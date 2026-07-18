@@ -93,6 +93,28 @@ func TestLeaseTakeoverReplacesAttemptAndFence(t *testing.T) {
 	}
 }
 
+func TestSearchIndexLeaseTakeoverRejectsOldFence(t *testing.T) {
+	service, clock, _ := newLeaseTestHarness(t, standardLeaseConfig())
+	request := standardAcquireLeaseRequest()
+	request.HolderType = LeaseHolderSearchIndex
+	request.OwnerID = "search-index-worker"
+	before, err := service.Acquire(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Acquire search index lease: %v", err)
+	}
+	clock.Advance(6 * time.Minute)
+	after, err := service.Takeover(context.Background(), TakeoverLeaseRequest{LeaseID: before.ID, OwnerID: before.OwnerID})
+	if err != nil {
+		t.Fatalf("Takeover search index lease: %v", err)
+	}
+	if err := service.ValidateFence(context.Background(), before.Fence); !errors.Is(err, ErrLeaseFenceLost) {
+		t.Fatalf("old search index fence got %v, want ErrLeaseFenceLost", err)
+	}
+	if err := service.ValidateFence(context.Background(), after.Fence); err != nil {
+		t.Fatalf("new search index fence rejected: %v", err)
+	}
+}
+
 func TestLeaseOldFenceCannotPublishAfterTakeover(t *testing.T) {
 	service, clock, _ := newLeaseTestHarness(t, standardLeaseConfig())
 	ctx := context.Background()

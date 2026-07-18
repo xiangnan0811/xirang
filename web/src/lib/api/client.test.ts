@@ -94,6 +94,18 @@ describe("request envelope handling", () => {
     expect(captured).toBeInstanceOf(ApiError);
     expect((captured as ApiError).retryAfter).toBe(12);
   });
+
+  it("sets Idempotency-Key only when the typed request option is supplied", async () => {
+    fetchMock.mockResolvedValue(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: null })));
+
+    await request("/overlay", { method: "POST", idempotencyKey: "overlay-key-0001" });
+    await request("/read");
+
+    const [, mutation] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [, read] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(mutation.headers).toMatchObject({ "Idempotency-Key": "overlay-key-0001" });
+    expect(read.headers).not.toHaveProperty("Idempotency-Key");
+  });
 });
 
 describe("apiClient 任务请求约束", () => {

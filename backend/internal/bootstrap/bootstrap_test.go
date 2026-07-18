@@ -103,7 +103,7 @@ func TestAutoMigrateIncludesTaskTrafficSample(t *testing.T) {
 	}
 }
 
-func TestMigrateEncryptionV1ToV2IncludesSensitiveSettings(t *testing.T) {
+func TestSearchBootstrapMigrateEncryptionV1ToV2IncludesSensitiveSettingsAndOverlays(t *testing.T) {
 	key := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("DATA_ENCRYPTION_KEY", key)
@@ -119,6 +119,10 @@ func TestMigrateEncryptionV1ToV2IncludesSensitiveSettings(t *testing.T) {
 		&model.AppCredential{},
 		&model.User{},
 		&model.SystemSetting{},
+		&model.BackupAssetSavedSearch{},
+		&model.BackupAssetFavorite{},
+		&model.BackupAssetTagDefinition{},
+		&model.BackupAssetOverlayIdempotency{},
 	); err != nil {
 		t.Fatalf("初始化加密迁移测试表失败: %v", err)
 	}
@@ -126,11 +130,28 @@ func TestMigrateEncryptionV1ToV2IncludesSensitiveSettings(t *testing.T) {
 	if err := db.Create(&model.SystemSetting{Key: "smtp.password", Value: legacyValue}).Error; err != nil {
 		t.Fatalf("写入 v1 设置失败: %v", err)
 	}
+	overlayPlaintexts := map[string]string{
+		"saved":       `{"schema_version":1,"root":{"op":"term","field":"name","text":"report"},"scope":{"mode":"current"},"sort":"relevance","limit":20}`,
+		"favorite":    "FAKE_FAVORITE_LABEL_FOR_TEST_ONLY",
+		"tag":         "FAKE_TAG_NAME_FOR_TEST_ONLY",
+		"idempotency": "FAKE_REQUEST_FINGERPRINT_FOR_TEST_ONLY",
+	}
+	legacyRows := []any{
+		&model.BackupAssetSavedSearch{ID: strings.Repeat("a", 32), OwnerUserID: 1, EncryptedAST: encryptV1ForTest(t, key, overlayPlaintexts["saved"]), SchemaVersion: 1, ScopeMode: "current", Version: 1, State: "active"},
+		&model.BackupAssetFavorite{ID: strings.Repeat("b", 32), OwnerUserID: 1, RecoveryPointID: strings.Repeat("c", 32), EntryID: strings.Repeat("d", 64), EncryptedLabel: encryptV1ForTest(t, key, overlayPlaintexts["favorite"]), State: "active", Version: 1},
+		&model.BackupAssetTagDefinition{ID: strings.Repeat("e", 32), OwnerUserID: 1, EncryptedName: encryptV1ForTest(t, key, overlayPlaintexts["tag"]), NameToken: strings.Repeat("f", 64), KeyVersion: 1, TokenState: "active", Version: 1},
+		&model.BackupAssetOverlayIdempotency{ID: strings.Repeat("1", 32), OwnerUserID: 1, Action: "favorite_add", KeyHash: strings.Repeat("2", 64), EncryptedRequestFingerprint: encryptV1ForTest(t, key, overlayPlaintexts["idempotency"]), ResultResourceType: "favorite"},
+	}
+	for _, row := range legacyRows {
+		if err := db.Session(&gorm.Session{SkipHooks: true}).Create(row).Error; err != nil {
+			t.Fatalf("写入 overlay v1 fixture 失败: %v", err)
+		}
+	}
 
 	if got, err := CountV1EncryptedData(db); err != nil {
 		t.Fatalf("统计 v1 失败: %v", err)
-	} else if got != 1 {
-		t.Fatalf("迁移前应统计到 1 条 v1 设置，实际 %d", got)
+	} else if got != 5 {
+		t.Fatalf("迁移前应统计到 5 条 v1 字段，实际 %d", got)
 	}
 	if err := MigrateEncryptionV1ToV2(db); err != nil {
 		t.Fatalf("迁移失败: %v", err)
@@ -149,6 +170,28 @@ func TestMigrateEncryptionV1ToV2IncludesSensitiveSettings(t *testing.T) {
 	}
 	if plain != "FAKE_SMTP_PASSWORD_FOR_TEST_ONLY" {
 		t.Fatalf("迁移后明文不匹配: %q", plain)
+	}
+	readEncrypted := func(table, column string) string {
+		t.Helper()
+		var row struct{ Value string }
+		if err := db.Session(&gorm.Session{SkipHooks: true}).Table(table).Select(column + " AS value").Take(&row).Error; err != nil {
+			t.Fatalf("读取 %s.%s 迁移结果失败: %v", table, column, err)
+		}
+		return row.Value
+	}
+	for field, encrypted := range map[string]string{
+		"saved":       readEncrypted("backup_asset_saved_searches", "encrypted_ast"),
+		"favorite":    readEncrypted("backup_asset_favorites", "encrypted_label"),
+		"tag":         readEncrypted("backup_asset_tag_definitions", "encrypted_name"),
+		"idempotency": readEncrypted("backup_asset_overlay_idempotency", "encrypted_request_fingerprint"),
+	} {
+		if !strings.HasPrefix(encrypted, "enc:v2:") {
+			t.Fatalf("%s 未迁移为 enc:v2: %q", field, encrypted)
+		}
+		decrypted, err := secure.DecryptString(encrypted)
+		if err != nil || decrypted != overlayPlaintexts[field] {
+			t.Fatalf("%s 迁移后明文不匹配: %q err=%v", field, decrypted, err)
+		}
 	}
 	if got, err := CountV1EncryptedData(db); err != nil {
 		t.Fatalf("统计 v1 失败: %v", err)

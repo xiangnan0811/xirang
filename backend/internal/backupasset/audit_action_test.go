@@ -43,14 +43,20 @@ func TestAuditActionRegistryMatchesDesignContract(t *testing.T) {
 		AuditActionSavedSearchCreate,
 		AuditActionSavedSearchUpdate,
 		AuditActionSavedSearchDelete,
+		AuditActionSavedSearchUse,
+		AuditActionSavedSearchBroken,
 		AuditActionFavoriteAdd,
 		AuditActionFavoriteRemove,
+		AuditActionFavoriteTombstone,
 		AuditActionTagCreate,
 		AuditActionTagUpdate,
 		AuditActionTagDelete,
 		AuditActionTagAssign,
 		AuditActionTagUnassign,
+		AuditActionTagAssignmentTombstone,
+		AuditActionRecentRecord,
 		AuditActionRecentClear,
+		AuditActionOverlayCleanup,
 		AuditActionPreviewJob,
 		AuditActionPreviewTicket,
 		AuditActionPreviewRead,
@@ -94,6 +100,22 @@ func TestAuditActionRegistryMatchesDesignContract(t *testing.T) {
 	}
 	if ValidAuditAction(AuditAction("asset.unregistered")) {
 		t.Fatal("unknown audit action was accepted")
+	}
+}
+
+func TestSearchOverlayAuditActionValuesAreStable(t *testing.T) {
+	want := map[AuditAction]string{
+		AuditActionSavedSearchUse:         "saved_search_use",
+		AuditActionSavedSearchBroken:      "saved_search_broken",
+		AuditActionFavoriteTombstone:      "favorite_tombstone",
+		AuditActionTagAssignmentTombstone: "tag_assignment_tombstone",
+		AuditActionRecentRecord:           "recent_record",
+		AuditActionOverlayCleanup:         "overlay_cleanup",
+	}
+	for action, value := range want {
+		if string(action) != value || !ValidAuditAction(action) {
+			t.Fatalf("Search/Overlay audit action drifted: action=%q want=%q valid=%t", action, value, ValidAuditAction(action))
+		}
 	}
 }
 

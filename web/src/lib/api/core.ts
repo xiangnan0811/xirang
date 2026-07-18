@@ -23,6 +23,7 @@ export type RequestOptions = {
   body?: unknown;
   token?: string;
   stepUpProof?: string;
+  idempotencyKey?: string;
   signal?: AbortSignal;
 };
 
@@ -59,6 +60,9 @@ async function doFetch(baseUrl: string, path: string, options: RequestOptions): 
   }
   if (options.stepUpProof) {
     headers["X-Xirang-Step-Up"] = options.stepUpProof;
+  }
+  if (options.idempotencyKey) {
+    headers["Idempotency-Key"] = options.idempotencyKey;
   }
   return fetch(`${baseUrl}${path}`, {
     method,

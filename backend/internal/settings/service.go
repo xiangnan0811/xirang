@@ -206,6 +206,30 @@ var registry = []SettingDef{
 	{Key: "backup_assets.rclone_health_interval", EnvVar: "BACKUP_ASSETS_RCLONE_HEALTH_INTERVAL", CodeDefault: "15m", Type: TypeDuration, Category: "backup_assets", Description: "Rclone 版本化健康检查间隔", MinDuration: "1m", MaxDuration: "24h"},
 	{Key: "backup_assets.rclone_health_batch_size", EnvVar: "BACKUP_ASSETS_RCLONE_HEALTH_BATCH_SIZE", CodeDefault: "100", Type: TypeInt, Category: "backup_assets", Description: "Rclone 版本化健康检查批次", Min: "1", Max: "1000"},
 	{Key: "backup_assets.rclone_aws_sdk_max_attempts", EnvVar: "BACKUP_ASSETS_RCLONE_AWS_SDK_MAX_ATTEMPTS", CodeDefault: "3", Type: TypeInt, Category: "backup_assets", Description: "Rclone AWS SDK 最大尝试次数", Min: "1", Max: "10"},
+	{Key: "backup_assets.search_reconcile_interval", EnvVar: "BACKUP_ASSETS_SEARCH_RECONCILE_INTERVAL", CodeDefault: "1m", Type: TypeDuration, Category: "backup_assets", Description: "资产搜索索引对账间隔", MinDuration: "10s", MaxDuration: "1h"},
+	{Key: "backup_assets.search_build_timeout", EnvVar: "BACKUP_ASSETS_SEARCH_BUILD_TIMEOUT", CodeDefault: "30m", Type: TypeDuration, Category: "backup_assets", Description: "资产搜索索引构建超时", MinDuration: "1m", MaxDuration: "24h"},
+	{Key: "backup_assets.search_batch_size", EnvVar: "BACKUP_ASSETS_SEARCH_BATCH_SIZE", CodeDefault: "500", Type: TypeInt, Category: "backup_assets", Description: "资产搜索索引构建批次", Min: "50", Max: "5000"},
+	{Key: "backup_assets.search_max_concurrency", EnvVar: "BACKUP_ASSETS_SEARCH_MAX_CONCURRENCY", CodeDefault: "2", Type: TypeInt, Category: "backup_assets", Description: "资产搜索索引最大并发", Min: "1", Max: "16"},
+	{Key: "backup_assets.search_ast_max_depth", EnvVar: "BACKUP_ASSETS_SEARCH_AST_MAX_DEPTH", CodeDefault: "8", Type: TypeInt, Category: "backup_assets", Description: "资产搜索 AST 最大深度", Min: "1", Max: "16"},
+	{Key: "backup_assets.search_ast_max_nodes", EnvVar: "BACKUP_ASSETS_SEARCH_AST_MAX_NODES", CodeDefault: "64", Type: TypeInt, Category: "backup_assets", Description: "资产搜索 AST 最大节点数", Min: "2", Max: "256"},
+	{Key: "backup_assets.search_values_per_node", EnvVar: "BACKUP_ASSETS_SEARCH_VALUES_PER_NODE", CodeDefault: "32", Type: TypeInt, Category: "backup_assets", Description: "资产搜索 AST 单节点最大值数", Min: "1", Max: "64"},
+	{Key: "backup_assets.search_body_max_bytes", EnvVar: "BACKUP_ASSETS_SEARCH_BODY_MAX_BYTES", CodeDefault: "65536", Type: TypeInt, Category: "backup_assets", Description: "资产搜索请求体最大字节数", Min: "1024", Max: "65536"},
+	{Key: "backup_assets.search_value_max_bytes", EnvVar: "BACKUP_ASSETS_SEARCH_VALUE_MAX_BYTES", CodeDefault: "1024", Type: TypeInt, Category: "backup_assets", Description: "资产搜索单值最大字节数", Min: "1", Max: "4096"},
+	{Key: "backup_assets.search_candidate_limit", EnvVar: "BACKUP_ASSETS_SEARCH_CANDIDATE_LIMIT", CodeDefault: "10000", Type: TypeInt, Category: "backup_assets", Description: "资产搜索候选上限", Min: "100", Max: "100000"},
+	{Key: "backup_assets.search_query_timeout", EnvVar: "BACKUP_ASSETS_SEARCH_QUERY_TIMEOUT", CodeDefault: "5s", Type: TypeDuration, Category: "backup_assets", Description: "资产搜索查询超时", MinDuration: "100ms", MaxDuration: "30s"},
+	{Key: "backup_assets.search_page_size_max", EnvVar: "BACKUP_ASSETS_SEARCH_PAGE_SIZE_MAX", CodeDefault: "200", Type: TypeInt, Category: "backup_assets", Description: "资产搜索单页最大条目数", Min: "1", Max: "500"},
+	{Key: "backup_assets.search_suggestion_limit", EnvVar: "BACKUP_ASSETS_SEARCH_SUGGESTION_LIMIT", CodeDefault: "20", Type: TypeInt, Category: "backup_assets", Description: "资产搜索建议上限", Min: "0", Max: "50"},
+	{Key: "backup_assets.saved_search_quota", EnvVar: "BACKUP_ASSETS_SAVED_SEARCH_QUOTA", CodeDefault: "100", Type: TypeInt, Category: "backup_assets", Description: "每用户保存搜索配额", Min: "1", Max: "1000"},
+	{Key: "backup_assets.favorite_quota", EnvVar: "BACKUP_ASSETS_FAVORITE_QUOTA", CodeDefault: "5000", Type: TypeInt, Category: "backup_assets", Description: "每用户资产收藏配额", Min: "1", Max: "100000"},
+	{Key: "backup_assets.tag_definition_quota", EnvVar: "BACKUP_ASSETS_TAG_DEFINITION_QUOTA", CodeDefault: "100", Type: TypeInt, Category: "backup_assets", Description: "每用户资产标签定义配额", Min: "1", Max: "1000"},
+	{Key: "backup_assets.tag_assignment_quota", EnvVar: "BACKUP_ASSETS_TAG_ASSIGNMENT_QUOTA", CodeDefault: "10000", Type: TypeInt, Category: "backup_assets", Description: "每用户资产标签绑定配额", Min: "1", Max: "200000"},
+	{Key: "backup_assets.overlay_bulk_max_items", EnvVar: "BACKUP_ASSETS_OVERLAY_BULK_MAX_ITEMS", CodeDefault: "200", Type: TypeInt, Category: "backup_assets", Description: "资产用户覆盖批量操作上限", Min: "1", Max: "1000"},
+	{Key: "backup_assets.overlay_label_max_bytes", EnvVar: "BACKUP_ASSETS_OVERLAY_LABEL_MAX_BYTES", CodeDefault: "256", Type: TypeInt, Category: "backup_assets", Description: "资产用户标签最大字节数", Min: "1", Max: "4096"},
+	{Key: "backup_assets.recent_quota", EnvVar: "BACKUP_ASSETS_RECENT_QUOTA", CodeDefault: "10000", Type: TypeInt, Category: "backup_assets", Description: "每用户最近访问资产配额", Min: "1", Max: "100000"},
+	{Key: "backup_assets.recent_retention", EnvVar: "BACKUP_ASSETS_RECENT_RETENTION", CodeDefault: "720h", Type: TypeDuration, Category: "backup_assets", Description: "最近访问资产保留时长", MinDuration: "24h", MaxDuration: "8760h"},
+	{Key: "backup_assets.recent_writes_per_minute", EnvVar: "BACKUP_ASSETS_RECENT_WRITES_PER_MINUTE", CodeDefault: "120", Type: TypeInt, Category: "backup_assets", Description: "每用户最近访问每分钟写入上限", Min: "1", Max: "10000"},
+	{Key: "backup_assets.idempotency_ttl", EnvVar: "BACKUP_ASSETS_IDEMPOTENCY_TTL", CodeDefault: "24h", Type: TypeDuration, Category: "backup_assets", Description: "资产用户覆盖幂等回执保留时长", MinDuration: "1h", MaxDuration: "168h"},
+	{Key: "backup_assets.idempotency_key_max_bytes", EnvVar: "BACKUP_ASSETS_IDEMPOTENCY_KEY_MAX_BYTES", CodeDefault: "128", Type: TypeInt, Category: "backup_assets", Description: "资产用户覆盖幂等键最大字节数", Min: "32", Max: "256"},
 }
 
 // registryMap O(1) key 查找（init 时构建）
@@ -456,6 +480,21 @@ func (s *Service) WithBackupAssetMutation(ctx context.Context, callback func(cur
 	return callback(copyStringMap(current))
 }
 
+// BackupAssetSettingsSnapshot returns one validated copy while coordinated
+// multi-key backup-asset mutations are excluded.
+func (s *Service) BackupAssetSettingsSnapshot() (map[string]string, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("settings service is unavailable")
+	}
+	s.backupAssetMutationMu.Lock()
+	defer s.backupAssetMutationMu.Unlock()
+	values, err := s.backupAssetFoundationSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	return copyStringMap(values), nil
+}
+
 func (s *Service) backupAssetFoundationSnapshot() (map[string]string, error) {
 	values := make(map[string]string, len(backupAssetFoundationSettingKeys))
 	for _, key := range backupAssetFoundationSettingKeys {
@@ -643,7 +682,7 @@ func validateValue(def *SettingDef, value string) error {
 	return nil
 }
 
-var backupAssetFoundationSettingKeys = []string{
+var backupAssetCoreSettingKeys = []string{
 	"backup_assets.enabled",
 	"backup_assets.catalog_batch_size",
 	"backup_assets.catalog_build_timeout",
@@ -684,6 +723,40 @@ var backupAssetFoundationSettingKeys = []string{
 	"backup_assets.rclone_aws_sdk_max_attempts",
 }
 
+var backupAssetSearchOverlaySettingKeys = []string{
+	"backup_assets.search_reconcile_interval",
+	"backup_assets.search_build_timeout",
+	"backup_assets.search_batch_size",
+	"backup_assets.search_max_concurrency",
+	"backup_assets.search_ast_max_depth",
+	"backup_assets.search_ast_max_nodes",
+	"backup_assets.search_values_per_node",
+	"backup_assets.search_body_max_bytes",
+	"backup_assets.search_value_max_bytes",
+	"backup_assets.search_candidate_limit",
+	"backup_assets.search_query_timeout",
+	"backup_assets.search_page_size_max",
+	"backup_assets.search_suggestion_limit",
+	"backup_assets.saved_search_quota",
+	"backup_assets.favorite_quota",
+	"backup_assets.tag_definition_quota",
+	"backup_assets.tag_assignment_quota",
+	"backup_assets.overlay_bulk_max_items",
+	"backup_assets.overlay_label_max_bytes",
+	"backup_assets.recent_quota",
+	"backup_assets.recent_retention",
+	"backup_assets.recent_writes_per_minute",
+	"backup_assets.idempotency_ttl",
+	"backup_assets.idempotency_key_max_bytes",
+}
+
+var backupAssetFoundationSettingKeys = func() []string {
+	keys := make([]string, 0, len(backupAssetCoreSettingKeys)+len(backupAssetSearchOverlaySettingKeys))
+	keys = append(keys, backupAssetCoreSettingKeys...)
+	keys = append(keys, backupAssetSearchOverlaySettingKeys...)
+	return keys
+}()
+
 var backupAssetFoundationSettingSet = func() map[string]bool {
 	values := make(map[string]bool, len(backupAssetFoundationSettingKeys))
 	for _, key := range backupAssetFoundationSettingKeys {
@@ -697,6 +770,15 @@ var backupAssetFoundationSettingSet = func() map[string]bool {
 func BackupAssetFoundationSettingKeys() []string {
 	keys := make([]string, len(backupAssetFoundationSettingKeys))
 	copy(keys, backupAssetFoundationSettingKeys)
+	return keys
+}
+
+// BackupAssetCoreSettingKeys returns the pre-Search setting set used by legacy
+// typed getters. Search and Overlay must use BackupAssetSettingsSnapshot so
+// their coupled limits are read atomically.
+func BackupAssetCoreSettingKeys() []string {
+	keys := make([]string, len(backupAssetCoreSettingKeys))
+	copy(keys, backupAssetCoreSettingKeys)
 	return keys
 }
 
@@ -743,6 +825,17 @@ func validateBackupAssetFoundationConfig(values map[string]string, requireComple
 	rcloneBoundConfigMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.rclone_bound_config_max_bytes"], 10, 64)
 	rcloneControlPayloadMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.rclone_control_payload_max_bytes"], 10, 64)
 	rcloneManifestChunkMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.rclone_manifest_chunk_max_bytes"], 10, 64)
+	searchBuildTimeout, _ := time.ParseDuration(resolved["backup_assets.search_build_timeout"])
+	searchASTDepth, _ := strconv.ParseInt(resolved["backup_assets.search_ast_max_depth"], 10, 64)
+	searchASTNodes, _ := strconv.ParseInt(resolved["backup_assets.search_ast_max_nodes"], 10, 64)
+	searchBodyBytes, _ := strconv.ParseInt(resolved["backup_assets.search_body_max_bytes"], 10, 64)
+	searchValueBytes, _ := strconv.ParseInt(resolved["backup_assets.search_value_max_bytes"], 10, 64)
+	searchCandidateLimit, _ := strconv.ParseInt(resolved["backup_assets.search_candidate_limit"], 10, 64)
+	searchQueryTimeout, _ := time.ParseDuration(resolved["backup_assets.search_query_timeout"])
+	searchPageSize, _ := strconv.ParseInt(resolved["backup_assets.search_page_size_max"], 10, 64)
+	searchSuggestionLimit, _ := strconv.ParseInt(resolved["backup_assets.search_suggestion_limit"], 10, 64)
+	tagAssignmentQuota, _ := strconv.ParseInt(resolved["backup_assets.tag_assignment_quota"], 10, 64)
+	overlayBulkMaxItems, _ := strconv.ParseInt(resolved["backup_assets.overlay_bulk_max_items"], 10, 64)
 	if heartbeat >= leaseDuration {
 		return fmt.Errorf("backup_assets.lease_heartbeat 必须小于 backup_assets.lease_duration")
 	}
@@ -772,6 +865,27 @@ func validateBackupAssetFoundationConfig(values map[string]string, requireComple
 	}
 	if rcloneManifestChunkMaxBytes > rcloneControlPayloadMaxBytes {
 		return fmt.Errorf("backup_assets.rclone_manifest_chunk_max_bytes 不能超过控制对象暂存上限")
+	}
+	if searchASTNodes < searchASTDepth {
+		return fmt.Errorf("backup_assets.search_ast_max_nodes 不能小于 AST 最大深度")
+	}
+	if searchBodyBytes < searchValueBytes {
+		return fmt.Errorf("backup_assets.search_body_max_bytes 不能小于单值字节上限")
+	}
+	if searchCandidateLimit < searchPageSize {
+		return fmt.Errorf("backup_assets.search_candidate_limit 不能小于单页条目上限")
+	}
+	if searchPageSize < searchSuggestionLimit {
+		return fmt.Errorf("backup_assets.search_page_size_max 不能小于建议上限")
+	}
+	if tagAssignmentQuota < overlayBulkMaxItems {
+		return fmt.Errorf("backup_assets.tag_assignment_quota 不能小于批量操作上限")
+	}
+	if searchBuildTimeout > absoluteDeadline {
+		return fmt.Errorf("backup_assets.search_build_timeout 不能超过租约绝对截止时间")
+	}
+	if searchQueryTimeout > 30*time.Second {
+		return fmt.Errorf("backup_assets.search_query_timeout 不能超过服务器写超时")
 	}
 	return nil
 }

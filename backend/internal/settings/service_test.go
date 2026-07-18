@@ -49,7 +49,7 @@ func TestRegistry(t *testing.T) {
 	}
 }
 
-func TestBackupAssetSettingsDefinitionsAndSafeDefaults(t *testing.T) {
+func TestBackupAssetSearchConfigAndOverlayConfigDefinitionsAndSafeDefaults(t *testing.T) {
 	type expectedDefinition struct {
 		env          string
 		defaultValue string
@@ -98,6 +98,30 @@ func TestBackupAssetSettingsDefinitionsAndSafeDefaults(t *testing.T) {
 		"backup_assets.rclone_health_interval":           {"BACKUP_ASSETS_RCLONE_HEALTH_INTERVAL", "15m", TypeDuration, "", "", "1m", "24h"},
 		"backup_assets.rclone_health_batch_size":         {"BACKUP_ASSETS_RCLONE_HEALTH_BATCH_SIZE", "100", TypeInt, "1", "1000", "", ""},
 		"backup_assets.rclone_aws_sdk_max_attempts":      {"BACKUP_ASSETS_RCLONE_AWS_SDK_MAX_ATTEMPTS", "3", TypeInt, "1", "10", "", ""},
+		"backup_assets.search_reconcile_interval":        {"BACKUP_ASSETS_SEARCH_RECONCILE_INTERVAL", "1m", TypeDuration, "", "", "10s", "1h"},
+		"backup_assets.search_build_timeout":             {"BACKUP_ASSETS_SEARCH_BUILD_TIMEOUT", "30m", TypeDuration, "", "", "1m", "24h"},
+		"backup_assets.search_batch_size":                {"BACKUP_ASSETS_SEARCH_BATCH_SIZE", "500", TypeInt, "50", "5000", "", ""},
+		"backup_assets.search_max_concurrency":           {"BACKUP_ASSETS_SEARCH_MAX_CONCURRENCY", "2", TypeInt, "1", "16", "", ""},
+		"backup_assets.search_ast_max_depth":             {"BACKUP_ASSETS_SEARCH_AST_MAX_DEPTH", "8", TypeInt, "1", "16", "", ""},
+		"backup_assets.search_ast_max_nodes":             {"BACKUP_ASSETS_SEARCH_AST_MAX_NODES", "64", TypeInt, "2", "256", "", ""},
+		"backup_assets.search_values_per_node":           {"BACKUP_ASSETS_SEARCH_VALUES_PER_NODE", "32", TypeInt, "1", "64", "", ""},
+		"backup_assets.search_body_max_bytes":            {"BACKUP_ASSETS_SEARCH_BODY_MAX_BYTES", "65536", TypeInt, "1024", "65536", "", ""},
+		"backup_assets.search_value_max_bytes":           {"BACKUP_ASSETS_SEARCH_VALUE_MAX_BYTES", "1024", TypeInt, "1", "4096", "", ""},
+		"backup_assets.search_candidate_limit":           {"BACKUP_ASSETS_SEARCH_CANDIDATE_LIMIT", "10000", TypeInt, "100", "100000", "", ""},
+		"backup_assets.search_query_timeout":             {"BACKUP_ASSETS_SEARCH_QUERY_TIMEOUT", "5s", TypeDuration, "", "", "100ms", "30s"},
+		"backup_assets.search_page_size_max":             {"BACKUP_ASSETS_SEARCH_PAGE_SIZE_MAX", "200", TypeInt, "1", "500", "", ""},
+		"backup_assets.search_suggestion_limit":          {"BACKUP_ASSETS_SEARCH_SUGGESTION_LIMIT", "20", TypeInt, "0", "50", "", ""},
+		"backup_assets.saved_search_quota":               {"BACKUP_ASSETS_SAVED_SEARCH_QUOTA", "100", TypeInt, "1", "1000", "", ""},
+		"backup_assets.favorite_quota":                   {"BACKUP_ASSETS_FAVORITE_QUOTA", "5000", TypeInt, "1", "100000", "", ""},
+		"backup_assets.tag_definition_quota":             {"BACKUP_ASSETS_TAG_DEFINITION_QUOTA", "100", TypeInt, "1", "1000", "", ""},
+		"backup_assets.tag_assignment_quota":             {"BACKUP_ASSETS_TAG_ASSIGNMENT_QUOTA", "10000", TypeInt, "1", "200000", "", ""},
+		"backup_assets.overlay_bulk_max_items":           {"BACKUP_ASSETS_OVERLAY_BULK_MAX_ITEMS", "200", TypeInt, "1", "1000", "", ""},
+		"backup_assets.overlay_label_max_bytes":          {"BACKUP_ASSETS_OVERLAY_LABEL_MAX_BYTES", "256", TypeInt, "1", "4096", "", ""},
+		"backup_assets.recent_quota":                     {"BACKUP_ASSETS_RECENT_QUOTA", "10000", TypeInt, "1", "100000", "", ""},
+		"backup_assets.recent_retention":                 {"BACKUP_ASSETS_RECENT_RETENTION", "720h", TypeDuration, "", "", "24h", "8760h"},
+		"backup_assets.recent_writes_per_minute":         {"BACKUP_ASSETS_RECENT_WRITES_PER_MINUTE", "120", TypeInt, "1", "10000", "", ""},
+		"backup_assets.idempotency_ttl":                  {"BACKUP_ASSETS_IDEMPOTENCY_TTL", "24h", TypeDuration, "", "", "1h", "168h"},
+		"backup_assets.idempotency_key_max_bytes":        {"BACKUP_ASSETS_IDEMPOTENCY_KEY_MAX_BYTES", "128", TypeInt, "32", "256", "", ""},
 	}
 	defs := NewService(setupTestDB(t)).Registry()
 	got := make(map[string]SettingDef, len(want))
@@ -313,6 +337,116 @@ func TestWithBackupAssetMutationSerializesCallbacksOverFreshSnapshots(t *testing
 		return nil
 	}); err != nil {
 		t.Fatalf("third mutation: %v", err)
+	}
+}
+
+func TestBackupAssetSearchConfigAndOverlayConfigCrossSettingBoundaries(t *testing.T) {
+	values := backupAssetFoundationValuesForTest()
+	if err := ValidateBackupAssetFoundationConfig(values); err != nil {
+		t.Fatalf("valid Search/Overlay defaults rejected: %v", err)
+	}
+
+	tests := map[string]map[string]string{
+		"nodes below depth": {
+			"backup_assets.search_ast_max_depth": "9",
+			"backup_assets.search_ast_max_nodes": "8",
+		},
+		"body below value": {
+			"backup_assets.search_body_max_bytes":  "1024",
+			"backup_assets.search_value_max_bytes": "1025",
+		},
+		"candidates below page": {
+			"backup_assets.search_candidate_limit": "100",
+			"backup_assets.search_page_size_max":   "101",
+		},
+		"page below suggestions": {
+			"backup_assets.search_page_size_max":    "20",
+			"backup_assets.search_suggestion_limit": "21",
+		},
+		"assignments below bulk": {
+			"backup_assets.tag_assignment_quota":   "199",
+			"backup_assets.overlay_bulk_max_items": "200",
+		},
+		"build beyond lease deadline": {
+			"backup_assets.search_build_timeout":    "2h1s",
+			"backup_assets.lease_absolute_deadline": "2h",
+		},
+	}
+	for name, overrides := range tests {
+		t.Run(name, func(t *testing.T) {
+			candidate := cloneSettingsValues(values)
+			for key, value := range overrides {
+				candidate[key] = value
+			}
+			if err := ValidateBackupAssetFoundationConfig(candidate); err == nil {
+				t.Fatalf("unsafe Search/Overlay settings accepted: %#v", overrides)
+			}
+		})
+	}
+}
+
+func TestBackupAssetSearchConfigAndOverlayConfigSnapshotIsCompleteCopiedAndMutationAtomic(t *testing.T) {
+	service := NewService(setupTestDB(t))
+	before, err := service.BackupAssetSettingsSnapshot()
+	if err != nil {
+		t.Fatalf("BackupAssetSettingsSnapshot: %v", err)
+	}
+	if len(before) != len(BackupAssetFoundationSettingKeys()) {
+		t.Fatalf("snapshot key count=%d, want %d", len(before), len(BackupAssetFoundationSettingKeys()))
+	}
+	before["backup_assets.search_candidate_limit"] = "mutated-caller-copy"
+	again, err := service.BackupAssetSettingsSnapshot()
+	if err != nil {
+		t.Fatalf("second BackupAssetSettingsSnapshot: %v", err)
+	}
+	if again["backup_assets.search_candidate_limit"] != "10000" {
+		t.Fatalf("caller mutation corrupted service snapshot: %q", again["backup_assets.search_candidate_limit"])
+	}
+
+	firstUpdated := make(chan struct{})
+	releaseMutation := make(chan struct{})
+	mutationDone := make(chan error, 1)
+	go func() {
+		mutationDone <- service.WithBackupAssetMutation(context.Background(), func(map[string]string) error {
+			if err := service.Update("backup_assets.search_candidate_limit", "20000"); err != nil {
+				return err
+			}
+			close(firstUpdated)
+			<-releaseMutation
+			return service.Update("backup_assets.search_page_size_max", "300")
+		})
+	}()
+	<-firstUpdated
+	snapshotDone := make(chan map[string]string, 1)
+	snapshotErr := make(chan error, 1)
+	go func() {
+		values, snapshotError := service.BackupAssetSettingsSnapshot()
+		if snapshotError != nil {
+			snapshotErr <- snapshotError
+			return
+		}
+		snapshotDone <- values
+	}()
+	select {
+	case values := <-snapshotDone:
+		t.Fatalf("snapshot observed a mutation mid-transition: %#v", values)
+	case err := <-snapshotErr:
+		t.Fatalf("snapshot failed during transition: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(releaseMutation)
+	if err := <-mutationDone; err != nil {
+		t.Fatalf("atomic settings mutation: %v", err)
+	}
+	select {
+	case err := <-snapshotErr:
+		t.Fatalf("snapshot after transition: %v", err)
+	case values := <-snapshotDone:
+		if values["backup_assets.search_candidate_limit"] != "20000" || values["backup_assets.search_page_size_max"] != "300" {
+			t.Fatalf("snapshot observed half transition: %#v", values)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("snapshot remained blocked after settings transition")
 	}
 }
 

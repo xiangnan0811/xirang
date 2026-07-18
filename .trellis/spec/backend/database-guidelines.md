@@ -297,6 +297,126 @@ if _, err := profile.ResolveAppProfileAccess(db, credentialID); err != nil {
 
 ---
 
+## Scenario: Backup Asset Search Projection And User Overlays
+
+### 1. Scope / Trigger
+
+- Trigger: changing backup-asset search normalization, projection/index
+  publication, query/cursor behavior, content/OCR ingest, saved searches,
+  favorites, tags, recent access, or their settings/runtime/API wiring.
+- Applies to paired migration `000065`, `backupasset/search`,
+  `backupasset/overlay`, backup-asset runtime composition, Search/Overlay
+  handlers, and the mandatory PostgreSQL parity job.
+
+### 2. Signatures
+
+- Paired DDL:
+  `migrations/{sqlite,postgres}/000065_backup_asset_search.{up,down}.sql`.
+- Independent domains: `KeyDomainSearchToken="search_token"` and
+  `LeaseHolderSearchIndex="search_index"`; Search still signs cursors with the
+  existing independent Cursor Signing domain.
+- Query route: `POST /api/v1/asset-search`; AST/scope/cursor stay in the body.
+- Owner-tag candidate port:
+  `TagResolver.CandidateRefs(ctx, ownerID, name, authorizedPointIDs, limit)`.
+- Future publication port:
+  `ContentIndexIngest.PublishContentProjection(ctx, projection)` and
+  `RevokeContentProjection(ctx, projection)`.
+- Asset overlay authorization:
+  `AuthorizeAsset(ctx, tx *gorm.DB, actor, AssetRef)`.
+
+### 3. Contracts
+
+- Product search semantics are computed in Go: Unicode NFKC, full case fold,
+  slash/path segments, Han bigrams, Latin tokens, extension/date tokens,
+  integer ranking, stable sort, grouping, and cursor binding. Database-native
+  FTS/collation is not the product contract.
+- SQL/posting and owner-tag candidates are bounded before private Catalog
+  hydration. Tag candidates receive only the already-authorized selected point
+  IDs. `any` unions available positive fields; an unselective negative branch
+  may scan only up to the configured hard ceiling, then returns resource limit.
+- Search Token HMACs bind field/kind/normalizer/key version. Search/Entry/
+  Cursor/Audit/future Derived keys are never reused; KEK rotation rewraps
+  without changing Search tokens.
+- Secret/unknown content or OCR is three-valued without an exact unexpired
+  `asset.secret_reveal` proof. HMAC postings never become a returned content hit
+  without the excerpt resolver's real-match verification.
+- A classification change removes both content/OCR posting families, advances
+  both field rows to the new classification revision, clears the sibling
+  excerpt ref, and leaves that sibling unavailable until republished.
+- Search cursors bind user/role/scope/query/key/point/generation/projection/
+  classification/owner-tag revision/proof. Payloads contain no query, token,
+  path, name, tag, label, or snippet.
+- Favorite, bulk favorite, tag assignment, and recent mutations authorize the
+  target inside the same transaction before idempotency replay or writes.
+  Overlays never create a hold, change retention, copy source metadata, or
+  write Provider bytes.
+- `backup_assets.enabled` remains false by default. Disabled paths stop before
+  Search-key, projection, proof lookup, audit mutation, or Provider access.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| SQLite/PostgreSQL 000065 definitions diverge | Migration parity test fails; do not merge. |
+| Search Token is missing/lost or version differs | Projection unavailable; never regenerate silently or use old postings. |
+| Query has unknown schema/op/field, bad exact scope, or exceeds a limit | Reject the whole query with a typed safe error. |
+| Positive candidates exceed the configured ceiling | Return resource limit; never truncate and claim a complete result. |
+| Latest authorized point is unindexed | Report real building/failed/unavailable coverage; never fall back to an older point. |
+| Secret/unknown content lacks exact proof | Content/OCR truth is unknown; no hit/count/suggestion/snippet fact. |
+| Tag definitions/assignments change between pages | Owner-tag digest changes and the cursor is stale. |
+| Asset ownership is lost before an overlay transaction authorizes | Mutation fails with safe not-found/forbidden and writes nothing. |
+| Used 000065 down is requested | Atomic guard rejects; schema/version/data remain unchanged. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: an Operator's tag query resolves bounded refs only inside that
+  Operator's authorized producing lineages, evaluates in Go, and returns a
+  cursor bound to the owner-tag revision.
+- Base: a metadata-only query on a complete generation returns exact total and
+  may emit bounded metadata suggestions; content capability can remain false.
+- Bad: load every document before applying `MaxCandidates`, authorize a
+  favorite before starting its transaction, or retain OCR postings after a
+  content classification change.
+
+### 6. Tests Required
+
+- Paired SQLite/real-PostgreSQL apply, pristine down, used-down atomic rejection,
+  FK/check/unique/index/model/UTC parity; required DSN must not skip.
+- Normalization/property, Search Token independence/loss/rewrap/replacement,
+  candidate preselection, path proximity, grouping/order/page concatenation,
+  coverage, and every cursor-staleness binding.
+- Secret Kleene logic, exact/wrong-purpose/expired proof, resolver failure,
+  metadata-only suggestions, and query/log/audit/cursor plaintext scans.
+- Content ingest source/fence/classification CAS, sibling invalidation,
+  replace/revoke rollback, and no plaintext/ciphertext ownership.
+- Overlay owner isolation, transaction-bound authorization, quota races,
+  idempotency, tag candidates/revision, tombstone/broken/recent cleanup, and
+  no hold/retention/Provider mutation on SQLite and real PostgreSQL.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+if err := assets.AuthorizeAsset(ctx, actor, ref); err != nil {
+    return err
+}
+return db.Transaction(func(tx *gorm.DB) error { return tx.Create(&favorite).Error })
+```
+
+Correct:
+
+```go
+return db.Transaction(func(tx *gorm.DB) error {
+    if err := assets.AuthorizeAsset(ctx, tx, actor, ref); err != nil {
+        return err
+    }
+    return tx.Create(&favorite).Error
+})
+```
+
+---
+
 ## Common Mistakes
 
 - Do not add a migration for only one database engine. SQLite and PostgreSQL

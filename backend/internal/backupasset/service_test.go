@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -302,6 +303,119 @@ func TestFoundationCatalogConfigUsesRegisteredSettingsAndBounds(t *testing.T) {
 	}
 }
 
+func TestFoundationSearchConfigAndOverlayConfigUseOneSnapshot(t *testing.T) {
+	values := cloneFoundationTestValues(staticFoundationDefaults)
+	for key, value := range map[string]string{
+		"backup_assets.enabled":                   "true",
+		"backup_assets.search_reconcile_interval": "45s",
+		"backup_assets.search_build_timeout":      "25m",
+		"backup_assets.search_batch_size":         "750",
+		"backup_assets.search_max_concurrency":    "3",
+		"backup_assets.search_ast_max_depth":      "7",
+		"backup_assets.search_ast_max_nodes":      "70",
+		"backup_assets.search_values_per_node":    "24",
+		"backup_assets.search_body_max_bytes":     "32768",
+		"backup_assets.search_value_max_bytes":    "2048",
+		"backup_assets.search_candidate_limit":    "15000",
+		"backup_assets.search_query_timeout":      "4s",
+		"backup_assets.search_page_size_max":      "250",
+		"backup_assets.search_suggestion_limit":   "15",
+		"backup_assets.saved_search_quota":        "120",
+		"backup_assets.favorite_quota":            "6000",
+		"backup_assets.tag_definition_quota":      "150",
+		"backup_assets.tag_assignment_quota":      "12000",
+		"backup_assets.overlay_bulk_max_items":    "300",
+		"backup_assets.overlay_label_max_bytes":   "512",
+		"backup_assets.recent_quota":              "12000",
+		"backup_assets.recent_retention":          "1440h",
+		"backup_assets.recent_writes_per_minute":  "240",
+		"backup_assets.idempotency_ttl":           "48h",
+		"backup_assets.idempotency_key_max_bytes": "192",
+		"backup_assets.lease_duration":            "4m",
+		"backup_assets.lease_heartbeat":           "30s",
+		"backup_assets.lease_absolute_deadline":   "3h",
+		"backup_assets.manifest_max_entries":      "9000000",
+	} {
+		values[key] = value
+	}
+	reader := &snapshotSettingsReader{values: values}
+	searchConfig, overlayConfig, err := NewFoundationService(reader).SearchOverlayConfig()
+	if err != nil {
+		t.Fatalf("SearchOverlayConfig: %v", err)
+	}
+	if !searchConfig.Enabled || searchConfig.ReconcileInterval != 45*time.Second || searchConfig.BuildTimeout != 25*time.Minute ||
+		searchConfig.BatchSize != 750 || searchConfig.MaxConcurrency != 3 || searchConfig.ASTMaxDepth != 7 ||
+		searchConfig.ASTMaxNodes != 70 || searchConfig.ValuesPerNode != 24 || searchConfig.BodyMaxBytes != 32768 ||
+		searchConfig.ValueMaxBytes != 2048 || searchConfig.CandidateLimit != 15000 || searchConfig.QueryTimeout != 4*time.Second ||
+		searchConfig.PageSizeMax != 250 || searchConfig.SuggestionLimit != 15 || searchConfig.MaxDocuments != 9000000 ||
+		searchConfig.Lease.Duration != 4*time.Minute || searchConfig.Lease.Heartbeat != 30*time.Second || searchConfig.Lease.AbsoluteDeadline != 3*time.Hour {
+		t.Fatalf("SearchConfig=%+v", searchConfig)
+	}
+	if !overlayConfig.Enabled || overlayConfig.SavedSearchQuota != 120 || overlayConfig.FavoriteQuota != 6000 ||
+		overlayConfig.TagDefinitionQuota != 150 || overlayConfig.TagAssignmentQuota != 12000 || overlayConfig.BulkMaxItems != 300 ||
+		overlayConfig.LabelMaxBytes != 512 || overlayConfig.RecentQuota != 12000 || overlayConfig.RecentRetention != 1440*time.Hour ||
+		overlayConfig.RecentWritesPerMinute != 240 || overlayConfig.IdempotencyTTL != 48*time.Hour || overlayConfig.IdempotencyKeyMaxBytes != 192 {
+		t.Fatalf("OverlayConfig=%+v", overlayConfig)
+	}
+	if reader.effectiveReads != 0 || reader.snapshotReads != 1 {
+		t.Fatalf("combined config mixed per-key reads: effective=%d snapshot=%d", reader.effectiveReads, reader.snapshotReads)
+	}
+
+	reader.set("backup_assets.search_page_size_max", "275")
+	nextSearch, _, err := NewFoundationService(reader).SearchOverlayConfig()
+	if err != nil || nextSearch.PageSizeMax != 275 {
+		t.Fatalf("dynamic snapshot was not re-read: config=%+v err=%v", nextSearch, err)
+	}
+}
+
+func TestFoundationSearchConfigAndOverlayConfigRequireCompleteSnapshotPort(t *testing.T) {
+	service := NewFoundationService(staticSettingsReader{})
+	if _, _, err := service.SearchOverlayConfig(); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("reader without snapshot port got %v, want ErrInvalidState", err)
+	}
+
+	reader := &snapshotSettingsReader{values: cloneFoundationTestValues(staticFoundationDefaults)}
+	delete(reader.values, "backup_assets.search_candidate_limit")
+	if _, _, err := NewFoundationService(reader).SearchOverlayConfig(); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("incomplete snapshot got %v, want ErrInvalidState", err)
+	}
+}
+
+type snapshotSettingsReader struct {
+	mu             sync.Mutex
+	values         map[string]string
+	effectiveReads int
+	snapshotReads  int
+}
+
+func (reader *snapshotSettingsReader) GetEffective(key string) string {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	reader.effectiveReads++
+	return reader.values[key]
+}
+
+func (reader *snapshotSettingsReader) BackupAssetSettingsSnapshot() (map[string]string, error) {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	reader.snapshotReads++
+	return cloneFoundationTestValues(reader.values), nil
+}
+
+func (reader *snapshotSettingsReader) set(key, value string) {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	reader.values[key] = value
+}
+
+func cloneFoundationTestValues(values map[string]string) map[string]string {
+	copy := make(map[string]string, len(values))
+	for key, value := range values {
+		copy[key] = value
+	}
+	return copy
+}
+
 type staticSettingsReader map[string]string
 
 func (reader staticSettingsReader) GetEffective(key string) string {
@@ -350,4 +464,28 @@ var staticFoundationDefaults = map[string]string{
 	"backup_assets.rclone_health_interval":           "15m",
 	"backup_assets.rclone_health_batch_size":         "100",
 	"backup_assets.rclone_aws_sdk_max_attempts":      "3",
+	"backup_assets.search_reconcile_interval":        "1m",
+	"backup_assets.search_build_timeout":             "30m",
+	"backup_assets.search_batch_size":                "500",
+	"backup_assets.search_max_concurrency":           "2",
+	"backup_assets.search_ast_max_depth":             "8",
+	"backup_assets.search_ast_max_nodes":             "64",
+	"backup_assets.search_values_per_node":           "32",
+	"backup_assets.search_body_max_bytes":            "65536",
+	"backup_assets.search_value_max_bytes":           "1024",
+	"backup_assets.search_candidate_limit":           "10000",
+	"backup_assets.search_query_timeout":             "5s",
+	"backup_assets.search_page_size_max":             "200",
+	"backup_assets.search_suggestion_limit":          "20",
+	"backup_assets.saved_search_quota":               "100",
+	"backup_assets.favorite_quota":                   "5000",
+	"backup_assets.tag_definition_quota":             "100",
+	"backup_assets.tag_assignment_quota":             "10000",
+	"backup_assets.overlay_bulk_max_items":           "200",
+	"backup_assets.overlay_label_max_bytes":          "256",
+	"backup_assets.recent_quota":                     "10000",
+	"backup_assets.recent_retention":                 "720h",
+	"backup_assets.recent_writes_per_minute":         "120",
+	"backup_assets.idempotency_ttl":                  "24h",
+	"backup_assets.idempotency_key_max_bytes":        "128",
 }

@@ -31,6 +31,14 @@ func (settings repositorySettings) GetEffective(key string) string {
 	return repositoryFoundationDefaults[key]
 }
 
+func (settings repositorySettings) BackupAssetSettingsSnapshot() (map[string]string, error) {
+	values := make(map[string]string, len(settings))
+	for key, value := range settings {
+		values[key] = value
+	}
+	return values, nil
+}
+
 type scriptedProber struct {
 	observation provider.RepositoryObservation
 	err         error
@@ -97,6 +105,17 @@ func enabledFoundation() *backupasset.FoundationService {
 	return backupasset.NewFoundationService(completeRepositoryFoundationSettings(true))
 }
 
+func TestRepositoryFoundationSettingsFixtureCoversSearchOverlayConfig(t *testing.T) {
+	searchConfig, overlayConfig, err := enabledFoundation().SearchOverlayConfig()
+	if err != nil {
+		t.Fatalf("SearchOverlayConfig: %v", err)
+	}
+	if !searchConfig.Enabled || searchConfig.CandidateLimit != 10000 || searchConfig.PageSizeMax != 200 ||
+		overlayConfig.FavoriteQuota != 5000 || overlayConfig.IdempotencyKeyMaxBytes != 128 {
+		t.Fatalf("incomplete Search/Overlay fixture: search=%+v overlay=%+v", searchConfig, overlayConfig)
+	}
+}
+
 func completeRepositoryFoundationSettings(enabled bool) repositorySettings {
 	values := make(repositorySettings, len(repositoryFoundationDefaults))
 	for key, value := range repositoryFoundationDefaults {
@@ -145,6 +164,30 @@ var repositoryFoundationDefaults = repositorySettings{
 	"backup_assets.rclone_health_interval":           "15m",
 	"backup_assets.rclone_health_batch_size":         "100",
 	"backup_assets.rclone_aws_sdk_max_attempts":      "3",
+	"backup_assets.search_reconcile_interval":        "1m",
+	"backup_assets.search_build_timeout":             "30m",
+	"backup_assets.search_batch_size":                "500",
+	"backup_assets.search_max_concurrency":           "2",
+	"backup_assets.search_ast_max_depth":             "8",
+	"backup_assets.search_ast_max_nodes":             "64",
+	"backup_assets.search_values_per_node":           "32",
+	"backup_assets.search_body_max_bytes":            "65536",
+	"backup_assets.search_value_max_bytes":           "1024",
+	"backup_assets.search_candidate_limit":           "10000",
+	"backup_assets.search_query_timeout":             "5s",
+	"backup_assets.search_page_size_max":             "200",
+	"backup_assets.search_suggestion_limit":          "20",
+	"backup_assets.saved_search_quota":               "100",
+	"backup_assets.favorite_quota":                   "5000",
+	"backup_assets.tag_definition_quota":             "100",
+	"backup_assets.tag_assignment_quota":             "10000",
+	"backup_assets.overlay_bulk_max_items":           "200",
+	"backup_assets.overlay_label_max_bytes":          "256",
+	"backup_assets.recent_quota":                     "10000",
+	"backup_assets.recent_retention":                 "720h",
+	"backup_assets.recent_writes_per_minute":         "120",
+	"backup_assets.idempotency_ttl":                  "24h",
+	"backup_assets.idempotency_key_max_bytes":        "128",
 }
 
 func testObservation(kind backupasset.ProviderKind, identity string) provider.RepositoryObservation {

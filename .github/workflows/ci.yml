@@ -105,6 +105,8 @@ jobs:
       TEST_POSTGRES_DSN: postgres://postgres:FAKE_POSTGRES_PASSWORD_FOR_TEST_ONLY@127.0.0.1:5432/xirang_test?sslmode=disable
       REQUIRE_POSTGRES_MIGRATION_TEST: "1"
       REQUIRE_POSTGRES_CATALOG_TEST: "1"
+      REQUIRE_POSTGRES_SEARCH_TEST: "1"
+      REQUIRE_POSTGRES_OVERLAY_TEST: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
@@ -119,10 +121,16 @@ jobs:
         run: go mod download
 
       - name: Run PostgreSQL migration parity
-        run: go test ./internal/database -run 'Test(BackupAssetMigration0(62|63|64)Postgres|PostgresTimestamptzScanUsesConfiguredUTC)' -count=1
+        run: go test ./internal/database -run 'Test(BackupAssetMigration0(62|63|64|65)Postgres|PostgresTimestamptzScanUsesConfiguredUTC)' -count=1
 
       - name: Run PostgreSQL Catalog behavior parity
         run: go test ./internal/backupasset/catalog -run '^TestCatalogBehaviorPostgres$' -count=1
+
+      - name: Run PostgreSQL Search behavior parity
+        run: go test ./internal/backupasset/search -run '^TestSearchBehaviorPostgres$' -count=1
+
+      - name: Run PostgreSQL Overlay behavior parity
+        run: go test ./internal/backupasset/overlay -run '^TestOverlayBehaviorPostgres$' -count=1
 
   frontend:
     name: Frontend Test & Build

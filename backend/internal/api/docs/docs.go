@@ -1060,6 +1060,305 @@ const docTemplate = `{
                 }
             }
         },
+        "/asset-favorites": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "列出收藏",
+                "responses": {}
+            },
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "添加收藏",
+                "responses": {}
+            }
+        },
+        "/asset-favorites/{recoveryPointId}/{entryId}": {
+            "delete": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "删除收藏",
+                "responses": {}
+            }
+        },
+        "/asset-recent": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "列出最近访问",
+                "responses": {}
+            }
+        },
+        "/asset-recent/clear": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "清空最近访问",
+                "responses": {}
+            }
+        },
+        "/asset-saved-searches": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "列出保存搜索",
+                "responses": {}
+            },
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "创建保存搜索",
+                "responses": {}
+            }
+        },
+        "/asset-saved-searches/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "查看保存搜索",
+                "responses": {}
+            },
+            "delete": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "删除保存搜索",
+                "responses": {}
+            },
+            "patch": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "更新保存搜索",
+                "responses": {}
+            }
+        },
+        "/asset-search": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "在服务端授权范围内执行便携 metadata 搜索；query 只存在于请求 body",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "搜索可见备份资产",
+                "parameters": [
+                    {
+                        "description": "inline query 或 opaque saved-search ID",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupAssetSearchPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_search.SearchResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/asset-tags": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "列出用户标签",
+                "responses": {}
+            },
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "创建用户标签",
+                "responses": {}
+            }
+        },
+        "/asset-tags/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "删除用户标签",
+                "responses": {}
+            },
+            "patch": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "更新用户标签",
+                "responses": {}
+            }
+        },
+        "/asset-tags/{id}/assignments": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "分配用户标签",
+                "responses": {}
+            }
+        },
+        "/asset-tags/{id}/assignments/{recoveryPointId}/{entryId}": {
+            "delete": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "取消用户标签分配",
+                "responses": {}
+            }
+        },
         "/audit-logs": {
             "get": {
                 "security": [
@@ -9966,6 +10265,23 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.backupAssetSearchPayload": {
+            "type": "object",
+            "properties": {
+                "cursor": {
+                    "type": "string"
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "query": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.SearchRequest"
+                },
+                "saved_search_id": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api_handlers.backupRepositoryConnectRequest": {
             "type": "object",
             "properties": {
@@ -11053,6 +11369,17 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset.AssetRef": {
+            "type": "object",
+            "properties": {
+                "entry_id": {
+                    "type": "string"
+                },
+                "recovery_point_id": {
                     "type": "string"
                 }
             }
@@ -12808,6 +13135,345 @@ const docTemplate = `{
                 },
                 "version_mode": {
                     "$ref": "#/definitions/xirang_backend_internal_backupasset.VersionMode"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_search.CoverageStatus": {
+            "type": "string",
+            "enum": [
+                "complete",
+                "partial",
+                "building",
+                "failed",
+                "unavailable"
+            ],
+            "x-enum-varnames": [
+                "CoverageComplete",
+                "CoveragePartial",
+                "CoverageBuilding",
+                "CoverageFailed",
+                "CoverageUnavailable"
+            ]
+        },
+        "xirang_backend_internal_backupasset_search.QueryNode": {
+            "type": "object",
+            "properties": {
+                "children": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_search.QueryNode"
+                    }
+                },
+                "field": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.SearchField"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "op": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.QueryOp"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                },
+                "values": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_search.QueryOp": {
+            "type": "string",
+            "enum": [
+                "and",
+                "or",
+                "not",
+                "term",
+                "type",
+                "modified_time"
+            ],
+            "x-enum-varnames": [
+                "QueryOpAnd",
+                "QueryOpOr",
+                "QueryOpNot",
+                "QueryOpTerm",
+                "QueryOpType",
+                "QueryOpModifiedTime"
+            ]
+        },
+        "xirang_backend_internal_backupasset_search.SearchCapabilities": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "boolean"
+                },
+                "metadata": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_search.SearchCoverage": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.CoverageStatus"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_search.SearchField": {
+            "type": "string",
+            "enum": [
+                "any",
+                "name",
+                "path",
+                "extension",
+                "type",
+                "modified_time",
+                "tag",
+                "content",
+                "ocr"
+            ],
+            "x-enum-varnames": [
+                "SearchFieldAny",
+                "SearchFieldName",
+                "SearchFieldPath",
+                "SearchFieldExtension",
+                "SearchFieldType",
+                "SearchFieldModifiedTime",
+                "SearchFieldTag",
+                "SearchFieldContent",
+                "SearchFieldOCR"
+            ]
+        },
+        "xirang_backend_internal_backupasset_search.SearchHit": {
+            "type": "object",
+            "properties": {
+                "asset": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.EntryDTO"
+                },
+                "hit_fields": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_search.SearchField"
+                    }
+                },
+                "ref": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.AssetRef"
+                },
+                "score": {
+                    "type": "integer"
+                },
+                "snippet": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.VerifiedSnippet"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_search.SearchIndexStatus": {
+            "type": "object",
+            "properties": {
+                "catalog_generation_id": {
+                    "type": "string"
+                },
+                "coverage": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.CoverageStatus"
+                },
+                "projection_revision": {
+                    "type": "integer"
+                },
+                "recovery_point_id": {
+                    "type": "string"
+                },
+                "search_generation_id": {
+                    "type": "string"
+                },
+                "staleness": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.StalenessStatus"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_search.SearchPermissions": {
+            "type": "object",
+            "properties": {
+                "list": {
+                    "type": "boolean"
+                },
+                "secret_reveal": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_search.SearchRequest": {
+            "type": "object",
+            "properties": {
+                "cursor": {
+                    "type": "string"
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "root": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.QueryNode"
+                },
+                "schema_version": {
+                    "type": "integer"
+                },
+                "scope": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.SearchScope"
+                },
+                "sort": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.SearchSort"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_search.SearchResponse": {
+            "type": "object",
+            "properties": {
+                "authoritative_empty": {
+                    "type": "boolean"
+                },
+                "capabilities": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.SearchCapabilities"
+                },
+                "coverage": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.SearchCoverage"
+                },
+                "indexes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_search.SearchIndexStatus"
+                    }
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_search.SearchHit"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                },
+                "permissions": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.SearchPermissions"
+                },
+                "query_generation": {
+                    "type": "string"
+                },
+                "suggestions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_search.SearchSuggestion"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "total_relation": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.TotalRelation"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_search.SearchScope": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.SearchScopeMode"
+                },
+                "recovery_point_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "repository_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "task_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_search.SearchScopeMode": {
+            "type": "string",
+            "enum": [
+                "current",
+                "all_retained",
+                "exact_points"
+            ],
+            "x-enum-varnames": [
+                "SearchScopeCurrent",
+                "SearchScopeAllRetained",
+                "SearchScopeExactPoints"
+            ]
+        },
+        "xirang_backend_internal_backupasset_search.SearchSort": {
+            "type": "string",
+            "enum": [
+                "relevance",
+                "name_asc",
+                "modified_desc"
+            ],
+            "x-enum-varnames": [
+                "SearchSortRelevance",
+                "SearchSortNameAsc",
+                "SearchSortModifiedDesc"
+            ]
+        },
+        "xirang_backend_internal_backupasset_search.SearchSuggestion": {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.SearchField"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_search.StalenessStatus": {
+            "type": "string",
+            "enum": [
+                "fresh",
+                "stale",
+                "unknown"
+            ],
+            "x-enum-varnames": [
+                "StalenessFresh",
+                "StalenessStale",
+                "StalenessUnknown"
+            ]
+        },
+        "xirang_backend_internal_backupasset_search.TotalRelation": {
+            "type": "string",
+            "enum": [
+                "exact",
+                "lower_bound",
+                "unavailable"
+            ],
+            "x-enum-varnames": [
+                "TotalRelationExact",
+                "TotalRelationLowerBound",
+                "TotalRelationUnavailable"
+            ]
+        },
+        "xirang_backend_internal_backupasset_search.VerifiedSnippet": {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_search.SearchField"
+                },
+                "text": {
+                    "type": "string"
                 }
             }
         },

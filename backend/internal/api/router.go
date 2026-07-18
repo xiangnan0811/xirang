@@ -16,6 +16,7 @@ import (
 	"xirang/backend/internal/backupasset/publication"
 	backuprepository "xirang/backend/internal/backupasset/repository"
 	backupruntime "xirang/backend/internal/backupasset/runtime"
+	assetsearch "xirang/backend/internal/backupasset/search"
 	"xirang/backend/internal/integration"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/node"
@@ -154,6 +155,32 @@ func (featureDisabledRcloneVersioningService) RcloneVersioningSummary(_ context.
 	return backupasset.RclonePublicationSummary{}, featureDisabledBackupRepositoryError(backuprepository.RequestContext{})
 }
 
+func runtimeBackupAssetHandlerConfigSource(runtime *backupruntime.Runtime) handlers.BackupAssetHandlerConfigSource {
+	return func() (handlers.BackupAssetHandlerConfig, error) {
+		if runtime == nil || runtime.FoundationService() == nil {
+			return handlers.BackupAssetHandlerConfig{}, fmt.Errorf("backup asset runtime config is unavailable")
+		}
+		searchConfig, overlayConfig, err := runtime.FoundationService().SearchOverlayConfig()
+		if err != nil {
+			return handlers.BackupAssetHandlerConfig{}, err
+		}
+		if searchConfig.Enabled != overlayConfig.Enabled {
+			return handlers.BackupAssetHandlerConfig{}, fmt.Errorf("backup asset handler feature snapshot is inconsistent")
+		}
+		return handlers.BackupAssetHandlerConfig{
+			Enabled: searchConfig.Enabled,
+			QueryLimits: assetsearch.QueryLimits{
+				MaxBodyBytes: searchConfig.BodyMaxBytes, MaxDepth: searchConfig.ASTMaxDepth,
+				MaxNodes: searchConfig.ASTMaxNodes, MaxValuesPerNode: searchConfig.ValuesPerNode,
+				MaxValueBytes: searchConfig.ValueMaxBytes, MaxValueRunes: searchConfig.ValueMaxBytes,
+				MaxPageSize: searchConfig.PageSizeMax, MaxCandidates: searchConfig.CandidateLimit,
+				MaxExecutionTime: searchConfig.QueryTimeout, MaxSuggestions: searchConfig.SuggestionLimit,
+			},
+			IdempotencyKeyMaxBytes: overlayConfig.IdempotencyKeyMaxBytes,
+		}, nil
+	}
+}
+
 func NewRouter(dep Dependencies) *gin.Engine {
 	appCtx := dep.AppContext
 	if appCtx == nil {
@@ -186,7 +213,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Xirang-Step-Up")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-Xirang-Step-Up")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
@@ -238,6 +265,10 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	reportHandler := handlers.NewReportHandler(dep.DB)
 	var backupRepositoryService handlers.BackupRepositoryService = featureDisabledBackupRepositoryService{}
 	backupAssetCatalogService := handlers.NewFeatureDisabledBackupAssetCatalogService()
+	backupAssetSearchService := handlers.NewFeatureDisabledBackupAssetSearchService()
+	backupAssetSavedSearchUseService := handlers.NewFeatureDisabledBackupAssetSavedSearchUseService()
+	backupAssetOverlayService := handlers.NewFeatureDisabledBackupAssetOverlayService()
+	backupAssetHandlerConfigSource := handlers.NewFeatureDisabledBackupAssetHandlerConfigSource()
 	var backupAssetAuditSink handlers.BackupAssetAuditSink
 	var lineageGuard publication.LineageGuard
 	var featureTransitioner publication.FeatureTransitioner
@@ -247,6 +278,14 @@ func NewRouter(dep Dependencies) *gin.Engine {
 			backupAssetCatalogService = dep.BackupAssets.CatalogService()
 			backupAssetAuditSink = dep.BackupAssets.CatalogAuditSink()
 		}
+		if dep.BackupAssets.SearchService() != nil {
+			backupAssetSearchService = dep.BackupAssets.SearchService()
+		}
+		if dep.BackupAssets.OverlayService() != nil {
+			backupAssetSavedSearchUseService = dep.BackupAssets.OverlayService()
+			backupAssetOverlayService = dep.BackupAssets.OverlayService()
+		}
+		backupAssetHandlerConfigSource = runtimeBackupAssetHandlerConfigSource(dep.BackupAssets)
 		lineageGuard = dep.BackupAssets.LineageGuard()
 		featureTransitioner = dep.BackupAssets.FeatureTransitioner()
 	}
@@ -263,6 +302,11 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager, dep.Hub.CheckOrigin)
 	backupRepositoryHandler := handlers.NewBackupRepositoryHandler(backupRepositoryService)
 	backupAssetHandler := handlers.NewBackupAssetHandler(backupAssetCatalogService, backupAssetAuditSink)
+	backupAssetSearchHandler := handlers.NewBackupAssetSearchHandler(
+		backupAssetSearchService, backupAssetSavedSearchUseService, backupAssetAuditSink,
+		backupAssetHandlerConfigSource, handlers.NewBackupAssetSecretProofVerifier(dep.DB, dep.JWTManager),
+	)
+	backupAssetOverlayHandler := handlers.NewBackupAssetOverlayHandler(backupAssetOverlayService, backupAssetAuditSink, backupAssetHandlerConfigSource)
 	var rsyncVersioningService handlers.TaskRsyncVersioningService = featureDisabledRsyncVersioningService{}
 	if dep.BackupAssets != nil {
 		rsyncVersioningService = dep.BackupAssets.RepositoryService()
@@ -311,6 +355,23 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/recovery-points/:id/entries", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.ListEntries)
 	secured.GET("/recovery-points/:id/entries/:entryId", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetEntry)
 	secured.POST("/recovery-point-diffs", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.Diff)
+	secured.POST("/asset-search", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetSearchHandler.Search)
+	secured.GET("/asset-saved-searches", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.ListSavedSearches)
+	secured.POST("/asset-saved-searches", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.CreateSavedSearch)
+	secured.GET("/asset-saved-searches/:id", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.GetSavedSearch)
+	secured.PATCH("/asset-saved-searches/:id", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.UpdateSavedSearch)
+	secured.DELETE("/asset-saved-searches/:id", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.DeleteSavedSearch)
+	secured.GET("/asset-favorites", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.ListFavorites)
+	secured.POST("/asset-favorites", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.AddFavorite)
+	secured.DELETE("/asset-favorites/:recoveryPointId/:entryId", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.RemoveFavorite)
+	secured.GET("/asset-tags", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.ListTags)
+	secured.POST("/asset-tags", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.CreateTag)
+	secured.PATCH("/asset-tags/:id", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.UpdateTag)
+	secured.DELETE("/asset-tags/:id", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.DeleteTag)
+	secured.POST("/asset-tags/:id/assignments", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.AssignTag)
+	secured.DELETE("/asset-tags/:id/assignments/:recoveryPointId/:entryId", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.UnassignTag)
+	secured.GET("/asset-recent", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.ListRecent)
+	secured.POST("/asset-recent/clear", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.ClearRecent)
 	secured.POST("/backup-repositories/:id/reconcile", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), backupRepositoryHandler.Reconcile)
 	secured.POST("/backup-repositories/:id/disconnect", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), backupRepositoryHandler.Disconnect)
 	secured.GET("/users", middleware.ETag(), middleware.RBAC("users:manage"), userHandler.List)

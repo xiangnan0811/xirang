@@ -136,6 +136,22 @@ func MigrateEncryptionV1ToV2(db *gorm.DB) error {
 	}
 	total += n
 
+	for _, encryptedOverlay := range []struct {
+		table   string
+		columns map[string]string
+	}{
+		{"backup_asset_saved_searches", map[string]string{"encrypted_ast": "encrypted_ast"}},
+		{"backup_asset_favorites", map[string]string{"encrypted_label": "encrypted_label"}},
+		{"backup_asset_tag_definitions", map[string]string{"encrypted_name": "encrypted_name"}},
+		{"backup_asset_overlay_idempotency", map[string]string{"encrypted_request_fingerprint": "encrypted_request_fingerprint"}},
+	} {
+		n, err = reEncryptColumns(noHooks, encryptedOverlay.table, encryptedOverlay.columns)
+		if err != nil {
+			return fmt.Errorf("%s 迁移失败: %w", encryptedOverlay.table, err)
+		}
+		total += n
+	}
+
 	// Drill scripts were historically stored as plaintext. Encrypt them even when
 	// no enc:v1: residual remains (reEncryptColumns only rewrites v1 ciphertext).
 	n, err = encryptPlaintextPolicyDrillScripts(noHooks)
@@ -241,11 +257,15 @@ func reEncryptColumns(db *gorm.DB, table string, columns map[string]string) (int
 	}
 	defer rows.Close() //nolint:errcheck
 
-	updated := 0
+	type pendingUpdate struct {
+		id      any
+		updates map[string]any
+	}
+	pending := make([]pendingUpdate, 0)
 	for rows.Next() {
 		// 动态扫描
 		values := make([]interface{}, len(cols))
-		var id uint
+		var id any
 		values[0] = &id
 		strPtrs := make([]*string, len(cols)-1)
 		for i := range strPtrs {
@@ -253,7 +273,7 @@ func reEncryptColumns(db *gorm.DB, table string, columns map[string]string) (int
 			values[i+1] = strPtrs[i]
 		}
 		if err := rows.Scan(values...); err != nil {
-			return updated, err
+			return 0, err
 		}
 
 		updates := map[string]interface{}{}
@@ -267,19 +287,30 @@ func reEncryptColumns(db *gorm.DB, table string, columns map[string]string) (int
 			}
 			newVal, changed, err := secure.ReEncryptV1Value(val)
 			if err != nil {
-				return updated, fmt.Errorf("表 %s id=%d 列 %s 重加密失败: %w", table, id, col, err)
+				return 0, fmt.Errorf("表 %s id=%v 列 %s 重加密失败: %w", table, id, col, err)
 			}
 			if changed {
 				updates[col] = newVal
-				updated++
 			}
 		}
 
 		if len(updates) > 0 {
-			if err := db.Table(table).Where("id = ?", id).Updates(updates).Error; err != nil {
-				return updated, fmt.Errorf("表 %s id=%d 更新失败: %w", table, id, err)
-			}
+			pending = append(pending, pendingUpdate{id: id, updates: updates})
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+
+	updated := 0
+	for _, item := range pending {
+		if err := db.Table(table).Where("id = ?", item.id).Updates(item.updates).Error; err != nil {
+			return updated, fmt.Errorf("表 %s id=%v 更新失败: %w", table, item.id, err)
+		}
+		updated += len(item.updates)
 	}
 	return updated, nil
 }
@@ -360,6 +391,10 @@ func CountV1EncryptedData(db *gorm.DB) (int64, error) {
 		{"policies", []string{"pre_hook", "post_hook", "drill_pre_verify", "drill_verify", "drill_post_verify"}},
 		{"app_credentials", []string{"config"}},
 		{"users", []string{"totp_secret", "recovery_codes"}},
+		{"backup_asset_saved_searches", []string{"encrypted_ast"}},
+		{"backup_asset_favorites", []string{"encrypted_label"}},
+		{"backup_asset_tag_definitions", []string{"encrypted_name"}},
+		{"backup_asset_overlay_idempotency", []string{"encrypted_request_fingerprint"}},
 	}
 
 	var total int64

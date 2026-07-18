@@ -169,6 +169,68 @@ func TestCatalogRoutesRequireAssetListPermissionBeforeFeatureGate(t *testing.T) 
 	}
 }
 
+func TestAssetSearchOverlayRoutesRequireListPermissionBeforeFeatureGate(t *testing.T) {
+	fixture := setupBackupAssetRBACFixture(t)
+	const id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const pointID = "11111111111111111111111111111111"
+	const entryID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	query := `{"schema_version":1,"root":{"op":"term","field":"name","text":"report"},"scope":{"mode":"current"},"sort":"relevance","limit":10}`
+	routes := []struct {
+		name     string
+		method   string
+		path     string
+		body     string
+		mutation bool
+	}{
+		{"search", http.MethodPost, "/api/v1/asset-search", `{"query":` + query + `}`, false},
+		{"saved list", http.MethodGet, "/api/v1/asset-saved-searches", "", false},
+		{"saved create", http.MethodPost, "/api/v1/asset-saved-searches", `{"query":` + query + `}`, true},
+		{"saved get", http.MethodGet, "/api/v1/asset-saved-searches/" + id, "", false},
+		{"saved update", http.MethodPatch, "/api/v1/asset-saved-searches/" + id, `{"query":` + query + `,"expected_version":1}`, true},
+		{"saved delete", http.MethodDelete, "/api/v1/asset-saved-searches/" + id, `{"expected_version":1}`, true},
+		{"favorite list", http.MethodGet, "/api/v1/asset-favorites", "", false},
+		{"favorite add", http.MethodPost, "/api/v1/asset-favorites", `{"ref":{"recovery_point_id":"` + pointID + `","entry_id":"` + entryID + `"}}`, true},
+		{"favorite remove", http.MethodDelete, "/api/v1/asset-favorites/" + pointID + "/" + entryID, "", true},
+		{"tag list", http.MethodGet, "/api/v1/asset-tags", "", false},
+		{"tag create", http.MethodPost, "/api/v1/asset-tags", `{"name":"Finance"}`, true},
+		{"tag update", http.MethodPatch, "/api/v1/asset-tags/" + id, `{"name":"Finance 2026","expected_version":1}`, true},
+		{"tag delete", http.MethodDelete, "/api/v1/asset-tags/" + id, `{"expected_version":1}`, true},
+		{"tag assign", http.MethodPost, "/api/v1/asset-tags/" + id + "/assignments", `{"ref":{"recovery_point_id":"` + pointID + `","entry_id":"` + entryID + `"}}`, true},
+		{"tag unassign", http.MethodDelete, "/api/v1/asset-tags/" + id + "/assignments/" + pointID + "/" + entryID, "", true},
+		{"recent list", http.MethodGet, "/api/v1/asset-recent", "", false},
+		{"recent clear", http.MethodPost, "/api/v1/asset-recent/clear", "", true},
+	}
+
+	for _, route := range routes {
+		route := route
+		t.Run(route.name+"/unauthenticated", func(t *testing.T) {
+			response := performBackupAssetRBACRequest(t, fixture, route.method, route.path, route.body, "")
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+		for _, role := range []string{"admin", "operator", "viewer", "unknown"} {
+			role := role
+			t.Run(route.name+"/"+role, func(t *testing.T) {
+				request := httptest.NewRequest(route.method, route.path, strings.NewReader(route.body))
+				request.Header.Set("Authorization", "Bearer "+fixture.tokens[role])
+				if route.mutation {
+					request.Header.Set("Idempotency-Key", "rbac-overlay-key-01")
+				}
+				response := httptest.NewRecorder()
+				fixture.router.ServeHTTP(response, request)
+				expected := http.StatusForbidden
+				if role == "admin" || role == "operator" {
+					expected = http.StatusServiceUnavailable
+				}
+				if response.Code != expected {
+					t.Fatalf("status=%d want=%d body=%s", response.Code, expected, response.Body.String())
+				}
+			})
+		}
+	}
+}
+
 func TestRsyncVersioningMigrationRoutesRequireAdminBeforeFeatureGate(t *testing.T) {
 	fixture := setupBackupAssetRBACFixture(t)
 	routes := []struct {

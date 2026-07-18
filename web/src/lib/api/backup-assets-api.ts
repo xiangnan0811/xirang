@@ -15,11 +15,16 @@ import type {
 } from "@/types/domain";
 import { request } from "./core";
 import {
+  blockedBackupAssetProjection,
+  isRawBackupAssetObject,
+  mapAssetRef,
+  mapBackupAssetEntryId,
+  mapSafeNonNegativeInteger,
+} from "./backup-assets-boundary";
+import {
   mapCatalogCapabilityReason,
   normalizeNullableCatalogTime,
 } from "./recovery-points-api";
-
-type RawObject = Record<string, unknown>;
 
 export type BackupAssetSort = "name_asc" | "name_desc" | "size_desc" | "modified_desc";
 export type RecoveryPointDiffSort = "path_asc";
@@ -42,28 +47,12 @@ export interface RecoveryPointDiffInput {
   cursor?: string;
 }
 
-function isRawObject(value: unknown): value is RawObject {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function blocked<T>(): CatalogProjection<T> {
-  return {
-    status: "blocked",
-    reason: { code: "unknown_internal_state", params: {} },
-  };
+  return blockedBackupAssetProjection();
 }
 
 function finiteInteger(value: unknown): number | null {
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
-}
-
-function pointId(value: unknown): string | null {
-  return typeof value === "string" && /^[0-9a-f]{32}$/.test(value) ? value : null;
-}
-
-function entryId(value: unknown): string | null {
-  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value) ? value : null;
+  return mapSafeNonNegativeInteger(value);
 }
 
 function entryType(value: unknown): CatalogEntryType | null {
@@ -142,24 +131,16 @@ function changedField(value: unknown): RecoveryPointDiffChangedField | null {
   }
 }
 
-function rawAssetRef(value: RawObject): AssetRef | null {
-  const recoveryPointId = pointId(value.recovery_point_id);
-  const assetEntryId = entryId(value.entry_id);
-  return recoveryPointId === null || assetEntryId === null
-    ? null
-    : { recoveryPointId, entryId: assetEntryId };
-}
-
 function mapBreadcrumb(value: unknown, recoveryPointId: string) {
   if (!Array.isArray(value)) {
     return [];
   }
   const result = [];
   for (const item of value) {
-    if (!isRawObject(item)) {
+    if (!isRawBackupAssetObject(item)) {
       return null;
     }
-    const ref = rawAssetRef(item);
+    const ref = mapAssetRef(item);
     if (ref === null || ref.recoveryPointId !== recoveryPointId || typeof item.name !== "string" || item.name === "") {
       return null;
     }
@@ -169,10 +150,10 @@ function mapBreadcrumb(value: unknown, recoveryPointId: string) {
 }
 
 export function mapBackupAsset(value: unknown): CatalogProjection<BackupAsset> {
-  if (!isRawObject(value)) {
+  if (!isRawBackupAssetObject(value)) {
     return blocked();
   }
-  const ref = rawAssetRef(value);
+  const ref = mapAssetRef(value);
   const mappedEntryType = entryType(value.entry_type);
   const size = finiteInteger(value.size);
   const strength = fingerprintStrength(value.fingerprint_strength);
@@ -182,7 +163,7 @@ export function mapBackupAsset(value: unknown): CatalogProjection<BackupAsset> {
   }
   let parentRef: AssetRef | null = null;
   if (value.parent_entry_id !== null && value.parent_entry_id !== undefined && value.parent_entry_id !== "") {
-    const parentEntryId = entryId(value.parent_entry_id);
+    const parentEntryId = mapBackupAssetEntryId(value.parent_entry_id);
     if (parentEntryId === null) {
       return blocked();
     }
@@ -214,10 +195,10 @@ function mapDiffSide(value: unknown): RecoveryPointDiffSide | null | undefined {
   if (value === null || value === undefined) {
     return null;
   }
-  if (!isRawObject(value)) {
+  if (!isRawBackupAssetObject(value)) {
     return undefined;
   }
-  const ref = rawAssetRef(value);
+  const ref = mapAssetRef(value);
   const mappedEntryType = entryType(value.entry_type);
   const size = finiteInteger(value.size);
   const strength = fingerprintStrength(value.fingerprint_strength);
@@ -239,7 +220,7 @@ function mapDiffSide(value: unknown): RecoveryPointDiffSide | null | undefined {
 }
 
 function mapDiffItem(value: unknown): RecoveryPointDiffItem | null {
-  if (!isRawObject(value)) {
+  if (!isRawBackupAssetObject(value)) {
     return null;
   }
   const kind = diffKind(value.kind);
@@ -265,7 +246,7 @@ function mapDiffItem(value: unknown): RecoveryPointDiffItem | null {
 }
 
 export function mapRecoveryPointDiff(value: unknown): CatalogProjection<RecoveryPointDiff> {
-  if (!isRawObject(value) || !Array.isArray(value.items) || !isRawObject(value.provider_evidence)) {
+  if (!isRawBackupAssetObject(value) || !Array.isArray(value.items) || !isRawBackupAssetObject(value.provider_evidence)) {
     return blocked();
   }
   const providerStatus = providerDiffStatus(value.provider_evidence.status);
@@ -294,7 +275,7 @@ export function mapRecoveryPointDiff(value: unknown): CatalogProjection<Recovery
 }
 
 function mapBackupAssetPage(value: unknown): BackupAssetPage {
-  const raw = isRawObject(value) ? value : {};
+  const raw = isRawBackupAssetObject(value) ? value : {};
   return {
     items: Array.isArray(raw.items) ? raw.items.map(mapBackupAsset) : [],
     nextCursor: typeof raw.next_cursor === "string" && raw.next_cursor !== "" ? raw.next_cursor : null,

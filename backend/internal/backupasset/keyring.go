@@ -23,6 +23,7 @@ const (
 	KeyDomainCursorSigning            KeyDomain = "cursor_signing"
 	KeyDomainAuditFingerprint         KeyDomain = "audit_fingerprint"
 	KeyDomainRecoveryCleanupOwnership KeyDomain = "recovery_cleanup_ownership"
+	KeyDomainSearchToken              KeyDomain = "search_token"
 )
 
 var RequiredKeyDomains = []KeyDomain{
@@ -50,6 +51,14 @@ type DomainKeyMaterial struct {
 	ActivatedAt time.Time
 	VerifyUntil *time.Time
 }
+
+type RebuildableKeyTransition struct {
+	Domain          KeyDomain
+	PreviousVersion int
+	NextVersion     int
+}
+
+type RebuildableKeyInvalidator func(context.Context, *gorm.DB, RebuildableKeyTransition) error
 
 type Keyring struct {
 	db  *gorm.DB
@@ -183,7 +192,7 @@ func (keyring *Keyring) Rotate(ctx context.Context, domain KeyDomain, verifyFor 
 	if err := keyring.validate(domain); err != nil {
 		return DomainKeyMaterial{}, err
 	}
-	if domain == KeyDomainEntryIdentity || domain == KeyDomainRecoveryCleanupOwnership {
+	if domain == KeyDomainEntryIdentity || domain == KeyDomainRecoveryCleanupOwnership || domain == KeyDomainSearchToken {
 		return DomainKeyMaterial{}, fmt.Errorf("%w: domain %s is installation-stable", ErrKeyRotationProhibited, domain)
 	}
 	if domain == KeyDomainCursorSigning && (verifyFor <= 0 || verifyFor > 7*24*time.Hour) {
@@ -255,6 +264,79 @@ func (keyring *Keyring) Rotate(ctx context.Context, domain KeyDomain, verifyFor 
 	return keyring.material(created)
 }
 
+func (keyring *Keyring) ReplaceRebuildable(
+	ctx context.Context,
+	domain KeyDomain,
+	invalidate RebuildableKeyInvalidator,
+) (DomainKeyMaterial, error) {
+	if err := keyring.validateRebuildableTransition(domain, invalidate); err != nil {
+		return DomainKeyMaterial{}, err
+	}
+	var created model.WrappedDomainKey
+	err := keyring.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		rows, err := loadDomainKeyRows(tx, domain, true)
+		if err != nil {
+			return err
+		}
+		var active *model.WrappedDomainKey
+		maxVersion := 0
+		for index := range rows {
+			row := &rows[index]
+			if row.Version > maxVersion {
+				maxVersion = row.Version
+			}
+			if DomainKeyState(row.State) == DomainKeyActive {
+				active = row
+			}
+		}
+		if maxVersion == 0 {
+			return fmt.Errorf("%w: rebuildable domain has not been initialized", ErrKeyUnavailable)
+		}
+		if active == nil {
+			latest := rows[len(rows)-1]
+			if DomainKeyState(latest.State) != DomainKeyLost {
+				return fmt.Errorf("%w: rebuildable domain has no active or lost key", ErrKeyUnavailable)
+			}
+		} else if _, err := keyring.material(*active); err != nil {
+			return err
+		}
+
+		transition := RebuildableKeyTransition{
+			Domain: domain, PreviousVersion: maxVersion, NextVersion: maxVersion + 1,
+		}
+		if err := invalidate(ctx, tx, transition); err != nil {
+			return fmt.Errorf("invalidate rebuildable domain: %w", err)
+		}
+		if active != nil {
+			result := tx.Model(&model.WrappedDomainKey{}).
+				Where("id = ? AND state = ?", active.ID, DomainKeyActive).
+				Updates(map[string]any{
+					"state":        DomainKeyRetired,
+					"verify_until": nil,
+					"updated_at":   keyring.utcNow(),
+				})
+			if result.Error != nil {
+				return fmt.Errorf("retire rebuildable domain key: %w", result.Error)
+			}
+			if result.RowsAffected != 1 {
+				return fmt.Errorf("%w: active rebuildable key changed", ErrConflict)
+			}
+		}
+		created, err = keyring.newRow(domain, transition.NextVersion, DomainKeyActive, nil)
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(&created).Error; err != nil {
+			return fmt.Errorf("create replacement domain key: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return DomainKeyMaterial{}, err
+	}
+	return keyring.material(created)
+}
+
 func (keyring *Keyring) RewrapAll(ctx context.Context) (int64, error) {
 	if keyring == nil || keyring.db == nil {
 		return 0, fmt.Errorf("%w: keyring database is unavailable", ErrKeyUnavailable)
@@ -305,6 +387,9 @@ func (keyring *Keyring) MarkLost(ctx context.Context, domain KeyDomain, version 
 	if err := keyring.validate(domain); err != nil {
 		return err
 	}
+	if domain == KeyDomainSearchToken {
+		return fmt.Errorf("%w: domain %s requires coordinated invalidation", ErrKeyRotationProhibited, domain)
+	}
 	if version <= 0 {
 		return fmt.Errorf("%w: invalid key version", ErrKeyUnavailable)
 	}
@@ -322,6 +407,66 @@ func (keyring *Keyring) MarkLost(ctx context.Context, domain KeyDomain, version 
 	}
 	if result.RowsAffected != 1 {
 		return fmt.Errorf("%w: domain key version is missing or already lost", ErrKeyUnavailable)
+	}
+	return nil
+}
+
+func (keyring *Keyring) MarkRebuildableLost(
+	ctx context.Context,
+	domain KeyDomain,
+	version int,
+	invalidate RebuildableKeyInvalidator,
+) error {
+	if err := keyring.validateRebuildableTransition(domain, invalidate); err != nil {
+		return err
+	}
+	if version <= 0 {
+		return fmt.Errorf("%w: invalid key version", ErrKeyUnavailable)
+	}
+	return keyring.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		rows, err := loadDomainKeyRows(tx, domain, true)
+		if err != nil {
+			return err
+		}
+		var target *model.WrappedDomainKey
+		for index := range rows {
+			if rows[index].Version == version && DomainKeyState(rows[index].State) == DomainKeyActive {
+				target = &rows[index]
+				break
+			}
+		}
+		if target == nil {
+			return fmt.Errorf("%w: domain key version is not active", ErrKeyUnavailable)
+		}
+		transition := RebuildableKeyTransition{Domain: domain, PreviousVersion: version}
+		if err := invalidate(ctx, tx, transition); err != nil {
+			return fmt.Errorf("invalidate lost rebuildable domain: %w", err)
+		}
+		now := keyring.utcNow()
+		result := tx.Model(&model.WrappedDomainKey{}).
+			Where("id = ? AND version = ? AND state = ?", target.ID, version, DomainKeyActive).
+			Updates(map[string]any{
+				"state": DomainKeyLost, "verify_until": nil, "lost_at": now, "updated_at": now,
+			})
+		if result.Error != nil {
+			return fmt.Errorf("mark rebuildable domain key lost: %w", result.Error)
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("%w: rebuildable key changed during loss", ErrConflict)
+		}
+		return nil
+	})
+}
+
+func (keyring *Keyring) validateRebuildableTransition(domain KeyDomain, invalidate RebuildableKeyInvalidator) error {
+	if err := keyring.validate(domain); err != nil {
+		return err
+	}
+	if domain != KeyDomainSearchToken {
+		return fmt.Errorf("%w: domain %s is not rebuildable", ErrKeyRotationProhibited, domain)
+	}
+	if invalidate == nil {
+		return fmt.Errorf("%w: rebuildable invalidation callback is required", ErrInvalidState)
 	}
 	return nil
 }
@@ -445,7 +590,10 @@ func loadDomainKeyRows(tx *gorm.DB, domain KeyDomain, lock bool) ([]model.Wrappe
 }
 
 var (
-	validKeyDomains      = setOf(RequiredKeyDomains...)
+	validKeyDomains = setOf(
+		KeyDomainEntryIdentity, KeyDomainCursorSigning, KeyDomainAuditFingerprint,
+		KeyDomainRecoveryCleanupOwnership, KeyDomainSearchToken,
+	)
 	validDomainKeyStates = setOf(DomainKeyActive, DomainKeyVerifyOnly, DomainKeyRetired, DomainKeyLost)
 )
 
