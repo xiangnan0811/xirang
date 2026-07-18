@@ -1701,6 +1701,151 @@ export interface BackupAssetPage {
   nextCursor: string | null;
 }
 
+export type AssetSearchField = "any" | "name" | "path" | "extension" | "tag" | "content" | "ocr";
+export type AssetSearchHitField = Exclude<AssetSearchField, "any"> | "type" | "modified_time";
+export type AssetSearchSort = "relevance" | "name_asc" | "modified_desc";
+export type AssetSearchScopeMode = "current" | "all_retained" | "exact_points";
+export type AssetSearchCoverageStatus = "complete" | "partial" | "building" | "failed" | "unavailable";
+export type AssetSearchStalenessStatus = "fresh" | "stale" | "unknown";
+export type AssetSearchTotalRelation = "exact" | "lower_bound" | "unavailable";
+
+export type AssetSearchQueryNode =
+  | { op: "and" | "or"; children: AssetSearchQueryNode[] }
+  | { op: "not"; children: [AssetSearchQueryNode] }
+  | { op: "term"; field: AssetSearchField; text: string }
+  | { op: "type"; values: CatalogEntryType[] }
+  | { op: "modified_time"; from: string | null; to: string | null };
+
+export interface AssetSearchScope {
+  mode: AssetSearchScopeMode;
+  repositoryIds: string[];
+  taskIds: number[];
+  recoveryPointIds: string[];
+}
+
+export interface AssetSearchRequest {
+  schemaVersion: 1;
+  root: AssetSearchQueryNode;
+  scope: AssetSearchScope;
+  sort: AssetSearchSort;
+  limit: number;
+  cursor: string | null;
+}
+
+export interface AssetSearchIndexStatus {
+  recoveryPointId: string;
+  catalogGenerationId: string | null;
+  searchGenerationId: string | null;
+  projectionRevision: number;
+  coverage: AssetSearchCoverageStatus;
+  staleness: AssetSearchStalenessStatus;
+}
+
+export interface AssetSearchSnippet {
+  field: "content" | "ocr";
+  text: string;
+}
+
+export interface AssetSearchHit {
+  ref: AssetRef;
+  asset: BackupAsset;
+  hitFields: AssetSearchHitField[];
+  score: number;
+  snippet: AssetSearchSnippet | null;
+}
+
+export interface AssetSearchSuggestion {
+  field: AssetSearchHitField;
+  value: string;
+}
+
+export interface AssetSearchResponse {
+  queryGeneration: string;
+  indexes: AssetSearchIndexStatus[];
+  items: AssetSearchHit[];
+  nextCursor: string | null;
+  total: number | null;
+  totalRelation: AssetSearchTotalRelation;
+  authoritativeEmpty: boolean;
+  coverage: { status: AssetSearchCoverageStatus };
+  suggestions: AssetSearchSuggestion[];
+  capabilities: { metadata: boolean; content: boolean };
+  permissions: { list: boolean; secretReveal: boolean };
+}
+
+export type SavedSearchState = "active" | "broken" | "blocked";
+export type SavedSearchReason =
+  | "point_retired"
+  | "point_expiring"
+  | "point_expired"
+  | "point_failed"
+  | "point_purge_blocked"
+  | "point_missing"
+  | "scope_unauthorized"
+  | "ast_schema_unsupported";
+
+export interface SavedAssetSearch {
+  id: string;
+  query: AssetSearchRequest;
+  version: number;
+  state: SavedSearchState;
+  stateReason: SavedSearchReason | null;
+  brokenAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AssetOverlayState = "active" | "tombstone";
+export type AssetOverlayTombstoneReason =
+  | "source_retired"
+  | "source_expiring"
+  | "source_expired"
+  | "source_failed"
+  | "source_purge_blocked"
+  | "source_missing";
+
+export interface BackupAssetFavorite {
+  id: string;
+  ref: AssetRef;
+  label: string;
+  state: AssetOverlayState;
+  tombstoneReason: AssetOverlayTombstoneReason | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BackupAssetTag {
+  id: string;
+  name: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BackupAssetTagAssignment {
+  id: string;
+  tagId: string;
+  ref: AssetRef;
+  state: AssetOverlayState;
+  tombstoneReason: AssetOverlayTombstoneReason | null;
+  version: number;
+}
+
+export interface BackupAssetRecentAccess {
+  id: string;
+  ref: AssetRef;
+  accessCount: number;
+  lastAccessedAt: string;
+  expiresAt: string;
+  version: number;
+}
+
+export interface BackupAssetOverlayPage<T> {
+  items: T[];
+  nextCursor: string | null;
+}
+
 export type RecoveryPointDiffKind = "added" | "removed" | "modified" | "type_changed";
 export type RecoveryPointDiffContentEquality = "equal" | "different" | "unknown";
 export type RecoveryPointDiffProviderStatus = "supported" | "unavailable" | "not_applicable";

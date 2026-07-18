@@ -772,3 +772,68 @@ Implemented and locally verified the option-A atomic Catalog plane, archived onl
 ### Next Steps
 
 - None - task complete
+
+
+## Session 22: Child 7 backup asset search and user overlays
+
+**Date**: 2026-07-18
+**Task**: Child 7 backup asset search and user overlays
+**Branch**: `codex/backup-assets-search-overlays`
+
+### Summary
+
+Implemented and locally verified permission-first portable backup-asset search plus owner-scoped overlays, archived only Child 7, and left PR/required CI/merge delivery pending.
+
+### Main Changes
+
+## Scope and frozen contracts
+
+- Added paired SQLite/PostgreSQL migration `000065` with 12 Search/Overlay tables, exact indexes/FKs/unique/check/UTC contracts, legacy apply preservation, pristine down, and atomic fail-closed used-down guards. Reservations `000066` through `000071` remain untouched.
+- Added portable Go search normalization and evaluation: Unicode NFKC/full case fold, path segments, Han bigrams, Latin/extension/date tokens, deterministic integer ranking, stable ordering, bounded positive candidate selection, versioned closed AST, and `current`/`all_retained`/`exact_points` scope semantics.
+- Added an independent random wrapped Search Token key domain. KEK rotation rewraps without changing tokens; key loss/replacement invalidates projections and reconciles owner-tag HMACs before availability. Entry/Cursor/Audit/future Derived keys remain separate.
+- Enforced authorization before candidates, classification and exact five-minute `asset.secret_reveal` proof before secret/unknown content facts, then grouping/count/suggestions/snippets. Viewer and unauthorized lineages receive no existence signal; cursor bindings include actor, scope, generations, revisions, proof, and owner-tag digest without plaintext query/path/name.
+- Added safe future `ContentIndexIngest` publication/revocation with source/fence/classification CAS and atomic field coverage. Child 7 creates no content, OCR, excerpt ciphertext, Derived Store, Provider mutation, or Provider command.
+- Added owner-scoped saved searches, favorites, tags, assignments, and recent access with transactional authorization, quotas, idempotency, optimistic versions, audit, broken/tombstone/cleanup behavior, and no retention hold or Provider writeback.
+- Added strict handlers/RBAC/audit/Swagger/runtime/settings/bootstrap wiring and frontend raw DTO/domain/API mapping only. Unknown coupled products block atomically; no page, route, component, browser query storage, or full UI was added.
+- `backup_assets.enabled` remains default false and Command Provider remains typed unsupported.
+
+## Fresh local verification
+
+- Focused Search/Overlay/Runtime/API/settings/bootstrap suites passed uncached.
+- `TestBackupAssetMigration065SQLite` passed.
+- A real isolated PostgreSQL 18 service ran required, non-skipped `TestBackupAssetMigration065Postgres`, `TestSearchBehaviorPostgres`, and `TestOverlayBehaviorPostgres`; all passed.
+- Search/Overlay/Runtime race suites passed with `-count=3`.
+- Swagger regenerated with project-pinned `swag` v1.16.6. The Codex shell omitted `$GOPATH/bin`, so generation used a temporary PATH override; no repository workaround was added.
+- UTC migration safety scanned 60 migration files without regression patterns.
+- `GOFLAGS=-count=1 make backend-test` passed.
+- `env -u NODE_ENV npm run check` passed: 136 test files, 616 tests, lint/typecheck/build all successful.
+- `env -u NODE_ENV make check` passed with golangci-lint reporting 0 issues and both applications building.
+- Security/source scans, exact-manifest review, generated-artifact exclusion, `git diff --cached --check`, and final worktree checks passed.
+
+## Delivery and rollback state
+
+- Base: `8cd6e5184e7dd05f702c3a5762b013c67901a399` (`main`/`origin/main` at implementation start).
+- Work commit: `c6956d0` (`feat: add permission-aware backup asset search`).
+- Child-only archive commit: `188dd0a`; the parent remains `planning` and program progress is now 7/15.
+- At this journal point, push, the single PR, required CI, squash merge, post-merge automation, main sync, and branch cleanup are pending.
+- Once `000065` contains any Search key/lease/projection/overlay row, destructive down is blocked. Rollback disables/fences the feature, retains additive schema, and uses a forward-fix migration/PR.
+- Release Please PR #386 and all sibling Child scope remain untouched.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c6956d03518071534db3d7144982a7c0c38b2189` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

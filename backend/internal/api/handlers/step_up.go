@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -12,6 +13,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+)
+
+var (
+	ErrStepUpProofInvalid        = errors.New("step-up proof invalid")
+	ErrStepUpVerifierUnavailable = errors.New("step-up verifier unavailable")
 )
 
 const (
@@ -82,43 +88,69 @@ func enforceStepUpForContext(c *gin.Context, db *gorm.DB, jwtManager *auth.JWTMa
 
 func validateStepUpProof(db *gorm.DB, jwtManager *auth.JWTManager, proof string, userID uint, role string, expectedAction auth.StepUpAction) (*auth.Claims, error) {
 	if db == nil || jwtManager == nil {
-		return nil, fmt.Errorf("step-up 验证服务不可用")
+		return nil, fmt.Errorf("%w: missing verifier dependency", ErrStepUpVerifierUnavailable)
 	}
 	proof = strings.TrimSpace(proof)
 	if proof == "" {
-		return nil, fmt.Errorf("缺少 step-up proof")
+		return nil, fmt.Errorf("%w: missing proof", ErrStepUpProofInvalid)
 	}
 	if !auth.IsValidStepUpAction(expectedAction) {
-		return nil, fmt.Errorf("step-up action 无效")
+		return nil, fmt.Errorf("%w: invalid expected action", ErrStepUpProofInvalid)
 	}
 	claims, err := jwtManager.ParseToken(proof)
 	if err != nil {
-		return nil, fmt.Errorf("step-up proof 无效")
+		return nil, fmt.Errorf("%w: parse proof", ErrStepUpProofInvalid)
 	}
 	if claims.Purpose != auth.PurposeStepUp {
-		return nil, fmt.Errorf("step-up proof 用途不匹配")
+		return nil, fmt.Errorf("%w: proof purpose", ErrStepUpProofInvalid)
 	}
 	if claims.StepUpAction != expectedAction {
-		return nil, fmt.Errorf("step-up proof 动作不匹配")
+		return nil, fmt.Errorf("%w: proof action", ErrStepUpProofInvalid)
 	}
 	if claims.UserID == 0 || claims.UserID != userID {
-		return nil, fmt.Errorf("step-up proof 用户不匹配")
+		return nil, fmt.Errorf("%w: proof user", ErrStepUpProofInvalid)
 	}
 	if strings.TrimSpace(role) != "" && claims.Role != role {
-		return nil, fmt.Errorf("step-up proof 角色不匹配")
+		return nil, fmt.Errorf("%w: proof role", ErrStepUpProofInvalid)
 	}
 	var user model.User
-	if err := db.Select("id", "role", "token_version", "totp_enabled").First(&user, claims.UserID).Error; err != nil {
-		return nil, fmt.Errorf("用户不存在或已删除")
+	if err := db.Select("id", "role", "token_version", "totp_enabled").First(&user, claims.UserID).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("%w: proof user is unavailable", ErrStepUpProofInvalid)
+	} else if err != nil {
+		return nil, fmt.Errorf("%w: load proof user", ErrStepUpVerifierUnavailable)
 	}
 	if user.TokenVersion != claims.TokenVersion {
-		return nil, fmt.Errorf("step-up proof 已失效")
+		return nil, fmt.Errorf("%w: proof token version", ErrStepUpProofInvalid)
 	}
 	if strings.TrimSpace(user.Role) != "" && user.Role != claims.Role {
-		return nil, fmt.Errorf("step-up proof 角色已失效")
+		return nil, fmt.Errorf("%w: proof role changed", ErrStepUpProofInvalid)
 	}
 	if !user.TOTPEnabled {
-		return nil, fmt.Errorf("step-up proof 已失效")
+		return nil, fmt.Errorf("%w: proof TOTP disabled", ErrStepUpProofInvalid)
+	}
+	return claims, nil
+}
+
+func VerifyOptionalStepUpProof(
+	db *gorm.DB,
+	jwtManager *auth.JWTManager,
+	proof string,
+	userID uint,
+	role string,
+	expectedAction auth.StepUpAction,
+) (*auth.Claims, error) {
+	if strings.TrimSpace(proof) == "" {
+		return nil, nil
+	}
+	if !auth.IsValidStepUpAction(expectedAction) {
+		return nil, fmt.Errorf("%w: invalid expected action", ErrStepUpVerifierUnavailable)
+	}
+	claims, err := validateStepUpProof(db, jwtManager, proof, userID, role, expectedAction)
+	if errors.Is(err, ErrStepUpProofInvalid) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	return claims, nil
 }

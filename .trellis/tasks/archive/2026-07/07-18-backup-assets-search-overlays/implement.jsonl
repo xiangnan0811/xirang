@@ -1,0 +1,14 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Paired SQLite/PostgreSQL 000065 DDL, UTC, constraints, indexes, model parity, apply/down, and real PostgreSQL fixtures."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Closed sentinel errors, errors.Is wrapping, safe handler mapping, and no raw query/SQL/crypto/source errors."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Structured low-cardinality logging with strict query/path/name/tag/content/token redaction."}
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Feature-gated startup, key rewrap/ensure, worker reconciliation, cancellation, and shutdown ownership."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Go tests, concurrency/race coverage, bounded resources, and package-level quality gates."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Raw unknown DTO validation, closed unions, camelCase boundary, and whole-product blocked behavior."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Frontend API tests and the env -u NODE_ENV full gate."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse Catalog ownership/cursor/audit/settings/runtime and central frontend request/boundary helpers."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Keep SQL/model/Go DTO/Swagger/TypeScript enums, security order, and lifecycle contracts aligned."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Dedicated branch, exact staging, single PR, required CI monitoring, squash merge, and post-merge hygiene."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/prd.md","reason":"Parent product goals, accepted decisions, cross-child boundaries, and migration reservation."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/design.md","reason":"Parent Search crypto, scope, classification, coverage, overlays, audit, and Worker/Derived boundaries."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/implement.md","reason":"Parent Child 7 execution contract, validation gates, high-risk reviews, and Content-GA reservations."}
+{"file":".trellis/tasks/07-18-backup-assets-search-overlays/research/current-main-evidence.md","reason":"Exact 8cd6e51 schema, Catalog, keyring, settings, bootstrap, step-up, audit, CI, and frontend gaps."}

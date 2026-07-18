@@ -44,17 +44,23 @@ const (
 	AuditActionAssetList   AuditAction = "asset_list"
 	AuditActionAssetSearch AuditAction = "asset_search"
 
-	AuditActionSavedSearchCreate AuditAction = "saved_search_create"
-	AuditActionSavedSearchUpdate AuditAction = "saved_search_update"
-	AuditActionSavedSearchDelete AuditAction = "saved_search_delete"
-	AuditActionFavoriteAdd       AuditAction = "favorite_add"
-	AuditActionFavoriteRemove    AuditAction = "favorite_remove"
-	AuditActionTagCreate         AuditAction = "tag_create"
-	AuditActionTagUpdate         AuditAction = "tag_update"
-	AuditActionTagDelete         AuditAction = "tag_delete"
-	AuditActionTagAssign         AuditAction = "tag_assign"
-	AuditActionTagUnassign       AuditAction = "tag_unassign"
-	AuditActionRecentClear       AuditAction = "recent_clear"
+	AuditActionSavedSearchCreate      AuditAction = "saved_search_create"
+	AuditActionSavedSearchUpdate      AuditAction = "saved_search_update"
+	AuditActionSavedSearchDelete      AuditAction = "saved_search_delete"
+	AuditActionSavedSearchUse         AuditAction = "saved_search_use"
+	AuditActionSavedSearchBroken      AuditAction = "saved_search_broken"
+	AuditActionFavoriteAdd            AuditAction = "favorite_add"
+	AuditActionFavoriteRemove         AuditAction = "favorite_remove"
+	AuditActionFavoriteTombstone      AuditAction = "favorite_tombstone"
+	AuditActionTagCreate              AuditAction = "tag_create"
+	AuditActionTagUpdate              AuditAction = "tag_update"
+	AuditActionTagDelete              AuditAction = "tag_delete"
+	AuditActionTagAssign              AuditAction = "tag_assign"
+	AuditActionTagUnassign            AuditAction = "tag_unassign"
+	AuditActionTagAssignmentTombstone AuditAction = "tag_assignment_tombstone"
+	AuditActionRecentRecord           AuditAction = "recent_record"
+	AuditActionRecentClear            AuditAction = "recent_clear"
+	AuditActionOverlayCleanup         AuditAction = "overlay_cleanup"
 
 	AuditActionPreviewJob    AuditAction = "preview_job"
 	AuditActionPreviewTicket AuditAction = "preview_ticket"
@@ -124,14 +130,20 @@ var AuditActions = []AuditAction{
 	AuditActionSavedSearchCreate,
 	AuditActionSavedSearchUpdate,
 	AuditActionSavedSearchDelete,
+	AuditActionSavedSearchUse,
+	AuditActionSavedSearchBroken,
 	AuditActionFavoriteAdd,
 	AuditActionFavoriteRemove,
+	AuditActionFavoriteTombstone,
 	AuditActionTagCreate,
 	AuditActionTagUpdate,
 	AuditActionTagDelete,
 	AuditActionTagAssign,
 	AuditActionTagUnassign,
+	AuditActionTagAssignmentTombstone,
+	AuditActionRecentRecord,
 	AuditActionRecentClear,
+	AuditActionOverlayCleanup,
 	AuditActionPreviewJob,
 	AuditActionPreviewTicket,
 	AuditActionPreviewRead,

@@ -2,16 +2,21 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/catalog"
+	"xirang/backend/internal/backupasset/overlay"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/backupasset/repository"
+	"xirang/backend/internal/backupasset/search"
+	"xirang/backend/internal/model"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
 
@@ -37,6 +42,7 @@ type Dependencies struct {
 	ToolBinaries    provider.ToolBinaries
 	Metrics         publication.Metrics
 	CatalogMetrics  catalog.Metrics
+	SearchMetrics   search.Metrics
 	Tombstones      repository.ManagedHistoryTombstoneSource
 }
 
@@ -57,13 +63,21 @@ type Runtime struct {
 	catalogIndexer *catalog.Indexer
 	catalogWorker  *CatalogWorker
 	catalogAudit   repository.AssetAuditSink
+	keyring        *backupasset.Keyring
+	searchService  *search.Service
+	searchIndexer  *search.Indexer
+	searchIngest   *search.ContentIngestService
+	searchWorker   *SearchWorker
+	overlayService *overlay.Service
+	searchReady    *atomic.Bool
 	metrics        publication.Metrics
 
-	mu        sync.Mutex
-	starting  bool
-	observer  publication.CommitObserver
-	reporter  publication.InterruptedRunReporter
-	readiness publication.InterruptedRunReadiness
+	mu          sync.Mutex
+	searchKeyMu sync.Mutex
+	starting    bool
+	observer    publication.CommitObserver
+	reporter    publication.InterruptedRunReporter
+	readiness   publication.InterruptedRunReadiness
 }
 
 func New(dependencies Dependencies) (*Runtime, error) {
@@ -85,6 +99,10 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		return nil, err
 	}
 	catalogConfig, err := foundation.CatalogConfig()
+	if err != nil {
+		return nil, err
+	}
+	searchConfig, overlayConfig, err := foundation.SearchOverlayConfig()
 	if err != nil {
 		return nil, err
 	}
@@ -213,6 +231,73 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	searchQueryLimits := runtimeSearchQueryLimits(searchConfig)
+	overlayAuthorizer := &runtimeOverlayAuthorizer{catalog: catalogService, ownership: catalogOwnership}
+	overlayService, err := overlay.NewService(overlay.ServiceDependencies{
+		DB: dependencies.DB, Keys: keyring, Assets: overlayAuthorizer, Points: overlayAuthorizer, Now: dependencies.Now,
+		Audit: auditSink, FeatureEnabled: foundation.FeatureEnabled,
+		Config: overlay.Config{
+			SavedSearchQuota: overlayConfig.SavedSearchQuota, FavoriteQuota: overlayConfig.FavoriteQuota,
+			TagDefinitionQuota: overlayConfig.TagDefinitionQuota, TagAssignmentQuota: overlayConfig.TagAssignmentQuota,
+			RecentQuota: overlayConfig.RecentQuota, RecentWritesPerMinute: overlayConfig.RecentWritesPerMinute,
+			RecentTTL: overlayConfig.RecentRetention, IdempotencyTTL: overlayConfig.IdempotencyTTL,
+			MaxBulk: overlayConfig.BulkMaxItems, LabelMaxBytes: overlayConfig.LabelMaxBytes,
+			IdempotencyKeyMaxBytes: overlayConfig.IdempotencyKeyMaxBytes, QueryLimits: searchQueryLimits,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	searchScope, err := search.NewScopeResolver(dependencies.DB, catalogOwnership, search.ScopeResolverLimits{MaxCandidates: searchConfig.CandidateLimit})
+	if err != nil {
+		return nil, err
+	}
+	searchService, err := search.NewService(search.ServiceDependencies{
+		DB: dependencies.DB, Scope: searchScope, Keys: keyring,
+		Cursor: search.NewCursorCodec(keyring, dependencies.Now, runtimeProviderCursorTTL), Tags: overlayService, Now: dependencies.Now,
+		Limits:         search.ServiceLimits{Query: searchQueryLimits, MaxCandidates: searchConfig.CandidateLimit, ExecutionTimeout: searchConfig.QueryTimeout},
+		FeatureEnabled: foundation.FeatureEnabled,
+	})
+	if err != nil {
+		return nil, err
+	}
+	searchIndexer, err := search.NewIndexer(search.IndexerDependencies{
+		DB: dependencies.DB, Lease: lease, Keys: keyring, Now: dependencies.Now,
+		Config: search.IndexerConfig{BatchSize: searchConfig.BatchSize, BuildTimeout: searchConfig.BuildTimeout, MaxDocuments: searchConfig.MaxDocuments},
+	})
+	if err != nil {
+		return nil, err
+	}
+	contentLimits := search.DefaultContentIngestLimits()
+	contentLimits.MaxTermBytes = searchConfig.ValueMaxBytes
+	contentLimits.MaxTermRunes = searchConfig.ValueMaxBytes
+	searchIngest, err := search.NewContentIngestService(search.ContentIngestDependencies{
+		DB: dependencies.DB, Keys: keyring, Lease: lease, Now: dependencies.Now, Limits: contentLimits,
+	})
+	if err != nil {
+		return nil, err
+	}
+	searchMetrics := dependencies.SearchMetrics
+	if searchMetrics == nil {
+		searchMetrics = search.NoopMetrics{}
+	}
+	searchReady := &atomic.Bool{}
+	searchWorker, err := NewSearchWorker(SearchWorkerDependencies{
+		Config: func() (SearchWorkerConfig, error) {
+			config, err := foundation.SearchConfig()
+			if err != nil {
+				return SearchWorkerConfig{}, err
+			}
+			return SearchWorkerConfig{
+				Enabled: config.Enabled && searchReady.Load(), ReconcileInterval: config.ReconcileInterval,
+				ReconcileBatchSize: config.BatchSize, WorkerConcurrency: config.MaxConcurrency, AbandonedAfter: config.BuildTimeout,
+			}, nil
+		},
+		Backend: searchIndexerWorkerBackend{indexer: searchIndexer, overlays: overlayService}, Metrics: searchMetrics, Now: dependencies.Now,
+	})
+	if err != nil {
+		return nil, err
+	}
 	var worker *PublicationWorker
 	publicationService, err := repository.NewPublicationService(repository.PublicationDependencies{
 		DB: dependencies.DB, Foundation: foundation, Registry: registry, Keyring: keyring, Lease: lease, Admission: admission, Metrics: metricsSink,
@@ -264,6 +349,8 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		resticStrategy: resticStrategy, rsyncStrategy: rsyncStrategy, rcloneStrategy: rcloneStrategy,
 		admission: admission, worker: worker, healthWorker: healthWorker,
 		catalogService: catalogService, catalogIndexer: catalogIndexer, catalogWorker: catalogWorker, catalogAudit: auditSink,
+		keyring: keyring, searchService: searchService, searchIndexer: searchIndexer, searchIngest: searchIngest,
+		searchWorker: searchWorker, overlayService: overlayService, searchReady: searchReady,
 		metrics: metricsSink,
 	}, nil
 }
@@ -321,6 +408,24 @@ func (runtime *Runtime) CatalogAuditSink() repository.AssetAuditSink {
 		return nil
 	}
 	return runtime.catalogAudit
+}
+func (runtime *Runtime) SearchService() *search.Service {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.searchService
+}
+func (runtime *Runtime) OverlayService() *overlay.Service {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.overlayService
+}
+func (runtime *Runtime) ContentIndexIngest() search.ContentIndexIngest {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.searchIngest
 }
 func (runtime *Runtime) PublicationCoordinator() publication.Coordinator { return runtime.publication }
 func (runtime *Runtime) PublicationReconciler() publication.Reconciler   { return runtime.publication }
@@ -436,6 +541,96 @@ func (runtime *Runtime) StartupPass(ctx context.Context) error {
 			return fmt.Errorf("%w: unresolved backup publication TaskRun", backupasset.ErrConflict)
 		}
 	}
+	return runtime.startupSearch(ctx)
+}
+
+func (runtime *Runtime) startupSearch(ctx context.Context) error {
+	if runtime == nil || runtime.foundation == nil || runtime.keyring == nil || runtime.searchWorker == nil {
+		return fmt.Errorf("%w: Search runtime unavailable", backupasset.ErrInvalidState)
+	}
+	enabled, err := runtime.foundation.FeatureEnabled()
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		runtime.setSearchReady(false)
+		return nil
+	}
+	if _, err := runtime.keyring.RewrapAll(ctx); err != nil {
+		runtime.setSearchReady(false)
+		return err
+	}
+	if _, err := runtime.keyring.Ensure(ctx, backupasset.KeyDomainSearchToken); errors.Is(err, backupasset.ErrKeyLost) {
+		runtime.setSearchReady(false)
+		return nil
+	} else if err != nil {
+		runtime.setSearchReady(false)
+		return err
+	}
+	runtime.setSearchReady(true)
+	if err := runtime.searchWorker.StartupPass(ctx); err != nil {
+		runtime.setSearchReady(false)
+		return err
+	}
+	return nil
+}
+
+func (runtime *Runtime) setSearchReady(ready bool) {
+	if runtime != nil && runtime.searchReady != nil {
+		runtime.searchReady.Store(ready)
+	}
+}
+
+func (runtime *Runtime) ReplaceSearchTokenForReindex(ctx context.Context) (backupasset.DomainKeyMaterial, error) {
+	if runtime == nil || runtime.foundation == nil || runtime.keyring == nil || runtime.overlayService == nil || runtime.searchReady == nil {
+		return backupasset.DomainKeyMaterial{}, fmt.Errorf("%w: Search Token replacement unavailable", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runtime.searchKeyMu.Lock()
+	defer runtime.searchKeyMu.Unlock()
+	enabled, err := runtime.foundation.FeatureEnabled()
+	if err != nil {
+		return backupasset.DomainKeyMaterial{}, err
+	}
+	wasReady := runtime.searchReady.Load()
+	runtime.setSearchReady(false)
+	material, err := runtime.keyring.ReplaceRebuildable(
+		ctx, backupasset.KeyDomainSearchToken, runtime.overlayService.InvalidateSearchKey,
+	)
+	if err != nil {
+		runtime.setSearchReady(wasReady)
+		return backupasset.DomainKeyMaterial{}, err
+	}
+	runtime.setSearchReady(enabled)
+	return material, nil
+}
+
+func (runtime *Runtime) MarkSearchTokenLost(ctx context.Context, version int) error {
+	if runtime == nil || runtime.keyring == nil || runtime.overlayService == nil || runtime.searchReady == nil || version <= 0 {
+		return fmt.Errorf("%w: Search Token loss transition unavailable", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runtime.searchKeyMu.Lock()
+	defer runtime.searchKeyMu.Unlock()
+	active, err := runtime.keyring.Active(ctx, backupasset.KeyDomainSearchToken)
+	if err != nil {
+		return err
+	}
+	if active.Version != version {
+		return fmt.Errorf("%w: Search Token version is not active", backupasset.ErrKeyUnavailable)
+	}
+	wasReady := runtime.searchReady.Load()
+	runtime.setSearchReady(false)
+	if err := runtime.keyring.MarkRebuildableLost(
+		ctx, backupasset.KeyDomainSearchToken, version, runtime.overlayService.InvalidateSearchKey,
+	); err != nil {
+		runtime.setSearchReady(wasReady)
+		return err
+	}
 	return nil
 }
 
@@ -479,6 +674,13 @@ func (runtime *Runtime) Run(ctx context.Context) {
 			runtime.catalogWorker.Run(runCtx)
 		}()
 	}
+	if runtime.searchWorker != nil {
+		health.Add(1)
+		go func() {
+			defer health.Done()
+			runtime.searchWorker.Run(runCtx)
+		}()
+	}
 	runtime.worker.Run(runCtx)
 	cancel()
 	health.Wait()
@@ -493,6 +695,11 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	}
 	if runtime.admission != nil {
 		runtime.admission.StopAccepting()
+	}
+	if runtime.searchWorker != nil {
+		if err := runtime.searchWorker.Shutdown(ctx); err != nil {
+			return err
+		}
 	}
 	if runtime.catalogWorker != nil {
 		if err := runtime.catalogWorker.Shutdown(ctx); err != nil {
@@ -512,6 +719,144 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	if runtime.admission != nil {
 		if err := runtime.admission.Stop(ctx); err != nil && err != ErrAdmissionNotInitialized {
 			return err
+		}
+	}
+	return nil
+}
+
+func runtimeSearchQueryLimits(config backupasset.SearchConfig) search.QueryLimits {
+	return search.QueryLimits{
+		MaxBodyBytes: config.BodyMaxBytes, MaxDepth: config.ASTMaxDepth, MaxNodes: config.ASTMaxNodes,
+		MaxValuesPerNode: config.ValuesPerNode, MaxValueBytes: config.ValueMaxBytes, MaxValueRunes: config.ValueMaxBytes,
+		MaxPageSize: config.PageSizeMax, MaxCandidates: config.CandidateLimit,
+		MaxExecutionTime: config.QueryTimeout, MaxSuggestions: config.SuggestionLimit,
+	}
+}
+
+type runtimeOverlayAuthorizer struct {
+	catalog   *catalog.Service
+	ownership *catalog.Ownership
+}
+
+type searchOverlayReconciler interface {
+	ReconcileTagKeys(context.Context, int) (int64, error)
+	ReconcileInvalidSources(context.Context, int) (int64, error)
+	CleanupExpiredRecent(context.Context, int) (int64, error)
+	CleanupIdempotency(context.Context, int) (int64, error)
+}
+
+type searchIndexerWorkerBackend struct {
+	indexer  *search.Indexer
+	overlays searchOverlayReconciler
+}
+
+func (backend searchIndexerWorkerBackend) ListCandidates(ctx context.Context, limit int) ([]search.BuildCandidate, error) {
+	return backend.indexer.ListCandidates(ctx, limit)
+}
+
+func (backend searchIndexerWorkerBackend) Build(ctx context.Context, request search.BuildRequest) error {
+	_, err := backend.indexer.Build(ctx, request)
+	return err
+}
+
+func (backend searchIndexerWorkerBackend) ReconcileAbandoned(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	return backend.indexer.ReconcileAbandoned(ctx, cutoff, limit)
+}
+
+func (backend searchIndexerWorkerBackend) ReconcileOverlays(ctx context.Context, limit int) (int64, error) {
+	if backend.overlays == nil {
+		return 0, fmt.Errorf("%w: overlay reconciler unavailable", backupasset.ErrInvalidState)
+	}
+	rekeyed, err := backend.overlays.ReconcileTagKeys(ctx, limit)
+	if err != nil {
+		return 0, err
+	}
+	reconciled, err := backend.overlays.ReconcileInvalidSources(ctx, limit)
+	if err != nil {
+		return 0, err
+	}
+	expiredRecent, err := backend.overlays.CleanupExpiredRecent(ctx, limit)
+	if err != nil {
+		return 0, err
+	}
+	expiredIdempotency, err := backend.overlays.CleanupIdempotency(ctx, limit)
+	if err != nil {
+		return 0, err
+	}
+	return rekeyed + reconciled + expiredRecent + expiredIdempotency, nil
+}
+
+func (authorizer *runtimeOverlayAuthorizer) AuthorizeAsset(
+	ctx context.Context,
+	tx *gorm.DB,
+	actor overlay.Actor,
+	ref backupasset.AssetRef,
+) error {
+	if authorizer == nil || authorizer.catalog == nil || tx == nil || actor.UserID == 0 ||
+		(actor.Role != "admin" && actor.Role != "operator") || backupasset.ValidateAssetRef(ref) != nil {
+		return backupasset.ErrForbidden
+	}
+	ownership, err := catalog.NewOwnership(tx)
+	if err != nil {
+		return err
+	}
+	visible, err := ownership.AuthorizedPointIDs(ctx, catalog.AuthorizationScope{Role: actor.Role, UserID: actor.UserID}, []string{ref.RecoveryPointID})
+	if err != nil {
+		return err
+	}
+	if len(visible) != 1 {
+		return fmt.Errorf("%w: overlay asset", backupasset.ErrNotFound)
+	}
+	var point model.RecoveryPoint
+	if err := tx.WithContext(ctx).Where("id = ?", ref.RecoveryPointID).Take(&point).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("%w: overlay asset", backupasset.ErrNotFound)
+		}
+		return fmt.Errorf("load overlay RecoveryPoint authorization: %w", err)
+	}
+	if !runtimeOverlayPointVisible(point) {
+		return fmt.Errorf("%w: overlay asset", backupasset.ErrNotFound)
+	}
+	var count int64
+	if err := tx.WithContext(ctx).Table("catalog_entries AS entries").
+		Joins("JOIN catalog_generations AS generations ON generations.id = entries.generation_id AND generations.recovery_point_id = entries.recovery_point_id").
+		Where(`entries.recovery_point_id = ? AND entries.entry_id = ?
+			AND generations.state = ? AND generations.is_active = ?`,
+			ref.RecoveryPointID, ref.EntryID, catalog.GenerationComplete, true).Count(&count).Error; err != nil {
+		return fmt.Errorf("load overlay Catalog entry authorization: %w", err)
+	}
+	if count != 1 {
+		return fmt.Errorf("%w: overlay asset", backupasset.ErrNotFound)
+	}
+	return nil
+}
+
+func runtimeOverlayPointVisible(point model.RecoveryPoint) bool {
+	switch backupasset.PointVersionSemantics(point.Semantics) {
+	case backupasset.PointMutableHead:
+		return backupasset.RecoveryPointState(point.State) == backupasset.RecoveryPointObserved
+	case backupasset.PointNativeSnapshot, backupasset.PointXirangManifest, backupasset.PointImportedBaseline:
+		state := backupasset.RecoveryPointState(point.State)
+		return state == backupasset.RecoveryPointCommitted || state == backupasset.RecoveryPointDegraded
+	default:
+		return false
+	}
+}
+
+func (authorizer *runtimeOverlayAuthorizer) AuthorizePoints(ctx context.Context, actor overlay.Actor, pointIDs []string) error {
+	if authorizer == nil || authorizer.ownership == nil || actor.UserID == 0 || (actor.Role != "admin" && actor.Role != "operator") {
+		return backupasset.ErrForbidden
+	}
+	const batchSize = 2000
+	for start := 0; start < len(pointIDs); start += batchSize {
+		end := min(start+batchSize, len(pointIDs))
+		batch := pointIDs[start:end]
+		authorized, err := authorizer.ownership.AuthorizedPointIDs(ctx, catalog.AuthorizationScope{Role: actor.Role, UserID: actor.UserID}, batch)
+		if err != nil {
+			return err
+		}
+		if len(authorized) != len(batch) {
+			return backupasset.ErrForbidden
 		}
 	}
 	return nil

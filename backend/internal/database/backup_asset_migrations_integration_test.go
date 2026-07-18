@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 
 	"github.com/golang-migrate/migrate/v4"
 	pgxmigrate "github.com/golang-migrate/migrate/v4/database/pgx/v5"
@@ -30,7 +31,23 @@ const (
 	backupAssetMigrationVersion        = 62
 	backupAssetPublicationVersion      = 63
 	backupAssetRsyncPublicationVersion = 64
+	backupAssetSearchVersion           = 65
 )
+
+var backupAssetSearchTables = []string{
+	"backup_asset_search_generations",
+	"backup_asset_search_documents",
+	"backup_asset_search_postings",
+	"backup_asset_search_document_fields",
+	"backup_asset_saved_searches",
+	"backup_asset_saved_search_scope_points",
+	"backup_asset_favorites",
+	"backup_asset_tag_definitions",
+	"backup_asset_tag_assignments",
+	"backup_asset_recent_access",
+	"backup_asset_overlay_usage",
+	"backup_asset_overlay_idempotency",
+}
 
 var backupAssetFoundationTables = []string{
 	"backup_repositories",
@@ -270,6 +287,98 @@ func TestBackupAssetMigration064Postgres(t *testing.T) {
 	runBackupAssetMigration064Contract(t, newRequiredPostgresMigrationFixture(t))
 }
 
+func TestBackupAssetMigration065SQLite(t *testing.T) {
+	runBackupAssetMigration065Contract(t, newSQLiteMigrationFixture(t))
+}
+
+func TestBackupAssetMigration065Postgres(t *testing.T) {
+	runBackupAssetMigration065Contract(t, newRequiredPostgresMigrationFixture(t))
+}
+
+func TestBackupAssetSearchModelSensitiveFieldsEncryptAtRest(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_BACKUP_ASSET_SEARCH_MODEL_DATA_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+
+	testCases := []struct {
+		name       string
+		beforeSave func() (string, error)
+		afterFind  func(string) (string, error)
+	}{
+		{
+			name: "SavedSearchAST",
+			beforeSave: func() (string, error) {
+				value := model.BackupAssetSavedSearch{EncryptedAST: `{"schema_version":1}`}
+				err := value.BeforeSave(nil)
+				return value.EncryptedAST, err
+			},
+			afterFind: func(ciphertext string) (string, error) {
+				value := model.BackupAssetSavedSearch{EncryptedAST: ciphertext}
+				err := value.AfterFind(nil)
+				return value.EncryptedAST, err
+			},
+		},
+		{
+			name: "FavoriteLabel",
+			beforeSave: func() (string, error) {
+				value := model.BackupAssetFavorite{EncryptedLabel: "private label"}
+				err := value.BeforeSave(nil)
+				return value.EncryptedLabel, err
+			},
+			afterFind: func(ciphertext string) (string, error) {
+				value := model.BackupAssetFavorite{EncryptedLabel: ciphertext}
+				err := value.AfterFind(nil)
+				return value.EncryptedLabel, err
+			},
+		},
+		{
+			name: "TagName",
+			beforeSave: func() (string, error) {
+				value := model.BackupAssetTagDefinition{EncryptedName: "private tag"}
+				err := value.BeforeSave(nil)
+				return value.EncryptedName, err
+			},
+			afterFind: func(ciphertext string) (string, error) {
+				value := model.BackupAssetTagDefinition{EncryptedName: ciphertext}
+				err := value.AfterFind(nil)
+				return value.EncryptedName, err
+			},
+		},
+		{
+			name: "IdempotencyFingerprint",
+			beforeSave: func() (string, error) {
+				value := model.BackupAssetOverlayIdempotency{EncryptedRequestFingerprint: "request fingerprint"}
+				err := value.BeforeSave(nil)
+				return value.EncryptedRequestFingerprint, err
+			},
+			afterFind: func(ciphertext string) (string, error) {
+				value := model.BackupAssetOverlayIdempotency{EncryptedRequestFingerprint: ciphertext}
+				err := value.AfterFind(nil)
+				return value.EncryptedRequestFingerprint, err
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			ciphertext, err := testCase.beforeSave()
+			if err != nil {
+				t.Fatalf("encrypt model field: %v", err)
+			}
+			if !strings.HasPrefix(ciphertext, "enc:") || strings.Contains(ciphertext, "private") || strings.Contains(ciphertext, "schema_version") {
+				t.Fatalf("sensitive model field is not opaque ciphertext: %q", ciphertext)
+			}
+			plaintext, err := testCase.afterFind(ciphertext)
+			if err != nil {
+				t.Fatalf("decrypt model field: %v", err)
+			}
+			if plaintext == ciphertext || plaintext == "" {
+				t.Fatalf("model hook did not restore plaintext: ciphertext=%q plaintext=%q", ciphertext, plaintext)
+			}
+		})
+	}
+}
+
 type migrationFixture struct {
 	engine string
 	open   func(*testing.T) (*migrate.Migrate, *sql.DB)
@@ -320,6 +429,431 @@ func runBackupAssetMigration064Contract(t *testing.T, fixture migrationFixture) 
 	t.Run("DownAllowsUnlinkedRcloneManagedLinkWithoutHistory", fixture.test064DownAllowsUnlinkedRcloneManagedLink)
 	t.Run("DownRejectsPublicationAndParentLease", fixture.test064DownRejectsPublicationAndParentLease)
 	t.Run("RejectedDownLeavesSchemaAndRowsUntouched", fixture.test064DownIsAtomic)
+}
+
+func runBackupAssetMigration065Contract(t *testing.T, fixture migrationFixture) {
+	t.Helper()
+	t.Run("ApplyCreatesChild7Tables", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, backupAssetSearchVersion)
+		assertMigrationVersion(t, migrator, backupAssetSearchVersion)
+		for _, table := range backupAssetSearchTables {
+			if !databaseTableExists(t, db, fixture.engine, table) {
+				t.Fatalf("%s search migration table %s is missing", fixture.engine, table)
+			}
+		}
+	})
+	t.Run("PristineDownRestores064", fixture.test065PristineDown)
+	t.Run("PreservesLegacyRowsAndExtendsClosedSets", fixture.test065PreservesLegacyRows)
+	t.Run("RejectsInvalidRowsAndCrossPointReferences", fixture.test065RejectsInvalidRows)
+	t.Run("UsedDownIsRejectedAtomically", fixture.test065UsedDownIsAtomic)
+	t.Run("ModelParity", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetSearchVersion)
+		for table, persistentModel := range backupAssetSearchModels() {
+			want := gormColumnNames(t, persistentModel)
+			var got []string
+			if fixture.engine == "sqlite" {
+				got = sqliteColumnNames(t, db, table)
+			} else {
+				got = postgresColumnNames(t, db, table)
+			}
+			sort.Strings(got)
+			sort.Strings(want)
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Fatalf("%s %s columns mismatch\n got: %v\nwant: %v", fixture.engine, table, got, want)
+			}
+		}
+	})
+}
+
+func (fixture migrationFixture) test065PristineDown(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetSearchVersion)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("step %s migration down to 000064: %v", fixture.engine, err)
+	}
+	assertMigrationVersion(t, migrator, backupAssetRsyncPublicationVersion)
+	for _, table := range backupAssetSearchTables {
+		if databaseTableExists(t, db, fixture.engine, table) {
+			t.Fatalf("%s search table %s remains after pristine down", fixture.engine, table)
+		}
+	}
+	if definition := fixture.tableDefinition(t, db, "wrapped_domain_keys"); strings.Contains(definition, "search_token") {
+		t.Fatalf("%s wrapped key CHECK still permits search_token after down: %s", fixture.engine, definition)
+	}
+	if definition := fixture.tableDefinition(t, db, "recovery_point_leases"); strings.Contains(definition, "search_index") {
+		t.Fatalf("%s lease CHECK still permits search_index after down: %s", fixture.engine, definition)
+	}
+	for _, index := range []string{
+		"idx_catalog_generations_id_recovery_point",
+		"idx_catalog_entries_generation_entry_recovery_point",
+	} {
+		if definition := fixture.indexDefinition(t, db, index); definition != "" {
+			t.Fatalf("%s parent identity index %s remains after down: %s", fixture.engine, index, definition)
+		}
+	}
+}
+
+func (fixture migrationFixture) test065PreservesLegacyRows(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetRsyncPublicationVersion)
+	now := time.Date(2026, 7, 18, 2, 3, 4, 0, time.UTC)
+	pointID, _, _ := fixture.insertSearchMigrationCatalog(t, db, "1", now)
+
+	legacyDomains := []string{"entry_identity", "cursor_signing", "audit_fingerprint", "recovery_cleanup_ownership"}
+	for index, domain := range legacyDomains {
+		fixture.mustExec(t, db, `INSERT INTO wrapped_domain_keys
+			(id, domain, version, state, wrapped_key, wrap_algorithm, wrapping_key_fingerprint,
+			 activated_at, created_at, updated_at)
+			VALUES (?, ?, 1, 'retired', ?, 'aes-256-gcm', ?, ?, ?, ?)`,
+			fmt.Sprintf("legacy-key-%020d", index), domain, "wrapped-"+domain,
+			strings.Repeat(strconv.Itoa(index+1), 64), now, now, now)
+	}
+	legacyHolders := []string{"rsync_parent", "catalog_build", "content_session", "processing_job", "export_job", "recovery_job", "point_publication"}
+	for index, holder := range legacyHolders {
+		fixture.insertSearchMigrationLease(t, db, fmt.Sprintf("legacy-lease-%018d", index), pointID, holder, now)
+	}
+
+	migrateToBackupAssetVersion(t, migrator, backupAssetSearchVersion)
+	assertMigrationVersion(t, migrator, backupAssetSearchVersion)
+	var domainCount, holderCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM wrapped_domain_keys WHERE domain <> 'search_token'`).Scan(&domainCount); err != nil {
+		t.Fatalf("count %s preserved key domains: %v", fixture.engine, err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM recovery_point_leases WHERE holder_type <> 'search_index'`).Scan(&holderCount); err != nil {
+		t.Fatalf("count %s preserved lease holders: %v", fixture.engine, err)
+	}
+	if domainCount != len(legacyDomains) || holderCount != len(legacyHolders) {
+		t.Fatalf("%s legacy rows changed: domains=%d/%d holders=%d/%d", fixture.engine, domainCount, len(legacyDomains), holderCount, len(legacyHolders))
+	}
+
+	fixture.mustExec(t, db, `INSERT INTO wrapped_domain_keys
+		(id, domain, version, state, wrapped_key, wrap_algorithm, wrapping_key_fingerprint,
+		 activated_at, created_at, updated_at)
+		VALUES (?, 'search_token', 1, 'active', 'wrapped-search', 'aes-256-gcm', ?, ?, ?, ?)`,
+		"search-key-00000000000000000000", strings.Repeat("a", 64), now, now, now)
+	fixture.insertSearchMigrationLease(t, db, "search-lease-000000000000000", pointID, "search_index", now)
+	fixture.expectExecRejected(t, db, `INSERT INTO wrapped_domain_keys
+		(id, domain, version, state, wrapped_key, wrap_algorithm, wrapping_key_fingerprint,
+		 activated_at, created_at, updated_at)
+		VALUES (?, 'future_domain', 1, 'retired', '', '', '', ?, ?, ?)`, "invalid-key-0000000000000000000", now, now, now)
+	fixture.expectExecRejected(t, db, `INSERT INTO recovery_point_leases
+		(id, recovery_point_id, holder_type, owner_id, attempt_id, fence_token, status,
+		 lease_expires_at, absolute_deadline, last_heartbeat_at, created_at, updated_at)
+		VALUES (?, ?, 'future_holder', 'owner', 'attempt', 'fence', 'released', ?, ?, ?, ?, ?)`,
+		"invalid-lease-000000000000000", pointID, now.Add(time.Minute), now.Add(time.Hour), now, now, now)
+}
+
+func (fixture migrationFixture) test065RejectsInvalidRows(t *testing.T) {
+	_, db := fixture.openAt(t, backupAssetSearchVersion)
+	now := time.Date(2026, 7, 18, 2, 3, 4, 0, time.UTC)
+	pointA, catalogA, entryA := fixture.insertSearchMigrationCatalog(t, db, "2", now)
+	pointB, catalogB, entryB := fixture.insertSearchMigrationCatalog(t, db, "3", now)
+	searchA := strings.Repeat("4", 32)
+	fixture.insertSearchMigrationGeneration(t, db, searchA, pointA, catalogA, 1, now)
+
+	fixture.expectExecRejected(t, db, `INSERT INTO backup_asset_search_generations
+		(id, recovery_point_id, catalog_generation_id, generation, state, is_active,
+		 source_fingerprint, normalizer_version, search_key_version, projection_revision,
+		 lease_id, build_attempt_id, fence_token_hash, expected_document_count,
+		 written_document_count, error_code, correlation_id, started_at, created_at, updated_at)
+		VALUES (?, ?, ?, 2, 'future', 0, '', 1, 1, 1, 'lease', 'attempt', ?, 0, 0, '', '', ?, ?, ?)`,
+		strings.Repeat("5", 32), pointA, catalogA, strings.Repeat("a", 64), now, now, now)
+	fixture.expectExecRejected(t, db, `INSERT INTO backup_asset_search_generations
+		(id, recovery_point_id, catalog_generation_id, generation, state, is_active,
+		 source_fingerprint, normalizer_version, search_key_version, projection_revision,
+		 lease_id, build_attempt_id, fence_token_hash, expected_document_count,
+		 written_document_count, error_code, correlation_id, started_at, created_at, updated_at)
+		VALUES (?, ?, ?, 2, 'building', 0, '', 1, 1, 1, 'lease', 'attempt', ?, -1, 0, '', '', ?, ?, ?)`,
+		strings.Repeat("6", 32), pointA, catalogA, strings.Repeat("a", 64), now, now, now)
+	fixture.expectExecRejected(t, db, `INSERT INTO backup_asset_search_generations
+		(id, recovery_point_id, catalog_generation_id, generation, state, is_active,
+		 source_fingerprint, normalizer_version, search_key_version, projection_revision,
+		 lease_id, build_attempt_id, fence_token_hash, expected_document_count,
+		 written_document_count, error_code, correlation_id, started_at, created_at, updated_at)
+		VALUES (?, ?, ?, 2, 'building', 0, '', 1, 1, 1, 'lease', 'attempt', ?, 0, 0, '', '', ?, ?, ?)`,
+		strings.Repeat("7", 32), pointA, catalogB, strings.Repeat("a", 64), now, now, now)
+	fixture.expectExecRejected(t, db, `INSERT INTO backup_asset_search_generations
+		(id, recovery_point_id, catalog_generation_id, generation, state, is_active,
+		 source_fingerprint, normalizer_version, search_key_version, projection_revision,
+		 lease_id, build_attempt_id, fence_token_hash, expected_document_count,
+		 written_document_count, error_code, correlation_id, started_at, created_at, updated_at)
+		VALUES (?, ?, ?, 1, 'building', 0, '', 1, 1, 1, 'lease', 'attempt', ?, 0, 0, '', '', ?, ?, ?)`,
+		strings.Repeat("8", 32), pointA, catalogA, strings.Repeat("a", 64), now, now, now)
+
+	fixture.insertSearchMigrationDocument(t, db, searchA, pointA, catalogA, entryA, strings.Repeat("9", 64), now)
+	fixture.expectExecRejected(t, db, `INSERT INTO backup_asset_search_documents
+		(search_generation_id, document_id, recovery_point_id, catalog_generation_id, entry_id,
+		 sensitivity, classification_revision, metadata_revision, entry_type, lineage_token,
+		 path_group_token, path_sort_key, name_sort_key, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, 'unknown', 1, 1, 'file', ?, ?, '', '', ?, ?)`,
+		searchA, strings.Repeat("a", 64), pointB, catalogB, entryB,
+		strings.Repeat("b", 64), strings.Repeat("c", 64), now, now)
+	fixture.expectExecRejected(t, db, `INSERT INTO backup_asset_search_postings
+		(search_generation_id, document_id, field, token_kind, key_version, token_hmac, term_frequency)
+		VALUES (?, ?, 'future', 'exact', 1, ?, 1)`, searchA, strings.Repeat("9", 64), strings.Repeat("d", 64))
+
+	fixture.insertSearchMigrationUser(t, db, 6501, "search-user-a", now)
+	fixture.expectExecRejected(t, db, `INSERT INTO backup_asset_overlay_usage
+		(owner_user_id, saved_search_count, favorite_count, tag_definition_count,
+		 tag_assignment_count, recent_count, recent_rate_window_started_at,
+		 recent_rate_window_write_count, version, updated_at)
+		VALUES (?, -1, 0, 0, 0, 0, ?, 0, 1, ?)`, 6501, now, now)
+	fixture.expectExecRejected(t, db, `INSERT INTO backup_asset_favorites
+		(id, owner_user_id, recovery_point_id, entry_id, encrypted_label, state,
+		 tombstone_reason, version, created_at, updated_at)
+		VALUES (?, 999999, ?, ?, '', 'active', '', 1, ?, ?)`, strings.Repeat("b", 32), pointA, entryA, now, now)
+}
+
+func (fixture migrationFixture) test065UsedDownIsAtomic(t *testing.T) {
+	testCases := []struct {
+		name string
+		seed func(*testing.T, *sql.DB)
+	}{
+		{name: "SearchKey", seed: func(t *testing.T, db *sql.DB) {
+			now := time.Date(2026, 7, 18, 3, 4, 5, 0, time.UTC)
+			fixture.mustExec(t, db, `INSERT INTO wrapped_domain_keys
+				(id, domain, version, state, wrapped_key, wrap_algorithm, wrapping_key_fingerprint,
+				 activated_at, created_at, updated_at)
+				VALUES (?, 'search_token', 1, 'active', '', '', ?, ?, ?, ?)`,
+				"used-search-key-000000000000000", strings.Repeat("a", 64), now, now, now)
+		}},
+		{name: "SearchLease", seed: func(t *testing.T, db *sql.DB) {
+			now := time.Date(2026, 7, 18, 3, 4, 5, 0, time.UTC)
+			pointID, _, _ := fixture.insertSearchMigrationCatalog(t, db, "5", now)
+			fixture.insertSearchMigrationLease(t, db, "used-search-lease-00000000000", pointID, "search_index", now)
+		}},
+		{name: "Projection", seed: func(t *testing.T, db *sql.DB) {
+			now := time.Date(2026, 7, 18, 3, 4, 5, 0, time.UTC)
+			pointID, catalogID, _ := fixture.insertSearchMigrationCatalog(t, db, "6", now)
+			fixture.insertSearchMigrationGeneration(t, db, strings.Repeat("7", 32), pointID, catalogID, 1, now)
+		}},
+		{name: "SavedSearch", seed: func(t *testing.T, db *sql.DB) {
+			now := time.Date(2026, 7, 18, 3, 4, 5, 0, time.UTC)
+			fixture.insertSearchMigrationUser(t, db, 6502, "saved-user", now)
+			fixture.mustExec(t, db, `INSERT INTO backup_asset_saved_searches
+				(id, owner_user_id, encrypted_ast, schema_version, scope_mode, version,
+				 state, state_reason, created_at, updated_at)
+				VALUES (?, 6502, 'enc:v2:test', 1, 'current', 1, 'active', '', ?, ?)`, strings.Repeat("8", 32), now, now)
+		}},
+		{name: "Favorite", seed: func(t *testing.T, db *sql.DB) {
+			now := time.Date(2026, 7, 18, 3, 4, 5, 0, time.UTC)
+			fixture.insertSearchMigrationUser(t, db, 6503, "favorite-user", now)
+			fixture.mustExec(t, db, `INSERT INTO backup_asset_favorites
+				(id, owner_user_id, recovery_point_id, entry_id, encrypted_label, state,
+				 tombstone_reason, version, created_at, updated_at)
+				VALUES (?, 6503, ?, ?, '', 'active', '', 1, ?, ?)`, strings.Repeat("9", 32), strings.Repeat("a", 32), strings.Repeat("b", 64), now, now)
+		}},
+		{name: "Tag", seed: func(t *testing.T, db *sql.DB) {
+			now := time.Date(2026, 7, 18, 3, 4, 5, 0, time.UTC)
+			fixture.insertSearchMigrationUser(t, db, 6504, "tag-user", now)
+			fixture.mustExec(t, db, `INSERT INTO backup_asset_tag_definitions
+				(id, owner_user_id, encrypted_name, name_token, key_version, token_state,
+				 version, created_at, updated_at)
+				VALUES (?, 6504, 'enc:v2:test', ?, 1, 'active', 1, ?, ?)`, strings.Repeat("c", 32), strings.Repeat("d", 64), now, now)
+		}},
+		{name: "Recent", seed: func(t *testing.T, db *sql.DB) {
+			now := time.Date(2026, 7, 18, 3, 4, 5, 0, time.UTC)
+			fixture.insertSearchMigrationUser(t, db, 6505, "recent-user", now)
+			fixture.mustExec(t, db, `INSERT INTO backup_asset_recent_access
+				(id, owner_user_id, recovery_point_id, entry_id, access_count, last_accessed_at,
+				 expires_at, version, created_at, updated_at)
+				VALUES (?, 6505, ?, ?, 1, ?, ?, 1, ?, ?)`, strings.Repeat("e", 32), strings.Repeat("f", 32), strings.Repeat("0", 64), now, now.Add(time.Hour), now, now)
+		}},
+		{name: "Usage", seed: func(t *testing.T, db *sql.DB) {
+			now := time.Date(2026, 7, 18, 3, 4, 5, 0, time.UTC)
+			fixture.insertSearchMigrationUser(t, db, 6506, "usage-user", now)
+			fixture.mustExec(t, db, `INSERT INTO backup_asset_overlay_usage
+				(owner_user_id, saved_search_count, favorite_count, tag_definition_count,
+				 tag_assignment_count, recent_count, recent_rate_window_started_at,
+				 recent_rate_window_write_count, version, updated_at)
+				VALUES (6506, 0, 0, 0, 0, 0, ?, 0, 1, ?)`, now, now)
+		}},
+		{name: "Idempotency", seed: func(t *testing.T, db *sql.DB) {
+			now := time.Date(2026, 7, 18, 3, 4, 5, 0, time.UTC)
+			fixture.insertSearchMigrationUser(t, db, 6507, "idempotency-user", now)
+			fixture.mustExec(t, db, `INSERT INTO backup_asset_overlay_idempotency
+				(id, owner_user_id, action, key_hash, encrypted_request_fingerprint,
+				 result_resource_type, result_resource_id, result_version, created_at, expires_at)
+				VALUES (?, 6507, 'recent_clear', ?, 'enc:v2:test', 'none', '', 0, ?, ?)`,
+				strings.Repeat("1", 32), strings.Repeat("2", 64), now, now.Add(time.Hour))
+		}},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			migrator, db := fixture.openAt(t, backupAssetSearchVersion)
+			testCase.seed(t, db)
+			before := fixture.captureSearchMigrationSnapshot(t, migrator, db)
+			if err := fixture.executeSearchDown(db); err == nil {
+				t.Fatal("000065 down unexpectedly succeeded while Child 7 state remains")
+			}
+			after := fixture.captureSearchMigrationSnapshot(t, migrator, db)
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("rejected 000065 down changed migration state\nbefore=%+v\nafter=%+v", before, after)
+			}
+		})
+	}
+}
+
+func backupAssetSearchModels() map[string]any {
+	return map[string]any{
+		"backup_asset_search_generations":        model.BackupAssetSearchGeneration{},
+		"backup_asset_search_documents":          model.BackupAssetSearchDocument{},
+		"backup_asset_search_postings":           model.BackupAssetSearchPosting{},
+		"backup_asset_search_document_fields":    model.BackupAssetSearchDocumentField{},
+		"backup_asset_saved_searches":            model.BackupAssetSavedSearch{},
+		"backup_asset_saved_search_scope_points": model.BackupAssetSavedSearchScopePoint{},
+		"backup_asset_favorites":                 model.BackupAssetFavorite{},
+		"backup_asset_tag_definitions":           model.BackupAssetTagDefinition{},
+		"backup_asset_tag_assignments":           model.BackupAssetTagAssignment{},
+		"backup_asset_recent_access":             model.BackupAssetRecentAccess{},
+		"backup_asset_overlay_usage":             model.BackupAssetOverlayUsage{},
+		"backup_asset_overlay_idempotency":       model.BackupAssetOverlayIdempotency{},
+	}
+}
+
+func (fixture migrationFixture) insertSearchMigrationCatalog(t *testing.T, db *sql.DB, marker string, now time.Time) (string, string, string) {
+	t.Helper()
+	repositoryID := strings.Repeat(marker, 32)
+	pointID := strings.Repeat(marker, 32)
+	catalogID := strings.Repeat(marker, 32)
+	entryID := strings.Repeat(marker, 64)
+	fixture.insertRepository(t, db, repositoryID, "rsync", now)
+	if err := fixture.insertRecoveryPoint(db, publicationPointSeed{
+		ID: pointID, RepositoryID: repositoryID, Semantics: "mutable_head",
+		State: "observed", SourceFingerprint: "search-source-" + marker,
+	}, now); err != nil {
+		t.Fatalf("insert %s search migration recovery point: %v", fixture.engine, err)
+	}
+	fixture.mustExec(t, db, `INSERT INTO catalog_generations
+		(id, recovery_point_id, generation, state, is_active, source_fingerprint,
+		 expected_entry_count, written_entry_count, expected_digest, written_digest,
+		 error_code, correlation_id, started_at, finished_at, created_at, updated_at)
+		VALUES (?, ?, 1, 'complete', ?, ?, 1, 1, '', '', '', '', ?, ?, ?, ?)`,
+		catalogID, pointID, true, "search-source-"+marker, now, now, now, now)
+	fixture.mustExec(t, db, `INSERT INTO catalog_entries
+		(generation_id, entry_id, recovery_point_id, normalized_path, name, entry_type,
+		 size, mode, owner, mime_type, fingerprint, fingerprint_strength,
+		 encrypted_provider_locator, security_state, created_at)
+		VALUES (?, ?, ?, ?, ?, 'file', 1, '', '', '', '', '', '', '', ?)`,
+		catalogID, entryID, pointID, "/search/"+marker+".txt", marker+".txt", now)
+	return pointID, catalogID, entryID
+}
+
+func (fixture migrationFixture) insertSearchMigrationGeneration(
+	t *testing.T,
+	db *sql.DB,
+	id, pointID, catalogID string,
+	generation int,
+	now time.Time,
+) {
+	t.Helper()
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_search_generations
+		(id, recovery_point_id, catalog_generation_id, generation, state, is_active,
+		 source_fingerprint, normalizer_version, search_key_version, projection_revision,
+		 lease_id, build_attempt_id, fence_token_hash, expected_document_count,
+		 written_document_count, error_code, correlation_id, started_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 'building', ?, '', 1, 1, 1, 'lease', 'attempt', ?, 1, 0, '', '', ?, ?, ?)`,
+		id, pointID, catalogID, generation, false, strings.Repeat("a", 64), now, now, now)
+}
+
+func (fixture migrationFixture) insertSearchMigrationDocument(
+	t *testing.T,
+	db *sql.DB,
+	searchID, pointID, catalogID, entryID, documentID string,
+	now time.Time,
+) {
+	t.Helper()
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_search_documents
+		(search_generation_id, document_id, recovery_point_id, catalog_generation_id,
+		 entry_id, sensitivity, classification_revision, metadata_revision, entry_type,
+		 lineage_token, path_group_token, path_sort_key, name_sort_key, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, 'unknown', 1, 1, 'file', ?, ?, '2f736561726368', '312e747874', ?, ?)`,
+		searchID, documentID, pointID, catalogID, entryID,
+		strings.Repeat("b", 64), strings.Repeat("c", 64), now, now)
+}
+
+func (fixture migrationFixture) insertSearchMigrationLease(t *testing.T, db *sql.DB, id, pointID, holder string, now time.Time) {
+	t.Helper()
+	fixture.mustExec(t, db, `INSERT INTO recovery_point_leases
+		(id, recovery_point_id, holder_type, owner_id, attempt_id, fence_token, status,
+		 lease_expires_at, absolute_deadline, last_heartbeat_at, released_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 'attempt', 'fence', 'released', ?, ?, ?, ?, ?, ?)`,
+		id, pointID, holder, "owner-"+holder, now.Add(time.Minute), now.Add(time.Hour), now, now, now, now)
+}
+
+func (fixture migrationFixture) insertSearchMigrationUser(t *testing.T, db *sql.DB, id int64, username string, now time.Time) {
+	t.Helper()
+	fixture.mustExec(t, db, `INSERT INTO users
+		(id, username, password_hash, role, totp_secret, totp_enabled, recovery_codes,
+		 token_version, onboarded, created_at, updated_at)
+		VALUES (?, ?, 'hash', 'operator', '', ?, '', 0, ?, ?, ?)`, id, username, false, true, now, now)
+}
+
+func (fixture migrationFixture) expectExecRejected(t *testing.T, db *sql.DB, query string, args ...any) {
+	t.Helper()
+	if _, err := db.Exec(fixture.bind(query), args...); err == nil {
+		t.Fatalf("%s invalid migration row unexpectedly succeeded", fixture.engine)
+	}
+}
+
+type searchMigrationSnapshot struct {
+	version     uint
+	dirty       bool
+	tables      map[string]bool
+	definitions map[string]string
+	indexes     map[string]string
+	rowCounts   map[string]int
+}
+
+func (fixture migrationFixture) captureSearchMigrationSnapshot(t *testing.T, migrator *migrate.Migrate, db *sql.DB) searchMigrationSnapshot {
+	t.Helper()
+	version, dirty, err := migrator.Version()
+	if err != nil {
+		t.Fatalf("read %s search migration version: %v", fixture.engine, err)
+	}
+	tables := append([]string{"wrapped_domain_keys", "recovery_point_leases"}, backupAssetSearchTables...)
+	snapshot := searchMigrationSnapshot{
+		version: version, dirty: dirty, tables: make(map[string]bool, len(tables)),
+		definitions: make(map[string]string, len(tables)),
+		indexes: map[string]string{
+			"idx_catalog_generations_id_recovery_point":           fixture.indexDefinition(t, db, "idx_catalog_generations_id_recovery_point"),
+			"idx_catalog_entries_generation_entry_recovery_point": fixture.indexDefinition(t, db, "idx_catalog_entries_generation_entry_recovery_point"),
+			"idx_backup_asset_search_generations_active":          fixture.indexDefinition(t, db, "idx_backup_asset_search_generations_active"),
+			"idx_backup_asset_overlay_idempotency_expiry":         fixture.indexDefinition(t, db, "idx_backup_asset_overlay_idempotency_expiry"),
+		},
+		rowCounts: make(map[string]int, len(tables)),
+	}
+	for _, table := range tables {
+		exists := databaseTableExists(t, db, fixture.engine, table)
+		snapshot.tables[table] = exists
+		if !exists {
+			continue
+		}
+		snapshot.definitions[table] = fixture.tableDefinition(t, db, table)
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
+			t.Fatalf("count %s rows in %s: %v", fixture.engine, table, err)
+		}
+		snapshot.rowCounts[table] = count
+	}
+	return snapshot
+}
+
+func (fixture migrationFixture) executeSearchDown(db *sql.DB) error {
+	path := "migrations/sqlite/000065_backup_asset_search.down.sql"
+	migrationFS := sqliteMigrationsFS
+	if fixture.engine == "postgres" {
+		path = "migrations/postgres/000065_backup_asset_search.down.sql"
+		migrationFS = postgresMigrationsFS
+	}
+	script, err := migrationFS.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(string(script))
+	if err != nil {
+		_, _ = db.Exec("ROLLBACK")
+	}
+	return err
 }
 
 func (fixture migrationFixture) openAt(t *testing.T, version uint) (*migrate.Migrate, *sql.DB) {

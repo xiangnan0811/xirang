@@ -1,0 +1,14 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Verify dual-engine migration parity, pristine/used down behavior, UTC, FK/check/unique/index and model contracts."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify sentinel-to-response mapping and failure-closed unknown/stale/resource-limit behavior."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Verify no query/path/name/tag/content/token/proof/source data enters logs, metrics, errors, cursors, or audit fields."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Verify focused, race, repetition, real PostgreSQL, Swagger, backend, and full project gates."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Verify raw DTO privacy, no any/casts, closed products, composite refs, and atomic blocked mapping."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Verify API mapper/factory tests and env -u NODE_ENV npm run check evidence."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace scope/auth/classification/coverage data from schema through service/API/frontend without drift."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Verify Swagger and task/journal claims match executed evidence and disabled feature state."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Verify exact staging, Child-only archive, journal commit, PR/CI monitoring, squash merge, and post-merge steps."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/design.md","reason":"Check Search crypto, no-existence leak, content/Derived ownership, overlay cleanup, and audit high-risk contracts."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/implement.md","reason":"Check every Child 7 parent requirement and reservation while confirming Child 8-15 scope remains untouched."}
+{"file":".trellis/tasks/07-18-backup-assets-search-overlays/prd.md","reason":"Acceptance source for normalization, AST/scope, permissions, coverage, ingest, overlays, frontend, and delivery."}
+{"file":".trellis/tasks/07-18-backup-assets-search-overlays/design.md","reason":"Frozen component/schema/API/threat/lifecycle/rollback contracts to compare against implementation."}
+{"file":".trellis/tasks/07-18-backup-assets-search-overlays/research/current-main-evidence.md","reason":"Check implementation against the actual 8cd6e51 reuse points and identified gaps rather than assumptions."}

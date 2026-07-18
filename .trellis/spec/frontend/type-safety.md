@@ -988,3 +988,102 @@ if (kmsCount === undefined ||
 }
 return { mode, encryptionProfile, kmsKeyStatus, kmsReadKeyCount: kmsCount };
 ```
+
+---
+
+## Scenario: Backup Asset Search And Overlay Boundary Mapping
+
+### 1. Scope / Trigger
+
+- Trigger: changing frontend access to backup-asset search, saved searches,
+  favorites, tags, recent access, coverage, snippets, suggestions, or step-up.
+- Applies only to raw/domain/API boundaries under `web/src/lib/api/` and shared
+  types in `web/src/types/domain.ts`; page/component/router work is a separate
+  feature scope.
+
+### 2. Signatures
+
+- Search mapper:
+  `mapBackupAssetSearch(raw: unknown): CatalogProjection<AssetSearchResponse>`.
+- Search factory: `createBackupAssetSearchApi().search(token, input)` posts to
+  `/asset-search`.
+- Overlay factory: `createBackupAssetOverlaysApi()` sends owner-scoped
+  saved/favorite/tag/recent requests through `request<T>()`.
+- Shared boundary helpers validate opaque 32-hex IDs, 64-hex entry IDs,
+  composite `AssetRef`, safe integers, and UTC instants.
+- Browser request fields are camelCase; wrappers serialize private snake_case
+  raw DTOs and use `RequestOptions.idempotencyKey` / `stepUpProof` headers.
+
+### 3. Contracts
+
+- Raw snake_case types stay private. Components and future UI consumers receive
+  only closed camelCase domain products.
+- Search response mapping is atomic. Unknown enum/schema/op/field, invalid
+  composite ref, duplicate/invalid hit field, missing generation, or impossible
+  coverage/total/authoritative-empty combination blocks the whole projection;
+  fields are not repaired independently.
+- A content/OCR hit, snippet, or suggestion requires
+  `capabilities.content=true`. `permissions.secret_reveal=false` does not by
+  itself invalidate a non-secret content hit; the server owns classification
+  and proof evaluation.
+- Inline AST and saved-search use stay in the POST body. Query text, path,
+  selection, result, and saved AST are not persisted to local/session storage
+  or encoded into URLs; only an opaque saved-search ID may be URL-safe later.
+- Mutations pass a bounded idempotency key through the central request wrapper.
+  Only the exact secret-reveal proof is forwarded through the existing step-up
+  header.
+
+### 4. Validation & Error Matrix
+
+| Raw condition | Domain result |
+|---|---|
+| Unknown AST op/field/schema or invalid exact scope | Reject request mapping or block the response product. |
+| Index says complete without catalog/search generation and positive revision | Block the whole projection. |
+| Complete aggregate contains a partial index | Block the whole projection. |
+| Partial response claims authoritative empty/exact total | Block the whole projection. |
+| Hit ref differs from the nested Catalog asset ref | Block the whole projection. |
+| Content hit/snippet/suggestion while content capability is false | Block the whole projection. |
+| Content capability true, secret reveal false, server returns a content hit | Preserve it as a valid non-secret server-authorized hit. |
+| Unknown overlay state/reason/version product | Block the whole overlay projection. |
+| Saved-search ID is not opaque 32-hex | Reject before calling `request()`. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a non-secret content result with verified snippet maps while
+  `content=true` and `secretReveal=false`; no client-side classification guess
+  is made.
+- Base: partial metadata coverage preserves covered hits, keeps total
+  unavailable/lower-bound, and never claims authoritative empty.
+- Bad: casting a raw response to `AssetSearchResponse`, accepting a content
+  suggestion when capability is false, or placing query text in URL/storage.
+
+### 6. Tests Required
+
+- Valid full and partial search mapping, composite-ref equality, closed AST,
+  index generation, total/coverage/authoritative-empty products, hit/snippet/
+  suggestion capability coupling, and whole-product blocking.
+- Non-secret content without reveal proof must map when server content
+  capability is true; the same content product must block when capability is
+  false.
+- Saved/favorite/tag/recent raw mapping, owner-safe opaque IDs, closed lifecycle
+  states, idempotency headers, and exact snake_case request bodies.
+- Source-boundary tests must prove no `localStorage`, `sessionStorage`, history,
+  location/router, URL query, direct `fetch`, `any`, or `unknown as T` bypass.
+- Run `env -u NODE_ENV npm run check` before PR.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+const allowContent = raw.capabilities.content && raw.permissions.secret_reveal;
+return raw.items as AssetSearchHit[];
+```
+
+Correct:
+
+```ts
+const allowContent = raw.capabilities.content === true;
+const hit = mapHit(rawHit, indexes, allowContent);
+if (hit === null) return blockedBackupAssetProjection();
+```

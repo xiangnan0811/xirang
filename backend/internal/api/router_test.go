@@ -798,6 +798,9 @@ func TestNewRouterCORSHeaders(t *testing.T) {
 	if got := resp.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
 		t.Fatalf("期望允许凭证头，实际: %s", got)
 	}
+	if got := resp.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Idempotency-Key") || !strings.Contains(got, "X-Xirang-Step-Up") {
+		t.Fatalf("备份资产搜索/覆盖请求头未被 CORS 允许: %s", got)
+	}
 
 	req = httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	resp = httptest.NewRecorder()
@@ -829,6 +832,37 @@ func TestNewRouterCORSHeaders(t *testing.T) {
 	g.ServeHTTP(resp, req)
 	if resp.Code != http.StatusForbidden {
 		t.Fatalf("非法 origin 应返回 403，实际: %d", resp.Code)
+	}
+}
+
+func TestRouterRegistersAssetSearchAndOverlayRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	routes := NewRouter(Dependencies{}).Routes()
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/asset-search"},
+		{http.MethodGet, "/api/v1/asset-saved-searches"},
+		{http.MethodPost, "/api/v1/asset-saved-searches"},
+		{http.MethodGet, "/api/v1/asset-saved-searches/:id"},
+		{http.MethodPatch, "/api/v1/asset-saved-searches/:id"},
+		{http.MethodDelete, "/api/v1/asset-saved-searches/:id"},
+		{http.MethodGet, "/api/v1/asset-favorites"},
+		{http.MethodPost, "/api/v1/asset-favorites"},
+		{http.MethodDelete, "/api/v1/asset-favorites/:recoveryPointId/:entryId"},
+		{http.MethodGet, "/api/v1/asset-tags"},
+		{http.MethodPost, "/api/v1/asset-tags"},
+		{http.MethodPatch, "/api/v1/asset-tags/:id"},
+		{http.MethodDelete, "/api/v1/asset-tags/:id"},
+		{http.MethodPost, "/api/v1/asset-tags/:id/assignments"},
+		{http.MethodDelete, "/api/v1/asset-tags/:id/assignments/:recoveryPointId/:entryId"},
+		{http.MethodGet, "/api/v1/asset-recent"},
+		{http.MethodPost, "/api/v1/asset-recent/clear"},
+	} {
+		if !hasRoute(routes, route.method, route.path) {
+			t.Fatalf("missing backup asset route %s %s", route.method, route.path)
+		}
 	}
 }
 

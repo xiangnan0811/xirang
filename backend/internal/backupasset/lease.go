@@ -17,6 +17,8 @@ import (
 
 const maxLeaseAbsoluteDeadline = 168 * time.Hour
 
+const LeaseHolderSearchIndex LeaseHolderType = "search_index"
+
 type LeaseStatus string
 
 const (
@@ -539,6 +541,7 @@ var (
 	validLeaseHolderTypes = setOf(
 		LeaseHolderRsyncParent, LeaseHolderCatalogBuild, LeaseHolderContentSession,
 		LeaseHolderProcessingJob, LeaseHolderExportJob, LeaseHolderRecoveryJob, LeaseHolderPointPublication,
+		LeaseHolderSearchIndex,
 	)
 	validLeaseStatuses = setOf(LeaseActive, LeaseReleased, LeaseExpired)
 )

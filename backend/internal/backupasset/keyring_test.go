@@ -40,6 +40,207 @@ func TestEnsureRequiredDomainsCreatesIndependentRandomKeys(t *testing.T) {
 	}
 }
 
+func TestSearchTokenDomainIsIndependentAndRandom(t *testing.T) {
+	ring, _ := newKeyringTestHarness(t)
+	ctx := context.Background()
+	required, err := ring.EnsureRequiredDomains(ctx)
+	if err != nil {
+		t.Fatalf("EnsureRequiredDomains: %v", err)
+	}
+	if _, bootRequired := required[KeyDomainSearchToken]; bootRequired {
+		t.Fatal("search token key was created by unconditional required-domain startup")
+	}
+	searchKey, err := ring.Ensure(ctx, KeyDomainSearchToken)
+	if err != nil {
+		t.Fatalf("Ensure search token: %v", err)
+	}
+	if searchKey.Domain != KeyDomainSearchToken || searchKey.Version != 1 || len(searchKey.Key) != secure.DomainKeySize {
+		t.Fatalf("invalid search token material: %+v", searchKey)
+	}
+	for domain, material := range required {
+		if bytes.Equal(searchKey.Key, material.Key) {
+			t.Fatalf("search token reuses %s key bytes", domain)
+		}
+	}
+}
+
+func TestSearchTokenOrdinaryRotationIsProhibited(t *testing.T) {
+	ring, _ := newKeyringTestHarness(t)
+	ctx := context.Background()
+	material, err := ring.Ensure(ctx, KeyDomainSearchToken)
+	if err != nil {
+		t.Fatalf("Ensure search token: %v", err)
+	}
+	if _, err := ring.Rotate(ctx, KeyDomainSearchToken, time.Hour); !errors.Is(err, ErrKeyRotationProhibited) {
+		t.Fatalf("Rotate search token got %v, want ErrKeyRotationProhibited", err)
+	}
+	if err := ring.MarkLost(ctx, KeyDomainSearchToken, material.Version); !errors.Is(err, ErrKeyRotationProhibited) {
+		t.Fatalf("MarkLost search token without invalidation got %v, want ErrKeyRotationProhibited", err)
+	}
+}
+
+func TestSearchTokenKEKRewrapPreservesKeyAndVersion(t *testing.T) {
+	ring, _ := newKeyringTestHarness(t)
+	ctx := context.Background()
+	before, err := ring.Ensure(ctx, KeyDomainSearchToken)
+	if err != nil {
+		t.Fatalf("Ensure search token: %v", err)
+	}
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_KEYRING_NEW_SEARCH_KEK_FOR_TEST_ONLY")
+	t.Setenv("DATA_ENCRYPTION_LEGACY_KEY", "FAKE_KEYRING_OLD_KEK_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	if _, err := ring.RewrapAll(ctx); err != nil {
+		t.Fatalf("RewrapAll: %v", err)
+	}
+	t.Setenv("DATA_ENCRYPTION_LEGACY_KEY", "")
+	secure.ResetForTesting()
+	after, err := ring.Active(ctx, KeyDomainSearchToken)
+	if err != nil {
+		t.Fatalf("Active rewrapped search token: %v", err)
+	}
+	if before.ID != after.ID || before.Version != after.Version || !bytes.Equal(before.Key, after.Key) {
+		t.Fatalf("rewrap changed search token identity/version/material: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestSearchTokenLossDoesNotRegenerate(t *testing.T) {
+	ring, _ := newKeyringTestHarness(t)
+	ctx := context.Background()
+	material, err := ring.Ensure(ctx, KeyDomainSearchToken)
+	if err != nil {
+		t.Fatalf("Ensure search token: %v", err)
+	}
+	invalidated := false
+	err = ring.MarkRebuildableLost(ctx, KeyDomainSearchToken, material.Version, func(
+		_ context.Context, _ *gorm.DB, transition RebuildableKeyTransition,
+	) error {
+		invalidated = true
+		if transition.Domain != KeyDomainSearchToken || transition.PreviousVersion != material.Version || transition.NextVersion != 0 {
+			t.Fatalf("unexpected loss transition: %+v", transition)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("MarkRebuildableLost: %v", err)
+	}
+	if !invalidated {
+		t.Fatal("search projections were not invalidated before loss")
+	}
+	if _, err := ring.Ensure(ctx, KeyDomainSearchToken); !errors.Is(err, ErrKeyLost) {
+		t.Fatalf("Ensure silently regenerated lost search token: %v", err)
+	}
+	var count int64
+	if err := ring.db.Model(&model.WrappedDomainKey{}).Where("domain = ?", KeyDomainSearchToken).Count(&count).Error; err != nil {
+		t.Fatalf("count search token rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("lost search token was replaced; row count=%d", count)
+	}
+}
+
+func TestSearchTokenLossRejectsRetiredVersionWithoutInvalidation(t *testing.T) {
+	ring, _ := newKeyringTestHarness(t)
+	ctx := context.Background()
+	before, err := ring.Ensure(ctx, KeyDomainSearchToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := ring.ReplaceRebuildable(ctx, KeyDomainSearchToken, func(context.Context, *gorm.DB, RebuildableKeyTransition) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidated := false
+	err = ring.MarkRebuildableLost(ctx, KeyDomainSearchToken, before.Version, func(context.Context, *gorm.DB, RebuildableKeyTransition) error {
+		invalidated = true
+		return nil
+	})
+	if !errors.Is(err, ErrKeyUnavailable) || invalidated {
+		t.Fatalf("retired Search Token loss err=%v invalidated=%t", err, invalidated)
+	}
+	active, err := ring.Active(ctx, KeyDomainSearchToken)
+	if err != nil || active.Version != after.Version {
+		t.Fatalf("retired loss changed active Search Token: active=%+v err=%v", active, err)
+	}
+}
+
+func TestSearchTokenReplacementInvalidatesBeforeActivation(t *testing.T) {
+	ring, _ := newKeyringTestHarness(t)
+	ctx := context.Background()
+	before, err := ring.Ensure(ctx, KeyDomainSearchToken)
+	if err != nil {
+		t.Fatalf("Ensure search token: %v", err)
+	}
+	callbackObservedOldActive := false
+	after, err := ring.ReplaceRebuildable(ctx, KeyDomainSearchToken, func(
+		_ context.Context, tx *gorm.DB, transition RebuildableKeyTransition,
+	) error {
+		var active model.WrappedDomainKey
+		if err := tx.Where("domain = ? AND state = ?", KeyDomainSearchToken, DomainKeyActive).First(&active).Error; err != nil {
+			return err
+		}
+		callbackObservedOldActive = active.Version == before.Version && transition.NextVersion == before.Version+1
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ReplaceRebuildable: %v", err)
+	}
+	if !callbackObservedOldActive {
+		t.Fatal("replacement activated new key before the invalidation callback")
+	}
+	if after.Version != before.Version+1 || bytes.Equal(after.Key, before.Key) {
+		t.Fatalf("replacement did not create independent next material: before=%+v after=%+v", before, after)
+	}
+
+	callbackErr := errors.New("invalidation failed")
+	if _, err := ring.ReplaceRebuildable(ctx, KeyDomainSearchToken, func(context.Context, *gorm.DB, RebuildableKeyTransition) error {
+		return callbackErr
+	}); !errors.Is(err, callbackErr) {
+		t.Fatalf("failed invalidation got %v, want callback error", err)
+	}
+	stillActive, err := ring.Active(ctx, KeyDomainSearchToken)
+	if err != nil || stillActive.Version != after.Version || !bytes.Equal(stillActive.Key, after.Key) {
+		t.Fatalf("failed invalidation changed active key: active=%+v err=%v", stillActive, err)
+	}
+}
+
+func TestSearchTokenReplacementRekeysTagsBeforeTagAvailability(t *testing.T) {
+	ring, _ := newKeyringTestHarness(t)
+	ctx := context.Background()
+	before, err := ring.Ensure(ctx, KeyDomainSearchToken)
+	if err != nil {
+		t.Fatalf("Ensure search token: %v", err)
+	}
+	type tagGate struct {
+		ID         int `gorm:"primaryKey"`
+		KeyVersion int
+		Available  bool
+	}
+	if err := ring.db.AutoMigrate(&tagGate{}); err != nil {
+		t.Fatalf("migrate tag gate: %v", err)
+	}
+	if err := ring.db.Create(&tagGate{ID: 1, KeyVersion: before.Version, Available: true}).Error; err != nil {
+		t.Fatalf("seed tag gate: %v", err)
+	}
+	after, err := ring.ReplaceRebuildable(ctx, KeyDomainSearchToken, func(
+		_ context.Context, tx *gorm.DB, transition RebuildableKeyTransition,
+	) error {
+		return tx.Model(&tagGate{}).Where("id = ? AND key_version = ?", 1, transition.PreviousVersion).
+			Updates(map[string]any{"available": false, "key_version": transition.NextVersion}).Error
+	})
+	if err != nil {
+		t.Fatalf("ReplaceRebuildable: %v", err)
+	}
+	var gate tagGate
+	if err := ring.db.First(&gate, 1).Error; err != nil {
+		t.Fatalf("load tag gate: %v", err)
+	}
+	if gate.Available || gate.KeyVersion != after.Version {
+		t.Fatalf("tag lookup became available before rekey reconciliation: %+v", gate)
+	}
+}
+
 func TestStableDomainsAllowRewrapButRejectRotate(t *testing.T) {
 	ring, _ := newKeyringTestHarness(t)
 	ctx := context.Background()

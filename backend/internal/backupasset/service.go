@@ -15,6 +15,10 @@ type SettingsReader interface {
 	GetEffective(key string) string
 }
 
+type BackupAssetSettingsSnapshotReader interface {
+	BackupAssetSettingsSnapshot() (map[string]string, error)
+}
+
 type FoundationService struct {
 	settings SettingsReader
 }
@@ -33,6 +37,40 @@ type CatalogConfig struct {
 	MaxConcurrency    int
 	MaxEntries        int64
 	Lease             LeaseConfig
+}
+
+type SearchConfig struct {
+	Enabled           bool
+	ReconcileInterval time.Duration
+	BuildTimeout      time.Duration
+	BatchSize         int
+	MaxConcurrency    int
+	ASTMaxDepth       int
+	ASTMaxNodes       int
+	ValuesPerNode     int
+	BodyMaxBytes      int
+	ValueMaxBytes     int
+	CandidateLimit    int
+	QueryTimeout      time.Duration
+	PageSizeMax       int
+	SuggestionLimit   int
+	MaxDocuments      int64
+	Lease             LeaseConfig
+}
+
+type OverlayConfig struct {
+	Enabled                bool
+	SavedSearchQuota       int64
+	FavoriteQuota          int64
+	TagDefinitionQuota     int64
+	TagAssignmentQuota     int64
+	BulkMaxItems           int
+	LabelMaxBytes          int
+	RecentQuota            int64
+	RecentRetention        time.Duration
+	RecentWritesPerMinute  int64
+	IdempotencyTTL         time.Duration
+	IdempotencyKeyMaxBytes int
 }
 
 func NewFoundationService(reader SettingsReader) *FoundationService {
@@ -155,6 +193,172 @@ func (service *FoundationService) CatalogConfig() (CatalogConfig, error) {
 		MaxConcurrency: maxConcurrency, MaxEntries: maxEntries,
 		Lease: LeaseConfig{Duration: leaseDuration, Heartbeat: leaseHeartbeat, AbsoluteDeadline: leaseDeadline},
 	}, nil
+}
+
+func (service *FoundationService) SearchOverlayConfig() (SearchConfig, OverlayConfig, error) {
+	if service == nil || service.settings == nil {
+		return SearchConfig{}, OverlayConfig{}, fmt.Errorf("%w: settings service is unavailable", ErrInvalidState)
+	}
+	reader, ok := service.settings.(BackupAssetSettingsSnapshotReader)
+	if !ok {
+		return SearchConfig{}, OverlayConfig{}, fmt.Errorf("%w: atomic backup asset settings snapshot is unavailable", ErrInvalidState)
+	}
+	values, err := reader.BackupAssetSettingsSnapshot()
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, fmt.Errorf("%w: read backup asset settings snapshot: %v", ErrInvalidState, err)
+	}
+	for _, key := range settings.BackupAssetFoundationSettingKeys() {
+		if _, exists := values[key]; !exists {
+			return SearchConfig{}, OverlayConfig{}, fmt.Errorf("%w: incomplete backup asset settings snapshot", ErrInvalidState)
+		}
+	}
+	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
+		return SearchConfig{}, OverlayConfig{}, fmt.Errorf("%w: %v", ErrInvalidState, err)
+	}
+
+	enabled, err := parseFoundationBool(values, "backup_assets.enabled")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	reconcileInterval, err := parseFoundationDuration(values, "backup_assets.search_reconcile_interval")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	buildTimeout, err := parseFoundationDuration(values, "backup_assets.search_build_timeout")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	batchSize, err := parseFoundationInt(values, "backup_assets.search_batch_size")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	maxConcurrency, err := parseFoundationInt(values, "backup_assets.search_max_concurrency")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	astMaxDepth, err := parseFoundationInt(values, "backup_assets.search_ast_max_depth")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	astMaxNodes, err := parseFoundationInt(values, "backup_assets.search_ast_max_nodes")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	valuesPerNode, err := parseFoundationInt(values, "backup_assets.search_values_per_node")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	bodyMaxBytes, err := parseFoundationInt(values, "backup_assets.search_body_max_bytes")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	valueMaxBytes, err := parseFoundationInt(values, "backup_assets.search_value_max_bytes")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	candidateLimit, err := parseFoundationInt(values, "backup_assets.search_candidate_limit")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	queryTimeout, err := parseFoundationDuration(values, "backup_assets.search_query_timeout")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	pageSizeMax, err := parseFoundationInt(values, "backup_assets.search_page_size_max")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	suggestionLimit, err := parseFoundationInt(values, "backup_assets.search_suggestion_limit")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	maxDocuments, err := parseFoundationInt64(values, "backup_assets.manifest_max_entries")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	leaseDuration, err := parseFoundationDuration(values, "backup_assets.lease_duration")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	leaseHeartbeat, err := parseFoundationDuration(values, "backup_assets.lease_heartbeat")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	leaseDeadline, err := parseFoundationDuration(values, "backup_assets.lease_absolute_deadline")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+
+	savedSearchQuota, err := parseFoundationInt64(values, "backup_assets.saved_search_quota")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	favoriteQuota, err := parseFoundationInt64(values, "backup_assets.favorite_quota")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	tagDefinitionQuota, err := parseFoundationInt64(values, "backup_assets.tag_definition_quota")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	tagAssignmentQuota, err := parseFoundationInt64(values, "backup_assets.tag_assignment_quota")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	bulkMaxItems, err := parseFoundationInt(values, "backup_assets.overlay_bulk_max_items")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	labelMaxBytes, err := parseFoundationInt(values, "backup_assets.overlay_label_max_bytes")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	recentQuota, err := parseFoundationInt64(values, "backup_assets.recent_quota")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	recentRetention, err := parseFoundationDuration(values, "backup_assets.recent_retention")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	recentWritesPerMinute, err := parseFoundationInt64(values, "backup_assets.recent_writes_per_minute")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	idempotencyTTL, err := parseFoundationDuration(values, "backup_assets.idempotency_ttl")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	idempotencyKeyMaxBytes, err := parseFoundationInt(values, "backup_assets.idempotency_key_max_bytes")
+	if err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+
+	searchConfig := SearchConfig{
+		Enabled: enabled, ReconcileInterval: reconcileInterval, BuildTimeout: buildTimeout,
+		BatchSize: batchSize, MaxConcurrency: maxConcurrency, ASTMaxDepth: astMaxDepth, ASTMaxNodes: astMaxNodes,
+		ValuesPerNode: valuesPerNode, BodyMaxBytes: bodyMaxBytes, ValueMaxBytes: valueMaxBytes,
+		CandidateLimit: candidateLimit, QueryTimeout: queryTimeout, PageSizeMax: pageSizeMax, SuggestionLimit: suggestionLimit,
+		MaxDocuments: maxDocuments, Lease: LeaseConfig{Duration: leaseDuration, Heartbeat: leaseHeartbeat, AbsoluteDeadline: leaseDeadline},
+	}
+	overlayConfig := OverlayConfig{
+		Enabled: enabled, SavedSearchQuota: savedSearchQuota, FavoriteQuota: favoriteQuota,
+		TagDefinitionQuota: tagDefinitionQuota, TagAssignmentQuota: tagAssignmentQuota,
+		BulkMaxItems: bulkMaxItems, LabelMaxBytes: labelMaxBytes, RecentQuota: recentQuota,
+		RecentRetention: recentRetention, RecentWritesPerMinute: recentWritesPerMinute,
+		IdempotencyTTL: idempotencyTTL, IdempotencyKeyMaxBytes: idempotencyKeyMaxBytes,
+	}
+	return searchConfig, overlayConfig, nil
+}
+
+func (service *FoundationService) SearchConfig() (SearchConfig, error) {
+	config, _, err := service.SearchOverlayConfig()
+	return config, err
+}
+
+func (service *FoundationService) OverlayConfig() (OverlayConfig, error) {
+	_, config, err := service.SearchOverlayConfig()
+	return config, err
 }
 
 func (service *FoundationService) AuditConfig() (AuditConfig, error) {
@@ -308,14 +512,22 @@ func (service *FoundationService) effectiveFoundationValues() (map[string]string
 	if service == nil || service.settings == nil {
 		return nil, fmt.Errorf("%w: settings service is unavailable", ErrInvalidState)
 	}
-	values := make(map[string]string, len(settings.BackupAssetFoundationSettingKeys()))
-	for _, key := range settings.BackupAssetFoundationSettingKeys() {
+	values := make(map[string]string, len(settings.BackupAssetCoreSettingKeys()))
+	for _, key := range settings.BackupAssetCoreSettingKeys() {
 		values[key] = service.settings.GetEffective(key)
 	}
 	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidState, err)
 	}
 	return values, nil
+}
+
+func parseFoundationBool(values map[string]string, key string) (bool, error) {
+	value, err := strconv.ParseBool(strings.TrimSpace(values[key]))
+	if err != nil {
+		return false, fmt.Errorf("%w: parse %s: %v", ErrInvalidState, key, err)
+	}
+	return value, nil
 }
 
 func parseFoundationDuration(values map[string]string, key string) (time.Duration, error) {
