@@ -324,7 +324,8 @@ All entries below are fresh local evidence from the dedicated Child 6 worktree. 
 | project full | pass | `env -u NODE_ENV make check`; `golangci-lint` reported `0 issues`, all tests and builds passed |
 | docs/diff | pass | `scripts/check-doc-freshness.sh` and `git diff --check` |
 | scope/security | pass | actual paths match §1 plus task bookkeeping; no migration/model/UI/router/i18n/deploy files; handler command/import scan and frontend `any`/cast/direct-fetch scan were empty; default feature remains false |
-| product commit/archive/journal | pending | performed only after explicit staging review |
+| product work commit | complete | `67f6c2f348a80e62548ef20af925a0a370306752`; explicit cached manifest and cached diff check passed |
+| Child archive/journal | pending | performed by `trellis-finish-work` after the product commit |
 | PR/required CI/merge/post-merge/main sync | not_executed | no PR exists yet; no CI or delivery pass is claimed here |
 
 ## 3. Verification matrix
@@ -394,7 +395,7 @@ If CI repair requires work changes, preserve reviewability and the repository's 
 | schema option A | complete | user selected no-migration/process-local-lane contract on 2026-07-17; deviation recorded |
 | `task.py start` | complete | total controller ran Phase 1.4 after explicit approval; `planning -> in_progress`, with no product edits at transition |
 | product implementation/tests | local_pass | Tasks 2–9 complete; fresh SQLite, real PostgreSQL 18, provider, race, Swagger, backend, frontend and project evidence is recorded in §2.1 |
-| product work commit | pending | no commit created |
+| product work commit | complete | `67f6c2f348a80e62548ef20af925a0a370306752` (`feat: add atomic backup asset catalog`) |
 | Child archive/journal commit | pending | Child is in progress; parent remains planning and is never archived by Child 6 |
 | push/PR | pending | no remote mutation |
 | required CI/PostgreSQL | not_executed | no PR; no pass claim |
