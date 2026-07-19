@@ -46,8 +46,8 @@ delivery:   pending
 
 The user approved `prd.md`, `design.md`, `implement.md`, the recommended
 scope-gate disposition, and separately authorized implementation on
-2026-07-19. The approved-start preflight and `task.py start` have now run; the
-remaining delivery steps are still pending.
+2026-07-19. The approved-start preflight, `task.py start`, exact staging, and
+the work commit have now run; archive and later delivery steps remain pending.
 
 ### 1.2 Future approved-start preflight
 
@@ -747,19 +747,19 @@ was separately approved; that amendment needs its own rollback contract.
 
 ## 19. Exact Staging And Delivery Workflow
 
-The implementation and local verification steps below are complete. Repository
-delivery steps remain pending and are not represented as successful until they
-actually run.
+The implementation, local verification, exact staging, and work commit below
+are complete. Remaining repository delivery steps are not represented as
+successful until they actually run.
 
 ### 19.1 Work commit
 
 - [x] Confirm `git status --short` contains only the reviewed manifest and
   workflow-owned Trellis changes.
-- [ ] Stage each exact changed product/planning/evidence path explicitly. Do not
+- [x] Stage each exact changed product/planning/evidence path explicitly. Do not
   run `git add web/src`, `git add .`, or a wildcard.
-- [ ] Run `git diff --cached --name-only`, compare it to the final manifest, and
+- [x] Run `git diff --cached --name-only`, compare it to the final manifest, and
   run `git diff --cached --check`.
-- [ ] Create one coherent work commit, expected conventional subject:
+- [x] Create one coherent work commit, expected conventional subject:
 
 ```text
 feat: add backup asset workspace
@@ -820,7 +820,7 @@ task.py start:               executed on 2026-07-19
 product implementation:      executed
 focused/full tests:          executed and passing (26/273 focused; 157/879 full)
 browser/dev server:          executed and passing (Vite 4174 + CDP 9223)
-work commit:                 not_executed
+work commit:                 executed (`863ea8f`)
 finish-work/archive:         not_executed
 journal completion commit:   not_executed
 push/PR/CI:                  not_executed

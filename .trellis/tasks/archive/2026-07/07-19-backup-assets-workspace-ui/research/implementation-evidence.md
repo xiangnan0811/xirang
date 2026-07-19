@@ -146,8 +146,9 @@ default-false.
 
 ## 7. Delivery state
 
-The final Trellis/spec review and fresh local verification have run. The
-following delivery transitions remain pending: final staged-diff verification,
-work commit, Child 9-only archive, concrete journal commit, push, single PR,
-required CI, squash merge, post-merge automation verification, and main/branch
-hygiene. None is recorded as passed here.
+The final Trellis/spec review, fresh local verification, exact 73-path staged
+diff check, and work commit `863ea8f` have run. The following delivery
+transitions remain pending: Child 9-only archive, concrete journal commit, push,
+single PR, required CI, squash merge, post-merge automation verification, and
+main/branch hygiene. None of those remaining transitions is recorded as passed
+here.

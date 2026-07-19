@@ -19,9 +19,9 @@ delivery:    pending
 ```
 
 This PRD is the approved Child 9 implementation contract. The user separately
-authorized implementation on 2026-07-19. Product implementation and local
-verification are complete; commit/archive/journal/PR/CI/merge/post-merge steps
-remain gated by their actual execution.
+authorized implementation on 2026-07-19. Product implementation, local
+verification, exact staging, and the work commit are complete; archive/journal/
+PR/CI/merge/post-merge steps remain gated by their actual execution.
 
 ## Goal
 
@@ -178,7 +178,7 @@ exists. Repository delivery remains a separate unchecked terminal criterion.
 - [x] Tree/list/grid/tab/dialog/portal/focus/aria-live/reduced-motion/color-independent/zh-en coverage 通过 unit/integration/axe/browser matrix。
 - [x] `env -u NODE_ENV npm run check` 和 `node scripts/check-bundle-budget.mjs` 完整通过，且没有新增依赖或越界产品文件。
 - [x] Browser/CDP 三 viewport 真实路由证据记录 nonblank、long-text、portal、focus、scroll、preview、console/network 和 no-overlap 结果，并给用户可访问 dev URL。
-- [ ] Exact staging、work commit、finish-work archive auto-commit、concrete journal commit、push、single PR、required CI green、squash merge、post-merge automation 和 main sync 按顺序完成后才可声明 Child 9 complete。
+- [ ] Exact staging 与 work commit 已完成；finish-work archive auto-commit、concrete journal commit、push、single PR、required CI green、squash merge、post-merge automation 和 main sync 按顺序完成后才可声明 Child 9 complete。
 
 ## Approved Scope-Gate Disposition
 
