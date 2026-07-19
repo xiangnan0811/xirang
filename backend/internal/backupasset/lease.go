@@ -135,22 +135,41 @@ func (service *LeaseService) AcquireTx(ctx context.Context, tx *gorm.DB, request
 }
 
 func (service *LeaseService) Renew(ctx context.Context, fence LeaseFence) (Lease, error) {
+	var renewed Lease
+	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		renewed, err = service.RenewTx(ctx, tx, fence)
+		return err
+	})
+	if err != nil {
+		return Lease{}, err
+	}
+	return renewed, nil
+}
+
+func (service *LeaseService) RenewTx(ctx context.Context, tx *gorm.DB, fence LeaseFence) (Lease, error) {
+	if tx == nil {
+		return Lease{}, fmt.Errorf("%w: lease transaction is unavailable", ErrInvalidState)
+	}
 	if err := validateLeaseFence(fence); err != nil {
 		return Lease{}, err
 	}
 	now := service.utcNow()
+	var current model.RecoveryPointLease
+	loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", fence.LeaseID).Limit(1).Find(&current)
+	if loaded.Error != nil {
+		return Lease{}, fmt.Errorf("load lease for renewal: %w", loaded.Error)
+	}
+	if loaded.RowsAffected != 1 || current.RecoveryPointID != fence.RecoveryPointID || current.HolderType != string(fence.HolderType) ||
+		current.OwnerID != fence.OwnerID || current.AttemptID != fence.AttemptID || current.FenceToken != fence.FenceToken ||
+		LeaseStatus(current.Status) != LeaseActive || !now.Before(current.LeaseExpiresAt.UTC()) || !now.Before(current.AbsoluteDeadline.UTC()) {
+		return Lease{}, service.fenceFailureTx(ctx, tx, fence.LeaseID, now)
+	}
 	nextExpiry := now.Add(service.config.Duration)
-	var absoluteDeadline time.Time
-	if err := service.db.WithContext(ctx).Model(&model.RecoveryPointLease{}).
-		Select("absolute_deadline").
-		Where("id = ?", fence.LeaseID).
-		Scan(&absoluteDeadline).Error; err != nil {
-		return Lease{}, fmt.Errorf("load lease deadline: %w", err)
+	if nextExpiry.After(current.AbsoluteDeadline.UTC()) {
+		nextExpiry = current.AbsoluteDeadline.UTC()
 	}
-	if !absoluteDeadline.IsZero() && nextExpiry.After(absoluteDeadline.UTC()) {
-		nextExpiry = absoluteDeadline.UTC()
-	}
-	result := service.db.WithContext(ctx).Model(&model.RecoveryPointLease{}).
+	result := tx.WithContext(ctx).Model(&model.RecoveryPointLease{}).
 		Where(`id = ? AND recovery_point_id = ? AND holder_type = ? AND owner_id = ? AND attempt_id = ? AND fence_token = ?
 			AND status = ? AND lease_expires_at > ? AND absolute_deadline > ?`,
 			fence.LeaseID, fence.RecoveryPointID, fence.HolderType, fence.OwnerID, fence.AttemptID, fence.FenceToken,
@@ -164,9 +183,12 @@ func (service *LeaseService) Renew(ctx context.Context, fence LeaseFence) (Lease
 		return Lease{}, fmt.Errorf("renew recovery point lease: %w", result.Error)
 	}
 	if result.RowsAffected != 1 {
-		return Lease{}, service.fenceFailure(ctx, fence.LeaseID, now)
+		return Lease{}, service.fenceFailureTx(ctx, tx, fence.LeaseID, now)
 	}
-	return service.loadLease(ctx, fence.LeaseID)
+	current.LeaseExpiresAt = nextExpiry
+	current.LastHeartbeatAt = now
+	current.UpdatedAt = now
+	return leaseFromModel(current)
 }
 
 func (service *LeaseService) Release(ctx context.Context, fence LeaseFence) error {
@@ -419,22 +441,6 @@ func (service *LeaseService) newLeaseRow(request AcquireLeaseRequest, now, absol
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}, nil
-}
-
-func (service *LeaseService) loadLease(ctx context.Context, id string) (Lease, error) {
-	var row model.RecoveryPointLease
-	result := service.db.WithContext(ctx).Where("id = ?", id).Limit(1).Find(&row)
-	if result.Error != nil {
-		return Lease{}, fmt.Errorf("load recovery point lease: %w", result.Error)
-	}
-	if result.RowsAffected != 1 {
-		return Lease{}, fmt.Errorf("%w: recovery point lease is missing", ErrLeaseFenceLost)
-	}
-	return leaseFromModel(row)
-}
-
-func (service *LeaseService) fenceFailure(ctx context.Context, leaseID string, now time.Time) error {
-	return service.fenceFailureTx(ctx, service.db.WithContext(ctx), leaseID, now)
 }
 
 func (service *LeaseService) fenceFailureTx(ctx context.Context, tx *gorm.DB, leaseID string, now time.Time) error {

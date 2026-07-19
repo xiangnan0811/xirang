@@ -24,6 +24,7 @@ const (
 	KeyDomainAuditFingerprint         KeyDomain = "audit_fingerprint"
 	KeyDomainRecoveryCleanupOwnership KeyDomain = "recovery_cleanup_ownership"
 	KeyDomainSearchToken              KeyDomain = "search_token"
+	KeyDomainDerivedStore             KeyDomain = "derived_store"
 )
 
 var RequiredKeyDomains = []KeyDomain{
@@ -341,13 +342,42 @@ func (keyring *Keyring) RewrapAll(ctx context.Context) (int64, error) {
 	if keyring == nil || keyring.db == nil {
 		return 0, fmt.Errorf("%w: keyring database is unavailable", ErrKeyUnavailable)
 	}
+	return keyring.rewrapDomains(ctx, nil)
+}
+
+// RewrapDomains rotates the master-key envelope only for the named domains.
+// Runtime composition uses this to keep an optional rebuildable domain failure
+// from blocking unrelated Core domains while preserving RewrapAll's atomic
+// all-domain maintenance contract.
+func (keyring *Keyring) RewrapDomains(ctx context.Context, domains ...KeyDomain) (int64, error) {
+	if keyring == nil || keyring.db == nil {
+		return 0, fmt.Errorf("%w: keyring database is unavailable", ErrKeyUnavailable)
+	}
+	if len(domains) == 0 {
+		return 0, fmt.Errorf("%w: at least one key domain is required", ErrKeyUnavailable)
+	}
+	seen := make(map[KeyDomain]struct{}, len(domains))
+	for _, domain := range domains {
+		if err := keyring.validate(domain); err != nil {
+			return 0, err
+		}
+		if _, duplicate := seen[domain]; duplicate {
+			return 0, fmt.Errorf("%w: duplicate key domain", ErrInvalidState)
+		}
+		seen[domain] = struct{}{}
+	}
+	return keyring.rewrapDomains(ctx, domains)
+}
+
+func (keyring *Keyring) rewrapDomains(ctx context.Context, domains []KeyDomain) (int64, error) {
 	var count int64
 	err := keyring.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var rows []model.WrappedDomainKey
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("state <> ?", DomainKeyLost).
-			Order("domain ASC, version ASC").
-			Find(&rows).Error; err != nil {
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("state <> ?", DomainKeyLost)
+		if len(domains) > 0 {
+			query = query.Where("domain IN ?", domains)
+		}
+		if err := query.Order("domain ASC, version ASC").Find(&rows).Error; err != nil {
 			return fmt.Errorf("load domain keys for rewrap: %w", err)
 		}
 		for _, row := range rows {
@@ -387,7 +417,7 @@ func (keyring *Keyring) MarkLost(ctx context.Context, domain KeyDomain, version 
 	if err := keyring.validate(domain); err != nil {
 		return err
 	}
-	if domain == KeyDomainSearchToken {
+	if domain == KeyDomainSearchToken || domain == KeyDomainDerivedStore {
 		return fmt.Errorf("%w: domain %s requires coordinated invalidation", ErrKeyRotationProhibited, domain)
 	}
 	if version <= 0 {
@@ -462,7 +492,7 @@ func (keyring *Keyring) validateRebuildableTransition(domain KeyDomain, invalida
 	if err := keyring.validate(domain); err != nil {
 		return err
 	}
-	if domain != KeyDomainSearchToken {
+	if domain != KeyDomainSearchToken && domain != KeyDomainDerivedStore {
 		return fmt.Errorf("%w: domain %s is not rebuildable", ErrKeyRotationProhibited, domain)
 	}
 	if invalidate == nil {
@@ -592,7 +622,7 @@ func loadDomainKeyRows(tx *gorm.DB, domain KeyDomain, lock bool) ([]model.Wrappe
 var (
 	validKeyDomains = setOf(
 		KeyDomainEntryIdentity, KeyDomainCursorSigning, KeyDomainAuditFingerprint,
-		KeyDomainRecoveryCleanupOwnership, KeyDomainSearchToken,
+		KeyDomainRecoveryCleanupOwnership, KeyDomainSearchToken, KeyDomainDerivedStore,
 	)
 	validDomainKeyStates = setOf(DomainKeyActive, DomainKeyVerifyOnly, DomainKeyRetired, DomainKeyLost)
 )

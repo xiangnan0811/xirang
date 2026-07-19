@@ -159,6 +159,10 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	g := NewRouter(Dependencies{})
 	routes := g.Routes()
 
+	if !hasRoute(routes, http.MethodGet, "/api/v1/admin/backup-asset-processing") {
+		t.Fatalf("未注册备份资产处理管理摘要接口")
+	}
+
 	if !hasRoute(routes, http.MethodGet, "/api/v1/tasks") {
 		t.Fatalf("未注册任务列表接口")
 	}

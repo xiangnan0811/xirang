@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	stdlog "log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,6 +23,7 @@ import (
 	"xirang/backend/internal/api/handlers"
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/automation"
+	"xirang/backend/internal/backupasset/processing"
 	"xirang/backend/internal/backupasset/provider"
 	backupruntime "xirang/backend/internal/backupasset/runtime"
 	"xirang/backend/internal/bootstrap"
@@ -219,6 +224,10 @@ func main() {
 	if err := assetRuntime.StartupPass(context.Background()); err != nil {
 		log.Fatal().Err(err).Msg("备份资产启动对账失败")
 	}
+	workerServers, workerServerErr := startWorkerHTTPServers(assetRuntime)
+	if workerServerErr != nil {
+		log.Warn().Str("stage", "worker_listener_startup").Msg("备份资产 Worker 监听器未完全启动，核心服务继续运行")
+	}
 	if err := taskManager.LoadSchedules(context.Background()); err != nil {
 		log.Fatal().Err(err).Msg("加载定时任务失败")
 	}
@@ -362,10 +371,16 @@ func main() {
 
 	cronScheduler.Stop()
 	taskManager.StopAccepting()
+	if err := workerServers.StopAccepting(); err != nil {
+		log.Warn().Str("stage", "worker_listener_close").Msg("备份资产 Worker 监听器关闭不完整")
+	}
 	assetRuntime.StopAccepting()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if err := workerServers.Shutdown(shutdownCtx); err != nil {
+		log.Warn().Str("stage", "worker_http_shutdown").Msg("备份资产 Worker 请求未在宽限期内完成")
+	}
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("优雅关闭失败，强制退出")
 	}
@@ -407,4 +422,118 @@ func buildRemoteWriteSinkFromConfig(svc *settings.Service) *metrics.RemoteWriteS
 		}
 	}
 	return metrics.NewRemoteWriteSink(url, token, timeout)
+}
+
+type workerHTTPServerSet struct {
+	mu        sync.Mutex
+	servers   []*http.Server
+	listeners []net.Listener
+}
+
+func startWorkerHTTPServers(runtime *backupruntime.Runtime) (*workerHTTPServerSet, error) {
+	servers := &workerHTTPServerSet{}
+	if runtime == nil {
+		return servers, nil
+	}
+	config, err := runtime.ProcessingConfig()
+	if err != nil {
+		return servers, err
+	}
+	if !config.Enabled || (!config.LocalWorker.Enabled && !config.RemoteWorker.Enabled) {
+		return servers, nil
+	}
+	protocol := runtime.WorkerProtocol()
+	if protocol == nil {
+		return servers, nil
+	}
+	handler, err := api.NewWorkerRouter(protocol, api.WorkerRouterConfig{
+		JSONMaxBytes: config.ProtocolJSONMaxBytes, ArtifactMaxBytes: config.Sink.ArtifactMaxBytes,
+	})
+	if err != nil {
+		return servers, err
+	}
+	var startupErrors []error
+	if config.LocalWorker.Enabled {
+		listener, listenErr := processing.ListenLocalWorker(processing.LocalTransportConfig{SocketPath: config.LocalWorker.Socket})
+		if listenErr != nil {
+			startupErrors = append(startupErrors, listenErr)
+		} else {
+			servers.serve("local", listener, handler)
+		}
+	}
+	if config.RemoteWorker.Enabled {
+		listener, listenErr := processing.ListenRemoteWorker(processing.RemoteTransportConfig{
+			Enabled: true, ListenAddress: config.RemoteWorker.ListenAddress,
+			ServerCertFile: config.RemoteWorker.ServerCertFile, ServerKeyFile: config.RemoteWorker.ServerKeyFile,
+			ClientCAFile: config.RemoteWorker.ClientCAFile, TrustDomain: config.RemoteWorker.TrustDomain,
+		})
+		if listenErr != nil {
+			startupErrors = append(startupErrors, listenErr)
+		} else {
+			servers.serve("mtls", listener, handler)
+		}
+	}
+	return servers, errors.Join(startupErrors...)
+}
+
+func newWorkerHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Minute,
+		WriteTimeout:      30 * time.Minute,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+		ConnContext:       api.WorkerConnContext,
+		ErrorLog:          stdlog.New(io.Discard, "", 0),
+	}
+}
+
+func (servers *workerHTTPServerSet) serve(kind string, listener net.Listener, handler http.Handler) {
+	server := newWorkerHTTPServer(handler)
+	servers.mu.Lock()
+	servers.servers = append(servers.servers, server)
+	servers.listeners = append(servers.listeners, listener)
+	servers.mu.Unlock()
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			logger.Module("backup_asset_processing").Warn().Str("transport", kind).Str("stage", "serve").Msg("备份资产 Worker 监听器停止")
+		}
+	}()
+}
+
+func (servers *workerHTTPServerSet) StopAccepting() error {
+	if servers == nil {
+		return nil
+	}
+	servers.mu.Lock()
+	listeners := append([]net.Listener(nil), servers.listeners...)
+	servers.listeners = nil
+	servers.mu.Unlock()
+	var closeErrors []error
+	for _, listener := range listeners {
+		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			closeErrors = append(closeErrors, err)
+		}
+	}
+	return errors.Join(closeErrors...)
+}
+
+func (servers *workerHTTPServerSet) Shutdown(ctx context.Context) error {
+	if servers == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	servers.mu.Lock()
+	values := append([]*http.Server(nil), servers.servers...)
+	servers.mu.Unlock()
+	var shutdownErrors []error
+	for _, server := range values {
+		if err := server.Shutdown(ctx); err != nil {
+			shutdownErrors = append(shutdownErrors, err)
+		}
+	}
+	return errors.Join(shutdownErrors...)
 }

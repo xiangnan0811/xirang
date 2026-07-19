@@ -130,6 +130,61 @@ type ContentConfig struct {
 	AllowInsecureLoopback   bool
 }
 
+type ProcessingInputConfig struct {
+	RequestMaxBytes    int64
+	CumulativeMaxBytes int64
+	MaxRequests        int64
+	MaxInFlight        int64
+}
+
+type ProcessingSinkConfig struct {
+	MaxArtifacts     int
+	ArtifactMaxBytes int64
+	TotalMaxBytes    int64
+}
+
+type ProcessingLocalWorkerConfig struct {
+	Enabled bool
+	Socket  string
+}
+
+type ProcessingRemoteWorkerConfig struct {
+	Enabled        bool
+	ListenAddress  string
+	ServerCertFile string
+	ServerKeyFile  string
+	ClientCAFile   string
+	TrustDomain    string
+}
+
+type ProcessingDerivedStoreConfig struct {
+	Root               string
+	ChunkBytes         int64
+	BlobMaxBytes       int64
+	GlobalMaxBytes     int64
+	ReconcileInterval  time.Duration
+	ReconcileBatchSize int
+}
+
+type ProcessingConfig struct {
+	Enabled              bool
+	QueueMax             int
+	InteractiveSlots     int
+	BackgroundSlots      int
+	PullLease            time.Duration
+	PullHeartbeat        time.Duration
+	AttemptTimeout       time.Duration
+	RetryMax             int
+	RetryBase            time.Duration
+	RetryMaxDelay        time.Duration
+	Input                ProcessingInputConfig
+	Sink                 ProcessingSinkConfig
+	ProtocolJSONMaxBytes int64
+	LocalWorker          ProcessingLocalWorkerConfig
+	RemoteWorker         ProcessingRemoteWorkerConfig
+	DerivedStore         ProcessingDerivedStoreConfig
+}
+
 func NewFoundationService(reader SettingsReader) *FoundationService {
 	return &FoundationService{settings: reader}
 }
@@ -465,6 +520,83 @@ func (service *FoundationService) ContentConfig() (ContentConfig, error) {
 	if result.AllowInsecureLoopback, err = parseFoundationBool(values, "backup_assets.content_allow_insecure_loopback"); err != nil {
 		return ContentConfig{}, err
 	}
+	return result, nil
+}
+
+func (service *FoundationService) ProcessingConfig() (ProcessingConfig, error) {
+	values, err := service.atomicFoundationValues()
+	if err != nil {
+		return ProcessingConfig{}, err
+	}
+	result := ProcessingConfig{}
+	for _, field := range []struct {
+		key    string
+		target *bool
+	}{
+		{"backup_assets.enabled", &result.Enabled},
+		{"backup_assets.worker_local_enabled", &result.LocalWorker.Enabled},
+		{"backup_assets.worker_remote_enabled", &result.RemoteWorker.Enabled},
+	} {
+		if *field.target, err = parseFoundationBool(values, field.key); err != nil {
+			return ProcessingConfig{}, err
+		}
+	}
+	for _, field := range []struct {
+		key    string
+		target *time.Duration
+	}{
+		{"backup_assets.processing_pull_lease", &result.PullLease},
+		{"backup_assets.processing_pull_heartbeat", &result.PullHeartbeat},
+		{"backup_assets.processing_attempt_timeout", &result.AttemptTimeout},
+		{"backup_assets.processing_retry_base", &result.RetryBase},
+		{"backup_assets.processing_retry_max_delay", &result.RetryMaxDelay},
+		{"backup_assets.derived_store_reconcile_interval", &result.DerivedStore.ReconcileInterval},
+	} {
+		if *field.target, err = parseFoundationDuration(values, field.key); err != nil {
+			return ProcessingConfig{}, err
+		}
+	}
+	for _, field := range []struct {
+		key    string
+		target *int
+	}{
+		{"backup_assets.processing_queue_max", &result.QueueMax},
+		{"backup_assets.processing_interactive_slots", &result.InteractiveSlots},
+		{"backup_assets.processing_background_slots", &result.BackgroundSlots},
+		{"backup_assets.processing_retry_max", &result.RetryMax},
+		{"backup_assets.processing_sink_max_artifacts", &result.Sink.MaxArtifacts},
+		{"backup_assets.derived_store_reconcile_batch_size", &result.DerivedStore.ReconcileBatchSize},
+	} {
+		if *field.target, err = parseFoundationInt(values, field.key); err != nil {
+			return ProcessingConfig{}, err
+		}
+	}
+	for _, field := range []struct {
+		key    string
+		target *int64
+	}{
+		{"backup_assets.processing_input_request_max_bytes", &result.Input.RequestMaxBytes},
+		{"backup_assets.processing_input_cumulative_max_bytes", &result.Input.CumulativeMaxBytes},
+		{"backup_assets.processing_input_max_requests", &result.Input.MaxRequests},
+		{"backup_assets.processing_input_max_in_flight", &result.Input.MaxInFlight},
+		{"backup_assets.processing_sink_artifact_max_bytes", &result.Sink.ArtifactMaxBytes},
+		{"backup_assets.processing_sink_total_max_bytes", &result.Sink.TotalMaxBytes},
+		{"backup_assets.processing_protocol_json_max_bytes", &result.ProtocolJSONMaxBytes},
+		{"backup_assets.derived_store_chunk_bytes", &result.DerivedStore.ChunkBytes},
+		{"backup_assets.derived_store_blob_max_bytes", &result.DerivedStore.BlobMaxBytes},
+		{"backup_assets.derived_store_global_max_bytes", &result.DerivedStore.GlobalMaxBytes},
+	} {
+		if *field.target, err = parseFoundationInt64(values, field.key); err != nil {
+			return ProcessingConfig{}, err
+		}
+	}
+	result.LocalWorker.Socket = strings.TrimSpace(values["backup_assets.worker_local_socket"])
+	result.RemoteWorker.ListenAddress = strings.TrimSpace(values["backup_assets.worker_remote_listen_addr"])
+	result.RemoteWorker.ServerCertFile = strings.TrimSpace(values["backup_assets.worker_remote_server_cert_file"])
+	result.RemoteWorker.ServerKeyFile = strings.TrimSpace(values["backup_assets.worker_remote_server_key_file"])
+	result.RemoteWorker.ClientCAFile = strings.TrimSpace(values["backup_assets.worker_remote_client_ca_file"])
+	result.RemoteWorker.TrustDomain = strings.TrimSpace(values["backup_assets.worker_remote_trust_domain"])
+	result.DerivedStore.Root = strings.TrimSpace(values["backup_assets.derived_store_root"])
 	return result, nil
 }
 

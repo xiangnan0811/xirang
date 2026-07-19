@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -18,7 +17,6 @@ import (
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
-	"xirang/backend/internal/util"
 
 	"gorm.io/gorm"
 )
@@ -32,83 +30,10 @@ const (
 // overlap any local Task or managed Repository source known to this process.
 // It returns only a closed cache error and never exposes the private source.
 func (service *Service) ValidateContentCacheRoot(ctx context.Context, candidate string) error {
-	if service == nil || service.db == nil || !validContentCacheCandidate(candidate) {
-		return content.ErrCacheUnsafeRoot
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	candidate = filepath.Clean(candidate)
-	var tasks []struct {
-		RsyncSource string
-		RsyncTarget string
-	}
-	if err := service.db.WithContext(ctx).Model(&model.Task{}).Select("rsync_source", "rsync_target").Find(&tasks).Error; err != nil {
-		return fmt.Errorf("%w: task source proof unavailable", content.ErrCacheUnsafeRoot)
-	}
-	for _, task := range tasks {
-		if contentCachePathOverlaps(candidate, task.RsyncSource) || contentCachePathOverlaps(candidate, task.RsyncTarget) {
-			return fmt.Errorf("%w: backup source overlap", content.ErrCacheUnsafeRoot)
-		}
-	}
-	var links []model.TaskRepositoryLink
-	if err := service.db.WithContext(ctx).Select("id", "encrypted_legacy_locator").Find(&links).Error; err != nil {
-		return fmt.Errorf("%w: repository source proof unavailable", content.ErrCacheUnsafeRoot)
-	}
-	for _, link := range links {
-		if contentCachePathOverlaps(candidate, link.EncryptedLegacyLocator) {
-			return fmt.Errorf("%w: backup source overlap", content.ErrCacheUnsafeRoot)
-		}
-	}
-	var bindings []model.RepositoryAccessBinding
-	if err := service.db.WithContext(ctx).Where("status = ?", bindingStatusActive).Find(&bindings).Error; err != nil {
-		return fmt.Errorf("%w: repository binding proof unavailable", content.ErrCacheUnsafeRoot)
-	}
-	for _, binding := range bindings {
-		document, err := decodeStoredBindingDocument(binding.EncryptedConfig)
-		if err != nil {
-			return fmt.Errorf("%w: repository binding proof unavailable", content.ErrCacheUnsafeRoot)
-		}
-		switch {
-		case document.V1 != nil && contentCachePathOverlaps(candidate, document.V1.Locator):
-			return fmt.Errorf("%w: backup source overlap", content.ErrCacheUnsafeRoot)
-		case document.ManagedRsyncV2 != nil && contentCachePathOverlaps(candidate, document.ManagedRsyncV2.ManagedRootLocator):
-			return fmt.Errorf("%w: backup source overlap", content.ErrCacheUnsafeRoot)
-		case document.ManagedRcloneV3 != nil && document.ManagedRcloneV3.Portable != nil &&
-			document.ManagedRcloneV3.Portable.Backend == "local":
-			// A bound local Rclone remote cannot be proven disjoint without
-			// re-exposing its private config, so disk cache degrades closed.
-			return fmt.Errorf("%w: local remote source proof unavailable", content.ErrCacheUnsafeRoot)
-		}
+	if err := service.ValidatePrivateRuntimeRoot(ctx, candidate); err != nil {
+		return fmt.Errorf("%w: private runtime root proof failed", content.ErrCacheUnsafeRoot)
 	}
 	return nil
-}
-
-func validContentCacheCandidate(candidate string) bool {
-	candidate = strings.TrimSpace(candidate)
-	if candidate == "" || !filepath.IsAbs(candidate) || filepath.Clean(candidate) != candidate || candidate == string(filepath.Separator) {
-		return false
-	}
-	for _, forbidden := range []string{"/data", "/backup", "/logs"} {
-		if contentCachePathsRelated(candidate, forbidden) {
-			return false
-		}
-	}
-	return true
-}
-
-func contentCachePathOverlaps(candidate, source string) bool {
-	source = strings.TrimSpace(source)
-	if source == "" || util.IsRemotePathSpec(source) || !filepath.IsAbs(source) {
-		return false
-	}
-	return contentCachePathsRelated(candidate, filepath.Clean(source))
-}
-
-func contentCachePathsRelated(left, right string) bool {
-	left, right = filepath.Clean(left), filepath.Clean(right)
-	return left == right || strings.HasPrefix(left, right+string(filepath.Separator)) ||
-		strings.HasPrefix(right, left+string(filepath.Separator))
 }
 
 type contentEntryLocatorV1 struct {
