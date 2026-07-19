@@ -65,6 +65,11 @@ describe("SnapshotBrowser", () => {
     const user = userEvent.setup();
     render(<SnapshotBrowser taskId={101} token="auth-marker" />);
 
+    expect(await screen.findByRole("link", { name: /asset workspace task context|资产工作区任务上下文/i })).toHaveAttribute(
+      "href",
+      "/app/backups/data?taskId=101"
+    );
+
     await user.click(await screen.findByRole("button", { name: /abcdef12/ }));
     expect(await screen.findByText("safe-file")).toBeInTheDocument();
 

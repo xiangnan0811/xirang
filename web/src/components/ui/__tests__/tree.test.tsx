@@ -38,6 +38,117 @@ function makeItems(): TreeItemData[] {
 }
 
 describe("Tree", () => {
+  it("uses one roving tab stop across all visible tree items", async () => {
+    render(<Tree items={makeItems()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "展开 root" }));
+    await screen.findByText("child-a");
+
+    const buttons = screen.getAllByRole("button");
+    expect(buttons.filter((button) => button.tabIndex === 0)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "折叠 root" })).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("button", { name: "选中 child-a" })).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("moves through visible items with ArrowUp/Down and Home/End", async () => {
+    render(<Tree items={makeItems()} />);
+    const root = screen.getByRole("button", { name: "展开 root" });
+    fireEvent.click(root);
+    const childA = await screen.findByRole("button", { name: "选中 child-a" });
+    const childB = screen.getByRole("button", { name: "选中 child-b" });
+    const lazy = screen.getByRole("button", { name: "展开 lazy" });
+
+    root.focus();
+    fireEvent.keyDown(root, { key: "ArrowDown" });
+    expect(childA).toHaveFocus();
+    fireEvent.keyDown(childA, { key: "ArrowDown" });
+    expect(childB).toHaveFocus();
+    fireEvent.keyDown(childB, { key: "End" });
+    expect(lazy).toHaveFocus();
+    fireEvent.keyDown(lazy, { key: "Home" });
+    expect(root).toHaveFocus();
+    fireEvent.keyDown(root, { key: "ArrowUp" });
+    expect(root).toHaveFocus();
+  });
+
+  it("uses ArrowRight for expand/first child and ArrowLeft for collapse/parent", async () => {
+    render(<Tree items={makeItems()} />);
+    const root = screen.getByRole("button", { name: "展开 root" });
+    root.focus();
+
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+    const expandedRoot = await screen.findByRole("button", { name: "折叠 root" });
+    expect(expandedRoot).toHaveFocus();
+
+    fireEvent.keyDown(expandedRoot, { key: "ArrowRight" });
+    const childA = screen.getByRole("button", { name: "选中 child-a" });
+    expect(childA).toHaveFocus();
+
+    fireEvent.keyDown(childA, { key: "ArrowLeft" });
+    expect(expandedRoot).toHaveFocus();
+    fireEvent.keyDown(expandedRoot, { key: "ArrowLeft" });
+    await waitFor(() => expect(screen.queryByText("child-a")).toBeNull());
+    expect(screen.getByRole("button", { name: "展开 root" })).toHaveFocus();
+  });
+
+  it("keeps focus on a lazy directory when loading completes", async () => {
+    let resolveChildren!: (items: TreeItemData[]) => void;
+    const onLoadChildren = vi.fn(
+      () =>
+        new Promise<TreeItemData[]>((resolve) => {
+          resolveChildren = resolve;
+        })
+    );
+    render(<Tree items={[{ id: "lazy", label: "lazy", isDir: true }]} onLoadChildren={onLoadChildren} />);
+    const lazy = screen.getByRole("button", { name: "展开 lazy" });
+    lazy.focus();
+
+    fireEvent.keyDown(lazy, { key: "ArrowRight" });
+    expect(lazy).toHaveFocus();
+    resolveChildren([{ id: "lazy/child", label: "loaded-child" }]);
+    await screen.findByText("loaded-child");
+    expect(screen.getByRole("button", { name: "折叠 lazy" })).toHaveFocus();
+  });
+
+  it("restores focus to the nearest visible parent when a focused node is removed", async () => {
+    const expanded = new Set(["root"]);
+    const { rerender } = render(<Tree items={makeItems()} expanded={expanded} />);
+    const childB = screen.getByRole("button", { name: "选中 child-b" });
+    childB.focus();
+    fireEvent.focus(childB);
+
+    const nextItems = makeItems();
+    nextItems[0] = {
+      ...nextItems[0],
+      children: [{ id: "root/child-a", label: "child-a", isDir: false }],
+    };
+    rerender(<Tree items={nextItems} expanded={expanded} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "折叠 root" })).toHaveFocus();
+    });
+  });
+
+  it("preserves controlled selection/expansion callbacks with keyboard navigation", () => {
+    const onToggle = vi.fn();
+    render(
+      <Tree
+        items={makeItems()}
+        selected="root/child-a"
+        expanded={new Set(["root"])}
+        onToggle={onToggle}
+      />
+    );
+    const childA = screen.getByRole("button", { name: "选中 child-a" });
+    expect(childA).toHaveAttribute("tabindex", "0");
+    childA.focus();
+    fireEvent.keyDown(childA, { key: "ArrowLeft" });
+    const root = screen.getByRole("button", { name: "折叠 root" });
+    expect(root).toHaveFocus();
+    fireEvent.keyDown(root, { key: "ArrowLeft" });
+    expect(onToggle).toHaveBeenCalledWith(expect.objectContaining({ id: "root" }));
+  });
+
   it("toggle expand 不会 mutate 入参 items 的 children 引用", async () => {
     const items = makeItems();
     const childrenBefore = items[0].children;

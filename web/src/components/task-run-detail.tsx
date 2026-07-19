@@ -7,6 +7,7 @@ import { LoadingState } from "@/components/ui/loading-state";
 import { apiClient } from "@/lib/api/client";
 import { getTaskStatusMeta } from "@/lib/status";
 import type { LogEvent, RestoreDrillStatus, TaskRunRecord } from "@/types/domain";
+import { BackupAssetsTaskContextLink } from "@/features/backup-assets/backup-assets-task-context-link";
 
 function getTriggerIcon(type: TaskRunRecord["triggerType"]) {
   switch (type) {
@@ -139,6 +140,7 @@ export function TaskRunDetail({ run, token, onBack }: Props) {
           <ArrowLeft className="size-4" aria-hidden="true" />
         </Button>
         <span className="text-sm font-medium">{t('taskRunDetail.recordTitle', { id: detailRun.id })}</span>
+        <BackupAssetsTaskContextLink taskId={detailRun.taskId} className="ml-auto" />
       </div>
 
       <div className="glass-panel p-5 space-y-3">

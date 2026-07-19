@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { getVisibleNavItems } from "./navigation";
+import { getVisibleNavItems, navItems } from "./navigation";
 
 describe("getVisibleNavItems", () => {
+  it("keeps exactly one Backups navigation entry", () => {
+    const backupItems = navItems.filter((item) => item.path.startsWith("/app/backups"));
+    expect(backupItems).toHaveLength(1);
+    expect(backupItems[0]?.path).toBe("/app/backups");
+  });
+
   it("keeps app credential management admin-only", () => {
     expect(getVisibleNavItems("admin").some((item) => item.path === "/app/credentials")).toBe(true);
     expect(getVisibleNavItems("operator").some((item) => item.path === "/app/credentials")).toBe(false);

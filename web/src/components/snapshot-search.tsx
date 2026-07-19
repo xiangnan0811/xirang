@@ -5,6 +5,7 @@ import { apiClient } from "@/lib/api/client";
 import { formatBytes, getErrorMessage } from "@/lib/utils";
 import type { SearchResult, SearchIndexingStatus } from "@/lib/api/snapshots-api";
 import { toast } from "sonner";
+import { BackupAssetsTaskContextLink } from "@/features/backup-assets/backup-assets-task-context-link";
 
 interface SnapshotSearchProps {
   taskId: number;
@@ -117,6 +118,9 @@ export function SnapshotSearch({ taskId, token, onNavigateToFile }: SnapshotSear
 
   return (
     <div className="space-y-3">
+      <div className="flex justify-end">
+        <BackupAssetsTaskContextLink taskId={taskId} />
+      </div>
       {/* 搜索栏 */}
       <div className="flex items-center gap-2">
         <div className="relative flex-1">

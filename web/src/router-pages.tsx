@@ -12,6 +12,15 @@ export const SSHKeysPage = lazy(() =>
 export const BackupsPage = lazy(() =>
   import("@/pages/backups-page").then((m) => ({ default: m.BackupsPage }))
 );
+export const BackupsOverviewPage = lazy(() =>
+  import("@/pages/backups-page.overview").then((m) => ({ default: m.BackupsOverviewPage }))
+);
+export const BackupsDataPage = lazy(() =>
+  import("@/pages/backups-page.data").then((m) => ({ default: m.BackupsDataPage }))
+);
+export const BackupsRecoveryPage = lazy(() =>
+  import("@/pages/backups-page.recovery").then((m) => ({ default: m.BackupsRecoveryPage }))
+);
 export const PoliciesPage = lazy(() =>
   import("@/pages/policies-page").then((m) => ({ default: m.PoliciesPage }))
 );
