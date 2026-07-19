@@ -325,6 +325,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 		backupAssetHandlerConfigSource, handlers.NewBackupAssetSecretProofVerifier(dep.DB, dep.JWTManager),
 	)
 	backupAssetOverlayHandler := handlers.NewBackupAssetOverlayHandler(backupAssetOverlayService, backupAssetAuditSink, backupAssetHandlerConfigSource)
+	backupWorkerHandler := handlers.NewBackupWorkerHandler(dep.BackupAssets)
 	var rsyncVersioningService handlers.TaskRsyncVersioningService = featureDisabledRsyncVersioningService{}
 	if dep.BackupAssets != nil {
 		rsyncVersioningService = dep.BackupAssets.RepositoryService()
@@ -378,6 +379,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/overview/backup-health", middleware.RBAC("tasks:read"), backupHealthHandler.Get)
 	secured.GET("/overview/backup-confidence", middleware.RBAC("tasks:read"), backupConfidenceHandler.Get)
 	secured.GET("/overview/storage-usage", middleware.RBAC("tasks:read"), storageUsageHandler.Get)
+	secured.GET("/admin/backup-asset-processing", middleware.RequireRole("admin"), middleware.APIRateLimit(30, time.Minute), middleware.MaxBodySize(1), backupWorkerHandler.Get)
 	secured.POST("/backup-repositories/connect", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), backupRepositoryHandler.Connect)
 	secured.GET("/backup-repositories", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupRepositoryHandler.List)
 	secured.GET("/backup-repositories/:id", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupRepositoryHandler.Detail)

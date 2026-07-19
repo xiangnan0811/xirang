@@ -15,6 +15,79 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/admin/backup-asset-processing": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "仅返回无身份、来源、路径、凭证或原始错误的有界管理聚合",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "查看备份资产 Worker 与派生存储健康摘要",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.ProcessingAdminSummary"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/alerts": {
             "get": {
                 "security": [
@@ -13691,6 +13764,136 @@ const docTemplate = `{
                 },
                 "version_mode": {
                     "$ref": "#/definitions/xirang_backend_internal_backupasset.VersionMode"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_runtime.ProcessingAdminSummary": {
+            "type": "object",
+            "properties": {
+                "configured": {
+                    "type": "boolean"
+                },
+                "derived": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.ProcessingDerivedSummary"
+                },
+                "local_enabled": {
+                    "type": "boolean"
+                },
+                "outcomes": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.ProcessingOutcomeSummary"
+                },
+                "queue": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.ProcessingQueueSummary"
+                },
+                "reconciled_at": {
+                    "type": "string"
+                },
+                "remote_enabled": {
+                    "type": "boolean"
+                },
+                "schema_version": {
+                    "type": "integer"
+                },
+                "slots": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.ProcessingSlotSummary"
+                },
+                "worker_counts": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.ProcessingWorkerCounts"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_runtime.ProcessingDerivedSummary": {
+            "type": "object",
+            "properties": {
+                "by_state": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer",
+                        "format": "int64"
+                    }
+                },
+                "logical_bytes": {
+                    "type": "integer"
+                },
+                "orphan_bytes": {
+                    "type": "integer"
+                },
+                "physical_bytes": {
+                    "type": "integer"
+                },
+                "quota_bytes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_runtime.ProcessingOutcomeSummary": {
+            "type": "object",
+            "properties": {
+                "by_error_category": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer",
+                        "format": "int64"
+                    }
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_runtime.ProcessingQueueSummary": {
+            "type": "object",
+            "properties": {
+                "by_priority": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer",
+                        "format": "int64"
+                    }
+                },
+                "by_state": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer",
+                        "format": "int64"
+                    }
+                },
+                "oldest_queued_seconds": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_runtime.ProcessingSlotSummary": {
+            "type": "object",
+            "properties": {
+                "background_total": {
+                    "type": "integer"
+                },
+                "background_used": {
+                    "type": "integer"
+                },
+                "interactive_total": {
+                    "type": "integer"
+                },
+                "interactive_used": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_runtime.ProcessingWorkerCounts": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "type": "integer"
+                },
+                "degraded": {
+                    "type": "integer"
+                },
+                "draining": {
+                    "type": "integer"
+                },
+                "quarantined": {
+                    "type": "integer"
                 }
             }
         },

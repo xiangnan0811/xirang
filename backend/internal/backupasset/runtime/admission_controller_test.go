@@ -350,7 +350,7 @@ func (settings runtimeSettings) GetEffective(key string) string { return setting
 func TestRuntimeFoundationSettingsFixtureCoversRegistry(t *testing.T) {
 	values := runtimeFoundationSettingsFromEnvironment()
 	for _, key := range appsettings.BackupAssetFoundationSettingKeys() {
-		if strings.TrimSpace(values[key]) == "" {
+		if _, exists := values[key]; !exists {
 			t.Fatalf("runtime foundation fixture omitted %q", key)
 		}
 	}

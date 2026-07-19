@@ -33,7 +33,24 @@ const (
 	backupAssetRsyncPublicationVersion = 64
 	backupAssetSearchVersion           = 65
 	backupAssetContentVersion          = 66
+	backupAssetProcessingVersion       = 67
 )
+
+var backupAssetProcessingTables = []string{
+	"backup_asset_processing_jobs",
+	"backup_asset_processing_interests",
+	"backup_asset_processing_attempts",
+	"backup_asset_processing_grants",
+	"backup_asset_processing_grant_requests",
+	"backup_asset_processing_uploads",
+	"backup_asset_worker_identities",
+	"backup_asset_worker_capabilities",
+	"backup_asset_derived_artifact_sets",
+	"backup_asset_derived_artifacts",
+	"backup_asset_derived_blobs",
+	"backup_asset_derived_blob_references",
+	"backup_asset_updater_metadata",
+}
 
 var backupAssetContentTables = []string{
 	"backup_asset_delivery_grants",
@@ -310,6 +327,43 @@ func TestBackupAssetMigration066Postgres(t *testing.T) {
 	runBackupAssetMigration066Contract(t, newRequiredPostgresMigrationFixture(t))
 }
 
+func TestBackupAssetMigration067SQLite(t *testing.T) {
+	runBackupAssetMigration067Contract(t, newSQLiteMigrationFixture(t))
+}
+
+func TestBackupAssetMigration067Postgres(t *testing.T) {
+	runBackupAssetMigration067Contract(t, newRequiredPostgresMigrationFixture(t))
+}
+
+func TestBackupAssetMigration067PairedFiles(t *testing.T) {
+	testCases := []struct {
+		name string
+		fs   interface {
+			ReadFile(string) ([]byte, error)
+		}
+		path string
+	}{
+		{name: "SQLiteUp", fs: sqliteMigrationsFS, path: "migrations/sqlite/000067_backup_asset_processing.up.sql"},
+		{name: "SQLiteDown", fs: sqliteMigrationsFS, path: "migrations/sqlite/000067_backup_asset_processing.down.sql"},
+		{name: "PostgresUp", fs: postgresMigrationsFS, path: "migrations/postgres/000067_backup_asset_processing.up.sql"},
+		{name: "PostgresDown", fs: postgresMigrationsFS, path: "migrations/postgres/000067_backup_asset_processing.down.sql"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			script, err := testCase.fs.ReadFile(testCase.path)
+			if err != nil {
+				t.Fatalf("read paired 000067 migration: %v", err)
+			}
+			text := string(script)
+			for _, fragment := range []string{"backup_asset_processing_jobs", "backup_asset_derived_blobs", "backup_asset_updater_metadata", "derived_store"} {
+				if !strings.Contains(text, fragment) {
+					t.Fatalf("%s is missing required fragment %q", testCase.path, fragment)
+				}
+			}
+		})
+	}
+}
+
 func TestBackupAssetSearchModelSensitiveFieldsEncryptAtRest(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_BACKUP_ASSET_SEARCH_MODEL_DATA_KEY_FOR_TEST_ONLY")
@@ -539,6 +593,414 @@ func runBackupAssetMigration066Contract(t *testing.T, fixture migrationFixture) 
 	t.Run("UsedDownIsRejectedAtomically", fixture.test066UsedDownIsAtomic)
 	t.Run("ExplicitSafeDrainAllowsDown", fixture.test066SafeDrain)
 	t.Run("Preserves065UsedDownDefense", fixture.test066Preserves065Defense)
+}
+
+func runBackupAssetMigration067Contract(t *testing.T, fixture migrationFixture) {
+	t.Helper()
+	t.Run("ApplyAndModelParity", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, backupAssetProcessingVersion)
+		assertMigrationVersion(t, migrator, backupAssetProcessingVersion)
+		for _, table := range backupAssetProcessingTables {
+			if !databaseTableExists(t, db, fixture.engine, table) {
+				t.Fatalf("%s processing migration table %s is missing", fixture.engine, table)
+			}
+			want := gormColumnNames(t, backupAssetProcessingModels()[table])
+			var got []string
+			if fixture.engine == "sqlite" {
+				got = sqliteColumnNames(t, db, table)
+				assertSQLiteTimeColumnsHaveNoDefault(t, db, table)
+			} else {
+				got = postgresColumnNames(t, db, table)
+				assertPostgresTableTimeColumnsHaveNoDefault(t, db, table)
+			}
+			sort.Strings(got)
+			sort.Strings(want)
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Fatalf("%s %s columns mismatch\n got: %v\nwant: %v", fixture.engine, table, got, want)
+			}
+		}
+		if definition := fixture.tableDefinition(t, db, "wrapped_domain_keys"); !strings.Contains(definition, "derived_store") {
+			t.Fatalf("%s wrapped key CHECK does not permit derived_store: %s", fixture.engine, definition)
+		}
+	})
+	t.Run("PristineDownRestores066", fixture.test067PristineDown)
+	t.Run("RejectsInvalidStateErrorProducts", fixture.test067RejectsInvalidStateErrorProducts)
+	t.Run("UsedDownIsRejectedAtomically", fixture.test067UsedDownIsAtomic)
+	t.Run("DownRejectsUnrevokedSearchProjection", fixture.test067DownRejectsUnrevokedSearchProjection)
+}
+
+func backupAssetProcessingModels() map[string]any {
+	return map[string]any{
+		"backup_asset_processing_jobs":           model.BackupAssetProcessingJob{},
+		"backup_asset_processing_interests":      model.BackupAssetProcessingInterest{},
+		"backup_asset_processing_attempts":       model.BackupAssetProcessingAttempt{},
+		"backup_asset_processing_grants":         model.BackupAssetProcessingGrant{},
+		"backup_asset_processing_grant_requests": model.BackupAssetProcessingGrantRequest{},
+		"backup_asset_processing_uploads":        model.BackupAssetProcessingUpload{},
+		"backup_asset_worker_identities":         model.BackupAssetWorkerIdentity{},
+		"backup_asset_worker_capabilities":       model.BackupAssetWorkerCapability{},
+		"backup_asset_derived_artifact_sets":     model.BackupAssetDerivedArtifactSet{},
+		"backup_asset_derived_artifacts":         model.BackupAssetDerivedArtifact{},
+		"backup_asset_derived_blobs":             model.BackupAssetDerivedBlob{},
+		"backup_asset_derived_blob_references":   model.BackupAssetDerivedBlobReference{},
+		"backup_asset_updater_metadata":          model.BackupAssetUpdaterMetadata{},
+	}
+}
+
+func (fixture migrationFixture) test067PristineDown(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetProcessingVersion)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("step %s migration down to 000066: %v", fixture.engine, err)
+	}
+	assertMigrationVersion(t, migrator, backupAssetContentVersion)
+	for _, table := range backupAssetProcessingTables {
+		if databaseTableExists(t, db, fixture.engine, table) {
+			t.Fatalf("%s processing table %s remains after pristine down", fixture.engine, table)
+		}
+	}
+	if definition := fixture.tableDefinition(t, db, "wrapped_domain_keys"); strings.Contains(definition, "derived_store") {
+		t.Fatalf("%s wrapped key CHECK still permits derived_store after down: %s", fixture.engine, definition)
+	}
+	if !databaseTableExists(t, db, fixture.engine, "backup_asset_delivery_grants") {
+		t.Fatalf("%s 000066 content schema was removed by 000067 down", fixture.engine)
+	}
+}
+
+func (fixture migrationFixture) test067RejectsInvalidStateErrorProducts(t *testing.T) {
+	t.Run("JobErrorProduct", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetProcessingVersion)
+		now := time.Date(2026, 7, 19, 8, 9, 10, 0, time.UTC)
+		pointID, catalogID, entryID := fixture.insertSearchMigrationCatalog(t, db, "7", now)
+		jobID := strings.Repeat("8", 32)
+		fixture.insertProcessingMigrationJob(t, db, jobID, pointID, catalogID, entryID, now)
+
+		fixture.expectExecRejected(t, db,
+			`UPDATE backup_asset_processing_jobs SET error_code = 'invalid_output' WHERE id = ?`, jobID)
+		fixture.expectExecRejected(t, db,
+			`UPDATE backup_asset_processing_jobs
+			 SET state = 'failed', is_current = ?, finished_at = ?, error_code = '' WHERE id = ?`,
+			false, now.Add(time.Minute), jobID)
+	})
+
+	t.Run("AttemptOutcomeProduct", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetProcessingVersion)
+		now := time.Date(2026, 7, 19, 8, 9, 11, 0, time.UTC)
+		pointID, catalogID, entryID := fixture.insertSearchMigrationCatalog(t, db, "9", now)
+		jobID := strings.Repeat("a", 32)
+		workerID := strings.Repeat("b", 32)
+		leaseID := strings.Repeat("c", 32)
+		attemptID := strings.Repeat("d", 32)
+		fixture.insertProcessingMigrationJob(t, db, jobID, pointID, catalogID, entryID, now)
+		fixture.insertProcessingMigrationWorker(t, db, workerID, now)
+		fixture.insertSearchMigrationLease(t, db, leaseID, pointID, "processing_job", now)
+		fixture.insertProcessingMigrationAttempt(t, db, attemptID, jobID, workerID, leaseID, now)
+
+		fixture.expectExecRejected(t, db,
+			`UPDATE backup_asset_processing_attempts
+			 SET state = 'succeeded', is_current = ?, finished_at = ?, outcome_code = 'invalid_output'
+			 WHERE id = ?`, false, now.Add(time.Minute), attemptID)
+		fixture.expectExecRejected(t, db,
+			`UPDATE backup_asset_processing_attempts
+			 SET state = 'failed', is_current = ?, finished_at = ?, outcome_code = ''
+			 WHERE id = ?`, false, now.Add(time.Minute), attemptID)
+
+		fixture.mustExec(t, db,
+			`UPDATE backup_asset_processing_attempts
+			 SET state = 'expired', is_current = ?, finished_at = ?, outcome_code = 'lease_lost'
+			 WHERE id = ?`, false, now.Add(time.Minute), attemptID)
+	})
+
+	t.Run("DerivedSetRevocationProduct", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetProcessingVersion)
+		now := time.Date(2026, 7, 19, 8, 9, 12, 0, time.UTC)
+		pointID, catalogID, entryID := fixture.insertSearchMigrationCatalog(t, db, "c", now)
+		jobID := strings.Repeat("e", 32)
+		workerID := strings.Repeat("f", 32)
+		leaseID := strings.Repeat("1", 32)
+		attemptID := strings.Repeat("2", 32)
+		setID := strings.Repeat("3", 32)
+		fixture.insertProcessingMigrationJob(t, db, jobID, pointID, catalogID, entryID, now)
+		fixture.insertProcessingMigrationWorker(t, db, workerID, now)
+		fixture.insertSearchMigrationLease(t, db, leaseID, pointID, "processing_job", now)
+		fixture.insertProcessingMigrationAttempt(t, db, attemptID, jobID, workerID, leaseID, now)
+		fixture.mustExec(t, db, `INSERT INTO backup_asset_derived_artifact_sets
+			(id, job_id, attempt_id, work_key, recovery_point_id, catalog_generation_id, entry_id,
+				 source_fingerprint, security_policy_revision, manifest_digest, state, revocation_reason,
+				 completeness, artifact_count, total_plaintext_bytes, projection_required,
+				 projection_published, projection_revision, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 'source-v1', 'policy-v1', ?, 'active', '',
+				 'complete', 1, 0, ?, ?, 0, ?, ?)`,
+			setID, jobID, attemptID, strings.Repeat("4", 64), pointID, catalogID, entryID,
+			strings.Repeat("5", 64), false, false, now, now)
+
+		fixture.expectExecRejected(t, db,
+			`UPDATE backup_asset_derived_artifact_sets
+			 SET state = 'superseded', revoked_at = ?, revocation_reason = '' WHERE id = ?`, now, setID)
+		fixture.expectExecRejected(t, db,
+			`UPDATE backup_asset_derived_artifact_sets
+			 SET state = 'superseded', revoked_at = ?, revocation_reason = 'not-a-reason' WHERE id = ?`, now, setID)
+	})
+}
+
+func (fixture migrationFixture) test067UsedDownIsAtomic(t *testing.T) {
+	testCases := []struct {
+		name string
+		seed func(*testing.T, *sql.DB, time.Time)
+	}{
+		{
+			name: "ProcessingJob",
+			seed: func(t *testing.T, db *sql.DB, now time.Time) {
+				pointID, catalogID, entryID := fixture.insertSearchMigrationCatalog(t, db, "1", now)
+				fixture.insertProcessingMigrationJob(t, db, strings.Repeat("2", 32), pointID, catalogID, entryID, now)
+			},
+		},
+		{
+			name: "WorkerIdentity",
+			seed: func(t *testing.T, db *sql.DB, now time.Time) {
+				fixture.insertProcessingMigrationWorker(t, db, strings.Repeat("3", 32), now)
+			},
+		},
+		{
+			name: "DerivedBlob",
+			seed: func(t *testing.T, db *sql.DB, now time.Time) {
+				fixture.mustExec(t, db, `INSERT INTO backup_asset_derived_blobs
+					(id, plaintext_digest, plaintext_size, physical_size, cipher_format_version,
+					 chunk_size, chunk_count, nonce_prefix, opaque_locator, wrapped_dek,
+					 envelope_nonce, derived_kek_version, state, ref_count, created_at, updated_at)
+					VALUES (?, ?, 1, 32, 1, 65536, 1, ?, 'blob-067-test', ?, ?, 1,
+					 'staged', 0, ?, ?)`, strings.Repeat("4", 32), strings.Repeat("5", 64),
+					[]byte("12345678"), []byte("wrapped-dek"), []byte("123456789012"), now, now)
+			},
+		},
+		{
+			name: "UpdaterMetadata",
+			seed: func(t *testing.T, db *sql.DB, now time.Time) {
+				fixture.mustExec(t, db, `INSERT INTO backup_asset_updater_metadata
+					(id, source_kind, source_id, version, manifest_digest, signing_key_fingerprint,
+					 bundle_fingerprint, state, failure_code, created_at, updated_at)
+					VALUES (?, 'builtin', 'noop-fixture', '1.0.0', ?, ?, ?, 'registered', '', ?, ?)`,
+					strings.Repeat("6", 32), strings.Repeat("7", 64), strings.Repeat("8", 64),
+					strings.Repeat("9", 64), now, now)
+			},
+		},
+		{
+			name: "ProcessingRecoveryPointLease",
+			seed: func(t *testing.T, db *sql.DB, now time.Time) {
+				pointID, _, _ := fixture.insertSearchMigrationCatalog(t, db, "a", now)
+				fixture.insertSearchMigrationLease(t, db, strings.Repeat("b", 32), pointID, "processing_job", now)
+			},
+		},
+		{
+			name: "DerivedDomainKey",
+			seed: func(t *testing.T, db *sql.DB, now time.Time) {
+				fixture.mustExec(t, db, `INSERT INTO wrapped_domain_keys
+					(id, domain, version, state, wrapped_key, wrap_algorithm,
+					 wrapping_key_fingerprint, activated_at, created_at, updated_at)
+					VALUES (?, 'derived_store', 1, 'active', 'wrapped-key', 'aes-256-gcm', ?, ?, ?, ?)`,
+					"derived-key-067-test", strings.Repeat("c", 64), now, now, now)
+			},
+		},
+	}
+
+	for index, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			migrator, db := fixture.openAt(t, backupAssetProcessingVersion)
+			now := time.Date(2026, 7, 19, 10, 11, index+1, 0, time.UTC)
+			testCase.seed(t, db, now)
+			fixture.assertProcessingDownRejectedUnchanged(t, migrator, db)
+		})
+	}
+}
+
+func (fixture migrationFixture) test067DownRejectsUnrevokedSearchProjection(t *testing.T) {
+	testCases := []struct {
+		name string
+		seed func(*testing.T, *sql.DB, string, string, time.Time)
+	}{
+		{
+			name: "ContentPostingWithoutExcerpt",
+			seed: func(t *testing.T, db *sql.DB, searchID, documentID string, _ time.Time) {
+				fixture.mustExec(t, db, `INSERT INTO backup_asset_search_postings
+					(search_generation_id, document_id, field, token_kind, key_version, token_hmac, term_frequency)
+					VALUES (?, ?, 'content', 'exact', 1, ?, 1)`,
+					searchID, documentID, strings.Repeat("d", 64))
+			},
+		},
+		{
+			name: "OCRCoverageStillAvailable",
+			seed: func(t *testing.T, db *sql.DB, searchID, documentID string, now time.Time) {
+				fixture.mustExec(t, db, `INSERT INTO backup_asset_search_document_fields
+					(search_generation_id, document_id, field, state, coverage_revision,
+					 classification_revision, pipeline_revision, index_revision, source_fingerprint,
+					 excerpt_ref, updated_at)
+					VALUES (?, ?, 'ocr', 'complete', 1, 1, 1, 1, 'source-v1', NULL, ?)`,
+					searchID, documentID, now)
+			},
+		},
+		{
+			name: "ContentExcerptStillReferenced",
+			seed: func(t *testing.T, db *sql.DB, searchID, documentID string, now time.Time) {
+				fixture.mustExec(t, db, `INSERT INTO backup_asset_search_document_fields
+					(search_generation_id, document_id, field, state, coverage_revision,
+					 classification_revision, pipeline_revision, index_revision, source_fingerprint,
+					 excerpt_ref, updated_at)
+					VALUES (?, ?, 'content', 'unavailable', 1, 1, 1, 1, 'source-v1', ?, ?)`,
+					searchID, documentID, strings.Repeat("f", 32), now)
+			},
+		},
+	}
+
+	for index, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			migrator, db := fixture.openAt(t, backupAssetProcessingVersion)
+			now := time.Date(2026, 7, 19, 9, 10, index+1, 0, time.UTC)
+			marker := strconv.Itoa(index + 1)
+			pointID, catalogID, entryID := fixture.insertSearchMigrationCatalog(t, db, marker, now)
+			searchID := strings.Repeat(string(rune('a'+index)), 32)
+			documentID := strings.Repeat(string(rune('e'+index)), 64)
+			fixture.insertSearchMigrationGeneration(t, db, searchID, pointID, catalogID, 1, now)
+			fixture.insertSearchMigrationDocument(t, db, searchID, pointID, catalogID, entryID, documentID, now)
+			testCase.seed(t, db, searchID, documentID, now)
+
+			fixture.assertProcessingDownRejectedUnchanged(t, migrator, db)
+		})
+	}
+}
+
+func (fixture migrationFixture) insertProcessingMigrationJob(
+	t *testing.T,
+	db *sql.DB,
+	jobID, pointID, catalogID, entryID string,
+	now time.Time,
+) {
+	t.Helper()
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_processing_jobs
+		(id, work_key, descriptor_schema_version, descriptor_canonical,
+		 recovery_point_id, catalog_generation_id, entry_id, source_fingerprint,
+		 entry_fingerprint, provider_capability_revision, capability, capability_schema,
+		 pipeline_fingerprint, output_profile, security_policy_revision, priority_class,
+		 effective_priority, state, transition_revision, error_code, retry_count,
+		 cancel_reason, supersede_reason, expiry_reason, is_current, queued_at,
+		 absolute_deadline, created_at, updated_at, version)
+		VALUES (?, ?, 1, ?, ?, ?, ?, 'source-v1', 'entry-v1', 1, 'noop', 'noop-v1',
+		 'pipeline-v1', 'noop-v1', 'security-policy-v1', 'interactive', 100,
+		 'queued', 1, '', 0, '', '', '', ?, ?, ?, ?, ?, 1)`,
+		jobID, strings.Repeat("c", 64), []byte{1}, pointID, catalogID, entryID,
+		true, now, now.Add(time.Hour), now, now)
+}
+
+func (fixture migrationFixture) insertProcessingMigrationWorker(t *testing.T, db *sql.DB, workerID string, now time.Time) {
+	t.Helper()
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_worker_identities
+		(id, transport_kind, transport_fingerprint, instance_id, identity_revision,
+		 protocol_version, trust_state, health_state, interactive_slots, background_slots,
+		 quarantine_code, last_seen_at, created_at, updated_at)
+		VALUES (?, 'local', ?, ?, 1, 1, 'active', 'ready', 1, 1, '', ?, ?, ?)`,
+		workerID, strings.Repeat("e", 64), strings.Repeat("f", 32), now, now, now)
+}
+
+func (fixture migrationFixture) insertProcessingMigrationAttempt(
+	t *testing.T,
+	db *sql.DB,
+	attemptID, jobID, workerID, leaseID string,
+	now time.Time,
+) {
+	t.Helper()
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_processing_attempts
+		(id, job_id, attempt_number, worker_id, slot_class, state,
+		 worker_lease_expires_at, last_heartbeat_at, recovery_point_lease_id,
+		 recovery_point_attempt_id, recovery_point_fence_hash, absolute_deadline,
+		 outcome_code, is_current, started_at, created_at, updated_at)
+		VALUES (?, ?, 1, ?, 'interactive', 'active', ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)`,
+		attemptID, jobID, workerID, now.Add(time.Minute), now, leaseID,
+		strings.Repeat("1", 32), strings.Repeat("2", 64), now.Add(time.Hour), true, now, now, now)
+}
+
+type processingMigrationSnapshot struct {
+	version     uint
+	dirty       bool
+	tables      map[string]bool
+	definitions map[string]string
+	indexes     map[string]string
+	rowCounts   map[string]int
+}
+
+func (fixture migrationFixture) captureProcessingMigrationSnapshot(
+	t *testing.T,
+	migrator *migrate.Migrate,
+	db *sql.DB,
+) processingMigrationSnapshot {
+	t.Helper()
+	version, dirty, err := migrator.Version()
+	if err != nil {
+		t.Fatalf("read %s processing migration version: %v", fixture.engine, err)
+	}
+	tables := append([]string{
+		"wrapped_domain_keys",
+		"recovery_point_leases",
+		"backup_asset_search_postings",
+		"backup_asset_search_document_fields",
+	}, backupAssetProcessingTables...)
+	snapshot := processingMigrationSnapshot{
+		version:     version,
+		dirty:       dirty,
+		tables:      make(map[string]bool, len(tables)),
+		definitions: make(map[string]string, len(tables)),
+		indexes: map[string]string{
+			"idx_wrapped_domain_keys_active":                fixture.indexDefinition(t, db, "idx_wrapped_domain_keys_active"),
+			"idx_backup_asset_processing_jobs_current_work": fixture.indexDefinition(t, db, "idx_backup_asset_processing_jobs_current_work"),
+			"idx_backup_asset_derived_refs_blob_state":      fixture.indexDefinition(t, db, "idx_backup_asset_derived_refs_blob_state"),
+		},
+		rowCounts: make(map[string]int, len(tables)),
+	}
+	for _, table := range tables {
+		exists := databaseTableExists(t, db, fixture.engine, table)
+		snapshot.tables[table] = exists
+		if !exists {
+			continue
+		}
+		snapshot.definitions[table] = fixture.tableDefinition(t, db, table)
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
+			t.Fatalf("count %s rows in %s: %v", fixture.engine, table, err)
+		}
+		snapshot.rowCounts[table] = count
+	}
+	return snapshot
+}
+
+func (fixture migrationFixture) executeProcessingDown(db *sql.DB) error {
+	path := "migrations/sqlite/000067_backup_asset_processing.down.sql"
+	migrationFS := sqliteMigrationsFS
+	if fixture.engine == "postgres" {
+		path = "migrations/postgres/000067_backup_asset_processing.down.sql"
+		migrationFS = postgresMigrationsFS
+	}
+	script, err := migrationFS.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(string(script))
+	if err != nil {
+		_, _ = db.Exec("ROLLBACK")
+	}
+	return err
+}
+
+func (fixture migrationFixture) assertProcessingDownRejectedUnchanged(
+	t *testing.T,
+	migrator *migrate.Migrate,
+	db *sql.DB,
+) {
+	t.Helper()
+	before := fixture.captureProcessingMigrationSnapshot(t, migrator, db)
+	if err := fixture.executeProcessingDown(db); err == nil {
+		t.Fatal("000067 down unexpectedly succeeded while Child 10 state remains")
+	}
+	after := fixture.captureProcessingMigrationSnapshot(t, migrator, db)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("rejected 000067 down changed migration state\nbefore=%+v\nafter=%+v", before, after)
+	}
 }
 
 func backupAssetContentModels() map[string]any {

@@ -130,6 +130,18 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 	if config, configErr := runtime.ContentConfig(); configErr != nil || config.Enabled {
 		t.Fatalf("default Content config=%+v err=%v, want disabled", config, configErr)
 	}
+	if runtime.processingManager == nil {
+		t.Fatal("runtime omitted the shared Processing manager")
+	}
+	if config, configErr := runtime.ProcessingConfig(); configErr != nil || config.Enabled || config.LocalWorker.Enabled || config.RemoteWorker.Enabled {
+		t.Fatalf("default Processing config=%+v err=%v, want disabled and unconfigured", config, configErr)
+	}
+	if runtime.WorkerProtocol() != nil {
+		t.Fatal("default-disabled runtime exposed the Worker protocol")
+	}
+	if summary, summaryErr := runtime.ProcessingAdminSummary(context.Background()); summaryErr != nil || summary.Configured || summary.Queue.Total != 0 {
+		t.Fatalf("default Processing summary=%+v err=%v, want quiet", summary, summaryErr)
+	}
 	if _, err := runtime.CatalogService().GetRecoveryPoint(context.Background(), strings.Repeat("f", 32), catalog.AuthorizationScope{Role: "admin", UserID: 1}); !errors.Is(err, catalog.ErrFeatureDisabled) {
 		t.Fatalf("default-disabled runtime Catalog error=%v", err)
 	}
@@ -953,6 +965,54 @@ func TestRuntimeSearchStartupUnexpectedUnwrapFailureIsFatal(t *testing.T) {
 	runtime := &Runtime{foundation: backupasset.NewFoundationService(settingsService), keyring: ring, searchWorker: worker}
 	if err := runtime.startupSearch(context.Background()); !errors.Is(err, backupasset.ErrKeyUnavailable) {
 		t.Fatalf("unexpected Search unwrap failure got %v, want fatal key unavailable", err)
+	}
+}
+
+func TestRuntimeSearchStartupIsolatesUnreadableDerivedKey(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RUNTIME_DERIVED_ISOLATION_KEK_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(&model.WrappedDomainKey{}); err != nil {
+		t.Fatal(err)
+	}
+	settingsService := settings.NewService(db)
+	if err := settingsService.Update("backup_assets.enabled", "true"); err != nil {
+		t.Fatal(err)
+	}
+	ring := backupasset.NewKeyring(db, nil)
+	derived, err := ring.Ensure(context.Background(), backupasset.KeyDomainDerivedStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.WrappedDomainKey{}).
+		Where("domain = ? AND version = ?", backupasset.KeyDomainDerivedStore, derived.Version).
+		Update("wrapped_key", []byte("corrupt-derived-envelope")).Error; err != nil {
+		t.Fatal(err)
+	}
+	backend := newSearchWorkerBackendFake()
+	worker, err := NewSearchWorker(SearchWorkerDependencies{
+		Config: func() (SearchWorkerConfig, error) {
+			return SearchWorkerConfig{Enabled: true, ReconcileInterval: time.Minute, ReconcileBatchSize: 10, WorkerConcurrency: 1}, nil
+		},
+		Backend: backend,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &Runtime{foundation: backupasset.NewFoundationService(settingsService), keyring: ring, searchWorker: worker}
+	if err := runtime.startupSearch(context.Background()); err != nil {
+		t.Fatalf("Derived key failure blocked Core Search startup: %v", err)
+	}
+	if calls := backend.calls(); calls.reconcile != 1 || calls.list != 1 {
+		t.Fatalf("Core Search did not start after isolated Derived failure: %+v", calls)
+	}
+	if _, err := ring.Active(context.Background(), backupasset.KeyDomainSearchToken); err != nil {
+		t.Fatalf("Search key unavailable after isolated Derived failure: %v", err)
+	}
+	if _, err := ring.Active(context.Background(), backupasset.KeyDomainDerivedStore); !errors.Is(err, backupasset.ErrKeyUnavailable) {
+		t.Fatalf("corrupt Derived key unexpectedly became readable: %v", err)
 	}
 }
 

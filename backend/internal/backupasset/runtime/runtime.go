@@ -16,6 +16,7 @@ import (
 	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/content"
 	"xirang/backend/internal/backupasset/overlay"
+	"xirang/backend/internal/backupasset/processing"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/backupasset/repository"
@@ -46,6 +47,7 @@ type Dependencies struct {
 	StagedPayload      provider.StagedPayloadTransport
 	ToolBinaries       provider.ToolBinaries
 	Metrics            publication.Metrics
+	ProcessingMetrics  processing.Metrics
 	CatalogMetrics     catalog.Metrics
 	SearchMetrics      search.Metrics
 	ContentMetrics     content.Metrics
@@ -98,6 +100,7 @@ type Runtime struct {
 	contentReconciler *content.Reconciler
 	contentReady      *atomic.Bool
 	contentManager    contentRuntimeManager
+	processingManager *managedProcessingRuntime
 	transitioner      publication.FeatureTransitioner
 	metrics           publication.Metrics
 
@@ -400,6 +403,17 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	processingMetrics := dependencies.ProcessingMetrics
+	if processingMetrics == nil {
+		if dependencies.Metrics != nil {
+			processingMetrics = processing.NoopMetrics{}
+		} else {
+			processingMetrics, err = processing.NewPrometheusMetrics(prometheus.DefaultRegisterer)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	contentReady := &atomic.Bool{}
 	contentBroker, err := content.NewBroker(content.BrokerDependencies{
 		DB: dependencies.DB, Now: dependencies.Now,
@@ -448,6 +462,17 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	processingManager, err := newProcessingRuntime(processingRuntimeDependencies{
+		DB: dependencies.DB, Foundation: foundation, Keyring: keyring, Lease: lease,
+		Source: repositoryService, ValidateRoot: repositoryService.ValidatePrivateRuntimeRoot,
+		RevalidateSource: runtimeProcessingSourceRevalidator{source: repositoryService},
+		Projection:       runtimeDerivedProjectionPort{ingest: searchIngest},
+		Metrics:          processingMetrics,
+		Now:              dependencies.Now,
+	})
+	if err != nil {
+		return nil, err
+	}
 	return &Runtime{
 		foundation: foundation, repository: repositoryService, publication: publicationService,
 		resticStrategy: resticStrategy, rsyncStrategy: rsyncStrategy, rcloneStrategy: rcloneStrategy,
@@ -457,8 +482,9 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		searchWorker: searchWorker, overlayService: overlayService, searchReady: searchReady,
 		contentBroker: contentBroker, contentBudget: contentBudget, contentAudit: contentAudit,
 		contentReconciler: contentReconciler, contentReady: contentReady, contentManager: contentManager,
-		transitioner: admission,
-		metrics:      metricsSink,
+		processingManager: processingManager,
+		transitioner:      admission,
+		metrics:           metricsSink,
 	}, nil
 }
 
@@ -545,6 +571,24 @@ func (runtime *Runtime) ContentConfig() (backupasset.ContentConfig, error) {
 		return backupasset.ContentConfig{}, fmt.Errorf("%w: Content config unavailable", backupasset.ErrInvalidState)
 	}
 	return runtime.foundation.ContentConfig()
+}
+func (runtime *Runtime) WorkerProtocol() *processing.WorkerProtocolService {
+	if runtime == nil || runtime.processingManager == nil {
+		return nil
+	}
+	return runtime.processingManager.WorkerProtocol()
+}
+func (runtime *Runtime) ProcessingConfig() (backupasset.ProcessingConfig, error) {
+	if runtime == nil || runtime.processingManager == nil {
+		return backupasset.ProcessingConfig{}, fmt.Errorf("%w: Processing config unavailable", backupasset.ErrInvalidState)
+	}
+	return runtime.processingManager.ProcessingConfig()
+}
+func (runtime *Runtime) ProcessingAdminSummary(ctx context.Context) (ProcessingAdminSummary, error) {
+	if runtime == nil || runtime.processingManager == nil {
+		return ProcessingAdminSummary{}, fmt.Errorf("%w: Processing summary unavailable", backupasset.ErrInvalidState)
+	}
+	return runtime.processingManager.AdminSummary(ctx)
 }
 func (runtime *Runtime) PublicationCoordinator() publication.Coordinator { return runtime.publication }
 func (runtime *Runtime) PublicationReconciler() publication.Reconciler   { return runtime.publication }
@@ -718,7 +762,15 @@ func (runtime *Runtime) StartupPass(ctx context.Context) error {
 			return fmt.Errorf("%w: unresolved backup publication TaskRun", backupasset.ErrConflict)
 		}
 	}
-	return runtime.startupSearch(ctx)
+	if err := runtime.startupSearch(ctx); err != nil {
+		return err
+	}
+	if runtime.processingManager != nil {
+		if err := runtime.processingManager.Startup(ctx); err != nil {
+			logger.Module("backup_asset_processing").Warn().Str("stage", "startup").Msg("备份资产处理运行时不可用，核心服务继续启动")
+		}
+	}
+	return nil
 }
 
 func (runtime *Runtime) startupSearch(ctx context.Context) error {
@@ -733,7 +785,9 @@ func (runtime *Runtime) startupSearch(ctx context.Context) error {
 		runtime.setSearchReady(false)
 		return nil
 	}
-	if _, err := runtime.keyring.RewrapAll(ctx); err != nil {
+	coreDomains := append([]backupasset.KeyDomain(nil), backupasset.RequiredKeyDomains...)
+	coreDomains = append(coreDomains, backupasset.KeyDomainSearchToken)
+	if _, err := runtime.keyring.RewrapDomains(ctx, coreDomains...); err != nil {
 		runtime.setSearchReady(false)
 		return err
 	}
@@ -827,6 +881,9 @@ func (runtime *Runtime) StopAccepting() {
 	if runtime.contentManager != nil {
 		runtime.contentManager.StopAccepting()
 	}
+	if runtime.processingManager != nil {
+		runtime.processingManager.StopAccepting()
+	}
 	if runtime.admission != nil {
 		runtime.admission.StopAccepting()
 	}
@@ -842,6 +899,13 @@ func (runtime *Runtime) Run(ctx context.Context) {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var health sync.WaitGroup
+	if runtime.processingManager != nil {
+		health.Add(1)
+		go func() {
+			defer health.Done()
+			runtime.processingManager.Run(runCtx)
+		}()
+	}
 	if runtime.contentManager != nil {
 		health.Add(1)
 		go func() {
@@ -888,6 +952,11 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	}
 	var shutdownErrors []error
 	runtime.StopAccepting()
+	if runtime.processingManager != nil {
+		if err := runtime.processingManager.Shutdown(ctx); err != nil {
+			shutdownErrors = append(shutdownErrors, err)
+		}
+	}
 	if runtime.contentManager != nil {
 		if err := runtime.contentManager.Shutdown(ctx); err != nil {
 			shutdownErrors = append(shutdownErrors, err)

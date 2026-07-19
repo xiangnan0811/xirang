@@ -64,6 +64,106 @@ func TestSearchTokenDomainIsIndependentAndRandom(t *testing.T) {
 	}
 }
 
+func TestDerivedStoreDomainIsOptionalIndependentAndRotatable(t *testing.T) {
+	ring, _ := newKeyringTestHarness(t)
+	ctx := context.Background()
+	required, err := ring.EnsureRequiredDomains(ctx)
+	if err != nil {
+		t.Fatalf("EnsureRequiredDomains: %v", err)
+	}
+	if _, bootRequired := required[KeyDomainDerivedStore]; bootRequired {
+		t.Fatal("derived store key was created by unconditional required-domain startup")
+	}
+	before, err := ring.Ensure(ctx, KeyDomainDerivedStore)
+	if err != nil {
+		t.Fatalf("Ensure derived store: %v", err)
+	}
+	if before.Domain != KeyDomainDerivedStore || before.Version != 1 || len(before.Key) != secure.DomainKeySize {
+		t.Fatalf("invalid derived store material: %+v", before)
+	}
+	for domain, material := range required {
+		if bytes.Equal(before.Key, material.Key) {
+			t.Fatalf("derived store reuses %s key bytes", domain)
+		}
+	}
+	after, err := ring.Rotate(ctx, KeyDomainDerivedStore, 0)
+	if err != nil {
+		t.Fatalf("Rotate derived store: %v", err)
+	}
+	if after.Version != before.Version+1 || bytes.Equal(after.Key, before.Key) {
+		t.Fatalf("derived rotation did not create independent next key: before=%+v after=%+v", before, after)
+	}
+	old, err := ring.ByVersion(ctx, KeyDomainDerivedStore, before.Version)
+	if err != nil || old.State != DomainKeyVerifyOnly || !bytes.Equal(old.Key, before.Key) {
+		t.Fatalf("old derived key is not verify-only: old=%+v err=%v", old, err)
+	}
+}
+
+func TestDerivedStoreLossRequiresProjectionSafeInvalidation(t *testing.T) {
+	ring, _ := newKeyringTestHarness(t)
+	ctx := context.Background()
+	material, err := ring.Ensure(ctx, KeyDomainDerivedStore)
+	if err != nil {
+		t.Fatalf("Ensure derived store: %v", err)
+	}
+	if err := ring.MarkLost(ctx, KeyDomainDerivedStore, material.Version); !errors.Is(err, ErrKeyRotationProhibited) {
+		t.Fatalf("MarkLost derived store without invalidation got %v, want ErrKeyRotationProhibited", err)
+	}
+	callbackObservedActive := false
+	err = ring.MarkRebuildableLost(ctx, KeyDomainDerivedStore, material.Version, func(
+		_ context.Context, tx *gorm.DB, transition RebuildableKeyTransition,
+	) error {
+		var active model.WrappedDomainKey
+		if err := tx.Where("domain = ? AND state = ?", KeyDomainDerivedStore, DomainKeyActive).First(&active).Error; err != nil {
+			return err
+		}
+		callbackObservedActive = active.Version == material.Version && transition.Domain == KeyDomainDerivedStore && transition.NextVersion == 0
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("MarkRebuildableLost derived store: %v", err)
+	}
+	if !callbackObservedActive {
+		t.Fatal("derived projections were not invalidated before the key became lost")
+	}
+	if _, err := ring.Ensure(ctx, KeyDomainDerivedStore); !errors.Is(err, ErrKeyLost) {
+		t.Fatalf("Ensure silently regenerated lost derived store key: %v", err)
+	}
+}
+
+func TestDomainScopedRewrapIsolatesUnreadableDerivedMaterial(t *testing.T) {
+	ring, _ := newKeyringTestHarness(t)
+	ctx := context.Background()
+	search, err := ring.Ensure(ctx, KeyDomainSearchToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derived, err := ring.Ensure(ctx, KeyDomainDerivedStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ring.db.Model(&model.WrappedDomainKey{}).
+		Where("domain = ? AND version = ?", KeyDomainDerivedStore, derived.Version).
+		Update("wrapped_key", []byte("corrupt-derived-envelope")).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	count, err := ring.RewrapDomains(ctx, KeyDomainSearchToken)
+	if err != nil || count != 1 {
+		t.Fatalf("RewrapDomains(search) count=%d err=%v", count, err)
+	}
+	after, err := ring.Active(ctx, KeyDomainSearchToken)
+	if err != nil || after.ID != search.ID || after.Version != search.Version || !bytes.Equal(after.Key, search.Key) {
+		t.Fatalf("scoped rewrap changed or lost Search key: before=%+v after=%+v err=%v", search, after, err)
+	}
+	if _, err := ring.Active(ctx, KeyDomainDerivedStore); !errors.Is(err, ErrKeyUnavailable) {
+		t.Fatalf("corrupt Derived material unexpectedly became readable: %v", err)
+	}
+	if _, err := ring.RewrapAll(ctx); !errors.Is(err, ErrKeyUnavailable) {
+		t.Fatalf("full rewrap did not report corrupt Derived material: %v", err)
+	}
+}
+
 func TestSearchTokenOrdinaryRotationIsProhibited(t *testing.T) {
 	ring, _ := newKeyringTestHarness(t)
 	ctx := context.Background()

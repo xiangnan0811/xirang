@@ -24,6 +24,7 @@ package settings
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -275,6 +276,37 @@ var registry = []SettingDef{
 	{Key: "backup_assets.recent_writes_per_minute", EnvVar: "BACKUP_ASSETS_RECENT_WRITES_PER_MINUTE", CodeDefault: "120", Type: TypeInt, Category: "backup_assets", Description: "每用户最近访问每分钟写入上限", Min: "1", Max: "10000"},
 	{Key: "backup_assets.idempotency_ttl", EnvVar: "BACKUP_ASSETS_IDEMPOTENCY_TTL", CodeDefault: "24h", Type: TypeDuration, Category: "backup_assets", Description: "资产用户覆盖幂等回执保留时长", MinDuration: "1h", MaxDuration: "168h"},
 	{Key: "backup_assets.idempotency_key_max_bytes", EnvVar: "BACKUP_ASSETS_IDEMPOTENCY_KEY_MAX_BYTES", CodeDefault: "128", Type: TypeInt, Category: "backup_assets", Description: "资产用户覆盖幂等键最大字节数", Min: "32", Max: "256"},
+	{Key: "backup_assets.processing_queue_max", EnvVar: "BACKUP_ASSETS_PROCESSING_QUEUE_MAX", CodeDefault: "10000", Type: TypeInt, Category: "backup_assets", Description: "资产处理持久队列上限", Min: "1", Max: "100000"},
+	{Key: "backup_assets.processing_interactive_slots", EnvVar: "BACKUP_ASSETS_PROCESSING_INTERACTIVE_SLOTS", CodeDefault: "2", Type: TypeInt, Category: "backup_assets", Description: "资产处理交互保留槽位", Min: "1", Max: "64"},
+	{Key: "backup_assets.processing_background_slots", EnvVar: "BACKUP_ASSETS_PROCESSING_BACKGROUND_SLOTS", CodeDefault: "2", Type: TypeInt, Category: "backup_assets", Description: "资产处理后台槽位", Min: "1", Max: "64"},
+	{Key: "backup_assets.processing_pull_lease", EnvVar: "BACKUP_ASSETS_PROCESSING_PULL_LEASE", CodeDefault: "90s", Type: TypeDuration, Category: "backup_assets", Description: "资产 Worker 拉取租约时长", MinDuration: "15s", MaxDuration: "5m"},
+	{Key: "backup_assets.processing_pull_heartbeat", EnvVar: "BACKUP_ASSETS_PROCESSING_PULL_HEARTBEAT", CodeDefault: "20s", Type: TypeDuration, Category: "backup_assets", Description: "资产 Worker 拉取租约心跳", MinDuration: "5s", MaxDuration: "1m"},
+	{Key: "backup_assets.processing_attempt_timeout", EnvVar: "BACKUP_ASSETS_PROCESSING_ATTEMPT_TIMEOUT", CodeDefault: "2h", Type: TypeDuration, Category: "backup_assets", Description: "资产处理 attempt 绝对超时", MinDuration: "1m", MaxDuration: "24h"},
+	{Key: "backup_assets.processing_retry_max", EnvVar: "BACKUP_ASSETS_PROCESSING_RETRY_MAX", CodeDefault: "5", Type: TypeInt, Category: "backup_assets", Description: "资产处理最大重试次数", Min: "0", Max: "20"},
+	{Key: "backup_assets.processing_retry_base", EnvVar: "BACKUP_ASSETS_PROCESSING_RETRY_BASE", CodeDefault: "5s", Type: TypeDuration, Category: "backup_assets", Description: "资产处理重试基础延迟", MinDuration: "1s", MaxDuration: "5m"},
+	{Key: "backup_assets.processing_retry_max_delay", EnvVar: "BACKUP_ASSETS_PROCESSING_RETRY_MAX_DELAY", CodeDefault: "15m", Type: TypeDuration, Category: "backup_assets", Description: "资产处理重试最大延迟", MinDuration: "1s", MaxDuration: "2h"},
+	{Key: "backup_assets.processing_input_request_max_bytes", EnvVar: "BACKUP_ASSETS_PROCESSING_INPUT_REQUEST_MAX_BYTES", CodeDefault: "67108864", Type: TypeInt, Category: "backup_assets", Description: "Worker Input 单次读取字节上限", Min: "65536", Max: "1073741824"},
+	{Key: "backup_assets.processing_input_cumulative_max_bytes", EnvVar: "BACKUP_ASSETS_PROCESSING_INPUT_CUMULATIVE_MAX_BYTES", CodeDefault: "2147483648", Type: TypeInt, Category: "backup_assets", Description: "Worker Input attempt 累计读取字节上限", Min: "65536", Max: "17179869184"},
+	{Key: "backup_assets.processing_input_max_requests", EnvVar: "BACKUP_ASSETS_PROCESSING_INPUT_MAX_REQUESTS", CodeDefault: "512", Type: TypeInt, Category: "backup_assets", Description: "Worker Input attempt 请求上限", Min: "1", Max: "4096"},
+	{Key: "backup_assets.processing_input_max_in_flight", EnvVar: "BACKUP_ASSETS_PROCESSING_INPUT_MAX_IN_FLIGHT", CodeDefault: "4", Type: TypeInt, Category: "backup_assets", Description: "Worker Input attempt 并发请求上限", Min: "1", Max: "32"},
+	{Key: "backup_assets.processing_sink_max_artifacts", EnvVar: "BACKUP_ASSETS_PROCESSING_SINK_MAX_ARTIFACTS", CodeDefault: "32", Type: TypeInt, Category: "backup_assets", Description: "Worker Sink 原子产物数量上限", Min: "1", Max: "256"},
+	{Key: "backup_assets.processing_sink_artifact_max_bytes", EnvVar: "BACKUP_ASSETS_PROCESSING_SINK_ARTIFACT_MAX_BYTES", CodeDefault: "536870912", Type: TypeInt, Category: "backup_assets", Description: "Worker Sink 单产物字节上限", Min: "65536", Max: "4294967296"},
+	{Key: "backup_assets.processing_sink_total_max_bytes", EnvVar: "BACKUP_ASSETS_PROCESSING_SINK_TOTAL_MAX_BYTES", CodeDefault: "1073741824", Type: TypeInt, Category: "backup_assets", Description: "Worker Sink 原子产物集总字节上限", Min: "65536", Max: "17179869184"},
+	{Key: "backup_assets.processing_protocol_json_max_bytes", EnvVar: "BACKUP_ASSETS_PROCESSING_PROTOCOL_JSON_MAX_BYTES", CodeDefault: "65536", Type: TypeInt, Category: "backup_assets", Description: "Worker 协议 JSON 请求体上限", Min: "4096", Max: "1048576"},
+	{Key: "backup_assets.worker_local_enabled", EnvVar: "BACKUP_ASSETS_WORKER_LOCAL_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "启用本机资产 Worker 传输", RequiresRestart: true},
+	{Key: "backup_assets.worker_local_socket", EnvVar: "BACKUP_ASSETS_WORKER_LOCAL_SOCKET", CodeDefault: "/run/xirang/asset-worker.sock", Type: TypeString, Category: "backup_assets", Description: "本机资产 Worker Unix socket", RequiresRestart: true},
+	{Key: "backup_assets.worker_remote_enabled", EnvVar: "BACKUP_ASSETS_WORKER_REMOTE_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "启用远程资产 Worker mTLS 传输", RequiresRestart: true},
+	{Key: "backup_assets.worker_remote_listen_addr", EnvVar: "BACKUP_ASSETS_WORKER_REMOTE_LISTEN_ADDR", CodeDefault: "", Type: TypeString, Category: "backup_assets", Description: "远程资产 Worker 专用监听地址", RequiresRestart: true},
+	{Key: "backup_assets.worker_remote_server_cert_file", EnvVar: "BACKUP_ASSETS_WORKER_REMOTE_SERVER_CERT_FILE", CodeDefault: "", Type: TypeString, Category: "backup_assets", Description: "远程资产 Worker 服务端证书路径", RequiresRestart: true, Sensitive: true},
+	{Key: "backup_assets.worker_remote_server_key_file", EnvVar: "BACKUP_ASSETS_WORKER_REMOTE_SERVER_KEY_FILE", CodeDefault: "", Type: TypeString, Category: "backup_assets", Description: "远程资产 Worker 服务端私钥路径", RequiresRestart: true, Sensitive: true},
+	{Key: "backup_assets.worker_remote_client_ca_file", EnvVar: "BACKUP_ASSETS_WORKER_REMOTE_CLIENT_CA_FILE", CodeDefault: "", Type: TypeString, Category: "backup_assets", Description: "远程资产 Worker 客户端 CA 路径", RequiresRestart: true, Sensitive: true},
+	{Key: "backup_assets.worker_remote_trust_domain", EnvVar: "BACKUP_ASSETS_WORKER_REMOTE_TRUST_DOMAIN", CodeDefault: "", Type: TypeString, Category: "backup_assets", Description: "远程资产 Worker SPIFFE 信任域", RequiresRestart: true, Sensitive: true},
+	{Key: "backup_assets.derived_store_root", EnvVar: "BACKUP_ASSETS_DERIVED_STORE_ROOT", CodeDefault: "/var/lib/xirang-asset-runtime/derived", Type: TypeString, Category: "backup_assets", Description: "加密派生资产专用根目录", RequiresRestart: true},
+	{Key: "backup_assets.derived_store_chunk_bytes", EnvVar: "BACKUP_ASSETS_DERIVED_STORE_CHUNK_BYTES", CodeDefault: "1048576", Type: TypeInt, Category: "backup_assets", Description: "派生资产认证加密分块字节数", Min: "65536", Max: "8388608", RequiresRestart: true},
+	{Key: "backup_assets.derived_store_blob_max_bytes", EnvVar: "BACKUP_ASSETS_DERIVED_STORE_BLOB_MAX_BYTES", CodeDefault: "4294967296", Type: TypeInt, Category: "backup_assets", Description: "派生资产单 blob 字节上限", Min: "65536", Max: "17179869184"},
+	{Key: "backup_assets.derived_store_global_max_bytes", EnvVar: "BACKUP_ASSETS_DERIVED_STORE_GLOBAL_MAX_BYTES", CodeDefault: "107374182400", Type: TypeInt, Category: "backup_assets", Description: "派生资产全局字节配额", Min: "65536", Max: "1099511627776"},
+	{Key: "backup_assets.derived_store_reconcile_interval", EnvVar: "BACKUP_ASSETS_DERIVED_STORE_RECONCILE_INTERVAL", CodeDefault: "15m", Type: TypeDuration, Category: "backup_assets", Description: "派生资产对账间隔", MinDuration: "1m", MaxDuration: "24h"},
+	{Key: "backup_assets.derived_store_reconcile_batch_size", EnvVar: "BACKUP_ASSETS_DERIVED_STORE_RECONCILE_BATCH_SIZE", CodeDefault: "256", Type: TypeInt, Category: "backup_assets", Description: "派生资产对账批次", Min: "1", Max: "10000"},
 }
 
 // registryMap O(1) key 查找（init 时构建）
@@ -842,11 +874,46 @@ var backupAssetContentSettingKeys = []string{
 	"backup_assets.content_allow_insecure_loopback",
 }
 
+var backupAssetProcessingSettingKeys = []string{
+	"backup_assets.processing_queue_max",
+	"backup_assets.processing_interactive_slots",
+	"backup_assets.processing_background_slots",
+	"backup_assets.processing_pull_lease",
+	"backup_assets.processing_pull_heartbeat",
+	"backup_assets.processing_attempt_timeout",
+	"backup_assets.processing_retry_max",
+	"backup_assets.processing_retry_base",
+	"backup_assets.processing_retry_max_delay",
+	"backup_assets.processing_input_request_max_bytes",
+	"backup_assets.processing_input_cumulative_max_bytes",
+	"backup_assets.processing_input_max_requests",
+	"backup_assets.processing_input_max_in_flight",
+	"backup_assets.processing_sink_max_artifacts",
+	"backup_assets.processing_sink_artifact_max_bytes",
+	"backup_assets.processing_sink_total_max_bytes",
+	"backup_assets.processing_protocol_json_max_bytes",
+	"backup_assets.worker_local_enabled",
+	"backup_assets.worker_local_socket",
+	"backup_assets.worker_remote_enabled",
+	"backup_assets.worker_remote_listen_addr",
+	"backup_assets.worker_remote_server_cert_file",
+	"backup_assets.worker_remote_server_key_file",
+	"backup_assets.worker_remote_client_ca_file",
+	"backup_assets.worker_remote_trust_domain",
+	"backup_assets.derived_store_root",
+	"backup_assets.derived_store_chunk_bytes",
+	"backup_assets.derived_store_blob_max_bytes",
+	"backup_assets.derived_store_global_max_bytes",
+	"backup_assets.derived_store_reconcile_interval",
+	"backup_assets.derived_store_reconcile_batch_size",
+}
+
 var backupAssetFoundationSettingKeys = func() []string {
-	keys := make([]string, 0, len(backupAssetCoreSettingKeys)+len(backupAssetSearchOverlaySettingKeys)+len(backupAssetContentSettingKeys))
+	keys := make([]string, 0, len(backupAssetCoreSettingKeys)+len(backupAssetSearchOverlaySettingKeys)+len(backupAssetContentSettingKeys)+len(backupAssetProcessingSettingKeys))
 	keys = append(keys, backupAssetCoreSettingKeys...)
 	keys = append(keys, backupAssetSearchOverlaySettingKeys...)
 	keys = append(keys, backupAssetContentSettingKeys...)
+	keys = append(keys, backupAssetProcessingSettingKeys...)
 	return keys
 }()
 
@@ -963,6 +1030,18 @@ func validateBackupAssetFoundationConfig(values map[string]string, requireComple
 	contentCacheGlobalFiles, _ := strconv.ParseInt(resolved["backup_assets.content_cache_global_files"], 10, 64)
 	contentCacheIdleTTL, _ := time.ParseDuration(resolved["backup_assets.content_cache_idle_ttl"])
 	contentCacheAbsoluteTTL, _ := time.ParseDuration(resolved["backup_assets.content_cache_absolute_ttl"])
+	processingPullLease, _ := time.ParseDuration(resolved["backup_assets.processing_pull_lease"])
+	processingPullHeartbeat, _ := time.ParseDuration(resolved["backup_assets.processing_pull_heartbeat"])
+	processingAttemptTimeout, _ := time.ParseDuration(resolved["backup_assets.processing_attempt_timeout"])
+	processingRetryBase, _ := time.ParseDuration(resolved["backup_assets.processing_retry_base"])
+	processingRetryMaxDelay, _ := time.ParseDuration(resolved["backup_assets.processing_retry_max_delay"])
+	processingInputRequestMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.processing_input_request_max_bytes"], 10, 64)
+	processingInputCumulativeMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.processing_input_cumulative_max_bytes"], 10, 64)
+	processingSinkArtifactMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.processing_sink_artifact_max_bytes"], 10, 64)
+	processingSinkTotalMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.processing_sink_total_max_bytes"], 10, 64)
+	derivedStoreChunkBytes, _ := strconv.ParseInt(resolved["backup_assets.derived_store_chunk_bytes"], 10, 64)
+	derivedStoreBlobMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.derived_store_blob_max_bytes"], 10, 64)
+	derivedStoreGlobalMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.derived_store_global_max_bytes"], 10, 64)
 	if heartbeat >= leaseDuration {
 		return fmt.Errorf("backup_assets.lease_heartbeat 必须小于 backup_assets.lease_duration")
 	}
@@ -1078,18 +1157,141 @@ func validateBackupAssetFoundationConfig(values map[string]string, requireComple
 	if !safeContentCacheRoot(resolved["backup_assets.content_cache_root"]) {
 		return fmt.Errorf("backup_assets.content_cache_root 不是安全的专用绝对路径")
 	}
+	if processingPullHeartbeat*2 >= processingPullLease {
+		return fmt.Errorf("backup_assets.processing_pull_heartbeat 必须小于 processing_pull_lease 的一半")
+	}
+	if processingAttemptTimeout > absoluteDeadline {
+		return fmt.Errorf("backup_assets.processing_attempt_timeout 不能超过 RecoveryPoint 租约绝对截止时间")
+	}
+	if processingRetryMaxDelay < processingRetryBase {
+		return fmt.Errorf("backup_assets.processing_retry_max_delay 不能小于 processing_retry_base")
+	}
+	if processingInputCumulativeMaxBytes < processingInputRequestMaxBytes {
+		return fmt.Errorf("backup_assets.processing_input_cumulative_max_bytes 不能小于单次读取上限")
+	}
+	if processingSinkTotalMaxBytes < processingSinkArtifactMaxBytes {
+		return fmt.Errorf("backup_assets.processing_sink_total_max_bytes 不能小于单产物上限")
+	}
+	if derivedStoreBlobMaxBytes < derivedStoreChunkBytes || derivedStoreGlobalMaxBytes < derivedStoreBlobMaxBytes {
+		return fmt.Errorf("派生资产分块、单 blob 与全局字节配额顺序无效")
+	}
+	if !cleanAbsolutePath(resolved["backup_assets.worker_local_socket"]) {
+		return fmt.Errorf("backup_assets.worker_local_socket 不是 clean absolute path")
+	}
+	derivedRoot := resolved["backup_assets.derived_store_root"]
+	if !safePrivateRuntimeRootPath(derivedRoot) {
+		return fmt.Errorf("backup_assets.derived_store_root 不是安全的专用绝对路径")
+	}
+	if privateRuntimePathsRelated(derivedRoot, resolved["backup_assets.content_cache_root"]) {
+		return fmt.Errorf("backup_assets.derived_store_root 不能与内容缓存根目录重叠")
+	}
+	if err := validateRemoteWorkerSettings(resolved); err != nil {
+		return err
+	}
 	return nil
 }
 
 func safeContentCacheRoot(value string) bool {
+	return safePrivateRuntimeRootPath(value)
+}
+
+func safePrivateRuntimeRootPath(value string) bool {
 	trimmed := strings.TrimSpace(value)
-	if trimmed == "" || !filepath.IsAbs(trimmed) || filepath.Clean(trimmed) != trimmed || trimmed == string(filepath.Separator) {
+	if trimmed == "" || trimmed != value || !filepath.IsAbs(trimmed) || filepath.Clean(trimmed) != trimmed || trimmed == string(filepath.Separator) {
 		return false
 	}
 	for _, forbidden := range []string{"/data", "/backup", "/logs"} {
 		if trimmed == forbidden || strings.HasPrefix(trimmed, forbidden+string(filepath.Separator)) ||
 			strings.HasPrefix(forbidden, trimmed+string(filepath.Separator)) {
 			return false
+		}
+	}
+	return true
+}
+
+func cleanAbsolutePath(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return trimmed != "" && trimmed == value && filepath.IsAbs(trimmed) && filepath.Clean(trimmed) == trimmed && trimmed != string(filepath.Separator)
+}
+
+func privateRuntimePathsRelated(left, right string) bool {
+	if !cleanAbsolutePath(left) || !cleanAbsolutePath(right) {
+		return false
+	}
+	left, right = filepath.Clean(left), filepath.Clean(right)
+	separator := string(filepath.Separator)
+	return left == right || strings.HasPrefix(left, right+separator) || strings.HasPrefix(right, left+separator)
+}
+
+func validateRemoteWorkerSettings(values map[string]string) error {
+	remoteEnabled, _ := strconv.ParseBool(values["backup_assets.worker_remote_enabled"])
+	keys := []string{
+		"backup_assets.worker_remote_listen_addr",
+		"backup_assets.worker_remote_server_cert_file",
+		"backup_assets.worker_remote_server_key_file",
+		"backup_assets.worker_remote_client_ca_file",
+		"backup_assets.worker_remote_trust_domain",
+	}
+	configured := remoteEnabled
+	for _, key := range keys {
+		configured = configured || strings.TrimSpace(values[key]) != ""
+	}
+	if !configured {
+		return nil
+	}
+	for _, key := range keys {
+		if strings.TrimSpace(values[key]) == "" {
+			return fmt.Errorf("远程资产 Worker trust material 必须完整")
+		}
+	}
+	if !safeWorkerListenAddress(values["backup_assets.worker_remote_listen_addr"]) {
+		return fmt.Errorf("backup_assets.worker_remote_listen_addr 必须是非 wildcard 地址")
+	}
+	for _, key := range []string{
+		"backup_assets.worker_remote_server_cert_file",
+		"backup_assets.worker_remote_server_key_file",
+		"backup_assets.worker_remote_client_ca_file",
+	} {
+		if !cleanAbsolutePath(values[key]) {
+			return fmt.Errorf("%s 不是 clean absolute path", key)
+		}
+	}
+	if !canonicalWorkerTrustDomain(values["backup_assets.worker_remote_trust_domain"]) {
+		return fmt.Errorf("backup_assets.worker_remote_trust_domain 不是 canonical trust domain")
+	}
+	return nil
+}
+
+func safeWorkerListenAddress(value string) bool {
+	if strings.TrimSpace(value) != value || value == "" {
+		return false
+	}
+	host, portText, err := net.SplitHostPort(value)
+	if err != nil || host == "" || host == "*" {
+		return false
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return false
+	}
+	if address := net.ParseIP(host); address != nil && address.IsUnspecified() {
+		return false
+	}
+	return true
+}
+
+func canonicalWorkerTrustDomain(value string) bool {
+	if value == "" || value != strings.TrimSpace(value) || value != strings.ToLower(value) || len(value) > 253 || net.ParseIP(value) != nil {
+		return false
+	}
+	for _, label := range strings.Split(value, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, character := range label {
+			if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '-' {
+				return false
+			}
 		}
 	}
 	return true

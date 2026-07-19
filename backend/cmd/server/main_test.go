@@ -1,9 +1,11 @@
 package main
 
 import (
+	"net/http"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMainWiresSharedBackupAssetRuntimeBeforeSchedules(t *testing.T) {
@@ -97,7 +99,9 @@ func TestMainShutdownStopsResticAdmissionBeforeHTTPAndCleansUpAfterWorkers(t *te
 	requiredInOrder := []string{
 		"cronScheduler.Stop()",
 		"taskManager.StopAccepting()",
+		"workerServers.StopAccepting()",
 		"assetRuntime.StopAccepting()",
+		"workerServers.Shutdown(shutdownCtx)",
 		"server.Shutdown(shutdownCtx)",
 		"workers[i].Shutdown(shutdownCtx)",
 		"executor.CleanupTempKeyDir()",
@@ -117,5 +121,48 @@ func TestMainShutdownStopsResticAdmissionBeforeHTTPAndCleansUpAfterWorkers(t *te
 	workerManager := strings.Index(source, "\t\ttaskManager,")
 	if workerRuntime < 0 || workerManager < 0 || workerRuntime >= workerManager {
 		t.Fatal("asset runtime must start before Task Manager so reverse shutdown drains consumers first")
+	}
+}
+
+func TestMainUsesDedicatedAuthenticatedWorkerServers(t *testing.T) {
+	sourceBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	source := string(sourceBytes)
+	required := []string{
+		"startWorkerHTTPServers(assetRuntime)",
+		"api.NewWorkerRouter(",
+		"processing.ListenLocalWorker(",
+		"processing.ListenRemoteWorker(",
+		"ConnContext:       api.WorkerConnContext",
+	}
+	for _, value := range required {
+		if !strings.Contains(source, value) {
+			t.Fatalf("main.go omitted dedicated Worker server boundary %q", value)
+		}
+	}
+	startup := strings.Index(source, "assetRuntime.StartupPass(context.Background())")
+	worker := strings.Index(source, "startWorkerHTTPServers(assetRuntime)")
+	public := strings.Index(source, "router := api.NewRouter(")
+	if startup < 0 || worker <= startup || public <= worker {
+		t.Fatalf("Worker listener startup order invalid: runtime=%d worker=%d public=%d", startup, worker, public)
+	}
+}
+
+func TestNewWorkerHTTPServerHasDedicatedBoundsAndConnContext(t *testing.T) {
+	server := newWorkerHTTPServer(http.NotFoundHandler())
+	if server == nil || server.Handler == nil || server.ConnContext == nil {
+		t.Fatal("dedicated Worker HTTP server omitted handler or authenticated ConnContext")
+	}
+	for name, value := range map[string]time.Duration{
+		"read header": server.ReadHeaderTimeout,
+		"read":        server.ReadTimeout,
+		"write":       server.WriteTimeout,
+		"idle":        server.IdleTimeout,
+	} {
+		if value <= 0 || value > 30*time.Minute {
+			t.Fatalf("Worker %s timeout=%s is unbounded", name, value)
+		}
 	}
 }

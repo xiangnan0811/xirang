@@ -78,6 +78,52 @@ func performBackupAssetRBACRequest(t *testing.T, fixture backupAssetRBACTestFixt
 	return response
 }
 
+func TestBackupProcessingAdminRouteRequiresAdminAndFocusedRateLimit(t *testing.T) {
+	fixture := setupBackupAssetRBACFixture(t)
+	path := "/api/v1/admin/backup-asset-processing"
+	if response := performBackupAssetRBACRequest(t, fixture, http.MethodGet, path, "", ""); response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, role := range []string{"operator", "viewer", "unknown"} {
+		t.Run(role, func(t *testing.T) {
+			response := performBackupAssetRBACRequest(t, fixture, http.MethodGet, path, "", fixture.tokens[role])
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+	for index := 0; index < 30; index++ {
+		response := performBackupAssetRBACRequest(t, fixture, http.MethodGet, path, "", fixture.tokens["admin"])
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("request %d status=%d body=%s", index+1, response.Code, response.Body.String())
+		}
+	}
+	response := performBackupAssetRBACRequest(t, fixture, http.MethodGet, path, "", fixture.tokens["admin"])
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("focused limit status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestBackupProcessingAdminRouteRejectsQueryAndBody(t *testing.T) {
+	fixture := setupBackupAssetRBACFixture(t)
+	path := "/api/v1/admin/backup-asset-processing"
+	for _, testCase := range []struct {
+		name   string
+		target string
+		body   string
+	}{
+		{name: "query", target: path + "?job_id=hidden"},
+		{name: "body", target: path, body: `{}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := performBackupAssetRBACRequest(t, fixture, http.MethodGet, testCase.target, testCase.body, fixture.tokens["admin"])
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestBackupAssetRBACUsesAuthAndExactRepositoryPermissionsBeforeFeatureGate(t *testing.T) {
 	fixture := setupBackupAssetRBACFixture(t)
 	const repositoryID = "0123456789abcdef0123456789abcdef"

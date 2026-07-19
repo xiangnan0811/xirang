@@ -15,6 +15,52 @@ import (
 	"gorm.io/gorm"
 )
 
+type expectedProcessingSettingDefinition struct {
+	env             string
+	defaultValue    string
+	settingType     SettingType
+	min             string
+	max             string
+	minDuration     string
+	maxDuration     string
+	requiresRestart bool
+	sensitive       bool
+}
+
+var expectedBackupAssetProcessingDefinitions = map[string]expectedProcessingSettingDefinition{
+	"backup_assets.processing_queue_max":                  {"BACKUP_ASSETS_PROCESSING_QUEUE_MAX", "10000", TypeInt, "1", "100000", "", "", false, false},
+	"backup_assets.processing_interactive_slots":          {"BACKUP_ASSETS_PROCESSING_INTERACTIVE_SLOTS", "2", TypeInt, "1", "64", "", "", false, false},
+	"backup_assets.processing_background_slots":           {"BACKUP_ASSETS_PROCESSING_BACKGROUND_SLOTS", "2", TypeInt, "1", "64", "", "", false, false},
+	"backup_assets.processing_pull_lease":                 {"BACKUP_ASSETS_PROCESSING_PULL_LEASE", "90s", TypeDuration, "", "", "15s", "5m", false, false},
+	"backup_assets.processing_pull_heartbeat":             {"BACKUP_ASSETS_PROCESSING_PULL_HEARTBEAT", "20s", TypeDuration, "", "", "5s", "1m", false, false},
+	"backup_assets.processing_attempt_timeout":            {"BACKUP_ASSETS_PROCESSING_ATTEMPT_TIMEOUT", "2h", TypeDuration, "", "", "1m", "24h", false, false},
+	"backup_assets.processing_retry_max":                  {"BACKUP_ASSETS_PROCESSING_RETRY_MAX", "5", TypeInt, "0", "20", "", "", false, false},
+	"backup_assets.processing_retry_base":                 {"BACKUP_ASSETS_PROCESSING_RETRY_BASE", "5s", TypeDuration, "", "", "1s", "5m", false, false},
+	"backup_assets.processing_retry_max_delay":            {"BACKUP_ASSETS_PROCESSING_RETRY_MAX_DELAY", "15m", TypeDuration, "", "", "1s", "2h", false, false},
+	"backup_assets.processing_input_request_max_bytes":    {"BACKUP_ASSETS_PROCESSING_INPUT_REQUEST_MAX_BYTES", "67108864", TypeInt, "65536", "1073741824", "", "", false, false},
+	"backup_assets.processing_input_cumulative_max_bytes": {"BACKUP_ASSETS_PROCESSING_INPUT_CUMULATIVE_MAX_BYTES", "2147483648", TypeInt, "65536", "17179869184", "", "", false, false},
+	"backup_assets.processing_input_max_requests":         {"BACKUP_ASSETS_PROCESSING_INPUT_MAX_REQUESTS", "512", TypeInt, "1", "4096", "", "", false, false},
+	"backup_assets.processing_input_max_in_flight":        {"BACKUP_ASSETS_PROCESSING_INPUT_MAX_IN_FLIGHT", "4", TypeInt, "1", "32", "", "", false, false},
+	"backup_assets.processing_sink_max_artifacts":         {"BACKUP_ASSETS_PROCESSING_SINK_MAX_ARTIFACTS", "32", TypeInt, "1", "256", "", "", false, false},
+	"backup_assets.processing_sink_artifact_max_bytes":    {"BACKUP_ASSETS_PROCESSING_SINK_ARTIFACT_MAX_BYTES", "536870912", TypeInt, "65536", "4294967296", "", "", false, false},
+	"backup_assets.processing_sink_total_max_bytes":       {"BACKUP_ASSETS_PROCESSING_SINK_TOTAL_MAX_BYTES", "1073741824", TypeInt, "65536", "17179869184", "", "", false, false},
+	"backup_assets.processing_protocol_json_max_bytes":    {"BACKUP_ASSETS_PROCESSING_PROTOCOL_JSON_MAX_BYTES", "65536", TypeInt, "4096", "1048576", "", "", false, false},
+	"backup_assets.worker_local_enabled":                  {"BACKUP_ASSETS_WORKER_LOCAL_ENABLED", "false", TypeBool, "", "", "", "", true, false},
+	"backup_assets.worker_local_socket":                   {"BACKUP_ASSETS_WORKER_LOCAL_SOCKET", "/run/xirang/asset-worker.sock", TypeString, "", "", "", "", true, false},
+	"backup_assets.worker_remote_enabled":                 {"BACKUP_ASSETS_WORKER_REMOTE_ENABLED", "false", TypeBool, "", "", "", "", true, false},
+	"backup_assets.worker_remote_listen_addr":             {"BACKUP_ASSETS_WORKER_REMOTE_LISTEN_ADDR", "", TypeString, "", "", "", "", true, false},
+	"backup_assets.worker_remote_server_cert_file":        {"BACKUP_ASSETS_WORKER_REMOTE_SERVER_CERT_FILE", "", TypeString, "", "", "", "", true, true},
+	"backup_assets.worker_remote_server_key_file":         {"BACKUP_ASSETS_WORKER_REMOTE_SERVER_KEY_FILE", "", TypeString, "", "", "", "", true, true},
+	"backup_assets.worker_remote_client_ca_file":          {"BACKUP_ASSETS_WORKER_REMOTE_CLIENT_CA_FILE", "", TypeString, "", "", "", "", true, true},
+	"backup_assets.worker_remote_trust_domain":            {"BACKUP_ASSETS_WORKER_REMOTE_TRUST_DOMAIN", "", TypeString, "", "", "", "", true, true},
+	"backup_assets.derived_store_root":                    {"BACKUP_ASSETS_DERIVED_STORE_ROOT", "/var/lib/xirang-asset-runtime/derived", TypeString, "", "", "", "", true, false},
+	"backup_assets.derived_store_chunk_bytes":             {"BACKUP_ASSETS_DERIVED_STORE_CHUNK_BYTES", "1048576", TypeInt, "65536", "8388608", "", "", true, false},
+	"backup_assets.derived_store_blob_max_bytes":          {"BACKUP_ASSETS_DERIVED_STORE_BLOB_MAX_BYTES", "4294967296", TypeInt, "65536", "17179869184", "", "", false, false},
+	"backup_assets.derived_store_global_max_bytes":        {"BACKUP_ASSETS_DERIVED_STORE_GLOBAL_MAX_BYTES", "107374182400", TypeInt, "65536", "1099511627776", "", "", false, false},
+	"backup_assets.derived_store_reconcile_interval":      {"BACKUP_ASSETS_DERIVED_STORE_RECONCILE_INTERVAL", "15m", TypeDuration, "", "", "1m", "24h", false, false},
+	"backup_assets.derived_store_reconcile_batch_size":    {"BACKUP_ASSETS_DERIVED_STORE_RECONCILE_BATCH_SIZE", "256", TypeInt, "1", "10000", "", "", false, false},
+}
+
 func setupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file::memory:?_loc=UTC"), &gorm.Config{})
@@ -174,8 +220,8 @@ func TestBackupAssetSearchConfigAndOverlayConfigDefinitionsAndSafeDefaults(t *te
 			got[def.Key] = def
 		}
 	}
-	if len(got) != len(want) {
-		t.Fatalf("backup asset setting count=%d, want %d", len(got), len(want))
+	if len(got) != len(want)+len(expectedBackupAssetProcessingDefinitions) {
+		t.Fatalf("backup asset setting count=%d, want %d", len(got), len(want)+len(expectedBackupAssetProcessingDefinitions))
 	}
 	for key, expected := range want {
 		def, ok := got[key]
@@ -187,7 +233,7 @@ func TestBackupAssetSearchConfigAndOverlayConfigDefinitionsAndSafeDefaults(t *te
 			t.Errorf("setting %s mismatch: %+v", key, def)
 		}
 		if def.Sensitive || def.RequiresRestart {
-			t.Errorf("foundation setting %s must be dynamic and non-sensitive", key)
+			t.Errorf("foundation setting %s lifecycle mismatch: %+v", key, def)
 		}
 	}
 
@@ -195,6 +241,90 @@ func TestBackupAssetSearchConfigAndOverlayConfigDefinitionsAndSafeDefaults(t *te
 	service := NewService(setupTestDB(t))
 	if got := service.GetEffective("backup_assets.enabled"); got != "false" {
 		t.Fatalf("backup assets default=%q, want false", got)
+	}
+}
+
+func TestBackupAssetProcessingDefinitionsAndSafeDefaults(t *testing.T) {
+	defs := NewService(setupTestDB(t)).Registry()
+	got := make(map[string]SettingDef, len(expectedBackupAssetProcessingDefinitions))
+	for _, def := range defs {
+		if _, expected := expectedBackupAssetProcessingDefinitions[def.Key]; expected {
+			got[def.Key] = def
+		}
+	}
+	if len(got) != len(expectedBackupAssetProcessingDefinitions) {
+		t.Fatalf("processing setting count=%d, want %d", len(got), len(expectedBackupAssetProcessingDefinitions))
+	}
+	for key, expected := range expectedBackupAssetProcessingDefinitions {
+		def, ok := got[key]
+		if !ok {
+			t.Fatalf("missing processing setting %s", key)
+		}
+		if def.EnvVar != expected.env || def.CodeDefault != expected.defaultValue || def.Type != expected.settingType ||
+			def.Min != expected.min || def.Max != expected.max || def.MinDuration != expected.minDuration ||
+			def.MaxDuration != expected.maxDuration || def.RequiresRestart != expected.requiresRestart ||
+			def.Sensitive != expected.sensitive {
+			t.Errorf("processing setting %s mismatch: %+v", key, def)
+		}
+	}
+	service := NewService(setupTestDB(t))
+	for _, key := range []string{"backup_assets.enabled", "backup_assets.worker_local_enabled", "backup_assets.worker_remote_enabled"} {
+		if value := service.GetEffective(key); value != "false" {
+			t.Errorf("%s default=%q, want false", key, value)
+		}
+	}
+}
+
+func TestBackupAssetProcessingCrossSettingBoundaries(t *testing.T) {
+	valid := backupAssetFoundationValuesForTest()
+	if err := ValidateBackupAssetFoundationConfig(valid); err != nil {
+		t.Fatalf("valid processing defaults rejected: %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{"heartbeat must be below half lease", "backup_assets.processing_pull_heartbeat", "45s"},
+		{"retry max delay must cover base", "backup_assets.processing_retry_max_delay", "4s"},
+		{"input cumulative must cover request", "backup_assets.processing_input_cumulative_max_bytes", "65536"},
+		{"sink total must cover artifact", "backup_assets.processing_sink_total_max_bytes", "65536"},
+		{"derived blob must cover chunk", "backup_assets.derived_store_blob_max_bytes", "65536"},
+		{"derived global must cover blob", "backup_assets.derived_store_global_max_bytes", "65536"},
+		{"local socket must be clean absolute", "backup_assets.worker_local_socket", "run/worker.sock"},
+		{"derived root must be private", "backup_assets.derived_store_root", "/data/derived"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			values := cloneSettingsValues(valid)
+			values[test.key] = test.value
+			if err := ValidateBackupAssetFoundationConfig(values); err == nil {
+				t.Fatalf("%s=%q unexpectedly accepted", test.key, test.value)
+			}
+		})
+	}
+
+	remote := cloneSettingsValues(valid)
+	remote["backup_assets.worker_remote_enabled"] = "true"
+	if err := ValidateBackupAssetFoundationConfig(remote); err == nil {
+		t.Fatal("partial remote trust unexpectedly accepted")
+	}
+	for key, value := range map[string]string{
+		"backup_assets.worker_remote_listen_addr":      "127.0.0.1:10762",
+		"backup_assets.worker_remote_server_cert_file": "/run/secrets/worker-server.crt",
+		"backup_assets.worker_remote_server_key_file":  "/run/secrets/worker-server.key",
+		"backup_assets.worker_remote_client_ca_file":   "/run/secrets/worker-client-ca.crt",
+		"backup_assets.worker_remote_trust_domain":     "workers.example.internal",
+	} {
+		remote[key] = value
+	}
+	if err := ValidateBackupAssetFoundationConfig(remote); err != nil {
+		t.Fatalf("complete remote trust rejected: %v", err)
+	}
+	remote["backup_assets.worker_remote_listen_addr"] = "0.0.0.0:10762"
+	if err := ValidateBackupAssetFoundationConfig(remote); err == nil {
+		t.Fatal("wildcard remote listen address unexpectedly accepted")
 	}
 }
 

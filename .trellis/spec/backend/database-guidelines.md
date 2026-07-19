@@ -45,7 +45,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
 - Keep version numbers in lockstep across SQLite and PostgreSQL. The current
-  latest migration is `000066_backup_asset_content`.
+  latest migration is `000067_backup_asset_processing`.
 - Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the
   SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
@@ -111,7 +111,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   both SQLite/PostgreSQL definitions and matching down migrations when changing
   traffic-window predicates or index names.
 - Backup-asset schema changes are paired across SQLite and PostgreSQL. The
-  current baseline includes `000062` through `000066_backup_asset_content`;
+  current baseline includes `000062` through `000067_backup_asset_processing`;
   later versions must remain paired. After durable Search or publication facts,
   or live content-delivery state exists, schema down must fail closed rather
   than deleting history, Provider facts, grants, reservations, or leases.
@@ -130,7 +130,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 
 - Connection helper: `openPostgresSQLDB(dsn string) (*sql.DB, error)`.
 - CI regression gate:
-  `go test ./internal/database -run 'Test(BackupAssetMigration0(62|63|64|65|66)Postgres|PostgresTimestamptzScanUsesConfiguredUTC)' -count=1`.
+  `go test ./internal/database -run 'Test(BackupAssetMigration0(62|63|64|65|66|67)Postgres|PostgresTimestamptzScanUsesConfiguredUTC)' -count=1`.
 - Required pgx registrations per physical connection:
   `pgtype.TimestampCodec{ScanLocation: scanLocation}` and
   `pgtype.TimestamptzCodec{ScanLocation: scanLocation}`.
@@ -145,7 +145,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   hook. Configuring only `timestamp` leaves `TIMESTAMPTZ` scans vulnerable to
   `time.Local` on newer Go/pgx combinations.
 - SQLite/PostgreSQL migration parity for backup assets covers 000062 through
-  000066. A new paired migration must be added to this regex deliberately; it
+  000067. A new paired migration must be added to this regex deliberately; it
   must never be silently omitted from the PostgreSQL gate.
 
 ### 4. Validation & Error Matrix
@@ -173,7 +173,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   PostgreSQL service with `TZ` set to a non-UTC value and assert both location
   and RFC3339 value.
 - PostgreSQL migration tests must exercise paired apply/down contracts for
-  000062 through 000066.
+  000062 through 000067.
 - Run the CI regex above with `REQUIRE_POSTGRES_MIGRATION_TEST=1`; a skipped
   PostgreSQL test is not completion evidence.
 
@@ -601,6 +601,101 @@ Correct:
 // Finalize changes request/budget state and the closed audit counters in the
 // same transaction. The reconciler emits only the terminal, due summary.
 _, err := budget.Finalize(ctx, intent)
+```
+
+---
+
+## Scenario: Backup Asset Processing Queue and Derived Store
+
+### 1. Scope / Trigger
+
+- Applies to paired `000067_backup_asset_processing`, processing models,
+  Worker/RP lease fencing, one-use grants, atomic Derived manifests, and
+  cross-engine behavior changes.
+
+### 2. Signatures
+
+- Paired DDL:
+  `migrations/{sqlite,postgres}/000067_backup_asset_processing.{up,down}.sql`.
+- Closed job state type: `processing.ProcessingState`.
+- Transactional lease renewal:
+  `LeaseService.RenewTx(ctx, tx, RenewLeaseRequest) (LeaseFence, error)`.
+- Engine behavior entry points: `TestProcessingBehaviorSQLite` and
+  `TestProcessingBehaviorPostgres`.
+- Required PostgreSQL selectors:
+  `Test(BackupAssetMigration0(62|63|64|65|66|67)Postgres|PostgresTimestamptzScanUsesConfiguredUTC)`
+  and `^TestProcessingBehaviorPostgres$`.
+
+### 3. Contracts
+
+- SQLite and PostgreSQL use the same closed Processing states and separate
+  transition revision, stable error, retry, cancel, supersede, and expiry
+  products. Partial unique indexes enforce one current job per `work_key`, one
+  current attempt per job, and one active interest per owner tuple.
+- A Worker pull owns both a short Worker lease and a `processing_job`
+  RecoveryPoint lease. A takeover creates a new attempt/fence; old grants,
+  heartbeats, uploads, and manifest commits remain invalid forever.
+- Activation secrets are persisted only as hashes and are one-use. Input and
+  Sink request counts, bytes, and in-flight reservations are transactionally
+  bounded on both engines.
+- Derived blobs use the independent `derived_store` key domain, per-blob random
+  DEKs, authenticated chunks, opaque locators, and explicit references.
+  Search projection revoke must succeed before reference/key/ciphertext
+  destruction; late output and tampered ciphertext fail closed.
+- Pristine down is allowed only with no Processing/Worker/Derived/updater rows
+  and no active `processing_job` lease. Used down aborts before any table or
+  index is removed; retain `000067` and ship a forward repair.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Same canonical `work_key` is requested concurrently | One current job; interests coalesce without an in-memory-only lock contract. |
+| Worker or RecoveryPoint lease/fence is stale | Heartbeat, grant use, upload, projection and manifest publication fail closed. |
+| Last interest is removed | Revoke both grants before `cancel_requested`; one remaining interest preserves the shared job. |
+| Manifest member, digest, MIME, count, size, completeness, source or policy differs | Reject the entire set and destroy/reconcile invisible staging. |
+| Search projection revoke fails | Retain Derived reference, wrapped DEK and ciphertext; do not continue destruction. |
+| PostgreSQL boolean fixture receives integer SQL literals | Invalid test fixture; bind Go `bool` values so the intended CHECK is exercised. |
+| A shared-memory SQLite DSN is reused by `go test -count=N` | Invalid test isolation; include a per-open atomic sequence and keep engine state per test run. |
+| Required PostgreSQL DSN is absent or unreachable | Gate fails or remains explicitly `not_executed`; SQLite/text inspection is not parity evidence. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a current Worker heartbeat renews its attempt, RecoveryPoint lease and
+  live grants in one transaction; a takeover gets a new fence and old output
+  can never publish.
+- Base: no Worker transport/capability is configured, so Core remains ready and
+  returns informational `not_deployed` without persisting noisy failed jobs.
+- Bad: delete a Derived key/blob before Child 7 projection revoke, use `0/1`
+  boolean literals in shared PostgreSQL fixtures, or derive an in-memory test
+  DSN from `t.Name()` alone when the suite must pass with `-count`.
+
+### 6. Tests Required
+
+- Migration tests: `TestBackupAssetMigration067SQLite` and
+  `TestBackupAssetMigration067Postgres` plus used-down/model/check/FK
+  parity cases.
+- Behavior tests: `TestProcessingBehaviorSQLite` and
+  `TestProcessingBehaviorPostgres`, both calling one shared contract suite.
+- The real PostgreSQL gate sets `REQUIRE_POSTGRES_MIGRATION_TEST=1` and
+  `REQUIRE_POSTGRES_PROCESSING_TEST=1`; a missing `TEST_POSTGRES_DSN` is a
+  failed required gate, never SQLite evidence.
+
+### 7. Wrong vs Correct
+
+Wrong cross-engine fixture and repeated-test DSN:
+
+```go
+_, _ = db.Exec(`INSERT INTO artifact_sets (projection_required) VALUES (0)`)
+dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"
+```
+
+Correct:
+
+```go
+_, _ = db.Exec(`INSERT INTO artifact_sets (projection_required) VALUES (?)`, false)
+dsn := fmt.Sprintf("file:%s-%d?mode=memory&cache=shared",
+    strings.ReplaceAll(t.Name(), "/", "_"), processingTestDBSequence.Add(1))
 ```
 
 ---

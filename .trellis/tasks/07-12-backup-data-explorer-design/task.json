@@ -27,7 +27,8 @@
     "07-17-backup-assets-catalog",
     "07-18-backup-assets-search-overlays",
     "07-18-backup-assets-content-plane",
-    "07-19-backup-assets-workspace-ui"
+    "07-19-backup-assets-workspace-ui",
+    "07-19-backup-assets-worker-protocol"
   ],
   "parent": null,
   "relatedFiles": [],
