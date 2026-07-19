@@ -613,7 +613,20 @@ _, err := budget.Finalize(ctx, intent)
   Worker/RP lease fencing, one-use grants, atomic Derived manifests, and
   cross-engine behavior changes.
 
-### 2. Contracts
+### 2. Signatures
+
+- Paired DDL:
+  `migrations/{sqlite,postgres}/000067_backup_asset_processing.{up,down}.sql`.
+- Closed job state type: `processing.ProcessingState`.
+- Transactional lease renewal:
+  `LeaseService.RenewTx(ctx, tx, RenewLeaseRequest) (LeaseFence, error)`.
+- Engine behavior entry points: `TestProcessingBehaviorSQLite` and
+  `TestProcessingBehaviorPostgres`.
+- Required PostgreSQL selectors:
+  `Test(BackupAssetMigration0(62|63|64|65|66|67)Postgres|PostgresTimestamptzScanUsesConfiguredUTC)`
+  and `^TestProcessingBehaviorPostgres$`.
+
+### 3. Contracts
 
 - SQLite and PostgreSQL use the same closed Processing states and separate
   transition revision, stable error, retry, cancel, supersede, and expiry
@@ -633,7 +646,31 @@ _, err := budget.Finalize(ctx, intent)
   and no active `processing_job` lease. Used down aborts before any table or
   index is removed; retain `000067` and ship a forward repair.
 
-### 3. Tests Required
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Same canonical `work_key` is requested concurrently | One current job; interests coalesce without an in-memory-only lock contract. |
+| Worker or RecoveryPoint lease/fence is stale | Heartbeat, grant use, upload, projection and manifest publication fail closed. |
+| Last interest is removed | Revoke both grants before `cancel_requested`; one remaining interest preserves the shared job. |
+| Manifest member, digest, MIME, count, size, completeness, source or policy differs | Reject the entire set and destroy/reconcile invisible staging. |
+| Search projection revoke fails | Retain Derived reference, wrapped DEK and ciphertext; do not continue destruction. |
+| PostgreSQL boolean fixture receives integer SQL literals | Invalid test fixture; bind Go `bool` values so the intended CHECK is exercised. |
+| A shared-memory SQLite DSN is reused by `go test -count=N` | Invalid test isolation; include a per-open atomic sequence and keep engine state per test run. |
+| Required PostgreSQL DSN is absent or unreachable | Gate fails or remains explicitly `not_executed`; SQLite/text inspection is not parity evidence. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a current Worker heartbeat renews its attempt, RecoveryPoint lease and
+  live grants in one transaction; a takeover gets a new fence and old output
+  can never publish.
+- Base: no Worker transport/capability is configured, so Core remains ready and
+  returns informational `not_deployed` without persisting noisy failed jobs.
+- Bad: delete a Derived key/blob before Child 7 projection revoke, use `0/1`
+  boolean literals in shared PostgreSQL fixtures, or derive an in-memory test
+  DSN from `t.Name()` alone when the suite must pass with `-count`.
+
+### 6. Tests Required
 
 - Migration tests: `TestBackupAssetMigration067SQLite` and
   `TestBackupAssetMigration067Postgres` plus used-down/model/check/FK
@@ -643,6 +680,23 @@ _, err := budget.Finalize(ctx, intent)
 - The real PostgreSQL gate sets `REQUIRE_POSTGRES_MIGRATION_TEST=1` and
   `REQUIRE_POSTGRES_PROCESSING_TEST=1`; a missing `TEST_POSTGRES_DSN` is a
   failed required gate, never SQLite evidence.
+
+### 7. Wrong vs Correct
+
+Wrong cross-engine fixture and repeated-test DSN:
+
+```go
+_, _ = db.Exec(`INSERT INTO artifact_sets (projection_required) VALUES (0)`)
+dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"
+```
+
+Correct:
+
+```go
+_, _ = db.Exec(`INSERT INTO artifact_sets (projection_required) VALUES (?)`, false)
+dsn := fmt.Sprintf("file:%s-%d?mode=memory&cache=shared",
+    strings.ReplaceAll(t.Name(), "/", "_"), processingTestDBSequence.Add(1))
+```
 
 ---
 
