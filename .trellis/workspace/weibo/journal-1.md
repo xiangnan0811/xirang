@@ -992,3 +992,36 @@ Implemented paired migration 067, persistent processing jobs and closed states, 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 26: Child 10 CI fixture correction
+
+**Date**: 2026-07-20
+**Task**: Child 10 CI fixture correction
+**Branch**: `codex/backup-assets-worker-protocol`
+
+### Summary
+
+Investigated PR 394 Backend Test & Build failure under GitHub Actions. Root cause: processing runtime tests relied on the local shell APP_ENV=development fallback, while CI correctly failed closed without DATA_ENCRYPTION_KEY. Reproduced RED with APP_ENV, ENVIRONMENT, and DATA_ENCRYPTION_KEY unset; made openProcessingRuntimeTestDB inject one fixed non-sensitive test key; verified the identical focused command GREEN, runtime race GREEN, CI-equivalent go test -coverprofile across all backend packages GREEN, and full make check GREEN with all three environment variables unset. No production, migration, feature, UI, or release scope changed.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `98f8233` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

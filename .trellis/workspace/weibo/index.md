@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 25
+- **Total Sessions**: 26
 - **Last Active**: 2026-07-20
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~994 | Active |
+| `journal-1.md` | ~1027 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 26 | 2026-07-20 | Child 10 CI fixture correction | `98f8233` | `codex/backup-assets-worker-protocol` |
 | 25 | 2026-07-20 | Child 10 Worker protocol and derived store | `795b2c1`, `1c21ff7` | `codex/backup-assets-worker-protocol` |
 | 24 | 2026-07-19 | Child 9：备份资产工作区 UI 实现与交付前验证 | `863ea8f` | `codex/backup-assets-workspace-ui` |
 | 23 | 2026-07-19 | Child 8：备份资产内容平面实现与交付前验证 | `5e5a13fdf527a3917d48a108d28d062b89c17a66` | `codex/backup-assets-content-plane` |
