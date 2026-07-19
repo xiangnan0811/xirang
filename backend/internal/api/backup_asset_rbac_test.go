@@ -169,6 +169,28 @@ func TestCatalogRoutesRequireAssetListPermissionBeforeFeatureGate(t *testing.T) 
 	}
 }
 
+func TestBackupContentTicketRequiresPreviewPermissionBeforeFeatureGate(t *testing.T) {
+	fixture := setupBackupAssetRBACFixture(t)
+	pointID, entryID := strings.Repeat("1", 32), strings.Repeat("a", 64)
+	path := "/api/v1/recovery-points/" + pointID + "/entries/" + entryID + "/delivery-tickets"
+	body := `{"schema_version":1,"action":"preview","renderer":"safe_raster","profile":"raster_v1"}`
+	if response := performBackupAssetRBACRequest(t, fixture, http.MethodPost, path, body, ""); response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, role := range []string{"admin", "operator", "viewer", "unknown"} {
+		t.Run(role, func(t *testing.T) {
+			response := performBackupAssetRBACRequest(t, fixture, http.MethodPost, path, body, fixture.tokens[role])
+			want := http.StatusForbidden
+			if role == "admin" || role == "operator" {
+				want = http.StatusServiceUnavailable
+			}
+			if response.Code != want {
+				t.Fatalf("status=%d want=%d body=%s", response.Code, want, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestAssetSearchOverlayRoutesRequireListPermissionBeforeFeatureGate(t *testing.T) {
 	fixture := setupBackupAssetRBACFixture(t)
 	const id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

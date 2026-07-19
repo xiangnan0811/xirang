@@ -200,6 +200,13 @@ type ReadHandle interface {
 	Close() error
 }
 
+// ProviderByteReporter exposes bytes consumed from the Provider, including
+// internal limit probes that are intentionally hidden from Read callers.
+// ReadHandle stays unchanged so adapters without hidden reads need not opt in.
+type ProviderByteReporter interface {
+	ProviderBytes() int64
+}
+
 type RepositoryProber interface {
 	Probe(context.Context, AccessBinding, OperationLimits) (RepositoryObservation, error)
 }

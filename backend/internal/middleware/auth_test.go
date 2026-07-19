@@ -28,10 +28,14 @@ func setupAuthHandler(jwtManager *auth.JWTManager, db *gorm.DB) *gin.Engine {
 		userID, _ := c.Get(CtxUserID)
 		username, _ := c.Get(CtxUsername)
 		role, _ := c.Get(CtxRole)
+		_, bindingOK := CurrentSessionBinding(c)
+		_, rawTokenPresent := c.Get(CtxToken)
 		c.JSON(http.StatusOK, gin.H{
-			"userID":   userID,
-			"username": username,
-			"role":     role,
+			"userID":          userID,
+			"username":        username,
+			"role":            role,
+			"bindingOK":       bindingOK,
+			"rawTokenPresent": rawTokenPresent,
 		})
 	})
 	return r
@@ -65,7 +69,7 @@ func authPerformRequest(r *gin.Engine, token string) *httptest.ResponseRecorder 
 // AuthMiddleware 认证测试
 // =============================================================================
 
-func TestAuthMiddleware_ValidToken(t *testing.T) {
+func TestAuthMiddlewareSessionBindingValidToken(t *testing.T) {
 	m := newTestJWTManager()
 	r := setupAuthHandler(m, nil)
 	user := model.User{ID: 1, Username: "admin", Role: "admin", TokenVersion: 1}
@@ -87,6 +91,45 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 	}
 	if body["role"] != user.Role {
 		t.Errorf("期望 role=%s，实际 %v", user.Role, body["role"])
+	}
+	if body["bindingOK"] != true {
+		t.Fatalf("safe session binding missing: %v", body)
+	}
+	if body["rawTokenPresent"] != false {
+		t.Fatalf("raw JWT remained in Gin context: %v", body)
+	}
+}
+
+func TestAuthMiddlewareSessionBindingIsPrivateAndExact(t *testing.T) {
+	m := newTestJWTManager()
+	user := model.User{ID: 8, Username: "operator", Role: "operator", TokenVersion: 4}
+	token := generateTestToken(m, user)
+	claims, err := m.ParseToken(token)
+	if err != nil {
+		t.Fatalf("parse test token: %v", err)
+	}
+
+	var got SessionBinding
+	var ok bool
+	r := setupTestRouter()
+	r.Use(AuthMiddleware(m, nil))
+	r.GET("/test", func(c *gin.Context) {
+		got, ok = CurrentSessionBinding(c)
+		c.Status(http.StatusNoContent)
+	})
+	w := authPerformRequest(r, token)
+	if w.Code != http.StatusNoContent || !ok {
+		t.Fatalf("status=%d bindingOK=%v", w.Code, ok)
+	}
+	if got.JTI != claims.ID || got.UserID != user.ID || got.Role != user.Role || got.TokenVersion != user.TokenVersion || !got.ExpiresAt.Equal(claims.ExpiresAt.UTC()) {
+		t.Fatalf("binding=%+v claims=%+v", got, claims)
+	}
+	payload, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal session binding: %v", err)
+	}
+	if string(payload) != "{}" {
+		t.Fatalf("session binding exposed JSON: %s", payload)
 	}
 }
 

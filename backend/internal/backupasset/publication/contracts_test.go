@@ -22,6 +22,7 @@ func TestResticOperationLedgerIsClosedAndLegacyBlockAuditIsDeterministic(t *test
 		OperationEvidenceBackup,
 		OperationManifest,
 		OperationReconcile,
+		OperationContentRead,
 	}
 	for _, operation := range operations {
 		if err := ValidateResticOperation(operation); err != nil {

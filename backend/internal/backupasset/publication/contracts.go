@@ -34,6 +34,7 @@ const (
 	OperationManifest              ResticOperation = "manifest"
 	OperationReconcile             ResticOperation = "reconcile"
 	OperationManagedRsyncPointRead ResticOperation = "managed_rsync_point_read"
+	OperationContentRead           ResticOperation = "content_read"
 )
 
 var validResticOperations = map[ResticOperation]struct{}{
@@ -52,6 +53,7 @@ var validResticOperations = map[ResticOperation]struct{}{
 	OperationManifest:              {},
 	OperationReconcile:             {},
 	OperationManagedRsyncPointRead: {},
+	OperationContentRead:           {},
 }
 
 func ValidateResticOperation(value ResticOperation) error {

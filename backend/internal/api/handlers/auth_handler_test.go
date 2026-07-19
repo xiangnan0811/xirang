@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -26,6 +27,7 @@ type authHandlerTestFixture struct {
 	db         *gorm.DB
 	service    *auth.Service
 	jwtManager *auth.JWTManager
+	handler    *AuthHandler
 	router     *gin.Engine
 	adminUser  model.User
 	adminToken string
@@ -101,6 +103,7 @@ func setupAuthHandlerFixture(t *testing.T) authHandlerTestFixture {
 		db:         db,
 		service:    service,
 		jwtManager: jwtManager,
+		handler:    authHandler,
 		router:     router,
 		adminUser:  adminUser,
 		adminToken: adminToken,
@@ -194,6 +197,48 @@ func TestLogoutSuccess(t *testing.T) {
 	if meResp.Code != http.StatusUnauthorized {
 		t.Fatalf("已注销 token 期望状态码 401，实际: %d，响应: %s", meResp.Code, meResp.Body.String())
 	}
+}
+
+func TestLogoutRevokesJWTBeforeContentSessionAndIgnoresSafeReconcileFailure(t *testing.T) {
+	fx := setupAuthHandlerFixture(t)
+	claims, err := fx.jwtManager.ParseToken(fx.adminToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoker := &contentSessionRevokerFake{
+		jwt: fx.jwtManager, expectedJTI: claims.ID,
+		err: fmt.Errorf("FAKE_REVOKER_ERROR_WITH_ID_FOR_TEST_ONLY:%s", claims.ID),
+	}
+	fx.handler.WithContentSessionRevoker(revoker)
+
+	response := jsonRequest(t, fx.router, http.MethodPost, "/auth/logout", fx.adminToken, `{}`)
+	if response.Code != http.StatusOK || revoker.calls != 1 || revoker.jti != claims.ID || revoker.reason != "logout" || !revoker.jwtWasRevoked {
+		t.Fatalf("status=%d revoker=%+v body=%s", response.Code, revoker, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), claims.ID) || strings.Contains(response.Body.String(), "FAKE_REVOKER_ERROR") {
+		t.Fatalf("logout response leaked revoker state: %s", response.Body.String())
+	}
+	if me := jsonRequest(t, fx.router, http.MethodGet, "/me", fx.adminToken, ""); me.Code != http.StatusUnauthorized {
+		t.Fatalf("content revoker failure reauthorized JWT: %d %s", me.Code, me.Body.String())
+	}
+}
+
+type contentSessionRevokerFake struct {
+	jwt           *auth.JWTManager
+	expectedJTI   string
+	calls         int
+	jti           string
+	reason        string
+	jwtWasRevoked bool
+	err           error
+}
+
+func (fake *contentSessionRevokerFake) RevokeSession(_ context.Context, jti, reason string) error {
+	fake.calls++
+	fake.jti, fake.reason = jti, reason
+	revoked, err := fake.jwt.IsSessionRevoked(fake.expectedJTI)
+	fake.jwtWasRevoked = err == nil && revoked
+	return fake.err
 }
 
 // ---------- ChangePassword ----------

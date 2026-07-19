@@ -34,13 +34,56 @@ func TestMainWiresSharedBackupAssetRuntimeBeforeSchedules(t *testing.T) {
 	}
 	for _, required := range []string{
 		"assetRuntime.RsyncTreePublicationStrategy()",
-		"BackupAssets:          assetRuntime",
+		"BackupAssets:      assetRuntime",
 		"LegacyResticSnapshots: legacyRestic",
 		"SnapshotDiffRunner:    legacyRestic",
 		"SnapshotIndexer:       snapshotIndexer",
 	} {
 		if !strings.Contains(source, required) {
 			t.Fatalf("main.go does not pass shared backup runtime port %q to Router", required)
+		}
+	}
+}
+
+func TestMainConstructsOneJWTManagerBeforeContentRuntimeAndReusesIt(t *testing.T) {
+	sourceBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	source := string(sourceBytes)
+	if count := strings.Count(source, "auth.NewJWTManager("); count != 1 {
+		t.Fatalf("main.go constructs %d JWT managers, want exactly one", count)
+	}
+	requiredInOrder := []string{
+		"settingsSvc := settings.NewService(db)",
+		"jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTTTL)",
+		"jwtManager.SetDB(db)",
+		"assetRuntime, err := backupruntime.New(",
+		"SessionRevocations: jwtManager",
+		"authService := auth.NewService(db, jwtManager, settingsSvc",
+		"JWTManager:        jwtManager",
+		"BackupContent:     assetRuntime.ContentBroker()",
+		"BackupContentConfig:",
+	}
+	previous := -1
+	for _, required := range requiredInOrder {
+		index := strings.Index(source, required)
+		if index < 0 {
+			t.Fatalf("main.go is missing shared JWT/Content wiring %q", required)
+		}
+		if index <= previous {
+			t.Fatalf("main.go wires %q out of startup order", required)
+		}
+		previous = index
+	}
+	for _, timeout := range []string{
+		"ReadHeaderTimeout: 10 * time.Second",
+		"ReadTimeout:       30 * time.Second",
+		"WriteTimeout:      30 * time.Second",
+		"IdleTimeout:       60 * time.Second",
+	} {
+		if !strings.Contains(source, timeout) {
+			t.Fatalf("main.go changed the global HTTP timeout contract %q", timeout)
 		}
 	}
 }

@@ -3,6 +3,14 @@ map $http_upgrade $connection_upgrade {
   '' close;
 }
 
+# Trust only the two closed forwarded-proto products used by an external TLS
+# proxy. Malformed or compound values fall back to the inner HTTP scheme.
+map $http_x_forwarded_proto $xirang_effective_proto {
+  default $scheme;
+  ~^http$ http;
+  ~^https$ https;
+}
+
 log_format xirang_access '$remote_addr - $remote_user [$time_local] '
                          '"$request_method $uri $server_protocol" '
                          '$status $body_bytes_sent '
@@ -10,6 +18,12 @@ log_format xirang_access '$remote_addr - $remote_user [$time_local] '
                          '"$http_x_forwarded_for" '
                          'rt=$request_time uct=$upstream_connect_time '
                          'uht=$upstream_header_time urt=$upstream_response_time';
+
+# Content delivery URLs are intentionally opaque and must never enter logs.
+log_format xirang_asset_content
+    '$request_id $status $body_bytes_sent '
+    'rt=$request_time uct=$upstream_connect_time '
+    'uht=$upstream_header_time urt=$upstream_response_time';
 
 server {
   listen 10761;
@@ -35,6 +49,51 @@ server {
 
   root /usr/share/nginx/html;
   index index.html;
+
+  location ~ "^/api/v1/asset-content/[0-9a-f]{32}$" {
+    access_log /logs/nginx-asset-content.log xirang_asset_content;
+    # Nginx error logs can include the full opaque route and have no redaction
+    # formatter. Backend metrics/audit plus the safe access log remain active.
+    error_log /dev/null crit;
+
+    # Owning these headers prevents inheritance of the SPA frame/CSP policy;
+    # the Broker's reviewed renderer headers (including PDF sandbox/frame) pass
+    # through unchanged.
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Cross-Origin-Resource-Policy "same-origin" always;
+
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_cache off;
+    proxy_max_temp_file_size 0;
+    gzip off;
+    proxy_read_timeout 75s;
+    proxy_send_timeout 75s;
+    send_timeout 75s;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $xirang_effective_proto;
+    proxy_set_header Range $http_range;
+    proxy_set_header If-Range $http_if_range;
+  }
+
+  # Redact malformed, unsupported-method and trailing-slash content-shaped
+  # requests without granting them the exact route's streaming policy.
+  location ~ "^/api/v1/asset-content(?:/|$)" {
+    access_log /logs/nginx-asset-content.log xirang_asset_content;
+    error_log /dev/null crit;
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Cross-Origin-Resource-Policy "same-origin" always;
+
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $xirang_effective_proto;
+  }
 
   location /api/v1/ {
     client_max_body_size 16m;

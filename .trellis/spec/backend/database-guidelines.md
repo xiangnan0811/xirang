@@ -45,7 +45,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
 - Keep version numbers in lockstep across SQLite and PostgreSQL. The current
-  latest migration is `000064_backup_asset_rsync_publication_contract`.
+  latest migration is `000066_backup_asset_content`.
 - Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the
   SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
@@ -111,11 +111,10 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   both SQLite/PostgreSQL definitions and matching down migrations when changing
   traffic-window predicates or index names.
 - Backup-asset schema changes are paired across SQLite and PostgreSQL. The
-  current baseline includes `000062`, `000063_backup_asset_publication_contract`,
-  and `000064_backup_asset_rsync_publication_contract`; later versions must
-  remain paired. After a native managed RecoveryPoint or tombstone exists,
-  schema down must fail closed rather than deleting publication history or
-  Provider facts.
+  current baseline includes `000062` through `000066_backup_asset_content`;
+  later versions must remain paired. After durable Search or publication facts,
+  or live content-delivery state exists, schema down must fail closed rather
+  than deleting history, Provider facts, grants, reservations, or leases.
 
 ## Scenario: PostgreSQL Timestamp Scan-Location Parity
 
@@ -131,7 +130,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 
 - Connection helper: `openPostgresSQLDB(dsn string) (*sql.DB, error)`.
 - CI regression gate:
-  `go test ./internal/database -run 'Test(BackupAssetMigration0(62|63|64)Postgres|PostgresTimestamptzScanUsesConfiguredUTC)' -count=1`.
+  `go test ./internal/database -run 'Test(BackupAssetMigration0(62|63|64|65|66)Postgres|PostgresTimestamptzScanUsesConfiguredUTC)' -count=1`.
 - Required pgx registrations per physical connection:
   `pgtype.TimestampCodec{ScanLocation: scanLocation}` and
   `pgtype.TimestamptzCodec{ScanLocation: scanLocation}`.
@@ -145,9 +144,9 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 - Register **both** `timestamp` and `timestamptz` codecs in pgx's `AfterConnect`
   hook. Configuring only `timestamp` leaves `TIMESTAMPTZ` scans vulnerable to
   `time.Local` on newer Go/pgx combinations.
-- SQLite/PostgreSQL migration parity for backup assets covers 000062, 000063,
-  and 000064. A new paired migration must be added to this regex deliberately;
-  it must never be silently omitted from the PostgreSQL gate.
+- SQLite/PostgreSQL migration parity for backup assets covers 000062 through
+  000066. A new paired migration must be added to this regex deliberately; it
+  must never be silently omitted from the PostgreSQL gate.
 
 ### 4. Validation & Error Matrix
 
@@ -174,7 +173,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   PostgreSQL service with `TZ` set to a non-UTC value and assert both location
   and RFC3339 value.
 - PostgreSQL migration tests must exercise paired apply/down contracts for
-  000062, 000063, and 000064.
+  000062 through 000066.
 - Run the CI regex above with `REQUIRE_POSTGRES_MIGRATION_TEST=1`; a skipped
   PostgreSQL test is not completion evidence.
 
@@ -413,6 +412,116 @@ return db.Transaction(func(tx *gorm.DB) error {
     }
     return tx.Create(&favorite).Error
 })
+```
+
+---
+
+## Scenario: Backup Asset Content Delivery Ledger
+
+### 1. Scope / Trigger
+
+- Trigger: changing backup-asset delivery grants, cookie/session bindings,
+  request or scope accounting, content-session leases, content audit
+  idempotency, or migration `000066` and later migrations that depend on it.
+- Applies to paired `000066_backup_asset_content` SQL, content models, the
+  migration fixture, and the cross-engine budget behavior fixture.
+
+### 2. Signatures
+
+- Paired DDL:
+  `migrations/{sqlite,postgres}/000066_backup_asset_content.{up,down}.sql`.
+- Tables: `backup_asset_delivery_grants`,
+  `backup_asset_delivery_requests`, and `backup_asset_delivery_usage`.
+- Audit uniqueness:
+  `idx_backup_asset_audit_events_content_grant_action(grant_id, action)` for
+  the four content actions.
+- Migration tests: `TestBackupAssetMigration066SQLite` and
+  `TestBackupAssetMigration066Postgres`.
+- Behavior tests: `TestContentBehaviorSQLite` and
+  `TestContentBehaviorPostgres`.
+
+### 3. Contracts
+
+- `000066` accepts exactly one `backup_asset` resource: RecoveryPoint,
+  Catalog generation, and entry IDs are all non-null; RecoveryResult columns
+  stay null and have no Child 13 foreign key or enabled resource kind.
+- A grant persists only the SHA-256 cookie-secret hash. Public delivery ID,
+  internal grant ID, session JTI, proof, action, renderer/profile, source
+  fingerprint, lease fence hash, absolute/idle expiry, and budgets are distinct
+  bindings; private fields remain `json:"-"` in models.
+- The composite Catalog foreign key is
+  `(catalog_generation_id, entry_id, recovery_point_id)` with `RESTRICT`.
+  `lease_id` references one `content_session` lease with `RESTRICT`.
+- SQL checks enforce the whole action/renderer/profile/range/classification/
+  proof product. Download requires exact `asset.download`; secret or unknown
+  preview requires exact `asset.secret_reveal`; non-secret preview has no proof.
+- Request reservations and global/provider/user usage counters are committed
+  atomically before source I/O. Counters stay non-negative and cannot exceed
+  request, cumulative, request-count, or in-flight bounds on either engine.
+- All timestamps are UTC-compatible (`DATETIME`/`TIMESTAMPTZ`). Run the real
+  PostgreSQL migration and behavior packages serially against a shared DSN so
+  their destructive fixtures cannot overlap.
+- Down is a guarded operation. Any grant, request, usage row, or
+  `content_session` lease aborts before schema mutation. Only a proven runtime
+  drain may remove terminal ephemeral state and then run pristine down to
+  `000065`; otherwise retain `000066` and ship a forward repair.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Resource is empty, dual, unknown, or RecoveryResult | Insert/service validation fails closed. |
+| Catalog tuple crosses point or generation | Composite foreign key rejects the grant. |
+| Action/proof/renderer/profile/classification combination is impossible | Table CHECK and service validator reject the whole product. |
+| Cookie secret rather than its 64-hex hash reaches persistence | Reject; no plaintext-secret column or model JSON exposure is allowed. |
+| Concurrent reservations exceed any scope or grant bound | Excess transactions fail; successful totals remain at or below every bound. |
+| Required PostgreSQL DSN is absent | Test fails when the corresponding `REQUIRE_POSTGRES_*_TEST=1`; skip is not completion evidence. |
+| Down sees any delivery state or content lease | Down aborts before dropping the audit index or tables. |
+| Pristine or explicitly drained schema is downgraded | Return exactly to `000065` without changing Catalog/Search/Provider facts. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: twelve concurrent 10-byte requests under a five-request/50-byte bound
+  commit exactly five reservations on both SQLite and PostgreSQL, then finalize
+  without negative or leaked counters.
+- Base: an active non-secret text preview grant binds one Catalog tuple, one
+  lease, a hash-only cookie secret, closed representation fields, and UTC TTLs.
+- Bad: storing a generic resource locator, accepting both AssetRef and
+  RecoveryResultRef, charging bytes only after a read, or deleting live rows in
+  a down migration.
+
+### 6. Tests Required
+
+- Apply real paired SQL from `000065`, assert tables/columns/checks/FKs/indexes,
+  exercise valid and invalid rows, and prove model/UTC parity on both engines.
+- Prove pristine down, every used-down family, atomic schema/data/index
+  preservation, explicit safe drain, and the existing `000065` used-down guard.
+- Run the two PostgreSQL packages as separate commands with required flags and
+  a real PostgreSQL service; do not combine destructive fixtures in one
+  multi-package `go test` invocation.
+- Use transaction barriers for reservation/finalize/replay/cancel/crash races
+  and assert exact successful totals plus non-negative persisted counters.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```sql
+-- A generic resource and post-read accounting bypass closed authorization.
+CREATE TABLE delivery_grants (resource_id TEXT, cookie_secret TEXT);
+UPDATE usage SET delivered_bytes = delivered_bytes + :bytes;
+```
+
+Correct:
+
+```sql
+CHECK (resource_kind = 'backup_asset'
+       AND recovery_point_id IS NOT NULL
+       AND catalog_generation_id IS NOT NULL
+       AND entry_id IS NOT NULL
+       AND recovery_job_id IS NULL
+       AND recovery_result_id IS NULL)
+-- Reserve grant and scope budgets transactionally before opening the source.
 ```
 
 ---

@@ -1087,3 +1087,105 @@ const allowContent = raw.capabilities.content === true;
 const hit = mapHit(rawHit, indexes, allowContent);
 if (hit === null) return blockedBackupAssetProjection();
 ```
+
+---
+
+## Scenario: Backup Asset Content Ticket Boundary
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing backup-asset preview/download ticket DTOs,
+  renderer/profile/classification products, step-up forwarding, or opaque
+  content URL handling.
+- Applies only to `web/src/lib/api/backup-content-api.ts` and shared content
+  domain types. Page/component/router/media/Blob/storage work requires a
+  separate feature scope.
+
+### 2. Signatures
+
+- Mapper:
+  `mapBackupContentTicket(raw: unknown, expected: BackupContentTicketInput): CatalogProjection<BackupContentTicket>`.
+- Factory:
+  `createBackupContentApi().issueTicket(token, AssetRef, input)`.
+- JSON route:
+  `POST /recovery-points/:recoveryPointId/entries/:entryId/delivery-tickets`.
+- Content URL shape:
+  `/api/v1/asset-content/[0-9a-f]{32}` with no query or fragment.
+- Closed domain unions: `BackupContentAction`, `BackupContentRenderer`,
+  `BackupContentProfile`, `BackupContentRangePolicy`, and
+  `BackupContentClassification`.
+
+### 3. Contracts
+
+- Raw snake_case DTOs stay private. The JSON request uses the central
+  `request<unknown>()` wrapper and serializes only `schema_version`, `action`,
+  `renderer`, and `profile`; step-up proof stays in `RequestOptions.stepUpProof`.
+- Validate the response as one closed product. Schema, URL, action, renderer,
+  profile, MIME, Range policy, classification/proof, ETag, non-negative safe
+  content length, UTC expiry ordering, capability reason, and fallbacks must all
+  agree or the whole projection becomes blocked.
+- Download is only `attachment/original_v1` and requires a proof. Preview never
+  uses attachment; non-secret preview has no proof, while secret/unknown preview
+  requires a proof. The frontend forwards proof but never interprets or stores it.
+- Treat `contentUrl` as an opaque same-origin path. Do not extract/rebuild the
+  delivery ID, append JWT/proof/query data, resolve a Provider path, or persist
+  the URL/ticket in local storage, session storage, history, or router state.
+- This API boundary does not fetch content directly or create Blob/media/UI
+  objects. Native delivery remains the browser/backend cookie route contract.
+- Time-sensitive tests freeze `Date.now()` or use relative valid fixtures and
+  run with `NODE_ENV` unset.
+
+### 4. Validation & Error Matrix
+
+| Raw/input condition | Domain result |
+|---|---|
+| AssetRef ID, schema, enum, or requested renderer/profile product is invalid | Reject before request or block the returned projection. |
+| URL is absolute, cross-origin, query-bearing, fragmented, malformed, or wrong path | Block the whole projection. |
+| MIME does not belong to the exact renderer | Block the whole projection. |
+| Text/hex advertises Range or attachment is used for preview | Block the whole projection. |
+| Download lacks proof, secret/unknown preview lacks proof, or non-secret preview carries proof | Reject/block; never repair the purpose product. |
+| ETag/time/size is malformed, expired, unsafe, or idle expiry exceeds absolute expiry | Block the whole projection. |
+| Available response contains a capability reason or fallback action | Block the contradiction. |
+| Unknown future enum/product arrives | Block atomically; do not cast or choose a permissive default. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a valid non-secret PNG preview maps to camelCase with one opaque,
+  query-free content URL and no proof or secret in the DTO.
+- Base: a valid secret text preview forwards the exact proof in the central
+  request option and maps only when every response binding agrees.
+- Bad: `request<BackupContentTicket>()`, appending `?token=...` to
+  `content_url`, or accepting fields independently with enum fallbacks.
+
+### 6. Tests Required
+
+- Cover exact snake_case request encoding, composite AssetRef validation,
+  step-up header forwarding, closed action/renderer/profile/MIME/range/
+  classification/proof products, UTC/ETag/safe-integer validation, and whole-
+  projection blocking.
+- Assert the source contains no direct `fetch`, Blob/media construction,
+  delivery-ID extraction, URL/query rewriting, local/session storage, history,
+  location, router, `any`, or `unknown as T` bypass.
+- Run `env -u NODE_ENV npm run check` after changing these types or mapper.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+const ticket = await request<BackupContentTicket>(url, { token });
+ticket.contentUrl += `?token=${token}`;
+localStorage.setItem("previewTicket", JSON.stringify(ticket));
+```
+
+Correct:
+
+```ts
+const raw = await request<unknown>(url, {
+  method: "POST",
+  token,
+  stepUpProof: input.stepUpProof,
+  body: encodeTicketInput(input),
+});
+return mapBackupContentTicket(raw, input);
+```

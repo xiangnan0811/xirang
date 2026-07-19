@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -18,11 +19,16 @@ import (
 )
 
 type AuthHandler struct {
-	authService  *auth.Service
-	jwtManager   *auth.JWTManager
-	settingsSvc  *settings.Service
-	db           *gorm.DB
-	captchaStore *CaptchaStore
+	authService     *auth.Service
+	jwtManager      *auth.JWTManager
+	settingsSvc     *settings.Service
+	db              *gorm.DB
+	captchaStore    *CaptchaStore
+	contentSessions ContentSessionRevoker
+}
+
+type ContentSessionRevoker interface {
+	RevokeSession(context.Context, string, string) error
 }
 
 // NewAuthHandler 构造登录 handler。验证码开关从 settings 服务按需读取（key:
@@ -62,6 +68,11 @@ func (h *AuthHandler) WithDB(db *gorm.DB) *AuthHandler {
 // WithCaptchaStore 注入验证码存储，用于在 Login 中校验验证码。
 func (h *AuthHandler) WithCaptchaStore(store *CaptchaStore) *AuthHandler {
 	h.captchaStore = store
+	return h
+}
+
+func (h *AuthHandler) WithContentSessionRevoker(revoker ContentSessionRevoker) *AuthHandler {
+	h.contentSessions = revoker
 	return h
 }
 
@@ -281,15 +292,21 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 		return
 	}
 
-	token := c.GetString(middleware.CtxToken)
-	if strings.TrimSpace(token) == "" {
-		respondBadRequest(c, "缺少 token")
+	binding, ok := middleware.CurrentSessionBinding(c)
+	if !ok {
+		respondBadRequest(c, "缺少会话绑定")
 		return
 	}
 
-	if err := h.jwtManager.RevokeToken(token); err != nil {
+	if err := h.jwtManager.RevokeSession(binding.JTI, binding.UserID, binding.ExpiresAt); err != nil {
 		respondInternalError(c, fmt.Errorf("注销 token 失败: %w", err))
 		return
+	}
+	if h.contentSessions != nil {
+		// JWT revocation is authoritative and has already succeeded. Content
+		// cancellation is best-effort cleanup; its implementation records a
+		// safe reconciliation signal without returning raw identifiers here.
+		_ = h.contentSessions.RevokeSession(c.Request.Context(), binding.JTI, "logout")
 	}
 
 	respondMessage(c, "已安全退出")

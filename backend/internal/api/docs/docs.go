@@ -1060,6 +1060,184 @@ const docTemplate = `{
                 }
             }
         },
+        "/asset-content/{deliveryId}": {
+            "get": {
+                "description": "Cookie-only 同源内容路由；禁止 Authorization 与 query。支持 HEAD、完整 GET、单个 normal/open/suffix Range 和 If-Range；multipart Range 返回 416。content_url 中的 delivery ID 本身不授权。",
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "读取备份资产票据内容",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "无授权能力的 opaque delivery ID",
+                        "name": "deliveryId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "精确 Path 的 xirang_asset_delivery HttpOnly Cookie",
+                        "name": "Cookie",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "单个 bytes Range；multipart 不支持",
+                        "name": "Range",
+                        "in": "header"
+                    },
+                    {
+                        "type": "string",
+                        "description": "强 ETag 或 HTTP date",
+                        "name": "If-Range",
+                        "in": "header"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "206": {
+                        "description": "Partial Content",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "412": {
+                        "description": "Precondition Failed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "416": {
+                        "description": "Requested Range Not Satisfiable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "head": {
+                "description": "Cookie-only 同源内容路由；禁止 Authorization 与 query。支持 HEAD、完整 GET、单个 normal/open/suffix Range 和 If-Range；multipart Range 返回 416。content_url 中的 delivery ID 本身不授权。",
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "读取备份资产票据内容",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "无授权能力的 opaque delivery ID",
+                        "name": "deliveryId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "精确 Path 的 xirang_asset_delivery HttpOnly Cookie",
+                        "name": "Cookie",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "单个 bytes Range；multipart 不支持",
+                        "name": "Range",
+                        "in": "header"
+                    },
+                    {
+                        "type": "string",
+                        "description": "强 ETag 或 HTTP date",
+                        "name": "If-Range",
+                        "in": "header"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "206": {
+                        "description": "Partial Content",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "412": {
+                        "description": "Precondition Failed",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "416": {
+                        "description": "Requested Range Not Satisfiable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/asset-favorites": {
             "get": {
                 "security": [
@@ -5819,6 +5997,119 @@ const docTemplate = `{
                 }
             }
         },
+        "/recovery-points/{id}/entries/{entryId}/delivery-tickets": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "只接受 URI 中的精确 backup AssetRef；普通非敏感预览无需二次验证，secret/unknown 预览与原件下载分别要求精确 step-up。成功响应只包含无授权能力的同源 content_url，Cookie secret 仅通过精确 Path 的 HttpOnly Strict Cookie 返回。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "创建备份资产内容交付票据",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Catalog entry opaque ID",
+                        "name": "entryId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "asset.secret_reveal 或 asset.download 精确 proof",
+                        "name": "X-Xirang-Step-Up",
+                        "in": "header"
+                    },
+                    {
+                        "description": "闭合 renderer/profile 请求；不接受资源 locator",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupContentTicketPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_content.TicketDescriptor"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/recovery-points/{id}/evidence": {
             "get": {
                 "security": [
@@ -10282,6 +10573,60 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.backupContentTicketPayload": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "enum": [
+                        "preview",
+                        "download"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_content.DeliveryAction"
+                        }
+                    ]
+                },
+                "profile": {
+                    "enum": [
+                        "text_v1",
+                        "raster_v1",
+                        "pdf_v1",
+                        "audio_v1",
+                        "video_v1",
+                        "hex_v1",
+                        "original_v1"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_content.RendererProfile"
+                        }
+                    ]
+                },
+                "renderer": {
+                    "enum": [
+                        "escaped_text",
+                        "safe_raster",
+                        "same_origin_pdf",
+                        "native_audio",
+                        "native_video",
+                        "metadata_hex",
+                        "attachment"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_content.Renderer"
+                        }
+                    ]
+                },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
         "internal_api_handlers.backupRepositoryConnectRequest": {
             "type": "object",
             "properties": {
@@ -11429,7 +11774,30 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "code": {
-                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilityCode"
+                    "enum": [
+                        "feature_disabled",
+                        "task_artifact_contract_missing",
+                        "repository_offline",
+                        "repository_disconnected",
+                        "provider_unavailable",
+                        "repository_identity_unavailable",
+                        "provider_protocol_incompatible",
+                        "provider_operation_timeout",
+                        "provider_resource_limit",
+                        "point_not_committed",
+                        "mutable_source_changed",
+                        "catalog_unavailable",
+                        "sequential_read_unavailable",
+                        "range_unavailable",
+                        "download_unavailable",
+                        "restore_unavailable",
+                        "diff_unavailable"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilityCode"
+                        }
+                    ]
                 },
                 "params": {
                     "type": "object",
@@ -13019,6 +13387,194 @@ const docTemplate = `{
                 },
                 "staleness": {
                     "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.StalenessDTO"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_content.Classification": {
+            "type": "string",
+            "enum": [
+                "non_secret",
+                "secret",
+                "unknown"
+            ],
+            "x-enum-varnames": [
+                "ClassificationNonSecret",
+                "ClassificationSecret",
+                "ClassificationUnknown"
+            ]
+        },
+        "xirang_backend_internal_backupasset_content.DeliveryAction": {
+            "type": "string",
+            "enum": [
+                "preview",
+                "download"
+            ],
+            "x-enum-varnames": [
+                "DeliveryPreview",
+                "DeliveryDownload"
+            ]
+        },
+        "xirang_backend_internal_backupasset_content.RangePolicy": {
+            "type": "string",
+            "enum": [
+                "none",
+                "single"
+            ],
+            "x-enum-varnames": [
+                "RangeNone",
+                "RangeSingle"
+            ]
+        },
+        "xirang_backend_internal_backupasset_content.Renderer": {
+            "type": "string",
+            "enum": [
+                "escaped_text",
+                "safe_raster",
+                "same_origin_pdf",
+                "native_audio",
+                "native_video",
+                "metadata_hex",
+                "attachment"
+            ],
+            "x-enum-varnames": [
+                "RendererEscapedText",
+                "RendererSafeRaster",
+                "RendererSameOriginPDF",
+                "RendererNativeAudio",
+                "RendererNativeVideo",
+                "RendererMetadataHex",
+                "RendererAttachment"
+            ]
+        },
+        "xirang_backend_internal_backupasset_content.RendererProfile": {
+            "type": "string",
+            "enum": [
+                "text_v1",
+                "raster_v1",
+                "pdf_v1",
+                "audio_v1",
+                "video_v1",
+                "hex_v1",
+                "original_v1"
+            ],
+            "x-enum-varnames": [
+                "ProfileTextV1",
+                "ProfileRasterV1",
+                "ProfilePDFV1",
+                "ProfileAudioV1",
+                "ProfileVideoV1",
+                "ProfileHexV1",
+                "ProfileOriginalV1"
+            ]
+        },
+        "xirang_backend_internal_backupasset_content.TicketDescriptor": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "enum": [
+                        "preview",
+                        "download"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_content.DeliveryAction"
+                        }
+                    ]
+                },
+                "capability_reason": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilityReason"
+                },
+                "classification": {
+                    "enum": [
+                        "non_secret",
+                        "secret",
+                        "unknown"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_content.Classification"
+                        }
+                    ]
+                },
+                "content_length": {
+                    "type": "integer"
+                },
+                "content_type": {
+                    "type": "string"
+                },
+                "content_url": {
+                    "type": "string"
+                },
+                "etag": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "fallback_actions": {
+                    "type": "array",
+                    "items": {
+                        "enum": [
+                            "preview",
+                            "download"
+                        ],
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_content.DeliveryAction"
+                    }
+                },
+                "idle_expires_at": {
+                    "type": "string"
+                },
+                "last_modified": {
+                    "type": "string"
+                },
+                "profile": {
+                    "enum": [
+                        "text_v1",
+                        "raster_v1",
+                        "pdf_v1",
+                        "audio_v1",
+                        "video_v1",
+                        "hex_v1",
+                        "original_v1"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_content.RendererProfile"
+                        }
+                    ]
+                },
+                "range": {
+                    "enum": [
+                        "none",
+                        "single"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_content.RangePolicy"
+                        }
+                    ]
+                },
+                "renderer": {
+                    "enum": [
+                        "escaped_text",
+                        "safe_raster",
+                        "same_origin_pdf",
+                        "native_audio",
+                        "native_video",
+                        "metadata_hex",
+                        "attachment"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_content.Renderer"
+                        }
+                    ]
+                },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
                 }
             }
         },

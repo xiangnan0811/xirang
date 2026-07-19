@@ -1,0 +1,15 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Verify both engines enforce exact 000066 schema, UTC/FK/check/index parity, pristine down and atomic safe-drain guards."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify closed errors and no raw Provider/path/content/session data in responses or failures."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Verify app/Nginx/audit/metrics omit raw delivery/path/name/query/content/cookie/JWT/session/locator data."}
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Verify bounded content admission, cache root, startup, feature transition, shutdown and all-in-one contracts."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Verify focused, race, cancellation, real PostgreSQL, Swagger, Nginx, Docker and full gates with evidence."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Verify raw DTO privacy, no any/casts, opaque URL and atomic blocked mapping for every illegal coupled product."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Verify mapper tests and env -u NODE_ENV npm run check evidence."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace identity/auth/proof/lease/source/Range/budget/cache/renderer data across every layer without drift."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Verify Swagger/task/archive/journal/PR claims distinguish executed evidence from pending planning."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Verify exact staging, Child-only archive, journal commit, PR/CI/squash/post-merge and main hygiene."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/design.md","reason":"Check every Content Plane, security, renderer, API, degradation and rollback parent contract."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/implement.md","reason":"Check Child 8 ownership, 000066 ordering, high-risk review and no Child 9-15 scope creep."}
+{"file":".trellis/tasks/07-18-backup-assets-content-plane/prd.md","reason":"Acceptance source for typed grants, auth/lease/source, Range/budget, cache, renderer, audit/Nginx/frontend and delivery."}
+{"file":".trellis/tasks/07-18-backup-assets-content-plane/design.md","reason":"Frozen schema/API/state/threat/lifecycle/rollback contract to compare against implementation."}
+{"file":".trellis/tasks/07-18-backup-assets-content-plane/research/current-main-evidence.md","reason":"Check implementation against actual a3c309a reuse points and gaps rather than parent-plan assumptions."}

@@ -25,6 +25,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -169,6 +170,50 @@ var registry = []SettingDef{
 	{Key: "smtp.from", EnvVar: "SMTP_FROM", CodeDefault: "", Type: TypeString, Category: "alerting", Description: "发件人地址；为空时回退到 smtp.user"},
 	{Key: "smtp.require_tls", EnvVar: "SMTP_REQUIRE_TLS", CodeDefault: "true", Type: TypeBool, Category: "alerting", Description: "强制 TLS 连接（465 隐式 / 587 STARTTLS）；false 回退明文"},
 	{Key: "backup_assets.enabled", EnvVar: "BACKUP_ASSETS_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "启用备份资产领域功能"},
+	{Key: "backup_assets.content_preview_ttl", EnvVar: "BACKUP_ASSETS_CONTENT_PREVIEW_TTL", CodeDefault: "2m", Type: TypeDuration, Category: "backup_assets", Description: "备份内容预览票据绝对有效期", MinDuration: "15s", MaxDuration: "10m"},
+	{Key: "backup_assets.content_media_ttl", EnvVar: "BACKUP_ASSETS_CONTENT_MEDIA_TTL", CodeDefault: "15m", Type: TypeDuration, Category: "backup_assets", Description: "备份媒体与下载票据绝对有效期", MinDuration: "1m", MaxDuration: "30m"},
+	{Key: "backup_assets.content_idle_ttl", EnvVar: "BACKUP_ASSETS_CONTENT_IDLE_TTL", CodeDefault: "60s", Type: TypeDuration, Category: "backup_assets", Description: "备份内容会话空闲有效期", MinDuration: "15s", MaxDuration: "10m"},
+	{Key: "backup_assets.content_write_idle_timeout", EnvVar: "BACKUP_ASSETS_CONTENT_WRITE_IDLE_TIMEOUT", CodeDefault: "30s", Type: TypeDuration, Category: "backup_assets", Description: "备份内容流单次写入空闲超时", MinDuration: "5s", MaxDuration: "2m"},
+	{Key: "backup_assets.content_ticket_timeout", EnvVar: "BACKUP_ASSETS_CONTENT_TICKET_TIMEOUT", CodeDefault: "20s", Type: TypeDuration, Category: "backup_assets", Description: "备份内容签票处理超时", MinDuration: "1s", MaxDuration: "25s"},
+	{Key: "backup_assets.content_request_max_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_REQUEST_MAX_BYTES", CodeDefault: "67108864", Type: TypeInt, Category: "backup_assets", Description: "单次备份内容请求最大字节数", Min: "65536", Max: "1073741824"},
+	{Key: "backup_assets.content_cumulative_max_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_CUMULATIVE_MAX_BYTES", CodeDefault: "536870912", Type: TypeInt, Category: "backup_assets", Description: "单张备份内容票据累计最大字节数", Min: "65536", Max: "8589934592"},
+	{Key: "backup_assets.content_max_requests", EnvVar: "BACKUP_ASSETS_CONTENT_MAX_REQUESTS", CodeDefault: "256", Type: TypeInt, Category: "backup_assets", Description: "单张备份内容票据最大请求数", Min: "1", Max: "4096"},
+	{Key: "backup_assets.content_grant_max_in_flight", EnvVar: "BACKUP_ASSETS_CONTENT_GRANT_MAX_IN_FLIGHT", CodeDefault: "2", Type: TypeInt, Category: "backup_assets", Description: "单张备份内容票据最大并发数", Min: "1", Max: "8"},
+	{Key: "backup_assets.content_user_max_concurrency", EnvVar: "BACKUP_ASSETS_CONTENT_USER_MAX_CONCURRENCY", CodeDefault: "4", Type: TypeInt, Category: "backup_assets", Description: "单用户备份内容最大并发数", Min: "1", Max: "32"},
+	{Key: "backup_assets.content_provider_max_concurrency", EnvVar: "BACKUP_ASSETS_CONTENT_PROVIDER_MAX_CONCURRENCY", CodeDefault: "4", Type: TypeInt, Category: "backup_assets", Description: "单 Provider 备份内容最大并发数", Min: "1", Max: "32"},
+	{Key: "backup_assets.content_global_max_concurrency", EnvVar: "BACKUP_ASSETS_CONTENT_GLOBAL_MAX_CONCURRENCY", CodeDefault: "16", Type: TypeInt, Category: "backup_assets", Description: "全局备份内容最大并发数", Min: "1", Max: "128"},
+	{Key: "backup_assets.content_rate_window", EnvVar: "BACKUP_ASSETS_CONTENT_RATE_WINDOW", CodeDefault: "1m", Type: TypeDuration, Category: "backup_assets", Description: "备份内容范围预算窗口", MinDuration: "10s", MaxDuration: "10m"},
+	{Key: "backup_assets.content_user_window_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_USER_WINDOW_BYTES", CodeDefault: "1073741824", Type: TypeInt, Category: "backup_assets", Description: "单用户窗口字节预算", Min: "65536", Max: "17179869184"},
+	{Key: "backup_assets.content_provider_window_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_PROVIDER_WINDOW_BYTES", CodeDefault: "4294967296", Type: TypeInt, Category: "backup_assets", Description: "单 Provider 窗口字节预算", Min: "65536", Max: "68719476736"},
+	{Key: "backup_assets.content_global_window_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_GLOBAL_WINDOW_BYTES", CodeDefault: "8589934592", Type: TypeInt, Category: "backup_assets", Description: "全局窗口字节预算", Min: "65536", Max: "137438953472"},
+	{Key: "backup_assets.content_user_window_requests", EnvVar: "BACKUP_ASSETS_CONTENT_USER_WINDOW_REQUESTS", CodeDefault: "1024", Type: TypeInt, Category: "backup_assets", Description: "单用户窗口请求预算", Min: "1", Max: "65536"},
+	{Key: "backup_assets.content_provider_window_requests", EnvVar: "BACKUP_ASSETS_CONTENT_PROVIDER_WINDOW_REQUESTS", CodeDefault: "4096", Type: TypeInt, Category: "backup_assets", Description: "单 Provider 窗口请求预算", Min: "1", Max: "262144"},
+	{Key: "backup_assets.content_global_window_requests", EnvVar: "BACKUP_ASSETS_CONTENT_GLOBAL_WINDOW_REQUESTS", CodeDefault: "8192", Type: TypeInt, Category: "backup_assets", Description: "全局窗口请求预算", Min: "1", Max: "1048576"},
+	{Key: "backup_assets.content_classification_scan_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_CLASSIFICATION_SCAN_BYTES", CodeDefault: "262144", Type: TypeInt, Category: "backup_assets", Description: "备份内容分类扫描字节上限", Min: "4096", Max: "4194304"},
+	{Key: "backup_assets.content_text_preview_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_TEXT_PREVIEW_BYTES", CodeDefault: "1048576", Type: TypeInt, Category: "backup_assets", Description: "备份文本预览字节上限", Min: "4096", Max: "16777216"},
+	{Key: "backup_assets.content_hex_preview_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_HEX_PREVIEW_BYTES", CodeDefault: "65536", Type: TypeInt, Category: "backup_assets", Description: "备份十六进制预览字节上限", Min: "1024", Max: "1048576"},
+	{Key: "backup_assets.content_raster_max_pixels", EnvVar: "BACKUP_ASSETS_CONTENT_RASTER_MAX_PIXELS", CodeDefault: "100000000", Type: TypeInt, Category: "backup_assets", Description: "备份栅格预览像素上限", Min: "1000000", Max: "250000000"},
+	{Key: "backup_assets.content_memory_global_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_MEMORY_GLOBAL_BYTES", CodeDefault: "67108864", Type: TypeInt, Category: "backup_assets", Description: "备份内容内存缓存全局字节上限", Min: "1048576", Max: "1073741824"},
+	{Key: "backup_assets.content_memory_object_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_MEMORY_OBJECT_BYTES", CodeDefault: "4194304", Type: TypeInt, Category: "backup_assets", Description: "备份内容内存缓存单对象字节上限", Min: "65536", Max: "1073741824"},
+	{Key: "backup_assets.content_memory_user_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_MEMORY_USER_BYTES", CodeDefault: "16777216", Type: TypeInt, Category: "backup_assets", Description: "备份内容内存缓存单用户字节上限", Min: "65536", Max: "1073741824"},
+	{Key: "backup_assets.content_memory_provider_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_MEMORY_PROVIDER_BYTES", CodeDefault: "33554432", Type: TypeInt, Category: "backup_assets", Description: "备份内容内存缓存单 Provider 字节上限", Min: "65536", Max: "1073741824"},
+	{Key: "backup_assets.content_cache_enabled", EnvVar: "BACKUP_ASSETS_CONTENT_CACHE_ENABLED", CodeDefault: "true", Type: TypeBool, Category: "backup_assets", Description: "启用备份内容认证磁盘缓存"},
+	{Key: "backup_assets.content_cache_root", EnvVar: "BACKUP_ASSETS_CONTENT_CACHE_ROOT", CodeDefault: "/var/cache/xirang/asset-content", Type: TypeString, Category: "backup_assets", Description: "备份内容认证磁盘缓存专用根目录"},
+	{Key: "backup_assets.content_cache_chunk_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_CACHE_CHUNK_BYTES", CodeDefault: "1048576", Type: TypeInt, Category: "backup_assets", Description: "备份内容缓存分块字节数", Min: "65536", Max: "8388608"},
+	{Key: "backup_assets.content_cache_object_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_CACHE_OBJECT_BYTES", CodeDefault: "536870912", Type: TypeInt, Category: "backup_assets", Description: "备份内容缓存单对象字节上限", Min: "65536", Max: "8589934592"},
+	{Key: "backup_assets.content_cache_user_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_CACHE_USER_BYTES", CodeDefault: "2147483648", Type: TypeInt, Category: "backup_assets", Description: "备份内容缓存单用户字节上限", Min: "65536", Max: "34359738368"},
+	{Key: "backup_assets.content_cache_provider_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_CACHE_PROVIDER_BYTES", CodeDefault: "4294967296", Type: TypeInt, Category: "backup_assets", Description: "备份内容缓存单 Provider 字节上限", Min: "65536", Max: "68719476736"},
+	{Key: "backup_assets.content_cache_global_bytes", EnvVar: "BACKUP_ASSETS_CONTENT_CACHE_GLOBAL_BYTES", CodeDefault: "8589934592", Type: TypeInt, Category: "backup_assets", Description: "备份内容缓存全局字节上限", Min: "65536", Max: "137438953472"},
+	{Key: "backup_assets.content_cache_object_files", EnvVar: "BACKUP_ASSETS_CONTENT_CACHE_OBJECT_FILES", CodeDefault: "1024", Type: TypeInt, Category: "backup_assets", Description: "备份内容缓存单对象文件上限", Min: "2", Max: "131072"},
+	{Key: "backup_assets.content_cache_user_files", EnvVar: "BACKUP_ASSETS_CONTENT_CACHE_USER_FILES", CodeDefault: "4096", Type: TypeInt, Category: "backup_assets", Description: "备份内容缓存单用户文件上限", Min: "2", Max: "262144"},
+	{Key: "backup_assets.content_cache_provider_files", EnvVar: "BACKUP_ASSETS_CONTENT_CACHE_PROVIDER_FILES", CodeDefault: "8192", Type: TypeInt, Category: "backup_assets", Description: "备份内容缓存单 Provider 文件上限", Min: "2", Max: "262144"},
+	{Key: "backup_assets.content_cache_global_files", EnvVar: "BACKUP_ASSETS_CONTENT_CACHE_GLOBAL_FILES", CodeDefault: "16384", Type: TypeInt, Category: "backup_assets", Description: "备份内容缓存全局文件上限", Min: "16", Max: "262144"},
+	{Key: "backup_assets.content_cache_idle_ttl", EnvVar: "BACKUP_ASSETS_CONTENT_CACHE_IDLE_TTL", CodeDefault: "15m", Type: TypeDuration, Category: "backup_assets", Description: "备份内容缓存空闲有效期", MinDuration: "1m", MaxDuration: "24h"},
+	{Key: "backup_assets.content_cache_absolute_ttl", EnvVar: "BACKUP_ASSETS_CONTENT_CACHE_ABSOLUTE_TTL", CodeDefault: "2h", Type: TypeDuration, Category: "backup_assets", Description: "备份内容缓存绝对有效期", MinDuration: "1m", MaxDuration: "24h"},
+	{Key: "backup_assets.content_reconcile_interval", EnvVar: "BACKUP_ASSETS_CONTENT_RECONCILE_INTERVAL", CodeDefault: "1m", Type: TypeDuration, Category: "backup_assets", Description: "备份内容状态对账间隔", MinDuration: "10s", MaxDuration: "1h"},
+	{Key: "backup_assets.content_reconcile_batch_size", EnvVar: "BACKUP_ASSETS_CONTENT_RECONCILE_BATCH_SIZE", CodeDefault: "100", Type: TypeInt, Category: "backup_assets", Description: "备份内容状态对账批次", Min: "1", Max: "1000"},
+	{Key: "backup_assets.content_audit_backlog_max", EnvVar: "BACKUP_ASSETS_CONTENT_AUDIT_BACKLOG_MAX", CodeDefault: "10000", Type: TypeInt, Category: "backup_assets", Description: "备份内容审计积压上限", Min: "100", Max: "100000"},
+	{Key: "backup_assets.content_allow_insecure_loopback", EnvVar: "BACKUP_ASSETS_CONTENT_ALLOW_INSECURE_LOOPBACK", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "仅允许受控本机 HTTP 开发票据 Cookie"},
 	{Key: "backup_assets.catalog_batch_size", EnvVar: "BACKUP_ASSETS_CATALOG_BATCH_SIZE", CodeDefault: "2000", Type: TypeInt, Category: "backup_assets", Description: "目录构建批次大小", Min: "1", Max: "100000"},
 	{Key: "backup_assets.catalog_build_timeout", EnvVar: "BACKUP_ASSETS_CATALOG_BUILD_TIMEOUT", CodeDefault: "30m", Type: TypeDuration, Category: "backup_assets", Description: "目录构建超时", MinDuration: "1m", MaxDuration: "24h"},
 	{Key: "backup_assets.repository_reconcile_interval", EnvVar: "BACKUP_ASSETS_REPOSITORY_RECONCILE_INTERVAL", CodeDefault: "15m", Type: TypeDuration, Category: "backup_assets", Description: "备份仓库对账间隔", MinDuration: "1m", MaxDuration: "24h"},
@@ -750,10 +795,58 @@ var backupAssetSearchOverlaySettingKeys = []string{
 	"backup_assets.idempotency_key_max_bytes",
 }
 
+var backupAssetContentSettingKeys = []string{
+	"backup_assets.content_preview_ttl",
+	"backup_assets.content_media_ttl",
+	"backup_assets.content_idle_ttl",
+	"backup_assets.content_write_idle_timeout",
+	"backup_assets.content_ticket_timeout",
+	"backup_assets.content_request_max_bytes",
+	"backup_assets.content_cumulative_max_bytes",
+	"backup_assets.content_max_requests",
+	"backup_assets.content_grant_max_in_flight",
+	"backup_assets.content_user_max_concurrency",
+	"backup_assets.content_provider_max_concurrency",
+	"backup_assets.content_global_max_concurrency",
+	"backup_assets.content_rate_window",
+	"backup_assets.content_user_window_bytes",
+	"backup_assets.content_provider_window_bytes",
+	"backup_assets.content_global_window_bytes",
+	"backup_assets.content_user_window_requests",
+	"backup_assets.content_provider_window_requests",
+	"backup_assets.content_global_window_requests",
+	"backup_assets.content_classification_scan_bytes",
+	"backup_assets.content_text_preview_bytes",
+	"backup_assets.content_hex_preview_bytes",
+	"backup_assets.content_raster_max_pixels",
+	"backup_assets.content_memory_global_bytes",
+	"backup_assets.content_memory_object_bytes",
+	"backup_assets.content_memory_user_bytes",
+	"backup_assets.content_memory_provider_bytes",
+	"backup_assets.content_cache_enabled",
+	"backup_assets.content_cache_root",
+	"backup_assets.content_cache_chunk_bytes",
+	"backup_assets.content_cache_object_bytes",
+	"backup_assets.content_cache_user_bytes",
+	"backup_assets.content_cache_provider_bytes",
+	"backup_assets.content_cache_global_bytes",
+	"backup_assets.content_cache_object_files",
+	"backup_assets.content_cache_user_files",
+	"backup_assets.content_cache_provider_files",
+	"backup_assets.content_cache_global_files",
+	"backup_assets.content_cache_idle_ttl",
+	"backup_assets.content_cache_absolute_ttl",
+	"backup_assets.content_reconcile_interval",
+	"backup_assets.content_reconcile_batch_size",
+	"backup_assets.content_audit_backlog_max",
+	"backup_assets.content_allow_insecure_loopback",
+}
+
 var backupAssetFoundationSettingKeys = func() []string {
-	keys := make([]string, 0, len(backupAssetCoreSettingKeys)+len(backupAssetSearchOverlaySettingKeys))
+	keys := make([]string, 0, len(backupAssetCoreSettingKeys)+len(backupAssetSearchOverlaySettingKeys)+len(backupAssetContentSettingKeys))
 	keys = append(keys, backupAssetCoreSettingKeys...)
 	keys = append(keys, backupAssetSearchOverlaySettingKeys...)
+	keys = append(keys, backupAssetContentSettingKeys...)
 	return keys
 }()
 
@@ -836,6 +929,40 @@ func validateBackupAssetFoundationConfig(values map[string]string, requireComple
 	searchSuggestionLimit, _ := strconv.ParseInt(resolved["backup_assets.search_suggestion_limit"], 10, 64)
 	tagAssignmentQuota, _ := strconv.ParseInt(resolved["backup_assets.tag_assignment_quota"], 10, 64)
 	overlayBulkMaxItems, _ := strconv.ParseInt(resolved["backup_assets.overlay_bulk_max_items"], 10, 64)
+	contentPreviewTTL, _ := time.ParseDuration(resolved["backup_assets.content_preview_ttl"])
+	contentMediaTTL, _ := time.ParseDuration(resolved["backup_assets.content_media_ttl"])
+	contentIdleTTL, _ := time.ParseDuration(resolved["backup_assets.content_idle_ttl"])
+	contentTicketTimeout, _ := time.ParseDuration(resolved["backup_assets.content_ticket_timeout"])
+	contentRequestMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.content_request_max_bytes"], 10, 64)
+	contentCumulativeMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.content_cumulative_max_bytes"], 10, 64)
+	contentGrantMaxInFlight, _ := strconv.ParseInt(resolved["backup_assets.content_grant_max_in_flight"], 10, 64)
+	contentUserMaxConcurrency, _ := strconv.ParseInt(resolved["backup_assets.content_user_max_concurrency"], 10, 64)
+	contentProviderMaxConcurrency, _ := strconv.ParseInt(resolved["backup_assets.content_provider_max_concurrency"], 10, 64)
+	contentGlobalMaxConcurrency, _ := strconv.ParseInt(resolved["backup_assets.content_global_max_concurrency"], 10, 64)
+	providerMaxConcurrency, _ := strconv.ParseInt(resolved["backup_assets.provider_max_concurrency"], 10, 64)
+	contentUserWindowBytes, _ := strconv.ParseInt(resolved["backup_assets.content_user_window_bytes"], 10, 64)
+	contentProviderWindowBytes, _ := strconv.ParseInt(resolved["backup_assets.content_provider_window_bytes"], 10, 64)
+	contentGlobalWindowBytes, _ := strconv.ParseInt(resolved["backup_assets.content_global_window_bytes"], 10, 64)
+	contentUserWindowRequests, _ := strconv.ParseInt(resolved["backup_assets.content_user_window_requests"], 10, 64)
+	contentProviderWindowRequests, _ := strconv.ParseInt(resolved["backup_assets.content_provider_window_requests"], 10, 64)
+	contentGlobalWindowRequests, _ := strconv.ParseInt(resolved["backup_assets.content_global_window_requests"], 10, 64)
+	contentClassificationScanBytes, _ := strconv.ParseInt(resolved["backup_assets.content_classification_scan_bytes"], 10, 64)
+	contentTextPreviewBytes, _ := strconv.ParseInt(resolved["backup_assets.content_text_preview_bytes"], 10, 64)
+	contentMemoryObjectBytes, _ := strconv.ParseInt(resolved["backup_assets.content_memory_object_bytes"], 10, 64)
+	contentMemoryUserBytes, _ := strconv.ParseInt(resolved["backup_assets.content_memory_user_bytes"], 10, 64)
+	contentMemoryProviderBytes, _ := strconv.ParseInt(resolved["backup_assets.content_memory_provider_bytes"], 10, 64)
+	contentMemoryGlobalBytes, _ := strconv.ParseInt(resolved["backup_assets.content_memory_global_bytes"], 10, 64)
+	contentCacheChunkBytes, _ := strconv.ParseInt(resolved["backup_assets.content_cache_chunk_bytes"], 10, 64)
+	contentCacheObjectBytes, _ := strconv.ParseInt(resolved["backup_assets.content_cache_object_bytes"], 10, 64)
+	contentCacheUserBytes, _ := strconv.ParseInt(resolved["backup_assets.content_cache_user_bytes"], 10, 64)
+	contentCacheProviderBytes, _ := strconv.ParseInt(resolved["backup_assets.content_cache_provider_bytes"], 10, 64)
+	contentCacheGlobalBytes, _ := strconv.ParseInt(resolved["backup_assets.content_cache_global_bytes"], 10, 64)
+	contentCacheObjectFiles, _ := strconv.ParseInt(resolved["backup_assets.content_cache_object_files"], 10, 64)
+	contentCacheUserFiles, _ := strconv.ParseInt(resolved["backup_assets.content_cache_user_files"], 10, 64)
+	contentCacheProviderFiles, _ := strconv.ParseInt(resolved["backup_assets.content_cache_provider_files"], 10, 64)
+	contentCacheGlobalFiles, _ := strconv.ParseInt(resolved["backup_assets.content_cache_global_files"], 10, 64)
+	contentCacheIdleTTL, _ := time.ParseDuration(resolved["backup_assets.content_cache_idle_ttl"])
+	contentCacheAbsoluteTTL, _ := time.ParseDuration(resolved["backup_assets.content_cache_absolute_ttl"])
 	if heartbeat >= leaseDuration {
 		return fmt.Errorf("backup_assets.lease_heartbeat 必须小于 backup_assets.lease_duration")
 	}
@@ -887,5 +1014,83 @@ func validateBackupAssetFoundationConfig(values map[string]string, requireComple
 	if searchQueryTimeout > 30*time.Second {
 		return fmt.Errorf("backup_assets.search_query_timeout 不能超过服务器写超时")
 	}
+	validateContent := requireComplete
+	if !validateContent {
+		for _, key := range backupAssetContentSettingKeys {
+			if _, exists := values[key]; exists {
+				validateContent = true
+				break
+			}
+		}
+	}
+	if !validateContent {
+		return nil
+	}
+	if contentIdleTTL > contentPreviewTTL || contentIdleTTL > contentMediaTTL {
+		return fmt.Errorf("backup_assets.content_idle_ttl 不能超过内容绝对有效期")
+	}
+	if contentTicketTimeout >= 30*time.Second {
+		return fmt.Errorf("backup_assets.content_ticket_timeout 必须小于服务器写超时")
+	}
+	if contentRequestMaxBytes > contentCumulativeMaxBytes {
+		return fmt.Errorf("backup_assets.content_request_max_bytes 不能超过累计字节上限")
+	}
+	if contentGrantMaxInFlight > contentUserMaxConcurrency {
+		return fmt.Errorf("backup_assets.content_grant_max_in_flight 不能超过用户并发上限")
+	}
+	if contentProviderMaxConcurrency > providerMaxConcurrency {
+		return fmt.Errorf("backup_assets.content_provider_max_concurrency 不能超过 Provider admission 上限")
+	}
+	if contentGlobalMaxConcurrency < contentUserMaxConcurrency || contentGlobalMaxConcurrency < contentProviderMaxConcurrency {
+		return fmt.Errorf("backup_assets.content_global_max_concurrency 不能小于用户或 Provider 并发上限")
+	}
+	if contentUserWindowBytes < contentRequestMaxBytes || contentProviderWindowBytes < contentRequestMaxBytes ||
+		contentGlobalWindowBytes < contentProviderWindowBytes || contentGlobalWindowBytes < contentUserWindowBytes {
+		return fmt.Errorf("备份内容窗口字节预算顺序无效")
+	}
+	if contentProviderWindowRequests < contentUserWindowRequests || contentGlobalWindowRequests < contentProviderWindowRequests {
+		return fmt.Errorf("备份内容窗口请求预算顺序无效")
+	}
+	if contentClassificationScanBytes > contentTextPreviewBytes {
+		return fmt.Errorf("backup_assets.content_classification_scan_bytes 不能超过文本预览上限")
+	}
+	if contentMemoryObjectBytes > contentMemoryUserBytes || contentMemoryObjectBytes > contentMemoryProviderBytes ||
+		contentMemoryUserBytes > contentMemoryGlobalBytes || contentMemoryProviderBytes > contentMemoryGlobalBytes {
+		return fmt.Errorf("备份内容内存配额顺序无效")
+	}
+	if contentCacheChunkBytes > contentCacheObjectBytes || contentCacheObjectBytes > contentCacheUserBytes ||
+		contentCacheObjectBytes > contentCacheProviderBytes || contentCacheUserBytes > contentCacheGlobalBytes ||
+		contentCacheProviderBytes > contentCacheGlobalBytes {
+		return fmt.Errorf("备份内容磁盘缓存字节配额顺序无效")
+	}
+	requiredObjectFiles := contentCacheObjectBytes/contentCacheChunkBytes + 1
+	if contentCacheObjectBytes%contentCacheChunkBytes != 0 {
+		requiredObjectFiles++
+	}
+	if contentCacheObjectFiles < requiredObjectFiles || contentCacheObjectFiles > contentCacheUserFiles ||
+		contentCacheObjectFiles > contentCacheProviderFiles || contentCacheUserFiles > contentCacheGlobalFiles ||
+		contentCacheProviderFiles > contentCacheGlobalFiles {
+		return fmt.Errorf("备份内容磁盘缓存文件配额顺序无效")
+	}
+	if contentCacheIdleTTL > contentCacheAbsoluteTTL {
+		return fmt.Errorf("backup_assets.content_cache_idle_ttl 不能超过缓存绝对有效期")
+	}
+	if !safeContentCacheRoot(resolved["backup_assets.content_cache_root"]) {
+		return fmt.Errorf("backup_assets.content_cache_root 不是安全的专用绝对路径")
+	}
 	return nil
+}
+
+func safeContentCacheRoot(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || !filepath.IsAbs(trimmed) || filepath.Clean(trimmed) != trimmed || trimmed == string(filepath.Separator) {
+		return false
+	}
+	for _, forbidden := range []string{"/data", "/backup", "/logs"} {
+		if trimmed == forbidden || strings.HasPrefix(trimmed, forbidden+string(filepath.Separator)) ||
+			strings.HasPrefix(forbidden, trimmed+string(filepath.Separator)) {
+			return false
+		}
+	}
+	return true
 }

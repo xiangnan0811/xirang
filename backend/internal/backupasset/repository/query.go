@@ -525,23 +525,52 @@ type ManagedRsyncPointReadSession struct {
 // BeginManagedRsyncPointRead reconstructs one exact committed managed Rsync
 // tree. It never accepts a root, path, marker, or locator from its caller.
 func (service *Service) BeginManagedRsyncPointRead(ctx context.Context, taskID uint, recoveryPointID string) (*ManagedRsyncPointReadSession, error) {
+	return service.beginManagedRsyncPointRead(ctx, taskID, recoveryPointID, publication.OperationManagedRsyncPointRead)
+}
+
+func (service *Service) beginManagedRsyncPointRead(
+	ctx context.Context,
+	taskID uint,
+	recoveryPointID string,
+	operation publication.ResticOperation,
+) (*ManagedRsyncPointReadSession, error) {
 	if service == nil || service.db == nil || service.foundation == nil || service.admission == nil || service.keyring == nil ||
-		taskID == 0 || backupasset.ValidateOpaqueID(recoveryPointID) != nil {
+		taskID == 0 || backupasset.ValidateOpaqueID(recoveryPointID) != nil ||
+		(operation != publication.OperationManagedRsyncPointRead && operation != publication.OperationContentRead) {
 		return nil, fmt.Errorf("%w: managed Rsync point reader request is invalid", backupasset.ErrInvalidState)
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	token, err := service.admission.Acquire(ctx, publication.OperationManagedRsyncPointRead)
+	token, err := service.admission.Acquire(ctx, operation)
 	if err != nil {
 		return nil, err
 	}
-	keepToken := false
-	defer func() {
-		if !keepToken {
-			_ = token.Close()
-		}
-	}()
+	session, err := service.beginManagedRsyncPointReadWithAdmission(ctx, taskID, recoveryPointID, token)
+	if err != nil {
+		_ = token.Close()
+		return nil, err
+	}
+	return session, nil
+}
+
+// beginManagedRsyncPointReadWithAdmission borrows token on failure and transfers
+// ownership to the returned session on success. Content uses this seam so one
+// admission acquired before decrypted Catalog/access loads is not reacquired.
+func (service *Service) beginManagedRsyncPointReadWithAdmission(
+	ctx context.Context,
+	taskID uint,
+	recoveryPointID string,
+	token publication.AdmissionToken,
+) (*ManagedRsyncPointReadSession, error) {
+	if service == nil || service.db == nil || service.foundation == nil || service.keyring == nil ||
+		taskID == 0 || backupasset.ValidateOpaqueID(recoveryPointID) != nil || token == nil ||
+		(token.Operation() != publication.OperationManagedRsyncPointRead && token.Operation() != publication.OperationContentRead) {
+		return nil, fmt.Errorf("%w: managed Rsync admitted reader request is invalid", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if token.Mode() != publication.AdmissionManaged && token.Mode() != publication.AdmissionRollbackSafe {
 		return nil, fmt.Errorf("%w: managed Rsync point reader is not admitted", backupasset.ErrForbidden)
 	}
@@ -584,7 +613,6 @@ func (service *Service) BeginManagedRsyncPointRead(ctx context.Context, taskID u
 	if len(points.Items) != 1 || points.NextCursor != "" {
 		return nil, fmt.Errorf("%w: committed Rsync point reader returned an invalid point set", backupasset.ErrInvalidState)
 	}
-	keepToken = true
 	return &ManagedRsyncPointReadSession{adapter: adapter, snapshot: snapshot, point: points.Items[0].Locator, token: token}, nil
 }
 
@@ -821,4 +849,15 @@ func (handle *managedRsyncPointReadHandle) Close() error {
 	err := handle.underlying.Close()
 	handle.once.Do(func() { handle.session.end() })
 	return err
+}
+
+func (handle *managedRsyncPointReadHandle) ProviderBytes() int64 {
+	if handle == nil {
+		return -1
+	}
+	reporter, ok := handle.underlying.(provider.ProviderByteReporter)
+	if !ok {
+		return -1
+	}
+	return reporter.ProviderBytes()
 }

@@ -55,6 +55,8 @@ type Dependencies struct {
 	MetricsRateLimit      int
 	MetricsRateWindow     time.Duration
 	BackupAssets          *backupruntime.Runtime
+	BackupContent         handlers.BackupContentService
+	BackupContentConfig   handlers.BackupContentHandlerConfigSource
 	LegacyResticSnapshots handlers.LegacyResticSnapshots
 	SnapshotDiffRunner    handlers.SnapshotDiffRunner
 	SnapshotIndexer       *snapshot.Indexer
@@ -200,6 +202,10 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	router.Use(gin.Recovery(), middleware.RequestID(), middleware.StructuredLogger())
 	router.Use(middleware.PrometheusMetrics())
 	router.Use(func(c *gin.Context) {
+		if middleware.IsBackupContentShapedPath(c.Request.URL.Path) {
+			c.Next()
+			return
+		}
 		origin := c.GetHeader("Origin")
 		allowedOrigin := resolveAllowedOrigin(origin, c.Request.Host, dep.AllowedOrigins)
 		if allowedOrigin == "" && origin != "" {
@@ -234,6 +240,18 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	captchaStore := handlers.NewCaptchaStore()
 	captchaHandler := handlers.NewCaptchaHandler(captchaStore).WithSettingsService(dep.SettingsService)
 	authHandler := handlers.NewAuthHandler(dep.AuthService, dep.JWTManager, dep.SettingsService).WithDB(dep.DB).WithCaptchaStore(captchaStore)
+	backupContentService := dep.BackupContent
+	if backupContentService == nil {
+		backupContentService = handlers.NewFeatureDisabledBackupContentService()
+	}
+	backupContentConfig := dep.BackupContentConfig
+	if backupContentConfig == nil {
+		backupContentConfig = handlers.NewFeatureDisabledBackupContentHandlerConfigSource()
+	}
+	backupContentHandler := handlers.NewBackupContentHandler(
+		backupContentService, dep.DB, dep.JWTManager, backupContentConfig,
+	)
+	authHandler.WithContentSessionRevoker(backupContentService)
 	overviewHandler := handlers.NewOverviewHandler(dep.DB)
 	overviewTrafficHandler := handlers.NewOverviewTrafficHandler(dep.DB, nil)
 	healthIncidentTimelineHandler := handlers.NewHealthIncidentTimelineHandler(dep.DB)
@@ -326,6 +344,21 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	v1.POST("/auth/login", middleware.LoginRateLimitWithContext(appCtx, dep.SettingsService, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.Login)
 	v1.POST("/auth/2fa/login", middleware.LoginRateLimitWithContext(appCtx, dep.SettingsService, dep.LoginRateLimit, dep.LoginRateWindow), authHandler.TOTPLogin)
 	v1.GET("/version", versionHandler.Info)
+	contentRouteHandlers := []gin.HandlerFunc{middleware.ContentSafeRecovery(), backupContentHandler.Serve}
+	v1.GET("/asset-content/:deliveryId", contentRouteHandlers...)
+	v1.HEAD("/asset-content/:deliveryId", contentRouteHandlers...)
+	for _, method := range []string{
+		http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions,
+		http.MethodConnect, http.MethodTrace,
+	} {
+		v1.Handle(method, "/asset-content/:deliveryId", contentRouteHandlers...)
+	}
+	for _, method := range []string{
+		http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
+		http.MethodDelete, http.MethodOptions, http.MethodConnect, http.MethodTrace,
+	} {
+		v1.Handle(method, "/asset-content/:deliveryId/", contentRouteHandlers...)
+	}
 	secured := v1.Group("")
 	secured.Use(middleware.AuthMiddleware(dep.JWTManager, dep.DB))
 	secured.Use(middleware.AuditLogger(dep.DB))
@@ -354,6 +387,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/recovery-points/:id/evidence", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetEvidence)
 	secured.GET("/recovery-points/:id/entries", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.ListEntries)
 	secured.GET("/recovery-points/:id/entries/:entryId", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetEntry)
+	secured.POST("/recovery-points/:id/entries/:entryId/delivery-tickets", middleware.RBAC(backupasset.PermissionBackupAssetsPreview), backupContentHandler.Issue)
 	secured.POST("/recovery-point-diffs", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.Diff)
 	secured.POST("/asset-search", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetSearchHandler.Search)
 	secured.GET("/asset-saved-searches", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.ListSavedSearches)
@@ -638,6 +672,13 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	if swaggerUIEnabled() {
 		router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	}
+	router.NoRoute(func(c *gin.Context) {
+		if middleware.IsBackupContentShapedPath(c.Request.URL.Path) {
+			backupContentHandler.Reject(c)
+			return
+		}
+		c.String(http.StatusNotFound, "404 page not found")
+	})
 
 	return router
 }

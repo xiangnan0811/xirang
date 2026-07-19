@@ -1701,6 +1701,44 @@ export interface BackupAssetPage {
   nextCursor: string | null;
 }
 
+export type BackupContentAction = "preview" | "download";
+export type BackupContentRenderer =
+  | "escaped_text"
+  | "safe_raster"
+  | "same_origin_pdf"
+  | "native_audio"
+  | "native_video"
+  | "metadata_hex"
+  | "attachment";
+export type BackupContentProfile =
+  | "text_v1"
+  | "raster_v1"
+  | "pdf_v1"
+  | "audio_v1"
+  | "video_v1"
+  | "hex_v1"
+  | "original_v1";
+export type BackupContentRangePolicy = "none" | "single";
+export type BackupContentClassification = "non_secret" | "secret" | "unknown";
+
+export interface BackupContentTicket {
+  schemaVersion: 1;
+  contentUrl: string;
+  action: BackupContentAction;
+  renderer: BackupContentRenderer;
+  profile: BackupContentProfile;
+  contentType: string;
+  contentLength: number;
+  etag: string;
+  lastModified: string | null;
+  range: BackupContentRangePolicy;
+  classification: BackupContentClassification;
+  expiresAt: string;
+  idleExpiresAt: string;
+  capabilityReason: CatalogCapabilityReason | null;
+  fallbackActions: BackupContentAction[];
+}
+
 export type AssetSearchField = "any" | "name" | "path" | "extension" | "tag" | "content" | "ocr";
 export type AssetSearchHitField = Exclude<AssetSearchField, "any"> | "type" | "modified_time";
 export type AssetSearchSort = "relevance" | "name_asc" | "modified_desc";

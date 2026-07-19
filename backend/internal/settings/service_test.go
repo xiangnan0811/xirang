@@ -60,68 +60,112 @@ func TestBackupAssetSearchConfigAndOverlayConfigDefinitionsAndSafeDefaults(t *te
 		maxDuration  string
 	}
 	want := map[string]expectedDefinition{
-		"backup_assets.enabled":                          {"BACKUP_ASSETS_ENABLED", "false", TypeBool, "", "", "", ""},
-		"backup_assets.catalog_batch_size":               {"BACKUP_ASSETS_CATALOG_BATCH_SIZE", "2000", TypeInt, "1", "100000", "", ""},
-		"backup_assets.catalog_build_timeout":            {"BACKUP_ASSETS_CATALOG_BUILD_TIMEOUT", "30m", TypeDuration, "", "", "1m", "24h"},
-		"backup_assets.repository_reconcile_interval":    {"BACKUP_ASSETS_REPOSITORY_RECONCILE_INTERVAL", "15m", TypeDuration, "", "", "1m", "24h"},
-		"backup_assets.audit_segment_max_events":         {"BACKUP_ASSETS_AUDIT_SEGMENT_MAX_EVENTS", "10000", TypeInt, "100", "1000000", "", ""},
-		"backup_assets.audit_segment_max_age":            {"BACKUP_ASSETS_AUDIT_SEGMENT_MAX_AGE", "24h", TypeDuration, "", "", "1h", "168h"},
-		"backup_assets.audit_detail_retention_days":      {"BACKUP_ASSETS_AUDIT_DETAIL_RETENTION_DAYS", "180", TypeInt, "1", "3650", "", ""},
-		"backup_assets.audit_checkpoint_retention_days":  {"BACKUP_ASSETS_AUDIT_CHECKPOINT_RETENTION_DAYS", "2555", TypeInt, "180", "36500", "", ""},
-		"backup_assets.lease_duration":                   {"BACKUP_ASSETS_LEASE_DURATION", "5m", TypeDuration, "", "", "30s", "30m"},
-		"backup_assets.lease_heartbeat":                  {"BACKUP_ASSETS_LEASE_HEARTBEAT", "60s", TypeDuration, "", "", "10s", "5m"},
-		"backup_assets.lease_absolute_deadline":          {"BACKUP_ASSETS_LEASE_ABSOLUTE_DEADLINE", "168h", TypeDuration, "", "", "5m", "168h"},
-		"backup_assets.provider_operation_timeout":       {"BACKUP_ASSETS_PROVIDER_OPERATION_TIMEOUT", "2m", TypeDuration, "", "", "5s", "30m"},
-		"backup_assets.provider_max_concurrency":         {"BACKUP_ASSETS_PROVIDER_MAX_CONCURRENCY", "4", TypeInt, "1", "32", "", ""},
-		"backup_assets.provider_metadata_limit_bytes":    {"BACKUP_ASSETS_PROVIDER_METADATA_LIMIT_BYTES", "16777216", TypeInt, "65536", "67108864", "", ""},
-		"backup_assets.publication_reconcile_interval":   {"BACKUP_ASSETS_PUBLICATION_RECONCILE_INTERVAL", "5m", TypeDuration, "", "", "30s", "24h"},
-		"backup_assets.publication_reconcile_batch_size": {"BACKUP_ASSETS_PUBLICATION_RECONCILE_BATCH_SIZE", "100", TypeInt, "1", "1000", "", ""},
-		"backup_assets.publication_worker_concurrency":   {"BACKUP_ASSETS_PUBLICATION_WORKER_CONCURRENCY", "2", TypeInt, "1", "32", "", ""},
-		"backup_assets.publication_missing_grace":        {"BACKUP_ASSETS_PUBLICATION_MISSING_GRACE", "30m", TypeDuration, "", "", "1m", "24h"},
-		"backup_assets.publication_stream_max_bytes":     {"BACKUP_ASSETS_PUBLICATION_STREAM_MAX_BYTES", "268435456", TypeInt, "1048576", "1073741824", "", ""},
-		"backup_assets.manifest_timeout":                 {"BACKUP_ASSETS_MANIFEST_TIMEOUT", "2h", TypeDuration, "", "", "1m", "24h"},
-		"backup_assets.manifest_max_bytes":               {"BACKUP_ASSETS_MANIFEST_MAX_BYTES", "4294967296", TypeInt, "1048576", "17179869184", "", ""},
-		"backup_assets.manifest_max_entries":             {"BACKUP_ASSETS_MANIFEST_MAX_ENTRIES", "10000000", TypeInt, "1", "100000000", "", ""},
-		"backup_assets.manifest_max_record_bytes":        {"BACKUP_ASSETS_MANIFEST_MAX_RECORD_BYTES", "1048576", TypeInt, "4096", "4194304", "", ""},
-		"backup_assets.manifest_max_depth":               {"BACKUP_ASSETS_MANIFEST_MAX_DEPTH", "4096", TypeInt, "1", "65536", "", ""},
-		"backup_assets.rclone_preflight_ttl":             {"BACKUP_ASSETS_RCLONE_PREFLIGHT_TTL", "30m", TypeDuration, "", "", "16m", "24h"},
-		"backup_assets.rclone_portable_deadline":         {"BACKUP_ASSETS_RCLONE_PORTABLE_DEADLINE", "24h", TypeDuration, "", "", "5m", "168h"},
-		"backup_assets.rclone_native_deadline":           {"BACKUP_ASSETS_RCLONE_NATIVE_DEADLINE", "45m", TypeDuration, "", "", "5m", "55m"},
-		"backup_assets.rclone_bound_config_max_bytes":    {"BACKUP_ASSETS_RCLONE_BOUND_CONFIG_MAX_BYTES", "65536", TypeInt, "1024", "65536", "", ""},
-		"backup_assets.rclone_control_payload_max_bytes": {"BACKUP_ASSETS_RCLONE_CONTROL_PAYLOAD_MAX_BYTES", "8388608", TypeInt, "65536", "67108864", "", ""},
-		"backup_assets.rclone_full_verify_max_bytes":     {"BACKUP_ASSETS_RCLONE_FULL_VERIFY_MAX_BYTES", "1099511627776", TypeInt, "1048576", "17592186044416", "", ""},
-		"backup_assets.rclone_manifest_chunk_max_bytes":  {"BACKUP_ASSETS_RCLONE_MANIFEST_CHUNK_MAX_BYTES", "8388608", TypeInt, "65536", "67108864", "", ""},
-		"backup_assets.rclone_low_level_retries":         {"BACKUP_ASSETS_RCLONE_LOW_LEVEL_RETRIES", "3", TypeInt, "1", "10", "", ""},
-		"backup_assets.rclone_staging_orphan_age":        {"BACKUP_ASSETS_RCLONE_STAGING_ORPHAN_AGE", "24h", TypeDuration, "", "", "1h", "168h"},
-		"backup_assets.rclone_staging_scan_limit":        {"BACKUP_ASSETS_RCLONE_STAGING_SCAN_LIMIT", "256", TypeInt, "1", "4096", "", ""},
-		"backup_assets.rclone_kms_read_key_max_count":    {"BACKUP_ASSETS_RCLONE_KMS_READ_KEY_MAX_COUNT", "8", TypeInt, "1", "32", "", ""},
-		"backup_assets.rclone_health_interval":           {"BACKUP_ASSETS_RCLONE_HEALTH_INTERVAL", "15m", TypeDuration, "", "", "1m", "24h"},
-		"backup_assets.rclone_health_batch_size":         {"BACKUP_ASSETS_RCLONE_HEALTH_BATCH_SIZE", "100", TypeInt, "1", "1000", "", ""},
-		"backup_assets.rclone_aws_sdk_max_attempts":      {"BACKUP_ASSETS_RCLONE_AWS_SDK_MAX_ATTEMPTS", "3", TypeInt, "1", "10", "", ""},
-		"backup_assets.search_reconcile_interval":        {"BACKUP_ASSETS_SEARCH_RECONCILE_INTERVAL", "1m", TypeDuration, "", "", "10s", "1h"},
-		"backup_assets.search_build_timeout":             {"BACKUP_ASSETS_SEARCH_BUILD_TIMEOUT", "30m", TypeDuration, "", "", "1m", "24h"},
-		"backup_assets.search_batch_size":                {"BACKUP_ASSETS_SEARCH_BATCH_SIZE", "500", TypeInt, "50", "5000", "", ""},
-		"backup_assets.search_max_concurrency":           {"BACKUP_ASSETS_SEARCH_MAX_CONCURRENCY", "2", TypeInt, "1", "16", "", ""},
-		"backup_assets.search_ast_max_depth":             {"BACKUP_ASSETS_SEARCH_AST_MAX_DEPTH", "8", TypeInt, "1", "16", "", ""},
-		"backup_assets.search_ast_max_nodes":             {"BACKUP_ASSETS_SEARCH_AST_MAX_NODES", "64", TypeInt, "2", "256", "", ""},
-		"backup_assets.search_values_per_node":           {"BACKUP_ASSETS_SEARCH_VALUES_PER_NODE", "32", TypeInt, "1", "64", "", ""},
-		"backup_assets.search_body_max_bytes":            {"BACKUP_ASSETS_SEARCH_BODY_MAX_BYTES", "65536", TypeInt, "1024", "65536", "", ""},
-		"backup_assets.search_value_max_bytes":           {"BACKUP_ASSETS_SEARCH_VALUE_MAX_BYTES", "1024", TypeInt, "1", "4096", "", ""},
-		"backup_assets.search_candidate_limit":           {"BACKUP_ASSETS_SEARCH_CANDIDATE_LIMIT", "10000", TypeInt, "100", "100000", "", ""},
-		"backup_assets.search_query_timeout":             {"BACKUP_ASSETS_SEARCH_QUERY_TIMEOUT", "5s", TypeDuration, "", "", "100ms", "30s"},
-		"backup_assets.search_page_size_max":             {"BACKUP_ASSETS_SEARCH_PAGE_SIZE_MAX", "200", TypeInt, "1", "500", "", ""},
-		"backup_assets.search_suggestion_limit":          {"BACKUP_ASSETS_SEARCH_SUGGESTION_LIMIT", "20", TypeInt, "0", "50", "", ""},
-		"backup_assets.saved_search_quota":               {"BACKUP_ASSETS_SAVED_SEARCH_QUOTA", "100", TypeInt, "1", "1000", "", ""},
-		"backup_assets.favorite_quota":                   {"BACKUP_ASSETS_FAVORITE_QUOTA", "5000", TypeInt, "1", "100000", "", ""},
-		"backup_assets.tag_definition_quota":             {"BACKUP_ASSETS_TAG_DEFINITION_QUOTA", "100", TypeInt, "1", "1000", "", ""},
-		"backup_assets.tag_assignment_quota":             {"BACKUP_ASSETS_TAG_ASSIGNMENT_QUOTA", "10000", TypeInt, "1", "200000", "", ""},
-		"backup_assets.overlay_bulk_max_items":           {"BACKUP_ASSETS_OVERLAY_BULK_MAX_ITEMS", "200", TypeInt, "1", "1000", "", ""},
-		"backup_assets.overlay_label_max_bytes":          {"BACKUP_ASSETS_OVERLAY_LABEL_MAX_BYTES", "256", TypeInt, "1", "4096", "", ""},
-		"backup_assets.recent_quota":                     {"BACKUP_ASSETS_RECENT_QUOTA", "10000", TypeInt, "1", "100000", "", ""},
-		"backup_assets.recent_retention":                 {"BACKUP_ASSETS_RECENT_RETENTION", "720h", TypeDuration, "", "", "24h", "8760h"},
-		"backup_assets.recent_writes_per_minute":         {"BACKUP_ASSETS_RECENT_WRITES_PER_MINUTE", "120", TypeInt, "1", "10000", "", ""},
-		"backup_assets.idempotency_ttl":                  {"BACKUP_ASSETS_IDEMPOTENCY_TTL", "24h", TypeDuration, "", "", "1h", "168h"},
-		"backup_assets.idempotency_key_max_bytes":        {"BACKUP_ASSETS_IDEMPOTENCY_KEY_MAX_BYTES", "128", TypeInt, "32", "256", "", ""},
+		"backup_assets.enabled":                           {"BACKUP_ASSETS_ENABLED", "false", TypeBool, "", "", "", ""},
+		"backup_assets.content_preview_ttl":               {"BACKUP_ASSETS_CONTENT_PREVIEW_TTL", "2m", TypeDuration, "", "", "15s", "10m"},
+		"backup_assets.content_media_ttl":                 {"BACKUP_ASSETS_CONTENT_MEDIA_TTL", "15m", TypeDuration, "", "", "1m", "30m"},
+		"backup_assets.content_idle_ttl":                  {"BACKUP_ASSETS_CONTENT_IDLE_TTL", "60s", TypeDuration, "", "", "15s", "10m"},
+		"backup_assets.content_write_idle_timeout":        {"BACKUP_ASSETS_CONTENT_WRITE_IDLE_TIMEOUT", "30s", TypeDuration, "", "", "5s", "2m"},
+		"backup_assets.content_ticket_timeout":            {"BACKUP_ASSETS_CONTENT_TICKET_TIMEOUT", "20s", TypeDuration, "", "", "1s", "25s"},
+		"backup_assets.content_request_max_bytes":         {"BACKUP_ASSETS_CONTENT_REQUEST_MAX_BYTES", "67108864", TypeInt, "65536", "1073741824", "", ""},
+		"backup_assets.content_cumulative_max_bytes":      {"BACKUP_ASSETS_CONTENT_CUMULATIVE_MAX_BYTES", "536870912", TypeInt, "65536", "8589934592", "", ""},
+		"backup_assets.content_max_requests":              {"BACKUP_ASSETS_CONTENT_MAX_REQUESTS", "256", TypeInt, "1", "4096", "", ""},
+		"backup_assets.content_grant_max_in_flight":       {"BACKUP_ASSETS_CONTENT_GRANT_MAX_IN_FLIGHT", "2", TypeInt, "1", "8", "", ""},
+		"backup_assets.content_user_max_concurrency":      {"BACKUP_ASSETS_CONTENT_USER_MAX_CONCURRENCY", "4", TypeInt, "1", "32", "", ""},
+		"backup_assets.content_provider_max_concurrency":  {"BACKUP_ASSETS_CONTENT_PROVIDER_MAX_CONCURRENCY", "4", TypeInt, "1", "32", "", ""},
+		"backup_assets.content_global_max_concurrency":    {"BACKUP_ASSETS_CONTENT_GLOBAL_MAX_CONCURRENCY", "16", TypeInt, "1", "128", "", ""},
+		"backup_assets.content_rate_window":               {"BACKUP_ASSETS_CONTENT_RATE_WINDOW", "1m", TypeDuration, "", "", "10s", "10m"},
+		"backup_assets.content_user_window_bytes":         {"BACKUP_ASSETS_CONTENT_USER_WINDOW_BYTES", "1073741824", TypeInt, "65536", "17179869184", "", ""},
+		"backup_assets.content_provider_window_bytes":     {"BACKUP_ASSETS_CONTENT_PROVIDER_WINDOW_BYTES", "4294967296", TypeInt, "65536", "68719476736", "", ""},
+		"backup_assets.content_global_window_bytes":       {"BACKUP_ASSETS_CONTENT_GLOBAL_WINDOW_BYTES", "8589934592", TypeInt, "65536", "137438953472", "", ""},
+		"backup_assets.content_user_window_requests":      {"BACKUP_ASSETS_CONTENT_USER_WINDOW_REQUESTS", "1024", TypeInt, "1", "65536", "", ""},
+		"backup_assets.content_provider_window_requests":  {"BACKUP_ASSETS_CONTENT_PROVIDER_WINDOW_REQUESTS", "4096", TypeInt, "1", "262144", "", ""},
+		"backup_assets.content_global_window_requests":    {"BACKUP_ASSETS_CONTENT_GLOBAL_WINDOW_REQUESTS", "8192", TypeInt, "1", "1048576", "", ""},
+		"backup_assets.content_classification_scan_bytes": {"BACKUP_ASSETS_CONTENT_CLASSIFICATION_SCAN_BYTES", "262144", TypeInt, "4096", "4194304", "", ""},
+		"backup_assets.content_text_preview_bytes":        {"BACKUP_ASSETS_CONTENT_TEXT_PREVIEW_BYTES", "1048576", TypeInt, "4096", "16777216", "", ""},
+		"backup_assets.content_hex_preview_bytes":         {"BACKUP_ASSETS_CONTENT_HEX_PREVIEW_BYTES", "65536", TypeInt, "1024", "1048576", "", ""},
+		"backup_assets.content_raster_max_pixels":         {"BACKUP_ASSETS_CONTENT_RASTER_MAX_PIXELS", "100000000", TypeInt, "1000000", "250000000", "", ""},
+		"backup_assets.content_memory_global_bytes":       {"BACKUP_ASSETS_CONTENT_MEMORY_GLOBAL_BYTES", "67108864", TypeInt, "1048576", "1073741824", "", ""},
+		"backup_assets.content_memory_object_bytes":       {"BACKUP_ASSETS_CONTENT_MEMORY_OBJECT_BYTES", "4194304", TypeInt, "65536", "1073741824", "", ""},
+		"backup_assets.content_memory_user_bytes":         {"BACKUP_ASSETS_CONTENT_MEMORY_USER_BYTES", "16777216", TypeInt, "65536", "1073741824", "", ""},
+		"backup_assets.content_memory_provider_bytes":     {"BACKUP_ASSETS_CONTENT_MEMORY_PROVIDER_BYTES", "33554432", TypeInt, "65536", "1073741824", "", ""},
+		"backup_assets.content_cache_enabled":             {"BACKUP_ASSETS_CONTENT_CACHE_ENABLED", "true", TypeBool, "", "", "", ""},
+		"backup_assets.content_cache_root":                {"BACKUP_ASSETS_CONTENT_CACHE_ROOT", "/var/cache/xirang/asset-content", TypeString, "", "", "", ""},
+		"backup_assets.content_cache_chunk_bytes":         {"BACKUP_ASSETS_CONTENT_CACHE_CHUNK_BYTES", "1048576", TypeInt, "65536", "8388608", "", ""},
+		"backup_assets.content_cache_object_bytes":        {"BACKUP_ASSETS_CONTENT_CACHE_OBJECT_BYTES", "536870912", TypeInt, "65536", "8589934592", "", ""},
+		"backup_assets.content_cache_user_bytes":          {"BACKUP_ASSETS_CONTENT_CACHE_USER_BYTES", "2147483648", TypeInt, "65536", "34359738368", "", ""},
+		"backup_assets.content_cache_provider_bytes":      {"BACKUP_ASSETS_CONTENT_CACHE_PROVIDER_BYTES", "4294967296", TypeInt, "65536", "68719476736", "", ""},
+		"backup_assets.content_cache_global_bytes":        {"BACKUP_ASSETS_CONTENT_CACHE_GLOBAL_BYTES", "8589934592", TypeInt, "65536", "137438953472", "", ""},
+		"backup_assets.content_cache_object_files":        {"BACKUP_ASSETS_CONTENT_CACHE_OBJECT_FILES", "1024", TypeInt, "2", "131072", "", ""},
+		"backup_assets.content_cache_user_files":          {"BACKUP_ASSETS_CONTENT_CACHE_USER_FILES", "4096", TypeInt, "2", "262144", "", ""},
+		"backup_assets.content_cache_provider_files":      {"BACKUP_ASSETS_CONTENT_CACHE_PROVIDER_FILES", "8192", TypeInt, "2", "262144", "", ""},
+		"backup_assets.content_cache_global_files":        {"BACKUP_ASSETS_CONTENT_CACHE_GLOBAL_FILES", "16384", TypeInt, "16", "262144", "", ""},
+		"backup_assets.content_cache_idle_ttl":            {"BACKUP_ASSETS_CONTENT_CACHE_IDLE_TTL", "15m", TypeDuration, "", "", "1m", "24h"},
+		"backup_assets.content_cache_absolute_ttl":        {"BACKUP_ASSETS_CONTENT_CACHE_ABSOLUTE_TTL", "2h", TypeDuration, "", "", "1m", "24h"},
+		"backup_assets.content_reconcile_interval":        {"BACKUP_ASSETS_CONTENT_RECONCILE_INTERVAL", "1m", TypeDuration, "", "", "10s", "1h"},
+		"backup_assets.content_reconcile_batch_size":      {"BACKUP_ASSETS_CONTENT_RECONCILE_BATCH_SIZE", "100", TypeInt, "1", "1000", "", ""},
+		"backup_assets.content_audit_backlog_max":         {"BACKUP_ASSETS_CONTENT_AUDIT_BACKLOG_MAX", "10000", TypeInt, "100", "100000", "", ""},
+		"backup_assets.content_allow_insecure_loopback":   {"BACKUP_ASSETS_CONTENT_ALLOW_INSECURE_LOOPBACK", "false", TypeBool, "", "", "", ""},
+		"backup_assets.catalog_batch_size":                {"BACKUP_ASSETS_CATALOG_BATCH_SIZE", "2000", TypeInt, "1", "100000", "", ""},
+		"backup_assets.catalog_build_timeout":             {"BACKUP_ASSETS_CATALOG_BUILD_TIMEOUT", "30m", TypeDuration, "", "", "1m", "24h"},
+		"backup_assets.repository_reconcile_interval":     {"BACKUP_ASSETS_REPOSITORY_RECONCILE_INTERVAL", "15m", TypeDuration, "", "", "1m", "24h"},
+		"backup_assets.audit_segment_max_events":          {"BACKUP_ASSETS_AUDIT_SEGMENT_MAX_EVENTS", "10000", TypeInt, "100", "1000000", "", ""},
+		"backup_assets.audit_segment_max_age":             {"BACKUP_ASSETS_AUDIT_SEGMENT_MAX_AGE", "24h", TypeDuration, "", "", "1h", "168h"},
+		"backup_assets.audit_detail_retention_days":       {"BACKUP_ASSETS_AUDIT_DETAIL_RETENTION_DAYS", "180", TypeInt, "1", "3650", "", ""},
+		"backup_assets.audit_checkpoint_retention_days":   {"BACKUP_ASSETS_AUDIT_CHECKPOINT_RETENTION_DAYS", "2555", TypeInt, "180", "36500", "", ""},
+		"backup_assets.lease_duration":                    {"BACKUP_ASSETS_LEASE_DURATION", "5m", TypeDuration, "", "", "30s", "30m"},
+		"backup_assets.lease_heartbeat":                   {"BACKUP_ASSETS_LEASE_HEARTBEAT", "60s", TypeDuration, "", "", "10s", "5m"},
+		"backup_assets.lease_absolute_deadline":           {"BACKUP_ASSETS_LEASE_ABSOLUTE_DEADLINE", "168h", TypeDuration, "", "", "5m", "168h"},
+		"backup_assets.provider_operation_timeout":        {"BACKUP_ASSETS_PROVIDER_OPERATION_TIMEOUT", "2m", TypeDuration, "", "", "5s", "30m"},
+		"backup_assets.provider_max_concurrency":          {"BACKUP_ASSETS_PROVIDER_MAX_CONCURRENCY", "4", TypeInt, "1", "32", "", ""},
+		"backup_assets.provider_metadata_limit_bytes":     {"BACKUP_ASSETS_PROVIDER_METADATA_LIMIT_BYTES", "16777216", TypeInt, "65536", "67108864", "", ""},
+		"backup_assets.publication_reconcile_interval":    {"BACKUP_ASSETS_PUBLICATION_RECONCILE_INTERVAL", "5m", TypeDuration, "", "", "30s", "24h"},
+		"backup_assets.publication_reconcile_batch_size":  {"BACKUP_ASSETS_PUBLICATION_RECONCILE_BATCH_SIZE", "100", TypeInt, "1", "1000", "", ""},
+		"backup_assets.publication_worker_concurrency":    {"BACKUP_ASSETS_PUBLICATION_WORKER_CONCURRENCY", "2", TypeInt, "1", "32", "", ""},
+		"backup_assets.publication_missing_grace":         {"BACKUP_ASSETS_PUBLICATION_MISSING_GRACE", "30m", TypeDuration, "", "", "1m", "24h"},
+		"backup_assets.publication_stream_max_bytes":      {"BACKUP_ASSETS_PUBLICATION_STREAM_MAX_BYTES", "268435456", TypeInt, "1048576", "1073741824", "", ""},
+		"backup_assets.manifest_timeout":                  {"BACKUP_ASSETS_MANIFEST_TIMEOUT", "2h", TypeDuration, "", "", "1m", "24h"},
+		"backup_assets.manifest_max_bytes":                {"BACKUP_ASSETS_MANIFEST_MAX_BYTES", "4294967296", TypeInt, "1048576", "17179869184", "", ""},
+		"backup_assets.manifest_max_entries":              {"BACKUP_ASSETS_MANIFEST_MAX_ENTRIES", "10000000", TypeInt, "1", "100000000", "", ""},
+		"backup_assets.manifest_max_record_bytes":         {"BACKUP_ASSETS_MANIFEST_MAX_RECORD_BYTES", "1048576", TypeInt, "4096", "4194304", "", ""},
+		"backup_assets.manifest_max_depth":                {"BACKUP_ASSETS_MANIFEST_MAX_DEPTH", "4096", TypeInt, "1", "65536", "", ""},
+		"backup_assets.rclone_preflight_ttl":              {"BACKUP_ASSETS_RCLONE_PREFLIGHT_TTL", "30m", TypeDuration, "", "", "16m", "24h"},
+		"backup_assets.rclone_portable_deadline":          {"BACKUP_ASSETS_RCLONE_PORTABLE_DEADLINE", "24h", TypeDuration, "", "", "5m", "168h"},
+		"backup_assets.rclone_native_deadline":            {"BACKUP_ASSETS_RCLONE_NATIVE_DEADLINE", "45m", TypeDuration, "", "", "5m", "55m"},
+		"backup_assets.rclone_bound_config_max_bytes":     {"BACKUP_ASSETS_RCLONE_BOUND_CONFIG_MAX_BYTES", "65536", TypeInt, "1024", "65536", "", ""},
+		"backup_assets.rclone_control_payload_max_bytes":  {"BACKUP_ASSETS_RCLONE_CONTROL_PAYLOAD_MAX_BYTES", "8388608", TypeInt, "65536", "67108864", "", ""},
+		"backup_assets.rclone_full_verify_max_bytes":      {"BACKUP_ASSETS_RCLONE_FULL_VERIFY_MAX_BYTES", "1099511627776", TypeInt, "1048576", "17592186044416", "", ""},
+		"backup_assets.rclone_manifest_chunk_max_bytes":   {"BACKUP_ASSETS_RCLONE_MANIFEST_CHUNK_MAX_BYTES", "8388608", TypeInt, "65536", "67108864", "", ""},
+		"backup_assets.rclone_low_level_retries":          {"BACKUP_ASSETS_RCLONE_LOW_LEVEL_RETRIES", "3", TypeInt, "1", "10", "", ""},
+		"backup_assets.rclone_staging_orphan_age":         {"BACKUP_ASSETS_RCLONE_STAGING_ORPHAN_AGE", "24h", TypeDuration, "", "", "1h", "168h"},
+		"backup_assets.rclone_staging_scan_limit":         {"BACKUP_ASSETS_RCLONE_STAGING_SCAN_LIMIT", "256", TypeInt, "1", "4096", "", ""},
+		"backup_assets.rclone_kms_read_key_max_count":     {"BACKUP_ASSETS_RCLONE_KMS_READ_KEY_MAX_COUNT", "8", TypeInt, "1", "32", "", ""},
+		"backup_assets.rclone_health_interval":            {"BACKUP_ASSETS_RCLONE_HEALTH_INTERVAL", "15m", TypeDuration, "", "", "1m", "24h"},
+		"backup_assets.rclone_health_batch_size":          {"BACKUP_ASSETS_RCLONE_HEALTH_BATCH_SIZE", "100", TypeInt, "1", "1000", "", ""},
+		"backup_assets.rclone_aws_sdk_max_attempts":       {"BACKUP_ASSETS_RCLONE_AWS_SDK_MAX_ATTEMPTS", "3", TypeInt, "1", "10", "", ""},
+		"backup_assets.search_reconcile_interval":         {"BACKUP_ASSETS_SEARCH_RECONCILE_INTERVAL", "1m", TypeDuration, "", "", "10s", "1h"},
+		"backup_assets.search_build_timeout":              {"BACKUP_ASSETS_SEARCH_BUILD_TIMEOUT", "30m", TypeDuration, "", "", "1m", "24h"},
+		"backup_assets.search_batch_size":                 {"BACKUP_ASSETS_SEARCH_BATCH_SIZE", "500", TypeInt, "50", "5000", "", ""},
+		"backup_assets.search_max_concurrency":            {"BACKUP_ASSETS_SEARCH_MAX_CONCURRENCY", "2", TypeInt, "1", "16", "", ""},
+		"backup_assets.search_ast_max_depth":              {"BACKUP_ASSETS_SEARCH_AST_MAX_DEPTH", "8", TypeInt, "1", "16", "", ""},
+		"backup_assets.search_ast_max_nodes":              {"BACKUP_ASSETS_SEARCH_AST_MAX_NODES", "64", TypeInt, "2", "256", "", ""},
+		"backup_assets.search_values_per_node":            {"BACKUP_ASSETS_SEARCH_VALUES_PER_NODE", "32", TypeInt, "1", "64", "", ""},
+		"backup_assets.search_body_max_bytes":             {"BACKUP_ASSETS_SEARCH_BODY_MAX_BYTES", "65536", TypeInt, "1024", "65536", "", ""},
+		"backup_assets.search_value_max_bytes":            {"BACKUP_ASSETS_SEARCH_VALUE_MAX_BYTES", "1024", TypeInt, "1", "4096", "", ""},
+		"backup_assets.search_candidate_limit":            {"BACKUP_ASSETS_SEARCH_CANDIDATE_LIMIT", "10000", TypeInt, "100", "100000", "", ""},
+		"backup_assets.search_query_timeout":              {"BACKUP_ASSETS_SEARCH_QUERY_TIMEOUT", "5s", TypeDuration, "", "", "100ms", "30s"},
+		"backup_assets.search_page_size_max":              {"BACKUP_ASSETS_SEARCH_PAGE_SIZE_MAX", "200", TypeInt, "1", "500", "", ""},
+		"backup_assets.search_suggestion_limit":           {"BACKUP_ASSETS_SEARCH_SUGGESTION_LIMIT", "20", TypeInt, "0", "50", "", ""},
+		"backup_assets.saved_search_quota":                {"BACKUP_ASSETS_SAVED_SEARCH_QUOTA", "100", TypeInt, "1", "1000", "", ""},
+		"backup_assets.favorite_quota":                    {"BACKUP_ASSETS_FAVORITE_QUOTA", "5000", TypeInt, "1", "100000", "", ""},
+		"backup_assets.tag_definition_quota":              {"BACKUP_ASSETS_TAG_DEFINITION_QUOTA", "100", TypeInt, "1", "1000", "", ""},
+		"backup_assets.tag_assignment_quota":              {"BACKUP_ASSETS_TAG_ASSIGNMENT_QUOTA", "10000", TypeInt, "1", "200000", "", ""},
+		"backup_assets.overlay_bulk_max_items":            {"BACKUP_ASSETS_OVERLAY_BULK_MAX_ITEMS", "200", TypeInt, "1", "1000", "", ""},
+		"backup_assets.overlay_label_max_bytes":           {"BACKUP_ASSETS_OVERLAY_LABEL_MAX_BYTES", "256", TypeInt, "1", "4096", "", ""},
+		"backup_assets.recent_quota":                      {"BACKUP_ASSETS_RECENT_QUOTA", "10000", TypeInt, "1", "100000", "", ""},
+		"backup_assets.recent_retention":                  {"BACKUP_ASSETS_RECENT_RETENTION", "720h", TypeDuration, "", "", "24h", "8760h"},
+		"backup_assets.recent_writes_per_minute":          {"BACKUP_ASSETS_RECENT_WRITES_PER_MINUTE", "120", TypeInt, "1", "10000", "", ""},
+		"backup_assets.idempotency_ttl":                   {"BACKUP_ASSETS_IDEMPOTENCY_TTL", "24h", TypeDuration, "", "", "1h", "168h"},
+		"backup_assets.idempotency_key_max_bytes":         {"BACKUP_ASSETS_IDEMPOTENCY_KEY_MAX_BYTES", "128", TypeInt, "32", "256", "", ""},
 	}
 	defs := NewService(setupTestDB(t)).Registry()
 	got := make(map[string]SettingDef, len(want))
@@ -382,6 +426,147 @@ func TestBackupAssetSearchConfigAndOverlayConfigCrossSettingBoundaries(t *testin
 				t.Fatalf("unsafe Search/Overlay settings accepted: %#v", overrides)
 			}
 		})
+	}
+}
+
+func TestBackupAssetContentConfigCrossSettingBoundaries(t *testing.T) {
+	values := backupAssetFoundationValuesForTest()
+	if err := ValidateBackupAssetFoundationConfig(values); err != nil {
+		t.Fatalf("valid Content defaults rejected: %v", err)
+	}
+
+	tests := map[string]map[string]string{
+		"idle beyond preview": {
+			"backup_assets.content_idle_ttl":    "3m",
+			"backup_assets.content_preview_ttl": "2m",
+		},
+		"request beyond cumulative": {
+			"backup_assets.content_request_max_bytes":    "1073741824",
+			"backup_assets.content_cumulative_max_bytes": "536870912",
+		},
+		"grant beyond user concurrency": {
+			"backup_assets.content_grant_max_in_flight":  "5",
+			"backup_assets.content_user_max_concurrency": "4",
+		},
+		"content provider beyond provider admission": {
+			"backup_assets.content_provider_max_concurrency": "5",
+			"backup_assets.provider_max_concurrency":         "4",
+		},
+		"global below provider concurrency": {
+			"backup_assets.content_provider_max_concurrency": "4",
+			"backup_assets.content_global_max_concurrency":   "3",
+		},
+		"user bytes below request": {
+			"backup_assets.content_request_max_bytes": "67108864",
+			"backup_assets.content_user_window_bytes": "65536",
+		},
+		"global bytes below provider": {
+			"backup_assets.content_provider_window_bytes": "4294967296",
+			"backup_assets.content_global_window_bytes":   "1073741824",
+		},
+		"provider requests below user": {
+			"backup_assets.content_user_window_requests":     "4096",
+			"backup_assets.content_provider_window_requests": "1024",
+		},
+		"global requests below provider": {
+			"backup_assets.content_provider_window_requests": "8192",
+			"backup_assets.content_global_window_requests":   "4096",
+		},
+		"scan beyond text": {
+			"backup_assets.content_classification_scan_bytes": "2097152",
+			"backup_assets.content_text_preview_bytes":        "1048576",
+		},
+		"memory object beyond user": {
+			"backup_assets.content_memory_object_bytes": "33554432",
+			"backup_assets.content_memory_user_bytes":   "16777216",
+		},
+		"memory provider beyond global": {
+			"backup_assets.content_memory_provider_bytes": "134217728",
+			"backup_assets.content_memory_global_bytes":   "67108864",
+		},
+		"cache chunk beyond object": {
+			"backup_assets.content_cache_chunk_bytes":  "8388608",
+			"backup_assets.content_cache_object_bytes": "4194304",
+		},
+		"cache object beyond user": {
+			"backup_assets.content_cache_object_bytes": "4294967296",
+			"backup_assets.content_cache_user_bytes":   "2147483648",
+		},
+		"cache provider beyond global": {
+			"backup_assets.content_cache_provider_bytes": "17179869184",
+			"backup_assets.content_cache_global_bytes":   "8589934592",
+		},
+		"cache object files cannot hold chunks": {
+			"backup_assets.content_cache_chunk_bytes":  "65536",
+			"backup_assets.content_cache_object_bytes": "536870912",
+			"backup_assets.content_cache_object_files": "1024",
+		},
+		"cache object files beyond user": {
+			"backup_assets.content_cache_object_files": "8192",
+			"backup_assets.content_cache_user_files":   "4096",
+		},
+		"cache provider files beyond global": {
+			"backup_assets.content_cache_provider_files": "32768",
+			"backup_assets.content_cache_global_files":   "16384",
+		},
+		"cache idle beyond absolute": {
+			"backup_assets.content_cache_idle_ttl":     "3h",
+			"backup_assets.content_cache_absolute_ttl": "2h",
+		},
+		"unsafe cache root": {
+			"backup_assets.content_cache_root": "/data/content-cache",
+		},
+	}
+	for name, overrides := range tests {
+		t.Run(name, func(t *testing.T) {
+			candidate := cloneSettingsValues(values)
+			for key, value := range overrides {
+				candidate[key] = value
+			}
+			if err := ValidateBackupAssetFoundationConfig(candidate); err == nil {
+				t.Fatalf("unsafe Content settings accepted: %#v", overrides)
+			}
+		})
+	}
+}
+
+func TestBackupAssetContentValidationDoesNotInventLegacyCoreOverrides(t *testing.T) {
+	if err := ValidateBackupAssetFoundationConfig(map[string]string{
+		"backup_assets.provider_max_concurrency": "1",
+	}); err != nil {
+		t.Fatalf("legacy core-only snapshot rejected by absent Content settings: %v", err)
+	}
+}
+
+func TestBackupAssetContentSettingsUseDBEnvDefaultPrecedenceInAtomicSnapshot(t *testing.T) {
+	t.Setenv("BACKUP_ASSETS_CONTENT_PREVIEW_TTL", "3m")
+	service := NewService(setupTestDB(t))
+	if err := service.Update("backup_assets.content_preview_ttl", "4m"); err != nil {
+		t.Fatalf("persist content override: %v", err)
+	}
+	values, err := service.BackupAssetSettingsSnapshot()
+	if err != nil {
+		t.Fatalf("BackupAssetSettingsSnapshot: %v", err)
+	}
+	if values["backup_assets.enabled"] != "false" {
+		t.Fatalf("content settings changed feature default: %q", values["backup_assets.enabled"])
+	}
+	if values["backup_assets.content_preview_ttl"] != "4m" {
+		t.Fatalf("DB did not override content env: %q", values["backup_assets.content_preview_ttl"])
+	}
+	if values["backup_assets.content_media_ttl"] != "15m" {
+		t.Fatalf("content code default missing from snapshot: %q", values["backup_assets.content_media_ttl"])
+	}
+	for _, key := range []string{
+		"backup_assets.content_ticket_timeout",
+		"backup_assets.content_user_window_requests",
+		"backup_assets.content_memory_provider_bytes",
+		"backup_assets.content_cache_object_files",
+		"backup_assets.content_allow_insecure_loopback",
+	} {
+		if _, exists := values[key]; !exists {
+			t.Fatalf("atomic snapshot omitted %s", key)
+		}
 	}
 }
 

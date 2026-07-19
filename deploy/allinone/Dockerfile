@@ -63,8 +63,8 @@ COPY scripts/backup-db.sh /usr/local/bin/backup-db.sh
 COPY deploy/allinone/xirang-backup.cron /etc/supercronic/xirang-backup
 
 RUN chmod +x /usr/local/bin/backup-db.sh /entrypoint.sh && \
-    mkdir -p /data /backup/db /logs /etc/supercronic && \
-    chown -R xirang:xirang /data /backup /logs /usr/share/nginx/html /etc/supercronic /etc/nginx/templates
+    mkdir -p /data /backup/db /logs /var/cache/xirang/asset-content /etc/supercronic && \
+    chown -R xirang:xirang /data /backup /logs /var/cache/xirang /usr/share/nginx/html /etc/supercronic /etc/nginx/templates
 
 # 后端监听 3000（容器内部），nginx 监听 10761 对外提供服务
 ENV SERVER_ADDR=:3000

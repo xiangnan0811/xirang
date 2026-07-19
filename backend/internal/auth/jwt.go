@@ -61,7 +61,7 @@ func (m *JWTManager) loadRevokedFromDB() {
 		return
 	}
 	var revocations []model.TokenRevocation
-	if err := m.db.Where("expires_at > ?", time.Now()).Find(&revocations).Error; err != nil {
+	if err := m.db.Where("expires_at > ?", time.Now().UTC()).Find(&revocations).Error; err != nil {
 		logger.Module("auth").Warn().Err(err).Msg("加载 JWT 撤销记录失败")
 		return
 	}
@@ -165,23 +165,81 @@ func (m *JWTManager) RevokeToken(tokenString string) error {
 	if claims.ExpiresAt != nil {
 		expireAt = claims.ExpiresAt.Time
 	}
+	if claims.ID != "" {
+		return m.RevokeSession(claims.ID, claims.UserID, expireAt)
+	}
+	return m.revokeKey(key, claims.UserID, expireAt)
+}
+
+// RevokeSession revokes a login session using its non-bearer JTI. Callers do
+// not need to retain or replay the raw JWT after AuthMiddleware has validated
+// it. The in-memory revocation is applied before persistence so a storage
+// failure cannot make the session usable again in this process.
+func (m *JWTManager) RevokeSession(jti string, userID uint, expiresAt time.Time) error {
+	if !lowerHexID(jti) || expiresAt.IsZero() || !expiresAt.UTC().After(time.Now().UTC()) {
+		return fmt.Errorf("invalid session revocation")
+	}
+	return m.revokeKey("jti:"+jti, userID, expiresAt.UTC())
+}
+
+func (m *JWTManager) revokeKey(key string, userID uint, expireAt time.Time) error {
+	now := time.Now().UTC()
+	expireAt = expireAt.UTC()
 
 	m.mu.Lock()
 	m.revoked[key] = expireAt
-	m.pruneRevokedLocked(time.Now())
+	m.pruneRevokedLocked(now)
 	m.mu.Unlock()
 
 	// 持久化到数据库
 	if m.db != nil {
 		if err := m.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.TokenRevocation{
 			TokenHash: key,
-			UserID:    claims.UserID,
+			UserID:    userID,
 			ExpiresAt: expireAt,
 		}).Error; err != nil {
 			return fmt.Errorf("持久化 token 撤销记录失败: %w", err)
 		}
+		if err := m.db.Where("expires_at <= ?", now).Delete(&model.TokenRevocation{}).Error; err != nil {
+			logger.Module("auth").Warn().Err(err).Msg("清理过期 JWT 撤销记录失败")
+		}
 	}
 	return nil
+}
+
+// IsSessionRevoked checks a non-bearer login-session JTI against both the
+// process cache and durable revocation rows. Invalid identifiers fail closed.
+func (m *JWTManager) IsSessionRevoked(jti string) (bool, error) {
+	if !lowerHexID(jti) {
+		return true, fmt.Errorf("invalid session jti")
+	}
+	now := time.Now().UTC()
+	key := "jti:" + jti
+	m.mu.Lock()
+	if now.Sub(m.lastPruneAt) > 30*time.Second {
+		m.pruneRevokedLocked(now)
+		m.lastPruneAt = now
+	}
+	expiresAt, revoked := m.revoked[key]
+	m.mu.Unlock()
+	if revoked && expiresAt.After(now) {
+		return true, nil
+	}
+	if m.db == nil {
+		return false, nil
+	}
+	var row model.TokenRevocation
+	result := m.db.Select("token_hash", "expires_at").Where("token_hash = ? AND expires_at > ?", key, now).Limit(1).Find(&row)
+	if result.Error != nil {
+		return true, fmt.Errorf("query session revocation: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return false, nil
+	}
+	m.mu.Lock()
+	m.revoked[key] = row.ExpiresAt
+	m.mu.Unlock()
+	return true, nil
 }
 
 func (m *JWTManager) parseToken(tokenString string, checkRevoked bool) (*Claims, error) {
@@ -200,7 +258,7 @@ func (m *JWTManager) parseToken(tokenString string, checkRevoked bool) (*Claims,
 	}
 	if checkRevoked {
 		key := revocationKey(claims, tokenString)
-		now := time.Now()
+		now := time.Now().UTC()
 		m.mu.Lock()
 		if now.Sub(m.lastPruneAt) > 30*time.Second {
 			m.pruneRevokedLocked(now)
@@ -221,11 +279,6 @@ func (m *JWTManager) pruneRevokedLocked(now time.Time) {
 			delete(m.revoked, key)
 		}
 	}
-	// 异步清理数据库过期记录
-	if m.db != nil {
-		db := m.db
-		go db.Where("expires_at <= ?", now).Delete(&model.TokenRevocation{})
-	}
 }
 
 func generateTokenID() (string, error) {
@@ -234,6 +287,18 @@ func generateTokenID() (string, error) {
 		return "", fmt.Errorf("生成 token id 失败: %w", err)
 	}
 	return hex.EncodeToString(buf), nil
+}
+
+func lowerHexID(value string) bool {
+	if len(value) != 32 {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func revocationKey(claims *Claims, tokenString string) string {

@@ -32,7 +32,14 @@ const (
 	backupAssetPublicationVersion      = 63
 	backupAssetRsyncPublicationVersion = 64
 	backupAssetSearchVersion           = 65
+	backupAssetContentVersion          = 66
 )
+
+var backupAssetContentTables = []string{
+	"backup_asset_delivery_grants",
+	"backup_asset_delivery_requests",
+	"backup_asset_delivery_usage",
+}
 
 var backupAssetSearchTables = []string{
 	"backup_asset_search_generations",
@@ -295,6 +302,14 @@ func TestBackupAssetMigration065Postgres(t *testing.T) {
 	runBackupAssetMigration065Contract(t, newRequiredPostgresMigrationFixture(t))
 }
 
+func TestBackupAssetMigration066SQLite(t *testing.T) {
+	runBackupAssetMigration066Contract(t, newSQLiteMigrationFixture(t))
+}
+
+func TestBackupAssetMigration066Postgres(t *testing.T) {
+	runBackupAssetMigration066Contract(t, newRequiredPostgresMigrationFixture(t))
+}
+
 func TestBackupAssetSearchModelSensitiveFieldsEncryptAtRest(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_BACKUP_ASSET_SEARCH_MODEL_DATA_KEY_FOR_TEST_ONLY")
@@ -463,6 +478,236 @@ func runBackupAssetMigration065Contract(t *testing.T, fixture migrationFixture) 
 			}
 		}
 	})
+}
+
+func runBackupAssetMigration066Contract(t *testing.T, fixture migrationFixture) {
+	t.Helper()
+	t.Run("ApplyAndParity", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, backupAssetContentVersion)
+		assertMigrationVersion(t, migrator, backupAssetContentVersion)
+		for _, table := range backupAssetContentTables {
+			if !databaseTableExists(t, db, fixture.engine, table) {
+				t.Fatalf("%s content migration table %s is missing", fixture.engine, table)
+			}
+			want := gormColumnNames(t, backupAssetContentModels()[table])
+			var got []string
+			if fixture.engine == "sqlite" {
+				got = sqliteColumnNames(t, db, table)
+				assertSQLiteTimeColumnsHaveNoDefault(t, db, table)
+			} else {
+				got = postgresColumnNames(t, db, table)
+				assertPostgresTableTimeColumnsHaveNoDefault(t, db, table)
+			}
+			sort.Strings(got)
+			sort.Strings(want)
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Fatalf("%s %s columns mismatch\n got: %v\nwant: %v", fixture.engine, table, got, want)
+			}
+			if table == "backup_asset_delivery_grants" {
+				for _, required := range []string{"representation_source_bytes", "representation_size", "representation_truncated"} {
+					found := false
+					for _, column := range got {
+						found = found || column == required
+					}
+					if !found {
+						t.Fatalf("%s delivery grant representation column %s is missing", fixture.engine, required)
+					}
+				}
+			}
+		}
+		for _, index := range []string{
+			"idx_backup_asset_delivery_grants_delivery_state",
+			"idx_backup_asset_delivery_grants_session_state",
+			"idx_backup_asset_delivery_grants_resource_state",
+			"idx_backup_asset_delivery_grants_expiry",
+			"idx_backup_asset_delivery_grants_audit",
+			"idx_backup_asset_delivery_requests_grant_state",
+			"idx_backup_asset_delivery_requests_reconcile",
+			"idx_backup_asset_delivery_usage_window",
+			"idx_backup_asset_audit_events_content_grant_action",
+		} {
+			if definition := fixture.indexDefinition(t, db, index); definition == "" {
+				t.Fatalf("%s content index %s is missing", fixture.engine, index)
+			}
+		}
+		if fixture.engine == "sqlite" {
+			assertSQLiteForeignKeyCheck(t, db)
+		}
+	})
+	t.Run("PristineDownRestores065", fixture.test066PristineDown)
+	t.Run("ValidRowsAndInvalidProducts", fixture.test066ValidAndInvalidRows)
+	t.Run("UsedDownIsRejectedAtomically", fixture.test066UsedDownIsAtomic)
+	t.Run("ExplicitSafeDrainAllowsDown", fixture.test066SafeDrain)
+	t.Run("Preserves065UsedDownDefense", fixture.test066Preserves065Defense)
+}
+
+func backupAssetContentModels() map[string]any {
+	return map[string]any{
+		"backup_asset_delivery_grants":   model.BackupAssetDeliveryGrant{},
+		"backup_asset_delivery_requests": model.BackupAssetDeliveryRequest{},
+		"backup_asset_delivery_usage":    model.BackupAssetDeliveryUsage{},
+	}
+}
+
+func (fixture migrationFixture) test066PristineDown(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetContentVersion)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("step %s migration down to 000065: %v", fixture.engine, err)
+	}
+	assertMigrationVersion(t, migrator, backupAssetSearchVersion)
+	for _, table := range backupAssetContentTables {
+		if databaseTableExists(t, db, fixture.engine, table) {
+			t.Fatalf("%s content table %s remains after pristine down", fixture.engine, table)
+		}
+	}
+	if definition := fixture.indexDefinition(t, db, "idx_backup_asset_audit_events_content_grant_action"); definition != "" {
+		t.Fatalf("%s content audit index remains after down: %s", fixture.engine, definition)
+	}
+	if !databaseTableExists(t, db, fixture.engine, "backup_asset_search_generations") {
+		t.Fatalf("%s 000065 search schema was removed by 000066 down", fixture.engine)
+	}
+}
+
+func (fixture migrationFixture) test066ValidAndInvalidRows(t *testing.T) {
+	_, db := fixture.openAt(t, backupAssetContentVersion)
+	now := time.Date(2026, 7, 18, 4, 5, 6, 0, time.UTC)
+	pointA, catalogA, entryA := fixture.insertSearchMigrationCatalog(t, db, "4", now)
+	pointB, _, _ := fixture.insertSearchMigrationCatalog(t, db, "5", now)
+	fixture.insertSearchMigrationUser(t, db, 6601, "content-user", now)
+	leaseID := strings.Repeat("6", 32)
+	fixture.insertSearchMigrationLease(t, db, leaseID, pointA, "catalog_build", now)
+	grantID := strings.Repeat("7", 32)
+	fixture.insertContentMigrationGrant(t, db, 6601, grantID, strings.Repeat("8", 32), pointA, catalogA, entryA, leaseID, now)
+	fixture.insertContentMigrationRequest(t, db, strings.Repeat("9", 32), grantID, now)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_delivery_usage
+		(scope_kind, scope_id, window_started_at, window_expires_at, request_count,
+		 reserved_bytes, delivered_bytes, in_flight, version, updated_at)
+		VALUES ('global', 'global', ?, ?, 1, 0, 0, 0, 1, ?)`, now, now.Add(time.Minute), now)
+
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET resource_kind = 'recovery_result',
+		recovery_point_id = NULL, catalog_generation_id = NULL, entry_id = NULL,
+		recovery_job_id = ?, recovery_result_id = ? WHERE id = ?`, strings.Repeat("a", 32), strings.Repeat("b", 32), grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET recovery_job_id = ? WHERE id = ?`, strings.Repeat("a", 32), grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET resource_kind = 'future' WHERE id = ?`, grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET recovery_point_id = ? WHERE id = ?`, pointB, grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET step_up_action = 'asset.download', step_up_proof_id = ?, step_up_expires_at = ? WHERE id = ?`, strings.Repeat("c", 32), now.Add(time.Minute), grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET classification = 'secret', step_up_action = NULL, step_up_proof_id = ?, step_up_expires_at = ? WHERE id = ?`, strings.Repeat("c", 32), now.Add(10*time.Minute), grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET action = 'download', renderer = 'attachment', profile = 'original_v1', step_up_action = NULL, step_up_proof_id = ?, step_up_expires_at = ? WHERE id = ?`, strings.Repeat("c", 32), now.Add(10*time.Minute), grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET renderer = 'native_video' WHERE id = ?`, grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET representation_truncated = ? WHERE id = ?`, true, grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET representation_source_bytes = 0, representation_truncated = ? WHERE id = ?`, false, grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET renderer = 'safe_raster', profile = 'raster_v1', representation_size = 2 WHERE id = ?`, grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET cookie_secret_hash = 'ABC' WHERE id = ?`, grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET lease_attempt_id = 'ABC' WHERE id = ?`, grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET idle_expires_at = ? WHERE id = ?`, now.Add(20*time.Minute), grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET reserved_bytes = max_cumulative_bytes + 1 WHERE id = ?`, grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_requests SET range_kind = 'normal' WHERE id = ?`, strings.Repeat("9", 32))
+	fixture.expectExecRejected(t, db, `INSERT INTO backup_asset_delivery_usage
+		(scope_kind, scope_id, window_started_at, window_expires_at, request_count,
+		 reserved_bytes, delivered_bytes, in_flight, version, updated_at)
+		VALUES ('user', '01', ?, ?, 0, 0, 0, 0, 1, ?)`, now, now.Add(time.Minute), now)
+	fixture.expectExecRejected(t, db, `INSERT INTO backup_asset_delivery_usage
+		(scope_kind, scope_id, window_started_at, window_expires_at, request_count,
+		 reserved_bytes, delivered_bytes, in_flight, version, updated_at)
+		VALUES ('provider', 'command', ?, ?, 0, 0, 0, 0, 1, ?)`, now, now.Add(time.Minute), now)
+}
+
+func (fixture migrationFixture) test066UsedDownIsAtomic(t *testing.T) {
+	testCases := []struct {
+		name string
+		seed func(*testing.T, *sql.DB)
+	}{
+		{name: "Grant", seed: func(t *testing.T, db *sql.DB) {
+			now := time.Date(2026, 7, 18, 5, 6, 7, 0, time.UTC)
+			pointID, catalogID, entryID := fixture.insertSearchMigrationCatalog(t, db, "a", now)
+			fixture.insertSearchMigrationUser(t, db, 6610, "grant-user", now)
+			leaseID := strings.Repeat("b", 32)
+			fixture.insertSearchMigrationLease(t, db, leaseID, pointID, "catalog_build", now)
+			fixture.insertContentMigrationGrant(t, db, 6610, strings.Repeat("c", 32), strings.Repeat("d", 32), pointID, catalogID, entryID, leaseID, now)
+		}},
+		{name: "Request", seed: func(t *testing.T, db *sql.DB) {
+			now := time.Date(2026, 7, 18, 5, 6, 7, 0, time.UTC)
+			pointID, catalogID, entryID := fixture.insertSearchMigrationCatalog(t, db, "e", now)
+			fixture.insertSearchMigrationUser(t, db, 6611, "request-user", now)
+			leaseID := strings.Repeat("f", 32)
+			fixture.insertSearchMigrationLease(t, db, leaseID, pointID, "catalog_build", now)
+			grantID := strings.Repeat("1", 32)
+			fixture.insertContentMigrationGrant(t, db, 6611, grantID, strings.Repeat("2", 32), pointID, catalogID, entryID, leaseID, now)
+			fixture.insertContentMigrationRequest(t, db, strings.Repeat("3", 32), grantID, now)
+		}},
+		{name: "Usage", seed: func(t *testing.T, db *sql.DB) {
+			now := time.Date(2026, 7, 18, 5, 6, 7, 0, time.UTC)
+			fixture.mustExec(t, db, `INSERT INTO backup_asset_delivery_usage
+				(scope_kind, scope_id, window_started_at, window_expires_at, request_count,
+				 reserved_bytes, delivered_bytes, in_flight, version, updated_at)
+				VALUES ('provider', 'rsync', ?, ?, 0, 0, 0, 0, 1, ?)`, now, now.Add(time.Minute), now)
+		}},
+		{name: "ContentLease", seed: func(t *testing.T, db *sql.DB) {
+			now := time.Date(2026, 7, 18, 5, 6, 7, 0, time.UTC)
+			pointID, _, _ := fixture.insertSearchMigrationCatalog(t, db, "4", now)
+			fixture.insertSearchMigrationLease(t, db, strings.Repeat("5", 32), pointID, "content_session", now)
+		}},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			migrator, db := fixture.openAt(t, backupAssetContentVersion)
+			testCase.seed(t, db)
+			before := fixture.captureContentMigrationSnapshot(t, migrator, db)
+			if err := fixture.executeContentDown(db); err == nil {
+				t.Fatal("000066 down unexpectedly succeeded while Child 8 state remains")
+			}
+			after := fixture.captureContentMigrationSnapshot(t, migrator, db)
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("rejected 000066 down changed migration state\nbefore=%+v\nafter=%+v", before, after)
+			}
+		})
+	}
+}
+
+func (fixture migrationFixture) test066SafeDrain(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetContentVersion)
+	now := time.Date(2026, 7, 18, 6, 7, 8, 0, time.UTC)
+	pointID, catalogID, entryID := fixture.insertSearchMigrationCatalog(t, db, "6", now)
+	fixture.insertSearchMigrationUser(t, db, 6620, "drain-user", now)
+	leaseID := strings.Repeat("7", 32)
+	fixture.insertSearchMigrationLease(t, db, leaseID, pointID, "content_session", now)
+	grantID := strings.Repeat("8", 32)
+	fixture.insertContentMigrationGrant(t, db, 6620, grantID, strings.Repeat("9", 32), pointID, catalogID, entryID, leaseID, now)
+	fixture.insertContentMigrationRequest(t, db, strings.Repeat("a", 32), grantID, now)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_delivery_usage
+		(scope_kind, scope_id, window_started_at, window_expires_at, request_count,
+		 reserved_bytes, delivered_bytes, in_flight, version, updated_at)
+		VALUES ('user', '6620', ?, ?, 1, 0, 0, 0, 1, ?)`, now, now.Add(time.Minute), now)
+
+	fixture.mustExec(t, db, `DELETE FROM backup_asset_delivery_requests`)
+	fixture.mustExec(t, db, `DELETE FROM backup_asset_delivery_grants`)
+	fixture.mustExec(t, db, `DELETE FROM backup_asset_delivery_usage`)
+	fixture.mustExec(t, db, `DELETE FROM recovery_point_leases WHERE holder_type = 'content_session'`)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("step %s drained 000066 down: %v", fixture.engine, err)
+	}
+	assertMigrationVersion(t, migrator, backupAssetSearchVersion)
+}
+
+func (fixture migrationFixture) test066Preserves065Defense(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetSearchVersion)
+	now := time.Date(2026, 7, 18, 7, 8, 9, 0, time.UTC)
+	pointID, catalogID, _ := fixture.insertSearchMigrationCatalog(t, db, "b", now)
+	fixture.insertSearchMigrationGeneration(t, db, strings.Repeat("c", 32), pointID, catalogID, 1, now)
+	migrateToBackupAssetVersion(t, migrator, backupAssetContentVersion)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("step %s 000066 down with Child 7 state: %v", fixture.engine, err)
+	}
+	assertMigrationVersion(t, migrator, backupAssetSearchVersion)
+	before := fixture.captureSearchMigrationSnapshot(t, migrator, db)
+	if err := fixture.executeSearchDown(db); err == nil {
+		t.Fatal("000065 down unexpectedly succeeded while Child 7 state remains after 000066")
+	}
+	after := fixture.captureSearchMigrationSnapshot(t, migrator, db)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("rejected 000065 down changed state after 000066\nbefore=%+v\nafter=%+v", before, after)
+	}
 }
 
 func (fixture migrationFixture) test065PristineDown(t *testing.T) {
@@ -786,6 +1031,110 @@ func (fixture migrationFixture) insertSearchMigrationUser(t *testing.T, db *sql.
 		(id, username, password_hash, role, totp_secret, totp_enabled, recovery_codes,
 		 token_version, onboarded, created_at, updated_at)
 		VALUES (?, ?, 'hash', 'operator', '', ?, '', 0, ?, ?, ?)`, id, username, false, true, now, now)
+}
+
+func (fixture migrationFixture) insertContentMigrationGrant(
+	t *testing.T,
+	db *sql.DB,
+	ownerUserID int64,
+	grantID, deliveryID, pointID, catalogID, entryID, leaseID string,
+	now time.Time,
+) {
+	t.Helper()
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_delivery_grants
+		(id, delivery_id, resource_kind, recovery_point_id, catalog_generation_id, entry_id,
+		 owner_user_id, session_jti, session_token_version, session_role, session_expires_at,
+		 action, method_policy, range_policy, renderer, profile, classification,
+		 classification_revision, classification_source_revision, provider_kind,
+			 source_fingerprint, entry_fingerprint, fingerprint_strength, representation_etag,
+			 source_size, source_modified_at, detected_media_type, representation_source_bytes,
+			 representation_size, representation_truncated, cookie_secret_hash,
+		 state, revocation_reason, lease_id, lease_attempt_id, lease_fence_token_hash,
+		 absolute_expires_at, idle_expires_at, idle_ttl_seconds, last_activity_at,
+		 max_bytes_per_request, max_cumulative_bytes, max_requests, max_in_flight,
+		 reserved_bytes, delivered_bytes, request_count, in_flight, version, audit_state,
+		 audit_range_count, audit_range_bytes, audit_request_count, audit_success_count,
+		 audit_blocked_count, audit_failure_count, audit_failure_code, audit_attempt_count,
+		 created_at, updated_at)
+		VALUES (?, ?, 'backup_asset', ?, ?, ?, ?, ?, 0, 'operator', ?,
+		 'preview', 'get_head', 'none', 'escaped_text', 'text_v1', 'non_secret',
+		 1, 1, 'rsync', 'content-source-v1', 'entry-v1', 'strong', '"content-etag"',
+			 1, ?, 'text/plain', 1, 1, ?, ?, 'active', '', ?, ?, ?, ?, ?, 60, ?,
+		 64, 256, 10, 2, 0, 0, 0, 0, 1, 'none', 0, 0, 0, 0, 0, 0, '', 0, ?, ?)`,
+		grantID, deliveryID, pointID, catalogID, entryID, ownerUserID, strings.Repeat("a", 32), now.Add(time.Hour),
+		now, false, strings.Repeat("b", 64), leaseID, strings.Repeat("c", 32), strings.Repeat("d", 64),
+		now.Add(10*time.Minute), now.Add(time.Minute), now, now, now)
+}
+
+func (fixture migrationFixture) insertContentMigrationRequest(t *testing.T, db *sql.DB, requestID, grantID string, now time.Time) {
+	t.Helper()
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_delivery_requests
+		(id, grant_id, method, range_kind, state, reserved_bytes, provider_bytes,
+		 response_bytes, http_status, failure_code, started_at, last_progress_at,
+		 finished_at, created_at, updated_at, version)
+		VALUES (?, ?, 'HEAD', 'full', 'succeeded', 0, 0, 0, 200, '', ?, ?, ?, ?, ?, 1)`,
+		requestID, grantID, now, now, now, now, now)
+}
+
+type contentMigrationSnapshot struct {
+	version     uint
+	dirty       bool
+	tables      map[string]bool
+	definitions map[string]string
+	indexes     map[string]string
+	rowCounts   map[string]int
+}
+
+func (fixture migrationFixture) captureContentMigrationSnapshot(t *testing.T, migrator *migrate.Migrate, db *sql.DB) contentMigrationSnapshot {
+	t.Helper()
+	version, dirty, err := migrator.Version()
+	if err != nil {
+		t.Fatalf("read %s content migration version: %v", fixture.engine, err)
+	}
+	tables := append([]string{"recovery_point_leases", "backup_asset_audit_events"}, backupAssetContentTables...)
+	snapshot := contentMigrationSnapshot{
+		version: version, dirty: dirty,
+		tables: make(map[string]bool, len(tables)), definitions: make(map[string]string, len(tables)),
+		indexes: map[string]string{
+			"idx_backup_asset_delivery_grants_delivery_state":    fixture.indexDefinition(t, db, "idx_backup_asset_delivery_grants_delivery_state"),
+			"idx_backup_asset_delivery_requests_grant_state":     fixture.indexDefinition(t, db, "idx_backup_asset_delivery_requests_grant_state"),
+			"idx_backup_asset_delivery_usage_window":             fixture.indexDefinition(t, db, "idx_backup_asset_delivery_usage_window"),
+			"idx_backup_asset_audit_events_content_grant_action": fixture.indexDefinition(t, db, "idx_backup_asset_audit_events_content_grant_action"),
+		},
+		rowCounts: make(map[string]int, len(tables)),
+	}
+	for _, table := range tables {
+		exists := databaseTableExists(t, db, fixture.engine, table)
+		snapshot.tables[table] = exists
+		if !exists {
+			continue
+		}
+		snapshot.definitions[table] = fixture.tableDefinition(t, db, table)
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
+			t.Fatalf("count %s rows in %s: %v", fixture.engine, table, err)
+		}
+		snapshot.rowCounts[table] = count
+	}
+	return snapshot
+}
+
+func (fixture migrationFixture) executeContentDown(db *sql.DB) error {
+	path := "migrations/sqlite/000066_backup_asset_content.down.sql"
+	migrationFS := sqliteMigrationsFS
+	if fixture.engine == "postgres" {
+		path = "migrations/postgres/000066_backup_asset_content.down.sql"
+		migrationFS = postgresMigrationsFS
+	}
+	script, err := migrationFS.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(string(script))
+	if err != nil {
+		_, _ = db.Exec("ROLLBACK")
+	}
+	return err
 }
 
 func (fixture migrationFixture) expectExecRejected(t *testing.T, db *sql.DB, query string, args ...any) {
@@ -2253,6 +2602,33 @@ func assertSQLiteTimeColumnsHaveNoDefault(t *testing.T, db *sql.DB, table string
 		if strings.Contains(strings.ToUpper(columnType), "DATE") && defaultValue.Valid {
 			t.Fatalf("%s.%s has DB-side time default %q", table, name, defaultValue.String)
 		}
+	}
+}
+
+func assertPostgresTableTimeColumnsHaveNoDefault(t *testing.T, db *sql.DB, table string) {
+	t.Helper()
+	rows, err := db.Query(`
+		SELECT column_name, column_default
+		FROM information_schema.columns
+		WHERE table_schema = current_schema()
+		  AND table_name = $1
+		  AND data_type IN ('timestamp with time zone', 'timestamp without time zone')`, table)
+	if err != nil {
+		t.Fatalf("inspect PostgreSQL time columns for %s: %v", table, err)
+	}
+	defer closeMigrationRows(t, rows)
+	for rows.Next() {
+		var column string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&column, &defaultValue); err != nil {
+			t.Fatalf("scan PostgreSQL time column for %s: %v", table, err)
+		}
+		if defaultValue.Valid {
+			t.Fatalf("PostgreSQL %s.%s has DB-side time default %q", table, column, defaultValue.String)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate PostgreSQL time columns for %s: %v", table, err)
 	}
 }
 

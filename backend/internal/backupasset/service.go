@@ -73,6 +73,63 @@ type OverlayConfig struct {
 	IdempotencyKeyMaxBytes int
 }
 
+type ContentScopeConfig struct {
+	MaxConcurrency int64
+	WindowBytes    int64
+	WindowRequests int64
+}
+
+type ContentMemoryConfig struct {
+	ObjectBytes   int64
+	UserBytes     int64
+	ProviderBytes int64
+	GlobalBytes   int64
+}
+
+type ContentCacheConfig struct {
+	Enabled       bool
+	Root          string
+	ChunkBytes    int64
+	ObjectBytes   int64
+	UserBytes     int64
+	ProviderBytes int64
+	GlobalBytes   int64
+	ObjectFiles   int64
+	UserFiles     int64
+	ProviderFiles int64
+	GlobalFiles   int64
+	IdleTTL       time.Duration
+	AbsoluteTTL   time.Duration
+}
+
+type ContentConfig struct {
+	Enabled                 bool
+	PreviewTTL              time.Duration
+	MediaTTL                time.Duration
+	IdleTTL                 time.Duration
+	WriteIdleTimeout        time.Duration
+	LeaseHeartbeat          time.Duration
+	TicketTimeout           time.Duration
+	RequestMaxBytes         int64
+	CumulativeMaxBytes      int64
+	MaxRequests             int64
+	GrantMaxInFlight        int64
+	RateWindow              time.Duration
+	User                    ContentScopeConfig
+	Provider                ContentScopeConfig
+	Global                  ContentScopeConfig
+	ClassificationScanBytes int64
+	TextPreviewBytes        int64
+	HexPreviewBytes         int64
+	RasterMaxPixels         int64
+	Memory                  ContentMemoryConfig
+	Cache                   ContentCacheConfig
+	ReconcileInterval       time.Duration
+	ReconcileBatchSize      int
+	AuditBacklogMax         int64
+	AllowInsecureLoopback   bool
+}
+
 func NewFoundationService(reader SettingsReader) *FoundationService {
 	return &FoundationService{settings: reader}
 }
@@ -196,24 +253,9 @@ func (service *FoundationService) CatalogConfig() (CatalogConfig, error) {
 }
 
 func (service *FoundationService) SearchOverlayConfig() (SearchConfig, OverlayConfig, error) {
-	if service == nil || service.settings == nil {
-		return SearchConfig{}, OverlayConfig{}, fmt.Errorf("%w: settings service is unavailable", ErrInvalidState)
-	}
-	reader, ok := service.settings.(BackupAssetSettingsSnapshotReader)
-	if !ok {
-		return SearchConfig{}, OverlayConfig{}, fmt.Errorf("%w: atomic backup asset settings snapshot is unavailable", ErrInvalidState)
-	}
-	values, err := reader.BackupAssetSettingsSnapshot()
+	values, err := service.atomicFoundationValues()
 	if err != nil {
-		return SearchConfig{}, OverlayConfig{}, fmt.Errorf("%w: read backup asset settings snapshot: %v", ErrInvalidState, err)
-	}
-	for _, key := range settings.BackupAssetFoundationSettingKeys() {
-		if _, exists := values[key]; !exists {
-			return SearchConfig{}, OverlayConfig{}, fmt.Errorf("%w: incomplete backup asset settings snapshot", ErrInvalidState)
-		}
-	}
-	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
-		return SearchConfig{}, OverlayConfig{}, fmt.Errorf("%w: %v", ErrInvalidState, err)
+		return SearchConfig{}, OverlayConfig{}, err
 	}
 
 	enabled, err := parseFoundationBool(values, "backup_assets.enabled")
@@ -349,6 +391,104 @@ func (service *FoundationService) SearchOverlayConfig() (SearchConfig, OverlayCo
 		IdempotencyTTL: idempotencyTTL, IdempotencyKeyMaxBytes: idempotencyKeyMaxBytes,
 	}
 	return searchConfig, overlayConfig, nil
+}
+
+func (service *FoundationService) ContentConfig() (ContentConfig, error) {
+	values, err := service.atomicFoundationValues()
+	if err != nil {
+		return ContentConfig{}, err
+	}
+	result := ContentConfig{}
+	if result.Enabled, err = parseFoundationBool(values, "backup_assets.enabled"); err != nil {
+		return ContentConfig{}, err
+	}
+	for key, target := range map[string]*time.Duration{
+		"backup_assets.content_preview_ttl":        &result.PreviewTTL,
+		"backup_assets.content_media_ttl":          &result.MediaTTL,
+		"backup_assets.content_idle_ttl":           &result.IdleTTL,
+		"backup_assets.content_write_idle_timeout": &result.WriteIdleTimeout,
+		"backup_assets.lease_heartbeat":            &result.LeaseHeartbeat,
+		"backup_assets.content_ticket_timeout":     &result.TicketTimeout,
+		"backup_assets.content_rate_window":        &result.RateWindow,
+		"backup_assets.content_cache_idle_ttl":     &result.Cache.IdleTTL,
+		"backup_assets.content_cache_absolute_ttl": &result.Cache.AbsoluteTTL,
+		"backup_assets.content_reconcile_interval": &result.ReconcileInterval,
+	} {
+		if *target, err = parseFoundationDuration(values, key); err != nil {
+			return ContentConfig{}, err
+		}
+	}
+	for key, target := range map[string]*int64{
+		"backup_assets.content_request_max_bytes":         &result.RequestMaxBytes,
+		"backup_assets.content_cumulative_max_bytes":      &result.CumulativeMaxBytes,
+		"backup_assets.content_max_requests":              &result.MaxRequests,
+		"backup_assets.content_grant_max_in_flight":       &result.GrantMaxInFlight,
+		"backup_assets.content_user_max_concurrency":      &result.User.MaxConcurrency,
+		"backup_assets.content_provider_max_concurrency":  &result.Provider.MaxConcurrency,
+		"backup_assets.content_global_max_concurrency":    &result.Global.MaxConcurrency,
+		"backup_assets.content_user_window_bytes":         &result.User.WindowBytes,
+		"backup_assets.content_provider_window_bytes":     &result.Provider.WindowBytes,
+		"backup_assets.content_global_window_bytes":       &result.Global.WindowBytes,
+		"backup_assets.content_user_window_requests":      &result.User.WindowRequests,
+		"backup_assets.content_provider_window_requests":  &result.Provider.WindowRequests,
+		"backup_assets.content_global_window_requests":    &result.Global.WindowRequests,
+		"backup_assets.content_classification_scan_bytes": &result.ClassificationScanBytes,
+		"backup_assets.content_text_preview_bytes":        &result.TextPreviewBytes,
+		"backup_assets.content_hex_preview_bytes":         &result.HexPreviewBytes,
+		"backup_assets.content_raster_max_pixels":         &result.RasterMaxPixels,
+		"backup_assets.content_memory_object_bytes":       &result.Memory.ObjectBytes,
+		"backup_assets.content_memory_user_bytes":         &result.Memory.UserBytes,
+		"backup_assets.content_memory_provider_bytes":     &result.Memory.ProviderBytes,
+		"backup_assets.content_memory_global_bytes":       &result.Memory.GlobalBytes,
+		"backup_assets.content_cache_chunk_bytes":         &result.Cache.ChunkBytes,
+		"backup_assets.content_cache_object_bytes":        &result.Cache.ObjectBytes,
+		"backup_assets.content_cache_user_bytes":          &result.Cache.UserBytes,
+		"backup_assets.content_cache_provider_bytes":      &result.Cache.ProviderBytes,
+		"backup_assets.content_cache_global_bytes":        &result.Cache.GlobalBytes,
+		"backup_assets.content_cache_object_files":        &result.Cache.ObjectFiles,
+		"backup_assets.content_cache_user_files":          &result.Cache.UserFiles,
+		"backup_assets.content_cache_provider_files":      &result.Cache.ProviderFiles,
+		"backup_assets.content_cache_global_files":        &result.Cache.GlobalFiles,
+		"backup_assets.content_audit_backlog_max":         &result.AuditBacklogMax,
+	} {
+		if *target, err = parseFoundationInt64(values, key); err != nil {
+			return ContentConfig{}, err
+		}
+	}
+	if result.ReconcileBatchSize, err = parseFoundationInt(values, "backup_assets.content_reconcile_batch_size"); err != nil {
+		return ContentConfig{}, err
+	}
+	if result.Cache.Enabled, err = parseFoundationBool(values, "backup_assets.content_cache_enabled"); err != nil {
+		return ContentConfig{}, err
+	}
+	result.Cache.Root = strings.TrimSpace(values["backup_assets.content_cache_root"])
+	if result.AllowInsecureLoopback, err = parseFoundationBool(values, "backup_assets.content_allow_insecure_loopback"); err != nil {
+		return ContentConfig{}, err
+	}
+	return result, nil
+}
+
+func (service *FoundationService) atomicFoundationValues() (map[string]string, error) {
+	if service == nil || service.settings == nil {
+		return nil, fmt.Errorf("%w: settings service is unavailable", ErrInvalidState)
+	}
+	reader, ok := service.settings.(BackupAssetSettingsSnapshotReader)
+	if !ok {
+		return nil, fmt.Errorf("%w: atomic backup asset settings snapshot is unavailable", ErrInvalidState)
+	}
+	values, err := reader.BackupAssetSettingsSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("%w: read backup asset settings snapshot: %v", ErrInvalidState, err)
+	}
+	for _, key := range settings.BackupAssetFoundationSettingKeys() {
+		if _, exists := values[key]; !exists {
+			return nil, fmt.Errorf("%w: incomplete backup asset settings snapshot", ErrInvalidState)
+		}
+	}
+	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidState, err)
+	}
+	return values, nil
 }
 
 func (service *FoundationService) SearchConfig() (SearchConfig, error) {
