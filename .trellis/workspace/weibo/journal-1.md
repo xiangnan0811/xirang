@@ -958,3 +958,37 @@ Branch delivery remains pending until the single PR is green and merged.
 ### Next Steps
 
 - None - task complete
+
+
+## Session 25: Child 10 Worker protocol and derived store
+
+**Date**: 2026-07-20
+**Task**: Child 10 Worker protocol and derived store
+**Branch**: `codex/backup-assets-worker-protocol`
+
+### Summary
+
+Implemented paired migration 067, persistent processing jobs and closed states, worker and RecoveryPoint fencing, one-use Broker/Sink grants, atomic derived manifests, independent encrypted Derived Store, search-first revocation, local/mTLS protocol, and protocol-only fake worker. Preserved backup_assets.enabled=false, typed Command Provider unsupported behavior, reserved migrations 068-071, and all Child 11/UI/release boundaries. Verified SQLite and real PostgreSQL parity, race suites including count=3, full backend/frontend make check, lint/build/audit/vulnerability/scripts, deterministic Swagger, exact 82-path manifest, and Trellis/scope/contradiction/diff gates. Completed the backend database processing specification before archiving the child.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `795b2c1` | (see git log) |
+| `1c21ff7` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
