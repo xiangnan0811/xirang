@@ -3,6 +3,7 @@ package content
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -49,64 +50,82 @@ func TestContentAuditAcceptsUniqueConflictOnlyForExactPersistedProjection(t *tes
 	}
 }
 
-func TestContentAuditAggregatesConcurrentRangesAndFlushesOneInternalGrantSummary(t *testing.T) {
-	db := newContentAuditTestDB(t)
-	grant := testBudgetGrant(time.Date(2026, 7, 18, 14, 0, 0, 0, time.UTC))
-	grant.AuditState = "none"
-	if err := db.Create(&grant).Error; err != nil {
-		t.Fatal(err)
-	}
-	writer := &contentFoundationAuditWriterFake{}
-	service, err := NewContentAuditService(ContentAuditDependencies{DB: db, Writer: writer, Now: time.Now, BacklogMax: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestContentAuditAggregatesRequestLedgerAndFlushesOneInternalGrantSummary(t *testing.T) {
+	harness := newBudgetTestHarness(t, func(grant *model.BackupAssetDeliveryGrant) {
+		grant.MaxBytesPerRequest = 1_000
+		grant.MaxCumulativeBytes = 1_000
+		grant.MaxRequests = 30
+	}, nil)
 	const requests = 20
-	start := make(chan struct{})
-	errs := make(chan error, requests)
 	for index := 0; index < requests; index++ {
-		go func(index int) {
-			<-start
-			outcome := backupasset.AuditOutcomeSuccess
-			if index%5 == 0 {
-				outcome = backupasset.AuditOutcomeBlocked
+		requestID := fmt.Sprintf("%032x", 500+index)
+		if index%5 == 0 {
+			if err := harness.service.RecordBlocked(context.Background(), BlockedRequest{
+				RequestID: requestID, GrantID: harness.grant.ID, Method: "GET", Status: 416,
+				FailureCode: RequestFailureInvalidRange, RangeRequested: true,
+			}); err != nil {
+				t.Fatal(err)
 			}
-			errs <- service.RecordRead(context.Background(), ReadAuditSummary{
-				GrantID: grant.ID, Outcome: outcome, Bytes: 10, Range: true,
-			})
-		}(index)
-	}
-	close(start)
-	for range requests {
-		if err := <-errs; err != nil {
+			continue
+		}
+		start, end := int64(index*10), int64(index*10+10)
+		reservation, err := harness.service.Reserve(context.Background(), ReservationIntent{
+			RequestID: requestID, GrantID: harness.grant.ID, Method: "GET",
+			Range: HTTPRange{
+				Kind: HTTPRangeNormal, Start: &start, EndExclusive: &end,
+				Offset: start, Length: 10,
+			},
+			ReservedBytes: 10,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := harness.service.Finalize(context.Background(), FinalizeIntent{
+			RequestID: reservation.RequestID, ExpectedRequestVersion: reservation.RequestVersion,
+			State: RequestSucceeded, HTTPStatus: 206, ProviderBytes: 10, ResponseBytes: 10, EvidenceKnown: true,
+		}); err != nil {
 			t.Fatal(err)
 		}
 	}
+	now := harness.clock.Now()
+	if err := harness.db.Model(&model.BackupAssetDeliveryGrant{}).Where("id = ?", harness.grant.ID).
+		Updates(map[string]any{
+			"state": DeliveryRevoked, "revocation_reason": "shutdown", "revoked_at": now,
+		}).Error; err != nil {
+		t.Fatal(err)
+	}
+	writer := &contentFoundationAuditWriterFake{}
+	service, err := NewContentAuditService(ContentAuditDependencies{
+		DB: harness.db, Writer: writer, Now: harness.clock.Now, BacklogMax: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	var aggregated model.BackupAssetDeliveryGrant
-	if err := db.First(&aggregated, "id = ?", grant.ID).Error; err != nil {
+	if err := harness.db.First(&aggregated, "id = ?", harness.grant.ID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if aggregated.AuditState != "pending" || aggregated.AuditRequestCount != requests ||
-		aggregated.AuditRangeCount != requests || aggregated.AuditRangeBytes != requests*10 ||
+		aggregated.AuditRangeCount != requests || aggregated.AuditRangeBytes != 16*10 ||
 		aggregated.AuditSuccessCount != 16 || aggregated.AuditBlockedCount != 4 {
 		t.Fatalf("aggregate=%+v", aggregated)
 	}
-	if err := service.FlushGrant(context.Background(), grant.ID); err != nil {
+	if err := service.FlushGrant(context.Background(), harness.grant.ID); err != nil {
 		t.Fatal(err)
 	}
 	if len(writer.inputs) != 1 {
 		t.Fatalf("audit writes=%d", len(writer.inputs))
 	}
 	written := writer.inputs[0]
-	if written.GrantID != grant.ID || written.Action != backupasset.AuditActionPreviewRead ||
-		written.Range.Count != requests || written.Range.Bytes != requests*10 ||
-		written.ByteCount != requests*10 || written.Outcome != backupasset.AuditOutcomeBlocked {
+	if written.GrantID != harness.grant.ID || written.Action != backupasset.AuditActionPreviewRead ||
+		written.Range.Count != requests || written.Range.Bytes != 16*10 ||
+		written.ByteCount != 16*10 || written.Outcome != backupasset.AuditOutcomeBlocked {
 		t.Fatalf("audit input=%+v", written)
 	}
 	if strings.Contains(written.Fields[backupasset.AuditFieldSource].(string), "delivery") {
 		t.Fatalf("public delivery fact entered audit: %+v", written.Fields)
 	}
-	if err := db.First(&aggregated, "id = ?", grant.ID).Error; err != nil || aggregated.AuditState != "emitted" {
+	if err := harness.db.First(&aggregated, "id = ?", harness.grant.ID).Error; err != nil || aggregated.AuditState != "emitted" {
 		t.Fatalf("flushed grant=%+v err=%v", aggregated, err)
 	}
 }
@@ -119,8 +138,23 @@ func TestContentAuditFailureQueuesBoundedRetryAndBacklogBlocksNewTickets(t *test
 		grant.ID = strings.Repeat(string(rune('a'+index)), 32)
 		grant.DeliveryID = strings.Repeat(string(rune('c'+index)), 32)
 		grant.LeaseID = strings.Repeat(string(rune('e'+index)), 32)
+		grant.State = string(DeliveryRevoked)
+		grant.RevocationReason = "shutdown"
+		grant.RevokedAt = &now
 		grant.AuditState = "pending"
+		grant.RequestCount = 1
+		grant.AuditRequestCount = 1
+		grant.AuditSuccessCount = 1
 		if err := db.Create(&grant).Error; err != nil {
+			t.Fatal(err)
+		}
+		request := model.BackupAssetDeliveryRequest{
+			ID: fmt.Sprintf("%032x", 700+index), GrantID: grant.ID, Method: "GET",
+			RangeKind: string(HTTPRangeFull), State: string(RequestSucceeded), HTTPStatus: 200,
+			StartedAt: now, LastProgressAt: now, FinishedAt: &now,
+			CreatedAt: now, UpdatedAt: now, Version: 1,
+		}
+		if err := db.Create(&request).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -151,6 +185,138 @@ func TestContentAuditFailureQueuesBoundedRetryAndBacklogBlocksNewTickets(t *test
 	}
 }
 
+func TestContentAuditDefersActiveGrantFinalSummary(t *testing.T) {
+	db := newContentAuditTestDB(t)
+	grant := testBudgetGrant(time.Date(2026, 7, 18, 16, 0, 0, 0, time.UTC))
+	grant.AuditState = "pending"
+	grant.RequestCount = 1
+	grant.AuditRequestCount = 1
+	grant.AuditSuccessCount = 1
+	if err := db.Create(&grant).Error; err != nil {
+		t.Fatal(err)
+	}
+	writer := &contentFoundationAuditWriterFake{}
+	service, err := NewContentAuditService(ContentAuditDependencies{
+		DB: db, Writer: writer, Now: time.Now, BacklogMax: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.FlushGrant(context.Background(), grant.ID); err == nil {
+		t.Fatal("active grant final audit unexpectedly flushed")
+	}
+	if len(writer.inputs) != 0 {
+		t.Fatalf("active grant audit writes=%d", len(writer.inputs))
+	}
+}
+
+func TestContentAuditFullReadReportsTotalBytesOutsideRangeSummary(t *testing.T) {
+	harness := newBudgetTestHarness(t, nil, nil)
+	reservation := harness.reserve(t, strings.Repeat("9", 32), 40)
+	if _, err := harness.service.Finalize(context.Background(), FinalizeIntent{
+		RequestID: reservation.RequestID, ExpectedRequestVersion: reservation.RequestVersion,
+		State: RequestSucceeded, HTTPStatus: 200, ProviderBytes: 30, ResponseBytes: 25, EvidenceKnown: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := harness.clock.Now()
+	if err := harness.db.Model(&model.BackupAssetDeliveryGrant{}).Where("id = ?", harness.grant.ID).
+		Updates(map[string]any{
+			"state": DeliveryRevoked, "revocation_reason": "shutdown", "revoked_at": now,
+		}).Error; err != nil {
+		t.Fatal(err)
+	}
+	writer := &contentFoundationAuditWriterFake{}
+	service, err := NewContentAuditService(ContentAuditDependencies{
+		DB: harness.db, Writer: writer, Now: harness.clock.Now, BacklogMax: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.FlushGrant(context.Background(), harness.grant.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.inputs) != 1 || writer.inputs[0].ByteCount != 25 ||
+		writer.inputs[0].Range.Count != 0 || writer.inputs[0].Range.Bytes != 0 {
+		t.Fatalf("full read audit=%+v", writer.inputs)
+	}
+}
+
+func TestContentAuditReturnsRetryPersistenceFailure(t *testing.T) {
+	harness := newBudgetTestHarness(t, nil, nil)
+	reservation := harness.reserve(t, strings.Repeat("9", 32), 10)
+	if _, err := harness.service.Finalize(context.Background(), FinalizeIntent{
+		RequestID: reservation.RequestID, ExpectedRequestVersion: reservation.RequestVersion,
+		State: RequestSucceeded, HTTPStatus: 200, ProviderBytes: 10, ResponseBytes: 10, EvidenceKnown: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := harness.clock.Now()
+	if err := harness.db.Model(&model.BackupAssetDeliveryGrant{}).Where("id = ?", harness.grant.ID).
+		Updates(map[string]any{
+			"state": DeliveryRevoked, "revocation_reason": "shutdown", "revoked_at": now,
+		}).Error; err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewContentAuditService(ContentAuditDependencies{
+		DB: harness.db, Writer: &contentFoundationAuditWriterFake{err: errors.New("audit unavailable")},
+		Now: harness.clock.Now, BacklogMax: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryPersistenceErr := errors.New("retry persistence unavailable")
+	if err := harness.db.Callback().Update().Before("gorm:update").Register(
+		"test:block_content_audit_retry", func(tx *gorm.DB) { _ = tx.AddError(retryPersistenceErr) },
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.FlushGrant(context.Background(), harness.grant.ID); !errors.Is(err, retryPersistenceErr) {
+		t.Fatalf("retry persistence error=%v", err)
+	}
+}
+
+func TestContentAuditStaleRetryCannotReopenEmittedSummary(t *testing.T) {
+	db := newContentAuditTestDB(t)
+	now := time.Date(2026, 7, 19, 10, 0, 0, 0, time.UTC)
+	grant := testBudgetGrant(now)
+	grant.State = string(DeliveryRevoked)
+	grant.RevocationReason = "shutdown"
+	grant.RevokedAt = &now
+	grant.AuditState = "pending"
+	grant.RequestCount = 1
+	grant.AuditRequestCount = 1
+	grant.AuditSuccessCount = 1
+	if err := db.Create(&grant).Error; err != nil {
+		t.Fatal(err)
+	}
+	var stale model.BackupAssetDeliveryGrant
+	if err := db.First(&stale, "id = ?", grant.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.BackupAssetDeliveryGrant{}).Where("id = ?", grant.ID).Updates(map[string]any{
+		"audit_state": "emitted", "version": gorm.Expr("version + 1"), "updated_at": now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewContentAuditService(ContentAuditDependencies{
+		DB: db, Writer: &contentFoundationAuditWriterFake{}, Now: func() time.Time { return now }, BacklogMax: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.queueAuditRetry(context.Background(), stale); !errors.Is(err, ErrContentAuditUnavailable) {
+		t.Fatalf("stale retry error=%v", err)
+	}
+	var stored model.BackupAssetDeliveryGrant
+	if err := db.First(&stored, "id = ?", grant.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.AuditState != "emitted" || stored.AuditAttemptCount != 0 || stored.AuditNextAttemptAt != nil {
+		t.Fatalf("stale retry reopened emitted audit: %+v", stored)
+	}
+}
+
 type contentFoundationAuditWriterFake struct {
 	mu     sync.Mutex
 	inputs []backupasset.AuditEventInput
@@ -171,7 +337,9 @@ func newContentAuditTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.BackupAssetAuditEvent{}, &model.BackupAssetDeliveryGrant{}); err != nil {
+	if err := db.AutoMigrate(
+		&model.BackupAssetAuditEvent{}, &model.BackupAssetDeliveryGrant{}, &model.BackupAssetDeliveryRequest{},
+	); err != nil {
 		t.Fatal(err)
 	}
 	return db

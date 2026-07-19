@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
@@ -70,6 +71,7 @@ func (reconciler *Reconciler) Startup(ctx context.Context) error {
 	ctx = nonNilContext(ctx)
 	err := errors.Join(
 		reconciler.reconcileReservations(ctx),
+		reconciler.releaseTerminalLeases(ctx),
 		reconciler.revokeAndReleaseGrants(ctx),
 		reconciler.flushPendingAudit(ctx),
 	)
@@ -85,6 +87,7 @@ func (reconciler *Reconciler) Reconcile(ctx context.Context) error {
 	err := errors.Join(
 		reconciler.expireDueGrants(ctx),
 		reconciler.reconcileExpiredLeases(ctx),
+		reconciler.releaseTerminalLeases(ctx),
 		reconciler.flushPendingAudit(ctx),
 	)
 	reconciler.observeReconciliationAge(ctx)
@@ -242,7 +245,11 @@ func (reconciler *Reconciler) revokeAndReleaseGrants(ctx context.Context) error 
 				stageErrors = append(stageErrors, fmt.Errorf("revoke stale grant: %w", result.Error))
 			} else if result.RowsAffected == 1 {
 				cleanup, err := TakeoverContentLeaseForCleanup(ctx, reconciler.lease, grant.LeaseID, grant.ID)
-				if err != nil {
+				if errors.Is(err, backupasset.ErrLeaseHeld) || errors.Is(err, backupasset.ErrLeaseDeadlineExceeded) {
+					// A just-crashed process can still own a valid short fence. The
+					// revoked grant makes it non-authorizing; periodic reconciliation
+					// retries after the short lease expires.
+				} else if err != nil {
 					stageErrors = append(stageErrors, fmt.Errorf("take over stale content lease: %w", err))
 				} else if err := cleanup.Release(ctx); err != nil {
 					stageErrors = append(stageErrors, fmt.Errorf("release stale content lease: %w", err))
@@ -257,13 +264,67 @@ func (reconciler *Reconciler) revokeAndReleaseGrants(ctx context.Context) error 
 	return errors.Join(stageErrors...)
 }
 
-func (reconciler *Reconciler) flushPendingAudit(ctx context.Context) error {
+func (reconciler *Reconciler) releaseTerminalLeases(ctx context.Context) error {
+	type terminalLease struct {
+		GrantID string `gorm:"column:grant_id"`
+		LeaseID string `gorm:"column:lease_id"`
+	}
 	var stageErrors []error
 	cursor := ""
 	for {
+		var leases []terminalLease
+		query := reconciler.db.WithContext(ctx).
+			Table("backup_asset_delivery_grants AS content_grants").
+			Select("content_grants.id AS grant_id, content_grants.lease_id AS lease_id").
+			Joins("JOIN recovery_point_leases AS content_leases ON content_leases.id = content_grants.lease_id").
+			Where("content_grants.state IN ?", []string{
+				string(DeliveryRevoked), string(DeliveryExpired), string(DeliveryClosed),
+			}).
+			Where("content_leases.holder_type = ? AND content_leases.status = ?",
+				backupasset.LeaseHolderContentSession, backupasset.LeaseActive)
+		if cursor != "" {
+			query = query.Where("content_grants.id > ?", cursor)
+		}
+		if err := query.Order("content_grants.id ASC").Limit(reconciler.batchSize).Scan(&leases).Error; err != nil {
+			stageErrors = append(stageErrors, fmt.Errorf("load terminal content leases: %w", err))
+			break
+		}
+		if len(leases) == 0 {
+			break
+		}
+		for _, lease := range leases {
+			cleanup, err := TakeoverContentLeaseForCleanup(ctx, reconciler.lease, lease.LeaseID, lease.GrantID)
+			if errors.Is(err, backupasset.ErrLeaseHeld) || errors.Is(err, backupasset.ErrLeaseDeadlineExceeded) {
+				// Safely fenced and retried by a later pass or expired by the
+				// foundation lease reconciler.
+			} else if err != nil {
+				stageErrors = append(stageErrors, fmt.Errorf("take over terminal content lease: %w", err))
+			} else if cleanup == nil {
+				stageErrors = append(stageErrors, ErrInvalidContentLease)
+			} else if releaseErr := cleanup.Release(ctx); releaseErr != nil {
+				stageErrors = append(stageErrors, fmt.Errorf("release terminal content lease: %w", releaseErr))
+			}
+			cursor = lease.GrantID
+		}
+		if len(leases) < reconciler.batchSize {
+			break
+		}
+	}
+	return errors.Join(stageErrors...)
+}
+
+func (reconciler *Reconciler) flushPendingAudit(ctx context.Context) error {
+	var stageErrors []error
+	cursor := ""
+	now := reconciler.now().UTC()
+	for {
 		var grantIDs []string
 		query := reconciler.db.WithContext(ctx).Model(&model.BackupAssetDeliveryGrant{}).
-			Where("audit_state IN ?", []string{"pending", "retry_wait", "failed"})
+			Where("state IN ? AND in_flight = 0", []string{
+				string(DeliveryRevoked), string(DeliveryExpired), string(DeliveryClosed),
+			}).
+			Where("audit_state = ? OR (audit_state IN ? AND (audit_next_attempt_at IS NULL OR audit_next_attempt_at <= ?))",
+				"pending", []string{"retry_wait", "failed"}, now)
 		if cursor != "" {
 			query = query.Where("id > ?", cursor)
 		}

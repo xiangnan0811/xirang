@@ -139,6 +139,29 @@ CREATE TABLE backup_asset_delivery_grants (
         AND audit_failure_count >= 0
         AND audit_failure_code IN ('', 'audit_write_failed', 'audit_backlog_full', 'reconciliation_failed')
         AND audit_attempt_count >= 0
+        AND (
+            (audit_state = 'none'
+                AND audit_range_count = 0 AND audit_range_bytes = 0 AND audit_request_count = 0
+                AND audit_success_count = 0 AND audit_blocked_count = 0 AND audit_failure_count = 0
+                AND audit_failure_code = '' AND audit_attempt_count = 0 AND audit_next_attempt_at IS NULL)
+            OR (
+                audit_state IN ('pending', 'emitted', 'retry_wait', 'failed')
+                AND audit_request_count > 0
+                AND audit_request_count <= request_count
+                AND audit_range_count <= audit_request_count
+                AND (audit_range_count > 0 OR audit_range_bytes = 0)
+                AND audit_range_bytes <= delivered_bytes
+                AND audit_success_count + audit_blocked_count + audit_failure_count = audit_request_count
+                AND (
+                    (audit_state = 'pending'
+                        AND audit_failure_code = '' AND audit_attempt_count = 0 AND audit_next_attempt_at IS NULL)
+                    OR (audit_state = 'emitted'
+                        AND audit_failure_code = '' AND audit_next_attempt_at IS NULL)
+                    OR (audit_state IN ('retry_wait', 'failed')
+                        AND audit_failure_code <> '' AND audit_attempt_count > 0 AND audit_next_attempt_at IS NOT NULL)
+                )
+            )
+        )
     ),
     CONSTRAINT backup_asset_delivery_grants_renderer_product_check CHECK (
         (renderer = 'escaped_text' AND profile = 'text_v1' AND range_policy = 'none')

@@ -597,6 +597,19 @@ func (fixture migrationFixture) test066ValidAndInvalidRows(t *testing.T) {
 	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET representation_truncated = ? WHERE id = ?`, true, grantID)
 	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET representation_source_bytes = 0, representation_truncated = ? WHERE id = ?`, false, grantID)
 	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET renderer = 'safe_raster', profile = 'raster_v1', representation_size = 2 WHERE id = ?`, grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET audit_request_count = 1 WHERE id = ?`, grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET audit_state = 'pending' WHERE id = ?`, grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET audit_state = 'pending',
+		audit_request_count = 1, audit_success_count = 1 WHERE id = ?`, grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET audit_state = 'retry_wait',
+		audit_request_count = 1, audit_failure_count = 1, audit_failure_code = 'audit_write_failed',
+		audit_attempt_count = 1 WHERE id = ?`, grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET request_count = 1,
+		delivered_bytes = 1, audit_state = 'pending', audit_request_count = 1,
+		audit_success_count = 1, audit_range_bytes = 1 WHERE id = ?`, grantID)
+	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET request_count = 1,
+		audit_state = 'pending', audit_request_count = 1, audit_success_count = 1,
+		audit_range_count = 1, audit_range_bytes = 1 WHERE id = ?`, grantID)
 	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET cookie_secret_hash = 'ABC' WHERE id = ?`, grantID)
 	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET lease_attempt_id = 'ABC' WHERE id = ?`, grantID)
 	fixture.expectExecRejected(t, db, `UPDATE backup_asset_delivery_grants SET idle_expires_at = ? WHERE id = ?`, now.Add(20*time.Minute), grantID)
@@ -610,6 +623,13 @@ func (fixture migrationFixture) test066ValidAndInvalidRows(t *testing.T) {
 		(scope_kind, scope_id, window_started_at, window_expires_at, request_count,
 		 reserved_bytes, delivered_bytes, in_flight, version, updated_at)
 		VALUES ('provider', 'command', ?, ?, 0, 0, 0, 0, 1, ?)`, now, now.Add(time.Minute), now)
+	fixture.mustExec(t, db, `UPDATE backup_asset_delivery_grants SET request_count = 1, audit_state = 'pending',
+		audit_request_count = 1, audit_success_count = 1 WHERE id = ?`, grantID)
+	fixture.mustExec(t, db, `UPDATE backup_asset_delivery_grants SET audit_state = 'retry_wait',
+		audit_failure_code = 'audit_write_failed', audit_attempt_count = 1,
+		audit_next_attempt_at = ? WHERE id = ?`, now.Add(time.Minute), grantID)
+	fixture.mustExec(t, db, `UPDATE backup_asset_delivery_grants SET audit_state = 'emitted',
+		audit_failure_code = '', audit_next_attempt_at = NULL WHERE id = ?`, grantID)
 }
 
 func (fixture migrationFixture) test066UsedDownIsAtomic(t *testing.T) {

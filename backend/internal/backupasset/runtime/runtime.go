@@ -408,7 +408,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 			return enabled && contentReady.Load(), enabledErr
 		},
 		Authorize: contentAuthorizer, Session: contentSession, Lease: lease, Source: repositoryService,
-		Audit: contentAudit, ReadAudit: contentAudit, Budget: contentBudget, Metrics: contentMetrics,
+		Audit: contentAudit, Budget: contentBudget, Metrics: contentMetrics,
 		Config: func(context.Context) (content.BrokerConfig, error) {
 			config, configErr := foundation.ContentConfig()
 			if configErr != nil {
@@ -934,6 +934,10 @@ type managedContentRuntime struct {
 	mu            sync.Mutex
 	cache         *content.AuthenticatedCache
 	cacheAttached bool
+	stopped       atomic.Bool
+	runMu         sync.Mutex
+	runCancel     context.CancelFunc
+	runDone       chan struct{}
 }
 
 func (runtime *managedContentRuntime) Startup(ctx context.Context) error {
@@ -1035,7 +1039,30 @@ func (runtime *managedContentRuntime) Run(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	runtime.runMu.Lock()
+	if runtime.stopped.Load() || runtime.runDone != nil {
+		runtime.runMu.Unlock()
+		return
+	}
+	runCtx, cancelRun := context.WithCancel(ctx)
+	done := make(chan struct{})
+	runtime.runCancel = cancelRun
+	runtime.runDone = done
+	runtime.runMu.Unlock()
+	defer func() {
+		cancelRun()
+		runtime.runMu.Lock()
+		if runtime.runDone == done {
+			runtime.runCancel = nil
+			runtime.runDone = nil
+			close(done)
+		}
+		runtime.runMu.Unlock()
+	}()
 	for {
+		if runtime.stopped.Load() {
+			return
+		}
 		config, err := runtime.foundation.ContentConfig()
 		interval := time.Minute
 		if err == nil && config.ReconcileInterval > 0 {
@@ -1043,41 +1070,69 @@ func (runtime *managedContentRuntime) Run(ctx context.Context) {
 		}
 		timer := time.NewTimer(interval)
 		select {
-		case <-ctx.Done():
+		case <-runCtx.Done():
 			if !timer.Stop() {
 				<-timer.C
 			}
 			return
 		case <-timer.C:
 		}
-		if !runtime.ready.Load() {
-			continue
+		stateErr, cacheErr := runtime.reconcileCycle(runCtx)
+		if stateErr != nil && !errors.Is(stateErr, context.Canceled) {
+			logger.Module("backup_asset_content").Warn().Str("stage", "state_reconcile").Msg("备份内容状态对账失败")
 		}
-		if runtime.reconciler != nil {
-			if err := runtime.reconciler.Reconcile(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				logger.Module("backup_asset_content").Warn().Str("stage", "state_reconcile").Msg("备份内容状态对账失败")
-			}
-		}
-		runtime.mu.Lock()
-		cache := runtime.cache
-		runtime.mu.Unlock()
-		if cache != nil {
-			if err := cache.Reconcile(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				logger.Module("backup_asset_content").Warn().Str("stage", "cache_reconcile").Msg("备份内容缓存对账失败")
-			}
+		if cacheErr != nil && !errors.Is(cacheErr, context.Canceled) {
+			logger.Module("backup_asset_content").Warn().Str("stage", "cache_reconcile").Msg("备份内容缓存对账失败")
 		}
 	}
+}
+
+func (runtime *managedContentRuntime) reconcileCycle(ctx context.Context) (stateErr, cacheErr error) {
+	if runtime == nil || runtime.stopped.Load() {
+		return nil, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if runtime.reconciler != nil {
+		stateErr = runtime.reconciler.Reconcile(ctx)
+	}
+	if runtime.ready == nil || !runtime.ready.Load() {
+		return stateErr, nil
+	}
+	runtime.mu.Lock()
+	cache := runtime.cache
+	runtime.mu.Unlock()
+	if cache != nil {
+		cacheErr = cache.Reconcile(ctx)
+	}
+	return stateErr, cacheErr
 }
 
 func (runtime *managedContentRuntime) Shutdown(ctx context.Context) error {
 	if runtime == nil {
 		return nil
 	}
-	runtime.ready.Store(false)
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	runtime.stopped.Store(true)
+	runtime.ready.Store(false)
 	var shutdownErrors []error
+	runtime.runMu.Lock()
+	cancelRun := runtime.runCancel
+	done := runtime.runDone
+	if cancelRun != nil {
+		cancelRun()
+	}
+	runtime.runMu.Unlock()
+	if done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			shutdownErrors = append(shutdownErrors, fmt.Errorf("join Content run loop: %w", ctx.Err()))
+		}
+	}
 	if runtime.broker != nil {
 		if err := runtime.broker.Shutdown(ctx); err != nil {
 			shutdownErrors = append(shutdownErrors, err)

@@ -88,11 +88,12 @@ type ReservationIntent struct {
 }
 
 type BlockedRequest struct {
-	RequestID   string
-	GrantID     string
-	Method      string
-	Status      int
-	FailureCode RequestFailureCode
+	RequestID      string
+	GrantID        string
+	Method         string
+	Status         int
+	FailureCode    RequestFailureCode
+	RangeRequested bool
 }
 
 type Reservation struct {
@@ -121,14 +122,15 @@ type Finalization struct {
 }
 
 type reservationSpec struct {
-	requestID     string
-	grantID       string
-	method        string
-	rangeValue    HTTPRange
-	reservedBytes int64
-	blocked       bool
-	status        int
-	failure       RequestFailureCode
+	requestID      string
+	grantID        string
+	method         string
+	rangeValue     HTTPRange
+	reservedBytes  int64
+	blocked        bool
+	rangeRequested bool
+	status         int
+	failure        RequestFailureCode
 }
 
 type lockedBudgetScope struct {
@@ -164,7 +166,7 @@ func (service *BudgetService) RecordBlocked(ctx context.Context, request Blocked
 	}
 	_, err := service.reserve(ctx, reservationSpec{
 		requestID: request.RequestID, grantID: request.GrantID, method: request.Method,
-		rangeValue: HTTPRange{Kind: HTTPRangeFull}, blocked: true,
+		rangeValue: HTTPRange{Kind: HTTPRangeFull}, blocked: true, rangeRequested: request.RangeRequested,
 		status: request.Status, failure: request.FailureCode,
 	})
 	return err
@@ -221,6 +223,11 @@ func (service *BudgetService) reserve(ctx context.Context, spec reservationSpec)
 		}
 		if err := prepareGrantReservation(&grant, now, spec.reservedBytes, active); err != nil {
 			return err
+		}
+		if spec.blocked {
+			if err := applyGrantAuditSummary(&grant, backupasset.AuditOutcomeBlocked, 0, spec.rangeRequested); err != nil {
+				return err
+			}
 		}
 		for _, scope := range scopes {
 			if err := service.updateUsage(tx, scope.row); err != nil {
@@ -322,6 +329,14 @@ func (service *BudgetService) Finalize(ctx context.Context, intent FinalizeInten
 				return err
 			}
 		}
+		storedProvider, storedResponse := boundedEvidence(request.ReservedBytes, intent.ProviderBytes), boundedEvidence(request.ReservedBytes, intent.ResponseBytes)
+		outcome := backupasset.AuditOutcomeFailure
+		if intent.State == RequestSucceeded {
+			outcome = backupasset.AuditOutcomeSuccess
+		}
+		if err := applyGrantAuditSummary(&grant, outcome, storedResponse, request.RangeKind != string(HTTPRangeFull)); err != nil {
+			return err
+		}
 		grant.ReservedBytes -= request.ReservedBytes
 		grant.DeliveredBytes += charged
 		grant.InFlight--
@@ -331,7 +346,6 @@ func (service *BudgetService) Finalize(ctx context.Context, intent FinalizeInten
 			return err
 		}
 
-		storedProvider, storedResponse := boundedEvidence(request.ReservedBytes, intent.ProviderBytes), boundedEvidence(request.ReservedBytes, intent.ResponseBytes)
 		request.State = string(intent.State)
 		request.ProviderBytes = storedProvider
 		request.ResponseBytes = storedResponse
@@ -461,7 +475,11 @@ func (service *BudgetService) updateGrantCounters(tx *gorm.DB, grant model.Backu
 			"idle_expires_at": grant.IdleExpiresAt, "last_activity_at": grant.LastActivityAt,
 			"reserved_bytes": grant.ReservedBytes, "delivered_bytes": grant.DeliveredBytes,
 			"request_count": grant.RequestCount, "in_flight": grant.InFlight,
-			"version": grant.Version, "updated_at": grant.UpdatedAt,
+			"audit_state": grant.AuditState, "audit_range_count": grant.AuditRangeCount,
+			"audit_range_bytes": grant.AuditRangeBytes, "audit_request_count": grant.AuditRequestCount,
+			"audit_success_count": grant.AuditSuccessCount, "audit_blocked_count": grant.AuditBlockedCount,
+			"audit_failure_count": grant.AuditFailureCount,
+			"version":             grant.Version, "updated_at": grant.UpdatedAt,
 		})
 	if result.Error != nil {
 		return result.Error
@@ -564,6 +582,50 @@ func prepareGrantReservation(grant *model.BackupAssetDeliveryGrant, now time.Tim
 	grant.Version++
 	grant.UpdatedAt = now
 	return nil
+}
+
+func applyGrantAuditSummary(
+	grant *model.BackupAssetDeliveryGrant,
+	outcome backupasset.AuditOutcome,
+	responseBytes int64,
+	rangeRequested bool,
+) error {
+	if grant == nil || responseBytes < 0 ||
+		(outcome != backupasset.AuditOutcomeSuccess && outcome != backupasset.AuditOutcomeBlocked &&
+			outcome != backupasset.AuditOutcomeFailure) ||
+		(grant.AuditState != "none" && grant.AuditState != "pending") ||
+		grant.AuditRangeCount < 0 || grant.AuditRangeBytes < 0 || grant.AuditRequestCount < 0 ||
+		grant.AuditSuccessCount < 0 || grant.AuditBlockedCount < 0 || grant.AuditFailureCount < 0 ||
+		grant.AuditFailureCode != "" || grant.AuditAttemptCount != 0 || grant.AuditNextAttemptAt != nil {
+		return ErrBudgetState
+	}
+	if grant.AuditState == "none" && (grant.AuditRangeCount != 0 || grant.AuditRangeBytes != 0 ||
+		grant.AuditRequestCount != 0 || grant.AuditSuccessCount != 0 || grant.AuditBlockedCount != 0 ||
+		grant.AuditFailureCount != 0) {
+		return ErrBudgetState
+	}
+	grant.AuditState = "pending"
+	grant.AuditRequestCount = boundedAuditCounter(grant.AuditRequestCount, 1, backupasset.MaxAuditRangeCount)
+	if rangeRequested {
+		grant.AuditRangeCount = boundedAuditCounter(grant.AuditRangeCount, 1, backupasset.MaxAuditRangeCount)
+		grant.AuditRangeBytes = boundedAuditCounter(grant.AuditRangeBytes, responseBytes, backupasset.MaxAuditRangeBytes)
+	}
+	switch outcome {
+	case backupasset.AuditOutcomeSuccess:
+		grant.AuditSuccessCount = boundedAuditCounter(grant.AuditSuccessCount, 1, backupasset.MaxAuditRangeCount)
+	case backupasset.AuditOutcomeBlocked:
+		grant.AuditBlockedCount = boundedAuditCounter(grant.AuditBlockedCount, 1, backupasset.MaxAuditRangeCount)
+	case backupasset.AuditOutcomeFailure:
+		grant.AuditFailureCount = boundedAuditCounter(grant.AuditFailureCount, 1, backupasset.MaxAuditRangeCount)
+	}
+	return nil
+}
+
+func boundedAuditCounter(current, increment, maximum int64) int64 {
+	if current >= maximum || increment >= maximum-current {
+		return maximum
+	}
+	return current + increment
 }
 
 func buildReservationRow(spec reservationSpec, now time.Time) model.BackupAssetDeliveryRequest {

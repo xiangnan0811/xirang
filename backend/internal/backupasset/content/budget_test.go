@@ -173,6 +173,22 @@ func TestBudgetBlockedInvalidRangeConsumesRequestWindowsWithoutIdleRefresh(t *te
 	}
 }
 
+func TestBudgetBlockedRequestPersistsAuditSummaryAtomically(t *testing.T) {
+	harness := newBudgetTestHarness(t, nil, nil)
+	if err := harness.service.RecordBlocked(context.Background(), BlockedRequest{
+		RequestID: strings.Repeat("9", 32), GrantID: harness.grant.ID,
+		Method: "GET", Status: 416,
+		FailureCode: RequestFailureInvalidRange, RangeRequested: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	grant := harness.loadGrant(t)
+	if grant.AuditState != "pending" || grant.AuditRequestCount != 1 || grant.AuditRangeCount != 1 ||
+		grant.AuditBlockedCount != 1 || grant.AuditRangeBytes != 0 {
+		t.Fatalf("blocked audit summary=%+v", grant)
+	}
+}
+
 func TestBudgetFinalizeChargesActualBytesOnceAndRejectsStaleVersion(t *testing.T) {
 	harness := newBudgetTestHarness(t, nil, nil)
 	reservation := harness.reserve(t, strings.Repeat("9", 32), 40)
@@ -408,7 +424,10 @@ func newBudgetTestHarness(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.BackupAssetDeliveryGrant{}, &model.BackupAssetDeliveryRequest{}, &model.BackupAssetDeliveryUsage{}); err != nil {
+	if err := db.AutoMigrate(
+		&model.BackupAssetDeliveryGrant{}, &model.BackupAssetDeliveryRequest{},
+		&model.BackupAssetDeliveryUsage{}, &model.RecoveryPointLease{},
+	); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

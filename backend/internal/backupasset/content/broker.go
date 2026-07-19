@@ -85,10 +85,6 @@ type BrokerAudit interface {
 	BacklogAvailable(context.Context) error
 }
 
-type BrokerReadAudit interface {
-	RecordRead(context.Context, ReadAuditSummary) error
-}
-
 type BrokerBudget interface {
 	Reserve(context.Context, ReservationIntent) (Reservation, error)
 	RecordBlocked(context.Context, BlockedRequest) error
@@ -119,7 +115,6 @@ type BrokerDependencies struct {
 	Lease          ContentLeaseController
 	Source         SourceResolver
 	Audit          BrokerAudit
-	ReadAudit      BrokerReadAudit
 	Budget         BrokerBudget
 	Metrics        Metrics
 	TicketMaterial func() (TicketMaterial, error)
@@ -185,7 +180,6 @@ type Broker struct {
 	lease          ContentLeaseController
 	source         SourceResolver
 	audit          BrokerAudit
-	readAudit      BrokerReadAudit
 	budget         BrokerBudget
 	metrics        Metrics
 	ticketMaterial func() (TicketMaterial, error)
@@ -206,7 +200,7 @@ type Broker struct {
 func NewBroker(dependencies BrokerDependencies) (*Broker, error) {
 	if dependencies.DB == nil || dependencies.Now == nil || dependencies.FeatureEnabled == nil ||
 		dependencies.Authorize == nil || dependencies.Session == nil || dependencies.Lease == nil ||
-		dependencies.Source == nil || dependencies.Audit == nil || dependencies.ReadAudit == nil ||
+		dependencies.Source == nil || dependencies.Audit == nil ||
 		dependencies.Budget == nil || dependencies.Config == nil {
 		return nil, ErrInvalidBrokerRequest
 	}
@@ -229,7 +223,7 @@ func NewBroker(dependencies BrokerDependencies) (*Broker, error) {
 	return &Broker{
 		db: dependencies.DB, now: dependencies.Now, featureEnabled: dependencies.FeatureEnabled,
 		authorize: dependencies.Authorize, session: dependencies.Session, lease: dependencies.Lease,
-		source: dependencies.Source, audit: dependencies.Audit, readAudit: dependencies.ReadAudit,
+		source: dependencies.Source, audit: dependencies.Audit,
 		budget: dependencies.Budget, metrics: dependencies.Metrics,
 		ticketMaterial: dependencies.TicketMaterial, requestID: dependencies.RequestID, config: dependencies.Config,
 		leases: make(map[string]*ContentLeaseSession), assets: make(map[string]AuthorizedAsset),
@@ -466,7 +460,7 @@ func (broker *Broker) Serve(ctx context.Context, request GatewayRequest, writer 
 	if plan.FailureCode != "" {
 		if err := broker.budget.RecordBlocked(ctx, BlockedRequest{
 			RequestID: requestID, GrantID: grant.ID, Method: request.Method,
-			Status: plan.Status, FailureCode: plan.FailureCode,
+			Status: plan.Status, FailureCode: plan.FailureCode, RangeRequested: len(request.RangeHeaders) > 0,
 		}); err != nil {
 			if errors.Is(err, ErrBudgetExhausted) {
 				return ErrContentBudgetExceeded
@@ -475,9 +469,6 @@ func (broker *Broker) Serve(ctx context.Context, request GatewayRequest, writer 
 		}
 		writeGatewayHeaders(writer.Header(), grant, plan)
 		writer.WriteHeader(plan.Status)
-		_ = broker.readAudit.RecordRead(ctx, ReadAuditSummary{
-			GrantID: grant.ID, Outcome: backupasset.AuditOutcomeBlocked, Range: len(request.RangeHeaders) > 0,
-		})
 		broker.metrics.ObserveRead(DeliveryAction(grant.Action), MetricOutcomeBlocked)
 		return nil
 	}
@@ -532,11 +523,9 @@ func (broker *Broker) Serve(ctx context.Context, request GatewayRequest, writer 
 		}
 	}
 	state := RequestSucceeded
-	outcome := backupasset.AuditOutcomeSuccess
 	metricOutcome := MetricOutcomeSuccess
 	if failure != "" {
 		state = RequestFailed
-		outcome = backupasset.AuditOutcomeFailure
 		metricOutcome = MetricOutcomeFailure
 		if errors.Is(serveErr, context.Canceled) || errors.Is(serveErr, context.DeadlineExceeded) {
 			state = RequestCanceled
@@ -548,11 +537,6 @@ func (broker *Broker) Serve(ctx context.Context, request GatewayRequest, writer 
 		cleanupCtx, reservation, state, status, failure,
 		providerBytes, responseBytes, evidenceKnown,
 	)
-	if auditErr := broker.readAudit.RecordRead(cleanupCtx, ReadAuditSummary{
-		GrantID: grant.ID, Outcome: outcome, Bytes: responseBytes, Range: plan.Range.Kind != HTTPRangeFull,
-	}); auditErr != nil && serveErr == nil {
-		serveErr = ErrContentAuditUnavailable
-	}
 	broker.metrics.ObserveRead(DeliveryAction(grant.Action), metricOutcome)
 	if finalizationErr != nil {
 		return ErrContentUnavailable

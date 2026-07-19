@@ -111,6 +111,29 @@ CREATE TABLE backup_asset_delivery_grants (
     CHECK (last_activity_at <= idle_expires_at AND idle_expires_at <= absolute_expires_at AND absolute_expires_at <= session_expires_at),
     CHECK (delivered_bytes <= max_cumulative_bytes AND reserved_bytes <= max_cumulative_bytes - delivered_bytes),
     CHECK (request_count <= max_requests AND in_flight <= max_in_flight),
+    CHECK (
+        (audit_state = 'none'
+            AND audit_range_count = 0 AND audit_range_bytes = 0 AND audit_request_count = 0
+            AND audit_success_count = 0 AND audit_blocked_count = 0 AND audit_failure_count = 0
+            AND audit_failure_code = '' AND audit_attempt_count = 0 AND audit_next_attempt_at IS NULL)
+        OR (
+            audit_state IN ('pending', 'emitted', 'retry_wait', 'failed')
+            AND audit_request_count > 0
+            AND audit_request_count <= request_count
+            AND audit_range_count <= audit_request_count
+            AND (audit_range_count > 0 OR audit_range_bytes = 0)
+            AND audit_range_bytes <= delivered_bytes
+            AND audit_success_count + audit_blocked_count + audit_failure_count = audit_request_count
+            AND (
+                (audit_state = 'pending'
+                    AND audit_failure_code = '' AND audit_attempt_count = 0 AND audit_next_attempt_at IS NULL)
+                OR (audit_state = 'emitted'
+                    AND audit_failure_code = '' AND audit_next_attempt_at IS NULL)
+                OR (audit_state IN ('retry_wait', 'failed')
+                    AND audit_failure_code <> '' AND audit_attempt_count > 0 AND audit_next_attempt_at IS NOT NULL)
+            )
+        )
+    ),
     FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (catalog_generation_id, entry_id, recovery_point_id)
         REFERENCES catalog_entries(generation_id, entry_id, recovery_point_id) ON DELETE RESTRICT,

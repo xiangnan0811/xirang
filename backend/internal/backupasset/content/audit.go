@@ -6,20 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sync"
 	"time"
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 var (
 	ErrContentAuditUnavailable = errors.New("content audit unavailable")
 	ErrContentAuditMismatch    = errors.New("content audit idempotency mismatch")
 	ErrContentAuditBacklogFull = errors.New("content audit backlog full")
+	ErrContentAuditNotReady    = errors.New("content final audit not ready")
 )
 
 type FoundationContentAuditWriter interface {
@@ -34,15 +33,7 @@ type ContentAuditDependencies struct {
 	Metrics    Metrics
 }
 
-type ReadAuditSummary struct {
-	GrantID string
-	Outcome backupasset.AuditOutcome
-	Bytes   int64
-	Range   bool
-}
-
 type ContentAuditService struct {
-	mu         sync.Mutex
 	db         *gorm.DB
 	writer     FoundationContentAuditWriter
 	now        func() time.Time
@@ -88,46 +79,6 @@ func (service *ContentAuditService) Write(ctx context.Context, input backupasset
 	return nil
 }
 
-func (service *ContentAuditService) RecordRead(ctx context.Context, summary ReadAuditSummary) error {
-	if service == nil || backupasset.ValidateOpaqueID(summary.GrantID) != nil || summary.Bytes < 0 ||
-		(summary.Outcome != backupasset.AuditOutcomeSuccess && summary.Outcome != backupasset.AuditOutcomeBlocked &&
-			summary.Outcome != backupasset.AuditOutcomeFailure) {
-		return ErrContentAuditUnavailable
-	}
-	rangeCount, rangeBytes := int64(0), int64(0)
-	if summary.Range {
-		rangeCount, rangeBytes = 1, summary.Bytes
-	}
-	success, blocked, failure := int64(0), int64(0), int64(0)
-	switch summary.Outcome {
-	case backupasset.AuditOutcomeSuccess:
-		success = 1
-	case backupasset.AuditOutcomeBlocked:
-		blocked = 1
-	case backupasset.AuditOutcomeFailure:
-		failure = 1
-	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	result := service.db.WithContext(nonNilContext(ctx)).Model(&model.BackupAssetDeliveryGrant{}).
-		Where("id = ?", summary.GrantID).Updates(map[string]any{
-		"audit_state":         "pending",
-		"audit_request_count": boundedAuditAdd("audit_request_count", 1, backupasset.MaxAuditRangeCount),
-		"audit_range_count":   boundedAuditAdd("audit_range_count", rangeCount, backupasset.MaxAuditRangeCount),
-		"audit_range_bytes":   boundedAuditAdd("audit_range_bytes", rangeBytes, backupasset.MaxAuditRangeBytes),
-		"audit_success_count": boundedAuditAdd("audit_success_count", success, backupasset.MaxAuditRangeCount),
-		"audit_blocked_count": boundedAuditAdd("audit_blocked_count", blocked, backupasset.MaxAuditRangeCount),
-		"audit_failure_count": boundedAuditAdd("audit_failure_count", failure, backupasset.MaxAuditRangeCount),
-		"updated_at":          service.now().UTC(),
-		"version":             gorm.Expr("version + 1"),
-	})
-	if result.Error != nil || result.RowsAffected != 1 {
-		return fmt.Errorf("%w: aggregate read: %v rows=%d", ErrContentAuditUnavailable, result.Error, result.RowsAffected)
-	}
-	service.observeBacklog(ctx)
-	return nil
-}
-
 func (service *ContentAuditService) FlushGrant(ctx context.Context, grantID string) error {
 	if service == nil || backupasset.ValidateOpaqueID(grantID) != nil {
 		return ErrContentAuditUnavailable
@@ -140,10 +91,17 @@ func (service *ContentAuditService) FlushGrant(ctx context.Context, grantID stri
 	if grant.AuditState == "none" || grant.AuditState == "emitted" {
 		return nil
 	}
-	input := aggregateAuditInput(grant)
-	if err := service.Write(ctx, input); err != nil {
-		service.queueAuditRetry(ctx, grant)
+	if grant.InFlight != 0 || (grant.State != string(DeliveryRevoked) &&
+		grant.State != string(DeliveryExpired) && grant.State != string(DeliveryClosed)) {
+		return ErrContentAuditNotReady
+	}
+	responseBytes, err := service.finalResponseBytes(ctx, grant)
+	if err != nil {
 		return err
+	}
+	input := aggregateAuditInput(grant, responseBytes)
+	if err := service.Write(ctx, input); err != nil {
+		return errors.Join(err, service.queueAuditRetry(ctx, grant))
 	}
 	result := service.db.WithContext(ctx).Model(&model.BackupAssetDeliveryGrant{}).
 		Where("id = ? AND audit_state IN ?", grant.ID, []string{"pending", "retry_wait", "failed"}).
@@ -156,6 +114,32 @@ func (service *ContentAuditService) FlushGrant(ctx context.Context, grantID stri
 	}
 	service.observeBacklog(ctx)
 	return nil
+}
+
+func (service *ContentAuditService) finalResponseBytes(
+	ctx context.Context,
+	grant model.BackupAssetDeliveryGrant,
+) (int64, error) {
+	type requestSummary struct {
+		RequestCount  int64 `gorm:"column:request_count"`
+		ResponseBytes int64 `gorm:"column:response_bytes"`
+	}
+	var summary requestSummary
+	result := service.db.WithContext(ctx).Model(&model.BackupAssetDeliveryRequest{}).
+		Select("COUNT(*) AS request_count, COALESCE(SUM(response_bytes), 0) AS response_bytes").
+		Where("grant_id = ?", grant.ID).Scan(&summary)
+	if result.Error != nil || summary.RequestCount != grant.AuditRequestCount || summary.ResponseBytes < 0 {
+		return 0, ErrContentAuditMismatch
+	}
+	var nonterminal int64
+	if err := service.db.WithContext(ctx).Model(&model.BackupAssetDeliveryRequest{}).
+		Where("grant_id = ? AND state NOT IN ?", grant.ID, []string{
+			string(RequestSucceeded), string(RequestBlocked), string(RequestCanceled),
+			string(RequestFailed), string(RequestReconciled),
+		}).Count(&nonterminal).Error; err != nil || nonterminal != 0 {
+		return 0, ErrContentAuditNotReady
+	}
+	return summary.ResponseBytes, nil
 }
 
 func (service *ContentAuditService) BacklogAvailable(ctx context.Context) error {
@@ -174,19 +158,27 @@ func (service *ContentAuditService) BacklogAvailable(ctx context.Context) error 
 	return nil
 }
 
-func (service *ContentAuditService) queueAuditRetry(ctx context.Context, grant model.BackupAssetDeliveryGrant) {
+func (service *ContentAuditService) queueAuditRetry(ctx context.Context, grant model.BackupAssetDeliveryGrant) error {
 	service.metrics.ObserveAuditRetry()
 	attempt := grant.AuditAttemptCount + 1
 	shift := min(attempt-1, int64(6))
 	backoff := time.Duration(1<<shift) * time.Second
 	next := service.now().UTC().Add(backoff)
-	_ = service.db.WithContext(ctx).Model(&model.BackupAssetDeliveryGrant{}).Where("id = ?", grant.ID).
+	result := service.db.WithContext(ctx).Model(&model.BackupAssetDeliveryGrant{}).
+		Where("id = ? AND version = ? AND audit_state = ?", grant.ID, grant.Version, grant.AuditState).
 		Updates(map[string]any{
 			"audit_state": "retry_wait", "audit_failure_code": "audit_write_failed",
 			"audit_attempt_count": attempt, "audit_next_attempt_at": next,
 			"updated_at": service.now().UTC(), "version": gorm.Expr("version + 1"),
-		}).Error
+		})
 	service.observeBacklog(ctx)
+	if result.Error != nil {
+		return fmt.Errorf("%w: persist audit retry: %w", ErrContentAuditUnavailable, result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("%w: persist audit retry rows=%d", ErrContentAuditUnavailable, result.RowsAffected)
+	}
+	return nil
 }
 
 func (service *ContentAuditService) observeBacklog(ctx context.Context) {
@@ -222,7 +214,7 @@ func exactAuditProjectionMatches(input backupasset.AuditEventInput, existing mod
 		existing.FieldsJSON == string(fieldsJSON), nil
 }
 
-func aggregateAuditInput(grant model.BackupAssetDeliveryGrant) backupasset.AuditEventInput {
+func aggregateAuditInput(grant model.BackupAssetDeliveryGrant, responseBytes int64) backupasset.AuditEventInput {
 	action := backupasset.AuditActionPreviewRead
 	if grant.Action == string(DeliveryDownload) {
 		action = backupasset.AuditActionAssetDownload
@@ -252,15 +244,11 @@ func aggregateAuditInput(grant model.BackupAssetDeliveryGrant) backupasset.Audit
 	return backupasset.AuditEventInput{
 		Actor:  backupasset.AuditActor{UserID: grant.OwnerUserID, Role: grant.SessionRole},
 		Action: action, Outcome: outcome, RecoveryPointID: recoveryPointID, EntryID: entryID,
-		ByteCount: grant.AuditRangeBytes, Range: backupasset.NewRangeSummary(grant.AuditRangeCount, grant.AuditRangeBytes),
+		ByteCount: responseBytes, Range: backupasset.NewRangeSummary(grant.AuditRangeCount, grant.AuditRangeBytes),
 		StepUpAction: stepUpAction, StepUpProofID: stepUpProofID, GrantID: grant.ID, FailureCode: failureCode,
 		Fields: map[backupasset.AuditField]any{
 			backupasset.AuditFieldRenderer: grant.Renderer, backupasset.AuditFieldProfile: grant.Profile,
 			backupasset.AuditFieldSource: grant.Classification,
 		},
 	}
-}
-
-func boundedAuditAdd(column string, increment, maximum int64) clause.Expr {
-	return gorm.Expr("CASE WHEN ? <= ? - ? THEN ? + ? ELSE ? END", gorm.Expr(column), maximum, increment, gorm.Expr(column), increment, maximum)
 }

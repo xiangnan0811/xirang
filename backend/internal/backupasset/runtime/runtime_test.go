@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -231,6 +232,130 @@ func TestRuntimeAuthenticatedCacheUsesSharedContentMetrics(t *testing.T) {
 	if got := metrics.cache[content.MetricCacheKeyLoss]; got != 1 {
 		t.Fatalf("runtime cache key-loss metric=%d, want 1", got)
 	}
+}
+
+func TestManagedContentRuntimeReconcileCycleReleasesTerminalLeaseWhileFeatureDisabled(t *testing.T) {
+	db, manager, leaseID := newManagedContentRuntimeTerminalLeaseHarness(t)
+	stateErr, cacheErr := manager.reconcileCycle(context.Background())
+	if stateErr != nil || cacheErr != nil {
+		t.Fatalf("disabled reconciliation errors: state=%v cache=%v", stateErr, cacheErr)
+	}
+	var stored model.RecoveryPointLease
+	if err := db.First(&stored, "id = ?", leaseID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != string(backupasset.LeaseReleased) || stored.ReleasedAt == nil {
+		t.Fatalf("disabled runtime left terminal lease active: %+v", stored)
+	}
+}
+
+func TestManagedContentRuntimeReconcileCycleStopsAtShutdownFence(t *testing.T) {
+	db, manager, leaseID := newManagedContentRuntimeTerminalLeaseHarness(t)
+	manager.stopped.Store(true)
+	stateErr, cacheErr := manager.reconcileCycle(context.Background())
+	if stateErr != nil || cacheErr != nil {
+		t.Fatalf("stopped reconciliation errors: state=%v cache=%v", stateErr, cacheErr)
+	}
+	var stored model.RecoveryPointLease
+	if err := db.First(&stored, "id = ?", leaseID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != string(backupasset.LeaseActive) || stored.ReleasedAt != nil {
+		t.Fatalf("stopped runtime mutated terminal lease: %+v", stored)
+	}
+}
+
+func TestManagedContentRuntimeShutdownCancelsAndJoinsRunLoop(t *testing.T) {
+	db, manager, _ := newManagedContentRuntimeTerminalLeaseHarness(t)
+	settingsReader := &runtimeContentRunSettings{
+		service: settings.NewService(db), started: make(chan struct{}),
+	}
+	manager.foundation = backupasset.NewFoundationService(settingsReader)
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	done := make(chan struct{})
+	go func() {
+		manager.Run(runCtx)
+		close(done)
+	}()
+	select {
+	case <-settingsReader.started:
+	case <-time.After(time.Second):
+		t.Fatal("managed Content run loop did not start")
+	}
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), time.Second)
+	defer cancelShutdown()
+	if err := manager.Shutdown(shutdownCtx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-shutdownCtx.Done():
+		t.Fatal("managed Content shutdown did not join its run loop")
+	}
+}
+
+func newManagedContentRuntimeTerminalLeaseHarness(t *testing.T) (*gorm.DB, *managedContentRuntime, string) {
+	t.Helper()
+	db := openRuntimeTestDB(t)
+	now := time.Date(2026, 7, 19, 10, 0, 0, 0, time.UTC)
+	leaseService, err := backupasset.NewLeaseService(db, func() time.Time { return now }, backupasset.LeaseConfig{
+		Duration: time.Minute, Heartbeat: 10 * time.Second, AbsoluteDeadline: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grantID := strings.Repeat("a", 32)
+	lease, err := leaseService.Acquire(context.Background(), backupasset.AcquireLeaseRequest{
+		RecoveryPointID: strings.Repeat("b", 32),
+		HolderType:      backupasset.LeaseHolderContentSession,
+		OwnerID:         grantID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := model.BackupAssetDeliveryGrant{
+		ID: grantID, DeliveryID: strings.Repeat("c", 32), State: string(content.DeliveryRevoked),
+		RevocationReason: "process_restarted", RevokedAt: &now, LeaseID: lease.ID,
+		Version: 1, AuditState: "none", CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&grant).Error; err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Minute)
+	reconciler, err := content.NewReconciler(content.ReconcilerDependencies{
+		DB: db, Budget: runtimeContentReconcilerBudgetFake{}, Audit: runtimeContentReconcilerAuditFake{},
+		Lease: leaseService, Now: func() time.Time { return now }, BatchSize: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return db, &managedContentRuntime{reconciler: reconciler, ready: &atomic.Bool{}}, lease.ID
+}
+
+type runtimeContentReconcilerBudgetFake struct{}
+
+func (runtimeContentReconcilerBudgetFake) Finalize(context.Context, content.FinalizeIntent) (content.Finalization, error) {
+	return content.Finalization{}, nil
+}
+
+type runtimeContentReconcilerAuditFake struct{}
+
+func (runtimeContentReconcilerAuditFake) FlushGrant(context.Context, string) error { return nil }
+
+type runtimeContentRunSettings struct {
+	service *settings.Service
+	started chan struct{}
+	once    sync.Once
+}
+
+func (reader *runtimeContentRunSettings) GetEffective(key string) string {
+	return reader.service.GetEffective(key)
+}
+
+func (reader *runtimeContentRunSettings) BackupAssetSettingsSnapshot() (map[string]string, error) {
+	reader.once.Do(func() { close(reader.started) })
+	return reader.service.BackupAssetSettingsSnapshot()
 }
 
 func TestRuntimeContentSessionValidatorChecksRevocationRoleVersionAndExpiry(t *testing.T) {

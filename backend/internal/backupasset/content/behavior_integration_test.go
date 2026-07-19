@@ -102,6 +102,7 @@ func runContentBehaviorContract(t *testing.T, fixture contentBehaviorFixture) {
 			}
 		}
 		assertContentBehaviorCounters(t, fixture, grant, 5, 50, 0, 0)
+		assertContentBehaviorAuditCounters(t, fixture, grant, 5, 5, 0, 0)
 	})
 
 	clearContentBehaviorState(t, fixture)
@@ -167,7 +168,26 @@ func runContentBehaviorContract(t *testing.T, fixture contentBehaviorFixture) {
 			t.Fatal(err)
 		}
 		assertContentBehaviorCounters(t, fixture, grant, 3, 15, 0, 0)
+		assertContentBehaviorAuditCounters(t, fixture, grant, 3, 1, 0, 2)
 	})
+}
+
+func assertContentBehaviorAuditCounters(
+	t *testing.T,
+	fixture contentBehaviorFixture,
+	grant model.BackupAssetDeliveryGrant,
+	wantRequests, wantSuccess, wantBlocked, wantFailure int64,
+) {
+	t.Helper()
+	var stored model.BackupAssetDeliveryGrant
+	if err := fixture.db.First(&stored, "id = ?", grant.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.AuditState != "pending" || stored.AuditRequestCount != wantRequests ||
+		stored.AuditSuccessCount != wantSuccess || stored.AuditBlockedCount != wantBlocked ||
+		stored.AuditFailureCount != wantFailure || stored.AuditRangeCount != 0 || stored.AuditRangeBytes != 0 {
+		t.Fatalf("%s audit counters=%+v", fixture.engine, stored)
+	}
 }
 
 func openContentBehaviorSQLite(t *testing.T) contentBehaviorFixture {

@@ -458,16 +458,14 @@ func TestBrokerLongReadRenewsLeaseWithoutWriterProgress(t *testing.T) {
 	}
 }
 
-func TestBrokerCanceledReadBoundsDetachedFinalizationAndAudit(t *testing.T) {
+func TestBrokerCanceledReadBoundsDetachedFinalizationWithAudit(t *testing.T) {
 	harness := newBrokerTestHarness(t)
 	ticket, err := harness.broker.Issue(context.Background(), harness.issueRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
 	budgetCapture := &brokerBudgetContextCapture{BrokerBudget: harness.broker.budget}
-	auditCapture := &brokerReadAuditContextCapture{BrokerReadAudit: harness.broker.readAudit}
 	harness.broker.budget = budgetCapture
-	harness.broker.readAudit = auditCapture
 	harness.source.blockReads = true
 	harness.source.readStarted = make(chan struct{})
 	harness.source.readCanceled = make(chan struct{})
@@ -490,14 +488,31 @@ func TestBrokerCanceledReadBoundsDetachedFinalizationAndAudit(t *testing.T) {
 	if serveErr := <-done; !errors.Is(serveErr, context.Canceled) {
 		t.Fatalf("serve cancellation error=%v", serveErr)
 	}
-	for name, snapshot := range map[string]brokerCleanupContextSnapshot{
-		"finalization": budgetCapture.snapshot(),
-		"audit":        auditCapture.snapshot(),
-	} {
-		if snapshot.err != nil || !snapshot.hasDeadline || !snapshot.deadline.After(time.Now()) ||
-			snapshot.deadline.After(time.Now().Add(6*time.Second)) {
-			t.Fatalf("%s cleanup context=%+v", name, snapshot)
-		}
+	snapshot := budgetCapture.snapshot()
+	if snapshot.err != nil || !snapshot.hasDeadline || !snapshot.deadline.After(time.Now()) ||
+		snapshot.deadline.After(time.Now().Add(6*time.Second)) {
+		t.Fatalf("finalization and audit cleanup context=%+v", snapshot)
+	}
+}
+
+func TestBrokerFinalizationPersistsReadAuditExactlyOnce(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	ticket, err := harness.broker.Issue(context.Background(), harness.issueRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.broker.Serve(context.Background(), GatewayRequest{
+		DeliveryID: harness.material.DeliveryID, Method: http.MethodGet,
+		RawCookie: ticket.Cookie.Name + "=" + ticket.Cookie.Value,
+	}, &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}); err != nil {
+		t.Fatal(err)
+	}
+	var grant model.BackupAssetDeliveryGrant
+	if err := harness.db.First(&grant, "id = ?", harness.material.GrantID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if grant.AuditRequestCount != 1 || grant.AuditSuccessCount != 1 {
+		t.Fatalf("read audit was not persisted exactly once: %+v", grant)
 	}
 }
 
@@ -918,7 +933,7 @@ func newBrokerTestHarness(t *testing.T) *brokerTestHarness {
 	broker, err := NewBroker(BrokerDependencies{
 		DB: db, Now: func() time.Time { return now }, FeatureEnabled: func(context.Context) (bool, error) { return true, nil },
 		Authorize: authorizer, Session: brokerSessionValidatorFake{}, Lease: lease, Source: source,
-		Audit: audit, ReadAudit: audit, Budget: budget, Metrics: metrics,
+		Audit: audit, Budget: budget, Metrics: metrics,
 		TicketMaterial: func() (TicketMaterial, error) { return material, nil },
 		Config:         func(context.Context) (BrokerConfig, error) { return testBrokerConfig(), nil },
 	})
@@ -1208,10 +1223,9 @@ func (*blockingBrokerSourceReader) Close() error { return nil }
 func (*blockingBrokerSourceReader) ProviderBytes() int64 { return 0 }
 
 type brokerAuditFake struct {
-	inputs        []backupasset.AuditEventInput
-	readSummaries []ReadAuditSummary
-	err           error
-	order         *[]string
+	inputs []backupasset.AuditEventInput
+	err    error
+	order  *[]string
 }
 
 type brokerCleanupContextSnapshot struct {
@@ -1235,26 +1249,6 @@ func (capture *brokerBudgetContextCapture) Finalize(ctx context.Context, intent 
 }
 
 func (capture *brokerBudgetContextCapture) snapshot() brokerCleanupContextSnapshot {
-	capture.mu.Lock()
-	defer capture.mu.Unlock()
-	return capture.context
-}
-
-type brokerReadAuditContextCapture struct {
-	BrokerReadAudit
-	mu      sync.Mutex
-	context brokerCleanupContextSnapshot
-}
-
-func (capture *brokerReadAuditContextCapture) RecordRead(ctx context.Context, summary ReadAuditSummary) error {
-	deadline, hasDeadline := ctx.Deadline()
-	capture.mu.Lock()
-	capture.context = brokerCleanupContextSnapshot{hasDeadline: hasDeadline, deadline: deadline, err: ctx.Err()}
-	capture.mu.Unlock()
-	return capture.BrokerReadAudit.RecordRead(ctx, summary)
-}
-
-func (capture *brokerReadAuditContextCapture) snapshot() brokerCleanupContextSnapshot {
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
 	return capture.context
@@ -1394,11 +1388,6 @@ func (fake *brokerAuditFake) Write(_ context.Context, input backupasset.AuditEve
 }
 
 func (*brokerAuditFake) BacklogAvailable(context.Context) error { return nil }
-
-func (fake *brokerAuditFake) RecordRead(_ context.Context, summary ReadAuditSummary) error {
-	fake.readSummaries = append(fake.readSummaries, summary)
-	return fake.err
-}
 
 func testBrokerConfig() BrokerConfig {
 	return BrokerConfig{
