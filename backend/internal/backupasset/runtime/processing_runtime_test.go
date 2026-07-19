@@ -429,6 +429,7 @@ func processingRuntimeWorkDescriptor() processing.WorkDescriptorV1 {
 
 func openProcessingRuntimeTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_PROCESSING_RUNTIME_DATA_KEY_FOR_TEST_ONLY")
 	db := openRuntimeTestDB(t)
 	if err := db.AutoMigrate(
 		&model.WrappedDomainKey{}, &model.BackupAssetProcessingJob{}, &model.BackupAssetProcessingInterest{},
