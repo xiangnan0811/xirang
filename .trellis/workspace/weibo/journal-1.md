@@ -837,3 +837,64 @@ Implemented and locally verified permission-first portable backup-asset search p
 ### Next Steps
 
 - None - task complete
+
+
+## Session 23: Child 8：备份资产内容平面实现与交付前验证
+
+**Date**: 2026-07-19
+**Task**: Child 8：备份资产内容平面实现与交付前验证
+**Branch**: `codex/backup-assets-content-plane`
+
+### Summary
+
+基于 main/origin/main a3c309a922d9a4f48cb82031031c0975c251f5f4 完成 Child 8：新增 SQLite/PostgreSQL paired 000066、typed backup AssetRef delivery grant、hash-only Strict/HttpOnly Path cookie、session/lease revocation、原子 Range 预算、AEAD chunk cache、安全 classification/renderer、thin handler、专用 Nginx 日志与前端 opaque ticket mapper；RecoveryResult 保持 stable unsupported，backup_assets.enabled 默认 false，000067–000071 未占用。最终新增两组 lease cleanup RED-GREEN，并重新通过聚焦/race、SQLite、真实 PostgreSQL 18、Nginx、前端 137 files/638 tests、Swagger v1.16.6、44-stage Docker、make check、UTC/doc/bundle/audit 门禁。工作提交 5e5a13f，Child 8 已归档；push、单一 PR、远端 CI、squash merge、post-merge 与 main sync 仍 pending，Release Please PR #386 未触碰。
+
+### Main Changes
+
+- Added paired SQLite/PostgreSQL migration `000066` with closed backup-asset
+  resource identity, hash-only delivery secrets, session/action/proof bindings,
+  lease ownership, atomic request/usage budgets, audit aggregation, guarded
+  down, and real dual-engine behavior fixtures.
+- Added the Content Broker, exact SourceResolver/content-session lease boundary,
+  HTTP HEAD/full/single Range gateway, bounded detached cleanup, authenticated
+  owner-partitioned AEAD chunk cache, fail-closed classification/render policy,
+  typed metrics/audit and startup/shutdown reconciliation.
+- Added the thin Authorization ticket API and cookie-only content route,
+  logout/session revocation wiring, safe recovery/logger normalization,
+  route-scoped Nginx streaming and fully redacted access log, deterministic
+  Swagger output, and the frontend raw DTO/API mapper only.
+- Kept `backup_assets.enabled=false`, RecoveryResult stable unsupported,
+  Provider bytes read-only, Child 9+ UI/Worker/Derived scope absent, and
+  migration reservations `000067` through `000071` untouched.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5e5a13fdf527a3917d48a108d28d062b89c17a66` | `feat: add secure backup asset content plane` |
+
+### Testing
+
+- [OK] Focused seven-package Go suite and Content/Repository race suite,
+  including all seven final high-risk RED-GREEN regressions.
+- [OK] SQLite `000066` migration/content behavior and required real PostgreSQL
+  18 migration/content behavior, executed serially against the shared DSN.
+- [OK] Nginx checker/self-test; `env -u NODE_ENV npm run check` with 137 files
+  and 638 tests; npm audit with 0 vulnerabilities; JS/CSS bundle budgets.
+- [OK] Pinned Swagger module v1.16.6 with unchanged `docs.go` hash; 44-stage
+  all-in-one Docker build; full `make check` with golangci-lint `0 issues`.
+- [OK] Migration UTC checker/self-test, doc freshness/self-test, exact manifest,
+  cached diff/check, secret/log/scope scan, and clean worktree.
+
+### Status
+
+[OK] **Implementation, validation, work commit, and Child archive completed.**
+Branch delivery remains pending until the single PR is green and merged.
+
+### Next Steps
+
+- Push `codex/backup-assets-content-plane` and open one ready PR to `main`.
+- Monitor every required CI check, perform the final inline high-risk review,
+  and squash merge only when all required checks are green.
+- Monitor post-merge Release Please/conditional image and docs automation,
+  leave PR #386 untouched, then sync clean local `main` and branch hygiene.
