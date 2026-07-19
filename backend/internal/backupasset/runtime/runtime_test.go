@@ -5,13 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/catalog"
+	"xirang/backend/internal/backupasset/content"
 	"xirang/backend/internal/backupasset/overlay"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
@@ -58,6 +62,24 @@ func (*runtimeStagedPayloadFake) CleanupAged(context.Context, provider.RemoteCom
 var _ provider.CommandTransport = (*runtimeTransportFake)(nil)
 var _ provider.CommandStreamTransport = (*runtimeTransportFake)(nil)
 
+type runtimeSessionRevocationsFake struct {
+	revoked bool
+	err     error
+}
+
+func (fake *runtimeSessionRevocationsFake) IsSessionRevoked(string) (bool, error) {
+	return fake.revoked, fake.err
+}
+
+type runtimeContentMetricsFake struct {
+	content.NoopMetrics
+	cache map[content.MetricCacheOutcome]int
+}
+
+func (fake *runtimeContentMetricsFake) ObserveCache(outcome content.MetricCacheOutcome) {
+	fake.cache[outcome]++
+}
+
 func openRuntimeTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", t.Name())), &gorm.Config{})
@@ -69,7 +91,10 @@ func openRuntimeTestDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+	if err := db.AutoMigrate(
+		&model.SystemSetting{}, &model.BackupAssetDeliveryGrant{}, &model.BackupAssetDeliveryRequest{},
+		&model.BackupAssetDeliveryUsage{}, &model.RecoveryPointLease{},
+	); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -81,7 +106,8 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 	runtime, err := New(Dependencies{
 		DB: db, Settings: settings.NewService(db), Transport: transport, StreamTransport: transport,
 		StagedPayload: &runtimeStagedPayloadFake{},
-		Metrics:       publication.NoopMetrics{}, Now: func() time.Time { return time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC) },
+		Metrics:       publication.NoopMetrics{}, ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{},
+		Now: func() time.Time { return time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
 		t.Fatalf("construct runtime: %v", err)
@@ -95,6 +121,14 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 	}
 	if runtime.SearchService() == nil || runtime.OverlayService() == nil || runtime.ContentIndexIngest() == nil || runtime.searchIndexer == nil || runtime.searchWorker == nil {
 		t.Fatal("runtime omitted the Search/Overlay graph")
+	}
+	contentBroker := runtime.ContentBroker()
+	if contentBroker == nil || contentBroker != runtime.contentBroker || runtime.contentManager == nil ||
+		runtime.contentBudget == nil || runtime.contentAudit == nil || runtime.contentReconciler == nil || runtime.contentReady == nil {
+		t.Fatal("runtime omitted or duplicated the Content graph")
+	}
+	if config, configErr := runtime.ContentConfig(); configErr != nil || config.Enabled {
+		t.Fatalf("default Content config=%+v err=%v, want disabled", config, configErr)
 	}
 	if _, err := runtime.CatalogService().GetRecoveryPoint(context.Background(), strings.Repeat("f", 32), catalog.AuthorizationScope{Role: "admin", UserID: 1}); !errors.Is(err, catalog.ErrFeatureDisabled) {
 		t.Fatalf("default-disabled runtime Catalog error=%v", err)
@@ -114,7 +148,7 @@ func TestRuntimeRejectsMismatchedTransportFacets(t *testing.T) {
 	db := openRuntimeTestDB(t)
 	_, err := New(Dependencies{
 		DB: db, Settings: settings.NewService(db), Transport: &runtimeTransportFake{marker: 1}, StreamTransport: &runtimeTransportFake{marker: 2}, Metrics: publication.NoopMetrics{},
-		StagedPayload: &runtimeStagedPayloadFake{},
+		ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{}, StagedPayload: &runtimeStagedPayloadFake{},
 	})
 	if err == nil {
 		t.Fatal("runtime accepted distinct transport facets")
@@ -130,15 +164,682 @@ func TestRuntimeStartupManagedModeRequiresInterruptedRunReadiness(t *testing.T) 
 	if err := settingsService.Update("backup_assets.enabled", "true"); err != nil {
 		t.Fatal(err)
 	}
+	if err := settingsService.Update("backup_assets.content_cache_enabled", "false"); err != nil {
+		t.Fatal(err)
+	}
 	transport := &runtimeTransportFake{}
 	runtime, err := New(Dependencies{
 		DB: db, Settings: settingsService, Transport: transport, StreamTransport: transport, StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{},
+		ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := runtime.StartupPass(context.Background()); !errors.Is(err, backupasset.ErrInvalidState) {
 		t.Fatalf("managed startup without TaskRun readiness error=%v, want invalid state", err)
+	}
+}
+
+func TestRuntimeContentConstructionRequiresSessionRevocationSource(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	transport := &runtimeTransportFake{}
+	_, err := New(Dependencies{
+		DB: db, Settings: settings.NewService(db), Transport: transport, StreamTransport: transport,
+		StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{}, ContentMetrics: content.NoopMetrics{},
+	})
+	if !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("runtime without session revocation source got %v, want invalid state", err)
+	}
+}
+
+func TestRuntimeAuthenticatedCacheUsesSharedContentMetrics(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(&model.Task{}, &model.TaskRepositoryLink{}, &model.RepositoryAccessBinding{}); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "asset-content-cache")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, strings.Repeat("a", 64)), []byte("old process generation"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settingsService := settings.NewService(db)
+	if err := settingsService.Update("backup_assets.content_cache_root", root); err != nil {
+		t.Fatal(err)
+	}
+	metrics := &runtimeContentMetricsFake{cache: make(map[content.MetricCacheOutcome]int)}
+	transport := &runtimeTransportFake{}
+	runtime, err := New(Dependencies{
+		DB: db, Settings: settingsService, Transport: transport, StreamTransport: transport,
+		StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{}, ContentMetrics: metrics,
+		SessionRevocations: &runtimeSessionRevocationsFake{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, ok := runtime.contentManager.(*managedContentRuntime)
+	if !ok {
+		t.Fatalf("content manager type=%T", runtime.contentManager)
+	}
+	t.Cleanup(func() { _ = manager.Shutdown(context.Background()) })
+	if err := manager.PrepareEnable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if manager.cache == nil || !manager.cache.Status().DiskEnabled {
+		t.Fatalf("runtime cache status=%+v", manager.cache.Status())
+	}
+	if got := metrics.cache[content.MetricCacheKeyLoss]; got != 1 {
+		t.Fatalf("runtime cache key-loss metric=%d, want 1", got)
+	}
+}
+
+func TestManagedContentRuntimeReconcileCycleReleasesTerminalLeaseWhileFeatureDisabled(t *testing.T) {
+	db, manager, leaseID := newManagedContentRuntimeTerminalLeaseHarness(t)
+	stateErr, cacheErr := manager.reconcileCycle(context.Background())
+	if stateErr != nil || cacheErr != nil {
+		t.Fatalf("disabled reconciliation errors: state=%v cache=%v", stateErr, cacheErr)
+	}
+	var stored model.RecoveryPointLease
+	if err := db.First(&stored, "id = ?", leaseID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != string(backupasset.LeaseReleased) || stored.ReleasedAt == nil {
+		t.Fatalf("disabled runtime left terminal lease active: %+v", stored)
+	}
+}
+
+func TestManagedContentRuntimeReconcileCycleStopsAtShutdownFence(t *testing.T) {
+	db, manager, leaseID := newManagedContentRuntimeTerminalLeaseHarness(t)
+	manager.stopped.Store(true)
+	stateErr, cacheErr := manager.reconcileCycle(context.Background())
+	if stateErr != nil || cacheErr != nil {
+		t.Fatalf("stopped reconciliation errors: state=%v cache=%v", stateErr, cacheErr)
+	}
+	var stored model.RecoveryPointLease
+	if err := db.First(&stored, "id = ?", leaseID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != string(backupasset.LeaseActive) || stored.ReleasedAt != nil {
+		t.Fatalf("stopped runtime mutated terminal lease: %+v", stored)
+	}
+}
+
+func TestManagedContentRuntimeShutdownCancelsAndJoinsRunLoop(t *testing.T) {
+	db, manager, _ := newManagedContentRuntimeTerminalLeaseHarness(t)
+	settingsReader := &runtimeContentRunSettings{
+		service: settings.NewService(db), started: make(chan struct{}),
+	}
+	manager.foundation = backupasset.NewFoundationService(settingsReader)
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	done := make(chan struct{})
+	go func() {
+		manager.Run(runCtx)
+		close(done)
+	}()
+	select {
+	case <-settingsReader.started:
+	case <-time.After(time.Second):
+		t.Fatal("managed Content run loop did not start")
+	}
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), time.Second)
+	defer cancelShutdown()
+	if err := manager.Shutdown(shutdownCtx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-shutdownCtx.Done():
+		t.Fatal("managed Content shutdown did not join its run loop")
+	}
+}
+
+func newManagedContentRuntimeTerminalLeaseHarness(t *testing.T) (*gorm.DB, *managedContentRuntime, string) {
+	t.Helper()
+	db := openRuntimeTestDB(t)
+	now := time.Date(2026, 7, 19, 10, 0, 0, 0, time.UTC)
+	leaseService, err := backupasset.NewLeaseService(db, func() time.Time { return now }, backupasset.LeaseConfig{
+		Duration: time.Minute, Heartbeat: 10 * time.Second, AbsoluteDeadline: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grantID := strings.Repeat("a", 32)
+	lease, err := leaseService.Acquire(context.Background(), backupasset.AcquireLeaseRequest{
+		RecoveryPointID: strings.Repeat("b", 32),
+		HolderType:      backupasset.LeaseHolderContentSession,
+		OwnerID:         grantID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := model.BackupAssetDeliveryGrant{
+		ID: grantID, DeliveryID: strings.Repeat("c", 32), State: string(content.DeliveryRevoked),
+		RevocationReason: "process_restarted", RevokedAt: &now, LeaseID: lease.ID,
+		Version: 1, AuditState: "none", CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&grant).Error; err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Minute)
+	reconciler, err := content.NewReconciler(content.ReconcilerDependencies{
+		DB: db, Budget: runtimeContentReconcilerBudgetFake{}, Audit: runtimeContentReconcilerAuditFake{},
+		Lease: leaseService, Now: func() time.Time { return now }, BatchSize: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return db, &managedContentRuntime{reconciler: reconciler, ready: &atomic.Bool{}}, lease.ID
+}
+
+type runtimeContentReconcilerBudgetFake struct{}
+
+func (runtimeContentReconcilerBudgetFake) Finalize(context.Context, content.FinalizeIntent) (content.Finalization, error) {
+	return content.Finalization{}, nil
+}
+
+type runtimeContentReconcilerAuditFake struct{}
+
+func (runtimeContentReconcilerAuditFake) FlushGrant(context.Context, string) error { return nil }
+
+type runtimeContentRunSettings struct {
+	service *settings.Service
+	started chan struct{}
+	once    sync.Once
+}
+
+func (reader *runtimeContentRunSettings) GetEffective(key string) string {
+	return reader.service.GetEffective(key)
+}
+
+func (reader *runtimeContentRunSettings) BackupAssetSettingsSnapshot() (map[string]string, error) {
+	reader.once.Do(func() { close(reader.started) })
+	return reader.service.BackupAssetSettingsSnapshot()
+}
+
+func TestRuntimeContentSessionValidatorChecksRevocationRoleVersionAndExpiry(t *testing.T) {
+	now := time.Date(2026, 7, 19, 1, 2, 3, 0, time.UTC)
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(&model.User{}); err != nil {
+		t.Fatal(err)
+	}
+	user := model.User{ID: 7, Username: "content-admin", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "admin", TokenVersion: 4}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	revocations := &runtimeSessionRevocationsFake{}
+	validator, err := newRuntimeContentSessionValidator(db, revocations, func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("newRuntimeContentSessionValidator: %v", err)
+	}
+	session := content.DeliverySession{
+		JTI: strings.Repeat("a", 32), UserID: user.ID, Role: user.Role,
+		TokenVersion: user.TokenVersion, ExpiresAt: now.Add(time.Minute),
+	}
+	if err := validator.Validate(context.Background(), session); err != nil {
+		t.Fatalf("valid content session rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*content.DeliverySession){
+		"expired":       func(value *content.DeliverySession) { value.ExpiresAt = now },
+		"wrong role":    func(value *content.DeliverySession) { value.Role = "operator" },
+		"wrong version": func(value *content.DeliverySession) { value.TokenVersion++ },
+		"wrong user":    func(value *content.DeliverySession) { value.UserID++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := session
+			mutate(&candidate)
+			if err := validator.Validate(context.Background(), candidate); !errors.Is(err, backupasset.ErrForbidden) {
+				t.Fatalf("invalid session got %v, want forbidden", err)
+			}
+		})
+	}
+	revocations.revoked = true
+	if err := validator.Validate(context.Background(), session); !errors.Is(err, backupasset.ErrForbidden) {
+		t.Fatalf("revoked session got %v, want forbidden", err)
+	}
+}
+
+func TestRuntimeContentAuthorizerBindsExactActiveCatalogAndCurrentOwnership(t *testing.T) {
+	now := time.Date(2026, 7, 19, 2, 3, 4, 0, time.UTC)
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(
+		&model.BackupRepository{}, &model.RecoveryPoint{}, &model.CatalogGeneration{}, &model.CatalogEntry{},
+		&model.BackupAssetSearchGeneration{}, &model.BackupAssetSearchDocument{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	repositoryID := strings.Repeat("b", 32)
+	pointID := strings.Repeat("c", 32)
+	generationID := strings.Repeat("d", 32)
+	entryID := strings.Repeat("e", 64)
+	sourceFingerprint := strings.Repeat("1", 64)
+	entryFingerprint := strings.Repeat("2", 64)
+	if err := db.Create(&model.BackupRepository{
+		ID: repositoryID, ProviderKind: string(backupasset.ProviderRclone), DisplayName: "content-repository",
+		VersionMode: string(backupasset.VersionVersionedPrefix), Status: string(backupasset.RepositoryOnline),
+		CapabilityRevision: 3, CapabilitiesJSON: `{"open_sequential":true,"open_range":true}`,
+		ImmutabilityLevel: string(backupasset.ImmutabilityBackendVersioned), CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.RecoveryPoint{
+		ID: pointID, RepositoryID: repositoryID, Semantics: string(backupasset.PointImportedBaseline),
+		State: string(backupasset.RecoveryPointCommitted), SourceFingerprint: sourceFingerprint,
+		CapabilityRevision: 3, CapabilitiesJSON: `{"open_sequential":true,"open_range":true}`,
+		PhysicalAvailability: string(backupasset.PhysicalOnline), HoldState: string(backupasset.HoldNone),
+		ImmutabilityLevel: string(backupasset.ImmutabilityBackendVersioned), CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.CatalogGeneration{
+		ID: generationID, RecoveryPointID: pointID, Generation: 1, State: string(catalog.GenerationComplete),
+		IsActive: true, SourceFingerprint: sourceFingerprint, ExpectedEntryCount: 1, WrittenEntryCount: 1,
+		StartedAt: now, CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	modified := now.Add(-time.Hour)
+	if err := db.Create(&model.CatalogEntry{
+		GenerationID: generationID, EntryID: entryID, RecoveryPointID: pointID,
+		NormalizedPath: "/safe/report.pdf", Name: "report.pdf", EntryType: string(backupasset.CatalogEntryFile),
+		Size: 4096, ModifiedAt: &modified, MimeType: "application/pdf", Fingerprint: entryFingerprint,
+		FingerprintStrength: string(catalog.FingerprintStrong), SecurityState: "sealed", CreatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	searchGenerationID := strings.Repeat("3", 32)
+	if err := db.Create(&model.BackupAssetSearchGeneration{
+		ID: searchGenerationID, RecoveryPointID: pointID, CatalogGenerationID: generationID,
+		Generation: 1, State: string(search.SearchGenerationComplete), IsActive: true,
+		SourceFingerprint: sourceFingerprint, NormalizerVersion: search.NormalizerVersion,
+		SearchKeyVersion: 1, ProjectionRevision: 1, LeaseID: strings.Repeat("4", 32),
+		BuildAttemptID: strings.Repeat("5", 32), FenceTokenHash: strings.Repeat("6", 64),
+		ExpectedDocumentCount: 1, WrittenDocumentCount: 1, StartedAt: now, FinishedAt: &now,
+		CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.BackupAssetSearchDocument{
+		SearchGenerationID: searchGenerationID, DocumentID: entryID, RecoveryPointID: pointID,
+		CatalogGenerationID: generationID, EntryID: entryID, Sensitivity: string(search.SensitivitySecret),
+		ClassificationRevision: 7, MetadataRevision: 1, EntryType: string(backupasset.CatalogEntryFile),
+		ModifiedAt: &modified, LineageToken: strings.Repeat("7", 64), PathGroupToken: strings.Repeat("8", 64),
+		PathSortKey: "report.pdf", NameSortKey: "report.pdf", CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	ownership, err := catalog.NewOwnership(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizer, err := newRuntimeContentAuthorizer(db, ownership)
+	if err != nil {
+		t.Fatalf("newRuntimeContentAuthorizer: %v", err)
+	}
+	ref := backupasset.AssetRef{RecoveryPointID: pointID, EntryID: entryID}
+	actor := content.DeliveryActor{UserID: 1, Username: "admin", Role: "admin"}
+	asset, err := authorizer.Authorize(context.Background(), actor, ref, content.DeliveryPreview)
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	if asset.Ref != ref || asset.CatalogGenerationID != generationID || asset.RepositoryID != repositoryID ||
+		asset.Provider != backupasset.ProviderRclone || asset.SourceFingerprint != sourceFingerprint ||
+		asset.EntryFingerprint != entryFingerprint || asset.FingerprintStrength != string(catalog.FingerprintStrong) ||
+		asset.Size != 4096 || asset.MediaType != "application/pdf" || asset.Path != "/safe/report.pdf" ||
+		asset.Name != "report.pdf" || !asset.RangeProven || asset.ModifiedAt == nil || !asset.ModifiedAt.Equal(modified) ||
+		asset.SearchClassification != content.ClassificationSecret || asset.SearchClassificationRevision != 7 {
+		t.Fatalf("authorized asset binding=%+v", asset)
+	}
+	assertNoSearchEvidence := func(t *testing.T) {
+		t.Helper()
+		current, err := authorizer.Authorize(context.Background(), actor, ref, content.DeliveryPreview)
+		if err != nil {
+			t.Fatalf("Authorize without usable Search evidence: %v", err)
+		}
+		if current.SearchClassification != "" || current.SearchClassificationRevision != 0 {
+			t.Fatalf("incomplete Search evidence escaped: %+v", current)
+		}
+	}
+	for name, testCase := range map[string]struct {
+		mutate  func(*testing.T)
+		restore func(*testing.T)
+	}{
+		"unfinished generation": {
+			mutate: func(t *testing.T) {
+				if err := db.Model(&model.BackupAssetSearchGeneration{}).Where("id = ?", searchGenerationID).
+					Update("finished_at", nil).Error; err != nil {
+					t.Fatal(err)
+				}
+			},
+			restore: func(t *testing.T) {
+				if err := db.Model(&model.BackupAssetSearchGeneration{}).Where("id = ?", searchGenerationID).
+					Update("finished_at", now).Error; err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		"document count mismatch": {
+			mutate: func(t *testing.T) {
+				if err := db.Model(&model.BackupAssetSearchGeneration{}).Where("id = ?", searchGenerationID).
+					Update("expected_document_count", 2).Error; err != nil {
+					t.Fatal(err)
+				}
+			},
+			restore: func(t *testing.T) {
+				if err := db.Model(&model.BackupAssetSearchGeneration{}).Where("id = ?", searchGenerationID).
+					Update("expected_document_count", 1).Error; err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		"source mismatch": {
+			mutate: func(t *testing.T) {
+				if err := db.Model(&model.BackupAssetSearchGeneration{}).Where("id = ?", searchGenerationID).
+					Update("source_fingerprint", "stale-source").Error; err != nil {
+					t.Fatal(err)
+				}
+			},
+			restore: func(t *testing.T) {
+				if err := db.Model(&model.BackupAssetSearchGeneration{}).Where("id = ?", searchGenerationID).
+					Update("source_fingerprint", sourceFingerprint).Error; err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		"inactive generation": {
+			mutate: func(t *testing.T) {
+				if err := db.Model(&model.BackupAssetSearchGeneration{}).Where("id = ?", searchGenerationID).
+					Update("is_active", false).Error; err != nil {
+					t.Fatal(err)
+				}
+			},
+			restore: func(t *testing.T) {
+				if err := db.Model(&model.BackupAssetSearchGeneration{}).Where("id = ?", searchGenerationID).
+					Update("is_active", true).Error; err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		"non-exact document": {
+			mutate: func(t *testing.T) {
+				if err := db.Model(&model.BackupAssetSearchDocument{}).
+					Where("search_generation_id = ? AND document_id = ?", searchGenerationID, entryID).
+					Update("document_id", strings.Repeat("9", 64)).Error; err != nil {
+					t.Fatal(err)
+				}
+			},
+			restore: func(t *testing.T) {
+				if err := db.Model(&model.BackupAssetSearchDocument{}).
+					Where("search_generation_id = ?", searchGenerationID).
+					Update("document_id", entryID).Error; err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run("ignores "+name, func(t *testing.T) {
+			testCase.mutate(t)
+			t.Cleanup(func() { testCase.restore(t) })
+			assertNoSearchEvidence(t)
+		})
+	}
+	if _, err := authorizer.Authorize(context.Background(), content.DeliveryActor{UserID: 2, Role: "operator"}, ref, content.DeliveryDownload); !errors.Is(err, backupasset.ErrForbidden) {
+		t.Fatalf("operator download got %v, want forbidden", err)
+	}
+	if _, err := authorizer.Authorize(context.Background(), content.DeliveryActor{UserID: 3, Role: "viewer"}, ref, content.DeliveryPreview); !errors.Is(err, backupasset.ErrForbidden) {
+		t.Fatalf("viewer preview got %v, want forbidden", err)
+	}
+	t.Run("repository drift", func(t *testing.T) {
+		replacementRepositoryID := strings.Repeat("a", 32)
+		if err := db.Create(&model.BackupRepository{
+			ID: replacementRepositoryID, ProviderKind: string(backupasset.ProviderRclone), DisplayName: "replacement-content-repository",
+			VersionMode: string(backupasset.VersionVersionedPrefix), Status: string(backupasset.RepositoryOnline),
+			CapabilityRevision: 3, CapabilitiesJSON: `{"open_sequential":true,"open_range":true}`,
+			ImmutabilityLevel: string(backupasset.ImmutabilityBackendVersioned), CreatedAt: now, UpdatedAt: now,
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Model(&model.RecoveryPoint{}).Where("id = ?", pointID).
+			Update("repository_id", replacementRepositoryID).Error; err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := db.Model(&model.RecoveryPoint{}).Where("id = ?", pointID).
+				Update("repository_id", repositoryID).Error; err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err := authorizer.Reauthorize(context.Background(), actor, asset, content.DeliveryPreview); !errors.Is(err, backupasset.ErrConflict) {
+			t.Fatalf("repository drift error=%v, want conflict", err)
+		}
+	})
+	for name, update := range map[string]map[string]any{
+		"Search classification": {"sensitivity": string(search.SensitivityNonSecret), "classification_revision": 8},
+		"path":                  {"normalized_path": "/safe/renamed/report.pdf"},
+		"name":                  {"name": "renamed.pdf"},
+		"media type":            {"mime_type": "application/octet-stream"},
+	} {
+		t.Run(name+" drift", func(t *testing.T) {
+			if name == "Search classification" {
+				if err := db.Model(&model.BackupAssetSearchDocument{}).
+					Where("search_generation_id = ? AND document_id = ?", searchGenerationID, entryID).
+					Updates(update).Error; err != nil {
+					t.Fatal(err)
+				}
+			} else if err := db.Model(&model.CatalogEntry{}).
+				Where("generation_id = ? AND entry_id = ?", generationID, entryID).Updates(update).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := authorizer.Reauthorize(context.Background(), actor, asset, content.DeliveryPreview); !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("reauthorization drift error=%v, want conflict", err)
+			}
+			if name == "Search classification" {
+				if err := db.Model(&model.BackupAssetSearchDocument{}).
+					Where("search_generation_id = ? AND document_id = ?", searchGenerationID, entryID).
+					Updates(map[string]any{"sensitivity": string(search.SensitivitySecret), "classification_revision": 7}).Error; err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				restore := map[string]any{"normalized_path": "/safe/report.pdf", "name": "report.pdf", "mime_type": "application/pdf"}
+				if err := db.Model(&model.CatalogEntry{}).
+					Where("generation_id = ? AND entry_id = ?", generationID, entryID).Updates(restore).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+	if err := db.Model(&model.CatalogGeneration{}).Where("id = ?", generationID).Update("is_active", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := authorizer.Reauthorize(context.Background(), actor, asset, content.DeliveryPreview); err == nil {
+		t.Fatal("reauthorization accepted an inactive Catalog generation")
+	}
+}
+
+type runtimeContentManagerFake struct {
+	events            *[]string
+	prepareEnableErr  error
+	prepareDisableErr error
+	shutdownErr       error
+	runStarted        chan struct{}
+}
+
+func (fake *runtimeContentManagerFake) Startup(context.Context) error {
+	*fake.events = append(*fake.events, "content-startup")
+	return nil
+}
+
+func (fake *runtimeContentManagerFake) PrepareEnable(context.Context) error {
+	*fake.events = append(*fake.events, "content-prepare-enable")
+	return fake.prepareEnableErr
+}
+
+func (fake *runtimeContentManagerFake) PrepareDisable(context.Context) error {
+	*fake.events = append(*fake.events, "content-prepare-disable")
+	return fake.prepareDisableErr
+}
+
+func (fake *runtimeContentManagerFake) SetReady(ready bool) {
+	*fake.events = append(*fake.events, fmt.Sprintf("content-ready-%t", ready))
+}
+
+func (fake *runtimeContentManagerFake) StopAccepting() {
+	*fake.events = append(*fake.events, "content-stop-accepting")
+}
+
+func (fake *runtimeContentManagerFake) Run(ctx context.Context) {
+	*fake.events = append(*fake.events, "content-run")
+	if fake.runStarted != nil {
+		close(fake.runStarted)
+	}
+	<-ctx.Done()
+}
+
+func (fake *runtimeContentManagerFake) Shutdown(context.Context) error {
+	*fake.events = append(*fake.events, "content-shutdown")
+	return fake.shutdownErr
+}
+
+func (fake *runtimeContentManagerFake) PrepareSchemaDown(_ context.Context, down func() error) error {
+	*fake.events = append(*fake.events, "content-schema-drain")
+	return down()
+}
+
+type runtimeFeatureTransitionerFake struct{ events *[]string }
+
+func (fake *runtimeFeatureTransitionerFake) TransitionFeature(_ context.Context, enabled bool, persist func() error) error {
+	*fake.events = append(*fake.events, fmt.Sprintf("admission-transition-%t", enabled))
+	return persist()
+}
+
+func (fake *runtimeFeatureTransitionerFake) PrepareApplicationDowngrade(_ context.Context, callback func() error) error {
+	*fake.events = append(*fake.events, "admission-app-downgrade")
+	return callback()
+}
+
+func (fake *runtimeFeatureTransitionerFake) PrepareSchemaDown(_ context.Context, callback func() error) error {
+	*fake.events = append(*fake.events, "admission-schema-down")
+	return callback()
+}
+
+func TestRuntimeContentTransitionAndSchemaDownOrdering(t *testing.T) {
+	events := []string{}
+	manager := &runtimeContentManagerFake{events: &events}
+	transitioner := &runtimeFeatureTransitionerFake{events: &events}
+	runtime := &Runtime{contentManager: manager, transitioner: transitioner}
+	if runtime.FeatureTransitioner() != runtime {
+		t.Fatal("runtime did not expose the composed Content feature transitioner")
+	}
+	if err := runtime.TransitionFeature(context.Background(), true, func() error {
+		events = append(events, "persist-enabled")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.TransitionFeature(context.Background(), false, func() error {
+		events = append(events, "persist-disabled")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.PrepareSchemaDown(context.Background(), func() error {
+		events = append(events, "schema-down")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"content-prepare-enable", "admission-transition-true", "persist-enabled", "content-ready-true",
+		"content-ready-false", "content-prepare-disable", "admission-transition-false", "persist-disabled",
+		"content-ready-false", "content-schema-drain", "admission-schema-down", "schema-down",
+	}
+	if fmt.Sprint(events) != fmt.Sprint(want) {
+		t.Fatalf("content transition order=%v, want %v", events, want)
+	}
+}
+
+func TestRuntimeContentTransitionRestoresLifecycleAfterPersistenceFailure(t *testing.T) {
+	persistErr := errors.New("FAKE_CONTENT_PERSIST_FAILURE_FOR_TEST_ONLY")
+	t.Run("failed enable drains provisional content runtime", func(t *testing.T) {
+		events := []string{}
+		manager := &runtimeContentManagerFake{events: &events}
+		runtime := &Runtime{contentManager: manager, transitioner: &runtimeFeatureTransitionerFake{events: &events}}
+		err := runtime.TransitionFeature(context.Background(), true, func() error {
+			events = append(events, "persist-enabled")
+			return persistErr
+		})
+		if !errors.Is(err, persistErr) {
+			t.Fatalf("enable persistence error=%v", err)
+		}
+		want := []string{
+			"content-prepare-enable", "admission-transition-true", "persist-enabled",
+			"content-ready-false", "content-prepare-disable",
+		}
+		if fmt.Sprint(events) != fmt.Sprint(want) {
+			t.Fatalf("failed enable lifecycle=%v, want %v", events, want)
+		}
+	})
+
+	t.Run("failed disable restores content runtime", func(t *testing.T) {
+		events := []string{}
+		manager := &runtimeContentManagerFake{events: &events}
+		runtime := &Runtime{contentManager: manager, transitioner: &runtimeFeatureTransitionerFake{events: &events}}
+		err := runtime.TransitionFeature(context.Background(), false, func() error {
+			events = append(events, "persist-disabled")
+			return persistErr
+		})
+		if !errors.Is(err, persistErr) {
+			t.Fatalf("disable persistence error=%v", err)
+		}
+		want := []string{
+			"content-ready-false", "content-prepare-disable", "admission-transition-false", "persist-disabled",
+			"content-prepare-enable", "content-ready-true",
+		}
+		if fmt.Sprint(events) != fmt.Sprint(want) {
+			t.Fatalf("failed disable lifecycle=%v, want %v", events, want)
+		}
+	})
+
+	t.Run("failed disable and failed restore remain not ready", func(t *testing.T) {
+		events := []string{}
+		restoreErr := errors.New("FAKE_CONTENT_RESTORE_FAILURE_FOR_TEST_ONLY")
+		manager := &runtimeContentManagerFake{events: &events, prepareEnableErr: restoreErr}
+		runtime := &Runtime{contentManager: manager, transitioner: &runtimeFeatureTransitionerFake{events: &events}}
+		err := runtime.TransitionFeature(context.Background(), false, func() error { return persistErr })
+		if !errors.Is(err, persistErr) || !errors.Is(err, restoreErr) {
+			t.Fatalf("joined disable/restore error=%v", err)
+		}
+		if got := events[len(events)-1]; got != "content-ready-false" {
+			t.Fatalf("failed restore final lifecycle=%v", events)
+		}
+	})
+}
+
+func TestRuntimeContentStopRunAndShutdownAreAlwaysJoined(t *testing.T) {
+	events := []string{}
+	shutdownErr := errors.New("FAKE_CONTENT_SHUTDOWN_FAILURE_FOR_TEST_ONLY")
+	manager := &runtimeContentManagerFake{events: &events, shutdownErr: shutdownErr, runStarted: make(chan struct{})}
+	runtime := &Runtime{contentManager: manager}
+	runtime.StopAccepting()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		runtime.Run(ctx)
+		close(done)
+	}()
+	<-manager.runStarted
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runtime did not join Content Run after cancellation")
+	}
+	if err := runtime.Shutdown(context.Background()); !errors.Is(err, shutdownErr) {
+		t.Fatalf("runtime shutdown got %v, want Content error", err)
+	}
+	if fmt.Sprint(events) != fmt.Sprint([]string{"content-stop-accepting", "content-run", "content-stop-accepting", "content-shutdown"}) {
+		t.Fatalf("content lifecycle events=%v", events)
 	}
 }
 

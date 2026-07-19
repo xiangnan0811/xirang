@@ -13,6 +13,9 @@ func StructuredLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
+		if IsBackupContentShapedPath(path) {
+			path = BackupContentSafeRoute
+		}
 
 		c.Next()
 

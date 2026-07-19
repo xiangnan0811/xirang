@@ -645,6 +645,17 @@ func (handle *commandInvariantHandle) Close() error {
 	return verifyErr
 }
 
+func (handle *commandInvariantHandle) ProviderBytes() int64 {
+	if handle == nil {
+		return -1
+	}
+	reporter, ok := handle.underlying.(ProviderByteReporter)
+	if !ok {
+		return -1
+	}
+	return reporter.ProviderBytes()
+}
+
 func (adapter *RcloneAdapter) pageEntries(ctx context.Context, snapshot ReadSnapshot, point PointLocator, parent string, items []Entry, request PageRequest) (EntryPage, error) {
 	request, err := request.Normalize(adapter.maxPageSize)
 	if err != nil {

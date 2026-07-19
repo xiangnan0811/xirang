@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/model"
@@ -12,11 +13,20 @@ import (
 )
 
 const (
-	CtxUserID   = "userID"
-	CtxUsername = "username"
-	CtxRole     = "role"
-	CtxToken    = "token"
+	CtxUserID         = "userID"
+	CtxUsername       = "username"
+	CtxRole           = "role"
+	CtxToken          = "token"
+	CtxSessionBinding = "sessionBinding"
 )
+
+type SessionBinding struct {
+	JTI          string    `json:"-"`
+	UserID       uint      `json:"-"`
+	Role         string    `json:"-"`
+	TokenVersion uint      `json:"-"`
+	ExpiresAt    time.Time `json:"-"`
+}
 
 func AuthMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -44,9 +54,14 @@ func AuthMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		// 校验 token_version：密码修改、角色变更、2FA 禁用后旧 token 自动失效
+		if claims.ID == "" || claims.ExpiresAt == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "token 会话绑定无效"})
+			c.Abort()
+			return
+		}
 		if db != nil {
 			var user model.User
-			if err := db.Select("token_version").First(&user, claims.UserID).Error; err != nil {
+			if err := db.Select("token_version", "role").First(&user, claims.UserID).Error; err != nil {
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "用户不存在或已删除"})
 				c.Abort()
 				return
@@ -56,13 +71,31 @@ func AuthMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 				c.Abort()
 				return
 			}
+			if user.Role != claims.Role {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "用户角色已变更，请重新登录"})
+				c.Abort()
+				return
+			}
+		}
+		binding := SessionBinding{
+			JTI: claims.ID, UserID: claims.UserID, Role: claims.Role,
+			TokenVersion: claims.TokenVersion, ExpiresAt: claims.ExpiresAt.UTC(),
 		}
 		c.Set(CtxUserID, claims.UserID)
 		c.Set(CtxUsername, claims.Username)
 		c.Set(CtxRole, claims.Role)
-		c.Set(CtxToken, parts[1])
+		c.Set(CtxSessionBinding, binding)
 		c.Next()
 	}
+}
+
+func CurrentSessionBinding(c *gin.Context) (SessionBinding, bool) {
+	value, exists := c.Get(CtxSessionBinding)
+	if !exists {
+		return SessionBinding{}, false
+	}
+	binding, ok := value.(SessionBinding)
+	return binding, ok
 }
 
 func CurrentRole(c *gin.Context) string {

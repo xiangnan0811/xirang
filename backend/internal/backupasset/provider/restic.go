@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"path"
 	"sort"
 	"strings"
@@ -557,11 +558,12 @@ func revisionDigest(value string) string {
 }
 
 type boundedReadHandle struct {
-	underlying ReadHandle
-	remaining  int64
-	limitErr   error
-	reachedEOF bool
-	mu         sync.Mutex
+	underlying    ReadHandle
+	remaining     int64
+	providerBytes int64
+	limitErr      error
+	reachedEOF    bool
+	mu            sync.Mutex
 }
 
 func newBoundedReadHandle(underlying ReadHandle, maximum int64) ReadHandle {
@@ -577,6 +579,10 @@ func (handle *boundedReadHandle) Read(buffer []byte) (int, error) {
 	if handle.remaining == 0 {
 		var probe [1]byte
 		count, err := handle.underlying.Read(probe[:])
+		if accountErr := handle.addProviderBytes(count); accountErr != nil {
+			handle.limitErr = accountErr
+			return 0, accountErr
+		}
 		if count > 0 {
 			handle.limitErr = newCapabilityError(backupasset.CapabilityProviderResourceLimit)
 			return 0, handle.limitErr
@@ -593,6 +599,12 @@ func (handle *boundedReadHandle) Read(buffer []byte) (int, error) {
 		buffer = buffer[:handle.remaining]
 	}
 	count, err := handle.underlying.Read(buffer)
+	if accountErr := handle.addProviderBytes(count); accountErr != nil {
+		handle.limitErr = accountErr
+		if err == nil {
+			err = accountErr
+		}
+	}
 	handle.remaining -= int64(count)
 	if errors.Is(err, io.EOF) {
 		handle.reachedEOF = true
@@ -605,7 +617,11 @@ func (handle *boundedReadHandle) Close() error {
 	if handle.limitErr == nil && handle.remaining == 0 && !handle.reachedEOF {
 		var probe [1]byte
 		count, err := io.ReadFull(handle.underlying, probe[:])
+		if accountErr := handle.addProviderBytes(count); accountErr != nil {
+			handle.limitErr = accountErr
+		}
 		switch {
+		case handle.limitErr != nil:
 		case count > 0:
 			handle.limitErr = newCapabilityError(backupasset.CapabilityProviderResourceLimit)
 		case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
@@ -621,6 +637,23 @@ func (handle *boundedReadHandle) Close() error {
 		return limitErr
 	}
 	return closeErr
+}
+
+func (handle *boundedReadHandle) ProviderBytes() int64 {
+	if handle == nil {
+		return -1
+	}
+	handle.mu.Lock()
+	defer handle.mu.Unlock()
+	return handle.providerBytes
+}
+
+func (handle *boundedReadHandle) addProviderBytes(count int) error {
+	if count < 0 || int64(count) > math.MaxInt64-handle.providerBytes {
+		return fmt.Errorf("%w: Provider byte counter overflow", backupasset.ErrInvalidState)
+	}
+	handle.providerBytes += int64(count)
+	return nil
 }
 
 var (

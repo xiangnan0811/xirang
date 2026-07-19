@@ -16,6 +16,7 @@ import (
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/anomaly"
 	"xirang/backend/internal/api"
+	"xirang/backend/internal/api/handlers"
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/automation"
 	"xirang/backend/internal/backupasset/provider"
@@ -114,8 +115,10 @@ func main() {
 	defer cronScheduler.Stop()
 
 	settingsSvc := settings.NewService(db)
+	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTTTL)
+	jwtManager.SetDB(db)
 	assetRuntime, err := backupruntime.New(backupruntime.Dependencies{
-		DB: db, Settings: settingsSvc,
+		DB: db, Settings: settingsSvc, SessionRevocations: jwtManager,
 		ToolBinaries: provider.ToolBinaries{
 			Restic: util.GetEnvOrDefault("RESTIC_BINARY", "restic"),
 			Rclone: util.GetEnvOrDefault("RCLONE_BINARY", "rclone"),
@@ -295,8 +298,6 @@ func main() {
 	dashboards.Register(providers.NewNodeProvider(db))
 	dashboards.Register(providers.NewTaskProvider(db))
 
-	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTTTL)
-	jwtManager.SetDB(db)
 	authService := auth.NewService(db, jwtManager, settingsSvc, auth.LoginSecurityConfig{
 		FailLockThreshold:       cfg.LoginFailLockThreshold,
 		FailLockDuration:        cfg.LoginFailLockDuration,
@@ -306,23 +307,33 @@ func main() {
 	snapshotIndexer := snapshot.NewIndexer(db, assetRuntime.LineageGuard(), assetRuntime.FoundationService())
 
 	router := api.NewRouter(api.Dependencies{
-		AppContext:            hubCtx,
-		DB:                    db,
-		AuthService:           authService,
-		JWTManager:            jwtManager,
-		TaskManager:           taskManager,
-		Hub:                   hub,
-		SettingsService:       settingsSvc,
-		AllowedOrigins:        cfg.AllowedOrigins,
-		LoginRateLimit:        cfg.LoginRateLimit,
-		LoginRateWindow:       cfg.LoginRateWindow,
-		RetryWorker:           retryWorker,
-		AlertDispatcher:       alertDispatcher,
-		MetricsToken:          cfg.MetricsToken,
-		MetricsRateLimit:      cfg.MetricsRateLimit,
-		TrustedProxies:        cfg.TrustedProxies,
-		MetricsRateWindow:     cfg.MetricsRateWindow,
-		BackupAssets:          assetRuntime,
+		AppContext:        hubCtx,
+		DB:                db,
+		AuthService:       authService,
+		JWTManager:        jwtManager,
+		TaskManager:       taskManager,
+		Hub:               hub,
+		SettingsService:   settingsSvc,
+		AllowedOrigins:    cfg.AllowedOrigins,
+		LoginRateLimit:    cfg.LoginRateLimit,
+		LoginRateWindow:   cfg.LoginRateWindow,
+		RetryWorker:       retryWorker,
+		AlertDispatcher:   alertDispatcher,
+		MetricsToken:      cfg.MetricsToken,
+		MetricsRateLimit:  cfg.MetricsRateLimit,
+		TrustedProxies:    cfg.TrustedProxies,
+		MetricsRateWindow: cfg.MetricsRateWindow,
+		BackupAssets:      assetRuntime,
+		BackupContent:     assetRuntime.ContentBroker(),
+		BackupContentConfig: func(context.Context) (handlers.BackupContentHandlerConfig, error) {
+			contentConfig, contentConfigErr := assetRuntime.ContentConfig()
+			if contentConfigErr != nil {
+				return handlers.BackupContentHandlerConfig{}, contentConfigErr
+			}
+			return handlers.BackupContentHandlerConfig{
+				TicketTimeout: contentConfig.TicketTimeout, AllowInsecureLoopback: contentConfig.AllowInsecureLoopback,
+			}, nil
+		},
 		LegacyResticSnapshots: legacyRestic,
 		SnapshotDiffRunner:    legacyRestic,
 		SnapshotIndexer:       snapshotIndexer,

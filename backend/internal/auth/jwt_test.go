@@ -99,11 +99,57 @@ func TestJWTManagerRevokeTokenPersistsAndReloads(t *testing.T) {
 	if err := manager.RevokeToken(token); err != nil {
 		t.Fatalf("注销 token 失败: %v", err)
 	}
-
 	reloaded := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
 	reloaded.SetDB(db)
 	if _, err := reloaded.ParseToken(token); err == nil {
 		t.Fatalf("期望重新加载后的管理器拒绝已持久化注销 token")
+	}
+	claims, err := manager.parseToken(token, false)
+	if err != nil {
+		t.Fatalf("parse revoked token claims: %v", err)
+	}
+	for _, candidate := range []*JWTManager{manager, reloaded} {
+		revoked, revokeErr := candidate.IsSessionRevoked(claims.ID)
+		if revokeErr != nil || !revoked {
+			t.Fatalf("IsSessionRevoked(%q) = %v, %v", claims.ID, revoked, revokeErr)
+		}
+	}
+}
+
+func TestJWTManagerSessionRevokedFailsClosedForInvalidJTI(t *testing.T) {
+	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	for _, value := range []string{"", "ABC", strings.Repeat("A", 32), strings.Repeat("g", 32)} {
+		if revoked, err := manager.IsSessionRevoked(value); err == nil || !revoked {
+			t.Fatalf("IsSessionRevoked(%q) = %v, %v; want revoked error", value, revoked, err)
+		}
+	}
+}
+
+func TestJWTManagerRevokeSessionByJTI(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared&_loc=UTC"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open test database: %v", err)
+	}
+	if err := db.AutoMigrate(&model.TokenRevocation{}); err != nil {
+		t.Fatalf("migrate token revocations: %v", err)
+	}
+
+	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	manager.SetDB(db)
+	jti := strings.Repeat("a", 32)
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	if err := manager.RevokeSession(jti, 7, expiresAt); err != nil {
+		t.Fatalf("revoke session: %v", err)
+	}
+	if revoked, err := manager.IsSessionRevoked(jti); err != nil || !revoked {
+		t.Fatalf("IsSessionRevoked(%q) = %v, %v", jti, revoked, err)
+	}
+	var row model.TokenRevocation
+	if err := db.Where("token_hash = ?", "jti:"+jti).First(&row).Error; err != nil {
+		t.Fatalf("load persisted session revocation: %v", err)
+	}
+	if row.UserID != 7 || !row.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("persisted revocation = %+v, want user=7 expiry=%s", row, expiresAt)
 	}
 }
 

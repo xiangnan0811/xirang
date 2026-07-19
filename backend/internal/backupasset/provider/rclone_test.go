@@ -45,6 +45,24 @@ func TestRcloneProbeUsesTaskScopedIdentityAndExecutableRangeProof(t *testing.T) 
 	}
 }
 
+func TestRcloneInvariantHandleForwardsProviderByteReporter(t *testing.T) {
+	underlying := newBoundedReadHandle(&trackingProviderReadHandle{Reader: strings.NewReader("12345")}, 4)
+	handle := &commandInvariantHandle{underlying: underlying, verify: func() error { return nil }}
+	reporter, ok := any(handle).(ProviderByteReporter)
+	if !ok {
+		t.Fatal("Rclone invariant handle hides ProviderByteReporter")
+	}
+	if _, err := io.ReadAll(handle); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		t.Fatalf("read overflow error=%v", err)
+	}
+	if err := handle.Close(); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		t.Fatalf("close overflow error=%v", err)
+	}
+	if got := reporter.ProviderBytes(); got != 5 {
+		t.Fatalf("forwarded Provider bytes=%d, want 5", got)
+	}
+}
+
 func TestRcloneNodeDefaultConfigOmitsSecretTransport(t *testing.T) {
 	transport := rcloneProbeTransport(true)
 	adapter := newRcloneAdapterForTest(t, transport)

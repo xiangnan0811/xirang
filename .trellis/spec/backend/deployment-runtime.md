@@ -88,3 +88,153 @@ services:
       - ./backups:/backup
       - ./logs:/logs
 ```
+
+---
+
+## Scenario: Backup Asset Content Gateway And Cache Runtime
+
+### 1. Scope / Trigger
+
+- Trigger: changing the asset-content Nginx routes, Range/streaming proxy
+  behavior, content-specific logs, effective origin forwarding, or the
+  authenticated cache directory in the All-in-One image.
+- Applies to `deploy/nginx/templates/default.conf.template`,
+  `deploy/nginx/README.md`, `deploy/allinone/Dockerfile`, the Nginx checker, and
+  its mutation self-test.
+
+### 2. Signatures
+
+- Exact gateway route:
+  `location ~ "^/api/v1/asset-content/[0-9a-f]{32}$"`.
+- Redacted shaped fallback:
+  `location ~ "^/api/v1/asset-content(?:/|$)"`.
+- Dedicated access format/file:
+  `xirang_asset_content` and `/logs/nginx-asset-content.log`.
+- Cache root: `/var/cache/xirang/asset-content`, owned by the runtime user and
+  not declared as a volume.
+- Cache root identity: pre-open `os.Lstat`, `os.OpenRoot`, `Root.Stat(".")`,
+  final `os.Lstat`, and `os.SameFile` comparisons before lock or cleanup.
+- Verification:
+  `scripts/check-asset-content-nginx.sh` and
+  `scripts/check-asset-content-nginx.test.sh`.
+
+### 3. Contracts
+
+- Only the exact 32-lowercase-hex route receives Range/If-Range forwarding,
+  disabled proxy/request buffering, cache/temp-file/gzip suppression, and
+  finite 75-second proxy/send ceilings. Application grant/lease/write
+  deadlines remain shorter and authoritative.
+- The shaped fallback exists only to keep malformed, trailing-slash, and
+  unsupported-method requests on redacted logs and safe rejection handlers. It
+  must not inherit the exact route's streaming, Range, buffering, or timeout
+  directives.
+- Both content locations precede generic `/api/v1/`, use the dedicated access
+  format, and override unformattable Nginx error logging with
+  `error_log /dev/null crit`.
+- The content access format contains only request ID, status, response bytes,
+  and upstream/request timing. URI, args, cookies, referrer, user agent,
+  client identity, and request line are forbidden.
+- The exact route preserves an explicit Host port through `$http_host`; its
+  effective proto is selected only from exact `http|https`, otherwise falling
+  back to inner `$scheme`. These headers are origin evidence, not authorization.
+- Generic API/WebSocket behavior, HTTP port `10761`, external TLS ownership,
+  health route, SPA/image policy, and official image name remain unchanged.
+- The cache root is dedicated and non-persistent, outside `/data`, `/backup`,
+  and `/logs`. Do not bind it to a backup source or substitute ordinary disk
+  temp storage when runtime containment checks disable it.
+- Path validation and `EvalSymlinks` do not make a later name-based open safe.
+  Capture the validated directory identity before mount/source checks, open it
+  with `os.OpenRoot`, then require the opened root and final non-symlink path to
+  be the same file before creating the process lock or deleting orphans. Any
+  rename/symlink replacement disables disk cache without touching the
+  replacement target.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Exact route contains a raw URI/cookie log variable | Checker fails; do not deploy. |
+| Exact route enables buffering, gzip, cache, temp files, or unbounded timeout | Checker fails. |
+| Shaped fallback gains Range/If-Range or exact-route streaming directives | Checker fails; malformed requests must stay rejection-only. |
+| Content route inherits normal Nginx error logging | Checker fails because opaque IDs may enter error logs. |
+| Host uses `$host` or forwarded proto accepts compound/arbitrary values | Checker fails; same-origin evidence became ambiguous. |
+| Generic API route, port 10761, or external TLS contract changes | Checker fails or deployment review rejects the change. |
+| Cache path is persistent or overlaps data/backup/log/source storage | Runtime cache disables; no plaintext/disk fallback is permitted. |
+| Cache root is replaced after validation but before `os.OpenRoot` | Identity comparison fails, disk cache stays disabled, and replacement files remain untouched. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a valid asset-content Range request uses the exact unbuffered route,
+  preserves Host port and closed proto evidence, and logs only status/bytes/time.
+- Base: a malformed asset-content-shaped request reaches the backend safe
+  rejection path under the same redacted log without streaming policy.
+- Base: a stable cache directory passes pre-open/opened/final identity checks;
+  later pathname replacement cannot redirect operations already confined to
+  the stable `os.Root` descriptor.
+- Bad: route all content-shaped paths through one unbuffered regex, log
+  `$request_uri`, persist the cache under `/data`, or trust `EvalSymlinks`
+  followed by an unchecked name-based `os.OpenRoot`.
+
+### 6. Tests Required
+
+- Render with the official `nginx:1.29-alpine` entrypoint, run `nginx -T`, and
+  assert exact/fallback/generic route order and every required/forbidden
+  directive.
+- Mutation self-tests must independently break log variables, error logging,
+  exact route, fallback isolation, buffering/cache/temp/gzip, finite timeouts,
+  Host, proto map, port, and generic API behavior and observe checker failure.
+- Build the All-in-One Dockerfile and assert the cache root exists with runtime
+  ownership while `/data`, `/backup`, `/logs`, image, TLS, and `10761` remain
+  unchanged.
+- Deterministically replace the root from the source-validator test seam after
+  path validation and before open. Assert disk cache is disabled and a sentinel
+  under the symlink target is not deleted. Keep post-open rename tests for
+  startup reconciliation and shutdown as separate coverage.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```nginx
+location ~ ^/api/v1/asset-content {
+  access_log /logs/nginx-access.log xirang_access;
+  proxy_buffering off;
+  proxy_set_header Range $http_range;
+}
+```
+
+Correct:
+
+```nginx
+location ~ "^/api/v1/asset-content/[0-9a-f]{32}$" {
+  access_log /logs/nginx-asset-content.log xirang_asset_content;
+  error_log /dev/null crit;
+  proxy_buffering off;
+  proxy_set_header Range $http_range;
+}
+location ~ "^/api/v1/asset-content(?:/|$)" {
+  access_log /logs/nginx-asset-content.log xirang_asset_content;
+  error_log /dev/null crit;
+  # Redaction/rejection only: no Range or streaming directives.
+}
+```
+
+Wrong cache-root open:
+
+```go
+resolved, _ := filepath.EvalSymlinks(rootPath)
+root, _ := os.OpenRoot(resolved) // the name may now identify another directory
+```
+
+Correct cache-root open:
+
+```go
+validated, _ := os.Lstat(resolved)
+root, _ := os.OpenRoot(resolved)
+opened, _ := root.Stat(".")
+current, _ := os.Lstat(resolved)
+if !os.SameFile(validated, opened) || !os.SameFile(opened, current) {
+    _ = root.Close()
+    return CacheReasonRootUnverified
+}
+```

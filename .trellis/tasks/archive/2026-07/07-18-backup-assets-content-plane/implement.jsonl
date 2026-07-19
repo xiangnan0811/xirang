@@ -1,0 +1,14 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Paired SQLite/PostgreSQL 000066 constraints, composite FKs, UTC/model parity, atomic used-down and real behavior fixtures."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Closed sentinel/capability errors, errors.Is wrapping and safe content/JSON handler mappings without Provider or secret output."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Structured low-cardinality logging, content-route normalization and path/name/query/delivery/cookie/JWT/locator redaction."}
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Runtime composition, bounded startup/reconciliation/shutdown, all-in-one/Nginx/cache-root and Docker contracts."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"TDD, race/cancellation tests, mandatory PostgreSQL behavior and focused/full quality gates."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Private raw DTOs, closed whole-product validation, camelCase mapping and central JSON request boundary."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Vitest mapper coverage and env -u NODE_ENV npm run check gate."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse Catalog ownership, leases, audit, settings, runtime, Provider readers and frontend boundary helpers."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Keep migration/model/domain/API/HTTP/Nginx/frontend/lifecycle contracts aligned end to end."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Dedicated branch, exact staging, single PR, required CI/post-merge monitoring and main sync."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/prd.md","reason":"Parent accepted product decisions, step-up policy, safety constraints and Child boundaries."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/design.md","reason":"Parent Content Plane, renderer, permission/audit, API, degradation, migration and validation contracts."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/implement.md","reason":"Parent execution/migration reservation, Child 8 steps, high-risk reviews, rollback and delivery workflow."}
+{"file":".trellis/tasks/07-18-backup-assets-content-plane/research/current-main-evidence.md","reason":"Exact a3c309a Provider/Catalog/Search/session/lease/runtime/Nginx/frontend gaps and selected implementation seams."}

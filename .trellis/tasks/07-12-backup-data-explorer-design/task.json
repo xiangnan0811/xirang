@@ -25,7 +25,8 @@
     "07-15-backup-assets-rsync-versioning",
     "07-15-backup-assets-rclone-versioning",
     "07-17-backup-assets-catalog",
-    "07-18-backup-assets-search-overlays"
+    "07-18-backup-assets-search-overlays",
+    "07-18-backup-assets-content-plane"
   ],
   "parent": null,
   "relatedFiles": [],

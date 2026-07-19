@@ -381,6 +381,106 @@ func TestFoundationSearchConfigAndOverlayConfigRequireCompleteSnapshotPort(t *te
 	}
 }
 
+func TestFoundationContentConfigUsesOneAtomicSnapshot(t *testing.T) {
+	values := cloneFoundationTestValues(staticFoundationDefaults)
+	for key, value := range map[string]string{
+		"backup_assets.enabled":                           "true",
+		"backup_assets.content_preview_ttl":               "3m",
+		"backup_assets.content_media_ttl":                 "20m",
+		"backup_assets.content_idle_ttl":                  "45s",
+		"backup_assets.content_write_idle_timeout":        "25s",
+		"backup_assets.content_ticket_timeout":            "15s",
+		"backup_assets.content_request_max_bytes":         "33554432",
+		"backup_assets.content_cumulative_max_bytes":      "268435456",
+		"backup_assets.content_max_requests":              "128",
+		"backup_assets.content_grant_max_in_flight":       "2",
+		"backup_assets.content_user_max_concurrency":      "3",
+		"backup_assets.content_provider_max_concurrency":  "3",
+		"backup_assets.content_global_max_concurrency":    "12",
+		"backup_assets.content_rate_window":               "2m",
+		"backup_assets.content_user_window_bytes":         "536870912",
+		"backup_assets.content_provider_window_bytes":     "2147483648",
+		"backup_assets.content_global_window_bytes":       "4294967296",
+		"backup_assets.content_user_window_requests":      "512",
+		"backup_assets.content_provider_window_requests":  "2048",
+		"backup_assets.content_global_window_requests":    "4096",
+		"backup_assets.content_classification_scan_bytes": "131072",
+		"backup_assets.content_text_preview_bytes":        "524288",
+		"backup_assets.content_hex_preview_bytes":         "32768",
+		"backup_assets.content_raster_max_pixels":         "50000000",
+		"backup_assets.content_memory_object_bytes":       "2097152",
+		"backup_assets.content_memory_user_bytes":         "8388608",
+		"backup_assets.content_memory_provider_bytes":     "16777216",
+		"backup_assets.content_memory_global_bytes":       "33554432",
+		"backup_assets.content_cache_enabled":             "false",
+		"backup_assets.content_cache_root":                "/var/cache/xirang/content-test",
+		"backup_assets.content_cache_chunk_bytes":         "524288",
+		"backup_assets.content_cache_object_bytes":        "268435456",
+		"backup_assets.content_cache_user_bytes":          "1073741824",
+		"backup_assets.content_cache_provider_bytes":      "2147483648",
+		"backup_assets.content_cache_global_bytes":        "4294967296",
+		"backup_assets.content_cache_object_files":        "1024",
+		"backup_assets.content_cache_user_files":          "2048",
+		"backup_assets.content_cache_provider_files":      "4096",
+		"backup_assets.content_cache_global_files":        "8192",
+		"backup_assets.content_cache_idle_ttl":            "10m",
+		"backup_assets.content_cache_absolute_ttl":        "90m",
+		"backup_assets.content_reconcile_interval":        "45s",
+		"backup_assets.content_reconcile_batch_size":      "80",
+		"backup_assets.content_audit_backlog_max":         "5000",
+		"backup_assets.content_allow_insecure_loopback":   "true",
+		"backup_assets.provider_max_concurrency":          "4",
+	} {
+		values[key] = value
+	}
+	reader := &snapshotSettingsReader{values: values}
+	config, err := NewFoundationService(reader).ContentConfig()
+	if err != nil {
+		t.Fatalf("ContentConfig: %v", err)
+	}
+	if !config.Enabled || config.PreviewTTL != 3*time.Minute || config.MediaTTL != 20*time.Minute ||
+		config.IdleTTL != 45*time.Second || config.WriteIdleTimeout != 25*time.Second || config.TicketTimeout != 15*time.Second ||
+		config.RequestMaxBytes != 33554432 || config.CumulativeMaxBytes != 268435456 || config.MaxRequests != 128 ||
+		config.GrantMaxInFlight != 2 || config.RateWindow != 2*time.Minute {
+		t.Fatalf("ContentConfig core=%+v", config)
+	}
+	if config.User.MaxConcurrency != 3 || config.User.WindowBytes != 536870912 || config.User.WindowRequests != 512 ||
+		config.Provider.MaxConcurrency != 3 || config.Provider.WindowBytes != 2147483648 || config.Provider.WindowRequests != 2048 ||
+		config.Global.MaxConcurrency != 12 || config.Global.WindowBytes != 4294967296 || config.Global.WindowRequests != 4096 {
+		t.Fatalf("ContentConfig scopes=%+v %+v %+v", config.User, config.Provider, config.Global)
+	}
+	if config.ClassificationScanBytes != 131072 || config.TextPreviewBytes != 524288 || config.HexPreviewBytes != 32768 ||
+		config.RasterMaxPixels != 50000000 || config.Memory.ObjectBytes != 2097152 || config.Memory.UserBytes != 8388608 ||
+		config.Memory.ProviderBytes != 16777216 || config.Memory.GlobalBytes != 33554432 {
+		t.Fatalf("ContentConfig renderer/memory=%+v", config)
+	}
+	if config.Cache.Enabled || config.Cache.Root != "/var/cache/xirang/content-test" || config.Cache.ChunkBytes != 524288 ||
+		config.Cache.ObjectBytes != 268435456 || config.Cache.UserBytes != 1073741824 ||
+		config.Cache.ProviderBytes != 2147483648 || config.Cache.GlobalBytes != 4294967296 ||
+		config.Cache.ObjectFiles != 1024 || config.Cache.UserFiles != 2048 || config.Cache.ProviderFiles != 4096 ||
+		config.Cache.GlobalFiles != 8192 || config.Cache.IdleTTL != 10*time.Minute || config.Cache.AbsoluteTTL != 90*time.Minute {
+		t.Fatalf("ContentConfig cache=%+v", config.Cache)
+	}
+	if config.ReconcileInterval != 45*time.Second || config.ReconcileBatchSize != 80 || config.AuditBacklogMax != 5000 ||
+		!config.AllowInsecureLoopback {
+		t.Fatalf("ContentConfig lifecycle=%+v", config)
+	}
+	if reader.effectiveReads != 0 || reader.snapshotReads != 1 {
+		t.Fatalf("ContentConfig mixed per-key reads: effective=%d snapshot=%d", reader.effectiveReads, reader.snapshotReads)
+	}
+}
+
+func TestFoundationContentConfigRequiresCompleteAtomicSnapshot(t *testing.T) {
+	if _, err := NewFoundationService(staticSettingsReader{}).ContentConfig(); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("reader without snapshot port got %v, want ErrInvalidState", err)
+	}
+	reader := &snapshotSettingsReader{values: cloneFoundationTestValues(staticFoundationDefaults)}
+	delete(reader.values, "backup_assets.content_ticket_timeout")
+	if _, err := NewFoundationService(reader).ContentConfig(); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("incomplete content snapshot got %v, want ErrInvalidState", err)
+	}
+}
+
 type snapshotSettingsReader struct {
 	mu             sync.Mutex
 	values         map[string]string
@@ -426,66 +526,110 @@ func (reader staticSettingsReader) GetEffective(key string) string {
 }
 
 var staticFoundationDefaults = map[string]string{
-	"backup_assets.enabled":                          "false",
-	"backup_assets.catalog_batch_size":               "2000",
-	"backup_assets.catalog_build_timeout":            "30m",
-	"backup_assets.repository_reconcile_interval":    "15m",
-	"backup_assets.audit_segment_max_events":         "10000",
-	"backup_assets.audit_segment_max_age":            "24h",
-	"backup_assets.audit_detail_retention_days":      "180",
-	"backup_assets.audit_checkpoint_retention_days":  "2555",
-	"backup_assets.lease_duration":                   "5m",
-	"backup_assets.lease_heartbeat":                  "60s",
-	"backup_assets.lease_absolute_deadline":          "168h",
-	"backup_assets.provider_operation_timeout":       "2m",
-	"backup_assets.provider_max_concurrency":         "4",
-	"backup_assets.provider_metadata_limit_bytes":    "16777216",
-	"backup_assets.publication_reconcile_interval":   "5m",
-	"backup_assets.publication_reconcile_batch_size": "100",
-	"backup_assets.publication_worker_concurrency":   "2",
-	"backup_assets.publication_missing_grace":        "30m",
-	"backup_assets.publication_stream_max_bytes":     "268435456",
-	"backup_assets.manifest_timeout":                 "2h",
-	"backup_assets.manifest_max_bytes":               "4294967296",
-	"backup_assets.manifest_max_entries":             "10000000",
-	"backup_assets.manifest_max_record_bytes":        "1048576",
-	"backup_assets.manifest_max_depth":               "4096",
-	"backup_assets.rclone_preflight_ttl":             "30m",
-	"backup_assets.rclone_portable_deadline":         "24h",
-	"backup_assets.rclone_native_deadline":           "45m",
-	"backup_assets.rclone_bound_config_max_bytes":    "65536",
-	"backup_assets.rclone_control_payload_max_bytes": "8388608",
-	"backup_assets.rclone_full_verify_max_bytes":     "1099511627776",
-	"backup_assets.rclone_manifest_chunk_max_bytes":  "8388608",
-	"backup_assets.rclone_low_level_retries":         "3",
-	"backup_assets.rclone_staging_orphan_age":        "24h",
-	"backup_assets.rclone_staging_scan_limit":        "256",
-	"backup_assets.rclone_kms_read_key_max_count":    "8",
-	"backup_assets.rclone_health_interval":           "15m",
-	"backup_assets.rclone_health_batch_size":         "100",
-	"backup_assets.rclone_aws_sdk_max_attempts":      "3",
-	"backup_assets.search_reconcile_interval":        "1m",
-	"backup_assets.search_build_timeout":             "30m",
-	"backup_assets.search_batch_size":                "500",
-	"backup_assets.search_max_concurrency":           "2",
-	"backup_assets.search_ast_max_depth":             "8",
-	"backup_assets.search_ast_max_nodes":             "64",
-	"backup_assets.search_values_per_node":           "32",
-	"backup_assets.search_body_max_bytes":            "65536",
-	"backup_assets.search_value_max_bytes":           "1024",
-	"backup_assets.search_candidate_limit":           "10000",
-	"backup_assets.search_query_timeout":             "5s",
-	"backup_assets.search_page_size_max":             "200",
-	"backup_assets.search_suggestion_limit":          "20",
-	"backup_assets.saved_search_quota":               "100",
-	"backup_assets.favorite_quota":                   "5000",
-	"backup_assets.tag_definition_quota":             "100",
-	"backup_assets.tag_assignment_quota":             "10000",
-	"backup_assets.overlay_bulk_max_items":           "200",
-	"backup_assets.overlay_label_max_bytes":          "256",
-	"backup_assets.recent_quota":                     "10000",
-	"backup_assets.recent_retention":                 "720h",
-	"backup_assets.recent_writes_per_minute":         "120",
-	"backup_assets.idempotency_ttl":                  "24h",
-	"backup_assets.idempotency_key_max_bytes":        "128",
+	"backup_assets.enabled":                           "false",
+	"backup_assets.content_preview_ttl":               "2m",
+	"backup_assets.content_media_ttl":                 "15m",
+	"backup_assets.content_idle_ttl":                  "60s",
+	"backup_assets.content_write_idle_timeout":        "30s",
+	"backup_assets.content_ticket_timeout":            "20s",
+	"backup_assets.content_request_max_bytes":         "67108864",
+	"backup_assets.content_cumulative_max_bytes":      "536870912",
+	"backup_assets.content_max_requests":              "256",
+	"backup_assets.content_grant_max_in_flight":       "2",
+	"backup_assets.content_user_max_concurrency":      "4",
+	"backup_assets.content_provider_max_concurrency":  "4",
+	"backup_assets.content_global_max_concurrency":    "16",
+	"backup_assets.content_rate_window":               "1m",
+	"backup_assets.content_user_window_bytes":         "1073741824",
+	"backup_assets.content_provider_window_bytes":     "4294967296",
+	"backup_assets.content_global_window_bytes":       "8589934592",
+	"backup_assets.content_user_window_requests":      "1024",
+	"backup_assets.content_provider_window_requests":  "4096",
+	"backup_assets.content_global_window_requests":    "8192",
+	"backup_assets.content_classification_scan_bytes": "262144",
+	"backup_assets.content_text_preview_bytes":        "1048576",
+	"backup_assets.content_hex_preview_bytes":         "65536",
+	"backup_assets.content_raster_max_pixels":         "100000000",
+	"backup_assets.content_memory_global_bytes":       "67108864",
+	"backup_assets.content_memory_object_bytes":       "4194304",
+	"backup_assets.content_memory_user_bytes":         "16777216",
+	"backup_assets.content_memory_provider_bytes":     "33554432",
+	"backup_assets.content_cache_enabled":             "true",
+	"backup_assets.content_cache_root":                "/var/cache/xirang/asset-content",
+	"backup_assets.content_cache_chunk_bytes":         "1048576",
+	"backup_assets.content_cache_object_bytes":        "536870912",
+	"backup_assets.content_cache_user_bytes":          "2147483648",
+	"backup_assets.content_cache_provider_bytes":      "4294967296",
+	"backup_assets.content_cache_global_bytes":        "8589934592",
+	"backup_assets.content_cache_object_files":        "1024",
+	"backup_assets.content_cache_user_files":          "4096",
+	"backup_assets.content_cache_provider_files":      "8192",
+	"backup_assets.content_cache_global_files":        "16384",
+	"backup_assets.content_cache_idle_ttl":            "15m",
+	"backup_assets.content_cache_absolute_ttl":        "2h",
+	"backup_assets.content_reconcile_interval":        "1m",
+	"backup_assets.content_reconcile_batch_size":      "100",
+	"backup_assets.content_audit_backlog_max":         "10000",
+	"backup_assets.content_allow_insecure_loopback":   "false",
+	"backup_assets.catalog_batch_size":                "2000",
+	"backup_assets.catalog_build_timeout":             "30m",
+	"backup_assets.repository_reconcile_interval":     "15m",
+	"backup_assets.audit_segment_max_events":          "10000",
+	"backup_assets.audit_segment_max_age":             "24h",
+	"backup_assets.audit_detail_retention_days":       "180",
+	"backup_assets.audit_checkpoint_retention_days":   "2555",
+	"backup_assets.lease_duration":                    "5m",
+	"backup_assets.lease_heartbeat":                   "60s",
+	"backup_assets.lease_absolute_deadline":           "168h",
+	"backup_assets.provider_operation_timeout":        "2m",
+	"backup_assets.provider_max_concurrency":          "4",
+	"backup_assets.provider_metadata_limit_bytes":     "16777216",
+	"backup_assets.publication_reconcile_interval":    "5m",
+	"backup_assets.publication_reconcile_batch_size":  "100",
+	"backup_assets.publication_worker_concurrency":    "2",
+	"backup_assets.publication_missing_grace":         "30m",
+	"backup_assets.publication_stream_max_bytes":      "268435456",
+	"backup_assets.manifest_timeout":                  "2h",
+	"backup_assets.manifest_max_bytes":                "4294967296",
+	"backup_assets.manifest_max_entries":              "10000000",
+	"backup_assets.manifest_max_record_bytes":         "1048576",
+	"backup_assets.manifest_max_depth":                "4096",
+	"backup_assets.rclone_preflight_ttl":              "30m",
+	"backup_assets.rclone_portable_deadline":          "24h",
+	"backup_assets.rclone_native_deadline":            "45m",
+	"backup_assets.rclone_bound_config_max_bytes":     "65536",
+	"backup_assets.rclone_control_payload_max_bytes":  "8388608",
+	"backup_assets.rclone_full_verify_max_bytes":      "1099511627776",
+	"backup_assets.rclone_manifest_chunk_max_bytes":   "8388608",
+	"backup_assets.rclone_low_level_retries":          "3",
+	"backup_assets.rclone_staging_orphan_age":         "24h",
+	"backup_assets.rclone_staging_scan_limit":         "256",
+	"backup_assets.rclone_kms_read_key_max_count":     "8",
+	"backup_assets.rclone_health_interval":            "15m",
+	"backup_assets.rclone_health_batch_size":          "100",
+	"backup_assets.rclone_aws_sdk_max_attempts":       "3",
+	"backup_assets.search_reconcile_interval":         "1m",
+	"backup_assets.search_build_timeout":              "30m",
+	"backup_assets.search_batch_size":                 "500",
+	"backup_assets.search_max_concurrency":            "2",
+	"backup_assets.search_ast_max_depth":              "8",
+	"backup_assets.search_ast_max_nodes":              "64",
+	"backup_assets.search_values_per_node":            "32",
+	"backup_assets.search_body_max_bytes":             "65536",
+	"backup_assets.search_value_max_bytes":            "1024",
+	"backup_assets.search_candidate_limit":            "10000",
+	"backup_assets.search_query_timeout":              "5s",
+	"backup_assets.search_page_size_max":              "200",
+	"backup_assets.search_suggestion_limit":           "20",
+	"backup_assets.saved_search_quota":                "100",
+	"backup_assets.favorite_quota":                    "5000",
+	"backup_assets.tag_definition_quota":              "100",
+	"backup_assets.tag_assignment_quota":              "10000",
+	"backup_assets.overlay_bulk_max_items":            "200",
+	"backup_assets.overlay_label_max_bytes":           "256",
+	"backup_assets.recent_quota":                      "10000",
+	"backup_assets.recent_retention":                  "720h",
+	"backup_assets.recent_writes_per_minute":          "120",
+	"backup_assets.idempotency_ttl":                   "24h",
+	"backup_assets.idempotency_key_max_bytes":         "128",
 }

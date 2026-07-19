@@ -216,7 +216,7 @@ const (
 )
 
 type CapabilityReason struct {
-	Code   CapabilityCode    `json:"code"`
+	Code   CapabilityCode    `json:"code" enums:"feature_disabled,task_artifact_contract_missing,repository_offline,repository_disconnected,provider_unavailable,repository_identity_unavailable,provider_protocol_incompatible,provider_operation_timeout,provider_resource_limit,point_not_committed,mutable_source_changed,catalog_unavailable,sequential_read_unavailable,range_unavailable,download_unavailable,restore_unavailable,diff_unavailable"`
 	Params map[string]string `json:"params,omitempty"`
 }
 

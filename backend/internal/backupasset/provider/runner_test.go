@@ -78,6 +78,47 @@ func TestBoundedReadHandleCloseDetectsUnreadOverflowAtExactLimit(t *testing.T) {
 	}
 }
 
+func TestBoundedReadHandleReportsProbeInclusiveProviderBytes(t *testing.T) {
+	t.Run("overflow probe", func(t *testing.T) {
+		underlying := &trackingProviderReadHandle{Reader: strings.NewReader("12345")}
+		handle := newBoundedReadHandle(underlying, 4)
+		reporter, ok := handle.(ProviderByteReporter)
+		if !ok {
+			t.Fatal("bounded handle does not expose ProviderByteReporter")
+		}
+		buffer := make([]byte, 4)
+		if _, err := io.ReadFull(handle, buffer); err != nil {
+			t.Fatal(err)
+		}
+		if got := reporter.ProviderBytes(); got != 4 {
+			t.Fatalf("provider bytes before close=%d, want 4", got)
+		}
+		if err := handle.Close(); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+			t.Fatalf("overflow close error=%v", err)
+		}
+		if got := reporter.ProviderBytes(); got != 5 {
+			t.Fatalf("provider bytes after hidden probe=%d, want 5", got)
+		}
+	})
+
+	t.Run("exact EOF", func(t *testing.T) {
+		handle := newBoundedReadHandle(&trackingProviderReadHandle{Reader: strings.NewReader("1234")}, 4)
+		reporter, ok := handle.(ProviderByteReporter)
+		if !ok {
+			t.Fatal("bounded handle does not expose ProviderByteReporter")
+		}
+		if _, err := io.ReadAll(handle); err != nil {
+			t.Fatal(err)
+		}
+		if err := handle.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if got := reporter.ProviderBytes(); got != 4 {
+			t.Fatalf("exact EOF provider bytes=%d, want 4", got)
+		}
+	})
+}
+
 func TestRunnerValidatesReadOnlyToolOperationPairs(t *testing.T) {
 	snapshotID := strings.Repeat("a", 64)
 	resticSecret := []byte("FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY")

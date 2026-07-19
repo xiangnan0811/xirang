@@ -280,6 +280,52 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	}
 }
 
+func TestBackupContentRoutesSplitAuthorizationFromCookieGateway(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	gin.SetMode(gin.TestMode)
+	router := NewRouter(Dependencies{})
+	deliveryID := strings.Repeat("d", 32)
+	routes := router.Routes()
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/recovery-points/:id/entries/:entryId/delivery-tickets"},
+		{http.MethodGet, "/api/v1/asset-content/:deliveryId"},
+		{http.MethodHead, "/api/v1/asset-content/:deliveryId"},
+	} {
+		if !hasRoute(routes, route.method, route.path) {
+			t.Fatalf("missing backup content route %s %s", route.method, route.path)
+		}
+	}
+
+	contentPath := "/api/v1/asset-content/" + deliveryID
+	for _, requestCase := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, contentPath},
+		{http.MethodHead, contentPath},
+		{http.MethodOptions, contentPath},
+		{http.MethodPost, contentPath},
+		{http.MethodGet, contentPath + "/"},
+	} {
+		request := httptest.NewRequest(requestCase.method, requestCase.path, nil)
+		request.Header.Set("Authorization", "Bearer FAKE_CONTENT_AUTHORIZATION_FOR_TEST_ONLY")
+		request.Header.Set("Origin", "https://evil.example")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code == http.StatusNoContent || response.Code == http.StatusMovedPermanently ||
+			response.Code == http.StatusTemporaryRedirect || response.Code == http.StatusPermanentRedirect {
+			t.Fatalf("content-shaped request bypassed safe chain: %s %s -> %d", requestCase.method, requestCase.path, response.Code)
+		}
+		if response.Header().Get("Cross-Origin-Resource-Policy") != "same-origin" ||
+			response.Header().Get("Access-Control-Allow-Origin") != "" {
+			t.Fatalf("unsafe content headers for %s %s: %v", requestCase.method, requestCase.path, response.Header())
+		}
+	}
+}
+
 func TestSettingsSecurityRiskSummaryRouteRBAC(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

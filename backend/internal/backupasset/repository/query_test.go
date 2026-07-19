@@ -139,6 +139,41 @@ func TestBeginManagedRsyncPointReadRejectsUncommittedPointBeforeReaderAccess(t *
 	}
 }
 
+func TestContentReadManagedRsyncPointUsesDedicatedAdmissionOperation(t *testing.T) {
+	fixture := newRsyncPublicationFixture(t)
+	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = execution.Abandon(backupasset.ErrPublicationSessionAbandoned) }()
+	attempt, err := execution.Attempt().RsyncTreeAttempt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(Dependencies{
+		DB: fixture.db, Foundation: fixture.service.foundation, Registry: fixture.service.registry, Keyring: fixture.service.keyring,
+		Now: func() time.Time { return fixture.now }, Admission: fixture.admission, History: fixture.service.history, Metrics: publication.NoopMetrics{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeOperations := fixture.admission.operations()
+	token := &managedRsyncPointReadTokenFake{operation: publication.OperationContentRead}
+	_, err = service.beginManagedRsyncPointReadWithAdmission(
+		context.Background(), fixture.task.ID, attempt.RecoveryPointID, token,
+	)
+	if !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		t.Fatalf("uncommitted content Rsync reader error=%v", err)
+	}
+	operations := fixture.admission.operations()
+	if len(operations) != len(beforeOperations) || token.closed.Load() != 0 {
+		t.Fatalf("content Rsync reacquired admission before=%v after=%v token_closes=%d", beforeOperations, operations, token.closed.Load())
+	}
+	if err := token.Close(); err != nil || token.closed.Load() != 1 {
+		t.Fatalf("caller failed to release borrowed content admission: err=%v closes=%d", err, token.closed.Load())
+	}
+}
+
 func TestManagedRsyncPointReadSessionRetainsAdmissionUntilReadHandleCloses(t *testing.T) {
 	token := &managedRsyncPointReadTokenFake{}
 	session := &ManagedRsyncPointReadSession{
@@ -164,6 +199,30 @@ func TestManagedRsyncPointReadSessionRetainsAdmissionUntilReadHandleCloses(t *te
 		t.Fatalf("closed session open error=%v, want forbidden", err)
 	}
 }
+
+func TestManagedRsyncReadHandleForwardsProviderByteReporter(t *testing.T) {
+	underlying := &meteredProviderReadHandleFake{Reader: strings.NewReader("data"), providerBytes: 5}
+	handle := &managedRsyncPointReadHandle{underlying: underlying, session: &ManagedRsyncPointReadSession{}}
+	reporter, ok := any(handle).(provider.ProviderByteReporter)
+	if !ok {
+		t.Fatal("managed Rsync wrapper hides ProviderByteReporter")
+	}
+	if payload, err := io.ReadAll(handle); err != nil || string(payload) != "data" {
+		t.Fatalf("payload=%q err=%v", payload, err)
+	}
+	if got := reporter.ProviderBytes(); got != 5 {
+		t.Fatalf("forwarded Provider bytes=%d, want 5", got)
+	}
+}
+
+type meteredProviderReadHandleFake struct {
+	io.Reader
+	providerBytes int64
+}
+
+func (*meteredProviderReadHandleFake) Close() error { return nil }
+
+func (handle *meteredProviderReadHandleFake) ProviderBytes() int64 { return handle.providerBytes }
 
 func TestManagedRsyncCommittedPointReadRequestBindsExactCommittedEvidence(t *testing.T) {
 	fixture := newRsyncPublicationFixture(t)
@@ -255,13 +314,19 @@ func (*managedRsyncPointReadAdapterFake) OpenRange(context.Context, provider.Rea
 	return io.NopCloser(strings.NewReader("managed-rsync")), provider.ContentStat{}, nil
 }
 
-type managedRsyncPointReadTokenFake struct{ closed atomic.Int32 }
+type managedRsyncPointReadTokenFake struct {
+	closed    atomic.Int32
+	operation publication.ResticOperation
+}
 
 func (*managedRsyncPointReadTokenFake) Generation() uint64 { return 1 }
 func (*managedRsyncPointReadTokenFake) Mode() publication.AdmissionMode {
 	return publication.AdmissionManaged
 }
-func (*managedRsyncPointReadTokenFake) Operation() publication.ResticOperation {
+func (token *managedRsyncPointReadTokenFake) Operation() publication.ResticOperation {
+	if token.operation != "" {
+		return token.operation
+	}
 	return publication.OperationManagedRsyncPointRead
 }
 func (token *managedRsyncPointReadTokenFake) Close() error {
