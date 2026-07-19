@@ -1,0 +1,504 @@
+{
+  "ids": {
+    "onlineRepository": "11111111111111111111111111111111",
+    "offlineRepository": "22222222222222222222222222222222",
+    "onlineRecoveryPoint": "33333333333333333333333333333333",
+    "previousRecoveryPoint": "44444444444444444444444444444444",
+    "offlineRecoveryPoint": "55555555555555555555555555555555",
+    "primaryEntry": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "secondaryEntry": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "directoryEntry": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "savedSearch": "99999999999999999999999999999999",
+    "favorite": "88888888888888888888888888888888",
+    "tag": "77777777777777777777777777777777",
+    "recent": "66666666666666666666666666666666"
+  },
+  "overview": {
+    "backupHealth": {
+      "stale_nodes": [],
+      "degraded_policies": [],
+      "trend": [
+        { "date": "2026-07-18", "total": 2, "success": 2 }
+      ],
+      "summary": { "total_nodes": 2, "total_policies": 2, "healthy_nodes": 2 }
+    },
+    "backupConfidence": {
+      "generated_at": "2026-07-19T00:00:00Z",
+      "summary": { "healthy": 1, "warning": 0, "at_risk": 0, "insufficient": 1, "total": 2 },
+      "items": [
+        {
+          "id": "synthetic-policy-confidence",
+          "scope": "policy",
+          "policy_id": 71,
+          "policy_name": "合成夜间备份策略",
+          "status": "healthy",
+          "score": 96,
+          "reasons": [],
+          "evidence": [],
+          "next_steps": [],
+          "targets": []
+        }
+      ]
+    },
+    "storageUsage": {
+      "mount_points": [
+        { "path": "/synthetic-storage", "used_gb": 12, "total_gb": 100, "pct": 12 }
+      ],
+      "per_node": []
+    }
+  },
+  "repositories": [
+    {
+      "id": "11111111111111111111111111111111",
+      "provider_kind": "restic",
+      "display_name": "合成主仓库 · Synthetic Operations Archive With A Deliberately Long Display Name",
+      "description": "Synthetic fixture repository",
+      "version_mode": "native_snapshot",
+      "status": "online",
+      "capability_revision": 3,
+      "capabilities": {
+        "list": true,
+        "search_path": true,
+        "open_sequential": true,
+        "open_range": true,
+        "download": true,
+        "restore": true,
+        "diff": true,
+        "native_history": true,
+        "reason": null
+      },
+      "immutability_level": "backend_versioned",
+      "last_seen_at": "2026-07-19T00:00:00Z",
+      "last_reconciled_at": "2026-07-19T00:05:00Z",
+      "created_at": "2026-07-18T00:00:00Z",
+      "updated_at": "2026-07-19T00:05:00Z",
+      "access_active": true,
+      "lineages": [
+        {
+          "source": "task_link",
+          "task_id": 71,
+          "task_name": "Synthetic nightly archive",
+          "node_id": 17,
+          "node_name": "synthetic-node-17",
+          "publication_mode": "native_snapshot",
+          "active": true
+        }
+      ],
+      "catalog": {
+        "recovery_point_count": 2,
+        "complete_catalog_count": 2,
+        "coverage": "complete",
+        "content_availability": { "available": true, "reason": null },
+        "permissions": { "list": true, "preview": true, "download": true }
+      }
+    },
+    {
+      "id": "22222222222222222222222222222222",
+      "provider_kind": "rclone",
+      "display_name": "Synthetic Offline Object Archive",
+      "description": "Synthetic partial Catalog fixture",
+      "version_mode": "native_object_versions",
+      "status": "offline",
+      "capability_revision": 5,
+      "capabilities": {
+        "list": true,
+        "search_path": false,
+        "open_sequential": false,
+        "open_range": false,
+        "download": false,
+        "restore": false,
+        "diff": true,
+        "native_history": true,
+        "reason": { "code": "repository_offline", "params": {} }
+      },
+      "immutability_level": "storage_worm",
+      "last_seen_at": "2026-07-18T00:00:00Z",
+      "last_reconciled_at": null,
+      "created_at": "2026-07-17T00:00:00Z",
+      "updated_at": "2026-07-18T00:00:00Z",
+      "access_active": true,
+      "lineages": [],
+      "catalog": {
+        "recovery_point_count": 1,
+        "complete_catalog_count": 0,
+        "coverage": "partial",
+        "content_availability": {
+          "available": false,
+          "reason": { "code": "repository_offline", "params": {} }
+        },
+        "permissions": { "list": true, "preview": false, "download": false }
+      }
+    }
+  ],
+  "recoveryPoints": {
+    "online": [
+      {
+        "id": "33333333333333333333333333333333",
+        "repository_id": "11111111111111111111111111111111",
+        "lineage": { "producing_task_id": 71, "producing_task_run_id": 7101 },
+        "semantics": "native_snapshot",
+        "state": "committed",
+        "physical_availability": "online",
+        "hold_state": "none",
+        "immutability_level": "backend_versioned",
+        "manifest_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "entry_count": 240,
+        "logical_bytes": 8388608,
+        "captured_at": "2026-07-19T00:00:00Z",
+        "committed_at": "2026-07-19T00:05:00Z",
+        "observed_at": "2026-07-19T00:05:00Z",
+        "capability_revision": 3,
+        "capabilities": {
+          "list": true,
+          "search_path": true,
+          "open_sequential": true,
+          "open_range": true,
+          "download": true,
+          "restore": true,
+          "diff": true,
+          "native_history": true,
+          "reason": null
+        },
+        "created_at": "2026-07-19T00:00:00Z",
+        "updated_at": "2026-07-19T00:05:00Z",
+        "producing_task_name": "Synthetic nightly archive",
+        "producing_node_id": 17,
+        "producing_node_name": "synthetic-node-17",
+        "catalog": {
+          "generation": {
+            "id": "10101010101010101010101010101010",
+            "sequence": 3,
+            "state": "complete",
+            "started_at": "2026-07-19T00:05:00Z",
+            "finished_at": "2026-07-19T00:06:00Z",
+            "error_code": "",
+            "correlation_id": "synthetic-catalog-3"
+          },
+          "latest_build": null,
+          "coverage": {
+            "status": "complete",
+            "indexed_entries": 240,
+            "expected_entries": 240,
+            "manifest_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "observed_at": "2026-07-19T00:06:00Z"
+          },
+          "staleness": { "status": "fresh", "observed_at": "2026-07-19T00:06:00Z", "reason": null },
+          "content_availability": { "available": true, "reason": null },
+          "permissions": { "list": true, "preview": true, "download": true }
+        }
+      },
+      {
+        "id": "44444444444444444444444444444444",
+        "repository_id": "11111111111111111111111111111111",
+        "lineage": { "producing_task_id": 71, "producing_task_run_id": 7001 },
+        "semantics": "native_snapshot",
+        "state": "committed",
+        "physical_availability": "online",
+        "hold_state": "none",
+        "immutability_level": "backend_versioned",
+        "manifest_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "entry_count": 220,
+        "logical_bytes": 7340032,
+        "captured_at": "2026-07-18T00:00:00Z",
+        "committed_at": "2026-07-18T00:05:00Z",
+        "observed_at": "2026-07-18T00:05:00Z",
+        "capability_revision": 3,
+        "capabilities": {
+          "list": true,
+          "search_path": true,
+          "open_sequential": true,
+          "open_range": true,
+          "download": true,
+          "restore": true,
+          "diff": true,
+          "native_history": true,
+          "reason": null
+        },
+        "created_at": "2026-07-18T00:00:00Z",
+        "updated_at": "2026-07-18T00:05:00Z",
+        "producing_task_name": "Synthetic nightly archive",
+        "producing_node_id": 17,
+        "producing_node_name": "synthetic-node-17",
+        "catalog": {
+          "generation": {
+            "id": "20202020202020202020202020202020",
+            "sequence": 2,
+            "state": "complete",
+            "started_at": "2026-07-18T00:05:00Z",
+            "finished_at": "2026-07-18T00:06:00Z",
+            "error_code": "",
+            "correlation_id": "synthetic-catalog-2"
+          },
+          "latest_build": null,
+          "coverage": {
+            "status": "complete",
+            "indexed_entries": 220,
+            "expected_entries": 220,
+            "manifest_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "observed_at": "2026-07-18T00:06:00Z"
+          },
+          "staleness": { "status": "fresh", "observed_at": "2026-07-18T00:06:00Z", "reason": null },
+          "content_availability": { "available": true, "reason": null },
+          "permissions": { "list": true, "preview": true, "download": true }
+        }
+      }
+    ],
+    "offline": [
+      {
+        "id": "55555555555555555555555555555555",
+        "repository_id": "22222222222222222222222222222222",
+        "lineage": { "producing_task_id": 72, "producing_task_run_id": 7201 },
+        "semantics": "xirang_manifest",
+        "state": "degraded",
+        "physical_availability": "offline",
+        "hold_state": "none",
+        "immutability_level": "storage_worm",
+        "manifest_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "entry_count": 12,
+        "logical_bytes": 4096,
+        "captured_at": "2026-07-18T12:00:00Z",
+        "committed_at": "2026-07-18T12:05:00Z",
+        "observed_at": "2026-07-18T12:05:00Z",
+        "capability_revision": 5,
+        "capabilities": {
+          "list": true,
+          "search_path": false,
+          "open_sequential": false,
+          "open_range": false,
+          "download": false,
+          "restore": false,
+          "diff": true,
+          "native_history": true,
+          "reason": { "code": "repository_offline", "params": {} }
+        },
+        "created_at": "2026-07-18T12:00:00Z",
+        "updated_at": "2026-07-18T12:05:00Z",
+        "producing_task_name": "Synthetic offline archive",
+        "producing_node_id": 18,
+        "producing_node_name": "synthetic-node-18",
+        "catalog": {
+          "generation": {
+            "id": "30303030303030303030303030303030",
+            "sequence": 1,
+            "state": "complete",
+            "started_at": "2026-07-18T12:05:00Z",
+            "finished_at": "2026-07-18T12:06:00Z",
+            "error_code": "",
+            "correlation_id": "synthetic-catalog-partial"
+          },
+          "latest_build": null,
+          "coverage": {
+            "status": "partial",
+            "indexed_entries": 0,
+            "expected_entries": 12,
+            "manifest_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "observed_at": "2026-07-18T12:06:00Z"
+          },
+          "staleness": {
+            "status": "stale",
+            "observed_at": "2026-07-18T12:06:00Z",
+            "reason": { "code": "repository_offline", "params": {} }
+          },
+          "content_availability": {
+            "available": false,
+            "reason": { "code": "repository_offline", "params": {} }
+          },
+          "permissions": { "list": true, "preview": false, "download": false }
+        }
+      }
+    ]
+  },
+  "entries": [
+    {
+      "recovery_point_id": "33333333333333333333333333333333",
+      "entry_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "parent_entry_id": null,
+      "name": "synthetic-service-config-with-a-deliberately-long-name-that-remains-readable-on-narrow-layouts.yaml",
+      "entry_type": "file",
+      "size": 1280,
+      "modified_at": "2026-07-19T00:01:00Z",
+      "mode": "0640",
+      "owner": "synthetic-operator",
+      "mime_type": "text/yaml",
+      "fingerprint_strength": "strong",
+      "breadcrumb": []
+    },
+    {
+      "recovery_point_id": "33333333333333333333333333333333",
+      "entry_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "parent_entry_id": null,
+      "name": "合成审计日志-synthetic-audit.log",
+      "entry_type": "file",
+      "size": 8192,
+      "modified_at": "2026-07-19T00:02:00Z",
+      "mode": "0640",
+      "owner": "synthetic-operator",
+      "mime_type": "text/plain",
+      "fingerprint_strength": "strong",
+      "breadcrumb": []
+    },
+    {
+      "recovery_point_id": "33333333333333333333333333333333",
+      "entry_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "parent_entry_id": null,
+      "name": "synthetic-directory",
+      "entry_type": "directory",
+      "size": 0,
+      "modified_at": "2026-07-19T00:03:00Z",
+      "mode": "0750",
+      "owner": "synthetic-operator",
+      "mime_type": "inode/directory",
+      "fingerprint_strength": "none",
+      "breadcrumb": []
+    },
+    {
+      "recovery_point_id": "33333333333333333333333333333333",
+      "entry_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "parent_entry_id": null,
+      "name": "synthetic-inactive-source.svg",
+      "entry_type": "file",
+      "size": 512,
+      "modified_at": "2026-07-19T00:04:00Z",
+      "mode": "0640",
+      "owner": "synthetic-operator",
+      "mime_type": "image/svg+xml",
+      "fingerprint_strength": "weak",
+      "breadcrumb": []
+    },
+    {
+      "recovery_point_id": "33333333333333333333333333333333",
+      "entry_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "parent_entry_id": null,
+      "name": "synthetic-safe-raster.png",
+      "entry_type": "file",
+      "size": 256,
+      "modified_at": "2026-07-19T00:05:00Z",
+      "mode": "0640",
+      "owner": "synthetic-operator",
+      "mime_type": "image/png",
+      "fingerprint_strength": "strong",
+      "breadcrumb": []
+    },
+    {
+      "recovery_point_id": "33333333333333333333333333333333",
+      "entry_id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "parent_entry_id": null,
+      "name": "synthetic-report.pdf",
+      "entry_type": "file",
+      "size": 1024,
+      "modified_at": "2026-07-19T00:06:00Z",
+      "mode": "0640",
+      "owner": "synthetic-operator",
+      "mime_type": "application/pdf",
+      "fingerprint_strength": "strong",
+      "breadcrumb": []
+    }
+  ],
+  "overlays": {
+    "savedSearches": [
+      {
+        "id": "99999999999999999999999999999999",
+        "query": {
+          "schema_version": 1,
+          "root": { "op": "term", "field": "name", "text": "synthetic" },
+          "scope": { "mode": "current" },
+          "sort": "relevance",
+          "limit": 25
+        },
+        "version": 1,
+        "state": "active",
+        "state_reason": null,
+        "broken_at": null,
+        "created_at": "2026-07-19T00:00:00Z",
+        "updated_at": "2026-07-19T00:00:00Z"
+      }
+    ],
+    "favorites": [
+      {
+        "id": "88888888888888888888888888888888",
+        "ref": {
+          "recovery_point_id": "33333333333333333333333333333333",
+          "entry_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "label": "Synthetic investigation target",
+        "state": "active",
+        "tombstone_reason": null,
+        "version": 1,
+        "created_at": "2026-07-19T00:00:00Z",
+        "updated_at": "2026-07-19T00:00:00Z"
+      }
+    ],
+    "tags": [
+      {
+        "id": "77777777777777777777777777777777",
+        "name": "synthetic-review",
+        "version": 1,
+        "created_at": "2026-07-19T00:00:00Z",
+        "updated_at": "2026-07-19T00:00:00Z"
+      }
+    ],
+    "recent": [
+      {
+        "id": "66666666666666666666666666666666",
+        "ref": {
+          "recovery_point_id": "33333333333333333333333333333333",
+          "entry_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "access_count": 2,
+        "last_accessed_at": "2026-07-19T00:00:00Z",
+        "expires_at": "2036-07-19T00:00:00Z",
+        "version": 1
+      }
+    ]
+  },
+  "evidence": {
+    "recovery_point_id": "33333333333333333333333333333333",
+    "lineage": {
+      "status": "recorded",
+      "task_id": 71,
+      "task_run_id": 7101,
+      "task_name": "Synthetic nightly archive",
+      "node_id": 17,
+      "node_name": "synthetic-node-17",
+      "trigger": "cron",
+      "run_status": "success",
+      "started_at": "2026-07-19T00:00:00Z",
+      "finished_at": "2026-07-19T00:05:00Z"
+    },
+    "manifest": {
+      "status": "recorded",
+      "id": "synthetic-manifest",
+      "revision": 1,
+      "digest_algorithm": "sha256",
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "entry_count": 240,
+      "logical_bytes": 8388608,
+      "generator": "xirang-synthetic-fixture",
+      "generator_version": "v1",
+      "completeness": "complete",
+      "created_at": "2026-07-19T00:00:00Z",
+      "updated_at": "2026-07-19T00:05:00Z"
+    },
+    "publication_verification": {
+      "status": "recorded",
+      "provider": "restic",
+      "completion": "known_exit_zero",
+      "failure_code": "",
+      "capture_started_at": "2026-07-19T00:00:00Z",
+      "capture_finished_at": "2026-07-19T00:05:00Z",
+      "files_processed": 240,
+      "logical_bytes": 8388608,
+      "commit_recorded": true
+    },
+    "restore_drills": { "status": "not_recorded", "items": [] }
+  },
+  "diff": {
+    "items": [],
+    "next_cursor": null,
+    "provider_evidence": { "status": "unavailable", "reason": { "code": "provider_unavailable", "params": {} } }
+  },
+  "unknownState": {
+    "provider_kind": "synthetic_future_provider",
+    "sensitivity": "synthetic_future_sensitivity"
+  }
+}

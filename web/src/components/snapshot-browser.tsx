@@ -20,6 +20,7 @@ import { formatBytes, getErrorMessage } from "@/lib/utils";
 import { formatTime } from "@/lib/api/core";
 import type { ResticSnapshot, ResticEntry } from "@/lib/api/snapshots-api";
 import { toast } from "sonner";
+import { BackupAssetsTaskContextLink } from "@/features/backup-assets/backup-assets-task-context-link";
 
 const SNAPSHOT_RESTORE_GRANT_MAX_REASON_LENGTH = 240;
 const SNAPSHOT_RESTORE_GRANT_TTL_SECONDS = 600;
@@ -199,6 +200,7 @@ export function SnapshotBrowser({ taskId, token, initialSnapshotId, initialPath 
             <span className="text-xs text-muted-foreground">
               {t('snapshots.snapshotLabel', { id: selectedSnapshot.short_id, time: formatTime(selectedSnapshot.time) })}
             </span>
+            <BackupAssetsTaskContextLink taskId={taskId} className="ml-auto" />
           </div>
 
           {/* Breadcrumb navigation */}
@@ -345,6 +347,9 @@ export function SnapshotBrowser({ taskId, token, initialSnapshotId, initialPath 
 
   return (
     <div className="space-y-2">
+      <div className="flex justify-end">
+        <BackupAssetsTaskContextLink taskId={taskId} />
+      </div>
       {snapshots.length === 0 ? (
         <p className="text-sm text-muted-foreground text-center py-4">{t('common.noData')}</p>
       ) : (

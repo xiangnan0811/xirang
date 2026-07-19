@@ -8,6 +8,9 @@ import {
   CredentialAuditPage,
   CredentialAccessGrantsPage,
   BackupsPage,
+  BackupsDataPage,
+  BackupsOverviewPage,
+  BackupsRecoveryPage,
   CredentialsPage,
   DashboardDetailPage,
   DashboardsPage,
@@ -82,7 +85,25 @@ export const AppRouter = createBrowserRouter([
       },
       {
         path: "backups",
-        element: <LazyPage><BackupsPage /></LazyPage>
+        element: <LazyPage><BackupsPage /></LazyPage>,
+        children: [
+          {
+            index: true,
+            element: <Navigate to="overview" replace />
+          },
+          {
+            path: "overview",
+            element: <LazyPage><BackupsOverviewPage /></LazyPage>
+          },
+          {
+            path: "data",
+            element: <LazyPage><BackupsDataPage /></LazyPage>
+          },
+          {
+            path: "recovery",
+            element: <LazyPage><BackupsRecoveryPage /></LazyPage>
+          }
+        ]
       },
       {
         path: "logs",

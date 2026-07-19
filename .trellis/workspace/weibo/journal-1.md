@@ -898,3 +898,63 @@ Branch delivery remains pending until the single PR is green and merged.
   and squash merge only when all required checks are green.
 - Monitor post-merge Release Please/conditional image and docs automation,
   leave PR #386 untouched, then sync clean local `main` and branch hygiene.
+
+
+## Session 24: Child 9：备份资产工作区 UI 实现与交付前验证
+
+**Date**: 2026-07-19
+**Task**: Child 9：备份资产工作区 UI 实现与交付前验证
+**Branch**: `codex/backup-assets-workspace-ui`
+
+### Summary
+
+基于 b744b116 完成并本地验证 Child 9 前端资产工作区：闭合隐私路由、响应式浏览/检查器、核心 Broker 预览、覆盖层、证据/差异、legacy Tasks 兼容、zh/en 与 a11y；工作提交 863ea8f，Child 9 已单独归档为 4f090d0，父任务保持 planning，远端 PR/CI/merge/post-merge 仍 pending。
+
+### Main Changes
+
+### Main Changes
+
+- 在唯一 Backups 入口内保留 overview，新增 /app/backups/data 与 /app/backups/recovery nested routes；repositories 仅为 data 内视图，legacy Tasks 浏览/搜索/恢复不删除，并仅新增不泄露 snapshot/path 的 task-context link。
+- 新增闭合、canonical、可逆的 route codec 与唯一 4 KiB 有界偏好记录。URL 只允许 opaque IDs 和非敏感展示状态；临时 query、path/name、selection、ticket/proof/reason/idempotency key 均留在内存。显式 route layout 优先，省略时从偏好回填，用户切换写回 route 与偏好，校验宽度驱动 desktop tracks。
+- 新增 route-local typed controller，对 repository/RP/entry/browse/search/overlay/content/evidence/diff 分通道执行 AbortController + sequence/key/selection guard；stale cursor、RP retired/expired、tombstone、partial/offline/unknown 状态均 fail closed。
+- 新增稳定三栏 desktop、连续 intermediate 与 context → results → full inspector mobile 流；list/grid 共享虚拟结果、selection 和 scroll/focus anchor，增强共享 Tree 的 roving keyboard contract。
+- 通过既有 typed API factories 交付 current-main 可证实的 browse/search、saved/favorite/tag/recent、manifest/drill evidence、exact two-point Catalog/Provider diff 与核心 opaque Broker preview。HTML/XML/SVG 仅 escaped/metadata；普通非敏感 preview 不多余 step-up，download 使用精确 asset.download purpose。
+- Worker/Derived、export、controlled recovery、retention、GA、Command Provider 和无法由现行 API 证明的 rename/tag lookup/version expansion/precise conflict/revoke 均保持 absent 或 truthful unavailable；未新增 backend、migration、dependency、deploy、public API/docs，也未启用 backup_assets.enabled。
+- 新增默认中文与英文完整文案、tab/tree/list/grid/dialog/portal/live-region/focus semantics、axe smoke，以及合成 fixture/MSW/CDP 证据；未使用真实资产、凭据或内容。
+
+### Fresh Validation
+
+- Focused suite：26 files / 273 tests passed。
+- env -u NODE_ENV npm run check：typecheck、lint、157 files / 879 tests、coverage 与 production build 全部通过。
+- Bundle budget：main JS 498.09/500.00 KiB，main CSS 104.21/105.00 KiB；通过但余量很小，后续 Child 应继续保持 lazy boundary。
+- make backend-test：全部 Go packages 通过；env -u NODE_ENV npm --prefix web audit --audit-level=moderate：0 vulnerabilities。
+- 精确 73-path manifest/cached diff、git diff --check、direct-fetch/type-bypass/debug-log/storage/out-of-scope scans 全部通过；唯一生产 storage 命中为受保护偏好 codec。
+- Browser/CDP：1440x900、1200/900 intermediate、390x844 真实 protected route 与 synthetic responses 已检查；无 body/workspace 横向溢出、portal/focus/preview overlap。最终偏好场景 320/420/396 tracks，console/exceptions/failed/unhandled/bad responses/API requests 均为 0。
+- 可访问合成路由：http://127.0.0.1:4174/app/backups/data?repositoryId=11111111111111111111111111111111&taskId=71&recoveryPointId=33333333333333333333333333333333&entryId=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&layout=grid。
+
+### Delivery And Risk State
+
+- Base：b744b116c6a11ef02998d6182d372e9efe97abc2；work commit：863ea8f；Child-only archive commit：4f090d0。
+- Parent 07-12-backup-data-explorer-design remains planning；true program progress is 9/15。No sibling task or detached worktree became a dependency。
+- Frontend rollback removes/hides data/recovery child routes and ignores the non-sensitive preference key while retaining overview and every legacy Tasks surface；no schema/Provider rollback is required。
+- Main bundle is within budget by only 1.91 KiB JS and 0.79 KiB CSS。Existing typed lazy API adapters are intentional；any later eager composition or new dependency needs explicit budget review。
+- At this journal point push、single PR、required CI、squash merge、Release Please/post-merge automation、local main sync、branch/worktree hygiene remain pending and must be recorded only after execution。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `863ea8f` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

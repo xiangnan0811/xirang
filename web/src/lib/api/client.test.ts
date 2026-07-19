@@ -106,6 +106,81 @@ describe("request envelope handling", () => {
     expect(mutation.headers).toMatchObject({ "Idempotency-Key": "overlay-key-0001" });
     expect(read.headers).not.toHaveProperty("Idempotency-Key");
   });
+
+  it("composes backup asset search and forwards proof plus AbortSignal", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: {} }))
+    );
+    const controller = new AbortController();
+
+    await apiClient.search("token-assets", {
+      query: {
+        schemaVersion: 1,
+        root: { op: "term", field: "name", text: "synthetic" },
+        scope: { mode: "current", repositoryIds: [], taskIds: [7], recoveryPointIds: [] },
+        sort: "relevance",
+        limit: 50,
+        cursor: null,
+      },
+      secretRevealProof: "proof-assets",
+      signal: controller.signal,
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/asset-search");
+    expect(init.method).toBe("POST");
+    expect(init.signal).toBe(controller.signal);
+    expect(init.headers).toMatchObject({
+      Authorization: "Bearer token-assets",
+      "X-Xirang-Step-Up": "proof-assets",
+    });
+  });
+
+  it("composes backup overlays and forwards idempotency plus AbortSignal", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: {} }))
+    );
+    const controller = new AbortController();
+
+    await apiClient.createTag("token-assets", "synthetic-tag", "attempt-0001", controller.signal);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/asset-tags");
+    expect(init.signal).toBe(controller.signal);
+    expect(init.headers).toMatchObject({ "Idempotency-Key": "attempt-0001" });
+    expect(JSON.parse(String(init.body))).toEqual({ name: "synthetic-tag" });
+  });
+
+  it("composes backup content and forwards only the closed ticket product", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: {} }))
+    );
+    const controller = new AbortController();
+
+    await apiClient.issueTicket(
+      "token-assets",
+      { recoveryPointId: "a".repeat(32), entryId: "b".repeat(64) },
+      {
+        schemaVersion: 1,
+        action: "preview",
+        renderer: "metadata_hex",
+        profile: "hex_v1",
+        signal: controller.signal,
+      }
+    );
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      `/api/v1/recovery-points/${"a".repeat(32)}/entries/${"b".repeat(64)}/delivery-tickets`
+    );
+    expect(init.signal).toBe(controller.signal);
+    expect(JSON.parse(String(init.body))).toEqual({
+      schema_version: 1,
+      action: "preview",
+      renderer: "metadata_hex",
+      profile: "hex_v1",
+    });
+  });
 });
 
 describe("apiClient 任务请求约束", () => {

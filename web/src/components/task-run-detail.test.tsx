@@ -78,6 +78,11 @@ describe("TaskRunDetail", () => {
 
     render(<TaskRunDetail run={baseRun} token="token-task" onBack={vi.fn()} />);
 
+    expect(screen.getByRole("link", { name: /asset workspace task context|资产工作区任务上下文/i })).toHaveAttribute(
+      "href",
+      "/app/backups/data?taskId=7"
+    );
+
     await waitFor(() => {
       expect(apiClient.getTaskRun).toHaveBeenCalledWith("token-task", 42);
       expect(screen.getByText("恢复演练证据")).toBeInTheDocument();

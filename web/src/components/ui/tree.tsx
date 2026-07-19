@@ -1,6 +1,15 @@
-import { useState, useCallback, useMemo, type ReactNode, type KeyboardEvent } from "react";
-import { ChevronRight, Folder, FolderOpen, File } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import { ChevronRight, File, Folder, FolderOpen } from "lucide-react";
 import { useTranslation } from "react-i18next";
+
 import { cn } from "@/lib/utils";
 
 type TreeItemData = {
@@ -18,11 +27,13 @@ type TreeItemProps = {
   expanded?: Set<string>;
   onSelect?: (item: TreeItemData) => void;
   onToggle?: (item: TreeItemData) => void;
-  /** 懒加载：展开时获取子节点 */
   onLoadChildren?: (item: TreeItemData) => Promise<TreeItemData[]>;
   loadingIds?: Set<string>;
-  /** 懒加载结果缓存（由 Tree 组件管理，避免 mutate item.children） */
   childrenMap?: Map<string, TreeItemData[]>;
+  focusedId?: string;
+  buttonRefs?: Map<string, HTMLButtonElement>;
+  onItemFocus?: (id: string) => void;
+  onItemKeyDown?: (event: KeyboardEvent<HTMLButtonElement>, item: TreeItemData) => void;
 };
 
 function TreeItem({
@@ -32,50 +43,68 @@ function TreeItem({
   expanded,
   onSelect,
   onToggle,
-  onLoadChildren,
   loadingIds,
   childrenMap,
+  focusedId,
+  buttonRefs,
+  onItemFocus,
+  onItemKeyDown,
 }: TreeItemProps) {
   const { t } = useTranslation();
   const isExpanded = expanded?.has(item.id) ?? false;
   const isSelected = selected === item.id;
   const isLoading = loadingIds?.has(item.id) ?? false;
-  // 优先使用懒加载缓存，回退到 props 上的静态 children
   const resolvedChildren = childrenMap?.get(item.id) ?? item.children;
-  const hasChildren = item.isDir || (resolvedChildren && resolvedChildren.length > 0);
+  const hasChildren = Boolean(item.isDir || (resolvedChildren && resolvedChildren.length > 0));
 
   const handleClick = () => {
-    if (hasChildren) {
-      onToggle?.(item);
-    }
+    onItemFocus?.(item.id);
+    if (hasChildren) onToggle?.(item);
     onSelect?.(item);
   };
 
-  const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
+  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (onItemKeyDown) {
+      onItemKeyDown(event, item);
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
       handleClick();
-    }
-    if (e.key === "ArrowRight" && hasChildren && !isExpanded) {
-      e.preventDefault();
+    } else if (event.key === "ArrowRight" && hasChildren && !isExpanded) {
+      event.preventDefault();
       onToggle?.(item);
-    }
-    if (e.key === "ArrowLeft" && hasChildren && isExpanded) {
-      e.preventDefault();
+    } else if (event.key === "ArrowLeft" && hasChildren && isExpanded) {
+      event.preventDefault();
       onToggle?.(item);
     }
   };
 
-  const defaultIcon = hasChildren
-    ? isExpanded
-      ? <FolderOpen className="size-4 shrink-0 text-warning" />
-      : <Folder className="size-4 shrink-0 text-warning" />
-    : <File className="size-4 shrink-0 text-muted-foreground" />;
+  const defaultIcon = hasChildren ? (
+    isExpanded ? (
+      <FolderOpen className="size-4 shrink-0 text-warning" aria-hidden />
+    ) : (
+      <Folder className="size-4 shrink-0 text-warning" aria-hidden />
+    )
+  ) : (
+    <File className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+  );
 
   return (
-    <div role="treeitem" aria-expanded={hasChildren ? isExpanded : undefined} aria-selected={isSelected} aria-level={depth + 1}>
+    <div
+      role="treeitem"
+      aria-expanded={hasChildren ? isExpanded : undefined}
+      aria-selected={isSelected}
+      aria-level={depth + 1}
+    >
       <button
+        ref={(node) => {
+          if (!buttonRefs) return;
+          if (node) buttonRefs.set(item.id, node);
+          else buttonRefs.delete(item.id);
+        }}
         type="button"
+        tabIndex={focusedId === undefined || focusedId === item.id ? 0 : -1}
         className={cn(
           "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
           "hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -83,8 +112,9 @@ function TreeItem({
         )}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         onClick={handleClick}
+        onFocus={() => onItemFocus?.(item.id)}
         onKeyDown={handleKeyDown}
-        aria-label={`${hasChildren ? (isExpanded ? t('tree.collapse') : t('tree.expand')) : t('tree.select')} ${item.label}`}
+        aria-label={`${hasChildren ? (isExpanded ? t("tree.collapse") : t("tree.expand")) : t("tree.select")} ${item.label}`}
       >
         {hasChildren ? (
           <ChevronRight
@@ -93,6 +123,7 @@ function TreeItem({
               isExpanded && "rotate-90",
               isLoading && "animate-spin"
             )}
+            aria-hidden
           />
         ) : (
           <span className="w-3.5 shrink-0" />
@@ -101,7 +132,7 @@ function TreeItem({
         <span className="truncate">{item.label}</span>
       </button>
 
-      {hasChildren && isExpanded && resolvedChildren && resolvedChildren.length > 0 && (
+      {hasChildren && isExpanded && resolvedChildren && resolvedChildren.length > 0 ? (
         <div role="group">
           {resolvedChildren.map((child) => (
             <TreeItem
@@ -112,13 +143,16 @@ function TreeItem({
               expanded={expanded}
               onSelect={onSelect}
               onToggle={onToggle}
-              onLoadChildren={onLoadChildren}
               loadingIds={loadingIds}
               childrenMap={childrenMap}
+              focusedId={focusedId}
+              buttonRefs={buttonRefs}
+              onItemFocus={onItemFocus}
+              onItemKeyDown={onItemKeyDown}
             />
           ))}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -126,84 +160,157 @@ function TreeItem({
 type TreeProps = {
   items: TreeItemData[];
   className?: string;
-  /** 受控：当前选中的节点 ID */
   selected?: string;
-  /** 受控：当前展开的节点 ID 集合 */
   expanded?: Set<string>;
   onSelect?: (item: TreeItemData) => void;
   onToggle?: (item: TreeItemData) => void;
-  /** 懒加载回调：展开目录时调用，返回子节点列表 */
   onLoadChildren?: (item: TreeItemData) => Promise<TreeItemData[]>;
 };
+
+interface VisibleTreeNode {
+  item: TreeItemData;
+  depth: number;
+  parentId: string | null;
+}
 
 function Tree({ items, className, selected, expanded, onSelect, onToggle, onLoadChildren }: TreeProps) {
   const { t } = useTranslation();
   const [internalSelected, setInternalSelected] = useState<string | undefined>(selected);
   const [internalExpanded, setInternalExpanded] = useState<Set<string>>(expanded ?? new Set());
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
-  // 懒加载结果缓存：避免直接 mutate items prop（保持 props 不可变）
   const [childrenMap, setChildrenMap] = useState<Map<string, TreeItemData[]>>(new Map());
+  const currentSelected = selected !== undefined ? selected : internalSelected;
+  const currentExpanded = expanded !== undefined ? expanded : internalExpanded;
+  const visibleNodes = useMemo(
+    () => flattenVisibleNodes(items, currentExpanded, childrenMap),
+    [childrenMap, currentExpanded, items]
+  );
+  const parentMap = useMemo(() => buildParentMap(items, childrenMap), [childrenMap, items]);
+  const previousParentMapRef = useRef(parentMap);
+  const buttonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const [focusedId, setFocusedId] = useState<string | undefined>(() => {
+    if (selected && visibleNodes.some((node) => node.item.id === selected)) return selected;
+    return visibleNodes[0]?.item.id;
+  });
 
-  const isControlled = selected !== undefined || expanded !== undefined;
+  const focusNode = useCallback((id: string | undefined) => {
+    if (id === undefined) return;
+    setFocusedId(id);
+    buttonRefs.current.get(id)?.focus();
+  }, []);
 
-  const fallbackExpanded = useMemo(() => new Set<string>(), []);
-  const currentSelected = isControlled ? selected : internalSelected;
-  const currentExpanded = isControlled ? (expanded ?? fallbackExpanded) : internalExpanded;
+  useEffect(() => {
+    const visibleIds = new Set(visibleNodes.map((node) => node.item.id));
+    if (focusedId !== undefined && !visibleIds.has(focusedId)) {
+      let fallback = previousParentMapRef.current.get(focusedId) ?? null;
+      while (fallback !== null && !visibleIds.has(fallback)) {
+        fallback = previousParentMapRef.current.get(fallback) ?? null;
+      }
+      const target = fallback ?? visibleNodes[0]?.item.id;
+      setFocusedId(target);
+      queueMicrotask(() => {
+        if (target !== undefined) buttonRefs.current.get(target)?.focus();
+      });
+    } else if (focusedId === undefined && visibleNodes.length > 0) {
+      setFocusedId(visibleNodes[0]?.item.id);
+    }
+    previousParentMapRef.current = parentMap;
+  }, [focusedId, parentMap, visibleNodes]);
 
   const handleSelect = useCallback(
     (item: TreeItemData) => {
-      if (!isControlled) {
-        setInternalSelected(item.id);
-      }
+      if (selected === undefined) setInternalSelected(item.id);
       onSelect?.(item);
     },
-    [isControlled, onSelect]
+    [onSelect, selected]
   );
 
   const handleToggle = useCallback(
     async (item: TreeItemData) => {
       const willExpand = !currentExpanded.has(item.id);
       const cached = childrenMap.get(item.id);
-      const hasInlineChildren = item.children && item.children.length > 0;
-      const needsLoad = willExpand && !!onLoadChildren && !hasInlineChildren && !cached;
+      const hasInlineChildren = Boolean(item.children && item.children.length > 0);
+      const needsLoad = willExpand && Boolean(onLoadChildren) && !hasInlineChildren && !cached;
 
       if (needsLoad && onLoadChildren) {
-        setLoadingIds((prev) => new Set(prev).add(item.id));
+        setLoadingIds((previous) => new Set(previous).add(item.id));
         try {
           const children = await onLoadChildren(item);
-          // 用 immutable 更新写入缓存，绝不 mutate item.children
-          setChildrenMap((prev) => {
-            const next = new Map(prev);
+          setChildrenMap((previous) => {
+            const next = new Map(previous);
             next.set(item.id, children);
             return next;
           });
         } finally {
-          setLoadingIds((prev) => {
-            const next = new Set(prev);
+          setLoadingIds((previous) => {
+            const next = new Set(previous);
             next.delete(item.id);
             return next;
           });
         }
       }
 
-      if (!isControlled) {
-        setInternalExpanded((prev) => {
-          const next = new Set(prev);
-          if (willExpand) {
-            next.add(item.id);
-          } else {
-            next.delete(item.id);
-          }
+      if (expanded === undefined) {
+        setInternalExpanded((previous) => {
+          const next = new Set(previous);
+          if (willExpand) next.add(item.id);
+          else next.delete(item.id);
           return next;
         });
       }
       onToggle?.(item);
     },
-    [isControlled, currentExpanded, childrenMap, onLoadChildren, onToggle]
+    [childrenMap, currentExpanded, expanded, onLoadChildren, onToggle]
+  );
+
+  const handleItemKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>, item: TreeItemData) => {
+      const index = visibleNodes.findIndex((node) => node.item.id === item.id);
+      if (index === -1) return;
+      const current = visibleNodes[index];
+      const resolvedChildren = childrenMap.get(item.id) ?? item.children;
+      const hasChildren = Boolean(item.isDir || (resolvedChildren && resolvedChildren.length > 0));
+
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        if (hasChildren) void handleToggle(item);
+        handleSelect(item);
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        focusNode(visibleNodes[Math.min(index + 1, visibleNodes.length - 1)]?.item.id);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        focusNode(visibleNodes[Math.max(index - 1, 0)]?.item.id);
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        focusNode(visibleNodes[0]?.item.id);
+      } else if (event.key === "End") {
+        event.preventDefault();
+        focusNode(visibleNodes[visibleNodes.length - 1]?.item.id);
+      } else if (event.key === "ArrowRight" && hasChildren) {
+        event.preventDefault();
+        if (!currentExpanded.has(item.id)) {
+          void handleToggle(item);
+        } else {
+          focusNode(visibleNodes.find((node) => node.parentId === item.id)?.item.id);
+        }
+      } else if (event.key === "ArrowLeft") {
+        if (hasChildren && currentExpanded.has(item.id)) {
+          event.preventDefault();
+          void handleToggle(item);
+        } else if (current.parentId !== null) {
+          event.preventDefault();
+          focusNode(current.parentId);
+        }
+      }
+    },
+    [childrenMap, currentExpanded, focusNode, handleSelect, handleToggle, visibleNodes]
   );
 
   return (
-    <div role="tree" className={cn("space-y-0.5", className)} aria-label={t('tree.treeViewLabel')}>
+    <div role="tree" className={cn("space-y-0.5", className)} aria-label={t("tree.treeViewLabel")}>
       {items.map((item) => (
         <TreeItem
           key={item.id}
@@ -211,15 +318,51 @@ function Tree({ items, className, selected, expanded, onSelect, onToggle, onLoad
           selected={currentSelected}
           expanded={currentExpanded}
           onSelect={handleSelect}
-          onToggle={handleToggle}
-          onLoadChildren={onLoadChildren}
+          onToggle={(target) => void handleToggle(target)}
           loadingIds={loadingIds}
           childrenMap={childrenMap}
+          focusedId={focusedId}
+          buttonRefs={buttonRefs.current}
+          onItemFocus={setFocusedId}
+          onItemKeyDown={handleItemKeyDown}
         />
       ))}
     </div>
   );
 }
 
+function flattenVisibleNodes(
+  items: TreeItemData[],
+  expanded: Set<string>,
+  childrenMap: Map<string, TreeItemData[]>
+): VisibleTreeNode[] {
+  const result: VisibleTreeNode[] = [];
+  const visit = (nodes: TreeItemData[], depth: number, parentId: string | null) => {
+    for (const item of nodes) {
+      result.push({ item, depth, parentId });
+      const children = childrenMap.get(item.id) ?? item.children;
+      if (expanded.has(item.id) && children && children.length > 0) visit(children, depth + 1, item.id);
+    }
+  };
+  visit(items, 0, null);
+  return result;
+}
+
+function buildParentMap(
+  items: TreeItemData[],
+  childrenMap: Map<string, TreeItemData[]>
+): Map<string, string | null> {
+  const result = new Map<string, string | null>();
+  const visit = (nodes: TreeItemData[], parentId: string | null) => {
+    for (const item of nodes) {
+      result.set(item.id, parentId);
+      const children = childrenMap.get(item.id) ?? item.children;
+      if (children) visit(children, item.id);
+    }
+  };
+  visit(items, null);
+  return result;
+}
+
 export { Tree, TreeItem };
-export type { TreeItemData, TreeProps, TreeItemProps };
+export type { TreeItemData, TreeItemProps, TreeProps };
