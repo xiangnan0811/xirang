@@ -1047,7 +1047,7 @@ git diff --cached -- backend/internal/backupasset/content \
   deploy/nginx/templates/default.conf.template
 ```
 
-- [ ] Create one coherent work commit only after every gate is green:
+- [x] Create one coherent work commit only after every gate is green:
 
 ```bash
 git commit -m "feat: add secure backup asset content plane"
@@ -1116,7 +1116,7 @@ git push -u origin codex/backup-assets-content-plane
 | remaining PostgreSQL/race/frontend/Nginx/Docker/full gates | `completed`; fresh real PostgreSQL 18, focused/race, frontend, Nginx, Swagger, Docker, full and migration-safety gates passed after final TDD fixes |
 | focused high-risk inline review | `completed`; provisional/invalid lease cleanup, lease-close bounds/error propagation, close-probe accounting, cache-root open TOCTOU, persisted idle heartbeat and bounded detached gateway cleanup RED-GREEN regressions passed |
 | spec updates | `completed`; four approved code-spec files contain executable Content ledger/runtime/logging/frontend boundary contracts |
-| work commit | `not_executed` |
+| work commit | `executed`; `5e5a13fdf527a3917d48a108d28d062b89c17a66` |
 | finish-work archive auto-commit | `not_executed` |
 | concrete journal commit | `not_executed` |
 | push / PR / CI / review / squash merge | `not_executed` |
