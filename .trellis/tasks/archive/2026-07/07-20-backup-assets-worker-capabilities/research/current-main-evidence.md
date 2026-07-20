@@ -980,3 +980,49 @@ Swagger/security checks other than this concrete Trellis ledger update and the
 paired correction in `implement.md`. Stage, work commit, archive commit,
 journal commit, push, PR, required CI, squash merge and post-merge automation
 remain pending until the immutable scope/whitespace gate is rerun.
+
+## 18. Restored controller delivery verification
+
+On 2026-07-21 the controller received a Git-writable, network-enabled
+environment and independently resumed the pre-PR delivery gate. Fresh
+`git fetch --prune origin` succeeded; `main` and `origin/main` remained
+`be6eebbe50dfd78e071c6d73e9c81493487fb4d5`, and the remote feature branch
+was absent before delivery.
+
+The restored environment closed the earlier local evidence gaps as follows:
+
+- `env -u NODE_ENV TMPDIR=/dev/shm GOCACHE=<isolated> make check` passed from
+  the committed delivery tree: backend lint reported zero issues, every Go
+  package passed, frontend coverage passed 162 files and 919 tests, and both
+  backend and frontend production builds completed. The generated untracked
+  `backend/xirang-server` was deleted before staging.
+- A dedicated PostgreSQL 18 container on host-network port 55434 passed the
+  CI-equivalent required migration test for 000062 through 000067 plus UTC
+  timestamptz scanning. Catalog, Search, Overlay, Content and Processing
+  behavior parity then passed serially with every corresponding
+  `REQUIRE_POSTGRES_*` flag set. The dedicated container was stopped and
+  removed; unrelated containers were not touched.
+- Bundle enforcement passed at 498.14 KiB main JavaScript of 500 KiB and
+  104.55 KiB main CSS of 105 KiB. Compose contract checks, core/Worker script
+  self-tests, documentation freshness, and deterministic Swagger v1.16.6
+  generation passed. Two Swagger generations preserved `docs.go` SHA-256
+  `477c6ace7631dbe1002ff1a0efc42ef0eea8b60758397ea6274a748570566559`.
+- The local linux/amd64 Worker image built successfully with the frozen tool
+  set. Its first runtime smoke correctly failed because the smoke script named
+  the media fixture `input.mp4` while the sandbox and runner require the fixed
+  path `input.bin`. The approved `scripts/test-asset-worker.sh` path was
+  corrected to emit MP4 bytes explicitly at `input.bin`; the same non-root,
+  read-only, network-none, capability-dropped, seccomp-constrained runtime
+  smoke then passed. No sandbox validation was weakened.
+- The current `brace-expansion` high-severity advisory reproduces on unchanged
+  `main`; the Child does not modify `package.json` or `package-lock.json`, and
+  CI marks npm audit `continue-on-error`. No dependency or manifest expansion
+  was made for that baseline advisory.
+
+The exact product manifest remains 164/164 unique with 158 changed product
+paths and zero outside paths. Paired 000067 remains the only Child migration;
+000068 through 000071, model files, Provider bytes, all-in-one release paths,
+root README and dependency manifests remain untouched. Local arm64 build,
+Trivy scanning and `actionlint` remain CI evidence, not local pass claims.
+Push, PR, required CI, squash merge and post-merge automation remain pending
+at this evidence snapshot.
