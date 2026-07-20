@@ -24,6 +24,7 @@ import (
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/automation"
 	"xirang/backend/internal/backupasset/processing"
+	processingupdater "xirang/backend/internal/backupasset/processing/updater"
 	"xirang/backend/internal/backupasset/provider"
 	backupruntime "xirang/backend/internal/backupasset/runtime"
 	"xirang/backend/internal/bootstrap"
@@ -228,6 +229,10 @@ func main() {
 	if workerServerErr != nil {
 		log.Warn().Str("stage", "worker_listener_startup").Msg("备份资产 Worker 监听器未完全启动，核心服务继续运行")
 	}
+	updaterServer, updaterServerErr := startUpdaterHTTPServer(assetRuntime)
+	if updaterServerErr != nil {
+		log.Warn().Str("stage", "updater_listener_startup").Msg("备份资产 updater 监听器未启动，核心服务继续运行")
+	}
 	if err := taskManager.LoadSchedules(context.Background()); err != nil {
 		log.Fatal().Err(err).Msg("加载定时任务失败")
 	}
@@ -374,12 +379,18 @@ func main() {
 	if err := workerServers.StopAccepting(); err != nil {
 		log.Warn().Str("stage", "worker_listener_close").Msg("备份资产 Worker 监听器关闭不完整")
 	}
+	if err := updaterServer.StopAccepting(); err != nil {
+		log.Warn().Str("stage", "updater_listener_close").Msg("备份资产 updater 监听器关闭不完整")
+	}
 	assetRuntime.StopAccepting()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := workerServers.Shutdown(shutdownCtx); err != nil {
 		log.Warn().Str("stage", "worker_http_shutdown").Msg("备份资产 Worker 请求未在宽限期内完成")
+	}
+	if err := updaterServer.Shutdown(shutdownCtx); err != nil {
+		log.Warn().Str("stage", "updater_http_shutdown").Msg("备份资产 updater 请求未在宽限期内完成")
 	}
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("优雅关闭失败，强制退出")
@@ -428,6 +439,95 @@ type workerHTTPServerSet struct {
 	mu        sync.Mutex
 	servers   []*http.Server
 	listeners []net.Listener
+}
+
+const (
+	assetWorkerUpdaterSocket = "/run/xirang/asset-worker-updater.sock"
+	assetWorkerUpdaterUID    = uint32(10002)
+	assetWorkerUpdaterGID    = uint32(10002)
+)
+
+type updaterHTTPServer struct {
+	mu       sync.Mutex
+	server   *http.Server
+	listener net.Listener
+}
+
+func startUpdaterHTTPServer(runtime *backupruntime.Runtime) (*updaterHTTPServer, error) {
+	result := &updaterHTTPServer{}
+	if runtime == nil {
+		return result, nil
+	}
+	config, err := runtime.ProcessingConfig()
+	if err != nil {
+		return result, err
+	}
+	if !config.Enabled || !config.Updater.Enabled {
+		return result, nil
+	}
+	handler, err := api.NewWorkerUpdaterRouter(runtime, api.WorkerUpdaterRouterConfig{
+		JSONMaxBytes: config.ProtocolJSONMaxBytes,
+	})
+	if err != nil {
+		return result, err
+	}
+	listener, err := processingupdater.ListenLocalUpdater(processingupdater.LocalUpdaterTransportConfig{
+		SocketPath: assetWorkerUpdaterSocket, ExpectedPeerUID: assetWorkerUpdaterUID, ExpectedPeerGID: assetWorkerUpdaterGID,
+	})
+	if err != nil {
+		return result, err
+	}
+	server := newUpdaterHTTPServer(handler)
+	result.server = server
+	result.listener = listener
+	go func() {
+		if serveErr := server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) &&
+			!errors.Is(serveErr, net.ErrClosed) {
+			logger.Module("backup_asset_processing").Warn().Str("transport", "updater_uds").
+				Str("stage", "serve").Msg("备份资产 updater 监听器停止")
+		}
+	}()
+	return result, nil
+}
+
+func newUpdaterHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       2 * time.Minute,
+		WriteTimeout:      2 * time.Minute,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+		ConnContext:       api.UpdaterConnContext,
+		ErrorLog:          stdlog.New(io.Discard, "", 0),
+	}
+}
+
+func (server *updaterHTTPServer) StopAccepting() error {
+	if server == nil {
+		return nil
+	}
+	server.mu.Lock()
+	listener := server.listener
+	server.listener = nil
+	server.mu.Unlock()
+	if listener == nil {
+		return nil
+	}
+	if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	return nil
+}
+
+func (server *updaterHTTPServer) Shutdown(ctx context.Context) error {
+	if server == nil || server.server == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return server.server.Shutdown(ctx)
 }
 
 func startWorkerHTTPServers(runtime *backupruntime.Runtime) (*workerHTTPServerSet, error) {

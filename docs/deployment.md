@@ -100,7 +100,84 @@ curl -fsS http://127.0.0.1:10761/healthz
 - 用户名：`admin`
 - 密码：`.env` 中的 `ADMIN_INITIAL_PASSWORD`
 
-### 4. 可选：外部反向代理与 HTTPS
+### 4. 可选：本地备份资产 Worker profile（非 GA）
+
+仓库根 Compose 提供 `asset-worker` 可选 profile，用于在本机从源码构建和验证 parser Worker 与独立 updater。该能力当前**不是 GA**，没有稳定公共 Worker 镜像，也不会发布到 Docker Hub 或 GitHub Release。它使用本地镜像名 `xirang-asset-worker:${ASSET_WORKER_IMAGE_TAG:-local}`；官方 Core 仍是 `linnea7171/xirang:${IMAGE_TAG:-latest}`，公开端口仍只有 `10761`。
+
+普通 `docker compose up -d` 不会启动 profile 服务，Catalog、元数据搜索、Content Broker、workspace、原生预览、下载和 recovery 继续工作。未部署 Worker、没有 active verified bundle 或 capability 不匹配时，增强处理显示 `not_deployed`/`unsupported`，不会制造备份失败或告警。
+
+Profile 固定使用以下本地身份和权限合同：
+
+| 对象 | 身份/模式 | 说明 |
+|---|---|---|
+| parser Worker | UID/GID `10000:10000` | non-root、read-only rootfs、无网络/DNS、只读 bundle mount |
+| updater | UID/GID `10002:10002` | 独立 UDS 身份；只有它可写 bundle store |
+| inbox 目录 | `10002:10002`, mode `0555` | updater-only、只读、不得是符号链接 |
+| trust 文件 | `10002:10002`, mode `0440` | updater-only Ed25519 公钥集合，不得是符号链接 |
+
+先准备固定 inbox 和 trust 文件。Trust 文档只包含公钥与 UTC 生效/退役时间；不要把私钥或在线凭据放入该文件：
+
+```json
+{
+  "schema_version": 1,
+  "keys": [
+    {
+      "id": "operator-key-1",
+      "public_key": "<base64-ed25519-public-key>",
+      "active_from": "<RFC3339-UTC>",
+      "retire_after": "<RFC3339-UTC>"
+    }
+  ]
+}
+```
+
+```bash
+mkdir -p asset-worker-inbox
+sudo chown 10002:10002 asset-worker-inbox asset-worker-updater-trust.json
+sudo chmod 0555 asset-worker-inbox
+sudo chmod 0440 asset-worker-updater-trust.json
+```
+
+在 `.env` 中显式启用全局 feature、本机 UDS 和独立 updater，并把加密 Derived Store 放在已有 `/data` 持久卷内。Settings 数据库覆盖优先于环境变量；若已有同名 DB override，必须在设置界面同步更新或删除旧覆盖值：
+
+```env
+BACKUP_ASSETS_ENABLED=true
+BACKUP_ASSETS_WORKER_LOCAL_ENABLED=true
+BACKUP_ASSETS_WORKER_LOCAL_SOCKET=/run/xirang/worker/asset-worker.sock
+BACKUP_ASSETS_WORKER_UPDATER_ENABLED=true
+BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ENABLED=false
+BACKUP_ASSETS_PROCESSING_SECRET_CLASSIFY=false
+BACKUP_ASSETS_PROCESSING_BACKFILL_PAUSED=true
+BACKUP_ASSETS_DERIVED_STORE_ROOT=/data/asset-worker-derived
+
+ASSET_WORKER_IMAGE_TAG=local
+ASSET_WORKER_INBOX_DIR=./asset-worker-inbox
+ASSET_WORKER_UPDATER_TRUST_FILE=./asset-worker-updater-trust.json
+```
+
+仓库 profile 固定为 offline-only，并给 Worker 与 updater 都设置 `network_mode: none`。不要在该 profile 中启用 online updater；在线模式需要独立的 allowlist proxy/firewall、隔离网络和凭据 secret 合同，当前仓库 Compose 不提供这条部署路径。
+
+本地构建并启动：
+
+```bash
+docker compose --profile asset-worker build asset-worker
+docker compose --profile asset-worker up -d
+docker compose --profile asset-worker ps
+docker compose --profile asset-worker logs --tail=200 asset-worker asset-worker-updater
+```
+
+以下变更需要重启 Core/profile：本机/远程 Worker enablement 与 socket/certificate/trust、updater enablement/online origins、Derived Store root/chunk，以及 inbox、trust 文件或 bundle mount。Backfill pause/quota 与有限秘密分类是动态设置；默认分别为 paused 与 disabled。
+
+回退时先暂停 backfill，再关闭本机 Worker 与 updater 设置并重启 Core，然后停止可选服务：
+
+```bash
+docker compose --profile asset-worker stop asset-worker asset-worker-updater
+docker compose up -d xirang
+```
+
+不要使用 `down -v` 作为功能回退，也不要删除 Provider bytes、RecoveryPoint、Catalog 或源备份。加密 Derived 数据和已验签 bundle 可保留给受控调和或后续重新启用；移除 profile 不影响原生预览、下载与 recovery。
+
+### 5. 可选：外部反向代理与 HTTPS
 
 Xirang 容器只提供 HTTP 单入口。生产公网访问建议在同机或前置网关部署外部反向代理：
 

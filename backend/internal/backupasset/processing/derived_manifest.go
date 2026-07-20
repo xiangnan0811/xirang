@@ -13,8 +13,10 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/processing/capabilityspec"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
@@ -94,6 +96,11 @@ type pendingProjection struct {
 	rejectionPending bool
 }
 
+type manifestArtifactIdentity struct {
+	artifactID  string
+	referenceID string
+}
+
 type ArtifactSinkConfig struct {
 	MaxArtifacts     int
 	MaxArtifactBytes int64
@@ -158,6 +165,10 @@ func (sink *ArtifactSink) UploadArtifact(ctx context.Context, request UploadArti
 	}
 	if err := sink.validateSinkGrant(ctx, request.JobID, request.AttemptID, request.WorkerID, request.GrantID); err != nil {
 		return UploadedArtifact{}, err
+	}
+	descriptor, err := sink.loadUploadDescriptor(ctx, request.JobID, request.AttemptID)
+	if err != nil || !validArtifactMediaForDescriptor(descriptor, request.Artifact.Role, request.Artifact.MediaType) {
+		return UploadedArtifact{}, ErrInvalidArtifact
 	}
 	reservation, err := sink.grants.Reserve(ctx, ReserveGrantRequest{
 		GrantID: request.GrantID, Kind: GrantRequestUpload, Bytes: request.Artifact.PlaintextSize,
@@ -240,6 +251,11 @@ func (sink *ArtifactSink) CommitManifest(ctx context.Context, request CommitMani
 	if err != nil {
 		return CommitManifestResult{}, err
 	}
+	for _, artifact := range artifacts {
+		if !validArtifactMediaForDescriptor(descriptor, artifact.Role, artifact.MediaType) {
+			return CommitManifestResult{}, ErrInvalidManifest
+		}
+	}
 	currentPolicy, err := sink.policy(ctx)
 	if err != nil || currentPolicy != request.SecurityPolicyRevision || job.SecurityPolicyRevision != request.SecurityPolicyRevision {
 		return CommitManifestResult{}, ErrManifestPolicyChanged
@@ -251,13 +267,47 @@ func (sink *ArtifactSink) CommitManifest(ctx context.Context, request CommitMani
 	if err != nil {
 		return CommitManifestResult{}, err
 	}
-	result := CommitManifestResult{ManifestDigest: manifestDigest, ProjectionRequired: manifestNeedsProjection(artifacts)}
-	err = sink.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		setID, err := sink.publishManifestTx(ctx, tx, request, job, artifacts, uploads, result)
+	setID, err := backupasset.NewOpaqueID()
+	if err != nil {
+		return CommitManifestResult{}, err
+	}
+	identities, err := newManifestArtifactIdentities(len(artifacts))
+	if err != nil {
+		return CommitManifestResult{}, err
+	}
+	result := CommitManifestResult{ArtifactSetID: setID, ManifestDigest: manifestDigest, ProjectionRequired: manifestNeedsProjection(descriptor, artifacts)}
+	var preparedProjection PreparedDerivedProjection
+	if result.ProjectionRequired {
+		fields, classification, fieldErr := sink.prepareProjectionEvidence(ctx, descriptor, artifacts, uploads, identities)
+		if fieldErr != nil {
+			return result, fieldErr
+		}
+		preparedProjection, err = sink.lifecycle.projection.PreparePublish(ctx, DerivedProjectionPublish{
+			ArtifactSetID: setID, RecoveryPointID: job.RecoveryPointID,
+			CatalogGenerationID: job.CatalogGenerationID, EntryID: job.EntryID, SourceFingerprint: job.SourceFingerprint,
+			RecoveryPointFence: request.RecoveryPointFence, Fields: fields, Classification: classification,
+		})
 		if err != nil {
+			return result, fmt.Errorf("prepare Derived Search projection: %w", err)
+		}
+	}
+	err = sink.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := sink.publishManifestTx(ctx, tx, request, job, artifacts, uploads, identities, result, setID); err != nil {
 			return err
 		}
-		result.ArtifactSetID = setID
+		if !result.ProjectionRequired {
+			return nil
+		}
+		publication, err := preparedProjection.PublishTx(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("publish Derived Search projection: %w", err)
+		}
+		if !validProjectionPublication(publication, setID) {
+			return ErrInvalidManifest
+		}
+		if err := sink.completeProjectedManifestTx(ctx, tx, request, setID, publication.Revision); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
@@ -268,27 +318,6 @@ func (sink *ArtifactSink) CommitManifest(ctx context.Context, request CommitMani
 			return CommitManifestResult{}, ErrManifestFenceLost
 		}
 		return CommitManifestResult{}, err
-	}
-	if !result.ProjectionRequired {
-		return result, nil
-	}
-	publish := DerivedProjectionPublish{
-		ArtifactSetID: result.ArtifactSetID, RecoveryPointID: job.RecoveryPointID,
-		CatalogGenerationID: job.CatalogGenerationID, EntryID: job.EntryID, SourceFingerprint: job.SourceFingerprint,
-		RecoveryPointFence: request.RecoveryPointFence,
-	}
-	publication, err := sink.lifecycle.projection.Publish(ctx, publish)
-	if err != nil {
-		return result, fmt.Errorf("publish Derived Search projection: %w", err)
-	}
-	if !validProjectionPublication(publication, result.ArtifactSetID) {
-		return result, ErrInvalidManifest
-	}
-	if err := sink.completeProjectedManifest(ctx, request, result.ArtifactSetID, publication.Revision); err != nil {
-		completed, proofErr := sink.projectionCompletionMatches(ctx, request.JobID, request.AttemptID, result.ArtifactSetID, publication.Revision)
-		if proofErr != nil || !completed {
-			return result, errors.Join(err, proofErr)
-		}
 	}
 	return result, nil
 }
@@ -351,22 +380,39 @@ func (sink *ArtifactSink) ReconcilePendingProjections(ctx context.Context, batch
 			}
 			continue
 		}
-		publication, err := sink.lifecycle.projection.Publish(ctx, DerivedProjectionPublish{
+		fields, classification, err := sink.loadProjectionEvidence(ctx, descriptor, pending.set.ID)
+		if err != nil {
+			return recovered, err
+		}
+		prepared, err := sink.lifecycle.projection.PreparePublish(ctx, DerivedProjectionPublish{
 			ArtifactSetID: pending.set.ID, RecoveryPointID: pending.job.RecoveryPointID,
 			CatalogGenerationID: pending.job.CatalogGenerationID, EntryID: pending.job.EntryID,
 			SourceFingerprint: pending.job.SourceFingerprint, RecoveryPointFence: pending.fence,
+			Fields: fields, Classification: classification,
 		})
 		if err != nil {
-			return recovered, fmt.Errorf("reconcile Derived Search projection: %w", err)
+			return recovered, fmt.Errorf("prepare reconciled Derived Search projection: %w", err)
 		}
-		if !validProjectionPublication(publication, pending.set.ID) {
-			return recovered, ErrInvalidManifest
-		}
-		if err := sink.completeProjectedManifest(ctx, CommitManifestRequest{
+		commitRequest := CommitManifestRequest{
 			JobID: pending.job.ID, AttemptID: pending.attempt.ID, WorkerID: pending.attempt.WorkerID,
 			RecoveryPointFence: pending.fence,
-		}, pending.set.ID, publication.Revision); err != nil {
-			completed, proofErr := sink.projectionCompletionMatches(ctx, pending.job.ID, pending.attempt.ID, pending.set.ID, publication.Revision)
+		}
+		var projectionRevision int64
+		err = sink.retryManifestConflicts(ctx, func() error {
+			return sink.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				publication, publishErr := prepared.PublishTx(ctx, tx)
+				if publishErr != nil {
+					return fmt.Errorf("reconcile Derived Search projection: %w", publishErr)
+				}
+				if !validProjectionPublication(publication, pending.set.ID) {
+					return ErrInvalidManifest
+				}
+				projectionRevision = publication.Revision
+				return sink.completeProjectedManifestTx(ctx, tx, commitRequest, pending.set.ID, publication.Revision)
+			})
+		})
+		if err != nil {
+			completed, proofErr := sink.projectionCompletionMatches(ctx, pending.job.ID, pending.attempt.ID, pending.set.ID, projectionRevision)
 			if proofErr != nil || !completed {
 				return recovered, errors.Join(err, proofErr)
 			}
@@ -491,7 +537,9 @@ func (sink *ArtifactSink) finishPendingSuperseded(ctx context.Context, pending p
 			}
 			now := sink.utcNow()
 			if attempt.State == "active" && attempt.IsCurrent {
-				if err := revokeAttemptGrantsTx(tx, attempt.ID, now, string(reason)); err != nil {
+				if err := revokeAttemptGrantsTx(tx, attempt.ID, now, transitionRevocationReason(AttemptTransitionRequest{
+					To: ProcessingSuperseded, SupersedeReason: reason,
+				})); err != nil {
 					return err
 				}
 				if err := finishAttemptTx(tx, attempt.ID, now, "superseded", ""); err != nil {
@@ -584,33 +632,34 @@ func (sink *ArtifactSink) publishManifestTx(
 	loadedJob model.BackupAssetProcessingJob,
 	artifacts []ArtifactDeclaration,
 	uploads []model.BackupAssetProcessingUpload,
+	identities []manifestArtifactIdentity,
 	manifest CommitManifestResult,
-) (string, error) {
+	setID string,
+) error {
+	if backupasset.ValidateOpaqueID(setID) != nil || manifest.ArtifactSetID != setID || len(identities) != len(artifacts) {
+		return ErrInvalidManifest
+	}
 	var job model.BackupAssetProcessingJob
 	result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.JobID).Limit(1).Find(&job)
 	if result.Error != nil || result.RowsAffected != 1 || job.State != string(ProcessingUploading) || !job.IsCurrent ||
 		job.TransitionRevision != loadedJob.TransitionRevision || job.CurrentAttemptID == nil || *job.CurrentAttemptID != request.AttemptID ||
 		job.SecurityPolicyRevision != request.SecurityPolicyRevision {
-		return "", ErrInvalidManifest
+		return ErrInvalidManifest
 	}
 	var attempt model.BackupAssetProcessingAttempt
 	result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND job_id = ? AND worker_id = ?", request.AttemptID, job.ID, request.WorkerID).Limit(1).Find(&attempt)
 	if result.Error != nil || result.RowsAffected != 1 || attempt.State != "active" || !attempt.IsCurrent ||
 		attempt.RecoveryPointFenceHash != hashFence(request.RecoveryPointFence.FenceToken) {
-		return "", ErrManifestFenceLost
+		return ErrManifestFenceLost
 	}
 	var grant model.BackupAssetProcessingGrant
 	result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.GrantID).Limit(1).Find(&grant)
 	if result.Error != nil || result.RowsAffected != 1 || grant.Kind != string(GrantSink) || grant.State != string(GrantActive) ||
 		grant.JobID != job.ID || grant.AttemptID != attempt.ID || grant.WorkerID != request.WorkerID || grant.FenceHash != attempt.RecoveryPointFenceHash {
-		return "", ErrManifestFenceLost
+		return ErrManifestFenceLost
 	}
 	if err := sink.leaseService.ValidateFenceTx(ctx, tx, request.RecoveryPointFence); err != nil {
-		return "", errors.Join(ErrManifestFenceLost, err)
-	}
-	setID, err := backupasset.NewOpaqueID()
-	if err != nil {
-		return "", err
+		return errors.Join(ErrManifestFenceLost, err)
 	}
 	now := sink.utcNow()
 	completeness := string(ArtifactComplete)
@@ -631,59 +680,55 @@ func (sink *ArtifactSink) publishManifestTx(
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := tx.Create(&set).Error; err != nil {
-		return "", fmt.Errorf("create Derived artifact set: %w", err)
+		return fmt.Errorf("create Derived artifact set: %w", err)
 	}
 	for index, declaration := range artifacts {
 		upload := uploads[index]
+		identity := identities[index]
+		if backupasset.ValidateOpaqueID(identity.artifactID) != nil || backupasset.ValidateOpaqueID(identity.referenceID) != nil {
+			return ErrInvalidManifest
+		}
 		var blob model.BackupAssetDerivedBlob
 		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND state = ?", upload.StagingID, "active").Limit(1).Find(&blob)
 		if result.Error != nil || result.RowsAffected != 1 || blob.PlaintextSize != declaration.PlaintextSize || blob.PlaintextDigest != declaration.PlaintextDigest {
-			return "", ErrInvalidManifest
-		}
-		artifactID, err := backupasset.NewOpaqueID()
-		if err != nil {
-			return "", err
-		}
-		referenceID, err := backupasset.NewOpaqueID()
-		if err != nil {
-			return "", err
+			return ErrInvalidManifest
 		}
 		artifact := model.BackupAssetDerivedArtifact{
-			ID: artifactID, ArtifactSetID: set.ID, Ordinal: declaration.Ordinal, Role: string(declaration.Role),
+			ID: identity.artifactID, ArtifactSetID: set.ID, Ordinal: declaration.Ordinal, Role: string(declaration.Role),
 			MediaType: declaration.MediaType, PlaintextSize: declaration.PlaintextSize, PlaintextDigest: declaration.PlaintextDigest,
 			Completeness: string(declaration.Completeness), CoverageCanonical: append([]byte(nil), declaration.CoverageCanonical...),
-			BlobID: blob.ID, ExcerptRef: "", CreatedAt: now,
+			BlobID: blob.ID, ExcerptRef: projectionExcerptRef(declaration, identity.artifactID), CreatedAt: now,
 		}
 		reference := model.BackupAssetDerivedBlobReference{
-			ID: referenceID, BlobID: blob.ID, ArtifactID: artifact.ID, RecoveryPointID: job.RecoveryPointID,
+			ID: identity.referenceID, BlobID: blob.ID, ArtifactID: artifact.ID, RecoveryPointID: job.RecoveryPointID,
 			CatalogGenerationID: job.CatalogGenerationID, EntryID: job.EntryID,
 			SourceFingerprint: job.SourceFingerprint, State: "active", CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Create(&artifact).Error; err != nil {
-			return "", fmt.Errorf("create Derived artifact: %w", err)
+			return fmt.Errorf("create Derived artifact: %w", err)
 		}
 		if err := tx.Create(&reference).Error; err != nil {
-			return "", fmt.Errorf("create Derived blob reference: %w", err)
+			return fmt.Errorf("create Derived blob reference: %w", err)
 		}
 		if err := tx.Model(&model.BackupAssetDerivedBlob{}).Where("id = ? AND state = ?", blob.ID, "active").
 			Update("ref_count", gorm.Expr("ref_count + 1")).Error; err != nil {
-			return "", fmt.Errorf("increment Derived blob reference count: %w", err)
+			return fmt.Errorf("increment Derived blob reference count: %w", err)
 		}
 		if err := tx.Model(&model.BackupAssetProcessingUpload{}).Where("id = ? AND state = ?", upload.ID, "staged").
 			Update("state", "committed").Error; err != nil {
-			return "", fmt.Errorf("commit Derived upload: %w", err)
+			return fmt.Errorf("commit Derived upload: %w", err)
 		}
 	}
 	if err := tx.Model(&model.BackupAssetProcessingGrant{}).Where("id = ? AND state = ?", grant.ID, GrantActive).
 		Updates(map[string]any{"state": string(GrantClosed), "updated_at": now, "version": gorm.Expr("version + 1")}).Error; err != nil {
-		return "", fmt.Errorf("close Sink grant: %w", err)
+		return fmt.Errorf("close Sink grant: %w", err)
 	}
 	validatingRevision, err := ValidateTransition(TransitionRequest{
 		From: ProcessingUploading, To: ProcessingValidating,
 		CurrentRevision: job.TransitionRevision, ExpectedRevision: job.TransitionRevision,
 	})
 	if err != nil {
-		return "", err
+		return err
 	}
 	updates := map[string]any{
 		"state": string(ProcessingValidating), "transition_revision": validatingRevision,
@@ -695,82 +740,84 @@ func (sink *ArtifactSink) publishManifestTx(
 			CurrentRevision: validatingRevision, ExpectedRevision: validatingRevision,
 		})
 		if err != nil {
-			return "", err
+			return err
 		}
 		updates["state"] = string(ProcessingSucceeded)
 		updates["transition_revision"] = succeededRevision
 		updates["is_current"] = false
 		updates["finished_at"] = now
 		if err := finishAttemptTx(tx, attempt.ID, now, "succeeded", ""); err != nil {
-			return "", err
+			return err
 		}
 		if err := sink.leaseService.ReleaseTx(ctx, tx, request.RecoveryPointFence); err != nil {
-			return "", err
+			return err
 		}
 	}
 	updated := tx.Model(&model.BackupAssetProcessingJob{}).Where("id = ? AND transition_revision = ?", job.ID, job.TransitionRevision).Updates(updates)
 	if updated.Error != nil || updated.RowsAffected != 1 {
-		return "", errors.Join(ErrRevisionConflict, updated.Error)
+		return errors.Join(ErrRevisionConflict, updated.Error)
 	}
-	return set.ID, nil
+	return nil
 }
 
-func (sink *ArtifactSink) completeProjectedManifest(ctx context.Context, request CommitManifestRequest, setID string, projectionRevision int64) error {
+func (sink *ArtifactSink) completeProjectedManifestTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	request CommitManifestRequest,
+	setID string,
+	projectionRevision int64,
+) error {
 	if projectionRevision <= 0 {
 		return ErrInvalidManifest
 	}
-	return sink.retryManifestConflicts(ctx, func() error {
-		return sink.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			if err := sink.leaseService.ValidateFenceTx(ctx, tx, request.RecoveryPointFence); err != nil {
-				return errors.Join(ErrManifestFenceLost, err)
-			}
-			var job model.BackupAssetProcessingJob
-			result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.JobID).Limit(1).Find(&job)
-			if result.Error != nil || result.RowsAffected != 1 || job.State != string(ProcessingValidating) || !job.IsCurrent ||
-				job.CurrentAttemptID == nil || *job.CurrentAttemptID != request.AttemptID {
-				return ErrManifestFenceLost
-			}
-			var attempt model.BackupAssetProcessingAttempt
-			result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND job_id = ? AND worker_id = ?",
-				request.AttemptID, job.ID, request.WorkerID).Limit(1).Find(&attempt)
-			if result.Error != nil || result.RowsAffected != 1 || attempt.State != "active" || !attempt.IsCurrent ||
-				attempt.RecoveryPointLeaseID != request.RecoveryPointFence.LeaseID ||
-				attempt.RecoveryPointAttemptID != request.RecoveryPointFence.AttemptID ||
-				attempt.RecoveryPointFenceHash != hashFence(request.RecoveryPointFence.FenceToken) {
-				return ErrManifestFenceLost
-			}
-			now := sink.utcNow()
-			setUpdate := tx.Model(&model.BackupAssetDerivedArtifactSet{}).Where("id = ? AND job_id = ? AND attempt_id = ? AND state = ? AND projection_required = ? AND projection_published = ?",
-				setID, job.ID, attempt.ID, "active", true, false).Updates(map[string]any{
-				"projection_published": true, "projection_revision": projectionRevision, "updated_at": now,
-			})
-			if setUpdate.Error != nil {
-				return fmt.Errorf("mark Derived projection published: %w", setUpdate.Error)
-			}
-			if setUpdate.RowsAffected != 1 {
-				return ErrManifestFenceLost
-			}
-			revision, err := ValidateTransition(TransitionRequest{
-				From: ProcessingValidating, To: ProcessingSucceeded,
-				CurrentRevision: job.TransitionRevision, ExpectedRevision: job.TransitionRevision,
-			})
-			if err != nil {
-				return err
-			}
-			updated := tx.Model(&model.BackupAssetProcessingJob{}).Where("id = ? AND transition_revision = ?", job.ID, job.TransitionRevision).
-				Updates(map[string]any{
-					"state": string(ProcessingSucceeded), "transition_revision": revision, "is_current": false,
-					"finished_at": now, "updated_at": now, "version": gorm.Expr("version + 1"),
-				})
-			if updated.Error != nil || updated.RowsAffected != 1 {
-				return ErrRevisionConflict
-			}
-			if err := finishAttemptTx(tx, request.AttemptID, now, "succeeded", ""); err != nil {
-				return err
-			}
-			return sink.leaseService.ReleaseTx(ctx, tx, request.RecoveryPointFence)
-		})
+	if err := sink.leaseService.ValidateFenceTx(ctx, tx, request.RecoveryPointFence); err != nil {
+		return errors.Join(ErrManifestFenceLost, err)
+	}
+	var job model.BackupAssetProcessingJob
+	result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.JobID).Limit(1).Find(&job)
+	if result.Error != nil || result.RowsAffected != 1 || job.State != string(ProcessingValidating) || !job.IsCurrent ||
+		job.CurrentAttemptID == nil || *job.CurrentAttemptID != request.AttemptID {
+		return ErrManifestFenceLost
+	}
+	var attempt model.BackupAssetProcessingAttempt
+	result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND job_id = ? AND worker_id = ?",
+		request.AttemptID, job.ID, request.WorkerID).Limit(1).Find(&attempt)
+	if result.Error != nil || result.RowsAffected != 1 || attempt.State != "active" || !attempt.IsCurrent ||
+		attempt.RecoveryPointLeaseID != request.RecoveryPointFence.LeaseID ||
+		attempt.RecoveryPointAttemptID != request.RecoveryPointFence.AttemptID ||
+		attempt.RecoveryPointFenceHash != hashFence(request.RecoveryPointFence.FenceToken) {
+		return ErrManifestFenceLost
+	}
+	now := sink.utcNow()
+	setUpdate := tx.Model(&model.BackupAssetDerivedArtifactSet{}).Where("id = ? AND job_id = ? AND attempt_id = ? AND state = ? AND projection_required = ? AND projection_published = ?",
+		setID, job.ID, attempt.ID, "active", true, false).Updates(map[string]any{
+		"projection_published": true, "projection_revision": projectionRevision, "updated_at": now,
 	})
+	if setUpdate.Error != nil {
+		return fmt.Errorf("mark Derived projection published: %w", setUpdate.Error)
+	}
+	if setUpdate.RowsAffected != 1 {
+		return ErrManifestFenceLost
+	}
+	revision, err := ValidateTransition(TransitionRequest{
+		From: ProcessingValidating, To: ProcessingSucceeded,
+		CurrentRevision: job.TransitionRevision, ExpectedRevision: job.TransitionRevision,
+	})
+	if err != nil {
+		return err
+	}
+	updated := tx.Model(&model.BackupAssetProcessingJob{}).Where("id = ? AND transition_revision = ?", job.ID, job.TransitionRevision).
+		Updates(map[string]any{
+			"state": string(ProcessingSucceeded), "transition_revision": revision, "is_current": false,
+			"finished_at": now, "updated_at": now, "version": gorm.Expr("version + 1"),
+		})
+	if updated.Error != nil || updated.RowsAffected != 1 {
+		return ErrRevisionConflict
+	}
+	if err := finishAttemptTx(tx, request.AttemptID, now, "succeeded", ""); err != nil {
+		return err
+	}
+	return sink.leaseService.ReleaseTx(ctx, tx, request.RecoveryPointFence)
 }
 
 func (sink *ArtifactSink) projectionCompletionMatches(ctx context.Context, jobID, attemptID, setID string, projectionRevision int64) (bool, error) {
@@ -838,6 +885,20 @@ func (sink *ArtifactSink) loadManifestJob(ctx context.Context, request CommitMan
 		return job, WorkDescriptorV1{}, ErrInvalidManifest
 	}
 	return job, descriptor, nil
+}
+
+func (sink *ArtifactSink) loadUploadDescriptor(ctx context.Context, jobID, attemptID string) (WorkDescriptorV1, error) {
+	var job model.BackupAssetProcessingJob
+	result := sink.db.WithContext(ctx).Where("id = ?", jobID).Limit(1).Find(&job)
+	if result.Error != nil || result.RowsAffected != 1 || job.State != string(ProcessingUploading) || !job.IsCurrent ||
+		job.CurrentAttemptID == nil || *job.CurrentAttemptID != attemptID {
+		return WorkDescriptorV1{}, ErrInvalidArtifact
+	}
+	descriptor, err := DecodeWorkDescriptorV1(job.DescriptorCanonical)
+	if err != nil {
+		return WorkDescriptorV1{}, ErrInvalidArtifact
+	}
+	return descriptor, nil
 }
 
 func (sink *ArtifactSink) loadAndValidateUploads(ctx context.Context, request CommitManifestRequest, artifacts []ArtifactDeclaration) ([]model.BackupAssetProcessingUpload, error) {
@@ -963,7 +1024,9 @@ func validArtifactMedia(role ArtifactRole, mediaType string) bool {
 	case ArtifactRoleNoop:
 		return mediaType == "application/octet-stream"
 	case ArtifactRoleContent, ArtifactRoleOCR:
-		return mediaType == "text/plain" || mediaType == "application/json"
+		return mediaType == "text/plain" || mediaType == "application/json" || mediaType == "application/pdf" ||
+			mediaType == "application/octet-stream" || mediaType == "video/mp4" || mediaType == "video/webm" ||
+			mediaType == "audio/mpeg" || mediaType == "audio/mp4" || mediaType == "audio/ogg"
 	case ArtifactRoleThumbnail:
 		return mediaType == "image/png" || mediaType == "image/jpeg" || mediaType == "image/webp"
 	case ArtifactRoleMetadata:
@@ -971,6 +1034,41 @@ func validArtifactMedia(role ArtifactRole, mediaType string) bool {
 	default:
 		return false
 	}
+}
+
+func validArtifactMediaForDescriptor(descriptor WorkDescriptorV1, role ArtifactRole, mediaType string) bool {
+	if !validArtifactMedia(role, mediaType) || mediaType == "text/html" || mediaType == "image/svg+xml" || mediaType == "application/xhtml+xml" {
+		return false
+	}
+	if descriptor.Capability == "noop" && descriptor.OutputProfile == "noop.v1" {
+		switch role {
+		case ArtifactRoleNoop:
+			return mediaType == "application/octet-stream"
+		case ArtifactRoleContent, ArtifactRoleOCR:
+			return mediaType == "text/plain" || mediaType == "application/json"
+		case ArtifactRoleThumbnail:
+			return mediaType == "image/png" || mediaType == "image/jpeg" || mediaType == "image/webp"
+		case ArtifactRoleMetadata:
+			return mediaType == "application/json"
+		default:
+			return false
+		}
+	}
+	profile, ok := capabilityspec.Lookup(descriptor.Capability, descriptor.OutputProfile, true)
+	if !ok || profile.CapabilitySchema != descriptor.CapabilitySchema {
+		return false
+	}
+	for _, output := range profile.Outputs {
+		if output.Role != string(role) {
+			continue
+		}
+		for _, allowed := range output.MediaTypes {
+			if allowed == mediaType {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type coverageV1 struct {
@@ -1042,13 +1140,255 @@ func writeManifestInt(destination io.Writer, value int64) {
 	_, _ = destination.Write(encoded[:])
 }
 
-func manifestNeedsProjection(artifacts []ArtifactDeclaration) bool {
+func manifestNeedsProjection(descriptor WorkDescriptorV1, artifacts []ArtifactDeclaration) bool {
+	if descriptor.Capability == capabilityspec.CapabilitySecretClassify {
+		return true
+	}
 	for _, artifact := range artifacts {
-		if artifact.Role == ArtifactRoleContent || artifact.Role == ArtifactRoleOCR {
+		if artifact.MediaType == "text/plain" && (artifact.Role == ArtifactRoleContent || artifact.Role == ArtifactRoleOCR) {
 			return true
 		}
 	}
 	return false
+}
+
+func newManifestArtifactIdentities(count int) ([]manifestArtifactIdentity, error) {
+	identities := make([]manifestArtifactIdentity, count)
+	for index := range identities {
+		artifactID, err := backupasset.NewOpaqueID()
+		if err != nil {
+			return nil, err
+		}
+		referenceID, err := backupasset.NewOpaqueID()
+		if err != nil {
+			return nil, err
+		}
+		identities[index] = manifestArtifactIdentity{artifactID: artifactID, referenceID: referenceID}
+	}
+	return identities, nil
+}
+
+func projectionExcerptRef(declaration ArtifactDeclaration, artifactID string) string {
+	if declaration.MediaType == "text/plain" && (declaration.Role == ArtifactRoleContent || declaration.Role == ArtifactRoleOCR) {
+		return artifactID
+	}
+	return ""
+}
+
+type secretClassificationMetadataV1 struct {
+	SchemaVersion int      `json:"schema_version"`
+	Sensitivity   string   `json:"sensitivity"`
+	Categories    []string `json:"categories"`
+}
+
+func parseSecretClassificationEvidence(
+	payload []byte,
+	completeness ArtifactCompleteness,
+	artifactID string,
+) (DerivedClassificationEvidence, error) {
+	if len(payload) == 0 || len(payload) > 256<<10 || backupasset.ValidateOpaqueID(artifactID) != nil ||
+		!json.Valid(payload) || rejectDuplicateJSONMembers(payload) != nil {
+		return DerivedClassificationEvidence{}, ErrInvalidManifest
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var metadata secretClassificationMetadataV1
+	if decoder.Decode(&metadata) != nil || ensureJSONEOF(decoder) != nil || metadata.SchemaVersion != 1 || metadata.Categories == nil {
+		return DerivedClassificationEvidence{}, ErrInvalidManifest
+	}
+	canonical, err := json.Marshal(metadata)
+	if err != nil || !bytes.Equal(canonical, payload) {
+		return DerivedClassificationEvidence{}, ErrInvalidManifest
+	}
+	categories := make([]string, len(metadata.Categories))
+	copy(categories, metadata.Categories)
+	evidence := DerivedClassificationEvidence{ArtifactID: artifactID, Categories: categories}
+	switch metadata.Sensitivity {
+	case string(DerivedSensitivityPublic):
+		if completeness != ArtifactComplete || len(metadata.Categories) != 0 {
+			return DerivedClassificationEvidence{}, ErrInvalidManifest
+		}
+		evidence.Sensitivity = DerivedSensitivityPublic
+	case string(DerivedSensitivitySecret):
+		if completeness != ArtifactComplete || len(metadata.Categories) != 1 || metadata.Categories[0] != "credential_pattern" {
+			return DerivedClassificationEvidence{}, ErrInvalidManifest
+		}
+		evidence.Sensitivity = DerivedSensitivitySecret
+	case string(DerivedSensitivityUnknown):
+		if completeness != ArtifactPartial || len(metadata.Categories) != 0 {
+			return DerivedClassificationEvidence{}, ErrInvalidManifest
+		}
+		evidence.Sensitivity = DerivedSensitivityUnknown
+	default:
+		return DerivedClassificationEvidence{}, ErrInvalidManifest
+	}
+	return evidence, nil
+}
+
+func (sink *ArtifactSink) prepareProjectionEvidence(
+	ctx context.Context,
+	descriptor WorkDescriptorV1,
+	artifacts []ArtifactDeclaration,
+	uploads []model.BackupAssetProcessingUpload,
+	identities []manifestArtifactIdentity,
+) ([]DerivedProjectionField, *DerivedClassificationEvidence, error) {
+	if descriptor.Capability != capabilityspec.CapabilitySecretClassify {
+		fields, err := sink.prepareProjectionFields(ctx, artifacts, uploads, identities)
+		return fields, nil, err
+	}
+	if len(artifacts) != 1 || len(uploads) != 1 || len(identities) != 1 ||
+		artifacts[0].Role != ArtifactRoleMetadata || artifacts[0].MediaType != "application/json" ||
+		artifacts[0].PlaintextSize > 256<<10 {
+		return nil, nil, ErrInvalidManifest
+	}
+	evidence, err := sink.classificationEvidenceFromBlob(
+		ctx, uploads[0].StagingID, identities[0].artifactID, artifacts[0].Completeness, artifacts[0].PlaintextSize,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return []DerivedProjectionField{}, &evidence, nil
+}
+
+func (sink *ArtifactSink) loadProjectionEvidence(
+	ctx context.Context,
+	descriptor WorkDescriptorV1,
+	artifactSetID string,
+) ([]DerivedProjectionField, *DerivedClassificationEvidence, error) {
+	if descriptor.Capability != capabilityspec.CapabilitySecretClassify {
+		fields, err := sink.loadProjectionFields(ctx, artifactSetID)
+		return fields, nil, err
+	}
+	var artifacts []model.BackupAssetDerivedArtifact
+	if err := sink.db.WithContext(ctx).Where("artifact_set_id = ?", artifactSetID).Order("ordinal ASC").Find(&artifacts).Error; err != nil {
+		return nil, nil, fmt.Errorf("load pending classification evidence: %w", err)
+	}
+	if len(artifacts) != 1 || artifacts[0].Role != string(ArtifactRoleMetadata) || artifacts[0].MediaType != "application/json" ||
+		artifacts[0].PlaintextSize > 256<<10 {
+		return nil, nil, ErrInvalidManifest
+	}
+	evidence, err := sink.classificationEvidenceFromBlob(
+		ctx, artifacts[0].BlobID, artifacts[0].ID, ArtifactCompleteness(artifacts[0].Completeness), artifacts[0].PlaintextSize,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return []DerivedProjectionField{}, &evidence, nil
+}
+
+func (sink *ArtifactSink) classificationEvidenceFromBlob(
+	ctx context.Context,
+	blobID string,
+	artifactID string,
+	completeness ArtifactCompleteness,
+	plaintextSize int64,
+) (DerivedClassificationEvidence, error) {
+	if sink == nil || sink.store == nil || backupasset.ValidateOpaqueID(blobID) != nil || plaintextSize < 0 || plaintextSize > 256<<10 {
+		return DerivedClassificationEvidence{}, ErrInvalidManifest
+	}
+	var plaintext bytes.Buffer
+	if err := sink.store.readBlob(ctx, blobID, &plaintext); err != nil || int64(plaintext.Len()) != plaintextSize {
+		return DerivedClassificationEvidence{}, errors.Join(ErrInvalidManifest, err)
+	}
+	return parseSecretClassificationEvidence(plaintext.Bytes(), completeness, artifactID)
+}
+
+func (sink *ArtifactSink) prepareProjectionFields(
+	ctx context.Context,
+	artifacts []ArtifactDeclaration,
+	uploads []model.BackupAssetProcessingUpload,
+	identities []manifestArtifactIdentity,
+) ([]DerivedProjectionField, error) {
+	if len(artifacts) != len(uploads) || len(artifacts) != len(identities) {
+		return nil, ErrInvalidManifest
+	}
+	fields := make([]DerivedProjectionField, 0, 2)
+	seen := make(map[ArtifactRole]bool, 2)
+	for index, artifact := range artifacts {
+		if artifact.MediaType != "text/plain" || artifact.Role != ArtifactRoleContent && artifact.Role != ArtifactRoleOCR {
+			continue
+		}
+		if seen[artifact.Role] {
+			return nil, ErrInvalidManifest
+		}
+		seen[artifact.Role] = true
+		field, err := sink.projectionFieldFromBlob(ctx, uploads[index].StagingID, identities[index].artifactID, artifact.Role, artifact.Completeness)
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, field)
+	}
+	if len(fields) == 0 {
+		return nil, ErrInvalidManifest
+	}
+	return fields, nil
+}
+
+func (sink *ArtifactSink) loadProjectionFields(ctx context.Context, artifactSetID string) ([]DerivedProjectionField, error) {
+	var artifacts []model.BackupAssetDerivedArtifact
+	if err := sink.db.WithContext(ctx).Where(
+		"artifact_set_id = ? AND media_type = ? AND role IN ?", artifactSetID, "text/plain", []string{string(ArtifactRoleContent), string(ArtifactRoleOCR)},
+	).Order("ordinal ASC").Find(&artifacts).Error; err != nil {
+		return nil, fmt.Errorf("load pending projection artifacts: %w", err)
+	}
+	fields := make([]DerivedProjectionField, 0, len(artifacts))
+	seen := make(map[ArtifactRole]bool, 2)
+	for _, artifact := range artifacts {
+		role := ArtifactRole(artifact.Role)
+		completeness := ArtifactCompleteness(artifact.Completeness)
+		if seen[role] || backupasset.ValidateOpaqueID(artifact.ID) != nil {
+			return nil, ErrInvalidManifest
+		}
+		seen[role] = true
+		field, err := sink.projectionFieldFromBlob(ctx, artifact.BlobID, artifact.ID, role, completeness)
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, field)
+	}
+	if len(fields) == 0 {
+		return nil, ErrInvalidManifest
+	}
+	return fields, nil
+}
+
+func (sink *ArtifactSink) projectionFieldFromBlob(
+	ctx context.Context,
+	blobID string,
+	artifactID string,
+	role ArtifactRole,
+	completeness ArtifactCompleteness,
+) (DerivedProjectionField, error) {
+	if backupasset.ValidateOpaqueID(blobID) != nil || backupasset.ValidateOpaqueID(artifactID) != nil ||
+		(role != ArtifactRoleContent && role != ArtifactRoleOCR) ||
+		(completeness != ArtifactComplete && completeness != ArtifactPartial) {
+		return DerivedProjectionField{}, ErrInvalidManifest
+	}
+	var plaintext bytes.Buffer
+	if err := sink.store.readBlob(ctx, blobID, &plaintext); err != nil {
+		return DerivedProjectionField{}, errors.Join(ErrInvalidManifest, err)
+	}
+	if plaintext.Len() > 16<<20 || !utf8.Valid(plaintext.Bytes()) || bytes.IndexByte(plaintext.Bytes(), 0) >= 0 {
+		return DerivedProjectionField{}, ErrInvalidManifest
+	}
+	frequencies := make(map[string]int)
+	for _, term := range strings.Fields(plaintext.String()) {
+		if len(term) > 4096 || utf8.RuneCountInString(term) > 2048 || len(frequencies) >= 2048 && frequencies[term] == 0 {
+			return DerivedProjectionField{}, ErrInvalidManifest
+		}
+		frequencies[term]++
+		if frequencies[term] > 1_000_000 {
+			return DerivedProjectionField{}, ErrInvalidManifest
+		}
+	}
+	terms := make([]DerivedProjectionTerm, 0, len(frequencies))
+	for term, frequency := range frequencies {
+		terms = append(terms, DerivedProjectionTerm{Term: term, Frequency: frequency})
+	}
+	sort.Slice(terms, func(left, right int) bool { return terms[left].Term < terms[right].Term })
+	return DerivedProjectionField{
+		ExcerptArtifactID: artifactID, Role: role, Completeness: completeness, Terms: terms,
+	}, nil
 }
 
 func validUploadIdentity(request UploadArtifactRequest) bool {

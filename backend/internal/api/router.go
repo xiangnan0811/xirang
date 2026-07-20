@@ -325,7 +325,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 		backupAssetHandlerConfigSource, handlers.NewBackupAssetSecretProofVerifier(dep.DB, dep.JWTManager),
 	)
 	backupAssetOverlayHandler := handlers.NewBackupAssetOverlayHandler(backupAssetOverlayService, backupAssetAuditSink, backupAssetHandlerConfigSource)
-	backupWorkerHandler := handlers.NewBackupWorkerHandler(dep.BackupAssets)
+	backupWorkerHandler := handlers.NewBackupWorkerHandler(dep.BackupAssets).WithAudit(backupAssetAuditSink)
+	backupProcessingHandler := handlers.NewBackupProcessingHandler(dep.BackupAssets, backupAssetAuditSink)
 	var rsyncVersioningService handlers.TaskRsyncVersioningService = featureDisabledRsyncVersioningService{}
 	if dep.BackupAssets != nil {
 		rsyncVersioningService = dep.BackupAssets.RepositoryService()
@@ -380,6 +381,13 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/overview/backup-confidence", middleware.RBAC("tasks:read"), backupConfidenceHandler.Get)
 	secured.GET("/overview/storage-usage", middleware.RBAC("tasks:read"), storageUsageHandler.Get)
 	secured.GET("/admin/backup-asset-processing", middleware.RequireRole("admin"), middleware.APIRateLimit(30, time.Minute), middleware.MaxBodySize(1), backupWorkerHandler.Get)
+	secured.GET("/admin/backup-asset-processing/capabilities", middleware.RequireRole("admin"), middleware.APIRateLimit(30, time.Minute), middleware.MaxBodySize(1), backupWorkerHandler.Capabilities)
+	secured.GET("/admin/backup-asset-processing/coverage", middleware.RequireRole("admin"), middleware.APIRateLimit(30, time.Minute), middleware.MaxBodySize(1), backupWorkerHandler.Coverage)
+	secured.GET("/admin/backup-asset-processing/updater", middleware.RequireRole("admin"), middleware.APIRateLimit(30, time.Minute), middleware.MaxBodySize(1), backupWorkerHandler.Updater)
+	secured.GET("/admin/backup-asset-processing/updater/offline-candidates", middleware.RequireRole("admin"), middleware.APIRateLimit(30, time.Minute), middleware.MaxBodySize(1), backupWorkerHandler.OfflineCandidates)
+	secured.PATCH("/admin/backup-asset-processing/backfill-policy", middleware.RequireRole("admin"), middleware.APIRateLimit(30, time.Minute), middleware.MaxBodySize(4<<10), backupWorkerHandler.UpdateBackfillPolicy)
+	secured.POST("/admin/backup-asset-processing/updater/offline-candidates/scan", middleware.RequireRole("admin"), middleware.APIRateLimit(6, time.Hour), middleware.MaxBodySize(1), backupWorkerHandler.ScanOfflineCandidates)
+	secured.POST("/admin/backup-asset-processing/updater/offline-imports", middleware.RequireRole("admin"), middleware.APIRateLimit(1, time.Hour), middleware.MaxBodySize(4<<10), backupWorkerHandler.ActivateOfflineCandidate)
 	secured.POST("/backup-repositories/connect", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), backupRepositoryHandler.Connect)
 	secured.GET("/backup-repositories", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupRepositoryHandler.List)
 	secured.GET("/backup-repositories/:id", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupRepositoryHandler.Detail)
@@ -390,6 +398,18 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/recovery-points/:id/entries", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.ListEntries)
 	secured.GET("/recovery-points/:id/entries/:entryId", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetEntry)
 	secured.POST("/recovery-points/:id/entries/:entryId/delivery-tickets", middleware.RBAC(backupasset.PermissionBackupAssetsPreview), backupContentHandler.Issue)
+	secured.POST("/recovery-points/:id/entries/:entryId/preview-jobs",
+		middleware.RBAC(backupasset.PermissionBackupAssetsPreview), middleware.APIRateLimit(30, time.Minute),
+		middleware.MaxBodySize(4<<10), backupProcessingHandler.CreatePreview)
+	secured.GET("/recovery-points/:id/entries/:entryId/preview-jobs/:jobId",
+		middleware.RBAC(backupasset.PermissionBackupAssetsPreview), middleware.APIRateLimit(60, time.Minute),
+		middleware.MaxBodySize(1), backupProcessingHandler.PollPreview)
+	secured.POST("/recovery-points/:id/entries/:entryId/preview-jobs/:jobId/cancel",
+		middleware.RBAC(backupasset.PermissionBackupAssetsPreview), middleware.APIRateLimit(30, time.Minute),
+		middleware.MaxBodySize(4<<10), backupProcessingHandler.CancelPreview)
+	secured.GET("/recovery-points/:id/entries/:entryId/processing",
+		middleware.RBAC(backupasset.PermissionBackupAssetsPreview), middleware.APIRateLimit(60, time.Minute),
+		middleware.MaxBodySize(1), backupProcessingHandler.GetState)
 	secured.POST("/recovery-point-diffs", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.Diff)
 	secured.POST("/asset-search", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetSearchHandler.Search)
 	secured.GET("/asset-saved-searches", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.ListSavedSearches)

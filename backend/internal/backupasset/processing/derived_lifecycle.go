@@ -16,7 +16,10 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-var ErrDerivedUnauthorized = errors.New("derived artifact is not authorized")
+var (
+	ErrDerivedUnauthorized  = errors.New("derived artifact is not authorized")
+	ErrDerivedFenceRequired = errors.New("derived projection revocation requires a processing fence")
+)
 
 type DerivedRevokeReason string
 
@@ -44,6 +47,34 @@ type DerivedProjectionPublish struct {
 	EntryID             string
 	SourceFingerprint   string
 	RecoveryPointFence  backupasset.LeaseFence
+	Fields              []DerivedProjectionField
+	Classification      *DerivedClassificationEvidence
+}
+
+type DerivedSensitivity string
+
+const (
+	DerivedSensitivityPublic  DerivedSensitivity = "public"
+	DerivedSensitivitySecret  DerivedSensitivity = "secret"
+	DerivedSensitivityUnknown DerivedSensitivity = "unknown"
+)
+
+type DerivedClassificationEvidence struct {
+	ArtifactID  string
+	Sensitivity DerivedSensitivity
+	Categories  []string
+}
+
+type DerivedProjectionTerm struct {
+	Term      string
+	Frequency int
+}
+
+type DerivedProjectionField struct {
+	ExcerptArtifactID string
+	Role              ArtifactRole
+	Completeness      ArtifactCompleteness
+	Terms             []DerivedProjectionTerm
 }
 
 type DerivedProjectionPublication struct {
@@ -59,30 +90,58 @@ type DerivedProjectionRevoke struct {
 	SourceFingerprint   string
 	ProjectionRevision  int64
 	Reason              DerivedRevokeReason
+	RecoveryPointFence  backupasset.LeaseFence
 }
 
 type DerivedProjectionPort interface {
-	// Publish is idempotent by ArtifactSetID. A replay after an ambiguous
-	// acknowledgement returns the same durable publication revision.
-	Publish(context.Context, DerivedProjectionPublish) (DerivedProjectionPublication, error)
-	Revoke(context.Context, DerivedProjectionRevoke) error
+	PreparePublish(context.Context, DerivedProjectionPublish) (PreparedDerivedProjection, error)
+	PrepareRevoke(context.Context, DerivedProjectionRevoke) (PreparedDerivedRevocation, error)
+}
+
+type PreparedDerivedProjection interface {
+	// PublishTx is idempotent by ArtifactSetID and must use only the supplied
+	// caller transaction for durable writes.
+	PublishTx(context.Context, *gorm.DB) (DerivedProjectionPublication, error)
+}
+
+type PreparedDerivedRevocation interface {
+	RevokeTx(context.Context, *gorm.DB) error
+}
+
+type DerivedFenceLease interface {
+	Acquire(context.Context, backupasset.AcquireLeaseRequest) (backupasset.Lease, error)
+	Release(context.Context, backupasset.LeaseFence) error
 }
 
 type DerivedLifecycle struct {
 	db         *gorm.DB
 	store      *DerivedStore
 	projection DerivedProjectionPort
+	fenceLease DerivedFenceLease
 	now        func() time.Time
 }
 
-func NewDerivedLifecycle(db *gorm.DB, store *DerivedStore, projection DerivedProjectionPort, now func() time.Time) (*DerivedLifecycle, error) {
+func NewDerivedLifecycle(
+	db *gorm.DB,
+	store *DerivedStore,
+	projection DerivedProjectionPort,
+	now func() time.Time,
+	fenceLeases ...DerivedFenceLease,
+) (*DerivedLifecycle, error) {
 	if db == nil || store == nil || projection == nil {
+		return nil, ErrDerivedStoreUnavailable
+	}
+	if len(fenceLeases) > 1 || len(fenceLeases) == 1 && fenceLeases[0] == nil {
 		return nil, ErrDerivedStoreUnavailable
 	}
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &DerivedLifecycle{db: db, store: store, projection: projection, now: now}, nil
+	lifecycle := &DerivedLifecycle{db: db, store: store, projection: projection, now: now}
+	if len(fenceLeases) == 1 {
+		lifecycle.fenceLease = fenceLeases[0]
+	}
+	return lifecycle, nil
 }
 
 func (lifecycle *DerivedLifecycle) ReadAuthorized(ctx context.Context, authorization DerivedArtifactAuthorization, destination io.Writer) error {
@@ -108,9 +167,9 @@ func (lifecycle *DerivedLifecycle) ReadAuthorized(ctx context.Context, authoriza
 	}
 	var set model.BackupAssetDerivedArtifactSet
 	result = lifecycle.db.WithContext(ctx).Where(
-		"id = ? AND recovery_point_id = ? AND catalog_generation_id = ? AND entry_id = ? AND source_fingerprint = ? AND state IN ?",
+		"id = ? AND recovery_point_id = ? AND catalog_generation_id = ? AND entry_id = ? AND source_fingerprint = ? AND state IN ? AND (projection_required = ? OR projection_published = ?)",
 		artifact.ArtifactSetID, authorization.RecoveryPointID, authorization.CatalogGenerationID,
-		authorization.EntryID, authorization.SourceFingerprint, []string{"active", "stale"},
+		authorization.EntryID, authorization.SourceFingerprint, []string{"active", "stale"}, false, true,
 	).Limit(1).Find(&set)
 	if result.Error != nil || result.RowsAffected != 1 {
 		return ErrDerivedUnauthorized
@@ -122,6 +181,27 @@ func (lifecycle *DerivedLifecycle) ReadAuthorized(ctx context.Context, authoriza
 }
 
 func (lifecycle *DerivedLifecycle) RevokeSet(ctx context.Context, artifactSetID string, reason DerivedRevokeReason) error {
+	return lifecycle.revokeSet(ctx, artifactSetID, reason, nil)
+}
+
+func (lifecycle *DerivedLifecycle) RevokeSetFenced(
+	ctx context.Context,
+	artifactSetID string,
+	reason DerivedRevokeReason,
+	fence backupasset.LeaseFence,
+) error {
+	if !validDerivedFence(fence, "") {
+		return ErrDerivedFenceRequired
+	}
+	return lifecycle.revokeSet(ctx, artifactSetID, reason, &fence)
+}
+
+func (lifecycle *DerivedLifecycle) revokeSet(
+	ctx context.Context,
+	artifactSetID string,
+	reason DerivedRevokeReason,
+	fence *backupasset.LeaseFence,
+) error {
 	if lifecycle == nil || backupasset.ValidateOpaqueID(artifactSetID) != nil || !validDerivedRevokeReason(reason) {
 		return ErrDerivedUnauthorized
 	}
@@ -136,14 +216,25 @@ func (lifecycle *DerivedLifecycle) RevokeSet(ctx context.Context, artifactSetID 
 	if derivedSetUnavailable(initial.State) {
 		return nil
 	}
+	if initial.ProjectionPublished && (fence == nil || !validDerivedFence(*fence, initial.RecoveryPointID)) {
+		return ErrDerivedFenceRequired
+	}
+	var preparedRevoke PreparedDerivedRevocation
 	if initial.ProjectionPublished {
-		if err := lifecycle.projection.Revoke(ctx, DerivedProjectionRevoke{
+		projectionFence := backupasset.LeaseFence{}
+		if fence != nil {
+			projectionFence = *fence
+		}
+		prepared, err := lifecycle.projection.PrepareRevoke(ctx, DerivedProjectionRevoke{
 			ArtifactSetID: initial.ID, RecoveryPointID: initial.RecoveryPointID,
 			CatalogGenerationID: initial.CatalogGenerationID, EntryID: initial.EntryID,
 			SourceFingerprint: initial.SourceFingerprint, ProjectionRevision: initial.ProjectionRevision, Reason: reason,
-		}); err != nil {
+			RecoveryPointFence: projectionFence,
+		})
+		if err != nil {
 			return fmt.Errorf("revoke Derived Search projection: %w", err)
 		}
+		preparedRevoke = prepared
 	}
 
 	type doomedBlob struct {
@@ -159,6 +250,14 @@ func (lifecycle *DerivedLifecycle) RevokeSet(ctx context.Context, artifactSetID 
 		}
 		if derivedSetUnavailable(set.State) {
 			return nil
+		}
+		if set.ProjectionPublished {
+			if preparedRevoke == nil {
+				return ErrDerivedUnauthorized
+			}
+			if err := preparedRevoke.RevokeTx(ctx, tx); err != nil {
+				return fmt.Errorf("revoke Derived Search projection: %w", err)
+			}
 		}
 		now := lifecycle.utcNow()
 		state := derivedSetRevokeState(reason)
@@ -234,6 +333,128 @@ func (lifecycle *DerivedLifecycle) RevokeSet(ctx context.Context, artifactSetID 
 	return nil
 }
 
+func (lifecycle *DerivedLifecycle) MarkSetStaleFenced(
+	ctx context.Context,
+	artifactSetID string,
+	fence backupasset.LeaseFence,
+) error {
+	if lifecycle == nil || backupasset.ValidateOpaqueID(artifactSetID) != nil || !validDerivedFence(fence, "") {
+		return ErrDerivedUnauthorized
+	}
+	var initial model.BackupAssetDerivedArtifactSet
+	result := lifecycle.db.WithContext(ctx).Where("id = ?", artifactSetID).Limit(1).Find(&initial)
+	if result.Error != nil {
+		return fmt.Errorf("load Derived artifact set for invalidation: %w", result.Error)
+	}
+	if result.RowsAffected != 1 || !validDerivedFence(fence, initial.RecoveryPointID) {
+		return ErrDerivedUnauthorized
+	}
+	if initial.State == "stale" {
+		return nil
+	}
+	if initial.State != "active" {
+		return ErrDerivedUnauthorized
+	}
+	var preparedRevoke PreparedDerivedRevocation
+	if initial.ProjectionPublished {
+		prepared, err := lifecycle.projection.PrepareRevoke(ctx, DerivedProjectionRevoke{
+			ArtifactSetID: initial.ID, RecoveryPointID: initial.RecoveryPointID,
+			CatalogGenerationID: initial.CatalogGenerationID, EntryID: initial.EntryID,
+			SourceFingerprint: initial.SourceFingerprint, ProjectionRevision: initial.ProjectionRevision,
+			Reason: DerivedRevokeRollback, RecoveryPointFence: fence,
+		})
+		if err != nil {
+			return fmt.Errorf("prepare stale Derived Search projection revoke: %w", err)
+		}
+		preparedRevoke = prepared
+	}
+	return lifecycle.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var set model.BackupAssetDerivedArtifactSet
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", artifactSetID).Limit(1).Find(&set)
+		if result.Error != nil || result.RowsAffected != 1 || set.RecoveryPointID != fence.RecoveryPointID {
+			return ErrDerivedUnauthorized
+		}
+		if set.State == "stale" {
+			return nil
+		}
+		if set.State != "active" || set.ProjectionPublished != initial.ProjectionPublished ||
+			set.ProjectionRevision != initial.ProjectionRevision {
+			return ErrDerivedUnauthorized
+		}
+		if set.ProjectionPublished {
+			if preparedRevoke == nil {
+				return ErrDerivedFenceRequired
+			}
+			if err := preparedRevoke.RevokeTx(ctx, tx); err != nil {
+				return fmt.Errorf("revoke stale Derived Search projection: %w", err)
+			}
+		}
+		updated := tx.Model(&model.BackupAssetDerivedArtifactSet{}).
+			Where("id = ? AND state = ? AND projection_published = ? AND projection_revision = ?",
+				set.ID, "active", set.ProjectionPublished, set.ProjectionRevision).
+			Updates(map[string]any{"state": "stale", "projection_published": false, "updated_at": lifecycle.utcNow()})
+		if updated.Error != nil || updated.RowsAffected != 1 {
+			return errors.Join(ErrDerivedUnauthorized, updated.Error)
+		}
+		return nil
+	})
+}
+
+func (lifecycle *DerivedLifecycle) MarkSetStale(ctx context.Context, artifactSetID string) error {
+	if lifecycle == nil || lifecycle.fenceLease == nil || backupasset.ValidateOpaqueID(artifactSetID) != nil {
+		return ErrDerivedFenceRequired
+	}
+	var set model.BackupAssetDerivedArtifactSet
+	result := lifecycle.db.WithContext(ctx).Select("id", "job_id", "recovery_point_id", "state").
+		Where("id = ?", artifactSetID).Limit(1).Find(&set)
+	if result.Error != nil || result.RowsAffected != 1 {
+		return errors.Join(ErrDerivedUnauthorized, result.Error)
+	}
+	if set.State == "stale" {
+		return nil
+	}
+	if set.State != "active" || backupasset.ValidateOpaqueID(set.JobID) != nil {
+		return ErrDerivedUnauthorized
+	}
+	lease, err := lifecycle.fenceLease.Acquire(ctx, backupasset.AcquireLeaseRequest{
+		RecoveryPointID: set.RecoveryPointID, HolderType: backupasset.LeaseHolderProcessingJob, OwnerID: set.JobID,
+	})
+	if err != nil {
+		return errors.Join(ErrDerivedFenceRequired, err)
+	}
+	staleErr := lifecycle.MarkSetStaleFenced(ctx, artifactSetID, lease.Fence)
+	releaseErr := lifecycle.fenceLease.Release(ctx, lease.Fence)
+	return errors.Join(staleErr, releaseErr)
+}
+
+func (lifecycle *DerivedLifecycle) revokeSetWithManagedFence(
+	ctx context.Context,
+	artifactSetID string,
+	reason DerivedRevokeReason,
+) error {
+	var set model.BackupAssetDerivedArtifactSet
+	result := lifecycle.db.WithContext(ctx).Select("id", "job_id", "recovery_point_id", "projection_published").
+		Where("id = ?", artifactSetID).Limit(1).Find(&set)
+	if result.Error != nil || result.RowsAffected != 1 {
+		return errors.Join(ErrDerivedUnauthorized, result.Error)
+	}
+	if !set.ProjectionPublished {
+		return lifecycle.RevokeSet(ctx, artifactSetID, reason)
+	}
+	if lifecycle.fenceLease == nil || backupasset.ValidateOpaqueID(set.JobID) != nil {
+		return ErrDerivedFenceRequired
+	}
+	lease, err := lifecycle.fenceLease.Acquire(ctx, backupasset.AcquireLeaseRequest{
+		RecoveryPointID: set.RecoveryPointID, HolderType: backupasset.LeaseHolderProcessingJob, OwnerID: set.JobID,
+	})
+	if err != nil {
+		return errors.Join(ErrDerivedFenceRequired, err)
+	}
+	revokeErr := lifecycle.RevokeSetFenced(ctx, artifactSetID, reason, lease.Fence)
+	releaseErr := lifecycle.fenceLease.Release(ctx, lease.Fence)
+	return errors.Join(revokeErr, releaseErr)
+}
+
 // MarkActiveKeyLost revokes every artifact backed by the affected Derived KEK
 // before allowing the keyring to persist the loss. Search revocation is an
 // external atomic port, so it deliberately runs before the keyring transaction;
@@ -260,7 +481,7 @@ func (lifecycle *DerivedLifecycle) MarkActiveKeyLost(ctx context.Context, versio
 			break
 		}
 		for _, setID := range setIDs {
-			if err := lifecycle.RevokeSet(ctx, setID, DerivedRevokeKeyLoss); err != nil {
+			if err := lifecycle.revokeSetWithManagedFence(ctx, setID, DerivedRevokeKeyLoss); err != nil {
 				return err
 			}
 		}
@@ -333,6 +554,15 @@ func validDerivedRevokeReason(value DerivedRevokeReason) bool {
 	default:
 		return false
 	}
+}
+
+func validDerivedFence(fence backupasset.LeaseFence, recoveryPointID string) bool {
+	return backupasset.ValidateOpaqueID(fence.LeaseID) == nil &&
+		backupasset.ValidateOpaqueID(fence.RecoveryPointID) == nil &&
+		(recoveryPointID == "" || fence.RecoveryPointID == recoveryPointID) &&
+		fence.HolderType == backupasset.LeaseHolderProcessingJob &&
+		backupasset.ValidateOpaqueID(fence.OwnerID) == nil &&
+		backupasset.ValidateOpaqueID(fence.AttemptID) == nil && lowerHex(fence.FenceToken, 64)
 }
 
 func derivedSetUnavailable(state string) bool {

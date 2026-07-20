@@ -9,6 +9,17 @@ import { buildAssetRows } from "./__tests__/test-utils";
 import { AssetPreview } from "./asset-preview";
 import { selectBackupAssetPreviewProduct } from "./asset-preview-model";
 
+const { processingPanelRenderMock } = vi.hoisted(() => ({
+  processingPanelRenderMock: vi.fn(),
+}));
+
+vi.mock("./backup-asset-processing-panel", () => ({
+  BackupAssetProcessingPanel: (props: unknown) => {
+    processingPanelRenderMock(props);
+    return <div data-testid="synthetic-processing-panel" />;
+  },
+}));
+
 const contentUrl = `/api/v1/asset-content/${"d".repeat(32)}`;
 
 function asset(overrides: Partial<BackupAsset> = {}): BackupAsset {
@@ -149,6 +160,33 @@ describe("AssetPreview", () => {
       />
     );
     expect(screen.getByTitle(/Asset preview|资产预览/)).toHaveClass("h-full", "max-h-full");
+  });
+
+  it("loads the processing controller only after explicit interaction", async () => {
+    const user = userEvent.setup();
+    const previewAsset = asset({ mimeType: "image/png" });
+    render(
+      <AssetPreview
+        asset={previewAsset}
+        resource={{ status: "idle", value: null }}
+        canPreview
+        canDownload
+        processingToken="processing-token"
+        onLoadPreview={vi.fn()}
+        onRenew={vi.fn()}
+        onPrepareDownload={vi.fn()}
+        onDetach={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByTestId("synthetic-processing-panel")).not.toBeInTheDocument();
+    expect(processingPanelRenderMock).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
+    expect(await screen.findByTestId("synthetic-processing-panel")).toBeInTheDocument();
+    expect(processingPanelRenderMock).toHaveBeenCalledWith(expect.objectContaining({
+      token: "processing-token",
+      asset: previewAsset,
+    }));
   });
 
   it("renders escaped content in a sandboxed opaque frame without active markup", () => {

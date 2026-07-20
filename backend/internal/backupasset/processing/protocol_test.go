@@ -62,18 +62,81 @@ func TestProtocolHandshakeStrictlyDecodesClosedCapabilityAdvertisement(t *testin
 	}
 }
 
-func TestProductionCapabilityRegistryIsEmptyAndCannotAdvertiseRealTools(t *testing.T) {
+func TestProductionCapabilityRegistryAcceptsOnlyClosedWorkerProfiles(t *testing.T) {
 	registry := NewProductionCapabilityRegistry()
-	request := validHandshakeRequest()
-	identity := WorkerTransportIdentity{Kind: WorkerTransportLocal, Fingerprint: strings.Repeat("b", 64)}
-	if _, err := ValidateHandshake(identity, request, registry); !errors.Is(err, ErrProtocolCapabilityUnsupported) {
-		t.Fatalf("production registry accepted noop capability: %v", err)
+	advertisements := NewProductionWorkerCapabilitySet().Advertisements()
+	want := []string{
+		"image.thumbnail/raster_thumbnail_v1", "text.extract/bounded_text_v1", "image.ocr/tesseract_text_v1",
+		"document.convert/static_pages_v1", "malware.scan/signature_scan_v1", "media.probe/media_probe_v1",
+		"media.transcode/browser_preview_v1", "archive.inspect/archive_index_v1", "archive.extract_entry/archive_member_v1",
+		"secret.classify/bounded_secret_v1",
 	}
-	for _, capability := range []string{"ocr", "thumbnail", "text", "media", "archive", "malware"} {
-		request.Capabilities[0].Capability = capability
-		if _, err := ValidateHandshake(identity, request, registry); !errors.Is(err, ErrProtocolCapabilityUnsupported) {
-			t.Fatalf("production registry accepted %s: %v", capability, err)
+	if len(advertisements) != len(want) {
+		t.Fatalf("production advertisements=%d, want %d: %+v", len(advertisements), len(want), advertisements)
+	}
+	for index, advertisement := range advertisements {
+		if got := advertisement.Capability + "/" + advertisement.OutputProfile; got != want[index] {
+			t.Fatalf("advertisement %d=%q, want %q", index, got, want[index])
 		}
+	}
+	request := HandshakeRequest{
+		SchemaVersion: 1, ProtocolVersion: WorkerProtocolVersion, InstanceID: strings.Repeat("1", 32), IdentityRevision: 1,
+		InteractiveSlots: 2, BackgroundSlots: 2, Capabilities: advertisements,
+	}
+	identity := WorkerTransportIdentity{Kind: WorkerTransportLocal, Fingerprint: strings.Repeat("b", 64)}
+	validated, err := ValidateHandshake(identity, request, registry)
+	if err != nil || len(validated.Capabilities) != len(want) {
+		t.Fatalf("closed production handshake=%+v err=%v", validated, err)
+	}
+	request.Capabilities[0].Capability = "caller.selected"
+	if _, err := ValidateHandshake(identity, request, registry); !errors.Is(err, ErrProtocolCapabilityUnsupported) {
+		t.Fatalf("production registry accepted caller-selected capability: %v", err)
+	}
+}
+
+func TestProductionPipelineFingerprintsUseOnlyAffectedActiveBundles(t *testing.T) {
+	base := NewProductionWorkerCapabilitySet().Advertisements()
+	bundles := CapabilityBundleFingerprints{
+		"image.ocr":    {strings.Repeat("a", 64)},
+		"malware.scan": {strings.Repeat("b", 64)},
+	}
+	registry, err := NewProductionCapabilityRegistryWithBundles(bundles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := NewProductionWorkerCapabilitySetWithBundles(bundles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advertisements := worker.Advertisements()
+	if len(advertisements) != len(base) {
+		t.Fatalf("bundle-aware advertisements=%d base=%d", len(advertisements), len(base))
+	}
+	changed := map[string]bool{}
+	for index := range advertisements {
+		if advertisements[index].PipelineFingerprint != base[index].PipelineFingerprint {
+			changed[advertisements[index].Capability] = true
+		}
+	}
+	if !reflect.DeepEqual(changed, map[string]bool{"image.ocr": true, "malware.scan": true}) {
+		t.Fatalf("affected pipeline set=%v", changed)
+	}
+	request := HandshakeRequest{
+		SchemaVersion: 1, ProtocolVersion: WorkerProtocolVersion, InstanceID: strings.Repeat("1", 32), IdentityRevision: 1,
+		InteractiveSlots: 1, BackgroundSlots: 1, Capabilities: advertisements,
+	}
+	identity := WorkerTransportIdentity{Kind: WorkerTransportLocal, Fingerprint: strings.Repeat("c", 64)}
+	if _, err := ValidateHandshake(identity, request, registry); err != nil {
+		t.Fatalf("matching bundle handshake: %v", err)
+	}
+	request.Capabilities = base
+	if _, err := ValidateHandshake(identity, request, registry); !errors.Is(err, ErrProtocolCapabilityUnsupported) {
+		t.Fatalf("stale bundle advertisement error=%v", err)
+	}
+	if _, err := NewProductionCapabilityRegistryWithBundles(CapabilityBundleFingerprints{
+		"caller.selected": {strings.Repeat("d", 64)},
+	}); !errors.Is(err, ErrProtocolInvalid) {
+		t.Fatalf("unknown bundle capability error=%v", err)
 	}
 }
 

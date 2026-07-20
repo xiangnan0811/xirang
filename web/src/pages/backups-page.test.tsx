@@ -74,7 +74,13 @@ const {
   listRecoveryPointsMock,
   verifyMountMock,
 } = vi.hoisted(() => ({
-  authRef: { current: { token: "test-token" as string | null, role: "admin" as "admin" | null } },
+  authRef: {
+    current: {
+      token: "test-token" as string | null,
+      role: "admin" as "admin" | "operator" | "viewer" | null,
+      ensureStepUpProof: vi.fn(),
+    },
+  },
   getBackupConfidenceMock: vi.fn(),
   getBackupHealthMock: vi.fn(),
   getStorageUsageMock: vi.fn(),
@@ -118,7 +124,7 @@ describe("BackupsPage", () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
     window.localStorage.clear();
-    authRef.current = { token: "test-token", role: "admin" };
+    authRef.current = { token: "test-token", role: "admin", ensureStepUpProof: vi.fn() };
     getBackupConfidenceMock.mockReset();
     getBackupHealthMock.mockReset();
     getStorageUsageMock.mockReset();
@@ -146,7 +152,7 @@ describe("BackupsPage", () => {
 
   it("demo 模式无 token 时展示 mock 可信路径和故障路径", async () => {
     vi.stubEnv("VITE_ENABLE_DEMO_MODE", "true");
-    authRef.current = { token: null, role: null };
+    authRef.current = { token: null, role: null, ensureStepUpProof: vi.fn() };
 
     renderBackups("/app/backups/overview");
 
@@ -183,6 +189,29 @@ describe("BackupsPage", () => {
     expect(screen.getByRole("tabpanel", { name: /Data|数据/ })).not.toHaveAttribute("hidden");
     expect(screen.getByRole("heading", { name: /Backup data|备份数据/ })).toBeInTheDocument();
     expect(await screen.findByRole("region", { name: /Asset results|资产结果/ })).toBeInTheDocument();
+  });
+
+  it("passes the authenticated role and token only through the data-page processing boundary", async () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    const route = `/app/backups/data?repositoryId=${repository.id}`;
+    const adminPage = renderBackups(route);
+
+    expect(await screen.findByRole("button", { name: /Processing coverage|处理覆盖/ })).toBeInTheDocument();
+    adminPage.unmount();
+
+    authRef.current = {
+      token: "operator-token",
+      role: "operator",
+      ensureStepUpProof: vi.fn(),
+    };
+    renderBackups(route);
+    expect(await screen.findByRole("region", { name: /Asset results|资产结果/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Processing coverage|处理覆盖/ })).not.toBeInTheDocument();
   });
 
   it("hydrates an omitted data layout from the bounded browser preference", async () => {

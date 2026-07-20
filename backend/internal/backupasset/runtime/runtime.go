@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"xirang/backend/internal/backupasset/content"
 	"xirang/backend/internal/backupasset/overlay"
 	"xirang/backend/internal/backupasset/processing"
+	processingupdater "xirang/backend/internal/backupasset/processing/updater"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/backupasset/repository"
@@ -293,6 +295,13 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		Cursor: search.NewCursorCodec(keyring, dependencies.Now, runtimeProviderCursorTTL), Tags: overlayService, Now: dependencies.Now,
 		Limits:         search.ServiceLimits{Query: searchQueryLimits, MaxCandidates: searchConfig.CandidateLimit, ExecutionTimeout: searchConfig.QueryTimeout},
 		FeatureEnabled: foundation.FeatureEnabled,
+		PipelineRevisions: func(ctx context.Context) (search.ContentPipelineRevisions, error) {
+			revisions, revisionErr := dependencies.Settings.ProcessingPipelineRevisions(ctx)
+			if revisionErr != nil {
+				return search.ContentPipelineRevisions{}, revisionErr
+			}
+			return search.ContentPipelineRevisions{Content: revisions.Content, OCR: revisions.OCR}, nil
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -415,6 +424,28 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		}
 	}
 	contentReady := &atomic.Bool{}
+	var processingManager *managedProcessingRuntime
+	derivedResolver, err := content.NewDerivedRepresentationResolver(
+		dependencies.DB,
+		func(ctx context.Context, request content.DerivedArtifactRead, destination io.Writer) error {
+			if processingManager == nil {
+				return content.ErrDerivedRepresentationUnavailable
+			}
+			return processingManager.ReadDerivedArtifact(ctx, request, destination)
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	processingSource, err := content.NewDerivedAttemptSourceResolver(
+		repositoryService,
+		derivedResolver,
+		processingSecurityPolicyRevision,
+		runtimeDerivedProviderResolver(dependencies.DB),
+	)
+	if err != nil {
+		return nil, err
+	}
 	contentBroker, err := content.NewBroker(content.BrokerDependencies{
 		DB: dependencies.DB, Now: dependencies.Now,
 		FeatureEnabled: func(context.Context) (bool, error) {
@@ -422,6 +453,10 @@ func New(dependencies Dependencies) (*Runtime, error) {
 			return enabled && contentReady.Load(), enabledErr
 		},
 		Authorize: contentAuthorizer, Session: contentSession, Lease: lease, Source: repositoryService,
+		Derived: derivedResolver,
+		SecurityPolicyRevision: func(context.Context) (string, error) {
+			return processingSecurityPolicyRevision, nil
+		},
 		Audit: contentAudit, Budget: contentBudget, Metrics: contentMetrics,
 		Config: func(context.Context) (content.BrokerConfig, error) {
 			config, configErr := foundation.ContentConfig()
@@ -462,13 +497,22 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	processingManager, err := newProcessingRuntime(processingRuntimeDependencies{
-		DB: dependencies.DB, Foundation: foundation, Keyring: keyring, Lease: lease,
-		Source: repositoryService, ValidateRoot: repositoryService.ValidatePrivateRuntimeRoot,
-		RevalidateSource: runtimeProcessingSourceRevalidator{source: repositoryService},
-		Projection:       runtimeDerivedProjectionPort{ingest: searchIngest},
-		Metrics:          processingMetrics,
-		Now:              dependencies.Now,
+	processingManager, err = newProcessingRuntime(processingRuntimeDependencies{
+		DB: dependencies.DB, Foundation: foundation, Settings: dependencies.Settings, Keyring: keyring, Lease: lease,
+		Source: processingSource, Authorize: contentAuthorizer, ValidateRoot: repositoryService.ValidatePrivateRuntimeRoot,
+		RevalidateSource: runtimeProcessingSourceRevalidator{source: processingSource},
+		Projection: runtimeDerivedProjectionPort{
+			db: dependencies.DB, ingest: searchIngest, classification: searchIngest,
+			pipelineRevisions: func(ctx context.Context) (runtimeProjectionRevisions, error) {
+				revisions, revisionErr := dependencies.Settings.ProcessingPipelineRevisions(ctx)
+				if revisionErr != nil {
+					return runtimeProjectionRevisions{}, revisionErr
+				}
+				return runtimeProjectionRevisions{Content: revisions.Content, OCR: revisions.OCR}, nil
+			},
+		},
+		Metrics: processingMetrics,
+		Now:     dependencies.Now,
 	})
 	if err != nil {
 		return nil, err
@@ -486,6 +530,54 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		transitioner:      admission,
 		metrics:           metricsSink,
 	}, nil
+}
+
+func runtimeDerivedProviderResolver(db *gorm.DB) content.DerivedProviderResolver {
+	return func(
+		ctx context.Context,
+		ref backupasset.AssetRef,
+		catalogGenerationID string,
+		sourceFingerprint string,
+	) (backupasset.ProviderKind, error) {
+		if db == nil || backupasset.ValidateAssetRef(ref) != nil ||
+			backupasset.ValidateOpaqueID(catalogGenerationID) != nil ||
+			strings.TrimSpace(sourceFingerprint) == "" || len(sourceFingerprint) > 128 {
+			return "", content.ErrDerivedRepresentationUnavailable
+		}
+		var rows []runtimeContentAssetRecord
+		err := db.WithContext(nonNilRuntimeContext(ctx)).Table("catalog_generations AS generations").
+			Select(`generations.source_fingerprint AS generation_source_fingerprint,
+				points.semantics AS point_semantics, points.state AS point_state,
+				points.source_fingerprint AS point_source_fingerprint,
+				points.capability_revision AS point_capability,
+				points.physical_availability AS point_physical_availability,
+				points.retired_at AS point_retired_at,
+				repositories.provider_kind AS repository_provider,
+				repositories.status AS repository_status,
+				repositories.capability_revision AS repository_capability`).
+			Joins("JOIN recovery_points AS points ON points.id = generations.recovery_point_id").
+			Joins("JOIN backup_repositories AS repositories ON repositories.id = points.repository_id").
+			Where(`generations.id = ? AND generations.recovery_point_id = ?
+				AND generations.state = ? AND generations.is_active = ?`,
+				catalogGenerationID, ref.RecoveryPointID, catalog.GenerationComplete, true).
+			Limit(2).Scan(&rows).Error
+		if err != nil {
+			return "", fmt.Errorf("load Derived Provider binding: %w", err)
+		}
+		if len(rows) != 1 {
+			return "", content.ErrDerivedRepresentationUnavailable
+		}
+		record := rows[0]
+		provider := backupasset.ProviderKind(record.RepositoryProvider)
+		if record.GenerationSourceFingerprint != sourceFingerprint || record.PointSourceFingerprint != sourceFingerprint ||
+			!runtimeContentPointVisible(record) || record.PointRetiredAt != nil ||
+			record.RepositoryStatus != string(backupasset.RepositoryOnline) ||
+			record.RepositoryCapability <= 0 || record.RepositoryCapability != record.PointCapability ||
+			(provider != backupasset.ProviderRestic && provider != backupasset.ProviderRsync && provider != backupasset.ProviderRclone) {
+			return "", content.ErrDerivedRepresentationUnavailable
+		}
+		return provider, nil
+	}
 }
 
 func runtimeTransport(dependencies Dependencies, foundation *backupasset.FoundationService) (provider.CommandTransport, provider.CommandStreamTransport, error) {
@@ -589,6 +681,135 @@ func (runtime *Runtime) ProcessingAdminSummary(ctx context.Context) (ProcessingA
 		return ProcessingAdminSummary{}, fmt.Errorf("%w: Processing summary unavailable", backupasset.ErrInvalidState)
 	}
 	return runtime.processingManager.AdminSummary(ctx)
+}
+
+func (runtime *Runtime) RequestProcessingPreview(
+	ctx context.Context,
+	request processing.PreviewJobRequest,
+) (processing.PreviewJobResult, error) {
+	if runtime == nil || runtime.processingManager == nil {
+		return processing.PreviewJobResult{}, processing.ErrProcessingDisabled
+	}
+	return runtime.processingManager.RequestPreview(ctx, request)
+}
+
+func (runtime *Runtime) PollProcessingPreview(
+	ctx context.Context,
+	lookup processing.PreviewJobLookup,
+) (processing.PreviewJobResult, error) {
+	if runtime == nil || runtime.processingManager == nil {
+		return processing.PreviewJobResult{}, processing.ErrProcessingDisabled
+	}
+	return runtime.processingManager.PollPreview(ctx, lookup)
+}
+
+func (runtime *Runtime) CancelProcessingPreview(ctx context.Context, lookup processing.PreviewJobLookup) error {
+	if runtime == nil || runtime.processingManager == nil {
+		return processing.ErrProcessingDisabled
+	}
+	return runtime.processingManager.CancelPreview(ctx, lookup)
+}
+
+func (runtime *Runtime) GetProcessingState(
+	ctx context.Context,
+	request processing.PreviewStateRequest,
+) (processing.AssetProcessingState, error) {
+	if runtime == nil || runtime.processingManager == nil {
+		return processing.AssetProcessingState{}, processing.ErrProcessingDisabled
+	}
+	return runtime.processingManager.ProcessingState(ctx, request)
+}
+
+func (runtime *Runtime) ProcessingCoverage(ctx context.Context) (processing.CoverageSummary, error) {
+	if runtime == nil || runtime.processingManager == nil {
+		return processing.CoverageSummary{}, processing.ErrProcessingDisabled
+	}
+	return runtime.processingManager.ProcessingCoverage(ctx)
+}
+
+func (runtime *Runtime) ProcessingCapabilities(ctx context.Context) ([]processing.CapabilityInventoryItem, error) {
+	if runtime == nil || runtime.processingManager == nil {
+		return nil, processing.ErrProcessingDisabled
+	}
+	return runtime.processingManager.ProcessingCapabilities(ctx)
+}
+
+func (runtime *Runtime) ProcessingUpdaterStatus(ctx context.Context) (ProcessingUpdaterStatus, error) {
+	if runtime == nil || runtime.processingManager == nil {
+		return ProcessingUpdaterStatus{}, processing.ErrProcessingDisabled
+	}
+	return runtime.processingManager.ProcessingUpdaterStatus(ctx)
+}
+
+func (runtime *Runtime) ProcessingUpdaterCandidates(ctx context.Context) ([]ProcessingUpdaterCandidate, error) {
+	if runtime == nil || runtime.processingManager == nil {
+		return nil, processing.ErrProcessingDisabled
+	}
+	return runtime.processingManager.ProcessingUpdaterCandidates(ctx)
+}
+
+func (runtime *Runtime) ProcessingBackfillPolicy() (ProcessingBackfillPolicy, error) {
+	if runtime == nil || runtime.processingManager == nil {
+		return ProcessingBackfillPolicy{}, processing.ErrProcessingDisabled
+	}
+	return runtime.processingManager.ProcessingBackfillPolicy()
+}
+
+func (runtime *Runtime) UpdateProcessingBackfillPolicy(
+	ctx context.Context,
+	request ProcessingBackfillPolicyUpdate,
+) (ProcessingBackfillPolicy, error) {
+	if runtime == nil || runtime.processingManager == nil {
+		return ProcessingBackfillPolicy{}, processing.ErrProcessingDisabled
+	}
+	return runtime.processingManager.UpdateProcessingBackfillPolicy(ctx, request)
+}
+
+func (runtime *Runtime) RequestProcessingUpdaterScan(ctx context.Context) error {
+	if runtime == nil || runtime.processingManager == nil {
+		return processing.ErrProcessingDisabled
+	}
+	return runtime.processingManager.RequestProcessingUpdaterScan(ctx)
+}
+
+func (runtime *Runtime) ActivateProcessingUpdaterCandidate(ctx context.Context, request ProcessingUpdaterActivationRequest) error {
+	if runtime == nil || runtime.processingManager == nil {
+		return processing.ErrProcessingDisabled
+	}
+	return runtime.processingManager.ActivateProcessingUpdaterCandidate(ctx, request)
+}
+
+func (runtime *Runtime) RegisterUpdaterCandidate(
+	ctx context.Context,
+	identity processingupdater.UpdaterTransportIdentity,
+	request processingupdater.RegisterCandidateRequest,
+) (processingupdater.RegisterCandidateResult, error) {
+	if runtime == nil || runtime.processingManager == nil {
+		return processingupdater.RegisterCandidateResult{}, processing.ErrProcessingDisabled
+	}
+	return runtime.processingManager.RegisterUpdaterCandidate(ctx, identity, request)
+}
+
+func (runtime *Runtime) PullUpdaterActivation(
+	ctx context.Context,
+	identity processingupdater.UpdaterTransportIdentity,
+	request processingupdater.PullActivationRequest,
+) (processingupdater.PullActivationResult, error) {
+	if runtime == nil || runtime.processingManager == nil {
+		return processingupdater.PullActivationResult{}, processing.ErrProcessingDisabled
+	}
+	return runtime.processingManager.PullUpdaterActivation(ctx, identity, request)
+}
+
+func (runtime *Runtime) ReportUpdaterActivation(
+	ctx context.Context,
+	identity processingupdater.UpdaterTransportIdentity,
+	request processingupdater.ActivationReportRequest,
+) (processingupdater.ActivationReportResult, error) {
+	if runtime == nil || runtime.processingManager == nil {
+		return processingupdater.ActivationReportResult{}, processing.ErrProcessingDisabled
+	}
+	return runtime.processingManager.ReportUpdaterActivation(ctx, identity, request)
 }
 func (runtime *Runtime) PublicationCoordinator() publication.Coordinator { return runtime.publication }
 func (runtime *Runtime) PublicationReconciler() publication.Reconciler   { return runtime.publication }
@@ -1474,6 +1695,7 @@ func (authorizer *runtimeContentAuthorizer) Reauthorize(
 	}
 	if current.Ref != expected.Ref || current.CatalogGenerationID != expected.CatalogGenerationID ||
 		current.RepositoryID != expected.RepositoryID || current.Provider != expected.Provider ||
+		current.ProviderCapabilityRevision != expected.ProviderCapabilityRevision ||
 		current.SourceFingerprint != expected.SourceFingerprint ||
 		current.EntryFingerprint != expected.EntryFingerprint || current.FingerprintStrength != expected.FingerprintStrength ||
 		current.Size != expected.Size || !sameRuntimeContentTime(current.ModifiedAt, expected.ModifiedAt) ||
@@ -1582,7 +1804,7 @@ func (authorizer *runtimeContentAuthorizer) load(
 	}
 	return content.AuthorizedAsset{
 		Ref: ref, CatalogGenerationID: record.CatalogGenerationID, RepositoryID: record.RepositoryID,
-		Provider: providerKind, SourceFingerprint: record.GenerationSourceFingerprint,
+		Provider: providerKind, ProviderCapabilityRevision: int64(record.PointCapability), SourceFingerprint: record.GenerationSourceFingerprint,
 		EntryFingerprint: record.EntryFingerprint, FingerprintStrength: string(strength),
 		Size: record.EntrySize, ModifiedAt: modifiedAt, MediaType: record.EntryMediaType,
 		Path: record.EntryPath, Name: record.EntryName, RangeProven: capabilities.OpenRange,

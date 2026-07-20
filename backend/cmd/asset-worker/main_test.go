@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,19 +19,61 @@ func TestParseAssetWorkerOptionsRequiresExactlyOneConfiguredTransport(t *testing
 	}
 	if options.client.LocalSocketPath != "/run/xirang/asset-worker.sock" || options.client.RemoteEndpoint != "" ||
 		options.runner.InteractiveSlots != 2 || options.runner.BackgroundSlots != 3 ||
-		options.runner.HeartbeatInterval != 5*time.Second || options.runner.GracePeriod != 20*time.Second {
+		options.runner.HeartbeatInterval != 5*time.Second || options.runner.GracePeriod != 20*time.Second ||
+		options.tools.WorkspaceRoot != "/run/xirang/asset-jobs" ||
+		options.bundleRoot != "/var/lib/xirang/asset-worker-bundles" {
 		t.Fatalf("unexpected parsed options: %+v", options)
 	}
 	invalid := [][]string{
 		{},
 		{"--local-socket", "/run/xirang/worker.sock", "--remote-endpoint", "https://127.0.0.1:9443"},
 		{"--local-socket", "relative.sock"},
+		{"--local-socket", "/run/xirang/worker.sock", "--workspace-root", "relative"},
 		{"--local-socket", "/run/xirang/worker.sock", "positional"},
 	}
 	for index, args := range invalid {
 		if _, err := parseAssetWorkerOptions(args); err == nil {
 			t.Fatalf("invalid option set %d accepted: %v", index, args)
 		}
+	}
+}
+
+func TestLoadActiveBundleFingerprintAcceptsOnlyContainedImmutableTarget(t *testing.T) {
+	root := t.TempDir()
+	bundles := filepath.Join(root, "bundles")
+	fingerprint := strings.Repeat("a", 64)
+	bundle := filepath.Join(bundles, fingerprint)
+	if err := os.MkdirAll(bundle, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bundle, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	active := filepath.Join(root, "active")
+	if err := os.Symlink(filepath.Join("bundles", fingerprint), active); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadActiveBundleFingerprint(root)
+	if err != nil || got != fingerprint {
+		t.Fatalf("fingerprint=%q err=%v", got, err)
+	}
+	if err := os.Remove(active); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(bundle, active); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadActiveBundleFingerprint(root); err == nil {
+		t.Fatal("absolute active target accepted")
+	}
+	if err := os.Remove(active); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("bundles", "missing"), active); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadActiveBundleFingerprint(root); err == nil {
+		t.Fatal("missing active bundle accepted")
 	}
 }
 
@@ -55,7 +98,7 @@ func TestNewAssetWorkerInstanceIDIsOpaqueNonSecret(t *testing.T) {
 	}
 }
 
-func TestAssetWorkerMainIsProtocolOnlyWithEmptyProductionRegistry(t *testing.T) {
+func TestAssetWorkerMainBuildsVerifiedToolRunnerWithoutPrivilegedImports(t *testing.T) {
 	source, err := os.ReadFile("main.go")
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +106,9 @@ func TestAssetWorkerMainIsProtocolOnlyWithEmptyProductionRegistry(t *testing.T) 
 	text := string(source)
 	for _, required := range []string{
 		"processing.NewWorkerClient(",
-		"processing.NewProductionWorkerCapabilitySet()",
+		"capabilities.NewRunner(",
+		"processing.NewProductionWorkerCapabilitySetWithOptions(",
+		"productionOptions.BundleFingerprints =",
 		"processing.NewWorkerRunner(",
 		"signal.NotifyContext(",
 		"syscall.SIGTERM",

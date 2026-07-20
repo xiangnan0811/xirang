@@ -263,6 +263,19 @@ var repositoryFoundationDefaults = repositorySettings{
 	"backup_assets.derived_store_global_max_bytes":        "107374182400",
 	"backup_assets.derived_store_reconcile_interval":      "15m",
 	"backup_assets.derived_store_reconcile_batch_size":    "256",
+
+	"backup_assets.processing_secret_classify":                 "false",
+	"backup_assets.processing_backfill_paused":                 "true",
+	"backup_assets.processing_backfill_batch_size":             "100",
+	"backup_assets.processing_backfill_jobs_per_hour":          "1000",
+	"backup_assets.processing_backfill_bytes_per_hour":         "10737418240",
+	"backup_assets.processing_backfill_provider_concurrency":   "1",
+	"backup_assets.processing_backfill_capability_concurrency": "1",
+	"backup_assets.processing_backfill_recent_window":          "720h",
+	"backup_assets.processing_backfill_history_aging_step":     "24h",
+	"backup_assets.worker_updater_enabled":                     "false",
+	"backup_assets.worker_updater_online_enabled":              "false",
+	"backup_assets.worker_updater_online_origins":              "",
 }
 
 func testObservation(kind backupasset.ProviderKind, identity string) provider.RepositoryObservation {

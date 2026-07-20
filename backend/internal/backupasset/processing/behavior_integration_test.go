@@ -250,7 +250,7 @@ func runProcessingBehaviorContract(t *testing.T, open func(*testing.T) processin
 			t.Fatal(err)
 		}
 		projection := &processingBehaviorProjection{db: fixture.db}
-		lifecycle, err := NewDerivedLifecycle(fixture.db, store, projection, fixture.clock.Now)
+		lifecycle, err := NewDerivedLifecycle(fixture.db, store, projection, fixture.clock.Now, fixture.lease)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -306,13 +306,13 @@ func runProcessingBehaviorContract(t *testing.T, open func(*testing.T) processin
 		if err := lifecycle.ReadAuthorized(context.Background(), authorization, &bytes.Buffer{}); !errors.Is(err, ErrDerivedTamper) {
 			t.Fatalf("%s tamper read=%v", fixture.engine, err)
 		}
-		projection.onRevoke = func(request DerivedProjectionRevoke) error {
+		projection.onRevoke = func(tx *gorm.DB, request DerivedProjectionRevoke) error {
 			var reference model.BackupAssetDerivedBlobReference
-			if err := fixture.db.First(&reference, "artifact_id = ?", artifact.ID).Error; err != nil {
+			if err := tx.First(&reference, "artifact_id = ?", artifact.ID).Error; err != nil {
 				return err
 			}
 			var current model.BackupAssetDerivedBlob
-			if err := fixture.db.First(&current, "id = ?", artifact.BlobID).Error; err != nil {
+			if err := tx.First(&current, "id = ?", artifact.BlobID).Error; err != nil {
 				return err
 			}
 			if reference.State != "active" || current.State != "active" || len(current.WrappedDEK) == 0 {
@@ -320,7 +320,8 @@ func runProcessingBehaviorContract(t *testing.T, open func(*testing.T) processin
 			}
 			return nil
 		}
-		if err := lifecycle.RevokeSet(context.Background(), manifest.ArtifactSetID, DerivedRevokeExpired); err != nil {
+		if err := lifecycle.RevokeSetFenced(context.Background(), manifest.ArtifactSetID, DerivedRevokeExpired,
+			leased.Lease.RecoveryPointFence); err != nil {
 			t.Fatalf("%s revoke: %v", fixture.engine, err)
 		}
 		if projection.revocations != 1 {
@@ -505,18 +506,39 @@ type processingBehaviorProjection struct {
 	db           *gorm.DB
 	publications int
 	revocations  int
-	onRevoke     func(DerivedProjectionRevoke) error
+	onRevoke     func(*gorm.DB, DerivedProjectionRevoke) error
 }
 
-func (projection *processingBehaviorProjection) Publish(_ context.Context, request DerivedProjectionPublish) (DerivedProjectionPublication, error) {
+type processingBehaviorPreparedPublish struct {
+	projection *processingBehaviorProjection
+	request    DerivedProjectionPublish
+}
+
+type processingBehaviorPreparedRevoke struct {
+	projection *processingBehaviorProjection
+	request    DerivedProjectionRevoke
+}
+
+func (projection *processingBehaviorProjection) PreparePublish(_ context.Context, request DerivedProjectionPublish) (PreparedDerivedProjection, error) {
+	return &processingBehaviorPreparedPublish{projection: projection, request: request}, nil
+}
+
+func (prepared *processingBehaviorPreparedPublish) PublishTx(_ context.Context, _ *gorm.DB) (DerivedProjectionPublication, error) {
+	projection := prepared.projection
+	request := prepared.request
 	projection.publications++
 	return DerivedProjectionPublication{ArtifactSetID: request.ArtifactSetID, Revision: int64(projection.publications)}, nil
 }
 
-func (projection *processingBehaviorProjection) Revoke(_ context.Context, request DerivedProjectionRevoke) error {
+func (projection *processingBehaviorProjection) PrepareRevoke(_ context.Context, request DerivedProjectionRevoke) (PreparedDerivedRevocation, error) {
+	return &processingBehaviorPreparedRevoke{projection: projection, request: request}, nil
+}
+
+func (prepared *processingBehaviorPreparedRevoke) RevokeTx(_ context.Context, tx *gorm.DB) error {
+	projection := prepared.projection
 	projection.revocations++
 	if projection.onRevoke != nil {
-		return projection.onRevoke(request)
+		return projection.onRevoke(tx, prepared.request)
 	}
 	return nil
 }

@@ -1,0 +1,55 @@
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "defaultErrnoRet": 1,
+  "archMap": [
+    {
+      "architecture": "SCMP_ARCH_X86_64",
+      "subArchitectures": ["SCMP_ARCH_X86", "SCMP_ARCH_X32"]
+    },
+    {
+      "architecture": "SCMP_ARCH_AARCH64",
+      "subArchitectures": ["SCMP_ARCH_ARM"]
+    }
+  ],
+  "syscalls": [
+    {
+      "names": [
+        "mount", "umount", "umount2", "pivot_root", "chroot",
+        "ptrace", "process_vm_readv", "process_vm_writev",
+        "keyctl", "add_key", "request_key",
+        "bpf", "perf_event_open", "userfaultfd", "fanotify_init",
+        "init_module", "finit_module", "delete_module",
+        "kexec_load", "kexec_file_load", "reboot", "swapon", "swapoff",
+        "setns", "unshare", "open_by_handle_at", "name_to_handle_at",
+        "quotactl", "io_uring_setup"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "names": ["socket"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        {
+          "index": 0,
+          "value": 17,
+          "op": "SCMP_CMP_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["socket"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        {
+          "index": 1,
+          "value": 15,
+          "valueTwo": 3,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    }
+  ]
+}

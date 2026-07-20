@@ -371,6 +371,58 @@ func TestSearchServiceExcerptResolverFailureCannotClaimAuthoritativeEmpty(t *tes
 	}
 }
 
+func TestSearchServicePipelineRevisionMismatchHidesOldContentProjection(t *testing.T) {
+	indexer, harness := newIndexerTestHarness(t)
+	entryID := strings.Repeat("7", 64)
+	pointID, _ := harness.seedCatalog(t, []model.CatalogEntry{{
+		EntryID: entryID, NormalizedPath: "stale-content.txt", Name: "stale-content.txt", EntryType: "file", SecurityState: "non_secret",
+	}})
+	generation, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := harness.ring.Active(context.Background(), backupasset.KeyDomainSearchToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := TokenHMAC(key.Key, key.Version, NormalizerVersion, SearchFieldContent, TokenKindExact, "old-needle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Create(&model.BackupAssetSearchPosting{
+		SearchGenerationID: generation.ID, DocumentID: entryID, Field: string(SearchFieldContent),
+		TokenKind: string(TokenKindExact), KeyVersion: key.Version, TokenHMAC: token, TermFrequency: 1,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Model(&model.BackupAssetSearchDocumentField{}).
+		Where("search_generation_id = ? AND document_id = ? AND field = ?", generation.ID, entryID, SearchFieldContent).
+		Updates(map[string]any{
+			"state": FieldCoverageComplete, "pipeline_revision": 2, "excerpt_ref": strings.Repeat("c", 32),
+		}).Error; err != nil {
+		t.Fatal(err)
+	}
+	resolver := &excerptResolverFake{match: true, snippet: "must stay hidden"}
+	service := newSearchServiceForHarness(t, harness, map[string]bool{pointID: true}, resolver)
+	service.pipelineRevisions = func(context.Context) (ContentPipelineRevisions, error) {
+		return ContentPipelineRevisions{Content: 3, OCR: 1}, nil
+	}
+	response, err := service.Search(context.Background(), SearchActor{
+		Authorization: catalog.AuthorizationScope{Role: "admin", UserID: 1},
+	}, SearchRequest{
+		SchemaVersion: QuerySchemaVersion, Root: QueryNode{Op: QueryOpTerm, Field: SearchFieldContent, Text: "old-needle"},
+		Scope: SearchScope{Mode: SearchScopeExactPoints, RecoveryPointIDs: []string{pointID}},
+		Sort:  SearchSortRelevance, Limit: 25,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Items) != 0 || response.Total != nil || response.AuthoritativeEmpty ||
+		response.Coverage.Status == CoverageComplete || resolver.calls != 0 {
+		t.Fatalf("stale content projection remained visible: response=%+v resolver_calls=%d", response, resolver.calls)
+	}
+}
+
 func TestSearchServiceMissingTagResolverCannotClaimAuthoritativeEmpty(t *testing.T) {
 	indexer, harness := newIndexerTestHarness(t)
 	pointID, _ := harness.seedCatalog(t, []model.CatalogEntry{{
@@ -457,6 +509,9 @@ func newSearchServiceForHarness(t *testing.T, harness *indexerTestHarness, allow
 		Cursor: NewCursorCodec(harness.ring, func() time.Time { return harness.now }, 15*time.Minute),
 		Now:    func() time.Time { return harness.now }, Limits: DefaultServiceLimits(),
 		FeatureEnabled: func() (bool, error) { return true, nil },
+		PipelineRevisions: func(context.Context) (ContentPipelineRevisions, error) {
+			return ContentPipelineRevisions{Content: 1, OCR: 1}, nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)

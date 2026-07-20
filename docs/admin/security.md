@@ -87,6 +87,24 @@ Web SSH 终端在打开会话前需要同时满足：有效的 admin 主认证�
 
 授权记录和凭据审计只保存用户、角色、操作、用途、资源 ID、状态、TTL 等安全字段。管理员可在“临时授权”页面只读查看授权状态、筛选条件和生命周期时间；该入口不提供批准、拒绝或撤销操作。Xirang 不记录导入文件内容、导出文件内容、终端输入/输出、命令文本、文件内容、恢复目标路径、快照文件列表、私钥、密码、令牌、主机地址或代理端点；终端录屏/回放不属于当前内置能力。
 
+## 备份资产 Worker 与 updater 信任边界
+
+备份资产 Worker 当前是默认关闭、非 GA 的可选本地 profile，没有稳定公共 Worker 镜像或 Docker Hub/GitHub Release 发布合同。官方 All-in-One Core 和公开端口 `10761` 不变。未部署 Worker 时，Catalog、原生预览、下载和 recovery 继续可用。
+
+Parser Worker 使用固定 non-root UID/GID `10000:10000`，read-only rootfs、drop-all capabilities、`no-new-privileges`、reviewed seccomp、PID/CPU/memory 上限和 `noexec,nosuid,nodev` job tmpfs。仓库 Compose 为 parser Worker 设置 `network_mode: none`，不配置 DNS；它只连接 Core 的受保护 Unix socket，并只读挂载 active bundle。Worker 不挂载 `/data`、`/backup`、`/logs`、Docker socket、updater inbox/credential 或任何 Provider 源路径。
+
+所有 parser/tool 调用来自服务端闭合 capability/profile：不经过 shell，不接受调用方 executable、argv、环境变量、codec、字体、模型、路径、URL 或工具配置。输入只来自一次性 attempt-bound grant，输出在 Core 再次检查 MIME、数量、大小、digest、coverage 和安全策略后才能发布。取消、超时或 fence 丢失会终止整个进程组并清理私有 workspace；缺少可验证 tmpfs/Landlock/seccomp 合同时 capability 不会被 advertised。
+
+Updater 与 parser 使用不同进程、UID/GID `10002:10002`、socket 和可写 bundle volume。Core 在解码 receipt 前校验 `/run/xirang/asset-worker-updater.sock` 的 owner/mode 与 Linux peer credential；parser Worker 不挂载该 socket。只有 updater 可写 content-addressed bundle store，parser 只读 active bundle。
+
+默认更新路径是 signed offline import：运维人员把候选目录放入固定 updater-only inbox，目录要求 `10002:10002`、mode `0555`；Ed25519 trust 文件要求 `10002:10002`、mode `0440`。Updater no-follow 扫描并验证 canonical manifest、Ed25519 signature、精确 tar/file SHA-256、大小/时间/路径/类型限制，fsync content-addressed store 后通过 journal 与原子 pointer rename 激活。浏览器和 Core HTTP API 不接收 bundle bytes、multipart、URL、服务器路径、inbox 文件名或原始 manifest；Admin API 只使用脱敏 candidate ID 和 expected fingerprint 的小型 JSON 控制请求。
+
+仓库 Compose 对 updater 同样使用 `network_mode: none`，只支持 offline-only。Online updater 默认关闭；若未来单独部署，必须同时具备 exact HTTPS origin allowlist、独立 allowlist proxy/firewall、隔离网络和 updater-only credential secret。应用层 allowlist 不能代替 egress firewall，parser Worker 永远不得继承 updater 网络或凭据。
+
+Malware 结果区分 `not_scanned`、`no_finding`、`finding`、`stale`；positive finding 是成功扫描结果，不会被当成失败重试或篡改 RecoveryPoint 信任状态。Preview job、Derived ticket/read 和 Search release 均由服务端重新执行 malware/sensitivity gate。有限秘密分类默认关闭，并且只能加强 Core 结论；`unknown`/`secret` 在缺少精确 proof 时继续失败关闭。
+
+处理 API、日志、指标、审计和管理聚合只记录闭合 capability/profile/state/error category、opaque 资源引用及有界计数。禁止记录 Provider locator、宿主/tmp/bundle/inbox 路径、Worker UID/PID/证书、credential、grant/session/attempt/fence/activation secret、原始 argv/stdout/stderr/tool diagnostic、manifest/body 或源内容。回退只关闭 settings/可选 profile并保留数据；不得删除 Provider bytes、RecoveryPoint、Catalog 或源备份。
+
 ## 敏感字段保护
 
 Xirang 会加密存储 SSH 密码、SSH 私钥、TOTP 密钥、通知端点、代理地址等敏感字段。请妥善备份 `DATA_ENCRYPTION_KEY`；数据库备份没有对应密钥时无法恢复敏感字段明文。

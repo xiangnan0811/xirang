@@ -194,7 +194,7 @@ describe("Backups routes accessibility", () => {
 
   it("renders an axe-clean mobile full-screen inspector with focus entry and reversible controls", async () => {
     useFixture("complete");
-    setViewport(390);
+    setViewport(375);
     renderBackups(
       `${completeRoute()}&entryId=${backupAssetsFixtureIds.primaryEntry}`
     );

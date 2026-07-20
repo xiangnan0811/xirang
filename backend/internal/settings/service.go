@@ -23,10 +23,13 @@ package settings
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,6 +55,18 @@ const (
 	cacheTTL       = 30 * time.Second
 	maxValueLength = 256
 )
+
+const (
+	ProcessingContentPipelineRevisionKey = "backup_assets.internal.processing_content_pipeline_revision"
+	ProcessingOCRPipelineRevisionKey     = "backup_assets.internal.processing_ocr_pipeline_revision"
+)
+
+var ErrInternalSettingUnavailable = errors.New("internal setting state unavailable")
+
+type ProcessingPipelineRevisions struct {
+	Content int64
+	OCR     int64
+}
 
 // SettingDef 设置项定义
 type SettingDef struct {
@@ -293,6 +308,15 @@ var registry = []SettingDef{
 	{Key: "backup_assets.processing_sink_artifact_max_bytes", EnvVar: "BACKUP_ASSETS_PROCESSING_SINK_ARTIFACT_MAX_BYTES", CodeDefault: "536870912", Type: TypeInt, Category: "backup_assets", Description: "Worker Sink 单产物字节上限", Min: "65536", Max: "4294967296"},
 	{Key: "backup_assets.processing_sink_total_max_bytes", EnvVar: "BACKUP_ASSETS_PROCESSING_SINK_TOTAL_MAX_BYTES", CodeDefault: "1073741824", Type: TypeInt, Category: "backup_assets", Description: "Worker Sink 原子产物集总字节上限", Min: "65536", Max: "17179869184"},
 	{Key: "backup_assets.processing_protocol_json_max_bytes", EnvVar: "BACKUP_ASSETS_PROCESSING_PROTOCOL_JSON_MAX_BYTES", CodeDefault: "65536", Type: TypeInt, Category: "backup_assets", Description: "Worker 协议 JSON 请求体上限", Min: "4096", Max: "1048576"},
+	{Key: "backup_assets.processing_secret_classify", EnvVar: "BACKUP_ASSETS_PROCESSING_SECRET_CLASSIFY", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "启用有限秘密分类增强"},
+	{Key: "backup_assets.processing_backfill_paused", EnvVar: "BACKUP_ASSETS_PROCESSING_BACKFILL_PAUSED", CodeDefault: "true", Type: TypeBool, Category: "backup_assets", Description: "暂停资产处理后台回填"},
+	{Key: "backup_assets.processing_backfill_batch_size", EnvVar: "BACKUP_ASSETS_PROCESSING_BACKFILL_BATCH_SIZE", CodeDefault: "100", Type: TypeInt, Category: "backup_assets", Description: "资产处理回填批次大小", Min: "1", Max: "10000"},
+	{Key: "backup_assets.processing_backfill_jobs_per_hour", EnvVar: "BACKUP_ASSETS_PROCESSING_BACKFILL_JOBS_PER_HOUR", CodeDefault: "1000", Type: TypeInt, Category: "backup_assets", Description: "资产处理回填每小时任务上限", Min: "1", Max: "100000"},
+	{Key: "backup_assets.processing_backfill_bytes_per_hour", EnvVar: "BACKUP_ASSETS_PROCESSING_BACKFILL_BYTES_PER_HOUR", CodeDefault: "10737418240", Type: TypeInt, Category: "backup_assets", Description: "资产处理回填每小时字节上限", Min: "65536", Max: "1099511627776"},
+	{Key: "backup_assets.processing_backfill_provider_concurrency", EnvVar: "BACKUP_ASSETS_PROCESSING_BACKFILL_PROVIDER_CONCURRENCY", CodeDefault: "1", Type: TypeInt, Category: "backup_assets", Description: "资产处理回填单 Provider 并发上限", Min: "1", Max: "32"},
+	{Key: "backup_assets.processing_backfill_capability_concurrency", EnvVar: "BACKUP_ASSETS_PROCESSING_BACKFILL_CAPABILITY_CONCURRENCY", CodeDefault: "1", Type: TypeInt, Category: "backup_assets", Description: "资产处理回填单能力并发上限", Min: "1", Max: "32"},
+	{Key: "backup_assets.processing_backfill_recent_window", EnvVar: "BACKUP_ASSETS_PROCESSING_BACKFILL_RECENT_WINDOW", CodeDefault: "720h", Type: TypeDuration, Category: "backup_assets", Description: "资产处理近期回填窗口", MinDuration: "24h", MaxDuration: "8760h"},
+	{Key: "backup_assets.processing_backfill_history_aging_step", EnvVar: "BACKUP_ASSETS_PROCESSING_BACKFILL_HISTORY_AGING_STEP", CodeDefault: "24h", Type: TypeDuration, Category: "backup_assets", Description: "资产处理历史回填老化步长", MinDuration: "1h", MaxDuration: "720h"},
 	{Key: "backup_assets.worker_local_enabled", EnvVar: "BACKUP_ASSETS_WORKER_LOCAL_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "启用本机资产 Worker 传输", RequiresRestart: true},
 	{Key: "backup_assets.worker_local_socket", EnvVar: "BACKUP_ASSETS_WORKER_LOCAL_SOCKET", CodeDefault: "/run/xirang/asset-worker.sock", Type: TypeString, Category: "backup_assets", Description: "本机资产 Worker Unix socket", RequiresRestart: true},
 	{Key: "backup_assets.worker_remote_enabled", EnvVar: "BACKUP_ASSETS_WORKER_REMOTE_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "启用远程资产 Worker mTLS 传输", RequiresRestart: true},
@@ -301,6 +325,9 @@ var registry = []SettingDef{
 	{Key: "backup_assets.worker_remote_server_key_file", EnvVar: "BACKUP_ASSETS_WORKER_REMOTE_SERVER_KEY_FILE", CodeDefault: "", Type: TypeString, Category: "backup_assets", Description: "远程资产 Worker 服务端私钥路径", RequiresRestart: true, Sensitive: true},
 	{Key: "backup_assets.worker_remote_client_ca_file", EnvVar: "BACKUP_ASSETS_WORKER_REMOTE_CLIENT_CA_FILE", CodeDefault: "", Type: TypeString, Category: "backup_assets", Description: "远程资产 Worker 客户端 CA 路径", RequiresRestart: true, Sensitive: true},
 	{Key: "backup_assets.worker_remote_trust_domain", EnvVar: "BACKUP_ASSETS_WORKER_REMOTE_TRUST_DOMAIN", CodeDefault: "", Type: TypeString, Category: "backup_assets", Description: "远程资产 Worker SPIFFE 信任域", RequiresRestart: true, Sensitive: true},
+	{Key: "backup_assets.worker_updater_enabled", EnvVar: "BACKUP_ASSETS_WORKER_UPDATER_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "启用独立资产 Worker updater", RequiresRestart: true},
+	{Key: "backup_assets.worker_updater_online_enabled", EnvVar: "BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "启用 updater 受限在线模式", RequiresRestart: true},
+	{Key: "backup_assets.worker_updater_online_origins", EnvVar: "BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ORIGINS", CodeDefault: "", Type: TypeString, Category: "backup_assets", Description: "updater 精确 HTTPS origin allowlist", RequiresRestart: true},
 	{Key: "backup_assets.derived_store_root", EnvVar: "BACKUP_ASSETS_DERIVED_STORE_ROOT", CodeDefault: "/var/lib/xirang-asset-runtime/derived", Type: TypeString, Category: "backup_assets", Description: "加密派生资产专用根目录", RequiresRestart: true},
 	{Key: "backup_assets.derived_store_chunk_bytes", EnvVar: "BACKUP_ASSETS_DERIVED_STORE_CHUNK_BYTES", CodeDefault: "1048576", Type: TypeInt, Category: "backup_assets", Description: "派生资产认证加密分块字节数", Min: "65536", Max: "8388608", RequiresRestart: true},
 	{Key: "backup_assets.derived_store_blob_max_bytes", EnvVar: "BACKUP_ASSETS_DERIVED_STORE_BLOB_MAX_BYTES", CodeDefault: "4294967296", Type: TypeInt, Category: "backup_assets", Description: "派生资产单 blob 字节上限", Min: "65536", Max: "17179869184"},
@@ -433,6 +460,9 @@ func (s *Service) GetAll() (map[string]ResolvedSetting, error) {
 
 // GetEffective 获取单项设置的有效值（带 TTL 缓存，供消费端调用）
 func (s *Service) GetEffective(key string) string {
+	if IsInternalSettingKey(key) {
+		return ""
+	}
 	// 先查缓存
 	s.mu.RLock()
 	if cv, ok := s.cache[key]; ok && time.Now().Before(cv.expiresAt) {
@@ -470,6 +500,9 @@ func (s *Service) GetEffective(key string) string {
 
 // resolveValue 按 DB → env → default 优先级解析值（无缓存）
 func (s *Service) resolveValue(key string) (string, error) {
+	if IsInternalSettingKey(key) {
+		return "", ErrInternalSettingUnavailable
+	}
 	// 使用 Limit(1).Find 代替 First，避免 GORM 对空结果打 "record not found" 错误日志
 	var dbSettings []model.SystemSetting
 	if err := s.db.Where("key = ?", key).Limit(1).Find(&dbSettings).Error; err != nil {
@@ -486,6 +519,97 @@ func (s *Service) resolveValue(key string) (string, error) {
 		return def.CodeDefault, nil
 	}
 	return "", nil
+}
+
+// ProcessingPipelineRevisions reads the reserved publication state directly
+// from the database. It deliberately bypasses the public registry and cache.
+func (s *Service) ProcessingPipelineRevisions(ctx context.Context) (ProcessingPipelineRevisions, error) {
+	if s == nil || s.db == nil || ctx == nil {
+		return ProcessingPipelineRevisions{}, ErrInternalSettingUnavailable
+	}
+	var rows []model.SystemSetting
+	if err := s.db.WithContext(ctx).Where("key IN ?", []string{
+		ProcessingContentPipelineRevisionKey, ProcessingOCRPipelineRevisionKey,
+	}).Limit(2).Find(&rows).Error; err != nil || len(rows) != 2 {
+		return ProcessingPipelineRevisions{}, ErrInternalSettingUnavailable
+	}
+	values := make(map[string]int64, 2)
+	for _, row := range rows {
+		if !IsInternalSettingKey(row.Key) || values[row.Key] != 0 {
+			return ProcessingPipelineRevisions{}, ErrInternalSettingUnavailable
+		}
+		value, err := parsePositiveRevision(row.Value)
+		if err != nil {
+			return ProcessingPipelineRevisions{}, err
+		}
+		values[row.Key] = value
+	}
+	if values[ProcessingContentPipelineRevisionKey] == 0 || values[ProcessingOCRPipelineRevisionKey] == 0 {
+		return ProcessingPipelineRevisions{}, ErrInternalSettingUnavailable
+	}
+	return ProcessingPipelineRevisions{
+		Content: values[ProcessingContentPipelineRevisionKey], OCR: values[ProcessingOCRPipelineRevisionKey],
+	}, nil
+}
+
+// AdvanceProcessingPipelineRevisionsTx initializes both reserved revisions and
+// advances only the fields affected by one already-verified bundle activation.
+func (s *Service) AdvanceProcessingPipelineRevisionsTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	affectContent bool,
+	affectOCR bool,
+) (ProcessingPipelineRevisions, error) {
+	if s == nil || s.db == nil || tx == nil || ctx == nil || !affectContent && !affectOCR {
+		return ProcessingPipelineRevisions{}, ErrInternalSettingUnavailable
+	}
+	keys := []string{ProcessingContentPipelineRevisionKey, ProcessingOCRPipelineRevisionKey}
+	var rows []model.SystemSetting
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("key IN ?", keys).Limit(2).Find(&rows).Error; err != nil {
+		return ProcessingPipelineRevisions{}, ErrInternalSettingUnavailable
+	}
+	current := make(map[string]int64, 2)
+	for _, row := range rows {
+		if !IsInternalSettingKey(row.Key) || current[row.Key] != 0 {
+			return ProcessingPipelineRevisions{}, ErrInternalSettingUnavailable
+		}
+		value, err := parsePositiveRevision(row.Value)
+		if err != nil {
+			return ProcessingPipelineRevisions{}, err
+		}
+		current[row.Key] = value
+	}
+	for _, key := range keys {
+		value := current[key]
+		affected := key == ProcessingContentPipelineRevisionKey && affectContent || key == ProcessingOCRPipelineRevisionKey && affectOCR
+		switch {
+		case value == 0:
+			value = 1
+		case affected && value == int64(^uint64(0)>>1):
+			return ProcessingPipelineRevisions{}, ErrInternalSettingUnavailable
+		case affected:
+			value++
+		}
+		if err := s.upsert(tx.WithContext(ctx), key, strconv.FormatInt(value, 10)); err != nil {
+			return ProcessingPipelineRevisions{}, ErrInternalSettingUnavailable
+		}
+		current[key] = value
+	}
+	return ProcessingPipelineRevisions{
+		Content: current[ProcessingContentPipelineRevisionKey], OCR: current[ProcessingOCRPipelineRevisionKey],
+	}, nil
+}
+
+func parsePositiveRevision(value string) (int64, error) {
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed <= 0 || strconv.FormatInt(parsed, 10) != value {
+		return 0, ErrInternalSettingUnavailable
+	}
+	return parsed, nil
+}
+
+func IsInternalSettingKey(key string) bool {
+	return key == ProcessingContentPipelineRevisionKey || key == ProcessingOCRPipelineRevisionKey
 }
 
 // GetFallback resolves a known setting from environment or its code default,
@@ -628,6 +752,35 @@ func (s *Service) UpdateWithTx(tx *gorm.DB, key, value string) error {
 		return err
 	}
 	s.invalidateCache(key)
+	return nil
+}
+
+// UpdateMany validates and persists a bounded setting set atomically.
+func (s *Service) UpdateMany(values map[string]string) error {
+	if s == nil || s.db == nil || len(values) == 0 || len(values) > 64 {
+		return fmt.Errorf("settings batch is unavailable")
+	}
+	keys := make([]string, 0, len(values))
+	for key, value := range values {
+		if err := s.Validate(key, value); err != nil {
+			return err
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		for _, key := range keys {
+			if err := s.upsert(tx, key, values[key]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		s.invalidateCache(key)
+	}
 	return nil
 }
 
@@ -892,6 +1045,15 @@ var backupAssetProcessingSettingKeys = []string{
 	"backup_assets.processing_sink_artifact_max_bytes",
 	"backup_assets.processing_sink_total_max_bytes",
 	"backup_assets.processing_protocol_json_max_bytes",
+	"backup_assets.processing_secret_classify",
+	"backup_assets.processing_backfill_paused",
+	"backup_assets.processing_backfill_batch_size",
+	"backup_assets.processing_backfill_jobs_per_hour",
+	"backup_assets.processing_backfill_bytes_per_hour",
+	"backup_assets.processing_backfill_provider_concurrency",
+	"backup_assets.processing_backfill_capability_concurrency",
+	"backup_assets.processing_backfill_recent_window",
+	"backup_assets.processing_backfill_history_aging_step",
 	"backup_assets.worker_local_enabled",
 	"backup_assets.worker_local_socket",
 	"backup_assets.worker_remote_enabled",
@@ -900,6 +1062,9 @@ var backupAssetProcessingSettingKeys = []string{
 	"backup_assets.worker_remote_server_key_file",
 	"backup_assets.worker_remote_client_ca_file",
 	"backup_assets.worker_remote_trust_domain",
+	"backup_assets.worker_updater_enabled",
+	"backup_assets.worker_updater_online_enabled",
+	"backup_assets.worker_updater_online_origins",
 	"backup_assets.derived_store_root",
 	"backup_assets.derived_store_chunk_bytes",
 	"backup_assets.derived_store_blob_max_bytes",
@@ -1188,6 +1353,9 @@ func validateBackupAssetFoundationConfig(values map[string]string, requireComple
 	if err := validateRemoteWorkerSettings(resolved); err != nil {
 		return err
 	}
+	if err := validateUpdaterSettings(resolved); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1260,6 +1428,64 @@ func validateRemoteWorkerSettings(values map[string]string) error {
 		return fmt.Errorf("backup_assets.worker_remote_trust_domain 不是 canonical trust domain")
 	}
 	return nil
+}
+
+func validateUpdaterSettings(values map[string]string) error {
+	enabled, _ := strconv.ParseBool(values["backup_assets.worker_updater_enabled"])
+	online, _ := strconv.ParseBool(values["backup_assets.worker_updater_online_enabled"])
+	if !online {
+		return nil
+	}
+	if !enabled || !validUpdaterOriginList(values["backup_assets.worker_updater_online_origins"]) {
+		return fmt.Errorf("backup_assets updater 在线配置无效")
+	}
+	return nil
+}
+
+func validUpdaterOriginList(value string) bool {
+	if value == "" || strings.TrimSpace(value) != value {
+		return false
+	}
+	origins := strings.Split(value, ",")
+	if len(origins) == 0 || len(origins) > 32 {
+		return false
+	}
+	last := ""
+	for _, origin := range origins {
+		parsed, err := url.Parse(origin)
+		if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.Host == "" || parsed.Port() == "" ||
+			parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.String() != origin ||
+			strings.ToLower(parsed.Host) != parsed.Host || origin <= last || !validUpdaterOriginHost(parsed.Hostname()) {
+			return false
+		}
+		port, err := strconv.ParseUint(parsed.Port(), 10, 16)
+		if err != nil || port == 0 {
+			return false
+		}
+		last = origin
+	}
+	return true
+}
+
+func validUpdaterOriginHost(value string) bool {
+	if ip := net.ParseIP(value); ip != nil {
+		return !ip.IsUnspecified() && !ip.IsMulticast()
+	}
+	if value == "" || len(value) > 253 || strings.ToLower(value) != value || strings.ContainsAny(value, "*/:@/?#\\\x00") {
+		return false
+	}
+	for _, label := range strings.Split(value, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, character := range label {
+			if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '-' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func safeWorkerListenAddress(value string) bool {

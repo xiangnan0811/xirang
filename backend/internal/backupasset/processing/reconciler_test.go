@@ -12,6 +12,8 @@ import (
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/model"
+
+	"gorm.io/gorm"
 )
 
 func TestLeaseCrashRecoveryCreatesNewFenceAndRejectsOldAttempt(t *testing.T) {
@@ -219,7 +221,7 @@ func TestDerivedReconcilerRevokesProjectionBeforeRepairingMissingReferencedBlob(
 		t.Fatal(err)
 	}
 	reference := harness.seedReference(t, blob.BlobID, "5", "e")
-	harness.projection.onRevoke = func(DerivedProjectionRevoke) error {
+	harness.projection.onRevoke = func(*gorm.DB, DerivedProjectionRevoke) error {
 		var row model.BackupAssetDerivedBlobReference
 		if err := harness.db.First(&row, "artifact_id = ?", reference.authorization.ArtifactID).Error; err != nil {
 			return err
@@ -264,7 +266,7 @@ func TestDerivedReconcilerRetriesMissingBlobImmediatelyAfterSearchRevokeFailure(
 		t.Fatal(err)
 	}
 	injected := errors.New("search revoke temporarily unavailable")
-	harness.projection.onRevoke = func(DerivedProjectionRevoke) error { return injected }
+	harness.projection.onRevoke = func(*gorm.DB, DerivedProjectionRevoke) error { return injected }
 	reconciler, err := NewDerivedReconciler(harness.store, harness.lifecycle, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -447,7 +449,8 @@ func TestDerivedReconcilerRetriesFailedPurgeAndClearsFailureState(t *testing.T) 
 		}
 		return os.Remove(path)
 	}
-	if err := harness.lifecycle.RevokeSet(context.Background(), reference.setID, DerivedRevokeExpired); !errors.Is(err, injected) {
+	if err := harness.lifecycle.RevokeSetFenced(context.Background(), reference.setID, DerivedRevokeExpired,
+		derivedLifecycleFence("9", reference.authorization.RecoveryPointID)); !errors.Is(err, injected) {
 		t.Fatalf("RevokeSet removal error=%v, want injected failure", err)
 	}
 	var failed model.BackupAssetDerivedBlob

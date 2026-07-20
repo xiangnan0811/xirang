@@ -5,10 +5,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
-	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -246,6 +248,32 @@ func TestSinkValidatesRoleMIMESizeDigestCompletenessAndPolicy(t *testing.T) {
 	}
 }
 
+func TestArtifactMediaValidationIsCapabilityProfileAware(t *testing.T) {
+	tests := []struct {
+		capability string
+		profile    string
+		role       ArtifactRole
+		mediaType  string
+		want       bool
+	}{
+		{capability: "archive.extract_entry", profile: "archive_member_v1", role: ArtifactRoleContent, mediaType: "application/octet-stream", want: true},
+		{capability: "document.convert", profile: "static_pages_v1", role: ArtifactRoleContent, mediaType: "application/pdf", want: true},
+		{capability: "media.transcode", profile: "browser_preview_v1", role: ArtifactRoleContent, mediaType: "video/mp4", want: true},
+		{capability: "text.extract", profile: "bounded_text_v1", role: ArtifactRoleContent, mediaType: "application/octet-stream", want: false},
+		{capability: "document.convert", profile: "static_pages_v1", role: ArtifactRoleContent, mediaType: "text/html", want: false},
+		{capability: "image.thumbnail", profile: "raster_thumbnail_v1", role: ArtifactRoleThumbnail, mediaType: "image/svg+xml", want: false},
+	}
+	for _, testCase := range tests {
+		descriptor := validWorkDescriptor()
+		descriptor.Capability = testCase.capability
+		descriptor.CapabilitySchema = testCase.capability + ".v1"
+		descriptor.OutputProfile = testCase.profile
+		if got := validArtifactMediaForDescriptor(descriptor, testCase.role, testCase.mediaType); got != testCase.want {
+			t.Fatalf("%s/%s %s %s=%v, want %v", testCase.capability, testCase.profile, testCase.role, testCase.mediaType, got, testCase.want)
+		}
+	}
+}
+
 func TestSinkMetricsCountOnlySuccessfullyAcceptedPlaintextBytes(t *testing.T) {
 	harness := newManifestHarness(t)
 	harness.moveJobToUploading(t)
@@ -284,7 +312,7 @@ func TestSinkMetricsCountOnlySuccessfullyAcceptedPlaintextBytes(t *testing.T) {
 	}
 }
 
-func TestProjectionFailureLeavesReadableSetPendingAndJobNotSucceeded(t *testing.T) {
+func TestProjectionFailureRollsBackDerivedAndJobInSameTransaction(t *testing.T) {
 	harness := newManifestHarness(t)
 	harness.moveJobToUploading(t)
 	payload := []byte("projected-content")
@@ -295,14 +323,7 @@ func TestProjectionFailureLeavesReadableSetPendingAndJobNotSucceeded(t *testing.
 	}, bytes.NewReader(payload)); err != nil {
 		t.Fatal(err)
 	}
-	harness.projection.onPublish = func(request DerivedProjectionPublish) error {
-		var set model.BackupAssetDerivedArtifactSet
-		if err := harness.db.First(&set, "id = ?", request.ArtifactSetID).Error; err != nil {
-			return err
-		}
-		if set.State != "active" || set.ProjectionPublished {
-			return errors.New("projection observed unreadable or already-published set")
-		}
+	harness.projection.onPublish = func(DerivedProjectionPublish) error {
 		return errors.New("search temporarily unavailable")
 	}
 	result, err := harness.sink.CommitManifest(context.Background(), CommitManifestRequest{
@@ -310,23 +331,31 @@ func TestProjectionFailureLeavesReadableSetPendingAndJobNotSucceeded(t *testing.
 		GrantID: harness.sinkGrantID, RecoveryPointFence: harness.lease.RecoveryPointFence,
 		SecurityPolicyRevision: validWorkDescriptor().SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{declaration},
 	})
-	if err == nil || !result.ProjectionRequired || harness.projection.publications != 1 {
+	if err == nil || result != (CommitManifestResult{}) || harness.projection.publications != 1 {
 		t.Fatalf("projection failure result=%+v publications=%d err=%v", result, harness.projection.publications, err)
 	}
 	var job model.BackupAssetProcessingJob
-	var set model.BackupAssetDerivedArtifactSet
 	if err := harness.db.First(&job, "id = ?", harness.lease.JobID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := harness.db.First(&set, "id = ?", result.ArtifactSetID).Error; err != nil {
+	var setCount int64
+	if err := harness.db.Model(&model.BackupAssetDerivedArtifactSet{}).Where("job_id = ?", harness.lease.JobID).Count(&setCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if job.State != string(ProcessingValidating) || set.State != "active" || set.ProjectionPublished {
-		t.Fatalf("projection failure exposed success or destroyed forward state: job=%+v set=%+v", job, set)
+	var upload model.BackupAssetProcessingUpload
+	if err := harness.db.Where("job_id = ?", harness.lease.JobID).Take(&upload).Error; err != nil {
+		t.Fatal(err)
+	}
+	var grant model.BackupAssetProcessingGrant
+	if err := harness.db.First(&grant, "id = ?", harness.sinkGrantID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if job.State != string(ProcessingUploading) || setCount != 0 || upload.State != "staged" || grant.State != string(GrantActive) {
+		t.Fatalf("projection failure escaped outer rollback: job=%+v sets=%d upload=%+v grant=%+v", job, setCount, upload, grant)
 	}
 }
 
-func TestPendingProjectionRecoveryTakesOverExpiredFenceAndCompletesSameSet(t *testing.T) {
+func TestAtomicProjectionFailureLeavesNoPendingRecoveryAndRetrySucceeds(t *testing.T) {
 	harness := newManifestHarness(t)
 	harness.moveJobToUploading(t)
 	payload := []byte("crash-safe-projected-content")
@@ -337,41 +366,26 @@ func TestPendingProjectionRecoveryTakesOverExpiredFenceAndCompletesSameSet(t *te
 	}, bytes.NewReader(payload)); err != nil {
 		t.Fatal(err)
 	}
-	var publishedSetID string
-	harness.projection.onPublish = func(request DerivedProjectionPublish) error {
-		if publishedSetID == "" {
-			publishedSetID = request.ArtifactSetID
-			return errors.New("projection commit acknowledgement lost")
-		}
-		if request.ArtifactSetID != publishedSetID {
-			return errors.New("projection replay changed artifact set identity")
-		}
-		return nil
+	harness.projection.onPublish = func(DerivedProjectionPublish) error {
+		return errors.New("projection transaction failed")
 	}
-	result, err := harness.sink.CommitManifest(context.Background(), CommitManifestRequest{
+	request := CommitManifestRequest{
 		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
 		GrantID: harness.sinkGrantID, RecoveryPointFence: harness.lease.RecoveryPointFence,
 		SecurityPolicyRevision: validWorkDescriptor().SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{declaration},
-	})
-	if err == nil || result.ArtifactSetID == "" || result.ArtifactSetID != publishedSetID {
-		t.Fatalf("ambiguous projection commit result=%+v published=%q err=%v", result, publishedSetID, err)
 	}
-
-	harness.clock.Advance(31 * time.Second)
+	result, err := harness.sink.CommitManifest(context.Background(), request)
+	if err == nil || result != (CommitManifestResult{}) {
+		t.Fatalf("failed atomic projection result=%+v err=%v", result, err)
+	}
 	recovered, err := harness.sink.ReconcilePendingProjections(context.Background(), 32)
-	if err != nil || recovered != 1 {
+	if err != nil || recovered != 0 {
 		t.Fatalf("ReconcilePendingProjections=%d err=%v", recovered, err)
 	}
-	if harness.projection.publications != 2 || len(harness.projection.publishRequests) != 2 {
-		t.Fatalf("projection replay count=%d requests=%+v", harness.projection.publications, harness.projection.publishRequests)
-	}
-	oldFence := harness.projection.publishRequests[0].RecoveryPointFence
-	newFence := harness.projection.publishRequests[1].RecoveryPointFence
-	if newFence.LeaseID != oldFence.LeaseID || newFence.AttemptID == oldFence.AttemptID || newFence.FenceToken == oldFence.FenceToken {
-		t.Fatalf("projection recovery reused expired authority: old=%+v new=%+v", oldFence, newFence)
-	}
-	if err := harness.coordinator.leaseService.ValidateFence(context.Background(), oldFence); err == nil {
-		t.Fatal("old projection fence remained valid after recovery takeover")
+	harness.projection.onPublish = nil
+	result, err = harness.sink.CommitManifest(context.Background(), request)
+	if err != nil || result.ArtifactSetID == "" {
+		t.Fatalf("retry atomic projection result=%+v err=%v", result, err)
 	}
 
 	var job model.BackupAssetProcessingJob
@@ -387,7 +401,7 @@ func TestPendingProjectionRecoveryTakesOverExpiredFenceAndCompletesSameSet(t *te
 	if err := harness.db.First(&set, "id = ?", result.ArtifactSetID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := harness.db.First(&lease, "id = ?", newFence.LeaseID).Error; err != nil {
+	if err := harness.db.First(&lease, "id = ?", harness.lease.RecoveryPointFence.LeaseID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if job.State != string(ProcessingSucceeded) || job.IsCurrent || attempt.State != "succeeded" || attempt.IsCurrent ||
@@ -395,15 +409,12 @@ func TestPendingProjectionRecoveryTakesOverExpiredFenceAndCompletesSameSet(t *te
 		lease.Status != string(backupasset.LeaseReleased) {
 		t.Fatalf("projection recovery did not close atomically: job=%+v attempt=%+v set=%+v lease=%+v", job, attempt, set, lease)
 	}
-	if attempt.RecoveryPointAttemptID != newFence.AttemptID || attempt.RecoveryPointFenceHash != hashFence(newFence.FenceToken) {
-		t.Fatalf("attempt did not persist takeover binding: attempt=%+v fence=%+v", attempt, newFence)
-	}
 	if recovered, err = harness.sink.ReconcilePendingProjections(context.Background(), 32); err != nil || recovered != 0 || harness.projection.publications != 2 {
-		t.Fatalf("idempotent projection recovery=%d publications=%d err=%v", recovered, harness.projection.publications, err)
+		t.Fatalf("idempotent pending scan=%d publications=%d err=%v", recovered, harness.projection.publications, err)
 	}
 }
 
-func TestPendingProjectionRecoveryReusesTakeoverFenceAfterTransientReplayFailure(t *testing.T) {
+func TestRepeatedProjectionFailuresRemainRetryableWithoutPendingState(t *testing.T) {
 	harness := newManifestHarness(t)
 	harness.moveJobToUploading(t)
 	payload := []byte("projection-takeover-retry")
@@ -414,54 +425,44 @@ func TestPendingProjectionRecoveryReusesTakeoverFenceAfterTransientReplayFailure
 	}, bytes.NewReader(payload)); err != nil {
 		t.Fatal(err)
 	}
-	var callMu sync.Mutex
-	calls := 0
 	harness.projection.onPublish = func(DerivedProjectionPublish) error {
-		callMu.Lock()
-		defer callMu.Unlock()
-		calls++
-		if calls <= 2 {
-			return errors.New("projection temporarily unavailable")
-		}
-		return nil
+		return errors.New("projection temporarily unavailable")
 	}
-	result, err := harness.sink.CommitManifest(context.Background(), CommitManifestRequest{
+	request := CommitManifestRequest{
 		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
 		GrantID: harness.sinkGrantID, RecoveryPointFence: harness.lease.RecoveryPointFence,
 		SecurityPolicyRevision: validWorkDescriptor().SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{declaration},
-	})
-	if err == nil {
-		t.Fatal("first projection publication unexpectedly succeeded")
 	}
-	harness.clock.Advance(31 * time.Second)
-	if _, err := harness.sink.ReconcilePendingProjections(context.Background(), 32); err == nil {
-		t.Fatal("first takeover replay unexpectedly succeeded")
+	for attempt := 0; attempt < 2; attempt++ {
+		if result, err := harness.sink.CommitManifest(context.Background(), request); err == nil || result != (CommitManifestResult{}) {
+			t.Fatalf("failed projection attempt %d result=%+v err=%v", attempt, result, err)
+		}
 	}
 	if len(harness.projection.publishRequests) != 2 {
-		t.Fatalf("first takeover replay requests=%d", len(harness.projection.publishRequests))
+		t.Fatalf("projection attempts=%d", len(harness.projection.publishRequests))
 	}
-	takeoverFence := harness.projection.publishRequests[1].RecoveryPointFence
-	recovered, err := harness.sink.ReconcilePendingProjections(context.Background(), 32)
-	if err != nil || recovered != 1 {
-		t.Fatalf("immediate takeover retry recovered=%d err=%v", recovered, err)
+	if harness.projection.publishRequests[0].RecoveryPointFence != harness.projection.publishRequests[1].RecoveryPointFence ||
+		harness.projection.publishRequests[0].ArtifactSetID == harness.projection.publishRequests[1].ArtifactSetID {
+		t.Fatalf("atomic retry identity invalid: %+v", harness.projection.publishRequests)
 	}
-	if len(harness.projection.publishRequests) != 3 {
-		t.Fatalf("takeover retry requests=%d", len(harness.projection.publishRequests))
-	}
-	retryFence := harness.projection.publishRequests[2].RecoveryPointFence
-	if retryFence != takeoverFence {
-		t.Fatalf("transient replay failure rotated recovery authority: first=%+v retry=%+v", takeoverFence, retryFence)
-	}
-	var set model.BackupAssetDerivedArtifactSet
-	if err := harness.db.First(&set, "id = ?", result.ArtifactSetID).Error; err != nil {
+	var sets int64
+	if err := harness.db.Model(&model.BackupAssetDerivedArtifactSet{}).Where("job_id = ?", harness.lease.JobID).Count(&sets).Error; err != nil {
 		t.Fatal(err)
 	}
-	if !set.ProjectionPublished {
-		t.Fatalf("takeover replay retry did not publish set: %+v", set)
+	var job model.BackupAssetProcessingJob
+	var upload model.BackupAssetProcessingUpload
+	if err := harness.db.First(&job, "id = ?", harness.lease.JobID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Where("job_id = ?", harness.lease.JobID).Take(&upload).Error; err != nil {
+		t.Fatal(err)
+	}
+	if sets != 0 || job.State != string(ProcessingUploading) || upload.State != "staged" {
+		t.Fatalf("failed retries left pending state: sets=%d job=%+v upload=%+v", sets, job, upload)
 	}
 }
 
-func TestPendingProjectionRecoverySupersedesAndDestroysOutputAfterSourceDrift(t *testing.T) {
+func TestProjectionRetryRejectsSourceDriftWithoutVisibleDerivedState(t *testing.T) {
 	harness := newManifestHarness(t)
 	harness.moveJobToUploading(t)
 	payload := []byte("pending-projection-source-drift")
@@ -476,61 +477,41 @@ func TestPendingProjectionRecoverySupersedesAndDestroysOutputAfterSourceDrift(t 
 	harness.projection.onPublish = func(DerivedProjectionPublish) error {
 		return errors.New("projection temporarily unavailable")
 	}
-	result, err := harness.sink.CommitManifest(context.Background(), CommitManifestRequest{
+	request := CommitManifestRequest{
 		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
 		GrantID: harness.sinkGrantID, RecoveryPointFence: harness.lease.RecoveryPointFence,
 		SecurityPolicyRevision: validWorkDescriptor().SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{declaration},
-	})
+	}
+	result, err := harness.sink.CommitManifest(context.Background(), request)
 	if err == nil {
 		t.Fatal("first projection publication unexpectedly succeeded")
 	}
 	harness.source.err = errors.New("source fingerprint changed")
 	harness.projection.onPublish = nil
-	if recovered, err := harness.sink.ReconcilePendingProjections(context.Background(), 32); err != nil || recovered != 0 {
-		t.Fatalf("source-drift reconciliation recovered=%d err=%v", recovered, err)
+	if retry, retryErr := harness.sink.CommitManifest(context.Background(), request); !errors.Is(retryErr, ErrManifestSourceChanged) || retry != (CommitManifestResult{}) {
+		t.Fatalf("source-drift retry result=%+v err=%v", retry, retryErr)
 	}
 	var job model.BackupAssetProcessingJob
-	var attempt model.BackupAssetProcessingAttempt
-	var set model.BackupAssetDerivedArtifactSet
-	var artifact model.BackupAssetDerivedArtifact
-	var reference model.BackupAssetDerivedBlobReference
 	var blob model.BackupAssetDerivedBlob
-	var lease model.RecoveryPointLease
 	if err := harness.db.First(&job, "id = ?", harness.lease.JobID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := harness.db.First(&attempt, "id = ?", harness.lease.AttemptID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := harness.db.First(&set, "id = ?", result.ArtifactSetID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := harness.db.First(&artifact, "artifact_set_id = ?", set.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := harness.db.First(&reference, "artifact_id = ?", artifact.ID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := harness.db.First(&blob, "id = ?", uploaded.BlobID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := harness.db.First(&lease, "id = ?", harness.lease.RecoveryPointFence.LeaseID).Error; err != nil {
+	var sets, references int64
+	if err := harness.db.Model(&model.BackupAssetDerivedArtifactSet{}).Where("job_id = ?", harness.lease.JobID).Count(&sets).Error; err != nil {
 		t.Fatal(err)
 	}
-	if job.State != string(ProcessingSuperseded) || job.SupersedeReason != string(SupersedeReasonSourceChanged) || job.IsCurrent ||
-		attempt.State != "superseded" || attempt.IsCurrent || set.State != "superseded" ||
-		set.RevocationReason != string(DerivedRevokeSourceChanged) || set.ProjectionPublished ||
-		reference.State != "revoked" || blob.State != "unavailable" || len(blob.WrappedDEK) != 0 ||
-		lease.Status != string(backupasset.LeaseReleased) || harness.projection.revocations != 0 {
-		t.Fatalf("source-drift product invalid: job=%+v attempt=%+v set=%+v reference=%+v blob=%+v lease=%+v revokes=%d",
-			job, attempt, set, reference, blob, lease, harness.projection.revocations)
+	if err := harness.db.Model(&model.BackupAssetDerivedBlobReference{}).Where("blob_id = ?", uploaded.BlobID).Count(&references).Error; err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(harness.root, blob.OpaqueLocator)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("source-drift ciphertext remains: %v", err)
+	if result != (CommitManifestResult{}) || job.State != string(ProcessingUploading) || sets != 0 || references != 0 || blob.RefCount != 0 {
+		t.Fatalf("source drift exposed Derived state: result=%+v job=%+v sets=%d refs=%d blob=%+v", result, job, sets, references, blob)
 	}
 }
 
-func TestPendingProjectionRecoverySupersedesAndDestroysOutputAfterPolicyDrift(t *testing.T) {
+func TestProjectionRetryRejectsPolicyDriftWithoutVisibleDerivedState(t *testing.T) {
 	harness := newManifestHarness(t)
 	harness.moveJobToUploading(t)
 	payload := []byte("pending-projection-policy-drift")
@@ -545,49 +526,120 @@ func TestPendingProjectionRecoverySupersedesAndDestroysOutputAfterPolicyDrift(t 
 	harness.projection.onPublish = func(DerivedProjectionPublish) error {
 		return errors.New("projection temporarily unavailable")
 	}
-	result, err := harness.sink.CommitManifest(context.Background(), CommitManifestRequest{
+	request := CommitManifestRequest{
 		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
 		GrantID: harness.sinkGrantID, RecoveryPointFence: harness.lease.RecoveryPointFence,
 		SecurityPolicyRevision: validWorkDescriptor().SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{declaration},
-	})
+	}
+	result, err := harness.sink.CommitManifest(context.Background(), request)
 	if err == nil {
 		t.Fatal("first projection publication unexpectedly succeeded")
 	}
 	harness.policy.revision = "security-policy-v2"
 	harness.projection.onPublish = nil
-	if recovered, err := harness.sink.ReconcilePendingProjections(context.Background(), 32); err != nil || recovered != 0 {
-		t.Fatalf("policy-drift reconciliation recovered=%d err=%v", recovered, err)
+	if retry, retryErr := harness.sink.CommitManifest(context.Background(), request); !errors.Is(retryErr, ErrManifestPolicyChanged) || retry != (CommitManifestResult{}) {
+		t.Fatalf("policy-drift retry result=%+v err=%v", retry, retryErr)
 	}
 	var job model.BackupAssetProcessingJob
-	var attempt model.BackupAssetProcessingAttempt
-	var set model.BackupAssetDerivedArtifactSet
 	var blob model.BackupAssetDerivedBlob
-	var lease model.RecoveryPointLease
 	if err := harness.db.First(&job, "id = ?", harness.lease.JobID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := harness.db.First(&attempt, "id = ?", harness.lease.AttemptID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := harness.db.First(&set, "id = ?", result.ArtifactSetID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := harness.db.First(&blob, "id = ?", uploaded.BlobID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := harness.db.First(&lease, "id = ?", harness.lease.RecoveryPointFence.LeaseID).Error; err != nil {
+	var sets int64
+	if err := harness.db.Model(&model.BackupAssetDerivedArtifactSet{}).Where("job_id = ?", harness.lease.JobID).Count(&sets).Error; err != nil {
 		t.Fatal(err)
 	}
-	if job.State != string(ProcessingSuperseded) || job.SupersedeReason != string(SupersedeReasonPolicyChanged) || job.IsCurrent ||
-		attempt.State != "superseded" || attempt.IsCurrent || set.State != "superseded" ||
-		set.RevocationReason != string(DerivedRevokePolicyChanged) || set.ProjectionPublished ||
-		blob.State != "unavailable" || len(blob.WrappedDEK) != 0 || lease.Status != string(backupasset.LeaseReleased) || harness.projection.revocations != 0 {
-		t.Fatalf("policy-drift product invalid: job=%+v attempt=%+v set=%+v blob=%+v lease=%+v revokes=%d",
-			job, attempt, set, blob, lease, harness.projection.revocations)
+	if result != (CommitManifestResult{}) || job.State != string(ProcessingUploading) || sets != 0 || blob.RefCount != 0 {
+		t.Fatalf("policy drift exposed Derived state: result=%+v job=%+v sets=%d blob=%+v", result, job, sets, blob)
 	}
 }
 
-func TestPendingProjectionRecoveryPreservesPolicyReasonAcrossCleanupCrash(t *testing.T) {
+func TestReconcilePendingProjectionPolicyDriftUsesClosedGrantRevocationReason(t *testing.T) {
+	harness := newManifestHarness(t)
+	harness.moveJobToUploading(t)
+	if err := harness.db.Exec(`
+		CREATE TRIGGER validate_manifest_grant_revocation_reason
+		BEFORE UPDATE OF revocation_reason ON backup_asset_processing_grants
+		WHEN NEW.revocation_reason NOT IN ('', 'cancel', 'lease_lost', 'source_changed', 'expired', 'quarantine', 'shutdown')
+		BEGIN
+			SELECT RAISE(ABORT, 'invalid grant revocation_reason');
+		END
+	`).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	payload := []byte("pending-projection-policy-drift")
+	declaration := artifactDeclaration(0, ArtifactRoleContent, "text/plain", payload)
+	if _, err := harness.sink.UploadArtifact(context.Background(), UploadArtifactRequest{
+		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
+		GrantID: harness.sinkGrantID, Artifact: declaration,
+	}, bytes.NewReader(payload)); err != nil {
+		t.Fatal(err)
+	}
+	request := CommitManifestRequest{
+		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
+		GrantID: harness.sinkGrantID, RecoveryPointFence: harness.lease.RecoveryPointFence,
+		SecurityPolicyRevision: validWorkDescriptor().SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{declaration},
+	}
+	artifacts := cloneAndSortArtifacts(request.Artifacts)
+	job, _, err := harness.sink.loadManifestJob(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploads, err := harness.sink.loadAndValidateUploads(context.Background(), request, artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setID, err := backupasset.NewOpaqueID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	identities, err := newManifestArtifactIdentities(len(artifacts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := CommitManifestResult{
+		ArtifactSetID: setID, ManifestDigest: computeManifestDigest(artifacts), ProjectionRequired: true,
+	}
+	if err := harness.db.Transaction(func(tx *gorm.DB) error {
+		return harness.sink.publishManifestTx(context.Background(), tx, request, job, artifacts, uploads, identities, manifest, setID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	harness.policy.revision = "security-policy-v2"
+	if recovered, err := harness.sink.ReconcilePendingProjections(context.Background(), 32); err != nil || recovered != 0 {
+		t.Fatalf("ReconcilePendingProjections=%d err=%v", recovered, err)
+	}
+
+	var updatedJob model.BackupAssetProcessingJob
+	var attempt model.BackupAssetProcessingAttempt
+	var inputGrant model.BackupAssetProcessingGrant
+	var set model.BackupAssetDerivedArtifactSet
+	if err := harness.db.First(&updatedJob, "id = ?", harness.lease.JobID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.First(&attempt, "id = ?", harness.lease.AttemptID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Where("attempt_id = ? AND kind = ?", harness.lease.AttemptID, GrantInput).Take(&inputGrant).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.First(&set, "id = ?", setID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updatedJob.State != string(ProcessingSuperseded) || updatedJob.IsCurrent || updatedJob.SupersedeReason != string(SupersedeReasonPolicyChanged) ||
+		attempt.State != "superseded" || attempt.IsCurrent || inputGrant.State != string(GrantRevoked) ||
+		inputGrant.RevocationReason != "source_changed" || set.State != derivedSetRevokeState(DerivedRevokePolicyChanged) ||
+		set.RevocationReason != string(DerivedRevokePolicyChanged) {
+		t.Fatalf("policy supersede did not preserve closed products: job=%+v attempt=%+v input_grant=%+v set=%+v", updatedJob, attempt, inputGrant, set)
+	}
+}
+
+func TestFailedAtomicProjectionHasNoArtifactSetToRevoke(t *testing.T) {
 	harness := newManifestHarness(t)
 	harness.moveJobToUploading(t)
 	payload := []byte("pending-projection-policy-crash")
@@ -609,20 +661,18 @@ func TestPendingProjectionRecoveryPreservesPolicyReasonAcrossCleanupCrash(t *tes
 	if err == nil {
 		t.Fatal("first projection publication unexpectedly succeeded")
 	}
-	if err := harness.lifecycle.RevokeSet(context.Background(), result.ArtifactSetID, DerivedRevokePolicyChanged); err != nil {
-		t.Fatal(err)
+	if result != (CommitManifestResult{}) {
+		t.Fatalf("failed projection returned visible result: %+v", result)
 	}
-	harness.policy.revision = validWorkDescriptor().SecurityPolicyRevision
-	harness.projection.onPublish = nil
-	if recovered, err := harness.sink.ReconcilePendingProjections(context.Background(), 32); err != nil || recovered != 0 {
-		t.Fatalf("post-crash reconciliation recovered=%d err=%v", recovered, err)
+	if err := harness.lifecycle.RevokeSet(context.Background(), strings.Repeat("f", 32), DerivedRevokePolicyChanged); !errors.Is(err, ErrDerivedUnauthorized) {
+		t.Fatalf("missing failed projection revoke error=%v", err)
 	}
 	var job model.BackupAssetProcessingJob
 	if err := harness.db.First(&job, "id = ?", harness.lease.JobID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if job.State != string(ProcessingSuperseded) || job.SupersedeReason != string(SupersedeReasonPolicyChanged) {
-		t.Fatalf("post-crash supersede product=%+v, want policy_changed", job)
+	if job.State != string(ProcessingUploading) || !job.IsCurrent {
+		t.Fatalf("failed projection changed job: %+v", job)
 	}
 }
 
@@ -655,7 +705,163 @@ func TestProjectionPublicationPersistsPortReceiptRevision(t *testing.T) {
 	}
 }
 
-func TestConcurrentPendingProjectionRecoveryCompletesExactlyOnce(t *testing.T) {
+func TestProjectedManifestPreparesBoundedTermsAndStableExcerptArtifact(t *testing.T) {
+	harness := newManifestHarness(t)
+	harness.moveJobToUploading(t)
+	payload := []byte("alpha alpha beta")
+	declaration := artifactDeclaration(0, ArtifactRoleContent, "text/plain", payload)
+	if _, err := harness.sink.UploadArtifact(context.Background(), UploadArtifactRequest{
+		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
+		GrantID: harness.sinkGrantID, Artifact: declaration,
+	}, bytes.NewReader(payload)); err != nil {
+		t.Fatal(err)
+	}
+	var preparedField DerivedProjectionField
+	harness.projection.onPublish = func(request DerivedProjectionPublish) error {
+		if len(request.Fields) != 1 {
+			return fmt.Errorf("projection fields=%d", len(request.Fields))
+		}
+		preparedField = request.Fields[0]
+		return nil
+	}
+	result, err := harness.sink.CommitManifest(context.Background(), CommitManifestRequest{
+		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
+		GrantID: harness.sinkGrantID, RecoveryPointFence: harness.lease.RecoveryPointFence,
+		SecurityPolicyRevision: validWorkDescriptor().SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{declaration},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preparedField.Role != ArtifactRoleContent || preparedField.Completeness != ArtifactComplete ||
+		len(preparedField.Terms) != 2 || preparedField.Terms[0] != (DerivedProjectionTerm{Term: "alpha", Frequency: 2}) ||
+		preparedField.Terms[1] != (DerivedProjectionTerm{Term: "beta", Frequency: 1}) ||
+		backupasset.ValidateOpaqueID(preparedField.ExcerptArtifactID) != nil {
+		t.Fatalf("prepared projection field=%+v", preparedField)
+	}
+	var artifact model.BackupAssetDerivedArtifact
+	if err := harness.db.Where("artifact_set_id = ? AND role = ?", result.ArtifactSetID, ArtifactRoleContent).Take(&artifact).Error; err != nil {
+		t.Fatal(err)
+	}
+	if artifact.ID != preparedField.ExcerptArtifactID {
+		t.Fatalf("Search excerpt=%q Derived artifact=%q", preparedField.ExcerptArtifactID, artifact.ID)
+	}
+}
+
+func TestBinaryContentManifestDoesNotRequireSearchProjection(t *testing.T) {
+	declaration := artifactDeclaration(0, ArtifactRoleContent, "application/pdf", []byte("pdf"))
+	if manifestNeedsProjection(validWorkDescriptor(), []ArtifactDeclaration{declaration}) {
+		t.Fatal("binary Derived content unexpectedly required a Search projection")
+	}
+}
+
+func TestSecretClassificationEvidenceIsCanonicalClosedAndFailClosed(t *testing.T) {
+	artifactID := strings.Repeat("c", 32)
+	tests := []struct {
+		name         string
+		payload      string
+		completeness ArtifactCompleteness
+		want         DerivedClassificationEvidence
+		wantErr      bool
+	}{
+		{
+			name: "public complete", payload: `{"schema_version":1,"sensitivity":"public","categories":[]}`,
+			completeness: ArtifactComplete,
+			want:         DerivedClassificationEvidence{ArtifactID: artifactID, Sensitivity: DerivedSensitivityPublic, Categories: []string{}},
+		},
+		{
+			name: "secret complete", payload: `{"schema_version":1,"sensitivity":"secret","categories":["credential_pattern"]}`,
+			completeness: ArtifactComplete,
+			want:         DerivedClassificationEvidence{ArtifactID: artifactID, Sensitivity: DerivedSensitivitySecret, Categories: []string{"credential_pattern"}},
+		},
+		{
+			name: "unknown partial", payload: `{"schema_version":1,"sensitivity":"unknown","categories":[]}`,
+			completeness: ArtifactPartial,
+			want:         DerivedClassificationEvidence{ArtifactID: artifactID, Sensitivity: DerivedSensitivityUnknown, Categories: []string{}},
+		},
+		{name: "duplicate member", payload: `{"schema_version":1,"sensitivity":"secret","sensitivity":"public","categories":[]}`, completeness: ArtifactComplete, wantErr: true},
+		{name: "unknown member", payload: `{"schema_version":1,"sensitivity":"public","categories":[],"marker":"forbidden"}`, completeness: ArtifactComplete, wantErr: true},
+		{name: "non canonical", payload: `{ "schema_version": 1, "sensitivity": "public", "categories": [] }`, completeness: ArtifactComplete, wantErr: true},
+		{name: "unknown category", payload: `{"schema_version":1,"sensitivity":"secret","categories":["future_category"]}`, completeness: ArtifactComplete, wantErr: true},
+		{name: "duplicate category", payload: `{"schema_version":1,"sensitivity":"secret","categories":["credential_pattern","credential_pattern"]}`, completeness: ArtifactComplete, wantErr: true},
+		{name: "public category", payload: `{"schema_version":1,"sensitivity":"public","categories":["credential_pattern"]}`, completeness: ArtifactComplete, wantErr: true},
+		{name: "secret without category", payload: `{"schema_version":1,"sensitivity":"secret","categories":[]}`, completeness: ArtifactComplete, wantErr: true},
+		{name: "public partial", payload: `{"schema_version":1,"sensitivity":"public","categories":[]}`, completeness: ArtifactPartial, wantErr: true},
+		{name: "secret partial", payload: `{"schema_version":1,"sensitivity":"secret","categories":["credential_pattern"]}`, completeness: ArtifactPartial, wantErr: true},
+		{name: "unknown complete", payload: `{"schema_version":1,"sensitivity":"unknown","categories":[]}`, completeness: ArtifactComplete, wantErr: true},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := parseSecretClassificationEvidence([]byte(testCase.payload), testCase.completeness, artifactID)
+			if testCase.wantErr {
+				if !errors.Is(err, ErrInvalidManifest) {
+					t.Fatalf("classification evidence error=%v", err)
+				}
+				return
+			}
+			if err != nil || !reflect.DeepEqual(got, testCase.want) {
+				t.Fatalf("classification evidence=%+v err=%v want=%+v", got, err, testCase.want)
+			}
+		})
+	}
+}
+
+func TestSecretClassificationEvidenceAndSearchPublicationShareCallerTransaction(t *testing.T) {
+	harness := newManifestHarness(t)
+	harness.moveJobToUploading(t)
+	harness.configureSecretJob(t)
+	payload := []byte(`{"schema_version":1,"sensitivity":"secret","categories":["credential_pattern"]}`)
+	declaration := artifactDeclaration(0, ArtifactRoleMetadata, "application/json", payload)
+	if _, err := harness.sink.UploadArtifact(context.Background(), UploadArtifactRequest{
+		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
+		GrantID: harness.sinkGrantID, Artifact: declaration,
+	}, bytes.NewReader(payload)); err != nil {
+		t.Fatal(err)
+	}
+	harness.projection.onPublish = func(request DerivedProjectionPublish) error {
+		if len(request.Fields) != 0 {
+			return fmt.Errorf("classification projection unexpectedly contains plaintext fields: %+v", request.Fields)
+		}
+		if request.Classification == nil || request.Classification.Sensitivity != DerivedSensitivitySecret ||
+			len(request.Classification.Categories) != 1 || request.Classification.Categories[0] != "credential_pattern" ||
+			backupasset.ValidateOpaqueID(request.Classification.ArtifactID) != nil {
+			return fmt.Errorf("classification projection evidence=%+v", request.Classification)
+		}
+		return errors.New("classification Search write failed")
+	}
+	request := CommitManifestRequest{
+		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
+		GrantID: harness.sinkGrantID, RecoveryPointFence: harness.lease.RecoveryPointFence,
+		SecurityPolicyRevision: validWorkDescriptor().SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{declaration},
+	}
+	if result, err := harness.sink.CommitManifest(context.Background(), request); err == nil || result != (CommitManifestResult{}) {
+		t.Fatalf("classification Search failure result=%+v err=%v", result, err)
+	}
+	var sets int64
+	if err := harness.db.Model(&model.BackupAssetDerivedArtifactSet{}).Where("job_id = ?", harness.lease.JobID).Count(&sets).Error; err != nil {
+		t.Fatal(err)
+	}
+	var job model.BackupAssetProcessingJob
+	if err := harness.db.First(&job, "id = ?", harness.lease.JobID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if sets != 0 || job.State != string(ProcessingUploading) || job.CurrentArtifactSetID != nil {
+		t.Fatalf("classification transaction leaked Derived state sets=%d job=%+v", sets, job)
+	}
+	harness.projection.onPublish = nil
+	result, err := harness.sink.CommitManifest(context.Background(), request)
+	if err != nil || !result.ProjectionRequired {
+		t.Fatalf("classification retry result=%+v err=%v", result, err)
+	}
+	var set model.BackupAssetDerivedArtifactSet
+	if err := harness.db.First(&set, "id = ?", result.ArtifactSetID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !set.ProjectionRequired || !set.ProjectionPublished || set.State != "active" || harness.projection.publications != 2 {
+		t.Fatalf("classification publication set=%+v publications=%d", set, harness.projection.publications)
+	}
+}
+
+func TestConcurrentAtomicProjectionRetriesCommitExactlyOnce(t *testing.T) {
 	harness := newManifestHarness(t)
 	harness.moveJobToUploading(t)
 	payload := []byte("concurrent-projection-recovery")
@@ -666,56 +872,37 @@ func TestConcurrentPendingProjectionRecoveryCompletesExactlyOnce(t *testing.T) {
 	}, bytes.NewReader(payload)); err != nil {
 		t.Fatal(err)
 	}
-	var publishMu sync.Mutex
-	publishCall := 0
-	replaysReady := make(chan struct{})
-	harness.projection.publishRevision = 23
 	harness.projection.onPublish = func(DerivedProjectionPublish) error {
-		publishMu.Lock()
-		publishCall++
-		call := publishCall
-		if call == 3 {
-			close(replaysReady)
-		}
-		publishMu.Unlock()
-		if call == 1 {
-			return errors.New("projection acknowledgement lost")
-		}
-		<-replaysReady
-		return nil
+		return errors.New("initial projection failure")
 	}
-	if _, err := harness.sink.CommitManifest(context.Background(), CommitManifestRequest{
+	request := CommitManifestRequest{
 		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
 		GrantID: harness.sinkGrantID, RecoveryPointFence: harness.lease.RecoveryPointFence,
 		SecurityPolicyRevision: validWorkDescriptor().SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{declaration},
-	}); err == nil {
+	}
+	if _, err := harness.sink.CommitManifest(context.Background(), request); err == nil {
 		t.Fatal("first projection publication unexpectedly acknowledged")
 	}
-
-	type reconcileOutcome struct {
-		recovered int
-		err       error
-	}
+	harness.projection.onPublish = nil
+	harness.projection.publishRevision = 23
 	start := make(chan struct{})
-	outcomes := make(chan reconcileOutcome, 2)
+	outcomes := make(chan error, 2)
 	for index := 0; index < 2; index++ {
 		go func() {
 			<-start
-			recovered, err := harness.sink.ReconcilePendingProjections(context.Background(), 32)
-			outcomes <- reconcileOutcome{recovered: recovered, err: err}
+			_, err := harness.sink.CommitManifest(context.Background(), request)
+			outcomes <- err
 		}()
 	}
 	close(start)
-	totalRecovered := 0
+	succeeded := 0
 	for index := 0; index < 2; index++ {
-		outcome := <-outcomes
-		if outcome.err != nil {
-			t.Fatalf("concurrent projection recovery error: %v", outcome.err)
+		if err := <-outcomes; err == nil {
+			succeeded++
 		}
-		totalRecovered += outcome.recovered
 	}
-	if totalRecovered != 1 {
-		t.Fatalf("concurrent projection recovery count=%d, want one DB winner", totalRecovered)
+	if succeeded != 1 {
+		t.Fatalf("concurrent atomic projection successes=%d, want one", succeeded)
 	}
 	var job model.BackupAssetProcessingJob
 	var set model.BackupAssetDerivedArtifactSet
@@ -726,7 +913,7 @@ func TestConcurrentPendingProjectionRecoveryCompletesExactlyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	if job.State != string(ProcessingSucceeded) || !set.ProjectionPublished || set.ProjectionRevision != 23 {
-		t.Fatalf("concurrent projection recovery terminal state invalid: job=%+v set=%+v", job, set)
+		t.Fatalf("concurrent atomic projection terminal state invalid: job=%+v set=%+v", job, set)
 	}
 }
 
@@ -777,7 +964,7 @@ func newManifestHarness(t *testing.T) *manifestHarness {
 		t.Fatal(err)
 	}
 	projection := &manifestProjectionFake{}
-	lifecycle, err := NewDerivedLifecycle(coordinator.db, store, projection, coordinator.clock.Now)
+	lifecycle, err := NewDerivedLifecycle(coordinator.db, store, projection, coordinator.clock.Now, coordinator.coordinator.leaseService)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -829,6 +1016,34 @@ func (harness *manifestHarness) moveJobToUploading(t *testing.T) {
 	t.Helper()
 	if err := harness.db.Model(&model.BackupAssetProcessingJob{}).Where("id = ?", harness.lease.JobID).
 		Updates(map[string]any{"state": string(ProcessingUploading), "transition_revision": int64(5)}).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (harness *manifestHarness) configureSecretJob(t *testing.T) {
+	t.Helper()
+	descriptor := validWorkDescriptor()
+	descriptor.Capability = "secret.classify"
+	descriptor.CapabilitySchema = "secret.classify.v1"
+	descriptor.PipelineFingerprint = "secret-pipeline-v1"
+	descriptor.OutputProfile = "bounded_secret_v1"
+	descriptor.EntryFingerprint = strings.Repeat("a", 64)
+	descriptor.Parameters.Codec = "text"
+	descriptor.Parameters.Language = "und"
+	descriptor.Parameters.Model = "builtin-v1"
+	descriptor.Parameters.MaxOutputBytes = 256 << 10
+	descriptor.Parameters.MaxOutputCount = 1
+	descriptor.Parameters.MaxExpandedBytes = 16 << 20
+	descriptor.Parameters.RequiresMaterialization = false
+	canonical, err := json.Marshal(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Model(&model.BackupAssetProcessingJob{}).Where("id = ?", harness.lease.JobID).Updates(map[string]any{
+		"descriptor_canonical": canonical, "entry_fingerprint": descriptor.EntryFingerprint,
+		"capability": descriptor.Capability, "capability_schema": descriptor.CapabilitySchema,
+		"pipeline_fingerprint": descriptor.PipelineFingerprint, "output_profile": descriptor.OutputProfile,
+	}).Error; err != nil {
 		t.Fatal(err)
 	}
 }
@@ -897,8 +1112,25 @@ func (*manifestMetricsFake) SetQueue(PriorityClass, ProcessingState, int64, time
 func (fake *manifestMetricsFake) AddSinkBytes(count int64)                                      { fake.sinkBytes += count }
 func (*manifestMetricsFake) SetDerived(DerivedMetricKind, int64)                                {}
 func (*manifestMetricsFake) ObserveDerived(DerivedMetricEvent)                                  {}
+func (*manifestMetricsFake) SetCoverage(string, string, CoverageMetricState, int64)             {}
+func (*manifestMetricsFake) ObserveUpdaterActivation(UpdaterActivationOutcome)                  {}
 
-func (fake *manifestProjectionFake) Publish(_ context.Context, request DerivedProjectionPublish) (DerivedProjectionPublication, error) {
+type manifestPreparedProjection struct {
+	fake    *manifestProjectionFake
+	request DerivedProjectionPublish
+}
+
+type manifestPreparedRevocation struct {
+	fake *manifestProjectionFake
+}
+
+func (fake *manifestProjectionFake) PreparePublish(_ context.Context, request DerivedProjectionPublish) (PreparedDerivedProjection, error) {
+	return &manifestPreparedProjection{fake: fake, request: request}, nil
+}
+
+func (prepared *manifestPreparedProjection) PublishTx(_ context.Context, _ *gorm.DB) (DerivedProjectionPublication, error) {
+	fake := prepared.fake
+	request := prepared.request
 	fake.mu.Lock()
 	fake.publications++
 	fake.publishRequests = append(fake.publishRequests, request)
@@ -916,7 +1148,12 @@ func (fake *manifestProjectionFake) Publish(_ context.Context, request DerivedPr
 	return DerivedProjectionPublication{ArtifactSetID: request.ArtifactSetID, Revision: revision}, nil
 }
 
-func (fake *manifestProjectionFake) Revoke(context.Context, DerivedProjectionRevoke) error {
+func (fake *manifestProjectionFake) PrepareRevoke(context.Context, DerivedProjectionRevoke) (PreparedDerivedRevocation, error) {
+	return &manifestPreparedRevocation{fake: fake}, nil
+}
+
+func (prepared *manifestPreparedRevocation) RevokeTx(context.Context, *gorm.DB) error {
+	fake := prepared.fake
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	fake.revocations++

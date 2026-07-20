@@ -133,6 +133,9 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 	if runtime.processingManager == nil {
 		t.Fatal("runtime omitted the shared Processing manager")
 	}
+	if _, ok := runtime.processingManager.source.(*content.DerivedAttemptSourceResolver); !ok {
+		t.Fatalf("Processing Worker Input source=%T, want Derived-first closed resolver", runtime.processingManager.source)
+	}
 	if config, configErr := runtime.ProcessingConfig(); configErr != nil || config.Enabled || config.LocalWorker.Enabled || config.RemoteWorker.Enabled {
 		t.Fatalf("default Processing config=%+v err=%v, want disabled and unconfigured", config, configErr)
 	}
@@ -164,6 +167,47 @@ func TestRuntimeRejectsMismatchedTransportFacets(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("runtime accepted distinct transport facets")
+	}
+}
+
+func TestRuntimeDerivedProviderResolverRequiresCurrentBoundSource(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(&model.BackupRepository{}, &model.RecoveryPoint{}, &model.CatalogGeneration{}); err != nil {
+		t.Fatal(err)
+	}
+	repositoryID := strings.Repeat("1", 32)
+	pointID := strings.Repeat("2", 32)
+	generationID := strings.Repeat("3", 32)
+	source := strings.Repeat("4", 64)
+	now := time.Date(2026, 7, 20, 8, 45, 0, 0, time.UTC)
+	for _, value := range []any{
+		&model.BackupRepository{
+			ID: repositoryID, ProviderKind: string(backupasset.ProviderRestic), DisplayName: "derived-provider",
+			VersionMode: string(backupasset.VersionNativeSnapshot), Status: string(backupasset.RepositoryOnline),
+			CapabilityRevision: 2, ImmutabilityLevel: string(backupasset.ImmutabilityBackendVersioned), CreatedAt: now, UpdatedAt: now,
+		},
+		&model.RecoveryPoint{
+			ID: pointID, RepositoryID: repositoryID, Semantics: string(backupasset.PointNativeSnapshot),
+			State: string(backupasset.RecoveryPointCommitted), SourceFingerprint: source, CapabilityRevision: 2,
+			PhysicalAvailability: string(backupasset.PhysicalOnline), CreatedAt: now, UpdatedAt: now,
+		},
+		&model.CatalogGeneration{
+			ID: generationID, RecoveryPointID: pointID, Generation: 1, State: string(catalog.GenerationComplete),
+			IsActive: true, SourceFingerprint: source, StartedAt: now, CreatedAt: now, UpdatedAt: now,
+		},
+	} {
+		if err := db.Create(value).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolver := runtimeDerivedProviderResolver(db)
+	ref := backupasset.AssetRef{RecoveryPointID: pointID, EntryID: strings.Repeat("5", 64)}
+	provider, err := resolver(context.Background(), ref, generationID, source)
+	if err != nil || provider != backupasset.ProviderRestic {
+		t.Fatalf("current Derived provider=%q err=%v", provider, err)
+	}
+	if provider, err = resolver(context.Background(), ref, generationID, "stale-source"); err == nil || provider != "" {
+		t.Fatalf("stale Derived provider=%q err=%v", provider, err)
 	}
 }
 
@@ -496,7 +540,7 @@ func TestRuntimeContentAuthorizerBindsExactActiveCatalogAndCurrentOwnership(t *t
 		t.Fatalf("Authorize: %v", err)
 	}
 	if asset.Ref != ref || asset.CatalogGenerationID != generationID || asset.RepositoryID != repositoryID ||
-		asset.Provider != backupasset.ProviderRclone || asset.SourceFingerprint != sourceFingerprint ||
+		asset.Provider != backupasset.ProviderRclone || asset.ProviderCapabilityRevision != 3 || asset.SourceFingerprint != sourceFingerprint ||
 		asset.EntryFingerprint != entryFingerprint || asset.FingerprintStrength != string(catalog.FingerprintStrong) ||
 		asset.Size != 4096 || asset.MediaType != "application/pdf" || asset.Path != "/safe/report.pdf" ||
 		asset.Name != "report.pdf" || !asset.RangeProven || asset.ModifiedAt == nil || !asset.ModifiedAt.Equal(modified) ||

@@ -133,32 +133,41 @@ type ServiceLimits struct {
 	ExecutionTimeout time.Duration
 }
 
+type ContentPipelineRevisions struct {
+	Content int64
+	OCR     int64
+}
+
+type ContentPipelineRevisionSource func(context.Context) (ContentPipelineRevisions, error)
+
 func DefaultServiceLimits() ServiceLimits {
 	return ServiceLimits{Query: DefaultQueryLimits(), MaxCandidates: 10000, ExecutionTimeout: 2 * time.Second}
 }
 
 type ServiceDependencies struct {
-	DB             *gorm.DB
-	Scope          *ScopeResolver
-	Keys           SearchKeySource
-	Cursor         *CursorCodec
-	Tags           TagResolver
-	Excerpts       ExcerptResolver
-	Now            func() time.Time
-	Limits         ServiceLimits
-	FeatureEnabled func() (bool, error)
+	DB                *gorm.DB
+	Scope             *ScopeResolver
+	Keys              SearchKeySource
+	Cursor            *CursorCodec
+	Tags              TagResolver
+	Excerpts          ExcerptResolver
+	Now               func() time.Time
+	Limits            ServiceLimits
+	FeatureEnabled    func() (bool, error)
+	PipelineRevisions ContentPipelineRevisionSource
 }
 
 type Service struct {
-	db             *gorm.DB
-	scope          *ScopeResolver
-	keys           SearchKeySource
-	cursor         *CursorCodec
-	tags           TagResolver
-	excerpts       ExcerptResolver
-	now            func() time.Time
-	limits         ServiceLimits
-	featureEnabled func() (bool, error)
+	db                *gorm.DB
+	scope             *ScopeResolver
+	keys              SearchKeySource
+	cursor            *CursorCodec
+	tags              TagResolver
+	excerpts          ExcerptResolver
+	now               func() time.Time
+	limits            ServiceLimits
+	featureEnabled    func() (bool, error)
+	pipelineRevisions ContentPipelineRevisionSource
 }
 
 type activeSearchIndex struct {
@@ -204,7 +213,7 @@ func NewService(dependencies ServiceDependencies) (*Service, error) {
 	return &Service{
 		db: dependencies.DB, scope: dependencies.Scope, keys: dependencies.Keys, cursor: dependencies.Cursor,
 		tags: dependencies.Tags, excerpts: dependencies.Excerpts, now: dependencies.Now, limits: dependencies.Limits,
-		featureEnabled: dependencies.FeatureEnabled,
+		featureEnabled: dependencies.FeatureEnabled, pipelineRevisions: dependencies.PipelineRevisions,
 	}, nil
 }
 
@@ -243,13 +252,19 @@ func (service *Service) Search(ctx context.Context, actor SearchActor, request S
 	if err != nil {
 		return SearchResponse{}, err
 	}
+	pipelineRevisions := service.contentPipelineRevisions(queryCtx)
+	if err := service.applyPipelineCoverage(
+		queryCtx, indexes, statuses, fieldsUsedByQuery(canonical.Request.Root), pipelineRevisions,
+	); err != nil {
+		return SearchResponse{}, err
+	}
 	proofValid, proofDigest := service.proofBinding(actor.SecretProof)
 	tagDigest, err := service.tagRevision(queryCtx, actor.Authorization.UserID, canonical.Request.Root)
 	if err != nil {
 		return SearchResponse{}, err
 	}
 	documents, err := service.loadDocuments(
-		queryCtx, indexes, canonical.Request.Root, key, actor.Authorization.UserID, proofValid,
+		queryCtx, indexes, canonical.Request.Root, key, actor.Authorization.UserID, proofValid, pipelineRevisions,
 	)
 	if err != nil {
 		return SearchResponse{}, err
@@ -257,7 +272,10 @@ func (service *Service) Search(ctx context.Context, actor SearchActor, request S
 	if len(documents) > service.limits.MaxCandidates {
 		return SearchResponse{}, ErrResourceLimit
 	}
-	evaluation := queryEvaluationState{excerptAvailable: service.excerpts != nil, tagAvailable: service.tags != nil}
+	evaluation := queryEvaluationState{
+		excerptAvailable: service.excerpts != nil && (pipelineRevisions.Content > 0 || pipelineRevisions.OCR > 0),
+		tagAvailable:     service.tags != nil,
+	}
 	evaluated := make([]evaluatedHit, 0, len(documents))
 	for _, document := range documents {
 		truth, facts, err := service.evaluateNode(
@@ -433,6 +451,7 @@ func (service *Service) loadDocuments(
 	key backupasset.DomainKeyMaterial,
 	userID uint,
 	secretProof bool,
+	pipelineRevisions ContentPipelineRevisions,
 ) ([]searchableDocument, error) {
 	pointIDs := make([]string, 0, len(indexes))
 	for _, index := range indexes {
@@ -527,8 +546,25 @@ func (service *Service) loadDocuments(
 			return nil, fmt.Errorf("load Search field coverage: %w", err)
 		}
 		fields := make(map[SearchField]model.BackupAssetSearchDocumentField, len(fieldRows))
+		staleFields := make(map[SearchField]bool, 2)
 		for _, field := range fieldRows {
-			fields[SearchField(field.Field)] = field
+			fieldName := SearchField(field.Field)
+			if (fieldName == SearchFieldContent || fieldName == SearchFieldOCR) &&
+				!contentPipelineRevisionMatches(fieldName, field.PipelineRevision, pipelineRevisions) {
+				field.State = string(FieldCoverageUnavailable)
+				field.ExcerptRef = nil
+				staleFields[fieldName] = true
+			}
+			fields[fieldName] = field
+		}
+		if len(staleFields) > 0 {
+			filtered := postings[:0]
+			for _, posting := range postings {
+				if !staleFields[SearchField(posting.Field)] {
+					filtered = append(filtered, posting)
+				}
+			}
+			postings = filtered
 		}
 		result = append(result, searchableDocument{
 			document: document, entry: entry, postings: postings, fields: fields, current: index.point.Current,
@@ -536,6 +572,80 @@ func (service *Service) loadDocuments(
 		})
 	}
 	return result, nil
+}
+
+func (service *Service) contentPipelineRevisions(ctx context.Context) ContentPipelineRevisions {
+	if service.pipelineRevisions == nil {
+		return ContentPipelineRevisions{}
+	}
+	revisions, err := service.pipelineRevisions(ctx)
+	if err != nil || revisions.Content <= 0 || revisions.OCR <= 0 {
+		return ContentPipelineRevisions{}
+	}
+	return revisions
+}
+
+func (service *Service) applyPipelineCoverage(
+	ctx context.Context,
+	indexes []activeSearchIndex,
+	statuses []SearchIndexStatus,
+	fields map[SearchField]bool,
+	revisions ContentPipelineRevisions,
+) error {
+	required := make(map[SearchField]int64, 2)
+	if fields[SearchFieldContent] {
+		required[SearchFieldContent] = revisions.Content
+	}
+	if fields[SearchFieldOCR] {
+		required[SearchFieldOCR] = revisions.OCR
+	}
+	if fields[SearchFieldAny] {
+		required[SearchFieldContent] = revisions.Content
+		required[SearchFieldOCR] = revisions.OCR
+	}
+	if len(required) == 0 {
+		return nil
+	}
+	statusByGeneration := make(map[string]int, len(statuses))
+	for index := range statuses {
+		statusByGeneration[statuses[index].SearchGenerationID] = index
+	}
+	for _, index := range indexes {
+		statusIndex, ok := statusByGeneration[index.search.ID]
+		if !ok {
+			return fmt.Errorf("%w: Search coverage status mismatch", backupasset.ErrInvalidState)
+		}
+		for field, revision := range required {
+			if revision <= 0 || revision > int64(^uint(0)>>1) {
+				statuses[statusIndex].Coverage = CoverageUnavailable
+				continue
+			}
+			var mismatched int64
+			if err := service.db.WithContext(ctx).Model(&model.BackupAssetSearchDocumentField{}).
+				Where("search_generation_id = ? AND field = ? AND pipeline_revision <> ?", index.search.ID, field, int(revision)).
+				Count(&mismatched).Error; err != nil {
+				return fmt.Errorf("load Search pipeline coverage: %w", err)
+			}
+			if mismatched > 0 {
+				statuses[statusIndex].Coverage = CoverageUnavailable
+			}
+		}
+	}
+	return nil
+}
+
+func contentPipelineRevisionMatches(field SearchField, persisted int, active ContentPipelineRevisions) bool {
+	if persisted <= 0 {
+		return false
+	}
+	switch field {
+	case SearchFieldContent:
+		return int64(persisted) == active.Content
+	case SearchFieldOCR:
+		return int64(persisted) == active.OCR
+	default:
+		return true
+	}
 }
 
 func (service *Service) buildCandidatePlan(

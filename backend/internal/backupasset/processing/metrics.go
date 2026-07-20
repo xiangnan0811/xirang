@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"xirang/backend/internal/backupasset/processing/capabilityspec"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -51,6 +53,25 @@ const (
 	DerivedEventReconcileFailure DerivedMetricEvent = "reconcile_failure"
 )
 
+type CoverageMetricState string
+
+const (
+	CoverageMetricComplete    CoverageMetricState = "complete"
+	CoverageMetricPartial     CoverageMetricState = "partial"
+	CoverageMetricQueued      CoverageMetricState = "queued"
+	CoverageMetricFailed      CoverageMetricState = "failed"
+	CoverageMetricUnsupported CoverageMetricState = "unsupported"
+	CoverageMetricNotDeployed CoverageMetricState = "not_deployed"
+	CoverageMetricStale       CoverageMetricState = "stale"
+)
+
+type UpdaterActivationOutcome string
+
+const (
+	UpdaterActivationCommit   UpdaterActivationOutcome = "commit"
+	UpdaterActivationRollback UpdaterActivationOutcome = "rollback"
+)
+
 type Metrics interface {
 	ObserveJob(PriorityClass, ProcessingState, ProcessingErrorCategory)
 	ObserveLeaseLoss()
@@ -61,6 +82,8 @@ type Metrics interface {
 	AddSinkBytes(int64)
 	SetDerived(DerivedMetricKind, int64)
 	ObserveDerived(DerivedMetricEvent)
+	SetCoverage(string, string, CoverageMetricState, int64)
+	ObserveUpdaterActivation(UpdaterActivationOutcome)
 }
 
 type NoopMetrics struct{}
@@ -74,6 +97,8 @@ func (NoopMetrics) SetQueue(PriorityClass, ProcessingState, int64, time.Duration
 func (NoopMetrics) AddSinkBytes(int64)                                                 {}
 func (NoopMetrics) SetDerived(DerivedMetricKind, int64)                                {}
 func (NoopMetrics) ObserveDerived(DerivedMetricEvent)                                  {}
+func (NoopMetrics) SetCoverage(string, string, CoverageMetricState, int64)             {}
+func (NoopMetrics) ObserveUpdaterActivation(UpdaterActivationOutcome)                  {}
 
 type PrometheusMetrics struct {
 	jobs          *prometheus.CounterVec
@@ -86,6 +111,8 @@ type PrometheusMetrics struct {
 	sinkBytes     prometheus.Counter
 	derived       *prometheus.GaugeVec
 	derivedEvents *prometheus.CounterVec
+	coverage      *prometheus.GaugeVec
+	activations   *prometheus.CounterVec
 }
 
 func NewPrometheusMetrics(registerer prometheus.Registerer) (*PrometheusMetrics, error) {
@@ -133,10 +160,19 @@ func NewPrometheusMetrics(registerer prometheus.Registerer) (*PrometheusMetrics,
 			Name: "xirang_backup_asset_processing_derived_events_total",
 			Help: "Total Derived Store security and reconciliation events by closed kind.",
 		}, []string{"event"}),
+		coverage: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "xirang_backup_asset_processing_coverage",
+			Help: "Current bounded Processing coverage by closed capability, profile, and state.",
+		}, []string{"capability", "profile", "state"}),
+		activations: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "xirang_backup_asset_processing_updater_activation_total",
+			Help: "Total updater activation decisions by closed outcome.",
+		}, []string{"outcome"}),
 	}
 	for _, collector := range []prometheus.Collector{
 		metrics.jobs, metrics.leaseLoss, metrics.jobDuration, metrics.workers, metrics.slots,
 		metrics.queue, metrics.queueAge, metrics.sinkBytes, metrics.derived, metrics.derivedEvents,
+		metrics.coverage, metrics.activations,
 	} {
 		if err := registerer.Register(collector); err != nil {
 			return nil, fmt.Errorf("register backup asset Processing metric: %w", err)
@@ -208,6 +244,25 @@ func (metrics *PrometheusMetrics) SetDerived(kind DerivedMetricKind, count int64
 func (metrics *PrometheusMetrics) ObserveDerived(event DerivedMetricEvent) {
 	if metrics != nil {
 		metrics.derivedEvents.WithLabelValues(metricDerivedEvent(event)).Inc()
+	}
+}
+
+func (metrics *PrometheusMetrics) SetCoverage(
+	capability string,
+	profile string,
+	state CoverageMetricState,
+	count int64,
+) {
+	if metrics == nil {
+		return
+	}
+	closedCapability, closedProfile := metricCapabilityProfile(capability, profile)
+	metrics.coverage.WithLabelValues(closedCapability, closedProfile, metricCoverageState(state)).Set(nonnegativeMetric(count))
+}
+
+func (metrics *PrometheusMetrics) ObserveUpdaterActivation(outcome UpdaterActivationOutcome) {
+	if metrics != nil {
+		metrics.activations.WithLabelValues(metricUpdaterActivation(outcome)).Inc()
 	}
 }
 
@@ -287,6 +342,30 @@ func metricDerivedEvent(value DerivedMetricEvent) string {
 	default:
 		return "unknown"
 	}
+}
+
+func metricCapabilityProfile(capability, profile string) (string, string) {
+	if _, ok := capabilityspec.Lookup(capability, profile, true); ok {
+		return capability, profile
+	}
+	return "unknown", "unknown"
+}
+
+func metricCoverageState(value CoverageMetricState) string {
+	switch value {
+	case CoverageMetricComplete, CoverageMetricPartial, CoverageMetricQueued, CoverageMetricFailed,
+		CoverageMetricUnsupported, CoverageMetricNotDeployed, CoverageMetricStale:
+		return string(value)
+	default:
+		return "unknown"
+	}
+}
+
+func metricUpdaterActivation(value UpdaterActivationOutcome) string {
+	if value == UpdaterActivationCommit || value == UpdaterActivationRollback {
+		return string(value)
+	}
+	return "unknown"
 }
 
 func nonnegativeMetric(value int64) float64 {

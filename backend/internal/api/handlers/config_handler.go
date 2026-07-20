@@ -298,6 +298,9 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 	}
 	exportSettings := make([]gin.H, 0, len(dbSettings))
 	for _, s := range dbSettings {
+		if settings.IsInternalSettingKey(s.Key) {
+			continue
+		}
 		if !includeSecrets && configExportSettingLooksSensitive(s) {
 			continue
 		}

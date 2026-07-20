@@ -58,6 +58,7 @@ type AuthorizedAsset struct {
 	CatalogGenerationID          string
 	RepositoryID                 string
 	Provider                     backupasset.ProviderKind
+	ProviderCapabilityRevision   int64
 	SourceFingerprint            string
 	EntryFingerprint             string
 	FingerprintStrength          string
@@ -74,6 +75,11 @@ type AuthorizedAsset struct {
 type AssetAuthorizer interface {
 	Authorize(context.Context, DeliveryActor, backupasset.AssetRef, DeliveryAction) (AuthorizedAsset, error)
 	Reauthorize(context.Context, DeliveryActor, AuthorizedAsset, DeliveryAction) error
+}
+
+type DerivedRepresentationSource interface {
+	Resolve(context.Context, DerivedRepresentationRequest) (DerivedRepresentation, error)
+	Open(context.Context, DerivedRepresentation, SourceRequest) (SourceSession, error)
 }
 
 type DeliverySessionValidator interface {
@@ -107,19 +113,21 @@ type BrokerConfig struct {
 }
 
 type BrokerDependencies struct {
-	DB             *gorm.DB
-	Now            func() time.Time
-	FeatureEnabled func(context.Context) (bool, error)
-	Authorize      AssetAuthorizer
-	Session        DeliverySessionValidator
-	Lease          ContentLeaseController
-	Source         SourceResolver
-	Audit          BrokerAudit
-	Budget         BrokerBudget
-	Metrics        Metrics
-	TicketMaterial func() (TicketMaterial, error)
-	RequestID      func() (string, error)
-	Config         func(context.Context) (BrokerConfig, error)
+	DB                     *gorm.DB
+	Now                    func() time.Time
+	FeatureEnabled         func(context.Context) (bool, error)
+	Authorize              AssetAuthorizer
+	Session                DeliverySessionValidator
+	Lease                  ContentLeaseController
+	Source                 SourceResolver
+	Derived                DerivedRepresentationSource
+	SecurityPolicyRevision func(context.Context) (string, error)
+	Audit                  BrokerAudit
+	Budget                 BrokerBudget
+	Metrics                Metrics
+	TicketMaterial         func() (TicketMaterial, error)
+	RequestID              func() (string, error)
+	Config                 func(context.Context) (BrokerConfig, error)
 }
 
 type IssueRequest struct {
@@ -172,29 +180,32 @@ type activeContentRead struct {
 }
 
 type Broker struct {
-	db             *gorm.DB
-	now            func() time.Time
-	featureEnabled func(context.Context) (bool, error)
-	authorize      AssetAuthorizer
-	session        DeliverySessionValidator
-	lease          ContentLeaseController
-	source         SourceResolver
-	audit          BrokerAudit
-	budget         BrokerBudget
-	metrics        Metrics
-	ticketMaterial func() (TicketMaterial, error)
-	requestID      func() (string, error)
-	config         func(context.Context) (BrokerConfig, error)
+	db                     *gorm.DB
+	now                    func() time.Time
+	featureEnabled         func(context.Context) (bool, error)
+	authorize              AssetAuthorizer
+	session                DeliverySessionValidator
+	lease                  ContentLeaseController
+	source                 SourceResolver
+	derived                DerivedRepresentationSource
+	securityPolicyRevision func(context.Context) (string, error)
+	audit                  BrokerAudit
+	budget                 BrokerBudget
+	metrics                Metrics
+	ticketMaterial         func() (TicketMaterial, error)
+	requestID              func() (string, error)
+	config                 func(context.Context) (BrokerConfig, error)
 
-	mu        sync.Mutex
-	closed    bool
-	accepting bool
-	issues    sync.WaitGroup
-	leases    map[string]*ContentLeaseSession
-	assets    map[string]AuthorizedAsset
-	reads     map[string]map[string]activeContentRead
-	inFlight  map[backupasset.ProviderKind]int
-	cache     *AuthenticatedCache
+	mu              sync.Mutex
+	closed          bool
+	accepting       bool
+	issues          sync.WaitGroup
+	leases          map[string]*ContentLeaseSession
+	assets          map[string]AuthorizedAsset
+	derivedBindings map[string]DerivedRepresentation
+	reads           map[string]map[string]activeContentRead
+	inFlight        map[backupasset.ProviderKind]int
+	cache           *AuthenticatedCache
 }
 
 func NewBroker(dependencies BrokerDependencies) (*Broker, error) {
@@ -202,6 +213,9 @@ func NewBroker(dependencies BrokerDependencies) (*Broker, error) {
 		dependencies.Authorize == nil || dependencies.Session == nil || dependencies.Lease == nil ||
 		dependencies.Source == nil || dependencies.Audit == nil ||
 		dependencies.Budget == nil || dependencies.Config == nil {
+		return nil, ErrInvalidBrokerRequest
+	}
+	if (dependencies.Derived == nil) != (dependencies.SecurityPolicyRevision == nil) {
 		return nil, ErrInvalidBrokerRequest
 	}
 	if dependencies.TicketMaterial == nil {
@@ -223,11 +237,13 @@ func NewBroker(dependencies BrokerDependencies) (*Broker, error) {
 	return &Broker{
 		db: dependencies.DB, now: dependencies.Now, featureEnabled: dependencies.FeatureEnabled,
 		authorize: dependencies.Authorize, session: dependencies.Session, lease: dependencies.Lease,
-		source: dependencies.Source, audit: dependencies.Audit,
+		source: dependencies.Source, derived: dependencies.Derived,
+		securityPolicyRevision: dependencies.SecurityPolicyRevision, audit: dependencies.Audit,
 		budget: dependencies.Budget, metrics: dependencies.Metrics,
 		ticketMaterial: dependencies.TicketMaterial, requestID: dependencies.RequestID, config: dependencies.Config,
 		leases: make(map[string]*ContentLeaseSession), assets: make(map[string]AuthorizedAsset),
-		reads: make(map[string]map[string]activeContentRead), inFlight: make(map[backupasset.ProviderKind]int), accepting: true,
+		derivedBindings: make(map[string]DerivedRepresentation),
+		reads:           make(map[string]map[string]activeContentRead), inFlight: make(map[backupasset.ProviderKind]int), accepting: true,
 	}, nil
 }
 
@@ -318,6 +334,14 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 	if err != nil {
 		return IssuedTicket{}, ErrInvalidBrokerRequest
 	}
+	representationAsset := asset
+	derivedBinding, err := broker.resolveDerivedRepresentation(ctx, request, asset)
+	if err != nil {
+		return IssuedTicket{}, err
+	}
+	if derivedBinding != nil {
+		representationAsset = authorizedAssetForDerived(asset, *derivedBinding)
+	}
 	profileTTL := config.PreviewTTL
 	if request.Action == DeliveryDownload || request.Renderer == RendererNativeAudio || request.Renderer == RendererNativeVideo {
 		profileTTL = config.MediaTTL
@@ -339,12 +363,12 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 	ticketDeadline := minTime(now.Add(config.TicketTimeout), deadlines.AbsoluteExpiresAt)
 	ticketCtx, cancel := context.WithDeadline(ctx, ticketDeadline)
 	defer cancel()
-	prefix, stat, capabilities, err := broker.readTicketPrefix(ticketCtx, asset, classifier, renderer)
+	prefix, stat, capabilities, err := broker.readTicketPrefix(ticketCtx, representationAsset, derivedBinding, classifier, renderer)
 	if err != nil {
 		return IssuedTicket{}, err
 	}
 	classification, err := classifier.Classify(ticketCtx, ClassificationRequest{
-		Path: asset.Path, Name: asset.Name, SourceSize: stat.Size, ProviderMediaType: asset.MediaType,
+		Path: asset.Path, Name: asset.Name, SourceSize: stat.Size, ProviderMediaType: representationAsset.MediaType,
 		CatalogGenerationID: asset.CatalogGenerationID, SourceFingerprint: asset.SourceFingerprint,
 		Search: searchClassificationEvidence(asset),
 	}, bytes.NewReader(prefix))
@@ -352,15 +376,15 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 		return IssuedTicket{}, err
 	}
 	auditGrant.Classification = string(classification.Classification)
-	asset.RangeProven = asset.RangeProven && capabilities.Range
+	representationAsset.RangeProven = representationAsset.RangeProven && capabilities.Range
 	rangePolicy := RangeNone
 	if cacheEligibleRenderer(request.Renderer) &&
-		(asset.RangeProven || broker.cacheRangeAvailable(cacheObjectForAsset(request.Actor.UserID, asset, request.Renderer, request.Profile))) {
+		(representationAsset.RangeProven || broker.cacheRangeAvailable(cacheObjectForAsset(request.Actor.UserID, representationAsset, request.Renderer, request.Profile))) {
 		rangePolicy = RangeSingle
 	}
 	renderPlan, err := renderer.Prepare(RenderRequest{
 		Action: request.Action, Renderer: request.Renderer, Profile: request.Profile, Range: rangePolicy,
-		SourceSize: stat.Size, Prefix: prefix, ProviderMediaType: asset.MediaType, Filename: asset.Name,
+		SourceSize: stat.Size, Prefix: prefix, ProviderMediaType: representationAsset.MediaType, Filename: asset.Name,
 	})
 	if err != nil {
 		return IssuedTicket{}, err
@@ -373,8 +397,8 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 	if err := ValidateDeliveryProduct(product, now); err != nil {
 		return IssuedTicket{}, err
 	}
-	etag := representationETag(asset, product, renderPlan, classification)
-	grant := buildIssuedGrant(request, asset, material, leaseBinding, deadlines, renderPlan, classification, etag, config, now)
+	etag := representationETag(representationAsset, product, renderPlan, classification)
+	grant := buildIssuedGrant(request, representationAsset, material, leaseBinding, deadlines, renderPlan, classification, etag, config, now)
 	auditGrant = grant
 	if err := broker.db.WithContext(ticketCtx).Create(&grant).Error; err != nil {
 		return IssuedTicket{}, err
@@ -400,6 +424,9 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 	broker.mu.Lock()
 	broker.leases[grant.ID] = lease
 	broker.assets[grant.ID] = asset
+	if derivedBinding != nil {
+		broker.derivedBindings[grant.ID] = *derivedBinding
+	}
 	broker.mu.Unlock()
 	releaseLease = false
 	metricOutcome = MetricOutcomeSuccess
@@ -407,7 +434,7 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 		Descriptor: TicketDescriptor{
 			SchemaVersion: 1, ContentURL: cookie.Path, Action: request.Action,
 			Renderer: request.Renderer, Profile: request.Profile, ContentType: renderPlan.MediaType,
-			ContentLength: renderPlan.Size, ETag: etag, LastModified: asset.ModifiedAt,
+			ContentLength: renderPlan.Size, ETag: etag, LastModified: representationAsset.ModifiedAt,
 			Range: rangePolicy, Classification: classification.Classification,
 			ExpiresAt: deadlines.AbsoluteExpiresAt, IdleExpiresAt: deadlines.IdleExpiresAt,
 			FallbackActions: []DeliveryAction{},
@@ -616,10 +643,19 @@ func (broker *Broker) authorizeGatewayRequest(
 	broker.mu.Lock()
 	asset, assetFound := broker.assets[grant.ID]
 	lease := broker.leases[grant.ID]
+	derivedBinding, derivedFound := broker.derivedBindings[grant.ID]
 	broker.mu.Unlock()
-	if !assetFound || !authorizedAssetMatchesGrant(asset, grant) {
+	if !assetFound || !authorizedAssetMatchesGrant(asset, grant, derivedBinding, derivedFound) {
 		broker.revokeIssuedGrant(ctx, grant.ID, "source_changed", broker.now().UTC())
 		return grant, actor, session, AuthorizedAsset{}, nil, ErrContentNotFound
+	}
+	if derivedFound {
+		policyRevision, revisionErr := broker.securityPolicyRevision(ctx)
+		if revisionErr != nil || strings.TrimSpace(policyRevision) != policyRevision || policyRevision == "" ||
+			len(policyRevision) > 128 || policyRevision != derivedBinding.SecurityPolicyRevision {
+			broker.revokeIssuedGrant(ctx, grant.ID, "policy_changed", broker.now().UTC())
+			return grant, actor, session, asset, nil, ErrContentNotFound
+		}
 	}
 	if err := broker.authorize.Reauthorize(ctx, actor, asset, DeliveryAction(grant.Action)); err != nil {
 		broker.revokeIssuedGrant(ctx, grant.ID, "permission_changed", broker.now().UTC())
@@ -847,7 +883,14 @@ func (broker *Broker) openGatewaySource(
 	grant model.BackupAssetDeliveryGrant,
 	request SourceRequest,
 ) error {
-	source, err := broker.source.OpenContentSource(ctx, request)
+	broker.mu.Lock()
+	binding, derived := broker.derivedBindings[grant.ID]
+	broker.mu.Unlock()
+	var bindingPointer *DerivedRepresentation
+	if derived {
+		bindingPointer = &binding
+	}
+	source, err := broker.openRepresentationSource(ctx, bindingPointer, request)
 	if err != nil {
 		return ErrContentUnavailable
 	}
@@ -985,6 +1028,7 @@ func (broker *Broker) drain(ctx context.Context, reason string, permanent bool) 
 			leases[grantID] = lease
 			delete(broker.leases, grantID)
 			delete(broker.assets, grantID)
+			delete(broker.derivedBindings, grantID)
 		}
 	}
 	broker.mu.Unlock()
@@ -1054,6 +1098,7 @@ func (broker *Broker) RevokeSession(ctx context.Context, sessionJTI, reason stri
 		if len(broker.reads[grantID]) == 0 {
 			delete(broker.leases, grantID)
 			delete(broker.assets, grantID)
+			delete(broker.derivedBindings, grantID)
 		} else {
 			lease = nil
 		}
@@ -1099,9 +1144,56 @@ func waitForActiveReads(ctx context.Context, waits map[string][]<-chan struct{})
 	return nil
 }
 
+func (broker *Broker) resolveDerivedRepresentation(
+	ctx context.Context,
+	request IssueRequest,
+	asset AuthorizedAsset,
+) (*DerivedRepresentation, error) {
+	if broker.derived == nil || request.Action != DeliveryPreview {
+		return nil, nil
+	}
+	policyRevision, err := broker.securityPolicyRevision(ctx)
+	if err != nil || strings.TrimSpace(policyRevision) != policyRevision || policyRevision == "" || len(policyRevision) > 128 {
+		return nil, ErrContentSourceUnavailable
+	}
+	binding, err := broker.derived.Resolve(ctx, DerivedRepresentationRequest{
+		Ref: asset.Ref, CatalogGenerationID: asset.CatalogGenerationID,
+		SourceFingerprint: asset.SourceFingerprint, SecurityPolicyRevision: policyRevision,
+		Provider: asset.Provider, Renderer: request.Renderer, Profile: request.Profile,
+	})
+	if errors.Is(err, ErrDerivedRepresentationUnavailable) {
+		return nil, nil
+	}
+	if err != nil || !derivedRepresentationMatchesAsset(binding, asset, request) {
+		return nil, ErrContentSourceUnavailable
+	}
+	return &binding, nil
+}
+
+func authorizedAssetForDerived(asset AuthorizedAsset, binding DerivedRepresentation) AuthorizedAsset {
+	asset.EntryFingerprint = binding.EntryFingerprint
+	asset.FingerprintStrength = "strong"
+	asset.Size = binding.Size
+	asset.ModifiedAt = cloneDerivedTime(binding.ModifiedAt)
+	asset.MediaType = binding.MediaType
+	asset.RangeProven = false
+	return asset
+}
+
+func derivedRepresentationMatchesAsset(
+	binding DerivedRepresentation,
+	asset AuthorizedAsset,
+	request IssueRequest,
+) bool {
+	return validDerivedBinding(binding) && binding.Ref == asset.Ref && binding.CatalogGenerationID == asset.CatalogGenerationID &&
+		binding.SourceFingerprint == asset.SourceFingerprint && binding.Provider == asset.Provider &&
+		binding.Renderer == request.Renderer && binding.Profile == request.Profile
+}
+
 func (broker *Broker) readTicketPrefix(
 	ctx context.Context,
 	asset AuthorizedAsset,
+	derived *DerivedRepresentation,
 	classifier *Classifier,
 	renderer *RendererPolicy,
 ) ([]byte, SourceStat, SourceCapabilities, error) {
@@ -1119,7 +1211,7 @@ func (broker *Broker) readTicketPrefix(
 	if asset.Size == 0 {
 		mode = SourceModeStat
 	}
-	session, err := broker.source.OpenContentSource(ctx, SourceRequest{
+	session, err := broker.openRepresentationSource(ctx, derived, SourceRequest{
 		Ref: asset.Ref, CatalogGenerationID: asset.CatalogGenerationID,
 		ExpectedSource: asset.SourceFingerprint, ExpectedEntry: asset.EntryFingerprint,
 		Mode: mode, MaxBytes: providerLimit,
@@ -1151,6 +1243,20 @@ func (broker *Broker) readTicketPrefix(
 		return nil, stat, capabilities, err
 	}
 	return prefix, stat, capabilities, nil
+}
+
+func (broker *Broker) openRepresentationSource(
+	ctx context.Context,
+	binding *DerivedRepresentation,
+	request SourceRequest,
+) (SourceSession, error) {
+	if binding == nil {
+		return broker.source.OpenContentSource(ctx, request)
+	}
+	if broker.derived == nil {
+		return nil, ErrDerivedRepresentationUnavailable
+	}
+	return broker.derived.Open(ctx, *binding, request)
 }
 
 func validIssueRequest(request IssueRequest, now time.Time) bool {
@@ -1386,6 +1492,7 @@ func (broker *Broker) revokeGrantAfterRead(ctx context.Context, grantID, current
 	if len(remaining) == 0 || len(remaining) == 1 && remaining[currentRequestID].done != nil {
 		delete(broker.leases, grantID)
 		delete(broker.assets, grantID)
+		delete(broker.derivedBindings, grantID)
 	} else {
 		lease = nil
 	}
@@ -1525,16 +1632,32 @@ func validGatewayMediaType(grant model.BackupAssetDeliveryGrant) bool {
 	}
 }
 
-func authorizedAssetMatchesGrant(asset AuthorizedAsset, grant model.BackupAssetDeliveryGrant) bool {
+func authorizedAssetMatchesGrant(
+	asset AuthorizedAsset,
+	grant model.BackupAssetDeliveryGrant,
+	derived DerivedRepresentation,
+	derivedFound bool,
+) bool {
 	if grant.RecoveryPointID == nil || grant.CatalogGenerationID == nil || grant.EntryID == nil {
 		return false
 	}
-	return asset.Ref == (backupasset.AssetRef{RecoveryPointID: *grant.RecoveryPointID, EntryID: *grant.EntryID}) &&
+	identityMatches := asset.Ref == (backupasset.AssetRef{RecoveryPointID: *grant.RecoveryPointID, EntryID: *grant.EntryID}) &&
 		asset.CatalogGenerationID == *grant.CatalogGenerationID && asset.Provider == backupasset.ProviderKind(grant.ProviderKind) &&
-		asset.SourceFingerprint == grant.SourceFingerprint && asset.EntryFingerprint == grant.EntryFingerprint &&
-		asset.FingerprintStrength == grant.FingerprintStrength && asset.Size == grant.SourceSize &&
-		classificationSourceRevisionForAsset(asset) == grant.ClassificationSourceRevision &&
-		sameContentTime(asset.ModifiedAt, grant.SourceModifiedAt)
+		asset.SourceFingerprint == grant.SourceFingerprint &&
+		classificationSourceRevisionForAsset(asset) == grant.ClassificationSourceRevision
+	if !identityMatches {
+		return false
+	}
+	if !derivedFound {
+		return asset.EntryFingerprint == grant.EntryFingerprint && asset.FingerprintStrength == grant.FingerprintStrength &&
+			asset.Size == grant.SourceSize && sameContentTime(asset.ModifiedAt, grant.SourceModifiedAt)
+	}
+	return validDerivedBinding(derived) && derived.Ref == asset.Ref &&
+		derived.CatalogGenerationID == asset.CatalogGenerationID && derived.SourceFingerprint == asset.SourceFingerprint &&
+		derived.Provider == asset.Provider && derived.Renderer == Renderer(grant.Renderer) &&
+		derived.Profile == RendererProfile(grant.Profile) && derived.EntryFingerprint == grant.EntryFingerprint &&
+		grant.FingerprintStrength == "strong" && derived.Size == grant.SourceSize &&
+		sameContentTime(derived.ModifiedAt, grant.SourceModifiedAt)
 }
 
 func classificationSourceRevisionForAsset(asset AuthorizedAsset) int64 {

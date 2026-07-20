@@ -63,9 +63,10 @@ type WorkRequest struct {
 }
 
 type WorkResult struct {
-	JobID   string
-	WorkKey string
-	Created bool
+	JobID      string
+	InterestID string
+	WorkKey    string
+	Created    bool
 }
 
 type PullRequest struct {
@@ -175,13 +176,14 @@ func (coordinator *Coordinator) RequestWork(ctx context.Context, request WorkReq
 			if err != nil {
 				return err
 			}
-			if err := coordinator.upsertInterestTx(ctx, tx, job.ID, request.Interest); err != nil {
+			interestID, err := coordinator.upsertInterestTx(ctx, tx, job.ID, request.Interest)
+			if err != nil {
 				return err
 			}
 			if err := coordinator.recomputePriorityTx(ctx, tx, job.ID); err != nil {
 				return err
 			}
-			result = WorkResult{JobID: job.ID, WorkKey: workKey, Created: created}
+			result = WorkResult{JobID: job.ID, InterestID: interestID, WorkKey: workKey, Created: created}
 			return nil
 		})
 	})
@@ -651,25 +653,25 @@ func (coordinator *Coordinator) findOrCreateJobTx(ctx context.Context, tx *gorm.
 	return job, true, nil
 }
 
-func (coordinator *Coordinator) upsertInterestTx(ctx context.Context, tx *gorm.DB, jobID string, request InterestRequest) error {
+func (coordinator *Coordinator) upsertInterestTx(ctx context.Context, tx *gorm.DB, jobID string, request InterestRequest) (string, error) {
 	var existing model.BackupAssetProcessingInterest
 	result := tx.WithContext(ctx).Where("job_id = ? AND owner_kind = ? AND owner_key = ? AND active = ?", jobID, request.OwnerKind, request.OwnerKey, true).
 		Limit(1).Find(&existing)
 	if result.Error != nil {
-		return fmt.Errorf("load processing interest: %w", result.Error)
+		return "", fmt.Errorf("load processing interest: %w", result.Error)
 	}
 	now := coordinator.utcNow()
 	if result.RowsAffected == 1 {
 		if err := tx.WithContext(ctx).Model(&existing).Updates(map[string]any{
 			"priority_class": string(request.PriorityClass), "priority": request.Priority, "updated_at": now,
 		}).Error; err != nil {
-			return fmt.Errorf("update processing interest: %w", err)
+			return "", fmt.Errorf("update processing interest: %w", err)
 		}
-		return nil
+		return existing.ID, nil
 	}
 	id, err := backupasset.NewOpaqueID()
 	if err != nil {
-		return err
+		return "", err
 	}
 	interest := model.BackupAssetProcessingInterest{
 		ID: id, JobID: jobID, OwnerKind: string(request.OwnerKind), OwnerKey: request.OwnerKey,
@@ -677,9 +679,9 @@ func (coordinator *Coordinator) upsertInterestTx(ctx context.Context, tx *gorm.D
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := tx.WithContext(ctx).Create(&interest).Error; err != nil {
-		return fmt.Errorf("create processing interest: %w", err)
+		return "", fmt.Errorf("create processing interest: %w", err)
 	}
-	return nil
+	return id, nil
 }
 
 func (coordinator *Coordinator) recomputePriorityTx(ctx context.Context, tx *gorm.DB, jobID string) error {

@@ -6183,6 +6183,380 @@ const docTemplate = `{
                 }
             }
         },
+        "/recovery-points/{id}/entries/{entryId}/preview-jobs": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "只接受 URI 中的精确 AssetRef 与闭合 representation/profile；queued 响应中的 job_id 是独立 processing-interest handle",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "创建备份资产增强预览任务",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Catalog entry opaque ID",
+                        "name": "entryId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "闭合增强预览请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupProcessingCreatePayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.PreviewJobResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.PreviewJobResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-points/{id}/entries/{entryId}/preview-jobs/{jobId}": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "查询备份资产增强预览任务",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Catalog entry opaque ID",
+                        "name": "entryId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "processing-interest opaque ID",
+                        "name": "jobId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.PreviewJobResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-points/{id}/entries/{entryId}/preview-jobs/{jobId}/cancel": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "取消当前用户的增强预览 interest",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Catalog entry opaque ID",
+                        "name": "entryId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "processing-interest opaque ID",
+                        "name": "jobId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "固定版本取消请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupProcessingCancelPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupProcessingCancelResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-points/{id}/entries/{entryId}/processing": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回闭合 representation 状态，不创建任务且不暴露内部处理身份",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "查看精确备份资产的增强处理状态",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Catalog entry opaque ID",
+                        "name": "entryId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.AssetProcessingState"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/recovery-points/{id}/evidence": {
             "get": {
                 "security": [
@@ -10700,6 +11074,56 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.backupProcessingCancelPayload": {
+            "type": "object",
+            "properties": {
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
+        "internal_api_handlers.backupProcessingCancelResult": {
+            "type": "object",
+            "properties": {
+                "canceled": {
+                    "type": "boolean"
+                },
+                "schema_version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.backupProcessingCreatePayload": {
+            "type": "object",
+            "properties": {
+                "profile": {
+                    "type": "string"
+                },
+                "representation": {
+                    "enum": [
+                        "thumbnail",
+                        "text",
+                        "document_pages",
+                        "media_preview",
+                        "archive_index"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.PreviewRepresentation"
+                        }
+                    ]
+                },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
         "internal_api_handlers.backupRepositoryConnectRequest": {
             "type": "object",
             "properties": {
@@ -13651,6 +14075,111 @@ const docTemplate = `{
                 }
             }
         },
+        "xirang_backend_internal_backupasset_processing.AssetProcessingState": {
+            "type": "object",
+            "properties": {
+                "representations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.PreviewJobResult"
+                    }
+                },
+                "schema_version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_processing.PreviewJobResult": {
+            "type": "object",
+            "properties": {
+                "capability": {
+                    "type": "string"
+                },
+                "coverage": {
+                    "type": "string"
+                },
+                "fallback_actions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "freshness": {
+                    "type": "string"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "poll_after_seconds": {
+                    "type": "integer"
+                },
+                "profile": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "representation": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.PreviewRepresentation"
+                },
+                "retryable": {
+                    "type": "boolean"
+                },
+                "scan_status": {
+                    "type": "string"
+                },
+                "schema_version": {
+                    "type": "integer"
+                },
+                "sensitivity_status": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.ProcessingProductState"
+                },
+                "terminal": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_processing.PreviewRepresentation": {
+            "type": "string",
+            "enum": [
+                "thumbnail",
+                "text",
+                "document_pages",
+                "media_preview",
+                "archive_index"
+            ],
+            "x-enum-varnames": [
+                "PreviewThumbnail",
+                "PreviewText",
+                "PreviewDocumentPages",
+                "PreviewMedia",
+                "PreviewArchiveIndex"
+            ]
+        },
+        "xirang_backend_internal_backupasset_processing.ProcessingProductState": {
+            "type": "string",
+            "enum": [
+                "native",
+                "derived",
+                "partial",
+                "unsupported",
+                "not_deployed",
+                "queued",
+                "failed"
+            ],
+            "x-enum-varnames": [
+                "ProcessingProductNative",
+                "ProcessingProductDerived",
+                "ProcessingProductPartial",
+                "ProcessingProductUnsupported",
+                "ProcessingProductNotDeployed",
+                "ProcessingProductQueued",
+                "ProcessingProductFailed"
+            ]
+        },
         "xirang_backend_internal_backupasset_repository.ConnectResult": {
             "type": "object",
             "properties": {
@@ -13770,6 +14299,9 @@ const docTemplate = `{
         "xirang_backend_internal_backupasset_runtime.ProcessingAdminSummary": {
             "type": "object",
             "properties": {
+                "backfill_policy": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.ProcessingBackfillPolicy"
+                },
                 "configured": {
                     "type": "boolean"
                 },
@@ -13799,6 +14331,35 @@ const docTemplate = `{
                 },
                 "worker_counts": {
                     "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.ProcessingWorkerCounts"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_runtime.ProcessingBackfillPolicy": {
+            "type": "object",
+            "properties": {
+                "batch_size": {
+                    "type": "integer"
+                },
+                "bytes_per_hour": {
+                    "type": "integer"
+                },
+                "capability_concurrency": {
+                    "type": "integer"
+                },
+                "jobs_per_hour": {
+                    "type": "integer"
+                },
+                "paused": {
+                    "type": "boolean"
+                },
+                "provider_concurrency": {
+                    "type": "integer"
+                },
+                "revision": {
+                    "type": "string"
+                },
+                "schema_version": {
+                    "type": "integer"
                 }
             }
         },

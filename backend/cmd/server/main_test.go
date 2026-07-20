@@ -166,3 +166,46 @@ func TestNewWorkerHTTPServerHasDedicatedBoundsAndConnContext(t *testing.T) {
 		}
 	}
 }
+
+func TestMainUsesDedicatedAuthenticatedUpdaterServerBeforePublicServing(t *testing.T) {
+	sourceBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	source := string(sourceBytes)
+	for _, required := range []string{
+		"startUpdaterHTTPServer(assetRuntime)",
+		"api.NewWorkerUpdaterRouter(",
+		"processingupdater.ListenLocalUpdater(",
+		"ConnContext:       api.UpdaterConnContext",
+		"updaterServer.StopAccepting()",
+		"updaterServer.Shutdown(shutdownCtx)",
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("main.go omitted dedicated updater server boundary %q", required)
+		}
+	}
+	startup := strings.Index(source, "assetRuntime.StartupPass(context.Background())")
+	updater := strings.Index(source, "startUpdaterHTTPServer(assetRuntime)")
+	public := strings.Index(source, "router := api.NewRouter(")
+	if startup < 0 || updater <= startup || public <= updater {
+		t.Fatalf("updater listener startup order invalid: runtime=%d updater=%d public=%d", startup, updater, public)
+	}
+}
+
+func TestNewUpdaterHTTPServerHasIndependentBoundsAndConnContext(t *testing.T) {
+	server := newUpdaterHTTPServer(http.NotFoundHandler())
+	if server == nil || server.Handler == nil || server.ConnContext == nil {
+		t.Fatal("dedicated updater HTTP server omitted handler or authenticated ConnContext")
+	}
+	for name, value := range map[string]time.Duration{
+		"read header": server.ReadHeaderTimeout,
+		"read":        server.ReadTimeout,
+		"write":       server.WriteTimeout,
+		"idle":        server.IdleTimeout,
+	} {
+		if value <= 0 || value > 15*time.Minute {
+			t.Fatalf("updater %s timeout=%s is unbounded", name, value)
+		}
+	}
+}

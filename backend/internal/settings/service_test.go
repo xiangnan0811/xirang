@@ -2,6 +2,7 @@ package settings
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -14,6 +15,77 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+func TestProcessingPipelineRevisionsUseReservedTransactionalState(t *testing.T) {
+	db := setupTestDB(t)
+	service := NewService(db)
+	var first ProcessingPipelineRevisions
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		first, err = service.AdvanceProcessingPipelineRevisionsTx(context.Background(), tx, true, true)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if first.Content != 1 || first.OCR != 1 {
+		t.Fatalf("initial revisions=%+v", first)
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		_, err := service.AdvanceProcessingPipelineRevisionsTx(context.Background(), tx, false, true)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := service.ProcessingPipelineRevisions(context.Background())
+	if err != nil || current.Content != 1 || current.OCR != 2 {
+		t.Fatalf("current revisions=%+v error=%v", current, err)
+	}
+}
+
+func TestProcessingPipelineRevisionKeysAreNeverPublicSettings(t *testing.T) {
+	db := setupTestDB(t)
+	service := NewService(db)
+	keys := []string{ProcessingContentPipelineRevisionKey, ProcessingOCRPipelineRevisionKey}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		_, err := service.AdvanceProcessingPipelineRevisionsTx(context.Background(), tx, true, true)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	definitions := service.Registry()
+	all, err := service.GetAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range keys {
+		for _, definition := range definitions {
+			if definition.Key == key {
+				t.Fatalf("reserved key appeared in Registry: %s", key)
+			}
+		}
+		if _, ok := all[key]; ok || service.GetEffective(key) != "" {
+			t.Fatalf("reserved key appeared in public resolution: %s all=%v effective=%q", key, ok, service.GetEffective(key))
+		}
+		if err := service.Validate(key, "9"); err == nil {
+			t.Fatalf("reserved key passed Validate: %s", key)
+		}
+		if err := service.Update(key, "9"); err == nil {
+			t.Fatalf("reserved key passed Update: %s", key)
+		}
+		if err := service.UpdateWithTx(db, key, "9"); err == nil {
+			t.Fatalf("reserved key passed UpdateWithTx: %s", key)
+		}
+		if !IsInternalSettingKey(key) {
+			t.Fatalf("reserved key not classified internal: %s", key)
+		}
+	}
+	if err := db.Model(&model.SystemSetting{}).Where("key = ?", ProcessingOCRPipelineRevisionKey).Update("value", "invalid").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ProcessingPipelineRevisions(context.Background()); !errors.Is(err, ErrInternalSettingUnavailable) {
+		t.Fatalf("malformed internal state error=%v", err)
+	}
+}
 
 type expectedProcessingSettingDefinition struct {
 	env             string
@@ -28,37 +100,49 @@ type expectedProcessingSettingDefinition struct {
 }
 
 var expectedBackupAssetProcessingDefinitions = map[string]expectedProcessingSettingDefinition{
-	"backup_assets.processing_queue_max":                  {"BACKUP_ASSETS_PROCESSING_QUEUE_MAX", "10000", TypeInt, "1", "100000", "", "", false, false},
-	"backup_assets.processing_interactive_slots":          {"BACKUP_ASSETS_PROCESSING_INTERACTIVE_SLOTS", "2", TypeInt, "1", "64", "", "", false, false},
-	"backup_assets.processing_background_slots":           {"BACKUP_ASSETS_PROCESSING_BACKGROUND_SLOTS", "2", TypeInt, "1", "64", "", "", false, false},
-	"backup_assets.processing_pull_lease":                 {"BACKUP_ASSETS_PROCESSING_PULL_LEASE", "90s", TypeDuration, "", "", "15s", "5m", false, false},
-	"backup_assets.processing_pull_heartbeat":             {"BACKUP_ASSETS_PROCESSING_PULL_HEARTBEAT", "20s", TypeDuration, "", "", "5s", "1m", false, false},
-	"backup_assets.processing_attempt_timeout":            {"BACKUP_ASSETS_PROCESSING_ATTEMPT_TIMEOUT", "2h", TypeDuration, "", "", "1m", "24h", false, false},
-	"backup_assets.processing_retry_max":                  {"BACKUP_ASSETS_PROCESSING_RETRY_MAX", "5", TypeInt, "0", "20", "", "", false, false},
-	"backup_assets.processing_retry_base":                 {"BACKUP_ASSETS_PROCESSING_RETRY_BASE", "5s", TypeDuration, "", "", "1s", "5m", false, false},
-	"backup_assets.processing_retry_max_delay":            {"BACKUP_ASSETS_PROCESSING_RETRY_MAX_DELAY", "15m", TypeDuration, "", "", "1s", "2h", false, false},
-	"backup_assets.processing_input_request_max_bytes":    {"BACKUP_ASSETS_PROCESSING_INPUT_REQUEST_MAX_BYTES", "67108864", TypeInt, "65536", "1073741824", "", "", false, false},
-	"backup_assets.processing_input_cumulative_max_bytes": {"BACKUP_ASSETS_PROCESSING_INPUT_CUMULATIVE_MAX_BYTES", "2147483648", TypeInt, "65536", "17179869184", "", "", false, false},
-	"backup_assets.processing_input_max_requests":         {"BACKUP_ASSETS_PROCESSING_INPUT_MAX_REQUESTS", "512", TypeInt, "1", "4096", "", "", false, false},
-	"backup_assets.processing_input_max_in_flight":        {"BACKUP_ASSETS_PROCESSING_INPUT_MAX_IN_FLIGHT", "4", TypeInt, "1", "32", "", "", false, false},
-	"backup_assets.processing_sink_max_artifacts":         {"BACKUP_ASSETS_PROCESSING_SINK_MAX_ARTIFACTS", "32", TypeInt, "1", "256", "", "", false, false},
-	"backup_assets.processing_sink_artifact_max_bytes":    {"BACKUP_ASSETS_PROCESSING_SINK_ARTIFACT_MAX_BYTES", "536870912", TypeInt, "65536", "4294967296", "", "", false, false},
-	"backup_assets.processing_sink_total_max_bytes":       {"BACKUP_ASSETS_PROCESSING_SINK_TOTAL_MAX_BYTES", "1073741824", TypeInt, "65536", "17179869184", "", "", false, false},
-	"backup_assets.processing_protocol_json_max_bytes":    {"BACKUP_ASSETS_PROCESSING_PROTOCOL_JSON_MAX_BYTES", "65536", TypeInt, "4096", "1048576", "", "", false, false},
-	"backup_assets.worker_local_enabled":                  {"BACKUP_ASSETS_WORKER_LOCAL_ENABLED", "false", TypeBool, "", "", "", "", true, false},
-	"backup_assets.worker_local_socket":                   {"BACKUP_ASSETS_WORKER_LOCAL_SOCKET", "/run/xirang/asset-worker.sock", TypeString, "", "", "", "", true, false},
-	"backup_assets.worker_remote_enabled":                 {"BACKUP_ASSETS_WORKER_REMOTE_ENABLED", "false", TypeBool, "", "", "", "", true, false},
-	"backup_assets.worker_remote_listen_addr":             {"BACKUP_ASSETS_WORKER_REMOTE_LISTEN_ADDR", "", TypeString, "", "", "", "", true, false},
-	"backup_assets.worker_remote_server_cert_file":        {"BACKUP_ASSETS_WORKER_REMOTE_SERVER_CERT_FILE", "", TypeString, "", "", "", "", true, true},
-	"backup_assets.worker_remote_server_key_file":         {"BACKUP_ASSETS_WORKER_REMOTE_SERVER_KEY_FILE", "", TypeString, "", "", "", "", true, true},
-	"backup_assets.worker_remote_client_ca_file":          {"BACKUP_ASSETS_WORKER_REMOTE_CLIENT_CA_FILE", "", TypeString, "", "", "", "", true, true},
-	"backup_assets.worker_remote_trust_domain":            {"BACKUP_ASSETS_WORKER_REMOTE_TRUST_DOMAIN", "", TypeString, "", "", "", "", true, true},
-	"backup_assets.derived_store_root":                    {"BACKUP_ASSETS_DERIVED_STORE_ROOT", "/var/lib/xirang-asset-runtime/derived", TypeString, "", "", "", "", true, false},
-	"backup_assets.derived_store_chunk_bytes":             {"BACKUP_ASSETS_DERIVED_STORE_CHUNK_BYTES", "1048576", TypeInt, "65536", "8388608", "", "", true, false},
-	"backup_assets.derived_store_blob_max_bytes":          {"BACKUP_ASSETS_DERIVED_STORE_BLOB_MAX_BYTES", "4294967296", TypeInt, "65536", "17179869184", "", "", false, false},
-	"backup_assets.derived_store_global_max_bytes":        {"BACKUP_ASSETS_DERIVED_STORE_GLOBAL_MAX_BYTES", "107374182400", TypeInt, "65536", "1099511627776", "", "", false, false},
-	"backup_assets.derived_store_reconcile_interval":      {"BACKUP_ASSETS_DERIVED_STORE_RECONCILE_INTERVAL", "15m", TypeDuration, "", "", "1m", "24h", false, false},
-	"backup_assets.derived_store_reconcile_batch_size":    {"BACKUP_ASSETS_DERIVED_STORE_RECONCILE_BATCH_SIZE", "256", TypeInt, "1", "10000", "", "", false, false},
+	"backup_assets.processing_queue_max":                       {"BACKUP_ASSETS_PROCESSING_QUEUE_MAX", "10000", TypeInt, "1", "100000", "", "", false, false},
+	"backup_assets.processing_interactive_slots":               {"BACKUP_ASSETS_PROCESSING_INTERACTIVE_SLOTS", "2", TypeInt, "1", "64", "", "", false, false},
+	"backup_assets.processing_background_slots":                {"BACKUP_ASSETS_PROCESSING_BACKGROUND_SLOTS", "2", TypeInt, "1", "64", "", "", false, false},
+	"backup_assets.processing_pull_lease":                      {"BACKUP_ASSETS_PROCESSING_PULL_LEASE", "90s", TypeDuration, "", "", "15s", "5m", false, false},
+	"backup_assets.processing_pull_heartbeat":                  {"BACKUP_ASSETS_PROCESSING_PULL_HEARTBEAT", "20s", TypeDuration, "", "", "5s", "1m", false, false},
+	"backup_assets.processing_attempt_timeout":                 {"BACKUP_ASSETS_PROCESSING_ATTEMPT_TIMEOUT", "2h", TypeDuration, "", "", "1m", "24h", false, false},
+	"backup_assets.processing_retry_max":                       {"BACKUP_ASSETS_PROCESSING_RETRY_MAX", "5", TypeInt, "0", "20", "", "", false, false},
+	"backup_assets.processing_retry_base":                      {"BACKUP_ASSETS_PROCESSING_RETRY_BASE", "5s", TypeDuration, "", "", "1s", "5m", false, false},
+	"backup_assets.processing_retry_max_delay":                 {"BACKUP_ASSETS_PROCESSING_RETRY_MAX_DELAY", "15m", TypeDuration, "", "", "1s", "2h", false, false},
+	"backup_assets.processing_input_request_max_bytes":         {"BACKUP_ASSETS_PROCESSING_INPUT_REQUEST_MAX_BYTES", "67108864", TypeInt, "65536", "1073741824", "", "", false, false},
+	"backup_assets.processing_input_cumulative_max_bytes":      {"BACKUP_ASSETS_PROCESSING_INPUT_CUMULATIVE_MAX_BYTES", "2147483648", TypeInt, "65536", "17179869184", "", "", false, false},
+	"backup_assets.processing_input_max_requests":              {"BACKUP_ASSETS_PROCESSING_INPUT_MAX_REQUESTS", "512", TypeInt, "1", "4096", "", "", false, false},
+	"backup_assets.processing_input_max_in_flight":             {"BACKUP_ASSETS_PROCESSING_INPUT_MAX_IN_FLIGHT", "4", TypeInt, "1", "32", "", "", false, false},
+	"backup_assets.processing_sink_max_artifacts":              {"BACKUP_ASSETS_PROCESSING_SINK_MAX_ARTIFACTS", "32", TypeInt, "1", "256", "", "", false, false},
+	"backup_assets.processing_sink_artifact_max_bytes":         {"BACKUP_ASSETS_PROCESSING_SINK_ARTIFACT_MAX_BYTES", "536870912", TypeInt, "65536", "4294967296", "", "", false, false},
+	"backup_assets.processing_sink_total_max_bytes":            {"BACKUP_ASSETS_PROCESSING_SINK_TOTAL_MAX_BYTES", "1073741824", TypeInt, "65536", "17179869184", "", "", false, false},
+	"backup_assets.processing_protocol_json_max_bytes":         {"BACKUP_ASSETS_PROCESSING_PROTOCOL_JSON_MAX_BYTES", "65536", TypeInt, "4096", "1048576", "", "", false, false},
+	"backup_assets.processing_secret_classify":                 {"BACKUP_ASSETS_PROCESSING_SECRET_CLASSIFY", "false", TypeBool, "", "", "", "", false, false},
+	"backup_assets.processing_backfill_paused":                 {"BACKUP_ASSETS_PROCESSING_BACKFILL_PAUSED", "true", TypeBool, "", "", "", "", false, false},
+	"backup_assets.processing_backfill_batch_size":             {"BACKUP_ASSETS_PROCESSING_BACKFILL_BATCH_SIZE", "100", TypeInt, "1", "10000", "", "", false, false},
+	"backup_assets.processing_backfill_jobs_per_hour":          {"BACKUP_ASSETS_PROCESSING_BACKFILL_JOBS_PER_HOUR", "1000", TypeInt, "1", "100000", "", "", false, false},
+	"backup_assets.processing_backfill_bytes_per_hour":         {"BACKUP_ASSETS_PROCESSING_BACKFILL_BYTES_PER_HOUR", "10737418240", TypeInt, "65536", "1099511627776", "", "", false, false},
+	"backup_assets.processing_backfill_provider_concurrency":   {"BACKUP_ASSETS_PROCESSING_BACKFILL_PROVIDER_CONCURRENCY", "1", TypeInt, "1", "32", "", "", false, false},
+	"backup_assets.processing_backfill_capability_concurrency": {"BACKUP_ASSETS_PROCESSING_BACKFILL_CAPABILITY_CONCURRENCY", "1", TypeInt, "1", "32", "", "", false, false},
+	"backup_assets.processing_backfill_recent_window":          {"BACKUP_ASSETS_PROCESSING_BACKFILL_RECENT_WINDOW", "720h", TypeDuration, "", "", "24h", "8760h", false, false},
+	"backup_assets.processing_backfill_history_aging_step":     {"BACKUP_ASSETS_PROCESSING_BACKFILL_HISTORY_AGING_STEP", "24h", TypeDuration, "", "", "1h", "720h", false, false},
+	"backup_assets.worker_local_enabled":                       {"BACKUP_ASSETS_WORKER_LOCAL_ENABLED", "false", TypeBool, "", "", "", "", true, false},
+	"backup_assets.worker_local_socket":                        {"BACKUP_ASSETS_WORKER_LOCAL_SOCKET", "/run/xirang/asset-worker.sock", TypeString, "", "", "", "", true, false},
+	"backup_assets.worker_remote_enabled":                      {"BACKUP_ASSETS_WORKER_REMOTE_ENABLED", "false", TypeBool, "", "", "", "", true, false},
+	"backup_assets.worker_remote_listen_addr":                  {"BACKUP_ASSETS_WORKER_REMOTE_LISTEN_ADDR", "", TypeString, "", "", "", "", true, false},
+	"backup_assets.worker_remote_server_cert_file":             {"BACKUP_ASSETS_WORKER_REMOTE_SERVER_CERT_FILE", "", TypeString, "", "", "", "", true, true},
+	"backup_assets.worker_remote_server_key_file":              {"BACKUP_ASSETS_WORKER_REMOTE_SERVER_KEY_FILE", "", TypeString, "", "", "", "", true, true},
+	"backup_assets.worker_remote_client_ca_file":               {"BACKUP_ASSETS_WORKER_REMOTE_CLIENT_CA_FILE", "", TypeString, "", "", "", "", true, true},
+	"backup_assets.worker_remote_trust_domain":                 {"BACKUP_ASSETS_WORKER_REMOTE_TRUST_DOMAIN", "", TypeString, "", "", "", "", true, true},
+	"backup_assets.worker_updater_enabled":                     {"BACKUP_ASSETS_WORKER_UPDATER_ENABLED", "false", TypeBool, "", "", "", "", true, false},
+	"backup_assets.worker_updater_online_enabled":              {"BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ENABLED", "false", TypeBool, "", "", "", "", true, false},
+	"backup_assets.worker_updater_online_origins":              {"BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ORIGINS", "", TypeString, "", "", "", "", true, false},
+	"backup_assets.derived_store_root":                         {"BACKUP_ASSETS_DERIVED_STORE_ROOT", "/var/lib/xirang-asset-runtime/derived", TypeString, "", "", "", "", true, false},
+	"backup_assets.derived_store_chunk_bytes":                  {"BACKUP_ASSETS_DERIVED_STORE_CHUNK_BYTES", "1048576", TypeInt, "65536", "8388608", "", "", true, false},
+	"backup_assets.derived_store_blob_max_bytes":               {"BACKUP_ASSETS_DERIVED_STORE_BLOB_MAX_BYTES", "4294967296", TypeInt, "65536", "17179869184", "", "", false, false},
+	"backup_assets.derived_store_global_max_bytes":             {"BACKUP_ASSETS_DERIVED_STORE_GLOBAL_MAX_BYTES", "107374182400", TypeInt, "65536", "1099511627776", "", "", false, false},
+	"backup_assets.derived_store_reconcile_interval":           {"BACKUP_ASSETS_DERIVED_STORE_RECONCILE_INTERVAL", "15m", TypeDuration, "", "", "1m", "24h", false, false},
+	"backup_assets.derived_store_reconcile_batch_size":         {"BACKUP_ASSETS_DERIVED_STORE_RECONCILE_BATCH_SIZE", "256", TypeInt, "1", "10000", "", "", false, false},
 }
 
 func setupTestDB(t *testing.T) *gorm.DB {
@@ -268,7 +352,10 @@ func TestBackupAssetProcessingDefinitionsAndSafeDefaults(t *testing.T) {
 		}
 	}
 	service := NewService(setupTestDB(t))
-	for _, key := range []string{"backup_assets.enabled", "backup_assets.worker_local_enabled", "backup_assets.worker_remote_enabled"} {
+	for _, key := range []string{
+		"backup_assets.enabled", "backup_assets.worker_local_enabled", "backup_assets.worker_remote_enabled",
+		"backup_assets.worker_updater_enabled", "backup_assets.worker_updater_online_enabled", "backup_assets.processing_secret_classify",
+	} {
 		if value := service.GetEffective(key); value != "false" {
 			t.Errorf("%s default=%q, want false", key, value)
 		}
@@ -325,6 +412,29 @@ func TestBackupAssetProcessingCrossSettingBoundaries(t *testing.T) {
 	remote["backup_assets.worker_remote_listen_addr"] = "0.0.0.0:10762"
 	if err := ValidateBackupAssetFoundationConfig(remote); err == nil {
 		t.Fatal("wildcard remote listen address unexpectedly accepted")
+	}
+
+	updaterOnline := cloneSettingsValues(valid)
+	updaterOnline["backup_assets.worker_updater_online_enabled"] = "true"
+	updaterOnline["backup_assets.worker_updater_online_origins"] = "https://bundles.example.internal:443"
+	if err := ValidateBackupAssetFoundationConfig(updaterOnline); err == nil {
+		t.Fatal("online updater without updater identity unexpectedly accepted")
+	}
+	updaterOnline["backup_assets.worker_updater_enabled"] = "true"
+	if err := ValidateBackupAssetFoundationConfig(updaterOnline); err != nil {
+		t.Fatalf("closed updater origin rejected: %v", err)
+	}
+	for _, origins := range []string{
+		"", "http://bundles.example.internal:80", "https://bundles.example.internal",
+		"https://z.example.internal:443,https://a.example.internal:443",
+		"https://a.example.internal:443,https://a.example.internal:443",
+		"https://A.example.internal:443", "https://a.example.internal:443/path",
+	} {
+		candidate := cloneSettingsValues(updaterOnline)
+		candidate["backup_assets.worker_updater_online_origins"] = origins
+		if err := ValidateBackupAssetFoundationConfig(candidate); err == nil {
+			t.Fatalf("unsafe updater origins %q unexpectedly accepted", origins)
+		}
 	}
 }
 

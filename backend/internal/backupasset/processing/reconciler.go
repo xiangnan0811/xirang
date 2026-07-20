@@ -286,7 +286,7 @@ func (reconciler *DerivedReconciler) revokeUnreadableBlob(ctx context.Context, b
 			return ErrDerivedBlobUnavailable
 		}
 		for _, setID := range setIDs {
-			if err := reconciler.lifecycle.RevokeSet(ctx, setID, DerivedRevokeKeyLoss); err != nil {
+			if err := reconciler.lifecycle.revokeSetWithManagedFence(ctx, setID, DerivedRevokeKeyLoss); err != nil {
 				return err
 			}
 			result.RevokedUnreadableSets++

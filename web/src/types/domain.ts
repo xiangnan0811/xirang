@@ -1739,6 +1739,124 @@ export interface BackupContentTicket {
   fallbackActions: BackupContentAction[];
 }
 
+export type BackupProcessingRepresentation =
+  | "thumbnail"
+  | "text"
+  | "document_pages"
+  | "media_preview"
+  | "archive_index";
+export type BackupProcessingProductState =
+  | "native"
+  | "derived"
+  | "partial"
+  | "unsupported"
+  | "not_deployed"
+  | "queued"
+  | "failed";
+export type BackupProcessingFallbackAction = "native_preview" | "download";
+export type BackupProcessingFreshness = "current" | "stale";
+export type BackupProcessingCoverage = "complete" | "partial";
+export type BackupProcessingScanStatus = "not_scanned" | "no_finding" | "finding" | "stale";
+export type BackupProcessingSensitivityStatus = "non_secret" | "secret" | "unknown" | "stale";
+
+export interface BackupProcessingProduct {
+  schemaVersion: 1;
+  jobId: string | null;
+  state: BackupProcessingProductState;
+  representation: BackupProcessingRepresentation;
+  capability: string | null;
+  profile: string | null;
+  coverage: BackupProcessingCoverage | null;
+  freshness: BackupProcessingFreshness | null;
+  scanStatus: BackupProcessingScanStatus | null;
+  sensitivityStatus: BackupProcessingSensitivityStatus | null;
+  reason: string | null;
+  retryable: boolean;
+  fallbackActions: BackupProcessingFallbackAction[];
+  pollAfterSeconds: number;
+  terminal: boolean;
+}
+
+export interface BackupAssetProcessingState {
+  schemaVersion: 1;
+  representations: BackupProcessingProduct[];
+}
+
+export interface BackupProcessingCoverageBucket {
+  capability: string;
+  profile: string;
+  eligible: number;
+  completed: number;
+  partial: number;
+  queued: number;
+  failed: number;
+  unsupported: number;
+  notDeployed: number;
+  stale: number;
+}
+
+export interface BackupProcessingCoverageSummary extends Omit<BackupProcessingCoverageBucket, "capability" | "profile"> {
+  schemaVersion: 1;
+  generatedAt: string;
+  backlogAgeBucket: string;
+  estimatedSeconds: number | null;
+  byCapability: BackupProcessingCoverageBucket[];
+}
+
+export interface BackupProcessingUpdaterCapabilityChange {
+  capability: string;
+  capabilitySchema: string;
+  profiles: string[];
+}
+
+export type BackupProcessingUpdaterCandidateState =
+  | "registered"
+  | "verified"
+  | "active"
+  | "superseded"
+  | "failed";
+
+export interface BackupProcessingUpdaterCandidate {
+  candidateId: string;
+  sourceKind: "builtin" | "admin_registered";
+  sourceId: string;
+  version: string;
+  manifestDigest: string;
+  signingKeyFingerprint: string;
+  bundleFingerprint: string;
+  state: BackupProcessingUpdaterCandidateState;
+  reason: string | null;
+  verifiedAt: string | null;
+  activatedAt: string | null;
+  capabilityChanges: BackupProcessingUpdaterCapabilityChange[];
+}
+
+export interface BackupProcessingUpdaterStatus {
+  schemaVersion: 1;
+  enabled: boolean;
+  onlineEnabled: boolean;
+  active: BackupProcessingUpdaterCandidate | null;
+}
+
+export interface BackupProcessingBackfillPolicy {
+  schemaVersion: 1;
+  revision: string;
+  paused: boolean;
+  batchSize: number;
+  jobsPerHour: number;
+  bytesPerHour: number;
+  providerConcurrency: number;
+  capabilityConcurrency: number;
+}
+
+export interface BackupProcessingAdminControl {
+  schemaVersion: 1;
+  configured: boolean;
+  localEnabled: boolean;
+  remoteEnabled: boolean;
+  backfillPolicy: BackupProcessingBackfillPolicy;
+}
+
 export type AssetSearchField = "any" | "name" | "path" | "extension" | "tag" | "content" | "ocr";
 export type AssetSearchHitField = Exclude<AssetSearchField, "any"> | "type" | "modified_time";
 export type AssetSearchSort = "relevance" | "name_asc" | "modified_desc";

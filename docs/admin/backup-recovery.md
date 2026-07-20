@@ -96,6 +96,30 @@ Clean rollback 只适用于 `first_new_point` 激活后且从未出现任何受�
 - Rclone 不是源端时间点快照。需要数据库或应用一致性时，仍应使用应用静默、dump 或底层卷快照。
 - 一旦产生受管 reservation/history，持久 latch 会在 feature 后续关闭时继续阻止不安全的 legacy mutable fallback。关闭 `backup_assets.enabled` 不是降级或清除受管历史的方法。
 
+## 备份资产增强处理与预览（默认关闭）
+
+备份资产 Worker 是可选的增强处理面，当前**不是 GA**，也没有稳定公共 Worker 镜像。它不会替代备份引擎、Provider、RecoveryPoint、Catalog、Content Broker 或 recovery 流程。全局 `backup_assets.enabled`、本机/远程 Worker transport、独立 updater 和有限秘密分类默认都是关闭状态；仓库 Compose 的 `asset-worker` profile 仅供本地 build 与验证。
+
+Worker 只从一次性、attempt-bound Input grant 读取源内容，并把产物经一次性 Sink grant 返回 Core。它不能修改 Provider bytes，也不能访问 Repository locator、数据库、SSH/Restic/Rclone/Command 凭据、宿主源路径或网络。增强能力使用闭合 profile/limit，覆盖静态图片缩略图、有界文本/OCR、静态文档页、malware finding、媒体探测/预览以及有界归档索引；不支持或超限的内容保持原生预览、下载或 recovery 路径。
+
+资产检查器使用以下闭合状态，不会把缺少 Worker 解释为文件不存在或备份失败：
+
+| 状态 | 含义 | 可用回退 |
+|---|---|---|
+| `native` | 当前内容应继续使用现有安全原生 renderer | 原生预览、下载、recovery |
+| `derived` | 当前 source/profile/policy 对应的派生产物可用 | 可切回原生预览、下载、recovery |
+| `partial` | 只处理了有界页数、字符、时长或成员范围 | 显示精确 coverage，并保留原生路径 |
+| `queued` | 当前用户的 processing interest 已排队或运行 | 按服务端 `poll_after_seconds` 轮询；原生路径仍可用 |
+| `unsupported` | MIME/profile 或安全策略不支持该增强表示 | 原生预览、下载、recovery |
+| `not_deployed` | Worker、sandbox 或 verified bundle 未配置/不可用 | 原生预览、下载、recovery；不创建噪声失败任务 |
+| `failed` | 一次增强处理在有界重试后失败 | 显示安全原因；不改变 RecoveryPoint 可信度或源数据 |
+
+Malware 状态严格区分 `not_scanned`、`no_finding`、`finding` 和 `stale`。`finding` 是一次成功扫描得到的安全结果，不是 Worker crash，也不会被重试成 `no_finding`；`not_scanned`/`stale` 也绝不显示为安全。Preview job 创建、派生 ticket、实际读取和 Search 结果/摘要释放都会重新执行服务端 malware 与 sensitivity gate，前端状态不能放宽权限。可选 `secret.classify` 默认关闭，并且只能加强已有 Core 分类；`unknown` 与 `secret` 继续失败关闭。
+
+Text/OCR/classification 的 Derived 引用、Search postings、excerpt 和 coverage 在同一个 processing fence 与数据库事务内发布或撤销。任何一步失败都会整体回滚；旧 attempt、丢失 fence 或 Search revoke 失败不能留下 ghost projection，也不能先删除派生引用/key/blob。派生 bytes 仍通过现有 Content Broker ticket/cookie/Range/审计边界交付，不提供直接 blob URL。
+
+无 Worker、禁用 profile、bundle 激活失败或增强处理失败时，Catalog、元数据 Search、workspace、原生 text/image/PDF/audio/video/metadata 预览、下载和 recovery 均保持可用；系统不会仅因 `not_deployed` 产生 backup failure 或告警。回退应暂停 backfill、关闭 Worker/updater 设置并停止可选 profile；不得删除 Provider bytes、RecoveryPoint、Catalog 或源备份。加密 Derived 数据可留给受控调和或之后重建。
+
 ## 应用感知备份
 
 应用感知备份会根据业务应用类型，在备份前自动执行数据库 dump，降低直接备份数据目录造成不一致的风险。

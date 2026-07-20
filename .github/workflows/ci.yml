@@ -158,18 +158,18 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: env -u NODE_ENV npm ci
 
       - name: Check npm vulnerabilities
         continue-on-error: true
-        run: npm audit --audit-level=moderate
+        run: env -u NODE_ENV npm audit --audit-level=moderate
 
       - name: Run frontend check
-        run: npm run check
+        run: env -u NODE_ENV npm run check
 
       - name: Check frontend bundle budget
         # Requires dist/ produced by 'npm run check' (which includes build)
-        run: node scripts/check-bundle-budget.mjs
+        run: env -u NODE_ENV node scripts/check-bundle-budget.mjs
 
       - name: Check frontend coverage
         if: always()
@@ -207,7 +207,73 @@ jobs:
         run: bash scripts/check-asset-content-nginx.test.sh
 
       - name: Build Docker image
-        run: docker build -f deploy/allinone/Dockerfile .
+        run: docker build -t linnea7171/xirang:ci-core-smoke -f deploy/allinone/Dockerfile .
+
+      - name: Self-test core-only Compose smoke
+        run: bash scripts/test-core-compose.test.sh
+
+      - name: Run core-only Compose smoke
+        env:
+          CORE_COMPOSE_IMAGE_TAG: ci-core-smoke
+          CORE_COMPOSE_PROJECT: xirang-core-smoke-ci
+        run: bash scripts/test-core-compose.sh
+
+  asset-worker:
+    # asset-worker-no-publish: this job builds, scans and smokes local images only.
+    name: Asset Worker Build & Scan (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+
+      - name: Run malicious fixture and sandbox unit tests
+        working-directory: backend
+        run: go test ./internal/backupasset/processing/capabilities -count=1
+
+      - name: Check Compose contracts
+        run: |
+          bash scripts/check-compose-config.sh
+          bash scripts/check-compose-config.test.sh
+
+      - name: Self-test core and Worker smoke scripts
+        run: |
+          bash scripts/test-core-compose.test.sh
+          bash scripts/test-asset-worker.test.sh
+
+      - name: Build local Worker image
+        run: |
+          docker build --platform "linux/${{ matrix.arch }}" \
+            -t "xirang-asset-worker:ci-${{ matrix.arch }}" \
+            -f deploy/worker/Dockerfile .
+
+      - name: Inspect and smoke native Worker image
+        env:
+          ASSET_WORKER_IMAGE: xirang-asset-worker:ci-${{ matrix.arch }}
+          EXPECTED_WORKER_ARCH: ${{ matrix.arch }}
+        run: bash scripts/test-asset-worker.sh
+
+      - name: Scan local Worker image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: xirang-asset-worker:ci-${{ matrix.arch }}
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
 
   doc-freshness:
     name: Doc Freshness Check
