@@ -1025,3 +1025,102 @@ Investigated PR 394 Backend Test & Build failure under GitHub Actions. Root caus
 ### Next Steps
 
 - None - task complete
+
+
+## Session 27: Child 11 backup asset worker capabilities delivery
+
+**Date**: 2026-07-21
+**Task**: Child 11 backup asset worker capabilities delivery
+**Branch**: `codex/backup-assets-worker-capabilities`
+
+### Summary
+
+Implemented and verified Child 11 within the approved manifest, archived the
+Child without closing its program-level parent, and resumed remote delivery
+after the controller environment regained Git, network, PostgreSQL and Docker
+access.
+
+### Main Changes
+
+- Delivered the approved Child 11 capability layer within the exact 164-path
+  product manifest plus eight Trellis planning artifacts. The closed profile
+  set covers bounded archive/image/OCR/document/media/malware/optional-secret
+  execution, independent signed updater activation, fenced Derived/Search
+  publication, default-off policy gates, optional Worker Compose/CI build
+  contracts, and lazy frontend processing controls. No migration, model,
+  Provider-byte, all-in-one, release/publish, or Child 12+ scope was added.
+- Preserved both focused manifest amendments as separate facts: the 161-to-163
+  atomic Derived/Search reconciliation correction and the 163-to-164
+  repository Foundation settings fixture synchronization. The later closed
+  advertisement/preflight/executable parity correction added no path.
+- Corrected the approved Worker runtime smoke path after a fresh real-image RED
+  exposed `input.mp4` versus the sandbox's fixed `input.bin` contract. The
+  script now writes explicit MP4 bytes to `input.bin`; no sandbox validation,
+  tool profile or runtime isolation was weakened.
+- Created work commit `5eab59fc810295f570513233819c3f966ab55115`
+  from the exact implementation set, then archived Child 11 in
+  `10be3454ae2f8e91195ef2f2fbbd020eca09701e`. The parent remains planning.
+
+### Verification Evidence
+
+- Source and independent delivery clone matched all 166 original paths by path
+  set, regular-file type, mode and SHA-256 digest before the focused smoke fix.
+- Fresh Trellis/scope gate: task validation passed (implement JSONL 23,
+  check JSONL 24); exact manifest 164/164 unique, duplicate 0; product changes
+  158, planning artifacts 8, outside 0; staged 0 before the explicit add.
+- Final integrity gate: tracked/untracked whitespace 0/0, forbidden paths 0,
+  backend go.mod/go.sum changes 0, four paired 000067 files, 000068-000071 0,
+  and no backend/xirang-server or other checked generated artifact.
+- `env -u NODE_ENV TMPDIR=/dev/shm GOCACHE=<isolated> make check` passed after
+  the smoke correction: backend lint reported zero issues, all Go packages
+  passed, frontend passed 162 files and 919 tests, and both builds completed.
+- PostgreSQL 18 required mode passed the 000062-000067 migration/UTC row and
+  Catalog, Search, Overlay, Content and Processing behavior parity. The
+  dedicated controller container was removed afterward.
+- Bundle budgets passed at 498.14/500 KiB JS and 104.55/105 KiB CSS. Compose
+  contracts and self-tests, doc freshness and two deterministic Swagger
+  v1.16.6 generations passed with stable docs hash `477c6ace7631d...`.
+- A local linux/amd64 Worker image built with the closed toolchain. Static and
+  real non-root/read-only/network-none/seccomp runtime smoke both passed after
+  the RED/GREEN input-path correction.
+
+### Remaining CI Evidence
+
+- GitHub CI still owns the arm64 Worker build, both Trivy scans, actionlint,
+  official core-image smoke and the complete required-check result. None is
+  recorded as locally passed.
+- The `brace-expansion` advisory reproduces on unchanged main and npm audit is
+  explicitly `continue-on-error`; Child 11 does not modify dependency files.
+- Push, PR, required CI, squash merge, post-merge automation, release checks,
+  main synchronization and branch/worktree cleanup remain pending at this
+  journal snapshot.
+
+### Delivery State
+
+- Implementation verification, exact work commit and Child-only archive are
+  complete. Remote delivery is ready from base
+  `be6eebbe50dfd78e071c6d73e9c81493487fb4d5`.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5eab59fc810295f570513233819c3f966ab55115` | `feat: add backup asset worker capabilities` |
+| `10be3454ae2f8e91195ef2f2fbbd020eca09701e` | `chore(task): archive 07-20-backup-assets-worker-capabilities` |
+
+### Testing
+
+- [OK] Full `make check` with 162 frontend files / 919 tests
+- [OK] PostgreSQL 18 migration and five behavior-parity suites
+- [OK] Worker amd64 image build plus static and real sandboxed runtime smoke
+- [OK] Bundle, Compose, Swagger, doc freshness and exact scope gates
+
+### Status
+
+[OK] **Task archived; remote delivery ready**
+
+### Next Steps
+
+- Push the single feature branch, open one ready PR, require all CI checks,
+  squash merge, then verify post-merge release automation and repository hygiene.
