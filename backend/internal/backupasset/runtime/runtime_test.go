@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,8 @@ import (
 	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/content"
 	"xirang/backend/internal/backupasset/overlay"
+	"xirang/backend/internal/backupasset/processing"
+	"xirang/backend/internal/backupasset/processing/capabilityspec"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/backupasset/search"
@@ -122,6 +125,10 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 	if runtime.SearchService() == nil || runtime.OverlayService() == nil || runtime.ContentIndexIngest() == nil || runtime.searchIndexer == nil || runtime.searchWorker == nil {
 		t.Fatal("runtime omitted the Search/Overlay graph")
 	}
+	searchService := reflect.ValueOf(runtime.SearchService()).Elem()
+	if searchService.FieldByName("excerpts").IsNil() || searchService.FieldByName("malwareSafety").IsNil() {
+		t.Fatal("runtime omitted the production Search excerpt or malware release dependency")
+	}
 	contentBroker := runtime.ContentBroker()
 	if contentBroker == nil || contentBroker != runtime.contentBroker || runtime.contentManager == nil ||
 		runtime.contentBudget == nil || runtime.contentAudit == nil || runtime.contentReconciler == nil || runtime.contentReady == nil {
@@ -159,6 +166,195 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 	}
 }
 
+func TestRuntimeSearchExcerptResolverReadsOnlyCurrentCompletePublishedArtifact(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	fixture := seedRuntimeSearchExcerptFixture(t, db)
+	readCalls := 0
+	resolver := &runtimeSearchExcerptResolver{
+		db:           db,
+		resolveAsset: runtimeDerivedSourceAssetResolver(db),
+		readArtifact: func(_ context.Context, request content.DerivedArtifactRead, destination io.Writer) error {
+			readCalls++
+			if request.ArtifactID != fixture.artifactID || request.RecoveryPointID != fixture.ref.RecoveryPointID ||
+				request.CatalogGenerationID != fixture.catalogID || request.EntryID != fixture.ref.EntryID ||
+				request.SourceFingerprint != fixture.sourceFingerprint {
+				t.Fatalf("Derived excerpt read request=%+v", request)
+			}
+			_, err := io.WriteString(destination, "before NEEDLE after")
+			return err
+		},
+		activePipeline: func(_ context.Context, capability, profile string) (string, error) {
+			if capability != capabilityspec.CapabilityTextExtract || profile != capabilityspec.ProfileBoundedTextV1 {
+				t.Fatalf("active pipeline request=%q/%q", capability, profile)
+			}
+			return fixture.pipelineFingerprint, nil
+		},
+	}
+	request := search.ExcerptVerifyRequest{
+		Ref: fixture.ref, Field: search.SearchFieldContent, Terms: []string{"needle"}, ExcerptRef: fixture.artifactID,
+	}
+	snippet, verified, err := resolver.Verify(context.Background(), request)
+	if err != nil || !verified || snippet.Field != search.SearchFieldContent || !strings.Contains(snippet.Text, "NEEDLE") ||
+		len(snippet.Text) > runtimeSearchSnippetMaxBytes || readCalls != 1 {
+		t.Fatalf("verified excerpt=%+v verified=%t reads=%d err=%v", snippet, verified, readCalls, err)
+	}
+
+	if err := db.Model(&model.BackupAssetDerivedArtifactSet{}).Where("id = ?", fixture.setID).
+		Update("projection_published", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, verified, err = resolver.Verify(context.Background(), request)
+	if err != nil || verified || readCalls != 1 {
+		t.Fatalf("unpublished excerpt verified=%t reads=%d err=%v", verified, readCalls, err)
+	}
+}
+
+func TestRuntimeSearchExcerptResolverRejectsUnverifiedOrInvalidText(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	fixture := seedRuntimeSearchExcerptFixture(t, db)
+	payload := []byte("different content")
+	readCalls := 0
+	resolver := &runtimeSearchExcerptResolver{
+		db:           db,
+		resolveAsset: runtimeDerivedSourceAssetResolver(db),
+		readArtifact: func(_ context.Context, _ content.DerivedArtifactRead, destination io.Writer) error {
+			readCalls++
+			_, err := destination.Write(payload)
+			return err
+		},
+		activePipeline: func(context.Context, string, string) (string, error) {
+			return fixture.pipelineFingerprint, nil
+		},
+	}
+	request := search.ExcerptVerifyRequest{
+		Ref: fixture.ref, Field: search.SearchFieldContent, Terms: []string{"needle"}, ExcerptRef: fixture.artifactID,
+	}
+	if _, verified, err := resolver.Verify(context.Background(), request); err != nil || verified {
+		t.Fatalf("unverified excerpt verified=%t err=%v", verified, err)
+	}
+	payload = []byte{0xff, 0xfe}
+	if _, verified, err := resolver.Verify(context.Background(), request); err != nil || verified {
+		t.Fatalf("invalid UTF-8 excerpt verified=%t err=%v", verified, err)
+	}
+	updated := db.Model(&model.BackupAssetProcessingJob{}).Where("current_artifact_set_id = ?", fixture.setID).
+		Updates(map[string]any{
+			"capability": capabilityspec.CapabilityImageThumbnail, "capability_schema": "image.thumbnail.v1",
+			"output_profile": capabilityspec.ProfileRasterThumbnailV1,
+		})
+	if updated.Error != nil || updated.RowsAffected != 1 {
+		t.Fatalf("replace excerpt producer profile: rows=%d err=%v", updated.RowsAffected, updated.Error)
+	}
+	payload = []byte("before NEEDLE after")
+	if _, verified, err := resolver.Verify(context.Background(), request); err != nil || verified || readCalls != 2 {
+		t.Fatalf("profile-incompatible excerpt verified=%t reads=%d err=%v", verified, readCalls, err)
+	}
+}
+
+type runtimeSearchExcerptFixture struct {
+	ref                 backupasset.AssetRef
+	catalogID           string
+	sourceFingerprint   string
+	pipelineFingerprint string
+	setID               string
+	artifactID          string
+}
+
+func seedRuntimeSearchExcerptFixture(t *testing.T, db *gorm.DB) runtimeSearchExcerptFixture {
+	t.Helper()
+	if err := db.AutoMigrate(
+		&model.BackupRepository{}, &model.RecoveryPoint{}, &model.CatalogGeneration{}, &model.CatalogEntry{},
+		&model.BackupAssetProcessingJob{}, &model.BackupAssetProcessingAttempt{},
+		&model.BackupAssetDerivedArtifactSet{}, &model.BackupAssetDerivedArtifact{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 21, 9, 0, 0, 0, time.UTC)
+	repositoryID := strings.Repeat("1", 32)
+	pointID := strings.Repeat("2", 32)
+	catalogID := strings.Repeat("3", 32)
+	entryID := strings.Repeat("4", 64)
+	jobID := strings.Repeat("5", 32)
+	attemptID := strings.Repeat("6", 32)
+	setID := strings.Repeat("7", 32)
+	artifactID := strings.Repeat("8", 32)
+	sourceFingerprint := strings.Repeat("9", 64)
+	entryFingerprint := strings.Repeat("a", 64)
+	pipelineFingerprint := strings.Repeat("b", 64)
+	workKey := strings.Repeat("c", 64)
+	currentAttemptID, currentSetID := attemptID, setID
+	rows := []any{
+		&model.BackupRepository{
+			ID: repositoryID, ProviderKind: string(backupasset.ProviderRestic), DisplayName: "excerpt-repository",
+			VersionMode: string(backupasset.VersionNativeSnapshot), Status: string(backupasset.RepositoryOnline),
+			CapabilityRevision: 2, ImmutabilityLevel: string(backupasset.ImmutabilityBackendVersioned), CreatedAt: now, UpdatedAt: now,
+		},
+		&model.RecoveryPoint{
+			ID: pointID, RepositoryID: repositoryID, Semantics: string(backupasset.PointNativeSnapshot),
+			State: string(backupasset.RecoveryPointCommitted), SourceFingerprint: sourceFingerprint, CapabilityRevision: 2,
+			PhysicalAvailability: string(backupasset.PhysicalOnline), CreatedAt: now, UpdatedAt: now,
+		},
+		&model.CatalogGeneration{
+			ID: catalogID, RecoveryPointID: pointID, Generation: 1, State: string(catalog.GenerationComplete), IsActive: true,
+			SourceFingerprint: sourceFingerprint, ExpectedEntryCount: 1, WrittenEntryCount: 1,
+			StartedAt: now, FinishedAt: &now, CreatedAt: now, UpdatedAt: now,
+		},
+		&model.CatalogEntry{
+			GenerationID: catalogID, EntryID: entryID, RecoveryPointID: pointID, NormalizedPath: "notes.txt", Name: "notes.txt",
+			EntryType: string(backupasset.CatalogEntryFile), Size: 19, MimeType: "text/plain", Fingerprint: entryFingerprint,
+			FingerprintStrength: string(catalog.FingerprintStrong), SecurityState: "sealed", CreatedAt: now,
+		},
+		&model.BackupAssetProcessingJob{
+			ID: jobID, WorkKey: workKey, DescriptorSchemaVersion: 1, DescriptorCanonical: []byte(`{}`),
+			RecoveryPointID: pointID, CatalogGenerationID: catalogID, EntryID: entryID,
+			SourceFingerprint: sourceFingerprint, EntryFingerprint: entryFingerprint, ProviderCapabilityRevision: 2,
+			Capability: capabilityspec.CapabilityTextExtract, CapabilitySchema: "text.extract.v1",
+			PipelineFingerprint: pipelineFingerprint, OutputProfile: capabilityspec.ProfileBoundedTextV1,
+			SecurityPolicyRevision: processingSecurityPolicyRevision, PriorityClass: string(processing.PriorityBackground),
+			EffectivePriority: 1, State: string(processing.ProcessingSucceeded), TransitionRevision: 2,
+			CurrentAttemptID: &currentAttemptID, CurrentArtifactSetID: &currentSetID, IsCurrent: false,
+			QueuedAt: now, FinishedAt: &now, AbsoluteDeadline: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now,
+		},
+		&model.BackupAssetProcessingAttempt{
+			ID: attemptID, JobID: jobID, AttemptNumber: 1, WorkerID: strings.Repeat("d", 32),
+			SlotClass: string(processing.PriorityBackground), State: "succeeded", WorkerLeaseExpiresAt: now.Add(time.Minute),
+			LastHeartbeatAt: now, RecoveryPointLeaseID: strings.Repeat("e", 32), RecoveryPointAttemptID: strings.Repeat("f", 32),
+			RecoveryPointFenceHash: strings.Repeat("0", 64), AbsoluteDeadline: now.Add(time.Hour), IsCurrent: false,
+			StartedAt: now, FinishedAt: &now, CreatedAt: now, UpdatedAt: now,
+		},
+		&model.BackupAssetDerivedArtifactSet{
+			ID: setID, JobID: jobID, AttemptID: attemptID, WorkKey: workKey,
+			RecoveryPointID: pointID, CatalogGenerationID: catalogID, EntryID: entryID,
+			SourceFingerprint: sourceFingerprint, SecurityPolicyRevision: processingSecurityPolicyRevision,
+			ManifestDigest: strings.Repeat("1", 64), State: "active", Completeness: string(processing.ArtifactComplete),
+			ArtifactCount: 1, TotalPlaintextBytes: 19, ProjectionRequired: true, ProjectionPublished: true,
+			ProjectionRevision: 1, CreatedAt: now, UpdatedAt: now,
+		},
+		&model.BackupAssetDerivedArtifact{
+			ID: artifactID, ArtifactSetID: setID, Ordinal: 0, Role: string(processing.ArtifactRoleContent), MediaType: "text/plain",
+			PlaintextSize: 19, PlaintextDigest: strings.Repeat("2", 64), Completeness: string(processing.ArtifactComplete),
+			CoverageCanonical: []byte(`{"schema_version":1,"kind":"all"}`), BlobID: strings.Repeat("3", 32),
+			ExcerptRef: artifactID, CreatedAt: now,
+		},
+	}
+	for _, row := range rows {
+		if err := db.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Model(&model.BackupAssetProcessingJob{}).Where("id = ?", jobID).
+		Update("is_current", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.BackupAssetProcessingAttempt{}).Where("id = ?", attemptID).
+		Update("is_current", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	return runtimeSearchExcerptFixture{
+		ref: backupasset.AssetRef{RecoveryPointID: pointID, EntryID: entryID}, catalogID: catalogID,
+		sourceFingerprint: sourceFingerprint, pipelineFingerprint: pipelineFingerprint, setID: setID, artifactID: artifactID,
+	}
+}
+
 func TestRuntimeRejectsMismatchedTransportFacets(t *testing.T) {
 	db := openRuntimeTestDB(t)
 	_, err := New(Dependencies{
@@ -170,15 +366,19 @@ func TestRuntimeRejectsMismatchedTransportFacets(t *testing.T) {
 	}
 }
 
-func TestRuntimeDerivedProviderResolverRequiresCurrentBoundSource(t *testing.T) {
+func TestRuntimeDerivedSourceAssetResolverRequiresCurrentBoundSource(t *testing.T) {
 	db := openRuntimeTestDB(t)
-	if err := db.AutoMigrate(&model.BackupRepository{}, &model.RecoveryPoint{}, &model.CatalogGeneration{}); err != nil {
+	if err := db.AutoMigrate(
+		&model.BackupRepository{}, &model.RecoveryPoint{}, &model.CatalogGeneration{}, &model.CatalogEntry{},
+	); err != nil {
 		t.Fatal(err)
 	}
 	repositoryID := strings.Repeat("1", 32)
 	pointID := strings.Repeat("2", 32)
 	generationID := strings.Repeat("3", 32)
+	entryID := strings.Repeat("5", 64)
 	source := strings.Repeat("4", 64)
+	entryFingerprint := strings.Repeat("6", 64)
 	now := time.Date(2026, 7, 20, 8, 45, 0, 0, time.UTC)
 	for _, value := range []any{
 		&model.BackupRepository{
@@ -195,19 +395,29 @@ func TestRuntimeDerivedProviderResolverRequiresCurrentBoundSource(t *testing.T) 
 			ID: generationID, RecoveryPointID: pointID, Generation: 1, State: string(catalog.GenerationComplete),
 			IsActive: true, SourceFingerprint: source, StartedAt: now, CreatedAt: now, UpdatedAt: now,
 		},
+		&model.CatalogEntry{
+			GenerationID: generationID, EntryID: entryID, RecoveryPointID: pointID,
+			NormalizedPath: "/safe/report.txt", Name: "report.txt", EntryType: string(backupasset.CatalogEntryFile),
+			Size: 128, MimeType: "text/plain", Fingerprint: entryFingerprint,
+			FingerprintStrength: string(catalog.FingerprintStrong), SecurityState: "sealed", CreatedAt: now,
+		},
 	} {
 		if err := db.Create(value).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
-	resolver := runtimeDerivedProviderResolver(db)
-	ref := backupasset.AssetRef{RecoveryPointID: pointID, EntryID: strings.Repeat("5", 64)}
-	provider, err := resolver(context.Background(), ref, generationID, source)
-	if err != nil || provider != backupasset.ProviderRestic {
-		t.Fatalf("current Derived provider=%q err=%v", provider, err)
+	resolver := runtimeDerivedSourceAssetResolver(db)
+	ref := backupasset.AssetRef{RecoveryPointID: pointID, EntryID: entryID}
+	asset, err := resolver(context.Background(), ref, generationID, source)
+	if err != nil || asset.Ref != ref || asset.CatalogGenerationID != generationID ||
+		asset.RepositoryID != repositoryID || asset.Provider != backupasset.ProviderRestic ||
+		asset.ProviderCapabilityRevision != 2 || asset.SourceFingerprint != source ||
+		asset.EntryFingerprint != entryFingerprint || asset.FingerprintStrength != string(catalog.FingerprintStrong) ||
+		asset.Size != 128 || asset.MediaType != "text/plain" {
+		t.Fatalf("current Derived source asset=%+v err=%v", asset, err)
 	}
-	if provider, err = resolver(context.Background(), ref, generationID, "stale-source"); err == nil || provider != "" {
-		t.Fatalf("stale Derived provider=%q err=%v", provider, err)
+	if asset, err = resolver(context.Background(), ref, generationID, "stale-source"); err == nil || asset != (content.AuthorizedAsset{}) {
+		t.Fatalf("stale Derived source asset=%+v err=%v", asset, err)
 	}
 }
 

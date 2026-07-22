@@ -121,6 +121,12 @@ type DerivedLifecycle struct {
 	now        func() time.Time
 }
 
+type preparedStaleDerivedSet struct {
+	initial model.BackupAssetDerivedArtifactSet
+	revoke  PreparedDerivedRevocation
+	fence   backupasset.LeaseFence
+}
+
 func NewDerivedLifecycle(
 	db *gorm.DB,
 	store *DerivedStore,
@@ -341,19 +347,36 @@ func (lifecycle *DerivedLifecycle) MarkSetStaleFenced(
 	if lifecycle == nil || backupasset.ValidateOpaqueID(artifactSetID) != nil || !validDerivedFence(fence, "") {
 		return ErrDerivedUnauthorized
 	}
+	prepared, err := lifecycle.prepareMarkSetStaleFenced(ctx, artifactSetID, fence)
+	if err != nil {
+		return err
+	}
+	return lifecycle.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return lifecycle.markSetStaleFencedTx(ctx, tx, prepared)
+	})
+}
+
+func (lifecycle *DerivedLifecycle) prepareMarkSetStaleFenced(
+	ctx context.Context,
+	artifactSetID string,
+	fence backupasset.LeaseFence,
+) (preparedStaleDerivedSet, error) {
+	if lifecycle == nil || backupasset.ValidateOpaqueID(artifactSetID) != nil || !validDerivedFence(fence, "") {
+		return preparedStaleDerivedSet{}, ErrDerivedUnauthorized
+	}
 	var initial model.BackupAssetDerivedArtifactSet
 	result := lifecycle.db.WithContext(ctx).Where("id = ?", artifactSetID).Limit(1).Find(&initial)
 	if result.Error != nil {
-		return fmt.Errorf("load Derived artifact set for invalidation: %w", result.Error)
+		return preparedStaleDerivedSet{}, fmt.Errorf("load Derived artifact set for invalidation: %w", result.Error)
 	}
 	if result.RowsAffected != 1 || !validDerivedFence(fence, initial.RecoveryPointID) {
-		return ErrDerivedUnauthorized
+		return preparedStaleDerivedSet{}, ErrDerivedUnauthorized
 	}
 	if initial.State == "stale" {
-		return nil
+		return preparedStaleDerivedSet{initial: initial, fence: fence}, nil
 	}
 	if initial.State != "active" {
-		return ErrDerivedUnauthorized
+		return preparedStaleDerivedSet{}, ErrDerivedUnauthorized
 	}
 	var preparedRevoke PreparedDerivedRevocation
 	if initial.ProjectionPublished {
@@ -364,40 +387,49 @@ func (lifecycle *DerivedLifecycle) MarkSetStaleFenced(
 			Reason: DerivedRevokeRollback, RecoveryPointFence: fence,
 		})
 		if err != nil {
-			return fmt.Errorf("prepare stale Derived Search projection revoke: %w", err)
+			return preparedStaleDerivedSet{}, fmt.Errorf("prepare stale Derived Search projection revoke: %w", err)
 		}
 		preparedRevoke = prepared
 	}
-	return lifecycle.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var set model.BackupAssetDerivedArtifactSet
-		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", artifactSetID).Limit(1).Find(&set)
-		if result.Error != nil || result.RowsAffected != 1 || set.RecoveryPointID != fence.RecoveryPointID {
-			return ErrDerivedUnauthorized
-		}
-		if set.State == "stale" {
-			return nil
-		}
-		if set.State != "active" || set.ProjectionPublished != initial.ProjectionPublished ||
-			set.ProjectionRevision != initial.ProjectionRevision {
-			return ErrDerivedUnauthorized
-		}
-		if set.ProjectionPublished {
-			if preparedRevoke == nil {
-				return ErrDerivedFenceRequired
-			}
-			if err := preparedRevoke.RevokeTx(ctx, tx); err != nil {
-				return fmt.Errorf("revoke stale Derived Search projection: %w", err)
-			}
-		}
-		updated := tx.Model(&model.BackupAssetDerivedArtifactSet{}).
-			Where("id = ? AND state = ? AND projection_published = ? AND projection_revision = ?",
-				set.ID, "active", set.ProjectionPublished, set.ProjectionRevision).
-			Updates(map[string]any{"state": "stale", "projection_published": false, "updated_at": lifecycle.utcNow()})
-		if updated.Error != nil || updated.RowsAffected != 1 {
-			return errors.Join(ErrDerivedUnauthorized, updated.Error)
-		}
+	return preparedStaleDerivedSet{initial: initial, revoke: preparedRevoke, fence: fence}, nil
+}
+
+func (lifecycle *DerivedLifecycle) markSetStaleFencedTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	prepared preparedStaleDerivedSet,
+) error {
+	if lifecycle == nil || tx == nil || !validDerivedFence(prepared.fence, prepared.initial.RecoveryPointID) {
+		return ErrDerivedUnauthorized
+	}
+	var set model.BackupAssetDerivedArtifactSet
+	result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", prepared.initial.ID).Limit(1).Find(&set)
+	if result.Error != nil || result.RowsAffected != 1 || set.RecoveryPointID != prepared.fence.RecoveryPointID {
+		return ErrDerivedUnauthorized
+	}
+	if set.State == "stale" {
 		return nil
-	})
+	}
+	if set.State != "active" || set.ProjectionPublished != prepared.initial.ProjectionPublished ||
+		set.ProjectionRevision != prepared.initial.ProjectionRevision {
+		return ErrDerivedUnauthorized
+	}
+	if set.ProjectionPublished {
+		if prepared.revoke == nil {
+			return ErrDerivedFenceRequired
+		}
+		if err := prepared.revoke.RevokeTx(ctx, tx); err != nil {
+			return fmt.Errorf("revoke stale Derived Search projection: %w", err)
+		}
+	}
+	updated := tx.Model(&model.BackupAssetDerivedArtifactSet{}).
+		Where("id = ? AND state = ? AND projection_published = ? AND projection_revision = ?",
+			set.ID, "active", set.ProjectionPublished, set.ProjectionRevision).
+		Updates(map[string]any{"state": "stale", "projection_published": false, "updated_at": lifecycle.utcNow()})
+	if updated.Error != nil || updated.RowsAffected != 1 {
+		return errors.Join(ErrDerivedUnauthorized, updated.Error)
+	}
+	return nil
 }
 
 func (lifecycle *DerivedLifecycle) MarkSetStale(ctx context.Context, artifactSetID string) error {

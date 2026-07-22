@@ -1026,3 +1026,100 @@ root README and dependency manifests remain untouched. Local arm64 build,
 Trivy scanning and `actionlint` remain CI evidence, not local pass claims.
 Push, PR, required CI, squash merge and post-merge automation remain pending
 at this evidence snapshot.
+
+## 19. Phase 2 bootstrap null parser manifest amendment
+
+The complete signed-profile smoke exposed a strict-decoder defect at the first
+offline bundle activation boundary. The closed request contract uses
+`expected_active_fingerprint: null` when there is no active bundle. The shared
+duplicate-key token walker represented that legal JSON value as a nil token and
+rejected it before the typed request decoder ran.
+
+The controller approved one additional product path:
+
+```text
+backend/internal/api/handlers/backup_content_handler.go
+```
+
+Fresh RED evidence after reverting that path was:
+
+```text
+TestBackupWorkerHandlerUsesStrictJSONOnlyPolicyScanAndActivation
+bootstrap activation status=400; recorded activations=1
+```
+
+The minimal correction removes only the nil-token rejection from the recursive
+token walker. Duplicate object names, unknown fields, excessive nesting,
+malformed delimiters and trailing tokens remain rejected. The same focused test
+then passed and recorded the nil expected fingerprint for the second activation.
+
+```text
+bootstrap null parser amendment: approved (164 -> 165)
+future exact paths:              165
+future unique paths:             165
+future duplicate paths:          0
+new migration/dependency/API:    0
+stage/commit/push/PR/CI:         not_executed at this checkpoint
+```
+
+Sections 17 and 18 remain immutable evidence snapshots from the earlier
+164-path checkpoint. This section supersedes their manifest count for current
+authorization without rewriting their historical command results.
+
+## 20. Complete profile smoke repair and final pre-delivery verification
+
+The complete signed offline Worker profile smoke exposed one final updater
+inbox lifecycle defect. `NewInbox` records the fixed read-only inbox root at
+startup, while a valid out-of-band delivery necessarily changes that
+directory's mtime/ctime before the next scan. `Scan` compared the startup
+snapshot with the later root through `sameStableDirectory`, so it rejected a
+legitimate newly delivered candidate before registration.
+
+The focused regression was observed RED before the correction:
+
+```text
+TestInboxAcceptsCandidateDeliveredAfterStartup
+updater manifest policy rejected
+```
+
+The minimal GREEN requires the root still to be a read-only `0555` directory
+and the same inode through `os.SameFile`, without requiring its startup
+mtime/ctime to remain unchanged. The stricter pre/open/post
+`sameStableDirectory` checks inside each individual candidate scan remain in
+place, including ctime/mtime, inode, entry-set and regular-file stability.
+The focused test, full updater package and updater race suite then passed.
+This correction changes no manifest path, API, dependency, migration, trust
+model, resource ceiling or frozen product scope.
+
+Fresh final verification after that correction reported:
+
+- `env -u NODE_ENV GOCACHE=<isolated> make check` exited zero: backend tests,
+  Go lint (`0 issues`), frontend typecheck/lint, all 162 frontend files and
+  935 tests, and backend/frontend production builds passed.
+- The frontend bundle remained inside the unchanged ceilings at 498.14 KiB of
+  500 KiB main JavaScript and 104.55 KiB of 105 KiB main CSS.
+- `scripts/test-asset-worker.test.sh` passed. The complete host-network
+  behavioral profile smoke passed both `asset Worker complete profile smoke`
+  and `asset Worker runtime smoke`, using local image
+  `sha256:e9669ea3c34cab10821f13a15ced19c2f26ce5ca4458ab45ecc5ebdb6c9c2e81`.
+  Its amd64 runtime-closure SHA-256 was
+  `e0ac046bcd194e20431d9ddc9d5efe60e20fc1a5fac56fbb5cb48bf6ab402d2f`;
+  the local cross-architecture comparison used the genuine previously built
+  arm64 closure. Fresh arm64 build/scan and the default bridge-mode profile
+  invocation remain required CI evidence, not local pass claims.
+- Swagger v1.16.6 generated twice without drift; tracked `docs.go` SHA-256 was
+  `6e413dd00a8e7262168d9c0e79e69f6cab4a0f966c3f87a1fc419baa3f2d42a4`.
+- The exact approved product manifest remained 165/165 unique with zero
+  duplicates. There were 159 changed product paths, zero paths outside the
+  manifest and six approved paths without a final diff. `go.mod`/`go.sum`,
+  migration/model files, `000068` through `000071`, Provider bytes,
+  `deploy/allinone`, root README and release/publish paths remained untouched.
+- The final pre-delivery tree had zero staged and zero untracked paths,
+  `git diff --check` passed, and the generated `backend/xirang-server`,
+  `web/dist` and coverage outputs were removed through `make clean`.
+
+The dedicated profile project was removed with its volumes and no unrelated
+container was touched. At this evidence checkpoint the repair work commit,
+repair journal commit, push, pull request, required CI, squash merge and
+post-merge automation remain pending. The task is already archived and must
+not be started or archived again; delivery continues on the same Child branch.

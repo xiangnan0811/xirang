@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -54,7 +55,7 @@ func TestLocalUpdaterListenerAuthenticatesExactPeerCredentials(t *testing.T) {
 	}
 	defer func() { _ = result.connection.Close() }()
 	if result.identity.PeerUID != uint32(os.Geteuid()) || result.identity.PeerGID != uint32(os.Getegid()) ||
-		result.identity.PeerPID <= 0 || len(result.identity.Fingerprint) != 64 {
+		result.identity.PeerPID < 0 || len(result.identity.Fingerprint) != 64 {
 		t.Fatalf("unexpected peer identity: %+v", result.identity)
 	}
 }
@@ -91,6 +92,43 @@ func TestLocalUpdaterListenerRejectsWrongPeerAndUnsafeSocketBeforeDecode(t *test
 		}
 	})
 
+	t.Run("wrong GID", func(t *testing.T) {
+		root := t.TempDir()
+		socket := filepath.Join(root, "peer.sock")
+		rawListener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = rawListener.Close() }()
+		accepted := make(chan *net.UnixConn, 1)
+		acceptErrors := make(chan error, 1)
+		go func() {
+			connection, err := rawListener.AcceptUnix()
+			if err != nil {
+				acceptErrors <- err
+				return
+			}
+			accepted <- connection
+		}()
+		client, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: socket, Net: "unix"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = client.Close() }()
+		var server *net.UnixConn
+		select {
+		case server = <-accepted:
+		case err := <-acceptErrors:
+			t.Fatal(err)
+		case <-time.After(time.Second):
+			t.Fatal("timed out accepting Unix peer")
+		}
+		defer func() { _ = server.Close() }()
+		if _, err := updaterPeerIdentity(server, uint32(os.Geteuid()), uint32(os.Getegid())+1); !errors.Is(err, ErrUpdaterUnauthenticated) {
+			t.Fatalf("wrong GID error=%v", err)
+		}
+	})
+
 	t.Run("unsafe mode", func(t *testing.T) {
 		root := t.TempDir()
 		if err := os.Chmod(root, 0o700); err != nil {
@@ -123,6 +161,23 @@ func TestUpdaterIdentityCannotBeForgedByPlainOrWorkerStyleConnection(t *testing.
 	worker := &workerStyleIdentityConn{Conn: left}
 	if _, ok := UpdaterIdentityFromConn(worker); ok {
 		t.Fatal("Worker-style identity received updater identity")
+	}
+}
+
+func TestUpdaterIdentityAcceptsNamespaceHiddenPIDAndRejectsNegativePID(t *testing.T) {
+	left, right := net.Pipe()
+	defer func() { _ = left.Close() }()
+	defer func() { _ = right.Close() }()
+	identity := UpdaterTransportIdentity{
+		Fingerprint: strings.Repeat("a", 64), PeerPID: 0, PeerUID: 10002, PeerGID: 10002,
+	}
+	got, ok := UpdaterIdentityFromConn(&updaterIdentityConn{Conn: left, identity: identity})
+	if !ok || got != identity {
+		t.Fatalf("namespace-hidden peer identity=%+v ok=%t", got, ok)
+	}
+	identity.PeerPID = -1
+	if got, ok := UpdaterIdentityFromConn(&updaterIdentityConn{Conn: left, identity: identity}); ok {
+		t.Fatalf("negative PID established updater identity: %+v", got)
 	}
 }
 

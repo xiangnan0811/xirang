@@ -5,6 +5,7 @@ package capabilities
 import (
 	"bufio"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,24 +20,47 @@ import (
 )
 
 type mountInfo struct {
+	MountPoint string
 	Filesystem string
 	Options    map[string]bool
 }
 
 type sandboxPolicy struct {
-	DeniedSyscalls map[uint32]bool
+	DeniedSyscalls   map[uint32]bool
+	DeniedCloneFlags uint32
+	UnixSocketOnly   bool
 }
 
-func linuxSandboxPolicy() sandboxPolicy {
+const seccompArgumentZeroOffset = 16
+
+func runtimeClosureManifestOwnerOK(info os.FileInfo) bool {
+	if info == nil {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && stat.Uid == 0 && stat.Gid == 0
+}
+
+func linuxSandboxPolicy(profile ToolArgProfile) sandboxPolicy {
 	denied := []uint32{
-		unix.SYS_SOCKET, unix.SYS_SOCKETPAIR, unix.SYS_CONNECT, unix.SYS_BIND, unix.SYS_LISTEN,
-		unix.SYS_ACCEPT, unix.SYS_ACCEPT4, unix.SYS_SENDTO, unix.SYS_SENDMSG, unix.SYS_RECVFROM,
-		unix.SYS_RECVMSG, unix.SYS_MOUNT, unix.SYS_UMOUNT2, unix.SYS_PTRACE, unix.SYS_BPF,
+		unix.SYS_CONNECT, unix.SYS_SENDTO, unix.SYS_SENDMSG, unix.SYS_SENDMMSG,
+		unix.SYS_RECVFROM, unix.SYS_RECVMSG, unix.SYS_RECVMMSG,
+		unix.SYS_MOUNT, unix.SYS_UMOUNT2, unix.SYS_PTRACE, unix.SYS_BPF,
 		unix.SYS_PERF_EVENT_OPEN, unix.SYS_SETNS, unix.SYS_UNSHARE, unix.SYS_KEXEC_LOAD,
 		unix.SYS_INIT_MODULE, unix.SYS_FINIT_MODULE, unix.SYS_DELETE_MODULE, unix.SYS_REBOOT,
-		unix.SYS_SWAPON, unix.SYS_SWAPOFF, unix.SYS_SETSID, unix.SYS_SETPGID,
+		unix.SYS_SWAPON, unix.SYS_SWAPOFF, unix.SYS_SETSID, unix.SYS_SETPGID, unix.SYS_CLONE3,
 	}
-	result := sandboxPolicy{DeniedSyscalls: make(map[uint32]bool, len(denied))}
+	result := sandboxPolicy{
+		DeniedSyscalls: make(map[uint32]bool, len(denied)),
+		DeniedCloneFlags: uint32(unix.CLONE_NEWTIME | unix.CLONE_NEWCGROUP | unix.CLONE_NEWNS |
+			unix.CLONE_NEWUTS | unix.CLONE_NEWIPC | unix.CLONE_NEWUSER | unix.CLONE_NEWPID | unix.CLONE_NEWNET),
+	}
+	if profile == ArgsOfficePDF {
+		result.UnixSocketOnly = true
+		denied = append(denied, unix.SYS_SOCKETPAIR)
+	} else {
+		denied = append(denied, unix.SYS_SOCKET, unix.SYS_SOCKETPAIR, unix.SYS_BIND, unix.SYS_LISTEN, unix.SYS_ACCEPT, unix.SYS_ACCEPT4)
+	}
 	for _, number := range denied {
 		result.DeniedSyscalls[number] = true
 	}
@@ -44,10 +68,14 @@ func linuxSandboxPolicy() sandboxPolicy {
 }
 
 func executeSandbox(request SandboxExecution) error {
+	runtime.LockOSThread()
 	if err := validateSandboxFilesystem(request); err != nil {
 		return err
 	}
-	if err := applySandboxRlimits(request.MaxProcesses); err != nil {
+	environment := sandboxExecEnvironment(request)
+	arguments := append([]string{request.Executable}, request.Args...)
+	prepared, err := prepareSandboxExecve(request.Executable, arguments, environment)
+	if err != nil {
 		return ErrSecureWorkspaceUnavailable
 	}
 	if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
@@ -59,9 +87,22 @@ func executeSandbox(request SandboxExecution) error {
 	if err := applyLandlock(request); err != nil {
 		return ErrSecureWorkspaceUnavailable
 	}
-	if err := applySeccomp(linuxSandboxPolicy()); err != nil {
+	if err := applySeccomp(linuxSandboxPolicy(request.Profile)); err != nil {
 		return ErrSecureWorkspaceUnavailable
 	}
+	if err := unix.CloseRange(3, ^uint(0), 0); err != nil && !errors.Is(err, unix.ENOSYS) {
+		return ErrSecureWorkspaceUnavailable
+	}
+	if err := applySandboxRlimits(request); err != nil {
+		return ErrSecureWorkspaceUnavailable
+	}
+	if err := execPreparedSandbox(prepared); err != nil {
+		return ErrToolFailed
+	}
+	return nil
+}
+
+func sandboxExecEnvironment(request SandboxExecution) []string {
 	environment := []string{
 		"HOME=" + request.HomeDir,
 		"LANG=C.UTF-8",
@@ -70,15 +111,61 @@ func executeSandbox(request SandboxExecution) error {
 		"XIRANG_OUTPUT_DIR=" + request.OutputDir,
 		"XIRANG_INPUT_MODE=" + string(request.InputMode),
 	}
+	if request.Profile == ArgsOfficePDF || request.Profile == ArgsClamScan {
+		environment = append(environment, "TMPDIR="+request.HomeDir)
+	}
 	if request.InputMode == ToolInputPath {
 		environment = append(environment, "XIRANG_INPUT_PATH="+request.InputPath)
 	}
-	arguments := append([]string{request.Executable}, request.Args...)
-	if err := unix.CloseRange(3, ^uint(0), 0); err != nil && !errors.Is(err, unix.ENOSYS) {
-		return ErrSecureWorkspaceUnavailable
+	return environment
+}
+
+type preparedSandboxExecve struct {
+	executable  *byte
+	arguments   []*byte
+	environment []*byte
+}
+
+func prepareSandboxExecve(executable string, arguments, environment []string) (preparedSandboxExecve, error) {
+	if executable == "" || len(arguments) == 0 || arguments[0] != executable {
+		return preparedSandboxExecve{}, ErrInvalidInvocation
 	}
-	if err := unix.Exec(request.Executable, arguments, environment); err != nil {
-		return ErrToolFailed
+	executablePointer, err := unix.BytePtrFromString(executable)
+	if err != nil {
+		return preparedSandboxExecve{}, ErrInvalidInvocation
+	}
+	argumentPointers := make([]*byte, len(arguments)+1)
+	for index, argument := range arguments {
+		argumentPointers[index], err = unix.BytePtrFromString(argument)
+		if err != nil {
+			return preparedSandboxExecve{}, ErrInvalidInvocation
+		}
+	}
+	environmentPointers := make([]*byte, len(environment)+1)
+	for index, value := range environment {
+		environmentPointers[index], err = unix.BytePtrFromString(value)
+		if err != nil {
+			return preparedSandboxExecve{}, ErrInvalidInvocation
+		}
+	}
+	return preparedSandboxExecve{
+		executable: executablePointer, arguments: argumentPointers, environment: environmentPointers,
+	}, nil
+}
+
+func execPreparedSandbox(value preparedSandboxExecve) error {
+	if value.executable == nil || len(value.arguments) < 2 || len(value.environment) == 0 {
+		return ErrInvalidInvocation
+	}
+	_, _, errno := unix.RawSyscall(
+		unix.SYS_EXECVE,
+		uintptr(unsafe.Pointer(value.executable)),
+		uintptr(unsafe.Pointer(&value.arguments[0])),
+		uintptr(unsafe.Pointer(&value.environment[0])),
+	)
+	runtime.KeepAlive(value)
+	if errno != 0 {
+		return errno
 	}
 	return nil
 }
@@ -87,6 +174,13 @@ func validateSandboxFilesystem(request SandboxExecution) error {
 	info, err := inspectWorkspaceMount(request.Workspace)
 	if err != nil || validateWorkspaceMount(info) != nil {
 		return ErrSecureWorkspaceUnavailable
+	}
+	if request.Profile == ArgsOfficePDF {
+		tmpMount, mountErr := inspectWorkspaceMount("/tmp")
+		tmpInfo, infoErr := os.Lstat("/tmp")
+		if mountErr != nil || infoErr != nil || validatePrivateTmpfsMount("/tmp", tmpMount, tmpInfo) != nil {
+			return ErrSecureWorkspaceUnavailable
+		}
 	}
 	for _, directory := range []string{request.Workspace, request.OutputDir, request.HomeDir} {
 		info, err := os.Lstat(directory)
@@ -112,17 +206,26 @@ func ownedByCurrentUID(info os.FileInfo) bool {
 	return ok && int(stat.Uid) == os.Geteuid()
 }
 
-func applySandboxRlimits(maxProcesses int) error {
-	limits := []struct {
-		resource int
-		value    uint64
-	}{
-		{unix.RLIMIT_CORE, 0},
-		{unix.RLIMIT_NOFILE, 64},
-		{unix.RLIMIT_NPROC, uint64(maxProcesses)},
+type sandboxRlimitValue struct {
+	Resource int
+	Value    uint64
+}
+
+func sandboxRlimitValues(request SandboxExecution) []sandboxRlimitValue {
+	return []sandboxRlimitValue{
+		{Resource: unix.RLIMIT_CORE, Value: 0},
+		{Resource: unix.RLIMIT_NOFILE, Value: 64},
+		{Resource: unix.RLIMIT_CPU, Value: uint64(request.CPUTime / time.Second)},
+		{Resource: unix.RLIMIT_FSIZE, Value: uint64(request.MaxFileBytes)},
+		{Resource: unix.RLIMIT_NPROC, Value: uint64(request.MaxProcesses)},
+		{Resource: unix.RLIMIT_AS, Value: uint64(request.MaxMemoryBytes)},
 	}
+}
+
+func applySandboxRlimits(request SandboxExecution) error {
+	limits := sandboxRlimitValues(request)
 	for _, limit := range limits {
-		if err := unix.Setrlimit(limit.resource, &unix.Rlimit{Cur: limit.value, Max: limit.value}); err != nil {
+		if err := unix.Setrlimit(limit.Resource, &unix.Rlimit{Cur: limit.Value, Max: limit.Value}); err != nil {
 			return err
 		}
 	}
@@ -140,6 +243,9 @@ func applySeccomp(policy sandboxPolicy) error {
 		{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_KILL_PROCESS},
 		{Code: unix.BPF_LD | unix.BPF_W | unix.BPF_ABS, K: 0},
 	}
+	if policy.UnixSocketOnly {
+		filters = appendUnixSocketDomainFilter(filters, uint32(unix.SYS_SOCKET))
+	}
 	numbers := make([]int, 0, len(policy.DeniedSyscalls))
 	for number := range policy.DeniedSyscalls {
 		numbers = append(numbers, int(number))
@@ -151,9 +257,28 @@ func applySeccomp(policy sandboxPolicy) error {
 			unix.SockFilter{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ERRNO | uint32(unix.EPERM)},
 		)
 	}
+	if policy.DeniedCloneFlags != 0 {
+		filters = append(filters,
+			unix.SockFilter{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, Jf: 4, K: uint32(unix.SYS_CLONE)},
+			unix.SockFilter{Code: unix.BPF_LD | unix.BPF_W | unix.BPF_ABS, K: seccompArgumentZeroOffset},
+			unix.SockFilter{Code: unix.BPF_ALU | unix.BPF_AND | unix.BPF_K, K: policy.DeniedCloneFlags},
+			unix.SockFilter{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, Jt: 1, K: 0},
+			unix.SockFilter{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ERRNO | uint32(unix.EPERM)},
+		)
+	}
 	filters = append(filters, unix.SockFilter{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ALLOW})
 	program := unix.SockFprog{Len: uint16(len(filters)), Filter: &filters[0]}
 	return unix.Prctl(unix.PR_SET_SECCOMP, unix.SECCOMP_MODE_FILTER, uintptr(unsafe.Pointer(&program)), 0, 0)
+}
+
+func appendUnixSocketDomainFilter(filters []unix.SockFilter, syscallNumber uint32) []unix.SockFilter {
+	return append(filters,
+		unix.SockFilter{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, Jf: 4, K: syscallNumber},
+		unix.SockFilter{Code: unix.BPF_LD | unix.BPF_W | unix.BPF_ABS, K: seccompArgumentZeroOffset},
+		unix.SockFilter{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, Jt: 1, K: uint32(unix.AF_UNIX)},
+		unix.SockFilter{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ERRNO | uint32(unix.EPERM)},
+		unix.SockFilter{Code: unix.BPF_LD | unix.BPF_W | unix.BPF_ABS, K: 0},
+	)
 }
 
 func sandboxAuditArchitecture() (uint32, bool) {
@@ -255,6 +380,17 @@ func sandboxLandlockRoots(request SandboxExecution, abi int) []landlockRoot {
 			access: readTree,
 		})
 	}
+	if request.Profile == ArgsOfficePDF {
+		roots = append(roots,
+			landlockRoot{
+				path: "/tmp",
+				access: uint64(unix.LANDLOCK_ACCESS_FS_READ_DIR | unix.LANDLOCK_ACCESS_FS_MAKE_SOCK |
+					unix.LANDLOCK_ACCESS_FS_REMOVE_FILE),
+			},
+			landlockRoot{path: "/dev/urandom", access: readFile},
+			landlockRoot{path: "/etc/fonts", access: readTree},
+		)
+	}
 	return roots
 }
 
@@ -264,10 +400,15 @@ func inspectWorkspaceMount(root string) (mountInfo, error) {
 		return mountInfo{}, ErrSecureWorkspaceUnavailable
 	}
 	defer func() { _ = file.Close() }()
+	return inspectWorkspaceMountReader(root, file)
+}
+
+func inspectWorkspaceMountReader(root string, reader io.Reader) (mountInfo, error) {
 	clean := filepath.Clean(root)
 	bestMount := ""
+	bestMatches := 0
 	var best mountInfo
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
 		separator := -1
@@ -281,7 +422,11 @@ func inspectWorkspaceMount(root string) (mountInfo, error) {
 			continue
 		}
 		mountPoint := strings.ReplaceAll(fields[4], `\040`, " ")
-		if clean != mountPoint && !strings.HasPrefix(clean, strings.TrimSuffix(mountPoint, "/")+"/") || len(mountPoint) < len(bestMount) {
+		if (clean != mountPoint && !strings.HasPrefix(clean, strings.TrimSuffix(mountPoint, "/")+"/")) || len(mountPoint) < len(bestMount) {
+			continue
+		}
+		if mountPoint == bestMount {
+			bestMatches++
 			continue
 		}
 		options := make(map[string]bool)
@@ -291,9 +436,10 @@ func inspectWorkspaceMount(root string) (mountInfo, error) {
 			}
 		}
 		bestMount = mountPoint
-		best = mountInfo{Filesystem: fields[separator+1], Options: options}
+		bestMatches = 1
+		best = mountInfo{MountPoint: mountPoint, Filesystem: fields[separator+1], Options: options}
 	}
-	if scanner.Err() != nil || bestMount == "" {
+	if scanner.Err() != nil || bestMount == "" || bestMatches != 1 {
 		return mountInfo{}, ErrSecureWorkspaceUnavailable
 	}
 	return best, nil
@@ -301,6 +447,18 @@ func inspectWorkspaceMount(root string) (mountInfo, error) {
 
 func validateWorkspaceMount(info mountInfo) error {
 	if info.Filesystem != "tmpfs" || !info.Options["rw"] || !info.Options["noexec"] || !info.Options["nosuid"] || !info.Options["nodev"] {
+		return ErrSecureWorkspaceUnavailable
+	}
+	return nil
+}
+
+func validatePrivateTmpfsMount(path string, mount mountInfo, info os.FileInfo) error {
+	if filepath.Clean(path) != path || mount.MountPoint != path || validateWorkspaceMount(mount) != nil ||
+		info == nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o700 {
+		return ErrSecureWorkspaceUnavailable
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Geteuid() || int(stat.Gid) != os.Getegid() {
 		return ErrSecureWorkspaceUnavailable
 	}
 	return nil

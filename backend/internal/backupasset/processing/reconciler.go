@@ -451,7 +451,8 @@ func (reconciler *Reconciler) PromoteRetries(ctx context.Context) (int, error) {
 			updated := tx.Model(&model.BackupAssetProcessingJob{}).Where("id = ? AND transition_revision = ?", job.ID, job.TransitionRevision).
 				Updates(map[string]any{
 					"state": string(ProcessingQueued), "transition_revision": revision, "error_code": "",
-					"retry_at": nil, "queued_at": now, "updated_at": now, "version": gorm.Expr("version + 1"),
+					"retry_at": nil, "queued_at": now, "started_at": nil, "updated_at": now,
+					"version": gorm.Expr("version + 1"),
 				})
 			if updated.Error != nil {
 				return updated.Error

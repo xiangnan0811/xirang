@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -29,6 +30,8 @@ import (
 const processingSecurityPolicyRevision = "security-policy-v1"
 
 const secretContinuationBatchSize = 100
+
+const malwareResultMaxBytes = 64 << 10
 
 type processingRuntimeDependencies struct {
 	DB               *gorm.DB
@@ -180,6 +183,9 @@ type managedProcessingRuntime struct {
 	sink              *processing.ArtifactSink
 	reconciler        *processing.Reconciler
 	derivedReconciler *processing.DerivedReconciler
+	invalidation      processingPipelineInvalidator
+	malwareEvidence   processingMalwareEvidenceReader
+	malwareWork       processingMalwareWorkRequester
 	protocol          *processing.ProtocolService
 	workerProtocol    *processing.WorkerProtocolService
 	capabilityService *processing.CapabilityService
@@ -198,6 +204,23 @@ type managedProcessingRuntime struct {
 	lastUpdaterActivation    time.Time
 	updaterCandidateImpacts  map[string]processingUpdaterImpact
 	updaterCandidateChanges  map[string][]ProcessingUpdaterCapabilityChange
+}
+
+type processingPipelineInvalidator interface {
+	Invalidate(context.Context, processing.InvalidationRequest) (processing.InvalidationResult, error)
+}
+
+type processingMalwareEvidenceReader interface {
+	ReadAuthorized(context.Context, processing.DerivedArtifactAuthorization, io.Writer) error
+}
+
+type processingMalwareWorkRequester interface {
+	RequestWork(context.Context, processing.WorkRequest) (processing.WorkResult, error)
+}
+
+type processingMalwareEvidence struct {
+	ArtifactID    string
+	PlaintextSize int64
 }
 
 type secretContinuationCandidate struct {
@@ -277,6 +300,7 @@ func (runtime *managedProcessingRuntime) initializeControlPlane(config backupass
 		return err
 	}
 	runtime.coordinator = coordinator
+	runtime.malwareWork = coordinator
 	runtime.capabilityService = capabilityService
 	runtime.coverageService = coverageService
 	return nil
@@ -301,6 +325,9 @@ func (runtime *managedProcessingRuntime) buildControlPlane(
 			return enabled && current.Enabled, errors.Join(enabledErr, configErr)
 		},
 		SecurityPolicyRevision: func(context.Context) (string, error) { return processingSecurityPolicyRevision, nil },
+		ActivePipeline:         runtime.activePipelineFingerprint,
+		PublicationIdentityTx:  runtime.activePublicationIdentityTx,
+		MalwareSafety:          runtime.malwareSafetyForAsset,
 		PollAfterSeconds:       2,
 	})
 	if err != nil {
@@ -311,6 +338,180 @@ func (runtime *managedProcessingRuntime) buildControlPlane(
 		return nil, nil, nil, err
 	}
 	return coordinator, capabilityService, coverageService, nil
+}
+
+func (runtime *managedProcessingRuntime) malwareSafetyForAsset(
+	ctx context.Context,
+	asset content.AuthorizedAsset,
+) (processing.MalwareSafetyDecision, error) {
+	decision := processing.MalwareSafetyDecision{
+		Active: false,
+		Safe:   false,
+		Status: capabilityspec.ScanNotScanned,
+	}
+	if runtime == nil || runtime.db == nil || backupasset.ValidateAssetRef(asset.Ref) != nil ||
+		backupasset.ValidateOpaqueID(asset.CatalogGenerationID) != nil ||
+		asset.ProviderCapabilityRevision <= 0 || asset.SourceFingerprint == "" ||
+		len(asset.SourceFingerprint) > 128 || len(asset.EntryFingerprint) > 128 || asset.Size < 0 {
+		return decision, processing.ErrInvalidContract
+	}
+	ctx = nonNilRuntimeContext(ctx)
+	profile, ok := capabilityspec.Lookup(
+		capabilityspec.CapabilityMalwareScan,
+		capabilityspec.ProfileSignatureScanV1,
+		false,
+	)
+	if !ok {
+		return decision, processing.ErrInvalidContract
+	}
+	pipeline, err := runtime.activePipelineFingerprint(ctx, profile.Capability, profile.OutputProfile)
+	if err != nil {
+		return decision, err
+	}
+	if pipeline == "" {
+		return decision, nil
+	}
+	decision.Active = true
+	bundleFingerprint, err := runtime.activeUpdaterFingerprint(ctx)
+	if err != nil || bundleFingerprint == "" {
+		return decision, errors.Join(processing.ErrInvalidContract, err)
+	}
+
+	evidence, found, err := runtime.currentMalwareEvidence(ctx, asset, profile, pipeline)
+	if err != nil {
+		return decision, err
+	}
+	if !found {
+		return decision, runtime.requestMalwareContinuation(ctx, asset, profile, pipeline)
+	}
+	if runtime.malwareEvidence == nil {
+		decision.Status = capabilityspec.ScanStale
+		return decision, runtime.requestMalwareContinuation(ctx, asset, profile, pipeline)
+	}
+
+	var payload bytes.Buffer
+	payload.Grow(int(evidence.PlaintextSize))
+	err = runtime.malwareEvidence.ReadAuthorized(ctx, processing.DerivedArtifactAuthorization{
+		ArtifactID: evidence.ArtifactID, RecoveryPointID: asset.Ref.RecoveryPointID,
+		CatalogGenerationID: asset.CatalogGenerationID, EntryID: asset.Ref.EntryID,
+		SourceFingerprint: asset.SourceFingerprint,
+	}, &payload)
+	if err != nil {
+		if ctx.Err() != nil {
+			return decision, ctx.Err()
+		}
+		decision.Status = capabilityspec.ScanStale
+		return decision, runtime.requestMalwareContinuation(ctx, asset, profile, pipeline)
+	}
+	result, err := processing.DecodeCanonicalMalwareResult(payload.Bytes())
+	if err != nil || result.SignatureBundleFingerprint != bundleFingerprint ||
+		result.Completeness != capabilityspec.CoverageComplete || result.ScannedBytes != asset.Size {
+		decision.Status = capabilityspec.ScanStale
+		return decision, runtime.requestMalwareContinuation(ctx, asset, profile, pipeline)
+	}
+	decision.Status = result.Result
+	switch result.Result {
+	case capabilityspec.ScanNoFinding:
+		decision.Safe = true
+		return decision, nil
+	case capabilityspec.ScanFinding:
+		return decision, nil
+	case capabilityspec.ScanNotScanned, capabilityspec.ScanStale:
+		return decision, runtime.requestMalwareContinuation(ctx, asset, profile, pipeline)
+	default:
+		decision.Status = capabilityspec.ScanStale
+		return decision, runtime.requestMalwareContinuation(ctx, asset, profile, pipeline)
+	}
+}
+
+func (runtime *managedProcessingRuntime) currentMalwareEvidence(
+	ctx context.Context,
+	asset content.AuthorizedAsset,
+	profile capabilityspec.Profile,
+	pipeline string,
+) (processingMalwareEvidence, bool, error) {
+	var rows []processingMalwareEvidence
+	query := runtime.db.WithContext(ctx).
+		Table("backup_asset_processing_jobs AS jobs").
+		Select("artifacts.id AS artifact_id, artifacts.plaintext_size AS plaintext_size").
+		Joins(`JOIN backup_asset_derived_artifact_sets AS artifact_sets
+			ON artifact_sets.id = jobs.current_artifact_set_id AND artifact_sets.job_id = jobs.id`).
+		Joins(`JOIN backup_asset_derived_artifacts AS artifacts
+				ON artifacts.artifact_set_id = artifact_sets.id`).
+		Joins(`JOIN backup_asset_processing_attempts AS attempts
+				ON attempts.id = artifact_sets.attempt_id AND attempts.job_id = jobs.id`).
+		Where(`jobs.recovery_point_id = ? AND jobs.catalog_generation_id = ? AND jobs.entry_id = ?
+			AND jobs.source_fingerprint = ? AND jobs.entry_fingerprint = ?
+			AND jobs.provider_capability_revision = ? AND jobs.capability = ?
+			AND jobs.capability_schema = ? AND jobs.pipeline_fingerprint = ?
+			AND jobs.output_profile = ? AND jobs.security_policy_revision = ?
+				AND jobs.state = ? AND jobs.is_current = ? AND jobs.finished_at IS NOT NULL
+				AND jobs.current_attempt_id = artifact_sets.attempt_id
+				AND attempts.state = ? AND attempts.is_current = ? AND attempts.finished_at IS NOT NULL`,
+			asset.Ref.RecoveryPointID, asset.CatalogGenerationID, asset.Ref.EntryID,
+			asset.SourceFingerprint, asset.EntryFingerprint, asset.ProviderCapabilityRevision,
+			profile.Capability, profile.CapabilitySchema, pipeline, profile.OutputProfile,
+			processingSecurityPolicyRevision, processing.ProcessingSucceeded, false, "succeeded", false).
+		Where(`artifact_sets.recovery_point_id = ? AND artifact_sets.catalog_generation_id = ?
+				AND artifact_sets.entry_id = ? AND artifact_sets.source_fingerprint = ?
+				AND artifact_sets.security_policy_revision = ? AND artifact_sets.state = ?
+				AND artifact_sets.completeness = ?
+				AND artifact_sets.artifact_count = ? AND artifact_sets.projection_required = ?
+			AND artifacts.ordinal = ? AND artifacts.role = ? AND artifacts.media_type = ?
+			AND artifacts.completeness = ? AND artifacts.plaintext_size > 0
+			AND artifacts.plaintext_size <= ?`,
+			asset.Ref.RecoveryPointID, asset.CatalogGenerationID, asset.Ref.EntryID,
+			asset.SourceFingerprint, processingSecurityPolicyRevision,
+			"active", processing.ArtifactComplete, 1, false, 0,
+			processing.ArtifactRoleMetadata, "application/json", processing.ArtifactComplete,
+			malwareResultMaxBytes).
+		Order("jobs.updated_at DESC, jobs.id ASC").Limit(2).Find(&rows)
+	if query.Error != nil {
+		return processingMalwareEvidence{}, false, fmt.Errorf("load current malware evidence: %w", query.Error)
+	}
+	if len(rows) > 1 {
+		return processingMalwareEvidence{}, false, backupasset.ErrConflict
+	}
+	if len(rows) == 0 {
+		return processingMalwareEvidence{}, false, nil
+	}
+	return rows[0], true, nil
+}
+
+func (runtime *managedProcessingRuntime) requestMalwareContinuation(
+	ctx context.Context,
+	asset content.AuthorizedAsset,
+	profile capabilityspec.Profile,
+	pipeline string,
+) error {
+	if runtime.malwareWork == nil {
+		return fmt.Errorf("%w: malware continuation coordinator unavailable", processing.ErrInvalidContract)
+	}
+	descriptor := processing.WorkDescriptorV1{
+		SchemaVersion: 1, Source: asset.Ref, CatalogGenerationID: asset.CatalogGenerationID,
+		SourceFingerprint: asset.SourceFingerprint, EntryFingerprint: asset.EntryFingerprint,
+		ProviderCapabilityRevision: asset.ProviderCapabilityRevision,
+		Capability:                 profile.Capability, CapabilitySchema: profile.CapabilitySchema,
+		PipelineFingerprint: pipeline, OutputProfile: profile.OutputProfile,
+		SecurityPolicyRevision: processingSecurityPolicyRevision,
+		Parameters:             processing.CanonicalProductionParameters(profile),
+	}
+	if err := processing.ValidateProductionWorkDescriptorV1(descriptor, false); err != nil {
+		return err
+	}
+	digest := sha256.Sum256([]byte("xirang.processing.malware-continuation.v1\x00" +
+		asset.Ref.RecoveryPointID + "\x00" + asset.Ref.EntryID))
+	_, err := runtime.malwareWork.RequestWork(ctx, processing.WorkRequest{
+		Descriptor: descriptor,
+		Interest: processing.InterestRequest{
+			OwnerKind: processing.InterestSystem, OwnerKey: "malware:" + hex.EncodeToString(digest[:]),
+			PriorityClass: processing.PriorityBackground, Priority: 900,
+		},
+	})
+	if errors.Is(err, processing.ErrNotDeployed) {
+		return nil
+	}
+	return err
 }
 
 func (runtime *managedProcessingRuntime) scheduleSecretContinuations(ctx context.Context) (int, error) {
@@ -506,9 +707,14 @@ func (runtime *managedProcessingRuntime) initialize(ctx context.Context, config 
 	if err != nil {
 		return err
 	}
+	invalidation, err := processing.NewInvalidationController(runtime.db, coordinator, lifecycle, runtime.now)
+	if err != nil {
+		return err
+	}
 	sink, err := processing.NewArtifactSink(
 		runtime.db, runtime.lease, grants, store, lifecycle, runtime.revalidateSource,
 		func(context.Context) (string, error) { return processingSecurityPolicyRevision, nil },
+		runtime.activePipelineFingerprint,
 		runtime.now, processing.ArtifactSinkConfig{
 			MaxArtifacts: config.Sink.MaxArtifacts, MaxArtifactBytes: config.Sink.ArtifactMaxBytes,
 			MaxTotalBytes: config.Sink.TotalMaxBytes,
@@ -545,9 +751,12 @@ func (runtime *managedProcessingRuntime) initialize(ctx context.Context, config 
 	runtime.attemptBroker = attemptBroker
 	runtime.store = store
 	runtime.lifecycle = lifecycle
+	runtime.malwareEvidence = lifecycle
+	runtime.malwareWork = coordinator
 	runtime.sink = sink
 	runtime.reconciler = reconciler
 	runtime.derivedReconciler = derivedReconciler
+	runtime.invalidation = invalidation
 	runtime.protocol = protocol
 	runtime.workerProtocol = workerProtocol
 	runtime.capabilityService = capabilityService
@@ -568,40 +777,139 @@ func (runtime *managedProcessingRuntime) activeProductionCapabilityRegistry(
 	return productionCapabilityRegistryForFingerprint(fingerprint)
 }
 
+func (runtime *managedProcessingRuntime) activePipelineFingerprint(
+	ctx context.Context,
+	capability string,
+	outputProfile string,
+) (string, error) {
+	if runtime == nil || capability == "" || outputProfile == "" {
+		return "", processing.ErrProtocolUnavailable
+	}
+	fingerprint, err := runtime.activeUpdaterFingerprint(nonNilRuntimeContext(ctx))
+	if err != nil {
+		return "", err
+	}
+	if fingerprint == "" {
+		return "", nil
+	}
+	registry, err := productionCapabilityRegistryForFingerprint(fingerprint)
+	if err != nil {
+		return "", err
+	}
+	pipeline, ok := registry.ActivePipelineFingerprint(capability, outputProfile)
+	if !ok {
+		return "", nil
+	}
+	return pipeline, nil
+}
+
+func (runtime *managedProcessingRuntime) activePublicationIdentityTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	capability string,
+	outputProfile string,
+) (processing.ActivePublicationIdentity, error) {
+	if runtime == nil || tx == nil || capability == "" || outputProfile == "" {
+		return processing.ActivePublicationIdentity{}, processing.ErrProtocolUnavailable
+	}
+	fingerprint, err := activeUpdaterFingerprintDB(nonNilRuntimeContext(ctx), tx, true)
+	if err != nil {
+		return processing.ActivePublicationIdentity{}, err
+	}
+	if fingerprint == "" {
+		return processing.ActivePublicationIdentity{}, nil
+	}
+	registry, err := productionCapabilityRegistryForFingerprint(fingerprint)
+	if err != nil {
+		return processing.ActivePublicationIdentity{}, err
+	}
+	pipeline, ok := registry.ActivePipelineFingerprint(capability, outputProfile)
+	if !ok {
+		return processing.ActivePublicationIdentity{}, nil
+	}
+	return processing.ActivePublicationIdentity{
+		PipelineFingerprint: pipeline, SecurityPolicyRevision: processingSecurityPolicyRevision,
+	}, nil
+}
+
+func (runtime *managedProcessingRuntime) reconcileActivePipelines(ctx context.Context) error {
+	if runtime == nil {
+		return processing.ErrProtocolUnavailable
+	}
+	runtime.mu.RLock()
+	controller := runtime.invalidation
+	batchSize := runtime.config.Backfill.BatchSize
+	runtime.mu.RUnlock()
+	if controller == nil {
+		return nil
+	}
+	if batchSize <= 0 {
+		config, err := runtime.ProcessingConfig()
+		if err != nil {
+			return err
+		}
+		batchSize = config.Backfill.BatchSize
+	}
+	if batchSize <= 0 || batchSize > 10000 {
+		return processing.ErrInvalidContract
+	}
+	fingerprint, err := runtime.activeUpdaterFingerprint(nonNilRuntimeContext(ctx))
+	if err != nil {
+		return err
+	}
+	if fingerprint == "" {
+		return nil
+	}
+	registry, err := productionCapabilityRegistryForFingerprint(fingerprint)
+	if err != nil {
+		return err
+	}
+	targets := make([]processing.InvalidationTarget, 0, len(capabilityspec.WorkerProfiles()))
+	seen := make(map[string]bool, len(capabilityspec.WorkerProfiles()))
+	for _, profile := range capabilityspec.WorkerProfiles() {
+		key := profile.Capability + "\x00" + profile.OutputProfile
+		if seen[key] {
+			continue
+		}
+		pipeline, ok := registry.ActivePipelineFingerprint(profile.Capability, profile.OutputProfile)
+		if !ok {
+			return processing.ErrProtocolUnavailable
+		}
+		seen[key] = true
+		targets = append(targets, processing.InvalidationTarget{
+			Capability: profile.Capability, OutputProfile: profile.OutputProfile,
+			ActivePipelineFingerprint: pipeline,
+		})
+	}
+	processing.SortInvalidationTargets(targets)
+	_, err = controller.Invalidate(nonNilRuntimeContext(ctx), processing.InvalidationRequest{
+		Targets: targets, BatchSize: batchSize, RequeuePriority: 900,
+	})
+	return err
+}
+
 func productionCapabilityRegistryForFingerprint(fingerprint string) (*processing.CapabilityRegistry, error) {
 	bundles := make(processing.CapabilityBundleFingerprints)
-	for _, profile := range capabilityspec.RequiredProfiles() {
+	for _, profile := range capabilityspec.WorkerProfiles() {
 		bundles[profile.Capability] = []string{fingerprint}
 	}
 	return processing.NewProductionCapabilityRegistryWithBundles(bundles)
 }
 
-func (runtime *managedProcessingRuntime) replacementWorkerProtocol(
+func (runtime *managedProcessingRuntime) replacementWorkerRegistry(
 	fingerprint string,
-) (*processing.ProtocolService, *processing.WorkerProtocolService, error) {
+) (*processing.CapabilityRegistry, error) {
 	runtime.mu.RLock()
 	configured := runtime.workerProtocol != nil
-	coordinator := runtime.coordinator
-	grants := runtime.grants
-	attemptBroker := runtime.attemptBroker
-	sink := runtime.sink
 	runtime.mu.RUnlock()
 	if !configured {
-		return nil, nil, nil
+		return nil, nil
 	}
 	registry, err := productionCapabilityRegistryForFingerprint(fingerprint)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	protocol, err := processing.NewProtocolService(runtime.db, registry, runtime.now)
-	if err != nil {
-		return nil, nil, err
-	}
-	workerProtocol, err := processing.NewWorkerProtocolService(protocol, coordinator, grants, attemptBroker, sink)
-	if err != nil {
-		return nil, nil, err
-	}
-	return protocol, workerProtocol, nil
+	return registry, nil
 }
 
 func (runtime *managedProcessingRuntime) invalidateUnreadableDerivedKey(
@@ -1044,6 +1352,9 @@ func (runtime *managedProcessingRuntime) ReportUpdaterActivation(
 		return processingupdater.ActivationReportResult{}, err
 	}
 	if committed {
+		if err := runtime.reconcileActivePipelines(ctx); err != nil {
+			return processingupdater.ActivationReportResult{}, err
+		}
 		activationOutcome = processing.UpdaterActivationCommit
 		return processingupdater.ActivationReportResult{
 			SchemaVersion: 1, Decision: processingupdater.ActivationDecisionCommit,
@@ -1067,7 +1378,7 @@ func (runtime *managedProcessingRuntime) ReportUpdaterActivation(
 	if !ok {
 		return rollback, nil
 	}
-	nextProtocol, nextWorkerProtocol, err := runtime.replacementWorkerProtocol(request.Receipt.NewFingerprint)
+	nextRegistry, err := runtime.replacementWorkerRegistry(request.Receipt.NewFingerprint)
 	if err != nil {
 		return rollback, nil
 	}
@@ -1114,11 +1425,16 @@ func (runtime *managedProcessingRuntime) ReportUpdaterActivation(
 	if err != nil {
 		return rollback, nil
 	}
-	if nextWorkerProtocol != nil {
-		runtime.mu.Lock()
-		runtime.protocol = nextProtocol
-		runtime.workerProtocol = nextWorkerProtocol
-		runtime.mu.Unlock()
+	if nextRegistry != nil {
+		runtime.mu.RLock()
+		protocol := runtime.protocol
+		runtime.mu.RUnlock()
+		if err := protocol.ReplaceRegistry(nextRegistry); err != nil {
+			return processingupdater.ActivationReportResult{}, err
+		}
+	}
+	if err := runtime.reconcileActivePipelines(ctx); err != nil {
+		return processingupdater.ActivationReportResult{}, err
 	}
 	runtime.pendingUpdaterActivation = nil
 	activationOutcome = processing.UpdaterActivationCommit
@@ -1134,8 +1450,22 @@ func (runtime *managedProcessingRuntime) updaterEnabled() bool {
 }
 
 func (runtime *managedProcessingRuntime) activeUpdaterFingerprint(ctx context.Context) (string, error) {
+	if runtime == nil {
+		return "", processing.ErrProtocolUnavailable
+	}
+	return activeUpdaterFingerprintDB(nonNilRuntimeContext(ctx), runtime.db, false)
+}
+
+func activeUpdaterFingerprintDB(ctx context.Context, db *gorm.DB, lock bool) (string, error) {
+	if db == nil {
+		return "", processing.ErrProtocolUnavailable
+	}
 	var rows []model.BackupAssetUpdaterMetadata
-	if err := runtime.db.WithContext(nonNilRuntimeContext(ctx)).Where("state = ?", "active").Limit(2).Find(&rows).Error; err != nil {
+	query := db.WithContext(nonNilRuntimeContext(ctx)).Where("state = ?", "active").Limit(2)
+	if lock {
+		query = query.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	if err := query.Find(&rows).Error; err != nil {
 		return "", err
 	}
 	if len(rows) > 1 {
@@ -1148,7 +1478,7 @@ func (runtime *managedProcessingRuntime) activeUpdaterFingerprint(ctx context.Co
 }
 
 func validRuntimeUpdaterIdentity(identity processingupdater.UpdaterTransportIdentity) bool {
-	return len(identity.Fingerprint) == 64 && lowerHexRuntime(identity.Fingerprint) && identity.PeerPID > 0
+	return len(identity.Fingerprint) == 64 && lowerHexRuntime(identity.Fingerprint) && identity.PeerPID >= 0
 }
 
 func processingUpdaterDeclarationForReceipt(
@@ -1539,6 +1869,9 @@ func (runtime *managedProcessingRuntime) reconcile(ctx context.Context) error {
 	sink := runtime.sink
 	projectionBatchSize := runtime.config.DerivedStore.ReconcileBatchSize
 	runtime.mu.RUnlock()
+	if err := runtime.reconcileActivePipelines(ctx); err != nil {
+		return err
+	}
 	if _, err := runtime.scheduleSecretContinuations(ctx); err != nil {
 		return err
 	}

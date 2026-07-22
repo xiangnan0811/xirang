@@ -317,6 +317,28 @@ func TestWorkerRunnerAdvertisesClosedProductionSetAndExecutesInjectedNoopLifecyc
 	}
 }
 
+func TestProductionWorkerCapabilitySetAdvertisesOnlyPreflightReadyProfiles(t *testing.T) {
+	set, err := NewProductionWorkerCapabilitySetWithOptions(ProductionWorkerCapabilityOptions{
+		ToolRunner: &productionToolRunnerFake{},
+		AvailableCapabilities: map[string]bool{
+			capabilityspec.CapabilityImageThumbnail: true,
+			capabilityspec.CapabilityTextExtract:    true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	advertisements := set.Advertisements()
+	if len(advertisements) != 2 {
+		t.Fatalf("preflight-filtered advertisements=%d: %+v", len(advertisements), advertisements)
+	}
+	for index, want := range []string{capabilityspec.CapabilityImageThumbnail, capabilityspec.CapabilityTextExtract} {
+		if advertisements[index].Capability != want {
+			t.Fatalf("advertisement %d=%q, want %q", index, advertisements[index].Capability, want)
+		}
+	}
+}
+
 func TestWorkerRunnerUsesMaterializingTransitionForPathProfiles(t *testing.T) {
 	capability := &workerNoopCapabilityFake{}
 	capabilities, err := NewWorkerCapabilitySet([]WorkerCapability{capability})
@@ -571,6 +593,34 @@ func TestOCRNormalizesAdvertisedWebPAndTIFFBeforeTesseract(t *testing.T) {
 	}
 }
 
+func TestOCRRejectsNormalizedRasterAboveOutputBudgetBeforeTesseract(t *testing.T) {
+	var normalized bytes.Buffer
+	if err := png.Encode(&normalized, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	oversized := append([]byte(nil), normalized.Bytes()...)
+	oversized = append(oversized, make([]byte, 8<<20+1-len(oversized))...)
+	runner := &productionToolRunnerFake{results: []workerCapabilities.ToolResult{
+		{Outputs: map[string][]byte{"normalized.png": oversized}},
+	}}
+	capability := productionCapabilityWithRunnerForTest(t, capabilityspec.CapabilityImageOCR, runner)
+	parameters := validWorkDescriptor().Parameters
+	parameters.Language = "eng"
+	source := advertisedRasterFixture(t, "image/webp")
+	_, err := capability.Execute(context.Background(), WorkerCapabilityJob{
+		Parameters: parameters,
+		Input: &workerCapabilityMemoryInput{content: source, info: WorkerInputSourceInfo{
+			Size: int64(len(source)), MediaType: "image/webp", FingerprintStrong: true, Sequential: true, Range: true,
+		}},
+	})
+	if !errors.Is(err, workerCapabilities.ErrInvalidToolOutput) {
+		t.Fatalf("oversized OCR normalization error=%v", err)
+	}
+	if len(runner.invocations) != 1 {
+		t.Fatalf("oversized normalized raster reached Tesseract: invocations=%+v", runner.invocations)
+	}
+}
+
 func TestImageCapabilitiesRejectMIMEMismatchActivePolyglotAndInvalidToolOutput(t *testing.T) {
 	pngSource := advertisedRasterFixture(t, "image/png")
 	for _, testCase := range []struct {
@@ -625,7 +675,7 @@ func TestProductionArchiveInspectEmitsOpaqueBoundedIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := member.Write([]byte("member")); err != nil {
+	if _, err := member.Write([]byte{0x00, 0x01, 0x02, 0xff}); err != nil {
 		t.Fatal(err)
 	}
 	if err := archive.Close(); err != nil {
@@ -646,10 +696,12 @@ func TestProductionArchiveInspectEmitsOpaqueBoundedIndex(t *testing.T) {
 		Entries []struct {
 			ID          string `json:"id"`
 			DisplayName string `json:"display_name"`
+			MediaType   string `json:"media_type"`
 		} `json:"entries"`
 	}
 	if err := json.Unmarshal(metadata, &decoded); err != nil || len(decoded.Entries) != 1 ||
-		len(decoded.Entries[0].ID) != 32 || decoded.Entries[0].DisplayName != "private-name.txt" {
+		len(decoded.Entries[0].ID) != 32 || decoded.Entries[0].DisplayName != "private-name.txt" ||
+		decoded.Entries[0].MediaType != "application/octet-stream" {
 		t.Fatalf("invalid opaque archive index=%+v err=%v", decoded, err)
 	}
 }
@@ -1052,10 +1104,55 @@ func TestProductionDocumentPreflightBlocksActivePackagesBeforeLibreOffice(t *tes
 	}
 }
 
+func TestProductionDocumentPreflightScansLargePDFFullyBeforeToolRunner(t *testing.T) {
+	payload := []byte("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\n")
+	payload = append(payload, bytes.Repeat([]byte{'x'}, (1<<20)+64)...)
+	payload = append(payload, []byte("\n<< /JavaScript 2 0 R >>\n")...)
+	payload = append(payload, bytes.Repeat([]byte{'y'}, (1<<20)+64)...)
+	payload = append(payload, []byte("\n%%EOF")...)
+	if len(payload) <= 2<<20 {
+		t.Fatalf("large PDF fixture is too small: %d", len(payload))
+	}
+	runner := &productionToolRunnerFake{}
+	capability := productionCapabilityWithRunnerForTest(t, capabilityspec.CapabilityDocumentConvert, runner)
+	_, err := capability.Execute(context.Background(), WorkerCapabilityJob{
+		Parameters: validWorkDescriptor().Parameters,
+		Input: &workerCapabilityMemoryInput{content: payload, info: WorkerInputSourceInfo{
+			Size: int64(len(payload)), MediaType: "application/pdf", FingerprintStrong: true, Sequential: true, Range: true,
+		}},
+	})
+	if !errors.Is(err, capabilityspec.ErrUnsupportedMedia) {
+		t.Fatalf("large active PDF preflight error=%v", err)
+	}
+	if len(runner.invocations) != 0 {
+		t.Fatalf("large active PDF reached document tool: %+v", runner.invocations)
+	}
+}
+
+func TestProductionPDFPreflightBlocksClosedUnsupportedSurfacesBeforePoppler(t *testing.T) {
+	for _, token := range []string{"/Encrypt", "/ObjStm", "/XRef", "/EmbeddedFile", "/AcroForm", "/RichMedia"} {
+		t.Run(strings.TrimPrefix(token, "/"), func(t *testing.T) {
+			source := []byte("%PDF-1.7\n1 0 obj\n<< /Type " + token + " >>\nendobj\n%%EOF")
+			runner := &productionToolRunnerFake{}
+			capability := productionCapabilityWithRunnerForTest(t, capabilityspec.CapabilityDocumentConvert, runner)
+			_, err := capability.Execute(context.Background(), WorkerCapabilityJob{
+				Parameters: validWorkDescriptor().Parameters,
+				Input: &workerCapabilityMemoryInput{content: source, info: WorkerInputSourceInfo{
+					Size: int64(len(source)), MediaType: "application/pdf", FingerprintStrong: true, Sequential: true, Range: true,
+				}},
+			})
+			if !errors.Is(err, capabilityspec.ErrUnsupportedMedia) ||
+				mapCapabilityError(err) != ProcessingErrorUnsupportedFormat || len(runner.invocations) != 0 {
+				t.Fatalf("closed PDF surface %s err=%v mapped=%s runner=%+v", token, err, mapCapabilityError(err), runner.invocations)
+			}
+		})
+	}
+}
+
 func TestProductionMalwarePositiveIsSuccessfulSanitizedFinding(t *testing.T) {
 	toolRunner := &productionToolRunnerFake{result: workerCapabilities.ToolResult{
 		ExitCode: 1,
-		Stdout:   "/run/xirang/asset-jobs/job-secret/input.bin: Test.Signature.Name FOUND\n",
+		Stdout:   "input.bin: Test.Signature.Name FOUND\n",
 	}}
 	set, err := NewProductionWorkerCapabilitySetWithOptions(ProductionWorkerCapabilityOptions{
 		ToolRunner: toolRunner, MalwareBundleFingerprint: strings.Repeat("a", 64),
@@ -1108,18 +1205,113 @@ func TestProductionMalwarePositiveIsSuccessfulSanitizedFinding(t *testing.T) {
 	}
 }
 
-func TestProductionDocumentCapabilityRevalidatesRenderedPage(t *testing.T) {
-	var page bytes.Buffer
-	pageImage := image.NewRGBA(image.Rect(0, 0, 2, 3))
-	pageImage.Set(0, 0, color.RGBA{G: 255, A: 255})
-	if err := png.Encode(&page, pageImage); err != nil {
+func TestProductionMalwareResultParserIsClosedAndFailSafe(t *testing.T) {
+	tests := []struct {
+		name      string
+		result    workerCapabilities.ToolResult
+		wantError error
+		wantState capabilityspec.ScanState
+	}{
+		{name: "clean", result: workerCapabilities.ToolResult{}, wantState: capabilityspec.ScanNoFinding},
+		{
+			name: "finding", result: workerCapabilities.ToolResult{
+				ExitCode: 1, Stdout: "input.bin: Test.Signature.Name FOUND\n",
+			}, wantState: capabilityspec.ScanFinding,
+		},
+		{
+			name: "limit", result: workerCapabilities.ToolResult{
+				ExitCode: 1, Stdout: "input.bin: Heuristics.Limits.Exceeded.MaxFileSize FOUND\n",
+			}, wantError: workerCapabilities.ErrInputLimit,
+		},
+		{name: "clean warning", result: workerCapabilities.ToolResult{Stdout: "WARNING: incomplete scan\n"}, wantError: workerCapabilities.ErrInvalidToolOutput},
+		{
+			name: "finding warning", result: workerCapabilities.ToolResult{
+				ExitCode: 1, Stdout: "WARNING: incomplete scan\ninput.bin: Test.Signature.Name FOUND\n",
+			}, wantError: workerCapabilities.ErrInvalidToolOutput,
+		},
+		{
+			name: "multiple findings", result: workerCapabilities.ToolResult{
+				ExitCode: 1, Stdout: "input.bin: First.Signature FOUND\ninput.bin: Second.Signature FOUND\n",
+			}, wantError: workerCapabilities.ErrInvalidToolOutput,
+		},
+		{
+			name: "wrong path", result: workerCapabilities.ToolResult{
+				ExitCode: 1, Stdout: "/run/xirang/asset-jobs/job-secret/input.bin: Test.Signature.Name FOUND\n",
+			}, wantError: workerCapabilities.ErrInvalidToolOutput,
+		},
+		{
+			name: "control byte", result: workerCapabilities.ToolResult{
+				ExitCode: 1, Stdout: "input.bin: Test\x00Signature FOUND\n",
+			}, wantError: workerCapabilities.ErrInvalidToolOutput,
+		},
+		{name: "stderr", result: workerCapabilities.ToolResult{Stderr: "diagnostic"}, wantError: workerCapabilities.ErrInvalidToolOutput},
+		{name: "stdout truncated", result: workerCapabilities.ToolResult{StdoutTruncated: true}, wantError: workerCapabilities.ErrInvalidToolOutput},
+		{name: "stderr truncated", result: workerCapabilities.ToolResult{StderrTruncated: true}, wantError: workerCapabilities.ErrInvalidToolOutput},
+		{name: "exit two", result: workerCapabilities.ToolResult{ExitCode: 2}, wantError: workerCapabilities.ErrInvalidToolOutput},
+		{name: "unexpected output file", result: workerCapabilities.ToolResult{Outputs: map[string][]byte{"metadata.json": []byte("{}")}}, wantError: workerCapabilities.ErrInvalidToolOutput},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			capability := productionMalwareCapabilityForTest(t, &productionToolRunnerFake{result: testCase.result})
+			source := []byte("bounded test input")
+			artifacts, err := capability.Execute(context.Background(), WorkerCapabilityJob{
+				Parameters: validWorkDescriptor().Parameters,
+				Input: &workerCapabilityMemoryInput{content: source, info: WorkerInputSourceInfo{
+					Size: int64(len(source)), MediaType: "application/octet-stream", Sequential: true, Range: true,
+				}},
+			})
+			if testCase.wantError != nil {
+				if !errors.Is(err, testCase.wantError) || len(artifacts) != 0 {
+					t.Fatalf("malware result error=%v artifacts=%+v, want %v", err, artifacts, testCase.wantError)
+				}
+				return
+			}
+			if err != nil || len(artifacts) != 1 {
+				t.Fatalf("malware result error=%v artifacts=%+v", err, artifacts)
+			}
+			payload, readErr := io.ReadAll(artifacts[0].Content)
+			var result capabilityspec.MalwareResult
+			if readErr != nil || json.Unmarshal(payload, &result) != nil || result.Validate() != nil || result.Result != testCase.wantState {
+				t.Fatalf("canonical malware result=%+v payload=%q readErr=%v", result, payload, readErr)
+			}
+		})
+	}
+}
+
+func productionMalwareCapabilityForTest(t *testing.T, runner ProductionToolRunner) WorkerCapability {
+	t.Helper()
+	set, err := NewProductionWorkerCapabilitySetWithOptions(ProductionWorkerCapabilityOptions{
+		ToolRunner: runner, MalwareBundleFingerprint: strings.Repeat("a", 64),
+		Now: func() time.Time { return time.Unix(1, 0).UTC() },
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	toolRunner := &productionToolRunnerFake{result: workerCapabilities.ToolResult{
-		Outputs: map[string][]byte{"page-01.png": page.Bytes()},
+	for _, advertisement := range set.Advertisements() {
+		if advertisement.Capability == capabilityspec.CapabilityMalwareScan {
+			return set.capabilities[capabilityKey(
+				advertisement.Capability, advertisement.CapabilitySchema,
+				advertisement.PipelineFingerprint, advertisement.OutputProfile,
+			)]
+		}
+	}
+	t.Fatal("malware.scan implementation missing")
+	return nil
+}
+
+func TestProductionPDFCapabilityRunsBoundedPageAndTextToolsWithFreshImmutableInput(t *testing.T) {
+	pageOutputs := make(map[string][]byte, 10)
+	for page := 1; page <= 10; page++ {
+		pageOutputs[fmt.Sprintf("page-%d.png", page)] = encodedPDFPageForTest(t, page, 1)
+	}
+	text := []byte("first page\nsecond page\n")
+	toolRunner := &productionToolRunnerFake{results: []workerCapabilities.ToolResult{
+		{Outputs: pageOutputs},
+		{Outputs: map[string][]byte{"content.txt": text}},
 	}}
-	capability := productionCapabilityWithRunnerForTest(t, "document.convert", toolRunner)
+	capability := productionCapabilityWithRunnerForTest(t, capabilityspec.CapabilityDocumentConvert, toolRunner)
 	source := []byte("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF")
+	original := append([]byte(nil), source...)
 	artifacts, err := capability.Execute(context.Background(), WorkerCapabilityJob{
 		Parameters: validWorkDescriptor().Parameters,
 		Input: &workerCapabilityMemoryInput{
@@ -1130,14 +1322,172 @@ func TestProductionDocumentCapabilityRevalidatesRenderedPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(artifacts) != 2 || artifacts[0].Declaration.Role != ArtifactRoleThumbnail ||
-		artifacts[1].Declaration.Role != ArtifactRoleMetadata {
-		t.Fatalf("unexpected document artifacts: %+v", artifacts)
+	if len(toolRunner.invocations) != 2 ||
+		toolRunner.invocations[0].ExecutableID != workerCapabilities.ExecutablePDFToCairo ||
+		toolRunner.invocations[0].ArgProfile != workerCapabilities.ArgsPDFPages ||
+		toolRunner.invocations[1].ExecutableID != workerCapabilities.ExecutablePDFToText ||
+		toolRunner.invocations[1].ArgProfile != workerCapabilities.ArgsPDFText {
+		t.Fatalf("PDF tool sequence=%+v", toolRunner.invocations)
 	}
+	if len(toolRunner.inputs) != 2 || !bytes.Equal(toolRunner.inputs[0], original) ||
+		!bytes.Equal(toolRunner.inputs[1], original) || !bytes.Equal(source, original) {
+		t.Fatalf("PDF tool inputs/source changed: inputs=%q source=%q", toolRunner.inputs, source)
+	}
+	if len(artifacts) != 12 {
+		t.Fatalf("PDF artifacts=%d, want 10 pages + text + metadata", len(artifacts))
+	}
+	for page := 1; page <= 10; page++ {
+		artifact := artifacts[page-1]
+		content, readErr := io.ReadAll(artifact.Content)
+		config, format, decodeErr := image.DecodeConfig(bytes.NewReader(content))
+		if readErr != nil || decodeErr != nil || format != "png" || config.Width != page || config.Height != 1 ||
+			artifact.Declaration.Ordinal != page-1 || artifact.Declaration.Role != ArtifactRoleThumbnail {
+			t.Fatalf("PDF page %d artifact=%+v config=%+v format=%q readErr=%v decodeErr=%v", page, artifact.Declaration, config, format, readErr, decodeErr)
+		}
+	}
+	content, err := io.ReadAll(artifacts[10].Content)
+	if err != nil || !bytes.Equal(content, text) || artifacts[10].Declaration.Role != ArtifactRoleContent ||
+		artifacts[10].Declaration.MediaType != "text/plain" {
+		t.Fatalf("PDF text artifact=%+v content=%q err=%v", artifacts[10].Declaration, content, err)
+	}
+	metadata, err := io.ReadAll(artifacts[11].Content)
+	var decoded struct {
+		SchemaVersion int    `json:"schema_version"`
+		Coverage      string `json:"coverage"`
+		RenderedPages int    `json:"rendered_pages"`
+	}
+	if err != nil || json.Unmarshal(metadata, &decoded) != nil || decoded.SchemaVersion != 1 ||
+		decoded.Coverage != "partial" || decoded.RenderedPages != 10 ||
+		artifacts[11].Declaration.Role != ArtifactRoleMetadata {
+		t.Fatalf("PDF metadata=%q decoded=%+v err=%v", metadata, decoded, err)
+	}
+}
+
+func TestProductionPDFCapabilityRejectsMissingOrInvalidTextOutput(t *testing.T) {
+	pageResult := workerCapabilities.ToolResult{Outputs: map[string][]byte{"page-1.png": encodedPDFPageForTest(t, 1, 1)}}
+	tests := []struct {
+		name   string
+		result workerCapabilities.ToolResult
+	}{
+		{name: "missing content", result: workerCapabilities.ToolResult{}},
+		{name: "invalid UTF-8", result: workerCapabilities.ToolResult{Outputs: map[string][]byte{"content.txt": {0xff}}}},
+		{name: "NUL byte", result: workerCapabilities.ToolResult{Outputs: map[string][]byte{"content.txt": []byte("text\x00tail")}}},
+		{name: "unexpected output", result: workerCapabilities.ToolResult{Outputs: map[string][]byte{"content.txt": []byte("text"), "metadata.json": []byte("{}")}}},
+		{name: "nonzero exit", result: workerCapabilities.ToolResult{ExitCode: 1, Outputs: map[string][]byte{"content.txt": []byte("text")}}},
+		{name: "stdout", result: workerCapabilities.ToolResult{Stdout: "diagnostic", Outputs: map[string][]byte{"content.txt": []byte("text")}}},
+		{name: "stderr", result: workerCapabilities.ToolResult{Stderr: "diagnostic", Outputs: map[string][]byte{"content.txt": []byte("text")}}},
+		{name: "truncated", result: workerCapabilities.ToolResult{StdoutTruncated: true, Outputs: map[string][]byte{"content.txt": []byte("text")}}},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			runner := &productionToolRunnerFake{results: []workerCapabilities.ToolResult{pageResult, testCase.result}}
+			artifacts, err := executePDFCapabilityForTest(t, runner, validWorkDescriptor().Parameters)
+			if !errors.Is(err, workerCapabilities.ErrInvalidToolOutput) || len(artifacts) != 0 {
+				t.Fatalf("invalid PDF text err=%v artifacts=%+v", err, artifacts)
+			}
+		})
+	}
+}
+
+func TestProductionPDFCapabilityRejectsMalformedPageOutput(t *testing.T) {
+	page := encodedPDFPageForTest(t, 1, 1)
+	thirtyOnePages := make(map[string][]byte, 31)
+	for number := 1; number <= 31; number++ {
+		thirtyOnePages[fmt.Sprintf("page-%d.png", number)] = page
+	}
+	tests := []struct {
+		name   string
+		result workerCapabilities.ToolResult
+	}{
+		{name: "missing pages", result: workerCapabilities.ToolResult{}},
+		{name: "missing first page", result: workerCapabilities.ToolResult{Outputs: map[string][]byte{"page-2.png": page}}},
+		{name: "page gap", result: workerCapabilities.ToolResult{Outputs: map[string][]byte{"page-1.png": page, "page-3.png": page}}},
+		{name: "zero padded name", result: workerCapabilities.ToolResult{Outputs: map[string][]byte{"page-01.png": page}}},
+		{name: "malformed name", result: workerCapabilities.ToolResult{Outputs: map[string][]byte{"page-one.png": page}}},
+		{name: "over page limit", result: workerCapabilities.ToolResult{Outputs: thirtyOnePages}},
+		{name: "mixed tool outputs", result: workerCapabilities.ToolResult{Outputs: map[string][]byte{"page-1.png": page, "content.txt": []byte("text")}}},
+		{name: "invalid PNG", result: workerCapabilities.ToolResult{Outputs: map[string][]byte{"page-1.png": []byte("not-png")}}},
+		{name: "nonzero exit", result: workerCapabilities.ToolResult{ExitCode: 1, Outputs: map[string][]byte{"page-1.png": page}}},
+		{name: "stdout", result: workerCapabilities.ToolResult{Stdout: "diagnostic", Outputs: map[string][]byte{"page-1.png": page}}},
+		{name: "stderr", result: workerCapabilities.ToolResult{Stderr: "diagnostic", Outputs: map[string][]byte{"page-1.png": page}}},
+		{name: "truncated", result: workerCapabilities.ToolResult{StderrTruncated: true, Outputs: map[string][]byte{"page-1.png": page}}},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			runner := &productionToolRunnerFake{results: []workerCapabilities.ToolResult{
+				testCase.result,
+				{Outputs: map[string][]byte{"content.txt": []byte("text")}},
+			}}
+			artifacts, err := executePDFCapabilityForTest(t, runner, validWorkDescriptor().Parameters)
+			if !errors.Is(err, workerCapabilities.ErrInvalidToolOutput) || len(artifacts) != 0 {
+				t.Fatalf("invalid PDF pages err=%v artifacts=%+v", err, artifacts)
+			}
+		})
+	}
+}
+
+func TestProductionPDFCapabilityEnforcesCombinedArtifactLimits(t *testing.T) {
+	page := encodedPDFPageForTest(t, 1, 1)
+	text := bytes.Repeat([]byte{'x'}, 512)
+	for _, testCase := range []struct {
+		name       string
+		parameters CanonicalParametersV1
+	}{
+		{name: "artifact count", parameters: func() CanonicalParametersV1 {
+			value := validWorkDescriptor().Parameters
+			value.MaxOutputCount = 2
+			return value
+		}()},
+		{name: "aggregate bytes", parameters: func() CanonicalParametersV1 {
+			value := validWorkDescriptor().Parameters
+			value.MaxOutputBytes = int64(len(page) + 256)
+			return value
+		}()},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			runner := &productionToolRunnerFake{results: []workerCapabilities.ToolResult{
+				{Outputs: map[string][]byte{"page-1.png": page}},
+				{Outputs: map[string][]byte{"content.txt": text}},
+			}}
+			artifacts, err := executePDFCapabilityForTest(t, runner, testCase.parameters)
+			if !errors.Is(err, workerCapabilities.ErrInvalidToolOutput) || len(artifacts) != 0 {
+				t.Fatalf("PDF aggregate limit err=%v artifacts=%+v", err, artifacts)
+			}
+		})
+	}
+}
+
+func executePDFCapabilityForTest(
+	t *testing.T,
+	runner ProductionToolRunner,
+	parameters CanonicalParametersV1,
+) ([]WorkerCapabilityArtifact, error) {
+	t.Helper()
+	source := []byte("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF")
+	capability := productionCapabilityWithRunnerForTest(t, capabilityspec.CapabilityDocumentConvert, runner)
+	return capability.Execute(context.Background(), WorkerCapabilityJob{
+		Parameters: parameters,
+		Input: &workerCapabilityMemoryInput{content: source, info: WorkerInputSourceInfo{
+			Size: int64(len(source)), MediaType: "application/pdf", Sequential: true, Range: true,
+		}},
+	})
+}
+
+func encodedPDFPageForTest(t *testing.T, width, height int) []byte {
+	t.Helper()
+	var page bytes.Buffer
+	pageImage := image.NewRGBA(image.Rect(0, 0, width, height))
+	pageImage.Set(0, 0, color.RGBA{G: 255, A: 255})
+	if err := png.Encode(&page, pageImage); err != nil {
+		t.Fatal(err)
+	}
+	return page.Bytes()
 }
 
 func TestProductionMediaProbeCanonicalizesBoundedToolOutput(t *testing.T) {
 	toolRunner := &productionToolRunnerFake{result: workerCapabilities.ToolResult{Stdout: `{
+  "programs":[],
+  "stream_groups":[],
   "streams":[{"index":0,"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"duration":"12.5"}],
   "format":{"duration":"12.5"}
 }`}}
@@ -1160,6 +1510,49 @@ func TestProductionMediaProbeCanonicalizesBoundedToolOutput(t *testing.T) {
 	if err != nil || !json.Valid(metadata) || bytes.Contains(bytes.ToLower(metadata), []byte("path")) {
 		t.Fatalf("unsafe media metadata=%q err=%v", metadata, err)
 	}
+}
+
+func TestProductionMediaProbeRejectsOpenToolEnvelope(t *testing.T) {
+	valid := `{"programs":[],"stream_groups":[],"streams":[{"index":0,"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"duration":"12.5"}],"format":{"duration":"12.5"}}`
+	tests := []struct {
+		name   string
+		result workerCapabilities.ToolResult
+	}{
+		{name: "stderr", result: workerCapabilities.ToolResult{Stdout: valid, Stderr: "diagnostic"}},
+		{name: "stdout truncated", result: workerCapabilities.ToolResult{Stdout: valid, StdoutTruncated: true}},
+		{name: "stderr truncated", result: workerCapabilities.ToolResult{Stdout: valid, StderrTruncated: true}},
+		{name: "unknown top-level field", result: workerCapabilities.ToolResult{Stdout: `{"programs":[],"stream_groups":[],"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}],"format":{"duration":"12.5"},"path":"secret"}`}},
+		{name: "unknown stream field", result: workerCapabilities.ToolResult{Stdout: `{"programs":[],"stream_groups":[],"streams":[{"index":0,"codec_type":"video","codec_name":"h264","tags":{}}],"format":{"duration":"12.5"}}`}},
+		{name: "unknown format field", result: workerCapabilities.ToolResult{Stdout: `{"programs":[],"stream_groups":[],"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}],"format":{"duration":"12.5","filename":"secret"}}`}},
+		{name: "program wrapper is nonempty", result: workerCapabilities.ToolResult{Stdout: `{"programs":[{}],"stream_groups":[],"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}],"format":{"duration":"12.5"}}`}},
+		{name: "stream group wrapper is nonempty", result: workerCapabilities.ToolResult{Stdout: `{"programs":[],"stream_groups":[{}],"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}],"format":{"duration":"12.5"}}`}},
+		{name: "program wrapper is missing", result: workerCapabilities.ToolResult{Stdout: `{"stream_groups":[],"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}],"format":{"duration":"12.5"}}`}},
+		{name: "stream group wrapper is missing", result: workerCapabilities.ToolResult{Stdout: `{"programs":[],"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}],"format":{"duration":"12.5"}}`}},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			artifacts, err := executeMediaProbeForTest(t, testCase.result)
+			if !errors.Is(err, workerCapabilities.ErrInvalidToolOutput) || len(artifacts) != 0 {
+				t.Fatalf("open ffprobe result err=%v artifacts=%+v", err, artifacts)
+			}
+		})
+	}
+}
+
+func executeMediaProbeForTest(
+	t *testing.T,
+	result workerCapabilities.ToolResult,
+) ([]WorkerCapabilityArtifact, error) {
+	t.Helper()
+	capability := productionCapabilityWithRunnerForTest(t, capabilityspec.CapabilityMediaProbe, &productionToolRunnerFake{result: result})
+	source := []byte{0, 0, 0, 16, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm', 0, 0, 0, 0}
+	return capability.Execute(context.Background(), WorkerCapabilityJob{
+		Parameters: validWorkDescriptor().Parameters,
+		Input: &workerCapabilityMemoryInput{
+			content: source,
+			info:    WorkerInputSourceInfo{Size: int64(len(source)), MediaType: "video/mp4", Sequential: true, Range: true},
+		},
+	})
 }
 
 func TestProductionMediaTranscodeRevalidatesClosedPreviewOutput(t *testing.T) {

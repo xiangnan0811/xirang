@@ -14,6 +14,9 @@ fail() {
 if [[ ! -f "$SMOKE" ]]; then
   fail "smoke script not found: $SMOKE"
 fi
+if ! grep -Fq -- 'ADMIN_INITIAL_PASSWORD=CoreSmokeAdmin1!' "$SMOKE"; then
+  fail "smoke fixture is missing the required initial admin password"
+fi
 
 DOCKER_LOG="$TMP_DIR/docker.log"
 CURL_LOG="$TMP_DIR/curl.log"
@@ -31,9 +34,19 @@ case "$*" in
       echo existing-core
     fi
     ;;
+  *" up -d --no-build xirang")
+    if [[ "${MOCK_UP_FAILURE:-0}" == "1" ]]; then
+      exit 1
+    fi
+    ;;
   *" ps -q xirang") echo core-smoke-container ;;
-  "inspect --format {{.State.Health.Status}} core-smoke-container") echo healthy ;;
-  *" ps --services --status running") echo xirang ;;
+	  "inspect --format {{.State.Health.Status}} core-smoke-container") echo healthy ;;
+	  "logs core-smoke-container")
+	    if [[ "${MOCK_PROCESSING_WARNING:-0}" == "1" ]]; then
+	      echo 'module=backup_asset_processing stage=startup 备份资产处理运行时不可用'
+	    fi
+	    ;;
+	  *" ps --services --status running") echo xirang ;;
 esac
 DOCKER
 
@@ -63,11 +76,30 @@ fi
 if ! grep -Fq -- 'down --volumes --remove-orphans' "$DOCKER_LOG"; then
   fail "smoke did not perform targeted project cleanup"
 fi
+if ! grep -Fq -- 'run --rm --network none --user 0:0 --read-only --cap-drop ALL --cap-add DAC_OVERRIDE' "$DOCKER_LOG"; then
+  fail "smoke did not clean Core-owned bind data through an isolated helper"
+fi
 if grep -Eq -- '(^| )(system prune|container prune|rm -f|--profile asset-worker)( |$)' "$DOCKER_LOG"; then
   fail "smoke used broad cleanup or enabled the Worker profile"
 fi
 if ! grep -Fq -- 'http://127.0.0.1:10761/healthz' "$CURL_LOG"; then
   fail "smoke did not probe the unchanged core health endpoint"
+fi
+if ! grep -Fq -- 'logs core-smoke-container' "$DOCKER_LOG"; then
+  fail "smoke did not inspect Core logs for disabled processing startup noise"
+fi
+
+: >"$DOCKER_LOG"
+if MOCK_PROCESSING_WARNING=1 run_smoke >"$TMP_DIR/processing-warning.log" 2>&1; then
+  fail "smoke accepted disabled processing startup warning noise"
+fi
+
+: >"$DOCKER_LOG"
+if MOCK_UP_FAILURE=1 run_smoke >"$TMP_DIR/up-failure.log" 2>&1; then
+  fail "smoke accepted a failed Compose startup"
+fi
+if ! grep -Fq -- 'down --volumes --remove-orphans' "$DOCKER_LOG"; then
+  fail "smoke did not clean its project after a partial Compose startup"
 fi
 
 : >"$DOCKER_LOG"

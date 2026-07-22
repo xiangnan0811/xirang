@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +26,7 @@ func TestInboxScansFixedNoFollowPackageAndReturnsSanitizedReceipt(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidates, err := inbox.Scan(context.Background(), TrustStore{Keys: []TrustedKey{{
+	candidates, err := collectInboxCandidates(t, context.Background(), inbox, TrustStore{Keys: []TrustedKey{{
 		ID: "key-2026", PublicKey: publicKey, ActiveFrom: now.Add(-time.Hour), RetireAfter: now.Add(time.Hour),
 	}}}, now)
 	if err != nil {
@@ -44,6 +45,99 @@ func TestInboxScansFixedNoFollowPackageAndReturnsSanitizedReceipt(t *testing.T) 
 		if strings.Contains(lower, strings.ToLower(forbidden)) {
 			t.Fatalf("sanitized inbox receipt leaked %q: %s", forbidden, payload)
 		}
+	}
+}
+
+func TestInboxAcceptsCandidateDeliveredAfterStartup(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { makeTreeWritable(root) })
+	inbox, err := NewInbox(root, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	publicKey, _, _ := writeInboxCandidate(t, root, "candidate-after-startup", now)
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+
+	candidates, err := collectInboxCandidates(t, context.Background(), inbox, TrustStore{Keys: []TrustedKey{{
+		ID: "key-2026", PublicKey: publicKey, ActiveFrom: now.Add(-time.Hour), RetireAfter: now.Add(time.Hour),
+	}}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidate count=%d want=1", len(candidates))
+	}
+}
+
+func TestInboxEnumerationIsBatchedAndCandidateBounded(t *testing.T) {
+	root := t.TempDir()
+	for index := 0; index < 6; index++ {
+		name := filepath.Join(root, fmt.Sprintf("candidate-%02d", index))
+		if err := os.Mkdir(name, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handle, err := os.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = handle.Close() }()
+	reader := &recordingDirectoryReader{File: handle}
+	entries, err := readBoundedDirectory(reader, 5)
+	if !errors.Is(err, ErrPolicyRejected) || entries != nil {
+		t.Fatalf("over-limit directory entries=%v error=%v", entries, err)
+	}
+	if len(reader.batchSizes) == 0 {
+		t.Fatal("directory enumeration made no bounded reads")
+	}
+	for _, size := range reader.batchSizes {
+		if size <= 0 || size > inboxReadBatchSize {
+			t.Fatalf("unbounded directory read size=%d batches=%v", size, reader.batchSizes)
+		}
+	}
+}
+
+func TestInboxFreezesFifteenMinuteDeadlinePerCandidate(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	root := t.TempDir()
+	publicKey, _, _ := writeInboxCandidate(t, root, "candidate", now)
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { makeTreeWritable(root) })
+	inbox, err := NewInbox(root, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(newStoreTestRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	visited := false
+	err = inbox.Scan(context.Background(), TrustStore{Keys: []TrustedKey{{
+		ID: "key-2026", PublicKey: publicKey, ActiveFrom: now.Add(-time.Hour), RetireAfter: now.Add(time.Hour),
+	}}}, now, func(packageCtx context.Context, candidate InboxCandidate) error {
+		visited = true
+		deadline, ok := packageCtx.Deadline()
+		remaining := time.Until(deadline)
+		if !ok || remaining <= 14*time.Minute+59*time.Second || remaining > offlinePackageDeadline {
+			t.Fatalf("offline package deadline ok=%v remaining=%v", ok, remaining)
+		}
+		_, err := store.storeInboxCandidate(packageCtx, candidate)
+		return err
+	})
+	if err != nil || !visited {
+		t.Fatalf("offline deadline scan visited=%v error=%v", visited, err)
 	}
 }
 
@@ -69,7 +163,7 @@ func TestInboxRejectsRootReachedThroughSymlinkedAncestor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = inbox.Scan(context.Background(), TrustStore{Keys: []TrustedKey{{
+	_, err = collectInboxCandidates(t, context.Background(), inbox, TrustStore{Keys: []TrustedKey{{
 		ID: "key-2026", PublicKey: publicKey, ActiveFrom: now.Add(-time.Hour), RetireAfter: now.Add(time.Hour),
 	}}}, now)
 	if !errors.Is(err, ErrPolicyRejected) {
@@ -125,7 +219,7 @@ func TestInboxRejectsSymlinkHardlinkAndExtraEntries(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = inbox.Scan(context.Background(), TrustStore{Keys: []TrustedKey{{
+			_, err = collectInboxCandidates(t, context.Background(), inbox, TrustStore{Keys: []TrustedKey{{
 				ID: "key-2026", PublicKey: publicKey, ActiveFrom: now.Add(-time.Hour), RetireAfter: now.Add(time.Hour),
 			}}}, now)
 			if !errors.Is(err, ErrPolicyRejected) {
@@ -133,6 +227,173 @@ func TestInboxRejectsSymlinkHardlinkAndExtraEntries(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInboxVerifiesManifestBeforeOpeningBundle(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	root := t.TempDir()
+	publicKey, _, _ := writeInboxCandidate(t, root, "candidate", now)
+	candidate := filepath.Join(root, "candidate")
+	manifestPath := filepath.Join(candidate, "manifest.json")
+	manifestPayload, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest Manifest
+	if err := json.Unmarshal(manifestPayload, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Signature = strings.Repeat("A", len(manifest.Signature))
+	manifestPayload, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(candidate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(manifestPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, manifestPayload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(manifestPath, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	bundlePath := filepath.Join(candidate, "bundle.tar")
+	if err := os.Remove(bundlePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("missing-bundle", bundlePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(candidate, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { makeTreeWritable(root) })
+	inbox, err := NewInbox(root, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = inbox.Scan(context.Background(), TrustStore{Keys: []TrustedKey{{
+		ID: "key-2026", PublicKey: publicKey, ActiveFrom: now.Add(-time.Hour), RetireAfter: now.Add(time.Hour),
+	}}}, now, func(context.Context, InboxCandidate) error {
+		t.Fatal("bundle callback ran before invalid manifest was rejected")
+		return nil
+	})
+	if !errors.Is(err, ErrInvalidSignature) {
+		t.Fatalf("manifest-first error=%v", err)
+	}
+}
+
+func TestInboxStreamingStoreRejectsSourceDriftAndReplacementWithoutPublishing(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*testing.T, string, []byte)
+	}{
+		{name: "in-place metadata drift", mutate: func(t *testing.T, path string, _ []byte) {
+			t.Helper()
+			future := now.Add(24 * time.Hour)
+			if err := os.Chtimes(path, future, future); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "in-place rewrite with restored mtime", mutate: func(t *testing.T, path string, bundle []byte) {
+			t.Helper()
+			before, err := os.Lstat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, bundle, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, 0o444); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "path replacement", mutate: func(t *testing.T, path string, bundle []byte) {
+			t.Helper()
+			candidate := filepath.Dir(path)
+			if err := os.Chmod(candidate, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, bundle, 0o444); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(candidate, 0o555); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := t.TempDir()
+			publicKey, _, bundle := writeInboxCandidate(t, root, "candidate", now)
+			if err := os.Chmod(root, 0o555); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { makeTreeWritable(root) })
+			inbox, err := NewInbox(root, 1<<20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			storeRoot := newStoreTestRoot(t)
+			store, err := NewStore(storeRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bundlePath := filepath.Join(root, "candidate", "bundle.tar")
+			err = inbox.Scan(context.Background(), TrustStore{Keys: []TrustedKey{{
+				ID: "key-2026", PublicKey: publicKey, ActiveFrom: now.Add(-time.Hour), RetireAfter: now.Add(time.Hour),
+			}}}, now, func(packageCtx context.Context, candidate InboxCandidate) error {
+				testCase.mutate(t, bundlePath, bundle)
+				_, storeErr := store.storeInboxCandidate(packageCtx, candidate)
+				return storeErr
+			})
+			if !errors.Is(err, ErrPolicyRejected) {
+				t.Fatalf("unstable source error=%v", err)
+			}
+			entries, readErr := os.ReadDir(filepath.Join(storeRoot, "bundles"))
+			if readErr != nil || len(entries) != 0 {
+				t.Fatalf("unstable source published or left staging: entries=%v err=%v", entries, readErr)
+			}
+		})
+	}
+}
+
+func collectInboxCandidates(
+	t *testing.T,
+	ctx context.Context,
+	inbox *Inbox,
+	trust TrustStore,
+	now time.Time,
+) ([]InboxCandidate, error) {
+	t.Helper()
+	store, err := NewStore(newStoreTestRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make([]InboxCandidate, 0)
+	err = inbox.Scan(ctx, trust, now, func(packageCtx context.Context, candidate InboxCandidate) error {
+		if _, err := store.storeInboxCandidate(packageCtx, candidate); err != nil {
+			return err
+		}
+		result = append(result, candidate)
+		return nil
+	})
+	return result, err
 }
 
 func writeInboxCandidate(t *testing.T, root, name string, now time.Time) (ed25519.PublicKey, []byte, []byte) {
@@ -184,4 +445,14 @@ func makeTreeWritable(root string) {
 		}
 		return nil
 	})
+}
+
+type recordingDirectoryReader struct {
+	*os.File
+	batchSizes []int
+}
+
+func (reader *recordingDirectoryReader) ReadDir(count int) ([]os.DirEntry, error) {
+	reader.batchSizes = append(reader.batchSizes, count)
+	return reader.File.ReadDir(count)
 }

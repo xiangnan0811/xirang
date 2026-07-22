@@ -34,7 +34,7 @@ func UpdaterIdentityFromConn(connection net.Conn) (UpdaterTransportIdentity, boo
 		return UpdaterTransportIdentity{}, false
 	}
 	identity := authenticated.UpdaterIdentity()
-	if !lowerHex(identity.Fingerprint, 64) || identity.PeerPID <= 0 {
+	if !lowerHex(identity.Fingerprint, 64) || identity.PeerPID < 0 {
 		return UpdaterTransportIdentity{}, false
 	}
 	return identity, true

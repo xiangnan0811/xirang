@@ -64,7 +64,7 @@ type Limits struct {
 	MaxStreams          int64         `json:"max_streams"`
 	MaxRunes            int64         `json:"max_runes"`
 	MaxLines            int64         `json:"max_lines"`
-	WallTime            time.Duration `json:"wall_time"`
+	WallTime            time.Duration `json:"wall_time" swaggertype:"integer"`
 }
 
 type Identity struct {

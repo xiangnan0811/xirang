@@ -14,9 +14,13 @@ import (
 	"os"
 	"path"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"xirang/backend/internal/backupasset/processing/capabilityspec"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
 
 type ArchiveLimits struct {
@@ -120,7 +124,7 @@ func inspectZIP(input []byte, limits ArchiveLimits) (ArchiveIndex, error) {
 		}
 		clean, err := validateArchivePath(file.Name, limits.MaxDepth)
 		mode := file.FileInfo().Mode()
-		collisionKey := strings.ToLower(clean)
+		collisionKey := archivePathCollisionKey(clean)
 		if err != nil || seen[collisionKey] || mode.IsDir() || !mode.IsRegular() ||
 			mode&(os.ModeSymlink|os.ModeDevice|os.ModeNamedPipe|os.ModeSocket) != 0 {
 			return ArchiveIndex{}, ErrInvalidToolOutput
@@ -216,7 +220,7 @@ func processTARStream(
 			return ArchiveIndex{}, nil, "", ErrInvalidToolOutput
 		}
 		clean, pathErr := validateArchivePath(header.Name, limits.MaxDepth)
-		collisionKey := strings.ToLower(clean)
+		collisionKey := archivePathCollisionKey(clean)
 		if pathErr != nil || seen[collisionKey] || header.Size < 0 || header.Size > limits.MaxMemberBytes ||
 			header.Size > limits.MaxExpandedBytes-result.ExpandedBytes {
 			return ArchiveIndex{}, nil, "", ErrInputLimit
@@ -316,23 +320,84 @@ func isRegularTARType(typeflag byte) bool {
 
 func archiveEntry(clean string, size int64, ordinal int, checksum uint32) ArchiveEntry {
 	digest := sha256.Sum256([]byte(fmt.Sprintf("xirang.archive.member.v1\x00%d\x00%d", ordinal, checksum)))
-	return ArchiveEntry{ID: hex.EncodeToString(digest[:16]), DisplayName: path.Base(clean), Size: size, Ordinal: ordinal}
+	return ArchiveEntry{
+		ID: hex.EncodeToString(digest[:16]), ParentID: archiveParentID(clean),
+		DisplayName: path.Base(clean), Size: size, Ordinal: ordinal,
+		MediaType: "application/octet-stream",
+	}
+}
+
+func archiveParentID(clean string) string {
+	parent := path.Dir(clean)
+	if parent == "." || parent == "" {
+		return ""
+	}
+	digest := sha256.Sum256([]byte("xirang.archive.parent.v1\x00" + archivePathCollisionKey(parent)))
+	return hex.EncodeToString(digest[:16])
 }
 
 func validateArchivePath(value string, maxDepth int) (string, error) {
 	if value == "" || !utf8.ValidString(value) || strings.ContainsAny(value, "\x00\r\n\\") || strings.HasPrefix(value, "/") {
 		return "", ErrInvalidToolOutput
 	}
-	clean := path.Clean(value)
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || clean != value || len(strings.Split(clean, "/")) > maxDepth {
+	parts := strings.Split(value, "/")
+	if len(parts) > maxDepth {
 		return "", ErrInvalidToolOutput
 	}
-	for _, character := range clean {
-		if character < 0x20 || character == 0x7f {
+	for _, part := range parts {
+		if !safeArchivePathComponent(part) {
 			return "", ErrInvalidToolOutput
 		}
 	}
+	clean := path.Clean(value)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || clean != value {
+		return "", ErrInvalidToolOutput
+	}
 	return clean, nil
+}
+
+func safeArchivePathComponent(value string) bool {
+	if value == "" || strings.TrimSpace(value) != value || value == "." || value == ".." || !utf8.ValidString(value) {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) || unicode.Is(unicode.Cf, character) {
+			return false
+		}
+	}
+	normalized := norm.NFKC.String(value)
+	if normalized == "" || normalized == "." || normalized == ".." || strings.ContainsAny(normalized, "/\\") {
+		return false
+	}
+	for _, character := range normalized {
+		if unicode.IsControl(character) || unicode.Is(unicode.Cf, character) {
+			return false
+		}
+	}
+	return true
+}
+
+func archivePathCollisionKey(value string) string {
+	return CanonicalNFKCCasefold(value)
+}
+
+// CanonicalNFKCCasefold returns a stable collision key equivalent to the
+// Unicode NFKC_Casefold operation, including removal of default-ignorable
+// code points before the final normalization pass.
+func CanonicalNFKCCasefold(value string) string {
+	folded := cases.Fold().String(norm.NFKC.String(value))
+	withoutIgnorables := strings.Map(func(character rune) rune {
+		if unicode.In(
+			character,
+			unicode.Cf,
+			unicode.Other_Default_Ignorable_Code_Point,
+			unicode.Variation_Selector,
+		) {
+			return -1
+		}
+		return character
+	}, folded)
+	return norm.NFKC.String(withoutIgnorables)
 }
 
 func validArchiveLimits(value ArchiveLimits) bool {

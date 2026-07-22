@@ -54,6 +54,11 @@ jq -e '
   .services.xirang.ports[0].target == 10761 and
   .services.xirang.ports[0].published == "10761" and
   .services.xirang.healthcheck.test == ["CMD", "curl", "-fsS", "http://127.0.0.1:10761/healthz"] and
+  .services.xirang.cap_drop == ["FSETID"] and
+  .services.xirang.cap_add == null and
+  .services.xirang.pid == null and
+  ([.services.xirang.volumes[] | select(.source == "asset-worker-derived-store" and .target == "/var/lib/xirang-asset-runtime/derived" and (.read_only // false) == false)] | length) == 1 and
+  .volumes["asset-worker-derived-store"] != null and
   .services.xirang.depends_on["asset-worker-init"].required == false and
   .services["asset-worker"] == null and
   .services["asset-worker-updater"] == null
@@ -62,29 +67,47 @@ jq -e '
 jq -e '
   .services["asset-worker"].profiles == ["asset-worker"] and
   .services["asset-worker"].user == "10000:10000" and
-  .services["asset-worker"].group_add == ["10002"] and
+  .services["asset-worker"].group_add == null and
   .services["asset-worker"].network_mode == "none" and
+  .services["asset-worker"].pid == null and
   .services["asset-worker"].read_only == true and
   .services["asset-worker"].cap_drop == ["ALL"] and
+  .services["asset-worker"].cap_add == null and
   (.services["asset-worker"].security_opt | index("no-new-privileges:true")) != null and
-  (.services["asset-worker"].security_opt | map(startswith("seccomp=")) | any) and
-  .services["asset-worker"].pids_limit == 256 and
-  (.services["asset-worker"].ports == null) and
+	  (.services["asset-worker"].security_opt | map(startswith("seccomp=")) | any) and
+	  .services["asset-worker"].pids_limit == 256 and
+	  .services["asset-worker"].mem_limit == "1073741824" and
+	  .services["asset-worker"].memswap_limit == "1073741824" and
+	  (.services["asset-worker"].ports == null) and
   ([.services["asset-worker"].volumes[] | select(.target == "/var/lib/xirang/asset-worker-bundles" and .read_only == true)] | length) == 1 and
-  ([.services["asset-worker"].volumes[] | select(.target == "/run/xirang" and .read_only == true)] | length) == 1 and
-  (.services["asset-worker"].tmpfs | map(contains("/run/xirang/asset-jobs")) | any)
+  ([.services["asset-worker"].volumes[] | select(.source == "asset-worker-worker-runtime" and .target == "/run/xirang/worker" and .read_only == true)] | length) == 1 and
+  ([.services["asset-worker"].volumes[] | select(.target == "/run/xirang")] | length) == 0 and
+  ([.services["asset-worker"].volumes[] | select(.source == "asset-worker-derived-store" or .target == "/var/lib/xirang-asset-runtime/derived")] | length) == 0 and
+  (.services["asset-worker"].tmpfs | sort) == ([
+    "/run/xirang/asset-jobs:rw,noexec,nosuid,nodev,size=268435456,nr_inodes=32768,mode=0700,uid=10000,gid=10000",
+    "/tmp:rw,noexec,nosuid,nodev,size=67108864,nr_inodes=8192,mode=0700,uid=10000,gid=10000"
+  ] | sort)
 ' "$TMP_DIR/profile.json" >/dev/null || fail "parser Worker isolation contract changed"
 
 jq -e '
   .services["asset-worker-updater"].profiles == ["asset-worker"] and
   .services["asset-worker-updater"].user == "10002:10002" and
   .services["asset-worker-updater"].network_mode == "none" and
+  .services["asset-worker-updater"].pid == null and
   .services["asset-worker-updater"].read_only == true and
   .services["asset-worker-updater"].cap_drop == ["ALL"] and
-  (.services["asset-worker-updater"].ports == null) and
+  .services["asset-worker-updater"].cap_add == null and
+  (.services["asset-worker-updater"].security_opt | index("no-new-privileges:true")) != null and
+	  (.services["asset-worker-updater"].security_opt | map(startswith("seccomp=")) | any) and
+	  .services["asset-worker-updater"].pids_limit == 64 and
+	  .services["asset-worker-updater"].mem_limit == "268435456" and
+	  .services["asset-worker-updater"].memswap_limit == "268435456" and
+	  (.services["asset-worker-updater"].ports == null) and
   ([.services["asset-worker-updater"].volumes[] | select(.target == "/var/lib/xirang/asset-worker-bundles" and (.read_only // false) == false)] | length) == 1 and
   ([.services["asset-worker-updater"].volumes[] | select(.target == "/var/lib/xirang/asset-worker-inbox" and .read_only == true)] | length) == 1 and
-  ([.services["asset-worker-updater"].volumes[] | select(.target == "/run/xirang" and .read_only == true)] | length) == 1 and
+  ([.services["asset-worker-updater"].volumes[] | select(.source == "asset-worker-updater-runtime" and .target == "/run/xirang" and .read_only == true)] | length) == 1 and
+  ([.services["asset-worker-updater"].volumes[] | select(.target == "/run/xirang/worker")] | length) == 0 and
+  ([.services["asset-worker-updater"].volumes[] | select(.source == "asset-worker-derived-store" or .target == "/var/lib/xirang-asset-runtime/derived")] | length) == 0 and
   (.services["asset-worker-updater"].secrets | length) == 1
 ' "$TMP_DIR/profile.json" >/dev/null || fail "Updater identity or mount contract changed"
 
@@ -92,11 +115,18 @@ jq -e '
   .services["asset-worker-init"].profiles == ["asset-worker"] and
   .services["asset-worker-init"].user == "0:0" and
   .services["asset-worker-init"].network_mode == "none" and
+  .services["asset-worker-init"].pid == null and
   .services["asset-worker-init"].read_only == true and
   .services["asset-worker-init"].cap_drop == ["ALL"] and
-  (.services["asset-worker-init"].cap_add | sort) == ["CHOWN", "DAC_OVERRIDE", "FOWNER"] and
+  (.services["asset-worker-init"].cap_add | sort) == ["CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID"] and
   (.services["asset-worker-init"].security_opt | index("no-new-privileges:true")) != null and
   (.services["asset-worker-init"].security_opt | map(startswith("seccomp=")) | any) and
+  ([.services["asset-worker-init"].volumes[] | select(.source == "asset-worker-updater-runtime" and .target == "/run/xirang" and (.read_only // false) == false)] | length) == 1 and
+  ([.services["asset-worker-init"].volumes[] | select(.source == "asset-worker-worker-runtime" and .target == "/run/xirang/worker" and (.read_only // false) == false)] | length) == 1 and
+  ([.services["asset-worker-init"].volumes[] | select(.source == "asset-worker-derived-store" and .target == "/var/lib/xirang-asset-runtime/derived" and (.read_only // false) == false)] | length) == 1 and
+  ([.services.xirang.volumes[] | select(.source == "asset-worker-updater-runtime" and .target == "/run/xirang")] | length) == 1 and
+  ([.services.xirang.volumes[] | select(.source == "asset-worker-worker-runtime" and .target == "/run/xirang/worker")] | length) == 1 and
+  ([.services.xirang.volumes[] | select(.source == "asset-worker-derived-store" and .target == "/var/lib/xirang-asset-runtime/derived")] | length) == 1 and
   .services["asset-worker-init"].restart == "no"
 ' "$TMP_DIR/profile.json" >/dev/null || fail "profile volume initializer contract changed"
 

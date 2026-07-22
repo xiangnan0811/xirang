@@ -111,9 +111,19 @@ Profile 固定使用以下本地身份和权限合同：
 | 对象 | 身份/模式 | 说明 |
 |---|---|---|
 | parser Worker | UID/GID `10000:10000` | non-root、read-only rootfs、无网络/DNS、只读 bundle mount |
-| updater | UID/GID `10002:10002` | 独立 UDS 身份；只有它可写 bundle store |
+| updater | UID/GID `10002:10002` | 独立 UDS 与 PID namespace；只有它可写 bundle store |
+| parser socket volume | `asset-worker-worker-runtime` | parser 只读挂载到 `/run/xirang/worker`；不包含 updater socket |
+| updater socket volume | `asset-worker-updater-runtime` | updater 只读挂载到 `/run/xirang`；不包含 parser socket volume |
+| bundle root | `10002:10000`, mode `2750` | updater owner 可写；Worker group 可读，但 parser mount 强制只读 |
+| Derived Store volume | `asset-worker-derived-store`, `10000:10000`, mode `0700` | 仅 Core 与 initializer 挂载到 `/var/lib/xirang-asset-runtime/derived`；parser/updater 不可见 |
 | inbox 目录 | `10002:10002`, mode `0555` | updater-only、只读、不得是符号链接 |
 | trust 文件 | `10002:10002`, mode `0440` | updater-only Ed25519 公钥集合，不得是符号链接 |
+
+Core 同时挂载 updater runtime 和嵌套的 Worker runtime，以分别创建 mode `0660`（`10000:10002`）与 `0600`（`10000:10000`）的 UDS。`/run/xirang` 使用 setgid mode `2770`，让 Core 创建的 updater socket 继承 GID `10002`；parser 不加入该组，也完全不挂载 updater runtime。反向同样成立：updater 不挂载 `asset-worker-worker-runtime`，因此两个进程都不能观察或连接对方的 socket。
+
+Core、parser 和 updater 保持各自独立的 PID namespace。Linux 跨 PID namespace 的 `SO_PEERCRED` 可能返回 peer PID `0`；PID 只作为诊断元数据，不参与授权。Core 的 updater listener 依赖受保护的 UDS，并在解码 receipt 前校验精确 UID/GID 与 socket owner/mode。
+
+`asset-worker-init` 还会把独立 Derived Store volume 初始化为 `0700:10000:10000`。该 volume 持久保留 Core 加密产物并与 `/data`、`/backup`、`/logs` 以及所有 Provider 源隔离；parser 和 updater 都不挂载它。
 
 先准备固定 inbox 和 trust 文件。Trust 文档只包含公钥与 UTC 生效/退役时间；不要把私钥或在线凭据放入该文件：
 
@@ -138,7 +148,7 @@ sudo chmod 0555 asset-worker-inbox
 sudo chmod 0440 asset-worker-updater-trust.json
 ```
 
-在 `.env` 中显式启用全局 feature、本机 UDS 和独立 updater，并把加密 Derived Store 放在已有 `/data` 持久卷内。Settings 数据库覆盖优先于环境变量；若已有同名 DB override，必须在设置界面同步更新或删除旧覆盖值：
+在 `.env` 中显式启用全局 feature、本机 UDS 和独立 updater，并让加密 Derived Store 使用 profile 提供的专用 volume 与默认路径。`/data`、`/backup` 和 `/logs` 及其子路径会被 private-runtime guard 拒绝，不能用作 Derived Store。Settings 数据库覆盖优先于环境变量；若已有同名 DB override，必须在设置界面同步更新或删除旧覆盖值：
 
 ```env
 BACKUP_ASSETS_ENABLED=true
@@ -148,7 +158,7 @@ BACKUP_ASSETS_WORKER_UPDATER_ENABLED=true
 BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ENABLED=false
 BACKUP_ASSETS_PROCESSING_SECRET_CLASSIFY=false
 BACKUP_ASSETS_PROCESSING_BACKFILL_PAUSED=true
-BACKUP_ASSETS_DERIVED_STORE_ROOT=/data/asset-worker-derived
+BACKUP_ASSETS_DERIVED_STORE_ROOT=/var/lib/xirang-asset-runtime/derived
 
 ASSET_WORKER_IMAGE_TAG=local
 ASSET_WORKER_INBOX_DIR=./asset-worker-inbox
@@ -156,6 +166,8 @@ ASSET_WORKER_UPDATER_TRUST_FILE=./asset-worker-updater-trust.json
 ```
 
 仓库 profile 固定为 offline-only，并给 Worker 与 updater 都设置 `network_mode: none`。不要在该 profile 中启用 online updater；在线模式需要独立的 allowlist proxy/firewall、隔离网络和凭据 secret 合同，当前仓库 Compose 不提供这条部署路径。
+
+Worker 的 job workspace 是敏感 `tmpfs`。仓库 Compose 已把 parser/updater 的 `memswap_limit` 设为与各自 `mem_limit` 相同，使这两个容器不能使用 swap；部署前仍应确认宿主 swap 已关闭，或只使用经过审计的全盘加密 swap。若改用 `docker run` 或外部编排，必须保留同等的 no-swap、memory、PID、read-only、no-network、seccomp 与 `noexec,nosuid,nodev` tmpfs 限制。
 
 本地构建并启动：
 

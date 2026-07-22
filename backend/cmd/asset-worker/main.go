@@ -31,6 +31,8 @@ type assetWorkerOptions struct {
 
 const assetWorkerBundleRoot = "/var/lib/xirang/asset-worker-bundles"
 
+const assetWorkerRuntimeClosureCommand = "write-runtime-closure-manifest"
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -41,6 +43,20 @@ func main() {
 }
 
 func runAssetWorker(ctx context.Context, args []string) error {
+	return runAssetWorkerWithRuntimeClosureWriter(ctx, args, capabilities.WriteProductionRuntimeClosureManifest)
+}
+
+func runAssetWorkerWithRuntimeClosureWriter(ctx context.Context, args []string, writer func() error) error {
+	if len(args) == 1 && args[0] == assetWorkerRuntimeClosureCommand {
+		if writer == nil {
+			return errInvalidAssetWorkerConfig
+		}
+		return writer()
+	}
+	return runAssetWorkerService(ctx, args)
+}
+
+func runAssetWorkerService(ctx context.Context, args []string) error {
 	options, err := parseAssetWorkerOptions(args)
 	if err != nil {
 		return err
@@ -56,19 +72,36 @@ func runAssetWorker(ctx context.Context, args []string) error {
 		return err
 	}
 	toolRunner, toolErr := capabilities.NewRunner(options.tools)
-	bundleFingerprint, bundleErr := loadActiveBundleFingerprint(options.bundleRoot)
+	bundleEvidence, bundleErr := loadActiveBundleEvidence(options.bundleRoot)
+	preflight := capabilities.ToolchainPreflight{}
+	if bundleErr == nil {
+		preflight = capabilities.PreflightProductionToolchain(
+			ctx, bundleEvidence.Root, bundleEvidence.ToolchainAttestationSHA256,
+		)
+	}
+	availableCount := 0
+	for _, available := range preflight.AvailableCapabilities {
+		if available {
+			availableCount++
+		}
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "asset-worker diagnostic stage=preflight bundle_ready=%t runner_ready=%t available=%d\n", bundleErr == nil, toolErr == nil, availableCount)
 	productionOptions := processing.ProductionWorkerCapabilityOptions{}
-	if toolErr == nil && bundleErr == nil {
+	if toolErr == nil && bundleErr == nil && preflight.Fingerprint != "" {
 		productionOptions.ToolRunner = toolRunner
-		productionOptions.BundleFingerprints = assetWorkerBundleFingerprints(bundleFingerprint)
+		productionOptions.AvailableCapabilities = preflight.AvailableCapabilities
+		productionOptions.BundleFingerprints = assetWorkerBundleFingerprints(bundleEvidence.Fingerprint)
 	}
 	capabilitySet, err := processing.NewProductionWorkerCapabilitySetWithOptions(productionOptions)
 	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "asset-worker diagnostic stage=capability_set")
 		client.CloseIdleConnections()
 		return err
 	}
+	_, _ = fmt.Fprintf(os.Stderr, "asset-worker diagnostic stage=capability_set_ready advertisements=%d\n", len(capabilitySet.Advertisements()))
 	runner, err := processing.NewWorkerRunner(client, capabilitySet, options.runner)
 	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "asset-worker diagnostic stage=runner_create")
 		client.CloseIdleConnections()
 		return err
 	}
@@ -124,37 +157,53 @@ func parseAssetWorkerOptions(args []string) (assetWorkerOptions, error) {
 	return options, nil
 }
 
+type activeBundleEvidence struct {
+	Fingerprint                string
+	Root                       string
+	ToolchainAttestationSHA256 string
+}
+
 func loadActiveBundleFingerprint(root string) (string, error) {
+	evidence, err := loadActiveBundleEvidence(root)
+	return evidence.Fingerprint, err
+}
+
+func loadActiveBundleEvidence(root string) (activeBundleEvidence, error) {
 	if !filepath.IsAbs(root) || filepath.Clean(root) != root || root == string(os.PathSeparator) ||
 		strings.ContainsAny(root, "\x00\r\n") {
-		return "", errInvalidAssetWorkerConfig
+		return activeBundleEvidence{}, errInvalidAssetWorkerConfig
 	}
 	rootInfo, err := os.Lstat(root)
 	if err != nil || !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 || rootInfo.Mode().Perm()&0o002 != 0 {
-		return "", errInvalidAssetWorkerConfig
+		return activeBundleEvidence{}, errInvalidAssetWorkerConfig
 	}
 	bundlesRoot := filepath.Join(root, "bundles")
 	bundlesInfo, err := os.Lstat(bundlesRoot)
 	if err != nil || !bundlesInfo.IsDir() || bundlesInfo.Mode()&os.ModeSymlink != 0 || bundlesInfo.Mode().Perm()&0o002 != 0 {
-		return "", errInvalidAssetWorkerConfig
+		return activeBundleEvidence{}, errInvalidAssetWorkerConfig
 	}
 	activePath := filepath.Join(root, "active")
 	activeInfo, err := os.Lstat(activePath)
 	if err != nil || activeInfo.Mode()&os.ModeSymlink == 0 {
-		return "", errInvalidAssetWorkerConfig
+		return activeBundleEvidence{}, errInvalidAssetWorkerConfig
 	}
 	target, err := os.Readlink(activePath)
 	prefix := "bundles" + string(os.PathSeparator)
 	if err != nil || filepath.IsAbs(target) || filepath.Clean(target) != target || !strings.HasPrefix(target, prefix) {
-		return "", errInvalidAssetWorkerConfig
+		return activeBundleEvidence{}, errInvalidAssetWorkerConfig
 	}
 	fingerprint := strings.TrimPrefix(target, prefix)
 	if strings.Contains(fingerprint, string(os.PathSeparator)) || !lowerHexAssetWorker(fingerprint, 64) {
-		return "", errInvalidAssetWorkerConfig
+		return activeBundleEvidence{}, errInvalidAssetWorkerConfig
 	}
-	bundleInfo, err := os.Lstat(filepath.Join(bundlesRoot, fingerprint))
+	bundleRoot := filepath.Join(bundlesRoot, fingerprint)
+	bundleInfo, err := os.Lstat(bundleRoot)
 	if err != nil || !bundleInfo.IsDir() || bundleInfo.Mode()&os.ModeSymlink != 0 || bundleInfo.Mode().Perm() != 0o555 {
-		return "", errInvalidAssetWorkerConfig
+		return activeBundleEvidence{}, errInvalidAssetWorkerConfig
+	}
+	storedEvidence, err := capabilities.InspectStoredBundleTree(bundleRoot, fingerprint)
+	if err != nil {
+		return activeBundleEvidence{}, errInvalidAssetWorkerConfig
 	}
 	rootAfter, rootErr := os.Lstat(root)
 	bundlesAfter, bundlesErr := os.Lstat(bundlesRoot)
@@ -162,14 +211,17 @@ func loadActiveBundleFingerprint(root string) (string, error) {
 	targetAfter, readErr := os.Readlink(activePath)
 	if rootErr != nil || bundlesErr != nil || activeErr != nil || readErr != nil || targetAfter != target ||
 		!os.SameFile(rootInfo, rootAfter) || !os.SameFile(bundlesInfo, bundlesAfter) || !os.SameFile(activeInfo, activeAfter) {
-		return "", errInvalidAssetWorkerConfig
+		return activeBundleEvidence{}, errInvalidAssetWorkerConfig
 	}
-	return fingerprint, nil
+	return activeBundleEvidence{
+		Fingerprint: fingerprint, Root: bundleRoot,
+		ToolchainAttestationSHA256: storedEvidence.ToolchainAttestationSHA256,
+	}, nil
 }
 
 func assetWorkerBundleFingerprints(fingerprint string) processing.CapabilityBundleFingerprints {
 	result := make(processing.CapabilityBundleFingerprints)
-	for _, profile := range capabilityspec.RequiredProfiles() {
+	for _, profile := range capabilityspec.WorkerProfiles() {
 		result[profile.Capability] = []string{fingerprint}
 	}
 	return result

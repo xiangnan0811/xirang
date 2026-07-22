@@ -315,7 +315,7 @@ func rejectDuplicateBackupContentJSON(payload []byte) error {
 }
 
 func walkBackupContentJSON(decoder *json.Decoder, token json.Token, depth int) error {
-	if depth > 16 || token == nil {
+	if depth > 16 {
 		return io.ErrUnexpectedEOF
 	}
 	delimiter, composite := token.(json.Delim)

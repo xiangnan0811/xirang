@@ -93,9 +93,37 @@ type ClosedOutputSpec struct {
 
 type ToolLimits struct {
 	WallTime       time.Duration
+	CPUTime        time.Duration
 	MaxInputBytes  int64
 	MaxOutputBytes int64
+	MaxMemoryBytes int64
+	MaxFileBytes   int64
 	MaxProcesses   int
+}
+
+type SandboxResourceLimits struct {
+	CPUTime        time.Duration
+	MaxMemoryBytes int64
+	MaxFileBytes   int64
+	MaxProcesses   int
+}
+
+func (value SandboxResourceLimits) ValidateFor(profile ToolArgProfile) error {
+	ceiling, ok := closedSandboxResourceCeiling(profile)
+	if !ok || value.CPUTime <= 0 || value.CPUTime%time.Second != 0 || value.CPUTime > ceiling.CPUTime ||
+		value.MaxMemoryBytes < 64<<20 || value.MaxMemoryBytes > ceiling.MaxMemoryBytes ||
+		value.MaxFileBytes <= 0 || value.MaxFileBytes > ceiling.MaxFileBytes ||
+		value.MaxProcesses <= 0 || value.MaxProcesses > ceiling.MaxProcesses {
+		return ErrInvalidInvocation
+	}
+	return nil
+}
+
+func (value ToolLimits) sandboxResources() SandboxResourceLimits {
+	return SandboxResourceLimits{
+		CPUTime: value.CPUTime, MaxMemoryBytes: value.MaxMemoryBytes,
+		MaxFileBytes: value.MaxFileBytes, MaxProcesses: value.MaxProcesses,
+	}
 }
 
 type ToolInvocation struct {
@@ -115,9 +143,11 @@ func (value ToolInvocation) Validate() error {
 		value.OutputSpec.MaximumFiles <= 0 || value.OutputSpec.MaximumFiles > 32 ||
 		len(value.OutputSpec.AllowedNames) == 0 || len(value.OutputSpec.AllowedNames) > value.OutputSpec.MaximumFiles ||
 		value.Limits.WallTime <= 0 || value.Limits.WallTime > 2*time.Hour ||
+		value.Limits.CPUTime > value.Limits.WallTime ||
 		value.Limits.MaxInputBytes <= 0 || value.Limits.MaxInputBytes > 16<<30 ||
 		value.Limits.MaxOutputBytes <= 0 || value.Limits.MaxOutputBytes > 8<<30 ||
-		value.Limits.MaxProcesses <= 0 || value.Limits.MaxProcesses > 128 {
+		value.Limits.MaxFileBytes > value.Limits.MaxOutputBytes && value.ArgProfile != ArgsClamScan ||
+		value.Limits.sandboxResources().ValidateFor(value.ArgProfile) != nil {
 		return ErrInvalidInvocation
 	}
 	seen := make(map[string]bool, len(value.OutputSpec.AllowedNames))

@@ -67,13 +67,13 @@ func NewBackupProcessingHandler(service BackupProcessingService, audit BackupAss
 // @Failure      503  {object} handlers.Response
 // @Router       /recovery-points/{id}/entries/{entryId}/preview-jobs [post]
 func (handler *BackupProcessingHandler) CreatePreview(c *gin.Context) {
-	ref, actor, ok := handler.requestIdentity(c, true)
+	ref, actor, ok := handler.requestIdentityWithMode(c, true, "create")
 	if !ok {
 		return
 	}
 	var payload backupProcessingCreatePayload
 	if decodeStrictBackupContentJSON(c, &payload) != nil || !validBackupProcessingCreate(payload) {
-		handler.finishAudit(c, ref, backupasset.AuditOutcomeBlocked, "invalid_request")
+		handler.finishAuditWithMode(c, ref, backupasset.AuditOutcomeBlocked, "invalid_request", "create")
 		respondBadRequest(c, "请求参数不合法")
 		return
 	}
@@ -81,14 +81,18 @@ func (handler *BackupProcessingHandler) CreatePreview(c *gin.Context) {
 		Actor: actor, Ref: ref, Representation: payload.Representation, Profile: payload.Profile,
 	})
 	if err != nil {
-		handler.finishError(c, ref, err)
+		handler.finishErrorWithCorrelation(c, ref, err, "create", "")
 		return
 	}
 	if !validBackupProcessingResult(result, payload.Representation, "") {
-		handler.finishError(c, ref, processing.ErrInvalidContract)
+		handler.finishErrorWithCorrelation(c, ref, processing.ErrInvalidContract, "create", "")
 		return
 	}
-	handler.finishAudit(c, ref, backupasset.AuditOutcomeSuccess, "")
+	correlationID := ""
+	if backupasset.ValidateOpaqueID(result.JobID) == nil {
+		correlationID = result.JobID
+	}
+	handler.finishAuditWithCorrelation(c, ref, backupasset.AuditOutcomeSuccess, "", "create", correlationID)
 	if result.State == processing.ProcessingProductQueued {
 		location := strings.TrimSuffix(c.Request.URL.Path, "/") + "/" + result.JobID
 		c.Header("Location", location)
@@ -114,13 +118,13 @@ func (handler *BackupProcessingHandler) CreatePreview(c *gin.Context) {
 // @Failure      503  {object} handlers.Response
 // @Router       /recovery-points/{id}/entries/{entryId}/preview-jobs/{jobId} [get]
 func (handler *BackupProcessingHandler) PollPreview(c *gin.Context) {
-	ref, actor, ok := handler.requestIdentity(c, false)
+	ref, actor, ok := handler.requestIdentityWithMode(c, false, "get_state")
 	if !ok {
 		return
 	}
 	jobID, ok := backupAssetOpaqueParam(c, "jobId")
 	if !ok {
-		handler.finishAudit(c, ref, backupasset.AuditOutcomeBlocked, "invalid_request")
+		handler.finishAuditWithMode(c, ref, backupasset.AuditOutcomeBlocked, "invalid_request", "get_state")
 		respondBadRequest(c, "请求参数不合法")
 		return
 	}
@@ -128,14 +132,14 @@ func (handler *BackupProcessingHandler) PollPreview(c *gin.Context) {
 		Actor: actor, Ref: ref, JobID: jobID,
 	})
 	if err != nil {
-		handler.finishError(c, ref, err)
+		handler.finishErrorWithCorrelation(c, ref, err, "get_state", jobID)
 		return
 	}
 	if !validBackupProcessingResult(result, "", jobID) {
-		handler.finishError(c, ref, processing.ErrInvalidContract)
+		handler.finishErrorWithCorrelation(c, ref, processing.ErrInvalidContract, "get_state", jobID)
 		return
 	}
-	handler.finishAudit(c, ref, backupasset.AuditOutcomeSuccess, "")
+	handler.finishAuditWithCorrelation(c, ref, backupasset.AuditOutcomeSuccess, "", "get_state", jobID)
 	respondOK(c, result)
 }
 
@@ -156,24 +160,28 @@ func (handler *BackupProcessingHandler) PollPreview(c *gin.Context) {
 // @Failure      503  {object} handlers.Response
 // @Router       /recovery-points/{id}/entries/{entryId}/preview-jobs/{jobId}/cancel [post]
 func (handler *BackupProcessingHandler) CancelPreview(c *gin.Context) {
-	ref, actor, ok := handler.requestIdentity(c, true)
+	ref, actor, ok := handler.requestIdentityWithMode(c, true, "cancel")
 	if !ok {
 		return
 	}
 	jobID, ok := backupAssetOpaqueParam(c, "jobId")
 	var payload backupProcessingCancelPayload
 	if !ok || decodeStrictBackupContentJSON(c, &payload) != nil || payload.SchemaVersion != 1 {
-		handler.finishAudit(c, ref, backupasset.AuditOutcomeBlocked, "invalid_request")
+		correlationID := ""
+		if ok {
+			correlationID = jobID
+		}
+		handler.finishAuditWithCorrelation(c, ref, backupasset.AuditOutcomeBlocked, "invalid_request", "cancel", correlationID)
 		respondBadRequest(c, "请求参数不合法")
 		return
 	}
 	if err := handler.service.CancelProcessingPreview(c.Request.Context(), processing.PreviewJobLookup{
 		Actor: actor, Ref: ref, JobID: jobID,
 	}); err != nil {
-		handler.finishError(c, ref, err)
+		handler.finishErrorWithCorrelation(c, ref, err, "cancel", jobID)
 		return
 	}
-	handler.finishAudit(c, ref, backupasset.AuditOutcomeSuccess, "")
+	handler.finishAuditWithCorrelation(c, ref, backupasset.AuditOutcomeSuccess, "", "cancel", jobID)
 	respondOK(c, backupProcessingCancelResult{SchemaVersion: 1, Canceled: true})
 }
 
@@ -193,25 +201,27 @@ func (handler *BackupProcessingHandler) CancelPreview(c *gin.Context) {
 // @Failure      503  {object} handlers.Response
 // @Router       /recovery-points/{id}/entries/{entryId}/processing [get]
 func (handler *BackupProcessingHandler) GetState(c *gin.Context) {
-	ref, actor, ok := handler.requestIdentity(c, false)
+	ref, actor, ok := handler.requestIdentityWithMode(c, false, "get_state")
 	if !ok {
 		return
 	}
 	result, err := handler.service.GetProcessingState(c.Request.Context(), processing.PreviewStateRequest{Actor: actor, Ref: ref})
 	if err != nil {
-		handler.finishError(c, ref, err)
+		handler.finishErrorWithMode(c, ref, err, "get_state")
 		return
 	}
 	if !validAssetProcessingState(result) {
-		handler.finishError(c, ref, processing.ErrInvalidContract)
+		handler.finishErrorWithMode(c, ref, processing.ErrInvalidContract, "get_state")
 		return
 	}
+	handler.finishAuditWithMode(c, ref, backupasset.AuditOutcomeSuccess, "", "get_state")
 	respondOK(c, result)
 }
 
-func (handler *BackupProcessingHandler) requestIdentity(
+func (handler *BackupProcessingHandler) requestIdentityWithMode(
 	c *gin.Context,
 	withJSON bool,
+	mode string,
 ) (backupasset.AssetRef, content.DeliveryActor, bool) {
 	ref := backupasset.AssetRef{}
 	if c == nil || c.Request == nil || c.Request.URL == nil || c.Request.URL.RawQuery != "" ||
@@ -234,7 +244,7 @@ func (handler *BackupProcessingHandler) requestIdentity(
 		UserID: middleware.CurrentUserID(c), Username: c.GetString(middleware.CtxUsername), Role: middleware.CurrentRole(c),
 	}
 	if actor.UserID == 0 || (actor.Role != "admin" && actor.Role != "operator") {
-		handler.finishAudit(c, ref, backupasset.AuditOutcomeBlocked, "forbidden")
+		handler.finishAuditWithMode(c, ref, backupasset.AuditOutcomeBlocked, "forbidden", mode)
 		respondForbidden(c, "无权执行该操作")
 		return ref, actor, false
 	}
@@ -245,24 +255,35 @@ func validBackupProcessingCreate(payload backupProcessingCreatePayload) bool {
 	if payload.SchemaVersion != 1 {
 		return false
 	}
-	switch payload.Representation {
-	case processing.PreviewThumbnail, processing.PreviewText, processing.PreviewDocumentPages,
-		processing.PreviewMedia, processing.PreviewArchiveIndex:
-	default:
-		return false
-	}
 	if payload.Profile == "" {
-		return true
+		switch payload.Representation {
+		case processing.PreviewThumbnail, processing.PreviewText, processing.PreviewDocumentPages,
+			processing.PreviewMedia, processing.PreviewArchiveIndex:
+			return true
+		default:
+			return false
+		}
 	}
-	switch payload.Profile {
-	case capabilityspec.ProfileRasterThumbnailV1, capabilityspec.ProfileBoundedTextV1,
-		capabilityspec.ProfileTesseractTextV1, capabilityspec.ProfileStaticPagesV1,
-		capabilityspec.ProfileMediaProbeV1, capabilityspec.ProfileBrowserPreviewV1,
-		capabilityspec.ProfileArchiveIndexV1:
-		return true
-	default:
-		return false
+	allowed := map[processing.PreviewRepresentation]map[string]struct{}{
+		processing.PreviewThumbnail: {
+			capabilityspec.ProfileRasterThumbnailV1: {},
+		},
+		processing.PreviewText: {
+			capabilityspec.ProfileBoundedTextV1:   {},
+			capabilityspec.ProfileTesseractTextV1: {},
+		},
+		processing.PreviewDocumentPages: {
+			capabilityspec.ProfileStaticPagesV1: {},
+		},
+		processing.PreviewMedia: {
+			capabilityspec.ProfileBrowserPreviewV1: {},
+		},
+		processing.PreviewArchiveIndex: {
+			capabilityspec.ProfileArchiveIndexV1: {},
+		},
 	}
+	_, ok := allowed[payload.Representation][payload.Profile]
+	return ok
 }
 
 func validBackupProcessingResult(
@@ -309,7 +330,22 @@ func validAssetProcessingState(value processing.AssetProcessingState) bool {
 	return true
 }
 
-func (handler *BackupProcessingHandler) finishError(c *gin.Context, ref backupasset.AssetRef, err error) {
+func (handler *BackupProcessingHandler) finishErrorWithMode(
+	c *gin.Context,
+	ref backupasset.AssetRef,
+	err error,
+	mode string,
+) {
+	handler.finishErrorWithCorrelation(c, ref, err, mode, "")
+}
+
+func (handler *BackupProcessingHandler) finishErrorWithCorrelation(
+	c *gin.Context,
+	ref backupasset.AssetRef,
+	err error,
+	mode string,
+	correlationID string,
+) {
 	status := http.StatusServiceUnavailable
 	outcome := backupasset.AuditOutcomeFailure
 	code := "unavailable"
@@ -320,7 +356,7 @@ func (handler *BackupProcessingHandler) finishError(c *gin.Context, ref backupas
 	case errors.Is(err, backupasset.ErrForbidden):
 		status, outcome, code = http.StatusForbidden, backupasset.AuditOutcomeBlocked, "forbidden"
 	}
-	handler.finishAudit(c, ref, outcome, code)
+	handler.finishAuditWithCorrelation(c, ref, outcome, code, mode, correlationID)
 	switch status {
 	case http.StatusBadRequest:
 		respondBadRequest(c, "请求参数不合法")
@@ -333,11 +369,23 @@ func (handler *BackupProcessingHandler) finishError(c *gin.Context, ref backupas
 	}
 }
 
-func (handler *BackupProcessingHandler) finishAudit(
+func (handler *BackupProcessingHandler) finishAuditWithMode(
 	c *gin.Context,
 	ref backupasset.AssetRef,
 	outcome backupasset.AuditOutcome,
 	code string,
+	mode string,
+) {
+	handler.finishAuditWithCorrelation(c, ref, outcome, code, mode, "")
+}
+
+func (handler *BackupProcessingHandler) finishAuditWithCorrelation(
+	c *gin.Context,
+	ref backupasset.AssetRef,
+	outcome backupasset.AuditOutcome,
+	code string,
+	mode string,
+	correlationID string,
 ) {
 	if handler == nil || handler.audit == nil || c == nil || c.Request == nil {
 		return
@@ -346,7 +394,14 @@ func (handler *BackupProcessingHandler) finishAudit(
 	input.RecoveryPointID = ref.RecoveryPointID
 	input.EntryID = ref.EntryID
 	input.Outcome = outcome
+	if mode != "" {
+		input.Fields[backupasset.AuditFieldMode] = mode
+	}
+	if backupasset.ValidateOpaqueID(correlationID) == nil {
+		input.Fields[backupasset.AuditFieldCorrelationID] = correlationID
+	}
 	if code != "" {
+		input.FailureCode = code
 		input.Fields[backupasset.AuditFieldCode] = code
 	}
 	if err := handler.audit.Write(c.Request.Context(), input); err != nil {

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -12,12 +13,15 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/content"
 	"xirang/backend/internal/backupasset/overlay"
 	"xirang/backend/internal/backupasset/processing"
+	"xirang/backend/internal/backupasset/processing/capabilityspec"
 	processingupdater "xirang/backend/internal/backupasset/processing/updater"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
@@ -33,8 +37,10 @@ import (
 )
 
 const (
-	runtimeProviderMaxPageSize = 200
-	runtimeProviderCursorTTL   = 15 * time.Minute
+	runtimeProviderMaxPageSize   = 200
+	runtimeProviderCursorTTL     = 15 * time.Minute
+	runtimeSearchExcerptMaxBytes = 16 << 20
+	runtimeSearchSnippetMaxBytes = 4 << 10
 )
 
 // Dependencies contain the one process-wide asset runtime graph. Supplying
@@ -269,6 +275,24 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	var processingManager *managedProcessingRuntime
+	derivedSourceResolver := runtimeDerivedSourceAssetResolver(dependencies.DB)
+	searchExcerpts := &runtimeSearchExcerptResolver{
+		db:           dependencies.DB,
+		resolveAsset: derivedSourceResolver,
+		readArtifact: func(ctx context.Context, request content.DerivedArtifactRead, destination io.Writer) error {
+			if processingManager == nil {
+				return content.ErrDerivedRepresentationUnavailable
+			}
+			return processingManager.ReadDerivedArtifact(ctx, request, destination)
+		},
+		activePipeline: func(ctx context.Context, capability, outputProfile string) (string, error) {
+			if processingManager == nil {
+				return "", content.ErrDerivedRepresentationUnavailable
+			}
+			return processingManager.activePipelineFingerprint(ctx, capability, outputProfile)
+		},
+	}
 	searchQueryLimits := runtimeSearchQueryLimits(searchConfig)
 	overlayAuthorizer := &runtimeOverlayAuthorizer{catalog: catalogService, ownership: catalogOwnership}
 	overlayService, err := overlay.NewService(overlay.ServiceDependencies{
@@ -291,7 +315,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		return nil, err
 	}
 	searchService, err := search.NewService(search.ServiceDependencies{
-		DB: dependencies.DB, Scope: searchScope, Keys: keyring,
+		DB: dependencies.DB, Scope: searchScope, Keys: keyring, Excerpts: searchExcerpts,
 		Cursor: search.NewCursorCodec(keyring, dependencies.Now, runtimeProviderCursorTTL), Tags: overlayService, Now: dependencies.Now,
 		Limits:         search.ServiceLimits{Query: searchQueryLimits, MaxCandidates: searchConfig.CandidateLimit, ExecutionTimeout: searchConfig.QueryTimeout},
 		FeatureEnabled: foundation.FeatureEnabled,
@@ -301,6 +325,18 @@ func New(dependencies Dependencies) (*Runtime, error) {
 				return search.ContentPipelineRevisions{}, revisionErr
 			}
 			return search.ContentPipelineRevisions{Content: revisions.Content, OCR: revisions.OCR}, nil
+		},
+		MalwareSafety: func(ctx context.Context, request search.MalwareSafetyRequest) (bool, error) {
+			if processingManager == nil {
+				return false, content.ErrDerivedRepresentationUnavailable
+			}
+			decision, safetyErr := processingManager.malwareSafetyForAsset(ctx, content.AuthorizedAsset{
+				Ref: request.Ref, CatalogGenerationID: request.CatalogGenerationID,
+				SourceFingerprint: request.SourceFingerprint, EntryFingerprint: request.EntryFingerprint,
+				FingerprintStrength: request.FingerprintStrength, ProviderCapabilityRevision: request.ProviderCapabilityRevision,
+				Size: request.Size, MediaType: request.MediaType,
+			})
+			return safetyErr == nil && decision.Safe, safetyErr
 		},
 	})
 	if err != nil {
@@ -424,7 +460,6 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		}
 	}
 	contentReady := &atomic.Bool{}
-	var processingManager *managedProcessingRuntime
 	derivedResolver, err := content.NewDerivedRepresentationResolver(
 		dependencies.DB,
 		func(ctx context.Context, request content.DerivedArtifactRead, destination io.Writer) error {
@@ -432,6 +467,19 @@ func New(dependencies Dependencies) (*Runtime, error) {
 				return content.ErrDerivedRepresentationUnavailable
 			}
 			return processingManager.ReadDerivedArtifact(ctx, request, destination)
+		},
+		func(ctx context.Context, capability, outputProfile string) (string, error) {
+			if processingManager == nil {
+				return "", content.ErrDerivedRepresentationUnavailable
+			}
+			return processingManager.activePipelineFingerprint(ctx, capability, outputProfile)
+		},
+		func(ctx context.Context, asset content.AuthorizedAsset) (bool, error) {
+			if processingManager == nil {
+				return false, content.ErrDerivedRepresentationUnavailable
+			}
+			decision, safetyErr := processingManager.malwareSafetyForAsset(ctx, asset)
+			return safetyErr == nil && decision.Safe, safetyErr
 		},
 	)
 	if err != nil {
@@ -441,7 +489,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		repositoryService,
 		derivedResolver,
 		processingSecurityPolicyRevision,
-		runtimeDerivedProviderResolver(dependencies.DB),
+		derivedSourceResolver,
 	)
 	if err != nil {
 		return nil, err
@@ -532,21 +580,280 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	}, nil
 }
 
-func runtimeDerivedProviderResolver(db *gorm.DB) content.DerivedProviderResolver {
+type runtimeSearchExcerptResolver struct {
+	db             *gorm.DB
+	resolveAsset   content.DerivedSourceAssetResolver
+	readArtifact   func(context.Context, content.DerivedArtifactRead, io.Writer) error
+	activePipeline func(context.Context, string, string) (string, error)
+}
+
+type runtimeSearchExcerptArtifact struct {
+	CatalogGenerationID        string
+	SourceFingerprint          string
+	EntryFingerprint           string
+	ProviderCapabilityRevision int64
+	Capability                 string
+	CapabilitySchema           string
+	PipelineFingerprint        string
+	OutputProfile              string
+	ArtifactID                 string
+	PlaintextSize              int64
+}
+
+func (resolver *runtimeSearchExcerptResolver) Verify(
+	ctx context.Context,
+	request search.ExcerptVerifyRequest,
+) (search.VerifiedSnippet, bool, error) {
+	if resolver == nil || resolver.db == nil || resolver.resolveAsset == nil || resolver.readArtifact == nil ||
+		resolver.activePipeline == nil || backupasset.ValidateAssetRef(request.Ref) != nil ||
+		backupasset.ValidateOpaqueID(request.ExcerptRef) != nil || !validRuntimeSearchExcerptField(request.Field) ||
+		!validRuntimeSearchExcerptTerms(request.Field, request.Terms) {
+		return search.VerifiedSnippet{}, false, nil
+	}
+	ctx = nonNilRuntimeContext(ctx)
+	role := processing.ArtifactRoleContent
+	if request.Field == search.SearchFieldOCR {
+		role = processing.ArtifactRoleOCR
+	}
+	var rows []runtimeSearchExcerptArtifact
+	query := resolver.db.WithContext(ctx).Table("backup_asset_derived_artifacts AS artifacts").
+		Select(`sets.catalog_generation_id, sets.source_fingerprint,
+			jobs.entry_fingerprint, jobs.provider_capability_revision,
+			jobs.capability, jobs.capability_schema, jobs.pipeline_fingerprint, jobs.output_profile,
+			artifacts.id AS artifact_id, artifacts.plaintext_size`).
+		Joins(`JOIN backup_asset_derived_artifact_sets AS sets
+			ON sets.id = artifacts.artifact_set_id`).
+		Joins(`JOIN backup_asset_processing_jobs AS jobs
+			ON jobs.id = sets.job_id AND jobs.current_artifact_set_id = sets.id`).
+		Joins(`JOIN backup_asset_processing_attempts AS attempts
+			ON attempts.id = sets.attempt_id AND attempts.job_id = jobs.id`).
+		Where(`artifacts.id = ? AND artifacts.excerpt_ref = ? AND artifacts.role = ?
+			AND artifacts.media_type = ? AND artifacts.completeness = ?
+			AND artifacts.plaintext_size > 0 AND artifacts.plaintext_size <= ?`,
+			request.ExcerptRef, request.ExcerptRef, role, "text/plain", processing.ArtifactComplete,
+			runtimeSearchExcerptMaxBytes).
+		Where(`sets.recovery_point_id = ? AND sets.entry_id = ?
+			AND sets.security_policy_revision = ? AND sets.state = ? AND sets.completeness = ?
+			AND sets.work_key = jobs.work_key AND sets.projection_required = ?
+			AND sets.projection_published = ? AND sets.projection_revision > 0`,
+			request.Ref.RecoveryPointID, request.Ref.EntryID, processingSecurityPolicyRevision,
+			"active", processing.ArtifactComplete, true, true).
+		Where(`jobs.recovery_point_id = sets.recovery_point_id
+			AND jobs.catalog_generation_id = sets.catalog_generation_id
+			AND jobs.entry_id = sets.entry_id AND jobs.source_fingerprint = sets.source_fingerprint
+			AND jobs.security_policy_revision = sets.security_policy_revision
+			AND jobs.state = ? AND jobs.is_current = ? AND jobs.finished_at IS NOT NULL
+			AND jobs.current_attempt_id = sets.attempt_id
+			AND attempts.state = ? AND attempts.is_current = ? AND attempts.finished_at IS NOT NULL`,
+			processing.ProcessingSucceeded, false, "succeeded", false).
+		Limit(2).Scan(&rows)
+	if query.Error != nil {
+		return search.VerifiedSnippet{}, false, fmt.Errorf("load current Search excerpt artifact: %w", query.Error)
+	}
+	if len(rows) != 1 {
+		return search.VerifiedSnippet{}, false, nil
+	}
+	row := rows[0]
+	profile, ok := capabilityspec.Lookup(row.Capability, row.OutputProfile, false)
+	if !ok || profile.CapabilitySchema != row.CapabilitySchema ||
+		backupasset.ValidateOpaqueID(row.ArtifactID) != nil || row.ArtifactID != request.ExcerptRef {
+		return search.VerifiedSnippet{}, false, nil
+	}
+	if !runtimeSearchExcerptProfileAllows(profile, role, "text/plain") {
+		return search.VerifiedSnippet{}, false, nil
+	}
+	activePipeline, err := resolver.activePipeline(ctx, row.Capability, row.OutputProfile)
+	if err != nil {
+		return search.VerifiedSnippet{}, false, err
+	}
+	if activePipeline == "" || activePipeline != row.PipelineFingerprint {
+		return search.VerifiedSnippet{}, false, nil
+	}
+	asset, err := resolver.resolveAsset(ctx, request.Ref, row.CatalogGenerationID, row.SourceFingerprint)
+	if err != nil {
+		return search.VerifiedSnippet{}, false, nil
+	}
+	if asset.EntryFingerprint != row.EntryFingerprint ||
+		asset.ProviderCapabilityRevision != row.ProviderCapabilityRevision {
+		return search.VerifiedSnippet{}, false, nil
+	}
+	var plaintext bytes.Buffer
+	plaintext.Grow(int(row.PlaintextSize))
+	limited := &runtimeSearchExcerptWriter{destination: &plaintext, remaining: row.PlaintextSize}
+	if err := resolver.readArtifact(ctx, content.DerivedArtifactRead{
+		ArtifactID: row.ArtifactID, RecoveryPointID: request.Ref.RecoveryPointID,
+		CatalogGenerationID: row.CatalogGenerationID, EntryID: request.Ref.EntryID,
+		SourceFingerprint: row.SourceFingerprint,
+	}, limited); err != nil {
+		return search.VerifiedSnippet{}, false, err
+	}
+	if limited.remaining != 0 || int64(plaintext.Len()) != row.PlaintextSize ||
+		!utf8.Valid(plaintext.Bytes()) || bytes.IndexByte(plaintext.Bytes(), 0) >= 0 {
+		return search.VerifiedSnippet{}, false, nil
+	}
+	matchStart, matchEnd, matched := runtimeSearchExcerptTerms(plaintext.String(), request.Field, request.Terms)
+	if !matched {
+		return search.VerifiedSnippet{}, false, nil
+	}
+	snippet := runtimeBoundedSearchSnippet(plaintext.String(), matchStart, matchEnd)
+	if snippet == "" {
+		return search.VerifiedSnippet{}, false, nil
+	}
+	return search.VerifiedSnippet{Field: request.Field, Text: snippet}, true, nil
+}
+
+type runtimeSearchExcerptWriter struct {
+	destination io.Writer
+	remaining   int64
+}
+
+func (writer *runtimeSearchExcerptWriter) Write(value []byte) (int, error) {
+	if writer == nil || writer.destination == nil || writer.remaining < 0 {
+		return 0, content.ErrDerivedRepresentationUnavailable
+	}
+	if int64(len(value)) > writer.remaining {
+		allowed := int(writer.remaining)
+		if allowed > 0 {
+			_, _ = writer.destination.Write(value[:allowed])
+			writer.remaining = 0
+		}
+		return allowed, content.ErrDerivedRepresentationUnavailable
+	}
+	written, err := writer.destination.Write(value)
+	writer.remaining -= int64(written)
+	return written, err
+}
+
+func validRuntimeSearchExcerptField(field search.SearchField) bool {
+	return field == search.SearchFieldContent || field == search.SearchFieldOCR
+}
+
+func runtimeSearchExcerptProfileAllows(profile capabilityspec.Profile, role processing.ArtifactRole, mediaType string) bool {
+	for _, output := range profile.Outputs {
+		if output.Role != string(role) || output.Maximum < 1 {
+			continue
+		}
+		for _, allowedMediaType := range output.MediaTypes {
+			if allowedMediaType == mediaType {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func validRuntimeSearchExcerptTerms(field search.SearchField, terms []string) bool {
+	if len(terms) == 0 || len(terms) > 512 {
+		return false
+	}
+	for _, term := range terms {
+		if term == "" || term != strings.TrimSpace(term) || len(term) > 4096 ||
+			!utf8.ValidString(term) || strings.ContainsRune(term, 0) {
+			return false
+		}
+		normalized, err := search.NormalizeFieldV1(field, term, search.DefaultNormalizerLimits())
+		if err != nil {
+			return false
+		}
+		canonical := false
+		for _, token := range normalized.Tokens {
+			if token.Value == term {
+				canonical = true
+				break
+			}
+		}
+		if !canonical {
+			return false
+		}
+	}
+	return true
+}
+
+func runtimeSearchExcerptTerms(value string, field search.SearchField, terms []string) (int, int, bool) {
+	remaining := make(map[string]bool, len(terms))
+	for _, term := range terms {
+		remaining[term] = true
+	}
+	firstStart, firstEnd := -1, -1
+	for offset := 0; offset < len(value); {
+		character, size := utf8.DecodeRuneInString(value[offset:])
+		if unicode.IsSpace(character) {
+			offset += size
+			continue
+		}
+		start := offset
+		for offset < len(value) {
+			character, size = utf8.DecodeRuneInString(value[offset:])
+			if unicode.IsSpace(character) {
+				break
+			}
+			offset += size
+		}
+		end := offset
+		normalized, err := search.NormalizeFieldV1(field, value[start:end], search.DefaultNormalizerLimits())
+		if err != nil {
+			return 0, 0, false
+		}
+		for _, token := range normalized.Tokens {
+			if !remaining[token.Value] {
+				continue
+			}
+			delete(remaining, token.Value)
+			if firstStart < 0 {
+				firstStart, firstEnd = start, end
+			}
+		}
+		if len(remaining) == 0 {
+			return firstStart, firstEnd, true
+		}
+	}
+	return 0, 0, false
+}
+
+func runtimeBoundedSearchSnippet(value string, matchStart, matchEnd int) string {
+	if matchStart < 0 || matchEnd <= matchStart || matchEnd > len(value) ||
+		matchEnd-matchStart > runtimeSearchSnippetMaxBytes {
+		return ""
+	}
+	contextBytes := runtimeSearchSnippetMaxBytes - (matchEnd - matchStart)
+	start := max(0, matchStart-contextBytes/2)
+	end := min(len(value), start+runtimeSearchSnippetMaxBytes)
+	if end < matchEnd {
+		end = matchEnd
+		start = max(0, end-runtimeSearchSnippetMaxBytes)
+	}
+	if end == len(value) {
+		start = max(0, end-runtimeSearchSnippetMaxBytes)
+	}
+	for start < matchStart && !utf8.RuneStart(value[start]) {
+		start++
+	}
+	for end > matchEnd && end < len(value) && !utf8.RuneStart(value[end]) {
+		end--
+	}
+	if start > matchStart || end < matchEnd || start >= end || end-start > runtimeSearchSnippetMaxBytes {
+		return ""
+	}
+	return value[start:end]
+}
+
+func runtimeDerivedSourceAssetResolver(db *gorm.DB) content.DerivedSourceAssetResolver {
 	return func(
 		ctx context.Context,
 		ref backupasset.AssetRef,
 		catalogGenerationID string,
 		sourceFingerprint string,
-	) (backupasset.ProviderKind, error) {
+	) (content.AuthorizedAsset, error) {
 		if db == nil || backupasset.ValidateAssetRef(ref) != nil ||
 			backupasset.ValidateOpaqueID(catalogGenerationID) != nil ||
 			strings.TrimSpace(sourceFingerprint) == "" || len(sourceFingerprint) > 128 {
-			return "", content.ErrDerivedRepresentationUnavailable
+			return content.AuthorizedAsset{}, content.ErrDerivedRepresentationUnavailable
 		}
 		var rows []runtimeContentAssetRecord
-		err := db.WithContext(nonNilRuntimeContext(ctx)).Table("catalog_generations AS generations").
-			Select(`generations.source_fingerprint AS generation_source_fingerprint,
+		err := db.WithContext(nonNilRuntimeContext(ctx)).Table("catalog_entries AS entries").
+			Select(`entries.generation_id AS catalog_generation_id,
+				generations.source_fingerprint AS generation_source_fingerprint,
+				points.repository_id AS repository_id,
 				points.semantics AS point_semantics, points.state AS point_state,
 				points.source_fingerprint AS point_source_fingerprint,
 				points.capability_revision AS point_capability,
@@ -554,29 +861,45 @@ func runtimeDerivedProviderResolver(db *gorm.DB) content.DerivedProviderResolver
 				points.retired_at AS point_retired_at,
 				repositories.provider_kind AS repository_provider,
 				repositories.status AS repository_status,
-				repositories.capability_revision AS repository_capability`).
-			Joins("JOIN recovery_points AS points ON points.id = generations.recovery_point_id").
+				repositories.capability_revision AS repository_capability,
+				entries.entry_type AS entry_type, entries.size AS entry_size,
+				entries.mime_type AS entry_media_type, entries.fingerprint AS entry_fingerprint,
+				entries.fingerprint_strength AS entry_fingerprint_strength,
+				entries.security_state AS entry_security_state`).
+			Joins(`JOIN catalog_generations AS generations
+				ON generations.id = entries.generation_id AND generations.recovery_point_id = entries.recovery_point_id`).
+			Joins("JOIN recovery_points AS points ON points.id = entries.recovery_point_id").
 			Joins("JOIN backup_repositories AS repositories ON repositories.id = points.repository_id").
-			Where(`generations.id = ? AND generations.recovery_point_id = ?
+			Where(`entries.generation_id = ? AND entries.recovery_point_id = ? AND entries.entry_id = ?
+				AND generations.id = ? AND generations.recovery_point_id = ?
 				AND generations.state = ? AND generations.is_active = ?`,
+				catalogGenerationID, ref.RecoveryPointID, ref.EntryID,
 				catalogGenerationID, ref.RecoveryPointID, catalog.GenerationComplete, true).
 			Limit(2).Scan(&rows).Error
 		if err != nil {
-			return "", fmt.Errorf("load Derived Provider binding: %w", err)
+			return content.AuthorizedAsset{}, fmt.Errorf("load Derived source binding: %w", err)
 		}
 		if len(rows) != 1 {
-			return "", content.ErrDerivedRepresentationUnavailable
+			return content.AuthorizedAsset{}, content.ErrDerivedRepresentationUnavailable
 		}
 		record := rows[0]
 		provider := backupasset.ProviderKind(record.RepositoryProvider)
+		strength, strengthErr := catalog.ParseFingerprintStrength(record.EntryFingerprintStrength)
 		if record.GenerationSourceFingerprint != sourceFingerprint || record.PointSourceFingerprint != sourceFingerprint ||
 			!runtimeContentPointVisible(record) || record.PointRetiredAt != nil ||
 			record.RepositoryStatus != string(backupasset.RepositoryOnline) ||
 			record.RepositoryCapability <= 0 || record.RepositoryCapability != record.PointCapability ||
-			(provider != backupasset.ProviderRestic && provider != backupasset.ProviderRsync && provider != backupasset.ProviderRclone) {
-			return "", content.ErrDerivedRepresentationUnavailable
+			(provider != backupasset.ProviderRestic && provider != backupasset.ProviderRsync && provider != backupasset.ProviderRclone) ||
+			strengthErr != nil || record.EntryType != string(backupasset.CatalogEntryFile) || record.EntrySize < 0 ||
+			record.EntrySecurityState != "sealed" {
+			return content.AuthorizedAsset{}, content.ErrDerivedRepresentationUnavailable
 		}
-		return provider, nil
+		return content.AuthorizedAsset{
+			Ref: ref, CatalogGenerationID: record.CatalogGenerationID, RepositoryID: record.RepositoryID,
+			Provider: provider, ProviderCapabilityRevision: int64(record.PointCapability),
+			SourceFingerprint: record.GenerationSourceFingerprint, EntryFingerprint: record.EntryFingerprint,
+			FingerprintStrength: string(strength), Size: record.EntrySize, MediaType: record.EntryMediaType,
+		}, nil
 	}
 }
 

@@ -1202,7 +1202,7 @@ lazy boundary, optional runtime and rollback are the recommended closed design.
 
 The controller has approved the current technical plan and the user has
 authorized its Phase 2 implementation; the workflow transition is complete and
-no further product approval is pending. The exact future manifest contains 164
+no further product approval is pending. The exact future manifest contains 165
 unique paths. The historical 161-to-163 amendment added only
 `processing/reconciler.go` and its test as the **atomic Derived/Search
 reconciliation correction**: missing/unreadable Derived blob repair revokes
@@ -1211,10 +1211,16 @@ Derived mutation. The later 163-to-164 amendment adds only
 `backupasset/repository/testutil_test.go` as the **repository foundation settings
 fixture synchronization**, keeping the explicit repository snapshot fixture in
 lockstep with the 12 new processing/backfill/updater defaults without weakening
-production validation. Neither correction is a product scope expansion. Any
+production validation. The later 164-to-165 **bootstrap null parser correction**
+adds only `backend/internal/api/handlers/backup_content_handler.go`: the shared
+duplicate-key walker accepts a legal JSON null value while retaining duplicate,
+unknown-field, depth and trailing-token rejection. It preserves the closed
+`expected_active_fingerprint: null` first-activation contract proven by the
+handler regression and signed-profile smoke. None of these corrections is a
+product scope expansion. Any
 future change to the capability list, closed profiles, toolchain, public routes,
 updater trust/egress, transaction boundary, Worker image/profile, migration
-ownership, feature defaults or exact 164-path future file manifest is a new
+ownership, feature defaults or exact 165-path future file manifest is a new
 scope amendment requiring review. Child 12 export, Child 13 recovery, Child 14
 lifecycle/retention and Child 15 GA remain out of scope.
 
@@ -1222,4 +1228,4 @@ The later **closed-profile advertisement/preflight/executable parity
 correction** changes no manifest path or dependency: archive compressed-stream
 validation, advertised image execution, optional physical secret
 classification, and OOXML/ODF fail-closed preflight are implemented inside the
-same approved 164 paths. It preserves both earlier manifest-amendment records.
+same approved paths. It preserves the earlier manifest-amendment records.

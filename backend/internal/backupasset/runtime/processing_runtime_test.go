@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -125,6 +126,178 @@ func TestProcessingRuntimeNoWorkerReturnsNotDeployedWithoutCreatingJob(t *testin
 	}
 }
 
+func TestProcessingRuntimeMalwareSafetyRequiresCurrentCompleteExactEvidence(t *testing.T) {
+	now := time.Date(2026, 7, 21, 2, 0, 0, 0, time.UTC)
+	bundleFingerprint := strings.Repeat("a", 64)
+	asset := content.AuthorizedAsset{
+		Ref: backupasset.AssetRef{
+			RecoveryPointID: strings.Repeat("1", 32),
+			EntryID:         strings.Repeat("2", 64),
+		},
+		CatalogGenerationID:        strings.Repeat("3", 32),
+		Provider:                   backupasset.ProviderRestic,
+		ProviderCapabilityRevision: 7,
+		SourceFingerprint:          "source-fingerprint-v1",
+		EntryFingerprint:           strings.Repeat("4", 64),
+		FingerprintStrength:        "strong",
+		Size:                       4096,
+		MediaType:                  "application/pdf",
+	}
+
+	tests := []struct {
+		name             string
+		result           capabilityspec.MalwareResult
+		mutateAsset      func(*content.AuthorizedAsset)
+		readerErr        error
+		wantSafe         bool
+		wantStatus       capabilityspec.ScanState
+		wantContinuation bool
+	}{
+		{
+			name: "current complete no finding",
+			result: processingRuntimeMalwareResult(now, bundleFingerprint, capabilityspec.ScanNoFinding,
+				capabilityspec.CoverageComplete, asset.Size),
+			wantSafe: true, wantStatus: capabilityspec.ScanNoFinding,
+		},
+		{
+			name: "finding",
+			result: processingRuntimeMalwareResult(now, bundleFingerprint, capabilityspec.ScanFinding,
+				capabilityspec.CoverageComplete, asset.Size),
+			wantStatus: capabilityspec.ScanFinding,
+		},
+		{
+			name: "partial",
+			result: processingRuntimeMalwareResult(now, bundleFingerprint, capabilityspec.ScanNoFinding,
+				capabilityspec.CoveragePartial, asset.Size),
+			wantStatus: capabilityspec.ScanStale, wantContinuation: true,
+		},
+		{
+			name: "wrong signature bundle",
+			result: processingRuntimeMalwareResult(now, strings.Repeat("b", 64), capabilityspec.ScanNoFinding,
+				capabilityspec.CoverageComplete, asset.Size),
+			wantStatus: capabilityspec.ScanStale, wantContinuation: true,
+		},
+		{
+			name: "wrong scanned byte count",
+			result: processingRuntimeMalwareResult(now, bundleFingerprint, capabilityspec.ScanNoFinding,
+				capabilityspec.CoverageComplete, asset.Size-1),
+			wantStatus: capabilityspec.ScanStale, wantContinuation: true,
+		},
+		{
+			name: "exact source mismatch",
+			result: processingRuntimeMalwareResult(now, bundleFingerprint, capabilityspec.ScanNoFinding,
+				capabilityspec.CoverageComplete, asset.Size),
+			mutateAsset: func(value *content.AuthorizedAsset) {
+				value.SourceFingerprint = "changed-source"
+			},
+			wantStatus: capabilityspec.ScanNotScanned, wantContinuation: true,
+		},
+		{
+			name: "unreadable evidence",
+			result: processingRuntimeMalwareResult(now, bundleFingerprint, capabilityspec.ScanNoFinding,
+				capabilityspec.CoverageComplete, asset.Size),
+			readerErr:  processing.ErrDerivedTamper,
+			wantStatus: capabilityspec.ScanStale, wantContinuation: true,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := openProcessingRuntimeTestDB(t)
+			pipeline := seedProcessingRuntimeMalwareEvidence(t, db, now, asset, bundleFingerprint)
+			payload, err := json.Marshal(testCase.result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reader := &processingRuntimeMalwareEvidenceReaderFake{payload: payload, err: testCase.readerErr}
+			requester := &processingRuntimeWorkRequesterFake{}
+			runtime := &managedProcessingRuntime{
+				db: db, now: func() time.Time { return now },
+				malwareEvidence: reader, malwareWork: requester,
+			}
+			currentAsset := asset
+			if testCase.mutateAsset != nil {
+				testCase.mutateAsset(&currentAsset)
+			}
+			decision, err := runtime.malwareSafetyForAsset(context.Background(), currentAsset)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !decision.Active || decision.Safe != testCase.wantSafe || decision.Status != testCase.wantStatus {
+				t.Fatalf("decision=%+v want safe=%v status=%s", decision, testCase.wantSafe, testCase.wantStatus)
+			}
+			if got := len(requester.requests); (got == 1) != testCase.wantContinuation {
+				t.Fatalf("continuation requests=%d want=%v", got, testCase.wantContinuation)
+			}
+			if testCase.wantContinuation {
+				request := requester.requests[0]
+				if request.Descriptor.Source != currentAsset.Ref ||
+					request.Descriptor.CatalogGenerationID != currentAsset.CatalogGenerationID ||
+					request.Descriptor.SourceFingerprint != currentAsset.SourceFingerprint ||
+					request.Descriptor.EntryFingerprint != currentAsset.EntryFingerprint ||
+					request.Descriptor.ProviderCapabilityRevision != currentAsset.ProviderCapabilityRevision ||
+					request.Descriptor.PipelineFingerprint != pipeline ||
+					request.Descriptor.Capability != capabilityspec.CapabilityMalwareScan ||
+					request.Interest.OwnerKind != processing.InterestSystem {
+					t.Fatalf("unsafe malware continuation=%+v", request)
+				}
+			}
+		})
+	}
+}
+
+func TestProcessingRuntimeMalwareSafetyWithoutActivePipelineIsNotDeployedAndQuiet(t *testing.T) {
+	db := openProcessingRuntimeTestDB(t)
+	reader := &processingRuntimeMalwareEvidenceReaderFake{}
+	requester := &processingRuntimeWorkRequesterFake{}
+	runtime := &managedProcessingRuntime{db: db, malwareEvidence: reader, malwareWork: requester}
+	decision, err := runtime.malwareSafetyForAsset(context.Background(), content.AuthorizedAsset{
+		Ref: backupasset.AssetRef{
+			RecoveryPointID: strings.Repeat("1", 32),
+			EntryID:         strings.Repeat("2", 64),
+		},
+		CatalogGenerationID: strings.Repeat("3", 32), Provider: backupasset.ProviderRsync,
+		ProviderCapabilityRevision: 1, SourceFingerprint: "source-v1", EntryFingerprint: "entry-v1",
+		FingerprintStrength: "strong", Size: 1, MediaType: "image/png",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Active || decision.Safe || decision.Status != capabilityspec.ScanNotScanned ||
+		reader.calls != 0 || len(requester.requests) != 0 {
+		t.Fatalf("inactive malware pipeline decision=%+v reads=%d work=%d", decision, reader.calls, len(requester.requests))
+	}
+}
+
+func TestProcessingRuntimeMalwareSafetyRejectsMultipleActivePublications(t *testing.T) {
+	db := openProcessingRuntimeTestDB(t)
+	now := time.Date(2026, 7, 21, 2, 30, 0, 0, time.UTC)
+	asset := content.AuthorizedAsset{
+		Ref: backupasset.AssetRef{
+			RecoveryPointID: strings.Repeat("1", 32),
+			EntryID:         strings.Repeat("2", 64),
+		},
+		CatalogGenerationID:        strings.Repeat("3", 32),
+		Provider:                   backupasset.ProviderRestic,
+		ProviderCapabilityRevision: 7,
+		SourceFingerprint:          "source-fingerprint-v1",
+		EntryFingerprint:           strings.Repeat("4", 64),
+		FingerprintStrength:        "strong",
+		Size:                       4096,
+		MediaType:                  "application/pdf",
+	}
+	seedProcessingRuntimeMalwareEvidence(t, db, now, asset, strings.Repeat("a", 64))
+	duplicateProcessingRuntimeMalwarePublication(t, db, now)
+	runtime := &managedProcessingRuntime{
+		db: db, now: func() time.Time { return now },
+		malwareEvidence: &processingRuntimeMalwareEvidenceReaderFake{},
+		malwareWork:     &processingRuntimeWorkRequesterFake{},
+	}
+	if _, err := runtime.malwareSafetyForAsset(context.Background(), asset); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("multiple malware publications error=%v, want conflict", err)
+	}
+}
+
 func TestProcessingRuntimeSecretContinuationIsDefaultOffCompleteOnlyAndIdempotent(t *testing.T) {
 	db := openProcessingRuntimeTestDB(t)
 	now := time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC)
@@ -190,9 +363,10 @@ func TestProcessingRuntimeUpdaterCommitsMetadataAndPipelineRevisionsAtomically(t
 	}
 	now := time.Date(2026, 7, 20, 8, 0, 0, 0, time.UTC)
 	metrics := &processingRuntimeMetricsFake{}
+	invalidation := &processingRuntimeInvalidationFake{}
 	runtime := &managedProcessingRuntime{
 		db: db, foundation: backupasset.NewFoundationService(settingsService), settings: settingsService,
-		metrics: metrics, now: func() time.Time { return now },
+		metrics: metrics, invalidation: invalidation, now: func() time.Time { return now },
 	}
 	identity := processingupdater.UpdaterTransportIdentity{
 		Fingerprint: strings.Repeat("a", 64), PeerPID: 42, PeerUID: 10002, PeerGID: 10002,
@@ -234,6 +408,10 @@ func TestProcessingRuntimeUpdaterCommitsMetadataAndPipelineRevisionsAtomically(t
 	if len(metrics.activationOutcomes) != 1 || metrics.activationOutcomes[0] != processing.UpdaterActivationCommit {
 		t.Fatalf("activation metrics=%v", metrics.activationOutcomes)
 	}
+	if invalidation.calls != 1 || len(invalidation.last.Targets) != len(capabilityspec.WorkerProfiles()) ||
+		invalidation.last.BatchSize <= 0 || invalidation.last.RequeuePriority != 900 {
+		t.Fatalf("activation invalidation=%+v calls=%d", invalidation.last, invalidation.calls)
+	}
 	var metadata model.BackupAssetUpdaterMetadata
 	if err := db.First(&metadata, "id = ?", registered.CandidateID).Error; err != nil || metadata.State != "active" || metadata.ActivatedAt == nil {
 		t.Fatalf("metadata=%+v err=%v", metadata, err)
@@ -241,6 +419,22 @@ func TestProcessingRuntimeUpdaterCommitsMetadataAndPipelineRevisionsAtomically(t
 	revisions, err := settingsService.ProcessingPipelineRevisions(context.Background())
 	if err != nil || revisions.Content != 2 || revisions.OCR != 1 {
 		t.Fatalf("pipeline revisions=%+v err=%v", revisions, err)
+	}
+}
+
+func TestValidRuntimeUpdaterIdentityAcceptsNamespaceHiddenPID(t *testing.T) {
+	identity := processingupdater.UpdaterTransportIdentity{
+		Fingerprint: strings.Repeat("a", 64), PeerPID: 0, PeerUID: 10002, PeerGID: 10002,
+	}
+	if !validRuntimeUpdaterIdentity(identity) {
+		t.Fatal("namespace-hidden peer PID was rejected")
+	}
+	identity.PeerPID = -1
+	if validRuntimeUpdaterIdentity(identity) {
+		t.Fatal("negative peer PID was accepted")
+	}
+	if validRuntimeUpdaterIdentity(processingupdater.UpdaterTransportIdentity{}) {
+		t.Fatal("missing updater identity was accepted")
 	}
 }
 
@@ -604,12 +798,13 @@ func TestProcessingRuntimeRegistersClosedCapabilitiesOnlyForActiveBundle(t *test
 	identity := processing.WorkerTransportIdentity{
 		Kind: processing.WorkerTransportLocal, Fingerprint: strings.Repeat("5", 64), PeerUID: uint32(os.Geteuid()),
 	}
-	if _, err := runtime.WorkerProtocol().Handshake(context.Background(), identity, request); err != nil {
+	protocolPort := runtime.WorkerProtocol()
+	if _, err := protocolPort.Handshake(context.Background(), identity, request); err != nil {
 		t.Fatalf("active-bundle handshake: %v", err)
 	}
 	request.InstanceID = strings.Repeat("6", 32)
 	request.Capabilities = processing.NewProductionWorkerCapabilitySet().Advertisements()
-	if _, err := runtime.WorkerProtocol().Handshake(context.Background(), identity, request); !errors.Is(err, processing.ErrProtocolCapabilityUnsupported) {
+	if _, err := protocolPort.Handshake(context.Background(), identity, request); !errors.Is(err, processing.ErrProtocolCapabilityUnsupported) {
 		t.Fatalf("unbound advertisement error=%v, want unsupported", err)
 	}
 
@@ -653,20 +848,183 @@ func TestProcessingRuntimeRegistersClosedCapabilitiesOnlyForActiveBundle(t *test
 	request.InstanceID = strings.Repeat("a", 32)
 	request.Capabilities = newWorker.Advertisements()
 	identity.Fingerprint = strings.Repeat("b", 64)
-	if _, err := runtime.WorkerProtocol().Handshake(context.Background(), identity, request); err != nil {
+	if runtime.WorkerProtocol() != protocolPort {
+		t.Fatal("updater activation replaced the protocol port held by the Worker HTTP router")
+	}
+	if _, err := protocolPort.Handshake(context.Background(), identity, request); err != nil {
 		t.Fatalf("new active-bundle handshake: %v", err)
 	}
 	request.InstanceID = strings.Repeat("c", 32)
 	request.Capabilities = worker.Advertisements()
 	identity.Fingerprint = strings.Repeat("c", 64)
-	if _, err := runtime.WorkerProtocol().Handshake(context.Background(), identity, request); !errors.Is(err, processing.ErrProtocolCapabilityUnsupported) {
+	if _, err := protocolPort.Handshake(context.Background(), identity, request); !errors.Is(err, processing.ErrProtocolCapabilityUnsupported) {
 		t.Fatalf("superseded bundle advertisement error=%v, want unsupported", err)
+	}
+}
+
+func TestProcessingRuntimeTerminalPollDoesNotConsumeAcrossUpdaterActivation(t *testing.T) {
+	db := openProcessingRuntimeTestDB(t)
+	now := time.Date(2026, 7, 21, 4, 0, 0, 0, time.UTC)
+	asset := content.AuthorizedAsset{
+		Ref: backupasset.AssetRef{
+			RecoveryPointID: strings.Repeat("1", 32),
+			EntryID:         strings.Repeat("2", 64),
+		},
+		CatalogGenerationID: strings.Repeat("3", 32), Provider: backupasset.ProviderRestic,
+		ProviderCapabilityRevision: 7, SourceFingerprint: "runtime-terminal-source-v1",
+		EntryFingerprint: strings.Repeat("4", 64), FingerprintStrength: "strong",
+		Size: 4096, MediaType: "image/png",
+	}
+	oldBundle := strings.Repeat("a", 64)
+	seedProcessingRuntimeMalwareEvidence(t, db, now, asset, oldBundle)
+	malwarePayload, err := json.Marshal(processingRuntimeMalwareResult(
+		now, oldBundle, capabilityspec.ScanNoFinding, capabilityspec.CoverageComplete, asset.Size,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := newProcessingRuntime(processingRuntimeDependencies{
+		DB: db, Foundation: processingRuntimeFoundation(t, db, filepath.Join(t.TempDir(), "derived"), true, false),
+		Keyring: backupasset.NewKeyring(db, func() time.Time { return now }), Lease: processingRuntimeLease(t, db),
+		Source: processingRuntimeSourceFake{}, Authorize: processingRuntimeAssetAuthorizerFake{asset: asset},
+		ValidateRoot: processingRuntimeRootValidator, RevalidateSource: processingRuntimeSourceRevalidatorFake{},
+		Projection: processingRuntimeProjectionFake{}, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Startup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	runtime.malwareEvidence = &processingRuntimeMalwareEvidenceReaderFake{payload: malwarePayload}
+	profile, ok := capabilityspec.Lookup(
+		capabilityspec.CapabilityImageThumbnail, capabilityspec.ProfileRasterThumbnailV1, false,
+	)
+	if !ok {
+		t.Fatal("closed thumbnail profile unavailable")
+	}
+	oldPipeline, err := runtime.activePipelineFingerprint(context.Background(), profile.Capability, profile.OutputProfile)
+	if err != nil || oldPipeline == "" {
+		t.Fatalf("active thumbnail pipeline=%q err=%v", oldPipeline, err)
+	}
+	workerID := strings.Repeat("5", 32)
+	if err := db.Create(&model.BackupAssetWorkerIdentity{
+		ID: workerID, TransportKind: "local", TransportFingerprint: strings.Repeat("5", 64),
+		InstanceID: strings.Repeat("6", 32), IdentityRevision: 1, ProtocolVersion: processing.WorkerProtocolVersion,
+		TrustState: "active", HealthState: "ready", InteractiveSlots: 1, LastSeenAt: now, CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.BackupAssetWorkerCapability{
+		ID: strings.Repeat("7", 32), WorkerID: workerID, Capability: profile.Capability,
+		CapabilitySchema: profile.CapabilitySchema, PipelineFingerprint: oldPipeline, OutputProfile: profile.OutputProfile,
+		InputModes: "stat,sequential,range", LimitsCanonical: []byte{1}, AdvertisementDigest: strings.Repeat("8", 64),
+		HealthState: "ready", CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	actor := content.DeliveryActor{UserID: 107, Role: "operator"}
+	created, err := runtime.RequestPreview(context.Background(), processing.PreviewJobRequest{
+		Actor: actor, Ref: asset.Ref, Representation: processing.PreviewThumbnail,
+	})
+	if err != nil || created.State != processing.ProcessingProductQueued {
+		t.Fatalf("queued runtime preview=%+v err=%v", created, err)
+	}
+	var interest model.BackupAssetProcessingInterest
+	if err := db.First(&interest, "id = ?", created.JobID).Error; err != nil {
+		t.Fatal(err)
+	}
+	setID := strings.Repeat("b", 32)
+	attemptID := strings.Repeat("c", 32)
+	if err := db.Model(&model.BackupAssetProcessingJob{}).Where("id = ?", interest.JobID).Updates(map[string]any{
+		"state": string(processing.ProcessingSucceeded), "current_artifact_set_id": setID,
+		"current_attempt_id": attemptID, "transition_revision": 2, "is_current": false,
+		"finished_at": &now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.BackupAssetProcessingAttempt{
+		ID: attemptID, JobID: interest.JobID, AttemptNumber: 1, WorkerID: workerID, SlotClass: "interactive",
+		State: "succeeded", WorkerLeaseExpiresAt: now.Add(time.Minute), LastHeartbeatAt: now,
+		RecoveryPointLeaseID: strings.Repeat("d", 32), RecoveryPointAttemptID: strings.Repeat("e", 32),
+		RecoveryPointFenceHash: strings.Repeat("f", 64), AbsoluteDeadline: now.Add(time.Hour), IsCurrent: false,
+		StartedAt: now, FinishedAt: &now, CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.BackupAssetProcessingAttempt{}).Where("id = ?", attemptID).
+		Update("is_current", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	var job model.BackupAssetProcessingJob
+	if err := db.First(&job, "id = ?", interest.JobID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.BackupAssetDerivedArtifactSet{
+		ID: setID, JobID: job.ID, AttemptID: attemptID, WorkKey: job.WorkKey,
+		RecoveryPointID: asset.Ref.RecoveryPointID, CatalogGenerationID: asset.CatalogGenerationID,
+		EntryID: asset.Ref.EntryID, SourceFingerprint: asset.SourceFingerprint,
+		SecurityPolicyRevision: processingSecurityPolicyRevision, ManifestDigest: strings.Repeat("1", 64),
+		State: "active", Completeness: "complete", ArtifactCount: 1, CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	callbackName := "test:terminal-poll-updater-activation"
+	activated := false
+	publicationReads := 0
+	if err := db.Callback().Row().Before("gorm:row").Register(callbackName, func(tx *gorm.DB) {
+		if activated || tx.Statement.Table != "sets" {
+			return
+		}
+		publicationReads++
+		if publicationReads != 1 {
+			return
+		}
+		newBundle := strings.Repeat("9", 64)
+		mutationDB := tx.Session(&gorm.Session{NewDB: true})
+		mutationErr := mutationDB.Transaction(func(updateTx *gorm.DB) error {
+			if err := updateTx.Model(&model.BackupAssetUpdaterMetadata{}).Where("state = ?", "active").
+				Update("state", "superseded").Error; err != nil {
+				return err
+			}
+			return updateTx.Create(&model.BackupAssetUpdaterMetadata{
+				ID: strings.Repeat("0", 32), SourceKind: "builtin", SourceID: "runtime-terminal-next",
+				Version: "2.0.0", ManifestDigest: strings.Repeat("2", 64), SigningKeyFingerprint: strings.Repeat("3", 64),
+				BundleFingerprint: newBundle, State: "active", VerifiedAt: &now, ActivatedAt: &now,
+				CreatedAt: now, UpdatedAt: now.Add(time.Second),
+			}).Error
+		})
+		if mutationErr != nil {
+			t.Errorf("activate updater between terminal identity reads: %v", mutationErr)
+			return
+		}
+		activated = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Row().Remove(callbackName) })
+
+	product, err := runtime.PollPreview(context.Background(), processing.PreviewJobLookup{
+		Actor: actor, Ref: asset.Ref, JobID: created.JobID,
+	})
+	if err == nil || product.State == processing.ProcessingProductDerived {
+		t.Fatalf("updater-raced terminal product=%+v err=%v", product, err)
+	}
+	if !activated {
+		t.Fatal("updater activation race was not exercised")
+	}
+	if err := db.First(&interest, "id = ?", interest.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !interest.Active || interest.RemovedReason != "" || interest.RemovedAt != nil {
+		t.Fatalf("updater activation consumed terminal interest: %+v", interest)
 	}
 }
 
 func processingRuntimeBundleFingerprints(fingerprint string) processing.CapabilityBundleFingerprints {
 	bundles := make(processing.CapabilityBundleFingerprints)
-	for _, profile := range capabilityspec.RequiredProfiles() {
+	for _, profile := range capabilityspec.WorkerProfiles() {
 		bundles[profile.Capability] = []string{fingerprint}
 	}
 	return bundles
@@ -790,6 +1148,16 @@ func TestProcessingRuntimePublishMetricsReadsSQLiteQueueAge(t *testing.T) {
 
 func TestProcessingRuntimeAtomicProjectionFailureLeavesNoPendingStateAndRetrySucceeds(t *testing.T) {
 	db := openProcessingRuntimeTestDB(t)
+	now := time.Now().UTC()
+	bundleFingerprint := strings.Repeat("d", 64)
+	if err := db.Create(&model.BackupAssetUpdaterMetadata{
+		ID: strings.Repeat("6", 32), SourceKind: "builtin", SourceID: "runtime-projection-recovery", Version: "1.0.0",
+		ManifestDigest: strings.Repeat("7", 64), SigningKeyFingerprint: strings.Repeat("8", 64),
+		BundleFingerprint: bundleFingerprint, State: "active", VerifiedAt: &now, ActivatedAt: &now,
+		CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
 	projection := &processingRuntimeRecoveringProjectionFake{}
 	runtime, err := newProcessingRuntime(processingRuntimeDependencies{
 		DB: db, Foundation: processingRuntimeFoundation(t, db, filepath.Join(t.TempDir(), "derived"), true, true),
@@ -804,7 +1172,26 @@ func TestProcessingRuntimeAtomicProjectionFailureLeavesNoPendingStateAndRetrySuc
 		t.Fatal(err)
 	}
 	descriptor := processingRuntimeWorkDescriptor()
-	now := time.Now().UTC()
+	profile, ok := capabilityspec.Lookup(
+		capabilityspec.CapabilityTextExtract,
+		capabilityspec.ProfileBoundedTextV1,
+		false,
+	)
+	if !ok {
+		t.Fatal("closed text extraction profile unavailable")
+	}
+	pipeline, err := runtime.activePipelineFingerprint(context.Background(), profile.Capability, profile.OutputProfile)
+	if err != nil || pipeline == "" {
+		t.Fatalf("active text extraction pipeline=%q err=%v", pipeline, err)
+	}
+	descriptor.Capability = profile.Capability
+	descriptor.CapabilitySchema = profile.CapabilitySchema
+	descriptor.PipelineFingerprint = pipeline
+	descriptor.OutputProfile = profile.OutputProfile
+	descriptor.Parameters = processing.CanonicalProductionParameters(profile)
+	if err := processing.ValidateProductionWorkDescriptorV1(descriptor, false); err != nil {
+		t.Fatalf("production work descriptor: %v", err)
+	}
 	workerID := strings.Repeat("4", 32)
 	worker := model.BackupAssetWorkerIdentity{
 		ID: workerID, TransportKind: string(processing.WorkerTransportLocal), TransportFingerprint: strings.Repeat("4", 64),
@@ -849,24 +1236,36 @@ func TestProcessingRuntimeAtomicProjectionFailureLeavesNoPendingStateAndRetrySuc
 		Updates(map[string]any{"state": string(processing.ProcessingUploading), "transition_revision": int64(5)}).Error; err != nil {
 		t.Fatal(err)
 	}
-	payload := []byte("runtime-pending-projection")
-	digest := fmt.Sprintf("%x", sha256.Sum256(payload))
-	declaration := processing.ArtifactDeclaration{
-		Ordinal: 0, Role: processing.ArtifactRoleContent, MediaType: "text/plain", PlaintextSize: int64(len(payload)),
-		PlaintextDigest: digest, Completeness: processing.ArtifactComplete,
-		CoverageCanonical: []byte(`{"schema_version":1,"kind":"all"}`),
+	payloads := [][]byte{
+		[]byte("runtime-pending-projection"),
+		[]byte(`{"schema_version":1,"coverage":"complete","truncated":false,"input_bytes":26,"runes":26,"lines":1}`),
 	}
-	if _, err := runtime.sink.UploadArtifact(context.Background(), processing.UploadArtifactRequest{
-		JobID: work.JobID, AttemptID: leased.Lease.AttemptID, WorkerID: workerID,
-		GrantID: activated.SessionID, Artifact: declaration,
-	}, bytes.NewReader(payload)); err != nil {
-		t.Fatal(err)
+	declarations := []processing.ArtifactDeclaration{
+		{
+			Ordinal: 0, Role: processing.ArtifactRoleContent, MediaType: "text/plain", PlaintextSize: int64(len(payloads[0])),
+			PlaintextDigest: fmt.Sprintf("%x", sha256.Sum256(payloads[0])), Completeness: processing.ArtifactComplete,
+			CoverageCanonical: []byte(`{"schema_version":1,"kind":"all"}`),
+		},
+		{
+			Ordinal: 1, Role: processing.ArtifactRoleMetadata, MediaType: "application/json", PlaintextSize: int64(len(payloads[1])),
+			PlaintextDigest: fmt.Sprintf("%x", sha256.Sum256(payloads[1])), Completeness: processing.ArtifactComplete,
+			CoverageCanonical: []byte(`{"schema_version":1,"kind":"all"}`),
+		},
 	}
-	if _, err := runtime.sink.CommitManifest(context.Background(), processing.CommitManifestRequest{
+	for index := range declarations {
+		if _, err := runtime.sink.UploadArtifact(context.Background(), processing.UploadArtifactRequest{
+			JobID: work.JobID, AttemptID: leased.Lease.AttemptID, WorkerID: workerID,
+			GrantID: activated.SessionID, Artifact: declarations[index],
+		}, bytes.NewReader(payloads[index])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, firstCommitErr := runtime.sink.CommitManifest(context.Background(), processing.CommitManifestRequest{
 		JobID: work.JobID, AttemptID: leased.Lease.AttemptID, WorkerID: workerID,
 		GrantID: activated.SessionID, RecoveryPointFence: leased.Lease.RecoveryPointFence,
-		SecurityPolicyRevision: descriptor.SecurityPolicyRevision, Artifacts: []processing.ArtifactDeclaration{declaration},
-	}); err == nil {
+		SecurityPolicyRevision: descriptor.SecurityPolicyRevision, Artifacts: declarations,
+	})
+	if firstCommitErr == nil {
 		t.Fatal("first projection publication unexpectedly acknowledged")
 	}
 	var job model.BackupAssetProcessingJob
@@ -878,7 +1277,7 @@ func TestProcessingRuntimeAtomicProjectionFailureLeavesNoPendingStateAndRetrySuc
 		t.Fatal(err)
 	}
 	if job.State != string(processing.ProcessingUploading) || job.CurrentArtifactSetID != nil || setCount != 0 || projection.calls != 1 {
-		t.Fatalf("failed projection escaped atomic rollback: calls=%d job=%+v sets=%d", projection.calls, job, setCount)
+		t.Fatalf("failed projection escaped atomic rollback: err=%v calls=%d job=%+v sets=%d", firstCommitErr, projection.calls, job, setCount)
 	}
 	if err := runtime.reconcile(context.Background()); err != nil {
 		t.Fatal(err)
@@ -889,7 +1288,7 @@ func TestProcessingRuntimeAtomicProjectionFailureLeavesNoPendingStateAndRetrySuc
 	if _, err := runtime.sink.CommitManifest(context.Background(), processing.CommitManifestRequest{
 		JobID: work.JobID, AttemptID: leased.Lease.AttemptID, WorkerID: workerID,
 		GrantID: activated.SessionID, RecoveryPointFence: leased.Lease.RecoveryPointFence,
-		SecurityPolicyRevision: descriptor.SecurityPolicyRevision, Artifacts: []processing.ArtifactDeclaration{declaration},
+		SecurityPolicyRevision: descriptor.SecurityPolicyRevision, Artifacts: declarations,
 	}); err != nil {
 		t.Fatalf("atomic projection retry: %v", err)
 	}
@@ -1791,6 +2190,209 @@ func seedProcessingRuntimeSecretContinuation(t *testing.T, db *gorm.DB, now time
 	}
 }
 
+func seedProcessingRuntimeMalwareEvidence(
+	t *testing.T,
+	db *gorm.DB,
+	now time.Time,
+	asset content.AuthorizedAsset,
+	bundleFingerprint string,
+) string {
+	t.Helper()
+	if err := db.Create(&model.BackupAssetUpdaterMetadata{
+		ID: strings.Repeat("a", 32), SourceKind: "admin_registered", SourceID: "offline-test", Version: "1.0.0",
+		ManifestDigest: strings.Repeat("b", 64), SigningKeyFingerprint: strings.Repeat("c", 64),
+		BundleFingerprint: bundleFingerprint, State: "active", ActivatedAt: &now, CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	pipeline, err := (&managedProcessingRuntime{db: db}).activePipelineFingerprint(
+		context.Background(), capabilityspec.CapabilityMalwareScan, capabilityspec.ProfileSignatureScanV1,
+	)
+	if err != nil || pipeline == "" {
+		t.Fatalf("active malware pipeline=%q err=%v", pipeline, err)
+	}
+	jobID := strings.Repeat("d", 32)
+	attemptID := strings.Repeat("2", 32)
+	setID := strings.Repeat("e", 32)
+	artifactID := strings.Repeat("f", 32)
+	blobID := strings.Repeat("0", 32)
+	job := model.BackupAssetProcessingJob{
+		ID: jobID, WorkKey: strings.Repeat("1", 64), DescriptorSchemaVersion: 1, DescriptorCanonical: []byte(`{}`),
+		RecoveryPointID: asset.Ref.RecoveryPointID, CatalogGenerationID: asset.CatalogGenerationID, EntryID: asset.Ref.EntryID,
+		SourceFingerprint: asset.SourceFingerprint, EntryFingerprint: asset.EntryFingerprint,
+		ProviderCapabilityRevision: asset.ProviderCapabilityRevision,
+		Capability:                 capabilityspec.CapabilityMalwareScan, CapabilitySchema: "malware.scan.v1",
+		PipelineFingerprint: pipeline, OutputProfile: capabilityspec.ProfileSignatureScanV1,
+		SecurityPolicyRevision: processingSecurityPolicyRevision, PriorityClass: string(processing.PriorityBackground),
+		EffectivePriority: 900, State: string(processing.ProcessingSucceeded), TransitionRevision: 2,
+		CurrentAttemptID: &attemptID, CurrentArtifactSetID: &setID, IsCurrent: false, QueuedAt: now, FinishedAt: &now,
+		AbsoluteDeadline: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now,
+	}
+	attempt := model.BackupAssetProcessingAttempt{
+		ID: attemptID, JobID: jobID, AttemptNumber: 1, WorkerID: strings.Repeat("6", 32),
+		SlotClass: string(processing.PriorityBackground), State: "succeeded",
+		WorkerLeaseExpiresAt: now.Add(time.Minute), LastHeartbeatAt: now,
+		RecoveryPointLeaseID: strings.Repeat("7", 32), RecoveryPointAttemptID: strings.Repeat("8", 32),
+		RecoveryPointFenceHash: strings.Repeat("9", 64), AbsoluteDeadline: now.Add(time.Hour),
+		IsCurrent: false, StartedAt: now, FinishedAt: &now, CreatedAt: now, UpdatedAt: now,
+	}
+	set := model.BackupAssetDerivedArtifactSet{
+		ID: setID, JobID: jobID, AttemptID: attemptID, WorkKey: job.WorkKey,
+		RecoveryPointID: asset.Ref.RecoveryPointID, CatalogGenerationID: asset.CatalogGenerationID,
+		EntryID: asset.Ref.EntryID, SourceFingerprint: asset.SourceFingerprint,
+		SecurityPolicyRevision: processingSecurityPolicyRevision, ManifestDigest: strings.Repeat("3", 64),
+		State: "active", Completeness: string(processing.ArtifactComplete), ArtifactCount: 1,
+		TotalPlaintextBytes: 256, ProjectionRequired: false, ProjectionPublished: false,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	blob := model.BackupAssetDerivedBlob{
+		ID: blobID, PlaintextDigest: strings.Repeat("4", 64), PlaintextSize: 256, PhysicalSize: 512,
+		CipherFormatVersion: 1, ChunkSize: 64 << 10, ChunkCount: 1, NoncePrefix: []byte{1},
+		OpaqueLocator: "aa/malware", WrappedDEK: []byte{1}, EnvelopeNonce: []byte{1}, DerivedKEKVersion: 1,
+		State: "active", RefCount: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	artifact := model.BackupAssetDerivedArtifact{
+		ID: artifactID, ArtifactSetID: setID, Ordinal: 0, Role: string(processing.ArtifactRoleMetadata),
+		MediaType: "application/json", PlaintextSize: 256, PlaintextDigest: strings.Repeat("4", 64),
+		Completeness: string(processing.ArtifactComplete), CoverageCanonical: []byte(`{"schema_version":1,"kind":"all"}`),
+		BlobID: blobID, CreatedAt: now,
+	}
+	reference := model.BackupAssetDerivedBlobReference{
+		ID: strings.Repeat("5", 32), BlobID: blobID, ArtifactID: artifactID,
+		RecoveryPointID: asset.Ref.RecoveryPointID, CatalogGenerationID: asset.CatalogGenerationID,
+		EntryID: asset.Ref.EntryID, SourceFingerprint: asset.SourceFingerprint,
+		State: "active", CreatedAt: now, UpdatedAt: now,
+	}
+	for _, value := range []any{&job, &attempt, &set, &blob, &artifact, &reference} {
+		if err := db.Create(value).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Model(&model.BackupAssetProcessingJob{}).Where("id = ?", jobID).
+		Update("is_current", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.BackupAssetProcessingAttempt{}).Where("id = ?", attemptID).
+		Update("is_current", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	return pipeline
+}
+
+func duplicateProcessingRuntimeMalwarePublication(t *testing.T, db *gorm.DB, now time.Time) {
+	t.Helper()
+	var job model.BackupAssetProcessingJob
+	var attempt model.BackupAssetProcessingAttempt
+	var set model.BackupAssetDerivedArtifactSet
+	var artifact model.BackupAssetDerivedArtifact
+	if err := db.First(&job, "id = ?", strings.Repeat("d", 32)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&attempt, "id = ?", strings.Repeat("2", 32)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&set, "id = ?", strings.Repeat("e", 32)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&artifact, "id = ?", strings.Repeat("f", 32)).Error; err != nil {
+		t.Fatal(err)
+	}
+	newJobID := strings.Repeat("6", 32)
+	newAttemptID := strings.Repeat("7", 32)
+	newSetID := strings.Repeat("8", 32)
+	job.ID = newJobID
+	job.WorkKey = strings.Repeat("6", 64)
+	job.CurrentAttemptID = &newAttemptID
+	job.CurrentArtifactSetID = &newSetID
+	job.UpdatedAt = now.Add(time.Minute)
+	if err := db.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.BackupAssetProcessingJob{}).Where("id = ?", newJobID).
+		Update("is_current", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	attempt.ID = newAttemptID
+	attempt.JobID = newJobID
+	attempt.UpdatedAt = job.UpdatedAt
+	if err := db.Create(&attempt).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.BackupAssetProcessingAttempt{}).Where("id = ?", newAttemptID).
+		Update("is_current", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	set.ID = newSetID
+	set.JobID = newJobID
+	set.AttemptID = newAttemptID
+	set.WorkKey = job.WorkKey
+	set.ManifestDigest = strings.Repeat("7", 64)
+	set.UpdatedAt = job.UpdatedAt
+	if err := db.Create(&set).Error; err != nil {
+		t.Fatal(err)
+	}
+	artifact.ID = strings.Repeat("9", 32)
+	artifact.ArtifactSetID = newSetID
+	if err := db.Create(&artifact).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func processingRuntimeMalwareResult(
+	now time.Time,
+	bundleFingerprint string,
+	state capabilityspec.ScanState,
+	completeness capabilityspec.CoverageState,
+	scannedBytes int64,
+) capabilityspec.MalwareResult {
+	result := capabilityspec.MalwareResult{
+		SchemaVersion: 1, EngineFamily: "clamav", SignatureBundleFingerprint: bundleFingerprint,
+		Result: state, ScannedBytes: scannedBytes, Completeness: completeness,
+		ScannedAt: now.UTC().Format(time.RFC3339),
+	}
+	if state == capabilityspec.ScanFinding {
+		result.FindingCategory = "malware"
+	}
+	return result
+}
+
+type processingRuntimeMalwareEvidenceReaderFake struct {
+	payload        []byte
+	err            error
+	calls          int
+	authorizations []processing.DerivedArtifactAuthorization
+}
+
+func (fake *processingRuntimeMalwareEvidenceReaderFake) ReadAuthorized(
+	_ context.Context,
+	authorization processing.DerivedArtifactAuthorization,
+	destination io.Writer,
+) error {
+	fake.calls++
+	fake.authorizations = append(fake.authorizations, authorization)
+	if fake.err != nil {
+		return fake.err
+	}
+	_, err := destination.Write(fake.payload)
+	return err
+}
+
+type processingRuntimeWorkRequesterFake struct {
+	requests []processing.WorkRequest
+	err      error
+}
+
+func (fake *processingRuntimeWorkRequesterFake) RequestWork(
+	_ context.Context,
+	request processing.WorkRequest,
+) (processing.WorkResult, error) {
+	fake.requests = append(fake.requests, request)
+	if fake.err != nil {
+		return processing.WorkResult{}, fake.err
+	}
+	return processing.WorkResult{InterestID: strings.Repeat("6", 32), Created: true}, nil
+}
+
 func processingRuntimeFoundation(t *testing.T, db *gorm.DB, root string, enabled, local bool) *backupasset.FoundationService {
 	t.Helper()
 	service := settings.NewService(db)
@@ -1936,6 +2538,21 @@ func (prepared *processingRuntimeRecoveringPreparedProjection) PublishTx(context
 
 func (*processingRuntimeRecoveringProjectionFake) PrepareRevoke(context.Context, processing.DerivedProjectionRevoke) (processing.PreparedDerivedRevocation, error) {
 	return processingRuntimePreparedRevocation{}, nil
+}
+
+type processingRuntimeInvalidationFake struct {
+	calls int
+	last  processing.InvalidationRequest
+	err   error
+}
+
+func (fake *processingRuntimeInvalidationFake) Invalidate(
+	_ context.Context,
+	request processing.InvalidationRequest,
+) (processing.InvalidationResult, error) {
+	fake.calls++
+	fake.last = request
+	return processing.InvalidationResult{}, fake.err
 }
 
 type processingRuntimeMetricsFake struct {

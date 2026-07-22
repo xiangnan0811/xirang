@@ -38,6 +38,20 @@ type OnlineFetcher struct {
 	bundleMaxBytes   int64
 }
 
+type OnlineBundleAuthorization interface {
+	onlineBundleAuthorization()
+}
+
+type verifiedOnlineBundleAuthorization struct {
+	owner     *OnlineFetcher
+	bundleURL string
+	bundle    VerifiedBundle
+	mu        sync.Mutex
+	consumed  bool
+}
+
+func (*verifiedOnlineBundleAuthorization) onlineBundleAuthorization() {}
+
 func NewOnlineFetcher(config OnlineConfig) (*OnlineFetcher, error) {
 	if !config.Enabled {
 		return &OnlineFetcher{}, nil
@@ -157,22 +171,70 @@ func readOnlineCredential(path string) ([]byte, error) {
 }
 
 func (fetcher *OnlineFetcher) FetchMetadata(ctx context.Context, rawURL string) ([]byte, error) {
-	return fetcher.fetch(ctx, rawURL, fetcher.metadataMaxBytes, "application/json")
+	stream, err := fetcher.fetchStream(ctx, rawURL, fetcher.metadataMaxBytes, "application/json")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = stream.Close() }()
+	payload, err := io.ReadAll(stream)
+	if err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
-func (fetcher *OnlineFetcher) FetchBundle(ctx context.Context, rawURL string) ([]byte, error) {
-	return fetcher.fetch(ctx, rawURL, fetcher.bundleMaxBytes, "application/octet-stream")
+func (fetcher *OnlineFetcher) AuthorizeBundle(
+	ctx context.Context,
+	manifestURL string,
+	bundleURL string,
+	trust TrustStore,
+	now time.Time,
+) (OnlineBundleAuthorization, error) {
+	if fetcher == nil || ctx == nil || now.Location() != time.UTC || manifestURL == bundleURL ||
+		fetcher.validateResourceURL(manifestURL) != nil || fetcher.validateResourceURL(bundleURL) != nil {
+		return nil, ErrPolicyRejected
+	}
+	manifest, err := fetcher.FetchMetadata(ctx, manifestURL)
+	if err != nil {
+		return nil, err
+	}
+	verified, err := VerifyManifest(manifest, trust, now)
+	if err != nil {
+		return nil, err
+	}
+	return &verifiedOnlineBundleAuthorization{owner: fetcher, bundleURL: bundleURL, bundle: verified}, nil
 }
 
-func (fetcher *OnlineFetcher) fetch(ctx context.Context, rawURL string, maximum int64, accept string) ([]byte, error) {
+func (fetcher *OnlineFetcher) OpenVerifiedBundle(
+	ctx context.Context,
+	authorization OnlineBundleAuthorization,
+) (VerifiedBundle, io.ReadCloser, error) {
+	verified, ok := authorization.(*verifiedOnlineBundleAuthorization)
+	if fetcher == nil || ctx == nil || !ok || verified == nil || verified.owner != fetcher {
+		return VerifiedBundle{}, nil, ErrPolicyRejected
+	}
+	verified.mu.Lock()
+	if verified.consumed {
+		verified.mu.Unlock()
+		return VerifiedBundle{}, nil, ErrPolicyRejected
+	}
+	verified.consumed = true
+	bundleURL := verified.bundleURL
+	bundle := verified.bundle
+	verified.mu.Unlock()
+	stream, err := fetcher.fetchStream(ctx, bundleURL, fetcher.bundleMaxBytes, "application/octet-stream")
+	if err != nil {
+		return VerifiedBundle{}, nil, err
+	}
+	return bundle, stream, nil
+}
+
+func (fetcher *OnlineFetcher) fetchStream(ctx context.Context, rawURL string, maximum int64, accept string) (io.ReadCloser, error) {
 	if fetcher == nil || !fetcher.enabled || fetcher.httpClient == nil || ctx == nil || maximum <= 0 {
 		return nil, ErrPolicyRejected
 	}
-	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.Fragment != "" ||
-		parsed.Path == "" || filepath.ToSlash(filepath.Clean(parsed.Path)) != parsed.Path || parsed.String() != rawURL ||
-		!fetcher.allowedOrigins[parsed.Scheme+"://"+parsed.Host] {
-		return nil, ErrPolicyRejected
+	if err := fetcher.validateResourceURL(rawURL); err != nil {
+		return nil, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -186,21 +248,80 @@ func (fetcher *OnlineFetcher) fetch(ctx context.Context, rawURL string, maximum 
 	if err != nil {
 		return nil, ErrTemporarilyUnavailable
 	}
-	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode >= 300 && response.StatusCode < 400 {
+		_ = response.Body.Close()
 		return nil, ErrPolicyRejected
 	}
 	if response.StatusCode != http.StatusOK {
+		_ = response.Body.Close()
 		return nil, ErrTemporarilyUnavailable
 	}
+	contentTypes := response.Header.Values("Content-Type")
+	if len(contentTypes) != 1 || contentTypes[0] != accept {
+		_ = response.Body.Close()
+		return nil, ErrPolicyRejected
+	}
 	if response.ContentLength > maximum {
+		_ = response.Body.Close()
 		return nil, ErrPolicyRejected
 	}
-	payload, err := io.ReadAll(io.LimitReader(response.Body, maximum+1))
-	if err != nil || int64(len(payload)) > maximum {
-		return nil, ErrPolicyRejected
+	return &boundedResponseBody{body: response.Body, remaining: maximum}, nil
+}
+
+func (fetcher *OnlineFetcher) validateResourceURL(rawURL string) error {
+	if fetcher == nil || !fetcher.enabled || fetcher.httpClient == nil {
+		return ErrPolicyRejected
 	}
-	return payload, nil
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.Fragment != "" ||
+		parsed.Path == "" || filepath.ToSlash(filepath.Clean(parsed.Path)) != parsed.Path || parsed.String() != rawURL ||
+		!fetcher.allowedOrigins[parsed.Scheme+"://"+parsed.Host] {
+		return ErrPolicyRejected
+	}
+	return nil
+}
+
+type boundedResponseBody struct {
+	body      io.ReadCloser
+	remaining int64
+	closed    bool
+}
+
+func (body *boundedResponseBody) Read(payload []byte) (int, error) {
+	if body == nil || body.body == nil || body.closed {
+		return 0, io.ErrClosedPipe
+	}
+	if body.remaining == 0 {
+		var probe [1]byte
+		count, err := body.body.Read(probe[:])
+		if count > 0 || err == nil {
+			_ = body.Close()
+			return 0, ErrPolicyRejected
+		}
+		if errors.Is(err, io.EOF) {
+			return 0, io.EOF
+		}
+		_ = body.Close()
+		return 0, ErrPolicyRejected
+	}
+	if int64(len(payload)) > body.remaining {
+		payload = payload[:body.remaining]
+	}
+	count, err := body.body.Read(payload)
+	body.remaining -= int64(count)
+	if err != nil && !errors.Is(err, io.EOF) {
+		_ = body.Close()
+		return count, ErrPolicyRejected
+	}
+	return count, err
+}
+
+func (body *boundedResponseBody) Close() error {
+	if body == nil || body.body == nil || body.closed {
+		return nil
+	}
+	body.closed = true
+	return body.body.Close()
 }
 
 type ProtocolClient interface {
@@ -244,7 +365,10 @@ type candidateReplayEntry struct {
 	Receipt     InboxReceipt `json:"receipt"`
 }
 
-const maximumCandidateReplayBytes = 64 << 20
+const (
+	maximumCandidateJournalBytes = 256 << 10
+	maximumCandidateReplayBytes  = 64 << 20
+)
 
 func NewService(inbox *Inbox, store *Store, activator *Activator, client ProtocolClient, journalPath string) (*Service, error) {
 	if store == nil || activator == nil || client == nil || !filepath.IsAbs(journalPath) || filepath.Clean(journalPath) != journalPath ||
@@ -294,10 +418,6 @@ func (service *Service) scanAndRegisterLocked(
 	trust TrustStore,
 	now time.Time,
 ) ([]RegisteredCandidateReceipt, error) {
-	candidates, err := service.inbox.Scan(ctx, trust, now)
-	if err != nil {
-		return nil, err
-	}
 	journal, err := service.readCandidateJournal()
 	if err != nil {
 		return nil, err
@@ -306,35 +426,42 @@ func (service *Service) scanAndRegisterLocked(
 	if err != nil {
 		return nil, err
 	}
-	registered := make([]RegisteredCandidateReceipt, 0, len(candidates))
-	for _, candidate := range candidates {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	registered := make([]RegisteredCandidateReceipt, 0)
+	err = service.inbox.Scan(ctx, trust, now, func(packageCtx context.Context, candidate InboxCandidate) error {
+		if len(registered) >= maximumInboxCandidates {
+			return ErrPolicyRejected
 		}
-		if _, err := service.store.StoreBundle(ctx, candidate.Bundle); err != nil {
-			return nil, err
+		if err := packageCtx.Err(); err != nil {
+			return err
 		}
-		result, err := service.client.RegisterCandidate(ctx, RegisterCandidateRequest{SchemaVersion: 1, Receipt: candidate.Receipt})
+		if _, err := service.store.storeInboxCandidate(packageCtx, candidate); err != nil {
+			return err
+		}
+		result, err := service.client.RegisterCandidate(packageCtx, RegisterCandidateRequest{SchemaVersion: 1, Receipt: candidate.Receipt})
 		if err != nil || ValidateRegisterCandidateResult(result) != nil {
 			if err != nil {
-				return nil, err
+				return err
 			}
-			return nil, ErrProtocolInvalid
+			return ErrProtocolInvalid
 		}
 		if err := addCandidateJournalEntry(&journal, candidateJournalEntry{
 			CandidateID: result.CandidateID, BundleFingerprint: candidate.Receipt.BundleFingerprint,
 		}); err != nil {
-			return nil, err
+			return err
 		}
 		if err := addCandidateReplayEntry(&replay, candidateReplayEntry{CandidateID: result.CandidateID, Receipt: candidate.Receipt}); err != nil {
-			return nil, err
+			return err
+		}
+		if err := service.writeCandidateReplayState(replay); err != nil {
+			return err
+		}
+		if err := service.writeCandidateJournal(journal); err != nil {
+			return err
 		}
 		registered = append(registered, RegisteredCandidateReceipt{CandidateID: result.CandidateID, InboxReceipt: candidate.Receipt})
-	}
-	if err := service.writeCandidateReplayState(replay); err != nil {
-		return nil, err
-	}
-	if err := service.writeCandidateJournal(journal); err != nil {
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return registered, nil
@@ -400,11 +527,11 @@ func (service *Service) pollAndActivateLocked(
 	if directive.ExpectedOldFingerprint != active {
 		return 0, ErrActivationFailed
 	}
-	journal, err := service.readCandidateJournal()
+	replay, err := service.readCandidateReplayState()
 	if err != nil {
 		return 0, err
 	}
-	if !journalContainsCandidate(journal, directive.CandidateID, directive.NewFingerprint) {
+	if !replayContainsCandidate(replay, directive.CandidateID, directive.NewFingerprint) {
 		return 0, ErrActivationFailed
 	}
 	receipt, err := service.activator.Activate(ctx, ActivationRequest{
@@ -486,10 +613,8 @@ func (service *Service) reportAndFinalizeActivationLocked(ctx context.Context, r
 	if err != nil {
 		return err
 	}
-	if reported.Decision == ActivationDecisionCommit {
-		removeCandidateReplayFingerprint(&replay, receipt.OldFingerprint)
-	} else {
-		removeCandidateReplayEntry(&replay, receipt.CandidateID)
+	if err := removeCandidateReplayEntryMatching(&replay, receipt.CandidateID, receipt.NewFingerprint); err != nil {
+		return err
 	}
 	if err := service.writeCandidateReplayState(replay); err != nil {
 		return err
@@ -524,9 +649,9 @@ func addCandidateJournalEntry(journal *candidateJournal, entry candidateJournalE
 	return nil
 }
 
-func journalContainsCandidate(journal candidateJournal, candidateID, fingerprint string) bool {
-	for _, entry := range journal.Candidates {
-		if entry.CandidateID == candidateID && entry.BundleFingerprint == fingerprint {
+func replayContainsCandidate(state candidateReplayState, candidateID, fingerprint string) bool {
+	for _, entry := range state.Receipts {
+		if entry.CandidateID == candidateID && entry.Receipt.BundleFingerprint == fingerprint {
 			return true
 		}
 	}
@@ -563,30 +688,26 @@ func addCandidateReplayEntry(state *candidateReplayState, entry candidateReplayE
 	return nil
 }
 
-func removeCandidateReplayEntry(state *candidateReplayState, candidateID string) {
-	for index, entry := range state.Receipts {
-		if entry.CandidateID == candidateID {
-			state.Receipts = append(state.Receipts[:index], state.Receipts[index+1:]...)
-			return
-		}
-	}
-}
-
-func removeCandidateReplayFingerprint(state *candidateReplayState, fingerprint string) {
-	if fingerprint == "" {
-		return
+func removeCandidateReplayEntryMatching(state *candidateReplayState, candidateID, fingerprint string) error {
+	if state == nil || !lowerHex(candidateID, 32) || !lowerHex(fingerprint, 64) {
+		return ErrActivationFailed
 	}
 	for index, entry := range state.Receipts {
-		if entry.Receipt.BundleFingerprint == fingerprint {
-			state.Receipts = append(state.Receipts[:index], state.Receipts[index+1:]...)
-			return
+		if entry.CandidateID != candidateID {
+			continue
 		}
+		if entry.Receipt.BundleFingerprint != fingerprint {
+			return ErrActivationFailed
+		}
+		state.Receipts = append(state.Receipts[:index], state.Receipts[index+1:]...)
+		return nil
 	}
+	return nil
 }
 
 func (service *Service) readCandidateJournal() (candidateJournal, error) {
 	info, err := os.Lstat(service.journalPath)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() <= 0 || info.Size() > maximumProtocolBytes {
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() <= 0 || info.Size() > maximumCandidateJournalBytes {
 		return candidateJournal{}, ErrActivationFailed
 	}
 	payload, err := os.ReadFile(service.journalPath)
@@ -628,7 +749,7 @@ func (service *Service) writeCandidateJournal(journal candidateJournal) error {
 		return ErrActivationFailed
 	}
 	payload, err := json.Marshal(journal)
-	if err != nil || len(payload) > maximumProtocolBytes {
+	if err != nil || len(payload) > maximumCandidateJournalBytes {
 		return ErrActivationFailed
 	}
 	temporary, err := privateTemporaryPath(filepath.Dir(service.journalPath), ".candidate-journal-")

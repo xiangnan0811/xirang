@@ -77,7 +77,7 @@ func TestInvalidationMarksOnlyAffectedSetsAndSupersedesOldJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.StaleSets != 1 || result.SupersededJobs != 1 || result.RequeuedJobs != 0 || result.NotDeployed != 1 {
+	if result.StaleSets != 1 || result.SupersededJobs != 1 || result.RequeuedJobs != 0 || result.NotDeployed != 2 {
 		t.Fatalf("invalidation result=%+v", result)
 	}
 	if err := harness.db.First(&affectedSet, "id = ?", affectedSet.ID).Error; err != nil {
@@ -101,6 +101,63 @@ func TestInvalidationMarksOnlyAffectedSetsAndSupersedesOldJobs(t *testing.T) {
 		queuedJob.IsCurrent || failedCurrent != 0 || harness.projection.revocations != 1 {
 		t.Fatalf("invalidation state invalid: affected=%+v unaffected=%+v queued=%+v failed=%d revokes=%d",
 			affectedSet, unaffectedSet, queuedJob, failedCurrent, harness.projection.revocations)
+	}
+}
+
+func TestInvalidationRollsBackStaleSetWhenRequeueFails(t *testing.T) {
+	harness := newManifestHarness(t)
+	harness.moveJobToUploading(t)
+	payload := []byte("published-before-failed-invalidation")
+	declaration := artifactDeclaration(0, ArtifactRoleContent, "text/plain", payload)
+	if _, err := harness.sink.UploadArtifact(context.Background(), UploadArtifactRequest{
+		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
+		GrantID: harness.sinkGrantID, Artifact: declaration,
+	}, bytes.NewReader(payload)); err != nil {
+		t.Fatal(err)
+	}
+	published, err := harness.sink.CommitManifest(context.Background(), CommitManifestRequest{
+		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
+		GrantID: harness.sinkGrantID, RecoveryPointFence: harness.lease.RecoveryPointFence,
+		SecurityPolicyRevision: validWorkDescriptor().SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{declaration},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Model(&model.BackupAssetWorkerCapability{}).
+		Where("worker_id = ?", harness.lease.WorkerID).
+		Update("pipeline_fingerprint", "pipeline-fingerprint-v2").Error; err != nil {
+		t.Fatal(err)
+	}
+	harness.coordinator.config.QueueMax = 0
+	controller, err := NewInvalidationController(harness.db, harness.coordinator, harness.lifecycle, harness.clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := controller.Invalidate(context.Background(), InvalidationRequest{
+		Targets: []InvalidationTarget{{
+			Capability: "noop", OutputProfile: "noop.v1", ActivePipelineFingerprint: "pipeline-fingerprint-v2",
+		}},
+		BatchSize: 32, RequeuePriority: 950,
+	})
+	if !errors.Is(err, ErrQueueFull) || result != (InvalidationResult{}) {
+		t.Fatalf("failed invalidation result=%+v err=%v", result, err)
+	}
+	var set model.BackupAssetDerivedArtifactSet
+	if err := harness.db.First(&set, "id = ?", published.ArtifactSetID).Error; err != nil {
+		t.Fatal(err)
+	}
+	var replacementJobs int64
+	if err := harness.db.Model(&model.BackupAssetProcessingJob{}).
+		Where("pipeline_fingerprint = ?", "pipeline-fingerprint-v2").Count(&replacementJobs).Error; err != nil {
+		t.Fatal(err)
+	}
+	var activeLeases int64
+	if err := harness.db.Model(&model.RecoveryPointLease{}).
+		Where("owner_id = ? AND status = ?", harness.lease.JobID, backupasset.LeaseActive).Count(&activeLeases).Error; err != nil {
+		t.Fatal(err)
+	}
+	if set.State != "active" || !set.ProjectionPublished || replacementJobs != 0 || activeLeases != 0 {
+		t.Fatalf("failed invalidation leaked state set=%+v replacement_jobs=%d active_leases=%d", set, replacementJobs, activeLeases)
 	}
 }
 
@@ -175,5 +232,115 @@ func TestInvalidationSupersedesActiveAttemptAndRejectsOldFencePublication(t *tes
 	}
 	if sets != 0 {
 		t.Fatalf("old fence publication created %d Derived sets", sets)
+	}
+}
+
+func TestInvalidationRequeuesSuccessfulCurrentDerivedForActivePipeline(t *testing.T) {
+	harness := newManifestHarness(t)
+	harness.moveJobToUploading(t)
+	payload := []byte("terminal-derived-from-old-pipeline")
+	declaration := artifactDeclaration(0, ArtifactRoleContent, "text/plain", payload)
+	if _, err := harness.sink.UploadArtifact(context.Background(), UploadArtifactRequest{
+		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
+		GrantID: harness.sinkGrantID, Artifact: declaration,
+	}, bytes.NewReader(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := harness.sink.CommitManifest(context.Background(), CommitManifestRequest{
+		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
+		GrantID: harness.sinkGrantID, RecoveryPointFence: harness.lease.RecoveryPointFence,
+		SecurityPolicyRevision: validWorkDescriptor().SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{declaration},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const activePipeline = "pipeline-fingerprint-v2"
+	if err := harness.db.Model(&model.BackupAssetWorkerCapability{}).Where("worker_id = ?", harness.lease.WorkerID).
+		Update("pipeline_fingerprint", activePipeline).Error; err != nil {
+		t.Fatal(err)
+	}
+	controller, err := NewInvalidationController(harness.db, harness.coordinator, harness.lifecycle, harness.clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := controller.Invalidate(context.Background(), InvalidationRequest{
+		Targets: []InvalidationTarget{{
+			Capability: "noop", OutputProfile: "noop.v1", ActivePipelineFingerprint: activePipeline,
+		}},
+		BatchSize: 32, RequeuePriority: 950,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StaleSets != 1 || result.RequeuedJobs != 1 || result.NotDeployed != 0 {
+		t.Fatalf("terminal invalidation result=%+v", result)
+	}
+	var replacement model.BackupAssetProcessingJob
+	if err := harness.db.Where("pipeline_fingerprint = ?", activePipeline).Take(&replacement).Error; err != nil {
+		t.Fatal(err)
+	}
+	if replacement.State != string(ProcessingQueued) || !replacement.IsCurrent || replacement.ID == harness.lease.JobID {
+		t.Fatalf("replacement job=%+v", replacement)
+	}
+}
+
+func TestInvalidationCatalogSourceDriftSkipsRequeueAndStillInvalidatesOldOutput(t *testing.T) {
+	harness := newManifestHarness(t)
+	harness.moveJobToUploading(t)
+	payload := []byte("terminal-derived-before-source-drift")
+	declaration := artifactDeclaration(0, ArtifactRoleContent, "text/plain", payload)
+	if _, err := harness.sink.UploadArtifact(context.Background(), UploadArtifactRequest{
+		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
+		GrantID: harness.sinkGrantID, Artifact: declaration,
+	}, bytes.NewReader(payload)); err != nil {
+		t.Fatal(err)
+	}
+	published, err := harness.sink.CommitManifest(context.Background(), CommitManifestRequest{
+		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
+		GrantID: harness.sinkGrantID, RecoveryPointFence: harness.lease.RecoveryPointFence,
+		SecurityPolicyRevision: validWorkDescriptor().SecurityPolicyRevision, Artifacts: []ArtifactDeclaration{declaration},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const activePipeline = "pipeline-fingerprint-v2"
+	if err := harness.db.Model(&model.BackupAssetWorkerCapability{}).Where("worker_id = ?", harness.lease.WorkerID).
+		Update("pipeline_fingerprint", activePipeline).Error; err != nil {
+		t.Fatal(err)
+	}
+	harness.projection.onPrepareRevoke = func() {
+		if err := harness.db.Model(&model.CatalogGeneration{}).Where("id = ?", validWorkDescriptor().CatalogGenerationID).
+			Update("source_fingerprint", "source-fingerprint-after-drift").Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	controller, err := NewInvalidationController(harness.db, harness.coordinator, harness.lifecycle, harness.clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := controller.Invalidate(context.Background(), InvalidationRequest{
+		Targets: []InvalidationTarget{{
+			Capability: "noop", OutputProfile: "noop.v1", ActivePipelineFingerprint: activePipeline,
+		}},
+		BatchSize: 32, RequeuePriority: 950,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StaleSets != 1 || result.SupersededJobs != 0 || result.RequeuedJobs != 0 || result.NotDeployed != 0 {
+		t.Fatalf("source-drift invalidation result=%+v", result)
+	}
+	var set model.BackupAssetDerivedArtifactSet
+	if err := harness.db.First(&set, "id = ?", published.ArtifactSetID).Error; err != nil {
+		t.Fatal(err)
+	}
+	var replacements int64
+	if err := harness.db.Model(&model.BackupAssetProcessingJob{}).
+		Where("pipeline_fingerprint = ?", activePipeline).Count(&replacements).Error; err != nil {
+		t.Fatal(err)
+	}
+	if set.State != "stale" || set.ProjectionPublished || replacements != 0 || harness.projection.revocations != 1 {
+		t.Fatalf("source drift leaked replacement or old projection: set=%+v replacements=%d revokes=%d",
+			set, replacements, harness.projection.revocations)
 	}
 }

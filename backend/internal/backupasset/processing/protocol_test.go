@@ -140,6 +140,17 @@ func TestProductionPipelineFingerprintsUseOnlyAffectedActiveBundles(t *testing.T
 	}
 }
 
+func TestProductionToolchainFingerprintIsCanonicalDigest(t *testing.T) {
+	if len(productionToolchainFingerprint) != 64 {
+		t.Fatalf("production toolchain fingerprint=%q, want SHA-256 hex", productionToolchainFingerprint)
+	}
+	for _, character := range productionToolchainFingerprint {
+		if character < '0' || character > '9' && character < 'a' || character > 'f' {
+			t.Fatalf("production toolchain fingerprint is not lowercase hex: %q", productionToolchainFingerprint)
+		}
+	}
+}
+
 func TestProtocolContractsContainNoProviderCredentialPathOrUpdaterFields(t *testing.T) {
 	request := validHandshakeRequest()
 	payload, err := json.Marshal(request)

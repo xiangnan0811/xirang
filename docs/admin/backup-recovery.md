@@ -100,6 +100,10 @@ Clean rollback 只适用于 `first_new_point` 激活后且从未出现任何受�
 
 备份资产 Worker 是可选的增强处理面，当前**不是 GA**，也没有稳定公共 Worker 镜像。它不会替代备份引擎、Provider、RecoveryPoint、Catalog、Content Broker 或 recovery 流程。全局 `backup_assets.enabled`、本机/远程 Worker transport、独立 updater 和有限秘密分类默认都是关闭状态；仓库 Compose 的 `asset-worker` profile 仅供本地 build 与验证。
 
+本地 profile 把 parser 与 updater UDS 分在 `asset-worker-worker-runtime` 和 `asset-worker-updater-runtime` 两个 named volume 中。Parser 只读挂载前者且不加入 updater GID，updater 只读挂载后者；双方都无法看到对方的 socket。Bundle store 另行共享为 updater 可写、parser 只读，inbox/trust 仍是 updater-only。该隔离不会改变官方 All-in-One image、`10761` 端口，也不会建立 Docker Hub/GitHub Release Worker 发布合同。
+
+加密 Derived Store 使用第四个独立 named volume `asset-worker-derived-store`，由 initializer 设为 `0700:10000:10000` 后只挂载给 Core。它不会复用 `/data`、`/backup`、`/logs` 或任何 Provider 源，parser/updater 也无法观察其中的加密产物。
+
 Worker 只从一次性、attempt-bound Input grant 读取源内容，并把产物经一次性 Sink grant 返回 Core。它不能修改 Provider bytes，也不能访问 Repository locator、数据库、SSH/Restic/Rclone/Command 凭据、宿主源路径或网络。增强能力使用闭合 profile/limit，覆盖静态图片缩略图、有界文本/OCR、静态文档页、malware finding、媒体探测/预览以及有界归档索引；不支持或超限的内容保持原生预览、下载或 recovery 路径。
 
 资产检查器使用以下闭合状态，不会把缺少 Worker 解释为文件不存在或备份失败：

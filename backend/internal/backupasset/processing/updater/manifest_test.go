@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -144,4 +145,132 @@ func TestVerifyPackageRejectsSignatureTarAndPathContractViolations(t *testing.T)
 	if _, err := VerifyPackage(unknown, bundle, trust, now); !errors.Is(err, ErrPolicyRejected) {
 		t.Fatalf("unknown JSON error=%v", err)
 	}
+}
+
+func TestVerifyPackageRejectsMalformedRawCanonicalUSTARFraming(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	manifest, _, bundle, trust, privateKey := signedManifestTestPackage(t, now, []byte("model"))
+
+	tests := []struct {
+		name   string
+		mutate func([]byte) []byte
+	}{
+		{name: "noncanonical uid header", mutate: func(value []byte) []byte {
+			copy(value[108:116], []byte("0000001\x00"))
+			rewriteTarHeaderChecksum(value[:512])
+			return value
+		}},
+		{name: "malformed checksum", mutate: func(value []byte) []byte {
+			value[0] ^= 1
+			return value
+		}},
+		{name: "nonzero member padding", mutate: func(value []byte) []byte {
+			value[512+len("model")] = 1
+			return value
+		}},
+		{name: "one terminal block", mutate: func(value []byte) []byte {
+			return value[:len(value)-512]
+		}},
+		{name: "nonzero terminal block", mutate: func(value []byte) []byte {
+			value[len(value)-1024] = 1
+			return value
+		}},
+		{name: "trailing byte", mutate: func(value []byte) []byte {
+			return append(value, 0)
+		}},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			mutated := testCase.mutate(append([]byte(nil), bundle...))
+			candidate := manifest
+			candidate.BundleSHA256 = SHA256Hex(mutated)
+			candidate.Signature = ""
+			if err := SignManifest(&candidate, privateKey); err != nil {
+				t.Fatal(err)
+			}
+			payload, err := json.Marshal(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := VerifyPackage(payload, mutated, trust, now); !errors.Is(err, ErrPolicyRejected) {
+				t.Fatalf("malformed tar error=%v", err)
+			}
+		})
+	}
+}
+
+func TestVerifyPackageRejectsMemberAndWholeBundleDigestMismatch(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	manifest, _, bundle, trust, privateKey := signedManifestTestPackage(t, now, []byte("model"))
+
+	memberMismatch := append([]byte(nil), bundle...)
+	memberMismatch[512] ^= 1
+	memberManifest := manifest
+	memberManifest.BundleSHA256 = SHA256Hex(memberMismatch)
+	memberManifest.Signature = ""
+	if err := SignManifest(&memberManifest, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	memberPayload, _ := json.Marshal(memberManifest)
+	if _, err := VerifyPackage(memberPayload, memberMismatch, trust, now); !errors.Is(err, ErrPolicyRejected) {
+		t.Fatalf("member digest mismatch error=%v", err)
+	}
+
+	bundleManifest := manifest
+	bundleManifest.BundleSHA256 = strings.Repeat("0", 64)
+	bundleManifest.Signature = ""
+	if err := SignManifest(&bundleManifest, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	bundlePayload, _ := json.Marshal(bundleManifest)
+	if _, err := VerifyPackage(bundlePayload, bundle, trust, now); !errors.Is(err, ErrPolicyRejected) {
+		t.Fatalf("bundle digest mismatch error=%v", err)
+	}
+}
+
+func signedManifestTestPackage(
+	t *testing.T,
+	now time.Time,
+	content []byte,
+) (Manifest, []byte, []byte, TrustStore, ed25519.PrivateKey) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, files, err := BuildCanonicalTar([]BundleFilePayload{{Path: "models/model.dat", Mode: 0o444, Content: content}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := Manifest{
+		SchemaVersion: 1, SourceKind: "admin_registered", SourceID: "offline.default", Version: "1.0.0",
+		CreatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour),
+		Capabilities: []ManifestCapability{{
+			Capability: "image.ocr", Schema: "image.ocr.v1", Profiles: []string{"tesseract_text_v1"},
+			ToolRevision: "tesseract-5", ModelRevision: "model-v1", DataRevision: "none",
+		}},
+		Files: files, BundleSHA256: SHA256Hex(bundle), SigningKeyID: "key-2026", SignatureAlgorithm: "ed25519",
+	}
+	if err := SignManifest(&manifest, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust := TrustStore{Keys: []TrustedKey{{
+		ID: "key-2026", PublicKey: publicKey, ActiveFrom: now.Add(-time.Hour), RetireAfter: now.Add(time.Hour),
+	}}}
+	return manifest, payload, bundle, trust, privateKey
+}
+
+func rewriteTarHeaderChecksum(header []byte) {
+	for index := 148; index < 156; index++ {
+		header[index] = ' '
+	}
+	var checksum int
+	for _, value := range header {
+		checksum += int(value)
+	}
+	copy(header[148:156], []byte(fmt.Sprintf("%06o\x00 ", checksum)))
 }

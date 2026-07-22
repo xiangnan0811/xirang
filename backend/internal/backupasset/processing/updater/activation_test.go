@@ -13,16 +13,17 @@ func TestActivationJournalRecoversCommittedSwapOrRollsBackUncommittedSwap(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldFingerprint := strings.Repeat("a", 64)
-	newFingerprint := strings.Repeat("b", 64)
-	for _, fingerprint := range []string{oldFingerprint, newFingerprint} {
-		if _, err := store.StoreBundle(context.Background(), VerifiedBundle{
-			BundleFingerprint: fingerprint,
-			Files:             []BundleFilePayload{{Path: "bundle.dat", Mode: 0o444, Content: []byte(fingerprint[:8])}},
-		}); err != nil {
+	storedBundles := []VerifiedBundle{
+		verifiedBundleForStore(t, []BundleFilePayload{{Path: "bundle.dat", Mode: 0o444, Content: []byte("old-bundle")}}),
+		verifiedBundleForStore(t, []BundleFilePayload{{Path: "bundle.dat", Mode: 0o444, Content: []byte("new-bundle")}}),
+	}
+	for _, bundle := range storedBundles {
+		if _, err := store.StoreBundle(context.Background(), bundle); err != nil {
 			t.Fatal(err)
 		}
 	}
+	oldFingerprint := storedBundles[0].BundleFingerprint
+	newFingerprint := storedBundles[1].BundleFingerprint
 	activator, err := NewActivator(root)
 	if err != nil {
 		t.Fatal(err)
@@ -82,11 +83,9 @@ func TestActivationCrashBeforeSwapLeavesOldPointerRecoverable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fingerprint := strings.Repeat("c", 64)
-	if _, err := store.StoreBundle(context.Background(), VerifiedBundle{
-		BundleFingerprint: fingerprint,
-		Files:             []BundleFilePayload{{Path: "bundle.dat", Mode: 0o444, Content: []byte("bundle")}},
-	}); err != nil {
+	bundle := verifiedBundleForStore(t, []BundleFilePayload{{Path: "bundle.dat", Mode: 0o444, Content: []byte("bundle")}})
+	fingerprint := bundle.BundleFingerprint
+	if _, err := store.StoreBundle(context.Background(), bundle); err != nil {
 		t.Fatal(err)
 	}
 	activator, err := NewActivator(root)

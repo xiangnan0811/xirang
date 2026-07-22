@@ -13,7 +13,12 @@ import (
 	"unicode/utf8"
 )
 
-const maximumManifestBytes = int64(1 << 20)
+const (
+	maximumManifestBytes   = int64(1 << 20)
+	maximumInboxCandidates = 1024
+	inboxReadBatchSize     = 64
+	offlinePackageDeadline = 15 * time.Minute
+)
 
 type Inbox struct {
 	root       string
@@ -37,6 +42,19 @@ type InboxReceipt struct {
 type InboxCandidate struct {
 	Receipt InboxReceipt   `json:"receipt"`
 	Bundle  VerifiedBundle `json:"-"`
+	source  *inboxBundleSource
+}
+
+type inboxBundleSource struct {
+	root            *secureInboxDirectory
+	candidateRoot   *secureInboxDirectory
+	candidateName   string
+	candidateInfo   os.FileInfo
+	manifestInfo    os.FileInfo
+	handle          *os.File
+	bundleInfo      os.FileInfo
+	bundleMaximum   int64
+	stabilityPassed bool
 }
 
 func NewInbox(root string, maxPackageBytes int64) (*Inbox, error) {
@@ -51,49 +69,76 @@ func NewInbox(root string, maxPackageBytes int64) (*Inbox, error) {
 	return &Inbox{root: root, rootInfo: info, maxPackage: maxPackageBytes}, nil
 }
 
-func (inbox *Inbox) Scan(ctx context.Context, trust TrustStore, now time.Time) ([]InboxCandidate, error) {
-	if inbox == nil || ctx == nil || inbox.rootInfo == nil || now.Location() != time.UTC {
-		return nil, ErrPolicyRejected
+func (inbox *Inbox) Scan(
+	ctx context.Context,
+	trust TrustStore,
+	now time.Time,
+	visit func(context.Context, InboxCandidate) error,
+) error {
+	if inbox == nil || ctx == nil || inbox.rootInfo == nil || now.Location() != time.UTC || visit == nil {
+		return ErrPolicyRejected
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return err
 	}
 	preRoot, err := os.Lstat(inbox.root)
 	if err != nil || !validReadOnlyDirectory(preRoot) || !os.SameFile(inbox.rootInfo, preRoot) {
-		return nil, ErrPolicyRejected
+		return ErrPolicyRejected
 	}
 	root, err := openSecureInboxRoot(inbox.root)
 	if err != nil {
-		return nil, ErrPolicyRejected
+		return ErrPolicyRejected
 	}
 	defer func() { _ = root.Close() }()
 	openedRoot, err := root.Stat()
-	if err != nil || !validReadOnlyDirectory(openedRoot) || !os.SameFile(preRoot, openedRoot) {
-		return nil, ErrPolicyRejected
+	if err != nil || !sameStableDirectory(preRoot, openedRoot) {
+		return ErrPolicyRejected
 	}
-	entries, err := readDirectory(root)
+	entries, err := readBoundedDirectory(root, maximumInboxCandidates)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	candidates := make([]InboxCandidate, 0, len(entries))
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return err
 		}
 		if !validInboxEntryName(entry.Name()) {
-			return nil, ErrPolicyRejected
+			return ErrPolicyRejected
 		}
-		candidate, err := inbox.scanCandidate(ctx, root, entry.Name(), trust, now)
-		if err != nil {
-			return nil, err
+		if err := inbox.scanAndVisitCandidate(ctx, root, entry.Name(), trust, now, visit); err != nil {
+			return err
 		}
-		candidates = append(candidates, candidate)
 	}
 	postRoot, err := os.Lstat(inbox.root)
-	if err != nil || !validReadOnlyDirectory(postRoot) || !os.SameFile(openedRoot, postRoot) {
-		return nil, ErrPolicyRejected
+	if err != nil || !sameStableDirectory(openedRoot, postRoot) {
+		return ErrPolicyRejected
 	}
-	return candidates, nil
+	return nil
+}
+
+func (inbox *Inbox) scanAndVisitCandidate(
+	ctx context.Context,
+	root *secureInboxDirectory,
+	name string,
+	trust TrustStore,
+	now time.Time,
+	visit func(context.Context, InboxCandidate) error,
+) error {
+	packageCtx, cancel := context.WithTimeout(ctx, offlinePackageDeadline)
+	defer cancel()
+	candidate, err := inbox.scanCandidate(packageCtx, root, name, trust, now)
+	if err != nil {
+		return err
+	}
+	visitErr := visit(packageCtx, candidate)
+	closeErr := candidate.source.close()
+	if visitErr != nil {
+		return visitErr
+	}
+	if closeErr != nil || !candidate.source.stabilityPassed {
+		return ErrPolicyRejected
+	}
+	return nil
 }
 
 func (inbox *Inbox) scanCandidate(
@@ -107,16 +152,21 @@ func (inbox *Inbox) scanCandidate(
 	if err != nil {
 		return InboxCandidate{}, ErrPolicyRejected
 	}
-	defer func() { _ = candidateRoot.Close() }()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = candidateRoot.Close()
+		}
+	}()
 	openedDirectory, err := candidateRoot.Stat()
 	if err != nil || !validReadOnlyDirectory(openedDirectory) {
 		return InboxCandidate{}, ErrPolicyRejected
 	}
-	entries, err := readDirectory(candidateRoot)
+	entries, err := readBoundedDirectory(candidateRoot, 2)
 	if err != nil || len(entries) != 2 || entries[0].Name() != "bundle.tar" || entries[1].Name() != "manifest.json" {
 		return InboxCandidate{}, ErrPolicyRejected
 	}
-	manifest, err := readStableRegularFile(ctx, candidateRoot, "manifest.json", minInt64(inbox.maxPackage, maximumManifestBytes))
+	manifest, manifestInfo, err := readStableRegularFile(ctx, candidateRoot, "manifest.json", minInt64(inbox.maxPackage, maximumManifestBytes))
 	if err != nil {
 		return InboxCandidate{}, err
 	}
@@ -124,24 +174,26 @@ func (inbox *Inbox) scanCandidate(
 	if remaining <= 0 {
 		return InboxCandidate{}, ErrPolicyRejected
 	}
-	bundle, err := readStableRegularFile(ctx, candidateRoot, "bundle.tar", remaining)
+	verified, err := VerifyManifest(manifest, trust, now)
 	if err != nil {
 		return InboxCandidate{}, err
 	}
-	postDirectory, err := root.OpenDirectory(name)
+	bundleMaximum := minInt64(remaining, maximumBundleBytes)
+	handle, err := candidateRoot.OpenRegular("bundle.tar")
 	if err != nil {
 		return InboxCandidate{}, ErrPolicyRejected
 	}
-	postInfo, statErr := postDirectory.Stat()
-	closeErr := postDirectory.Close()
-	if statErr != nil || closeErr != nil || !validReadOnlyDirectory(postInfo) || !os.SameFile(openedDirectory, postInfo) {
+	bundleInfo, err := handle.Stat()
+	if err != nil || !validReadOnlyRegular(bundleInfo, bundleMaximum) || bundleInfo.Size()+int64(len(manifest)) > inbox.maxPackage {
+		_ = handle.Close()
 		return InboxCandidate{}, ErrPolicyRejected
 	}
-	verified, err := VerifyPackage(manifest, bundle, trust, now)
-	if err != nil {
-		return InboxCandidate{}, err
+	source := &inboxBundleSource{
+		root: root, candidateRoot: candidateRoot, candidateName: name, candidateInfo: openedDirectory,
+		manifestInfo: manifestInfo, handle: handle, bundleInfo: bundleInfo, bundleMaximum: bundleMaximum,
 	}
 	capabilities := append([]ManifestCapability(nil), verified.Manifest.Capabilities...)
+	cleanup = false
 	return InboxCandidate{
 		Receipt: InboxReceipt{
 			SchemaVersion: 1, SourceKind: verified.Manifest.SourceKind, SourceID: verified.Manifest.SourceID,
@@ -150,48 +202,156 @@ func (inbox *Inbox) scanCandidate(
 			BundleSHA256: verified.Manifest.BundleSHA256, Capabilities: capabilities, VerifiedAt: now,
 		},
 		Bundle: verified,
+		source: source,
 	}, nil
 }
 
-func readDirectory(root *secureInboxDirectory) ([]os.DirEntry, error) {
-	entries, err := root.ReadDir()
-	if err != nil {
-		return nil, ErrPolicyRejected
-	}
-	sort.Slice(entries, func(left, right int) bool { return entries[left].Name() < entries[right].Name() })
-	return entries, nil
+type boundedDirectoryReader interface {
+	ReadDir(int) ([]os.DirEntry, error)
 }
 
-func readStableRegularFile(ctx context.Context, root *secureInboxDirectory, name string, maximum int64) ([]byte, error) {
-	if maximum <= 0 {
+func readBoundedDirectory(root boundedDirectoryReader, maximum int) ([]os.DirEntry, error) {
+	if root == nil || maximum <= 0 {
 		return nil, ErrPolicyRejected
+	}
+	entries := make([]os.DirEntry, 0, min(maximum, inboxReadBatchSize))
+	for {
+		remaining := maximum + 1 - len(entries)
+		if remaining <= 0 {
+			return nil, ErrPolicyRejected
+		}
+		batchSize := min(remaining, inboxReadBatchSize)
+		batch, err := root.ReadDir(batchSize)
+		entries = append(entries, batch...)
+		if len(entries) > maximum {
+			return nil, ErrPolicyRejected
+		}
+		if errors.Is(err, io.EOF) {
+			sort.Slice(entries, func(left, right int) bool { return entries[left].Name() < entries[right].Name() })
+			return entries, nil
+		}
+		if err != nil || len(batch) == 0 {
+			return nil, ErrPolicyRejected
+		}
+	}
+}
+
+func readStableRegularFile(
+	ctx context.Context,
+	root *secureInboxDirectory,
+	name string,
+	maximum int64,
+) ([]byte, os.FileInfo, error) {
+	if maximum <= 0 {
+		return nil, nil, ErrPolicyRejected
 	}
 	handle, err := root.OpenRegular(name)
 	if err != nil {
-		return nil, ErrPolicyRejected
+		return nil, nil, ErrPolicyRejected
 	}
 	defer func() { _ = handle.Close() }()
 	opened, err := handle.Stat()
 	if err != nil || !validReadOnlyRegular(opened, maximum) {
-		return nil, ErrPolicyRejected
+		return nil, nil, ErrPolicyRejected
 	}
 	payload, err := readBounded(ctx, handle, maximum)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	openedAfter, openErr := handle.Stat()
 	postHandle, postOpenErr := root.OpenRegular(name)
 	if postOpenErr != nil {
-		return nil, ErrPolicyRejected
+		return nil, nil, ErrPolicyRejected
 	}
 	post, postErr := postHandle.Stat()
 	postCloseErr := postHandle.Close()
-	if openErr != nil || postErr != nil || postCloseErr != nil || !validReadOnlyRegular(openedAfter, maximum) ||
-		!validReadOnlyRegular(post, maximum) || !os.SameFile(opened, openedAfter) ||
-		!os.SameFile(openedAfter, post) || int64(len(payload)) != openedAfter.Size() {
-		return nil, ErrPolicyRejected
+	if openErr != nil || postErr != nil || postCloseErr != nil || int64(len(payload)) != openedAfter.Size() ||
+		!sameStableRegularFile(opened, openedAfter, int64(len(payload))) ||
+		!sameStableRegularFile(opened, post, int64(len(payload))) {
+		return nil, nil, ErrPolicyRejected
 	}
-	return payload, nil
+	return payload, openedAfter, nil
+}
+
+func (source *inboxBundleSource) verifyStable(ctx context.Context) error {
+	if source == nil || source.handle == nil || source.stabilityPassed {
+		return ErrPolicyRejected
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	openedAfter, statErr := source.handle.Stat()
+	offset, seekErr := source.handle.Seek(0, io.SeekCurrent)
+	closeErr := source.handle.Close()
+	source.handle = nil
+	if statErr != nil || seekErr != nil || closeErr != nil || offset != source.bundleInfo.Size() ||
+		!sameStableRegularFile(source.bundleInfo, openedAfter, source.bundleInfo.Size()) {
+		return ErrPolicyRejected
+	}
+	candidateAfter, err := source.candidateRoot.Stat()
+	if err != nil || !sameStableDirectory(source.candidateInfo, candidateAfter) {
+		return ErrPolicyRejected
+	}
+	postDirectory, err := source.root.OpenDirectory(source.candidateName)
+	if err != nil {
+		return ErrPolicyRejected
+	}
+	defer func() { _ = postDirectory.Close() }()
+	postInfo, err := postDirectory.Stat()
+	if err != nil || !sameStableDirectory(source.candidateInfo, postInfo) {
+		return ErrPolicyRejected
+	}
+	entries, err := readBoundedDirectory(postDirectory, 2)
+	if err != nil || len(entries) != 2 || entries[0].Name() != "bundle.tar" || entries[1].Name() != "manifest.json" {
+		return ErrPolicyRejected
+	}
+	manifestHandle, err := postDirectory.OpenRegular("manifest.json")
+	if err != nil {
+		return ErrPolicyRejected
+	}
+	manifestInfo, manifestStatErr := manifestHandle.Stat()
+	manifestCloseErr := manifestHandle.Close()
+	if manifestStatErr != nil || manifestCloseErr != nil ||
+		!sameStableRegularFile(source.manifestInfo, manifestInfo, source.manifestInfo.Size()) {
+		return ErrPolicyRejected
+	}
+	postBundle, err := postDirectory.OpenRegular("bundle.tar")
+	if err != nil {
+		return ErrPolicyRejected
+	}
+	postBundleInfo, postStatErr := postBundle.Stat()
+	postCloseErr := postBundle.Close()
+	if postStatErr != nil || postCloseErr != nil ||
+		!sameStableRegularFile(source.bundleInfo, postBundleInfo, source.bundleInfo.Size()) {
+		return ErrPolicyRejected
+	}
+	source.stabilityPassed = true
+	return nil
+}
+
+func (source *inboxBundleSource) close() error {
+	if source == nil {
+		return nil
+	}
+	var handleErr error
+	if source.handle != nil {
+		handleErr = source.handle.Close()
+		source.handle = nil
+	}
+	var directoryErr error
+	if source.candidateRoot != nil {
+		directoryErr = source.candidateRoot.Close()
+		source.candidateRoot = nil
+	}
+	if handleErr != nil {
+		return handleErr
+	}
+	return directoryErr
+}
+
+func sameStableDirectory(before, after os.FileInfo) bool {
+	return validReadOnlyDirectory(before) && validReadOnlyDirectory(after) && os.SameFile(before, after) &&
+		before.ModTime().Equal(after.ModTime()) && sameStableChangeTime(before, after)
 }
 
 func readBounded(ctx context.Context, reader io.Reader, maximum int64) ([]byte, error) {
@@ -247,6 +407,37 @@ func linkCount(info os.FileInfo) uint64 {
 		}
 	}
 	return 0
+}
+
+func sameStableChangeTime(before, after os.FileInfo) bool {
+	beforeSeconds, beforeNanos, beforeOK := stableChangeTime(before)
+	afterSeconds, afterNanos, afterOK := stableChangeTime(after)
+	if beforeOK != afterOK {
+		return false
+	}
+	return !beforeOK || beforeSeconds == afterSeconds && beforeNanos == afterNanos
+}
+
+func stableChangeTime(info os.FileInfo) (int64, int64, bool) {
+	if info == nil || info.Sys() == nil {
+		return 0, 0, false
+	}
+	value := reflect.Indirect(reflect.ValueOf(info.Sys()))
+	if !value.IsValid() || value.Kind() != reflect.Struct {
+		return 0, 0, false
+	}
+	for _, fieldName := range []string{"Ctim", "Ctimespec"} {
+		field := reflect.Indirect(value.FieldByName(fieldName))
+		if !field.IsValid() || field.Kind() != reflect.Struct {
+			continue
+		}
+		seconds := field.FieldByName("Sec")
+		nanos := field.FieldByName("Nsec")
+		if seconds.IsValid() && nanos.IsValid() && seconds.CanInt() && nanos.CanInt() {
+			return seconds.Int(), nanos.Int(), true
+		}
+	}
+	return 0, 0, false
 }
 
 func validInboxEntryName(value string) bool {

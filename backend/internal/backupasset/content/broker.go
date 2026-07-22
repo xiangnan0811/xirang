@@ -368,7 +368,8 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 		return IssuedTicket{}, err
 	}
 	classification, err := classifier.Classify(ticketCtx, ClassificationRequest{
-		Path: asset.Path, Name: asset.Name, SourceSize: stat.Size, ProviderMediaType: representationAsset.MediaType,
+		Path: asset.Path, Name: asset.Name, SourceSize: stat.Size,
+		ProviderMediaType:   classificationMediaTypeForRepresentation(representationAsset, derivedBinding),
 		CatalogGenerationID: asset.CatalogGenerationID, SourceFingerprint: asset.SourceFingerprint,
 		Search: searchClassificationEvidence(asset),
 	}, bytes.NewReader(prefix))
@@ -1152,14 +1153,22 @@ func (broker *Broker) resolveDerivedRepresentation(
 	if broker.derived == nil || request.Action != DeliveryPreview {
 		return nil, nil
 	}
+	intent, ok := inferDerivedDeliveryIntent(asset.MediaType, request.Renderer, request.Profile)
+	if !ok {
+		return nil, nil
+	}
 	policyRevision, err := broker.securityPolicyRevision(ctx)
 	if err != nil || strings.TrimSpace(policyRevision) != policyRevision || policyRevision == "" || len(policyRevision) > 128 {
 		return nil, ErrContentSourceUnavailable
 	}
 	binding, err := broker.derived.Resolve(ctx, DerivedRepresentationRequest{
 		Ref: asset.Ref, CatalogGenerationID: asset.CatalogGenerationID,
-		SourceFingerprint: asset.SourceFingerprint, SecurityPolicyRevision: policyRevision,
-		Provider: asset.Provider, Renderer: request.Renderer, Profile: request.Profile,
+		SourceFingerprint: asset.SourceFingerprint, SourceEntryFingerprint: asset.EntryFingerprint,
+		FingerprintStrength:        asset.FingerprintStrength,
+		ProviderCapabilityRevision: asset.ProviderCapabilityRevision,
+		SourceSize:                 asset.Size, SourceMediaType: asset.MediaType,
+		SecurityPolicyRevision: policyRevision,
+		Provider:               asset.Provider, Renderer: request.Renderer, Profile: request.Profile, intent: intent,
 	})
 	if errors.Is(err, ErrDerivedRepresentationUnavailable) {
 		return nil, nil
@@ -1178,6 +1187,13 @@ func authorizedAssetForDerived(asset AuthorizedAsset, binding DerivedRepresentat
 	asset.MediaType = binding.MediaType
 	asset.RangeProven = false
 	return asset
+}
+
+func classificationMediaTypeForRepresentation(asset AuthorizedAsset, binding *DerivedRepresentation) string {
+	if binding != nil && binding.intent == derivedIntentArchiveIndex {
+		return "text/plain"
+	}
+	return asset.MediaType
 }
 
 func derivedRepresentationMatchesAsset(

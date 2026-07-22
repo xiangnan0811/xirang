@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -69,6 +70,12 @@ func TestImageFormatMediaTypeCoversEveryAdvertisedRaster(t *testing.T) {
 		if got := imageFormatMediaType(format); got != mediaType {
 			t.Fatalf("format %q maps to %q, want %q", format, got, mediaType)
 		}
+	}
+}
+
+func TestRasterPixelsRejectsIntegerOverflow(t *testing.T) {
+	if pixels, ok := rasterPixels(math.MaxInt, math.MaxInt); ok || pixels != 0 {
+		t.Fatalf("overflowing raster product accepted: pixels=%d ok=%t", pixels, ok)
 	}
 }
 

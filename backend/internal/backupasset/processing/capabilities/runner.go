@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -142,7 +143,7 @@ func (runner *Runner) RunInput(ctx context.Context, invocation ToolInvocation, i
 	}
 	command := exec.Command(executable, args...)
 	command.Dir = workspace
-	command.Env = runtimeEnvironment(invocation.Environment, workspace, output, invocation.InputMode, inputPath)
+	command.Env = runtimeEnvironment(invocation.Environment, workspace, output, invocation.InputMode, inputPath, invocation.Limits)
 	if boundedInput != nil {
 		command.Stdin = boundedInput
 	}
@@ -204,10 +205,17 @@ func (runner *Runner) RunInput(ctx context.Context, invocation ToolInvocation, i
 	if err != nil {
 		return ToolResult{}, err
 	}
-	return ToolResult{
+	result := ToolResult{
 		ExitCode: exitCode, Stdout: stdout.String(), Stderr: stderr.String(),
 		StdoutTruncated: stdout.Truncated(), StderrTruncated: stderr.Truncated(), Outputs: outputs,
-	}, nil
+	}
+	if invocation.ExecutableID == ExecutableClamScan && invocation.ArgProfile == ArgsClamScan && exitCode == 1 {
+		result.Stdout, err = canonicalClamFindingOutput(result, inputPath)
+		if err != nil {
+			return ToolResult{}, err
+		}
+	}
+	return result, nil
 }
 
 func (runner *Runner) RunInputStream(
@@ -254,7 +262,7 @@ func (runner *Runner) RunInputStream(
 	}
 	command := exec.Command(executable, args...)
 	command.Dir = workspace
-	command.Env = runtimeEnvironment(invocation.Environment, workspace, output, invocation.InputMode, "")
+	command.Env = runtimeEnvironment(invocation.Environment, workspace, output, invocation.InputMode, "", invocation.Limits)
 	command.Stdin = boundedInput
 	configureToolProcess(command)
 	stdout, err := command.StdoutPipe()
@@ -386,8 +394,37 @@ func allowedExitCode(invocation ToolInvocation, code int) bool {
 	return false
 }
 
-func runtimeEnvironment(closed []string, workspace, output string, inputMode ToolInputMode, inputPath string) []string {
-	result := make([]string, 0, len(closed)+3)
+func canonicalClamFindingOutput(result ToolResult, inputPath string) (string, error) {
+	const (
+		suffix                = " FOUND\n"
+		maximumSignatureBytes = 128
+	)
+	prefix := inputPath + ": "
+	if inputPath == "" || result.ExitCode != 1 || result.StdoutTruncated || result.StderrTruncated ||
+		result.Stderr != "" || len(result.Outputs) != 0 || !strings.HasPrefix(result.Stdout, prefix) ||
+		!strings.HasSuffix(result.Stdout, suffix) || strings.Count(result.Stdout, "\n") != 1 {
+		return "", ErrInvalidToolOutput
+	}
+	signature := strings.TrimSuffix(strings.TrimPrefix(result.Stdout, prefix), suffix)
+	if len(signature) == 0 || len(signature) > maximumSignatureBytes || strings.TrimSpace(signature) != signature {
+		return "", ErrInvalidToolOutput
+	}
+	for _, character := range []byte(signature) {
+		if character < 0x20 || character > 0x7e {
+			return "", ErrInvalidToolOutput
+		}
+	}
+	return "input.bin: " + signature + suffix, nil
+}
+
+func runtimeEnvironment(
+	closed []string,
+	workspace, output string,
+	inputMode ToolInputMode,
+	inputPath string,
+	limits ToolLimits,
+) []string {
+	result := make([]string, 0, len(closed)+7)
 	for _, value := range closed {
 		if value == "HOME=workspace/home" {
 			result = append(result, "HOME="+filepath.Join(workspace, "home"))
@@ -399,6 +436,12 @@ func runtimeEnvironment(closed []string, workspace, output string, inputMode Too
 	if inputMode == ToolInputPath {
 		result = append(result, "XIRANG_INPUT_PATH="+inputPath)
 	}
+	result = append(result,
+		"XIRANG_RLIMIT_CPU_SECONDS="+strconv.FormatInt(int64(limits.CPUTime/time.Second), 10),
+		"XIRANG_RLIMIT_MEMORY_BYTES="+strconv.FormatInt(limits.MaxMemoryBytes, 10),
+		"XIRANG_RLIMIT_FSIZE_BYTES="+strconv.FormatInt(limits.MaxFileBytes, 10),
+		"XIRANG_RLIMIT_PROCESSES="+strconv.Itoa(limits.MaxProcesses),
+	)
 	return result
 }
 

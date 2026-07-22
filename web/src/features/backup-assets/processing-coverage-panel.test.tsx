@@ -1,11 +1,14 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runAxe } from "@/test/a11y-helpers";
 import type {
   BackupProcessingAdminControl,
+  BackupProcessingBackfillPolicy,
   BackupProcessingCoverageSummary,
   BackupProcessingUpdaterCandidate,
   BackupProcessingUpdaterStatus,
@@ -18,6 +21,16 @@ import {
 
 const revision = "1".repeat(64);
 const candidateId = "2".repeat(32);
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 function control(): BackupProcessingAdminControl {
   return {
@@ -157,6 +170,90 @@ describe("ProcessingCoveragePanel", () => {
       expect.objectContaining({ revision, paused: false, jobsPerHour: 500 }),
       expect.any(AbortSignal)
     ));
+  });
+
+  it("isolates a deferred mutation from a new token and role generation", async () => {
+    const user = userEvent.setup();
+    const oldMutation = deferred<BackupProcessingBackfillPolicy>();
+    let oldMutationSignal: AbortSignal | undefined;
+    vi.mocked(api.updateBackfillPolicy).mockImplementation((_token, _policy, signal) => {
+      oldMutationSignal = signal;
+      return oldMutation.promise;
+    });
+    const nextApi = client();
+    const nextMutation = deferred<BackupProcessingBackfillPolicy>();
+    vi.mocked(nextApi.updateBackfillPolicy).mockReturnValue(nextMutation.promise);
+    const nextRevision = "8".repeat(64);
+    vi.mocked(nextApi.getAdminControl).mockResolvedValue({
+      ...control(),
+      backfillPolicy: {
+        ...control().backfillPolicy,
+        revision: nextRevision,
+        paused: false,
+        jobsPerHour: 900,
+      },
+    });
+    const firstProps = { token: "token-a", role: "admin" as const, loadApi: async () => api };
+    const operatorProps = { token: "token-b", role: "operator" as const, loadApi: async () => nextApi };
+    const nextProps = { token: "token-b", role: "admin" as const, loadApi: async () => nextApi };
+    const { rerender } = render(<ProcessingCoveragePanel {...firstProps} />);
+
+    const pause = await screen.findByRole("switch", { name: /Pause background processing|暂停后台处理/ });
+    await user.click(pause);
+    await user.click(screen.getByRole("button", { name: /Save limits|保存限额/ }));
+    await waitFor(() => expect(api.updateBackfillPolicy).toHaveBeenCalledTimes(1));
+    expect(oldMutationSignal?.aborted).toBe(false);
+
+    rerender(<ProcessingCoveragePanel {...operatorProps} />);
+    expect(oldMutationSignal?.aborted).toBe(true);
+    rerender(<ProcessingCoveragePanel {...nextProps} />);
+
+    const jobsPerHour = await screen.findByLabelText(/Jobs per hour|每小时任务数/);
+    expect(jobsPerHour).toHaveValue(900);
+    expect(screen.getByRole("switch", { name: /Pause background processing|暂停后台处理/ })).toBeEnabled();
+    const nextSave = screen.getByRole("button", { name: /Save limits|保存限额/ });
+    expect(nextSave).toBeEnabled();
+    await user.click(nextSave);
+    await waitFor(() => expect(nextApi.updateBackfillPolicy).toHaveBeenCalledTimes(1));
+    expect(nextSave).toBeDisabled();
+
+    await act(async () => {
+      oldMutation.resolve({
+        ...control().backfillPolicy,
+        revision: "9".repeat(64),
+        paused: true,
+        jobsPerHour: 111,
+      });
+      await oldMutation.promise;
+    });
+
+    expect(jobsPerHour).toHaveValue(900);
+    expect(screen.getByRole("switch", { name: /Pause background processing|暂停后台处理/ })).not.toBeChecked();
+    expect(nextSave).toBeDisabled();
+
+    await act(async () => {
+      nextMutation.resolve({
+        ...control().backfillPolicy,
+        revision: "a".repeat(64),
+        paused: false,
+        jobsPerHour: 901,
+      });
+      await nextMutation.promise;
+    });
+    expect(jobsPerHour).toHaveValue(901);
+    expect(nextSave).toBeEnabled();
+  });
+
+  it("binds ready resource rendering to the current Admin token before effects run", () => {
+    const source = readFileSync(
+      path.resolve(process.cwd(), "src/features/backup-assets/processing-coverage-panel.tsx"),
+      "utf8"
+    );
+    const tokenGuard = source.indexOf("scopeRef.current.token !== token");
+    const readyResourceRead = source.indexOf("const { control, coverage, updater, candidates }");
+
+    expect(tokenGuard).toBeGreaterThan(-1);
+    expect(tokenGuard).toBeLessThan(readyResourceRead);
   });
 
   it("does not load Admin data for a non-Admin role", () => {

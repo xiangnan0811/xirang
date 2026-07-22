@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/processing"
+	"xirang/backend/internal/backupasset/processing/capabilityspec"
 	"xirang/backend/internal/middleware"
 
 	"github.com/gin-gonic/gin"
@@ -77,9 +79,14 @@ func TestBackupProcessingHandlerBindsQueuedLocationPollCancelAndAuditToInterest(
 	if len(audit.inputs) != 3 {
 		t.Fatalf("processing audit count=%d", len(audit.inputs))
 	}
-	for _, input := range audit.inputs {
+	wantModes := []string{"create", "get_state", "cancel"}
+	for index, input := range audit.inputs {
 		if input.Action != backupasset.AuditActionPreviewJob || input.RecoveryPointID != pointID || input.EntryID != entryID {
 			t.Fatalf("processing audit=%+v", input)
+		}
+		if input.Outcome != backupasset.AuditOutcomeSuccess || input.Fields[backupasset.AuditFieldMode] != wantModes[index] ||
+			input.Fields[backupasset.AuditFieldCorrelationID] != interestID {
+			t.Fatalf("processing audit[%d]=%+v want mode=%q correlation=%q", index, input, wantModes[index], interestID)
 		}
 	}
 	for _, forbidden := range []string{"raster_thumbnail_v1", "image.thumbnail", "source", "path", "worker", "fence", "grant"} {
@@ -87,6 +94,97 @@ func TestBackupProcessingHandlerBindsQueuedLocationPollCancelAndAuditToInterest(
 			(forbidden == "source" || forbidden == "path" || forbidden == "worker" || forbidden == "fence" || forbidden == "grant") {
 			t.Fatalf("processing response leaked %q", forbidden)
 		}
+	}
+}
+
+func TestBackupProcessingHandlerDoesNotForgeCreateCorrelationOnFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	pointID, entryID := strings.Repeat("1", 32), strings.Repeat("2", 64)
+	audit := &backupAssetAuditSpy{}
+	handler := NewBackupProcessingHandler(&backupProcessingServiceFake{err: errors.New("private processing error")}, audit)
+	router := gin.New()
+	router.Use(backupProcessingActorForTest())
+	router.POST("/api/v1/recovery-points/:id/entries/:entryId/preview-jobs", handler.CreatePreview)
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/v1/recovery-points/"+pointID+"/entries/"+entryID+"/preview-jobs",
+		strings.NewReader(`{"schema_version":1,"representation":"thumbnail"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("create failure status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(audit.inputs) != 1 || audit.inputs[0].Outcome != backupasset.AuditOutcomeFailure ||
+		audit.inputs[0].Fields[backupasset.AuditFieldMode] != "create" ||
+		audit.inputs[0].Fields[backupasset.AuditFieldCorrelationID] != "" {
+		t.Fatalf("create failure audit=%+v", audit.inputs)
+	}
+}
+
+func TestValidBackupProcessingCreateUsesClosedRepresentationProfilePairs(t *testing.T) {
+	tests := []struct {
+		name           string
+		representation processing.PreviewRepresentation
+		profile        string
+		want           bool
+	}{
+		{name: "thumbnail default", representation: processing.PreviewThumbnail, want: true},
+		{name: "thumbnail raster", representation: processing.PreviewThumbnail, profile: capabilityspec.ProfileRasterThumbnailV1, want: true},
+		{name: "thumbnail rejects text profile", representation: processing.PreviewThumbnail, profile: capabilityspec.ProfileBoundedTextV1},
+		{name: "text default", representation: processing.PreviewText, want: true},
+		{name: "text bounded", representation: processing.PreviewText, profile: capabilityspec.ProfileBoundedTextV1, want: true},
+		{name: "text OCR", representation: processing.PreviewText, profile: capabilityspec.ProfileTesseractTextV1, want: true},
+		{name: "text rejects raster profile", representation: processing.PreviewText, profile: capabilityspec.ProfileRasterThumbnailV1},
+		{name: "document pages static", representation: processing.PreviewDocumentPages, profile: capabilityspec.ProfileStaticPagesV1, want: true},
+		{name: "document pages rejects browser", representation: processing.PreviewDocumentPages, profile: capabilityspec.ProfileBrowserPreviewV1},
+		{name: "media browser", representation: processing.PreviewMedia, profile: capabilityspec.ProfileBrowserPreviewV1, want: true},
+		{name: "media rejects static pages", representation: processing.PreviewMedia, profile: capabilityspec.ProfileStaticPagesV1},
+		{name: "archive index", representation: processing.PreviewArchiveIndex, profile: capabilityspec.ProfileArchiveIndexV1, want: true},
+		{name: "archive rejects member", representation: processing.PreviewArchiveIndex, profile: capabilityspec.ProfileArchiveMemberV1},
+		{name: "unknown representation", representation: processing.PreviewRepresentation("unknown"), profile: capabilityspec.ProfileRasterThumbnailV1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := validBackupProcessingCreate(backupProcessingCreatePayload{
+				SchemaVersion: 1, Representation: test.representation, Profile: test.profile,
+			})
+			if got != test.want {
+				t.Fatalf("validBackupProcessingCreate(%q, %q)=%t, want %t", test.representation, test.profile, got, test.want)
+			}
+		})
+	}
+}
+
+func TestBackupProcessingHandlerReturnsMalwareBlockedTerminalThenRejectsReplay(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	pointID, entryID, interestID := strings.Repeat("1", 32), strings.Repeat("2", 64), strings.Repeat("3", 32)
+	service := &backupProcessingServiceFake{
+		pollResults: []processing.PreviewJobResult{{
+			SchemaVersion: 1, JobID: interestID, State: processing.ProcessingProductUnsupported,
+			Representation: processing.PreviewThumbnail, Capability: "image.thumbnail", Profile: "raster_thumbnail_v1",
+			ScanStatus: "stale", Reason: "invalid_output",
+			FallbackActions: []string{"native_preview", "download"}, Terminal: true,
+		}},
+		pollErrors: []error{nil, processing.ErrProcessingHandleNotFound},
+	}
+	handler := NewBackupProcessingHandler(service, &backupAssetAuditSpy{})
+	router := gin.New()
+	router.Use(backupProcessingActorForTest())
+	router.GET("/api/v1/recovery-points/:id/entries/:entryId/preview-jobs/:jobId", handler.PollPreview)
+	target := "/api/v1/recovery-points/" + pointID + "/entries/" + entryID + "/preview-jobs/" + interestID
+
+	first := httptest.NewRecorder()
+	router.ServeHTTP(first, httptest.NewRequest(http.MethodGet, target, nil))
+	if first.Code != http.StatusOK || !strings.Contains(first.Body.String(), `"job_id":"`+interestID+`"`) ||
+		!strings.Contains(first.Body.String(), `"state":"unsupported"`) ||
+		!strings.Contains(first.Body.String(), `"scan_status":"stale"`) {
+		t.Fatalf("malware-blocked terminal poll status=%d body=%s", first.Code, first.Body.String())
+	}
+
+	second := httptest.NewRecorder()
+	router.ServeHTTP(second, httptest.NewRequest(http.MethodGet, target, nil))
+	if second.Code != http.StatusNotFound || strings.Contains(second.Body.String(), interestID) {
+		t.Fatalf("malware-blocked replay status=%d body=%s", second.Code, second.Body.String())
 	}
 }
 
@@ -124,7 +222,8 @@ func TestBackupProcessingHandlerReturnsExactAssetStateWithoutCreatingWork(t *tes
 			processingStateResultForTest(processing.PreviewArchiveIndex),
 		},
 	}}
-	handler := NewBackupProcessingHandler(service, &backupAssetAuditSpy{})
+	audit := &backupAssetAuditSpy{}
+	handler := NewBackupProcessingHandler(service, audit)
 	router := gin.New()
 	router.Use(backupProcessingActorForTest())
 	router.GET("/api/v1/recovery-points/:id/entries/:entryId/processing", handler.GetState)
@@ -136,10 +235,38 @@ func TestBackupProcessingHandlerReturnsExactAssetStateWithoutCreatingWork(t *tes
 		service.states[0].Ref != (backupasset.AssetRef{RecoveryPointID: pointID, EntryID: entryID}) {
 		t.Fatalf("state status=%d requests=%+v creates=%+v body=%s", response.Code, service.states, service.creates, response.Body.String())
 	}
+	if len(audit.inputs) != 1 || audit.inputs[0].Action != backupasset.AuditActionPreviewJob ||
+		audit.inputs[0].Outcome != backupasset.AuditOutcomeSuccess || audit.inputs[0].RecoveryPointID != pointID ||
+		audit.inputs[0].EntryID != entryID || audit.inputs[0].Fields[backupasset.AuditFieldMode] != "get_state" {
+		t.Fatalf("state audit=%+v", audit.inputs)
+	}
 	for _, forbidden := range []string{"job_id", "worker_id", "grant", "attempt", "fence", "blob", "path"} {
 		if strings.Contains(response.Body.String(), forbidden) {
 			t.Fatalf("state response leaked %q: %s", forbidden, response.Body.String())
 		}
+	}
+}
+
+func TestBackupProcessingHandlerAuditsStateFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	pointID, entryID := strings.Repeat("1", 32), strings.Repeat("2", 64)
+	audit := &backupAssetAuditSpy{}
+	handler := NewBackupProcessingHandler(&backupProcessingServiceFake{err: backupasset.ErrNotFound}, audit)
+	router := gin.New()
+	router.Use(backupProcessingActorForTest())
+	router.GET("/api/v1/recovery-points/:id/entries/:entryId/processing", handler.GetState)
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+		"/api/v1/recovery-points/"+pointID+"/entries/"+entryID+"/processing", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("state failure status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(audit.inputs) != 1 || audit.inputs[0].Action != backupasset.AuditActionPreviewJob ||
+		audit.inputs[0].Outcome != backupasset.AuditOutcomeBlocked || audit.inputs[0].FailureCode != "not_found" ||
+		audit.inputs[0].Fields[backupasset.AuditFieldMode] != "get_state" ||
+		audit.inputs[0].Fields[backupasset.AuditFieldCode] != "not_found" {
+		t.Fatalf("state failure audit=%+v", audit.inputs)
 	}
 }
 
@@ -204,6 +331,8 @@ func backupProcessingActorForTest() gin.HandlerFunc {
 type backupProcessingServiceFake struct {
 	createResult processing.PreviewJobResult
 	pollResult   processing.PreviewJobResult
+	pollResults  []processing.PreviewJobResult
+	pollErrors   []error
 	stateResult  processing.AssetProcessingState
 	err          error
 	creates      []processing.PreviewJobRequest
@@ -224,7 +353,19 @@ func (fake *backupProcessingServiceFake) PollProcessingPreview(
 	_ context.Context,
 	lookup processing.PreviewJobLookup,
 ) (processing.PreviewJobResult, error) {
+	call := len(fake.polls)
 	fake.polls = append(fake.polls, lookup)
+	if call < len(fake.pollResults) || call < len(fake.pollErrors) {
+		var result processing.PreviewJobResult
+		var err error
+		if call < len(fake.pollResults) {
+			result = fake.pollResults[call]
+		}
+		if call < len(fake.pollErrors) {
+			err = fake.pollErrors[call]
+		}
+		return result, err
+	}
 	return fake.pollResult, fake.err
 }
 

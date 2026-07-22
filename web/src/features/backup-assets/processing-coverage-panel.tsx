@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Power, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -55,6 +55,13 @@ type PanelResource =
   | { status: "ready"; data: PanelData }
   | { status: "error"; data: null };
 
+type PanelScope = {
+  generation: number;
+  token: string;
+  controller: AbortController;
+  client: BackupProcessingAdminClient | null;
+};
+
 let defaultAdminApiPromise: Promise<BackupProcessingAdminClient> | null = null;
 
 function loadDefaultAdminApi(): Promise<BackupProcessingAdminClient> {
@@ -74,40 +81,56 @@ export function ProcessingCoveragePanel({
   const [draft, setDraft] = useState<BackupProcessingBackfillPolicy | null>(null);
   const [pending, setPending] = useState<"policy" | "scan" | "activation" | null>(null);
   const [mutationError, setMutationError] = useState(false);
-  const controllerRef = useRef<AbortController | null>(null);
-  const clientRef = useRef<BackupProcessingAdminClient | null>(null);
+  const generationRef = useRef(0);
+  const scopeRef = useRef<PanelScope | null>(null);
   const loadApiRef = useRef(loadApi);
   loadApiRef.current = loadApi;
 
+  const isCurrentScope = useCallback((scope: PanelScope) =>
+    scopeRef.current === scope
+      && scopeRef.current.generation === scope.generation
+      && !scope.controller.signal.aborted, []);
+
   useEffect(() => {
-    controllerRef.current?.abort();
+    const previousScope = scopeRef.current;
+    scopeRef.current = null;
+    previousScope?.controller.abort();
+    const generation = generationRef.current + 1;
+    generationRef.current = generation;
+    setPending(null);
+    setDraft(null);
+    setMutationError(false);
     if (!token || role !== "admin") return undefined;
     const controller = new AbortController();
-    controllerRef.current = controller;
+    const scope: PanelScope = { generation, token, controller, client: null };
+    scopeRef.current = scope;
     setResource({ status: "loading", data: null });
-    setMutationError(false);
     void (async () => {
       try {
         const client = await loadApiRef.current();
-        clientRef.current = client;
+        if (!isCurrentScope(scope)) return;
+        scope.client = client;
         const [control, coverage, updater, candidates] = await Promise.all([
           client.getAdminControl(token, controller.signal),
           client.getCoverage(token, controller.signal),
           client.getUpdaterStatus(token, controller.signal),
           client.listOfflineCandidates(token, controller.signal),
         ]);
-        if (controller.signal.aborted) return;
+        if (!isCurrentScope(scope)) return;
         setDraft(control.backfillPolicy);
         setResource({ status: "ready", data: { control, coverage, updater, candidates } });
       } catch {
-        if (!controller.signal.aborted) setResource({ status: "error", data: null });
+        if (isCurrentScope(scope)) setResource({ status: "error", data: null });
       }
     })();
-    return () => controller.abort();
-  }, [role, token]);
+    return () => {
+      controller.abort();
+      if (scopeRef.current === scope) scopeRef.current = null;
+    };
+  }, [isCurrentScope, role, token]);
 
   if (!token || role !== "admin") return null;
-  if (resource.status === "loading") {
+  if (scopeRef.current === null || scopeRef.current.token !== token || resource.status === "loading") {
     return <LoadingState title={t("backupAssets.adminProcessing.loading")} rows={7} />;
   }
   if (resource.status === "error") {
@@ -115,34 +138,39 @@ export function ProcessingCoveragePanel({
   }
 
   const { control, coverage, updater, candidates } = resource.data;
-  const signal = controllerRef.current?.signal;
 
   const runMutation = async (
     kind: NonNullable<typeof pending>,
-    action: (client: BackupProcessingAdminClient, activeSignal: AbortSignal) => Promise<void>
+    action: (
+      client: BackupProcessingAdminClient,
+      activeSignal: AbortSignal,
+      activeScope: PanelScope
+    ) => Promise<void>
   ) => {
-    const client = clientRef.current;
-    if (!client || !signal || signal.aborted || pending !== null) return;
+    const scope = scopeRef.current;
+    const client = scope?.client;
+    if (!scope || !client || !isCurrentScope(scope) || pending !== null) return;
     setPending(kind);
     setMutationError(false);
     try {
-      await action(client, signal);
+      await action(client, scope.controller.signal, scope);
     } catch {
-      if (!signal.aborted) setMutationError(true);
+      if (isCurrentScope(scope)) setMutationError(true);
     } finally {
-      if (!signal.aborted) setPending(null);
+      if (isCurrentScope(scope)) setPending(null);
     }
   };
 
-  const scan = () => runMutation("scan", async (client, activeSignal) => {
+  const scan = () => runMutation("scan", async (client, activeSignal, activeScope) => {
     await client.scanOfflineCandidates(token, activeSignal);
     const next = await client.listOfflineCandidates(token, activeSignal);
+    if (!isCurrentScope(activeScope)) return;
     setResource({ status: "ready", data: { ...resource.data, candidates: next } });
   });
 
   const activate = (candidate: BackupProcessingUpdaterCandidate) => runMutation(
     "activation",
-    async (client, activeSignal) => {
+    async (client, activeSignal, activeScope) => {
       await client.activateOfflineCandidate(
         token,
         candidate.candidateId,
@@ -153,6 +181,7 @@ export function ProcessingCoveragePanel({
         client.getUpdaterStatus(token, activeSignal),
         client.listOfflineCandidates(token, activeSignal),
       ]);
+      if (!isCurrentScope(activeScope)) return;
       setResource({
         status: "ready",
         data: { ...resource.data, updater: nextUpdater, candidates: nextCandidates },
@@ -162,8 +191,9 @@ export function ProcessingCoveragePanel({
 
   const savePolicy = () => {
     if (!draft || !validPolicy(draft)) return;
-    void runMutation("policy", async (client, activeSignal) => {
+    void runMutation("policy", async (client, activeSignal, activeScope) => {
       const next = await client.updateBackfillPolicy(token, draft, activeSignal);
+      if (!isCurrentScope(activeScope)) return;
       setDraft(next);
       setResource({
         status: "ready",

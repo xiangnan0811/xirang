@@ -1,15 +1,24 @@
 package content
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"xirang/backend/internal/backupasset"
+	workerCapabilities "xirang/backend/internal/backupasset/processing/capabilities"
+
+	"golang.org/x/text/unicode/norm"
 
 	"gorm.io/gorm"
 )
@@ -26,47 +35,102 @@ type DerivedArtifactRead struct {
 
 type DerivedArtifactReadFunc func(context.Context, DerivedArtifactRead, io.Writer) error
 
+type DerivedPipelineFingerprintSource func(context.Context, string, string) (string, error)
+
+type DerivedMalwareSafetySource func(context.Context, AuthorizedAsset) (bool, error)
+
+type derivedDeliveryIntent uint8
+
+const (
+	derivedIntentNone derivedDeliveryIntent = iota
+	derivedIntentExtractedText
+	derivedIntentImageThumbnail
+	derivedIntentDocumentPage
+	derivedIntentAudioPreview
+	derivedIntentVideoPreview
+	derivedIntentArchiveIndex
+	maximumDerivedArchiveIndexBytes = 16 << 20
+	maximumDerivedArchiveEntries    = 100_000
+	maximumDerivedArchiveExpanded   = 8 << 30
+	maximumDerivedArchiveMember     = 256 << 20
+)
+
+type derivedArtifactContract struct {
+	capability       string
+	capabilitySchema string
+	outputProfile    string
+	ordinal          int
+	role             string
+	mediaTypes       []string
+}
+
 type DerivedRepresentationRequest struct {
-	Ref                      backupasset.AssetRef
-	CatalogGenerationID      string
-	SourceFingerprint        string
-	ExpectedEntryFingerprint string
-	SecurityPolicyRevision   string
-	Provider                 backupasset.ProviderKind
-	Renderer                 Renderer
-	Profile                  RendererProfile
+	Ref                        backupasset.AssetRef
+	CatalogGenerationID        string
+	SourceFingerprint          string
+	SourceEntryFingerprint     string
+	FingerprintStrength        string
+	ProviderCapabilityRevision int64
+	SourceSize                 int64
+	SourceMediaType            string
+	ExpectedEntryFingerprint   string
+	SecurityPolicyRevision     string
+	Provider                   backupasset.ProviderKind
+	Renderer                   Renderer
+	Profile                    RendererProfile
+	intent                     derivedDeliveryIntent
 }
 
 type DerivedRepresentation struct {
-	artifactID             string                   `json:"-"`
-	artifactSetID          string                   `json:"-"`
-	blobID                 string                   `json:"-"`
-	setCompleteness        string                   `json:"-"`
-	Ref                    backupasset.AssetRef     `json:"-"`
-	CatalogGenerationID    string                   `json:"-"`
-	SourceFingerprint      string                   `json:"-"`
-	SecurityPolicyRevision string                   `json:"-"`
-	Provider               backupasset.ProviderKind `json:"-"`
-	Renderer               Renderer                 `json:"-"`
-	Profile                RendererProfile          `json:"-"`
-	Role                   string                   `json:"-"`
-	MediaType              string                   `json:"-"`
-	Size                   int64                    `json:"-"`
-	EntryFingerprint       string                   `json:"-"`
-	Completeness           string                   `json:"-"`
-	ModifiedAt             *time.Time               `json:"-"`
+	artifactID                 string                   `json:"-"`
+	artifactSetID              string                   `json:"-"`
+	blobID                     string                   `json:"-"`
+	setCompleteness            string                   `json:"-"`
+	Ref                        backupasset.AssetRef     `json:"-"`
+	CatalogGenerationID        string                   `json:"-"`
+	SourceFingerprint          string                   `json:"-"`
+	SecurityPolicyRevision     string                   `json:"-"`
+	Provider                   backupasset.ProviderKind `json:"-"`
+	Renderer                   Renderer                 `json:"-"`
+	Profile                    RendererProfile          `json:"-"`
+	Role                       string                   `json:"-"`
+	MediaType                  string                   `json:"-"`
+	Size                       int64                    `json:"-"`
+	EntryFingerprint           string                   `json:"-"`
+	Completeness               string                   `json:"-"`
+	ModifiedAt                 *time.Time               `json:"-"`
+	capability                 string                   `json:"-"`
+	capabilitySchema           string                   `json:"-"`
+	pipelineFingerprint        string                   `json:"-"`
+	outputProfile              string                   `json:"-"`
+	sourceEntryFingerprint     string                   `json:"-"`
+	fingerprintStrength        string                   `json:"-"`
+	providerCapabilityRevision int64                    `json:"-"`
+	sourceSize                 int64                    `json:"-"`
+	sourceMediaType            string                   `json:"-"`
+	intent                     derivedDeliveryIntent    `json:"-"`
+	ordinal                    int                      `json:"-"`
 }
 
 type DerivedRepresentationResolver struct {
-	db   *gorm.DB
-	read DerivedArtifactReadFunc
+	db             *gorm.DB
+	read           DerivedArtifactReadFunc
+	activePipeline DerivedPipelineFingerprintSource
+	malwareSafety  DerivedMalwareSafetySource
 }
 
-func NewDerivedRepresentationResolver(db *gorm.DB, read DerivedArtifactReadFunc) (*DerivedRepresentationResolver, error) {
-	if db == nil || read == nil {
+func NewDerivedRepresentationResolver(
+	db *gorm.DB,
+	read DerivedArtifactReadFunc,
+	activePipeline DerivedPipelineFingerprintSource,
+	malwareSafety DerivedMalwareSafetySource,
+) (*DerivedRepresentationResolver, error) {
+	if db == nil || read == nil || activePipeline == nil || malwareSafety == nil {
 		return nil, ErrDerivedRepresentationUnavailable
 	}
-	return &DerivedRepresentationResolver{db: db, read: read}, nil
+	return &DerivedRepresentationResolver{
+		db: db, read: read, activePipeline: activePipeline, malwareSafety: malwareSafety,
+	}, nil
 }
 
 func (resolver *DerivedRepresentationResolver) Resolve(
@@ -74,6 +138,13 @@ func (resolver *DerivedRepresentationResolver) Resolve(
 	request DerivedRepresentationRequest,
 ) (DerivedRepresentation, error) {
 	if resolver == nil || resolver.db == nil || resolver.read == nil || !validDerivedRepresentationRequest(request) {
+		return DerivedRepresentation{}, ErrDerivedRepresentationUnavailable
+	}
+	if err := resolver.requireMalwareSafety(nonNilContext(ctx), derivedSafetyAsset(request)); err != nil {
+		return DerivedRepresentation{}, err
+	}
+	intent, ok := resolveDerivedDeliveryIntent(request)
+	if !ok {
 		return DerivedRepresentation{}, ErrDerivedRepresentationUnavailable
 	}
 	var rows []derivedRepresentationRow
@@ -85,16 +156,30 @@ func (resolver *DerivedRepresentationResolver) Resolve(
 	if request.ExpectedEntryFingerprint != "" {
 		query = query.Where("artifacts.plaintext_digest = ?", request.ExpectedEntryFingerprint)
 	}
-	if err := query.Order("artifacts.ordinal ASC").Limit(64).Scan(&rows).Error; err != nil {
+	query = queryForDerivedIntent(query, intent)
+	if err := query.Order("sets.updated_at DESC, sets.id ASC, artifacts.ordinal ASC").Limit(257).Scan(&rows).Error; err != nil {
 		return DerivedRepresentation{}, fmt.Errorf("load Derived representation: %w", err)
 	}
+	if len(rows) == 257 {
+		return DerivedRepresentation{}, backupasset.ErrConflict
+	}
+	var resolved *DerivedRepresentation
 	for _, row := range rows {
-		if !derivedArtifactMatchesRenderer(row.Role, row.MediaType, request.Renderer, request.Profile) ||
-			!validDerivedRepresentationRow(row, request) {
+		if !derivedArtifactMatchesIntent(row, intent) || !validDerivedRepresentationRow(row, request) {
 			continue
 		}
+		active, err := resolver.rowUsesActivePipeline(nonNilContext(ctx), row)
+		if err != nil {
+			return DerivedRepresentation{}, err
+		}
+		if !active {
+			continue
+		}
+		if resolved != nil {
+			return DerivedRepresentation{}, backupasset.ErrConflict
+		}
 		modified := row.UpdatedAt.UTC()
-		return DerivedRepresentation{
+		candidate := DerivedRepresentation{
 			artifactID: row.ArtifactID, artifactSetID: row.ArtifactSetID, blobID: row.BlobID,
 			setCompleteness: row.SetCompleteness,
 			Ref:             request.Ref, CatalogGenerationID: request.CatalogGenerationID,
@@ -102,7 +187,21 @@ func (resolver *DerivedRepresentationResolver) Resolve(
 			Provider: request.Provider, Renderer: request.Renderer, Profile: request.Profile,
 			Role: row.Role, MediaType: row.MediaType, Size: row.PlaintextSize,
 			EntryFingerprint: row.PlaintextDigest, Completeness: row.Completeness, ModifiedAt: &modified,
-		}, nil
+			capability: row.Capability, capabilitySchema: row.CapabilitySchema,
+			pipelineFingerprint: row.PipelineFingerprint, outputProfile: row.OutputProfile,
+			sourceEntryFingerprint:     request.SourceEntryFingerprint,
+			fingerprintStrength:        request.FingerprintStrength,
+			providerCapabilityRevision: request.ProviderCapabilityRevision,
+			sourceSize:                 request.SourceSize, sourceMediaType: request.SourceMediaType,
+			intent: intent, ordinal: row.Ordinal,
+		}
+		resolved = &candidate
+	}
+	if resolved != nil {
+		if err := resolver.validateDerivedPayload(nonNilContext(ctx), *resolved); err != nil {
+			return DerivedRepresentation{}, err
+		}
+		return *resolved, nil
 	}
 	return DerivedRepresentation{}, ErrDerivedRepresentationUnavailable
 }
@@ -120,15 +219,28 @@ func (resolver *DerivedRepresentationResolver) Revalidate(ctx context.Context, b
 	}
 	request := DerivedRepresentationRequest{
 		Ref: binding.Ref, CatalogGenerationID: binding.CatalogGenerationID,
-		SourceFingerprint: binding.SourceFingerprint, SecurityPolicyRevision: binding.SecurityPolicyRevision,
-		Provider: binding.Provider, Renderer: binding.Renderer, Profile: binding.Profile,
+		SourceFingerprint: binding.SourceFingerprint, SourceEntryFingerprint: binding.sourceEntryFingerprint,
+		FingerprintStrength:        binding.fingerprintStrength,
+		ProviderCapabilityRevision: binding.providerCapabilityRevision,
+		SourceSize:                 binding.sourceSize, SourceMediaType: binding.sourceMediaType,
+		SecurityPolicyRevision: binding.SecurityPolicyRevision,
+		Provider:               binding.Provider, Renderer: binding.Renderer, Profile: binding.Profile, intent: binding.intent,
 	}
-	if result.RowsAffected != 1 || !validDerivedRepresentationRow(row, request) ||
+	if err := resolver.requireMalwareSafety(nonNilContext(ctx), derivedSafetyAsset(request)); err != nil {
+		return err
+	}
+	active, activeErr := resolver.rowUsesActivePipeline(nonNilContext(ctx), row)
+	if activeErr != nil {
+		return activeErr
+	}
+	if result.RowsAffected != 1 || !active || !validDerivedRepresentationRow(row, request) ||
 		row.ArtifactID != binding.artifactID || row.ArtifactSetID != binding.artifactSetID || row.BlobID != binding.blobID ||
 		row.SetCompleteness != binding.setCompleteness ||
 		row.Role != binding.Role || row.MediaType != binding.MediaType || row.PlaintextSize != binding.Size ||
 		row.PlaintextDigest != binding.EntryFingerprint || row.Completeness != binding.Completeness ||
-		!derivedArtifactMatchesRenderer(row.Role, row.MediaType, binding.Renderer, binding.Profile) {
+		row.Capability != binding.capability || row.CapabilitySchema != binding.capabilitySchema ||
+		row.PipelineFingerprint != binding.pipelineFingerprint || row.OutputProfile != binding.outputProfile ||
+		row.Ordinal != binding.ordinal || !derivedArtifactMatchesIntent(row, binding.intent) {
 		return ErrDerivedRepresentationUnavailable
 	}
 	return nil
@@ -139,39 +251,77 @@ func (resolver *DerivedRepresentationResolver) Open(
 	binding DerivedRepresentation,
 	request SourceRequest,
 ) (SourceSession, error) {
+	return resolver.open(ctx, binding, request, nil)
+}
+
+func (resolver *DerivedRepresentationResolver) open(
+	ctx context.Context,
+	binding DerivedRepresentation,
+	request SourceRequest,
+	liveSourceRevalidate func(context.Context) error,
+) (SourceSession, error) {
 	if ValidateSourceRequest(request) != nil || request.Ref != binding.Ref ||
 		request.CatalogGenerationID != binding.CatalogGenerationID || request.ExpectedSource != binding.SourceFingerprint ||
 		request.ExpectedEntry != binding.EntryFingerprint || request.Mode == SourceModeRange ||
 		request.Mode == SourceModeSequential && request.MaxBytes > binding.Size {
 		return nil, ErrDerivedRepresentationUnavailable
 	}
+	if liveSourceRevalidate != nil {
+		if err := liveSourceRevalidate(nonNilContext(ctx)); err != nil {
+			return nil, err
+		}
+	}
 	if err := resolver.Revalidate(ctx, binding); err != nil {
 		return nil, err
 	}
-	return &derivedSourceSession{resolver: resolver, binding: binding, request: request, ctx: nonNilContext(ctx)}, nil
+	return &derivedSourceSession{
+		resolver: resolver, binding: binding, request: request, ctx: nonNilContext(ctx),
+		liveSourceRevalidate: liveSourceRevalidate,
+	}, nil
 }
 
 type derivedRepresentationRow struct {
-	ArtifactID             string
-	ArtifactSetID          string
-	BlobID                 string
-	RecoveryPointID        string
-	CatalogGenerationID    string
-	EntryID                string
-	SourceFingerprint      string
-	SecurityPolicyRevision string
-	SetState               string
-	SetCompleteness        string
-	ProjectionRequired     bool
-	ProjectionPublished    bool
-	Role                   string
-	MediaType              string
-	PlaintextSize          int64
-	PlaintextDigest        string
-	Completeness           string
-	ReferenceState         string
-	BlobState              string
-	UpdatedAt              time.Time
+	ArtifactID                    string
+	ArtifactSetID                 string
+	BlobID                        string
+	RecoveryPointID               string
+	CatalogGenerationID           string
+	EntryID                       string
+	SourceFingerprint             string
+	SecurityPolicyRevision        string
+	SetState                      string
+	SetCompleteness               string
+	ProjectionRequired            bool
+	ProjectionPublished           bool
+	Role                          string
+	Ordinal                       int
+	MediaType                     string
+	PlaintextSize                 int64
+	PlaintextDigest               string
+	Completeness                  string
+	ReferenceState                string
+	BlobState                     string
+	UpdatedAt                     time.Time
+	Capability                    string
+	CapabilitySchema              string
+	PipelineFingerprint           string
+	OutputProfile                 string
+	JobRecoveryPointID            string
+	JobCatalogGenerationID        string
+	JobEntryID                    string
+	JobSourceFingerprint          string
+	JobEntryFingerprint           string
+	JobProviderCapabilityRevision int64
+	JobSecurityPolicyRevision     string
+	JobState                      string
+	JobIsCurrent                  bool
+	JobFinishedAt                 *time.Time
+	JobCurrentAttemptID           string
+	JobCurrentArtifactSetID       string
+	AttemptID                     string
+	AttemptState                  string
+	AttemptIsCurrent              bool
+	AttemptFinishedAt             *time.Time
 }
 
 func (resolver *DerivedRepresentationResolver) baseQuery(ctx context.Context) *gorm.DB {
@@ -180,10 +330,26 @@ func (resolver *DerivedRepresentationResolver) baseQuery(ctx context.Context) *g
 			sets.recovery_point_id, sets.catalog_generation_id, sets.entry_id, sets.source_fingerprint,
 			sets.security_policy_revision, sets.state AS set_state, sets.completeness AS set_completeness,
 			sets.projection_required, sets.projection_published, sets.updated_at,
-			artifacts.role, artifacts.media_type, artifacts.plaintext_size,
+			artifacts.ordinal, artifacts.role, artifacts.media_type, artifacts.plaintext_size,
 			artifacts.plaintext_digest, artifacts.completeness,
-			refs.state AS reference_state, blobs.state AS blob_state`).
+			refs.state AS reference_state, blobs.state AS blob_state,
+			jobs.capability, jobs.capability_schema, jobs.pipeline_fingerprint, jobs.output_profile,
+			jobs.recovery_point_id AS job_recovery_point_id,
+			jobs.catalog_generation_id AS job_catalog_generation_id,
+			jobs.entry_id AS job_entry_id, jobs.source_fingerprint AS job_source_fingerprint,
+			jobs.entry_fingerprint AS job_entry_fingerprint,
+			jobs.provider_capability_revision AS job_provider_capability_revision,
+			jobs.security_policy_revision AS job_security_policy_revision,
+			jobs.state AS job_state, jobs.is_current AS job_is_current,
+			jobs.finished_at AS job_finished_at,
+			jobs.current_attempt_id AS job_current_attempt_id,
+			jobs.current_artifact_set_id AS job_current_artifact_set_id,
+			attempts.id AS attempt_id, attempts.state AS attempt_state,
+			attempts.is_current AS attempt_is_current, attempts.finished_at AS attempt_finished_at`).
 		Joins(`JOIN backup_asset_derived_artifact_sets AS sets ON sets.id = artifacts.artifact_set_id`).
+		Joins(`JOIN backup_asset_processing_jobs AS jobs ON jobs.id = sets.job_id`).
+		Joins(`JOIN backup_asset_processing_attempts AS attempts
+			ON attempts.id = sets.attempt_id AND attempts.job_id = jobs.id`).
 		Joins(`JOIN backup_asset_derived_blob_references AS refs
 			ON refs.artifact_id = artifacts.id AND refs.blob_id = artifacts.blob_id
 			AND refs.recovery_point_id = sets.recovery_point_id
@@ -193,9 +359,50 @@ func (resolver *DerivedRepresentationResolver) baseQuery(ctx context.Context) *g
 		Where("sets.state = ? AND refs.state = ? AND blobs.state = ?", "active", "active", "active")
 }
 
+func (resolver *DerivedRepresentationResolver) rowUsesActivePipeline(
+	ctx context.Context,
+	row derivedRepresentationRow,
+) (bool, error) {
+	if resolver == nil || resolver.activePipeline == nil || row.Capability == "" || row.OutputProfile == "" || row.PipelineFingerprint == "" {
+		return false, ErrDerivedRepresentationUnavailable
+	}
+	active, err := resolver.activePipeline(nonNilContext(ctx), row.Capability, row.OutputProfile)
+	if err != nil {
+		return false, fmt.Errorf("load active Derived pipeline: %w", err)
+	}
+	return active != "" && active == row.PipelineFingerprint, nil
+}
+
+func (resolver *DerivedRepresentationResolver) requireMalwareSafety(
+	ctx context.Context,
+	asset AuthorizedAsset,
+) error {
+	if resolver == nil || resolver.malwareSafety == nil {
+		return ErrDerivedRepresentationUnavailable
+	}
+	safe, err := resolver.malwareSafety(nonNilContext(ctx), asset)
+	if err != nil || !safe {
+		return errors.Join(ErrDerivedRepresentationUnavailable, err)
+	}
+	return nil
+}
+
+func derivedSafetyAsset(request DerivedRepresentationRequest) AuthorizedAsset {
+	return AuthorizedAsset{
+		Ref: request.Ref, CatalogGenerationID: request.CatalogGenerationID,
+		Provider: request.Provider, ProviderCapabilityRevision: request.ProviderCapabilityRevision,
+		SourceFingerprint: request.SourceFingerprint, EntryFingerprint: request.SourceEntryFingerprint,
+		FingerprintStrength: request.FingerprintStrength, Size: request.SourceSize,
+		MediaType: request.SourceMediaType,
+	}
+}
+
 func validDerivedRepresentationRequest(request DerivedRepresentationRequest) bool {
 	if backupasset.ValidateAssetRef(request.Ref) != nil || backupasset.ValidateOpaqueID(request.CatalogGenerationID) != nil ||
 		request.SourceFingerprint == "" || len(request.SourceFingerprint) > 128 ||
+		len(request.SourceEntryFingerprint) > 128 || request.ProviderCapabilityRevision <= 0 || request.SourceSize < 0 ||
+		!oneOfContent(request.FingerprintStrength, "strong", "weak", "none") ||
+		strings.TrimSpace(request.SourceMediaType) == "" || len(request.SourceMediaType) > 255 ||
 		request.SecurityPolicyRevision == "" || len(request.SecurityPolicyRevision) > 128 ||
 		request.ExpectedEntryFingerprint != "" && !lowerHexContent(request.ExpectedEntryFingerprint, 64) {
 		return false
@@ -203,28 +410,16 @@ func validDerivedRepresentationRequest(request DerivedRepresentationRequest) boo
 	if request.Provider != backupasset.ProviderRestic && request.Provider != backupasset.ProviderRsync && request.Provider != backupasset.ProviderRclone {
 		return false
 	}
-	switch request.Renderer {
-	case RendererEscapedText:
-		return request.Profile == ProfileTextV1
-	case RendererSafeRaster:
-		return request.Profile == ProfileRasterV1
-	case RendererSameOriginPDF:
-		return request.Profile == ProfilePDFV1
-	case RendererNativeAudio:
-		return request.Profile == ProfileAudioV1
-	case RendererNativeVideo:
-		return request.Profile == ProfileVideoV1
-	default:
-		return false
-	}
+	_, ok := resolveDerivedDeliveryIntent(request)
+	return ok
 }
 
-type DerivedProviderResolver func(
+type DerivedSourceAssetResolver func(
 	context.Context,
 	backupasset.AssetRef,
 	string,
 	string,
-) (backupasset.ProviderKind, error)
+) (AuthorizedAsset, error)
 
 // DerivedAttemptSourceResolver routes a Worker Input binding to an exact active
 // complete text/OCR Derived representation when the descriptor carries its
@@ -233,21 +428,21 @@ type DerivedAttemptSourceResolver struct {
 	primary                SourceResolver
 	derived                *DerivedRepresentationResolver
 	securityPolicyRevision string
-	provider               DerivedProviderResolver
+	asset                  DerivedSourceAssetResolver
 }
 
 func NewDerivedAttemptSourceResolver(
 	primary SourceResolver,
 	derived *DerivedRepresentationResolver,
 	securityPolicyRevision string,
-	provider DerivedProviderResolver,
+	asset DerivedSourceAssetResolver,
 ) (*DerivedAttemptSourceResolver, error) {
 	if primary == nil || derived == nil || strings.TrimSpace(securityPolicyRevision) == "" ||
-		len(securityPolicyRevision) > 128 || provider == nil {
+		len(securityPolicyRevision) > 128 || asset == nil {
 		return nil, ErrDerivedRepresentationUnavailable
 	}
 	return &DerivedAttemptSourceResolver{
-		primary: primary, derived: derived, securityPolicyRevision: securityPolicyRevision, provider: provider,
+		primary: primary, derived: derived, securityPolicyRevision: securityPolicyRevision, asset: asset,
 	}, nil
 }
 
@@ -255,7 +450,7 @@ func (resolver *DerivedAttemptSourceResolver) OpenContentSource(
 	ctx context.Context,
 	request SourceRequest,
 ) (SourceSession, error) {
-	if resolver == nil || resolver.primary == nil || resolver.derived == nil || resolver.provider == nil ||
+	if resolver == nil || resolver.primary == nil || resolver.derived == nil || resolver.asset == nil ||
 		ValidateSourceRequest(request) != nil {
 		return nil, ErrDerivedRepresentationUnavailable
 	}
@@ -270,21 +465,35 @@ func (resolver *DerivedAttemptSourceResolver) OpenContentSource(
 	if request.Mode == SourceModeRange {
 		return nil, ErrDerivedRepresentationUnavailable
 	}
-	provider, err := resolver.provider(ctx, request.Ref, request.CatalogGenerationID, request.ExpectedSource)
-	if err != nil || !validDerivedProvider(provider) {
+	asset, err := resolver.asset(ctx, request.Ref, request.CatalogGenerationID, request.ExpectedSource)
+	if err != nil || asset.Ref != request.Ref || asset.CatalogGenerationID != request.CatalogGenerationID ||
+		asset.SourceFingerprint != request.ExpectedSource || !validDerivedProvider(asset.Provider) {
 		return nil, errors.Join(ErrDerivedRepresentationUnavailable, err)
 	}
 	binding, err := resolver.derived.Resolve(ctx, DerivedRepresentationRequest{
 		Ref: request.Ref, CatalogGenerationID: request.CatalogGenerationID,
-		SourceFingerprint: request.ExpectedSource, ExpectedEntryFingerprint: request.ExpectedEntry,
-		SecurityPolicyRevision: resolver.securityPolicyRevision, Provider: provider,
-		Renderer: RendererEscapedText, Profile: ProfileTextV1,
+		SourceFingerprint: request.ExpectedSource, SourceEntryFingerprint: asset.EntryFingerprint,
+		FingerprintStrength:        asset.FingerprintStrength,
+		ProviderCapabilityRevision: asset.ProviderCapabilityRevision,
+		SourceSize:                 asset.Size, SourceMediaType: asset.MediaType,
+		ExpectedEntryFingerprint: request.ExpectedEntry,
+		SecurityPolicyRevision:   resolver.securityPolicyRevision, Provider: asset.Provider,
+		Renderer: RendererEscapedText, Profile: ProfileTextV1, intent: derivedIntentExtractedText,
 	})
 	if err != nil || binding.setCompleteness != "complete" || binding.Completeness != "complete" ||
 		(binding.Role != "content" && binding.Role != "ocr") || binding.MediaType != "text/plain" {
 		return nil, errors.Join(ErrDerivedRepresentationUnavailable, err)
 	}
-	return resolver.derived.Open(ctx, binding, request)
+	expectedAsset := asset
+	return resolver.derived.open(ctx, binding, request, func(revalidateCtx context.Context) error {
+		current, resolveErr := resolver.asset(
+			nonNilContext(revalidateCtx), request.Ref, request.CatalogGenerationID, request.ExpectedSource,
+		)
+		if resolveErr != nil || !sameDerivedSourceAsset(current, expectedAsset) {
+			return errors.Join(ErrDerivedRepresentationUnavailable, resolveErr)
+		}
+		return nil
+	})
 }
 
 func (resolver *DerivedAttemptSourceResolver) ValidateContentCacheRoot(ctx context.Context, root string) error {
@@ -317,11 +526,30 @@ func validDerivedProvider(provider backupasset.ProviderKind) bool {
 	return provider == backupasset.ProviderRestic || provider == backupasset.ProviderRsync || provider == backupasset.ProviderRclone
 }
 
+func sameDerivedSourceAsset(current, expected AuthorizedAsset) bool {
+	return current.Ref == expected.Ref && current.CatalogGenerationID == expected.CatalogGenerationID &&
+		current.RepositoryID == expected.RepositoryID && current.Provider == expected.Provider &&
+		current.ProviderCapabilityRevision == expected.ProviderCapabilityRevision &&
+		current.SourceFingerprint == expected.SourceFingerprint && current.EntryFingerprint == expected.EntryFingerprint &&
+		current.FingerprintStrength == expected.FingerprintStrength && current.Size == expected.Size &&
+		current.MediaType == expected.MediaType
+}
+
 func validDerivedRepresentationRow(row derivedRepresentationRow, request DerivedRepresentationRequest) bool {
 	return backupasset.ValidateOpaqueID(row.ArtifactID) == nil && backupasset.ValidateOpaqueID(row.ArtifactSetID) == nil &&
 		backupasset.ValidateOpaqueID(row.BlobID) == nil && row.RecoveryPointID == request.Ref.RecoveryPointID &&
 		row.CatalogGenerationID == request.CatalogGenerationID && row.EntryID == request.Ref.EntryID &&
 		row.SourceFingerprint == request.SourceFingerprint && row.SecurityPolicyRevision == request.SecurityPolicyRevision &&
+		row.JobRecoveryPointID == request.Ref.RecoveryPointID && row.JobCatalogGenerationID == request.CatalogGenerationID &&
+		row.JobEntryID == request.Ref.EntryID && row.JobSourceFingerprint == request.SourceFingerprint &&
+		row.JobEntryFingerprint == request.SourceEntryFingerprint &&
+		row.JobProviderCapabilityRevision == request.ProviderCapabilityRevision &&
+		row.JobSecurityPolicyRevision == request.SecurityPolicyRevision && row.JobState == "succeeded" &&
+		!row.JobIsCurrent && row.JobFinishedAt != nil && row.JobCurrentArtifactSetID == row.ArtifactSetID &&
+		row.JobCurrentAttemptID == row.AttemptID && row.AttemptState == "succeeded" &&
+		!row.AttemptIsCurrent && row.AttemptFinishedAt != nil &&
+		row.Capability != "" && len(row.Capability) <= 64 && row.CapabilitySchema != "" && len(row.CapabilitySchema) <= 64 &&
+		row.PipelineFingerprint != "" && len(row.PipelineFingerprint) <= 128 && row.OutputProfile != "" && len(row.OutputProfile) <= 64 &&
 		row.SetState == "active" && row.ReferenceState == "active" && row.BlobState == "active" &&
 		(row.SetCompleteness == "complete" || row.SetCompleteness == "partial") &&
 		(!row.ProjectionRequired || row.ProjectionPublished) && row.PlaintextSize >= 0 &&
@@ -332,41 +560,323 @@ func validDerivedRepresentationRow(row derivedRepresentationRow, request Derived
 func validDerivedBinding(binding DerivedRepresentation) bool {
 	return validDerivedRepresentationRequest(DerivedRepresentationRequest{
 		Ref: binding.Ref, CatalogGenerationID: binding.CatalogGenerationID,
-		SourceFingerprint: binding.SourceFingerprint, SecurityPolicyRevision: binding.SecurityPolicyRevision,
-		Provider: binding.Provider, Renderer: binding.Renderer, Profile: binding.Profile,
+		SourceFingerprint: binding.SourceFingerprint, SourceEntryFingerprint: binding.sourceEntryFingerprint,
+		FingerprintStrength:        binding.fingerprintStrength,
+		ProviderCapabilityRevision: binding.providerCapabilityRevision,
+		SourceSize:                 binding.sourceSize, SourceMediaType: binding.sourceMediaType,
+		SecurityPolicyRevision: binding.SecurityPolicyRevision,
+		Provider:               binding.Provider, Renderer: binding.Renderer, Profile: binding.Profile, intent: binding.intent,
 	}) && backupasset.ValidateOpaqueID(binding.artifactID) == nil && backupasset.ValidateOpaqueID(binding.artifactSetID) == nil &&
 		backupasset.ValidateOpaqueID(binding.blobID) == nil &&
 		(binding.setCompleteness == "complete" || binding.setCompleteness == "partial") &&
-		binding.Size >= 0 && lowerHexContent(binding.EntryFingerprint, 64)
+		binding.Size >= 0 && lowerHexContent(binding.EntryFingerprint, 64) &&
+		binding.capability != "" && binding.capabilitySchema != "" && binding.pipelineFingerprint != "" && binding.outputProfile != "" &&
+		binding.intent != derivedIntentNone && binding.ordinal >= 0 &&
+		len(binding.sourceEntryFingerprint) <= 128 && binding.providerCapabilityRevision > 0 && binding.sourceSize >= 0 &&
+		oneOfContent(binding.fingerprintStrength, "strong", "weak", "none") && binding.sourceMediaType != ""
 }
 
-func derivedArtifactMatchesRenderer(role, mediaType string, renderer Renderer, profile RendererProfile) bool {
-	switch renderer {
-	case RendererEscapedText:
-		return profile == ProfileTextV1 && (role == "content" || role == "ocr") && mediaType == "text/plain"
-	case RendererSafeRaster:
-		return profile == ProfileRasterV1 && role == "thumbnail" &&
-			(mediaType == "image/png" || mediaType == "image/jpeg" || mediaType == "image/webp")
-	case RendererSameOriginPDF:
-		return profile == ProfilePDFV1 && role == "content" && mediaType == "application/pdf"
-	case RendererNativeAudio:
-		return profile == ProfileAudioV1 && role == "content" && strings.HasPrefix(mediaType, "audio/")
-	case RendererNativeVideo:
-		return profile == ProfileVideoV1 && role == "content" && strings.HasPrefix(mediaType, "video/")
+func oneOfContent(value string, allowed ...string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveDerivedDeliveryIntent(request DerivedRepresentationRequest) (derivedDeliveryIntent, bool) {
+	inferred, ok := inferDerivedDeliveryIntent(request.SourceMediaType, request.Renderer, request.Profile)
+	if !ok || request.intent != derivedIntentNone && request.intent != inferred {
+		return derivedIntentNone, false
+	}
+	return inferred, true
+}
+
+func inferDerivedDeliveryIntent(
+	sourceMediaType string,
+	renderer Renderer,
+	profile RendererProfile,
+) (derivedDeliveryIntent, bool) {
+	mediaType := normalizedMediaType(sourceMediaType)
+	switch {
+	case renderer == RendererEscapedText && profile == ProfileTextV1 && isDerivedTextSource(mediaType):
+		return derivedIntentExtractedText, true
+	case renderer == RendererSafeRaster && profile == ProfileRasterV1 && isDerivedImageSource(mediaType):
+		return derivedIntentImageThumbnail, true
+	case renderer == RendererSafeRaster && profile == ProfileRasterV1 && isDerivedDocumentSource(mediaType):
+		return derivedIntentDocumentPage, true
+	case renderer == RendererNativeAudio && profile == ProfileAudioV1 && strings.HasPrefix(mediaType, "audio/"):
+		return derivedIntentAudioPreview, true
+	case renderer == RendererNativeVideo && profile == ProfileVideoV1 && strings.HasPrefix(mediaType, "video/"):
+		return derivedIntentVideoPreview, true
+	case renderer == RendererEscapedText && profile == ProfileTextV1 && isDerivedArchiveSource(mediaType):
+		return derivedIntentArchiveIndex, true
 	default:
-		return false
+		return derivedIntentNone, false
 	}
 }
 
+func queryForDerivedIntent(query *gorm.DB, intent derivedDeliveryIntent) *gorm.DB {
+	contract, ok := derivedContractForIntent(intent)
+	if query == nil {
+		return nil
+	}
+	if !ok {
+		return query.Where("1 = 0")
+	}
+	return query.Where(
+		"jobs.capability = ? AND jobs.capability_schema = ? AND jobs.output_profile = ? AND artifacts.ordinal = ? AND artifacts.role = ? AND artifacts.media_type IN ?",
+		contract.capability, contract.capabilitySchema, contract.outputProfile,
+		contract.ordinal, contract.role, contract.mediaTypes,
+	)
+}
+
+func derivedArtifactMatchesIntent(row derivedRepresentationRow, intent derivedDeliveryIntent) bool {
+	contract, ok := derivedContractForIntent(intent)
+	if !ok || row.Capability != contract.capability || row.CapabilitySchema != contract.capabilitySchema ||
+		row.OutputProfile != contract.outputProfile || row.Ordinal != contract.ordinal || row.Role != contract.role {
+		return false
+	}
+	return oneOfContent(row.MediaType, contract.mediaTypes...)
+}
+
+func derivedContractForIntent(intent derivedDeliveryIntent) (derivedArtifactContract, bool) {
+	switch intent {
+	case derivedIntentExtractedText:
+		return derivedArtifactContract{
+			capability: "text.extract", capabilitySchema: "text.extract.v1", outputProfile: "bounded_text_v1",
+			ordinal: 0, role: "content", mediaTypes: []string{"text/plain"},
+		}, true
+	case derivedIntentImageThumbnail:
+		return derivedArtifactContract{
+			capability: "image.thumbnail", capabilitySchema: "image.thumbnail.v1", outputProfile: "raster_thumbnail_v1",
+			ordinal: 0, role: "thumbnail", mediaTypes: []string{"image/png", "image/jpeg", "image/webp"},
+		}, true
+	case derivedIntentDocumentPage:
+		return derivedArtifactContract{
+			capability: "document.convert", capabilitySchema: "document.convert.v1", outputProfile: "static_pages_v1",
+			ordinal: 0, role: "thumbnail", mediaTypes: []string{"image/png", "image/jpeg", "image/webp"},
+		}, true
+	case derivedIntentAudioPreview:
+		return derivedArtifactContract{
+			capability: "media.transcode", capabilitySchema: "media.transcode.v1", outputProfile: "browser_preview_v1",
+			ordinal: 0, role: "content", mediaTypes: []string{"audio/mpeg", "audio/mp4", "audio/ogg"},
+		}, true
+	case derivedIntentVideoPreview:
+		return derivedArtifactContract{
+			capability: "media.transcode", capabilitySchema: "media.transcode.v1", outputProfile: "browser_preview_v1",
+			ordinal: 0, role: "content", mediaTypes: []string{"video/mp4", "video/webm"},
+		}, true
+	case derivedIntentArchiveIndex:
+		return derivedArtifactContract{
+			capability: "archive.inspect", capabilitySchema: "archive.inspect.v1", outputProfile: "archive_index_v1",
+			ordinal: 0, role: "metadata", mediaTypes: []string{"application/json"},
+		}, true
+	default:
+		return derivedArtifactContract{}, false
+	}
+}
+
+func isDerivedTextSource(mediaType string) bool {
+	return oneOfContent(mediaType, "text/plain", "text/csv", "text/markdown", "application/json", "application/xml")
+}
+
+func isDerivedImageSource(mediaType string) bool {
+	return oneOfContent(mediaType, "image/jpeg", "image/png", "image/webp", "image/gif", "image/tiff", "image/bmp")
+}
+
+func isDerivedDocumentSource(mediaType string) bool {
+	return oneOfContent(mediaType,
+		"application/pdf",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		"application/vnd.openxmlformats-officedocument.presentationml.presentation",
+		"application/vnd.oasis.opendocument.text",
+		"application/vnd.oasis.opendocument.spreadsheet",
+		"application/vnd.oasis.opendocument.presentation",
+	)
+}
+
+func isDerivedArchiveSource(mediaType string) bool {
+	return oneOfContent(mediaType, "application/zip", "application/x-tar", "application/gzip", "application/x-xz", "application/zstd")
+}
+
+type derivedArchiveIndexEntry struct {
+	ID          string `json:"id"`
+	ParentID    string `json:"parent_id,omitempty"`
+	DisplayName string `json:"display_name"`
+	Size        int64  `json:"size"`
+	MediaType   string `json:"media_type"`
+}
+
+type derivedArchiveIndex struct {
+	SchemaVersion int                        `json:"schema_version"`
+	Entries       []derivedArchiveIndexEntry `json:"entries"`
+	ExpandedBytes int64                      `json:"expanded_bytes"`
+	Complete      bool                       `json:"complete"`
+}
+
+func (resolver *DerivedRepresentationResolver) validateDerivedPayload(
+	ctx context.Context,
+	binding DerivedRepresentation,
+) error {
+	if binding.intent != derivedIntentArchiveIndex {
+		return nil
+	}
+	payload, err := resolver.loadArchiveIndexPayload(ctx, binding)
+	zeroBytes(payload)
+	return err
+}
+
+func (resolver *DerivedRepresentationResolver) readRepresentation(
+	ctx context.Context,
+	binding DerivedRepresentation,
+	destination io.Writer,
+) error {
+	if binding.intent != derivedIntentArchiveIndex {
+		return resolver.read(ctx, derivedArtifactReadRequest(binding), destination)
+	}
+	payload, err := resolver.loadArchiveIndexPayload(ctx, binding)
+	if err != nil {
+		return err
+	}
+	defer zeroBytes(payload)
+	written, err := destination.Write(payload)
+	if err != nil || written != len(payload) {
+		return errors.Join(ErrDerivedRepresentationUnavailable, err)
+	}
+	return nil
+}
+
+func (resolver *DerivedRepresentationResolver) loadArchiveIndexPayload(
+	ctx context.Context,
+	binding DerivedRepresentation,
+) ([]byte, error) {
+	if resolver == nil || resolver.read == nil || binding.intent != derivedIntentArchiveIndex ||
+		binding.Size < 0 || binding.Size > maximumDerivedArchiveIndexBytes {
+		return nil, ErrDerivedRepresentationUnavailable
+	}
+	buffer := &derivedBoundedBuffer{maximum: maximumDerivedArchiveIndexBytes}
+	buffer.buffer.Grow(int(binding.Size))
+	err := resolver.read(nonNilContext(ctx), derivedArtifactReadRequest(binding), buffer)
+	if err != nil || buffer.exceeded || int64(buffer.buffer.Len()) != binding.Size {
+		zeroBytes(buffer.buffer.Bytes())
+		return nil, errors.Join(ErrDerivedRepresentationUnavailable, err)
+	}
+	payload := buffer.buffer.Bytes()
+	digest := sha256.Sum256(payload)
+	if hex.EncodeToString(digest[:]) != binding.EntryFingerprint || !validDerivedArchiveIndex(payload) {
+		zeroBytes(payload)
+		return nil, ErrDerivedRepresentationUnavailable
+	}
+	return payload, nil
+}
+
+func derivedArtifactReadRequest(binding DerivedRepresentation) DerivedArtifactRead {
+	return DerivedArtifactRead{
+		ArtifactID: binding.artifactID, RecoveryPointID: binding.Ref.RecoveryPointID,
+		CatalogGenerationID: binding.CatalogGenerationID, EntryID: binding.Ref.EntryID,
+		SourceFingerprint: binding.SourceFingerprint,
+	}
+}
+
+type derivedBoundedBuffer struct {
+	buffer   bytes.Buffer
+	maximum  int64
+	exceeded bool
+}
+
+func (buffer *derivedBoundedBuffer) Write(payload []byte) (int, error) {
+	if buffer == nil || buffer.maximum < 0 || int64(len(payload)) > buffer.maximum-int64(buffer.buffer.Len()) {
+		if buffer != nil {
+			buffer.exceeded = true
+		}
+		return 0, ErrDerivedRepresentationUnavailable
+	}
+	return buffer.buffer.Write(payload)
+}
+
+func validDerivedArchiveIndex(payload []byte) bool {
+	if len(payload) == 0 || len(payload) > maximumDerivedArchiveIndexBytes || !utf8.Valid(payload) || !json.Valid(payload) {
+		return false
+	}
+	var value derivedArchiveIndex
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&value) != nil {
+		return false
+	}
+	var trailing any
+	if decoder.Decode(&trailing) != io.EOF {
+		return false
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil || !bytes.Equal(canonical, payload) || value.SchemaVersion != 1 || value.Entries == nil ||
+		!value.Complete || value.ExpandedBytes < 0 || value.ExpandedBytes > maximumDerivedArchiveExpanded ||
+		len(value.Entries) > maximumDerivedArchiveEntries {
+		return false
+	}
+	seen := make(map[string]struct{}, len(value.Entries))
+	seenDisplayNames := make(map[string]struct{}, len(value.Entries))
+	total := int64(0)
+	for _, entry := range value.Entries {
+		if !lowerHexContent(entry.ID, 32) || entry.ParentID != "" && !lowerHexContent(entry.ParentID, 32) ||
+			!safeDerivedArchiveDisplayName(entry.DisplayName) || entry.Size < 0 || entry.Size > maximumDerivedArchiveMember ||
+			entry.Size > value.ExpandedBytes-total || !oneOfContent(entry.MediaType,
+			"text/plain", "image/png", "image/jpeg", "application/pdf", "application/octet-stream") {
+			return false
+		}
+		if _, duplicate := seen[entry.ID]; duplicate {
+			return false
+		}
+		displayKey := derivedArchiveDisplayCollisionKey(entry.ParentID, entry.DisplayName)
+		if _, duplicate := seenDisplayNames[displayKey]; duplicate {
+			return false
+		}
+		seen[entry.ID] = struct{}{}
+		seenDisplayNames[displayKey] = struct{}{}
+		total += entry.Size
+	}
+	return total == value.ExpandedBytes
+}
+
+func safeDerivedArchiveDisplayName(value string) bool {
+	if value == "" || len(value) > 512 || !utf8.ValidString(value) || strings.TrimSpace(value) != value ||
+		value == "." || value == ".." || strings.ContainsAny(value, "\x00\r\n/\\") {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) || unicode.Is(unicode.Cf, character) {
+			return false
+		}
+	}
+	normalized := norm.NFKC.String(value)
+	if normalized == "" || normalized == "." || normalized == ".." || strings.ContainsAny(normalized, "/\\") {
+		return false
+	}
+	for _, character := range normalized {
+		if unicode.IsControl(character) || unicode.Is(unicode.Cf, character) {
+			return false
+		}
+	}
+	return true
+}
+
+func derivedArchiveDisplayCollisionKey(parentID, displayName string) string {
+	return parentID + "\x00" + workerCapabilities.CanonicalNFKCCasefold(displayName)
+}
+
 type derivedSourceSession struct {
-	resolver *DerivedRepresentationResolver
-	binding  DerivedRepresentation
-	request  SourceRequest
-	ctx      context.Context
-	once     sync.Once
-	reader   *derivedSourceReader
-	closed   bool
-	mu       sync.Mutex
+	resolver             *DerivedRepresentationResolver
+	binding              DerivedRepresentation
+	request              SourceRequest
+	ctx                  context.Context
+	liveSourceRevalidate func(context.Context) error
+	once                 sync.Once
+	reader               *derivedSourceReader
+	closed               bool
+	mu                   sync.Mutex
 }
 
 func (session *derivedSourceSession) Stat() SourceStat {
@@ -395,13 +905,9 @@ func (session *derivedSourceSession) Reader() SourceReader {
 		session.reader = &derivedSourceReader{PipeReader: pipeReader}
 		binding := session.binding
 		go func() {
-			err := session.resolver.Revalidate(session.ctx, binding)
+			err := session.Revalidate(session.ctx)
 			if err == nil {
-				err = session.resolver.read(session.ctx, DerivedArtifactRead{
-					ArtifactID: binding.artifactID, RecoveryPointID: binding.Ref.RecoveryPointID,
-					CatalogGenerationID: binding.CatalogGenerationID, EntryID: binding.Ref.EntryID,
-					SourceFingerprint: binding.SourceFingerprint,
-				}, pipeWriter)
+				err = session.resolver.readRepresentation(session.ctx, binding, pipeWriter)
 			}
 			_ = pipeWriter.CloseWithError(err)
 		}()
@@ -410,6 +916,11 @@ func (session *derivedSourceSession) Reader() SourceReader {
 }
 
 func (session *derivedSourceSession) Revalidate(ctx context.Context) error {
+	if session.liveSourceRevalidate != nil {
+		if err := session.liveSourceRevalidate(nonNilContext(ctx)); err != nil {
+			return err
+		}
+	}
 	return session.resolver.Revalidate(ctx, session.binding)
 }
 

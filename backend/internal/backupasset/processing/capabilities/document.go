@@ -3,6 +3,7 @@ package capabilities
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/hex"
 	"encoding/xml"
 	"io"
 	"path"
@@ -18,6 +19,8 @@ const (
 	documentPackageMaxRatio         = 100
 	documentXMLMaxBytes             = 1 << 20
 	documentXMLMaxTokens            = 100_000
+	documentXMLTotalMaxBytes        = 8 << 20
+	documentXMLTotalMaxTokens       = 500_000
 )
 
 type DocumentPlan struct {
@@ -31,6 +34,9 @@ func PlanDocument(input []byte, mediaType string) (DocumentPlan, error) {
 	case "application/pdf":
 		if len(input) < 16 || !bytes.HasPrefix(input, []byte("%PDF-")) || !bytes.Contains(input[max(0, len(input)-1024):], []byte("%%EOF")) {
 			return DocumentPlan{}, ErrInvalidToolOutput
+		}
+		if containsActivePDFAction(input) {
+			return DocumentPlan{}, capabilityspec.ErrUnsupportedMedia
 		}
 		return DocumentPlan{ExecutableID: ExecutablePDFToCairo, ArgProfile: ArgsPDFPages}, nil
 	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -47,6 +53,49 @@ func PlanDocument(input []byte, mediaType string) (DocumentPlan, error) {
 		return DocumentPlan{ExecutableID: ExecutableLibreOffice, ArgProfile: ArgsOfficePDF}, nil
 	default:
 		return DocumentPlan{}, capabilityspec.ErrUnsupportedMedia
+	}
+}
+
+func containsActivePDFAction(input []byte) bool {
+	active := map[string]struct{}{
+		"JavaScript": {}, "JS": {}, "Launch": {}, "URI": {}, "GoToR": {}, "GoToE": {},
+		"SubmitForm": {}, "ImportData": {}, "OpenAction": {}, "AA": {}, "Encrypt": {},
+		"ObjStm": {}, "XRef": {}, "EmbeddedFile": {}, "Filespec": {}, "AcroForm": {},
+		"RichMedia": {}, "Rendition": {}, "Movie": {}, "Sound": {},
+	}
+	for index := 0; index < len(input); index++ {
+		if input[index] != '/' {
+			continue
+		}
+		name := make([]byte, 0, 32)
+		for cursor := index + 1; cursor < len(input) && !pdfNameDelimiter(input[cursor]); {
+			if len(name) >= 64 {
+				break
+			}
+			if input[cursor] == '#' && cursor+2 < len(input) {
+				decoded := []byte{0}
+				if _, err := hex.Decode(decoded, input[cursor+1:cursor+3]); err == nil {
+					name = append(name, decoded[0])
+					cursor += 3
+					continue
+				}
+			}
+			name = append(name, input[cursor])
+			cursor++
+		}
+		if _, blocked := active[string(name)]; blocked {
+			return true
+		}
+	}
+	return false
+}
+
+func pdfNameDelimiter(value byte) bool {
+	switch value {
+	case 0, '\t', '\n', '\f', '\r', ' ', '(', ')', '<', '>', '[', ']', '{', '}', '/', '%':
+		return true
+	default:
+		return false
 	}
 }
 
@@ -86,17 +135,27 @@ func inspectDocumentPackage(input []byte, mediaType string, odf bool) error {
 	} else if !members["[content_types].xml"] {
 		return ErrInvalidToolOutput
 	}
+	var scannedXMLBytes int64
+	var scannedXMLTokens int
 	for name, file := range lookup {
 		if !allowlistedDocumentXML(name, odf) {
 			continue
 		}
-		payload, err := readBoundedDocumentPart(file, documentXMLMaxBytes)
+		remainingBytes := int64(documentXMLTotalMaxBytes) - scannedXMLBytes
+		remainingTokens := documentXMLTotalMaxTokens - scannedXMLTokens
+		if remainingBytes <= 0 || remainingTokens <= 0 || file.UncompressedSize64 > uint64(remainingBytes) {
+			return ErrInvalidToolOutput
+		}
+		payload, err := readBoundedDocumentPart(file, min(int64(documentXMLMaxBytes), remainingBytes))
 		if err != nil {
 			return err
 		}
-		if err := inspectDocumentXML(payload, odf, members); err != nil {
+		tokens, err := inspectDocumentXML(payload, name, odf, members, min(documentXMLMaxTokens, remainingTokens))
+		if err != nil {
 			return err
 		}
+		scannedXMLBytes += int64(len(payload))
+		scannedXMLTokens += tokens
 	}
 	return nil
 }
@@ -109,7 +168,12 @@ func activeDocumentMember(name string, odf bool) bool {
 	if !odf {
 		return false
 	}
-	return name == "scripts" || strings.HasPrefix(name, "scripts/") || name == "basic" || strings.HasPrefix(name, "basic/")
+	for _, segment := range strings.Split(name, "/") {
+		if segment == "scripts" || segment == "basic" {
+			return true
+		}
+	}
+	return false
 }
 
 func validateODFMimetype(files []*zip.File, lookup map[string]*zip.File, mediaType string) error {
@@ -127,14 +191,9 @@ func validateODFMimetype(files []*zip.File, lookup map[string]*zip.File, mediaTy
 
 func allowlistedDocumentXML(name string, odf bool) bool {
 	if odf {
-		switch name {
-		case "content.xml", "styles.xml", "settings.xml", "meta.xml", "meta-inf/manifest.xml":
-			return true
-		default:
-			return false
-		}
+		return strings.HasSuffix(name, ".xml")
 	}
-	return name == "[content_types].xml" || strings.HasSuffix(name, ".rels")
+	return strings.HasSuffix(name, ".xml") || strings.HasSuffix(name, ".rels")
 }
 
 func readBoundedDocumentPart(file *zip.File, maximum int64) ([]byte, error) {
@@ -153,19 +212,33 @@ func readBoundedDocumentPart(file *zip.File, maximum int64) ([]byte, error) {
 	return payload, nil
 }
 
-func inspectDocumentXML(payload []byte, odf bool, members map[string]bool) error {
+func inspectDocumentXML(payload []byte, memberName string, odf bool, members map[string]bool, maximumTokens int) (int, error) {
+	if maximumTokens <= 0 || maximumTokens > documentXMLMaxTokens {
+		return 0, ErrInvalidToolOutput
+	}
 	decoder := xml.NewDecoder(bytes.NewReader(payload))
 	decoder.Strict = true
-	for tokens := 0; ; tokens++ {
-		if tokens >= documentXMLMaxTokens {
-			return ErrInvalidToolOutput
+	tokens := 0
+	for {
+		if tokens >= maximumTokens {
+			return tokens, ErrInvalidToolOutput
 		}
 		token, err := decoder.Token()
 		if err == io.EOF {
-			return nil
+			return tokens, nil
 		}
 		if err != nil {
-			return ErrInvalidToolOutput
+			return tokens, ErrInvalidToolOutput
+		}
+		tokens++
+		switch value := token.(type) {
+		case xml.Directive:
+			return tokens, capabilityspec.ErrUnsupportedMedia
+		case xml.ProcInst:
+			if !canonicalXMLDeclaration(value, tokens) {
+				return tokens, capabilityspec.ErrUnsupportedMedia
+			}
+			continue
 		}
 		start, ok := token.(xml.StartElement)
 		if !ok {
@@ -174,7 +247,7 @@ func inspectDocumentXML(payload []byte, odf bool, members map[string]bool) error
 		local := strings.ToLower(start.Name.Local)
 		space := strings.ToLower(start.Name.Space)
 		if odf && (strings.Contains(local, "script") || strings.Contains(local, "macro") || strings.Contains(space, "script")) {
-			return capabilityspec.ErrUnsupportedMedia
+			return tokens, capabilityspec.ErrUnsupportedMedia
 		}
 		for _, attribute := range start.Attr {
 			name := strings.ToLower(attribute.Name.Local)
@@ -182,23 +255,38 @@ func inspectDocumentXML(payload []byte, odf bool, members map[string]bool) error
 			value := strings.TrimSpace(attribute.Value)
 			lowerValue := strings.ToLower(value)
 			if name == "targetmode" && strings.EqualFold(value, "external") {
-				return capabilityspec.ErrUnsupportedMedia
+				return tokens, capabilityspec.ErrUnsupportedMedia
 			}
 			if strings.Contains(name, "contenttype") || name == "media-type" || name == "full-path" {
 				if strings.Contains(lowerValue, "macro") || strings.Contains(lowerValue, "script") ||
 					strings.Contains(lowerValue, "vbaproject") || strings.HasPrefix(lowerValue, "basic/") ||
 					strings.HasPrefix(lowerValue, "scripts/") {
-					return capabilityspec.ErrUnsupportedMedia
+					return tokens, capabilityspec.ErrUnsupportedMedia
 				}
 			}
-			if odf && (name == "href" || strings.Contains(namespace, "xlink")) && externalDocumentReference(value, members) {
-				return capabilityspec.ErrUnsupportedMedia
+			if odf && (name == "href" || strings.Contains(namespace, "xlink")) && externalDocumentReference(value, memberName, members) {
+				return tokens, capabilityspec.ErrUnsupportedMedia
 			}
 		}
 	}
 }
 
-func externalDocumentReference(value string, members map[string]bool) bool {
+func canonicalXMLDeclaration(instruction xml.ProcInst, tokenPosition int) bool {
+	if tokenPosition != 1 || instruction.Target != "xml" {
+		return false
+	}
+	switch string(instruction.Inst) {
+	case `version="1.0"`,
+		`version="1.0" encoding="UTF-8"`,
+		`version="1.0" encoding="UTF-8" standalone="yes"`,
+		`version="1.0" encoding="UTF-8" standalone="no"`:
+		return true
+	default:
+		return false
+	}
+}
+
+func externalDocumentReference(value, memberName string, members map[string]bool) bool {
 	if value == "" || strings.HasPrefix(value, "#") {
 		return false
 	}
@@ -213,5 +301,9 @@ func externalDocumentReference(value string, members map[string]bool) bool {
 	if clean != target || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
 		return true
 	}
-	return !members[strings.ToLower(clean)]
+	resolved := path.Join(path.Dir(memberName), clean)
+	if resolved == "." || resolved == ".." || strings.HasPrefix(resolved, "../") {
+		return true
+	}
+	return !members[strings.ToLower(resolved)]
 }

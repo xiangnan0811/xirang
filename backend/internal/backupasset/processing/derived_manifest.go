@@ -10,25 +10,32 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"xirang/backend/internal/backupasset"
+	workerCapabilities "xirang/backend/internal/backupasset/processing/capabilities"
 	"xirang/backend/internal/backupasset/processing/capabilityspec"
 	"xirang/backend/internal/model"
+
+	"golang.org/x/text/unicode/norm"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 var (
-	ErrInvalidArtifact       = errors.New("invalid Derived artifact")
-	ErrInvalidManifest       = errors.New("invalid Derived artifact manifest")
-	ErrManifestFenceLost     = errors.New("derived manifest publication fence lost")
-	ErrManifestPolicyChanged = errors.New("derived manifest security policy changed")
-	ErrManifestSourceChanged = errors.New("derived manifest source changed")
+	ErrInvalidArtifact         = errors.New("invalid Derived artifact")
+	ErrInvalidManifest         = errors.New("invalid Derived artifact manifest")
+	ErrManifestFenceLost       = errors.New("derived manifest publication fence lost")
+	ErrManifestPipelineChanged = errors.New("derived manifest processing pipeline changed")
+	ErrManifestPolicyChanged   = errors.New("derived manifest security policy changed")
+	ErrManifestSourceChanged   = errors.New("derived manifest source changed")
 )
 
 type ArtifactRole string
@@ -111,17 +118,20 @@ type ProcessingSourceRevalidator interface {
 	RevalidateProcessingSource(context.Context, WorkDescriptorV1) error
 }
 
+type ActivePipelineFingerprintSource func(context.Context, string, string) (string, error)
+
 type ArtifactSink struct {
-	db           *gorm.DB
-	leaseService *backupasset.LeaseService
-	grants       *GrantService
-	store        *DerivedStore
-	lifecycle    *DerivedLifecycle
-	source       ProcessingSourceRevalidator
-	policy       func(context.Context) (string, error)
-	now          func() time.Time
-	config       ArtifactSinkConfig
-	metrics      Metrics
+	db             *gorm.DB
+	leaseService   *backupasset.LeaseService
+	grants         *GrantService
+	store          *DerivedStore
+	lifecycle      *DerivedLifecycle
+	source         ProcessingSourceRevalidator
+	policy         func(context.Context) (string, error)
+	activePipeline ActivePipelineFingerprintSource
+	now            func() time.Time
+	config         ArtifactSinkConfig
+	metrics        Metrics
 }
 
 func NewArtifactSink(
@@ -132,10 +142,11 @@ func NewArtifactSink(
 	lifecycle *DerivedLifecycle,
 	source ProcessingSourceRevalidator,
 	policy func(context.Context) (string, error),
+	activePipeline ActivePipelineFingerprintSource,
 	now func() time.Time,
 	config ArtifactSinkConfig,
 ) (*ArtifactSink, error) {
-	if db == nil || leaseService == nil || grants == nil || store == nil || lifecycle == nil || source == nil || policy == nil ||
+	if db == nil || leaseService == nil || grants == nil || store == nil || lifecycle == nil || source == nil || policy == nil || activePipeline == nil ||
 		config.MaxArtifacts <= 0 || config.MaxArtifacts > 256 || config.MaxArtifactBytes <= 0 ||
 		config.MaxTotalBytes < config.MaxArtifactBytes {
 		return nil, ErrInvalidManifest
@@ -145,7 +156,7 @@ func NewArtifactSink(
 	}
 	return &ArtifactSink{
 		db: db, leaseService: leaseService, grants: grants, store: store, lifecycle: lifecycle,
-		source: source, policy: policy, now: now, config: config, metrics: NoopMetrics{},
+		source: source, policy: policy, activePipeline: activePipeline, now: now, config: config, metrics: NoopMetrics{},
 	}, nil
 }
 
@@ -256,6 +267,10 @@ func (sink *ArtifactSink) CommitManifest(ctx context.Context, request CommitMani
 			return CommitManifestResult{}, ErrInvalidManifest
 		}
 	}
+	activePipeline, err := sink.activePipeline(nonNilProcessingContext(ctx), descriptor.Capability, descriptor.OutputProfile)
+	if err != nil || activePipeline == "" || activePipeline != descriptor.PipelineFingerprint {
+		return CommitManifestResult{}, errors.Join(ErrManifestPipelineChanged, err)
+	}
 	currentPolicy, err := sink.policy(ctx)
 	if err != nil || currentPolicy != request.SecurityPolicyRevision || job.SecurityPolicyRevision != request.SecurityPolicyRevision {
 		return CommitManifestResult{}, ErrManifestPolicyChanged
@@ -265,6 +280,9 @@ func (sink *ArtifactSink) CommitManifest(ctx context.Context, request CommitMani
 	}
 	uploads, err := sink.loadAndValidateUploads(ctx, request, artifacts)
 	if err != nil {
+		return CommitManifestResult{}, err
+	}
+	if err := sink.validateCapabilityManifestPayloads(ctx, descriptor, artifacts, uploads); err != nil {
 		return CommitManifestResult{}, err
 	}
 	setID, err := backupasset.NewOpaqueID()
@@ -921,6 +939,512 @@ func (sink *ArtifactSink) loadAndValidateUploads(ctx context.Context, request Co
 		}
 	}
 	return uploads, nil
+}
+
+const (
+	manifestMetadataMaxBytes = int64(16 << 20)
+	manifestBinaryMaxBytes   = int64(64 << 20)
+	manifestHeaderMaxBytes   = int64(64 << 10)
+)
+
+type manifestPayload struct {
+	content  []byte
+	total    int64
+	complete bool
+}
+
+type manifestPayloadWriter struct {
+	maximum int64
+	total   int64
+	content bytes.Buffer
+}
+
+func (writer *manifestPayloadWriter) Write(payload []byte) (int, error) {
+	if writer == nil || writer.maximum < 0 || writer.total > int64(^uint64(0)>>1)-int64(len(payload)) {
+		return 0, ErrInvalidManifest
+	}
+	original := len(payload)
+	remaining := writer.maximum - int64(writer.content.Len())
+	if remaining > 0 {
+		length := min(int64(len(payload)), remaining)
+		_, _ = writer.content.Write(payload[:length])
+	}
+	writer.total += int64(original)
+	return original, nil
+}
+
+func (sink *ArtifactSink) validateCapabilityManifestPayloads(
+	ctx context.Context,
+	descriptor WorkDescriptorV1,
+	artifacts []ArtifactDeclaration,
+	uploads []model.BackupAssetProcessingUpload,
+) error {
+	if descriptor.Capability == "noop" && descriptor.OutputProfile == "noop.v1" {
+		return nil
+	}
+	profile, ok := capabilityspec.Lookup(descriptor.Capability, descriptor.OutputProfile, true)
+	if !ok || profile.CapabilitySchema != descriptor.CapabilitySchema || len(artifacts) != len(uploads) ||
+		descriptor.Parameters.MaxOutputCount <= 0 || len(artifacts) > descriptor.Parameters.MaxOutputCount {
+		return ErrInvalidManifest
+	}
+	if err := validateCapabilityArtifactShape(descriptor, profile, artifacts); err != nil {
+		return err
+	}
+	payloads := make([]manifestPayload, len(artifacts))
+	totalBytes := int64(0)
+	for index, artifact := range artifacts {
+		if artifact.PlaintextSize > descriptor.Parameters.MaxOutputBytes-totalBytes {
+			return ErrInvalidManifest
+		}
+		totalBytes += artifact.PlaintextSize
+		maximum := manifestPayloadCaptureBytes(descriptor.Capability, artifact)
+		writer := &manifestPayloadWriter{maximum: maximum}
+		if err := sink.store.readBlob(ctx, uploads[index].StagingID, writer); err != nil || writer.total != artifact.PlaintextSize {
+			return errors.Join(ErrInvalidManifest, err)
+		}
+		payloads[index] = manifestPayload{
+			content: append([]byte(nil), writer.content.Bytes()...), total: writer.total,
+			complete: writer.total <= maximum,
+		}
+	}
+	if err := validateCapabilityPayloads(descriptor, profile, artifacts, payloads); err != nil {
+		return errors.Join(ErrInvalidManifest, err)
+	}
+	return nil
+}
+
+func manifestPayloadCaptureBytes(capability string, artifact ArtifactDeclaration) int64 {
+	if artifact.Role == ArtifactRoleMetadata {
+		return manifestMetadataMaxBytes
+	}
+	if capability == capabilityspec.CapabilityMediaTranscode && artifact.Role == ArtifactRoleContent ||
+		capability == capabilityspec.CapabilityArchiveExtractEntry && artifact.Role == ArtifactRoleContent {
+		return manifestHeaderMaxBytes
+	}
+	return manifestBinaryMaxBytes
+}
+
+func validateCapabilityArtifactShape(
+	descriptor WorkDescriptorV1,
+	profile capabilityspec.Profile,
+	artifacts []ArtifactDeclaration,
+) error {
+	counts := make(map[ArtifactRole]int, len(profile.Outputs))
+	maximums := make(map[ArtifactRole]int, len(profile.Outputs))
+	for _, output := range profile.Outputs {
+		maximums[ArtifactRole(output.Role)] = output.Maximum
+	}
+	for _, artifact := range artifacts {
+		counts[artifact.Role]++
+		if counts[artifact.Role] > maximums[artifact.Role] {
+			return ErrInvalidManifest
+		}
+	}
+	exact := func(roles ...ArtifactRole) bool {
+		if len(artifacts) != len(roles) {
+			return false
+		}
+		for index, role := range roles {
+			if artifacts[index].Role != role {
+				return false
+			}
+		}
+		return true
+	}
+	sameCompleteness := func(want ArtifactCompleteness) bool {
+		for _, artifact := range artifacts {
+			if artifact.Completeness != want {
+				return false
+			}
+		}
+		return true
+	}
+	switch descriptor.Capability {
+	case capabilityspec.CapabilityImageThumbnail:
+		if !exact(ArtifactRoleThumbnail, ArtifactRoleMetadata) || !sameCompleteness(ArtifactComplete) {
+			return ErrInvalidManifest
+		}
+	case capabilityspec.CapabilityTextExtract:
+		if !exact(ArtifactRoleContent, ArtifactRoleMetadata) || artifacts[0].MediaType != "text/plain" ||
+			artifacts[0].Completeness != artifacts[1].Completeness {
+			return ErrInvalidManifest
+		}
+	case capabilityspec.CapabilityImageOCR:
+		if !exact(ArtifactRoleOCR, ArtifactRoleMetadata) || artifacts[0].MediaType != "text/plain" || !sameCompleteness(ArtifactComplete) {
+			return ErrInvalidManifest
+		}
+	case capabilityspec.CapabilityDocumentConvert:
+		if len(artifacts) < 2 || artifacts[len(artifacts)-1].Role != ArtifactRoleMetadata || !sameCompleteness(ArtifactPartial) ||
+			counts[ArtifactRoleMetadata] != 1 || counts[ArtifactRoleContent] > 1 ||
+			counts[ArtifactRoleContent]+counts[ArtifactRoleThumbnail] != len(artifacts)-1 {
+			return ErrInvalidManifest
+		}
+		contentSeen := false
+		for _, artifact := range artifacts[:len(artifacts)-1] {
+			if artifact.Role == ArtifactRoleContent {
+				if contentSeen {
+					return ErrInvalidManifest
+				}
+				contentSeen = true
+			} else if contentSeen || artifact.Role != ArtifactRoleThumbnail {
+				return ErrInvalidManifest
+			}
+		}
+	case capabilityspec.CapabilityMalwareScan, capabilityspec.CapabilityMediaProbe,
+		capabilityspec.CapabilityArchiveInspect, capabilityspec.CapabilitySecretClassify:
+		if !exact(ArtifactRoleMetadata) || !sameCompleteness(ArtifactComplete) && descriptor.Capability != capabilityspec.CapabilitySecretClassify {
+			return ErrInvalidManifest
+		}
+	case capabilityspec.CapabilityMediaTranscode:
+		if len(artifacts) < 2 || len(artifacts) > 3 || artifacts[0].Role != ArtifactRoleContent ||
+			artifacts[0].MediaType != "video/mp4" || artifacts[len(artifacts)-1].Role != ArtifactRoleMetadata ||
+			len(artifacts) == 3 && artifacts[1].Role != ArtifactRoleThumbnail || !sameCompleteness(ArtifactPartial) {
+			return ErrInvalidManifest
+		}
+	case capabilityspec.CapabilityArchiveExtractEntry:
+		if !exact(ArtifactRoleContent, ArtifactRoleMetadata) || !sameCompleteness(ArtifactComplete) {
+			return ErrInvalidManifest
+		}
+	default:
+		return ErrInvalidManifest
+	}
+	return nil
+}
+
+func validateCapabilityPayloads(
+	descriptor WorkDescriptorV1,
+	profile capabilityspec.Profile,
+	artifacts []ArtifactDeclaration,
+	payloads []manifestPayload,
+) error {
+	if len(artifacts) != len(payloads) {
+		return ErrInvalidManifest
+	}
+	full := func(index int) ([]byte, error) {
+		if index < 0 || index >= len(payloads) || !payloads[index].complete || int64(len(payloads[index].content)) != payloads[index].total {
+			return nil, ErrInvalidManifest
+		}
+		return payloads[index].content, nil
+	}
+	metadata := func(index int, destination any) error {
+		payload, err := full(index)
+		if err != nil {
+			return err
+		}
+		return decodeCanonicalManifestJSON(payload, destination)
+	}
+	switch descriptor.Capability {
+	case capabilityspec.CapabilityImageThumbnail:
+		binary, err := full(0)
+		if err != nil {
+			return err
+		}
+		info, err := workerCapabilities.ValidateRasterOutput(binary, artifacts[0].MediaType, profile.Limits.MaxOutputBytes, profile.Limits.MaxPixels, 1)
+		var value thumbnailManifestMetadataV1
+		if err != nil || metadata(1, &value) != nil || value.SchemaVersion != 1 || value.Width != info.Width || value.Height != info.Height ||
+			value.Width <= 0 || value.Height <= 0 || value.Width > descriptor.Parameters.Width || value.Height > descriptor.Parameters.Height {
+			return ErrInvalidManifest
+		}
+	case capabilityspec.CapabilityTextExtract:
+		content, err := full(0)
+		var value textManifestMetadataV1
+		if err != nil || !safeManifestText(content) || metadata(1, &value) != nil || value.SchemaVersion != 1 ||
+			value.InputBytes < 0 || value.Runes < 0 || value.Lines < 0 || value.Truncated != (artifacts[0].Completeness == ArtifactPartial) ||
+			value.Coverage != string(artifacts[0].Completeness) {
+			return ErrInvalidManifest
+		}
+	case capabilityspec.CapabilityImageOCR:
+		content, err := full(0)
+		var value ocrManifestMetadataV1
+		if err != nil || !safeManifestText(content) || metadata(1, &value) != nil || value.SchemaVersion != 1 ||
+			value.Coverage != "complete" || value.Language != descriptor.Parameters.Language {
+			return ErrInvalidManifest
+		}
+	case capabilityspec.CapabilityDocumentConvert:
+		thumbnails := 0
+		for index, artifact := range artifacts[:len(artifacts)-1] {
+			payload, err := full(index)
+			if err != nil {
+				return err
+			}
+			switch artifact.Role {
+			case ArtifactRoleThumbnail:
+				if _, err := workerCapabilities.ValidateRasterOutput(payload, artifact.MediaType, profile.Limits.MaxOutputBytes, profile.Limits.MaxPixels, 1); err != nil {
+					return ErrInvalidManifest
+				}
+				thumbnails++
+			case ArtifactRoleContent:
+				if artifact.MediaType == "text/plain" {
+					if !safeManifestText(payload) {
+						return ErrInvalidManifest
+					}
+				} else if _, err := workerCapabilities.PlanDocument(payload, artifact.MediaType); err != nil {
+					return ErrInvalidManifest
+				}
+			}
+		}
+		var value documentManifestMetadataV1
+		if metadata(len(artifacts)-1, &value) != nil || value.SchemaVersion != 1 || value.Coverage != "partial" ||
+			value.RenderedPages != thumbnails || int64(thumbnails) > profile.Limits.MaxRenderedPages {
+			return ErrInvalidManifest
+		}
+	case capabilityspec.CapabilityMalwareScan:
+		var value capabilityspec.MalwareResult
+		if metadata(0, &value) != nil || value.Validate() != nil {
+			return ErrInvalidManifest
+		}
+	case capabilityspec.CapabilityMediaProbe:
+		var value mediaProbeManifestMetadataV1
+		if metadata(0, &value) != nil || !validMediaProbeManifest(value, profile) {
+			return ErrInvalidManifest
+		}
+	case capabilityspec.CapabilityMediaTranscode:
+		if _, err := workerCapabilities.PlanMedia(payloads[0].content, artifacts[0].MediaType, workerCapabilities.MediaProbe); err != nil {
+			return ErrInvalidManifest
+		}
+		if len(artifacts) == 3 {
+			poster, err := full(1)
+			if err != nil {
+				return err
+			}
+			if _, err := workerCapabilities.ValidateRasterOutput(poster, artifacts[1].MediaType, profile.Limits.MaxOutputBytes, profile.Limits.MaxPixels, 1); err != nil {
+				return ErrInvalidManifest
+			}
+		}
+		var value mediaPreviewManifestMetadataV1
+		if metadata(len(artifacts)-1, &value) != nil || value.SchemaVersion != 1 || value.Coverage != "partial" ||
+			value.DurationMillis < 0 || value.DurationMillis > descriptor.Parameters.MaxDurationMillis || value.DurationMillis > profile.Limits.MaxDurationMillis {
+			return ErrInvalidManifest
+		}
+	case capabilityspec.CapabilityArchiveInspect:
+		var value archiveIndexManifestMetadataV1
+		if metadata(0, &value) != nil || !validArchiveIndexManifest(
+			value,
+			profile,
+			min(profile.Limits.MaxExpandedBytes, descriptor.Parameters.MaxExpandedBytes),
+		) {
+			return ErrInvalidManifest
+		}
+	case capabilityspec.CapabilityArchiveExtractEntry:
+		var value archiveMemberManifestMetadataV1
+		if metadata(1, &value) != nil || !validArchiveMemberManifest(value, artifacts[0], payloads[0]) {
+			return ErrInvalidManifest
+		}
+	case capabilityspec.CapabilitySecretClassify:
+		// The secret result is validated again with its generated artifact identity
+		// immediately before the atomic Search projection is prepared.
+		return nil
+	default:
+		return ErrInvalidManifest
+	}
+	return nil
+}
+
+type thumbnailManifestMetadataV1 struct {
+	SchemaVersion int `json:"schema_version"`
+	Width         int `json:"width"`
+	Height        int `json:"height"`
+}
+
+type textManifestMetadataV1 struct {
+	SchemaVersion int    `json:"schema_version"`
+	Coverage      string `json:"coverage"`
+	Truncated     bool   `json:"truncated"`
+	InputBytes    int64  `json:"input_bytes"`
+	Runes         int    `json:"runes"`
+	Lines         int    `json:"lines"`
+}
+
+type ocrManifestMetadataV1 struct {
+	SchemaVersion int    `json:"schema_version"`
+	Coverage      string `json:"coverage"`
+	Language      string `json:"language"`
+}
+
+type documentManifestMetadataV1 struct {
+	SchemaVersion int    `json:"schema_version"`
+	Coverage      string `json:"coverage"`
+	RenderedPages int    `json:"rendered_pages"`
+}
+
+type mediaProbeManifestStreamV1 struct {
+	Index    int    `json:"index"`
+	Kind     string `json:"kind"`
+	Codec    string `json:"codec"`
+	Width    int    `json:"width,omitempty"`
+	Height   int    `json:"height,omitempty"`
+	Duration int64  `json:"duration_millis,omitempty"`
+}
+
+type mediaProbeManifestMetadataV1 struct {
+	SchemaVersion  int                          `json:"schema_version"`
+	DurationMillis int64                        `json:"duration_millis"`
+	Streams        []mediaProbeManifestStreamV1 `json:"streams"`
+}
+
+type mediaPreviewManifestMetadataV1 struct {
+	SchemaVersion  int    `json:"schema_version"`
+	Coverage       string `json:"coverage"`
+	DurationMillis int64  `json:"duration_millis"`
+}
+
+type archiveIndexManifestEntryV1 struct {
+	ID          string `json:"id"`
+	ParentID    string `json:"parent_id,omitempty"`
+	DisplayName string `json:"display_name"`
+	Size        int64  `json:"size"`
+	MediaType   string `json:"media_type"`
+}
+
+type archiveIndexManifestMetadataV1 struct {
+	SchemaVersion int                           `json:"schema_version"`
+	Entries       []archiveIndexManifestEntryV1 `json:"entries"`
+	ExpandedBytes int64                         `json:"expanded_bytes"`
+	Complete      bool                          `json:"complete"`
+}
+
+type archiveMemberManifestMetadataV1 struct {
+	SchemaVersion int    `json:"schema_version"`
+	MemberID      string `json:"member_id"`
+	DisplayName   string `json:"display_name"`
+	Size          int64  `json:"size"`
+	MediaType     string `json:"media_type"`
+}
+
+func decodeCanonicalManifestJSON(payload []byte, destination any) error {
+	if len(payload) == 0 || destination == nil || !json.Valid(payload) || rejectDuplicateJSONMembers(payload) != nil {
+		return ErrInvalidManifest
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(destination) != nil || ensureJSONEOF(decoder) != nil {
+		return ErrInvalidManifest
+	}
+	canonical, err := json.Marshal(destination)
+	if err != nil || !bytes.Equal(canonical, payload) {
+		return ErrInvalidManifest
+	}
+	return nil
+}
+
+// DecodeCanonicalMalwareResult validates persisted malware evidence with the
+// same duplicate/unknown-member, EOF, and canonical-byte rules used at Sink
+// publication. Callers must still bind the result to the current asset,
+// pipeline, and signature bundle before treating it as safe evidence.
+func DecodeCanonicalMalwareResult(payload []byte) (capabilityspec.MalwareResult, error) {
+	var result capabilityspec.MalwareResult
+	if len(payload) > 64<<10 || decodeCanonicalManifestJSON(payload, &result) != nil || result.Validate() != nil {
+		return capabilityspec.MalwareResult{}, ErrInvalidManifest
+	}
+	return result, nil
+}
+
+func safeManifestText(payload []byte) bool {
+	return utf8.Valid(payload) && bytes.IndexByte(payload, 0) < 0
+}
+
+func checkedPixelProduct(width, height int) (int64, bool) {
+	if width < 0 || height < 0 {
+		return 0, false
+	}
+	if width == 0 || height == 0 {
+		return 0, true
+	}
+	if int64(width) > math.MaxInt64/int64(height) {
+		return 0, false
+	}
+	return int64(width) * int64(height), true
+}
+
+func validMediaProbeManifest(value mediaProbeManifestMetadataV1, profile capabilityspec.Profile) bool {
+	if value.SchemaVersion != 1 || value.DurationMillis < 0 || value.DurationMillis > profile.Limits.MaxDurationMillis ||
+		len(value.Streams) == 0 || int64(len(value.Streams)) > profile.Limits.MaxStreams {
+		return false
+	}
+	seen := make(map[int]bool, len(value.Streams))
+	for _, stream := range value.Streams {
+		pixels, pixelsOK := checkedPixelProduct(stream.Width, stream.Height)
+		if stream.Index < 0 || seen[stream.Index] || !closedMediaCodec(stream.Kind, stream.Codec) || stream.Width < 0 || stream.Height < 0 ||
+			!pixelsOK || pixels > profile.Limits.MaxPixels || stream.Duration < 0 || stream.Duration > value.DurationMillis {
+			return false
+		}
+		seen[stream.Index] = true
+	}
+	return true
+}
+
+func validArchiveIndexManifest(
+	value archiveIndexManifestMetadataV1,
+	profile capabilityspec.Profile,
+	maximumExpandedBytes int64,
+) bool {
+	maximumExpandedBytes = min(maximumExpandedBytes, profile.Limits.MaxExpandedBytes)
+	if value.SchemaVersion != 1 || value.Entries == nil || !value.Complete || value.ExpandedBytes < 0 ||
+		maximumExpandedBytes <= 0 || value.ExpandedBytes > maximumExpandedBytes ||
+		int64(len(value.Entries)) > profile.Limits.MaxArchiveEntries {
+		return false
+	}
+	maxMemberBytes := profile.Limits.MaxMemberBytes
+	if maxMemberBytes == 0 {
+		maxMemberBytes = 256 << 20
+	}
+	seen := make(map[string]bool, len(value.Entries))
+	seenDisplayNames := make(map[string]bool, len(value.Entries))
+	total := int64(0)
+	for _, entry := range value.Entries {
+		if !lowerHex(entry.ID, 32) || entry.ParentID != "" && !lowerHex(entry.ParentID, 32) || seen[entry.ID] ||
+			!safeArchiveDisplayName(entry.DisplayName) || entry.Size < 0 || entry.Size > maxMemberBytes ||
+			entry.Size > value.ExpandedBytes-total || canonicalArchiveMemberMedia(entry.MediaType) != entry.MediaType {
+			return false
+		}
+		displayKey := archiveDisplayCollisionKey(entry.ParentID, entry.DisplayName)
+		if seenDisplayNames[displayKey] {
+			return false
+		}
+		seen[entry.ID] = true
+		seenDisplayNames[displayKey] = true
+		total += entry.Size
+	}
+	return total == value.ExpandedBytes
+}
+
+func validArchiveMemberManifest(
+	value archiveMemberManifestMetadataV1,
+	artifact ArtifactDeclaration,
+	payload manifestPayload,
+) bool {
+	if value.SchemaVersion != 1 || !lowerHex(value.MemberID, 32) || !safeArchiveDisplayName(value.DisplayName) ||
+		value.Size != artifact.PlaintextSize || value.Size != payload.total || value.MediaType != artifact.MediaType {
+		return false
+	}
+	detected := canonicalArchiveMemberMedia(http.DetectContentType(payload.content))
+	return detected == value.MediaType || value.MediaType == "application/octet-stream"
+}
+
+func safeArchiveDisplayName(value string) bool {
+	if value == "" || len(value) > 512 || !utf8.ValidString(value) || strings.TrimSpace(value) != value ||
+		strings.ContainsAny(value, "\x00\r\n/\\") || value == "." || value == ".." {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) || unicode.Is(unicode.Cf, character) {
+			return false
+		}
+	}
+	normalized := norm.NFKC.String(value)
+	if normalized == "" || normalized == "." || normalized == ".." || strings.ContainsAny(normalized, "/\\") {
+		return false
+	}
+	for _, character := range normalized {
+		if unicode.IsControl(character) || unicode.Is(unicode.Cf, character) {
+			return false
+		}
+	}
+	return true
+}
+
+func archiveDisplayCollisionKey(parentID, displayName string) string {
+	return parentID + "\x00" + workerCapabilities.CanonicalNFKCCasefold(displayName)
 }
 
 func (sink *ArtifactSink) validateSinkGrant(ctx context.Context, jobID, attemptID, workerID, grantID string) error {

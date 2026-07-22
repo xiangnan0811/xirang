@@ -140,6 +140,19 @@ type ContentPipelineRevisions struct {
 
 type ContentPipelineRevisionSource func(context.Context) (ContentPipelineRevisions, error)
 
+type MalwareSafetyRequest struct {
+	Ref                        backupasset.AssetRef
+	CatalogGenerationID        string
+	SourceFingerprint          string
+	EntryFingerprint           string
+	FingerprintStrength        string
+	ProviderCapabilityRevision int64
+	Size                       int64
+	MediaType                  string
+}
+
+type MalwareSafetySource func(context.Context, MalwareSafetyRequest) (bool, error)
+
 func DefaultServiceLimits() ServiceLimits {
 	return ServiceLimits{Query: DefaultQueryLimits(), MaxCandidates: 10000, ExecutionTimeout: 2 * time.Second}
 }
@@ -155,6 +168,7 @@ type ServiceDependencies struct {
 	Limits            ServiceLimits
 	FeatureEnabled    func() (bool, error)
 	PipelineRevisions ContentPipelineRevisionSource
+	MalwareSafety     MalwareSafetySource
 }
 
 type Service struct {
@@ -168,6 +182,7 @@ type Service struct {
 	limits            ServiceLimits
 	featureEnabled    func() (bool, error)
 	pipelineRevisions ContentPipelineRevisionSource
+	malwareSafety     MalwareSafetySource
 }
 
 type activeSearchIndex struct {
@@ -181,6 +196,7 @@ type activeSearchIndex struct {
 type searchableDocument struct {
 	document model.BackupAssetSearchDocument
 	entry    model.CatalogEntry
+	point    model.RecoveryPoint
 	postings []model.BackupAssetSearchPosting
 	fields   map[SearchField]model.BackupAssetSearchDocumentField
 	current  bool
@@ -198,11 +214,13 @@ type evaluatedHit struct {
 type queryEvaluationState struct {
 	excerptAvailable bool
 	tagAvailable     bool
+	malwareSafety    map[backupasset.AssetRef]bool
 }
 
 func NewService(dependencies ServiceDependencies) (*Service, error) {
 	if dependencies.DB == nil || dependencies.Scope == nil || dependencies.Keys == nil || dependencies.Cursor == nil ||
 		dependencies.FeatureEnabled == nil ||
+		(dependencies.PipelineRevisions != nil && dependencies.MalwareSafety == nil) ||
 		dependencies.Limits.MaxCandidates <= 0 || dependencies.Limits.ExecutionTimeout <= 0 ||
 		!validQueryLimits(dependencies.Limits.Query) {
 		return nil, fmt.Errorf("%w: invalid Search service dependencies", backupasset.ErrInvalidState)
@@ -214,6 +232,7 @@ func NewService(dependencies ServiceDependencies) (*Service, error) {
 		db: dependencies.DB, scope: dependencies.Scope, keys: dependencies.Keys, cursor: dependencies.Cursor,
 		tags: dependencies.Tags, excerpts: dependencies.Excerpts, now: dependencies.Now, limits: dependencies.Limits,
 		featureEnabled: dependencies.FeatureEnabled, pipelineRevisions: dependencies.PipelineRevisions,
+		malwareSafety: dependencies.MalwareSafety,
 	}, nil
 }
 
@@ -275,6 +294,7 @@ func (service *Service) Search(ctx context.Context, actor SearchActor, request S
 	evaluation := queryEvaluationState{
 		excerptAvailable: service.excerpts != nil && (pipelineRevisions.Content > 0 || pipelineRevisions.OCR > 0),
 		tagAvailable:     service.tags != nil,
+		malwareSafety:    make(map[backupasset.AssetRef]bool, len(documents)),
 	}
 	evaluated := make([]evaluatedHit, 0, len(documents))
 	for _, document := range documents {
@@ -567,7 +587,7 @@ func (service *Service) loadDocuments(
 			postings = filtered
 		}
 		result = append(result, searchableDocument{
-			document: document, entry: entry, postings: postings, fields: fields, current: index.point.Current,
+			document: document, entry: entry, point: index.pointModel, postings: postings, fields: fields, current: index.point.Current,
 			pointAt: selectedPointTime(index.point),
 		})
 	}
@@ -1012,6 +1032,9 @@ func (service *Service) evaluateTermField(
 		if (sensitivity == SensitivitySecret || sensitivity == SensitivityUnknown) && !secretProof {
 			return truthUnknown, nil, nil
 		}
+		if !service.contentMalwareSafe(ctx, document, evaluation) {
+			return truthUnknown, nil, nil
+		}
 	}
 	normalizerField := field
 	if normalizerField == SearchFieldExtension {
@@ -1054,6 +1077,46 @@ func (service *Service) evaluateTermField(
 	}
 	fact.snippet = &snippet
 	return truthTrue, fact, nil
+}
+
+func (service *Service) contentMalwareSafe(
+	ctx context.Context,
+	document searchableDocument,
+	evaluation *queryEvaluationState,
+) bool {
+	ref := backupasset.AssetRef{
+		RecoveryPointID: document.document.RecoveryPointID,
+		EntryID:         document.document.EntryID,
+	}
+	if evaluation != nil {
+		if safe, exists := evaluation.malwareSafety[ref]; exists {
+			return safe
+		}
+	}
+	safe := false
+	if service.malwareSafety != nil {
+		value, err := service.malwareSafety(ctx, MalwareSafetyRequest{
+			Ref:                        ref,
+			CatalogGenerationID:        document.document.CatalogGenerationID,
+			SourceFingerprint:          document.point.SourceFingerprint,
+			EntryFingerprint:           document.entry.Fingerprint,
+			FingerprintStrength:        document.entry.FingerprintStrength,
+			ProviderCapabilityRevision: int64(document.point.CapabilityRevision),
+			Size:                       document.entry.Size,
+			MediaType:                  document.entry.MimeType,
+		})
+		safe = err == nil && value
+	}
+	if evaluation != nil {
+		if evaluation.malwareSafety == nil {
+			evaluation.malwareSafety = make(map[backupasset.AssetRef]bool)
+		}
+		evaluation.malwareSafety[ref] = safe
+		if !safe {
+			evaluation.excerptAvailable = false
+		}
+	}
+	return safe
 }
 
 func postingMatch(

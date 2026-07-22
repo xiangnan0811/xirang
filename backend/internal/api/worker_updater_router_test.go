@@ -19,7 +19,7 @@ func TestUpdaterConnContextUsesOnlyAuthenticatedUpdaterConnection(t *testing.T) 
 		_ = right.Close()
 	})
 	identity := updater.UpdaterTransportIdentity{
-		Fingerprint: strings.Repeat("a", 64), PeerPID: 42, PeerUID: 10002, PeerGID: 10002,
+		Fingerprint: strings.Repeat("a", 64), PeerPID: 0, PeerUID: 10002, PeerGID: 10002,
 	}
 	ctx := UpdaterConnContext(context.Background(), updaterRouterAuthenticatedConn{Conn: left, identity: identity})
 	if got, ok := updaterIdentityFromContext(ctx); !ok || got != identity {
@@ -43,7 +43,7 @@ func TestWorkerUpdaterRouterIsDedicatedStrictAndTransportAuthenticated(t *testin
 		t.Fatal(err)
 	}
 	identity := updater.UpdaterTransportIdentity{
-		Fingerprint: strings.Repeat("a", 64), PeerPID: 42, PeerUID: 10002, PeerGID: 10002,
+		Fingerprint: strings.Repeat("a", 64), PeerPID: 0, PeerUID: 10002, PeerGID: 10002,
 	}
 	payload := `{"schema_version":1,"active_fingerprint":""}`
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/asset-worker-updater/activations/pull", strings.NewReader(payload))
@@ -73,6 +73,17 @@ func TestWorkerUpdaterRouterIsDedicatedStrictAndTransportAuthenticated(t *testin
 		if response.Code != http.StatusUnauthorized || service.pullCalls != 1 || strings.Contains(response.Body.String(), "FAKE_UPDATER_TOKEN") {
 			t.Fatalf("unauthenticated status=%d calls=%d body=%s", response.Code, service.pullCalls, response.Body.String())
 		}
+	}
+
+	negativePID := httptest.NewRequest(http.MethodPost, "/internal/v1/asset-worker-updater/activations/pull", strings.NewReader(payload))
+	invalidIdentity := identity
+	invalidIdentity.PeerPID = -1
+	negativePID = negativePID.WithContext(ContextWithUpdaterTransportIdentity(negativePID.Context(), invalidIdentity))
+	negativePID.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, negativePID)
+	if response.Code != http.StatusUnauthorized || service.pullCalls != 1 {
+		t.Fatalf("negative PID status=%d calls=%d body=%s", response.Code, service.pullCalls, response.Body.String())
 	}
 
 	for _, invalid := range []string{

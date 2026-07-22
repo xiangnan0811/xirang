@@ -14,6 +14,8 @@ type mountInfo struct {
 	Options    map[string]bool
 }
 
+func runtimeClosureManifestOwnerOK(os.FileInfo) bool { return false }
+
 func inspectWorkspaceMount(string) (mountInfo, error) {
 	return mountInfo{}, ErrSecureWorkspaceUnavailable
 }

@@ -50,7 +50,7 @@ inside Section 2 and do not alter this eight-path planning-artifact count.
 
 ## 2. Exact future implementation manifest
 
-This approved future manifest contains exactly 164 unique paths. Any future
+This approved future manifest contains exactly 165 unique paths. Any future
 tracked path outside it requires a written focused amendment and review of that
 scope change. Directory-wide staging is forbidden; the eventual commit must
 stage exact paths from this list.
@@ -80,6 +80,15 @@ optional secret profile, while requiring executable parity and bounded Office/
 ODF preflight. It preserves both earlier manifest-amendment records and does not
 authorize `go.mod`/`go.sum`, migration/model, Provider, release or Child 12+
 changes.
+
+The controller-approved **bootstrap null parser correction** adds only
+`backend/internal/api/handlers/backup_content_handler.go` and raises the exact
+manifest from 164 to 165 unique paths. The shared token walker must accept a
+legal JSON null used by the closed first-activation request while retaining
+duplicate-key, unknown-field, depth and trailing-token rejection. The focused
+handler regression was observed RED at HTTP 400 after the path was reverted and
+GREEN after the minimal correction. This is not an API, dependency, migration
+or product-scope expansion.
 
 ### 2.1 Backend capability and runner paths
 
@@ -224,6 +233,7 @@ backend/internal/api/worker_updater_router.go
 backend/internal/api/worker_updater_router_test.go
 backend/internal/api/handlers/backup_processing_handler.go
 backend/internal/api/handlers/backup_processing_handler_test.go
+backend/internal/api/handlers/backup_content_handler.go
 backend/internal/api/handlers/backup_worker_handler.go
 backend/internal/api/handlers/backup_worker_handler_test.go
 backend/internal/api/handlers/config_handler.go
@@ -599,6 +609,9 @@ rebuild candidate until the existing reconciler safely removes it.
       `testutil_test.go` as the Foundation settings fixture synchronization;
       production snapshot validation is unchanged and this is not a product
       scope expansion.
+- [x] The focused 164-to-165 amendment adds only
+      `backup_content_handler.go` as the bootstrap null parser correction;
+      duplicate-key and strict decode boundaries remain fail closed.
 - [x] task.py start: completed; Child status is `in_progress` and the parent
       remains `planning`.
 - [ ] Product implementation/tests: in_progress; migrations remain forbidden.
@@ -606,7 +619,7 @@ rebuild candidate until the existing reconciler safely removes it.
 - [ ] Push/PR/CI/merge/post-merge/release/deploy: not_executed / pending future
       delivery workflow.
 
-The planning package and both focused amendments are approved, the exact future
-manifest is 164 unique paths, the workflow transition is complete, and Phase 2
+The planning package and focused amendments are approved, the exact future
+manifest is 165 unique paths, the workflow transition is complete, and Phase 2
 is in progress. No further product decision is required unless another path or
 frozen boundary changes.

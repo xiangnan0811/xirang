@@ -410,6 +410,9 @@ func TestBrokerServeAuthenticatesCookieReservesBeforeSourceAndFreezesGetHead(t *
 
 func TestBrokerDerivedPreviewUsesBrokerBytesAndReauthorizesOriginalAsset(t *testing.T) {
 	harness := newBrokerTestHarness(t)
+	harness.asset.MediaType = "text/plain"
+	harness.asset.Path = "/documents/source.txt"
+	harness.asset.Name = "source.txt"
 	payload := []byte("<derived> searchable text\n")
 	modified := harness.now.Add(-time.Minute)
 	derived := &brokerDerivedResolverFake{
@@ -424,6 +427,7 @@ func TestBrokerDerivedPreviewUsesBrokerBytesAndReauthorizesOriginalAsset(t *test
 			EntryFingerprint: strings.Repeat("4", 64), Completeness: "complete", ModifiedAt: &modified,
 		},
 	}
+	bindBrokerDerivedTestSourceIdentity(&derived.binding, *harness.asset)
 	harness.broker.derived = derived
 	harness.broker.securityPolicyRevision = func(context.Context) (string, error) { return "security-policy-v1", nil }
 	request := harness.issueRequest()
@@ -470,8 +474,106 @@ func TestBrokerDerivedPreviewUsesBrokerBytesAndReauthorizesOriginalAsset(t *test
 	}
 }
 
+func TestBrokerDerivedDocumentAndArchivePreviewsUseAuthorizedOriginalIntent(t *testing.T) {
+	pngPayload := encodeRasterForTest(t, "png", 2, 2)
+	archivePayload := []byte(`{"schema_version":1,"complete":true,"expanded_bytes":0,"entries":[]}`)
+	tests := []struct {
+		name             string
+		sourceMediaType  string
+		sourceName       string
+		renderer         Renderer
+		profile          RendererProfile
+		payload          []byte
+		role             string
+		derivedMediaType string
+		wantContentType  string
+		wantBody         []byte
+		wantRange        RangePolicy
+	}{
+		{
+			name: "document page", sourceMediaType: "application/pdf", sourceName: "evidence.pdf",
+			renderer: RendererSafeRaster, profile: ProfileRasterV1, payload: pngPayload,
+			role: "thumbnail", derivedMediaType: "image/png", wantContentType: "image/png",
+			wantBody: pngPayload, wantRange: RangeNone,
+		},
+		{
+			name: "archive index", sourceMediaType: "application/zip", sourceName: "evidence.zip",
+			renderer: RendererEscapedText, profile: ProfileTextV1, payload: archivePayload,
+			role: "metadata", derivedMediaType: "application/json", wantContentType: "text/plain; charset=utf-8",
+			wantBody: []byte(escapeRenderedText(string(archivePayload))), wantRange: RangeNone,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			harness := newBrokerTestHarness(t)
+			harness.asset.MediaType = test.sourceMediaType
+			harness.asset.Name = test.sourceName
+			harness.asset.Path = "/evidence/" + test.sourceName
+			harness.asset.Size = 4096
+			modified := harness.now.Add(-time.Minute)
+			derived := &brokerDerivedResolverFake{
+				payload: test.payload,
+				binding: DerivedRepresentation{
+					artifactID: strings.Repeat("1", 32), artifactSetID: strings.Repeat("2", 32), blobID: strings.Repeat("3", 32),
+					setCompleteness: "complete",
+					Ref:             harness.asset.Ref, CatalogGenerationID: harness.asset.CatalogGenerationID,
+					SourceFingerprint: harness.asset.SourceFingerprint, SecurityPolicyRevision: "security-policy-v1",
+					Provider: harness.asset.Provider, Renderer: test.renderer, Profile: test.profile,
+					Role: test.role, MediaType: test.derivedMediaType, Size: int64(len(test.payload)),
+					EntryFingerprint: strings.Repeat("4", 64), Completeness: "complete", ModifiedAt: &modified,
+				},
+			}
+			bindBrokerDerivedTestSourceIdentity(&derived.binding, *harness.asset)
+			harness.broker.derived = derived
+			harness.broker.securityPolicyRevision = func(context.Context) (string, error) {
+				return "security-policy-v1", nil
+			}
+			request := harness.issueRequest()
+			request.Renderer = test.renderer
+			request.Profile = test.profile
+
+			ticket, err := harness.broker.Issue(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ticket.Descriptor.Renderer != test.renderer || ticket.Descriptor.Profile != test.profile ||
+				ticket.Descriptor.ContentType != test.wantContentType || ticket.Descriptor.Range != test.wantRange {
+				t.Fatalf("descriptor=%+v", ticket.Descriptor)
+			}
+			if harness.source.openCalls != 0 || derived.resolveCalls != 1 || derived.openCalls != 1 {
+				t.Fatalf("issue source opens provider=%d derived resolve=%d open=%d", harness.source.openCalls, derived.resolveCalls, derived.openCalls)
+			}
+
+			recorder := &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+			if err := harness.broker.Serve(context.Background(), GatewayRequest{
+				DeliveryID: harness.material.DeliveryID, Method: http.MethodGet,
+				RawCookie: ticket.Cookie.Name + "=" + ticket.Cookie.Value,
+			}, recorder); err != nil {
+				t.Fatal(err)
+			}
+			if recorder.Code != http.StatusOK || !bytes.Equal(recorder.Body.Bytes(), test.wantBody) {
+				t.Fatalf("derived response status=%d body=%q want=%q", recorder.Code, recorder.Body.Bytes(), test.wantBody)
+			}
+			if harness.source.openCalls != 0 {
+				t.Fatalf("derived response opened Provider %d times", harness.source.openCalls)
+			}
+			var deliveryRequest model.BackupAssetDeliveryRequest
+			if err := harness.db.Order("created_at DESC").First(&deliveryRequest).Error; err != nil {
+				t.Fatal(err)
+			}
+			if deliveryRequest.ProviderBytes != 0 || deliveryRequest.ResponseBytes != int64(len(test.wantBody)) {
+				t.Fatalf("derived byte accounting provider=%d response=%d", deliveryRequest.ProviderBytes, deliveryRequest.ResponseBytes)
+			}
+		})
+	}
+}
+
 func TestBrokerDerivedPreviewRevokesTicketWhenSecurityPolicyChangesBeforeRead(t *testing.T) {
 	harness := newBrokerTestHarness(t)
+	harness.asset.MediaType = "text/plain"
+	harness.asset.Path = "/documents/source.txt"
+	harness.asset.Name = "source.txt"
 	payload := []byte("derived preview")
 	modified := harness.now.Add(-time.Minute)
 	derived := &brokerDerivedResolverFake{
@@ -486,6 +588,7 @@ func TestBrokerDerivedPreviewRevokesTicketWhenSecurityPolicyChangesBeforeRead(t 
 			EntryFingerprint: strings.Repeat("4", 64), Completeness: "complete", ModifiedAt: &modified,
 		},
 	}
+	bindBrokerDerivedTestSourceIdentity(&derived.binding, *harness.asset)
 	harness.broker.derived = derived
 	harness.broker.securityPolicyRevision = func(context.Context) (string, error) { return "security-policy-v1", nil }
 	request := harness.issueRequest()
@@ -1015,7 +1118,8 @@ func newBrokerTestHarness(t *testing.T) *brokerTestHarness {
 	asset := AuthorizedAsset{
 		Ref:                 backupasset.AssetRef{RecoveryPointID: strings.Repeat("a", 32), EntryID: strings.Repeat("b", 64)},
 		CatalogGenerationID: strings.Repeat("c", 32), RepositoryID: strings.Repeat("d", 32),
-		Provider: backupasset.ProviderRsync, SourceFingerprint: "source-v1", EntryFingerprint: "entry-v1",
+		Provider: backupasset.ProviderRsync, ProviderCapabilityRevision: 1,
+		SourceFingerprint: "source-v1", EntryFingerprint: "entry-v1",
 		FingerprintStrength: "strong", Size: int64(len(pngPayload)), MediaType: "image/png", RangeProven: true,
 		Path: "/images/safe.png", Name: "safe.png",
 	}
@@ -1206,11 +1310,30 @@ func (fake *brokerDerivedResolverFake) Resolve(
 	fake.resolveCalls++
 	if fake.stale || request.Ref != fake.binding.Ref || request.CatalogGenerationID != fake.binding.CatalogGenerationID ||
 		request.SourceFingerprint != fake.binding.SourceFingerprint ||
+		request.SourceEntryFingerprint != fake.binding.sourceEntryFingerprint ||
+		request.FingerprintStrength != fake.binding.fingerprintStrength ||
+		request.ProviderCapabilityRevision != fake.binding.providerCapabilityRevision ||
+		request.SourceSize != fake.binding.sourceSize || request.SourceMediaType != fake.binding.sourceMediaType ||
 		request.SecurityPolicyRevision != fake.binding.SecurityPolicyRevision || request.Provider != fake.binding.Provider ||
-		request.Renderer != fake.binding.Renderer || request.Profile != fake.binding.Profile {
+		request.Renderer != fake.binding.Renderer || request.Profile != fake.binding.Profile || request.intent != fake.binding.intent {
 		return DerivedRepresentation{}, ErrDerivedRepresentationUnavailable
 	}
 	return fake.binding, nil
+}
+
+func bindBrokerDerivedTestSourceIdentity(binding *DerivedRepresentation, asset AuthorizedAsset) {
+	binding.intent, _ = inferDerivedDeliveryIntent(asset.MediaType, binding.Renderer, binding.Profile)
+	contract, _ := derivedContractForIntent(binding.intent)
+	binding.capability = contract.capability
+	binding.capabilitySchema = contract.capabilitySchema
+	binding.pipelineFingerprint = "broker-derived-pipeline-v1"
+	binding.outputProfile = contract.outputProfile
+	binding.sourceEntryFingerprint = asset.EntryFingerprint
+	binding.fingerprintStrength = asset.FingerprintStrength
+	binding.providerCapabilityRevision = asset.ProviderCapabilityRevision
+	binding.sourceSize = asset.Size
+	binding.sourceMediaType = asset.MediaType
+	binding.ordinal = contract.ordinal
 }
 
 func (fake *brokerDerivedResolverFake) Open(

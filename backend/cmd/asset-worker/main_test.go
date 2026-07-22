@@ -1,12 +1,38 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"xirang/backend/internal/backupasset/processing/capabilities"
+	"xirang/backend/internal/backupasset/processing/capabilityspec"
 )
+
+func TestRunAssetWorkerRuntimeClosureCommandIsExactAndIsolated(t *testing.T) {
+	sentinel := errors.New("writer failed")
+	calls := 0
+	writer := func() error {
+		calls++
+		return sentinel
+	}
+	if err := runAssetWorkerWithRuntimeClosureWriter(
+		context.Background(), []string{assetWorkerRuntimeClosureCommand}, writer,
+	); !errors.Is(err, sentinel) || calls != 1 {
+		t.Fatalf("runtime closure command err=%v calls=%d", err, calls)
+	}
+	if err := runAssetWorkerWithRuntimeClosureWriter(
+		context.Background(), []string{assetWorkerRuntimeClosureCommand, "extra"}, writer,
+	); !errors.Is(err, errInvalidAssetWorkerConfig) || calls != 1 {
+		t.Fatalf("mixed runtime closure command err=%v calls=%d", err, calls)
+	}
+}
 
 func TestParseAssetWorkerOptionsRequiresExactlyOneConfiguredTransport(t *testing.T) {
 	options, err := parseAssetWorkerOptions([]string{
@@ -40,10 +66,15 @@ func TestParseAssetWorkerOptionsRequiresExactlyOneConfiguredTransport(t *testing
 
 func TestLoadActiveBundleFingerprintAcceptsOnlyContainedImmutableTarget(t *testing.T) {
 	root := t.TempDir()
+	makeAssetWorkerTestTreeRemovable(t, root)
 	bundles := filepath.Join(root, "bundles")
-	fingerprint := strings.Repeat("a", 64)
+	model := []byte("model-v1")
+	receiptPayload, fingerprint := makeAssetWorkerBundleReceipt(t, map[string][]byte{"model.dat": model})
 	bundle := filepath.Join(bundles, fingerprint)
 	if err := os.MkdirAll(bundle, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "model.dat"), model, 0o444); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(bundle, 0o555); err != nil {
@@ -53,6 +84,10 @@ func TestLoadActiveBundleFingerprintAcceptsOnlyContainedImmutableTarget(t *testi
 	if err := os.Symlink(filepath.Join("bundles", fingerprint), active); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := loadActiveBundleFingerprint(root); err == nil {
+		t.Fatal("active bundle without a verified stored-tree receipt accepted")
+	}
+	writeAssetWorkerBundleReceipt(t, bundle, receiptPayload)
 	got, err := loadActiveBundleFingerprint(root)
 	if err != nil || got != fingerprint {
 		t.Fatalf("fingerprint=%q err=%v", got, err)
@@ -77,6 +112,134 @@ func TestLoadActiveBundleFingerprintAcceptsOnlyContainedImmutableTarget(t *testi
 	}
 }
 
+func TestLoadActiveBundleFingerprintRejectsReceiptAndTreeTampering(t *testing.T) {
+	root := t.TempDir()
+	makeAssetWorkerTestTreeRemovable(t, root)
+	bundles := filepath.Join(root, "bundles")
+	attestation := []byte(`{"schema_version":1,"attestations":[]}`)
+	receiptPayload, fingerprint := makeAssetWorkerBundleReceipt(t, map[string][]byte{"toolchain/attestations.v1.json": attestation})
+	bundle := filepath.Join(bundles, fingerprint)
+	if err := os.MkdirAll(filepath.Join(bundle, "toolchain"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	attestationPath := filepath.Join(bundle, "toolchain", "attestations.v1.json")
+	if err := os.WriteFile(attestationPath, attestation, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	writeAssetWorkerBundleReceipt(t, bundle, receiptPayload)
+	if err := os.Chmod(filepath.Join(bundle, "toolchain"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bundle, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("bundles", fingerprint), filepath.Join(root, "active")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := loadActiveBundleFingerprint(root); err != nil || got != fingerprint {
+		t.Fatalf("valid stored bundle fingerprint=%q err=%v", got, err)
+	}
+	if err := os.Chmod(attestationPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(attestationPath, []byte(`{"schema_version":1,"attestations":[{"platform":"linux/amd64"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(attestationPath, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadActiveBundleFingerprint(root); err == nil {
+		t.Fatal("tampered active bundle tree accepted")
+	}
+	receiptPath := filepath.Join(bundle, capabilities.StoredBundleReceiptPath)
+	receiptPayload, err := os.ReadFile(receiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := capabilities.DecodeStoredBundleReceipt(receiptPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt.Files[0].Size = int64(len(`{"schema_version":1,"attestations":[{"platform":"linux/amd64"}]}`))
+	receipt.Files[0].SHA256 = capabilities.SHA256Hex([]byte(`{"schema_version":1,"attestations":[{"platform":"linux/amd64"}]}`))
+	forgedReceipt, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bundle, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(receiptPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(receiptPath, forgedReceipt, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(receiptPath, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bundle, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadActiveBundleFingerprint(root); err == nil {
+		t.Fatal("forged receipt retained an unchanged active fingerprint")
+	}
+}
+
+func makeAssetWorkerBundleReceipt(t *testing.T, files map[string][]byte) ([]byte, string) {
+	t.Helper()
+	declarations := make([]capabilities.StoredBundleFile, 0, len(files))
+	for path, content := range files {
+		declarations = append(declarations, capabilities.StoredBundleFile{
+			Path: path, Mode: 0o444, Size: int64(len(content)), SHA256: capabilities.SHA256Hex(content),
+		})
+	}
+	sort.Slice(declarations, func(left, right int) bool { return declarations[left].Path < declarations[right].Path })
+	receipt := capabilities.StoredBundleReceipt{
+		SchemaVersion: 1, ManifestSchemaVersion: 1,
+		Capabilities: []capabilities.StoredBundleCapability{{
+			Capability: "image.ocr", Schema: "image.ocr.v1", Profiles: []string{"tesseract_text_v1"},
+			ToolRevision: "tool-v1", ModelRevision: "model-v1", DataRevision: "data-v1",
+		}},
+		Files: declarations, BundleSHA256: strings.Repeat("e", 64),
+	}
+	fingerprint, err := capabilities.StoredBundleFingerprint(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt.BundleFingerprint = fingerprint
+	payload, err := capabilities.EncodeStoredBundleReceipt(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload, fingerprint
+}
+
+func writeAssetWorkerBundleReceipt(t *testing.T, root string, payload []byte) {
+	t.Helper()
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, capabilities.StoredBundleReceiptPath), payload, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func makeAssetWorkerTestTreeRemovable(t *testing.T, root string) {
+	t.Helper()
+	t.Cleanup(func() {
+		_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err == nil {
+				_ = os.Chmod(path, 0o700)
+			}
+			return nil
+		})
+	})
+}
+
 func TestNewAssetWorkerInstanceIDIsOpaqueNonSecret(t *testing.T) {
 	first, err := newAssetWorkerInstanceID()
 	if err != nil {
@@ -98,6 +261,16 @@ func TestNewAssetWorkerInstanceIDIsOpaqueNonSecret(t *testing.T) {
 	}
 }
 
+func TestAssetWorkerBundleFingerprintsBindOptionalSecretCapability(t *testing.T) {
+	fingerprint := strings.Repeat("d", 64)
+	bundles := assetWorkerBundleFingerprints(fingerprint)
+	if len(bundles) != len(capabilityspec.WorkerProfiles()) ||
+		len(bundles[capabilityspec.CapabilitySecretClassify]) != 1 ||
+		bundles[capabilityspec.CapabilitySecretClassify][0] != fingerprint {
+		t.Fatalf("closed Worker bundle identities=%v", bundles)
+	}
+}
+
 func TestAssetWorkerMainBuildsVerifiedToolRunnerWithoutPrivilegedImports(t *testing.T) {
 	source, err := os.ReadFile("main.go")
 	if err != nil {
@@ -107,7 +280,9 @@ func TestAssetWorkerMainBuildsVerifiedToolRunnerWithoutPrivilegedImports(t *test
 	for _, required := range []string{
 		"processing.NewWorkerClient(",
 		"capabilities.NewRunner(",
+		"capabilities.PreflightProductionToolchain(",
 		"processing.NewProductionWorkerCapabilitySetWithOptions(",
+		"productionOptions.AvailableCapabilities =",
 		"productionOptions.BundleFingerprints =",
 		"processing.NewWorkerRunner(",
 		"signal.NotifyContext(",

@@ -157,7 +157,7 @@
 | `BACKUP_ASSETS_WORKER_UPDATER_ENABLED` | bool | `false` | 否 | 启用独立 updater UDS；默认关闭，变更需重启 |
 | `BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ENABLED` | bool | `false` | 否 | 启用 updater 受限在线模式；默认关闭，变更需重启；仓库 Compose profile 不提供在线网络 |
 | `BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ORIGINS` | string | 空 | online 模式必填 | 逗号分隔的 exact HTTPS origin allowlist；变更需重启，不能替代外部 allowlist proxy/firewall |
-| `BACKUP_ASSETS_DERIVED_STORE_ROOT` | string | `/var/lib/xirang-asset-runtime/derived` | 否 | Core 加密 Derived Store 根；变更需重启。Compose profile 建议设为 `/data/asset-worker-derived` 以使用现有持久卷 |
+| `BACKUP_ASSETS_DERIVED_STORE_ROOT` | string | `/var/lib/xirang-asset-runtime/derived` | 否 | Core 加密 Derived Store 根；变更需重启。Compose profile 在默认路径挂载专用 `asset-worker-derived-store` volume；`/data`、`/backup`、`/logs` 及其子路径会被安全校验拒绝 |
 | `BACKUP_ASSETS_DERIVED_STORE_CHUNK_BYTES` | int | `1048576` | 否 | Derived 认证加密分块大小，范围 `65536..8388608` 字节；变更需重启 |
 | `BACKUP_ASSETS_DERIVED_STORE_BLOB_MAX_BYTES` | int | `4294967296` | 否 | 单 Derived blob 上限，范围 `65536..17179869184` 字节 |
 | `BACKUP_ASSETS_DERIVED_STORE_GLOBAL_MAX_BYTES` | int | `107374182400` | 否 | Derived Store 全局配额，范围 `65536..1099511627776` 字节 |
@@ -261,6 +261,8 @@
 | `ASSET_WORKER_UPDATER_TRUST_FILE` | `./asset-worker-updater-trust.json` | updater-only Ed25519 trust 文档；文件必须由 UID/GID `10002:10002` 拥有、mode `0440` 且不是符号链接 |
 
 All-in-One 容器固定监听 `10761`，生产 Compose 固定映射 `10761:10761`。HTTPS/TLS 由外部反向代理负责，不通过项目环境变量配置。上述 `ASSET_WORKER_*` 变量只控制仓库内非 GA、本地 build 的可选 profile；不会改变官方 Core image selector，也不表示 Docker Hub/GitHub Release 发布 Worker。
+
+该 profile 的 socket 拓扑不是环境变量：`asset-worker-worker-runtime` 只读提供 parser UDS `/run/xirang/worker/asset-worker.sock`，`asset-worker-updater-runtime` 只读提供 updater UDS `/run/xirang/asset-worker-updater.sock`。Core 同时挂载两者，parser/updater 各自只挂载自己的 volume，且 parser 不加入 updater GID；任何环境变量都不能合并这两个 volume、把 peer socket 暴露给另一进程或放宽 `network_mode: none`。`asset-worker-derived-store` 仅由 Core 与 initializer 挂载，固定在默认 Derived root 并初始化为 `0700:10000:10000`；parser/updater 不可见。全局、本机、远程、updater online 与有限秘密分类默认仍为 `false`，后台回填默认暂停。
 
 ---
 

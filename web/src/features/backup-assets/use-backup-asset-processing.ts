@@ -52,6 +52,27 @@ type AssetScope = {
   client: BackupAssetProcessingClient | null;
 };
 
+type PreviewAction = {
+  scope: AssetScope;
+  revision: number;
+  controller: AbortController;
+};
+
+type PollSession = {
+  scope: AssetScope;
+  token: string;
+  ref: AssetRef;
+  product: BackupProcessingProduct;
+  deadlineAt: number;
+  attempts: number;
+  paused: boolean;
+  controller: AbortController | null;
+};
+
+const pollMaxAttempts = 30;
+const pollMaxDurationMs = 120_000;
+const pollTimeoutError = new Error("backup asset processing polling timed out");
+
 let defaultApiPromise: Promise<BackupAssetProcessingClient> | null = null;
 
 function loadDefaultApi(): Promise<BackupAssetProcessingClient> {
@@ -82,6 +103,11 @@ function boundedRetrySeconds(error: unknown): number | null {
     : null;
 }
 
+function canPollNow(): boolean {
+  if (typeof document !== "undefined" && document.hidden) return false;
+  return typeof navigator === "undefined" || navigator.onLine !== false;
+}
+
 export function useBackupAssetProcessing({
   token,
   ref,
@@ -91,8 +117,11 @@ export function useBackupAssetProcessing({
     createBackupAssetsProcessingState()
   );
   const revisionRef = useRef(0);
+  const actionRevisionRef = useRef(0);
   const scopeRef = useRef<AssetScope | null>(null);
+  const actionRef = useRef<PreviewAction | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollRef = useRef<PollSession | null>(null);
   const productsRef = useRef<BackupProcessingProduct[]>([]);
   const activeRef = useRef<BackupProcessingProduct | null>(null);
   const loadApiRef = useRef(loadApi);
@@ -109,8 +138,64 @@ export function useBackupAssetProcessing({
     }
   }, []);
 
+  const clearPollTimer = useCallback((timer: ReturnType<typeof setTimeout>) => {
+    if (timerRef.current !== timer) return;
+    clearTimeout(timer);
+    timerRef.current = null;
+  }, []);
+
+  const stopPoll = useCallback((scope?: AssetScope) => {
+    const session = pollRef.current;
+    if (scope && session?.scope !== scope) return;
+    clearPoll();
+    if (session) {
+      session.controller?.abort();
+      session.controller = null;
+    }
+    pollRef.current = null;
+  }, [clearPoll]);
+
+  const pausePoll = useCallback((scope: AssetScope) => {
+    const session = pollRef.current;
+    if (session?.scope !== scope) return;
+    session.paused = true;
+    clearPoll();
+    session.controller?.abort();
+    session.controller = null;
+  }, [clearPoll]);
+
   const isCurrent = useCallback((scope: AssetScope) =>
     scopeRef.current === scope && !scope.controller.signal.aborted, []);
+
+  const invalidateAction = useCallback((scope?: AssetScope) => {
+    const action = actionRef.current;
+    if (scope && action?.scope !== scope) return false;
+    if (!action) return false;
+    action.controller.abort();
+    actionRef.current = null;
+    return true;
+  }, []);
+
+  const beginAction = useCallback((scope: AssetScope): PreviewAction => {
+    invalidateAction();
+    const revision = actionRevisionRef.current + 1;
+    actionRevisionRef.current = revision;
+    const action = { scope, revision, controller: new AbortController() };
+    actionRef.current = action;
+    return action;
+  }, [invalidateAction]);
+
+  const isCurrentAction = useCallback((action: PreviewAction) =>
+    actionRef.current === action
+      && actionRef.current.revision === action.revision
+      && !action.controller.signal.aborted
+      && isCurrent(action.scope), [isCurrent]);
+
+  const finishAction = useCallback((action: PreviewAction) => {
+    if (actionRef.current === action && actionRef.current.revision === action.revision) {
+      actionRef.current = null;
+    }
+  }, []);
 
   const resolveProduct = useCallback((scope: AssetScope, product: BackupProcessingProduct) => {
     if (!isCurrent(scope)) return;
@@ -124,47 +209,133 @@ export function useBackupAssetProcessing({
     });
   }, [isCurrent]);
 
+  const failPoll = useCallback((scope: AssetScope, session: PollSession, error: Error) => {
+    if (!isCurrent(scope) || pollRef.current !== session) return;
+    stopPoll(scope);
+    productsRef.current = productsRef.current.filter(
+      (item) => item.jobId !== session.product.jobId || item.state !== "queued"
+    );
+    activeRef.current = null;
+    dispatch({
+      type: "resolved",
+      revision: scope.revision,
+      products: productsRef.current,
+      active: null,
+    });
+    dispatch({ type: "failed", revision: scope.revision, error });
+  }, [isCurrent, stopPoll]);
+
   const schedulePoll = useCallback((
     scope: AssetScope,
-    currentToken: string,
-    currentRef: AssetRef,
-    product: BackupProcessingProduct,
-    delaySeconds = product.pollAfterSeconds
+    session: PollSession,
+    delaySeconds = session.product.pollAfterSeconds
   ) => {
     clearPoll();
-    if (product.state !== "queued" || product.jobId === null || !isCurrent(scope)) return;
+    if (pollRef.current !== session || session.scope !== scope || !isCurrent(scope)) return;
+    if (session.product.state !== "queued" || session.product.jobId === null) {
+      stopPoll(scope);
+      return;
+    }
+    if (Date.now() >= session.deadlineAt || session.attempts >= pollMaxAttempts) {
+      failPoll(scope, session, pollTimeoutError);
+      return;
+    }
+    if (!canPollNow()) {
+      session.paused = true;
+      return;
+    }
 
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null;
+    session.paused = false;
+    const remainingMs = session.deadlineAt - Date.now();
+    const requestedDelayMs = Math.max(0, delaySeconds * 1_000);
+    const delayMs = Math.min(requestedDelayMs, remainingMs);
+    const runPoll = () => {
       void (async () => {
+        if (pollRef.current !== session || !isCurrent(scope)) return;
+        if (!canPollNow()) {
+          pausePoll(scope);
+          return;
+        }
+        if (Date.now() >= session.deadlineAt || session.attempts >= pollMaxAttempts) {
+          failPoll(scope, session, pollTimeoutError);
+          return;
+        }
+
+        const controller = new AbortController();
+        session.controller = controller;
+        session.attempts += 1;
+        const deadlineTimer = setTimeout(() => {
+          clearPollTimer(deadlineTimer);
+          controller.abort();
+          failPoll(scope, session, pollTimeoutError);
+        }, session.deadlineAt - Date.now());
+        timerRef.current = deadlineTimer;
         try {
           const client = scope.client ?? await loadClient();
           scope.client = client;
           const next = await client.pollPreview(
-            currentToken,
-            currentRef,
-            product.jobId ?? "",
-            scope.controller.signal
+            session.token,
+            session.ref,
+            session.product.jobId ?? "",
+            controller.signal
           );
-          if (!isCurrent(scope)) return;
+          if (controller.signal.aborted || pollRef.current !== session || !isCurrent(scope)) return;
+          clearPollTimer(deadlineTimer);
+          session.controller = null;
+          session.product = next;
           resolveProduct(scope, next);
-          schedulePoll(scope, currentToken, currentRef, next);
+          schedulePoll(scope, session);
         } catch (error) {
-          if (!isCurrent(scope)) return;
+          clearPollTimer(deadlineTimer);
+          if (session.controller === controller) session.controller = null;
+          if (controller.signal.aborted || pollRef.current !== session || !isCurrent(scope)) return;
           const retrySeconds = boundedRetrySeconds(error);
           if (retrySeconds !== null) {
-            schedulePoll(scope, currentToken, currentRef, product, retrySeconds);
+            schedulePoll(scope, session, retrySeconds);
             return;
           }
-          dispatch({ type: "failed", revision: scope.revision, error: asError(error) });
+          failPoll(scope, session, asError(error));
         }
       })();
-    }, delaySeconds * 1_000);
-  }, [clearPoll, isCurrent, loadClient, resolveProduct]);
+    };
+
+    if (delayMs === 0) {
+      runPoll();
+      return;
+    }
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      runPoll();
+    }, delayMs);
+  }, [clearPoll, clearPollTimer, failPoll, isCurrent, loadClient, pausePoll, resolveProduct, stopPoll]);
+
+  const startPoll = useCallback((
+    scope: AssetScope,
+    currentToken: string,
+    currentRef: AssetRef,
+    product: BackupProcessingProduct
+  ) => {
+    stopPoll();
+    if (product.state !== "queued" || product.jobId === null || !isCurrent(scope)) return;
+    const session: PollSession = {
+      scope,
+      token: currentToken,
+      ref: currentRef,
+      product,
+      deadlineAt: Date.now() + pollMaxDurationMs,
+      attempts: 0,
+      paused: false,
+      controller: null,
+    };
+    pollRef.current = session;
+    schedulePoll(scope, session);
+  }, [isCurrent, schedulePoll, stopPoll]);
 
   useEffect(() => {
-    clearPoll();
-    scopeRef.current?.controller.abort();
+    const previousScope = scopeRef.current;
+    invalidateAction(previousScope ?? undefined);
+    stopPoll(previousScope ?? undefined);
+    previousScope?.controller.abort();
     const revision = revisionRef.current + 1;
     revisionRef.current = revision;
     productsRef.current = [];
@@ -178,16 +349,36 @@ export function useBackupAssetProcessing({
 
     const scope: AssetScope = { revision, controller: new AbortController(), client: null };
     const currentRef: AssetRef = { recoveryPointId, entryId };
+    const initialActionRevision = actionRevisionRef.current;
     scopeRef.current = scope;
+    const handleEnvironmentChange = () => {
+      const session = pollRef.current;
+      if (session?.scope !== scope || !isCurrent(scope)) return;
+      if (!canPollNow()) {
+        pausePoll(scope);
+        return;
+      }
+      if (session.paused && session.controller === null && timerRef.current === null) {
+        schedulePoll(scope, session, 0);
+      }
+    };
+    document.addEventListener("visibilitychange", handleEnvironmentChange);
+    window.addEventListener("online", handleEnvironmentChange);
+    window.addEventListener("offline", handleEnvironmentChange);
     dispatch({ type: "loading", revision });
     void (async () => {
       try {
         const client = await loadClient();
         scope.client = client;
         const initial = await client.getState(token, currentRef, scope.controller.signal);
-        if (!isCurrent(scope)) return;
+        if (!isCurrent(scope) || actionRevisionRef.current !== initialActionRevision) return;
         productsRef.current = [...initial.representations];
-        dispatch({ type: "resolved", revision, products: productsRef.current, active: null });
+        const queued = productsRef.current.find(
+          (product) => product.state === "queued" && product.jobId !== null
+        ) ?? null;
+        activeRef.current = queued;
+        dispatch({ type: "resolved", revision, products: productsRef.current, active: queued });
+        if (queued) startPoll(scope, token, currentRef, queued);
       } catch (error) {
         if (!isCurrent(scope)) return;
         dispatch({ type: "failed", revision, error: asError(error) });
@@ -195,11 +386,15 @@ export function useBackupAssetProcessing({
     })();
 
     return () => {
+      document.removeEventListener("visibilitychange", handleEnvironmentChange);
+      window.removeEventListener("online", handleEnvironmentChange);
+      window.removeEventListener("offline", handleEnvironmentChange);
+      invalidateAction(scope);
+      stopPoll(scope);
       if (scopeRef.current === scope) scopeRef.current = null;
-      clearPoll();
       scope.controller.abort();
     };
-  }, [clearPoll, entryId, isCurrent, loadClient, recoveryPointId, token]);
+  }, [entryId, invalidateAction, isCurrent, loadClient, pausePoll, recoveryPointId, schedulePoll, startPoll, stopPoll, token]);
 
   const request = useCallback(async (
     representation: BackupProcessingRepresentation,
@@ -207,37 +402,60 @@ export function useBackupAssetProcessing({
   ) => {
     const scope = scopeRef.current;
     if (!scope || !token) return;
-    clearPoll();
+    const action = beginAction(scope);
+    stopPoll(scope);
     dispatch({ type: "loading", revision: scope.revision });
     try {
       const client = scope.client ?? await loadClient();
+      if (!isCurrentAction(action)) return;
       scope.client = client;
       const product = await client.createPreview(
         token,
         ref,
         representation,
         profile,
-        scope.controller.signal
+        action.controller.signal
       );
-      if (!isCurrent(scope)) return;
+      if (!isCurrentAction(action)) return;
       resolveProduct(scope, product);
-      schedulePoll(scope, token, ref, product);
+      startPoll(scope, token, ref, product);
     } catch (error) {
-      if (!isCurrent(scope)) return;
+      if (!isCurrentAction(action)) return;
       dispatch({ type: "failed", revision: scope.revision, error: asError(error) });
+    } finally {
+      finishAction(action);
     }
-  }, [clearPoll, isCurrent, loadClient, ref, resolveProduct, schedulePoll, token]);
+  }, [beginAction, finishAction, isCurrentAction, loadClient, ref, resolveProduct, startPoll, stopPoll, token]);
 
   const cancel = useCallback(async () => {
     const scope = scopeRef.current;
-    const active = activeRef.current;
-    if (!scope || !token || active?.jobId === null || active?.jobId === undefined) return;
-    clearPoll();
+    if (!scope || !token) return;
+    const action = beginAction(scope);
+    const active = (activeRef.current?.state === "queued" ? activeRef.current : null) ?? productsRef.current.find(
+      (product) => product.state === "queued" && product.jobId !== null
+    ) ?? null;
+    stopPoll(scope);
+    if (active?.jobId === null || active?.jobId === undefined) {
+      if (isCurrentAction(action)) {
+        dispatch({
+          type: "resolved",
+          revision: scope.revision,
+          products: productsRef.current,
+          active: activeRef.current,
+        });
+      }
+      finishAction(action);
+      return;
+    }
     try {
       const client = scope.client ?? await loadClient();
+      if (!isCurrentAction(action)) return;
       scope.client = client;
-      await client.cancelPreview(token, ref, active.jobId, scope.controller.signal);
-      if (!isCurrent(scope)) return;
+      await client.cancelPreview(token, ref, active.jobId, action.controller.signal);
+      if (!isCurrentAction(action)) return;
+      productsRef.current = productsRef.current.filter(
+        (product) => product.jobId !== active.jobId || product.state !== "queued"
+      );
       activeRef.current = null;
       dispatch({
         type: "resolved",
@@ -246,10 +464,12 @@ export function useBackupAssetProcessing({
         active: null,
       });
     } catch (error) {
-      if (!isCurrent(scope)) return;
+      if (!isCurrentAction(action)) return;
       dispatch({ type: "failed", revision: scope.revision, error: asError(error) });
+    } finally {
+      finishAction(action);
     }
-  }, [clearPoll, isCurrent, loadClient, ref, token]);
+  }, [beginAction, finishAction, isCurrentAction, loadClient, ref, stopPoll, token]);
 
   return { state, request, cancel };
 }

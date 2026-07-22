@@ -7,6 +7,8 @@ import { InlineAlert } from "@/components/ui/inline-alert";
 import { LoadingState } from "@/components/ui/loading-state";
 import type { BackupAsset, BackupContentTicket } from "@/types/domain";
 
+import { selectProcessingRepresentation } from "./backup-assets-processing-state";
+import type { ProcessingPreviewSource } from "./backup-asset-processing-panel";
 import type { BackupAssetsValueResource } from "./use-backup-assets-state";
 
 const RENEW_BEFORE_MS = 30_000;
@@ -147,13 +149,25 @@ export function AssetPreview({
             asset={asset}
             canNativePreview={canPreview}
             canDownload={canDownload}
-            onOpenPreview={() => onLoadPreview(asset)}
+            onOpenPreview={(source) => onLoadPreview(assetForProcessingPreview(asset, source))}
             onPrepareDownload={() => onPrepareDownload(asset)}
           />
         </Suspense>
       ) : null}
     </div>
   );
+}
+
+function assetForProcessingPreview(asset: BackupAsset, source: ProcessingPreviewSource): BackupAsset {
+  if (source === "native") return asset;
+  switch (selectProcessingRepresentation(asset)) {
+    case "document_pages":
+      return { ...asset, mimeType: "image/png" };
+    case "archive_index":
+      return { ...asset, mimeType: "text/plain" };
+    default:
+      return asset;
+  }
 }
 
 function PreviewBody({

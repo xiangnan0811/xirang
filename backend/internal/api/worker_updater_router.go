@@ -50,7 +50,7 @@ func updaterIdentityFromContext(ctx context.Context) (updater.UpdaterTransportId
 		return updater.UpdaterTransportIdentity{}, false
 	}
 	identity, ok := ctx.Value(updaterTransportIdentityContextKey{}).(updater.UpdaterTransportIdentity)
-	if !ok || len(identity.Fingerprint) != 64 || identity.PeerPID <= 0 {
+	if !ok || len(identity.Fingerprint) != 64 || identity.PeerPID < 0 {
 		return updater.UpdaterTransportIdentity{}, false
 	}
 	return identity, true

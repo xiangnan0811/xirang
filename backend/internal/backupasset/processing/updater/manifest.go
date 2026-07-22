@@ -3,6 +3,7 @@ package updater
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -10,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"path"
 	"regexp"
@@ -203,6 +205,14 @@ func SignManifest(manifest *Manifest, privateKey ed25519.PrivateKey) error {
 }
 
 func VerifyPackage(manifestJSON, bundle []byte, trust TrustStore, now time.Time) (VerifiedBundle, error) {
+	verified, err := VerifyManifest(manifestJSON, trust, now)
+	if err != nil {
+		return VerifiedBundle{}, err
+	}
+	return verifyPackageBundle(verified, bundle)
+}
+
+func VerifyManifest(manifestJSON []byte, trust TrustStore, now time.Time) (VerifiedBundle, error) {
 	if len(manifestJSON) == 0 || len(manifestJSON) > 1<<20 || !utf8.Valid(manifestJSON) || !json.Valid(manifestJSON) ||
 		rejectDuplicateJSONMembers(manifestJSON) != nil {
 		return VerifiedBundle{}, ErrPolicyRejected
@@ -233,21 +243,34 @@ func VerifyPackage(manifestJSON, bundle []byte, trust TrustStore, now time.Time)
 	if err != nil || !ed25519.Verify(trusted.PublicKey, signed, signature) {
 		return VerifiedBundle{}, ErrInvalidSignature
 	}
-	if int64(len(bundle)) > maximumBundleBytes || SHA256Hex(bundle) != manifest.BundleSHA256 {
-		return VerifiedBundle{}, ErrPolicyRejected
-	}
-	files, err := verifyCanonicalTar(bundle, manifest.Files)
-	if err != nil {
-		return VerifiedBundle{}, err
-	}
 	fingerprint, err := bundleFingerprint(manifest)
 	if err != nil {
 		return VerifiedBundle{}, ErrPolicyRejected
 	}
 	return VerifiedBundle{
 		Manifest: manifest, ManifestDigest: SHA256Hex(manifestJSON),
-		SigningKeyFingerprint: SHA256Hex(trusted.PublicKey), BundleFingerprint: fingerprint, Files: files,
+		SigningKeyFingerprint: SHA256Hex(trusted.PublicKey), BundleFingerprint: fingerprint,
 	}, nil
+}
+
+func verifyPackageBundle(verified VerifiedBundle, bundle []byte) (VerifiedBundle, error) {
+	files := make([]BundleFilePayload, 0, len(verified.Manifest.Files))
+	err := verifyCanonicalTarStream(
+		context.Background(), bytes.NewReader(bundle), verified.Manifest.Files, verified.Manifest.BundleSHA256,
+		func(_ context.Context, declaration ManifestFile, content io.Reader) error {
+			payload, readErr := io.ReadAll(content)
+			if readErr != nil {
+				return readErr
+			}
+			files = append(files, BundleFilePayload{Path: declaration.Path, Mode: declaration.Mode, Content: payload})
+			return nil
+		},
+	)
+	if err != nil {
+		return VerifiedBundle{}, err
+	}
+	verified.Files = files
+	return verified, nil
 }
 
 func (store TrustStore) lookup(id string, now time.Time) (TrustedKey, bool) {
@@ -349,29 +372,163 @@ func bundleFingerprint(value Manifest) (string, error) {
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
-func verifyCanonicalTar(bundle []byte, expected []ManifestFile) ([]BundleFilePayload, error) {
-	reader := tar.NewReader(bytes.NewReader(bundle))
-	files := make([]BundleFilePayload, 0, len(expected))
+type canonicalTarMemberConsumer func(context.Context, ManifestFile, io.Reader) error
+
+func verifyCanonicalTarStream(
+	ctx context.Context,
+	source io.Reader,
+	expected []ManifestFile,
+	expectedBundleSHA256 string,
+	consume canonicalTarMemberConsumer,
+) error {
+	if ctx == nil || source == nil || len(expected) == 0 || len(expected) > maximumBundleFiles ||
+		!lowerHex(expectedBundleSHA256, 64) {
+		return ErrPolicyRejected
+	}
+	reader := &canonicalBundleReader{ctx: ctx, source: source, digest: sha256.New()}
 	for _, declaration := range expected {
-		header, err := reader.Next()
-		if err != nil || header.Name != declaration.Path || header.Typeflag != tar.TypeReg || header.Mode != declaration.Mode ||
-			header.Size != declaration.Size {
-			return nil, ErrPolicyRejected
+		var rawHeader [tarBlockSize]byte
+		if err := readCanonicalTarBytes(reader, rawHeader[:]); err != nil {
+			return err
 		}
-		content, err := io.ReadAll(io.LimitReader(reader, declaration.Size+1))
-		if err != nil || int64(len(content)) != declaration.Size || SHA256Hex(content) != declaration.SHA256 {
-			return nil, ErrPolicyRejected
+		expectedHeader, err := canonicalUSTARHeader(declaration)
+		if err != nil || !bytes.Equal(rawHeader[:], expectedHeader[:]) {
+			return ErrPolicyRejected
 		}
-		files = append(files, BundleFilePayload{Path: declaration.Path, Mode: declaration.Mode, Content: content})
+		member := &canonicalTarMemberReader{reader: reader, remaining: declaration.Size, digest: sha256.New()}
+		if consume == nil {
+			if err := discardCanonicalTarMember(ctx, member); err != nil {
+				return err
+			}
+		} else if err := consume(ctx, declaration, member); err != nil {
+			return err
+		}
+		if member.remaining != 0 || hex.EncodeToString(member.digest.Sum(nil)) != declaration.SHA256 {
+			return ErrPolicyRejected
+		}
+		padding := (tarBlockSize - declaration.Size%tarBlockSize) % tarBlockSize
+		if padding > 0 {
+			var rawPadding [tarBlockSize]byte
+			if err := readCanonicalTarBytes(reader, rawPadding[:padding]); err != nil || !allZero(rawPadding[:padding]) {
+				return ErrPolicyRejected
+			}
+		}
 	}
-	if _, err := reader.Next(); err != io.EOF {
-		return nil, ErrPolicyRejected
+	var terminal [2 * tarBlockSize]byte
+	if err := readCanonicalTarBytes(reader, terminal[:]); err != nil || !allZero(terminal[:]) {
+		return ErrPolicyRejected
 	}
-	canonical, _, err := BuildCanonicalTar(files)
-	if err != nil || !bytes.Equal(canonical, bundle) {
-		return nil, ErrPolicyRejected
+	var trailing [1]byte
+	count, err := reader.Read(trailing[:])
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
-	return files, nil
+	if count != 0 || !errors.Is(err, io.EOF) || reader.count > maximumBundleBytes ||
+		hex.EncodeToString(reader.digest.Sum(nil)) != expectedBundleSHA256 {
+		return ErrPolicyRejected
+	}
+	return nil
+}
+
+const tarBlockSize = int64(512)
+
+type canonicalBundleReader struct {
+	ctx    context.Context
+	source io.Reader
+	digest hash.Hash
+	count  int64
+}
+
+func (reader *canonicalBundleReader) Read(payload []byte) (int, error) {
+	if err := reader.ctx.Err(); err != nil {
+		return 0, err
+	}
+	count, err := reader.source.Read(payload)
+	if count > 0 {
+		reader.count += int64(count)
+		_, _ = reader.digest.Write(payload[:count])
+		if reader.count > maximumBundleBytes {
+			return count, ErrPolicyRejected
+		}
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		if ctxErr := reader.ctx.Err(); ctxErr != nil {
+			return count, ctxErr
+		}
+		return count, ErrPolicyRejected
+	}
+	return count, err
+}
+
+type canonicalTarMemberReader struct {
+	reader    io.Reader
+	remaining int64
+	digest    hash.Hash
+}
+
+func (reader *canonicalTarMemberReader) Read(payload []byte) (int, error) {
+	if reader.remaining == 0 {
+		return 0, io.EOF
+	}
+	if int64(len(payload)) > reader.remaining {
+		payload = payload[:reader.remaining]
+	}
+	count, err := reader.reader.Read(payload)
+	if count > 0 {
+		reader.remaining -= int64(count)
+		_, _ = reader.digest.Write(payload[:count])
+	}
+	return count, err
+}
+
+func canonicalUSTARHeader(declaration ManifestFile) ([tarBlockSize]byte, error) {
+	var result [tarBlockSize]byte
+	var buffer bytes.Buffer
+	writer := tar.NewWriter(&buffer)
+	err := writer.WriteHeader(&tar.Header{
+		Name: declaration.Path, Mode: declaration.Mode, Size: declaration.Size, Typeflag: tar.TypeReg,
+		ModTime: time.Unix(0, 0).UTC(), Format: tar.FormatUSTAR,
+	})
+	if err != nil || buffer.Len() != len(result) {
+		return result, ErrPolicyRejected
+	}
+	copy(result[:], buffer.Bytes())
+	return result, nil
+}
+
+func readCanonicalTarBytes(reader io.Reader, payload []byte) error {
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return ErrPolicyRejected
+	}
+	return nil
+}
+
+func discardCanonicalTarMember(ctx context.Context, reader io.Reader) error {
+	buffer := make([]byte, 64<<10)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		count, err := reader.Read(buffer)
+		if count == 0 && errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return ErrPolicyRejected
+		}
+	}
+}
+
+func allZero(payload []byte) bool {
+	for _, value := range payload {
+		if value != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func validBundlePath(value string) bool {

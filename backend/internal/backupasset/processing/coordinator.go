@@ -147,6 +147,24 @@ func NewCoordinator(db *gorm.DB, leaseService *backupasset.LeaseService, now fun
 }
 
 func (coordinator *Coordinator) RequestWork(ctx context.Context, request WorkRequest) (WorkResult, error) {
+	var result WorkResult
+	err := coordinator.retryConflicts(ctx, func() error {
+		return coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var requestErr error
+			result, requestErr = coordinator.requestWorkTx(ctx, tx, request)
+			return requestErr
+		})
+	})
+	if err != nil {
+		return WorkResult{}, err
+	}
+	return result, nil
+}
+
+func (coordinator *Coordinator) requestWorkTx(ctx context.Context, tx *gorm.DB, request WorkRequest) (WorkResult, error) {
+	if tx == nil {
+		return WorkResult{}, ErrInvalidContract
+	}
 	if err := ValidateWorkDescriptorV1(request.Descriptor); err != nil {
 		return WorkResult{}, err
 	}
@@ -161,36 +179,25 @@ func (coordinator *Coordinator) RequestWork(ctx context.Context, request WorkReq
 	if err != nil {
 		return WorkResult{}, fmt.Errorf("marshal work descriptor: %w", err)
 	}
-	compatible, err := coordinator.hasCompatibleWorker(ctx, request.Descriptor)
+	compatible, err := coordinator.hasCompatibleWorkerTx(ctx, tx, request.Descriptor)
 	if err != nil {
 		return WorkResult{}, err
 	}
 	if !compatible {
 		return WorkResult{}, ErrNotDeployed
 	}
-
-	var result WorkResult
-	err = coordinator.retryConflicts(ctx, func() error {
-		return coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			job, created, err := coordinator.findOrCreateJobTx(ctx, tx, request, workKey, canonical)
-			if err != nil {
-				return err
-			}
-			interestID, err := coordinator.upsertInterestTx(ctx, tx, job.ID, request.Interest)
-			if err != nil {
-				return err
-			}
-			if err := coordinator.recomputePriorityTx(ctx, tx, job.ID); err != nil {
-				return err
-			}
-			result = WorkResult{JobID: job.ID, InterestID: interestID, WorkKey: workKey, Created: created}
-			return nil
-		})
-	})
+	job, created, err := coordinator.findOrCreateJobTx(ctx, tx, request, workKey, canonical)
 	if err != nil {
 		return WorkResult{}, err
 	}
-	return result, nil
+	interestID, err := coordinator.upsertInterestTx(ctx, tx, job.ID, request.Interest)
+	if err != nil {
+		return WorkResult{}, err
+	}
+	if err := coordinator.recomputePriorityTx(ctx, tx, job.ID); err != nil {
+		return WorkResult{}, err
+	}
+	return WorkResult{JobID: job.ID, InterestID: interestID, WorkKey: workKey, Created: created}, nil
 }
 
 func (coordinator *Coordinator) RemoveInterest(ctx context.Context, jobID string, ownerKind InterestOwnerKind, ownerKey string, reason InterestRemovedReason) error {
@@ -715,9 +722,12 @@ func (coordinator *Coordinator) recomputePriorityTx(ctx context.Context, tx *gor
 	return nil
 }
 
-func (coordinator *Coordinator) hasCompatibleWorker(ctx context.Context, descriptor WorkDescriptorV1) (bool, error) {
+func (coordinator *Coordinator) hasCompatibleWorkerTx(ctx context.Context, tx *gorm.DB, descriptor WorkDescriptorV1) (bool, error) {
+	if tx == nil {
+		return false, ErrInvalidContract
+	}
 	var count int64
-	err := coordinator.db.WithContext(ctx).Table("backup_asset_worker_identities AS workers").
+	err := tx.WithContext(ctx).Table("backup_asset_worker_identities AS workers").
 		Joins("JOIN backup_asset_worker_capabilities AS capabilities ON capabilities.worker_id = workers.id").
 		Where(`workers.trust_state = ? AND workers.health_state = ? AND capabilities.health_state = ?
 			AND capabilities.capability = ? AND capabilities.capability_schema = ?

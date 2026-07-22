@@ -20,6 +20,8 @@
 
 增强处理复用同一 runtime、Child 10 持久队列/Input-Sink grant、Content Broker 与 Derived Store。全局 feature、本机/远程 Worker transport、独立 updater 和可选秘密分类均默认关闭；生产 capability 只接受编译期闭合的 capability/profile/limit，不接受调用方 executable、argv、路径、URL 或工具配置。公开响应只返回 exact AssetRef、用户作用域的 processing-interest handle、闭合状态/原因、覆盖和 fallback，不返回共享 coordinator job、attempt/fence/grant/Worker/blob 身份、Provider locator、bundle 路径、凭据或原始工具输出。无 Worker 或无匹配 capability 时返回 `not_deployed`/`unsupported`，不会把 Catalog、原生预览、下载或 recovery 变成失败。
 
+非 GA 的本地 `asset-worker` Compose profile 使用两个独立 socket volume：Core 同时挂载 `asset-worker-updater-runtime` 与嵌套的 `asset-worker-worker-runtime`，parser 只读挂载后者且不加入 updater GID，updater 只读挂载前者；双方都看不到对方的 socket 或 secret。Worker 没有稳定公共镜像，也不会由本功能发布到 Docker Hub/GitHub Release；普通 Core-only Compose 与 `10761` 端口不变。
+
 ## 快速运行
 
 ```bash
@@ -165,7 +167,7 @@ ADMIN_INITIAL_PASSWORD='LocalDev#2026' APP_ENV=development \
 | POST | /admin/backup-asset-processing/updater/offline-candidates/scan | 🔒 请求扫描固定 inbox；请求体必须为空 |
 | POST | /admin/backup-asset-processing/updater/offline-imports | 🔒 使用 `candidate_id` 与 expected fingerprint 确认原子激活 |
 
-Updater receipt 只在独立 Unix socket `/run/xirang/asset-worker-updater.sock` 上提供 `/internal/v1/asset-worker-updater/*` 私有协议，并在解码请求前校验固定 socket 权限和 peer credential。它不注册到公开 `/api/v1`、Nginx 或 parser Worker socket。
+Updater receipt 只在独立 Unix socket `/run/xirang/asset-worker-updater.sock` 上提供 `/internal/v1/asset-worker-updater/*` 私有协议，并在解码请求前校验固定 socket 权限和 peer credential。Parser socket 位于独立的 `/run/xirang/worker/asset-worker.sock`；两个 socket 分属不同 named volume，互不挂载。Updater 协议不注册到公开 `/api/v1`、Nginx 或 parser Worker socket。
 
 ### 任务与执行
 

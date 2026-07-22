@@ -91,11 +91,15 @@ Web SSH 终端在打开会话前需要同时满足：有效的 admin 主认证�
 
 备份资产 Worker 当前是默认关闭、非 GA 的可选本地 profile，没有稳定公共 Worker 镜像或 Docker Hub/GitHub Release 发布合同。官方 All-in-One Core 和公开端口 `10761` 不变。未部署 Worker 时，Catalog、原生预览、下载和 recovery 继续可用。
 
-Parser Worker 使用固定 non-root UID/GID `10000:10000`，read-only rootfs、drop-all capabilities、`no-new-privileges`、reviewed seccomp、PID/CPU/memory 上限和 `noexec,nosuid,nodev` job tmpfs。仓库 Compose 为 parser Worker 设置 `network_mode: none`，不配置 DNS；它只连接 Core 的受保护 Unix socket，并只读挂载 active bundle。Worker 不挂载 `/data`、`/backup`、`/logs`、Docker socket、updater inbox/credential 或任何 Provider 源路径。
+Parser Worker 使用固定 non-root UID/GID `10000:10000`，read-only rootfs、drop-all capabilities、`no-new-privileges`、reviewed seccomp、PID/CPU/memory 上限和 `noexec,nosuid,nodev` job tmpfs。仓库 Compose 把 `memswap_limit` 固定为与 `mem_limit` 相同，禁止 parser/updater 容器使用 swap；运维侧仍应关闭宿主 swap，或只使用经过审计的全盘加密 swap，避免其他运行方式让敏感 tmpfs 页面落到明文交换空间。仓库 Compose 为 parser Worker 设置 `network_mode: none`，不配置 DNS；它只读挂载 `asset-worker-worker-runtime` 到 `/run/xirang/worker`，连接 mode `0600`、owner `10000:10000` 的 Core UDS，并只读挂载 active bundle。Worker 不加入 updater GID，也不挂载 `asset-worker-updater-runtime`、`/data`、`/backup`、`/logs`、Docker socket、updater inbox/credential 或任何 Provider 源路径。
 
 所有 parser/tool 调用来自服务端闭合 capability/profile：不经过 shell，不接受调用方 executable、argv、环境变量、codec、字体、模型、路径、URL 或工具配置。输入只来自一次性 attempt-bound grant，输出在 Core 再次检查 MIME、数量、大小、digest、coverage 和安全策略后才能发布。取消、超时或 fence 丢失会终止整个进程组并清理私有 workspace；缺少可验证 tmpfs/Landlock/seccomp 合同时 capability 不会被 advertised。
 
-Updater 与 parser 使用不同进程、UID/GID `10002:10002`、socket 和可写 bundle volume。Core 在解码 receipt 前校验 `/run/xirang/asset-worker-updater.sock` 的 owner/mode 与 Linux peer credential；parser Worker 不挂载该 socket。只有 updater 可写 content-addressed bundle store，parser 只读 active bundle。
+Updater 与 parser 使用不同进程、UID/GID `10002:10002`、PID namespace、socket 和可写 bundle volume。Updater 只读挂载独立的 `asset-worker-updater-runtime` 到 `/run/xirang`，不挂载 `asset-worker-worker-runtime`，因此不能观察 parser socket；parser 的隔离方向与之对称。Core 使用 setgid mode `2770`、owner/group `10000:10002` 的 updater runtime 创建 mode `0660`、owner/group `10000:10002` 的 `/run/xirang/asset-worker-updater.sock`，并在解码 receipt 前校验 socket 与 Linux peer credential。跨 PID namespace 时 `SO_PEERCRED` 的 peer PID 可以是 `0`；PID 只作为诊断元数据，不是授权主体，认证仍由受保护 UDS、精确 UID/GID 与 socket owner/mode 共同完成。
+
+Content-addressed bundle volume 是唯一的共享数据 mount：根目录为 updater owner、Worker reader group `10002:10000` 与 setgid mode `2750`。Updater mount 可写，parser mount 强制只读，因此 parser 可验证 active bundle 但不能修改 store。Inbox 与 Ed25519 trust secret 仍只挂载到 updater。Socket volumes、bundle volume 与 secret mounts 不能互相替代或合并。
+
+Core 加密 Derived Store 使用单独的 `asset-worker-derived-store` named volume，由 initializer 固定为 `0700:10000:10000` 并挂载到 `/var/lib/xirang-asset-runtime/derived`。只有 Core 与 initializer 能看到该 volume；parser/updater 不挂载它，且 private-runtime guard 会拒绝把 Derived root 放到 `/data`、`/backup`、`/logs` 或已知 Provider 源路径下。
 
 默认更新路径是 signed offline import：运维人员把候选目录放入固定 updater-only inbox，目录要求 `10002:10002`、mode `0555`；Ed25519 trust 文件要求 `10002:10002`、mode `0440`。Updater no-follow 扫描并验证 canonical manifest、Ed25519 signature、精确 tar/file SHA-256、大小/时间/路径/类型限制，fsync content-addressed store 后通过 journal 与原子 pointer rename 激活。浏览器和 Core HTTP API 不接收 bundle bytes、multipart、URL、服务器路径、inbox 文件名或原始 manifest；Admin API 只使用脱敏 candidate ID 和 expected fingerprint 的小型 JSON 控制请求。
 

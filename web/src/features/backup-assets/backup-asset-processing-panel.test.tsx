@@ -124,7 +124,17 @@ describe("BackupAssetProcessingPanel", () => {
     expect(screen.queryByText(/No finding|未发现/)).not.toBeInTheDocument();
     expect(await runAxe(container)).toHaveNoViolations();
     await user.click(screen.getByRole("button", { name: /Open enhanced preview|打开增强预览/ }));
-    expect(onOpenPreview).toHaveBeenCalledTimes(1);
+    expect(onOpenPreview).toHaveBeenCalledWith("derived");
+  });
+
+  it("keeps the native fallback distinct from the derived preview", async () => {
+    const user = userEvent.setup();
+    setHookState(product({ state: "derived", reason: null, fallbackActions: ["native_preview"] }));
+    const onOpenPreview = vi.fn();
+    renderPanel({ onOpenPreview });
+
+    await user.click(screen.getByRole("button", { name: /Native preview|原生预览/ }));
+    expect(onOpenPreview).toHaveBeenCalledWith("native");
   });
 
   it("renders a safe generic error without exposing raw request detail", () => {

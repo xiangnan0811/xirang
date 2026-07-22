@@ -19,6 +19,17 @@ cleanup() {
   if [[ "$STARTED" == "1" ]]; then
     IMAGE_TAG="$IMAGE_TAG" "$DOCKER" compose -p "$PROJECT" -f "$TMP_DIR/docker-compose.yml" \
       down --volumes --remove-orphans >/dev/null 2>&1 || true
+    "$DOCKER" run --rm \
+      --network none \
+      --user 0:0 \
+      --read-only \
+      --cap-drop ALL \
+      --cap-add DAC_OVERRIDE \
+      --security-opt no-new-privileges=true \
+      --entrypoint /bin/sh \
+      -v "$TMP_DIR:/smoke" \
+      "linnea7171/xirang:$IMAGE_TAG" -eu -c 'rm -rf /smoke/* /smoke/.[!.]* /smoke/..?*' \
+      >/dev/null 2>&1 || true
   fi
   rm -rf -- "$TMP_DIR"
 }
@@ -46,15 +57,16 @@ APP_ENV=production
 JWT_SECRET=core-smoke-jwt-secret-at-least-32-bytes
 DATA_ENCRYPTION_KEY=core-smoke-encryption-key
 METRICS_TOKEN=core-smoke-metrics-token
+ADMIN_INITIAL_PASSWORD=CoreSmokeAdmin1!
 BACKUP_ASSETS_ENABLED=false
 BACKUP_ASSETS_WORKER_LOCAL_ENABLED=false
 BACKUP_ASSETS_WORKER_UPDATER_ENABLED=false
 ENV
 mkdir -p "$TMP_DIR/data" "$TMP_DIR/backups" "$TMP_DIR/logs"
 
+STARTED=1
 IMAGE_TAG="$IMAGE_TAG" "$DOCKER" compose -p "$PROJECT" -f "$TMP_DIR/docker-compose.yml" \
   up -d --no-build xirang
-STARTED=1
 
 container_id=$(IMAGE_TAG="$IMAGE_TAG" "$DOCKER" compose -p "$PROJECT" -f "$TMP_DIR/docker-compose.yml" ps -q xirang)
 if [[ -z "$container_id" ]]; then
@@ -81,6 +93,10 @@ running=$(IMAGE_TAG="$IMAGE_TAG" "$DOCKER" compose -p "$PROJECT" -f "$TMP_DIR/do
   ps --services --status running)
 if [[ "$running" != "xirang" ]]; then
   fail "core-only smoke started optional services"
+fi
+core_logs=$("$DOCKER" logs "$container_id" 2>&1)
+if grep -Eq 'module=backup_asset_processing.*stage=startup|备份资产处理运行时不可用' <<<"$core_logs"; then
+  fail "disabled processing emitted startup failure noise"
 fi
 "$CURL" -fsS --max-time 5 http://127.0.0.1:10761/healthz >/dev/null
 

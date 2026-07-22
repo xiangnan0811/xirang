@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -20,6 +21,140 @@ import (
 )
 
 const secureInboxResolve = unix.RESOLVE_BENEATH | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_SYMLINKS
+
+type secureStoreDirectory struct {
+	file *os.File
+}
+
+func openSecureStoreRoot(path string) (*secureStoreDirectory, error) {
+	slashFD, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = unix.Close(slashFD) }()
+	relative := strings.TrimPrefix(path, "/")
+	if relative == "" {
+		return nil, ErrPolicyRejected
+	}
+	return openSecureStoreDirectoryAt(slashFD, relative)
+}
+
+func openSecureStoreDirectoryAt(parentFD int, name string) (*secureStoreDirectory, error) {
+	fd, err := unix.Openat2(parentFD, name, &unix.OpenHow{
+		Flags:   unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC | unix.O_NOFOLLOW,
+		Resolve: secureInboxResolve,
+	})
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), name)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, ErrPolicyRejected
+	}
+	return &secureStoreDirectory{file: file}, nil
+}
+
+func (directory *secureStoreDirectory) OpenDirectory(name string) (*secureStoreDirectory, error) {
+	if directory == nil || directory.file == nil || !validStoreComponent(name) {
+		return nil, ErrPolicyRejected
+	}
+	return openSecureStoreDirectoryAt(int(directory.file.Fd()), name)
+}
+
+func (directory *secureStoreDirectory) CreateDirectory(name string, mode os.FileMode) error {
+	if directory == nil || directory.file == nil || !validStoreComponent(name) || mode.Perm() != mode {
+		return ErrPolicyRejected
+	}
+	return unix.Mkdirat(int(directory.file.Fd()), name, uint32(mode.Perm()))
+}
+
+func (directory *secureStoreDirectory) OpenFile(name string, flags int, mode os.FileMode) (*os.File, error) {
+	if directory == nil || directory.file == nil || !validStoreComponent(name) || mode.Perm() != mode {
+		return nil, ErrPolicyRejected
+	}
+	fd, err := unix.Openat2(int(directory.file.Fd()), name, &unix.OpenHow{
+		Flags:   uint64(flags | unix.O_CLOEXEC | unix.O_NOFOLLOW),
+		Mode:    uint64(mode.Perm()),
+		Resolve: secureInboxResolve,
+	})
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), name)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, ErrPolicyRejected
+	}
+	return file, nil
+}
+
+func (directory *secureStoreDirectory) RenameNoReplace(oldName, newName string) error {
+	if directory == nil || directory.file == nil || !validStoreComponent(oldName) || !validStoreComponent(newName) {
+		return ErrPolicyRejected
+	}
+	fd := int(directory.file.Fd())
+	return unix.Renameat2(fd, oldName, fd, newName, unix.RENAME_NOREPLACE)
+}
+
+func (directory *secureStoreDirectory) RemoveFile(name string) error {
+	if directory == nil || directory.file == nil || !validStoreComponent(name) {
+		return ErrPolicyRejected
+	}
+	return unix.Unlinkat(int(directory.file.Fd()), name, 0)
+}
+
+func (directory *secureStoreDirectory) RemoveDirectory(name string) error {
+	if directory == nil || directory.file == nil || !validStoreComponent(name) {
+		return ErrPolicyRejected
+	}
+	return unix.Unlinkat(int(directory.file.Fd()), name, unix.AT_REMOVEDIR)
+}
+
+func (directory *secureStoreDirectory) Stat() (os.FileInfo, error) {
+	if directory == nil || directory.file == nil {
+		return nil, ErrPolicyRejected
+	}
+	return directory.file.Stat()
+}
+
+func (directory *secureStoreDirectory) ReadDir(maximum int) ([]os.DirEntry, error) {
+	if directory == nil || directory.file == nil || maximum <= 0 {
+		return nil, ErrPolicyRejected
+	}
+	return directory.file.ReadDir(maximum)
+}
+
+func (directory *secureStoreDirectory) rewind() error {
+	if directory == nil || directory.file == nil {
+		return ErrPolicyRejected
+	}
+	_, err := directory.file.Seek(0, io.SeekStart)
+	return err
+}
+
+func (directory *secureStoreDirectory) Chmod(mode os.FileMode) error {
+	if directory == nil || directory.file == nil || mode.Perm() != mode {
+		return ErrPolicyRejected
+	}
+	return directory.file.Chmod(mode)
+}
+
+func (directory *secureStoreDirectory) Sync() error {
+	if directory == nil || directory.file == nil {
+		return ErrPolicyRejected
+	}
+	return directory.file.Sync()
+}
+
+func (directory *secureStoreDirectory) Close() error {
+	if directory == nil || directory.file == nil {
+		return nil
+	}
+	err := directory.file.Close()
+	directory.file = nil
+	return err
+}
 
 type secureInboxDirectory struct {
 	file *os.File
@@ -87,11 +222,11 @@ func (directory *secureInboxDirectory) Stat() (os.FileInfo, error) {
 	return directory.file.Stat()
 }
 
-func (directory *secureInboxDirectory) ReadDir() ([]os.DirEntry, error) {
-	if directory == nil || directory.file == nil {
+func (directory *secureInboxDirectory) ReadDir(maximum int) ([]os.DirEntry, error) {
+	if directory == nil || directory.file == nil || maximum <= 0 {
 		return nil, ErrPolicyRejected
 	}
-	return directory.file.ReadDir(-1)
+	return directory.file.ReadDir(maximum)
 }
 
 func (directory *secureInboxDirectory) Close() error {

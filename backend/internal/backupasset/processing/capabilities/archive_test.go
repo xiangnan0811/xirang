@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -25,6 +26,135 @@ func TestArchiveInspectRejectsTraversalLinksDevicesBombsAndEncryption(t *testing
 		if _, err := InspectArchive(testCase.payload, testCase.media, testCase.limits); err == nil {
 			t.Fatalf("%s archive accepted", testCase.name)
 		}
+	}
+}
+
+func TestArchiveInspectRejectsUnsafeUnicodeComponentsWithoutRawPathLeak(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "ASCII control", path: "folder/member\u0001.txt"},
+		{name: "tab control", path: "folder/member\t.txt"},
+		{name: "bidi override", path: "folder/member\u202etxt"},
+		{name: "zero width format", path: "folder/member\u200b.txt"},
+		{name: "confusable dot", path: "\uff0e/member.txt"},
+		{name: "confusable dot dot", path: "\uff0e\uff0e/member.txt"},
+		{name: "confusable slash", path: "folder/member\uff0fescape.txt"},
+		{name: "confusable reverse slash", path: "folder/member\uff3cescape.txt"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			index, err := InspectArchive(
+				makeZip(t, zipEntry{name: testCase.path, content: []byte("member")}),
+				"application/zip",
+				testArchiveLimits(),
+			)
+			if err == nil {
+				t.Fatalf("unsafe path accepted: entries=%+v", index.Entries)
+			}
+			if strings.Contains(err.Error(), testCase.path) || len(index.Entries) != 0 {
+				t.Fatalf("unsafe archive leaked raw path %q: index=%+v err=%v", testCase.path, index, err)
+			}
+		})
+	}
+}
+
+func TestArchiveInspectRejectsUnicodeNormalizationAndFoldCollisions(t *testing.T) {
+	tests := []struct {
+		name  string
+		first string
+		last  string
+	}{
+		{name: "canonical normalization", first: "folder/caf\u00e9.txt", last: "folder/cafe\u0301.txt"},
+		{name: "compatibility normalization", first: "folder/A.txt", last: "folder/\uff21.txt"},
+		{name: "Unicode case fold", first: "folder/Stra\u00dfe.txt", last: "folder/STRASSE.txt"},
+		{name: "default ignorable code point", first: "folder/a.txt", last: "folder/a\u034f.txt"},
+		{name: "variation selector", first: "folder/a.txt", last: "folder/a\ufe0f.txt"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			index, err := InspectArchive(
+				makeZip(t,
+					zipEntry{name: testCase.first, content: []byte("first")},
+					zipEntry{name: testCase.last, content: []byte("last")},
+				),
+				"application/zip",
+				testArchiveLimits(),
+			)
+			if err == nil {
+				t.Fatalf("colliding paths accepted: entries=%+v", index.Entries)
+			}
+			if strings.Contains(err.Error(), testCase.first) || strings.Contains(err.Error(), testCase.last) || len(index.Entries) != 0 {
+				t.Fatalf("colliding archive leaked a raw path: index=%+v err=%v", index, err)
+			}
+		})
+	}
+}
+
+func TestArchiveInspectPreservesSafeNormalizedUnicodeDisplayName(t *testing.T) {
+	const rawPath = "\u8d44\u6599/r\u00e9sum\u00e9-\u6771\u4eac-\u0645\u0644\u0641-\U0001f9fe.txt"
+	index, err := InspectArchive(
+		makeZip(t, zipEntry{name: rawPath, content: []byte("member")}),
+		"application/zip",
+		testArchiveLimits(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(index.Entries) != 1 || index.Entries[0].DisplayName != "r\u00e9sum\u00e9-\u6771\u4eac-\u0645\u0644\u0641-\U0001f9fe.txt" ||
+		strings.Contains(index.Entries[0].DisplayName, "\u8d44\u6599/") {
+		t.Fatalf("safe Unicode index=%+v", index)
+	}
+}
+
+func TestArchiveInspectPreservesLegalUnicodeNormalizationForms(t *testing.T) {
+	for _, rawPath := range []string{
+		"folder/cafe\u0301.txt",
+		"folder/\uff21.txt",
+	} {
+		index, err := InspectArchive(
+			makeZip(t, zipEntry{name: rawPath, content: []byte("member")}),
+			"application/zip",
+			testArchiveLimits(),
+		)
+		if err != nil || len(index.Entries) != 1 {
+			t.Fatalf("legal Unicode normalization form %q rejected: index=%+v err=%v", rawPath, index, err)
+		}
+	}
+	index, err := InspectArchive(
+		makeZip(t,
+			zipEntry{name: "left/member.txt", content: []byte("left")},
+			zipEntry{name: "right/member.txt", content: []byte("right")},
+		),
+		"application/zip",
+		testArchiveLimits(),
+	)
+	if err != nil || len(index.Entries) != 2 || index.Entries[0].ParentID == "" || index.Entries[0].ParentID == index.Entries[1].ParentID {
+		t.Fatalf("legal duplicate basenames lost opaque parent identity: index=%+v err=%v", index, err)
+	}
+}
+
+func TestArchiveInspectAssignsClosedCanonicalMemberMediaType(t *testing.T) {
+	payload := []byte{0x00, 0x01, 0x02, 0xff}
+	tests := []struct {
+		name    string
+		archive []byte
+		media   string
+	}{
+		{name: "zip", archive: makeZip(t, zipEntry{name: "member.bin", content: payload}), media: "application/zip"},
+		{name: "tar", archive: makeTar(t, tar.Header{Name: "member.bin", Typeflag: tar.TypeReg}, payload), media: "application/x-tar"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			index, err := InspectArchive(testCase.archive, testCase.media, testArchiveLimits())
+			if err != nil || len(index.Entries) != 1 {
+				t.Fatalf("archive index=%+v err=%v", index, err)
+			}
+			if index.Entries[0].MediaType != "application/octet-stream" {
+				t.Fatalf("member media type=%q, want closed octet-stream fallback", index.Entries[0].MediaType)
+			}
+		})
 	}
 }
 

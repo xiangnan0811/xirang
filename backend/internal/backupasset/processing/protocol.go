@@ -17,6 +17,7 @@ import (
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/content"
+	"xirang/backend/internal/backupasset/processing/capabilities"
 	"xirang/backend/internal/backupasset/processing/capabilityspec"
 	"xirang/backend/internal/model"
 
@@ -950,9 +951,10 @@ func workerProtocolCleanupContext(ctx context.Context) (context.Context, context
 }
 
 type ProtocolService struct {
-	db       *gorm.DB
-	registry *CapabilityRegistry
-	now      func() time.Time
+	db         *gorm.DB
+	registryMu sync.RWMutex
+	registry   *CapabilityRegistry
+	now        func() time.Time
 }
 
 func NewProtocolService(db *gorm.DB, registry *CapabilityRegistry, now func() time.Time) (*ProtocolService, error) {
@@ -966,6 +968,8 @@ func NewProtocolService(db *gorm.DB, registry *CapabilityRegistry, now func() ti
 }
 
 func (service *ProtocolService) Handshake(ctx context.Context, identity WorkerTransportIdentity, request HandshakeRequest) (HandshakeResult, error) {
+	service.registryMu.RLock()
+	defer service.registryMu.RUnlock()
 	validated, err := ValidateHandshake(identity, request, service.registry)
 	if err != nil {
 		return HandshakeResult{}, err
@@ -1062,6 +1066,16 @@ func (service *ProtocolService) Handshake(ctx context.Context, identity WorkerTr
 		return HandshakeResult{}, err
 	}
 	return response, nil
+}
+
+func (service *ProtocolService) ReplaceRegistry(registry *CapabilityRegistry) error {
+	if service == nil || registry == nil {
+		return ErrProtocolInvalid
+	}
+	service.registryMu.Lock()
+	service.registry = registry
+	service.registryMu.Unlock()
+	return nil
 }
 
 func (service *ProtocolService) hasLiveWorkerAuthorityTx(ctx context.Context, tx *gorm.DB, workerID string) (bool, error) {
@@ -1211,10 +1225,9 @@ func NewProductionCapabilityRegistryWithBundles(bundles CapabilityBundleFingerpr
 	return registry, nil
 }
 
-const (
-	productionToolchainFingerprint = "asset-worker-toolchain-v1"
-	productionSecurityPolicy       = "backup-assets-security-v1"
-)
+var productionToolchainFingerprint = capabilities.ProductionToolchainFingerprint()
+
+const productionSecurityPolicy = "backup-assets-security-v1"
 
 func productionCapabilityAdvertisements() []CapabilityAdvertisement {
 	advertisements, err := productionCapabilityAdvertisementsWithBundles(nil)
@@ -1294,6 +1307,23 @@ func NewCapabilityRegistry(definitions []CapabilityDefinition) (*CapabilityRegis
 		registry.definitions[key] = definition
 	}
 	return registry, nil
+}
+
+func (registry *CapabilityRegistry) ActivePipelineFingerprint(capability, outputProfile string) (string, bool) {
+	if registry == nil || capability == "" || outputProfile == "" {
+		return "", false
+	}
+	fingerprint := ""
+	for _, definition := range registry.definitions {
+		if definition.Capability != capability || definition.OutputProfile != outputProfile {
+			continue
+		}
+		if fingerprint != "" && fingerprint != definition.PipelineFingerprint {
+			return "", false
+		}
+		fingerprint = definition.PipelineFingerprint
+	}
+	return fingerprint, fingerprint != ""
 }
 
 func DecodeHandshakeRequest(payload []byte) (HandshakeRequest, error) {

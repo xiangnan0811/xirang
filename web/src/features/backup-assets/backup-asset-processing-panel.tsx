@@ -9,12 +9,14 @@ import type { BackupAsset, BackupProcessingProductState } from "@/types/domain";
 import { selectProcessingRepresentation } from "./backup-assets-processing-state";
 import { useBackupAssetProcessing } from "./use-backup-asset-processing";
 
+export type ProcessingPreviewSource = "derived" | "native";
+
 export interface BackupAssetProcessingPanelProps {
   token: string | null;
   asset: BackupAsset;
   canNativePreview: boolean;
   canDownload: boolean;
-  onOpenPreview: () => void;
+  onOpenPreview: (source: ProcessingPreviewSource) => void;
   onPrepareDownload: () => void;
 }
 
@@ -106,7 +108,7 @@ export function BackupAssetProcessingPanel({
           </Button>
         ) : null}
         {ready ? (
-          <Button type="button" variant="outline" size="sm" onClick={onOpenPreview}>
+          <Button type="button" variant="outline" size="sm" onClick={() => onOpenPreview("derived")}>
             <Sparkles className="size-4" aria-hidden />
             {t("backupAssets.processing.actions.open")}
           </Button>
@@ -124,7 +126,7 @@ export function BackupAssetProcessingPanel({
           </Button>
         ) : null}
         {nativeAllowed ? (
-          <Button type="button" variant="ghost" size="sm" onClick={onOpenPreview}>
+          <Button type="button" variant="ghost" size="sm" onClick={() => onOpenPreview("native")}>
             <Eye className="size-4" aria-hidden />
             {t("backupAssets.processing.actions.native")}
           </Button>

@@ -11,6 +11,7 @@ WORKER_SOCKET=$WORKER_SOCKET_DIR/asset-worker.sock
 UPDATER_SOCKET=$RUNTIME_ROOT/asset-worker-updater.sock
 WORKSPACE_ROOT=$RUNTIME_ROOT/asset-jobs
 BUNDLE_ROOT=/var/lib/xirang/asset-worker-bundles
+DERIVED_ROOT=/var/lib/xirang-asset-runtime/derived
 INBOX_ROOT=/var/lib/xirang/asset-worker-inbox
 TRUST_FILE=/run/secrets/asset-worker-updater-trust.json
 
@@ -22,6 +23,12 @@ fail() {
 require_identity() {
   [ "$(id -u)" = "$1" ] || fail
   [ "$(id -g)" = "$2" ] || fail
+}
+
+require_exact_groups() {
+	expected_gid=$1
+	group_ids=$(id -G) || fail
+	[ "$group_ids" = "$expected_gid" ] || fail
 }
 
 require_directory() {
@@ -51,14 +58,18 @@ require_socket() {
   [ "$(stat -c '%a:%u:%g' "$path")" = "$mode:$uid:$gid" ] || fail
 }
 
+require_absent() {
+  [ ! -e "$1" ] && [ ! -L "$1" ] || fail
+}
+
 require_mount_option() {
   target=$1
   option=$2
   awk -v target="$target" -v option="$option" '
     $5 == target {
       count = split($6, options, ",")
-      for (index = 1; index <= count; index++) {
-        if (options[index] == option) {
+      for (field = 1; field <= count; field++) {
+        if (options[field] == option) {
           found = 1
         }
       }
@@ -67,13 +78,50 @@ require_mount_option() {
   ' /proc/self/mountinfo || fail
 }
 
+require_private_tmpfs() {
+  target=$1
+  uid=$2
+  gid=$3
+  require_directory "$target" 700 "$uid" "$gid"
+  awk -v target="$target" '
+    $5 == target {
+      exact_mounts++
+      separator = 0
+      for (field = 7; field <= NF; field++) {
+        if ($field == "-") {
+          separator = field
+          break
+        }
+      }
+      if (separator == 0) {
+        next
+      }
+      filesystem = $(separator + 1)
+      for (group = 1; group <= 2; group++) {
+        value = group == 1 ? $6 : $(separator + 3)
+        count = split(value, options, ",")
+        for (field = 1; field <= count; field++) {
+          if (options[field] == "rw") rw = 1
+          if (options[field] == "noexec") noexec = 1
+          if (options[field] == "nosuid") nosuid = 1
+          if (options[field] == "nodev") nodev = 1
+        }
+      }
+    }
+    END { exit exact_mounts == 1 && filesystem == "tmpfs" && rw && noexec && nosuid && nodev ? 0 : 1 }
+  ' /proc/self/mountinfo || fail
+}
+
 run_worker() {
-  require_identity "$WORKER_UID" "$WORKER_GID"
-  require_directory "$RUNTIME_ROOT" 770 "$WORKER_UID" "$UPDATER_GID"
+	require_identity "$WORKER_UID" "$WORKER_GID"
+	require_exact_groups "$WORKER_GID"
+  require_private_tmpfs /tmp "$WORKER_UID" "$WORKER_GID"
   require_directory "$WORKER_SOCKET_DIR" 700 "$WORKER_UID" "$WORKER_GID"
-  require_directory "$WORKSPACE_ROOT" 700 "$WORKER_UID" "$WORKER_GID"
-  require_directory "$BUNDLE_ROOT" 750 "$UPDATER_UID" "$UPDATER_GID"
+  require_private_tmpfs "$WORKSPACE_ROOT" "$WORKER_UID" "$WORKER_GID"
+  require_directory "$BUNDLE_ROOT" 2750 "$UPDATER_UID" "$WORKER_GID"
   require_socket "$WORKER_SOCKET" 600 "$WORKER_UID" "$WORKER_GID"
+  require_absent "$UPDATER_SOCKET"
+  require_mount_option "$WORKER_SOCKET_DIR" ro
   require_mount_option "$WORKSPACE_ROOT" rw
   require_mount_option "$WORKSPACE_ROOT" noexec
   require_mount_option "$WORKSPACE_ROOT" nosuid
@@ -85,13 +133,15 @@ run_worker() {
 }
 
 run_updater() {
-  require_identity "$UPDATER_UID" "$UPDATER_GID"
-  require_directory "$RUNTIME_ROOT" 770 "$WORKER_UID" "$UPDATER_GID"
-  require_directory "$BUNDLE_ROOT" 750 "$UPDATER_UID" "$UPDATER_GID"
+	require_identity "$UPDATER_UID" "$UPDATER_GID"
+	require_exact_groups "$UPDATER_GID"
+  require_directory "$RUNTIME_ROOT" 2770 "$WORKER_UID" "$UPDATER_GID"
+  require_directory "$BUNDLE_ROOT" 2750 "$UPDATER_UID" "$WORKER_GID"
   require_directory "$INBOX_ROOT" 555 "$UPDATER_UID" "$UPDATER_GID"
   require_directory /tmp 700 "$UPDATER_UID" "$UPDATER_GID"
   require_file "$TRUST_FILE" 440 "$UPDATER_UID" "$UPDATER_GID"
   require_socket "$UPDATER_SOCKET" 660 "$WORKER_UID" "$UPDATER_GID"
+  require_absent "$WORKER_SOCKET"
   require_mount_option "$RUNTIME_ROOT" ro
   require_mount_option "$BUNDLE_ROOT" rw
   require_mount_option "$INBOX_ROOT" ro
@@ -106,16 +156,22 @@ initialize_volumes() {
   require_identity 0 0
   [ -d "$RUNTIME_ROOT" ] && [ ! -L "$RUNTIME_ROOT" ] || fail
   [ -d "$BUNDLE_ROOT" ] && [ ! -L "$BUNDLE_ROOT" ] || fail
+  [ -d "$DERIVED_ROOT" ] && [ ! -L "$DERIVED_ROOT" ] || fail
   require_mount_option "$RUNTIME_ROOT" rw
+  require_mount_option "$WORKER_SOCKET_DIR" rw
   require_mount_option "$BUNDLE_ROOT" rw
+  require_mount_option "$DERIVED_ROOT" rw
 
   mkdir -p "$WORKER_SOCKET_DIR"
   chown "$WORKER_UID:$UPDATER_GID" "$RUNTIME_ROOT"
-  chmod 0770 "$RUNTIME_ROOT"
+  chmod 2770 "$RUNTIME_ROOT"
   chown "$WORKER_UID:$WORKER_GID" "$WORKER_SOCKET_DIR"
   chmod 0700 "$WORKER_SOCKET_DIR"
-  chown "$UPDATER_UID:$UPDATER_GID" "$BUNDLE_ROOT"
-  chmod 0750 "$BUNDLE_ROOT"
+  chown "$UPDATER_UID:$WORKER_GID" "$BUNDLE_ROOT"
+  chmod 2750 "$BUNDLE_ROOT"
+  chown "$WORKER_UID:$WORKER_GID" "$DERIVED_ROOT"
+  chmod 0700 "$DERIVED_ROOT"
+  require_directory "$DERIVED_ROOT" 700 "$WORKER_UID" "$WORKER_GID"
 }
 
 case "${1:-}" in

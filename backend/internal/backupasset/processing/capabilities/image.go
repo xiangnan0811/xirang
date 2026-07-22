@@ -43,7 +43,8 @@ func Thumbnail(ctx context.Context, source []byte, declaredMediaType string, opt
 		return ImageResult{}, ErrInputLimit
 	}
 	config, format, err := image.DecodeConfig(bytes.NewReader(source))
-	if err != nil || config.Width <= 0 || config.Height <= 0 || int64(config.Width)*int64(config.Height) > profile.Limits.MaxPixels {
+	pixels, pixelsOK := rasterPixels(config.Width, config.Height)
+	if err != nil || config.Width <= 0 || config.Height <= 0 || !pixelsOK || pixels > profile.Limits.MaxPixels {
 		return ImageResult{}, ErrInvalidToolOutput
 	}
 	if err := profile.ValidateMedia(declaredMediaType, imageFormatMediaType(format)); err != nil {
@@ -417,12 +418,13 @@ func inspectBMP(source []byte) (RasterInfo, error) {
 	if width <= 0 || height <= 0 || (bits != 24 && bits != 32) || pixelOffset < 54 || pixelOffset > len(source) {
 		return RasterInfo{}, ErrInvalidToolOutput
 	}
-	rowBytes := ((int64(width)*int64(bits) + 31) / 32) * 4
-	if rowBytes <= 0 || int64(pixelOffset)+rowBytes*int64(height) > int64(len(source)) {
-		return RasterInfo{}, ErrInvalidToolOutput
-	}
 	pixels, ok := rasterPixels(width, height)
 	if !ok {
+		return RasterInfo{}, ErrInvalidToolOutput
+	}
+	rowBytes := ((int64(width)*int64(bits) + 31) / 32) * 4
+	if rowBytes <= 0 || int64(height) > math.MaxInt64/rowBytes ||
+		rowBytes*int64(height) > int64(len(source)-pixelOffset) {
 		return RasterInfo{}, ErrInvalidToolOutput
 	}
 	return RasterInfo{MediaType: "image/bmp", Width: width, Height: height, Frames: 1, Pixels: pixels}, nil

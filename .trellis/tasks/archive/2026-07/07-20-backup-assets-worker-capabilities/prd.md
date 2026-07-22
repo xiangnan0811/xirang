@@ -309,12 +309,20 @@ Command credential、宿主路径或任意网络访问。
   控制；OOXML/ODF 的 macro/script/external-link package 在 LibreOffice 前直接 fail
   closed。该修正不增加路径、依赖、migration/model、公开 API 或产品范围，exact
   future manifest 继续为 164 unique paths，并保留前两次 manifest amendment 历史。
+- 完整 signed-profile smoke 随后证明 updater 首次激活必须接受闭合请求中的
+  `expected_active_fingerprint: null`，而共用 duplicate-key token walker 会把合法 JSON
+  `null` 误判为 malformed。总控批准只加入
+  `backend/internal/api/handlers/backup_content_handler.go`，在不放宽 duplicate/unknown
+  field 防护的前提下接受合法 null token；对应 handler 回归先稳定返回 400，再在最小
+  修复后返回 accepted。该 **bootstrap null parser correction** 将 exact future
+  manifest 从 164 修正为 165 unique paths，不改变 API shape、migration、依赖或产品范围。
 
 ### 7.3 审批状态与未来变更门禁
 
 Current-main 研究已经给出满足冻结边界的单一推荐方案，没有未决产品问题；规划包、
-161→163 atomic reconciliation amendment、163→164 repository fixture amendment 与
-164-path 内的 closed-profile parity correction 均已由总控技术批准，用户也已授权
+161→163 atomic reconciliation amendment、163→164 repository fixture amendment、
+164-path 内的 closed-profile parity correction 与 164→165 bootstrap null parser
+correction 均已由总控技术批准，用户也已授权
 Phase 2，workflow transition 已完成。若未来要改变 capability 列表、工具链、公开
-API、updater trust、atomic publication、Worker image/profile 或 164-path exact
+API、updater trust、atomic publication、Worker image/profile 或 165-path exact
 manifest，仍须先形成新的 focused amendment 并审阅该 scope change。

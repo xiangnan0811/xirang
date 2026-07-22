@@ -522,6 +522,7 @@ type ProductionWorkerCapabilityOptions struct {
 	ToolRunner               ProductionToolRunner
 	MalwareBundleFingerprint string
 	BundleFingerprints       CapabilityBundleFingerprints
+	AvailableCapabilities    map[string]bool
 	Now                      func() time.Time
 }
 
@@ -566,6 +567,9 @@ func newProductionWorkerCapabilitySet(options ProductionWorkerCapabilityOptions,
 	}
 	capabilities := make([]WorkerCapability, 0, len(advertisements))
 	for index, advertisement := range advertisements {
+		if options.AvailableCapabilities != nil && !options.AvailableCapabilities[profiles[index].Capability] {
+			continue
+		}
 		if options.ToolRunner != nil && profiles[index].Capability == capabilityspec.CapabilityMalwareScan &&
 			options.MalwareBundleFingerprint == "" {
 			continue
@@ -671,6 +675,10 @@ func (capability productionWorkerCapability) executeExternal(ctx context.Context
 	if capability.profile.Capability == capabilityspec.CapabilityImageOCR {
 		return capability.executeOCRExternal(ctx, job)
 	}
+	if capability.profile.Capability == capabilityspec.CapabilityDocumentConvert &&
+		job.Input.Info().MediaType == "application/pdf" {
+		return capability.executePDFExternal(ctx, job)
+	}
 	invocation, err := workerCapabilities.BuildInvocation(capability.profile, workerCapabilities.ToolParameters{
 		Width: job.Parameters.Width, Height: job.Parameters.Height, Quality: job.Parameters.Quality,
 		Language: job.Parameters.Language, MediaType: job.Input.Info().MediaType,
@@ -702,6 +710,137 @@ func (capability productionWorkerCapability) executeExternal(ctx context.Context
 	default:
 		return nil, workerCapabilities.ErrInvalidToolOutput
 	}
+}
+
+func (capability productionWorkerCapability) executePDFExternal(
+	ctx context.Context,
+	job WorkerCapabilityJob,
+) ([]WorkerCapabilityArtifact, error) {
+	pageInvocation, err := workerCapabilities.BuildInvocation(capability.profile, workerCapabilities.ToolParameters{
+		MediaType: "application/pdf",
+	})
+	if err != nil {
+		return nil, err
+	}
+	textInvocation, err := workerCapabilities.BuildPDFTextInvocation(capability.profile)
+	if err != nil {
+		return nil, err
+	}
+
+	pageInput, err := newProductionCapabilityInputReader(ctx, job.Input, capability.profile.Limits.MaxInputBytes)
+	if err != nil {
+		return nil, err
+	}
+	pageResult, err := capability.toolRunner.RunInput(ctx, pageInvocation, pageInput)
+	if err != nil {
+		return nil, err
+	}
+	pages, pageBytes, err := capability.validatePDFPageResult(pageResult, job.Parameters)
+	if err != nil {
+		return nil, err
+	}
+
+	textInput, err := newProductionCapabilityInputReader(ctx, job.Input, capability.profile.Limits.MaxInputBytes)
+	if err != nil {
+		return nil, err
+	}
+	textResult, err := capability.toolRunner.RunInput(ctx, textInvocation, textInput)
+	if err != nil {
+		return nil, err
+	}
+	text, err := capability.validatePDFTextResult(textResult, job.Parameters)
+	if err != nil {
+		return nil, err
+	}
+	return capability.pdfArtifacts(pages, text, pageBytes, job.Parameters)
+}
+
+func (capability productionWorkerCapability) validatePDFPageResult(
+	result workerCapabilities.ToolResult,
+	parameters CanonicalParametersV1,
+) ([][]byte, int64, error) {
+	maximumPages := min(capability.profile.Limits.MaxRenderedPages, parameters.MaxPages)
+	if !validClosedPDFToolResult(result) || len(result.Outputs) == 0 || int64(len(result.Outputs)) > maximumPages {
+		return nil, 0, workerCapabilities.ErrInvalidToolOutput
+	}
+	pages := make([][]byte, len(result.Outputs))
+	for name, content := range result.Outputs {
+		page, ok := canonicalPDFPageNumber(name)
+		if !ok || page > len(pages) || pages[page-1] != nil {
+			return nil, 0, workerCapabilities.ErrInvalidToolOutput
+		}
+		pages[page-1] = content
+	}
+	maximumOutput := min(capability.profile.Limits.MaxOutputBytes, parameters.MaxOutputBytes)
+	maximumPixels := min(capability.profile.Limits.MaxPixels, parameters.MaxPixels)
+	totalBytes := int64(0)
+	for _, content := range pages {
+		if content == nil || int64(len(content)) > maximumOutput-totalBytes {
+			return nil, 0, workerCapabilities.ErrInvalidToolOutput
+		}
+		if _, err := workerCapabilities.ValidateRasterOutput(content, "image/png", maximumOutput, maximumPixels, 1); err != nil {
+			return nil, 0, workerCapabilities.ErrInvalidToolOutput
+		}
+		totalBytes += int64(len(content))
+	}
+	return pages, totalBytes, nil
+}
+
+func (capability productionWorkerCapability) validatePDFTextResult(
+	result workerCapabilities.ToolResult,
+	parameters CanonicalParametersV1,
+) ([]byte, error) {
+	content, ok := result.Outputs["content.txt"]
+	maximumOutput := min(capability.profile.Limits.MaxOutputBytes, parameters.MaxOutputBytes)
+	if !validClosedPDFToolResult(result) || !ok || len(result.Outputs) != 1 ||
+		int64(len(content)) > maximumOutput || !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 {
+		return nil, workerCapabilities.ErrInvalidToolOutput
+	}
+	return content, nil
+}
+
+func (capability productionWorkerCapability) pdfArtifacts(
+	pages [][]byte,
+	text []byte,
+	pageBytes int64,
+	parameters CanonicalParametersV1,
+) ([]WorkerCapabilityArtifact, error) {
+	maximumOutput := min(capability.profile.Limits.MaxOutputBytes, parameters.MaxOutputBytes)
+	maximumCount := min(capability.profile.Limits.MaxOutputCount, parameters.MaxOutputCount)
+	if len(pages)+2 > maximumCount || int64(len(text)) > maximumOutput-pageBytes {
+		return nil, workerCapabilities.ErrInvalidToolOutput
+	}
+	metadata, err := json.Marshal(struct {
+		SchemaVersion int    `json:"schema_version"`
+		Coverage      string `json:"coverage"`
+		RenderedPages int    `json:"rendered_pages"`
+	}{SchemaVersion: 1, Coverage: "partial", RenderedPages: len(pages)})
+	totalBytes := pageBytes + int64(len(text))
+	if err != nil || int64(len(metadata)) > maximumOutput-totalBytes {
+		return nil, workerCapabilities.ErrInvalidToolOutput
+	}
+
+	artifacts := make([]WorkerCapabilityArtifact, 0, len(pages)+2)
+	for _, content := range pages {
+		artifacts = append(artifacts, productionArtifact(len(artifacts), ArtifactRoleThumbnail, "image/png", ArtifactPartial, content))
+	}
+	artifacts = append(artifacts, productionArtifact(len(artifacts), ArtifactRoleContent, "text/plain", ArtifactPartial, text))
+	artifacts = append(artifacts, productionArtifact(len(artifacts), ArtifactRoleMetadata, "application/json", ArtifactPartial, metadata))
+	return artifacts, nil
+}
+
+func validClosedPDFToolResult(result workerCapabilities.ToolResult) bool {
+	return result.ExitCode == 0 && result.Stdout == "" && result.Stderr == "" &&
+		!result.StdoutTruncated && !result.StderrTruncated
+}
+
+func canonicalPDFPageNumber(name string) (int, bool) {
+	if !strings.HasPrefix(name, "page-") || !strings.HasSuffix(name, ".png") {
+		return 0, false
+	}
+	encoded := strings.TrimSuffix(strings.TrimPrefix(name, "page-"), ".png")
+	page, err := strconv.Atoi(encoded)
+	return page, err == nil && page > 0 && strconv.Itoa(page) == encoded
 }
 
 func (capability productionWorkerCapability) preflightExternalInput(ctx context.Context, input WorkerCapabilityInput) error {
@@ -738,25 +877,11 @@ func (capability productionWorkerCapability) preflightExternalInput(ctx context.
 		)
 		return err
 	case capabilityspec.CapabilityDocumentConvert:
-		var payload []byte
-		if info.Size <= 2<<20 || info.MediaType != "application/pdf" {
-			var err error
-			payload, err = readProductionCapabilityInput(ctx, input, capability.profile.Limits.MaxInputBytes)
-			if err != nil {
-				return err
-			}
-		} else {
-			head, err := readRange(0, 1024)
-			if err != nil {
-				return err
-			}
-			tail, err := readRange(info.Size-1024, 1024)
-			if err != nil {
-				return err
-			}
-			payload = append(head, tail...)
+		payload, err := readProductionCapabilityInput(ctx, input, capability.profile.Limits.MaxInputBytes)
+		if err != nil {
+			return err
 		}
-		_, err := workerCapabilities.PlanDocument(payload, info.MediaType)
+		_, err = workerCapabilities.PlanDocument(payload, info.MediaType)
 		return err
 	case capabilityspec.CapabilityMediaProbe:
 		prefix, err := readRange(0, min(info.Size, int64(64<<10)))
@@ -802,7 +927,7 @@ func (capability productionWorkerCapability) executeOCRExternal(
 			return nil, workerCapabilities.ErrInvalidToolOutput
 		}
 		if _, err := workerCapabilities.ValidateRasterOutput(
-			normalized, "image/png", capability.profile.Limits.MaxInputBytes,
+			normalized, "image/png", capability.profile.Limits.MaxOutputBytes,
 			capability.profile.Limits.MaxPixels, 1,
 		); err != nil {
 			return nil, workerCapabilities.ErrInvalidToolOutput
@@ -875,8 +1000,9 @@ func (capability productionWorkerCapability) documentArtifacts(
 		case strings.HasPrefix(name, "page-") && strings.HasSuffix(name, ".png"):
 			page, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(name, "page-"), ".png"))
 			config, format, decodeErr := image.DecodeConfig(bytes.NewReader(content))
+			pixels, pixelsOK := checkedPixelProduct(config.Width, config.Height)
 			if err != nil || decodeErr != nil || format != "png" || page != pages+1 || page > int(capability.profile.Limits.MaxRenderedPages) ||
-				config.Width <= 0 || config.Height <= 0 || int64(config.Width)*int64(config.Height) > capability.profile.Limits.MaxPixels {
+				config.Width <= 0 || config.Height <= 0 || !pixelsOK || pixels > capability.profile.Limits.MaxPixels {
 				return nil, workerCapabilities.ErrInvalidToolOutput
 			}
 			artifacts = append(artifacts, productionArtifact(len(artifacts), ArtifactRoleThumbnail, "image/png", ArtifactPartial, content))
@@ -913,7 +1039,9 @@ func (capability productionWorkerCapability) documentArtifacts(
 }
 
 type rawMediaProbe struct {
-	Streams []struct {
+	Programs     []struct{} `json:"programs"`
+	StreamGroups []struct{} `json:"stream_groups"`
+	Streams      []struct {
 		Index     int    `json:"index"`
 		CodecType string `json:"codec_type"`
 		CodecName string `json:"codec_name"`
@@ -930,13 +1058,15 @@ func (capability productionWorkerCapability) mediaProbeArtifacts(
 	result workerCapabilities.ToolResult,
 	parameters CanonicalParametersV1,
 ) ([]WorkerCapabilityArtifact, error) {
-	if result.ExitCode != 0 || result.StdoutTruncated || result.StderrTruncated || len(result.Outputs) != 0 || len(result.Stdout) > 1<<20 {
+	if result.ExitCode != 0 || result.StdoutTruncated || result.StderrTruncated || result.Stderr != "" ||
+		len(result.Outputs) != 0 || len(result.Stdout) > 1<<20 {
 		return nil, workerCapabilities.ErrInvalidToolOutput
 	}
 	decoder := json.NewDecoder(strings.NewReader(result.Stdout))
 	decoder.DisallowUnknownFields()
 	var raw rawMediaProbe
-	if decoder.Decode(&raw) != nil || ensureJSONEOF(decoder) != nil || len(raw.Streams) == 0 ||
+	if decoder.Decode(&raw) != nil || ensureJSONEOF(decoder) != nil || raw.Programs == nil || len(raw.Programs) != 0 ||
+		raw.StreamGroups == nil || len(raw.StreamGroups) != 0 || len(raw.Streams) == 0 ||
 		len(raw.Streams) > int(capability.profile.Limits.MaxStreams) {
 		return nil, workerCapabilities.ErrInvalidToolOutput
 	}
@@ -954,8 +1084,9 @@ func (capability productionWorkerCapability) mediaProbeArtifacts(
 	}
 	streams := make([]streamDTO, 0, len(raw.Streams))
 	for _, stream := range raw.Streams {
+		pixels, pixelsOK := checkedPixelProduct(stream.Width, stream.Height)
 		if stream.Index < 0 || !closedMediaCodec(stream.CodecType, stream.CodecName) || stream.Width < 0 || stream.Height < 0 ||
-			stream.Width > 3840 || stream.Height > 2160 || int64(stream.Width)*int64(stream.Height) > capability.profile.Limits.MaxPixels {
+			stream.Width > 3840 || stream.Height > 2160 || !pixelsOK || pixels > capability.profile.Limits.MaxPixels {
 			return nil, workerCapabilities.ErrInvalidToolOutput
 		}
 		streamDuration := int64(0)
@@ -1023,8 +1154,9 @@ func (capability productionWorkerCapability) mediaPreviewArtifacts(
 	totalBytes := int64(len(preview))
 	if poster, exists := result.Outputs["poster.png"]; exists {
 		config, format, err := image.DecodeConfig(bytes.NewReader(poster))
+		pixels, pixelsOK := checkedPixelProduct(config.Width, config.Height)
 		if err != nil || format != "png" || config.Width <= 0 || config.Height <= 0 ||
-			int64(config.Width)*int64(config.Height) > capability.profile.Limits.MaxPixels {
+			!pixelsOK || pixels > capability.profile.Limits.MaxPixels {
 			return nil, workerCapabilities.ErrInvalidToolOutput
 		}
 		totalBytes += int64(len(poster))
@@ -1047,14 +1179,15 @@ func (capability productionWorkerCapability) malwareArtifacts(
 	result workerCapabilities.ToolResult,
 	job WorkerCapabilityJob,
 ) ([]WorkerCapabilityArtifact, error) {
-	if capability.malwareBundleFingerprint == "" || capability.now == nil || result.StdoutTruncated || result.StderrTruncated ||
-		(result.ExitCode != 0 && result.ExitCode != 1) || len(result.Outputs) != 0 {
+	if capability.malwareBundleFingerprint == "" || capability.now == nil {
 		return nil, workerCapabilities.ErrInvalidToolOutput
 	}
-	state := capabilityspec.ScanNoFinding
+	state, err := parseClamScanResult(result)
+	if err != nil {
+		return nil, err
+	}
 	category := ""
-	if result.ExitCode == 1 {
-		state = capabilityspec.ScanFinding
+	if state == capabilityspec.ScanFinding {
 		category = "malware"
 	}
 	metadataValue := capabilityspec.MalwareResult{
@@ -1073,6 +1206,44 @@ func (capability productionWorkerCapability) malwareArtifacts(
 	return []WorkerCapabilityArtifact{
 		productionArtifact(0, ArtifactRoleMetadata, "application/json", ArtifactComplete, metadata),
 	}, nil
+}
+
+func parseClamScanResult(result workerCapabilities.ToolResult) (capabilityspec.ScanState, error) {
+	if result.StdoutTruncated || result.StderrTruncated || result.Stderr != "" || len(result.Outputs) != 0 {
+		return "", workerCapabilities.ErrInvalidToolOutput
+	}
+	if result.ExitCode == 0 {
+		if result.Stdout != "" {
+			return "", workerCapabilities.ErrInvalidToolOutput
+		}
+		return capabilityspec.ScanNoFinding, nil
+	}
+	if result.ExitCode != 1 {
+		return "", workerCapabilities.ErrInvalidToolOutput
+	}
+	const (
+		prefix                  = "input.bin: "
+		suffix                  = " FOUND\n"
+		maximumSignatureBytes   = 128
+		limitExceededNamePrefix = "Heuristics.Limits.Exceeded."
+	)
+	if !strings.HasPrefix(result.Stdout, prefix) || !strings.HasSuffix(result.Stdout, suffix) ||
+		strings.Count(result.Stdout, "\n") != 1 {
+		return "", workerCapabilities.ErrInvalidToolOutput
+	}
+	signature := strings.TrimSuffix(strings.TrimPrefix(result.Stdout, prefix), suffix)
+	if len(signature) == 0 || len(signature) > maximumSignatureBytes || strings.TrimSpace(signature) != signature {
+		return "", workerCapabilities.ErrInvalidToolOutput
+	}
+	for _, character := range []byte(signature) {
+		if character < 0x20 || character > 0x7e {
+			return "", workerCapabilities.ErrInvalidToolOutput
+		}
+	}
+	if strings.HasPrefix(signature, limitExceededNamePrefix) {
+		return "", workerCapabilities.ErrInputLimit
+	}
+	return capabilityspec.ScanFinding, nil
 }
 
 func (capability productionWorkerCapability) ocrArtifacts(
@@ -1748,7 +1919,7 @@ func compressedTARMagicBytes(mediaType string) []byte {
 
 func canonicalArchiveMemberMedia(value string) string {
 	switch {
-	case strings.HasPrefix(value, "text/plain;"):
+	case value == "text/plain" || strings.HasPrefix(value, "text/plain;"):
 		return "text/plain"
 	case strings.HasPrefix(value, "image/png"):
 		return "image/png"

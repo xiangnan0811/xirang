@@ -10,6 +10,26 @@ import (
 
 type secureInboxDirectory struct{}
 
+type secureStoreDirectory struct{}
+
+func openSecureStoreRoot(string) (*secureStoreDirectory, error) { return nil, ErrPolicyRejected }
+func (*secureStoreDirectory) OpenDirectory(string) (*secureStoreDirectory, error) {
+	return nil, ErrPolicyRejected
+}
+func (*secureStoreDirectory) CreateDirectory(string, os.FileMode) error { return ErrPolicyRejected }
+func (*secureStoreDirectory) OpenFile(string, int, os.FileMode) (*os.File, error) {
+	return nil, ErrPolicyRejected
+}
+func (*secureStoreDirectory) RenameNoReplace(string, string) error { return ErrPolicyRejected }
+func (*secureStoreDirectory) RemoveFile(string) error              { return ErrPolicyRejected }
+func (*secureStoreDirectory) RemoveDirectory(string) error         { return ErrPolicyRejected }
+func (*secureStoreDirectory) Stat() (os.FileInfo, error)           { return nil, ErrPolicyRejected }
+func (*secureStoreDirectory) ReadDir(int) ([]os.DirEntry, error)   { return nil, ErrPolicyRejected }
+func (*secureStoreDirectory) rewind() error                        { return ErrPolicyRejected }
+func (*secureStoreDirectory) Chmod(os.FileMode) error              { return ErrPolicyRejected }
+func (*secureStoreDirectory) Sync() error                          { return ErrPolicyRejected }
+func (*secureStoreDirectory) Close() error                         { return nil }
+
 func openSecureInboxRoot(string) (*secureInboxDirectory, error) {
 	return nil, ErrPolicyRejected
 }
@@ -22,9 +42,9 @@ func (*secureInboxDirectory) OpenRegular(string) (*os.File, error) {
 	return nil, ErrPolicyRejected
 }
 
-func (*secureInboxDirectory) Stat() (os.FileInfo, error)      { return nil, ErrPolicyRejected }
-func (*secureInboxDirectory) ReadDir() ([]os.DirEntry, error) { return nil, ErrPolicyRejected }
-func (*secureInboxDirectory) Close() error                    { return nil }
+func (*secureInboxDirectory) Stat() (os.FileInfo, error)         { return nil, ErrPolicyRejected }
+func (*secureInboxDirectory) ReadDir(int) ([]os.DirEntry, error) { return nil, ErrPolicyRejected }
+func (*secureInboxDirectory) Close() error                       { return nil }
 
 type LocalUpdaterListener struct{}
 
