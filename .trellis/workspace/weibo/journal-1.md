@@ -1166,7 +1166,61 @@ Closed the complete-profile updater inbox lifecycle defect, reran final quality 
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] Focused updater RED/GREEN, full updater package and updater race suite
+- [OK] `env -u NODE_ENV GOCACHE=<isolated> make check`: Go lint 0 issues,
+  backend packages, 162 frontend files / 935 tests, typecheck, lint and builds
+- [OK] Bundle gate: 498.14 / 500 KiB JavaScript and 104.55 / 105 KiB CSS
+- [OK] Worker script plus rebuilt amd64 runtime and complete host-network
+  signed profile; Swagger v1.16.6 regenerated twice without drift
+- [OK] Exact manifest 165/165 unique, product paths outside manifest 0
+- [NOT_EXECUTED] Fresh arm64 build/scan and default bridge profile remained CI
+  evidence; no local pass was claimed
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 29: Child 11 runtime closure CI repair
+
+**Date**: 2026-07-22
+**Task**: Child 11 runtime closure CI repair
+**Branch**: `codex/backup-assets-worker-capabilities`
+
+### Summary
+
+Diagnosed the sole PR #398 amd64 complete-profile failure as Docker rewriting /etc/mtab from ../proc/mounts to /proc/mounts, excluded only that runtime-managed symlink, added closed privacy-safe file-index diagnostics, fixed the runner-independent checked condition and deterministic race fixture, and reran the complete local gate without reopening the archived Child.
+
+### Main Changes
+
+- Excluded only /etc/mtab from the immutable runtime closure because it is a Docker-managed symlink into the already excluded /proc tree; toolchain, package, policy, bundle and capability attestation remains intact.
+- Added closed not_checked/none/evidence/metadata/read/digest/symlink/race diagnostics with a bounded canonical files[] index while preserving errors.Is(ErrInvalidInvocation) and a generic error string.
+- Added RED/GREEN coverage for a runner construction failure after closure preflight and replaced the inode-reuse-prone race fixture with two simultaneously existing files.
+- Appended archived evidence Section 21; the Child remains completed, its parent remains planning, and no migration, dependency, Provider, all-in-one, release or feature-default scope changed.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a101713` | (see git log) |
+
+### Testing
+
+- [OK] Focused diagnostic RED/GREEN, two-package tests, targeted race, `go vet`,
+  formatting, and the deterministic race regression repeated 100 times
+- [OK] `env -u NODE_ENV TMPDIR=/dev/shm GOCACHE=<isolated> make check`: Go
+  lint 0 issues, every backend package, 162 frontend files / 935 tests,
+  typecheck, lint and production builds
+- [OK] Bundle gate: 498.14 / 500 KiB JavaScript and 104.55 / 105 KiB CSS
+- [OK] Worker script, rebuilt amd64 runtime smoke and complete host-network
+  signed Compose profile; closure SHA-256 `1c8c35f622de5a8da5c8b86a3c1b440c9f0240fe26a496bc36a201830f60f8c1`
+- [NOT_EXECUTED] Final-code arm64 local build was unavailable without buildx;
+  final native arm64 closure/build/scan remained pending CI
 
 ### Status
 

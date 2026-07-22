@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 28
+- **Total Sessions**: 29
 - **Last Active**: 2026-07-22
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1165 | Active |
+| `journal-1.md` | ~1214 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 29 | 2026-07-22 | Child 11 runtime closure CI repair | `a101713` | `codex/backup-assets-worker-capabilities` |
 | 28 | 2026-07-22 | Child 11 Worker capabilities repair and PR delivery | `19ef777` | `codex/backup-assets-worker-capabilities` |
 | 27 | 2026-07-21 | Child 11 backup asset worker capabilities offline delivery | `54c913b02e53c88a2e2e8285149da02e48005764` | `codex/backup-assets-worker-capabilities` |
 | 26 | 2026-07-20 | Child 10 CI fixture correction | `98f8233` | `codex/backup-assets-worker-protocol` |
