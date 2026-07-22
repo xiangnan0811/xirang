@@ -304,21 +304,64 @@ func TestAssetWorkerMainBuildsVerifiedToolRunnerWithoutPrivilegedImports(t *test
 }
 
 func TestAssetWorkerPreflightDiagnosticUsesOnlyClosedState(t *testing.T) {
-	var output bytes.Buffer
-	writeAssetWorkerPreflightDiagnostic(&output, true, true, capabilities.ToolchainPreflight{
-		UngatedAvailableCount: 10,
-		RuntimeClosureReady:   false,
-		AvailableCapabilities: map[string]bool{
-			capabilityspec.CapabilityImageOCR: false,
+	tests := []struct {
+		name        string
+		bundleReady bool
+		runnerReady bool
+		preflight   capabilities.ToolchainPreflight
+		want        string
+	}{
+		{
+			name: "declared file failure", bundleReady: true, runnerReady: true,
+			preflight: capabilities.ToolchainPreflight{
+				UngatedAvailableCount:          10,
+				RuntimeClosureFailureCategory:  capabilities.RuntimeClosureFailureMetadata,
+				RuntimeClosureFailureFileIndex: 147,
+				AvailableCapabilities:          map[string]bool{capabilityspec.CapabilityImageOCR: false},
+			},
+			want: "asset-worker diagnostic stage=preflight bundle_ready=true runner_ready=true ungated_available=10 closure_ready=false closure_failure=metadata closure_file_index=147 available=0\n",
 		},
-	})
-	want := "asset-worker diagnostic stage=preflight bundle_ready=true runner_ready=true ungated_available=10 closure_ready=false available=0\n"
-	if output.String() != want {
-		t.Fatalf("preflight diagnostic=%q, want %q", output.String(), want)
+		{
+			name: "runner unavailable after closure check", bundleReady: true,
+			preflight: capabilities.ToolchainPreflight{
+				UngatedAvailableCount:          10,
+				RuntimeClosureFailureCategory:  capabilities.RuntimeClosureFailureMetadata,
+				RuntimeClosureFailureFileIndex: 147,
+				AvailableCapabilities:          map[string]bool{capabilityspec.CapabilityImageOCR: false},
+			},
+			want: "asset-worker diagnostic stage=preflight bundle_ready=true runner_ready=false ungated_available=10 closure_ready=false closure_failure=metadata closure_file_index=147 available=0\n",
+		},
+		{
+			name: "prerequisite missing", runnerReady: true,
+			preflight: capabilities.ToolchainPreflight{
+				RuntimeClosureReady:            true,
+				RuntimeClosureFailureCategory:  capabilities.RuntimeClosureFailureMetadata,
+				RuntimeClosureFailureFileIndex: 147,
+			},
+			want: "asset-worker diagnostic stage=preflight bundle_ready=false runner_ready=true ungated_available=0 closure_ready=false closure_failure=not_checked closure_file_index=-1 available=0\n",
+		},
+		{
+			name: "contradictory checked state", bundleReady: true, runnerReady: true,
+			preflight: capabilities.ToolchainPreflight{
+				RuntimeClosureReady:            true,
+				RuntimeClosureFailureCategory:  capabilities.RuntimeClosureFailureMetadata,
+				RuntimeClosureFailureFileIndex: 147,
+			},
+			want: "asset-worker diagnostic stage=preflight bundle_ready=true runner_ready=true ungated_available=0 closure_ready=false closure_failure=evidence closure_file_index=-1 available=0\n",
+		},
 	}
-	for _, forbidden := range []string{"/", "error", "invalid invocation"} {
-		if strings.Contains(output.String(), forbidden) {
-			t.Fatalf("preflight diagnostic disclosed %q: %q", forbidden, output.String())
-		}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			writeAssetWorkerPreflightDiagnostic(&output, test.bundleReady, test.runnerReady, test.preflight)
+			if output.String() != test.want {
+				t.Fatalf("preflight diagnostic=%q, want %q", output.String(), test.want)
+			}
+			for _, forbidden := range []string{"/", "error", "invalid invocation"} {
+				if strings.Contains(output.String(), forbidden) {
+					t.Fatalf("preflight diagnostic disclosed %q: %q", forbidden, output.String())
+				}
+			}
+		})
 	}
 }

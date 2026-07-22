@@ -1123,3 +1123,97 @@ container was touched. At this evidence checkpoint the repair work commit,
 repair journal commit, push, pull request, required CI, squash merge and
 post-merge automation remain pending. The task is already archived and must
 not be started or archived again; delivery continues on the same Child branch.
+
+## 21. PR #398 amd64 runtime-closure repair
+
+PR #398 was opened from `codex/backup-assets-worker-capabilities` at
+`731429a88e5c737a07241a762e7d04a8f0bd6000`. Push run `29884963470` and PR run
+`29884965236` passed Backend, Frontend, PostgreSQL, Docker, documentation, UTC,
+both native runtime-closure producers and the arm64 Worker build/scan. Their
+only failures were the amd64 Worker build/scan jobs during the complete Compose
+profile smoke. Those failed before the parser advertised an activated pipeline;
+the feature remained fail closed.
+
+### 21.1 Root cause and minimal runtime correction
+
+The pre-repair amd64 closure's canonical `files[147]` entry was `/etc/mtab`, a
+14-byte symlink whose digest is exactly the digest of `../proc/mounts`. Docker
+rewrites that runtime-managed link before a live container starts: both the
+one-purpose rewrite-probe image and the final image report `/proc/mounts`, whose
+length is 12. The live verifier therefore rejected canonical index 147 even
+though no tool, package, policy, asset or signed bundle had changed.
+
+`/etc/mtab` is now excluded beside the already excluded `/proc` runtime tree.
+The final closure contains no `/etc/mtab` entry; all ordinary toolchain files,
+symlinks, packages, policies and bundle attestations remain covered. No
+capability, resource ceiling, Compose policy, dependency, migration, feature
+default or publication contract changed.
+
+The same approved four paths add privacy-safe failure evidence:
+
+```text
+not_checked | none | evidence | metadata | read | digest | symlink | race
+```
+
+Failures carry only the zero-based canonical `files[]` index, or `-1` when no
+declared file caused the failure. The typed error still unwraps to
+`ErrInvalidInvocation`; its string stays generic and contains no path, raw
+error, content or secret. Unknown, contradictory or out-of-range state
+normalizes to `evidence/-1`.
+
+Two final review findings were corrected test-first. The new runner-unavailable
+case failed before the production correction with:
+
+```text
+got:  closure_failure=not_checked closure_file_index=-1
+want: closure_failure=metadata    closure_file_index=147
+```
+
+The actual closure preflight runs whenever bundle evidence is ready, independent
+of runner construction, so diagnostic normalization now uses `bundleReady`
+while logging `runner_ready` separately. The file-identity race regression now
+uses two simultaneously existing equal-size/mode files rather than deleting and
+recreating one pathname, removing theoretical inode-reuse flakiness. Independent
+review found no remaining P1, P2 or P3 issue.
+
+### 21.2 Fresh verification after the final correction
+
+- The focused `asset-worker` diagnostic test was observed RED for the expected
+  reason and GREEN after the one-line condition fix. The deterministic race
+  regression passed 100 repetitions.
+- Fresh two-package unit, targeted `-race`, `go vet`, `gofmt` and whitespace
+  gates passed. A first parallel compilation attempt exhausted only this
+  session's `/tmp` cache quota and was not counted; after clearing the named
+  Child 11 caches, all commands were rerun successfully.
+- `env -u NODE_ENV TMPDIR=/dev/shm GOCACHE=<isolated> make check` exited zero:
+  golangci-lint reported `0 issues`, every backend package passed, and all 162
+  frontend files / 935 tests, typecheck, lint and production builds passed.
+- The explicit bundle gate passed at 498.14 KiB / 500 KiB main JavaScript and
+  104.55 KiB / 105 KiB main CSS.
+- `scripts/test-asset-worker.test.sh`, the rebuilt amd64 runtime smoke and the
+  complete host-network signed Compose profile passed. The final local image is
+  `sha256:6328953e7092454092d6bfadbaa55ce79e9df2b1d4606b747e5fa0ae036820cc`.
+  Its validated runtime closure is
+  `1c8c35f622de5a8da5c8b86a3c1b440c9f0240fe26a496bc36a201830f60f8c1`.
+- This host has the legacy Docker builder but no buildx plugin. A final-code
+  arm64 local build was attempted and rejected at Docker's platform boundary,
+  so it remains `not_executed` locally rather than pass. The local complete
+  profile used the previously generated genuine arm64 closure only for the
+  signed cross-platform fixture; the new push must prove the final arm64 native
+  build/closure/scan again in CI.
+
+### 21.3 Final scope and delivery state
+
+Fresh extraction of archived `implement.md` reports 165 manifest paths, 165
+unique and zero duplicates. The full branch has 159 changed product paths and
+zero paths outside that manifest. Only the four approved repair product paths
+are currently unstaged; generated `backend/xirang-server`, frontend build and
+coverage outputs were removed with `make clean`. Paired 000067 remains the only
+Child migration; 000068 through 000071 remain absent. `go.mod`, `go.sum`, model,
+Provider, `deploy/allinone`, root README and release/publish contracts remain
+unchanged.
+
+The Child task remains archived/completed and the parent remains the planning
+program tracker; neither is restarted or re-archived for this repair. The repair
+work commit, concrete journal commit, push to the same PR, required rerun CI,
+squash merge and post-merge automation are pending after this evidence update.

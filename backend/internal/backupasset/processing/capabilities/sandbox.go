@@ -45,10 +45,93 @@ const (
 // closed profiles may be advertised by a Worker. The bundle fingerprint is
 // deliberately kept separate: it is supplied by the updater contract.
 type ToolchainPreflight struct {
-	Fingerprint           string
-	AvailableCapabilities map[string]bool
-	UngatedAvailableCount int
-	RuntimeClosureReady   bool
+	Fingerprint                   string
+	AvailableCapabilities         map[string]bool
+	UngatedAvailableCount         int
+	RuntimeClosureReady           bool
+	RuntimeClosureFailureCategory RuntimeClosureFailureCategory
+	// RuntimeClosureFailureFileIndex is the zero-based canonical files[] index,
+	// or RuntimeClosureNoFileIndex when no declared file caused the failure.
+	RuntimeClosureFailureFileIndex int
+}
+
+type RuntimeClosureFailureCategory string
+
+const (
+	RuntimeClosureFailureNotChecked RuntimeClosureFailureCategory = "not_checked"
+	RuntimeClosureFailureNone       RuntimeClosureFailureCategory = "none"
+	RuntimeClosureFailureEvidence   RuntimeClosureFailureCategory = "evidence"
+	RuntimeClosureFailureMetadata   RuntimeClosureFailureCategory = "metadata"
+	RuntimeClosureFailureRead       RuntimeClosureFailureCategory = "read"
+	RuntimeClosureFailureDigest     RuntimeClosureFailureCategory = "digest"
+	RuntimeClosureFailureSymlink    RuntimeClosureFailureCategory = "symlink"
+	RuntimeClosureFailureRace       RuntimeClosureFailureCategory = "race"
+)
+
+const RuntimeClosureNoFileIndex = -1
+
+func (preflight ToolchainPreflight) RuntimeClosureDiagnostic(checked bool) (bool, RuntimeClosureFailureCategory, int) {
+	if !checked {
+		return false, RuntimeClosureFailureNotChecked, RuntimeClosureNoFileIndex
+	}
+	if preflight.RuntimeClosureReady {
+		if preflight.RuntimeClosureFailureCategory == RuntimeClosureFailureNone &&
+			preflight.RuntimeClosureFailureFileIndex == RuntimeClosureNoFileIndex {
+			return true, RuntimeClosureFailureNone, RuntimeClosureNoFileIndex
+		}
+		return false, RuntimeClosureFailureEvidence, RuntimeClosureNoFileIndex
+	}
+	switch preflight.RuntimeClosureFailureCategory {
+	case RuntimeClosureFailureEvidence:
+		return false, RuntimeClosureFailureEvidence, RuntimeClosureNoFileIndex
+	case RuntimeClosureFailureMetadata,
+		RuntimeClosureFailureRead,
+		RuntimeClosureFailureDigest,
+		RuntimeClosureFailureSymlink:
+		if preflight.RuntimeClosureFailureFileIndex >= 0 &&
+			preflight.RuntimeClosureFailureFileIndex < maximumRuntimeClosureFiles {
+			return false, preflight.RuntimeClosureFailureCategory, preflight.RuntimeClosureFailureFileIndex
+		}
+	case RuntimeClosureFailureRace:
+		if preflight.RuntimeClosureFailureFileIndex >= RuntimeClosureNoFileIndex &&
+			preflight.RuntimeClosureFailureFileIndex < maximumRuntimeClosureFiles {
+			return false, RuntimeClosureFailureRace, preflight.RuntimeClosureFailureFileIndex
+		}
+	}
+	return false, RuntimeClosureFailureEvidence, RuntimeClosureNoFileIndex
+}
+
+type runtimeClosureVerificationError struct {
+	category  RuntimeClosureFailureCategory
+	fileIndex int
+}
+
+func (err *runtimeClosureVerificationError) Error() string { return ErrInvalidInvocation.Error() }
+
+func (err *runtimeClosureVerificationError) Unwrap() error { return ErrInvalidInvocation }
+
+func (err *runtimeClosureVerificationError) RuntimeClosureFailure() (string, int) {
+	return string(err.category), err.fileIndex
+}
+
+func newRuntimeClosureVerificationError(category RuntimeClosureFailureCategory, fileIndex int) error {
+	return &runtimeClosureVerificationError{category: category, fileIndex: fileIndex}
+}
+
+func runtimeClosureFailureDiagnostic(err error) (RuntimeClosureFailureCategory, int) {
+	if err == nil {
+		return RuntimeClosureFailureNone, RuntimeClosureNoFileIndex
+	}
+	var diagnostic *runtimeClosureVerificationError
+	if errors.As(err, &diagnostic) {
+		return diagnostic.category, diagnostic.fileIndex
+	}
+	return RuntimeClosureFailureEvidence, RuntimeClosureNoFileIndex
+}
+
+func runtimeClosureFailureAtFileIndex(err error, fileIndex int) error {
+	category, _ := runtimeClosureFailureDiagnostic(err)
+	return newRuntimeClosureVerificationError(category, fileIndex)
 }
 
 type StoredBundleReceipt struct {
@@ -286,7 +369,7 @@ func productionRuntimeClosureExcludedPaths() []string {
 	return []string{
 		ProductionRuntimeClosureManifestPath,
 		"/dev", "/proc", "/run", "/sys", "/tmp", "/var/tmp",
-		"/etc/hostname", "/etc/hosts", "/etc/resolv.conf", "/etc/shadow",
+		"/etc/hostname", "/etc/hosts", "/etc/mtab", "/etc/resolv.conf", "/etc/shadow",
 		"/var/lib/xirang/asset-worker-bundles", "/var/lib/xirang/asset-worker-inbox",
 		"/var/lib/xirang-asset-runtime",
 	}
@@ -542,26 +625,45 @@ func verifyRuntimeClosureAttestationPayloads(manifestPayload, attestationPayload
 	if expectedDigest == "" || expectedDigest != manifestDigest {
 		return "", ErrInvalidInvocation
 	}
-	for _, file := range manifest.Files {
-		info, err := os.Lstat(file.Path)
-		if err != nil || info.Mode().Perm() != os.FileMode(file.Mode) || info.Size() != file.Size {
-			return "", ErrInvalidInvocation
-		}
-		switch file.Kind {
-		case "regular":
-			if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o022 != 0 ||
-				verifyRuntimeFileDigest(file.Path, info, file.SHA256) != nil {
-				return "", ErrInvalidInvocation
-			}
-		case "symlink":
-			if info.Mode()&os.ModeSymlink == 0 || verifyRuntimeSymlinkDigest(file.Path, info, file.SHA256) != nil {
-				return "", ErrInvalidInvocation
-			}
-		default:
-			return "", ErrInvalidInvocation
+	for index, file := range manifest.Files {
+		if err := verifyRuntimeClosureDeclaredFile(index, file); err != nil {
+			return "", err
 		}
 	}
 	return manifestDigest, nil
+}
+
+func verifyRuntimeClosureDeclaredFile(index int, file runtimeClosureFile) error {
+	info, err := os.Lstat(file.Path)
+	if err != nil {
+		return newRuntimeClosureVerificationError(RuntimeClosureFailureMetadata, index)
+	}
+	return verifyRuntimeClosureDeclaredFileInfo(index, file, info)
+}
+
+func verifyRuntimeClosureDeclaredFileInfo(index int, file runtimeClosureFile, info os.FileInfo) error {
+	if info.Mode().Perm() != os.FileMode(file.Mode) || info.Size() != file.Size {
+		return newRuntimeClosureVerificationError(RuntimeClosureFailureMetadata, index)
+	}
+	switch file.Kind {
+	case "regular":
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o022 != 0 {
+			return newRuntimeClosureVerificationError(RuntimeClosureFailureMetadata, index)
+		}
+		if err := verifyRuntimeFileDigest(file.Path, info, file.SHA256); err != nil {
+			return runtimeClosureFailureAtFileIndex(err, index)
+		}
+	case "symlink":
+		if info.Mode()&os.ModeSymlink == 0 {
+			return newRuntimeClosureVerificationError(RuntimeClosureFailureMetadata, index)
+		}
+		if err := verifyRuntimeSymlinkDigest(file.Path, info, file.SHA256); err != nil {
+			return runtimeClosureFailureAtFileIndex(err, index)
+		}
+	default:
+		return newRuntimeClosureVerificationError(RuntimeClosureFailureEvidence, RuntimeClosureNoFileIndex)
+	}
+	return nil
 }
 
 func verifyBoundRuntimeClosureAttestationPayloads(
@@ -606,7 +708,7 @@ func VerifyProductionRuntimeClosure(runtimeManifestPath, activeBundleRoot, goos,
 	manifestAfter, manifestErr := os.Lstat(runtimeManifestPath)
 	attestationAfter, attestationErr := os.Lstat(attestationPath)
 	if manifestErr != nil || attestationErr != nil || !os.SameFile(manifestInfo, manifestAfter) || !os.SameFile(attestationInfo, attestationAfter) {
-		return ErrInvalidInvocation
+		return newRuntimeClosureVerificationError(RuntimeClosureFailureRace, RuntimeClosureNoFileIndex)
 	}
 	return nil
 }
@@ -659,15 +761,20 @@ func readBoundedToolchainFile(filePath string, maximum int) ([]byte, error) {
 func verifyRuntimeFileDigest(filePath string, before os.FileInfo, expected string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
-		return ErrInvalidInvocation
+		return newRuntimeClosureVerificationError(RuntimeClosureFailureRead, RuntimeClosureNoFileIndex)
 	}
 	digest := sha256.New()
 	written, copyErr := io.Copy(digest, io.LimitReader(file, before.Size()+1))
 	closeErr := file.Close()
 	after, statErr := os.Lstat(filePath)
-	if copyErr != nil || closeErr != nil || statErr != nil || written != before.Size() || !os.SameFile(before, after) ||
-		hex.EncodeToString(digest.Sum(nil)) != expected {
-		return ErrInvalidInvocation
+	if copyErr != nil || closeErr != nil {
+		return newRuntimeClosureVerificationError(RuntimeClosureFailureRead, RuntimeClosureNoFileIndex)
+	}
+	if statErr != nil || written != before.Size() || !os.SameFile(before, after) {
+		return newRuntimeClosureVerificationError(RuntimeClosureFailureRace, RuntimeClosureNoFileIndex)
+	}
+	if hex.EncodeToString(digest.Sum(nil)) != expected {
+		return newRuntimeClosureVerificationError(RuntimeClosureFailureDigest, RuntimeClosureNoFileIndex)
 	}
 	return nil
 }
@@ -675,9 +782,14 @@ func verifyRuntimeFileDigest(filePath string, before os.FileInfo, expected strin
 func verifyRuntimeSymlinkDigest(filePath string, before os.FileInfo, expected string) error {
 	target, err := os.Readlink(filePath)
 	after, statErr := os.Lstat(filePath)
-	if err != nil || statErr != nil || strings.ContainsAny(target, "\x00\r\n") || !os.SameFile(before, after) ||
-		SHA256Hex([]byte(target)) != expected {
-		return ErrInvalidInvocation
+	if err != nil || statErr != nil {
+		return newRuntimeClosureVerificationError(RuntimeClosureFailureRead, RuntimeClosureNoFileIndex)
+	}
+	if int64(len(target)) != before.Size() || !os.SameFile(before, after) {
+		return newRuntimeClosureVerificationError(RuntimeClosureFailureRace, RuntimeClosureNoFileIndex)
+	}
+	if strings.ContainsAny(target, "\x00\r\n") || SHA256Hex([]byte(target)) != expected {
+		return newRuntimeClosureVerificationError(RuntimeClosureFailureSymlink, RuntimeClosureNoFileIndex)
 	}
 	return nil
 }
@@ -879,11 +991,14 @@ func newToolchainPreflight(fingerprint string, ready map[string]bool, closureErr
 			ungatedAvailable++
 		}
 	}
+	failureCategory, failureFileIndex := runtimeClosureFailureDiagnostic(closureErr)
 	return ToolchainPreflight{
-		Fingerprint:           fingerprint,
-		AvailableCapabilities: gateCapabilitiesByRuntimeClosure(ready, closureErr),
-		UngatedAvailableCount: ungatedAvailable,
-		RuntimeClosureReady:   closureErr == nil,
+		Fingerprint:                    fingerprint,
+		AvailableCapabilities:          gateCapabilitiesByRuntimeClosure(ready, closureErr),
+		UngatedAvailableCount:          ungatedAvailable,
+		RuntimeClosureReady:            closureErr == nil,
+		RuntimeClosureFailureCategory:  failureCategory,
+		RuntimeClosureFailureFileIndex: failureFileIndex,
 	}
 }
 

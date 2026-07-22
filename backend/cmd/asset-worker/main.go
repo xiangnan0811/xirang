@@ -109,10 +109,12 @@ func writeAssetWorkerPreflightDiagnostic(writer io.Writer, bundleReady, runnerRe
 			availableCount++
 		}
 	}
+	closureReady, failureCategory, failureFileIndex := preflight.RuntimeClosureDiagnostic(bundleReady)
 	_, _ = fmt.Fprintf(
 		writer,
-		"asset-worker diagnostic stage=preflight bundle_ready=%t runner_ready=%t ungated_available=%d closure_ready=%t available=%d\n",
-		bundleReady, runnerReady, preflight.UngatedAvailableCount, preflight.RuntimeClosureReady, availableCount,
+		"asset-worker diagnostic stage=preflight bundle_ready=%t runner_ready=%t ungated_available=%d closure_ready=%t closure_failure=%s closure_file_index=%d available=%d\n",
+		bundleReady, runnerReady, preflight.UngatedAvailableCount, closureReady,
+		failureCategory, failureFileIndex, availableCount,
 	)
 }
 

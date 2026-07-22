@@ -148,6 +148,191 @@ func TestRuntimeClosureAttestationRejectsTamperedOrWrongArchitectureEvidence(t *
 	}
 }
 
+type runtimeClosureDiagnosticError interface {
+	RuntimeClosureFailure() (string, int)
+}
+
+func requireRuntimeClosureDiagnostic(t *testing.T, err error, wantCategory string, wantIndex int) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("runtime closure verification unexpectedly succeeded")
+	}
+	var diagnostic runtimeClosureDiagnosticError
+	if !errors.As(err, &diagnostic) {
+		t.Fatalf("runtime closure error %T has no closed diagnostic", err)
+	}
+	if !errors.Is(err, ErrInvalidInvocation) {
+		t.Fatalf("runtime closure diagnostic lost invalid-invocation compatibility: %v", err)
+	}
+	category, index := diagnostic.RuntimeClosureFailure()
+	if category != wantCategory || index != wantIndex {
+		t.Fatalf("runtime closure diagnostic=(%q,%d), want (%q,%d)", category, index, wantCategory, wantIndex)
+	}
+	if strings.Contains(err.Error(), "/") {
+		t.Fatalf("runtime closure diagnostic disclosed a path: %q", err.Error())
+	}
+}
+
+func signedRuntimeClosurePayloads(t *testing.T, manifest runtimeClosureManifest) ([]byte, []byte) {
+	t.Helper()
+	manifestPayload, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attestationPayload, err := json.Marshal(runtimeClosureAttestations{
+		SchemaVersion: 1,
+		Attestations: []runtimeClosureAttestation{
+			{Platform: "linux/amd64", RuntimeManifestSHA256: testSHA256Hex(manifestPayload)},
+			{Platform: "linux/arm64", RuntimeManifestSHA256: strings.Repeat("b", 64)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manifestPayload, attestationPayload
+}
+
+func TestRuntimeClosureDiagnosticsClassifySortedDeclaredFileFailures(t *testing.T) {
+	root := t.TempDir()
+	firstPath := filepath.Join(root, "a-tool")
+	secondPath := filepath.Join(root, "b-tool")
+	linkPath := filepath.Join(root, "c-tool-link")
+	for filePath, payload := range map[string]string{firstPath: "alpha", secondPath: "bravo"} {
+		if err := os.WriteFile(filePath, []byte(payload), 0o555); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Base(firstPath), linkPath); err != nil {
+		t.Fatal(err)
+	}
+	manifest := runtimeClosureManifest{
+		SchemaVersion: 1,
+		Platform:      "linux/amd64",
+		Files: []runtimeClosureFile{
+			{Kind: "regular", Path: firstPath, Mode: 0o555, Size: 5, SHA256: testSHA256Hex([]byte("alpha"))},
+			{Kind: "regular", Path: secondPath, Mode: 0o555, Size: 5, SHA256: testSHA256Hex([]byte("bravo"))},
+			{Kind: "symlink", Path: linkPath, Mode: 0o777, Size: int64(len(filepath.Base(firstPath))), SHA256: testSHA256Hex([]byte(filepath.Base(firstPath)))},
+		},
+	}
+	manifestPayload, attestationPayload := signedRuntimeClosurePayloads(t, manifest)
+
+	t.Run("metadata", func(t *testing.T) {
+		if err := os.Chmod(secondPath, 0o444); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = os.Chmod(secondPath, 0o555) }()
+		_, err := verifyRuntimeClosureAttestationPayloads(manifestPayload, attestationPayload, "linux", "amd64")
+		requireRuntimeClosureDiagnostic(t, err, "metadata", 1)
+	})
+
+	t.Run("digest", func(t *testing.T) {
+		if err := os.Chmod(secondPath, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(secondPath, []byte("BRAVO"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(secondPath, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			_ = os.Chmod(secondPath, 0o644)
+			_ = os.WriteFile(secondPath, []byte("bravo"), 0o644)
+			_ = os.Chmod(secondPath, 0o555)
+		}()
+		_, err := verifyRuntimeClosureAttestationPayloads(manifestPayload, attestationPayload, "linux", "amd64")
+		requireRuntimeClosureDiagnostic(t, err, "digest", 1)
+	})
+
+	t.Run("symlink_metadata", func(t *testing.T) {
+		if err := os.Remove(linkPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("short", linkPath); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			_ = os.Remove(linkPath)
+			_ = os.Symlink(filepath.Base(firstPath), linkPath)
+		}()
+		_, err := verifyRuntimeClosureAttestationPayloads(manifestPayload, attestationPayload, "linux", "amd64")
+		requireRuntimeClosureDiagnostic(t, err, "metadata", 2)
+	})
+
+	t.Run("symlink", func(t *testing.T) {
+		if err := os.Remove(linkPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Base(secondPath), linkPath); err != nil {
+			t.Fatal(err)
+		}
+		_, err := verifyRuntimeClosureAttestationPayloads(manifestPayload, attestationPayload, "linux", "amd64")
+		requireRuntimeClosureDiagnostic(t, err, "symlink", 2)
+	})
+}
+
+func TestRuntimeClosureDeclaredFilePropagatesReadAndRaceIndex(t *testing.T) {
+	root := t.TempDir()
+	filePath := filepath.Join(root, "tool-a")
+	replacementPath := filepath.Join(root, "tool-b")
+	if err := os.WriteFile(filePath, []byte("alpha"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(replacementPath, []byte("alpha"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Lstat(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declaration := runtimeClosureFile{
+		Kind: "regular", Path: filePath, Mode: 0o555, Size: int64(len("alpha")), SHA256: testSHA256Hex([]byte("alpha")),
+	}
+	missing := declaration
+	missing.Path += "-missing"
+	requireRuntimeClosureDiagnostic(t, verifyRuntimeClosureDeclaredFileInfo(4, missing, before), "read", 4)
+	replacement := declaration
+	replacement.Path = replacementPath
+	requireRuntimeClosureDiagnostic(t, verifyRuntimeClosureDeclaredFileInfo(4, replacement, before), "race", 4)
+}
+
+func TestToolchainPreflightNormalizesClosedRuntimeClosureDiagnostic(t *testing.T) {
+	const outOfRangeIndex = maximumRuntimeClosureFiles
+	tests := []struct {
+		name         string
+		checked      bool
+		preflight    ToolchainPreflight
+		wantReady    bool
+		wantCategory RuntimeClosureFailureCategory
+		wantIndex    int
+	}{
+		{name: "not checked", wantCategory: RuntimeClosureFailureNotChecked, wantIndex: RuntimeClosureNoFileIndex},
+		{name: "unchecked overrides contradictory input", preflight: ToolchainPreflight{RuntimeClosureReady: true, RuntimeClosureFailureCategory: RuntimeClosureFailureMetadata, RuntimeClosureFailureFileIndex: 7}, wantCategory: RuntimeClosureFailureNotChecked, wantIndex: RuntimeClosureNoFileIndex},
+		{name: "success", checked: true, preflight: ToolchainPreflight{RuntimeClosureReady: true, RuntimeClosureFailureCategory: RuntimeClosureFailureNone, RuntimeClosureFailureFileIndex: RuntimeClosureNoFileIndex}, wantReady: true, wantCategory: RuntimeClosureFailureNone, wantIndex: RuntimeClosureNoFileIndex},
+		{name: "metadata file", checked: true, preflight: ToolchainPreflight{RuntimeClosureFailureCategory: RuntimeClosureFailureMetadata, RuntimeClosureFailureFileIndex: 147}, wantCategory: RuntimeClosureFailureMetadata, wantIndex: 147},
+		{name: "read file", checked: true, preflight: ToolchainPreflight{RuntimeClosureFailureCategory: RuntimeClosureFailureRead, RuntimeClosureFailureFileIndex: 3}, wantCategory: RuntimeClosureFailureRead, wantIndex: 3},
+		{name: "digest file", checked: true, preflight: ToolchainPreflight{RuntimeClosureFailureCategory: RuntimeClosureFailureDigest, RuntimeClosureFailureFileIndex: 5}, wantCategory: RuntimeClosureFailureDigest, wantIndex: 5},
+		{name: "symlink file", checked: true, preflight: ToolchainPreflight{RuntimeClosureFailureCategory: RuntimeClosureFailureSymlink, RuntimeClosureFailureFileIndex: 9}, wantCategory: RuntimeClosureFailureSymlink, wantIndex: 9},
+		{name: "global race", checked: true, preflight: ToolchainPreflight{RuntimeClosureFailureCategory: RuntimeClosureFailureRace, RuntimeClosureFailureFileIndex: RuntimeClosureNoFileIndex}, wantCategory: RuntimeClosureFailureRace, wantIndex: RuntimeClosureNoFileIndex},
+		{name: "file race", checked: true, preflight: ToolchainPreflight{RuntimeClosureFailureCategory: RuntimeClosureFailureRace, RuntimeClosureFailureFileIndex: 11}, wantCategory: RuntimeClosureFailureRace, wantIndex: 11},
+		{name: "zero value after check", checked: true, wantCategory: RuntimeClosureFailureEvidence, wantIndex: RuntimeClosureNoFileIndex},
+		{name: "ready with failure", checked: true, preflight: ToolchainPreflight{RuntimeClosureReady: true, RuntimeClosureFailureCategory: RuntimeClosureFailureMetadata, RuntimeClosureFailureFileIndex: 1}, wantCategory: RuntimeClosureFailureEvidence, wantIndex: RuntimeClosureNoFileIndex},
+		{name: "not ready with none", checked: true, preflight: ToolchainPreflight{RuntimeClosureFailureCategory: RuntimeClosureFailureNone, RuntimeClosureFailureFileIndex: RuntimeClosureNoFileIndex}, wantCategory: RuntimeClosureFailureEvidence, wantIndex: RuntimeClosureNoFileIndex},
+		{name: "not checked after check", checked: true, preflight: ToolchainPreflight{RuntimeClosureFailureCategory: RuntimeClosureFailureNotChecked, RuntimeClosureFailureFileIndex: RuntimeClosureNoFileIndex}, wantCategory: RuntimeClosureFailureEvidence, wantIndex: RuntimeClosureNoFileIndex},
+		{name: "missing file index", checked: true, preflight: ToolchainPreflight{RuntimeClosureFailureCategory: RuntimeClosureFailureMetadata, RuntimeClosureFailureFileIndex: RuntimeClosureNoFileIndex}, wantCategory: RuntimeClosureFailureEvidence, wantIndex: RuntimeClosureNoFileIndex},
+		{name: "out of range file index", checked: true, preflight: ToolchainPreflight{RuntimeClosureFailureCategory: RuntimeClosureFailureMetadata, RuntimeClosureFailureFileIndex: outOfRangeIndex}, wantCategory: RuntimeClosureFailureEvidence, wantIndex: RuntimeClosureNoFileIndex},
+		{name: "unknown category", checked: true, preflight: ToolchainPreflight{RuntimeClosureFailureCategory: RuntimeClosureFailureCategory("future"), RuntimeClosureFailureFileIndex: 1}, wantCategory: RuntimeClosureFailureEvidence, wantIndex: RuntimeClosureNoFileIndex},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ready, category, index := test.preflight.RuntimeClosureDiagnostic(test.checked)
+			if ready != test.wantReady || category != test.wantCategory || index != test.wantIndex {
+				t.Fatalf("normalized diagnostic=(%t,%q,%d), want (%t,%q,%d)", ready, category, index, test.wantReady, test.wantCategory, test.wantIndex)
+			}
+		})
+	}
+}
+
 func TestBuildAndWriteRuntimeClosureManifestCoversRegularFilesAndSymlinkTargets(t *testing.T) {
 	root := t.TempDir()
 	regularPath := filepath.Join(root, "bin", "tool")
@@ -208,7 +393,7 @@ func TestProductionRuntimeClosureExcludesOnlyReviewedSystemMetadata(t *testing.T
 	want := []string{
 		ProductionRuntimeClosureManifestPath,
 		"/dev", "/proc", "/run", "/sys", "/tmp", "/var/tmp",
-		"/etc/hostname", "/etc/hosts", "/etc/resolv.conf", "/etc/shadow",
+		"/etc/hostname", "/etc/hosts", "/etc/mtab", "/etc/resolv.conf", "/etc/shadow",
 		"/var/lib/xirang/asset-worker-bundles", "/var/lib/xirang/asset-worker-inbox",
 		"/var/lib/xirang-asset-runtime",
 	}
@@ -299,7 +484,9 @@ func TestToolchainPreflightPreservesClosedRuntimeClosureDiagnostics(t *testing.T
 		capabilityspec.CapabilityMediaProbe: false,
 	}
 	preflight := newToolchainPreflight(strings.Repeat("a", 64), ready, ErrInvalidInvocation)
-	if preflight.UngatedAvailableCount != 1 || preflight.RuntimeClosureReady {
+	if preflight.UngatedAvailableCount != 1 || preflight.RuntimeClosureReady ||
+		preflight.RuntimeClosureFailureCategory != RuntimeClosureFailureEvidence ||
+		preflight.RuntimeClosureFailureFileIndex != RuntimeClosureNoFileIndex {
 		t.Fatalf("preflight diagnostics=%+v", preflight)
 	}
 	for capability, available := range preflight.AvailableCapabilities {
@@ -310,6 +497,8 @@ func TestToolchainPreflightPreservesClosedRuntimeClosureDiagnostics(t *testing.T
 
 	preflight = newToolchainPreflight(strings.Repeat("b", 64), ready, nil)
 	if preflight.UngatedAvailableCount != 1 || !preflight.RuntimeClosureReady ||
+		preflight.RuntimeClosureFailureCategory != RuntimeClosureFailureNone ||
+		preflight.RuntimeClosureFailureFileIndex != RuntimeClosureNoFileIndex ||
 		!preflight.AvailableCapabilities[capabilityspec.CapabilityImageOCR] {
 		t.Fatalf("successful preflight diagnostics=%+v", preflight)
 	}
