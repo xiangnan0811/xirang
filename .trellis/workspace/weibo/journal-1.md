@@ -29,15 +29,27 @@
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] Fresh `env -u NODE_ENV TMPDIR=/dev/shm GOCACHE=<isolated> make check`:
+  backend lint 0 issues, all Go packages, frontend 162 files / 935 tests,
+  and backend/frontend production builds.
+- [OK] Bundle budget: 498.14/500 KiB main JavaScript and 104.55/105 KiB
+  main CSS.
+- [OK] Complete signed offline Worker profile and runtime smoke on linux/amd64;
+  Worker image `sha256:e9669ea3c34cab10821f13a15ced19c2f26ce5ca4458ab45ecc5ebdb6c9c2e81`.
+- [OK] Trellis validate 23/24 JSONL; exact manifest 165/165 unique,
+  159 changed product paths, outside 0, staged/untracked/whitespace clean.
+- [CI] Fresh arm64 build/scan, both Trivy rows, actionlint, bridge-mode profile
+  smoke and required-check aggregate remain pending GitHub CI evidence.
 
 ### Status
 
-[OK] **Completed**
+[OK] **Repair committed; single PR delivery pending**
 
 ### Next Steps
 
-- None - task complete
+- Push the existing Child branch, open one ready PR, monitor every required
+  check, squash merge only when green, then verify post-merge automation,
+  main synchronization and exact feature-branch/worktree cleanup.
 
 
 ## Session 2: 重建 Trellis 配置更新 PR
@@ -1124,3 +1136,42 @@ access.
 
 - Push the single feature branch, open one ready PR, require all CI checks,
   squash merge, then verify post-merge release automation and repository hygiene.
+
+
+## Session 28: Child 11 Worker capabilities repair and PR delivery
+
+**Date**: 2026-07-22
+**Task**: Child 11 Worker capabilities repair and PR delivery
+**Branch**: `codex/backup-assets-worker-capabilities`
+
+### Summary
+
+Closed the complete-profile updater inbox lifecycle defect, reran final quality and scope gates, and prepared the archived Child for its single PR.
+
+### Main Changes
+
+- Added the approved 164-to-165 strict JSON null parser correction and completed the existing 165-path repair set without adding another path, migration, dependency, Provider mutation, all-in-one release change, or feature enablement.
+- Fixed the signed offline updater lifecycle so a candidate delivered after NewInbox startup is accepted when the root is still 0555 and the same inode; per-candidate pre/open/post mtime, ctime, inode and entry-set stability checks remain fail closed.
+- Preserved archive gzip/xz/zstd, advertised image, optional secret, OOXML/ODF preflight, Derived/Search fenced revocation, Worker sandbox, updater trust, default-off degradation, API/frontend boundary and documentation-truth contracts.
+- Added archived evidence Section 20 with the RED/GREEN result, final full profile smoke, deterministic Swagger hash, bundle measurements and exact-scope result.
+- Created repair work commit 19ef777 after the original work/archive/journal chain; the already completed Child was not restarted or archived again. Parent remains planning and Release Please PR #386 remains outside this Child.
+
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `19ef777` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
