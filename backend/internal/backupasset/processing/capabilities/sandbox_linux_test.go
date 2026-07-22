@@ -293,6 +293,28 @@ func TestProductionToolchainInventoryFingerprintAndPartialPreflight(t *testing.T
 	}
 }
 
+func TestToolchainPreflightPreservesClosedRuntimeClosureDiagnostics(t *testing.T) {
+	ready := map[string]bool{
+		capabilityspec.CapabilityImageOCR:   true,
+		capabilityspec.CapabilityMediaProbe: false,
+	}
+	preflight := newToolchainPreflight(strings.Repeat("a", 64), ready, ErrInvalidInvocation)
+	if preflight.UngatedAvailableCount != 1 || preflight.RuntimeClosureReady {
+		t.Fatalf("preflight diagnostics=%+v", preflight)
+	}
+	for capability, available := range preflight.AvailableCapabilities {
+		if available {
+			t.Fatalf("failed runtime closure left %s available", capability)
+		}
+	}
+
+	preflight = newToolchainPreflight(strings.Repeat("b", 64), ready, nil)
+	if preflight.UngatedAvailableCount != 1 || !preflight.RuntimeClosureReady ||
+		!preflight.AvailableCapabilities[capabilityspec.CapabilityImageOCR] {
+		t.Fatalf("successful preflight diagnostics=%+v", preflight)
+	}
+}
+
 func matchingToolchainInspection(inventory toolchainInventory) toolchainInspection {
 	inspection := toolchainInspection{
 		Packages: make(map[string]string),

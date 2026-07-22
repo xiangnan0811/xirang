@@ -47,6 +47,8 @@ const (
 type ToolchainPreflight struct {
 	Fingerprint           string
 	AvailableCapabilities map[string]bool
+	UngatedAvailableCount int
+	RuntimeClosureReady   bool
 }
 
 type StoredBundleReceipt struct {
@@ -867,7 +869,22 @@ func PreflightProductionToolchain(ctx context.Context, activeBundleRoot, expecte
 	closureErr := VerifyProductionRuntimeClosure(
 		ProductionRuntimeClosureManifestPath, activeBundleRoot, runtime.GOOS, runtime.GOARCH, expectedAttestationSHA256,
 	)
-	return ToolchainPreflight{Fingerprint: fingerprint, AvailableCapabilities: gateCapabilitiesByRuntimeClosure(ready, closureErr)}
+	return newToolchainPreflight(fingerprint, ready, closureErr)
+}
+
+func newToolchainPreflight(fingerprint string, ready map[string]bool, closureErr error) ToolchainPreflight {
+	ungatedAvailable := 0
+	for _, available := range ready {
+		if available {
+			ungatedAvailable++
+		}
+	}
+	return ToolchainPreflight{
+		Fingerprint:           fingerprint,
+		AvailableCapabilities: gateCapabilitiesByRuntimeClosure(ready, closureErr),
+		UngatedAvailableCount: ungatedAvailable,
+		RuntimeClosureReady:   closureErr == nil,
+	}
 }
 
 func cloneToolchainInventory(value toolchainInventory) toolchainInventory {

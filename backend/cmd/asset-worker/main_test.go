@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -298,6 +299,26 @@ func TestAssetWorkerMainBuildsVerifiedToolRunnerWithoutPrivilegedImports(t *test
 	} {
 		if strings.Contains(strings.ToLower(text), strings.ToLower(forbidden)) {
 			t.Fatalf("asset-worker main crossed protocol-only boundary with %q", forbidden)
+		}
+	}
+}
+
+func TestAssetWorkerPreflightDiagnosticUsesOnlyClosedState(t *testing.T) {
+	var output bytes.Buffer
+	writeAssetWorkerPreflightDiagnostic(&output, true, true, capabilities.ToolchainPreflight{
+		UngatedAvailableCount: 10,
+		RuntimeClosureReady:   false,
+		AvailableCapabilities: map[string]bool{
+			capabilityspec.CapabilityImageOCR: false,
+		},
+	})
+	want := "asset-worker diagnostic stage=preflight bundle_ready=true runner_ready=true ungated_available=10 closure_ready=false available=0\n"
+	if output.String() != want {
+		t.Fatalf("preflight diagnostic=%q, want %q", output.String(), want)
+	}
+	for _, forbidden := range []string{"/", "error", "invalid invocation"} {
+		if strings.Contains(output.String(), forbidden) {
+			t.Fatalf("preflight diagnostic disclosed %q: %q", forbidden, output.String())
 		}
 	}
 }

@@ -79,13 +79,7 @@ func runAssetWorkerService(ctx context.Context, args []string) error {
 			ctx, bundleEvidence.Root, bundleEvidence.ToolchainAttestationSHA256,
 		)
 	}
-	availableCount := 0
-	for _, available := range preflight.AvailableCapabilities {
-		if available {
-			availableCount++
-		}
-	}
-	_, _ = fmt.Fprintf(os.Stderr, "asset-worker diagnostic stage=preflight bundle_ready=%t runner_ready=%t available=%d\n", bundleErr == nil, toolErr == nil, availableCount)
+	writeAssetWorkerPreflightDiagnostic(os.Stderr, bundleErr == nil, toolErr == nil, preflight)
 	productionOptions := processing.ProductionWorkerCapabilityOptions{}
 	if toolErr == nil && bundleErr == nil && preflight.Fingerprint != "" {
 		productionOptions.ToolRunner = toolRunner
@@ -106,6 +100,20 @@ func runAssetWorkerService(ctx context.Context, args []string) error {
 		return err
 	}
 	return runner.Run(ctx)
+}
+
+func writeAssetWorkerPreflightDiagnostic(writer io.Writer, bundleReady, runnerReady bool, preflight capabilities.ToolchainPreflight) {
+	availableCount := 0
+	for _, available := range preflight.AvailableCapabilities {
+		if available {
+			availableCount++
+		}
+	}
+	_, _ = fmt.Fprintf(
+		writer,
+		"asset-worker diagnostic stage=preflight bundle_ready=%t runner_ready=%t ungated_available=%d closure_ready=%t available=%d\n",
+		bundleReady, runnerReady, preflight.UngatedAvailableCount, preflight.RuntimeClosureReady, availableCount,
+	)
 }
 
 func parseAssetWorkerOptions(args []string) (assetWorkerOptions, error) {
