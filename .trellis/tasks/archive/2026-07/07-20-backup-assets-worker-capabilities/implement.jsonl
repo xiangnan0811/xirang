@@ -1,0 +1,23 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Keep Child 11 on the merged paired 000067 contract, preserve SQLite/PostgreSQL transaction semantics, and prohibit new DDL or model drift."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Map capability/updater/tool outcomes to closed sentinel codes, wrap errors safely, and keep API failures sanitized and failure-closed."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Enforce structured low-cardinality diagnostics with no paths, credentials, raw tool output, IDs, or source content."}
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Guide runtime composition, optional profile behavior, shutdown/cancellation, sandbox mounts, network isolation, and core-only degradation."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Drive TDD, race/fault-injection coverage, bounded resources, real PostgreSQL behavior, and full backend gates."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Keep raw snake_case DTOs private, use exhaustive closed mappers and camelCase domain types, and avoid any or unchecked casts."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Reuse shadcn primitives, stable dimensions, lazy feature boundaries, and accessible processing/preview composition."}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"Design abortable, revision-keyed processing polling hooks with cleanup and no stale state updates."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Preserve workspace route state, request races, cancellation and native fallback while adding derived processing status."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Verify keyboard tabs, focus restoration, live status, reduced motion and responsive inspector behavior."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Run focused mapper/UI tests, lazy-chunk assertions, bundle budget and the complete frontend check."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse Child 7/8/10 ports, settings/audit/response helpers, Content Broker tickets and the existing lazy API adapter."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace capability/profile/fingerprint/policy/fence state from protocol and DB through API, Search, Content and frontend without drift."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Preserve dedicated branch, exact future manifest, no wildcard staging, PR/CI monitoring, merge and main synchronization rules."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Keep Swagger, Compose/CI claims, task status and implementation evidence aligned with commands actually run."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/prd.md","reason":"Parent product goals, accepted Worker/preview/security decisions, migration reservations and Child 11 boundary."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/design.md","reason":"Parent Worker, preview, authorization, API, deployment, degradation and verification contracts refined by this child."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/implement.md","reason":"Parent Child 11 coarse file list, dependency order, global gates and rollback strategy to reconcile with the exact focused manifest."}
+{"file":".trellis/tasks/archive/2026-07/07-19-backup-assets-worker-protocol/prd.md","reason":"Merged Child 10 queue, grants, Worker trust, Derived Store and updater metadata contract that Child 11 consumes."}
+{"file":".trellis/tasks/archive/2026-07/07-19-backup-assets-worker-protocol/design.md","reason":"Child 10 protocol, work identity, role/error closure, fence and Derived publication boundaries."}
+{"file":".trellis/tasks/archive/2026-07/07-19-backup-assets-worker-protocol/implement.md","reason":"Child 10 exact runtime/model/port evidence and the explicit handoff of real tools, sandbox and enhanced UI to Child 11."}
+{"file":".trellis/tasks/archive/2026-07/07-19-backup-assets-worker-protocol/research/current-main-evidence.md","reason":"Merged-main evidence for Content Attempt Broker, Search port, key domains, runtime composition, settings and protocol-only Worker state."}
+{"file":".trellis/tasks/archive/2026-07/07-20-backup-assets-worker-capabilities/research/current-main-evidence.md","reason":"Focused current-main symbols, line references, baseline, scope deviations, frozen decisions and planning-only execution ledger."}

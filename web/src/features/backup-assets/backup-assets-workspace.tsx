@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowRight, Database, FolderTree, PanelRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { LoadingState } from "@/components/ui/loading-state";
+import type { AuthContextValue } from "@/context/auth-context.shared";
 import type { BackupRepository, CatalogProjection } from "@/types/domain";
 
 import { AssetContextPanel } from "./asset-context-panel";
@@ -45,9 +46,21 @@ import {
   type BackupAssetsRestorationRegistry,
 } from "./backup-assets-state";
 
+const LazyProcessingCoveragePanel = lazy(() =>
+  import("./processing-coverage-panel").then((module) => ({
+    default: module.ProcessingCoveragePanel,
+  }))
+);
+
+type BackupAssetsProcessingRuntime = Pick<
+  AuthContextValue,
+  "token" | "role" | "ensureStepUpProof"
+>;
+
 export interface BackupAssetsWorkspaceProps {
   controller: BackupAssetsController;
   preferences?: BackupAssetsPreferencesV1;
+  processingRuntime?: BackupAssetsProcessingRuntime;
   onRoutePatch: (patch: Partial<BackupAssetsRouteState>) => void;
   onReturnOverview: () => void;
 }
@@ -57,6 +70,7 @@ type BackupAssetsViewport = "desktop" | "intermediate" | "mobile";
 export function BackupAssetsWorkspace({
   controller,
   preferences = DEFAULT_BACKUP_ASSETS_PREFERENCES,
+  processingRuntime,
   onRoutePatch,
   onReturnOverview,
 }: BackupAssetsWorkspaceProps) {
@@ -208,26 +222,31 @@ export function BackupAssetsWorkspace({
   }
 
   const contextPanel = (
-    <AssetContextPanel
-      route={controller.state.route}
-      repositories={controller.repositories}
-      recoveryPoints={controller.recoveryPoints}
-      selectedRepository={selectedRepository}
-      selectedRecoveryPoint={controller.selectedRecoveryPoint}
-      directoryRows={controller.state.route.view === "browse" ? controller.state.result.rows : []}
-      overlayCounts={{
-        savedSearches: controller.overlays.savedSearches.items.length,
-        favorites: controller.overlays.favorites.items.length,
-        tags: controller.overlays.tags.items.length,
-        recent: controller.overlays.recent.items.length,
-      }}
-      onRoutePatch={onRoutePatch}
-      onOverlaySectionChange={(section, trigger) => {
-        overlayTriggerRef.current = trigger;
-        setOverlaySection(section);
-        controller.actions.loadOverlaySection(section);
-      }}
-    />
+    <>
+      {processingRuntime?.token && processingRuntime.role === "admin" ? (
+        <ProcessingCoverageDialog runtime={processingRuntime} />
+      ) : null}
+      <AssetContextPanel
+        route={controller.state.route}
+        repositories={controller.repositories}
+        recoveryPoints={controller.recoveryPoints}
+        selectedRepository={selectedRepository}
+        selectedRecoveryPoint={controller.selectedRecoveryPoint}
+        directoryRows={controller.state.route.view === "browse" ? controller.state.result.rows : []}
+        overlayCounts={{
+          savedSearches: controller.overlays.savedSearches.items.length,
+          favorites: controller.overlays.favorites.items.length,
+          tags: controller.overlays.tags.items.length,
+          recent: controller.overlays.recent.items.length,
+        }}
+        onRoutePatch={onRoutePatch}
+        onOverlaySectionChange={(section, trigger) => {
+          overlayTriggerRef.current = trigger;
+          setOverlaySection(section);
+          controller.actions.loadOverlaySection(section);
+        }}
+      />
+    </>
   );
 
   const inspector =
@@ -246,6 +265,7 @@ export function BackupAssetsWorkspace({
             resource={controller.content}
             canPreview={canPreview}
             canDownload={canDownload}
+            processingToken={processingRuntime?.token}
             onLoadPreview={controller.actions.loadPreview}
             onRenew={controller.actions.renewPreview}
             onPrepareDownload={controller.actions.prepareDownload}
@@ -442,6 +462,38 @@ export function BackupAssetsWorkspace({
         }}
       />
     </>
+  );
+}
+
+function ProcessingCoverageDialog({ runtime }: { runtime: BackupAssetsProcessingRuntime }) {
+  const { t } = useTranslation();
+  const title = t("backupAssets.adminProcessing.title");
+  return (
+    <div className="flex min-h-11 items-center border-b border-border px-2">
+      <Dialog>
+        <DialogTrigger asChild>
+          <Button type="button" variant="ghost" size="sm">
+            <PanelRight className="size-4" aria-hidden />
+            {title}
+          </Button>
+        </DialogTrigger>
+        <DialogContent size="lg" aria-label={title} aria-describedby={undefined}>
+          <DialogHeader>
+            <DialogTitle>{title}</DialogTitle>
+            <DialogCloseButton aria-label={title} />
+          </DialogHeader>
+          <DialogBody className="max-h-[75dvh] overflow-y-auto p-0">
+            <Suspense fallback={<LoadingState title={t("backupAssets.adminProcessing.loading")} rows={7} />}>
+              <LazyProcessingCoveragePanel
+                token={runtime.token}
+                role={runtime.role}
+                ensureStepUpProof={runtime.ensureStepUpProof}
+              />
+            </Suspense>
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }
 

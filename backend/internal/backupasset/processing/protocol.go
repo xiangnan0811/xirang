@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,8 @@ import (
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/content"
+	"xirang/backend/internal/backupasset/processing/capabilities"
+	"xirang/backend/internal/backupasset/processing/capabilityspec"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
@@ -948,9 +951,10 @@ func workerProtocolCleanupContext(ctx context.Context) (context.Context, context
 }
 
 type ProtocolService struct {
-	db       *gorm.DB
-	registry *CapabilityRegistry
-	now      func() time.Time
+	db         *gorm.DB
+	registryMu sync.RWMutex
+	registry   *CapabilityRegistry
+	now        func() time.Time
 }
 
 func NewProtocolService(db *gorm.DB, registry *CapabilityRegistry, now func() time.Time) (*ProtocolService, error) {
@@ -964,6 +968,8 @@ func NewProtocolService(db *gorm.DB, registry *CapabilityRegistry, now func() ti
 }
 
 func (service *ProtocolService) Handshake(ctx context.Context, identity WorkerTransportIdentity, request HandshakeRequest) (HandshakeResult, error) {
+	service.registryMu.RLock()
+	defer service.registryMu.RUnlock()
 	validated, err := ValidateHandshake(identity, request, service.registry)
 	if err != nil {
 		return HandshakeResult{}, err
@@ -1060,6 +1066,16 @@ func (service *ProtocolService) Handshake(ctx context.Context, identity WorkerTr
 		return HandshakeResult{}, err
 	}
 	return response, nil
+}
+
+func (service *ProtocolService) ReplaceRegistry(registry *CapabilityRegistry) error {
+	if service == nil || registry == nil {
+		return ErrProtocolInvalid
+	}
+	service.registryMu.Lock()
+	service.registry = registry
+	service.registryMu.Unlock()
+	return nil
 }
 
 func (service *ProtocolService) hasLiveWorkerAuthorityTx(ctx context.Context, tx *gorm.DB, workerID string) (bool, error) {
@@ -1181,7 +1197,101 @@ func (service *ProtocolService) replaceCapabilitiesTx(tx *gorm.DB, workerID stri
 func (service *ProtocolService) utcNow() time.Time { return service.now().UTC() }
 
 func NewProductionCapabilityRegistry() *CapabilityRegistry {
-	return &CapabilityRegistry{definitions: map[string]CapabilityDefinition{}}
+	registry, err := NewProductionCapabilityRegistryWithBundles(nil)
+	if err != nil {
+		return &CapabilityRegistry{definitions: map[string]CapabilityDefinition{}}
+	}
+	return registry
+}
+
+type CapabilityBundleFingerprints map[string][]string
+
+func NewProductionCapabilityRegistryWithBundles(bundles CapabilityBundleFingerprints) (*CapabilityRegistry, error) {
+	advertisements, err := productionCapabilityAdvertisementsWithBundles(bundles)
+	if err != nil {
+		return nil, err
+	}
+	definitions := make([]CapabilityDefinition, 0, len(advertisements))
+	for _, advertisement := range advertisements {
+		definitions = append(definitions, CapabilityDefinition{
+			Capability: advertisement.Capability, CapabilitySchema: advertisement.CapabilitySchema,
+			PipelineFingerprint: advertisement.PipelineFingerprint, OutputProfile: advertisement.OutputProfile,
+		})
+	}
+	registry, err := NewCapabilityRegistry(definitions)
+	if err != nil {
+		return nil, err
+	}
+	return registry, nil
+}
+
+var productionToolchainFingerprint = capabilities.ProductionToolchainFingerprint()
+
+const productionSecurityPolicy = "backup-assets-security-v1"
+
+func productionCapabilityAdvertisements() []CapabilityAdvertisement {
+	advertisements, err := productionCapabilityAdvertisementsWithBundles(nil)
+	if err != nil {
+		return nil
+	}
+	return advertisements
+}
+
+func productionCapabilityAdvertisementsWithBundles(bundles CapabilityBundleFingerprints) ([]CapabilityAdvertisement, error) {
+	profiles := capabilityspec.WorkerProfiles()
+	normalized, err := normalizeCapabilityBundleFingerprints(profiles, bundles)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]CapabilityAdvertisement, 0, len(profiles))
+	for _, profile := range profiles {
+		pipelineFingerprint, err := profile.PipelineFingerprint(
+			productionToolchainFingerprint, normalized[profile.Capability], productionSecurityPolicy,
+		)
+		if err != nil {
+			return nil, ErrProtocolInvalid
+		}
+		inputModes := make([]ProtocolInputMode, len(profile.InputModes))
+		for index, mode := range profile.InputModes {
+			inputModes[index] = ProtocolInputMode(mode)
+		}
+		result = append(result, CapabilityAdvertisement{
+			SchemaVersion: 1, Capability: profile.Capability, CapabilitySchema: profile.CapabilitySchema,
+			PipelineFingerprint: pipelineFingerprint, OutputProfile: profile.OutputProfile, InputModes: inputModes,
+			Limits: ProtocolCapabilityLimits{
+				MaxInputBytes: profile.Limits.MaxInputBytes, MaxOutputBytes: profile.Limits.MaxOutputBytes,
+				MaxOutputCount: profile.Limits.MaxOutputCount, MaxPages: profile.Limits.MaxPages,
+				MaxPixels: profile.Limits.MaxPixels, MaxDurationMillis: profile.Limits.MaxDurationMillis,
+				MaxExpandedBytes: profile.Limits.MaxExpandedBytes,
+			},
+		})
+	}
+	return result, nil
+}
+
+func normalizeCapabilityBundleFingerprints(
+	profiles []capabilityspec.Profile,
+	bundles CapabilityBundleFingerprints,
+) (CapabilityBundleFingerprints, error) {
+	allowed := make(map[string]bool, len(profiles))
+	for _, profile := range profiles {
+		allowed[profile.Capability] = true
+	}
+	result := make(CapabilityBundleFingerprints, len(bundles))
+	for capability, values := range bundles {
+		if !allowed[capability] || len(values) == 0 || len(values) > 8 {
+			return nil, ErrProtocolInvalid
+		}
+		cloned := append([]string(nil), values...)
+		sort.Strings(cloned)
+		for index, fingerprint := range cloned {
+			if !lowerHex(fingerprint, 64) || index > 0 && fingerprint == cloned[index-1] {
+				return nil, ErrProtocolInvalid
+			}
+		}
+		result[capability] = cloned
+	}
+	return result, nil
 }
 
 func NewCapabilityRegistry(definitions []CapabilityDefinition) (*CapabilityRegistry, error) {
@@ -1197,6 +1307,23 @@ func NewCapabilityRegistry(definitions []CapabilityDefinition) (*CapabilityRegis
 		registry.definitions[key] = definition
 	}
 	return registry, nil
+}
+
+func (registry *CapabilityRegistry) ActivePipelineFingerprint(capability, outputProfile string) (string, bool) {
+	if registry == nil || capability == "" || outputProfile == "" {
+		return "", false
+	}
+	fingerprint := ""
+	for _, definition := range registry.definitions {
+		if definition.Capability != capability || definition.OutputProfile != outputProfile {
+			continue
+		}
+		if fingerprint != "" && fingerprint != definition.PipelineFingerprint {
+			return "", false
+		}
+		fingerprint = definition.PipelineFingerprint
+	}
+	return fingerprint, fingerprint != ""
 }
 
 func DecodeHandshakeRequest(payload []byte) (HandshakeRequest, error) {

@@ -88,6 +88,563 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/backup-asset-processing/backfill-policy": {
+            "patch": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Admin-only、feature-gated 的 revision-CAS mutation；请求只包含闭合 pause/quota/concurrency 字段并写入 typed audit",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "更新备份资产处理回填策略",
+                "parameters": [
+                    {
+                        "description": "回填 pause/quota 策略",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupWorkerPolicyPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.ProcessingBackfillPolicy"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/backup-asset-processing/capabilities": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Admin-only、feature-gated 的闭合 capability/profile 清单；不返回 Worker 身份、路径、凭证或原始诊断",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "查看备份资产 Worker capability inventory",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupWorkerCapabilitiesResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/backup-asset-processing/coverage": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Admin-only、feature-gated 的有界 coverage 聚合；generation、coverage、staleness 与 availability 保持独立",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "查看备份资产处理覆盖率",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.CoverageSummary"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/backup-asset-processing/updater": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Admin-only、feature-gated 的脱敏 updater 状态；不返回 inbox 路径、bundle bytes、凭证或原始错误",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "查看备份资产 updater 状态",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.ProcessingUpdaterStatus"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/backup-asset-processing/updater/offline-candidates": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Admin-only、feature-gated 的已验签 candidate 摘要；只返回 opaque candidate ID 与有界版本/指纹",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "列出备份资产 updater 离线候选",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupWorkerCandidatesResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/backup-asset-processing/updater/offline-candidates/scan": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Admin-only、feature-gated 的固定 inbox scan；请求不接受 body/query，异步结果只返回 bounded accepted 状态",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "扫描备份资产 updater 离线候选",
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupWorkerAcceptedResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/backup-asset-processing/updater/offline-imports": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Admin-only、feature-gated 的 bounded candidate activation；使用 expected_active_fingerprint CAS，不接受 bundle bytes、URL 或服务器路径",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "激活备份资产 updater 离线候选",
+                "parameters": [
+                    {
+                        "description": "candidate opaque ID 与期望 active fingerprint",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupWorkerActivationPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupWorkerAcceptedResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/alerts": {
             "get": {
                 "security": [
@@ -6183,6 +6740,380 @@ const docTemplate = `{
                 }
             }
         },
+        "/recovery-points/{id}/entries/{entryId}/preview-jobs": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "只接受 URI 中的精确 AssetRef 与闭合 representation/profile；queued 响应中的 job_id 是独立 processing-interest handle",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "创建备份资产增强预览任务",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Catalog entry opaque ID",
+                        "name": "entryId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "闭合增强预览请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupProcessingCreatePayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.PreviewJobResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.PreviewJobResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-points/{id}/entries/{entryId}/preview-jobs/{jobId}": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "查询备份资产增强预览任务",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Catalog entry opaque ID",
+                        "name": "entryId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "processing-interest opaque ID",
+                        "name": "jobId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.PreviewJobResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-points/{id}/entries/{entryId}/preview-jobs/{jobId}/cancel": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "取消当前用户的增强预览 interest",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Catalog entry opaque ID",
+                        "name": "entryId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "processing-interest opaque ID",
+                        "name": "jobId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "固定版本取消请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupProcessingCancelPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupProcessingCancelResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-points/{id}/entries/{entryId}/processing": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回闭合 representation 状态，不创建任务且不暴露内部处理身份",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "查看精确备份资产的增强处理状态",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Catalog entry opaque ID",
+                        "name": "entryId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.AssetProcessingState"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/recovery-points/{id}/evidence": {
             "get": {
                 "security": [
@@ -10700,6 +11631,56 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.backupProcessingCancelPayload": {
+            "type": "object",
+            "properties": {
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
+        "internal_api_handlers.backupProcessingCancelResult": {
+            "type": "object",
+            "properties": {
+                "canceled": {
+                    "type": "boolean"
+                },
+                "schema_version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.backupProcessingCreatePayload": {
+            "type": "object",
+            "properties": {
+                "profile": {
+                    "type": "string"
+                },
+                "representation": {
+                    "enum": [
+                        "thumbnail",
+                        "text",
+                        "document_pages",
+                        "media_preview",
+                        "archive_index"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.PreviewRepresentation"
+                        }
+                    ]
+                },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
         "internal_api_handlers.backupRepositoryConnectRequest": {
             "type": "object",
             "properties": {
@@ -10717,6 +11698,124 @@ const docTemplate = `{
                 },
                 "task_id": {
                     "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.backupWorkerAcceptedResult": {
+            "type": "object",
+            "properties": {
+                "accepted": {
+                    "type": "boolean"
+                },
+                "schema_version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.backupWorkerActivationPayload": {
+            "type": "object",
+            "required": [
+                "candidate_id",
+                "expected_active_fingerprint",
+                "schema_version"
+            ],
+            "properties": {
+                "candidate_id": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "minLength": 32,
+                    "x-pattern": "^[0-9a-f]{32}$"
+                },
+                "expected_active_fingerprint": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "x-nullable": true,
+                    "x-pattern": "^[0-9a-f]{64}$"
+                },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
+        "internal_api_handlers.backupWorkerCandidatesResult": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.ProcessingUpdaterCandidate"
+                    }
+                },
+                "schema_version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.backupWorkerCapabilitiesResult": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.CapabilityInventoryItem"
+                    }
+                },
+                "schema_version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.backupWorkerPolicyPayload": {
+            "type": "object",
+            "required": [
+                "batch_size",
+                "bytes_per_hour",
+                "capability_concurrency",
+                "expected_revision",
+                "jobs_per_hour",
+                "paused",
+                "provider_concurrency",
+                "schema_version"
+            ],
+            "properties": {
+                "batch_size": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "bytes_per_hour": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "capability_concurrency": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "expected_revision": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "x-pattern": "^[0-9a-f]{64}$"
+                },
+                "jobs_per_hour": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "paused": {
+                    "type": "boolean"
+                },
+                "provider_concurrency": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
                 }
             }
         },
@@ -13651,6 +14750,284 @@ const docTemplate = `{
                 }
             }
         },
+        "xirang_backend_internal_backupasset_processing.AssetProcessingState": {
+            "type": "object",
+            "properties": {
+                "representations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.PreviewJobResult"
+                    }
+                },
+                "schema_version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_processing.CapabilityInventoryItem": {
+            "type": "object",
+            "properties": {
+                "capability": {
+                    "type": "string"
+                },
+                "deployed": {
+                    "type": "boolean"
+                },
+                "enabled_by_default": {
+                    "type": "boolean"
+                },
+                "input_mimes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "limits": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_processing_capabilityspec.Limits"
+                },
+                "profile": {
+                    "type": "string"
+                },
+                "ready_workers": {
+                    "type": "integer"
+                },
+                "requires_secure_workspace": {
+                    "type": "boolean"
+                },
+                "schema": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_processing.CoverageBucket": {
+            "type": "object",
+            "properties": {
+                "capability": {
+                    "type": "string"
+                },
+                "completed": {
+                    "type": "integer"
+                },
+                "eligible": {
+                    "type": "integer"
+                },
+                "failed": {
+                    "type": "integer"
+                },
+                "not_deployed": {
+                    "type": "integer"
+                },
+                "partial": {
+                    "type": "integer"
+                },
+                "profile": {
+                    "type": "string"
+                },
+                "queued": {
+                    "type": "integer"
+                },
+                "stale": {
+                    "type": "integer"
+                },
+                "unsupported": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_processing.CoverageSummary": {
+            "type": "object",
+            "properties": {
+                "backlog_age_bucket": {
+                    "type": "string"
+                },
+                "by_capability": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.CoverageBucket"
+                    }
+                },
+                "completed": {
+                    "type": "integer"
+                },
+                "eligible": {
+                    "type": "integer"
+                },
+                "estimated_seconds": {
+                    "type": "integer"
+                },
+                "failed": {
+                    "type": "integer"
+                },
+                "generated_at": {
+                    "type": "string"
+                },
+                "not_deployed": {
+                    "type": "integer"
+                },
+                "partial": {
+                    "type": "integer"
+                },
+                "queued": {
+                    "type": "integer"
+                },
+                "schema_version": {
+                    "type": "integer"
+                },
+                "stale": {
+                    "type": "integer"
+                },
+                "unsupported": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_processing.PreviewJobResult": {
+            "type": "object",
+            "properties": {
+                "capability": {
+                    "type": "string"
+                },
+                "coverage": {
+                    "type": "string"
+                },
+                "fallback_actions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "freshness": {
+                    "type": "string"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "poll_after_seconds": {
+                    "type": "integer"
+                },
+                "profile": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "representation": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.PreviewRepresentation"
+                },
+                "retryable": {
+                    "type": "boolean"
+                },
+                "scan_status": {
+                    "type": "string"
+                },
+                "schema_version": {
+                    "type": "integer"
+                },
+                "sensitivity_status": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_processing.ProcessingProductState"
+                },
+                "terminal": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_processing.PreviewRepresentation": {
+            "type": "string",
+            "enum": [
+                "thumbnail",
+                "text",
+                "document_pages",
+                "media_preview",
+                "archive_index"
+            ],
+            "x-enum-varnames": [
+                "PreviewThumbnail",
+                "PreviewText",
+                "PreviewDocumentPages",
+                "PreviewMedia",
+                "PreviewArchiveIndex"
+            ]
+        },
+        "xirang_backend_internal_backupasset_processing.ProcessingProductState": {
+            "type": "string",
+            "enum": [
+                "native",
+                "derived",
+                "partial",
+                "unsupported",
+                "not_deployed",
+                "queued",
+                "failed"
+            ],
+            "x-enum-varnames": [
+                "ProcessingProductNative",
+                "ProcessingProductDerived",
+                "ProcessingProductPartial",
+                "ProcessingProductUnsupported",
+                "ProcessingProductNotDeployed",
+                "ProcessingProductQueued",
+                "ProcessingProductFailed"
+            ]
+        },
+        "xirang_backend_internal_backupasset_processing_capabilityspec.Limits": {
+            "type": "object",
+            "properties": {
+                "max_archive_depth": {
+                    "type": "integer"
+                },
+                "max_archive_entries": {
+                    "type": "integer"
+                },
+                "max_compression_ratio": {
+                    "type": "integer"
+                },
+                "max_duration_millis": {
+                    "type": "integer"
+                },
+                "max_expanded_bytes": {
+                    "type": "integer"
+                },
+                "max_frames": {
+                    "type": "integer"
+                },
+                "max_input_bytes": {
+                    "type": "integer"
+                },
+                "max_lines": {
+                    "type": "integer"
+                },
+                "max_member_bytes": {
+                    "type": "integer"
+                },
+                "max_output_bytes": {
+                    "type": "integer"
+                },
+                "max_output_count": {
+                    "type": "integer"
+                },
+                "max_pages": {
+                    "type": "integer"
+                },
+                "max_pixels": {
+                    "type": "integer"
+                },
+                "max_rendered_pages": {
+                    "type": "integer"
+                },
+                "max_runes": {
+                    "type": "integer"
+                },
+                "max_streams": {
+                    "type": "integer"
+                },
+                "wall_time": {
+                    "type": "integer"
+                }
+            }
+        },
         "xirang_backend_internal_backupasset_repository.ConnectResult": {
             "type": "object",
             "properties": {
@@ -13770,6 +15147,9 @@ const docTemplate = `{
         "xirang_backend_internal_backupasset_runtime.ProcessingAdminSummary": {
             "type": "object",
             "properties": {
+                "backfill_policy": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.ProcessingBackfillPolicy"
+                },
                 "configured": {
                     "type": "boolean"
                 },
@@ -13799,6 +15179,35 @@ const docTemplate = `{
                 },
                 "worker_counts": {
                     "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.ProcessingWorkerCounts"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_runtime.ProcessingBackfillPolicy": {
+            "type": "object",
+            "properties": {
+                "batch_size": {
+                    "type": "integer"
+                },
+                "bytes_per_hour": {
+                    "type": "integer"
+                },
+                "capability_concurrency": {
+                    "type": "integer"
+                },
+                "jobs_per_hour": {
+                    "type": "integer"
+                },
+                "paused": {
+                    "type": "boolean"
+                },
+                "provider_concurrency": {
+                    "type": "integer"
+                },
+                "revision": {
+                    "type": "string"
+                },
+                "schema_version": {
+                    "type": "integer"
                 }
             }
         },
@@ -13876,6 +15285,84 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "interactive_used": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_runtime.ProcessingUpdaterCandidate": {
+            "type": "object",
+            "properties": {
+                "activated_at": {
+                    "type": "string"
+                },
+                "bundle_fingerprint": {
+                    "type": "string"
+                },
+                "candidate_id": {
+                    "type": "string"
+                },
+                "capability_changes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.ProcessingUpdaterCapabilityChange"
+                    }
+                },
+                "manifest_digest": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "signing_key_fingerprint": {
+                    "type": "string"
+                },
+                "source_id": {
+                    "type": "string"
+                },
+                "source_kind": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                },
+                "verified_at": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_runtime.ProcessingUpdaterCapabilityChange": {
+            "type": "object",
+            "properties": {
+                "capability": {
+                    "type": "string"
+                },
+                "capability_schema": {
+                    "type": "string"
+                },
+                "profiles": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_runtime.ProcessingUpdaterStatus": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.ProcessingUpdaterCandidate"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "online_enabled": {
+                    "type": "boolean"
+                },
+                "schema_version": {
                     "type": "integer"
                 }
             }

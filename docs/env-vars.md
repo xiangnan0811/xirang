@@ -82,7 +82,7 @@
 | `FILE_BROWSER_ALLOW_ALL` | string | 空（禁用） | 否 | 设为 `true` 允许浏览任意路径（默认仅允许备份目录） |
 | `BACKUP_PATH_ALLOW_SHELL_META` | bool | `false` | 否 | 仅历史数据救援用；设为 `true` 会跳过备份路径 shell 元字符防御校验 |
 | `SNAPSHOT_INDEX_MAX_SECONDS` | int | `1800` | 否 | Restic 快照文件搜索异步索引单次最长构建秒数 |
-| `BACKUP_ASSETS_ENABLED` | bool | `false` | 否 | 备份资产领域 feature gate；基础版本保持关闭，且不因此注册公开资产路由 |
+| `BACKUP_ASSETS_ENABLED` | bool | `false` | 否 | 备份资产领域 feature gate；默认关闭，关闭时相关公开/Admin 路由在读取资产或创建处理工作前失败关闭 |
 | `BACKUP_ASSETS_CATALOG_BATCH_SIZE` | int | `2000` | 否 | 目录构建批次大小，范围 `1..100000` |
 | `BACKUP_ASSETS_CATALOG_BUILD_TIMEOUT` | duration | `30m` | 否 | 单次目录构建超时，范围 `1m..24h` |
 | `BACKUP_ASSETS_REPOSITORY_RECONCILE_INTERVAL` | duration | `15m` | 否 | 仓库元数据对账间隔，范围 `1m..24h` |
@@ -120,8 +120,53 @@
 | `BACKUP_ASSETS_RCLONE_HEALTH_INTERVAL` | duration | `15m` | 否 | Rclone 受管 Repository 健康复核间隔，范围 `1m..24h` |
 | `BACKUP_ASSETS_RCLONE_HEALTH_BATCH_SIZE` | int | `100` | 否 | 单次 Rclone 版本化健康检查批次大小，范围 `1..1000` |
 | `BACKUP_ASSETS_RCLONE_AWS_SDK_MAX_ATTEMPTS` | int | `3` | 否 | Rclone AWS Native SDK 操作最大尝试次数，范围 `1..10` |
+| `BACKUP_ASSETS_PROCESSING_QUEUE_MAX` | int | `10000` | 否 | 资产处理持久队列上限，范围 `1..100000` |
+| `BACKUP_ASSETS_PROCESSING_INTERACTIVE_SLOTS` | int | `2` | 否 | 交互处理保留槽位，范围 `1..64`；后台回填不能借用 |
+| `BACKUP_ASSETS_PROCESSING_BACKGROUND_SLOTS` | int | `2` | 否 | 后台处理槽位，范围 `1..64` |
+| `BACKUP_ASSETS_PROCESSING_PULL_LEASE` | duration | `90s` | 否 | Worker pull lease，范围 `15s..5m` |
+| `BACKUP_ASSETS_PROCESSING_PULL_HEARTBEAT` | duration | `20s` | 否 | Worker heartbeat，范围 `5s..1m`，且必须小于 pull lease 的一半 |
+| `BACKUP_ASSETS_PROCESSING_ATTEMPT_TIMEOUT` | duration | `2h` | 否 | 单次 attempt 绝对超时，范围 `1m..24h`，不得超过 RecoveryPoint lease 绝对截止时间 |
+| `BACKUP_ASSETS_PROCESSING_RETRY_MAX` | int | `5` | 否 | transient processing 最大重试次数，范围 `0..20` |
+| `BACKUP_ASSETS_PROCESSING_RETRY_BASE` | duration | `5s` | 否 | 重试基础延迟，范围 `1s..5m` |
+| `BACKUP_ASSETS_PROCESSING_RETRY_MAX_DELAY` | duration | `15m` | 否 | 重试最大延迟，范围 `1s..2h`，不得小于 retry base |
+| `BACKUP_ASSETS_PROCESSING_INPUT_REQUEST_MAX_BYTES` | int | `67108864` | 否 | 单次 Input grant 读取上限，范围 `65536..1073741824` 字节 |
+| `BACKUP_ASSETS_PROCESSING_INPUT_CUMULATIVE_MAX_BYTES` | int | `2147483648` | 否 | attempt 累计 Input 上限，范围 `65536..17179869184` 字节，且不得小于单次上限 |
+| `BACKUP_ASSETS_PROCESSING_INPUT_MAX_REQUESTS` | int | `512` | 否 | attempt Input 请求数上限，范围 `1..4096` |
+| `BACKUP_ASSETS_PROCESSING_INPUT_MAX_IN_FLIGHT` | int | `4` | 否 | attempt Input 并发请求上限，范围 `1..32` |
+| `BACKUP_ASSETS_PROCESSING_SINK_MAX_ARTIFACTS` | int | `32` | 否 | 原子 Sink artifact 数量上限，范围 `1..256`；闭合 profile 仍可设置更低硬上限 |
+| `BACKUP_ASSETS_PROCESSING_SINK_ARTIFACT_MAX_BYTES` | int | `536870912` | 否 | 单 artifact 上限，范围 `65536..4294967296` 字节 |
+| `BACKUP_ASSETS_PROCESSING_SINK_TOTAL_MAX_BYTES` | int | `1073741824` | 否 | 原子 artifact set 总上限，范围 `65536..17179869184` 字节，且不得小于单 artifact 上限 |
+| `BACKUP_ASSETS_PROCESSING_PROTOCOL_JSON_MAX_BYTES` | int | `65536` | 否 | Worker/updater 协议 JSON 请求体上限，范围 `4096..1048576` 字节 |
+| `BACKUP_ASSETS_PROCESSING_SECRET_CLASSIFY` | bool | `false` | 否 | 启用有限 text/OCR 秘密分类增强；默认关闭，可动态调整 |
+| `BACKUP_ASSETS_PROCESSING_BACKFILL_PAUSED` | bool | `true` | 否 | 暂停后台回填；默认暂停，可动态调整，不阻塞显式交互预览 |
+| `BACKUP_ASSETS_PROCESSING_BACKFILL_BATCH_SIZE` | int | `100` | 否 | 回填批次大小，范围 `1..10000` |
+| `BACKUP_ASSETS_PROCESSING_BACKFILL_JOBS_PER_HOUR` | int | `1000` | 否 | 回填每小时 job 上限，范围 `1..100000` |
+| `BACKUP_ASSETS_PROCESSING_BACKFILL_BYTES_PER_HOUR` | int | `10737418240` | 否 | 回填每小时字节上限，范围 `65536..1099511627776` |
+| `BACKUP_ASSETS_PROCESSING_BACKFILL_PROVIDER_CONCURRENCY` | int | `1` | 否 | 单 Provider 回填并发上限，范围 `1..32` |
+| `BACKUP_ASSETS_PROCESSING_BACKFILL_CAPABILITY_CONCURRENCY` | int | `1` | 否 | 单 capability 回填并发上限，范围 `1..32` |
+| `BACKUP_ASSETS_PROCESSING_BACKFILL_RECENT_WINDOW` | duration | `720h` | 否 | recent/history 分界窗口，范围 `24h..8760h` |
+| `BACKUP_ASSETS_PROCESSING_BACKFILL_HISTORY_AGING_STEP` | duration | `24h` | 否 | 旧 history 排队老化步长，范围 `1h..720h` |
+| `BACKUP_ASSETS_WORKER_LOCAL_ENABLED` | bool | `false` | 否 | 启用本机 parser Worker UDS；默认关闭，变更需重启 |
+| `BACKUP_ASSETS_WORKER_LOCAL_SOCKET` | string | `/run/xirang/asset-worker.sock` | 否 | 本机 parser Worker UDS；变更需重启。仓库 `asset-worker` profile 固定覆盖为 `/run/xirang/worker/asset-worker.sock` |
+| `BACKUP_ASSETS_WORKER_REMOTE_ENABLED` | bool | `false` | 否 | 启用远程 parser Worker mTLS；默认关闭，变更需重启 |
+| `BACKUP_ASSETS_WORKER_REMOTE_LISTEN_ADDR` | string | 空 | 否 | 远程 Worker 专用监听地址；变更需重启，不得复用公开 HTTP 监听 |
+| `BACKUP_ASSETS_WORKER_REMOTE_SERVER_CERT_FILE` | string | 空 | 远程模式必填 | 远程 Worker 服务端证书文件；敏感 restart-time 配置 |
+| `BACKUP_ASSETS_WORKER_REMOTE_SERVER_KEY_FILE` | string | 空 | 远程模式必填 | 远程 Worker 服务端私钥文件；敏感 restart-time 配置 |
+| `BACKUP_ASSETS_WORKER_REMOTE_CLIENT_CA_FILE` | string | 空 | 远程模式必填 | 远程 Worker 客户端 CA 文件；敏感 restart-time 配置 |
+| `BACKUP_ASSETS_WORKER_REMOTE_TRUST_DOMAIN` | string | 空 | 远程模式必填 | 远程 Worker SPIFFE trust domain；敏感 restart-time 配置 |
+| `BACKUP_ASSETS_WORKER_UPDATER_ENABLED` | bool | `false` | 否 | 启用独立 updater UDS；默认关闭，变更需重启 |
+| `BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ENABLED` | bool | `false` | 否 | 启用 updater 受限在线模式；默认关闭，变更需重启；仓库 Compose profile 不提供在线网络 |
+| `BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ORIGINS` | string | 空 | online 模式必填 | 逗号分隔的 exact HTTPS origin allowlist；变更需重启，不能替代外部 allowlist proxy/firewall |
+| `BACKUP_ASSETS_DERIVED_STORE_ROOT` | string | `/var/lib/xirang-asset-runtime/derived` | 否 | Core 加密 Derived Store 根；变更需重启。Compose profile 在默认路径挂载专用 `asset-worker-derived-store` volume；`/data`、`/backup`、`/logs` 及其子路径会被安全校验拒绝 |
+| `BACKUP_ASSETS_DERIVED_STORE_CHUNK_BYTES` | int | `1048576` | 否 | Derived 认证加密分块大小，范围 `65536..8388608` 字节；变更需重启 |
+| `BACKUP_ASSETS_DERIVED_STORE_BLOB_MAX_BYTES` | int | `4294967296` | 否 | 单 Derived blob 上限，范围 `65536..17179869184` 字节 |
+| `BACKUP_ASSETS_DERIVED_STORE_GLOBAL_MAX_BYTES` | int | `107374182400` | 否 | Derived Store 全局配额，范围 `65536..1099511627776` 字节 |
+| `BACKUP_ASSETS_DERIVED_STORE_RECONCILE_INTERVAL` | duration | `15m` | 否 | Derived 状态/引用/blob 对账间隔，范围 `1m..24h` |
+| `BACKUP_ASSETS_DERIVED_STORE_RECONCILE_BATCH_SIZE` | int | `256` | 否 | 单次 Derived 对账批次，范围 `1..10000` |
 
-**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器、完整性检查与备份 Repository 只读适配器；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`；`SNAPSHOT_INDEX_MAX_SECONDS` → `backend/internal/snapshot/indexer.go`；`BACKUP_ASSETS_*` → settings 服务的 `backup_assets.*` registry、`backend/internal/backupasset/runtime` 共享运行时与 foundation service（DB override > env > default，均可动态调整）。涉及 `BACKUP_ASSETS_ENABLED` 的设置/导入/删除会先关闭新的备份资产 admission，排空当前 generation 中已获准的 legacy 访问、Restic/Rsync/Rclone 发布与调和，再提交新值。
+**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器、完整性检查与备份 Repository 只读适配器；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`；`SNAPSHOT_INDEX_MAX_SECONDS` → `backend/internal/snapshot/indexer.go`；`BACKUP_ASSETS_*` → settings 服务的 `backup_assets.*` registry、`backend/internal/backupasset/runtime` 共享运行时与 foundation service（DB override > env > default）。涉及 `BACKUP_ASSETS_ENABLED` 的设置/导入/删除会先关闭新的备份资产 admission，排空当前 generation 中已获准的 legacy 访问、Restic/Rsync/Rclone 发布与调和，再提交新值。表中标注 restart-time 的 Worker/updater/Derived 设置不会热切换 listener、身份或存储根；其它 processing/backfill quota 可动态调整并接受组合校验。
+
+`backup_assets.internal.processing_content_pipeline_revision` 与 `backup_assets.internal.processing_ocr_pipeline_revision` 是 Core 原子激活事务维护的内部发布状态，不是环境变量或公共 settings registry 键。它们不会出现在 Settings API/配置导出中，配置导入也会拒绝调用方写入。
 
 ## 7. 节点探测
 
@@ -211,8 +256,13 @@
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `IMAGE_TAG` | `latest` | 镜像标签；官方镜像固定为 `docker.io/linnea7171/xirang`，`latest` 仅代表最新稳定版，生产环境建议固定为 `vX.Y.Z` |
+| `ASSET_WORKER_IMAGE_TAG` | `local` | 仅可选 `asset-worker` profile 的本地构建标签；不是稳定公共镜像标签 |
+| `ASSET_WORKER_INBOX_DIR` | `./asset-worker-inbox` | updater-only 固定 inbox bind source；目录必须由 UID/GID `10002:10002` 拥有、mode `0555` 且不是符号链接 |
+| `ASSET_WORKER_UPDATER_TRUST_FILE` | `./asset-worker-updater-trust.json` | updater-only Ed25519 trust 文档；文件必须由 UID/GID `10002:10002` 拥有、mode `0440` 且不是符号链接 |
 
-All-in-One 容器固定监听 `10761`，生产 Compose 固定映射 `10761:10761`。HTTPS/TLS 由外部反向代理负责，不通过项目环境变量配置。
+All-in-One 容器固定监听 `10761`，生产 Compose 固定映射 `10761:10761`。HTTPS/TLS 由外部反向代理负责，不通过项目环境变量配置。上述 `ASSET_WORKER_*` 变量只控制仓库内非 GA、本地 build 的可选 profile；不会改变官方 Core image selector，也不表示 Docker Hub/GitHub Release 发布 Worker。
+
+该 profile 的 socket 拓扑不是环境变量：`asset-worker-worker-runtime` 只读提供 parser UDS `/run/xirang/worker/asset-worker.sock`，`asset-worker-updater-runtime` 只读提供 updater UDS `/run/xirang/asset-worker-updater.sock`。Core 同时挂载两者，parser/updater 各自只挂载自己的 volume，且 parser 不加入 updater GID；任何环境变量都不能合并这两个 volume、把 peer socket 暴露给另一进程或放宽 `network_mode: none`。`asset-worker-derived-store` 仅由 Core 与 initializer 挂载，固定在默认 Derived root 并初始化为 `0700:10000:10000`；parser/updater 不可见。全局、本机、远程、updater online 与有限秘密分类默认仍为 `false`，后台回填默认暂停。
 
 ---
 

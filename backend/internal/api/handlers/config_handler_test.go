@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,74 @@ func openConfigHandlerTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
 	return db
+}
+
+func TestConfigExportAlwaysOmitsInternalPipelineRevisions(t *testing.T) {
+	for _, includeSecrets := range []bool{false, true} {
+		t.Run(strconv.FormatBool(includeSecrets), func(t *testing.T) {
+			db := openConfigHandlerTestDB(t)
+			if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
+				t.Fatal(err)
+			}
+			for _, row := range []model.SystemSetting{
+				{Key: settings.ProcessingContentPipelineRevisionKey, Value: "7"},
+				{Key: settings.ProcessingOCRPipelineRevisionKey, Value: "8"},
+				{Key: "storage.min_free_gb", Value: "42"},
+			} {
+				if err := db.Create(&row).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			handler := NewConfigHandler(db, settings.NewService(db))
+			router := gin.New()
+			router.GET("/config/export", func(c *gin.Context) {
+				c.Set("userID", uint(1))
+				c.Set("username", "admin")
+				c.Set("role", "admin")
+				handler.Export(c)
+			})
+			path := "/config/export"
+			if includeSecrets {
+				path += "?include_secrets=true"
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			body := response.Body.String()
+			if strings.Contains(body, settings.ProcessingContentPipelineRevisionKey) ||
+				strings.Contains(body, settings.ProcessingOCRPipelineRevisionKey) || !strings.Contains(body, "storage.min_free_gb") {
+				t.Fatalf("internal revisions leaked or public setting disappeared: %s", body)
+			}
+		})
+	}
+}
+
+func TestConfigImportRejectsInternalPipelineRevisions(t *testing.T) {
+	for _, key := range []string{settings.ProcessingContentPipelineRevisionKey, settings.ProcessingOCRPipelineRevisionKey} {
+		t.Run(key, func(t *testing.T) {
+			db := openConfigHandlerTestDB(t)
+			if err := db.AutoMigrate(&model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {
+				t.Fatal(err)
+			}
+			handler := NewConfigHandler(db, settings.NewService(db))
+			router := gin.New()
+			router.POST("/config/import", handler.Import)
+			payload, _ := json.Marshal(map[string]any{"system_settings": []map[string]string{{"key": key, "value": "9"}}})
+			request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(string(payload)))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			var count int64
+			if err := db.Model(&model.SystemSetting{}).Where("key = ?", key).Count(&count).Error; err != nil || count != 0 {
+				t.Fatalf("reserved import count=%d error=%v", count, err)
+			}
+		})
+	}
 }
 
 func TestConfigImportTransitionsBackupAssetEnableBeforePersistingSettings(t *testing.T) {

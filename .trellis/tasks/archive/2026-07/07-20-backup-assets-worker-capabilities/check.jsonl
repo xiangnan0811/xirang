@@ -1,0 +1,24 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check that no migration/model change slipped into Child 11, 000067 remains paired, and Derived/Search writes obey one SQLite/PostgreSQL transaction."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check closed processing/updater codes, typed unsupported/degraded outcomes, response helper use and absence of raw diagnostics."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check API, logs and metrics for path, credential, tool-output, identity, grant, fence and bundle-secret leakage."}
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Check non-root/read-only/drop-all/no-new-privileges/tmpfs/no-network runtime, updater isolation, shutdown and core-only behavior."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check focused tests, race/fault injection, real PostgreSQL parity, resource bounds, Swagger and full project gates."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check private raw DTO boundaries, closed processing states, safe numeric/time mapping and no any or unchecked casts."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Check lazy panel composition, shadcn/Lucide reuse, stable layout and native-preview fallback."}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"Check abort, unmount, asset-switch and stale-poll handling in the processing controller."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Check route/workspace state preservation, coalesced jobs, cancellation and server-gated fallback actions."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Check keyboard/focus/live-region/reduced-motion and three-viewport processing/inspector behavior."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check focused and full npm gates plus unchanged 500/105 KiB startup budgets and lazy-chunk evidence."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check capability/profile/fingerprint/policy/fence consistency across model, protocol, runtime, API, Search, Content, Compose and UI."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Check generated Swagger, task status, no-publication claims and validation ledger against executed output."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Check exact future manifest, forbidden path scans, staged names and later PR/CI/merge/post-merge gates."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/prd.md","reason":"Check parent security, preview, Worker, degradation and Child 12-15 exclusions remain intact."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/design.md","reason":"Check focused design against parent §§7-10, 17.2, 18, 20 and 21 without expanding public or migration scope."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/implement.md","reason":"Check exact Child 11 future paths and validation/rollback obligations against the program tracker."}
+{"file":".trellis/tasks/archive/2026-07/07-19-backup-assets-worker-protocol/design.md","reason":"Check reuse of Child 10 grants, states, role/error closure, updater metadata and fenced Derived lifecycle."}
+{"file":".trellis/tasks/archive/2026-07/07-19-backup-assets-worker-protocol/implement.md","reason":"Check current-main handoff and ensure Child 11 does not redo migration 000067 or alter Child 10 ownership."}
+{"file":".trellis/tasks/archive/2026-07/07-19-backup-assets-worker-protocol/research/current-main-evidence.md","reason":"Check every claimed Child 10 port/runtime/settings/UI seam against merged source evidence."}
+{"file":".trellis/tasks/archive/2026-07/07-20-backup-assets-worker-capabilities/prd.md","reason":"Check frozen capabilities, defaults, malicious fixtures, privacy, degradation, exclusions and approval ledger."}
+{"file":".trellis/tasks/archive/2026-07/07-20-backup-assets-worker-capabilities/design.md","reason":"Check closed profiles, runner/updater sandbox, atomic publication, API/UI boundary, rollback and risk gates."}
+{"file":".trellis/tasks/archive/2026-07/07-20-backup-assets-worker-capabilities/implement.md","reason":"Check exact future file manifest, TDD order, validation matrix, fixture names, rollback and not-executed ledger."}
+{"file":".trellis/tasks/archive/2026-07/07-20-backup-assets-worker-capabilities/research/current-main-evidence.md","reason":"Check baseline, line references, diff boundary and current-main evidence before any future implementation."}

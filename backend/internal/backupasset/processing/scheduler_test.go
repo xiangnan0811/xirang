@@ -26,6 +26,7 @@ func TestSchedulerAllowsInteractiveToBorrowIdleBackground(t *testing.T) {
 
 func TestSchedulerStableQueueOrder(t *testing.T) {
 	jobs := []QueueCandidate{
+		{ID: "latest", PriorityClass: PriorityBackground, Priority: 950, QueuedUnixNano: 40},
 		{ID: "c", PriorityClass: PriorityBackground, Priority: 10, QueuedUnixNano: 20},
 		{ID: "b", PriorityClass: PriorityInteractive, Priority: 10, QueuedUnixNano: 20},
 		{ID: "a", PriorityClass: PriorityInteractive, Priority: 10, QueuedUnixNano: 20},
@@ -33,7 +34,7 @@ func TestSchedulerStableQueueOrder(t *testing.T) {
 		{ID: "e", PriorityClass: PriorityInteractive, Priority: 20, QueuedUnixNano: 10},
 	}
 	SortQueueCandidates(jobs)
-	want := []string{"e", "d", "a", "b", "c"}
+	want := []string{"latest", "e", "d", "a", "b", "c"}
 	for index := range want {
 		if jobs[index].ID != want[index] {
 			t.Fatalf("queue order=%v, want %v", jobs, want)

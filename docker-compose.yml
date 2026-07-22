@@ -10,10 +10,28 @@ services:
       - .env
     environment:
       TZ: ${TZ:-Asia/Shanghai}
+      BACKUP_ASSETS_WORKER_LOCAL_SOCKET: /run/xirang/worker/asset-worker.sock
+    cap_drop:
+      - FSETID
     volumes:
       - ./data:/data           # SQLite 数据库及应用数据，务必备份此目录
       - ./backups:/backup      # 自动备份目录（每日 02:00 备份，保留 30 天）
       - ./logs:/logs           # 应用与 Nginx 日志
+      - type: volume
+        source: asset-worker-updater-runtime
+        target: /run/xirang
+        volume:
+          nocopy: true
+      - type: volume
+        source: asset-worker-worker-runtime
+        target: /run/xirang/worker
+        volume:
+          nocopy: true
+      - type: volume
+        source: asset-worker-derived-store
+        target: /var/lib/xirang-asset-runtime/derived
+        volume:
+          nocopy: true
     ports:
       - "10761:10761"
     healthcheck:
@@ -23,8 +41,165 @@ services:
       retries: 3
       start_period: 15s
     restart: unless-stopped
+    depends_on:
+      asset-worker-init:
+        condition: service_completed_successfully
+        required: false
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+
+  asset-worker-init:
+    profiles:
+      - asset-worker
+    image: xirang-asset-worker:${ASSET_WORKER_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: deploy/worker/Dockerfile
+    container_name: xirang-asset-worker-init
+    user: "0:0"
+    command: ["init"]
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - FSETID
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=deploy/worker/seccomp.json
+    volumes:
+      - type: volume
+        source: asset-worker-updater-runtime
+        target: /run/xirang
+        volume:
+          nocopy: true
+      - type: volume
+        source: asset-worker-worker-runtime
+        target: /run/xirang/worker
+        volume:
+          nocopy: true
+      - type: volume
+        source: asset-worker-bundles
+        target: /var/lib/xirang/asset-worker-bundles
+        volume:
+          nocopy: true
+      - type: volume
+        source: asset-worker-derived-store
+        target: /var/lib/xirang-asset-runtime/derived
+        volume:
+          nocopy: true
+    restart: "no"
+
+  asset-worker:
+    profiles:
+      - asset-worker
+    image: xirang-asset-worker:${ASSET_WORKER_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: deploy/worker/Dockerfile
+    container_name: xirang-asset-worker
+    user: "10000:10000"
+    command: ["worker"]
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=deploy/worker/seccomp.json
+    pids_limit: 256
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 2.0
+    tmpfs:
+      - /run/xirang/asset-jobs:rw,noexec,nosuid,nodev,size=268435456,nr_inodes=32768,mode=0700,uid=10000,gid=10000
+      - /tmp:rw,noexec,nosuid,nodev,size=67108864,nr_inodes=8192,mode=0700,uid=10000,gid=10000
+    volumes:
+      - type: volume
+        source: asset-worker-worker-runtime
+        target: /run/xirang/worker
+        read_only: true
+        volume:
+          nocopy: true
+      - type: volume
+        source: asset-worker-bundles
+        target: /var/lib/xirang/asset-worker-bundles
+        read_only: true
+        volume:
+          nocopy: true
+    depends_on:
+      asset-worker-init:
+        condition: service_completed_successfully
+      xirang:
+        condition: service_healthy
+    restart: unless-stopped
+
+  asset-worker-updater:
+    profiles:
+      - asset-worker
+    image: xirang-asset-worker:${ASSET_WORKER_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: deploy/worker/Dockerfile
+    container_name: xirang-asset-worker-updater
+    user: "10002:10002"
+    command: ["updater"]
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=deploy/worker/seccomp.json
+    pids_limit: 64
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=67108864,nr_inodes=8192,mode=0700,uid=10002,gid=10002
+    volumes:
+      - type: volume
+        source: asset-worker-updater-runtime
+        target: /run/xirang
+        read_only: true
+        volume:
+          nocopy: true
+      - type: volume
+        source: asset-worker-bundles
+        target: /var/lib/xirang/asset-worker-bundles
+        volume:
+          nocopy: true
+      - type: bind
+        source: ${ASSET_WORKER_INBOX_DIR:-./asset-worker-inbox}
+        target: /var/lib/xirang/asset-worker-inbox
+        read_only: true
+        bind:
+          create_host_path: false
+    secrets:
+      - source: asset-worker-updater-trust
+        target: asset-worker-updater-trust.json
+        uid: "10002"
+        gid: "10002"
+        mode: 0440
+    depends_on:
+      asset-worker-init:
+        condition: service_completed_successfully
+      xirang:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  asset-worker-worker-runtime:
+  asset-worker-updater-runtime:
+  asset-worker-bundles:
+  asset-worker-derived-store:
+
+secrets:
+  asset-worker-updater-trust:
+    file: ${ASSET_WORKER_UPDATER_TRUST_FILE:-./asset-worker-updater-trust.json}

@@ -60,9 +60,47 @@ type RevokeProjection struct {
 	IndexRevision                  int
 }
 
+type ClassificationProjection struct {
+	Ref                            backupasset.AssetRef
+	SourceFingerprint              string
+	CatalogGenerationID            string
+	SearchGenerationID             string
+	ProcessingLeaseID              string
+	AttemptID                      string
+	FenceToken                     string
+	ExpectedClassificationRevision int
+	Classification                 Sensitivity
+	ClassificationRevision         int
+	EvidenceArtifactID             string
+}
+
 type ContentIndexIngest interface {
 	PublishContentProjection(context.Context, ContentProjection) error
 	RevokeContentProjection(context.Context, RevokeProjection) error
+}
+
+type ContentIndexIngestTx interface {
+	PrepareContentProjection(context.Context, ContentProjection) (PreparedContentProjection, error)
+	PublishContentProjectionTx(context.Context, *gorm.DB, PreparedContentProjection) error
+	RevokeContentProjectionTx(context.Context, *gorm.DB, RevokeProjection) error
+}
+
+type ClassificationIndexIngestTx interface {
+	PrepareClassificationProjection(context.Context, ClassificationProjection) (PreparedClassificationProjection, error)
+	PublishClassificationProjectionTx(context.Context, *gorm.DB, PreparedClassificationProjection) error
+}
+
+type PreparedContentProjection struct {
+	owner      *ContentIngestService
+	projection ContentProjection
+	postings   []model.BackupAssetSearchPosting
+	keyVersion int
+}
+
+type PreparedClassificationProjection struct {
+	owner      *ContentIngestService
+	projection ClassificationProjection
+	keyVersion int
 }
 
 type ContentIngestLimits struct {
@@ -112,97 +150,229 @@ func NewContentIngestService(dependencies ContentIngestDependencies) (*ContentIn
 }
 
 func (service *ContentIngestService) PublishContentProjection(ctx context.Context, projection ContentProjection) error {
-	if err := service.validateProjection(projection); err != nil {
+	prepared, err := service.PrepareContentProjection(ctx, projection)
+	if err != nil {
 		return err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return service.PublishContentProjectionTx(ctx, tx, prepared)
+	})
+}
+
+func (service *ContentIngestService) PrepareContentProjection(
+	ctx context.Context,
+	projection ContentProjection,
+) (PreparedContentProjection, error) {
+	if err := service.validateProjection(projection); err != nil {
+		return PreparedContentProjection{}, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	key, err := service.activeKey(ctx)
 	if err != nil {
-		return err
+		return PreparedContentProjection{}, err
 	}
 	postings, err := service.prepareContentPostings(projection, key)
 	if err != nil {
+		return PreparedContentProjection{}, err
+	}
+	return PreparedContentProjection{
+		owner: service, projection: projection, postings: postings, keyVersion: key.Version,
+	}, nil
+}
+
+func (service *ContentIngestService) PublishContentProjectionTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	prepared PreparedContentProjection,
+) error {
+	if prepared.owner != service || !service.validContentTransaction(tx) {
+		return ErrInvalidContentProjection
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		control, err := service.lockAndValidate(ctx, tx, projection.Ref, projection.Field, projection.SourceFingerprint,
-			projection.CatalogGenerationID, projection.SearchGenerationID, projection.ProcessingLeaseID,
-			projection.AttemptID, projection.FenceToken, projection.ExpectedClassificationRevision, key.Version)
-		if err != nil {
-			return err
-		}
-		if projection.CoverageRevision <= control.field.CoverageRevision || projection.PipelineRevision <= control.field.PipelineRevision ||
-			projection.IndexRevision <= control.field.IndexRevision {
+	tx = tx.WithContext(ctx)
+	projection := prepared.projection
+	control, err := service.lockAndValidate(ctx, tx, projection.Ref, projection.Field, projection.SourceFingerprint,
+		projection.CatalogGenerationID, projection.SearchGenerationID, projection.ProcessingLeaseID,
+		projection.AttemptID, projection.FenceToken, projection.ExpectedClassificationRevision, prepared.keyVersion)
+	if err != nil {
+		return err
+	}
+	if projection.CoverageRevision <= control.field.CoverageRevision || projection.PipelineRevision < control.field.PipelineRevision ||
+		projection.PipelineRevision == control.field.PipelineRevision && control.field.State != string(FieldCoverageUnavailable) ||
+		projection.IndexRevision <= control.field.IndexRevision {
+		return ErrContentProjectionStale
+	}
+	currentSensitivity := Sensitivity(control.document.Sensitivity)
+	if projection.Classification == currentSensitivity {
+		if projection.ClassificationRevision < control.document.ClassificationRevision {
 			return ErrContentProjectionStale
 		}
-		currentSensitivity := Sensitivity(control.document.Sensitivity)
-		if projection.Classification == currentSensitivity {
-			if projection.ClassificationRevision < control.document.ClassificationRevision {
-				return ErrContentProjectionStale
-			}
-		} else if projection.ClassificationRevision <= control.document.ClassificationRevision {
-			return ErrContentProjectionStale
-		}
-		now := service.utcNow()
-		documentUpdate := tx.Model(&model.BackupAssetSearchDocument{}).
-			Where("search_generation_id = ? AND document_id = ? AND classification_revision = ?",
-				projection.SearchGenerationID, projection.Ref.EntryID, projection.ExpectedClassificationRevision).
+	} else if projection.ClassificationRevision <= control.document.ClassificationRevision {
+		return ErrContentProjectionStale
+	}
+	now := service.utcNow()
+	documentUpdate := tx.Model(&model.BackupAssetSearchDocument{}).
+		Where("search_generation_id = ? AND document_id = ? AND classification_revision = ?",
+			projection.SearchGenerationID, projection.Ref.EntryID, projection.ExpectedClassificationRevision).
+		Updates(map[string]any{
+			"sensitivity": projection.Classification, "classification_revision": projection.ClassificationRevision, "updated_at": now,
+		})
+	if documentUpdate.Error != nil {
+		return fmt.Errorf("update content classification: %w", documentUpdate.Error)
+	}
+	if documentUpdate.RowsAffected != 1 {
+		return ErrContentProjectionStale
+	}
+	classificationChanged := projection.ClassificationRevision != control.document.ClassificationRevision
+	postingDelete := tx.Where("search_generation_id = ? AND document_id = ?",
+		projection.SearchGenerationID, projection.Ref.EntryID)
+	if classificationChanged {
+		postingDelete = postingDelete.Where("field IN ?", []SearchField{SearchFieldContent, SearchFieldOCR})
+	} else {
+		postingDelete = postingDelete.Where("field = ?", projection.Field)
+	}
+	if err := postingDelete.Delete(&model.BackupAssetSearchPosting{}).Error; err != nil {
+		return fmt.Errorf("replace content postings: %w", err)
+	}
+	if classificationChanged {
+		if err := tx.Model(&model.BackupAssetSearchDocumentField{}).
+			Where("search_generation_id = ? AND document_id = ? AND field IN ? AND field <> ?",
+				projection.SearchGenerationID, projection.Ref.EntryID,
+				[]SearchField{SearchFieldContent, SearchFieldOCR}, projection.Field).
 			Updates(map[string]any{
-				"sensitivity": projection.Classification, "classification_revision": projection.ClassificationRevision, "updated_at": now,
-			})
-		if documentUpdate.Error != nil {
-			return fmt.Errorf("update content classification: %w", documentUpdate.Error)
+				"state": FieldCoverageUnavailable, "classification_revision": projection.ClassificationRevision,
+				"excerpt_ref": nil, "updated_at": now,
+			}).Error; err != nil {
+			return fmt.Errorf("invalidate sibling content fields: %w", err)
 		}
-		if documentUpdate.RowsAffected != 1 {
-			return ErrContentProjectionStale
+	}
+	if len(prepared.postings) > 0 {
+		if err := tx.Create(&prepared.postings).Error; err != nil {
+			return fmt.Errorf("publish content postings: %w", err)
 		}
-		classificationChanged := projection.ClassificationRevision != control.document.ClassificationRevision
-		postingDelete := tx.Where("search_generation_id = ? AND document_id = ?",
-			projection.SearchGenerationID, projection.Ref.EntryID)
-		if classificationChanged {
-			postingDelete = postingDelete.Where("field IN ?", []SearchField{SearchFieldContent, SearchFieldOCR})
-		} else {
-			postingDelete = postingDelete.Where("field = ?", projection.Field)
-		}
-		if err := postingDelete.Delete(&model.BackupAssetSearchPosting{}).Error; err != nil {
-			return fmt.Errorf("replace content postings: %w", err)
-		}
-		if classificationChanged {
-			if err := tx.Model(&model.BackupAssetSearchDocumentField{}).
-				Where("search_generation_id = ? AND document_id = ? AND field IN ? AND field <> ?",
-					projection.SearchGenerationID, projection.Ref.EntryID,
-					[]SearchField{SearchFieldContent, SearchFieldOCR}, projection.Field).
-				Updates(map[string]any{
-					"state": FieldCoverageUnavailable, "classification_revision": projection.ClassificationRevision,
-					"excerpt_ref": nil, "updated_at": now,
-				}).Error; err != nil {
-				return fmt.Errorf("invalidate sibling content fields: %w", err)
-			}
-		}
-		if len(postings) > 0 {
-			if err := tx.Create(&postings).Error; err != nil {
-				return fmt.Errorf("publish content postings: %w", err)
-			}
-		}
-		fieldUpdate := tx.Model(&model.BackupAssetSearchDocumentField{}).
-			Where("search_generation_id = ? AND document_id = ? AND field = ? AND classification_revision = ?",
-				projection.SearchGenerationID, projection.Ref.EntryID, projection.Field, control.field.ClassificationRevision).
-			Updates(map[string]any{
-				"state": projection.Coverage, "coverage_revision": projection.CoverageRevision,
-				"classification_revision": projection.ClassificationRevision,
-				"pipeline_revision":       projection.PipelineRevision, "index_revision": projection.IndexRevision,
-				"source_fingerprint": projection.SourceFingerprint, "excerpt_ref": projection.ExcerptRef, "updated_at": now,
-			})
-		if fieldUpdate.Error != nil {
-			return fmt.Errorf("update content field coverage: %w", fieldUpdate.Error)
-		}
-		if fieldUpdate.RowsAffected != 1 {
-			return ErrContentProjectionStale
-		}
-		return service.advanceProjectionRevision(tx, projection.SearchGenerationID, control.generation.ProjectionRevision, now)
-	})
+	}
+	fieldUpdate := tx.Model(&model.BackupAssetSearchDocumentField{}).
+		Where("search_generation_id = ? AND document_id = ? AND field = ? AND classification_revision = ?",
+			projection.SearchGenerationID, projection.Ref.EntryID, projection.Field, control.field.ClassificationRevision).
+		Updates(map[string]any{
+			"state": projection.Coverage, "coverage_revision": projection.CoverageRevision,
+			"classification_revision": projection.ClassificationRevision,
+			"pipeline_revision":       projection.PipelineRevision, "index_revision": projection.IndexRevision,
+			"source_fingerprint": projection.SourceFingerprint, "excerpt_ref": projection.ExcerptRef, "updated_at": now,
+		})
+	if fieldUpdate.Error != nil {
+		return fmt.Errorf("update content field coverage: %w", fieldUpdate.Error)
+	}
+	if fieldUpdate.RowsAffected != 1 {
+		return ErrContentProjectionStale
+	}
+	return service.advanceProjectionRevision(tx, projection.SearchGenerationID, control.generation.ProjectionRevision, now)
+}
+
+func (service *ContentIngestService) PrepareClassificationProjection(
+	ctx context.Context,
+	projection ClassificationProjection,
+) (PreparedClassificationProjection, error) {
+	if err := service.validateClassificationProjection(projection); err != nil {
+		return PreparedClassificationProjection{}, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	key, err := service.activeKey(ctx)
+	if err != nil {
+		return PreparedClassificationProjection{}, err
+	}
+	return PreparedClassificationProjection{owner: service, projection: projection, keyVersion: key.Version}, nil
+}
+
+func (service *ContentIngestService) PublishClassificationProjectionTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	prepared PreparedClassificationProjection,
+) error {
+	if prepared.owner != service || !service.validContentTransaction(tx) {
+		return ErrInvalidContentProjection
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	tx = tx.WithContext(ctx)
+	projection := prepared.projection
+	contentControl, err := service.lockAndValidate(
+		ctx, tx, projection.Ref, SearchFieldContent, projection.SourceFingerprint,
+		projection.CatalogGenerationID, projection.SearchGenerationID, projection.ProcessingLeaseID,
+		projection.AttemptID, projection.FenceToken, projection.ExpectedClassificationRevision, prepared.keyVersion,
+	)
+	if err != nil {
+		return err
+	}
+	ocrControl, err := service.lockAndValidate(
+		ctx, tx, projection.Ref, SearchFieldOCR, projection.SourceFingerprint,
+		projection.CatalogGenerationID, projection.SearchGenerationID, projection.ProcessingLeaseID,
+		projection.AttemptID, projection.FenceToken, projection.ExpectedClassificationRevision, prepared.keyVersion,
+	)
+	if err != nil {
+		return err
+	}
+	if contentControl.document.SearchGenerationID != ocrControl.document.SearchGenerationID ||
+		contentControl.document.DocumentID != ocrControl.document.DocumentID ||
+		contentControl.document.ClassificationRevision != ocrControl.document.ClassificationRevision ||
+		contentControl.generation.ID != ocrControl.generation.ID ||
+		contentControl.generation.ProjectionRevision != ocrControl.generation.ProjectionRevision {
+		return ErrContentProjectionStale
+	}
+	now := service.utcNow()
+	documentUpdate := tx.Model(&model.BackupAssetSearchDocument{}).
+		Where("search_generation_id = ? AND document_id = ? AND classification_revision = ?",
+			projection.SearchGenerationID, projection.Ref.EntryID, projection.ExpectedClassificationRevision).
+		Updates(map[string]any{
+			"sensitivity": projection.Classification, "classification_revision": projection.ClassificationRevision,
+			"updated_at": now,
+		})
+	if documentUpdate.Error != nil {
+		return fmt.Errorf("update classification evidence: %w", documentUpdate.Error)
+	}
+	if documentUpdate.RowsAffected != 1 {
+		return ErrContentProjectionStale
+	}
+	fields := []SearchField{SearchFieldContent, SearchFieldOCR}
+	if err := tx.Where("search_generation_id = ? AND document_id = ? AND field IN ?",
+		projection.SearchGenerationID, projection.Ref.EntryID, fields).
+		Delete(&model.BackupAssetSearchPosting{}).Error; err != nil {
+		return fmt.Errorf("remove classified content postings: %w", err)
+	}
+	fieldUpdate := tx.Model(&model.BackupAssetSearchDocumentField{}).
+		Where(`search_generation_id = ? AND document_id = ? AND field IN ?
+			AND classification_revision = ? AND source_fingerprint = ?`,
+			projection.SearchGenerationID, projection.Ref.EntryID, fields,
+			projection.ExpectedClassificationRevision, projection.SourceFingerprint).
+		Updates(map[string]any{
+			"state": FieldCoverageUnavailable, "classification_revision": projection.ClassificationRevision,
+			"coverage_revision": gorm.Expr("coverage_revision + 1"),
+			"index_revision":    gorm.Expr("index_revision + 1"),
+			"excerpt_ref":       nil, "updated_at": now,
+		})
+	if fieldUpdate.Error != nil {
+		return fmt.Errorf("invalidate classified content fields: %w", fieldUpdate.Error)
+	}
+	if fieldUpdate.RowsAffected != int64(len(fields)) {
+		return ErrContentProjectionStale
+	}
+	return service.advanceProjectionRevision(tx, projection.SearchGenerationID, contentControl.generation.ProjectionRevision, now)
 }
 
 func (service *ContentIngestService) RevokeContentProjection(ctx context.Context, projection RevokeProjection) error {
@@ -212,43 +382,62 @@ func (service *ContentIngestService) RevokeContentProjection(ctx context.Context
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	key, err := service.activeKey(ctx)
+	return service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return service.RevokeContentProjectionTx(ctx, tx, projection)
+	})
+}
+
+func (service *ContentIngestService) RevokeContentProjectionTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	projection RevokeProjection,
+) error {
+	if err := service.validateRevoke(projection); err != nil || !service.validContentTransaction(tx) {
+		return ErrInvalidContentProjection
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	tx = tx.WithContext(ctx)
+	var key model.WrappedDomainKey
+	if err := tx.Where("domain = ? AND state = ?", backupasset.KeyDomainSearchToken, backupasset.DomainKeyActive).
+		Take(&key).Error; err != nil {
+		return ErrSearchKeyUnavailable
+	}
+	control, err := service.lockAndValidate(ctx, tx, projection.Ref, projection.Field, projection.SourceFingerprint,
+		projection.CatalogGenerationID, projection.SearchGenerationID, projection.ProcessingLeaseID,
+		projection.AttemptID, projection.FenceToken, projection.ExpectedClassificationRevision, key.Version)
 	if err != nil {
 		return err
 	}
-	return service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		control, err := service.lockAndValidate(ctx, tx, projection.Ref, projection.Field, projection.SourceFingerprint,
-			projection.CatalogGenerationID, projection.SearchGenerationID, projection.ProcessingLeaseID,
-			projection.AttemptID, projection.FenceToken, projection.ExpectedClassificationRevision, key.Version)
-		if err != nil {
-			return err
-		}
-		if projection.CoverageRevision <= control.field.CoverageRevision || projection.PipelineRevision <= control.field.PipelineRevision ||
-			projection.IndexRevision <= control.field.IndexRevision {
-			return ErrContentProjectionStale
-		}
-		if err := tx.Where("search_generation_id = ? AND document_id = ? AND field = ?",
-			projection.SearchGenerationID, projection.Ref.EntryID, projection.Field).
-			Delete(&model.BackupAssetSearchPosting{}).Error; err != nil {
-			return fmt.Errorf("revoke content postings: %w", err)
-		}
-		now := service.utcNow()
-		fieldUpdate := tx.Model(&model.BackupAssetSearchDocumentField{}).
-			Where("search_generation_id = ? AND document_id = ? AND field = ? AND index_revision = ?",
-				projection.SearchGenerationID, projection.Ref.EntryID, projection.Field, control.field.IndexRevision).
-			Updates(map[string]any{
-				"state": FieldCoverageUnavailable, "coverage_revision": projection.CoverageRevision,
-				"pipeline_revision": projection.PipelineRevision, "index_revision": projection.IndexRevision,
-				"source_fingerprint": projection.SourceFingerprint, "excerpt_ref": nil, "updated_at": now,
-			})
-		if fieldUpdate.Error != nil {
-			return fmt.Errorf("revoke content field coverage: %w", fieldUpdate.Error)
-		}
-		if fieldUpdate.RowsAffected != 1 {
-			return ErrContentProjectionStale
-		}
-		return service.advanceProjectionRevision(tx, projection.SearchGenerationID, control.generation.ProjectionRevision, now)
-	})
+	if projection.CoverageRevision <= control.field.CoverageRevision || projection.PipelineRevision < control.field.PipelineRevision ||
+		projection.IndexRevision <= control.field.IndexRevision {
+		return ErrContentProjectionStale
+	}
+	if err := tx.Where("search_generation_id = ? AND document_id = ? AND field = ?",
+		projection.SearchGenerationID, projection.Ref.EntryID, projection.Field).
+		Delete(&model.BackupAssetSearchPosting{}).Error; err != nil {
+		return fmt.Errorf("revoke content postings: %w", err)
+	}
+	now := service.utcNow()
+	fieldUpdate := tx.Model(&model.BackupAssetSearchDocumentField{}).
+		Where("search_generation_id = ? AND document_id = ? AND field = ? AND index_revision = ?",
+			projection.SearchGenerationID, projection.Ref.EntryID, projection.Field, control.field.IndexRevision).
+		Updates(map[string]any{
+			"state": FieldCoverageUnavailable, "coverage_revision": projection.CoverageRevision,
+			"pipeline_revision": projection.PipelineRevision, "index_revision": projection.IndexRevision,
+			"source_fingerprint": projection.SourceFingerprint, "excerpt_ref": nil, "updated_at": now,
+		})
+	if fieldUpdate.Error != nil {
+		return fmt.Errorf("revoke content field coverage: %w", fieldUpdate.Error)
+	}
+	if fieldUpdate.RowsAffected != 1 {
+		return ErrContentProjectionStale
+	}
+	return service.advanceProjectionRevision(tx, projection.SearchGenerationID, control.generation.ProjectionRevision, now)
 }
 
 func (service *ContentIngestService) lockAndValidate(
@@ -356,7 +545,7 @@ func (service *ContentIngestService) prepareContentPostings(
 
 func (service *ContentIngestService) validateProjection(projection ContentProjection) error {
 	if service == nil || service.db == nil || !validContentField(projection.Field) ||
-		backupasset.ValidateAssetRef(projection.Ref) != nil || len(projection.Terms) == 0 || len(projection.Terms) > service.limits.MaxTerms ||
+		backupasset.ValidateAssetRef(projection.Ref) != nil || len(projection.Terms) > service.limits.MaxTerms ||
 		!validProjectionIdentity(projection.SourceFingerprint, projection.CatalogGenerationID, projection.SearchGenerationID,
 			projection.ProcessingLeaseID, projection.AttemptID, projection.FenceToken) ||
 		projection.ExpectedClassificationRevision <= 0 || projection.ClassificationRevision <= 0 ||
@@ -381,6 +570,20 @@ func (service *ContentIngestService) validateRevoke(projection RevokeProjection)
 			projection.ProcessingLeaseID, projection.AttemptID, projection.FenceToken) ||
 		projection.ExpectedClassificationRevision <= 0 || projection.CoverageRevision <= 0 ||
 		projection.PipelineRevision <= 0 || projection.IndexRevision <= 0 {
+		return ErrInvalidContentProjection
+	}
+	return nil
+}
+
+func (service *ContentIngestService) validateClassificationProjection(projection ClassificationProjection) error {
+	evidenceValid := lowerHex(projection.EvidenceArtifactID, 32) ||
+		projection.Classification == SensitivityUnknown && projection.EvidenceArtifactID == ""
+	if service == nil || service.db == nil || backupasset.ValidateAssetRef(projection.Ref) != nil ||
+		!validProjectionIdentity(projection.SourceFingerprint, projection.CatalogGenerationID, projection.SearchGenerationID,
+			projection.ProcessingLeaseID, projection.AttemptID, projection.FenceToken) ||
+		projection.ExpectedClassificationRevision <= 0 ||
+		projection.ClassificationRevision != projection.ExpectedClassificationRevision+1 ||
+		!validSensitivity(projection.Classification) || !evidenceValid {
 		return ErrInvalidContentProjection
 	}
 	return nil
@@ -420,4 +623,18 @@ func (service *ContentIngestService) advanceProjectionRevision(tx *gorm.DB, sear
 	return nil
 }
 
+func (service *ContentIngestService) validContentTransaction(tx *gorm.DB) bool {
+	if service == nil || service.db == nil || tx == nil || tx.Statement == nil || tx.Statement.ConnPool == nil {
+		return false
+	}
+	if _, ok := tx.Statement.ConnPool.(gorm.TxCommitter); !ok {
+		return false
+	}
+	serviceDB, serviceErr := service.db.DB()
+	txDB, txErr := tx.DB()
+	return serviceErr == nil && txErr == nil && serviceDB == txDB
+}
+
 func (service *ContentIngestService) utcNow() time.Time { return service.now().UTC() }
+
+var _ ClassificationIndexIngestTx = (*ContentIngestService)(nil)

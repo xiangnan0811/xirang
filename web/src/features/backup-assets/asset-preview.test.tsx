@@ -9,6 +9,26 @@ import { buildAssetRows } from "./__tests__/test-utils";
 import { AssetPreview } from "./asset-preview";
 import { selectBackupAssetPreviewProduct } from "./asset-preview-model";
 
+const { processingPanelRenderMock } = vi.hoisted(() => ({
+  processingPanelRenderMock: vi.fn(),
+}));
+
+type SyntheticProcessingPanelProps = {
+  onOpenPreview: (source: "derived" | "native") => void;
+};
+
+vi.mock("./backup-asset-processing-panel", () => ({
+  BackupAssetProcessingPanel: (props: SyntheticProcessingPanelProps) => {
+    processingPanelRenderMock(props);
+    return (
+      <div data-testid="synthetic-processing-panel">
+        <button type="button" data-testid="synthetic-derived-preview" onClick={() => props.onOpenPreview("derived")} />
+        <button type="button" data-testid="synthetic-native-preview" onClick={() => props.onOpenPreview("native")} />
+      </div>
+    );
+  },
+}));
+
 const contentUrl = `/api/v1/asset-content/${"d".repeat(32)}`;
 
 function asset(overrides: Partial<BackupAsset> = {}): BackupAsset {
@@ -112,6 +132,7 @@ describe("backup asset preview product", () => {
 
 describe("AssetPreview", () => {
   beforeEach(() => {
+    processingPanelRenderMock.mockReset();
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
   });
 
@@ -149,6 +170,160 @@ describe("AssetPreview", () => {
       />
     );
     expect(screen.getByTitle(/Asset preview|资产预览/)).toHaveClass("h-full", "max-h-full");
+  });
+
+  it("loads the processing controller only after explicit interaction", async () => {
+    const user = userEvent.setup();
+    const previewAsset = asset({ mimeType: "image/png" });
+    render(
+      <AssetPreview
+        asset={previewAsset}
+        resource={{ status: "idle", value: null }}
+        canPreview
+        canDownload
+        processingToken="processing-token"
+        onLoadPreview={vi.fn()}
+        onRenew={vi.fn()}
+        onPrepareDownload={vi.fn()}
+        onDetach={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByTestId("synthetic-processing-panel")).not.toBeInTheDocument();
+    expect(processingPanelRenderMock).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
+    expect(await screen.findByTestId("synthetic-processing-panel")).toBeInTheDocument();
+    expect(processingPanelRenderMock).toHaveBeenCalledWith(expect.objectContaining({
+      token: "processing-token",
+      asset: previewAsset,
+    }));
+  });
+
+  it.each([
+    ["application/pdf", "image/png"],
+    ["application/zip", "text/plain"],
+  ])("adapts derived %s preview MIME without changing its identity fields", async (mimeType, derivedMimeType) => {
+    const user = userEvent.setup();
+    const previewAsset = asset({ mimeType });
+    const onLoadPreview = vi.fn();
+    render(
+      <AssetPreview
+        asset={previewAsset}
+        resource={{ status: "idle", value: null }}
+        canPreview
+        canDownload
+        processingToken="processing-token"
+        onLoadPreview={onLoadPreview}
+        onRenew={vi.fn()}
+        onPrepareDownload={vi.fn()}
+        onDetach={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
+    await user.click(await screen.findByTestId("synthetic-derived-preview"));
+
+    expect(onLoadPreview).toHaveBeenCalledTimes(1);
+    const selected = onLoadPreview.mock.calls[0][0] as BackupAsset;
+    expect(selected).not.toBe(previewAsset);
+    expect(selected.ref).toBe(previewAsset.ref);
+    expect(selected.mimeType).toBe(derivedMimeType);
+    for (const key of Object.keys(previewAsset) as Array<keyof BackupAsset>) {
+      if (key === "mimeType") continue;
+      expect(selected[key]).toBe(previewAsset[key]);
+    }
+  });
+
+  it("passes the exact original asset object for native fallback", async () => {
+    const user = userEvent.setup();
+    const previewAsset = asset({ mimeType: "application/pdf" });
+    const onLoadPreview = vi.fn();
+    render(
+      <AssetPreview
+        asset={previewAsset}
+        resource={{ status: "idle", value: null }}
+        canPreview
+        canDownload
+        processingToken="processing-token"
+        onLoadPreview={onLoadPreview}
+        onRenew={vi.fn()}
+        onPrepareDownload={vi.fn()}
+        onDetach={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
+    await user.click(await screen.findByTestId("synthetic-native-preview"));
+
+    expect(onLoadPreview).toHaveBeenCalledTimes(1);
+    expect(onLoadPreview.mock.calls[0][0]).toBe(previewAsset);
+  });
+
+  it("renews the renderer selected by a derived document preview", async () => {
+    const user = userEvent.setup();
+    const previewAsset = asset({ mimeType: "application/pdf" });
+    let activePreview: BackupAsset | null = null;
+    const issuedProducts = vi.fn();
+    const onLoadPreview = vi.fn((selected: BackupAsset) => {
+      activePreview = selected;
+      issuedProducts(selectBackupAssetPreviewProduct(selected));
+    });
+    const onRenew = vi.fn(() => {
+      if (activePreview) onLoadPreview(activePreview);
+    });
+    const commonProps = {
+      asset: previewAsset,
+      canPreview: true,
+      canDownload: true,
+      processingToken: "processing-token",
+      onLoadPreview,
+      onRenew,
+      onPrepareDownload: vi.fn(),
+      onDetach: vi.fn(),
+    };
+    const rendered = render(
+      <AssetPreview {...commonProps} resource={{ status: "idle", value: null }} />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
+    await user.click(await screen.findByTestId("synthetic-derived-preview"));
+    expect(issuedProducts).toHaveBeenLastCalledWith({ renderer: "safe_raster", profile: "raster_v1" });
+
+    rendered.rerender(
+      <AssetPreview {...commonProps} resource={{ status: "ready", value: ticket("safe_raster") }} />
+    );
+    await user.click(screen.getByRole("button", { name: /Refresh preview|刷新预览/ }));
+
+    expect(onRenew).toHaveBeenCalledTimes(1);
+    expect(onLoadPreview).toHaveBeenCalledTimes(2);
+    expect(onLoadPreview.mock.calls[1][0]).toBe(onLoadPreview.mock.calls[0][0]);
+    expect(issuedProducts).toHaveBeenLastCalledWith({ renderer: "safe_raster", profile: "raster_v1" });
+  });
+
+  it("detaches once without selecting a processing preview on unmount", async () => {
+    const user = userEvent.setup();
+    const onLoadPreview = vi.fn();
+    const onDetach = vi.fn();
+    const rendered = render(
+      <AssetPreview
+        asset={asset({ mimeType: "application/zip" })}
+        resource={{ status: "idle", value: null }}
+        canPreview
+        canDownload
+        processingToken="processing-token"
+        onLoadPreview={onLoadPreview}
+        onRenew={vi.fn()}
+        onPrepareDownload={vi.fn()}
+        onDetach={onDetach}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
+    expect(await screen.findByTestId("synthetic-processing-panel")).toBeInTheDocument();
+    rendered.unmount();
+
+    expect(onDetach).toHaveBeenCalledTimes(1);
+    expect(onLoadPreview).not.toHaveBeenCalled();
   });
 
   it("renders escaped content in a sandboxed opaque frame without active markup", () => {

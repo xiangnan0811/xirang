@@ -14,13 +14,14 @@ import (
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/content"
+	"xirang/backend/internal/backupasset/processing/capabilityspec"
+	"xirang/backend/internal/config"
+	"xirang/backend/internal/database"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 
-	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 func TestProcessingBehaviorSQLite(t *testing.T) {
@@ -250,13 +251,15 @@ func runProcessingBehaviorContract(t *testing.T, open func(*testing.T) processin
 			t.Fatal(err)
 		}
 		projection := &processingBehaviorProjection{db: fixture.db}
-		lifecycle, err := NewDerivedLifecycle(fixture.db, store, projection, fixture.clock.Now)
+		lifecycle, err := NewDerivedLifecycle(fixture.db, store, projection, fixture.clock.Now, fixture.lease)
 		if err != nil {
 			t.Fatal(err)
 		}
 		sink, err := NewArtifactSink(fixture.db, fixture.lease, fixture.grants, store, lifecycle,
 			&manifestSourceRevalidator{}, func(context.Context) (string, error) {
 				return validWorkDescriptor().SecurityPolicyRevision, nil
+			}, func(context.Context, string, string) (string, error) {
+				return validWorkDescriptor().PipelineFingerprint, nil
 			}, fixture.clock.Now, ArtifactSinkConfig{MaxArtifacts: 4, MaxArtifactBytes: 1 << 20, MaxTotalBytes: 4 << 20})
 		if err != nil {
 			t.Fatal(err)
@@ -276,6 +279,29 @@ func runProcessingBehaviorContract(t *testing.T, open func(*testing.T) processin
 		})
 		if err != nil || !manifest.ProjectionRequired || projection.publications != 1 {
 			t.Fatalf("%s commit=%+v publications=%d err=%v", fixture.engine, manifest, projection.publications, err)
+		}
+		descriptor := validWorkDescriptor()
+		capabilityService := &CapabilityService{
+			db: fixture.db,
+			activePipeline: func(context.Context, string, string) (string, error) {
+				return descriptor.PipelineFingerprint, nil
+			},
+			securityPolicyRevision: func(context.Context) (string, error) {
+				return descriptor.SecurityPolicyRevision, nil
+			},
+		}
+		asset := content.AuthorizedAsset{
+			Ref: descriptor.Source, CatalogGenerationID: descriptor.CatalogGenerationID,
+			Provider: backupasset.ProviderRsync, ProviderCapabilityRevision: descriptor.ProviderCapabilityRevision,
+			SourceFingerprint: descriptor.SourceFingerprint, EntryFingerprint: descriptor.EntryFingerprint,
+			FingerprintStrength: "strong", Size: 1024, MediaType: "text/plain",
+		}
+		derived, found, err := capabilityService.activeDerived(context.Background(), asset, PreviewText, capabilityspec.Profile{
+			Capability: descriptor.Capability, CapabilitySchema: descriptor.CapabilitySchema,
+			OutputProfile: descriptor.OutputProfile,
+		})
+		if err != nil || !found || derived.State != ProcessingProductDerived || derived.Coverage != string(ArtifactComplete) {
+			t.Fatalf("%s terminal publication reader=%+v found=%v err=%v", fixture.engine, derived, found, err)
 		}
 		var artifact model.BackupAssetDerivedArtifact
 		if err := fixture.db.First(&artifact, "artifact_set_id = ?", manifest.ArtifactSetID).Error; err != nil {
@@ -306,13 +332,13 @@ func runProcessingBehaviorContract(t *testing.T, open func(*testing.T) processin
 		if err := lifecycle.ReadAuthorized(context.Background(), authorization, &bytes.Buffer{}); !errors.Is(err, ErrDerivedTamper) {
 			t.Fatalf("%s tamper read=%v", fixture.engine, err)
 		}
-		projection.onRevoke = func(request DerivedProjectionRevoke) error {
+		projection.onRevoke = func(tx *gorm.DB, request DerivedProjectionRevoke) error {
 			var reference model.BackupAssetDerivedBlobReference
-			if err := fixture.db.First(&reference, "artifact_id = ?", artifact.ID).Error; err != nil {
+			if err := tx.First(&reference, "artifact_id = ?", artifact.ID).Error; err != nil {
 				return err
 			}
 			var current model.BackupAssetDerivedBlob
-			if err := fixture.db.First(&current, "id = ?", artifact.BlobID).Error; err != nil {
+			if err := tx.First(&current, "id = ?", artifact.BlobID).Error; err != nil {
 				return err
 			}
 			if reference.State != "active" || current.State != "active" || len(current.WrappedDEK) == 0 {
@@ -320,11 +346,18 @@ func runProcessingBehaviorContract(t *testing.T, open func(*testing.T) processin
 			}
 			return nil
 		}
-		if err := lifecycle.RevokeSet(context.Background(), manifest.ArtifactSetID, DerivedRevokeExpired); err != nil {
+		if err := lifecycle.RevokeSetFenced(context.Background(), manifest.ArtifactSetID, DerivedRevokeExpired,
+			leased.Lease.RecoveryPointFence); err != nil {
 			t.Fatalf("%s revoke: %v", fixture.engine, err)
 		}
 		if projection.revocations != 1 {
 			t.Fatalf("%s Search revocations=%d", fixture.engine, projection.revocations)
+		}
+		if _, found, err := capabilityService.activeDerived(context.Background(), asset, PreviewText, capabilityspec.Profile{
+			Capability: descriptor.Capability, CapabilitySchema: descriptor.CapabilitySchema,
+			OutputProfile: descriptor.OutputProfile,
+		}); err != nil || found {
+			t.Fatalf("%s revoked publication remained readable: found=%v err=%v", fixture.engine, found, err)
 		}
 		if err := fixture.db.First(&blob, "id = ?", artifact.BlobID).Error; err != nil || blob.State != "unavailable" || len(blob.WrappedDEK) != 0 {
 			t.Fatalf("%s revoked blob=%+v err=%v", fixture.engine, blob, err)
@@ -367,9 +400,11 @@ func openProcessingBehaviorSQLite(t *testing.T) processingBehaviorFixture {
 	t.Helper()
 	configureProcessingBehaviorEnvironment(t)
 	path := filepath.Join(t.TempDir(), "processing-behavior.db")
-	dsn := "file:" + path + "?_busy_timeout=5000&_txlock=immediate&_loc=UTC"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	db, err := database.Open(config.Config{DBType: "sqlite", SQLitePath: path})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RunMigrations(db, "sqlite"); err != nil {
 		t.Fatal(err)
 	}
 	if sqlDB, err := db.DB(); err == nil {
@@ -386,7 +421,7 @@ func openProcessingBehaviorPostgres(t *testing.T, dsn string) processingBehavior
 	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") {
 		t.Fatalf("TEST_POSTGRES_DSN must be a PostgreSQL URL: %v", err)
 	}
-	base, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	base, err := database.Open(config.Config{DBType: "postgres", PostgresDSN: dsn})
 	if err != nil {
 		t.Fatalf("open PostgreSQL behavior base: %v", err)
 	}
@@ -398,8 +433,11 @@ func openProcessingBehaviorPostgres(t *testing.T, dsn string) processingBehavior
 	query.Set("search_path", schema)
 	query.Set("timezone", "UTC")
 	parsed.RawQuery = query.Encode()
-	db, err := gorm.Open(postgres.Open(parsed.String()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	db, err := database.Open(config.Config{DBType: "postgres", PostgresDSN: parsed.String()})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RunMigrations(db, "postgres"); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -424,32 +462,8 @@ func configureProcessingBehaviorEnvironment(t *testing.T) {
 
 func prepareProcessingBehaviorFixture(t *testing.T, db *gorm.DB, engine string) processingBehaviorFixture {
 	t.Helper()
-	if err := db.AutoMigrate(
-		&model.WrappedDomainKey{}, &model.RecoveryPointLease{},
-		&model.BackupAssetWorkerIdentity{}, &model.BackupAssetWorkerCapability{},
-		&model.BackupAssetProcessingJob{}, &model.BackupAssetProcessingInterest{},
-		&model.BackupAssetProcessingAttempt{}, &model.BackupAssetProcessingGrant{},
-		&model.BackupAssetProcessingGrantRequest{}, &model.BackupAssetProcessingUpload{},
-		&model.BackupAssetDerivedBlob{}, &model.BackupAssetDerivedArtifactSet{},
-		&model.BackupAssetDerivedArtifact{}, &model.BackupAssetDerivedBlobReference{},
-	); err != nil {
-		t.Fatalf("migrate %s Processing behavior schema: %v", engine, err)
-	}
-	truth := "1"
-	if engine == "postgres" {
-		truth = "TRUE"
-	}
-	for _, statement := range []string{
-		"CREATE UNIQUE INDEX idx_behavior_processing_key_active ON wrapped_domain_keys(domain) WHERE state = 'active'",
-		"CREATE UNIQUE INDEX idx_behavior_processing_current_work ON backup_asset_processing_jobs(work_key) WHERE is_current = " + truth,
-		"CREATE UNIQUE INDEX idx_behavior_processing_current_attempt ON backup_asset_processing_attempts(job_id) WHERE is_current = " + truth,
-		"CREATE UNIQUE INDEX idx_behavior_processing_active_interest ON backup_asset_processing_interests(job_id, owner_kind, owner_key) WHERE active = " + truth,
-	} {
-		if err := db.Exec(statement).Error; err != nil {
-			t.Fatalf("create %s Processing behavior index: %v", engine, err)
-		}
-	}
 	clock := &coordinatorClock{now: time.Date(2026, 7, 19, 8, 0, 0, 0, time.UTC)}
+	seedProcessingBehaviorParents(t, db, engine, clock.Now())
 	lease, err := backupasset.NewLeaseService(db, clock.Now, backupasset.LeaseConfig{
 		Duration: 30 * time.Second, Heartbeat: 10 * time.Second, AbsoluteDeadline: 2 * time.Hour,
 	})
@@ -475,6 +489,61 @@ func prepareProcessingBehaviorFixture(t *testing.T, db *gorm.DB, engine string) 
 	workerID := harness.registerNoopWorker(t, "d")
 	return processingBehaviorFixture{
 		engine: engine, db: db, clock: clock, lease: lease, coordinator: coordinator, grants: grants, workerID: workerID,
+	}
+}
+
+func seedProcessingBehaviorParents(t *testing.T, db *gorm.DB, engine string, now time.Time) {
+	t.Helper()
+	descriptor := validWorkDescriptor()
+	repositoryID := strings.Repeat("e", 32)
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{
+			query: `INSERT INTO backup_repositories
+				(id, provider_kind, repository_identity, display_name, description, version_mode,
+				 status, capability_revision, capabilities_json, immutability_level, created_at, updated_at)
+				VALUES (?, 'rsync', 'processing-behavior-repository', 'processing-behavior', '', 'hardlink_tree',
+				 'online', ?, '{}', 'xirang_managed', ?, ?)`,
+			args: []any{repositoryID, descriptor.ProviderCapabilityRevision, now, now},
+		},
+		{
+			query: `INSERT INTO recovery_points
+				(id, repository_id, producing_task_name_snapshot, producing_node_id_snapshot, producing_node_name_snapshot,
+				 lineage_json, encrypted_provider_locator, encrypted_rollback_locator, semantics, state, observed_at,
+				 source_fingerprint, manifest_digest_algorithm, manifest_digest, entry_count, logical_bytes,
+				 consistency_json, fidelity_json, capability_revision, capabilities_json, immutability_level,
+				 physical_availability, hold_state, created_at, updated_at)
+				VALUES (?, ?, '', 0, '', '{}', '', '', 'mutable_head', 'observed', ?, ?,
+				 'sha256', '', 1, 1024, '{}', '{}', ?, '{}', 'mutable', 'online', 'none', ?, ?)`,
+			args: []any{descriptor.Source.RecoveryPointID, repositoryID, now, descriptor.SourceFingerprint,
+				descriptor.ProviderCapabilityRevision, now, now},
+		},
+		{
+			query: `INSERT INTO catalog_generations
+				(id, recovery_point_id, generation, state, is_active, source_fingerprint,
+				 expected_entry_count, written_entry_count, expected_digest, written_digest,
+				 error_code, correlation_id, started_at, finished_at, created_at, updated_at)
+				VALUES (?, ?, 1, 'complete', ?, ?, 1, 1, '', '', '', '', ?, ?, ?, ?)`,
+			args: []any{descriptor.CatalogGenerationID, descriptor.Source.RecoveryPointID, true,
+				descriptor.SourceFingerprint, now, now, now, now},
+		},
+		{
+			query: `INSERT INTO catalog_entries
+				(generation_id, entry_id, recovery_point_id, normalized_path, name, entry_type,
+				 size, mode, owner, mime_type, fingerprint, fingerprint_strength,
+				 encrypted_provider_locator, security_state, created_at)
+				VALUES (?, ?, ?, '/processing/asset.bin', 'asset.bin', 'file', 1024, '', '',
+				 'application/octet-stream', ?, 'strong', '', 'non_secret', ?)`,
+			args: []any{descriptor.CatalogGenerationID, descriptor.Source.EntryID,
+				descriptor.Source.RecoveryPointID, descriptor.EntryFingerprint, now},
+		},
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement.query, statement.args...).Error; err != nil {
+			t.Fatalf("seed %s Processing behavior parent: %v", engine, err)
+		}
 	}
 }
 
@@ -505,18 +574,39 @@ type processingBehaviorProjection struct {
 	db           *gorm.DB
 	publications int
 	revocations  int
-	onRevoke     func(DerivedProjectionRevoke) error
+	onRevoke     func(*gorm.DB, DerivedProjectionRevoke) error
 }
 
-func (projection *processingBehaviorProjection) Publish(_ context.Context, request DerivedProjectionPublish) (DerivedProjectionPublication, error) {
+type processingBehaviorPreparedPublish struct {
+	projection *processingBehaviorProjection
+	request    DerivedProjectionPublish
+}
+
+type processingBehaviorPreparedRevoke struct {
+	projection *processingBehaviorProjection
+	request    DerivedProjectionRevoke
+}
+
+func (projection *processingBehaviorProjection) PreparePublish(_ context.Context, request DerivedProjectionPublish) (PreparedDerivedProjection, error) {
+	return &processingBehaviorPreparedPublish{projection: projection, request: request}, nil
+}
+
+func (prepared *processingBehaviorPreparedPublish) PublishTx(_ context.Context, _ *gorm.DB) (DerivedProjectionPublication, error) {
+	projection := prepared.projection
+	request := prepared.request
 	projection.publications++
 	return DerivedProjectionPublication{ArtifactSetID: request.ArtifactSetID, Revision: int64(projection.publications)}, nil
 }
 
-func (projection *processingBehaviorProjection) Revoke(_ context.Context, request DerivedProjectionRevoke) error {
+func (projection *processingBehaviorProjection) PrepareRevoke(_ context.Context, request DerivedProjectionRevoke) (PreparedDerivedRevocation, error) {
+	return &processingBehaviorPreparedRevoke{projection: projection, request: request}, nil
+}
+
+func (prepared *processingBehaviorPreparedRevoke) RevokeTx(_ context.Context, tx *gorm.DB) error {
+	projection := prepared.projection
 	projection.revocations++
 	if projection.onRevoke != nil {
-		return projection.onRevoke(request)
+		return projection.onRevoke(tx, prepared.request)
 	}
 	return nil
 }

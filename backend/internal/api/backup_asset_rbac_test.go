@@ -237,6 +237,43 @@ func TestBackupContentTicketRequiresPreviewPermissionBeforeFeatureGate(t *testin
 	}
 }
 
+func TestBackupProcessingRoutesRequirePreviewPermissionBeforeFeatureGate(t *testing.T) {
+	fixture := setupBackupAssetRBACFixture(t)
+	pointID, entryID, interestID := strings.Repeat("1", 32), strings.Repeat("a", 64), strings.Repeat("2", 32)
+	base := "/api/v1/recovery-points/" + pointID + "/entries/" + entryID
+	routes := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"create", http.MethodPost, base + "/preview-jobs", `{"schema_version":1,"representation":"thumbnail"}`},
+		{"poll", http.MethodGet, base + "/preview-jobs/" + interestID, ""},
+		{"cancel", http.MethodPost, base + "/preview-jobs/" + interestID + "/cancel", `{"schema_version":1}`},
+		{"state", http.MethodGet, base + "/processing", ""},
+	}
+	for _, route := range routes {
+		t.Run(route.name+"/unauthenticated", func(t *testing.T) {
+			response := performBackupAssetRBACRequest(t, fixture, route.method, route.path, route.body, "")
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+		for _, role := range []string{"admin", "operator", "viewer", "unknown"} {
+			t.Run(route.name+"/"+role, func(t *testing.T) {
+				response := performBackupAssetRBACRequest(t, fixture, route.method, route.path, route.body, fixture.tokens[role])
+				want := http.StatusForbidden
+				if role == "admin" || role == "operator" {
+					want = http.StatusNotFound
+				}
+				if response.Code != want {
+					t.Fatalf("status=%d want=%d body=%s", response.Code, want, response.Body.String())
+				}
+			})
+		}
+	}
+}
+
 func TestAssetSearchOverlayRoutesRequireListPermissionBeforeFeatureGate(t *testing.T) {
 	fixture := setupBackupAssetRBACFixture(t)
 	const id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

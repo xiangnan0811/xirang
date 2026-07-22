@@ -29,15 +29,27 @@
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] Fresh `env -u NODE_ENV TMPDIR=/dev/shm GOCACHE=<isolated> make check`:
+  backend lint 0 issues, all Go packages, frontend 162 files / 935 tests,
+  and backend/frontend production builds.
+- [OK] Bundle budget: 498.14/500 KiB main JavaScript and 104.55/105 KiB
+  main CSS.
+- [OK] Complete signed offline Worker profile and runtime smoke on linux/amd64;
+  Worker image `sha256:e9669ea3c34cab10821f13a15ced19c2f26ce5ca4458ab45ecc5ebdb6c9c2e81`.
+- [OK] Trellis validate 23/24 JSONL; exact manifest 165/165 unique,
+  159 changed product paths, outside 0, staged/untracked/whitespace clean.
+- [CI] Fresh arm64 build/scan, both Trivy rows, actionlint, bridge-mode profile
+  smoke and required-check aggregate remain pending GitHub CI evidence.
 
 ### Status
 
-[OK] **Completed**
+[OK] **Repair committed; single PR delivery pending**
 
 ### Next Steps
 
-- None - task complete
+- Push the existing Child branch, open one ready PR, monitor every required
+  check, squash merge only when green, then verify post-merge automation,
+  main synchronization and exact feature-branch/worktree cleanup.
 
 
 ## Session 2: 重建 Trellis 配置更新 PR
@@ -1017,6 +1029,198 @@ Investigated PR 394 Backend Test & Build failure under GitHub Actions. Root caus
 ### Testing
 
 - [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 27: Child 11 backup asset worker capabilities delivery
+
+**Date**: 2026-07-21
+**Task**: Child 11 backup asset worker capabilities delivery
+**Branch**: `codex/backup-assets-worker-capabilities`
+
+### Summary
+
+Implemented and verified Child 11 within the approved manifest, archived the
+Child without closing its program-level parent, and resumed remote delivery
+after the controller environment regained Git, network, PostgreSQL and Docker
+access.
+
+### Main Changes
+
+- Delivered the approved Child 11 capability layer within the exact 164-path
+  product manifest plus eight Trellis planning artifacts. The closed profile
+  set covers bounded archive/image/OCR/document/media/malware/optional-secret
+  execution, independent signed updater activation, fenced Derived/Search
+  publication, default-off policy gates, optional Worker Compose/CI build
+  contracts, and lazy frontend processing controls. No migration, model,
+  Provider-byte, all-in-one, release/publish, or Child 12+ scope was added.
+- Preserved both focused manifest amendments as separate facts: the 161-to-163
+  atomic Derived/Search reconciliation correction and the 163-to-164
+  repository Foundation settings fixture synchronization. The later closed
+  advertisement/preflight/executable parity correction added no path.
+- Corrected the approved Worker runtime smoke path after a fresh real-image RED
+  exposed `input.mp4` versus the sandbox's fixed `input.bin` contract. The
+  script now writes explicit MP4 bytes to `input.bin`; no sandbox validation,
+  tool profile or runtime isolation was weakened.
+- Created work commit `5eab59fc810295f570513233819c3f966ab55115`
+  from the exact implementation set, then archived Child 11 in
+  `10be3454ae2f8e91195ef2f2fbbd020eca09701e`. The parent remains planning.
+
+### Verification Evidence
+
+- Source and independent delivery clone matched all 166 original paths by path
+  set, regular-file type, mode and SHA-256 digest before the focused smoke fix.
+- Fresh Trellis/scope gate: task validation passed (implement JSONL 23,
+  check JSONL 24); exact manifest 164/164 unique, duplicate 0; product changes
+  158, planning artifacts 8, outside 0; staged 0 before the explicit add.
+- Final integrity gate: tracked/untracked whitespace 0/0, forbidden paths 0,
+  backend go.mod/go.sum changes 0, four paired 000067 files, 000068-000071 0,
+  and no backend/xirang-server or other checked generated artifact.
+- `env -u NODE_ENV TMPDIR=/dev/shm GOCACHE=<isolated> make check` passed after
+  the smoke correction: backend lint reported zero issues, all Go packages
+  passed, frontend passed 162 files and 919 tests, and both builds completed.
+- PostgreSQL 18 required mode passed the 000062-000067 migration/UTC row and
+  Catalog, Search, Overlay, Content and Processing behavior parity. The
+  dedicated controller container was removed afterward.
+- Bundle budgets passed at 498.14/500 KiB JS and 104.55/105 KiB CSS. Compose
+  contracts and self-tests, doc freshness and two deterministic Swagger
+  v1.16.6 generations passed with stable docs hash `477c6ace7631d...`.
+- A local linux/amd64 Worker image built with the closed toolchain. Static and
+  real non-root/read-only/network-none/seccomp runtime smoke both passed after
+  the RED/GREEN input-path correction.
+
+### Remaining CI Evidence
+
+- GitHub CI still owns the arm64 Worker build, both Trivy scans, actionlint,
+  official core-image smoke and the complete required-check result. None is
+  recorded as locally passed.
+- The `brace-expansion` advisory reproduces on unchanged main and npm audit is
+  explicitly `continue-on-error`; Child 11 does not modify dependency files.
+- Push, PR, required CI, squash merge, post-merge automation, release checks,
+  main synchronization and branch/worktree cleanup remain pending at this
+  journal snapshot.
+
+### Delivery State
+
+- Implementation verification, exact work commit and Child-only archive are
+  complete. Remote delivery is ready from base
+  `be6eebbe50dfd78e071c6d73e9c81493487fb4d5`.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5eab59fc810295f570513233819c3f966ab55115` | `feat: add backup asset worker capabilities` |
+| `10be3454ae2f8e91195ef2f2fbbd020eca09701e` | `chore(task): archive 07-20-backup-assets-worker-capabilities` |
+
+### Testing
+
+- [OK] Full `make check` with 162 frontend files / 919 tests
+- [OK] PostgreSQL 18 migration and five behavior-parity suites
+- [OK] Worker amd64 image build plus static and real sandboxed runtime smoke
+- [OK] Bundle, Compose, Swagger, doc freshness and exact scope gates
+
+### Status
+
+[OK] **Task archived; remote delivery ready**
+
+### Next Steps
+
+- Push the single feature branch, open one ready PR, require all CI checks,
+  squash merge, then verify post-merge release automation and repository hygiene.
+
+
+## Session 28: Child 11 Worker capabilities repair and PR delivery
+
+**Date**: 2026-07-22
+**Task**: Child 11 Worker capabilities repair and PR delivery
+**Branch**: `codex/backup-assets-worker-capabilities`
+
+### Summary
+
+Closed the complete-profile updater inbox lifecycle defect, reran final quality and scope gates, and prepared the archived Child for its single PR.
+
+### Main Changes
+
+- Added the approved 164-to-165 strict JSON null parser correction and completed the existing 165-path repair set without adding another path, migration, dependency, Provider mutation, all-in-one release change, or feature enablement.
+- Fixed the signed offline updater lifecycle so a candidate delivered after NewInbox startup is accepted when the root is still 0555 and the same inode; per-candidate pre/open/post mtime, ctime, inode and entry-set stability checks remain fail closed.
+- Preserved archive gzip/xz/zstd, advertised image, optional secret, OOXML/ODF preflight, Derived/Search fenced revocation, Worker sandbox, updater trust, default-off degradation, API/frontend boundary and documentation-truth contracts.
+- Added archived evidence Section 20 with the RED/GREEN result, final full profile smoke, deterministic Swagger hash, bundle measurements and exact-scope result.
+- Created repair work commit 19ef777 after the original work/archive/journal chain; the already completed Child was not restarted or archived again. Parent remains planning and Release Please PR #386 remains outside this Child.
+
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `19ef777` | (see git log) |
+
+### Testing
+
+- [OK] Focused updater RED/GREEN, full updater package and updater race suite
+- [OK] `env -u NODE_ENV GOCACHE=<isolated> make check`: Go lint 0 issues,
+  backend packages, 162 frontend files / 935 tests, typecheck, lint and builds
+- [OK] Bundle gate: 498.14 / 500 KiB JavaScript and 104.55 / 105 KiB CSS
+- [OK] Worker script plus rebuilt amd64 runtime and complete host-network
+  signed profile; Swagger v1.16.6 regenerated twice without drift
+- [OK] Exact manifest 165/165 unique, product paths outside manifest 0
+- [NOT_EXECUTED] Fresh arm64 build/scan and default bridge profile remained CI
+  evidence; no local pass was claimed
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 29: Child 11 runtime closure CI repair
+
+**Date**: 2026-07-22
+**Task**: Child 11 runtime closure CI repair
+**Branch**: `codex/backup-assets-worker-capabilities`
+
+### Summary
+
+Diagnosed the sole PR #398 amd64 complete-profile failure as Docker rewriting /etc/mtab from ../proc/mounts to /proc/mounts, excluded only that runtime-managed symlink, added closed privacy-safe file-index diagnostics, fixed the runner-independent checked condition and deterministic race fixture, and reran the complete local gate without reopening the archived Child.
+
+### Main Changes
+
+- Excluded only /etc/mtab from the immutable runtime closure because it is a Docker-managed symlink into the already excluded /proc tree; toolchain, package, policy, bundle and capability attestation remains intact.
+- Added closed not_checked/none/evidence/metadata/read/digest/symlink/race diagnostics with a bounded canonical files[] index while preserving errors.Is(ErrInvalidInvocation) and a generic error string.
+- Added RED/GREEN coverage for a runner construction failure after closure preflight and replaced the inode-reuse-prone race fixture with two simultaneously existing files.
+- Appended archived evidence Section 21; the Child remains completed, its parent remains planning, and no migration, dependency, Provider, all-in-one, release or feature-default scope changed.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a101713` | (see git log) |
+
+### Testing
+
+- [OK] Focused diagnostic RED/GREEN, two-package tests, targeted race, `go vet`,
+  formatting, and the deterministic race regression repeated 100 times
+- [OK] `env -u NODE_ENV TMPDIR=/dev/shm GOCACHE=<isolated> make check`: Go
+  lint 0 issues, every backend package, 162 frontend files / 935 tests,
+  typecheck, lint and production builds
+- [OK] Bundle gate: 498.14 / 500 KiB JavaScript and 104.55 / 105 KiB CSS
+- [OK] Worker script, rebuilt amd64 runtime smoke and complete host-network
+  signed Compose profile; closure SHA-256 `1c8c35f622de5a8da5c8b86a3c1b440c9f0240fe26a496bc36a201830f60f8c1`
+- [NOT_EXECUTED] Final-code arm64 local build was unavailable without buildx;
+  final native arm64 closure/build/scan remained pending CI
 
 ### Status
 

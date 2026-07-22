@@ -51,6 +51,10 @@ func TestCoordinatorCoalescesSameWorkKeyAndKeepsIndependentInterests(t *testing.
 	if first.JobID != second.JobID || second.Created {
 		t.Fatalf("same work was not coalesced: first=%+v second=%+v", first, second)
 	}
+	if backupasset.ValidateOpaqueID(first.InterestID) != nil || backupasset.ValidateOpaqueID(second.InterestID) != nil ||
+		first.InterestID == second.InterestID || first.InterestID == first.JobID || second.InterestID == second.JobID {
+		t.Fatalf("coalesced work did not return independent opaque interest handles: first=%+v second=%+v", first, second)
+	}
 	var job model.BackupAssetProcessingJob
 	if err := harness.db.First(&job, "id = ?", first.JobID).Error; err != nil {
 		t.Fatal(err)
@@ -61,6 +65,15 @@ func TestCoordinatorCoalescesSameWorkKeyAndKeepsIndependentInterests(t *testing.
 	var interests int64
 	if err := harness.db.Model(&model.BackupAssetProcessingInterest{}).Where("job_id = ? AND active = ?", first.JobID, true).Count(&interests).Error; err != nil || interests != 2 {
 		t.Fatalf("active interests=%d, err=%v", interests, err)
+	}
+	for interestID, ownerKey := range map[string]string{first.InterestID: "workspace-a", second.InterestID: "search-a"} {
+		var interest model.BackupAssetProcessingInterest
+		if err := harness.db.First(&interest, "id = ?", interestID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if interest.JobID != first.JobID || interest.OwnerKey != ownerKey || !interest.Active {
+			t.Fatalf("interest handle %q resolved to %+v", interestID, interest)
+		}
 	}
 }
 

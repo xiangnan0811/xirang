@@ -166,6 +166,23 @@ type ProcessingDerivedStoreConfig struct {
 	ReconcileBatchSize int
 }
 
+type ProcessingUpdaterConfig struct {
+	Enabled       bool
+	OnlineEnabled bool
+	OnlineOrigins []string
+}
+
+type ProcessingBackfillConfig struct {
+	Paused                bool
+	BatchSize             int
+	JobsPerHour           int
+	BytesPerHour          int64
+	ProviderConcurrency   int
+	CapabilityConcurrency int
+	RecentWindow          time.Duration
+	HistoryAgingStep      time.Duration
+}
+
 type ProcessingConfig struct {
 	Enabled              bool
 	QueueMax             int
@@ -182,6 +199,9 @@ type ProcessingConfig struct {
 	ProtocolJSONMaxBytes int64
 	LocalWorker          ProcessingLocalWorkerConfig
 	RemoteWorker         ProcessingRemoteWorkerConfig
+	Updater              ProcessingUpdaterConfig
+	SecretClassify       bool
+	Backfill             ProcessingBackfillConfig
 	DerivedStore         ProcessingDerivedStoreConfig
 }
 
@@ -536,6 +556,10 @@ func (service *FoundationService) ProcessingConfig() (ProcessingConfig, error) {
 		{"backup_assets.enabled", &result.Enabled},
 		{"backup_assets.worker_local_enabled", &result.LocalWorker.Enabled},
 		{"backup_assets.worker_remote_enabled", &result.RemoteWorker.Enabled},
+		{"backup_assets.worker_updater_enabled", &result.Updater.Enabled},
+		{"backup_assets.worker_updater_online_enabled", &result.Updater.OnlineEnabled},
+		{"backup_assets.processing_secret_classify", &result.SecretClassify},
+		{"backup_assets.processing_backfill_paused", &result.Backfill.Paused},
 	} {
 		if *field.target, err = parseFoundationBool(values, field.key); err != nil {
 			return ProcessingConfig{}, err
@@ -551,6 +575,8 @@ func (service *FoundationService) ProcessingConfig() (ProcessingConfig, error) {
 		{"backup_assets.processing_retry_base", &result.RetryBase},
 		{"backup_assets.processing_retry_max_delay", &result.RetryMaxDelay},
 		{"backup_assets.derived_store_reconcile_interval", &result.DerivedStore.ReconcileInterval},
+		{"backup_assets.processing_backfill_recent_window", &result.Backfill.RecentWindow},
+		{"backup_assets.processing_backfill_history_aging_step", &result.Backfill.HistoryAgingStep},
 	} {
 		if *field.target, err = parseFoundationDuration(values, field.key); err != nil {
 			return ProcessingConfig{}, err
@@ -566,6 +592,10 @@ func (service *FoundationService) ProcessingConfig() (ProcessingConfig, error) {
 		{"backup_assets.processing_retry_max", &result.RetryMax},
 		{"backup_assets.processing_sink_max_artifacts", &result.Sink.MaxArtifacts},
 		{"backup_assets.derived_store_reconcile_batch_size", &result.DerivedStore.ReconcileBatchSize},
+		{"backup_assets.processing_backfill_batch_size", &result.Backfill.BatchSize},
+		{"backup_assets.processing_backfill_jobs_per_hour", &result.Backfill.JobsPerHour},
+		{"backup_assets.processing_backfill_provider_concurrency", &result.Backfill.ProviderConcurrency},
+		{"backup_assets.processing_backfill_capability_concurrency", &result.Backfill.CapabilityConcurrency},
 	} {
 		if *field.target, err = parseFoundationInt(values, field.key); err != nil {
 			return ProcessingConfig{}, err
@@ -585,6 +615,7 @@ func (service *FoundationService) ProcessingConfig() (ProcessingConfig, error) {
 		{"backup_assets.derived_store_chunk_bytes", &result.DerivedStore.ChunkBytes},
 		{"backup_assets.derived_store_blob_max_bytes", &result.DerivedStore.BlobMaxBytes},
 		{"backup_assets.derived_store_global_max_bytes", &result.DerivedStore.GlobalMaxBytes},
+		{"backup_assets.processing_backfill_bytes_per_hour", &result.Backfill.BytesPerHour},
 	} {
 		if *field.target, err = parseFoundationInt64(values, field.key); err != nil {
 			return ProcessingConfig{}, err
@@ -596,6 +627,9 @@ func (service *FoundationService) ProcessingConfig() (ProcessingConfig, error) {
 	result.RemoteWorker.ServerKeyFile = strings.TrimSpace(values["backup_assets.worker_remote_server_key_file"])
 	result.RemoteWorker.ClientCAFile = strings.TrimSpace(values["backup_assets.worker_remote_client_ca_file"])
 	result.RemoteWorker.TrustDomain = strings.TrimSpace(values["backup_assets.worker_remote_trust_domain"])
+	if origins := strings.TrimSpace(values["backup_assets.worker_updater_online_origins"]); origins != "" {
+		result.Updater.OnlineOrigins = strings.Split(origins, ",")
+	}
 	result.DerivedStore.Root = strings.TrimSpace(values["backup_assets.derived_store_root"])
 	return result, nil
 }

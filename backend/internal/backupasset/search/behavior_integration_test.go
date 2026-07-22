@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -152,6 +153,80 @@ func runSearchBehaviorContract(t *testing.T, fixture searchBehaviorFixture) {
 	if !reflect.DeepEqual(summary, want) || first.QueryGeneration != second.QueryGeneration {
 		t.Fatalf("%s behavior summary=%+v want=%+v second_generation=%s", fixture.engine, summary, want, second.QueryGeneration)
 	}
+	assertAtomicContentProjectionBehavior(t, fixture, harness, pointID, searchGenerationIDForBehavior(t, fixture.db, pointID))
+}
+
+func assertAtomicContentProjectionBehavior(
+	t *testing.T,
+	fixture searchBehaviorFixture,
+	harness *indexerTestHarness,
+	pointID string,
+	searchGenerationID string,
+) {
+	t.Helper()
+	entryID := strings.Repeat("1", 64)
+	var catalog model.CatalogGeneration
+	if err := fixture.db.Where("recovery_point_id = ? AND is_active = ?", pointID, true).Take(&catalog).Error; err != nil {
+		t.Fatalf("load %s active Catalog generation: %v", fixture.engine, err)
+	}
+	ingest, processingLease := newContentIngestForHarness(t, harness)
+	projection := ContentProjection{
+		Ref: backupasset.AssetRef{RecoveryPointID: pointID, EntryID: entryID}, Field: SearchFieldContent,
+		Terms: []TermFrequency{{Term: "cross-engine-atomic", Frequency: 1}}, SourceFingerprint: "source-" + pointID,
+		CatalogGenerationID: catalog.ID, SearchGenerationID: searchGenerationID,
+		ProcessingLeaseID: processingLease.ID, AttemptID: processingLease.Fence.AttemptID,
+		FenceToken: processingLease.Fence.FenceToken, ExpectedClassificationRevision: 1,
+		Classification: SensitivityNonSecret, ClassificationRevision: 1,
+		CoverageRevision: 2, PipelineRevision: 2, IndexRevision: 2,
+		ExcerptRef: stringPointer(strings.Repeat("f", 32)), Coverage: FieldCoverageComplete,
+	}
+	prepared, err := ingest.PrepareContentProjection(context.Background(), projection)
+	if err != nil {
+		t.Fatalf("prepare %s content projection: %v", fixture.engine, err)
+	}
+	before := contentProjectionSnapshot(t, harness, searchGenerationID, entryID, SearchFieldContent)
+	rollback := fmt.Errorf("force %s caller rollback", fixture.engine)
+	err = fixture.db.Transaction(func(tx *gorm.DB) error {
+		if err := ingest.PublishContentProjectionTx(context.Background(), tx, prepared); err != nil {
+			return err
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("%s publish rollback error=%v", fixture.engine, err)
+	}
+	if after := contentProjectionSnapshot(t, harness, searchGenerationID, entryID, SearchFieldContent); !reflect.DeepEqual(before, after) {
+		t.Fatalf("%s publish rollback leaked state: before=%+v after=%+v", fixture.engine, before, after)
+	}
+	if err := fixture.db.Transaction(func(tx *gorm.DB) error {
+		return ingest.PublishContentProjectionTx(context.Background(), tx, prepared)
+	}); err != nil {
+		t.Fatalf("publish %s content projection: %v", fixture.engine, err)
+	}
+	revoke := RevokeProjection{
+		Ref: projection.Ref, Field: projection.Field, SourceFingerprint: projection.SourceFingerprint,
+		CatalogGenerationID: projection.CatalogGenerationID, SearchGenerationID: projection.SearchGenerationID,
+		ProcessingLeaseID: projection.ProcessingLeaseID, AttemptID: projection.AttemptID, FenceToken: projection.FenceToken,
+		ExpectedClassificationRevision: 1, CoverageRevision: 3, PipelineRevision: 3, IndexRevision: 3,
+	}
+	if err := fixture.db.Transaction(func(tx *gorm.DB) error {
+		return ingest.RevokeContentProjectionTx(context.Background(), tx, revoke)
+	}); err != nil {
+		t.Fatalf("revoke %s content projection: %v", fixture.engine, err)
+	}
+	snapshot := contentProjectionSnapshot(t, harness, searchGenerationID, entryID, SearchFieldContent)
+	if snapshot.Postings != 0 || snapshot.State != string(FieldCoverageUnavailable) || snapshot.ExcerptRef != "" {
+		t.Fatalf("%s revoked projection=%+v", fixture.engine, snapshot)
+	}
+}
+
+func searchGenerationIDForBehavior(t *testing.T, db *gorm.DB, pointID string) string {
+	t.Helper()
+	var generation model.BackupAssetSearchGeneration
+	if err := db.Where("recovery_point_id = ? AND is_active = ?", pointID, true).Take(&generation).Error; err != nil {
+		t.Fatal(err)
+	}
+	return generation.ID
 }
 
 func openSearchBehaviorSQLite(t *testing.T) searchBehaviorFixture {

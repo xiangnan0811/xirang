@@ -10,6 +10,8 @@ import (
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/model"
+
+	"gorm.io/gorm"
 )
 
 func TestContentIndexIngestPublishesAtomicOpaqueProjection(t *testing.T) {
@@ -59,6 +61,82 @@ func TestContentIndexIngestPublishesAtomicOpaqueProjection(t *testing.T) {
 	}
 	if document.Sensitivity != string(SensitivitySecret) || document.ClassificationRevision != 2 {
 		t.Fatalf("classification CAS mismatch: %+v", document)
+	}
+}
+
+func TestContentIndexIngestPublishesEmptyTextCoverageWithoutSyntheticPosting(t *testing.T) {
+	indexer, harness := newIndexerTestHarness(t)
+	entryID := strings.Repeat("3", 64)
+	pointID, catalogID := harness.seedCatalog(t, []model.CatalogEntry{{
+		EntryID: entryID, NormalizedPath: "empty.txt", Name: "empty.txt", EntryType: "file", SecurityState: "non_secret",
+	}})
+	searchGeneration, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingest, lease := newContentIngestForHarness(t, harness)
+	excerpt := strings.Repeat("3", 32)
+	if err := ingest.PublishContentProjection(context.Background(), ContentProjection{
+		Ref: backupasset.AssetRef{RecoveryPointID: pointID, EntryID: entryID}, Field: SearchFieldContent,
+		Terms: nil, SourceFingerprint: "source-" + pointID, CatalogGenerationID: catalogID, SearchGenerationID: searchGeneration.ID,
+		ProcessingLeaseID: lease.ID, AttemptID: lease.Fence.AttemptID, FenceToken: lease.Fence.FenceToken,
+		ExpectedClassificationRevision: 1, Classification: SensitivityNonSecret, ClassificationRevision: 1,
+		CoverageRevision: 2, PipelineRevision: 2, IndexRevision: 2, ExcerptRef: &excerpt, Coverage: FieldCoverageComplete,
+	}); err != nil {
+		t.Fatalf("publish empty content coverage: %v", err)
+	}
+	snapshot := contentProjectionSnapshot(t, harness, searchGeneration.ID, entryID, SearchFieldContent)
+	if snapshot.Postings != 0 || snapshot.State != string(FieldCoverageComplete) || snapshot.ExcerptRef != excerpt || snapshot.IndexRevision != 2 {
+		t.Fatalf("empty content projection=%+v", snapshot)
+	}
+}
+
+func TestContentIndexIngestTxUsesCallerTransactionAndRejectsRootHandle(t *testing.T) {
+	indexer, harness := newIndexerTestHarness(t)
+	entryID := strings.Repeat("5", 64)
+	pointID, catalogID := harness.seedCatalog(t, []model.CatalogEntry{{
+		EntryID: entryID, NormalizedPath: "caller-tx.txt", Name: "caller-tx.txt", EntryType: "file", SecurityState: "non_secret",
+	}})
+	searchGeneration, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingest, lease := newContentIngestForHarness(t, harness)
+	projection := ContentProjection{
+		Ref: backupasset.AssetRef{RecoveryPointID: pointID, EntryID: entryID}, Field: SearchFieldContent,
+		Terms: []TermFrequency{{Term: "caller-transaction", Frequency: 1}}, SourceFingerprint: "source-" + pointID,
+		CatalogGenerationID: catalogID, SearchGenerationID: searchGeneration.ID,
+		ProcessingLeaseID: lease.ID, AttemptID: lease.Fence.AttemptID, FenceToken: lease.Fence.FenceToken,
+		ExpectedClassificationRevision: 1, Classification: SensitivityNonSecret, ClassificationRevision: 1,
+		CoverageRevision: 2, PipelineRevision: 2, IndexRevision: 2, Coverage: FieldCoverageComplete,
+	}
+	prepared, err := ingest.PrepareContentProjection(context.Background(), projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ingest.PublishContentProjectionTx(context.Background(), harness.db, prepared); !errors.Is(err, ErrInvalidContentProjection) {
+		t.Fatalf("root DB handle error=%v", err)
+	}
+
+	before := contentProjectionSnapshot(t, harness, searchGeneration.ID, entryID, SearchFieldContent)
+	rollback := errors.New("force outer rollback")
+	err = harness.db.Transaction(func(tx *gorm.DB) error {
+		if err := ingest.PublishContentProjectionTx(context.Background(), tx, prepared); err != nil {
+			return err
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("outer transaction error=%v", err)
+	}
+	after := contentProjectionSnapshot(t, harness, searchGeneration.ID, entryID, SearchFieldContent)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("caller rollback leaked Search state: before=%+v after=%+v", before, after)
+	}
+	if err := harness.db.Transaction(func(tx *gorm.DB) error {
+		return ingest.PublishContentProjectionTx(context.Background(), tx, prepared)
+	}); err != nil {
+		t.Fatalf("caller transaction publish: %v", err)
 	}
 }
 
@@ -123,6 +201,140 @@ func TestContentIndexIngestClassificationChangeInvalidatesSiblingField(t *testin
 	ocr.ExcerptRef = stringPointer(strings.Repeat("e", 32))
 	if err := ingest.PublishContentProjection(context.Background(), ocr); err != nil {
 		t.Fatalf("republish sibling at new classification revision: %v", err)
+	}
+}
+
+func TestClassificationIndexIngestUsesCallerTransactionAndInvalidatesBothFields(t *testing.T) {
+	indexer, harness := newIndexerTestHarness(t)
+	entryID := strings.Repeat("a", 64)
+	pointID, catalogID := harness.seedCatalog(t, []model.CatalogEntry{{
+		EntryID: entryID, NormalizedPath: "classified-evidence.txt", Name: "classified-evidence.txt",
+		EntryType: "file", SecurityState: "non_secret",
+	}})
+	searchGeneration, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingest, lease := newContentIngestForHarness(t, harness)
+	for index, field := range []SearchField{SearchFieldContent, SearchFieldOCR} {
+		excerpt := strings.Repeat(string(rune('b'+index)), 32)
+		if err := ingest.PublishContentProjection(context.Background(), ContentProjection{
+			Ref: backupasset.AssetRef{RecoveryPointID: pointID, EntryID: entryID}, Field: field,
+			Terms: []TermFrequency{{Term: "must-disappear", Frequency: 1}}, SourceFingerprint: "source-" + pointID,
+			CatalogGenerationID: catalogID, SearchGenerationID: searchGeneration.ID,
+			ProcessingLeaseID: lease.ID, AttemptID: lease.Fence.AttemptID, FenceToken: lease.Fence.FenceToken,
+			ExpectedClassificationRevision: 1, Classification: SensitivityNonSecret, ClassificationRevision: 1,
+			CoverageRevision: 2, PipelineRevision: 2, IndexRevision: 2,
+			ExcerptRef: &excerpt, Coverage: FieldCoverageComplete,
+		}); err != nil {
+			t.Fatalf("publish %s fixture: %v", field, err)
+		}
+	}
+	projection := ClassificationProjection{
+		Ref:               backupasset.AssetRef{RecoveryPointID: pointID, EntryID: entryID},
+		SourceFingerprint: "source-" + pointID, CatalogGenerationID: catalogID, SearchGenerationID: searchGeneration.ID,
+		ProcessingLeaseID: lease.ID, AttemptID: lease.Fence.AttemptID, FenceToken: lease.Fence.FenceToken,
+		ExpectedClassificationRevision: 1, Classification: SensitivitySecret, ClassificationRevision: 2,
+		EvidenceArtifactID: strings.Repeat("d", 32),
+	}
+
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*ClassificationProjection)
+		want   error
+	}{
+		{name: "source", mutate: func(value *ClassificationProjection) { value.SourceFingerprint = "drift" }, want: ErrSearchSourceChanged},
+		{name: "fence", mutate: func(value *ClassificationProjection) { value.FenceToken = strings.Repeat("0", 64) }, want: backupasset.ErrLeaseFenceLost},
+		{name: "classification revision", mutate: func(value *ClassificationProjection) {
+			value.ExpectedClassificationRevision = 2
+			value.ClassificationRevision = 3
+		}, want: ErrContentProjectionStale},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			candidate := projection
+			testCase.mutate(&candidate)
+			prepared, prepareErr := ingest.PrepareClassificationProjection(context.Background(), candidate)
+			if prepareErr != nil {
+				t.Fatalf("prepare rejected syntactically valid stale classification: %v", prepareErr)
+			}
+			before := classificationProjectionSnapshot(t, harness, searchGeneration.ID, entryID)
+			err := harness.db.Transaction(func(tx *gorm.DB) error {
+				return ingest.PublishClassificationProjectionTx(context.Background(), tx, prepared)
+			})
+			if !errors.Is(err, testCase.want) {
+				t.Fatalf("classification error=%v, want %v", err, testCase.want)
+			}
+			if after := classificationProjectionSnapshot(t, harness, searchGeneration.ID, entryID); !reflect.DeepEqual(before, after) {
+				t.Fatalf("rejected classification changed Search: before=%+v after=%+v", before, after)
+			}
+		})
+	}
+
+	prepared, err := ingest.PrepareClassificationProjection(context.Background(), projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ingest.PublishClassificationProjectionTx(context.Background(), harness.db, prepared); !errors.Is(err, ErrInvalidContentProjection) {
+		t.Fatalf("root DB classification error=%v", err)
+	}
+	before := classificationProjectionSnapshot(t, harness, searchGeneration.ID, entryID)
+	rollback := errors.New("force classification rollback")
+	err = harness.db.Transaction(func(tx *gorm.DB) error {
+		if err := ingest.PublishClassificationProjectionTx(context.Background(), tx, prepared); err != nil {
+			return err
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("classification outer rollback error=%v", err)
+	}
+	if after := classificationProjectionSnapshot(t, harness, searchGeneration.ID, entryID); !reflect.DeepEqual(before, after) {
+		t.Fatalf("classification rollback leaked Search: before=%+v after=%+v", before, after)
+	}
+	if err := harness.db.Transaction(func(tx *gorm.DB) error {
+		return ingest.PublishClassificationProjectionTx(context.Background(), tx, prepared)
+	}); err != nil {
+		t.Fatalf("publish classification: %v", err)
+	}
+	after := classificationProjectionSnapshot(t, harness, searchGeneration.ID, entryID)
+	if after.Document.Sensitivity != string(SensitivitySecret) || after.Document.ClassificationRevision != 2 || after.Postings != 0 {
+		t.Fatalf("classification document/postings=%+v", after)
+	}
+	for _, field := range after.Fields {
+		if field.State != string(FieldCoverageUnavailable) || field.ClassificationRevision != 2 || field.ExcerptRef != nil ||
+			field.CoverageRevision != 3 || field.IndexRevision != 3 {
+			t.Fatalf("classification field remained visible: %+v", field)
+		}
+	}
+}
+
+func TestClassificationProjectionValidationRequiresEvidenceForProofOnly(t *testing.T) {
+	service := &ContentIngestService{db: &gorm.DB{}}
+	projection := ClassificationProjection{
+		Ref:               backupasset.AssetRef{RecoveryPointID: strings.Repeat("1", 32), EntryID: strings.Repeat("2", 64)},
+		SourceFingerprint: "classification-source", CatalogGenerationID: strings.Repeat("3", 32),
+		SearchGenerationID: strings.Repeat("4", 32), ProcessingLeaseID: strings.Repeat("5", 32),
+		AttemptID: strings.Repeat("6", 32), FenceToken: strings.Repeat("7", 64),
+		ExpectedClassificationRevision: 1, ClassificationRevision: 2,
+	}
+	projection.Classification = SensitivityUnknown
+	if err := service.validateClassificationProjection(projection); err != nil {
+		t.Fatalf("evidence-free unknown revocation rejected: %v", err)
+	}
+	projection.Classification = SensitivitySecret
+	if err := service.validateClassificationProjection(projection); !errors.Is(err, ErrInvalidContentProjection) {
+		t.Fatalf("evidence-free secret error=%v", err)
+	}
+	projection.Classification = SensitivityNonSecret
+	if err := service.validateClassificationProjection(projection); !errors.Is(err, ErrInvalidContentProjection) {
+		t.Fatalf("evidence-free non-secret error=%v", err)
+	}
+	projection.EvidenceArtifactID = strings.Repeat("8", 32)
+	for _, sensitivity := range []Sensitivity{SensitivityNonSecret, SensitivitySecret, SensitivityUnknown} {
+		projection.Classification = sensitivity
+		if err := service.validateClassificationProjection(projection); err != nil {
+			t.Fatalf("classification %q with evidence rejected: %v", sensitivity, err)
+		}
 	}
 }
 
@@ -196,17 +408,83 @@ func TestProjectionRevokeRemovesPostingsExcerptAndCoverage(t *testing.T) {
 	if err := ingest.PublishContentProjection(context.Background(), publish); err != nil {
 		t.Fatal(err)
 	}
-	if err := ingest.RevokeContentProjection(context.Background(), RevokeProjection{
+	revoke := RevokeProjection{
 		Ref: publish.Ref, Field: publish.Field, SourceFingerprint: publish.SourceFingerprint,
 		CatalogGenerationID: catalogID, SearchGenerationID: searchGeneration.ID,
 		ProcessingLeaseID: lease.ID, AttemptID: lease.Fence.AttemptID, FenceToken: lease.Fence.FenceToken,
 		ExpectedClassificationRevision: 1, CoverageRevision: 3, PipelineRevision: 3, IndexRevision: 3,
+	}
+	if err := ingest.RevokeContentProjectionTx(context.Background(), harness.db, revoke); !errors.Is(err, ErrInvalidContentProjection) {
+		t.Fatalf("root DB revoke error=%v", err)
+	}
+	before := contentProjectionSnapshot(t, harness, searchGeneration.ID, entryID, SearchFieldContent)
+	rollback := errors.New("force revoke rollback")
+	err := harness.db.Transaction(func(tx *gorm.DB) error {
+		if err := ingest.RevokeContentProjectionTx(context.Background(), tx, revoke); err != nil {
+			return err
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("outer revoke transaction error=%v", err)
+	}
+	if afterRollback := contentProjectionSnapshot(t, harness, searchGeneration.ID, entryID, SearchFieldContent); !reflect.DeepEqual(before, afterRollback) {
+		t.Fatalf("caller revoke rollback leaked Search state: before=%+v after=%+v", before, afterRollback)
+	}
+	if err := harness.db.Transaction(func(tx *gorm.DB) error {
+		return ingest.RevokeContentProjectionTx(context.Background(), tx, revoke)
 	}); err != nil {
-		t.Fatalf("RevokeContentProjection: %v", err)
+		t.Fatalf("RevokeContentProjectionTx: %v", err)
 	}
 	snapshot := contentProjectionSnapshot(t, harness, searchGeneration.ID, entryID, SearchFieldContent)
 	if snapshot.Postings != 0 || snapshot.State != string(FieldCoverageUnavailable) || snapshot.ExcerptRef != "" || snapshot.IndexRevision != 3 {
 		t.Fatalf("revoked projection remains visible: %+v", snapshot)
+	}
+}
+
+func TestProjectionRevokeAndRebuildKeepSameActivePipelineRevision(t *testing.T) {
+	indexer, harness := newIndexerTestHarness(t)
+	entryID := strings.Repeat("4", 64)
+	pointID, catalogID := harness.seedCatalog(t, []model.CatalogEntry{{
+		EntryID: entryID, NormalizedPath: "same-pipeline.txt", Name: "same-pipeline.txt", EntryType: "file", SecurityState: "non_secret",
+	}})
+	searchGeneration, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingest, lease := newContentIngestForHarness(t, harness)
+	projection := ContentProjection{
+		Ref: backupasset.AssetRef{RecoveryPointID: pointID, EntryID: entryID}, Field: SearchFieldContent,
+		Terms: []TermFrequency{{Term: "first", Frequency: 1}}, SourceFingerprint: "source-" + pointID,
+		CatalogGenerationID: catalogID, SearchGenerationID: searchGeneration.ID,
+		ProcessingLeaseID: lease.ID, AttemptID: lease.Fence.AttemptID, FenceToken: lease.Fence.FenceToken,
+		ExpectedClassificationRevision: 1, Classification: SensitivityNonSecret, ClassificationRevision: 1,
+		CoverageRevision: 2, PipelineRevision: 2, IndexRevision: 2,
+		ExcerptRef: stringPointer(strings.Repeat("1", 32)), Coverage: FieldCoverageComplete,
+	}
+	if err := ingest.PublishContentProjection(context.Background(), projection); err != nil {
+		t.Fatal(err)
+	}
+	if err := ingest.RevokeContentProjection(context.Background(), RevokeProjection{
+		Ref: projection.Ref, Field: projection.Field, SourceFingerprint: projection.SourceFingerprint,
+		CatalogGenerationID: catalogID, SearchGenerationID: searchGeneration.ID,
+		ProcessingLeaseID: lease.ID, AttemptID: lease.Fence.AttemptID, FenceToken: lease.Fence.FenceToken,
+		ExpectedClassificationRevision: 1, CoverageRevision: 3, PipelineRevision: 2, IndexRevision: 3,
+	}); err != nil {
+		t.Fatalf("same-pipeline revoke: %v", err)
+	}
+	projection.Terms = []TermFrequency{{Term: "second", Frequency: 1}}
+	projection.CoverageRevision = 4
+	projection.PipelineRevision = 2
+	projection.IndexRevision = 4
+	projection.ExcerptRef = stringPointer(strings.Repeat("2", 32))
+	if err := ingest.PublishContentProjection(context.Background(), projection); err != nil {
+		t.Fatalf("same-pipeline rebuild: %v", err)
+	}
+	snapshot := contentProjectionSnapshot(t, harness, searchGeneration.ID, entryID, SearchFieldContent)
+	if snapshot.Postings == 0 || snapshot.State != string(FieldCoverageComplete) || snapshot.ExcerptRef != strings.Repeat("2", 32) ||
+		snapshot.IndexRevision != 4 {
+		t.Fatalf("same-pipeline rebuild snapshot=%+v", snapshot)
 	}
 }
 
@@ -216,6 +494,41 @@ type contentSnapshot struct {
 	ExcerptRef    string
 	IndexRevision int
 	ProjectionRev int64
+}
+
+type classificationSnapshot struct {
+	Document      model.BackupAssetSearchDocument
+	Fields        []model.BackupAssetSearchDocumentField
+	Postings      int64
+	ProjectionRev int64
+}
+
+func classificationProjectionSnapshot(
+	t *testing.T,
+	harness *indexerTestHarness,
+	searchID string,
+	entryID string,
+) classificationSnapshot {
+	t.Helper()
+	var snapshot classificationSnapshot
+	if err := harness.db.Where("search_generation_id = ? AND document_id = ?", searchID, entryID).
+		Take(&snapshot.Document).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Where("search_generation_id = ? AND document_id = ? AND field IN ?", searchID, entryID,
+		[]SearchField{SearchFieldContent, SearchFieldOCR}).Order("field ASC").Find(&snapshot.Fields).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Model(&model.BackupAssetSearchPosting{}).
+		Where("search_generation_id = ? AND document_id = ? AND field IN ?", searchID, entryID,
+			[]SearchField{SearchFieldContent, SearchFieldOCR}).Count(&snapshot.Postings).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Model(&model.BackupAssetSearchGeneration{}).Select("projection_revision").
+		Where("id = ?", searchID).Scan(&snapshot.ProjectionRev).Error; err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
 }
 
 func contentProjectionSnapshot(t *testing.T, harness *indexerTestHarness, searchID, entryID string, field SearchField) contentSnapshot {

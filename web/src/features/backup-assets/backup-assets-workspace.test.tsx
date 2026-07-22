@@ -3,11 +3,24 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
+import { runAxe } from "@/test/a11y-helpers";
+
 import { createInitialBackupAssetsState } from "./backup-assets-state";
 import { defaultBackupAssetsRouteState } from "./backup-assets-route-state";
 import { BackupAssetsWorkspace } from "./backup-assets-workspace";
 import type { BackupAssetsController } from "./use-backup-assets-state";
 import { buildAssetRows, recoveryPoint, repository } from "./__tests__/test-utils";
+
+const { coveragePanelRenderMock } = vi.hoisted(() => ({
+  coveragePanelRenderMock: vi.fn(),
+}));
+
+vi.mock("./processing-coverage-panel", () => ({
+  ProcessingCoveragePanel: (props: unknown) => {
+    coveragePanelRenderMock(props);
+    return <section data-testid="synthetic-coverage-panel">Synthetic coverage panel</section>;
+  },
+}));
 
 function controller(overrides: Partial<BackupAssetsController> = {}): BackupAssetsController {
   const route = { ...defaultBackupAssetsRouteState("data"), repositoryId: repository.id };
@@ -90,6 +103,66 @@ beforeAll(() => {
 });
 
 describe("BackupAssetsWorkspace", () => {
+  it("loads the Admin processing surface only after an authorized interaction", async () => {
+    setViewport(1440);
+    coveragePanelRenderMock.mockClear();
+    const user = userEvent.setup();
+    const ensureStepUpProof = vi.fn();
+    render(
+      <BackupAssetsWorkspace
+        controller={controller()}
+        processingRuntime={{ token: "admin-token", role: "admin", ensureStepUpProof }}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />
+    );
+
+    const trigger = screen.getByRole("button", { name: /Processing coverage|处理覆盖/ });
+    expect(screen.queryByTestId("synthetic-coverage-panel")).not.toBeInTheDocument();
+    expect(coveragePanelRenderMock).not.toHaveBeenCalled();
+    await user.click(trigger);
+    expect(await screen.findByRole("dialog", { name: /Processing coverage|处理覆盖/ })).toBeInTheDocument();
+    expect(await screen.findByTestId("synthetic-coverage-panel")).toBeInTheDocument();
+    expect(coveragePanelRenderMock).toHaveBeenCalledWith(expect.objectContaining({
+      token: "admin-token",
+      role: "admin",
+      ensureStepUpProof,
+    }));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("keeps the lazy Admin processing dialog axe-clean", async () => {
+    setViewport(1440);
+    const user = userEvent.setup();
+    render(
+      <BackupAssetsWorkspace
+        controller={controller()}
+        processingRuntime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Processing coverage|处理覆盖/ }));
+    expect(await screen.findByRole("dialog", { name: /Processing coverage|处理覆盖/ })).toBeInTheDocument();
+    expect(await runAxe(document.body)).toHaveNoViolations();
+  });
+
+  it("does not expose the processing administration trigger to operators", () => {
+    setViewport(1440);
+    render(
+      <BackupAssetsWorkspace
+        controller={controller()}
+        processingRuntime={{ token: "operator-token", role: "operator", ensureStepUpProof: vi.fn() }}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByRole("button", { name: /Processing coverage|处理覆盖/ })).not.toBeInTheDocument();
+  });
+
   it("renders stable unframed three-track desktop regions", () => {
     setViewport(1440);
     const { container } = render(
@@ -150,7 +223,7 @@ describe("BackupAssetsWorkspace", () => {
     });
     desktop.unmount();
 
-    setViewport(390);
+    setViewport(375);
     render(
       <BackupAssetsWorkspace controller={controller()} onRoutePatch={vi.fn()} onReturnOverview={vi.fn()} />
     );
@@ -203,7 +276,7 @@ describe("BackupAssetsWorkspace", () => {
   });
 
   it("uses a context dialog at intermediate width and returns focus to its trigger", async () => {
-    setViewport(900);
+    setViewport(768);
     const user = userEvent.setup();
     render(<BackupAssetsWorkspace controller={controller()} onRoutePatch={vi.fn()} onReturnOverview={vi.fn()} />);
 

@@ -22,6 +22,8 @@ func TestProcessingMetricsKeepLabelsClosedAndClampValues(t *testing.T) {
 	metrics.AddSinkBytes(-4)
 	metrics.SetDerived(DerivedMetricKind("derived/secret"), -4)
 	metrics.ObserveDerived(DerivedMetricEvent("event/secret"))
+	metrics.SetCoverage("capability/secret", "profile/secret", CoverageMetricState("coverage/secret"), -4)
+	metrics.ObserveUpdaterActivation(UpdaterActivationOutcome("activation/secret"))
 
 	families, err := registry.Gather()
 	if err != nil {
@@ -34,6 +36,18 @@ func TestProcessingMetricsKeepLabelsClosedAndClampValues(t *testing.T) {
 					t.Fatalf("raw metric label leaked: family=%s label=%s", family.GetName(), label.GetValue())
 				}
 			}
+		}
+	}
+	names := make(map[string]bool, len(families))
+	for _, family := range families {
+		names[family.GetName()] = true
+	}
+	for _, required := range []string{
+		"xirang_backup_asset_processing_coverage",
+		"xirang_backup_asset_processing_updater_activation_total",
+	} {
+		if !names[required] {
+			t.Fatalf("missing Child 11 metric %q", required)
 		}
 	}
 }
@@ -49,4 +63,6 @@ func TestProcessingMetricsNoopIsSafe(t *testing.T) {
 	metrics.AddSinkBytes(1)
 	metrics.SetDerived(DerivedMetricLogicalBytes, 1)
 	metrics.ObserveDerived(DerivedEventRewrapped)
+	metrics.SetCoverage("image.thumbnail", "raster_thumbnail_v1", CoverageMetricComplete, 1)
+	metrics.ObserveUpdaterActivation(UpdaterActivationCommit)
 }

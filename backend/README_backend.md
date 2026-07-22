@@ -18,6 +18,10 @@
 
 `backup_assets.enabled` 默认仍为 `false`。启用后，Catalog API 只公开经过 producing-lineage 授权的已提交元数据；每个资产引用必须同时携带恢复点 ID 与 entry ID，不接受 Provider 路径。已经原子提交的 immutable Catalog 在 Provider 离线时仍可浏览，但内容可用性会独立返回 `false`；Catalog 不提供内容字节，也不是恢复源。Rclone 版本化 setup、binding、preflight、activation 与 rollback 继续通过 Task 子资源提供，全部要求认证、Admin、`backup_repositories:manage` 和 Task ownership。
 
+增强处理复用同一 runtime、Child 10 持久队列/Input-Sink grant、Content Broker 与 Derived Store。全局 feature、本机/远程 Worker transport、独立 updater 和可选秘密分类均默认关闭；生产 capability 只接受编译期闭合的 capability/profile/limit，不接受调用方 executable、argv、路径、URL 或工具配置。公开响应只返回 exact AssetRef、用户作用域的 processing-interest handle、闭合状态/原因、覆盖和 fallback，不返回共享 coordinator job、attempt/fence/grant/Worker/blob 身份、Provider locator、bundle 路径、凭据或原始工具输出。无 Worker 或无匹配 capability 时返回 `not_deployed`/`unsupported`，不会把 Catalog、原生预览、下载或 recovery 变成失败。
+
+非 GA 的本地 `asset-worker` Compose profile 使用两个独立 socket volume：Core 同时挂载 `asset-worker-updater-runtime` 与嵌套的 `asset-worker-worker-runtime`，parser 只读挂载后者且不加入 updater GID，updater 只读挂载前者；双方都看不到对方的 socket 或 secret。Worker 没有稳定公共镜像，也不会由本功能发布到 Docker Hub/GitHub Release；普通 Core-only Compose 与 `10761` 端口不变。
+
 ## 快速运行
 
 ```bash
@@ -141,7 +145,29 @@ ADMIN_INITIAL_PASSWORD='LocalDev#2026' APP_ENV=development \
 | GET | /recovery-points/:id/evidence | 🔒 查看分层且不提升信任结论的精确证据（`backup_assets:list`） |
 | GET | /recovery-points/:id/entries | 🔒 使用 opaque parent/cursor 浏览 active Catalog（`backup_assets:list`） |
 | GET | /recovery-points/:id/entries/:entryId | 🔒 使用恢复点与 entry 复合身份查看条目（`backup_assets:list`） |
+| POST | /recovery-points/:id/entries/:entryId/delivery-tickets | 🔒 为 exact AssetRef 签发原生/派生 Content Broker ticket（`backup_assets:preview`） |
+| POST | /recovery-points/:id/entries/:entryId/preview-jobs | 🔒 创建闭合 representation 的增强预览 interest（`backup_assets:preview`；queued 为 `202 + Location`） |
+| GET | /recovery-points/:id/entries/:entryId/preview-jobs/:jobId | 🔒 按当前用户与 exact AssetRef 查询一次性处理结果（`backup_assets:preview`） |
+| POST | /recovery-points/:id/entries/:entryId/preview-jobs/:jobId/cancel | 🔒 只取消当前用户的 interest，不越权取消共享 work（`backup_assets:preview`） |
+| GET | /recovery-points/:id/entries/:entryId/processing | 🔒 查看闭合增强处理状态，不创建任务（`backup_assets:preview`） |
 | POST | /recovery-point-diffs | 🔒 对两个明确恢复点执行精确 metadata diff（`backup_assets:list`） |
+
+### 备份资产处理管理（默认关闭）
+
+以下路由全部要求认证、Admin、全局 feature gate、独立速率/请求体上限，并只返回有界脱敏 DTO。Offline bundle bytes 由运维人员放入 updater-only 固定只读 inbox；浏览器与 Core HTTP API 只发送 candidate JSON 控制请求，不接收 multipart、URL、服务器路径或 bundle bytes。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /admin/backup-asset-processing | 🔒 Worker/Derived 有界健康摘要 |
+| GET | /admin/backup-asset-processing/capabilities | 🔒 闭合 capability/profile inventory |
+| GET | /admin/backup-asset-processing/coverage | 🔒 eligible/complete/partial/queued/failed/unsupported/not-deployed/stale 聚合 |
+| GET | /admin/backup-asset-processing/updater | 🔒 脱敏 updater 与 active bundle 状态 |
+| GET | /admin/backup-asset-processing/updater/offline-candidates | 🔒 已验签 candidate 的脱敏列表 |
+| PATCH | /admin/backup-asset-processing/backfill-policy | 🔒 使用 revision CAS 更新 pause/quota |
+| POST | /admin/backup-asset-processing/updater/offline-candidates/scan | 🔒 请求扫描固定 inbox；请求体必须为空 |
+| POST | /admin/backup-asset-processing/updater/offline-imports | 🔒 使用 `candidate_id` 与 expected fingerprint 确认原子激活 |
+
+Updater receipt 只在独立 Unix socket `/run/xirang/asset-worker-updater.sock` 上提供 `/internal/v1/asset-worker-updater/*` 私有协议，并在解码请求前校验固定 socket 权限和 peer credential。Parser socket 位于独立的 `/run/xirang/worker/asset-worker.sock`；两个 socket 分属不同 named volume，互不挂载。Updater 协议不注册到公开 `/api/v1`、Nginx 或 parser Worker socket。
 
 ### 任务与执行
 

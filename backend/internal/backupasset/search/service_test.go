@@ -371,6 +371,165 @@ func TestSearchServiceExcerptResolverFailureCannotClaimAuthoritativeEmpty(t *tes
 	}
 }
 
+func TestSearchServiceMalwareReleaseGateHidesUnsafeOrStaleDerivedEvidence(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		field SearchField
+		err   error
+	}{
+		{name: "content unsafe", field: SearchFieldContent},
+		{name: "content stale", field: SearchFieldContent, err: errors.New("malware evidence stale")},
+		{name: "ocr unsafe", field: SearchFieldOCR},
+		{name: "ocr stale", field: SearchFieldOCR, err: errors.New("malware evidence stale")},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			indexer, harness := newIndexerTestHarness(t)
+			entryID := strings.Repeat("8", 64)
+			pointID, _ := harness.seedCatalog(t, []model.CatalogEntry{{
+				EntryID: entryID, NormalizedPath: "unsafe-content.txt", Name: "unsafe-content.txt", EntryType: "file",
+				Size: 4096, MimeType: "text/plain", Fingerprint: strings.Repeat("9", 64),
+				FingerprintStrength: string(catalog.FingerprintStrong), SecurityState: "non_secret",
+			}})
+			generation, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			key, err := harness.ring.Active(context.Background(), backupasset.KeyDomainSearchToken)
+			if err != nil {
+				t.Fatal(err)
+			}
+			token, err := TokenHMAC(key.Key, key.Version, NormalizerVersion, testCase.field, TokenKindExact, "needle")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := harness.db.Create(&model.BackupAssetSearchPosting{
+				SearchGenerationID: generation.ID, DocumentID: entryID, Field: string(testCase.field),
+				TokenKind: string(TokenKindExact), KeyVersion: key.Version, TokenHMAC: token, TermFrequency: 1,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := harness.db.Model(&model.BackupAssetSearchDocumentField{}).
+				Where("search_generation_id = ? AND document_id = ? AND field = ?", generation.ID, entryID, testCase.field).
+				Updates(map[string]any{"state": FieldCoverageComplete, "excerpt_ref": strings.Repeat("d", 32)}).Error; err != nil {
+				t.Fatal(err)
+			}
+			resolver := &excerptResolverFake{match: true, snippet: "must not be released"}
+			service := newSearchServiceForHarness(t, harness, map[string]bool{pointID: true}, resolver)
+			var requests []MalwareSafetyRequest
+			service.malwareSafety = func(_ context.Context, request MalwareSafetyRequest) (bool, error) {
+				requests = append(requests, request)
+				return false, testCase.err
+			}
+
+			response, err := service.Search(context.Background(), SearchActor{
+				Authorization: catalog.AuthorizationScope{Role: "admin", UserID: 1},
+			}, SearchRequest{
+				SchemaVersion: QuerySchemaVersion, Root: QueryNode{Op: QueryOpTerm, Field: testCase.field, Text: "needle"},
+				Scope: SearchScope{Mode: SearchScopeExactPoints, RecoveryPointIDs: []string{pointID}},
+				Sort:  SearchSortRelevance, Limit: 25,
+			})
+			if err != nil {
+				t.Fatalf("Search with blocked malware evidence: %v", err)
+			}
+			if len(response.Items) != 0 || response.Total != nil || response.TotalRelation != TotalRelationUnavailable ||
+				response.AuthoritativeEmpty || len(response.Suggestions) != 0 ||
+				response.Coverage.Status == CoverageComplete || response.Capabilities.Content || resolver.calls != 0 {
+				t.Fatalf("blocked malware evidence leaked Search output: response=%+v resolver_calls=%d", response, resolver.calls)
+			}
+			if len(requests) != 1 {
+				t.Fatalf("malware release checks=%d, want 1", len(requests))
+			}
+			var point model.RecoveryPoint
+			if err := harness.db.First(&point, "id = ?", pointID).Error; err != nil {
+				t.Fatal(err)
+			}
+			request := requests[0]
+			if request.Ref != (backupasset.AssetRef{RecoveryPointID: pointID, EntryID: entryID}) ||
+				request.CatalogGenerationID != generation.CatalogGenerationID || request.SourceFingerprint != point.SourceFingerprint ||
+				request.EntryFingerprint != strings.Repeat("9", 64) || request.FingerprintStrength != string(catalog.FingerprintStrong) ||
+				request.ProviderCapabilityRevision != int64(point.CapabilityRevision) || request.Size != 4096 || request.MediaType != "text/plain" {
+				t.Fatalf("malware release request=%+v", request)
+			}
+
+			requests = nil
+			resolver.calls = 0
+			response, err = service.Search(context.Background(), SearchActor{
+				Authorization: catalog.AuthorizationScope{Role: "admin", UserID: 1},
+			}, SearchRequest{
+				SchemaVersion: QuerySchemaVersion,
+				Root: QueryNode{Op: QueryOpNot, Children: []QueryNode{{
+					Op: QueryOpTerm, Field: testCase.field, Text: "different-term",
+				}}},
+				Scope: SearchScope{Mode: SearchScopeExactPoints, RecoveryPointIDs: []string{pointID}},
+				Sort:  SearchSortRelevance, Limit: 25,
+			})
+			if err != nil {
+				t.Fatalf("Search NOT %s with blocked malware evidence: %v", testCase.field, err)
+			}
+			if len(requests) != 1 {
+				t.Fatalf("NOT %s malware release checks=%d, want 1", testCase.field, len(requests))
+			}
+			if len(response.Items) != 0 || response.Total != nil || response.TotalRelation != TotalRelationUnavailable ||
+				response.AuthoritativeEmpty || len(response.Suggestions) != 0 ||
+				response.Coverage.Status == CoverageComplete || response.Capabilities.Content || resolver.calls != 0 {
+				t.Fatalf("blocked malware evidence leaked through NOT %s: response=%+v resolver_calls=%d", testCase.field, response, resolver.calls)
+			}
+		})
+	}
+}
+
+func TestSearchServicePipelineRevisionMismatchHidesOldContentProjection(t *testing.T) {
+	indexer, harness := newIndexerTestHarness(t)
+	entryID := strings.Repeat("7", 64)
+	pointID, _ := harness.seedCatalog(t, []model.CatalogEntry{{
+		EntryID: entryID, NormalizedPath: "stale-content.txt", Name: "stale-content.txt", EntryType: "file", SecurityState: "non_secret",
+	}})
+	generation, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := harness.ring.Active(context.Background(), backupasset.KeyDomainSearchToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := TokenHMAC(key.Key, key.Version, NormalizerVersion, SearchFieldContent, TokenKindExact, "old-needle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Create(&model.BackupAssetSearchPosting{
+		SearchGenerationID: generation.ID, DocumentID: entryID, Field: string(SearchFieldContent),
+		TokenKind: string(TokenKindExact), KeyVersion: key.Version, TokenHMAC: token, TermFrequency: 1,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Model(&model.BackupAssetSearchDocumentField{}).
+		Where("search_generation_id = ? AND document_id = ? AND field = ?", generation.ID, entryID, SearchFieldContent).
+		Updates(map[string]any{
+			"state": FieldCoverageComplete, "pipeline_revision": 2, "excerpt_ref": strings.Repeat("c", 32),
+		}).Error; err != nil {
+		t.Fatal(err)
+	}
+	resolver := &excerptResolverFake{match: true, snippet: "must stay hidden"}
+	service := newSearchServiceForHarness(t, harness, map[string]bool{pointID: true}, resolver)
+	service.pipelineRevisions = func(context.Context) (ContentPipelineRevisions, error) {
+		return ContentPipelineRevisions{Content: 3, OCR: 1}, nil
+	}
+	response, err := service.Search(context.Background(), SearchActor{
+		Authorization: catalog.AuthorizationScope{Role: "admin", UserID: 1},
+	}, SearchRequest{
+		SchemaVersion: QuerySchemaVersion, Root: QueryNode{Op: QueryOpTerm, Field: SearchFieldContent, Text: "old-needle"},
+		Scope: SearchScope{Mode: SearchScopeExactPoints, RecoveryPointIDs: []string{pointID}},
+		Sort:  SearchSortRelevance, Limit: 25,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Items) != 0 || response.Total != nil || response.AuthoritativeEmpty ||
+		response.Coverage.Status == CoverageComplete || resolver.calls != 0 {
+		t.Fatalf("stale content projection remained visible: response=%+v resolver_calls=%d", response, resolver.calls)
+	}
+}
+
 func TestSearchServiceMissingTagResolverCannotClaimAuthoritativeEmpty(t *testing.T) {
 	indexer, harness := newIndexerTestHarness(t)
 	pointID, _ := harness.seedCatalog(t, []model.CatalogEntry{{
@@ -443,6 +602,29 @@ func TestSearchServiceFeatureDisabledBeforeScopeKeyOrDatabaseAccess(t *testing.T
 	}
 }
 
+func TestSearchServiceRequiresMalwareSafetyForDerivedPipelines(t *testing.T) {
+	_, harness := newIndexerTestHarness(t)
+	if _, err := harness.ring.Ensure(context.Background(), backupasset.KeyDomainCursorSigning); err != nil {
+		t.Fatal(err)
+	}
+	scope, err := NewScopeResolver(harness.db, &scopeTestAuthorizer{allowed: map[string]bool{}}, ScopeResolverLimits{MaxCandidates: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewService(ServiceDependencies{
+		DB: harness.db, Scope: scope, Keys: harness.ring,
+		Cursor: NewCursorCodec(harness.ring, func() time.Time { return harness.now }, 15*time.Minute),
+		Now:    func() time.Time { return harness.now }, Limits: DefaultServiceLimits(),
+		FeatureEnabled: func() (bool, error) { return true, nil },
+		PipelineRevisions: func(context.Context) (ContentPipelineRevisions, error) {
+			return ContentPipelineRevisions{Content: 1, OCR: 1}, nil
+		},
+	})
+	if err == nil {
+		t.Fatal("Search service accepted Derived pipeline revisions without malware release safety")
+	}
+}
+
 func newSearchServiceForHarness(t *testing.T, harness *indexerTestHarness, allowed map[string]bool, excerpts ExcerptResolver) *Service {
 	t.Helper()
 	if _, err := harness.ring.Ensure(context.Background(), backupasset.KeyDomainCursorSigning); err != nil {
@@ -457,6 +639,10 @@ func newSearchServiceForHarness(t *testing.T, harness *indexerTestHarness, allow
 		Cursor: NewCursorCodec(harness.ring, func() time.Time { return harness.now }, 15*time.Minute),
 		Now:    func() time.Time { return harness.now }, Limits: DefaultServiceLimits(),
 		FeatureEnabled: func() (bool, error) { return true, nil },
+		PipelineRevisions: func(context.Context) (ContentPipelineRevisions, error) {
+			return ContentPipelineRevisions{Content: 1, OCR: 1}, nil
+		},
+		MalwareSafety: func(context.Context, MalwareSafetyRequest) (bool, error) { return true, nil },
 	})
 	if err != nil {
 		t.Fatal(err)

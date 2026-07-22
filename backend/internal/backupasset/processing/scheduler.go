@@ -47,13 +47,13 @@ type QueueCandidate struct {
 
 func SortQueueCandidates(candidates []QueueCandidate) {
 	sort.SliceStable(candidates, func(left, right int) bool {
+		if candidates[left].Priority != candidates[right].Priority {
+			return candidates[left].Priority > candidates[right].Priority
+		}
 		leftInteractive := candidates[left].PriorityClass == PriorityInteractive
 		rightInteractive := candidates[right].PriorityClass == PriorityInteractive
 		if leftInteractive != rightInteractive {
 			return leftInteractive
-		}
-		if candidates[left].Priority != candidates[right].Priority {
-			return candidates[left].Priority > candidates[right].Priority
 		}
 		if candidates[left].QueuedUnixNano != candidates[right].QueuedUnixNano {
 			return candidates[left].QueuedUnixNano < candidates[right].QueuedUnixNano

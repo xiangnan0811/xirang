@@ -158,6 +158,19 @@ func TestResolveAllowedOrigin(t *testing.T) {
 func TestNewRouterRegisterRoutes(t *testing.T) {
 	g := NewRouter(Dependencies{})
 	routes := g.Routes()
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/recovery-points/:id/entries/:entryId/preview-jobs"},
+		{http.MethodGet, "/api/v1/recovery-points/:id/entries/:entryId/preview-jobs/:jobId"},
+		{http.MethodPost, "/api/v1/recovery-points/:id/entries/:entryId/preview-jobs/:jobId/cancel"},
+		{http.MethodGet, "/api/v1/recovery-points/:id/entries/:entryId/processing"},
+	} {
+		if !hasRoute(routes, route.method, route.path) {
+			t.Fatalf("backup asset processing route is missing: %s %s", route.method, route.path)
+		}
+	}
 
 	if !hasRoute(routes, http.MethodGet, "/api/v1/admin/backup-asset-processing") {
 		t.Fatalf("未注册备份资产处理管理摘要接口")

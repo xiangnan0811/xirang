@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef } from "react";
-import { Download, Eye, RefreshCw } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Download, Eye, RefreshCw, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -7,16 +7,24 @@ import { InlineAlert } from "@/components/ui/inline-alert";
 import { LoadingState } from "@/components/ui/loading-state";
 import type { BackupAsset, BackupContentTicket } from "@/types/domain";
 
+import { selectProcessingRepresentation } from "./backup-assets-processing-state";
+import type { ProcessingPreviewSource } from "./backup-asset-processing-panel";
 import type { BackupAssetsValueResource } from "./use-backup-assets-state";
 
 const RENEW_BEFORE_MS = 30_000;
 const MEDIA_DESCRIPTION_ID = "backup-assets-preview-media-description";
+const LazyBackupAssetProcessingPanel = lazy(() =>
+  import("./backup-asset-processing-panel").then((module) => ({
+    default: module.BackupAssetProcessingPanel,
+  }))
+);
 
 export interface AssetPreviewProps {
   asset: BackupAsset;
   resource: BackupAssetsValueResource<BackupContentTicket>;
   canPreview: boolean;
   canDownload: boolean;
+  processingToken?: string | null;
   onLoadPreview: (asset: BackupAsset) => void;
   onRenew: () => void;
   onPrepareDownload: (asset: BackupAsset) => void;
@@ -28,6 +36,7 @@ export function AssetPreview({
   resource,
   canPreview,
   canDownload,
+  processingToken = null,
   onLoadPreview,
   onRenew,
   onPrepareDownload,
@@ -37,6 +46,7 @@ export function AssetPreview({
   const contentNodeRef = useRef<HTMLIFrameElement | HTMLImageElement | HTMLMediaElement | null>(null);
   const detachRef = useRef(onDetach);
   const mediaRetryRef = useRef({ binding: "", count: 0 });
+  const [processingOpen, setProcessingOpen] = useState(false);
 
   useEffect(() => {
     detachRef.current = onDetach;
@@ -86,6 +96,12 @@ export function AssetPreview({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex min-h-11 shrink-0 flex-wrap items-center justify-end gap-2 border-b border-border px-2 py-1.5">
+        {processingToken ? (
+          <Button type="button" variant="ghost" size="sm" onClick={() => setProcessingOpen(true)}>
+            <Sparkles className="size-4" aria-hidden />
+            {t("backupAssets.preview.processingStatus")}
+          </Button>
+        ) : null}
         {canPreview && resource.status !== "loading" && ticket?.action !== "preview" ? (
           <Button type="button" variant="ghost" size="sm" onClick={() => onLoadPreview(asset)}>
             <Eye className="size-4" aria-hidden />
@@ -120,8 +136,38 @@ export function AssetPreview({
           onMediaError={handleMediaError}
         />
       </div>
+      {processingOpen && processingToken ? (
+        <Suspense
+          fallback={(
+            <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground" role="status">
+              {t("backupAssets.preview.processingLoading")}
+            </p>
+          )}
+        >
+          <LazyBackupAssetProcessingPanel
+            token={processingToken}
+            asset={asset}
+            canNativePreview={canPreview}
+            canDownload={canDownload}
+            onOpenPreview={(source) => onLoadPreview(assetForProcessingPreview(asset, source))}
+            onPrepareDownload={() => onPrepareDownload(asset)}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
+}
+
+function assetForProcessingPreview(asset: BackupAsset, source: ProcessingPreviewSource): BackupAsset {
+  if (source === "native") return asset;
+  switch (selectProcessingRepresentation(asset)) {
+    case "document_pages":
+      return { ...asset, mimeType: "image/png" };
+    case "archive_index":
+      return { ...asset, mimeType: "text/plain" };
+    default:
+      return asset;
+  }
 }
 
 function PreviewBody({
