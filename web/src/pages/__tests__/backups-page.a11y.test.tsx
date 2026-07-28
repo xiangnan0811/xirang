@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
@@ -182,7 +183,9 @@ describe("Backups routes accessibility", () => {
       screen.getByRole("searchbox", { name: /Search backup assets|搜索备份资产/ }),
       temporaryQuery
     );
-    await user.click(screen.getAllByRole("option")[0]);
+    await user.click(within(screen.getByRole("listbox")).getAllByRole("option")[0]);
+    await user.click(screen.getByRole("button", { name: /Export selected|导出所选/ }));
+    expect(await screen.findByRole("dialog", { name: /Export backup assets|导出备份资产/ })).toBeInTheDocument();
 
     expect(browserChannels()).toEqual(before);
     const serialized = JSON.stringify(browserChannels());
@@ -190,6 +193,24 @@ describe("Backups routes accessibility", () => {
     expect(serialized).not.toContain("synthetic-service-config-with-a-deliberately-long-name");
     expect(serialized).not.toContain("/api/v1/asset-content/");
     expect(serialized).not.toContain("proof");
+  });
+
+  it.each([
+    [1440, "desktop"],
+    [1200, "intermediate"],
+    [390, "mobile"],
+  ] as const)("keeps the lazy export review axe-clean at %ipx", async (width, viewport) => {
+    useFixture("complete");
+    setViewport(width);
+    const user = userEvent.setup();
+    renderBackups(completeRoute());
+
+    await user.click(within(await screen.findByRole("listbox")).getAllByRole("option")[0]);
+    await user.click(screen.getByRole("button", { name: /Export selected|导出所选/ }));
+
+    expect(await screen.findByRole("dialog", { name: /Export backup assets|导出备份资产/ })).toBeInTheDocument();
+    expect(screen.getByTestId("backup-assets-workspace")).toHaveAttribute("data-viewport", viewport);
+    expect(await runAxe(document.body)).toHaveNoViolations();
   });
 
   it("renders an axe-clean mobile full-screen inspector with focus entry and reversible controls", async () => {

@@ -64,7 +64,7 @@ func TestMainConstructsOneJWTManagerBeforeContentRuntimeAndReusesIt(t *testing.T
 		"SessionRevocations: jwtManager",
 		"authService := auth.NewService(db, jwtManager, settingsSvc",
 		"JWTManager:        jwtManager",
-		"BackupContent:     assetRuntime.ContentBroker()",
+		"BackupContent:     assetRuntime.ContentService()",
 		"BackupContentConfig:",
 	}
 	previous := -1

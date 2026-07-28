@@ -338,7 +338,7 @@ func main() {
 		TrustedProxies:    cfg.TrustedProxies,
 		MetricsRateWindow: cfg.MetricsRateWindow,
 		BackupAssets:      assetRuntime,
-		BackupContent:     assetRuntime.ContentBroker(),
+		BackupContent:     assetRuntime.ContentService(),
 		BackupContentConfig: func(context.Context) (handlers.BackupContentHandlerConfig, error) {
 			contentConfig, contentConfigErr := assetRuntime.ContentConfig()
 			if contentConfigErr != nil {

@@ -1665,6 +1665,9 @@ func writeManifestInt(destination io.Writer, value int64) {
 }
 
 func manifestNeedsProjection(descriptor WorkDescriptorV1, artifacts []ArtifactDeclaration) bool {
+	if descriptor.Capability == capabilityspec.CapabilityArchiveExtractEntry && descriptor.OutputProfile == capabilityspec.ProfileArchiveMemberV1 {
+		return false
+	}
 	if descriptor.Capability == capabilityspec.CapabilitySecretClassify {
 		return true
 	}

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/content"
+	assetexport "xirang/backend/internal/backupasset/export"
 	"xirang/backend/internal/backupasset/overlay"
 	"xirang/backend/internal/backupasset/processing"
 	"xirang/backend/internal/backupasset/processing/capabilityspec"
@@ -78,39 +80,86 @@ type contentRuntimeManager interface {
 	PrepareSchemaDown(context.Context, func() error) error
 }
 
+type exportRuntimeManager interface {
+	Startup(context.Context) error
+	Ready() bool
+	TransitionSettings(context.Context, bool, backupasset.ExportConfig, func() error) error
+	Service() *managedExportServiceFacade
+	Delivery() *managedExportDeliveryFacade
+	StopAccepting()
+	Run(context.Context)
+	Shutdown(context.Context) error
+	PrepareSchemaDown(context.Context, func() error) error
+}
+
+type runtimeStopTerminalizer interface {
+	TerminalizeForRuntimeStopPass(context.Context, int) (assetexport.RuntimeStopTerminalizationProgress, error)
+}
+
+func terminalizeExportRuntimeLifecycle(
+	ctx context.Context,
+	terminalizer runtimeStopTerminalizer,
+	batchSize int,
+	reconcileOrphans func(context.Context) (int, error),
+) error {
+	if terminalizer == nil || batchSize <= 0 || reconcileOrphans == nil {
+		return assetexport.ErrUnavailable
+	}
+	var terminalizeErr error
+	for {
+		progress, err := terminalizer.TerminalizeForRuntimeStopPass(ctx, batchSize)
+		terminalizeErr = errors.Join(terminalizeErr, err)
+		if progress.Complete {
+			break
+		}
+		if progress.Advanced == 0 {
+			if terminalizeErr != nil {
+				return terminalizeErr
+			}
+			return assetexport.ErrUnavailable
+		}
+	}
+	_, orphanErr := reconcileOrphans(ctx)
+	return errors.Join(terminalizeErr, orphanErr)
+}
+
 // Runtime is the single composition root for Repository reads, publication,
 // admission, and guarded legacy Restic callers. It does not own Task Manager;
 // callback ports are set explicitly before StartupPass.
 type Runtime struct {
-	foundation        *backupasset.FoundationService
-	repository        *repository.Service
-	publication       *repository.PublicationService
-	resticStrategy    provider.PublicationStrategy
-	rsyncStrategy     provider.PublicationStrategy
-	rcloneStrategy    provider.PublicationStrategy
-	admission         *AdmissionController
-	worker            *PublicationWorker
-	healthWorker      *RcloneHealthWorker
-	catalogService    *catalog.Service
-	catalogIndexer    *catalog.Indexer
-	catalogWorker     *CatalogWorker
-	catalogAudit      repository.AssetAuditSink
-	keyring           *backupasset.Keyring
-	searchService     *search.Service
-	searchIndexer     *search.Indexer
-	searchIngest      *search.ContentIngestService
-	searchWorker      *SearchWorker
-	overlayService    *overlay.Service
-	searchReady       *atomic.Bool
-	contentBroker     *content.Broker
-	contentBudget     *content.BudgetService
-	contentAudit      *content.ContentAuditService
-	contentReconciler *content.Reconciler
-	contentReady      *atomic.Bool
-	contentManager    contentRuntimeManager
-	processingManager *managedProcessingRuntime
-	transitioner      publication.FeatureTransitioner
-	metrics           publication.Metrics
+	foundation           *backupasset.FoundationService
+	repository           *repository.Service
+	publication          *repository.PublicationService
+	resticStrategy       provider.PublicationStrategy
+	rsyncStrategy        provider.PublicationStrategy
+	rcloneStrategy       provider.PublicationStrategy
+	admission            *AdmissionController
+	worker               *PublicationWorker
+	healthWorker         *RcloneHealthWorker
+	catalogService       *catalog.Service
+	catalogIndexer       *catalog.Indexer
+	catalogWorker        *CatalogWorker
+	catalogAudit         repository.AssetAuditSink
+	keyring              *backupasset.Keyring
+	searchService        *search.Service
+	searchIndexer        *search.Indexer
+	searchIngest         *search.ContentIngestService
+	searchWorker         *SearchWorker
+	overlayService       *overlay.Service
+	searchReady          *atomic.Bool
+	contentBroker        *content.Broker
+	contentService       *contentDeliveryMux
+	exportDelivery       *managedExportDeliveryFacade
+	contentBudget        *content.BudgetService
+	contentAudit         *content.ContentAuditService
+	contentReconciler    *content.Reconciler
+	contentReady         *atomic.Bool
+	contentManager       contentRuntimeManager
+	exportManager        exportRuntimeManager
+	processingManager    *managedProcessingRuntime
+	archiveMemberService *managedArchiveMemberFacade
+	transitioner         publication.FeatureTransitioner
+	metrics              publication.Metrics
 
 	mu          sync.Mutex
 	searchKeyMu sync.Mutex
@@ -517,6 +566,18 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	contentDeliveryBranch, err := newContentBrokerDeliveryBranch(dependencies.DB, contentBroker)
+	if err != nil {
+		return nil, err
+	}
+	exportPublication := newManagedExportPublication()
+	exportServiceFacade := &managedExportServiceFacade{publication: exportPublication}
+	exportDeliveryFacade := &managedExportDeliveryFacade{publication: exportPublication}
+	archiveMemberFacade := &managedArchiveMemberFacade{publication: exportPublication}
+	contentService, err := newContentDeliveryMux(contentBroker, contentDeliveryBranch, exportDeliveryFacade)
+	if err != nil {
+		return nil, err
+	}
 	contentReconciler, err := content.NewReconciler(content.ReconcilerDependencies{
 		DB: dependencies.DB, Budget: contentBudget, Audit: contentAudit, Lease: lease,
 		Now: dependencies.Now, BatchSize: contentConfig.ReconcileBatchSize, Metrics: contentMetrics,
@@ -565,6 +626,117 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	exportManager, err := newManagedExportRuntime(managedExportRuntimeDependencies{
+		DB: dependencies.DB, Foundation: foundation, Keyring: keyring,
+		ValidateRoot: repositoryService.ValidatePrivateRuntimeRoot,
+		Publication:  exportPublication, Service: exportServiceFacade,
+		Delivery: exportDeliveryFacade, Archive: archiveMemberFacade,
+		Build: func(ctx context.Context, config backupasset.ExportConfig, store *assetexport.Store) (*managedExportGraph, error) {
+			selection := &runtimeExportSelectionResolver{
+				db: dependencies.DB, ownership: catalogOwnership, overlay: overlayService, search: searchService,
+				queryLimits: searchQueryLimits,
+			}
+			serviceConfig := runtimeExportServiceConfig(config)
+			service, buildErr := assetexport.NewService(assetexport.ServiceDependencies{
+				DB: dependencies.DB, Now: dependencies.Now, Leases: lease, Keys: keyring, Resolver: selection,
+				Config: serviceConfig,
+			})
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			audit, buildErr := assetexport.NewDeliveryAudit(auditSink)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			delivery, buildErr := assetexport.NewDeliveryGateway(assetexport.DeliveryGatewayDependencies{
+				DB: dependencies.DB, Now: dependencies.Now, Session: contentSession, Store: store, Keys: keyring,
+				ArchiveMembers: derivedResolver, ArchiveMemberAuthorize: contentAuthorizer, Audit: audit,
+				Config: runtimeExportDeliveryConfig(config),
+			})
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			archiveMember, buildErr := newRuntimeArchiveMemberService(
+				dependencies.DB, dependencies.Now, config, processingManager, contentAuthorizer, derivedResolver, delivery,
+			)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			quota, buildErr := assetexport.NewQuotaService(dependencies.DB, dependencies.Now, serviceConfig.Quota)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			attemptBudget, buildErr := assetexport.NewAttemptBudgetService(dependencies.DB, dependencies.Now)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			attemptBroker, buildErr := content.NewAttemptBroker(repositoryService, attemptBudget, dependencies.Now)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			workerCapacity := assetexport.WorkerCapacityLimits{
+				WorkerConcurrency: int64(config.WorkerConcurrency),
+				UserActiveJobs:    int64(config.UserActiveJobs),
+			}
+			attemptWork := assetexport.NewAttemptWorkRegistry()
+			attempts, buildErr := assetexport.NewAttemptCoordinatorWithWorkerCapacity(
+				dependencies.DB, dependencies.Now, workerCapacity, lease,
+			)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			workerOwnerID, buildErr := backupasset.NewOpaqueID()
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			lifecyclePort, buildErr := assetexport.NewPersistentLifecyclePort(assetexport.PersistentLifecyclePortDependencies{
+				DB: dependencies.DB, Delivery: delivery, Sources: lease, Quota: quota, Store: store, Now: dependencies.Now,
+				WorkerCapacity: &workerCapacity, AttemptWork: attemptWork,
+			})
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			lifecycle, buildErr := assetexport.NewLifecycle(assetexport.LifecycleDependencies{
+				DB: dependencies.DB, Port: lifecyclePort, Now: dependencies.Now,
+			})
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			exportWorker, buildErr := assetexport.NewPersistentWorker(assetexport.PersistentWorkerDependencies{
+				DB: dependencies.DB, Keys: keyring, Broker: attemptBroker, Metadata: selection,
+				Store: store, Lifecycle: lifecycle, SourceLeases: lease, WorkerCapacity: &workerCapacity, AttemptWork: attemptWork, Now: dependencies.Now,
+			})
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			runner, buildErr := newManagedExportWorker(managedExportWorkerDependencies{
+				DB: dependencies.DB, Attempts: attempts, Worker: exportWorker, Lifecycle: lifecycle, Delivery: delivery,
+				Archive: archiveMember, Budget: attemptBudget,
+				Cadence: config.GCCadence, HeartbeatInterval: config.LeaseRenewMargin / 2,
+				SourceLeaseInterval: leaseConfig.Heartbeat,
+				BatchSize:           config.ReconcileBatchSize, WorkerConcurrency: config.WorkerConcurrency,
+				WorkerOwner: "export-worker-" + workerOwnerID,
+			})
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			return &managedExportGraph{
+				store: store, service: service, delivery: delivery, archiveMember: archiveMember, attempts: attempts,
+				worker: exportWorker, lifecycle: lifecycle, runner: runner,
+				stopAccepting: runner.StopAccepting, drain: runner.Drain,
+				run: runner.Run, shutdown: runner.Shutdown,
+				startup: runner.Startup,
+				terminalize: func(ctx context.Context) error {
+					return terminalizeExportRuntimeLifecycle(
+						ctx, lifecycle, config.ReconcileBatchSize, exportWorker.ReconcileOrphans,
+					)
+				},
+			}, nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
 	return &Runtime{
 		foundation: foundation, repository: repositoryService, publication: publicationService,
 		resticStrategy: resticStrategy, rsyncStrategy: rsyncStrategy, rcloneStrategy: rcloneStrategy,
@@ -572,11 +744,12 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		catalogService: catalogService, catalogIndexer: catalogIndexer, catalogWorker: catalogWorker, catalogAudit: auditSink,
 		keyring: keyring, searchService: searchService, searchIndexer: searchIndexer, searchIngest: searchIngest,
 		searchWorker: searchWorker, overlayService: overlayService, searchReady: searchReady,
-		contentBroker: contentBroker, contentBudget: contentBudget, contentAudit: contentAudit,
+		contentBroker: contentBroker, contentService: contentService, exportDelivery: exportDeliveryFacade,
+		contentBudget: contentBudget, contentAudit: contentAudit,
 		contentReconciler: contentReconciler, contentReady: contentReady, contentManager: contentManager,
-		processingManager: processingManager,
-		transitioner:      admission,
-		metrics:           metricsSink,
+		exportManager: exportManager, processingManager: processingManager, archiveMemberService: archiveMemberFacade,
+		transitioner: admission,
+		metrics:      metricsSink,
 	}, nil
 }
 
@@ -981,6 +1154,30 @@ func (runtime *Runtime) ContentBroker() *content.Broker {
 	}
 	return runtime.contentBroker
 }
+func (runtime *Runtime) ContentService() *contentDeliveryMux {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.contentService
+}
+func (runtime *Runtime) ExportService() *managedExportServiceFacade {
+	if runtime == nil || runtime.exportManager == nil {
+		return nil
+	}
+	return runtime.exportManager.Service()
+}
+func (runtime *Runtime) ExportDeliveryGateway() *managedExportDeliveryFacade {
+	if runtime == nil || runtime.exportManager == nil {
+		return nil
+	}
+	return runtime.exportManager.Delivery()
+}
+func (runtime *Runtime) ArchiveMemberService() *managedArchiveMemberFacade {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.archiveMemberService
+}
 func (runtime *Runtime) ContentConfig() (backupasset.ContentConfig, error) {
 	if runtime == nil || runtime.foundation == nil {
 		return backupasset.ContentConfig{}, fmt.Errorf("%w: Content config unavailable", backupasset.ErrInvalidState)
@@ -1197,11 +1394,57 @@ func (runtime *Runtime) TransitionFeature(ctx context.Context, enabled bool, per
 	return nil
 }
 
+func (runtime *Runtime) TransitionBackupAssetSettings(
+	ctx context.Context,
+	_ map[string]string,
+	overlay map[string]string,
+	effective map[string]string,
+	config backupasset.ExportConfig,
+	persist func() error,
+) error {
+	if runtime == nil || runtime.exportManager == nil || runtime.transitioner == nil || persist == nil {
+		return fmt.Errorf("%w: backup asset settings transition unavailable", backupasset.ErrInvalidState)
+	}
+	enabled, err := strconv.ParseBool(strings.TrimSpace(effective["backup_assets.enabled"]))
+	if err != nil {
+		return fmt.Errorf("%w: parse effective backup asset enabled setting: %v", backupasset.ErrInvalidState, err)
+	}
+	_, changesIdempotencyTTL := overlay["backup_assets.idempotency_ttl"]
+	_, changesIdempotencyKeyMaxBytes := overlay["backup_assets.idempotency_key_max_bytes"]
+	if (changesIdempotencyTTL || changesIdempotencyKeyMaxBytes) && runtime.overlayService == nil {
+		return fmt.Errorf("%w: Overlay idempotency settings transition unavailable", backupasset.ErrInvalidState)
+	}
+	transitionExport := func() error {
+		transitionPersist := persist
+		if changesIdempotencyTTL || changesIdempotencyKeyMaxBytes {
+			transitionPersist = func() error {
+				return runtime.overlayService.TransitionIdempotencySettings(
+					config.IdempotencyTTL,
+					config.IdempotencyKeyMaxBytes,
+					persist,
+				)
+			}
+		}
+		return runtime.exportManager.TransitionSettings(ctx, enabled, config, transitionPersist)
+	}
+	if _, changesGlobalEnabled := overlay["backup_assets.enabled"]; changesGlobalEnabled {
+		return runtime.TransitionFeature(ctx, enabled, transitionExport)
+	}
+	return runtime.transitioner.TransitionFeature(ctx, enabled, transitionExport)
+}
+
 func (runtime *Runtime) PrepareApplicationDowngrade(ctx context.Context, callback func() error) error {
 	if runtime == nil || runtime.transitioner == nil || runtime.contentManager == nil {
 		return fmt.Errorf("%w: backup asset application downgrade unavailable", backupasset.ErrInvalidState)
 	}
 	runtime.contentManager.SetReady(false)
+	if runtime.exportManager != nil {
+		return runtime.exportManager.PrepareSchemaDown(ctx, func() error {
+			return runtime.contentManager.PrepareSchemaDown(ctx, func() error {
+				return runtime.transitioner.PrepareApplicationDowngrade(ctx, callback)
+			})
+		})
+	}
 	return runtime.contentManager.PrepareSchemaDown(ctx, func() error {
 		return runtime.transitioner.PrepareApplicationDowngrade(ctx, callback)
 	})
@@ -1212,6 +1455,13 @@ func (runtime *Runtime) PrepareSchemaDown(ctx context.Context, callback func() e
 		return fmt.Errorf("%w: backup asset schema down unavailable", backupasset.ErrInvalidState)
 	}
 	runtime.contentManager.SetReady(false)
+	if runtime.exportManager != nil {
+		return runtime.exportManager.PrepareSchemaDown(ctx, func() error {
+			return runtime.contentManager.PrepareSchemaDown(ctx, func() error {
+				return runtime.transitioner.PrepareSchemaDown(ctx, callback)
+			})
+		})
+	}
 	return runtime.contentManager.PrepareSchemaDown(ctx, func() error {
 		return runtime.transitioner.PrepareSchemaDown(ctx, callback)
 	})
@@ -1312,6 +1562,11 @@ func (runtime *Runtime) StartupPass(ctx context.Context) error {
 	if runtime.processingManager != nil {
 		if err := runtime.processingManager.Startup(ctx); err != nil {
 			logger.Module("backup_asset_processing").Warn().Str("stage", "startup").Msg("备份资产处理运行时不可用，核心服务继续启动")
+		}
+	}
+	if runtime.exportManager != nil {
+		if err := runtime.exportManager.Startup(ctx); err != nil {
+			logger.Module("backup_asset_export").Warn().Str("stage", "startup").Msg("备份资产导出运行时不可用，核心服务继续启动")
 		}
 	}
 	return nil
@@ -1422,6 +1677,9 @@ func (runtime *Runtime) StopAccepting() {
 	if runtime == nil {
 		return
 	}
+	if runtime.exportManager != nil {
+		runtime.exportManager.StopAccepting()
+	}
 	if runtime.contentManager != nil {
 		runtime.contentManager.StopAccepting()
 	}
@@ -1443,6 +1701,13 @@ func (runtime *Runtime) Run(ctx context.Context) {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var health sync.WaitGroup
+	if runtime.exportManager != nil {
+		health.Add(1)
+		go func() {
+			defer health.Done()
+			runtime.exportManager.Run(runCtx)
+		}()
+	}
 	if runtime.processingManager != nil {
 		health.Add(1)
 		go func() {
@@ -1496,6 +1761,11 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	}
 	var shutdownErrors []error
 	runtime.StopAccepting()
+	if runtime.exportManager != nil {
+		if err := runtime.exportManager.Shutdown(ctx); err != nil {
+			shutdownErrors = append(shutdownErrors, err)
+		}
+	}
 	if runtime.processingManager != nil {
 		if err := runtime.processingManager.Shutdown(ctx); err != nil {
 			shutdownErrors = append(shutdownErrors, err)

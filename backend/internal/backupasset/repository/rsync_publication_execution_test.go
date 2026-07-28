@@ -939,7 +939,7 @@ type rsyncPublicationFixture struct {
 func newRsyncPublicationFixture(t *testing.T) *rsyncPublicationFixture {
 	t.Helper()
 	db := newRepositoryTestDB(t)
-	now := time.Date(2026, 7, 15, 11, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	legacyTarget := t.TempDir()
 	taskEntity := seedTask(t, db, "rsync", legacyTarget, "")
 	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Update("updated_at", now).Error; err != nil {

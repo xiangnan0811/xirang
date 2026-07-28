@@ -91,6 +91,45 @@ describe("AssetBrowser", () => {
     expect(onRoutePatch).toHaveBeenCalledWith({ layout: "grid" });
   });
 
+  it("delegates the bulk export command only through the explicit authorization prop", async () => {
+    const user = userEvent.setup();
+    const rows = buildAssetRows(1);
+    const state = createInitialBackupAssetsState({
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: "a".repeat(32),
+      recoveryPointId: "b".repeat(32),
+    });
+    state.result = {
+      status: "ready",
+      requestKey: "explicit-export",
+      generation: 1,
+      rows,
+      nextCursor: null,
+      coverage: "complete",
+      authoritativeEmpty: false,
+    };
+    state.selection = new Map([[assetRefKey(rows[0].ref), rows[0].ref]]);
+    const onExport = vi.fn();
+    render(
+      <AssetBrowser
+        state={state}
+        canExport
+        onExport={onExport}
+        onRoutePatch={vi.fn()}
+        onSearch={vi.fn()}
+        onSearchDraftChange={vi.fn()}
+        onToggleSelection={vi.fn()}
+        onClearSelection={vi.fn()}
+        onOpen={vi.fn()}
+        onLoadMore={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Export selected|导出所选/ }));
+
+    expect(onExport).toHaveBeenCalledOnce();
+  });
+
   it("does not present partial zero results as an authoritative empty state", () => {
     const route = {
       ...defaultBackupAssetsRouteState("data"),

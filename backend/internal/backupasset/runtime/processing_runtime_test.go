@@ -126,6 +126,27 @@ func TestProcessingRuntimeNoWorkerReturnsNotDeployedWithoutCreatingJob(t *testin
 	}
 }
 
+func TestProcessingRuntimeArchiveMemberCoordinatorRequiresReadyAndRunning(t *testing.T) {
+	coordinator := &processing.Coordinator{}
+	runtime := &managedProcessingRuntime{coordinator: coordinator}
+	adapter := runtimeArchiveMemberCoordinator{runtime: runtime}
+
+	if current := (runtimeArchiveMemberCoordinator{}).current(); current != nil {
+		t.Fatal("nil Processing runtime exposed an archive-member coordinator")
+	}
+	if current := adapter.current(); current != nil {
+		t.Fatal("not-ready Processing runtime exposed an archive-member coordinator")
+	}
+	runtime.ready.Store(true)
+	if current := adapter.current(); current != coordinator {
+		t.Fatalf("ready Processing runtime coordinator=%p, want %p", current, coordinator)
+	}
+	runtime.stopped.Store(true)
+	if current := adapter.current(); current != nil {
+		t.Fatal("stopped Processing runtime exposed an archive-member coordinator")
+	}
+}
+
 func TestProcessingRuntimeMalwareSafetyRequiresCurrentCompleteExactEvidence(t *testing.T) {
 	now := time.Date(2026, 7, 21, 2, 0, 0, 0, time.UTC)
 	bundleFingerprint := strings.Repeat("a", 64)

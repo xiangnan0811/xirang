@@ -963,6 +963,18 @@ func (runtime *managedProcessingRuntime) WorkerProtocol() *processing.WorkerProt
 	return runtime.workerProtocol
 }
 
+func (runtime *managedProcessingRuntime) archiveMemberCoordinator() *processing.Coordinator {
+	if runtime == nil || !runtime.ready.Load() || runtime.stopped.Load() {
+		return nil
+	}
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	if !runtime.ready.Load() || runtime.stopped.Load() {
+		return nil
+	}
+	return runtime.coordinator
+}
+
 func (runtime *managedProcessingRuntime) ReadDerivedArtifact(
 	ctx context.Context,
 	request content.DerivedArtifactRead,

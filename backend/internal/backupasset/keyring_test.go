@@ -99,6 +99,226 @@ func TestDerivedStoreDomainIsOptionalIndependentAndRotatable(t *testing.T) {
 	}
 }
 
+func TestExportStoreDomainIsOptionalIndependentAndRotatable(t *testing.T) {
+	ring, _ := newKeyringTestHarness(t)
+	ctx := context.Background()
+	required, err := ring.EnsureRequiredDomains(ctx)
+	if err != nil {
+		t.Fatalf("EnsureRequiredDomains: %v", err)
+	}
+	if _, bootRequired := required[KeyDomainExportStore]; bootRequired {
+		t.Fatal("export store key was created by unconditional required-domain startup")
+	}
+	derived, err := ring.Ensure(ctx, KeyDomainDerivedStore)
+	if err != nil {
+		t.Fatalf("Ensure derived store: %v", err)
+	}
+	before, err := ring.Ensure(ctx, KeyDomainExportStore)
+	if err != nil {
+		t.Fatalf("Ensure export store: %v", err)
+	}
+	if before.Domain != KeyDomainExportStore || before.Version != 1 || len(before.Key) != secure.DomainKeySize {
+		t.Fatalf("invalid export store material: %+v", before)
+	}
+	if bytes.Equal(before.Key, derived.Key) {
+		t.Fatal("export store reuses derived store key bytes")
+	}
+	for domain, material := range required {
+		if bytes.Equal(before.Key, material.Key) {
+			t.Fatalf("export store reuses %s key bytes", domain)
+		}
+	}
+	after, err := ring.Rotate(ctx, KeyDomainExportStore, 0)
+	if err != nil {
+		t.Fatalf("Rotate export store: %v", err)
+	}
+	if after.Version != before.Version+1 || bytes.Equal(after.Key, before.Key) {
+		t.Fatalf("export rotation did not create independent next key: before=%+v after=%+v", before, after)
+	}
+	old, err := ring.ByVersion(ctx, KeyDomainExportStore, before.Version)
+	if err != nil || old.State != DomainKeyVerifyOnly || !bytes.Equal(old.Key, before.Key) {
+		t.Fatalf("old export key is not verify-only: old=%+v err=%v", old, err)
+	}
+}
+
+func TestExportStoreLockActiveTxRequiresExactMaterialAndAllowsMasterRewrap(t *testing.T) {
+	ring, _ := newKeyringTestHarness(t)
+	db := ring.db
+	ctx := context.Background()
+	active, err := ring.Ensure(ctx, KeyDomainExportStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ring.RewrapDomains(ctx, KeyDomainExportStore); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		verified, err := ring.LockActiveTx(ctx, tx, active)
+		if err != nil {
+			return err
+		}
+		if verified.ID != active.ID || verified.Domain != active.Domain || verified.Version != active.Version ||
+			verified.State != DomainKeyActive || !bytes.Equal(verified.Key, active.Key) {
+			t.Fatalf("verified material=%+v active=%+v", verified, active)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*DomainKeyMaterial)
+	}{
+		{name: "id", mutate: func(material *DomainKeyMaterial) { material.ID = strings.Repeat("f", 32) }},
+		{name: "domain", mutate: func(material *DomainKeyMaterial) { material.Domain = KeyDomainDerivedStore }},
+		{name: "version", mutate: func(material *DomainKeyMaterial) { material.Version++ }},
+		{name: "state", mutate: func(material *DomainKeyMaterial) { material.State = DomainKeyVerifyOnly }},
+		{name: "key", mutate: func(material *DomainKeyMaterial) { material.Key[0] ^= 0xff }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expected := active
+			expected.Key = append([]byte(nil), active.Key...)
+			test.mutate(&expected)
+			err := db.Transaction(func(tx *gorm.DB) error {
+				_, err := ring.LockActiveTx(ctx, tx, expected)
+				return err
+			})
+			if !errors.Is(err, ErrKeyUnavailable) {
+				t.Fatalf("LockActiveTx mismatch error=%v, want ErrKeyUnavailable", err)
+			}
+		})
+	}
+
+	rotated, err := ring.Rotate(ctx, KeyDomainExportStore, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = db.Transaction(func(tx *gorm.DB) error {
+		_, err := ring.LockActiveTx(ctx, tx, active)
+		return err
+	})
+	if !errors.Is(err, ErrKeyUnavailable) {
+		t.Fatalf("demoted material error=%v, want ErrKeyUnavailable", err)
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		_, err := ring.LockActiveTx(ctx, tx, rotated)
+		return err
+	}); err != nil {
+		t.Fatalf("current active material: %v", err)
+	}
+}
+
+func TestExportStoreLossRequiresArtifactRevocation(t *testing.T) {
+	ring, _ := newKeyringTestHarness(t)
+	ctx := context.Background()
+	material, err := ring.Ensure(ctx, KeyDomainExportStore)
+	if err != nil {
+		t.Fatalf("Ensure export store: %v", err)
+	}
+	if err := ring.MarkLost(ctx, KeyDomainExportStore, material.Version); !errors.Is(err, ErrKeyRotationProhibited) {
+		t.Fatalf("MarkLost export store without revocation got %v, want ErrKeyRotationProhibited", err)
+	}
+	revocationObservedActive := false
+	err = ring.MarkRebuildableLost(ctx, KeyDomainExportStore, material.Version, func(
+		_ context.Context, tx *gorm.DB, transition RebuildableKeyTransition,
+	) error {
+		var active model.WrappedDomainKey
+		if err := tx.Where("domain = ? AND state = ?", KeyDomainExportStore, DomainKeyActive).First(&active).Error; err != nil {
+			return err
+		}
+		revocationObservedActive = active.Version == material.Version &&
+			transition.Domain == KeyDomainExportStore && transition.NextVersion == 0
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("MarkRebuildableLost export store: %v", err)
+	}
+	if !revocationObservedActive {
+		t.Fatal("export artifacts were not revoked before the key became lost")
+	}
+	if _, err := ring.Ensure(ctx, KeyDomainExportStore); !errors.Is(err, ErrKeyLost) {
+		t.Fatalf("Ensure silently regenerated lost export store key: %v", err)
+	}
+}
+
+func TestExportStoreLossTargetsExactRetainedVersion(t *testing.T) {
+	ring, _ := newKeyringTestHarness(t)
+	ctx := context.Background()
+	first, err := ring.Ensure(ctx, KeyDomainExportStore)
+	if err != nil {
+		t.Fatalf("Ensure export store: %v", err)
+	}
+	second, err := ring.Rotate(ctx, KeyDomainExportStore, 0)
+	if err != nil {
+		t.Fatalf("first export rotation: %v", err)
+	}
+	third, err := ring.Rotate(ctx, KeyDomainExportStore, 0)
+	if err != nil {
+		t.Fatalf("second export rotation: %v", err)
+	}
+
+	callbackCalls := 0
+	var callbackTransition RebuildableKeyTransition
+	callbackSawRetainedState := false
+	err = ring.MarkRebuildableLost(ctx, KeyDomainExportStore, first.Version, func(
+		_ context.Context, tx *gorm.DB, transition RebuildableKeyTransition,
+	) error {
+		callbackCalls++
+		callbackTransition = transition
+		var row model.WrappedDomainKey
+		if err := tx.Where("domain = ? AND version = ?", KeyDomainExportStore, first.Version).First(&row).Error; err != nil {
+			return err
+		}
+		callbackSawRetainedState = DomainKeyState(row.State) == DomainKeyVerifyOnly
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("MarkRebuildableLost retained export version: %v", err)
+	}
+	if callbackCalls != 1 || !callbackSawRetainedState {
+		t.Fatalf("retained key invalidation callback calls=%d saw_verify_only=%t", callbackCalls, callbackSawRetainedState)
+	}
+	if callbackTransition != (RebuildableKeyTransition{
+		Domain: KeyDomainExportStore, PreviousVersion: first.Version, NextVersion: 0,
+	}) {
+		t.Fatalf("unexpected retained key transition: %+v", callbackTransition)
+	}
+
+	var lost model.WrappedDomainKey
+	if err := ring.db.Where("domain = ? AND version = ?", KeyDomainExportStore, first.Version).First(&lost).Error; err != nil {
+		t.Fatalf("load lost export version: %v", err)
+	}
+	if DomainKeyState(lost.State) != DomainKeyLost {
+		t.Fatalf("exact retained version state=%q, want %q", lost.State, DomainKeyLost)
+	}
+	remaining, err := ring.ByVersion(ctx, KeyDomainExportStore, second.Version)
+	if err != nil {
+		t.Fatalf("load newer retained export version: %v", err)
+	}
+	if remaining.ID != second.ID || remaining.State != DomainKeyVerifyOnly || !bytes.Equal(remaining.Key, second.Key) {
+		t.Fatalf("newer retained version changed: before=%+v after=%+v", second, remaining)
+	}
+	active, err := ring.Active(ctx, KeyDomainExportStore)
+	if err != nil {
+		t.Fatalf("load active export version: %v", err)
+	}
+	if active.ID != third.ID || active.Version != third.Version || !bytes.Equal(active.Key, third.Key) {
+		t.Fatalf("new active version changed: before=%+v after=%+v", third, active)
+	}
+
+	for _, version := range []int{0, 99} {
+		called := false
+		err := ring.MarkRebuildableLost(ctx, KeyDomainExportStore, version, func(context.Context, *gorm.DB, RebuildableKeyTransition) error {
+			called = true
+			return nil
+		})
+		if !errors.Is(err, ErrKeyUnavailable) || called {
+			t.Fatalf("invalid/missing export version %d err=%v callback_called=%t", version, err, called)
+		}
+	}
+}
+
 func TestDerivedStoreLossRequiresProjectionSafeInvalidation(t *testing.T) {
 	ring, _ := newKeyringTestHarness(t)
 	ctx := context.Background()

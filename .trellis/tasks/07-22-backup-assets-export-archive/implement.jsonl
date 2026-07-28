@@ -1,0 +1,13 @@
+{"file":".trellis/workflow.md","reason":"Phase gates, task lifecycle, approval separation, and Trellis delivery workflow."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/design.md","reason":"Parent contracts for authorization, export, archive retrieval, API, settings, failure handling, and migration compatibility."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/implement.md","reason":"Child 12 ownership, global validation, high-risk reviews, migration reservation, and rollback contract."}
+{"file":".trellis/tasks/archive/2026-07/07-18-backup-assets-search-overlays/research/current-main-evidence.md","reason":"Merged saved-search, cursor, coverage, composite identity, and projection evidence reused by selection freezing."}
+{"file":".trellis/tasks/archive/2026-07/07-18-backup-assets-content-plane/research/current-main-evidence.md","reason":"Merged source, ticket, cookie, Range, lease, redaction, TLS, and private-root evidence reused by Export."}
+{"file":".trellis/tasks/archive/2026-07/07-19-backup-assets-worker-protocol/research/current-main-evidence.md","reason":"Merged Processing, one-use grant, RecoveryPoint fence, Derived Store, keyring, runtime, and migration 067 evidence."}
+{"file":".trellis/tasks/archive/2026-07/07-20-backup-assets-worker-capabilities/research/current-main-evidence.md","reason":"Merged archive inspect/extract capability, malicious fixture, sandbox, Derived delivery, and frontend lazy-boundary evidence."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Paired SQLite/PostgreSQL migration, UTC, model parity, required real-PostgreSQL, and safe down rules."}
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Private runtime roots, graceful lifecycle, all-in-one boundaries, and default-disabled optional runtime rules."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Private raw DTO, unknown-boundary validation, closed camelCase mapping, URL safety, and no unsafe casts."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Async state ownership, stale response control, selection snapshots, and durable server-state reconciliation."}
+{"file":".trellis/tasks/07-22-backup-assets-export-archive/research/current-main-evidence.md","reason":"Child 12 verified baseline, delivered ports, current gaps, focused deviations, and Phase 1 scope evidence."}
+{"file":".trellis/tasks/07-22-backup-assets-export-archive/research/implementation-evidence.md","reason":"Phase 2 RED/GREEN, review, cross-engine, runtime, and current Step 10 evidence with delivery-status boundaries."}

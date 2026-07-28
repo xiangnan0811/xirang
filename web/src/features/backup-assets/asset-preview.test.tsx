@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import { useEffect, useRef, useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,12 +10,25 @@ import { buildAssetRows } from "./__tests__/test-utils";
 import { AssetPreview } from "./asset-preview";
 import { selectBackupAssetPreviewProduct } from "./asset-preview-model";
 
-const { processingPanelRenderMock } = vi.hoisted(() => ({
+const {
+  archiveDismissMock,
+  archivePanelRenderMock,
+  archiveUnregisters,
+  processingPanelRenderMock,
+} = vi.hoisted(() => ({
+  archiveDismissMock: vi.fn(),
+  archivePanelRenderMock: vi.fn(),
+  archiveUnregisters: [] as Array<(() => void) | undefined>,
   processingPanelRenderMock: vi.fn(),
 }));
 
 type SyntheticProcessingPanelProps = {
   onOpenPreview: (source: "derived" | "native") => void;
+  onBrowseArchive?: () => void;
+};
+
+type SyntheticArchiveMemberPanelProps = {
+  onDismissHandlerRegister?: (handler: () => void) => () => void;
 };
 
 vi.mock("./backup-asset-processing-panel", () => ({
@@ -24,12 +38,32 @@ vi.mock("./backup-asset-processing-panel", () => ({
       <div data-testid="synthetic-processing-panel">
         <button type="button" data-testid="synthetic-derived-preview" onClick={() => props.onOpenPreview("derived")} />
         <button type="button" data-testid="synthetic-native-preview" onClick={() => props.onOpenPreview("native")} />
+        <button type="button" data-testid="synthetic-browse-archive" onClick={props.onBrowseArchive} />
       </div>
     );
   },
 }));
 
+vi.mock("./archive-member-panel", () => ({
+  ArchiveMemberPanel: (props: SyntheticArchiveMemberPanelProps) => {
+    const { onDismissHandlerRegister } = props;
+    const dismissHandlerRef = useRef(() => archiveDismissMock());
+    archivePanelRenderMock(props);
+    useEffect(() => {
+      const unregister = onDismissHandlerRegister?.(dismissHandlerRef.current);
+      archiveUnregisters.push(unregister);
+      return unregister;
+    }, [onDismissHandlerRegister]);
+    return <section data-testid="synthetic-archive-member-panel">Archive member panel</section>;
+  },
+}));
+
 const contentUrl = `/api/v1/asset-content/${"d".repeat(32)}`;
+const processingRuntime = {
+  token: "processing-token",
+  role: "admin" as const,
+  ensureStepUpProof: vi.fn(),
+};
 
 function asset(overrides: Partial<BackupAsset> = {}): BackupAsset {
   return { ...buildAssetRows(1)[0].asset, entryType: "file", ...overrides };
@@ -132,6 +166,9 @@ describe("backup asset preview product", () => {
 
 describe("AssetPreview", () => {
   beforeEach(() => {
+    archiveDismissMock.mockReset();
+    archivePanelRenderMock.mockReset();
+    archiveUnregisters.length = 0;
     processingPanelRenderMock.mockReset();
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
   });
@@ -181,7 +218,7 @@ describe("AssetPreview", () => {
         resource={{ status: "idle", value: null }}
         canPreview
         canDownload
-        processingToken="processing-token"
+        processingRuntime={processingRuntime}
         onLoadPreview={vi.fn()}
         onRenew={vi.fn()}
         onPrepareDownload={vi.fn()}
@@ -199,6 +236,358 @@ describe("AssetPreview", () => {
     }));
   });
 
+  it("loads the archive member dialog only after the ready processing action", async () => {
+    const user = userEvent.setup();
+    const previewAsset = asset({ mimeType: "application/zip" });
+    render(
+      <AssetPreview
+        asset={previewAsset}
+        resource={{ status: "idle", value: null }}
+        canPreview
+        canDownload
+        processingRuntime={{ token: "processing-token", role: "operator", ensureStepUpProof: vi.fn() }}
+        archiveContentAvailable
+        archiveDownloadAllowed
+        onLoadPreview={vi.fn()}
+        onRenew={vi.fn()}
+        onPrepareDownload={vi.fn()}
+        onDetach={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByTestId("synthetic-archive-member-panel")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
+    await user.click(await screen.findByTestId("synthetic-browse-archive"));
+
+    expect(await screen.findByRole("dialog", { name: /Archive contents|归档内容/ })).toBeInTheDocument();
+    expect(await screen.findByTestId("synthetic-archive-member-panel")).toBeInTheDocument();
+    expect(archivePanelRenderMock).toHaveBeenCalledWith(expect.objectContaining({
+      refValue: previewAsset.ref,
+      runtime: expect.objectContaining({ token: "processing-token", role: "operator" }),
+      contentAvailable: true,
+      downloadAllowed: true,
+    }));
+  });
+
+  it("returns focus to the operator archive trigger when the member dialog closes", async () => {
+    const user = userEvent.setup();
+    render(
+      <AssetPreview
+        asset={asset({ mimeType: "application/zip" })}
+        resource={{ status: "idle", value: null }}
+        canPreview
+        canDownload
+        processingRuntime={{ token: "processing-token", role: "operator", ensureStepUpProof: vi.fn() }}
+        onLoadPreview={vi.fn()}
+        onRenew={vi.fn()}
+        onPrepareDownload={vi.fn()}
+        onDetach={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
+    const trigger = await screen.findByTestId("synthetic-browse-archive");
+    await user.click(trigger);
+    expect(await screen.findByRole("dialog", { name: /Archive contents|归档内容/ })).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(archiveDismissMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("falls back to the inspector heading when the archive trigger is disconnected on close", async () => {
+    const user = userEvent.setup();
+    render(
+      <div>
+        <h2 tabIndex={-1}>Selected archive</h2>
+        <section role="tabpanel">
+          <AssetPreview
+            asset={asset({ mimeType: "application/zip" })}
+            resource={{ status: "idle", value: null }}
+            canPreview
+            canDownload
+            processingRuntime={{ token: "processing-token", role: "operator", ensureStepUpProof: vi.fn() }}
+            onLoadPreview={vi.fn()}
+            onRenew={vi.fn()}
+            onPrepareDownload={vi.fn()}
+            onDetach={vi.fn()}
+          />
+        </section>
+      </div>
+    );
+
+    await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
+    const trigger = await screen.findByTestId("synthetic-browse-archive");
+    await user.click(trigger);
+    expect(await screen.findByRole("dialog", { name: /Archive contents|归档内容/ })).toBeInTheDocument();
+
+    trigger.remove();
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Selected archive" })).toHaveFocus());
+  });
+
+  it("falls back to the workspace results region when the trigger and inspector are removed on close", async () => {
+    const user = userEvent.setup();
+    function WorkspaceFixture() {
+      const [inspectorOpen, setInspectorOpen] = useState(true);
+      return (
+        <div data-testid="backup-assets-workspace">
+          <section aria-label="Results" tabIndex={-1}>Workspace results</section>
+          <button type="button" onClick={() => setInspectorOpen(false)}>Close inspector</button>
+          {inspectorOpen ? (
+            <div data-testid="archive-inspector">
+              <h2 tabIndex={-1}>Selected archive</h2>
+              <section role="tabpanel">
+                <AssetPreview
+                  asset={asset({ mimeType: "application/zip" })}
+                  resource={{ status: "idle", value: null }}
+                  canPreview
+                  canDownload
+                  processingRuntime={{ token: "processing-token", role: "operator", ensureStepUpProof: vi.fn() }}
+                  onLoadPreview={vi.fn()}
+                  onRenew={vi.fn()}
+                  onPrepareDownload={vi.fn()}
+                  onDetach={vi.fn()}
+                />
+              </section>
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+    render(
+      <WorkspaceFixture />
+    );
+
+    const closeInspector = screen.getByRole("button", { name: "Close inspector" });
+    await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
+    await user.click(await screen.findByTestId("synthetic-browse-archive"));
+    expect(await screen.findByRole("dialog", { name: /Archive contents|归档内容/ })).toBeInTheDocument();
+
+    fireEvent.click(closeInspector);
+
+    await waitFor(() => expect(screen.getByRole("region", { name: "Results" })).toHaveFocus());
+    expect(archiveDismissMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an archive dialog closed after switching away and back until browse is selected again", async () => {
+    const user = userEvent.setup();
+    const firstAsset = asset({ mimeType: "application/zip" });
+    const secondAsset = asset({
+      mimeType: "application/zip",
+      ref: { recoveryPointId: "1".repeat(32), entryId: "2".repeat(64) },
+    });
+    const commonProps = {
+      resource: { status: "idle" as const, value: null },
+      canPreview: true,
+      canDownload: true,
+      processingRuntime: { token: "processing-token", role: "operator" as const, ensureStepUpProof: vi.fn() },
+      onLoadPreview: vi.fn(),
+      onRenew: vi.fn(),
+      onPrepareDownload: vi.fn(),
+      onDetach: vi.fn(),
+    };
+    const rendered = render(<AssetPreview {...commonProps} asset={firstAsset} />);
+
+    await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
+    await user.click(await screen.findByTestId("synthetic-browse-archive"));
+    expect(await screen.findByRole("dialog", { name: /Archive contents|归档内容/ })).toBeInTheDocument();
+
+    rendered.rerender(<AssetPreview {...commonProps} asset={secondAsset} />);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /Archive contents|归档内容/ })).not.toBeInTheDocument());
+
+    rendered.rerender(<AssetPreview {...commonProps} asset={firstAsset} />);
+    expect(screen.queryByRole("dialog", { name: /Archive contents|归档内容/ })).not.toBeInTheDocument();
+    expect(archiveDismissMock).toHaveBeenCalledTimes(1);
+
+    await user.click(await screen.findByTestId("synthetic-browse-archive"));
+    expect(await screen.findByRole("dialog", { name: /Archive contents|归档内容/ })).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog", { name: /Archive contents|归档内容/ })).toHaveLength(1);
+  });
+
+  it("keeps a successor archive dismissal registered when an older panel unregister runs again in the same session", async () => {
+    const user = userEvent.setup();
+    const previewAsset = asset({ mimeType: "application/zip" });
+    const commonProps = {
+      resource: { status: "idle" as const, value: null },
+      canPreview: true,
+      canDownload: true,
+      processingRuntime: { token: "processing-token", role: "operator" as const, ensureStepUpProof: vi.fn() },
+      onLoadPreview: vi.fn(),
+      onRenew: vi.fn(),
+      onPrepareDownload: vi.fn(),
+      onDetach: vi.fn(),
+    };
+    const rendered = render(<AssetPreview {...commonProps} asset={previewAsset} />);
+
+    await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
+    await user.click(await screen.findByTestId("synthetic-browse-archive"));
+    await waitFor(() => expect(archiveUnregisters).toHaveLength(1));
+    const firstUnregister = archiveUnregisters[0];
+    if (!firstUnregister) throw new Error("first archive dismissal handler was not registered");
+
+    await user.click(screen.getByRole("button", { name: /Close archive contents|关闭归档内容/ }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /Archive contents|归档内容/ })).not.toBeInTheDocument());
+    expect(archiveDismissMock).toHaveBeenCalledTimes(1);
+    archiveDismissMock.mockClear();
+
+    await user.click(await screen.findByTestId("synthetic-browse-archive"));
+    await waitFor(() => expect(archiveUnregisters).toHaveLength(2));
+
+    firstUnregister();
+    rendered.unmount();
+
+    expect(archiveDismissMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the archive dialog and member panel alive while live original-download availability changes", async () => {
+    const user = userEvent.setup();
+    const previewAsset = asset({ mimeType: "application/zip" });
+    const commonProps = {
+      asset: previewAsset,
+      resource: { status: "idle" as const, value: null },
+      canPreview: true,
+      canDownload: true,
+      processingRuntime: { token: "processing-token", role: "operator" as const, ensureStepUpProof: vi.fn() },
+      archiveContentAvailable: true,
+      archiveDownloadAllowed: true,
+      online: true,
+      onLoadPreview: vi.fn(),
+      onRenew: vi.fn(),
+      onPrepareDownload: vi.fn(),
+      onDetach: vi.fn(),
+    };
+    const rendered = render(<AssetPreview {...commonProps} />);
+
+    await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
+    await user.click(await screen.findByTestId("synthetic-browse-archive"));
+    expect(await screen.findByRole("dialog", { name: /Archive contents|归档内容/ })).toBeInTheDocument();
+    expect(archiveUnregisters).toHaveLength(1);
+
+    rendered.rerender(
+      <AssetPreview
+        {...commonProps}
+        online={false}
+      />,
+    );
+
+    expect(screen.getByRole("dialog", { name: /Archive contents|归档内容/ })).toBeInTheDocument();
+    await waitFor(() => expect(archivePanelRenderMock.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({
+      online: false,
+      contentAvailable: true,
+      downloadAllowed: true,
+    })));
+    expect(archiveDismissMock).not.toHaveBeenCalled();
+    expect(archiveUnregisters).toHaveLength(1);
+
+    rendered.rerender(
+      <AssetPreview
+        {...commonProps}
+        online={false}
+        archiveContentAvailable={false}
+      />,
+    );
+
+    expect(screen.getByRole("dialog", { name: /Archive contents|归档内容/ })).toBeInTheDocument();
+    await waitFor(() => expect(archivePanelRenderMock.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({
+      online: false,
+      contentAvailable: false,
+      downloadAllowed: true,
+    })));
+    expect(archiveDismissMock).not.toHaveBeenCalled();
+    expect(archiveUnregisters).toHaveLength(1);
+
+    rendered.rerender(
+      <AssetPreview
+        {...commonProps}
+        online={false}
+        archiveContentAvailable={false}
+        archiveDownloadAllowed={false}
+      />,
+    );
+
+    expect(screen.getByRole("dialog", { name: /Archive contents|归档内容/ })).toBeInTheDocument();
+    await waitFor(() => expect(archivePanelRenderMock.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({
+      online: false,
+      contentAvailable: false,
+      downloadAllowed: false,
+    })));
+    expect(archiveDismissMock).not.toHaveBeenCalled();
+    expect(archiveUnregisters).toHaveLength(1);
+  });
+
+  it("keeps an archive dialog closed after its runtime becomes ineligible until browse is selected again", async () => {
+    const user = userEvent.setup();
+    const previewAsset = asset({ mimeType: "application/zip" });
+    const commonProps = {
+      asset: previewAsset,
+      resource: { status: "idle" as const, value: null },
+      canPreview: true,
+      canDownload: true,
+      archiveContentAvailable: true,
+      archiveDownloadAllowed: true,
+      onLoadPreview: vi.fn(),
+      onRenew: vi.fn(),
+      onPrepareDownload: vi.fn(),
+      onDetach: vi.fn(),
+    };
+    const rendered = render(
+      <AssetPreview
+        {...commonProps}
+        processingRuntime={{ token: "processing-token", role: "operator", ensureStepUpProof: vi.fn() }}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
+    await user.click(await screen.findByTestId("synthetic-browse-archive"));
+    expect(await screen.findByRole("dialog", { name: /Archive contents|归档内容/ })).toBeInTheDocument();
+
+    rendered.rerender(
+      <AssetPreview
+        {...commonProps}
+        processingRuntime={{ token: "processing-token", role: "viewer", ensureStepUpProof: vi.fn() }}
+      />,
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /Archive contents|归档内容/ })).not.toBeInTheDocument());
+    expect(archiveDismissMock).toHaveBeenCalledTimes(1);
+
+    rendered.rerender(
+      <AssetPreview
+        {...commonProps}
+        processingRuntime={{ token: "processing-token", role: "operator", ensureStepUpProof: vi.fn() }}
+      />,
+    );
+    expect(screen.queryByRole("dialog", { name: /Archive contents|归档内容/ })).not.toBeInTheDocument();
+
+    await user.click(await screen.findByTestId("synthetic-browse-archive"));
+    expect(await screen.findByRole("dialog", { name: /Archive contents|归档内容/ })).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog", { name: /Archive contents|归档内容/ })).toHaveLength(1);
+  });
+
+  it("does not give a viewer processing surface an archive callback", async () => {
+    const user = userEvent.setup();
+    render(
+      <AssetPreview
+        asset={asset({ mimeType: "application/zip" })}
+        resource={{ status: "idle", value: null }}
+        canPreview
+        canDownload
+        processingRuntime={{ token: "processing-token", role: "viewer", ensureStepUpProof: vi.fn() }}
+        onLoadPreview={vi.fn()}
+        onRenew={vi.fn()}
+        onPrepareDownload={vi.fn()}
+        onDetach={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
+
+    expect(processingPanelRenderMock).toHaveBeenLastCalledWith(expect.objectContaining({ onBrowseArchive: undefined }));
+    await user.click(await screen.findByTestId("synthetic-browse-archive"));
+    expect(screen.queryByRole("dialog", { name: /Archive contents|归档内容/ })).not.toBeInTheDocument();
+  });
+
   it.each([
     ["application/pdf", "image/png"],
     ["application/zip", "text/plain"],
@@ -212,7 +601,7 @@ describe("AssetPreview", () => {
         resource={{ status: "idle", value: null }}
         canPreview
         canDownload
-        processingToken="processing-token"
+        processingRuntime={processingRuntime}
         onLoadPreview={onLoadPreview}
         onRenew={vi.fn()}
         onPrepareDownload={vi.fn()}
@@ -244,7 +633,7 @@ describe("AssetPreview", () => {
         resource={{ status: "idle", value: null }}
         canPreview
         canDownload
-        processingToken="processing-token"
+        processingRuntime={processingRuntime}
         onLoadPreview={onLoadPreview}
         onRenew={vi.fn()}
         onPrepareDownload={vi.fn()}
@@ -275,7 +664,7 @@ describe("AssetPreview", () => {
       asset: previewAsset,
       canPreview: true,
       canDownload: true,
-      processingToken: "processing-token",
+      processingRuntime,
       onLoadPreview,
       onRenew,
       onPrepareDownload: vi.fn(),
@@ -310,7 +699,7 @@ describe("AssetPreview", () => {
         resource={{ status: "idle", value: null }}
         canPreview
         canDownload
-        processingToken="processing-token"
+        processingRuntime={processingRuntime}
         onLoadPreview={onLoadPreview}
         onRenew={vi.fn()}
         onPrepareDownload={vi.fn()}

@@ -45,7 +45,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
 - Keep version numbers in lockstep across SQLite and PostgreSQL. The current
-  latest migration is `000067_backup_asset_processing`.
+  latest migration is `000068_backup_asset_export`.
 - Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the
   SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
@@ -111,7 +111,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   both SQLite/PostgreSQL definitions and matching down migrations when changing
   traffic-window predicates or index names.
 - Backup-asset schema changes are paired across SQLite and PostgreSQL. The
-  current baseline includes `000062` through `000067_backup_asset_processing`;
+  current baseline includes `000062` through `000068_backup_asset_export`;
   later versions must remain paired. After durable Search or publication facts,
   or live content-delivery state exists, schema down must fail closed rather
   than deleting history, Provider facts, grants, reservations, or leases.
@@ -130,7 +130,9 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 
 - Connection helper: `openPostgresSQLDB(dsn string) (*sql.DB, error)`.
 - CI regression gate:
-  `go test ./internal/database -run 'Test(BackupAssetMigration0(62|63|64|65|66|67)Postgres|PostgresTimestamptzScanUsesConfiguredUTC)' -count=1`.
+  `go test ./internal/database -run '^(TestBackupAssetMigration062PostgresApplyDown|TestBackupAssetMigration0(63|64|65|66|67|68)Postgres|TestPostgresTimestamptzScanUsesConfiguredUTC|TestRunMigrationsPostgresDirtyCheckUsesSearchPath)$' -count=1`.
+- Export behavior gate:
+  `go test ./internal/backupasset/export -run '^TestExportBehaviorPostgres$' -count=1`.
 - Required pgx registrations per physical connection:
   `pgtype.TimestampCodec{ScanLocation: scanLocation}` and
   `pgtype.TimestamptzCodec{ScanLocation: scanLocation}`.
@@ -139,13 +141,17 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 
 - PostgreSQL DSNs default `timezone` to `UTC` when the caller did not specify
   one; `scanLocation` is loaded from that effective setting.
+- A PostgreSQL `schema_migrations` existence probe that precedes an unqualified
+  read must use `pg_catalog.to_regclass('schema_migrations')`, so both queries
+  resolve through the same connection `search_path`. Never count an unscoped
+  `information_schema.tables` row and then read an unrelated schema.
 - GORM must receive the `*sql.DB` returned by `openPostgresSQLDB`, rather than
   opening an unrelated pool through the dialector DSN.
 - Register **both** `timestamp` and `timestamptz` codecs in pgx's `AfterConnect`
   hook. Configuring only `timestamp` leaves `TIMESTAMPTZ` scans vulnerable to
   `time.Local` on newer Go/pgx combinations.
 - SQLite/PostgreSQL migration parity for backup assets covers 000062 through
-  000067. A new paired migration must be added to this regex deliberately; it
+  000068. A new paired migration must be added to this regex deliberately; it
   must never be silently omitted from the PostgreSQL gate.
 
 ### 4. Validation & Error Matrix
@@ -173,9 +179,14 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   PostgreSQL service with `TZ` set to a non-UTC value and assert both location
   and RFC3339 value.
 - PostgreSQL migration tests must exercise paired apply/down contracts for
-  000062 through 000067.
+  000062 through 000068.
+- `TestRunMigrationsPostgresDirtyCheckUsesSearchPath` must prove an unrelated
+  sibling schema does not interfere while a search-path-visible dirty row still
+  fails closed.
 - Run the CI regex above with `REQUIRE_POSTGRES_MIGRATION_TEST=1`; a skipped
   PostgreSQL test is not completion evidence.
+- Run `TestExportBehaviorPostgres` with `REQUIRE_POSTGRES_EXPORT_TEST=1`; a
+  missing `TEST_POSTGRES_DSN` is a failed required gate, never SQLite evidence.
 
 ### 7. Wrong vs Correct
 

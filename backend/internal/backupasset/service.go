@@ -205,6 +205,60 @@ type ProcessingConfig struct {
 	DerivedStore         ProcessingDerivedStoreConfig
 }
 
+type ExportTicketConfig struct {
+	TTL                time.Duration
+	MaxRequests        int
+	MaxInFlight        int
+	MaxCumulativeBytes int64
+}
+
+type ExportQuotaConfig struct {
+	UserStoreBytes   int64
+	GlobalStoreBytes int64
+}
+
+type ExportArchiveConfig struct {
+	MemberTTL           time.Duration
+	MaxExpandedBytes    int64
+	MemberMaxBytes      int64
+	MaxEntries          int
+	MaxDepth            int
+	MaxCompressionRatio int
+	MaxDuration         time.Duration
+}
+
+type ExportConfig struct {
+	Enabled                bool
+	Root                   string
+	DefaultProfile         string
+	ChunkBytes             int64
+	MaxItems               int
+	MaxSourcePoints        int
+	MaxItemBytes           int64
+	MaxLogicalBytes        int64
+	MaxProviderBytes       int64
+	MaxCiphertextBytes     int64
+	UserActiveJobs         int
+	GlobalActiveJobs       int
+	WorkerConcurrency      int
+	MaxOpenReaders         int
+	MaxDuration            time.Duration
+	MaxAttempts            int
+	RetryBase              time.Duration
+	RetryMaxDelay          time.Duration
+	LeaseTTL               time.Duration
+	LeaseRenewMargin       time.Duration
+	ReadyTTL               time.Duration
+	IdempotencyTTL         time.Duration
+	IdempotencyKeyMaxBytes int
+	SummaryTTL             time.Duration
+	Ticket                 ExportTicketConfig
+	Quota                  ExportQuotaConfig
+	GCCadence              time.Duration
+	ReconcileBatchSize     int
+	Archive                ExportArchiveConfig
+}
+
 func NewFoundationService(reader SettingsReader) *FoundationService {
 	return &FoundationService{settings: reader}
 }
@@ -631,6 +685,104 @@ func (service *FoundationService) ProcessingConfig() (ProcessingConfig, error) {
 		result.Updater.OnlineOrigins = strings.Split(origins, ",")
 	}
 	result.DerivedStore.Root = strings.TrimSpace(values["backup_assets.derived_store_root"])
+	return result, nil
+}
+
+func (service *FoundationService) ExportConfig() (ExportConfig, error) {
+	values, err := service.atomicFoundationValues()
+	if err != nil {
+		return ExportConfig{}, err
+	}
+	return ExportConfigFromValues(values)
+}
+
+// ExportConfigFromValues parses one complete, validated foundation snapshot
+// without reading settings. Callers that already hold the settings mutation
+// lock use it to prepare a prospective Export graph safely.
+func ExportConfigFromValues(values map[string]string) (ExportConfig, error) {
+	for _, key := range settings.BackupAssetFoundationSettingKeys() {
+		if _, exists := values[key]; !exists {
+			return ExportConfig{}, fmt.Errorf("%w: incomplete backup asset settings snapshot", ErrInvalidState)
+		}
+	}
+	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
+		return ExportConfig{}, fmt.Errorf("%w: %v", ErrInvalidState, err)
+	}
+	return exportConfigFromValidatedValues(values)
+}
+
+func exportConfigFromValidatedValues(values map[string]string) (ExportConfig, error) {
+	result := ExportConfig{
+		Root:           strings.TrimSpace(values["backup_assets.export.root"]),
+		DefaultProfile: strings.TrimSpace(values["backup_assets.export.default_profile"]),
+	}
+	var err error
+	if result.Enabled, err = parseFoundationBool(values, "backup_assets.export.enabled"); err != nil {
+		return ExportConfig{}, err
+	}
+	for _, field := range []struct {
+		key    string
+		target *time.Duration
+	}{
+		{"backup_assets.export.max_duration", &result.MaxDuration},
+		{"backup_assets.export.retry_base", &result.RetryBase},
+		{"backup_assets.export.retry_max_delay", &result.RetryMaxDelay},
+		{"backup_assets.export.lease_ttl", &result.LeaseTTL},
+		{"backup_assets.export.lease_renew_margin", &result.LeaseRenewMargin},
+		{"backup_assets.export.ready_ttl", &result.ReadyTTL},
+		{"backup_assets.idempotency_ttl", &result.IdempotencyTTL},
+		{"backup_assets.export.summary_ttl", &result.SummaryTTL},
+		{"backup_assets.export.ticket_ttl", &result.Ticket.TTL},
+		{"backup_assets.export.gc_cadence", &result.GCCadence},
+		{"backup_assets.archive.member_ttl", &result.Archive.MemberTTL},
+		{"backup_assets.archive.max_duration", &result.Archive.MaxDuration},
+	} {
+		if *field.target, err = parseFoundationDuration(values, field.key); err != nil {
+			return ExportConfig{}, err
+		}
+	}
+	for _, field := range []struct {
+		key    string
+		target *int
+	}{
+		{"backup_assets.export.max_items", &result.MaxItems},
+		{"backup_assets.export.max_source_points", &result.MaxSourcePoints},
+		{"backup_assets.export.user_active_jobs", &result.UserActiveJobs},
+		{"backup_assets.export.global_active_jobs", &result.GlobalActiveJobs},
+		{"backup_assets.export.worker_concurrency", &result.WorkerConcurrency},
+		{"backup_assets.export.max_open_readers", &result.MaxOpenReaders},
+		{"backup_assets.export.max_attempts", &result.MaxAttempts},
+		{"backup_assets.export.ticket_max_requests", &result.Ticket.MaxRequests},
+		{"backup_assets.export.ticket_max_in_flight", &result.Ticket.MaxInFlight},
+		{"backup_assets.export.reconcile_batch_size", &result.ReconcileBatchSize},
+		{"backup_assets.idempotency_key_max_bytes", &result.IdempotencyKeyMaxBytes},
+		{"backup_assets.archive.max_entries", &result.Archive.MaxEntries},
+		{"backup_assets.archive.max_depth", &result.Archive.MaxDepth},
+		{"backup_assets.archive.max_compression_ratio", &result.Archive.MaxCompressionRatio},
+	} {
+		if *field.target, err = parseFoundationInt(values, field.key); err != nil {
+			return ExportConfig{}, err
+		}
+	}
+	for _, field := range []struct {
+		key    string
+		target *int64
+	}{
+		{"backup_assets.export.chunk_bytes", &result.ChunkBytes},
+		{"backup_assets.export.max_item_bytes", &result.MaxItemBytes},
+		{"backup_assets.export.max_logical_bytes", &result.MaxLogicalBytes},
+		{"backup_assets.export.max_provider_bytes", &result.MaxProviderBytes},
+		{"backup_assets.export.max_ciphertext_bytes", &result.MaxCiphertextBytes},
+		{"backup_assets.export.ticket_max_cumulative_bytes", &result.Ticket.MaxCumulativeBytes},
+		{"backup_assets.export.user_store_quota", &result.Quota.UserStoreBytes},
+		{"backup_assets.export.store_quota", &result.Quota.GlobalStoreBytes},
+		{"backup_assets.archive.max_expanded_bytes", &result.Archive.MaxExpandedBytes},
+		{"backup_assets.archive.member_max_bytes", &result.Archive.MemberMaxBytes},
+	} {
+		if *field.target, err = parseFoundationInt64(values, field.key); err != nil {
+			return ExportConfig{}, err
+		}
+	}
 	return result, nil
 }
 

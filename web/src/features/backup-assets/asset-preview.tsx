@@ -1,11 +1,19 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Download, Eye, RefreshCw, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogCloseButton,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { LoadingState } from "@/components/ui/loading-state";
-import type { BackupAsset, BackupContentTicket } from "@/types/domain";
+import type { AuthContextValue } from "@/context/auth-context.shared";
+import type { AssetRef, BackupAsset, BackupContentTicket } from "@/types/domain";
 
 import { selectProcessingRepresentation } from "./backup-assets-processing-state";
 import type { ProcessingPreviewSource } from "./backup-asset-processing-panel";
@@ -18,13 +26,52 @@ const LazyBackupAssetProcessingPanel = lazy(() =>
     default: module.BackupAssetProcessingPanel,
   }))
 );
+const LazyArchiveMemberPanel = lazy(() =>
+  import("./archive-member-panel").then((module) => ({
+    default: module.ArchiveMemberPanel,
+  }))
+);
+
+function archiveFocusFallback(trigger: HTMLElement | null): HTMLElement | null {
+  const panel = trigger?.closest<HTMLElement>('[role="tabpanel"]');
+  const inspector = panel?.parentElement;
+  const inspectorHeading = inspector?.querySelector<HTMLElement>('h2[tabindex="-1"]');
+  if (inspectorHeading?.isConnected) return inspectorHeading;
+  const activeInspectorTab = inspector?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+  return activeInspectorTab?.isConnected ? activeInspectorTab : null;
+}
+
+function archiveWorkspaceFocusFallback(trigger: HTMLElement | null): HTMLElement | null {
+  const workspace = trigger?.closest<HTMLElement>('[data-testid="backup-assets-workspace"]');
+  const results = workspace?.querySelector<HTMLElement>('section[tabindex="-1"][aria-label]');
+  return results?.isConnected ? results : null;
+}
+
+function restoreArchiveFocus(
+  trigger: HTMLElement | null,
+  inspectorFallback: HTMLElement | null,
+  workspaceFallback: HTMLElement | null,
+): void {
+  if (trigger?.isConnected) {
+    trigger.focus();
+    return;
+  }
+  if (inspectorFallback?.isConnected) {
+    inspectorFallback.focus();
+    return;
+  }
+  workspaceFallback?.focus();
+}
 
 export interface AssetPreviewProps {
   asset: BackupAsset;
   resource: BackupAssetsValueResource<BackupContentTicket>;
   canPreview: boolean;
   canDownload: boolean;
-  processingToken?: string | null;
+  processingRuntime?: Pick<AuthContextValue, "token" | "role" | "ensureStepUpProof">;
+  archiveContentAvailable?: boolean;
+  archiveDownloadAllowed?: boolean;
+  online?: boolean;
   onLoadPreview: (asset: BackupAsset) => void;
   onRenew: () => void;
   onPrepareDownload: (asset: BackupAsset) => void;
@@ -36,7 +83,10 @@ export function AssetPreview({
   resource,
   canPreview,
   canDownload,
-  processingToken = null,
+  processingRuntime,
+  archiveContentAvailable = canDownload,
+  archiveDownloadAllowed = canDownload,
+  online,
   onLoadPreview,
   onRenew,
   onPrepareDownload,
@@ -47,6 +97,17 @@ export function AssetPreview({
   const detachRef = useRef(onDetach);
   const mediaRetryRef = useRef({ binding: "", count: 0 });
   const [processingOpen, setProcessingOpen] = useState(false);
+  const archiveAssetKey = `${asset.ref.recoveryPointId}:${asset.ref.entryId}`;
+  const canBrowseArchive = Boolean(
+    processingRuntime?.token &&
+      (processingRuntime.role === "admin" || processingRuntime.role === "operator")
+  );
+  const archiveContextKey = JSON.stringify([
+    archiveAssetKey,
+    processingRuntime?.token ?? null,
+    processingRuntime?.role ?? null,
+    canBrowseArchive,
+  ]);
 
   useEffect(() => {
     detachRef.current = onDetach;
@@ -96,7 +157,7 @@ export function AssetPreview({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex min-h-11 shrink-0 flex-wrap items-center justify-end gap-2 border-b border-border px-2 py-1.5">
-        {processingToken ? (
+        {processingRuntime?.token ? (
           <Button type="button" variant="ghost" size="sm" onClick={() => setProcessingOpen(true)}>
             <Sparkles className="size-4" aria-hidden />
             {t("backupAssets.preview.processingStatus")}
@@ -136,7 +197,7 @@ export function AssetPreview({
           onMediaError={handleMediaError}
         />
       </div>
-      {processingOpen && processingToken ? (
+      {processingOpen && processingRuntime?.token ? (
         <Suspense
           fallback={(
             <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground" role="status">
@@ -144,17 +205,144 @@ export function AssetPreview({
             </p>
           )}
         >
-          <LazyBackupAssetProcessingPanel
-            token={processingToken}
+          <ArchiveProcessingSession
+            key={archiveContextKey}
             asset={asset}
             canNativePreview={canPreview}
             canDownload={canDownload}
+            runtime={processingRuntime}
+            canBrowseArchive={canBrowseArchive}
+            contentAvailable={archiveContentAvailable}
+            downloadAllowed={archiveDownloadAllowed}
+            online={online}
             onOpenPreview={(source) => onLoadPreview(assetForProcessingPreview(asset, source))}
-            onPrepareDownload={() => onPrepareDownload(asset)}
+            onPrepareDownload={(ref) => {
+              if (
+                ref.recoveryPointId === asset.ref.recoveryPointId &&
+                ref.entryId === asset.ref.entryId
+              ) {
+                return onPrepareDownload(asset);
+              }
+            }}
           />
         </Suspense>
       ) : null}
     </div>
+  );
+}
+
+interface ArchiveProcessingSessionProps {
+  asset: BackupAsset;
+  canNativePreview: boolean;
+  canDownload: boolean;
+  runtime: NonNullable<AssetPreviewProps["processingRuntime"]>;
+  canBrowseArchive: boolean;
+  contentAvailable: boolean;
+  downloadAllowed: boolean;
+  online?: boolean;
+  onOpenPreview: (source: ProcessingPreviewSource) => void;
+  onPrepareDownload: (ref: AssetRef) => void | Promise<void>;
+}
+
+function ArchiveProcessingSession({
+  asset,
+  canNativePreview,
+  canDownload,
+  runtime,
+  canBrowseArchive,
+  contentAvailable,
+  downloadAllowed,
+  online,
+  onOpenPreview,
+  onPrepareDownload,
+}: ArchiveProcessingSessionProps) {
+  const { t } = useTranslation();
+  const archiveTriggerRef = useRef<HTMLElement | null>(null);
+  const archiveFocusFallbackRef = useRef<HTMLElement | null>(null);
+  const archiveWorkspaceFocusFallbackRef = useRef<HTMLElement | null>(null);
+  const archiveDismissRef = useRef<(() => void) | null>(null);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const archiveOpenRef = useRef(false);
+
+  useLayoutEffect(() => {
+    archiveOpenRef.current = archiveOpen;
+  }, [archiveOpen]);
+
+  const registerArchiveDismissHandler = useCallback((handler: () => void) => {
+    archiveDismissRef.current = handler;
+    return () => {
+      if (archiveDismissRef.current === handler) archiveDismissRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => () => {
+    if (!archiveOpenRef.current) return;
+    archiveDismissRef.current?.();
+    queueMicrotask(() => restoreArchiveFocus(
+      archiveTriggerRef.current,
+      archiveFocusFallbackRef.current,
+      archiveWorkspaceFocusFallbackRef.current,
+    ));
+  }, []);
+
+  return (
+    <>
+      <LazyBackupAssetProcessingPanel
+        token={runtime.token}
+        asset={asset}
+        canNativePreview={canNativePreview}
+        canDownload={canDownload}
+        onOpenPreview={onOpenPreview}
+        onPrepareDownload={() => onPrepareDownload(asset.ref)}
+        onBrowseArchive={canBrowseArchive ? () => {
+          const trigger = document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+          archiveTriggerRef.current = trigger;
+          archiveFocusFallbackRef.current = archiveFocusFallback(trigger);
+          archiveWorkspaceFocusFallbackRef.current = archiveWorkspaceFocusFallback(trigger);
+          setArchiveOpen(true);
+        } : undefined}
+      />
+      {canBrowseArchive ? (
+        <Dialog
+          open={archiveOpen}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) archiveDismissRef.current?.();
+            setArchiveOpen(nextOpen);
+          }}
+        >
+          <DialogContent
+            size="lg"
+            aria-describedby={undefined}
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              queueMicrotask(() => restoreArchiveFocus(
+                archiveTriggerRef.current,
+                archiveFocusFallbackRef.current,
+                archiveWorkspaceFocusFallbackRef.current,
+              ));
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>{t("backupAssets.archive.title")}</DialogTitle>
+              <DialogCloseButton aria-label={t("backupAssets.archive.close")} />
+            </DialogHeader>
+            <Suspense fallback={<LoadingState title={t("backupAssets.archive.loading")} rows={6} />}>
+              <LazyArchiveMemberPanel
+                refValue={asset.ref}
+                runtime={runtime}
+                contentAvailable={contentAvailable}
+                downloadAllowed={downloadAllowed}
+                online={online}
+                onDismissHandlerRegister={registerArchiveDismissHandler}
+                onPrepareDownload={onPrepareDownload}
+              />
+            </Suspense>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+    </>
   );
 }
 

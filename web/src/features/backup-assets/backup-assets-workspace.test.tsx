@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { runAxe } from "@/test/a11y-helpers";
 
@@ -14,11 +14,66 @@ import { buildAssetRows, recoveryPoint, repository } from "./__tests__/test-util
 const { coveragePanelRenderMock } = vi.hoisted(() => ({
   coveragePanelRenderMock: vi.fn(),
 }));
+const { exportPanelRenderMock, exportPanelGate } = vi.hoisted(() => {
+  let pending: Promise<void> | null = null;
+  let resolvePending: (() => void) | null = null;
+
+  return {
+    exportPanelRenderMock: vi.fn(),
+    exportPanelGate: {
+      arm() {
+        pending = new Promise<void>((resolve) => {
+          resolvePending = resolve;
+        });
+      },
+      read() {
+        return pending;
+      },
+      release() {
+        const resolve = resolvePending;
+        pending = null;
+        resolvePending = null;
+        resolve?.();
+      },
+      reset() {
+        const resolve = resolvePending;
+        pending = null;
+        resolvePending = null;
+        resolve?.();
+      },
+    },
+  };
+});
+const { archivePanelRenderMock } = vi.hoisted(() => ({
+  archivePanelRenderMock: vi.fn(),
+}));
 
 vi.mock("./processing-coverage-panel", () => ({
   ProcessingCoveragePanel: (props: unknown) => {
     coveragePanelRenderMock(props);
     return <section data-testid="synthetic-coverage-panel">Synthetic coverage panel</section>;
+  },
+}));
+
+vi.mock("./export-job-panel", () => ({
+  ExportJobPanel: (props: unknown) => {
+    const pending = exportPanelGate.read();
+    if (pending) throw pending;
+    exportPanelRenderMock(props);
+    return <section data-testid="synthetic-export-panel">Synthetic export panel</section>;
+  },
+}));
+
+vi.mock("./backup-asset-processing-panel", () => ({
+  BackupAssetProcessingPanel: ({ onBrowseArchive }: { onBrowseArchive?: () => void }) => (
+    <button type="button" onClick={onBrowseArchive}>Open archive browser</button>
+  ),
+}));
+
+vi.mock("./archive-member-panel", () => ({
+  ArchiveMemberPanel: (props: { online?: boolean }) => {
+    archivePanelRenderMock(props);
+    return <section data-testid="synthetic-archive-panel">Synthetic archive panel</section>;
   },
 }));
 
@@ -102,7 +157,170 @@ beforeAll(() => {
   });
 });
 
+afterEach(() => {
+  exportPanelGate.reset();
+  Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
+});
+
 describe("BackupAssetsWorkspace", () => {
+  it("opens the lazy export dialog only from an Admin explicit selection", async () => {
+    setViewport(1440);
+    exportPanelRenderMock.mockClear();
+    const user = userEvent.setup();
+    const rows = buildAssetRows(1);
+    const state = createInitialBackupAssetsState({
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+    });
+    state.result = { status: "ready", requestKey: "test", generation: 1, rows, nextCursor: null, coverage: "complete", authoritativeEmpty: false };
+    state.selection = new Map([[`${rows[0].ref.recoveryPointId}:${rows[0].ref.entryId}`, rows[0].ref]]);
+    const onRoutePatch = vi.fn();
+    render(
+      <BackupAssetsWorkspace
+        controller={controller({ state, selectedRecoveryPoint: recoveryPoint })}
+        processingRuntime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        onRoutePatch={onRoutePatch}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /导出所选|Export selected/ }));
+    expect(await screen.findByRole("dialog", { name: /导出备份资产|Export backup assets/ })).toBeInTheDocument();
+    expect(await screen.findByTestId("synthetic-export-panel")).toBeInTheDocument();
+    expect(exportPanelRenderMock).toHaveBeenCalledWith(expect.objectContaining({
+      open: true,
+      exportJobId: undefined,
+      selection: [{ ref: rows[0].ref, logicalBytes: rows[0].asset.size }],
+    }));
+    expect(onRoutePatch).not.toHaveBeenCalledWith(expect.objectContaining({ selection: expect.anything() }));
+  });
+
+  it("freezes explicit export refs before the lazy panel resolves", async () => {
+    setViewport(1440);
+    exportPanelRenderMock.mockClear();
+    exportPanelGate.arm();
+    const user = userEvent.setup();
+    const rows = buildAssetRows(2);
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+    };
+    const initialState = createInitialBackupAssetsState(route);
+    initialState.result = {
+      status: "ready",
+      requestKey: "initial-export-selection",
+      generation: 1,
+      rows,
+      nextCursor: null,
+      coverage: "complete",
+      authoritativeEmpty: false,
+    };
+    initialState.selection = new Map([[`${rows[0].ref.recoveryPointId}:${rows[0].ref.entryId}`, rows[0].ref]]);
+    const rendered = render(
+      <BackupAssetsWorkspace
+        controller={controller({ state: initialState, selectedRecoveryPoint: recoveryPoint })}
+        processingRuntime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /导出所选|Export selected/ }));
+    expect(await screen.findByRole("dialog", { name: /导出备份资产|Export backup assets/ })).toBeInTheDocument();
+    expect(exportPanelRenderMock).not.toHaveBeenCalled();
+
+    const replacementState = createInitialBackupAssetsState({
+      ...route,
+      parentEntryId: rows[1].ref.entryId,
+    });
+    replacementState.result = {
+      status: "ready",
+      requestKey: "replaced-export-selection",
+      generation: 2,
+      rows: [rows[1]],
+      nextCursor: null,
+      coverage: "complete",
+      authoritativeEmpty: false,
+    };
+    replacementState.selection = new Map([[`${rows[1].ref.recoveryPointId}:${rows[1].ref.entryId}`, rows[1].ref]]);
+    rendered.rerender(
+      <BackupAssetsWorkspace
+        controller={controller({ state: replacementState, selectedRecoveryPoint: recoveryPoint })}
+        processingRuntime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+
+    await act(async () => {
+      exportPanelGate.release();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(exportPanelRenderMock).toHaveBeenCalledWith(expect.objectContaining({
+      open: true,
+      selection: [{ ref: rows[0].ref, logicalBytes: rows[0].asset.size }],
+    })));
+  });
+
+  it.each(["operator", "viewer"] as const)("does not expose bulk export to the %s role", (role) => {
+    setViewport(1440);
+    const rows = buildAssetRows(1);
+    const state = createInitialBackupAssetsState({
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+    });
+    state.result = { status: "ready", requestKey: "role-matrix", generation: 1, rows, nextCursor: null, coverage: "complete", authoritativeEmpty: false };
+    state.selection = new Map([[`${rows[0].ref.recoveryPointId}:${rows[0].ref.entryId}`, rows[0].ref]]);
+    render(
+      <BackupAssetsWorkspace
+        controller={controller({ state, selectedRecoveryPoint: recoveryPoint })}
+        processingRuntime={{ token: `${role}-token`, role, ensureStepUpProof: vi.fn() }}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /Export selected|导出所选/ })).not.toBeInTheDocument();
+  });
+
+  it("closes a direct-route export on context reset and focuses the results fallback", async () => {
+    setViewport(1440);
+    const exportJobId = "d".repeat(32);
+    const directRoute = {
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: repository.id,
+      exportJobId,
+    };
+    const directState = createInitialBackupAssetsState(directRoute);
+    const runtime = { token: "admin-token", role: "admin" as const, ensureStepUpProof: vi.fn() };
+    const rendered = render(
+      <BackupAssetsWorkspace
+        controller={controller({ state: directState })}
+        processingRuntime={runtime}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("dialog", { name: /导出备份资产|Export backup assets/ })).toBeInTheDocument();
+
+    rendered.rerender(
+      <BackupAssetsWorkspace
+        controller={controller({ state: createInitialBackupAssetsState({ ...directRoute, exportJobId: undefined }) })}
+        processingRuntime={runtime}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /导出备份资产|Export backup assets/ })).not.toBeInTheDocument());
+    expect(screen.getByRole("region", { name: /Asset results|资产结果/ })).toHaveFocus();
+  });
+
   it("loads the Admin processing surface only after an authorized interaction", async () => {
     setViewport(1440);
     coveragePanelRenderMock.mockClear();
@@ -751,5 +969,43 @@ describe("BackupAssetsWorkspace", () => {
     expect(prepareDownload).toHaveBeenCalledWith(row.asset);
     unmount();
     expect(detachContent).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes live browser connectivity to the archive fallback panel", async () => {
+    setViewport(1440);
+    archivePanelRenderMock.mockClear();
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
+    const user = userEvent.setup();
+    const row = buildAssetRows(1)[0];
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      entryId: row.ref.entryId,
+    };
+    render(
+      <BackupAssetsWorkspace
+        controller={controller({
+          state: createInitialBackupAssetsState(route),
+          selectedRecoveryPoint: recoveryPoint,
+          selectedEntry: { status: "ready", value: row.asset },
+        })}
+        processingRuntime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /处理状态|Processing status/ }));
+    await user.click(await screen.findByRole("button", { name: "Open archive browser" }));
+    await screen.findByTestId("synthetic-archive-panel");
+    expect(archivePanelRenderMock.mock.calls.at(-1)?.[0]).toMatchObject({ online: false });
+
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
+    await act(async () => {
+      window.dispatchEvent(new Event("online"));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(archivePanelRenderMock.mock.calls.at(-1)?.[0]).toMatchObject({ online: true }));
   });
 });

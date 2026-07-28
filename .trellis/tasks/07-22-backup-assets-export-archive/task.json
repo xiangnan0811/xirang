@@ -1,0 +1,156 @@
+{
+  "id": "backup-assets-export-archive",
+  "name": "backup-assets-export-archive",
+  "title": "备份资产导出与归档",
+  "description": "",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-07-22",
+  "completedAt": null,
+  "branch": "codex/backup-assets-export-archive",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-12-backup-data-explorer-design",
+  "relatedFiles": [],
+  "notes": "The user approvals and standing reasonable-decision authorization cover the current focused manifest. The 2026-07-28 runner stdout amendment added only existing runner.go and runner_test.go, making the exact manifest 56 create + 67 modify and the Git-visible union 131 paths (68 tracked + 63 untracked). Deterministic delayed-consumer RED reproduced read |0: file already closed; the parent-owned os.Pipe GREEN, capabilities normal/race/repetition, go vet, exact/static, full make check, bundle budgets, and required real PostgreSQL migration/Export/Processing selectors all passed fresh. Step 10 is blocked_external solely on the unchanged dependency audit at 1 moderate + 3 high. Step 11 limited exact stage/commit/push/draft-PR permission is restored, but ready/merge/completion remain forbidden until dependency-risk closure. Product scope, dependencies, migrations and the thirteen corrections remain unchanged.",
+  "meta": {
+    "planning_approval": {
+      "status": "complete_approved",
+      "approved_on": "2026-07-22",
+      "source": "controller user reply: 批准",
+      "scope": {
+        "artifacts": [
+          "prd.md",
+          "design.md",
+          "implement.md",
+          "research/current-main-evidence.md"
+        ],
+        "future_manifest": "56 create + 67 modify",
+        "corrections_deviations": 13
+      }
+    },
+    "planning_workflow_transition": "complete_approved",
+    "implementation_approval": "complete_approved",
+    "task_start_approval": "complete_approved",
+    "authorization_clarification": {
+      "clarified_on": "2026-07-22",
+      "source": "controller user clarification: 确认，另外，我刚刚的批准其实就已经同意了实施，而且，如果没有特殊说明，我会同意你提到的多个请求",
+      "standing_interpretation": "When the controller presents multiple approval requests together, the user's approval covers all of them unless the user explicitly excludes one.",
+      "limits": "No authority for genuinely new scope, irreversible high-risk actions, or deviations outside the approved manifest."
+    },
+    "focused_manifest_amendment": {
+      "status": "complete_approved",
+      "approved_on": "2026-07-23",
+      "source": "controller decision",
+      "scope": "Add two existing Rsync repository fixtures and one Rsync Provider preflight fixture for test-start-relative time; no production Provider, product-scope or correction-count change."
+    },
+    "runtime_settings_manifest_amendment": {
+      "status": "complete_approved",
+      "approved_on": "2026-07-24",
+      "source": "controller technical direction under the user's standing authorization to make reasonable implementation decisions",
+      "scope": "Add SettingsHandler and ConfigHandler production/tests (four existing paths) so backup_assets.export.enabled and other non-restart Export settings transition atomically into the managed runtime; no new endpoint, setting, product correction, migration, deploy or release scope."
+    },
+    "overlay_idempotency_manifest_reconciliation": {
+      "status": "complete_approved",
+      "approved_on": "2026-07-25",
+      "source": "controller exact-dirty-union audit under the user's standing authorization to make reasonable implementation decisions",
+      "scope": "Add existing backend/internal/backupasset/overlay/idempotency.go to the exact future modify manifest. Its TTL/key reads must use the same Overlay service lock as the already-approved live runtime-settings transition; this adds no endpoint, setting, product correction, migration, deploy, release, or public contract."
+    },
+    "settings_handler_test_scope_narrowing": {
+      "status": "complete_approved",
+      "approved_on": "2026-07-25",
+      "source": "controller technical direction under the user's standing authorization to make reasonable implementation decisions",
+      "scope": "Remove unrelated settings_handler_test.go from the exact manifest; settings_transition_test.go and config_handler_test.go remain the dedicated live Export-settings coverage. No production or product-scope change."
+    },
+    "postgres_migration_guard_manifest_amendment": {
+      "status": "complete_approved",
+      "approved_on": "2026-07-25",
+      "source": "controller technical direction under the user's standing authorization to make reasonable implementation decisions",
+      "scope": "Add migrator.go so PostgreSQL dirty-state lookup follows the same search path as its read; the already-approved migration integration test proves sibling isolated schemas do not mask or manufacture a dirty result while a search-path-visible dirty row remains fail-closed. No migration SQL, product API, Provider, deploy, release, or correction-count change."
+    },
+    "sqlite_dsn_lock_manifest_amendment": {
+      "status": "complete_approved",
+      "approved_on": "2026-07-25",
+      "source": "controller technical direction under the user's standing authorization to make reasonable implementation decisions",
+      "scope": "Add database.go and database_test.go so SQLite DSN enforcement replaces caller-supplied _txlock/_busy_timeout query values instead of appending duplicates that can downgrade immediate writer serialization. No migration, product API, Provider, deploy, release, or correction-count change."
+    },
+    "archive_member_projection_manifest_amendment": {
+      "status": "complete_approved",
+      "approved_on": "2026-07-26",
+      "source": "controller technical direction under the user's standing authorization to make reasonable implementation decisions",
+      "scope": "Add existing backend/internal/backupasset/processing/derived_manifest.go and backend/internal/backupasset/processing/derived_manifest_test.go to the exact future modify manifest. archive.extract_entry/archive_member_v1 is attachment-only one-hop retrieval, so its output must be non-projectable and cannot publish generic Search/preview text or OCR before its request is ready. This is a Child 12 security/no-leak containment, not a new product feature or a broad historical-projection cleanup claim; it adds no create path, migration, deploy, docs, release, or correction-count change, and does not record code or test implementation."
+    },
+    "source_reader_drain_manifest_amendment": {
+      "status": "complete_approved",
+      "approved_on": "2026-07-25",
+      "source": "controller technical direction under the user's standing authorization to make reasonable implementation decisions",
+      "scope": "Add existing backend/internal/backupasset/content/attempt_broker.go to the exact future modify manifest. A blocked source Read holds its internal read mutex while cancellation needs to close the same reader; Export must be able to cancel and acknowledge reader drain before key destruction or source-lease release. The narrow lock-scope correction changes no Content public contract, Broker, BudgetService, Auth handler, ledger, model, migration, Provider, endpoint, deploy, release, or product correction. Its regression remains in the already-approved Export runtime test path."
+    },
+    "provider_reader_cancellation_manifest_amendment": {
+      "status": "complete_approved",
+      "approved_on": "2026-07-25",
+      "source": "controller technical direction under the user's standing authorization to make reasonable implementation decisions",
+      "scope": "Add existing backend/internal/backupasset/provider/restic.go and backend/internal/backupasset/provider/runner_test.go to the exact future modify manifest. The shared boundedReadHandle holds its mutex across an underlying Read, while Close must first acquire that mutex before it can close the underlying reader; a truly blocked Provider Read therefore defeats the already-approved Export drain-before-key/source-cleanup invariant. Narrow the internal lock scope and prove Close reaches the underlying reader. This changes no Provider public contract, Provider bytes/locators/credentials, Content public contract, ledger, Broker, BudgetService, Auth handler, model, migration, endpoint, deploy, release, or product correction."
+    },
+    "accessibility_manifest_amendment": {
+      "status": "complete_approved",
+      "approved_on": "2026-07-28",
+      "source": "controller disposition under the user's standing authorization",
+      "scope": "Add existing tracked web/src/index.css and web/src/index-css.test.ts to the exact future modify manifest for the approved global reduced-motion/power-save behavior and its regression coverage. The export-list inset focus ring remains owned by the already-listed export panel files. No product scope, migration, Provider behavior, frozen path, or correction-count change."
+    },
+    "frontend_route_cleanup_manifest_amendment": {
+      "status": "complete_approved",
+      "approved_on": "2026-07-28",
+      "source": "controller disposition under the user's standing authorization",
+      "scope": "Add existing tracked web/src/lib/api/core.ts to the exact future modify manifest. Removing decoded exportJobId query fields must preserve every unrelated raw query byte, ordering, duplicate, bare flag, empty separator and hash fragment. This is a narrow existing-route cleanup with no endpoint, product correction, dependency, migration, deploy or release change."
+    },
+    "runner_stdout_pipe_manifest_amendment": {
+      "status": "complete_approved",
+      "approved_on": "2026-07-28",
+      "source": "controller root-cause disposition under the user's standing authorization to make reasonable implementation decisions",
+      "scope": "Add only existing backend/internal/backupasset/processing/capabilities/runner.go and runner_test.go. A final full gate observed file already closed because Command.Wait may close StdoutPipe before a delayed streaming consumer reaches EOF. Use a deterministic delayed-consumer RED and a parent-owned pipe GREEN while retaining concurrent leader/process-group cleanup. No API, dependency, parser profile, migration, deploy, release, product correction or broader capabilities change."
+    },
+    "runner_stdout_pipe_tdd": {
+      "status": "passed_current",
+      "verified_on": "2026-07-28",
+      "red": "TestRunnerStreamsToolStdoutToConsumerAndJoinsOnCancellation failed after a 250ms delayed consumer with read |0: file already closed.",
+      "green": "RunInputStream now uses a parent-owned os.Pipe, closes the parent writer after Start, retains concurrent Wait/process-group cleanup, and passes focused, package, race and 20x repetition gates."
+    },
+    "frontend_dependency_audit_gate": {
+      "status": "blocked_external",
+      "observed_on": "2026-07-28",
+      "source": "fresh local npm 11 and CI-equivalent Node 20/npm 10 audit evidence",
+      "scope": "No dependency-manifest amendment or package-file edit. The unchanged tree reports 1 moderate + 3 high. The compatible lockfile probe updates react-router/react-router-dom to 7.18.1, postcss to 8.5.23, nanoid to 3.3.16, and brace-expansion to 1.1.16/5.0.8, but current advisories still require an unpublished compatible brace-expansion fix and react-router 8.3.0, whose Node >=22.22 and React >=19.2.7 requirements are incompatible with this repository's Node 20/React 18 contract. The independent runner amendment makes the exact current scope 8 Phase-1 + 56 create + 67 modify = 131."
+    },
+    "step_10_current_verification": {
+      "status": "blocked_external",
+      "verified_on": "2026-07-28",
+      "runnable_gates": "passed_current_runner_amended",
+      "scope": "Exact 131 (68 tracked + 63 untracked) parity/static/gofmt passed. Runner deterministic RED/GREEN, capabilities normal/race/20x, go vet, corrected short-TMP env -u NODE_ENV make check, bundle budgets, and required real PostgreSQL migration/Export/Processing selectors passed fresh. backend/xirang-server was deleted and confirmed absent. The unchanged dependency audit remains the sole blocked_external row at 1 moderate + 3 high."
+    },
+    "step_11_limited_delivery_permission": {
+      "status": "authorized_limited_pending",
+      "authorized_on": "2026-07-28",
+      "source": "controller workflow disposition under the user's standing authorization",
+      "scope": "Exact staging and coherent commit, push, and creation of a draft PR are permitted only as a CI-validation channel. CI dependency audit is warning-only, so green CI does not close the Step 10 audit blocker. The PR must remain draft and must not merge or support implementation/task completion claims until a compatible dependency remediation or an explicit later risk-policy disposition.",
+      "order": [
+        "exact_stage_and_commit",
+        "draft_pr_ci_and_fixes",
+        "dependency_risk_closure",
+        "ready_merge_and_post_merge_monitoring",
+        "trellis_archive_and_journal"
+      ]
+    },
+    "task_start": "executed",
+    "started_on": "2026-07-22"
+  }
+}

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/backupasset/overlay"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
@@ -127,6 +129,68 @@ func TestConfigImportTransitionsBackupAssetEnableBeforePersistingSettings(t *tes
 	if len(spy.targets) != 1 || !spy.targets[0] || svc.GetEffective("backup_assets.enabled") != "true" {
 		t.Fatalf("transition targets=%v effective=%q", spy.targets, svc.GetEffective("backup_assets.enabled"))
 	}
+}
+
+func TestConfigImportDynamicExportMutationUsesRuntimeSettingsTransition(t *testing.T) {
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("migrate import settings: %v", err)
+	}
+	svc := settings.NewService(db)
+	spy := &settingsRuntimeSettingsTransitionSpy{}
+	handler := NewConfigHandler(db, svc).WithBackupAssetTransitioner(spy)
+	router := gin.New()
+	router.POST("/config/import", handler.Import)
+
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(`{"system_settings":[{"key":"backup_assets.export.ticket_max_requests","value":"128"}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if spy.calls != 1 {
+		t.Fatalf("runtime settings transition calls=%d, want one", spy.calls)
+	}
+	if spy.current["backup_assets.export.ticket_max_requests"] != "256" {
+		t.Fatalf("current max requests=%q, want default 256", spy.current["backup_assets.export.ticket_max_requests"])
+	}
+	if len(spy.overlay) != 1 || spy.overlay["backup_assets.export.ticket_max_requests"] != "128" {
+		t.Fatalf("overlay=%v", spy.overlay)
+	}
+	if spy.effective["backup_assets.export.ticket_max_requests"] != "128" || spy.config.Ticket.MaxRequests != 128 {
+		t.Fatalf("effective=%q config=%+v", spy.effective["backup_assets.export.ticket_max_requests"], spy.config)
+	}
+}
+
+func TestConfigImportSharedIdempotencySettingsUsesRuntimeSettingsTransition(t *testing.T) {
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("migrate import settings: %v", err)
+	}
+	svc := settings.NewService(db)
+	overlayService, now := newSettingsTransitionOverlay(t, db, overlay.DefaultConfig())
+	spy := &settingsRuntimeSettingsTransitionSpy{overlayService: overlayService}
+	handler := NewConfigHandler(db, svc).WithBackupAssetTransitioner(spy)
+	router := gin.New()
+	router.POST("/config/import", handler.Import)
+
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(`{"system_settings":[{"key":"backup_assets.idempotency_ttl","value":"48h"},{"key":"backup_assets.idempotency_key_max_bytes","value":"192"}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if spy.calls != 1 || spy.config.IdempotencyTTL != 48*time.Hour || spy.config.IdempotencyKeyMaxBytes != 192 {
+		t.Fatalf("runtime idempotency import calls=%d config=%+v", spy.calls, spy.config)
+	}
+	if _, err := overlayService.ClearRecent(context.Background(), 781, strings.Repeat("a", 160)); err != nil {
+		t.Fatalf("imported Overlay key limit rejected handler-approved key: %v", err)
+	}
+	assertSettingsOverlayReceiptTTL(t, db, 781, now, 48*time.Hour)
 }
 
 func TestConfigImportFailedBackupAssetTransitionDoesNotPersistSettings(t *testing.T) {

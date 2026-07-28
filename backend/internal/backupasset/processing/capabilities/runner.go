@@ -265,14 +265,23 @@ func (runner *Runner) RunInputStream(
 	command.Env = runtimeEnvironment(invocation.Environment, workspace, output, invocation.InputMode, "", invocation.Limits)
 	command.Stdin = boundedInput
 	configureToolProcess(command)
-	stdout, err := command.StdoutPipe()
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		return ToolResult{}, ErrToolFailed
 	}
+	defer func() { _ = stdout.Close() }()
+	command.Stdout = stdoutWriter
 	stderr := newBoundedBuffer(runner.config.StderrLimit)
 	command.Stderr = stderr
 	if err := command.Start(); err != nil {
+		_ = stdoutWriter.Close()
 		return ToolResult{}, sanitizeProcessError(err)
+	}
+	if err := stdoutWriter.Close(); err != nil {
+		_ = signalToolProcessGroup(command.Process, syscall.SIGKILL)
+		_ = command.Wait()
+		_ = killAndWaitToolProcessGroup(command.Process, runner.config.GracePeriod)
+		return ToolResult{}, ErrToolFailed
 	}
 
 	waited := make(chan error, 1)

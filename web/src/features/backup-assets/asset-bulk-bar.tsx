@@ -1,15 +1,17 @@
-import { Eye, X } from "lucide-react";
+import { Archive, Eye, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 
 export interface AssetBulkBarProps {
   count: number;
+  canExport?: boolean;
   onClear: () => void;
   onInspect: () => void;
+  onExport?: () => void;
 }
 
-export function AssetBulkBar({ count, onClear, onInspect }: AssetBulkBarProps) {
+export function AssetBulkBar({ count, canExport = false, onClear, onInspect, onExport }: AssetBulkBarProps) {
   const { t } = useTranslation();
   if (count === 0) return null;
   return (
@@ -31,6 +33,17 @@ export function AssetBulkBar({ count, onClear, onInspect }: AssetBulkBarProps) {
       >
         <Eye className="size-4" aria-hidden />
       </Button>
+      {canExport && onExport ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-label={t("backupAssets.actions.exportSelected")}
+          onClick={onExport}
+        >
+          <Archive className="size-4" aria-hidden />
+        </Button>
+      ) : null}
       <Button
         type="button"
         variant="ghost"

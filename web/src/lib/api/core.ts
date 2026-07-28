@@ -85,8 +85,31 @@ export function buildReturnPath(locationLike: LocationLike): string {
   return path;
 }
 
+function withoutQueryParameter(search: string, parameter: string): string {
+  const query = search.startsWith("?") ? search.slice(1) : search;
+  let removed = false;
+  const remaining = query.split("&").filter((field) => {
+    const valueSeparator = field.indexOf("=");
+    const rawName = valueSeparator === -1 ? field : field.slice(0, valueSeparator);
+    const decodedName = new URLSearchParams(`name=${rawName}`).get("name");
+    if (decodedName !== parameter) {
+      return true;
+    }
+    removed = true;
+    return false;
+  });
+  if (!removed) {
+    return search;
+  }
+  const remainingSearch = remaining.join("&");
+  return remainingSearch ? `?${remainingSearch}` : "";
+}
+
 export function buildLoginRedirectPath(locationLike: LocationLike): string {
-  const returnPath = buildReturnPath(locationLike);
+  const returnPath = buildReturnPath({
+    ...locationLike,
+    search: withoutQueryParameter(locationLike.search || "", "exportJobId"),
+  });
   if (!returnPath) {
     return "/login";
   }

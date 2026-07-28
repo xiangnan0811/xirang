@@ -186,10 +186,12 @@
     padding-bottom: 0.5rem;
   }
 
-  html[data-power="save"] * {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 80ms !important;
+  @media (prefers-reduced-motion: no-preference) {
+    html[data-power="save"] * {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 80ms !important;
+    }
   }
 
   html[data-power="save"] .app-shell-bg::before {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -73,13 +74,18 @@ func TestBoundedReadHandleCloseDetectsUnreadOverflowAtExactLimit(t *testing.T) {
 	if _, err := io.ReadFull(handle, buffer); err != nil || string(buffer) != "1234" {
 		t.Fatalf("read value=%q err=%v", buffer, err)
 	}
-	if err := handle.Close(); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
-		t.Fatalf("overflow close error=%v", err)
+	if err := handle.Close(); err == nil {
+		t.Fatal("overflow close unexpectedly succeeded")
+	} else {
+		var capabilityErr *CapabilityError
+		if !errors.As(err, &capabilityErr) || capabilityErr.Reason.Code != backupasset.CapabilityProviderResourceLimit {
+			t.Fatalf("overflow close error=%v, want provider resource limit", err)
+		}
 	}
 }
 
 func TestBoundedReadHandleReportsProbeInclusiveProviderBytes(t *testing.T) {
-	t.Run("overflow probe", func(t *testing.T) {
+	t.Run("overflow proof", func(t *testing.T) {
 		underlying := &trackingProviderReadHandle{Reader: strings.NewReader("12345")}
 		handle := newBoundedReadHandle(underlying, 4)
 		reporter, ok := handle.(ProviderByteReporter)
@@ -90,14 +96,14 @@ func TestBoundedReadHandleReportsProbeInclusiveProviderBytes(t *testing.T) {
 		if _, err := io.ReadFull(handle, buffer); err != nil {
 			t.Fatal(err)
 		}
-		if got := reporter.ProviderBytes(); got != 4 {
-			t.Fatalf("provider bytes before close=%d, want 4", got)
+		if got := reporter.ProviderBytes(); got != 5 {
+			t.Fatalf("provider bytes after inline proof=%d, want 5", got)
 		}
-		if err := handle.Close(); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
-			t.Fatalf("overflow close error=%v", err)
+		if err := handle.Close(); err == nil {
+			t.Fatal("overflow close unexpectedly succeeded")
 		}
 		if got := reporter.ProviderBytes(); got != 5 {
-			t.Fatalf("provider bytes after hidden probe=%d, want 5", got)
+			t.Fatalf("provider bytes after close=%d, want inline proof retained", got)
 		}
 	})
 
@@ -107,8 +113,9 @@ func TestBoundedReadHandleReportsProbeInclusiveProviderBytes(t *testing.T) {
 		if !ok {
 			t.Fatal("bounded handle does not expose ProviderByteReporter")
 		}
-		if _, err := io.ReadAll(handle); err != nil {
-			t.Fatal(err)
+		buffer := make([]byte, 4)
+		if _, err := io.ReadFull(handle, buffer); err != nil || string(buffer) != "1234" {
+			t.Fatalf("direct exact read value=%q err=%v", buffer, err)
 		}
 		if err := handle.Close(); err != nil {
 			t.Fatal(err)
@@ -117,6 +124,413 @@ func TestBoundedReadHandleReportsProbeInclusiveProviderBytes(t *testing.T) {
 			t.Fatalf("exact EOF provider bytes=%d, want 4", got)
 		}
 	})
+}
+
+func TestBoundedReadHandleCloseDoesNotStartIdleProbe(t *testing.T) {
+	underlying := newBlockingExactLimitProbeProviderReadHandle()
+	handle := newBoundedReadHandle(underlying, 1)
+	reporter := handle.(ProviderByteReporter)
+
+	closeDone := make(chan error, 1)
+	closeObserved := false
+	t.Cleanup(func() {
+		underlying.allowCloseReturn()
+		underlying.allowProbeReturn()
+		if !closeObserved {
+			select {
+			case <-closeDone:
+			case <-time.After(time.Second):
+				t.Error("bounded close did not finish during cleanup")
+			}
+		}
+	})
+	go func() { closeDone <- handle.Close() }()
+
+	select {
+	case <-underlying.closeCalled:
+	case <-underlying.probeEntered:
+		t.Fatal("idle bounded close entered an exact-limit probe")
+	case <-time.After(time.Second):
+		t.Fatal("bounded close did not reach underlying Close")
+	}
+	select {
+	case err := <-closeDone:
+		closeObserved = true
+		t.Fatalf("bounded close returned before underlying Close drained: %v", err)
+	default:
+	}
+
+	underlying.allowCloseReturn()
+	select {
+	case err := <-closeDone:
+		closeObserved = true
+		if err != nil {
+			t.Fatalf("idle close error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("bounded close did not finish after underlying Close drained")
+	}
+	if got := reporter.ProviderBytes(); got != 0 {
+		t.Fatalf("provider bytes=%d, want no read", got)
+	}
+	if got := underlying.reads.Load(); got != 0 {
+		t.Fatalf("underlying reads=%d, want no idle hidden probe", got)
+	}
+}
+
+func TestBoundedReadHandleCloseDrainsBlockedExactLimitProbe(t *testing.T) {
+	underlying := newBlockingExactLimitProbeProviderReadHandle()
+	defer underlying.allowCloseReturn()
+	defer underlying.allowProbeReturn()
+	handle := newBoundedReadHandle(underlying, 1)
+	reporter := handle.(ProviderByteReporter)
+	type readResult struct {
+		count int
+		err   error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		count, err := handle.Read(make([]byte, 1))
+		readDone <- readResult{count: count, err: err}
+	}()
+	select {
+	case <-underlying.probeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("final permitted read did not reach its inline exact-limit probe")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- handle.Close() }()
+	select {
+	case <-underlying.closeCalled:
+	case <-time.After(time.Second):
+		t.Fatal("bounded close did not reach the blocked exact-limit probe")
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("bounded close returned before exact-limit probe drained: %v", err)
+	default:
+	}
+
+	underlying.allowCloseReturn()
+	select {
+	case err := <-closeDone:
+		t.Fatalf("bounded close returned before exact-limit probe drained: %v", err)
+	default:
+	}
+	underlying.allowProbeReturn()
+	select {
+	case result := <-readDone:
+		if result.count != 1 || result.err != nil {
+			t.Fatalf("final permitted read count=%d err=%v, want one byte with inline EOF proof", result.count, result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("final permitted read did not finish after inline probe drained")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("bounded close error=%v, want EOF-success close", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("bounded close did not finish after exact-limit probe drained")
+	}
+	if got := reporter.ProviderBytes(); got != 1 {
+		t.Fatalf("provider bytes=%d, want permitted byte only", got)
+	}
+	if got := underlying.reads.Load(); got != 2 {
+		t.Fatalf("underlying reads=%d, want final permitted read plus inline exact-limit probe", got)
+	}
+}
+
+func TestBoundedReadHandleCloseInterruptsBlockedRead(t *testing.T) {
+	underlying := newBlockingProviderReadHandle()
+	t.Cleanup(func() {
+		if err := underlying.Close(); err != nil {
+			t.Errorf("close blocking provider read handle: %v", err)
+		}
+	})
+	defer underlying.allowReadReturn()
+	handle := newBoundedReadHandle(underlying, 1)
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := handle.Read(make([]byte, 1))
+		readDone <- err
+	}()
+	select {
+	case <-underlying.readEntered:
+	case <-time.After(time.Second):
+		t.Fatal("bounded read did not reach underlying reader")
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- handle.Close() }()
+	select {
+	case <-underlying.closeCalled:
+	case <-time.After(time.Second):
+		t.Fatal("bounded close did not reach underlying reader")
+	}
+	select {
+	case <-underlying.readReleased:
+	case <-time.After(time.Second):
+		t.Fatal("blocked read did not observe underlying close")
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("bounded close returned before blocked read drained: %v", err)
+	default:
+	}
+	underlying.allowReadReturn()
+	select {
+	case err := <-readDone:
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("blocked read error=%v, want closed pipe", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked read did not finish after close")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("non-final interrupted read close error=%v, want ordinary close behavior", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("bounded close did not finish")
+	}
+	if _, err := handle.Read(make([]byte, 1)); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("post-close read error=%v, want closed pipe", err)
+	}
+}
+
+func TestBoundedReadHandleCloseIgnoresQueuedPostCloseRead(t *testing.T) {
+	underlying := newBlockingProviderReadHandle()
+	handle := newBoundedReadHandle(underlying, 1).(*boundedReadHandle)
+
+	handle.readMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			handle.readMu.Unlock()
+		}
+	}()
+	queuedStarted := make(chan struct{})
+	queuedDone := make(chan error, 1)
+	go func() {
+		close(queuedStarted)
+		_, err := handle.Read(make([]byte, 1))
+		queuedDone <- err
+	}()
+	<-queuedStarted
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- handle.Close() }()
+
+	select {
+	case <-underlying.closeCalled:
+	case <-time.After(time.Second):
+		t.Fatal("bounded close did not reach underlying reader")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("close error=%v, want clean close without an underlying read", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("bounded close waited for a queued post-close read")
+	}
+	handle.readMu.Unlock()
+	locked = false
+	select {
+	case err := <-queuedDone:
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("queued post-close read error=%v, want closed pipe", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued post-close read did not return")
+	}
+	select {
+	case <-underlying.readEntered:
+		t.Fatal("queued post-close read reached the underlying reader")
+	default:
+	}
+}
+
+func TestBoundedReadHandleCloseWaitsOnlyForInFlightRead(t *testing.T) {
+	underlying := newBlockingCloseProviderReadHandle()
+	handle := newBoundedReadHandle(underlying, 1).(*boundedReadHandle)
+
+	// Model the active Read after it has claimed the serialization lock and
+	// marked itself in flight, before it calls the underlying reader.
+	handle.readMu.Lock()
+	readMuLocked := true
+	handle.mu.Lock()
+	handle.readInFlight = true
+	handle.mu.Unlock()
+
+	closeDone := make(chan error, 1)
+	closeObserved := false
+	go func() { closeDone <- handle.Close() }()
+	select {
+	case <-underlying.closeCalled:
+	case <-time.After(time.Second):
+		t.Fatal("bounded close did not reach underlying reader")
+	}
+
+	// This is the state transition an active Read makes before it releases
+	// readMu. A post-close reader can then acquire readMu but be paused before
+	// it observes the closed state.
+	handle.finishRead()
+	queuedOwnsReadMu := make(chan struct{})
+	releaseQueuedRead := make(chan struct{})
+	go func() {
+		handle.readMu.Lock()
+		close(queuedOwnsReadMu)
+		<-releaseQueuedRead
+		handle.readMu.Unlock()
+	}()
+	handle.readMu.Unlock()
+	readMuLocked = false
+	select {
+	case <-queuedOwnsReadMu:
+	case <-time.After(time.Second):
+		t.Fatal("queued post-close read did not acquire read mutex")
+	}
+
+	t.Cleanup(func() {
+		close(releaseQueuedRead)
+		underlying.allowCloseReturn()
+		if !closeObserved {
+			select {
+			case <-closeDone:
+			case <-time.After(time.Second):
+				t.Error("bounded close did not finish during cleanup")
+			}
+		}
+	})
+	defer func() {
+		if readMuLocked {
+			handle.readMu.Unlock()
+		}
+	}()
+
+	underlying.allowCloseReturn()
+	select {
+	case err := <-closeDone:
+		closeObserved = true
+		if err != nil {
+			t.Fatalf("close error=%v, want clean close after active read drained", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("bounded close waited for a queued post-close read")
+	}
+}
+
+func TestBoundedReadHandleCloseRacingFinalPermittedReadFailsClosed(t *testing.T) {
+	underlying := newFinalByteThenProbeProviderReadHandle(nil, io.ErrClosedPipe, false)
+	t.Cleanup(func() {
+		if err := underlying.Close(); err != nil {
+			t.Errorf("close final-byte probe provider read handle: %v", err)
+		}
+	})
+	handle := newBoundedReadHandle(underlying, 1)
+	type readResult struct {
+		count int
+		err   error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		count, err := handle.Read(make([]byte, 1))
+		readDone <- readResult{count: count, err: err}
+	}()
+	select {
+	case <-underlying.readEntered:
+	case <-time.After(time.Second):
+		t.Fatal("bounded read did not reach final-byte reader")
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- handle.Close() }()
+	select {
+	case <-underlying.closeCalled:
+	case <-time.After(time.Second):
+		t.Fatal("bounded close did not reach final-byte reader")
+	}
+	select {
+	case result := <-readDone:
+		if result.count != 1 || !errors.Is(result.err, backupasset.ErrCapabilityUnavailable) {
+			t.Fatalf("interrupted final proof count=%d err=%v, want provider unavailable", result.count, result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("final permitted read did not finish")
+	}
+	select {
+	case err := <-closeDone:
+		var capabilityErr *CapabilityError
+		if !errors.As(err, &capabilityErr) || capabilityErr.Reason.Code != backupasset.CapabilityProviderUnavailable {
+			t.Fatalf("close error=%v, want provider unavailable after interruption", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("bounded close did not finish")
+	}
+	reporter := handle.(ProviderByteReporter)
+	if got := reporter.ProviderBytes(); got != 1 {
+		t.Fatalf("provider bytes=%d, want final permitted byte only", got)
+	}
+	if got := underlying.reads.Load(); got != 2 {
+		t.Fatalf("underlying reads=%d, want final permitted read plus interrupted inline proof", got)
+	}
+}
+
+func TestBoundedReadHandleCloseRacingFinalPermittedEOFRemainsSuccessful(t *testing.T) {
+	underlying := newFinalByteThenProbeProviderReadHandle(io.EOF, nil, false)
+	t.Cleanup(func() {
+		if err := underlying.Close(); err != nil {
+			t.Errorf("close final-byte probe provider read handle: %v", err)
+		}
+	})
+	handle := newBoundedReadHandle(underlying, 1)
+	type readResult struct {
+		count int
+		err   error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		count, err := handle.Read(make([]byte, 1))
+		readDone <- readResult{count: count, err: err}
+	}()
+	select {
+	case <-underlying.readEntered:
+	case <-time.After(time.Second):
+		t.Fatal("bounded read did not reach final-byte reader")
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- handle.Close() }()
+	select {
+	case <-underlying.closeCalled:
+	case <-time.After(time.Second):
+		t.Fatal("bounded close did not reach final-byte reader")
+	}
+	select {
+	case result := <-readDone:
+		if result.count != 1 || !errors.Is(result.err, io.EOF) {
+			t.Fatalf("final permitted EOF read count=%d err=%v", result.count, result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("final permitted EOF read did not finish")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("bounded close error=%v, want EOF-success close", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("bounded close did not finish")
+	}
+	reporter := handle.(ProviderByteReporter)
+	if got := reporter.ProviderBytes(); got != 1 {
+		t.Fatalf("provider bytes=%d, want final permitted byte only", got)
+	}
+	if got := underlying.reads.Load(); got != 1 {
+		t.Fatalf("underlying reads=%d, want no post-close overflow probe", got)
+	}
 }
 
 func TestRunnerValidatesReadOnlyToolOperationPairs(t *testing.T) {
@@ -639,3 +1053,170 @@ type trackingProviderReadHandle struct {
 }
 
 func (handle *trackingProviderReadHandle) Close() error { handle.closed = true; return nil }
+
+type blockingCloseProviderReadHandle struct {
+	closeCalled chan struct{}
+	allowClose  chan struct{}
+	closeOnce   sync.Once
+	allowOnce   sync.Once
+}
+
+func newBlockingCloseProviderReadHandle() *blockingCloseProviderReadHandle {
+	return &blockingCloseProviderReadHandle{
+		closeCalled: make(chan struct{}),
+		allowClose:  make(chan struct{}),
+	}
+}
+
+func (handle *blockingCloseProviderReadHandle) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (handle *blockingCloseProviderReadHandle) Close() error {
+	handle.closeOnce.Do(func() {
+		close(handle.closeCalled)
+		<-handle.allowClose
+	})
+	return nil
+}
+
+func (handle *blockingCloseProviderReadHandle) allowCloseReturn() {
+	handle.allowOnce.Do(func() { close(handle.allowClose) })
+}
+
+type blockingProviderReadHandle struct {
+	readEntered      chan struct{}
+	closeCalled      chan struct{}
+	releaseRead      chan struct{}
+	readReleased     chan struct{}
+	allowReadRelease chan struct{}
+	closeOnce        sync.Once
+	releaseOnce      sync.Once
+}
+
+func newBlockingProviderReadHandle() *blockingProviderReadHandle {
+	return &blockingProviderReadHandle{
+		readEntered:      make(chan struct{}),
+		closeCalled:      make(chan struct{}),
+		releaseRead:      make(chan struct{}),
+		readReleased:     make(chan struct{}),
+		allowReadRelease: make(chan struct{}),
+	}
+}
+
+func (handle *blockingProviderReadHandle) Read([]byte) (int, error) {
+	select {
+	case <-handle.readEntered:
+	default:
+		close(handle.readEntered)
+	}
+	<-handle.releaseRead
+	close(handle.readReleased)
+	<-handle.allowReadRelease
+	return 0, io.ErrClosedPipe
+}
+
+func (handle *blockingProviderReadHandle) Close() error {
+	handle.closeOnce.Do(func() {
+		close(handle.closeCalled)
+		close(handle.releaseRead)
+	})
+	return nil
+}
+
+func (handle *blockingProviderReadHandle) allowReadReturn() {
+	handle.releaseOnce.Do(func() { close(handle.allowReadRelease) })
+}
+
+type blockingExactLimitProbeProviderReadHandle struct {
+	reads             atomic.Int32
+	probeEntered      chan struct{}
+	closeCalled       chan struct{}
+	allowProbeRelease chan struct{}
+	allowCloseRelease chan struct{}
+	probeOnce         sync.Once
+	closeOnce         sync.Once
+	allowProbeOnce    sync.Once
+	allowCloseOnce    sync.Once
+}
+
+func newBlockingExactLimitProbeProviderReadHandle() *blockingExactLimitProbeProviderReadHandle {
+	return &blockingExactLimitProbeProviderReadHandle{
+		probeEntered:      make(chan struct{}),
+		closeCalled:       make(chan struct{}),
+		allowProbeRelease: make(chan struct{}),
+		allowCloseRelease: make(chan struct{}),
+	}
+}
+
+func (handle *blockingExactLimitProbeProviderReadHandle) Read(buffer []byte) (int, error) {
+	if handle.reads.Add(1) == 1 {
+		buffer[0] = '1'
+		return 1, nil
+	}
+	handle.probeOnce.Do(func() { close(handle.probeEntered) })
+	<-handle.allowProbeRelease
+	return 0, io.EOF
+}
+
+func (handle *blockingExactLimitProbeProviderReadHandle) Close() error {
+	handle.closeOnce.Do(func() { close(handle.closeCalled) })
+	<-handle.allowCloseRelease
+	return nil
+}
+
+func (handle *blockingExactLimitProbeProviderReadHandle) allowCloseReturn() {
+	handle.allowCloseOnce.Do(func() { close(handle.allowCloseRelease) })
+}
+
+func (handle *blockingExactLimitProbeProviderReadHandle) allowProbeReturn() {
+	handle.allowProbeOnce.Do(func() { close(handle.allowProbeRelease) })
+}
+
+type finalByteThenProbeProviderReadHandle struct {
+	readEntered chan struct{}
+	closeCalled chan struct{}
+	releaseRead chan struct{}
+	closeOnce   sync.Once
+	reads       atomic.Int32
+	finalErr    error
+	probeErr    error
+	probeByte   bool
+}
+
+func newFinalByteThenProbeProviderReadHandle(finalErr, probeErr error, probeByte bool) *finalByteThenProbeProviderReadHandle {
+	return &finalByteThenProbeProviderReadHandle{
+		readEntered: make(chan struct{}),
+		closeCalled: make(chan struct{}),
+		releaseRead: make(chan struct{}),
+		finalErr:    finalErr,
+		probeErr:    probeErr,
+		probeByte:   probeByte,
+	}
+}
+
+func (handle *finalByteThenProbeProviderReadHandle) Read(buffer []byte) (int, error) {
+	switch handle.reads.Add(1) {
+	case 1:
+		close(handle.readEntered)
+		<-handle.releaseRead
+		buffer[0] = '1'
+		return 1, handle.finalErr
+	case 2:
+		if handle.probeByte {
+			buffer[0] = '2'
+			return 1, handle.probeErr
+		}
+		return 0, handle.probeErr
+	default:
+		return 0, io.EOF
+	}
+}
+
+func (handle *finalByteThenProbeProviderReadHandle) Close() error {
+	handle.closeOnce.Do(func() {
+		close(handle.closeCalled)
+		close(handle.releaseRead)
+	})
+	return nil
+}

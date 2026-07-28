@@ -17,6 +17,7 @@ import (
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/content"
+	assetexport "xirang/backend/internal/backupasset/export"
 	"xirang/backend/internal/backupasset/overlay"
 	"xirang/backend/internal/backupasset/processing"
 	"xirang/backend/internal/backupasset/processing/capabilityspec"
@@ -62,6 +63,28 @@ func (*runtimeStagedPayloadFake) CleanupAged(context.Context, provider.RemoteCom
 	return nil
 }
 
+type runtimeStopTerminalizerPass struct {
+	progress assetexport.RuntimeStopTerminalizationProgress
+	err      error
+}
+
+type runtimeStopTerminalizerFake struct {
+	passes []runtimeStopTerminalizerPass
+	calls  int
+}
+
+func (fake *runtimeStopTerminalizerFake) TerminalizeForRuntimeStopPass(
+	context.Context,
+	int,
+) (assetexport.RuntimeStopTerminalizationProgress, error) {
+	if fake.calls >= len(fake.passes) {
+		return assetexport.RuntimeStopTerminalizationProgress{}, assetexport.ErrUnavailable
+	}
+	pass := fake.passes[fake.calls]
+	fake.calls++
+	return pass.progress, pass.err
+}
+
 var _ provider.CommandTransport = (*runtimeTransportFake)(nil)
 var _ provider.CommandStreamTransport = (*runtimeTransportFake)(nil)
 
@@ -103,6 +126,60 @@ func openRuntimeTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func TestTerminalizeExportRuntimeLifecycleContinuesAfterDurableCleanupFailure(t *testing.T) {
+	cleanupErr := errors.New("persistent runtime-stop cleanup failure")
+	terminalizer := &runtimeStopTerminalizerFake{passes: []runtimeStopTerminalizerPass{
+		{
+			progress: assetexport.RuntimeStopTerminalizationProgress{Advanced: 32},
+			err:      cleanupErr,
+		},
+		{
+			progress: assetexport.RuntimeStopTerminalizationProgress{Processed: 1, Advanced: 2, Complete: true},
+			err:      cleanupErr,
+		},
+	}}
+	orphans := 0
+	err := terminalizeExportRuntimeLifecycle(
+		context.Background(), terminalizer, 1,
+		func(context.Context) (int, error) {
+			orphans++
+			return 0, nil
+		},
+	)
+	if !errors.Is(err, cleanupErr) {
+		t.Fatalf("terminalization error=%v, want persistent cleanup error", err)
+	}
+	if terminalizer.calls != 2 {
+		t.Fatalf("terminalization passes=%d, want durable follow-up pass", terminalizer.calls)
+	}
+	if orphans != 1 {
+		t.Fatalf("orphan reconciliation calls=%d, want one after the finite terminalization sweep", orphans)
+	}
+}
+
+func TestTerminalizeExportRuntimeLifecycleBoundsRetryableSweepContention(t *testing.T) {
+	terminalizer := &runtimeStopTerminalizerFake{passes: []runtimeStopTerminalizerPass{{
+		err: assetexport.ErrUnavailable,
+	}}}
+	orphans := 0
+	err := terminalizeExportRuntimeLifecycle(
+		context.Background(), terminalizer, 1,
+		func(context.Context) (int, error) {
+			orphans++
+			return 0, nil
+		},
+	)
+	if !errors.Is(err, assetexport.ErrUnavailable) {
+		t.Fatalf("contended runtime-stop error=%v, want retryable unavailability", err)
+	}
+	if terminalizer.calls != 1 {
+		t.Fatalf("contended runtime-stop passes=%d, want one bounded attempt", terminalizer.calls)
+	}
+	if orphans != 0 {
+		t.Fatalf("orphan reconciliation calls=%d, want none before lifecycle sweep completion", orphans)
+	}
+}
+
 func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *testing.T) {
 	db := openRuntimeTestDB(t)
 	transport := &runtimeTransportFake{}
@@ -140,6 +217,17 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 	if runtime.processingManager == nil {
 		t.Fatal("runtime omitted the shared Processing manager")
 	}
+	if runtime.archiveMemberService == nil {
+		t.Fatal("runtime omitted the one-hop archive-member service")
+	}
+	if runtime.exportManager == nil {
+		t.Fatal("runtime omitted the managed Export graph")
+	}
+	exportManager, ok := runtime.exportManager.(*managedExportRuntime)
+	if !ok || exportManager.Ready() || exportManager.Service() == nil || exportManager.Delivery() == nil ||
+		exportManager.ArchiveMember() == nil || exportManager.publication.current() != nil {
+		t.Fatal("default-disabled runtime did not expose stable unpublished Export facades")
+	}
 	if _, ok := runtime.processingManager.source.(*content.DerivedAttemptSourceResolver); !ok {
 		t.Fatalf("Processing Worker Input source=%T, want Derived-first closed resolver", runtime.processingManager.source)
 	}
@@ -163,6 +251,69 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 	}
 	if runtime.RclonePublicationStrategy().Kind() != backupasset.ProviderRclone {
 		t.Fatalf("publication strategy kind=%q, want %q", runtime.RclonePublicationStrategy().Kind(), backupasset.ProviderRclone)
+	}
+}
+
+func TestRuntimeNewStartsAndInstallsManagedExportGraph(t *testing.T) {
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RUNTIME_EXPORT_DATA_KEY_FOR_TEST_ONLY")
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(
+		&model.Task{}, &model.TaskRepositoryLink{}, &model.RepositoryAccessBinding{},
+		&model.WrappedDomainKey{}, &model.BackupAssetExportJob{}, &model.BackupAssetExportKey{},
+		&model.BackupAssetExportItem{}, &model.BackupAssetExportAttempt{}, &model.BackupAssetExportItemAttempt{},
+		&model.BackupAssetExportSourceLease{}, &model.BackupAssetExportArtifact{}, &model.BackupAssetExportIdempotency{},
+		&model.BackupAssetExportQuotaBucket{}, &model.BackupAssetExportReservation{},
+		&model.BackupAssetExportDeliveryGrant{}, &model.BackupAssetExportDeliveryRequest{},
+		&model.BackupAssetArchiveMemberRequest{},
+		&model.BackupAssetProcessingJob{}, &model.BackupAssetProcessingInterest{},
+		&model.BackupAssetDerivedArtifactSet{}, &model.BackupAssetDerivedArtifact{}, &model.BackupAssetDerivedBlob{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "export")
+	settingsService := settings.NewService(db)
+	if err := settingsService.UpdateMany(map[string]string{
+		"backup_assets.enabled":                   "true",
+		"backup_assets.lease_heartbeat":           "15s",
+		"backup_assets.export.enabled":            "true",
+		"backup_assets.export.root":               root,
+		"backup_assets.export.lease_renew_margin": "40s",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	transport := &runtimeTransportFake{}
+	runtime, err := New(Dependencies{
+		DB: db, Settings: settingsService, Transport: transport, StreamTransport: transport,
+		StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{},
+		ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{},
+		Now: func() time.Time { return time.Now().UTC() },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, ok := runtime.exportManager.(*managedExportRuntime)
+	if !ok {
+		t.Fatalf("Export manager type=%T", runtime.exportManager)
+	}
+	t.Cleanup(func() { _ = manager.Shutdown(context.Background()) })
+	if err := manager.Startup(context.Background()); err != nil {
+		t.Fatalf("start managed Export graph: %v", err)
+	}
+	if !manager.Ready() || manager.Service() == nil || manager.Delivery() == nil {
+		t.Fatalf("ready=%v service=%p delivery=%p", manager.Ready(), manager.Service(), manager.Delivery())
+	}
+	if runtime.exportDelivery != manager.Delivery() || runtime.contentService.exportBranch != manager.Delivery() {
+		t.Fatalf("runtime did not bind the stable Export delivery facade")
+	}
+	manager.mu.RLock()
+	graph := manager.graph
+	manager.mu.RUnlock()
+	if graph == nil || graph.attempts == nil || graph.worker == nil || graph.lifecycle == nil || graph.runner == nil ||
+		graph.stopAccepting == nil || graph.drain == nil || graph.run == nil || graph.shutdown == nil {
+		t.Fatalf("managed Export execution graph incomplete: %+v", graph)
+	}
+	if graph.runner.sourceLeaseInterval != 15*time.Second || graph.runner.heartbeat != 20*time.Second {
+		t.Fatalf("managed Export worker intervals: source=%s attempt=%s", graph.runner.sourceLeaseInterval, graph.runner.heartbeat)
 	}
 }
 
@@ -1022,6 +1173,170 @@ func TestRuntimeContentTransitionAndSchemaDownOrdering(t *testing.T) {
 	}
 	if fmt.Sprint(events) != fmt.Sprint(want) {
 		t.Fatalf("content transition order=%v, want %v", events, want)
+	}
+}
+
+type runtimeExportSettingsManagerFake struct {
+	events        *[]string
+	globalEnabled []bool
+	configs       []backupasset.ExportConfig
+}
+
+type runtimeOverlayKeySourceUnused struct{}
+
+func (runtimeOverlayKeySourceUnused) Active(context.Context, backupasset.KeyDomain) (backupasset.DomainKeyMaterial, error) {
+	return backupasset.DomainKeyMaterial{}, errors.New("FAKE_RUNTIME_OVERLAY_KEY_SOURCE_UNUSED_FOR_TEST_ONLY")
+}
+
+func (*runtimeExportSettingsManagerFake) Startup(context.Context) error { return nil }
+func (*runtimeExportSettingsManagerFake) Ready() bool                   { return true }
+func (*runtimeExportSettingsManagerFake) Service() *managedExportServiceFacade {
+	return nil
+}
+func (*runtimeExportSettingsManagerFake) Delivery() *managedExportDeliveryFacade { return nil }
+func (*runtimeExportSettingsManagerFake) StopAccepting()                         {}
+func (*runtimeExportSettingsManagerFake) Run(context.Context)                    {}
+func (*runtimeExportSettingsManagerFake) Shutdown(context.Context) error         { return nil }
+func (*runtimeExportSettingsManagerFake) PrepareSchemaDown(context.Context, func() error) error {
+	return nil
+}
+func (fake *runtimeExportSettingsManagerFake) TransitionSettings(
+	_ context.Context,
+	globalEnabled bool,
+	config backupasset.ExportConfig,
+	persist func() error,
+) error {
+	fake.globalEnabled = append(fake.globalEnabled, globalEnabled)
+	fake.configs = append(fake.configs, config)
+	*fake.events = append(*fake.events, fmt.Sprintf("export-settings-%t", globalEnabled))
+	return persist()
+}
+
+func TestRuntimeBackupAssetSettingsTransitionCoordinatesGlobalDisable(t *testing.T) {
+	events := []string{}
+	exportManager := &runtimeExportSettingsManagerFake{events: &events}
+	runtime := &Runtime{
+		exportManager:  exportManager,
+		contentManager: &runtimeContentManagerFake{events: &events},
+		transitioner:   &runtimeFeatureTransitionerFake{events: &events},
+	}
+	transitioner, ok := any(runtime).(interface {
+		TransitionBackupAssetSettings(
+			context.Context,
+			map[string]string,
+			map[string]string,
+			map[string]string,
+			backupasset.ExportConfig,
+			func() error,
+		) error
+	})
+	if !ok {
+		t.Fatal("Runtime does not provide backup asset settings transition")
+	}
+	config := backupasset.ExportConfig{Enabled: false, WorkerConcurrency: 3}
+	if err := transitioner.TransitionBackupAssetSettings(
+		context.Background(),
+		map[string]string{"backup_assets.enabled": "true"},
+		map[string]string{"backup_assets.enabled": "false"},
+		map[string]string{"backup_assets.enabled": "false"},
+		config,
+		func() error {
+			events = append(events, "persist")
+			return nil
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fmt.Sprint(events), "[content-ready-false content-prepare-disable admission-transition-false export-settings-false persist]"; got != want {
+		t.Fatalf("global settings transition order=%s want=%s", got, want)
+	}
+	if got := fmt.Sprint(exportManager.globalEnabled); got != "[false]" || len(exportManager.configs) != 1 || exportManager.configs[0] != config {
+		t.Fatalf("Export settings calls enabled=%v configs=%+v", exportManager.globalEnabled, exportManager.configs)
+	}
+}
+
+func TestRuntimeBackupAssetSettingsTransitionCoordinatesIdempotencyAcrossExportAndOverlay(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RUNTIME_OVERLAY_IDEMPOTENCY_DATA_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(
+		&model.BackupAssetOverlayUsage{}, &model.BackupAssetOverlayIdempotency{}, &model.BackupAssetRecentAccess{},
+	); err != nil {
+		t.Fatalf("migrate runtime Overlay idempotency fixture: %v", err)
+	}
+	now := time.Date(2026, 7, 26, 8, 0, 0, 0, time.UTC)
+	overlayService, err := overlay.NewService(overlay.ServiceDependencies{
+		DB: db, Keys: runtimeOverlayKeySourceUnused{}, Assets: runtimeOverlayAuthorizationAllowAll{}, Points: runtimeOverlayAuthorizationAllowAll{},
+		Now: func() time.Time { return now }, Config: overlay.DefaultConfig(),
+		FeatureEnabled: func() (bool, error) { return true, nil },
+	})
+	if err != nil {
+		t.Fatalf("construct Overlay service: %v", err)
+	}
+	events := []string{}
+	exportManager := &runtimeExportSettingsManagerFake{events: &events}
+	runtime := &Runtime{
+		overlayService: overlayService,
+		exportManager:  exportManager,
+		transitioner:   &runtimeFeatureTransitionerFake{events: &events},
+	}
+	config := backupasset.ExportConfig{Enabled: false, IdempotencyTTL: 2 * time.Hour, IdempotencyKeyMaxBytes: 32}
+	if err := runtime.TransitionBackupAssetSettings(
+		context.Background(),
+		map[string]string{"backup_assets.idempotency_ttl": "24h", "backup_assets.idempotency_key_max_bytes": "128"},
+		map[string]string{"backup_assets.idempotency_ttl": "2h", "backup_assets.idempotency_key_max_bytes": "32"},
+		map[string]string{"backup_assets.enabled": "false", "backup_assets.idempotency_ttl": "2h", "backup_assets.idempotency_key_max_bytes": "32"},
+		config,
+		func() error {
+			events = append(events, "persist")
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("transition idempotency settings: %v", err)
+	}
+	if got, want := fmt.Sprint(events), "[admission-transition-false export-settings-false persist]"; got != want {
+		t.Fatalf("idempotency transition order=%s want=%s", got, want)
+	}
+	if len(exportManager.configs) != 1 || exportManager.configs[0] != config {
+		t.Fatalf("Export configuration=%+v, want %+v", exportManager.configs, config)
+	}
+	if _, err := overlayService.ClearRecent(context.Background(), 761, strings.Repeat("a", 64)); !errors.Is(err, overlay.ErrInvalidOverlay) {
+		t.Fatalf("Overlay retained stale idempotency key limit: %v", err)
+	}
+	key := strings.Repeat("b", 32)
+	if _, err := overlayService.ClearRecent(context.Background(), 761, key); err != nil {
+		t.Fatalf("create receipt with transitioned Overlay settings: %v", err)
+	}
+	var receipt model.BackupAssetOverlayIdempotency
+	if err := db.Where("owner_user_id = ? AND action = ?", 761, "recent_clear").Take(&receipt).Error; err != nil {
+		t.Fatalf("load transitioned Overlay receipt: %v", err)
+	}
+	if want := now.Add(2 * time.Hour); !receipt.ExpiresAt.Equal(want) {
+		t.Fatalf("transitioned Overlay receipt expiry=%s, want %s", receipt.ExpiresAt, want)
+	}
+
+	persistErr := errors.New("FAKE_RUNTIME_IDEMPOTENCY_PERSIST_FAILURE_FOR_TEST_ONLY")
+	if err := runtime.TransitionBackupAssetSettings(
+		context.Background(), nil,
+		map[string]string{"backup_assets.idempotency_ttl": "3h", "backup_assets.idempotency_key_max_bytes": "16"},
+		map[string]string{"backup_assets.enabled": "false", "backup_assets.idempotency_ttl": "3h", "backup_assets.idempotency_key_max_bytes": "16"},
+		backupasset.ExportConfig{Enabled: false, IdempotencyTTL: 3 * time.Hour, IdempotencyKeyMaxBytes: 16},
+		func() error { return persistErr },
+	); !errors.Is(err, persistErr) {
+		t.Fatalf("failed idempotency transition error=%v, want %v", err, persistErr)
+	}
+	rollbackKey := strings.Repeat("c", 32)
+	if _, err := overlayService.ClearRecent(context.Background(), 762, rollbackKey); err != nil {
+		t.Fatalf("failed transition changed Overlay idempotency key limit: %v", err)
+	}
+	var rollbackReceipt model.BackupAssetOverlayIdempotency
+	if err := db.Where("owner_user_id = ? AND action = ?", 762, "recent_clear").Take(&rollbackReceipt).Error; err != nil {
+		t.Fatalf("load rollback Overlay receipt: %v", err)
+	}
+	if want := now.Add(2 * time.Hour); !rollbackReceipt.ExpiresAt.Equal(want) {
+		t.Fatalf("failed transition changed Overlay receipt expiry=%s, want %s", rollbackReceipt.ExpiresAt, want)
 	}
 }
 

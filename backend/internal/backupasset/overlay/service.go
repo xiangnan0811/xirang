@@ -3,12 +3,14 @@ package overlay
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -80,14 +82,22 @@ type ServiceDependencies struct {
 }
 
 type Service struct {
-	db             *gorm.DB
-	keys           KeySource
-	assets         AssetAuthorizer
-	points         PointAuthorizer
-	audit          AuditSink
-	now            func() time.Time
-	config         Config
-	featureEnabled func() (bool, error)
+	db                      *gorm.DB
+	keys                    KeySource
+	assets                  AssetAuthorizer
+	points                  PointAuthorizer
+	audit                   AuditSink
+	now                     func() time.Time
+	config                  Config
+	featureEnabled          func() (bool, error)
+	idempotencyMu           sync.RWMutex
+	idempotencyTransitionMu sync.Mutex
+	idempotencySettings     overlayIdempotencySettings
+}
+
+type overlayIdempotencySettings struct {
+	ttl         time.Duration
+	keyMaxBytes int
 }
 
 type CreateSavedSearchRequest struct {
@@ -105,6 +115,13 @@ type UpdateSavedSearchRequest struct {
 	Query           assetsearch.SearchRequest
 	ExpectedVersion int
 	IdempotencyKey  string
+}
+
+type SavedSearchExportBinding struct {
+	ID                   string
+	OwnerUserID          uint
+	ExpectedVersion      int
+	CanonicalQueryDigest string
 }
 
 type UpdateTagRequest struct {
@@ -134,7 +151,25 @@ func NewService(dependencies ServiceDependencies) (*Service, error) {
 	return &Service{
 		db: dependencies.DB, keys: dependencies.Keys, assets: dependencies.Assets, points: dependencies.Points,
 		audit: dependencies.Audit, now: dependencies.Now, config: config, featureEnabled: dependencies.FeatureEnabled,
+		idempotencySettings: overlayIdempotencySettings{ttl: config.IdempotencyTTL, keyMaxBytes: config.IdempotencyKeyMaxBytes},
 	}, nil
+}
+
+// TransitionIdempotencySettings keeps the dynamically shared Overlay settings
+// aligned with Export only after their durable setting mutation succeeds.
+func (service *Service) TransitionIdempotencySettings(ttl time.Duration, keyMaxBytes int, persist func() error) error {
+	if service == nil || persist == nil || ttl <= 0 || keyMaxBytes < 16 {
+		return fmt.Errorf("%w: Overlay idempotency settings", backupasset.ErrInvalidState)
+	}
+	service.idempotencyTransitionMu.Lock()
+	defer service.idempotencyTransitionMu.Unlock()
+	if err := persist(); err != nil {
+		return err
+	}
+	service.idempotencyMu.Lock()
+	service.idempotencySettings = overlayIdempotencySettings{ttl: ttl, keyMaxBytes: keyMaxBytes}
+	service.idempotencyMu.Unlock()
+	return nil
 }
 
 func (service *Service) CreateSavedSearch(ctx context.Context, actor Actor, request CreateSavedSearchRequest) (SavedSearch, error) {
@@ -358,6 +393,55 @@ func (service *Service) UseSavedSearch(ctx context.Context, actor Actor, id stri
 		},
 	})
 	return SavedSearch{}, ErrSavedSearchBroken
+}
+
+func SavedSearchQueryDigest(query assetsearch.SearchRequest, limits assetsearch.QueryLimits) (string, error) {
+	canonical, err := assetsearch.ValidateAndCanonicalize(query, limits)
+	if err != nil {
+		return "", ErrInvalidOverlay
+	}
+	digest := sha256.Sum256(append([]byte("xirang.backup_asset.saved_search.export.v1\x00"), canonical.JSON...))
+	return hex.EncodeToString(digest[:]), nil
+}
+
+// ValidateSavedSearchForExportTx closes the gap between the last Search page
+// and Export commit without exposing Overlay persistence outside this package.
+func (service *Service) ValidateSavedSearchForExportTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	binding SavedSearchExportBinding,
+) error {
+	if service == nil || tx == nil || binding.OwnerUserID == 0 || binding.ExpectedVersion <= 0 ||
+		backupasset.ValidateOpaqueID(binding.ID) != nil || len(binding.CanonicalQueryDigest) != 64 {
+		return ErrOverlayUnavailable
+	}
+	var row model.BackupAssetSavedSearch
+	err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND owner_user_id = ?", binding.ID, binding.OwnerUserID).Take(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return backupasset.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock saved search for export: %w", err)
+	}
+	if row.State != string(SavedSearchActive) {
+		return ErrSavedSearchBroken
+	}
+	if row.Version != binding.ExpectedVersion {
+		return backupasset.ErrConflict
+	}
+	canonical, err := assetsearch.DecodeAndCanonicalize([]byte(row.EncryptedAST), service.overlayQueryLimits())
+	if err != nil {
+		return ErrOverlayUnavailable
+	}
+	digest, err := SavedSearchQueryDigest(canonical.Request, service.overlayQueryLimits())
+	if err != nil {
+		return ErrOverlayUnavailable
+	}
+	if subtle.ConstantTimeCompare([]byte(digest), []byte(binding.CanonicalQueryDigest)) != 1 {
+		return backupasset.ErrConflict
+	}
+	return nil
 }
 
 func (service *Service) DeleteSavedSearch(ctx context.Context, ownerID uint, id string, expectedVersion int, idempotencyKey string) error {

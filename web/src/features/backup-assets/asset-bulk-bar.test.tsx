@@ -24,4 +24,21 @@ describe("AssetBulkBar", () => {
     await user.click(screen.getByRole("button", { name: /Inspect selected|检查所选/ }));
     expect(onInspect).toHaveBeenCalledTimes(1);
   });
+
+  it("shows the export command only for an authorized explicit selection", async () => {
+    const onExport = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <AssetBulkBar
+        count={2}
+        canExport
+        onExport={onExport}
+        onClear={vi.fn()}
+        onInspect={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /导出|Export/ }));
+    expect(onExport).toHaveBeenCalledOnce();
+  });
 });

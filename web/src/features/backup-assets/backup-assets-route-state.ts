@@ -23,6 +23,7 @@ export interface BackupAssetsRouteState {
   parentEntryId?: string;
   entryId?: string;
   savedSearchId?: string;
+  exportJobId?: string;
   scope: BackupAssetsScope;
   types: CatalogEntryType[];
   tagId?: string;
@@ -38,7 +39,7 @@ export type BackupAssetsRouteResult =
   | { status: "invalid"; safePath: string };
 
 export type BackupAssetsRouteUpdateResult =
-  | { status: "valid"; state: BackupAssetsRouteState; href: string }
+  | { status: "valid"; state: BackupAssetsRouteState; href: string; replace?: true }
   | { status: "invalid"; safePath: string };
 
 const DATA_PATH = "/app/backups/data";
@@ -55,6 +56,7 @@ const DATA_QUERY_KEYS = new Set([
   "parentEntryId",
   "entryId",
   "savedSearchId",
+  "exportJobId",
   "scope",
   "type",
   "tag",
@@ -135,6 +137,7 @@ export function serializeBackupAssetsRoute(state: BackupAssetsRouteState): strin
   appendString(params, "parentEntryId", normalized.parentEntryId);
   appendString(params, "entryId", normalized.entryId);
   appendString(params, "savedSearchId", normalized.savedSearchId);
+  appendString(params, "exportJobId", normalized.exportJobId);
   if (normalized.scope !== "current") params.set("scope", normalized.scope);
   for (const type of normalized.types) params.append("type", type);
   appendString(params, "tag", normalized.tagId);
@@ -163,7 +166,7 @@ export function updateBackupAssetsRoute(
 
   if (patch.page !== undefined && patch.page !== source.page) {
     const state = normalizeState({ ...defaultBackupAssetsRouteState(patch.page), ...patch });
-    return updateResult(state);
+    return updateResult(state, source.exportJobId !== undefined && state.exportJobId === undefined);
   }
 
   let state: BackupAssetsRouteState = { ...source, ...patch };
@@ -178,12 +181,14 @@ export function updateBackupAssetsRoute(
       recoveryPointId: hasOwn(patch, "recoveryPointId") ? state.recoveryPointId : undefined,
       parentEntryId: hasOwn(patch, "parentEntryId") ? state.parentEntryId : undefined,
       entryId: hasOwn(patch, "entryId") ? state.entryId : undefined,
+      exportJobId: hasOwn(patch, "exportJobId") ? state.exportJobId : undefined,
     };
   } else if (recoveryPointChanged) {
     state = {
       ...state,
       parentEntryId: hasOwn(patch, "parentEntryId") ? state.parentEntryId : undefined,
       entryId: hasOwn(patch, "entryId") ? state.entryId : undefined,
+      exportJobId: hasOwn(patch, "exportJobId") ? state.exportJobId : undefined,
     };
   } else if (parentChanged) {
     state = { ...state, entryId: hasOwn(patch, "entryId") ? state.entryId : undefined };
@@ -202,6 +207,7 @@ export function updateBackupAssetsRoute(
       direction: viewDefaults.direction,
       parentEntryId: hasOwn(patch, "parentEntryId") ? state.parentEntryId : undefined,
       entryId: hasOwn(patch, "entryId") ? state.entryId : undefined,
+      exportJobId: hasOwn(patch, "exportJobId") ? state.exportJobId : undefined,
     };
     if (patch.view === "repositories") {
       state = {
@@ -209,6 +215,7 @@ export function updateBackupAssetsRoute(
         view: "repositories",
         repositoryId: state.repositoryId,
         layout: state.layout,
+        exportJobId: undefined,
       };
     }
   }
@@ -224,6 +231,7 @@ export function updateBackupAssetsRoute(
       favoriteOnly: false,
       sort: viewDefaults.sort,
       direction: viewDefaults.direction,
+      exportJobId: undefined,
     };
   }
 
@@ -233,11 +241,22 @@ export function updateBackupAssetsRoute(
       recoveryPointId: undefined,
       parentEntryId: undefined,
       entryId: undefined,
+      exportJobId: undefined,
     };
   }
 
   state = normalizeState(state);
-  return updateResult(state);
+  const clearedIncompatibleExportJob =
+    source.exportJobId !== undefined &&
+    state.exportJobId === undefined &&
+    (
+      repositoryChanged ||
+      recoveryPointChanged ||
+      (patch.view !== undefined && patch.view !== source.view) ||
+      (hasOwn(patch, "savedSearchId") && patch.savedSearchId !== undefined) ||
+      (source.scope !== "all_retained" && state.scope === "all_retained")
+    );
+  return updateResult(state, clearedIncompatibleExportJob);
 }
 
 function parseRecoveryRoute(params: URLSearchParams): BackupAssetsRouteResult {
@@ -273,6 +292,7 @@ function parseDataRoute(params: URLSearchParams): BackupAssetsRouteResult {
   const parentEntryId = parseEntryId(params.get("parentEntryId"));
   const entryId = parseEntryId(params.get("entryId"));
   const savedSearchId = parseOpaqueId(params.get("savedSearchId"));
+  const exportJobId = parseOpaqueId(params.get("exportJobId"));
   const scope = parseOneOf(params.get("scope") ?? "current", ["current", "all_retained"] as const);
   const types = params.getAll("type");
   const tagId = parseOpaqueId(params.get("tag"));
@@ -291,6 +311,7 @@ function parseDataRoute(params: URLSearchParams): BackupAssetsRouteResult {
     (params.has("parentEntryId") && parentEntryId === undefined) ||
     (params.has("entryId") && entryId === undefined) ||
     (params.has("savedSearchId") && savedSearchId === undefined) ||
+    (params.has("exportJobId") && exportJobId === undefined) ||
     (params.has("tag") && tagId === undefined) ||
     (favorite !== null && favorite !== "true") ||
     types.length > 6 ||
@@ -314,6 +335,7 @@ function parseDataRoute(params: URLSearchParams): BackupAssetsRouteResult {
     parentEntryId,
     entryId,
     savedSearchId,
+    exportJobId,
     scope,
     types: types as CatalogEntryType[],
     tagId,
@@ -340,6 +362,7 @@ function isValidState(state: BackupAssetsRouteState): boolean {
   if (state.parentEntryId !== undefined && !ENTRY_ID_PATTERN.test(state.parentEntryId)) return false;
   if (state.entryId !== undefined && !ENTRY_ID_PATTERN.test(state.entryId)) return false;
   if (state.savedSearchId !== undefined && !OPAQUE_ID_PATTERN.test(state.savedSearchId)) return false;
+  if (state.exportJobId !== undefined && !OPAQUE_ID_PATTERN.test(state.exportJobId)) return false;
   if (state.tagId !== undefined && !OPAQUE_ID_PATTERN.test(state.tagId)) return false;
   if (state.types.length > 6 || new Set(state.types).size !== state.types.length || !state.types.every(isEntryType)) return false;
 
@@ -351,6 +374,7 @@ function isValidState(state: BackupAssetsRouteState): boolean {
       state.parentEntryId === undefined &&
       state.entryId === undefined &&
       state.savedSearchId === undefined &&
+      state.exportJobId === undefined &&
       state.scope === "current" &&
       state.types.length === 0 &&
       state.tagId === undefined &&
@@ -371,6 +395,7 @@ function isValidState(state: BackupAssetsRouteState): boolean {
       state.parentEntryId === undefined &&
       state.entryId === undefined &&
       state.savedSearchId === undefined &&
+      state.exportJobId === undefined &&
       state.scope === "current" &&
       state.types.length === 0 &&
       state.tagId === undefined &&
@@ -422,9 +447,10 @@ function defaultsForView(view: BackupAssetsDataView): Pick<BackupAssetsRouteStat
   return view === "search" ? { sort: "relevance", direction: "desc" } : { sort: "name", direction: "asc" };
 }
 
-function updateResult(state: BackupAssetsRouteState): BackupAssetsRouteUpdateResult {
+function updateResult(state: BackupAssetsRouteState, replace = false): BackupAssetsRouteUpdateResult {
   if (!isValidState(state)) return invalid(pathForPage(state.page));
-  return { status: "valid", state, href: serializeBackupAssetsRoute(state) };
+  const result = { status: "valid" as const, state, href: serializeBackupAssetsRoute(state) };
+  return replace ? { ...result, replace: true } : result;
 }
 
 function invalid(safePath: string): { status: "invalid"; safePath: string } {

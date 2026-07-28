@@ -198,6 +198,10 @@ func NewRouter(dep Dependencies) *gin.Engine {
 		// trust-all (XFF spoofing). Config.Load validates the list first.
 		panic(fmt.Sprintf("TRUSTED_PROXIES invalid for Gin SetTrustedProxies: %v", err))
 	}
+	backupContentSchemePolicy, err := handlers.NewBackupContentSchemePolicy(dep.TrustedProxies)
+	if err != nil {
+		panic(fmt.Sprintf("TRUSTED_PROXIES invalid for backup content scheme policy: %v", err))
+	}
 	router.MaxMultipartMemory = 10 << 20 // 10 MB
 	router.Use(gin.Recovery(), middleware.RequestID(), middleware.StructuredLogger())
 	router.Use(middleware.PrometheusMetrics())
@@ -250,7 +254,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	}
 	backupContentHandler := handlers.NewBackupContentHandler(
 		backupContentService, dep.DB, dep.JWTManager, backupContentConfig,
-	)
+	).WithSchemePolicy(backupContentSchemePolicy)
 	authHandler.WithContentSessionRevoker(backupContentService)
 	overviewHandler := handlers.NewOverviewHandler(dep.DB)
 	overviewTrafficHandler := handlers.NewOverviewTrafficHandler(dep.DB, nil)
@@ -327,6 +331,24 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	backupAssetOverlayHandler := handlers.NewBackupAssetOverlayHandler(backupAssetOverlayService, backupAssetAuditSink, backupAssetHandlerConfigSource)
 	backupWorkerHandler := handlers.NewBackupWorkerHandler(dep.BackupAssets).WithAudit(backupAssetAuditSink)
 	backupProcessingHandler := handlers.NewBackupProcessingHandler(dep.BackupAssets, backupAssetAuditSink)
+	var backupAssetExportService handlers.BackupAssetExportService
+	var backupAssetExportDelivery handlers.BackupAssetExportDelivery
+	var backupArchiveDelivery handlers.BackupArchiveDelivery
+	var backupArchiveService handlers.BackupArchiveService
+	if dep.BackupAssets != nil {
+		backupAssetExportService = dep.BackupAssets.ExportService()
+		backupAssetExportDelivery = dep.BackupAssets.ExportDeliveryGateway()
+		backupArchiveDelivery = dep.BackupAssets.ExportDeliveryGateway()
+		backupArchiveService = dep.BackupAssets.ArchiveMemberService()
+	}
+	backupAssetExportHandler := handlers.NewBackupAssetExportHandler(
+		backupAssetExportService, backupAssetExportDelivery, dep.DB, dep.JWTManager,
+		backupAssetAuditSink, backupContentConfig,
+	).WithSchemePolicy(backupContentSchemePolicy)
+	backupArchiveHandler := handlers.NewBackupArchiveHandler(
+		backupArchiveService, backupArchiveDelivery, dep.DB, dep.JWTManager,
+		backupAssetAuditSink, backupContentConfig,
+	).WithSchemePolicy(backupContentSchemePolicy)
 	var rsyncVersioningService handlers.TaskRsyncVersioningService = featureDisabledRsyncVersioningService{}
 	if dep.BackupAssets != nil {
 		rsyncVersioningService = dep.BackupAssets.RepositoryService()
@@ -410,6 +432,34 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/recovery-points/:id/entries/:entryId/processing",
 		middleware.RBAC(backupasset.PermissionBackupAssetsPreview), middleware.APIRateLimit(60, time.Minute),
 		middleware.MaxBodySize(1), backupProcessingHandler.GetState)
+	secured.POST("/asset-exports",
+		middleware.RBAC(backupasset.PermissionBackupAssetsExport), middleware.RequireRole("admin"),
+		middleware.APIRateLimit(10, time.Minute), middleware.MaxBodySize(2<<20), backupAssetExportHandler.Create)
+	secured.GET("/asset-exports/:id",
+		middleware.RBAC(backupasset.PermissionBackupAssetsExport), middleware.RequireRole("admin"),
+		middleware.APIRateLimit(60, time.Minute), middleware.MaxBodySize(1), backupAssetExportHandler.Status)
+	secured.POST("/asset-exports/:id/cancel",
+		middleware.RBAC(backupasset.PermissionBackupAssetsExport), middleware.RequireRole("admin"),
+		middleware.APIRateLimit(30, time.Minute), middleware.MaxBodySize(4<<10), backupAssetExportHandler.Cancel)
+	secured.POST("/asset-exports/:id/download-ticket",
+		middleware.RBAC(backupasset.PermissionBackupAssetsExport), middleware.RequireRole("admin"),
+		middleware.APIRateLimit(30, time.Minute), middleware.MaxBodySize(4<<10), backupAssetExportHandler.DownloadTicket)
+	archiveMemberBase := "/recovery-points/:id/entries/:entryId"
+	secured.GET(archiveMemberBase+"/archive-members",
+		middleware.RBAC(backupasset.PermissionBackupAssetsPreview), middleware.APIRateLimit(60, time.Minute),
+		middleware.MaxBodySize(1), backupArchiveHandler.List)
+	secured.POST(archiveMemberBase+"/archive-member-jobs",
+		middleware.RBAC(backupasset.PermissionBackupAssetsPreview), middleware.APIRateLimit(30, time.Minute),
+		middleware.MaxBodySize(4<<10), backupArchiveHandler.Create)
+	secured.GET(archiveMemberBase+"/archive-member-jobs/:jobId",
+		middleware.RBAC(backupasset.PermissionBackupAssetsPreview), middleware.APIRateLimit(60, time.Minute),
+		middleware.MaxBodySize(1), backupArchiveHandler.Status)
+	secured.POST(archiveMemberBase+"/archive-member-jobs/:jobId/cancel",
+		middleware.RBAC(backupasset.PermissionBackupAssetsPreview), middleware.APIRateLimit(30, time.Minute),
+		middleware.MaxBodySize(4<<10), backupArchiveHandler.Cancel)
+	secured.POST(archiveMemberBase+"/archive-member-jobs/:jobId/delivery-ticket",
+		middleware.RBAC(backupasset.PermissionBackupAssetsDownload), middleware.APIRateLimit(30, time.Minute),
+		middleware.MaxBodySize(4<<10), backupArchiveHandler.DeliveryTicket)
 	secured.POST("/recovery-point-diffs", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.Diff)
 	secured.POST("/asset-search", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetSearchHandler.Search)
 	secured.GET("/asset-saved-searches", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.ListSavedSearches)

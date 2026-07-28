@@ -1013,6 +1013,34 @@ func newQueuedThumbnailPreviewForTest(
 	return harness, service, asset, created, interest
 }
 
+func TestCapabilityServiceResolvesOnlyReadyArchiveExtractCapability(t *testing.T) {
+	harness := newCoordinatorHarness(t)
+	asset := content.AuthorizedAsset{
+		Ref: validWorkDescriptor().Source, CatalogGenerationID: validWorkDescriptor().CatalogGenerationID,
+		Provider: backupasset.ProviderRestic, ProviderCapabilityRevision: 1,
+		SourceFingerprint:   validWorkDescriptor().SourceFingerprint,
+		EntryFingerprint:    validWorkDescriptor().EntryFingerprint,
+		FingerprintStrength: "strong", Size: 1024, MediaType: "application/zip",
+	}
+	service := newCapabilityServiceForTest(t, harness, asset)
+	if _, err := service.ArchiveExtractCapability(context.Background()); !errors.Is(err, ErrNotDeployed) {
+		t.Fatalf("missing capability error=%v", err)
+	}
+	want := productionCapabilityForTest(
+		t, capabilityspec.CapabilityArchiveExtractEntry, capabilityspec.ProfileArchiveMemberV1,
+	)
+	registerCapabilityForTest(t, harness, want)
+	got, err := service.ArchiveExtractCapability(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SchemaVersion != 1 || got.Capability != want.Capability ||
+		got.CapabilitySchema != want.CapabilitySchema || got.PipelineFingerprint != want.PipelineFingerprint ||
+		got.OutputProfile != want.OutputProfile {
+		t.Fatalf("capability=%+v want=%+v", got, want)
+	}
+}
+
 func newCapabilityServiceForTest(t *testing.T, harness *coordinatorHarness, asset content.AuthorizedAsset) *CapabilityService {
 	t.Helper()
 	if err := harness.db.AutoMigrate(&model.BackupAssetDerivedArtifactSet{}); err != nil {

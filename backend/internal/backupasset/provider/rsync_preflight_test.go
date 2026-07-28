@@ -20,7 +20,7 @@ import (
 )
 
 func TestRsyncTreePreflightBuildsBoundEvidenceFromTrustedRoot(t *testing.T) {
-	now := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	tree := newRsyncManagedTreeForTest(t, t.TempDir())
 	request, markerDigest := rsyncTreePreflightRequestForTest(t, tree, backupasset.PublicationVersionedFullCopy)
 	request.LocalSourceRoot = t.TempDir()

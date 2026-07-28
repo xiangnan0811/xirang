@@ -826,6 +826,17 @@ cat
 		t.Fatalf("stream result=%+v consumed=%q err=%v", result, consumed, err)
 	}
 
+	consumed = nil
+	result, err = streamer.RunInputStream(context.Background(), invocation, strings.NewReader("delayed"), func(source io.Reader) error {
+		time.Sleep(250 * time.Millisecond)
+		var readErr error
+		consumed, readErr = io.ReadAll(source)
+		return readErr
+	})
+	if err != nil || string(consumed) != "delayed" || result.Stdout != "" || result.StdoutTruncated {
+		t.Fatalf("delayed stream result=%+v consumed=%q err=%v", result, consumed, err)
+	}
+
 	blocking := writeFakeTool(t, root, `
 (sleep 30) &
 wait

@@ -137,6 +137,25 @@ describe("BackupAssetProcessingPanel", () => {
     expect(onOpenPreview).toHaveBeenCalledWith("native");
   });
 
+  it("opens the archive member browser only for a ready archive index", async () => {
+    const user = userEvent.setup();
+    setHookState(product({
+      state: "derived",
+      representation: "archive_index",
+      capability: "archive.inspect",
+      profile: "archive_index_v1",
+      reason: null,
+    }));
+    const onBrowseArchive = vi.fn();
+    renderPanel({
+      asset: asset({ mimeType: "application/zip" }),
+      onBrowseArchive,
+    });
+
+    await user.click(screen.getByRole("button", { name: /Browse archive contents|浏览归档内容/ }));
+    expect(onBrowseArchive).toHaveBeenCalledTimes(1);
+  });
+
   it("renders a safe generic error without exposing raw request detail", () => {
     setHookState(product(), "error");
     renderPanel();

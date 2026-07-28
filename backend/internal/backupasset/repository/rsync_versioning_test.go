@@ -317,7 +317,7 @@ func TestActivateRsyncVersioningHardlinkFirstNewPointRequiresFullCopySeed(t *tes
 
 func TestActivateRsyncVersioningImportedBaselinePublishesFullCopyAndCommitsMigrationRun(t *testing.T) {
 	db := newRepositoryTestDB(t)
-	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	root := t.TempDir()
 	legacyTarget := filepath.Join(root, "legacy")
 	source := filepath.Join(root, "source")

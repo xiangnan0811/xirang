@@ -1739,6 +1739,146 @@ export interface BackupContentTicket {
   fallbackActions: BackupContentAction[];
 }
 
+export type BackupExportArchiveFormat = "zip" | "tar";
+export type BackupExportArchiveProfile = "zip_deflate_v1" | "tar_none_v1" | "tar_gzip_v1";
+export type BackupExportExecutionState =
+  | "queued"
+  | "running"
+  | "retry_wait"
+  | "sealing"
+  | "ready"
+  | "cancel_requested"
+  | "failed"
+  | "source_expired"
+  | "canceled"
+  | "expiring"
+  | "expired";
+export type BackupExportCleanupState = "none" | "revoking" | "purging" | "purged" | "purge_failed";
+export type BackupExportItemState = "pending" | "read" | "packed" | "skipped" | "failed";
+export type BackupExportResultKind = "complete" | "partial";
+export type BackupExportAttemptState = "active" | "sealing" | "sealed" | "failed" | "canceled" | "superseded";
+export type BackupExportErrorCategory =
+  | "source_changed"
+  | "source_expired"
+  | "link_metadata_unavailable"
+  | "special_file_skipped"
+  | "artifact_missing"
+  | "artifact_tampered"
+  | "key_unavailable"
+  | "quota_exceeded"
+  | "deadline"
+  | "canceled"
+  | "internal_failure"
+  | "worker_unavailable"
+  | "provider_unavailable";
+
+export interface BackupExportItemStatus {
+  id: string;
+  ordinal: number;
+  state: BackupExportItemState;
+  logicalBytes: number;
+  providerBytes: number;
+  errorCategory: BackupExportErrorCategory | null;
+}
+
+export interface BackupExportAttemptProgress {
+  attemptNumber: number;
+  state: BackupExportAttemptState;
+  itemCount: number;
+  logicalBytes: number;
+  providerBytes: number;
+  leaseExpiresAt: string;
+}
+
+export interface BackupExportJob {
+  schemaVersion: 1;
+  id: string;
+  selectionDigest: string;
+  archiveFormat: BackupExportArchiveFormat;
+  archiveProfile: BackupExportArchiveProfile;
+  executionState: BackupExportExecutionState;
+  resultKind: BackupExportResultKind | null;
+  cleanupState: BackupExportCleanupState;
+  itemCount: number;
+  packedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  logicalBytes: number;
+  providerBytes: number;
+  artifactBytes: number;
+  errorCategory: BackupExportErrorCategory | null;
+  createdAt: string;
+  absoluteDeadline: string;
+  readyAt: string | null;
+  expiresAt: string | null;
+  attempt: BackupExportAttemptProgress | null;
+  items: BackupExportItemStatus[];
+  nextCursor: string | null;
+  pollAfterSeconds: number;
+  canCancel: boolean;
+  canDownload: boolean;
+}
+
+export interface BackupExportCreateResult {
+  job: BackupExportJob;
+  replay: boolean;
+}
+
+export interface BackupExportDownloadTicket {
+  schemaVersion: 1;
+  contentUrl: string;
+  contentType: string;
+  contentLength: number;
+  etag: string;
+  range: BackupContentRangePolicy;
+  expiresAt: string;
+  idleExpiresAt: string;
+}
+
+export type BackupArchiveMemberState = "queued" | "running" | "ready" | "failed" | "canceled" | "expired";
+export type BackupArchiveFailureProduct = "encrypted" | "unsupported" | "limit" | "unsafe" | "unavailable";
+export type BackupArchiveFallbackAction = "download_original";
+export type BackupArchiveFallbackReason = "original_download_unavailable";
+export type BackupArchiveEntryWarning = "none";
+
+export interface BackupArchiveIndexEntry {
+  id: string;
+  parentId: string | null;
+  displayName: string;
+  type: "file";
+  size: number;
+  mediaType: string;
+  warning: BackupArchiveEntryWarning;
+}
+
+export interface BackupArchiveIndex {
+  schemaVersion: 1;
+  indexRevision: string;
+  expiresAt: string;
+  entries: BackupArchiveIndexEntry[];
+}
+
+export interface BackupArchiveMemberCreateResult {
+  schemaVersion: 1;
+  requestId: string;
+  state: "queued";
+}
+
+export interface BackupArchiveFallback {
+  action: BackupArchiveFallbackAction | null;
+  reason: BackupArchiveFallbackReason | null;
+}
+
+export interface BackupArchiveMemberStatus {
+  schemaVersion: 1;
+  requestId: string;
+  state: BackupArchiveMemberState;
+  failureProduct: BackupArchiveFailureProduct | null;
+  fallback: BackupArchiveFallback;
+  retryable: boolean;
+  terminal: boolean;
+}
+
 export type BackupProcessingRepresentation =
   | "thumbnail"
   | "text"

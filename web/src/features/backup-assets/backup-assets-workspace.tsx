@@ -16,7 +16,7 @@ import {
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { LoadingState } from "@/components/ui/loading-state";
 import type { AuthContextValue } from "@/context/auth-context.shared";
-import type { BackupRepository, CatalogProjection } from "@/types/domain";
+import type { AssetRef, BackupRepository, CatalogProjection } from "@/types/domain";
 
 import { AssetContextPanel } from "./asset-context-panel";
 import {
@@ -51,6 +51,11 @@ const LazyProcessingCoveragePanel = lazy(() =>
     default: module.ProcessingCoveragePanel,
   }))
 );
+const LazyExportJobPanel = lazy(() =>
+  import("./export-job-panel").then((module) => ({
+    default: module.ExportJobPanel,
+  }))
+);
 
 type BackupAssetsProcessingRuntime = Pick<
   AuthContextValue,
@@ -61,11 +66,15 @@ export interface BackupAssetsWorkspaceProps {
   controller: BackupAssetsController;
   preferences?: BackupAssetsPreferencesV1;
   processingRuntime?: BackupAssetsProcessingRuntime;
-  onRoutePatch: (patch: Partial<BackupAssetsRouteState>) => void;
+  onRoutePatch: (patch: Partial<BackupAssetsRouteState>, options?: { replace?: boolean }) => void;
   onReturnOverview: () => void;
 }
 
 type BackupAssetsViewport = "desktop" | "intermediate" | "mobile";
+
+type ExportReviewSnapshot = {
+  selection: Array<{ ref: AssetRef; logicalBytes: number }>;
+};
 
 export function BackupAssetsWorkspace({
   controller,
@@ -76,8 +85,12 @@ export function BackupAssetsWorkspace({
 }: BackupAssetsWorkspaceProps) {
   const { t } = useTranslation();
   const viewport = useBackupAssetsViewport();
+  const online = useBackupAssetsOnline();
   const [overlaySection, setOverlaySection] = useState<BackupAssetsOverlaySection | null>(null);
+  const [exportReviewSnapshot, setExportReviewSnapshot] = useState<ExportReviewSnapshot | null>(null);
   const overlayTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const exportTriggerRef = useRef<HTMLElement | null>(null);
+  const resultsRegionRef = useRef<HTMLElement | null>(null);
   const restorationRegistryRef = useRef<BackupAssetsRestorationRegistry | null>(null);
   const lastRestorationContextRef = useRef<string | null>(null);
   const [restorationAnchor, setRestorationAnchor] = useState<BackupAssetsRestorationAnchor | null>(null);
@@ -124,6 +137,19 @@ export function BackupAssetsWorkspace({
       controller.selectedRecoveryPoint?.capabilities.download
   );
   const canManageFavorite = Boolean(selectedCatalog?.permissions.list);
+  const exportSelection = useMemo(() => {
+    const rowsByRef = new Map(controller.state.result.rows.map((row) => [assetRefKey(row.ref), row]));
+    return [...controller.state.selection.values()].flatMap((ref) => {
+      const row = rowsByRef.get(assetRefKey(ref));
+      return row ? [{ ref: { ...row.ref }, logicalBytes: row.asset.size }] : [];
+    });
+  }, [controller.state.result.rows, controller.state.selection]);
+  const canExport = Boolean(
+    processingRuntime?.role === "admin" &&
+      exportSelection.length > 0 &&
+      exportSelection.length === controller.state.selection.size
+  );
+  const exportDialogOpen = exportReviewSnapshot !== null || Boolean(controller.state.route.exportJobId);
   const favoriteMembershipComplete =
     controller.overlays.favorites.status === "ready" &&
     controller.overlays.favorites.nextCursor === null;
@@ -149,6 +175,12 @@ export function BackupAssetsWorkspace({
     controller.overlays.favorites.status,
     selectedAsset,
   ]);
+
+  useEffect(() => {
+    if (controller.state.route.exportJobId && processingRuntime?.role !== "admin") {
+      onRoutePatch({ exportJobId: undefined }, { replace: true });
+    }
+  }, [controller.state.route.exportJobId, onRoutePatch, processingRuntime?.role]);
 
   const recordResultAnchor = (
     row: BackupAssetResultRow,
@@ -265,7 +297,13 @@ export function BackupAssetsWorkspace({
             resource={controller.content}
             canPreview={canPreview}
             canDownload={canDownload}
-            processingToken={processingRuntime?.token}
+            processingRuntime={processingRuntime}
+            archiveContentAvailable={Boolean(
+              selectedCatalog?.contentAvailability.available &&
+                controller.selectedRecoveryPoint.capabilities.download
+            )}
+            archiveDownloadAllowed={Boolean(selectedCatalog?.permissions.download)}
+            online={online}
             onLoadPreview={controller.actions.loadPreview}
             onRenew={controller.actions.renewPreview}
             onPrepareDownload={controller.actions.prepareDownload}
@@ -358,6 +396,8 @@ export function BackupAssetsWorkspace({
       )}
 
       <section
+        ref={resultsRegionRef}
+        tabIndex={-1}
         aria-label={t("backupAssets.regions.results")}
         className="flex min-w-0 flex-1 flex-col overflow-hidden"
       >
@@ -393,6 +433,22 @@ export function BackupAssetsWorkspace({
             onSearchDraftChange={controller.actions.setSearchDraft}
             onToggleSelection={controller.actions.toggleSelection}
             onClearSelection={controller.actions.clearSelection}
+            canExport={canExport}
+            onExport={() => {
+              const selection = exportSelection.map((item) => ({
+                ref: {
+                  recoveryPointId: item.ref.recoveryPointId,
+                  entryId: item.ref.entryId,
+                },
+                logicalBytes: Number.isSafeInteger(item.logicalBytes) && item.logicalBytes >= 0
+                  ? item.logicalBytes
+                  : 0,
+              }));
+              exportTriggerRef.current = document.activeElement instanceof HTMLElement
+                ? document.activeElement
+                : null;
+              setExportReviewSnapshot({ selection });
+            }}
             onOpen={(row, position) => {
               if (row.asset.entryType === "directory") {
                 onRoutePatch({ parentEntryId: row.ref.entryId, entryId: undefined });
@@ -461,6 +517,45 @@ export function BackupAssetsWorkspace({
           });
         }}
       />
+      {processingRuntime?.role === "admin" ? (
+        <Dialog open={exportDialogOpen} onOpenChange={(nextOpen) => {
+          if (!nextOpen) {
+            setExportReviewSnapshot(null);
+            if (controller.state.route.exportJobId) {
+              onRoutePatch({ exportJobId: undefined }, { replace: true });
+            }
+          }
+        }}>
+          <DialogContent
+            size="lg"
+            aria-label={t("backupAssets.export.title")}
+            aria-describedby={undefined}
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              const trigger = exportTriggerRef.current;
+              if (trigger?.isConnected) trigger.focus();
+              else resultsRegionRef.current?.focus();
+            }}
+          >
+            <DialogHeader className="sr-only">
+              <DialogTitle>{t("backupAssets.export.title")}</DialogTitle>
+            </DialogHeader>
+            <Suspense fallback={<LoadingState title={t("backupAssets.export.title")} rows={5} />}>
+              <LazyExportJobPanel
+                open={exportDialogOpen}
+                selection={exportReviewSnapshot?.selection ?? []}
+                exportJobId={controller.state.route.exportJobId}
+                runtime={processingRuntime}
+                onRouteChange={(exportJobId, options) => {
+                  setExportReviewSnapshot(null);
+                  onRoutePatch({ exportJobId: exportJobId ?? undefined }, options);
+                }}
+                onDismiss={() => setExportReviewSnapshot(null)}
+              />
+            </Suspense>
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </>
   );
 }
@@ -821,6 +916,23 @@ function useBackupAssetsViewport(): BackupAssetsViewport {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
   return viewport;
+}
+
+function useBackupAssetsOnline(): boolean {
+  const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine !== false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const update = () => setOnline(typeof navigator === "undefined" || navigator.onLine !== false);
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
+
+  return online;
 }
 
 function viewportFromWidth(width: number): BackupAssetsViewport {
