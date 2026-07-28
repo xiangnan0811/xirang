@@ -9,6 +9,6 @@
 {"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Required reuse of Content, lease, keyring, Processing, Derived, audit, and UI primitives without duplicate stacks."}
 {"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"End-to-end data flow, authorization, lifecycle, rollback, and cross-engine/frontend contract review."}
 {"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Exact manifest, migration head, scope, release/deployment truth, and evidence status accuracy."}
-{"file":".trellis/tasks/07-22-backup-assets-export-archive/research/current-main-evidence.md","reason":"Planning-only baseline and scope evidence against which final implementation and delivery claims must be checked."}
-{"file":".trellis/tasks/07-22-backup-assets-export-archive/research/implementation-evidence.md","reason":"Observed Phase 2 commands, current Step 10 closure boundaries, historical checkpoints, and delivery-status truth."}
+{"file":".trellis/tasks/archive/2026-07/07-22-backup-assets-export-archive/research/current-main-evidence.md","reason":"Planning-only baseline and scope evidence against which final implementation and delivery claims must be checked."}
+{"file":".trellis/tasks/archive/2026-07/07-22-backup-assets-export-archive/research/implementation-evidence.md","reason":"Observed Phase 2 commands, current Step 10 closure boundaries, historical checkpoints, and delivery-status truth."}
 {"file":".trellis/spec/backend/deployment-runtime.md","reason":"Private runtime roots, graceful lifecycle, default-disabled publication, scheduler ownership, and deployment boundary checks."}

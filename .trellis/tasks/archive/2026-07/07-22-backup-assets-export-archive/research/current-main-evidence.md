@@ -605,11 +605,11 @@ M  .trellis/tasks/07-12-backup-data-explorer-design/task.json
 | SQLite/PostgreSQL/restart/frontend/backend rows recorded before the final rerun | `historical_checkpoint` only; never current completion evidence |
 | current Step 10 runnable gates | `passed_current_follow_up_amended`; approved exact manifest `131`; Config rollback and Processing dual-boundary retry RED/GREEN plus fresh full/race/PostgreSQL reruns passed |
 | current Step 10 dependency audit | `risk_accepted_for_child_delivery`; unchanged package files still report `1 moderate + 3 high`; vulnerabilities are not fixed and audit did not pass |
-| Step 11 workflow permission | `active_incremental_follow_up_pending`; initial commit/push/draft PR executed; five product/spec plus six ledger paths await review/commit/push/CI |
-| exact staging/work commit | `initial_executed_follow_up_pending`; `94a15dc` pushed; current five product/spec plus six ledger paths uncommitted and `staged=0` |
+| Step 11 workflow permission | `merged_post_merge_verified_archive_pending`; feature head `2e9e119` passed required checks and PR #399 squash-merged as `bd9572f` |
+| exact staging/work commit | `executed`; initial `94a15dc`, follow-up `2e9e119`, squash merge `bd9572f` |
 | trellis finish/Child archive/journal/archive commit | `not_executed` |
-| push/PR/required CI/squash merge/post-merge | initial push and draft PR #399 executed; follow-up push/CI, ready/merge/post-merge `not_executed` |
-| local main sync/branch-worktree cleanup | `not_executed` |
+| push/PR/required CI/squash merge/post-merge | `executed`; PR required checks, main CI `30344924877`, and Release Please `30344927402` succeeded |
+| local main sync/branch-worktree cleanup | `executed`; local main equals origin/main at `bd9572f` |
 | Release Please PR #386/release/deploy | `not_applicable`; forbidden/out of scope |
 
 ### 10.1 Historical Accessibility Focused Checkpoint
@@ -948,25 +948,26 @@ No stage, commit, push, PR, CI, merge, archive or journal action had executed at
 that checkpoint; `staged=0`, and the parent remained `planning`. Section 16 is
 the authoritative current delivery and verification ledger.
 
-## 16. 2026-07-28 Current Commit, CI Follow-Up And Risk Disposition
+## 16. 2026-07-28 Merged Delivery, Post-Merge Verification And Risk Disposition
 
 The approved scope remains exactly `8 Phase-1 + 56 create + 67 modify = 131`.
-Commit `94a15dc41634b096839ef6e661714a88db1f4c09` (`feat: add backup asset
-export and archive`) is the current `HEAD`, is pushed on
-`codex/backup-assets-export-archive`, and backs draft PR #399:
-<https://github.com/xiangnan0811/xirang/pull/399>. The child remains
-`in_progress`; parent `07-12-backup-data-explorer-design` remains `planning`.
-Child 12 completion must not be read as completion of the parent, 07-11, or P3
-work.
+The implementation reached feature head
+`2e9e119ec3267748a9562f29450be0a18d9725f3` on
+`codex/backup-assets-export-archive`. PR #399
+<https://github.com/xiangnan0811/xirang/pull/399> passed required checks and
+squash-merged at 2026-07-28T09:03:00Z as
+`bd9572f9f69dde721db9976c25816ea72b4ae664`. The child remains `in_progress`
+only until archive bookkeeping; parent `07-12-backup-data-explorer-design`
+remains `planning`. Child 12 completion must not be read as completion of the
+parent, 07-11, or P3 work.
 
-At the start of this final ledger synchronization, the product/spec dirty
-increment was exactly five already-approved manifest paths:
+At the historical pre-merge ledger boundary, the product/spec dirty increment
+was exactly five already-approved manifest paths:
 `config_handler.go`, `config_handler_test.go`, `derived_manifest.go`,
 `derived_manifest_test.go`, and `.trellis/spec/backend/database-guidelines.md`.
-They remain uncommitted and unstaged at this evidence boundary. The ledger sync
-itself modifies the six assigned task artifacts, so the resulting unstaged
-worktree contains eleven paths total; every path is already in the approved 131
-manifest.
+Those five paths and the prior six ledger updates were subsequently committed in
+feature head `2e9e119`, pushed, reviewed by required CI, and merged. They are no
+longer a current dirty-worktree claim.
 
 CI RED/GREEN 1 proved that Config import swallowed Task Create failures, could
 return 200, and could partially commit nodes. Production now returns the
@@ -1000,7 +1001,10 @@ migration is authorized. Track a compatible upstream fix or a Node/React/Router
 migration in a separate Trellis task and branch after Child 12 merge.
 
 Step 10 is therefore `passed_with_explicit_dependency_risk_acceptance`. Step 11
-is `active_incremental_follow_up_pending`: initial commit, push, and draft PR
-creation are executed; incremental review/commit/push/CI for the five product/
-spec plus six ledger paths remain. Ready, merge, post-merge monitoring, Child
-archive, and journal are not executed. The Git index remains empty.
+product delivery is complete: required PR checks passed, post-merge main CI run
+`30344924877` succeeded, and Release Please run `30344927402` succeeded while
+only updating PR #386. No tag or GitHub Release was created, so no Docker image
+publish or Docker Hub description sync was triggered or expected. Local `main`
+was synchronized to `bd9572f`. Current status is
+`merged_post_merge_verified_archive_pending`; only Child archive and journal
+bookkeeping remain, and the parent stays `planning`.

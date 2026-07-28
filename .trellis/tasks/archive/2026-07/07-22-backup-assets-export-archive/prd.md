@@ -6,9 +6,9 @@
   已在 2026-07-22 执行一次，Child status 为 `in_progress`；parent 是
   `07-12-backup-data-explorer-design`，且继续保持 `planning`。
 - 专用分支：`codex/backup-assets-export-archive`；规划基线是 Child 11 / PR #398 的 squash
-  merge `9ad2893c714c82781461f452030c25e0766eedd4`。当前 `HEAD` 与已 push commit 是
-  `94a15dc41634b096839ef6e661714a88db1f4c09`（`feat: add backup asset export and archive`）；
-  draft PR #399 是 <https://github.com/xiangnan0811/xirang/pull/399>。
+  merge `9ad2893c714c82781461f452030c25e0766eedd4`。最终 feature head 是
+  `2e9e119ec3267748a9562f29450be0a18d9725f3`；PR #399 已通过 required checks，并于
+  2026-07-28T09:03:00Z squash merge 为 `bd9572f9f69dde721db9976c25816ea72b4ae664`。
 - 真实 program 交付进度是 11/15；12 个已实例化 child 不表示父任务完成，父任务不得由
   Child 12 归档。
 - 2026-07-22 总控会话中用户回复“批准”，
@@ -51,10 +51,9 @@
   或 approved manifest 之外的 deviation。
 - 当前 `task.py start`、workflow status transition、产品代码、测试与 paired 000068
   migration 实施已在 exact manifest 内 `executed`。approved exact manifest 仍是
-  `8 Phase-1 + 56 create + 67 modify = 131`；commit
-  `94a15dc41634b096839ef6e661714a88db1f4c09` 已创建并 push，draft PR #399 已打开。
-  本次 ledger sync 开始时，五个 already-in-manifest product/spec follow-up 路径仍未 commit 且
-  staged=0：Config import 不再吞掉
+  `8 Phase-1 + 56 create + 67 modify = 131`。最终 feature head `2e9e119ec3267748a9562f29450be0a18d9725f3`
+  已 push；其 Config/Processing follow-up 已随 PR #399 required CI 通过并 squash merge 到 main。
+  Config import 不再吞掉
   Task Create error，而是返回 generic 500 并整体回滚 node/task，同时 fixture 隔离 secure global
   cache；Processing `CommitManifest` 在 projection evidence read 与 atomic publish transaction 两个
   SQLite lock boundary 都复用既有 bounded/context-aware retry，保留一个 durable winner。
@@ -64,13 +63,12 @@
   lint 0，frontend `168 files / 1388 tests`，lint 0 errors 加一个已批准的 a11y debt warning，bundle
   JS `498.48/500 KiB`、CSS `104.94/105 KiB`。真实 PostgreSQL 18 required selectors 无 skip 通过：
   migrations/UTC/dirty-search-path `49.561s`、Export `13.353s`、Processing/archive-member
-  `4.679s`，使用 loopback `127.0.0.1:55470` 测试服务。本次 final ledger sync 另修改获分配的
-  六个 task artifact；因此交付时 unstaged worktree 是五个 follow-up + 六个 ledger 路径共 11 个，
-  且全部已经在 approved 131 manifest 内。
-- Step 10 现为 `passed_with_explicit_dependency_risk_acceptance`。Step 11 已执行 initial exact
-  commit/push/draft-PR，当前为 `active_incremental_follow_up_pending`，等待五个 product/spec +
-  六个 ledger 路径的增量 review、commit、push 与 CI。PR 仍是 draft；ready、merge、post-merge、
-  Child archive/journal 均未执行。
+  `4.679s`，使用 loopback `127.0.0.1:55470` 测试服务。
+- Step 10 现为 `passed_with_explicit_dependency_risk_acceptance`。Step 11 产品交付已经完成：
+  PR #399 required checks 与 post-merge main CI `30344924877` 全绿，Release Please
+  `30344927402` 成功且只更新 PR #386。没有创建 tag/GitHub Release，因此没有触发或期望
+  Docker image publish / Docker Hub description sync。local `main` 已同步到 merge commit。
+  当前仅剩六份 Child ledger 的归档与 journal bookkeeping；parent 继续 `planning`。
 - 2026-07-28 fresh CI-equivalent dependency audit 曾新增一个外部 Step 10 blocker。当前 HEAD
   `web/package.json`/`web/package-lock.json` 未修改；Node 20/npm 10 与本机 npm 11 均复现
   `1 moderate + 3 high` audit failure。兼容 lockfile probe 能升级到 `react-router(-dom) 7.18.1`、
@@ -625,11 +623,11 @@ create/product API、Provider public contract 或十三项 product corrections�
 | Step 10 dependency audit | `risk_accepted_for_child_delivery`；unchanged package files 仍为 `1 moderate + 3 high`；controller 明确临时接受既有风险，但 vulnerabilities 未修复、audit 未通过，且未使用 `--force`/unsafe override |
 | runner/package/race/full/PostgreSQL gates | `passed_current_runner_amended`；capabilities normal/race/20x、vet、full `make check`、bundle budget 与 real PostgreSQL required selectors fresh pass |
 | backend/full `env -u NODE_ENV make check` gates | `passed_current_runner_amended`；corrected `/tmp/xc12` exit 0；generated binary removed/absent |
-| Step 11 / delivery | `active_incremental_follow_up_pending`；initial commit/push/draft PR 已执行；五个 product/spec + 六个 ledger 路径的增量 review/commit/push/CI 待执行 |
-| exact staging / work commit | `initial_executed_follow_up_pending`；`94a15dc41634b096839ef6e661714a88db1f4c09` 已 push；当前 11-path increment 未 commit 且 `staged=0` |
+| Step 11 / delivery | `merged_post_merge_verified_archive_pending`；feature head `2e9e119` 经 PR #399 required CI 后 squash merge 为 `bd9572f` |
+| exact staging / work commit | `executed`；initial `94a15dc` 与 follow-up `2e9e119` 已交付，squash merge commit 为 `bd9572f9f69dde721db9976c25816ea72b4ae664` |
 | `trellis-finish-work` / Child archive / journal | `not_executed`；只可在 ready/merge/post-merge monitoring 之后执行；parent 保持 `planning` |
 | archive/journal commit | `not_executed` |
-| push / PR / required CI | `initial_push_and_draft_pr_executed_follow_up_pending`；commit `94a15dc` 已 push，draft PR #399 已打开；等待增量 push 与 required CI |
-| squash merge / post-merge automation | `not_executed`；等待 incremental CI 与 ready review，并保留 dependency-risk disclosure |
-| local main sync / branch-worktree cleanup | `not_executed` |
+| push / PR / required CI | `executed`；PR #399 required checks 全绿并已合并 |
+| squash merge / post-merge automation | `executed`；main CI `30344924877` 与 Release Please `30344927402` 成功；没有正式 release/image/description publish，且本次不期望 |
+| local main sync / branch-worktree cleanup | `executed`；local main/origin main 同步到 `bd9572f`，bookkeeping 在独立分支继续 |
 | Release Please PR #386 / release / deploy | `not_applicable`；out of scope |

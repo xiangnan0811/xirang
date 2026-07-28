@@ -43,14 +43,14 @@ added only for the documented `StdoutPipe`/`Wait` ownership race.
   below is explicitly historical and is never current aggregate completion
   evidence. The P3 instrumentation coverage note remains a coverage limitation,
   not a product failure. The product scope and thirteen corrections are unchanged.
-- Step 11 is `active_incremental_follow_up_pending`. Commit
-  `94a15dc41634b096839ef6e661714a88db1f4c09` is pushed and draft PR #399 is
-  open. The five product/spec in-manifest paths present at ledger-sync start plus
-  the six assigned ledger paths are uncommitted and `staged=0`, with incremental
-  review/commit/push/CI pending.
-- Ready/merge/post-merge monitoring and Child archive/journal remain
-  `not_executed`. The child remains `in_progress`, and the parent remains
-  `planning` outside Child 12 archival scope.
+- Step 11 is `merged_post_merge_verified_archive_pending`. Feature head
+  `2e9e119ec3267748a9562f29450be0a18d9725f3` passed required checks, and PR
+  #399 squash-merged at 2026-07-28T09:03:00Z as
+  `bd9572f9f69dde721db9976c25816ea72b4ae664`.
+- Post-merge main CI `30344924877` and Release Please `30344927402` succeeded.
+  Release Please only updated PR #386; no formal release, Docker image publish,
+  or Docker Hub description sync occurred or was expected. Local `main` is
+  synchronized. Only Child archive/journal remain; the parent stays `planning`.
 
 ## First Genuine TDD RED
 
@@ -4702,9 +4702,10 @@ cannot close dependency risk, and the PR must not become ready, merge or support
 a completion claim before compatible remediation or an explicit later
 risk-policy disposition. No stage, commit, push, PR, CI, merge, archive or
 journal action had run; `staged=0`, and the parent remained `planning`. The
-following section is the authoritative current ledger.
+following section is a historical pre-merge ledger and is superseded by the
+final current workflow boundary at the end of this file.
 
-## 2026-07-28 Current Commit, CI RED/GREEN And Delivery Ledger
+## 2026-07-28 Historical Commit, CI RED/GREEN And Delivery Ledger
 
 ### Delivered checkpoint and exact scope
 
@@ -4798,11 +4799,11 @@ Trellis task and branch after Child 12 merge.
 
 ### Current workflow boundary
 
-Step 10 is `passed_with_explicit_dependency_risk_acceptance`. Step 11 is
-`active_incremental_follow_up_pending`: the initial coherent commit, push, and
-draft PR are executed; the five product/spec plus six ledger paths still require
-incremental review, commit, push, and required CI monitoring. The PR remains
-draft. Ready, merge, post-merge automation monitoring, Child archive, and journal work are
-not executed. Child 12 remains `in_progress`; the parent remains `planning`.
-Nothing in this ledger completes the parent, 07-11, or P3 work. The Git index
-remains empty.
+Step 10 is `passed_with_explicit_dependency_risk_acceptance`. Step 11 product
+delivery is complete: feature head `2e9e119` passed required checks and PR #399
+squash-merged as `bd9572f`. Post-merge main CI `30344924877` and Release Please
+`30344927402` succeeded. No tag/release or image/description publication was
+created or expected. Local `main` is synchronized. Current status is
+`merged_post_merge_verified_archive_pending`: Child 12 remains `in_progress`
+only until archive/journal bookkeeping; the parent remains `planning`. Nothing
+in this ledger completes the parent, 07-11, or P3 work.
