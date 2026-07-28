@@ -15,8 +15,8 @@
   "branch": "codex/snapshot-indexer-test-isolation",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
-  "pr_url": null,
+  "commit": "f82f9208aac91cfe09190a4f8daa55663e9dcfa0",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/403",
   "subtasks": [],
   "children": [],
   "parent": "07-11-07-11-p3-quality-debt",
@@ -32,6 +32,7 @@
       "attempt": 1,
       "test": "TestEnsureIndexedRepresentsEmptySnapshotWithCompletionMarker"
     },
-    "local_verification": "passed_pending_delivery"
+    "local_verification": "passed_pending_delivery",
+    "delivery": "pr_open_ci_pending"
   }
 }
