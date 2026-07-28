@@ -332,3 +332,45 @@ pending. The delivery checkpoint below supersedes that historical state.
 - Dependabot #383: still open; close only after PR #401 merges
 - Dependabot #379: unchanged and excluded
 - Merge, post-merge CI, Release Please, archive and journal: not executed
+
+## 2026-07-28 — Merge and post-merge closure
+
+The historical delivery checkpoint above is superseded by this final product
+delivery evidence:
+
+```text
+PR:                  https://github.com/xiangnan0811/xirang/pull/401
+PR state:            MERGED
+merged at:           2026-07-28T11:10:52Z
+feature commit:      e63a28a8d9878577cc4b93bac2ac08dcb7217893
+feature head:        a49a88245b6eb128360ab0f9b70657a1c995a629
+squash commit:       d1f19fde97ab83936d4bc471d6447b911012f665
+required PR CI:      30352885841 success
+post-merge main CI:  30353748734 success
+Release Please:      30353748767 success
+release PR #386:     updated to 19074ab9203d8385476c3a3c01e1900040cc481f
+Dependabot PR #383:  closed after merge; remote branch deleted
+Dependabot PR #379:  open and unchanged
+local main:          d1f19fde97ab83936d4bc471d6447b911012f665
+```
+
+Every job in post-merge main CI run `30353748734` reached a successful terminal
+state except the push-inapplicable PR-title job, which was skipped. This
+includes backend, frontend, PostgreSQL migration parity, Docker build, native
+Worker runtime closure on amd64/arm64 and Worker image build/scan on both
+architectures. Existing continue-on-error audit and vulnerability annotations
+do not change those job conclusions and are not used as clean-audit evidence.
+
+Release Please ran only its `Prepare Release PR` job. The latest formal release
+remained `v0.45.0`; no tag or GitHub Release was created by this merge, so no
+Docker image publication or Docker Hub description synchronization was expected
+or triggered.
+
+The strict npm audit remains nonzero and not clean. Its only unique residual
+GHSAs remain `GHSA-mh99-v99m-4gvg` and `GHSA-qwww-vcr4-c8h2`, with the owners
+and objective revisit triggers recorded above. No suppression or CI-policy
+weakening was introduced.
+
+Product delivery and local-main synchronization are complete. The remaining
+work is limited to archiving this Trellis task and recording its journal entry
+on the dedicated bookkeeping branch.

@@ -1262,3 +1262,36 @@ PR #399 squash-merged; post-merge main CI and Release Please succeeded; no forma
 ### Next Steps
 
 - None - task complete
+
+
+## Session 31: Frontend dependency risk remediation delivery
+
+**Date**: 2026-07-28
+**Task**: Frontend dependency risk remediation delivery
+**Branch**: `codex/frontend-dependency-risk-remediation-closeout`
+
+### Summary
+
+PR #401 squash-merged after required CI; post-merge main CI and Release Please succeeded; #383 closed as superseded while #379 remained unchanged; the task archived with two explicit unsuppressed residual GHSAs and no clean-audit claim.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d1f19fde97ab83936d4bc471d6447b911012f665` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
