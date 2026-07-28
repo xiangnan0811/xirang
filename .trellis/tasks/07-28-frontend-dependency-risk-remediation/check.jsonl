@@ -1,0 +1,3 @@
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Review strict audit evidence, clean-install parity, frontend gate and prohibited force/major-upgrade shortcuts."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Review PR/CI/post-merge delivery order and clean main synchronization."}
+{"file":".trellis/tasks/07-28-frontend-dependency-risk-remediation/research/current-main-evidence.md","reason":"Compare final package graph and residual GHSA set against the frozen baseline."}

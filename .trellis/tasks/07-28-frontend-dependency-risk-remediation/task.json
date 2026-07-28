@@ -1,0 +1,41 @@
+{
+  "id": "frontend-dependency-risk-remediation",
+  "name": "frontend-dependency-risk-remediation",
+  "title": "Frontend dependency risk remediation",
+  "description": "Reduce the current frontend dependency advisory set through compatible lockfile updates while preserving Node 20 and React 18, and document unavoidable residual applicability without weakening CI policy.",
+  "status": "in_progress",
+  "dev_type": "fix",
+  "scope": "frontend",
+  "package": "web",
+  "priority": "P2",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-07-28",
+  "completedAt": null,
+  "branch": "codex/frontend-dependency-risk-remediation",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": "e63a28a8d9878577cc4b93bac2ac08dcb7217893",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/401",
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "web/package-lock.json",
+    "web/package.json",
+    ".trellis/spec/frontend/quality-guidelines.md",
+    ".github/workflows/ci.yml"
+  ],
+  "notes": "Planning scope is lockfile-first and must not claim a clean audit while the two documented upstream-constrained advisories remain. No force, peer bypass, override, major runtime/framework migration, audit omission, or CI weakening is authorized.",
+  "meta": {
+    "source": "Child 12 temporary dependency-risk acceptance follow-up",
+    "planning_status": "complete_approved",
+    "planning_review": "SPEC APPROVED by independent read-only review on 2026-07-28",
+    "implementation_authorization": "granted under the user's standing continue-and-decide authorization",
+    "implementation_status": "committed_pr_open_ci_pending",
+    "verification_status": "node20_frontend_full_project_and_host_network_docker_passed",
+    "audit_status": "nonzero_with_only_two_approved_residual_ghsas",
+    "delivery_status": "pr_401_open_required_checks_running",
+    "baseline_main": "ffa1ebf685af91ee7ebefb1a1535b65f8a870c6c"
+  }
+}
