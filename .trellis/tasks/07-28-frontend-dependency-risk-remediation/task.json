@@ -15,7 +15,7 @@
   "branch": "codex/frontend-dependency-risk-remediation",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": "e63a28a8d9878577cc4b93bac2ac08dcb7217893",
+  "commit": "d1f19fde97ab83936d4bc471d6447b911012f665",
   "pr_url": "https://github.com/xiangnan0811/xirang/pull/401",
   "subtasks": [],
   "children": [],
@@ -26,16 +26,34 @@
     ".trellis/spec/frontend/quality-guidelines.md",
     ".github/workflows/ci.yml"
   ],
-  "notes": "Planning scope is lockfile-first and must not claim a clean audit while the two documented upstream-constrained advisories remain. No force, peer bypass, override, major runtime/framework migration, audit omission, or CI weakening is authorized.",
+  "notes": "PR #401 squash-merged as d1f19fde97ab83936d4bc471d6447b911012f665 after required CI passed. Post-merge main CI 30353748734 and Release Please 30353748767 succeeded; Release Please only updated PR #386, so no tag, GitHub Release, Docker image publication, or Docker Hub description synchronization was expected or triggered. Dependabot PR #383 was then closed as superseded and its branch deleted; PR #379 remains open and unchanged. The audit remains nonzero with only the two documented upstream-constrained residual GHSAs and is not claimed clean. Product delivery and local main synchronization are complete; only this task's archive and journal bookkeeping remain.",
   "meta": {
     "source": "Child 12 temporary dependency-risk acceptance follow-up",
     "planning_status": "complete_approved",
     "planning_review": "SPEC APPROVED by independent read-only review on 2026-07-28",
     "implementation_authorization": "granted under the user's standing continue-and-decide authorization",
-    "implementation_status": "committed_pr_open_ci_pending",
-    "verification_status": "node20_frontend_full_project_and_host_network_docker_passed",
+    "implementation_status": "merged_post_merge_verified_archive_pending",
+    "verification_status": "node20_local_pr_ci_and_post_merge_main_ci_passed",
     "audit_status": "nonzero_with_only_two_approved_residual_ghsas",
-    "delivery_status": "pr_401_open_required_checks_running",
-    "baseline_main": "ffa1ebf685af91ee7ebefb1a1535b65f8a870c6c"
+    "delivery_status": "merged_post_merge_verified_archive_pending",
+    "baseline_main": "ffa1ebf685af91ee7ebefb1a1535b65f8a870c6c",
+    "delivery_checkpoint": {
+      "status": "merged_post_merge_verified_archive_pending",
+      "feature_commit": "e63a28a8d9878577cc4b93bac2ac08dcb7217893",
+      "feature_head": "a49a88245b6eb128360ab0f9b70657a1c995a629",
+      "squash_commit": "d1f19fde97ab83936d4bc471d6447b911012f665",
+      "pr_url": "https://github.com/xiangnan0811/xirang/pull/401",
+      "pr_state": "merged",
+      "merged_at": "2026-07-28T11:10:52Z",
+      "required_pr_ci": "30352885841:success",
+      "main_ci": "30353748734:success",
+      "release_please": "30353748767:success_prepare_release_pr_386_only",
+      "release_pr_head": "19074ab9203d8385476c3a3c01e1900040cc481f",
+      "formal_release": "not_created_not_expected",
+      "docker_publish": "not_triggered_not_expected",
+      "superseded_pr_383": "closed_after_merge_remote_branch_deleted",
+      "excluded_pr_379": "open_unchanged",
+      "remaining": "Task-only Trellis archive and journal on the bookkeeping branch."
+    }
   }
 }

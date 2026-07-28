@@ -65,9 +65,9 @@ audit.
       `web/package.json` change requires a documented planning amendment.
 - [x] Node 20 `npm ci`, `npm run check`, bundle-budget validation, the full
       project gate and Docker build pass on the final lockfile.
-- [ ] PR #383 is closed as superseded only after the replacement merges; PR
+- [x] PR #383 is closed as superseded only after the replacement merges; PR
       #379 remains excluded.
-- [ ] Required PR CI, post-merge main CI and Release Please complete before the
+- [x] Required PR CI, post-merge main CI and Release Please complete before the
       task is archived.
 
 ## Out Of Scope
@@ -84,8 +84,11 @@ audit.
 The user has granted the controller standing authority to make routine technical
 and workflow decisions. An independent read-only reviewer returned
 `SPEC APPROVED` on 2026-07-28. Planning and implementation within this exact
-scope are authorized; `task.py start` has run and the task remains
-`in_progress` pending review, delivery, CI, merge and post-merge closure.
+scope are authorized. PR #401 has squash-merged, required PR CI and post-merge
+main CI passed, Release Please only updated release PR #386, and #383 was closed
+as superseded while #379 remained unchanged. The audit is still nonzero with
+the two approved residuals. The task remains `in_progress` only until its
+Trellis archive and journal bookkeeping are delivered.
 
 ## Notes
 

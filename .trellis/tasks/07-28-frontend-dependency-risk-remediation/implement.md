@@ -6,7 +6,7 @@
 - Branch: `codex/frontend-dependency-risk-remediation`
 - Base: `main@ffa1ebf685af91ee7ebefb1a1535b65f8a870c6c`
 - Planning review: `SPEC APPROVED` (2026-07-28)
-- Implementation: `committed_pr_open_ci_pending`
+- Implementation: `merged_post_merge_verified_archive_pending`
 - Expected product manifest: `web/package-lock.json` only
 
 ## Step 1: Planning And Preflight
@@ -100,3 +100,21 @@ confirm the final product diff remains lockfile-only.
 - A newly published advisory expands the residual set without an applicability
   assessment.
 - Clean install, frontend/full-project, bundle or Docker gates regress.
+
+## Delivery Closure
+
+- PR #401 passed required CI and squash-merged at
+  `2026-07-28T11:10:52Z` as
+  `d1f19fde97ab83936d4bc471d6447b911012f665`.
+- Post-merge main CI run `30353748734` completed successfully, including both
+  Worker build/scan architectures and PostgreSQL migration parity.
+- Release Please run `30353748767` succeeded and only updated existing release
+  PR #386 to head `19074ab9203d8385476c3a3c01e1900040cc481f`.
+  No tag, GitHub Release, Docker image publication or Docker Hub description
+  synchronization was expected or triggered.
+- Dependabot PR #383 was closed as superseded after the merge and its remote
+  branch was deleted. PR #379 remains open and unchanged.
+- The audit is still nonzero with only the two approved residual GHSAs; this
+  closure does not claim `npm audit` passed or is clean.
+- Local `main` is synchronized to the squash commit. Only Trellis archive and
+  journal bookkeeping remain on the dedicated closeout branch.
