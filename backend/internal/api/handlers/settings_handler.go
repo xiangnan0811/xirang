@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/logger"
@@ -26,6 +27,20 @@ type SettingsHandler struct {
 	db           *gorm.DB
 	svc          *settings.Service
 	transitioner publication.FeatureTransitioner
+}
+
+// backupAssetRuntimeSettingsTransitioner is an optional extension of the
+// established admission transitioner. Keeping it separate preserves the
+// FeatureTransitioner contract used by legacy callers and fixtures.
+type backupAssetRuntimeSettingsTransitioner interface {
+	TransitionBackupAssetSettings(
+		context.Context,
+		map[string]string,
+		map[string]string,
+		map[string]string,
+		backupasset.ExportConfig,
+		func() error,
+	) error
 }
 
 type securityRiskSummaryResponse struct {
@@ -68,6 +83,68 @@ func (h *SettingsHandler) WithBackupAssetTransitioner(transitioner publication.F
 		h.transitioner = transitioner
 	}
 	return h
+}
+
+func transitionBackupAssetSettingsMutation(
+	ctx context.Context,
+	svc *settings.Service,
+	transitioner publication.FeatureTransitioner,
+	current map[string]string,
+	overlay map[string]string,
+	persist func() error,
+) error {
+	if err := svc.ValidateBackupAssetEffectiveUpdate(current, overlay); err != nil {
+		return err
+	}
+	effective := copyBackupAssetSettings(current)
+	for key, value := range overlay {
+		effective[key] = value
+	}
+	if runtimeTransitioner, ok := transitioner.(backupAssetRuntimeSettingsTransitioner); ok && hasLiveExportSettings(overlay) {
+		config, err := backupasset.ExportConfigFromValues(effective)
+		if err != nil {
+			return err
+		}
+		if _, changesRoot := overlay["backup_assets.export.root"]; changesRoot {
+			config.Root = strings.TrimSpace(current["backup_assets.export.root"])
+		}
+		return runtimeTransitioner.TransitionBackupAssetSettings(ctx, current, overlay, effective, config, persist)
+	}
+	if value, changesEnabled := overlay["backup_assets.enabled"]; changesEnabled {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		if transitioner == nil {
+			return fmt.Errorf("backup asset feature transitioner is unavailable")
+		}
+		return transitioner.TransitionFeature(ctx, enabled, persist)
+	}
+	return persist()
+}
+
+func hasLiveExportSettings(overlay map[string]string) bool {
+	for key := range overlay {
+		if key == "backup_assets.enabled" {
+			return true
+		}
+		if key == "backup_assets.export.root" {
+			continue
+		}
+		if strings.HasPrefix(key, "backup_assets.export.") || strings.HasPrefix(key, "backup_assets.archive.") ||
+			key == "backup_assets.idempotency_ttl" || key == "backup_assets.idempotency_key_max_bytes" {
+			return true
+		}
+	}
+	return false
+}
+
+func copyBackupAssetSettings(values map[string]string) map[string]string {
+	result := make(map[string]string, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
 }
 
 // GetAll godoc
@@ -231,20 +308,7 @@ func (h *SettingsHandler) persistSettingsMutation(ctx context.Context, values ma
 		return persist()
 	}
 	return h.svc.WithBackupAssetMutation(ctx, func(current map[string]string) error {
-		if err := h.svc.ValidateBackupAssetEffectiveUpdate(current, foundationOverlay); err != nil {
-			return err
-		}
-		if value, ok := foundationOverlay["backup_assets.enabled"]; ok {
-			parsed, err := strconv.ParseBool(value)
-			if err != nil {
-				return err
-			}
-			if h.transitioner == nil {
-				return fmt.Errorf("backup asset feature transitioner is unavailable")
-			}
-			return h.transitioner.TransitionFeature(ctx, parsed, persist)
-		}
-		return persist()
+		return transitionBackupAssetSettingsMutation(ctx, h.svc, h.transitioner, current, foundationOverlay, persist)
 	})
 }
 
@@ -261,25 +325,12 @@ func (h *SettingsHandler) deleteSettingOverride(ctx context.Context, key string)
 			return err
 		}
 		override := map[string]string{key: fallback}
-		if err := h.svc.ValidateBackupAssetEffectiveUpdate(current, override); err != nil {
-			return err
-		}
 		persist := func() error {
 			return h.db.Transaction(func(tx *gorm.DB) error {
 				return h.svc.DeleteWithTx(tx, key)
 			})
 		}
-		if key != "backup_assets.enabled" {
-			return persist()
-		}
-		targetEnabled, err := strconv.ParseBool(fallback)
-		if err != nil {
-			return err
-		}
-		if h.transitioner == nil {
-			return fmt.Errorf("backup asset feature transitioner is unavailable")
-		}
-		return h.transitioner.TransitionFeature(ctx, targetEnabled, persist)
+		return transitionBackupAssetSettingsMutation(ctx, h.svc, h.transitioner, current, override, persist)
 	})
 }
 

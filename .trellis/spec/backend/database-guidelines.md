@@ -45,7 +45,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
 - Keep version numbers in lockstep across SQLite and PostgreSQL. The current
-  latest migration is `000067_backup_asset_processing`.
+  latest migration is `000068_backup_asset_export`.
 - Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the
   SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
@@ -111,7 +111,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   both SQLite/PostgreSQL definitions and matching down migrations when changing
   traffic-window predicates or index names.
 - Backup-asset schema changes are paired across SQLite and PostgreSQL. The
-  current baseline includes `000062` through `000067_backup_asset_processing`;
+  current baseline includes `000062` through `000068_backup_asset_export`;
   later versions must remain paired. After durable Search or publication facts,
   or live content-delivery state exists, schema down must fail closed rather
   than deleting history, Provider facts, grants, reservations, or leases.
@@ -130,7 +130,9 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 
 - Connection helper: `openPostgresSQLDB(dsn string) (*sql.DB, error)`.
 - CI regression gate:
-  `go test ./internal/database -run 'Test(BackupAssetMigration0(62|63|64|65|66|67)Postgres|PostgresTimestamptzScanUsesConfiguredUTC)' -count=1`.
+  `go test ./internal/database -run '^(TestBackupAssetMigration062PostgresApplyDown|TestBackupAssetMigration0(63|64|65|66|67|68)Postgres|TestPostgresTimestamptzScanUsesConfiguredUTC|TestRunMigrationsPostgresDirtyCheckUsesSearchPath)$' -count=1`.
+- Export behavior gate:
+  `go test ./internal/backupasset/export -run '^TestExportBehaviorPostgres$' -count=1`.
 - Required pgx registrations per physical connection:
   `pgtype.TimestampCodec{ScanLocation: scanLocation}` and
   `pgtype.TimestamptzCodec{ScanLocation: scanLocation}`.
@@ -139,13 +141,17 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 
 - PostgreSQL DSNs default `timezone` to `UTC` when the caller did not specify
   one; `scanLocation` is loaded from that effective setting.
+- A PostgreSQL `schema_migrations` existence probe that precedes an unqualified
+  read must use `pg_catalog.to_regclass('schema_migrations')`, so both queries
+  resolve through the same connection `search_path`. Never count an unscoped
+  `information_schema.tables` row and then read an unrelated schema.
 - GORM must receive the `*sql.DB` returned by `openPostgresSQLDB`, rather than
   opening an unrelated pool through the dialector DSN.
 - Register **both** `timestamp` and `timestamptz` codecs in pgx's `AfterConnect`
   hook. Configuring only `timestamp` leaves `TIMESTAMPTZ` scans vulnerable to
   `time.Local` on newer Go/pgx combinations.
 - SQLite/PostgreSQL migration parity for backup assets covers 000062 through
-  000067. A new paired migration must be added to this regex deliberately; it
+  000068. A new paired migration must be added to this regex deliberately; it
   must never be silently omitted from the PostgreSQL gate.
 
 ### 4. Validation & Error Matrix
@@ -173,9 +179,14 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   PostgreSQL service with `TZ` set to a non-UTC value and assert both location
   and RFC3339 value.
 - PostgreSQL migration tests must exercise paired apply/down contracts for
-  000062 through 000067.
+  000062 through 000068.
+- `TestRunMigrationsPostgresDirtyCheckUsesSearchPath` must prove an unrelated
+  sibling schema does not interfere while a search-path-visible dirty row still
+  fails closed.
 - Run the CI regex above with `REQUIRE_POSTGRES_MIGRATION_TEST=1`; a skipped
   PostgreSQL test is not completion evidence.
+- Run `TestExportBehaviorPostgres` with `REQUIRE_POSTGRES_EXPORT_TEST=1`; a
+  missing `TEST_POSTGRES_DSN` is a failed required gate, never SQLite evidence.
 
 ### 7. Wrong vs Correct
 
@@ -622,6 +633,11 @@ _, err := budget.Finalize(ctx, intent)
   `LeaseService.RenewTx(ctx, tx, RenewLeaseRequest) (LeaseFence, error)`.
 - Engine behavior entry points: `TestProcessingBehaviorSQLite` and
   `TestProcessingBehaviorPostgres`.
+- Atomic Derived publication entry point:
+  `ArtifactSink.CommitManifest(context.Context, CommitManifestRequest)`.
+- Bounded conflict helper: `ArtifactSink.retryManifestConflicts`; it recognizes
+  SQLite busy/table locks plus PostgreSQL serialization/deadlock conflicts and
+  stops on caller cancellation.
 - Required PostgreSQL selectors:
   `Test(BackupAssetMigration0(62|63|64|65|66|67)Postgres|PostgresTimestamptzScanUsesConfiguredUTC)`
   and `^TestProcessingBehaviorPostgres$`.
@@ -642,6 +658,16 @@ _, err := budget.Finalize(ctx, intent)
   DEKs, authenticated chunks, opaque locators, and explicit references.
   Search projection revoke must succeed before reference/key/ciphertext
   destruction; late output and tampered ciphertext fail closed.
+- A projected manifest commit has two retry-sensitive database boundaries:
+  reading/decrypting projection evidence before `PreparePublish`, and the
+  caller transaction that commits uploads/blobs/artifacts plus the Search
+  projection. Both boundaries use the same bounded, context-aware transient
+  conflict policy. Retrying only the transaction is insufficient because a
+  concurrent writer can lock the Derived blob evidence query first.
+- `PreparedDerivedProjection.PublishTx` is idempotent by artifact-set ID and
+  writes only through the supplied transaction, so a rolled-back transient
+  transaction may reuse the prepared publication. Validation, fence, source,
+  policy, and other semantic errors are not retryable.
 - Pristine down is allowed only with no Processing/Worker/Derived/updater rows
   and no active `processing_job` lease. Used down aborts before any table or
   index is removed; retain `000067` and ship a forward repair.
@@ -655,6 +681,9 @@ _, err := budget.Finalize(ctx, intent)
 | Last interest is removed | Revoke both grants before `cancel_requested`; one remaining interest preserves the shared job. |
 | Manifest member, digest, MIME, count, size, completeness, source or policy differs | Reject the entire set and destroy/reconcile invisible staging. |
 | Search projection revoke fails | Retain Derived reference, wrapped DEK and ciphertext; do not continue destruction. |
+| Projection evidence read or manifest upload/blob update returns a transient SQLite lock | Retry with the bounded conflict policy; honor caller cancellation and never spin indefinitely. |
+| Two callers retry the same current projected manifest concurrently | Exactly one transaction commits the terminal job/artifact-set state; the loser returns a closed semantic conflict without a second publication. |
+| Manifest validation, source/policy/fence, or payload binding fails | Fail immediately; do not classify the semantic failure as a database conflict. |
 | PostgreSQL boolean fixture receives integer SQL literals | Invalid test fixture; bind Go `bool` values so the intended CHECK is exercised. |
 | A shared-memory SQLite DSN is reused by `go test -count=N` | Invalid test isolation; include a per-open atomic sequence and keep engine state per test run. |
 | Required PostgreSQL DSN is absent or unreachable | Gate fails or remains explicitly `not_executed`; SQLite/text inspection is not parity evidence. |
@@ -664,11 +693,16 @@ _, err := budget.Finalize(ctx, intent)
 - Good: a current Worker heartbeat renews its attempt, RecoveryPoint lease and
   live grants in one transaction; a takeover gets a new fence and old output
   can never publish.
+- Good: deterministic SQLite callbacks inject one lock into the Derived blob
+  evidence query and one into the upload state update; bounded retries still
+  produce exactly one committed projection under concurrent callers.
 - Base: no Worker transport/capability is configured, so Core remains ready and
   returns informational `not_deployed` without persisting noisy failed jobs.
 - Bad: delete a Derived key/blob before Child 7 projection revoke, use `0/1`
   boolean literals in shared PostgreSQL fixtures, or derive an in-memory test
   DSN from `t.Name()` alone when the suite must pass with `-count`.
+- Bad: protect only `db.Transaction(...)` with retries while leaving
+  `prepareProjectionEvidence` as a one-shot database read.
 
 ### 6. Tests Required
 
@@ -677,6 +711,10 @@ _, err := budget.Finalize(ctx, intent)
   parity cases.
 - Behavior tests: `TestProcessingBehaviorSQLite` and
   `TestProcessingBehaviorPostgres`, both calling one shared contract suite.
+- `TestConcurrentAtomicProjectionRetriesCommitExactlyOnce` must inject
+  `sqlite3.ErrLocked` at both the pre-transaction Derived blob query and the
+  in-transaction upload update, assert one injection at each boundary, and
+  prove exactly one durable winner under `-race` and repetition.
 - The real PostgreSQL gate sets `REQUIRE_POSTGRES_MIGRATION_TEST=1` and
   `REQUIRE_POSTGRES_PROCESSING_TEST=1`; a missing `TEST_POSTGRES_DSN` is a
   failed required gate, never SQLite evidence.
@@ -696,6 +734,28 @@ Correct:
 _, _ = db.Exec(`INSERT INTO artifact_sets (projection_required) VALUES (?)`, false)
 dsn := fmt.Sprintf("file:%s-%d?mode=memory&cache=shared",
     strings.ReplaceAll(t.Name(), "/", "_"), processingTestDBSequence.Add(1))
+```
+
+Wrong retry boundary:
+
+```go
+fields, err := sink.prepareProjectionEvidence(ctx, descriptor, artifacts, uploads, identities)
+if err != nil {
+    return result, err // a transient blob-table lock escapes before the transaction retry
+}
+err = sink.retryManifestConflicts(ctx, func() error { return sink.db.Transaction(commit) })
+```
+
+Correct retry boundaries:
+
+```go
+err = sink.retryManifestConflicts(ctx, func() error {
+    fields, classification, err = sink.prepareProjectionEvidence(ctx, descriptor, artifacts, uploads, identities)
+    return err
+})
+if err == nil {
+    err = sink.retryManifestConflicts(ctx, func() error { return sink.db.Transaction(commit) })
+}
 ```
 
 ---

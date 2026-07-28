@@ -289,6 +289,56 @@ func TestSavedSearchListUpdateUseDeleteAndCAS(t *testing.T) {
 	}
 }
 
+func TestValidateSavedSearchForExportTxClosesFinalPageRace(t *testing.T) {
+	service, harness := newOverlayTestHarness(t)
+	actor := Actor{UserID: 611, Role: "operator"}
+	pointID := strings.Repeat("7", 32)
+	harness.points[pointID] = true
+	created, err := service.CreateSavedSearch(context.Background(), actor, CreateSavedSearchRequest{
+		Query: savedQuery(pointID, "before"), IdempotencyKey: "saved-export-race-01",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := SavedSearchQueryDigest(created.Query, service.overlayQueryLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := SavedSearchExportBinding{
+		ID: created.ID, OwnerUserID: actor.UserID, ExpectedVersion: created.Version, CanonicalQueryDigest: digest,
+	}
+	if err := harness.db.Transaction(func(tx *gorm.DB) error {
+		return service.ValidateSavedSearchForExportTx(context.Background(), tx, binding)
+	}); err != nil {
+		t.Fatalf("validate unchanged saved search: %v", err)
+	}
+
+	updated, err := service.UpdateSavedSearch(context.Background(), actor, created.ID, UpdateSavedSearchRequest{
+		Query: savedQuery(pointID, "after"), ExpectedVersion: created.Version, IdempotencyKey: "saved-export-race-02",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Transaction(func(tx *gorm.DB) error {
+		return service.ValidateSavedSearchForExportTx(context.Background(), tx, binding)
+	}); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("stale final-page binding error=%v want conflict", err)
+	}
+
+	updatedDigest, err := SavedSearchQueryDigest(updated.Query, service.overlayQueryLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongOwner := SavedSearchExportBinding{
+		ID: updated.ID, OwnerUserID: actor.UserID + 1, ExpectedVersion: updated.Version, CanonicalQueryDigest: updatedDigest,
+	}
+	if err := harness.db.Transaction(func(tx *gorm.DB) error {
+		return service.ValidateSavedSearchForExportTx(context.Background(), tx, wrongOwner)
+	}); !errors.Is(err, backupasset.ErrNotFound) {
+		t.Fatalf("cross-owner export validation error=%v want safe not found", err)
+	}
+}
+
 func TestFavoriteTagAndRecentListMutationLifecycle(t *testing.T) {
 	service, harness := newOverlayTestHarness(t)
 	actor := Actor{UserID: 901, Role: "operator"}
@@ -375,8 +425,10 @@ func TestOverlayModelsPersistNoSourceMetadataOrRetentionHold(t *testing.T) {
 func TestOverlayConfigControlsQueryLabelAndIdempotencyBounds(t *testing.T) {
 	service, harness := newOverlayTestHarness(t)
 	service.config.LabelMaxBytes = 4
-	service.config.IdempotencyKeyMaxBytes = 32
 	service.config.QueryLimits.MaxPageSize = 10
+	if err := service.TransitionIdempotencySettings(DefaultConfig().IdempotencyTTL, 32, func() error { return nil }); err != nil {
+		t.Fatalf("configure idempotency bounds: %v", err)
+	}
 	actor := Actor{UserID: 701, Role: "operator"}
 	ref := backupasset.AssetRef{RecoveryPointID: strings.Repeat("7", 32), EntryID: strings.Repeat("7", 64)}
 	harness.assets[ref] = true
@@ -407,6 +459,66 @@ func TestOverlayConfigControlsQueryLabelAndIdempotencyBounds(t *testing.T) {
 		Query: query, IdempotencyKey: strings.Repeat("a", 33),
 	}); !errors.Is(err, ErrInvalidOverlay) {
 		t.Fatalf("configured idempotency maximum got %v, want invalid overlay", err)
+	}
+}
+
+func TestOverlayIdempotencySettingsTransitionPersistsBeforeAtomicallySwapping(t *testing.T) {
+	service, harness := newOverlayTestHarness(t)
+	oldKey := strings.Repeat("a", 64)
+	newKey := strings.Repeat("b", 32)
+	if !service.validIdempotencyKey(oldKey) {
+		t.Fatal("default idempotency key bound rejected the control key")
+	}
+
+	persistCalls := 0
+	if err := service.TransitionIdempotencySettings(2*time.Hour, len(newKey), func() error {
+		persistCalls++
+		if !service.validIdempotencyKey(oldKey) {
+			t.Fatal("idempotency settings swapped before persistence completed")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("transition idempotency settings: %v", err)
+	}
+	if persistCalls != 1 {
+		t.Fatalf("persistence calls=%d, want one", persistCalls)
+	}
+	if service.validIdempotencyKey(oldKey) || !service.validIdempotencyKey(newKey) {
+		t.Fatal("successful transition did not atomically replace idempotency key bounds")
+	}
+	if _, err := service.ClearRecent(context.Background(), 741, newKey); err != nil {
+		t.Fatalf("create receipt with transitioned key bound: %v", err)
+	}
+	var receipt model.BackupAssetOverlayIdempotency
+	if err := harness.db.Where("owner_user_id = ? AND action = ? AND key_hash = ?", 741, actionRecentClear, hashIdempotencyKey(newKey)).Take(&receipt).Error; err != nil {
+		t.Fatalf("load transitioned receipt: %v", err)
+	}
+	if want := harness.clock.Now().Add(2 * time.Hour); !receipt.ExpiresAt.Equal(want) {
+		t.Fatalf("transitioned receipt expiry=%s, want %s", receipt.ExpiresAt, want)
+	}
+
+	persistErr := errors.New("FAKE_OVERLAY_IDEMPOTENCY_PERSIST_FAILURE_FOR_TEST_ONLY")
+	if err := service.TransitionIdempotencySettings(3*time.Hour, 16, func() error {
+		if !service.validIdempotencyKey(newKey) {
+			t.Fatal("idempotency settings swapped before failed persistence returned")
+		}
+		return persistErr
+	}); !errors.Is(err, persistErr) {
+		t.Fatalf("failed transition error=%v, want %v", err, persistErr)
+	}
+	if !service.validIdempotencyKey(newKey) {
+		t.Fatal("failed persistence changed idempotency key bounds")
+	}
+	fallbackKey := strings.Repeat("c", 32)
+	if _, err := service.ClearRecent(context.Background(), 742, fallbackKey); err != nil {
+		t.Fatalf("create receipt after failed transition: %v", err)
+	}
+	var rollbackReceipt model.BackupAssetOverlayIdempotency
+	if err := harness.db.Where("owner_user_id = ? AND action = ? AND key_hash = ?", 742, actionRecentClear, hashIdempotencyKey(fallbackKey)).Take(&rollbackReceipt).Error; err != nil {
+		t.Fatalf("load post-failure receipt: %v", err)
+	}
+	if want := harness.clock.Now().Add(2 * time.Hour); !rollbackReceipt.ExpiresAt.Equal(want) {
+		t.Fatalf("post-failure receipt expiry=%s, want retained %s", rollbackReceipt.ExpiresAt, want)
 	}
 }
 

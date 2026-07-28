@@ -29,7 +29,8 @@
     "07-18-backup-assets-content-plane",
     "07-19-backup-assets-workspace-ui",
     "07-19-backup-assets-worker-protocol",
-    "07-20-backup-assets-worker-capabilities"
+    "07-20-backup-assets-worker-capabilities",
+    "07-22-backup-assets-export-archive"
   ],
   "parent": null,
   "relatedFiles": [],

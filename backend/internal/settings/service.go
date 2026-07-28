@@ -25,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -334,6 +335,43 @@ var registry = []SettingDef{
 	{Key: "backup_assets.derived_store_global_max_bytes", EnvVar: "BACKUP_ASSETS_DERIVED_STORE_GLOBAL_MAX_BYTES", CodeDefault: "107374182400", Type: TypeInt, Category: "backup_assets", Description: "派生资产全局字节配额", Min: "65536", Max: "1099511627776"},
 	{Key: "backup_assets.derived_store_reconcile_interval", EnvVar: "BACKUP_ASSETS_DERIVED_STORE_RECONCILE_INTERVAL", CodeDefault: "15m", Type: TypeDuration, Category: "backup_assets", Description: "派生资产对账间隔", MinDuration: "1m", MaxDuration: "24h"},
 	{Key: "backup_assets.derived_store_reconcile_batch_size", EnvVar: "BACKUP_ASSETS_DERIVED_STORE_RECONCILE_BATCH_SIZE", CodeDefault: "256", Type: TypeInt, Category: "backup_assets", Description: "派生资产对账批次", Min: "1", Max: "10000"},
+	{Key: "backup_assets.export.enabled", EnvVar: "BACKUP_ASSETS_EXPORT_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "启用备份资产导出"},
+	{Key: "backup_assets.export.root", EnvVar: "BACKUP_ASSETS_EXPORT_ROOT", CodeDefault: "/var/lib/xirang-asset-runtime/export", Type: TypeString, Category: "backup_assets", Description: "备份资产导出密文专用根目录", RequiresRestart: true},
+	{Key: "backup_assets.export.default_profile", EnvVar: "BACKUP_ASSETS_EXPORT_DEFAULT_PROFILE", CodeDefault: "zip_deflate_v1", Type: TypeString, Category: "backup_assets", Description: "备份资产导出默认归档配置"},
+	{Key: "backup_assets.export.chunk_bytes", EnvVar: "BACKUP_ASSETS_EXPORT_CHUNK_BYTES", CodeDefault: "1048576", Type: TypeInt, Category: "backup_assets", Description: "备份资产导出认证加密分块字节数", Min: "65536", Max: "8388608"},
+	{Key: "backup_assets.export.max_items", EnvVar: "BACKUP_ASSETS_EXPORT_MAX_ITEMS", CodeDefault: "10000", Type: TypeInt, Category: "backup_assets", Description: "单次备份资产导出条目上限", Min: "1", Max: "100000"},
+	{Key: "backup_assets.export.max_source_points", EnvVar: "BACKUP_ASSETS_EXPORT_MAX_SOURCE_POINTS", CodeDefault: "128", Type: TypeInt, Category: "backup_assets", Description: "单次备份资产导出恢复点上限", Min: "1", Max: "1024"},
+	{Key: "backup_assets.export.max_item_bytes", EnvVar: "BACKUP_ASSETS_EXPORT_MAX_ITEM_BYTES", CodeDefault: "2147483648", Type: TypeInt, Category: "backup_assets", Description: "单条备份资产导出逻辑字节上限", Min: "65536", Max: "274877906944"},
+	{Key: "backup_assets.export.max_logical_bytes", EnvVar: "BACKUP_ASSETS_EXPORT_MAX_LOGICAL_BYTES", CodeDefault: "10737418240", Type: TypeInt, Category: "backup_assets", Description: "单次备份资产导出逻辑字节上限", Min: "65536", Max: "1099511627776"},
+	{Key: "backup_assets.export.max_provider_bytes", EnvVar: "BACKUP_ASSETS_EXPORT_MAX_PROVIDER_BYTES", CodeDefault: "21474836480", Type: TypeInt, Category: "backup_assets", Description: "单次备份资产导出 Provider 读取字节上限", Min: "65536", Max: "2199023255552"},
+	{Key: "backup_assets.export.max_ciphertext_bytes", EnvVar: "BACKUP_ASSETS_EXPORT_MAX_CIPHERTEXT_BYTES", CodeDefault: "12884901888", Type: TypeInt, Category: "backup_assets", Description: "单次备份资产导出密文字节上限", Min: "65536", Max: "1374389534720"},
+	{Key: "backup_assets.export.user_active_jobs", EnvVar: "BACKUP_ASSETS_EXPORT_USER_ACTIVE_JOBS", CodeDefault: "2", Type: TypeInt, Category: "backup_assets", Description: "单用户备份资产导出活动作业上限", Min: "1", Max: "16"},
+	{Key: "backup_assets.export.global_active_jobs", EnvVar: "BACKUP_ASSETS_EXPORT_GLOBAL_ACTIVE_JOBS", CodeDefault: "8", Type: TypeInt, Category: "backup_assets", Description: "全局备份资产导出活动作业上限", Min: "1", Max: "64"},
+	{Key: "backup_assets.export.worker_concurrency", EnvVar: "BACKUP_ASSETS_EXPORT_WORKER_CONCURRENCY", CodeDefault: "2", Type: TypeInt, Category: "backup_assets", Description: "备份资产导出 Worker 并发上限", Min: "1", Max: "16"},
+	{Key: "backup_assets.export.max_open_readers", EnvVar: "BACKUP_ASSETS_EXPORT_MAX_OPEN_READERS", CodeDefault: "2", Type: TypeInt, Category: "backup_assets", Description: "单次备份资产导出读取器上限", Min: "1", Max: "8"},
+	{Key: "backup_assets.export.max_duration", EnvVar: "BACKUP_ASSETS_EXPORT_MAX_DURATION", CodeDefault: "2h", Type: TypeDuration, Category: "backup_assets", Description: "单次备份资产导出绝对执行时长", MinDuration: "5m", MaxDuration: "24h"},
+	{Key: "backup_assets.export.max_attempts", EnvVar: "BACKUP_ASSETS_EXPORT_MAX_ATTEMPTS", CodeDefault: "3", Type: TypeInt, Category: "backup_assets", Description: "单次备份资产导出最大尝试次数", Min: "1", Max: "10"},
+	{Key: "backup_assets.export.retry_base", EnvVar: "BACKUP_ASSETS_EXPORT_RETRY_BASE", CodeDefault: "5s", Type: TypeDuration, Category: "backup_assets", Description: "备份资产导出重试基础延迟", MinDuration: "1s", MaxDuration: "1m"},
+	{Key: "backup_assets.export.retry_max_delay", EnvVar: "BACKUP_ASSETS_EXPORT_RETRY_MAX_DELAY", CodeDefault: "5m", Type: TypeDuration, Category: "backup_assets", Description: "备份资产导出重试最大延迟", MinDuration: "5s", MaxDuration: "30m"},
+	{Key: "backup_assets.export.lease_ttl", EnvVar: "BACKUP_ASSETS_EXPORT_LEASE_TTL", CodeDefault: "90s", Type: TypeDuration, Category: "backup_assets", Description: "备份资产导出内部租约时长", MinDuration: "30s", MaxDuration: "5m"},
+	{Key: "backup_assets.export.lease_renew_margin", EnvVar: "BACKUP_ASSETS_EXPORT_LEASE_RENEW_MARGIN", CodeDefault: "20s", Type: TypeDuration, Category: "backup_assets", Description: "备份资产导出租约续期安全余量", MinDuration: "5s", MaxDuration: "2m"},
+	{Key: "backup_assets.export.ready_ttl", EnvVar: "BACKUP_ASSETS_EXPORT_READY_TTL", CodeDefault: "24h", Type: TypeDuration, Category: "backup_assets", Description: "备份资产导出就绪产物绝对有效期", MinDuration: "15m", MaxDuration: "168h"},
+	{Key: "backup_assets.export.summary_ttl", EnvVar: "BACKUP_ASSETS_EXPORT_SUMMARY_TTL", CodeDefault: "2160h", Type: TypeDuration, Category: "backup_assets", Description: "备份资产导出终态摘要保留期", MinDuration: "24h", MaxDuration: "8760h"},
+	{Key: "backup_assets.export.ticket_ttl", EnvVar: "BACKUP_ASSETS_EXPORT_TICKET_TTL", CodeDefault: "5m", Type: TypeDuration, Category: "backup_assets", Description: "备份资产导出下载票据有效期", MinDuration: "30s", MaxDuration: "15m"},
+	{Key: "backup_assets.export.ticket_max_requests", EnvVar: "BACKUP_ASSETS_EXPORT_TICKET_MAX_REQUESTS", CodeDefault: "256", Type: TypeInt, Category: "backup_assets", Description: "备份资产导出下载票据请求上限", Min: "1", Max: "4096"},
+	{Key: "backup_assets.export.ticket_max_in_flight", EnvVar: "BACKUP_ASSETS_EXPORT_TICKET_MAX_IN_FLIGHT", CodeDefault: "2", Type: TypeInt, Category: "backup_assets", Description: "备份资产导出下载票据并发上限", Min: "1", Max: "8"},
+	{Key: "backup_assets.export.ticket_max_cumulative_bytes", EnvVar: "BACKUP_ASSETS_EXPORT_TICKET_MAX_CUMULATIVE_BYTES", CodeDefault: "25769803776", Type: TypeInt, Category: "backup_assets", Description: "备份资产导出下载票据累计字节上限", Min: "65536", Max: "2748779069440"},
+	{Key: "backup_assets.export.user_store_quota", EnvVar: "BACKUP_ASSETS_EXPORT_USER_STORE_QUOTA", CodeDefault: "26843545600", Type: TypeInt, Category: "backup_assets", Description: "单用户备份资产导出密文存储配额", Min: "1073741824", Max: "2199023255552"},
+	{Key: "backup_assets.export.store_quota", EnvVar: "BACKUP_ASSETS_EXPORT_STORE_QUOTA", CodeDefault: "107374182400", Type: TypeInt, Category: "backup_assets", Description: "全局备份资产导出密文存储配额", Min: "1073741824", Max: "10995116277760"},
+	{Key: "backup_assets.export.gc_cadence", EnvVar: "BACKUP_ASSETS_EXPORT_GC_CADENCE", CodeDefault: "5m", Type: TypeDuration, Category: "backup_assets", Description: "备份资产导出清理周期", MinDuration: "30s", MaxDuration: "1h"},
+	{Key: "backup_assets.export.reconcile_batch_size", EnvVar: "BACKUP_ASSETS_EXPORT_RECONCILE_BATCH_SIZE", CodeDefault: "100", Type: TypeInt, Category: "backup_assets", Description: "备份资产导出对账批次", Min: "1", Max: "1000"},
+	{Key: "backup_assets.archive.member_ttl", EnvVar: "BACKUP_ASSETS_ARCHIVE_MEMBER_TTL", CodeDefault: "1h", Type: TypeDuration, Category: "backup_assets", Description: "归档 member 临时产物有效期", MinDuration: "5m", MaxDuration: "24h"},
+	{Key: "backup_assets.archive.max_expanded_bytes", EnvVar: "BACKUP_ASSETS_ARCHIVE_MAX_EXPANDED_BYTES", CodeDefault: "8589934592", Type: TypeInt, Category: "backup_assets", Description: "归档展开总字节上限", Min: "1048576", Max: "8589934592"},
+	{Key: "backup_assets.archive.member_max_bytes", EnvVar: "BACKUP_ASSETS_ARCHIVE_MEMBER_MAX_BYTES", CodeDefault: "268435456", Type: TypeInt, Category: "backup_assets", Description: "归档单 member 字节上限", Min: "65536", Max: "268435456"},
+	{Key: "backup_assets.archive.max_entries", EnvVar: "BACKUP_ASSETS_ARCHIVE_MAX_ENTRIES", CodeDefault: "100000", Type: TypeInt, Category: "backup_assets", Description: "归档条目上限", Min: "1", Max: "100000"},
+	{Key: "backup_assets.archive.max_depth", EnvVar: "BACKUP_ASSETS_ARCHIVE_MAX_DEPTH", CodeDefault: "16", Type: TypeInt, Category: "backup_assets", Description: "归档目录深度上限", Min: "1", Max: "16"},
+	{Key: "backup_assets.archive.max_compression_ratio", EnvVar: "BACKUP_ASSETS_ARCHIVE_MAX_COMPRESSION_RATIO", CodeDefault: "100", Type: TypeInt, Category: "backup_assets", Description: "归档压缩比上限", Min: "1", Max: "100"},
+	{Key: "backup_assets.archive.max_duration", EnvVar: "BACKUP_ASSETS_ARCHIVE_MAX_DURATION", CodeDefault: "10m", Type: TypeDuration, Category: "backup_assets", Description: "归档处理绝对时长", MinDuration: "1s", MaxDuration: "10m"},
 }
 
 // registryMap O(1) key 查找（init 时构建）
@@ -1073,12 +1111,53 @@ var backupAssetProcessingSettingKeys = []string{
 	"backup_assets.derived_store_reconcile_batch_size",
 }
 
+var backupAssetExportSettingKeys = []string{
+	"backup_assets.export.enabled",
+	"backup_assets.export.root",
+	"backup_assets.export.default_profile",
+	"backup_assets.export.chunk_bytes",
+	"backup_assets.export.max_items",
+	"backup_assets.export.max_source_points",
+	"backup_assets.export.max_item_bytes",
+	"backup_assets.export.max_logical_bytes",
+	"backup_assets.export.max_provider_bytes",
+	"backup_assets.export.max_ciphertext_bytes",
+	"backup_assets.export.user_active_jobs",
+	"backup_assets.export.global_active_jobs",
+	"backup_assets.export.worker_concurrency",
+	"backup_assets.export.max_open_readers",
+	"backup_assets.export.max_duration",
+	"backup_assets.export.max_attempts",
+	"backup_assets.export.retry_base",
+	"backup_assets.export.retry_max_delay",
+	"backup_assets.export.lease_ttl",
+	"backup_assets.export.lease_renew_margin",
+	"backup_assets.export.ready_ttl",
+	"backup_assets.export.summary_ttl",
+	"backup_assets.export.ticket_ttl",
+	"backup_assets.export.ticket_max_requests",
+	"backup_assets.export.ticket_max_in_flight",
+	"backup_assets.export.ticket_max_cumulative_bytes",
+	"backup_assets.export.user_store_quota",
+	"backup_assets.export.store_quota",
+	"backup_assets.export.gc_cadence",
+	"backup_assets.export.reconcile_batch_size",
+	"backup_assets.archive.member_ttl",
+	"backup_assets.archive.max_expanded_bytes",
+	"backup_assets.archive.member_max_bytes",
+	"backup_assets.archive.max_entries",
+	"backup_assets.archive.max_depth",
+	"backup_assets.archive.max_compression_ratio",
+	"backup_assets.archive.max_duration",
+}
+
 var backupAssetFoundationSettingKeys = func() []string {
-	keys := make([]string, 0, len(backupAssetCoreSettingKeys)+len(backupAssetSearchOverlaySettingKeys)+len(backupAssetContentSettingKeys)+len(backupAssetProcessingSettingKeys))
+	keys := make([]string, 0, len(backupAssetCoreSettingKeys)+len(backupAssetSearchOverlaySettingKeys)+len(backupAssetContentSettingKeys)+len(backupAssetProcessingSettingKeys)+len(backupAssetExportSettingKeys))
 	keys = append(keys, backupAssetCoreSettingKeys...)
 	keys = append(keys, backupAssetSearchOverlaySettingKeys...)
 	keys = append(keys, backupAssetContentSettingKeys...)
 	keys = append(keys, backupAssetProcessingSettingKeys...)
+	keys = append(keys, backupAssetExportSettingKeys...)
 	return keys
 }()
 
@@ -1207,6 +1286,28 @@ func validateBackupAssetFoundationConfig(values map[string]string, requireComple
 	derivedStoreChunkBytes, _ := strconv.ParseInt(resolved["backup_assets.derived_store_chunk_bytes"], 10, 64)
 	derivedStoreBlobMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.derived_store_blob_max_bytes"], 10, 64)
 	derivedStoreGlobalMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.derived_store_global_max_bytes"], 10, 64)
+	exportChunkBytes, _ := strconv.ParseInt(resolved["backup_assets.export.chunk_bytes"], 10, 64)
+	exportMaxItems, _ := strconv.ParseInt(resolved["backup_assets.export.max_items"], 10, 64)
+	exportMaxSourcePoints, _ := strconv.ParseInt(resolved["backup_assets.export.max_source_points"], 10, 64)
+	exportMaxItemBytes, _ := strconv.ParseInt(resolved["backup_assets.export.max_item_bytes"], 10, 64)
+	exportMaxLogicalBytes, _ := strconv.ParseInt(resolved["backup_assets.export.max_logical_bytes"], 10, 64)
+	exportMaxProviderBytes, _ := strconv.ParseInt(resolved["backup_assets.export.max_provider_bytes"], 10, 64)
+	exportMaxCiphertextBytes, _ := strconv.ParseInt(resolved["backup_assets.export.max_ciphertext_bytes"], 10, 64)
+	exportUserActiveJobs, _ := strconv.ParseInt(resolved["backup_assets.export.user_active_jobs"], 10, 64)
+	exportGlobalActiveJobs, _ := strconv.ParseInt(resolved["backup_assets.export.global_active_jobs"], 10, 64)
+	exportRetryBase, _ := time.ParseDuration(resolved["backup_assets.export.retry_base"])
+	exportRetryMaxDelay, _ := time.ParseDuration(resolved["backup_assets.export.retry_max_delay"])
+	exportLeaseTTL, _ := time.ParseDuration(resolved["backup_assets.export.lease_ttl"])
+	exportLeaseRenewMargin, _ := time.ParseDuration(resolved["backup_assets.export.lease_renew_margin"])
+	exportTicketMaxCumulativeBytes, _ := strconv.ParseInt(resolved["backup_assets.export.ticket_max_cumulative_bytes"], 10, 64)
+	exportUserStoreQuota, _ := strconv.ParseInt(resolved["backup_assets.export.user_store_quota"], 10, 64)
+	exportStoreQuota, _ := strconv.ParseInt(resolved["backup_assets.export.store_quota"], 10, 64)
+	archiveMaxExpandedBytes, _ := strconv.ParseInt(resolved["backup_assets.archive.max_expanded_bytes"], 10, 64)
+	archiveMemberMaxBytes, _ := strconv.ParseInt(resolved["backup_assets.archive.member_max_bytes"], 10, 64)
+	archiveMaxEntries, _ := strconv.ParseInt(resolved["backup_assets.archive.max_entries"], 10, 64)
+	archiveMaxDepth, _ := strconv.ParseInt(resolved["backup_assets.archive.max_depth"], 10, 64)
+	archiveMaxCompressionRatio, _ := strconv.ParseInt(resolved["backup_assets.archive.max_compression_ratio"], 10, 64)
+	archiveMaxDuration, _ := time.ParseDuration(resolved["backup_assets.archive.max_duration"])
 	if heartbeat >= leaseDuration {
 		return fmt.Errorf("backup_assets.lease_heartbeat 必须小于 backup_assets.lease_duration")
 	}
@@ -1350,6 +1451,68 @@ func validateBackupAssetFoundationConfig(values map[string]string, requireComple
 	if privateRuntimePathsRelated(derivedRoot, resolved["backup_assets.content_cache_root"]) {
 		return fmt.Errorf("backup_assets.derived_store_root 不能与内容缓存根目录重叠")
 	}
+	if exportMaxSourcePoints > exportMaxItems {
+		return fmt.Errorf("backup_assets.export.max_source_points 不能超过 max_items")
+	}
+	if exportMaxItemBytes > exportMaxLogicalBytes {
+		return fmt.Errorf("backup_assets.export.max_item_bytes 不能超过 max_logical_bytes")
+	}
+	if exportMaxProviderBytes < exportMaxLogicalBytes {
+		return fmt.Errorf("backup_assets.export.max_provider_bytes 不能小于 max_logical_bytes")
+	}
+	minimumCiphertextBytes, ok := backupAssetExportMinimumCiphertextBytesV1(
+		exportMaxLogicalBytes, exportMaxItems, exportChunkBytes,
+	)
+	if !ok || exportMaxCiphertextBytes < minimumCiphertextBytes {
+		return fmt.Errorf("backup_assets.export.max_ciphertext_bytes 未覆盖逻辑内容与归档开销")
+	}
+	if exportTicketMaxCumulativeBytes < exportMaxCiphertextBytes {
+		return fmt.Errorf("backup_assets.export.ticket_max_cumulative_bytes 不能小于 max_ciphertext_bytes")
+	}
+	if exportUserStoreQuota > exportStoreQuota {
+		return fmt.Errorf("backup_assets.export.user_store_quota 不能超过 store_quota")
+	}
+	maximumStorePeakBytes, ok := BackupAssetExportMaximumStorePeakV1(
+		exportMaxCiphertextBytes, exportMaxItems, exportMaxItemBytes, exportMaxLogicalBytes, exportChunkBytes,
+	)
+	if !ok {
+		return fmt.Errorf("backup_assets.export 存储峰值无法安全计算")
+	}
+	if exportUserStoreQuota < maximumStorePeakBytes {
+		return fmt.Errorf("backup_assets.export.user_store_quota 未覆盖归档与全部合法 spool")
+	}
+	if exportStoreQuota < maximumStorePeakBytes {
+		return fmt.Errorf("backup_assets.export.store_quota 未覆盖归档与全部合法 spool")
+	}
+	if exportUserActiveJobs > exportGlobalActiveJobs {
+		return fmt.Errorf("backup_assets.export.user_active_jobs 不能超过 global_active_jobs")
+	}
+	if exportRetryBase > exportRetryMaxDelay {
+		return fmt.Errorf("backup_assets.export.retry_base 不能超过 retry_max_delay")
+	}
+	if exportLeaseRenewMargin*2 >= exportLeaseTTL {
+		return fmt.Errorf("backup_assets.export.lease_renew_margin 必须小于 lease_ttl 的一半")
+	}
+	if archiveMemberMaxBytes > archiveMaxExpandedBytes {
+		return fmt.Errorf("backup_assets.archive.member_max_bytes 不能超过 max_expanded_bytes")
+	}
+	if archiveMaxExpandedBytes > 8<<30 || archiveMemberMaxBytes > 256<<20 || archiveMaxEntries > 100000 ||
+		archiveMaxDepth > 16 || archiveMaxCompressionRatio > 100 || archiveMaxDuration > 10*time.Minute {
+		return fmt.Errorf("backup_assets.archive 限制不能放宽 Worker archive hard caps")
+	}
+	switch resolved["backup_assets.export.default_profile"] {
+	case "zip_deflate_v1", "tar_none_v1", "tar_gzip_v1":
+	default:
+		return fmt.Errorf("backup_assets.export.default_profile 不在允许列表")
+	}
+	exportRoot := resolved["backup_assets.export.root"]
+	if !safePrivateRuntimeRootPath(exportRoot) {
+		return fmt.Errorf("backup_assets.export.root 不是安全的专用绝对路径")
+	}
+	if privateRuntimePathsRelated(exportRoot, resolved["backup_assets.content_cache_root"]) ||
+		privateRuntimePathsRelated(exportRoot, derivedRoot) {
+		return fmt.Errorf("backup_assets.export.root 不能与 Content 或 Derived 根目录重叠")
+	}
 	if err := validateRemoteWorkerSettings(resolved); err != nil {
 		return err
 	}
@@ -1357,6 +1520,128 @@ func validateBackupAssetFoundationConfig(values map[string]string, requireComple
 		return err
 	}
 	return nil
+}
+
+const (
+	backupAssetExportV1MinimumChunkBytes int64 = 64 << 10
+	backupAssetExportV1MaximumChunkBytes int64 = 8 << 20
+	backupAssetExportV1RecordOverhead    int64 = 20
+	backupAssetExportV1FixedOverhead     int64 = 20 + 68
+)
+
+// BackupAssetExportMaximumStorePeakV1 returns the largest V1 final-artifact
+// plus regular-spool peak allowed by the supplied immutable Export limits.
+// The boolean is false for invalid limits or any counter/size overflow.
+func BackupAssetExportMaximumStorePeakV1(
+	archiveCiphertextBytes, maxItems, maxItemBytes, maxLogicalBytes, chunkBytes int64,
+) (int64, bool) {
+	if archiveCiphertextBytes < 0 || maxItems <= 0 || maxItemBytes <= 0 || maxLogicalBytes <= 0 ||
+		chunkBytes <= 0 || chunkBytes > backupAssetExportV1MaximumChunkBytes {
+		return 0, false
+	}
+
+	totalLogicalBytes := maxLogicalBytes
+	if maxItemBytes <= math.MaxInt64/maxItems {
+		if itemCapacity := maxItemBytes * maxItems; itemCapacity < totalLogicalBytes {
+			totalLogicalBytes = itemCapacity
+		}
+	}
+	maxRegularLogicalBytes := min(maxItemBytes, totalLogicalBytes)
+	if _, ok := backupAssetExportV1CiphertextSize(maxRegularLogicalBytes, chunkBytes); !ok {
+		return 0, false
+	}
+
+	if maxItems > math.MaxInt64/backupAssetExportV1FixedOverhead {
+		return 0, false
+	}
+	peakStoreBytes := maxItems * backupAssetExportV1FixedOverhead
+	if archiveCiphertextBytes > math.MaxInt64-peakStoreBytes {
+		return 0, false
+	}
+	peakStoreBytes += archiveCiphertextBytes
+	if totalLogicalBytes > math.MaxInt64-peakStoreBytes {
+		return 0, false
+	}
+	peakStoreBytes += totalLogicalBytes
+
+	// Every positive regular item opens its first authenticated record. Each
+	// additional record costs exactly one full chunk after that first byte.
+	activeItems := min(maxItems, totalLogicalBytes)
+	remainingLogicalBytes := totalLogicalBytes - activeItems
+	additionalChunks := remainingLogicalBytes / chunkBytes
+	additionalChunksPerItem := (maxItemBytes - 1) / chunkBytes
+	if additionalChunksPerItem <= additionalChunks/activeItems {
+		additionalChunks = additionalChunksPerItem * activeItems
+	}
+	chunkCount := activeItems + additionalChunks
+	if chunkCount > math.MaxInt64/backupAssetExportV1RecordOverhead ||
+		chunkCount*backupAssetExportV1RecordOverhead > math.MaxInt64-peakStoreBytes {
+		return 0, false
+	}
+	return peakStoreBytes + chunkCount*backupAssetExportV1RecordOverhead, true
+}
+
+func backupAssetExportCiphertextSizeV1(plaintextBytes, chunkBytes int64) (int64, bool) {
+	if chunkBytes < backupAssetExportV1MinimumChunkBytes {
+		return 0, false
+	}
+	return backupAssetExportV1CiphertextSize(plaintextBytes, chunkBytes)
+}
+
+func backupAssetExportV1CiphertextSize(plaintextBytes, chunkBytes int64) (int64, bool) {
+	if plaintextBytes < 0 || chunkBytes <= 0 || chunkBytes > backupAssetExportV1MaximumChunkBytes {
+		return 0, false
+	}
+	if plaintextBytes == 0 {
+		return backupAssetExportV1FixedOverhead, true
+	}
+	chunkCount := 1 + (plaintextBytes-1)/chunkBytes
+	if chunkCount > int64(math.MaxUint32) || plaintextBytes > math.MaxInt64-backupAssetExportV1FixedOverhead {
+		return 0, false
+	}
+	remaining := math.MaxInt64 - plaintextBytes - backupAssetExportV1FixedOverhead
+	if chunkCount > remaining/backupAssetExportV1RecordOverhead {
+		return 0, false
+	}
+	return plaintextBytes + chunkCount*backupAssetExportV1RecordOverhead + backupAssetExportV1FixedOverhead, true
+}
+
+func backupAssetExportMinimumCiphertextBytesV1(logicalBytes, maxItems, chunkBytes int64) (int64, bool) {
+	archivePlaintextBytes, ok := backupAssetExportArchivePlaintextUpperBoundV1(logicalBytes, maxItems)
+	if !ok {
+		return 0, false
+	}
+	return backupAssetExportCiphertextSizeV1(archivePlaintextBytes, chunkBytes)
+}
+
+func backupAssetExportArchivePlaintextUpperBoundV1(logicalBytes, maxItems int64) (int64, bool) {
+	const (
+		archiveFixedOverheadBytes int64 = 64 << 20
+		archiveMemberPathBytes    int64 = 4096
+		// Reserve duplicated ZIP/PAX names and escaped report paths plus framing.
+		archivePerItemOverheadBytes          = 16 * archiveMemberPathBytes
+		archiveCompressionSlackDivisor int64 = 8
+	)
+	if logicalBytes <= 0 || maxItems <= 0 || maxItems > math.MaxInt64/archivePerItemOverheadBytes {
+		return 0, false
+	}
+	compressionSlack := logicalBytes / archiveCompressionSlackDivisor
+	if logicalBytes%archiveCompressionSlackDivisor != 0 {
+		compressionSlack++
+	}
+	if logicalBytes > math.MaxInt64-compressionSlack {
+		return 0, false
+	}
+	archivePlaintextBytes := logicalBytes + compressionSlack
+	perItemOverheadBytes := maxItems * archivePerItemOverheadBytes
+	if perItemOverheadBytes > math.MaxInt64-archivePlaintextBytes {
+		return 0, false
+	}
+	archivePlaintextBytes += perItemOverheadBytes
+	if archiveFixedOverheadBytes > math.MaxInt64-archivePlaintextBytes {
+		return 0, false
+	}
+	return archivePlaintextBytes + archiveFixedOverheadBytes, true
 }
 
 func safeContentCacheRoot(value string) bool {

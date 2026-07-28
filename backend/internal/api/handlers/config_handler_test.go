@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/backupasset/overlay"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
@@ -29,6 +31,14 @@ func openConfigHandlerTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
 	return db
+}
+
+func setConfigHandlerTestEncryption(t *testing.T) {
+	t.Helper()
+	t.Cleanup(secure.ResetForTesting)
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_CONFIG_HANDLER_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
 }
 
 func TestConfigExportAlwaysOmitsInternalPipelineRevisions(t *testing.T) {
@@ -129,6 +139,68 @@ func TestConfigImportTransitionsBackupAssetEnableBeforePersistingSettings(t *tes
 	}
 }
 
+func TestConfigImportDynamicExportMutationUsesRuntimeSettingsTransition(t *testing.T) {
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("migrate import settings: %v", err)
+	}
+	svc := settings.NewService(db)
+	spy := &settingsRuntimeSettingsTransitionSpy{}
+	handler := NewConfigHandler(db, svc).WithBackupAssetTransitioner(spy)
+	router := gin.New()
+	router.POST("/config/import", handler.Import)
+
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(`{"system_settings":[{"key":"backup_assets.export.ticket_max_requests","value":"128"}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if spy.calls != 1 {
+		t.Fatalf("runtime settings transition calls=%d, want one", spy.calls)
+	}
+	if spy.current["backup_assets.export.ticket_max_requests"] != "256" {
+		t.Fatalf("current max requests=%q, want default 256", spy.current["backup_assets.export.ticket_max_requests"])
+	}
+	if len(spy.overlay) != 1 || spy.overlay["backup_assets.export.ticket_max_requests"] != "128" {
+		t.Fatalf("overlay=%v", spy.overlay)
+	}
+	if spy.effective["backup_assets.export.ticket_max_requests"] != "128" || spy.config.Ticket.MaxRequests != 128 {
+		t.Fatalf("effective=%q config=%+v", spy.effective["backup_assets.export.ticket_max_requests"], spy.config)
+	}
+}
+
+func TestConfigImportSharedIdempotencySettingsUsesRuntimeSettingsTransition(t *testing.T) {
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("migrate import settings: %v", err)
+	}
+	svc := settings.NewService(db)
+	overlayService, now := newSettingsTransitionOverlay(t, db, overlay.DefaultConfig())
+	spy := &settingsRuntimeSettingsTransitionSpy{overlayService: overlayService}
+	handler := NewConfigHandler(db, svc).WithBackupAssetTransitioner(spy)
+	router := gin.New()
+	router.POST("/config/import", handler.Import)
+
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(`{"system_settings":[{"key":"backup_assets.idempotency_ttl","value":"48h"},{"key":"backup_assets.idempotency_key_max_bytes","value":"192"}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if spy.calls != 1 || spy.config.IdempotencyTTL != 48*time.Hour || spy.config.IdempotencyKeyMaxBytes != 192 {
+		t.Fatalf("runtime idempotency import calls=%d config=%+v", spy.calls, spy.config)
+	}
+	if _, err := overlayService.ClearRecent(context.Background(), 781, strings.Repeat("a", 160)); err != nil {
+		t.Fatalf("imported Overlay key limit rejected handler-approved key: %v", err)
+	}
+	assertSettingsOverlayReceiptTTL(t, db, 781, now, 48*time.Hour)
+}
+
 func TestConfigImportFailedBackupAssetTransitionDoesNotPersistSettings(t *testing.T) {
 	db := openConfigHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {
@@ -157,7 +229,67 @@ func TestConfigImportFailedBackupAssetTransitionDoesNotPersistSettings(t *testin
 	}
 }
 
+func TestConfigImportTaskCreateFailureReturnsGenericInternalErrorAndRollsBack(t *testing.T) {
+	setConfigHandlerTestEncryption(t)
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatal(err)
+	}
+
+	injectedErr := errors.New("FAKE_CONFIG_IMPORT_TASK_CREATE_FAILURE_FOR_TEST_ONLY")
+	const callbackName = "test:config-import-task-create-failure"
+	if err := db.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Schema != nil && tx.Statement.Schema.Table == "tasks" {
+			_ = tx.AddError(injectedErr)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Create().Remove(callbackName) })
+
+	handler := NewConfigHandler(db, nil)
+	router := gin.New()
+	router.POST("/config/import", handler.Import)
+	body := `{
+  "nodes":[{"name":"rollback-node","host":"10.0.0.8","port":22,"username":"root","auth_type":"key"}],
+  "tasks":[{
+    "name":"rollback-managed-task","node_name":"rollback-node","executor_type":"rsync",
+    "executor_config":"{\"version\":1,\"publication_mode\":\"versioned_hardlink\",\"managed_root\":\"/foreign/managed\"}"
+  }]
+}`
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Errorf("status=%d, want %d; body=%s", response.Code, http.StatusInternalServerError, response.Body.String())
+	}
+	var envelope Response
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Errorf("decode response envelope: %v", err)
+	} else if envelope.Code != http.StatusInternalServerError || envelope.Message != "服务器内部错误" || envelope.Data != nil {
+		t.Errorf("response envelope=%+v, want generic internal error", envelope)
+	}
+	if strings.Contains(response.Body.String(), injectedErr.Error()) {
+		t.Errorf("response leaked injected task create error: %s", response.Body.String())
+	}
+
+	for modelType, name := range map[any]string{
+		&model.Node{}: "nodes",
+		&model.Task{}: "tasks",
+	} {
+		var count int64
+		if err := db.Model(modelType).Count(&count).Error; err != nil {
+			t.Errorf("count %s: %v", name, err)
+		} else if count != 0 {
+			t.Errorf("%s count=%d, want total rollback", name, count)
+		}
+	}
+}
+
 func TestConfigImportManagedRsyncTaskPausesAndDisconnectsForeignPublicationConfig(t *testing.T) {
+	setConfigHandlerTestEncryption(t)
 	db := openConfigHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
 		t.Fatal(err)
@@ -192,6 +324,7 @@ func TestConfigImportManagedRsyncTaskPausesAndDisconnectsForeignPublicationConfi
 }
 
 func TestConfigImportManagedRsyncTaskDiscardsForeignPathsBeforeValidation(t *testing.T) {
+	setConfigHandlerTestEncryption(t)
 	db := openConfigHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
 		t.Fatal(err)
@@ -228,6 +361,7 @@ func TestConfigImportManagedRsyncTaskDiscardsForeignPathsBeforeValidation(t *tes
 func TestConfigImportManagedRcloneTasksPauseAndDisconnectForeignPublicationConfig(t *testing.T) {
 	for _, mode := range []string{"versioned_prefix", "native_object_versions"} {
 		t.Run(mode, func(t *testing.T) {
+			setConfigHandlerTestEncryption(t)
 			db := openConfigHandlerTestDB(t)
 			if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
 				t.Fatal(err)
@@ -398,8 +532,7 @@ func TestConfigExportedDataCanBeImportedBackAsDownloadedFile(t *testing.T) {
 }
 
 func TestConfigExportOmitsSecretsByDefaultAndWritesSafeAudit(t *testing.T) {
-	t.Setenv("APP_ENV", "development")
-	secure.ResetForTesting()
+	setConfigHandlerTestEncryption(t)
 	db := openConfigHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
 		t.Fatalf("初始化数据库失败: %v", err)
@@ -545,8 +678,7 @@ func TestConfigExportIncludeSecretsRequiresAdminAndAuditsBlockedAttempt(t *testi
 }
 
 func TestConfigExportIncludeSecretsAsAdminAuditsWithoutPayload(t *testing.T) {
-	t.Setenv("APP_ENV", "development")
-	secure.ResetForTesting()
+	setConfigHandlerTestEncryption(t)
 	db := openConfigHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
 		t.Fatalf("初始化数据库失败: %v", err)

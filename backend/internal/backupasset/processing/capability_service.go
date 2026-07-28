@@ -742,6 +742,30 @@ func applyTerminalPublicationResult(result *PreviewJobResult, rows []activeDeriv
 	}
 }
 
+func (service *CapabilityService) ArchiveExtractCapability(
+	ctx context.Context,
+) (CapabilityAdvertisement, error) {
+	if service == nil || service.db == nil {
+		return CapabilityAdvertisement{}, ErrNotDeployed
+	}
+	profile, ok := capabilityspec.Lookup(
+		capabilityspec.CapabilityArchiveExtractEntry,
+		capabilityspec.ProfileArchiveMemberV1,
+		false,
+	)
+	if !ok {
+		return CapabilityAdvertisement{}, ErrNotDeployed
+	}
+	advertisement, ready, err := service.readyCapability(nonNilProcessingContext(ctx), profile)
+	if err != nil {
+		return CapabilityAdvertisement{}, err
+	}
+	if !ready {
+		return CapabilityAdvertisement{}, ErrNotDeployed
+	}
+	return advertisement, nil
+}
+
 func (service *CapabilityService) readyCapability(ctx context.Context, profile capabilityspec.Profile) (CapabilityAdvertisement, bool, error) {
 	if profile.Capability == "" {
 		return CapabilityAdvertisement{}, false, nil

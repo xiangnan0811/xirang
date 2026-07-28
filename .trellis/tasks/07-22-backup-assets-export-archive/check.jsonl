@@ -1,0 +1,14 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Go tests, race checks, package boundaries, error contracts, and full backend quality gate."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Sentinel wrapping, stable safe API mapping, fail-closed errors, and no raw internal diagnostics."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Structured module logging, secret/path/member redaction, and bounded cardinality requirements."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Migration 068 apply/down, SQLite/PostgreSQL parity, used-data rollback refusal, and forward-fix verification."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Typecheck, lint, test, build, bundle, lazy-loading, localization, and interaction quality gate."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Keyboard, dialog focus, ARIA live/progress, axe, reduced-motion, and responsive verification."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Closed DTO mapper, unknown enum/contradiction rejection, exact IDs/times/bytes, and storage/URL safety."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Dedicated branch, exact staging, PR/CI monitoring, merge, and post-merge workflow gate."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Required reuse of Content, lease, keyring, Processing, Derived, audit, and UI primitives without duplicate stacks."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"End-to-end data flow, authorization, lifecycle, rollback, and cross-engine/frontend contract review."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Exact manifest, migration head, scope, release/deployment truth, and evidence status accuracy."}
+{"file":".trellis/tasks/07-22-backup-assets-export-archive/research/current-main-evidence.md","reason":"Planning-only baseline and scope evidence against which final implementation and delivery claims must be checked."}
+{"file":".trellis/tasks/07-22-backup-assets-export-archive/research/implementation-evidence.md","reason":"Observed Phase 2 commands, current Step 10 closure boundaries, historical checkpoints, and delivery-status truth."}
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Private runtime roots, graceful lifecycle, default-disabled publication, scheduler ownership, and deployment boundary checks."}

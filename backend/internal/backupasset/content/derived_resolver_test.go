@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -341,6 +342,207 @@ func TestDerivedResolverArchiveIndexResolvesExactCanonicalJSON(t *testing.T) {
 	got, err := io.ReadAll(session.Reader())
 	if err != nil || !bytes.Equal(got, payload) || reader.calls != 2 {
 		t.Fatalf("archive index payload=%q calls=%d err=%v", got, reader.calls, err)
+	}
+}
+
+func TestDerivedResolverArchiveIndexViewKeepsOrdinalAndArtifactBindingPrivate(t *testing.T) {
+	db, fixture := derivedResolverFixture(t)
+	firstID := strings.Repeat("a", 32)
+	secondID := strings.Repeat("b", 32)
+	payload := []byte(`{"schema_version":1,"entries":[{"id":"` + firstID + `","display_name":"first.txt","size":3,"media_type":"text/plain"},{"id":"` + secondID + `","parent_id":"` + strings.Repeat("c", 32) + `","display_name":"second.pdf","size":5,"media_type":"application/pdf"}],"expanded_bytes":8,"complete":true}`)
+	configureDerivedResolverPayload(t, db, fixture, payload)
+	configureDerivedResolverProduct(t, db, fixture, "archive.inspect", "archive.inspect.v1", "archive_index_v1", "metadata", "application/json")
+	reader := &derivedArtifactReaderFake{artifactID: fixture.artifactID, payload: payload}
+	resolver, err := NewDerivedRepresentationResolver(
+		db, reader.Read, derivedResolverTestActivePipeline, derivedResolverTestMalwareSafe,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := derivedResolverTestAsset(fixture)
+	asset.MediaType = "application/zip"
+	asset.Size = 1024
+	index, err := resolver.ResolveArchiveIndex(context.Background(), ArchiveIndexRequest{
+		Asset: asset, SecurityPolicyRevision: fixture.policyRevision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if index.SchemaVersion != 1 || index.IndexRevision == "" || len(index.Entries) != 2 ||
+		index.ArtifactID() != fixture.artifactID || index.PipelineFingerprint() != derivedResolverTestPipeline ||
+		index.SecurityPolicyRevision() != fixture.policyRevision {
+		t.Fatalf("archive index=%+v", index)
+	}
+	if member, ok := index.ResolveMember(secondID); !ok || member.Ordinal != 1 || member.Digest == "" ||
+		member.Size != 5 || member.MediaType != "application/pdf" {
+		t.Fatalf("resolved member=%+v ok=%v", member, ok)
+	}
+	encoded, err := json.Marshal(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"ordinal", fixture.artifactID, fixture.setID, fixture.blobID, derivedResolverTestPipeline, "artifact", "locator"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("archive index JSON leaked %q: %s", forbidden, encoded)
+		}
+	}
+	if !strings.Contains(string(encoded), secondID) || !strings.Contains(string(encoded), "second.pdf") {
+		t.Fatalf("archive index JSON lost safe member view: %s", encoded)
+	}
+}
+
+func TestDerivedResolverArchiveMemberBindsExactRequestAndDerivedArtifact(t *testing.T) {
+	db, fixture := derivedResolverFixture(t)
+	memberID := strings.Repeat("a", 32)
+	requestID, contentPayload := configureDerivedArchiveMemberFixture(t, db, fixture, memberID, 7)
+	reader := &derivedArtifactReaderMapFake{payloads: map[string][]byte{}}
+	var contentArtifact model.BackupAssetDerivedArtifact
+	if err := db.Where("artifact_set_id = ? AND role = ?", fixture.setID, "content").Take(&contentArtifact).Error; err != nil {
+		t.Fatal(err)
+	}
+	var metadataArtifact model.BackupAssetDerivedArtifact
+	if err := db.Where("artifact_set_id = ? AND role = ?", fixture.setID, "metadata").Take(&metadataArtifact).Error; err != nil {
+		t.Fatal(err)
+	}
+	reader.payloads[contentArtifact.ID] = contentPayload
+	reader.payloads[metadataArtifact.ID] = []byte(`{"schema_version":1,"member_id":"` + memberID + `","display_name":"member.txt","size":14,"media_type":"text/plain"}`)
+	resolver, err := NewDerivedRepresentationResolver(
+		db, reader.Read, derivedResolverTestActivePipeline, derivedResolverTestMalwareSafe,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := derivedResolverTestAsset(fixture)
+	asset.MediaType = "application/zip"
+	asset.Size = 1024
+	resolved, err := resolver.ResolveArchiveMember(context.Background(), ArchiveMemberArtifactRequest{
+		RequestID: requestID, OwnerUserID: 42, Asset: asset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.MemberRequestID != requestID || resolved.Ref != fixture.ref ||
+		resolved.CatalogGenerationID != fixture.catalogGenerationID || resolved.SourceFingerprint != fixture.sourceFingerprint ||
+		resolved.EntryFingerprint != fixture.sourceEntryFingerprint || resolved.ProcessingJobID != fixture.jobID ||
+		resolved.ProcessingAttemptID == "" || resolved.DerivedArtifactSetID != fixture.setID ||
+		resolved.DerivedArtifactID != contentArtifact.ID || resolved.DerivedBlobID != contentArtifact.BlobID ||
+		resolved.DerivedDigest != contentArtifact.PlaintextDigest || resolved.DerivedSize != int64(len(contentPayload)) ||
+		resolved.MediaType != "text/plain" || resolved.MemberChainDigest != ArchiveMemberChainDigest(fixture.ref, strings.Repeat("3", 64), memberID) {
+		t.Fatalf("resolved archive member=%+v", resolved)
+	}
+	if encoded, err := json.Marshal(resolved); err != nil || string(encoded) != "{}" {
+		t.Fatalf("private member binding serialized: %s err=%v", encoded, err)
+	}
+	var destination bytes.Buffer
+	if err := resolver.ReadArchiveMember(context.Background(), resolved, &destination); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(destination.Bytes(), contentPayload) {
+		t.Fatalf("member payload=%q", destination.Bytes())
+	}
+}
+
+func TestDerivedResolverArchiveMemberValidatesSucceededOutputBeforeReadyWithoutServingIt(t *testing.T) {
+	db, fixture := derivedResolverFixture(t)
+	memberID := strings.Repeat("a", 32)
+	requestID, contentPayload := configureDerivedArchiveMemberFixture(t, db, fixture, memberID, 7)
+	if err := db.Model(&model.BackupAssetArchiveMemberRequest{}).Where("id = ?", requestID).Updates(map[string]any{
+		"state": "running", "finished_at": nil,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	reader := &derivedArtifactReaderMapFake{payloads: map[string][]byte{}}
+	var contentArtifact model.BackupAssetDerivedArtifact
+	if err := db.Where("artifact_set_id = ? AND role = ?", fixture.setID, "content").Take(&contentArtifact).Error; err != nil {
+		t.Fatal(err)
+	}
+	var metadataArtifact model.BackupAssetDerivedArtifact
+	if err := db.Where("artifact_set_id = ? AND role = ?", fixture.setID, "metadata").Take(&metadataArtifact).Error; err != nil {
+		t.Fatal(err)
+	}
+	reader.payloads[contentArtifact.ID] = contentPayload
+	reader.payloads[metadataArtifact.ID] = []byte(`{"schema_version":1,"member_id":"` + memberID + `","display_name":"member.txt","size":14,"media_type":"text/plain"}`)
+	resolver, err := NewDerivedRepresentationResolver(
+		db, reader.Read, derivedResolverTestActivePipeline, derivedResolverTestMalwareSafe,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := derivedResolverTestAsset(fixture)
+	asset.MediaType = "application/zip"
+	asset.Size = 1024
+	request := ArchiveMemberArtifactRequest{RequestID: requestID, OwnerUserID: 42, Asset: asset}
+
+	validated, err := resolver.ValidateArchiveMemberOutput(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validated.MemberRequestID != requestID || validated.ProcessingJobID != fixture.jobID ||
+		validated.DerivedArtifactID != contentArtifact.ID || validated.DerivedSize != int64(len(contentPayload)) {
+		t.Fatalf("validated output=%+v", validated)
+	}
+	if _, err := resolver.ResolveArchiveMember(context.Background(), request); !errors.Is(err, ErrDerivedRepresentationUnavailable) {
+		t.Fatalf("running member became serveable: %v", err)
+	}
+}
+
+func TestDerivedResolverArchiveMemberRejectsMalformedOrCrossMemberMetadata(t *testing.T) {
+	memberID := strings.Repeat("a", 32)
+	for _, testCase := range []struct {
+		name      string
+		metadata  []byte
+		forbidden string
+	}{
+		{name: "malformed", metadata: []byte(`{"schema_version":`)},
+		{name: "cross member", metadata: []byte(`{"schema_version":1,"member_id":"` + strings.Repeat("b", 32) + `","display_name":"member.txt","size":14,"media_type":"text/plain"}`)},
+		{name: "raw path display", metadata: []byte(`{"schema_version":1,"member_id":"` + memberID + `","display_name":"folder/member.txt","size":14,"media_type":"text/plain"}`), forbidden: "folder/member.txt"},
+		{name: "size mismatch", metadata: []byte(`{"schema_version":1,"member_id":"` + memberID + `","display_name":"member.txt","size":15,"media_type":"text/plain"}`)},
+		{name: "unknown field", metadata: []byte(`{"schema_version":1,"member_id":"` + memberID + `","display_name":"member.txt","size":14,"media_type":"text/plain","path":"secret/member.txt"}`), forbidden: "secret/member.txt"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, fixture := derivedResolverFixture(t)
+			requestID, contentPayload := configureDerivedArchiveMemberFixture(t, db, fixture, memberID, 7)
+			var contentArtifact model.BackupAssetDerivedArtifact
+			if err := db.Where("artifact_set_id = ? AND role = ?", fixture.setID, "content").Take(&contentArtifact).Error; err != nil {
+				t.Fatal(err)
+			}
+			var metadataArtifact model.BackupAssetDerivedArtifact
+			if err := db.Where("artifact_set_id = ? AND role = ?", fixture.setID, "metadata").Take(&metadataArtifact).Error; err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(testCase.metadata)
+			digestHex := hex.EncodeToString(digest[:])
+			if err := db.Model(&model.BackupAssetDerivedArtifact{}).Where("id = ?", metadataArtifact.ID).Updates(map[string]any{
+				"plaintext_size": int64(len(testCase.metadata)), "plaintext_digest": digestHex,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", metadataArtifact.BlobID).Updates(map[string]any{
+				"plaintext_size": int64(len(testCase.metadata)), "plaintext_digest": digestHex,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			reader := &derivedArtifactReaderMapFake{payloads: map[string][]byte{
+				contentArtifact.ID: contentPayload, metadataArtifact.ID: testCase.metadata,
+			}}
+			resolver, err := NewDerivedRepresentationResolver(
+				db, reader.Read, derivedResolverTestActivePipeline, derivedResolverTestMalwareSafe,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			asset := derivedResolverTestAsset(fixture)
+			asset.MediaType, asset.Size = "application/zip", 1024
+			_, err = resolver.ResolveArchiveMember(context.Background(), ArchiveMemberArtifactRequest{
+				RequestID: requestID, OwnerUserID: 42, Asset: asset,
+			})
+			if !errors.Is(err, ErrDerivedRepresentationUnavailable) {
+				t.Fatalf("malformed member metadata error=%v", err)
+			}
+			if testCase.forbidden != "" && strings.Contains(err.Error(), testCase.forbidden) {
+				t.Fatalf("member metadata error leaked %q: %v", testCase.forbidden, err)
+			}
+		})
 	}
 }
 
@@ -719,6 +921,46 @@ func TestDerivedAttemptResolverFailsClosedForKnownInvalidDerivedIdentity(t *test
 	}
 }
 
+func TestDerivedAttemptResolverNeverUsesArchiveMemberArtifactAsNestedWorkerInput(t *testing.T) {
+	db, fixture := derivedResolverFixture(t)
+	memberID := strings.Repeat("a", 32)
+	configureDerivedArchiveMemberFixture(t, db, fixture, memberID, 7)
+	var member model.BackupAssetDerivedArtifact
+	if err := db.Where("artifact_set_id = ? AND role = ?", fixture.setID, "content").Take(&member).Error; err != nil {
+		t.Fatal(err)
+	}
+	derived, err := NewDerivedRepresentationResolver(
+		db,
+		func(context.Context, DerivedArtifactRead, io.Writer) error { return nil },
+		derivedResolverTestActivePipeline,
+		derivedResolverTestMalwareSafe,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary := &derivedPrimaryResolverFake{payload: []byte("must not open the outer Provider")}
+	asset := derivedResolverTestAsset(fixture)
+	asset.MediaType = "application/zip"
+	asset.Size = 1024
+	resolver, err := NewDerivedAttemptSourceResolver(
+		primary, derived, fixture.policyRevision,
+		func(context.Context, backupasset.AssetRef, string, string) (AuthorizedAsset, error) {
+			return asset, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = resolver.OpenContentSource(context.Background(), SourceRequest{
+		Ref: fixture.ref, CatalogGenerationID: fixture.catalogGenerationID,
+		ExpectedSource: fixture.sourceFingerprint, ExpectedEntry: member.PlaintextDigest,
+		Mode: SourceModeStat,
+	})
+	if !errors.Is(err, ErrDerivedRepresentationUnavailable) || primary.opens != 0 {
+		t.Fatalf("archive-member nested input error=%v Provider opens=%d", err, primary.opens)
+	}
+}
+
 type derivedResolverTestBinding struct {
 	ref                    backupasset.AssetRef
 	catalogGenerationID    string
@@ -779,6 +1021,7 @@ func derivedResolverFixture(t *testing.T) (*gorm.DB, derivedResolverTestBinding)
 		&model.BackupAssetProcessingJob{}, &model.BackupAssetProcessingAttempt{},
 		&model.BackupAssetDerivedArtifactSet{}, &model.BackupAssetDerivedArtifact{},
 		&model.BackupAssetDerivedBlobReference{}, &model.BackupAssetDerivedBlob{},
+		&model.BackupAssetArchiveMemberRequest{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -865,6 +1108,90 @@ func derivedResolverFixture(t *testing.T) (*gorm.DB, derivedResolverTestBinding)
 		t.Fatal(err)
 	}
 	return db, fixture
+}
+
+func configureDerivedArchiveMemberFixture(
+	t *testing.T,
+	db *gorm.DB,
+	fixture derivedResolverTestBinding,
+	memberID string,
+	ordinal int,
+) (string, []byte) {
+	t.Helper()
+	now := time.Date(2026, 7, 20, 8, 0, 0, 0, time.UTC)
+	contentPayload := []byte("member payload")
+	contentDigest := sha256.Sum256(contentPayload)
+	metadataPayload := []byte(`{"schema_version":1,"member_id":"` + memberID + `","display_name":"member.txt","size":14,"media_type":"text/plain"}`)
+	metadataDigest := sha256.Sum256(metadataPayload)
+	metadataArtifactID := strings.Repeat("b", 32)
+	metadataBlobID := strings.Repeat("c", 32)
+	metadataReferenceID := strings.Repeat("e", 32)
+	if err := db.Model(&model.BackupAssetProcessingJob{}).Where("id = ?", fixture.jobID).Updates(map[string]any{
+		"capability": "archive.extract_entry", "capability_schema": "archive.extract_entry.v1",
+		"output_profile": "archive_member_v1", "descriptor_canonical": []byte(fmt.Sprintf(`{"schema_version":1,"parameters":{"member_start":%d,"member_end":%d}}`, ordinal, ordinal)),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.BackupAssetDerivedArtifact{}).Where("id = ?", fixture.artifactID).Updates(map[string]any{
+		"ordinal": 0, "role": "content", "media_type": "text/plain", "plaintext_size": int64(len(contentPayload)),
+		"plaintext_digest": hex.EncodeToString(contentDigest[:]), "completeness": "complete",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.BackupAssetDerivedBlob{}).Where("id = ?", fixture.blobID).Updates(map[string]any{
+		"plaintext_size": int64(len(contentPayload)), "plaintext_digest": hex.EncodeToString(contentDigest[:]),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	metadataBlob := model.BackupAssetDerivedBlob{
+		ID: metadataBlobID, PlaintextDigest: hex.EncodeToString(metadataDigest[:]), PlaintextSize: int64(len(metadataPayload)),
+		PhysicalSize: 256, CipherFormatVersion: 1, ChunkSize: 64 << 10, ChunkCount: 1,
+		NoncePrefix: []byte("87654321"), OpaqueLocator: metadataBlobID + ".xrd",
+		WrappedDEK: bytes.Repeat([]byte{3}, 48), EnvelopeNonce: bytes.Repeat([]byte{4}, 12),
+		DerivedKEKVersion: 1, State: "active", RefCount: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	metadataArtifact := model.BackupAssetDerivedArtifact{
+		ID: metadataArtifactID, ArtifactSetID: fixture.setID, Ordinal: 1, Role: "metadata", MediaType: "application/json",
+		PlaintextSize: int64(len(metadataPayload)), PlaintextDigest: metadataBlob.PlaintextDigest, Completeness: "complete",
+		CoverageCanonical: []byte(`{"schema_version":1}`), BlobID: metadataBlobID, CreatedAt: now,
+	}
+	metadataReference := model.BackupAssetDerivedBlobReference{
+		ID: metadataReferenceID, BlobID: metadataBlobID, ArtifactID: metadataArtifactID,
+		RecoveryPointID: fixture.ref.RecoveryPointID, CatalogGenerationID: fixture.catalogGenerationID,
+		EntryID: fixture.ref.EntryID, SourceFingerprint: fixture.sourceFingerprint,
+		State: "active", CreatedAt: now, UpdatedAt: now,
+	}
+	for _, value := range []any{&metadataBlob, &metadataArtifact, &metadataReference} {
+		if err := db.Create(value).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Model(&model.BackupAssetDerivedArtifactSet{}).Where("id = ?", fixture.setID).Updates(map[string]any{
+		"artifact_count": 2, "total_plaintext_bytes": int64(len(contentPayload) + len(metadataPayload)),
+		"completeness": "complete",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	requestID := strings.Repeat("0", 32)
+	interestID := strings.Repeat("1", 32)
+	jobID := fixture.jobID
+	finished := now
+	request := model.BackupAssetArchiveMemberRequest{
+		ID: requestID, OwnerUserID: 42, Endpoint: "archive_member_create",
+		KeyDigest: strings.Repeat("1", 64), RequestIntentDigest: strings.Repeat("2", 64),
+		RecoveryPointID: fixture.ref.RecoveryPointID, EntryID: fixture.ref.EntryID,
+		CatalogGenerationID: fixture.catalogGenerationID, SourceFingerprint: fixture.sourceFingerprint,
+		EntryFingerprint: fixture.sourceEntryFingerprint, IndexArtifactID: strings.Repeat("f", 32),
+		IndexRevision:     strings.Repeat("3", 64),
+		MemberChainDigest: ArchiveMemberChainDigest(fixture.ref, strings.Repeat("3", 64), memberID),
+		ResolvedOrdinal:   ordinal, ProcessingInterestID: &interestID, ProcessingJobID: &jobID,
+		State: "ready", AbsoluteExpiresAt: now.Add(2 * time.Hour), CreatedAt: now, UpdatedAt: now,
+		FinishedAt: &finished, Version: 2,
+	}
+	if err := db.Create(&request).Error; err != nil {
+		t.Fatal(err)
+	}
+	return requestID, contentPayload
 }
 
 func configureDerivedResolverProduct(
@@ -1032,6 +1359,21 @@ type derivedArtifactReaderFake struct {
 	artifactID string
 	payload    []byte
 	calls      int
+}
+
+type derivedArtifactReaderMapFake struct {
+	payloads map[string][]byte
+	calls    int
+}
+
+func (fake *derivedArtifactReaderMapFake) Read(_ context.Context, request DerivedArtifactRead, destination io.Writer) error {
+	payload, ok := fake.payloads[request.ArtifactID]
+	if !ok {
+		return errors.New("unexpected artifact")
+	}
+	fake.calls++
+	_, err := destination.Write(payload)
+	return err
 }
 
 type derivedPrimaryResolverFake struct {

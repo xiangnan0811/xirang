@@ -109,21 +109,7 @@ func (h *ConfigHandler) persistConfigImport(ctx context.Context, foundation map[
 		return fmt.Errorf("settings service is unavailable for backup asset import")
 	}
 	return h.settingsSvc.WithBackupAssetMutation(ctx, func(current map[string]string) error {
-		if err := h.settingsSvc.ValidateBackupAssetEffectiveUpdate(current, foundation); err != nil {
-			return err
-		}
-		value, changesEnabled := foundation["backup_assets.enabled"]
-		if !changesEnabled {
-			return persist()
-		}
-		enabled, err := strconv.ParseBool(value)
-		if err != nil {
-			return err
-		}
-		if h.transitioner == nil {
-			return fmt.Errorf("backup asset feature transitioner is unavailable")
-		}
-		return h.transitioner.TransitionFeature(ctx, enabled, persist)
+		return transitionBackupAssetSettingsMutation(ctx, h.settingsSvc, h.transitioner, current, foundation, persist)
 	})
 }
 
@@ -857,7 +843,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					}
 				}
 				if err := tx.Create(&newTask).Error; err != nil {
-					continue
+					return err
 				}
 				// GORM omits a false bool when the model declares default:true.
 				// Keep the corrective write in this transaction so a foreign

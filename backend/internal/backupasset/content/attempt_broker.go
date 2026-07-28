@@ -327,21 +327,27 @@ type attemptReadHandle struct {
 
 func (read *attemptReadHandle) Read(payload []byte) (int, error) {
 	read.mu.Lock()
-	defer read.mu.Unlock()
 	if read.closed {
+		read.mu.Unlock()
 		return 0, io.ErrClosedPipe
 	}
 	if read.remaining == 0 {
+		read.mu.Unlock()
 		return 0, io.EOF
 	}
 	if int64(len(payload)) > read.remaining {
 		payload = payload[:read.remaining]
 	}
-	count, err := read.reader.Read(payload)
+	reader := read.reader
+	read.mu.Unlock()
+
+	count, err := reader.Read(payload)
+	read.mu.Lock()
 	read.remaining -= int64(count)
 	if err != nil && !errors.Is(err, io.EOF) {
 		read.readErr = err
 	}
+	read.mu.Unlock()
 	return count, err
 }
 

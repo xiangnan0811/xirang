@@ -3,6 +3,7 @@ package backupasset
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,7 @@ const (
 	KeyDomainRecoveryCleanupOwnership KeyDomain = "recovery_cleanup_ownership"
 	KeyDomainSearchToken              KeyDomain = "search_token"
 	KeyDomainDerivedStore             KeyDomain = "derived_store"
+	KeyDomainExportStore              KeyDomain = "export_store"
 )
 
 var RequiredKeyDomains = []KeyDomain{
@@ -187,6 +189,43 @@ func (keyring *Keyring) ByVersion(ctx context.Context, domain KeyDomain, version
 		return DomainKeyMaterial{}, fmt.Errorf("load domain key version: %w", err)
 	}
 	return keyring.material(row)
+}
+
+// LockActiveTx reloads and locks the exact active domain-key row selected by a
+// caller before its transaction began. The plaintext comparison prevents a
+// stale or substituted key snapshot from authorizing a dependent commit while
+// still allowing a master-key envelope rewrap that preserves domain material.
+func (keyring *Keyring) LockActiveTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	expected DomainKeyMaterial,
+) (DomainKeyMaterial, error) {
+	if tx == nil || expected.State != DomainKeyActive || expected.Version <= 0 ||
+		ValidateOpaqueID(expected.ID) != nil || len(expected.Key) != secure.DomainKeySize {
+		return DomainKeyMaterial{}, fmt.Errorf("%w: invalid expected active domain key", ErrKeyUnavailable)
+	}
+	if err := keyring.validate(expected.Domain); err != nil {
+		return DomainKeyMaterial{}, err
+	}
+	var row model.WrappedDomainKey
+	result := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND domain = ? AND version = ?", expected.ID, expected.Domain, expected.Version).
+		Limit(1).Find(&row)
+	if result.Error != nil {
+		return DomainKeyMaterial{}, fmt.Errorf("lock active domain key: %w", result.Error)
+	}
+	if result.RowsAffected != 1 || DomainKeyState(row.State) != DomainKeyActive {
+		return DomainKeyMaterial{}, fmt.Errorf("%w: expected domain key is no longer active", ErrKeyUnavailable)
+	}
+	material, err := keyring.material(row)
+	if err != nil {
+		return DomainKeyMaterial{}, err
+	}
+	if material.ID != expected.ID || material.Domain != expected.Domain || material.Version != expected.Version ||
+		material.State != DomainKeyActive || subtle.ConstantTimeCompare(material.Key, expected.Key) != 1 {
+		return DomainKeyMaterial{}, fmt.Errorf("%w: active domain key material changed", ErrKeyUnavailable)
+	}
+	return material, nil
 }
 
 func (keyring *Keyring) Rotate(ctx context.Context, domain KeyDomain, verifyFor time.Duration) (DomainKeyMaterial, error) {
@@ -417,7 +456,7 @@ func (keyring *Keyring) MarkLost(ctx context.Context, domain KeyDomain, version 
 	if err := keyring.validate(domain); err != nil {
 		return err
 	}
-	if domain == KeyDomainSearchToken || domain == KeyDomainDerivedStore {
+	if domain == KeyDomainSearchToken || domain == KeyDomainDerivedStore || domain == KeyDomainExportStore {
 		return fmt.Errorf("%w: domain %s requires coordinated invalidation", ErrKeyRotationProhibited, domain)
 	}
 	if version <= 0 {
@@ -460,21 +499,26 @@ func (keyring *Keyring) MarkRebuildableLost(
 		}
 		var target *model.WrappedDomainKey
 		for index := range rows {
-			if rows[index].Version == version && DomainKeyState(rows[index].State) == DomainKeyActive {
-				target = &rows[index]
-				break
+			if rows[index].Version != version {
+				continue
 			}
+			state := DomainKeyState(rows[index].State)
+			if state == DomainKeyActive || (domain == KeyDomainExportStore && state == DomainKeyVerifyOnly) {
+				target = &rows[index]
+			}
+			break
 		}
 		if target == nil {
 			return fmt.Errorf("%w: domain key version is not active", ErrKeyUnavailable)
 		}
+		targetState := DomainKeyState(target.State)
 		transition := RebuildableKeyTransition{Domain: domain, PreviousVersion: version}
 		if err := invalidate(ctx, tx, transition); err != nil {
 			return fmt.Errorf("invalidate lost rebuildable domain: %w", err)
 		}
 		now := keyring.utcNow()
 		result := tx.Model(&model.WrappedDomainKey{}).
-			Where("id = ? AND version = ? AND state = ?", target.ID, version, DomainKeyActive).
+			Where("id = ? AND version = ? AND state = ?", target.ID, version, targetState).
 			Updates(map[string]any{
 				"state": DomainKeyLost, "verify_until": nil, "lost_at": now, "updated_at": now,
 			})
@@ -492,7 +536,7 @@ func (keyring *Keyring) validateRebuildableTransition(domain KeyDomain, invalida
 	if err := keyring.validate(domain); err != nil {
 		return err
 	}
-	if domain != KeyDomainSearchToken && domain != KeyDomainDerivedStore {
+	if domain != KeyDomainSearchToken && domain != KeyDomainDerivedStore && domain != KeyDomainExportStore {
 		return fmt.Errorf("%w: domain %s is not rebuildable", ErrKeyRotationProhibited, domain)
 	}
 	if invalidate == nil {
@@ -623,6 +667,7 @@ var (
 	validKeyDomains = setOf(
 		KeyDomainEntryIdentity, KeyDomainCursorSigning, KeyDomainAuditFingerprint,
 		KeyDomainRecoveryCleanupOwnership, KeyDomainSearchToken, KeyDomainDerivedStore,
+		KeyDomainExportStore,
 	)
 	validDomainKeyStates = setOf(DomainKeyActive, DomainKeyVerifyOnly, DomainKeyRetired, DomainKeyLost)
 )

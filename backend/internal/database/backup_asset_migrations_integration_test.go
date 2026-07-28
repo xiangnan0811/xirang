@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/config"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/mattn/go-sqlite3"
+	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
 )
 
@@ -34,7 +36,24 @@ const (
 	backupAssetSearchVersion           = 65
 	backupAssetContentVersion          = 66
 	backupAssetProcessingVersion       = 67
+	backupAssetExportVersion           = 68
 )
+
+var backupAssetExportTables = []string{
+	"backup_asset_export_jobs",
+	"backup_asset_export_keys",
+	"backup_asset_export_items",
+	"backup_asset_export_attempts",
+	"backup_asset_export_item_attempts",
+	"backup_asset_export_source_leases",
+	"backup_asset_export_artifacts",
+	"backup_asset_export_idempotency",
+	"backup_asset_export_quota_buckets",
+	"backup_asset_export_reservations",
+	"backup_asset_export_delivery_grants",
+	"backup_asset_export_delivery_requests",
+	"backup_asset_archive_member_requests",
+}
 
 var backupAssetProcessingTables = []string{
 	"backup_asset_processing_jobs",
@@ -188,6 +207,87 @@ func TestBackupAssetMigration062PostgresApplyDown(t *testing.T) {
 	assertFoundationSchemaAbsent(t, db, "postgres")
 }
 
+func TestRunMigrationsPostgresDirtyCheckUsesSearchPath(t *testing.T) {
+	t.Setenv("ALLOW_DIRTY_STARTUP", "")
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		if strings.TrimSpace(os.Getenv("REQUIRE_POSTGRES_MIGRATION_TEST")) == "1" {
+			t.Fatal("TEST_POSTGRES_DSN is required when REQUIRE_POSTGRES_MIGRATION_TEST=1")
+		}
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil || parsed.Scheme == "" {
+		t.Fatalf("TEST_POSTGRES_DSN must be a PostgreSQL URL: %v", err)
+	}
+
+	baseDB, err := openPostgresSQLDB(dsn)
+	if err != nil {
+		t.Fatalf("open PostgreSQL dirty-check base: %v", err)
+	}
+	if err := baseDB.Ping(); err != nil {
+		_ = baseDB.Close()
+		t.Fatalf("ping PostgreSQL dirty-check base: %v", err)
+	}
+	t.Cleanup(func() { _ = baseDB.Close() })
+
+	suffix := time.Now().UTC().Format("20060102150405.000000000")
+	freshSchema := "xirang_dirty_fresh_" + strings.ReplaceAll(suffix, ".", "")
+	firstSchema := "xirang_dirty_first_" + strings.ReplaceAll(suffix, ".", "")
+	siblingSchema := "xirang_dirty_sibling_" + strings.ReplaceAll(suffix, ".", "")
+	createdSchemas := make([]string, 0, 3)
+	t.Cleanup(func() {
+		for index := len(createdSchemas) - 1; index >= 0; index-- {
+			if _, err := baseDB.Exec("DROP SCHEMA IF EXISTS " + createdSchemas[index] + " CASCADE"); err != nil {
+				t.Errorf("drop PostgreSQL dirty-check schema %s: %v", createdSchemas[index], err)
+			}
+		}
+	})
+	for _, schema := range []string{freshSchema, firstSchema, siblingSchema} {
+		if _, err := baseDB.Exec("CREATE SCHEMA " + schema); err != nil {
+			t.Fatalf("create PostgreSQL dirty-check schema %s: %v", schema, err)
+		}
+		createdSchemas = append(createdSchemas, schema)
+	}
+
+	if _, err := baseDB.Exec("CREATE TABLE " + siblingSchema + ".schema_migrations (version BIGINT NOT NULL PRIMARY KEY, dirty BOOLEAN NOT NULL)"); err != nil {
+		t.Fatalf("create sibling schema_migrations: %v", err)
+	}
+	if _, err := baseDB.Exec("INSERT INTO " + siblingSchema + ".schema_migrations (version, dirty) VALUES (68, true)"); err != nil {
+		t.Fatalf("seed sibling dirty migration: %v", err)
+	}
+
+	openScoped := func(searchPath string) (*gorm.DB, *sql.DB) {
+		t.Helper()
+		scoped := *parsed
+		query := scoped.Query()
+		query.Set("search_path", searchPath)
+		query.Set("timezone", "UTC")
+		scoped.RawQuery = query.Encode()
+		gdb, err := Open(config.Config{DBType: "postgres", PostgresDSN: scoped.String()})
+		if err != nil {
+			t.Fatalf("open PostgreSQL dirty-check scope %s: %v", searchPath, err)
+		}
+		sqlDB, err := gdb.DB()
+		if err != nil {
+			t.Fatalf("get PostgreSQL dirty-check scope %s DB: %v", searchPath, err)
+		}
+		t.Cleanup(func() { _ = sqlDB.Close() })
+		return gdb, sqlDB
+	}
+
+	freshDB, _ := openScoped(freshSchema)
+	if err := RunMigrations(freshDB, "postgres"); err != nil {
+		t.Fatalf("fresh scoped schema must ignore sibling dirty row: %v", err)
+	}
+
+	firstDB, _ := openScoped(firstSchema + "," + siblingSchema)
+	err = RunMigrations(firstDB, "postgres")
+	if !errors.Is(err, ErrMigrationDirty) {
+		t.Fatalf("search-path-visible sibling dirty row must fail closed, got %v", err)
+	}
+}
+
 func TestBackupAssetMigration062ForeignKeysSetNull(t *testing.T) {
 	migrator, db := newSQLiteBackupAssetMigrator(t)
 	migrateToBackupAssetFoundation(t, migrator)
@@ -335,6 +435,14 @@ func TestBackupAssetMigration067Postgres(t *testing.T) {
 	runBackupAssetMigration067Contract(t, newRequiredPostgresMigrationFixture(t))
 }
 
+func TestBackupAssetMigration068SQLite(t *testing.T) {
+	runBackupAssetMigration068Contract(t, newSQLiteMigrationFixture(t))
+}
+
+func TestBackupAssetMigration068Postgres(t *testing.T) {
+	runBackupAssetMigration068Contract(t, newRequiredPostgresMigrationFixture(t))
+}
+
 func TestBackupAssetMigration067PairedFiles(t *testing.T) {
 	testCases := []struct {
 		name string
@@ -358,6 +466,59 @@ func TestBackupAssetMigration067PairedFiles(t *testing.T) {
 			for _, fragment := range []string{"backup_asset_processing_jobs", "backup_asset_derived_blobs", "backup_asset_updater_metadata", "derived_store"} {
 				if !strings.Contains(text, fragment) {
 					t.Fatalf("%s is missing required fragment %q", testCase.path, fragment)
+				}
+			}
+		})
+	}
+}
+
+func TestBackupAssetMigration068PairedFiles(t *testing.T) {
+	tableFragments := []string{
+		"backup_asset_export_jobs",
+		"backup_asset_export_keys",
+		"backup_asset_export_items",
+		"backup_asset_export_attempts",
+		"backup_asset_export_item_attempts",
+		"backup_asset_export_source_leases",
+		"backup_asset_export_artifacts",
+		"backup_asset_export_idempotency",
+		"backup_asset_export_quota_buckets",
+		"backup_asset_export_reservations",
+		"backup_asset_export_delivery_grants",
+		"backup_asset_export_delivery_requests",
+		"backup_asset_archive_member_requests",
+	}
+	testCases := []struct {
+		name string
+		fs   interface {
+			ReadFile(string) ([]byte, error)
+		}
+		path string
+	}{
+		{name: "SQLiteUp", fs: sqliteMigrationsFS, path: "migrations/sqlite/000068_backup_asset_export.up.sql"},
+		{name: "SQLiteDown", fs: sqliteMigrationsFS, path: "migrations/sqlite/000068_backup_asset_export.down.sql"},
+		{name: "PostgresUp", fs: postgresMigrationsFS, path: "migrations/postgres/000068_backup_asset_export.up.sql"},
+		{name: "PostgresDown", fs: postgresMigrationsFS, path: "migrations/postgres/000068_backup_asset_export.down.sql"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			script, err := testCase.fs.ReadFile(testCase.path)
+			if err != nil {
+				t.Fatalf("read paired 000068 migration: %v", err)
+			}
+			text := string(script)
+			for _, fragment := range append(tableFragments, "export_store") {
+				if !strings.Contains(text, fragment) {
+					t.Fatalf("%s is missing required fragment %q", testCase.path, fragment)
+				}
+			}
+			if strings.HasSuffix(testCase.path, ".up.sql") {
+				const readyProductCheck = "CHECK (execution_state NOT IN ('ready', 'expiring', 'expired') OR (result_kind IN ('complete', 'partial') AND packed_count > 0))"
+				if !strings.Contains(text, readyProductCheck) {
+					t.Fatalf("%s is missing the closed ready-product CHECK", testCase.path)
+				}
+				if testCase.name == "SQLiteUp" && strings.Count(text, "id TEXT NOT NULL PRIMARY KEY CHECK") != len(tableFragments) {
+					t.Fatalf("%s does not declare every Export primary key NOT NULL", testCase.path)
 				}
 			}
 		})
@@ -485,6 +646,37 @@ func runBackupAssetMigration063Contract(t *testing.T, fixture migrationFixture) 
 	t.Run("DownRejectsEveryNativePointStateAndNullableLineage", fixture.testDownRejectsEveryNativePointStateAndNullableLineage)
 	t.Run("RejectedDownLeavesVersionSchemaAndDataUnchanged", fixture.testRejectedDownLeavesVersionSchemaAndDataUnchanged)
 	t.Run("UTCAndModelParity", fixture.testUTCAndModelParity)
+}
+
+func TestBackupAssetMigration068DeliveryAuditReceiptStatesArePaired(t *testing.T) {
+	testCases := []struct {
+		name string
+		fs   interface {
+			ReadFile(string) ([]byte, error)
+		}
+		path string
+	}{
+		{name: "SQLite", fs: sqliteMigrationsFS, path: "migrations/sqlite/000068_backup_asset_export.up.sql"},
+		{name: "Postgres", fs: postgresMigrationsFS, path: "migrations/postgres/000068_backup_asset_export.up.sql"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			script, err := testCase.fs.ReadFile(testCase.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(script)
+			for _, fragment := range []string{
+				"range_requested",
+				"audit_state IN ('none', 'pending', 'emitted', 'retry_wait', 'failed')",
+				"audit_state IN ('retry_wait', 'failed') AND audit_failure_code IN ('audit_write_failed', 'reconciliation_failed')",
+			} {
+				if !strings.Contains(text, fragment) {
+					t.Fatalf("%s is missing delivery audit contract %q", testCase.path, fragment)
+				}
+			}
+		})
+	}
 }
 
 func runBackupAssetMigration064Contract(t *testing.T, fixture migrationFixture) {
@@ -644,6 +836,1227 @@ func backupAssetProcessingModels() map[string]any {
 		"backup_asset_derived_blobs":             model.BackupAssetDerivedBlob{},
 		"backup_asset_derived_blob_references":   model.BackupAssetDerivedBlobReference{},
 		"backup_asset_updater_metadata":          model.BackupAssetUpdaterMetadata{},
+	}
+}
+
+func runBackupAssetMigration068Contract(t *testing.T, fixture migrationFixture) {
+	t.Helper()
+	t.Run("ApplyAndModelParity", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, backupAssetExportVersion)
+		assertMigrationVersion(t, migrator, backupAssetExportVersion)
+		for _, table := range backupAssetExportTables {
+			if !databaseTableExists(t, db, fixture.engine, table) {
+				t.Fatalf("%s export migration table %s is missing", fixture.engine, table)
+			}
+			want := gormColumnNames(t, backupAssetExportModels()[table])
+			var got []string
+			if fixture.engine == "sqlite" {
+				got = sqliteColumnNames(t, db, table)
+				assertSQLiteTimeColumnsHaveNoDefault(t, db, table)
+			} else {
+				got = postgresColumnNames(t, db, table)
+				assertPostgresTableTimeColumnsHaveNoDefault(t, db, table)
+			}
+			sort.Strings(got)
+			sort.Strings(want)
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Fatalf("%s %s columns mismatch\n got: %v\nwant: %v", fixture.engine, table, got, want)
+			}
+		}
+		definition := fixture.tableDefinition(t, db, "wrapped_domain_keys")
+		if !strings.Contains(definition, "derived_store") || !strings.Contains(definition, "export_store") {
+			t.Fatalf("%s wrapped key CHECK does not preserve derived_store and add export_store: %s", fixture.engine, definition)
+		}
+	})
+	t.Run("PostgresTimestampScanLocations", func(t *testing.T) {
+		if fixture.engine != "postgres" {
+			return
+		}
+		t.Setenv("TZ", "Asia/Shanghai")
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+
+		var timestampAt time.Time
+		var timestamptzAt time.Time
+		if err := db.QueryRow(`SELECT
+			TIMESTAMP '2026-07-27 03:04:05',
+			TIMESTAMPTZ '2026-07-27 03:04:05+00'`).Scan(&timestampAt, &timestamptzAt); err != nil {
+			t.Fatalf("scan PostgreSQL timestamp pair: %v", err)
+		}
+		for name, got := range map[string]time.Time{
+			"timestamp":   timestampAt,
+			"timestamptz": timestamptzAt,
+		} {
+			if got.Location() != time.UTC || got.Format(time.RFC3339) != "2026-07-27T03:04:05Z" {
+				t.Fatalf("%s scan=%s (%s), want configured UTC ScanLocation", name, got.Format(time.RFC3339), got.Location())
+			}
+		}
+	})
+	t.Run("LifecycleSchedulerColumnsIndexesDefaultsAndChecks", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+		var bucketCount int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM backup_asset_export_quota_buckets`).Scan(&bucketCount); err != nil {
+			t.Fatalf("count pristine %s lifecycle scheduler buckets: %v", fixture.engine, err)
+		}
+		if bucketCount != 0 {
+			t.Fatalf("pristine %s schema must not pre-create the global lifecycle latch, got %d bucket(s)", fixture.engine, bucketCount)
+		}
+		jobType := reflect.TypeOf(model.BackupAssetExportJob{})
+		sequenceField, found := jobType.FieldByName("LifecycleEnqueueSequence")
+		if !found || !strings.Contains(sequenceField.Tag.Get("gorm"),
+			"uniqueIndex:idx_backup_asset_export_jobs_lifecycle_enqueue_sequence") {
+			t.Fatalf("Export job model does not bind the immutable lifecycle sequence index: %+v", sequenceField)
+		}
+		indexDefinition := fixture.indexDefinition(t, db, "idx_backup_asset_export_jobs_lifecycle_enqueue_sequence")
+		for _, fragment := range []string{"unique index", "lifecycle_enqueue_sequence"} {
+			if !strings.Contains(indexDefinition, fragment) {
+				t.Fatalf("%s lifecycle sequence index omits %q: %s", fixture.engine, fragment, indexDefinition)
+			}
+		}
+
+		now := time.Now().UTC().Truncate(time.Second)
+		globalID := strings.Repeat("d", 32)
+		userID := strings.Repeat("e", 32)
+		fixture.mustExec(t, db, `INSERT INTO backup_asset_export_quota_buckets
+			(id, scope, subject, transition_revision, active_jobs, active_workers, active_readers,
+			 reserved_store_bytes, used_store_bytes, created_at, updated_at)
+			VALUES (?, 'global', 'global', 1, 0, 0, 0, 0, 0, ?, ?)`, globalID, now, now)
+		fixture.mustExec(t, db, `INSERT INTO backup_asset_export_quota_buckets
+			(id, scope, subject, transition_revision, active_jobs, active_workers, active_readers,
+			 reserved_store_bytes, used_store_bytes, created_at, updated_at)
+			VALUES (?, 'user', '42', 1, 0, 0, 0, 0, 0, ?, ?)`, userID, now, now)
+		assertSchedulerDefaults := func(t *testing.T, bucketID string) {
+			t.Helper()
+			var next, cursor, highWater, revision int64
+			var lease any
+			if err := db.QueryRow(fixture.bind(`SELECT lifecycle_next_sequence, lifecycle_sweep_cursor,
+				lifecycle_sweep_high_water, lifecycle_sweep_revision, lifecycle_sweep_lease_expires_at
+				FROM backup_asset_export_quota_buckets WHERE id = ?`), bucketID).
+				Scan(&next, &cursor, &highWater, &revision, &lease); err != nil {
+				t.Fatalf("load %s lifecycle scheduler defaults: %v", fixture.engine, err)
+			}
+			if next != 1 || cursor != 0 || highWater != 0 || revision != 0 || lease != nil {
+				t.Fatalf("%s lifecycle scheduler defaults are not inert: next=%d cursor=%d high_water=%d revision=%d lease=%v",
+					fixture.engine, next, cursor, highWater, revision, lease)
+			}
+		}
+		t.Run("global defaults", func(t *testing.T) { assertSchedulerDefaults(t, globalID) })
+		t.Run("user defaults", func(t *testing.T) { assertSchedulerDefaults(t, userID) })
+
+		for _, testCase := range []struct {
+			name  string
+			query string
+			args  []any
+		}{
+			{
+				name: "global cursor exceeds high water",
+				query: `UPDATE backup_asset_export_quota_buckets
+					SET lifecycle_sweep_cursor = 1 WHERE id = ?`,
+				args: []any{globalID},
+			},
+			{
+				name: "global high water reaches next sequence",
+				query: `UPDATE backup_asset_export_quota_buckets
+					SET lifecycle_sweep_high_water = lifecycle_next_sequence WHERE id = ?`,
+				args: []any{globalID},
+			},
+			{
+				name: "global lease without acquired revision",
+				query: `UPDATE backup_asset_export_quota_buckets
+					SET lifecycle_sweep_lease_expires_at = ? WHERE id = ?`,
+				args: []any{now.Add(time.Minute), globalID},
+			},
+			{
+				name: "global high water without a scheduler revision",
+				query: `UPDATE backup_asset_export_quota_buckets
+					SET lifecycle_next_sequence = 2, lifecycle_sweep_high_water = 1 WHERE id = ?`,
+				args: []any{globalID},
+			},
+			{
+				name: "global scheduler revision without high water",
+				query: `UPDATE backup_asset_export_quota_buckets
+					SET lifecycle_sweep_revision = 1 WHERE id = ?`,
+				args: []any{globalID},
+			},
+			{
+				name: "user next sequence is mutable",
+				query: `UPDATE backup_asset_export_quota_buckets
+					SET lifecycle_next_sequence = 2 WHERE id = ?`,
+				args: []any{userID},
+			},
+			{
+				name: "user cursor is mutable",
+				query: `UPDATE backup_asset_export_quota_buckets
+					SET lifecycle_sweep_cursor = 1, lifecycle_sweep_high_water = 1,
+						lifecycle_next_sequence = 2 WHERE id = ?`,
+				args: []any{userID},
+			},
+			{
+				name: "user revision is mutable",
+				query: `UPDATE backup_asset_export_quota_buckets
+					SET lifecycle_sweep_revision = 1 WHERE id = ?`,
+				args: []any{userID},
+			},
+			{
+				name: "user lease is mutable",
+				query: `UPDATE backup_asset_export_quota_buckets
+					SET lifecycle_sweep_lease_expires_at = ? WHERE id = ?`,
+				args: []any{now.Add(time.Minute), userID},
+			},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				fixture.expectExecRejectedInRollback(t, db, testCase.query, testCase.args...)
+			})
+		}
+
+		type quotaAccountingState struct {
+			transitionRevision int64
+			activeJobs         int64
+			activeWorkers      int64
+			activeReaders      int64
+			reservedStoreBytes int64
+			usedStoreBytes     int64
+			updatedAt          time.Time
+		}
+		loadQuotaAccountingState := func(t *testing.T) quotaAccountingState {
+			t.Helper()
+			var state quotaAccountingState
+			if err := db.QueryRow(fixture.bind(`SELECT transition_revision, active_jobs, active_workers,
+				active_readers, reserved_store_bytes, used_store_bytes, updated_at
+				FROM backup_asset_export_quota_buckets WHERE id = ?`), globalID).Scan(
+				&state.transitionRevision, &state.activeJobs, &state.activeWorkers, &state.activeReaders,
+				&state.reservedStoreBytes, &state.usedStoreBytes, &state.updatedAt,
+			); err != nil {
+				t.Fatalf("load %s quota accounting state: %v", fixture.engine, err)
+			}
+			return state
+		}
+		beforeSchedulerCAS := loadQuotaAccountingState(t)
+		schedulerLease := now.Add(time.Minute)
+		result, err := db.Exec(fixture.bind(`UPDATE backup_asset_export_quota_buckets
+			SET lifecycle_next_sequence = 2, lifecycle_sweep_cursor = 0, lifecycle_sweep_high_water = 1,
+				lifecycle_sweep_revision = 1, lifecycle_sweep_lease_expires_at = ?
+			WHERE id = ? AND lifecycle_sweep_revision = 0`), schedulerLease, globalID)
+		if err != nil {
+			t.Fatalf("persist %s scheduler-only CAS: %v", fixture.engine, err)
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+			t.Fatalf("persist %s scheduler-only CAS rows=%d err=%v, want 1 nil", fixture.engine, rows, err)
+		}
+		afterSchedulerCAS := loadQuotaAccountingState(t)
+		if afterSchedulerCAS.transitionRevision != beforeSchedulerCAS.transitionRevision ||
+			afterSchedulerCAS.activeJobs != beforeSchedulerCAS.activeJobs ||
+			afterSchedulerCAS.activeWorkers != beforeSchedulerCAS.activeWorkers ||
+			afterSchedulerCAS.activeReaders != beforeSchedulerCAS.activeReaders ||
+			afterSchedulerCAS.reservedStoreBytes != beforeSchedulerCAS.reservedStoreBytes ||
+			afterSchedulerCAS.usedStoreBytes != beforeSchedulerCAS.usedStoreBytes ||
+			!afterSchedulerCAS.updatedAt.Equal(beforeSchedulerCAS.updatedAt) {
+			t.Fatalf("%s scheduler-only CAS mutated quota accounting: before=%+v after=%+v",
+				fixture.engine, beforeSchedulerCAS, afterSchedulerCAS)
+		}
+		loser, err := db.Exec(fixture.bind(`UPDATE backup_asset_export_quota_buckets
+			SET lifecycle_sweep_lease_expires_at = ?
+			WHERE id = ? AND lifecycle_sweep_revision = 0`), schedulerLease.Add(time.Minute), globalID)
+		if err != nil {
+			t.Fatalf("persist %s stale scheduler CAS: %v", fixture.engine, err)
+		}
+		if rows, err := loser.RowsAffected(); err != nil || rows != 0 {
+			t.Fatalf("stale %s scheduler CAS rows=%d err=%v, want 0 nil", fixture.engine, rows, err)
+		}
+	})
+	t.Run("ReaderSchedulerColumnsIndexesDefaultsAndChecks", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+		now := time.Now().UTC().Truncate(time.Second)
+		globalID := strings.Repeat("c", 32)
+		userID := strings.Repeat("d", 32)
+		fixture.mustExec(t, db, `INSERT INTO backup_asset_export_quota_buckets
+				(id, scope, subject, transition_revision, active_jobs, active_workers, active_readers,
+				 reserved_store_bytes, used_store_bytes, created_at, updated_at)
+				VALUES (?, 'global', 'global', 1, 0, 0, 0, 0, 0, ?, ?)`, globalID, now, now)
+		fixture.mustExec(t, db, `INSERT INTO backup_asset_export_quota_buckets
+				(id, scope, subject, transition_revision, active_jobs, active_workers, active_readers,
+				 reserved_store_bytes, used_store_bytes, created_at, updated_at)
+				VALUES (?, 'user', '42', 1, 0, 0, 0, 0, 0, ?, ?)`, userID, now, now)
+
+		assertDefaults := func(t *testing.T, bucketID string) {
+			t.Helper()
+			var next, cursor, highWater, revision int64
+			var lease any
+			if err := db.QueryRow(fixture.bind(`SELECT reader_next_sequence, reader_sweep_cursor,
+					reader_sweep_high_water, reader_sweep_revision, reader_sweep_lease_expires_at
+					FROM backup_asset_export_quota_buckets WHERE id = ?`), bucketID).
+				Scan(&next, &cursor, &highWater, &revision, &lease); err != nil {
+				t.Fatalf("load %s reader scheduler defaults: %v", fixture.engine, err)
+			}
+			if next != 1 || cursor != 0 || highWater != 0 || revision != 0 || lease != nil {
+				t.Fatalf("%s reader scheduler defaults are not inert: next=%d cursor=%d high_water=%d revision=%d lease=%v",
+					fixture.engine, next, cursor, highWater, revision, lease)
+			}
+		}
+		assertDefaults(t, globalID)
+		assertDefaults(t, userID)
+		t.Run("physical column types", func(t *testing.T) {
+			if fixture.engine == "sqlite" {
+				loadTypes := func(table string) map[string]string {
+					t.Helper()
+					rows, err := db.Query(`PRAGMA table_info('` + table + `')`)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer closeMigrationRows(t, rows)
+					types := make(map[string]string)
+					for rows.Next() {
+						var cid, notNull, primaryKey int
+						var name, columnType string
+						var defaultValue sql.NullString
+						if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+							t.Fatal(err)
+						}
+						types[name] = strings.ToUpper(columnType)
+					}
+					if err := rows.Err(); err != nil {
+						t.Fatal(err)
+					}
+					return types
+				}
+				bucketTypes := loadTypes("backup_asset_export_quota_buckets")
+				for _, column := range []string{"reader_next_sequence", "reader_sweep_cursor", "reader_sweep_high_water", "reader_sweep_revision"} {
+					if bucketTypes[column] != "INTEGER" {
+						t.Fatalf("SQLite %s type=%q want INTEGER", column, bucketTypes[column])
+					}
+				}
+				if bucketTypes["reader_sweep_lease_expires_at"] != "DATETIME" {
+					t.Fatalf("SQLite reader sweep lease type=%q want DATETIME", bucketTypes["reader_sweep_lease_expires_at"])
+				}
+				reservationTypes := loadTypes("backup_asset_export_reservations")
+				if reservationTypes["reader_enqueue_sequence"] != "INTEGER" {
+					t.Fatalf("SQLite reader enqueue sequence type=%q want INTEGER", reservationTypes["reader_enqueue_sequence"])
+				}
+				return
+			}
+
+			rows, err := db.Query(fixture.bind(`SELECT table_name, column_name, data_type
+					FROM information_schema.columns
+					WHERE table_schema = current_schema()
+					  AND ((table_name = ? AND column_name IN (?, ?, ?, ?, ?))
+					       OR (table_name = ? AND column_name = ?))`),
+				"backup_asset_export_quota_buckets", "reader_next_sequence", "reader_sweep_cursor",
+				"reader_sweep_high_water", "reader_sweep_revision", "reader_sweep_lease_expires_at",
+				"backup_asset_export_reservations", "reader_enqueue_sequence")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeMigrationRows(t, rows)
+			types := make(map[string]string)
+			for rows.Next() {
+				var table, column, columnType string
+				if err := rows.Scan(&table, &column, &columnType); err != nil {
+					t.Fatal(err)
+				}
+				types[table+"."+column] = columnType
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			for _, column := range []string{"reader_next_sequence", "reader_sweep_cursor", "reader_sweep_high_water", "reader_sweep_revision"} {
+				if types["backup_asset_export_quota_buckets."+column] != "bigint" {
+					t.Fatalf("PostgreSQL %s type=%q want bigint", column, types["backup_asset_export_quota_buckets."+column])
+				}
+			}
+			if types["backup_asset_export_quota_buckets.reader_sweep_lease_expires_at"] != "timestamp with time zone" {
+				t.Fatalf("PostgreSQL reader sweep lease type=%q want TIMESTAMPTZ", types["backup_asset_export_quota_buckets.reader_sweep_lease_expires_at"])
+			}
+			if types["backup_asset_export_reservations.reader_enqueue_sequence"] != "bigint" {
+				t.Fatalf("PostgreSQL reader enqueue sequence type=%q want bigint", types["backup_asset_export_reservations.reader_enqueue_sequence"])
+			}
+		})
+
+		for _, testCase := range []struct {
+			name  string
+			query string
+			args  []any
+		}{
+			{name: "global cursor exceeds high water", query: `UPDATE backup_asset_export_quota_buckets
+					SET reader_sweep_cursor = 1 WHERE id = ?`, args: []any{globalID}},
+			{name: "global high water reaches next sequence", query: `UPDATE backup_asset_export_quota_buckets
+					SET reader_sweep_revision = 1, reader_sweep_high_water = reader_next_sequence WHERE id = ?`, args: []any{globalID}},
+			{name: "global lease without revision", query: `UPDATE backup_asset_export_quota_buckets
+					SET reader_sweep_lease_expires_at = ? WHERE id = ?`, args: []any{now.Add(time.Minute), globalID}},
+			{name: "global high water without revision", query: `UPDATE backup_asset_export_quota_buckets
+					SET reader_next_sequence = 2, reader_sweep_high_water = 1 WHERE id = ?`, args: []any{globalID}},
+			{name: "global revision without high water", query: `UPDATE backup_asset_export_quota_buckets
+					SET reader_sweep_revision = 1 WHERE id = ?`, args: []any{globalID}},
+			{name: "user next sequence is mutable", query: `UPDATE backup_asset_export_quota_buckets
+					SET reader_next_sequence = 2 WHERE id = ?`, args: []any{userID}},
+			{name: "user cursor is mutable", query: `UPDATE backup_asset_export_quota_buckets
+					SET reader_next_sequence = 2, reader_sweep_cursor = 1, reader_sweep_high_water = 1,
+					reader_sweep_revision = 1 WHERE id = ?`, args: []any{userID}},
+			{name: "user revision is mutable", query: `UPDATE backup_asset_export_quota_buckets
+					SET reader_sweep_revision = 1 WHERE id = ?`, args: []any{userID}},
+			{name: "user lease is mutable", query: `UPDATE backup_asset_export_quota_buckets
+					SET reader_sweep_lease_expires_at = ? WHERE id = ?`, args: []any{now.Add(time.Minute), userID}},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				fixture.expectExecRejectedInRollback(t, db, testCase.query, testCase.args...)
+			})
+		}
+
+		type quotaAccountingState struct {
+			transitionRevision int64
+			activeJobs         int64
+			activeWorkers      int64
+			activeReaders      int64
+			reservedStoreBytes int64
+			usedStoreBytes     int64
+			updatedAt          time.Time
+		}
+		loadAccounting := func(t *testing.T) quotaAccountingState {
+			t.Helper()
+			var state quotaAccountingState
+			if err := db.QueryRow(fixture.bind(`SELECT transition_revision, active_jobs, active_workers,
+					active_readers, reserved_store_bytes, used_store_bytes, updated_at
+					FROM backup_asset_export_quota_buckets WHERE id = ?`), globalID).Scan(
+				&state.transitionRevision, &state.activeJobs, &state.activeWorkers, &state.activeReaders,
+				&state.reservedStoreBytes, &state.usedStoreBytes, &state.updatedAt,
+			); err != nil {
+				t.Fatalf("load %s reader scheduler accounting state: %v", fixture.engine, err)
+			}
+			return state
+		}
+		beforeSchedulerCAS := loadAccounting(t)
+		schedulerLease := now.Add(time.Minute)
+		result, err := db.Exec(fixture.bind(`UPDATE backup_asset_export_quota_buckets
+				SET reader_next_sequence = 2, reader_sweep_cursor = 0, reader_sweep_high_water = 1,
+					reader_sweep_revision = 1, reader_sweep_lease_expires_at = ?
+				WHERE id = ? AND reader_sweep_revision = 0`), schedulerLease, globalID)
+		if err != nil {
+			t.Fatalf("persist %s reader scheduler-only CAS: %v", fixture.engine, err)
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+			t.Fatalf("persist %s reader scheduler-only CAS rows=%d err=%v, want 1 nil", fixture.engine, rows, err)
+		}
+		afterSchedulerCAS := loadAccounting(t)
+		if afterSchedulerCAS != beforeSchedulerCAS {
+			t.Fatalf("%s reader scheduler-only CAS mutated quota accounting: before=%+v after=%+v",
+				fixture.engine, beforeSchedulerCAS, afterSchedulerCAS)
+		}
+		loser, err := db.Exec(fixture.bind(`UPDATE backup_asset_export_quota_buckets
+				SET reader_sweep_lease_expires_at = ?
+				WHERE id = ? AND reader_sweep_revision = 0`), schedulerLease.Add(time.Minute), globalID)
+		if err != nil {
+			t.Fatalf("persist %s stale reader scheduler CAS: %v", fixture.engine, err)
+		}
+		if rows, err := loser.RowsAffected(); err != nil || rows != 0 {
+			t.Fatalf("stale %s reader scheduler CAS rows=%d err=%v, want 0 nil", fixture.engine, rows, err)
+		}
+
+		for _, index := range []struct {
+			name      string
+			fragments []string
+		}{
+			{name: "idx_backup_asset_export_reservations_reader_enqueue_sequence", fragments: []string{
+				"unique index", "bucket_id", "reader_enqueue_sequence", "where", "kind", "reader",
+			}},
+			{name: "idx_backup_asset_export_reservations_reader_sweep", fragments: []string{
+				"bucket_id", "reader_enqueue_sequence", "lease_expires_at", "where", "kind", "reader", "state", "active",
+			}},
+		} {
+			definition := fixture.indexDefinition(t, db, index.name)
+			for _, fragment := range index.fragments {
+				if !strings.Contains(definition, fragment) {
+					t.Fatalf("%s reader index %s omits %q: %s", fixture.engine, index.name, fragment, definition)
+				}
+			}
+		}
+
+		insertReader := `INSERT INTO backup_asset_export_reservations
+				(id, bucket_id, kind, reader_enqueue_sequence, reserved_slots, lease_owner, lease_expires_at, state, created_at, updated_at)
+				VALUES (?, ?, 'reader', ?, 1, ?, ?, 'active', ?, ?)`
+		fixture.mustExec(t, db, insertReader, strings.Repeat("1", 32), globalID, 1, "reader-sequence-one", now.Add(time.Hour), now, now)
+		fixture.expectExecRejectedInRollback(t, db, insertReader,
+			strings.Repeat("2", 32), globalID, 1, "reader-sequence-duplicate", now.Add(time.Hour), now, now)
+		fixture.expectExecRejectedInRollback(t, db, insertReader,
+			strings.Repeat("3", 32), globalID, 0, "reader-sequence-zero", now.Add(time.Hour), now, now)
+		fixture.expectExecRejectedInRollback(t, db, `INSERT INTO backup_asset_export_reservations
+				(id, bucket_id, kind, reader_enqueue_sequence, reserved_slots, lease_owner, lease_expires_at, state, created_at, updated_at)
+				VALUES (?, ?, 'job', 1, 1, 'non-reader-sequence', ?, 'active', ?, ?)`,
+			strings.Repeat("4", 32), globalID, now.Add(time.Hour), now, now)
+	})
+	t.Run("FrozenJobLimitSnapshotChecksAreClosed", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+		now := time.Now().UTC().Truncate(time.Second)
+		fixture.seed068CryptographicRows(t, db, now)
+		jobID := strings.Repeat("1", 32)
+		const exactMinimumCiphertextBytes = int64(10485760 + 10*1024 + 67108864)
+		fixture.mustExec(t, db, `UPDATE backup_asset_export_jobs SET max_ciphertext_bytes = ? WHERE id = ?`,
+			exactMinimumCiphertextBytes, jobID)
+		for _, testCase := range []struct {
+			name  string
+			query string
+			args  []any
+		}{
+			{
+				name:  "unknown selection schema",
+				query: `UPDATE backup_asset_export_jobs SET selection_schema_version = 2 WHERE id = ?`,
+				args:  []any{jobID},
+			},
+			{
+				name:  "unknown limits schema",
+				query: `UPDATE backup_asset_export_jobs SET limits_schema_version = 2 WHERE id = ?`,
+				args:  []any{jobID},
+			},
+			{
+				name:  "source points exceed items",
+				query: `UPDATE backup_asset_export_jobs SET max_source_points = max_items + 1 WHERE id = ?`,
+				args:  []any{jobID},
+			},
+			{
+				name:  "item bytes exceed logical bytes",
+				query: `UPDATE backup_asset_export_jobs SET max_item_bytes = max_logical_bytes + 1 WHERE id = ?`,
+				args:  []any{jobID},
+			},
+			{
+				name:  "provider bytes below logical bytes",
+				query: `UPDATE backup_asset_export_jobs SET max_provider_bytes = max_logical_bytes - 1 WHERE id = ?`,
+				args:  []any{jobID},
+			},
+			{
+				name:  "ciphertext omits fixed and per-item overhead",
+				query: `UPDATE backup_asset_export_jobs SET max_ciphertext_bytes = ? WHERE id = ?`,
+				args:  []any{exactMinimumCiphertextBytes - 1, jobID},
+			},
+			{
+				name: "renew margin reaches half lease TTL",
+				query: `UPDATE backup_asset_export_jobs
+					SET lease_ttl_seconds = 120, lease_renew_margin_seconds = 60 WHERE id = ?`,
+				args: []any{jobID},
+			},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				fixture.expectExecRejectedInRollback(t, db, testCase.query, testCase.args...)
+			})
+		}
+	})
+	t.Run("LifecycleMaintenanceIndexesCoverBoundedQueries", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+		for indexName, fragments := range map[string][]string{
+			"idx_backup_asset_archive_member_requests_state_id": {
+				"backup_asset_archive_member_requests", "state", "id",
+			},
+			"idx_backup_asset_export_delivery_grants_member_state": {
+				"backup_asset_export_delivery_grants", "member_request_id", "resource_kind", "state", "id",
+			},
+			"idx_backup_asset_export_delivery_grants_export_job": {
+				"backup_asset_export_delivery_grants", "export_job_id", "resource_kind", "id",
+			},
+		} {
+			indexName := indexName
+			fragments := fragments
+			t.Run(indexName, func(t *testing.T) {
+				definition := fixture.indexDefinition(t, db, indexName)
+				if definition == "" {
+					t.Fatalf("%s maintenance index %s is missing", fixture.engine, indexName)
+				}
+				for _, fragment := range fragments {
+					if !strings.Contains(definition, fragment) {
+						t.Fatalf("%s maintenance index %s omits %q: %s",
+							fixture.engine, indexName, fragment, definition)
+					}
+				}
+			})
+		}
+	})
+	t.Run("SQLiteOpaquePrimaryKeysAreExplicitlyNotNull", func(t *testing.T) {
+		if fixture.engine != "sqlite" {
+			return
+		}
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+		for _, table := range backupAssetExportTables {
+			var notNull int
+			if err := db.QueryRow(`SELECT "notnull" FROM pragma_table_info(?) WHERE name = 'id'`, table).Scan(&notNull); err != nil {
+				t.Fatalf("inspect SQLite opaque primary key %s.id: %v", table, err)
+			}
+			if notNull != 1 {
+				t.Fatalf("SQLite opaque primary key %s.id is nullable", table)
+			}
+		}
+	})
+	t.Run("ArchiveFormatProfilePairIsClosed", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+		now := time.Now().UTC().Truncate(time.Second)
+		fixture.insertSearchMigrationUser(t, db, 6683, "export-archive-pair-user", now)
+		const insertJob = `INSERT INTO backup_asset_export_jobs
+			(id, owner_user_id, lifecycle_enqueue_sequence, selection_digest, selection_schema_version, archive_format, archive_profile,
+			 limits_schema_version, chunk_bytes, max_items, max_source_points, max_item_bytes, max_logical_bytes,
+			 max_provider_bytes, max_ciphertext_bytes, max_open_readers, max_duration_seconds, max_attempts,
+			 retry_base_seconds, retry_max_delay_seconds, lease_ttl_seconds, lease_renew_margin_seconds,
+			 ready_ttl_seconds, execution_state, result_kind, cleanup_state, absolute_deadline,
+			 item_count, packed_count, skipped_count, failed_count, transition_revision, created_at, updated_at)
+			VALUES (?, 6683, ?, ?, 1, ?, ?, 1, 65536, 10, 2, 1048576, 10485760,
+			 10485760, 77604864, 2, 300, 3, 1, 10, 120, 30, 86400, 'queued', '',
+			 'none', ?, 0, 0, 0, 0, 1, ?, ?)`
+		for index, pair := range []struct {
+			format  any
+			profile any
+		}{
+			{format: "zip", profile: "zip_deflate_v1"},
+			{format: "tar", profile: "tar_none_v1"},
+			{format: "tar", profile: "tar_gzip_v1"},
+		} {
+			fixture.mustExec(t, db, insertJob,
+				strings.Repeat(strconv.Itoa(index+1), 32), index+1, strings.Repeat("a", 64),
+				pair.format, pair.profile, now.Add(time.Hour), now, now)
+		}
+		for _, testCase := range []struct {
+			name    string
+			format  any
+			profile any
+		}{
+			{name: "missing format", profile: "zip_deflate_v1"},
+			{name: "missing profile", format: "zip"},
+			{name: "unknown format", format: "rar", profile: "zip_deflate_v1"},
+			{name: "unknown profile", format: "zip", profile: "future_v2"},
+			{name: "zip crossed with tar none", format: "zip", profile: "tar_none_v1"},
+			{name: "zip crossed with tar gzip", format: "zip", profile: "tar_gzip_v1"},
+			{name: "tar crossed with zip", format: "tar", profile: "zip_deflate_v1"},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				fixture.expectExecRejectedInRollback(t, db, insertJob,
+					strings.Repeat("f", 32), 100, strings.Repeat("b", 64), testCase.format, testCase.profile,
+					now.Add(time.Hour), now, now)
+			})
+		}
+	})
+	t.Run("ReadyLifecycleTimestampProductIsClosed", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+		now := time.Now().UTC().Truncate(time.Second)
+		fixture.insertSearchMigrationUser(t, db, 6684, "export-ready-timestamp-user", now)
+		const insertJob = `INSERT INTO backup_asset_export_jobs
+			(id, owner_user_id, lifecycle_enqueue_sequence, selection_digest, selection_schema_version, archive_format, archive_profile,
+			 limits_schema_version, chunk_bytes, max_items, max_source_points, max_item_bytes, max_logical_bytes,
+			 max_provider_bytes, max_ciphertext_bytes, max_open_readers, max_duration_seconds, max_attempts,
+			 retry_base_seconds, retry_max_delay_seconds, lease_ttl_seconds, lease_renew_margin_seconds,
+			 ready_ttl_seconds, execution_state, result_kind, cleanup_state, absolute_deadline, ready_at, expires_at,
+			 item_count, packed_count, skipped_count, failed_count, transition_revision, created_at, updated_at)
+			VALUES (?, 6684, ?, ?, 1, 'zip', 'zip_deflate_v1', 1, 65536, 10, 2, 1048576, 10485760,
+			 10485760, 77604864, 2, 300, 3, 1, 10, 120, 30, 86400, ?, ?, 'none', ?, ?, ?,
+			 ?, ?, 0, 0, 1, ?, ?)`
+		absoluteDeadline := now.Add(5 * time.Minute)
+		readyAt := now.Add(4 * time.Minute)
+		expiresAt := now.Add(15 * time.Minute)
+		idCharacters := "0123456789abcdef"
+		insert := func(idCharacter byte, state, resultKind string, ready, expires any, itemCount, packedCount int, updatedAt time.Time) {
+			sequence := strings.IndexByte(idCharacters, idCharacter) + 1
+			fixture.mustExec(t, db, insertJob,
+				strings.Repeat(string(idCharacter), 32), sequence, strings.Repeat(string(idCharacter), 64),
+				state, resultKind, absoluteDeadline, ready, expires, itemCount, packedCount, now, updatedAt)
+		}
+
+		for index, state := range []string{
+			"queued", "running", "retry_wait", "sealing", "cancel_requested", "failed", "source_expired", "canceled",
+		} {
+			t.Run(state+" permits no ready timestamps", func(t *testing.T) {
+				insert(idCharacters[index], state, "", nil, nil, 0, 0, now)
+			})
+		}
+		for index, state := range []string{"ready", "expiring", "expired"} {
+			t.Run(state+" requires an ordered timestamp pair independent of execution deadline", func(t *testing.T) {
+				insert(idCharacters[index+8], state, "complete", readyAt, expiresAt, 1, 1, expiresAt)
+			})
+		}
+		for index, state := range []string{"cancel_requested", "canceled"} {
+			t.Run(state+" preserves ready timestamp history", func(t *testing.T) {
+				insert(idCharacters[index+11], state, "complete", readyAt, expiresAt, 1, 1, expiresAt)
+			})
+		}
+
+		for _, testCase := range []struct {
+			name      string
+			state     string
+			readyAt   any
+			expiresAt any
+		}{
+			{name: "ready missing both timestamps", state: "ready"},
+			{name: "expiring missing both timestamps", state: "expiring"},
+			{name: "expired missing both timestamps", state: "expired"},
+			{name: "ready missing ready timestamp", state: "ready", expiresAt: expiresAt},
+			{name: "expiring missing ready timestamp", state: "expiring", expiresAt: expiresAt},
+			{name: "expired missing ready timestamp", state: "expired", expiresAt: expiresAt},
+			{name: "ready missing expiry timestamp", state: "ready", readyAt: readyAt},
+			{name: "expiring missing expiry timestamp", state: "expiring", readyAt: readyAt},
+			{name: "expired missing expiry timestamp", state: "expired", readyAt: readyAt},
+			{name: "ready has zero duration", state: "ready", readyAt: readyAt, expiresAt: readyAt},
+			{name: "expiring has zero duration", state: "expiring", readyAt: readyAt, expiresAt: readyAt},
+			{name: "expired has zero duration", state: "expired", readyAt: readyAt, expiresAt: readyAt},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				fixture.expectExecRejectedInRollback(t, db, insertJob,
+					strings.Repeat("f", 32), 16, strings.Repeat("f", 64), testCase.state, "complete",
+					absoluteDeadline, testCase.readyAt, testCase.expiresAt, 1, 1, now, expiresAt)
+			})
+		}
+		for _, testCase := range []struct {
+			name       string
+			state      string
+			resultKind string
+			packed     int
+		}{
+			{name: "ready missing result", state: "ready", packed: 1},
+			{name: "expiring missing result", state: "expiring", packed: 1},
+			{name: "expired missing result", state: "expired", packed: 1},
+			{name: "ready has no packed items", state: "ready", resultKind: "complete"},
+			{name: "expiring has no packed items", state: "expiring", resultKind: "complete"},
+			{name: "expired has no packed items", state: "expired", resultKind: "complete"},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				fixture.expectExecRejectedInRollback(t, db, insertJob,
+					strings.Repeat("e", 32), 15, strings.Repeat("e", 64), testCase.state, testCase.resultKind,
+					absoluteDeadline, readyAt, expiresAt, 1, testCase.packed, now, expiresAt)
+			})
+		}
+	})
+	t.Run("IdempotencyReceiptCreatedAtPrecedesExpiry", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+		now := time.Now().UTC().Truncate(time.Second)
+		fixture.seed068ParityRows(t, db, now)
+		fixture.expectExecRejectedInRollback(t, db,
+			`UPDATE backup_asset_export_idempotency SET expires_at = ? WHERE id = ?`,
+			now.Add(-time.Second), strings.Repeat("a", 32),
+		)
+	})
+	t.Run("PristineDownRestores067", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, backupAssetExportVersion)
+		if err := migrator.Steps(-1); err != nil {
+			t.Fatalf("step %s migration down to 000067: %v", fixture.engine, err)
+		}
+		assertMigrationVersion(t, migrator, backupAssetProcessingVersion)
+		for _, table := range backupAssetExportTables {
+			if databaseTableExists(t, db, fixture.engine, table) {
+				t.Fatalf("%s export table %s remains after pristine down", fixture.engine, table)
+			}
+		}
+		definition := fixture.tableDefinition(t, db, "wrapped_domain_keys")
+		if !strings.Contains(definition, "derived_store") || strings.Contains(definition, "export_store") {
+			t.Fatalf("%s wrapped key CHECK was not restored to 000067: %s", fixture.engine, definition)
+		}
+		if !databaseTableExists(t, db, fixture.engine, "backup_asset_processing_jobs") {
+			t.Fatalf("%s 000067 processing schema was removed by 000068 down", fixture.engine)
+		}
+	})
+	t.Run("GlobalQuotaBucketPermanentlyBlocksUsedDown", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, backupAssetExportVersion)
+		now := time.Now().UTC().Truncate(time.Second)
+		fixture.mustExec(t, db, `INSERT INTO backup_asset_export_quota_buckets
+			(id, scope, subject, transition_revision, active_jobs, active_workers, active_readers,
+			 reserved_store_bytes, used_store_bytes, created_at, updated_at)
+			 VALUES (?, 'global', 'global', 1, 0, 0, 0, 0, 0, ?, ?)`, strings.Repeat("e", 32), now, now)
+		if err := fixture.executeExportDown(db); err == nil {
+			t.Fatalf("%s used 000068 down unexpectedly succeeded", fixture.engine)
+		}
+		assertMigrationVersion(t, migrator, backupAssetExportVersion)
+		if !databaseTableExists(t, db, fixture.engine, "backup_asset_export_quota_buckets") {
+			t.Fatalf("%s used-down removed the durable use latch", fixture.engine)
+		}
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM backup_asset_export_quota_buckets`).Scan(&count); err != nil {
+			t.Fatalf("count %s durable use latch rows: %v", fixture.engine, err)
+		}
+		if count != 1 {
+			t.Fatalf("%s used-down changed durable use latch count: got=%d want=1", fixture.engine, count)
+		}
+	})
+	t.Run("ArchiveMemberTerminalCleanupMayAdvanceAfterAbsoluteExpiry", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+		now := time.Now().UTC().Truncate(time.Second)
+		fixture.insertSearchMigrationUser(t, db, 6681, "archive-member-expiry-user", now)
+		expiresAt := now.Add(time.Minute)
+		idempotencyExpiresAt := now.Add(30 * time.Minute)
+		fixture.mustExec(t, db, `INSERT INTO backup_asset_archive_member_requests
+			(id, owner_user_id, endpoint, key_digest, request_intent_digest, recovery_point_id, entry_id,
+			 catalog_generation_id, source_fingerprint, entry_fingerprint, index_artifact_id, index_revision,
+			 member_chain_digest, resolved_ordinal, state, error_category, idempotency_expires_at, absolute_expires_at,
+			 created_at, updated_at, version)
+			VALUES (?, 6681, 'archive_member', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'queued', '', ?, ?, ?, ?, 1)`,
+			strings.Repeat("1", 32), strings.Repeat("2", 64), strings.Repeat("3", 64),
+			strings.Repeat("4", 32), strings.Repeat("5", 64), strings.Repeat("6", 32),
+			strings.Repeat("7", 64), strings.Repeat("8", 64), strings.Repeat("9", 32),
+			strings.Repeat("a", 64), strings.Repeat("b", 64), idempotencyExpiresAt, expiresAt, now, now)
+
+		cleanupAt := expiresAt.Add(time.Minute)
+		fixture.mustExec(t, db, `UPDATE backup_asset_archive_member_requests
+			SET state = 'expired', finished_at = ?, updated_at = ?, version = version + 1
+			WHERE id = ?`, cleanupAt, cleanupAt, strings.Repeat("1", 32))
+	})
+	t.Run("CleanupMayAdvanceAfterExecutionDeadlineAndRetentionCapsLease", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+		now := time.Now().UTC().Truncate(time.Second)
+		fixture.insertSearchMigrationUser(t, db, 6680, "export-cleanup-user", now)
+
+		jobID := strings.Repeat("8", 32)
+		jobDeadline := now.Add(5 * time.Minute)
+		readyAt := now.Add(4 * time.Minute)
+		expiresAt := now.Add(15 * time.Minute)
+		fixture.mustExec(t, db, `INSERT INTO backup_asset_export_jobs
+			(id, owner_user_id, lifecycle_enqueue_sequence, selection_digest, selection_schema_version, archive_format, archive_profile,
+			 limits_schema_version, chunk_bytes, max_items, max_source_points, max_item_bytes, max_logical_bytes,
+			 max_provider_bytes, max_ciphertext_bytes, max_open_readers, max_duration_seconds, max_attempts,
+			 retry_base_seconds, retry_max_delay_seconds, lease_ttl_seconds, lease_renew_margin_seconds,
+			 ready_ttl_seconds, execution_state, result_kind, cleanup_state, absolute_deadline, ready_at, expires_at,
+			 item_count, packed_count, skipped_count, failed_count, transition_revision, created_at, updated_at)
+			VALUES (?, 6680, 1, ?, 1, 'zip', 'zip_deflate_v1', 1, 1048576, 10, 2, 1048576, 10485760,
+			 10485760, 77604864, 2, 300, 3, 1, 10, 120, 30, 86400, 'ready', 'complete',
+			 'none', ?, ?, ?, 1, 1, 0, 0, 1, ?, ?)`,
+			jobID, strings.Repeat("a", 64), jobDeadline, readyAt, expiresAt, now, readyAt)
+
+		leaseDeadline := now.Add(45 * time.Minute)
+		retentionUntil := now.Add(20 * time.Minute)
+		fixture.mustExec(t, db, `INSERT INTO backup_asset_export_source_leases
+			(id, job_id, recovery_point_id, lease_id, lease_attempt_id, fence_hash, absolute_deadline,
+			 retention_until, state, acquired_at, renewed_at, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
+			strings.Repeat("9", 32), jobID, strings.Repeat("7", 32), strings.Repeat("6", 32),
+			strings.Repeat("5", 32), strings.Repeat("b", 64), leaseDeadline, retentionUntil,
+			now, now, now, now)
+
+		cleanupAt := jobDeadline.Add(time.Minute)
+		fixture.mustExec(t, db, `UPDATE backup_asset_export_jobs
+			SET cleanup_state = 'revoking', updated_at = ?, transition_revision = transition_revision + 1
+			WHERE id = ?`, cleanupAt, jobID)
+	})
+	t.Run("CryptographicTombstonesAreCompletePairs", func(t *testing.T) {
+		t.Run("Key", func(t *testing.T) {
+			_, db := fixture.openAt(t, backupAssetExportVersion)
+			now := time.Now().UTC().Truncate(time.Second)
+			fixture.seed068CryptographicRows(t, db, now)
+			fixture.mustExec(t, db, `UPDATE backup_asset_export_keys
+				SET state = 'destroyed', wrapped_dek = ?, envelope_nonce = ?, destroyed_at = ?
+				WHERE id = ?`, []byte{}, []byte{}, now.Add(time.Second), strings.Repeat("2", 32))
+		})
+		t.Run("LostKey", func(t *testing.T) {
+			_, db := fixture.openAt(t, backupAssetExportVersion)
+			now := time.Now().UTC().Truncate(time.Second)
+			fixture.seed068CryptographicRows(t, db, now)
+			fixture.mustExec(t, db, `UPDATE backup_asset_export_keys
+				SET state = 'lost', wrapped_dek = ?, envelope_nonce = ?, destroyed_at = ?
+				WHERE id = ?`, []byte{}, []byte{}, now.Add(time.Second), strings.Repeat("2", 32))
+		})
+		t.Run("Item", func(t *testing.T) {
+			_, db := fixture.openAt(t, backupAssetExportVersion)
+			now := time.Now().UTC().Truncate(time.Second)
+			fixture.seed068CryptographicRows(t, db, now)
+			fixture.mustExec(t, db, `UPDATE backup_asset_export_items
+				SET path_nonce = ?, path_ciphertext = ? WHERE id = ?`,
+				[]byte{}, []byte{}, strings.Repeat("3", 32))
+		})
+		t.Run("RejectsHalfWipes", func(t *testing.T) {
+			_, db := fixture.openAt(t, backupAssetExportVersion)
+			now := time.Now().UTC().Truncate(time.Second)
+			fixture.seed068CryptographicRows(t, db, now)
+			for _, testCase := range []struct {
+				name  string
+				query string
+				args  []any
+			}{
+				{name: "key wrapped only", query: `UPDATE backup_asset_export_keys SET wrapped_dek = ?, envelope_nonce = ? WHERE id = ?`, args: []any{[]byte("wrapped"), []byte{}, strings.Repeat("2", 32)}},
+				{name: "key nonce only", query: `UPDATE backup_asset_export_keys SET wrapped_dek = ?, envelope_nonce = ? WHERE id = ?`, args: []any{[]byte{}, []byte("123456789012"), strings.Repeat("2", 32)}},
+				{name: "item ciphertext only", query: `UPDATE backup_asset_export_items SET path_nonce = ?, path_ciphertext = ? WHERE id = ?`, args: []any{[]byte{}, []byte("ciphertext"), strings.Repeat("3", 32)}},
+				{name: "item nonce only", query: `UPDATE backup_asset_export_items SET path_nonce = ?, path_ciphertext = ? WHERE id = ?`, args: []any{[]byte("123456789012"), []byte{}, strings.Repeat("3", 32)}},
+			} {
+				t.Run(testCase.name, func(t *testing.T) {
+					fixture.expectExecRejectedInRollback(t, db, testCase.query, testCase.args...)
+				})
+			}
+		})
+	})
+	t.Run("ReservationLiveSlotIsUnique", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+		now := time.Now().UTC().Truncate(time.Second)
+		bucketID := strings.Repeat("b", 32)
+		fixture.mustExec(t, db, `INSERT INTO backup_asset_export_quota_buckets
+			(id, scope, subject, transition_revision, active_jobs, active_workers, active_readers,
+			 reserved_store_bytes, used_store_bytes, created_at, updated_at)
+			 VALUES (?, 'global', 'global', 1, 0, 0, 0, 0, 0, ?, ?)`, bucketID, now, now)
+		fixture.mustExec(t, db, `INSERT INTO backup_asset_export_reservations
+			(id, bucket_id, kind, reserved_slots, lease_owner, lease_expires_at, state, created_at, updated_at)
+			VALUES (?, ?, 'job', 1, 'same-owner', ?, 'active', ?, ?)`,
+			strings.Repeat("c", 32), bucketID, now.Add(time.Hour), now, now)
+		for index, state := range []string{"active", "purge_pending"} {
+			t.Run(state, func(t *testing.T) {
+				fixture.expectExecRejectedInRollback(t, db, `INSERT INTO backup_asset_export_reservations
+					(id, bucket_id, kind, reserved_slots, lease_owner, lease_expires_at, state, created_at, updated_at)
+					VALUES (?, ?, 'job', 1, 'same-owner', ?, ?, ?, ?)`,
+					strings.Repeat(strconv.Itoa(index+1), 32), bucketID, now.Add(time.Hour), state, now, now)
+			})
+		}
+		for index, state := range []string{"released", "expired"} {
+			t.Run(state+" history permits later active", func(t *testing.T) {
+				owner := "history-" + state
+				fixture.mustExec(t, db, `INSERT INTO backup_asset_export_reservations
+					(id, bucket_id, kind, reserved_slots, lease_owner, lease_expires_at, state, created_at, updated_at)
+					VALUES (?, ?, 'job', 1, ?, ?, ?, ?, ?)`,
+					strings.Repeat([]string{"d", "e"}[index], 32), bucketID, owner,
+					now.Add(time.Hour), state, now, now)
+				fixture.mustExec(t, db, `INSERT INTO backup_asset_export_reservations
+					(id, bucket_id, kind, reserved_slots, lease_owner, lease_expires_at, state, created_at, updated_at)
+					VALUES (?, ?, 'job', 1, ?, ?, 'active', ?, ?)`,
+					strings.Repeat([]string{"f", "0"}[index], 32), bucketID, owner,
+					now.Add(time.Hour), now, now)
+			})
+		}
+	})
+	t.Run("DeliveryActionAndRangeMatchResourceArm", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+		now := time.Now().UTC().Truncate(time.Second)
+		fixture.seed068DeliveryRows(t, db, now)
+		for _, testCase := range []struct {
+			name  string
+			query string
+			args  []any
+		}{
+			{name: "export action", query: `UPDATE backup_asset_export_delivery_grants SET action = 'archive_member_download' WHERE id = ?`, args: []any{strings.Repeat("6", 32)}},
+			{name: "export range", query: `UPDATE backup_asset_export_delivery_grants SET range_policy = 'none' WHERE id = ?`, args: []any{strings.Repeat("6", 32)}},
+			{name: "member action", query: `UPDATE backup_asset_export_delivery_grants SET action = 'export_download' WHERE id = ?`, args: []any{strings.Repeat("7", 32)}},
+			{name: "member range", query: `UPDATE backup_asset_export_delivery_grants SET range_policy = 'single' WHERE id = ?`, args: []any{strings.Repeat("7", 32)}},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				fixture.expectExecRejectedInRollback(t, db, testCase.query, testCase.args...)
+			})
+		}
+	})
+	t.Run("KeyStatePayloadAndTimestampProductIsClosed", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+		now := time.Now().UTC().Truncate(time.Second)
+		fixture.seed068CryptographicRows(t, db, now)
+		for _, testCase := range []struct {
+			name        string
+			state       string
+			wrappedDEK  []byte
+			nonce       []byte
+			destroyedAt any
+		}{
+			{name: "active tombstone", state: "active", wrappedDEK: []byte{}, nonce: []byte{}},
+			{name: "active with destruction timestamp", state: "active", wrappedDEK: []byte("wrapped-dek"), nonce: []byte("123456789012"), destroyedAt: now},
+			{name: "destroyed with live payload", state: "destroyed", wrappedDEK: []byte("wrapped-dek"), nonce: []byte("123456789012"), destroyedAt: now},
+			{name: "destroyed without timestamp", state: "destroyed", wrappedDEK: []byte{}, nonce: []byte{}},
+			{name: "lost with live payload", state: "lost", wrappedDEK: []byte("wrapped-dek"), nonce: []byte("123456789012"), destroyedAt: now},
+			{name: "lost without timestamp", state: "lost", wrappedDEK: []byte{}, nonce: []byte{}},
+			{name: "unknown state", state: "unknown", wrappedDEK: []byte("wrapped-dek"), nonce: []byte("123456789012")},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				fixture.expectExecRejectedInRollback(t, db, `UPDATE backup_asset_export_keys
+					SET state = ?, wrapped_dek = ?, envelope_nonce = ?, destroyed_at = ? WHERE id = ?`,
+					testCase.state, testCase.wrappedDEK, testCase.nonce, testCase.destroyedAt, strings.Repeat("2", 32))
+			})
+		}
+	})
+	t.Run("RequiredStringsRejectEmptyAcrossEngines", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+		now := time.Now().UTC().Truncate(time.Second)
+		fixture.seed068ParityRows(t, db, now)
+		for _, testCase := range []struct {
+			name   string
+			table  string
+			column string
+			id     string
+		}{
+			{name: "jobs archive_profile", table: "backup_asset_export_jobs", column: "archive_profile", id: strings.Repeat("1", 32)},
+			{name: "jobs current_attempt_id", table: "backup_asset_export_jobs", column: "current_attempt_id", id: strings.Repeat("1", 32)},
+			{name: "keys wrap_algorithm", table: "backup_asset_export_keys", column: "wrap_algorithm", id: strings.Repeat("2", 32)},
+			{name: "items recovery_point_id", table: "backup_asset_export_items", column: "recovery_point_id", id: strings.Repeat("3", 32)},
+			{name: "items entry_id", table: "backup_asset_export_items", column: "entry_id", id: strings.Repeat("3", 32)},
+			{name: "items catalog_generation_id", table: "backup_asset_export_items", column: "catalog_generation_id", id: strings.Repeat("3", 32)},
+			{name: "items source_fingerprint", table: "backup_asset_export_items", column: "source_fingerprint", id: strings.Repeat("3", 32)},
+			{name: "items entry_fingerprint", table: "backup_asset_export_items", column: "entry_fingerprint", id: strings.Repeat("3", 32)},
+			{name: "items current_attempt_id", table: "backup_asset_export_items", column: "current_attempt_id", id: strings.Repeat("3", 32)},
+			{name: "attempts worker_owner", table: "backup_asset_export_attempts", column: "worker_owner", id: strings.Repeat("4", 32)},
+			{name: "source leases recovery_point_id", table: "backup_asset_export_source_leases", column: "recovery_point_id", id: strings.Repeat("9", 32)},
+			{name: "source leases lease_id", table: "backup_asset_export_source_leases", column: "lease_id", id: strings.Repeat("9", 32)},
+			{name: "source leases lease_attempt_id", table: "backup_asset_export_source_leases", column: "lease_attempt_id", id: strings.Repeat("9", 32)},
+			{name: "artifacts locator", table: "backup_asset_export_artifacts", column: "locator", id: strings.Repeat("5", 32)},
+			{name: "idempotency endpoint", table: "backup_asset_export_idempotency", column: "endpoint", id: strings.Repeat("a", 32)},
+			{name: "idempotency committed result_job_id", table: "backup_asset_export_idempotency", column: "result_job_id", id: strings.Repeat("a", 32)},
+			{name: "quota user subject", table: "backup_asset_export_quota_buckets", column: "subject", id: strings.Repeat("f", 32)},
+			{name: "reservations lease_owner", table: "backup_asset_export_reservations", column: "lease_owner", id: strings.Repeat("e", 32)},
+			{name: "archive member endpoint", table: "backup_asset_archive_member_requests", column: "endpoint", id: strings.Repeat("8", 32)},
+			{name: "archive member recovery_point_id", table: "backup_asset_archive_member_requests", column: "recovery_point_id", id: strings.Repeat("8", 32)},
+			{name: "archive member entry_id", table: "backup_asset_archive_member_requests", column: "entry_id", id: strings.Repeat("8", 32)},
+			{name: "archive member catalog_generation_id", table: "backup_asset_archive_member_requests", column: "catalog_generation_id", id: strings.Repeat("8", 32)},
+			{name: "archive member source_fingerprint", table: "backup_asset_archive_member_requests", column: "source_fingerprint", id: strings.Repeat("8", 32)},
+			{name: "archive member entry_fingerprint", table: "backup_asset_archive_member_requests", column: "entry_fingerprint", id: strings.Repeat("8", 32)},
+			{name: "archive member index_artifact_id", table: "backup_asset_archive_member_requests", column: "index_artifact_id", id: strings.Repeat("8", 32)},
+			{name: "archive member index_revision", table: "backup_asset_archive_member_requests", column: "index_revision", id: strings.Repeat("8", 32)},
+			{name: "archive member processing_interest_id", table: "backup_asset_archive_member_requests", column: "processing_interest_id", id: strings.Repeat("8", 32)},
+			{name: "archive member processing_job_id", table: "backup_asset_archive_member_requests", column: "processing_job_id", id: strings.Repeat("8", 32)},
+			{name: "delivery session_jti", table: "backup_asset_export_delivery_grants", column: "session_jti", id: strings.Repeat("7", 32)},
+			{name: "delivery proof_id", table: "backup_asset_export_delivery_grants", column: "proof_id", id: strings.Repeat("7", 32)},
+			{name: "delivery canonical_path", table: "backup_asset_export_delivery_grants", column: "canonical_path", id: strings.Repeat("7", 32)},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				query := fmt.Sprintf("UPDATE %s SET %s = '' WHERE id = ?", testCase.table, testCase.column)
+				fixture.expectExecRejectedInRollback(t, db, query, testCase.id)
+			})
+		}
+	})
+	t.Run("ArchiveMemberOpaqueIDsAreCanonical", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+		now := time.Now().UTC().Truncate(time.Second)
+		fixture.seed068DeliveryRows(t, db, now)
+		for _, column := range []string{
+			"processing_job_id", "processing_attempt_id", "derived_artifact_set_id", "derived_artifact_id", "derived_blob_id",
+		} {
+			for _, invalid := range []struct {
+				name  string
+				value string
+			}{
+				{name: "empty", value: ""},
+				{name: "wrong length", value: strings.Repeat("a", 31)},
+				{name: "uppercase", value: strings.Repeat("A", 32)},
+				{name: "nonhex", value: strings.Repeat("g", 32)},
+			} {
+				t.Run(column+" "+invalid.name, func(t *testing.T) {
+					query := fmt.Sprintf("UPDATE backup_asset_export_delivery_grants SET %s = ? WHERE id = ?", column)
+					fixture.expectExecRejectedInRollback(t, db, query, invalid.value, strings.Repeat("7", 32))
+				})
+			}
+		}
+	})
+	t.Run("FixedWidthFieldsRejectAdjacentLengths", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetExportVersion)
+		now := time.Now().UTC().Truncate(time.Second)
+		fixture.seed068ParityRows(t, db, now)
+		for _, testCase := range []struct {
+			name   string
+			table  string
+			column string
+			id     string
+			width  int
+		}{
+			{name: "jobs current_attempt_id", table: "backup_asset_export_jobs", column: "current_attempt_id", id: strings.Repeat("1", 32), width: 32},
+			{name: "keys job_id", table: "backup_asset_export_keys", column: "job_id", id: strings.Repeat("2", 32), width: 32},
+			{name: "items job_id", table: "backup_asset_export_items", column: "job_id", id: strings.Repeat("3", 32), width: 32},
+			{name: "items recovery_point_id", table: "backup_asset_export_items", column: "recovery_point_id", id: strings.Repeat("3", 32), width: 32},
+			{name: "items entry_id", table: "backup_asset_export_items", column: "entry_id", id: strings.Repeat("3", 32), width: 64},
+			{name: "items catalog_generation_id", table: "backup_asset_export_items", column: "catalog_generation_id", id: strings.Repeat("3", 32), width: 32},
+			{name: "items current_attempt_id", table: "backup_asset_export_items", column: "current_attempt_id", id: strings.Repeat("3", 32), width: 32},
+			{name: "attempts job_id", table: "backup_asset_export_attempts", column: "job_id", id: strings.Repeat("4", 32), width: 32},
+			{name: "attempts fence_digest", table: "backup_asset_export_attempts", column: "fence_digest", id: strings.Repeat("4", 32), width: 64},
+			{name: "source leases job_id", table: "backup_asset_export_source_leases", column: "job_id", id: strings.Repeat("9", 32), width: 32},
+			{name: "source leases recovery_point_id", table: "backup_asset_export_source_leases", column: "recovery_point_id", id: strings.Repeat("9", 32), width: 32},
+			{name: "source leases lease_id", table: "backup_asset_export_source_leases", column: "lease_id", id: strings.Repeat("9", 32), width: 32},
+			{name: "source leases lease_attempt_id", table: "backup_asset_export_source_leases", column: "lease_attempt_id", id: strings.Repeat("9", 32), width: 32},
+			{name: "source leases fence_hash", table: "backup_asset_export_source_leases", column: "fence_hash", id: strings.Repeat("9", 32), width: 64},
+			{name: "artifacts job_id", table: "backup_asset_export_artifacts", column: "job_id", id: strings.Repeat("5", 32), width: 32},
+			{name: "artifacts attempt_id", table: "backup_asset_export_artifacts", column: "attempt_id", id: strings.Repeat("5", 32), width: 32},
+			{name: "artifacts job_key_id", table: "backup_asset_export_artifacts", column: "job_key_id", id: strings.Repeat("5", 32), width: 32},
+			{name: "artifacts plaintext_digest", table: "backup_asset_export_artifacts", column: "plaintext_digest", id: strings.Repeat("5", 32), width: 64},
+			{name: "artifacts archive_digest", table: "backup_asset_export_artifacts", column: "archive_digest", id: strings.Repeat("5", 32), width: 64},
+			{name: "artifacts ciphertext_digest", table: "backup_asset_export_artifacts", column: "ciphertext_digest", id: strings.Repeat("5", 32), width: 64},
+			{name: "idempotency key_digest", table: "backup_asset_export_idempotency", column: "key_digest", id: strings.Repeat("a", 32), width: 64},
+			{name: "idempotency request_intent_digest", table: "backup_asset_export_idempotency", column: "request_intent_digest", id: strings.Repeat("a", 32), width: 64},
+			{name: "idempotency result_job_id", table: "backup_asset_export_idempotency", column: "result_job_id", id: strings.Repeat("a", 32), width: 32},
+			{name: "reservations bucket_id", table: "backup_asset_export_reservations", column: "bucket_id", id: strings.Repeat("e", 32), width: 32},
+			{name: "reservations job_id", table: "backup_asset_export_reservations", column: "job_id", id: strings.Repeat("e", 32), width: 32},
+			{name: "reservations attempt_id", table: "backup_asset_export_reservations", column: "attempt_id", id: strings.Repeat("e", 32), width: 32},
+			{name: "archive member key_digest", table: "backup_asset_archive_member_requests", column: "key_digest", id: strings.Repeat("8", 32), width: 64},
+			{name: "archive member request_intent_digest", table: "backup_asset_archive_member_requests", column: "request_intent_digest", id: strings.Repeat("8", 32), width: 64},
+			{name: "archive member recovery_point_id", table: "backup_asset_archive_member_requests", column: "recovery_point_id", id: strings.Repeat("8", 32), width: 32},
+			{name: "archive member entry_id", table: "backup_asset_archive_member_requests", column: "entry_id", id: strings.Repeat("8", 32), width: 64},
+			{name: "archive member catalog_generation_id", table: "backup_asset_archive_member_requests", column: "catalog_generation_id", id: strings.Repeat("8", 32), width: 32},
+			{name: "archive member index_artifact_id", table: "backup_asset_archive_member_requests", column: "index_artifact_id", id: strings.Repeat("8", 32), width: 32},
+			{name: "archive member index_revision", table: "backup_asset_archive_member_requests", column: "index_revision", id: strings.Repeat("8", 32), width: 64},
+			{name: "archive member member_chain_digest", table: "backup_asset_archive_member_requests", column: "member_chain_digest", id: strings.Repeat("8", 32), width: 64},
+			{name: "archive member processing_interest_id", table: "backup_asset_archive_member_requests", column: "processing_interest_id", id: strings.Repeat("8", 32), width: 32},
+			{name: "archive member processing_job_id", table: "backup_asset_archive_member_requests", column: "processing_job_id", id: strings.Repeat("8", 32), width: 32},
+			{name: "export grant fence digest", table: "backup_asset_export_delivery_grants", column: "export_fence_digest", id: strings.Repeat("6", 32), width: 64},
+			{name: "export grant selection digest", table: "backup_asset_export_delivery_grants", column: "selection_digest", id: strings.Repeat("6", 32), width: 64},
+			{name: "export grant artifact digest", table: "backup_asset_export_delivery_grants", column: "artifact_digest", id: strings.Repeat("6", 32), width: 64},
+			{name: "member grant outer recovery point", table: "backup_asset_export_delivery_grants", column: "outer_recovery_point_id", id: strings.Repeat("7", 32), width: 32},
+			{name: "member grant outer entry", table: "backup_asset_export_delivery_grants", column: "outer_entry_id", id: strings.Repeat("7", 32), width: 64},
+			{name: "member grant chain digest", table: "backup_asset_export_delivery_grants", column: "member_chain_digest", id: strings.Repeat("7", 32), width: 64},
+			{name: "member grant processing job", table: "backup_asset_export_delivery_grants", column: "processing_job_id", id: strings.Repeat("7", 32), width: 32},
+			{name: "member grant processing attempt", table: "backup_asset_export_delivery_grants", column: "processing_attempt_id", id: strings.Repeat("7", 32), width: 32},
+			{name: "member grant derived artifact set", table: "backup_asset_export_delivery_grants", column: "derived_artifact_set_id", id: strings.Repeat("7", 32), width: 32},
+			{name: "member grant derived artifact", table: "backup_asset_export_delivery_grants", column: "derived_artifact_id", id: strings.Repeat("7", 32), width: 32},
+			{name: "member grant derived blob", table: "backup_asset_export_delivery_grants", column: "derived_blob_id", id: strings.Repeat("7", 32), width: 32},
+			{name: "member grant derived digest", table: "backup_asset_export_delivery_grants", column: "derived_digest", id: strings.Repeat("7", 32), width: 64},
+		} {
+			for _, invalidWidth := range []int{testCase.width - 1, testCase.width + 1} {
+				t.Run(fmt.Sprintf("%s/%d", testCase.name, invalidWidth), func(t *testing.T) {
+					query := fmt.Sprintf("UPDATE %s SET %s = ? WHERE id = ?", testCase.table, testCase.column)
+					fixture.expectExecRejectedInRollback(t, db, query, strings.Repeat("a", invalidWidth), testCase.id)
+				})
+			}
+		}
+	})
+}
+
+func (fixture migrationFixture) seed068CryptographicRows(t *testing.T, db *sql.DB, now time.Time) {
+	t.Helper()
+	fixture.insertSearchMigrationUser(t, db, 6682, "export-contract-user", now)
+	jobID := strings.Repeat("1", 32)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_export_jobs
+		(id, owner_user_id, lifecycle_enqueue_sequence, selection_digest, selection_schema_version, archive_format, archive_profile,
+		 limits_schema_version, chunk_bytes, max_items, max_source_points, max_item_bytes, max_logical_bytes,
+		 max_provider_bytes, max_ciphertext_bytes, max_open_readers, max_duration_seconds, max_attempts,
+		 retry_base_seconds, retry_max_delay_seconds, lease_ttl_seconds, lease_renew_margin_seconds,
+		 ready_ttl_seconds, execution_state, result_kind, cleanup_state, absolute_deadline,
+		 item_count, packed_count, skipped_count, failed_count, transition_revision, created_at, updated_at)
+		VALUES (?, 6682, 1, ?, 1, 'zip', 'zip_deflate_v1', 1, 1048576, 10, 2, 1048576, 10485760,
+		 10485760, 77604864, 2, 300, 3, 1, 10, 120, 30, 86400, 'queued', '',
+		 'none', ?, 1, 0, 0, 0, 1, ?, ?)`,
+		jobID, strings.Repeat("a", 64), now.Add(time.Hour), now, now)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_export_keys
+		(id, job_id, state, wrapped_dek, envelope_nonce, kek_version, wrap_algorithm,
+		 key_revision, created_at)
+		VALUES (?, ?, 'active', ?, ?, 1, 'aes-256-gcm', 1, ?)`,
+		strings.Repeat("2", 32), jobID, []byte("wrapped-dek"), []byte("123456789012"), now)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_export_items
+		(id, job_id, ordinal, recovery_point_id, entry_id, catalog_generation_id,
+		 source_fingerprint, entry_fingerprint, fingerprint_strength, provider_capability_revision,
+		 entry_type, logical_size, selection_root_ordinal, path_nonce, path_ciphertext, state,
+		 created_at, updated_at)
+		VALUES (?, ?, 0, ?, ?, ?, 'source-fingerprint', 'entry-fingerprint', 'strong', 1,
+		 'file', 10, 0, ?, ?, 'pending', ?, ?)`,
+		strings.Repeat("3", 32), jobID, strings.Repeat("4", 32), strings.Repeat("5", 64),
+		strings.Repeat("6", 32), []byte("123456789012"), []byte("path-ciphertext"), now, now)
+}
+
+func (fixture migrationFixture) seed068DeliveryRows(t *testing.T, db *sql.DB, now time.Time) {
+	t.Helper()
+	fixture.seed068CryptographicRows(t, db, now)
+	jobID := strings.Repeat("1", 32)
+	keyID := strings.Repeat("2", 32)
+	attemptID := strings.Repeat("4", 32)
+	artifactID := strings.Repeat("5", 32)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_export_attempts
+		(id, job_id, attempt_number, worker_owner, state, fence_token, fence_digest, nonce_prefix,
+		 lease_expires_at, is_current, started_at, finished_at, created_at, updated_at)
+		VALUES (?, ?, 1, 'worker', 'sealed', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		attemptID, jobID, []byte(strings.Repeat("f", 32)), strings.Repeat("b", 64), []byte("12345678"),
+		now.Add(time.Hour), false, now, now, now, now)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_export_artifacts
+		(id, job_id, attempt_id, job_key_id, state, locator, cipher_version, chunk_bytes,
+		 format_version, nonce_prefix, chunk_count, plaintext_digest, archive_digest, ciphertext_digest,
+		 plaintext_size, ciphertext_size, sealed_at, expires_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 'sealed', 'final.xre', 1, 65536, 1, ?, 1, ?, ?, ?, 10, 20, ?, ?, ?, ?)`,
+		artifactID, jobID, attemptID, keyID, []byte("12345678"), strings.Repeat("c", 64),
+		strings.Repeat("d", 64), strings.Repeat("e", 64), now, now.Add(time.Hour), now, now)
+	memberRequestID := strings.Repeat("8", 32)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_archive_member_requests
+		(id, owner_user_id, endpoint, key_digest, request_intent_digest, recovery_point_id, entry_id,
+		 catalog_generation_id, source_fingerprint, entry_fingerprint, index_artifact_id, index_revision,
+		 member_chain_digest, resolved_ordinal, processing_interest_id, processing_job_id, state,
+		 idempotency_expires_at, absolute_expires_at, created_at, updated_at, version)
+		VALUES (?, 6682, 'archive_member', ?, ?, ?, ?, ?, 'source-fingerprint', 'entry-fingerprint', ?, ?, ?, 0,
+		 ?, ?, 'ready', ?, ?, ?, ?, 1)`, memberRequestID, strings.Repeat("1", 64), strings.Repeat("2", 64),
+		strings.Repeat("3", 32), strings.Repeat("4", 64), strings.Repeat("5", 32), strings.Repeat("6", 32),
+		strings.Repeat("7", 64), strings.Repeat("9", 64), strings.Repeat("a", 32), strings.Repeat("b", 32),
+		now.Add(2*time.Hour), now.Add(time.Hour), now, now)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_export_delivery_grants
+		(id, delivery_id, resource_kind, export_job_id, export_artifact_id, export_attempt_id,
+		 export_fence_digest, selection_digest, artifact_digest, plaintext_size, ciphertext_size,
+		 format_version, chunk_bytes, job_key_id, job_key_version, owner_user_id, session_jti,
+		 token_version, role_revision, proof_action, proof_id, proof_expires_at, cookie_secret_hash,
+		 action, canonical_path, method_policy, range_policy, state, idle_expires_at, absolute_expires_at,
+		 max_requests, max_cumulative_bytes, max_in_flight, issued_at, created_at, updated_at)
+		VALUES (?, ?, 'export_archive', ?, ?, ?, ?, ?, ?, 10, 20, 1, 65536, ?, 1, 6682, 'session',
+		 1, 1, 'asset.export_download', 'proof', ?, ?, 'export_download', '/api/v1/asset-content/export',
+		 'get_head', 'single', 'issued', ?, ?, 10, 100, 1, ?, ?, ?)`,
+		strings.Repeat("6", 32), strings.Repeat("c", 32), jobID, artifactID, attemptID,
+		strings.Repeat("b", 64), strings.Repeat("a", 64), strings.Repeat("e", 64), keyID,
+		now.Add(2*time.Hour), strings.Repeat("f", 64), now.Add(30*time.Minute), now.Add(time.Hour), now, now, now)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_export_delivery_grants
+		(id, delivery_id, resource_kind, member_request_id, outer_recovery_point_id, outer_entry_id,
+		 outer_source_fingerprint, outer_entry_fingerprint, member_chain_digest, processing_job_id,
+		 processing_attempt_id, derived_artifact_set_id, derived_artifact_id, derived_blob_id,
+		 derived_digest, derived_size, owner_user_id, session_jti, token_version, role_revision,
+		 proof_action, proof_id, proof_expires_at, cookie_secret_hash, action, canonical_path,
+		 method_policy, range_policy, state, idle_expires_at, absolute_expires_at, max_requests,
+		 max_cumulative_bytes, max_in_flight, issued_at, created_at, updated_at)
+		VALUES (?, ?, 'archive_member', ?, ?, ?, 'source-fingerprint', 'entry-fingerprint', ?, ?, ?, ?, ?, ?, ?, 10,
+		 6682, 'session', 1, 1, 'asset.download', 'proof', ?, ?, 'archive_member_download',
+		 '/api/v1/asset-content/member', 'get_head', 'none', 'issued', ?, ?, 10, 100, 1, ?, ?, ?)`,
+		strings.Repeat("7", 32), strings.Repeat("d", 32), memberRequestID, strings.Repeat("3", 32),
+		strings.Repeat("4", 64), strings.Repeat("9", 64), strings.Repeat("a", 32), strings.Repeat("b", 32),
+		strings.Repeat("c", 32), strings.Repeat("d", 32), strings.Repeat("e", 32),
+		strings.Repeat("1", 64), now.Add(2*time.Hour), strings.Repeat("2", 64), now.Add(30*time.Minute),
+		now.Add(time.Hour), now, now, now)
+}
+
+func (fixture migrationFixture) seed068ParityRows(t *testing.T, db *sql.DB, now time.Time) {
+	t.Helper()
+	fixture.seed068DeliveryRows(t, db, now)
+	jobID := strings.Repeat("1", 32)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_export_source_leases
+		(id, job_id, recovery_point_id, lease_id, lease_attempt_id, fence_hash, absolute_deadline,
+		 state, acquired_at, renewed_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
+		strings.Repeat("9", 32), jobID, strings.Repeat("7", 32), strings.Repeat("8", 32),
+		strings.Repeat("6", 32), strings.Repeat("a", 64), now.Add(time.Hour), now, now, now, now)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_export_idempotency
+		(id, owner_user_id, endpoint, key_digest, request_intent_digest, state, result_job_id,
+		 expires_at, created_at, updated_at)
+		VALUES (?, 6682, 'asset_export_create', ?, ?, 'committed', ?, ?, ?, ?)`,
+		strings.Repeat("a", 32), strings.Repeat("b", 64), strings.Repeat("c", 64), jobID,
+		now.Add(time.Hour), now, now)
+	userBucketID := strings.Repeat("f", 32)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_export_quota_buckets
+		(id, scope, subject, transition_revision, active_jobs, active_workers, active_readers,
+		 reserved_store_bytes, used_store_bytes, created_at, updated_at)
+		VALUES (?, 'user', '6682', 1, 0, 0, 0, 0, 0, ?, ?)`, userBucketID, now, now)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_export_reservations
+		(id, bucket_id, kind, reserved_slots, lease_owner, lease_expires_at, state, created_at, updated_at)
+		VALUES (?, ?, 'job', 1, 'reservation-owner', ?, 'released', ?, ?)`,
+		strings.Repeat("e", 32), userBucketID, now.Add(time.Hour), now, now)
+}
+
+func (fixture migrationFixture) expectExecRejectedInRollback(t *testing.T, db *sql.DB, query string, args ...any) {
+	t.Helper()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin %s rejected-row transaction: %v", fixture.engine, err)
+	}
+	_, execErr := tx.Exec(fixture.bind(query), args...)
+	if rollbackErr := tx.Rollback(); rollbackErr != nil {
+		t.Fatalf("rollback %s rejected-row transaction: %v", fixture.engine, rollbackErr)
+	}
+	if execErr == nil {
+		t.Fatalf("%s invalid migration row unexpectedly succeeded", fixture.engine)
+	}
+}
+
+func (fixture migrationFixture) executeExportDown(db *sql.DB) error {
+	path := "migrations/sqlite/000068_backup_asset_export.down.sql"
+	migrationFS := sqliteMigrationsFS
+	if fixture.engine == "postgres" {
+		path = "migrations/postgres/000068_backup_asset_export.down.sql"
+		migrationFS = postgresMigrationsFS
+	}
+	script, err := migrationFS.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(string(script))
+	if err != nil {
+		_, _ = db.Exec("ROLLBACK")
+	}
+	return err
+}
+
+func backupAssetExportModels() map[string]any {
+	return map[string]any{
+		"backup_asset_export_jobs":              model.BackupAssetExportJob{},
+		"backup_asset_export_keys":              model.BackupAssetExportKey{},
+		"backup_asset_export_items":             model.BackupAssetExportItem{},
+		"backup_asset_export_attempts":          model.BackupAssetExportAttempt{},
+		"backup_asset_export_item_attempts":     model.BackupAssetExportItemAttempt{},
+		"backup_asset_export_source_leases":     model.BackupAssetExportSourceLease{},
+		"backup_asset_export_artifacts":         model.BackupAssetExportArtifact{},
+		"backup_asset_export_idempotency":       model.BackupAssetExportIdempotency{},
+		"backup_asset_export_quota_buckets":     model.BackupAssetExportQuotaBucket{},
+		"backup_asset_export_reservations":      model.BackupAssetExportReservation{},
+		"backup_asset_export_delivery_grants":   model.BackupAssetExportDeliveryGrant{},
+		"backup_asset_export_delivery_requests": model.BackupAssetExportDeliveryRequest{},
+		"backup_asset_archive_member_requests":  model.BackupAssetArchiveMemberRequest{},
 	}
 }
 

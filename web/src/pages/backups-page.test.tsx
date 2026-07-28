@@ -1,8 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
 import { BackupsPage } from "./backups-page";
 import { BackupsDataPage } from "./backups-page.data";
@@ -93,6 +93,23 @@ const {
 
 vi.mock("@/context/auth-context.hooks", () => ({
   useAuth: () => authRef.current,
+}));
+
+vi.mock("@/features/backup-assets/export-job-panel", () => ({
+  ExportJobPanel: ({
+    onRouteChange,
+  }: {
+    onRouteChange: (exportJobId: string | null, options: { replace: boolean }) => void;
+  }) => (
+    <div>
+      <button type="button" onClick={() => onRouteChange("e".repeat(32), { replace: false })}>
+        Synthetic push export
+      </button>
+      <button type="button" onClick={() => onRouteChange(null, { replace: true })}>
+        Synthetic replace export
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("@/lib/api/client", () => ({
@@ -214,6 +231,68 @@ describe("BackupsPage", () => {
     expect(screen.queryByRole("button", { name: /Processing coverage|处理覆盖/ })).not.toBeInTheDocument();
   });
 
+  it("pushes a new export handle, restores it with Back, and replace-dismisses it", async () => {
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+    getBackupConfidenceMock.mockResolvedValue(backupConfidence);
+    getStorageUsageMock.mockResolvedValue(storageUsage);
+    const originalJobId = "d".repeat(32);
+    const originalRoute = `/app/backups/data?exportJobId=${originalJobId}`;
+    const user = userEvent.setup();
+    renderBackups(["/app/backups/overview", originalRoute], 1);
+
+    await user.click(await screen.findByRole("button", { name: "Synthetic push export" }));
+    await waitFor(() => expect(screen.getByTestId("backups-location")).toHaveTextContent(
+      `/app/backups/data?exportJobId=${"e".repeat(32)}`,
+    ));
+
+    fireEvent.click(screen.getByTestId("backups-history-back"));
+    await waitFor(() => expect(screen.getByTestId("backups-location")).toHaveTextContent(originalRoute));
+
+    await user.click(await screen.findByRole("button", { name: "Synthetic replace export" }));
+    await waitFor(() => expect(screen.getByTestId("backups-location")).toHaveTextContent("/app/backups/data"));
+
+    fireEvent.click(screen.getByTestId("backups-history-back"));
+    await waitFor(() => expect(screen.getByTestId("backups-location")).toHaveTextContent("/app/backups/overview"));
+  });
+
+  it("replace-clears an incompatible export handle on repository change so Back cannot reopen it", async () => {
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+    getBackupConfidenceMock.mockResolvedValue(backupConfidence);
+    getStorageUsageMock.mockResolvedValue(storageUsage);
+    const replacementRepository = {
+      ...repository,
+      id: "e".repeat(32),
+      displayName: "Synthetic Replacement Repository",
+    };
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [
+        { status: "available", value: repository },
+        { status: "available", value: replacementRepository },
+      ],
+      nextCursor: null,
+    });
+    const exportJobId = "d".repeat(32);
+    renderBackups([
+      "/app/backups/overview",
+      `/app/backups/data?repositoryId=${repository.id}&exportJobId=${exportJobId}`,
+    ], 1);
+
+    const repositorySelect = await waitFor(() => {
+      const element = document.querySelector("#backup-assets-repository");
+      expect(element).toBeInstanceOf(HTMLSelectElement);
+      return element as HTMLSelectElement;
+    });
+    fireEvent.change(repositorySelect, { target: { value: replacementRepository.id } });
+
+    await waitFor(() => expect(screen.getByTestId("backups-location")).toHaveTextContent(
+      `/app/backups/data?repositoryId=${replacementRepository.id}`,
+    ));
+    expect(screen.getByTestId("backups-location")).not.toHaveTextContent("exportJobId");
+
+    fireEvent.click(screen.getByTestId("backups-history-back"));
+    await waitFor(() => expect(screen.getByTestId("backups-location")).toHaveTextContent("/app/backups/overview"));
+  });
+
   it("hydrates an omitted data layout from the bounded browser preference", async () => {
     getBackupHealthMock.mockResolvedValue(backupHealth);
     window.localStorage.setItem(
@@ -319,9 +398,10 @@ describe("BackupsPage", () => {
   });
 });
 
-function renderBackups(initialEntry: string) {
+function renderBackups(initialEntry: string | string[], initialIndex?: number) {
+  const initialEntries = Array.isArray(initialEntry) ? initialEntry : [initialEntry];
   return render(
-    <MemoryRouter initialEntries={[initialEntry]}>
+    <MemoryRouter initialEntries={initialEntries} initialIndex={initialIndex}>
       <Routes>
         <Route path="/app/backups" element={<BackupsPage />}>
           <Route index element={<Navigate to="overview" replace />} />
@@ -337,5 +417,11 @@ function renderBackups(initialEntry: string) {
 
 function LocationProbe() {
   const location = useLocation();
-  return <output data-testid="backups-location">{location.pathname + location.search}</output>;
+  const navigate = useNavigate();
+  return (
+    <div>
+      <output data-testid="backups-location">{location.pathname + location.search}</output>
+      <button type="button" data-testid="backups-history-back" onClick={() => navigate(-1)}>Test history back</button>
+    </div>
+  );
 }

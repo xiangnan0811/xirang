@@ -22,6 +22,7 @@ import (
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 
+	"github.com/mattn/go-sqlite3"
 	"gorm.io/gorm"
 )
 
@@ -756,6 +757,121 @@ func TestBinaryContentManifestDoesNotRequireSearchProjection(t *testing.T) {
 	}
 }
 
+func TestArchiveMemberManifestCommitsWithoutGenericProjection(t *testing.T) {
+	harness := newManifestHarness(t)
+	harness.moveJobToUploading(t)
+	harness.configureCapabilityJob(t, capabilityspec.CapabilityArchiveExtractEntry)
+	payload := []byte("archive member text")
+	metadata, err := json.Marshal(archiveMemberManifestMetadataV1{
+		SchemaVersion: 1, MemberID: strings.Repeat("a", 32), DisplayName: "member.txt", Size: int64(len(payload)), MediaType: "text/plain",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := []ArtifactDeclaration{
+		artifactDeclaration(0, ArtifactRoleContent, "text/plain", payload),
+		artifactDeclaration(1, ArtifactRoleMetadata, "application/json", metadata),
+	}
+	result, err := commitManifestArtifacts(t, harness, artifacts, [][]byte{payload, metadata})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ProjectionRequired || harness.projection.preparations != 0 || harness.projection.publications != 0 {
+		t.Fatalf("archive member projection result=%+v prepares=%d publications=%d", result, harness.projection.preparations, harness.projection.publications)
+	}
+}
+
+func TestOrdinaryTextAndOCRManifestsPublishGenericProjection(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		capability string
+		role       ArtifactRole
+	}{
+		{name: "text", capability: capabilityspec.CapabilityTextExtract, role: ArtifactRoleContent},
+		{name: "OCR", capability: capabilityspec.CapabilityImageOCR, role: ArtifactRoleOCR},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			harness := newManifestHarness(t)
+			harness.moveJobToUploading(t)
+			harness.configureCapabilityJob(t, testCase.capability)
+			payload := []byte("ordinary projected text")
+			var metadata []byte
+			var err error
+			switch testCase.capability {
+			case capabilityspec.CapabilityTextExtract:
+				metadata, err = json.Marshal(textManifestMetadataV1{
+					SchemaVersion: 1, Coverage: "complete", InputBytes: int64(len(payload)), Runes: 3, Lines: 1,
+				})
+			case capabilityspec.CapabilityImageOCR:
+				metadata, err = json.Marshal(ocrManifestMetadataV1{SchemaVersion: 1, Coverage: "complete", Language: "zh-CN"})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			artifacts := []ArtifactDeclaration{
+				artifactDeclaration(0, testCase.role, "text/plain", payload),
+				artifactDeclaration(1, ArtifactRoleMetadata, "application/json", metadata),
+			}
+			result, err := commitManifestArtifacts(t, harness, artifacts, [][]byte{payload, metadata})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.ProjectionRequired || harness.projection.preparations != 1 || harness.projection.publications != 1 {
+				t.Fatalf("ordinary projection result=%+v prepares=%d publications=%d", result, harness.projection.preparations, harness.projection.publications)
+			}
+		})
+	}
+}
+
+func commitManifestArtifacts(
+	t *testing.T,
+	harness *manifestHarness,
+	artifacts []ArtifactDeclaration,
+	payloads [][]byte,
+) (CommitManifestResult, error) {
+	t.Helper()
+	if len(artifacts) != len(payloads) {
+		t.Fatal("manifest artifacts and payloads differ in length")
+	}
+	for index, artifact := range artifacts {
+		if _, err := harness.sink.UploadArtifact(context.Background(), UploadArtifactRequest{
+			JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
+			GrantID: harness.sinkGrantID, Artifact: artifact,
+		}, bytes.NewReader(payloads[index])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return harness.sink.CommitManifest(context.Background(), CommitManifestRequest{
+		JobID: harness.lease.JobID, AttemptID: harness.lease.AttemptID, WorkerID: harness.lease.WorkerID,
+		GrantID: harness.sinkGrantID, RecoveryPointFence: harness.lease.RecoveryPointFence,
+		SecurityPolicyRevision: validWorkDescriptor().SecurityPolicyRevision, Artifacts: artifacts,
+	})
+}
+
+func TestArchiveMemberProjectionGuardRequiresExactCapabilityAndProfile(t *testing.T) {
+	declaration := artifactDeclaration(0, ArtifactRoleContent, "text/plain", []byte("member text"))
+	archiveCapabilityOtherProfile := validWorkDescriptor()
+	archiveCapabilityOtherProfile.Capability = capabilityspec.CapabilityArchiveExtractEntry
+	archiveCapabilityOtherProfile.OutputProfile = capabilityspec.ProfileBoundedTextV1
+	otherCapabilityArchiveProfile := validWorkDescriptor()
+	otherCapabilityArchiveProfile.Capability = capabilityspec.CapabilityTextExtract
+	otherCapabilityArchiveProfile.OutputProfile = capabilityspec.ProfileArchiveMemberV1
+
+	for _, testCase := range []struct {
+		name       string
+		descriptor WorkDescriptorV1
+	}{
+		{name: "archive capability with another profile", descriptor: archiveCapabilityOtherProfile},
+		{name: "another capability with archive profile", descriptor: otherCapabilityArchiveProfile},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if !manifestNeedsProjection(testCase.descriptor, []ArtifactDeclaration{declaration}) {
+				t.Fatal("non-archive-member descriptor unexpectedly skipped generic projection")
+			}
+		})
+	}
+}
+
 func TestDecodeCanonicalMalwareResultRejectsAmbiguousOrNonCanonicalJSON(t *testing.T) {
 	want := capabilityspec.MalwareResult{
 		SchemaVersion: 1, EngineFamily: "clamav", SignatureBundleFingerprint: strings.Repeat("a", 64),
@@ -1295,6 +1411,39 @@ func TestConcurrentAtomicProjectionRetriesCommitExactlyOnce(t *testing.T) {
 	}
 	harness.projection.onPublish = nil
 	harness.projection.publishRevision = 23
+	var injectedMu sync.Mutex
+	blobLocks := 0
+	uploadLocks := 0
+	const blobCallback = "test:concurrent-projection-transient-blob-lock"
+	if err := harness.db.Callback().Query().Before("gorm:query").Register(blobCallback, func(tx *gorm.DB) {
+		if tx.Statement.Table != "backup_asset_derived_blobs" {
+			return
+		}
+		injectedMu.Lock()
+		defer injectedMu.Unlock()
+		if blobLocks == 0 {
+			blobLocks++
+			_ = tx.AddError(sqlite3.Error{Code: sqlite3.ErrLocked})
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = harness.db.Callback().Query().Remove(blobCallback) })
+	const uploadCallback = "test:concurrent-projection-transient-upload-lock"
+	if err := harness.db.Callback().Update().Before("gorm:update").Register(uploadCallback, func(tx *gorm.DB) {
+		if tx.Statement.Table != "backup_asset_processing_uploads" {
+			return
+		}
+		injectedMu.Lock()
+		defer injectedMu.Unlock()
+		if uploadLocks == 0 {
+			uploadLocks++
+			_ = tx.AddError(sqlite3.Error{Code: sqlite3.ErrLocked})
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = harness.db.Callback().Update().Remove(uploadCallback) })
 	start := make(chan struct{})
 	outcomes := make(chan error, 2)
 	for index := 0; index < 2; index++ {
@@ -1313,6 +1462,12 @@ func TestConcurrentAtomicProjectionRetriesCommitExactlyOnce(t *testing.T) {
 	}
 	if succeeded != 1 {
 		t.Fatalf("concurrent atomic projection successes=%d, want one", succeeded)
+	}
+	injectedMu.Lock()
+	gotBlobLocks, gotUploadLocks := blobLocks, uploadLocks
+	injectedMu.Unlock()
+	if gotBlobLocks != 1 || gotUploadLocks != 1 {
+		t.Fatalf("injected transient locks blob=%d upload=%d, want one each", gotBlobLocks, gotUploadLocks)
 	}
 	var job model.BackupAssetProcessingJob
 	var set model.BackupAssetDerivedArtifactSet
@@ -1592,6 +1747,7 @@ type manifestPolicyFake struct{ revision string }
 
 type manifestProjectionFake struct {
 	mu              sync.Mutex
+	preparations    int
 	publications    int
 	revocations     int
 	onPublish       func(DerivedProjectionPublish) error
@@ -1626,6 +1782,9 @@ type manifestPreparedRevocation struct {
 }
 
 func (fake *manifestProjectionFake) PreparePublish(_ context.Context, request DerivedProjectionPublish) (PreparedDerivedProjection, error) {
+	fake.mu.Lock()
+	fake.preparations++
+	fake.mu.Unlock()
 	return &manifestPreparedProjection{fake: fake, request: request}, nil
 }
 

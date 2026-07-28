@@ -174,7 +174,8 @@ func checkMigrationDirty(db *sql.DB, dbType string) (bool, int64, error) {
 	case "sqlite":
 		existsQuery = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
 	case "postgres":
-		existsQuery = "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='schema_migrations'"
+		// Resolve this identifier through the same search_path as the read below.
+		existsQuery = "SELECT COUNT(*) FROM pg_catalog.pg_class WHERE oid = pg_catalog.to_regclass('schema_migrations')"
 	default:
 		return false, 0, fmt.Errorf("不支持的数据库类型: %s", dbType)
 	}

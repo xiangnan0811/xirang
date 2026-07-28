@@ -582,6 +582,93 @@ func TestFoundationProcessingConfigRequiresCompleteAtomicSnapshot(t *testing.T) 
 	}
 }
 
+func TestFoundationExportConfigUsesOneAtomicSnapshot(t *testing.T) {
+	values := cloneFoundationTestValues(staticFoundationDefaults)
+	for key, value := range map[string]string{
+		"backup_assets.export.enabled":                     "true",
+		"backup_assets.export.root":                        "/var/lib/xirang-asset-runtime/test-export",
+		"backup_assets.export.default_profile":             "tar_gzip_v1",
+		"backup_assets.export.chunk_bytes":                 "524288",
+		"backup_assets.export.max_items":                   "5000",
+		"backup_assets.export.max_source_points":           "64",
+		"backup_assets.export.max_item_bytes":              "1073741824",
+		"backup_assets.export.max_logical_bytes":           "8589934592",
+		"backup_assets.export.max_provider_bytes":          "17179869184",
+		"backup_assets.export.max_ciphertext_bytes":        "10737418240",
+		"backup_assets.export.user_active_jobs":            "2",
+		"backup_assets.export.global_active_jobs":          "6",
+		"backup_assets.export.worker_concurrency":          "3",
+		"backup_assets.export.max_open_readers":            "2",
+		"backup_assets.export.max_duration":                "90m",
+		"backup_assets.export.max_attempts":                "4",
+		"backup_assets.export.retry_base":                  "10s",
+		"backup_assets.export.retry_max_delay":             "4m",
+		"backup_assets.export.lease_ttl":                   "120s",
+		"backup_assets.export.lease_renew_margin":          "30s",
+		"backup_assets.export.ready_ttl":                   "12h",
+		"backup_assets.export.summary_ttl":                 "1000h",
+		"backup_assets.export.ticket_ttl":                  "3m",
+		"backup_assets.export.ticket_max_requests":         "128",
+		"backup_assets.export.ticket_max_in_flight":        "2",
+		"backup_assets.export.ticket_max_cumulative_bytes": "21474836480",
+		"backup_assets.export.user_store_quota":            "21474836480",
+		"backup_assets.export.store_quota":                 "68719476736",
+		"backup_assets.export.gc_cadence":                  "2m",
+		"backup_assets.export.reconcile_batch_size":        "80",
+		"backup_assets.archive.member_ttl":                 "30m",
+		"backup_assets.archive.max_expanded_bytes":         "4294967296",
+		"backup_assets.archive.member_max_bytes":           "134217728",
+		"backup_assets.archive.max_entries":                "50000",
+		"backup_assets.archive.max_depth":                  "10",
+		"backup_assets.archive.max_compression_ratio":      "50",
+		"backup_assets.archive.max_duration":               "5m",
+	} {
+		values[key] = value
+	}
+	reader := &snapshotSettingsReader{values: values}
+	config, err := NewFoundationService(reader).ExportConfig()
+	if err != nil {
+		t.Fatalf("ExportConfig: %v", err)
+	}
+	if !config.Enabled || config.Root != "/var/lib/xirang-asset-runtime/test-export" || config.DefaultProfile != "tar_gzip_v1" ||
+		config.ChunkBytes != 524288 || config.MaxItems != 5000 || config.MaxSourcePoints != 64 ||
+		config.MaxItemBytes != 1073741824 || config.MaxLogicalBytes != 8589934592 ||
+		config.MaxProviderBytes != 17179869184 || config.MaxCiphertextBytes != 10737418240 ||
+		config.UserActiveJobs != 2 || config.GlobalActiveJobs != 6 || config.WorkerConcurrency != 3 || config.MaxOpenReaders != 2 {
+		t.Fatalf("ExportConfig limits=%+v", config)
+	}
+	if config.MaxDuration != 90*time.Minute || config.MaxAttempts != 4 || config.RetryBase != 10*time.Second ||
+		config.RetryMaxDelay != 4*time.Minute || config.LeaseTTL != 2*time.Minute || config.LeaseRenewMargin != 30*time.Second ||
+		config.ReadyTTL != 12*time.Hour || config.SummaryTTL != 1000*time.Hour || config.GCCadence != 2*time.Minute ||
+		config.ReconcileBatchSize != 80 || config.IdempotencyTTL != 24*time.Hour || config.IdempotencyKeyMaxBytes != 128 {
+		t.Fatalf("ExportConfig lifecycle=%+v", config)
+	}
+	if config.Ticket.TTL != 3*time.Minute || config.Ticket.MaxRequests != 128 || config.Ticket.MaxInFlight != 2 ||
+		config.Ticket.MaxCumulativeBytes != 21474836480 || config.Quota.UserStoreBytes != 21474836480 ||
+		config.Quota.GlobalStoreBytes != 68719476736 {
+		t.Fatalf("ExportConfig delivery/quota=%+v", config)
+	}
+	if config.Archive.MemberTTL != 30*time.Minute || config.Archive.MaxExpandedBytes != 4294967296 ||
+		config.Archive.MemberMaxBytes != 134217728 || config.Archive.MaxEntries != 50000 || config.Archive.MaxDepth != 10 ||
+		config.Archive.MaxCompressionRatio != 50 || config.Archive.MaxDuration != 5*time.Minute {
+		t.Fatalf("ExportConfig archive=%+v", config.Archive)
+	}
+	if reader.effectiveReads != 0 || reader.snapshotReads != 1 {
+		t.Fatalf("ExportConfig mixed per-key reads: effective=%d snapshot=%d", reader.effectiveReads, reader.snapshotReads)
+	}
+}
+
+func TestFoundationExportConfigRequiresCompleteAtomicSnapshot(t *testing.T) {
+	if _, err := NewFoundationService(staticSettingsReader{}).ExportConfig(); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("reader without snapshot port got %v, want ErrInvalidState", err)
+	}
+	reader := &snapshotSettingsReader{values: cloneFoundationTestValues(staticFoundationDefaults)}
+	delete(reader.values, "backup_assets.export.ticket_ttl")
+	if _, err := NewFoundationService(reader).ExportConfig(); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("incomplete Export snapshot got %v, want ErrInvalidState", err)
+	}
+}
+
 type snapshotSettingsReader struct {
 	mu             sync.Mutex
 	values         map[string]string
@@ -776,4 +863,41 @@ var staticFoundationDefaults = map[string]string{
 	"backup_assets.derived_store_global_max_bytes":             "107374182400",
 	"backup_assets.derived_store_reconcile_interval":           "15m",
 	"backup_assets.derived_store_reconcile_batch_size":         "256",
+	"backup_assets.export.enabled":                             "false",
+	"backup_assets.export.root":                                "/var/lib/xirang-asset-runtime/export",
+	"backup_assets.export.default_profile":                     "zip_deflate_v1",
+	"backup_assets.export.chunk_bytes":                         "1048576",
+	"backup_assets.export.max_items":                           "10000",
+	"backup_assets.export.max_source_points":                   "128",
+	"backup_assets.export.max_item_bytes":                      "2147483648",
+	"backup_assets.export.max_logical_bytes":                   "10737418240",
+	"backup_assets.export.max_provider_bytes":                  "21474836480",
+	"backup_assets.export.max_ciphertext_bytes":                "12884901888",
+	"backup_assets.export.user_active_jobs":                    "2",
+	"backup_assets.export.global_active_jobs":                  "8",
+	"backup_assets.export.worker_concurrency":                  "2",
+	"backup_assets.export.max_open_readers":                    "2",
+	"backup_assets.export.max_duration":                        "2h",
+	"backup_assets.export.max_attempts":                        "3",
+	"backup_assets.export.retry_base":                          "5s",
+	"backup_assets.export.retry_max_delay":                     "5m",
+	"backup_assets.export.lease_ttl":                           "90s",
+	"backup_assets.export.lease_renew_margin":                  "20s",
+	"backup_assets.export.ready_ttl":                           "24h",
+	"backup_assets.export.summary_ttl":                         "2160h",
+	"backup_assets.export.ticket_ttl":                          "5m",
+	"backup_assets.export.ticket_max_requests":                 "256",
+	"backup_assets.export.ticket_max_in_flight":                "2",
+	"backup_assets.export.ticket_max_cumulative_bytes":         "25769803776",
+	"backup_assets.export.user_store_quota":                    "26843545600",
+	"backup_assets.export.store_quota":                         "107374182400",
+	"backup_assets.export.gc_cadence":                          "5m",
+	"backup_assets.export.reconcile_batch_size":                "100",
+	"backup_assets.archive.member_ttl":                         "1h",
+	"backup_assets.archive.max_expanded_bytes":                 "8589934592",
+	"backup_assets.archive.member_max_bytes":                   "268435456",
+	"backup_assets.archive.max_entries":                        "100000",
+	"backup_assets.archive.max_depth":                          "16",
+	"backup_assets.archive.max_compression_ratio":              "100",
+	"backup_assets.archive.max_duration":                       "10m",
 }

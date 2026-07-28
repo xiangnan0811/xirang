@@ -1,4 +1,4 @@
-import { Download, Eye, Loader2, Sparkles, Square } from "lucide-react";
+import { Archive, Download, Eye, Loader2, Sparkles, Square } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,7 @@ export interface BackupAssetProcessingPanelProps {
   canDownload: boolean;
   onOpenPreview: (source: ProcessingPreviewSource) => void;
   onPrepareDownload: () => void;
+  onBrowseArchive?: () => void;
 }
 
 export function BackupAssetProcessingPanel({
@@ -27,6 +28,7 @@ export function BackupAssetProcessingPanel({
   canDownload,
   onOpenPreview,
   onPrepareDownload,
+  onBrowseArchive,
 }: BackupAssetProcessingPanelProps) {
   const { t } = useTranslation();
   const representation = selectProcessingRepresentation(asset);
@@ -111,6 +113,12 @@ export function BackupAssetProcessingPanel({
           <Button type="button" variant="outline" size="sm" onClick={() => onOpenPreview("derived")}>
             <Sparkles className="size-4" aria-hidden />
             {t("backupAssets.processing.actions.open")}
+          </Button>
+        ) : null}
+        {ready && representation === "archive_index" && onBrowseArchive ? (
+          <Button type="button" variant="outline" size="sm" onClick={onBrowseArchive}>
+            <Archive className="size-4" aria-hidden />
+            {t("backupAssets.processing.actions.browseArchive")}
           </Button>
         ) : null}
         {queued ? (

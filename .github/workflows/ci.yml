@@ -109,6 +109,7 @@ jobs:
       REQUIRE_POSTGRES_OVERLAY_TEST: "1"
       REQUIRE_POSTGRES_CONTENT_TEST: "1"
       REQUIRE_POSTGRES_PROCESSING_TEST: "1"
+      REQUIRE_POSTGRES_EXPORT_TEST: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
@@ -123,7 +124,7 @@ jobs:
         run: go mod download
 
       - name: Run PostgreSQL migration parity
-        run: go test ./internal/database -run 'Test(BackupAssetMigration0(62|63|64|65|66|67)Postgres|PostgresTimestamptzScanUsesConfiguredUTC)' -count=1
+        run: go test ./internal/database -run '^(TestBackupAssetMigration062PostgresApplyDown|TestBackupAssetMigration0(63|64|65|66|67|68)Postgres|TestPostgresTimestamptzScanUsesConfiguredUTC|TestRunMigrationsPostgresDirtyCheckUsesSearchPath)$' -count=1
 
       - name: Run PostgreSQL Catalog behavior parity
         run: go test ./internal/backupasset/catalog -run '^TestCatalogBehaviorPostgres$' -count=1
@@ -138,7 +139,10 @@ jobs:
         run: go test ./internal/backupasset/content -run '^TestContentBehaviorPostgres$' -count=1
 
       - name: Run PostgreSQL Processing behavior parity
-        run: go test ./internal/backupasset/processing -run '^TestProcessingBehaviorPostgres$' -count=1
+        run: go test ./internal/backupasset/processing -run '^(TestProcessingBehaviorPostgres|TestArchiveMemberBehaviorPostgres)$' -count=1
+
+      - name: Run PostgreSQL Export behavior parity
+        run: go test ./internal/backupasset/export -run '^TestExportBehaviorPostgres$' -count=1
 
   frontend:
     name: Frontend Test & Build

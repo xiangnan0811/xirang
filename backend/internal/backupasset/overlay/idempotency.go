@@ -81,10 +81,11 @@ func (service *Service) createIdempotency(
 		return err
 	}
 	now := service.utcNow()
+	settings := service.currentIdempotencySettings()
 	row := model.BackupAssetOverlayIdempotency{
 		ID: id, OwnerUserID: ownerID, Action: action, KeyHash: hashIdempotencyKey(key),
 		EncryptedRequestFingerprint: fingerprint, ResultResourceType: resourceType,
-		ResultResourceID: resourceID, ResultVersion: version, CreatedAt: now, ExpiresAt: now.Add(service.config.IdempotencyTTL),
+		ResultResourceID: resourceID, ResultVersion: version, CreatedAt: now, ExpiresAt: now.Add(settings.ttl),
 	}
 	if err := tx.Create(&row).Error; err != nil {
 		return fmt.Errorf("create overlay idempotency receipt: %w", err)
@@ -120,7 +121,11 @@ func (service *Service) CleanupIdempotency(ctx context.Context, limit int) (int6
 }
 
 func (service *Service) validIdempotencyKey(value string) bool {
-	if service == nil || len(value) < 16 || len(value) > service.config.IdempotencyKeyMaxBytes || strings.TrimSpace(value) != value {
+	if service == nil {
+		return false
+	}
+	settings := service.currentIdempotencySettings()
+	if len(value) < 16 || len(value) > settings.keyMaxBytes || strings.TrimSpace(value) != value {
 		return false
 	}
 	for _, character := range value {
@@ -130,6 +135,12 @@ func (service *Service) validIdempotencyKey(value string) bool {
 		}
 	}
 	return true
+}
+
+func (service *Service) currentIdempotencySettings() overlayIdempotencySettings {
+	service.idempotencyMu.RLock()
+	defer service.idempotencyMu.RUnlock()
+	return service.idempotencySettings
 }
 
 func hashIdempotencyKey(value string) string {

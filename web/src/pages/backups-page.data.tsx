@@ -58,14 +58,16 @@ function BackupsDataWorkspace({
     navigate(result.status === "valid" ? result.href : result.safePath, { replace: true });
   }, [layout, navigate, route, routeHasExplicitLayout]);
 
-  const handleRoutePatch = (patch: Partial<typeof resolvedRoute>) => {
+  const handleRoutePatch = (patch: Partial<typeof resolvedRoute>, options?: { replace?: boolean }) => {
     const result = updateBackupAssetsRoute(resolvedRoute, patch);
     if (result.status === "valid" && patch.layout !== undefined) {
       const nextPreferences = { ...preferences, layout: patch.layout };
       setPreferences(nextPreferences);
       writeBackupAssetsPreferences(nextPreferences);
     }
-    navigate(result.status === "valid" ? result.href : result.safePath);
+    navigate(result.status === "valid" ? result.href : result.safePath, {
+      replace: options?.replace === true || (result.status === "valid" && result.replace === true),
+    });
   };
 
   const handleRouteRepair = (repair: BackupAssetsSemanticIssue) => {

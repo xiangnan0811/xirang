@@ -17,6 +17,7 @@ import (
 
 	"xirang/backend/internal/backupasset"
 	workerCapabilities "xirang/backend/internal/backupasset/processing/capabilities"
+	"xirang/backend/internal/model"
 
 	"golang.org/x/text/unicode/norm"
 
@@ -119,6 +120,108 @@ type DerivedRepresentationResolver struct {
 	malwareSafety  DerivedMalwareSafetySource
 }
 
+type ArchiveIndexRequest struct {
+	Asset                  AuthorizedAsset
+	SecurityPolicyRevision string
+	ExpectedRevision       string
+}
+
+type ArchiveIndexEntry struct {
+	ID          string `json:"id"`
+	ParentID    string `json:"parent_id,omitempty"`
+	DisplayName string `json:"display_name"`
+	Size        int64  `json:"size"`
+	MediaType   string `json:"media_type"`
+}
+
+type ResolvedArchiveMember struct {
+	Ordinal   int
+	Digest    string
+	Size      int64
+	MediaType string
+}
+
+type ResolvedArchiveIndex struct {
+	SchemaVersion int                 `json:"schema_version"`
+	IndexRevision string              `json:"index_revision"`
+	Entries       []ArchiveIndexEntry `json:"entries"`
+
+	artifactID             string
+	artifactSetID          string
+	blobID                 string
+	pipelineFingerprint    string
+	securityPolicyRevision string
+	ref                    backupasset.AssetRef
+	ordinals               map[string]int
+}
+
+type ArchiveMemberArtifactRequest struct {
+	RequestID   string
+	OwnerUserID uint
+	Asset       AuthorizedAsset
+}
+
+type ResolvedArchiveMemberArtifact struct {
+	MemberRequestID            string                   `json:"-"`
+	OwnerUserID                uint                     `json:"-"`
+	Ref                        backupasset.AssetRef     `json:"-"`
+	CatalogGenerationID        string                   `json:"-"`
+	SourceFingerprint          string                   `json:"-"`
+	EntryFingerprint           string                   `json:"-"`
+	MemberChainDigest          string                   `json:"-"`
+	ProcessingJobID            string                   `json:"-"`
+	ProcessingAttemptID        string                   `json:"-"`
+	DerivedArtifactSetID       string                   `json:"-"`
+	DerivedArtifactID          string                   `json:"-"`
+	DerivedBlobID              string                   `json:"-"`
+	DerivedDigest              string                   `json:"-"`
+	DerivedSize                int64                    `json:"-"`
+	MediaType                  string                   `json:"-"`
+	AbsoluteExpiresAt          time.Time                `json:"-"`
+	Provider                   backupasset.ProviderKind `json:"-"`
+	ProviderCapabilityRevision int64                    `json:"-"`
+	FingerprintStrength        string                   `json:"-"`
+	SourceSize                 int64                    `json:"-"`
+	SourceMediaType            string                   `json:"-"`
+	SecurityPolicyRevision     string                   `json:"-"`
+}
+
+func (index ResolvedArchiveIndex) ArtifactID() string { return index.artifactID }
+
+func (index ResolvedArchiveIndex) PipelineFingerprint() string { return index.pipelineFingerprint }
+
+func (index ResolvedArchiveIndex) SecurityPolicyRevision() string {
+	return index.securityPolicyRevision
+}
+
+func (index ResolvedArchiveIndex) ResolveMember(memberID string) (ResolvedArchiveMember, bool) {
+	ordinal, ok := index.ordinals[memberID]
+	if !ok || ordinal < 0 || ordinal >= len(index.Entries) || index.Entries[ordinal].ID != memberID {
+		return ResolvedArchiveMember{}, false
+	}
+	entry := index.Entries[ordinal]
+	return ResolvedArchiveMember{
+		Ordinal: ordinal, Digest: ArchiveMemberChainDigest(index.ref, index.IndexRevision, memberID),
+		Size: entry.Size, MediaType: entry.MediaType,
+	}, true
+}
+
+func ArchiveMemberChainDigest(ref backupasset.AssetRef, indexRevision, memberID string) string {
+	if backupasset.ValidateAssetRef(ref) != nil || !lowerHexContent(indexRevision, 64) || backupasset.ValidateOpaqueID(memberID) != nil {
+		return ""
+	}
+	digest := sha256.New()
+	digest.Write([]byte("xirang.backup_asset.archive_member.chain.v1\x00"))
+	digest.Write([]byte(ref.RecoveryPointID))
+	digest.Write([]byte{0})
+	digest.Write([]byte(ref.EntryID))
+	digest.Write([]byte{0})
+	digest.Write([]byte(indexRevision))
+	digest.Write([]byte{0})
+	digest.Write([]byte(memberID))
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
 func NewDerivedRepresentationResolver(
 	db *gorm.DB,
 	read DerivedArtifactReadFunc,
@@ -131,6 +234,278 @@ func NewDerivedRepresentationResolver(
 	return &DerivedRepresentationResolver{
 		db: db, read: read, activePipeline: activePipeline, malwareSafety: malwareSafety,
 	}, nil
+}
+
+func (resolver *DerivedRepresentationResolver) ResolveArchiveIndex(
+	ctx context.Context,
+	request ArchiveIndexRequest,
+) (ResolvedArchiveIndex, error) {
+	asset := request.Asset
+	derivedRequest := DerivedRepresentationRequest{
+		Ref: asset.Ref, CatalogGenerationID: asset.CatalogGenerationID,
+		SourceFingerprint: asset.SourceFingerprint, SourceEntryFingerprint: asset.EntryFingerprint,
+		FingerprintStrength: asset.FingerprintStrength, ProviderCapabilityRevision: asset.ProviderCapabilityRevision,
+		SourceSize: asset.Size, SourceMediaType: asset.MediaType,
+		ExpectedEntryFingerprint: request.ExpectedRevision,
+		SecurityPolicyRevision:   request.SecurityPolicyRevision, Provider: asset.Provider,
+		Renderer: RendererEscapedText, Profile: ProfileTextV1, intent: derivedIntentArchiveIndex,
+	}
+	binding, err := resolver.Resolve(nonNilContext(ctx), derivedRequest)
+	if err != nil || binding.intent != derivedIntentArchiveIndex {
+		return ResolvedArchiveIndex{}, errors.Join(ErrDerivedRepresentationUnavailable, err)
+	}
+	payload, err := resolver.loadArchiveIndexPayload(nonNilContext(ctx), binding)
+	if err != nil {
+		return ResolvedArchiveIndex{}, err
+	}
+	defer zeroBytes(payload)
+	var decoded derivedArchiveIndex
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		return ResolvedArchiveIndex{}, ErrDerivedRepresentationUnavailable
+	}
+	entries := make([]ArchiveIndexEntry, len(decoded.Entries))
+	ordinals := make(map[string]int, len(decoded.Entries))
+	for ordinal, entry := range decoded.Entries {
+		entries[ordinal] = ArchiveIndexEntry(entry)
+		ordinals[entry.ID] = ordinal
+	}
+	return ResolvedArchiveIndex{
+		SchemaVersion: 1, IndexRevision: binding.EntryFingerprint, Entries: entries,
+		artifactID: binding.artifactID, artifactSetID: binding.artifactSetID, blobID: binding.blobID,
+		pipelineFingerprint:    binding.pipelineFingerprint,
+		securityPolicyRevision: binding.SecurityPolicyRevision, ref: binding.Ref, ordinals: ordinals,
+	}, nil
+}
+
+func (resolver *DerivedRepresentationResolver) ResolveArchiveMember(
+	ctx context.Context,
+	request ArchiveMemberArtifactRequest,
+) (ResolvedArchiveMemberArtifact, error) {
+	return resolver.resolveArchiveMember(ctx, request, "ready")
+}
+
+// ValidateArchiveMemberOutput resolves the exact succeeded Derived product
+// while its durable member request is still running. Delivery must continue to
+// use ResolveArchiveMember, which accepts only an already-ready request.
+func (resolver *DerivedRepresentationResolver) ValidateArchiveMemberOutput(
+	ctx context.Context,
+	request ArchiveMemberArtifactRequest,
+) (ResolvedArchiveMemberArtifact, error) {
+	return resolver.resolveArchiveMember(ctx, request, "running")
+}
+
+func (resolver *DerivedRepresentationResolver) resolveArchiveMember(
+	ctx context.Context,
+	request ArchiveMemberArtifactRequest,
+	requiredRequestState string,
+) (ResolvedArchiveMemberArtifact, error) {
+	if resolver == nil || resolver.db == nil || resolver.read == nil || request.OwnerUserID == 0 ||
+		backupasset.ValidateOpaqueID(request.RequestID) != nil || !validArchiveMemberAuthorizedAsset(request.Asset) ||
+		(requiredRequestState != "running" && requiredRequestState != "ready") {
+		return ResolvedArchiveMemberArtifact{}, ErrDerivedRepresentationUnavailable
+	}
+	ctx = nonNilContext(ctx)
+	var memberRequest model.BackupAssetArchiveMemberRequest
+	requestResult := resolver.db.WithContext(ctx).
+		Where("id = ? AND owner_user_id = ?", request.RequestID, request.OwnerUserID).
+		Limit(1).Find(&memberRequest)
+	if requestResult.Error != nil {
+		return ResolvedArchiveMemberArtifact{}, fmt.Errorf("load archive member request: %w", requestResult.Error)
+	}
+	asset := request.Asset
+	if requestResult.RowsAffected != 1 || memberRequest.State != requiredRequestState || memberRequest.ProcessingJobID == nil ||
+		memberRequest.ProcessingInterestID == nil || memberRequest.RecoveryPointID != asset.Ref.RecoveryPointID ||
+		memberRequest.EntryID != asset.Ref.EntryID || memberRequest.CatalogGenerationID != asset.CatalogGenerationID ||
+		memberRequest.SourceFingerprint != asset.SourceFingerprint || memberRequest.EntryFingerprint != asset.EntryFingerprint ||
+		!lowerHexContent(memberRequest.IndexRevision, 64) || !lowerHexContent(memberRequest.MemberChainDigest, 64) {
+		return ResolvedArchiveMemberArtifact{}, ErrDerivedRepresentationUnavailable
+	}
+	var rows []derivedRepresentationRow
+	rowsResult := resolver.baseQuery(ctx).
+		Where("sets.job_id = ?", *memberRequest.ProcessingJobID).
+		Order("artifacts.ordinal ASC").Limit(3).Scan(&rows)
+	if rowsResult.Error != nil {
+		return ResolvedArchiveMemberArtifact{}, fmt.Errorf("load archive member artifacts: %w", rowsResult.Error)
+	}
+	if len(rows) != 2 {
+		return ResolvedArchiveMemberArtifact{}, ErrDerivedRepresentationUnavailable
+	}
+	validationRequest := DerivedRepresentationRequest{
+		Ref: asset.Ref, CatalogGenerationID: asset.CatalogGenerationID,
+		SourceFingerprint: asset.SourceFingerprint, SourceEntryFingerprint: asset.EntryFingerprint,
+		FingerprintStrength: asset.FingerprintStrength, ProviderCapabilityRevision: asset.ProviderCapabilityRevision,
+		SourceSize: asset.Size, SourceMediaType: asset.MediaType,
+		SecurityPolicyRevision: rows[0].JobSecurityPolicyRevision, Provider: asset.Provider,
+	}
+	for _, row := range rows {
+		active, activeErr := resolver.rowUsesActivePipeline(ctx, row)
+		if activeErr != nil {
+			return ResolvedArchiveMemberArtifact{}, activeErr
+		}
+		if !active || !validDerivedRepresentationRow(row, validationRequest) ||
+			row.Capability != "archive.extract_entry" || row.CapabilitySchema != "archive.extract_entry.v1" ||
+			row.OutputProfile != "archive_member_v1" || row.SetCompleteness != "complete" || row.Completeness != "complete" {
+			return ResolvedArchiveMemberArtifact{}, ErrDerivedRepresentationUnavailable
+		}
+	}
+	contentRow, metadataRow := rows[0], rows[1]
+	if contentRow.Ordinal != 0 || contentRow.Role != "content" || metadataRow.Ordinal != 1 ||
+		metadataRow.Role != "metadata" || metadataRow.MediaType != "application/json" ||
+		contentRow.ArtifactSetID != metadataRow.ArtifactSetID || contentRow.AttemptID != metadataRow.AttemptID ||
+		contentRow.PlaintextSize < 0 || contentRow.PlaintextSize > maximumDerivedArchiveMember {
+		return ResolvedArchiveMemberArtifact{}, ErrDerivedRepresentationUnavailable
+	}
+	var job model.BackupAssetProcessingJob
+	jobResult := resolver.db.WithContext(ctx).Where("id = ?", *memberRequest.ProcessingJobID).Limit(1).Find(&job)
+	if jobResult.Error != nil || jobResult.RowsAffected != 1 || !archiveMemberDescriptorOrdinal(job.DescriptorCanonical, memberRequest.ResolvedOrdinal) {
+		return ResolvedArchiveMemberArtifact{}, errors.Join(ErrDerivedRepresentationUnavailable, jobResult.Error)
+	}
+	metadata, err := resolver.loadArchiveMemberMetadata(ctx, metadataRow)
+	if err != nil || metadata.Size != contentRow.PlaintextSize || metadata.MediaType != contentRow.MediaType ||
+		ArchiveMemberChainDigest(asset.Ref, memberRequest.IndexRevision, metadata.MemberID) != memberRequest.MemberChainDigest {
+		return ResolvedArchiveMemberArtifact{}, errors.Join(ErrDerivedRepresentationUnavailable, err)
+	}
+	return ResolvedArchiveMemberArtifact{
+		MemberRequestID: memberRequest.ID, OwnerUserID: memberRequest.OwnerUserID,
+		Ref: asset.Ref, CatalogGenerationID: asset.CatalogGenerationID,
+		SourceFingerprint: asset.SourceFingerprint, EntryFingerprint: asset.EntryFingerprint,
+		MemberChainDigest: memberRequest.MemberChainDigest,
+		ProcessingJobID:   *memberRequest.ProcessingJobID, ProcessingAttemptID: contentRow.AttemptID,
+		DerivedArtifactSetID: contentRow.ArtifactSetID, DerivedArtifactID: contentRow.ArtifactID,
+		DerivedBlobID: contentRow.BlobID, DerivedDigest: contentRow.PlaintextDigest,
+		DerivedSize: contentRow.PlaintextSize, MediaType: contentRow.MediaType,
+		AbsoluteExpiresAt: memberRequest.AbsoluteExpiresAt.UTC(), Provider: asset.Provider,
+		ProviderCapabilityRevision: asset.ProviderCapabilityRevision, FingerprintStrength: asset.FingerprintStrength,
+		SourceSize: asset.Size, SourceMediaType: asset.MediaType,
+		SecurityPolicyRevision: contentRow.JobSecurityPolicyRevision,
+	}, nil
+}
+
+func (resolver *DerivedRepresentationResolver) ReadArchiveMember(
+	ctx context.Context,
+	binding ResolvedArchiveMemberArtifact,
+	destination io.Writer,
+) error {
+	if destination == nil || !validResolvedArchiveMemberArtifact(binding) {
+		return ErrDerivedRepresentationUnavailable
+	}
+	current, err := resolver.ResolveArchiveMember(nonNilContext(ctx), ArchiveMemberArtifactRequest{
+		RequestID: binding.MemberRequestID, OwnerUserID: binding.OwnerUserID,
+		Asset: AuthorizedAsset{
+			Ref: binding.Ref, CatalogGenerationID: binding.CatalogGenerationID,
+			Provider: binding.Provider, ProviderCapabilityRevision: binding.ProviderCapabilityRevision,
+			SourceFingerprint: binding.SourceFingerprint, EntryFingerprint: binding.EntryFingerprint,
+			FingerprintStrength: binding.FingerprintStrength, Size: binding.SourceSize, MediaType: binding.SourceMediaType,
+		},
+	})
+	if err != nil || !sameResolvedArchiveMemberArtifact(current, binding) {
+		return errors.Join(ErrDerivedRepresentationUnavailable, err)
+	}
+	return resolver.read(nonNilContext(ctx), DerivedArtifactRead{
+		ArtifactID: binding.DerivedArtifactID, RecoveryPointID: binding.Ref.RecoveryPointID,
+		CatalogGenerationID: binding.CatalogGenerationID, EntryID: binding.Ref.EntryID,
+		SourceFingerprint: binding.SourceFingerprint,
+	}, destination)
+}
+
+type archiveMemberOutputMetadata struct {
+	SchemaVersion int    `json:"schema_version"`
+	MemberID      string `json:"member_id"`
+	DisplayName   string `json:"display_name"`
+	Size          int64  `json:"size"`
+	MediaType     string `json:"media_type"`
+}
+
+func (resolver *DerivedRepresentationResolver) loadArchiveMemberMetadata(
+	ctx context.Context,
+	row derivedRepresentationRow,
+) (archiveMemberOutputMetadata, error) {
+	if resolver == nil || resolver.read == nil || row.Role != "metadata" || row.MediaType != "application/json" ||
+		row.PlaintextSize <= 0 || row.PlaintextSize > 4096 || !lowerHexContent(row.PlaintextDigest, 64) {
+		return archiveMemberOutputMetadata{}, ErrDerivedRepresentationUnavailable
+	}
+	buffer := &derivedBoundedBuffer{maximum: 4096}
+	err := resolver.read(nonNilContext(ctx), DerivedArtifactRead{
+		ArtifactID: row.ArtifactID, RecoveryPointID: row.RecoveryPointID,
+		CatalogGenerationID: row.CatalogGenerationID, EntryID: row.EntryID,
+		SourceFingerprint: row.SourceFingerprint,
+	}, buffer)
+	if err != nil || buffer.exceeded || int64(buffer.buffer.Len()) != row.PlaintextSize {
+		zeroBytes(buffer.buffer.Bytes())
+		return archiveMemberOutputMetadata{}, errors.Join(ErrDerivedRepresentationUnavailable, err)
+	}
+	payload := buffer.buffer.Bytes()
+	defer zeroBytes(payload)
+	digest := sha256.Sum256(payload)
+	if hex.EncodeToString(digest[:]) != row.PlaintextDigest || !json.Valid(payload) {
+		return archiveMemberOutputMetadata{}, ErrDerivedRepresentationUnavailable
+	}
+	var metadata archiveMemberOutputMetadata
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&metadata) != nil {
+		return archiveMemberOutputMetadata{}, ErrDerivedRepresentationUnavailable
+	}
+	var trailing any
+	if decoder.Decode(&trailing) != io.EOF {
+		return archiveMemberOutputMetadata{}, ErrDerivedRepresentationUnavailable
+	}
+	canonical, canonicalErr := json.Marshal(metadata)
+	if canonicalErr != nil || !bytes.Equal(canonical, payload) || metadata.SchemaVersion != 1 ||
+		backupasset.ValidateOpaqueID(metadata.MemberID) != nil || !safeDerivedArchiveDisplayName(metadata.DisplayName) ||
+		metadata.Size < 0 || metadata.Size > maximumDerivedArchiveMember ||
+		!oneOfContent(metadata.MediaType, "text/plain", "image/png", "image/jpeg", "application/pdf", "application/octet-stream") {
+		return archiveMemberOutputMetadata{}, ErrDerivedRepresentationUnavailable
+	}
+	return metadata, nil
+}
+
+func archiveMemberDescriptorOrdinal(canonical []byte, ordinal int) bool {
+	if len(canonical) == 0 || ordinal < 0 || !json.Valid(canonical) {
+		return false
+	}
+	var descriptor struct {
+		SchemaVersion int `json:"schema_version"`
+		Parameters    struct {
+			MemberStart int `json:"member_start"`
+			MemberEnd   int `json:"member_end"`
+		} `json:"parameters"`
+	}
+	if json.Unmarshal(canonical, &descriptor) != nil {
+		return false
+	}
+	return descriptor.SchemaVersion == 1 && descriptor.Parameters.MemberStart == ordinal && descriptor.Parameters.MemberEnd == ordinal
+}
+
+func validArchiveMemberAuthorizedAsset(asset AuthorizedAsset) bool {
+	return backupasset.ValidateAssetRef(asset.Ref) == nil && backupasset.ValidateOpaqueID(asset.CatalogGenerationID) == nil &&
+		asset.SourceFingerprint != "" && len(asset.SourceFingerprint) <= 128 &&
+		asset.EntryFingerprint != "" && len(asset.EntryFingerprint) <= 128 &&
+		asset.ProviderCapabilityRevision > 0 && asset.Size >= 0 &&
+		oneOfContent(asset.FingerprintStrength, "strong", "weak", "none") &&
+		strings.TrimSpace(asset.MediaType) != "" && len(asset.MediaType) <= 255 &&
+		(asset.Provider == backupasset.ProviderRestic || asset.Provider == backupasset.ProviderRsync || asset.Provider == backupasset.ProviderRclone)
+}
+
+func validResolvedArchiveMemberArtifact(binding ResolvedArchiveMemberArtifact) bool {
+	return backupasset.ValidateOpaqueID(binding.MemberRequestID) == nil && binding.OwnerUserID > 0 &&
+		backupasset.ValidateAssetRef(binding.Ref) == nil && backupasset.ValidateOpaqueID(binding.CatalogGenerationID) == nil &&
+		binding.SourceFingerprint != "" && binding.EntryFingerprint != "" && lowerHexContent(binding.MemberChainDigest, 64) &&
+		backupasset.ValidateOpaqueID(binding.ProcessingJobID) == nil && backupasset.ValidateOpaqueID(binding.ProcessingAttemptID) == nil &&
+		backupasset.ValidateOpaqueID(binding.DerivedArtifactSetID) == nil && backupasset.ValidateOpaqueID(binding.DerivedArtifactID) == nil &&
+		backupasset.ValidateOpaqueID(binding.DerivedBlobID) == nil && lowerHexContent(binding.DerivedDigest, 64) &&
+		binding.DerivedSize >= 0 && binding.DerivedSize <= maximumDerivedArchiveMember &&
+		strings.TrimSpace(binding.MediaType) != "" && binding.AbsoluteExpiresAt.Location() == time.UTC &&
+		validArchiveMemberAuthorizedAsset(AuthorizedAsset{
+			Ref: binding.Ref, CatalogGenerationID: binding.CatalogGenerationID,
+			Provider: binding.Provider, ProviderCapabilityRevision: binding.ProviderCapabilityRevision,
+			SourceFingerprint: binding.SourceFingerprint, EntryFingerprint: binding.EntryFingerprint,
+			FingerprintStrength: binding.FingerprintStrength, Size: binding.SourceSize, MediaType: binding.SourceMediaType,
+		}) && strings.TrimSpace(binding.SecurityPolicyRevision) != ""
+}
+
+func sameResolvedArchiveMemberArtifact(left, right ResolvedArchiveMemberArtifact) bool {
+	return left == right
 }
 
 func (resolver *DerivedRepresentationResolver) Resolve(

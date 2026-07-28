@@ -563,42 +563,49 @@ type boundedReadHandle struct {
 	providerBytes int64
 	limitErr      error
 	reachedEOF    bool
+	readInFlight  bool
 	mu            sync.Mutex
+	readDrained   *sync.Cond
+	readMu        sync.Mutex
+	closeOnce     sync.Once
+	closed        bool
+	closeErr      error
 }
 
 func newBoundedReadHandle(underlying ReadHandle, maximum int64) ReadHandle {
-	return &boundedReadHandle{underlying: underlying, remaining: maximum}
+	handle := &boundedReadHandle{underlying: underlying, remaining: maximum}
+	handle.readDrained = sync.NewCond(&handle.mu)
+	return handle
 }
 
 func (handle *boundedReadHandle) Read(buffer []byte) (int, error) {
+	handle.readMu.Lock()
+	defer handle.readMu.Unlock()
 	handle.mu.Lock()
-	defer handle.mu.Unlock()
+	if handle.closed {
+		handle.mu.Unlock()
+		return 0, io.ErrClosedPipe
+	}
 	if handle.limitErr != nil {
+		handle.mu.Unlock()
 		return 0, handle.limitErr
 	}
 	if handle.remaining == 0 {
-		var probe [1]byte
-		count, err := handle.underlying.Read(probe[:])
-		if accountErr := handle.addProviderBytes(count); accountErr != nil {
-			handle.limitErr = accountErr
-			return 0, accountErr
+		reachedEOF := handle.reachedEOF
+		handle.mu.Unlock()
+		if reachedEOF {
+			return 0, io.EOF
 		}
-		if count > 0 {
-			handle.limitErr = newCapabilityError(backupasset.CapabilityProviderResourceLimit)
-			return 0, handle.limitErr
-		}
-		if errors.Is(err, io.EOF) {
-			handle.reachedEOF = true
-		} else if err != nil {
-			handle.limitErr = mapCommandTransportError(context.Background(), err)
-			return 0, handle.limitErr
-		}
-		return 0, err
+		return 0, newCapabilityError(backupasset.CapabilityProviderUnavailable)
 	}
 	if int64(len(buffer)) > handle.remaining {
 		buffer = buffer[:handle.remaining]
 	}
+	handle.readInFlight = true
+	handle.mu.Unlock()
+	defer handle.finishRead()
 	count, err := handle.underlying.Read(buffer)
+	handle.mu.Lock()
 	if accountErr := handle.addProviderBytes(count); accountErr != nil {
 		handle.limitErr = accountErr
 		if err == nil {
@@ -609,34 +616,80 @@ func (handle *boundedReadHandle) Read(buffer []byte) (int, error) {
 	if errors.Is(err, io.EOF) {
 		handle.reachedEOF = true
 	}
+	needsExactLimitProof := handle.limitErr == nil && err == nil && count > 0 && handle.remaining == 0
+	handle.mu.Unlock()
+	if needsExactLimitProof {
+		return handle.proveExactLimit(count)
+	}
 	return count, err
 }
 
 func (handle *boundedReadHandle) Close() error {
+	handle.closeOnce.Do(func() {
+		handle.mu.Lock()
+		handle.closed = true
+		handle.mu.Unlock()
+		closeErr := handle.underlying.Close()
+		handle.mu.Lock()
+		for handle.readInFlight {
+			handle.readDrained.Wait()
+		}
+		handle.mu.Unlock()
+		handle.closeErr = handle.closeAfterDrain(closeErr)
+	})
+	return handle.closeErr
+}
+
+func (handle *boundedReadHandle) finishRead() {
 	handle.mu.Lock()
-	if handle.limitErr == nil && handle.remaining == 0 && !handle.reachedEOF {
-		var probe [1]byte
-		count, err := io.ReadFull(handle.underlying, probe[:])
-		if accountErr := handle.addProviderBytes(count); accountErr != nil {
-			handle.limitErr = accountErr
-		}
-		switch {
-		case handle.limitErr != nil:
-		case count > 0:
-			handle.limitErr = newCapabilityError(backupasset.CapabilityProviderResourceLimit)
-		case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
-			handle.reachedEOF = true
-		case err != nil:
-			handle.limitErr = mapCommandTransportError(context.Background(), err)
-		}
-	}
-	limitErr := handle.limitErr
+	handle.readInFlight = false
+	handle.readDrained.Broadcast()
 	handle.mu.Unlock()
-	closeErr := handle.underlying.Close()
+}
+
+func (handle *boundedReadHandle) proveExactLimit(count int) (int, error) {
+	var probe [1]byte
+	probeCount, probeErr := handle.underlying.Read(probe[:])
+	handle.mu.Lock()
+	defer handle.mu.Unlock()
+	if accountErr := handle.addProviderBytes(probeCount); accountErr != nil {
+		handle.limitErr = accountErr
+		return count, accountErr
+	}
+	switch {
+	case probeCount > 0:
+		handle.limitErr = newCapabilityError(backupasset.CapabilityProviderResourceLimit)
+	case errors.Is(probeErr, io.EOF), errors.Is(probeErr, io.ErrUnexpectedEOF):
+		handle.reachedEOF = true
+	case probeErr != nil:
+		handle.limitErr = mapCommandTransportError(context.Background(), probeErr)
+	default:
+		handle.limitErr = newCapabilityError(backupasset.CapabilityProviderUnavailable)
+	}
+	if handle.limitErr != nil {
+		return count, handle.limitErr
+	}
+	return count, nil
+}
+
+func (handle *boundedReadHandle) closeAfterDrain(closeErr error) error {
+	handle.mu.Lock()
+	limitErr := handle.limitErr
+	remaining := handle.remaining
+	reachedEOF := handle.reachedEOF
+	handle.mu.Unlock()
 	if limitErr != nil {
 		return limitErr
 	}
-	return closeErr
+	if closeErr != nil {
+		return closeErr
+	}
+	if !reachedEOF && remaining == 0 {
+		// The last permitted read did not establish EOF or overflow before Close
+		// interrupted it, so the source length is uncertain.
+		return newCapabilityError(backupasset.CapabilityProviderUnavailable)
+	}
+	return nil
 }
 
 func (handle *boundedReadHandle) ProviderBytes() int64 {

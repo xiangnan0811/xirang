@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,13 +11,50 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/api/handlers"
 	"xirang/backend/internal/auth"
+	"xirang/backend/internal/backupasset/content"
 	"xirang/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+type routerBackupContentSchemeService struct {
+	issueRequests []content.IssueRequest
+}
+
+func (service *routerBackupContentSchemeService) Issue(
+	_ context.Context,
+	request content.IssueRequest,
+) (content.IssuedTicket, error) {
+	service.issueRequests = append(service.issueRequests, request)
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	cookie, err := content.NewDeliveryCookie(
+		strings.Repeat("d", 32), "v1."+strings.Repeat("A", 43), expiresAt, request.SecureCookie,
+	)
+	if err != nil {
+		return content.IssuedTicket{}, err
+	}
+	return content.IssuedTicket{
+		Descriptor: content.TicketDescriptor{
+			SchemaVersion: 1, ContentURL: cookie.Path, Action: request.Action, Renderer: request.Renderer,
+			Profile: request.Profile, ContentType: "image/png", ContentLength: 1, ETag: `"router-test"`,
+			Range: content.RangeSingle, Classification: content.ClassificationNonSecret, ExpiresAt: expiresAt,
+			IdleExpiresAt: expiresAt, FallbackActions: []content.DeliveryAction{},
+		},
+		Cookie: cookie,
+	}, nil
+}
+
+func (*routerBackupContentSchemeService) Serve(context.Context, content.GatewayRequest, http.ResponseWriter) error {
+	return content.ErrContentNotFound
+}
+
+func (*routerBackupContentSchemeService) RevokeSession(context.Context, string, string) error {
+	return nil
+}
 
 func TestEveryStepUpRouteDeclaresExpectedAction(t *testing.T) {
 	files := []string{
@@ -340,6 +378,62 @@ func TestBackupContentRoutesSplitAuthorizationFromCookieGateway(t *testing.T) {
 			response.Header().Get("Access-Control-Allow-Origin") != "" {
 			t.Fatalf("unsafe content headers for %s %s: %v", requestCase.method, requestCase.path, response.Header())
 		}
+	}
+}
+
+func TestRouterInjectsTrustedProxySchemePolicyIntoBackupContent(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	gin.SetMode(gin.TestMode)
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}); err != nil {
+		t.Fatal(err)
+	}
+	admin := model.User{
+		Username: "content-scheme-admin", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "admin",
+	}
+	if err := db.Create(&admin).Error; err != nil {
+		t.Fatal(err)
+	}
+	jwtManager := auth.NewJWTManager("FAKE_CONTENT_SCHEME_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	token, err := jwtManager.GenerateToken(admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &routerBackupContentSchemeService{}
+	router := NewRouter(Dependencies{
+		DB: db, JWTManager: jwtManager, BackupContent: service, TrustedProxies: []string{"127.0.0.1"},
+		BackupContentConfig: func(context.Context) (handlers.BackupContentHandlerConfig, error) {
+			return handlers.BackupContentHandlerConfig{TicketTimeout: 5 * time.Second}, nil
+		},
+	})
+	pointID, entryID := strings.Repeat("1", 32), strings.Repeat("a", 64)
+	target := "http://xirang.example/api/v1/recovery-points/" + pointID + "/entries/" + entryID + "/delivery-tickets"
+	body := `{"schema_version":1,"action":"preview","renderer":"safe_raster","profile":"raster_v1"}`
+
+	request := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+	request.RemoteAddr = "127.0.0.1:43210"
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Forwarded-Proto", "https")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || len(service.issueRequests) != 1 || !service.issueRequests[0].SecureCookie {
+		t.Fatalf("trusted status=%d calls=%d body=%s", response.Code, len(service.issueRequests), response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+	request.RemoteAddr = "192.0.2.10:43210"
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Forwarded-Proto", "https")
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || len(service.issueRequests) != 1 {
+		t.Fatalf("untrusted status=%d calls=%d body=%s", response.Code, len(service.issueRequests), response.Body.String())
 	}
 }
 
@@ -925,6 +1019,28 @@ func TestRouterRegistersAssetSearchAndOverlayRoutes(t *testing.T) {
 	} {
 		if !hasRoute(routes, route.method, route.path) {
 			t.Fatalf("missing backup asset route %s %s", route.method, route.path)
+		}
+	}
+}
+
+func TestRouterRegistersBackupAssetExportAndArchiveMemberRoutes(t *testing.T) {
+	routes := NewRouter(Dependencies{}).Routes()
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/asset-exports"},
+		{http.MethodGet, "/api/v1/asset-exports/:id"},
+		{http.MethodPost, "/api/v1/asset-exports/:id/cancel"},
+		{http.MethodPost, "/api/v1/asset-exports/:id/download-ticket"},
+		{http.MethodGet, "/api/v1/recovery-points/:id/entries/:entryId/archive-members"},
+		{http.MethodPost, "/api/v1/recovery-points/:id/entries/:entryId/archive-member-jobs"},
+		{http.MethodGet, "/api/v1/recovery-points/:id/entries/:entryId/archive-member-jobs/:jobId"},
+		{http.MethodPost, "/api/v1/recovery-points/:id/entries/:entryId/archive-member-jobs/:jobId/cancel"},
+		{http.MethodPost, "/api/v1/recovery-points/:id/entries/:entryId/archive-member-jobs/:jobId/delivery-ticket"},
+	} {
+		if !hasRoute(routes, route.method, route.path) {
+			t.Fatalf("missing backup asset Export/archive route %s %s", route.method, route.path)
 		}
 	}
 }

@@ -3,7 +3,9 @@ package settings
 import (
 	"context"
 	"errors"
+	"math"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -143,6 +145,46 @@ var expectedBackupAssetProcessingDefinitions = map[string]expectedProcessingSett
 	"backup_assets.derived_store_global_max_bytes":             {"BACKUP_ASSETS_DERIVED_STORE_GLOBAL_MAX_BYTES", "107374182400", TypeInt, "65536", "1099511627776", "", "", false, false},
 	"backup_assets.derived_store_reconcile_interval":           {"BACKUP_ASSETS_DERIVED_STORE_RECONCILE_INTERVAL", "15m", TypeDuration, "", "", "1m", "24h", false, false},
 	"backup_assets.derived_store_reconcile_batch_size":         {"BACKUP_ASSETS_DERIVED_STORE_RECONCILE_BATCH_SIZE", "256", TypeInt, "1", "10000", "", "", false, false},
+}
+
+var expectedBackupAssetExportDefinitions = map[string]expectedProcessingSettingDefinition{
+	"backup_assets.export.enabled":                     {"BACKUP_ASSETS_EXPORT_ENABLED", "false", TypeBool, "", "", "", "", false, false},
+	"backup_assets.export.root":                        {"BACKUP_ASSETS_EXPORT_ROOT", "/var/lib/xirang-asset-runtime/export", TypeString, "", "", "", "", true, false},
+	"backup_assets.export.default_profile":             {"BACKUP_ASSETS_EXPORT_DEFAULT_PROFILE", "zip_deflate_v1", TypeString, "", "", "", "", false, false},
+	"backup_assets.export.chunk_bytes":                 {"BACKUP_ASSETS_EXPORT_CHUNK_BYTES", "1048576", TypeInt, "65536", "8388608", "", "", false, false},
+	"backup_assets.export.max_items":                   {"BACKUP_ASSETS_EXPORT_MAX_ITEMS", "10000", TypeInt, "1", "100000", "", "", false, false},
+	"backup_assets.export.max_source_points":           {"BACKUP_ASSETS_EXPORT_MAX_SOURCE_POINTS", "128", TypeInt, "1", "1024", "", "", false, false},
+	"backup_assets.export.max_item_bytes":              {"BACKUP_ASSETS_EXPORT_MAX_ITEM_BYTES", "2147483648", TypeInt, "65536", "274877906944", "", "", false, false},
+	"backup_assets.export.max_logical_bytes":           {"BACKUP_ASSETS_EXPORT_MAX_LOGICAL_BYTES", "10737418240", TypeInt, "65536", "1099511627776", "", "", false, false},
+	"backup_assets.export.max_provider_bytes":          {"BACKUP_ASSETS_EXPORT_MAX_PROVIDER_BYTES", "21474836480", TypeInt, "65536", "2199023255552", "", "", false, false},
+	"backup_assets.export.max_ciphertext_bytes":        {"BACKUP_ASSETS_EXPORT_MAX_CIPHERTEXT_BYTES", "12884901888", TypeInt, "65536", "1374389534720", "", "", false, false},
+	"backup_assets.export.user_active_jobs":            {"BACKUP_ASSETS_EXPORT_USER_ACTIVE_JOBS", "2", TypeInt, "1", "16", "", "", false, false},
+	"backup_assets.export.global_active_jobs":          {"BACKUP_ASSETS_EXPORT_GLOBAL_ACTIVE_JOBS", "8", TypeInt, "1", "64", "", "", false, false},
+	"backup_assets.export.worker_concurrency":          {"BACKUP_ASSETS_EXPORT_WORKER_CONCURRENCY", "2", TypeInt, "1", "16", "", "", false, false},
+	"backup_assets.export.max_open_readers":            {"BACKUP_ASSETS_EXPORT_MAX_OPEN_READERS", "2", TypeInt, "1", "8", "", "", false, false},
+	"backup_assets.export.max_duration":                {"BACKUP_ASSETS_EXPORT_MAX_DURATION", "2h", TypeDuration, "", "", "5m", "24h", false, false},
+	"backup_assets.export.max_attempts":                {"BACKUP_ASSETS_EXPORT_MAX_ATTEMPTS", "3", TypeInt, "1", "10", "", "", false, false},
+	"backup_assets.export.retry_base":                  {"BACKUP_ASSETS_EXPORT_RETRY_BASE", "5s", TypeDuration, "", "", "1s", "1m", false, false},
+	"backup_assets.export.retry_max_delay":             {"BACKUP_ASSETS_EXPORT_RETRY_MAX_DELAY", "5m", TypeDuration, "", "", "5s", "30m", false, false},
+	"backup_assets.export.lease_ttl":                   {"BACKUP_ASSETS_EXPORT_LEASE_TTL", "90s", TypeDuration, "", "", "30s", "5m", false, false},
+	"backup_assets.export.lease_renew_margin":          {"BACKUP_ASSETS_EXPORT_LEASE_RENEW_MARGIN", "20s", TypeDuration, "", "", "5s", "2m", false, false},
+	"backup_assets.export.ready_ttl":                   {"BACKUP_ASSETS_EXPORT_READY_TTL", "24h", TypeDuration, "", "", "15m", "168h", false, false},
+	"backup_assets.export.summary_ttl":                 {"BACKUP_ASSETS_EXPORT_SUMMARY_TTL", "2160h", TypeDuration, "", "", "24h", "8760h", false, false},
+	"backup_assets.export.ticket_ttl":                  {"BACKUP_ASSETS_EXPORT_TICKET_TTL", "5m", TypeDuration, "", "", "30s", "15m", false, false},
+	"backup_assets.export.ticket_max_requests":         {"BACKUP_ASSETS_EXPORT_TICKET_MAX_REQUESTS", "256", TypeInt, "1", "4096", "", "", false, false},
+	"backup_assets.export.ticket_max_in_flight":        {"BACKUP_ASSETS_EXPORT_TICKET_MAX_IN_FLIGHT", "2", TypeInt, "1", "8", "", "", false, false},
+	"backup_assets.export.ticket_max_cumulative_bytes": {"BACKUP_ASSETS_EXPORT_TICKET_MAX_CUMULATIVE_BYTES", "25769803776", TypeInt, "65536", "2748779069440", "", "", false, false},
+	"backup_assets.export.user_store_quota":            {"BACKUP_ASSETS_EXPORT_USER_STORE_QUOTA", "26843545600", TypeInt, "1073741824", "2199023255552", "", "", false, false},
+	"backup_assets.export.store_quota":                 {"BACKUP_ASSETS_EXPORT_STORE_QUOTA", "107374182400", TypeInt, "1073741824", "10995116277760", "", "", false, false},
+	"backup_assets.export.gc_cadence":                  {"BACKUP_ASSETS_EXPORT_GC_CADENCE", "5m", TypeDuration, "", "", "30s", "1h", false, false},
+	"backup_assets.export.reconcile_batch_size":        {"BACKUP_ASSETS_EXPORT_RECONCILE_BATCH_SIZE", "100", TypeInt, "1", "1000", "", "", false, false},
+	"backup_assets.archive.member_ttl":                 {"BACKUP_ASSETS_ARCHIVE_MEMBER_TTL", "1h", TypeDuration, "", "", "5m", "24h", false, false},
+	"backup_assets.archive.max_expanded_bytes":         {"BACKUP_ASSETS_ARCHIVE_MAX_EXPANDED_BYTES", "8589934592", TypeInt, "1048576", "8589934592", "", "", false, false},
+	"backup_assets.archive.member_max_bytes":           {"BACKUP_ASSETS_ARCHIVE_MEMBER_MAX_BYTES", "268435456", TypeInt, "65536", "268435456", "", "", false, false},
+	"backup_assets.archive.max_entries":                {"BACKUP_ASSETS_ARCHIVE_MAX_ENTRIES", "100000", TypeInt, "1", "100000", "", "", false, false},
+	"backup_assets.archive.max_depth":                  {"BACKUP_ASSETS_ARCHIVE_MAX_DEPTH", "16", TypeInt, "1", "16", "", "", false, false},
+	"backup_assets.archive.max_compression_ratio":      {"BACKUP_ASSETS_ARCHIVE_MAX_COMPRESSION_RATIO", "100", TypeInt, "1", "100", "", "", false, false},
+	"backup_assets.archive.max_duration":               {"BACKUP_ASSETS_ARCHIVE_MAX_DURATION", "10m", TypeDuration, "", "", "1s", "10m", false, false},
 }
 
 func setupTestDB(t *testing.T) *gorm.DB {
@@ -304,8 +346,8 @@ func TestBackupAssetSearchConfigAndOverlayConfigDefinitionsAndSafeDefaults(t *te
 			got[def.Key] = def
 		}
 	}
-	if len(got) != len(want)+len(expectedBackupAssetProcessingDefinitions) {
-		t.Fatalf("backup asset setting count=%d, want %d", len(got), len(want)+len(expectedBackupAssetProcessingDefinitions))
+	if len(got) != len(want)+len(expectedBackupAssetProcessingDefinitions)+len(expectedBackupAssetExportDefinitions) {
+		t.Fatalf("backup asset setting count=%d, want %d", len(got), len(want)+len(expectedBackupAssetProcessingDefinitions)+len(expectedBackupAssetExportDefinitions))
 	}
 	for key, expected := range want {
 		def, ok := got[key]
@@ -359,6 +401,418 @@ func TestBackupAssetProcessingDefinitionsAndSafeDefaults(t *testing.T) {
 		if value := service.GetEffective(key); value != "false" {
 			t.Errorf("%s default=%q, want false", key, value)
 		}
+	}
+}
+
+func TestBackupAssetExportSettingDefinitions(t *testing.T) {
+	definitions := NewService(setupTestDB(t)).Registry()
+	got := make(map[string]SettingDef, len(expectedBackupAssetExportDefinitions))
+	for _, definition := range definitions {
+		if _, expected := expectedBackupAssetExportDefinitions[definition.Key]; expected {
+			got[definition.Key] = definition
+		}
+	}
+	if len(got) != len(expectedBackupAssetExportDefinitions) {
+		t.Fatalf("export/archive setting count=%d, want %d", len(got), len(expectedBackupAssetExportDefinitions))
+	}
+	for key, expected := range expectedBackupAssetExportDefinitions {
+		definition, ok := got[key]
+		if !ok {
+			t.Fatalf("missing export/archive setting %s", key)
+		}
+		if definition.EnvVar != expected.env || definition.CodeDefault != expected.defaultValue ||
+			definition.Type != expected.settingType || definition.Min != expected.min || definition.Max != expected.max ||
+			definition.MinDuration != expected.minDuration || definition.MaxDuration != expected.maxDuration ||
+			definition.RequiresRestart != expected.requiresRestart || definition.Sensitive != expected.sensitive {
+			t.Errorf("export/archive setting %s mismatch: %+v", key, definition)
+		}
+	}
+	for _, definition := range definitions {
+		key := strings.ToLower(definition.Key)
+		if strings.Contains(key, "export.kek") || strings.Contains(key, "export.key_file") || strings.Contains(key, "export.keyfile") {
+			t.Fatalf("raw Export key material must not be a public setting: %s", definition.Key)
+		}
+	}
+}
+
+func TestBackupAssetExportFoundationKeysAreComplete(t *testing.T) {
+	keys := BackupAssetFoundationSettingKeys()
+	keySet := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		keySet[key] = true
+	}
+	for key := range expectedBackupAssetExportDefinitions {
+		if !keySet[key] || !IsBackupAssetFoundationSetting(key) {
+			t.Errorf("Export/Archive setting omitted from atomic foundation set: %s", key)
+		}
+	}
+	if len(keys) != len(backupAssetCoreSettingKeys)+len(backupAssetSearchOverlaySettingKeys)+
+		len(backupAssetContentSettingKeys)+len(backupAssetProcessingSettingKeys)+len(expectedBackupAssetExportDefinitions) {
+		t.Fatalf("foundation key count=%d does not include exact Export/Archive set", len(keys))
+	}
+}
+
+func TestBackupAssetExportCrossSettingBoundaries(t *testing.T) {
+	valid := backupAssetFoundationValuesForTest()
+	if err := ValidateBackupAssetFoundationConfig(valid); err != nil {
+		t.Fatalf("valid Export/Archive defaults rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		values map[string]string
+	}{
+		{"source points must not exceed items", map[string]string{"backup_assets.export.max_source_points": "10001"}},
+		{"item bytes must not exceed logical bytes", map[string]string{"backup_assets.export.max_logical_bytes": "1073741824"}},
+		{"provider bytes must cover logical bytes", map[string]string{"backup_assets.export.max_provider_bytes": "8589934592"}},
+		{"ciphertext must cover archive overhead", map[string]string{"backup_assets.export.max_ciphertext_bytes": "10737418240"}},
+		{"ticket cumulative bytes must cover ciphertext", map[string]string{"backup_assets.export.ticket_max_cumulative_bytes": "8589934592"}},
+		{"user store quota must not exceed global", map[string]string{"backup_assets.export.user_store_quota": "2199023255552"}},
+		{"global store must cover artifact and spool", map[string]string{"backup_assets.export.store_quota": "12884901888"}},
+		{"user jobs must not exceed global", map[string]string{"backup_assets.export.global_active_jobs": "1"}},
+		{"retry maximum must cover retry base", map[string]string{"backup_assets.export.retry_base": "1m", "backup_assets.export.retry_max_delay": "5s"}},
+		{"renew margin must be below half lease ttl", map[string]string{"backup_assets.export.lease_renew_margin": "45s"}},
+		{"member bytes must not exceed expanded bytes", map[string]string{"backup_assets.archive.max_expanded_bytes": "1048576"}},
+		{"profile must be closed", map[string]string{"backup_assets.export.default_profile": "zip_custom"}},
+		{"root must be private absolute", map[string]string{"backup_assets.export.root": "/data/export"}},
+		{"root must not overlap content", map[string]string{"backup_assets.export.root": "/var/cache/xirang/asset-content/export"}},
+		{"root must not overlap derived", map[string]string{"backup_assets.export.root": "/var/lib/xirang-asset-runtime/derived/export"}},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			values := cloneSettingsValues(valid)
+			for key, value := range testCase.values {
+				values[key] = value
+			}
+			if err := ValidateBackupAssetFoundationConfig(values); err == nil {
+				t.Fatal("expected coupled Export/Archive settings rejection")
+			}
+		})
+	}
+}
+
+func TestBackupAssetExportCiphertextAdmissionRejectsV1AndArchivePathUnderestimates(t *testing.T) {
+	const (
+		minimumCipherChunkBytes int64 = 64 << 10
+		cipherRecordBytes       int64 = 20
+		cipherFixedBytes        int64 = 20 + 68
+		legacyArchiveFixedBytes int64 = 64 << 20
+		archivePathBytes        int64 = 4096
+	)
+	legacyMinimum := func(maxLogicalBytes, maxItems int64) int64 {
+		return maxLogicalBytes + maxItems*1024 + legacyArchiveFixedBytes
+	}
+	cases := []struct {
+		name       string
+		values     map[string]string
+		assertSafe func(t *testing.T, maxCiphertextBytes int64)
+	}{
+		{
+			name: "large final stream needs V1 chunk records",
+			values: map[string]string{
+				"backup_assets.export.chunk_bytes":                 strconv.FormatInt(minimumCipherChunkBytes, 10),
+				"backup_assets.export.max_items":                   "4",
+				"backup_assets.export.max_source_points":           "4",
+				"backup_assets.export.max_logical_bytes":           strconv.FormatInt(1<<40, 10),
+				"backup_assets.export.max_provider_bytes":          strconv.FormatInt(2<<40, 10),
+				"backup_assets.export.max_ciphertext_bytes":        strconv.FormatInt(legacyMinimum(1<<40, 4), 10),
+				"backup_assets.export.ticket_max_cumulative_bytes": strconv.FormatInt(2<<40, 10),
+				"backup_assets.export.user_store_quota":            strconv.FormatInt(2<<40, 10),
+				"backup_assets.export.store_quota":                 strconv.FormatInt(2<<40, 10),
+			},
+			assertSafe: func(t *testing.T, maxCiphertextBytes int64) {
+				t.Helper()
+				plaintextBytes := int64(1 << 40)
+				chunkCount := 1 + (plaintextBytes-1)/minimumCipherChunkBytes
+				minimumCiphertextBytes := plaintextBytes + chunkCount*cipherRecordBytes + cipherFixedBytes
+				if maxCiphertextBytes >= minimumCiphertextBytes {
+					t.Fatalf("fixture ciphertext=%d must be below V1 minimum=%d", maxCiphertextBytes, minimumCiphertextBytes)
+				}
+			},
+		},
+		{
+			name: "directory member paths exceed legacy archive allowance",
+			values: map[string]string{
+				"backup_assets.export.chunk_bytes":          strconv.FormatInt(minimumCipherChunkBytes, 10),
+				"backup_assets.export.max_items":            "100000",
+				"backup_assets.export.max_item_bytes":       strconv.FormatInt(minimumCipherChunkBytes, 10),
+				"backup_assets.export.max_logical_bytes":    strconv.FormatInt(minimumCipherChunkBytes, 10),
+				"backup_assets.export.max_provider_bytes":   strconv.FormatInt(minimumCipherChunkBytes, 10),
+				"backup_assets.export.max_ciphertext_bytes": strconv.FormatInt(legacyMinimum(minimumCipherChunkBytes, 100000), 10),
+			},
+			assertSafe: func(t *testing.T, maxCiphertextBytes int64) {
+				t.Helper()
+				pathBytes := int64(100000) * archivePathBytes
+				if maxCiphertextBytes >= pathBytes {
+					t.Fatalf("fixture ciphertext=%d must be below directory path bytes=%d", maxCiphertextBytes, pathBytes)
+				}
+			},
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			values := backupAssetFoundationValuesForTest()
+			for key, value := range testCase.values {
+				values[key] = value
+			}
+			maxCiphertextBytes, err := strconv.ParseInt(values["backup_assets.export.max_ciphertext_bytes"], 10, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			testCase.assertSafe(t, maxCiphertextBytes)
+			if err := ValidateBackupAssetFoundationConfig(values); err == nil {
+				t.Fatalf("accepted max_ciphertext_bytes=%d below a bounded archive/ciphertext requirement", maxCiphertextBytes)
+			}
+		})
+	}
+}
+
+func TestBackupAssetExportStoreQuotaUsesExactV1SpoolBoundary(t *testing.T) {
+	// These independent constants freeze the V1 physical layout at the settings
+	// boundary: 20-byte header, 20 bytes per chunk, and a 68-byte trailer.
+	const (
+		maxItemBytes       int64 = 2 << 30
+		maxCiphertextBytes int64 = 12 << 30
+		fixedBytes         int64 = 20 + 68
+		chunkRecordBytes   int64 = 20
+	)
+	ciphertextBytes := func(plaintextBytes, chunkBytes int64) int64 {
+		if plaintextBytes == 0 {
+			return fixedBytes
+		}
+		chunkCount := 1 + (plaintextBytes-1)/chunkBytes
+		return plaintextBytes + chunkCount*chunkRecordBytes + fixedBytes
+	}
+
+	for _, chunkBytes := range []int64{64 << 10, 8 << 20} {
+		t.Run(strconv.FormatInt(chunkBytes, 10), func(t *testing.T) {
+			values := backupAssetFoundationValuesForTest()
+			values["backup_assets.export.chunk_bytes"] = strconv.FormatInt(chunkBytes, 10)
+			values["backup_assets.export.max_items"] = "1"
+			values["backup_assets.export.max_source_points"] = "1"
+
+			plaintextOnlyBoundary := maxCiphertextBytes + maxItemBytes
+			values["backup_assets.export.user_store_quota"] = strconv.FormatInt(plaintextOnlyBoundary, 10)
+			values["backup_assets.export.store_quota"] = strconv.FormatInt(plaintextOnlyBoundary, 10)
+			if err := ValidateBackupAssetFoundationConfig(values); err == nil {
+				t.Fatal("plaintext-only spool boundary must not satisfy the V1 ciphertext reservation")
+			}
+
+			exactBoundary := maxCiphertextBytes + ciphertextBytes(maxItemBytes, chunkBytes)
+			values["backup_assets.export.user_store_quota"] = strconv.FormatInt(exactBoundary, 10)
+			values["backup_assets.export.store_quota"] = strconv.FormatInt(exactBoundary, 10)
+			if err := ValidateBackupAssetFoundationConfig(values); err != nil {
+				t.Fatalf("exact V1 spool boundary rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestBackupAssetExportStoreQuotaCoversMaximumMultiItemSpoolPeak(t *testing.T) {
+	const (
+		chunkBytes           int64 = 1 << 20
+		maxItemBytes         int64 = 1 << 20
+		maxLogicalBytes      int64 = 2 << 20
+		maxCiphertextBytes   int64 = 12 << 30
+		cipherFixedBytes     int64 = 20 + 68
+		cipherRecordOverhead int64 = 20
+	)
+	ciphertextBytes := func(plaintextBytes int64) int64 {
+		chunkCount := int64(0)
+		if plaintextBytes > 0 {
+			chunkCount = 1 + (plaintextBytes-1)/chunkBytes
+		}
+		return plaintextBytes + chunkCount*cipherRecordOverhead + cipherFixedBytes
+	}
+
+	spoolBytes := ciphertextBytes(maxItemBytes)
+	exactPeak := maxCiphertextBytes + 2*spoolBytes
+	base := backupAssetFoundationValuesForTest()
+	base["backup_assets.export.chunk_bytes"] = strconv.FormatInt(chunkBytes, 10)
+	base["backup_assets.export.max_items"] = "2"
+	base["backup_assets.export.max_source_points"] = "2"
+	base["backup_assets.export.max_item_bytes"] = strconv.FormatInt(maxItemBytes, 10)
+	base["backup_assets.export.max_logical_bytes"] = strconv.FormatInt(maxLogicalBytes, 10)
+	base["backup_assets.export.max_provider_bytes"] = strconv.FormatInt(maxLogicalBytes, 10)
+	base["backup_assets.export.max_ciphertext_bytes"] = strconv.FormatInt(maxCiphertextBytes, 10)
+	base["backup_assets.export.user_store_quota"] = strconv.FormatInt(exactPeak, 10)
+	base["backup_assets.export.store_quota"] = strconv.FormatInt(exactPeak, 10)
+	if err := ValidateBackupAssetFoundationConfig(base); err != nil {
+		t.Fatalf("exact two-item maximum peak=%d rejected: %v", exactPeak, err)
+	}
+
+	for _, quotaKey := range []string{
+		"backup_assets.export.user_store_quota",
+		"backup_assets.export.store_quota",
+	} {
+		t.Run(quotaKey, func(t *testing.T) {
+			values := cloneSettingsValues(base)
+			values[quotaKey] = strconv.FormatInt(exactPeak-1, 10)
+			if quotaKey == "backup_assets.export.store_quota" {
+				values["backup_assets.export.user_store_quota"] = strconv.FormatInt(exactPeak-1, 10)
+			}
+			if err := ValidateBackupAssetFoundationConfig(values); err == nil {
+				t.Fatalf("accepted %s=%d below exact two-item maximum peak=%d", quotaKey, exactPeak-1, exactPeak)
+			}
+		})
+	}
+}
+
+func TestBackupAssetExportStoreQuotaCoversLogicalCapChunkBoundary(t *testing.T) {
+	const (
+		chunkBytes           int64 = 64 << 10
+		maxItemBytes         int64 = chunkBytes + 2
+		maxLogicalBytes      int64 = maxItemBytes + 2
+		maxCiphertextBytes   int64 = 12 << 30
+		cipherFixedBytes     int64 = 20 + 68
+		cipherRecordOverhead int64 = 20
+	)
+	ciphertextBytes := func(plaintextBytes int64) int64 {
+		chunkCount := int64(0)
+		if plaintextBytes > 0 {
+			chunkCount = 1 + (plaintextBytes-1)/chunkBytes
+		}
+		return plaintextBytes + chunkCount*cipherRecordOverhead + cipherFixedBytes
+	}
+
+	// The exact maximum is [maxItemBytes, 1, 1]: the capped first file
+	// crosses the chunk boundary while the logical remainder opens two more
+	// regular spools.
+	exactPeak := maxCiphertextBytes + ciphertextBytes(maxItemBytes) + 2*ciphertextBytes(1)
+	base := backupAssetFoundationValuesForTest()
+	base["backup_assets.export.chunk_bytes"] = strconv.FormatInt(chunkBytes, 10)
+	base["backup_assets.export.max_items"] = "3"
+	base["backup_assets.export.max_source_points"] = "3"
+	base["backup_assets.export.max_item_bytes"] = strconv.FormatInt(maxItemBytes, 10)
+	base["backup_assets.export.max_logical_bytes"] = strconv.FormatInt(maxLogicalBytes, 10)
+	base["backup_assets.export.max_provider_bytes"] = strconv.FormatInt(maxLogicalBytes, 10)
+	base["backup_assets.export.max_ciphertext_bytes"] = strconv.FormatInt(maxCiphertextBytes, 10)
+	base["backup_assets.export.user_store_quota"] = strconv.FormatInt(exactPeak, 10)
+	base["backup_assets.export.store_quota"] = strconv.FormatInt(exactPeak, 10)
+	if err := ValidateBackupAssetFoundationConfig(base); err != nil {
+		t.Fatalf("exact logical-cap/chunk-boundary peak=%d rejected: %v", exactPeak, err)
+	}
+
+	for _, quotaKey := range []string{
+		"backup_assets.export.user_store_quota",
+		"backup_assets.export.store_quota",
+	} {
+		t.Run(quotaKey, func(t *testing.T) {
+			values := cloneSettingsValues(base)
+			values[quotaKey] = strconv.FormatInt(exactPeak-1, 10)
+			if quotaKey == "backup_assets.export.store_quota" {
+				values["backup_assets.export.user_store_quota"] = strconv.FormatInt(exactPeak-1, 10)
+			}
+			if err := ValidateBackupAssetFoundationConfig(values); err == nil {
+				t.Fatalf("accepted %s=%d below exact logical-cap/chunk-boundary peak=%d", quotaKey, exactPeak-1, exactPeak)
+			}
+		})
+	}
+}
+
+func TestBackupAssetExportMaximumStorePeakV1(t *testing.T) {
+	const (
+		cipherFixedBytes     int64 = 20 + 68
+		cipherRecordOverhead int64 = 20
+	)
+	ciphertextBytes := func(plaintextBytes, chunkBytes int64) int64 {
+		chunkCount := int64(0)
+		if plaintextBytes > 0 {
+			chunkCount = 1 + (plaintextBytes-1)/chunkBytes
+		}
+		return plaintextBytes + chunkCount*cipherRecordOverhead + cipherFixedBytes
+	}
+
+	tests := []struct {
+		name                                           string
+		archiveCiphertextBytes, maxItems, maxItemBytes int64
+		maxLogicalBytes, chunkBytes, want              int64
+	}{
+		{
+			name:                   "logical cap distributes chunk boundaries",
+			archiveCiphertextBytes: 1, maxItems: 3, maxItemBytes: 10,
+			maxLogicalBytes: 15, chunkBytes: 8,
+			want: 1 + ciphertextBytes(10, 8) + ciphertextBytes(4, 8) + ciphertextBytes(1, 8),
+		},
+		{
+			name:                   "zero byte regular spools retain fixed overhead",
+			archiveCiphertextBytes: 1, maxItems: 3, maxItemBytes: 10,
+			maxLogicalBytes: 1, chunkBytes: 8,
+			want: 1 + ciphertextBytes(1, 8) + 2*ciphertextBytes(0, 8),
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, ok := BackupAssetExportMaximumStorePeakV1(
+				testCase.archiveCiphertextBytes, testCase.maxItems, testCase.maxItemBytes,
+				testCase.maxLogicalBytes, testCase.chunkBytes,
+			)
+			if !ok || got != testCase.want {
+				t.Fatalf("maximum peak=(%d, %t), want (%d, true)", got, ok, testCase.want)
+			}
+		})
+	}
+}
+
+func TestBackupAssetExportMaximumStorePeakV1FailsClosedOnOverflow(t *testing.T) {
+	if got, ok := BackupAssetExportMaximumStorePeakV1(math.MaxInt64, 1, 1, 1, 1); ok || got != 0 {
+		t.Fatalf("overflow peak=(%d, %t), want (0, false)", got, ok)
+	}
+}
+
+func TestBackupAssetExportCiphertextSizeV1SettingsContract(t *testing.T) {
+	const (
+		minChunkBytes     int64 = 64 << 10
+		maxChunkBytes     int64 = 8 << 20
+		fixedBytes        int64 = 20 + 68
+		chunkRecordBytes  int64 = 20
+		maximumChunkCount int64 = math.MaxUint32
+	)
+	tests := []struct {
+		name           string
+		plaintextBytes int64
+		chunkBytes     int64
+		want           int64
+	}{
+		{name: "empty", plaintextBytes: 0, chunkBytes: minChunkBytes, want: fixedBytes},
+		{name: "one byte", plaintextBytes: 1, chunkBytes: minChunkBytes, want: 1 + chunkRecordBytes + fixedBytes},
+		{name: "one full chunk", plaintextBytes: minChunkBytes, chunkBytes: minChunkBytes, want: minChunkBytes + chunkRecordBytes + fixedBytes},
+		{name: "full plus partial", plaintextBytes: minChunkBytes + 1, chunkBytes: minChunkBytes, want: minChunkBytes + 1 + 2*chunkRecordBytes + fixedBytes},
+		{name: "maximum registry chunk", plaintextBytes: maxChunkBytes + 1, chunkBytes: maxChunkBytes, want: maxChunkBytes + 1 + 2*chunkRecordBytes + fixedBytes},
+		{
+			name:           "uint32 counter limit",
+			plaintextBytes: maximumChunkCount * minChunkBytes,
+			chunkBytes:     minChunkBytes,
+			want:           maximumChunkCount*minChunkBytes + maximumChunkCount*chunkRecordBytes + fixedBytes,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, ok := backupAssetExportCiphertextSizeV1(testCase.plaintextBytes, testCase.chunkBytes)
+			if !ok || got != testCase.want {
+				t.Fatalf("ciphertext size (%d, %d)=(%d, %t), want (%d, true)", testCase.plaintextBytes, testCase.chunkBytes, got, ok, testCase.want)
+			}
+		})
+	}
+
+	invalid := []struct {
+		name           string
+		plaintextBytes int64
+		chunkBytes     int64
+	}{
+		{name: "negative plaintext", plaintextBytes: -1, chunkBytes: minChunkBytes},
+		{name: "chunk below registry minimum", plaintextBytes: 1, chunkBytes: minChunkBytes - 1},
+		{name: "chunk above registry maximum", plaintextBytes: 1, chunkBytes: maxChunkBytes + 1},
+		{name: "uint32 counter overflow", plaintextBytes: maximumChunkCount*minChunkBytes + 1, chunkBytes: minChunkBytes},
+		{name: "int64 size overflow", plaintextBytes: math.MaxInt64, chunkBytes: minChunkBytes},
+	}
+	for _, testCase := range invalid {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got, ok := backupAssetExportCiphertextSizeV1(testCase.plaintextBytes, testCase.chunkBytes); ok || got != 0 {
+				t.Fatalf("invalid ciphertext size (%d, %d)=(%d, %t), want (0, false)", testCase.plaintextBytes, testCase.chunkBytes, got, ok)
+			}
+		})
 	}
 }
 

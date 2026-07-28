@@ -256,6 +256,32 @@ func TestBackupContentServeEnforcesBrowserBoundaryAndDelegatesCookieOnly(t *test
 	}
 }
 
+func TestBackupContentServeUsesTrustedProxySchemeForOrigin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	policy, err := NewBackupContentSchemePolicy([]string{"127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &backupContentServiceFake{}
+	handler := NewBackupContentHandler(fake, nil, nil, func(context.Context) (BackupContentHandlerConfig, error) {
+		return BackupContentHandlerConfig{TicketTimeout: 5 * time.Second}, nil
+	}).WithSchemePolicy(policy)
+	router := gin.New()
+	router.GET("/api/v1/asset-content/:deliveryId", handler.Serve)
+	deliveryID := strings.Repeat("d", 32)
+	request := httptest.NewRequest(http.MethodGet, "http://xirang.example/api/v1/asset-content/"+deliveryID, nil)
+	request.RemoteAddr = "127.0.0.1:43210"
+	request.Header.Set("X-Forwarded-Proto", "https")
+	request.Header.Set("Cookie", content.DeliveryCookieName+"=v1."+strings.Repeat("A", 43))
+	request.Header.Set("Sec-Fetch-Site", "same-origin")
+	request.Header.Set("Origin", "https://xirang.example")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || len(fake.gatewayRequests) != 1 {
+		t.Fatalf("status=%d calls=%d body=%q", response.Code, len(fake.gatewayRequests), response.Body.String())
+	}
+}
+
 func TestBackupContentServeBlocksQueryAuthorizationAndCrossSiteBeforeService(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	deliveryID := strings.Repeat("d", 32)
@@ -315,6 +341,106 @@ func TestBackupContentSecureCookieAllowsOnlyExplicitLoopbackHTTP(t *testing.T) {
 	}
 	if _, err := backupContentSecureCookie(loopback, false); err == nil {
 		t.Fatal("loopback HTTP accepted without explicit setting")
+	}
+}
+
+func TestBackupContentSchemePolicyRequiresTrustedProxyForForwardedHTTPS(t *testing.T) {
+	policy, err := NewBackupContentSchemePolicy([]string{"127.0.0.1", "10.0.0.0/8", "2001:db8::/32"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	directTLS := httptest.NewRequest(http.MethodPost, "https://xirang.example/ticket", nil)
+	if secure, err := policy.SecureCookie(directTLS, false); err != nil || !secure {
+		t.Fatalf("direct TLS secure=%v err=%v", secure, err)
+	}
+
+	tests := []struct {
+		name   string
+		remote string
+		tls    bool
+		xfp    []string
+		fwd    []string
+		wantOK bool
+	}{
+		{name: "trusted IPv4", remote: "127.0.0.1:43210", xfp: []string{"https"}, wantOK: true},
+		{name: "trusted CIDR", remote: "10.23.4.5:43210", xfp: []string{"https"}, wantOK: true},
+		{name: "trusted IPv6 CIDR", remote: "[2001:db8::42]:43210", xfp: []string{"https"}, wantOK: true},
+		{name: "untrusted peer", remote: "192.0.2.10:43210", xfp: []string{"https"}},
+		{name: "missing forwarded proto", remote: "127.0.0.1:43210"},
+		{name: "empty forwarded proto", remote: "127.0.0.1:43210", xfp: []string{""}},
+		{name: "multiple forwarded proto", remote: "127.0.0.1:43210", xfp: []string{"https", "https"}},
+		{name: "comma forwarded proto", remote: "127.0.0.1:43210", xfp: []string{"https,http"}},
+		{name: "noncanonical case", remote: "127.0.0.1:43210", xfp: []string{"HTTPS"}},
+		{name: "ambiguous Forwarded", remote: "127.0.0.1:43210", xfp: []string{"https"}, fwd: []string{"proto=https"}},
+		{name: "TLS contradiction", remote: "127.0.0.1:43210", tls: true, xfp: []string{"http"}},
+		{name: "TLS untrusted forwarded header", remote: "192.0.2.10:43210", tls: true, xfp: []string{"https"}},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			scheme := "http"
+			if testCase.tls {
+				scheme = "https"
+			}
+			request := httptest.NewRequest(http.MethodPost, scheme+"://xirang.example/ticket", nil)
+			request.RemoteAddr = testCase.remote
+			for _, value := range testCase.xfp {
+				request.Header.Add("X-Forwarded-Proto", value)
+			}
+			for _, value := range testCase.fwd {
+				request.Header.Add("Forwarded", value)
+			}
+			secure, err := policy.SecureCookie(request, false)
+			if testCase.wantOK {
+				if err != nil || !secure {
+					t.Fatalf("secure=%v err=%v", secure, err)
+				}
+				return
+			}
+			if err == nil || secure {
+				t.Fatalf("unsafe scheme accepted: secure=%v remote=%q headers=%v", secure, request.RemoteAddr, request.Header)
+			}
+		})
+	}
+
+	if _, err := NewBackupContentSchemePolicy([]string{"127.0.0.1", "not-a-cidr"}); err == nil {
+		t.Fatal("invalid trusted proxy entry accepted")
+	}
+}
+
+func TestBackupContentIssueRejectsForwardedHTTPSFromUntrustedPeer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	policy, err := NewBackupContentSchemePolicy([]string{"127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &backupContentServiceFake{}
+	handler := NewBackupContentHandler(fake, nil, nil, func(context.Context) (BackupContentHandlerConfig, error) {
+		return BackupContentHandlerConfig{TicketTimeout: 5 * time.Second}, nil
+	}).WithSchemePolicy(policy)
+	now := time.Now().UTC()
+	router := gin.New()
+	router.POST("/api/v1/recovery-points/:recoveryPointId/entries/:entryId/delivery-tickets", func(c *gin.Context) {
+		c.Set(middleware.CtxUserID, uint(42))
+		c.Set(middleware.CtxUsername, "operator")
+		c.Set(middleware.CtxRole, "operator")
+		c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{
+			JTI: strings.Repeat("f", 32), UserID: 42, Role: "operator", TokenVersion: 3,
+			ExpiresAt: now.Add(time.Hour),
+		})
+		c.Next()
+	}, handler.Issue)
+	pointID, entryID := strings.Repeat("a", 32), strings.Repeat("b", 64)
+	request := httptest.NewRequest(http.MethodPost,
+		"http://xirang.example/api/v1/recovery-points/"+pointID+"/entries/"+entryID+"/delivery-tickets",
+		strings.NewReader(`{"schema_version":1,"action":"preview","renderer":"safe_raster","profile":"raster_v1"}`))
+	request.RemoteAddr = "192.0.2.10:43210"
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Forwarded-Proto", "https")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || len(fake.issueRequests) != 0 {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, len(fake.issueRequests), response.Body.String())
 	}
 }
 

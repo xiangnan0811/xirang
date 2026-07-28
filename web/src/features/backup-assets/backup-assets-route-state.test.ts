@@ -32,6 +32,42 @@ describe("backup assets route state", () => {
     expect(serializeBackupAssetsRoute(state)).toBe("/app/backups/data");
   });
 
+  it("accepts only an opaque export job handle and round-trips it", () => {
+    const exportJobId = "f".repeat(32);
+    const state = expectValid("/app/backups/data", `?exportJobId=${exportJobId}`);
+    expect(state.exportJobId).toBe(exportJobId);
+    expect(serializeBackupAssetsRoute(state)).toBe(`/app/backups/data?exportJobId=${exportJobId}`);
+  });
+
+  it.each(["?exportJobId=not-opaque", "?exportJobId=ABC"].map((value) => [value]))(
+    "rejects an unsafe export job handle %s",
+    (search) => {
+      expect(parseBackupAssetsRoute("/app/backups/data", search)).toEqual({
+        status: "invalid",
+        safePath: "/app/backups/data",
+      });
+    }
+  );
+
+  it("marks an incompatible export handle cleared by a repository change for replacement", () => {
+    const source = expectValid("/app/backups/data", `?repositoryId=${repositoryId}&exportJobId=${"f".repeat(32)}`);
+    const result = updateBackupAssetsRoute(source, { repositoryId: "0".repeat(32) });
+    expect(result.status).toBe("valid");
+    if (result.status !== "valid") return;
+    expect(result.state.exportJobId).toBeUndefined();
+    expect(result).toMatchObject({ replace: true });
+  });
+
+  it("marks an incompatible export handle cleared by a view change for replacement", () => {
+    const source = expectValid("/app/backups/data", `?repositoryId=${repositoryId}&exportJobId=${"f".repeat(32)}`);
+    const result = updateBackupAssetsRoute(source, { view: "search" });
+
+    expect(result.status).toBe("valid");
+    if (result.status !== "valid") return;
+    expect(result.state.exportJobId).toBeUndefined();
+    expect(result).toMatchObject({ replace: true });
+  });
+
   it("accepts only closed fields and emits deterministic query ordering", () => {
     const state = expectValid(
       "/app/backups/data",

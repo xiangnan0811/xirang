@@ -296,9 +296,15 @@ func (sink *ArtifactSink) CommitManifest(ctx context.Context, request CommitMani
 	result := CommitManifestResult{ArtifactSetID: setID, ManifestDigest: manifestDigest, ProjectionRequired: manifestNeedsProjection(descriptor, artifacts)}
 	var preparedProjection PreparedDerivedProjection
 	if result.ProjectionRequired {
-		fields, classification, fieldErr := sink.prepareProjectionEvidence(ctx, descriptor, artifacts, uploads, identities)
-		if fieldErr != nil {
-			return result, fieldErr
+		var fields []DerivedProjectionField
+		var classification *DerivedClassificationEvidence
+		err = sink.retryManifestConflicts(ctx, func() error {
+			var fieldErr error
+			fields, classification, fieldErr = sink.prepareProjectionEvidence(ctx, descriptor, artifacts, uploads, identities)
+			return fieldErr
+		})
+		if err != nil {
+			return result, err
 		}
 		preparedProjection, err = sink.lifecycle.projection.PreparePublish(ctx, DerivedProjectionPublish{
 			ArtifactSetID: setID, RecoveryPointID: job.RecoveryPointID,
@@ -309,24 +315,26 @@ func (sink *ArtifactSink) CommitManifest(ctx context.Context, request CommitMani
 			return result, fmt.Errorf("prepare Derived Search projection: %w", err)
 		}
 	}
-	err = sink.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := sink.publishManifestTx(ctx, tx, request, job, artifacts, uploads, identities, result, setID); err != nil {
-			return err
-		}
-		if !result.ProjectionRequired {
+	err = sink.retryManifestConflicts(ctx, func() error {
+		return sink.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := sink.publishManifestTx(ctx, tx, request, job, artifacts, uploads, identities, result, setID); err != nil {
+				return err
+			}
+			if !result.ProjectionRequired {
+				return nil
+			}
+			publication, err := preparedProjection.PublishTx(ctx, tx)
+			if err != nil {
+				return fmt.Errorf("publish Derived Search projection: %w", err)
+			}
+			if !validProjectionPublication(publication, setID) {
+				return ErrInvalidManifest
+			}
+			if err := sink.completeProjectedManifestTx(ctx, tx, request, setID, publication.Revision); err != nil {
+				return err
+			}
 			return nil
-		}
-		publication, err := preparedProjection.PublishTx(ctx, tx)
-		if err != nil {
-			return fmt.Errorf("publish Derived Search projection: %w", err)
-		}
-		if !validProjectionPublication(publication, setID) {
-			return ErrInvalidManifest
-		}
-		if err := sink.completeProjectedManifestTx(ctx, tx, request, setID, publication.Revision); err != nil {
-			return err
-		}
-		return nil
+		})
 	})
 	if err != nil {
 		if errors.Is(err, backupasset.ErrLeaseFenceLost) || errors.Is(err, backupasset.ErrLeaseDeadlineExceeded) || errors.Is(err, ErrManifestFenceLost) {
@@ -1665,6 +1673,9 @@ func writeManifestInt(destination io.Writer, value int64) {
 }
 
 func manifestNeedsProjection(descriptor WorkDescriptorV1, artifacts []ArtifactDeclaration) bool {
+	if descriptor.Capability == capabilityspec.CapabilityArchiveExtractEntry && descriptor.OutputProfile == capabilityspec.ProfileArchiveMemberV1 {
+		return false
+	}
 	if descriptor.Capability == capabilityspec.CapabilitySecretClassify {
 		return true
 	}

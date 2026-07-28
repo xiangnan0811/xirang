@@ -19,6 +19,12 @@ import (
 type backupAssetRBACTestFixture struct {
 	router *gin.Engine
 	tokens map[string]string
+	proofs map[backupAssetRBACProofKey]string
+}
+
+type backupAssetRBACProofKey struct {
+	role   string
+	action auth.StepUpAction
 }
 
 func setupBackupAssetRBACFixture(t *testing.T) backupAssetRBACTestFixture {
@@ -42,11 +48,13 @@ func setupBackupAssetRBACFixture(t *testing.T) backupAssetRBACTestFixture {
 
 	jwtManager := auth.NewJWTManager("FAKE_BACKUP_ASSET_RBAC_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
 	tokens := make(map[string]string, 4)
+	proofs := make(map[backupAssetRBACProofKey]string, 4)
 	for _, role := range []string{"admin", "operator", "viewer", "unknown"} {
 		user := model.User{
 			Username:     "backup-asset-rbac-" + role,
 			PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
 			Role:         role,
+			TOTPEnabled:  true,
 		}
 		if err := db.Create(&user).Error; err != nil {
 			t.Fatalf("create %s backup asset RBAC user: %v", role, err)
@@ -56,11 +64,30 @@ func setupBackupAssetRBACFixture(t *testing.T) backupAssetRBACTestFixture {
 			t.Fatalf("generate %s backup asset RBAC token: %v", role, err)
 		}
 		tokens[role] = token
+		actions := []auth.StepUpAction(nil)
+		switch role {
+		case "admin":
+			actions = []auth.StepUpAction{
+				auth.StepUpActionAssetDownload,
+				auth.StepUpActionAssetExportCreate,
+				auth.StepUpActionAssetExportDownload,
+			}
+		case "operator":
+			actions = []auth.StepUpAction{auth.StepUpActionAssetDownload}
+		}
+		for _, action := range actions {
+			proof, _, proofErr := jwtManager.GenerateStepUpToken(user, action)
+			if proofErr != nil {
+				t.Fatalf("generate %s %s backup asset proof: %v", role, action, proofErr)
+			}
+			proofs[backupAssetRBACProofKey{role: role, action: action}] = proof
+		}
 	}
 
 	return backupAssetRBACTestFixture{
 		router: NewRouter(Dependencies{DB: db, JWTManager: jwtManager}),
 		tokens: tokens,
+		proofs: proofs,
 	}
 }
 
@@ -264,6 +291,78 @@ func TestBackupProcessingRoutesRequirePreviewPermissionBeforeFeatureGate(t *test
 				response := performBackupAssetRBACRequest(t, fixture, route.method, route.path, route.body, fixture.tokens[role])
 				want := http.StatusForbidden
 				if role == "admin" || role == "operator" {
+					want = http.StatusNotFound
+				}
+				if response.Code != want {
+					t.Fatalf("status=%d want=%d body=%s", response.Code, want, response.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestBackupAssetExportAndArchiveRoutesUseExactRoleAndPermissionMatrix(t *testing.T) {
+	fixture := setupBackupAssetRBACFixture(t)
+	pointID, entryID := strings.Repeat("1", 32), strings.Repeat("a", 64)
+	jobID, memberID := strings.Repeat("2", 32), strings.Repeat("3", 32)
+	indexRevision := strings.Repeat("4", 64)
+	base := "/api/v1/recovery-points/" + pointID + "/entries/" + entryID
+	exportBody := `{"schema_version":1,"selection":{"schema_version":1,"kind":"explicit","refs":[{"recovery_point_id":"` +
+		pointID + `","entry_id":"` + entryID + `"}]},"archive_format":"zip","archive_profile":"zip_deflate_v1"}`
+	memberBody := `{"schema_version":1,"index_revision":"` + indexRevision + `","member_chain":["` + memberID + `"]}`
+	routes := []struct {
+		name         string
+		method       string
+		path         string
+		body         string
+		idempotency  bool
+		proof        auth.StepUpAction
+		operatorRead bool
+	}{
+		{name: "export create", method: http.MethodPost, path: "/api/v1/asset-exports", body: exportBody, idempotency: true, proof: auth.StepUpActionAssetExportCreate},
+		{name: "export status", method: http.MethodGet, path: "/api/v1/asset-exports/" + jobID},
+		{name: "export cancel", method: http.MethodPost, path: "/api/v1/asset-exports/" + jobID + "/cancel", body: `{"schema_version":1}`},
+		{name: "export ticket", method: http.MethodPost, path: "/api/v1/asset-exports/" + jobID + "/download-ticket", body: `{"schema_version":1}`, proof: auth.StepUpActionAssetExportDownload},
+		{name: "archive index", method: http.MethodGet, path: base + "/archive-members", operatorRead: true},
+		{name: "archive create", method: http.MethodPost, path: base + "/archive-member-jobs", body: memberBody, idempotency: true, operatorRead: true},
+		{name: "archive status", method: http.MethodGet, path: base + "/archive-member-jobs/" + jobID + "?index_revision=" + indexRevision, operatorRead: true},
+		{name: "archive cancel", method: http.MethodPost, path: base + "/archive-member-jobs/" + jobID + "/cancel", body: `{"schema_version":1,"index_revision":"` + indexRevision + `"}`, operatorRead: true},
+		{name: "archive ticket", method: http.MethodPost, path: base + "/archive-member-jobs/" + jobID + "/delivery-ticket", body: `{"schema_version":1}`, proof: auth.StepUpActionAssetDownload},
+	}
+	for _, route := range routes {
+		t.Run(route.name+"/unauthenticated", func(t *testing.T) {
+			request := httptest.NewRequest(route.method, "https://xirang.example"+route.path, strings.NewReader(route.body))
+			response := httptest.NewRecorder()
+			fixture.router.ServeHTTP(response, request)
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+		for _, role := range []string{"admin", "operator", "viewer", "unknown"} {
+			role := role
+			t.Run(route.name+"/"+role, func(t *testing.T) {
+				request := httptest.NewRequest(route.method, "https://xirang.example"+route.path, strings.NewReader(route.body))
+				request.Header.Set("Authorization", "Bearer "+fixture.tokens[role])
+				if route.body != "" {
+					request.Header.Set("Content-Type", "application/json")
+				}
+				if route.idempotency {
+					request.Header.Set("Idempotency-Key", "0123456789abcdef")
+				}
+				if route.proof != "" {
+					proof, hasProof := fixture.proofs[backupAssetRBACProofKey{role: role, action: route.proof}]
+					if hasProof {
+						request.Header.Set("X-Xirang-Step-Up", proof)
+					}
+					if (role == "admin" || role == "operator" && route.proof == auth.StepUpActionAssetDownload) && !hasProof {
+						t.Fatalf("missing %s-bound %s proof", role, route.proof)
+					}
+				}
+				response := httptest.NewRecorder()
+				fixture.router.ServeHTTP(response, request)
+				allowed := role == "admin" || role == "operator" && route.operatorRead
+				want := http.StatusForbidden
+				if allowed {
 					want = http.StatusNotFound
 				}
 				if response.Code != want {

@@ -13,6 +13,7 @@ import (
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
+	settingservice "xirang/backend/internal/settings"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -106,6 +107,11 @@ func enabledFoundation() *backupasset.FoundationService {
 }
 
 func TestRepositoryFoundationSettingsFixtureCoversSearchOverlayConfig(t *testing.T) {
+	for _, key := range settingservice.BackupAssetFoundationSettingKeys() {
+		if _, exists := repositoryFoundationDefaults[key]; !exists {
+			t.Errorf("repository frozen-default fixture omitted %s", key)
+		}
+	}
 	searchConfig, overlayConfig, err := enabledFoundation().SearchOverlayConfig()
 	if err != nil {
 		t.Fatalf("SearchOverlayConfig: %v", err)
@@ -263,6 +269,43 @@ var repositoryFoundationDefaults = repositorySettings{
 	"backup_assets.derived_store_global_max_bytes":        "107374182400",
 	"backup_assets.derived_store_reconcile_interval":      "15m",
 	"backup_assets.derived_store_reconcile_batch_size":    "256",
+	"backup_assets.export.enabled":                        "false",
+	"backup_assets.export.root":                           "/var/lib/xirang-asset-runtime/export",
+	"backup_assets.export.default_profile":                "zip_deflate_v1",
+	"backup_assets.export.chunk_bytes":                    "1048576",
+	"backup_assets.export.max_items":                      "10000",
+	"backup_assets.export.max_source_points":              "128",
+	"backup_assets.export.max_item_bytes":                 "2147483648",
+	"backup_assets.export.max_logical_bytes":              "10737418240",
+	"backup_assets.export.max_provider_bytes":             "21474836480",
+	"backup_assets.export.max_ciphertext_bytes":           "12884901888",
+	"backup_assets.export.user_active_jobs":               "2",
+	"backup_assets.export.global_active_jobs":             "8",
+	"backup_assets.export.worker_concurrency":             "2",
+	"backup_assets.export.max_open_readers":               "2",
+	"backup_assets.export.max_duration":                   "2h",
+	"backup_assets.export.max_attempts":                   "3",
+	"backup_assets.export.retry_base":                     "5s",
+	"backup_assets.export.retry_max_delay":                "5m",
+	"backup_assets.export.lease_ttl":                      "90s",
+	"backup_assets.export.lease_renew_margin":             "20s",
+	"backup_assets.export.ready_ttl":                      "24h",
+	"backup_assets.export.summary_ttl":                    "2160h",
+	"backup_assets.export.ticket_ttl":                     "5m",
+	"backup_assets.export.ticket_max_requests":            "256",
+	"backup_assets.export.ticket_max_in_flight":           "2",
+	"backup_assets.export.ticket_max_cumulative_bytes":    "25769803776",
+	"backup_assets.export.user_store_quota":               "26843545600",
+	"backup_assets.export.store_quota":                    "107374182400",
+	"backup_assets.export.gc_cadence":                     "5m",
+	"backup_assets.export.reconcile_batch_size":           "100",
+	"backup_assets.archive.member_ttl":                    "1h",
+	"backup_assets.archive.max_expanded_bytes":            "8589934592",
+	"backup_assets.archive.member_max_bytes":              "268435456",
+	"backup_assets.archive.max_entries":                   "100000",
+	"backup_assets.archive.max_depth":                     "16",
+	"backup_assets.archive.max_compression_ratio":         "100",
+	"backup_assets.archive.max_duration":                  "10m",
 
 	"backup_assets.processing_secret_classify":                 "false",
 	"backup_assets.processing_backfill_paused":                 "true",
