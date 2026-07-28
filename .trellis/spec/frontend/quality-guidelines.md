@@ -101,6 +101,15 @@ and predictable repeated workflows matter more than decorative UI.
 - Prefer non-breaking lockfile updates within existing semver ranges. Do not
   use `--force` or introduce a major dependency change solely to silence audit
   output without separate review.
+- Compare dependency updates as structured lockfile package records, not only
+  as a text diff. A different npm writer may remove unchanged optional-platform
+  metadata such as `cpu`, `os`, `libc`, or `optional`; reject or restore that
+  unrelated churn before delivery.
+- Compare unique advisory identifiers and their resolved dependency paths.
+  npm may propagate one advisory through several parent packages, so the
+  vulnerable-package summary count can increase even when the GHSA set shrinks.
+  Record both the actual summary/exit code and the unique GHSA set; never infer
+  a clean audit from either count alone.
 
 ### 4. Validation & Error Matrix
 
@@ -110,6 +119,8 @@ and predictable repeated workflows matter more than decorative UI.
 | Node 20 `npm ci` then audit finds moderate/high vulnerabilities | Update the lockfile through compatible versions and rerun Node 20 audit. |
 | Audit fix requires a major or forced change | Stop and review the dependency upgrade separately. |
 | Local audit is clean but Docker/CI audit is not | Compare Node version, `NODE_ENV`, and a clean lockfile install before claiming success. |
+| Targeted npm update rewrites unrelated optional-platform metadata | Reject the expanded diff or restore the unchanged metadata, then prove the final changed-record set exactly. |
+| Package-record count grows while unique GHSA count falls | Inspect `via`, `nodes`, `npm ls`, and `npm explain`; report the propagated records and GHSA set separately. |
 
 ### 5. Good/Base/Bad Cases
 
@@ -127,6 +138,9 @@ and predictable repeated workflows matter more than decorative UI.
 - Run `npm run check` after any lockfile update.
 - When Docker/CI uses a different Node version, verify a clean Node 20 install
   and audit before merging.
+- Structurally compare old and new `packages` entries and assert that only the
+  intended dependency records changed; keep `package.json` byte-identical for
+  a lockfile-only remediation.
 
 ### 7. Wrong vs Correct
 
