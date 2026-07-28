@@ -215,7 +215,10 @@ func TestEnsureIndexedRejectsPartialRowsWithoutCompletionMarker(t *testing.T) {
 	point := publication.CommittedPoint{RecoveryPointID: "22222222222222222222222222222222", FullNativeID: indexerPointOne, CapturedAt: time.Now().UTC()}
 	handlerSession := &indexerLineageSession{mode: publication.LineageExact, points: []publication.CommittedPoint{point}}
 	buildSession := &indexerLineageSession{mode: publication.LineageExact, points: []publication.CommittedPoint{point}}
+	buildStarted := make(chan struct{})
+	var buildStartedOnce sync.Once
 	buildSession.list = func(context.Context, string, provider.EntryLocator, provider.PageRequest) (provider.EntryPage, error) {
+		buildStartedOnce.Do(func() { close(buildStarted) })
 		return provider.EntryPage{}, errors.New("provider temporarily unavailable")
 	}
 	guard := &indexerLineageGuard{sessions: []publication.LineageSession{buildSession}}
@@ -229,9 +232,22 @@ func TestEnsureIndexedRejectsPartialRowsWithoutCompletionMarker(t *testing.T) {
 		t.Fatal("partial rows without a completion marker reported ready")
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
-	for IsIndexing(taskEntity.ID) && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	select {
+	case <-buildStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for scheduled exact index build to enter provider listing")
+	}
+
+	idleDeadline := time.NewTimer(3 * time.Second)
+	defer idleDeadline.Stop()
+	idlePoll := time.NewTicker(5 * time.Millisecond)
+	defer idlePoll.Stop()
+	for IsIndexing(taskEntity.ID) {
+		select {
+		case <-idlePoll.C:
+		case <-idleDeadline.C:
+			t.Fatal("timed out waiting for scheduled exact index build to leave the active registry")
+		}
 	}
 	var markers int64
 	if err := db.Model(&model.SnapshotFileIndex{}).Where("task_id = ? AND snapshot_id = ? AND path = ? AND mtime = ?", taskEntity.ID, indexerPointOne, exactIndexCompleteMarkerPath, exactIndexCompleteMarkerMtime).Count(&markers).Error; err != nil {

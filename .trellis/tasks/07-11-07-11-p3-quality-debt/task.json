@@ -18,7 +18,9 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "07-28-snapshot-indexer-test-isolation"
+  ],
   "parent": "07-11-07-11-full-stack-audit-remediation",
   "relatedFiles": [
     "backend/internal/api/router.go",

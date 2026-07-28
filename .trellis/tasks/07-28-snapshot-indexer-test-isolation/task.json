@@ -1,0 +1,37 @@
+{
+  "id": "snapshot-indexer-test-isolation",
+  "name": "snapshot-indexer-test-isolation",
+  "title": "Snapshot indexer test isolation",
+  "description": "Synchronize the snapshot indexer async test lifecycle so process-global task-ID admission cannot leak across independent test databases.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "backend",
+  "package": null,
+  "priority": "P2",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-07-28",
+  "completedAt": null,
+  "branch": "codex/snapshot-indexer-test-isolation",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-11-07-11-p3-quality-debt",
+  "relatedFiles": [
+    "backend/internal/snapshot/indexer_test.go"
+  ],
+  "notes": "Observed RED is CI run 30354793081 attempt 1; the test-only synchronization fix keeps the production Indexer contract unchanged.",
+  "meta": {
+    "planning_review": "approved",
+    "implementation_scope": "one_test_file",
+    "observed_red": {
+      "run_id": 30354793081,
+      "attempt": 1,
+      "test": "TestEnsureIndexedRepresentsEmptySnapshotWithCompletionMarker"
+    },
+    "local_verification": "passed_pending_delivery"
+  }
+}
