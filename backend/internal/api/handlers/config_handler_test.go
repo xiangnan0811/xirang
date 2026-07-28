@@ -33,6 +33,14 @@ func openConfigHandlerTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func setConfigHandlerTestEncryption(t *testing.T) {
+	t.Helper()
+	t.Cleanup(secure.ResetForTesting)
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_CONFIG_HANDLER_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+}
+
 func TestConfigExportAlwaysOmitsInternalPipelineRevisions(t *testing.T) {
 	for _, includeSecrets := range []bool{false, true} {
 		t.Run(strconv.FormatBool(includeSecrets), func(t *testing.T) {
@@ -221,7 +229,67 @@ func TestConfigImportFailedBackupAssetTransitionDoesNotPersistSettings(t *testin
 	}
 }
 
+func TestConfigImportTaskCreateFailureReturnsGenericInternalErrorAndRollsBack(t *testing.T) {
+	setConfigHandlerTestEncryption(t)
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatal(err)
+	}
+
+	injectedErr := errors.New("FAKE_CONFIG_IMPORT_TASK_CREATE_FAILURE_FOR_TEST_ONLY")
+	const callbackName = "test:config-import-task-create-failure"
+	if err := db.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Schema != nil && tx.Statement.Schema.Table == "tasks" {
+			_ = tx.AddError(injectedErr)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Create().Remove(callbackName) })
+
+	handler := NewConfigHandler(db, nil)
+	router := gin.New()
+	router.POST("/config/import", handler.Import)
+	body := `{
+  "nodes":[{"name":"rollback-node","host":"10.0.0.8","port":22,"username":"root","auth_type":"key"}],
+  "tasks":[{
+    "name":"rollback-managed-task","node_name":"rollback-node","executor_type":"rsync",
+    "executor_config":"{\"version\":1,\"publication_mode\":\"versioned_hardlink\",\"managed_root\":\"/foreign/managed\"}"
+  }]
+}`
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Errorf("status=%d, want %d; body=%s", response.Code, http.StatusInternalServerError, response.Body.String())
+	}
+	var envelope Response
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Errorf("decode response envelope: %v", err)
+	} else if envelope.Code != http.StatusInternalServerError || envelope.Message != "服务器内部错误" || envelope.Data != nil {
+		t.Errorf("response envelope=%+v, want generic internal error", envelope)
+	}
+	if strings.Contains(response.Body.String(), injectedErr.Error()) {
+		t.Errorf("response leaked injected task create error: %s", response.Body.String())
+	}
+
+	for modelType, name := range map[any]string{
+		&model.Node{}: "nodes",
+		&model.Task{}: "tasks",
+	} {
+		var count int64
+		if err := db.Model(modelType).Count(&count).Error; err != nil {
+			t.Errorf("count %s: %v", name, err)
+		} else if count != 0 {
+			t.Errorf("%s count=%d, want total rollback", name, count)
+		}
+	}
+}
+
 func TestConfigImportManagedRsyncTaskPausesAndDisconnectsForeignPublicationConfig(t *testing.T) {
+	setConfigHandlerTestEncryption(t)
 	db := openConfigHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
 		t.Fatal(err)
@@ -256,6 +324,7 @@ func TestConfigImportManagedRsyncTaskPausesAndDisconnectsForeignPublicationConfi
 }
 
 func TestConfigImportManagedRsyncTaskDiscardsForeignPathsBeforeValidation(t *testing.T) {
+	setConfigHandlerTestEncryption(t)
 	db := openConfigHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
 		t.Fatal(err)
@@ -292,6 +361,7 @@ func TestConfigImportManagedRsyncTaskDiscardsForeignPathsBeforeValidation(t *tes
 func TestConfigImportManagedRcloneTasksPauseAndDisconnectForeignPublicationConfig(t *testing.T) {
 	for _, mode := range []string{"versioned_prefix", "native_object_versions"} {
 		t.Run(mode, func(t *testing.T) {
+			setConfigHandlerTestEncryption(t)
 			db := openConfigHandlerTestDB(t)
 			if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
 				t.Fatal(err)
@@ -462,8 +532,7 @@ func TestConfigExportedDataCanBeImportedBackAsDownloadedFile(t *testing.T) {
 }
 
 func TestConfigExportOmitsSecretsByDefaultAndWritesSafeAudit(t *testing.T) {
-	t.Setenv("APP_ENV", "development")
-	secure.ResetForTesting()
+	setConfigHandlerTestEncryption(t)
 	db := openConfigHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
 		t.Fatalf("初始化数据库失败: %v", err)
@@ -609,8 +678,7 @@ func TestConfigExportIncludeSecretsRequiresAdminAndAuditsBlockedAttempt(t *testi
 }
 
 func TestConfigExportIncludeSecretsAsAdminAuditsWithoutPayload(t *testing.T) {
-	t.Setenv("APP_ENV", "development")
-	secure.ResetForTesting()
+	setConfigHandlerTestEncryption(t)
 	db := openConfigHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
 		t.Fatalf("初始化数据库失败: %v", err)

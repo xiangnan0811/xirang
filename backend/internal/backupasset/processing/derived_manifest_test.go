@@ -22,6 +22,7 @@ import (
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 
+	"github.com/mattn/go-sqlite3"
 	"gorm.io/gorm"
 )
 
@@ -1410,6 +1411,39 @@ func TestConcurrentAtomicProjectionRetriesCommitExactlyOnce(t *testing.T) {
 	}
 	harness.projection.onPublish = nil
 	harness.projection.publishRevision = 23
+	var injectedMu sync.Mutex
+	blobLocks := 0
+	uploadLocks := 0
+	const blobCallback = "test:concurrent-projection-transient-blob-lock"
+	if err := harness.db.Callback().Query().Before("gorm:query").Register(blobCallback, func(tx *gorm.DB) {
+		if tx.Statement.Table != "backup_asset_derived_blobs" {
+			return
+		}
+		injectedMu.Lock()
+		defer injectedMu.Unlock()
+		if blobLocks == 0 {
+			blobLocks++
+			_ = tx.AddError(sqlite3.Error{Code: sqlite3.ErrLocked})
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = harness.db.Callback().Query().Remove(blobCallback) })
+	const uploadCallback = "test:concurrent-projection-transient-upload-lock"
+	if err := harness.db.Callback().Update().Before("gorm:update").Register(uploadCallback, func(tx *gorm.DB) {
+		if tx.Statement.Table != "backup_asset_processing_uploads" {
+			return
+		}
+		injectedMu.Lock()
+		defer injectedMu.Unlock()
+		if uploadLocks == 0 {
+			uploadLocks++
+			_ = tx.AddError(sqlite3.Error{Code: sqlite3.ErrLocked})
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = harness.db.Callback().Update().Remove(uploadCallback) })
 	start := make(chan struct{})
 	outcomes := make(chan error, 2)
 	for index := 0; index < 2; index++ {
@@ -1428,6 +1462,12 @@ func TestConcurrentAtomicProjectionRetriesCommitExactlyOnce(t *testing.T) {
 	}
 	if succeeded != 1 {
 		t.Fatalf("concurrent atomic projection successes=%d, want one", succeeded)
+	}
+	injectedMu.Lock()
+	gotBlobLocks, gotUploadLocks := blobLocks, uploadLocks
+	injectedMu.Unlock()
+	if gotBlobLocks != 1 || gotUploadLocks != 1 {
+		t.Fatalf("injected transient locks blob=%d upload=%d, want one each", gotBlobLocks, gotUploadLocks)
 	}
 	var job model.BackupAssetProcessingJob
 	var set model.BackupAssetDerivedArtifactSet

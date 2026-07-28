@@ -603,12 +603,12 @@ M  .trellis/tasks/07-12-backup-data-explorer-design/task.json
 | status transition | `executed`; Child `in_progress`, parent `planning` |
 | red tests/product code/test/migration files | `executed`；exact-manifest implementation and focused RED/GREEN ledger recorded |
 | SQLite/PostgreSQL/restart/frontend/backend rows recorded before the final rerun | `historical_checkpoint` only; never current completion evidence |
-| current Step 10 runnable gates | `passed_current_runner_amended`; exact `131 = 68 tracked + 63 untracked`; zero missing/extra/overlap/duplicate/staged; deterministic runner RED/GREEN, package/race/20x/vet and fresh full-project/PostgreSQL/bundle reruns passed |
-| current Step 10 dependency audit | `blocked_external`; unchanged package files report `1 moderate + 3 high`, with no complete compatible Node 20/React 18 remediation |
-| Step 11 workflow permission | `authorized_limited_pending`; exact-131 stage/commit/push plus draft PR/CI only; no ready/merge/completion claim before dependency-risk closure |
-| exact staging/work commit | `not_executed`; `staged=0` |
+| current Step 10 runnable gates | `passed_current_follow_up_amended`; approved exact manifest `131`; Config rollback and Processing dual-boundary retry RED/GREEN plus fresh full/race/PostgreSQL reruns passed |
+| current Step 10 dependency audit | `risk_accepted_for_child_delivery`; unchanged package files still report `1 moderate + 3 high`; vulnerabilities are not fixed and audit did not pass |
+| Step 11 workflow permission | `active_incremental_follow_up_pending`; initial commit/push/draft PR executed; five product/spec plus six ledger paths await review/commit/push/CI |
+| exact staging/work commit | `initial_executed_follow_up_pending`; `94a15dc` pushed; current five product/spec plus six ledger paths uncommitted and `staged=0` |
 | trellis finish/Child archive/journal/archive commit | `not_executed` |
-| push/PR/required CI/squash merge/post-merge | `not_executed` |
+| push/PR/required CI/squash merge/post-merge | initial push and draft PR #399 executed; follow-up push/CI, ready/merge/post-merge `not_executed` |
 | local main sync/branch-worktree cleanup | `not_executed` |
 | Release Please PR #386/release/deploy | `not_applicable`; forbidden/out of scope |
 
@@ -902,10 +902,10 @@ permission was `suspended_pending_runner_rerun`; no stage, commit, push, PR or
 other delivery mutation could run until the runnable gates closed. Product
 scope, dependencies, migrations and the thirteen corrections were unchanged.
 
-## 15. 2026-07-28 Current Runner-Amended Step 10 Truth
+## 15. 2026-07-28 Historical Pre-Commit Runner-Amended Step 10 Truth
 
-This section is the authoritative current status and supersedes the aggregate
-status in §§13-14. The deterministic delayed-consumer regression first failed
+This section preserves the final pre-commit status and supersedes the aggregate
+status in §§13-14 only at that historical checkpoint. The deterministic delayed-consumer regression first failed
 on the old runner with exit `1` and `read |0: file already closed`. GREEN uses a
 parent-owned `os.Pipe`, assigns its writer to `command.Stdout`, closes the
 parent's writer copy after successful `Start`, leaves reader ownership with the
@@ -938,11 +938,69 @@ Required PostgreSQL 18 selectors ran with zero skips: migration passed in
 `backend/xirang-server` was removed and confirmed absent. Therefore every
 runnable Step 10 boundary is `passed_current_runner_amended`.
 
-Overall Step 10 remains `blocked_external` solely because the unchanged
+At that historical checkpoint, overall Step 10 remained `blocked_external` solely because the unchanged
 dependency audit exits `1` with `1 moderate + 3 high`; no complete compatible
 Node 20/React 18 remediation exists, and package files remain unchanged. Step 11
-is `authorized_limited_pending`: exact-131 staging/coherent commit, push and a
+was `authorized_limited_pending`: exact-131 staging/coherent commit, push and a
 draft PR/CI are permitted as the validation channel. The PR must remain draft,
 and no ready/merge/completion claim is permitted until dependency-risk closure.
-No stage, commit, push, PR, CI, merge, archive or journal action has executed;
-`staged=0`, and the parent remains `planning`.
+No stage, commit, push, PR, CI, merge, archive or journal action had executed at
+that checkpoint; `staged=0`, and the parent remained `planning`. Section 16 is
+the authoritative current delivery and verification ledger.
+
+## 16. 2026-07-28 Current Commit, CI Follow-Up And Risk Disposition
+
+The approved scope remains exactly `8 Phase-1 + 56 create + 67 modify = 131`.
+Commit `94a15dc41634b096839ef6e661714a88db1f4c09` (`feat: add backup asset
+export and archive`) is the current `HEAD`, is pushed on
+`codex/backup-assets-export-archive`, and backs draft PR #399:
+<https://github.com/xiangnan0811/xirang/pull/399>. The child remains
+`in_progress`; parent `07-12-backup-data-explorer-design` remains `planning`.
+Child 12 completion must not be read as completion of the parent, 07-11, or P3
+work.
+
+At the start of this final ledger synchronization, the product/spec dirty
+increment was exactly five already-approved manifest paths:
+`config_handler.go`, `config_handler_test.go`, `derived_manifest.go`,
+`derived_manifest_test.go`, and `.trellis/spec/backend/database-guidelines.md`.
+They remain uncommitted and unstaged at this evidence boundary. The ledger sync
+itself modifies the six assigned task artifacts, so the resulting unstaged
+worktree contains eleven paths total; every path is already in the approved 131
+manifest.
+
+CI RED/GREEN 1 proved that Config import swallowed Task Create failures, could
+return 200, and could partially commit nodes. Production now returns the
+transaction error so the handler emits a generic 500 and the complete import
+transaction rolls back; the fixture also isolates the secure global cache.
+Focused and sequencing tests, handlers coverage `57.9%`, handlers `-race`, vet,
+gofmt, and diff checks passed.
+
+CI RED/GREEN 2 proved that Processing `CommitManifest` could hit SQLite locks at
+the projection-evidence read or atomic-publish transaction and leave concurrent
+successes at zero. Both boundaries now use the existing bounded,
+context-aware conflict retry and retain exactly one durable winner. Focused
+deterministic tests, count `50`, race count `20`, Processing coverage `74.0%`,
+and full Processing race passed.
+
+Fresh local gates after both fixes passed: exact `131`; child and parent task
+validation; `env -u NODE_ENV make check` exit `0`; backend lint `0`; frontend
+`168 files / 1388 tests`, lint `0` errors plus one approved a11y debt warning;
+bundle JS `498.48/500 KiB` and CSS `104.94/105 KiB`. Required PostgreSQL 18
+selectors ran without skip against loopback `127.0.0.1:55470` and passed:
+migrations/UTC/dirty-search-path `49.561s`, Export `13.353s`, and
+Processing/archive-member `4.679s`.
+
+The fresh npm audit still reports four vulnerabilities (`1 moderate + 3 high`)
+in brace-expansion, postcss, and react-router. The controller explicitly and
+temporarily accepts this unchanged pre-existing dependency risk for Child 12
+delivery. This closes the Child 12 dependency-risk gate but does not mean the
+vulnerabilities are fixed or the audit passed. Package files stay unchanged;
+no `--force`, unsafe override, or incompatible Node 20 + React 18 router
+migration is authorized. Track a compatible upstream fix or a Node/React/Router
+migration in a separate Trellis task and branch after Child 12 merge.
+
+Step 10 is therefore `passed_with_explicit_dependency_risk_acceptance`. Step 11
+is `active_incremental_follow_up_pending`: initial commit, push, and draft PR
+creation are executed; incremental review/commit/push/CI for the five product/
+spec plus six ledger paths remain. Ready, merge, post-merge monitoring, Child
+archive, and journal are not executed. The Git index remains empty.

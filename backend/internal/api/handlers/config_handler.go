@@ -843,7 +843,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					}
 				}
 				if err := tx.Create(&newTask).Error; err != nil {
-					continue
+					return err
 				}
 				// GORM omits a false bool when the model declares default:true.
 				// Keep the corrective write in this transaction so a foreign

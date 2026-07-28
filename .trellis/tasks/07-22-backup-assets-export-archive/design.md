@@ -9,8 +9,9 @@ an unmerged sibling. The child is now `in_progress`; the parent remains `plannin
 ```text
 task:                     .trellis/tasks/07-22-backup-assets-export-archive
 branch:                   codex/backup-assets-export-archive
-base / HEAD / main:       9ad2893c714c82781461f452030c25e0766eedd4
-origin/main / merge-base: 9ad2893c714c82781461f452030c25e0766eedd4
+planning baseline:        9ad2893c714c82781461f452030c25e0766eedd4
+HEAD / pushed commit:     94a15dc41634b096839ef6e661714a88db1f4c09
+draft PR:                 #399 https://github.com/xiangnan0811/xirang/pull/399
 delivered program state:  11/15
 planning approval:        complete_approved (2026-07-22 controller user reply "批准")
 workflow transition:      complete_approved (same approval + user clarification)
@@ -25,16 +26,17 @@ archive-profile sub-boundary: closed (independent current-code review: complete 
                           after scope prefixing and every retry; focused selectors passed; remaining P3
                           instrumentation coverage limitation is not a product failure)
 final implementation review: closed in focused implementation/review tranches
-Step 10 runnable gates:   passed_current_runner_amended; exact 131 = 68 tracked + 63 untracked;
-                          runner package/race/vet/full/PostgreSQL/bundle gates passed fresh
-Step 10 status:           blocked_external; dependency audit is the sole open gate
-dependency audit gate:    1 moderate + 3 high; no compatible complete Node 20/React 18 fix;
-                          brace-expansion upstream/tooling or Node 22.22+/React 19.2.7+/Router 8 migration needed
+Step 10 runnable gates:   passed_current_follow_up_amended; exact approved manifest 131;
+                          Config rollback and Processing dual-boundary retry gates passed fresh
+Step 10 status:           passed_with_explicit_dependency_risk_acceptance
+dependency audit gate:    risk_accepted_for_child_delivery; unchanged 1 moderate + 3 high;
+                          vulnerabilities remain unfixed and npm audit did not pass
 historical local gates:   checkpoints only; current completion evidence is the fresh runnable-gate record
-Step 11 / delivery:       authorized_limited_pending; exact stage/commit/push and draft PR/CI only
-Step 11 preflight:        exact git-add staging attempt rejected by read-only Git metadata before index mutation; staged=0
-Step 11 gate:             draft must remain draft; no ready/merge/completion claim before dependency-risk closure
-delivery mutations:       stage/commit/archive/journal/push/PR/CI/merge still not_executed
+Step 11 / delivery:       active_incremental_follow_up_pending
+initial delivery:         commit 94a15dc created/pushed; draft PR #399 open
+current follow-up:        five product/spec + six assigned ledger paths unstaged; staged=0;
+                          review/commit/push/CI pending
+later delivery:           ready/merge/post-merge/archive/journal not_executed
 ```
 
 The thirteen focused corrections in PRD §7 are part of the approval surface. In
@@ -83,16 +85,40 @@ real runner pipe race. The delayed-consumer test then reproduced the exact
 `file already closed` RED; the parent-owned-pipe GREEN passed focused/package/
 race/repetition/vet, exact-131 parity, corrected short-TMP full gate, bundle
 budgets and required real PostgreSQL migration/Export/Processing selectors.
-Step 10 is again closed for every runnable boundary and remains
-`blocked_external` only on dependency audit.
+Those runner-amended facts are now a historical pre-delivery checkpoint. The
+exact-131 coherent commit `94a15dc41634b096839ef6e661714a88db1f4c09` was
+subsequently created and pushed, and draft PR #399 opened. CI review then found
+two in-manifest defects. Config import had swallowed Task Create failures and
+could return 200 after partially committing nodes; the fix propagates the
+transaction error for a generic 500 and total rollback, while isolating the
+secure test cache. Processing `CommitManifest` could return zero successes when
+SQLite locked either projection-evidence reads or the atomic publish
+transaction; both boundaries now share the existing bounded, context-aware
+conflict retry and retain one durable winner.
 
-Narrow workflow-only permission for exact staging, one coherent commit, push and
-a draft PR is restored. CI's dependency audit remains warning-only, so
-otherwise-green CI does not close the audit. The PR must stay draft until a
-compatible dependency remediation or explicit later risk-policy disposition.
-Only after that closure may it become ready, merge, receive post-merge
-monitoring and then allow Child 12 archive/journal work. The parent remains
-`planning` and is never archived by this child.
+Fresh focused, sequencing/repetition, race, coverage, vet/gofmt/diff and full
+gates passed after those fixes. Handler coverage is `57.9%`; Processing coverage
+is `74.0%`; deterministic Processing repetition passed at count `50`, race at
+count `20`, and the full Processing race passed. `env -u NODE_ENV make check`
+exited `0`; frontend passed `168 files / 1388 tests`, zero lint errors plus one
+approved a11y debt warning, and bundle budgets at JS `498.48/500 KiB` and CSS
+`104.94/105 KiB`. Required PostgreSQL 18 migration/UTC/dirty-search-path,
+Export, and Processing/archive-member selectors passed without skip in
+`49.561s`, `13.353s`, and `4.679s` against the loopback test service at
+`127.0.0.1:55470`.
+
+The controller explicitly and temporarily accepts the unchanged pre-existing
+dependency risk for Child 12 delivery. This closes the Child 12 dependency-risk
+gate without claiming that the `1 moderate + 3 high` vulnerabilities are fixed
+or that `npm audit` passed. Package files remain unchanged; no `--force`, unsafe
+override, or incompatible Node 20/React 18 router migration is allowed. Track a
+compatible upstream fix or platform/router migration in a separate Trellis task
+and branch after Child 12 merge. Step 11 is active pending review/commit/push/CI
+for the five product/spec paths present at ledger-sync start plus these six
+assigned ledger paths; all eleven are in the approved manifest. The PR remains
+draft; ready/merge, post-merge monitoring, Child archive, and journal work
+remain unexecuted. The parent remains `planning` and is never archived by this
+child.
 The same approval,
 as clarified by the user on 2026-07-22, also authorizes the planning workflow
 transition, `task.py start`, and Phase 2 work inside the exact approved manifest.

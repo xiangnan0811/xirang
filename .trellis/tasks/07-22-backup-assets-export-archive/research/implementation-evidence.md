@@ -26,35 +26,31 @@ added only for the documented `StdoutPipe`/`Wait` ownership race.
 
 ## Current Superseding Status
 
-- Step 10 runnable gates are `passed_current_runner_amended`; overall Step 10 is
-  `blocked_external`, not completed/pass-all, solely on the unchanged dependency
-  audit. The prior exact-129 record and runner-reopen state are historical. The
-  delayed-consumer regression reproduced `read |0: file already closed` on the
-  old runner; the parent-owned-pipe GREEN then passed the exact regression,
-  capabilities normal/race/20x, vet, exact/static, corrected short-TMP full
-  project, bundle and required real PostgreSQL gates. The exact union is
-  `131 = 68 tracked + 63 untracked`, with no missing, extra, overlap, duplicate
-  or staged paths.
-- The sole open gate is the unchanged package-tree audit, which reports
-  `1 moderate + 3 high`. No compatible complete Node 20/React 18 fix exists: brace-expansion
-  needs an upstream-compatible release or separate lint-tool migration, while
-  Router needs a 7.x backport or a separately authorized Node `22.22+` / React
-  `19.2.7+` / Router 8 migration. No package edit, `--force` or unsafe override
-  is included.
+- Step 10 is `passed_with_explicit_dependency_risk_acceptance`. The approved
+  manifest remains exactly `131`. In addition to the historical runner closure,
+  current Config rollback and Processing dual-boundary retry RED/GREEN plus fresh
+  focused/race/coverage/full/PostgreSQL gates are recorded at the end of this
+  file.
+- The unchanged package-tree audit still reports `1 moderate + 3 high`. The
+  controller explicitly and temporarily accepts this pre-existing risk for
+  Child 12 delivery. The vulnerabilities are not fixed and audit did not pass;
+  no package edit, `--force`, unsafe override, or incompatible Node 20/React 18
+  router migration is included. Separate post-merge Trellis follow-up remains
+  required.
 - PostgreSQL lock, crypto/AAD, archive-profile, lifecycle/runtime-stop and all
   other earlier focused closure rows remain valid only for their named boundary.
   Every earlier completion, final-gate, readiness or `passed_local` statement
   below is explicitly historical and is never current aggregate completion
   evidence. The P3 instrumentation coverage note remains a coverage limitation,
   not a product failure. The product scope and thirteen corrections are unchanged.
-- Step 11 is `authorized_limited_pending`. Its narrow exact-stage/commit, push
-  and draft-PR permission is active as a CI-validation channel. Hosted CI's
-  audit is warning-only, so green CI still cannot close dependency risk or
-  permit ready/merge/completion claims.
-- Delivery order is exact stage/commit; draft PR/CI/fixes; dependency-risk
-  closure; ready/merge/post-merge monitoring; only then Trellis archive/journal.
-  Stage, commit, archive, journal, push, PR, CI and merge remain `not_executed`,
-  `staged=0`, and the parent remains `planning` outside Child 12 archival scope.
+- Step 11 is `active_incremental_follow_up_pending`. Commit
+  `94a15dc41634b096839ef6e661714a88db1f4c09` is pushed and draft PR #399 is
+  open. The five product/spec in-manifest paths present at ledger-sync start plus
+  the six assigned ledger paths are uncommitted and `staged=0`, with incremental
+  review/commit/push/CI pending.
+- Ready/merge/post-merge monitoring and Child archive/journal remain
+  `not_executed`. The child remains `in_progress`, and the parent remains
+  `planning` outside Child 12 archival scope.
 
 ## First Genuine TDD RED
 
@@ -4442,18 +4438,21 @@ CI intentionally use Node 20 and React 18. `react-router-dom` itself has no 8.x
 release. npm's suggested `--force` path is therefore neither a lockfile-only
 fix nor a compatible Child 12 change.
 
-### Disposition
+### Historical Disposition
 
-The proposed lockfile-only manifest amendment is rejected by fresh evidence.
+At that historical audit checkpoint, the proposed lockfile-only manifest
+amendment was rejected by fresh evidence.
 Neither `web/package.json` nor `web/package-lock.json` was edited; their SHA-256
 values remain `db0be2d10de74a3c0489dff41944b2de2bf21b9d019a82661aefa88f1118e571`
 and `c59e50da9e648ecab0bfc435b14d32051f1a7d63bc9062275b07dd9cedcb9be6`.
 No `--force`, vulnerable downgrade, hidden major override, staging or delivery
 action ran. The independent `core.ts` amendment makes exact scope
-`8 + 56 + 65 = 129`. Step 10 may continue every
-other gate, but dependency audit remains `blocked_external` until upstream
+`8 + 56 + 65 = 129`. Step 10 could continue every
+other gate, but dependency audit remained `blocked_external` until upstream
 publishes a Node 20/React 18-compatible fix or the repository separately
-authorizes a major platform/router migration.
+authorized a major platform/router migration. The current controller risk
+acceptance at the end of this file supersedes that workflow disposition without
+altering the audit result.
 
 ## 2026-07-28 Byte-Preserving Export Route Cleanup
 
@@ -4643,9 +4642,9 @@ pending. Step 10 was `reopened_in_progress`; Step 11 was
 `suspended_pending_runner_rerun`. The dependency audit remained independently
 `blocked_external` at `1 moderate + 3 high`, and staged remained zero.
 
-## 2026-07-28 Current Runner-Amended Runnable Closure
+## 2026-07-28 Historical Pre-Commit Runner-Amended Runnable Closure
 
-This is the authoritative current aggregate record. The deterministic
+This is the historical final pre-commit aggregate record. The deterministic
 `TestRunnerStreamsToolStdoutToConsumerAndJoinsOnCancellation` regression first
 failed on the old `StdoutPipe` implementation with exit `1` and:
 
@@ -4693,13 +4692,117 @@ Required PostgreSQL 18 selectors ran with zero skips and passed: migration in
 `backend/xirang-server` was removed and confirmed absent. Every runnable Step 10
 gate is therefore `passed_current_runner_amended`.
 
-The sole remaining Step 10 row is the unchanged dependency audit, which exits
-`1` with `1 moderate + 3 high`. There is no complete compatible Node 20/React 18
-remediation; neither package file changed. Overall Step 10 remains
-`blocked_external`, not completed/pass-all. Step 11 is
+At that checkpoint, the sole remaining Step 10 row was the unchanged dependency
+audit, which exited `1` with `1 moderate + 3 high`. There was no complete compatible Node 20/React 18
+remediation; neither package file changed. Overall Step 10 remained
+`blocked_external`, not completed/pass-all. Step 11 was
 `authorized_limited_pending`: exact-131 staging/coherent commit, push and a
 draft PR/CI are permitted only as the validation channel. Warning-only green CI
 cannot close dependency risk, and the PR must not become ready, merge or support
 a completion claim before compatible remediation or an explicit later
 risk-policy disposition. No stage, commit, push, PR, CI, merge, archive or
-journal action has run; `staged=0`, and the parent remains `planning`.
+journal action had run; `staged=0`, and the parent remained `planning`. The
+following section is the authoritative current ledger.
+
+## 2026-07-28 Current Commit, CI RED/GREEN And Delivery Ledger
+
+### Delivered checkpoint and exact scope
+
+The approved manifest remains exactly:
+
+```text
+8 Phase-1 + 56 create + 67 modify = 131
+```
+
+Commit `94a15dc41634b096839ef6e661714a88db1f4c09` with subject
+`feat: add backup asset export and archive` is current `HEAD`, is pushed to
+`codex/backup-assets-export-archive`, and is published through draft PR #399:
+<https://github.com/xiangnan0811/xirang/pull/399>. Earlier `not_executed` claims
+for commit, push, PR, and initial CI are historical only.
+
+At the start of final ledger synchronization, the product/spec dirty follow-up
+was exactly five paths already included in the approved 131-path manifest:
+
+```text
+backend/internal/api/handlers/config_handler.go
+backend/internal/api/handlers/config_handler_test.go
+backend/internal/backupasset/processing/derived_manifest.go
+backend/internal/backupasset/processing/derived_manifest_test.go
+.trellis/spec/backend/database-guidelines.md
+```
+
+This increment remains uncommitted and unstaged. The ledger synchronization
+adds only its six assigned task-artifact paths, so the resulting unstaged
+worktree is eleven approved-manifest paths total. It does not expand scope.
+
+### CI RED/GREEN 1: Config import transaction rollback
+
+RED showed that Config import swallowed Task Create errors, returned HTTP 200,
+and could commit nodes without their tasks. GREEN propagates the transaction
+error so the handler returns the generic HTTP 500 envelope without leaking the
+injected error, and the transaction rolls back nodes and tasks in full. The
+test fixture now also isolates and resets the secure global cache around its
+explicit test encryption key.
+
+Fresh focused and sequencing coverage passed. The handlers package coverage was
+`57.9%`; handlers `-race`, `go vet`, gofmt, and scoped diff checks passed.
+
+### CI RED/GREEN 2: Processing dual-boundary conflict retry
+
+RED showed `CommitManifest` could encounter SQLite locks either while reading
+projection evidence or while committing the atomic publication transaction;
+the concurrent deterministic case produced successes=0. GREEN applies the
+existing bounded, context-aware conflict retry to both boundaries. The prepared
+publication remains idempotent across a rolled-back transient transaction, and
+exactly one durable winner remains; semantic validation/fence errors are not
+made retryable.
+
+Fresh deterministic focused tests, count `50`, race count `20`, Processing
+coverage `74.0%`, and the full Processing race passed.
+
+### Fresh aggregate and cross-engine verification
+
+After both fixes, exact manifest verification and both child and parent
+`task.py validate` passed. The fresh full gate completed with:
+
+```text
+env -u NODE_ENV make check
+exit 0
+backend lint: 0 issues
+frontend: 168 files / 1388 tests
+frontend lint: 0 errors + 1 approved a11y debt warning
+main JS: 498.48 / 500 KiB
+main CSS: 104.94 / 105 KiB
+```
+
+Required PostgreSQL 18 selectors used the loopback test service at
+`127.0.0.1:55470`, ran without skip, and passed:
+
+```text
+migrations / UTC / dirty search path: 49.561s
+Export:                                13.353s
+Processing / archive member:           4.679s
+```
+
+### Explicit dependency-risk acceptance
+
+Fresh npm audit still reports four vulnerabilities (`1 moderate + 3 high`) in
+brace-expansion, postcss, and react-router. The controller explicitly and
+temporarily accepts this unchanged pre-existing dependency risk for purposes of
+Child 12 delivery. This disposition closes the Child dependency-risk gate but
+does not claim remediation or an audit pass. `web/package.json` and
+`web/package-lock.json` remain unchanged. No `--force`, unsafe override, or
+incompatible Node 20 + React 18 router migration is permitted. A compatible
+upstream fix or Node/React/Router migration must be tracked in a separate
+Trellis task and branch after Child 12 merge.
+
+### Current workflow boundary
+
+Step 10 is `passed_with_explicit_dependency_risk_acceptance`. Step 11 is
+`active_incremental_follow_up_pending`: the initial coherent commit, push, and
+draft PR are executed; the five product/spec plus six ledger paths still require
+incremental review, commit, push, and required CI monitoring. The PR remains
+draft. Ready, merge, post-merge automation monitoring, Child archive, and journal work are
+not executed. Child 12 remains `in_progress`; the parent remains `planning`.
+Nothing in this ledger completes the parent, 07-11, or P3 work. The Git index
+remains empty.

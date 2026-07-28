@@ -5,9 +5,10 @@
 - Trellis task：`.trellis/tasks/07-22-backup-assets-export-archive`；approved `task.py start`
   已在 2026-07-22 执行一次，Child status 为 `in_progress`；parent 是
   `07-12-backup-data-explorer-design`，且继续保持 `planning`。
-- 专用分支：`codex/backup-assets-export-archive`；规划基线、`HEAD`、`main`、
-  `origin/main` 与 merge-base 均为 Child 11 / PR #398 的 squash merge
-  `9ad2893c714c82781461f452030c25e0766eedd4`。
+- 专用分支：`codex/backup-assets-export-archive`；规划基线是 Child 11 / PR #398 的 squash
+  merge `9ad2893c714c82781461f452030c25e0766eedd4`。当前 `HEAD` 与已 push commit 是
+  `94a15dc41634b096839ef6e661714a88db1f4c09`（`feat: add backup asset export and archive`）；
+  draft PR #399 是 <https://github.com/xiangnan0811/xirang/pull/399>。
 - 真实 program 交付进度是 11/15；12 个已实例化 child 不表示父任务完成，父任务不得由
   Child 12 归档。
 - 2026-07-22 总控会话中用户回复“批准”，
@@ -49,19 +50,28 @@
   明确排除某项，其批准覆盖全部所列请求。该解释不授权真正的新 scope、不可逆高风险动作，
   或 approved manifest 之外的 deviation。
 - 当前 `task.py start`、workflow status transition、产品代码、测试与 paired 000068
-  migration 实施已在 exact manifest 内 `executed`。runner delayed-consumer 回归先稳定 RED 为
-  `read |0: file already closed`，parent-owned `os.Pipe` GREEN 后 focused、capabilities package、race、
-  20 次重复与 `go vet` 均通过。fresh exact union 是
-  `8 Phase-1 + 56 create + 67 modify = 131`，即 `68 tracked + 63 untracked`，zero missing/extra/
-  overlap/duplicate/staged；corrected short-TMP `env -u NODE_ENV make check` exit 0，frontend
-  `168 files / 1388 tests`，bundle JS `498.48/500 KiB`、CSS `104.94/105 KiB`，真实 PostgreSQL 18
-  migration/Export/Processing required selectors 均通过。Make binary 已删除并确认不存在。因此
-  Step 10 的所有 runnable gates 为 `passed_current_runner_amended`，当前只因下述 unchanged
-  dependency audit 保持 `blocked_external`。产品范围与十三项 corrections 未改变。
-- Step 11 的 narrow workflow-only permission 已恢复为 `authorized_limited_pending`：只允许
-  exact-131 stage/coherent commit、push 与 draft PR 作为 CI-validation channel；dependency-risk
-  closure 前不得 ready、merge 或支撑 completion claim。
-- 2026-07-28 fresh CI-equivalent dependency audit 新增一个外部 Step 10 blocker。当前 HEAD
+  migration 实施已在 exact manifest 内 `executed`。approved exact manifest 仍是
+  `8 Phase-1 + 56 create + 67 modify = 131`；commit
+  `94a15dc41634b096839ef6e661714a88db1f4c09` 已创建并 push，draft PR #399 已打开。
+  本次 ledger sync 开始时，五个 already-in-manifest product/spec follow-up 路径仍未 commit 且
+  staged=0：Config import 不再吞掉
+  Task Create error，而是返回 generic 500 并整体回滚 node/task，同时 fixture 隔离 secure global
+  cache；Processing `CommitManifest` 在 projection evidence read 与 atomic publish transaction 两个
+  SQLite lock boundary 都复用既有 bounded/context-aware retry，保留一个 durable winner。
+- 两组 CI RED/GREEN 的 focused、sequencing/repetition、race、coverage、vet/gofmt/diff 均通过：
+  handlers coverage `57.9%`，Processing coverage `74.0%`，Processing deterministic count `50`、
+  race count `20`，以及 full Processing race。fresh `env -u NODE_ENV make check` exit 0；backend
+  lint 0，frontend `168 files / 1388 tests`，lint 0 errors 加一个已批准的 a11y debt warning，bundle
+  JS `498.48/500 KiB`、CSS `104.94/105 KiB`。真实 PostgreSQL 18 required selectors 无 skip 通过：
+  migrations/UTC/dirty-search-path `49.561s`、Export `13.353s`、Processing/archive-member
+  `4.679s`，使用 loopback `127.0.0.1:55470` 测试服务。本次 final ledger sync 另修改获分配的
+  六个 task artifact；因此交付时 unstaged worktree 是五个 follow-up + 六个 ledger 路径共 11 个，
+  且全部已经在 approved 131 manifest 内。
+- Step 10 现为 `passed_with_explicit_dependency_risk_acceptance`。Step 11 已执行 initial exact
+  commit/push/draft-PR，当前为 `active_incremental_follow_up_pending`，等待五个 product/spec +
+  六个 ledger 路径的增量 review、commit、push 与 CI。PR 仍是 draft；ready、merge、post-merge、
+  Child archive/journal 均未执行。
+- 2026-07-28 fresh CI-equivalent dependency audit 曾新增一个外部 Step 10 blocker。当前 HEAD
   `web/package.json`/`web/package-lock.json` 未修改；Node 20/npm 10 与本机 npm 11 均复现
   `1 moderate + 3 high` audit failure。兼容 lockfile probe 能升级到 `react-router(-dom) 7.18.1`、
   `postcss 8.5.23`、`nanoid 3.3.16`、`brace-expansion 1.1.16/5.0.8`，但随后仍被新公告要求
@@ -69,9 +79,11 @@
   和 React `>=19.2.7`，与仓库 Node 20/React 18 合同不兼容。因此不执行 `--force`、不做
   主版本路由/React 迁移，也不把 `web/package-lock.json` 纳入 Child 12；独立的 `core.ts`
   route-cleanup amendment 当时使 scope 为 `8 + 56 + 65 = 129`；独立 runner amendment 现使
-  approved target 为 `8 + 56 + 67 = 131`。该 blocker 需要 upstream
-  compatible fix、独立的 `brace-expansion` lint-tool migration，或另行批准的 Node `22.22+` /
-  React `19.2.7+` / Router 8 migration；在此之前 Step 10 保持 `blocked_external`。
+  approved target 为 `8 + 56 + 67 = 131`。控制器现明确且临时接受这一 unchanged pre-existing
+  dependency risk，用于 Child 12 delivery；因此 Child 12 的 dependency-risk gate 已关闭，但
+  vulnerabilities 没有修复，`npm audit` 也没有通过。package files 保持不变，仍不执行
+  `--force`/unsafe override/不兼容的 Node 20 + React 18 router migration；compatible upstream
+  fix 或 Node/React/Router migration 必须在 Child 12 merge 后由独立 Trellis task/branch 跟踪。
 
 本 PRD 冻结产品需求和验收边界；技术合同、schema/API/安全取舍见 `design.md`，未来
 TDD 顺序、exact file manifest、验证与 rollback 见 `implement.md`。这些文档均不
@@ -609,15 +621,15 @@ create/product API、Provider public contract 或十三项 product corrections�
 | PostgreSQL lock-order/context/idempotency tranche | `closed`；controller fresh required `TestExportBehaviorPostgres` PASS `11.527s`；canonical `Q(global,user) -> J -> A -> I -> IA` order and required real-PostgreSQL selector evidence recorded |
 | focused crypto/AAD review | `closed`；spec `✅`，quality `APPROVED`，zero findings |
 | archive-profile sub-boundary | `closed`；independent current-code review 确认 allocation 前的完整 `AssetRef` + nonnegative root ordinal 校验，以及 scope prefixing/每次 retry 后的 collision allocator/limits final-member validation；focused selectors PASS；剩余 `P3` instrumentation coverage limitation 仅为验证覆盖限制，非产品失败 |
-| Step 10 exact manifest/static/review | `passed_current_runner_amended`；exact `131 = 68 tracked + 63 untracked`，zero missing/extra/overlap/duplicate/staged；十三项 corrections 不变 |
-| Step 10 dependency audit | `blocked_external`；unchanged package files 为 `1 moderate + 3 high`；无完整兼容 Node 20/React 18 修复，且未使用 `--force`/unsafe override |
+| Step 10 exact manifest/static/review | `passed_current_follow_up_amended`；approved exact manifest `131`；Config rollback 与 Processing dual-boundary retry RED/GREEN 及 fresh full/race/PostgreSQL gates 通过；十三项 corrections 不变 |
+| Step 10 dependency audit | `risk_accepted_for_child_delivery`；unchanged package files 仍为 `1 moderate + 3 high`；controller 明确临时接受既有风险，但 vulnerabilities 未修复、audit 未通过，且未使用 `--force`/unsafe override |
 | runner/package/race/full/PostgreSQL gates | `passed_current_runner_amended`；capabilities normal/race/20x、vet、full `make check`、bundle budget 与 real PostgreSQL required selectors fresh pass |
 | backend/full `env -u NODE_ENV make check` gates | `passed_current_runner_amended`；corrected `/tmp/xc12` exit 0；generated binary removed/absent |
-| Step 11 / delivery | `authorized_limited_pending`；exact-131 stage/commit/push + draft PR/CI only；dependency closure 前仍禁止 ready/merge/completion claim |
-| exact staging / work commit | `not_executed`；现获 narrow permission，当前 `staged=0` |
-| `trellis-finish-work` / Child archive / journal | `not_executed`；只可在 dependency closure、ready/merge/post-merge monitoring 之后执行；parent 保持 `planning` |
+| Step 11 / delivery | `active_incremental_follow_up_pending`；initial commit/push/draft PR 已执行；五个 product/spec + 六个 ledger 路径的增量 review/commit/push/CI 待执行 |
+| exact staging / work commit | `initial_executed_follow_up_pending`；`94a15dc41634b096839ef6e661714a88db1f4c09` 已 push；当前 11-path increment 未 commit 且 `staged=0` |
+| `trellis-finish-work` / Child archive / journal | `not_executed`；只可在 ready/merge/post-merge monitoring 之后执行；parent 保持 `planning` |
 | archive/journal commit | `not_executed` |
-| push / PR / required CI | `not_executed`；push + draft PR 已 narrow-authorized，PR 必须保持 draft 直至 risk closure |
-| squash merge / post-merge automation | `not_executed`；dependency-risk closure 前禁止 ready/merge |
+| push / PR / required CI | `initial_push_and_draft_pr_executed_follow_up_pending`；commit `94a15dc` 已 push，draft PR #399 已打开；等待增量 push 与 required CI |
+| squash merge / post-merge automation | `not_executed`；等待 incremental CI 与 ready review，并保留 dependency-risk disclosure |
 | local main sync / branch-worktree cleanup | `not_executed` |
 | Release Please PR #386 / release / deploy | `not_applicable`；out of scope |

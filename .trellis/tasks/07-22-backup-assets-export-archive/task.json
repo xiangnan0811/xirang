@@ -15,13 +15,13 @@
   "branch": "codex/backup-assets-export-archive",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
-  "pr_url": null,
+  "commit": "94a15dc41634b096839ef6e661714a88db1f4c09",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/399",
   "subtasks": [],
   "children": [],
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [],
-  "notes": "The user approvals and standing reasonable-decision authorization cover the current focused manifest. The 2026-07-28 runner stdout amendment added only existing runner.go and runner_test.go, making the exact manifest 56 create + 67 modify and the Git-visible union 131 paths (68 tracked + 63 untracked). Deterministic delayed-consumer RED reproduced read |0: file already closed; the parent-owned os.Pipe GREEN, capabilities normal/race/repetition, go vet, exact/static, full make check, bundle budgets, and required real PostgreSQL migration/Export/Processing selectors all passed fresh. Step 10 is blocked_external solely on the unchanged dependency audit at 1 moderate + 3 high. Step 11 limited exact stage/commit/push/draft-PR permission is restored, but ready/merge/completion remain forbidden until dependency-risk closure. Product scope, dependencies, migrations and the thirteen corrections remain unchanged.",
+  "notes": "Child 12 remains in_progress and the parent 07-12 tracker remains planning. The approved exact manifest is 8 Phase-1 + 56 create + 67 modify = 131. Commit 94a15dc41634b096839ef6e661714a88db1f4c09 (feat: add backup asset export and archive) is pushed on codex/backup-assets-export-archive and draft PR #399 is open. At the start of final ledger synchronization, a five-file in-manifest product/spec follow-up remained uncommitted and unstaged: Config import now propagates Task Create failure for generic 500 plus total transaction rollback and isolates the secure test cache; Processing CommitManifest now retries transient conflicts at both projection-evidence and atomic-publish boundaries, retaining one durable winner. The final ledger synchronization itself modifies the six assigned task artifacts, so the resulting unstaged worktree delta is those five paths plus six ledger paths; all eleven are already within the approved manifest. Fresh focused/race/vet/gofmt/diff, full make check, bundle, and required PostgreSQL 18 gates passed. The unchanged npm audit still reports 4 vulnerabilities (1 moderate, 3 high); the controller explicitly and temporarily accepted this pre-existing dependency risk for Child 12 delivery without claiming remediation or an audit pass. Step 11 is active pending incremental review, commit, push, and CI; ready/merge/post-merge/archive remain pending.",
   "meta": {
     "planning_approval": {
       "status": "complete_approved",
@@ -126,29 +126,41 @@
       "green": "RunInputStream now uses a parent-owned os.Pipe, closes the parent writer after Start, retains concurrent Wait/process-group cleanup, and passes focused, package, race and 20x repetition gates."
     },
     "frontend_dependency_audit_gate": {
-      "status": "blocked_external",
+      "status": "risk_accepted_for_child_delivery",
       "observed_on": "2026-07-28",
       "source": "fresh local npm 11 and CI-equivalent Node 20/npm 10 audit evidence",
-      "scope": "No dependency-manifest amendment or package-file edit. The unchanged tree reports 1 moderate + 3 high. The compatible lockfile probe updates react-router/react-router-dom to 7.18.1, postcss to 8.5.23, nanoid to 3.3.16, and brace-expansion to 1.1.16/5.0.8, but current advisories still require an unpublished compatible brace-expansion fix and react-router 8.3.0, whose Node >=22.22 and React >=19.2.7 requirements are incompatible with this repository's Node 20/React 18 contract. The independent runner amendment makes the exact current scope 8 Phase-1 + 56 create + 67 modify = 131."
+      "scope": "No dependency-manifest amendment or package-file edit. The unchanged tree reports 1 moderate + 3 high. The compatible lockfile probe updates react-router/react-router-dom to 7.18.1, postcss to 8.5.23, nanoid to 3.3.16, and brace-expansion to 1.1.16/5.0.8, but current advisories still require an unpublished compatible brace-expansion fix and react-router 8.3.0, whose Node >=22.22 and React >=19.2.7 requirements are incompatible with this repository's Node 20/React 18 contract. The controller explicitly and temporarily accepts this unchanged pre-existing risk for Child 12 delivery; this closes the Child 12 dependency-risk gate without claiming the vulnerabilities are fixed or npm audit passed. Track a compatible upstream fix or a Node/React/Router migration in a separate Trellis task and branch after Child 12 merge."
     },
     "step_10_current_verification": {
-      "status": "blocked_external",
+      "status": "passed_with_explicit_dependency_risk_acceptance",
       "verified_on": "2026-07-28",
-      "runnable_gates": "passed_current_runner_amended",
-      "scope": "Exact 131 (68 tracked + 63 untracked) parity/static/gofmt passed. Runner deterministic RED/GREEN, capabilities normal/race/20x, go vet, corrected short-TMP env -u NODE_ENV make check, bundle budgets, and required real PostgreSQL migration/Export/Processing selectors passed fresh. backend/xirang-server was deleted and confirmed absent. The unchanged dependency audit remains the sole blocked_external row at 1 moderate + 3 high."
+      "runnable_gates": "passed_current_follow_up_amended",
+      "scope": "Exact 131 parity/static/gofmt passed. In addition to the runner RED/GREEN, CI RED/GREEN 1 propagates Config import Task Create errors for generic 500 and total rollback, with isolated secure test cache; focused, sequencing, handler coverage 57.9%, handler race, vet/gofmt/diff passed. CI RED/GREEN 2 applies bounded/context-aware conflict retry to Processing projection-evidence and atomic-publish boundaries; deterministic focused tests, count=50, race count=20, Processing coverage 74.0%, and full Processing race passed with one durable winner. Fresh env -u NODE_ENV make check exited 0; frontend passed 168 files/1388 tests with zero lint errors and one approved a11y warning; bundle JS/CSS were 498.48/500 and 104.94/105 KiB. Required PostgreSQL 18 selectors passed without skip in 49.561s, 13.353s, and 4.679s. The unchanged 1 moderate + 3 high audit result is explicitly risk-accepted, not remediated or passed."
     },
     "step_11_limited_delivery_permission": {
-      "status": "authorized_limited_pending",
+      "status": "active_incremental_follow_up_pending",
       "authorized_on": "2026-07-28",
       "source": "controller workflow disposition under the user's standing authorization",
-      "scope": "Exact staging and coherent commit, push, and creation of a draft PR are permitted only as a CI-validation channel. CI dependency audit is warning-only, so green CI does not close the Step 10 audit blocker. The PR must remain draft and must not merge or support implementation/task completion claims until a compatible dependency remediation or an explicit later risk-policy disposition.",
+      "scope": "The exact-131 coherent commit 94a15dc41634b096839ef6e661714a88db1f4c09 was created and pushed, and draft PR #399 was opened. At ledger-sync start the five-file in-manifest product/spec CI follow-up was uncommitted and unstaged; the six assigned ledger updates make the current unstaged delta eleven approved-manifest paths. Step 11 is active pending incremental review, commit, push, and required CI monitoring. The controller's explicit temporary dependency-risk acceptance closes that Child 12 gate without claiming remediation. Ready, merge, post-merge monitoring, archive, and journal remain pending.",
       "order": [
-        "exact_stage_and_commit",
-        "draft_pr_ci_and_fixes",
-        "dependency_risk_closure",
+        "in_manifest_follow_up_review_and_commit",
+        "follow_up_push_and_required_ci",
         "ready_merge_and_post_merge_monitoring",
         "trellis_archive_and_journal"
       ]
+    },
+    "delivery_checkpoint": {
+      "status": "draft_pr_open_follow_up_pending",
+      "commit": "94a15dc41634b096839ef6e661714a88db1f4c09",
+      "commit_subject": "feat: add backup asset export and archive",
+      "pushed": true,
+      "pr_url": "https://github.com/xiangnan0811/xirang/pull/399",
+      "pr_state": "draft",
+      "current_product_follow_up_paths": 5,
+      "current_ledger_sync_paths": 6,
+      "current_total_unstaged_paths": 11,
+      "staged_paths": 0,
+      "remaining": "Incremental review/commit/push/CI, then ready/merge/post-merge monitoring and Child-only finish work."
     },
     "task_start": "executed",
     "started_on": "2026-07-22"
