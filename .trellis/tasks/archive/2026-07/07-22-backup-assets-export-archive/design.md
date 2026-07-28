@@ -10,8 +10,9 @@ an unmerged sibling. The child is now `in_progress`; the parent remains `plannin
 task:                     .trellis/tasks/07-22-backup-assets-export-archive
 branch:                   codex/backup-assets-export-archive
 planning baseline:        9ad2893c714c82781461f452030c25e0766eedd4
-HEAD / pushed commit:     94a15dc41634b096839ef6e661714a88db1f4c09
-draft PR:                 #399 https://github.com/xiangnan0811/xirang/pull/399
+feature head:              2e9e119ec3267748a9562f29450be0a18d9725f3
+squash merge:              bd9572f9f69dde721db9976c25816ea72b4ae664
+PR:                        #399 merged 2026-07-28T09:03:00Z
 delivered program state:  11/15
 planning approval:        complete_approved (2026-07-22 controller user reply "批准")
 workflow transition:      complete_approved (same approval + user clarification)
@@ -32,11 +33,11 @@ Step 10 status:           passed_with_explicit_dependency_risk_acceptance
 dependency audit gate:    risk_accepted_for_child_delivery; unchanged 1 moderate + 3 high;
                           vulnerabilities remain unfixed and npm audit did not pass
 historical local gates:   checkpoints only; current completion evidence is the fresh runnable-gate record
-Step 11 / delivery:       active_incremental_follow_up_pending
-initial delivery:         commit 94a15dc created/pushed; draft PR #399 open
-current follow-up:        five product/spec + six assigned ledger paths unstaged; staged=0;
-                          review/commit/push/CI pending
-later delivery:           ready/merge/post-merge/archive/journal not_executed
+Step 11 / delivery:       merged_post_merge_verified_archive_pending
+delivery:                 feature head 2e9e119 passed required checks; PR #399 squash-merged as bd9572f
+post-merge:               main CI 30344924877 and Release Please 30344927402 succeeded
+release publication:      no tag/release created; Docker image/description publish not triggered or expected
+remaining:                Child-only archive/journal; parent remains planning
 ```
 
 The thirteen focused corrections in PRD §7 are part of the approval surface. In
@@ -113,12 +114,17 @@ gate without claiming that the `1 moderate + 3 high` vulnerabilities are fixed
 or that `npm audit` passed. Package files remain unchanged; no `--force`, unsafe
 override, or incompatible Node 20/React 18 router migration is allowed. Track a
 compatible upstream fix or platform/router migration in a separate Trellis task
-and branch after Child 12 merge. Step 11 is active pending review/commit/push/CI
-for the five product/spec paths present at ledger-sync start plus these six
-assigned ledger paths; all eleven are in the approved manifest. The PR remains
-draft; ready/merge, post-merge monitoring, Child archive, and journal work
-remain unexecuted. The parent remains `planning` and is never archived by this
-child.
+and branch after Child 12 merge.
+
+Step 11 product delivery is complete. Feature head
+`2e9e119ec3267748a9562f29450be0a18d9725f3` passed required checks, and PR #399
+squash-merged at 2026-07-28T09:03:00Z as
+`bd9572f9f69dde721db9976c25816ea72b4ae664`. Post-merge main CI run
+`30344924877` and Release Please run `30344927402` succeeded. Release Please
+only updated PR #386; no tag or GitHub Release was created, so no Docker image
+or Docker Hub description publication was triggered or expected. Local `main`
+is synchronized to the merge commit. Only Child archive/journal bookkeeping
+remains; the parent stays `planning` and is never archived by this child.
 The same approval,
 as clarified by the user on 2026-07-22, also authorizes the planning workflow
 transition, `task.py start`, and Phase 2 work inside the exact approved manifest.

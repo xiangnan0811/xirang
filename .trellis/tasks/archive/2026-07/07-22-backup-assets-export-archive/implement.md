@@ -36,8 +36,9 @@ status:                     in_progress
 parent:                     07-12-backup-data-explorer-design (planning tracker)
 branch:                     codex/backup-assets-export-archive
 planning baseline:          9ad2893c714c82781461f452030c25e0766eedd4
-HEAD / pushed commit:       94a15dc41634b096839ef6e661714a88db1f4c09
-draft PR:                   #399 https://github.com/xiangnan0811/xirang/pull/399
+feature head:                2e9e119ec3267748a9562f29450be0a18d9725f3
+squash merge:                bd9572f9f69dde721db9976c25816ea72b4ae664
+PR:                          #399 merged 2026-07-28T09:03:00Z
 delivered program state:    11/15
 focused planning approval:  complete_approved (2026-07-22 controller user reply "批准")
 workflow transition:        complete_approved (same approval + user clarification)
@@ -58,12 +59,11 @@ Step 10 status:             passed_with_explicit_dependency_risk_acceptance
 dependency audit gate:      risk_accepted_for_child_delivery; unchanged 1 moderate + 3 high;
                             package files unchanged; audit did not pass; no --force or unsafe override
 historical local gates:     checkpoints only; current completion evidence is the fresh runnable-gate record
-Step 11 / delivery:         active_incremental_follow_up_pending
-initial commit/push/PR:     executed; 94a15dc pushed and draft PR #399 open
-current follow-up:           five product/spec + six assigned ledger paths unstaged;
-                            incremental review/commit/push/CI pending
-ready/merge/archive/journal: not_executed; staged=0
-post-merge:                 not_executed
+Step 11 / delivery:         merged_post_merge_verified_archive_pending
+commit/push/PR:             executed; feature head 2e9e119, PR #399 squash merge bd9572f
+required/post-merge CI:     passed; main CI 30344924877, Release Please 30344927402
+release publication:        no tag/release; image/description publish not triggered or expected
+archive/journal:            not_executed; next Child-only bookkeeping action
 release/deploy:             not_applicable in Child 12 product scope
 ```
 
@@ -528,11 +528,11 @@ exact generated paths, for example:
 .trellis/workspace/weibo/journal-1.md                    (only if changed)
 ```
 
-The parent remains planning and is never archived by Child 12. One dedicated
-branch and PR #399 are used under the delivery authorization. The initial
-product commit is followed only by the current eleven-path in-manifest increment
-(five product/spec paths plus six ledger updates); the PR remains draft until
-incremental CI and ready review close.
+The parent remains planning and is never archived by Child 12. Product delivery
+used dedicated branch `codex/backup-assets-export-archive` and PR #399. The
+historical eleven-path follow-up was committed as feature head `2e9e119`, passed
+required checks, and squash-merged as `bd9572f`. This section now governs only
+the remaining Child archive/journal bookkeeping.
 
 ## 3. Ordered TDD And Implementation Steps
 
@@ -1091,14 +1091,14 @@ Request focused code review for the high-risk matrix in design §15 and use
 `superpowers:requesting-code-review`. Resolve findings on the same branch and
 rerun affected/final gates before claiming implementation complete.
 
-### Step 11: Active Incremental Delivery Workflow
+### Step 11: Merged Delivery And Child-Only Bookkeeping
 
-**Current status:** `active_incremental_follow_up_pending`. The exact-131
-coherent commit `94a15dc41634b096839ef6e661714a88db1f4c09` was created and
-pushed on `codex/backup-assets-export-archive`; draft PR #399 is open at
-<https://github.com/xiangnan0811/xirang/pull/399>. Earlier claims that commit,
-push, PR, and all CI activity were `not_executed` are historical pre-delivery
-checkpoints, not current truth.
+**Current status:** `merged_post_merge_verified_archive_pending`. The exact-131
+implementation reached feature head `2e9e119ec3267748a9562f29450be0a18d9725f3`.
+PR #399 at <https://github.com/xiangnan0811/xirang/pull/399> passed required
+checks and squash-merged at 2026-07-28T09:03:00Z as
+`bd9572f9f69dde721db9976c25816ea72b4ae664`. Earlier pending/draft claims in
+historical evidence below are not current truth.
 
 CI RED/GREEN 1 found that Config import swallowed Task Create errors, returned
 200, and could partially commit nodes. Production now propagates the transaction
@@ -1120,14 +1120,13 @@ Fresh local gates after both fixes passed: exact `131`, child/parent validation,
 passed without skip against `127.0.0.1:55470`: migration/UTC/dirty-search-path
 `49.561s`, Export `13.353s`, and Processing/archive-member `4.679s`.
 
-At the start of this ledger synchronization, the five-file in-manifest
-product/spec follow-up remained uncommitted and unstaged:
-`config_handler.go`, `config_handler_test.go`, `derived_manifest.go`,
-`derived_manifest_test.go`, and `database-guidelines.md`. This final ledger sync
-adds the six assigned task-artifact modifications, making the current unstaged
-worktree eleven approved-manifest paths in total. Step 11 therefore remains
-active for incremental review, coherent follow-up commit, push, and required CI
-monitoring.
+The five-file in-manifest product/spec follow-up and six ledger files recorded
+at the earlier checkpoint were reviewed and committed as feature head
+`2e9e119ec3267748a9562f29450be0a18d9725f3`. Required PR checks passed. The
+post-merge main CI run `30344924877` and Release Please run `30344927402` also
+succeeded. Release Please only updated PR #386; it did not create a tag or
+GitHub Release, so no Docker image publish or Docker Hub description sync was
+triggered or expected. Local `main` was fast-forwarded to `bd9572f`.
 
 The unchanged npm audit still reports four vulnerabilities (`1 moderate + 3
 high`). The controller explicitly and temporarily accepts that pre-existing
@@ -1137,19 +1136,17 @@ override, or an incompatible Node 20/React 18 router migration. Track compatible
 upstream remediation or a Node/React/Router migration in a separate Trellis
 task/branch after Child 12 merge.
 
-The mandatory order is:
+The delivery ordering through merge and post-merge monitoring is complete. The
+remaining mandatory order is:
 
-1. Review and stage exactly the current eleven in-manifest paths (five
-   product/spec follow-ups plus six ledger updates), prove cached parity/no
-   unrelated paths, and create one coherent incremental commit.
-2. Push the dedicated branch, keep PR #399 draft, monitor every required CI job,
-   and repair failures on the same branch.
-3. Only after required CI is green may the PR become ready, merge, and receive
-   required post-merge CI/Release Please observation. Do not merge Release Please
-   PR #386. The accepted dependency risk must remain explicitly disclosed.
-4. Only after merge and post-merge truth is recorded may `trellis-finish-work`
-   archive Child 12 and update its journal. The parent remains `planning` and
-   must not be archived by this child.
+1. Validate these six superseding ledger updates on the dedicated bookkeeping
+   branch.
+2. Run `trellis-finish-work` so `task.py archive` moves only Child 12 and
+   `add_session.py` records merge commit `bd9572f`.
+3. Deliver the bookkeeping commits through their own PR and monitor required
+   CI/post-merge automation. Do not merge Release Please PR #386.
+4. Keep parent `07-12-backup-data-explorer-design` in `planning`; Child 12 must
+   not archive or complete it.
 
 No GitHub Release, Docker publish or Docker Hub sync is expected from this
 non-release child unless repository automation actually creates one; record
@@ -1315,13 +1312,13 @@ container volume/GA readiness; Child 12 does not claim it.
 | Step 10 dependency audit | `risk_accepted_for_child_delivery` | unchanged package files still report `1 moderate + 3 high`; controller explicitly and temporarily accepts the pre-existing risk; vulnerabilities are not fixed and audit did not pass; separate post-merge task/branch required |
 | prior SQLite/PostgreSQL/restart/frontend/backend/full gates | `historical_checkpoint` | cannot substitute for fresh runner-amended package/race/full-project evidence |
 | backend/full `env -u NODE_ENV make check` gates | `passed_current_runner_amended` | corrected `/tmp/xc12` rerun exit 0 after runner GREEN; generated binary removed and confirmed absent |
-| Step 11 / delivery | `active_incremental_follow_up_pending` | initial commit/push/draft PR executed; five product/spec plus six ledger paths await review/commit/push/CI |
-| exact staging / coherent work commit | `initial_executed_follow_up_pending` | `94a15dc41634b096839ef6e661714a88db1f4c09` is pushed; current eleven-path increment is uncommitted and `staged=0` |
+| Step 11 / delivery | `merged_post_merge_verified_archive_pending` | feature head `2e9e119` passed required checks; PR #399 squash-merged as `bd9572f` |
+| exact staging / coherent work commit | `executed` | initial `94a15dc`, follow-up feature head `2e9e119`, squash merge `bd9572f` |
 | `trellis-finish-work` / Child archive / journal | `not_executed` | only after ready/merge and post-merge monitoring; parent stays `planning` |
 | archive/journal commit | `not_executed` | only actual post-merge workflow outputs may be inspected/staged |
-| push / PR / required CI | `initial_push_and_draft_pr_executed_follow_up_pending` | commit `94a15dc` pushed; draft PR #399 open; push eleven-path follow-up and monitor all required CI |
-| squash merge / post-merge CI and Release Please observation | `not_executed` | wait for incremental CI and ready review; retain explicit dependency-risk disclosure |
-| local main sync / branch-worktree cleanup | `not_executed` | only after merged post-checks |
+| push / PR / required CI | `executed` | PR #399 required checks passed and PR merged |
+| squash merge / post-merge CI and Release Please observation | `executed` | main CI `30344924877` and Release Please `30344927402` succeeded; no formal release/image/description publication expected |
+| local main sync / branch-worktree cleanup | `executed` | local `main` synchronized to `bd9572f`; bookkeeping continues on a dedicated branch |
 | Release Please PR #386 merge | `not_applicable` | explicitly forbidden here |
 | Compose/deploy/release/publication | `not_applicable` | Child 15 or separate scope |
 
