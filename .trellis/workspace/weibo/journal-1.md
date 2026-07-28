@@ -1229,3 +1229,36 @@ Diagnosed the sole PR #398 amd64 complete-profile failure as Docker rewriting /e
 ### Next Steps
 
 - None - task complete
+
+
+## Session 30: Child 12 backup asset export and archive delivery
+
+**Date**: 2026-07-28
+**Task**: Child 12 backup asset export and archive delivery
+**Branch**: `codex/backup-assets-export-archive`
+
+### Summary
+
+PR #399 squash-merged; post-merge main CI and Release Please succeeded; no formal release or image/description publish was expected; unchanged dependency risk remains separately tracked; Child 12 archived while its parent remains planning.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bd9572f9f69dde721db9976c25816ea72b4ae664` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
