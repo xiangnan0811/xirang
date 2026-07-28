@@ -6,7 +6,7 @@
 - Branch: `codex/frontend-dependency-risk-remediation`
 - Base: `main@ffa1ebf685af91ee7ebefb1a1535b65f8a870c6c`
 - Planning review: `SPEC APPROVED` (2026-07-28)
-- Implementation: `implemented_local_gates_passed_pending_review_delivery`
+- Implementation: `committed_pr_open_ci_pending`
 - Expected product manifest: `web/package-lock.json` only
 
 ## Step 1: Planning And Preflight

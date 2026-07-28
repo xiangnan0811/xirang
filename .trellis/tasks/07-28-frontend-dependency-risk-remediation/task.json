@@ -15,8 +15,8 @@
   "branch": "codex/frontend-dependency-risk-remediation",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
-  "pr_url": null,
+  "commit": "e63a28a8d9878577cc4b93bac2ac08dcb7217893",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/401",
   "subtasks": [],
   "children": [],
   "parent": null,
@@ -32,9 +32,10 @@
     "planning_status": "complete_approved",
     "planning_review": "SPEC APPROVED by independent read-only review on 2026-07-28",
     "implementation_authorization": "granted under the user's standing continue-and-decide authorization",
-    "implementation_status": "implemented_local_gates_passed_pending_review_delivery",
+    "implementation_status": "committed_pr_open_ci_pending",
     "verification_status": "node20_frontend_full_project_and_host_network_docker_passed",
     "audit_status": "nonzero_with_only_two_approved_residual_ghsas",
+    "delivery_status": "pr_401_open_required_checks_running",
     "baseline_main": "ffa1ebf685af91ee7ebefb1a1535b65f8a870c6c"
   }
 }

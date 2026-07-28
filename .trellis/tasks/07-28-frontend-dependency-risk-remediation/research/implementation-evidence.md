@@ -319,5 +319,16 @@ No application, backend, deployment, CI or public documentation file changed.
 The existing Trellis frontend quality spec was updated with the reusable npm
 lockfile-metadata and advisory-counting guardrails discovered during this run;
 this is a non-product code-spec update, not an expansion of dependency scope.
-Review, commit, PR, CI, merge, Dependabot #383 closure, post-merge monitoring,
-archive and journal remain pending.
+At the time of this local-scope snapshot, review, commit, PR, CI, merge,
+Dependabot #383 closure, post-merge monitoring, archive and journal were still
+pending. The delivery checkpoint below supersedes that historical state.
+
+## 2026-07-28 — Delivery checkpoint
+
+- Feature commit:
+  `e63a28a8d9878577cc4b93bac2ac08dcb7217893`
+- Pull request: <https://github.com/xiangnan0811/xirang/pull/401>
+- PR state at recording: open, ready (not draft), required checks running
+- Dependabot #383: still open; close only after PR #401 merges
+- Dependabot #379: unchanged and excluded
+- Merge, post-merge CI, Release Please, archive and journal: not executed
