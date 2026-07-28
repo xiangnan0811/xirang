@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 31
+- **Total Sessions**: 32
 - **Last Active**: 2026-07-28
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1297 | Active |
+| `journal-1.md` | ~1330 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 32 | 2026-07-28 | Snapshot indexer test isolation | `6478c9f882a4f872cb9c9b2fba87886c5195ab06` | `codex/snapshot-indexer-test-isolation` |
 | 31 | 2026-07-28 | Frontend dependency risk remediation delivery | `d1f19fde97ab83936d4bc471d6447b911012f665` | `codex/frontend-dependency-risk-remediation-closeout` |
 | 30 | 2026-07-28 | Child 12 backup asset export and archive delivery | `bd9572f9f69dde721db9976c25816ea72b4ae664` | `codex/backup-assets-export-archive` |
 | 29 | 2026-07-22 | Child 11 runtime closure CI repair | `a101713` | `codex/backup-assets-worker-capabilities` |

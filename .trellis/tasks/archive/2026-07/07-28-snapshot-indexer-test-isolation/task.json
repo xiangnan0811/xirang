@@ -3,7 +3,7 @@
   "name": "snapshot-indexer-test-isolation",
   "title": "Snapshot indexer test isolation",
   "description": "Synchronize the snapshot indexer async test lifecycle so process-global task-ID admission cannot leak across independent test databases.",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": "backend",
   "package": null,
@@ -11,11 +11,11 @@
   "creator": "weibo",
   "assignee": "weibo",
   "createdAt": "2026-07-28",
-  "completedAt": null,
+  "completedAt": "2026-07-28",
   "branch": "codex/snapshot-indexer-test-isolation",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": "f82f9208aac91cfe09190a4f8daa55663e9dcfa0",
+  "commit": "6478c9f882a4f872cb9c9b2fba87886c5195ab06",
   "pr_url": "https://github.com/xiangnan0811/xirang/pull/403",
   "subtasks": [],
   "children": [],
@@ -23,7 +23,7 @@
   "relatedFiles": [
     "backend/internal/snapshot/indexer_test.go"
   ],
-  "notes": "Observed RED is CI run 30354793081 attempt 1; the test-only synchronization fix keeps the production Indexer contract unchanged.",
+  "notes": "Observed RED is CI run 30354793081 attempt 1; PR #403 was squash-merged and its post-merge CI and Release Please runs succeeded without a formal release or image publication.",
   "meta": {
     "planning_review": "approved",
     "implementation_scope": "one_test_file",
@@ -32,7 +32,23 @@
       "attempt": 1,
       "test": "TestEnsureIndexedRepresentsEmptySnapshotWithCompletionMarker"
     },
-    "local_verification": "passed_pending_delivery",
-    "delivery": "pr_open_ci_pending"
+    "local_verification": "passed",
+    "delivery": "merged_postmerge_green_pending_archive",
+    "feature_head": "ca05ac91c5ec48238f17c882944ccd6c9677cc2a",
+    "merge_commit": "6478c9f882a4f872cb9c9b2fba87886c5195ab06",
+    "merged_at": "2026-07-28T12:35:08Z",
+    "reviews": {
+      "spec_compliance": "approved",
+      "code_quality": "approved"
+    },
+    "post_merge": {
+      "ci_run": 30359601980,
+      "ci_status": "success",
+      "release_please_run": 30359599029,
+      "release_please_status": "success",
+      "formal_release": "not_expected_not_created",
+      "image_publish": "not_expected_not_triggered",
+      "docker_hub_sync": "not_expected_not_triggered"
+    }
   }
 }

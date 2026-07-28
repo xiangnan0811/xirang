@@ -37,7 +37,7 @@ admission cannot leak across independent test databases.
       detection, and with a CI-style coverage invocation.
 - [x] Backend/full-project gates, exact task validation, formatting, and diff
       hygiene pass before delivery.
-- [ ] Changes are delivered through a dedicated PR; required CI and post-merge
+- [x] Changes are delivered through a dedicated PR; required CI and post-merge
       automation are monitored before archiving this child task.
 
 ## Non-goals
@@ -68,3 +68,9 @@ test-only task, so the PRD is the complete planning artifact.
   builds. The generated `backend/xirang-server` was removed afterward.
 - The existing configured frontend accessibility warning remains one warning
   and zero errors; this task does not touch that path.
+- Independent specification-compliance and code-quality reviews both returned
+  `APPROVED` with no actionable findings. PR #403 was squash-merged at
+  `2026-07-28T12:35:08Z` as `6478c9f882a4f872cb9c9b2fba87886c5195ab06`.
+- Post-merge CI run `30359601980` and Release Please run `30359599029` both
+  completed successfully. This test-only merge did not create a formal release
+  or trigger image publication or Docker Hub synchronization, as expected.

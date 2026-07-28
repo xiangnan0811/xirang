@@ -1295,3 +1295,36 @@ PR #401 squash-merged after required CI; post-merge main CI and Release Please s
 ### Next Steps
 
 - None - task complete
+
+
+## Session 32: Snapshot indexer test isolation
+
+**Date**: 2026-07-28
+**Task**: Snapshot indexer test isolation
+**Branch**: `codex/snapshot-indexer-test-isolation`
+
+### Summary
+
+PR #403 squash-merged after independent spec and quality approvals; post-merge CI and Release Please succeeded; no formal release, image publish, or Docker Hub sync was expected; the lightweight child task was archived while its P3 parent remains planning.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6478c9f882a4f872cb9c9b2fba87886c5195ab06` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
