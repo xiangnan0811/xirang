@@ -9,5 +9,5 @@
 {"file":".trellis/spec/backend/deployment-runtime.md","reason":"Private runtime roots, graceful lifecycle, all-in-one boundaries, and default-disabled optional runtime rules."}
 {"file":".trellis/spec/frontend/type-safety.md","reason":"Private raw DTO, unknown-boundary validation, closed camelCase mapping, URL safety, and no unsafe casts."}
 {"file":".trellis/spec/frontend/state-management.md","reason":"Async state ownership, stale response control, selection snapshots, and durable server-state reconciliation."}
-{"file":".trellis/tasks/07-22-backup-assets-export-archive/research/current-main-evidence.md","reason":"Child 12 verified baseline, delivered ports, current gaps, focused deviations, and Phase 1 scope evidence."}
-{"file":".trellis/tasks/07-22-backup-assets-export-archive/research/implementation-evidence.md","reason":"Phase 2 RED/GREEN, review, cross-engine, runtime, and current Step 10 evidence with delivery-status boundaries."}
+{"file":".trellis/tasks/archive/2026-07/07-22-backup-assets-export-archive/research/current-main-evidence.md","reason":"Child 12 verified baseline, delivered ports, current gaps, focused deviations, and Phase 1 scope evidence."}
+{"file":".trellis/tasks/archive/2026-07/07-22-backup-assets-export-archive/research/implementation-evidence.md","reason":"Phase 2 RED/GREEN, review, cross-engine, runtime, and current Step 10 evidence with delivery-status boundaries."}
