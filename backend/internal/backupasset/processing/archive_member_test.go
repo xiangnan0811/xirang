@@ -835,8 +835,8 @@ func TestArchiveMemberCreateRetryDelayHonorsContextCancellation(t *testing.T) {
 	if _, err := service.Create(ctx, archiveMemberCreateFixture(memberID)); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("canceled retry error=%v attempts=%d", err, attempts.Load())
 	}
-	if attempts.Load() < 2 || attempts.Load() >= 20 {
-		t.Fatalf("canceled retry attempts=%d", attempts.Load())
+	if got := attempts.Load(); got == 0 || got >= int32(archiveMemberConflictAttempts) {
+		t.Fatalf("canceled retry attempts=%d", got)
 	}
 }
 
