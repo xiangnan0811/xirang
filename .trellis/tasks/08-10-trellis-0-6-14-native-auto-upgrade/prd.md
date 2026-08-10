@@ -58,9 +58,9 @@ Codex auto dispatch, and preserve all project customization and task memory.
 - [x] Protected untracked file hashes remain
   `b767fc9ef9376c651d0493329b710ac8dcf8d77e52686b847d244aff9f6d48fd`
   and `2570bd4472541322d902c4cdf2fe43f247b69f19d335558830e749567f763892`.
-- [ ] The maintenance PR is merged with required CI green, post-merge automation
-  is understood, local `main` matches `origin/main`, and the work branch is
-  removed locally.
+- [x] The maintenance PR and its narrow post-merge CI dependency-fix PR are merged
+  with required CI green, post-merge automation is understood, local `main`
+  matches `origin/main`, and the delivery work branches are removed locally.
 
 ## Out of Scope
 

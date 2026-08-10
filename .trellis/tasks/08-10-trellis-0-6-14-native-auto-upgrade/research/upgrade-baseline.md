@@ -85,5 +85,33 @@ Xirang still requires an independent file-by-file audit because it starts from
 
 - Upgrade commit: `828ebe0b28848f72c8df9476fc90c2b121e830f4`.
 - Pull request: https://github.com/xiangnan0811/xirang/pull/412.
-- Current state: PR open; hosted CI pending. Task 8 remains blocked on this
-  maintenance task's merge, post-merge review, archive, and cleanup.
+- PR #412 passed both hosted CI matrices and squash merged as
+  `b068e9d3a3328fe0175ed93902eeee40ad20790f`.
+- Release Please run `31393779974` succeeded after the upgrade merge. The latest
+  formal release remained `v0.45.0`, so no Docker image publish or Docker Hub
+  description sync was expected.
+- Main CI run `31393780233` exposed the unrelated flaky test
+  `TestPersistentWorkerPublishReadyRejectsAuthorityExpiredAfterSourceLocks`.
+  Diagnosis proved that the sealed fixture mixed the service's frozen clock with
+  a later wall-clock sample; crossing a one-second boundary made the test's
+  synthetic attempt expiry exceed the persisted job deadline, so the loader
+  rejected the invalid tuple before artifact authentication.
+- Dependency-fix commit `5abb48108a535f2f62e87233e427865943a1b02e`
+  reused the fixture clock, retained bounded failure diagnostics, and captured
+  the deterministic-clock convention in the backend quality spec. It merged
+  through PR #413 as `ac9e3fa187435a135c8ab425190f70ad3bf66670`.
+- Focused normal/race repetition, the export package normal/race suites, full
+  `make check`, document freshness checks, and both PR #413 CI matrices passed.
+  Post-merge main CI run `31410079441` passed every applicable job, including the
+  previously failing Backend job and PostgreSQL parity.
+- Release Please run `31410079475` succeeded and updated open release PR #386 to
+  `chore(main): release 0.46.0`. No GitHub Release, stable tag, Docker publish, or
+  Docker Hub description sync was triggered by this main merge.
+- Native `trellis-implement` dispatch completed the bounded fix successfully.
+  Two bounded `trellis-check` dispatch attempts did not return a result and had
+  no active test process when interrupted; the main session completed the same
+  spec review and full quality gate inline. This is an operational observation,
+  not a code or acceptance failure.
+- Local `main` was synchronized to `origin/main`; both delivery branches were
+  removed after tree-equivalence checks. The protected untracked hashes remained
+  unchanged, and Task 8 was not started.

@@ -27,9 +27,16 @@
     ".codex/config.toml",
     ".gitattributes"
   ],
-  "notes": "Independent maintenance task. Upgrade commit 828ebe0 is under review in PR #412; Task 7 is read-only and Task 8 must not start.",
+  "notes": "Independent maintenance task delivered by PR #412 and narrow post-merge CI dependency fix PR #413. Main CI and Release Please are green; no formal release or Docker publish occurred. Task 7 remained read-only and Task 8 did not start.",
   "meta": {
-    "delivery_status": "pr_open_ci_pending",
+    "delivery_status": "merged_post_merge_ci_green_closure_pending",
+    "merge_commit": "b068e9d3a3328fe0175ed93902eeee40ad20790f",
+    "dependency_fix_pr_url": "https://github.com/xiangnan0811/xirang/pull/413",
+    "dependency_fix_commit": "5abb48108a535f2f62e87233e427865943a1b02e",
+    "dependency_fix_merge_commit": "ac9e3fa187435a135c8ab425190f70ad3bf66670",
+    "post_merge_ci_run": "31410079441",
+    "release_please_run": "31410079475",
+    "closure_branch": "codex/trellis-0.6.14-upgrade-closure",
     "protected_dirty_paths": "go.mod,recovery/testdata/rsync_local_to_remote.json"
   }
 }
