@@ -8991,6 +8991,51 @@ checkpoint commit and session record leave only those two protected unrelated
 paths dirty. Push, pull request, CI, merge and release monitoring remain separate
 delivery decisions after the local checkpoint.
 
+## Tasks 1--7 checkpoint PR-CI remediation exception (2026-08-10)
+
+Checkpoint commits `fe4eb47` and `185b481` were pushed to the dedicated branch
+and opened as PR #410. Hosted CI then exposed four delivery-only failures that
+were not visible in the final local checkpoint gate:
+
+- the ordinary paired `000069` migration fixture required a real encryption
+  environment even though only the first-write case needs a decryptable
+  workspace locator;
+- the authorization winner race could surface SQLite busy from receipt, proof or
+  immutable-intent reads before the effect transaction and return
+  `ErrAuthorizationUnavailable`;
+- Worker image scanning rejected `golang.org/x/text v0.38.0` for
+  `CVE-2026-56852`, whose fixed version is `v0.39.0`;
+- `only-new-issues: true` made the backend lint action depend on a GitHub PR
+  patch that cannot be returned once the checkpoint diff exceeds 20,000 lines.
+
+The approved remediation stays on PR #410 and is limited to these paths:
+
+- existing 145-path manifest members:
+  `.github/workflows/ci.yml`,
+  `backend/internal/backupasset/recovery/service.go`,
+  `backend/internal/backupasset/recovery/service_test.go`, and
+  `backend/internal/database/backup_asset_migrations_integration_test.go`;
+- delivery-only dependency exceptions: `backend/go.mod` and `backend/go.sum`.
+
+The dependency exception permits only the `x/text v0.39.0` security upgrade and
+the `go mod tidy`-required `x/mod`/`x/tools` synchronization. It does not modify
+the root-level protected `go.mod`. The fixture correction may use a fixed valid
+test ciphertext for ordinary DDL-only rows. First-write behavior and the two
+worker-state behavior fixtures that load the locator through model hooks continue
+to use test-scoped real encryption. The authorization correction is a bounded,
+context-aware retry around pre-transaction reads with a three-stage regression
+selector. The workflow correction runs the same full-repository backend lint
+already required locally and removes only the oversized-PR patch dependency.
+
+Fresh focused/repeated/race, whole Recovery, full SQLite `000069`, module verify,
+vet, backend lint, full `make check`, format/diff, Trellis/JSON/JSONL, manifest,
+protected-hash and exact-stage gates must pass before the fix commit. The same
+branch is then pushed and PR #410 is monitored until every required check passes.
+Only after squash merge, post-merge automation disposition, local-main sync and
+topic-worktree cleanup may Task 8 begin. Child 13 remains `in_progress`, the
+parent remains `planning`, and the two protected unrelated paths remain excluded
+and byte-for-byte unchanged.
+
 ## Full A3 implementation authorization state
 
 This plan has been written after approval of PRD full-A3 requirements and

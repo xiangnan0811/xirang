@@ -5259,6 +5259,11 @@ func (fixture migrationFixture) test069InitialWorkerClaimHandoff(t *testing.T) {
 }
 
 func (fixture migrationFixture) test069WorkerClaimHeartbeatAndTakeover(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_MIGRATION_RECOVERY_WORKER_STATE_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+
 	_, sqlDB := fixture.openAt(t, backupAssetRecoveryVersion)
 	db := fixture.recoveryWorkerGorm(t, sqlDB)
 	now := time.Now().UTC().Truncate(time.Second)
@@ -5268,7 +5273,7 @@ func (fixture migrationFixture) test069WorkerClaimHeartbeatAndTakeover(t *testin
 		"d",
 		170,
 		now,
-		recoveryMigrationSeedOptions{claimableAttempt: true},
+		recoveryMigrationSeedOptions{claimableAttempt: true, decryptableWorkspace: true},
 	)
 	sourceLeaseID := recoveryMigrationOpaqueID(890001)
 	fixture.mustExec(t, sqlDB, `INSERT INTO recovery_point_leases
@@ -5812,11 +5817,17 @@ func (fixture migrationFixture) test069WorkerEvidenceBindings(t *testing.T) {
 }
 
 func (fixture migrationFixture) test069WorkerCancelQueued(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_MIGRATION_RECOVERY_WORKER_STATE_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+
 	_, sqlDB := fixture.openAt(t, backupAssetRecoveryVersion)
 	db := fixture.recoveryWorkerGorm(t, sqlDB)
 	now := time.Now().UTC().Truncate(time.Second)
 	aggregate := fixture.seedRecoveryMigrationAggregateWithOptions(
-		t, sqlDB, "g", 176, now, recoveryMigrationSeedOptions{claimableAttempt: true},
+		t, sqlDB, "g", 176, now,
+		recoveryMigrationSeedOptions{claimableAttempt: true, decryptableWorkspace: true},
 	)
 	sourceLeaseID := recoveryMigrationOpaqueID(899201)
 	fixture.mustExec(t, sqlDB, `INSERT INTO recovery_point_leases
@@ -8773,6 +8784,7 @@ type recoveryMigrationSeedOptions struct {
 	initialOperationHistory bool
 	purgeablePlan           bool
 	firstWrite              bool
+	decryptableWorkspace    bool
 	workspacePhase          string
 }
 
@@ -8945,9 +8957,13 @@ func (fixture migrationFixture) seedRecoveryMigrationAggregateWithOptions(
 	targetMode := "isolated"
 	conflictPolicy := "fail_on_conflict"
 	workspaceRelativeLocator := "jobs/" + aggregate.JobID
-	workspaceLocator, err := secure.EncryptString(workspaceRelativeLocator)
-	if err != nil {
-		t.Fatalf("encrypt %s recovery workspace locator: %v", fixture.engine, err)
+	workspaceLocator := "enc:v2:workspace"
+	if options.firstWrite || options.decryptableWorkspace {
+		encryptedWorkspaceLocator, encryptErr := secure.EncryptString(workspaceRelativeLocator)
+		if encryptErr != nil {
+			t.Fatalf("encrypt %s recovery workspace locator: %v", fixture.engine, encryptErr)
+		}
+		workspaceLocator = encryptedWorkspaceLocator
 	}
 	workspaceBindingDigest := recoveryMigrationWorkspaceBindingDigest(
 		aggregate.JobID,

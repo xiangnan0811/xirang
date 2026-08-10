@@ -1500,6 +1500,46 @@ func TestRecoveryAuthorizationReceiptConcurrentSQLiteWinner(t *testing.T) {
 	})
 }
 
+func TestRecoveryAuthorizationReceiptRetriesSQLiteBusyDuringPretransactionReads(t *testing.T) {
+	for _, testCase := range []struct {
+		name              string
+		table             string
+		evidenceQueryCall int32
+	}{
+		{name: "receipt lookup", table: (model.BackupAssetRecoveryEvidence{}).TableName(), evidenceQueryCall: 1},
+		{name: "proof lookup", table: (model.BackupAssetRecoveryEvidence{}).TableName(), evidenceQueryCall: 2},
+		{name: "intent binding", table: (model.BackupAssetRecoveryPlan{}).TableName()},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptWriteAuthorize)
+			callbackName := "recovery:authorization-pretransaction-busy:" + strings.ReplaceAll(t.Name(), "/", "_")
+			var evidenceQueries atomic.Int32
+			var injected atomic.Bool
+			if err := fixture.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+				if tx.Statement == nil || tx.Statement.Table != testCase.table || injected.Load() {
+					return
+				}
+				if testCase.evidenceQueryCall != 0 && evidenceQueries.Add(1) != testCase.evidenceQueryCall {
+					return
+				}
+				injected.Store(true)
+				_ = tx.AddError(errors.New("database table is locked"))
+			}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = fixture.db.Callback().Query().Remove(callbackName) })
+
+			result, err := fixture.service.Authorize(context.Background(), fixture.request)
+			if err != nil {
+				t.Fatalf("authorization did not retry transient pre-transaction read: %v", err)
+			}
+			if !injected.Load() || result.ReceiptID == "" || result.GrantID == "" {
+				t.Fatalf("authorization retry result=%+v injected=%t", result, injected.Load())
+			}
+		})
+	}
+}
+
 func TestRecoveryAuthorizationReceiptConcurrentPostgresWinner(t *testing.T) {
 	t.Run("SameIntentReplay", func(t *testing.T) {
 		fixture := newAuthorizationReceiptPostgresServiceFixture(t, AuthorizationReceiptWriteAuthorize)

@@ -8964,3 +8964,100 @@ files and 1388 tests passed; backend build and the TypeScript/Vite production
 build succeeded. Required-real-PostgreSQL evidence remains the V14 no-skip
 one-use-fixture run above; the removed fixture was not recreated merely for the
 local commit gate.
+
+## Tasks 1--7 checkpoint PR #410 hosted-CI remediation (2026-08-10)
+
+The local checkpoint was committed as `fe4eb47` and its session record as
+`185b481`, then pushed on `codex/backup-assets-controlled-recovery` and opened as
+PR #410. The PR remains mergeable but blocked by required checks while this
+remediation is uncommitted. Hosted run `31344568520` provides the retained RED
+evidence:
+
+```text
+Backend lint action
+  failed to fetch pull request patch: diff exceeded 20,000 lines
+
+Backend Test & Build
+  TestRecoveryAuthorizationReceiptConcurrentSQLiteWinner/SameIntentReplay
+  one caller returned recovery authorization is unavailable
+  TestBackupAssetMigration069SQLite ordinary fixture rows
+  failed because DATA_ENCRYPTION_KEY was absent
+
+PostgreSQL Migration Parity
+  TestBackupAssetMigration069Postgres ordinary fixture rows
+  failed for the same absent DATA_ENCRYPTION_KEY requirement
+
+Asset Worker Build & Scan (amd64 and arm64)
+  golang.org/x/text v0.38.0 / CVE-2026-56852 / HIGH
+  fixed version 0.39.0
+```
+
+The narrow worktree correction is six tracked files. The existing manifest owns
+the workflow, Recovery service/test and paired migration fixture paths. Only
+`backend/go.mod` and `backend/go.sum` are added as delivery-only dependency
+exceptions. The root-level protected `go.mod` and
+`recovery/testdata/rsync_local_to_remote.json` remain unrelated and excluded.
+
+Implementation disposition before the final fresh gate:
+
+- ordinary DDL-only migration rows use fixed valid test ciphertext; first-write
+  and worker behavior rows that traverse model decryption use test-scoped real
+  ciphertext from `secure.EncryptString`;
+- authorization receipt, proof and immutable intent reads share the existing
+  bounded SQLite conflict retry policy, preserve caller cancellation and expose
+  only the existing closed public errors;
+- a three-row regression injects a transient lock at receipt, proof and intent
+  lookup respectively;
+- `golang.org/x/text` is upgraded to `v0.39.0`, with tidy-required `x/mod
+  v0.37.0` and `x/tools v0.47.0` synchronization;
+- backend lint no longer requests a GitHub PR patch and instead runs the full
+  repository lint gate.
+
+The retained pre-bookkeeping worktree checks passed the full SQLite `000069`
+fixture without an encryption environment, the real first-write selector,
+authorization focused normal `-count=100` and race `-count=20`, and `go mod
+verify`. These results are supporting evidence only; the final pre-commit gate is
+rerun after this Trellis record and recorded separately below. No Task 8,
+PostgreSQL fixture creation, stage, fix commit, push, merge or cleanup action has
+been taken by this remediation checkpoint yet.
+
+The first fresh full-project gate found one over-broad fixture assumption and
+exited nonzero. `TestBackupAssetRecoveryWorkerBehaviorSQLite` and
+`TestBackupAssetMigration069WorkerCancelQueuedSQLite` load the job through GORM,
+so the model hook tried to decrypt the fixed DDL ciphertext and returned the
+expected `解密数据格式错误`. This was a genuine regression RED in the pending CI
+fixture correction, not a Task 7 product defect.
+
+Backward tracing showed that every pure SQL migration selector only needs a
+schema-valid opaque ciphertext, while exactly those two non-first-write behavior
+fixtures cross the model-decryption boundary. The minimal correction adds a
+private seed option only for that boundary and gives the two tests a scoped fake
+test key; it does not make ordinary DDL fixtures depend on environment secrets or
+change first-write product data. Fresh GREEN evidence is:
+
+```text
+authorization busy/winner normal -count=100                 PASS (13.526s)
+authorization busy/winner race -count=20                    PASS (10.802s)
+full SQLite 000069 + paired files, encryption env unset     PASS (9.331s)
+whole Recovery normal                                       PASS (35.504s)
+whole Recovery race                                         PASS (110.885s)
+go mod verify                                                PASS
+go vet ./...                                                 PASS
+make lint-backend                                            PASS (0 issues)
+owned gofmt -d                                               PASS (empty)
+git diff --check                                             PASS
+
+worker claim + queued-cancel regression selectors           PASS (0.331s)
+full SQLite 000069 + paired files after fixture refinement  PASS (7.562s)
+fresh make check                                             PASS
+  backend lint                                               0 issues
+  backend packages                                           all passed
+  frontend lint                                              0 errors, 1 pre-existing warning
+  frontend tests                                             168 files / 1388 tests passed
+  backend build                                              passed
+  TypeScript/Vite production build                           passed
+```
+
+Required real PostgreSQL and Worker image scan closure remains assigned to the
+hosted PR run after the fix commit is pushed. The local run did not create or
+restart PostgreSQL infrastructure and did not claim local Trivy evidence.

@@ -1811,7 +1811,7 @@ func (service *AuthorizationService) ReplayAuthorization(
 	if request.Operation == AuthorizationReceiptExecute {
 		return service.loadAuthorizationReplay(ctx, lookup)
 	}
-	normalized, err := service.normalizeAuthorization(ctx, request, false)
+	normalized, err := service.normalizeAuthorizationWithRetry(ctx, request, false)
 	if err != nil {
 		return RecoveryAuthorizationResult{}, false, err
 	}
@@ -1834,9 +1834,14 @@ func (service *AuthorizationService) Authorize(
 	if err != nil {
 		return RecoveryAuthorizationResult{}, err
 	}
-	receiptExists, receiptErr := authorizationReceiptKeyExists(ctx, service.db, replayLookup)
+	var receiptExists bool
+	receiptErr := retryAuthorizationRead(ctx, func() error {
+		var readErr error
+		receiptExists, readErr = authorizationReceiptKeyExists(ctx, service.db, replayLookup)
+		return readErr
+	})
 	if receiptErr != nil {
-		return RecoveryAuthorizationResult{}, ErrAuthorizationUnavailable
+		return RecoveryAuthorizationResult{}, publicAuthorizationReadError(ctx, receiptErr)
 	}
 	if receiptExists {
 		if request.Operation == AuthorizationReceiptExecute {
@@ -1844,7 +1849,7 @@ func (service *AuthorizationService) Authorize(
 				return replay, replayErr
 			}
 		} else {
-			replayNormalized, normalizeErr := service.normalizeAuthorization(ctx, request, false)
+			replayNormalized, normalizeErr := service.normalizeAuthorizationWithRetry(ctx, request, false)
 			if normalizeErr != nil {
 				return RecoveryAuthorizationResult{}, normalizeErr
 			}
@@ -1859,15 +1864,21 @@ func (service *AuthorizationService) Authorize(
 	if request.Proof.ExpiresAt.UTC().After(request.Session.ExpiresAt.UTC()) {
 		return RecoveryAuthorizationResult{}, ErrAuthorizationProofLifetime
 	}
-	if used, proofErr := authorizationProofDigestExists(ctx, service.db, replayLookup.proofDigest); proofErr != nil {
-		return RecoveryAuthorizationResult{}, ErrAuthorizationUnavailable
-	} else if used {
+	var proofUsed bool
+	proofErr := retryAuthorizationRead(ctx, func() error {
+		var readErr error
+		proofUsed, readErr = authorizationProofDigestExists(ctx, service.db, replayLookup.proofDigest)
+		return readErr
+	})
+	if proofErr != nil {
+		return RecoveryAuthorizationResult{}, publicAuthorizationReadError(ctx, proofErr)
+	} else if proofUsed {
 		if request.Operation == AuthorizationReceiptExecute {
 			if replay, found, replayErr := service.loadAuthorizationReplay(ctx, replayLookup); found || replayErr != nil {
 				return replay, replayErr
 			}
 		} else {
-			replayNormalized, normalizeErr := service.normalizeAuthorization(ctx, request, false)
+			replayNormalized, normalizeErr := service.normalizeAuthorizationWithRetry(ctx, request, false)
 			if normalizeErr == nil {
 				if replay, found, replayErr := service.loadAuthorizationReplay(ctx, replayNormalized); found || replayErr != nil {
 					return replay, replayErr
@@ -1876,7 +1887,7 @@ func (service *AuthorizationService) Authorize(
 		}
 		return RecoveryAuthorizationResult{}, ErrAuthorizationProofUsed
 	}
-	normalized, err := service.normalizeAuthorization(ctx, request, true)
+	normalized, err := service.normalizeAuthorizationWithRetry(ctx, request, true)
 	if err != nil {
 		return RecoveryAuthorizationResult{}, err
 	}
@@ -1976,6 +1987,55 @@ func isAuthorizationRetryable(err error) bool {
 	return isPlanDuplicateKey(err) || isPlanDatabaseBusy(err)
 }
 
+func retryAuthorizationRead(ctx context.Context, read func() error) error {
+	for attempt := 0; attempt < authorizationRetryAttempts; attempt++ {
+		err := read()
+		if err == nil {
+			return nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if !isAuthorizationRetryable(err) {
+			return err
+		}
+		if attempt+1 == authorizationRetryAttempts {
+			return ErrAuthorizationUnavailable
+		}
+		if err := waitForPlanCreateRetry(ctx, attempt); err != nil {
+			return err
+		}
+	}
+	return ErrAuthorizationUnavailable
+}
+
+func publicAuthorizationReadError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if isAuthorizationPublicError(err) {
+		return err
+	}
+	return ErrAuthorizationUnavailable
+}
+
+func (service *AuthorizationService) normalizeAuthorizationWithRetry(
+	ctx context.Context,
+	request RecoveryAuthorizationRequest,
+	requireProof bool,
+) (normalizedRecoveryAuthorization, error) {
+	var normalized normalizedRecoveryAuthorization
+	err := retryAuthorizationRead(ctx, func() error {
+		var readErr error
+		normalized, readErr = service.normalizeAuthorization(ctx, request, requireProof)
+		return readErr
+	})
+	if err != nil {
+		return normalizedRecoveryAuthorization{}, publicAuthorizationReadError(ctx, err)
+	}
+	return normalized, nil
+}
+
 func (service *AuthorizationService) loadAuthorizationReplay(
 	ctx context.Context,
 	normalized normalizedRecoveryAuthorization,
@@ -2038,6 +2098,9 @@ func (service *AuthorizationService) normalizeAuthorization(
 	if err != nil {
 		if errors.Is(err, ErrAuthorizationDenied) {
 			return normalizedRecoveryAuthorization{}, ErrAuthorizationDenied
+		}
+		if isAuthorizationRetryable(err) {
+			return normalizedRecoveryAuthorization{}, err
 		}
 		return normalizedRecoveryAuthorization{}, ErrAuthorizationUnavailable
 	}

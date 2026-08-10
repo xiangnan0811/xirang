@@ -15,8 +15,8 @@
   "branch": "codex/backup-assets-controlled-recovery",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
-  "pr_url": null,
+  "commit": "185b481b9463f694eeca0756cb8a0f5262e1a8f4",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/410",
   "subtasks": [],
   "children": [],
   "parent": "07-12-backup-data-explorer-design",
@@ -280,16 +280,34 @@
         "next": "task_8_runtime_main_requires_its_own_authorized_plan_no_stage_commit_push_pr_or_ci_inside_v14"
       },
       "tasks_1_to_7_checkpoint_delivery": {
-        "status": "user_approved_fresh_make_check_passed_pending_local_commit",
+        "status": "pr_410_ci_remediation_fresh_local_gates_passed_pending_exact_stage_and_fix_commit",
         "date": "2026-08-10",
-        "scope": "cumulative_tasks_1_to_7_manifest_dirty_91_plus_r65_foundation_exception_2",
+        "scope": "cumulative_tasks_1_to_7_manifest_dirty_91_plus_r65_foundation_exception_2_plus_pr_ci_delivery_dependency_exception_2",
+        "work_commit": "fe4eb4764b72786c53846f3e391e8a51e061b266",
+        "journal_commit": "185b481b9463f694eeca0756cb8a0f5262e1a8f4",
+        "pr_url": "https://github.com/xiangnan0811/xirang/pull/410",
         "excluded_protected_paths": [
           "go.mod",
           "recovery/testdata/rsync_local_to_remote.json"
         ],
         "pre_stage_accounting": "dirty_95_stage_allow_93_protected_2_outside_0_staged_0",
+        "ci_remediation_paths": [
+          ".github/workflows/ci.yml",
+          "backend/go.mod",
+          "backend/go.sum",
+          "backend/internal/backupasset/recovery/service.go",
+          "backend/internal/backupasset/recovery/service_test.go",
+          "backend/internal/database/backup_asset_migrations_integration_test.go"
+        ],
+        "delivery_dependency_exceptions": [
+          "backend/go.mod",
+          "backend/go.sum"
+        ],
+        "hosted_ci_red": "run_31344568520_oversized_pr_patch_lint_failure_sqlite_authorization_pretransaction_busy_migration_fixture_requires_missing_encryption_environment_worker_trivy_cve_2026_56852_x_text_v0_38_0",
+        "local_fix": "implemented_uncommitted_full_make_check_found_and_closed_fixture_model_decryption_boundary_regression_pending_exact_stage_fix_commit_and_push",
+        "local_verification": "authorization_normal_count_100_13_526s_race_count_20_10_802s_full_sqlite_000069_unset_encryption_9_331s_then_7_562s_worker_behavior_regressions_0_331s_whole_recovery_normal_35_504s_race_110_885s_go_mod_verify_vet_backend_lint_zero_owned_gofmt_diff_and_fresh_make_check_passed_frontend_168_files_1388_tests_2026_08_10",
         "ordering": "finish_local_checkpoint_and_session_record_leave_only_protected_dirty_paths_before_task_8",
-        "boundary": "child_13_not_archived_tasks_8_to_12_push_pr_ci_merge_release_still_open"
+        "boundary": "child_13_not_archived_tasks_8_to_12_fix_commit_push_pr_ci_merge_post_merge_main_sync_and_cleanup_still_open"
       }
     },
     "task_4_b1_scope_amendment": {

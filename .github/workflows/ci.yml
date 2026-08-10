@@ -46,7 +46,9 @@ jobs:
         with:
           version: v2.11.4
           working-directory: backend
-          only-new-issues: true
+          # Full-repository lint avoids GitHub's 20,000-line PR patch limit for
+          # large checkpoint deliveries while preserving the stricter local gate.
+          only-new-issues: false
 
       - name: Download modules
         run: go mod download
