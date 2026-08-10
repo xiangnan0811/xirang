@@ -7222,7 +7222,10 @@ func TestPersistentWorkerPublishReadyRejectsAuthorityExpiredAfterSourceLocks(t *
 		JobID: fixture.jobID, AttemptID: fixture.attemptID, FenceToken: fixture.fenceToken, ArtifactID: fixture.artifactID,
 	})
 	if !barrier.fired {
-		t.Fatal("publish-ready source fence barrier was not reached")
+		t.Fatalf(
+			"publish-ready source fence barrier was not reached: publish error=%v artifact_authenticated=%t transaction_pool=%T",
+			err, barrier.artifactAuthenticated, barrier.transactionPool,
+		)
 	}
 	if barrier.err != nil {
 		t.Fatalf("publish-ready source fence barrier error: %v", barrier.err)
@@ -11608,7 +11611,7 @@ func createPersistentSealedFixtureWithProfileAndSourceAuthority(
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock := time.Now().UTC().Truncate(time.Second)
+	clock := harness.service.now().UTC()
 	coordinator, err := NewAttemptCoordinator(harness.db, func() time.Time { return clock })
 	if err != nil {
 		t.Fatal(err)

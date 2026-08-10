@@ -105,6 +105,78 @@ fallbacks when existing tests or call sites do not yet inject a dispatcher.
   broader changes also run `cd backend && go build ./...` and `make lint-backend`
   when `golangci-lint` is available.
 
+### Scenario: Deterministic logical clocks in backend test fixtures
+
+#### 1. Scope / Trigger
+
+- Trigger: a test fixture creates persisted deadlines, leases, TTLs, retries, or
+  state transitions through a service/component with an injected `Now` function.
+- Applies when later fixture setup or the test derives more timestamps from that
+  logical instant.
+
+#### 2. Signatures
+
+- Injected clock: `Now func() time.Time`, `service.now()`, or an equivalent
+  package-owned clock function.
+- Fixture clock: a stored `time.Time` or mutable variable returned by the injected
+  function.
+
+#### 3. Contracts
+
+- A fixture must use one logical time source for related persisted rows. Reuse the
+  injected clock after construction or sample the base instant once before wiring
+  every dependency.
+- Do not call `time.Now()` again to derive a lease, expiry, or deadline that must
+  be ordered against rows created with the fixture clock. Crossing a precision
+  boundary can create an impossible tuple even when the test usually runs within
+  the same wall-clock tick.
+- To test time progression, mutate a test-owned clock variable deliberately and
+  keep all participating services bound to that variable.
+
+#### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Related rows use the same frozen fixture clock | Persisted ordering and deadline invariants remain deterministic. |
+| A second real-time sample crosses a second/millisecond boundary | Treat the fixture as invalid; do not weaken production validation or add retries. |
+| A test intentionally advances time | Advance the injected test clock explicitly and assert the resulting boundary state. |
+| A timing failure appears only under repetition or race load | Reproduce the boundary deterministically, then run focused `-count` and `-race` checks after the fix. |
+
+#### 5. Good / Base / Bad Cases
+
+- Good: create the service with a frozen clock and store `clock := service.now()`
+  for later lease/expiry calculations.
+- Base: sample `clock := time.Now().UTC().Truncate(time.Second)` once, then inject
+  that exact value into every fixture dependency.
+- Bad: create a job with an injected frozen clock, call `time.Now()` later, and
+  derive an attempt expiry that can exceed the job deadline by one clock tick.
+
+#### 6. Tests Required
+
+- Preserve a deterministic regression path for the discovered clock boundary.
+- For timing-sensitive fixes, run the focused test repeatedly in normal and race
+  modes; do not rely on one passing run or a CI rerun.
+- Keep production invariant checks strict. Repair the fixture unless evidence
+  proves the executable contract itself is wrong.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+harness := newServiceHarness(t) // service persisted rows with harness.service.now()
+clock := time.Now().UTC().Truncate(time.Second)
+expiresAt := clock.Add(time.Hour)
+```
+
+Correct:
+
+```go
+harness := newServiceHarness(t)
+clock := harness.service.now().UTC()
+expiresAt := clock.Add(time.Hour)
+```
+
 ### Scenario: Asynchronous task-run state assertions
 
 #### 1. Scope / Trigger
