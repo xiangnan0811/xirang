@@ -1387,7 +1387,11 @@ Fixed PR #410 hosted-CI gates for oversized lint patches, SQLite authorization p
 
 ### Main Changes
 
-(Add details)
+- Closed the oversized-patch lint dependency, migration fixture encryption
+  boundary, authorization/plan winner races and Worker dependency scan gate on
+  PR #410.
+- Preserved the two protected historical untracked paths throughout every fix,
+  stage and hosted-CI rerun.
 
 ### Git Commits
 
@@ -1397,15 +1401,18 @@ Fixed PR #410 hosted-CI gates for oversized lint patches, SQLite authorization p
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] Final pull-request run `31353319143` and rerun-complete push run
+  `31353316583` passed all required checks.
+- [OK] Fresh local focused normal/race, whole Recovery normal/race,
+  `env -u NODE_ENV make check`, vet, backend lint, format and diff gates passed.
 
 ### Status
 
-[OK] **Completed**
+[OK] **PR remediation completed and merged through PR #410**
 
 ### Next Steps
 
-- None - task complete
+- Complete Task 7 post-merge bookkeeping before starting Task 8.
 
 
 ## Session 35: Task 7 delivery closure
@@ -1420,7 +1427,12 @@ Recorded PR #410 squash merge, green hosted and post-merge automation, no formal
 
 ### Main Changes
 
-(Add details)
+- Recorded PR #410 final commit `a873b49`, squash commit `def0086`, hosted CI,
+  main CI and Release Please outcomes in Child and parent Trellis memory.
+- Recorded that Release Please updated release PR #386 without creating a stable
+  release, so image and Docker Hub description publication were not expected.
+- Kept Child 13 `in_progress`, parent `planning`, program delivery `12/15`, and
+  both protected historical files excluded and byte-identical.
 
 ### Git Commits
 
@@ -1430,12 +1442,17 @@ Recorded PR #410 squash merge, green hosted and post-merge automation, no formal
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] Child/parent `task.py validate`, task JSON and JSONL parsing passed.
+- [OK] `git diff --check`, exact changed-path/staged-path checks and protected
+  SHA-256 checks passed.
+- [OK] GitHub PR, required checks, main CI, Release Please, release list and
+  open release PR disposition were re-read from hosted state.
 
 ### Status
 
-[OK] **Completed**
+[OK] **Task 7 delivered; Child 13 remains in progress**
 
 ### Next Steps
 
-- None - task complete
+- Merge this bookkeeping PR, monitor its post-merge automation, resynchronize
+  local `main`, remove the bookkeeping branch, then begin Task 8 separately.
