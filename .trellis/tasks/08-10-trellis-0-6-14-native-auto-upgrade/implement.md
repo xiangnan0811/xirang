@@ -73,8 +73,9 @@ levels before completing the repository PR workflow.
 - [x] Review whether any project spec needs updating; no update is needed because
   no application executable contract changed and Trellis's managed meta docs
   already describe the new platform behavior.
-- [ ] Stage only reviewed maintenance-task paths and create a conventional commit.
-- [ ] Push the topic branch and create a PR targeting `main`.
+- [x] Stage only reviewed maintenance-task paths and create conventional commit
+  `828ebe0`.
+- [x] Push the topic branch and create PR #412 targeting `main`.
 - [ ] Monitor every required CI job; fix and push failures on this branch until
   all required checks pass.
 - [ ] Squash merge the PR, then monitor Release Please and applicable post-merge

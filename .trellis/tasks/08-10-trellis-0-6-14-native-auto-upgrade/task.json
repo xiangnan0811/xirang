@@ -12,11 +12,11 @@
   "assignee": "weibo",
   "createdAt": "2026-08-10",
   "completedAt": null,
-  "branch": null,
-  "base_branch": "codex/trellis-0.6.14-upgrade",
+  "branch": "codex/trellis-0.6.14-upgrade",
+  "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
-  "pr_url": null,
+  "commit": "828ebe0b28848f72c8df9476fc90c2b121e830f4",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/412",
   "subtasks": [],
   "children": [],
   "parent": null,
@@ -27,6 +27,9 @@
     ".codex/config.toml",
     ".gitattributes"
   ],
-  "notes": "Independent maintenance task. Task 7 is read-only and Task 8 must not start.",
-  "meta": {}
+  "notes": "Independent maintenance task. Upgrade commit 828ebe0 is under review in PR #412; Task 7 is read-only and Task 8 must not start.",
+  "meta": {
+    "delivery_status": "pr_open_ci_pending",
+    "protected_dirty_paths": "go.mod,recovery/testdata/rsync_local_to_remote.json"
+  }
 }
