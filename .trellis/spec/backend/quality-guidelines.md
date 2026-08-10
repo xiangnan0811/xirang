@@ -177,6 +177,70 @@ clock := harness.service.now().UTC()
 expiresAt := clock.Add(time.Hour)
 ```
 
+### Scenario: Timing-safe context cancellation assertions
+
+#### 1. Scope / Trigger
+
+- Trigger: a test exercises context-aware retry or backoff behavior with a
+  wall-clock deadline and records operation attempts.
+
+#### 2. Signatures
+
+- Cancellation boundary: `context.WithTimeout` or `context.WithCancel`.
+- Retry boundary: a bounded helper that checks `ctx.Done()` between attempts.
+- Observation: an atomic or test-owned attempt counter.
+
+#### 3. Contracts
+
+- A wall-clock deadline may expire before, during, or after the first operation.
+  Without test-controlled synchronization, do not require a second attempt.
+- A cancellation regression test may require at least one attempted operation,
+  the expected `context` error, and fewer attempts than the retry cap.
+- If the exact cancellation phase or attempt count is part of the contract, use
+  a test-controlled channel or explicit cancel signal instead of a millisecond
+  timing assumption.
+
+#### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Deadline expires during the first operation | One attempt plus the expected context error is valid. |
+| Cancellation is ignored | The helper reaches its retry cap; the test fails. |
+| The retryable operation is never reached | Zero attempts; the test fails. |
+| Exact attempt ordering is required | Synchronize the boundary before asserting the count. |
+
+#### 5. Good / Base / Bad Cases
+
+- Good: assert `attempts > 0 && attempts < retryCap` and
+  `errors.Is(err, context.DeadlineExceeded)` under an unsynchronized deadline.
+- Base: cancel through a test-owned signal and assert an exact attempt count.
+- Bad: require `attempts >= 2` only because the nominal deadline is longer than
+  the first backoff interval.
+
+#### 6. Tests Required
+
+- Run timing-sensitive cancellation tests repeatedly in normal and race modes.
+- Preserve both lower (`> 0`) and upper (`< retryCap`) attempt bounds so the test
+  still proves that the conflict path ran and cancellation stopped the loop.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+if attempts.Load() < 2 { // assumes the first operation finishes before 8 ms
+    t.Fatal("retry did not start")
+}
+```
+
+Correct:
+
+```go
+if got := attempts.Load(); got == 0 || got >= int32(retryCap) {
+    t.Fatalf("cancellation attempts=%d", got)
+}
+```
+
 ### Scenario: Asynchronous task-run state assertions
 
 #### 1. Scope / Trigger
