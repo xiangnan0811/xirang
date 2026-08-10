@@ -1,0 +1,3 @@
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Required branch, PR, CI, post-merge, and cleanup workflow for repository changes."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Requires searching and preserving existing configuration before changing values."}
+{"file":".trellis/tasks/08-10-trellis-0-6-14-native-auto-upgrade/research/upgrade-baseline.md","reason":"Records the approved mode, customization inventory, and protected dirty-file hashes."}
