@@ -9070,6 +9070,36 @@ checks, squash merge only after GREEN, monitor post-merge automation, sync local
 `main`, record closure through the repository workflow and clean the topic branch
 before Task 8.
 
+## Tasks 1--7 checkpoint PR #410 third hosted-CI remediation (2026-08-10)
+
+The pull-request merge-ref run `31351417378` retained one Backend Test & Build
+failure after the second correction. The real concurrent selector
+`TestPlanCreateConcurrentDifferentIntentElectsOneWinner` showed that a losing
+plan creator could finish its last transaction attempt and its immediate replay
+read before the winning transaction committed, then return
+`ErrRecoveryPlanUnavailable` even though the durable winner became visible
+immediately afterward.
+
+The bounded third correction remains limited to existing manifest members
+`backend/internal/backupasset/recovery/service.go` and
+`backend/internal/backupasset/recovery/service_test.go`. A deterministic
+regression blocks the winner at its commit seam, forces the loser's final replay
+read to observe the uncommitted winner, and releases the winner only after that
+read. It was genuinely RED against `4e5072b`. Plan creation now performs one
+additional bounded, context-aware durable-winner observation phase after normal
+transaction retries are exhausted; it preserves the existing public conflict,
+unavailable and context-cancellation identities and does not change schema,
+migrations, dependencies, runtime or APIs.
+
+Fresh exact normal/race repetition, whole Recovery normal/race, backend lint,
+all backend/frontend tests, builds and full `make check` must pass before the
+exact fix commit. Stage only the two product/test paths plus this Trellis
+evidence and metadata. Keep the root `go.mod` and
+`recovery/testdata/rsync_local_to_remote.json` excluded at their frozen hashes,
+push the same PR, and monitor every required check before squash merge. Task 8
+remains stopped through post-merge automation disposition, local-main sync and
+Task 7 delivery cleanup.
+
 ## Full A3 implementation authorization state
 
 This plan has been written after approval of PRD full-A3 requirements and

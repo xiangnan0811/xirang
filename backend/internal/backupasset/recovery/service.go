@@ -144,6 +144,7 @@ func (service *PlanService) CreatePlan(ctx context.Context, request CreatePlanRe
 	if err != nil {
 		return CreatePlanResult{}, err
 	}
+	keyDigest := planIdempotencyKeyDigest(normalized.RequesterID, normalized.Endpoint, normalized.IdempotencyKey)
 
 	for attempt := 0; attempt < planCreateRetryAttempts; attempt++ {
 		var result CreatePlanResult
@@ -162,7 +163,6 @@ func (service *PlanService) CreatePlan(ctx context.Context, request CreatePlanRe
 		if !errors.Is(err, errPlanIdempotencyRace) && !errors.Is(err, errPlanDatabaseBusy) {
 			return CreatePlanResult{}, publicPlanCreateError(ctx, err)
 		}
-		keyDigest := planIdempotencyKeyDigest(normalized.RequesterID, normalized.Endpoint, normalized.IdempotencyKey)
 		replay, found, replayErr := loadPlanReplayTx(
 			ctx, service.db, normalized.RequesterID, normalized.Endpoint, keyDigest,
 		)
@@ -174,6 +174,13 @@ func (service *PlanService) CreatePlan(ctx context.Context, request CreatePlanRe
 			return CreatePlanResult{}, publicPlanCreateError(ctx, replayErr)
 		}
 		if attempt+1 == planCreateRetryAttempts {
+			replay, found, replayErr = waitForPlanCreateWinner(ctx, service.db, normalized, keyDigest)
+			if replayErr != nil {
+				return CreatePlanResult{}, publicPlanCreateError(ctx, replayErr)
+			}
+			if found {
+				return planCreateResultFromReplay(normalized, replay)
+			}
 			break
 		}
 		if err := waitForPlanCreateRetry(ctx, attempt); err != nil {
@@ -181,6 +188,30 @@ func (service *PlanService) CreatePlan(ctx context.Context, request CreatePlanRe
 		}
 	}
 	return CreatePlanResult{}, ErrRecoveryPlanUnavailable
+}
+
+func waitForPlanCreateWinner(
+	ctx context.Context,
+	db *gorm.DB,
+	request CreatePlanRequest,
+	keyDigest string,
+) (planReplayRow, bool, error) {
+	for attempt := 0; attempt < planCreateRetryAttempts; attempt++ {
+		if err := waitForPlanCreateRetry(ctx, attempt); err != nil {
+			return planReplayRow{}, false, err
+		}
+		replay, found, err := loadPlanReplayTx(ctx, db, request.RequesterID, request.Endpoint, keyDigest)
+		if err == nil {
+			if found {
+				return replay, true, nil
+			}
+			continue
+		}
+		if !errors.Is(err, errPlanIdempotencyRace) && !errors.Is(err, errPlanDatabaseBusy) {
+			return planReplayRow{}, false, err
+		}
+	}
+	return planReplayRow{}, false, nil
 }
 
 // CreatePlanTx performs the plan write inside a caller-owned transaction. A

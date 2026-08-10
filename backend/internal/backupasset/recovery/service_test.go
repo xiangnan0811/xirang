@@ -3919,6 +3919,116 @@ func TestPlanCreateRetryExhaustionResolvesDurableWinner(t *testing.T) {
 	assertPlanCreationRows(t, fixture.db, len(fixture.request.Selection.AssetRefs))
 }
 
+func TestPlanCreateRetryExhaustionWaitsForCommittingWinner(t *testing.T) {
+	fixture := newPlanServiceTestFixture(t, false)
+	loserRequest := cloneCreatePlanRequest(fixture.request)
+	loserRequest.Plan.Binding.CapabilityRevision = "capability-revision-committing-winner-loser"
+	contextKey := &struct{ name string }{name: "plan-committing-winner"}
+	loserCtx := context.WithValue(context.Background(), contextKey, true)
+	callbackPrefix := "recovery:plan-committing-winner:" + strings.ReplaceAll(t.Name(), "/", "_")
+	var transactionReplayQueries atomic.Int32
+	var winnerCommitOnce sync.Once
+	var releaseWinnerOnce sync.Once
+	winnerCommitEntered := make(chan struct{})
+	releaseWinner := make(chan struct{})
+	replayObserved := make(chan struct{})
+	t.Cleanup(func() { releaseWinnerOnce.Do(func() { close(releaseWinner) }) })
+
+	winnerService, err := NewPlanService(PlanServiceDependencies{
+		DB: fixture.db, Now: func() time.Time { return fixture.now },
+		TargetRootResolver: fixture.resolver,
+		beforePersist: func(stage planCreateStage, _ int) error {
+			if stage != planCreateBeforeCommit {
+				return nil
+			}
+			winnerCommitOnce.Do(func() { close(winnerCommitEntered) })
+			<-releaseWinner
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type winnerOutcome struct {
+		result CreatePlanResult
+		err    error
+	}
+	winner := make(chan winnerOutcome, 1)
+	beforeCallback := callbackPrefix + ":before"
+	if err := fixture.db.Callback().Query().Before("gorm:query").Register(beforeCallback, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Context.Value(contextKey) != true ||
+			tx.Statement.Table != (model.BackupAssetRecoveryPlan{}).TableName() {
+			return
+		}
+		if _, inTransaction := tx.Statement.ConnPool.(*sql.Tx); !inTransaction {
+			return
+		}
+		attempt := transactionReplayQueries.Add(1)
+		_ = tx.AddError(errors.New("database table is locked"))
+		if attempt != planCreateRetryAttempts {
+			return
+		}
+		go func() {
+			result, err := winnerService.CreatePlan(context.Background(), fixture.request)
+			winner <- winnerOutcome{result: result, err: err}
+		}()
+		select {
+		case <-winnerCommitEntered:
+		case <-time.After(5 * time.Second):
+			_ = tx.AddError(errors.New("plan race winner did not reach commit"))
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	afterCallback := callbackPrefix + ":after"
+	if err := fixture.db.Callback().Query().After("gorm:query").Register(afterCallback, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Context.Value(contextKey) != true ||
+			tx.Statement.Table != (model.BackupAssetRecoveryPlan{}).TableName() ||
+			transactionReplayQueries.Load() != planCreateRetryAttempts {
+			return
+		}
+		if _, inTransaction := tx.Statement.ConnPool.(*sql.Tx); inTransaction {
+			return
+		}
+		select {
+		case <-replayObserved:
+		default:
+			close(replayObserved)
+			releaseWinnerOnce.Do(func() { close(releaseWinner) })
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = fixture.db.Callback().Query().Remove(beforeCallback)
+		_ = fixture.db.Callback().Query().Remove(afterCallback)
+	})
+
+	_, loserErr := fixture.service.CreatePlan(loserCtx, loserRequest)
+	select {
+	case <-replayObserved:
+	case <-time.After(5 * time.Second):
+		t.Fatal("retry-exhausted loser did not observe the uncommitted winner")
+	}
+	var winnerResult winnerOutcome
+	select {
+	case winnerResult = <-winner:
+	case <-time.After(5 * time.Second):
+		t.Fatal("plan race winner did not finish committing")
+	}
+	if winnerResult.err != nil || winnerResult.result.PlanID == "" || winnerResult.result.Replay {
+		t.Fatalf("plan race winner result=%+v error=%v", winnerResult.result, winnerResult.err)
+	}
+	if !errors.Is(loserErr, ErrPlanIdempotencyConflict) {
+		t.Fatalf("retry-exhausted loser error=%v, want durable idempotency conflict", loserErr)
+	}
+	if got := transactionReplayQueries.Load(); got != planCreateRetryAttempts {
+		t.Fatalf("transaction replay queries=%d, want %d", got, planCreateRetryAttempts)
+	}
+	assertPlanCreationRows(t, fixture.db, len(fixture.request.Selection.AssetRefs))
+}
+
 func TestPlanCreateConcurrentSQLiteContentionHonorsContext(t *testing.T) {
 	fixture := newPlanServiceTestFixture(t, false)
 	locker := fixture.db.Begin()

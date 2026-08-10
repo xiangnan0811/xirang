@@ -9126,3 +9126,64 @@ second local remediation. Hosted PR checks own fresh PostgreSQL and Worker scan
 closure after the exact fix commit is pushed. Task 8 remains stopped through PR
 GREEN, squash merge, post-merge automation disposition, local-main sync, closure
 bookkeeping and topic cleanup.
+
+## PR #410 third hosted-CI remediation and final-commit winner race (2026-08-10)
+
+The second correction was committed and pushed as `4e5072b`. Duplicate hosted
+runs `31351415372` and `31351417378` passed every PostgreSQL, frontend, Docker,
+Worker runtime/build/scan, documentation and UTC-safety check; the push run's
+Backend Test & Build also passed. The merge-ref Backend Test & Build retained one
+timing failure:
+
+```text
+TestPlanCreateConcurrentDifferentIntentElectsOneWinner
+  different-intent CreatePlan() error = recovery plan is unavailable
+```
+
+Backward tracing confirmed a final visibility window. After the last retryable
+transaction failure, the losing invocation performed exactly one immediate
+non-transactional replay read. That read could finish while the winner was still
+inside its commit seam, and the loop then returned unavailable without any
+further durable observation.
+
+`TestPlanCreateRetryExhaustionWaitsForCommittingWinner` deterministically blocks
+the winner at `planCreateBeforeCommit`, injects retryable failures into all loser
+transaction replay reads, lets the loser's final non-transactional replay observe
+the uncommitted winner, and only then releases commit. Against `4e5072b` the
+unchanged test produced the genuine expected RED:
+
+```text
+retry-exhausted loser error=recovery plan is unavailable,
+want durable idempotency conflict
+```
+
+The minimal GREEN adds a bounded context-aware durable-winner observation phase
+only after the ordinary plan-create attempts and immediate replay reads are
+exhausted. A visible same-intent winner is replayed, a different-intent winner is
+the existing stable idempotency conflict, caller cancellation/deadline preserves
+identity, and exhaustion without a winner remains the existing closed
+unavailable result. No schema, migration, dependency, runtime, public API or
+protected-path change is involved.
+
+Fresh local evidence after the GREEN:
+
+```text
+four plan selectors normal -count=20                         PASS (3.166s)
+four plan selectors race -count=10                          PASS (4.551s)
+whole Recovery normal                                       PASS (34.006s)
+whole Recovery race                                         PASS (110.354s)
+env -u NODE_ENV make check                                  PASS
+  backend lint                                               0 issues
+  backend packages                                           all passed
+  frontend lint                                              0 errors, 1 pre-existing warning
+  frontend tests                                             168 files / 1388 tests passed
+  backend and TypeScript/Vite production builds              passed
+owned gofmt and git diff --check                             PASS
+```
+
+The generated `backend/xirang-server` was removed. No PostgreSQL fixture or other
+infrastructure was created or restarted; the next hosted PR run owns fresh
+PostgreSQL and Worker scan closure. Before bookkeeping, the only dirty product
+paths are `service.go` and `service_test.go`; the two protected unrelated paths
+retain their frozen hashes. Task 8 remains stopped through exact commit/push, PR
+GREEN, squash merge, post-merge automation, local-main sync and delivery cleanup.
