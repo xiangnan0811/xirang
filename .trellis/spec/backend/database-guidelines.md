@@ -45,7 +45,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
 - Keep version numbers in lockstep across SQLite and PostgreSQL. The current
-  latest migration is `000068_backup_asset_export`.
+  latest migration is `000069_backup_asset_recovery`.
 - Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the
   SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
@@ -111,7 +111,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   both SQLite/PostgreSQL definitions and matching down migrations when changing
   traffic-window predicates or index names.
 - Backup-asset schema changes are paired across SQLite and PostgreSQL. The
-  current baseline includes `000062` through `000068_backup_asset_export`;
+  current baseline includes `000062` through `000069_backup_asset_recovery`;
   later versions must remain paired. After durable Search or publication facts,
   or live content-delivery state exists, schema down must fail closed rather
   than deleting history, Provider facts, grants, reservations, or leases.
@@ -130,7 +130,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 
 - Connection helper: `openPostgresSQLDB(dsn string) (*sql.DB, error)`.
 - CI regression gate:
-  `go test ./internal/database -run '^(TestBackupAssetMigration062PostgresApplyDown|TestBackupAssetMigration0(63|64|65|66|67|68)Postgres|TestPostgresTimestamptzScanUsesConfiguredUTC|TestRunMigrationsPostgresDirtyCheckUsesSearchPath)$' -count=1`.
+  `go test ./internal/database -run '^(TestBackupAssetMigration062PostgresApplyDown|TestBackupAssetMigration0(63|64|65|66|67|68|69)Postgres|TestPostgresTimestamptzScanUsesConfiguredUTC|TestRunMigrationsPostgresDirtyCheckUsesSearchPath)$' -count=1`.
 - Export behavior gate:
   `go test ./internal/backupasset/export -run '^TestExportBehaviorPostgres$' -count=1`.
 - Required pgx registrations per physical connection:
@@ -151,7 +151,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   hook. Configuring only `timestamp` leaves `TIMESTAMPTZ` scans vulnerable to
   `time.Local` on newer Go/pgx combinations.
 - SQLite/PostgreSQL migration parity for backup assets covers 000062 through
-  000068. A new paired migration must be added to this regex deliberately; it
+  000069. A new paired migration must be added to this regex deliberately; it
   must never be silently omitted from the PostgreSQL gate.
 
 ### 4. Validation & Error Matrix
@@ -179,7 +179,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   PostgreSQL service with `TZ` set to a non-UTC value and assert both location
   and RFC3339 value.
 - PostgreSQL migration tests must exercise paired apply/down contracts for
-  000062 through 000068.
+  000062 through 000069.
 - `TestRunMigrationsPostgresDirtyCheckUsesSearchPath` must prove an unrelated
   sibling schema does not interfere while a search-path-visible dirty row still
   fails closed.
@@ -756,6 +756,87 @@ err = sink.retryManifestConflicts(ctx, func() error {
 if err == nil {
     err = sink.retryManifestConflicts(ctx, func() error { return sink.db.Transaction(commit) })
 }
+```
+
+---
+
+## Scenario: Used Migration Down Admission Before Dirty Versioning
+
+### 1. Scope / Trigger
+
+- Trigger: a migration down guard protects durable state and is run through
+  `golang-migrate` rather than executed directly as SQL.
+- Applies to paired SQLite/PostgreSQL migrations whose used down must preserve
+  the current clean `schema_migrations` version as well as schema and data.
+
+### 2. Signatures
+
+- Runner boundary: `migrator.Steps(-1)`.
+- Metadata table: `schema_migrations(version, dirty)`.
+- Recovery 000069 admission trigger:
+  `trg_backup_asset_recovery_downgrade_admission` on `schema_migrations`.
+
+### 3. Contracts
+
+- `golang-migrate` calls `SetVersion(target, true)` before the down body. A
+  down-script guard alone therefore cannot preserve the old version if it
+  rejects after that call.
+- A paired metadata admission trigger must reject a downgrade target below the
+  protected version while the complete used-state guard is nonempty. The
+  SQLite `DELETE` plus `INSERT` and PostgreSQL `TRUNCATE` plus `INSERT` occur
+  in the driver transaction, so rejecting the insert rolls it back to the
+  previous clean version.
+- The trigger must permit target versions at or above the protected version so
+  future forward migrations and a down from a later version to the protected
+  version continue to work. A pristine down removes the trigger before the
+  protected tables disappear.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Used `Steps(-1)` | Error; previous version remains clean and every table, index, trigger, and row snapshot is unchanged. |
+| Pristine `Steps(-1)` | Down succeeds, target version is clean, protected schema and admission trigger are removed. |
+| Latch-only or purge-to-empty use | Error; the permanent latch still blocks the metadata transition. |
+| Later forward migration or down to the protected version | Admission trigger permits the metadata write. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a recovery row causes the metadata insert for version 68 to fail and
+  leaves version 69 clean without executing the down body.
+- Base: a never-used 000069 schema reaches 000068 clean and removes its
+  admission trigger.
+- Bad: test the down SQL via `db.Exec` only, then assume its first statement
+  also protects `schema_migrations` under `migrator.Steps(-1)`.
+
+### 6. Tests Required
+
+- Exercise the complete used-state matrix through `migrator.Steps(-1)` on
+  SQLite and required real PostgreSQL; compare version/dirty, tables,
+  definitions, indexes, triggers, and row counts before and after refusal.
+- Prove pristine down restores the preceding version clean and removes the
+  admission trigger.
+- Run the required PostgreSQL migration parity selector with
+  `REQUIRE_POSTGRES_MIGRATION_TEST=1`; a skipped DSN is not parity evidence.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```sql
+-- This runs after golang-migrate has already committed target=68, dirty=true.
+SELECT RAISE(ABORT, 'used down blocked');
+```
+
+Correct:
+
+```sql
+CREATE TRIGGER trg_backup_asset_recovery_downgrade_admission
+BEFORE INSERT ON schema_migrations
+WHEN NEW.version < 69 AND /* complete used-state guard */
+BEGIN
+    SELECT RAISE(ABORT, 'used down blocked');
+END;
 ```
 
 ---

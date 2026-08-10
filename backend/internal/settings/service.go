@@ -22,19 +22,28 @@
 package settings
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
@@ -60,9 +69,61 @@ const (
 const (
 	ProcessingContentPipelineRevisionKey = "backup_assets.internal.processing_content_pipeline_revision"
 	ProcessingOCRPipelineRevisionKey     = "backup_assets.internal.processing_ocr_pipeline_revision"
+	RecoveryTargetRootKeyPrefix          = "backup_assets.internal.recovery_target_root.v1."
 )
 
-var ErrInternalSettingUnavailable = errors.New("internal setting state unavailable")
+const (
+	recoveryTargetRootSchemaVersion     = 1
+	recoveryTargetRootIDMaxBytes        = 32
+	recoveryTargetRootSafeLabelMaxBytes = 128
+	recoveryTargetRootLocatorMaxBytes   = 4096
+	recoveryTargetRootDocumentMaxBytes  = 8 << 10
+	recoveryTargetRootListMax           = 64
+	recoveryTargetRootAllListMax        = 1024
+	recoveryTargetRootDigestDomain      = "xirang/recovery/target-root/v1"
+)
+
+var (
+	ErrInternalSettingUnavailable    = errors.New("internal setting state unavailable")
+	ErrRecoveryTargetRootInvalid     = errors.New("recovery target root definition invalid")
+	ErrRecoveryTargetRootNotFound    = errors.New("recovery target root not found")
+	ErrRecoveryTargetRootUnavailable = errors.New("recovery target root state unavailable")
+)
+
+type RecoveryTargetRootDefinition struct {
+	NodeID    uint   `json:"node_id"`
+	RootID    string `json:"root_id"`
+	SafeLabel string `json:"safe_label"`
+	Locator   string `json:"-"`
+}
+
+type RecoveryTargetRootSummary struct {
+	NodeID    uint   `json:"node_id"`
+	RootID    string `json:"root_id"`
+	SafeLabel string `json:"safe_label"`
+}
+
+type RecoveryTargetRootReference struct {
+	NodeID uint   `json:"node_id"`
+	RootID string `json:"root_id"`
+}
+
+type RecoveryTargetRootResolution struct {
+	NodeID        uint   `json:"node_id"`
+	RootID        string `json:"root_id"`
+	SafeLabel     string `json:"safe_label"`
+	Locator       string `json:"-"`
+	LocatorDigest string `json:"-"`
+}
+
+type recoveryTargetRootRecord struct {
+	SchemaVersion    int    `json:"schema_version"`
+	NodeID           uint   `json:"node_id"`
+	RootID           string `json:"root_id"`
+	SafeLabel        string `json:"safe_label"`
+	CanonicalLocator string `json:"canonical_locator"`
+	LocatorDigest    string `json:"locator_digest"`
+}
 
 type ProcessingPipelineRevisions struct {
 	Content int64
@@ -335,6 +396,11 @@ var registry = []SettingDef{
 	{Key: "backup_assets.derived_store_global_max_bytes", EnvVar: "BACKUP_ASSETS_DERIVED_STORE_GLOBAL_MAX_BYTES", CodeDefault: "107374182400", Type: TypeInt, Category: "backup_assets", Description: "派生资产全局字节配额", Min: "65536", Max: "1099511627776"},
 	{Key: "backup_assets.derived_store_reconcile_interval", EnvVar: "BACKUP_ASSETS_DERIVED_STORE_RECONCILE_INTERVAL", CodeDefault: "15m", Type: TypeDuration, Category: "backup_assets", Description: "派生资产对账间隔", MinDuration: "1m", MaxDuration: "24h"},
 	{Key: "backup_assets.derived_store_reconcile_batch_size", EnvVar: "BACKUP_ASSETS_DERIVED_STORE_RECONCILE_BATCH_SIZE", CodeDefault: "256", Type: TypeInt, Category: "backup_assets", Description: "派生资产对账批次", Min: "1", Max: "10000"},
+	{Key: "backup_assets.recovery.receipt_replay_ttl", EnvVar: "BACKUP_ASSETS_RECOVERY_RECEIPT_REPLAY_TTL", CodeDefault: "20m", Type: TypeDuration, Category: "backup_assets", Description: "恢复授权回执回放与保留有效期", MinDuration: "5m", MaxDuration: "24h"},
+	{Key: "backup_assets.recovery.write_grant_ttl", EnvVar: "BACKUP_ASSETS_RECOVERY_WRITE_GRANT_TTL", CodeDefault: "15m", Type: TypeDuration, Category: "backup_assets", Description: "恢复写入授权有效期", MinDuration: "1m", MaxDuration: "24h"},
+	{Key: "backup_assets.recovery.delete_grant_ttl", EnvVar: "BACKUP_ASSETS_RECOVERY_DELETE_GRANT_TTL", CodeDefault: "10m", Type: TypeDuration, Category: "backup_assets", Description: "恢复精确镜像删除授权有效期", MinDuration: "1m", MaxDuration: "24h"},
+	{Key: "backup_assets.recovery.receipt_reaper_cadence", EnvVar: "BACKUP_ASSETS_RECOVERY_RECEIPT_REAPER_CADENCE", CodeDefault: "1m", Type: TypeDuration, Category: "backup_assets", Description: "恢复授权回执清理周期", MinDuration: "10s", MaxDuration: "1h"},
+	{Key: "backup_assets.recovery.receipt_reaper_batch_size", EnvVar: "BACKUP_ASSETS_RECOVERY_RECEIPT_REAPER_BATCH_SIZE", CodeDefault: "100", Type: TypeInt, Category: "backup_assets", Description: "恢复授权回执单次清理批次", Min: "1", Max: "1000"},
 	{Key: "backup_assets.export.enabled", EnvVar: "BACKUP_ASSETS_EXPORT_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "启用备份资产导出"},
 	{Key: "backup_assets.export.root", EnvVar: "BACKUP_ASSETS_EXPORT_ROOT", CodeDefault: "/var/lib/xirang-asset-runtime/export", Type: TypeString, Category: "backup_assets", Description: "备份资产导出密文专用根目录", RequiresRestart: true},
 	{Key: "backup_assets.export.default_profile", EnvVar: "BACKUP_ASSETS_EXPORT_DEFAULT_PROFILE", CodeDefault: "zip_deflate_v1", Type: TypeString, Category: "backup_assets", Description: "备份资产导出默认归档配置"},
@@ -647,12 +713,477 @@ func parsePositiveRevision(value string) (int64, error) {
 }
 
 func IsInternalSettingKey(key string) bool {
-	return key == ProcessingContentPipelineRevisionKey || key == ProcessingOCRPipelineRevisionKey
+	return key == ProcessingContentPipelineRevisionKey || key == ProcessingOCRPipelineRevisionKey ||
+		strings.HasPrefix(key, RecoveryTargetRootKeyPrefix)
+}
+
+// RecoveryTargetRootLocatorDigest validates and binds one canonical private
+// target locator to its node and root identities.
+func RecoveryTargetRootLocatorDigest(nodeID uint, rootID, locator string) (string, error) {
+	if nodeID == 0 || !validRecoveryTargetRootID(rootID) || !validRecoveryTargetRootLocator(locator) {
+		return "", ErrRecoveryTargetRootInvalid
+	}
+	buffer := bytes.NewBuffer(nil)
+	writeRecoveryTargetRootDigestString(buffer, recoveryTargetRootDigestDomain)
+	writeRecoveryTargetRootDigestUint64(buffer, 3)
+	writeRecoveryTargetRootDigestString(buffer, strconv.FormatUint(uint64(nodeID), 10))
+	writeRecoveryTargetRootDigestString(buffer, rootID)
+	writeRecoveryTargetRootDigestString(buffer, locator)
+	sum := sha256.Sum256(buffer.Bytes())
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// RegisterRecoveryTargetRootTx persists or rotates exactly one private root in
+// the caller-owned transaction. An identical definition is a no-op.
+func (s *Service) RegisterRecoveryTargetRootTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	definition RecoveryTargetRootDefinition,
+) (RecoveryTargetRootResolution, error) {
+	if err := validateRecoveryTargetRootCall(s, ctx, tx); err != nil {
+		return RecoveryTargetRootResolution{}, err
+	}
+	resolution, err := normalizeRecoveryTargetRootDefinition(definition)
+	if err != nil {
+		return RecoveryTargetRootResolution{}, err
+	}
+	if err := requireActiveRecoveryTargetRootNode(ctx, tx, definition.NodeID); err != nil {
+		return RecoveryTargetRootResolution{}, err
+	}
+	key, err := recoveryTargetRootKey(definition.NodeID, definition.RootID)
+	if err != nil {
+		return RecoveryTargetRootResolution{}, err
+	}
+
+	var rows []model.SystemSetting
+	if queryErr := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("key = ?", key).Limit(2).Find(&rows).Error; queryErr != nil {
+		return RecoveryTargetRootResolution{}, recoveryTargetRootUnavailableForContext(ctx)
+	}
+	if len(rows) > 1 {
+		return RecoveryTargetRootResolution{}, ErrRecoveryTargetRootUnavailable
+	}
+	if len(rows) == 1 {
+		current, decodeErr := decodeRecoveryTargetRootRow(rows[0].Key, rows[0].Value)
+		if decodeErr != nil {
+			return RecoveryTargetRootResolution{}, decodeErr
+		}
+		if current == resolution {
+			return current, nil
+		}
+	}
+
+	record := recoveryTargetRootRecord{
+		SchemaVersion: recoveryTargetRootSchemaVersion, NodeID: resolution.NodeID,
+		RootID: resolution.RootID, SafeLabel: resolution.SafeLabel,
+		CanonicalLocator: resolution.Locator, LocatorDigest: resolution.LocatorDigest,
+	}
+	document, marshalErr := json.Marshal(record)
+	if marshalErr != nil || len(document) == 0 || len(document) > recoveryTargetRootDocumentMaxBytes {
+		return RecoveryTargetRootResolution{}, ErrRecoveryTargetRootUnavailable
+	}
+	ciphertext, encryptErr := secure.EncryptString(string(document))
+	if encryptErr != nil || !strings.HasPrefix(ciphertext, "enc:v2:") {
+		return RecoveryTargetRootResolution{}, recoveryTargetRootUnavailableForContext(ctx)
+	}
+	row := model.SystemSetting{Key: key, Value: ciphertext, UpdatedAt: time.Now().UTC()}
+	if persistErr := tx.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"value", "updated_at"}),
+	}).Create(&row).Error; persistErr != nil {
+		return RecoveryTargetRootResolution{}, recoveryTargetRootUnavailableForContext(ctx)
+	}
+	return resolution, nil
+}
+
+// DeleteRecoveryTargetRootTx removes exactly one constructed private key from
+// the caller-owned transaction.
+func (s *Service) DeleteRecoveryTargetRootTx(ctx context.Context, tx *gorm.DB, nodeID uint, rootID string) error {
+	if err := validateRecoveryTargetRootCall(s, ctx, tx); err != nil {
+		return err
+	}
+	key, err := recoveryTargetRootKey(nodeID, rootID)
+	if err != nil {
+		return err
+	}
+	result := tx.WithContext(ctx).Where("key = ?", key).Delete(&model.SystemSetting{})
+	if result.Error != nil {
+		return recoveryTargetRootUnavailableForContext(ctx)
+	}
+	if result.RowsAffected != 1 {
+		return ErrRecoveryTargetRootNotFound
+	}
+	return nil
+}
+
+// ResolveRecoveryTargetRootTx loads one exact private root through the
+// caller-owned transaction and validates its complete encrypted record.
+func (s *Service) ResolveRecoveryTargetRootTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	nodeID uint,
+	rootID string,
+) (RecoveryTargetRootResolution, error) {
+	if err := validateRecoveryTargetRootCall(s, ctx, tx); err != nil {
+		return RecoveryTargetRootResolution{}, err
+	}
+	key, err := recoveryTargetRootKey(nodeID, rootID)
+	if err != nil {
+		return RecoveryTargetRootResolution{}, err
+	}
+	if err := requireActiveRecoveryTargetRootNode(ctx, tx, nodeID); err != nil {
+		return RecoveryTargetRootResolution{}, err
+	}
+	var rows []model.SystemSetting
+	if queryErr := tx.WithContext(ctx).Where("key = ?", key).Limit(2).Find(&rows).Error; queryErr != nil {
+		return RecoveryTargetRootResolution{}, recoveryTargetRootUnavailableForContext(ctx)
+	}
+	if len(rows) == 0 {
+		return RecoveryTargetRootResolution{}, ErrRecoveryTargetRootNotFound
+	}
+	if len(rows) != 1 {
+		return RecoveryTargetRootResolution{}, ErrRecoveryTargetRootUnavailable
+	}
+	return decodeRecoveryTargetRootRow(rows[0].Key, rows[0].Value)
+}
+
+// ListRecoveryTargetRoots returns only safe summaries for one active node. A
+// malformed row fails the whole bounded result.
+func (s *Service) ListRecoveryTargetRoots(ctx context.Context, nodeID uint) ([]RecoveryTargetRootSummary, error) {
+	if s == nil || s.db == nil || ctx == nil {
+		return nil, ErrRecoveryTargetRootUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if nodeID == 0 {
+		return nil, ErrRecoveryTargetRootInvalid
+	}
+	if err := requireActiveRecoveryTargetRootNode(ctx, s.db, nodeID); err != nil {
+		return nil, err
+	}
+	nodePrefix := RecoveryTargetRootKeyPrefix + strconv.FormatUint(uint64(nodeID), 10) + "."
+	var rows []model.SystemSetting
+	if queryErr := s.db.WithContext(ctx).
+		Where("substr(key, 1, ?) = ?", len(nodePrefix), nodePrefix).
+		Order("key ASC").Limit(recoveryTargetRootListMax + 1).Find(&rows).Error; queryErr != nil {
+		return nil, recoveryTargetRootUnavailableForContext(ctx)
+	}
+	if len(rows) > recoveryTargetRootListMax {
+		return nil, ErrRecoveryTargetRootUnavailable
+	}
+	summaries := make([]RecoveryTargetRootSummary, 0, len(rows))
+	for _, row := range rows {
+		resolution, err := decodeRecoveryTargetRootRow(row.Key, row.Value)
+		if err != nil || resolution.NodeID != nodeID {
+			return nil, ErrRecoveryTargetRootUnavailable
+		}
+		summaries = append(summaries, RecoveryTargetRootSummary{
+			NodeID: resolution.NodeID, RootID: resolution.RootID, SafeLabel: resolution.SafeLabel,
+		})
+	}
+	return summaries, nil
+}
+
+// ListAllRecoveryTargetRoots returns the bounded reconciliation catalog without
+// exposing labels or locators. Any malformed row or inactive node invalidates
+// the complete result.
+func (s *Service) ListAllRecoveryTargetRoots(ctx context.Context) ([]RecoveryTargetRootReference, error) {
+	if s == nil || s.db == nil || ctx == nil {
+		return nil, ErrRecoveryTargetRootUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var rows []model.SystemSetting
+	if err := s.db.WithContext(ctx).
+		Where("substr(key, 1, ?) = ?", len(RecoveryTargetRootKeyPrefix), RecoveryTargetRootKeyPrefix).
+		Order("key ASC").Limit(recoveryTargetRootAllListMax + 1).Find(&rows).Error; err != nil {
+		return nil, recoveryTargetRootUnavailableForContext(ctx)
+	}
+	if len(rows) > recoveryTargetRootAllListMax {
+		return nil, ErrRecoveryTargetRootUnavailable
+	}
+
+	type rootIdentity struct {
+		nodeID uint
+		rootID string
+	}
+	references := make([]RecoveryTargetRootReference, 0, len(rows))
+	identities := make(map[rootIdentity]struct{}, len(rows))
+	nodeIDs := make(map[uint]struct{})
+	for _, row := range rows {
+		resolution, err := decodeRecoveryTargetRootRow(row.Key, row.Value)
+		if err != nil {
+			return nil, ErrRecoveryTargetRootUnavailable
+		}
+		identity := rootIdentity{nodeID: resolution.NodeID, rootID: resolution.RootID}
+		if _, duplicate := identities[identity]; duplicate {
+			return nil, ErrRecoveryTargetRootUnavailable
+		}
+		identities[identity] = struct{}{}
+		nodeIDs[resolution.NodeID] = struct{}{}
+		references = append(references, RecoveryTargetRootReference{
+			NodeID: resolution.NodeID, RootID: resolution.RootID,
+		})
+	}
+
+	if len(nodeIDs) > 0 {
+		ids := make([]uint, 0, len(nodeIDs))
+		for nodeID := range nodeIDs {
+			ids = append(ids, nodeID)
+		}
+		var nodes []struct {
+			ID       uint
+			Archived bool
+		}
+		if err := s.db.WithContext(ctx).Model(&model.Node{}).Select("id", "archived").
+			Where("id IN ?", ids).Limit(len(ids) + 1).Find(&nodes).Error; err != nil {
+			return nil, recoveryTargetRootUnavailableForContext(ctx)
+		}
+		active := make(map[uint]struct{}, len(nodes))
+		for _, node := range nodes {
+			if node.ID == 0 || node.Archived {
+				return nil, ErrRecoveryTargetRootUnavailable
+			}
+			if _, duplicate := active[node.ID]; duplicate {
+				return nil, ErrRecoveryTargetRootUnavailable
+			}
+			active[node.ID] = struct{}{}
+		}
+		if len(active) != len(nodeIDs) {
+			return nil, ErrRecoveryTargetRootUnavailable
+		}
+	}
+
+	sort.Slice(references, func(left, right int) bool {
+		if references[left].NodeID != references[right].NodeID {
+			return references[left].NodeID < references[right].NodeID
+		}
+		return references[left].RootID < references[right].RootID
+	})
+	return references, nil
+}
+
+func validateRecoveryTargetRootCall(s *Service, ctx context.Context, tx *gorm.DB) error {
+	if s == nil || s.db == nil || ctx == nil || tx == nil {
+		return ErrRecoveryTargetRootUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func normalizeRecoveryTargetRootDefinition(definition RecoveryTargetRootDefinition) (RecoveryTargetRootResolution, error) {
+	if !validRecoveryTargetRootSafeLabel(definition.SafeLabel) {
+		return RecoveryTargetRootResolution{}, ErrRecoveryTargetRootInvalid
+	}
+	digest, err := RecoveryTargetRootLocatorDigest(definition.NodeID, definition.RootID, definition.Locator)
+	if err != nil {
+		return RecoveryTargetRootResolution{}, err
+	}
+	return RecoveryTargetRootResolution{
+		NodeID: definition.NodeID, RootID: definition.RootID, SafeLabel: definition.SafeLabel,
+		Locator: definition.Locator, LocatorDigest: digest,
+	}, nil
+}
+
+func requireActiveRecoveryTargetRootNode(ctx context.Context, db *gorm.DB, nodeID uint) error {
+	if ctx == nil || db == nil || nodeID == 0 {
+		return ErrRecoveryTargetRootInvalid
+	}
+	var nodes []struct {
+		ID       uint
+		Archived bool
+	}
+	if err := db.WithContext(ctx).Model(&model.Node{}).Select("id", "archived").
+		Where("id = ?", nodeID).Limit(2).Find(&nodes).Error; err != nil {
+		return recoveryTargetRootUnavailableForContext(ctx)
+	}
+	if len(nodes) != 1 || nodes[0].ID != nodeID || nodes[0].Archived {
+		return ErrRecoveryTargetRootNotFound
+	}
+	return nil
+}
+
+func recoveryTargetRootKey(nodeID uint, rootID string) (string, error) {
+	if nodeID == 0 || !validRecoveryTargetRootID(rootID) {
+		return "", ErrRecoveryTargetRootInvalid
+	}
+	key := RecoveryTargetRootKeyPrefix + strconv.FormatUint(uint64(nodeID), 10) + "." + rootID
+	if len(key) > 128 {
+		return "", ErrRecoveryTargetRootInvalid
+	}
+	return key, nil
+}
+
+func parseRecoveryTargetRootKey(key string) (uint, string, error) {
+	if !strings.HasPrefix(key, RecoveryTargetRootKeyPrefix) || len(key) > 128 {
+		return 0, "", ErrRecoveryTargetRootUnavailable
+	}
+	nodeText, rootID, found := strings.Cut(strings.TrimPrefix(key, RecoveryTargetRootKeyPrefix), ".")
+	if !found || nodeText == "" || rootID == "" || !validRecoveryTargetRootID(rootID) {
+		return 0, "", ErrRecoveryTargetRootUnavailable
+	}
+	parsed, err := strconv.ParseUint(nodeText, 10, 64)
+	if err != nil || parsed == 0 || uint64(uint(parsed)) != parsed || strconv.FormatUint(parsed, 10) != nodeText {
+		return 0, "", ErrRecoveryTargetRootUnavailable
+	}
+	return uint(parsed), rootID, nil
+}
+
+func decodeRecoveryTargetRootRow(key, value string) (RecoveryTargetRootResolution, error) {
+	nodeID, rootID, err := parseRecoveryTargetRootKey(key)
+	if err != nil || value == "" || !strings.HasPrefix(value, "enc:v2:") {
+		return RecoveryTargetRootResolution{}, ErrRecoveryTargetRootUnavailable
+	}
+	document, decryptErr := secure.DecryptString(value)
+	if decryptErr != nil || len(document) == 0 || len(document) > recoveryTargetRootDocumentMaxBytes {
+		return RecoveryTargetRootResolution{}, ErrRecoveryTargetRootUnavailable
+	}
+	record, decodeErr := decodeRecoveryTargetRootDocument(document)
+	if decodeErr != nil || record.SchemaVersion != recoveryTargetRootSchemaVersion ||
+		record.NodeID != nodeID || record.RootID != rootID {
+		return RecoveryTargetRootResolution{}, ErrRecoveryTargetRootUnavailable
+	}
+	resolution, normalizeErr := normalizeRecoveryTargetRootDefinition(RecoveryTargetRootDefinition{
+		NodeID: record.NodeID, RootID: record.RootID, SafeLabel: record.SafeLabel, Locator: record.CanonicalLocator,
+	})
+	if normalizeErr != nil || resolution.LocatorDigest != record.LocatorDigest {
+		return RecoveryTargetRootResolution{}, ErrRecoveryTargetRootUnavailable
+	}
+	return resolution, nil
+}
+
+func decodeRecoveryTargetRootDocument(document string) (recoveryTargetRootRecord, error) {
+	decoder := json.NewDecoder(strings.NewReader(document))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return recoveryTargetRootRecord{}, ErrRecoveryTargetRootUnavailable
+	}
+	var record recoveryTargetRootRecord
+	seen := make(map[string]struct{}, 6)
+	for decoder.More() {
+		nameToken, tokenErr := decoder.Token()
+		name, ok := nameToken.(string)
+		if tokenErr != nil || !ok {
+			return recoveryTargetRootRecord{}, ErrRecoveryTargetRootUnavailable
+		}
+		if _, duplicate := seen[name]; duplicate {
+			return recoveryTargetRootRecord{}, ErrRecoveryTargetRootUnavailable
+		}
+		seen[name] = struct{}{}
+		switch name {
+		case "schema_version":
+			err = decoder.Decode(&record.SchemaVersion)
+		case "node_id":
+			err = decoder.Decode(&record.NodeID)
+		case "root_id":
+			err = decoder.Decode(&record.RootID)
+		case "safe_label":
+			err = decoder.Decode(&record.SafeLabel)
+		case "canonical_locator":
+			err = decoder.Decode(&record.CanonicalLocator)
+		case "locator_digest":
+			err = decoder.Decode(&record.LocatorDigest)
+		default:
+			return recoveryTargetRootRecord{}, ErrRecoveryTargetRootUnavailable
+		}
+		if err != nil {
+			return recoveryTargetRootRecord{}, ErrRecoveryTargetRootUnavailable
+		}
+	}
+	closing, err := decoder.Token()
+	if err != nil || closing != json.Delim('}') || len(seen) != 6 {
+		return recoveryTargetRootRecord{}, ErrRecoveryTargetRootUnavailable
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return recoveryTargetRootRecord{}, ErrRecoveryTargetRootUnavailable
+	}
+	return record, nil
+}
+
+func validRecoveryTargetRootID(rootID string) bool {
+	if len(rootID) == 0 || len(rootID) > recoveryTargetRootIDMaxBytes {
+		return false
+	}
+	validEndpoint := func(value byte) bool {
+		return value >= 'a' && value <= 'z' || value >= '0' && value <= '9'
+	}
+	if !validEndpoint(rootID[0]) || !validEndpoint(rootID[len(rootID)-1]) {
+		return false
+	}
+	for index := 1; index < len(rootID)-1; index++ {
+		value := rootID[index]
+		if !validEndpoint(value) && value != '-' && value != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+func validRecoveryTargetRootSafeLabel(label string) bool {
+	if !utf8.ValidString(label) || len(label) == 0 || len(label) > recoveryTargetRootSafeLabelMaxBytes || strings.TrimSpace(label) == "" {
+		return false
+	}
+	for _, character := range label {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
+}
+
+func validRecoveryTargetRootLocator(locator string) bool {
+	if !utf8.ValidString(locator) || len(locator) < 2 || len(locator) > recoveryTargetRootLocatorMaxBytes ||
+		locator == "/" || !path.IsAbs(locator) || path.Clean(locator) != locator ||
+		strings.HasSuffix(locator, "/") || strings.Contains(locator, `\`) {
+		return false
+	}
+	for index := 0; index < len(locator); index++ {
+		if locator[index] < 0x20 || locator[index] == 0x7f {
+			return false
+		}
+	}
+	components := strings.Split(locator, "/")
+	if len(components) < 2 || components[0] != "" {
+		return false
+	}
+	for _, component := range components[1:] {
+		if component == "" || component == "." || component == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func recoveryTargetRootUnavailableForContext(ctx context.Context) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	return ErrRecoveryTargetRootUnavailable
+}
+
+func writeRecoveryTargetRootDigestString(buffer *bytes.Buffer, value string) {
+	writeRecoveryTargetRootDigestUint64(buffer, uint64(len(value)))
+	buffer.WriteString(value)
+}
+
+func writeRecoveryTargetRootDigestUint64(buffer *bytes.Buffer, value uint64) {
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], value)
+	buffer.Write(encoded[:])
 }
 
 // GetFallback resolves a known setting from environment or its code default,
 // intentionally excluding any database override.
 func (s *Service) GetFallback(key string) (string, error) {
+	if IsInternalSettingKey(key) {
+		return "", ErrInternalSettingUnavailable
+	}
 	def := findDef(key)
 	if def == nil {
 		return "", fmt.Errorf("未知的设置项: %s", key)
@@ -759,6 +1290,9 @@ func copyStringMap(values map[string]string) map[string]string {
 
 // Validate 校验设置值（不写入），用于批量更新前的预检
 func (s *Service) Validate(key, value string) error {
+	if IsInternalSettingKey(key) {
+		return ErrInternalSettingUnavailable
+	}
 	def := findDef(key)
 	if def == nil {
 		return fmt.Errorf("未知的设置项: %s", key)
@@ -860,6 +1394,9 @@ func decryptSettingValue(key, value string) string {
 
 // Delete 删除 DB 覆盖值（恢复为环境变量或默认值），写入后自动失效缓存
 func (s *Service) Delete(key string) error {
+	if IsInternalSettingKey(key) {
+		return ErrInternalSettingUnavailable
+	}
 	def := findDef(key)
 	if def == nil {
 		return fmt.Errorf("未知的设置项: %s", key)
@@ -874,6 +1411,9 @@ func (s *Service) Delete(key string) error {
 // transaction. Foundation-setting callers use it only after the admission
 // transition has drained, so a rollback leaves the prior persisted value.
 func (s *Service) DeleteWithTx(tx *gorm.DB, key string) error {
+	if IsInternalSettingKey(key) {
+		return ErrInternalSettingUnavailable
+	}
 	def := findDef(key)
 	if def == nil {
 		return fmt.Errorf("未知的设置项: %s", key)
@@ -1151,13 +1691,22 @@ var backupAssetExportSettingKeys = []string{
 	"backup_assets.archive.max_duration",
 }
 
+var backupAssetRecoverySettingKeys = []string{
+	"backup_assets.recovery.receipt_replay_ttl",
+	"backup_assets.recovery.write_grant_ttl",
+	"backup_assets.recovery.delete_grant_ttl",
+	"backup_assets.recovery.receipt_reaper_cadence",
+	"backup_assets.recovery.receipt_reaper_batch_size",
+}
+
 var backupAssetFoundationSettingKeys = func() []string {
-	keys := make([]string, 0, len(backupAssetCoreSettingKeys)+len(backupAssetSearchOverlaySettingKeys)+len(backupAssetContentSettingKeys)+len(backupAssetProcessingSettingKeys)+len(backupAssetExportSettingKeys))
+	keys := make([]string, 0, len(backupAssetCoreSettingKeys)+len(backupAssetSearchOverlaySettingKeys)+len(backupAssetContentSettingKeys)+len(backupAssetProcessingSettingKeys)+len(backupAssetExportSettingKeys)+len(backupAssetRecoverySettingKeys))
 	keys = append(keys, backupAssetCoreSettingKeys...)
 	keys = append(keys, backupAssetSearchOverlaySettingKeys...)
 	keys = append(keys, backupAssetContentSettingKeys...)
 	keys = append(keys, backupAssetProcessingSettingKeys...)
 	keys = append(keys, backupAssetExportSettingKeys...)
+	keys = append(keys, backupAssetRecoverySettingKeys...)
 	return keys
 }()
 
@@ -1308,6 +1857,9 @@ func validateBackupAssetFoundationConfig(values map[string]string, requireComple
 	archiveMaxDepth, _ := strconv.ParseInt(resolved["backup_assets.archive.max_depth"], 10, 64)
 	archiveMaxCompressionRatio, _ := strconv.ParseInt(resolved["backup_assets.archive.max_compression_ratio"], 10, 64)
 	archiveMaxDuration, _ := time.ParseDuration(resolved["backup_assets.archive.max_duration"])
+	recoveryReceiptReplayTTL, _ := time.ParseDuration(resolved["backup_assets.recovery.receipt_replay_ttl"])
+	recoveryWriteGrantTTL, _ := time.ParseDuration(resolved["backup_assets.recovery.write_grant_ttl"])
+	recoveryDeleteGrantTTL, _ := time.ParseDuration(resolved["backup_assets.recovery.delete_grant_ttl"])
 	if heartbeat >= leaseDuration {
 		return fmt.Errorf("backup_assets.lease_heartbeat 必须小于 backup_assets.lease_duration")
 	}
@@ -1358,6 +1910,12 @@ func validateBackupAssetFoundationConfig(values map[string]string, requireComple
 	}
 	if searchQueryTimeout > 30*time.Second {
 		return fmt.Errorf("backup_assets.search_query_timeout 不能超过服务器写超时")
+	}
+	if recoveryWriteGrantTTL > recoveryReceiptReplayTTL {
+		return fmt.Errorf("backup_assets.recovery.write_grant_ttl 不能超过 receipt_replay_ttl")
+	}
+	if recoveryDeleteGrantTTL > recoveryReceiptReplayTTL {
+		return fmt.Errorf("backup_assets.recovery.delete_grant_ttl 不能超过 receipt_replay_ttl")
 	}
 	validateContent := requireComplete
 	if !validateContent {

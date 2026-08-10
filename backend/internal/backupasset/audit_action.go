@@ -393,6 +393,13 @@ func validatePublicationAuditOperationField(action AuditAction, fields map[Audit
 	if !present {
 		return nil
 	}
+	if action == AuditActionRecoveryCleanup {
+		operation, ok := value.(string)
+		if !ok || operation != "recovery_reconcile" {
+			return fmt.Errorf("%w: invalid recovery cleanup operation", ErrInvalidState)
+		}
+		return nil
+	}
 	if action != AuditActionResticLegacyOperationBlocked {
 		return fmt.Errorf("%w: operation field is only valid for legacy Restic block audits", ErrInvalidState)
 	}

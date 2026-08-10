@@ -9,7 +9,10 @@ import (
 
 type strictRootHandle struct{}
 
-func openStrictRoot(string) (*strictRootHandle, error)         { return nil, ErrStrictUnavailable }
+func openStrictRoot(string) (*strictRootHandle, error) { return nil, ErrStrictUnavailable }
+func OpenPinnedStrictTree(context.Context, Root, Locator) (PinnedStrictTree, error) {
+	return nil, ErrStrictUnavailable
+}
 func (*strictRootHandle) Close() error                         { return nil }
 func (*strictRootHandle) OpenRegular(string) (*os.File, error) { return nil, ErrStrictUnavailable }
 func (*strictRootHandle) List(context.Context, string, PageRequest) (EntryPage, error) {

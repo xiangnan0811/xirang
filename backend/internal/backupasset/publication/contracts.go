@@ -1,11 +1,14 @@
 package publication
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"xirang/backend/internal/backupasset"
@@ -123,6 +126,107 @@ type LineageSession interface {
 
 type LineageGuard interface {
 	Begin(context.Context, uint, ResticOperation) (LineageSession, error)
+}
+
+// ExactRecoverySource is the private, typed handoff from recovery source
+// validation to the one consumer that is about to perform Provider I/O. The
+// locator and its locator-specific digest are intentionally non-serializable.
+type ExactRecoverySource struct {
+	RepositoryID    string                   `json:"repository_id"`
+	RecoveryPointID string                   `json:"recovery_point_id"`
+	Provider        backupasset.ProviderKind `json:"provider"`
+	Locator         string                   `json:"-"`
+	LocatorDigest   string                   `json:"-"`
+}
+
+const recoveryPlanItemPathDigestDomain = "xirang.backup_asset.recovery.plan_item_path.v1"
+
+// RecoveryPlanItemPathDigest binds a frozen recovery plan item to its private
+// Catalog path without exposing that path outside trusted service boundaries.
+func RecoveryPlanItemPathDigest(repositoryID, recoveryPointID, catalogGenerationID, entryID, normalizedPath string) string {
+	values := []string{repositoryID, recoveryPointID, catalogGenerationID, entryID, normalizedPath}
+	buffer := bytes.NewBuffer(nil)
+	writeValue := func(value string) {
+		var length [8]byte
+		binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+		buffer.Write(length[:])
+		buffer.WriteString(value)
+	}
+	writeValue(recoveryPlanItemPathDigestDomain)
+	var count [8]byte
+	binary.BigEndian.PutUint64(count[:], uint64(len(values)))
+	buffer.Write(count[:])
+	for _, value := range values {
+		writeValue(value)
+	}
+	sum := sha256.Sum256(buffer.Bytes())
+	return hex.EncodeToString(sum[:])
+}
+
+// ImmutableLocatorDigest derives the domain-separated private binding for an
+// immutable RecoveryPoint locator. It deliberately accepts process-local
+// locator material only; callers must keep both the locator and this digest off
+// every serialized authority, audit, and API product.
+func ImmutableLocatorDigest(repositoryID string, provider backupasset.ProviderKind, recoveryPointID, locator string) (string, error) {
+	if backupasset.ValidateOpaqueID(repositoryID) != nil || !validExactRecoveryProvider(provider) ||
+		backupasset.ValidateOpaqueID(recoveryPointID) != nil || !validExactRecoveryLocator(locator) {
+		return "", fmt.Errorf("%w: invalid immutable RecoveryPoint locator", backupasset.ErrInvalidState)
+	}
+	buffer := bytes.NewBuffer(nil)
+	buffer.WriteString("xirang/recovery/source-locator/v1")
+	for _, value := range []string{repositoryID, string(provider), recoveryPointID, locator} {
+		var length [8]byte
+		binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+		buffer.Write(length[:])
+		buffer.WriteString(value)
+	}
+	sum := sha256.Sum256(buffer.Bytes())
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// Validate checks the safe shape of a source handoff. The recovery boundary
+// computes and verifies the domain-separated LocatorDigest before constructing
+// this value, so consumers never need to reconstruct a locator from authority
+// data.
+func (source ExactRecoverySource) Validate() error {
+	if backupasset.ValidateOpaqueID(source.RepositoryID) != nil ||
+		backupasset.ValidateOpaqueID(source.RecoveryPointID) != nil ||
+		!validExactRecoveryProvider(source.Provider) || !validExactRecoveryLocator(source.Locator) ||
+		!validExactRecoveryDigest(source.LocatorDigest) {
+		return fmt.Errorf("%w: invalid exact recovery source", backupasset.ErrInvalidState)
+	}
+	return nil
+}
+
+// ExactRecoverySourceConsumer is deliberately narrow so source validation can
+// hand an ephemeral locator only to an explicitly typed Provider boundary.
+type ExactRecoverySourceConsumer interface {
+	ConsumeExactRecoverySource(context.Context, ExactRecoverySource) error
+}
+
+func validExactRecoveryProvider(provider backupasset.ProviderKind) bool {
+	switch provider {
+	case backupasset.ProviderRestic, backupasset.ProviderRsync, backupasset.ProviderRclone, backupasset.ProviderVerifiedImport:
+		return true
+	default:
+		return false
+	}
+}
+
+func validExactRecoveryLocator(locator string) bool {
+	return len(locator) > 0 && len(locator) <= 4096 && strings.TrimSpace(locator) != "" && !strings.ContainsRune(locator, '\x00')
+}
+
+func validExactRecoveryDigest(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 type PublicationStage string

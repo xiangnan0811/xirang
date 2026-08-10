@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "reasons": [
+    "node_unregistered",
+    "node_archived",
+    "node_offline",
+    "node_unauthorized",
+    "credential_purpose_invalid",
+    "tool_unavailable",
+    "source_unavailable",
+    "root_not_real",
+    "root_noncanonical",
+    "device_invalid",
+    "mount_invalid",
+    "owner_invalid",
+    "mode_invalid",
+    "symlink_component",
+    "xirang_root_overlap",
+    "source_root_overlap",
+    "insufficient_bytes",
+    "insufficient_inodes",
+    "active_writer",
+    "target_conflict",
+    "security_blocked"
+  ]
+}

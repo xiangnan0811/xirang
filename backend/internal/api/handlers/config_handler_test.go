@@ -109,6 +109,96 @@ func TestConfigImportRejectsInternalPipelineRevisions(t *testing.T) {
 	}
 }
 
+func TestConfigExportAndImportExcludeRecoveryTargetRootRegistry(t *testing.T) {
+	setConfigHandlerTestEncryption(t)
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatal(err)
+	}
+	node := model.Node{
+		ID: 81, Name: "config-recovery-node", Host: "config-recovery.invalid", Port: 22,
+		Username: "tester", AuthType: "password", BackupDir: "config-recovery-backup",
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := settings.NewService(db)
+	definition := settings.RecoveryTargetRootDefinition{
+		NodeID: node.ID, RootID: "config-root", SafeLabel: "FAKE_CONFIG_RECOVERY_ROOT_LABEL_FOR_TEST_ONLY",
+		Locator: "/srv/FAKE_CONFIG_RECOVERY_ROOT_FOR_TEST_ONLY",
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		_, err := service.RegisterRecoveryTargetRootTx(context.Background(), tx, definition)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	key := settings.RecoveryTargetRootKeyPrefix + strconv.FormatUint(uint64(node.ID), 10) + "." + definition.RootID
+	var ciphertext string
+	if err := db.Table("system_settings").Select("value").Where("key = ?", key).Scan(&ciphertext).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(ciphertext, "enc:v2:") {
+		t.Fatalf("private registry row is not v2 ciphertext: %q", ciphertext)
+	}
+
+	handler := NewConfigHandler(db, service)
+	for _, includeSecrets := range []bool{false, true} {
+		t.Run("export-"+strconv.FormatBool(includeSecrets), func(t *testing.T) {
+			router := gin.New()
+			router.GET("/config/export", func(c *gin.Context) {
+				c.Set("user_id", uint(1))
+				c.Set("username", "admin")
+				c.Set("role", "admin")
+				handler.Export(c)
+			})
+			path := "/config/export"
+			if includeSecrets {
+				path += "?include_secrets=true"
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			body := response.Body.String()
+			for _, private := range []string{key, ciphertext, definition.Locator, definition.SafeLabel} {
+				if strings.Contains(body, private) {
+					t.Fatalf("private target-root material leaked from export: %s", body)
+				}
+			}
+		})
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"system_settings": []map[string]string{{"key": key, "value": ciphertext}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.POST("/config/import", handler.Import)
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(string(payload)))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, private := range []string{key, ciphertext, definition.Locator, definition.SafeLabel} {
+		if strings.Contains(response.Body.String(), private) {
+			t.Fatalf("private target-root material leaked from import rejection: %s", response.Body.String())
+		}
+	}
+	var after string
+	if err := db.Table("system_settings").Select("value").Where("key = ?", key).Scan(&after).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after != ciphertext {
+		t.Fatal("rejected config import changed the registered target root")
+	}
+}
+
 func TestConfigImportTransitionsBackupAssetEnableBeforePersistingSettings(t *testing.T) {
 	db := openConfigHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {

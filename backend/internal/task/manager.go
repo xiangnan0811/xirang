@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -22,6 +23,8 @@ import (
 	"xirang/backend/internal/task/scheduler"
 	"xirang/backend/internal/ws"
 
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/mattn/go-sqlite3"
 	"github.com/robfig/cron/v3"
 	"gorm.io/gorm"
 )
@@ -51,11 +54,78 @@ const (
 	defaultSampleThrottleWindow   = 10 * time.Second
 	defaultSampleCleanupInterval  = time.Hour
 	defaultSampleCleanupBatchSize = 500
+	nodeWriteReservationAttempts  = 8
 )
+
+var (
+	ErrNodeWriteConflict    = errors.New("node write conflict")
+	ErrNodeWriteUnavailable = errors.New("node write admission unavailable")
+	ErrNodeWriteStartLost   = errors.New("node write start compare-and-swap lost")
+)
+
+// NodeWriteAdmission serializes TaskRun reservations with durable Recovery
+// node leases. The caller owns the transaction and inserts the pending run only
+// after admission succeeds.
+type NodeWriteAdmission interface {
+	AdmitTaskTx(context.Context, *gorm.DB, uint) error
+	EnterTaskExecutionTx(context.Context, *gorm.DB, uint, uint, time.Time) error
+}
+
+// ManagerOption configures a Manager during construction.
+type ManagerOption func(*Manager)
+
+// WithRunContextFactory configures the context used by trigger-owned TaskRun
+// lifecycles. Production uses context.WithTimeout; tests can inject a
+// deterministic deadline context at construction time.
+func WithRunContextFactory(factory func(context.Context, time.Duration) (context.Context, context.CancelFunc)) ManagerOption {
+	return func(manager *Manager) {
+		if factory != nil {
+			manager.runContextFactory = factory
+		}
+	}
+}
 
 // chainContext 保存任务链的上下文信息，用于重试时恢复链路追踪
 type chainContext struct {
 	chainRunID string
+}
+
+type pendingRunOwnership struct {
+	mu       sync.Mutex
+	canceled bool
+	cancels  []context.CancelFunc
+}
+
+func (ownership *pendingRunOwnership) addCancel(cancel context.CancelFunc) {
+	if ownership == nil || cancel == nil {
+		return
+	}
+	ownership.mu.Lock()
+	if !ownership.canceled {
+		ownership.cancels = append(ownership.cancels, cancel)
+		ownership.mu.Unlock()
+		return
+	}
+	ownership.mu.Unlock()
+	cancel()
+}
+
+func (ownership *pendingRunOwnership) cancel() {
+	if ownership == nil {
+		return
+	}
+	ownership.mu.Lock()
+	if ownership.canceled {
+		ownership.mu.Unlock()
+		return
+	}
+	ownership.canceled = true
+	cancels := append([]context.CancelFunc(nil), ownership.cancels...)
+	ownership.cancels = nil
+	ownership.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
 }
 
 func generateChainRunID() string {
@@ -82,6 +152,9 @@ type queuedTaskSample struct {
 
 type Manager struct {
 	db                          *gorm.DB
+	nodeWriteAdmission          NodeWriteAdmission
+	nodeWriteRetryWait          func(context.Context, int) error
+	runContextFactory           func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 	stateMachine                *StateMachine
 	executorFactory             executor.Factory
 	hub                         *ws.Hub
@@ -134,12 +207,14 @@ type Manager struct {
 // through the shared lineage guard before opening a Provider command.
 type ExactAnomalyFunc func(context.Context, model.Task, uint, string, string) ([]anomaly.Finding, error)
 
-func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, scheduler *scheduler.CronScheduler, settingsSvc *settings.Service, alertDispatcher *alerting.Dispatcher, sampleRetentionDays int, taskRunRetentionDays int) *Manager {
+func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, scheduler *scheduler.CronScheduler, settingsSvc *settings.Service, alertDispatcher *alerting.Dispatcher, sampleRetentionDays int, taskRunRetentionDays int, options ...ManagerOption) *Manager {
 	if alertDispatcher == nil {
 		alertDispatcher = alerting.NewDispatcher(db, nil, nil)
 	}
 	m := &Manager{
 		db:                   db,
+		nodeWriteRetryWait:   waitForNodeWriteReservationRetry,
+		runContextFactory:    context.WithTimeout,
 		stateMachine:         NewStateMachine(),
 		executorFactory:      executorFactory,
 		hub:                  hub,
@@ -149,6 +224,11 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 		taskRunRetentionDays: taskRunRetentionDays,
 		settingsSvc:          settingsSvc,
 		alertDispatcher:      alertDispatcher,
+	}
+	for _, option := range options {
+		if option != nil {
+			option(m)
+		}
 	}
 	m.hookRunFunc = m.runSSHHook
 	m.drillSSHScriptFunc = m.runDrillSSHScript
@@ -165,6 +245,29 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 	m.sampleWriter.Start(m.rootCtx)
 
 	return m
+}
+
+func (m *Manager) newRunContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	factory := m.runContextFactory
+	if factory == nil {
+		factory = context.WithTimeout
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	return factory(parent, timeout)
+}
+
+func (m *Manager) claimPendingRunOwnership(taskID uint) (context.Context, *pendingRunOwnership, bool) {
+	launchCtx, launchCancel := context.WithCancel(context.Background())
+	ownership := &pendingRunOwnership{}
+	ownership.addCancel(launchCancel)
+	if _, loaded := m.pendingRuns.LoadOrStore(taskID, ownership); loaded {
+		ownership.cancel()
+		return nil, nil, false
+	}
+	m.chainRunner.Store(taskID, ownership.cancel)
+	return launchCtx, ownership, true
 }
 
 // SetAnomalySink 注入 anomaly.AlertSink，用于快照差异异常检测后的告警提升。
@@ -238,6 +341,219 @@ func (m *Manager) SetLegacyBlockRecorder(recorder publication.LegacyBlockRecorde
 	m.legacyBlockRecorder = recorder
 }
 
+// SetNodeWriteAdmission installs the durable Task/Recovery node boundary. It
+// must be wired before schedules are loaded so every production trigger uses
+// the same coordinator.
+func (m *Manager) SetNodeWriteAdmission(admission NodeWriteAdmission) {
+	m.nodeWriteAdmission = admission
+}
+
+func (m *Manager) reserveTaskRun(ctx context.Context, nodeID uint, requested model.TaskRun) (model.TaskRun, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	wait := m.nodeWriteRetryWait
+	if wait == nil {
+		wait = waitForNodeWriteReservationRetry
+	}
+	for attempt := 0; attempt < nodeWriteReservationAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return model.TaskRun{}, err
+		}
+		candidate := requested
+		candidate.ID = 0
+		candidate.NodeIDSnapshot = nodeID
+		candidate.CreatedAt = time.Time{}
+		candidate.UpdatedAt = time.Time{}
+		err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if m.nodeWriteAdmission != nil {
+				if err := m.nodeWriteAdmission.AdmitTaskTx(ctx, tx, nodeID); err != nil {
+					return err
+				}
+			}
+			return tx.Create(&candidate).Error
+		})
+		if err == nil {
+			return candidate, nil
+		}
+		if errors.Is(err, ErrNodeWriteConflict) {
+			return model.TaskRun{}, ErrNodeWriteConflict
+		}
+		if !retryableNodeWriteReservationError(err) {
+			return model.TaskRun{}, err
+		}
+		if attempt+1 == nodeWriteReservationAttempts {
+			break
+		}
+		if err := wait(ctx, attempt); err != nil {
+			return model.TaskRun{}, err
+		}
+	}
+	return model.TaskRun{}, ErrNodeWriteUnavailable
+}
+
+func (m *Manager) enterTaskExecution(
+	ctx context.Context,
+	runID uint,
+	nodeID uint,
+	startedAt time.Time,
+	taskEntity *model.Task,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	var taskPayload map[string]interface{}
+	var expectedTaskStatus string
+	if taskEntity != nil {
+		expectedTaskStatus = taskEntity.Status
+		from := ParseStatus(expectedTaskStatus)
+		switch from {
+		case StatusSuccess, StatusFailed, StatusCanceled, StatusWarning, StatusSkipped:
+			if err := m.stateMachine.ValidateTransition(from, StatusPending); err != nil {
+				return err
+			}
+			if err := m.stateMachine.ValidateTransition(StatusPending, StatusRunning); err != nil {
+				return err
+			}
+		default:
+			if err := m.stateMachine.ValidateTransition(from, StatusRunning); err != nil {
+				return err
+			}
+		}
+		taskPayload = map[string]interface{}{
+			"status":      string(StatusRunning),
+			"last_run_at": startedAt,
+			"next_run_at": nil,
+			"last_error":  "",
+		}
+	}
+
+	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if m.nodeWriteAdmission != nil {
+			if err := m.nodeWriteAdmission.EnterTaskExecutionTx(ctx, tx, runID, nodeID, startedAt); err != nil {
+				return err
+			}
+		} else {
+			result := tx.Model(&model.TaskRun{}).
+				Where("id = ? AND node_id_snapshot = ? AND status = ?", runID, nodeID, "pending").
+				Updates(map[string]interface{}{"status": "running", "started_at": &startedAt})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return ErrNodeWriteStartLost
+			}
+		}
+
+		if taskEntity == nil {
+			return nil
+		}
+		result := tx.Model(&model.Task{}).
+			Where("id = ? AND status = ?", taskEntity.ID, expectedTaskStatus).
+			Updates(taskPayload)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrNodeWriteStartLost
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if taskEntity != nil {
+		taskEntity.Status = string(StatusRunning)
+		taskEntity.LastRunAt = &startedAt
+		taskEntity.NextRunAt = nil
+		taskEntity.LastError = ""
+	}
+	return nil
+}
+
+func (m *Manager) cancelTaskExecutionBeforeExecutor(
+	runID uint,
+	taskID uint,
+	nodeID uint,
+	previous *model.Task,
+	message string,
+) error {
+	canceledAt := time.Now().UTC()
+	return m.db.Transaction(func(tx *gorm.DB) error {
+		runResult := tx.Model(&model.TaskRun{}).
+			Where("id = ? AND task_id = ? AND node_id_snapshot = ? AND status = ?", runID, taskID, nodeID, "running").
+			Updates(map[string]interface{}{
+				"status":      "canceled",
+				"started_at":  nil,
+				"finished_at": &canceledAt,
+				"duration_ms": int64(0),
+				"last_error":  message,
+			})
+		if runResult.Error != nil {
+			return runResult.Error
+		}
+		if runResult.RowsAffected != 1 {
+			return ErrNodeWriteStartLost
+		}
+
+		if previous == nil {
+			return nil
+		}
+
+		taskResult := tx.Model(&model.Task{}).
+			Where("id = ? AND status = ?", previous.ID, string(StatusRunning)).
+			Updates(map[string]interface{}{
+				"status":      previous.Status,
+				"last_run_at": previous.LastRunAt,
+				"next_run_at": previous.NextRunAt,
+				"last_error":  previous.LastError,
+			})
+		if taskResult.Error != nil {
+			return taskResult.Error
+		}
+		if taskResult.RowsAffected != 1 {
+			return ErrNodeWriteStartLost
+		}
+		return nil
+	})
+}
+
+func retryableNodeWriteReservationError(err error) bool {
+	if errors.Is(err, ErrNodeWriteUnavailable) {
+		return true
+	}
+	var sqliteError sqlite3.Error
+	if errors.As(err, &sqliteError) {
+		return sqliteError.Code == sqlite3.ErrBusy || sqliteError.Code == sqlite3.ErrLocked
+	}
+	var sqliteCode sqlite3.ErrNo
+	if errors.As(err, &sqliteCode) {
+		return sqliteCode == sqlite3.ErrBusy || sqliteCode == sqlite3.ErrLocked
+	}
+	var postgresError *pgconn.PgError
+	if errors.As(err, &postgresError) {
+		return postgresError.Code == "40001" || postgresError.Code == "40P01" || postgresError.Code == "55P03"
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") || strings.Contains(message, "database table is locked")
+}
+
+func waitForNodeWriteReservationRetry(ctx context.Context, attempt int) error {
+	delay := time.Duration(attempt+1) * 5 * time.Millisecond
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func (m *Manager) LoadSchedules(ctx context.Context) error {
 	var tasks []model.Task
 	if err := m.db.WithContext(ctx).Where("cron_spec <> '' AND enabled = ?", true).Find(&tasks).Error; err != nil {
@@ -298,18 +614,24 @@ func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
 	}
 
 	// 互斥检查：防止与同任务的备份/恢复并发执行
-	if _, loaded := m.pendingRuns.LoadOrStore(taskID, struct{}{}); loaded {
+	launchCtx, ownership, claimed := m.claimPendingRunOwnership(taskID)
+	if !claimed {
 		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
 	}
 	scheduled := false
 	nodeIDForCleanup := uint(0)
+	registeredCancel := ownership.cancel
 	defer func() {
 		if !scheduled {
-			m.pendingRuns.Delete(taskID)
+			if registeredCancel != nil {
+				registeredCancel()
+				m.chainRunner.Delete(taskID)
+			}
 			// 如果 restoreNodes 已注册但 goroutine 未启动，需要清理
 			if nodeIDForCleanup > 0 {
 				m.restoreNodes.Delete(nodeIDForCleanup)
 			}
+			m.pendingRuns.Delete(taskID)
 		}
 	}()
 
@@ -327,35 +649,12 @@ func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
 
 	// 校验是否有成功的执行记录
 	var successCount int64
-	m.db.Model(&model.TaskRun{}).Where("task_id = ? AND status = ?", taskID, "success").Count(&successCount)
+	if err := m.db.Model(&model.TaskRun{}).Where("task_id = ? AND status = ?", taskID, "success").Count(&successCount).Error; err != nil {
+		return 0, err
+	}
 	if successCount == 0 {
 		return 0, fmt.Errorf("该任务没有成功的执行记录，无法恢复")
 	}
-
-	// 恢复是破坏性操作，需要节点级互斥（比备份的策略级互斥更严格）。
-	// 使用 nodeLock 保证冲突检查与 restoreNodes 注册的原子性，
-	// 与 runTask() 中的 isNodeRestoring+updateStatus(running) 互斥。
-	nLock := m.nodeLock(taskEntity.NodeID)
-	nLock.Lock()
-	// 1. 内存级检查：是否已有恢复任务正在运行
-	if m.isNodeRestoring(taskEntity.NodeID) {
-		nLock.Unlock()
-		return 0, fmt.Errorf("同节点已有恢复任务正在运行，请稍候再试")
-	}
-	// 2. DB 级检查：是否有普通任务正在运行（Task.Status = running）
-	conflicted, err := m.hasNodeConflictForRestore(taskEntity)
-	if err != nil {
-		nLock.Unlock()
-		return 0, err
-	}
-	if conflicted {
-		nLock.Unlock()
-		return 0, fmt.Errorf("同节点有任务正在运行，请稍候再试")
-	}
-	// 在同步路径中、nodeLock 保护下标记节点正在恢复
-	m.restoreNodes.Store(taskEntity.NodeID, taskID)
-	nodeIDForCleanup = taskEntity.NodeID
-	nLock.Unlock()
 
 	// 确定恢复目标路径
 	restoreTo := strings.TrimSpace(targetPath)
@@ -365,26 +664,71 @@ func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
 	if err := validateRestorePath(restoreTo); err != nil {
 		return 0, err
 	}
+	// Register before the durable reservation so a concurrent Cancel can abort
+	// the reservation itself; registering only before goroutine launch still
+	// leaves a committed-pending window.
+	restoreTask := taskEntity
+	restoreTask.RsyncSource = taskEntity.RsyncTarget // 备份目的地作为源
+	restoreTask.RsyncTarget = restoreTo              // 恢复到目标路径
+	execCtx, cancel := m.newRunContext(launchCtx, computeExecTimeout(restoreTask))
+	ownership.addCancel(cancel)
+	if err := launchCtx.Err(); err != nil {
+		return 0, err
+	}
+	if err := execCtx.Err(); err != nil {
+		return 0, err
+	}
 
-	// 创建恢复执行记录
-	run := model.TaskRun{
+	// 恢复是破坏性操作，需要节点级互斥（比备份的策略级互斥更严格）。
+	// nodeLock keeps the compatibility markers atomic in this process; the
+	// caller-owned DB transaction below is the durable cross-process boundary.
+	nLock := m.nodeLock(taskEntity.NodeID)
+	nLock.Lock()
+	if m.isNodeRestoring(taskEntity.NodeID) {
+		nLock.Unlock()
+		return 0, fmt.Errorf("同节点已有恢复任务正在运行，请稍候再试")
+	}
+	conflicted, err := m.hasNodeConflictForRestore(taskEntity)
+	if err != nil {
+		nLock.Unlock()
+		return 0, err
+	}
+	if conflicted {
+		nLock.Unlock()
+		return 0, fmt.Errorf("同节点有任务正在运行，请稍候再试")
+	}
+	requestedRun := model.TaskRun{
 		TaskID:      taskID,
 		TriggerType: "restore",
 		Status:      "pending",
 	}
-	if err := m.db.Create(&run).Error; err != nil {
+	run, err := m.reserveTaskRun(execCtx, taskEntity.NodeID, requestedRun)
+	if err != nil {
+		nLock.Unlock()
+		if errors.Is(err, ErrNodeWriteConflict) {
+			return 0, fmt.Errorf("同节点有恢复任务正在运行，请稍候再试: %w", err)
+		}
+		if errors.Is(err, ErrNodeWriteUnavailable) {
+			return 0, fmt.Errorf("节点写入协调暂不可用，请稍候再试: %w", err)
+		}
 		return 0, fmt.Errorf("创建恢复执行记录失败: %w", err)
 	}
+	// Register only after the durable pending run commits. A rejected admission
+	// therefore leaves neither a TaskRun nor an in-memory restore marker.
+	m.restoreNodes.Store(taskEntity.NodeID, taskID)
+	nodeIDForCleanup = taskEntity.NodeID
+	nLock.Unlock()
 
+	// Replace the reservation-only audit context with the exact durable TaskRun
+	// binding before any credential or remote operation can begin.
+	execCtx = m.withTaskCredentialAuditContext(execCtx, restoreTask, run.ID, "restore", map[string]any{
+		"operation": "restore_task",
+	})
 	scheduled = true
 	m.taskWG.Add(1)
 	go func() {
 		defer m.taskWG.Done()
-		// 恢复模式：source=备份路径(远程), target=恢复目标路径(远程)
-		restoreTask := taskEntity
-		restoreTask.RsyncSource = taskEntity.RsyncTarget // 备份目的地作为源
-		restoreTask.RsyncTarget = restoreTo              // 恢复到目标路径
-		m.runRestoreTask(taskID, run.ID, restoreTask)
+		m.runRestoreTaskWithContext(taskID, run.ID, restoreTask, execCtx, ownership.cancel)
 	}()
 	return run.ID, nil
 }
@@ -423,15 +767,19 @@ func (m *Manager) Cancel(taskID uint) error {
 	case StatusPending, StatusRetrying:
 		m.stopRetryTimer(taskID)
 		m.retryChainContexts.Delete(taskID) // 清理重试链路上下文，防止泄漏
-		canceledAt := time.Now()
-		if err := m.db.Model(&model.TaskRun{}).
-			Where("task_id = ? AND status = ?", taskID, "pending").
-			Updates(map[string]interface{}{
-				"status":      "canceled",
-				"finished_at": &canceledAt,
-				"last_error":  "任务已取消",
-			}).Error; err != nil {
+		// Runners register their cancel function before competing for any
+		// executor-entry lock. Signal it before the pending-row CAS so a start
+		// transaction cannot advance after cancellation authority is observed.
+		runnerOwnsCancellation := m.cancelTaskRunOwner(taskID)
+		canceledRuns, err := m.cancelPendingTaskRuns(taskID, "任务已取消")
+		if err != nil {
 			return err
+		}
+		if runnerOwnsCancellation && canceledRuns == 0 {
+			// The runner may already have committed its atomic entry. It owns the
+			// matching no-executor compensation and the captured Task snapshot.
+			m.logDispatcher.Dispatch(taskID, nil, "warn", "任务取消请求已发送", taskEntity.Status)
+			return nil
 		}
 		if err := m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
 			"next_run_at": nextCronRun(taskEntity.CronSpec),
@@ -443,12 +791,15 @@ func (m *Manager) Cancel(taskID uint) error {
 		return nil
 	case StatusRunning:
 		m.stopRetryTimer(taskID)
-		if cancelFn, ok := m.chainRunner.Load(taskID); ok {
-			cancelFn()
+		if m.cancelTaskRunOwner(taskID) {
+			// Once a runner owns cancellation, it also owns the atomic terminal
+			// update. An independent Task overwrite here can race its no-executor
+			// compensation and destroy the exact pre-entry outcome.
+			m.logDispatcher.Dispatch(taskID, nil, "warn", "任务已取消，正在终止执行进程", taskEntity.Status)
+			return nil
 		}
-		// 二次确认 runTask 确实收到了取消信号：等待一小段时间后检查 runTask 是否已将状态从 running 变更为 canceled。
-		// 若 runTask 已自行完成（不再是 running），则不再覆盖状态，避免并发写。
-		time.Sleep(100 * time.Millisecond)
+		// Compatibility fallback for a persisted running Task with no live
+		// process owner (for example after an older process crashed).
 		var current struct{ Status string }
 		if err := m.db.Model(&model.Task{}).Select("status").Where("id = ?", taskID).Take(&current).Error; err != nil {
 			return err
@@ -464,14 +815,46 @@ func (m *Manager) Cancel(taskID uint) error {
 		m.logDispatcher.Dispatch(taskID, nil, "warn", "任务已取消，正在终止执行进程", taskEntity.Status)
 		return nil
 	default:
-		// 检查是否有恢复操作正在运行（恢复不改变 Task.Status，但会注册 cancel）
-		if cancelFn, ok := m.chainRunner.Load(taskID); ok {
-			cancelFn()
-			m.logDispatcher.Dispatch(taskID, nil, "warn", "恢复任务已取消", taskEntity.Status)
+		// Terminal-state Tasks may own either an ordinary or legacy-restore runner
+		// between reservation and executor entry.
+		if m.cancelTaskRunOwner(taskID) {
+			if _, err := m.cancelPendingTaskRuns(taskID, "任务已取消"); err != nil {
+				return err
+			}
+			m.logDispatcher.Dispatch(taskID, nil, "warn", "任务已取消", taskEntity.Status)
 			return nil
 		}
 		return fmt.Errorf("仅支持取消待执行、重试中或运行中的任务")
 	}
+}
+
+func (m *Manager) cancelTaskRunOwner(taskID uint) bool {
+	owned := false
+	if value, ok := m.pendingRuns.Load(taskID); ok {
+		if ownership, ok := value.(*pendingRunOwnership); ok {
+			ownership.cancel()
+			owned = true
+		}
+	}
+	if cancel, ok := m.chainRunner.Load(taskID); ok {
+		cancel()
+		owned = true
+	}
+	return owned
+}
+
+func (m *Manager) cancelPendingTaskRuns(taskID uint, message string) (int64, error) {
+	canceledAt := time.Now().UTC()
+	result := m.db.Model(&model.TaskRun{}).
+		Where("task_id = ? AND status = ?", taskID, "pending").
+		Updates(map[string]interface{}{
+			"status":      "canceled",
+			"started_at":  nil,
+			"finished_at": &canceledAt,
+			"duration_ms": int64(0),
+			"last_error":  message,
+		})
+	return result.RowsAffected, result.Error
 }
 
 // Pause 暂停任务：停止调度、阻止触发，保留任务配置和历史。

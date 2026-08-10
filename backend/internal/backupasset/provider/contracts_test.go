@@ -8,6 +8,8 @@ import (
 	"go/token"
 	"io"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -298,5 +300,121 @@ func TestRsyncTreeAttemptAcceptsFixedOpaqueStagingComponent(t *testing.T) {
 	}
 	if err := attempt.Validate(); err != nil {
 		t.Fatalf("fixed opaque staging component rejected: %v", err)
+	}
+}
+
+func TestRestorePortAndRequestRemainClosed(t *testing.T) {
+	portType := reflect.TypeOf((*RestorePort)(nil)).Elem()
+	methods := make([]string, 0, portType.NumMethod())
+	for index := 0; index < portType.NumMethod(); index++ {
+		methods = append(methods, portType.Method(index).Name)
+	}
+	sort.Strings(methods)
+	if want := []string{"Execute", "Preflight", "ProviderKind", "Reconcile", "Verify"}; !reflect.DeepEqual(methods, want) {
+		t.Fatalf("RestorePort methods = %v, want %v", methods, want)
+	}
+
+	requestType := reflect.TypeOf(RestoreRequest{})
+	for _, forbidden := range []string{"Executor", "Command", "Credentials", "SourcePath", "TargetPath"} {
+		if _, exists := requestType.FieldByName(forbidden); exists {
+			t.Fatalf("RestoreRequest exposes forbidden generic field %q", forbidden)
+		}
+	}
+	for _, field := range []struct {
+		typeOf reflect.Type
+		name   string
+	}{
+		{reflect.TypeOf(RestoreSource{}), "Locator"},
+		{reflect.TypeOf(RestoreTarget{}), "RootLocatorDigest"},
+		{reflect.TypeOf(ResticRestoreRequest{}), "SnapshotID"},
+		{reflect.TypeOf(ResticRestoreRequest{}), "Includes"},
+		{reflect.TypeOf(TargetSession{}), "ID"},
+	} {
+		value, exists := field.typeOf.FieldByName(field.name)
+		if !exists || value.Tag.Get("json") != "-" {
+			t.Fatalf("%s.%s must remain private, field=%#v", field.typeOf.Name(), field.name, value)
+		}
+	}
+}
+
+func TestRsyncRestoreSourceResolverHasOnlyPortableInputAndOpaqueOutput(t *testing.T) {
+	sourceType := reflect.TypeOf((*RsyncRestoreSource)(nil)).Elem()
+	streamType := reflect.TypeOf((*RsyncRestoreSourceStream)(nil)).Elem()
+	resolverType := reflect.TypeOf((*RsyncRestoreSourceResolver)(nil)).Elem()
+	if resolverType.NumMethod() != 1 {
+		t.Fatalf("RsyncRestoreSourceResolver method count = %d, want 1", resolverType.NumMethod())
+	}
+	method := resolverType.Method(0)
+	if method.Name != "ResolveRsyncRestoreSource" || method.Type.NumIn() != 2 ||
+		method.Type.In(0) != reflect.TypeOf((*context.Context)(nil)).Elem() ||
+		method.Type.In(1) != reflect.TypeOf(RsyncRestoreSourceRef{}) {
+		t.Fatalf("RsyncRestoreSourceResolver method = %s %s, want context plus scalar ref", method.Name, method.Type)
+	}
+	if method.Type.NumOut() != 2 || method.Type.Out(0) != sourceType ||
+		method.Type.Out(1) != reflect.TypeOf((*error)(nil)).Elem() {
+		t.Fatalf("RsyncRestoreSourceResolver output = %s, want opaque declared-entry source plus error", method.Type)
+	}
+	if sourceType.NumMethod() != 4 {
+		t.Fatalf("RsyncRestoreSource methods = %d, want 4", sourceType.NumMethod())
+	}
+	open, ok := sourceType.MethodByName("OpenDeclaredRegular")
+	if !ok || open.Type.NumIn() != 2 || open.Type.In(0) != reflect.TypeOf((*context.Context)(nil)).Elem() ||
+		open.Type.In(1) != reflect.TypeOf(RestoreEntry{}) || open.Type.NumOut() != 2 || open.Type.Out(0) != streamType ||
+		open.Type.Out(1) != reflect.TypeOf((*error)(nil)).Elem() {
+		t.Fatalf("RsyncRestoreSource.OpenDeclaredRegular = %v, want context plus frozen entry to bounded stream", open.Type)
+	}
+	materialize, ok := sourceType.MethodByName("MaterializeDeclaredEntries")
+	if !ok || materialize.Type.NumIn() != 2 || materialize.Type.In(0) != reflect.TypeOf((*context.Context)(nil)).Elem() ||
+		materialize.Type.In(1) != reflect.TypeOf([]RestoreEntry{}) || materialize.Type.NumOut() != 2 ||
+		materialize.Type.Out(0) != reflect.TypeOf([]RestoreEntry{}) ||
+		materialize.Type.Out(1) != reflect.TypeOf((*error)(nil)).Elem() {
+		t.Fatalf("RsyncRestoreSource.MaterializeDeclaredEntries = %v, want durable facts to strict entries plus error", materialize.Type)
+	}
+	for _, methodName := range []string{"Close", "Revalidate"} {
+		method, ok := sourceType.MethodByName(methodName)
+		if !ok || method.Type.NumOut() != 1 || method.Type.Out(0) != reflect.TypeOf((*error)(nil)).Elem() {
+			t.Fatalf("RsyncRestoreSource.%s = %v, want error-only capability method", methodName, method.Type)
+		}
+	}
+	methods := make([]string, 0, streamType.NumMethod())
+	for index := 0; index < streamType.NumMethod(); index++ {
+		methods = append(methods, streamType.Method(index).Name)
+	}
+	if want := []string{"Close", "Read"}; !reflect.DeepEqual(methods, want) {
+		t.Fatalf("RsyncRestoreSourceStream methods = %v, want %v", methods, want)
+	}
+}
+
+func TestRsyncTargetWriterHasOnlyBoundDeclaredStreamAuthority(t *testing.T) {
+	writerType := reflect.TypeOf((*RsyncTargetWriter)(nil)).Elem()
+	if writerType.NumMethod() != 1 {
+		t.Fatalf("RsyncTargetWriter methods = %d, want 1", writerType.NumMethod())
+	}
+	method := writerType.Method(0)
+	if method.Name != "WriteDeclaredRegular" || method.Type.NumIn() != 2 ||
+		method.Type.In(0) != reflect.TypeOf((*context.Context)(nil)).Elem() ||
+		method.Type.In(1) != reflect.TypeOf(RsyncTargetWriteCall{}) || method.Type.NumOut() != 1 ||
+		method.Type.Out(0) != reflect.TypeOf((*error)(nil)).Elem() {
+		t.Fatalf("RsyncTargetWriter method = %s %s, want one bound declared-stream write", method.Name, method.Type)
+	}
+	callType := reflect.TypeOf(RsyncTargetWriteCall{})
+	want := map[string]reflect.Type{
+		"Target": reflect.TypeOf(RsyncBoundRemoteTarget{}),
+		"Entry":  reflect.TypeOf(RestoreEntry{}),
+		"Source": reflect.TypeOf((*RsyncRestoreSourceStream)(nil)).Elem(),
+		"Permit": reflect.TypeOf(TargetMutationPermit{}),
+	}
+	if callType.NumField() != len(want) {
+		t.Fatalf("RsyncTargetWriteCall fields = %d, want %d", callType.NumField(), len(want))
+	}
+	for index := 0; index < callType.NumField(); index++ {
+		field := callType.Field(index)
+		if want[field.Name] != field.Type {
+			t.Fatalf("RsyncTargetWriteCall field = %#v, want closed authority field", field)
+		}
+		delete(want, field.Name)
+	}
+	if len(want) != 0 {
+		t.Fatalf("RsyncTargetWriteCall missing fields: %v", want)
 	}
 }

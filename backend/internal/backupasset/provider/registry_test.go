@@ -109,6 +109,55 @@ func TestRegistryReturnsCatalogReaderOnlyWhenExplicitlyRegistered(t *testing.T) 
 	}
 }
 
+func TestRegistryReturnsRestorePortOnlyWhenExplicitlyRegistered(t *testing.T) {
+	missing := NewRegistry()
+	if err := missing.Register(backupasset.ProviderRestic, Registration{Prober: &fakeProvider{}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := missing.RestorePort(backupasset.ProviderRestic); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		t.Fatalf("missing restore port error=%v", err)
+	}
+
+	port := &countingRestorePort{kind: backupasset.ProviderRestic}
+	registered := NewRegistry()
+	if err := registered.Register(backupasset.ProviderRestic, Registration{Prober: &fakeProvider{}, RestorePort: port}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := registered.RestorePort(backupasset.ProviderRestic)
+	if err != nil || got != port {
+		t.Fatalf("RestorePort=%T err=%v", got, err)
+	}
+	if _, err := registered.RestorePort(backupasset.ProviderCommand); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		t.Fatalf("unsupported restore port error=%v", err)
+	}
+}
+
+func TestRestorePortKindMatchesRegistration(t *testing.T) {
+	registry := NewRegistry()
+	port := &restorePortWithKind{kind: backupasset.ProviderRestic}
+
+	err := registry.Register(backupasset.ProviderRsync, Registration{
+		Prober:      &fakeProvider{},
+		RestorePort: port,
+	})
+
+	if !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("Register mismatched RestorePort kind error = %v, want ErrInvalidState", err)
+	}
+	if _, err := registry.RestorePort(backupasset.ProviderRsync); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		t.Fatalf("mismatched RestorePort remained registered: %v", err)
+	}
+}
+
+type restorePortWithKind struct {
+	countingRestorePort
+	kind backupasset.ProviderKind
+}
+
+func (port *restorePortWithKind) ProviderKind() backupasset.ProviderKind {
+	return port.kind
+}
+
 type catalogReaderFake struct{}
 
 func (*catalogReaderFake) OpenCatalogRead(context.Context, CatalogReadRequest) (CatalogReadSession, error) {

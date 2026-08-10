@@ -231,6 +231,55 @@ type RangeReader interface {
 	OpenRange(context.Context, ReadSnapshot, PointLocator, EntryLocator, ByteRange) (ReadHandle, ContentStat, error)
 }
 
+// RestorePort is the closed provider boundary for exact recovery work. It has
+// no generic command, arbitrary-path, or credential-bearing operation.
+type RestorePort interface {
+	ProviderKind() backupasset.ProviderKind
+	Preflight(context.Context, RestorePreflightRequest) (RestorePreflightEvidence, error)
+	Execute(context.Context, RestoreRequest, RestoreProgress) (RestoreResult, error)
+	Verify(context.Context, RestoreVerifyRequest) (RestoreVerifyResult, error)
+	Reconcile(context.Context, RestoreReconcileRequest) (RestoreReconcileResult, error)
+}
+
+// RsyncRestoreSourceStream is the bounded regular-file stream returned by an
+// opaque declared-entry source. It carries no locator or filesystem handle.
+type RsyncRestoreSourceStream interface {
+	io.Reader
+	Close() error
+}
+
+// RsyncRestoreSource exposes only exact entries frozen into the durable plan.
+// Repository owns the private mapping from each RestoreEntry to its pinned
+// filesystem declaration and retains the underlying descriptor until Close.
+type RsyncRestoreSource interface {
+	OpenDeclaredRegular(context.Context, RestoreEntry) (RsyncRestoreSourceStream, error)
+	MaterializeDeclaredEntries(context.Context, []RestoreEntry) ([]RestoreEntry, error)
+	Revalidate(context.Context) error
+	Close() error
+}
+
+// RsyncRestoreSourceResolver resolves a scalar Rsync source binding to an
+// opaque declared-entry capability. It intentionally accepts no locator,
+// root, task, or provider-private source material.
+type RsyncRestoreSourceResolver interface {
+	ResolveRsyncRestoreSource(context.Context, RsyncRestoreSourceRef) (RsyncRestoreSource, error)
+}
+
+// RsyncTargetWriteCall carries one already-declared source stream to the
+// bound target authority. It contains no remote root or path locator.
+type RsyncTargetWriteCall struct {
+	Target RsyncBoundRemoteTarget
+	Entry  RestoreEntry
+	Source RsyncRestoreSourceStream
+	Permit TargetMutationPermit
+}
+
+// RsyncTargetWriter is the narrow mutating target authority injected by
+// Runtime. A runner cannot manufacture it from target binding facts.
+type RsyncTargetWriter interface {
+	WriteDeclaredRegular(context.Context, RsyncTargetWriteCall) error
+}
+
 // ResticAttemptV1 is the provider-owned runtime attempt for a native Restic
 // publication. It intentionally keeps access, audit, and fence material out
 // of the tagged wire codec below; those values remain process-local and are

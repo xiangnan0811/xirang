@@ -463,7 +463,8 @@ func (session *catalogReadSession) acceptEntry(parent catalogDirectory, entry En
 	}
 	record := CatalogRecord{
 		NormalizedPath: normalizedPath, ParentNormalizedPath: parent.path, Name: entry.Name,
-		Type: entry.Type, Size: entry.Size, ModifiedAt: modifiedAt, ProviderLocator: entry.Locator,
+		Type: entry.Type, Size: entry.Size, ModifiedAt: modifiedAt,
+		Fingerprint: "", FingerprintStrength: "none", ProviderLocator: entry.Locator,
 	}
 	session.writeRecord(record)
 	if entry.Type == backupasset.CatalogEntryDirectory {
@@ -626,7 +627,8 @@ func (adapter *RsyncCommittedPointAdapter) ProveCatalogManifest(ctx context.Cont
 		return CatalogManifestProof{}, fmt.Errorf("%w: committed Rsync Catalog proof request", ErrCatalogProtocol)
 	}
 	runtimeAccess, ok := request.Snapshot.Access.AdapterData.(RsyncCommittedPointRuntimeAccess)
-	if !ok || request.Snapshot.SourceRevision != runtimeAccess.SourceRevision ||
+	if !ok || runtimeAccess.SourceRevision != runtimeAccess.request.SourceFingerprint ||
+		request.Snapshot.SourceRevision != runtimeAccess.SourceRevision ||
 		request.Point.Native != rsyncCommittedPointLocator(runtimeAccess.request).Native {
 		return CatalogManifestProof{}, fmt.Errorf("%w: committed Rsync Catalog runtime facts", ErrCatalogProtocol)
 	}
@@ -637,7 +639,7 @@ func (adapter *RsyncCommittedPointAdapter) ProveCatalogManifest(ctx context.Cont
 		ManifestID: request.Manifest.ManifestID, Revision: request.Manifest.Revision,
 		DigestAlgorithm: "sha256", Digest: runtimeAccess.request.ManifestDigest,
 		EntryCount: int64(runtimeAccess.request.ManifestEntryCount), Completeness: backupasset.ManifestComplete,
-		SourceRevision: runtimeAccess.SourceRevision,
+		SourceRevision: runtimeAccess.request.SourceFingerprint,
 	}, nil
 }
 

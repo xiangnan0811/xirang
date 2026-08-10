@@ -4,15 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
+	"xirang/backend/internal/backupasset/recovery"
+	"xirang/backend/internal/fileaccess"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
@@ -137,6 +145,1401 @@ func TestBeginManagedRsyncPointReadRejectsUncommittedPointBeforeReaderAccess(t *
 	if got := fixture.admission.closedCount(); got != 1 {
 		t.Fatalf("rejected managed Rsync reader left admission open: closed=%d", got)
 	}
+}
+
+func TestManagedRsyncCatalogBuildCompletesWithFingerprintNone(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	fixture := newManagedRsyncCatalogFixture(t)
+	if _, err := fixture.keyring.Ensure(context.Background(), backupasset.KeyDomainEntryIdentity); err != nil {
+		t.Fatal(err)
+	}
+	indexer, err := catalog.NewIndexer(catalog.IndexerDependencies{
+		DB: fixture.db, Factory: fixture.factory, Lease: fixture.lease, IdentityKeys: fixture.keyring,
+		Now:    func() time.Time { return fixture.now },
+		Config: catalog.IndexerConfig{BatchSize: 100, BuildTimeout: time.Minute, MaxEntries: 100, HeartbeatInterval: time.Second},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation, err := indexer.Build(context.Background(), catalog.BuildRequest{
+		RepositoryID: fixture.repository.ID, RecoveryPointID: fixture.point.ID,
+	})
+	if err != nil {
+		t.Fatalf("build real managed-Rsync Catalog: %v", err)
+	}
+	if generation.State != string(catalog.GenerationComplete) || !generation.IsActive {
+		t.Fatalf("Catalog generation=%+v, want active complete", generation)
+	}
+	var entry model.CatalogEntry
+	if err := fixture.db.Where("generation_id = ?", generation.ID).First(&entry).Error; err != nil {
+		t.Fatal(err)
+	}
+	if entry.Fingerprint != "" || entry.FingerprintStrength != string(catalog.FingerprintNone) {
+		t.Fatalf("persisted generic entry=%+v, want empty fingerprint with none strength", entry)
+	}
+}
+
+type managedRsyncCatalogFixture struct {
+	db         *gorm.DB
+	factory    catalog.PointReadFactory
+	lease      *backupasset.LeaseService
+	keyring    *backupasset.Keyring
+	now        time.Time
+	repository model.BackupRepository
+	point      model.RecoveryPoint
+}
+
+func newManagedRsyncCatalogFixture(t *testing.T) managedRsyncCatalogFixture {
+	t.Helper()
+	publicationFixture := newRsyncPublicationFixture(t)
+	markerKey, err := publicationFixture.service.rsyncMarkerKey(context.Background(), publicationFixture.repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managedRoot := filepath.Join(t.TempDir(), "managed-rsync-root")
+	bootstrap, err := provider.BootstrapRsyncManagedRoot(context.Background(), provider.RsyncManagedRootBootstrapRequest{
+		ManagedRoot: managedRoot, RepositoryID: publicationFixture.repository.ID, MarkerKey: markerKey, CreatedAt: publicationFixture.now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicationFixture.binding.ManagedRootLocator = managedRoot
+	publicationFixture.binding.RootMarkerDigest = bootstrap.RepositoryMarkerDigest
+	publicationFixture.binding.ManagedRootIdentityDigest = bootstrap.ManagedRootIdentityDigest
+	bindingPayload, err := encodeManagedRsyncBindingDocumentV2(publicationFixture.binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := managedRsyncRepositoryIdentity(publicationFixture.binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var binding model.RepositoryAccessBinding
+	if err := publicationFixture.db.Where("repository_id = ?", publicationFixture.repository.ID).First(&binding).Error; err != nil {
+		t.Fatal(err)
+	}
+	binding.EncryptedConfig = bindingPayload
+	binding.UpdatedAt = publicationFixture.now
+	if err := publicationFixture.db.Save(&binding).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := publicationFixture.db.Model(&model.BackupRepository{}).Where("id = ?", publicationFixture.repository.ID).
+		Update("repository_identity", identity).Error; err != nil {
+		t.Fatal(err)
+	}
+	publicationFixture.repository.RepositoryIdentity = &identity
+
+	execution, err := publicationFixture.service.Prepare(context.Background(), publicationFixture.run())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = execution.Abandon(backupasset.ErrPublicationSessionAbandoned) })
+	state, ok := execution.(*rsyncPublicationExecution)
+	if !ok {
+		t.Fatalf("managed Rsync execution type=%T", execution)
+	}
+	input, err := state.RsyncTreePublicationInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDirectory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDirectory, "payload.txt"), []byte("managed Catalog payload\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	input.Source = provider.RsyncTreeCommandSource{LocalPath: sourceDirectory}
+	strategy, err := provider.NewLocalRsyncTreePublicationStrategy(func() time.Time { return publicationFixture.now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := strategy.Prepare(context.Background(), provider.PublicationPrepareRequest{
+		Attempt: provider.NewRsyncTreePublicationAttempt(state.attempt), RsyncTreeInput: &input,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := strategy.Execute(context.Background(), prepared, provider.PublicationProgress{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitRecord, err := strategy.RecordCommit(context.Background(), prepared, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := commitRecord.RsyncTreeCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execution.RecordProviderCommit(context.Background(), provider.NewRsyncTreeProviderCommit(commit)); err != nil {
+		t.Fatal(err)
+	}
+	if err := publicationFixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", state.attempt.RecoveryPointID).Updates(map[string]any{
+		"state": string(backupasset.RecoveryPointCommitted), "committed_at": publicationFixture.now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	var point model.RecoveryPoint
+	if err := publicationFixture.db.First(&point, "id = ?", state.attempt.RecoveryPointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(Dependencies{
+		DB: publicationFixture.db, Foundation: publicationFixture.service.foundation, Registry: publicationFixture.service.registry,
+		Keyring: publicationFixture.service.keyring, Now: func() time.Time { return publicationFixture.now },
+		Admission: publicationFixture.admission, History: publicationFixture.service.history, Metrics: publication.NoopMetrics{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := model.RecoveryPointManifest{
+		ID: strings.Repeat("3", 32), RecoveryPointID: point.ID, Revision: 1, DigestAlgorithm: "sha256",
+		Digest: point.ManifestDigest, Generator: "rsync-managed-tree", GeneratorVersion: "v1",
+		Completeness: string(backupasset.ManifestComplete), EntryCount: point.EntryCount, LogicalBytes: point.LogicalBytes,
+		IsActive: true, CreatedAt: publicationFixture.now, UpdatedAt: publicationFixture.now,
+	}
+	if err := publicationFixture.db.Create(&manifest).Error; err != nil {
+		t.Fatal(err)
+	}
+	return managedRsyncCatalogFixture{
+		db: publicationFixture.db, factory: service, lease: publicationFixture.service.lease, keyring: publicationFixture.service.keyring,
+		now: publicationFixture.now, repository: publicationFixture.repository, point: point,
+	}
+}
+
+// The portable resolver boundary deliberately has no caller-supplied Task ID.
+// Repository must derive the producing Task from the durable RecoveryPoint.
+func TestRsyncResolverDerivesProducingTaskOnly(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict pinned source capability is Linux-only")
+	}
+	fixture := newRsyncRestoreResolverFixture(t)
+
+	var resolver provider.RsyncRestoreSourceResolver = fixture.service
+	source, err := resolver.ResolveRsyncRestoreSource(context.Background(), fixture.ref)
+	if err != nil {
+		t.Fatalf("resolve durable Rsync scalar ref: %v", err)
+	}
+	defer func() { _ = source.Close() }()
+	if err := source.Revalidate(context.Background()); err != nil {
+		t.Fatalf("revalidate derived pinned source: %v", err)
+	}
+
+	forged := fixture.ref
+	forged.RecoveryPointID = strings.Repeat("f", 32)
+	if _, err := resolver.ResolveRsyncRestoreSource(context.Background(), forged); !errors.Is(err, provider.ErrInvalidRestoreRequest) {
+		t.Fatalf("substituted scalar source ref error=%v, want invalid restore request", err)
+	}
+}
+
+func TestRsyncResolverRejectsPlanSelectionCatalogRevisionAndCiphertextDrift(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict pinned source capability is Linux-only")
+	}
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *rsyncRestoreResolverFixture, *provider.RsyncRestoreSourceRef)
+	}{
+		{name: "plan binding", mutate: func(_ *testing.T, _ *rsyncRestoreResolverFixture, ref *provider.RsyncRestoreSourceRef) {
+			ref.PlanBindingDigest = strings.Repeat("e", 64)
+		}},
+		{name: "selection", mutate: func(_ *testing.T, _ *rsyncRestoreResolverFixture, ref *provider.RsyncRestoreSourceRef) {
+			ref.SelectionDigest = strings.Repeat("e", 64)
+		}},
+		{name: "catalog", mutate: func(_ *testing.T, _ *rsyncRestoreResolverFixture, ref *provider.RsyncRestoreSourceRef) {
+			ref.CatalogGenerationID = strings.Repeat("e", 32)
+		}},
+		{name: "source revision", mutate: func(_ *testing.T, _ *rsyncRestoreResolverFixture, ref *provider.RsyncRestoreSourceRef) {
+			ref.SourceRevisionDigest = strings.Repeat("e", 64)
+		}},
+		{name: "mutable source revision kind", mutate: func(t *testing.T, fixture *rsyncRestoreResolverFixture, _ *provider.RsyncRestoreSourceRef) {
+			if err := fixture.db.Model(&model.BackupAssetRecoveryPlan{}).
+				Where("id = ?", fixture.ref.PlanID).
+				Update("source_revision_kind", "observation").Error; err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "mutable plan item fingerprint", mutate: func(t *testing.T, fixture *rsyncRestoreResolverFixture, _ *provider.RsyncRestoreSourceRef) {
+			if err := fixture.db.Model(&model.BackupAssetRecoveryPlanItem{}).
+				Where("plan_id = ?", fixture.ref.PlanID).
+				Update("source_fingerprint", strings.Repeat("e", 64)).Error; err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "manifest", mutate: func(_ *testing.T, _ *rsyncRestoreResolverFixture, ref *provider.RsyncRestoreSourceRef) {
+			ref.ManifestDigest = strings.Repeat("e", 64)
+		}},
+		{name: "encrypted plan source", mutate: func(t *testing.T, fixture *rsyncRestoreResolverFixture, _ *provider.RsyncRestoreSourceRef) {
+			var plan model.BackupAssetRecoveryPlan
+			if err := fixture.db.First(&plan, "id = ?", fixture.ref.PlanID).Error; err != nil {
+				t.Fatal(err)
+			}
+			plan.EncryptedSourceLocator = "FAKE_REPLACED_RSYNC_POINT_LOCATOR_FOR_TEST_ONLY"
+			if err := fixture.db.Save(&plan).Error; err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "matching encrypted point and plan source", mutate: func(t *testing.T, fixture *rsyncRestoreResolverFixture, _ *provider.RsyncRestoreSourceRef) {
+			const replacement = "FAKE_REPLACED_RSYNC_POINT_LOCATOR_FOR_TEST_ONLY"
+			var plan model.BackupAssetRecoveryPlan
+			if err := fixture.db.First(&plan, "id = ?", fixture.ref.PlanID).Error; err != nil {
+				t.Fatal(err)
+			}
+			var point model.RecoveryPoint
+			if err := fixture.db.First(&point, "id = ?", fixture.ref.RecoveryPointID).Error; err != nil {
+				t.Fatal(err)
+			}
+			plan.EncryptedSourceLocator = replacement
+			point.EncryptedProviderLocator = replacement
+			if err := fixture.db.Save(&plan).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := fixture.db.Save(&point).Error; err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newRsyncRestoreResolverFixture(t)
+			candidate := fixture.ref
+			test.mutate(t, fixture, &candidate)
+			if source, err := fixture.service.ResolveRsyncRestoreSource(context.Background(), candidate); !errors.Is(err, provider.ErrInvalidRestoreRequest) {
+				if source != nil {
+					_ = source.Close()
+				}
+				t.Fatalf("substituted Rsync source error=%v, want invalid restore request", err)
+			}
+		})
+	}
+}
+
+func TestRsyncResolverRequiresExactDurablePlanItems(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict pinned source capability is Linux-only")
+	}
+	fixture := newRsyncRestoreResolverFixture(t)
+	if err := fixture.db.Where("plan_id = ?", fixture.ref.PlanID).Delete(&model.BackupAssetRecoveryPlanItem{}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	source, err := fixture.service.ResolveRsyncRestoreSource(context.Background(), fixture.ref)
+	if source != nil {
+		_ = source.Close()
+	}
+	if !errors.Is(err, provider.ErrInvalidRestoreRequest) {
+		t.Fatalf("resolve without durable plan items error=%v, want invalid restore request", err)
+	}
+}
+
+func TestRsyncResolverRejectsMissingSelectedCatalogEntry(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict pinned source capability is Linux-only")
+	}
+	fixture := newRsyncRestoreResolverFixture(t)
+	if err := fixture.db.Where("generation_id = ?", fixture.ref.CatalogGenerationID).Delete(&model.CatalogEntry{}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	source, err := fixture.service.ResolveRsyncRestoreSource(context.Background(), fixture.ref)
+	if source != nil {
+		_ = source.Close()
+	}
+	if !errors.Is(err, provider.ErrInvalidRestoreRequest) {
+		t.Fatalf("resolve without selected catalog entry error=%v, want invalid restore request", err)
+	}
+}
+
+func TestRsyncResolverRejectsImmutableLocatorDigestDrift(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict pinned source capability is Linux-only")
+	}
+	fixture := newRsyncRestoreResolverFixture(t)
+	if err := fixture.db.Model(&model.BackupAssetRecoveryPlan{}).
+		Where("id = ?", fixture.ref.PlanID).
+		Update("immutable_locator_digest", strings.Repeat("8", 64)).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	source, err := fixture.service.ResolveRsyncRestoreSource(context.Background(), fixture.ref)
+	if source != nil {
+		_ = source.Close()
+	}
+	if !errors.Is(err, provider.ErrInvalidRestoreRequest) {
+		t.Fatalf("resolve with stale immutable locator digest error=%v, want invalid restore request", err)
+	}
+}
+
+type rsyncRestoreResolverFixture struct {
+	service *Service
+	db      *gorm.DB
+	ref     provider.RsyncRestoreSourceRef
+	entry   provider.RestoreEntry
+	content string
+	root    string
+}
+
+func newRsyncRestoreResolverFixture(t *testing.T) *rsyncRestoreResolverFixture {
+	return newRsyncRestoreResolverFixtureWithAlternate(t, false)
+}
+
+func newRsyncRestoreResolverFixtureWithAlternate(t *testing.T, alternate bool) *rsyncRestoreResolverFixture {
+	t.Helper()
+	fixture := newRsyncPublicationFixture(t)
+	markerKey, err := fixture.service.rsyncMarkerKey(context.Background(), fixture.repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managedRoot := filepath.Join(t.TempDir(), "managed-rsync-root")
+	bootstrap, err := provider.BootstrapRsyncManagedRoot(context.Background(), provider.RsyncManagedRootBootstrapRequest{
+		ManagedRoot: managedRoot, RepositoryID: fixture.repository.ID, MarkerKey: markerKey, CreatedAt: fixture.now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.binding.ManagedRootLocator = managedRoot
+	fixture.binding.RootMarkerDigest = bootstrap.RepositoryMarkerDigest
+	fixture.binding.ManagedRootIdentityDigest = bootstrap.ManagedRootIdentityDigest
+	bindingPayload, err := encodeManagedRsyncBindingDocumentV2(fixture.binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := managedRsyncRepositoryIdentity(fixture.binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var storedBinding model.RepositoryAccessBinding
+	if err := fixture.db.Where("repository_id = ?", fixture.repository.ID).First(&storedBinding).Error; err != nil {
+		t.Fatal(err)
+	}
+	storedBinding.EncryptedConfig = bindingPayload
+	storedBinding.UpdatedAt = fixture.now
+	if err := fixture.db.Save(&storedBinding).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Model(&model.BackupRepository{}).Where("id = ?", fixture.repository.ID).Update("repository_identity", identity).Error; err != nil {
+		t.Fatal(err)
+	}
+	fixture.repository.RepositoryIdentity = &identity
+
+	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = execution.Abandon(backupasset.ErrPublicationSessionAbandoned) })
+	state, ok := execution.(*rsyncPublicationExecution)
+	if !ok {
+		t.Fatalf("managed Rsync execution type=%T", execution)
+	}
+	input, err := state.RsyncTreePublicationInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDirectory := t.TempDir()
+	const sourceName = "payload.txt"
+	const sourceContents = "managed restore payload\n"
+	if err := os.WriteFile(filepath.Join(sourceDirectory, sourceName), []byte(sourceContents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if alternate {
+		alternateDirectory := filepath.Join(sourceDirectory, "alternate")
+		if err := os.Mkdir(alternateDirectory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(alternateDirectory, sourceName), []byte(sourceContents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	input.Source = provider.RsyncTreeCommandSource{LocalPath: sourceDirectory}
+	strategy, err := provider.NewLocalRsyncTreePublicationStrategy(func() time.Time { return fixture.now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := strategy.Prepare(context.Background(), provider.PublicationPrepareRequest{
+		Attempt: provider.NewRsyncTreePublicationAttempt(state.attempt), RsyncTreeInput: &input,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := strategy.Execute(context.Background(), prepared, provider.PublicationProgress{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitRecord, err := strategy.RecordCommit(context.Background(), prepared, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := commitRecord.RsyncTreeCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execution.RecordProviderCommit(context.Background(), provider.NewRsyncTreeProviderCommit(commit)); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", state.attempt.RecoveryPointID).Updates(map[string]any{
+		"state": string(backupasset.RecoveryPointCommitted), "committed_at": fixture.now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.AutoMigrate(&model.BackupAssetRecoveryPlan{}, &model.BackupAssetRecoveryPlanItem{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var point model.RecoveryPoint
+	if err := fixture.db.First(&point, "id = ?", state.attempt.RecoveryPointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	manifest := model.RecoveryPointManifest{
+		ID: strings.Repeat("3", 32), RecoveryPointID: point.ID, Revision: 1, DigestAlgorithm: "sha256",
+		Digest: point.ManifestDigest, Generator: "rsync-managed-tree", GeneratorVersion: "v1",
+		Completeness: string(backupasset.ManifestComplete), EntryCount: point.EntryCount, LogicalBytes: point.LogicalBytes,
+		IsActive: true, CreatedAt: fixture.now, UpdatedAt: fixture.now,
+	}
+	if err := fixture.db.Create(&manifest).Error; err != nil {
+		t.Fatal(err)
+	}
+	immutableLocatorDigest, err := publication.ImmutableLocatorDigest(
+		fixture.repository.ID, backupasset.ProviderRsync, point.ID, point.EncryptedProviderLocator,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finishedAt := fixture.now
+	generation := model.CatalogGeneration{
+		ID: strings.Repeat("4", 32), RecoveryPointID: point.ID, Generation: 1, State: string(catalog.GenerationComplete), IsActive: true,
+		ManifestID:        &manifest.ID,
+		SourceFingerprint: point.SourceFingerprint, ExpectedEntryCount: point.EntryCount, WrittenEntryCount: point.EntryCount,
+		ExpectedDigest: point.ManifestDigest, WrittenDigest: strings.Repeat("9", 64),
+		StartedAt: fixture.now.Add(-time.Minute), FinishedAt: &finishedAt, CreatedAt: fixture.now, UpdatedAt: fixture.now,
+	}
+	if err := fixture.db.Create(&generation).Error; err != nil {
+		t.Fatal(err)
+	}
+	plan := model.BackupAssetRecoveryPlan{
+		ID:                       strings.Repeat("5", 32),
+		RequesterID:              1,
+		Endpoint:                 "recovery_execute",
+		IdempotencyKeyDigest:     strings.Repeat("6", 64),
+		RepositoryID:             fixture.repository.ID,
+		RecoveryPointID:          point.ID,
+		SourceRevisionDigest:     strings.Repeat("7", 64),
+		SourceRevisionKind:       "immutable",
+		ImmutableLocatorDigest:   immutableLocatorDigest,
+		ImmutableManifestDigest:  point.ManifestDigest,
+		CatalogGenerationID:      generation.ID,
+		EncryptedSourceLocator:   point.EncryptedProviderLocator,
+		TargetMode:               "isolated",
+		TargetNodeID:             fixture.task.NodeID,
+		TargetRootID:             strings.Repeat("9", 32),
+		RootLocatorDigest:        strings.Repeat("a", 64),
+		PathDigest:               strings.Repeat("b", 64),
+		TargetBaseRevision:       "node-revision",
+		CredentialScopeRevision:  "credential-revision",
+		RootRevision:             "root-revision",
+		FilesystemRevision:       "filesystem-revision",
+		SelectionDigest:          strings.Repeat("c", 64),
+		BindingDigest:            strings.Repeat("d", 64),
+		CapabilityRevision:       "capability-revision",
+		ConflictPolicy:           "fail_on_conflict",
+		OperationSetDigest:       strings.Repeat("e", 64),
+		DeleteSetDigest:          strings.Repeat("f", 64),
+		SecurityDecision:         "clean",
+		SecurityDecisionDigest:   strings.Repeat("1", 64),
+		SecurityFindingSetDigest: strings.Repeat("2", 64),
+		SecurityPolicyRevision:   "security-revision",
+		PreflightRevision:        "preflight-revision",
+		PreflightExpiresAt:       fixture.now.Add(time.Hour),
+		State:                    "draft",
+		TransitionRevision:       1,
+		CreatedAt:                fixture.now,
+		UpdatedAt:                fixture.now,
+	}
+	if err := fixture.db.Create(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+	entry := model.CatalogEntry{
+		GenerationID: generation.ID, EntryID: strings.Repeat("f", 64), RecoveryPointID: point.ID,
+		NormalizedPath: sourceName, Name: sourceName, EntryType: string(backupasset.CatalogEntryFile), Size: int64(len(sourceContents)),
+		FingerprintStrength:      string(catalog.FingerprintNone),
+		EncryptedProviderLocator: `{"version":1,"native":"` + sourceName + `"}`, SecurityState: "sealed", CreatedAt: fixture.now,
+	}
+	if err := fixture.db.Create(&entry).Error; err != nil {
+		t.Fatal(err)
+	}
+	item := model.BackupAssetRecoveryPlanItem{
+		ID: strings.Repeat("b", 32), PlanID: plan.ID, Ordinal: 0, RecoveryPointID: point.ID, CatalogGenerationID: generation.ID,
+		EntryID: entry.EntryID, EntryType: entry.EntryType, RelativePathDigest: publication.RecoveryPlanItemPathDigest(
+			plan.RepositoryID, point.ID, generation.ID, entry.EntryID, entry.NormalizedPath,
+		), CreatedAt: fixture.now,
+	}
+	if err := fixture.db.Create(&item).Error; err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(Dependencies{
+		DB: fixture.db, Foundation: fixture.service.foundation, Registry: fixture.service.registry, Keyring: fixture.service.keyring,
+		Now: func() time.Time { return fixture.now }, Admission: fixture.admission, History: fixture.service.history, Metrics: publication.NoopMetrics{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &rsyncRestoreResolverFixture{service: service, db: fixture.db, ref: provider.RsyncRestoreSourceRef{
+		PlanID:               plan.ID,
+		PlanBindingDigest:    plan.BindingDigest,
+		RepositoryID:         plan.RepositoryID,
+		RecoveryPointID:      plan.RecoveryPointID,
+		CatalogGenerationID:  plan.CatalogGenerationID,
+		SelectionDigest:      plan.SelectionDigest,
+		SourceRevisionDigest: plan.SourceRevisionDigest,
+		ManifestDigest:       plan.ImmutableManifestDigest,
+	}, entry: provider.RestoreEntry{
+		AssetRef:           backupasset.AssetRef{RecoveryPointID: point.ID, EntryID: entry.EntryID},
+		Type:               backupasset.CatalogEntryFile,
+		ExpectedSize:       entry.Size,
+		TargetObjectDigest: item.RelativePathDigest,
+	}, content: sourceContents, root: managedRoot}
+}
+
+func TestRsyncResolverExposesOnlyExactDeclaredEntries(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict pinned source capability is Linux-only")
+	}
+	fixture := newRsyncRestoreResolverFixture(t)
+	source, err := fixture.service.ResolveRsyncRestoreSource(context.Background(), fixture.ref)
+	if err != nil {
+		t.Fatalf("resolve durable Rsync source: %v", err)
+	}
+	defer func() { _ = source.Close() }()
+	materialized, err := source.MaterializeDeclaredEntries(context.Background(), []provider.RestoreEntry{fixture.entry})
+	if err != nil || len(materialized) != 1 {
+		t.Fatalf("materialize exact declared entry: entries=%#v err=%v", materialized, err)
+	}
+	strictEntry := materialized[0]
+
+	stream, err := source.OpenDeclaredRegular(context.Background(), strictEntry)
+	if err != nil {
+		t.Fatalf("open exact declared entry: %v", err)
+	}
+	payload, readErr := io.ReadAll(stream)
+	closeErr := stream.Close()
+	if readErr != nil || closeErr != nil {
+		t.Fatalf("read exact declared entry: read=%v close=%v", readErr, closeErr)
+	}
+	if string(payload) != fixture.content {
+		t.Fatalf("declared entry payload = %q, want %q", payload, fixture.content)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*provider.RestoreEntry)
+	}{
+		{name: "asset ref", mutate: func(entry *provider.RestoreEntry) { entry.AssetRef.EntryID = strings.Repeat("e", 64) }},
+		{name: "type", mutate: func(entry *provider.RestoreEntry) { entry.Type = backupasset.CatalogEntryDirectory }},
+		{name: "size", mutate: func(entry *provider.RestoreEntry) { entry.ExpectedSize++ }},
+		{name: "digest", mutate: func(entry *provider.RestoreEntry) { entry.ExpectedDigest = strings.Repeat("e", 64) }},
+		{name: "target object", mutate: func(entry *provider.RestoreEntry) { entry.TargetObjectDigest = strings.Repeat("e", 64) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := strictEntry
+			test.mutate(&candidate)
+			stream, err := source.OpenDeclaredRegular(context.Background(), candidate)
+			if stream != nil {
+				_ = stream.Close()
+			}
+			if !errors.Is(err, provider.ErrRsyncRestoreSourceDrift) {
+				t.Fatalf("forged declared entry error=%v, want source drift", err)
+			}
+		})
+	}
+}
+
+func TestRsyncResolverAcceptsCatalogProjectionDigestDistinctFromManifest(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict pinned source capability is Linux-only")
+	}
+	fixture := newRsyncRestoreResolverFixture(t)
+	source, err := fixture.service.ResolveRsyncRestoreSource(context.Background(), fixture.ref)
+	if err != nil {
+		t.Fatalf("resolve Catalog-none source before strong projection: %v", err)
+	}
+	materialized, err := source.MaterializeDeclaredEntries(context.Background(), []provider.RestoreEntry{fixture.entry})
+	closeErr := source.Close()
+	if err != nil || closeErr != nil || len(materialized) != 1 {
+		t.Fatalf("materialize strong projection digest: entries=%#v materialize=%v close=%v", materialized, err, closeErr)
+	}
+	if err := fixture.db.Model(&model.CatalogEntry{}).
+		Where("generation_id = ? AND entry_id = ?", fixture.ref.CatalogGenerationID, fixture.entry.AssetRef.EntryID).
+		Updates(map[string]any{
+			"fingerprint": materialized[0].ExpectedDigest, "fingerprint_strength": string(catalog.FingerprintStrong),
+		}).Error; err != nil {
+		t.Fatal(err)
+	}
+	var generation model.CatalogGeneration
+	if err := fixture.db.First(&generation, "id = ?", fixture.ref.CatalogGenerationID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if generation.WrittenDigest == generation.ExpectedDigest {
+		t.Fatal("fixture must keep the Catalog projection digest distinct from the provider manifest digest")
+	}
+
+	source, err = fixture.service.ResolveRsyncRestoreSource(context.Background(), fixture.ref)
+	if err != nil {
+		t.Fatalf("resolve with distinct Catalog projection digest: %v", err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatalf("close resolved source: %v", err)
+	}
+}
+
+func TestRsyncResolverDerivesMissingCatalogFingerprintFromAuthenticatedTree(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict pinned source capability is Linux-only")
+	}
+	fixture := newRsyncRestoreResolverFixture(t)
+	var entry model.CatalogEntry
+	if err := fixture.db.First(&entry,
+		"generation_id = ? AND entry_id = ?", fixture.ref.CatalogGenerationID, fixture.entry.AssetRef.EntryID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if entry.Fingerprint != "" || entry.FingerprintStrength != string(catalog.FingerprintNone) {
+		t.Fatalf("fixture Catalog fingerprint = %q/%q, want unavailable/none", entry.Fingerprint, entry.FingerprintStrength)
+	}
+
+	source, err := fixture.service.ResolveRsyncRestoreSource(context.Background(), fixture.ref)
+	if err != nil {
+		t.Fatalf("resolve from authenticated managed-tree manifest: %v", err)
+	}
+	defer func() { _ = source.Close() }()
+	materialized, err := source.MaterializeDeclaredEntries(context.Background(), []provider.RestoreEntry{fixture.entry})
+	if err != nil || len(materialized) != 1 || materialized[0].Validate(fixture.ref.RecoveryPointID) != nil {
+		t.Fatalf("materialize manifest-backed declared entry: entries=%#v err=%v", materialized, err)
+	}
+}
+
+func TestRsyncRestorePortMaterializesFingerprintNoneDigestFromDurableSource(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict pinned source capability is Linux-only")
+	}
+	fixture := newRsyncRestoreResolverFixture(t)
+	var plan model.BackupAssetRecoveryPlan
+	if err := fixture.db.First(&plan, "id = ?", fixture.ref.PlanID).Error; err != nil {
+		t.Fatal(err)
+	}
+	var item model.BackupAssetRecoveryPlanItem
+	if err := fixture.db.Where("plan_id = ?", plan.ID).First(&item).Error; err != nil {
+		t.Fatal(err)
+	}
+	var catalogEntry model.CatalogEntry
+	if err := fixture.db.Where("generation_id = ? AND entry_id = ?", item.CatalogGenerationID, item.EntryID).
+		First(&catalogEntry).Error; err != nil {
+		t.Fatal(err)
+	}
+	if catalogEntry.Fingerprint != "" || catalogEntry.FingerprintStrength != string(catalog.FingerprintNone) {
+		t.Fatalf("durable Catalog entry fingerprint = %q/%q, want unavailable/none", catalogEntry.Fingerprint, catalogEntry.FingerprintStrength)
+	}
+	ref, err := recovery.NewRsyncRestoreSourceRef(plan)
+	if err != nil {
+		t.Fatalf("project durable Recovery plan to scalar Rsync ref: %v", err)
+	}
+
+	request := validRepositoryRsyncRestoreRequest(t)
+	request.Rsync = &provider.RsyncRestoreRequest{ManifestDigest: ref.ManifestDigest, SourceRef: ref}
+	request.Entries = []provider.RestoreEntry{{
+		AssetRef: backupasset.AssetRef{RecoveryPointID: item.RecoveryPointID, EntryID: item.EntryID},
+		Type:     backupasset.CatalogEntryType(item.EntryType), ExpectedSize: catalogEntry.Size,
+		TargetObjectDigest: item.RelativePathDigest,
+	}}
+	durableFacts := request.Entries[0]
+	if request.Entries[0].ExpectedDigest != "" {
+		t.Fatal("production-path fixture invented a caller-side content digest")
+	}
+
+	now := time.Now().UTC()
+	preflightPermit, err := provider.NewTargetPreflightPermit(provider.TargetObservationPermit{
+		TargetBindingDigest: request.Target.BindingDigest,
+		Session: provider.TargetSession{
+			ID: strings.Repeat("a", 32), Purpose: provider.TargetPurposePreflight,
+			CredentialRevision: "credential-revision-1", ExpiresAt: now.Add(time.Minute),
+		},
+	}, request.Target, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifyPermit, err := provider.NewTargetVerifyPermit(provider.TargetObservationPermit{
+		TargetBindingDigest: request.Target.BindingDigest,
+		Session: provider.TargetSession{
+			ID: strings.Repeat("b", 32), Purpose: provider.TargetPurposeVerify,
+			CredentialRevision: "credential-revision-1", ExpiresAt: now.Add(time.Minute),
+		},
+	}, request.Target, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconcilePermit, err := provider.NewTargetReconcilePermit(provider.TargetObservationPermit{
+		TargetBindingDigest: request.Target.BindingDigest,
+		Session: provider.TargetSession{
+			ID: strings.Repeat("c", 32), Purpose: provider.TargetPurposeReconcile,
+			CredentialRevision: "credential-revision-1", ExpiresAt: now.Add(time.Minute),
+		},
+	}, request.Target, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &recordingRepositoryRsyncRestoreRunner{}
+	port := NewRsyncRestorePort(fixture.service, &recordingRepositoryRsyncTargetWriter{}, runner)
+	if _, err := provider.PreflightRestore(context.Background(), port, provider.RestorePreflightRequest{Request: request, Permit: preflightPermit}); err != nil {
+		t.Errorf("Preflight with scalar ref and durable entry facts: %v", err)
+	}
+	if _, err := provider.ExecuteRestore(context.Background(), port, request, provider.RestoreProgress{}); err != nil {
+		t.Errorf("Execute with scalar ref and durable entry facts: %v", err)
+	}
+	if _, err := provider.VerifyRestore(context.Background(), port, provider.RestoreVerifyRequest{Request: request, Permit: verifyPermit}); err != nil {
+		t.Errorf("Verify with scalar ref and durable entry facts: %v", err)
+	}
+	if _, err := provider.ReconcileRestore(context.Background(), port, provider.RestoreReconcileRequest{Request: request, Permit: reconcilePermit}); err != nil {
+		t.Errorf("Reconcile with scalar ref and durable entry facts: %v", err)
+	}
+
+	phaseEntries := map[string][]provider.RestoreEntry{}
+	if len(runner.preflights) == 1 {
+		phaseEntries["preflight"] = runner.preflights[0].Entries
+	}
+	if len(runner.executes) == 1 {
+		phaseEntries["execute"] = runner.executes[0].Entries
+	}
+	if len(runner.verifies) == 1 {
+		phaseEntries["verify"] = runner.verifies[0].Entries
+	}
+	if len(runner.reconciles) == 1 {
+		phaseEntries["reconcile"] = runner.reconciles[0].Entries
+	}
+	if len(phaseEntries) != 4 {
+		t.Fatalf("runner phases = %v, want preflight/execute/verify/reconcile", phaseEntries)
+	}
+	for phase, entries := range phaseEntries {
+		if len(entries) != 1 || entries[0].Validate(ref.RecoveryPointID) != nil || entries[0].ExpectedDigest == "" {
+			t.Errorf("%s runner entries = %#v, want one Repository-materialized strict entry", phase, entries)
+			continue
+		}
+		strict := entries[0]
+		strict.ExpectedDigest = ""
+		if strict != durableFacts {
+			t.Errorf("%s runner durable entry facts = %#v, want %#v", phase, strict, durableFacts)
+		}
+	}
+	if request.Entries[0].ExpectedDigest != "" {
+		t.Fatalf("caller request learned Repository-private digest %q", request.Entries[0].ExpectedDigest)
+	}
+}
+
+func TestRsyncResolverRejectsEmptyCatalogFingerprintStrength(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict pinned source capability is Linux-only")
+	}
+	fixture := newRsyncRestoreResolverFixture(t)
+	if err := fixture.db.Model(&model.CatalogEntry{}).
+		Where("generation_id = ? AND entry_id = ?", fixture.ref.CatalogGenerationID, fixture.entry.AssetRef.EntryID).
+		Update("fingerprint_strength", "").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	source, err := fixture.service.ResolveRsyncRestoreSource(context.Background(), fixture.ref)
+	if source != nil {
+		_ = source.Close()
+	}
+	if !errors.Is(err, provider.ErrInvalidRestoreRequest) {
+		t.Fatalf("empty Catalog fingerprint strength error=%v, want invalid restore request", err)
+	}
+}
+
+func TestRsyncResolverRejectsStrongCatalogFingerprintMismatchAgainstAuthenticatedTree(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict pinned source capability is Linux-only")
+	}
+	fixture := newRsyncRestoreResolverFixture(t)
+	if err := fixture.db.Model(&model.CatalogEntry{}).
+		Where("generation_id = ? AND entry_id = ?", fixture.ref.CatalogGenerationID, fixture.entry.AssetRef.EntryID).
+		Updates(map[string]any{
+			"fingerprint": strings.Repeat("0", 64), "fingerprint_strength": string(catalog.FingerprintStrong),
+		}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	source, err := fixture.service.ResolveRsyncRestoreSource(context.Background(), fixture.ref)
+	if source != nil {
+		_ = source.Close()
+	}
+	if !errors.Is(err, provider.ErrInvalidRestoreRequest) {
+		t.Fatalf("strong Catalog fingerprint mismatch error=%v, want invalid restore request", err)
+	}
+}
+
+func TestRsyncResolverRejectsCatalogLocatorSubstitutionWithinAuthenticatedTree(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict pinned source capability is Linux-only")
+	}
+	fixture := newRsyncRestoreResolverFixtureWithAlternate(t, true)
+	var entry model.CatalogEntry
+	if err := fixture.db.First(&entry,
+		"generation_id = ? AND entry_id = ?", fixture.ref.CatalogGenerationID, fixture.entry.AssetRef.EntryID).Error; err != nil {
+		t.Fatal(err)
+	}
+	entry.EncryptedProviderLocator = `{"version":1,"native":"alternate/payload.txt"}`
+	if err := fixture.db.Save(&entry).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	source, err := fixture.service.ResolveRsyncRestoreSource(context.Background(), fixture.ref)
+	if source != nil {
+		_ = source.Close()
+	}
+	if !errors.Is(err, provider.ErrInvalidRestoreRequest) {
+		t.Fatalf("Catalog locator substitution error=%v, want invalid restore request", err)
+	}
+}
+
+func TestRsyncResolverRejectsSameKeyCatalogEntryPathSubstitutionWithinAuthenticatedTree(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict pinned source capability is Linux-only")
+	}
+	fixture := newRsyncRestoreResolverFixtureWithAlternate(t, true)
+	source, err := fixture.service.ResolveRsyncRestoreSource(context.Background(), fixture.ref)
+	if err != nil {
+		t.Fatalf("resolve frozen Catalog entry before substitution: %v", err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatalf("close frozen Catalog source: %v", err)
+	}
+
+	var entry model.CatalogEntry
+	if err := fixture.db.First(&entry,
+		"generation_id = ? AND entry_id = ?", fixture.ref.CatalogGenerationID, fixture.entry.AssetRef.EntryID).Error; err != nil {
+		t.Fatal(err)
+	}
+	entry.NormalizedPath = "alternate/payload.txt"
+	entry.EncryptedProviderLocator = `{"version":1,"native":"alternate/payload.txt"}`
+	if err := fixture.db.Save(&entry).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	source, err = fixture.service.ResolveRsyncRestoreSource(context.Background(), fixture.ref)
+	if source != nil {
+		_ = source.Close()
+	}
+	if !errors.Is(err, provider.ErrInvalidRestoreRequest) {
+		t.Fatalf("same-key Catalog substitution error=%v, want invalid restore request", err)
+	}
+	if err != nil && strings.Contains(err.Error(), "alternate/payload.txt") {
+		t.Fatalf("same-key Catalog substitution leaked a private path: %v", err)
+	}
+}
+
+func TestRsyncRestorePortRevalidatesAllFourPhases(t *testing.T) {
+	request := validRepositoryRsyncRestoreRequest(t)
+	resolver := &recordingRepositoryRsyncRestoreSourceResolver{root: t.TempDir()}
+	writer := &recordingRepositoryRsyncTargetWriter{}
+	runner := &recordingRepositoryRsyncRestoreRunner{}
+	port := NewRsyncRestorePort(resolver, writer, runner)
+	now := time.Now().UTC()
+
+	preflightPermit, err := provider.NewTargetPreflightPermit(provider.TargetObservationPermit{
+		TargetBindingDigest: request.Target.BindingDigest,
+		Session:             provider.TargetSession{ID: strings.Repeat("a", 32), Purpose: provider.TargetPurposePreflight, CredentialRevision: "credential-revision-1", ExpiresAt: now.Add(time.Minute)},
+	}, request.Target, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := port.Preflight(context.Background(), provider.RestorePreflightRequest{Request: request, Permit: preflightPermit}); err != nil {
+		t.Fatalf("Preflight: %v", err)
+	}
+	if _, err := port.Execute(context.Background(), request, provider.RestoreProgress{}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	verifyPermit, err := provider.NewTargetVerifyPermit(provider.TargetObservationPermit{
+		TargetBindingDigest: request.Target.BindingDigest,
+		Session:             provider.TargetSession{ID: strings.Repeat("b", 32), Purpose: provider.TargetPurposeVerify, CredentialRevision: "credential-revision-1", ExpiresAt: now.Add(time.Minute)},
+	}, request.Target, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := port.Verify(context.Background(), provider.RestoreVerifyRequest{Request: request, Permit: verifyPermit}); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	reconcilePermit, err := provider.NewTargetReconcilePermit(provider.TargetObservationPermit{
+		TargetBindingDigest: request.Target.BindingDigest,
+		Session:             provider.TargetSession{ID: strings.Repeat("c", 32), Purpose: provider.TargetPurposeReconcile, CredentialRevision: "credential-revision-1", ExpiresAt: now.Add(time.Minute)},
+	}, request.Target, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := port.Reconcile(context.Background(), provider.RestoreReconcileRequest{Request: request, Permit: reconcilePermit}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if got := len(resolver.refs); got != 4 {
+		t.Fatalf("resolver calls = %d, want 4", got)
+	}
+	for index, ref := range resolver.refs {
+		if ref != request.Rsync.SourceRef {
+			t.Fatalf("resolver ref %d = %#v, want exact scalar ref %#v", index, ref, request.Rsync.SourceRef)
+		}
+	}
+	if len(runner.preflights) != 1 || len(runner.executes) != 1 || len(runner.verifies) != 1 || len(runner.reconciles) != 1 {
+		t.Fatalf("runner calls preflight=%d execute=%d verify=%d reconcile=%d, want one each", len(runner.preflights), len(runner.executes), len(runner.verifies), len(runner.reconciles))
+	}
+	for _, injected := range []provider.RsyncTargetWriter{
+		runner.preflights[0].TargetWriter,
+		runner.executes[0].TargetWriter,
+		runner.verifies[0].TargetWriter,
+		runner.reconciles[0].TargetWriter,
+	} {
+		if injected != writer {
+			t.Fatalf("runner target writer = %T, want exact injected authority", injected)
+		}
+	}
+	for index, tree := range resolver.trees {
+		if tree.revalidations != 2 || tree.closes != 1 {
+			t.Fatalf("source %d revalidations=%d closes=%d, want 2/1", index, tree.revalidations, tree.closes)
+		}
+	}
+}
+
+func TestRsyncRestorePortRejectsRequestEntrySetMismatchBeforeRunner(t *testing.T) {
+	request := validRepositoryRsyncRestoreRequest(t)
+	extra := request.Entries[0]
+	extra.AssetRef.EntryID = strings.Repeat("e", 64)
+	resolver := &recordingRepositoryRsyncRestoreSourceResolver{
+		declared: []provider.RestoreEntry{request.Entries[0], extra},
+	}
+	runner := &recordingRepositoryRsyncRestoreRunner{}
+
+	_, err := NewRsyncRestorePort(resolver, &recordingRepositoryRsyncTargetWriter{}, runner).
+		Execute(context.Background(), request, provider.RestoreProgress{})
+
+	if !errors.Is(err, provider.ErrRsyncRestoreSourceDrift) || !errors.Is(err, provider.ErrInvalidRestoreRequest) {
+		t.Fatalf("request entry-set mismatch error=%v, want typed source drift", err)
+	}
+	if len(runner.executes) != 0 {
+		t.Fatalf("request entry-set mismatch reached runner %d time(s)", len(runner.executes))
+	}
+	if len(resolver.trees) != 1 || resolver.trees[0].entryValidations != 1 {
+		t.Fatal("request entry set was not validated exactly once before runner dispatch")
+	}
+}
+
+func TestRsyncRestorePortRejectsPostPhaseDurableAndMarkerDrift(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict pinned source capability is Linux-only")
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, *rsyncRestoreResolverFixture)
+	}{
+		{
+			name: "durable plan",
+			mutate: func(t *testing.T, fixture *rsyncRestoreResolverFixture) {
+				t.Helper()
+				if err := fixture.db.Model(&model.BackupAssetRecoveryPlan{}).
+					Where("id = ?", fixture.ref.PlanID).
+					Update("selection_digest", strings.Repeat("e", 64)).Error; err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "authenticated commit marker",
+			mutate: func(t *testing.T, fixture *rsyncRestoreResolverFixture) {
+				t.Helper()
+				marker := filepath.Join(fixture.root, "points", fixture.ref.RecoveryPointID, "commit.json")
+				if err := os.WriteFile(marker, []byte(`{}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newRsyncRestoreResolverFixture(t)
+			request := validRepositoryRsyncRestoreRequest(t)
+			request.Rsync = &provider.RsyncRestoreRequest{ManifestDigest: fixture.ref.ManifestDigest, SourceRef: fixture.ref}
+			request.Entries = []provider.RestoreEntry{fixture.entry}
+			runner := &recordingRepositoryRsyncRestoreRunner{executeHook: func() { test.mutate(t, fixture) }}
+
+			_, err := NewRsyncRestorePort(fixture.service, &recordingRepositoryRsyncTargetWriter{}, runner).
+				Execute(context.Background(), request, provider.RestoreProgress{})
+
+			if !errors.Is(err, provider.ErrRsyncRestoreSourceDrift) || !errors.Is(err, provider.ErrInvalidRestoreRequest) {
+				t.Fatalf("post-phase source drift error=%v, want typed source drift", err)
+			}
+			if len(runner.executes) != 1 {
+				t.Fatalf("runner calls = %d, want one before post-phase rejection", len(runner.executes))
+			}
+		})
+	}
+}
+
+func TestRsyncRestorePortRejectsSourceOrRootSwapBeforeRunner(t *testing.T) {
+	for _, phase := range []struct {
+		name   string
+		invoke func(*RsyncRestorePort, provider.RestoreRequest) error
+		calls  func(*recordingRepositoryRsyncRestoreRunner) int
+	}{
+		{
+			name: "preflight",
+			invoke: func(port *RsyncRestorePort, request provider.RestoreRequest) error {
+				now := time.Now().UTC()
+				permit, err := provider.NewTargetPreflightPermit(provider.TargetObservationPermit{TargetBindingDigest: request.Target.BindingDigest, Session: provider.TargetSession{ID: strings.Repeat("a", 32), Purpose: provider.TargetPurposePreflight, CredentialRevision: "credential-revision-1", ExpiresAt: now.Add(time.Minute)}}, request.Target, now)
+				if err != nil {
+					return err
+				}
+				_, err = port.Preflight(context.Background(), provider.RestorePreflightRequest{Request: request, Permit: permit})
+				return err
+			},
+			calls: func(runner *recordingRepositoryRsyncRestoreRunner) int { return len(runner.preflights) },
+		},
+		{
+			name: "execute",
+			invoke: func(port *RsyncRestorePort, request provider.RestoreRequest) error {
+				_, err := port.Execute(context.Background(), request, provider.RestoreProgress{})
+				return err
+			},
+			calls: func(runner *recordingRepositoryRsyncRestoreRunner) int { return len(runner.executes) },
+		},
+		{
+			name: "verify",
+			invoke: func(port *RsyncRestorePort, request provider.RestoreRequest) error {
+				now := time.Now().UTC()
+				permit, err := provider.NewTargetVerifyPermit(provider.TargetObservationPermit{TargetBindingDigest: request.Target.BindingDigest, Session: provider.TargetSession{ID: strings.Repeat("b", 32), Purpose: provider.TargetPurposeVerify, CredentialRevision: "credential-revision-1", ExpiresAt: now.Add(time.Minute)}}, request.Target, now)
+				if err != nil {
+					return err
+				}
+				_, err = port.Verify(context.Background(), provider.RestoreVerifyRequest{Request: request, Permit: permit})
+				return err
+			},
+			calls: func(runner *recordingRepositoryRsyncRestoreRunner) int { return len(runner.verifies) },
+		},
+		{
+			name: "reconcile",
+			invoke: func(port *RsyncRestorePort, request provider.RestoreRequest) error {
+				now := time.Now().UTC()
+				permit, err := provider.NewTargetReconcilePermit(provider.TargetObservationPermit{TargetBindingDigest: request.Target.BindingDigest, Session: provider.TargetSession{ID: strings.Repeat("c", 32), Purpose: provider.TargetPurposeReconcile, CredentialRevision: "credential-revision-1", ExpiresAt: now.Add(time.Minute)}}, request.Target, now)
+				if err != nil {
+					return err
+				}
+				_, err = port.Reconcile(context.Background(), provider.RestoreReconcileRequest{Request: request, Permit: permit})
+				return err
+			},
+			calls: func(runner *recordingRepositoryRsyncRestoreRunner) int { return len(runner.reconciles) },
+		},
+	} {
+		t.Run(phase.name, func(t *testing.T) {
+			resolver := &recordingRepositoryRsyncRestoreSourceResolver{root: t.TempDir(), revalidateErr: fileaccess.ErrSourceChanged}
+			runner := &recordingRepositoryRsyncRestoreRunner{}
+			err := phase.invoke(NewRsyncRestorePort(resolver, &recordingRepositoryRsyncTargetWriter{}, runner), validRepositoryRsyncRestoreRequest(t))
+			if !errors.Is(err, provider.ErrRsyncRestoreSourceDrift) || !errors.Is(err, provider.ErrInvalidRestoreRequest) {
+				t.Fatalf("source/root swap error=%v, want typed source drift", err)
+			}
+			if calls := phase.calls(runner); calls != 0 {
+				t.Fatalf("source/root swap reached %s runner %d time(s)", phase.name, calls)
+			}
+		})
+	}
+}
+
+func TestRsyncRestorePortRevalidatesAfterRunnerError(t *testing.T) {
+	const privateFailure = "FAKE_RSYNC_PRIVATE_RUNNER_FAILURE_FOR_TEST_ONLY"
+	for _, phase := range []struct {
+		name      string
+		setError  func(*recordingRepositoryRsyncRestoreRunner, error)
+		invoke    func(*RsyncRestorePort, provider.RestoreRequest) error
+		callCount func(*recordingRepositoryRsyncRestoreRunner) int
+	}{
+		{
+			name:     "preflight",
+			setError: func(runner *recordingRepositoryRsyncRestoreRunner, err error) { runner.preflightErr = err },
+			invoke: func(port *RsyncRestorePort, request provider.RestoreRequest) error {
+				now := time.Now().UTC()
+				permit, err := provider.NewTargetPreflightPermit(provider.TargetObservationPermit{TargetBindingDigest: request.Target.BindingDigest, Session: provider.TargetSession{ID: strings.Repeat("a", 32), Purpose: provider.TargetPurposePreflight, CredentialRevision: "credential-revision-1", ExpiresAt: now.Add(time.Minute)}}, request.Target, now)
+				if err != nil {
+					return err
+				}
+				_, err = port.Preflight(context.Background(), provider.RestorePreflightRequest{Request: request, Permit: permit})
+				return err
+			},
+			callCount: func(runner *recordingRepositoryRsyncRestoreRunner) int { return len(runner.preflights) },
+		},
+		{
+			name:     "execute",
+			setError: func(runner *recordingRepositoryRsyncRestoreRunner, err error) { runner.executeErr = err },
+			invoke: func(port *RsyncRestorePort, request provider.RestoreRequest) error {
+				_, err := port.Execute(context.Background(), request, provider.RestoreProgress{})
+				return err
+			},
+			callCount: func(runner *recordingRepositoryRsyncRestoreRunner) int { return len(runner.executes) },
+		},
+		{
+			name:     "verify",
+			setError: func(runner *recordingRepositoryRsyncRestoreRunner, err error) { runner.verifyErr = err },
+			invoke: func(port *RsyncRestorePort, request provider.RestoreRequest) error {
+				now := time.Now().UTC()
+				permit, err := provider.NewTargetVerifyPermit(provider.TargetObservationPermit{TargetBindingDigest: request.Target.BindingDigest, Session: provider.TargetSession{ID: strings.Repeat("b", 32), Purpose: provider.TargetPurposeVerify, CredentialRevision: "credential-revision-1", ExpiresAt: now.Add(time.Minute)}}, request.Target, now)
+				if err != nil {
+					return err
+				}
+				_, err = port.Verify(context.Background(), provider.RestoreVerifyRequest{Request: request, Permit: permit})
+				return err
+			},
+			callCount: func(runner *recordingRepositoryRsyncRestoreRunner) int { return len(runner.verifies) },
+		},
+		{
+			name:     "reconcile",
+			setError: func(runner *recordingRepositoryRsyncRestoreRunner, err error) { runner.reconcileErr = err },
+			invoke: func(port *RsyncRestorePort, request provider.RestoreRequest) error {
+				now := time.Now().UTC()
+				permit, err := provider.NewTargetReconcilePermit(provider.TargetObservationPermit{TargetBindingDigest: request.Target.BindingDigest, Session: provider.TargetSession{ID: strings.Repeat("c", 32), Purpose: provider.TargetPurposeReconcile, CredentialRevision: "credential-revision-1", ExpiresAt: now.Add(time.Minute)}}, request.Target, now)
+				if err != nil {
+					return err
+				}
+				_, err = port.Reconcile(context.Background(), provider.RestoreReconcileRequest{Request: request, Permit: permit})
+				return err
+			},
+			callCount: func(runner *recordingRepositoryRsyncRestoreRunner) int { return len(runner.reconciles) },
+		},
+	} {
+		for _, failure := range []struct {
+			name      string
+			runnerErr error
+			want      error
+		}{
+			{name: "ordinary", runnerErr: errors.New(privateFailure), want: provider.ErrRsyncRestoreSourceDrift},
+			{name: "canceled", runnerErr: fmt.Errorf("%s: %w", privateFailure, context.Canceled), want: context.Canceled},
+			{name: "deadline", runnerErr: fmt.Errorf("%s: %w", privateFailure, context.DeadlineExceeded), want: context.DeadlineExceeded},
+		} {
+			t.Run(phase.name+"/"+failure.name, func(t *testing.T) {
+				resolver := &recordingRepositoryRsyncRestoreSourceResolver{
+					revalidateErr:   fileaccess.ErrSourceChanged,
+					revalidateErrAt: 2,
+				}
+				runner := &recordingRepositoryRsyncRestoreRunner{}
+				phase.setError(runner, failure.runnerErr)
+
+				err := phase.invoke(NewRsyncRestorePort(resolver, &recordingRepositoryRsyncTargetWriter{}, runner), validRepositoryRsyncRestoreRequest(t))
+
+				if !errors.Is(err, failure.want) || strings.Contains(err.Error(), privateFailure) {
+					t.Fatalf("post-runner error=%v, want sanitized %v identity", err, failure.want)
+				}
+				if calls := phase.callCount(runner); calls != 1 {
+					t.Fatalf("%s runner calls=%d, want one", phase.name, calls)
+				}
+				if len(resolver.trees) != 1 {
+					t.Fatalf("source trees=%d, want one", len(resolver.trees))
+				}
+				tree := resolver.trees[0]
+				if tree.revalidations != 2 || tree.closes != 1 {
+					t.Fatalf("source revalidations/closes=%d/%d, want 2/1", tree.revalidations, tree.closes)
+				}
+			})
+		}
+	}
+}
+
+func TestRsyncRestorePortSanitizesResolverAndRunnerErrors(t *testing.T) {
+	const privateFailure = "FAKE_RSYNC_PRIVATE_PATH_TOKEN_FOR_TEST_ONLY"
+	request := validRepositoryRsyncRestoreRequest(t)
+	resolver := &recordingRepositoryRsyncRestoreSourceResolver{root: t.TempDir(), resolveErr: errors.New(privateFailure)}
+	if _, err := NewRsyncRestorePort(resolver, &recordingRepositoryRsyncTargetWriter{}, &recordingRepositoryRsyncRestoreRunner{}).Execute(context.Background(), request, provider.RestoreProgress{}); !errors.Is(err, provider.ErrRsyncRestoreUnavailable) || strings.Contains(err.Error(), privateFailure) {
+		t.Fatalf("resolver error=%v, want sanitized unavailable", err)
+	}
+	resolver = &recordingRepositoryRsyncRestoreSourceResolver{root: t.TempDir()}
+	runner := &recordingRepositoryRsyncRestoreRunner{executeErr: errors.New(privateFailure)}
+	if _, err := NewRsyncRestorePort(resolver, &recordingRepositoryRsyncTargetWriter{}, runner).Execute(context.Background(), request, provider.RestoreProgress{}); !errors.Is(err, provider.ErrRsyncRestoreUnavailable) || strings.Contains(err.Error(), privateFailure) {
+		t.Fatalf("runner error=%v, want sanitized unavailable", err)
+	}
+	for _, sentinel := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(sentinel.Error()+" from resolver", func(t *testing.T) {
+			resolver := &recordingRepositoryRsyncRestoreSourceResolver{resolveErr: fmt.Errorf("%s: %w", privateFailure, sentinel)}
+			_, err := NewRsyncRestorePort(resolver, &recordingRepositoryRsyncTargetWriter{}, &recordingRepositoryRsyncRestoreRunner{}).
+				Execute(context.Background(), request, provider.RestoreProgress{})
+			if !errors.Is(err, sentinel) || strings.Contains(err.Error(), privateFailure) {
+				t.Fatalf("resolver context error=%v, want sanitized %v identity", err, sentinel)
+			}
+		})
+		t.Run(sentinel.Error()+" from runner", func(t *testing.T) {
+			resolver := &recordingRepositoryRsyncRestoreSourceResolver{}
+			runner := &recordingRepositoryRsyncRestoreRunner{executeErr: fmt.Errorf("%s: %w", privateFailure, sentinel)}
+			_, err := NewRsyncRestorePort(resolver, &recordingRepositoryRsyncTargetWriter{}, runner).
+				Execute(context.Background(), request, provider.RestoreProgress{})
+			if !errors.Is(err, sentinel) || strings.Contains(err.Error(), privateFailure) {
+				t.Fatalf("runner context error=%v, want sanitized %v identity", err, sentinel)
+			}
+		})
+	}
+}
+
+func validRepositoryRsyncRestoreRequest(t *testing.T) provider.RestoreRequest {
+	t.Helper()
+	now := time.Now().UTC()
+	target, err := provider.NewRestoreTarget(7, "approved-root", strings.Repeat("3", 64), strings.Repeat("4", 64), "root-revision-1", "target-revision-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := provider.RsyncRestoreSourceRef{
+		PlanID: strings.Repeat("1", 32), PlanBindingDigest: strings.Repeat("2", 64), RepositoryID: strings.Repeat("3", 32),
+		RecoveryPointID: strings.Repeat("4", 32), CatalogGenerationID: strings.Repeat("5", 32), SelectionDigest: strings.Repeat("6", 64),
+		SourceRevisionDigest: strings.Repeat("7", 64), ManifestDigest: strings.Repeat("8", 64),
+	}
+	fence := provider.RestoreFence{JobID: strings.Repeat("9", 32), AttemptID: strings.Repeat("a", 32), NodeLeaseID: strings.Repeat("b", 32), AttemptFence: 11, NodeFence: 13, ExpectedTargetRevision: target.TargetRevision}
+	checkpoint := provider.RestoreCheckpoint{ID: strings.Repeat("c", 32), OperationDigest: strings.Repeat("d", 64), PriorTargetRevision: target.TargetRevision, VerifiedTargetIdentityDigest: strings.Repeat("e", 64), VerifiedTargetRevision: target.TargetRevision, VerifiedBytes: 17, AttemptFence: fence.AttemptFence, NodeFence: fence.NodeFence}
+	return provider.RestoreRequest{
+		Version: provider.RestoreRequestSchemaV1, Provider: backupasset.ProviderRsync,
+		Entries: []provider.RestoreEntry{{AssetRef: backupasset.AssetRef{RecoveryPointID: ref.RecoveryPointID, EntryID: strings.Repeat("f", 64)}, Type: backupasset.CatalogEntryFile, ExpectedSize: 17, TargetObjectDigest: strings.Repeat("b", 64)}},
+		Target:  target, Limits: provider.RestoreLimits{MaxEntries: 2, MaxBytes: 1024, MaxEntryBytes: 1024}, ConflictPolicy: provider.RestoreConflictFailOnConflict,
+		Fence: fence, Checkpoint: checkpoint,
+		MutationPermit: provider.TargetMutationPermit{TargetBindingDigest: target.BindingDigest, UseLatchID: provider.RestoreSchemaUseLatchID, JobID: fence.JobID, AttemptID: fence.AttemptID, NodeLeaseID: fence.NodeLeaseID, AttemptFence: fence.AttemptFence, NodeFence: fence.NodeFence, ExpectedTargetRevision: target.TargetRevision, Session: provider.TargetSession{ID: strings.Repeat("d", 32), Purpose: provider.TargetPurposeWrite, CredentialRevision: "credential-revision-1", ExpiresAt: now.Add(time.Minute)}},
+		Rsync:          &provider.RsyncRestoreRequest{ManifestDigest: ref.ManifestDigest, SourceRef: ref},
+	}
+}
+
+type recordingRepositoryRsyncRestoreSourceResolver struct {
+	root            string
+	refs            []provider.RsyncRestoreSourceRef
+	trees           []*recordingRepositoryPinnedStrictTree
+	declared        []provider.RestoreEntry
+	resolveErr      error
+	revalidateErr   error
+	revalidateErrAt int
+}
+
+func (resolver *recordingRepositoryRsyncRestoreSourceResolver) ResolveRsyncRestoreSource(_ context.Context, ref provider.RsyncRestoreSourceRef) (provider.RsyncRestoreSource, error) {
+	resolver.refs = append(resolver.refs, ref)
+	if resolver.resolveErr != nil {
+		return nil, resolver.resolveErr
+	}
+	recording := &recordingRepositoryPinnedStrictTree{
+		declared: append([]provider.RestoreEntry(nil), resolver.declared...), revalidateErr: resolver.revalidateErr,
+		revalidateErrAt: resolver.revalidateErrAt,
+	}
+	resolver.trees = append(resolver.trees, recording)
+	return recording, nil
+}
+
+type recordingRepositoryPinnedStrictTree struct {
+	revalidations    int
+	entryValidations int
+	closes           int
+	declared         []provider.RestoreEntry
+	revalidateErr    error
+	revalidateErrAt  int
+}
+
+func (*recordingRepositoryPinnedStrictTree) OpenDeclaredRegular(context.Context, provider.RestoreEntry) (provider.RsyncRestoreSourceStream, error) {
+	return nil, provider.ErrRsyncRestoreSourceDrift
+}
+
+func (tree *recordingRepositoryPinnedStrictTree) MaterializeDeclaredEntries(_ context.Context, entries []provider.RestoreEntry) ([]provider.RestoreEntry, error) {
+	tree.entryValidations++
+	for _, entry := range entries {
+		if entry.ExpectedDigest != "" {
+			return nil, provider.ErrRsyncRestoreSourceDrift
+		}
+	}
+	if len(tree.declared) == 0 {
+		materialized := append([]provider.RestoreEntry(nil), entries...)
+		for index := range materialized {
+			materialized[index].ExpectedDigest = strings.Repeat("a", 64)
+		}
+		return materialized, nil
+	}
+	declaredFacts := append([]provider.RestoreEntry(nil), tree.declared...)
+	for index := range declaredFacts {
+		declaredFacts[index].ExpectedDigest = ""
+	}
+	if !reflect.DeepEqual(declaredFacts, entries) {
+		return nil, provider.ErrRsyncRestoreSourceDrift
+	}
+	materialized := append([]provider.RestoreEntry(nil), tree.declared...)
+	for index := range materialized {
+		if materialized[index].ExpectedDigest == "" {
+			materialized[index].ExpectedDigest = strings.Repeat("a", 64)
+		}
+	}
+	return materialized, nil
+}
+
+func (tree *recordingRepositoryPinnedStrictTree) Revalidate(ctx context.Context) error {
+	tree.revalidations++
+	if tree.revalidateErr != nil && (tree.revalidateErrAt == 0 || tree.revalidations == tree.revalidateErrAt) {
+		return tree.revalidateErr
+	}
+	return nil
+}
+
+func (tree *recordingRepositoryPinnedStrictTree) Close() error {
+	tree.closes++
+	return nil
+}
+
+type recordingRepositoryRsyncTargetWriter struct{}
+
+func (*recordingRepositoryRsyncTargetWriter) WriteDeclaredRegular(context.Context, provider.RsyncTargetWriteCall) error {
+	return nil
+}
+
+type recordingRepositoryRsyncRestoreRunner struct {
+	preflights   []provider.RsyncRestorePreflightCall
+	executes     []provider.RsyncRestoreExecuteCall
+	verifies     []provider.RsyncRestoreVerifyCall
+	reconciles   []provider.RsyncRestoreReconcileCall
+	preflightErr error
+	executeErr   error
+	verifyErr    error
+	reconcileErr error
+	executeHook  func()
+}
+
+func (runner *recordingRepositoryRsyncRestoreRunner) Preflight(_ context.Context, call provider.RsyncRestorePreflightCall) (provider.RsyncRestoreRunnerEvidence, error) {
+	if call.Source == nil {
+		return provider.RsyncRestoreRunnerEvidence{}, errors.New("pinned source was not provided")
+	}
+	runner.preflights = append(runner.preflights, call)
+	if runner.preflightErr != nil {
+		return provider.RsyncRestoreRunnerEvidence{}, runner.preflightErr
+	}
+	return provider.RsyncRestoreRunnerEvidence{TargetBindingDigest: call.Target.TargetBindingDigest, TargetRevision: call.Target.TargetRevision, Checkpoint: call.Checkpoint}, nil
+}
+
+func (runner *recordingRepositoryRsyncRestoreRunner) Execute(_ context.Context, call provider.RsyncRestoreExecuteCall) (provider.RsyncRestoreRunnerResult, error) {
+	if call.Source == nil {
+		return provider.RsyncRestoreRunnerResult{}, errors.New("pinned source was not provided")
+	}
+	runner.executes = append(runner.executes, call)
+	if runner.executeHook != nil {
+		runner.executeHook()
+	}
+	if runner.executeErr != nil {
+		return provider.RsyncRestoreRunnerResult{}, runner.executeErr
+	}
+	return provider.RsyncRestoreRunnerResult{Checkpoint: provider.RestoreCheckpoint{ID: strings.Repeat("e", 32), OperationDigest: strings.Repeat("f", 64), PriorTargetRevision: call.Checkpoint.PriorTargetRevision, VerifiedTargetIdentityDigest: strings.Repeat("a", 64), VerifiedTargetRevision: "target-revision-next", VerifiedBytes: 17, AttemptFence: call.Fence.AttemptFence, NodeFence: call.Fence.NodeFence}}, nil
+}
+
+func (runner *recordingRepositoryRsyncRestoreRunner) Verify(_ context.Context, call provider.RsyncRestoreVerifyCall) (provider.RsyncRestoreRunnerEvidence, error) {
+	if call.Source == nil {
+		return provider.RsyncRestoreRunnerEvidence{}, errors.New("pinned source was not provided")
+	}
+	runner.verifies = append(runner.verifies, call)
+	if runner.verifyErr != nil {
+		return provider.RsyncRestoreRunnerEvidence{}, runner.verifyErr
+	}
+	return provider.RsyncRestoreRunnerEvidence{TargetBindingDigest: call.Target.TargetBindingDigest, TargetRevision: call.Target.TargetRevision, Checkpoint: call.Checkpoint}, nil
+}
+
+func (runner *recordingRepositoryRsyncRestoreRunner) Reconcile(_ context.Context, call provider.RsyncRestoreReconcileCall) (provider.RsyncRestoreRunnerEvidence, error) {
+	if call.Source == nil {
+		return provider.RsyncRestoreRunnerEvidence{}, errors.New("pinned source was not provided")
+	}
+	runner.reconciles = append(runner.reconciles, call)
+	if runner.reconcileErr != nil {
+		return provider.RsyncRestoreRunnerEvidence{}, runner.reconcileErr
+	}
+	return provider.RsyncRestoreRunnerEvidence{TargetBindingDigest: call.Target.TargetBindingDigest, TargetRevision: call.Target.TargetRevision, Checkpoint: call.Checkpoint}, nil
 }
 
 func TestContentReadManagedRsyncPointUsesDedicatedAdmissionOperation(t *testing.T) {

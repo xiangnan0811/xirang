@@ -87,6 +87,14 @@ func (spy *settingsRuntimeSettingsTransitionSpy) TransitionBackupAssetSettings(
 	spy.overlay = overlay
 	spy.effective = effective
 	spy.config = config
+	if spy.err != nil {
+		return spy.err
+	}
+	if spy.beforePersist != nil {
+		if err := spy.beforePersist(); err != nil {
+			return err
+		}
+	}
 	_, changesIdempotencyTTL := overlay["backup_assets.idempotency_ttl"]
 	_, changesIdempotencyKeyMaxBytes := overlay["backup_assets.idempotency_key_max_bytes"]
 	if spy.overlayService != nil && (changesIdempotencyTTL || changesIdempotencyKeyMaxBytes) {
@@ -344,6 +352,132 @@ func TestSettingsRootOnlyExportMutationPersistsWithoutRuntimeSettingsTransition(
 	if got := svc.GetEffective("backup_assets.export.root"); got != root {
 		t.Fatalf("persisted Export root=%q, want %q", got, root)
 	}
+}
+
+func TestRecoveryAuthorizationReceiptSettingsTransitions(t *testing.T) {
+	const (
+		replayKey  = "backup_assets.recovery.receipt_replay_ttl"
+		cadenceKey = "backup_assets.recovery.receipt_reaper_cadence"
+	)
+	drainFailure := errors.New("FAKE_RECOVERY_SETTINGS_DRAIN_FAILURE_FOR_TEST_ONLY")
+
+	t.Run("batch update", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+			t.Fatal(err)
+		}
+		svc := settings.NewService(db)
+		spy := &settingsRuntimeSettingsTransitionSpy{}
+		spy.beforePersist = func() error {
+			if got := svc.GetEffective(replayKey); got != "20m" {
+				t.Fatalf("batch changed value before drain: %q", got)
+			}
+			return drainFailure
+		}
+		handler := NewSettingsHandler(db, svc).WithBackupAssetTransitioner(spy)
+		router := gin.New()
+		router.PUT("/settings", handler.BatchUpdate)
+
+		request := httptest.NewRequest(http.MethodPut, "/settings", strings.NewReader(`{"backup_assets.recovery.receipt_replay_ttl":"30m"}`))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		rolledBack, snapshotErr := svc.BackupAssetSettingsSnapshot()
+		if snapshotErr != nil {
+			t.Fatal(snapshotErr)
+		}
+		if response.Code != http.StatusInternalServerError || rolledBack[replayKey] != "20m" {
+			t.Fatalf("failed batch status=%d snapshot=%q body=%s", response.Code, rolledBack[replayKey], response.Body.String())
+		}
+
+		spy.beforePersist = nil
+		request = httptest.NewRequest(http.MethodPut, "/settings", strings.NewReader(`{"backup_assets.recovery.receipt_replay_ttl":"30m"}`))
+		request.Header.Set("Content-Type", "application/json")
+		response = httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || spy.calls != 2 || svc.GetEffective(replayKey) != "30m" {
+			t.Fatalf("successful batch status=%d calls=%d effective=%q body=%s", response.Code, spy.calls, svc.GetEffective(replayKey), response.Body.String())
+		}
+	})
+
+	t.Run("delete reset", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+			t.Fatal(err)
+		}
+		svc := settings.NewService(db)
+		if err := svc.Update(replayKey, "30m"); err != nil {
+			t.Fatal(err)
+		}
+		spy := &settingsRuntimeSettingsTransitionSpy{}
+		spy.beforePersist = func() error {
+			if got := svc.GetEffective(replayKey); got != "30m" {
+				t.Fatalf("reset changed snapshot before drain: %q", got)
+			}
+			return drainFailure
+		}
+		handler := NewSettingsHandler(db, svc).WithBackupAssetTransitioner(spy)
+		router := gin.New()
+		router.DELETE("/settings/:key", handler.Delete)
+
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/settings/"+replayKey, nil))
+		if response.Code != http.StatusBadRequest || svc.GetEffective(replayKey) != "30m" {
+			t.Fatalf("failed reset status=%d effective=%q body=%s", response.Code, svc.GetEffective(replayKey), response.Body.String())
+		}
+
+		spy.beforePersist = nil
+		response = httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/settings/"+replayKey, nil))
+		if response.Code != http.StatusOK || spy.calls != 2 || svc.GetEffective(replayKey) != "20m" {
+			t.Fatalf("successful reset status=%d calls=%d effective=%q body=%s", response.Code, spy.calls, svc.GetEffective(replayKey), response.Body.String())
+		}
+	})
+
+	t.Run("config import", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		db := openConfigHandlerTestDB(t)
+		if err := db.AutoMigrate(&model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {
+			t.Fatal(err)
+		}
+		svc := settings.NewService(db)
+		spy := &settingsRuntimeSettingsTransitionSpy{}
+		spy.beforePersist = func() error {
+			if got := svc.GetEffective(cadenceKey); got != "1m" {
+				t.Fatalf("import changed snapshot before drain: %q", got)
+			}
+			return drainFailure
+		}
+		handler := NewConfigHandler(db, svc).WithBackupAssetTransitioner(spy)
+		router := gin.New()
+		router.POST("/config/import", handler.Import)
+		body := `{"system_settings":[{"key":"backup_assets.recovery.receipt_reaper_cadence","value":"2m"}]}`
+
+		request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusInternalServerError || svc.GetEffective(cadenceKey) != "1m" {
+			t.Fatalf("failed import status=%d effective=%q body=%s", response.Code, svc.GetEffective(cadenceKey), response.Body.String())
+		}
+
+		spy.beforePersist = nil
+		request = httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response = httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || spy.calls != 2 || svc.GetEffective(cadenceKey) != "2m" {
+			t.Fatalf("successful import status=%d calls=%d effective=%q body=%s", response.Code, spy.calls, svc.GetEffective(cadenceKey), response.Body.String())
+		}
+	})
 }
 
 func setupSettingsTransitionHandler(t *testing.T) (*gorm.DB, *settings.Service, *SettingsHandler, *settingsTransitionSpy, *gin.Engine) {

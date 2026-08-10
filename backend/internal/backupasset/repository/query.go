@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -18,9 +19,11 @@ import (
 	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
+	"xirang/backend/internal/fileaccess"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -34,6 +37,7 @@ const (
 	repositoryCursorDomain      = "backup-repository-list-cursor:v1"
 	managedRsyncReaderPageSize  = 200
 	managedRsyncReaderCursorTTL = 15 * time.Minute
+	rsyncRestoreImmutableSource = "immutable"
 )
 
 type VisibilityScope struct {
@@ -521,6 +525,678 @@ type ManagedRsyncPointReadSession struct {
 	active        int
 	tokenReleased bool
 }
+
+// ResolveRsyncRestoreSource is the Repository-owned boundary for resolving a
+// portable Recovery source ref. The ref intentionally has no caller-supplied
+// Task ID, root, locator, or filesystem path; later resolution derives those
+// facts from durable RecoveryPoint state.
+func (service *Service) ResolveRsyncRestoreSource(ctx context.Context, ref provider.RsyncRestoreSourceRef) (provider.RsyncRestoreSource, error) {
+	if service == nil || service.db == nil ||
+		backupasset.ValidateOpaqueID(ref.PlanID) != nil ||
+		backupasset.ValidateOpaqueID(ref.RepositoryID) != nil ||
+		backupasset.ValidateOpaqueID(ref.RecoveryPointID) != nil ||
+		backupasset.ValidateOpaqueID(ref.CatalogGenerationID) != nil ||
+		!isLowerHex64(ref.PlanBindingDigest) || !isLowerHex64(ref.SelectionDigest) ||
+		!isLowerHex64(ref.SourceRevisionDigest) || !isLowerHex64(ref.ManifestDigest) {
+		return nil, fmt.Errorf("%w: invalid Rsync restore source ref", provider.ErrInvalidRestoreRequest)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var source *repositoryRsyncRestoreSource
+	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		resolution, err := service.loadRsyncRestoreResolution(ctx, tx, ref)
+		if err != nil {
+			return err
+		}
+		pinned, err := fileaccess.OpenPinnedStrictTree(ctx, resolution.access.Root, fileaccess.RootLocator())
+		if err != nil {
+			return invalidRsyncRestoreSourceRef()
+		}
+		entries := make(map[provider.RestoreEntry]fileaccess.Entry, len(resolution.declared))
+		ordered := make([]provider.RestoreEntry, 0, len(resolution.declared))
+		for _, declaration := range resolution.declared {
+			entry, statErr := resolution.access.Tree.Lstat(ctx, resolution.access.Root, declaration.locator, fileaccess.ProviderPolicy)
+			if statErr != nil || entry.Type != fileaccess.EntryFile || entry.Size != declaration.restore.ExpectedSize ||
+				entry.Name != declaration.name || entry.SourceRevision == "" {
+				_ = pinned.Close()
+				return invalidRsyncRestoreSourceRef()
+			}
+			digest, digestErr := digestPinnedRsyncRestoreEntry(ctx, pinned, entry)
+			if digestErr != nil || declaration.restore.ExpectedDigest != "" && declaration.restore.ExpectedDigest != digest {
+				_ = pinned.Close()
+				return invalidRsyncRestoreSourceRef()
+			}
+			declared := declaration.restore
+			declared.ExpectedDigest = digest
+			entries[declared] = entry
+			ordered = append(ordered, declared)
+		}
+		source = &repositoryRsyncRestoreSource{service: service, ref: ref, tree: pinned, entries: entries, ordered: ordered}
+		return nil
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, invalidRsyncRestoreSourceRef()
+	}
+	if err := source.Revalidate(ctx); err != nil {
+		_ = source.Close()
+		if contextErr := rsyncRestorePortContextError(ctx, err); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, invalidRsyncRestoreSourceRef()
+	}
+	return source, nil
+}
+
+func digestPinnedRsyncRestoreEntry(ctx context.Context, tree fileaccess.PinnedStrictTree, entry fileaccess.Entry) (string, error) {
+	handle, stat, err := tree.OpenDeclaredRegular(ctx, entry)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	written, readErr := io.Copy(hash, handle)
+	closeErr := handle.Close()
+	if readErr != nil || closeErr != nil || written != entry.Size || stat.Size != entry.Size || stat.SourceRevision != entry.SourceRevision {
+		return "", fileaccess.ErrSourceChanged
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+}
+
+type rsyncRestoreDeclaredEntry struct {
+	restore provider.RestoreEntry
+	locator fileaccess.Locator
+	name    string
+}
+
+type rsyncRestoreResolution struct {
+	access   provider.RsyncCommittedPointRuntimeAccess
+	declared []rsyncRestoreDeclaredEntry
+}
+
+type repositoryRsyncRestoreSource struct {
+	service *Service
+	ref     provider.RsyncRestoreSourceRef
+	tree    fileaccess.PinnedStrictTree
+	entries map[provider.RestoreEntry]fileaccess.Entry
+	ordered []provider.RestoreEntry
+}
+
+func (source *repositoryRsyncRestoreSource) OpenDeclaredRegular(ctx context.Context, requested provider.RestoreEntry) (provider.RsyncRestoreSourceStream, error) {
+	if source == nil || source.tree == nil || requested.Validate(requested.AssetRef.RecoveryPointID) != nil {
+		return nil, provider.ErrRsyncRestoreSourceDrift
+	}
+	entry, exists := source.entries[requested]
+	if !exists {
+		return nil, provider.ErrRsyncRestoreSourceDrift
+	}
+	handle, stat, err := source.tree.OpenDeclaredRegular(ctx, entry)
+	if err != nil {
+		if ctx != nil && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, provider.ErrRsyncRestoreSourceDrift
+	}
+	if stat.Size != requested.ExpectedSize || stat.SourceRevision != entry.SourceRevision {
+		_ = handle.Close()
+		return nil, provider.ErrRsyncRestoreSourceDrift
+	}
+	return handle, nil
+}
+
+func (source *repositoryRsyncRestoreSource) MaterializeDeclaredEntries(ctx context.Context, requested []provider.RestoreEntry) ([]provider.RestoreEntry, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if source == nil || len(source.entries) == 0 || len(source.ordered) != len(source.entries) || len(requested) != len(source.entries) {
+		return nil, provider.ErrRsyncRestoreSourceDrift
+	}
+	strictByBinding := make(map[rsyncRestoreEntryBinding]provider.RestoreEntry, len(source.entries))
+	for strict := range source.entries {
+		if strict.Validate(source.ref.RecoveryPointID) != nil {
+			return nil, provider.ErrRsyncRestoreSourceDrift
+		}
+		binding := rsyncRestoreBindingForEntry(strict)
+		if _, duplicate := strictByBinding[binding]; duplicate {
+			return nil, provider.ErrRsyncRestoreSourceDrift
+		}
+		strictByBinding[binding] = strict
+	}
+	seen := make(map[rsyncRestoreEntryBinding]struct{}, len(requested))
+	for _, entry := range requested {
+		if entry.ExpectedDigest != "" {
+			return nil, provider.ErrRsyncRestoreSourceDrift
+		}
+		binding := rsyncRestoreBindingForEntry(entry)
+		if _, duplicate := seen[binding]; duplicate {
+			return nil, provider.ErrRsyncRestoreSourceDrift
+		}
+		seen[binding] = struct{}{}
+		if _, declared := strictByBinding[binding]; !declared {
+			return nil, provider.ErrRsyncRestoreSourceDrift
+		}
+	}
+	return append([]provider.RestoreEntry(nil), source.ordered...), nil
+}
+
+func (source *repositoryRsyncRestoreSource) Revalidate(ctx context.Context) error {
+	if source == nil || source.service == nil || source.tree == nil {
+		return provider.ErrRsyncRestoreSourceDrift
+	}
+	if err := source.service.revalidateRsyncRestoreResolution(ctx, source.ref, source.entries); err != nil {
+		if contextErr := rsyncRestorePortContextError(ctx, err); contextErr != nil {
+			return contextErr
+		}
+		return provider.ErrRsyncRestoreSourceDrift
+	}
+	if err := source.tree.Revalidate(ctx); err != nil {
+		if contextErr := rsyncRestorePortContextError(ctx, err); contextErr != nil {
+			return contextErr
+		}
+		return provider.ErrRsyncRestoreSourceDrift
+	}
+	return nil
+}
+
+func (source *repositoryRsyncRestoreSource) Close() error {
+	if source == nil || source.tree == nil {
+		return nil
+	}
+	return source.tree.Close()
+}
+
+var _ provider.RsyncRestoreSource = (*repositoryRsyncRestoreSource)(nil)
+
+func (service *Service) loadRsyncRestoreResolution(
+	ctx context.Context,
+	tx *gorm.DB,
+	ref provider.RsyncRestoreSourceRef,
+) (rsyncRestoreResolution, error) {
+	plan, point, declared, err := loadRsyncRestoreSourceBinding(ctx, tx, ref)
+	if err != nil {
+		return rsyncRestoreResolution{}, err
+	}
+	runtime, err := loadExactManagedRsyncPublicationRuntime(ctx, tx, *point.ProducingTaskID)
+	if err != nil || runtime.task.ID != *point.ProducingTaskID || runtime.repository.ID != plan.RepositoryID {
+		return rsyncRestoreResolution{}, invalidRsyncRestoreSourceRef()
+	}
+	request, _, err := service.managedRsyncCommittedPointReadRequest(ctx, runtime, point)
+	if err != nil {
+		return rsyncRestoreResolution{}, invalidRsyncRestoreSourceRef()
+	}
+	access, err := provider.NewRsyncCommittedPointRuntimeAccess(ctx, request)
+	if err != nil {
+		return rsyncRestoreResolution{}, invalidRsyncRestoreSourceRef()
+	}
+	return rsyncRestoreResolution{access: access, declared: declared}, nil
+}
+
+func (service *Service) revalidateRsyncRestoreResolution(
+	ctx context.Context,
+	ref provider.RsyncRestoreSourceRef,
+	expected map[provider.RestoreEntry]fileaccess.Entry,
+) error {
+	if service == nil || service.db == nil || len(expected) == 0 {
+		return invalidRsyncRestoreSourceRef()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		resolution, err := service.loadRsyncRestoreResolution(ctx, tx, ref)
+		if err != nil || len(resolution.declared) != len(expected) {
+			return invalidRsyncRestoreSourceRef()
+		}
+		expectedBindings := make(map[rsyncRestoreEntryBinding]string, len(expected))
+		for entry := range expected {
+			binding := rsyncRestoreBindingForEntry(entry)
+			if entry.Validate(ref.RecoveryPointID) != nil {
+				return invalidRsyncRestoreSourceRef()
+			}
+			expectedBindings[binding] = entry.ExpectedDigest
+		}
+		for _, declaration := range resolution.declared {
+			digest, exists := expectedBindings[rsyncRestoreBindingForEntry(declaration.restore)]
+			if !exists || declaration.restore.ExpectedDigest != "" && declaration.restore.ExpectedDigest != digest {
+				return invalidRsyncRestoreSourceRef()
+			}
+		}
+		return nil
+	})
+}
+
+type rsyncRestoreEntryBinding struct {
+	AssetRef           backupasset.AssetRef
+	Type               backupasset.CatalogEntryType
+	ExpectedSize       int64
+	TargetObjectDigest string
+}
+
+func rsyncRestoreBindingForEntry(entry provider.RestoreEntry) rsyncRestoreEntryBinding {
+	return rsyncRestoreEntryBinding{
+		AssetRef: entry.AssetRef, Type: entry.Type, ExpectedSize: entry.ExpectedSize,
+		TargetObjectDigest: entry.TargetObjectDigest,
+	}
+}
+
+func loadRsyncRestoreSourceBinding(
+	ctx context.Context,
+	tx *gorm.DB,
+	ref provider.RsyncRestoreSourceRef,
+) (model.BackupAssetRecoveryPlan, model.RecoveryPoint, []rsyncRestoreDeclaredEntry, error) {
+	var plan model.BackupAssetRecoveryPlan
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", ref.PlanID).First(&plan).Error; err != nil ||
+		plan.RepositoryID != ref.RepositoryID || plan.RecoveryPointID != ref.RecoveryPointID ||
+		plan.CatalogGenerationID != ref.CatalogGenerationID || plan.BindingDigest != ref.PlanBindingDigest ||
+		plan.SelectionDigest != ref.SelectionDigest || plan.SourceRevisionDigest != ref.SourceRevisionDigest ||
+		plan.SourceRevisionKind != rsyncRestoreImmutableSource || plan.ObservationFingerprint != "" ||
+		plan.ImmutableManifestDigest != ref.ManifestDigest || !isLowerHex64(plan.ImmutableLocatorDigest) {
+		return model.BackupAssetRecoveryPlan{}, model.RecoveryPoint{}, nil, invalidRsyncRestoreSourceRef()
+	}
+	var point model.RecoveryPoint
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND repository_id = ?", ref.RecoveryPointID, ref.RepositoryID).First(&point).Error; err != nil ||
+		point.ProducingTaskID == nil || point.ManifestDigest != ref.ManifestDigest ||
+		plan.EncryptedSourceLocator != point.EncryptedProviderLocator ||
+		backupasset.RecoveryPointState(point.State) != backupasset.RecoveryPointCommitted ||
+		(point.Semantics != string(backupasset.PointXirangManifest) && point.Semantics != string(backupasset.PointImportedBaseline)) {
+		return model.BackupAssetRecoveryPlan{}, model.RecoveryPoint{}, nil, invalidRsyncRestoreSourceRef()
+	}
+	immutableLocatorDigest, err := publication.ImmutableLocatorDigest(
+		plan.RepositoryID, backupasset.ProviderRsync, point.ID, point.EncryptedProviderLocator,
+	)
+	if err != nil || plan.ImmutableLocatorDigest != immutableLocatorDigest {
+		return model.BackupAssetRecoveryPlan{}, model.RecoveryPoint{}, nil, invalidRsyncRestoreSourceRef()
+	}
+	var generation model.CatalogGeneration
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND recovery_point_id = ? AND state = ? AND is_active = ?", ref.CatalogGenerationID, ref.RecoveryPointID, catalog.GenerationComplete, true).
+		First(&generation).Error; err != nil || generation.SourceFingerprint != point.SourceFingerprint ||
+		generation.ManifestID == nil || backupasset.ValidateOpaqueID(*generation.ManifestID) != nil ||
+		generation.ExpectedDigest != point.ManifestDigest || !isLowerHex64(generation.WrittenDigest) ||
+		generation.ExpectedEntryCount != point.EntryCount || generation.WrittenEntryCount != point.EntryCount {
+		return model.BackupAssetRecoveryPlan{}, model.RecoveryPoint{}, nil, invalidRsyncRestoreSourceRef()
+	}
+	var manifest model.RecoveryPointManifest
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND recovery_point_id = ? AND is_active = ?", *generation.ManifestID, point.ID, true).
+		First(&manifest).Error; err != nil || manifest.Revision <= 0 || manifest.DigestAlgorithm != "sha256" ||
+		manifest.Digest != point.ManifestDigest || manifest.Completeness != string(backupasset.ManifestComplete) ||
+		manifest.EntryCount != point.EntryCount || manifest.LogicalBytes != point.LogicalBytes {
+		return model.BackupAssetRecoveryPlan{}, model.RecoveryPoint{}, nil, invalidRsyncRestoreSourceRef()
+	}
+	declared, err := lockExactRsyncRestorePlanItems(ctx, tx, plan, point, generation)
+	if err != nil {
+		return model.BackupAssetRecoveryPlan{}, model.RecoveryPoint{}, nil, invalidRsyncRestoreSourceRef()
+	}
+	return plan, point, declared, nil
+}
+
+func lockExactRsyncRestorePlanItems(
+	ctx context.Context,
+	tx *gorm.DB,
+	plan model.BackupAssetRecoveryPlan,
+	point model.RecoveryPoint,
+	generation model.CatalogGeneration,
+) ([]rsyncRestoreDeclaredEntry, error) {
+	var items []model.BackupAssetRecoveryPlanItem
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("plan_id = ?", plan.ID).Order("ordinal ASC, id ASC").Find(&items).Error; err != nil || len(items) == 0 {
+		return nil, invalidRsyncRestoreSourceRef()
+	}
+
+	entryIDs := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for ordinal, item := range items {
+		if item.PlanID != plan.ID || item.Ordinal != ordinal || item.RecoveryPointID != point.ID ||
+			item.CatalogGenerationID != generation.ID || backupasset.ValidateAssetRef(backupasset.AssetRef{
+			RecoveryPointID: item.RecoveryPointID, EntryID: item.EntryID,
+		}) != nil || item.EntryType != string(backupasset.CatalogEntryFile) || item.SourceFingerprint != "" ||
+			!isLowerHex64(item.RelativePathDigest) {
+			return nil, invalidRsyncRestoreSourceRef()
+		}
+		if _, exists := seen[item.EntryID]; exists {
+			return nil, invalidRsyncRestoreSourceRef()
+		}
+		seen[item.EntryID] = struct{}{}
+		entryIDs = append(entryIDs, item.EntryID)
+	}
+
+	var entries []model.CatalogEntry
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("generation_id = ? AND recovery_point_id = ? AND entry_id IN ?", generation.ID, point.ID, entryIDs).
+		Find(&entries).Error; err != nil || len(entries) != len(items) {
+		return nil, invalidRsyncRestoreSourceRef()
+	}
+	entriesByID := make(map[string]model.CatalogEntry, len(entries))
+	for _, entry := range entries {
+		if entry.GenerationID != generation.ID || entry.RecoveryPointID != point.ID ||
+			backupasset.ValidateAssetRef(backupasset.AssetRef{RecoveryPointID: entry.RecoveryPointID, EntryID: entry.EntryID}) != nil ||
+			entry.EntryType != string(backupasset.CatalogEntryFile) || entry.Size < 0 || entry.NormalizedPath == "" {
+			return nil, invalidRsyncRestoreSourceRef()
+		}
+		entriesByID[entry.EntryID] = entry
+	}
+	declared := make([]rsyncRestoreDeclaredEntry, 0, len(items))
+	for _, item := range items {
+		entry, found := entriesByID[item.EntryID]
+		if !found || entry.EntryType != item.EntryType ||
+			item.RelativePathDigest != publication.RecoveryPlanItemPathDigest(
+				plan.RepositoryID, point.ID, generation.ID, entry.EntryID, entry.NormalizedPath,
+			) || entry.SecurityState != "sealed" {
+			return nil, invalidRsyncRestoreSourceRef()
+		}
+		switch entry.FingerprintStrength {
+		case string(catalog.FingerprintStrong):
+			if !isLowerHex64(entry.Fingerprint) {
+				return nil, invalidRsyncRestoreSourceRef()
+			}
+		case string(catalog.FingerprintNone):
+			if entry.Fingerprint != "" {
+				return nil, invalidRsyncRestoreSourceRef()
+			}
+		default:
+			return nil, invalidRsyncRestoreSourceRef()
+		}
+		providerLocator, err := decodeContentEntryLocator(entry.EncryptedProviderLocator)
+		if err != nil || providerLocator.Native != entry.NormalizedPath {
+			return nil, invalidRsyncRestoreSourceRef()
+		}
+		locator, err := fileaccess.ParseLocator(providerLocator.Native, fileaccess.ProviderPolicy)
+		if err != nil {
+			return nil, invalidRsyncRestoreSourceRef()
+		}
+		declared = append(declared, rsyncRestoreDeclaredEntry{
+			restore: provider.RestoreEntry{
+				AssetRef: backupasset.AssetRef{RecoveryPointID: point.ID, EntryID: entry.EntryID},
+				Type:     backupasset.CatalogEntryFile, ExpectedSize: entry.Size,
+				ExpectedDigest: entry.Fingerprint, TargetObjectDigest: item.RelativePathDigest,
+			},
+			locator: locator,
+			name:    entry.Name,
+		})
+	}
+	return declared, nil
+}
+
+func invalidRsyncRestoreSourceRef() error {
+	return fmt.Errorf("%w: Rsync restore source binding rejected", provider.ErrInvalidRestoreRequest)
+}
+
+// RsyncRestorePort is the Repository-owned concrete RestorePort. Provider
+// owns only portable request/result contracts and the runner seam; this port
+// resolves the scalar source ref into a pinned descriptor for each phase.
+type RsyncRestorePort struct {
+	resolver provider.RsyncRestoreSourceResolver
+	writer   provider.RsyncTargetWriter
+	runner   provider.RsyncRestoreRunner
+}
+
+func NewRsyncRestorePort(
+	resolver provider.RsyncRestoreSourceResolver,
+	writer provider.RsyncTargetWriter,
+	runner provider.RsyncRestoreRunner,
+) *RsyncRestorePort {
+	return &RsyncRestorePort{resolver: resolver, writer: writer, runner: runner}
+}
+
+func (*RsyncRestorePort) ProviderKind() backupasset.ProviderKind {
+	return backupasset.ProviderRsync
+}
+
+func (port *RsyncRestorePort) Preflight(ctx context.Context, request provider.RestorePreflightRequest) (evidence provider.RestorePreflightEvidence, err error) {
+	if err = port.validateDependencies(); err != nil {
+		return provider.RestorePreflightEvidence{}, err
+	}
+	now := time.Now().UTC()
+	if err = request.Request.ValidateRsyncResolutionIntent(); err != nil {
+		return provider.RestorePreflightEvidence{}, err
+	}
+	if err = request.Permit.ValidateAt(now, request.Request.Target); err != nil {
+		return provider.RestorePreflightEvidence{}, err
+	}
+	intent, source, err := port.resolveIntent(ctx, request.Request)
+	if err != nil {
+		return provider.RestorePreflightEvidence{}, err
+	}
+	defer func() {
+		if closeErr := source.Close(); err == nil && closeErr != nil {
+			evidence = provider.RestorePreflightEvidence{}
+			err = unavailableRsyncRestorePortError(ctx, closeErr)
+		}
+	}()
+	runnerEvidence, runnerErr := port.runner.Preflight(ctx, provider.RsyncRestorePreflightCall{RsyncRestoreIntent: intent, Permit: request.Permit})
+	if err = source.Revalidate(ctx); err != nil {
+		return provider.RestorePreflightEvidence{}, sourceDriftRsyncRestorePortError(ctx, runnerErr, err)
+	}
+	if runnerErr != nil {
+		return provider.RestorePreflightEvidence{}, unavailableRsyncRestorePortError(ctx, runnerErr)
+	}
+	if err = provider.ValidateRsyncRestoreRunnerObservation(request.Request, runnerEvidence); err != nil {
+		return provider.RestorePreflightEvidence{}, err
+	}
+	evidence = provider.RestorePreflightEvidence{
+		TargetBindingDigest: runnerEvidence.TargetBindingDigest,
+		TargetRevision:      runnerEvidence.TargetRevision,
+		Checkpoint:          runnerEvidence.Checkpoint,
+		Operations:          append([]provider.RestoreEvidence(nil), runnerEvidence.Evidence...),
+	}
+	if err = evidence.ValidateFor(request.Request); err != nil {
+		return provider.RestorePreflightEvidence{}, err
+	}
+	return evidence, nil
+}
+
+func (port *RsyncRestorePort) Execute(ctx context.Context, request provider.RestoreRequest, progress provider.RestoreProgress) (result provider.RestoreResult, err error) {
+	if err = port.validateDependencies(); err != nil {
+		return provider.RestoreResult{}, err
+	}
+	if err = request.ValidateRsyncResolutionIntent(); err != nil {
+		return provider.RestoreResult{}, err
+	}
+	if err = request.MutationPermit.ValidateAt(time.Now().UTC(), request.Target, request.Fence); err != nil {
+		return provider.RestoreResult{}, err
+	}
+	intent, source, err := port.resolveIntent(ctx, request)
+	if err != nil {
+		return provider.RestoreResult{}, err
+	}
+	defer func() {
+		if closeErr := source.Close(); err == nil && closeErr != nil {
+			result = provider.RestoreResult{}
+			err = unavailableRsyncRestorePortError(ctx, closeErr)
+		}
+	}()
+	runnerResult, runnerErr := port.runner.Execute(ctx, provider.RsyncRestoreExecuteCall{
+		RsyncRestoreIntent: intent,
+		Permit:             request.MutationPermit,
+		Progress:           progress,
+	})
+	if err = source.Revalidate(ctx); err != nil {
+		return provider.RestoreResult{}, sourceDriftRsyncRestorePortError(ctx, runnerErr, err)
+	}
+	if runnerErr != nil {
+		return provider.RestoreResult{}, unavailableRsyncRestorePortError(ctx, runnerErr)
+	}
+	result = provider.RestoreResult{Checkpoint: runnerResult.Checkpoint, Evidence: append([]provider.RestoreEvidence(nil), runnerResult.Evidence...)}
+	if err = result.ValidateFor(request); err != nil {
+		return provider.RestoreResult{}, err
+	}
+	return result, nil
+}
+
+func (port *RsyncRestorePort) Verify(ctx context.Context, request provider.RestoreVerifyRequest) (result provider.RestoreVerifyResult, err error) {
+	if err = port.validateDependencies(); err != nil {
+		return provider.RestoreVerifyResult{}, err
+	}
+	now := time.Now().UTC()
+	if err = request.Request.ValidateRsyncResolutionIntent(); err != nil {
+		return provider.RestoreVerifyResult{}, err
+	}
+	if err = request.Permit.ValidateAt(now, request.Request.Target); err != nil {
+		return provider.RestoreVerifyResult{}, err
+	}
+	intent, source, err := port.resolveIntent(ctx, request.Request)
+	if err != nil {
+		return provider.RestoreVerifyResult{}, err
+	}
+	defer func() {
+		if closeErr := source.Close(); err == nil && closeErr != nil {
+			result = provider.RestoreVerifyResult{}
+			err = unavailableRsyncRestorePortError(ctx, closeErr)
+		}
+	}()
+	runnerEvidence, runnerErr := port.runner.Verify(ctx, provider.RsyncRestoreVerifyCall{RsyncRestoreIntent: intent, Permit: request.Permit})
+	if err = source.Revalidate(ctx); err != nil {
+		return provider.RestoreVerifyResult{}, sourceDriftRsyncRestorePortError(ctx, runnerErr, err)
+	}
+	if runnerErr != nil {
+		return provider.RestoreVerifyResult{}, unavailableRsyncRestorePortError(ctx, runnerErr)
+	}
+	if err = provider.ValidateRsyncRestoreRunnerObservation(request.Request, runnerEvidence); err != nil {
+		return provider.RestoreVerifyResult{}, err
+	}
+	result = provider.RestoreVerifyResult{Checkpoint: runnerEvidence.Checkpoint, Evidence: append([]provider.RestoreEvidence(nil), runnerEvidence.Evidence...)}
+	if err = result.ValidateFor(request.Request); err != nil {
+		return provider.RestoreVerifyResult{}, err
+	}
+	return result, nil
+}
+
+func (port *RsyncRestorePort) Reconcile(ctx context.Context, request provider.RestoreReconcileRequest) (result provider.RestoreReconcileResult, err error) {
+	if err = port.validateDependencies(); err != nil {
+		return provider.RestoreReconcileResult{}, err
+	}
+	now := time.Now().UTC()
+	if err = request.Request.ValidateRsyncResolutionIntent(); err != nil {
+		return provider.RestoreReconcileResult{}, err
+	}
+	if err = request.Permit.ValidateAt(now, request.Request.Target); err != nil {
+		return provider.RestoreReconcileResult{}, err
+	}
+	intent, source, err := port.resolveIntent(ctx, request.Request)
+	if err != nil {
+		return provider.RestoreReconcileResult{}, err
+	}
+	defer func() {
+		if closeErr := source.Close(); err == nil && closeErr != nil {
+			result = provider.RestoreReconcileResult{}
+			err = unavailableRsyncRestorePortError(ctx, closeErr)
+		}
+	}()
+	runnerEvidence, runnerErr := port.runner.Reconcile(ctx, provider.RsyncRestoreReconcileCall{RsyncRestoreIntent: intent, Permit: request.Permit})
+	if err = source.Revalidate(ctx); err != nil {
+		return provider.RestoreReconcileResult{}, sourceDriftRsyncRestorePortError(ctx, runnerErr, err)
+	}
+	if runnerErr != nil {
+		return provider.RestoreReconcileResult{}, unavailableRsyncRestorePortError(ctx, runnerErr)
+	}
+	if err = provider.ValidateRsyncRestoreRunnerObservation(request.Request, runnerEvidence); err != nil {
+		return provider.RestoreReconcileResult{}, err
+	}
+	result = provider.RestoreReconcileResult{Checkpoint: runnerEvidence.Checkpoint, Evidence: append([]provider.RestoreEvidence(nil), runnerEvidence.Evidence...)}
+	if err = result.ValidateFor(request.Request); err != nil {
+		return provider.RestoreReconcileResult{}, err
+	}
+	return result, nil
+}
+
+func (port *RsyncRestorePort) resolveIntent(ctx context.Context, request provider.RestoreRequest) (provider.RsyncRestoreIntent, provider.RsyncRestoreSource, error) {
+	if err := request.ValidateRsyncResolutionIntent(); err != nil || request.Rsync == nil {
+		return provider.RsyncRestoreIntent{}, nil, sourceDriftRsyncRestorePortError(ctx)
+	}
+	source, err := port.resolver.ResolveRsyncRestoreSource(ctx, request.Rsync.SourceRef)
+	if err != nil || source == nil {
+		return provider.RsyncRestoreIntent{}, nil, sourceResolutionRsyncRestorePortError(ctx, err)
+	}
+	if err := source.Revalidate(ctx); err != nil {
+		_ = source.Close()
+		return provider.RsyncRestoreIntent{}, nil, sourceDriftRsyncRestorePortError(ctx, err)
+	}
+	entries, err := source.MaterializeDeclaredEntries(ctx, request.Entries)
+	if err != nil {
+		_ = source.Close()
+		return provider.RsyncRestoreIntent{}, nil, sourceDriftRsyncRestorePortError(ctx, err)
+	}
+	request.Entries = entries
+	if err := request.ValidateIntent(); err != nil {
+		_ = source.Close()
+		return provider.RsyncRestoreIntent{}, nil, sourceDriftRsyncRestorePortError(ctx, err)
+	}
+	intent, err := provider.NewRsyncRestoreIntent(request, source, port.writer)
+	if err != nil {
+		_ = source.Close()
+		return provider.RsyncRestoreIntent{}, nil, sourceDriftRsyncRestorePortError(ctx, err)
+	}
+	return intent, source, nil
+}
+
+func (port *RsyncRestorePort) validateDependencies() error {
+	if port == nil || isNilRsyncRestoreDependency(port.resolver) || isNilRsyncRestoreDependency(port.writer) || isNilRsyncRestoreDependency(port.runner) {
+		return unavailableRsyncRestorePortError(context.Background())
+	}
+	return nil
+}
+
+func isNilRsyncRestoreDependency(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
+}
+
+func sourceResolutionRsyncRestorePortError(ctx context.Context, err error) error {
+	if contextErr := rsyncRestorePortContextError(ctx, err); contextErr != nil {
+		return contextErr
+	}
+	if errors.Is(err, provider.ErrRsyncRestoreSourceDrift) || errors.Is(err, provider.ErrInvalidRestoreRequest) ||
+		errors.Is(err, fileaccess.ErrSourceChanged) || errors.Is(err, fileaccess.ErrStrictUnavailable) {
+		return provider.ErrRsyncRestoreSourceDrift
+	}
+	return provider.ErrRsyncRestoreUnavailable
+}
+
+func sourceDriftRsyncRestorePortError(ctx context.Context, causes ...error) error {
+	if contextErr := rsyncRestorePortContextError(ctx, causes...); contextErr != nil {
+		return contextErr
+	}
+	return provider.ErrRsyncRestoreSourceDrift
+}
+
+func unavailableRsyncRestorePortError(ctx context.Context, causes ...error) error {
+	if contextErr := rsyncRestorePortContextError(ctx, causes...); contextErr != nil {
+		return contextErr
+	}
+	return provider.ErrRsyncRestoreUnavailable
+}
+
+func rsyncRestorePortContextError(ctx context.Context, causes ...error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	for _, cause := range causes {
+		if errors.Is(cause, context.Canceled) {
+			return context.Canceled
+		}
+		if errors.Is(cause, context.DeadlineExceeded) {
+			return context.DeadlineExceeded
+		}
+	}
+	return nil
+}
+
+var _ provider.RestorePort = (*RsyncRestorePort)(nil)
 
 // BeginManagedRsyncPointRead reconstructs one exact committed managed Rsync
 // tree. It never accepts a root, path, marker, or locator from its caller.

@@ -669,6 +669,82 @@ func TestFoundationExportConfigRequiresCompleteAtomicSnapshot(t *testing.T) {
 	}
 }
 
+func TestRecoveryAuthorizationReceiptSettingsDeadlineOrdering(t *testing.T) {
+	values := cloneFoundationTestValues(staticFoundationDefaults)
+	for key, value := range map[string]string{
+		"backup_assets.recovery.receipt_replay_ttl":        "30m",
+		"backup_assets.recovery.write_grant_ttl":           "25m",
+		"backup_assets.recovery.delete_grant_ttl":          "20m",
+		"backup_assets.recovery.receipt_reaper_cadence":    "45s",
+		"backup_assets.recovery.receipt_reaper_batch_size": "73",
+	} {
+		values[key] = value
+	}
+	reader := &snapshotSettingsReader{values: values}
+	config, err := callRecoveryAuthorizationConfig(t, NewFoundationService(reader))
+	if err != nil {
+		t.Fatalf("RecoveryAuthorizationConfig: %v", err)
+	}
+	for field, want := range map[string]any{
+		"ReceiptReplayTTL":       30 * time.Minute,
+		"WriteGrantTTL":          25 * time.Minute,
+		"DeleteGrantTTL":         20 * time.Minute,
+		"ReceiptReaperCadence":   45 * time.Second,
+		"ReceiptReaperBatchSize": 73,
+	} {
+		got := config.FieldByName(field)
+		if !got.IsValid() || !reflect.DeepEqual(got.Interface(), want) {
+			t.Errorf("RecoveryAuthorizationConfig.%s=%v, want %v", field, valueOfReflectField(got), want)
+		}
+	}
+	if reader.effectiveReads != 0 || reader.snapshotReads != 1 {
+		t.Fatalf("RecoveryAuthorizationConfig mixed per-key reads: effective=%d snapshot=%d", reader.effectiveReads, reader.snapshotReads)
+	}
+
+	invalid := map[string]string{
+		"backup_assets.recovery.write_grant_ttl":           "31m",
+		"backup_assets.recovery.delete_grant_ttl":          "31m",
+		"backup_assets.recovery.receipt_reaper_cadence":    "0s",
+		"backup_assets.recovery.receipt_reaper_batch_size": "0",
+	}
+	for key, value := range invalid {
+		t.Run(key, func(t *testing.T) {
+			candidate := cloneFoundationTestValues(values)
+			candidate[key] = value
+			if _, err := callRecoveryAuthorizationConfig(t, NewFoundationService(&snapshotSettingsReader{values: candidate})); err == nil {
+				t.Fatalf("unsafe Recovery authorization setting %s=%q was accepted", key, value)
+			}
+		})
+	}
+}
+
+func callRecoveryAuthorizationConfig(t *testing.T, service *FoundationService) (reflect.Value, error) {
+	t.Helper()
+	method := reflect.ValueOf(service).MethodByName("RecoveryAuthorizationConfig")
+	if !method.IsValid() {
+		t.Fatal("FoundationService.RecoveryAuthorizationConfig is unavailable")
+	}
+	results := method.Call(nil)
+	if len(results) != 2 {
+		t.Fatalf("RecoveryAuthorizationConfig returned %d values, want 2", len(results))
+	}
+	if !results[1].IsNil() {
+		err, ok := results[1].Interface().(error)
+		if !ok {
+			t.Fatalf("RecoveryAuthorizationConfig second result is %T, want error", results[1].Interface())
+		}
+		return results[0], err
+	}
+	return results[0], nil
+}
+
+func valueOfReflectField(value reflect.Value) any {
+	if !value.IsValid() {
+		return nil
+	}
+	return value.Interface()
+}
+
 type snapshotSettingsReader struct {
 	mu             sync.Mutex
 	values         map[string]string
@@ -900,4 +976,9 @@ var staticFoundationDefaults = map[string]string{
 	"backup_assets.archive.max_depth":                          "16",
 	"backup_assets.archive.max_compression_ratio":              "100",
 	"backup_assets.archive.max_duration":                       "10m",
+	"backup_assets.recovery.receipt_replay_ttl":                "20m",
+	"backup_assets.recovery.write_grant_ttl":                   "15m",
+	"backup_assets.recovery.delete_grant_ttl":                  "10m",
+	"backup_assets.recovery.receipt_reaper_cadence":            "1m",
+	"backup_assets.recovery.receipt_reaper_batch_size":         "100",
 }

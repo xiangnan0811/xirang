@@ -35,8 +35,9 @@ var (
 )
 
 const (
-	ticketFailureAuditTimeout = 5 * time.Second
-	gatewayCleanupTimeout     = 5 * time.Second
+	ticketFailureAuditTimeout   = 5 * time.Second
+	gatewayCleanupTimeout       = 5 * time.Second
+	RecoveryResultCleanupReason = "recovery_cleanup"
 )
 
 type DeliveryActor struct {
@@ -75,6 +76,47 @@ type AuthorizedAsset struct {
 type AssetAuthorizer interface {
 	Authorize(context.Context, DeliveryActor, backupasset.AssetRef, DeliveryAction) (AuthorizedAsset, error)
 	Reauthorize(context.Context, DeliveryActor, AuthorizedAsset, DeliveryAction) error
+}
+
+type AuthorizedRecoveryResult struct {
+	Ref                          RecoveryResultRef
+	OwnerUserID                  uint
+	RepositoryID                 string
+	RecoveryPointID              string
+	Provider                     backupasset.ProviderKind
+	PublicationRevision          uint64
+	CleanupFence                 uint64
+	MarkerBindingDigest          string
+	PublicationFingerprint       string
+	ContentDigest                string
+	Size                         int64
+	ModifiedAt                   *time.Time
+	MediaType                    string
+	RangeProven                  bool
+	Classification               Classification
+	ClassificationRevision       int64
+	ClassificationSourceRevision int64
+	PlaintextDeadline            time.Time
+	HardDeadline                 time.Time
+}
+
+type RecoveryResultAuthorizer interface {
+	AuthorizeRecoveryResult(context.Context, DeliveryActor, RecoveryResultRef, DeliveryAction) (AuthorizedRecoveryResult, error)
+	ReauthorizeRecoveryResult(context.Context, DeliveryActor, AuthorizedRecoveryResult, DeliveryAction) error
+}
+
+type RecoveryResultSourceRequest struct {
+	OwnerUserID         uint              `json:"-"`
+	Ref                 RecoveryResultRef `json:"-"`
+	ExpectedPublication string            `json:"-"`
+	ExpectedContent     string            `json:"-"`
+	Mode                SourceMode        `json:"-"`
+	MaxBytes            int64             `json:"-"`
+	Range               *ResolvedRange    `json:"-"`
+}
+
+type RecoveryResultSourceResolver interface {
+	OpenRecoveryResultSource(context.Context, RecoveryResultSourceRequest) (SourceSession, error)
 }
 
 type DerivedRepresentationSource interface {
@@ -117,9 +159,11 @@ type BrokerDependencies struct {
 	Now                    func() time.Time
 	FeatureEnabled         func(context.Context) (bool, error)
 	Authorize              AssetAuthorizer
+	RecoveryAuthorize      RecoveryResultAuthorizer
 	Session                DeliverySessionValidator
 	Lease                  ContentLeaseController
 	Source                 SourceResolver
+	RecoverySource         RecoveryResultSourceResolver
 	Derived                DerivedRepresentationSource
 	SecurityPolicyRevision func(context.Context) (string, error)
 	Audit                  BrokerAudit
@@ -134,6 +178,7 @@ type IssueRequest struct {
 	Actor        DeliveryActor
 	Session      DeliverySession
 	Ref          backupasset.AssetRef
+	Resource     DeliveryResource
 	Action       DeliveryAction
 	Renderer     Renderer
 	Profile      RendererProfile
@@ -184,9 +229,11 @@ type Broker struct {
 	now                    func() time.Time
 	featureEnabled         func(context.Context) (bool, error)
 	authorize              AssetAuthorizer
+	recoveryAuthorize      RecoveryResultAuthorizer
 	session                DeliverySessionValidator
 	lease                  ContentLeaseController
 	source                 SourceResolver
+	recoverySource         RecoveryResultSourceResolver
 	derived                DerivedRepresentationSource
 	securityPolicyRevision func(context.Context) (string, error)
 	audit                  BrokerAudit
@@ -202,8 +249,10 @@ type Broker struct {
 	issues          sync.WaitGroup
 	leases          map[string]*ContentLeaseSession
 	assets          map[string]AuthorizedAsset
+	recoveryResults map[string]AuthorizedRecoveryResult
 	derivedBindings map[string]DerivedRepresentation
 	reads           map[string]map[string]activeContentRead
+	revokedGrants   map[string]struct{}
 	inFlight        map[backupasset.ProviderKind]int
 	cache           *AuthenticatedCache
 }
@@ -213,6 +262,9 @@ func NewBroker(dependencies BrokerDependencies) (*Broker, error) {
 		dependencies.Authorize == nil || dependencies.Session == nil || dependencies.Lease == nil ||
 		dependencies.Source == nil || dependencies.Audit == nil ||
 		dependencies.Budget == nil || dependencies.Config == nil {
+		return nil, ErrInvalidBrokerRequest
+	}
+	if (dependencies.RecoveryAuthorize == nil) != (dependencies.RecoverySource == nil) {
 		return nil, ErrInvalidBrokerRequest
 	}
 	if (dependencies.Derived == nil) != (dependencies.SecurityPolicyRevision == nil) {
@@ -236,14 +288,17 @@ func NewBroker(dependencies BrokerDependencies) (*Broker, error) {
 	}
 	return &Broker{
 		db: dependencies.DB, now: dependencies.Now, featureEnabled: dependencies.FeatureEnabled,
-		authorize: dependencies.Authorize, session: dependencies.Session, lease: dependencies.Lease,
-		source: dependencies.Source, derived: dependencies.Derived,
+		authorize: dependencies.Authorize, recoveryAuthorize: dependencies.RecoveryAuthorize,
+		session: dependencies.Session, lease: dependencies.Lease,
+		source: dependencies.Source, recoverySource: dependencies.RecoverySource, derived: dependencies.Derived,
 		securityPolicyRevision: dependencies.SecurityPolicyRevision, audit: dependencies.Audit,
 		budget: dependencies.Budget, metrics: dependencies.Metrics,
 		ticketMaterial: dependencies.TicketMaterial, requestID: dependencies.RequestID, config: dependencies.Config,
 		leases: make(map[string]*ContentLeaseSession), assets: make(map[string]AuthorizedAsset),
+		recoveryResults: make(map[string]AuthorizedRecoveryResult),
 		derivedBindings: make(map[string]DerivedRepresentation),
-		reads:           make(map[string]map[string]activeContentRead), inFlight: make(map[backupasset.ProviderKind]int), accepting: true,
+		reads:           make(map[string]map[string]activeContentRead), revokedGrants: make(map[string]struct{}),
+		inFlight: make(map[backupasset.ProviderKind]int), accepting: true,
 	}, nil
 }
 
@@ -258,6 +313,13 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 	}
 	defer broker.issues.Done()
 	now := broker.now().UTC()
+	resource, validResource := issueDeliveryResource(request)
+	if !validResource {
+		return IssuedTicket{}, ErrInvalidDeliveryProduct
+	}
+	if resource.Kind == DeliveryResourceBackupAsset {
+		request.Ref = *resource.Asset
+	}
 	if request.Actor.Role != "admin" && request.Actor.Role != "operator" {
 		return IssuedTicket{}, backupasset.ErrForbidden
 	}
@@ -277,6 +339,18 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 	}
 	if err := broker.session.Validate(ctx, request.Session); err != nil {
 		return IssuedTicket{}, backupasset.ErrForbidden
+	}
+	if resource.Kind == DeliveryResourceRecoveryResult {
+		if broker.recoveryAuthorize == nil || broker.recoverySource == nil {
+			return IssuedTicket{}, ErrContentSourceUnavailable
+		}
+		ticket, issueErr := broker.issueRecoveryResult(ctx, request, *resource.RecoveryResult, now)
+		if issueErr == nil {
+			metricOutcome = MetricOutcomeSuccess
+		} else if outcome, _ := ticketFailureAuditOutcome(issueErr); outcome == backupasset.AuditOutcomeBlocked {
+			metricOutcome = MetricOutcomeBlocked
+		}
+		return ticket, issueErr
 	}
 	asset, err := broker.authorize.Authorize(ctx, request.Actor, request.Ref, request.Action)
 	if err != nil {
@@ -444,6 +518,162 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 	}, nil
 }
 
+func (broker *Broker) issueRecoveryResult(
+	ctx context.Context,
+	request IssueRequest,
+	ref RecoveryResultRef,
+	now time.Time,
+) (ticket IssuedTicket, resultErr error) {
+	result, err := broker.recoveryAuthorize.AuthorizeRecoveryResult(ctx, request.Actor, ref, request.Action)
+	if err != nil {
+		return IssuedTicket{}, err
+	}
+	if !validAuthorizedRecoveryResult(result, ref, request.Actor.UserID, now) {
+		return IssuedTicket{}, ErrContentSourceUnavailable
+	}
+	material, err := broker.ticketMaterial()
+	if err != nil || !validTicketMaterial(material) {
+		return IssuedTicket{}, ErrInvalidBrokerRequest
+	}
+	auditGrant := model.BackupAssetDeliveryGrant{
+		ID: material.GrantID, Renderer: string(request.Renderer), Profile: string(request.Profile),
+		Classification: string(result.Classification), RepresentationSize: result.Size,
+	}
+	auditFailure := true
+	defer func() {
+		if !auditFailure || resultErr == nil {
+			return
+		}
+		outcome, failureCode := ticketFailureAuditOutcome(resultErr)
+		auditCtx, cancelAudit := context.WithTimeout(context.WithoutCancel(ctx), ticketFailureAuditTimeout)
+		defer cancelAudit()
+		if auditErr := broker.audit.Write(
+			auditCtx, recoveryResultTicketAuditInput(request, result, auditGrant, outcome, failureCode),
+		); auditErr != nil {
+			resultErr = errors.Join(resultErr, ErrContentAuditUnavailable)
+		}
+		ticket = IssuedTicket{}
+	}()
+
+	lease, err := acquireContentLeaseForRecoveryPoint(ctx, broker.lease, result.RecoveryPointID, material.GrantID)
+	if err != nil {
+		return IssuedTicket{}, err
+	}
+	releaseLease := true
+	defer func() {
+		if !releaseLease {
+			return
+		}
+		releaseCtx, cancelRelease := context.WithTimeout(context.WithoutCancel(ctx), ticketFailureAuditTimeout)
+		defer cancelRelease()
+		if releaseErr := lease.Release(releaseCtx); releaseErr != nil {
+			resultErr = errors.Join(resultErr, ErrContentUnavailable)
+			ticket = IssuedTicket{}
+		}
+	}()
+
+	config, err := broker.config(ctx)
+	if err != nil || !validBrokerConfig(config) {
+		return IssuedTicket{}, ErrInvalidBrokerRequest
+	}
+	profileExpiry := minTime(now.Add(config.MediaTTL), result.PlaintextDeadline.UTC())
+	proofExpiry := request.Proof.ExpiresAt.UTC()
+	deadlines, err := ResolveGrantDeadlines(GrantDeadlineInput{
+		Now: now, SessionExpiresAt: request.Session.ExpiresAt, ProfileExpiresAt: profileExpiry,
+		LeaseDeadline: lease.Binding().AbsoluteDeadline, ProofExpiresAt: &proofExpiry, IdleTTL: config.IdleTTL,
+	})
+	if err != nil {
+		return IssuedTicket{}, err
+	}
+	rangePolicy := RangeNone
+	if result.RangeProven {
+		rangePolicy = RangeSingle
+	}
+	product := DeliveryProduct{
+		Action: DeliveryDownload, Method: MethodGetHead, Range: rangePolicy,
+		Renderer: RendererAttachment, Profile: ProfileOriginalV1,
+		Classification: result.Classification, Proof: request.Proof,
+		AbsoluteExpiresAt: deadlines.AbsoluteExpiresAt,
+	}
+	if err := ValidateDeliveryProductForResource(DeliveryResourceRecoveryResult, product, now); err != nil {
+		return IssuedTicket{}, err
+	}
+	etag := recoveryResultETag(result, product)
+	grant := buildIssuedRecoveryResultGrant(request, result, material, lease.Binding(), deadlines, product, etag, config, now)
+	auditGrant = grant
+	ticketDeadline := minTime(now.Add(config.TicketTimeout), deadlines.AbsoluteExpiresAt)
+	ticketCtx, cancelTicket := context.WithDeadline(ctx, ticketDeadline)
+	defer cancelTicket()
+	if err := broker.db.WithContext(ticketCtx).Create(&grant).Error; err != nil {
+		return IssuedTicket{}, err
+	}
+	auditFailure = false
+	if err := broker.audit.Write(
+		ticketCtx, recoveryResultTicketAuditInput(request, result, grant, backupasset.AuditOutcomeSuccess, ""),
+	); err != nil {
+		broker.revokeIssuedGrant(ticketCtx, grant.ID, "audit_failed", now)
+		return IssuedTicket{}, ErrContentAuditUnavailable
+	}
+	updated := broker.db.WithContext(ticketCtx).Model(&model.BackupAssetDeliveryGrant{}).
+		Where("id = ? AND state = ? AND version = ?", grant.ID, DeliveryIssued, grant.Version).
+		Updates(map[string]any{"state": DeliveryActive, "version": grant.Version + 1, "updated_at": now})
+	if updated.Error != nil || updated.RowsAffected != 1 {
+		broker.revokeIssuedGrant(ticketCtx, grant.ID, "request_failed", now)
+		return IssuedTicket{}, ErrInvalidBrokerRequest
+	}
+	cookie, err := NewDeliveryCookie(material.DeliveryID, material.CookieSecret, deadlines.AbsoluteExpiresAt, request.SecureCookie)
+	if err != nil {
+		broker.revokeIssuedGrant(ticketCtx, grant.ID, "request_failed", now)
+		return IssuedTicket{}, err
+	}
+	broker.mu.Lock()
+	broker.leases[grant.ID] = lease
+	broker.recoveryResults[grant.ID] = result
+	broker.mu.Unlock()
+	releaseLease = false
+	return IssuedTicket{
+		Descriptor: TicketDescriptor{
+			SchemaVersion: 1, ContentURL: cookie.Path, Action: DeliveryDownload,
+			Renderer: RendererAttachment, Profile: ProfileOriginalV1,
+			ContentType: result.MediaType, ContentLength: result.Size, ETag: etag,
+			LastModified: result.ModifiedAt, Range: rangePolicy, Classification: result.Classification,
+			ExpiresAt: deadlines.AbsoluteExpiresAt, IdleExpiresAt: deadlines.IdleExpiresAt,
+			FallbackActions: []DeliveryAction{},
+		},
+		Cookie: cookie,
+	}, nil
+}
+
+func acquireContentLeaseForRecoveryPoint(
+	ctx context.Context,
+	controller ContentLeaseController,
+	recoveryPointID string,
+	grantID string,
+) (*ContentLeaseSession, error) {
+	if controller == nil || backupasset.ValidateOpaqueID(recoveryPointID) != nil ||
+		backupasset.ValidateOpaqueID(grantID) != nil {
+		return nil, ErrInvalidContentLease
+	}
+	ctx = nonNilContext(ctx)
+	lease, err := controller.Acquire(ctx, backupasset.AcquireLeaseRequest{
+		RecoveryPointID: recoveryPointID, HolderType: backupasset.LeaseHolderContentSession, OwnerID: grantID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	binding, err := contentLeaseBinding(lease, recoveryPointID, grantID)
+	if err != nil {
+		cleanupCtx, cancelCleanup := boundedDetachedLeaseCleanup(ctx)
+		releaseErr := controller.Release(cleanupCtx, lease.Fence)
+		cancelCleanup()
+		return nil, errors.Join(err, releaseErr)
+	}
+	return &ContentLeaseSession{
+		controller: controller, fence: lease.Fence, binding: binding,
+		lastHeartbeatAt: lease.LastHeartbeatAt.UTC(),
+	}, nil
+}
+
 // Serve performs the cookie-only content request flow. It reserves all byte
 // and concurrency budgets before opening a source and owns reader close,
 // conservative finalization, aggregate audit, and response streaming.
@@ -518,7 +748,9 @@ func (broker *Broker) Serve(ctx context.Context, request GatewayRequest, writer 
 	broker.metrics.AddBytes(MetricBytesReserved, reservedBytes)
 
 	readCtx, cancel := context.WithCancel(ctx)
-	done, registered := broker.registerRead(grant.ID, requestID, grant.SessionJTI, asset.Provider, cancel)
+	done, registered := broker.registerRead(
+		grant.ID, requestID, grant.SessionJTI, backupasset.ProviderKind(grant.ProviderKind), cancel,
+	)
 	if !registered {
 		cancel()
 		_ = broker.finalizeGatewayRequest(ctx, reservation, RequestFailed, http.StatusServiceUnavailable, RequestFailureInternal, -1, 0, false)
@@ -643,9 +875,28 @@ func (broker *Broker) authorizeGatewayRequest(
 	}
 	broker.mu.Lock()
 	asset, assetFound := broker.assets[grant.ID]
+	recoveryResult, recoveryResultFound := broker.recoveryResults[grant.ID]
 	lease := broker.leases[grant.ID]
 	derivedBinding, derivedFound := broker.derivedBindings[grant.ID]
 	broker.mu.Unlock()
+	if grant.ResourceKind == string(DeliveryResourceRecoveryResult) {
+		if !recoveryResultFound || !authorizedRecoveryResultMatchesGrant(recoveryResult, grant, broker.now().UTC()) {
+			broker.revokeIssuedGrant(ctx, grant.ID, "source_changed", broker.now().UTC())
+			return grant, actor, session, AuthorizedAsset{}, nil, ErrContentNotFound
+		}
+		if broker.recoveryAuthorize == nil || broker.recoveryAuthorize.ReauthorizeRecoveryResult(
+			ctx, actor, recoveryResult, DeliveryAction(grant.Action),
+		) != nil {
+			broker.revokeIssuedGrant(ctx, grant.ID, "permission_changed", broker.now().UTC())
+			return grant, actor, session, AuthorizedAsset{}, nil, ErrContentNotFound
+		}
+		if lease == nil || lease.Binding().LeaseID != grant.LeaseID || lease.Binding().AttemptID != grant.LeaseAttemptID ||
+			lease.Binding().FenceTokenHash != grant.LeaseFenceTokenHash || lease.Validate(ctx) != nil {
+			broker.revokeIssuedGrant(ctx, grant.ID, "lease_lost", broker.now().UTC())
+			return grant, actor, session, AuthorizedAsset{}, nil, ErrContentNotFound
+		}
+		return grant, actor, session, AuthorizedAsset{}, lease, nil
+	}
 	if !assetFound || !authorizedAssetMatchesGrant(asset, grant, derivedBinding, derivedFound) {
 		broker.revokeIssuedGrant(ctx, grant.ID, "source_changed", broker.now().UTC())
 		return grant, actor, session, AuthorizedAsset{}, nil, ErrContentNotFound
@@ -782,6 +1033,9 @@ func (broker *Broker) prepareGatewayRead(
 	plan RepresentationPlan,
 	renderer *RendererPolicy,
 ) (*gatewayReadState, error) {
+	if grant.ResourceKind == string(DeliveryResourceRecoveryResult) {
+		return broker.prepareRecoveryResultGatewayRead(ctx, request, grant, plan)
+	}
 	state := &gatewayReadState{}
 	sourceRequest, transformed, err := gatewaySourceRequest(grant, plan, request.Method)
 	if err != nil {
@@ -878,6 +1132,29 @@ func (broker *Broker) prepareGatewayRead(
 	return state, nil
 }
 
+func (broker *Broker) prepareRecoveryResultGatewayRead(
+	ctx context.Context,
+	request GatewayRequest,
+	grant model.BackupAssetDeliveryGrant,
+	plan RepresentationPlan,
+) (*gatewayReadState, error) {
+	state := &gatewayReadState{}
+	sourceRequest, err := gatewayRecoveryResultSourceRequest(grant, plan, request.Method)
+	if err != nil {
+		return state, ErrContentUnavailable
+	}
+	if err := broker.openGatewayRecoveryResultSource(ctx, state, grant, sourceRequest); err != nil {
+		return state, err
+	}
+	if request.Method != http.MethodHead && plan.ContentLength > 0 {
+		if state.sourceReader == nil {
+			return state, ErrContentUnavailable
+		}
+		state.body = state.sourceReader
+	}
+	return state, nil
+}
+
 func (broker *Broker) openGatewaySource(
 	ctx context.Context,
 	state *gatewayReadState,
@@ -892,6 +1169,32 @@ func (broker *Broker) openGatewaySource(
 		bindingPointer = &binding
 	}
 	source, err := broker.openRepresentationSource(ctx, bindingPointer, request)
+	if err != nil {
+		return ErrContentUnavailable
+	}
+	state.source = source
+	if !gatewaySourceMatchesGrant(source, grant, request.Mode) || source.Revalidate(ctx) != nil {
+		return ErrContentNotFound
+	}
+	if request.Mode != SourceModeStat {
+		state.sourceReader = source.Reader()
+		if state.sourceReader == nil {
+			return ErrContentUnavailable
+		}
+	}
+	return nil
+}
+
+func (broker *Broker) openGatewayRecoveryResultSource(
+	ctx context.Context,
+	state *gatewayReadState,
+	grant model.BackupAssetDeliveryGrant,
+	request RecoveryResultSourceRequest,
+) error {
+	if broker.recoverySource == nil {
+		return ErrContentUnavailable
+	}
+	source, err := broker.recoverySource.OpenRecoveryResultSource(ctx, request)
 	if err != nil {
 		return ErrContentUnavailable
 	}
@@ -1029,6 +1332,7 @@ func (broker *Broker) drain(ctx context.Context, reason string, permanent bool) 
 			leases[grantID] = lease
 			delete(broker.leases, grantID)
 			delete(broker.assets, grantID)
+			delete(broker.recoveryResults, grantID)
 			delete(broker.derivedBindings, grantID)
 		}
 	}
@@ -1099,6 +1403,7 @@ func (broker *Broker) RevokeSession(ctx context.Context, sessionJTI, reason stri
 		if len(broker.reads[grantID]) == 0 {
 			delete(broker.leases, grantID)
 			delete(broker.assets, grantID)
+			delete(broker.recoveryResults, grantID)
 			delete(broker.derivedBindings, grantID)
 		} else {
 			lease = nil
@@ -1114,6 +1419,127 @@ func (broker *Broker) RevokeSession(ctx context.Context, sessionJTI, reason stri
 		broker.metrics.ObserveReason(MetricReasonSessionRevoked)
 	}
 	return errors.Join(revokeErrors...)
+}
+
+// RevokeRecoveryResultGrantsTx is the durable half of Recovery cleanup. The
+// caller owns the transaction and must commit before canceling in-memory reads.
+func (broker *Broker) RevokeRecoveryResultGrantsTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	recoveryJobID string,
+	reason string,
+	revokedAt time.Time,
+) error {
+	if broker == nil || tx == nil || backupasset.ValidateOpaqueID(recoveryJobID) != nil ||
+		reason != RecoveryResultCleanupReason || revokedAt.IsZero() {
+		return ErrInvalidBrokerRequest
+	}
+	revokedAt = revokedAt.UTC()
+	return tx.WithContext(nonNilContext(ctx)).Model(&model.BackupAssetDeliveryGrant{}).
+		Where("resource_kind = ? AND recovery_job_id = ? AND state IN ?",
+			DeliveryResourceRecoveryResult, recoveryJobID,
+			[]string{string(DeliveryIssued), string(DeliveryActive), string(DeliveryDraining)}).
+		Updates(map[string]any{
+			"state": DeliveryRevoked, "revocation_reason": reason, "revoked_at": revokedAt,
+			"updated_at": revokedAt, "version": gorm.Expr("version + 1"),
+		}).Error
+}
+
+// CancelRecoveryResultReads closes the post-authorization registration race
+// after the caller has committed durable grant revocation. It never waits or
+// mutates the database.
+func (broker *Broker) CancelRecoveryResultReads(recoveryJobID string) error {
+	if broker == nil || backupasset.ValidateOpaqueID(recoveryJobID) != nil {
+		return ErrInvalidBrokerRequest
+	}
+	broker.cancelRecoveryResultReads(recoveryJobID)
+	return nil
+}
+
+// DrainRecoveryResult joins only one Recovery job's reads, releases its exact
+// retained Content leases, and removes no unrelated in-memory binding.
+func (broker *Broker) DrainRecoveryResult(ctx context.Context, recoveryJobID string) error {
+	if broker == nil || backupasset.ValidateOpaqueID(recoveryJobID) != nil {
+		return ErrInvalidBrokerRequest
+	}
+	ctx = nonNilContext(ctx)
+	waits := broker.cancelRecoveryResultReads(recoveryJobID)
+	if err := waitForActiveReads(ctx, waits); err != nil {
+		return err
+	}
+	if err := broker.validateRecoveryResultDrain(ctx, recoveryJobID); err != nil {
+		return err
+	}
+
+	type retainedRecoveryResultLease struct {
+		grantID string
+		lease   *ContentLeaseSession
+	}
+	retained := make([]retainedRecoveryResultLease, 0)
+	broker.mu.Lock()
+	for grantID, result := range broker.recoveryResults {
+		if result.Ref.RecoveryJobID != recoveryJobID {
+			continue
+		}
+		if len(broker.reads[grantID]) != 0 {
+			broker.mu.Unlock()
+			return ErrContentUnavailable
+		}
+		retained = append(retained, retainedRecoveryResultLease{grantID: grantID, lease: broker.leases[grantID]})
+	}
+	broker.mu.Unlock()
+
+	var releaseErrors []error
+	for _, binding := range retained {
+		if binding.lease != nil {
+			if err := binding.lease.Release(ctx); err != nil {
+				releaseErrors = append(releaseErrors, err)
+				continue
+			}
+		}
+		broker.mu.Lock()
+		if len(broker.reads[binding.grantID]) == 0 && broker.leases[binding.grantID] == binding.lease {
+			delete(broker.leases, binding.grantID)
+			delete(broker.recoveryResults, binding.grantID)
+			delete(broker.derivedBindings, binding.grantID)
+			delete(broker.revokedGrants, binding.grantID)
+		}
+		broker.mu.Unlock()
+	}
+	return errors.Join(releaseErrors...)
+}
+
+func (broker *Broker) cancelRecoveryResultReads(recoveryJobID string) map[string][]<-chan struct{} {
+	waits := make(map[string][]<-chan struct{})
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	for grantID, result := range broker.recoveryResults {
+		if result.Ref.RecoveryJobID != recoveryJobID {
+			continue
+		}
+		broker.revokedGrants[grantID] = struct{}{}
+		for _, read := range broker.reads[grantID] {
+			read.cancel()
+			waits[grantID] = append(waits[grantID], read.done)
+		}
+	}
+	return waits
+}
+
+func (broker *Broker) validateRecoveryResultDrain(ctx context.Context, recoveryJobID string) error {
+	var invalid int64
+	result := broker.db.WithContext(ctx).Model(&model.BackupAssetDeliveryGrant{}).
+		Where("resource_kind = ? AND recovery_job_id = ?", DeliveryResourceRecoveryResult, recoveryJobID).
+		Where("state NOT IN ? OR in_flight <> 0",
+			[]string{string(DeliveryRevoked), string(DeliveryExpired), string(DeliveryClosed)}).
+		Count(&invalid)
+	if result.Error != nil {
+		return result.Error
+	}
+	if invalid != 0 {
+		return ErrContentUnavailable
+	}
+	return nil
 }
 
 func (broker *Broker) cancelReads(sessionJTI string) map[string][]<-chan struct{} {
@@ -1277,9 +1703,18 @@ func (broker *Broker) openRepresentationSource(
 
 func validIssueRequest(request IssueRequest, now time.Time) bool {
 	if request.Actor.UserID == 0 || request.Session.UserID != request.Actor.UserID || request.Session.Role != request.Actor.Role ||
-		backupasset.ValidateOpaqueID(request.Session.JTI) != nil || !request.Session.ExpiresAt.After(now) ||
-		backupasset.ValidateAssetRef(request.Ref) != nil {
+		backupasset.ValidateOpaqueID(request.Session.JTI) != nil || !request.Session.ExpiresAt.After(now) {
 		return false
+	}
+	resource, valid := issueDeliveryResource(request)
+	if !valid {
+		return false
+	}
+	if resource.Kind == DeliveryResourceRecoveryResult {
+		return request.Actor.Role == "admin" && request.Proof != nil && request.Action == DeliveryDownload &&
+			request.Renderer == RendererAttachment && request.Profile == ProfileOriginalV1 &&
+			validProof(request.Proof, auth.StepUpActionRecoveryResultDownload,
+				minTime(request.Proof.ExpiresAt, request.Session.ExpiresAt), now)
 	}
 	if request.Action == DeliveryDownload {
 		if request.Proof == nil {
@@ -1294,6 +1729,55 @@ func validIssueRequest(request IssueRequest, now time.Time) bool {
 	}
 	return request.Proof == nil || request.Proof.Action == auth.StepUpActionAssetSecretReveal &&
 		backupasset.ValidateOpaqueID(request.Proof.ID) == nil && request.Proof.ExpiresAt.After(now)
+}
+
+func issueDeliveryResource(request IssueRequest) (DeliveryResource, bool) {
+	emptyResource := request.Resource.Kind == "" && request.Resource.Asset == nil && request.Resource.RecoveryResult == nil
+	if emptyResource {
+		if backupasset.ValidateAssetRef(request.Ref) != nil {
+			return DeliveryResource{}, false
+		}
+		ref := request.Ref
+		return DeliveryResource{Kind: DeliveryResourceBackupAsset, Asset: &ref}, true
+	}
+	if ValidateDeliveryResource(request.Resource) != nil {
+		return DeliveryResource{}, false
+	}
+	switch request.Resource.Kind {
+	case DeliveryResourceBackupAsset:
+		if request.Ref != (backupasset.AssetRef{}) && request.Ref != *request.Resource.Asset {
+			return DeliveryResource{}, false
+		}
+	case DeliveryResourceRecoveryResult:
+		if request.Ref != (backupasset.AssetRef{}) {
+			return DeliveryResource{}, false
+		}
+	default:
+		return DeliveryResource{}, false
+	}
+	return request.Resource, true
+}
+
+func validAuthorizedRecoveryResult(
+	result AuthorizedRecoveryResult,
+	expected RecoveryResultRef,
+	expectedOwner uint,
+	now time.Time,
+) bool {
+	return result.Ref == expected && expectedOwner > 0 && result.OwnerUserID == expectedOwner &&
+		backupasset.ValidateOpaqueID(result.Ref.RecoveryJobID) == nil &&
+		backupasset.ValidateOpaqueID(result.Ref.ResultID) == nil &&
+		backupasset.ValidateOpaqueID(result.RepositoryID) == nil &&
+		backupasset.ValidateOpaqueID(result.RecoveryPointID) == nil && validCacheProvider(result.Provider) &&
+		result.PublicationRevision > 0 && result.CleanupFence == 0 &&
+		lowerHexOfLength(result.MarkerBindingDigest, 64) &&
+		lowerHexOfLength(result.PublicationFingerprint, 64) && lowerHexOfLength(result.ContentDigest, 64) &&
+		result.Size >= 0 && result.MediaType == "application/octet-stream" &&
+		(result.Classification == ClassificationNonSecret || result.Classification == ClassificationSecret ||
+			result.Classification == ClassificationUnknown) &&
+		result.ClassificationRevision > 0 && result.ClassificationRevision <= math.MaxInt &&
+		result.ClassificationSourceRevision > 0 && result.PlaintextDeadline.UTC().After(now.UTC()) &&
+		!result.PlaintextDeadline.UTC().After(result.HardDeadline.UTC())
 }
 
 func validAuthorizedAsset(asset AuthorizedAsset, expected backupasset.AssetRef) bool {
@@ -1400,6 +1884,48 @@ func buildIssuedGrant(
 	return grant
 }
 
+func buildIssuedRecoveryResultGrant(
+	request IssueRequest,
+	result AuthorizedRecoveryResult,
+	material TicketMaterial,
+	lease ContentLeaseBinding,
+	deadlines GrantDeadlines,
+	product DeliveryProduct,
+	etag string,
+	config BrokerConfig,
+	now time.Time,
+) model.BackupAssetDeliveryGrant {
+	jobID, resultID := result.Ref.RecoveryJobID, result.Ref.ResultID
+	grant := model.BackupAssetDeliveryGrant{
+		ID: material.GrantID, DeliveryID: material.DeliveryID, ResourceKind: string(DeliveryResourceRecoveryResult),
+		RecoveryJobID: &jobID, RecoveryResultID: &resultID,
+		OwnerUserID: result.OwnerUserID, SessionJTI: request.Session.JTI,
+		SessionTokenVersion: request.Session.TokenVersion, SessionRole: request.Session.Role,
+		SessionExpiresAt: request.Session.ExpiresAt.UTC(), Action: string(product.Action),
+		MethodPolicy: string(product.Method), RangePolicy: string(product.Range),
+		Renderer: string(product.Renderer), Profile: string(product.Profile), Classification: string(product.Classification),
+		ClassificationRevision:       int(result.ClassificationRevision),
+		ClassificationSourceRevision: result.ClassificationSourceRevision,
+		ProviderKind:                 string(result.Provider), SourceFingerprint: result.PublicationFingerprint,
+		EntryFingerprint: result.ContentDigest, FingerprintStrength: "strong",
+		RepresentationETag: etag, SourceSize: result.Size, SourceModifiedAt: result.ModifiedAt,
+		DetectedMediaType: result.MediaType, RepresentationSourceBytes: result.Size,
+		RepresentationSize: result.Size, RepresentationTruncated: false,
+		CookieSecretHash: material.CookieSecretHash, State: string(DeliveryIssued),
+		LeaseID: lease.LeaseID, LeaseAttemptID: lease.AttemptID, LeaseFenceTokenHash: lease.FenceTokenHash,
+		AbsoluteExpiresAt: deadlines.AbsoluteExpiresAt, IdleExpiresAt: deadlines.IdleExpiresAt,
+		IdleTTLSeconds: int64(config.IdleTTL / time.Second), LastActivityAt: now,
+		MaxBytesPerRequest: config.MaxBytesPerRequest, MaxCumulativeBytes: config.MaxCumulativeBytes,
+		MaxRequests: config.MaxRequests, MaxInFlight: config.MaxInFlight,
+		Version: 1, AuditState: "none", CreatedAt: now, UpdatedAt: now,
+	}
+	if request.Proof != nil {
+		action, proofID, expiry := string(request.Proof.Action), request.Proof.ID, request.Proof.ExpiresAt.UTC()
+		grant.StepUpAction, grant.StepUpProofID, grant.StepUpExpiresAt = &action, &proofID, &expiry
+	}
+	return grant
+}
+
 func ticketAuditInput(
 	request IssueRequest,
 	asset AuthorizedAsset,
@@ -1420,6 +1946,33 @@ func ticketAuditInput(
 		Action: action, Outcome: outcome,
 		RepositoryID: asset.RepositoryID, RecoveryPointID: asset.Ref.RecoveryPointID, EntryID: asset.Ref.EntryID,
 		ItemCount: 1, ByteCount: grant.RepresentationSize, StepUpAction: stepUpAction, StepUpProofID: stepUpProofID,
+		GrantID: grant.ID, FailureCode: failureCode,
+		Fields: map[backupasset.AuditField]any{
+			backupasset.AuditFieldRenderer: grant.Renderer, backupasset.AuditFieldProfile: grant.Profile,
+			backupasset.AuditFieldSource: grant.Classification,
+		},
+	}
+}
+
+func recoveryResultTicketAuditInput(
+	request IssueRequest,
+	result AuthorizedRecoveryResult,
+	grant model.BackupAssetDeliveryGrant,
+	outcome backupasset.AuditOutcome,
+	failureCode string,
+) backupasset.AuditEventInput {
+	stepUpAction, stepUpProofID := "", ""
+	if request.Proof != nil {
+		stepUpAction, stepUpProofID = string(request.Proof.Action), request.Proof.ID
+	}
+	return backupasset.AuditEventInput{
+		Actor: backupasset.AuditActor{
+			UserID: request.Actor.UserID, Username: request.Actor.Username, Role: request.Actor.Role,
+		},
+		Action: backupasset.AuditActionRecoveryResultDownloadTicket, Outcome: outcome,
+		RepositoryID: result.RepositoryID, RecoveryPointID: result.RecoveryPointID,
+		RecoveryJobID: result.Ref.RecoveryJobID, ItemCount: 1, ByteCount: grant.RepresentationSize,
+		StepUpAction: stepUpAction, StepUpProofID: stepUpProofID,
 		GrantID: grant.ID, FailureCode: failureCode,
 		Fields: map[backupasset.AuditField]any{
 			backupasset.AuditFieldRenderer: grant.Renderer, backupasset.AuditFieldProfile: grant.Profile,
@@ -1470,6 +2023,31 @@ func representationETag(
 	return prefix + `"` + hex.EncodeToString(sum[:]) + `"`
 }
 
+func recoveryResultETag(result AuthorizedRecoveryResult, product DeliveryProduct) string {
+	var buffer bytes.Buffer
+	modifiedAt := ""
+	if result.ModifiedAt != nil {
+		modifiedAt = result.ModifiedAt.UTC().Format(time.RFC3339Nano)
+	}
+	for _, value := range []string{
+		result.Ref.RecoveryJobID, result.Ref.ResultID, result.RepositoryID, result.RecoveryPointID,
+		result.MarkerBindingDigest, result.PublicationFingerprint, result.ContentDigest, modifiedAt,
+		result.MediaType, string(product.Action), string(product.Renderer), string(product.Profile),
+		string(product.Classification),
+	} {
+		_ = binary.Write(&buffer, binary.BigEndian, uint32(len(value)))
+		_, _ = buffer.WriteString(value)
+	}
+	for _, value := range []uint64{result.PublicationRevision, result.CleanupFence} {
+		_ = binary.Write(&buffer, binary.BigEndian, value)
+	}
+	for _, value := range []int64{result.Size, result.ClassificationRevision, result.ClassificationSourceRevision} {
+		_ = binary.Write(&buffer, binary.BigEndian, value)
+	}
+	sum := sha256.Sum256(buffer.Bytes())
+	return `"` + hex.EncodeToString(sum[:]) + `"`
+}
+
 func (broker *Broker) revokeIssuedGrant(ctx context.Context, grantID, reason string, now time.Time) {
 	_ = broker.revokeGrant(ctx, grantID, reason, now)
 }
@@ -1508,6 +2086,7 @@ func (broker *Broker) revokeGrantAfterRead(ctx context.Context, grantID, current
 	if len(remaining) == 0 || len(remaining) == 1 && remaining[currentRequestID].done != nil {
 		delete(broker.leases, grantID)
 		delete(broker.assets, grantID)
+		delete(broker.recoveryResults, grantID)
 		delete(broker.derivedBindings, grantID)
 	} else {
 		lease = nil
@@ -1569,6 +2148,9 @@ func validGatewayRequest(request GatewayRequest) bool {
 }
 
 func validGatewayGrant(grant model.BackupAssetDeliveryGrant, deliveryID string, now time.Time) bool {
+	if grant.ResourceKind == string(DeliveryResourceRecoveryResult) {
+		return validRecoveryResultGatewayGrant(grant, deliveryID, now)
+	}
 	if backupasset.ValidateOpaqueID(grant.ID) != nil || grant.DeliveryID != deliveryID ||
 		grant.ResourceKind != string(DeliveryResourceBackupAsset) || grant.RecoveryPointID == nil ||
 		grant.CatalogGenerationID == nil || grant.EntryID == nil || grant.RecoveryJobID != nil || grant.RecoveryResultID != nil ||
@@ -1610,6 +2192,40 @@ func validGatewayGrant(grant model.BackupAssetDeliveryGrant, deliveryID string, 
 	}
 	return !grant.RepresentationTruncated && grant.RepresentationSourceBytes == grant.SourceSize &&
 		grant.RepresentationSize == grant.SourceSize
+}
+
+func validRecoveryResultGatewayGrant(grant model.BackupAssetDeliveryGrant, deliveryID string, now time.Time) bool {
+	if backupasset.ValidateOpaqueID(grant.ID) != nil || grant.DeliveryID != deliveryID ||
+		grant.ResourceKind != string(DeliveryResourceRecoveryResult) || grant.RecoveryPointID != nil ||
+		grant.CatalogGenerationID != nil || grant.EntryID != nil || grant.RecoveryJobID == nil ||
+		grant.RecoveryResultID == nil || backupasset.ValidateOpaqueID(*grant.RecoveryJobID) != nil ||
+		backupasset.ValidateOpaqueID(*grant.RecoveryResultID) != nil || grant.OwnerUserID == 0 ||
+		backupasset.ValidateOpaqueID(grant.SessionJTI) != nil || grant.SessionRole != "admin" ||
+		grant.MethodPolicy != string(MethodGetHead) || grant.State != string(DeliveryActive) ||
+		!now.Before(grant.IdleExpiresAt.UTC()) || !now.Before(grant.AbsoluteExpiresAt.UTC()) ||
+		!now.Before(grant.SessionExpiresAt.UTC()) || grant.IdleExpiresAt.After(grant.AbsoluteExpiresAt) ||
+		grant.AbsoluteExpiresAt.After(grant.SessionExpiresAt) || grant.ClassificationRevision <= 0 ||
+		grant.ClassificationSourceRevision <= 0 || !validCacheProvider(backupasset.ProviderKind(grant.ProviderKind)) ||
+		!lowerHexOfLength(grant.SourceFingerprint, 64) || !lowerHexOfLength(grant.EntryFingerprint, 64) ||
+		grant.FingerprintStrength != "strong" || grant.SourceSize < 0 ||
+		grant.RepresentationSourceBytes != grant.SourceSize || grant.RepresentationSize != grant.SourceSize ||
+		grant.RepresentationTruncated || !validEntityTag(grant.RepresentationETag) || !validGatewayMediaType(grant) ||
+		backupasset.ValidateOpaqueID(grant.LeaseID) != nil || backupasset.ValidateOpaqueID(grant.LeaseAttemptID) != nil ||
+		!lowerHexOfLength(grant.LeaseFenceTokenHash, 64) || grant.IdleTTLSeconds <= 0 ||
+		grant.MaxBytesPerRequest <= 0 || grant.MaxCumulativeBytes < grant.MaxBytesPerRequest ||
+		grant.MaxRequests <= 0 || grant.MaxInFlight <= 0 || grant.Version <= 0 {
+		return false
+	}
+	proof, ok := gatewayGrantProof(grant)
+	if !ok {
+		return false
+	}
+	return ValidateDeliveryProductForResource(DeliveryResourceRecoveryResult, DeliveryProduct{
+		Action: DeliveryAction(grant.Action), Method: MethodPolicy(grant.MethodPolicy), Range: RangePolicy(grant.RangePolicy),
+		Renderer: Renderer(grant.Renderer), Profile: RendererProfile(grant.Profile),
+		Classification: Classification(grant.Classification), Proof: proof,
+		AbsoluteExpiresAt: grant.AbsoluteExpiresAt,
+	}, now) == nil
 }
 
 func gatewayGrantProof(grant model.BackupAssetDeliveryGrant) (*StepUpProof, bool) {
@@ -1674,6 +2290,37 @@ func authorizedAssetMatchesGrant(
 		derived.Profile == RendererProfile(grant.Profile) && derived.EntryFingerprint == grant.EntryFingerprint &&
 		grant.FingerprintStrength == "strong" && derived.Size == grant.SourceSize &&
 		sameContentTime(derived.ModifiedAt, grant.SourceModifiedAt)
+}
+
+func authorizedRecoveryResultMatchesGrant(
+	result AuthorizedRecoveryResult,
+	grant model.BackupAssetDeliveryGrant,
+	now time.Time,
+) bool {
+	if grant.RecoveryJobID == nil || grant.RecoveryResultID == nil ||
+		!validAuthorizedRecoveryResult(result, RecoveryResultRef{
+			RecoveryJobID: *grant.RecoveryJobID, ResultID: *grant.RecoveryResultID,
+		}, grant.OwnerUserID, now) ||
+		result.Provider != backupasset.ProviderKind(grant.ProviderKind) ||
+		result.PublicationFingerprint != grant.SourceFingerprint || result.ContentDigest != grant.EntryFingerprint ||
+		result.Size != grant.SourceSize || !sameContentTime(result.ModifiedAt, grant.SourceModifiedAt) ||
+		result.MediaType != grant.DetectedMediaType || string(result.Classification) != grant.Classification ||
+		result.ClassificationRevision != int64(grant.ClassificationRevision) ||
+		result.ClassificationSourceRevision != grant.ClassificationSourceRevision ||
+		grant.AbsoluteExpiresAt.After(result.PlaintextDeadline.UTC()) {
+		return false
+	}
+	proof, ok := gatewayGrantProof(grant)
+	if !ok {
+		return false
+	}
+	product := DeliveryProduct{
+		Action: DeliveryAction(grant.Action), Method: MethodPolicy(grant.MethodPolicy), Range: RangePolicy(grant.RangePolicy),
+		Renderer: Renderer(grant.Renderer), Profile: RendererProfile(grant.Profile),
+		Classification: Classification(grant.Classification), Proof: proof,
+		AbsoluteExpiresAt: grant.AbsoluteExpiresAt,
+	}
+	return grant.RepresentationETag == recoveryResultETag(result, product)
 }
 
 func classificationSourceRevisionForAsset(asset AuthorizedAsset) int64 {
@@ -1794,6 +2441,63 @@ func gatewaySourceRequest(grant model.BackupAssetDeliveryGrant, plan Representat
 	return request, transformed, nil
 }
 
+func gatewayRecoveryResultSourceRequest(
+	grant model.BackupAssetDeliveryGrant,
+	plan RepresentationPlan,
+	method string,
+) (RecoveryResultSourceRequest, error) {
+	if grant.RecoveryJobID == nil || grant.RecoveryResultID == nil {
+		return RecoveryResultSourceRequest{}, ErrInvalidSourceRequest
+	}
+	request := RecoveryResultSourceRequest{
+		OwnerUserID:         grant.OwnerUserID,
+		Ref:                 RecoveryResultRef{RecoveryJobID: *grant.RecoveryJobID, ResultID: *grant.RecoveryResultID},
+		ExpectedPublication: grant.SourceFingerprint, ExpectedContent: grant.EntryFingerprint,
+	}
+	switch {
+	case method == http.MethodHead || plan.ContentLength == 0:
+		request.Mode = SourceModeStat
+	case plan.Range.Kind != HTTPRangeFull:
+		request.Mode = SourceModeRange
+		request.MaxBytes = plan.ContentLength
+		request.Range = &ResolvedRange{Offset: plan.Range.Offset, Length: plan.Range.Length}
+	default:
+		request.Mode = SourceModeSequential
+		request.MaxBytes = grant.SourceSize
+	}
+	if ValidateRecoveryResultSourceRequest(request) != nil {
+		return RecoveryResultSourceRequest{}, ErrInvalidSourceRequest
+	}
+	return request, nil
+}
+
+func ValidateRecoveryResultSourceRequest(request RecoveryResultSourceRequest) error {
+	if request.OwnerUserID == 0 || backupasset.ValidateOpaqueID(request.Ref.RecoveryJobID) != nil ||
+		backupasset.ValidateOpaqueID(request.Ref.ResultID) != nil ||
+		!lowerHexOfLength(request.ExpectedPublication, 64) || !lowerHexOfLength(request.ExpectedContent, 64) {
+		return ErrInvalidSourceRequest
+	}
+	switch request.Mode {
+	case SourceModeStat:
+		if request.MaxBytes != 0 || request.Range != nil {
+			return ErrInvalidSourceRequest
+		}
+	case SourceModeSequential:
+		if request.MaxBytes <= 0 || request.Range != nil {
+			return ErrInvalidSourceRequest
+		}
+	case SourceModeRange:
+		if request.MaxBytes <= 0 || request.Range == nil || request.Range.Offset < 0 ||
+			request.Range.Length <= 0 || request.Range.Length != request.MaxBytes ||
+			request.Range.Offset > math.MaxInt64-request.Range.Length {
+			return ErrInvalidSourceRequest
+		}
+	default:
+		return ErrInvalidSourceRequest
+	}
+	return nil
+}
+
 func gatewayStatSourceRequest(grant model.BackupAssetDeliveryGrant) SourceRequest {
 	return SourceRequest{
 		Ref:                 backupasset.AssetRef{RecoveryPointID: *grant.RecoveryPointID, EntryID: *grant.EntryID},
@@ -1901,7 +2605,20 @@ func (broker *Broker) gatewayHeartbeat(
 		}
 		return ErrContentNotFound
 	}
-	if err := broker.authorize.Reauthorize(ctx, actor, asset, DeliveryAction(grant.Action)); err != nil {
+	if grant.ResourceKind == string(DeliveryResourceRecoveryResult) {
+		broker.mu.Lock()
+		result, found := broker.recoveryResults[grant.ID]
+		broker.mu.Unlock()
+		if !found || !authorizedRecoveryResultMatchesGrant(result, grant, broker.now().UTC()) ||
+			broker.recoveryAuthorize == nil || broker.recoveryAuthorize.ReauthorizeRecoveryResult(
+			ctx, actor, result, DeliveryAction(grant.Action),
+		) != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return contextErr
+			}
+			return ErrContentNotFound
+		}
+	} else if err := broker.authorize.Reauthorize(ctx, actor, asset, DeliveryAction(grant.Action)); err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return contextErr
 		}
@@ -1997,7 +2714,8 @@ func (broker *Broker) registerRead(
 ) (chan struct{}, bool) {
 	done := make(chan struct{})
 	broker.mu.Lock()
-	if broker.closed || !broker.accepting || broker.leases[grantID] == nil || len(broker.reads[grantID]) >= 64 {
+	_, revoked := broker.revokedGrants[grantID]
+	if broker.closed || !broker.accepting || revoked || broker.leases[grantID] == nil || len(broker.reads[grantID]) >= 64 {
 		broker.mu.Unlock()
 		return done, false
 	}

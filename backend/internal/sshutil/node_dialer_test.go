@@ -146,6 +146,89 @@ func TestNodeDialerAuditsTaskBackupWithTaskRunID(t *testing.T) {
 	}
 }
 
+func TestNodeDialerAuditsPurposeExactRecoverySessions(t *testing.T) {
+	tests := []struct {
+		name    string
+		purpose string
+		action  string
+	}{
+		{name: "preflight", purpose: PurposeRecoveryPreflight, action: "recovery_preflight"},
+		{name: "write", purpose: PurposeRecoveryWrite, action: "recovery_execute"},
+		{name: "verify", purpose: PurposeRecoveryVerify, action: "recovery_verify"},
+		{name: "result read", purpose: PurposeRecoveryResultRead, action: "recovery_result_download"},
+		{name: "cleanup", purpose: PurposeRecoveryCleanup, action: "recovery_cleanup"},
+		{name: "reconcile", purpose: PurposeRecoveryReconcile, action: "recovery_reconcile"},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := setupNodeDialerDB(t)
+			dialer := NewNodeDialer(db)
+			dialer.buildAuth = func(_ model.Node, gotDB *gorm.DB, purpose string) ([]ssh.AuthMethod, ResolvedCredential, error) {
+				if gotDB != db || purpose != testCase.purpose {
+					t.Fatalf("build auth inputs db=%p purpose=%q, want db=%p purpose=%q", gotDB, purpose, db, testCase.purpose)
+				}
+				return []ssh.AuthMethod{ssh.Password("FAKE_PASSWORD_FOR_TEST_ONLY")}, ResolvedCredential{
+					Kind: "password", Source: "node.password",
+				}, nil
+			}
+			dialer.hostKeyResolver = func() (ssh.HostKeyCallback, error) { return ssh.InsecureIgnoreHostKey(), nil }
+			dialCalled := false
+			dialer.dial = func(context.Context, string, string, []ssh.AuthMethod, ssh.HostKeyCallback) (*ssh.Client, error) {
+				dialCalled = true
+				return nil, nil
+			}
+			jobID := strings.Repeat("a", 32)
+			_, err := dialer.Dial(context.Background(), model.Node{ID: 17, Host: "example.invalid"}, testCase.purpose, DialAuditContext{
+				Action: testCase.action, CorrelationID: jobID, UserID: 7, Username: "admin", Role: "admin",
+			})
+			if err != nil || !dialCalled {
+				t.Fatalf("Dial() error = %v, dial called = %t", err, dialCalled)
+			}
+			var event model.CredentialAuditEvent
+			if err := db.Where("action = ?", testCase.action).First(&event).Error; err != nil {
+				t.Fatalf("load recovery credential audit: %v", err)
+			}
+			if event.Purpose != testCase.purpose || event.NodeID == nil || *event.NodeID != 17 ||
+				!strings.Contains(event.Metadata, jobID) {
+				t.Fatalf("recovery credential audit = %+v", event)
+			}
+		})
+	}
+}
+
+func TestNodeDialerRejectsRecoveryReconcileAuditActionMismatchBeforeNetwork(t *testing.T) {
+	dialer := NewNodeDialer(nil)
+	dialer.buildAuth = func(model.Node, *gorm.DB, string) ([]ssh.AuthMethod, ResolvedCredential, error) {
+		t.Fatal("reconcile audit action mismatch must stop before auth")
+		return nil, ResolvedCredential{}, nil
+	}
+	dialer.dial = func(context.Context, string, string, []ssh.AuthMethod, ssh.HostKeyCallback) (*ssh.Client, error) {
+		t.Fatal("reconcile audit action mismatch must stop before network")
+		return nil, nil
+	}
+	_, err := dialer.Dial(context.Background(), model.Node{ID: 1}, PurposeRecoveryReconcile, DialAuditContext{Action: PurposeRecoveryCleanup})
+	if err == nil {
+		t.Fatal("mismatched reconcile audit action unexpectedly accepted")
+	}
+}
+
+func TestNodeDialerRejectsRecoveryPurposeAuditActionMismatchBeforeNetwork(t *testing.T) {
+	dialer := NewNodeDialer(nil)
+	dialer.buildAuth = func(model.Node, *gorm.DB, string) ([]ssh.AuthMethod, ResolvedCredential, error) {
+		t.Fatal("audit action mismatch must stop before auth")
+		return nil, ResolvedCredential{}, nil
+	}
+	dialer.dial = func(context.Context, string, string, []ssh.AuthMethod, ssh.HostKeyCallback) (*ssh.Client, error) {
+		t.Fatal("audit action mismatch must stop before network")
+		return nil, nil
+	}
+	_, err := dialer.Dial(context.Background(), model.Node{ID: 1}, PurposeRecoveryWrite, DialAuditContext{Action: "recovery_cleanup"})
+	if err == nil {
+		t.Fatal("mismatched recovery audit action unexpectedly accepted")
+	}
+}
+
 func TestNilNodeDialerFailsClosedWithoutPanic(t *testing.T) {
 	var dialer *NodeDialer
 	_, err := dialer.Dial(context.Background(), model.Node{ID: 1}, PurposeRepositoryProbe, DialAuditContext{Action: "repository.probe"})

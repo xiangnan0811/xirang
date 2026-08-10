@@ -123,3 +123,12 @@ type Tree interface {
 	OpenRegular(context.Context, Root, Locator, Policy) (ReadHandle, ContentStat, error)
 	OpenRange(context.Context, Root, Locator, Policy, ByteRange) (ReadHandle, ContentStat, error)
 }
+
+// PinnedStrictTree is an opaque strict source capability. Its consumer can
+// revalidate and open only declared regular entries; it cannot recover a root
+// or source pathname from the capability.
+type PinnedStrictTree interface {
+	OpenDeclaredRegular(context.Context, Entry) (ReadHandle, ContentStat, error)
+	Revalidate(context.Context) error
+	Close() error
+}

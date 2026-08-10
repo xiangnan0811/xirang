@@ -62,7 +62,7 @@ func (dialer *NodeDialer) Dial(ctx context.Context, node model.Node, purpose str
 		return nil, fmt.Errorf("repository SSH dialer unavailable")
 	}
 	purpose = NormalizePurpose(purpose)
-	action, ok := repositoryCredentialAction(purpose)
+	action, ok := credentialAuditActionForPurpose(purpose)
 	if !ok {
 		return nil, fmt.Errorf("repository SSH purpose unavailable")
 	}
@@ -173,7 +173,7 @@ func (dialer *NodeDialer) writeAudit(auditContext DialAuditContext, nodeID uint,
 	}
 }
 
-func repositoryCredentialAction(purpose string) (string, bool) {
+func credentialAuditActionForPurpose(purpose string) (string, bool) {
 	switch purpose {
 	case PurposeRepositoryProbe:
 		return "repository.probe", true
@@ -183,6 +183,18 @@ func repositoryCredentialAction(purpose string) (string, bool) {
 		return "repository.read", true
 	case PurposeTaskBackup:
 		return "task.credential.use", true
+	case PurposeRecoveryPreflight:
+		return "recovery_preflight", true
+	case PurposeRecoveryWrite:
+		return "recovery_execute", true
+	case PurposeRecoveryVerify:
+		return "recovery_verify", true
+	case PurposeRecoveryResultRead:
+		return "recovery_result_download", true
+	case PurposeRecoveryCleanup:
+		return "recovery_cleanup", true
+	case PurposeRecoveryReconcile:
+		return "recovery_reconcile", true
 	default:
 		return "", false
 	}

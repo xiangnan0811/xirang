@@ -11,28 +11,34 @@ import (
 )
 
 const (
-	PurposeSSHKeyTest      = "ssh_key_test"
-	PurposeSSHKeyExport    = "ssh_key_export"
-	PurposeNodeTest        = "node_test"
-	PurposeTerminal        = "terminal"
-	PurposeTaskCommand     = "task_command"
-	PurposeBatchCommand    = "batch_command"
-	PurposeDrill           = "drill"
-	PurposeProbe           = "probe"
-	PurposeFileBrowser     = "file_browser"
-	PurposeDockerVolumes   = "docker_volumes"
-	PurposeNodeLogs        = "node_logs"
-	PurposeTaskBackup      = "task_backup"
-	PurposeTaskRestore     = "task_restore"
-	PurposeTaskHook        = "task_hook"
-	PurposeSnapshot        = "snapshot"
-	PurposeSnapshotDiff    = "snapshot_diff"
-	PurposeIntegrityCheck  = "integrity_check"
-	PurposeRetention       = "retention"
-	PurposeNodeMigration   = "node_migration"
-	PurposeRepositoryProbe = "repository_probe"
-	PurposeRepositoryList  = "repository_list"
-	PurposeRepositoryRead  = "repository_read"
+	PurposeSSHKeyTest         = "ssh_key_test"
+	PurposeSSHKeyExport       = "ssh_key_export"
+	PurposeNodeTest           = "node_test"
+	PurposeTerminal           = "terminal"
+	PurposeTaskCommand        = "task_command"
+	PurposeBatchCommand       = "batch_command"
+	PurposeDrill              = "drill"
+	PurposeProbe              = "probe"
+	PurposeFileBrowser        = "file_browser"
+	PurposeDockerVolumes      = "docker_volumes"
+	PurposeNodeLogs           = "node_logs"
+	PurposeTaskBackup         = "task_backup"
+	PurposeTaskRestore        = "task_restore"
+	PurposeTaskHook           = "task_hook"
+	PurposeSnapshot           = "snapshot"
+	PurposeSnapshotDiff       = "snapshot_diff"
+	PurposeIntegrityCheck     = "integrity_check"
+	PurposeRetention          = "retention"
+	PurposeNodeMigration      = "node_migration"
+	PurposeRepositoryProbe    = "repository_probe"
+	PurposeRepositoryList     = "repository_list"
+	PurposeRepositoryRead     = "repository_read"
+	PurposeRecoveryPreflight  = "recovery_preflight"
+	PurposeRecoveryWrite      = "recovery_write"
+	PurposeRecoveryVerify     = "recovery_verify"
+	PurposeRecoveryResultRead = "recovery_result_read"
+	PurposeRecoveryCleanup    = "recovery_cleanup"
+	PurposeRecoveryReconcile  = "recovery_reconcile"
 )
 
 var KnownPurposes = []string{
@@ -58,6 +64,12 @@ var KnownPurposes = []string{
 	PurposeRepositoryProbe,
 	PurposeRepositoryList,
 	PurposeRepositoryRead,
+	PurposeRecoveryPreflight,
+	PurposeRecoveryWrite,
+	PurposeRecoveryVerify,
+	PurposeRecoveryResultRead,
+	PurposeRecoveryCleanup,
+	PurposeRecoveryReconcile,
 }
 
 // ResolvedCredential describes which credential source was selected without

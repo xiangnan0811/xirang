@@ -2,8 +2,11 @@ package settings
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"math"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -17,6 +20,551 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+func setRecoveryTargetRootTestEncryption(t *testing.T) {
+	t.Helper()
+	key := base64.StdEncoding.EncodeToString([]byte("FAKE_RECOVERY_TARGET_ROOT_KEY_FOR_TEST_ONLY"))
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", key)
+	t.Setenv("DATA_ENCRYPTION_LEGACY_KEY", key)
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+}
+
+func setupRecoveryTargetRootTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := filepath.Join(t.TempDir(), "recovery-target-root.db") + "?_loc=UTC"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.SystemSetting{}, &model.Node{}); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func seedRecoveryTargetRootNode(t *testing.T, db *gorm.DB, id uint, archived bool) {
+	t.Helper()
+	node := model.Node{
+		ID: id, Name: "recovery-node-" + strconv.FormatUint(uint64(id), 10),
+		Host: "recovery-node.invalid", Port: 22, Username: "tester", AuthType: "password",
+		BackupDir: "recovery-backup-" + strconv.FormatUint(uint64(id), 10), Archived: archived,
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func registerRecoveryTargetRootForTest(
+	t *testing.T,
+	db *gorm.DB,
+	service *Service,
+	definition RecoveryTargetRootDefinition,
+) RecoveryTargetRootResolution {
+	t.Helper()
+	var result RecoveryTargetRootResolution
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		result, err = service.RegisterRecoveryTargetRootTx(context.Background(), tx, definition)
+		return err
+	}); err != nil {
+		t.Fatalf("register recovery target root: %v", err)
+	}
+	return result
+}
+
+func resolveRecoveryTargetRootForTest(
+	t *testing.T,
+	db *gorm.DB,
+	service *Service,
+	nodeID uint,
+	rootID string,
+) (RecoveryTargetRootResolution, error) {
+	t.Helper()
+	var result RecoveryTargetRootResolution
+	var resolveErr error
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		result, resolveErr = service.ResolveRecoveryTargetRootTx(context.Background(), tx, nodeID, rootID)
+		return nil
+	}); err != nil {
+		t.Fatalf("resolve transaction: %v", err)
+	}
+	return result, resolveErr
+}
+
+func recoveryTargetRootTestKey(nodeID uint, rootID string) string {
+	return RecoveryTargetRootKeyPrefix + strconv.FormatUint(uint64(nodeID), 10) + "." + rootID
+}
+
+func rawRecoveryTargetRootValue(t *testing.T, db *gorm.DB, key string) string {
+	t.Helper()
+	var value string
+	if err := db.Table("system_settings").Select("value").Where("key = ?", key).Scan(&value).Error; err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+func encryptRecoveryTargetRootDocumentForTest(t *testing.T, document string) string {
+	t.Helper()
+	encrypted, err := secure.EncryptString(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encrypted
+}
+
+func mutateRecoveryTargetRootDocumentForTest(
+	t *testing.T,
+	document string,
+	mutate func(map[string]any),
+) string {
+	t.Helper()
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(document), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	mutate(decoded)
+	encoded, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
+}
+
+func TestRecoveryTargetRootRegistryPersistsPrivateV2Records(t *testing.T) {
+	setRecoveryTargetRootTestEncryption(t)
+	db := setupRecoveryTargetRootTestDB(t)
+	seedRecoveryTargetRootNode(t, db, 41, false)
+	seedRecoveryTargetRootNode(t, db, 42, false)
+	service := NewService(db)
+
+	definitions := []RecoveryTargetRootDefinition{
+		{NodeID: 41, RootID: "root-b", SafeLabel: "FAKE_RECOVERY_ROOT_B_LABEL_FOR_TEST_ONLY", Locator: "/srv/FAKE_RECOVERY_ROOT_B_FOR_TEST_ONLY"},
+		{NodeID: 41, RootID: "root-a", SafeLabel: "FAKE_RECOVERY_ROOT_A_LABEL_FOR_TEST_ONLY", Locator: "/srv/FAKE_RECOVERY_ROOT_A_FOR_TEST_ONLY"},
+		{NodeID: 42, RootID: "root-a", SafeLabel: "FAKE_RECOVERY_ROOT_C_LABEL_FOR_TEST_ONLY", Locator: "/srv/FAKE_RECOVERY_ROOT_C_FOR_TEST_ONLY"},
+	}
+	resolutions := make([]RecoveryTargetRootResolution, 0, len(definitions))
+	for _, definition := range definitions {
+		resolutions = append(resolutions, registerRecoveryTargetRootForTest(t, db, service, definition))
+	}
+
+	var rows []model.SystemSetting
+	if err := db.Where("key LIKE ?", RecoveryTargetRootKeyPrefix+"%").Order("key ASC").Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != len(definitions) {
+		t.Fatalf("private row count=%d, want %d", len(rows), len(definitions))
+	}
+	before := make(map[string]string, len(rows))
+	for _, row := range rows {
+		before[row.Key] = row.Value
+		if !strings.HasPrefix(row.Value, "enc:v2:") {
+			t.Fatalf("private row %q is not current v2 ciphertext", row.Key)
+		}
+		for _, definition := range definitions {
+			if strings.Contains(row.Value, definition.Locator) || strings.Contains(row.Value, definition.SafeLabel) {
+				t.Fatalf("private row %q contains recognizable plaintext", row.Key)
+			}
+		}
+	}
+
+	for index, definition := range definitions {
+		resolved, err := resolveRecoveryTargetRootForTest(t, db, service, definition.NodeID, definition.RootID)
+		if err != nil {
+			t.Fatalf("resolve %d/%s: %v", definition.NodeID, definition.RootID, err)
+		}
+		wantDigest, err := RecoveryTargetRootLocatorDigest(definition.NodeID, definition.RootID, definition.Locator)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved != resolutions[index] || resolved.NodeID != definition.NodeID || resolved.RootID != definition.RootID ||
+			resolved.SafeLabel != definition.SafeLabel || resolved.Locator != definition.Locator || resolved.LocatorDigest != wantDigest {
+			t.Fatalf("resolution=%+v registration=%+v definition=%+v", resolved, resolutions[index], definition)
+		}
+		encoded, err := json.Marshal(resolved)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), definition.Locator) || strings.Contains(string(encoded), wantDigest) {
+			t.Fatalf("private resolution fields leaked to JSON: %s", encoded)
+		}
+	}
+
+	summaries, err := service.ListRecoveryTargetRoots(context.Background(), 41)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 2 || summaries[0].RootID != "root-a" || summaries[1].RootID != "root-b" {
+		t.Fatalf("safe summaries are not root-ID sorted: %+v", summaries)
+	}
+	encodedSummaries, err := json.Marshal(summaries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, definition := range definitions {
+		if strings.Contains(string(encodedSummaries), definition.Locator) ||
+			strings.Contains(string(encodedSummaries), resolutions[0].LocatorDigest) {
+			t.Fatalf("safe summaries leaked private fields: %s", encodedSummaries)
+		}
+	}
+
+	registerRecoveryTargetRootForTest(t, db, service, definitions[1])
+	if got := rawRecoveryTargetRootValue(t, db, recoveryTargetRootTestKey(41, "root-a")); got != before[recoveryTargetRootTestKey(41, "root-a")] {
+		t.Fatal("identical registration rewrote the private row")
+	}
+
+	rotated := definitions[1]
+	rotated.SafeLabel = "FAKE_ROTATED_RECOVERY_ROOT_A_LABEL_FOR_TEST_ONLY"
+	rotated.Locator = "/srv/FAKE_ROTATED_RECOVERY_ROOT_A_FOR_TEST_ONLY"
+	rotatedResolution := registerRecoveryTargetRootForTest(t, db, service, rotated)
+	if rotatedResolution.Locator != rotated.Locator || rotatedResolution.LocatorDigest == resolutions[1].LocatorDigest {
+		t.Fatalf("rotation did not produce one new exact tuple: %+v", rotatedResolution)
+	}
+	if got := rawRecoveryTargetRootValue(t, db, recoveryTargetRootTestKey(41, "root-a")); got == before[recoveryTargetRootTestKey(41, "root-a")] {
+		t.Fatal("rotation did not replace the selected row")
+	}
+	for _, key := range []string{recoveryTargetRootTestKey(41, "root-b"), recoveryTargetRootTestKey(42, "root-a")} {
+		if got := rawRecoveryTargetRootValue(t, db, key); got != before[key] {
+			t.Fatalf("rotation changed sibling/cross-node row %q", key)
+		}
+	}
+
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		return service.DeleteRecoveryTargetRootTx(context.Background(), tx, 41, "root-b")
+	}); err != nil {
+		t.Fatalf("delete exact root: %v", err)
+	}
+	if _, err := resolveRecoveryTargetRootForTest(t, db, service, 41, "root-b"); !errors.Is(err, ErrRecoveryTargetRootNotFound) {
+		t.Fatalf("deleted root resolve error=%v", err)
+	}
+	if resolved, err := resolveRecoveryTargetRootForTest(t, db, service, 42, "root-a"); err != nil || resolved.Locator != definitions[2].Locator {
+		t.Fatalf("cross-node sibling changed after delete: resolution=%+v error=%v", resolved, err)
+	}
+}
+
+func TestRecoveryTargetRootRegistryRejectsInvalidDefinitions(t *testing.T) {
+	setRecoveryTargetRootTestEncryption(t)
+	db := setupRecoveryTargetRootTestDB(t)
+	seedRecoveryTargetRootNode(t, db, 51, false)
+	seedRecoveryTargetRootNode(t, db, 52, true)
+	service := NewService(db)
+	baseline := RecoveryTargetRootDefinition{
+		NodeID: 51, RootID: "root-a", SafeLabel: "FAKE_VALID_RECOVERY_ROOT_LABEL_FOR_TEST_ONLY",
+		Locator: "/srv/FAKE_VALID_RECOVERY_ROOT_FOR_TEST_ONLY",
+	}
+	registerRecoveryTargetRootForTest(t, db, service, baseline)
+	baselineKey := recoveryTargetRootTestKey(baseline.NodeID, baseline.RootID)
+	baselineValue := rawRecoveryTargetRootValue(t, db, baselineKey)
+
+	tests := []struct {
+		name    string
+		wantErr error
+		mutate  func(*RecoveryTargetRootDefinition)
+	}{
+		{name: "zero node", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.NodeID = 0 }},
+		{name: "missing node", wantErr: ErrRecoveryTargetRootNotFound, mutate: func(value *RecoveryTargetRootDefinition) { value.NodeID = 999 }},
+		{name: "archived node", wantErr: ErrRecoveryTargetRootNotFound, mutate: func(value *RecoveryTargetRootDefinition) { value.NodeID = 52 }},
+		{name: "empty root ID", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.RootID = "" }},
+		{name: "uppercase root ID", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.RootID = "Root-a" }},
+		{name: "root ID begins punctuation", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.RootID = "-root" }},
+		{name: "root ID ends punctuation", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.RootID = "root_" }},
+		{name: "root ID contains dot", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.RootID = "root.a" }},
+		{name: "overlong root ID", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.RootID = strings.Repeat("a", 33) }},
+		{name: "empty label", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.SafeLabel = "" }},
+		{name: "control label", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.SafeLabel = "FAKE_LABEL_\x1f_FOR_TEST_ONLY" }},
+		{name: "overlong label", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.SafeLabel = strings.Repeat("a", 129) }},
+		{name: "empty locator", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.Locator = "" }},
+		{name: "filesystem root", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.Locator = "/" }},
+		{name: "relative locator", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.Locator = "srv/recovery" }},
+		{name: "cleaned but unequal", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.Locator = "/srv/target/../recovery" }},
+		{name: "double slash", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.Locator = "/srv//recovery" }},
+		{name: "trailing slash", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.Locator = "/srv/recovery/" }},
+		{name: "dot component", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.Locator = "/srv/./recovery" }},
+		{name: "dot-dot component", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.Locator = "/srv/../recovery" }},
+		{name: "backslash", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.Locator = "/srv/FAKE\\recovery" }},
+		{name: "NUL", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.Locator = "/srv/FAKE_\x00_FOR_TEST_ONLY" }},
+		{name: "control locator", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.Locator = "/srv/FAKE_\x1f_FOR_TEST_ONLY" }},
+		{name: "invalid UTF-8", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.Locator = string([]byte{'/', 0xff}) }},
+		{name: "overlong locator", wantErr: ErrRecoveryTargetRootInvalid, mutate: func(value *RecoveryTargetRootDefinition) { value.Locator = "/" + strings.Repeat("a", 4096) }},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			definition := baseline
+			testCase.mutate(&definition)
+			var registerErr error
+			if err := db.Transaction(func(tx *gorm.DB) error {
+				_, registerErr = service.RegisterRecoveryTargetRootTx(context.Background(), tx, definition)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if !errors.Is(registerErr, testCase.wantErr) || registerErr.Error() != testCase.wantErr.Error() {
+				t.Fatalf("registration error=%v, want safe %v", registerErr, testCase.wantErr)
+			}
+			var count int64
+			if err := db.Model(&model.SystemSetting{}).Where("key LIKE ?", RecoveryTargetRootKeyPrefix+"%").Count(&count).Error; err != nil {
+				t.Fatal(err)
+			}
+			if count != 1 || rawRecoveryTargetRootValue(t, db, baselineKey) != baselineValue {
+				t.Fatalf("invalid registration mutated private rows: count=%d", count)
+			}
+		})
+	}
+}
+
+func TestRecoveryTargetRootRegistryRejectsInvalidStoredRecords(t *testing.T) {
+	setRecoveryTargetRootTestEncryption(t)
+	tests := []struct {
+		name  string
+		value func(t *testing.T, validDocument, validCiphertext, siblingCiphertext string) string
+	}{
+		{name: "empty", value: func(_ *testing.T, _, _, _ string) string { return "" }},
+		{name: "plaintext", value: func(_ *testing.T, valid, _, _ string) string { return valid }},
+		{name: "valid legacy v1", value: func(_ *testing.T, _, valid, _ string) string { return strings.Replace(valid, "enc:v2:", "enc:v1:", 1) }},
+		{name: "corrupt v2", value: func(_ *testing.T, _, _, _ string) string {
+			return "enc:v2:FAKE_CORRUPT_RECOVERY_ROOT_CIPHERTEXT_FOR_TEST_ONLY"
+		}},
+		{name: "unsupported schema", value: func(t *testing.T, valid, _, _ string) string {
+			return encryptRecoveryTargetRootDocumentForTest(t, mutateRecoveryTargetRootDocumentForTest(t, valid, func(value map[string]any) { value["schema_version"] = 2 }))
+		}},
+		{name: "unknown field", value: func(t *testing.T, valid, _, _ string) string {
+			return encryptRecoveryTargetRootDocumentForTest(t, mutateRecoveryTargetRootDocumentForTest(t, valid, func(value map[string]any) { value["unknown"] = "FAKE_UNKNOWN_FOR_TEST_ONLY" }))
+		}},
+		{name: "duplicate field", value: func(t *testing.T, valid, _, _ string) string {
+			duplicate := strings.Replace(valid, `"root_id":"root-a"`, `"root_id":"root-a","root_id":"root-a"`, 1)
+			if duplicate == valid {
+				t.Fatal("valid document did not contain the expected root_id member")
+			}
+			return encryptRecoveryTargetRootDocumentForTest(t, duplicate)
+		}},
+		{name: "missing field", value: func(t *testing.T, valid, _, _ string) string {
+			return encryptRecoveryTargetRootDocumentForTest(t, mutateRecoveryTargetRootDocumentForTest(t, valid, func(value map[string]any) { delete(value, "safe_label") }))
+		}},
+		{name: "trailing document", value: func(t *testing.T, valid, _, _ string) string {
+			return encryptRecoveryTargetRootDocumentForTest(t, valid+` {}`)
+		}},
+		{name: "oversized plaintext", value: func(t *testing.T, valid, _, _ string) string {
+			oversized := mutateRecoveryTargetRootDocumentForTest(t, valid, func(value map[string]any) { value["safe_label"] = strings.Repeat("x", 9<<10) })
+			return encryptRecoveryTargetRootDocumentForTest(t, oversized)
+		}},
+		{name: "wrong node", value: func(t *testing.T, valid, _, _ string) string {
+			return encryptRecoveryTargetRootDocumentForTest(t, mutateRecoveryTargetRootDocumentForTest(t, valid, func(value map[string]any) { value["node_id"] = 62 }))
+		}},
+		{name: "wrong root", value: func(t *testing.T, valid, _, _ string) string {
+			return encryptRecoveryTargetRootDocumentForTest(t, mutateRecoveryTargetRootDocumentForTest(t, valid, func(value map[string]any) { value["root_id"] = "root-z" }))
+		}},
+		{name: "swapped ciphertext", value: func(_ *testing.T, _, _, sibling string) string { return sibling }},
+		{name: "wrong digest", value: func(t *testing.T, valid, _, _ string) string {
+			return encryptRecoveryTargetRootDocumentForTest(t, mutateRecoveryTargetRootDocumentForTest(t, valid, func(value map[string]any) { value["locator_digest"] = strings.Repeat("0", 64) }))
+		}},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := setupRecoveryTargetRootTestDB(t)
+			seedRecoveryTargetRootNode(t, db, 61, false)
+			service := NewService(db)
+			definition := RecoveryTargetRootDefinition{
+				NodeID: 61, RootID: "root-a", SafeLabel: "FAKE_STORED_ROOT_A_LABEL_FOR_TEST_ONLY",
+				Locator: "/srv/FAKE_STORED_ROOT_A_FOR_TEST_ONLY",
+			}
+			sibling := RecoveryTargetRootDefinition{
+				NodeID: 61, RootID: "root-b", SafeLabel: "FAKE_STORED_ROOT_B_LABEL_FOR_TEST_ONLY",
+				Locator: "/srv/FAKE_STORED_ROOT_B_FOR_TEST_ONLY",
+			}
+			registerRecoveryTargetRootForTest(t, db, service, definition)
+			registerRecoveryTargetRootForTest(t, db, service, sibling)
+			key := recoveryTargetRootTestKey(definition.NodeID, definition.RootID)
+			validCiphertext := rawRecoveryTargetRootValue(t, db, key)
+			validDocument, err := secure.DecryptString(validCiphertext)
+			if err != nil {
+				t.Fatal(err)
+			}
+			siblingCiphertext := rawRecoveryTargetRootValue(t, db, recoveryTargetRootTestKey(sibling.NodeID, sibling.RootID))
+			invalidValue := testCase.value(t, validDocument, validCiphertext, siblingCiphertext)
+			if err := db.Model(&model.SystemSetting{}).Where("key = ?", key).UpdateColumn("value", invalidValue).Error; err != nil {
+				t.Fatal(err)
+			}
+
+			resolved, resolveErr := resolveRecoveryTargetRootForTest(t, db, service, definition.NodeID, definition.RootID)
+			if !errors.Is(resolveErr, ErrRecoveryTargetRootUnavailable) || resolveErr.Error() != ErrRecoveryTargetRootUnavailable.Error() {
+				t.Fatalf("resolve error=%v, want safe private-state error", resolveErr)
+			}
+			if resolved.Locator != "" || resolved.LocatorDigest != "" || resolved.SafeLabel != "" {
+				t.Fatalf("invalid record returned private resolution: %+v", resolved)
+			}
+			summaries, listErr := service.ListRecoveryTargetRoots(context.Background(), definition.NodeID)
+			if !errors.Is(listErr, ErrRecoveryTargetRootUnavailable) || listErr.Error() != ErrRecoveryTargetRootUnavailable.Error() || len(summaries) != 0 {
+				t.Fatalf("list returned partial/private state: summaries=%+v error=%v", summaries, listErr)
+			}
+			for _, private := range []string{definition.Locator, definition.SafeLabel, key, invalidValue} {
+				if private != "" && (strings.Contains(resolveErr.Error(), private) || strings.Contains(listErr.Error(), private)) {
+					t.Fatalf("private record material leaked through error")
+				}
+			}
+		})
+	}
+}
+
+func TestSettingsListAllRecoveryTargetRootsIsBoundedAndSafe(t *testing.T) {
+	setRecoveryTargetRootTestEncryption(t)
+	db := setupRecoveryTargetRootTestDB(t)
+	seedRecoveryTargetRootNode(t, db, 81, false)
+	seedRecoveryTargetRootNode(t, db, 82, false)
+	seedRecoveryTargetRootNode(t, db, 83, true)
+	service := NewService(db)
+	registerRecoveryTargetRootForTest(t, db, service, RecoveryTargetRootDefinition{
+		NodeID: 82, RootID: "root-b", SafeLabel: "FAKE_ALL_ROOT_B_LABEL_FOR_TEST_ONLY", Locator: "/srv/FAKE_ALL_ROOT_B_FOR_TEST_ONLY",
+	})
+	registerRecoveryTargetRootForTest(t, db, service, RecoveryTargetRootDefinition{
+		NodeID: 81, RootID: "root-c", SafeLabel: "FAKE_ALL_ROOT_C_LABEL_FOR_TEST_ONLY", Locator: "/srv/FAKE_ALL_ROOT_C_FOR_TEST_ONLY",
+	})
+	registerRecoveryTargetRootForTest(t, db, service, RecoveryTargetRootDefinition{
+		NodeID: 81, RootID: "root-a", SafeLabel: "FAKE_ALL_ROOT_A_LABEL_FOR_TEST_ONLY", Locator: "/srv/FAKE_ALL_ROOT_A_FOR_TEST_ONLY",
+	})
+
+	roots, err := service.ListAllRecoveryTargetRoots(context.Background())
+	if err != nil {
+		t.Fatalf("list all recovery roots: %v", err)
+	}
+	want := []RecoveryTargetRootReference{{NodeID: 81, RootID: "root-a"}, {NodeID: 81, RootID: "root-c"}, {NodeID: 82, RootID: "root-b"}}
+	if !reflect.DeepEqual(roots, want) {
+		t.Fatalf("all recovery roots=%+v, want %+v", roots, want)
+	}
+	encoded, err := json.Marshal(roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"FAKE_ALL_ROOT_A_LABEL_FOR_TEST_ONLY", "/srv/FAKE_ALL_ROOT_A_FOR_TEST_ONLY"} {
+		if strings.Contains(string(encoded), private) {
+			t.Fatalf("all-root catalog leaked private value %q: %s", private, encoded)
+		}
+	}
+	t.Run("inactive node row fails closed", func(t *testing.T) {
+		if err := db.Model(&model.Node{}).Where("id = ?", 82).UpdateColumn("archived", true).Error; err != nil {
+			t.Fatal(err)
+		}
+		if roots, err := service.ListAllRecoveryTargetRoots(context.Background()); !errors.Is(err, ErrRecoveryTargetRootUnavailable) || len(roots) != 0 {
+			t.Fatalf("inactive-node catalog roots=%+v error=%v", roots, err)
+		}
+		if err := db.Model(&model.Node{}).Where("id = ?", 82).UpdateColumn("archived", false).Error; err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("malformed duplicate identity fails closed", func(t *testing.T) {
+		valid := rawRecoveryTargetRootValue(t, db, recoveryTargetRootTestKey(81, "root-a"))
+		row := model.SystemSetting{Key: RecoveryTargetRootKeyPrefix + "081.root-a", Value: valid}
+		if err := db.Create(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+		if roots, err := service.ListAllRecoveryTargetRoots(context.Background()); !errors.Is(err, ErrRecoveryTargetRootUnavailable) || len(roots) != 0 {
+			t.Fatalf("malformed duplicate catalog roots=%+v error=%v", roots, err)
+		}
+		if err := db.Delete(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("limit plus one fails instead of truncating", func(t *testing.T) {
+		limitDB := setupRecoveryTargetRootTestDB(t)
+		seedRecoveryTargetRootNode(t, limitDB, 91, false)
+		rows := make([]model.SystemSetting, 0, 1025)
+		for index := 0; index < 1025; index++ {
+			rows = append(rows, model.SystemSetting{
+				Key:   RecoveryTargetRootKeyPrefix + "91.r" + strconv.FormatInt(int64(index), 10),
+				Value: "enc:v2:FAKE_LIMIT_ROW_FOR_TEST_ONLY",
+			})
+		}
+		if err := limitDB.CreateInBatches(rows, 128).Error; err != nil {
+			t.Fatal(err)
+		}
+		limitService := NewService(limitDB)
+		if roots, err := limitService.ListAllRecoveryTargetRoots(context.Background()); !errors.Is(err, ErrRecoveryTargetRootUnavailable) || len(roots) != 0 {
+			t.Fatalf("limit+1 catalog roots=%d error=%v", len(roots), err)
+		}
+	})
+}
+
+func TestRecoveryTargetRootRegistryKeysNeverUseGenericSettings(t *testing.T) {
+	setRecoveryTargetRootTestEncryption(t)
+	db := setupRecoveryTargetRootTestDB(t)
+	seedRecoveryTargetRootNode(t, db, 71, false)
+	service := NewService(db)
+	definition := RecoveryTargetRootDefinition{
+		NodeID: 71, RootID: "root-a", SafeLabel: "FAKE_GENERIC_ROOT_LABEL_FOR_TEST_ONLY",
+		Locator: "/srv/FAKE_GENERIC_ROOT_FOR_TEST_ONLY",
+	}
+	registerRecoveryTargetRootForTest(t, db, service, definition)
+	key := recoveryTargetRootTestKey(definition.NodeID, definition.RootID)
+	original := rawRecoveryTargetRootValue(t, db, key)
+	malformedKey := RecoveryTargetRootKeyPrefix + "malformed"
+	if err := db.Create(&model.SystemSetting{Key: malformedKey, Value: "enc:v2:FAKE_MALFORMED_INTERNAL_ROW_FOR_TEST_ONLY"}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	internalKeys := []string{
+		ProcessingContentPipelineRevisionKey,
+		ProcessingOCRPipelineRevisionKey,
+		key,
+		malformedKey,
+		RecoveryTargetRootKeyPrefix + ".",
+	}
+	for _, internalKey := range internalKeys {
+		if !IsInternalSettingKey(internalKey) {
+			t.Fatalf("internal key was not classified: %q", internalKey)
+		}
+	}
+	for _, lookalike := range []string{
+		"backup_assets.internal.recovery_target_root.v1",
+		"backup_assets.internal.recovery_target_root.v10.71.root-a",
+		"backup_assets.internal.recovery_target_root.v1x.71.root-a",
+		"backup_assets.internal.recovery_target_roots.v1.71.root-a",
+	} {
+		if IsInternalSettingKey(lookalike) {
+			t.Fatalf("lookalike key was classified internal: %q", lookalike)
+		}
+	}
+
+	for _, definition := range service.Registry() {
+		if IsInternalSettingKey(definition.Key) {
+			t.Fatalf("internal key appeared in Registry: %q", definition.Key)
+		}
+	}
+	all, err := service.GetAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, internalKey := range []string{key, malformedKey} {
+		if _, ok := all[internalKey]; ok {
+			t.Fatalf("internal key appeared in GetAll: %q", internalKey)
+		}
+		if got := service.GetEffective(internalKey); got != "" {
+			t.Fatalf("GetEffective returned internal value for %q", internalKey)
+		}
+		if _, resolveErr := service.resolveValue(internalKey); !errors.Is(resolveErr, ErrInternalSettingUnavailable) {
+			t.Fatalf("resolveValue error=%v for %q", resolveErr, internalKey)
+		}
+		for operation, operationErr := range map[string]error{
+			"Validate":     service.Validate(internalKey, "FAKE_REPLACEMENT_FOR_TEST_ONLY"),
+			"Update":       service.Update(internalKey, "FAKE_REPLACEMENT_FOR_TEST_ONLY"),
+			"UpdateWithTx": service.UpdateWithTx(db, internalKey, "FAKE_REPLACEMENT_FOR_TEST_ONLY"),
+			"UpdateMany":   service.UpdateMany(map[string]string{internalKey: "FAKE_REPLACEMENT_FOR_TEST_ONLY"}),
+			"Delete":       service.Delete(internalKey),
+			"DeleteWithTx": service.DeleteWithTx(db, internalKey),
+		} {
+			if !errors.Is(operationErr, ErrInternalSettingUnavailable) || operationErr.Error() != ErrInternalSettingUnavailable.Error() {
+				t.Fatalf("%s error=%v for internal key %q", operation, operationErr, internalKey)
+			}
+		}
+	}
+	if got := rawRecoveryTargetRootValue(t, db, key); got != original {
+		t.Fatal("generic settings operation changed the private root row")
+	}
+}
 
 func TestProcessingPipelineRevisionsUseReservedTransactionalState(t *testing.T) {
 	db := setupTestDB(t)
@@ -346,8 +894,10 @@ func TestBackupAssetSearchConfigAndOverlayConfigDefinitionsAndSafeDefaults(t *te
 			got[def.Key] = def
 		}
 	}
-	if len(got) != len(want)+len(expectedBackupAssetProcessingDefinitions)+len(expectedBackupAssetExportDefinitions) {
-		t.Fatalf("backup asset setting count=%d, want %d", len(got), len(want)+len(expectedBackupAssetProcessingDefinitions)+len(expectedBackupAssetExportDefinitions))
+	wantCount := len(want) + len(expectedBackupAssetProcessingDefinitions) +
+		len(expectedBackupAssetExportDefinitions) + len(backupAssetRecoverySettingKeys)
+	if len(got) != wantCount {
+		t.Fatalf("backup asset setting count=%d, want %d", len(got), wantCount)
 	}
 	for key, expected := range want {
 		def, ok := got[key]
@@ -447,7 +997,8 @@ func TestBackupAssetExportFoundationKeysAreComplete(t *testing.T) {
 		}
 	}
 	if len(keys) != len(backupAssetCoreSettingKeys)+len(backupAssetSearchOverlaySettingKeys)+
-		len(backupAssetContentSettingKeys)+len(backupAssetProcessingSettingKeys)+len(expectedBackupAssetExportDefinitions) {
+		len(backupAssetContentSettingKeys)+len(backupAssetProcessingSettingKeys)+len(expectedBackupAssetExportDefinitions)+
+		len(backupAssetRecoverySettingKeys) {
 		t.Fatalf("foundation key count=%d does not include exact Export/Archive set", len(keys))
 	}
 }
@@ -1261,6 +1812,39 @@ func TestBackupAssetContentSettingsUseDBEnvDefaultPrecedenceInAtomicSnapshot(t *
 		if _, exists := values[key]; !exists {
 			t.Fatalf("atomic snapshot omitted %s", key)
 		}
+	}
+}
+
+func TestRecoveryAuthorizationReceiptSettingsAtomicSnapshot(t *testing.T) {
+	t.Setenv("BACKUP_ASSETS_RECOVERY_RECEIPT_REPLAY_TTL", "25m")
+	t.Setenv("BACKUP_ASSETS_RECOVERY_WRITE_GRANT_TTL", "12m")
+	t.Setenv("BACKUP_ASSETS_RECOVERY_RECEIPT_REAPER_CADENCE", "2m")
+	service := NewService(setupTestDB(t))
+	if err := service.UpdateMany(map[string]string{
+		"backup_assets.recovery.receipt_replay_ttl":        "30m",
+		"backup_assets.recovery.receipt_reaper_batch_size": "64",
+	}); err != nil {
+		t.Fatalf("persist Recovery authorization settings: %v", err)
+	}
+
+	values, err := service.BackupAssetSettingsSnapshot()
+	if err != nil {
+		t.Fatalf("BackupAssetSettingsSnapshot: %v", err)
+	}
+	want := map[string]string{
+		"backup_assets.recovery.receipt_replay_ttl":        "30m",
+		"backup_assets.recovery.write_grant_ttl":           "12m",
+		"backup_assets.recovery.delete_grant_ttl":          "10m",
+		"backup_assets.recovery.receipt_reaper_cadence":    "2m",
+		"backup_assets.recovery.receipt_reaper_batch_size": "64",
+	}
+	for key, expected := range want {
+		if got, exists := values[key]; !exists || got != expected {
+			t.Errorf("atomic Recovery setting %s=%q exists=%v, want %q", key, got, exists, expected)
+		}
+	}
+	if len(values) != len(BackupAssetFoundationSettingKeys()) {
+		t.Fatalf("snapshot key count=%d, want %d", len(values), len(BackupAssetFoundationSettingKeys()))
 	}
 }
 

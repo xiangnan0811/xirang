@@ -23,6 +23,7 @@ import (
 	"xirang/backend/internal/backupasset/processing/capabilityspec"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
+	"xirang/backend/internal/backupasset/recovery"
 	"xirang/backend/internal/backupasset/search"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
@@ -124,6 +125,326 @@ func openRuntimeTestDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	return db
+}
+
+func TestRuntimeNewReconcilesCurrentPostArmWorkBeforePermanentCleanupKeyFailure(t *testing.T) {
+	testCases := []struct {
+		name     string
+		keyState backupasset.DomainKeyState
+		want     error
+	}{
+		{name: "lost", keyState: backupasset.DomainKeyLost, want: backupasset.ErrKeyLost},
+		{name: "unavailable", keyState: backupasset.DomainKeyVerifyOnly, want: backupasset.ErrKeyUnavailable},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := openRuntimeTestDB(t)
+			now := time.Now().UTC().Truncate(time.Second)
+			fixture := seedRuntimeCleanupKeyCurrentWork(t, db, now)
+			seedRuntimeCleanupKeyState(t, db, now, testCase.keyState)
+
+			_, err := New(runtimeCleanupKeyDependencies(db, now))
+			if !errors.Is(err, testCase.want) {
+				t.Fatalf("runtime cleanup-key startup error=%v, want %v", err, testCase.want)
+			}
+			job := loadRuntimeCleanupKeyJob(t, db, fixture.jobID)
+			if job.State != "needs_attention" || job.FailureCategory != "cleanup_key_unavailable" ||
+				job.WorkspacePhase != "cleanup_due" || job.TransitionRevision != 8 ||
+				job.TargetChainRevision != fixture.targetChainRevision {
+				t.Fatalf("runtime cleanup-key reconciliation job=%+v", job)
+			}
+			attempt := loadRuntimeCleanupKeyAttempt(t, db, fixture.attemptID)
+			if attempt.State != "failed" || !attempt.MutationArmed || attempt.ClosedAt == nil ||
+				!attempt.ClosedAt.Equal(now) || attempt.OwnerID != fixture.ownerID || attempt.Fence != fixture.fence {
+				t.Fatalf("runtime cleanup-key reconciliation attempt=%+v", attempt)
+			}
+		})
+	}
+}
+
+func TestRuntimeNewDoesNotReconcileTransientCleanupKeyStartupFailure(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	fixture := seedRuntimeCleanupKeyCurrentWork(t, db, now)
+	transientErr := errors.New("injected transient keyring query failure")
+	const callbackName = "runtime:transient_cleanup_key_query"
+	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == (model.WrappedDomainKey{}).TableName() {
+			_ = tx.AddError(transientErr)
+		}
+	}); err != nil {
+		t.Fatalf("register transient keyring failure: %v", err)
+	}
+	_, err := New(runtimeCleanupKeyDependencies(db, now))
+	if removeErr := db.Callback().Query().Remove(callbackName); removeErr != nil {
+		t.Fatalf("remove transient keyring failure: %v", removeErr)
+	}
+	if !errors.Is(err, transientErr) || errors.Is(err, backupasset.ErrKeyLost) || errors.Is(err, backupasset.ErrKeyUnavailable) {
+		t.Fatalf("runtime transient cleanup-key error=%v", err)
+	}
+	job := loadRuntimeCleanupKeyJob(t, db, fixture.jobID)
+	attempt := loadRuntimeCleanupKeyAttempt(t, db, fixture.attemptID)
+	if job.State != "running" || job.FailureCategory != "" || job.WorkspacePhase != "reserved" ||
+		job.TransitionRevision != 7 || attempt.State != "running" || attempt.ClosedAt != nil {
+		t.Fatalf("transient cleanup-key failure reconciled durable work: job=%+v attempt=%+v", job, attempt)
+	}
+}
+
+func TestRuntimeNewPreservesPermanentCleanupKeyErrorWhenReconciliationFails(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	seedRuntimeCleanupKeyCurrentWork(t, db, now)
+	seedRuntimeCleanupKeyState(t, db, now, backupasset.DomainKeyLost)
+	_, wantErr := backupasset.NewKeyring(db, func() time.Time { return now }).
+		Ensure(context.Background(), backupasset.KeyDomainRecoveryCleanupOwnership)
+	if !errors.Is(wantErr, backupasset.ErrKeyLost) {
+		t.Fatalf("probe permanent cleanup-key error: %v", wantErr)
+	}
+	if err := db.Migrator().DropTable(&model.BackupAssetRecoveryAttempt{}); err != nil {
+		t.Fatalf("drop attempt table for reconciliation failure: %v", err)
+	}
+
+	_, err := New(runtimeCleanupKeyDependencies(db, now))
+	if !errors.Is(err, backupasset.ErrKeyLost) {
+		t.Fatalf("runtime hid original permanent cleanup-key error: %v", err)
+	}
+	if err.Error() != wantErr.Error() || errors.Is(err, recovery.ErrRecoveryWorkerUnavailable) {
+		t.Fatalf("runtime replaced or joined the original cleanup-key error: got=%v want=%v", err, wantErr)
+	}
+}
+
+func TestRuntimeNewReturnsExactLostCleanupKeyErrorAfterConfiguredBoundedReconciliation(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RUNTIME_RECOVERY_CLEANUP_LOST_KEK_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+	db := openRuntimeTestDB(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	first := seedRuntimeCleanupKeyCurrentWorkAt(t, db, now.Add(-time.Second), 0)
+	second := seedRuntimeCleanupKeyCurrentWorkAt(t, db, now, 1)
+	settingsService := settings.NewService(db)
+	if err := settingsService.Update("backup_assets.recovery.receipt_reaper_batch_size", "1"); err != nil {
+		t.Fatalf("configure cleanup-key reconciliation bound: %v", err)
+	}
+	ring := backupasset.NewKeyring(db, func() time.Time { return now })
+	material, err := ring.Ensure(context.Background(), backupasset.KeyDomainRecoveryCleanupOwnership)
+	if err != nil {
+		t.Fatalf("ensure cleanup key: %v", err)
+	}
+	if err := ring.MarkLost(context.Background(), backupasset.KeyDomainRecoveryCleanupOwnership, material.Version); err != nil {
+		t.Fatalf("mark cleanup key lost: %v", err)
+	}
+	_, wantErr := ring.Ensure(context.Background(), backupasset.KeyDomainRecoveryCleanupOwnership)
+	if !errors.Is(wantErr, backupasset.ErrKeyLost) {
+		t.Fatalf("probe lost cleanup-key error: %v", wantErr)
+	}
+
+	_, err = New(runtimeCleanupKeyDependencies(db, now))
+	if !errors.Is(err, backupasset.ErrKeyLost) || err.Error() != wantErr.Error() {
+		t.Fatalf("runtime cleanup-key error=%v, want exact %v", err, wantErr)
+	}
+	firstJob := loadRuntimeCleanupKeyJob(t, db, first.jobID)
+	firstAttempt := loadRuntimeCleanupKeyAttempt(t, db, first.attemptID)
+	if firstJob.State != "needs_attention" || firstJob.FailureCategory != "cleanup_key_unavailable" ||
+		firstJob.WorkspacePhase != "cleanup_due" || firstAttempt.State != "failed" || firstAttempt.ClosedAt == nil {
+		t.Fatalf("runtime did not reconcile first bounded cleanup-key row: job=%+v attempt=%+v", firstJob, firstAttempt)
+	}
+	secondJob := loadRuntimeCleanupKeyJob(t, db, second.jobID)
+	secondAttempt := loadRuntimeCleanupKeyAttempt(t, db, second.attemptID)
+	if secondJob.State != "running" || secondJob.FailureCategory != "" || secondJob.WorkspacePhase != "reserved" ||
+		secondAttempt.State != "running" || secondAttempt.ClosedAt != nil {
+		t.Fatalf("runtime exceeded configured cleanup-key reconciliation bound: job=%+v attempt=%+v", secondJob, secondAttempt)
+	}
+}
+
+func TestRuntimeNewReturnsExactUnavailableCleanupKeyErrorAfterReconciliation(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RUNTIME_RECOVERY_CLEANUP_OLD_KEK_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+	db := openRuntimeTestDB(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	fixture := seedRuntimeCleanupKeyCurrentWork(t, db, now)
+	ring := backupasset.NewKeyring(db, func() time.Time { return now })
+	if _, err := ring.Ensure(context.Background(), backupasset.KeyDomainRecoveryCleanupOwnership); err != nil {
+		t.Fatalf("ensure cleanup key under old master key: %v", err)
+	}
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RUNTIME_RECOVERY_CLEANUP_NEW_KEK_FOR_TEST_ONLY")
+	t.Setenv("DATA_ENCRYPTION_LEGACY_KEY", "")
+	secure.ResetForTesting()
+	_, wantErr := ring.Ensure(context.Background(), backupasset.KeyDomainRecoveryCleanupOwnership)
+	if !errors.Is(wantErr, backupasset.ErrKeyUnavailable) {
+		t.Fatalf("probe unavailable cleanup-key error: %v", wantErr)
+	}
+
+	_, err := New(runtimeCleanupKeyDependencies(db, now))
+	if !errors.Is(err, backupasset.ErrKeyUnavailable) || err.Error() != wantErr.Error() {
+		t.Fatalf("runtime cleanup-key error=%v, want exact %v", err, wantErr)
+	}
+	job := loadRuntimeCleanupKeyJob(t, db, fixture.jobID)
+	attempt := loadRuntimeCleanupKeyAttempt(t, db, fixture.attemptID)
+	if job.State != "needs_attention" || job.FailureCategory != "cleanup_key_unavailable" ||
+		job.WorkspacePhase != "cleanup_due" || attempt.State != "failed" || attempt.ClosedAt == nil {
+		t.Fatalf("runtime did not reconcile unavailable cleanup-key row: job=%+v attempt=%+v", job, attempt)
+	}
+}
+
+type runtimeCleanupKeyFixture struct {
+	jobID               string
+	attemptID           string
+	ownerID             string
+	fence               uint64
+	targetChainRevision string
+}
+
+type runtimeCleanupKeyJobSnapshot struct {
+	State                 string
+	FailureCategory       string
+	TransitionRevision    uint64
+	WorkspacePhase        string
+	TargetChainRevision   string
+	EncryptedWorkspaceRaw string `gorm:"column:encrypted_workspace_relative_locator"`
+}
+
+type runtimeCleanupKeyAttemptSnapshot struct {
+	OwnerID       string
+	Fence         uint64
+	State         string
+	MutationArmed bool
+	ClosedAt      *time.Time
+}
+
+func runtimeCleanupKeyDependencies(db *gorm.DB, now time.Time) Dependencies {
+	transport := &runtimeTransportFake{}
+	return Dependencies{
+		DB: db, Settings: settings.NewService(db), Now: func() time.Time { return now },
+		Transport: transport, StreamTransport: transport, Metrics: publication.NoopMetrics{},
+		ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{},
+	}
+}
+
+func seedRuntimeCleanupKeyCurrentWork(t *testing.T, db *gorm.DB, now time.Time) runtimeCleanupKeyFixture {
+	t.Helper()
+	return seedRuntimeCleanupKeyCurrentWorkAt(t, db, now, 0)
+}
+
+func seedRuntimeCleanupKeyCurrentWorkAt(
+	t *testing.T,
+	db *gorm.DB,
+	now time.Time,
+	index int,
+) runtimeCleanupKeyFixture {
+	t.Helper()
+	if err := db.AutoMigrate(
+		&model.WrappedDomainKey{}, &model.BackupAssetRecoveryPlan{}, &model.BackupAssetRecoveryJob{},
+		&model.BackupAssetRecoveryAttempt{}, &model.BackupAssetRecoveryNodeLease{},
+	); err != nil {
+		t.Fatalf("migrate runtime cleanup-key fixture: %v", err)
+	}
+	fixture := runtimeCleanupKeyFixture{
+		jobID: fmt.Sprintf("%032x", index+1), attemptID: fmt.Sprintf("%032x", index+101),
+		ownerID: "runtime-cleanup-key-owner", fence: 11, targetChainRevision: "opaque-target-chain-before-key-loss",
+	}
+	plan := model.BackupAssetRecoveryPlan{
+		ID: fmt.Sprintf("%032x", index+201), RecoveryPointID: fmt.Sprintf("%032x", index+301),
+		State: "executed", TransitionRevision: 4, CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute),
+	}
+	if err := db.Session(&gorm.Session{SkipHooks: true}).Create(&plan).Error; err != nil {
+		t.Fatalf("create runtime cleanup-key plan: %v", err)
+	}
+	job := model.BackupAssetRecoveryJob{
+		ID: fixture.jobID, PlanID: plan.ID, State: "running", TransitionRevision: 7,
+		WorkspacePhase: "reserved", EncryptedWorkspaceRelativeLocator: "ciphertext-must-not-be-read",
+		WorkspaceMarkerBindingDigest: strings.Repeat("a", 64), WorkspaceOwner: fixture.ownerID,
+		WorkspaceFence: fixture.fence, TargetMode: "isolated", TargetNodeID: uint(index + 41),
+		TargetChainRevision: fixture.targetChainRevision, CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute),
+	}
+	if err := db.Session(&gorm.Session{SkipHooks: true}).Create(&job).Error; err != nil {
+		t.Fatalf("create runtime cleanup-key job: %v", err)
+	}
+	expiresAt := now.Add(10 * time.Minute)
+	attempt := model.BackupAssetRecoveryAttempt{
+		ID: fixture.attemptID, JobID: fixture.jobID, OwnerID: fixture.ownerID, Fence: fixture.fence,
+		State: "running", MutationArmed: true, LeaseExpiresAt: &expiresAt, HeartbeatAt: &now,
+		CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute),
+	}
+	if err := db.Session(&gorm.Session{SkipHooks: true}).Create(&attempt).Error; err != nil {
+		t.Fatalf("create runtime cleanup-key attempt: %v", err)
+	}
+	attemptID := fixture.attemptID
+	node := model.BackupAssetRecoveryNodeLease{
+		ID: fmt.Sprintf("%032x", index+401), NodeID: uint(index + 41), HolderKind: "recovery_job",
+		JobID: fixture.jobID, AttemptID: &attemptID, OwnerID: fixture.ownerID, Fence: fixture.fence,
+		State: "active", LeaseExpiresAt: expiresAt, CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute),
+	}
+	if err := db.Session(&gorm.Session{SkipHooks: true}).Create(&node).Error; err != nil {
+		t.Fatalf("create runtime cleanup-key node lease: %v", err)
+	}
+	source := model.RecoveryPointLease{
+		ID: fmt.Sprintf("%032x", index+501), RecoveryPointID: plan.RecoveryPointID,
+		HolderType: string(backupasset.LeaseHolderRecoveryJob), OwnerID: fixture.jobID,
+		AttemptID: fixture.attemptID, FenceToken: strings.Repeat("7", 64), Status: string(backupasset.LeaseActive),
+		LeaseExpiresAt: expiresAt, AbsoluteDeadline: now.Add(time.Hour), LastHeartbeatAt: now,
+		CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute),
+	}
+	if err := db.Session(&gorm.Session{SkipHooks: true}).Create(&source).Error; err != nil {
+		t.Fatalf("create runtime cleanup-key source lease: %v", err)
+	}
+	return fixture
+}
+
+func seedRuntimeCleanupKeyState(
+	t *testing.T,
+	db *gorm.DB,
+	now time.Time,
+	state backupasset.DomainKeyState,
+) {
+	t.Helper()
+	row := model.WrappedDomainKey{
+		ID: strings.Repeat("8", 32), Domain: string(backupasset.KeyDomainRecoveryCleanupOwnership),
+		Version: 1, State: string(state), WrappedKey: "unreadable-key-material",
+		WrapAlgorithm: "test", WrappingKeyFingerprint: strings.Repeat("9", 64),
+		ActivatedAt: now.Add(-time.Hour), CreatedAt: now.Add(-time.Hour), UpdatedAt: now,
+	}
+	if state == backupasset.DomainKeyLost {
+		row.LostAt = &now
+	} else {
+		verifyUntil := now.Add(time.Hour)
+		row.VerifyUntil = &verifyUntil
+	}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatalf("create runtime cleanup-key state %q: %v", state, err)
+	}
+}
+
+func loadRuntimeCleanupKeyJob(t *testing.T, db *gorm.DB, jobID string) runtimeCleanupKeyJobSnapshot {
+	t.Helper()
+	var snapshot runtimeCleanupKeyJobSnapshot
+	result := db.Table("backup_asset_recovery_jobs").
+		Select(`state, failure_category, transition_revision, workspace_phase,
+			target_chain_revision, encrypted_workspace_relative_locator`).
+		Where("id = ?", jobID).Limit(1).Scan(&snapshot)
+	if result.Error != nil || result.RowsAffected != 1 {
+		t.Fatalf("load runtime cleanup-key job: rows=%d err=%v", result.RowsAffected, result.Error)
+	}
+	return snapshot
+}
+
+func loadRuntimeCleanupKeyAttempt(
+	t *testing.T,
+	db *gorm.DB,
+	attemptID string,
+) runtimeCleanupKeyAttemptSnapshot {
+	t.Helper()
+	var snapshot runtimeCleanupKeyAttemptSnapshot
+	result := db.Table("backup_asset_recovery_attempts").
+		Select("owner_id, fence, state, mutation_armed, closed_at").
+		Where("id = ?", attemptID).Limit(1).Scan(&snapshot)
+	if result.Error != nil || result.RowsAffected != 1 {
+		t.Fatalf("load runtime cleanup-key attempt: rows=%d err=%v", result.RowsAffected, result.Error)
+	}
+	return snapshot
 }
 
 func TestTerminalizeExportRuntimeLifecycleContinuesAfterDurableCleanupFailure(t *testing.T) {

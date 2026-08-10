@@ -219,6 +219,11 @@ func aggregateAuditInput(grant model.BackupAssetDeliveryGrant, responseBytes int
 	if grant.Action == string(DeliveryDownload) {
 		action = backupasset.AuditActionAssetDownload
 	}
+	recoveryJobID := ""
+	if grant.ResourceKind == string(DeliveryResourceRecoveryResult) && grant.RecoveryJobID != nil {
+		action = backupasset.AuditActionRecoveryResultDownload
+		recoveryJobID = *grant.RecoveryJobID
+	}
 	outcome := backupasset.AuditOutcomeSuccess
 	failureCode := ""
 	if grant.AuditFailureCount > 0 {
@@ -244,7 +249,8 @@ func aggregateAuditInput(grant model.BackupAssetDeliveryGrant, responseBytes int
 	return backupasset.AuditEventInput{
 		Actor:  backupasset.AuditActor{UserID: grant.OwnerUserID, Role: grant.SessionRole},
 		Action: action, Outcome: outcome, RecoveryPointID: recoveryPointID, EntryID: entryID,
-		ByteCount: responseBytes, Range: backupasset.NewRangeSummary(grant.AuditRangeCount, grant.AuditRangeBytes),
+		RecoveryJobID: recoveryJobID,
+		ByteCount:     responseBytes, Range: backupasset.NewRangeSummary(grant.AuditRangeCount, grant.AuditRangeBytes),
 		StepUpAction: stepUpAction, StepUpProofID: stepUpProofID, GrantID: grant.ID, FailureCode: failureCode,
 		Fields: map[backupasset.AuditField]any{
 			backupasset.AuditFieldRenderer: grant.Renderer, backupasset.AuditFieldProfile: grant.Profile,
