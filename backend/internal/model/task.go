@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -68,8 +69,9 @@ type TaskRun struct {
 	ID                uint       `gorm:"primaryKey" json:"id"`
 	TaskID            uint       `gorm:"not null;index" json:"task_id"`
 	Task              Task       `gorm:"foreignKey:TaskID" json:"-"`
+	NodeIDSnapshot    uint       `gorm:"not null;index:idx_task_runs_node_snapshot_status,priority:1" json:"-"`
 	TriggerType       string     `gorm:"size:32;not null;default:manual" json:"trigger_type"`
-	Status            string     `gorm:"size:32;not null;default:pending;index;index:idx_task_runs_status_finished_at,priority:1" json:"status"`
+	Status            string     `gorm:"size:32;not null;default:pending;index;index:idx_task_runs_status_finished_at,priority:1;index:idx_task_runs_node_snapshot_status,priority:2" json:"status"`
 	ChainRunID        string     `gorm:"size:64;index" json:"chain_run_id,omitempty"`
 	UpstreamTaskRunID *uint      `gorm:"index" json:"upstream_task_run_id,omitempty"`
 	SkipReason        string     `gorm:"type:text" json:"skip_reason,omitempty"`
@@ -82,6 +84,36 @@ type TaskRun struct {
 	LastError         string     `gorm:"type:text" json:"last_error"`
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
+// BeforeCreate freezes the Task's current node for every GORM TaskRun writer.
+// Paired migration guards remain the authoritative defense for raw SQL and
+// reject explicit mismatches; the hook keeps legacy TaskRun producers on the
+// same immutable identity contract without duplicating node lookups.
+func (r *TaskRun) BeforeCreate(tx *gorm.DB) error {
+	if r == nil || tx == nil || r.TaskID == 0 {
+		return nil
+	}
+	var taskNode struct {
+		NodeID uint
+	}
+	result := tx.Model(&Task{}).Select("node_id").Where("id = ?", r.TaskID).Limit(1).Find(&taskNode)
+	if result.Error != nil {
+		return result.Error
+	}
+	// Let the existing Task FK (and the paired 000069 insert guard) own a
+	// missing Task. Some isolated model consumers intentionally omit FKs.
+	if result.RowsAffected == 0 {
+		return nil
+	}
+	if r.NodeIDSnapshot == 0 {
+		r.NodeIDSnapshot = taskNode.NodeID
+		return nil
+	}
+	if r.NodeIDSnapshot != taskNode.NodeID {
+		return fmt.Errorf("task run node snapshot %d does not match task node %d", r.NodeIDSnapshot, taskNode.NodeID)
+	}
+	return nil
 }
 
 type TaskLog struct {

@@ -281,7 +281,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if stagedPayload == nil {
 		ownership, ownershipErr := keyring.Ensure(context.Background(), backupasset.KeyDomainRecoveryCleanupOwnership)
 		if ownershipErr != nil {
-			return nil, ownershipErr
+			return nil, reconcilePermanentCleanupKeyLossBeforeReturn(ownershipErr, dependencies, foundation)
 		}
 		stagedPayload, err = provider.NewRcloneStagedPayloadTransport(sshutil.NewNodeDialer(dependencies.DB), ownership.Key, dependencies.Now)
 		if err != nil {

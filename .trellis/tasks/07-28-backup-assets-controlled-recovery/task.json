@@ -1,0 +1,989 @@
+{
+  "id": "backup-assets-controlled-recovery",
+  "name": "backup-assets-controlled-recovery",
+  "title": "备份资产受控恢复",
+  "description": "Deliver exact, preflighted and fenced backup-asset recovery plans/jobs with isolated results, bounded plaintext lifecycle, and explicit high-risk in-place recovery.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "full-stack",
+  "package": "backend,web",
+  "priority": "P2",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-07-28",
+  "completedAt": null,
+  "branch": "codex/backup-assets-controlled-recovery",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-12-backup-data-explorer-design",
+  "relatedFiles": [],
+  "notes": "Complex Child 13 planning was independently approved on 2026-07-28 and task.py start ran exactly once. Tasks 1-5 are complete_approved at their recorded scopes, and Task 6 is complete_checked at whole scope after fresh combined specification, quality and dynamic-gate review. B1 and B2 aggregates are complete_checked; B3 retains its focused historical credit and is incorporated into the whole review. Corrections 15-18 have fresh GREEN evidence without reconstructed historical RED output; Corrections 19-20 retain exact RED/GREEN ledger evidence. Task 7 is in progress: atomic publication, the owner-bound durable RecoveryResult resolver, the Recovery-specific Content grant/source/audit arm, the purpose-exact target delivery adapter, exact retain authorization/deadline CAS, retained effective-deadline delivery compatibility, published ResultSet and unpublished workspace cleanup claim admission, resource-scoped Content revoke/drain, fenced cleanup/node lease renewal, cleanup-specific read-only target validation through durable validated, retryable ownerless drained failure projection, the private current-v2 target-root registry plus transaction-bound encrypted immutable plan snapshot, the strict authenticated recovery workspace marker codec plus immutable creator/fence interoperability, the exact-plan purpose-exact SSH/SFTP no-overwrite marker create plus observational validation adapter, exact executed-plan sealed Verify authority plus concrete present regular-file observation, no-overwrite regular-file create, split composite preflight, resolver-bound published result read, delete-oriented Lstat plus exact absence, and A2e2 R42--R47 overwrite artifact authority/historical-key binding/authenticated intent-post preparation/exact-prior capture/same-invocation mismatched-winner restore/closed tuple publish/authenticated acknowledgement/safe residue cleanup/source-free replay/durable checkpoint-before-finalize/preterminal takeover reconciliation plus authority/error/resource/context/privacy closure are complete_checked at focused scope. A2e2+A3a V13 focused acceptance/design/code review is also complete_checked after fresh normal/race, required-real PostgreSQL and structural gates; its only finding was a corrected three-row manifest duplication with no product-scope change. RemoveOwnedJobDir, remote delete/tombstone, successful terminal cleanup lease release, general crash/orphan/quarantine reconciliation and whole Task 7 cross-engine review remain open; Task 8 owns startup/listener ordering and managed lifecycle. No new path, table, route, migration number, backfill or 000070 was added; the exact manifest remains 9 Phase-1 + 55 create + 81 modify = 145 unique/disjoint paths. Staged paths remain zero, no commit/push/PR/CI/merge action has run, the Child remains in_progress, the parent remains planning, and the program remains 12/15.",
+  "meta": {
+    "parent_delivery": "12_of_15_complete",
+    "planning_basis": "approved parent PRD/design/implement plus Child 13 current-main reconnaissance",
+    "target_node_policy": "eligible_registered_node_with_producer_preselection",
+    "future_manifest": "55_create_81_modify",
+    "planning_scope": "9_current_55_create_81_modify_145_total",
+    "focused_manifest_amendment": "2026-07-30_task4_b1_catalog_fingerprint_strength_completion_blocker_one_tracked_modify_no_000070",
+    "planning_artifacts": "original_package_independently_approved_2026-07-28_task_6_b3_reconciled_f6_focused_complete_approved_r0_rebaselined_2026-08-02_f3_plan_a_plus_f4_focused_complete_checked_2026-08-03_corrections_15_20_implemented_whole_task6_complete_checked",
+    "planning_review": "whole_task_6_specification_and_quality_reviews_complete_task_7_publication_resolver_content_adapter_retain_claim_revoke_drain_cleanup_target_validation_target_root_plan_snapshot_workspace_marker_interoperability_exact_plan_sftp_marker_present_regular_file_verify_no_overwrite_regular_file_create_composite_read_only_preflight_published_result_read_delete_oriented_lstat_exact_absence_and_a2e2_r42_r47_overwrite_artifact_authority_historical_key_binding_authenticated_intent_post_preparation_exact_prior_capture_same_invocation_mismatch_restore_closed_tuple_publish_authenticated_acknowledgement_safe_residue_cleanup_source_free_replay_durable_checkpoint_before_finalize_preterminal_takeover_reconciliation_and_authority_error_resource_context_privacy_focused_checks_complete_v13_delete_and_whole_task7_review_open",
+    "planning_review_evidence": "independent_security_state_and_plan_manifest_rereviews_approved_2026-07-28_b3_receipt_019fc0c2_cfda_74e3_b218_246f3a425545_approved_f6_spec_019fc136_feca_7fb0_82bc_3c33739aef12_quality_019fc13c_0710_7343_b261_dd866382a8c0_postgres_019fc13d_ea0e_7f93_b1c6_32aebcb7368e_whole_task6_controller_inline_spec_quality_and_fresh_combined_gates_approved_2026-08-03",
+    "task_start": "executed_once_2026-07-28",
+    "implementation": "tasks_1_to_5_complete_approved_task_6_complete_checked_whole_scope_task_7_in_progress_publication_resolver_content_adapter_retain_claim_revoke_drain_cleanup_specific_read_only_target_validation_durable_validated_retryable_ownerless_drained_failure_projection_private_target_root_encrypted_plan_snapshot_strict_authenticated_marker_codec_creator_fence_interoperability_exact_plan_sftp_marker_present_regular_file_verify_no_overwrite_regular_file_create_composite_read_only_preflight_published_result_read_delete_oriented_lstat_exact_absence_and_overwrite_authenticated_intent_post_preparation_exact_prior_capture_same_invocation_mismatch_restore_closed_tuple_publish_acknowledgement_safe_residue_cleanup_source_free_replay_durable_checkpoint_before_finalize_preterminal_takeover_reconciliation_and_authority_error_resource_context_privacy_focused_complete_checked_remaining_v13_delete_tombstone_orphan_and_whole_review_open_tasks_8_to_10_not_executed",
+    "task_7": {
+      "status": "complete_checked_whole_scope",
+      "focused_complete_checked": [
+        "atomic_ready_publication_and_safe_closed_resolver",
+        "recovery_specific_content_ticket_reauthorization_source_range_budget_logout_and_audit_arm",
+        "owner_bound_purpose_exact_target_delivery_adapter_with_post_open_revalidation",
+        "admin_owner_fresh_retain_expected_job_revision_monotonic_deadline_and_immutable_hard_cap",
+        "retained_effective_deadline_remains_resolvable_after_initial_workspace_anchor_expires",
+        "published_resultset_ready_cleanup_failed_and_expired_revoking_claim_with_job_node_resultset_lock_order_and_lost_cas_release",
+        "unpublished_cleanup_due_workspace_claim_with_separate_cleanup_tuple_shared_node_boundary_and_lost_cas_release",
+        "resource_scoped_content_revoke_cancel_registration_barrier_bounded_drain_exact_lease_release_and_published_unpublished_fenced_renewal_through_drained",
+        "cleanup_specific_immutable_permit_read_only_target_observation_two_transaction_renewal_durable_validated_cas_and_ownerless_drained_failure_retry_with_paired_guard",
+        "private_current_v2_target_root_registry_and_transaction_bound_encrypted_immutable_plan_locator_snapshot",
+        "strict_authenticated_recovery_workspace_marker_codec_and_immutable_creator_fence_interoperability",
+        "exact_plan_snapshot_bound_purpose_exact_ssh_sftp_authenticated_no_overwrite_workspace_marker_create_and_observational_validation",
+        "exact_executed_plan_sealed_verify_authority_and_purpose_exact_sftp_regular_file_present_observation",
+        "exact_executed_plan_item_write_authority_and_no_overwrite_sftp_regular_file_create",
+        "exact_observed_draft_plan_target_probe_plus_production_external_source_policy_evidence_composite_preflight_and_locked_durable_revalidation",
+        "exact_delete_operation_prior_bound_lstat_present_identity_and_absent_verify_observation",
+        "in_place_overwrite_historical_key_artifact_binding_and_exact_private_item_authority",
+        "in_place_overwrite_authenticated_intent_and_exact_post_preparation",
+        "in_place_overwrite_exact_prior_capture_and_same_invocation_mismatched_winner_restore",
+        "in_place_overwrite_closed_tuple_publish_authenticated_acknowledgement_safe_residue_cleanup_and_source_free_replay",
+        "in_place_overwrite_durable_checkpoint_before_published_marker_finalize_and_preterminal_takeover_reconciliation",
+        "in_place_overwrite_authority_error_resource_context_and_privacy_matrix",
+        "a2e2_a3a_v13_focused_acceptance_design_code_and_fresh_gate_review",
+        "a3b_r48_r54_exact_mirror_delete_and_a3b_v1_focused_review",
+        "a3c_r55_r60_owned_workspace_cleanup_terminalization_and_a3c_v1_focused_review",
+        "a3d_r61_exact_read_only_ssh_purpose_root_scoped_session_and_bounded_safe_root_catalog",
+        "a3d_r62_complete_keyed_expected_set_current_revision_snapshot_and_hmac_sealed_reconciliation_permit",
+        "a3d_r63_direct_child_read_only_classification_and_sanitized_incomplete_scan",
+        "a3d_r64_authenticated_cursor_prefix_replay_cumulative_pages_and_hard_bounds",
+        "a3d_r65_aggregate_audit_alert_and_fresh_downgrade_clear",
+        "a3d_r66_resource_error_and_privacy_closure",
+        "a3d_v1_focused_review"
+      ],
+      "open": [],
+      "verification": "v14_complete_checked_whole_scope_fresh_remaining_13_acceptance_rows_mapped_and_closed_no_open_critical_or_important_focused_a3_normal_13_134s_race_count_5_287_599s_whole_recovery_normal_30_007s_race_103_294s_a2a_target_root_snapshot_normal_0_370s_race_count_5_6_795s_required_real_postgresql_recovery_normal_8_528s_race_12_067s_no_skip_complete_000069_sqlite_postgresql_matrix_293_149s_vet_backend_lint_gofmt_diff_privacy_static_trellis_json_jsonl_manifest_protected_hash_git_state_and_fixture_cleanup_passed_2026_08_09",
+      "approved_next_batch": {
+      "status": "focused_complete_checked",
+      "decision": "scheme_a1_exact_plan_snapshot_session_capability_plus_real_sftp_workspace_marker",
+      "scope": "immutable_locked_plan_session_binding_purpose_exact_ssh_sftp_lifetime_fixed_no_overwrite_authenticated_marker_create_and_bounded_read_only_validation",
+      "exact_product_paths": [
+        "backend/internal/backupasset/recovery/target.go",
+        "backend/internal/backupasset/recovery/worker.go",
+        "backend/internal/backupasset/recovery/result_lifecycle.go"
+      ],
+      "focused_test_paths": [
+        "backend/internal/backupasset/recovery/target_test.go",
+        "backend/internal/backupasset/recovery/worker_test.go",
+        "backend/internal/backupasset/recovery/result_lifecycle_test.go",
+        "backend/internal/backupasset/recovery/testutil_test.go"
+      ],
+      "stop": "no_a2_payload_operations_a3_remove_owned_job_dir_delete_tombstone_terminal_cleanup_runtime_main_orphan_quarantine_or_git_delivery",
+      "verification": "genuine_r12_r15_red_green_plus_two_genuine_review_defect_red_green_combined_normal_stateful_race_count_5_full_recovery_normal_and_race_required_postgresql_normal_and_race_no_skip_static_manifest_trellis_and_staged_zero_passed_2026_08_04"
+    },
+    "a2a_exact_plan_regular_file_verify": {
+      "status": "focused_complete_checked",
+      "decision": "scheme_a2a_exact_executed_plan_observation_authority_plus_present_regular_file_verify",
+      "scope": "sealed_locked_plan_verify_permit_purpose_exact_recovery_verify_session_canonical_bounded_regular_file_content_observation_and_stable_opaque_revision",
+      "exact_product_paths": [
+        "backend/internal/backupasset/recovery/target.go",
+        "backend/internal/backupasset/recovery/worker.go",
+        "backend/internal/backupasset/recovery/executor.go"
+      ],
+      "focused_test_paths": [
+        "backend/internal/backupasset/recovery/target_test.go",
+        "backend/internal/backupasset/recovery/worker_test.go",
+        "backend/internal/backupasset/recovery/executor_test.go"
+      ],
+      "stop": "no_a2b_create_write_a2c_preflight_a2d_result_read_a2e_overwrite_lstat_absence_a3_remove_delete_terminal_cleanup_runtime_main_orphan_quarantine_or_git_delivery",
+      "verification": "genuine_r16_r20_red_green_plus_controller_review_namespace_classification_red_green_combined_normal_race_count_5_full_recovery_normal_and_race_required_postgresql_normal_and_race_no_skip_static_manifest_trellis_and_staged_zero_passed_2026_08_04"
+    },
+    "a2b_exact_plan_no_overwrite_regular_file_create": {
+      "status": "focused_complete_checked",
+      "decision": "scheme_a_exact_plan_no_overwrite_regular_file_create",
+      "scope": "sealed_locked_handoff_item_write_authority_purpose_exact_recovery_write_session_mode_exact_parent_preparation_private_exclusive_temp_bounded_stream_standard_sftp_rename_and_a2a_revision_result",
+      "exact_product_paths": [
+        "backend/internal/backupasset/recovery/target.go",
+        "backend/internal/backupasset/recovery/executor.go"
+      ],
+      "focused_test_paths": [
+        "backend/internal/backupasset/recovery/target_test.go",
+        "backend/internal/backupasset/recovery/executor_test.go"
+      ],
+      "tdd": "genuine_r21_r24_red_green_r25_inherited_green_after_call_time_fake_authority_recording_no_reconstructed_red",
+      "review": "controller_inline_design_40_1_through_40_7_and_all_a2b_prd_acceptance_rows_no_remaining_critical_or_important_finding",
+      "stop": "no_a2c_preflight_a2d_result_read_a2e_overwrite_lstat_absence_a3_remove_delete_tombstone_terminal_cleanup_runtime_main_orphan_quarantine_or_git_delivery",
+      "verification": "a1_a2a_a2b_focused_normal_and_race_count_5_whole_recovery_normal_and_race_required_postgresql_normal_and_race_no_skip_vet_backend_lint_owned_format_static_privacy_trellis_json_jsonl_exact_manifest_protected_hash_branch_head_and_staged_zero_passed_2026_08_04"
+    },
+    "a2c_split_preflight": {
+      "status": "focused_complete_checked",
+      "decision": "scheme_a_split_target_owned_probe_from_source_policy_composition",
+      "a2c1_status": "focused_complete_checked",
+      "a2c1_scope": "exact_observed_draft_plan_private_preflight_proof_purpose_exact_recovery_preflight_session_fixed_bounded_principal_probe_sftp_canonical_root_path_statvfs_capacity_target_existence_stable_target_owned_revisions_and_buildable_external_evidence_interface_private_proof_with_test_only_deterministic_issuer",
+      "a2c1_product_paths": [
+        "backend/internal/backupasset/recovery/preflight.go",
+        "backend/internal/backupasset/recovery/target.go"
+      ],
+      "a2c1_test_paths": [
+        "backend/internal/backupasset/recovery/preflight_test.go",
+        "backend/internal/backupasset/recovery/target_test.go"
+      ],
+      "a2c2_status": "focused_complete_checked",
+      "a2c2_scope": "production_recovery_owned_provider_repository_adapter_issues_independently_proved_source_capability_policy_finding_overlap_reserve_evidence_composed_with_target_owned_facts_outside_transactions_then_locked_durable_snapshot_revalidation",
+      "a2c2_product_paths": [
+        "backend/internal/backupasset/recovery/preflight.go"
+      ],
+      "a2c2_test_paths": [
+        "backend/internal/backupasset/recovery/preflight_test.go",
+        "backend/internal/backupasset/recovery/service_test.go"
+      ],
+      "a2c2_tdd": "genuine_r31_missing_production_adapter_compile_red_r32_test_proof_durable_acceptance_red_r33_production_drift_error_collapse_red_then_exact_green_plus_v10_canceled_sqlite_connection_schema_lifetime_race_red_green",
+      "a2c2_review": "controller_inline_prd_design_implement_and_production_delta_review_no_remaining_critical_or_important_product_finding_one_v10_test_fixture_lifetime_finding_closed",
+      "a2c2_verification": "focused_normal_and_race_whole_preflight_normal_and_race_whole_recovery_normal_and_race_required_real_postgresql_normal_and_race_no_skip_vet_backend_lint_owned_format_diff_static_privacy_trellis_json_jsonl_exact_manifest_protected_hash_branch_head_and_staged_zero_passed_2026_08_05",
+      "review_gate": "a2c1_and_a2c2_each_separately_user_approved_and_focused_reviewed",
+      "stop": "no_a2d_result_read_a2e_overwrite_lstat_absence_a3_remove_delete_tombstone_terminal_cleanup_runtime_main_orphan_quarantine_or_git_delivery"
+    },
+      "a2d_resolver_bound_published_result_read": {
+        "status": "focused_complete_checked"
+      },
+      "a2e1_delete_lstat_exact_absence": {
+        "status": "focused_complete_checked",
+        "decision": "split_a2e_observation_only_delete_lstat_and_exact_absent_verify",
+        "scope": "locked_handoff_operation_prior_bound_verify_proof_purpose_exact_recovery_verify_session_two_complete_canonical_observations_payload_bound_present_identity_and_exact_absence_revision_parity",
+        "exact_product_paths": [
+          "backend/internal/backupasset/recovery/target.go",
+          "backend/internal/backupasset/recovery/worker.go"
+        ],
+        "focused_test_paths": [
+          "backend/internal/backupasset/recovery/target_test.go",
+          "backend/internal/backupasset/recovery/worker_test.go",
+          "backend/internal/backupasset/recovery/executor_test.go"
+        ],
+        "tdd": "genuine_r38_r41_red_green_plus_v12_authority_shape_compile_red_and_locked_handoff_operation_prior_substitution_behavior_red_green",
+        "review": "controller_inline_prd_a2e1_design_43_1_through_43_6_review_no_remaining_critical_or_important_finding_after_operation_prior_authority_correction",
+        "stop": "no_a2e2_overwrite_a3_remove_owned_job_dir_delete_tombstone_terminal_cleanup_runtime_main_orphan_quarantine_or_git_delivery",
+        "verification": "r38_r41_and_authority_regressions_normal_race_whole_recovery_normal_race_required_real_postgresql_normal_race_no_skip_vet_backend_lint_owned_format_static_privacy_trellis_json_jsonl_exact_manifest_protected_hash_branch_head_and_staged_zero_passed_2026_08_05"
+      },
+      "a2e2_a3a_authenticated_overwrite_sidecar": {
+        "status": "focused_complete_checked",
+        "decision": "scheme_a_same_parent_hmac_sidecars_exact_prior_capture_no_overwrite_publish_authenticated_published_marker_checkpoint_before_finalize",
+        "scope": "literal_in_place_overwrite_historical_cleanup_key_artifact_binding_reentrant_remote_state_machine_safe_restore_existing_operation_checkpoint_fresh_finalize_proof_and_preterminal_marker_absence",
+        "exact_product_paths": [
+          "backend/internal/backupasset/recovery/target.go",
+          "backend/internal/backupasset/recovery/worker.go",
+          "backend/internal/backupasset/recovery/executor.go"
+        ],
+        "focused_test_paths": [
+          "backend/internal/backupasset/recovery/target_test.go",
+          "backend/internal/backupasset/recovery/worker_test.go",
+          "backend/internal/backupasset/recovery/executor_test.go"
+        ],
+        "schema": "reuse_existing_models_paired_000069_operation_checkpoint_job_item_key_version_no_new_table_column_phase_migration_or_path",
+        "approved_tradeoff": "temporary_final_absence_during_captured_prior_verification_bounded_by_expected_prior_bytes_context_deadline_and_transport_progress_not_fixed_wall_clock",
+        "implementation_plan": "r42_r47_and_v13_focused_complete_checked",
+        "tdd": "genuine_r42_missing_artifact_binding_and_item_proof_fields_compile_red_then_exact_green_plus_genuine_r43_missing_intent_post_and_collision_classification_behavior_red_then_exact_green_plus_genuine_r44_prepared_tuple_stopped_before_capture_and_mismatch_restore_behavior_red_then_exact_green_plus_genuine_r45_captured_published_and_acknowledged_tuple_behavior_red_then_exact_green_plus_regular_and_authenticated_marker_final_canonical_snapshot_drift_review_red_then_exact_green_plus_genuine_r46_missing_checkpoint_bound_finalize_order_reentry_predecessor_takeover_and_pre_source_failure_finalize_behavior_red_then_exact_green_plus_genuine_r47_formatted_private_authority_leak_and_non_nil_dial_sftp_error_resource_leak_red_then_exact_green",
+        "review": "controller_inline_prd_a2e2_acceptance_design_44_1_through_44_7_r42_r47_target_worker_executor_review_no_remaining_critical_or_important_product_finding_after_manifest_only_duplicate_row_correction",
+        "verification": "r42_r47_focused_normal_race_count_5_a1_a2e2_broad_testrecovery_whole_recovery_normal_race_required_real_postgresql_all_postgres_normal_race_no_skip_zero_temp_schema_role_residue_vet_backend_lint_owned_format_diff_static_privacy_trellis_json_jsonl_exact_manifest_red_green_protected_hash_branch_head_remote_and_staged_zero_passed_2026_08_05",
+        "stop": "no_general_a3_delete_remove_owned_job_dir_tombstone_terminal_cleanup_lease_release_orphan_quarantine_runtime_main_whole_task7_review_or_git_delivery"
+      },
+      "a3b_remote_delete_tombstone": {
+        "status": "focused_complete_checked",
+        "focused_complete_checked": [
+          "r48_delete_only_consumed_authority_and_historical_cleanup_key_artifact_binding",
+          "r49_authenticated_delete_tuple_classifier",
+          "r50_mutation_instant_capture_closed_kind_verification_and_same_invocation_mismatch_restore",
+          "r51_verified_kind_specific_captured_leaf_delete_ordered_marker_cleanup_and_clean_tuple_reentry",
+          "r52_durable_consumed_delete_authority_issuance_and_executor_reconciliation_order",
+          "r53_retryable_unavailability_and_contradictory_remote_outcome_separation",
+          "r54_resource_live_revocation_and_privacy_matrix",
+          "a3b_v1_focused_review"
+        ],
+        "closure": "r48_r54_and_a3b_v1_focused_complete_checked",
+        "verification": "a3b_v1_genuine_review_defect_red_green_r48_r54_normal_race_count_5_whole_recovery_normal_race_required_real_postgresql_no_skip_vet_backend_lint_gofmt_diff_privacy_static_trellis_manifest_protected_hash_git_state_passed_2026_08_06",
+        "stop": "a3b_v1_closed_then_a3c_a3d_and_v14_executed_in_the_approved_order"
+      },
+      "a3c_bounded_owned_workspace_cleanup": {
+        "status": "focused_complete_checked",
+        "focused_complete_checked": [
+          "r55_cleanup_claim_and_one_pass_advance",
+          "r56_authenticated_capture_and_verified_marker_reentry",
+          "r57_bounded_depth_first_cleanup_walker",
+          "r58_bounded_progress_retryable_failure_and_takeover",
+          "r59_durable_deleted_clean_tuple_and_atomic_tombstone",
+          "r60_crash_resource_close_and_privacy_matrix",
+          "a3c_v1_whole_cross_engine_static_privacy_and_structural_review"
+        ],
+        "verification": "r60_focused_normal_race_count_5_whole_recovery_normal_race_count_5_required_real_postgresql_recovery_normal_race_no_skip_full_000069_sqlite_postgresql_migration_normal_no_skip_vet_backend_lint_owned_gofmt_diff_static_privacy_trellis_json_jsonl_manifest_protected_hash_branch_head_and_staged_zero_passed_2026_08_07",
+        "fixture_correction": "first_write_migration_fixture_uses_canonical_recovery_target_root_locator_digest_after_genuine_sqlite_and_postgresql_source_drift_red",
+        "stop": "stop_before_a3d_task8_runtime_main_v14_and_git_delivery_obtain_explicit_approval_for_a3d"
+      },
+      "a3d_logical_reconciliation": {
+        "status": "focused_complete_checked",
+        "focused_complete_checked": [
+          "r61_exact_read_only_ssh_purpose_root_scoped_session_and_bounded_safe_root_catalog",
+          "r62_complete_keyed_expected_set_current_revision_snapshot_and_hmac_sealed_reconciliation_permit",
+          "r63_direct_child_read_only_classification_and_sanitized_incomplete_scan",
+          "r64_authenticated_cursor_prefix_replay_cumulative_pages_and_hard_bounds",
+          "r65_aggregate_audit_alert_and_fresh_downgrade_clear",
+          "r66_resource_error_and_privacy_closure",
+          "a3d_v1_focused_review"
+        ],
+        "next": "whole_task_7_v14_completed_next_boundary_is_task_8_runtime_main_only_after_its_own_authorization",
+        "r65_status": "focused_complete_checked",
+        "r65_verification": "genuine_aggregate_audit_and_downgrade_orchestration_red_green_plus_genuine_foundation_operation_contract_red_then_user_approved_exact_pair_green_r65_exact_normal_race_count_5_r61_r65_combined_normal_race_count_5_whole_recovery_normal_race_required_real_postgresql_normal_race_no_skip_zero_schema_role_and_fixture_residue_full_backupasset_vet_backend_lint_owned_gofmt_and_diff_passed_2026_08_09",
+        "r65_blockers": [],
+        "r65_foundation_exception": {
+          "status": "user_approved_implemented_checked",
+          "allowed_pair": "AuditActionRecoveryCleanup_plus_AuditFieldOperation_recovery_reconcile_only",
+          "paths": [
+            "backend/internal/backupasset/audit_action.go",
+            "backend/internal/backupasset/audit_action_test.go"
+          ],
+          "negative_matrix": "other_cleanup_operation_non_string_and_cross_action_reuse_rejected",
+          "manifest": "base_9_current_55_create_81_modify_145_unique_paths_unchanged_two_foundation_paths_independent_approved_exception_allowlist"
+        },
+        "r66_status": "focused_complete_checked",
+        "r66_verification": "genuine_canceled_context_nil_receiver_nil_clock_precedence_red_then_minimal_context_first_green_four_r66_matrices_normal_0_765s_race_count_5_3_678s_r61_r66_combined_normal_54_924s_race_count_5_246_333s_whole_recovery_normal_31_924s_race_106_300s_zero_mutation_privacy_resource_close_and_error_precedence_passed_2026_08_09",
+        "r66_blockers": [],
+        "a3d_v1_status": "focused_complete_checked",
+        "a3d_v1_verification": "fresh_post_format_r61_r66_combined_normal_56_612s_race_count_5_259_003s_whole_recovery_normal_31_729s_race_106_913s_required_real_postgresql_recovery_normal_8_023s_race_11_200s_no_skip_paired_sqlite_and_postgresql_000069_migration_passed_sshutil_settings_vet_backend_lint_owned_gofmt_diff_privacy_static_zero_mutation_trellis_json_jsonl_manifest_exception_gate_protected_hash_git_state_passed_zero_fixture_residue_2026_08_09",
+        "verification": "r61_r66_and_a3d_v1_focused_complete_checked_normal_race_required_real_postgresql_and_paired_migration_vet_backend_lint_owned_gofmt_diff_zero_mutation_direct_log_privacy_trellis_json_jsonl_exact_manifest_plus_approved_foundation_exception_protected_hash_branch_head_remote_worktree_and_staged_zero_passed_2026_08_09",
+        "review": "controller_inline_a3d_acceptance_design_46_1_46_7_46_9_47_1_and_code_review_confirmed_independent_read_only_port_all_five_categories_authenticated_prefix_replay_hard_bounds_required_sinks_fresh_downgrade_authority_context_precedence_resource_closure_privacy_and_zero_mutation_with_no_remaining_critical_or_important_finding",
+        "stop": "v14_task8_runtime_main_and_git_delivery_not_started_at_this_checkpoint_obtain_explicit_approval_before_v14"
+      },
+      "v14_whole_task_7_closure": {
+        "status": "complete_checked_whole_scope",
+        "date": "2026-08-09",
+        "acceptance": "remaining_7_target_root_plan_snapshot_and_6_a2a_exact_plan_regular_file_rows_mapped_to_final_symbols_and_fresh_selectors_then_checked",
+        "review": "full_plan_preflight_job_worker_target_resultset_content_cleanup_reconciliation_flow_and_all_task_7_modified_paths_reviewed_zero_open_critical_or_important_finding",
+        "dynamic": "a3b_a3c_a3d_normal_13_134s_race_count_5_287_599s_whole_recovery_normal_30_007s_race_103_294s_a2a_target_root_snapshot_normal_0_370s_race_count_5_6_795s_sshutil_settings_config_normal_and_race_passed",
+        "postgres": "one_user_approved_isolated_postgresql_18_fixture_required_recovery_normal_8_528s_race_12_067s_no_skip_complete_000069_sqlite_postgresql_matrix_293_149s_zero_schema_role_residue_container_and_volume_removed_old_fixture_absent",
+        "static": "vet_backend_lint_zero_issues_dirty_go_gofmt_diff_whitespace_conflict_direct_log_posixrename_filepath_registry_path_privacy_and_read_only_zero_mutation_gates_passed",
+        "trellis": "child_parent_validate_task_parent_json_and_child_jsonl_parse_passed_17_18_and_0_0_entries",
+        "manifest": "phase1_9_create_55_modify_81_total_145_unique_145_duplicates_0_dirty_95_manifest_dirty_91_protected_dirty_2_approved_exception_dirty_2_outside_0_staged_0_create_present_at_head_0_modify_missing_at_head_0_future_000070_71_0",
+        "path_label_correction": "protected_fixture_is_root_recovery_testdata_rsync_local_to_remote_json_not_absent_backend_manifest_create_path_content_unchanged",
+        "protected_hashes": {
+          "go_mod": "b767fc9ef9376c651d0493329b710ac8dcf8d77e52686b847d244aff9f6d48fd",
+          "recovery_testdata_rsync_local_to_remote_json": "2570bd4472541322d902c4cdf2fe43f247b69f19d335558830e749567f763892"
+        },
+        "git": "branch_codex_backup_assets_controlled_recovery_head_main_origin_main_remote_main_51771654a85967656fe1ca69686590b734ff9214_remote_feature_absent_worktrees_10_index_lock_0_staged_0_no_delivery_action",
+        "closure_boundary": "task_7_only_child_13_in_progress_tasks_8_12_and_git_delivery_open_parent_planning_program_12_of_15",
+        "next": "task_8_runtime_main_requires_its_own_authorized_plan_no_stage_commit_push_pr_or_ci_inside_v14"
+      },
+      "tasks_1_to_7_checkpoint_delivery": {
+        "status": "user_approved_fresh_make_check_passed_pending_local_commit",
+        "date": "2026-08-10",
+        "scope": "cumulative_tasks_1_to_7_manifest_dirty_91_plus_r65_foundation_exception_2",
+        "excluded_protected_paths": [
+          "go.mod",
+          "recovery/testdata/rsync_local_to_remote.json"
+        ],
+        "pre_stage_accounting": "dirty_95_stage_allow_93_protected_2_outside_0_staged_0",
+        "ordering": "finish_local_checkpoint_and_session_record_leave_only_protected_dirty_paths_before_task_8",
+        "boundary": "child_13_not_archived_tasks_8_to_12_push_pr_ci_merge_release_still_open"
+      }
+    },
+    "task_4_b1_scope_amendment": {
+      "status": "complete_approved_as_part_of_task_4_focused_closure",
+      "reason": "provider_local_raw_locator_issuer_forgeable_and_string_path_revalidation_has_root_source_toctou",
+      "added_modify_path_count": 8,
+      "added_modify_paths": [
+        "backend/internal/backupasset/provider/rsync.go",
+        "backend/internal/backupasset/provider/rsync_test.go",
+        "backend/internal/backupasset/repository/query.go",
+        "backend/internal/backupasset/repository/query_test.go",
+        "backend/internal/fileaccess/contracts.go",
+        "backend/internal/fileaccess/local_linux.go",
+        "backend/internal/fileaccess/local_other.go",
+        "backend/internal/fileaccess/local_test.go"
+      ],
+      "removed_path_count": 0,
+      "removed_paths": [],
+      "boundary": "provider_portable_closed_contracts_and_typed_errors_repository_concrete_rsync_port_and_descriptor_resolver_fileaccess_pinned_no_follow_tree_recovery_scalar_ref_only_runtime_injection",
+      "dependency_direction": "recovery_to_provider_repository_to_provider_runtime_to_repository_recovery_provider",
+      "task_4": "complete_approved",
+      "tasks_5_to_10": "not_executed"
+    },
+    "task_4_catalog_completion_blocker_amendment": {
+      "status": "complete_approved",
+      "reason": "generic_provider_catalog_record_projection_omits_fingerprint_strength_committed_managed_rsync_uses_that_session_repository_only_seals_locator_and_catalog_indexer_rejects_empty_strength",
+      "prior_manifest": "9_current_55_create_80_modify_144_total",
+      "added_modify_path_count": 1,
+      "added_modify_paths": [
+        "backend/internal/backupasset/provider/catalog.go"
+      ],
+      "already_manifested_tdd_test_paths": [
+        "backend/internal/backupasset/provider/rsync_test.go",
+        "backend/internal/backupasset/repository/query_test.go"
+      ],
+      "inspected_unchanged_test_paths": [
+        "backend/internal/backupasset/provider/catalog_contract_test.go",
+        "backend/internal/backupasset/repository/catalog_read_test.go",
+        "backend/internal/backupasset/catalog/indexer_test.go"
+      ],
+      "current_manifest": "9_current_55_create_81_modify_145_total",
+      "minimal_green": "project_missing_generic_entry_fingerprint_as_closed_none_in_provider_catalog_without_weakening_repository_or_catalog_validation",
+      "planned_red": "real_committed_managed_rsync_catalog_fixture_must_fail_before_green_then_complete_with_fingerprint_none_through_repository_and_catalog_indexer",
+      "required_gates": "focused_provider_catalog_repository_and_task4_normal_race_vet_and_static_gates",
+      "implementation": "observed_red_green_complete",
+      "reviews": "spec_approved_quality_approved",
+      "task_4": "complete_approved",
+      "tasks_5_to_10": "not_executed"
+    },
+    "task_4_completion_review_receipt": {
+      "status": "complete_approved",
+      "specification": "SPEC APPROVED",
+      "quality": "QUALITY APPROVED",
+      "focused_chronology": "provider_missing_strength_red_real_repository_immutable_rsync_catalog_point_changed_red_detached_factory_fingerprint_rewrite_rejected_authenticated_request_source_fingerprint_real_service_open_catalog_read_indexer_normal_race_green",
+      "inherited_green_follow_up": "not_a_new_red",
+      "broad_provider": "blocked_host_ifree_0_not_claimed",
+      "scope": "focused_task_4_only_no_child_full_postgresql_frontend_ci_pr_merge_claim",
+      "child": "in_progress",
+      "parent": "planning",
+      "tasks_5_to_10": "not_executed"
+    },
+    "task_5": {
+      "scope": "authorization_receipts_atomic_effects_operation_snapshot_settings_and_standalone_retention_owner",
+      "status": "complete_approved",
+      "implementation": "paired_000069_evidence_arm_four_atomic_receipt_effect_transactions_proof_session_grant_deadline_order_hash_only_client_secrets_exact_operation_rows_stateless_reaper_standalone_owner",
+      "chronology": "historical_reds_preserved_expanded_direct_sql_and_cross_boundary_concurrency_coverage_immediate_green_no_missing_red_output_reconstructed_fixture_clock_failure_not_product_red",
+      "focused_evidence": "unchanged_sqlite_settings_operation_snapshot_and_aggregate_selectors_repeated_sqlite_and_postgresql_races_required_real_postgresql_direct_sql_concurrency_rollback_reaper_and_full_000069_vet_format_privacy_passed",
+      "reviews": "spec_approved_quality_approved_ready",
+      "review_closure": {
+        "status": "complete_approved_2026-07-31",
+        "specification_receipt": {
+          "thread": "019fb71a-75df-7770-a17d-9b3d8647d99d",
+          "result": "SPEC APPROVED",
+          "coverage": "exact_steps_7_11_12_sqlite_postgresql_races_full_postgresql_000069_manifest_static_trellis_index_task_8_graph_intentionally_deferred"
+        },
+        "quality_receipt": {
+          "thread": "019fb73d-03b6-7111-baf3-83e1ae2e3f8b",
+          "result": "QUALITY APPROVED: READY",
+          "findings": "none_critical_important_minor",
+          "coverage": "focused_eight_package_sqlite_race_x10_runtime_owner_x50_postgresql_winner_x10_direct_sql_rollback_vet_format_diff_trellis_manifest_index"
+        },
+        "scope_boundary": "task_5_only_no_task_6_credit_tasks_7_to_10_and_full_task_8_graph_frontend_child_full_ci_delivery_not_executed_or_open",
+        "manifest": "9_current_55_create_81_modify_145_total",
+        "unrelated_dirty_paths": [
+          "go.mod",
+          "recovery/testdata/rsync_local_to_remote.json"
+        ]
+      },
+      "task_6": "in_progress_planning_repair_no_red_green_credit",
+      "tasks_7_to_10": "not_executed",
+      "child": "in_progress",
+      "parent": "planning"
+    },
+    "task_6_restart_adoption_persistence_amendment": {
+      "status": "complete_checked_whole_scope_f6_f3_f4_b1_b2_b3_and_corrections_1_20_reviewed_and_gated",
+      "scope": "restart_adoption_expected_post_identity_canonical_locator_dual_digest_preallocated_workspace_recovery_local_item_aead_grant_first_prepared_aggregate_key_loss_unresolved_remote_outcome_and_paired_000069_guards",
+      "implementation": "b1_e1_e2_e3_and_b1_aggregate_complete_checked_b2_e1_e2_and_b2_aggregate_complete_checked_b3_focused_proof_incorporated_f3_f4_f6_complete_at_task6_scope_corrections_1_20_implemented_whole_specification_quality_and_final_dynamic_gates_complete_checked",
+      "review_chronology": {
+        "initial_independent_review": "3_critical_2_important",
+        "first_revision": "rejected_invented_delete_absence_digest",
+        "corrected_controlling_revision_review": "2_important_skip_source_identity_conflation_and_insert_before_grant_ordering",
+        "corrections": "both_adopted",
+        "final_independent_result": "SPEC APPROVED",
+        "nonblocking_clarification": "skip_prior_target_bytes_are_separately_frozen_immutable_and_exact_key_version_lock_is_transaction_scoped_through_grant_cas_and_aggregate_insert",
+        "locator_contract_design_result": "DESIGN READY",
+        "controller_locator_contract_decision": "approved_inside_then_existing_first_thirteen_corrections_without_scope_or_manifest_delta",
+        "fourteenth_correction_decision": "proved_complete_at_focused_correction_scope_after_independent_spec_approval_and_controller_inline_quality_review",
+        "f6_decision": "complete_approved_at_focused_live_mutation_permit_scope_after_genuine_controlled_red_green_independent_spec_and_quality_approval_and_required_real_postgresql_gate",
+        "b1_e3_decision": "complete_checked_for_corrections_11_12_13_after_five_controlled_behavior_removals_unchanged_selector_red_final_green_and_dual_engine_scope_gates",
+        "b2_e1_decision": "complete_checked_for_correction_4_plus_delete_row_after_exact_absence_authority_synthetic_digest_and_paired_delete_legality_controlled_red_final_green",
+        "b2_e2_decision": "complete_checked_for_correction_6_after_absence_chain_domain_and_consumed_delete_authority_reuse_controlled_red_final_green_with_sqlite_and_required_real_postgresql_multi_delete_evidence",
+        "f4_decision": "complete_checked_for_task6_owned_preallocated_workspace_reservation_immutable_24_hour_deadline_and_cleanup_only_classification_after_two_controlled_behavior_removal_reds_final_green_and_sqlite_required_real_postgresql_scope_gates",
+        "whole_task6_review_2026_08_03": "not_approved_four_blockers_mapped_to_user_approved_plan_a_corrections_15_17_no_focused_credit_revoked",
+        "whole_task6_final_review_2026_08_03": "approved_specification_and_quality_no_open_critical_or_important_findings_fresh_combined_and_whole_gates_passed_task6_complete_checked"
+      },
+      "product_corrections_count": 20,
+      "product_corrections": [
+        "freeze_expected_post_identity_digest_and_bytes_by_operation_with_length_framed_empty_delete_post_field",
+        "create_overwrite_fresh_restore_entry_must_equal_persisted_post_digest_and_bytes",
+        "skip_revalidates_source_separately_and_verifies_unchanged_target_against_frozen_prior_digest_and_bytes",
+        "delete_uses_explicit_absent_observation_and_never_an_absence_digest",
+        "target_verify_uses_closed_present_absent_expectation_observation_union_with_strong_observed_revision",
+        "target_chain_domain_binds_absence_separately_while_expected_post_remains_empty",
+        "every_schema_v2_operation_including_delete_persists_canonical_target_relative_locator_and_semantic_target_digest_separate_from_final_target_object_digest",
+        "execute_preallocates_job_item_and_isolated_workspace_identity_outside_tx_and_prepare_first_write_reuses_the_persisted_none_state_identity",
+        "job_item_locator_uses_recovery_local_row_bound_aead_with_positive_explicit_key_cipher_versions_and_complete_length_framed_binding_without_generic_model_hooks",
+        "generic_enc_v2_is_the_encrypted_preflight_snapshot_while_generic_encryption_remains_for_operation_rows_and_job_workspace_locator",
+        "adopt_interrupted_operation_uses_db_load_decrypt_validation_then_transaction_free_target_io_then_final_relock_fenced_cas",
+        "fatal_cleanup_key_loss_reconciles_db_only_and_execute_rechecks_byte_equal_prepared_aggregate_and_exact_active_key_before_grant_cas_first_atomic_insert",
+        "paired_000069_freezes_workspace_identity_dual_digests_cipher_versions_operation_product_uniqueness_and_terminal_projection_without_000070",
+        "post_arm_invalid_or_contradictory_write_and_verification_outcomes_append_terminal_operation_unresolved_checkpoint_and_atomically_project_remote_outcome_unresolved_needs_attention_without_chain_advance",
+        "post_arm_target_call_errors_without_a_trustworthy_returned_product_use_existing_write_result_invalid_or_observation_invalid_empty_product_arms_and_restart_adoption_mismatch_may_lack_write_facts",
+        "restart_adoption_uses_injected_repository_rsync_source_resolver_and_every_verified_operation_gets_item_bound_normal_checkpoint_while_source_failure_preserves_completed_evidence_then_terminalizes_needs_attention",
+        "isolated_owned_marker_success_is_durably_cased_reserved_to_marker_created_before_item_io_and_paired_000069_enforces_the_complete_one_way_workspace_phase_graph",
+        "isolated_takeover_preserves_immutable_marker_creator_provenance_and_requires_current_operation_checkpoint_history_for_writing_continuation_and_pending_aware_adoption",
+        "reserved_marker_takeover_atomically_persists_a_private_current_attempt_and_node_fence_validation_tuple_while_marker_created_takeover_requires_adoption_before_first_item_replay",
+        "consumed_exact_mirror_delete_set_authority_self_validates_its_immutable_historical_checkpoint_and_grant_tuple_while_fresh_takeover_requires_current_checkpoint_adoption_before_bearer_free_continuation"
+      ],
+      "fourteenth_unresolved_remote_outcome_correction": {
+        "status": "proved_complete_focused_correction_scope_only_task_6_whole_gates_and_reviews_open",
+        "checkpoint_phase": "operation_unresolved",
+        "failure_category": "remote_outcome_unresolved",
+        "unresolved_categories": [
+          "revision_disagreement",
+          "verification_mismatch",
+          "write_result_invalid",
+          "observation_invalid"
+        ],
+        "checkpoint_facts": [
+          "job_item_id",
+          "unresolved_category",
+          "write_result_digest",
+          "write_target_revision",
+          "observation_digest",
+          "observed_target_revision",
+          "observed_presence",
+          "source_revalidation_outcome"
+        ],
+        "closed_values": "observed_presence_empty_present_absent_source_revalidation_outcome_matched_drifted_failed",
+        "category_field_legality": {
+          "revision_disagreement": "valid_write_and_observation_digests_and_revisions_present_with_revisions_unequal",
+          "verification_mismatch": "valid_observation_skip_write_fields_neutral_create_and_overwrite_valid_write_digest_and_revision_existing_b2_delete_contract_unchanged",
+          "write_result_invalid": "only_sanitized_length_framed_invalid_write_result_digest_no_structured_write_revision_or_observation_facts",
+          "observation_invalid": "valid_write_facts_when_applicable_only_sanitized_length_framed_invalid_observation_digest_structured_observation_facts_neutral"
+        },
+        "source_revalidation_coexistence": "drifted_or_failed_may_coexist_without_replacing_remote_outcome_unresolved_or_its_unresolved_category",
+        "neutrality_and_binding": "all_preexisting_phases_require_neutral_unresolved_fields_operation_unresolved_binds_current_job_item_canonical_operation_digest_prior_target_revision_attempt_node_source_preflight_and_authority_fences_plus_sanitized_length_framed_remote_facts_has_empty_next_target_revision_and_never_advances_target_chain",
+        "predecessor_and_terminality": "operation_unresolved_may_be_sequence_1_or_follow_workspace_reserved_earlier_operation_or_delete_authority_consumed_history_as_applicable_is_terminal_no_checkpoint_for_the_job_may_follow_and_current_item_has_no_success_skipped_or_adoption_checkpoint",
+        "atomic_projection": "exactly_one_short_fenced_transaction_appends_exactly_one_operation_unresolved_checkpoint_marks_current_item_failed_marks_job_needs_attention_remote_outcome_unresolved_writes_sanitized_failure_evidence_closes_attempt_releases_source_and_node_leases_preserves_prior_success_skipped_and_chain_fields_and_forbids_continued_writes",
+        "failure_evidence_binding": "ordinary_failure_evidence_cross_binds_unresolved_checkpoint_job_item_attempt_and_node_fences",
+        "digest_contract": "write_result_digest_and_observation_digest_are_sanitized_length_framed_evidence_bindings_not_fidelity_or_absence_digests_and_never_plaintext_or_raw_error_storage",
+        "migration": "amend_only_existing_unshipped_sqlite_and_postgresql_000069_up_migrations_down_migrations_unchanged_no_new_path_table_migration_backfill_000070_target_or_contracts_interface_keyring_or_crypto",
+        "implementation_paths": "existing_manifested_model_state_executor_worker_and_tests_only",
+        "migration_gate_companions": [
+          "TestBackupAssetMigration069SQLite",
+          "TestBackupAssetMigration069PairedFiles",
+          "TestBackupAssetMigration069Postgres"
+        ],
+        "chronology": "independent_spec_approved_selectors_frozen_authorized_pre_feature_baseline_genuine_red_observed_final_product_restored_or_fixed_same_selectors_green_no_retroactive_credit"
+      },
+      "whole_task6_corrections_15_17": {
+        "status": "implemented_fresh_green_and_whole_review_passed_exact_historical_red_output_not_independently_ledgered_no_retroactive_checkbox_credit",
+        "review_result": "whole_task6_specification_and_quality_reviews_approved_no_open_critical_or_important_findings",
+        "correction_15": "existing_unresolved_categories_gain_explicit_no_trustworthy_product_arms_for_post_arm_write_delete_verify_call_errors_and_restart_adoption_verification_mismatch_may_have_no_write_facts",
+        "correction_16": "worker_injects_existing_rsync_source_resolver_adoption_resolves_revalidates_closes_provider_source_every_verified_operation_has_exact_job_item_bound_normal_checkpoint_skip_keeps_chain_and_source_failure_preserves_operation_evidence_then_atomically_terminalizes_needs_attention_source_revalidation_failed",
+        "correction_17": "successful_owned_workspace_marker_result_is_durably_cased_reserved_to_marker_created_before_item_io_first_operation_moves_marker_created_to_writing_and_paired_sql_enforces_exact_one_way_phase_edges",
+        "frozen_selectors": [
+          "TestRecoveryExecuteClaimPostArmCallErrorsBecomeUnresolved",
+          "TestRecoveryExecuteClaimRevalidatesPinnedSourcePerOperation",
+          "TestRecoveryAdoptInterruptedOperationUsesProviderSourceAndTerminalDisposition",
+          "TestRecoveryPrepareFirstWritePersistsMarkerCreatedBeforeContent",
+          "TestBackupAssetMigration069WholeTask6ClosureSQLite",
+          "TestBackupAssetMigration069WholeTask6ClosurePostgres"
+        ],
+        "scope": "existing_manifest_paths_only_no_new_table_migration_number_unresolved_category_field_crypto_domain_public_api_or_000070",
+        "evidence_boundary": "current_selectors_and_fresh_whole_green_are_verified_prior_red_green_summary_is_retained_but_exact_historical_red_output_is_not_reconstructed",
+        "next_step": "retain_historical_empty_checkboxes_unchecked_task7_is_next_and_not_started"
+      },
+      "whole_task6_corrections_18_20": {
+        "status": "correction_18_fresh_green_without_reconstructed_historical_red_corrections_19_20_exact_red_green_ledgered_whole_task6_complete_checked",
+        "correction_18": "immutable_marker_creator_provenance_complete_checkpoint_history_current_checkpoint_continuation_and_pending_aware_adoption_projection",
+        "correction_19": "paired_private_workspace_marker_validation_attempt_id_attempt_fence_node_fence_assigned_only_with_reserved_to_marker_created_and_required_for_marker_created_first_item_authority",
+        "correction_19_scope": "existing_manifested_worker_model_tests_and_paired_000069_up_paths_only_no_new_table_migration_number_public_api_provider_contract_crypto_domain_or_000070",
+        "correction_19_frozen_selectors": [
+          "TestRecoveryReservedMarkerTakeoverPersistsValidationBeforeFirstItem",
+          "TestRecoveryMarkerCreatedTakeoverRequiresAdoptionBeforeReplay",
+          "TestBackupAssetMigration069WholeTask6ClosureSQLite",
+          "TestBackupAssetMigration069WholeTask6ClosurePostgres"
+        ],
+        "correction_19_red": [
+          "model_reflection_and_sqlite_migration_selectors_rejected_the_three_missing_private_columns",
+          "after_schema_only_green_reserved_takeover_failed_before_marker_validation_and_marker_created_retained_an_empty_validation_product"
+        ],
+        "correction_19_green_contract": "reserved_takeover_revalidates_the_same_immutable_owned_marker_then_atomically_commits_marker_created_and_the_current_attempt_node_validation_tuple_before_item_io_marker_created_with_an_older_tuple_fails_ordinary_execution_before_target_mutation_and_writing_continuation_still_requires_the_current_operation_checkpoint",
+        "correction_19_verification": "new_selectors_normal_and_race_count10_full_recovery_race_full_model_database_paired_sqlite_required_real_postgresql_whole_task6_vet_full_backend_lint_owned_gofmt_and_diff_passed",
+        "correction_19_product_hashes": {
+          "model_go": "99580077ccbf61de8c2d3f0cb0065fb1e760208f2bec2565f54c70b5e5422359",
+          "worker_go": "873fcc1e869883cdb26e801ee88ce7dcd4b1881cea9604d78894dc0a22f41f80",
+          "sqlite_000069_up": "7cc29ff175572ebb151dbdb1ef5fe355c1e2724689e6146c10ee3b63c8d192cd",
+          "postgres_000069_up": "990f68f18ca1958704f503733c72dac6aa2fac1f22f9da5759ed7aef3ab1b0da"
+        },
+        "correction_19_test_hashes": {
+          "model_test_go": "9a7adcf632e2a062a49c4006e2f00cc82fd9b76369589bda19a172b04a6ff60c",
+          "worker_test_go": "db8654f83471d97e46cb6a304724aa63851e5b1a4af0ceb9da5d281106cd2bed",
+          "migration_test_go": "87f78b8e2adb502d158a20e53f818fe2e6a1ddc0768072bb36a0934ee61b3b81"
+        },
+        "quality_gate_cleanup": "full_backend_lint_red_found_two_staticcheck_identical_struct_literal_findings_and_one_unused_provider_helper_minimal_behavior_neutral_cleanup_then_provider_tests_provider_lint_and_full_backend_lint_green",
+        "correction_20": "consumed_delete_authority_validates_the_required_consumed_checkpoint_and_grant_historical_attempt_fence_tuple_without_comparing_it_to_a_later_current_claim_ordinary_execution_still_requires_a_latest_current_operation_checkpoint",
+        "correction_20_scope": "existing_manifested_worker_executor_and_executor_test_paths_only_no_model_ddl_migration_provider_repository_runtime_api_frontend_task7_or_000070_change",
+        "correction_20_frozen_selector": "TestRecoveryExactMirrorConsumedAuthorityFreshTakeoverRequiresAdoption",
+        "correction_20_red": "fresh_takeover_ordinary_execution_failed_closed_without_target_calls_then_exact_absence_adoption_failed_with_recovery_worker_fence_lost_because_the_immutable_consumed_authority_was_compared_to_the_new_claim",
+        "correction_20_green_contract": "fresh_takeover_cannot_run_ordinarily_before_adoption_exact_absence_adoption_appends_the_current_claim_checkpoint_and_bearer_free_continuation_reuses_the_single_consumed_historical_grant_for_the_remaining_delete_without_rewrite_or_reconsumption",
+        "correction_20_verification": "selector_green_race_count10_focused_delete_adoption_normal_and_race_full_recovery_normal_and_race_model_database_required_real_postgresql_operation_product_no_skip_recovery_vet_full_backend_lint_owned_gofmt_and_diff_passed",
+        "correction_20_product_hashes": {
+          "worker_go": "b98764f97ddf89ccd4ca12d52d28fbf29dc112db995cee1dfdbc189b7457a0ec",
+          "executor_go": "da353e2ef2e1322386bbf6f8f7665a02058eb36bd422729263cd0453aedb33f5"
+        },
+        "correction_20_test_hash": "f2bbbd0b1643b0b69be49c77944e145c8f35fb6ed601576606020c4764ec5f88",
+        "correction_20_postgres": "healthy_existing_xirang_c13_pg_postgresql18_fixture_used_with_a_command_scoped_role_after_two_preconnection_stale_credential_diagnostics_role_and_schema_residue_zero_container_and_existing_roles_unchanged",
+        "correction_18_evidence_boundary": "current_selector_and_fresh_whole_green_verified_exact_historical_red_output_not_independently_ledgered_historical_empty_checkbox_remains_unchecked",
+        "next_step": "task7_next_not_started"
+      },
+      "batch_status": {
+        "B1": {
+          "scope": "corrections_1_2_3_5_7_8_9_10_11_12_13_ordinary_and_foundation",
+          "status": "COMPLETE_CHECKED_WHOLE_SCOPE",
+          "credit": "focused_e1_e2_e3_credit_preserved_and_fresh_combined_evidence_incorporated_into_whole_task6_closure",
+          "focused_batches": {
+            "B1-E1": "complete_checked_corrections_1_2_3_5",
+            "B1-E2": "complete_checked_corrections_7_8_9_10",
+            "B1-E3": "complete_checked_corrections_11_12_13"
+          }
+        },
+        "B2": {
+          "scope": "corrections_4_6_exact_mirror_multi_delete_plus_delete_row",
+          "status": "COMPLETE_CHECKED_WHOLE_SCOPE",
+          "credit": "focused_e1_e2_credit_preserved_and_fresh_combined_exact_mirror_evidence_incorporated_into_whole_task6_closure",
+          "focused_batches": {
+            "B2-E1": "complete_checked_correction_4_plus_delete_row",
+            "B2-E2": "complete_checked_correction_6_absence_chain_multi_delete"
+          }
+        },
+        "B3": {
+          "scope": "correction_14_unresolved_remote_outcome",
+          "status": "PROVED_COMPLETE_FOCUSED_HISTORY_INCORPORATED_IN_WHOLE_TASK6_REVIEW",
+          "final_writer_paths": [
+            "backend/internal/backupasset/recovery/executor_test.go",
+            "backend/internal/database/backup_asset_migrations_integration_test.go"
+          ],
+          "specification_receipt": "019fc0c2-cfda-74e3-b218-246f3a425545_APPROVED",
+          "quality": "controller_inline_no_findings_fresh_vet_owned_gofmt_diff_exit_0_staged_0",
+          "required_evidence": "postgresql_000069_six_case_no_skip_cancellation_focused_race_exact_mirror_regressions_manifest_guards_passed_resources_cleaned",
+          "local_reviewer_rerun": "host_disk_quota_link_failure_not_claimed_pass_or_fail"
+        }
+      },
+      "adoption_api": "AdoptInterruptedOperation(ctx, claim, jobItemID)",
+      "remaining_work": "task7_next_not_started_publication_content_revalidation_revoking_takeover_cleanup_node_lease_behavior_and_recovery_result_ref_denial_then_tasks_8_to_10",
+      "remaining_ledger": "task6_complete_checked_whole_scope_historical_empty_corrections_15_18_checkboxes_intentionally_not_backfilled_task7_not_started_child_in_progress_parent_planning_program_12_of_15",
+      "ownership_split": "task6_preallocated_workspace_reservation_cleanup_only_classification_and_bounded_restart_adoption_reconciliation_semantics_task7_publication_content_revalidation_revoking_takeover_cleanup_node_lease_and_recovery_result_ref_denial_task8_startup_listener_ordering_and_managed_lifecycle",
+      "f6_live_mutation_permit": {
+        "status": "complete_approved_focused_only",
+        "credit_boundary": "no_credit_to_f3_b1_b2_f4_whole_task6_child_delivery_or_full_gates",
+        "permanent_delta": [
+          "backend/internal/backupasset/recovery/worker_test.go recording fake near line 34",
+          "backend/internal/backupasset/recovery/worker_test.go TestRecoveryReviewF6LatchBeforeTargetMutation near line 669"
+        ],
+        "temporary_red_delta": "backend/internal/backupasset/recovery/target.go live_proof_callback_bypass_only_restored_byte_for_byte_before_handoff",
+        "hashes": {
+          "target_final_sha256": "8a0efaafc5bb08d3981790cc0fa27760936b80a58862f1910fd3e96dd5c64822",
+          "worker_test_start_sha256": "a2452e6d5f01c4afb9fb5255ecc188b8790b695f0121430ac078a58cce373534",
+          "worker_test_final_sha256": "352c31b6e5ced3f9f4a033a096ee90c5cd196be3bc4da65ab426bca18254ab3d"
+        },
+        "controlled_red": "only_TargetMutationPermit_live_proof_callback_temporarily_bypassed_every_revoked_latch_job_attempt_node_source_case_reached_CreateOwnedJobDir_and_produced_revoked_authority_CreateOwnedJobDir_error_nil_want_ErrInvalidTargetPermit_compilation_and_quota_failures_not_red_evidence",
+        "green": "current_authority_admits_CreateOwnedJobDir_CreateDirectory_WriteAtomic_Delete_permanent_latch_loss_current_job_loss_attempt_fence_loss_node_lease_fence_loss_source_fence_loss_reject_before_fake_mutation",
+        "remove_owned_job_dir": "deferred_to_task_7",
+        "writer_checks": [
+          "combined_sqlite_model_recovery_selector_passed",
+          "TestRecoveryReviewF6LatchBeforeTargetMutation_race_count_10_passed",
+          "four_frozen_recovery_regressions_passed",
+          "gofmt_go_vet_git_diff_check_passed",
+          "exact_manifest_9_phase1_55_create_81_modify_145_unique_disjoint_passed",
+          "staged_paths_0"
+        ],
+        "reviews": {
+          "specification": "019fc136-feca-7fb0-82bc-3c33739aef12_SPEC_APPROVED",
+          "quality": "019fc13c-0710-7343-b261-dd866382a8c0_QUALITY_APPROVED",
+          "quality_coverage": "deterministic_isolated_fixtures_reliable_admission_recording_frozen_hashes_manifest_and_staged_zero"
+        },
+        "postgres_gate": {
+          "thread": "019fc13d-ea0e-7f93-b1c6-32aebcb7368e",
+          "result": "POSTGRES_GATE_PASSED_exit_0_ok_xirang_backend_internal_database_1_709s_wall_31_032s",
+          "command": "REQUIRE_POSTGRES_MIGRATION_TEST=1 TEST_POSTGRES_DSN=\"$TEST_POSTGRES_DSN\" go test ./internal/database -run '^TestRecoveryReviewF6UseLatchPostgres$' -count=1",
+          "environment": "PostgreSQL_18_4_isolated_postgres_18_alpine_loopback_database_xirang_f6_gate",
+          "non_red_attempts": "first_two_compile_attempts_hit_tmp_quota_and_did_not_reach_tests_passing_run_moved_go_and_cgo_temp_to_dev_shm",
+          "cleanup": "created_container_and_scratch_removed_pre_existing_resources_untouched"
+        },
+        "next_order": "f3_then_b1_e1_e2_e3_then_b2_e1_e2_then_task6_owned_f4_then_whole_task6_spec_review_then_whole_quality_review_then_all_final_gates_then_task7"
+      },
+      "f3_adjudication": {
+        "date": "2026-08-02",
+        "status": "complete_approved_design_decision_only_product_red_green_review_and_gates_unstarted",
+        "decision": "persistent_plan_a_plus",
+        "reason": "sql_eligible_post_selection_persistent_failure_can_retain_eligibility_and_order_across_invocations_and_restart_without_any_existing_durable_traversal_fact",
+        "rejected": {
+          "stateless_plan_b": "same_invocation_skip_does_not_preserve_progress_across_restart",
+          "per_domain_row_backoff": "stale_fence_loser_has_no_authority_to_mutate_job_or_attempt_for_scheduler_fairness"
+        },
+        "storage": "two_fixed_closed_scheduler_state_rows_in_existing_backup_asset_recovery_evidence_no_new_table_or_000070",
+        "fixed_rows": {
+          "0000000000000000000000000000006a": "claim_recovery_job_updated_at_id",
+          "0000000000000000000000000000006b": "takeover_attempt_lease_expires_at_id"
+        },
+        "fields": "scheduler_scope_cursor_at_cursor_id_high_water_at_high_water_id_revision",
+        "selection": "short_scheduler_transaction_durably_pre_advances_one_candidate_then_separate_candidate_claim_or_takeover_transaction_bounded_by_scan_limit",
+        "failure_semantics": "candidate_conflict_or_fence_loss_scheduler_only_no_domain_or_remote_mutation_crash_delays_until_wrap_database_wide_failure_fails_pass",
+        "down": "ignore_only_two_exact_shape_checked_scheduler_rows_refuse_for_latch_or_any_real_recovery_content_or_lease_state",
+        "additional_f3_corrections": "guarded_authority_only_pre_write_drift_atomic_terminalization_and_immutable_receipt_frozen_intent_execute_replay",
+        "owned_product_paths": [
+          "backend/internal/backupasset/recovery/worker.go",
+          "backend/internal/backupasset/recovery/worker_test.go",
+          "backend/internal/backupasset/recovery/service.go",
+          "backend/internal/backupasset/recovery/service_test.go",
+          "backend/internal/model/backup_asset_recovery.go",
+          "backend/internal/database/migrations/sqlite/000069_backup_asset_recovery.up.sql",
+          "backend/internal/database/migrations/sqlite/000069_backup_asset_recovery.down.sql",
+          "backend/internal/database/migrations/postgres/000069_backup_asset_recovery.up.sql",
+          "backend/internal/database/migrations/postgres/000069_backup_asset_recovery.down.sql",
+          "backend/internal/database/backup_asset_migrations_integration_test.go"
+        ],
+        "frozen_selectors": [
+          "TestRecoveryReviewF3PreWriteDriftTransactionSQLite",
+          "TestRecoveryReviewF3ExecuteReplayAfterDrift",
+          "TestRecoveryReviewF3TwoWorkerAndCrashBarriers",
+          "TestRecoveryReviewF3PreWriteDriftTransactionPostgres"
+        ],
+        "required_gate": "controlled_red_same_selector_green_real_postgresql_no_skip_focused_race_regression_static_paired_migration_manifest_staged_zero_evidence_then_stop_before_b1_b2",
+        "adjudication_validation": {
+          "trellis": "child_and_parent_task_validate_passed",
+          "structured_data": "task_json_and_17_implement_plus_18_check_jsonl_entries_parse",
+          "manifest": "9_phase1_55_create_81_modify_145_total_145_unique_0_duplicates_f3_owned_paths_10_of_10_present",
+          "frozen_product_hashes": "target_and_worker_test_match_recorded_f6_final_sha256",
+          "non_trellis_candidate": "tracked_patch_and_untracked_content_match_r0_frozen_sha256",
+          "staged_paths": 0,
+          "product_tests": "not_run_by_design_decision_only_milestone_no_product_edit_or_completion_claim",
+          "spec_update": "deferred_until_f3_product_contract_is_implemented_and_dual_engine_verified_user_approved_adjudication_scope_is_task_artifacts_only"
+        }
+      },
+      "b1_e3_focused_closure": {
+        "date": "2026-08-02",
+        "status": "complete_checked_corrections_11_12_13_only",
+        "credit_boundary": "b1_aggregate_partial_no_b2_f4_whole_task6_child_delivery_or_final_gate_credit",
+        "permanent_delta": [
+          "backend/internal/backupasset/recovery/service_test.go",
+          "backend/internal/backupasset/recovery/worker_test.go",
+          "backend/internal/database/backup_asset_migrations_integration_test.go"
+        ],
+        "controlled_red_only_paths": [
+          "backend/internal/backupasset/recovery/service.go",
+          "backend/internal/backupasset/recovery/worker.go",
+          "backend/internal/database/migrations/sqlite/000069_backup_asset_recovery.up.sql",
+          "backend/internal/database/migrations/postgres/000069_backup_asset_recovery.up.sql"
+        ],
+        "frozen_selectors": [
+          "TestRecoveryExecutePreparedAggregateGrantFirstMatrix",
+          "TestRecoveryAdoptInterruptedOperationDurableDerivationMatrix",
+          "TestRecoveryPermanentCleanupKeyLossMatrix",
+          "TestRecoveryLocatorRaceTakeoverOneWinner",
+          "TestBackupAssetMigration069RecoveryLocatorProductSQLite",
+          "TestBackupAssetMigration069RecoveryLocatorProductPostgres"
+        ],
+        "controlled_red": [
+          "adoption_durable_digest_equality_removed_false_adoption_succeeded_instead_of_fence_lost",
+          "cleanup_reconciliation_selected_pre_arm_and_missed_current_post_arm_attempt",
+          "grant_cas_did_not_persist_consumed_at_and_prepared_aggregate_could_not_complete",
+          "exact_transaction_key_comparison_bypassed_and_mismatched_key_was_accepted",
+          "paired_immutable_semantic_target_digest_arm_removed_and_sqlite_postgresql_accepted_illegal_rewrite_with_legal_pending_to_failed_projection"
+        ],
+        "green_contract": "three_boundary_durable_adoption_bounded_db_only_permanent_key_loss_reconciliation_grant_first_exact_key_prepared_aggregate_and_paired_immutable_enforcement",
+        "protected_product_hashes": {
+          "worker_go": "75e4c4a2beb421a6f76d6d9b752f7afb47cc034a6609d00dd0760b66e2798972",
+          "service_go": "9cfd9f07178061297ff3be7cc7cc12f6f823a3c82ed5c8d9a5c7e6f8c1f00a57",
+          "sqlite_000069_up": "f842be1eece0adcd1d84b9ec5e4216e96c67a4eca9b9308886be2b6ee97edad5",
+          "postgres_000069_up": "42c92b3c4e6c56ac57d67cdf249746c682abe94efbe915182e54bb0f3ca8c67d"
+        },
+        "permanent_test_hashes": {
+          "service_test_go": "3078b9069ac3e5f54794f900ac7a34db7076a107c6cbc456b55d513255ccea01",
+          "worker_test_go": "9335559d73b57403bb93c2da1c9bda26fa487dc12e5282069b08bde74eb075fd",
+          "migration_test_go": "aad45fc1193e9102cdc5e885d97d3f982121676d6098cbb6ad2930008105217b"
+        },
+        "focused_verification": "six_frozen_local_and_required_real_postgresql_no_skip_race_count10_full_recovery_runtime_startup_six_affected_packages_same_scope_vet_sqlite_full_paired_and_postgresql_locator_adoption_rollback_full_000069_companions_passed",
+        "final_reverification": "four_recovery_frozen_0_814s_sqlite_locator_0_416s_required_real_postgresql_locator_6_951s_no_skip",
+        "lint": "three_b1_e3_owned_findings_fixed_seven_earlier_recovery_package_findings_remain_no_whole_package_lint_pass_claim",
+        "scope": "dirty_union_82_manifest_members_80_plus_only_go_mod_and_recovery_testdata_rsync_local_to_remote_json_exact_manifest_9_plus_55_plus_81_equals_145_unique_disjoint_no_000070_staged_zero",
+        "spec_update": "not_required_unshipped_task_local_recovery_contract_already_in_design_section_19_and_frozen_matrix",
+        "scratch_cleanup": "removed_after_final_reverification_exact_path_dev_shm_xirang_b1e3_baseline_R5W7xg_only",
+        "next_stop": "before_b2_e1"
+      },
+      "b2_e1_focused_closure": {
+        "date": "2026-08-02",
+        "status": "complete_checked_correction_4_plus_delete_row_only",
+        "credit_boundary": "b2_aggregate_partial_b2_e2_absence_chain_multi_delete_f4_whole_task6_child_delivery_and_final_gates_open",
+        "permanent_delta": [
+          "backend/internal/backupasset/recovery/contracts_test.go"
+        ],
+        "controlled_red_only_paths": [
+          "backend/internal/backupasset/recovery/contracts.go",
+          "backend/internal/backupasset/recovery/executor.go",
+          "backend/internal/database/migrations/sqlite/000069_backup_asset_recovery.up.sql",
+          "backend/internal/database/migrations/postgres/000069_backup_asset_recovery.up.sql"
+        ],
+        "frozen_selectors": [
+          "TestRecoveryOperationSnapshotV2WholeProductTamperMatrix",
+          "TestRecoveryVerifyOperationProductMatrix",
+          "TestBackupAssetMigration069RecoveryLocatorProductSQLite",
+          "TestBackupAssetMigration069RecoveryLocatorProductPostgres"
+        ],
+        "supporting_regressions": [
+          "TestRecoveryAuthorizationReceiptExecuteDeleteRowHasNoPlanItem",
+          "TestRecoveryExactMirrorDeletePauseRequiresOrdinaryExecutionHistory",
+          "TestRecoveryExactMirrorSuccessfulDeleteProjectsAbsenceCheckpointAndChain"
+        ],
+        "controlled_red": [
+          "non_exact_absence_evidence_was_temporarily_accepted_and_the_unchanged_verify_selector_rejected_permission_denied_and_ambiguous_missing",
+          "empty_delete_grant_pause_gate_was_temporarily_bypassed_and_the_unchanged_verify_selector_rejected_missing_durable_delete_authority_history",
+          "synthetic_delete_post_digest_was_temporarily_accepted_and_the_unchanged_snapshot_selector_rejected_it",
+          "paired_job_item_insert_binding_was_temporarily_loosened_and_unchanged_sqlite_and_required_real_postgresql_selectors_rejected_isolated_delete_rows"
+        ],
+        "green_contract": "delete_requires_durable_in_place_exact_mirror_authority_explicit_exact_absence_present_prior_sha256_empty_post_digest_negative_one_byte_sentinels_null_plan_item_and_no_synthetic_absence_digest",
+        "protected_product_hashes": {
+          "contracts_go": "5c2338ce250ffda7a4749ab1629af6eddcc80c23f7ad7ca4397fdb3b47ec3cb8",
+          "executor_go": "23762c8e435a553d1e0da1dc346b8f03bef0e100003cd8530036e37bb6d913a9",
+          "sqlite_000069_up": "f842be1eece0adcd1d84b9ec5e4216e96c67a4eca9b9308886be2b6ee97edad5",
+          "postgres_000069_up": "42c92b3c4e6c56ac57d67cdf249746c682abe94efbe915182e54bb0f3ca8c67d"
+        },
+        "permanent_test_hashes": {
+          "contracts_test_go": "0ed3e14ff3ea3c957a18ebc65b55d59e43ec81fdb9cb5b03d86f32bdbe0df47b"
+        },
+        "focused_verification": "frozen_and_supporting_normal_green_core_race_count10_full_recovery_six_affected_packages_vet_sqlite_and_required_real_postgresql_locator_product_green_no_skip_owned_gofmt_and_diff_clean",
+        "lint": "seven_earlier_recovery_package_findings_remain_none_in_b2_e1_owned_contracts_test_delta_no_whole_package_lint_pass_claim",
+        "scope": "dirty_union_82_manifest_members_80_plus_only_go_mod_and_recovery_testdata_rsync_local_to_remote_json_exact_manifest_9_plus_55_plus_81_equals_145_unique_disjoint_no_000070_staged_zero",
+        "spec_update": "not_required_unshipped_task_local_recovery_contract_already_in_design_section_19_and_frozen_matrix",
+        "postgres": "reused_healthy_xirang_c13_pg_required_mode_no_skip_no_restart_reconfigure_or_remove",
+        "next_stop": "before_b2_e2"
+      },
+      "b2_e2_focused_closure": {
+        "date": "2026-08-02",
+        "status": "complete_checked_correction_6_absence_chain_multi_delete_only",
+        "credit_boundary": "b2_aggregate_partial_f4_whole_task6_child_delivery_and_final_gates_open",
+        "permanent_delta": [
+          "backend/internal/backupasset/recovery/contracts_test.go",
+          "backend/internal/backupasset/recovery/executor_test.go",
+          "backend/internal/backupasset/recovery/testutil_test.go"
+        ],
+        "controlled_red_only_paths": [
+          "backend/internal/backupasset/recovery/executor.go",
+          "backend/internal/backupasset/recovery/worker.go"
+        ],
+        "frozen_selectors": [
+          "TestRecoveryVerifyOperationProductMatrix"
+        ],
+        "supporting_regressions": [
+          "TestRecoveryExactMirrorSuccessfulDeleteProjectsAbsenceCheckpointAndChain",
+          "TestRecoveryExactMirrorMultipleDeletesReuseConsumedSetAuthorityInSameExecution",
+          "TestRecoveryExactMirrorMultipleDeletesConsumeSetAuthorityOnceAcrossRestart",
+          "TestRecoveryExactMirrorConsumedDeleteAuthorityReloadReconcilesAbsence"
+        ],
+        "controlled_red": [
+          "absence_chain_domain_was_temporarily_conflated_with_present_target_chain_and_the_unchanged_frozen_selector_rejected_single_and_multi_delete_chain_revisions",
+          "durable_consumed_delete_checkpoint_reuse_was_temporarily_disabled_and_the_unchanged_frozen_selector_rejected_same_execution_second_delete_restart_and_consumed_absence_reconciliation"
+        ],
+        "green_contract": "one_exact_mirror_delete_set_authority_is_consumed_once_and_reused_for_ordered_same_execution_or_restart_deletes_each_exact_absence_advances_the_separate_length_framed_absence_chain_and_the_terminal_job_chain_equals_the_last_delete_revision_without_b3_unresolved_fields",
+        "protected_product_hashes": {
+          "executor_go": "23762c8e435a553d1e0da1dc346b8f03bef0e100003cd8530036e37bb6d913a9",
+          "worker_go": "75e4c4a2beb421a6f76d6d9b752f7afb47cc034a6609d00dd0760b66e2798972"
+        },
+        "permanent_test_hashes": {
+          "contracts_test_go": "02c633aff6a77c952e8d6beaa4dd3acd95db42171daf2591f4c59da3d95e9f54",
+          "executor_test_go": "7699d40d610ab3cd3a275aada8bcdee2c388becda0391d423cd3931792fd5ae9",
+          "testutil_test_go": "482a0fba26d78fc770ed4be97642cfa2d07ff59ea903b66d883b30d29320fb83"
+        },
+        "postgres_fixture_correction": "production_000069_scheduler_rows_use_subsecond_database_time_while_the_shared_fixture_clock_is_second_aligned_the_migration_fixture_now_rebases_after_the_scheduler_seed_this_was_fixture_red_not_product_red",
+        "focused_verification": "frozen_and_supporting_normal_green_race_count10_full_recovery_six_affected_packages_vet_production_sqlite_multi_delete_required_real_postgresql_frozen_selector_and_postgresql_subtest_count5_green_no_skip_owned_gofmt_clean",
+        "lint": "same_seven_earlier_recovery_package_findings_remain_none_in_b2_e2_owned_lines_no_whole_package_lint_pass_claim",
+        "scope": "dirty_union_82_manifest_members_80_plus_only_go_mod_and_recovery_testdata_rsync_local_to_remote_json_exact_manifest_9_plus_55_plus_81_equals_145_unique_disjoint_no_000070_staged_zero",
+        "spec_update": "not_required_unshipped_task_local_recovery_contract_already_in_design_and_frozen_matrix",
+        "postgres": "reused_healthy_xirang_c13_pg_postgresql_18_required_mode_no_skip_no_restart_reconfigure_or_remove",
+        "next_stop": "before_task6_owned_f4"
+      },
+      "f4_focused_closure": {
+        "date": "2026-08-02",
+        "status": "complete_checked_task6_workspace_deadline_cleanup_only_only",
+        "credit_boundary": "no_b1_b2_aggregate_unchecked_row_whole_task6_child_delivery_publication_content_revoking_cleanup_node_lease_or_recovery_result_ref_credit",
+        "permanent_delta": [
+          "backend/internal/backupasset/recovery/executor_test.go"
+        ],
+        "frozen_selectors": [
+          "TestRecoveryReviewF4WorkspaceDeadlineAndPublication",
+          "TestRecoveryReviewF4PartialWorkspaceCleanupOnly"
+        ],
+        "controlled_red": [
+          "workspace_deadline_temporarily_changed_from_24_hours_to_24_hours_minus_1_second_and_unchanged_workspace_selector_failed",
+          "armed_cancellation_cleanup_due_projection_temporarily_removed_and_unchanged_partial_workspace_selector_observed_illegal_reserved_state"
+        ],
+        "green_contract": "execute_preallocates_encrypted_jobs_opaque_none_identity_prepare_first_write_reuses_it_and_commits_reserved_marker_owner_fence_24_hour_deadline_checkpoint_and_latch_before_remote_directory_or_content_success_seals_without_publication_prearm_and_queued_cancel_remain_none_armed_cancel_and_postarm_unresolved_become_needs_attention_cleanup_due",
+        "protected_product_hashes": {
+          "worker_go": "75e4c4a2beb421a6f76d6d9b752f7afb47cc034a6609d00dd0760b66e2798972",
+          "executor_go": "23762c8e435a553d1e0da1dc346b8f03bef0e100003cd8530036e37bb6d913a9"
+        },
+        "permanent_test_hashes": {
+          "executor_test_go": "9964b2d1b02c2f6071c4b4d58614ff9af5975f5c046aaa29a246f4e3d5a900a2"
+        },
+        "focused_verification": "f4_normal_recovery_and_sqlite_companions_race_count10_full_recovery_model_database_runtime_backupasset_server_required_real_postgresql_three_companions_no_skip_same_scope_vet_owned_gofmt_diff_trellis_manifest_staged_zero_passed",
+        "lint": "same_seven_earlier_recovery_package_findings_remain_none_in_new_f4_selector_range_no_whole_package_lint_pass_claim",
+        "scope": "dirty_union_82_manifest_members_80_plus_only_go_mod_and_recovery_testdata_rsync_local_to_remote_json_exact_manifest_9_plus_55_plus_81_equals_145_unique_disjoint_no_000070_staged_zero",
+        "trellis": "child_and_parent_validate_task_json_and_17_implement_plus_18_check_jsonl_entries_parse",
+        "postgres": "reused_healthy_xirang_c13_pg_postgresql_18_required_mode_three_workspace_locator_deadline_companions_no_skip_no_restart_reconfigure_or_remove_first_keyword_dsn_attempt_was_preconnection_harness_diagnostic",
+        "next_stop": "before_whole_task6_specification_review"
+      },
+      "test_gate": "fresh_whole_task6_selectors_recovery_normal_race_affected_packages_dual_engine_postgresql_329_pass_0_fail_0_skip_vet_full_backend_lint_format_diff_privacy_scope_trellis_json_jsonl_manifest_protected_hash_branch_remote_and_staged_zero_all_passed",
+      "frozen_red_selectors": [
+        "TestRecoveryOperationSnapshotV2CanonicalLocatorMatrix",
+        "TestRecoveryOperationSnapshotV2WholeProductTamperMatrix",
+        "TestRecoveryExecutePreparedAggregateGrantFirstMatrix",
+        "TestRecoveryTargetLocatorCiphertextBindingMatrix",
+        "TestRecoveryPrepareFirstWriteUsesPreallocatedWorkspaceMatrix",
+        "TestRecoveryAdoptInterruptedOperationDurableDerivationMatrix",
+        "TestRecoveryVerifyOperationProductMatrix",
+        "TestRecoveryPermanentCleanupKeyLossMatrix",
+        "TestBackupAssetMigration069RecoveryLocatorProductSQLite",
+        "TestBackupAssetMigration069RecoveryLocatorProductPostgres",
+        "TestRecoveryLocatorRaceTakeoverOneWinner",
+        "TestRecoveryLocatorProductNoPlaintextLeak",
+        "TestStateOperationUnresolvedProductsAreClosedAndTerminal",
+        "TestBackupAssetRecoveryCheckpointCarriesPrivateUnresolvedOutcomeProduct",
+        "TestRecoveryExecuteClaimProjectsUnresolvedRemoteOutcomeMatrix",
+        "TestBackupAssetMigration069UnresolvedOperationOutcomeSQLite",
+        "TestBackupAssetMigration069UnresolvedOperationOutcomePostgres"
+      ],
+      "red_green_execution": "prior_focused_batches_retain_exact_credit_corrections_19_20_retain_exact_genuine_red_green_ledger_corrections_15_18_have_fresh_green_and_prior_summary_without_reconstructed_exact_historical_red_output_whole_task6_complete_checked_on_current_product_and_whole_review",
+      "scope_delta": "none_no_new_path_table_route_migration_backfill_or_000070",
+      "migration": "f3_authorizes_only_existing_unshipped_sqlite_and_postgresql_000069_up_and_down_scheduler_state_amendments_no_000070_backfill_new_table_or_path",
+      "manifest": "9_current_55_create_81_modify_145_total",
+      "child": "in_progress",
+      "parent": "planning",
+      "delivery": "staged_0_commit_push_pr_ci_merge_not_executed"
+    },
+    "r0_execution_rebaseline": {
+      "date": "2026-08-02",
+      "status": "trellis_only_complete_no_product_implementation_or_git_delivery",
+      "old_controller": {
+        "thread": "019f6fe1-5133-7012-a18c-7c9dda469cb5",
+        "thread_status": "idle_last_turn_interrupted",
+        "goal_status": "paused",
+        "automation": "child-13-controller-heartbeat_paused_preserved_as_evidence"
+      },
+      "hard_rule": "never_use_a_15_minute_heartbeat_for_this_task",
+      "orchestration": "goals_controller_child_tasks_user_visible_tasks_and_subagents_remain_allowed_only_when_bounded_justified_observable_and_stoppable",
+      "concurrency_default": "one_active_feature_branch_one_working_implementation_worktree_one_product_pr_unless_actual_independence_justifies_more",
+      "progress_definition": "program_delivery_plus_child_task_batch_state_plus_evidence_depth_plus_git_delivery_plus_unresolved_scope_risk_not_time_tokens_code_volume_dirty_paths_or_checkboxes_alone",
+      "parent_progress": "12_of_15_delivered_80_percent_mechanical_12_of_13_counts_instantiated_children_only",
+      "child_progress": "tasks_1_to_5_complete_approved_task_6_partial_tasks_7_to_12_not_executed_or_open",
+      "mechanical_ledger": "reconciled_from_53_of_132_raw_to_62_of_131_after_task0_task4_and_misplaced_task5_receipt_correction_not_a_product_percentage",
+      "f3": "bounded_inline_adjudication_complete_user_approved_persistent_plan_a_plus_design_decision_only_product_unstarted",
+      "next": "separate_bounded_f3_tdd_writer_then_focused_evidence_stop_and_report_before_b1_b2"
+    },
+    "current_dirty_accounting_after_task_6_planning": {
+      "snapshot": "r0_current_2026-08-02_after_controller_stop_before_f3_adjudication",
+      "dirty_union_count": 82,
+      "manifest_dirty_count": 80,
+      "manifest_dirty_breakdown": "9_phase_current_32_create_39_modify",
+      "unrelated_dirty_count": 2,
+      "unrelated_dirty_paths": [
+        "go.mod",
+        "recovery/testdata/rsync_local_to_remote.json"
+      ],
+      "unrelated_disposition": "preserve_pending_explicit_adjudication_no_move_delete_stage_or_manifest_admission",
+      "staged_path_count": 0,
+      "tracked_path_count": 40,
+      "untracked_path_count": 42,
+      "pre_r0_trellis_edit_tracked_patch_sha256": "3cf2dad83af30e07cc567d6a400190cbb362b53d7b7ed8a2641bef96f16c5929",
+      "pre_r0_trellis_edit_untracked_content_sha256": "0733f9e3435632e1b76f7dc2227dfe6bc6f8d49dd08710b0b3bcd2018c245972",
+      "non_trellis_tracked_patch_sha256": "0c7b8e1069e66aef68b10836c38e431f19dce8336c4f3e87894e516de54b2fce",
+      "non_trellis_untracked_content_sha256": "675f5e42fa00fa05afc76076b22cbf5ce62a6e7ef2b682918de0bc12380e1623",
+      "remote_child_branch": "absent",
+      "child_pr": "absent"
+    },
+    "dirty_accounting_at_catalog_amendment": {
+      "dirty_union_count": 61,
+      "manifest_dirty_count": 59,
+      "unrelated_dirty_count": 2,
+      "unrelated_dirty_paths": [
+        "go.mod",
+        "recovery/testdata/rsync_local_to_remote.json"
+      ],
+      "path_reconciliation": "the_supplied_backend_internal_backupasset_recovery_testdata_rsync_local_to_remote_path_was_absent_while_the_root_recovery_testdata_path_was_present_and_was_preserved_without_move_delete_or_manifest_admission"
+    },
+    "task_1": {
+      "scope": "paired_000069_model_contracts",
+      "status": "complete_approved",
+      "latest_independent_spec_review": {
+        "status": "complete_approved_2026-07-29",
+        "closed_gaps": [
+          "content_check_null_proof_down_parity",
+          "consumed_grant_binding_immutability",
+          "exact_postgresql_f6_selector",
+          "rejected_down_mutation_arm_trigger_function_snapshot"
+        ]
+      },
+      "focused_evidence": "full_sqlite_000069_paired_files_database_model_recovery_vet_and_real_postgresql18_selectors_passed_disposable_postgres_removed_live_attempt_terminal_rereview_approved",
+      "historical_process_deviation": {
+        "status": "controller_accepted_under_standing_user_authorization",
+        "scope": "original_model_state_contracts_implementation",
+        "chronology": "red_not_observed_before_green",
+        "tdd_gate": "not_passed_not_retroactively_red",
+        "future_requirement": "tasks_2_to_10_and_every_new_fix_must_observe_red_before_green"
+      },
+      "reviews": {
+        "independent_spec_rereview": "complete_approved_2026-07-29",
+        "independent_quality_review": "complete_approved_2026-07-29_live_worktree",
+        "completion": "complete",
+        "task_2_start": "authorized_then_executed_2026-07-29"
+      }
+    },
+    "task_2": {
+      "scope": "exact_selection_source_revision_plan_idempotency",
+      "status": "complete_approved_2026-07-29",
+      "tdd": "findings_1_to_7_observed_red_green_finding_8_immediate_green_coverage_gap_no_fake_red",
+      "closed_review_findings": [
+        "mutable_provider_locator_substitution",
+        "parent_entry_id_directory_expansion",
+        "duplicate_and_overlapping_provenance",
+        "caller_transaction_scoped_savepoint",
+        "source_catalog_commit_barrier_and_post_commit_provider_io",
+        "exact_locator_digest_formula",
+        "sanitized_consumer_errors_with_context_semantics",
+        "idempotency_replay_matrix"
+      ],
+      "reviews": {
+        "controller_inline_specification_review": "complete_approved_2026-07-29",
+        "controller_inline_quality_review": "complete_approved_2026-07-29",
+        "task_3_start": "authorized_not_executed"
+      },
+      "focused_evidence": "focused_and_full_recovery_publication_tests_two_10x_race_suites_vet_golangci_lint_gofmt_diff_and_staged_zero_passed"
+    },
+    "task_3": {
+      "scope": "read_only_target_preflight_purpose_exact_ssh_and_durable_node_write_coordination",
+      "status": "complete_approved_2026-07-30_task_scope_only",
+      "tdd": "task3a_3b_original_red_not_observed_before_green_task3c_security_permit_atomic_no_executor_compensation_and_deadline_seam_observed_red_green_postgresql_permanent_gate_immediate_green_coverage_gap_no_fake_red",
+      "focused_evidence": "security_purpose_atomic_compensation_deadline_seam_and_legacy_terminal_cas_regressions_normal_and_race_task3_aggregate_vet_lint_static_sqlite_real_postgresql18_behavior_and_migration_passed",
+      "real_postgresql": "permanent_TestRecoveryBehaviorPostgres_covers_active_lease_taskrun_state_matrix_and_same_node_unique_winner_real_postgresql_18_4_count10_and_race_passed_isolated_schemas_removed",
+      "deadline_harness": "constructor_time_run_context_factory_closes_done_and_returns_deadline_exceeded_only_after_commit_entered_no_wall_clock_correctness_gate",
+      "reviews": {
+        "independent_specification_rereview": "approved_2026-07-30_after_final_legacy_terminal_cas_regression",
+        "controller_inline_quality_recheck": "complete_approved_2026-07-30",
+        "prior_live_worktree_quality_rereview": "historical_approved_before_fresh_findings",
+        "task_4_start": "authorized_not_executed"
+      },
+      "quality_remediation_closed": {
+        "status": "closed_2026-07-30",
+        "critical": "recovery_target_authority_and_path_safety_unbound",
+        "important": [
+          "cancellation_window_before_owner_registration_for_ordinary_and_legacy_restore",
+          "expired_active_recovery_lease_not_atomically_reclaimed_under_node_boundary"
+        ],
+        "confirmed_closed": [
+          "former_post_reservation_trigger_to_goroutine_cancel_ownership_gap",
+          "paired_000069_sqlite_postgresql_task_run_node_snapshot_parity_and_recovery_direct_snapshot_use",
+          "permanent_required_real_postgresql_000069_migration_and_recovery_cancel_start_race_ci_gate"
+        ],
+        "verifier_checks": "focused_checks_passed_staged_0_no_mutations",
+        "closure_checks": "independent_spec_approved_controller_inline_normal_race_sqlite_real_postgresql_vet_lint_gofmt_static_manifest_and_staged_zero_passed",
+        "broad_runtime_cache": "environment_blocked_host_ifree_zero_not_a_product_pass"
+      }
+    },
+    "delivery_actions": "staged_0_commit_push_pr_ci_merge_not_executed"
+  }
+}

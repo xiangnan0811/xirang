@@ -203,9 +203,14 @@ func main() {
 	if !ok {
 		log.Fatal().Msg("Restic legacy adapter type mismatch")
 	}
+	nodeWriteCoordinator, err := backupruntime.NewNodeWriteCoordinator(db)
+	if err != nil {
+		log.Fatal().Err(err).Msg("配置节点写入协调器失败")
+	}
 	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, settingsSvc, alertDispatcher, cfg.TaskTrafficRetentionDays, cfg.TaskRunRetentionDays)
 	taskManager.SetPublicationCoordinator(assetRuntime.PublicationCoordinator())
 	taskManager.SetLineageGuard(assetRuntime.LineageGuard())
+	taskManager.SetNodeWriteAdmission(nodeWriteCoordinator)
 	taskManager.SetLegacyBlockRecorder(assetRuntime.LegacyBlockRecorder())
 	taskManager.SetAnomalySink(anomalySink)
 	taskManager.SetExactAnomalyAnalyzer(func(ctx context.Context, taskEntity model.Task, runID uint, currentID, previousID string) ([]anomaly.Finding, error) {

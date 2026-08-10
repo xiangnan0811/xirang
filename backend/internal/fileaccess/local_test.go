@@ -6,10 +6,226 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestPinnedStrictTreeNeverReturnsPath(t *testing.T) {
+	treeType := reflect.TypeOf((*PinnedStrictTree)(nil)).Elem()
+	for _, forbidden := range []string{"Path", "Root", "Locator", "String"} {
+		if _, exists := treeType.MethodByName(forbidden); exists {
+			t.Fatalf("PinnedStrictTree exposes forbidden %s accessor", forbidden)
+		}
+	}
+	for _, required := range []string{"Close", "OpenDeclaredRegular", "Revalidate"} {
+		if _, exists := treeType.MethodByName(required); !exists {
+			t.Fatalf("PinnedStrictTree missing %s", required)
+		}
+	}
+	for index := 0; index < treeType.NumMethod(); index++ {
+		method := treeType.Method(index)
+		for output := 0; output < method.Type.NumOut(); output++ {
+			if method.Type.Out(output).Kind() == reflect.String {
+				t.Fatalf("PinnedStrictTree.%s returns a string path", method.Name)
+			}
+		}
+	}
+}
+
+func TestPinnedStrictTreeRejectsRootSwap(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("pinned strict tree requires Linux")
+	}
+	parent := t.TempDir()
+	root := filepath.Join(parent, "managed-root")
+	treePath := filepath.Join(root, "points", "point-a", "tree")
+	filePath := filepath.Join(treePath, "entry")
+	if err := os.MkdirAll(treePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filePath, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := entryFromFileInfo("entry", Locator{Path: "entry"}, info)
+	pinned, err := OpenPinnedStrictTree(context.Background(), Root{Path: root}, Locator{Path: "points/point-a/tree"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pinned.Close() }()
+
+	if err := os.Rename(root, filepath.Join(parent, "managed-root-original")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(treePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filePath, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := pinned.OpenDeclaredRegular(context.Background(), entry); !errors.Is(err, ErrSourceChanged) {
+		t.Fatalf("root replacement open error = %v, want ErrSourceChanged", err)
+	}
+}
+
+func TestPinnedStrictTreeRejectsFinalTreeSwap(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("pinned strict tree requires Linux")
+	}
+	root := t.TempDir()
+	treePath := filepath.Join(root, "points", "point-a", "tree")
+	filePath := filepath.Join(treePath, "entry")
+	if err := os.MkdirAll(treePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filePath, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := entryFromFileInfo("entry", Locator{Path: "entry"}, info)
+	pinned, err := OpenPinnedStrictTree(context.Background(), Root{Path: root}, Locator{Path: "points/point-a/tree"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pinned.Close() }()
+
+	if err := os.Rename(treePath, treePath+"-original"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(treePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filePath, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := pinned.OpenDeclaredRegular(context.Background(), entry); !errors.Is(err, ErrSourceChanged) {
+		t.Fatalf("final tree replacement open error = %v, want ErrSourceChanged", err)
+	}
+}
+
+func TestPinnedStrictTreeRejectsLinkSwap(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("pinned strict tree requires Linux")
+	}
+	root := t.TempDir()
+	treePath := filepath.Join(root, "points", "point-a", "tree")
+	filePath := filepath.Join(treePath, "entry")
+	if err := os.MkdirAll(treePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filePath, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := entryFromFileInfo("entry", Locator{Path: "entry"}, info)
+	pinned, err := OpenPinnedStrictTree(context.Background(), Root{Path: root}, Locator{Path: "points/point-a/tree"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pinned.Close() }()
+
+	if err := os.Rename(treePath, treePath+"-original"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(treePath+"-original", treePath); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := pinned.OpenDeclaredRegular(context.Background(), entry); !errors.Is(err, ErrSourceChanged) {
+		t.Fatalf("link replacement open error = %v, want ErrSourceChanged", err)
+	}
+}
+
+func TestPinnedStrictTreeRejectsEntrySwap(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("pinned strict tree requires Linux")
+	}
+	root := t.TempDir()
+	treePath := filepath.Join(root, "points", "point-a", "tree")
+	filePath := filepath.Join(treePath, "entry")
+	if err := os.MkdirAll(treePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filePath, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := entryFromFileInfo("entry", Locator{Path: "entry"}, info)
+	pinned, err := OpenPinnedStrictTree(context.Background(), Root{Path: root}, Locator{Path: "points/point-a/tree"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pinned.Close() }()
+
+	if err := os.Rename(filePath, filePath+"-original"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filePath, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := pinned.OpenDeclaredRegular(context.Background(), entry); !errors.Is(err, ErrSourceChanged) {
+		t.Fatalf("entry replacement open error = %v, want ErrSourceChanged", err)
+	}
+}
+
+func TestPinnedStrictTreeOpensDeclaredRegularAndCloses(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("pinned strict tree requires Linux")
+	}
+	root := t.TempDir()
+	treePath := filepath.Join(root, "points", "point-a", "tree")
+	filePath := filepath.Join(treePath, "entry")
+	if err := os.MkdirAll(treePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filePath, []byte("declared"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := entryFromFileInfo("entry", Locator{Path: "entry"}, info)
+	pinned, err := OpenPinnedStrictTree(context.Background(), Root{Path: root}, Locator{Path: "points/point-a/tree"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handle, stat, err := pinned.OpenDeclaredRegular(context.Background(), entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, readErr := io.ReadAll(handle)
+	if closeErr := handle.Close(); readErr != nil || closeErr != nil || string(value) != "declared" || stat.Size != int64(len(value)) {
+		t.Fatalf("declared entry read=%q readErr=%v closeErr=%v stat=%+v", value, readErr, closeErr, stat)
+	}
+	if err := pinned.Close(); err != nil {
+		t.Fatalf("close pinned tree: %v", err)
+	}
+	if _, _, err := pinned.OpenDeclaredRegular(context.Background(), entry); !errors.Is(err, ErrSourceChanged) {
+		t.Fatalf("open after close error = %v, want ErrSourceChanged", err)
+	}
+	if err := pinned.Close(); err != nil {
+		t.Fatalf("second pinned close: %v", err)
+	}
+}
 
 func TestLocalStrictListTypesAndBoundedOrder(t *testing.T) {
 	if runtime.GOOS != "linux" {

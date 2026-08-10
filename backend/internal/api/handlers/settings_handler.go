@@ -100,7 +100,7 @@ func transitionBackupAssetSettingsMutation(
 	for key, value := range overlay {
 		effective[key] = value
 	}
-	if runtimeTransitioner, ok := transitioner.(backupAssetRuntimeSettingsTransitioner); ok && hasLiveExportSettings(overlay) {
+	if runtimeTransitioner, ok := transitioner.(backupAssetRuntimeSettingsTransitioner); ok && hasLiveBackupAssetRuntimeSettings(overlay) {
 		config, err := backupasset.ExportConfigFromValues(effective)
 		if err != nil {
 			return err
@@ -123,7 +123,7 @@ func transitionBackupAssetSettingsMutation(
 	return persist()
 }
 
-func hasLiveExportSettings(overlay map[string]string) bool {
+func hasLiveBackupAssetRuntimeSettings(overlay map[string]string) bool {
 	for key := range overlay {
 		if key == "backup_assets.enabled" {
 			return true
@@ -132,7 +132,8 @@ func hasLiveExportSettings(overlay map[string]string) bool {
 			continue
 		}
 		if strings.HasPrefix(key, "backup_assets.export.") || strings.HasPrefix(key, "backup_assets.archive.") ||
-			key == "backup_assets.idempotency_ttl" || key == "backup_assets.idempotency_key_max_bytes" {
+			strings.HasPrefix(key, "backup_assets.recovery.") || key == "backup_assets.idempotency_ttl" ||
+			key == "backup_assets.idempotency_key_max_bytes" {
 			return true
 		}
 	}

@@ -17,8 +17,10 @@ func TestMainWiresSharedBackupAssetRuntimeBeforeSchedules(t *testing.T) {
 	requiredInOrder := []string{
 		"assetRuntime, err := backupruntime.New(",
 		"executor.NewFactoryWithPublicationStrategies(",
+		"nodeWriteCoordinator, err := backupruntime.NewNodeWriteCoordinator(db)",
 		"taskManager.SetPublicationCoordinator(assetRuntime.PublicationCoordinator())",
 		"taskManager.SetLineageGuard(assetRuntime.LineageGuard())",
+		"taskManager.SetNodeWriteAdmission(nodeWriteCoordinator)",
 		"assetRuntime.SetCommitObserver(taskManager)",
 		"assetRuntime.StartupPass(context.Background())",
 		"taskManager.LoadSchedules(context.Background())",

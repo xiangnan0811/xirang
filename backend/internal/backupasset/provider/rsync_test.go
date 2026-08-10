@@ -217,6 +217,60 @@ func TestRsyncCommittedPointReaderReadsOnlyExactPublishedTree(t *testing.T) {
 	}
 }
 
+func TestRsyncCommittedPointReaderRejectsSourceFingerprintSubstitution(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	fixture := newPublishedRsyncTreeReconcileFixture(t)
+	request := rsyncCommittedPointRequestForTest(fixture)
+	request.SourceFingerprint = strings.Repeat("9", 64)
+
+	if _, err := NewRsyncCommittedPointRuntimeAccess(context.Background(), request); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("substituted committed source fingerprint error=%v, want conflict", err)
+	}
+}
+
+func TestRsyncCommittedPointReaderRejectsMutatedRuntimeSourceRevision(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	adapter, snapshot, _ := rsyncCommittedPointReaderForTest(t)
+	runtimeAccess := snapshot.Access.AdapterData.(RsyncCommittedPointRuntimeAccess)
+	runtimeAccess.SourceRevision = strings.Repeat("9", 64)
+	snapshot.SourceRevision = runtimeAccess.SourceRevision
+	snapshot.Access.AdapterData = runtimeAccess
+
+	if points, err := adapter.ListPoints(context.Background(), snapshot, PageRequest{Limit: 10}); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("mutated committed runtime source revision published points=%+v err=%v, want invalid state", points, err)
+	}
+}
+
+func TestRsyncCommittedCatalogProofRejectsMutatedRuntimeSourceRevision(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict local provider access is Linux-only")
+	}
+	fixture := newPublishedRsyncTreeReconcileFixture(t)
+	adapter, snapshot, point := rsyncCommittedPointReaderForFixture(t, fixture)
+	runtimeAccess := snapshot.Access.AdapterData.(RsyncCommittedPointRuntimeAccess)
+	runtimeAccess.SourceRevision = strings.Repeat("9", 64)
+	snapshot.SourceRevision = runtimeAccess.SourceRevision
+	snapshot.Access.AdapterData = runtimeAccess
+	request := CatalogReadRequest{
+		Provider: backupasset.ProviderRsync, RecoveryPointID: fixture.attempt.RecoveryPointID,
+		Snapshot: snapshot, Point: point, Mode: CatalogProofPublicationManifest,
+		Manifest: CatalogManifestProof{
+			ManifestID: strings.Repeat("d", 32), Revision: 1, DigestAlgorithm: "sha256",
+			Digest: fixture.commit.ManifestDigest, EntryCount: int64(fixture.commit.ManifestEntryCount),
+			Completeness: backupasset.ManifestComplete, SourceRevision: snapshot.SourceRevision,
+		},
+		MaxItems: 100,
+	}
+
+	if proof, err := adapter.ProveCatalogManifest(context.Background(), request); !errors.Is(err, ErrCatalogProtocol) {
+		t.Fatalf("mutated committed runtime source revision published proof=%+v err=%v, want Catalog protocol error", proof, err)
+	}
+}
+
 func TestRsyncCommittedCatalogRevalidatesExactManifestAtFinalize(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("strict local provider access is Linux-only")
@@ -240,6 +294,11 @@ func TestRsyncCommittedCatalogRevalidatesExactManifestAtFinalize(t *testing.T) {
 	page, err := session.ListCanonical(context.Background(), PageRequest{Limit: 100})
 	if err != nil || len(page.Items) != int(fixture.commit.ManifestEntryCount) || page.NextCursor != "" {
 		t.Fatalf("Catalog page=%+v err=%v", page, err)
+	}
+	for _, record := range page.Items {
+		if record.Fingerprint != "" || record.FingerprintStrength != "none" {
+			t.Fatalf("generic committed-tree record=%+v, want empty fingerprint with none strength", record)
+		}
 	}
 	proof, err := session.Finalize(context.Background())
 	if err != nil || proof.Manifest != request.Manifest || !proof.Catalog.Complete {
@@ -404,9 +463,13 @@ func rsyncCommittedPointReaderForTest(t *testing.T) (*RsyncCommittedPointAdapter
 
 func rsyncCommittedPointReaderForFixture(t *testing.T, fixture rsyncTreeReconcileFixture) (*RsyncCommittedPointAdapter, ReadSnapshot, PointLocator) {
 	t.Helper()
-	access, err := NewRsyncCommittedPointRuntimeAccess(context.Background(), rsyncCommittedPointRequestForTest(fixture))
+	request := rsyncCommittedPointRequestForTest(fixture)
+	access, err := NewRsyncCommittedPointRuntimeAccess(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if access.SourceRevision != request.SourceFingerprint {
+		t.Fatalf("committed runtime source revision=%q, want authenticated source fingerprint %q", access.SourceRevision, request.SourceFingerprint)
 	}
 	adapter := newRsyncCommittedPointAdapterForTest(t)
 	binding := AccessBinding{

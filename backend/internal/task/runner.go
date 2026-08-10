@@ -85,15 +85,21 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 		return 0, fmt.Errorf("系统维护中，请稍候再试")
 	}
 
-	if _, loaded := m.pendingRuns.LoadOrStore(taskID, struct{}{}); loaded {
+	launchCtx, ownership, claimed := m.claimPendingRunOwnership(taskID)
+	if !claimed {
 		if reason == "retry" || reason == "cron" || reason == "chain" {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
 	}
 	scheduled := false
+	registeredCancel := ownership.cancel
 	defer func() {
 		if !scheduled {
+			if registeredCancel != nil {
+				registeredCancel()
+				m.chainRunner.Delete(taskID)
+			}
 			m.pendingRuns.Delete(taskID)
 		}
 	}()
@@ -146,28 +152,54 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 	if reason == "manual" && taskEntity.DependsOnTaskID != nil && *taskEntity.DependsOnTaskID > 0 {
 		return 0, fmt.Errorf("该任务有前置依赖（任务 ID: %d），请从链头节点触发", *taskEntity.DependsOnTaskID)
 	}
+	// Cancellation ownership precedes durable reservation. A concurrent Cancel
+	// can therefore abort the caller-owned reservation transaction instead of
+	// leaving a pending TaskRun whose goroutine has not registered yet.
+	runCtx, runCancel := m.newRunContext(launchCtx, computeExecTimeout(taskEntity))
+	ownership.addCancel(runCancel)
+	if err := launchCtx.Err(); err != nil {
+		return 0, err
+	}
+	if err := runCtx.Err(); err != nil {
+		return 0, err
+	}
 
+	// Keep the process-local restore marker check atomic with the durable
+	// admission plus TaskRun reservation. Cross-process exclusion is provided by
+	// the coordinator's shared node-row boundary inside reserveTaskRun.
+	nLock := m.nodeLock(taskEntity.NodeID)
+	nLock.Lock()
 	conflicted, err := m.hasRunningConflict(taskEntity)
 	if err != nil {
+		nLock.Unlock()
 		return 0, err
 	}
 	if conflicted {
+		nLock.Unlock()
 		return 0, fmt.Errorf("同节点有任务正在运行，请稍候再试")
 	}
 	// 检查同节点是否有恢复任务正在运行（恢复是破坏性操作，需要节点级互斥）
 	if m.isNodeRestoring(taskEntity.NodeID) {
+		nLock.Unlock()
 		return 0, fmt.Errorf("同节点有恢复任务正在运行，请稍候再试")
 	}
 
-	// 创建 TaskRun 执行记录
-	run := model.TaskRun{
+	requestedRun := model.TaskRun{
 		TaskID:            taskID,
 		TriggerType:       reason,
 		Status:            "pending",
 		ChainRunID:        chainRunID,
 		UpstreamTaskRunID: upstreamRunID,
 	}
-	if err := m.db.Create(&run).Error; err != nil {
+	run, err := m.reserveTaskRun(runCtx, taskEntity.NodeID, requestedRun)
+	nLock.Unlock()
+	if err != nil {
+		if errors.Is(err, ErrNodeWriteConflict) {
+			return 0, fmt.Errorf("同节点有恢复任务正在运行，请稍候再试: %w", err)
+		}
+		if errors.Is(err, ErrNodeWriteUnavailable) {
+			return 0, fmt.Errorf("节点写入协调暂不可用，请稍候再试: %w", err)
+		}
 		return 0, fmt.Errorf("创建执行记录失败: %w", err)
 	}
 
@@ -176,33 +208,66 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 	m.taskWG.Add(1)
 	go func() {
 		defer m.taskWG.Done()
-		m.runTask(taskID, run.ID, reason, chainRunID)
+		m.runTaskWithContext(taskID, run.ID, reason, chainRunID, runCtx, ownership.cancel)
 	}()
 	return run.ID, nil
 }
 
 func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID string) {
+	runCtx, runCancel := context.WithCancel(context.Background())
+	m.chainRunner.Store(taskID, runCancel)
+	m.runTaskWithContext(taskID, runID, reason, chainRunID, runCtx, runCancel)
+}
+
+func (m *Manager) runTaskWithContext(
+	taskID uint,
+	runID uint,
+	reason string,
+	chainRunID string,
+	runCtx context.Context,
+	runCancel context.CancelFunc,
+) {
 	defer m.pendingRuns.Delete(taskID)
 	defer m.locks.Delete(taskID) // 清理任务锁，防止 sync.Map 无限增长
+	defer m.chainRunner.Delete(taskID)
+	defer runCancel()
 
 	runCompleted := false
 	defer func() {
 		if !runCompleted {
 			now := time.Now()
-			m.db.Model(&model.TaskRun{}).Where("id = ?", runID).
+			result := m.db.Model(&model.TaskRun{}).
+				Where("id = ? AND status IN ?", runID, []string{"pending", "running"}).
 				Updates(map[string]interface{}{
 					"status":      "failed",
 					"finished_at": &now,
 					"last_error":  "任务启动前异常退出",
 				})
+			if result.Error != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(result.Error).Msg("标记启动前异常 TaskRun 失败")
+			}
 		}
 	}()
 
-	m.semaphore <- struct{}{}
+	select {
+	case m.semaphore <- struct{}{}:
+	case <-runCtx.Done():
+		if err := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消排队 TaskRun 失败")
+		}
+		runCompleted = true
+		return
+	}
 	defer func() { <-m.semaphore }()
 
 	lock := m.taskLock(taskID)
-	lock.Lock()
+	if !acquireLockWithContext(runCtx, lock) {
+		if err := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消等待任务锁的 TaskRun 失败")
+		}
+		runCompleted = true
+		return
+	}
 	defer lock.Unlock()
 
 	runIDPtr := &runID
@@ -213,8 +278,18 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		return
 	}
 
-	var currentRun struct{ Status string }
-	if err := m.db.Model(&model.TaskRun{}).Select("status").Where("id = ?", runID).Take(&currentRun).Error; err == nil && currentRun.Status == "canceled" {
+	var currentRun struct {
+		Status         string
+		NodeIDSnapshot uint
+	}
+	if err := m.db.Model(&model.TaskRun{}).Select("status", "node_id_snapshot").Where("id = ?", runID).Take(&currentRun).Error; err != nil {
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("加载执行记录失败: %v", err), taskEntity.Status)
+		return
+	}
+	if currentRun.Status == "canceled" || runCtx.Err() != nil {
+		if err := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("保留启动前取消状态失败")
+		}
 		runCompleted = true
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "任务已在启动前取消，跳过执行", taskEntity.Status)
 		return
@@ -268,13 +343,25 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 	}
 
 	strategyLock := m.strategyLock(taskEntity.NodeID, taskEntity.PolicyID)
-	strategyLock.Lock()
+	if !acquireLockWithContext(runCtx, strategyLock) {
+		if err := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消等待策略锁的 TaskRun 失败")
+		}
+		runCompleted = true
+		return
+	}
 	defer strategyLock.Unlock()
 
 	// 使用 nodeLock 保证 isNodeRestoring 检查与 updateStatus(running) 的原子性，
 	// 与 TriggerRestore() 中的 hasNodeConflictForRestore+restoreNodes.Store 互斥。
 	nLock := m.nodeLock(taskEntity.NodeID)
-	nLock.Lock()
+	if !acquireLockWithContext(runCtx, nLock) {
+		if err := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消等待节点锁的 TaskRun 失败")
+		}
+		runCompleted = true
+		return
+	}
 
 	conflicted, err := m.hasRunningConflict(taskEntity)
 	if err != nil {
@@ -293,45 +380,47 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		return
 	}
 
-	if currentStatus == StatusSuccess || currentStatus == StatusFailed || currentStatus == StatusCanceled || currentStatus == StatusWarning {
-		if err := m.updateStatus(&taskEntity, StatusPending, map[string]interface{}{"last_error": ""}); err != nil {
-			nLock.Unlock()
-			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("切换 pending 失败: %v", err), taskEntity.Status)
-			return
-		}
-	}
-
 	now := time.Now().UTC()
 	m.sampleWriter.ResetThrottle(taskID)
-	if err := m.updateStatus(&taskEntity, StatusRunning, map[string]interface{}{
-		"last_run_at": now,
-		"next_run_at": nil,
-		"last_error":  "",
-	}); err != nil {
+	execTimeout := computeExecTimeout(taskEntity)
+	execCtx, timeoutCancel := context.WithTimeout(runCtx, execTimeout)
+	execCtx = m.withTaskCredentialAuditContext(execCtx, taskEntity, runID, reason, map[string]any{
+		"operation":            "task_run",
+		"chain_run_id_present": strings.TrimSpace(chainRunID) != "",
+	})
+	defer timeoutCancel()
+	previousTaskOutcome := taskEntity
+	if err := m.enterTaskExecution(execCtx, runID, taskEntity.NodeID, now, &taskEntity); err != nil {
 		nLock.Unlock()
-		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("切换 running 失败: %v", err), taskEntity.Status)
+		if execCtx.Err() != nil || errors.Is(err, context.Canceled) {
+			if cancelErr := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); cancelErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(cancelErr).Msg("保留执行入口取消状态失败")
+			}
+			runCompleted = true
+			return
+		}
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("TaskRun 执行入口拒绝: %v", err), taskEntity.Status)
 		return
 	}
-	// 同步更新 TaskRun 为 running
-	m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-		"status":     "running",
-		"started_at": &now,
-	})
+	if execCtx.Err() != nil || runCtx.Err() != nil {
+		if err := m.cancelTaskExecutionBeforeExecutor(
+			runID,
+			taskID,
+			taskEntity.NodeID,
+			&previousTaskOutcome,
+			"任务已取消",
+		); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("补偿未进入 executor 的 Task 执行失败")
+		}
+		nLock.Unlock()
+		runCompleted = true
+		return
+	}
 	nLock.Unlock()
 	tasksActive.Inc()
 	defer tasksActive.Dec()
 
 	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", fmt.Sprintf("任务开始执行，触发来源: %s", reason), taskEntity.Status)
-
-	execTimeout := computeExecTimeout(taskEntity)
-	execCtx, cancel := context.WithTimeout(context.Background(), execTimeout)
-	execCtx = m.withTaskCredentialAuditContext(execCtx, taskEntity, runID, reason, map[string]any{
-		"operation":            "task_run",
-		"chain_run_id_present": strings.TrimSpace(chainRunID) != "",
-	})
-	m.chainRunner.Store(taskID, cancel)
-	defer m.chainRunner.Delete(taskID)
-	defer cancel()
 
 	if taskEntity.Policy != nil {
 		if preHook, err := secure.DecryptIfNeeded(taskEntity.Policy.PreHook); err == nil {
@@ -364,6 +453,19 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 
 	// Pre-hook 执行
 	if taskEntity.Policy != nil && taskEntity.Policy.PreHook != "" {
+		if execCtx.Err() != nil || runCtx.Err() != nil {
+			if err := m.cancelTaskExecutionBeforeExecutor(
+				runID,
+				taskID,
+				taskEntity.NodeID,
+				&previousTaskOutcome,
+				"任务已取消",
+			); err != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("补偿 pre-hook 前取消失败")
+			}
+			runCompleted = true
+			return
+		}
 		hookTimeout := time.Duration(taskEntity.Policy.HookTimeoutSeconds) * time.Second
 		if hookTimeout <= 0 {
 			hookTimeout = 5 * time.Minute
@@ -394,6 +496,19 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "pre-hook 执行成功", taskEntity.Status)
 	}
 
+	if execCtx.Err() != nil || runCtx.Err() != nil {
+		if err := m.cancelTaskExecutionBeforeExecutor(
+			runID,
+			taskID,
+			taskEntity.NodeID,
+			&previousTaskOutcome,
+			"任务已取消",
+		); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("补偿 executor 前取消失败")
+		}
+		runCompleted = true
+		return
+	}
 	runStartedAt := now
 	providerResult := m.executeProvider(execCtx, taskEntity, runID, reason, chainRunID, func(level, message string) {
 		m.logDispatcher.Dispatch(taskID, runIDPtr, level, message, string(StatusRunning))
@@ -690,16 +805,25 @@ func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID str
 // runRestoreTask 执行恢复任务。与 runTask 不同，恢复不影响原始 Task 的状态，
 // 仅更新 TaskRun 记录。使用内存中交换了 source/target 的任务副本。
 func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task) {
-	defer m.pendingRuns.Delete(taskID)
-	defer m.locks.Delete(taskID) // 清理任务锁，防止 sync.Map 无限增长
-
-	// 尽早注册取消句柄，使排队等锁期间也能被 Cancel() 中断；
-	// 同时受 Policy.MaxExecutionSeconds / TASK_MAX_EXECUTION_SECONDS 全局兜底。
 	execCtx, cancel := context.WithTimeout(context.Background(), computeExecTimeout(restoreTask))
 	execCtx = m.withTaskCredentialAuditContext(execCtx, restoreTask, runID, "restore", map[string]any{
 		"operation": "restore_task",
 	})
 	m.chainRunner.Store(taskID, cancel)
+	m.runRestoreTaskWithContext(taskID, runID, restoreTask, execCtx, cancel)
+}
+
+func (m *Manager) runRestoreTaskWithContext(
+	taskID uint,
+	runID uint,
+	restoreTask model.Task,
+	execCtx context.Context,
+	cancel context.CancelFunc,
+) {
+	defer m.pendingRuns.Delete(taskID)
+	defer m.locks.Delete(taskID) // 清理任务锁，防止 sync.Map 无限增长
+	defer m.restoreNodes.Delete(restoreTask.NodeID)
+
 	defer m.chainRunner.Delete(taskID)
 	defer cancel()
 
@@ -716,20 +840,22 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		defer func() { _ = session.Close() }()
 	}
 
-	// restoreNodes 已在 TriggerRestore 同步路径中注册，此处仅负责清理
-	defer m.restoreNodes.Delete(restoreTask.NodeID)
 	m.sampleWriter.ResetThrottle(taskID)
 
 	runCompleted := false
 	defer func() {
 		if !runCompleted {
 			now := time.Now()
-			m.db.Model(&model.TaskRun{}).Where("id = ?", runID).
+			result := m.db.Model(&model.TaskRun{}).
+				Where("id = ? AND status IN ?", runID, []string{"pending", "running"}).
 				Updates(map[string]interface{}{
 					"status":      "failed",
 					"finished_at": &now,
 					"last_error":  "恢复任务启动前异常退出",
 				})
+			if result.Error != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(result.Error).Msg("标记恢复启动前异常 TaskRun 失败")
+			}
 		}
 	}()
 
@@ -738,7 +864,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	case m.semaphore <- struct{}{}:
 	case <-execCtx.Done():
 		finishedAt := time.Now()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+		m.db.Model(&model.TaskRun{}).Where("id = ? AND status = ?", runID, "pending").Updates(map[string]interface{}{
 			"status":      "canceled",
 			"finished_at": &finishedAt,
 			"last_error":  "恢复任务已取消",
@@ -752,7 +878,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	lock := m.taskLock(taskID)
 	if !acquireLockWithContext(execCtx, lock) {
 		finishedAt := time.Now()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+		m.db.Model(&model.TaskRun{}).Where("id = ? AND status = ?", runID, "pending").Updates(map[string]interface{}{
 			"status":      "canceled",
 			"finished_at": &finishedAt,
 			"last_error":  "恢复任务已取消",
@@ -765,7 +891,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 	strategyLock := m.strategyLock(restoreTask.NodeID, restoreTask.PolicyID)
 	if !acquireLockWithContext(execCtx, strategyLock) {
 		finishedAt := time.Now()
-		m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+		m.db.Model(&model.TaskRun{}).Where("id = ? AND status = ?", runID, "pending").Updates(map[string]interface{}{
 			"status":      "canceled",
 			"finished_at": &finishedAt,
 			"last_error":  "恢复任务已取消",
@@ -777,11 +903,31 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 
 	runIDPtr := &runID
 
-	now := time.Now()
-	m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
-		"status":     "running",
-		"started_at": &now,
-	})
+	now := time.Now().UTC()
+	if err := m.enterTaskExecution(execCtx, runID, restoreTask.NodeID, now, nil); err != nil {
+		if execCtx.Err() != nil || errors.Is(err, context.Canceled) {
+			if cancelErr := m.cancelTaskRunBeforeExecutor(runID, "恢复任务已取消"); cancelErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(cancelErr).Msg("保留恢复执行入口取消状态失败")
+			}
+			runCompleted = true
+			return
+		}
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("恢复 TaskRun 执行入口拒绝: %v", err), "")
+		return
+	}
+	if execCtx.Err() != nil {
+		if err := m.cancelTaskExecutionBeforeExecutor(
+			runID,
+			taskID,
+			restoreTask.NodeID,
+			nil,
+			"恢复任务已取消",
+		); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("补偿恢复预检前取消失败")
+		}
+		runCompleted = true
+		return
+	}
 
 	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "开始恢复任务", "")
 
@@ -834,6 +980,19 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		return
 	}
 
+	if execCtx.Err() != nil {
+		if err := m.cancelTaskExecutionBeforeExecutor(
+			runID,
+			taskID,
+			restoreTask.NodeID,
+			nil,
+			"恢复任务已取消",
+		); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("补偿恢复 executor 前取消失败")
+		}
+		runCompleted = true
+		return
+	}
 	_, err := restoreExec.RunRestore(execCtx, restoreTask, func(level, message string) {
 		m.logDispatcher.Dispatch(taskID, runIDPtr, level, message, "running")
 	}, func(sample executor.ProgressSample) {
@@ -1146,6 +1305,19 @@ func acquireLockWithContext(ctx context.Context, mu *sync.Mutex) bool {
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+func (m *Manager) cancelTaskRunBeforeExecutor(runID uint, message string) error {
+	finishedAt := time.Now().UTC()
+	return m.db.Model(&model.TaskRun{}).
+		Where("id = ? AND status = ?", runID, "pending").
+		Updates(map[string]interface{}{
+			"status":      "canceled",
+			"started_at":  nil,
+			"finished_at": &finishedAt,
+			"duration_ms": int64(0),
+			"last_error":  message,
+		}).Error
 }
 
 func (m *Manager) isCanceled(taskID uint) bool {

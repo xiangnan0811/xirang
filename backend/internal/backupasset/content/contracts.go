@@ -10,11 +10,10 @@ import (
 )
 
 var (
-	ErrInvalidDeliveryResource   = errors.New("invalid delivery resource")
-	ErrRecoveryResultUnsupported = errors.New("recovery result delivery unsupported")
-	ErrInvalidDeliveryProduct    = errors.New("invalid delivery product")
-	ErrInvalidDeliveryState      = errors.New("invalid delivery state")
-	ErrInvalidDeliveryCookie     = errors.New("invalid delivery cookie")
+	ErrInvalidDeliveryResource = errors.New("invalid delivery resource")
+	ErrInvalidDeliveryProduct  = errors.New("invalid delivery product")
+	ErrInvalidDeliveryState    = errors.New("invalid delivery state")
+	ErrInvalidDeliveryCookie   = errors.New("invalid delivery cookie")
 )
 
 type DeliveryResourceKind string
@@ -115,13 +114,35 @@ type DeliveryProduct struct {
 
 func ValidateDeliveryResource(resource DeliveryResource) error {
 	if resource.Kind == DeliveryResourceRecoveryResult && resource.Asset == nil && resource.RecoveryResult != nil {
-		return ErrRecoveryResultUnsupported
+		if backupasset.ValidateOpaqueID(resource.RecoveryResult.RecoveryJobID) != nil ||
+			backupasset.ValidateOpaqueID(resource.RecoveryResult.ResultID) != nil {
+			return ErrInvalidDeliveryResource
+		}
+		return nil
 	}
 	if resource.Kind != DeliveryResourceBackupAsset || resource.Asset == nil || resource.RecoveryResult != nil {
 		return ErrInvalidDeliveryResource
 	}
 	if err := backupasset.ValidateAssetRef(*resource.Asset); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidDeliveryResource, err)
+	}
+	return nil
+}
+
+func ValidateDeliveryProductForResource(
+	kind DeliveryResourceKind,
+	product DeliveryProduct,
+	now time.Time,
+) error {
+	if kind == DeliveryResourceBackupAsset {
+		return ValidateDeliveryProduct(product, now)
+	}
+	if kind != DeliveryResourceRecoveryResult || product.Method != MethodGetHead ||
+		!validClassifications[product.Classification] || !product.AbsoluteExpiresAt.After(now.UTC()) ||
+		!validRendererProduct(product) || product.Action != DeliveryDownload ||
+		product.Renderer != RendererAttachment || product.Profile != ProfileOriginalV1 ||
+		!validProof(product.Proof, auth.StepUpActionRecoveryResultDownload, product.AbsoluteExpiresAt, now) {
+		return ErrInvalidDeliveryProduct
 	}
 	return nil
 }

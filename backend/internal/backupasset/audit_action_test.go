@@ -201,6 +201,46 @@ func TestPublicationAuditActionsPermitOnlySafeTypedFields(t *testing.T) {
 	}
 }
 
+func TestRecoveryReconciliationAuditOperationIsPurposeExact(t *testing.T) {
+	event, err := NewAuditEvent(AuditEventInput{
+		Action:  AuditActionRecoveryCleanup,
+		Outcome: AuditOutcomeSuccess,
+		Fields: map[AuditField]any{
+			AuditFieldOperation: "recovery_reconcile",
+			AuditFieldStatus:    "clear",
+		},
+	})
+	if err != nil {
+		t.Fatalf("new recovery reconciliation audit event: %v", err)
+	}
+	want := map[AuditField]any{
+		AuditFieldOperation: "recovery_reconcile",
+		AuditFieldStatus:    "clear",
+	}
+	if !reflect.DeepEqual(event.Fields, want) {
+		t.Fatalf("recovery reconciliation audit fields=%#v, want %#v", event.Fields, want)
+	}
+
+	for _, testCase := range []struct {
+		name      string
+		action    AuditAction
+		operation any
+	}{
+		{name: "cleanup other operation", action: AuditActionRecoveryCleanup, operation: "recovery_cleanup"},
+		{name: "cleanup non-string operation", action: AuditActionRecoveryCleanup, operation: 1},
+		{name: "other action reconciliation operation", action: AuditActionRecoveryVerify, operation: "recovery_reconcile"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, eventErr := NewAuditEvent(AuditEventInput{
+				Action: testCase.action,
+				Fields: map[AuditField]any{AuditFieldOperation: testCase.operation},
+			}); !errors.Is(eventErr, ErrInvalidState) {
+				t.Fatalf("operation combination error=%v, want ErrInvalidState", eventErr)
+			}
+		})
+	}
+}
+
 func TestAuditRejectsUnknownActionAndField(t *testing.T) {
 	if _, err := NewAuditEvent(AuditEventInput{Action: AuditAction("asset.unregistered")}); !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("unknown action got %v, want ErrInvalidState", err)

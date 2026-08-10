@@ -130,6 +130,23 @@ func TestContentAuditAggregatesRequestLedgerAndFlushesOneInternalGrantSummary(t 
 	}
 }
 
+func TestContentAggregateAuditUsesRecoveryResultActionAndJobBinding(t *testing.T) {
+	jobID := strings.Repeat("a", 32)
+	resultID := strings.Repeat("b", 32)
+	grant := model.BackupAssetDeliveryGrant{
+		ID: strings.Repeat("c", 32), ResourceKind: string(DeliveryResourceRecoveryResult),
+		RecoveryJobID: &jobID, RecoveryResultID: &resultID,
+		OwnerUserID: 42, SessionRole: "admin", Action: string(DeliveryDownload),
+		Renderer: string(RendererAttachment), Profile: string(ProfileOriginalV1),
+		Classification: string(ClassificationUnknown),
+	}
+	input := aggregateAuditInput(grant, 12)
+	if input.Action != backupasset.AuditActionRecoveryResultDownload || input.RecoveryJobID != jobID ||
+		input.RecoveryPointID != "" || input.EntryID != "" || input.ByteCount != 12 || input.GrantID != grant.ID {
+		t.Fatalf("recovery aggregate audit=%+v", input)
+	}
+}
+
 func TestContentAuditFailureQueuesBoundedRetryAndBacklogBlocksNewTickets(t *testing.T) {
 	db := newContentAuditTestDB(t)
 	now := time.Date(2026, 7, 18, 15, 0, 0, 0, time.UTC)

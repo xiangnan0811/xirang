@@ -17,6 +17,7 @@ type Registration struct {
 	RangeReader         RangeReader
 	CatalogReader       CatalogReader
 	PublicationStrategy PublicationStrategy
+	RestorePort         RestorePort
 }
 
 type Registry struct {
@@ -31,6 +32,9 @@ func NewRegistry() *Registry {
 func (registry *Registry) Register(kind backupasset.ProviderKind, registration Registration) error {
 	if !readableProvider(kind) || interfaceNil(registration.Prober) {
 		return newCapabilityError(backupasset.CapabilityProviderUnavailable)
+	}
+	if !interfaceNil(registration.RestorePort) && registration.RestorePort.ProviderKind() != kind {
+		return fmt.Errorf("%w: restore port provider mismatch", backupasset.ErrInvalidState)
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
@@ -134,6 +138,22 @@ func (registry *Registry) PublicationStrategy(kind backupasset.ProviderKind) (Pu
 		return nil, fmt.Errorf("%w: publication strategy provider mismatch", backupasset.ErrInvalidState)
 	}
 	return strategy, nil
+}
+
+// RestorePort returns only the restore implementation registered for this
+// Provider. It never falls back to a different Provider or a generic executor.
+func (registry *Registry) RestorePort(kind backupasset.ProviderKind) (RestorePort, error) {
+	registration, err := registry.registration(kind)
+	if err != nil || interfaceNil(registration.RestorePort) {
+		if err != nil {
+			return nil, err
+		}
+		return nil, newCapabilityError(backupasset.CapabilityRestoreUnavailable)
+	}
+	if registration.RestorePort.ProviderKind() != kind {
+		return nil, fmt.Errorf("%w: restore port provider mismatch", backupasset.ErrInvalidState)
+	}
+	return registration.RestorePort, nil
 }
 
 func (registry *Registry) registration(kind backupasset.ProviderKind) (Registration, error) {

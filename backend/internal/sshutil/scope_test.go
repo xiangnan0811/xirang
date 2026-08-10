@@ -103,3 +103,46 @@ func TestRepositoryPurposesRemainIndependent(t *testing.T) {
 		}
 	}
 }
+
+func TestRecoveryPurposesNormalizeAsKnownAndRemainIndependent(t *testing.T) {
+	purposes := []string{
+		PurposeRecoveryPreflight,
+		PurposeRecoveryWrite,
+		PurposeRecoveryVerify,
+		PurposeRecoveryResultRead,
+		PurposeRecoveryCleanup,
+		PurposeRecoveryReconcile,
+	}
+	normalized, err := NormalizePurposeList(strings.Join(append(append([]string(nil), purposes...), purposes...), ","))
+	if err != nil {
+		t.Fatalf("normalize recovery purposes: %v", err)
+	}
+	if normalized != strings.Join(purposes, ",") {
+		t.Fatalf("normalized recovery purposes = %q, want %q", normalized, strings.Join(purposes, ","))
+	}
+
+	for _, allowed := range purposes {
+		key := model.SSHKey{AllowedPurposes: allowed}
+		for _, requested := range purposes {
+			err := ValidateSSHKeyScope(key, model.Node{ID: 1}, requested)
+			if (allowed == requested) != (err == nil) {
+				t.Fatalf("allowed=%s requested=%s err=%v", allowed, requested, err)
+			}
+		}
+	}
+}
+
+func TestRecoveryReconcilePurposeIsKnownAndIndependent(t *testing.T) {
+	if got := NormalizePurpose("  RECOVERY_RECONCILE "); got != PurposeRecoveryReconcile {
+		t.Fatalf("normalized recovery reconcile purpose=%q, want %q", got, PurposeRecoveryReconcile)
+	}
+	key := model.SSHKey{AllowedPurposes: PurposeRecoveryReconcile}
+	if err := ValidateSSHKeyScope(key, model.Node{ID: 1}, PurposeRecoveryReconcile); err != nil {
+		t.Fatalf("reconcile purpose should be allowed by an exact scope: %v", err)
+	}
+	for _, other := range []string{PurposeRecoveryPreflight, PurposeRecoveryWrite, PurposeRecoveryVerify, PurposeRecoveryResultRead, PurposeRecoveryCleanup} {
+		if err := ValidateSSHKeyScope(key, model.Node{ID: 1}, other); err == nil {
+			t.Fatalf("reconcile-only key unexpectedly allowed purpose %q", other)
+		}
+	}
+}

@@ -10,7 +10,7 @@ import (
 	"xirang/backend/internal/backupasset"
 )
 
-func TestDeliveryResourceAcceptsOnlyOneBackupAsset(t *testing.T) {
+func TestDeliveryResourceAcceptsOneClosedResourceArm(t *testing.T) {
 	asset := backupasset.AssetRef{RecoveryPointID: strings.Repeat("a", 32), EntryID: strings.Repeat("b", 64)}
 	recovery := RecoveryResultRef{RecoveryJobID: strings.Repeat("c", 32), ResultID: strings.Repeat("d", 32)}
 	tests := []struct {
@@ -22,7 +22,11 @@ func TestDeliveryResourceAcceptsOnlyOneBackupAsset(t *testing.T) {
 		{name: "empty", value: DeliveryResource{}, wantErr: ErrInvalidDeliveryResource},
 		{name: "missing asset", value: DeliveryResource{Kind: DeliveryResourceBackupAsset}, wantErr: ErrInvalidDeliveryResource},
 		{name: "dual", value: DeliveryResource{Kind: DeliveryResourceBackupAsset, Asset: &asset, RecoveryResult: &recovery}, wantErr: ErrInvalidDeliveryResource},
-		{name: "recovery result", value: DeliveryResource{Kind: DeliveryResourceRecoveryResult, RecoveryResult: &recovery}, wantErr: ErrRecoveryResultUnsupported},
+		{name: "recovery result", value: DeliveryResource{Kind: DeliveryResourceRecoveryResult, RecoveryResult: &recovery}},
+		{name: "recovery result missing ref", value: DeliveryResource{Kind: DeliveryResourceRecoveryResult}, wantErr: ErrInvalidDeliveryResource},
+		{name: "recovery result path id", value: DeliveryResource{Kind: DeliveryResourceRecoveryResult, RecoveryResult: &RecoveryResultRef{
+			RecoveryJobID: recovery.RecoveryJobID, ResultID: "../result",
+		}}, wantErr: ErrInvalidDeliveryResource},
 		{name: "unknown", value: DeliveryResource{Kind: "future", Asset: &asset}, wantErr: ErrInvalidDeliveryResource},
 	}
 	for _, test := range tests {
@@ -33,6 +37,61 @@ func TestDeliveryResourceAcceptsOnlyOneBackupAsset(t *testing.T) {
 			}
 			if test.wantErr != nil && !errors.Is(err, test.wantErr) {
 				t.Fatalf("ValidateDeliveryResource() error = %v, want %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestRecoveryResultDeliveryProductRequiresExactDownloadPurpose(t *testing.T) {
+	now := time.Date(2026, 8, 3, 8, 0, 0, 0, time.UTC)
+	expires := now.Add(2 * time.Minute)
+	recoveryProof := &StepUpProof{
+		Action: auth.StepUpActionRecoveryResultDownload, ID: strings.Repeat("a", 32), ExpiresAt: expires,
+	}
+	assetProof := &StepUpProof{
+		Action: auth.StepUpActionAssetDownload, ID: strings.Repeat("b", 32), ExpiresAt: expires,
+	}
+	base := DeliveryProduct{
+		Action: DeliveryDownload, Method: MethodGetHead, Range: RangeSingle,
+		Renderer: RendererAttachment, Profile: ProfileOriginalV1,
+		Classification: ClassificationUnknown, Proof: recoveryProof, AbsoluteExpiresAt: now.Add(time.Minute),
+	}
+	tests := []struct {
+		name  string
+		edit  func(DeliveryProduct) DeliveryProduct
+		valid bool
+	}{
+		{name: "exact recovery proof", edit: func(product DeliveryProduct) DeliveryProduct { return product }, valid: true},
+		{name: "non secret still requires proof", edit: func(product DeliveryProduct) DeliveryProduct {
+			product.Classification = ClassificationNonSecret
+			product.Proof = nil
+			return product
+		}},
+		{name: "asset download proof is insufficient", edit: func(product DeliveryProduct) DeliveryProduct {
+			product.Proof = assetProof
+			return product
+		}},
+		{name: "preview is forbidden", edit: func(product DeliveryProduct) DeliveryProduct {
+			product.Action = DeliveryPreview
+			return product
+		}},
+		{name: "inline renderer is forbidden", edit: func(product DeliveryProduct) DeliveryProduct {
+			product.Renderer = RendererEscapedText
+			product.Profile = ProfileTextV1
+			product.Range = RangeNone
+			return product
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateDeliveryProductForResource(
+				DeliveryResourceRecoveryResult, test.edit(base), now,
+			)
+			if test.valid && err != nil {
+				t.Fatalf("ValidateDeliveryProductForResource() error = %v", err)
+			}
+			if !test.valid && !errors.Is(err, ErrInvalidDeliveryProduct) {
+				t.Fatalf("ValidateDeliveryProductForResource() error = %v, want invalid product", err)
 			}
 		})
 	}

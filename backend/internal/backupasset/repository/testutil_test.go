@@ -122,6 +122,59 @@ func TestRepositoryFoundationSettingsFixtureCoversSearchOverlayConfig(t *testing
 	}
 }
 
+func TestRecoveryAuthorizationReceiptSettingsRegistryComplete(t *testing.T) {
+	expected := map[string]settingservice.SettingDef{
+		"backup_assets.recovery.receipt_replay_ttl": {
+			Key: "backup_assets.recovery.receipt_replay_ttl", EnvVar: "BACKUP_ASSETS_RECOVERY_RECEIPT_REPLAY_TTL",
+			CodeDefault: "20m", Type: settingservice.TypeDuration, Category: "backup_assets", MinDuration: "5m", MaxDuration: "24h",
+		},
+		"backup_assets.recovery.write_grant_ttl": {
+			Key: "backup_assets.recovery.write_grant_ttl", EnvVar: "BACKUP_ASSETS_RECOVERY_WRITE_GRANT_TTL",
+			CodeDefault: "15m", Type: settingservice.TypeDuration, Category: "backup_assets", MinDuration: "1m", MaxDuration: "24h",
+		},
+		"backup_assets.recovery.delete_grant_ttl": {
+			Key: "backup_assets.recovery.delete_grant_ttl", EnvVar: "BACKUP_ASSETS_RECOVERY_DELETE_GRANT_TTL",
+			CodeDefault: "10m", Type: settingservice.TypeDuration, Category: "backup_assets", MinDuration: "1m", MaxDuration: "24h",
+		},
+		"backup_assets.recovery.receipt_reaper_cadence": {
+			Key: "backup_assets.recovery.receipt_reaper_cadence", EnvVar: "BACKUP_ASSETS_RECOVERY_RECEIPT_REAPER_CADENCE",
+			CodeDefault: "1m", Type: settingservice.TypeDuration, Category: "backup_assets", MinDuration: "10s", MaxDuration: "1h",
+		},
+		"backup_assets.recovery.receipt_reaper_batch_size": {
+			Key: "backup_assets.recovery.receipt_reaper_batch_size", EnvVar: "BACKUP_ASSETS_RECOVERY_RECEIPT_REAPER_BATCH_SIZE",
+			CodeDefault: "100", Type: settingservice.TypeInt, Category: "backup_assets", Min: "1", Max: "1000",
+		},
+	}
+	definitions := make(map[string]settingservice.SettingDef, len(expected))
+	for _, definition := range settingservice.NewService(nil).Registry() {
+		if _, wanted := expected[definition.Key]; wanted {
+			definitions[definition.Key] = definition
+		}
+	}
+	foundationKeys := make(map[string]bool)
+	for _, key := range settingservice.BackupAssetFoundationSettingKeys() {
+		foundationKeys[key] = true
+	}
+	for key, want := range expected {
+		got, exists := definitions[key]
+		if !exists {
+			t.Errorf("settings registry omitted %s", key)
+			continue
+		}
+		got.Description = ""
+		want.Description = ""
+		if got != want {
+			t.Errorf("definition %s=%+v, want %+v", key, got, want)
+		}
+		if !foundationKeys[key] {
+			t.Errorf("foundation snapshot omitted %s", key)
+		}
+		if gotDefault, exists := repositoryFoundationDefaults[key]; !exists || gotDefault != want.CodeDefault {
+			t.Errorf("repository frozen default %s=%q exists=%v, want %q", key, gotDefault, exists, want.CodeDefault)
+		}
+	}
+}
+
 func completeRepositoryFoundationSettings(enabled bool) repositorySettings {
 	values := make(repositorySettings, len(repositoryFoundationDefaults))
 	for key, value := range repositoryFoundationDefaults {
@@ -319,6 +372,11 @@ var repositoryFoundationDefaults = repositorySettings{
 	"backup_assets.worker_updater_enabled":                     "false",
 	"backup_assets.worker_updater_online_enabled":              "false",
 	"backup_assets.worker_updater_online_origins":              "",
+	"backup_assets.recovery.receipt_replay_ttl":                "20m",
+	"backup_assets.recovery.write_grant_ttl":                   "15m",
+	"backup_assets.recovery.delete_grant_ttl":                  "10m",
+	"backup_assets.recovery.receipt_reaper_cadence":            "1m",
+	"backup_assets.recovery.receipt_reaper_batch_size":         "100",
 }
 
 func testObservation(kind backupasset.ProviderKind, identity string) provider.RepositoryObservation {

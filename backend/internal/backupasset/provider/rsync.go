@@ -112,12 +112,8 @@ func NewRsyncCommittedPointRuntimeAccess(ctx context.Context, request RsyncCommi
 	if err != nil {
 		return RsyncCommittedPointRuntimeAccess{}, err
 	}
-	sourceRevision, err := rsyncCommittedPointSourceRevision(request)
-	if err != nil {
-		return RsyncCommittedPointRuntimeAccess{}, fmt.Errorf("%w: encode committed Rsync point source revision", backupasset.ErrInvalidState)
-	}
 	return RsyncCommittedPointRuntimeAccess{
-		Tree: fileaccess.NewLocalTree(), Root: fileaccess.Root{Path: root}, SourceRevision: sourceRevision,
+		Tree: fileaccess.NewLocalTree(), Root: fileaccess.Root{Path: root}, SourceRevision: request.SourceFingerprint,
 		request: cloneRsyncCommittedPointReadRequest(request),
 	}, nil
 }
@@ -140,17 +136,6 @@ func validateRsyncCommittedPointReadRequest(request RsyncCommittedPointReadReque
 func cloneRsyncCommittedPointReadRequest(request RsyncCommittedPointReadRequest) RsyncCommittedPointReadRequest {
 	request.MarkerKey = append([]byte(nil), request.MarkerKey...)
 	return request
-}
-
-func rsyncCommittedPointSourceRevision(request RsyncCommittedPointReadRequest) (string, error) {
-	writer := backupasset.NewCanonicalSHA256()
-	writer.String("rsync-committed-point-source-revision:v1")
-	writer.String(request.Attempt.RepositoryID)
-	writer.String(request.Attempt.RecoveryPointID)
-	writer.String(request.CommitMarkerDigest)
-	writer.String(request.ManifestDigest)
-	writer.String(request.Attempt.ManagedRootIdentityDigest)
-	return writer.HexDigest()
 }
 
 func rsyncCommittedPointLocator(request RsyncCommittedPointReadRequest) PointLocator {
@@ -743,7 +728,8 @@ func (adapter *RsyncCommittedPointAdapter) validateBinding(binding AccessBinding
 	}
 	runtimeAccess, ok := binding.AdapterData.(RsyncCommittedPointRuntimeAccess)
 	if !ok || runtimeAccess.Tree == nil || strings.TrimSpace(runtimeAccess.Root.Path) == "" ||
-		validateRsyncCommittedPointReadRequest(runtimeAccess.request) != nil || binding.RepositoryID != runtimeAccess.request.Attempt.RepositoryID ||
+		validateRsyncCommittedPointReadRequest(runtimeAccess.request) != nil || runtimeAccess.SourceRevision != runtimeAccess.request.SourceFingerprint ||
+		binding.RepositoryID != runtimeAccess.request.Attempt.RepositoryID ||
 		binding.TaskID != runtimeAccess.request.Attempt.TaskID {
 		return RsyncCommittedPointRuntimeAccess{}, fmt.Errorf("%w: committed Rsync tree access unavailable", backupasset.ErrInvalidState)
 	}

@@ -259,6 +259,14 @@ type ExportConfig struct {
 	Archive                ExportArchiveConfig
 }
 
+type RecoveryAuthorizationConfig struct {
+	ReceiptReplayTTL       time.Duration
+	WriteGrantTTL          time.Duration
+	DeleteGrantTTL         time.Duration
+	ReceiptReaperCadence   time.Duration
+	ReceiptReaperBatchSize int
+}
+
 func NewFoundationService(reader SettingsReader) *FoundationService {
 	return &FoundationService{settings: reader}
 }
@@ -694,6 +702,33 @@ func (service *FoundationService) ExportConfig() (ExportConfig, error) {
 		return ExportConfig{}, err
 	}
 	return ExportConfigFromValues(values)
+}
+
+// RecoveryAuthorizationConfig returns the coupled receipt/grant deadlines and
+// bounded maintenance limits from one validated Foundation snapshot.
+func (service *FoundationService) RecoveryAuthorizationConfig() (RecoveryAuthorizationConfig, error) {
+	values, err := service.atomicFoundationValues()
+	if err != nil {
+		return RecoveryAuthorizationConfig{}, err
+	}
+	result := RecoveryAuthorizationConfig{}
+	for _, field := range []struct {
+		key    string
+		target *time.Duration
+	}{
+		{"backup_assets.recovery.receipt_replay_ttl", &result.ReceiptReplayTTL},
+		{"backup_assets.recovery.write_grant_ttl", &result.WriteGrantTTL},
+		{"backup_assets.recovery.delete_grant_ttl", &result.DeleteGrantTTL},
+		{"backup_assets.recovery.receipt_reaper_cadence", &result.ReceiptReaperCadence},
+	} {
+		if *field.target, err = parseFoundationDuration(values, field.key); err != nil {
+			return RecoveryAuthorizationConfig{}, err
+		}
+	}
+	if result.ReceiptReaperBatchSize, err = parseFoundationInt(values, "backup_assets.recovery.receipt_reaper_batch_size"); err != nil {
+		return RecoveryAuthorizationConfig{}, err
+	}
+	return result, nil
 }
 
 // ExportConfigFromValues parses one complete, validated foundation snapshot
