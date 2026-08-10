@@ -1456,3 +1456,26 @@ Recorded PR #410 squash merge, green hosted and post-merge automation, no formal
 
 - Merge this bookkeeping PR, monitor its post-merge automation, resynchronize
   local `main`, remove the bookkeeping branch, then begin Task 8 separately.
+
+
+## Session 36: Trellis 0.6.14 native auto upgrade closure
+
+**Date**: 2026-08-11
+**Task**: Trellis 0.6.14 native auto upgrade closure
+**Branch**: `codex/trellis-0.6.14-upgrade-closure`
+
+### Summary
+
+Upgraded project Trellis to 0.6.14 native auto dispatch while preserving Xirang customization and task memory; merged PR #412, diagnosed and fixed the post-merge publish-ready fixture clock flake through PR #413, verified both PR matrices and post-merge main CI, recorded release behavior, synchronized main, removed delivery branches, and archived the maintenance task without starting Task 8.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b068e9d` | (see git log) |
+| `ac9e3fa` | (see git log) |
+| `6b05b77` | (see git log) |
+
+### Status
+
+[OK] **Completed**

@@ -76,11 +76,15 @@ levels before completing the repository PR workflow.
 - [x] Stage only reviewed maintenance-task paths and create conventional commit
   `828ebe0`.
 - [x] Push the topic branch and create PR #412 targeting `main`.
-- [ ] Monitor every required CI job; fix and push failures on this branch until
-  all required checks pass.
-- [ ] Squash merge the PR, then monitor Release Please and applicable post-merge
-  workflows; record when no formal release or Docker publish is expected.
-- [ ] Sync local `main` with `origin/main`, remove the local topic branch, archive
-  the maintenance task according to Trellis workflow, and verify a clean final
-  state except for the two protected historical untracked paths.
-- [ ] Do not start Task 8.
+- [x] Monitor every required CI job; PR #412 passed both CI matrices. Its first
+  post-merge main CI exposed an unrelated publish-ready fixture clock flake,
+  which was fixed and revalidated through PR #413.
+- [x] Squash merge PR #412 as `b068e9d3` and the dependency fix as `ac9e3fa1`,
+  then monitor Release Please and applicable post-merge workflows. No formal
+  release or Docker publish was triggered; release PR #386 was updated.
+- [x] Sync local `main` with `origin/main`, remove the upgrade and dependency-fix
+  delivery branches, and verify a clean state except for the two protected
+  historical untracked paths.
+- [x] Prepare the final delivery record for the separate Trellis archive and
+  journal auto-commits on the closure branch.
+- [x] Do not start Task 8.
