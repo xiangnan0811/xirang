@@ -15,13 +15,13 @@
   "branch": "codex/backup-assets-controlled-recovery",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": "185b481b9463f694eeca0756cb8a0f5262e1a8f4",
+  "commit": "def0086da561bc2c1b26c34c1efa6dacf020c3bc",
   "pr_url": "https://github.com/xiangnan0811/xirang/pull/410",
   "subtasks": [],
   "children": [],
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [],
-  "notes": "Complex Child 13 planning was independently approved on 2026-07-28 and task.py start ran exactly once. Tasks 1-5 are complete_approved at their recorded scopes, and Task 6 is complete_checked at whole scope after fresh combined specification, quality and dynamic-gate review. B1 and B2 aggregates are complete_checked; B3 retains its focused historical credit and is incorporated into the whole review. Corrections 15-18 have fresh GREEN evidence without reconstructed historical RED output; Corrections 19-20 retain exact RED/GREEN ledger evidence. Task 7 is in progress: atomic publication, the owner-bound durable RecoveryResult resolver, the Recovery-specific Content grant/source/audit arm, the purpose-exact target delivery adapter, exact retain authorization/deadline CAS, retained effective-deadline delivery compatibility, published ResultSet and unpublished workspace cleanup claim admission, resource-scoped Content revoke/drain, fenced cleanup/node lease renewal, cleanup-specific read-only target validation through durable validated, retryable ownerless drained failure projection, the private current-v2 target-root registry plus transaction-bound encrypted immutable plan snapshot, the strict authenticated recovery workspace marker codec plus immutable creator/fence interoperability, the exact-plan purpose-exact SSH/SFTP no-overwrite marker create plus observational validation adapter, exact executed-plan sealed Verify authority plus concrete present regular-file observation, no-overwrite regular-file create, split composite preflight, resolver-bound published result read, delete-oriented Lstat plus exact absence, and A2e2 R42--R47 overwrite artifact authority/historical-key binding/authenticated intent-post preparation/exact-prior capture/same-invocation mismatched-winner restore/closed tuple publish/authenticated acknowledgement/safe residue cleanup/source-free replay/durable checkpoint-before-finalize/preterminal takeover reconciliation plus authority/error/resource/context/privacy closure are complete_checked at focused scope. A2e2+A3a V13 focused acceptance/design/code review is also complete_checked after fresh normal/race, required-real PostgreSQL and structural gates; its only finding was a corrected three-row manifest duplication with no product-scope change. RemoveOwnedJobDir, remote delete/tombstone, successful terminal cleanup lease release, general crash/orphan/quarantine reconciliation and whole Task 7 cross-engine review remain open; Task 8 owns startup/listener ordering and managed lifecycle. No new path, table, route, migration number, backfill or 000070 was added; the exact manifest remains 9 Phase-1 + 55 create + 81 modify = 145 unique/disjoint paths. Staged paths remain zero, no commit/push/PR/CI/merge action has run, the Child remains in_progress, the parent remains planning, and the program remains 12/15.",
+  "notes": "Complex Child 13 planning was independently approved on 2026-07-28 and task.py start ran exactly once. Tasks 1-5 are complete_approved, Task 6 is complete_checked at whole scope, and Task 7 is complete_checked_whole_scope and delivered through PR #410. Final product commit a873b49 passed the complete hosted PR check set; PR #410 was squash-merged as def0086 on 2026-08-10. Main CI and Release Please passed. Release Please updated release PR #386 but created no stable tag or GitHub Release, so no image or Docker Hub description publication was expected. Child 13 remains in_progress for Tasks 8-12, the parent remains planning, and program delivery remains 12/15. The Child must not be archived at this checkpoint. The only protected historical dirty paths are root go.mod and recovery/testdata/rsync_local_to_remote.json, which remain excluded and byte-identical.",
   "meta": {
     "parent_delivery": "12_of_15_complete",
     "planning_basis": "approved parent PRD/design/implement plus Child 13 current-main reconnaissance",
@@ -280,7 +280,7 @@
         "next": "task_8_runtime_main_requires_its_own_authorized_plan_no_stage_commit_push_pr_or_ci_inside_v14"
       },
       "tasks_1_to_7_checkpoint_delivery": {
-        "status": "pr_410_third_ci_remediation_fresh_local_gates_passed_pending_exact_stage_and_fix_commit",
+        "status": "delivered_merged_post_merge_observed_pending_bookkeeping_pr",
         "date": "2026-08-10",
         "scope": "cumulative_tasks_1_to_7_manifest_dirty_91_plus_r65_foundation_exception_2_plus_pr_ci_delivery_dependency_exception_2",
         "work_commit": "fe4eb4764b72786c53846f3e391e8a51e061b266",
@@ -313,8 +313,15 @@
         "third_hosted_ci_red": "merge_ref_run_31351417378_backend_test_build_plan_different_intent_loser_final_replay_read_preceded_winner_commit_and_returned_unavailable",
         "third_local_fix": "bounded_context_aware_durable_plan_winner_observation_after_retry_exhaustion_with_deterministic_commit_seam_regression",
         "third_local_verification": "genuine_red_then_four_plan_selectors_normal_count_20_race_count_10_whole_recovery_normal_34_006s_race_110_354s_full_make_check_backend_lint_zero_backend_all_frontend_168_files_1388_tests_and_builds_passed_2026_08_10",
+        "final_fix_commit": "a873b49415347a39ffc2e5819f67649ce29d5f4b",
+        "hosted_ci": "pull_request_run_31353319143_success_push_run_31353316583_rerun_complete_success_all_required_checks_green",
+        "squash_commit": "def0086da561bc2c1b26c34c1efa6dacf020c3bc",
+        "merged_at": "2026-08-10T04:07:42Z",
+        "post_merge": "main_ci_31354534726_success_release_please_31354534699_success_existing_release_pr_386_updated_no_stable_tag_no_github_release_no_image_or_docker_hub_description_publish_expected",
+        "topic_cleanup": "local_and_remote_feature_branch_deleted_detached_codex_worktrees_untouched",
+        "bookkeeping_branch": "codex/task7-delivery-closure",
         "ordering": "finish_local_checkpoint_and_session_record_leave_only_protected_dirty_paths_before_task_8",
-        "boundary": "child_13_not_archived_tasks_8_to_12_fix_commit_push_pr_ci_merge_post_merge_main_sync_and_cleanup_still_open"
+        "boundary": "task_7_delivered_child_13_not_archived_tasks_8_to_12_open_bookkeeping_pr_ci_merge_post_merge_main_sync_and_cleanup_required_before_task_8"
       }
     },
     "task_4_b1_scope_amendment": {
@@ -1009,6 +1016,6 @@
         "broad_runtime_cache": "environment_blocked_host_ifree_zero_not_a_product_pass"
       }
     },
-    "delivery_actions": "staged_0_commit_push_pr_ci_merge_not_executed"
+    "delivery_actions": "tasks_1_to_7_pr_410_merged_as_def0086_main_ci_and_release_please_success_no_formal_release_or_image_expected_bookkeeping_pr_pending"
   }
 }
