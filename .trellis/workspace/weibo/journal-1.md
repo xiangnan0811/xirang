@@ -1328,3 +1328,48 @@ PR #403 squash-merged after independent spec and quality approvals; post-merge C
 ### Next Steps
 
 - None - task complete
+
+
+## Session 33: Child 13 Tasks 1-7 checkpoint delivery
+
+**Date**: 2026-08-10
+**Task**: Child 13 Tasks 1-7 checkpoint delivery
+**Branch**: `codex/backup-assets-controlled-recovery`
+
+### Summary
+
+Task 7 reached whole-scope checked closure; the cumulative Tasks 1-7 result was freshly verified and committed as an exact 93-path checkpoint while preserving the two pre-existing protected files. Child 13 remains in progress for Tasks 8-12.
+
+### Main Changes
+
+- Recorded Task 7/V14 as `complete_checked_whole_scope` while keeping Child 13
+  `in_progress` and the parent `planning`.
+- Committed the cumulative Tasks 1--7 product, migration, tests, workflow, spec
+  and Trellis evidence through the exact 93-path allow-list.
+- Preserved the pre-existing untracked `go.mod` and
+  `recovery/testdata/rsync_local_to_remote.json` byte-for-byte and excluded them
+  from staging.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fe4eb47` | (see git log) |
+
+### Testing
+
+- [OK] `make check`: backend lint 0 issues, all backend packages, 168 frontend
+  test files / 1388 tests, backend build and TypeScript/Vite build passed.
+- [OK] `go vet ./...`, dirty-Go `gofmt -d`, `git diff --check`, Child/parent
+  Trellis validation and JSON/JSONL parsing passed.
+- [OK] Manifest gate: 145/145 unique paths, 91 manifest dirty + 2 approved
+  exceptions staged, 2 protected paths excluded, 0 outside-scope paths.
+
+### Status
+
+[OK] **Tasks 1--7 checkpoint committed; Child 13 remains in progress**
+
+### Next Steps
+
+- Decide local branch delivery (push/PR) before Task 8. Do not archive Child 13
+  until Tasks 8--12 and the full delivery flow are complete.
