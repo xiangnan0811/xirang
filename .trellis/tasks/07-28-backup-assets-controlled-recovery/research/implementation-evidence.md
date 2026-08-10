@@ -9187,3 +9187,46 @@ PostgreSQL and Worker scan closure. Before bookkeeping, the only dirty product
 paths are `service.go` and `service_test.go`; the two protected unrelated paths
 retain their frozen hashes. Task 8 remains stopped through exact commit/push, PR
 GREEN, squash merge, post-merge automation, local-main sync and delivery cleanup.
+
+## PR #410 merge and post-merge delivery disposition (2026-08-10)
+
+Final product commit `a873b49415347a39ffc2e5819f67649ce29d5f4b` closed the
+retry-exhaustion winner visibility window. Pull-request run `31353319143` and
+the rerun-complete push run `31353316583` both concluded successfully. The
+required check set included Backend Test & Build, PostgreSQL Migration Parity,
+Frontend Test & Build, Docker Build, Worker runtime/build/scan on amd64 and
+arm64, documentation freshness, migration UTC safety and PR title validation.
+
+PR #410 was squash-merged at `2026-08-10T04:07:42Z` as
+`def0086da561bc2c1b26c34c1efa6dacf020c3bc`. The local and remote
+`codex/backup-assets-controlled-recovery` branches were deleted. Main CI run
+`31354534726` passed on the squash commit. Release Please run `31354534699`
+also passed; its only job was `Prepare Release PR`, and the existing open release
+PR #386 now carries `chore(main): release 0.46.0`. `gh release list` still shows
+`v0.45.0` as the latest release, so this merge created no stable tag or GitHub
+Release. Consequently no `Publish Docker Images` or
+`Sync Docker Hub Description` run was expected.
+
+After fetch/prune, local `main`, `origin/main` and HEAD were equal to `def0086`.
+The feature branch was absent locally and remotely. Detached Codex worktrees were
+left untouched. The worktree contained only the two protected historical
+untracked paths:
+
+```text
+go.mod
+b767fc9ef9376c651d0493329b710ac8dcf8d77e52686b847d244aff9f6d48fd
+
+recovery/testdata/rsync_local_to_remote.json
+2570bd4472541322d902c4cdf2fe43f247b69f19d335558830e749567f763892
+```
+
+The shared code-spec review found no new reusable implementation contract to
+promote: the durable recovery contracts were already captured by Task 7 and the
+paired migration/database spec, while the facts above are delivery history.
+No `.trellis/spec/` file changes in this closure.
+
+Task 7 is delivered and merged. Child 13 remains `in_progress` because Tasks
+8--12 remain open; its parent remains `planning` and program delivery remains
+12/15. The Child is intentionally not archived. Task 8 remains stopped until the
+bookkeeping branch itself passes CI, merges, receives a post-merge disposition,
+local `main` is resynchronized and the bookkeeping branch is removed.

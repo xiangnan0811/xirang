@@ -35,7 +35,7 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "R0 rebaseline updated 2026-08-05: program delivery remains 12/15 merged and archived (80%). Trellis 12/13 counts only instantiated children. Child 13 remains active/in_progress without commit, remote branch or PR; Tasks 1-5 are complete_approved, Task 6 is complete_checked at whole scope, and Task 7 is in progress with A1/A2a/A2b/A2c/A2d, A2e1 delete-oriented Lstat/exact absence, and A2e2+A3a authenticated overwrite sidecar protocol focused_complete_checked through V13 acceptance/design/code review and fresh normal/race/required-real-PostgreSQL/structural gates. V13 found no Critical/Important product defect and corrected only three duplicate create-manifest rows without changing the 145-path scope. A3 cleanup/delete, successful terminal cleanup release, general orphan/quarantine, whole Task 7 review, Tasks 8-12 and Child-wide delivery remain open. Children 14-15 are not created. Do not archive the parent or infer completion from the mechanical child count.",
+  "notes": "Program delivery remains 12/15 merged and archived (80%); Trellis 12/13 counts only instantiated children. Child 13 remains active/in_progress. Its Tasks 1-6 are checked at their recorded scopes, and Task 7 is complete_checked_whole_scope and delivered through PR #410, squash-merged as def0086 on 2026-08-10 with green required CI and green post-merge main CI/Release Please. No formal release or image publication occurred. Tasks 8-12 remain open, so Child 13 and this parent must not be archived; Children 14-15 are not created.",
   "meta": {
     "program_delivery": {
       "delivered": 12,
@@ -48,6 +48,13 @@
         14,
         15
       ]
+    },
+    "task_7_checkpoint_delivery": {
+      "status": "delivered_merged_post_merge_observed_pending_bookkeeping_pr",
+      "pr": "https://github.com/xiangnan0811/xirang/pull/410",
+      "squash_commit": "def0086da561bc2c1b26c34c1efa6dacf020c3bc",
+      "child_status": "in_progress_tasks_8_to_12_open",
+      "program_delivery": "12_of_15"
     },
     "r0_execution_rebaseline": {
       "date": "2026-08-02",

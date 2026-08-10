@@ -9107,3 +9107,27 @@ design sections 46--47. It is not implementation approval. The next authorized
 action is user review of this plan. Only an explicit approval after that review
 permits loading `trellis-before-dev` and starting Task 7-R48 with the genuine
 RED; A3c, A3d, V14 and all Git-delivery actions retain their later stop gates.
+
+## Tasks 1--7 checkpoint PR #410 delivery closure (2026-08-10)
+
+- [x] Final fix `a873b49415347a39ffc2e5819f67649ce29d5f4b` passed the
+  pull-request run `31353319143` and the rerun-complete push run `31353316583`.
+  Required backend, PostgreSQL migration parity, frontend, Docker, Worker
+  runtime/build/scan, documentation, UTC-safety and title checks were green.
+- [x] PR #410 was squash-merged at `2026-08-10T04:07:42Z` as
+  `def0086da561bc2c1b26c34c1efa6dacf020c3bc`; the local and remote topic branch
+  were deleted.
+- [x] Post-merge main CI run `31354534726` and Release Please run
+  `31354534699` passed. Release Please updated the existing release PR #386
+  (`chore(main): release 0.46.0`) and did not create a stable tag or GitHub
+  Release, so `Publish Docker Images` and `Sync Docker Hub Description` were not
+  expected for this merge.
+- [x] Local `main`, `origin/main` and HEAD were synchronized at `def0086` before
+  the dedicated bookkeeping branch was created. The only remaining dirty paths
+  were the protected historical `go.mod` and
+  `recovery/testdata/rsync_local_to_remote.json`, with their frozen hashes.
+- [x] Task 7 is delivered and merged. Child 13 remains `in_progress`, the parent
+  remains `planning`, program delivery remains `12/15`, and Tasks 8--12 remain
+  open. Do not run `task.py archive` at this checkpoint and do not start Task 8
+  until this bookkeeping PR is green, merged, post-merge automation is recorded,
+  local `main` is resynchronized and the bookkeeping topic branch is cleaned.
