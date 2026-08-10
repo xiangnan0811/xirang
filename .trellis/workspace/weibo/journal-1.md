@@ -1373,3 +1373,36 @@ Task 7 reached whole-scope checked closure; the cumulative Tasks 1-7 result was 
 
 - Decide local branch delivery (push/PR) before Task 8. Do not archive Child 13
   until Tasks 8--12 and the full delivery flow are complete.
+
+
+## Session 34: Task 7 PR CI remediation
+
+**Date**: 2026-08-10
+**Task**: Task 7 PR CI remediation
+**Branch**: `codex/backup-assets-controlled-recovery`
+
+### Summary
+
+Fixed PR #410 hosted-CI gates for oversized lint patches, SQLite authorization pre-transaction busy reads, 000069 migration encryption fixtures, and the x/text security update; fresh full local checks passed and protected unrelated files were preserved.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7de8b0d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
