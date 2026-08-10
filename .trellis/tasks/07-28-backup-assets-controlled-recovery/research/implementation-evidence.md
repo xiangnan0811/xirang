@@ -9061,3 +9061,68 @@ fresh make check                                             PASS
 Required real PostgreSQL and Worker image scan closure remains assigned to the
 hosted PR run after the fix commit is pushed. The local run did not create or
 restart PostgreSQL infrastructure and did not claim local Trivy evidence.
+
+## PR #410 second hosted-CI remediation and fresh local gate (2026-08-10)
+
+Hosted runs `31348175030` and `31348176438` passed PostgreSQL migration parity,
+frontend, Docker, Worker runtime/build/scan, documentation and UTC-safety checks.
+Both Backend Test & Build jobs failed on the remaining concurrency windows:
+
+```text
+TestPlanCreateConcurrentDifferentIntentElectsOneWinner
+  retry exhaustion returned unavailable instead of resolving the durable winner
+TestRecoveryAuthorizationReceiptConcurrentSQLiteWinner/SameIntentReplay
+  proof use became visible before the final same-intent receipt replay
+TestTriggerRegistersCancelOwnerBeforeReturning/ordinary
+  post-barrier executor scheduling violated a test-only zero-call assertion
+```
+
+Two new deterministic selectors first reproduced the missing durable-winner and
+proof-visibility behavior. The minimal product correction reads the plan winner
+after each retryable transaction failure and replays the same authorization
+receipt after proof use becomes visible. The task-manager production contract was
+already correct: the test continues to prove cancel-owner registration before
+return and no longer asserts executor non-entry after releasing its barrier.
+
+Fresh post-edit evidence:
+
+```text
+five affected selectors normal -count=10             PASS (Recovery 1.542s, task 0.230s)
+five affected selectors race -count=5                PASS (Recovery 3.481s, task 1.280s)
+whole Recovery and task normal                       PASS (31.810s / 2.838s)
+whole Recovery and task race                         PASS (103.487s / 5.514s)
+full SQLite 000069 plus paired files, env unset      PASS (7.240s)
+go mod verify                                        PASS
+go vet ./...                                         PASS
+make lint-backend                                    PASS (0 issues)
+owned gofmt -d / git diff --check                    PASS (empty)
+fresh make check                                     PASS
+  backend packages                                   all passed
+  frontend lint                                      0 errors, 1 pre-existing warning
+  frontend tests                                     168 files / 1388 tests passed
+  backend and TypeScript/Vite production builds      passed
+Child and parent task.py validate                    PASS (17/18 and 0/0 entries)
+task/parent JSON and Child JSONL parsing             PASS (2 JSON / 35 JSONL rows)
+exact manifest                                       9/55/81/145/145, duplicates 0
+```
+
+Before bookkeeping, branch is
+`codex/backup-assets-controlled-recovery`, HEAD and remote feature are
+`280aad979fc47232ef6a8a4394443a628c1c7e3b`, local `main`, `origin/main` and the
+merge base are `51771654a85967656fe1ca69686590b734ff9214`, PR #410 is open and
+blocked only by the old Backend Test & Build results, and staged paths are zero.
+The generated `backend/coverage.out` was removed. Protected unrelated paths
+remain excluded and byte-identical:
+
+```text
+go.mod
+b767fc9ef9376c651d0493329b710ac8dcf8d77e52686b847d244aff9f6d48fd
+recovery/testdata/rsync_local_to_remote.json
+2570bd4472541322d902c4cdf2fe43f247b69f19d335558830e749567f763892
+```
+
+No PostgreSQL fixture or other infrastructure was created or restarted for this
+second local remediation. Hosted PR checks own fresh PostgreSQL and Worker scan
+closure after the exact fix commit is pushed. Task 8 remains stopped through PR
+GREEN, squash merge, post-merge automation disposition, local-main sync, closure
+bookkeeping and topic cleanup.

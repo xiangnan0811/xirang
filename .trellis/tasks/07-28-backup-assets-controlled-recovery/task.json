@@ -280,7 +280,7 @@
         "next": "task_8_runtime_main_requires_its_own_authorized_plan_no_stage_commit_push_pr_or_ci_inside_v14"
       },
       "tasks_1_to_7_checkpoint_delivery": {
-        "status": "pr_410_ci_remediation_fresh_local_gates_passed_pending_exact_stage_and_fix_commit",
+        "status": "pr_410_second_ci_remediation_fresh_local_gates_passed_pending_exact_stage_and_fix_commit",
         "date": "2026-08-10",
         "scope": "cumulative_tasks_1_to_7_manifest_dirty_91_plus_r65_foundation_exception_2_plus_pr_ci_delivery_dependency_exception_2",
         "work_commit": "fe4eb4764b72786c53846f3e391e8a51e061b266",
@@ -297,7 +297,8 @@
           "backend/go.sum",
           "backend/internal/backupasset/recovery/service.go",
           "backend/internal/backupasset/recovery/service_test.go",
-          "backend/internal/database/backup_asset_migrations_integration_test.go"
+          "backend/internal/database/backup_asset_migrations_integration_test.go",
+          "backend/internal/task/manager_test.go"
         ],
         "delivery_dependency_exceptions": [
           "backend/go.mod",
@@ -306,6 +307,9 @@
         "hosted_ci_red": "run_31344568520_oversized_pr_patch_lint_failure_sqlite_authorization_pretransaction_busy_migration_fixture_requires_missing_encryption_environment_worker_trivy_cve_2026_56852_x_text_v0_38_0",
         "local_fix": "implemented_uncommitted_full_make_check_found_and_closed_fixture_model_decryption_boundary_regression_pending_exact_stage_fix_commit_and_push",
         "local_verification": "authorization_normal_count_100_13_526s_race_count_20_10_802s_full_sqlite_000069_unset_encryption_9_331s_then_7_562s_worker_behavior_regressions_0_331s_whole_recovery_normal_35_504s_race_110_885s_go_mod_verify_vet_backend_lint_zero_owned_gofmt_diff_and_fresh_make_check_passed_frontend_168_files_1388_tests_2026_08_10",
+        "second_hosted_ci_red": "runs_31348175030_and_31348176438_backend_test_build_plan_retry_exhaustion_missing_durable_winner_authorization_proof_visibility_missing_final_same_intent_replay_and_cancel_owner_test_post_barrier_executor_zero_call_assertion",
+        "second_local_fix": "uncommitted_durable_plan_winner_resolution_final_authorization_receipt_replay_after_visible_proof_use_and_contract_exact_async_cancel_owner_test_assertion",
+        "second_local_verification": "focused_normal_count_10_and_race_count_5_whole_recovery_and_task_normal_race_full_sqlite_000069_unset_encryption_go_mod_verify_go_vet_all_backend_lint_zero_owned_gofmt_diff_full_make_check_backend_all_frontend_168_files_1388_tests_builds_passed_2026_08_10",
         "ordering": "finish_local_checkpoint_and_session_record_leave_only_protected_dirty_paths_before_task_8",
         "boundary": "child_13_not_archived_tasks_8_to_12_fix_commit_push_pr_ci_merge_post_merge_main_sync_and_cleanup_still_open"
       }

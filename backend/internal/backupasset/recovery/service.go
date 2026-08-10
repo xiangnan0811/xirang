@@ -162,6 +162,17 @@ func (service *PlanService) CreatePlan(ctx context.Context, request CreatePlanRe
 		if !errors.Is(err, errPlanIdempotencyRace) && !errors.Is(err, errPlanDatabaseBusy) {
 			return CreatePlanResult{}, publicPlanCreateError(ctx, err)
 		}
+		keyDigest := planIdempotencyKeyDigest(normalized.RequesterID, normalized.Endpoint, normalized.IdempotencyKey)
+		replay, found, replayErr := loadPlanReplayTx(
+			ctx, service.db, normalized.RequesterID, normalized.Endpoint, keyDigest,
+		)
+		if replayErr == nil && found {
+			return planCreateResultFromReplay(normalized, replay)
+		}
+		if replayErr != nil && !errors.Is(replayErr, errPlanIdempotencyRace) &&
+			!errors.Is(replayErr, errPlanDatabaseBusy) {
+			return CreatePlanResult{}, publicPlanCreateError(ctx, replayErr)
+		}
 		if attempt+1 == planCreateRetryAttempts {
 			break
 		}
@@ -222,10 +233,7 @@ func (service *PlanService) createPlanTx(
 		return CreatePlanResult{}, err
 	}
 	if found {
-		if replay.BindingDigest != request.Plan.Binding.PlanDigest {
-			return CreatePlanResult{}, ErrPlanIdempotencyConflict
-		}
-		return CreatePlanResult{PlanID: replay.ID, State: PlanState(replay.State), Replay: true}, nil
+		return planCreateResultFromReplay(request, replay)
 	}
 
 	source, err := loadValidatedSource(
@@ -333,6 +341,13 @@ type planReplayRow struct {
 	TargetRootID               string
 	EncryptedTargetRootLocator string
 	RootLocatorDigest          string
+}
+
+func planCreateResultFromReplay(request CreatePlanRequest, replay planReplayRow) (CreatePlanResult, error) {
+	if replay.BindingDigest != request.Plan.Binding.PlanDigest {
+		return CreatePlanResult{}, ErrPlanIdempotencyConflict
+	}
+	return CreatePlanResult{PlanID: replay.ID, State: PlanState(replay.State), Replay: true}, nil
 }
 
 func loadPlanReplayTx(
@@ -1914,6 +1929,9 @@ func (service *AuthorizationService) Authorize(
 		}
 		proofUsed, proofErr := authorizationProofDigestExists(ctx, service.db, normalized.proofDigest)
 		if proofErr == nil && proofUsed {
+			if replay, found, replayErr := service.loadAuthorizationReplay(ctx, normalized); found || replayErr != nil {
+				return replay, replayErr
+			}
 			return RecoveryAuthorizationResult{}, ErrAuthorizationProofUsed
 		}
 		if !isAuthorizationRetryable(authorizeErr) || attempt+1 == authorizationRetryAttempts {

@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -1498,6 +1499,64 @@ func TestRecoveryAuthorizationReceiptConcurrentSQLiteWinner(t *testing.T) {
 	t.Run("CrossCategoryProofReuse", func(t *testing.T) {
 		testRecoveryAuthorizationReceiptConcurrentCrossCategoryProofReuse(t, newAuthorizationReceiptServiceFixture)
 	})
+}
+
+func TestRecoveryAuthorizationSameIntentReplaysAfterProofVisibilityRace(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptWriteAuthorize)
+	contextKey := &struct{ name string }{name: "same-intent-proof-visibility-race"}
+	loserCtx := context.WithValue(context.Background(), contextKey, true)
+	callbackName := "recovery:authorization-proof-visibility-race:" + strings.ReplaceAll(t.Name(), "/", "_")
+	var evidenceQueries atomic.Int32
+	var winnerStarted atomic.Bool
+	var winner authorizationReceiptConcurrentResult
+
+	if err := fixture.db.Callback().Query().Before("gorm:query").Register(callbackName+":before", func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Context.Value(contextKey) != true ||
+			tx.Statement.Table != (model.BackupAssetRecoveryEvidence{}).TableName() {
+			return
+		}
+		if evidenceQueries.Add(1) == 3 {
+			_ = tx.AddError(errors.New("database table is locked"))
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Callback().Query().After("gorm:query").Register(callbackName+":after", func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Context.Value(contextKey) != true ||
+			tx.Statement.Table != (model.BackupAssetRecoveryEvidence{}).TableName() ||
+			evidenceQueries.Load() != 4 || winnerStarted.Swap(true) {
+			return
+		}
+		outcome := make(chan authorizationReceiptConcurrentResult, 1)
+		go func() {
+			result, err := fixture.service.Authorize(context.Background(), fixture.request)
+			outcome <- authorizationReceiptConcurrentResult{result: result, err: err}
+		}()
+		select {
+		case winner = <-outcome:
+		case <-time.After(5 * time.Second):
+			_ = tx.AddError(errors.New("authorization race winner did not commit"))
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = fixture.db.Callback().Query().Remove(callbackName + ":before")
+		_ = fixture.db.Callback().Query().Remove(callbackName + ":after")
+	})
+
+	replay, err := fixture.service.Authorize(loserCtx, fixture.request)
+	if winner.err != nil {
+		t.Fatalf("authorization race winner error=%v", winner.err)
+	}
+	if err != nil {
+		t.Fatalf("same-intent proof visibility race error=%v, want durable replay", err)
+	}
+	if !winnerStarted.Load() || winner.result.Replay || !replay.Replay ||
+		!winner.result.sameDurableEffect(replay) {
+		t.Fatalf("same-intent proof visibility winner=%+v replay=%+v started=%t",
+			winner.result, replay, winnerStarted.Load())
+	}
 }
 
 func TestRecoveryAuthorizationReceiptRetriesSQLiteBusyDuringPretransactionReads(t *testing.T) {
@@ -3801,6 +3860,61 @@ func TestPlanCreateConcurrentDifferentIntentElectsOneWinner(t *testing.T) {
 	}
 	if winnerIntent == -1 || winnerResults != callersPerIntent || conflicts != callersPerIntent {
 		t.Fatalf("different-intent results: winnerIntent=%d winnerResults=%d conflicts=%d", winnerIntent, winnerResults, conflicts)
+	}
+	assertPlanCreationRows(t, fixture.db, len(fixture.request.Selection.AssetRefs))
+}
+
+func TestPlanCreateRetryExhaustionResolvesDurableWinner(t *testing.T) {
+	fixture := newPlanServiceTestFixture(t, false)
+	loserRequest := cloneCreatePlanRequest(fixture.request)
+	loserRequest.Plan.Binding.CapabilityRevision = "capability-revision-retry-exhaustion-loser"
+	contextKey := &struct{ name string }{name: "plan-retry-exhaustion"}
+	loserCtx := context.WithValue(context.Background(), contextKey, true)
+	callbackName := "recovery:plan-retry-exhaustion:" + strings.ReplaceAll(t.Name(), "/", "_")
+	var transactionReplayQueries atomic.Int32
+	type winnerOutcome struct {
+		result CreatePlanResult
+		err    error
+	}
+	var winner winnerOutcome
+
+	if err := fixture.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Context.Value(contextKey) != true ||
+			tx.Statement.Table != (model.BackupAssetRecoveryPlan{}).TableName() {
+			return
+		}
+		if _, inTransaction := tx.Statement.ConnPool.(*sql.Tx); !inTransaction {
+			return
+		}
+		attempt := transactionReplayQueries.Add(1)
+		_ = tx.AddError(errors.New("database table is locked"))
+		if attempt != planCreateRetryAttempts {
+			return
+		}
+		outcome := make(chan winnerOutcome, 1)
+		go func() {
+			result, err := fixture.service.CreatePlan(context.Background(), fixture.request)
+			outcome <- winnerOutcome{result: result, err: err}
+		}()
+		select {
+		case winner = <-outcome:
+		case <-time.After(5 * time.Second):
+			_ = tx.AddError(errors.New("plan race winner did not commit"))
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fixture.db.Callback().Query().Remove(callbackName) })
+
+	_, err := fixture.service.CreatePlan(loserCtx, loserRequest)
+	if winner.err != nil || winner.result.PlanID == "" || winner.result.Replay {
+		t.Fatalf("plan race winner result=%+v error=%v", winner.result, winner.err)
+	}
+	if !errors.Is(err, ErrPlanIdempotencyConflict) {
+		t.Fatalf("retry-exhausted loser error=%v, want durable idempotency conflict", err)
+	}
+	if got := transactionReplayQueries.Load(); got != planCreateRetryAttempts {
+		t.Fatalf("transaction replay queries=%d, want %d", got, planCreateRetryAttempts)
 	}
 	assertPlanCreationRows(t, fixture.db, len(fixture.request.Selection.AssetRefs))
 }

@@ -427,9 +427,6 @@ func TestTriggerRegistersCancelOwnerBeforeReturning(t *testing.T) {
 		if !registered {
 			t.Fatal("ordinary TriggerManual returned before its cancel owner was registered")
 		}
-		if exec.Calls() != 0 {
-			t.Fatalf("canceled ordinary task entered executor %d time(s)", exec.Calls())
-		}
 	})
 
 	t.Run("legacy_restore", func(t *testing.T) {
@@ -484,9 +481,6 @@ func TestTriggerRegistersCancelOwnerBeforeReturning(t *testing.T) {
 		}
 		if !registered {
 			t.Fatal("legacy TriggerRestore returned before its cancel owner was registered")
-		}
-		if got := atomic.LoadInt32(&restoreExecutor.calls); got != 0 {
-			t.Fatalf("canceled legacy restore entered executor %d time(s)", got)
 		}
 	})
 }

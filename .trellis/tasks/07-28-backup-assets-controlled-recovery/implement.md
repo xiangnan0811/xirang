@@ -9036,6 +9036,40 @@ topic-worktree cleanup may Task 8 begin. Child 13 remains `in_progress`, the
 parent remains `planning`, and the two protected unrelated paths remain excluded
 and byte-for-byte unchanged.
 
+## Tasks 1--7 checkpoint PR #410 second hosted-CI remediation (2026-08-10)
+
+Hosted runs `31348175030` and `31348176438` closed the first remediation's
+PostgreSQL, frontend, Docker, Worker scan, documentation and UTC-safety gates,
+but retained three Backend Test & Build concurrency failures:
+
+- plan creation could exhaust SQLite retries after a different-intent winner
+  committed without resolving that durable winner;
+- same-intent authorization could observe proof use after the winner committed
+  but before the losing invocation's final receipt replay;
+- the cancel-owner registration test released its synchronization barrier and
+  then required an asynchronously scheduled executor to remain unentered, which
+  exceeded the synchronous registration contract.
+
+The bounded second correction modifies only existing manifest members
+`backend/internal/backupasset/recovery/service.go`,
+`backend/internal/backupasset/recovery/service_test.go` and
+`backend/internal/task/manager_test.go`. Plan and authorization retry exhaustion
+now resolve a durable winner before returning a closed conflict/proof-used
+result, and the task test retains the exact return-before-registration assertion
+without asserting post-barrier scheduling. No task production code, schema,
+migration, dependency, runtime or public API changes.
+
+Fresh focused normal `-count=10` and race `-count=5`, whole Recovery and task
+normal/race, full SQLite `000069` with the encryption environment unset, module
+verification, `go vet ./...`, backend lint, owned gofmt, diff checks and full
+`make check` all pass. The generated `backend/coverage.out` was removed. Exact
+stage remains limited to these three paths plus this Task 7 delivery evidence and
+metadata; root `go.mod` and `recovery/testdata/rsync_local_to_remote.json` remain
+excluded at their frozen hashes. Push the fix on PR #410, monitor all required
+checks, squash merge only after GREEN, monitor post-merge automation, sync local
+`main`, record closure through the repository workflow and clean the topic branch
+before Task 8.
+
 ## Full A3 implementation authorization state
 
 This plan has been written after approval of PRD full-A3 requirements and
