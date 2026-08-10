@@ -1,0 +1,35 @@
+{
+  "id": "trellis-0-6-14-native-auto-upgrade",
+  "name": "trellis-0-6-14-native-auto-upgrade",
+  "title": "Upgrade Trellis to 0.6.14 native auto workflow",
+  "description": "Upgrade project Trellis to 0.6.14 native workflow with Codex auto dispatch while preserving Xirang customization and task memory.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "Trellis managed templates, Codex integration, journal merge rule, and maintenance task records",
+  "package": null,
+  "priority": "P2",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-08-10",
+  "completedAt": null,
+  "branch": "codex/trellis-0.6.14-upgrade",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": "828ebe0b28848f72c8df9476fc90c2b121e830f4",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/412",
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    ".trellis/config.yaml",
+    ".trellis/workflow.md",
+    ".codex/hooks.json",
+    ".codex/config.toml",
+    ".gitattributes"
+  ],
+  "notes": "Independent maintenance task. Upgrade commit 828ebe0 is under review in PR #412; Task 7 is read-only and Task 8 must not start.",
+  "meta": {
+    "delivery_status": "pr_open_ci_pending",
+    "protected_dirty_paths": "go.mod,recovery/testdata/rsync_local_to_remote.json"
+  }
+}
