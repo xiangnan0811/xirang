@@ -34,7 +34,7 @@
 
 ### Migration and cleanup
 
-- R10. 新配置通过 PR 合并并完成必需 CI 后，关闭现有 13 个分散 Dependabot PR，再按新配置触发检查。
+- R10. 新配置通过 PR 合并并完成必需 CI 后，仅按预先快照关闭现有 13 个分散 Dependabot PR，并以各 PR 的完整 `headRefOid` 校验和条件删除其机器人分支；随后在 GitHub 受支持的 Dependabot Web UI 中为 `gomod /backend`、`npm /web` 和 `github-actions /` 各手动触发一次（总计恰好三次）`Check for updates`。三个任务必须全部进入终态 `success` 才能记录关联分组 PR 并进入安全更新启用步骤；`queued` 仍为 pending，任何 `failure`（包括已记录的外部阻塞）都会使 R10 保持未完成且不得触发第四次检查。成功任务没有可用更新是有效结果。
 - R11. 保留 Release Please PR #386 及其分支；它不属于依赖清理范围。
 - R12. 不在本任务中直接升级 `package.json`、`package-lock.json`、`go.mod`、`go.sum` 或现有 GitHub Actions 版本。
 
@@ -45,14 +45,14 @@
 
 ## Acceptance Criteria
 
-- [ ] AC1. Dependabot 配置为月度普通版本更新，明确时区、分组、major 策略和与分组匹配的 PR 上限。
-- [ ] AC2. Go、npm 生产依赖、npm 开发依赖、GitHub Actions 的 minor/patch 更新最多形成 4 个常规维护 PR。
-- [ ] AC3. GitHub API 确认 vulnerability alerts 与 automated security fixes 已启用。
-- [ ] AC4. CI 配置在 PR 提交上只触发 `pull_request` 流，在合并后的 `main` 提交上触发 `push` 流。
+- [ ] AC1. Dependabot 配置为月度普通版本更新，明确时区、分组、major 策略和与分组匹配的 PR 上限；Task 5 的三次手动检查全部 `success` 后，用实际 update job 与 PR 证据验证配置已生效。任何 queued/failure 都使 AC1 保持未完成。
+- [ ] AC2. Task 5 的三次手动检查全部 `success` 后，实际普通版本 PR 仅使用 Go、npm production、npm development、GitHub Actions 四个批准的分组身份，每个身份最多对应一个 PR（身份必须唯一、不得重复），总数最多为 4；成功任务无可用更新时 0 个 PR 也是有效结果。任何 queued/failure 都使 AC2 保持未完成。
+- [ ] AC3. GitHub API 确认 vulnerability alerts 请求成功，且 automated security fixes 精确为 `enabled: true`、`paused: false`。
+- [ ] AC4. CI 配置在 PR 提交上只触发 `pull_request` 流；治理 PR 合并提交在 `main` 上精确对应一个 `push` CI run，且其状态为 `completed`、结论为 `success`。
 - [ ] AC5. 相关 YAML 可解析，仓库本地适用检查及远程必需 CI 全部通过。
-- [ ] AC6. 13 个旧 Dependabot PR 已关闭，其机器人分支已清理或明确记录仍存在的外部阻塞。
-- [ ] AC7. Release Please PR #386 保持开放且未被本任务修改。
-- [ ] AC8. PR 合并后已检查 Release Please；本次不直接发布版本或 Docker 镜像，除非 Release Please 产生独立且经维护者批准的发布动作。
+- [ ] AC6. 13 个旧 Dependabot PR 已按精确快照关闭，远程分支仅在当前 OID 等于该 PR 完整 `headRefOid` 时通过 expected-OID lease 条件删除，或记录外部阻塞；随后恰好三次受支持的 Web UI 检查均记录 ecosystem/directory、点击前 baseline job IDs、点击时间、job ID、任务 timestamp/type/status 和 logs URL，且三个任务全部 `success`。任何 queued/failure 都使 AC6 保持未完成并阻止 Task 6；不得触发第四次检查。
+- [ ] AC7. Release Please PR #386 在手动版本检查前及 post-merge 自动化检查后均保持 `OPEN`、head 为 `release-please--branches--main`，并记录精确 URL。
+- [ ] AC8. 治理 merge SHA 精确对应一个终态成功的 Release Please `push` run；没有与该 SHA 关联的 `Publish Docker Images` 或 `Sync Docker Hub Description` run。本次不直接发布版本或 Docker 镜像。
 - [ ] AC9. `.trellis/config.yaml` 明确包含 `codex.dispatch_mode: sub-agent`，现有 `.codex/agents/*` 与 Codex hooks 未被本任务修改。
 - [ ] AC10. `.gitignore` 继续忽略 `.worktrees/`，项目规范记录该目录为默认隔离 worktree 位置，本任务在 `.worktrees/dependency-update-governance` 中执行。
 

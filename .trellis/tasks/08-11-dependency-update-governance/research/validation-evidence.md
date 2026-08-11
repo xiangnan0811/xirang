@@ -5,8 +5,9 @@ Captured on 2026-08-11 from
 `codex/chore-dependency-governance`.
 
 This file records local validation only. Remote CI, GitHub repository settings,
-legacy PR cleanup, and post-merge automation remain assigned to the later tasks
-identified in the requirement mapping.
+legacy PR cleanup, the three supported manual version-update reruns and their
+success/group evidence, and post-merge automation remain assigned to the later
+tasks identified in the requirement mapping.
 
 ## Commands And Results
 
@@ -344,8 +345,8 @@ local gate.
 | R7 | Task 6 inspects security PRs and alerts and creates manual high-priority major-upgrade follow-up where needed | **Pending Task 6** |
 | R8 | Task 2 keeps `pull_request` and limits `push` to `main`; assertion 4 and actionlint pass | Local trigger contract passed; remote behavior is covered by AC4 below |
 | R9 | Task 2 changes only the CI event restriction and adds no path filters or job reductions; actionlint passes | Local contract passed |
-| R10 | Task 5 revalidates and closes only the captured 13-PR number/head allowlist | **Pending Task 5** |
-| R11 | Protected-path check preserves the Release Please workflow; Task 5 must verify PR #386 remains open and unchanged | **Pending Task 5 live verification** |
+| R10 | Task 5 revalidates and closes only the captured 13-PR allowlist, conditionally deletes an exact remote head only when its OID equals that PR's complete `headRefOid`, then uses the supported GitHub Web UI to trigger exactly three checks (`gomod /backend`, `npm /web`, `github-actions /`) and captures baseline IDs, three terminal `success` results, logs, and unique grouped-PR evidence before Task 6. Any queued/failure result leaves R10 incomplete and blocks Task 6; no fourth trigger is allowed | **Pending Task 5** |
+| R11 | Protected-path check preserves the Release Please workflow; Task 5 must verify PR #386 before manual triggers and Task 7 must revalidate its exact state/head/URL after the merge-SHA Release Please run | **Pending Task 5 and Task 7 live verification** |
 | R12 | Protected-path command exits 0 for all dependency manifests, lock files, Release Please workflow, and action/Codex protected paths | Local contract passed |
 | R13 | Task 0 sets `codex.dispatch_mode: sub-agent`; assertion 1 and protected Codex-path check pass; durable guide records the default | Local contract passed |
 | R14 | Work is in `.worktrees/dependency-update-governance`; assertion 10 verifies the ignore rule; durable guide records `.worktrees/<task-slug>` | Local contract passed |
@@ -354,13 +355,13 @@ local gate.
 
 | Acceptance criterion | Implementation / evidence | Status |
 |---|---|---|
-| AC1 | Task 1 Dependabot config; assertions 2-3 validate schedule, timezone, groups, major boundary, and limits | Local contract passed |
-| AC2 | Task 1 exact group keys and 1/2/1 limits; assertions 2-3 cap routine maintenance at four groups | Local contract passed |
-| AC3 | Task 6 GitHub API enablement and read-only verification for vulnerability alerts and automated security fixes | **Pending Task 6** |
-| AC4 | Assertion 4 proves the local event contract. Task 7 must still observe the post-merge `main` push and confirm one push CI run | **Local trigger contract passed; post-merge observation pending Task 7** |
+| AC1 | Task 1 Dependabot config; assertions 2-3 validate schedule, timezone, groups, major boundary, and limits. Task 5 must observe all three manually triggered update jobs reach `success`; queued/failure leaves AC1 incomplete | **Local config contract passed; live Task 5 success observation pending** |
+| AC2 | Task 1 exact group keys and 1/2/1 limits; assertions 2-3 cap routine maintenance at four groups. After all three live jobs succeed, Task 5 must verify associated version PRs use only the four approved identities, each identity appears at most once, and the total is at most four; zero PRs after successful no-update jobs is valid. Queued/failure leaves AC2 incomplete | **Local config contract passed; live Task 5 success/group observation pending** |
+| AC3 | Task 6 independently guards both enable calls, requires the vulnerability-alert read query to succeed, and requires automated security fixes to be exactly `enabled: true`, `paused: false` | **Pending Task 6** |
+| AC4 | Assertion 4 proves the local event contract. Task 7 must resolve the exact governance merge SHA and require exactly one matching CI `push` run with `completed`/`success` | **Local trigger contract passed; exact post-merge run assertion pending Task 7** |
 | AC5 | YAML structural assertions, actionlint, diff hygiene, title validation, protected paths, Trellis validation, and `make check` all pass locally. Task 4 must still obtain all required remote CI | **Local checks passed; remote required CI pending Task 4** |
-| AC6 | Task 5 exact allowlist validation, closure of only the 13 captured legacy Dependabot PRs, and remote-head verification | **Pending Task 5** |
-| AC7 | Protected-path check shows no Release Please workflow change. Task 5 must still verify PR #386 remains open with head `release-please--branches--main` | **Pending Task 5 live verification** |
-| AC8 | Task 7 inspects Release Please and publishing workflows and records the expected no-release/no-publish result | **Pending Task 7 post-merge observation** |
+| AC6 | Task 5 exact allowlist validation, OID-matched leased deletion for only captured remote heads, followed by exactly three supported Web UI triggers with ecosystem/directory, baseline job IDs, click time, job ID, timestamp/type/status, logs URL, and three terminal `success` results. Queued/failure leaves AC6 incomplete and blocks Task 6; no fourth trigger is allowed | **Pending Task 5** |
+| AC7 | Protected-path check shows no Release Please workflow change. Task 5 must verify PR #386 before manual triggers, and Task 7 must revalidate it post-merge as `OPEN` with head `release-please--branches--main`, recording its URL | **Pending Task 5 and Task 7 live verification** |
+| AC8 | Task 7 binds workflow queries to the exact governance merge SHA, requires one completed/successful Release Please push run, and asserts zero associated Publish Docker Images and Sync Docker Hub Description runs | **Pending Task 7 exact post-merge assertions** |
 | AC9 | Assertion 1 verifies explicit sub-agent dispatch; command 9 verifies `.codex/agents`, hooks, and Codex config are unchanged | Local contract passed |
 | AC10 | Command 10 verifies `.worktrees/` remains ignored; the durable guide records the local path; this task ran in the required isolated worktree | Local contract passed |

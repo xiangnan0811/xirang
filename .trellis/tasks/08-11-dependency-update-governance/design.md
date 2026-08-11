@@ -73,7 +73,7 @@ GitHub 官方配置契约明确 `allow.update-types` 仅影响 version updates�
 
 ## 5. Security Update Contract
 
-配置 PR 合并且旧版本 PR 清理后，通过 GitHub API 按顺序启用：
+配置 PR 合并、旧版本 PR 精确清理且三次普通版本 update job 均取得终态 `success` 与分组证据后，通过 GitHub API 按顺序启用：
 
 1. Dependabot vulnerability alerts。
 2. Dependabot automated security fixes。
@@ -109,14 +109,21 @@ on:
 1. 记录配置变更前 13 个开放 Dependabot PR 的编号、标题和 head branch。
 2. 在独立分支修改配置，运行本地验证，提交并创建 PR。
 3. 监控全部 required CI，通过后 squash merge。
-4. 确认合并提交进入 `main`，并观察 Release Please 更新；不合并发布 PR。
-5. 逐个关闭步骤 1 快照中的 13 个旧普通版本 PR，并附上由分组策略取代的说明。
-6. 验证对应 Dependabot branches 已删除；如 GitHub 未自动删除，仅记录并按精确分支名清理。
-7. 启用 vulnerability alerts 和 automated security fixes，并通过 API 验证。
-8. 观察 Dependabot 因配置变更产生的更新任务；普通版本更新应遵循最多 4 个分组 PR，安全 PR 独立保留。
-9. 同步本地 `main`，完成 Trellis 任务归档。
+4. 使用 `gh pr merge --squash` 合并但不让 `gh` 删除仍在 linked worktree 中检出的治理分支；本地和远程治理分支清理推迟到治理 worktree 被安全移除之后。
+5. 显式切换命令执行位置到主 worktree `/home/murray/code/xirang`，先确认它干净且已检出 `main`，再执行 `git -C /home/murray/code/xirang pull --ff-only origin main` 并确认 `HEAD` 等于 `origin/main`。GitHub CLI 的 PR 查询可从任一 worktree 执行，但后续 Git 同步不得在治理 worktree 中尝试 `git switch main`。
+6. 确认合并提交进入 `main`，并观察 Release Please 更新；不合并发布 PR。
+7. 逐个关闭步骤 1 快照中的 13 个旧普通版本 PR，并附上由分组策略取代的说明。
+8. 对每个已关闭的捕获 PR 查询完整 `headRefOid` 并校验 CLOSED 状态、`app/dependabot` author 和精确 head name。远程分支存在时，其当前 OID 必须仍等于该 `headRefOid`，随后使用 expected-OID `--force-with-lease` 原子条件删除；OID 不匹配、非完整 OID 或传输错误都必须在删除前中止。
+9. 使用执行时加载的 `browser` skill 和已认证 GitHub Web UI 打开 `https://github.com/xiangnan0811/xirang/network/updates`，在 Recent update jobs 中依次对 `gomod /backend`、`npm /web`、`github-actions /` 各点击一次 `Check for updates`，总计恰好三次。每次点击前保存该 ecosystem/directory 的 baseline job IDs；npm 虽有两个 groups，仍只触发一个 ecosystem/directory 任务。
+10. 对每次点击记录 ecosystem/directory、baseline job IDs、点击时间、job ID、任务 timestamp/type/status 与 logs URL，并异步监控。点击后若超时或页面重载导致结果不明确，不得再次点击；只能重载 Recent update jobs 并与 baseline 比较，直到识别出恰好一个新 job，无法唯一识别时记录阻塞。
+11. 三个任务必须全部达到终态 `success`。`queued` 只表示 pending；任何 `failure`（即使已调查并记录为外部阻塞）都阻止 Task 6，并使 R10/AC1/AC2/AC6 保持未完成；不得提交第四次触发。成功但无可用更新是有效结果。
+12. 从三个成功任务的页面和日志捕获关联的新普通版本 PR，确认它们仅使用 `go-minor-patch`、`npm-production-minor-patch`、`npm-development-minor-patch`、`actions-minor-patch` 四个批准身份，每个身份最多对应一个 PR（身份唯一、不得重复），且总数不超过 4；不得关闭这些新 PR。
+13. 只有步骤 9-12 的三个任务全部成功且分组证据完整后，才启用 vulnerability alerts 和 automated security fixes；只读 API 必须确认 alerts 请求成功，且 security fixes 精确为 `enabled: true`、`paused: false`。安全 PR 独立保留。
+14. 完成 Trellis 任务归档和所有合并后的 follow-up 后，只在主 worktree `/home/murray/code/xirang` 完成最终同步：先确认该 worktree 干净且当前分支恰好为 `main`，再运行 `git -C /home/murray/code/xirang pull --ff-only origin main`，并确认其 `HEAD` 等于 `origin/main`。随后确认治理 worktree 存在、干净、检出精确治理分支且 HEAD 等于已合并 PR 的完整 `headRefOid`；移除治理 worktree 后，使用该 OID 条件删除本地 ref，并仅在远程 ref 仍等于同一 OID 时通过 expected-OID lease 删除远程 ref。条件删除可阻止验证后 ref 被并发移动时误删新提交。
 
-先清理旧 PR、后启用安全更新，可以避免新生成的安全 PR 与旧普通版本 PR 混淆或被误关。
+先清理旧 PR、再主动验证新的普通版本分组、最后启用安全更新，可以避免新生成的安全 PR 与旧普通版本 PR 或新分组 version PR 混淆或被误关。
+
+手动重新运行只使用 GitHub 官方文档支持的 Web UI 操作：[Re-running Dependabot jobs](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/manage-your-dependency-security/re-run-dependabot-jobs)。GitHub 没有为该动作公开记录 REST、GraphQL 或第一方 `gh` 触发接口；不得脚本调用不透明的内部 endpoint。
 
 ## 8. Validation Strategy
 
@@ -133,14 +140,17 @@ on:
 
 - 运行与配置变更匹配的轻量本地检查。
 - PR 上监控仓库全部 required CI；不以本地静态检查代替远程事件验证。
-- 合并后确认 `main` push CI 只产生一套运行。
+- 解析唯一已合并治理 PR 的 `mergeCommit.oid`；对该 SHA 断言精确一个 CI `push` run，且 `headSha` 匹配、状态 `completed`、结论 `success`。
+- 对同一 merge SHA 断言精确一个终态成功的 Release Please `push` run，并断言没有关联的 Publish Docker Images 或 Sync Docker Hub Description run。该结论对应实际触发器：前者只由 release published/手动触发，后者的 main push 仅匹配 README 或自身 workflow 路径。
 
 ### Operational validation
 
-- GitHub API 返回 vulnerability alerts enabled。
-- GitHub API 返回 automated security fixes `enabled: true`。
-- 旧 13 个 PR 全部关闭，Release Please PR #386 仍开放。
-- 远程不再保留旧 Dependabot heads，或为每个外部阻塞留下精确记录。
+- GitHub vulnerability alerts 只读 API 请求成功；automated security fixes 精确返回 `enabled: true`、`paused: false`，查询失败或 false 值均不通过。
+- 旧 13 个 PR 全部关闭；每个远程 head 只在 OID 等于对应 PR 的完整 `headRefOid` 时以 expected-OID lease 条件删除，或为外部阻塞留下精确记录。
+- Release Please PR #386 在手动触发前及 post-merge 检查后均精确为 `OPEN`、head `release-please--branches--main`，并记录 URL。
+- 在 `https://github.com/xiangnan0811/xirang/network/updates` 使用受支持的 `Check for updates` Web UI 动作恰好触发三个任务：`gomod /backend`、`npm /web`、`github-actions /`。对每个任务保存 baseline job IDs、点击时间、job ID、任务 timestamp/type/status 和 logs URL；结果不明确时只重载并对比 baseline，不得重试点击。
+- 三个任务必须全部 `success`；成功且无可用更新有效，queued 仍待处理，任何 failure 都阻止 Task 6 并使 R10/AC1/AC2/AC6 未完成。
+- 从三个成功任务捕获所有关联 version-update PR，验证它们仅使用上述四个批准 group identities、每个 identity 最多一个 PR（identity unique、不得重复）、总数不超过 4，并保持这些 PR 开放；成功任务没有可用更新时 0 个 PR 也有效。完成该证据后才启用安全设置。
 
 ## 9. Risks And Mitigations
 
@@ -150,7 +160,7 @@ on:
 
 ### Immediate security PR burst
 
-首次启用安全功能可能一次产生多个 PR。先完成旧版本 PR 清理，再启用安全功能；安全 PR 不按普通版本噪音处理，也不自动关闭。
+首次启用安全功能可能一次产生多个 PR。先完成旧版本 PR 清理和三次普通版本 job/分组验证，再启用安全功能；安全 PR 不按普通版本噪音处理，也不自动关闭。
 
 ### Major-version debt
 
@@ -158,7 +168,7 @@ on:
 
 ### Dependabot scheduling observability
 
-Dependabot 的服务端调度不能由本地测试完整验证。PR 合并后结合 GitHub update job、实际 PR 形状和下一个月度窗口验证；服务端未立即运行不视为配置失败，但必须记录等待项。
+Dependabot 的服务端调度不能由本地测试完整验证。PR 合并并清理旧 PR 后，必须通过官方 Web UI 恰好触发三个 `Check for updates` 任务，并异步等待每个任务进入 `success`；仅看到 queued 或等待下一个月度窗口不足以验收。成功但没有可用更新是有效结果；任何 failure 都必须调查或记录为真实外部阻塞，同时阻止 Task 6 并使 R10/AC1/AC2/AC6 保持未完成，不得触发第四次任务。点击结果不明确时使用 baseline job IDs 恢复观察，不能通过再次点击消除歧义。
 
 ### Generated Trellis file drift
 
@@ -168,7 +178,8 @@ Dependabot 的服务端调度不能由本地测试完整验证。PR 合并后结
 
 - 配置或 CI 行为异常：通过新 PR revert 本任务的仓库提交，不直接改 `main`。
 - 安全更新 PR 数量异常：保留 vulnerability alerts，必要时临时关闭 automated security fixes；不得为降噪关闭告警。
-- 已关闭的旧 PR 可按精确编号重新打开，但优先让 Dependabot 按新配置重建，避免恢复旧分散策略。
+- 已关闭的旧 PR 可按精确编号重新打开；已触发的三个 update jobs 无法回滚，关联的新分组 PR 必须保留并单独评估，不得把它们当作旧快照关闭。优先通过新 PR 修正配置，避免恢复旧分散策略。
+- squash merge 后不要立即删除仍在 linked worktree 中检出的治理分支。回滚、任务证据和 follow-up 全部完成后，先安全移除干净的治理 worktree，再以已验证 PR `headRefOid` 为旧值条件删除本地 ref，并用相同 OID lease 删除仍存在的远程 ref；不得按分支名无条件强删。
 - 子代理派发出现平台阻塞：可在独立 PR 中临时改回 `auto` 或 `inline`；不得通过删除 agent/hook 文件绕过配置入口。
 
 ## 11. Deferred Work
