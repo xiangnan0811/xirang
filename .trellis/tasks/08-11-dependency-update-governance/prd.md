@@ -2,7 +2,7 @@
 
 ## Goal
 
-将普通依赖更新从高频、逐依赖 PR 改为低频、按生态分组的可控维护流程，同时保留及时的安全告警与安全修复通道，并消除依赖 PR 上重复执行的 CI。
+将普通依赖更新从高频、逐依赖 PR 改为低频、按生态分组的可控维护流程，同时保留及时的安全告警与安全修复通道，消除依赖 PR 上重复执行的 CI，并固化本项目 Codex 默认使用子代理的执行偏好。
 
 ## Background
 
@@ -38,6 +38,10 @@
 - R11. 保留 Release Please PR #386 及其分支；它不属于依赖清理范围。
 - R12. 不在本任务中直接升级 `package.json`、`package-lock.json`、`go.mod`、`go.sum` 或现有 GitHub Actions 版本。
 
+### Persistent execution mode
+
+- R13. 将本项目 Codex 的 Trellis 派发偏好显式设为 `sub-agent`；后续实现、研究与检查默认使用子代理，只有用户明确要求 inline 时才覆盖该偏好。
+
 ## Acceptance Criteria
 
 - [ ] AC1. Dependabot 配置为月度普通版本更新，明确时区、分组、major 策略和与分组匹配的 PR 上限。
@@ -48,6 +52,7 @@
 - [ ] AC6. 13 个旧 Dependabot PR 已关闭，其机器人分支已清理或明确记录仍存在的外部阻塞。
 - [ ] AC7. Release Please PR #386 保持开放且未被本任务修改。
 - [ ] AC8. PR 合并后已检查 Release Please；本次不直接发布版本或 Docker 镜像，除非 Release Please 产生独立且经维护者批准的发布动作。
+- [ ] AC9. `.trellis/config.yaml` 明确包含 `codex.dispatch_mode: sub-agent`，现有 `.codex/agents/*` 与 Codex hooks 未被本任务修改。
 
 ## Out Of Scope
 
@@ -56,3 +61,4 @@
 - Dependabot 自动合并或无人工审查的补丁发布。
 - 基于文件路径跳过后端、前端、Docker 或 Worker 检查。
 - 合并或关闭 Release Please PR #386。
+- 修改 Trellis 上游、全局 Codex 用户配置或其他项目的派发偏好。

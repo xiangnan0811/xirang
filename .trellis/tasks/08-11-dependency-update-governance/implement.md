@@ -4,9 +4,9 @@
 
 **Goal:** Replace noisy weekly single-dependency PRs with monthly grouped minor/patch updates, keep security updates immediate, and prevent duplicate CI runs for pull-request commits.
 
-**Architecture:** Repository configuration changes are limited to `.github/dependabot.yml` and the CI event block in `.github/workflows/ci.yml`. After the configuration PR is green and merged, the migration closes only the pre-captured version-update PRs, enables security settings through GitHub APIs, and verifies post-merge automation before Trellis archival.
+**Architecture:** Project execution preference is persisted through the canonical Trellis Codex dispatch setting; repository automation changes are limited to `.github/dependabot.yml` and the CI event block in `.github/workflows/ci.yml`. After the configuration PR is green and merged, the migration closes only the pre-captured version-update PRs, enables security settings through GitHub APIs, and verifies post-merge automation before Trellis archival.
 
-**Tech Stack:** Dependabot v2 configuration, GitHub Actions YAML, Ruby/Psych structural assertions, actionlint, GitHub CLI, Trellis workflow.
+**Tech Stack:** Trellis Codex dispatch configuration, Dependabot v2 configuration, GitHub Actions YAML, Ruby/Psych structural assertions, actionlint, GitHub CLI.
 
 ---
 
@@ -14,9 +14,62 @@
 
 - Modify `.github/dependabot.yml`: monthly schedules, version-update allow rules, four groups, and 1/2/1 version-PR limits.
 - Modify `.github/workflows/ci.yml`: limit the `push` trigger to `main` while preserving the existing `pull_request` trigger and all jobs.
+- Modify `.trellis/config.yaml`: make the existing Codex sub-agent dispatch behavior an explicit persistent project preference.
 - Modify `.trellis/spec/guides/branch-workflow-guidelines.md` during Phase 3.3: preserve the durable dependency-automation contract for future maintainers.
 - Update `.trellis/tasks/08-11-dependency-update-governance/*`: record validation evidence, acceptance results, PR metadata, and completion state.
 - Do not modify dependency manifests, lock files, workflow action pins, Release Please configuration, or application code.
+
+## Task 0: Persist The Project Sub-Agent Default
+
+**Files:**
+
+- Modify: `.trellis/config.yaml:129`
+- Verify unchanged: `.codex/agents/trellis-implement.toml`
+- Verify unchanged: `.codex/agents/trellis-check.toml`
+- Verify unchanged: `.codex/agents/trellis-research.toml`
+- Verify unchanged: `.codex/hooks.json`
+
+- [ ] **Step 1: Confirm the explicit-preference assertion fails against `auto`**
+
+```bash
+ruby -ryaml -e '
+config = YAML.safe_load(File.read(".trellis/config.yaml"))
+abort "Codex dispatch preference must be explicit" unless config.dig("codex", "dispatch_mode") == "sub-agent"
+puts "Codex sub-agent dispatch preference OK"
+'
+```
+
+Expected: exit 1 with `Codex dispatch preference must be explicit`.
+
+- [ ] **Step 2: Change only the project dispatch value**
+
+Apply this narrow change and preserve every other config line:
+
+```yaml
+codex:
+  dispatch_mode: sub-agent
+```
+
+- [ ] **Step 3: Re-run the explicit-preference assertion**
+
+Run the exact Ruby command from Step 1.
+
+Expected: exit 0 and `Codex sub-agent dispatch preference OK`.
+
+- [ ] **Step 4: Verify generated Codex integration files are unchanged**
+
+```bash
+git diff --exit-code origin/main -- .codex/agents .codex/hooks.json .codex/config.toml
+```
+
+Expected: exit 0 with no output.
+
+- [ ] **Step 5: Commit the persistent project preference**
+
+```bash
+git add .trellis/config.yaml
+git commit -m "chore(trellis): prefer sub-agent dispatch"
+```
 
 ## Task 1: Configure Monthly Grouped Version Updates
 
@@ -263,11 +316,11 @@ git commit -m "ci: avoid duplicate pull request runs"
 - Modify: `.trellis/spec/guides/branch-workflow-guidelines.md`
 - Update: `.trellis/tasks/08-11-dependency-update-governance/*`
 
-- [ ] **Step 1: Run both structural assertions**
+- [ ] **Step 1: Run all structural assertions**
 
-Run the exact Ruby assertions from Task 1 Step 1 and Task 2 Step 1.
+Run the exact Ruby assertions from Task 0 Step 1, Task 1 Step 1, and Task 2 Step 1.
 
-Expected: both exit 0 with their `OK` messages.
+Expected: all three exit 0 with their `OK` messages.
 
 - [ ] **Step 2: Run workflow lint and repository hygiene checks**
 
@@ -282,7 +335,7 @@ Expected: all commands exit 0. Actionlint reports no errors; diff check is silen
 - [ ] **Step 3: Reconfirm protected files are unchanged**
 
 ```bash
-git diff --exit-code origin/main -- backend/go.mod backend/go.sum web/package.json web/package-lock.json .github/workflows/release-please.yml
+git diff --exit-code origin/main -- backend/go.mod backend/go.sum web/package.json web/package-lock.json .github/workflows/release-please.yml .codex/agents .codex/hooks.json .codex/config.toml
 ```
 
 Expected: exit 0 with no output.
@@ -299,11 +352,12 @@ Add this section to `.trellis/spec/guides/branch-workflow-guidelines.md`:
 - Keep Dependabot vulnerability alerts and security fixes independent from the routine version-update schedule and groups.
 - Before replacing old bot PRs, capture their exact numbers and head branches. Close only that allowlist; never use a dynamic close-all query that could include new security PRs.
 - Run pull-request CI through `pull_request`, and limit push-triggered CI to `main` so a PR commit does not run the same workflow twice.
+- For Codex Trellis work, default to project-configured sub-agent dispatch for research, implementation, and checks. Use inline execution only when the user explicitly requests it for the current task.
 ```
 
 - [ ] **Step 5: Update task evidence and commit the guidance**
 
-Create `.trellis/tasks/08-11-dependency-update-governance/research/validation-evidence.md` with the exact commands, exit codes, and relevant output from Steps 1-3, followed by a mapping from R1-R12 and AC1-AC8 to the implementing task step. Then run:
+Create `.trellis/tasks/08-11-dependency-update-governance/research/validation-evidence.md` with the exact commands, exit codes, and relevant output from Steps 1-3, followed by a mapping from R1-R13 and AC1-AC9 to the implementing task step. Then run:
 
 ```bash
 python3 ./.trellis/scripts/task.py validate .trellis/tasks/08-11-dependency-update-governance
@@ -336,6 +390,7 @@ gh pr create \
   --title "chore(deps): govern dependency update automation" \
   --body "$(printf '%s\n' \
     '## Summary' \
+    '- persist project-level Codex sub-agent dispatch as the default' \
     '- group routine minor/patch dependency updates into monthly ecosystem PRs' \
     '- keep security updates outside the monthly version-update groups' \
     '- run PR CI once by limiting push-triggered CI to main' \
@@ -596,3 +651,4 @@ Expected: clean `main` tracking `origin/main` with no local-only commits.
 | R11, AC7 | Task 5 explicit PR #386 preservation check |
 | R12, AC5 | Tasks 1 and 3 protected-file checks, actionlint, diff hygiene, remote required CI |
 | AC8 | Task 7 Release Please and publish-workflow inspection with explicit no-release conclusion |
+| R13, AC9 | Task 0 explicit Trellis config preference and generated Codex integration immutability checks; Task 3 durable project guidance |
