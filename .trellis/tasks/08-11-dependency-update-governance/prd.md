@@ -25,7 +25,7 @@
 ### Security updates
 
 - R6. 启用 GitHub Dependabot vulnerability alerts 与 automated security fixes，安全告警不受月度普通版本更新时间窗延迟。
-- R7. 若安全修复只能通过 major 升级完成，必须保留可见告警并转为人工高优先级升级任务，不能因普通 major 更新策略静默遗漏。
+- R7. 若安全修复只能通过 major 升级完成，必须保留可见告警并创建人工高优先级升级任务，不能因普通 major 更新策略静默遗漏。Task 6 必须将审查结果解析为机器可读的 `r7-follow-up-task-paths.txt`：无需 follow-up 时内容精确为 `NONE`，否则每行一个实际创建且已写入内容的 `.trellis/tasks/<exact-task-name>` 直接子任务目录；拒绝 `PENDING`、重复项、当前任务、`archive`、嵌套路径、缺失目录和无新建内容的目录。同一精确结果必须记入 `post-merge-evidence.md`。
 
 ### CI behavior
 
@@ -34,7 +34,7 @@
 
 ### Migration and cleanup
 
-- R10. 新配置通过 PR 合并并完成必需 CI 后，仅按预先快照关闭现有 13 个分散 Dependabot PR，并以各 PR 的完整 `headRefOid` 校验和条件删除其机器人分支；随后在 GitHub 受支持的 Dependabot Web UI 中为 `gomod /backend`、`npm /web` 和 `github-actions /` 各手动触发一次（总计恰好三次）`Check for updates`。三个任务必须全部进入终态 `success` 才能记录关联分组 PR 并进入安全更新启用步骤；`queued` 仍为 pending，任何 `failure`（包括已记录的外部阻塞）都会使 R10 保持未完成且不得触发第四次检查。成功任务没有可用更新是有效结果。
+- R10. 新配置通过 PR 合并并完成必需 CI 后，仅按预先快照关闭现有 13 个分散 Dependabot PR，并以各 PR 的完整 `headRefOid` 校验和条件删除其机器人分支；随后在 GitHub 受支持的 Dependabot Web UI 中为 `gomod /backend`、`npm /web` 和 `github-actions /` 各手动触发一次（总计恰好三次）`Check for updates`。三个任务必须全部进入终态 `success`；从三份成功 job 日志独立提取关联 PR 编号，同时枚举完整的当前开放 `app/dependabot` PR 集合，分别校验编号为数字、无重复并排序，要求两个集合完全相等。每个 live PR 必须为 OPEN、作者为 `app/dependabot`、head 属于四个批准分组且 group identity 唯一，总数为 0-4；空的 job 关联数组只有在 live 集合也为空时才有效。任何 `queued`、`failure`、重复编号/分组、错误 state/author/head、遗漏或多余 live PR、集合不等（包括已记录的外部阻塞）都会使 R10 保持未完成、阻止安全设置启用且不得触发第四次检查。成功任务没有可用更新且两个集合均为空是有效结果。
 - R11. 保留 Release Please PR #386 及其分支；它不属于依赖清理范围。
 - R12. 不在本任务中直接升级 `package.json`、`package-lock.json`、`go.mod`、`go.sum` 或现有 GitHub Actions 版本。
 
@@ -42,19 +42,21 @@
 
 - R13. 将本项目 Codex 的 Trellis 派发偏好显式设为 `sub-agent`；后续实现、研究与检查默认使用子代理，只有用户明确要求 inline 时才覆盖该偏好。
 - R14. 本项目需要隔离工作区时默认使用仓库内 `.worktrees/`；该目录必须保持在 `.gitignore` 中，未来任务沿用此位置而不重复询问。
+- R15. 治理 PR 合并后，所有 live 结果、任务验收、R7 follow-up 任务内容、归档与开发者日志写入必须在主 worktree 从已同步 `main` 新建的精确分支 `codex/chore-dependency-governance-evidence` 上完成，并通过独立 follow-up PR、完整 required CI 和 squash merge 进入 `main`。创建分支时必须将已验证的同步 main OID 持久化为单行 `evidence-branch-base-oid.txt`，closeout 时以该值证明 work commit 的唯一 parent 正是分支 base。分支相对该 base 必须精确且仅有三个提交：先在 Phase 3.4 将 audited evidence/验收/R7 follow-up 工作提交为 `docs(task): record dependency governance evidence`，再由 `task.py archive` 自动提交 `chore(task): archive 08-11-dependency-update-governance`，最后由 `add_session.py` 自动提交 `chore: record journal`；日志 `--commit` 只接收 Phase 3.4 work commit 的完整 hash，不得包含 archive commit。work commit 完成后必须基于实际 committed tree 再次执行相同 active-task/R7-manifest allowlist 审计并重验 evidence、manifest 和 base-OID 文件，防止 hooks 或并发 index 变化夹带路径；push 前必须重验从 base 到 HEAD 的精确三提交数量、顺序、subjects 和 parent 链，拒绝任何额外 clean commit。远程写入必须使用 `${journal_commit}:refs/heads/codex/chore-dependency-governance-evidence` 精确 refspec 和“远程 ref 必须不存在”的 atomic force-with-lease，不得从可移动本地分支名推送；PR 在 CI 监控前及 merge 紧邻边界都必须返回 `headRefOid == journal_commit`，merge 请求也必须携带同一 expected head OID。该 PR 合并后的最终 main CI、Release Please 与 no-publish 观察只记录在最终任务/用户交接中，不再创建 tracked evidence，避免递归 evidence PR。
 
 ## Acceptance Criteria
 
-- [ ] AC1. Dependabot 配置为月度普通版本更新，明确时区、分组、major 策略和与分组匹配的 PR 上限；Task 5 的三次手动检查全部 `success` 后，用实际 update job 与 PR 证据验证配置已生效。任何 queued/failure 都使 AC1 保持未完成。
-- [ ] AC2. Task 5 的三次手动检查全部 `success` 后，实际普通版本 PR 仅使用 Go、npm production、npm development、GitHub Actions 四个批准的分组身份，每个身份最多对应一个 PR（身份必须唯一、不得重复），总数最多为 4；成功任务无可用更新时 0 个 PR 也是有效结果。任何 queued/failure 都使 AC2 保持未完成。
+- [ ] AC1. Dependabot 配置为月度普通版本更新，明确时区、分组、major 策略和与分组匹配的 PR 上限；Task 5 的三次手动检查全部 `success` 后，用实际 update job、完整 live `app/dependabot` 枚举和两组 PR 编号精确相等证据验证配置已生效。任何 queued/failure、无效编号或集合不等都使 AC1 保持未完成。
+- [ ] AC2. Task 5 的三次手动检查全部 `success` 后，完整枚举的 live 普通版本 PR 仅使用 Go、npm production、npm development、GitHub Actions 四个批准的分组身份，每个身份最多对应一个 PR（身份必须唯一、不得重复），总数为 0-4，并与三份成功 job 日志提取、去重排序后的关联 PR 编号集合完全相等；成功任务无可用更新且两组均为空时 0 个 PR 有效。任何遗漏、多余、重复、错误 state/author/head/group 或集合不等都使 AC2 保持未完成。
 - [ ] AC3. GitHub API 确认 vulnerability alerts 请求成功，且 automated security fixes 精确为 `enabled: true`、`paused: false`。
 - [ ] AC4. CI 配置在 PR 提交上只触发 `pull_request` 流；治理 PR 合并提交在 `main` 上精确对应一个 `push` CI run，且其状态为 `completed`、结论为 `success`。
 - [ ] AC5. 相关 YAML 可解析，仓库本地适用检查及远程必需 CI 全部通过。
-- [ ] AC6. 13 个旧 Dependabot PR 已按精确快照关闭，远程分支仅在当前 OID 等于该 PR 完整 `headRefOid` 时通过 expected-OID lease 条件删除，或记录外部阻塞；随后恰好三次受支持的 Web UI 检查均记录 ecosystem/directory、点击前 baseline job IDs、点击时间、job ID、任务 timestamp/type/status 和 logs URL，且三个任务全部 `success`。任何 queued/failure 都使 AC6 保持未完成并阻止 Task 6；不得触发第四次检查。
+- [ ] AC6. 13 个旧 Dependabot PR 已按精确快照关闭，远程分支仅在当前 OID 等于该 PR 完整 `headRefOid` 时通过 expected-OID lease 条件删除，或记录外部阻塞；随后恰好三次受支持的 Web UI 检查均记录 ecosystem/directory、点击前 baseline job IDs、点击时间、job ID、任务 timestamp/type/status 和 logs URL，且三个任务全部 `success`。在安全设置仍未启用且旧快照已关闭的 gate 上，job 日志关联 PR 编号与完整 live `app/dependabot` PR 编号集合必须各自 numeric/unique/sorted 并完全相等，所有 live PR 通过 OPEN/author/head/unique-group/0-4 校验。任何 queued/failure 或集合/shape 失败都使 AC6 保持未完成并阻止 Task 6；不得触发第四次检查。
 - [ ] AC7. Release Please PR #386 在手动版本检查前及 post-merge 自动化检查后均保持 `OPEN`、head 为 `release-please--branches--main`，并记录精确 URL。
 - [ ] AC8. 治理 merge SHA 精确对应一个终态成功的 Release Please `push` run；没有与该 SHA 关联的 `Publish Docker Images` 或 `Sync Docker Hub Description` run。本次不直接发布版本或 Docker 镜像。
 - [ ] AC9. `.trellis/config.yaml` 明确包含 `codex.dispatch_mode: sub-agent`，现有 `.codex/agents/*` 与 Codex hooks 未被本任务修改。
 - [ ] AC10. `.gitignore` 继续忽略 `.worktrees/`，项目规范记录该目录为默认隔离 worktree 位置，本任务在 `.worktrees/dependency-update-governance` 中执行。
+- [ ] AC11. 治理 merge 后先同步 primary `main`，确认同名 local/remote evidence branch 均不存在且查询无错误，再从该 main OID 创建 `codex/chore-dependency-governance-evidence` 并将精确 base OID 持久化；Task 5-7 所有 tracked live evidence、验收、R7 manifest/follow-up 内容、归档和 journal 变更仅在该分支完成。Phase 3.4 work commit 必须先经精确 active-task/R7-manifest allowlist 审计并保证拒绝任意 `.trellis/tasks/*`，提交后再用实际 tree diff 复跑同一 allowlist，重验 exact evidence/manifest/base-OID 文件，并断言其 parent 等于持久化 base；其后 archive 和 journal 由 Trellis 分别自动提交，两次均审计精确 subject、parent 和 diff allowlist，日志仅记录 work commit hash。push 前必须证明 `base..HEAD` 精确只有 work → archive → journal 三个提交，subjects 与 parent 链完全匹配，任何之前、中间或之后的额外 clean commit 都失败；仅以 audited `journal_commit` 精确 refspec 和 absent-ref lease 创建远程 evidence ref并回读同一 OID。PR 在 CI 前和 merge 前都必须断言完整 `headRefOid` 等于该 commit，merge 使用同一 expected-head guard。三个提交经独立 PR、required CI、diff 审查和 squash merge 进入 `main`。随后验证 evidence merge 的 main CI 与 Release Please/no-publish 状态，只在最终交接记录这次最后观察；同步 main、以 PR `headRefOid` 条件清理 evidence branch 后，才清理治理 worktree/branch。
 
 ## Out Of Scope
 

@@ -403,7 +403,7 @@ Add this section to `.trellis/spec/guides/branch-workflow-guidelines.md`:
 
 - [ ] **Step 5: Update task evidence and commit the guidance**
 
-Create `.trellis/tasks/08-11-dependency-update-governance/research/validation-evidence.md` with the exact commands, exit codes, and relevant output from Steps 1-3, followed by a mapping from R1-R14 and AC1-AC10 to the implementing task step. Then run:
+Create `.trellis/tasks/08-11-dependency-update-governance/research/validation-evidence.md` with the exact commands, exit codes, and relevant output from Steps 1-3, followed by a mapping from R1-R15 and AC1-AC11 to the implementing task step. Then run:
 
 ```bash
 python3 ./.trellis/scripts/task.py validate .trellis/tasks/08-11-dependency-update-governance
@@ -448,9 +448,10 @@ gh pr create \
     '' \
     '## Post-merge' \
     '- close only the 13 captured legacy Dependabot PRs' \
-    '- save pre-click baseline job IDs, run exactly three supported Web UI version checks, require all three to succeed, and verify grouped PRs' \
+    '- save pre-click baseline job IDs, run exactly three supported Web UI version checks, require all three to succeed, and reconcile job-associated PRs with the complete live Dependabot PR set' \
     '- enable and verify vulnerability alerts and automated security fixes' \
-    '- preserve Release Please PR #386')"
+    '- preserve Release Please PR #386' \
+    '- deliver tracked post-merge evidence and Trellis closeout through the dedicated evidence branch and follow-up PR')"
 ```
 
 Expected: PR targets `main` and has a valid Conventional Commit title.
@@ -499,12 +500,16 @@ Expected: merge succeeds only after required checks pass. Do not pass `--delete-
 
 ## Task 5: Perform Exact Cleanup And Re-run Version Updates
 
-**Files:** Use `.trellis/tasks/08-11-dependency-update-governance/research/open-dependabot-prs-2026-08-11.md` as the immutable allowlist.
+**Files:** Use `.trellis/tasks/08-11-dependency-update-governance/research/open-dependabot-prs-2026-08-11.md` as the immutable allowlist. Record all live results only in `.trellis/tasks/08-11-dependency-update-governance/research/post-merge-evidence.md` on `codex/chore-dependency-governance-evidence`, initialize `.trellis/tasks/08-11-dependency-update-governance/research/r7-follow-up-task-paths.txt` as the machine-readable R7 disposition manifest, and preserve the verified branch base in `.trellis/tasks/08-11-dependency-update-governance/research/evidence-branch-base-oid.txt`.
 
-- [ ] **Step 1: Transition to the primary worktree, sync `main`, and resolve the governance PR number**
+- [ ] **Step 1: Sync primary `main`, create the exact evidence branch, and authorize tracked writes**
 
 ```bash
 primary_worktree=/home/murray/code/xirang
+evidence_branch=codex/chore-dependency-governance-evidence
+post_merge_evidence=.trellis/tasks/08-11-dependency-update-governance/research/post-merge-evidence.md
+r7_follow_up_manifest=.trellis/tasks/08-11-dependency-update-governance/research/r7-follow-up-task-paths.txt
+evidence_base_oid_file=.trellis/tasks/08-11-dependency-update-governance/research/evidence-branch-base-oid.txt
 primary_branch=$(git -C "${primary_worktree}" branch --show-current) || {
   printf 'cannot inspect primary worktree branch: %s\n' "${primary_worktree}" >&2
   exit 1
@@ -538,10 +543,6 @@ if [[ "${primary_head}" != "${origin_main_head}" ]]; then
     "${primary_head}" "${origin_main_head}" >&2
   exit 1
 fi
-cd "${primary_worktree}" || {
-  printf 'cannot enter primary worktree: %s\n' "${primary_worktree}" >&2
-  exit 1
-}
 
 governance_pr_record=$(gh pr list \
   --repo xiangnan0811/xirang \
@@ -570,9 +571,109 @@ gh pr view "${governance_pr_number}" \
       "${governance_pr_number}" >&2
     exit 1
   }
+
+local_evidence_lookup=$(git -C "${primary_worktree}" show-ref --verify \
+  "refs/heads/${evidence_branch}" 2>&1)
+local_evidence_status=$?
+case "${local_evidence_status}" in
+  0)
+    printf 'local evidence branch already exists; refusing reuse: %s\n%s\n' \
+      "${evidence_branch}" "${local_evidence_lookup}" >&2
+    exit 1
+    ;;
+  1)
+    ;;
+  *)
+    printf 'cannot inspect local evidence branch (exit %s): %s\n' \
+      "${local_evidence_status}" "${evidence_branch}" >&2
+    exit 1
+    ;;
+esac
+
+remote_evidence_lookup=$(git -C "${primary_worktree}" ls-remote --exit-code \
+  --heads origin "refs/heads/${evidence_branch}" 2>&1)
+remote_evidence_status=$?
+case "${remote_evidence_status}" in
+  0)
+    printf 'remote evidence branch already exists; refusing reuse: %s\n%s\n' \
+      "${evidence_branch}" "${remote_evidence_lookup}" >&2
+    exit 1
+    ;;
+  2)
+    ;;
+  *)
+    printf 'cannot inspect remote evidence branch (exit %s):\n%s\n' \
+      "${remote_evidence_status}" "${remote_evidence_lookup}" >&2
+    exit 1
+    ;;
+esac
+
+git -C "${primary_worktree}" switch -c "${evidence_branch}" \
+  "${origin_main_head}" || {
+  printf 'failed to create evidence branch %s from synchronized main %s\n' \
+    "${evidence_branch}" "${origin_main_head}" >&2
+  exit 1
+}
+cd "${primary_worktree}" || {
+  printf 'cannot enter primary worktree: %s\n' "${primary_worktree}" >&2
+  exit 1
+}
+actual_worktree=$(pwd -P) || {
+  printf 'cannot resolve current worktree path\n' >&2
+  exit 1
+}
+actual_branch=$(git branch --show-current) || {
+  printf 'cannot inspect evidence branch after creation\n' >&2
+  exit 1
+}
+actual_branch_head=$(git rev-parse HEAD) || {
+  printf 'cannot inspect evidence branch HEAD after creation\n' >&2
+  exit 1
+}
+if [[ "${actual_worktree}" != "${primary_worktree}" || \
+      "${actual_branch}" != "${evidence_branch}" || \
+      "${actual_branch_head}" != "${origin_main_head}" || \
+      ! "${origin_main_head}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  printf 'tracked evidence write requires %s on %s at base %s; got %s on %s at %s\n' \
+    "${primary_worktree}" "${evidence_branch}" \
+    "${origin_main_head}" "${actual_worktree}" "${actual_branch}" \
+    "${actual_branch_head}" >&2
+  exit 1
+fi
+if [[ -e "${post_merge_evidence}" ]]; then
+  printf 'post-merge evidence file unexpectedly exists on fresh branch: %s\n' \
+    "${post_merge_evidence}" >&2
+  exit 1
+fi
+if [[ -e "${r7_follow_up_manifest}" ]]; then
+  printf 'R7 follow-up manifest unexpectedly exists on fresh branch: %s\n' \
+    "${r7_follow_up_manifest}" >&2
+  exit 1
+fi
+if [[ -e "${evidence_base_oid_file}" ]]; then
+  printf 'evidence base OID file unexpectedly exists on fresh branch: %s\n' \
+    "${evidence_base_oid_file}" >&2
+  exit 1
+fi
+printf '# Dependency Update Governance Post-Merge Evidence\n\n' \
+  >"${post_merge_evidence}" || {
+  printf 'failed to initialize tracked post-merge evidence: %s\n' \
+    "${post_merge_evidence}" >&2
+  exit 1
+}
+printf 'PENDING\n' >"${r7_follow_up_manifest}" || {
+  printf 'failed to initialize R7 follow-up manifest: %s\n' \
+    "${r7_follow_up_manifest}" >&2
+  exit 1
+}
+printf '%s\n' "${origin_main_head}" >"${evidence_base_oid_file}" || {
+  printf 'failed to persist evidence branch base OID: %s\n' \
+    "${evidence_base_oid_file}" >&2
+  exit 1
+}
 ```
 
-Expected: the primary worktree is clean, already on `main`, and its `HEAD` equals `origin/main`; governance PR state is `MERGED`. GitHub CLI verification can be run from either worktree because every command names `--repo`, but this explicit `cd` makes `/home/murray/code/xirang` the working directory for all remaining post-merge steps. Never run `git switch main` from the governance worktree.
+Expected: the primary worktree begins clean on `main`, fast-forwards to `origin/main`, and rejects a pre-existing local or remote evidence branch as well as any lookup error. It then creates `codex/chore-dependency-governance-evidence` from that exact synchronized full OID, proves the new branch HEAD still equals that OID, asserts the primary path and branch, and only then performs the first tracked writes by initializing the exact evidence file, the R7 manifest to the single line `PENDING`, and the base-OID file to exactly that one full OID. The persisted base is the closeout ancestry source of truth. This branch creation is the authorization boundary for every Task 5-7 live evidence, acceptance, R7 follow-up task, archive, and journal write; never write them on `main` or in the old governance worktree. The governance PR is uniquely `MERGED`.
 
 - [ ] **Step 2: Revalidate every captured PR before closing anything**
 
@@ -762,13 +863,29 @@ Follow the documented path `Repository > Insights > Dependency graph > Dependabo
 
 npm is one ecosystem/directory trigger even though its configuration has production and development groups. Do not click either npm group separately and do not trigger more than these three jobs.
 
-Immediately record this table in the task evidence, using ISO 8601 timestamps with timezone and the new job's logs link:
+Immediately record this table in the exact `post-merge-evidence.md`, using ISO 8601 timestamps with timezone and the new job's logs link:
 
 | ecosystem | directory | pre-click baseline job IDs | click time | job ID | job timestamp | type | current status | logs URL |
 |---|---|---|---|---|---|---|---|---|
 | `gomod` | `/backend` | | | | | | | |
 | `npm` | `/web` | | | | | | | |
 | `github-actions` | `/` | | | | | | | |
+
+Before the first baseline/result append, reassert the write context:
+
+```bash
+primary_worktree=/home/murray/code/xirang
+evidence_branch=codex/chore-dependency-governance-evidence
+post_merge_evidence=.trellis/tasks/08-11-dependency-update-governance/research/post-merge-evidence.md
+actual_worktree=$(pwd -P) || exit 1
+actual_branch=$(git branch --show-current) || exit 1
+if [[ "${actual_worktree}" != "${primary_worktree}" || \
+      "${actual_branch}" != "${evidence_branch}" || \
+      ! -f "${post_merge_evidence}" ]]; then
+  printf 'refusing Task 5 evidence write outside exact evidence context\n' >&2
+  exit 1
+fi
+```
 
 If a click times out, the page reloads, or the outcome is otherwise ambiguous, do not click again. Reload Recent update jobs and compare the current IDs for that exact ecosystem/directory with its saved baseline until exactly one new job is identified. If zero or multiple new IDs remain ambiguous, record a blocker and stop; a second click could create a duplicate trigger.
 
@@ -780,60 +897,121 @@ Use the `browser` automation to revisit each captured logs URL without clicking 
 
 Expected: all three captured jobs have terminal `success` evidence. Any queued job keeps the task pending; any failure, including a documented external blocker, leaves R10/AC1/AC2/AC6 incomplete and blocks Task 6. A failure cannot be converted into acceptance evidence and must not cause a fourth click.
 
-- [ ] **Step 8: Capture and verify the new grouped version-update PRs**
+- [ ] **Step 8: Reconcile job-associated PRs with the complete live Dependabot set**
 
-From the three successful job pages/logs, capture the exact PR numbers and URLs associated with those runs. If the jobs created PRs, populate `version_pr_numbers` with only those exact numbers; otherwise leave it empty. Run this read-only shape check from the primary worktree:
+From the three successful job logs, independently capture every exact associated PR number. Populate `job_associated_pr_numbers` only from those logs, never from the live PR query. Then enumerate the complete current open `app/dependabot` set and run this gate from the primary evidence branch:
 
 ```bash
-version_pr_numbers=() # replace with the exact associated PR numbers, for example: (410 411)
-if (( ${#version_pr_numbers[@]} > 4 )); then
-  printf 'too many grouped version-update PRs: %s\n' "${#version_pr_numbers[@]}" >&2
-  exit 1
+job_associated_pr_numbers=() # replace only from the three successful job logs
+declare -A seen_job_pr_numbers=()
+normalized_job_pr_numbers=()
+for pr_number in "${job_associated_pr_numbers[@]}"; do
+  if [[ ! "${pr_number}" =~ ^[0-9]+$ ]]; then
+    printf 'job-associated PR number is not numeric: %s\n' "${pr_number}" >&2
+    exit 1
+  fi
+  if [[ -n "${seen_job_pr_numbers[${pr_number}]+x}" ]]; then
+    printf 'duplicate job-associated PR number: %s\n' "${pr_number}" >&2
+    exit 1
+  fi
+  seen_job_pr_numbers[${pr_number}]=1
+  normalized_job_pr_numbers+=("${pr_number}")
+done
+if (( ${#normalized_job_pr_numbers[@]} > 0 )); then
+  mapfile -t normalized_job_pr_numbers < <(
+    printf '%s\n' "${normalized_job_pr_numbers[@]}" | LC_ALL=C sort -n
+  )
 fi
 
+live_dependabot_pr_rows=$(gh pr list \
+  --repo xiangnan0811/xirang \
+  --state open \
+  --author app/dependabot \
+  --limit 200 \
+  --json number,state,author,headRefName,url \
+  --jq '.[] | [(.number | tostring), .state, .author.login, .headRefName, .url] | @tsv') || {
+    printf 'failed to enumerate the complete live Dependabot PR set\n' >&2
+    exit 1
+  }
+
+declare -A seen_live_pr_numbers=()
 declare -A seen_groups=()
-for pr_number in "${version_pr_numbers[@]}"; do
-  actual=$(gh pr view "${pr_number}" \
-    --repo xiangnan0811/xirang \
-    --json state,author,headRefName,url \
-    --jq '[.state, .author.login, .headRefName, .url] | @tsv') || {
-      printf 'failed to inspect associated version-update PR #%s\n' "${pr_number}" >&2
+live_pr_numbers=()
+if [[ -n "${live_dependabot_pr_rows}" ]]; then
+  while IFS=$'\t' read -r pr_number state author head url; do
+    if [[ ! "${pr_number}" =~ ^[0-9]+$ ]]; then
+      printf 'live Dependabot PR number is not numeric: %s\n' "${pr_number}" >&2
       exit 1
-    }
-  IFS=$'\t' read -r state author head url <<<"${actual}"
-  if [[ "${state}" != "OPEN" ]]; then
-    printf 'associated version-update PR #%s must be OPEN, got %s\n' \
-      "${pr_number}" "${state}" >&2
+    fi
+    if [[ -n "${seen_live_pr_numbers[${pr_number}]+x}" ]]; then
+      printf 'duplicate live Dependabot PR number: %s\n' "${pr_number}" >&2
+      exit 1
+    fi
+    seen_live_pr_numbers[${pr_number}]=1
+    if [[ "${state}" != "OPEN" ]]; then
+      printf 'live Dependabot PR #%s must be OPEN, got %s\n' \
+        "${pr_number}" "${state}" >&2
+      exit 1
+    fi
+    if [[ "${author}" != "app/dependabot" ]]; then
+      printf 'live Dependabot PR #%s author mismatch: %s\n' \
+        "${pr_number}" "${author}" >&2
+      exit 1
+    fi
+    case "${head}" in
+      dependabot/go_modules/backend/go-minor-patch|dependabot/go_modules/backend/go-minor-patch-*) group=go-minor-patch ;;
+      dependabot/npm_and_yarn/web/npm-production-minor-patch|dependabot/npm_and_yarn/web/npm-production-minor-patch-*) group=npm-production-minor-patch ;;
+      dependabot/npm_and_yarn/web/npm-development-minor-patch|dependabot/npm_and_yarn/web/npm-development-minor-patch-*) group=npm-development-minor-patch ;;
+      dependabot/github_actions/actions-minor-patch|dependabot/github_actions/actions-minor-patch-*) group=actions-minor-patch ;;
+      *) printf 'unapproved live grouped PR head for #%s: %s\n' \
+           "${pr_number}" "${head}" >&2; exit 1 ;;
+    esac
+    if [[ -n "${seen_groups[${group}]+x}" ]]; then
+      printf 'duplicate live grouped PR identity: %s\n' "${group}" >&2
+      exit 1
+    fi
+    if [[ -z "${url}" ]]; then
+      printf 'live Dependabot PR #%s has no URL\n' "${pr_number}" >&2
+      exit 1
+    fi
+    seen_groups[${group}]=1
+    live_pr_numbers+=("${pr_number}")
+    printf '%s\t%s\t%s\t%s\n' "${pr_number}" "${group}" "${head}" "${url}"
+  done <<<"${live_dependabot_pr_rows}"
+fi
+if (( ${#live_pr_numbers[@]} > 4 )); then
+  printf 'too many live grouped version-update PRs: %s\n' \
+    "${#live_pr_numbers[@]}" >&2
+  exit 1
+fi
+if (( ${#live_pr_numbers[@]} > 0 )); then
+  mapfile -t live_pr_numbers < <(
+    printf '%s\n' "${live_pr_numbers[@]}" | LC_ALL=C sort -n
+  )
+fi
+
+if (( ${#normalized_job_pr_numbers[@]} != ${#live_pr_numbers[@]} )); then
+  printf 'job/live Dependabot PR set size mismatch: job=%s live=%s\n' \
+    "${normalized_job_pr_numbers[*]:-}" "${live_pr_numbers[*]:-}" >&2
+  exit 1
+fi
+for ((index = 0; index < ${#live_pr_numbers[@]}; index++)); do
+  if [[ "${normalized_job_pr_numbers[index]}" != "${live_pr_numbers[index]}" ]]; then
+    printf 'job/live Dependabot PR set mismatch: job=%s live=%s\n' \
+      "${normalized_job_pr_numbers[*]:-}" "${live_pr_numbers[*]:-}" >&2
     exit 1
   fi
-  if [[ "${author}" != "app/dependabot" ]]; then
-    printf 'associated version-update PR #%s must be authored by app/dependabot, got %s\n' \
-      "${pr_number}" "${author}" >&2
-    exit 1
-  fi
-  case "${head}" in
-    dependabot/go_modules/backend/go-minor-patch|dependabot/go_modules/backend/go-minor-patch-*) group=go-minor-patch ;;
-    dependabot/npm_and_yarn/web/npm-production-minor-patch|dependabot/npm_and_yarn/web/npm-production-minor-patch-*) group=npm-production-minor-patch ;;
-    dependabot/npm_and_yarn/web/npm-development-minor-patch|dependabot/npm_and_yarn/web/npm-development-minor-patch-*) group=npm-development-minor-patch ;;
-    dependabot/github_actions/actions-minor-patch|dependabot/github_actions/actions-minor-patch-*) group=actions-minor-patch ;;
-    *) printf 'unapproved grouped PR head for #%s: %s\n' "${pr_number}" "${head}" >&2; exit 1 ;;
-  esac
-  if [[ -n "${seen_groups[${group}]+x}" ]]; then
-    printf 'duplicate grouped PR identity: %s\n' "${group}" >&2
-    exit 1
-  fi
-  seen_groups[${group}]=1
-  printf '%s\t%s\t%s\t%s\n' "${pr_number}" "${group}" "${head}" "${url}"
 done
+printf 'reconciled grouped version PRs: %s\n' "${live_pr_numbers[*]:-none}"
 ```
 
-Expected: zero to four associated PRs, each open, Dependabot-authored, and mapped to one of the four approved unique group identities. Record the job-to-PR mapping and command output in task evidence. Do not close these new grouped PRs. Only after Steps 6-8 prove all three jobs succeeded and the grouped-PR evidence is complete may Task 6 enable security updates.
+Expected: both sources are independently normalized as numeric, duplicate-free, sorted PR-number sets and are exactly equal. An empty job-associated array fails whenever the live set is nonempty; an extra live PR or job-only number fails. Every actual live PR is OPEN, authored by `app/dependabot`, mapped from an approved head to one unique group, has a URL, and the live total is 0-4; duplicate numbers/groups and wrong state/author/head fail. Because all 13 captured legacy PRs are closed and security settings are still disabled at this gate, every live Dependabot PR must be one of these ordinary grouped version PRs; any violation blocks Task 6. Record the job/log mapping, complete live query, normalized sets, and comparison output in the exact evidence file. Leave valid new PRs open. Zero is valid only when all three jobs succeeded with no updates and both sets are empty.
 
 ## Task 6: Enable And Verify Security Updates
 
-**Files:** No repository files; GitHub repository settings only.
+**Files:** GitHub repository settings, result appends to `.trellis/tasks/08-11-dependency-update-governance/research/post-merge-evidence.md`, the exact R7 disposition manifest, and any required high-priority R7 child task directories, all on the evidence branch.
 
-**Entry gate:** Task 5 exact cleanup is verified; all three manual version-update jobs are terminal `success`; all associated version-update PRs have passed the approved-identity, unique-identity, and maximum-four checks. Any queued/failure job blocks this task even when recorded as an external blocker. This ordering is mandatory so newly created security PRs cannot be confused with version-update PRs.
+**Entry gate:** Task 5 exact cleanup is verified; all three manual version-update jobs are terminal `success`; the independently derived job-associated and complete live Dependabot PR sets are numeric, unique, sorted, exactly equal, and every live PR passed the OPEN/author/head/unique-group/0-4 checks. Any queued/failure job or reconciliation failure blocks this task even when recorded as an external blocker. This ordering is mandatory so newly created security PRs cannot be confused with version-update PRs. Before appending any Task 6 result, re-run the exact primary-worktree/evidence-branch/file assertion from Task 5 Step 6.
 
 - [ ] **Step 1: Enable vulnerability alerts**
 
@@ -914,11 +1092,78 @@ gh api --method GET --paginate repos/xiangnan0811/xirang/dependabot/alerts \
   }
 ```
 
-Expected: the command succeeds. For any open alert without an automatically created fix PR, record the package, severity, and first patched version in task evidence; create a separate high-priority Trellis upgrade task when the fix requires a major-version compatibility change.
+Expected: the command succeeds. For every open alert, record the package, severity, first patched version, automatic-fix-PR status, and manual-major disposition in the exact post-merge evidence file after the evidence-context assertion. Create a separate high-priority Trellis child upgrade task for each compatibility scope that requires a manual major-version fix; use `--parent .trellis/tasks/08-11-dependency-update-governance` and `--no-start` so the current evidence task remains active.
 
-## Task 7: Verify Post-Merge Automation And Finish Trellis
+- [ ] **Step 6: Resolve and record the exact R7 follow-up task paths**
 
-**Files:** Trellis task archive and developer journal as directed by `trellis-finish-work`.
+After the Step 5 review and any required task creation, populate `r7_follow_up_task_paths` with the exact created task directories. Leave it empty only when the recorded alert-by-alert review proves no R7 follow-up is required. Then run:
+
+```bash
+active_task_root=.trellis/tasks/08-11-dependency-update-governance
+post_merge_evidence="${active_task_root}/research/post-merge-evidence.md"
+r7_follow_up_manifest="${active_task_root}/research/r7-follow-up-task-paths.txt"
+r7_follow_up_task_paths=() # replace with exact created paths when R7 follow-up is required
+
+if [[ ! -f "${post_merge_evidence}" || ! -f "${r7_follow_up_manifest}" ]]; then
+  printf 'R7 resolution requires the exact evidence and manifest files\n' >&2
+  exit 1
+fi
+if (( ${#r7_follow_up_task_paths[@]} == 0 )); then
+  manifest_entries=(NONE)
+else
+  manifest_entries=("${r7_follow_up_task_paths[@]}")
+fi
+
+declare -A seen_r7_paths=()
+for follow_up_path in "${manifest_entries[@]}"; do
+  if [[ "${follow_up_path}" == "NONE" ]]; then
+    if (( ${#manifest_entries[@]} != 1 )); then
+      printf 'NONE cannot be combined with R7 follow-up paths\n' >&2
+      exit 1
+    fi
+    continue
+  fi
+  if [[ ! "${follow_up_path}" =~ ^\.trellis/tasks/[A-Za-z0-9._-]+$ || \
+        "${follow_up_path}" == "${active_task_root}" || \
+        "${follow_up_path}" == ".trellis/tasks/archive" ]]; then
+    printf 'invalid R7 direct-child task path: %s\n' "${follow_up_path}" >&2
+    exit 1
+  fi
+  if [[ -n "${seen_r7_paths[${follow_up_path}]+x}" ]]; then
+    printf 'duplicate R7 follow-up task path: %s\n' "${follow_up_path}" >&2
+    exit 1
+  fi
+  if [[ ! -d "${follow_up_path}" || ! -f "${follow_up_path}/task.json" ]]; then
+    printf 'R7 follow-up task path is missing created task content: %s\n' \
+      "${follow_up_path}" >&2
+    exit 1
+  fi
+  follow_up_parent=$(ruby -rjson -e \
+    'data = JSON.parse(File.read(ARGV.fetch(0))); print(data["parent"].to_s)' \
+    "${follow_up_path}/task.json") || exit 1
+  if [[ "${follow_up_parent}" != "${active_task_root##*/}" ]]; then
+    printf 'R7 follow-up is not a direct child of the current task: %s\n' \
+      "${follow_up_path}" >&2
+    exit 1
+  fi
+  seen_r7_paths[${follow_up_path}]=1
+done
+
+printf '%s\n' "${manifest_entries[@]}" >"${r7_follow_up_manifest}" || exit 1
+{
+  printf '## R7 Follow-Up Task Paths\n\n```text\n'
+  printf '%s\n' "${manifest_entries[@]}"
+  printf '```\n\n'
+} >>"${post_merge_evidence}" || exit 1
+```
+
+Expected: `PENDING` is replaced by exactly `NONE` when no reviewed alert requires manual-major work, or by one or more unique exact `.trellis/tasks/<exact-task-name>` directories containing a created `task.json` whose parent is the current task. The command rejects the current task, `archive`, nested paths, duplicates, missing task content, and non-child tasks. The manifest and post-merge evidence receive the same canonical ordered entries from one array. Task 7 performs the final dirty-content proof and rejects a manifest path whose directory contributes no created changes.
+
+## Task 7: Verify Automation, Deliver The Evidence PR, And Finish Trellis
+
+**Files:** The exact post-merge evidence, R7 manifest, and evidence-base-OID files, any manifest-listed follow-up child task directories, Trellis task acceptance/archive files, and developer journal/index files directed by `trellis-finish-work`, all on `codex/chore-dependency-governance-evidence` in the primary worktree.
+
+**Entry gate:** The primary worktree remains on the evidence branch created in Task 5 at the exact full OID persisted during branch creation, all Task 5-6 live results have been appended to the exact evidence file, and the R7 manifest has been resolved from `PENDING` to `NONE` or exact created direct-child task paths. Neither `main` nor the old governance worktree may receive tracked evidence writes.
 
 - [ ] **Step 1: Verify the main push CI run**
 
@@ -1095,70 +1340,1069 @@ printf 'publish_images_runs=0\tdockerhub_description_runs=0\trelease_pr=%s\n' \
 
 Expected: for the exact governance merge SHA, one Release Please `push` run is `completed`/`success`; no Publish Docker Images run exists because that workflow only handles `release.published` or manual dispatch; no Sync Docker Hub Description run exists because the governance commit changes neither README nor that workflow and no associated manual run is expected. Each query fails independently on API errors. PR #386 is revalidated as `OPEN` with its exact head and URL.
 
-- [ ] **Step 3: Complete acceptance evidence**
+- [ ] **Step 3: Assert the evidence context and complete acceptance evidence**
 
-Update the task PRD/check evidence with:
-
-- config assertions and actionlint results;
-- governance PR URL and merge commit;
-- governance PR URL, exact merge SHA, CI run ID/URL and asserted `completed`/`success` result;
-- exact old-PR closure results and remaining remote heads;
-- exactly three manual version-update job records, pre-click baseline job IDs, terminal `success` statuses, logs URLs, and associated unique grouped-PR evidence;
-- vulnerability-alert query success and exact automated-security-fixes enabled/paused values;
-- Release Please run ID/URL/result, post-merge PR #386 URL/state/head, and exact merge-SHA no-release/no-publish query results.
-
-- [ ] **Step 4: Run `trellis-finish-work`**
-
-Use the project finish workflow to verify the quality gate, archive the completed task, update the developer journal, and route any archive commit through a dedicated follow-up branch and PR if required by the repository workflow.
-
-- [ ] **Step 5: Sync `main` in the primary worktree after all merged follow-up work**
+Before the first Task 7 tracked write, run:
 
 ```bash
 primary_worktree=/home/murray/code/xirang
-primary_branch=$(git -C "${primary_worktree}" branch --show-current) || {
-  printf 'cannot inspect primary worktree branch: %s\n' "${primary_worktree}" >&2
+evidence_branch=codex/chore-dependency-governance-evidence
+post_merge_evidence=.trellis/tasks/08-11-dependency-update-governance/research/post-merge-evidence.md
+r7_follow_up_manifest=.trellis/tasks/08-11-dependency-update-governance/research/r7-follow-up-task-paths.txt
+evidence_base_oid_file=.trellis/tasks/08-11-dependency-update-governance/research/evidence-branch-base-oid.txt
+cd "${primary_worktree}" || {
+  printf 'cannot enter primary worktree: %s\n' "${primary_worktree}" >&2
   exit 1
 }
-if [[ "${primary_branch}" != "main" ]]; then
-  printf 'primary worktree must already be on main, got %s\n' "${primary_branch}" >&2
+actual_worktree=$(pwd -P) || exit 1
+actual_branch=$(git branch --show-current) || exit 1
+if [[ "${actual_worktree}" != "${primary_worktree}" || \
+      "${actual_branch}" != "${evidence_branch}" || \
+      ! -f "${post_merge_evidence}" || \
+      ! -f "${r7_follow_up_manifest}" || \
+      ! -f "${evidence_base_oid_file}" ]]; then
+  printf 'Task 7 tracked writes require %s on %s with %s, %s, and %s\n' \
+    "${primary_worktree}" "${evidence_branch}" \
+    "${post_merge_evidence}" "${r7_follow_up_manifest}" \
+    "${evidence_base_oid_file}" >&2
   exit 1
 fi
-primary_status=$(git -C "${primary_worktree}" status --porcelain) || {
-  printf 'cannot inspect primary worktree status: %s\n' "${primary_worktree}" >&2
+mapfile -t evidence_base_oid_entries <"${evidence_base_oid_file}" || exit 1
+if (( ${#evidence_base_oid_entries[@]} != 1 )) || \
+   [[ ! "${evidence_base_oid_entries[0]}" =~ ^[0-9a-fA-F]{40}$ || \
+      "$(git rev-parse HEAD)" != "${evidence_base_oid_entries[0]}" ]]; then
+  printf 'Task 7 requires HEAD to equal the single persisted evidence base OID\n' >&2
+  exit 1
+fi
+```
+
+Complete the exact evidence file and task acceptance state with:
+
+- config assertions and actionlint results;
+- governance PR URL, exact merge SHA, and successful CI run ID/URL;
+- exact old-PR closure and leased branch-deletion results;
+- exactly three manual jobs with baseline IDs, click/job timestamps, terminal `success`, type and logs URLs;
+- the independently captured job-associated PR numbers, complete live `app/dependabot` query, per-row shape/group results, both normalized sets, and exact equality result;
+- vulnerability-alert query success and exact automated-security-fixes enabled/paused values;
+- the alert-by-alert manual-major disposition and exact R7 manifest entries, including every created follow-up task path or the single `NONE` result;
+- governance Release Please run, PR #386 state/head/URL, and exact no-publish/no-description results.
+
+Do not yet record the future evidence-PR merge automation; that observation occurs after this evidence is committed and merged.
+
+- [ ] **Step 4: Audit Phase 3.4 paths and commit the completed work**
+
+Finish all post-merge evidence, acceptance-state, manifest, and R7 follow-up task content before this step. Repeat the Step 3 worktree/branch/file assertion, then run this fail-closed Phase 3.4 audit. The current active task root is always allowed; every other allowed task root must be an exact resolved manifest entry that contributes created dirty content. Workspace, archive, arbitrary sibling tasks, and any pre-staged path are rejected before staging:
+
+```bash
+primary_worktree=/home/murray/code/xirang
+evidence_branch=codex/chore-dependency-governance-evidence
+active_task_root=.trellis/tasks/08-11-dependency-update-governance
+post_merge_evidence="${active_task_root}/research/post-merge-evidence.md"
+r7_follow_up_manifest="${active_task_root}/research/r7-follow-up-task-paths.txt"
+cd "${primary_worktree}" || exit 1
+actual_branch=$(git branch --show-current) || exit 1
+if [[ "$(pwd -P)" != "${primary_worktree}" || \
+      "${actual_branch}" != "${evidence_branch}" ]]; then
+  printf 'Phase 3.4 work commit requires the exact primary evidence branch\n' >&2
+  exit 1
+fi
+preexisting_staged=$(git diff --cached --name-only) || {
+  printf 'cannot inspect staged paths before Phase 3.4 audit\n' >&2
   exit 1
 }
-if [[ -n "${primary_status}" ]]; then
-  printf 'primary worktree is dirty; refusing final pull\n%s\n' "${primary_status}" >&2
+if [[ -n "${preexisting_staged}" ]]; then
+  printf 'unexpected staged paths before Phase 3.4 audit:\n%s\n' \
+    "${preexisting_staged}" >&2
   exit 1
 fi
+
+if [[ ! -f "${post_merge_evidence}" || ! -f "${r7_follow_up_manifest}" || \
+      ! -f "${evidence_base_oid_file}" ]]; then
+  printf 'Phase 3.4 requires the exact evidence, R7 manifest, and base-OID files\n' >&2
+  exit 1
+fi
+mapfile -t evidence_base_oid_entries <"${evidence_base_oid_file}" || exit 1
+precommit_head=$(git rev-parse HEAD) || exit 1
+if (( ${#evidence_base_oid_entries[@]} != 1 )) || \
+   [[ ! "${evidence_base_oid_entries[0]}" =~ ^[0-9a-fA-F]{40}$ || \
+      "${precommit_head}" != "${evidence_base_oid_entries[0]}" ]]; then
+  printf 'Phase 3.4 pre-commit HEAD does not equal the persisted evidence base OID\n' >&2
+  exit 1
+fi
+evidence_base_oid=${evidence_base_oid_entries[0]}
+mapfile -t manifest_entries <"${r7_follow_up_manifest}" || exit 1
+if (( ${#manifest_entries[@]} == 0 )); then
+  printf 'R7 manifest is empty\n' >&2
+  exit 1
+fi
+follow_up_task_paths=()
+declare -A seen_follow_up_paths=()
+if [[ "${manifest_entries[0]}" == "NONE" ]]; then
+  if (( ${#manifest_entries[@]} != 1 )); then
+    printf 'R7 manifest NONE must be the only line\n' >&2
+    exit 1
+  fi
+elif [[ "${manifest_entries[0]}" == "PENDING" ]]; then
+  printf 'R7 manifest is still PENDING\n' >&2
+  exit 1
+else
+  for follow_up_path in "${manifest_entries[@]}"; do
+    if [[ ! "${follow_up_path}" =~ ^\.trellis/tasks/[A-Za-z0-9._-]+$ || \
+          "${follow_up_path}" == "${active_task_root}" || \
+          "${follow_up_path}" == ".trellis/tasks/archive" ]]; then
+      printf 'invalid R7 direct-child task path: %s\n' "${follow_up_path}" >&2
+      exit 1
+    fi
+    if [[ -n "${seen_follow_up_paths[${follow_up_path}]+x}" ]]; then
+      printf 'duplicate R7 follow-up task path: %s\n' "${follow_up_path}" >&2
+      exit 1
+    fi
+    if [[ ! -d "${follow_up_path}" || ! -f "${follow_up_path}/task.json" ]]; then
+      printf 'R7 follow-up task content is missing: %s\n' \
+        "${follow_up_path}" >&2
+      exit 1
+    fi
+    follow_up_parent=$(ruby -rjson -e \
+      'data = JSON.parse(File.read(ARGV.fetch(0))); print(data["parent"].to_s)' \
+      "${follow_up_path}/task.json") || exit 1
+    if [[ "${follow_up_parent}" != "${active_task_root##*/}" ]]; then
+      printf 'R7 follow-up is not a direct child: %s\n' \
+        "${follow_up_path}" >&2
+      exit 1
+    fi
+    seen_follow_up_paths[${follow_up_path}]=1
+    follow_up_task_paths+=("${follow_up_path}")
+  done
+fi
+
+changed_paths=()
+while IFS= read -r changed_path; do
+  [[ -n "${changed_path}" ]] && changed_paths+=("${changed_path}")
+done < <(
+  {
+    git diff --name-only
+    git ls-files --others --exclude-standard
+  } | LC_ALL=C sort -u
+)
+if (( ${#changed_paths[@]} == 0 )); then
+  printf 'no Phase 3.4 evidence/task changes found to commit\n' >&2
+  exit 1
+fi
+evidence_path_seen=false
+manifest_path_seen=false
+base_oid_path_seen=false
+declare -A follow_up_path_seen=()
+for follow_up_path in "${follow_up_task_paths[@]}"; do
+  follow_up_path_seen[${follow_up_path}]=false
+done
+for changed_path in "${changed_paths[@]}"; do
+  allowed_path=false
+  case "${changed_path}" in
+    "${active_task_root}"|"${active_task_root}"/*)
+      allowed_path=true
+      ;;
+  esac
+  if [[ "${allowed_path}" != true ]]; then
+    for follow_up_path in "${follow_up_task_paths[@]}"; do
+      case "${changed_path}" in
+        "${follow_up_path}"|"${follow_up_path}"/*)
+          allowed_path=true
+          follow_up_path_seen[${follow_up_path}]=true
+          break
+          ;;
+      esac
+    done
+  fi
+  if [[ "${allowed_path}" != true ]]; then
+    printf 'unexpected Phase 3.4 path; refusing commit: %s\n' \
+      "${changed_path}" >&2
+    exit 1
+  fi
+  case "${changed_path}" in
+    "${post_merge_evidence}")
+      evidence_path_seen=true
+      ;;
+    "${r7_follow_up_manifest}")
+      manifest_path_seen=true
+      ;;
+    "${evidence_base_oid_file}")
+      base_oid_path_seen=true
+      ;;
+  esac
+done
+if [[ "${evidence_path_seen}" != true ]]; then
+  printf 'exact post-merge evidence file is absent from Phase 3.4 changes\n' >&2
+  exit 1
+fi
+if [[ "${manifest_path_seen}" != true ]]; then
+  printf 'exact R7 manifest is absent from Phase 3.4 changes\n' >&2
+  exit 1
+fi
+if [[ "${base_oid_path_seen}" != true ]]; then
+  printf 'exact evidence base-OID file is absent from Phase 3.4 changes\n' >&2
+  exit 1
+fi
+for follow_up_path in "${follow_up_task_paths[@]}"; do
+  if [[ "${follow_up_path_seen[${follow_up_path}]}" != true ]]; then
+    printf 'manifest path has no created dirty content: %s\n' \
+      "${follow_up_path}" >&2
+    exit 1
+  fi
+done
+
+git add -- "${changed_paths[@]}" || {
+  printf 'failed to stage exact Phase 3.4 path set\n' >&2
+  exit 1
+}
+git diff --cached --check || {
+  printf 'staged Phase 3.4 diff failed whitespace validation\n' >&2
+  exit 1
+}
+git diff --cached --name-status
+bash scripts/check-pr-title.sh \
+  "docs(task): record dependency governance evidence" || exit 1
+git commit -m "docs(task): record dependency governance evidence" || {
+  printf 'failed to commit Phase 3.4 evidence work\n' >&2
+  exit 1
+}
+
+work_commit=$(git rev-parse HEAD) || exit 1
+work_parent=$(git rev-parse "${work_commit}^") || exit 1
+work_subject=$(git log -1 --format=%s "${work_commit}") || exit 1
+if [[ ! "${work_commit}" =~ ^[0-9a-fA-F]{40}$ || \
+      "${work_parent}" != "${evidence_base_oid}" || \
+      "${work_subject}" != "docs(task): record dependency governance evidence" ]]; then
+  printf 'Phase 3.4 committed work identity/base-parent mismatch\n' >&2
+  exit 1
+fi
+mapfile -t work_committed_paths < <(
+  git diff-tree --no-commit-id --name-only -r --no-renames \
+    "${work_commit}" | LC_ALL=C sort -u
+)
+if (( ${#work_committed_paths[@]} == 0 )); then
+  printf 'Phase 3.4 work commit has no committed paths\n' >&2
+  exit 1
+fi
+committed_evidence_seen=false
+committed_manifest_seen=false
+committed_base_oid_seen=false
+declare -A committed_follow_up_seen=()
+for follow_up_path in "${follow_up_task_paths[@]}"; do
+  committed_follow_up_seen[${follow_up_path}]=false
+done
+for committed_path in "${work_committed_paths[@]}"; do
+  allowed_path=false
+  case "${committed_path}" in
+    "${active_task_root}"|"${active_task_root}"/*)
+      allowed_path=true
+      ;;
+  esac
+  if [[ "${allowed_path}" != true ]]; then
+    for follow_up_path in "${follow_up_task_paths[@]}"; do
+      case "${committed_path}" in
+        "${follow_up_path}"|"${follow_up_path}"/*)
+          allowed_path=true
+          committed_follow_up_seen[${follow_up_path}]=true
+          break
+          ;;
+      esac
+    done
+  fi
+  if [[ "${allowed_path}" != true ]]; then
+    printf 'unexpected path in actual Phase 3.4 work commit: %s\n' \
+      "${committed_path}" >&2
+    exit 1
+  fi
+  case "${committed_path}" in
+    "${post_merge_evidence}")
+      committed_evidence_seen=true
+      ;;
+    "${r7_follow_up_manifest}")
+      committed_manifest_seen=true
+      ;;
+    "${evidence_base_oid_file}")
+      committed_base_oid_seen=true
+      ;;
+  esac
+done
+if [[ "${committed_evidence_seen}" != true || \
+      "${committed_manifest_seen}" != true || \
+      "${committed_base_oid_seen}" != true ]]; then
+  printf 'actual work commit lacks required evidence/manifest/base-OID paths\n' >&2
+  exit 1
+fi
+committed_manifest=$(git show \
+  "${work_commit}:${r7_follow_up_manifest}") || exit 1
+expected_manifest=$(printf '%s\n' "${manifest_entries[@]}")
+committed_base_oid=$(git show \
+  "${work_commit}:${evidence_base_oid_file}") || exit 1
+if [[ "${committed_manifest}" != "${expected_manifest}" || \
+      "${committed_base_oid}" != "${evidence_base_oid}" ]]; then
+  printf 'hook/concurrent change altered committed manifest or base OID content\n' >&2
+  exit 1
+fi
+for follow_up_path in "${follow_up_task_paths[@]}"; do
+  if [[ "${committed_follow_up_seen[${follow_up_path}]}" != true ]]; then
+    printf 'actual work commit lacks manifest follow-up content: %s\n' \
+      "${follow_up_path}" >&2
+    exit 1
+  fi
+done
+if [[ -n "$(git status --porcelain)" ]]; then
+  printf 'worktree changed during Phase 3.4 commit/audit\n' >&2
+  exit 1
+fi
+printf 'evidence_base_oid=%s\nwork_commit=%s\n' \
+  "${evidence_base_oid}" "${work_commit}"
+```
+
+Expected: the work commit runs only on the exact evidence branch whose pre-commit HEAD equals the single persisted base OID and contains the completed active-task evidence/acceptance/manifest/base record plus only exact manifest-listed R7 child task directories. `PENDING`, duplicate/missing/current/archive/nested/non-child manifest entries, a listed task with no created dirty content, workspace/archive changes, arbitrary `.trellis/tasks/*`, and all other paths abort before staging. After `git commit`, the actual committed tree is independently enumerated with `diff-tree --no-renames` and passed through the same active-task/exact-manifest allowlist; exact evidence, manifest, base-OID, and every follow-up path must appear. A wrong work parent/subject, hook- or concurrent-index-added path, missing required committed path, or residual dirt aborts. This is the workflow Phase 3.4 work commit; do not archive or write the journal before every post-commit assertion succeeds.
+
+- [ ] **Step 5: Assert the clean work boundary, capture its hash, and survey finish context**
+
+```bash
+primary_worktree=/home/murray/code/xirang
+evidence_branch=codex/chore-dependency-governance-evidence
+active_task_root=.trellis/tasks/08-11-dependency-update-governance
+evidence_base_oid_file="${active_task_root}/research/evidence-branch-base-oid.txt"
+cd "${primary_worktree}" || exit 1
+work_status=$(git status --porcelain) || exit 1
+work_commit=$(git rev-parse HEAD) || exit 1
+work_parent=$(git rev-parse "${work_commit}^") || exit 1
+work_subject=$(git log -1 --format=%s "${work_commit}") || exit 1
+mapfile -t evidence_base_oid_entries <"${evidence_base_oid_file}" || exit 1
+if (( ${#evidence_base_oid_entries[@]} != 1 )); then
+  printf 'work boundary requires one persisted evidence base OID\n' >&2
+  exit 1
+fi
+evidence_base_oid=${evidence_base_oid_entries[0]}
+mapfile -t work_range_commits < <(
+  git rev-list --reverse "${evidence_base_oid}..${work_commit}"
+)
+if [[ "$(pwd -P)" != "${primary_worktree}" || \
+      "$(git branch --show-current)" != "${evidence_branch}" || \
+      -n "${work_status}" || ! "${work_commit}" =~ ^[0-9a-fA-F]{40}$ || \
+      ! "${evidence_base_oid}" =~ ^[0-9a-fA-F]{40}$ || \
+      "${work_parent}" != "${evidence_base_oid}" || \
+      ${#work_range_commits[@]} -ne 1 || \
+      "${work_range_commits[0]}" != "${work_commit}" || \
+      "${work_subject}" != "docs(task): record dependency governance evidence" ]]; then
+  printf 'invalid Phase 3.4 work-commit boundary\n' >&2
+  exit 1
+fi
+printf 'evidence_base_oid=%s\nwork_commit=%s\n' \
+  "${evidence_base_oid}" "${work_commit}"
+python3 ./.trellis/scripts/get_context.py --mode record || exit 1
+```
+
+Expected: the exact evidence branch is clean, the persisted base file still contains one full OID, `work_commit` has that OID as its direct parent, and `base..work_commit` contains exactly that one exact-subject Phase 3.4 commit. Record mode succeeds before any Trellis-managed closeout commit. Review other tasks printed by record mode but do not archive them without separate maintainer approval.
+
+- [ ] **Step 6: Archive the current task and audit the automatic archive commit**
+
+```bash
+primary_worktree=/home/murray/code/xirang
+evidence_branch=codex/chore-dependency-governance-evidence
+active_task_root=.trellis/tasks/08-11-dependency-update-governance
+archive_task_root=.trellis/tasks/archive/2026-08/08-11-dependency-update-governance
+r7_follow_up_manifest="${active_task_root}/research/r7-follow-up-task-paths.txt"
+evidence_base_oid_file="${active_task_root}/research/evidence-branch-base-oid.txt"
+cd "${primary_worktree}" || exit 1
+if [[ "$(pwd -P)" != "${primary_worktree}" || \
+      "$(git branch --show-current)" != "${evidence_branch}" || \
+      -n "$(git status --porcelain)" ]]; then
+  printf 'archive requires the clean exact evidence branch\n' >&2
+  exit 1
+fi
+work_commit=$(git rev-parse HEAD) || exit 1
+work_parent=$(git rev-parse "${work_commit}^") || exit 1
+work_subject=$(git log -1 --format=%s "${work_commit}") || exit 1
+mapfile -t evidence_base_oid_entries <"${evidence_base_oid_file}" || exit 1
+if (( ${#evidence_base_oid_entries[@]} != 1 )); then
+  printf 'archive requires one persisted evidence base OID\n' >&2
+  exit 1
+fi
+evidence_base_oid=${evidence_base_oid_entries[0]}
+if [[ ! "${work_commit}" =~ ^[0-9a-fA-F]{40}$ || \
+      ! "${evidence_base_oid}" =~ ^[0-9a-fA-F]{40}$ || \
+      "${work_parent}" != "${evidence_base_oid}" || \
+      "${work_subject}" != "docs(task): record dependency governance evidence" ]]; then
+  printf 'archive parent is not the exact Phase 3.4 work commit\n' >&2
+  exit 1
+fi
+mapfile -t manifest_entries <"${r7_follow_up_manifest}" || exit 1
+follow_up_task_paths=()
+declare -A seen_follow_up_paths=()
+if (( ${#manifest_entries[@]} == 1 )) && [[ "${manifest_entries[0]}" == "NONE" ]]; then
+  :
+else
+  for follow_up_path in "${manifest_entries[@]}"; do
+    if [[ ! "${follow_up_path}" =~ ^\.trellis/tasks/[A-Za-z0-9._-]+$ || \
+          "${follow_up_path}" == "${active_task_root}" || \
+          "${follow_up_path}" == ".trellis/tasks/archive" || \
+          -n "${seen_follow_up_paths[${follow_up_path}]+x}" || \
+          ! -d "${follow_up_path}" ]]; then
+      printf 'invalid R7 manifest entry before archive: %s\n' \
+        "${follow_up_path}" >&2
+      exit 1
+    fi
+    seen_follow_up_paths[${follow_up_path}]=1
+    follow_up_task_paths+=("${follow_up_path}")
+  done
+fi
+
+python3 ./.trellis/scripts/task.py archive \
+  08-11-dependency-update-governance || exit 1
+archive_commit=$(git rev-parse HEAD) || exit 1
+archive_parent=$(git rev-parse "${archive_commit}^") || exit 1
+archive_subject=$(git log -1 --format=%s "${archive_commit}") || exit 1
+if [[ ! "${archive_commit}" =~ ^[0-9a-fA-F]{40}$ || \
+      "${archive_parent}" != "${work_commit}" || \
+      "${archive_subject}" != \
+        "chore(task): archive 08-11-dependency-update-governance" ]]; then
+  printf 'automatic archive commit identity/order mismatch\n' >&2
+  exit 1
+fi
+mapfile -t pre_journal_commits < <(
+  git rev-list --reverse "${evidence_base_oid}..${archive_commit}"
+)
+if (( ${#pre_journal_commits[@]} != 2 )) || \
+   [[ "${pre_journal_commits[0]}" != "${work_commit}" || \
+      "${pre_journal_commits[1]}" != "${archive_commit}" ]]; then
+  printf 'base-to-archive range must contain exactly work then archive\n' >&2
+  exit 1
+fi
+
+mapfile -t archive_changed_paths < <(
+  git diff-tree --no-commit-id --name-only --no-renames -r \
+    "${archive_commit}" | \
+    LC_ALL=C sort -u
+)
+active_path_seen=false
+archive_path_seen=false
+for changed_path in "${archive_changed_paths[@]}"; do
+  allowed_path=false
+  case "${changed_path}" in
+    "${active_task_root}"|"${active_task_root}"/*)
+      allowed_path=true
+      active_path_seen=true
+      ;;
+    "${archive_task_root}"|"${archive_task_root}"/*)
+      allowed_path=true
+      archive_path_seen=true
+      ;;
+  esac
+  if [[ "${allowed_path}" != true ]]; then
+    for follow_up_path in "${follow_up_task_paths[@]}"; do
+      case "${changed_path}" in
+        "${follow_up_path}"|"${follow_up_path}"/*)
+          allowed_path=true
+          break
+          ;;
+      esac
+    done
+  fi
+  if [[ "${allowed_path}" != true ]]; then
+    printf 'unexpected automatic archive path: %s\n' "${changed_path}" >&2
+    exit 1
+  fi
+done
+if [[ "${active_path_seen}" != true || "${archive_path_seen}" != true || \
+      -n "$(git status --porcelain)" ]]; then
+  printf 'archive diff/path/cleanliness assertion failed\n' >&2
+  exit 1
+fi
+printf 'work_commit=%s\narchive_commit=%s\n' \
+  "${work_commit}" "${archive_commit}"
+```
+
+Expected: the persisted base still directly parents `work_commit`; `task.py archive` creates its own exact-subject commit directly on top of that work commit; and `base..archive` contains exactly those two commits in order. Its diff contains the current task source, exact `archive/2026-08` destination, and only manifest-listed follow-up paths if Trellis clears their parent relationship. All extra commits, arbitrary task/workspace paths, a wrong parent/subject, a missing source/destination move, and residual dirt abort.
+
+- [ ] **Step 7: Record the journal and audit the automatic journal commit**
+
+```bash
+primary_worktree=/home/murray/code/xirang
+evidence_branch=codex/chore-dependency-governance-evidence
+archive_task_root=.trellis/tasks/archive/2026-08/08-11-dependency-update-governance
+evidence_base_oid_file="${archive_task_root}/research/evidence-branch-base-oid.txt"
+cd "${primary_worktree}" || exit 1
+if [[ "$(pwd -P)" != "${primary_worktree}" || \
+      "$(git branch --show-current)" != "${evidence_branch}" || \
+      -n "$(git status --porcelain)" ]]; then
+  printf 'journal requires the clean exact evidence branch\n' >&2
+  exit 1
+fi
+archive_commit=$(git rev-parse HEAD) || exit 1
+work_commit=$(git rev-parse "${archive_commit}^") || exit 1
+archive_parent=$(git rev-parse "${archive_commit}^") || exit 1
+work_parent=$(git rev-parse "${work_commit}^") || exit 1
+mapfile -t evidence_base_oid_entries <"${evidence_base_oid_file}" || exit 1
+if (( ${#evidence_base_oid_entries[@]} != 1 )); then
+  printf 'journal requires one persisted evidence base OID\n' >&2
+  exit 1
+fi
+evidence_base_oid=${evidence_base_oid_entries[0]}
+if [[ "$(git log -1 --format=%s "${archive_commit}")" != \
+        "chore(task): archive 08-11-dependency-update-governance" || \
+      "$(git log -1 --format=%s "${work_commit}")" != \
+        "docs(task): record dependency governance evidence" || \
+      ! "${evidence_base_oid}" =~ ^[0-9a-fA-F]{40}$ || \
+      "${work_parent}" != "${evidence_base_oid}" || \
+      "${archive_parent}" != "${work_commit}" ]]; then
+  printf 'journal parent chain does not end in work then archive\n' >&2
+  exit 1
+fi
+
+developer_name=
+while IFS='=' read -r developer_key developer_value; do
+  if [[ "${developer_key}" == "name" ]]; then
+    developer_name=${developer_value}
+  fi
+done <.trellis/.developer
+if [[ ! "${developer_name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  printf 'cannot resolve a safe current developer workspace name\n' >&2
+  exit 1
+fi
+developer_workspace=".trellis/workspace/${developer_name}"
+
+python3 ./.trellis/scripts/add_session.py \
+  --title "Complete dependency update governance evidence" \
+  --commit "${work_commit}" \
+  --summary "Recorded post-merge governance evidence, acceptance, and R7 disposition." \
+  --branch "${evidence_branch}" || exit 1
+
+journal_commit=$(git rev-parse HEAD) || exit 1
+journal_parent=$(git rev-parse "${journal_commit}^") || exit 1
+journal_subject=$(git log -1 --format=%s "${journal_commit}") || exit 1
+if [[ ! "${journal_commit}" =~ ^[0-9a-fA-F]{40}$ || \
+      "${journal_parent}" != "${archive_commit}" || \
+      "${journal_subject}" != "chore: record journal" ]]; then
+  printf 'automatic journal commit identity/order mismatch\n' >&2
+  exit 1
+fi
+
+mapfile -t journal_changed_paths < <(
+  git diff-tree --no-commit-id --name-only -r "${journal_commit}" | \
+    LC_ALL=C sort -u
+)
+workspace_index_seen=false
+journal_file_seen=false
+for changed_path in "${journal_changed_paths[@]}"; do
+  case "${changed_path}" in
+    "${developer_workspace}/index.md")
+      workspace_index_seen=true
+      ;;
+    "${developer_workspace}"/journal-[0-9]*.md)
+      journal_file_seen=true
+      ;;
+    *)
+      printf 'unexpected automatic journal path: %s\n' "${changed_path}" >&2
+      exit 1
+      ;;
+  esac
+done
+git merge-base --is-ancestor "${evidence_base_oid}" \
+  "${journal_commit}" || {
+  printf 'persisted evidence base is not an ancestor of journal HEAD\n' >&2
+  exit 1
+}
+mapfile -t closeout_commits < <(
+  git rev-list --reverse "${evidence_base_oid}..${journal_commit}"
+)
+if [[ "${workspace_index_seen}" != true || "${journal_file_seen}" != true || \
+      ${#closeout_commits[@]} -ne 3 || \
+      "${closeout_commits[0]}" != "${work_commit}" || \
+      "${closeout_commits[1]}" != "${archive_commit}" || \
+      "${closeout_commits[2]}" != "${journal_commit}" || \
+      "$(git rev-parse "${work_commit}^")" != "${evidence_base_oid}" || \
+      "$(git rev-parse "${archive_commit}^")" != "${work_commit}" || \
+      "$(git rev-parse "${journal_commit}^")" != "${archive_commit}" || \
+      "$(git rev-parse HEAD)" != "${journal_commit}" || \
+      -n "$(git status --porcelain)" ]]; then
+  printf 'final work/archive/journal order or cleanliness assertion failed\n' >&2
+  exit 1
+fi
+git log --reverse --format='%H%x09%s' \
+  "${evidence_base_oid}..${journal_commit}"
+```
+
+Expected: `add_session.py` receives the full Phase 3.4 `work_commit` only, never the archive hash, and explicitly records the evidence branch. Its automatic commit is directly on top of the archive commit, has exact subject `chore: record journal`, and changes only the current developer's exact workspace `index.md` and one or more `journal-*.md` files. The archived base-OID record must still contain one full ancestor OID; `base..HEAD` must enumerate exactly three commits matching work, archive, and journal with direct parents base → work → archive → journal. A commit inserted before, between, or after the expected three makes the exact-count/order audit fail even when the worktree is clean.
+
+- [ ] **Step 8: Push and open the evidence follow-up PR**
+
+```bash
+primary_worktree=/home/murray/code/xirang
+evidence_branch=codex/chore-dependency-governance-evidence
+evidence_pr_title="docs(task): record dependency governance evidence"
+archive_task_root=.trellis/tasks/archive/2026-08/08-11-dependency-update-governance
+evidence_base_oid_file="${archive_task_root}/research/evidence-branch-base-oid.txt"
+cd "${primary_worktree}" || exit 1
+actual_branch=$(git branch --show-current) || exit 1
+evidence_status=$(git status --porcelain) || exit 1
+if [[ "$(pwd -P)" != "${primary_worktree}" || \
+      "${actual_branch}" != "${evidence_branch}" || \
+      -n "${evidence_status}" ]]; then
+  printf 'evidence PR push requires a clean exact evidence branch\n' >&2
+  exit 1
+fi
+mapfile -t evidence_base_oid_entries <"${evidence_base_oid_file}" || exit 1
+if (( ${#evidence_base_oid_entries[@]} != 1 )) || \
+   [[ ! "${evidence_base_oid_entries[0]}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  printf 'pre-push audit requires one full persisted evidence base OID\n' >&2
+  exit 1
+fi
+evidence_base_oid=${evidence_base_oid_entries[0]}
+journal_commit=$(git rev-parse HEAD) || exit 1
+git merge-base --is-ancestor "${evidence_base_oid}" \
+  "${journal_commit}" || {
+  printf 'pre-push evidence base is not an ancestor of HEAD\n' >&2
+  exit 1
+}
+mapfile -t closeout_commits < <(
+  git rev-list --reverse "${evidence_base_oid}..${journal_commit}"
+)
+if (( ${#closeout_commits[@]} != 3 )); then
+  printf 'pre-push base..HEAD range must contain exactly three commits, got %s\n' \
+    "${#closeout_commits[@]}" >&2
+  exit 1
+fi
+work_commit=${closeout_commits[0]}
+archive_commit=${closeout_commits[1]}
+expected_journal_commit=${closeout_commits[2]}
+if [[ "${expected_journal_commit}" != "${journal_commit}" || \
+      "$(git rev-parse "${work_commit}^")" != "${evidence_base_oid}" || \
+      "$(git rev-parse "${archive_commit}^")" != "${work_commit}" || \
+      "$(git rev-parse "${journal_commit}^")" != "${archive_commit}" || \
+      "$(git log -1 --format=%s "${work_commit}")" != \
+        "docs(task): record dependency governance evidence" || \
+      "$(git log -1 --format=%s "${archive_commit}")" != \
+        "chore(task): archive 08-11-dependency-update-governance" || \
+      "$(git log -1 --format=%s "${journal_commit}")" != \
+        "chore: record journal" ]]; then
+  printf 'pre-push exact three-commit identity/order audit failed\n' >&2
+  exit 1
+fi
+bash scripts/check-pr-title.sh "${evidence_pr_title}" || exit 1
+evidence_ref="refs/heads/${evidence_branch}"
+git push \
+  --force-with-lease="${evidence_ref}:" \
+  origin "${journal_commit}:${evidence_ref}" || {
+  printf 'failed to create absent remote evidence ref at audited journal commit\n' >&2
+  exit 1
+}
+remote_evidence_record=$(git ls-remote --heads origin "${evidence_ref}" 2>&1) || {
+  printf 'failed to verify pushed evidence ref\n' >&2
+  exit 1
+}
+IFS=$'\t' read -r remote_evidence_oid remote_evidence_ref \
+  <<<"${remote_evidence_record}"
+if [[ "${remote_evidence_oid}" != "${journal_commit}" || \
+      "${remote_evidence_ref}" != "${evidence_ref}" ]]; then
+  printf 'remote evidence ref does not equal audited journal commit: %s\n' \
+    "${remote_evidence_record}" >&2
+  exit 1
+fi
+evidence_pr_url=$(gh pr create \
+  --repo xiangnan0811/xirang \
+  --base main \
+  --head "${evidence_branch}" \
+  --title "${evidence_pr_title}" \
+  --body "$(printf '%s\n' \
+    '## Summary' \
+    '- record exact post-merge dependency governance evidence' \
+    '- preserve exact R7 follow-up task paths from the reviewed security alerts' \
+    '- deliver the separate Trellis archive and developer-journal commits' \
+    '' \
+    '## Validation' \
+    '- exact legacy cleanup and three successful Dependabot jobs' \
+    '- complete live Dependabot PR enumeration and exact job/live set reconciliation' \
+    '- governance main CI, Release Please, and security-setting assertions')") || {
+  printf 'failed to create evidence follow-up PR\n' >&2
+  exit 1
+}
+if [[ -z "${evidence_pr_url}" ]]; then
+  printf 'evidence PR URL is empty\n' >&2
+  exit 1
+fi
+printf '%s\n' "${evidence_pr_url}"
+```
+
+Expected: immediately before any push, the archived base-OID file still contains one full ancestor OID and `base..HEAD` contains exactly three commits with subjects and direct parents base → work → archive → journal. Any clean commit inserted before, between, or after the expected commits aborts before network mutation. The push source is the immutable audited `journal_commit`, not the movable local branch name; the explicit empty expected value in `--force-with-lease="refs/heads/...:"` atomically requires the remote evidence ref to be absent, so a concurrently created or updated ref is never overwritten. A read-back must resolve that exact remote ref to `journal_commit` before PR creation. The dedicated evidence branch then targets `main` and has a title that passes the repository Conventional Commit validator.
+
+- [ ] **Step 9: Monitor, inspect, and squash merge the evidence PR**
+
+```bash
+primary_worktree=/home/murray/code/xirang
+evidence_branch=codex/chore-dependency-governance-evidence
+archive_task_root=.trellis/tasks/archive/2026-08/08-11-dependency-update-governance
+evidence_base_oid_file="${archive_task_root}/research/evidence-branch-base-oid.txt"
+cd "${primary_worktree}" || exit 1
+if [[ "$(pwd -P)" != "${primary_worktree}" || \
+      "$(git branch --show-current)" != "${evidence_branch}" || \
+      -n "$(git status --porcelain)" ]]; then
+  printf 'PR monitoring requires the clean exact evidence branch\n' >&2
+  exit 1
+fi
+mapfile -t evidence_base_oid_entries <"${evidence_base_oid_file}" || exit 1
+if (( ${#evidence_base_oid_entries[@]} != 1 )) || \
+   [[ ! "${evidence_base_oid_entries[0]}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  printf 'PR monitoring requires one full persisted evidence base OID\n' >&2
+  exit 1
+fi
+evidence_base_oid=${evidence_base_oid_entries[0]}
+journal_commit=$(git rev-parse HEAD) || exit 1
+mapfile -t closeout_commits < <(
+  git rev-list --reverse "${evidence_base_oid}..${journal_commit}"
+)
+if (( ${#closeout_commits[@]} != 3 )); then
+  printf 'PR monitoring requires exactly three audited closeout commits\n' >&2
+  exit 1
+fi
+work_commit=${closeout_commits[0]}
+archive_commit=${closeout_commits[1]}
+if [[ "${closeout_commits[2]}" != "${journal_commit}" || \
+      "$(git rev-parse "${work_commit}^")" != "${evidence_base_oid}" || \
+      "$(git rev-parse "${archive_commit}^")" != "${work_commit}" || \
+      "$(git rev-parse "${journal_commit}^")" != "${archive_commit}" || \
+      "$(git log -1 --format=%s "${work_commit}")" != \
+        "docs(task): record dependency governance evidence" || \
+      "$(git log -1 --format=%s "${archive_commit}")" != \
+        "chore(task): archive 08-11-dependency-update-governance" || \
+      "$(git log -1 --format=%s "${journal_commit}")" != \
+        "chore: record journal" ]]; then
+  printf 'PR monitoring exact closeout topology audit failed\n' >&2
+  exit 1
+fi
+
+evidence_pr_record=$(gh pr list \
+  --repo xiangnan0811/xirang \
+  --state open \
+  --head codex/chore-dependency-governance-evidence \
+  --limit 2 \
+  --json number,state,headRefName,headRefOid,baseRefName,title,url \
+  --jq 'if length == 1 then .[0] | [(.number | tostring), .state, .headRefName, .headRefOid, .baseRefName, .title, .url] | @tsv else empty end') || {
+    printf 'failed to resolve unique open evidence PR\n' >&2
+    exit 1
+  }
+if [[ -z "${evidence_pr_record}" ]]; then
+  printf 'expected exactly one open evidence PR\n' >&2
+  exit 1
+fi
+IFS=$'\t' read -r evidence_pr_number evidence_pr_state evidence_pr_head \
+  evidence_pr_head_oid evidence_pr_base evidence_pr_title evidence_pr_url \
+  <<<"${evidence_pr_record}"
+if [[ "${evidence_pr_state}" != "OPEN" || \
+      "${evidence_pr_head}" != "codex/chore-dependency-governance-evidence" || \
+      ! "${evidence_pr_head_oid}" =~ ^[0-9a-fA-F]{40}$ || \
+      "${evidence_pr_head_oid}" != "${journal_commit}" || \
+      "${evidence_pr_base}" != "main" || \
+      "${evidence_pr_title}" != "docs(task): record dependency governance evidence" || \
+      -z "${evidence_pr_url}" ]]; then
+  printf 'evidence PR metadata mismatch: %s\n' "${evidence_pr_record}" >&2
+  exit 1
+fi
+gh pr checks "${evidence_pr_number}" \
+  --repo xiangnan0811/xirang \
+  --watch --fail-fast=false || {
+  printf 'evidence PR required checks did not all pass\n' >&2
+  exit 1
+}
+gh pr diff "${evidence_pr_number}" --repo xiangnan0811/xirang || exit 1
+gh pr view "${evidence_pr_number}" \
+  --repo xiangnan0811/xirang \
+  --json mergeable,mergeStateStatus,statusCheckRollup,url || exit 1
+pre_merge_pr_record=$(gh pr view "${evidence_pr_number}" \
+  --repo xiangnan0811/xirang \
+  --json state,headRefName,headRefOid,baseRefName,url \
+  --jq '[.state, .headRefName, .headRefOid, .baseRefName, .url] | @tsv') || {
+  printf 'failed to revalidate evidence PR head immediately before merge\n' >&2
+  exit 1
+}
+IFS=$'\t' read -r pre_merge_state pre_merge_head pre_merge_head_oid \
+  pre_merge_base pre_merge_url <<<"${pre_merge_pr_record}"
+if [[ "${pre_merge_state}" != "OPEN" || \
+      "${pre_merge_head}" != "${evidence_branch}" || \
+      ! "${pre_merge_head_oid}" =~ ^[0-9a-fA-F]{40}$ || \
+      "${pre_merge_head_oid}" != "${journal_commit}" || \
+      "${pre_merge_base}" != "main" || -z "${pre_merge_url}" ]]; then
+  printf 'evidence PR head moved before merge: expected %s, got %s\n' \
+    "${journal_commit}" "${pre_merge_pr_record}" >&2
+  exit 1
+fi
+gh pr merge "${evidence_pr_number}" \
+  --repo xiangnan0811/xirang \
+  --match-head-commit "${journal_commit}" \
+  --squash || {
+  printf 'failed to squash merge evidence PR #%s\n' \
+    "${evidence_pr_number}" >&2
+  exit 1
+}
+```
+
+Expected: local clean topology is re-audited to recover the same `journal_commit`; the unique open PR query requests a full `headRefOid` and requires it to equal that commit before CI monitoring. Every required check reaches success and the diff contains only the audited work, archive, and journal paths. Immediately before merge, a fresh PR query again requires OPEN state, exact head/base, and `headRefOid == journal_commit`; `gh pr merge --match-head-commit` carries the same expected OID into the merge request so a later head move is rejected atomically. Do not pass `--delete-branch`: the primary worktree still checks out the evidence branch, so all cleanup is deferred to Step 11.
+
+- [ ] **Step 10: Monitor the evidence merge without creating recursive evidence**
+
+Wait until the evidence merge's main CI and Release Please runs are terminal, then run:
+
+```bash
+evidence_pr_record=$(gh pr list \
+  --repo xiangnan0811/xirang \
+  --state merged \
+  --head codex/chore-dependency-governance-evidence \
+  --limit 2 \
+  --json number,state,headRefName,headRefOid,mergeCommit,url \
+  --jq 'if length == 1 then .[0] | [(.number | tostring), .state, .headRefName, .headRefOid, (.mergeCommit.oid // ""), .url] | @tsv else empty end') || {
+    printf 'failed to resolve merged evidence PR\n' >&2
+    exit 1
+  }
+if [[ -z "${evidence_pr_record}" ]]; then
+  printf 'expected exactly one merged evidence PR\n' >&2
+  exit 1
+fi
+IFS=$'\t' read -r evidence_pr_number evidence_pr_state evidence_pr_head \
+  evidence_pr_head_oid evidence_merge_sha evidence_pr_url <<<"${evidence_pr_record}"
+if [[ "${evidence_pr_state}" != "MERGED" || \
+      "${evidence_pr_head}" != "codex/chore-dependency-governance-evidence" || \
+      ! "${evidence_pr_head_oid}" =~ ^[0-9a-fA-F]{40}$ || \
+      ! "${evidence_merge_sha}" =~ ^[0-9a-fA-F]{40}$ || \
+      -z "${evidence_pr_url}" ]]; then
+  printf 'invalid merged evidence PR record: %s\n' "${evidence_pr_record}" >&2
+  exit 1
+fi
+
+assert_evidence_push_run() {
+  local workflow=$1
+  local label=$2
+  local run_record
+  run_record=$(gh run list \
+    --repo xiangnan0811/xirang \
+    --workflow "${workflow}" \
+    --branch main \
+    --commit "${evidence_merge_sha}" \
+    --event push \
+    --limit 2 \
+    --json databaseId,event,headSha,status,conclusion,url \
+    --jq 'if length == 1 then .[0] | [(.databaseId | tostring), .event, .headSha, .status, (.conclusion // "NONE"), .url] | @tsv else empty end') || {
+      printf 'failed to query %s run for evidence merge\n' "${label}" >&2
+      return 1
+    }
+  if [[ -z "${run_record}" ]]; then
+    printf 'expected exactly one %s push run for evidence merge\n' \
+      "${label}" >&2
+    return 1
+  fi
+  local run_id run_event run_head_sha run_status run_conclusion run_url
+  IFS=$'\t' read -r run_id run_event run_head_sha run_status \
+    run_conclusion run_url <<<"${run_record}"
+  if [[ ! "${run_id}" =~ ^[0-9]+$ || "${run_event}" != "push" || \
+        "${run_head_sha}" != "${evidence_merge_sha}" || \
+        "${run_status}" != "completed" || \
+        "${run_conclusion}" != "success" || -z "${run_url}" ]]; then
+    printf '%s evidence-merge run failed assertion: %s\n' \
+      "${label}" "${run_record}" >&2
+    return 1
+  fi
+  printf '%s\t%s\t%s\n' "${label}" "${run_id}" "${run_url}"
+}
+assert_evidence_push_run ci.yml CI || exit 1
+assert_evidence_push_run release-please.yml 'Release Please' || exit 1
+
+evidence_publish_count=$(gh run list \
+  --repo xiangnan0811/xirang \
+  --workflow publish-images.yml \
+  --commit "${evidence_merge_sha}" \
+  --limit 2 --json databaseId --jq 'length') || {
+  printf 'failed to query image publish runs for evidence merge\n' >&2
+  exit 1
+}
+evidence_description_count=$(gh run list \
+  --repo xiangnan0811/xirang \
+  --workflow dockerhub-description.yml \
+  --commit "${evidence_merge_sha}" \
+  --limit 2 --json databaseId --jq 'length') || {
+  printf 'failed to query description runs for evidence merge\n' >&2
+  exit 1
+}
+if [[ "${evidence_publish_count}" != "0" || \
+      "${evidence_description_count}" != "0" ]]; then
+  printf 'unexpected publish automation for evidence merge: images=%s description=%s\n' \
+    "${evidence_publish_count}" "${evidence_description_count}" >&2
+  exit 1
+fi
+release_please_record=$(gh pr view 386 \
+  --repo xiangnan0811/xirang \
+  --json number,state,headRefName,url \
+  --jq '[.number, .state, .headRefName, .url] | @tsv') || exit 1
+IFS=$'\t' read -r release_pr_number release_pr_state release_pr_head release_pr_url \
+  <<<"${release_please_record}"
+if [[ "${release_pr_number}" != "386" || "${release_pr_state}" != "OPEN" || \
+      "${release_pr_head}" != "release-please--branches--main" || \
+      -z "${release_pr_url}" ]]; then
+  printf 'Release Please PR changed after evidence merge: %s\n' \
+    "${release_please_record}" >&2
+  exit 1
+fi
+printf 'evidence_merge=%s\tpublish_images=0\tdescription_runs=0\trelease_pr=%s\n' \
+  "${evidence_merge_sha}" "${release_pr_url}"
+```
+
+Expected: the evidence merge has exactly one successful main CI push run and one successful Release Please push run, no image publish or Docker Hub description run, and PR #386 remains protected. Record this final observation only in the final task/user handoff. Do not edit the tracked evidence, archive, task, or journal after the evidence PR merges; that would create an infinite evidence-PR loop.
+
+- [ ] **Step 11: Sync primary `main` and conditionally clean the evidence branch**
+
+```bash
+primary_worktree=/home/murray/code/xirang
+evidence_branch=codex/chore-dependency-governance-evidence
+evidence_ref="refs/heads/${evidence_branch}"
+evidence_pr_record=$(gh pr list \
+  --repo xiangnan0811/xirang \
+  --state merged \
+  --head "${evidence_branch}" \
+  --limit 2 \
+  --json number,state,headRefName,headRefOid,url \
+  --jq 'if length == 1 then .[0] | [(.number | tostring), .state, .headRefName, .headRefOid, .url] | @tsv else empty end') || {
+    printf 'failed to resolve merged evidence PR for cleanup\n' >&2
+    exit 1
+  }
+if [[ -z "${evidence_pr_record}" ]]; then
+  printf 'expected exactly one merged evidence PR for cleanup\n' >&2
+  exit 1
+fi
+IFS=$'\t' read -r evidence_pr_number evidence_pr_state evidence_pr_head \
+  evidence_pr_head_oid evidence_pr_url <<<"${evidence_pr_record}"
+if [[ "${evidence_pr_state}" != "MERGED" || \
+      "${evidence_pr_head}" != "${evidence_branch}" || \
+      ! "${evidence_pr_head_oid}" =~ ^[0-9a-fA-F]{40}$ || \
+      -z "${evidence_pr_url}" ]]; then
+  printf 'invalid evidence PR cleanup record: %s\n' "${evidence_pr_record}" >&2
+  exit 1
+fi
+current_branch=$(git -C "${primary_worktree}" branch --show-current) || exit 1
+current_status=$(git -C "${primary_worktree}" status --porcelain) || exit 1
+if [[ "${current_branch}" != "${evidence_branch}" || \
+      -n "${current_status}" ]]; then
+  printf 'primary worktree must be clean on the evidence branch before final sync\n' >&2
+  exit 1
+fi
+git -C "${primary_worktree}" switch main || {
+  printf 'failed to switch primary worktree back to main\n' >&2
+  exit 1
+}
 git -C "${primary_worktree}" pull --ff-only origin main || {
-  printf 'failed to fast-forward primary main from origin/main\n' >&2
+  printf 'failed to fast-forward primary main after evidence PR merge\n' >&2
   exit 1
 }
-primary_head=$(git -C "${primary_worktree}" rev-parse HEAD) || {
-  printf 'cannot resolve primary worktree HEAD\n' >&2
-  exit 1
-}
-origin_main_head=$(git -C "${primary_worktree}" rev-parse origin/main) || {
-  printf 'cannot resolve origin/main\n' >&2
-  exit 1
-}
+primary_head=$(git -C "${primary_worktree}" rev-parse HEAD) || exit 1
+origin_main_head=$(git -C "${primary_worktree}" rev-parse origin/main) || exit 1
 if [[ "${primary_head}" != "${origin_main_head}" ]]; then
   printf 'primary HEAD %s does not equal origin/main %s\n' \
     "${primary_head}" "${origin_main_head}" >&2
   exit 1
 fi
-git -C "${primary_worktree}" status --short --branch || {
-  printf 'cannot report final primary worktree status\n' >&2
+
+evidence_symbolic_target=$(git -C "${primary_worktree}" symbolic-ref -q \
+  "${evidence_ref}" 2>&1)
+evidence_symbolic_status=$?
+case "${evidence_symbolic_status}" in
+  0)
+    printf 'evidence ref is symbolic; refusing cleanup: %s -> %s\n' \
+      "${evidence_ref}" "${evidence_symbolic_target}" >&2
+    exit 1
+    ;;
+  1)
+    ;;
+  *)
+    printf 'cannot inspect evidence ref symbolic state (exit %s): %s\n' \
+      "${evidence_symbolic_status}" "${evidence_ref}" >&2
+    exit 1
+    ;;
+esac
+local_evidence_record=$(git -C "${primary_worktree}" show-ref --verify \
+  "${evidence_ref}" 2>&1) || {
+  printf 'cannot resolve exact local evidence ref: %s\n' \
+    "${local_evidence_record}" >&2
   exit 1
 }
+IFS=' ' read -r local_evidence_oid local_evidence_ref \
+  <<<"${local_evidence_record}"
+if [[ ! "${local_evidence_oid}" =~ ^[0-9a-fA-F]{40}$ || \
+      "${local_evidence_ref}" != "${evidence_ref}" || \
+      "${local_evidence_oid}" != "${evidence_pr_head_oid}" ]]; then
+  printf 'local evidence ref does not match merged PR head OID: %s\n' \
+    "${local_evidence_record}" >&2
+  exit 1
+fi
+remote_evidence_lookup=$(git -C "${primary_worktree}" ls-remote --heads origin \
+  "${evidence_ref}" 2>&1)
+remote_evidence_status=$?
+if (( remote_evidence_status != 0 )); then
+  printf 'cannot inspect remote evidence ref (exit %s):\n%s\n' \
+    "${remote_evidence_status}" "${remote_evidence_lookup}" >&2
+  exit 1
+fi
+remote_evidence_oid=
+if [[ -n "${remote_evidence_lookup}" ]]; then
+  IFS=$'\t' read -r remote_evidence_oid remote_evidence_ref \
+    <<<"${remote_evidence_lookup}"
+  if [[ ! "${remote_evidence_oid}" =~ ^[0-9a-fA-F]{40}$ || \
+        "${remote_evidence_ref}" != "${evidence_ref}" || \
+        "${remote_evidence_oid}" != "${evidence_pr_head_oid}" ]]; then
+    printf 'remote evidence ref does not match merged PR head OID: %s\n' \
+      "${remote_evidence_lookup}" >&2
+    exit 1
+  fi
+fi
+
+git -C "${primary_worktree}" update-ref --no-deref -d \
+  "${evidence_ref}" "${evidence_pr_head_oid}" || {
+  printf 'conditional local evidence ref deletion failed at OID %s\n' \
+    "${evidence_pr_head_oid}" >&2
+  exit 1
+}
+evidence_config_section="branch.${evidence_branch}"
+evidence_config_entries=$(git -C "${primary_worktree}" config --local --get-regexp \
+  "^branch\\.${evidence_branch}\\." 2>&1)
+evidence_config_status=$?
+case "${evidence_config_status}" in
+  0)
+    git -C "${primary_worktree}" config --local --remove-section \
+      "${evidence_config_section}" || {
+      printf 'failed to remove exact evidence branch config section\n' >&2
+      exit 1
+    }
+    ;;
+  1)
+    ;;
+  *)
+    printf 'cannot inspect exact evidence branch config section (exit %s):\n%s\n' \
+      "${evidence_config_status}" "${evidence_config_entries}" >&2
+    exit 1
+    ;;
+esac
+if [[ -n "${remote_evidence_oid}" ]]; then
+  git -C "${primary_worktree}" push \
+    --force-with-lease="${evidence_ref}:${evidence_pr_head_oid}" \
+    origin --delete "${evidence_branch}" || {
+    printf 'leased remote evidence ref deletion failed at OID %s\n' \
+      "${evidence_pr_head_oid}" >&2
+    exit 1
+  }
+fi
+git -C "${primary_worktree}" fetch origin --prune || exit 1
+final_primary_branch=$(git -C "${primary_worktree}" branch --show-current) || exit 1
+final_primary_status=$(git -C "${primary_worktree}" status --porcelain) || exit 1
+if [[ "${final_primary_branch}" != "main" || \
+      -n "${final_primary_status}" ]]; then
+  printf 'primary worktree is not clean on main after evidence cleanup\n' >&2
+  exit 1
+fi
 ```
 
-Expected: clean `main` tracking `origin/main` with no local-only commits.
+Expected: only after the evidence PR is merged and its final automation is observed does the primary worktree switch back to `main`, fast-forward, and prove `HEAD == origin/main`. The exact evidence ref must be non-symbolic and equal the merged PR's full `headRefOid`; local deletion uses `update-ref --no-deref` with that old OID, only the exact branch config section is removed, and any present remote ref is deleted with the same expected-OID lease. Errors and moved refs abort. No tracked write occurs after the evidence merge.
 
-- [ ] **Step 6: Remove the governance worktree before branch cleanup**
+- [ ] **Step 12: Remove the governance worktree before branch cleanup**
 
-Run only after all governance task writes and merged follow-up work are complete:
+Run only after the evidence PR is merged, its post-merge automation is recorded in the untracked final handoff, primary `main` is synchronized, and the evidence branch cleanup is complete:
 
 ```bash
 primary_worktree=/home/murray/code/xirang
@@ -1358,17 +2602,19 @@ Expected: every prerequisite aborts with a diagnostic before mutation when false
 - After merge but before cleanup: revert the merge through a new PR; old Dependabot PRs remain available.
 - After old PR cleanup and manual reruns: reopen only exact captured PR numbers if rollback is necessary. The three submitted jobs cannot be canceled as a rollback; keep any new grouped PRs open and use their captured evidence while a configuration correction goes through a new PR.
 - After security enablement: keep vulnerability alerts enabled; automated security fixes may be paused or disabled separately if an external incident requires it.
+- After evidence branch creation: if no live operation has started, return to main and conditionally delete only the unpushed exact evidence ref; otherwise retain the branch and complete the same evidence PR. After the evidence PR merges, its final automation observation belongs only in the final handoff, followed by conditional evidence-ref cleanup and then governance-worktree cleanup.
 
 ## Requirement Coverage
 
 | Requirements | Implementation |
 |---|---|
-| R1-R5, AC1-AC2 | Task 1 config contract, failing/passing structural assertion, protected-file check; Task 5 three successful update jobs and live unique grouped-PR shape verification |
-| R6-R7, AC3 | Task 6 independently guarded settings enablement, asserted read-only API state, bot PR inspection, and open-alert inspection |
+| R1-R5, AC1-AC2 | Task 1 config contract, failing/passing structural assertion, protected-file check; Task 5 three successful jobs, complete live bot enumeration, per-row shape/unique-group checks, and exact normalized job/live PR-set equality |
+| R6-R7, AC3 | Task 6 independently guarded settings enablement, asserted read-only API state, bot PR/open-alert inspection, exact `NONE`-or-child-path R7 manifest resolution, and same-list evidence capture; Task 7 rejects unresolved, duplicate, non-child, missing, or content-free follow-up paths |
 | R8-R9, AC4 | Task 2 trigger-only change, failing/passing assertion, actionlint; Task 7 exact merge-SHA CI run cardinality/status/conclusion assertion |
-| R10, AC6 | Task 5 immutable allowlist validation, OID-conditioned exact PR/branch cleanup, exactly three supported Web UI reruns, baseline IDs, three successful job/log records, and unique grouped-PR verification before Task 6 |
+| R10, AC6 | Task 5 immutable allowlist validation, OID-conditioned exact PR/branch cleanup, exactly three Web UI jobs, baseline IDs, three successful logs, independently derived job/live PR sets, and exact equality before Task 6 |
 | R11, AC7 | Task 5 pre-trigger and Task 7 post-merge asserted PR #386 preservation checks with URL evidence |
 | R12, AC5 | Tasks 1 and 3 protected-file checks, actionlint, diff hygiene, remote required CI |
 | AC8 | Task 7 exact merge-SHA Release Please success assertion and zero associated publish/description run assertions |
 | R13, AC9 | Task 0 explicit Trellis config preference and generated Codex integration immutability checks; Task 3 durable project guidance |
 | R14, AC10 | Execution Setup ignore verification and project-local worktree creation; Task 3 durable project guidance |
+| R15, AC11 | Task 5 synchronized-main evidence branch authorization plus exact evidence/manifest/base-OID initialization; Task 7 pre- and post-commit Phase 3.4 allowlist audits, required committed-path/content checks, base-parent assertion, automatic archive/journal commits with exact subjects/parents/diff allowlists and work-only journal hash, exact three-commit `base..HEAD` audits, audited-journal exact refspec with absent-ref lease/read-back, pre-CI and pre-merge PR `headRefOid` equality plus expected-head merge guard, non-recursive final automation handoff, conditional evidence-ref cleanup, then governance worktree cleanup |
