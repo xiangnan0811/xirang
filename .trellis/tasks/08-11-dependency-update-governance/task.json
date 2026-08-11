@@ -3,7 +3,7 @@
   "name": "dependency-update-governance",
   "title": "依赖更新治理与 CI 去重",
   "description": "Reduce routine dependency-update PR churn, remove duplicate PR CI runs, and preserve timely security-update handling.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
