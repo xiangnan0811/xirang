@@ -403,7 +403,7 @@ Add this section to `.trellis/spec/guides/branch-workflow-guidelines.md`:
 
 - [ ] **Step 5: Update task evidence and commit the guidance**
 
-Create `.trellis/tasks/08-11-dependency-update-governance/research/validation-evidence.md` with the exact commands, exit codes, and relevant output from Steps 1-3, followed by a mapping from R1-R13 and AC1-AC9 to the implementing task step. Then run:
+Create `.trellis/tasks/08-11-dependency-update-governance/research/validation-evidence.md` with the exact commands, exit codes, and relevant output from Steps 1-3, followed by a mapping from R1-R14 and AC1-AC10 to the implementing task step. Then run:
 
 ```bash
 python3 ./.trellis/scripts/task.py validate .trellis/tasks/08-11-dependency-update-governance
@@ -562,7 +562,7 @@ Run:
 for pr_number in 409 408 407 406 405 397 396 395 380 378 377 376 375; do
   gh pr close "${pr_number}" \
     --repo xiangnan0811/xirang \
-    --comment "Superseded by the merged monthly grouped dependency-update policy. Security updates are handled separately and remain enabled."
+    --comment "Superseded by the merged monthly grouped dependency-update policy. Security updates are handled separately and will be enabled and verified in the next migration step."
 done
 ```
 
