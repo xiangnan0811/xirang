@@ -79,6 +79,16 @@ Do not edit, stage, or commit project files on `main`.
 
 The repository normally uses squash merge, so local topic branches may not share ancestry with the final `main` commit after merge. Start the next task from the updated `main`, not from the old topic branch.
 
+## Dependency Automation Maintenance
+
+- Keep routine dependency version updates monthly and grouped by ecosystem; do not return to one weekly PR per dependency without an explicit maintainer decision.
+- Treat ordinary major-version upgrades as dedicated tasks with compatibility research, full validation, and upstream release-note review.
+- Keep Dependabot vulnerability alerts and security fixes independent from the routine version-update schedule and groups.
+- Before replacing old bot PRs, capture exact PR numbers and head branches. Close only that allowlist; never use a dynamic close-all query that could include new security PRs.
+- Run pull-request CI through `pull_request`, and limit push-triggered CI to `main` so a PR commit does not run the same workflow twice.
+- For Codex Trellis work, default to project-configured sub-agent dispatch for research, implementation, and checks. Use inline only when the user explicitly requests it for the current task.
+- Use the repository-local ignored `.worktrees/<task-slug>` path for isolated implementation worktrees; preserve `.worktrees/` in `.gitignore` and revalidate it before creation.
+
 ## Workflow Action Runtime Maintenance
 
 When editing `.github/workflows/*.yml` action pins:
