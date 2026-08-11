@@ -41,6 +41,7 @@
 ### Persistent execution mode
 
 - R13. 将本项目 Codex 的 Trellis 派发偏好显式设为 `sub-agent`；后续实现、研究与检查默认使用子代理，只有用户明确要求 inline 时才覆盖该偏好。
+- R14. 本项目需要隔离工作区时默认使用仓库内 `.worktrees/`；该目录必须保持在 `.gitignore` 中，未来任务沿用此位置而不重复询问。
 
 ## Acceptance Criteria
 
@@ -53,6 +54,7 @@
 - [ ] AC7. Release Please PR #386 保持开放且未被本任务修改。
 - [ ] AC8. PR 合并后已检查 Release Please；本次不直接发布版本或 Docker 镜像，除非 Release Please 产生独立且经维护者批准的发布动作。
 - [ ] AC9. `.trellis/config.yaml` 明确包含 `codex.dispatch_mode: sub-agent`，现有 `.codex/agents/*` 与 Codex hooks 未被本任务修改。
+- [ ] AC10. `.gitignore` 继续忽略 `.worktrees/`，项目规范记录该目录为默认隔离 worktree 位置，本任务在 `.worktrees/dependency-update-governance` 中执行。
 
 ## Out Of Scope
 

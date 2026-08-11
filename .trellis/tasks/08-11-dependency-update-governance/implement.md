@@ -19,6 +19,51 @@
 - Update `.trellis/tasks/08-11-dependency-update-governance/*`: record validation evidence, acceptance results, PR metadata, and completion state.
 - Do not modify dependency manifests, lock files, workflow action pins, Release Please configuration, or application code.
 
+## Execution Setup: Create The Project-Local Worktree
+
+**Files:**
+
+- Verify unchanged: `.gitignore`
+- Create ignored directory: `.worktrees/dependency-update-governance`
+
+- [ ] **Step 1: Verify the project worktree directory is ignored**
+
+```bash
+git check-ignore -v .worktrees/
+```
+
+Expected: `.gitignore:37:.worktrees/` is reported. Stop before creating a worktree if the rule is missing.
+
+- [ ] **Step 2: Free the governance branch in the primary worktree**
+
+```bash
+git status --short --branch
+git switch main
+```
+
+Expected: the governance branch is clean before switching; the primary worktree moves to `main` without altering files.
+
+- [ ] **Step 3: Create the isolated worktree from the existing branch**
+
+```bash
+git worktree add .worktrees/dependency-update-governance codex/chore-dependency-governance
+```
+
+Expected: `/home/murray/code/xirang/.worktrees/dependency-update-governance` checks out `codex/chore-dependency-governance`.
+
+- [ ] **Step 4: Verify the isolated baseline**
+
+Run from `.worktrees/dependency-update-governance`:
+
+```bash
+git status --short --branch
+python3 ./.trellis/scripts/task.py validate .trellis/tasks/08-11-dependency-update-governance
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml
+make check
+```
+
+Expected: clean governance branch, valid 5-entry implement/check manifests, actionlint success, and the repository baseline check passes. If the baseline fails before implementation, stop and report the exact pre-existing failure.
+
 ## Task 0: Persist The Project Sub-Agent Default
 
 **Files:**
@@ -353,6 +398,7 @@ Add this section to `.trellis/spec/guides/branch-workflow-guidelines.md`:
 - Before replacing old bot PRs, capture their exact numbers and head branches. Close only that allowlist; never use a dynamic close-all query that could include new security PRs.
 - Run pull-request CI through `pull_request`, and limit push-triggered CI to `main` so a PR commit does not run the same workflow twice.
 - For Codex Trellis work, default to project-configured sub-agent dispatch for research, implementation, and checks. Use inline execution only when the user explicitly requests it for the current task.
+- Use the repository-local ignored `.worktrees/<task-slug>` path for isolated implementation worktrees; preserve `.worktrees/` in `.gitignore` and revalidate it before creation.
 ```
 
 - [ ] **Step 5: Update task evidence and commit the guidance**
@@ -652,3 +698,4 @@ Expected: clean `main` tracking `origin/main` with no local-only commits.
 | R12, AC5 | Tasks 1 and 3 protected-file checks, actionlint, diff hygiene, remote required CI |
 | AC8 | Task 7 Release Please and publish-workflow inspection with explicit no-release conclusion |
 | R13, AC9 | Task 0 explicit Trellis config preference and generated Codex integration immutability checks; Task 3 durable project guidance |
+| R14, AC10 | Execution Setup ignore verification and project-local worktree creation; Task 3 durable project guidance |

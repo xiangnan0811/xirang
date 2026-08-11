@@ -31,6 +31,8 @@ codex:
 
 本任务不修改 `.codex/agents/trellis-*.toml`、`.codex/hooks.json` 或用户级 `~/.codex/config.toml`。这样既保留现有角色边界和递归保护，也避免把项目偏好错误扩散到其他仓库。
 
+Subagent-Driven 执行使用仓库内 `.worktrees/` 作为项目默认隔离目录。`.gitignore` 已包含 `.worktrees/`，创建前必须用 `git check-ignore -v .worktrees/` 复核。具体任务目录采用 `.worktrees/<task-slug>`；本任务使用 `.worktrees/dependency-update-governance`。该约定写入项目分支工作流规范，后续任务无需再次选择全局或项目内位置。
+
 ## 4. Dependabot Configuration Contract
 
 每个 ecosystem 使用月度调度，并明确：
@@ -124,6 +126,7 @@ on:
 - 使用 GitHub Actions 专用 lint 验证 workflow 事件结构。
 - 对 Dependabot 配置做结构断言：三个 ecosystems、月度调度、固定时区、四个分组、minor/patch allow 规则、1/2/1 PR 上限。
 - 断言 `.trellis/config.yaml` 的 `codex.dispatch_mode` 明确为 `sub-agent`，并检查 `.codex/agents/*` 与 hooks 未变化。
+- 验证 `.worktrees/` 受 `.gitignore` 保护，隔离 worktree 从当前治理分支创建且基线检查通过。
 - 检查依赖清单和 action pin 没有被意外修改。
 
 ### Repository validation

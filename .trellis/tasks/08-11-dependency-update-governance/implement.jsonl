@@ -2,3 +2,4 @@
 {"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Keep repository automation and release-process claims backed by current config and verified external state."}
 {"file":".trellis/tasks/08-11-dependency-update-governance/research/open-dependabot-prs-2026-08-11.md","reason":"Use the exact pre-change PR and branch allowlist for safe post-merge cleanup without touching new security PRs or Release Please."}
 {"file":".trellis/tasks/08-11-dependency-update-governance/research/subagent-dispatch-default.md","reason":"Apply the project-level Codex sub-agent preference through the canonical Trellis config without changing generated agent or hook files."}
+{"file":".trellis/tasks/08-11-dependency-update-governance/research/project-worktree-convention.md","reason":"Use the maintainer-selected project-local .worktrees directory and preserve its existing ignore safety contract."}
