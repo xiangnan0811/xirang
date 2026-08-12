@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.46.0](https://github.com/xiangnan0811/xirang/compare/v0.45.0...v0.46.0) (2026-08-12)
+
+
+### ✨ Features
+
+* add atomic backup asset catalog ([#390](https://github.com/xiangnan0811/xirang/issues/390)) ([8cd6e51](https://github.com/xiangnan0811/xirang/commit/8cd6e5184e7dd05f702c3a5762b013c67901a399))
+* add backup asset export and archive ([#399](https://github.com/xiangnan0811/xirang/issues/399)) ([bd9572f](https://github.com/xiangnan0811/xirang/commit/bd9572f9f69dde721db9976c25816ea72b4ae664))
+* add backup asset worker capabilities ([#398](https://github.com/xiangnan0811/xirang/issues/398)) ([9ad2893](https://github.com/xiangnan0811/xirang/commit/9ad2893c714c82781461f452030c25e0766eedd4))
+* add backup asset worker protocol ([#394](https://github.com/xiangnan0811/xirang/issues/394)) ([be6eebb](https://github.com/xiangnan0811/xirang/commit/be6eebbe50dfd78e071c6d73e9c81493487fb4d5))
+* add backup asset workspace ([#393](https://github.com/xiangnan0811/xirang/issues/393)) ([2ce7133](https://github.com/xiangnan0811/xirang/commit/2ce71339b7f10fe759c0009ff01a100e589a700c))
+* add backup repository read adapters ([#385](https://github.com/xiangnan0811/xirang/issues/385)) ([e1a8f24](https://github.com/xiangnan0811/xirang/commit/e1a8f24c3c8b8b71581cedc148c5f32482c8ac0b))
+* add permission-aware backup asset search ([#391](https://github.com/xiangnan0811/xirang/issues/391)) ([a3c309a](https://github.com/xiangnan0811/xirang/commit/a3c309a922d9a4f48cb82031031c0975c251f5f4))
+* add rclone versioned recovery points ([#389](https://github.com/xiangnan0811/xirang/issues/389)) ([2edd795](https://github.com/xiangnan0811/xirang/commit/2edd795581f9368dbaacb27ad2d9f389848060fe))
+* add rsync versioned recovery points ([#388](https://github.com/xiangnan0811/xirang/issues/388)) ([3825c0a](https://github.com/xiangnan0811/xirang/commit/3825c0aa3eb66c865e33c72dc69ec47658e8c1eb))
+* add secure backup asset content plane ([#392](https://github.com/xiangnan0811/xirang/issues/392)) ([b744b11](https://github.com/xiangnan0811/xirang/commit/b744b116c6a11ef02998d6182d372e9efe97abc2))
+* publish exact Restic recovery points ([#387](https://github.com/xiangnan0811/xirang/issues/387)) ([12791c9](https://github.com/xiangnan0811/xirang/commit/12791c9b3da9a9f041af375f3b23c11dd3e21afb))
+* **recovery:** deliver controlled recovery through task 7 ([def0086](https://github.com/xiangnan0811/xirang/commit/def0086da561bc2c1b26c34c1efa6dacf020c3bc))
+
+
+### 🐛 Bug Fixes
+
+* **export:** stabilize publish-ready clock fixture ([#413](https://github.com/xiangnan0811/xirang/issues/413)) ([ac9e3fa](https://github.com/xiangnan0811/xirang/commit/ac9e3fa187435a135c8ab425190f70ad3bf66670))
+* **processing:** stabilize cancellation retry test ([#415](https://github.com/xiangnan0811/xirang/issues/415)) ([b9e9070](https://github.com/xiangnan0811/xirang/commit/b9e90708632c02a25be80e1cf5ff48babefbf36c))
+* **web:** remediate compatible dependency advisories ([#401](https://github.com/xiangnan0811/xirang/issues/401)) ([d1f19fd](https://github.com/xiangnan0811/xirang/commit/d1f19fde97ab83936d4bc471d6447b911012f665))
+
 ## [0.45.0](https://github.com/xiangnan0811/xirang/compare/v0.44.8...v0.45.0) (2026-07-13)
 
 
