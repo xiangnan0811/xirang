@@ -4,7 +4,7 @@
 
 **Goal:** Replace noisy weekly single-dependency PRs with monthly grouped minor/patch updates, keep security updates immediate, and prevent duplicate CI runs for pull-request commits.
 
-**Architecture:** Project execution preference is persisted through the canonical Trellis Codex dispatch setting; repository automation changes are limited to `.github/dependabot.yml` and the CI event block in `.github/workflows/ci.yml`. After the configuration PR is green and merged, the migration syncs `main` in the primary worktree, closes only the pre-captured version-update PRs, uses GitHub's supported Web UI to run and verify exactly three version-update jobs, then enables security settings through GitHub APIs before verifying post-merge automation and completing Trellis archival.
+**Architecture:** Project execution preference is persisted through the canonical Trellis Codex dispatch setting; repository automation changes are limited to `.github/dependabot.yml` and the CI event block in `.github/workflows/ci.yml`. After the configuration PR is green and merged, the migration syncs `main` in the primary worktree, records the exact pre-captured PRs as automatically superseded/closed with absent captured heads, observes exactly one version-update job per configured ecosystem/directory (automatic activation first, supported explicit trigger only as a missing-job fallback), then enables security settings through GitHub APIs before verifying post-merge automation and completing Trellis archival. A Go Recent Jobs capacity error is accepted only with the approved grouped PR, `mark_as_processed` HTTP 204, successful Actions wrapper, and exact live-set reconciliation; true failures remain blocking.
 
 **Tech Stack:** Trellis Codex dispatch configuration, Dependabot v2 configuration, GitHub Actions YAML, Ruby/Psych structural assertions, actionlint, GitHub CLI.
 
@@ -448,7 +448,7 @@ gh pr create \
     '' \
     '## Post-merge' \
     '- close only the 13 captured legacy Dependabot PRs' \
-    '- save pre-click baseline job IDs, run exactly three supported Web UI version checks, require all three to succeed, and reconcile job-associated PRs with the complete live Dependabot PR set' \
+    '- observe exactly one version-update job per configured ecosystem/directory (automatic merge activation first; supported Web UI only as a missing-job fallback), apply the documented Go capacity exception only with wrapper/mark/live-set proof, and reconcile job-associated PRs with the complete live Dependabot PR set' \
     '- enable and verify vulnerability alerts and automated security fixes' \
     '- preserve Release Please PR #386' \
     '- deliver tracked post-merge evidence and Trellis closeout through the dedicated evidence branch and follow-up PR')"
@@ -498,11 +498,11 @@ gh pr merge --squash
 
 Expected: merge succeeds only after required checks pass. Do not pass `--delete-branch`: `codex/chore-dependency-governance` remains checked out by `/home/murray/code/xirang/.worktrees/dependency-update-governance`, and `gh` must not attempt to switch or delete that linked branch. Defer both local and remote governance-branch cleanup until Task 7 removes the clean governance worktree.
 
-## Task 5: Perform Exact Cleanup And Re-run Version Updates
+## Task 5: Verify Automatic Cleanup And Version-Update Activation
 
 **Files:** Use `.trellis/tasks/08-11-dependency-update-governance/research/open-dependabot-prs-2026-08-11.md` as the immutable allowlist. Record all live results only in `.trellis/tasks/08-11-dependency-update-governance/research/post-merge-evidence.md` on `codex/chore-dependency-governance-evidence`, initialize `.trellis/tasks/08-11-dependency-update-governance/research/r7-follow-up-task-paths.txt` as the machine-readable R7 disposition manifest, and preserve the verified branch base in `.trellis/tasks/08-11-dependency-update-governance/research/evidence-branch-base-oid.txt`.
 
-- [ ] **Step 1: Sync primary `main`, create the exact evidence branch, and authorize tracked writes**
+- [x] **Step 1: Sync primary `main`, create the exact evidence branch, and authorize tracked writes**
 
 ```bash
 primary_worktree=/home/murray/code/xirang
@@ -675,9 +675,9 @@ printf '%s\n' "${origin_main_head}" >"${evidence_base_oid_file}" || {
 
 Expected: the primary worktree begins clean on `main`, fast-forwards to `origin/main`, and rejects a pre-existing local or remote evidence branch as well as any lookup error. It then creates `codex/chore-dependency-governance-evidence` from that exact synchronized full OID, proves the new branch HEAD still equals that OID, asserts the primary path and branch, and only then performs the first tracked writes by initializing the exact evidence file, the R7 manifest to the single line `PENDING`, and the base-OID file to exactly that one full OID. The persisted base is the closeout ancestry source of truth. This branch creation is the authorization boundary for every Task 5-7 live evidence, acceptance, R7 follow-up task, archive, and journal write; never write them on `main` or in the old governance worktree. The governance PR is uniquely `MERGED`.
 
-- [ ] **Step 2: Revalidate every captured PR before closing anything**
+- [x] **Step 2: Revalidate every captured PR identity and automatic closure**
 
-Run this exact allowlist validation:
+Run this exact read-only allowlist validation after automatic activation:
 
 ```bash
 while IFS='|' read -r pr_number expected_head; do
@@ -689,7 +689,7 @@ while IFS='|' read -r pr_number expected_head; do
         "${pr_number}" >&2
       exit 1
     }
-  expected=$(printf 'OPEN\tapp/dependabot\t%s' "${expected_head}")
+  expected=$(printf 'CLOSED\tapp/dependabot\t%s' "${expected_head}")
   if [[ "${actual}" != "${expected}" ]]; then
     printf 'refusing cleanup for PR #%s: expected %s, got %s\n' \
       "${pr_number}" "${expected}" "${actual}" >&2
@@ -712,27 +712,13 @@ done <<'EOF'
 EOF
 ```
 
-Expected: exit 0 with no output. Any mismatch aborts the cleanup; never substitute a newly created PR.
+Expected: all 13 exact captured PRs are `CLOSED`, retain author/head identity, and were closed by `dependabot[bot]` timeline events during automatic activation. Any mismatch blocks acceptance; never substitute a newly created PR.
 
-- [ ] **Step 3: Close only the validated snapshot PRs**
+- [x] **Step 3: Record automatic supersede/close results without manual mutation**
 
-Run:
+Use the exact read-only PR timelines and metadata recorded in `post-merge-evidence.md`. All 13 captured version-update PRs were automatically superseded/closed by `dependabot[bot]` as the approved grouped replacements were generated. This Task 5 execution did not run `gh pr close`, post close comments, or otherwise mutate those PRs. PR #386 remained open.
 
-```bash
-for pr_number in 409 408 407 406 405 397 396 395 380 378 377 376 375; do
-  gh pr close "${pr_number}" \
-    --repo xiangnan0811/xirang \
-    --comment "Superseded by the merged monthly grouped dependency-update policy. Security updates are handled separately and will be enabled and verified in the next migration step." || {
-      printf 'failed to close captured PR #%s; stopping exact cleanup\n' \
-        "${pr_number}" >&2
-      exit 1
-    }
-done
-```
-
-Expected: only the 13 captured version-update PRs become closed. PR #386 remains open.
-
-- [ ] **Step 4: Verify PR state and clean only the captured branches**
+- [x] **Step 4: Verify automatic captured-head removal without manual deletion**
 
 ```bash
 gh pr list --repo xiangnan0811/xirang --state open --limit 200 --json number,author,headRefName,title,url
@@ -775,25 +761,9 @@ while IFS='|' read -r pr_number expected_head; do
     exit 1
   fi
   if [[ -n "${remote_lookup}" ]]; then
-    IFS=$'\t' read -r remote_head_oid remote_head_ref <<<"${remote_lookup}"
-    if [[ ! "${remote_head_oid}" =~ ^[0-9a-fA-F]{40}$ || \
-          "${remote_head_ref}" != "refs/heads/${expected_head}" ]]; then
-      printf 'unexpected remote head while checking %s: %s\n' \
-        "${expected_head}" "${remote_lookup}" >&2
-      exit 1
-    fi
-    if [[ "${remote_head_oid}" != "${validated_oid}" ]]; then
-      printf 'captured branch %s moved: PR OID %s, remote OID %s\n' \
-        "${expected_head}" "${validated_oid}" "${remote_head_oid}" >&2
-      exit 1
-    fi
-    git push \
-      --force-with-lease="refs/heads/${expected_head}:${validated_oid}" \
-      origin --delete "${expected_head}" || {
-      printf 'leased deletion failed for captured branch %s at OID %s\n' \
-        "${expected_head}" "${validated_oid}" >&2
-      exit 1
-    }
+    printf 'captured remote head still exists; no manual deletion is authorized: %s\n' \
+      "${remote_lookup}" >&2
+    exit 1
   fi
 done <<'EOF'
 409|dependabot/npm_and_yarn/web/eslint-10.8.0
@@ -821,9 +791,9 @@ fi
 printf '%s\n' "${remaining_dependabot_heads}"
 ```
 
-Expected: no captured PR remains open and no captured Dependabot head remains. The loop refuses deletion unless the exact PR is CLOSED, Dependabot-authored, has the expected head name, and supplies a full `headRefOid`; an existing remote ref must still equal that OID. The expected-OID lease makes deletion atomic and rejects a ref that moves after validation. Lookup transport errors, OID mismatches, and lease failures stop cleanup as external blockers; never substitute a dynamic close-all or delete-all query.
+Expected: no captured PR remains open and every exact captured Dependabot head is absent. The loop is read-only and fails if any captured ref still exists; no leased or manual deletion was executed. Lookup transport errors and identity/OID mismatches remain blockers; never substitute a dynamic close-all or delete-all query.
 
-- [ ] **Step 5: Verify Release Please was preserved**
+- [x] **Step 5: Verify Release Please was preserved**
 
 ```bash
 release_please_record=$(gh pr view 386 \
@@ -845,31 +815,29 @@ fi
 printf '386\tOPEN\trelease-please--branches--main\t%s\n' "${release_pr_url}"
 ```
 
-Expected: query succeeds and asserts number `386`, state `OPEN`, head `release-please--branches--main`, and a nonempty URL before any manual version-update trigger.
+Expected: query succeeds and asserts number `386`, state `OPEN`, head `release-please--branches--main`, and a nonempty URL before accepting the observed version-update activation or using any fallback trigger.
 
-- [ ] **Step 6: Trigger exactly three supported version-update checks in the GitHub Web UI**
+- [x] **Step 6: Observe automatic version-update activation (with fallback-only trigger)**
 
-At execution time, load and use the `browser` skill against an authenticated GitHub browser session. Navigate to the repository Dependabot page:
+After the governance merge, observe the automatic Dependabot jobs before using any explicit trigger. Merge SHA `a28206bdcfd97b43a659ca5a562ab60ab805566a` activated exactly one job for each configured ecosystem/directory within 9-10 seconds:
 
 ```text
-https://github.com/xiangnan0811/xirang/network/updates
+gomod          /backend  job 1519658007
+npm            /web      job 1519658010
+github-actions /         job 1519658011
 ```
 
-Follow the documented path `Repository > Insights > Dependency graph > Dependabot > Recent update jobs`. Before each click, identify the exact ecosystem/directory row and save its current recent-job IDs as the pre-click baseline so the new job can be distinguished. Click `Check for updates` exactly once for each of these entries, in this order:
+The captured post-merge evidence records the job timestamp, type, terminal status, and logs URL for each row. npm remains one ecosystem/directory observation even though it has production and development groups. Do not click either npm group separately and do not submit a duplicate trigger.
 
-1. `gomod` at `/backend`
-2. `npm` at `/web`
-3. `github-actions` at `/`
+If a configured row has no automatic job, use the documented GitHub Web UI path only as a missing-job fallback: <https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/manage-your-dependency-security/re-run-dependabot-jobs>. Save the row's current job IDs before the single supported explicit trigger, click once, and reconcile exactly one new job. If the outcome is ambiguous or produces zero/multiple new IDs, record a blocker and stop; never click again. There is no public REST, GraphQL, or first-party `gh` trigger for this operation.
 
-npm is one ecosystem/directory trigger even though its configuration has production and development groups. Do not click either npm group separately and do not trigger more than these three jobs.
+Record this table in the exact `post-merge-evidence.md`, using ISO 8601 timestamps with timezone and each job's logs link:
 
-Immediately record this table in the exact `post-merge-evidence.md`, using ISO 8601 timestamps with timezone and the new job's logs link:
-
-| ecosystem | directory | pre-click baseline job IDs | click time | job ID | job timestamp | type | current status | logs URL |
-|---|---|---|---|---|---|---|---|---|
-| `gomod` | `/backend` | | | | | | | |
-| `npm` | `/web` | | | | | | | |
-| `github-actions` | `/` | | | | | | | |
+| ecosystem | directory | activation | job ID | job timestamp | type | terminal evidence | logs URL |
+|---|---|---|---|---|---|---|---|
+| `gomod` | `/backend` | automatic | `1519658007` | captured | captured | capacity split; wrapper success | captured |
+| `npm` | `/web` | automatic | `1519658010` | captured | captured | normal completion | captured |
+| `github-actions` | `/` | automatic | `1519658011` | captured | captured | normal completion | captured |
 
 Before the first baseline/result append, reassert the write context:
 
@@ -887,22 +855,20 @@ if [[ "${actual_worktree}" != "${primary_worktree}" || \
 fi
 ```
 
-If a click times out, the page reloads, or the outcome is otherwise ambiguous, do not click again. Reload Recent update jobs and compare the current IDs for that exact ecosystem/directory with its saved baseline until exactly one new job is identified. If zero or multiple new IDs remain ambiguous, record a blocker and stop; a second click could create a duplicate trigger.
+Expected: exactly one automatic version-update job is identified for each configured ecosystem/directory, with no duplicate trigger. A supported explicit trigger is permitted only for a row missing its automatic job and only once after a saved baseline; an ambiguous result blocks acceptance.
 
-Expected: exactly three new version-update jobs are identified from three clicks, with a saved baseline for each. This Web UI action is the only documented supported rerun mechanism: <https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/manage-your-dependency-security/re-run-dependabot-jobs>. GitHub documents no public REST, GraphQL, or first-party `gh` trigger for it; do not call undocumented internal endpoints.
+- [x] **Step 7: Monitor all observed jobs asynchronously to a terminal result**
 
-- [ ] **Step 7: Monitor all three jobs asynchronously to a terminal result**
+Use the captured job logs and Recent Jobs evidence without clicking `Check for updates` again. Record every status transition and the final timestamp/type/status. Do not treat `queued` as complete: it remains pending and must be checked again asynchronously. npm and GitHub Actions reached normal terminal completion. Go created approved grouped PR #420, `mark_as_processed` returned HTTP 204, and Actions wrapper run `31482925783` (job `93751739702`) completed successfully. The Go Recent Jobs card separately reports a capacity error because `open-pull-requests-limit: 1` was occupied and later eligible updates could not join/open another PR; accept this split only with the approved PR, 204 response, successful wrapper, and exact live reconciliation recorded in evidence.
 
-Use the `browser` automation to revisit each captured logs URL without clicking `Check for updates` again. Record every status transition and the final timestamp/type/status. Do not treat `queued` as complete: it remains pending and must be checked again asynchronously. `success` is terminal and valid even when the logs report no eligible update. For any `failure`, inspect and record the relevant log error and investigate repository-caused failures, but do not submit a fourth trigger.
+Expected: one job per ecosystem/directory has captured terminal evidence, with the documented Go capacity-only exception fully evidenced above. A true failure, queued/missing job, wrapper failure, non-204 `mark_as_processed`, missing approved grouped PR, duplicate job, or reconciliation mismatch remains blocking and must not cause a duplicate trigger.
 
-Expected: all three captured jobs have terminal `success` evidence. Any queued job keeps the task pending; any failure, including a documented external blocker, leaves R10/AC1/AC2/AC6 incomplete and blocks Task 6. A failure cannot be converted into acceptance evidence and must not cause a fourth click.
+- [x] **Step 8: Reconcile job-associated PRs with the complete live Dependabot set**
 
-- [ ] **Step 8: Reconcile job-associated PRs with the complete live Dependabot set**
-
-From the three successful job logs, independently capture every exact associated PR number. Populate `job_associated_pr_numbers` only from those logs, never from the live PR query. Then enumerate the complete current open `app/dependabot` set and run this gate from the primary evidence branch:
+From the observed job logs and browser-derived PR links, independently capture every exact associated PR number. Populate `job_associated_pr_numbers` only from those observations, never from the live PR query. Then enumerate the complete current open `app/dependabot` set and run this gate from the primary evidence branch:
 
 ```bash
-job_associated_pr_numbers=() # replace only from the three successful job logs
+job_associated_pr_numbers=() # replace only from observed job logs/browser-derived PR links
 declare -A seen_job_pr_numbers=()
 normalized_job_pr_numbers=()
 for pr_number in "${job_associated_pr_numbers[@]}"; do
@@ -1005,13 +971,13 @@ done
 printf 'reconciled grouped version PRs: %s\n' "${live_pr_numbers[*]:-none}"
 ```
 
-Expected: both sources are independently normalized as numeric, duplicate-free, sorted PR-number sets and are exactly equal. An empty job-associated array fails whenever the live set is nonempty; an extra live PR or job-only number fails. Every actual live PR is OPEN, authored by `app/dependabot`, mapped from an approved head to one unique group, has a URL, and the live total is 0-4; duplicate numbers/groups and wrong state/author/head fail. Because all 13 captured legacy PRs are closed and security settings are still disabled at this gate, every live Dependabot PR must be one of these ordinary grouped version PRs; any violation blocks Task 6. Record the job/log mapping, complete live query, normalized sets, and comparison output in the exact evidence file. Leave valid new PRs open. Zero is valid only when all three jobs succeeded with no updates and both sets are empty.
+Expected: both sources are independently normalized as numeric, duplicate-free, sorted PR-number sets and are exactly equal. An empty job-associated array fails whenever the live set is nonempty; an extra live PR or job-only number fails. Every actual live PR is OPEN, authored by `app/dependabot`, mapped from an approved head to one unique group, has a URL, and the live total is 0-4; duplicate numbers/groups and wrong state/author/head fail. Because all 13 captured legacy PRs are closed and security settings are still disabled at this gate, every live Dependabot PR must be one of these ordinary grouped version PRs; any violation blocks Task 6. Record the observed job/log mapping, complete live query, normalized sets, and comparison output in the exact evidence file. Leave valid new PRs open. Zero is valid only when every configured ecosystem/directory job completed without updates and both sets are empty.
 
 ## Task 6: Enable And Verify Security Updates
 
 **Files:** GitHub repository settings, result appends to `.trellis/tasks/08-11-dependency-update-governance/research/post-merge-evidence.md`, the exact R7 disposition manifest, and any required high-priority R7 child task directories, all on the evidence branch.
 
-**Entry gate:** Task 5 exact cleanup is verified; all three manual version-update jobs are terminal `success`; the independently derived job-associated and complete live Dependabot PR sets are numeric, unique, sorted, exactly equal, and every live PR passed the OPEN/author/head/unique-group/0-4 checks. Any queued/failure job or reconciliation failure blocks this task even when recorded as an external blocker. This ordering is mandatory so newly created security PRs cannot be confused with version-update PRs. Before appending any Task 6 result, re-run the exact primary-worktree/evidence-branch/file assertion from Task 5 Step 6.
+**Entry gate:** Task 5 exact cleanup is verified; every configured ecosystem/directory has exactly one observed version-update job with an acceptable terminal result (npm/actions `success`, or the documented Go capacity-only exception); the independently derived job-associated and complete live Dependabot PR sets are numeric, unique, sorted, exactly equal, and every live PR passed the OPEN/author/head/unique-group/0-4 checks. Any queued/real failure job or reconciliation failure blocks this task even when recorded as an external blocker. This ordering is mandatory so newly created security PRs cannot be confused with version-update PRs. Before appending any Task 6 result, re-run the exact primary-worktree/evidence-branch/file assertion from Task 5 Step 6.
 
 - [ ] **Step 1: Enable vulnerability alerts**
 
@@ -1381,7 +1347,7 @@ Complete the exact evidence file and task acceptance state with:
 - config assertions and actionlint results;
 - governance PR URL, exact merge SHA, and successful CI run ID/URL;
 - exact old-PR closure and leased branch-deletion results;
-- exactly three manual jobs with baseline IDs, click/job timestamps, terminal `success`, type and logs URLs;
+- exactly one observed job per configured ecosystem/directory, with automatic activation (or missing-job fallback metadata), job timestamps, acceptable terminal evidence, type and logs URLs;
 - the independently captured job-associated PR numbers, complete live `app/dependabot` query, per-row shape/group results, both normalized sets, and exact equality result;
 - vulnerability-alert query success and exact automated-security-fixes enabled/paused values;
 - the alert-by-alert manual-major disposition and exact R7 manifest entries, including every created follow-up task path or the single `NONE` result;
@@ -2013,7 +1979,7 @@ evidence_pr_url=$(gh pr create \
     '- deliver the separate Trellis archive and developer-journal commits' \
     '' \
     '## Validation' \
-    '- exact legacy cleanup and three successful Dependabot jobs' \
+    '- exact automatic legacy cleanup and one observed job per configured ecosystem/directory, including the documented Go capacity exception' \
     '- complete live Dependabot PR enumeration and exact job/live set reconciliation' \
     '- governance main CI, Release Please, and security-setting assertions')") || {
   printf 'failed to create evidence follow-up PR\n' >&2
@@ -2600,7 +2566,7 @@ Expected: every prerequisite aborts with a diagnostic before mutation when false
 
 - Before governance PR merge: close the governance PR; remove the clean linked governance worktree before deleting only `codex/chore-dependency-governance`. No repository settings or old PRs have changed.
 - After merge but before cleanup: revert the merge through a new PR; old Dependabot PRs remain available.
-- After old PR cleanup and manual reruns: reopen only exact captured PR numbers if rollback is necessary. The three submitted jobs cannot be canceled as a rollback; keep any new grouped PRs open and use their captured evidence while a configuration correction goes through a new PR.
+- After old PR cleanup and automatic job activation: reopen only exact captured PR numbers if rollback is necessary. The observed jobs cannot be canceled as a rollback; keep any new grouped PRs open and use their captured evidence while a configuration correction goes through a new PR.
 - After security enablement: keep vulnerability alerts enabled; automated security fixes may be paused or disabled separately if an external incident requires it.
 - After evidence branch creation: if no live operation has started, return to main and conditionally delete only the unpushed exact evidence ref; otherwise retain the branch and complete the same evidence PR. After the evidence PR merges, its final automation observation belongs only in the final handoff, followed by conditional evidence-ref cleanup and then governance-worktree cleanup.
 
@@ -2608,10 +2574,10 @@ Expected: every prerequisite aborts with a diagnostic before mutation when false
 
 | Requirements | Implementation |
 |---|---|
-| R1-R5, AC1-AC2 | Task 1 config contract, failing/passing structural assertion, protected-file check; Task 5 three successful jobs, complete live bot enumeration, per-row shape/unique-group checks, and exact normalized job/live PR-set equality |
+| R1-R5, AC1-AC2 | Task 1 config contract, failing/passing structural assertion, protected-file check; Task 5 one observed job per configured ecosystem/directory, complete live bot enumeration, per-row shape/unique-group checks, and exact normalized job/live PR-set equality |
 | R6-R7, AC3 | Task 6 independently guarded settings enablement, asserted read-only API state, bot PR/open-alert inspection, exact `NONE`-or-child-path R7 manifest resolution, and same-list evidence capture; Task 7 rejects unresolved, duplicate, non-child, missing, or content-free follow-up paths |
 | R8-R9, AC4 | Task 2 trigger-only change, failing/passing assertion, actionlint; Task 7 exact merge-SHA CI run cardinality/status/conclusion assertion |
-| R10, AC6 | Task 5 immutable allowlist validation, OID-conditioned exact PR/branch cleanup, exactly three Web UI jobs, baseline IDs, three successful logs, independently derived job/live PR sets, and exact equality before Task 6 |
+| R10, AC6 | Task 5 immutable allowlist validation, automatic exact PR/branch cleanup evidence, one observed job per configured ecosystem/directory, Go capacity exception proof, independently derived job/live PR sets, and exact equality before Task 6 |
 | R11, AC7 | Task 5 pre-trigger and Task 7 post-merge asserted PR #386 preservation checks with URL evidence |
 | R12, AC5 | Tasks 1 and 3 protected-file checks, actionlint, diff hygiene, remote required CI |
 | AC8 | Task 7 exact merge-SHA Release Please success assertion and zero associated publish/description run assertions |
