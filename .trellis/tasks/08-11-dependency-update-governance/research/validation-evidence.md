@@ -4,12 +4,13 @@ Captured on 2026-08-11 from
 `/home/murray/code/xirang/.worktrees/dependency-update-governance` on branch
 `codex/chore-dependency-governance`.
 
-This file records local validation only. Remote CI, GitHub repository settings,
-legacy PR cleanup, the three supported manual version-update reruns, complete
-live Dependabot PR enumeration and exact job/live set reconciliation, and
-post-merge automation remain assigned to the later tasks identified in the
-requirement mapping. Their tracked results must be written only to the dedicated
-post-merge evidence branch and delivered through its follow-up PR.
+This file preserves the local validation snapshot captured before the post-merge
+live work. Its command outputs remain scoped to that capture time and do not
+replace the later live evidence in `post-merge-evidence.md`. That post-merge
+record reconciles automatic activation (one observed job per ecosystem/directory),
+the exact grouped PR set, the capacity-bound Go split, security settings, and the
+Task 7 governance-merge automation. The final evidence-branch delivery lifecycle
+is intentionally tracked as the remaining R15/AC11 work.
 
 ## Commands And Results
 
@@ -343,29 +344,29 @@ local gate.
 | R3 | Task 1 minor/patch-only routine allow rules plus a durable guide requirement that ordinary major upgrades use dedicated tasks with compatibility research, full validation, and upstream release-note review | Local contract passed |
 | R4 | Task 1 1/2/1 PR limits aligned to the four groups; assertion 2 | Local contract passed |
 | R5 | Task 1 contains no auto-merge policy; Task 2 preserves PR CI review flow | Local contract passed |
-| R6 | Task 6 enables and verifies vulnerability alerts and automated security fixes | **Pending Task 6** |
-| R7 | Task 6 records an alert-by-alert manual-major disposition, creates any required high-priority child task, and resolves `r7-follow-up-task-paths.txt` from `PENDING` to exactly `NONE` or unique exact created child-task paths copied from the same array into post-merge evidence. Task 7 rejects current/archive/nested/duplicate/missing/non-child entries and every listed directory without created dirty content before the work commit | **Pending Task 6 manifest resolution and Task 7 content audit** |
+| R6 | Task 6 enables and verifies vulnerability alerts and automated security fixes; post-merge evidence records HTTP 204 for alerts GET and `enabled=true paused=false` | Complete |
+| R7 | Task 6 records both alert dispositions as same-major patch fixes (`#421` / `#422`) and resolves `r7-follow-up-task-paths.txt` to exact `NONE`; no child task is required | Complete |
 | R8 | Task 2 keeps `pull_request` and limits `push` to `main`; assertion 4 and actionlint pass | Local trigger contract passed; remote behavior is covered by AC4 below |
 | R9 | Task 2 changes only the CI event restriction and adds no path filters or job reductions; actionlint passes | Local contract passed |
-| R10 | Task 5 revalidates and closes only the captured 13-PR allowlist, conditionally deletes an exact remote head only when its OID equals that PR's complete `headRefOid`, then uses the supported GitHub Web UI for exactly three checks and captures baseline IDs, three terminal `success` results and logs. It must independently extract job-associated PR numbers and enumerate the complete live open `app/dependabot` set, reject invalid/duplicate numbers, wrong state/author/head, duplicate groups or more than four live PRs, normalize both sets, and require exact equality before Task 6. Any queued/failure or set/shape mismatch leaves R10 incomplete; no fourth trigger is allowed | **Pending Task 5** |
-| R11 | Protected-path check preserves the Release Please workflow; Task 5 must verify PR #386 before manual triggers and Task 7 must revalidate its exact state/head/URL after the merge-SHA Release Please run | **Pending Task 5 and Task 7 live verification** |
+| R10 | Task 5 evidence records automatic supersede/close and absent captured heads, one observed job per configured ecosystem/directory, normal npm/actions outcomes, the Go capacity-only exception with #420 plus `mark_as_processed` HTTP 204 and successful Actions wrapper, and exact live/job set reconciliation `417 418 419 420`; any real failure, queued, missing PR, failed wrapper/mark, duplicate trigger or set mismatch remains blocking | Complete |
+| R11 | Protected-path check and Task 5/Task 7 live evidence preserve PR #386 as `OPEN` with head `release-please--branches--main` and exact URL | Complete (Task 5 + Task 7 recheck) |
 | R12 | Protected-path command exits 0 for all dependency manifests, lock files, Release Please workflow, and action/Codex protected paths | Local contract passed |
 | R13 | Task 0 sets `codex.dispatch_mode: sub-agent`; assertion 1 and protected Codex-path check pass; durable guide records the default | Local contract passed |
 | R14 | Work is in `.worktrees/dependency-update-governance`; assertion 10 verifies the ignore rule; durable guide records `.worktrees/<task-slug>` | Local contract passed |
-| R15 | After governance merge, Task 5 must create the exact evidence branch from synchronized primary main before any tracked live-evidence write, initialize the R7 manifest to `PENDING`, and persist the verified full branch base OID. Task 7 must inspect the actual Phase 3.4 work tree with the same exact allowlist and required-file/content assertions, prove the work parent equals base, and retain exact archive/journal commits with a three-commit `base..HEAD` gate. It then pushes only the audited journal SHA through an explicit refspec with an expected-absent remote lease and exact read-back; the PR must report that SHA as `headRefOid` before CI and immediately before an expected-head-guarded merge | **Pending Tasks 5-7 exact evidence delivery, PR-head binding, and cleanup** |
+| R15 | After governance merge, Task 5 must create the exact evidence branch from synchronized primary main before any tracked live-evidence write, initialize the R7 manifest to `PENDING`, and persist the verified full branch base OID. Task 7 must inspect the actual Phase 3.4 work tree with the same exact allowlist and required-file/content assertions, prove the work parent equals base, and retain exact archive/journal commits with a three-commit `base..HEAD` gate. It then pushes only the audited journal SHA through an explicit refspec with an expected-absent remote lease and exact read-back; the PR must report that SHA as `headRefOid` before CI and immediately before an expected-head-guarded merge | Pending delivery lifecycle by design |
 
 ## Acceptance-Criteria Mapping
 
 | Acceptance criterion | Implementation / evidence | Status |
 |---|---|---|
-| AC1 | Task 1 validates schedule/timezone/groups/major boundary/limits. Task 5 must observe all three jobs reach `success` and require exact equality between normalized job-associated and complete live Dependabot PR sets; queued/failure or set mismatch leaves AC1 incomplete | **Local config contract passed; live Task 5 success/reconciliation pending** |
-| AC2 | Task 1 caps routine maintenance at four groups. Task 5 must validate every complete live bot PR as OPEN, `app/dependabot`, an approved unique group and total 0-4, then require its numeric unique sorted PR set to equal the independently derived job set. Empty job data is valid only when live is also empty | **Local config contract passed; live Task 5 shape/set reconciliation pending** |
-| AC3 | Task 6 independently guards both enable calls, requires the vulnerability-alert read query to succeed, and requires automated security fixes to be exactly `enabled: true`, `paused: false` | **Pending Task 6** |
-| AC4 | Assertion 4 proves the local event contract. Task 7 must resolve the exact governance merge SHA and require exactly one matching CI `push` run with `completed`/`success` | **Local trigger contract passed; exact post-merge run assertion pending Task 7** |
-| AC5 | YAML structural assertions, actionlint, diff hygiene, title validation, protected paths, Trellis validation, and `make check` all pass locally. Task 4 must still obtain all required remote CI | **Local checks passed; remote required CI pending Task 4** |
-| AC6 | Task 5 exact allowlist/OID-leased cleanup and exactly three Web UI jobs must produce baseline/timestamp/type/status/log evidence and three terminal successes. Before security enablement, the independently captured job-associated and complete live bot PR sets must both be numeric/unique/sorted and exactly equal, with every live row passing OPEN/author/head/unique-group/0-4 checks. Any job or reconciliation failure blocks Task 6 | **Pending Task 5** |
-| AC7 | Protected-path check shows no Release Please workflow change. Task 5 must verify PR #386 before manual triggers, and Task 7 must revalidate it post-merge as `OPEN` with head `release-please--branches--main`, recording its URL | **Pending Task 5 and Task 7 live verification** |
-| AC8 | Task 7 binds workflow queries to the exact governance merge SHA, requires one completed/successful Release Please push run, and asserts zero associated Publish Docker Images and Sync Docker Hub Description runs | **Pending Task 7 exact post-merge assertions** |
+| AC1 | Task 1 validates schedule/timezone/groups/major boundary/limits. Task 5 observes one job per configured ecosystem/directory and exact equality between normalized job-associated and complete live Dependabot PR sets; strict failure/duplicate rules remain | Complete |
+| AC2 | Task 1 caps routine maintenance at four groups. Task 5 validates live PRs `417 418 419 420` as OPEN, `app/dependabot`, approved unique groups and exact equality with job evidence; Go capacity split is accepted only under the documented exception | Complete |
+| AC3 | Task 6 independently guards both enable calls, records vulnerability-alert GET HTTP 204, and verifies automated security fixes exactly `enabled: true`, `paused: false` | Complete |
+| AC4 | Assertion 4 proves the local event contract; Task 7 evidence records governance merge SHA `a28206bdcfd97b43a659ca5a562ab60ab805566a` with exactly one completed/success CI push run `31482921948` | Complete |
+| AC5 | YAML structural assertions, actionlint, diff hygiene, title validation, protected paths, Trellis validation, `make check`, and governance-merge CI evidence all pass | Complete |
+| AC6 | Task 5 exact allowlist evidence records automatic closure/absent heads, one job per ecosystem/directory, npm/actions normal completion, Go capacity-only split with #420/204/wrapper success, and exact grouped PR reconciliation; strict failure/queued/duplicate rules remain | Complete |
+| AC7 | Protected-path check and Task 5/Task 7 evidence preserve PR #386 as OPEN with head `release-please--branches--main` and exact URL | Complete |
+| AC8 | Task 7 evidence binds governance merge SHA to Release Please run `31482921949` completed/success and zero Publish Docker Images / Sync Docker Hub Description runs | Complete |
 | AC9 | Assertion 1 verifies explicit sub-agent dispatch; command 9 verifies `.codex/agents`, hooks, and Codex config are unchanged | Local contract passed |
 | AC10 | Command 10 verifies `.worktrees/` remains ignored; the durable guide records the local path; this task ran in the required isolated worktree | Local contract passed |
-| AC11 | Tasks 5-7 must persist the synchronized evidence base, reject arbitrary task paths, audit the actual work commit, and prove exactly three direct commits through journal. Remote creation must use the audited journal SHA as an exact refspec with an absent-ref force-with-lease and exact read-back, never a movable local branch source. The follow-up PR must return `headRefOid == journal_commit` before CI and immediately before merge, with the same OID passed to the merge guard. After required CI and squash merge, only untracked final observation, main sync, OID-safe evidence cleanup, and governance worktree cleanup remain | **Pending Tasks 5-7 exact-ref delivery, PR-head race guards, and lifecycle completion** |
+| AC11 | Tasks 5-7 must persist the synchronized evidence base, reject arbitrary task paths, audit the actual work commit, and prove exactly three direct commits through journal. Remote creation must use the audited journal SHA as an exact refspec with an absent-ref force-with-lease and exact read-back, never a movable local branch source. The follow-up PR must return `headRefOid == journal_commit` before CI and immediately before merge, with the same OID passed to the merge guard. After required CI and squash merge, only untracked final observation, main sync, OID-safe evidence cleanup, and governance worktree cleanup remain | Pending delivery lifecycle by design |
