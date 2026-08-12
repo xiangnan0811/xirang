@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 36
-- **Last Active**: 2026-08-11
+- **Total Sessions**: 37
+- **Last Active**: 2026-08-12
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1481 | Active |
+| `journal-1.md` | ~1502 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 37 | 2026-08-12 | Complete dependency update governance evidence | `24f58e984912ea2f4a67a1d602ac8345f6f0a47d` | `codex/chore-dependency-governance-evidence` |
 | 36 | 2026-08-11 | Trellis 0.6.14 native auto upgrade closure | `b068e9d`, `ac9e3fa`, `6b05b77` | `codex/trellis-0.6.14-upgrade-closure` |
 | 35 | 2026-08-10 | Task 7 delivery closure | `27d54d6` | `codex/task7-delivery-closure` |
 | 34 | 2026-08-10 | Task 7 PR CI remediation | `7de8b0d` | `codex/backup-assets-controlled-recovery` |
