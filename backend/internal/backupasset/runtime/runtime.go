@@ -17,6 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/content"
@@ -27,6 +28,7 @@ import (
 	processingupdater "xirang/backend/internal/backupasset/processing/updater"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
+	"xirang/backend/internal/backupasset/recovery"
 	"xirang/backend/internal/backupasset/repository"
 	"xirang/backend/internal/backupasset/search"
 	"xirang/backend/internal/logger"
@@ -57,12 +59,14 @@ type Dependencies struct {
 	StagedPayload      provider.StagedPayloadTransport
 	ToolBinaries       provider.ToolBinaries
 	Metrics            publication.Metrics
+	RecoveryMetrics    recovery.Metrics
 	ProcessingMetrics  processing.Metrics
 	CatalogMetrics     catalog.Metrics
 	SearchMetrics      search.Metrics
 	ContentMetrics     content.Metrics
 	SessionRevocations ContentSessionRevocationSource
 	Tombstones         repository.ManagedHistoryTombstoneSource
+	AlertDispatcher    *alerting.Dispatcher
 }
 
 type ContentSessionRevocationSource interface {
@@ -86,6 +90,21 @@ type exportRuntimeManager interface {
 	TransitionSettings(context.Context, bool, backupasset.ExportConfig, func() error) error
 	Service() *managedExportServiceFacade
 	Delivery() *managedExportDeliveryFacade
+	StopAccepting()
+	Run(context.Context)
+	Shutdown(context.Context) error
+	PrepareSchemaDown(context.Context, func() error) error
+}
+
+type recoveryRuntimeManager interface {
+	StartupWithConfig(context.Context, backupasset.RecoveryConfig) error
+	TransitionSettingsWithRestore(
+		context.Context,
+		backupasset.RecoveryConfig,
+		func() error,
+		func() error,
+	) error
+	DowngradeReadiness(context.Context) (RecoveryDowngradeReadiness, error)
 	StopAccepting()
 	Run(context.Context)
 	Shutdown(context.Context) error
@@ -127,39 +146,46 @@ func terminalizeExportRuntimeLifecycle(
 // admission, and guarded legacy Restic callers. It does not own Task Manager;
 // callback ports are set explicitly before StartupPass.
 type Runtime struct {
-	foundation           *backupasset.FoundationService
-	repository           *repository.Service
-	publication          *repository.PublicationService
-	resticStrategy       provider.PublicationStrategy
-	rsyncStrategy        provider.PublicationStrategy
-	rcloneStrategy       provider.PublicationStrategy
-	admission            *AdmissionController
-	worker               *PublicationWorker
-	healthWorker         *RcloneHealthWorker
-	catalogService       *catalog.Service
-	catalogIndexer       *catalog.Indexer
-	catalogWorker        *CatalogWorker
-	catalogAudit         repository.AssetAuditSink
-	keyring              *backupasset.Keyring
-	searchService        *search.Service
-	searchIndexer        *search.Indexer
-	searchIngest         *search.ContentIngestService
-	searchWorker         *SearchWorker
-	overlayService       *overlay.Service
-	searchReady          *atomic.Bool
-	contentBroker        *content.Broker
-	contentService       *contentDeliveryMux
-	exportDelivery       *managedExportDeliveryFacade
-	contentBudget        *content.BudgetService
-	contentAudit         *content.ContentAuditService
-	contentReconciler    *content.Reconciler
-	contentReady         *atomic.Bool
-	contentManager       contentRuntimeManager
-	exportManager        exportRuntimeManager
-	processingManager    *managedProcessingRuntime
-	archiveMemberService *managedArchiveMemberFacade
-	transitioner         publication.FeatureTransitioner
-	metrics              publication.Metrics
+	foundation              *backupasset.FoundationService
+	settings                *settings.Service
+	repository              *repository.Service
+	publication             *repository.PublicationService
+	resticStrategy          provider.PublicationStrategy
+	rsyncStrategy           provider.PublicationStrategy
+	rcloneStrategy          provider.PublicationStrategy
+	admission               *AdmissionController
+	worker                  *PublicationWorker
+	healthWorker            *RcloneHealthWorker
+	catalogService          *catalog.Service
+	catalogIndexer          *catalog.Indexer
+	catalogWorker           *CatalogWorker
+	catalogAudit            repository.AssetAuditSink
+	keyring                 *backupasset.Keyring
+	searchService           *search.Service
+	searchIndexer           *search.Indexer
+	searchIngest            *search.ContentIngestService
+	searchWorker            *SearchWorker
+	overlayService          *overlay.Service
+	searchReady             *atomic.Bool
+	contentBroker           *content.Broker
+	contentService          *contentDeliveryMux
+	exportDelivery          *managedExportDeliveryFacade
+	contentBudget           *content.BudgetService
+	contentAudit            *content.ContentAuditService
+	contentReconciler       *content.Reconciler
+	contentReady            *atomic.Bool
+	contentManager          contentRuntimeManager
+	exportManager           exportRuntimeManager
+	recoveryManager         recoveryRuntimeManager
+	recoverySourceNamespace recovery.RecoverySourceNamespaceAuthority
+	recoveryTargetRoots     *managedRecoveryTargetRootFacade
+	nodeWriteCoordinator    *NodeWriteCoordinator
+	recoveryAuthorization   *managedRecoveryAuthorizationFacade
+	recoveryResults         *managedRecoveryResultFacade
+	processingManager       *managedProcessingRuntime
+	archiveMemberService    *managedArchiveMemberFacade
+	transitioner            publication.FeatureTransitioner
+	metrics                 publication.Metrics
 
 	mu          sync.Mutex
 	searchKeyMu sync.Mutex
@@ -168,6 +194,138 @@ type Runtime struct {
 	reporter    publication.InterruptedRunReporter
 	readiness   publication.InterruptedRunReadiness
 }
+
+// managedRecoverySourceNamespaceAdapter keeps Repository dependent only on
+// its own ownership-transfer port while Recovery retains the opaque proof and
+// observed source capability. Runtime is the sole composition boundary that
+// translates the scalar request between the two packages.
+type managedRecoverySourceNamespaceAdapter struct {
+	authority recovery.RecoverySourceNamespaceAuthority
+}
+
+func (adapter *managedRecoverySourceNamespaceAdapter) ObserveRecoverySourceNamespace(
+	ctx context.Context,
+	request repository.RecoverySourceNamespaceRequest,
+	pinned provider.RsyncRestoreSource,
+) (provider.RsyncRestoreSource, error) {
+	if adapter == nil || adapter.authority == nil {
+		if pinned != nil {
+			_ = pinned.Close()
+		}
+		return nil, fmt.Errorf("%w: recovery source namespace authority unavailable", backupasset.ErrCapabilityUnavailable)
+	}
+	return adapter.authority.ObserveRecoverySourceNamespace(ctx, recovery.RecoverySourceNamespaceRequest{
+		SourceRef:                 request.SourceRef,
+		ProducingTaskID:           request.ProducingTaskID,
+		RepositoryBindingRevision: request.RepositoryBindingRevision,
+		ProvenanceRevision:        request.ProvenanceRevision,
+	}, pinned)
+}
+
+var _ repository.RecoverySourceNamespaceAuthority = (*managedRecoverySourceNamespaceAdapter)(nil)
+
+// RecoveryTargetRootAuthority is the narrow Task 9 composition seam. It
+// exposes only the reviewed authority operations and never the registry,
+// ciphertext, probe session, or private locator outside Recovery.
+type RecoveryTargetRootAuthority interface {
+	Register(
+		context.Context,
+		recovery.TargetRootRegistrationRequest,
+	) (settings.RecoveryTargetRootSummary, error)
+	Delete(context.Context, uint, string) error
+	List(context.Context, uint) ([]settings.RecoveryTargetRootSummary, error)
+}
+
+type recoveryTargetRootMutationService interface {
+	ValidateRegistration(recovery.TargetRootRegistrationRequest) error
+	ValidateDelete(uint, string) error
+	RegisterMutation(
+		context.Context,
+		recovery.TargetRootRegistrationRequest,
+	) (settings.RecoveryTargetRootSummary, recovery.TargetRootMutationRollback, error)
+	DeleteMutation(context.Context, uint, string) (recovery.TargetRootMutationRollback, error)
+	RestoreMutation(context.Context, recovery.TargetRootMutationRollback) error
+	List(context.Context, uint) ([]settings.RecoveryTargetRootSummary, error)
+}
+
+type recoveryTargetRootTransitionOwner interface {
+	TransitionCurrentWithRestore(context.Context, func() error, func() error) error
+}
+
+type managedRecoveryTargetRootFacade struct {
+	service recoveryTargetRootMutationService
+	runtime recoveryTargetRootTransitionOwner
+}
+
+func (facade *managedRecoveryTargetRootFacade) Register(
+	ctx context.Context,
+	request recovery.TargetRootRegistrationRequest,
+) (settings.RecoveryTargetRootSummary, error) {
+	if facade == nil || facade.service == nil || facade.runtime == nil {
+		return settings.RecoveryTargetRootSummary{}, recovery.ErrRecoveryTargetUnavailable
+	}
+	if err := facade.service.ValidateRegistration(request); err != nil {
+		return settings.RecoveryTargetRootSummary{}, err
+	}
+	var result settings.RecoveryTargetRootSummary
+	var rollback recovery.TargetRootMutationRollback
+	mutationApplied := false
+	err := facade.runtime.TransitionCurrentWithRestore(ctx, func() error {
+		var mutationErr error
+		result, rollback, mutationErr = facade.service.RegisterMutation(ctx, request)
+		mutationApplied = mutationErr == nil
+		return mutationErr
+	}, func() error {
+		if !mutationApplied {
+			return nil
+		}
+		return facade.restoreMutation(rollback)
+	})
+	if err != nil {
+		return settings.RecoveryTargetRootSummary{}, err
+	}
+	return result, nil
+}
+
+func (facade *managedRecoveryTargetRootFacade) Delete(ctx context.Context, nodeID uint, rootID string) error {
+	if facade == nil || facade.service == nil || facade.runtime == nil {
+		return recovery.ErrRecoveryTargetUnavailable
+	}
+	if err := facade.service.ValidateDelete(nodeID, rootID); err != nil {
+		return err
+	}
+	var rollback recovery.TargetRootMutationRollback
+	mutationApplied := false
+	return facade.runtime.TransitionCurrentWithRestore(ctx, func() error {
+		var mutationErr error
+		rollback, mutationErr = facade.service.DeleteMutation(ctx, nodeID, rootID)
+		mutationApplied = mutationErr == nil
+		return mutationErr
+	}, func() error {
+		if !mutationApplied {
+			return nil
+		}
+		return facade.restoreMutation(rollback)
+	})
+}
+
+func (facade *managedRecoveryTargetRootFacade) restoreMutation(rollback recovery.TargetRootMutationRollback) error {
+	restoreCtx, cancel := context.WithTimeout(context.Background(), recoveryRuntimeTransitionTimeout)
+	defer cancel()
+	return facade.service.RestoreMutation(restoreCtx, rollback)
+}
+
+func (facade *managedRecoveryTargetRootFacade) List(
+	ctx context.Context,
+	nodeID uint,
+) ([]settings.RecoveryTargetRootSummary, error) {
+	if facade == nil || facade.service == nil {
+		return nil, recovery.ErrRecoveryTargetUnavailable
+	}
+	return facade.service.List(ctx, nodeID)
+}
+
+var _ RecoveryTargetRootAuthority = (*managedRecoveryTargetRootFacade)(nil)
 
 func New(dependencies Dependencies) (*Runtime, error) {
 	if dependencies.DB == nil || dependencies.Settings == nil || dependencies.SessionRevocations == nil {
@@ -217,6 +375,17 @@ func New(dependencies Dependencies) (*Runtime, error) {
 			}
 		} else {
 			catalogMetrics = catalog.NoopMetrics{}
+		}
+	}
+	recoveryMetrics := dependencies.RecoveryMetrics
+	if recoveryMetrics == nil {
+		if dependencies.Metrics == nil {
+			recoveryMetrics, err = recovery.NewPrometheusMetrics(prometheus.DefaultRegisterer)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			recoveryMetrics = recovery.NoopMetrics{}
 		}
 	}
 	keyring := backupasset.NewKeyring(dependencies.DB, dependencies.Now)
@@ -450,10 +619,16 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	recoverySourceNamespace, err := recovery.NewRecoverySourceNamespaceAuthority(dependencies.DB, dependencies.Now)
+	if err != nil {
+		return nil, err
+	}
+	recoverySourceNamespaceAdapter := &managedRecoverySourceNamespaceAdapter{authority: recoverySourceNamespace}
 	repositoryService, err := repository.NewService(repository.Dependencies{
 		DB: dependencies.DB, Foundation: foundation, Registry: registry, Keyring: keyring, Now: dependencies.Now,
 		Audit: auditSink, Admission: admission, History: history, Metrics: metricsSink, Publication: publicationService,
 		CatalogOwnership: catalogOwnership, CatalogSummary: catalogService,
+		RecoverySourceNamespace: recoverySourceNamespaceAdapter,
 	})
 	if err != nil {
 		return nil, err
@@ -543,13 +718,17 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	recoveryPublication := newManagedRecoveryPublication()
+	recoveryAuthorization := &managedRecoveryAuthorizationFacade{publication: recoveryPublication}
+	recoveryResults := &managedRecoveryResultFacade{publication: recoveryPublication}
 	contentBroker, err := content.NewBroker(content.BrokerDependencies{
 		DB: dependencies.DB, Now: dependencies.Now,
 		FeatureEnabled: func(context.Context) (bool, error) {
 			enabled, enabledErr := foundation.FeatureEnabled()
 			return enabled && contentReady.Load(), enabledErr
 		},
-		Authorize: contentAuthorizer, Session: contentSession, Lease: lease, Source: repositoryService,
+		Authorize: contentAuthorizer, RecoveryAuthorize: recoveryResults,
+		Session: contentSession, Lease: lease, Source: repositoryService, RecoverySource: recoveryResults,
 		Derived: derivedResolver,
 		SecurityPolicyRevision: func(context.Context) (string, error) {
 			return processingSecurityPolicyRevision, nil
@@ -590,6 +769,108 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		broker: contentBroker, reconciler: contentReconciler, ready: contentReady, now: dependencies.Now,
 		metrics: contentMetrics,
 	}
+	receiptReaper, err := recovery.NewAuthorizationReceiptReaper(dependencies.DB)
+	if err != nil {
+		return nil, err
+	}
+	receiptOwner, err := NewRecoveryAuthorizationReceiptOwner(RecoveryAuthorizationReceiptOwnerDependencies{
+		Foundation: foundation,
+		Reaper:     receiptReaper,
+	})
+	if err != nil {
+		return nil, err
+	}
+	downgradeInspector, err := newManagedRecoveryDowngradeDBInspector(dependencies.DB)
+	if err != nil {
+		return nil, err
+	}
+	nodeWriteCoordinator, err := NewNodeWriteCoordinator(dependencies.DB)
+	if err != nil {
+		return nil, err
+	}
+	nodeRevisions := newManagedRecoveryNodeRevisionSource(dependencies.Now)
+	targetRootProbe, err := recovery.NewRecoveryTargetRootRegistrationProbe(
+		recovery.RecoveryTargetRootRegistrationProbeDependencies{
+			DB: dependencies.DB, Revisions: nodeRevisions, Now: dependencies.Now,
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build Recovery target-root registration probe: %w", err)
+	}
+	targetRootAuthority, err := recovery.NewTargetRootAuthorityService(
+		recovery.TargetRootAuthorityServiceDependencies{
+			DB: dependencies.DB, Registry: dependencies.Settings,
+			Probe: targetRootProbe, Now: dependencies.Now,
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build Recovery target-root authority: %w", err)
+	}
+	cleanupWorkerID, err := backupasset.NewOpaqueID()
+	if err != nil {
+		return nil, err
+	}
+	recoveryManager, err := newManagedRecoveryRuntime(managedRecoveryRuntimeDependencies{
+		ReceiptOwner: receiptOwner, DowngradeInspector: downgradeInspector, Publication: recoveryPublication,
+		Build: func(ctx context.Context, config backupasset.RecoveryConfig) (*managedRecoveryGraph, error) {
+			if config.Enabled && !processingManager.recoverySecurityReady() {
+				return nil, fmt.Errorf("%w: enabled Recovery requires ready Processing security evidence", backupasset.ErrInvalidState)
+			}
+			sourceEligibility, eligibilityErr := newManagedRecoveryEligibilitySourceAdapter(
+				repositoryService, repositoryService,
+			)
+			if eligibilityErr != nil {
+				return nil, fmt.Errorf("build Recovery source eligibility authority: %w", eligibilityErr)
+			}
+			securityEligibility, eligibilityErr := newManagedRecoveryEligibilitySecurityAdapter(processingManager)
+			if eligibilityErr != nil {
+				return nil, fmt.Errorf("build Recovery security eligibility authority: %w", eligibilityErr)
+			}
+			targetRootEligibility, eligibilityErr := recovery.NewRecoveryEligibilityTargetRootAuthority(
+				recovery.RecoveryEligibilityTargetRootAuthorityDependencies{
+					Registry: dependencies.Settings, Revisions: nodeRevisions,
+				},
+			)
+			if eligibilityErr != nil {
+				return nil, fmt.Errorf("build Recovery target-root eligibility authority: %w", eligibilityErr)
+			}
+			targetEligibility, eligibilityErr := recovery.NewRecoveryEligibilityTargetObservation(
+				recovery.RecoveryEligibilityTargetObservationDependencies{
+					DB: dependencies.DB, Revisions: nodeRevisions, Now: dependencies.Now,
+				},
+			)
+			if eligibilityErr != nil {
+				return nil, fmt.Errorf("build Recovery target eligibility authority: %w", eligibilityErr)
+			}
+			eligibility, eligibilityErr := newManagedRecoveryEligibilityAuthorities(
+				recovery.RecoveryEligibilityAuthorityDependencies{
+					DB: dependencies.DB, Source: sourceEligibility, Security: securityEligibility,
+					TargetRoot: targetRootEligibility, TargetObservation: targetEligibility, Now: dependencies.Now,
+				},
+			)
+			if eligibilityErr != nil {
+				return nil, fmt.Errorf("build Recovery eligibility authority: %w", eligibilityErr)
+			}
+			return buildManagedRecoveryGraph(ctx, config, managedRecoveryGraphBuildDependencies{
+				DB: dependencies.DB, Settings: dependencies.Settings, Now: dependencies.Now,
+				Metrics:         recoveryMetrics,
+				CleanupWorkerID: "recovery-cleanup-" + cleanupWorkerID,
+				SourceLeases:    lease, NodeAdmission: nodeWriteCoordinator,
+				NodeRevisions:        nodeRevisions,
+				PreflightEvidence:    eligibility.preflight,
+				AuthorityRevalidator: eligibility.live,
+				WorkspaceKeys:        keyring, Audit: auditWriter, ContentLifecycle: contentBroker,
+				SourceResolver:          repositoryService,
+				Dialer:                  sshutil.NewNodeDialer(dependencies.DB),
+				ReconciliationRevisions: eligibility.reconciliation,
+				ReconciliationFindings:  newManagedRecoveryReconciliationFindingSink(dependencies.AlertDispatcher),
+			})
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	targetRootFacade := &managedRecoveryTargetRootFacade{service: targetRootAuthority, runtime: recoveryManager}
 	catalogIndexer, err := catalog.NewIndexer(catalog.IndexerDependencies{
 		DB: dependencies.DB, Factory: repositoryService, Lease: lease, IdentityKeys: keyring, Now: dependencies.Now,
 		Config: catalog.IndexerConfig{
@@ -738,7 +1019,8 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		return nil, err
 	}
 	return &Runtime{
-		foundation: foundation, repository: repositoryService, publication: publicationService,
+		foundation: foundation, settings: dependencies.Settings,
+		repository: repositoryService, publication: publicationService,
 		resticStrategy: resticStrategy, rsyncStrategy: rsyncStrategy, rcloneStrategy: rcloneStrategy,
 		admission: admission, worker: worker, healthWorker: healthWorker,
 		catalogService: catalogService, catalogIndexer: catalogIndexer, catalogWorker: catalogWorker, catalogAudit: auditSink,
@@ -747,7 +1029,12 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		contentBroker: contentBroker, contentService: contentService, exportDelivery: exportDeliveryFacade,
 		contentBudget: contentBudget, contentAudit: contentAudit,
 		contentReconciler: contentReconciler, contentReady: contentReady, contentManager: contentManager,
-		exportManager: exportManager, processingManager: processingManager, archiveMemberService: archiveMemberFacade,
+		exportManager: exportManager, recoveryManager: recoveryManager,
+		recoverySourceNamespace: recoverySourceNamespace,
+		recoveryTargetRoots:     targetRootFacade,
+		nodeWriteCoordinator:    nodeWriteCoordinator,
+		recoveryAuthorization:   recoveryAuthorization, recoveryResults: recoveryResults,
+		processingManager: processingManager, archiveMemberService: archiveMemberFacade,
 		transitioner: admission,
 		metrics:      metricsSink,
 	}, nil
@@ -1160,6 +1447,36 @@ func (runtime *Runtime) ContentService() *contentDeliveryMux {
 	}
 	return runtime.contentService
 }
+func (runtime *Runtime) NodeWriteCoordinator() *NodeWriteCoordinator {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.nodeWriteCoordinator
+}
+func (runtime *Runtime) RecoveryAuthorization() *managedRecoveryAuthorizationFacade {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.recoveryAuthorization
+}
+func (runtime *Runtime) RecoveryTargetRoots() RecoveryTargetRootAuthority {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.recoveryTargetRoots
+}
+func (runtime *Runtime) RecoveryResults() *managedRecoveryResultFacade {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.recoveryResults
+}
+func (runtime *Runtime) RecoveryDowngradeReadiness(ctx context.Context) (RecoveryDowngradeReadiness, error) {
+	if runtime == nil || runtime.recoveryManager == nil {
+		return RecoveryDowngradeReadiness{}, fmt.Errorf("%w: Recovery downgrade readiness unavailable", backupasset.ErrInvalidState)
+	}
+	return runtime.recoveryManager.DowngradeReadiness(ctx)
+}
 func (runtime *Runtime) ExportService() *managedExportServiceFacade {
 	if runtime == nil || runtime.exportManager == nil {
 		return nil
@@ -1396,7 +1713,7 @@ func (runtime *Runtime) TransitionFeature(ctx context.Context, enabled bool, per
 
 func (runtime *Runtime) TransitionBackupAssetSettings(
 	ctx context.Context,
-	_ map[string]string,
+	current map[string]string,
 	overlay map[string]string,
 	effective map[string]string,
 	config backupasset.ExportConfig,
@@ -1425,7 +1742,39 @@ func (runtime *Runtime) TransitionBackupAssetSettings(
 				)
 			}
 		}
-		return runtime.exportManager.TransitionSettings(ctx, enabled, config, transitionPersist)
+		transitionRecovery := transitionPersist
+		if runtime.recoveryManager != nil {
+			recoveryConfig, recoveryErr := backupasset.RecoveryConfigFromValues(effective)
+			if recoveryErr != nil {
+				return recoveryErr
+			}
+			restoreValues := make(map[string]string)
+			for key := range overlay {
+				if !strings.HasPrefix(key, "backup_assets.recovery.") {
+					continue
+				}
+				value, exists := current[key]
+				if !exists {
+					return fmt.Errorf("%w: prior Recovery setting unavailable", backupasset.ErrInvalidState)
+				}
+				restoreValues[key] = value
+			}
+			restoreRecovery := func() error {
+				if len(restoreValues) == 0 {
+					return nil
+				}
+				if runtime.settings == nil {
+					return fmt.Errorf("%w: Recovery settings restoration unavailable", backupasset.ErrInvalidState)
+				}
+				return runtime.settings.UpdateMany(restoreValues)
+			}
+			transitionRecovery = func() error {
+				return runtime.recoveryManager.TransitionSettingsWithRestore(
+					ctx, recoveryConfig, transitionPersist, restoreRecovery,
+				)
+			}
+		}
+		return runtime.exportManager.TransitionSettings(ctx, enabled, config, transitionRecovery)
 	}
 	if _, changesGlobalEnabled := overlay["backup_assets.enabled"]; changesGlobalEnabled {
 		return runtime.TransitionFeature(ctx, enabled, transitionExport)
@@ -1440,13 +1789,17 @@ func (runtime *Runtime) PrepareApplicationDowngrade(ctx context.Context, callbac
 	runtime.contentManager.SetReady(false)
 	if runtime.exportManager != nil {
 		return runtime.exportManager.PrepareSchemaDown(ctx, func() error {
-			return runtime.contentManager.PrepareSchemaDown(ctx, func() error {
-				return runtime.transitioner.PrepareApplicationDowngrade(ctx, callback)
+			return runtime.prepareRecoverySchemaDown(ctx, func() error {
+				return runtime.contentManager.PrepareSchemaDown(ctx, func() error {
+					return runtime.transitioner.PrepareApplicationDowngrade(ctx, callback)
+				})
 			})
 		})
 	}
-	return runtime.contentManager.PrepareSchemaDown(ctx, func() error {
-		return runtime.transitioner.PrepareApplicationDowngrade(ctx, callback)
+	return runtime.prepareRecoverySchemaDown(ctx, func() error {
+		return runtime.contentManager.PrepareSchemaDown(ctx, func() error {
+			return runtime.transitioner.PrepareApplicationDowngrade(ctx, callback)
+		})
 	})
 }
 
@@ -1457,14 +1810,25 @@ func (runtime *Runtime) PrepareSchemaDown(ctx context.Context, callback func() e
 	runtime.contentManager.SetReady(false)
 	if runtime.exportManager != nil {
 		return runtime.exportManager.PrepareSchemaDown(ctx, func() error {
-			return runtime.contentManager.PrepareSchemaDown(ctx, func() error {
-				return runtime.transitioner.PrepareSchemaDown(ctx, callback)
+			return runtime.prepareRecoverySchemaDown(ctx, func() error {
+				return runtime.contentManager.PrepareSchemaDown(ctx, func() error {
+					return runtime.transitioner.PrepareSchemaDown(ctx, callback)
+				})
 			})
 		})
 	}
-	return runtime.contentManager.PrepareSchemaDown(ctx, func() error {
-		return runtime.transitioner.PrepareSchemaDown(ctx, callback)
+	return runtime.prepareRecoverySchemaDown(ctx, func() error {
+		return runtime.contentManager.PrepareSchemaDown(ctx, func() error {
+			return runtime.transitioner.PrepareSchemaDown(ctx, callback)
+		})
 	})
+}
+
+func (runtime *Runtime) prepareRecoverySchemaDown(ctx context.Context, callback func() error) error {
+	if runtime.recoveryManager != nil {
+		return runtime.recoveryManager.PrepareSchemaDown(ctx, callback)
+	}
+	return callback()
 }
 
 func (runtime *Runtime) SetCommitObserver(observer publication.CommitObserver) error {
@@ -1567,6 +1931,15 @@ func (runtime *Runtime) StartupPass(ctx context.Context) error {
 	if runtime.exportManager != nil {
 		if err := runtime.exportManager.Startup(ctx); err != nil {
 			logger.Module("backup_asset_export").Warn().Str("stage", "startup").Msg("备份资产导出运行时不可用，核心服务继续启动")
+		}
+	}
+	if runtime.recoveryManager != nil {
+		config, err := runtime.foundation.RecoveryConfig()
+		if err != nil {
+			return err
+		}
+		if err := runtime.recoveryManager.StartupWithConfig(ctx, config); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -1677,6 +2050,9 @@ func (runtime *Runtime) StopAccepting() {
 	if runtime == nil {
 		return
 	}
+	if runtime.recoveryManager != nil {
+		runtime.recoveryManager.StopAccepting()
+	}
 	if runtime.exportManager != nil {
 		runtime.exportManager.StopAccepting()
 	}
@@ -1701,6 +2077,13 @@ func (runtime *Runtime) Run(ctx context.Context) {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var health sync.WaitGroup
+	if runtime.recoveryManager != nil {
+		health.Add(1)
+		go func() {
+			defer health.Done()
+			runtime.recoveryManager.Run(runCtx)
+		}()
+	}
 	if runtime.exportManager != nil {
 		health.Add(1)
 		go func() {
@@ -1761,6 +2144,11 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	}
 	var shutdownErrors []error
 	runtime.StopAccepting()
+	if runtime.recoveryManager != nil {
+		if err := runtime.recoveryManager.Shutdown(ctx); err != nil {
+			shutdownErrors = append(shutdownErrors, err)
+		}
+	}
 	if runtime.exportManager != nil {
 		if err := runtime.exportManager.Shutdown(ctx); err != nil {
 			shutdownErrors = append(shutdownErrors, err)

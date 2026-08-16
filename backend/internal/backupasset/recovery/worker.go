@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -32,6 +33,9 @@ var (
 )
 
 const (
+	recoveryWorkerMaxLeaseRenewMargin = 5 * time.Minute
+	recoveryWorkerMaxExecutionTimeout = 24 * time.Hour
+
 	recoveryWorkspacePlaintextTTL                       = 24 * time.Hour
 	recoveryUnresolvedProjectionTimeout                 = 5 * time.Second
 	recoveryWorkspaceLocatorDirectory                   = "jobs"
@@ -49,6 +53,34 @@ const (
 	recoverySchedulerCASAttempts                        = 8
 )
 
+// WorkerPolicy is the immutable timing authority shared by job creation and
+// the managed claim owner.
+type WorkerPolicy struct {
+	LeaseRenewMargin time.Duration
+	ExecutionTimeout time.Duration
+}
+
+func (policy WorkerPolicy) valid() bool {
+	return policy.LeaseRenewMargin > 0 && policy.LeaseRenewMargin <= recoveryWorkerMaxLeaseRenewMargin &&
+		policy.ExecutionTimeout > 0 && policy.ExecutionTimeout <= recoveryWorkerMaxExecutionTimeout
+}
+
+// Validate rejects policy products that were not produced by the bounded
+// Recovery settings registry.
+func (policy WorkerPolicy) Validate() error {
+	if !policy.valid() {
+		return ErrInvalidRecoveryWorker
+	}
+	return nil
+}
+
+// ClaimSchedulerRowID and TakeoverSchedulerRowID expose the immutable
+// scheduler identifiers to runtime composition without duplicating values
+// outside the Recovery package.
+func ClaimSchedulerRowID() string { return recoveryClaimSchedulerRowID }
+
+func TakeoverSchedulerRowID() string { return recoveryTakeoverSchedulerRowID }
+
 type RecoverySourceLeaseCoordinator interface {
 	RenewTx(context.Context, *gorm.DB, backupasset.LeaseFence) (backupasset.Lease, error)
 	TakeoverTx(context.Context, *gorm.DB, backupasset.TakeoverLeaseRequest) (backupasset.Lease, error)
@@ -64,6 +96,7 @@ type RecoveryWorkspaceKeySource interface {
 
 type WorkerCoordinatorDependencies struct {
 	DB              *gorm.DB
+	Metrics         Metrics
 	SourceLeases    RecoverySourceLeaseCoordinator
 	LiveRevalidator RecoveryAuthorityRevalidator
 	WorkspaceKeys   RecoveryWorkspaceKeySource
@@ -76,6 +109,7 @@ type WorkerCoordinatorDependencies struct {
 
 type WorkerCoordinator struct {
 	db              *gorm.DB
+	metrics         Metrics
 	sourceValidator *SourceValidator
 	sourceLeases    RecoverySourceLeaseCoordinator
 	liveRevalidator RecoveryAuthorityRevalidator
@@ -85,6 +119,126 @@ type WorkerCoordinator struct {
 	now             func() time.Time
 	leaseTTL        time.Duration
 	scanLimit       int
+	declaredMu      sync.Mutex
+	declaredWrites  map[string]*declaredWriteContext
+}
+
+type declaredWriteContext struct {
+	permit  TargetWritePermit
+	object  TargetObjectRef
+	entry   provider.RestoreEntry
+	target  provider.RsyncBoundRemoteTarget
+	result  TargetWriteResult
+	claimed bool
+	ready   bool
+}
+
+type observedRecoveryAuthority struct {
+	binding     RecoveryAuthorityBinding
+	observation RecoveryAuthorityObservation
+}
+
+func (coordinator *WorkerCoordinator) observeRecoveryAuthority(
+	ctx context.Context,
+	plan model.BackupAssetRecoveryPlan,
+	preflight model.BackupAssetRecoveryPreflight,
+) (observedRecoveryAuthority, error) {
+	if coordinator == nil || coordinator.liveRevalidator == nil {
+		return observedRecoveryAuthority{}, ErrInvalidRecoveryWorker
+	}
+	providerKind, err := recoveryAuthorityProvider(ctx, coordinator.db, plan)
+	if err != nil {
+		return observedRecoveryAuthority{}, err
+	}
+	binding := recoveryAuthorityBinding(AuthorizationReceiptExecute, providerKind, plan, preflight)
+	observation, err := coordinator.liveRevalidator.ObserveRecoveryAuthority(ctx, binding)
+	if err != nil {
+		return observedRecoveryAuthority{}, err
+	}
+	return observedRecoveryAuthority{binding: binding, observation: observation}, nil
+}
+
+// observeRecoveryAuthorityForJob loads only the closed durable binding needed
+// by the external observation. The observation itself therefore always runs
+// before the later caller-owned mutation transaction is opened.
+func (coordinator *WorkerCoordinator) observeRecoveryAuthorityForJob(
+	ctx context.Context,
+	jobID string,
+) (observedRecoveryAuthority, error) {
+	if coordinator == nil || coordinator.db == nil || !validOpaqueID(jobID) {
+		return observedRecoveryAuthority{}, ErrInvalidRecoveryWorker
+	}
+	var reference struct {
+		PlanID      string `gorm:"column:plan_id"`
+		PreflightID string `gorm:"column:preflight_id"`
+	}
+	loaded := coordinator.db.WithContext(ctx).Table((model.BackupAssetRecoveryJob{}).TableName()).
+		Select("plan_id, preflight_id").Where("id = ?", jobID).Limit(1).Find(&reference)
+	if loaded.Error != nil {
+		return observedRecoveryAuthority{}, loaded.Error
+	}
+	if loaded.RowsAffected != 1 || !validOpaqueID(reference.PlanID) || !validOpaqueID(reference.PreflightID) {
+		return observedRecoveryAuthority{}, ErrRecoveryWorkerFenceLost
+	}
+	var plan model.BackupAssetRecoveryPlan
+	loaded = coordinator.db.WithContext(ctx).Where("id = ?", reference.PlanID).Limit(1).Find(&plan)
+	if loaded.Error != nil {
+		return observedRecoveryAuthority{}, loaded.Error
+	}
+	if loaded.RowsAffected != 1 || PlanState(plan.State) != PlanStateExecuted {
+		return observedRecoveryAuthority{}, ErrRecoveryWorkerFenceLost
+	}
+	var preflight model.BackupAssetRecoveryPreflight
+	loaded = coordinator.db.WithContext(ctx).
+		Where("id = ? AND plan_id = ?", reference.PreflightID, plan.ID).Limit(1).Find(&preflight)
+	if loaded.Error != nil {
+		return observedRecoveryAuthority{}, loaded.Error
+	}
+	if loaded.RowsAffected != 1 {
+		return observedRecoveryAuthority{}, ErrRecoveryWorkerFenceLost
+	}
+	return coordinator.observeRecoveryAuthority(ctx, plan, preflight)
+}
+
+func (coordinator *WorkerCoordinator) revalidateObservedRecoveryAuthorityTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	plan model.BackupAssetRecoveryPlan,
+	preflight model.BackupAssetRecoveryPreflight,
+	observed observedRecoveryAuthority,
+) error {
+	if coordinator == nil || coordinator.liveRevalidator == nil || tx == nil {
+		return ErrInvalidRecoveryWorker
+	}
+	if !validRecoveryProvider(observed.binding.Provider) {
+		return ErrRecoveryTargetChanged
+	}
+	binding := recoveryAuthorityBinding(
+		AuthorizationReceiptExecute, observed.binding.Provider, plan, preflight,
+	)
+	if binding != observed.binding {
+		return ErrRecoveryTargetChanged
+	}
+	return coordinator.liveRevalidator.RevalidateRecoveryAuthorityTx(
+		ctx, tx, binding, observed.observation,
+	)
+}
+
+// withTransactionDB creates the narrow coordinator view used by helpers that
+// must stay inside a caller-owned transaction. Runtime declaration state is
+// intentionally excluded because copying its mutex or sharing its map under a
+// different lock would break the Provider writer boundary.
+func (coordinator *WorkerCoordinator) withTransactionDB(tx *gorm.DB) *WorkerCoordinator {
+	if coordinator == nil || tx == nil {
+		return nil
+	}
+	return &WorkerCoordinator{
+		db: tx.Session(&gorm.Session{DisableNestedTransaction: true}), metrics: coordinator.metrics,
+		sourceValidator: coordinator.sourceValidator, sourceLeases: coordinator.sourceLeases,
+		liveRevalidator: coordinator.liveRevalidator, workspaceKeys: coordinator.workspaceKeys,
+		target: coordinator.target, sourceResolver: coordinator.sourceResolver,
+		now: coordinator.now, leaseTTL: coordinator.leaseTTL, scanLimit: coordinator.scanLimit,
+	}
 }
 
 type RecoveryWorkerClaim struct {
@@ -96,6 +250,7 @@ type RecoveryWorkerClaim struct {
 	NodeFence          uint64
 	TransitionRevision uint64
 	LeaseExpiresAt     time.Time
+	AbsoluteDeadline   time.Time
 	SourceFence        backupasset.LeaseFence
 }
 
@@ -127,12 +282,159 @@ func NewWorkerCoordinator(dependencies WorkerCoordinatorDependencies) (*WorkerCo
 	if dependencies.Now == nil {
 		dependencies.Now = func() time.Time { return time.Now().UTC() }
 	}
+	if dependencies.Metrics == nil {
+		dependencies.Metrics = NoopMetrics{}
+	}
 	return &WorkerCoordinator{
-		db: dependencies.DB, sourceValidator: sourceValidator, sourceLeases: dependencies.SourceLeases,
+		db: dependencies.DB, metrics: dependencies.Metrics,
+		sourceValidator: sourceValidator, sourceLeases: dependencies.SourceLeases,
 		liveRevalidator: dependencies.LiveRevalidator, workspaceKeys: dependencies.WorkspaceKeys,
 		target: dependencies.Target, sourceResolver: dependencies.SourceResolver,
 		now: dependencies.Now, leaseTTL: dependencies.LeaseTTL, scanLimit: dependencies.ScanLimit,
+		declaredWrites: make(map[string]*declaredWriteContext),
 	}, nil
+}
+
+// ExecuteClaimWithRsyncTargetWriter runs the normal fenced Recovery lifecycle
+// while routing regular-file mutation through the injected Provider writer.
+// Recovery still mints and validates the private item permit; the Provider only
+// receives the public projection and the pinned declared stream.
+func (coordinator *WorkerCoordinator) ExecuteClaimWithRsyncTargetWriter(
+	ctx context.Context,
+	claim RecoveryWorkerClaim,
+	source provider.RsyncRestoreSource,
+	writer provider.RsyncTargetWriter,
+	target provider.RsyncBoundRemoteTarget,
+) error {
+	if writer == nil {
+		return ErrInvalidRecoveryWorker
+	}
+	return coordinator.executeClaim(ctx, claim, source, "", writer, target)
+}
+
+// RsyncTargetWriter returns the only Provider-facing adapter that can consume
+// a declaration registered by this coordinator. The adapter carries no target
+// authority of its own; the private item permit remains inside Recovery.
+func (coordinator *WorkerCoordinator) RsyncTargetWriter() provider.RsyncTargetWriter {
+	return recoveryRsyncTargetWriter{coordinator: coordinator}
+}
+
+type recoveryRsyncTargetWriter struct {
+	coordinator *WorkerCoordinator
+}
+
+func (writer recoveryRsyncTargetWriter) WriteDeclaredRegular(
+	ctx context.Context,
+	call provider.RsyncTargetWriteCall,
+) error {
+	if writer.coordinator == nil {
+		return ErrInvalidRecoveryWorker
+	}
+	return writer.coordinator.forwardDeclaredRegular(ctx, call)
+}
+
+func (coordinator *WorkerCoordinator) forwardDeclaredRegular(
+	ctx context.Context,
+	call provider.RsyncTargetWriteCall,
+) error {
+	if coordinator == nil || coordinator.target == nil || call.Source == nil {
+		return ErrInvalidRecoveryWorker
+	}
+	claim := recoveryWorkerClaimFromTargetPermit(call.Permit)
+	key := declaredWriteKey(claim, call.Entry.AssetRef.EntryID)
+	coordinator.declaredMu.Lock()
+	declaration, ok := coordinator.declaredWrites[key]
+	if !ok || declaration == nil || declaration.claimed || declaration.ready ||
+		targetMutationPermitProjection(declaration.permit, call.Target.TargetBindingDigest) != call.Permit ||
+		declaration.entry != call.Entry || !sameRsyncTargetBinding(declaration.target, call.Target) {
+		coordinator.declaredMu.Unlock()
+		return ErrRecoveryWorkerFenceLost
+	}
+	declaration.claimed = true
+	coordinator.declaredMu.Unlock()
+
+	result, err := coordinator.target.WriteAtomic(ctx, declaration.permit, TargetWriteAtomicRequest{
+		Object: declaration.object, ExpectedBytes: declaration.entry.ExpectedSize,
+		ExpectedDigest: declaration.entry.ExpectedDigest, Content: call.Source,
+	})
+	if err != nil {
+		coordinator.discardDeclaredRegular(claim, call.Entry.AssetRef.EntryID)
+		return err
+	}
+	coordinator.declaredMu.Lock()
+	declaration, ok = coordinator.declaredWrites[key]
+	if ok && declaration != nil {
+		declaration.result = result
+		declaration.ready = true
+	}
+	coordinator.declaredMu.Unlock()
+	return nil
+}
+
+func (coordinator *WorkerCoordinator) discardDeclaredRegular(claim RecoveryWorkerClaim, entryID string) {
+	if coordinator == nil {
+		return
+	}
+	coordinator.declaredMu.Lock()
+	delete(coordinator.declaredWrites, declaredWriteKey(claim, entryID))
+	coordinator.declaredMu.Unlock()
+}
+
+func targetMutationPermitProjection(permit TargetWritePermit, targetBindingDigest string) provider.TargetMutationPermit {
+	var credentialRevision string
+	if permit.permit.proof != nil {
+		credentialRevision = permit.permit.proof.sessionBinding.CredentialRevision
+	}
+	return provider.TargetMutationPermit{
+		TargetBindingDigest:    targetBindingDigest,
+		UseLatchID:             provider.RestoreSchemaUseLatchID,
+		JobID:                  permit.permit.JobID,
+		AttemptID:              permit.permit.AttemptID,
+		NodeLeaseID:            permit.permit.NodeLeaseID,
+		AttemptFence:           permit.permit.AttemptFence,
+		NodeFence:              permit.permit.NodeFence,
+		ExpectedTargetRevision: permit.permit.ExpectedTargetRevision,
+		Session: provider.TargetSession{
+			ID: permit.permit.AttemptID, Purpose: provider.TargetPurposeWrite,
+			CredentialRevision: credentialRevision, ExpiresAt: permit.permit.ExpiresAt,
+		},
+	}
+}
+
+func (coordinator *WorkerCoordinator) takeDeclaredRegularResult(
+	claim RecoveryWorkerClaim,
+	entry provider.RestoreEntry,
+) (TargetWriteResult, bool) {
+	key := declaredWriteKey(claim, entry.AssetRef.EntryID)
+	coordinator.declaredMu.Lock()
+	declaration, ok := coordinator.declaredWrites[key]
+	if ok {
+		delete(coordinator.declaredWrites, key)
+	}
+	coordinator.declaredMu.Unlock()
+	if !ok || declaration == nil || !declaration.ready {
+		return TargetWriteResult{}, false
+	}
+	return declaration.result, true
+}
+
+func declaredWriteKey(claim RecoveryWorkerClaim, entryID string) string {
+	return claim.JobID + "\x00" + claim.AttemptID + "\x00" + claim.NodeLeaseID + "\x00" +
+		strconv.FormatUint(claim.AttemptFence, 10) + "\x00" + strconv.FormatUint(claim.NodeFence, 10) + "\x00" + entryID
+}
+
+func recoveryWorkerClaimFromTargetPermit(permit provider.TargetMutationPermit) RecoveryWorkerClaim {
+	return RecoveryWorkerClaim{
+		JobID: permit.JobID, AttemptID: permit.AttemptID, NodeLeaseID: permit.NodeLeaseID,
+		AttemptFence: permit.AttemptFence, NodeFence: permit.NodeFence,
+	}
+}
+
+func sameRsyncTargetBinding(left, right provider.RsyncBoundRemoteTarget) bool {
+	return left.NodeID == right.NodeID && left.RootID == right.RootID &&
+		left.TargetBindingDigest == right.TargetBindingDigest &&
+		left.TargetPathDigest == right.TargetPathDigest && left.RootRevision == right.RootRevision &&
+		left.TargetRevision == right.TargetRevision
 }
 
 type recoveryCleanupKeyCandidate struct {
@@ -359,6 +661,7 @@ func (coordinator *WorkerCoordinator) ClaimNext(
 		}
 		claim, err := coordinator.claimJob(ctx, candidate.JobID, workerID)
 		if err == nil {
+			coordinator.observeJobState(ctx, claim.JobID, JobStateRunning)
 			return claim, true, nil
 		}
 		if errors.Is(err, errRecoveryWorkerClaimConflict) || errors.Is(err, ErrRecoveryWorkerFenceLost) {
@@ -664,6 +967,10 @@ func (coordinator *WorkerCoordinator) claimJob(
 		if err != nil {
 			return recoveryWorkerSourceError(err)
 		}
+		if !renewed.AbsoluteDeadline.UTC().Equal(source.AbsoluteDeadline.UTC()) ||
+			renewed.LeaseExpiresAt.UTC().After(source.AbsoluteDeadline.UTC()) {
+			return ErrRecoveryWorkerFenceLost
+		}
 		nextExpiry := now.Add(coordinator.leaseTTL)
 		if renewed.LeaseExpiresAt.Before(nextExpiry) {
 			nextExpiry = renewed.LeaseExpiresAt.UTC()
@@ -709,7 +1016,7 @@ func (coordinator *WorkerCoordinator) claimJob(
 		claim = RecoveryWorkerClaim{
 			JobID: job.ID, AttemptID: attempt.ID, NodeLeaseID: node.ID, WorkerID: workerID,
 			AttemptFence: attempt.Fence, NodeFence: node.Fence, TransitionRevision: nextRevision,
-			LeaseExpiresAt: nextExpiry, SourceFence: sourceFence,
+			LeaseExpiresAt: nextExpiry, AbsoluteDeadline: source.AbsoluteDeadline.UTC(), SourceFence: sourceFence,
 		}
 		return nil
 	})
@@ -747,6 +1054,7 @@ func (coordinator *WorkerCoordinator) TakeoverExpired(
 		}
 		claim, err := coordinator.takeoverJob(ctx, candidate.JobID, candidate.KeyID, workerID)
 		if err == nil {
+			coordinator.observeJobState(ctx, claim.JobID, JobStateRunning)
 			return claim, true, nil
 		}
 		if errors.Is(err, errRecoveryWorkerClaimConflict) || errors.Is(err, ErrRecoveryWorkerFenceLost) {
@@ -794,6 +1102,10 @@ func (coordinator *WorkerCoordinator) takeoverJob(
 		})
 		if err != nil {
 			return recoveryWorkerSourceError(err)
+		}
+		if !renewed.AbsoluteDeadline.UTC().Equal(source.AbsoluteDeadline.UTC()) ||
+			renewed.LeaseExpiresAt.UTC().After(source.AbsoluteDeadline.UTC()) {
+			return ErrRecoveryWorkerFenceLost
 		}
 		if renewed.Fence.AttemptID == oldAttemptID || !validOpaqueID(renewed.Fence.AttemptID) {
 			return ErrRecoveryWorkerFenceLost
@@ -884,7 +1196,7 @@ func (coordinator *WorkerCoordinator) takeoverJob(
 		claim = RecoveryWorkerClaim{
 			JobID: job.ID, AttemptID: attempt.ID, NodeLeaseID: node.ID, WorkerID: workerID,
 			AttemptFence: nextFence, NodeFence: nextFence, TransitionRevision: nextRevision,
-			LeaseExpiresAt: nextExpiry, SourceFence: renewed.Fence,
+			LeaseExpiresAt: nextExpiry, AbsoluteDeadline: source.AbsoluteDeadline.UTC(), SourceFence: renewed.Fence,
 		}
 		return nil
 	})
@@ -924,6 +1236,10 @@ func (coordinator *WorkerCoordinator) Heartbeat(
 		renewed, err := coordinator.sourceLeases.RenewTx(ctx, tx, claim.SourceFence)
 		if err != nil {
 			return recoveryWorkerSourceError(err)
+		}
+		if !renewed.AbsoluteDeadline.UTC().Equal(claim.AbsoluteDeadline.UTC()) ||
+			renewed.LeaseExpiresAt.UTC().After(claim.AbsoluteDeadline.UTC()) {
+			return ErrRecoveryWorkerFenceLost
 		}
 
 		var node model.BackupAssetRecoveryNodeLease
@@ -1015,6 +1331,13 @@ func (coordinator *WorkerCoordinator) prepareFirstWrite(
 	ctx = recoveryWorkerContext(ctx)
 	if err := ctx.Err(); err != nil {
 		return TargetWritePermit{}, err
+	}
+	observedAuthority, err := coordinator.observeRecoveryAuthorityForJob(ctx, claim.JobID)
+	if err != nil {
+		if errors.Is(err, ErrRecoveryWorkerFenceLost) || errors.Is(err, ErrRecoverySourceChanged) {
+			return TargetWritePermit{}, err
+		}
+		return TargetWritePermit{}, fmt.Errorf("%w: observe first-write recovery authority", ErrRecoveryWorkerUnavailable)
 	}
 
 	ownershipKey, err := coordinator.workspaceKeys.Active(ctx, backupasset.KeyDomainRecoveryCleanupOwnership)
@@ -1112,8 +1435,8 @@ func (coordinator *WorkerCoordinator) prepareFirstWrite(
 			return ErrRecoveryWorkerFenceLost
 		}
 
-		authorityErr := coordinator.liveRevalidator.RevalidateRecoveryAuthorityTx(
-			ctx, tx, recoveryAuthorityBinding(AuthorizationReceiptExecute, plan, preflight),
+		authorityErr := coordinator.revalidateObservedRecoveryAuthorityTx(
+			ctx, tx, plan, preflight, observedAuthority,
 		)
 
 		var attempt model.BackupAssetRecoveryAttempt
@@ -1294,6 +1617,7 @@ func (coordinator *WorkerCoordinator) prepareFirstWrite(
 		return TargetWritePermit{}, fmt.Errorf("%w: prepare first recovery write", ErrRecoveryWorkerUnavailable)
 	}
 	if preWriteDrift {
+		coordinator.observeJobOutcome(ctx, claim.JobID, JobStateFailed)
 		return TargetWritePermit{}, ErrRecoverySourceChanged
 	}
 
@@ -1513,6 +1837,8 @@ func (coordinator *WorkerCoordinator) CancelJob(ctx context.Context, jobID strin
 		ctx = context.WithoutCancel(ctx)
 	}
 
+	var transitioned bool
+	var terminalOutcome JobState
 	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := coordinator.now().UTC()
 		var job model.BackupAssetRecoveryJob
@@ -1648,6 +1974,8 @@ func (coordinator *WorkerCoordinator) CancelJob(ctx context.Context, jobID strin
 		if updated.RowsAffected != 1 {
 			return ErrRecoveryWorkerFenceLost
 		}
+		transitioned = true
+		terminalOutcome = terminalState
 		return nil
 	})
 	if err != nil {
@@ -1655,6 +1983,9 @@ func (coordinator *WorkerCoordinator) CancelJob(ctx context.Context, jobID strin
 			return err
 		}
 		return fmt.Errorf("%w: cancel recovery job", ErrRecoveryWorkerUnavailable)
+	}
+	if transitioned {
+		coordinator.observeJobOutcome(ctx, jobID, terminalOutcome)
 	}
 	return nil
 }
@@ -1748,14 +2079,8 @@ func (coordinator *WorkerCoordinator) AdoptInterruptedOperation(
 	if err != nil {
 		return model.BackupAssetRecoveryCheckpoint{}, publicInterruptedOperationError(err)
 	}
-
-	if err := coordinator.sourceValidator.RevalidatePlanTx(ctx, coordinator.db.WithContext(ctx), initial.plan); err != nil {
-		return model.BackupAssetRecoveryCheckpoint{}, publicInterruptedOperationError(err)
-	}
-	if err := coordinator.liveRevalidator.RevalidateRecoveryAuthorityTx(
-		ctx, coordinator.db.WithContext(ctx),
-		recoveryAuthorityBinding(AuthorizationReceiptExecute, initial.plan, initial.preflight),
-	); err != nil {
+	observedAuthority, err := coordinator.observeRecoveryAuthority(ctx, initial.plan, initial.preflight)
+	if err != nil {
 		return model.BackupAssetRecoveryCheckpoint{}, publicInterruptedOperationError(err)
 	}
 	sourceOutcome := coordinator.revalidateAdoptionSource(ctx, initial.plan)
@@ -1787,6 +2112,7 @@ func (coordinator *WorkerCoordinator) AdoptInterruptedOperation(
 		}
 	}
 	if result.unresolvedCategory.Valid() {
+		var transitioned bool
 		err = coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			current, loadErr := coordinator.loadInterruptedOperationHandoffTx(
 				ctx, tx, claim, jobItemID, coordinator.now().UTC(), false, false,
@@ -1794,24 +2120,33 @@ func (coordinator *WorkerCoordinator) AdoptInterruptedOperation(
 			if loadErr != nil {
 				return loadErr
 			}
+			if authorityErr := coordinator.revalidateObservedRecoveryAuthorityTx(
+				ctx, tx, current.plan, current.preflight, observedAuthority,
+			); authorityErr != nil {
+				return authorityErr
+			}
 			if current.durableDigest != initial.durableDigest {
 				return ErrRecoveryWorkerFenceLost
 			}
-			lockedCoordinator := *coordinator
-			lockedCoordinator.db = tx.Session(&gorm.Session{DisableNestedTransaction: true})
-			_, projectErr := lockedCoordinator.projectPendingOperationUnresolved(
+			lockedCoordinator := coordinator.withTransactionDB(tx)
+			_, projectErr := lockedCoordinator.projectPendingOperationUnresolvedOwned(
 				ctx, claim, current, current.job.TargetChainRevision, result,
-				sourceOutcome, coordinator.now().UTC(),
+				sourceOutcome, coordinator.now().UTC(), observedAuthority, false,
 			)
+			transitioned = projectErr == nil
 			return projectErr
 		})
 		if err != nil {
 			return model.BackupAssetRecoveryCheckpoint{}, publicInterruptedOperationError(err)
 		}
+		if transitioned {
+			coordinator.observeJobOutcome(ctx, claim.JobID, JobStateNeedsAttention)
+		}
 		return model.BackupAssetRecoveryCheckpoint{}, ErrInvalidTargetVerification
 	}
 
 	var checkpoint model.BackupAssetRecoveryCheckpoint
+	var terminalState JobState
 	err = coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		current, loadErr := coordinator.loadInterruptedOperationHandoffTx(
 			ctx, tx, claim, jobItemID, coordinator.now().UTC(), false, false,
@@ -1819,17 +2154,26 @@ func (coordinator *WorkerCoordinator) AdoptInterruptedOperation(
 		if loadErr != nil {
 			return loadErr
 		}
+		if authorityErr := coordinator.revalidateObservedRecoveryAuthorityTx(
+			ctx, tx, current.plan, current.preflight, observedAuthority,
+		); authorityErr != nil {
+			return authorityErr
+		}
 		if current.durableDigest != initial.durableDigest || observed.ValidateAgainst(current.expectation) != nil {
 			return ErrRecoveryWorkerFenceLost
 		}
 		var projectErr error
 		checkpoint, projectErr = coordinator.projectInterruptedOperationTx(
 			ctx, tx, claim, current, observed, sourceOutcome, coordinator.now().UTC(),
+			&terminalState,
 		)
 		return projectErr
 	})
 	if err != nil {
 		return model.BackupAssetRecoveryCheckpoint{}, publicInterruptedOperationError(err)
+	}
+	if terminalState.Valid() {
+		coordinator.observeJobOutcome(ctx, claim.JobID, terminalState)
 	}
 	if sourceOutcome != SourceRevalidationMatched {
 		return checkpoint, sourceRevalidationOutcomeError(sourceOutcome)
@@ -1989,12 +2333,6 @@ func (coordinator *WorkerCoordinator) loadInterruptedOperationHandoffTx(
 	if err := coordinator.sourceValidator.RevalidatePlanTx(ctx, tx, plan); err != nil {
 		return interruptedOperationHandoff{}, err
 	}
-	if err := coordinator.liveRevalidator.RevalidateRecoveryAuthorityTx(
-		ctx, tx, recoveryAuthorityBinding(AuthorizationReceiptExecute, plan, preflight),
-	); err != nil {
-		return interruptedOperationHandoff{}, err
-	}
-
 	var source model.RecoveryPointLease
 	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
 		Where("id = ?", claim.SourceFence.LeaseID).Limit(1).Find(&source)
@@ -3046,6 +3384,7 @@ func (coordinator *WorkerCoordinator) projectInterruptedOperationTx(
 	observed TargetVerifyObservation,
 	sourceOutcome SourceRevalidationOutcome,
 	now time.Time,
+	terminalState *JobState,
 ) (model.BackupAssetRecoveryCheckpoint, error) {
 	if !sourceOutcome.Valid() || observed.ValidateAgainst(handoff.expectation) != nil {
 		return model.BackupAssetRecoveryCheckpoint{}, ErrRecoveryWorkerFenceLost
@@ -3173,6 +3512,9 @@ func (coordinator *WorkerCoordinator) projectInterruptedOperationTx(
 		); err != nil {
 			return model.BackupAssetRecoveryCheckpoint{}, err
 		}
+		if terminalState != nil {
+			*terminalState = JobStateNeedsAttention
+		}
 		return checkpoint, nil
 	}
 	var pending int64
@@ -3185,6 +3527,9 @@ func (coordinator *WorkerCoordinator) projectInterruptedOperationTx(
 	}
 	if err := coordinator.completeOrdinaryRecoveryJobTx(ctx, tx, claim, job, nextRevision, now); err != nil {
 		return model.BackupAssetRecoveryCheckpoint{}, err
+	}
+	if terminalState != nil {
+		*terminalState = JobStateSucceeded
 	}
 	return checkpoint, nil
 }
@@ -3308,9 +3653,18 @@ func (coordinator *WorkerCoordinator) ProjectOperationVerification(
 		return model.BackupAssetRecoveryEvidence{}, err
 	}
 	verifiedAt = verifiedAt.UTC()
+	observedAuthority, err := coordinator.observeRecoveryAuthorityForJob(ctx, claim.JobID)
+	if err != nil {
+		if errors.Is(err, ErrRecoveryWorkerFenceLost) || errors.Is(err, ErrRecoverySourceChanged) {
+			return model.BackupAssetRecoveryEvidence{}, err
+		}
+		return model.BackupAssetRecoveryEvidence{}, fmt.Errorf(
+			"%w: observe recovery operation verification authority", ErrRecoveryWorkerUnavailable,
+		)
+	}
 
 	var evidence model.BackupAssetRecoveryEvidence
-	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := coordinator.now().UTC()
 		if verifiedAt.After(now) {
 			return ErrRecoveryWorkerFenceLost
@@ -3366,8 +3720,8 @@ func (coordinator *WorkerCoordinator) ProjectOperationVerification(
 		if err := coordinator.sourceValidator.RevalidatePlanTx(ctx, tx, plan); err != nil {
 			return err
 		}
-		if err := coordinator.liveRevalidator.RevalidateRecoveryAuthorityTx(
-			ctx, tx, recoveryAuthorityBinding(AuthorizationReceiptExecute, plan, preflight),
+		if err := coordinator.revalidateObservedRecoveryAuthorityTx(
+			ctx, tx, plan, preflight, observedAuthority,
 		); err != nil {
 			return err
 		}
@@ -3528,6 +3882,33 @@ func (coordinator *WorkerCoordinator) projectPendingOperationUnresolved(
 	sourceOutcome SourceRevalidationOutcome,
 	verifiedAt time.Time,
 ) (model.BackupAssetRecoveryEvidence, error) {
+	effectCtx := recoveryWorkerContext(ctx)
+	effectCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(effectCtx), recoveryUnresolvedProjectionTimeout,
+	)
+	defer cancel()
+	observedAuthority, err := coordinator.observeRecoveryAuthority(
+		effectCtx, handoff.plan, handoff.preflight,
+	)
+	if err != nil {
+		return model.BackupAssetRecoveryEvidence{}, err
+	}
+	return coordinator.projectPendingOperationUnresolvedOwned(
+		effectCtx, claim, handoff, expectedRevision, result, sourceOutcome, verifiedAt, observedAuthority, true,
+	)
+}
+
+func (coordinator *WorkerCoordinator) projectPendingOperationUnresolvedOwned(
+	ctx context.Context,
+	claim RecoveryWorkerClaim,
+	handoff interruptedOperationHandoff,
+	expectedRevision string,
+	result ordinaryOperationResult,
+	sourceOutcome SourceRevalidationOutcome,
+	verifiedAt time.Time,
+	observedAuthority observedRecoveryAuthority,
+	observe bool,
+) (model.BackupAssetRecoveryEvidence, error) {
 	if coordinator == nil || coordinator.db == nil || coordinator.sourceValidator == nil ||
 		coordinator.sourceLeases == nil || coordinator.liveRevalidator == nil || coordinator.workspaceKeys == nil ||
 		!validRecoveryWorkerClaim(claim) || handoff.item.ID == "" ||
@@ -3548,7 +3929,7 @@ func (coordinator *WorkerCoordinator) projectPendingOperationUnresolved(
 			return ErrRecoveryWorkerFenceLost
 		}
 		fence, err := coordinator.lockOrdinaryExecutionTx(
-			ctx, tx, claim, handoff, expectedRevision, now,
+			ctx, tx, claim, handoff, expectedRevision, now, observedAuthority,
 		)
 		if err != nil {
 			return err
@@ -3696,6 +4077,9 @@ func (coordinator *WorkerCoordinator) projectPendingOperationUnresolved(
 		return model.BackupAssetRecoveryEvidence{}, fmt.Errorf(
 			"%w: project unresolved recovery operation", ErrRecoveryWorkerUnavailable,
 		)
+	}
+	if observe {
+		coordinator.observeJobOutcome(ctx, claim.JobID, JobStateNeedsAttention)
 	}
 	return evidence, nil
 }
@@ -3846,9 +4230,18 @@ func (coordinator *WorkerCoordinator) ProjectOperationMismatch(
 		return model.BackupAssetRecoveryEvidence{}, err
 	}
 	verifiedAt = verifiedAt.UTC()
+	observedAuthority, err := coordinator.observeRecoveryAuthorityForJob(ctx, claim.JobID)
+	if err != nil {
+		if errors.Is(err, ErrRecoveryWorkerFenceLost) || errors.Is(err, ErrRecoverySourceChanged) {
+			return model.BackupAssetRecoveryEvidence{}, err
+		}
+		return model.BackupAssetRecoveryEvidence{}, fmt.Errorf(
+			"%w: observe recovery verification mismatch authority", ErrRecoveryWorkerUnavailable,
+		)
+	}
 
 	var evidence model.BackupAssetRecoveryEvidence
-	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := coordinator.now().UTC()
 		if verifiedAt.After(now) {
 			return ErrRecoveryWorkerFenceLost
@@ -3905,8 +4298,8 @@ func (coordinator *WorkerCoordinator) ProjectOperationMismatch(
 		if err := coordinator.sourceValidator.RevalidatePlanTx(ctx, tx, plan); err != nil {
 			return err
 		}
-		if err := coordinator.liveRevalidator.RevalidateRecoveryAuthorityTx(
-			ctx, tx, recoveryAuthorityBinding(AuthorizationReceiptExecute, plan, preflight),
+		if err := coordinator.revalidateObservedRecoveryAuthorityTx(
+			ctx, tx, plan, preflight, observedAuthority,
 		); err != nil {
 			return err
 		}
@@ -4040,6 +4433,7 @@ func (coordinator *WorkerCoordinator) ProjectOperationMismatch(
 		}
 		return model.BackupAssetRecoveryEvidence{}, fmt.Errorf("%w: project recovery verification mismatch", ErrRecoveryWorkerUnavailable)
 	}
+	coordinator.observeJobOutcome(ctx, claim.JobID, JobStateNeedsAttention)
 	return evidence, nil
 }
 
@@ -4585,7 +4979,8 @@ func recoveryWorkerSourceError(err error) error {
 func validRecoveryWorkerClaim(claim RecoveryWorkerClaim) bool {
 	return validOpaqueID(claim.JobID) && validOpaqueID(claim.AttemptID) && validOpaqueID(claim.NodeLeaseID) &&
 		validRecoveryWorkerID(claim.WorkerID) && claim.AttemptFence > 0 && claim.NodeFence > 0 &&
-		claim.TransitionRevision > 0 && !claim.LeaseExpiresAt.IsZero() &&
+		claim.TransitionRevision > 0 && !claim.LeaseExpiresAt.IsZero() && !claim.AbsoluteDeadline.IsZero() &&
+		!claim.LeaseExpiresAt.UTC().After(claim.AbsoluteDeadline.UTC()) &&
 		claim.SourceFence.LeaseID != "" && claim.SourceFence.OwnerID == claim.JobID &&
 		claim.SourceFence.AttemptID == claim.AttemptID && claim.SourceFence.HolderType == backupasset.LeaseHolderRecoveryJob
 }

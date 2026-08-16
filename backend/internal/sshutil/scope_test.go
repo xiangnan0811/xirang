@@ -146,3 +146,23 @@ func TestRecoveryReconcilePurposeIsKnownAndIndependent(t *testing.T) {
 		}
 	}
 }
+
+func TestRecoveryTargetRootRegistrationPurposeIsKnownAndIndependent(t *testing.T) {
+	const registrationPurpose = "recovery_target_root_registration"
+	normalized, err := NormalizePurposeList(registrationPurpose)
+	if err != nil || normalized != registrationPurpose {
+		t.Fatalf("normalize target-root registration purpose=%q err=%v", normalized, err)
+	}
+	key := model.SSHKey{AllowedPurposes: registrationPurpose}
+	if err := ValidateSSHKeyScope(key, model.Node{ID: 1}, registrationPurpose); err != nil {
+		t.Fatalf("target-root registration purpose should be allowed by an exact scope: %v", err)
+	}
+	for _, other := range []string{
+		PurposeRecoveryPreflight, PurposeRecoveryWrite, PurposeRecoveryVerify,
+		PurposeRecoveryResultRead, PurposeRecoveryCleanup, PurposeRecoveryReconcile,
+	} {
+		if err := ValidateSSHKeyScope(key, model.Node{ID: 1}, other); err == nil {
+			t.Fatalf("target-root-registration-only key unexpectedly allowed purpose %q", other)
+		}
+	}
+}

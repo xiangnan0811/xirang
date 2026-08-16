@@ -105,6 +105,15 @@ type RecoveryResultAuthorizer interface {
 	ReauthorizeRecoveryResult(context.Context, DeliveryActor, AuthorizedRecoveryResult, DeliveryAction) error
 }
 
+type recoveryResultIssueAuthorizer interface {
+	AuthorizeRecoveryResultIssue(
+		context.Context,
+		DeliveryActor,
+		RecoveryResultRef,
+		DeliveryAction,
+	) (AuthorizedRecoveryResult, func(), error)
+}
+
 type RecoveryResultSourceRequest struct {
 	OwnerUserID         uint              `json:"-"`
 	Ref                 RecoveryResultRef `json:"-"`
@@ -524,10 +533,11 @@ func (broker *Broker) issueRecoveryResult(
 	ref RecoveryResultRef,
 	now time.Time,
 ) (ticket IssuedTicket, resultErr error) {
-	result, err := broker.recoveryAuthorize.AuthorizeRecoveryResult(ctx, request.Actor, ref, request.Action)
+	result, releaseAuthorization, err := broker.authorizeRecoveryResultIssue(ctx, request.Actor, ref, request.Action)
 	if err != nil {
 		return IssuedTicket{}, err
 	}
+	defer releaseAuthorization()
 	if !validAuthorizedRecoveryResult(result, ref, request.Actor.UserID, now) {
 		return IssuedTicket{}, ErrContentSourceUnavailable
 	}
@@ -642,6 +652,27 @@ func (broker *Broker) issueRecoveryResult(
 		},
 		Cookie: cookie,
 	}, nil
+}
+
+func (broker *Broker) authorizeRecoveryResultIssue(
+	ctx context.Context,
+	actor DeliveryActor,
+	ref RecoveryResultRef,
+	action DeliveryAction,
+) (AuthorizedRecoveryResult, func(), error) {
+	if scoped, ok := broker.recoveryAuthorize.(recoveryResultIssueAuthorizer); ok {
+		result, release, err := scoped.AuthorizeRecoveryResultIssue(ctx, actor, ref, action)
+		if release == nil {
+			release = func() {}
+		}
+		if err != nil {
+			release()
+			return AuthorizedRecoveryResult{}, func() {}, err
+		}
+		return result, release, nil
+	}
+	result, err := broker.recoveryAuthorize.AuthorizeRecoveryResult(ctx, actor, ref, action)
+	return result, func() {}, err
 }
 
 func acquireContentLeaseForRecoveryPoint(

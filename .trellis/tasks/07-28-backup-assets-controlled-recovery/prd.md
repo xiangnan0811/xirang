@@ -2050,3 +2050,86 @@ normal/race no-skip、vet/backend lint、format/diff、privacy/static、paired m
 
 该批准闭合完整 A3 的交互式 design input，允许把全部已批准内容整理进现有 `design.md` 并进行书面规格自检；它仍不
 批准更新 `implement.md` 或开始任何产品实现。
+
+## Task 8 Production Authority Focused Amendment (2026-08-14)
+
+Task 8 的 runtime/lifecycle shell 已达到 fail-closed checkpoint，但生产 enablement 仍缺少 current preflight
+external evidence、complete live authority revalidation 和 reconciliation root revision。用户批准方案 A：在
+不新增 `000070`、不伪造 clean/false/zero evidence、也不把 locator digest 当 root authority revision 的前提下，
+扩展现有 encrypted target-root registry，并由 Recovery-owned production authority 组合当前 source、security、
+target 和 policy evidence。该批准取代“保留 unavailable adapter 即可完成 Task 8”的任何旧推断，但不追认产品
+实现、测试或交付已经完成。
+
+### Requirements
+
+- encrypted target-root registry 继续存放在现有 internal settings namespace，不新增 table、column、migration 或
+  `000070`。每个 `(node_id, root_id)` record 必须同时拥有独立、durable、opaque authority revision、当前已证明的
+  root observation binding、reserve bytes/inodes policy 和 closed overlap/policy binding；locator digest 只绑定
+  canonical private locator，不能替代 authority revision。任一 locator、root observation、reserve 或 policy
+  rotation 都必须产生新 authority revision；safe-label-only 修改不得静默改变安全 authority。
+- target-root register/rotate/delete/list 必须由 Recovery-owned Admin operation 管理。registration/rotation 在持久化前
+  取得 fresh purpose-exact read-only target probe，并只保存经过验证的 encrypted locator 与 closed authority
+  product；generic settings BatchUpdate/Delete/config import 不得直接构造、覆盖或导出 registry record。Task 9 的 API
+  scope 必须补齐这些管理 routes、Auth/RBAC/step-up/idempotency/audit/privacy/Swagger contracts；Task 8 只拥有
+  production service/facade 与 runtime composition。
+- `RecoveryPreflightExternalEvidenceAuthority` 必须从当前 durable plan 重新取得 exact Repository source authority、
+  Provider capability、Processing malware/security evidence、registered target-root authority 和 fresh target probe，
+  生成一个 Recovery-owned closed eligibility product。managed Rsync 使用现有 Repository pinned-tree source resolver；
+  没有 exact production source authority 的 Provider 必须返回 closed unavailable，不能降级到 locator、旧 Catalog、
+  request echo 或 generic read success。
+- security evidence 必须由当前 canonical Processing malware artifacts 与当前 Recovery policy 聚合为 exact
+  finding-set digest、policy revision、closed disposition 和 overridable categories。单个 `safe` bool、固定 clean
+  值、旧 preflight security decision 或 plan-carried digest 都不能签发新 authority。
+- overlap 与 reserve evidence 必须属于上述 current eligibility product。它必须由 current source namespace evidence、
+  registered root policy 和 fresh target observation 得出；caller-supplied flags、path-prefix guess、zero reserve 或
+  registration-time assertion 单独都不能批准 preflight。任一 evidence unavailable 必须阻止 production-enabled graph
+  publication，或在已发布 graph 的 effect boundary fail closed，绝不能产生 synthetic clear。
+- `RecoveryAuthorityRevalidator` 必须复用同一个 eligibility owner，在 caller-owned transaction 内重验 node/
+  credential、registered root authority revision、source/capability、policy/finding/disposition 和 durable preflight
+  binding；需要 external observation 的部分在 transaction 外取得并以 private sealed snapshot 带入，commit 前再锁定
+  对应 durable revisions。partial node/source success 不构成完整 effect authority。
+- `RecoveryReconciliationRevisionSource` 必须从同一 target-root authority record 取得独立 current authority revision，
+  并与 current node/credential revisions 在同一 transaction 内解析。reconciliation 继续使用 read-only remote scan；
+  authority unavailable、revision drift、scan incomplete、finding 或 sink/audit failure 全部是 blocker，从不投影 clear。
+- production Recovery provider coverage 以 exact registered restore port 为准。当前 managed Rsync exact source seam 可
+  enable；没有同等 source-access/revalidation product 的 Restic/Rclone plan 必须显式 unavailable，不得 fallback 到
+  Rsync、generic Provider contract 或 legacy restore path。
+
+### Settings Disposition
+
+- 保留并接入 `PreflightTTL`：由 server-owned plan/preflight policy 生成并验证 expiry，API/caller 不得自由选择 TTL。
+- 保留并接入 `MaxSelectionItems` 与 `MaxLogicalBytes`：PlanService/selection materialization 在持久化前后都按 dynamic
+  limit 与 immutable hard cap 的较小值拒绝超限，handler-only validation 不算 domain enforcement。
+- 保留并接入 `LeaseRenewMargin`：managed worker 必须在 active claim 中按 margin 调用 durable heartbeat，传播 renewed
+  claim/fence deadline，并在 renew failure 后取消当前 effect、阻止旧 lease 继续 mutation。
+- 保留并接入 `ExecutionTimeout`：execute effect 创建 source lease/job 时冻结 absolute deadline，managed execution
+  context 不得超过它；timeout 后只走现有 post-arm/unresolved 或 safe takeover contract，不推断远端零写入。
+- 将 `OrphanQuarantineLimit` 更名为 logical `ReconciliationFindingLimit` 并接入 A3d finding/aggregate bound；它不表示
+  physical move/delete/quarantine，也不能扩大 immutable chain/expected-set hard caps。
+- 删除 `DefaultRootID`。root identity 是 node-scoped `(node_id, root_id)`，一个 global root ID 无法无歧义选择 authority；
+  Task 10 可在已选 node 只有一个可用 registered root 时做显式 UI 预选，但 request 仍必须提交 exact pair。
+- 删除 `VerificationTimeout`。当前 Recovery verification 是 execution 内逐 operation 的 fenced evidence，不存在可独立
+  计时、持久化或 takeover 的 verification phase；`ExecutionTimeout` 与每个 target/provider bounded context 继续
+  约束它。未来若新增独立 durable verification phase，必须另行规划 setting 和 state contract。
+
+### Acceptance
+
+- [ ] encrypted registry authority revision 与 locator digest 独立；register/rotate/no-op/delete、tamper、key rotation、
+  stale probe 和 concurrent update 在 SQLite 与 required real PostgreSQL 上有 closed tests，且没有 `000070`。
+- [ ] 三个 production authority 由同一 current eligibility owner 提供，并覆盖 source/capability/policy/finding/root/
+  overlap/reserve 的 drift、unavailable、substitution 和 privacy matrix；known-unavailable adapters 不能发布 enabled graph。
+- [ ] managed Rsync exact source access 通过 pinned resolver 正常完成；无 exact production source authority 的 Provider
+  稳定 fail closed 且零 target mutation。
+- [ ] 五个保留/更名 settings 在 owning domain seam 被消费，两个删除 settings 从 registry/snapshot/config fixtures 中
+  移除；BatchUpdate/reset/import 仍通过 validate -> drain -> persist -> install/rollback。
+- [ ] disabled graph 继续 cleanup、logical reconciliation 和 receipt reaping；fresh/transition downgrade readiness 在
+  authority unavailable 时保持 blocked，use latch 仍永久支配 `forward_fix_only`。
+- [ ] Task 9 route map 明确包含 target-root management 与 downgrade-readiness Admin operations；Task 8 不冒领其 handler/
+  audit/Swagger 完成度，Tasks 9--10 在本 amendment 完成前仍为 `not_executed`。
+
+### Planning State
+
+方案 A 的产品方向、settings disposition、architecture、data flow、error/privacy/compatibility 与 testing/rollback
+均已由用户批准并写入 `design.md` section 48。focused execution plan 与 convergence review 已完成，blocking open
+questions 为空；final design summary 获得后续明确批准前，不得修改产品代码、运行 `task.py start`、stage、commit、
+push 或创建 PR。

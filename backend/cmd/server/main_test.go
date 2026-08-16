@@ -17,13 +17,15 @@ func TestMainWiresSharedBackupAssetRuntimeBeforeSchedules(t *testing.T) {
 	requiredInOrder := []string{
 		"assetRuntime, err := backupruntime.New(",
 		"executor.NewFactoryWithPublicationStrategies(",
-		"nodeWriteCoordinator, err := backupruntime.NewNodeWriteCoordinator(db)",
 		"taskManager.SetPublicationCoordinator(assetRuntime.PublicationCoordinator())",
 		"taskManager.SetLineageGuard(assetRuntime.LineageGuard())",
-		"taskManager.SetNodeWriteAdmission(nodeWriteCoordinator)",
+		"taskManager.SetNodeWriteAdmission(assetRuntime.NodeWriteCoordinator())",
 		"assetRuntime.SetCommitObserver(taskManager)",
 		"assetRuntime.StartupPass(context.Background())",
 		"taskManager.LoadSchedules(context.Background())",
+	}
+	if strings.Contains(source, "backupruntime.NewNodeWriteCoordinator(db)") {
+		t.Fatal("main.go constructs a second Task/Recovery node-write coordinator")
 	}
 	previous := -1
 	for _, required := range requiredInOrder {
@@ -38,14 +40,55 @@ func TestMainWiresSharedBackupAssetRuntimeBeforeSchedules(t *testing.T) {
 	}
 	for _, required := range []string{
 		"assetRuntime.RsyncTreePublicationStrategy()",
-		"BackupAssets:      assetRuntime",
+		"BackupAssets:          assetRuntime",
 		"LegacyResticSnapshots: legacyRestic",
 		"SnapshotDiffRunner:    legacyRestic",
 		"SnapshotIndexer:       snapshotIndexer",
 	} {
-		if !strings.Contains(source, required) {
+		if mainSourceIndexIgnoringHorizontalWhitespace(source, required) < 0 {
 			t.Fatalf("main.go does not pass shared backup runtime port %q to Router", required)
 		}
+	}
+}
+
+func TestRecoveryRuntimeMainDefersRecoveryAuthorizationRoutingToTaskNine(t *testing.T) {
+	sourceBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if strings.Contains(string(sourceBytes), "RecoveryAuthorization: assetRuntime.RecoveryAuthorization()") {
+		t.Fatal("Task 8 main wires the Task 9 Recovery authorization route dependency")
+	}
+}
+
+func TestMainConstructsCanonicalAlertDispatcherBeforeRecoveryRuntime(t *testing.T) {
+	sourceBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	source := string(sourceBytes)
+	if count := strings.Count(source, "alerting.NewDispatcher("); count != 1 {
+		t.Fatalf("main.go constructs %d canonical alert dispatchers, want one", count)
+	}
+	requiredInOrder := []string{
+		"alertDispatcher := alerting.NewDispatcher(",
+		"alerting.SetDispatcher(alertDispatcher)",
+		"assetRuntime, err := backupruntime.New(",
+		"AlertDispatcher: alertDispatcher",
+	}
+	previous := -1
+	for _, required := range requiredInOrder {
+		index := strings.Index(source, required)
+		if index < 0 {
+			t.Fatalf("main.go is missing canonical Recovery alert wiring %q", required)
+		}
+		if index <= previous {
+			t.Fatalf("main.go wires %q out of startup order", required)
+		}
+		previous = index
+	}
+	if strings.Contains(source, "RecoveryTargetRoots()") {
+		t.Fatal("main.go exposes the Task 9 target-root facade before its handlers exist")
 	}
 }
 
@@ -65,13 +108,13 @@ func TestMainConstructsOneJWTManagerBeforeContentRuntimeAndReusesIt(t *testing.T
 		"assetRuntime, err := backupruntime.New(",
 		"SessionRevocations: jwtManager",
 		"authService := auth.NewService(db, jwtManager, settingsSvc",
-		"JWTManager:        jwtManager",
-		"BackupContent:     assetRuntime.ContentService()",
+		"JWTManager:            jwtManager",
+		"BackupContent:         assetRuntime.ContentService()",
 		"BackupContentConfig:",
 	}
 	previous := -1
 	for _, required := range requiredInOrder {
-		index := strings.Index(source, required)
+		index := mainSourceIndexIgnoringHorizontalWhitespace(source, required)
 		if index < 0 {
 			t.Fatalf("main.go is missing shared JWT/Content wiring %q", required)
 		}
@@ -90,6 +133,11 @@ func TestMainConstructsOneJWTManagerBeforeContentRuntimeAndReusesIt(t *testing.T
 			t.Fatalf("main.go changed the global HTTP timeout contract %q", timeout)
 		}
 	}
+}
+
+func mainSourceIndexIgnoringHorizontalWhitespace(source, fragment string) int {
+	compact := strings.NewReplacer(" ", "", "\t", "").Replace
+	return strings.Index(compact(source), compact(fragment))
 }
 
 func TestMainShutdownStopsResticAdmissionBeforeHTTPAndCleansUpAfterWorkers(t *testing.T) {

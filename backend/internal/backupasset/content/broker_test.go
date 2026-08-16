@@ -125,6 +125,23 @@ func TestBrokerIssueRecoveryResultUsesClosedResourceAndPlaintextDeadline(t *test
 	}
 }
 
+func TestBrokerIssueRecoveryResultHoldsAuthorizationThroughGrantRegistration(t *testing.T) {
+	harness := newRecoveryBrokerTestHarness(t)
+	harness.recoveryAuthorizer.onIssueRelease = func() bool {
+		var grant model.BackupAssetDeliveryGrant
+		return harness.db.First(&grant, "id = ?", harness.material.GrantID).Error == nil &&
+			grant.State == string(DeliveryActive)
+	}
+	if _, err := harness.broker.Issue(context.Background(), harness.recoveryIssueRequest()); err != nil {
+		t.Fatalf("issue recovery result ticket: %v", err)
+	}
+	scopes, releases, releasedAfterRegistration := harness.recoveryAuthorizer.issueScopeSnapshot()
+	if scopes != 1 || releases != 1 || !releasedAfterRegistration {
+		t.Fatalf("Recovery issue scopes=%d releases=%d released_after_registration=%t, want 1/1/true",
+			scopes, releases, releasedAfterRegistration)
+	}
+}
+
 func TestBrokerServeRecoveryResultReauthorizesBeforeSourceOpen(t *testing.T) {
 	harness := newRecoveryBrokerTestHarness(t)
 	ticket, err := harness.broker.Issue(context.Background(), harness.recoveryIssueRequest())
@@ -1764,11 +1781,15 @@ type brokerAssetAuthorizerFake struct {
 }
 
 type brokerRecoveryResultAuthorizerFake struct {
-	mu           sync.Mutex
-	result       AuthorizedRecoveryResult
-	order        *[]string
-	stale        bool
-	reauthorized int
+	mu                        sync.Mutex
+	result                    AuthorizedRecoveryResult
+	order                     *[]string
+	stale                     bool
+	reauthorized              int
+	issueScopes               int
+	issueReleases             int
+	releasedAfterRegistration bool
+	onIssueRelease            func() bool
 }
 
 func (fake *brokerRecoveryResultAuthorizerFake) AuthorizeRecoveryResult(
@@ -1785,6 +1806,40 @@ func (fake *brokerRecoveryResultAuthorizerFake) AuthorizeRecoveryResult(
 		return AuthorizedRecoveryResult{}, backupasset.ErrNotFound
 	}
 	return fake.result, nil
+}
+
+func (fake *brokerRecoveryResultAuthorizerFake) AuthorizeRecoveryResultIssue(
+	ctx context.Context,
+	actor DeliveryActor,
+	ref RecoveryResultRef,
+	action DeliveryAction,
+) (AuthorizedRecoveryResult, func(), error) {
+	result, err := fake.AuthorizeRecoveryResult(ctx, actor, ref, action)
+	if err != nil {
+		return AuthorizedRecoveryResult{}, func() {}, err
+	}
+	fake.mu.Lock()
+	fake.issueScopes++
+	fake.mu.Unlock()
+	var once sync.Once
+	return result, func() {
+		once.Do(func() {
+			fake.mu.Lock()
+			fake.issueReleases++
+			check := fake.onIssueRelease
+			fake.mu.Unlock()
+			releasedAfterRegistration := check == nil || check()
+			fake.mu.Lock()
+			fake.releasedAfterRegistration = releasedAfterRegistration
+			fake.mu.Unlock()
+		})
+	}, nil
+}
+
+func (fake *brokerRecoveryResultAuthorizerFake) issueScopeSnapshot() (int, int, bool) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	return fake.issueScopes, fake.issueReleases, fake.releasedAfterRegistration
 }
 
 func (fake *brokerRecoveryResultAuthorizerFake) setStale(stale bool) {

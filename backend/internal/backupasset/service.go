@@ -267,6 +267,32 @@ type RecoveryAuthorizationConfig struct {
 	ReceiptReaperBatchSize int
 }
 
+type RecoveryConfig struct {
+	RecoveryAuthorizationConfig
+	Enabled                    bool
+	PreflightTTL               time.Duration
+	MaxSelectionItems          int
+	MaxLogicalBytes            int64
+	WorkerConcurrency          int
+	LeaseTTL                   time.Duration
+	LeaseRenewMargin           time.Duration
+	TakeoverCadence            time.Duration
+	RetryBase                  time.Duration
+	RetryMaxDelay              time.Duration
+	ScanLimit                  int
+	ExecutionTimeout           time.Duration
+	ResultDefaultTTL           time.Duration
+	ResultRetainHardCap        time.Duration
+	ResultReadPermitTTL        time.Duration
+	ResultDrainTimeout         time.Duration
+	CleanupCadence             time.Duration
+	CleanupBatchSize           int
+	CleanupLeaseTTL            time.Duration
+	CleanupRetryBase           time.Duration
+	CleanupRetryMaxDelay       time.Duration
+	ReconciliationFindingLimit int
+}
+
 func NewFoundationService(reader SettingsReader) *FoundationService {
 	return &FoundationService{settings: reader}
 }
@@ -729,6 +755,84 @@ func (service *FoundationService) RecoveryAuthorizationConfig() (RecoveryAuthori
 		return RecoveryAuthorizationConfig{}, err
 	}
 	return result, nil
+}
+
+func (service *FoundationService) RecoveryConfig() (RecoveryConfig, error) {
+	values, err := service.atomicFoundationValues()
+	if err != nil {
+		return RecoveryConfig{}, err
+	}
+	return recoveryConfigFromValidatedValues(values)
+}
+
+// RecoveryConfigFromValues parses one complete prospective Foundation
+// snapshot. Settings transitions use it before persistence so graph validation
+// never rereads the old effective values.
+func RecoveryConfigFromValues(values map[string]string) (RecoveryConfig, error) {
+	for _, key := range settings.BackupAssetFoundationSettingKeys() {
+		if _, exists := values[key]; !exists {
+			return RecoveryConfig{}, fmt.Errorf("%w: incomplete backup asset settings snapshot", ErrInvalidState)
+		}
+	}
+	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
+		return RecoveryConfig{}, fmt.Errorf("%w: %v", ErrInvalidState, err)
+	}
+	return recoveryConfigFromValidatedValues(values)
+}
+
+func recoveryConfigFromValidatedValues(values map[string]string) (RecoveryConfig, error) {
+	var err error
+	config := RecoveryConfig{}
+	if config.Enabled, err = parseFoundationBool(values, "backup_assets.recovery.enabled"); err != nil {
+		return RecoveryConfig{}, err
+	}
+	for _, field := range []struct {
+		key    string
+		target *time.Duration
+	}{
+		{"backup_assets.recovery.receipt_replay_ttl", &config.ReceiptReplayTTL},
+		{"backup_assets.recovery.write_grant_ttl", &config.WriteGrantTTL},
+		{"backup_assets.recovery.delete_grant_ttl", &config.DeleteGrantTTL},
+		{"backup_assets.recovery.receipt_reaper_cadence", &config.ReceiptReaperCadence},
+		{"backup_assets.recovery.preflight_ttl", &config.PreflightTTL},
+		{"backup_assets.recovery.lease_ttl", &config.LeaseTTL},
+		{"backup_assets.recovery.lease_renew_margin", &config.LeaseRenewMargin},
+		{"backup_assets.recovery.takeover_cadence", &config.TakeoverCadence},
+		{"backup_assets.recovery.retry_base", &config.RetryBase},
+		{"backup_assets.recovery.retry_max_delay", &config.RetryMaxDelay},
+		{"backup_assets.recovery.execution_timeout", &config.ExecutionTimeout},
+		{"backup_assets.recovery.result_default_ttl", &config.ResultDefaultTTL},
+		{"backup_assets.recovery.result_retain_hard_cap", &config.ResultRetainHardCap},
+		{"backup_assets.recovery.result_read_permit_ttl", &config.ResultReadPermitTTL},
+		{"backup_assets.recovery.result_drain_timeout", &config.ResultDrainTimeout},
+		{"backup_assets.recovery.cleanup_cadence", &config.CleanupCadence},
+		{"backup_assets.recovery.cleanup_lease_ttl", &config.CleanupLeaseTTL},
+		{"backup_assets.recovery.cleanup_retry_base", &config.CleanupRetryBase},
+		{"backup_assets.recovery.cleanup_retry_max_delay", &config.CleanupRetryMaxDelay},
+	} {
+		if *field.target, err = parseFoundationDuration(values, field.key); err != nil {
+			return RecoveryConfig{}, err
+		}
+	}
+	for _, field := range []struct {
+		key    string
+		target *int
+	}{
+		{"backup_assets.recovery.receipt_reaper_batch_size", &config.ReceiptReaperBatchSize},
+		{"backup_assets.recovery.max_selection_items", &config.MaxSelectionItems},
+		{"backup_assets.recovery.worker_concurrency", &config.WorkerConcurrency},
+		{"backup_assets.recovery.scan_limit", &config.ScanLimit},
+		{"backup_assets.recovery.cleanup_batch_size", &config.CleanupBatchSize},
+		{"backup_assets.recovery.reconciliation_finding_limit", &config.ReconciliationFindingLimit},
+	} {
+		if *field.target, err = parseFoundationInt(values, field.key); err != nil {
+			return RecoveryConfig{}, err
+		}
+	}
+	if config.MaxLogicalBytes, err = parseFoundationInt64(values, "backup_assets.recovery.max_logical_bytes"); err != nil {
+		return RecoveryConfig{}, err
+	}
+	return config, nil
 }
 
 // ExportConfigFromValues parses one complete, validated foundation snapshot

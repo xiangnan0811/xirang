@@ -441,6 +441,103 @@ func TestPreflightServicePersistsCanonicalEncryptedSnapshotAndCandidate(t *testi
 	}
 }
 
+func TestRecoveryPreflightPolicyOwnsExpiryAndRejectsInvalidBounds(t *testing.T) {
+	fixture := newPreflightPersistenceFixture(t)
+	for _, policy := range []PreflightPolicy{{}, {TTL: recoveryPreflightMaxTTL + time.Second}} {
+		service, err := NewPreflightService(PreflightServiceDependencies{
+			DB: fixture.db, Now: func() time.Time { return fixture.now },
+			Evaluator: fixture.service.evaluator, Policy: policy,
+		})
+		if service != nil || !errors.Is(err, ErrTargetPreflightUnavailable) {
+			t.Fatalf("policy=%+v service=%v error=%v, want unavailable", policy, service, err)
+		}
+	}
+
+	fixture.request.Input.SnapshotTTL = time.Minute
+	result, err := fixture.service.EvaluateAndPersist(context.Background(), fixture.request)
+	if err != nil || !result.Persisted {
+		t.Fatalf("policy-owned preflight result=%+v error=%v", result, err)
+	}
+	if !result.Evaluation.Snapshot.ExpiresAt.Equal(fixture.now.Add(time.Hour)) {
+		t.Fatalf("snapshot expiry=%s, want policy expiry %s", result.Evaluation.Snapshot.ExpiresAt, fixture.now.Add(time.Hour))
+	}
+}
+
+func TestRecoveryPreflightPolicyUsesDurablePlanExpiryAcrossAdvancingClock(t *testing.T) {
+	fixture := newPreflightPersistenceFixture(t)
+	var plan model.BackupAssetRecoveryPlan
+	if err := fixture.db.Where("id = ?", fixture.planID).Take(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	advancedNow := fixture.now.Add(5 * time.Minute)
+	fixture.service.now = func() time.Time { return advancedNow }
+	fixture.request.Input.SnapshotTTL = 24 * time.Hour
+
+	result, err := fixture.service.EvaluateAndPersist(context.Background(), fixture.request)
+	if err != nil || !result.Persisted {
+		t.Fatalf("advancing-clock preflight result=%+v error=%v", result, err)
+	}
+	if !result.Evaluation.Snapshot.ExpiresAt.UTC().Equal(plan.PreflightExpiresAt.UTC()) {
+		t.Fatalf(
+			"snapshot expiry=%s, want durable plan expiry %s",
+			result.Evaluation.Snapshot.ExpiresAt,
+			plan.PreflightExpiresAt,
+		)
+	}
+}
+
+func TestRecoveryPreflightRejectsExpiryReachedDuringExternalObservation(t *testing.T) {
+	fixture := newPreflightPersistenceFixture(t)
+	var plan model.BackupAssetRecoveryPlan
+	if err := fixture.db.Where("id = ?", fixture.planID).Take(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	current := fixture.now
+	fixture.service.now = func() time.Time { return current }
+	fixture.authority.onObserve = func() {
+		current = plan.PreflightExpiresAt.UTC().Add(time.Second)
+	}
+
+	_, err := fixture.service.EvaluateAndPersist(context.Background(), fixture.request)
+	if !errors.Is(err, ErrRecoveryPreflightConflict) {
+		t.Fatalf("observation-crossed expiry error=%v, want ErrRecoveryPreflightConflict", err)
+	}
+	assertPreflightPersistenceWriteSet(t, fixture, 0, PlanStateDraft, 1)
+}
+
+func TestRecoveryPreflightRejectsExpiryReachedWhileAcquiringCommitLock(t *testing.T) {
+	fixture := newPreflightPersistenceFixture(t)
+	var plan model.BackupAssetRecoveryPlan
+	if err := fixture.db.Where("id = ?", fixture.planID).Take(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	current := fixture.now
+	fixture.service.now = func() time.Time { return current }
+	callbackName := "task8:preflight-commit-lock-clock:" + t.Name()
+	advanced := false
+	if err := fixture.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if _, locking := tx.Statement.Clauses["FOR"]; locking && !advanced {
+			advanced = true
+			current = plan.PreflightExpiresAt.UTC().Add(time.Second)
+		}
+	}); err != nil {
+		t.Fatalf("register commit-lock clock callback: %v", err)
+	}
+	t.Cleanup(func() { _ = fixture.db.Callback().Query().Remove(callbackName) })
+
+	_, err := fixture.service.EvaluateAndPersist(context.Background(), fixture.request)
+	if !advanced {
+		t.Fatal("commit-lock query did not advance the injected clock")
+	}
+	if !errors.Is(err, ErrRecoveryPreflightConflict) {
+		t.Fatalf("commit-lock-crossed expiry error=%v, want ErrRecoveryPreflightConflict", err)
+	}
+	assertPreflightPersistenceWriteSet(t, fixture, 0, PlanStateDraft, 1)
+}
+
 func TestPreflightServiceComposesIndependentEvidenceBeforeLock(t *testing.T) {
 	t.Run("production evidence precedes lock and remains bound", func(t *testing.T) {
 		fixture := newPreflightPersistenceFixture(t)
@@ -665,6 +762,7 @@ func newPreflightPersistenceFixture(t *testing.T) *preflightPersistenceFixture {
 	}
 	service, err := NewPreflightService(PreflightServiceDependencies{
 		DB: base.db, Now: func() time.Time { return base.now }, Evaluator: evaluator,
+		Policy: PreflightPolicy{TTL: time.Hour},
 	})
 	if err != nil {
 		t.Fatal(err)

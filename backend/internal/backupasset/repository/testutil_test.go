@@ -73,7 +73,10 @@ func newRepositoryTestDB(t *testing.T) *gorm.DB {
 	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
 	secure.ResetForTesting()
 	t.Cleanup(secure.ResetForTesting)
-	dsn := fmt.Sprintf("file:%s-%d?mode=memory&cache=shared&_loc=UTC&_foreign_keys=1", strings.ReplaceAll(t.Name(), "/", "_"), repositoryDBSequence.Add(1))
+	dsn := fmt.Sprintf(
+		"file:%s-%d?mode=memory&cache=shared&_journal_mode=WAL&_busy_timeout=25&_foreign_keys=ON&_synchronous=NORMAL&_txlock=immediate&_loc=UTC",
+		strings.ReplaceAll(t.Name(), "/", "_"), repositoryDBSequence.Add(1),
+	)
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatal(err)
@@ -377,6 +380,28 @@ var repositoryFoundationDefaults = repositorySettings{
 	"backup_assets.recovery.delete_grant_ttl":                  "10m",
 	"backup_assets.recovery.receipt_reaper_cadence":            "1m",
 	"backup_assets.recovery.receipt_reaper_batch_size":         "100",
+	"backup_assets.recovery.enabled":                           "false",
+	"backup_assets.recovery.preflight_ttl":                     "10m",
+	"backup_assets.recovery.max_selection_items":               "10000",
+	"backup_assets.recovery.max_logical_bytes":                 "10737418240",
+	"backup_assets.recovery.worker_concurrency":                "2",
+	"backup_assets.recovery.lease_ttl":                         "90s",
+	"backup_assets.recovery.lease_renew_margin":                "20s",
+	"backup_assets.recovery.takeover_cadence":                  "15s",
+	"backup_assets.recovery.retry_base":                        "5s",
+	"backup_assets.recovery.retry_max_delay":                   "5m",
+	"backup_assets.recovery.scan_limit":                        "100",
+	"backup_assets.recovery.execution_timeout":                 "2h",
+	"backup_assets.recovery.result_default_ttl":                "1h",
+	"backup_assets.recovery.result_retain_hard_cap":            "24h",
+	"backup_assets.recovery.result_read_permit_ttl":            "2m",
+	"backup_assets.recovery.result_drain_timeout":              "30s",
+	"backup_assets.recovery.cleanup_cadence":                   "1m",
+	"backup_assets.recovery.cleanup_batch_size":                "100",
+	"backup_assets.recovery.cleanup_lease_ttl":                 "2m",
+	"backup_assets.recovery.cleanup_retry_base":                "10s",
+	"backup_assets.recovery.cleanup_retry_max_delay":           "10m",
+	"backup_assets.recovery.reconciliation_finding_limit":      "100",
 }
 
 func testObservation(kind backupasset.ProviderKind, identity string) provider.RepositoryObservation {

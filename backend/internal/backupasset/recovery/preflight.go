@@ -409,6 +409,18 @@ type PreflightServiceDependencies struct {
 	DB        *gorm.DB
 	Now       func() time.Time
 	Evaluator *TargetPreflightEvaluator
+	Policy    PreflightPolicy
+}
+
+const recoveryPreflightMaxTTL = time.Hour
+
+// PreflightPolicy owns the maximum lifetime of every newly observed snapshot.
+type PreflightPolicy struct {
+	TTL time.Duration
+}
+
+func (policy PreflightPolicy) valid() bool {
+	return policy.TTL > 0 && policy.TTL <= recoveryPreflightMaxTTL
 }
 
 // PreflightService owns the observation-to-durable-snapshot commit boundary.
@@ -418,10 +430,11 @@ type PreflightService struct {
 	now             func() time.Time
 	evaluator       *TargetPreflightEvaluator
 	sourceValidator *SourceValidator
+	policy          PreflightPolicy
 }
 
 func NewPreflightService(dependencies PreflightServiceDependencies) (*PreflightService, error) {
-	if dependencies.DB == nil || dependencies.Evaluator == nil {
+	if dependencies.DB == nil || dependencies.Evaluator == nil || !dependencies.Policy.valid() {
 		return nil, ErrTargetPreflightUnavailable
 	}
 	if dependencies.Now == nil {
@@ -433,7 +446,7 @@ func NewPreflightService(dependencies PreflightServiceDependencies) (*PreflightS
 	}
 	return &PreflightService{
 		db: dependencies.DB, now: dependencies.Now, evaluator: dependencies.Evaluator,
-		sourceValidator: sourceValidator,
+		sourceValidator: sourceValidator, policy: dependencies.Policy,
 	}, nil
 }
 
@@ -453,11 +466,6 @@ func (service *PreflightService) EvaluateAndPersist(
 		request.ExpectedPlanRevision == 0 {
 		return PreflightPersistenceResult{}, ErrInvalidTargetPreflight
 	}
-
-	input, err := canonicalPreflightPersistenceInput(request.Input)
-	if err != nil {
-		return PreflightPersistenceResult{}, err
-	}
 	var observedPlan model.BackupAssetRecoveryPlan
 	loaded := service.db.WithContext(ctx).
 		Where("id = ? AND requester_id = ?", request.PlanID, request.RequesterID).
@@ -465,7 +473,17 @@ func (service *PreflightService) EvaluateAndPersist(
 	if loaded.Error != nil {
 		return PreflightPersistenceResult{}, preflightPersistenceDatabaseError(ctx)
 	}
-	if loaded.RowsAffected != 1 || validatePreflightPlanInput(observedPlan, request.ExpectedPlanRevision, input, now) != nil {
+	durableExpiresAt := observedPlan.PreflightExpiresAt.UTC()
+	remainingTTL := durableExpiresAt.Sub(now)
+	if loaded.RowsAffected != 1 || remainingTTL <= 0 || remainingTTL > service.policy.TTL {
+		return PreflightPersistenceResult{}, ErrRecoveryPreflightConflict
+	}
+	request.Input.SnapshotTTL = remainingTTL
+	input, err := canonicalPreflightPersistenceInput(request.Input)
+	if err != nil {
+		return PreflightPersistenceResult{}, err
+	}
+	if validatePreflightPlanInput(observedPlan, request.ExpectedPlanRevision, input, now) != nil {
 		return PreflightPersistenceResult{}, ErrRecoveryPreflightConflict
 	}
 	binding, err := newRecoveryTargetPreflightSessionBinding(observedPlan)
@@ -481,11 +499,15 @@ func (service *PreflightService) EvaluateAndPersist(
 	if err != nil {
 		return PreflightPersistenceResult{}, err
 	}
+	commitNow := service.now().UTC()
+	if commitNow.IsZero() || commitNow.Before(now) || !commitNow.Before(durableExpiresAt) {
+		return PreflightPersistenceResult{}, ErrRecoveryPreflightConflict
+	}
 	result := PreflightPersistenceResult{PlanID: request.PlanID, Evaluation: evaluation}
 	if !preflightObservationCommittable(evaluation) {
 		return result, nil
 	}
-	encodedRows, candidateDigest, candidateCategories, err := validatePreflightCommitProduct(observedPlan, input, evaluation, now)
+	encodedRows, candidateDigest, candidateCategories, err := validatePreflightCommitProduct(observedPlan, input, evaluation, commitNow)
 	if err != nil {
 		return PreflightPersistenceResult{}, err
 	}
@@ -499,7 +521,8 @@ func (service *PreflightService) EvaluateAndPersist(
 			return locked.Error
 		}
 		if locked.RowsAffected != 1 || lockedPlan.BindingDigest != observedPlan.BindingDigest ||
-			validatePreflightPlanInput(lockedPlan, request.ExpectedPlanRevision, input, now) != nil {
+			!lockedPlan.PreflightExpiresAt.UTC().Equal(durableExpiresAt) ||
+			validatePreflightPlanInput(lockedPlan, request.ExpectedPlanRevision, input, commitNow) != nil {
 			return ErrRecoveryPreflightConflict
 		}
 		if err := service.sourceValidator.RevalidatePlanTx(ctx, tx, lockedPlan); err != nil {
@@ -508,12 +531,20 @@ func (service *PreflightService) EvaluateAndPersist(
 			}
 			return err
 		}
+		transactionNow := service.now().UTC()
+		if transactionNow.IsZero() || transactionNow.Before(commitNow) ||
+			!transactionNow.Before(durableExpiresAt) ||
+			validatePreflightPlanInput(
+				lockedPlan, request.ExpectedPlanRevision, input, transactionNow,
+			) != nil {
+			return ErrRecoveryPreflightConflict
+		}
 		txInput, err := canonicalPreflightPersistenceInput(input)
 		if err != nil {
 			return ErrRecoveryPreflightConflict
 		}
 		txEncodedRows, txCandidateDigest, txCandidateCategories, err :=
-			validatePreflightCommitProduct(lockedPlan, txInput, evaluation, now)
+			validatePreflightCommitProduct(lockedPlan, txInput, evaluation, transactionNow)
 		if err != nil || txEncodedRows != encodedRows || txCandidateDigest != candidateDigest ||
 			txCandidateCategories != candidateCategories {
 			return ErrRecoveryPreflightConflict
@@ -539,7 +570,7 @@ func (service *PreflightService) EvaluateAndPersist(
 			EstimatedItems:                  evaluation.Snapshot.Impact.EstimatedItems,
 			EstimatedBytes:                  evaluation.Snapshot.Impact.EstimatedBytes,
 			ExpiresAt:                       evaluation.Snapshot.ExpiresAt.UTC(),
-			CreatedAt:                       now,
+			CreatedAt:                       transactionNow,
 		}
 		if err := tx.WithContext(ctx).Create(&preflight).Error; err != nil {
 			return err
@@ -550,7 +581,7 @@ func (service *PreflightService) EvaluateAndPersist(
 			Updates(map[string]any{
 				"state":               string(PlanStatePreflightReady),
 				"transition_revision": request.ExpectedPlanRevision + 1,
-				"updated_at":          now,
+				"updated_at":          transactionNow,
 			})
 		if updated.Error != nil {
 			return updated.Error

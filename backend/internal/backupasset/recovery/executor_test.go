@@ -878,6 +878,251 @@ func TestRecoveryExecuteClaimUsesRepositoryCompatibleRsyncDeclarations(t *testin
 	}
 }
 
+type recoveryInjectedRsyncWriter struct {
+	delegate provider.RsyncTargetWriter
+	now      time.Time
+	target   provider.RestoreTarget
+	fence    provider.RestoreFence
+	calls    int
+}
+
+func (writer *recoveryInjectedRsyncWriter) WriteDeclaredRegular(
+	ctx context.Context,
+	call provider.RsyncTargetWriteCall,
+) error {
+	writer.calls++
+	if call.Permit.ValidateAt(writer.now, writer.target, writer.fence) != nil {
+		return errors.New("injected Rsync writer received an invalid Provider permit")
+	}
+	return writer.delegate.WriteDeclaredRegular(ctx, call)
+}
+
+func TestRecoveryExecuteClaimRoutesOnePendingRsyncWriteThroughInjectedWriter(t *testing.T) {
+	fixture := newRecoveryExecutionFixture(t)
+	executed, err := fixture.service.Authorize(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("execute recovery fixture: %v", err)
+	}
+	coordinator := newRecoveryWorkerCoordinator(t, fixture)
+	target := &recoveryExecutionTargetFake{db: fixture.db, now: func() time.Time { return fixture.now }}
+	coordinator.target = target
+	claim, found, err := coordinator.ClaimNext(context.Background(), "injected-rsync-writer")
+	if err != nil || !found || claim.JobID != executed.JobID {
+		t.Fatalf("claim ordinary execution: claim=%+v found=%t err=%v", claim, found, err)
+	}
+	var items []model.BackupAssetRecoveryJobItem
+	if err := fixture.db.Where("job_id = ?", claim.JobID).Order("ordinal ASC").Find(&items).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("ordinary execution items=%d, want create/overwrite/skip", len(items))
+	}
+	primeRecoveryOrdinaryCompletedItem(t, coordinator, claim, items[0].ID)
+
+	var job model.BackupAssetRecoveryJob
+	var plan model.BackupAssetRecoveryPlan
+	if err := fixture.db.Where("id = ?", claim.JobID).Take(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Where("id = ?", job.PlanID).Take(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+	providerTarget, err := provider.NewRestoreTarget(
+		job.TargetNodeID, job.TargetRootID, job.RootLocatorDigest, job.PathDigest,
+		plan.RootRevision, job.TargetChainRevision,
+	)
+	if err != nil {
+		t.Fatalf("build Provider target binding: %v", err)
+	}
+	fence := provider.RestoreFence{
+		JobID: claim.JobID, AttemptID: claim.AttemptID, NodeLeaseID: claim.NodeLeaseID,
+		AttemptFence: claim.AttemptFence, NodeFence: claim.NodeFence,
+		ExpectedTargetRevision: job.TargetChainRevision,
+	}
+	writer := &recoveryInjectedRsyncWriter{
+		delegate: coordinator.RsyncTargetWriter(), now: fixture.now, target: providerTarget, fence: fence,
+	}
+	boundTarget := provider.RsyncBoundRemoteTarget{
+		NodeID: providerTarget.NodeID, RootID: providerTarget.RootID,
+		TargetBindingDigest: providerTarget.BindingDigest, TargetPathDigest: providerTarget.TargetPathDigest,
+		RootRevision: providerTarget.RootRevision, TargetRevision: providerTarget.TargetRevision,
+	}
+	source := newRecoveryRepositoryContractSource(t, fixture.db, claim.JobID)
+	if err := coordinator.ExecuteClaimWithRsyncTargetWriter(
+		context.Background(), claim, source, writer, boundTarget,
+	); err != nil {
+		t.Fatalf("execute through injected Rsync writer: %v", err)
+	}
+	if writer.calls != 1 || len(target.writes) != 1 || len(source.opened) != 1 {
+		t.Fatalf("injected/target/source write counts=%d/%d/%d, want 1/1/1",
+			writer.calls, len(target.writes), len(source.opened))
+	}
+	coordinator.declaredMu.Lock()
+	pendingDeclarations := len(coordinator.declaredWrites)
+	coordinator.declaredMu.Unlock()
+	if pendingDeclarations != 0 {
+		t.Fatalf("completed injected write retained %d declared capabilities", pendingDeclarations)
+	}
+
+	if err := fixture.db.Where("id = ?", claim.JobID).Take(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	if job.State != string(JobStateSucceeded) || job.FailureCategory != "" ||
+		job.WorkspacePhase != string(WorkspacePhaseSealed) {
+		t.Fatalf("injected Rsync execution job terminal projection=%+v", job)
+	}
+	var attempt model.BackupAssetRecoveryAttempt
+	if err := fixture.db.Where("id = ? AND job_id = ?", claim.AttemptID, claim.JobID).Take(&attempt).Error; err != nil {
+		t.Fatal(err)
+	}
+	if attempt.State != string(AttemptStateCompleted) || attempt.ClosedAt == nil {
+		t.Fatalf("injected Rsync execution attempt projection=%+v", attempt)
+	}
+	var checkpoints []model.BackupAssetRecoveryCheckpoint
+	if err := fixture.db.Where("job_id = ?", claim.JobID).Order("sequence ASC").Find(&checkpoints).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(checkpoints) != len(items)+1 || checkpoints[len(checkpoints)-1].Sequence != len(items) ||
+		checkpoints[len(checkpoints)-1].NextTargetRevision != job.TargetChainRevision {
+		t.Fatalf("injected Rsync execution checkpoints=%+v, want reservation plus complete item chain", checkpoints)
+	}
+}
+
+func TestRecoveryHeartbeatRenewalBeforeFirstWriteRefreshesPrivatePermit(t *testing.T) {
+	fixture := newRecoveryExecutionFixture(t)
+	executed, err := fixture.service.Authorize(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("execute recovery fixture: %v", err)
+	}
+	coordinator := newRecoveryWorkerCoordinator(t, fixture)
+	claim, found, err := coordinator.ClaimNext(context.Background(), "renew-before-first-write")
+	if err != nil || !found || claim.JobID != executed.JobID {
+		t.Fatalf("claim ordinary execution: claim=%+v found=%t err=%v", claim, found, err)
+	}
+	var renewed RecoveryWorkerClaim
+	target := &recoveryExecutionTargetFake{
+		db: fixture.db, now: func() time.Time { return fixture.now },
+		beforeWorkspaceCreate: func(ctx context.Context, _ CreateOwnedJobDirRequest) error {
+			fixture.now = claim.LeaseExpiresAt.Add(-30 * time.Second)
+			var heartbeatErr error
+			renewed, heartbeatErr = coordinator.Heartbeat(ctx, claim)
+			if heartbeatErr != nil {
+				return heartbeatErr
+			}
+			if !renewed.LeaseExpiresAt.After(claim.LeaseExpiresAt) {
+				return fmt.Errorf("heartbeat expiry=%s, want after original %s", renewed.LeaseExpiresAt, claim.LeaseExpiresAt)
+			}
+			fixture.now = claim.LeaseExpiresAt.Add(time.Second)
+			return nil
+		},
+	}
+	coordinator.target = target
+	source := newRecoveryRepositoryContractSource(t, fixture.db, claim.JobID)
+	if err := coordinator.ExecuteClaim(context.Background(), claim, source, ""); err != nil {
+		t.Fatalf("execute after pre-write renewal: %v", err)
+	}
+	if len(target.writes) == 0 || !target.writes[0].permit.permit.ExpiresAt.Equal(renewed.LeaseExpiresAt) {
+		t.Fatalf("first write permits=%+v, want refreshed expiry %s", target.writes, renewed.LeaseExpiresAt)
+	}
+}
+
+func TestRecoveryHeartbeatRenewalBetweenItemsRefreshesSecondPrivatePermit(t *testing.T) {
+	fixture := newRecoveryExecutionFixture(t)
+	executed, err := fixture.service.Authorize(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("execute recovery fixture: %v", err)
+	}
+	coordinator := newRecoveryWorkerCoordinator(t, fixture)
+	claim, found, err := coordinator.ClaimNext(context.Background(), "renew-between-items")
+	if err != nil || !found || claim.JobID != executed.JobID {
+		t.Fatalf("claim ordinary execution: claim=%+v found=%t err=%v", claim, found, err)
+	}
+	var renewed RecoveryWorkerClaim
+	target := &recoveryExecutionTargetFake{
+		db: fixture.db, now: func() time.Time { return fixture.now },
+		afterVerify: func(call int) {
+			if call != 1 {
+				return
+			}
+			fixture.now = claim.LeaseExpiresAt.Add(-30 * time.Second)
+			var heartbeatErr error
+			renewed, heartbeatErr = coordinator.Heartbeat(context.Background(), claim)
+			if heartbeatErr != nil {
+				t.Fatalf("heartbeat between items: %v", heartbeatErr)
+			}
+			fixture.now = claim.LeaseExpiresAt.Add(time.Second)
+		},
+	}
+	coordinator.target = target
+	source := newRecoveryRepositoryContractSource(t, fixture.db, claim.JobID)
+	if err := coordinator.ExecuteClaim(context.Background(), claim, source, ""); err != nil {
+		t.Fatalf("execute after between-item renewal: %v", err)
+	}
+	if len(target.writes) != 2 || !renewed.LeaseExpiresAt.After(claim.LeaseExpiresAt) ||
+		!target.writes[1].permit.permit.ExpiresAt.Equal(renewed.LeaseExpiresAt) {
+		t.Fatalf("writes=%+v renewed=%+v, want second write under renewed lease", target.writes, renewed)
+	}
+}
+
+func TestRecoveryTerminalMetricsObserveCommittedSuccessOnlyOnce(t *testing.T) {
+	fixture := newRecoveryExecutionFixture(t)
+	executed, err := fixture.service.Authorize(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("execute recovery fixture: %v", err)
+	}
+	metrics := &recoveryMetricsSpy{}
+	coordinator := newRecoveryWorkerCoordinator(t, fixture)
+	coordinator.metrics = metrics
+	target := &recoveryExecutionTargetFake{db: fixture.db, now: func() time.Time { return fixture.now }}
+	coordinator.target = target
+	claim, found, err := coordinator.ClaimNext(context.Background(), "recovery-terminal-success-metrics")
+	if err != nil || !found || claim.JobID != executed.JobID {
+		t.Fatalf("claim ordinary execution: claim=%+v found=%t err=%v", claim, found, err)
+	}
+	source := newRecoveryRepositoryContractSource(t, fixture.db, claim.JobID)
+	if err := coordinator.ExecuteClaim(context.Background(), claim, source, ""); err != nil {
+		t.Fatalf("execute ordinary recovery claim: %v", err)
+	}
+	metrics.assertSingleOutcome(t, backupasset.ProviderRestic, JobStateSucceeded, MetricOutcomeSuccess)
+	replaySource := newRecoveryRepositoryContractSource(t, fixture.db, claim.JobID)
+	if err := coordinator.ExecuteClaim(context.Background(), claim, replaySource, ""); !errors.Is(err, ErrRecoveryWorkerFenceLost) {
+		t.Fatalf("replay successful recovery claim error=%v, want ErrRecoveryWorkerFenceLost", err)
+	}
+	if len(metrics.outcomes) != 1 {
+		t.Fatalf("successful replay emitted terminal metrics=%+v, want one observation", metrics.outcomes)
+	}
+}
+
+func TestRecoveryTerminalMetricsObserveCommittedNeedsAttentionOnlyOnce(t *testing.T) {
+	fixture := newRecoveryExecutionFixture(t)
+	executed, err := fixture.service.Authorize(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("execute recovery fixture: %v", err)
+	}
+	metrics := &recoveryMetricsSpy{}
+	coordinator := newRecoveryWorkerCoordinator(t, fixture)
+	coordinator.metrics = metrics
+	target := &recoveryExecutionTargetFake{db: fixture.db, now: func() time.Time { return fixture.now }}
+	target.afterWrite = func(int) { corruptRecoveryExecutionTargetState(target) }
+	coordinator.target = target
+	claim, found, err := coordinator.ClaimNext(context.Background(), "recovery-terminal-needs-attention-metrics")
+	if err != nil || !found || claim.JobID != executed.JobID {
+		t.Fatalf("claim ordinary execution: claim=%+v found=%t err=%v", claim, found, err)
+	}
+	source := newRecoveryRepositoryContractSource(t, fixture.db, claim.JobID)
+	if err := coordinator.ExecuteClaim(context.Background(), claim, source, ""); !errors.Is(err, ErrInvalidTargetVerification) {
+		t.Fatalf("execute mismatching recovery claim error=%v, want ErrInvalidTargetVerification", err)
+	}
+	metrics.assertSingleOutcome(t, backupasset.ProviderRestic, JobStateNeedsAttention, MetricOutcomeFailure)
+	replaySource := newRecoveryRepositoryContractSource(t, fixture.db, claim.JobID)
+	if err := coordinator.ExecuteClaim(context.Background(), claim, replaySource, ""); !errors.Is(err, ErrRecoveryWorkerFenceLost) {
+		t.Fatalf("replay needs-attention recovery claim error=%v, want ErrRecoveryWorkerFenceLost", err)
+	}
+	if len(metrics.outcomes) != 1 {
+		t.Fatalf("needs-attention replay emitted terminal metrics=%+v, want one observation", metrics.outcomes)
+	}
+}
+
 func primeRecoveryOrdinaryCompletedItem(
 	t *testing.T,
 	coordinator *WorkerCoordinator,
@@ -2539,6 +2784,12 @@ func TestRecoveryOrdinaryExecutionLocksPlanBeforeJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load ordinary operation handoff: %v", err)
 	}
+	observedAuthority, err := coordinator.observeRecoveryAuthority(
+		context.Background(), handoff.plan, handoff.preflight,
+	)
+	if err != nil {
+		t.Fatalf("observe ordinary execution authority: %v", err)
+	}
 
 	var mu sync.Mutex
 	lockedTables := make([]string, 0, 2)
@@ -2567,6 +2818,7 @@ func TestRecoveryOrdinaryExecutionLocksPlanBeforeJob(t *testing.T) {
 	err = fixture.db.Transaction(func(tx *gorm.DB) error {
 		_, lockErr := coordinator.lockOrdinaryExecutionTx(
 			context.Background(), tx, claim, handoff, handoff.job.TargetChainRevision, fixture.now,
+			observedAuthority,
 		)
 		return lockErr
 	})

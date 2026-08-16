@@ -123,8 +123,23 @@ func main() {
 	settingsSvc := settings.NewService(db)
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTTTL)
 	jwtManager.SetDB(db)
+	escSvc := escalation.NewService(db)
+
+	// alertDispatcher is the canonical Dispatcher. Recovery reconciliation also
+	// uses it, so construct it before the backup runtime composition root.
+	alertDispatcher := alerting.NewDispatcher(db, settingsSvc, func(alert model.Alert) (*alerting.EscalationPolicySummary, error) {
+		policy, err := escSvc.ResolvePolicyForAlert(hubCtx, alert)
+		if err != nil {
+			return nil, err
+		}
+		if policy == nil {
+			return nil, nil
+		}
+		return &alerting.EscalationPolicySummary{Enabled: policy.Enabled, MinSeverity: policy.MinSeverity}, nil
+	})
+	alerting.SetDispatcher(alertDispatcher)
 	assetRuntime, err := backupruntime.New(backupruntime.Dependencies{
-		DB: db, Settings: settingsSvc, SessionRevocations: jwtManager,
+		DB: db, Settings: settingsSvc, SessionRevocations: jwtManager, AlertDispatcher: alertDispatcher,
 		ToolBinaries: provider.ToolBinaries{
 			Restic: util.GetEnvOrDefault("RESTIC_BINARY", "restic"),
 			Rclone: util.GetEnvOrDefault("RCLONE_BINARY", "rclone"),
@@ -137,23 +152,6 @@ func main() {
 
 	// 自动化规则引擎 —— 在任务/异常事件发生时匹配规则并执行动作
 	autoDispatcher := automation.NewDispatcher(db)
-
-	escSvc := escalation.NewService(db)
-
-	// alertDispatcher is the canonical Dispatcher — it bundles db, settings, and
-	// escalation resolver so that RaiseXxx calls no longer need to reach for
-	// package-level module vars. Callers receive it via constructors.
-	alertDispatcher := alerting.NewDispatcher(db, settingsSvc, func(alert model.Alert) (*alerting.EscalationPolicySummary, error) {
-		policy, err := escSvc.ResolvePolicyForAlert(hubCtx, alert)
-		if err != nil {
-			return nil, err
-		}
-		if policy == nil {
-			return nil, nil
-		}
-		return &alerting.EscalationPolicySummary{Enabled: policy.Enabled, MinSeverity: policy.MinSeverity}, nil
-	})
-	alerting.SetDispatcher(alertDispatcher)
 
 	// Engine
 	escEngine := escalation.NewEngine(
@@ -203,14 +201,10 @@ func main() {
 	if !ok {
 		log.Fatal().Msg("Restic legacy adapter type mismatch")
 	}
-	nodeWriteCoordinator, err := backupruntime.NewNodeWriteCoordinator(db)
-	if err != nil {
-		log.Fatal().Err(err).Msg("配置节点写入协调器失败")
-	}
 	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, settingsSvc, alertDispatcher, cfg.TaskTrafficRetentionDays, cfg.TaskRunRetentionDays)
 	taskManager.SetPublicationCoordinator(assetRuntime.PublicationCoordinator())
 	taskManager.SetLineageGuard(assetRuntime.LineageGuard())
-	taskManager.SetNodeWriteAdmission(nodeWriteCoordinator)
+	taskManager.SetNodeWriteAdmission(assetRuntime.NodeWriteCoordinator())
 	taskManager.SetLegacyBlockRecorder(assetRuntime.LegacyBlockRecorder())
 	taskManager.SetAnomalySink(anomalySink)
 	taskManager.SetExactAnomalyAnalyzer(func(ctx context.Context, taskEntity model.Task, runID uint, currentID, previousID string) ([]anomaly.Finding, error) {

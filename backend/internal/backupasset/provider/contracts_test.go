@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"io"
@@ -382,6 +383,38 @@ func TestRsyncRestoreSourceResolverHasOnlyPortableInputAndOpaqueOutput(t *testin
 	}
 	if want := []string{"Close", "Read"}; !reflect.DeepEqual(methods, want) {
 		t.Fatalf("RsyncRestoreSourceStream methods = %v, want %v", methods, want)
+	}
+}
+
+func TestRecoveryRsyncSourceAuthorityRequestIsClosedAndRedacted(t *testing.T) {
+	request := RecoverySourceAuthorityRequest{
+		Provider: backupasset.ProviderRsync,
+		RsyncRef: RsyncRestoreSourceRef{
+			PlanID: strings.Repeat("1", 32), PlanBindingDigest: strings.Repeat("2", 64),
+			RepositoryID: strings.Repeat("3", 32), RecoveryPointID: strings.Repeat("4", 32),
+			CatalogGenerationID: strings.Repeat("5", 32), SelectionDigest: strings.Repeat("6", 64),
+			SourceRevisionDigest: strings.Repeat("7", 64), ManifestDigest: strings.Repeat("8", 64),
+		},
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, formatted := range []string{
+		string(encoded), fmt.Sprintf("%v", request), fmt.Sprintf("%+v", request), fmt.Sprintf("%#v", request),
+	} {
+		for _, canary := range []string{request.RsyncRef.PlanID, request.RsyncRef.ManifestDigest} {
+			if strings.Contains(formatted, canary) {
+				t.Fatalf("Recovery source authority request leaked %q in %q", canary, formatted)
+			}
+		}
+	}
+	if string(encoded) != "{}" {
+		t.Fatalf("Recovery source authority request JSON=%s, want closed empty object", encoded)
+	}
+	requestType := reflect.TypeOf(request)
+	if requestType.NumField() != 2 || requestType.Field(0).Name != "Provider" || requestType.Field(1).Name != "RsyncRef" {
+		t.Fatalf("Recovery source authority request fields changed: %v", requestType)
 	}
 }
 

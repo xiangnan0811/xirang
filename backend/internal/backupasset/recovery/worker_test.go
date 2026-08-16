@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -1719,6 +1720,42 @@ func TestRecoveryAdoptInterruptedOperationUsesProviderSourceAndTerminalDispositi
 	}
 }
 
+func TestRecoveryAdoptInterruptedOperationObservesBeforeProjectionTransaction(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+	if _, err := fixture.service.Authorize(context.Background(), fixture.request); err != nil {
+		t.Fatalf("execute recovery fixture: %v", err)
+	}
+	coordinator := newRecoveryWorkerCoordinator(t, fixture)
+	first, found, err := coordinator.ClaimNext(context.Background(), "authority-order-adoption-before")
+	if err != nil || !found {
+		t.Fatalf("claim recovery job: found=%t err=%v", found, err)
+	}
+	if _, err := coordinator.PrepareFirstWrite(context.Background(), first); err != nil {
+		t.Fatalf("prepare durable first-write barrier: %v", err)
+	}
+	var item model.BackupAssetRecoveryJobItem
+	if err := fixture.db.Where("job_id = ?", first.JobID).Order("ordinal ASC").Take(&item).Error; err != nil {
+		t.Fatal(err)
+	}
+	fixture.now = first.LeaseExpiresAt.Add(time.Second)
+	takeover, found, err := coordinator.TakeoverExpired(context.Background(), "authority-order-adoption-after")
+	if err != nil || !found {
+		t.Fatalf("take over interrupted recovery job: found=%t err=%v", found, err)
+	}
+	spy := &recoveryWorkerAuthorityEffectSpy{observation: RecoveryAuthorityObservation{
+		observedAt: fixture.now,
+		expiresAt:  fixture.now.Add(time.Minute),
+	}}
+	coordinator.liveRevalidator = spy
+
+	if _, err := coordinator.AdoptInterruptedOperation(context.Background(), takeover, item.ID); err != nil {
+		t.Fatalf("adopt interrupted operation: %v", err)
+	}
+	if got, want := strings.Join(spy.events, ","), "observe,revalidate"; got != want {
+		t.Fatalf("adoption authority effect order=%q, want %q", got, want)
+	}
+}
+
 func TestRecoveryPermanentCleanupKeyLossMatrix(t *testing.T) {
 	TestWorkerPermanentCleanupKeyReconciliationMarksOnlyCurrentPostArmWork(t)
 	TestWorkerPermanentCleanupKeyReconciliationLeavesIneligibleWorkUnchanged(t)
@@ -2006,7 +2043,7 @@ func TestWorkerClaimBindsQueuedJobToOneCurrentOwner(t *testing.T) {
 	}
 }
 
-func TestWorkerHeartbeatLosesAllAuthorityWhenSourceFenceIsGone(t *testing.T) {
+func TestRecoveryHeartbeatLosesAllAuthorityWhenSourceFenceIsGone(t *testing.T) {
 	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
 	if _, err := fixture.service.Authorize(context.Background(), fixture.request); err != nil {
 		t.Fatalf("execute recovery fixture: %v", err)
@@ -2025,6 +2062,118 @@ func TestWorkerHeartbeatLosesAllAuthorityWhenSourceFenceIsGone(t *testing.T) {
 	fixture.now = fixture.now.Add(time.Minute)
 	if _, err := coordinator.Heartbeat(context.Background(), claim); !errors.Is(err, ErrRecoveryWorkerFenceLost) {
 		t.Fatalf("heartbeat after source-fence loss error=%v", err)
+	}
+}
+
+func TestRecoveryHeartbeatAtomicallyPropagatesSourceNodeAndAttemptDeadline(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+	if _, err := fixture.service.Authorize(context.Background(), fixture.request); err != nil {
+		t.Fatalf("execute recovery fixture: %v", err)
+	}
+	coordinator := newRecoveryWorkerCoordinator(t, fixture)
+	claim, found, err := coordinator.ClaimNext(context.Background(), "recovery-heartbeat-worker")
+	if err != nil || !found {
+		t.Fatalf("claim queued recovery job: found=%t err=%v", found, err)
+	}
+	fixture.now = fixture.now.Add(time.Minute)
+	renewed, err := coordinator.Heartbeat(context.Background(), claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantExpiry := fixture.now.Add(10 * time.Minute)
+	var source model.RecoveryPointLease
+	if err := fixture.db.Where("id = ?", claim.SourceFence.LeaseID).Take(&source).Error; err != nil {
+		t.Fatal(err)
+	}
+	claimValue := reflect.ValueOf(claim)
+	absoluteDeadline := claimValue.FieldByName("AbsoluteDeadline")
+	if !absoluteDeadline.IsValid() || !absoluteDeadline.Interface().(time.Time).Equal(source.AbsoluteDeadline) {
+		t.Fatalf("claim omits frozen source absolute deadline %s: %+v", source.AbsoluteDeadline, claim)
+	}
+	renewedDeadline := reflect.ValueOf(renewed).FieldByName("AbsoluteDeadline")
+	if !renewedDeadline.IsValid() || !renewedDeadline.Interface().(time.Time).Equal(source.AbsoluteDeadline) {
+		t.Fatalf("heartbeat changed frozen source absolute deadline %s: %+v", source.AbsoluteDeadline, renewed)
+	}
+	var node model.BackupAssetRecoveryNodeLease
+	if err := fixture.db.Where("id = ?", claim.NodeLeaseID).Take(&node).Error; err != nil {
+		t.Fatal(err)
+	}
+	var attempt model.BackupAssetRecoveryAttempt
+	if err := fixture.db.Where("id = ?", claim.AttemptID).Take(&attempt).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !renewed.LeaseExpiresAt.Equal(wantExpiry) || !source.LeaseExpiresAt.Equal(wantExpiry) ||
+		!source.LastHeartbeatAt.Equal(fixture.now) || !node.LeaseExpiresAt.Equal(wantExpiry) ||
+		attempt.LeaseExpiresAt == nil || !attempt.LeaseExpiresAt.Equal(wantExpiry) ||
+		attempt.HeartbeatAt == nil || !attempt.HeartbeatAt.Equal(fixture.now) {
+		t.Fatalf("renewed=%s source=%s/%s node=%s attempt=%v/%v, want %s/%s",
+			renewed.LeaseExpiresAt, source.LeaseExpiresAt, source.LastHeartbeatAt, node.LeaseExpiresAt,
+			attempt.LeaseExpiresAt, attempt.HeartbeatAt, wantExpiry, fixture.now)
+	}
+}
+
+func TestRecoveryHeartbeatTransactionRollsBackSourceRenewalWhenNodeUpdateFails(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+	if _, err := fixture.service.Authorize(context.Background(), fixture.request); err != nil {
+		t.Fatalf("execute recovery fixture: %v", err)
+	}
+	coordinator := newRecoveryWorkerCoordinator(t, fixture)
+	claim, found, err := coordinator.ClaimNext(context.Background(), "recovery-heartbeat-rollback-worker")
+	if err != nil || !found {
+		t.Fatalf("claim queued recovery job: found=%t err=%v", found, err)
+	}
+
+	var sourceBefore model.RecoveryPointLease
+	if err := fixture.db.Where("id = ?", claim.SourceFence.LeaseID).Take(&sourceBefore).Error; err != nil {
+		t.Fatal(err)
+	}
+	var nodeBefore model.BackupAssetRecoveryNodeLease
+	if err := fixture.db.Where("id = ?", claim.NodeLeaseID).Take(&nodeBefore).Error; err != nil {
+		t.Fatal(err)
+	}
+	var attemptBefore model.BackupAssetRecoveryAttempt
+	if err := fixture.db.Where("id = ?", claim.AttemptID).Take(&attemptBefore).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	callbackName := "recovery:heartbeat-node-update-failure:" + t.Name()
+	injected := errors.New("injected recovery heartbeat node update failure")
+	if err := fixture.db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == (model.BackupAssetRecoveryNodeLease{}).TableName() {
+			_ = tx.AddError(injected)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fixture.db.Callback().Update().Remove(callbackName) })
+
+	fixture.now = fixture.now.Add(time.Minute)
+	if _, err := coordinator.Heartbeat(context.Background(), claim); !errors.Is(err, ErrRecoveryWorkerUnavailable) {
+		t.Fatalf("heartbeat injected node failure error=%v, want unavailable", err)
+	}
+
+	var sourceAfter model.RecoveryPointLease
+	if err := fixture.db.Where("id = ?", claim.SourceFence.LeaseID).Take(&sourceAfter).Error; err != nil {
+		t.Fatal(err)
+	}
+	var nodeAfter model.BackupAssetRecoveryNodeLease
+	if err := fixture.db.Where("id = ?", claim.NodeLeaseID).Take(&nodeAfter).Error; err != nil {
+		t.Fatal(err)
+	}
+	var attemptAfter model.BackupAssetRecoveryAttempt
+	if err := fixture.db.Where("id = ?", claim.AttemptID).Take(&attemptAfter).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !sourceAfter.LeaseExpiresAt.Equal(sourceBefore.LeaseExpiresAt) ||
+		!sourceAfter.LastHeartbeatAt.Equal(sourceBefore.LastHeartbeatAt) ||
+		!sourceAfter.AbsoluteDeadline.Equal(sourceBefore.AbsoluteDeadline) ||
+		!nodeAfter.LeaseExpiresAt.Equal(nodeBefore.LeaseExpiresAt) ||
+		attemptAfter.LeaseExpiresAt == nil || attemptBefore.LeaseExpiresAt == nil ||
+		!attemptAfter.LeaseExpiresAt.Equal(*attemptBefore.LeaseExpiresAt) ||
+		attemptAfter.HeartbeatAt == nil || attemptBefore.HeartbeatAt == nil ||
+		!attemptAfter.HeartbeatAt.Equal(*attemptBefore.HeartbeatAt) {
+		t.Fatalf("heartbeat transaction partially committed: source=%+v/%+v node=%+v/%+v attempt=%+v/%+v",
+			sourceBefore, sourceAfter, nodeBefore, nodeAfter, attemptBefore, attemptAfter)
 	}
 }
 
@@ -2865,6 +3014,132 @@ func TestRecoveryReviewF3PreWriteDriftTransactionSQLite(t *testing.T) {
 	}
 }
 
+type recoveryWorkerAuthorityEffectSpy struct {
+	events             []string
+	observeBindings    []RecoveryAuthorityBinding
+	revalidateBindings []RecoveryAuthorityBinding
+	inTransactions     []bool
+	observation        RecoveryAuthorityObservation
+	revalidateErr      error
+}
+
+func (spy *recoveryWorkerAuthorityEffectSpy) ObserveRecoveryAuthority(
+	_ context.Context,
+	binding RecoveryAuthorityBinding,
+) (RecoveryAuthorityObservation, error) {
+	spy.events = append(spy.events, "observe")
+	spy.observeBindings = append(spy.observeBindings, binding)
+	return spy.observation, nil
+}
+
+func (spy *recoveryWorkerAuthorityEffectSpy) RevalidateRecoveryAuthorityTx(
+	_ context.Context,
+	tx *gorm.DB,
+	binding RecoveryAuthorityBinding,
+	observation RecoveryAuthorityObservation,
+) error {
+	spy.events = append(spy.events, "revalidate")
+	spy.revalidateBindings = append(spy.revalidateBindings, binding)
+	if tx == nil || tx.Statement == nil {
+		return errors.New("live authority revalidation did not receive caller transaction")
+	}
+	_, inTransaction := tx.Statement.ConnPool.(*sql.Tx)
+	spy.inTransactions = append(spy.inTransactions, inTransaction)
+	if !inTransaction {
+		return errors.New("live authority revalidation escaped caller transaction")
+	}
+	if observation.observedAt != spy.observation.observedAt {
+		return errors.New("live authority revalidation did not receive observed sealed product")
+	}
+	return spy.revalidateErr
+}
+
+func TestRecoveryPrepareFirstWriteObservesBeforeLockedRevalidation(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+	if _, err := fixture.service.Authorize(context.Background(), fixture.request); err != nil {
+		t.Fatalf("execute recovery fixture: %v", err)
+	}
+	coordinator := newRecoveryWorkerCoordinator(t, fixture)
+	claim, found, err := coordinator.ClaimNext(context.Background(), "recovery-authority-effect-order")
+	if err != nil || !found {
+		t.Fatalf("claim recovery job: found=%t err=%v", found, err)
+	}
+	spy := &recoveryWorkerAuthorityEffectSpy{observation: RecoveryAuthorityObservation{
+		observedAt: fixture.now,
+		expiresAt:  fixture.now.Add(time.Minute),
+	}}
+	coordinator.liveRevalidator = spy
+
+	if _, err := coordinator.PrepareFirstWrite(context.Background(), claim); err != nil {
+		t.Fatalf("prepare first write with live authority observation: %v", err)
+	}
+	if got, want := strings.Join(spy.events, ","), "observe,revalidate"; got != want {
+		t.Fatalf("live authority effect order=%q, want %q", got, want)
+	}
+	if len(spy.observeBindings) != 1 || len(spy.revalidateBindings) != 1 ||
+		spy.observeBindings[0] != spy.revalidateBindings[0] || len(spy.inTransactions) != 1 ||
+		!spy.inTransactions[0] {
+		t.Fatalf("live authority binding changed across observation/revalidation: observe=%+v revalidate=%+v",
+			spy.observeBindings, spy.revalidateBindings)
+	}
+}
+
+func TestRecoveryTerminalMetricsObserveCommittedPreWriteFailureOnlyOnce(t *testing.T) {
+	fixture := newAuthorizationReceiptSQLiteMigrationServiceFixture(
+		t, AuthorizationReceiptExecute, false, true,
+	)
+	result, err := fixture.service.Authorize(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("execute recovery fixture: %v", err)
+	}
+	metrics := &recoveryMetricsSpy{}
+	coordinator := newRecoveryWorkerCoordinator(t, fixture)
+	coordinator.metrics = metrics
+	claim, found, err := coordinator.ClaimNext(context.Background(), "recovery-terminal-prewrite-metrics")
+	if err != nil || !found {
+		t.Fatalf("claim authority-drift job: found=%t err=%v", found, err)
+	}
+	coordinator.liveRevalidator = &authorizationReceiptLiveRevalidatorSpy{err: ErrAuthorizationDenied}
+	if _, err := coordinator.PrepareFirstWrite(context.Background(), claim); !errors.Is(err, ErrRecoverySourceChanged) {
+		t.Fatalf("prepare first write after authority drift error=%v, want ErrRecoverySourceChanged", err)
+	}
+	metrics.assertSingleOutcome(t, backupasset.ProviderRestic, JobStateFailed, MetricOutcomeFailure)
+	if _, err := coordinator.PrepareFirstWrite(context.Background(), claim); !errors.Is(err, ErrRecoveryWorkerFenceLost) {
+		t.Fatalf("stale authority-drift worker error=%v, want ErrRecoveryWorkerFenceLost", err)
+	}
+	if len(metrics.outcomes) != 1 {
+		t.Fatalf("stale pre-write drift emitted terminal metrics=%+v, want one observation", metrics.outcomes)
+	}
+	var job model.BackupAssetRecoveryJob
+	if err := fixture.db.Where("id = ?", result.JobID).Take(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	if job.State != string(JobStateFailed) {
+		t.Fatalf("pre-write drift job state=%q, want failed", job.State)
+	}
+}
+
+func TestRecoveryTerminalMetricsObserveCommittedCancellationOnlyOnce(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+	result, err := fixture.service.Authorize(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("execute recovery fixture: %v", err)
+	}
+	metrics := &recoveryMetricsSpy{}
+	coordinator := newRecoveryWorkerCoordinator(t, fixture)
+	coordinator.metrics = metrics
+	if err := coordinator.CancelJob(context.Background(), result.JobID); err != nil {
+		t.Fatalf("cancel queued recovery job: %v", err)
+	}
+	metrics.assertSingleOutcome(t, backupasset.ProviderRestic, JobStateCanceled, MetricOutcomeBlocked)
+	if err := coordinator.CancelJob(context.Background(), result.JobID); err != nil {
+		t.Fatalf("replay queued recovery cancellation: %v", err)
+	}
+	if len(metrics.outcomes) != 1 {
+		t.Fatalf("cancellation replay emitted terminal metrics=%+v, want one observation", metrics.outcomes)
+	}
+}
+
 func TestWorkerTakeoverReplacesOnlyExpiredCurrentFences(t *testing.T) {
 	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
 	if _, err := fixture.service.Authorize(context.Background(), fixture.request); err != nil {
@@ -3051,6 +3326,33 @@ func TestWorkerProjectPendingOperationMismatchAtomicallyNeedsAttention(t *testin
 	}
 	if _, err := coordinator.PrepareFirstWrite(context.Background(), claim); !errors.Is(err, ErrRecoveryWorkerFenceLost) {
 		t.Fatalf("terminal mismatch claim minted another write permit: %v", err)
+	}
+}
+
+func TestWorkerPendingProjectionAuthorityDriftRollsBackWithoutEffects(t *testing.T) {
+	fixture, coordinator, claim, writeResult, observation, before :=
+		newRecoveryPendingOperationMismatchFixture(t)
+	spy := &recoveryWorkerAuthorityEffectSpy{
+		observation: RecoveryAuthorityObservation{
+			observedAt: fixture.now,
+			expiresAt:  fixture.now.Add(time.Minute),
+		},
+		revalidateErr: ErrRecoveryTargetChanged,
+	}
+	coordinator.liveRevalidator = spy
+
+	_, err := coordinator.projectPendingOperationMismatch(
+		context.Background(), claim, before.item.ID, writeResult, observation, fixture.now,
+	)
+	if !errors.Is(err, ErrRecoveryWorkerUnavailable) {
+		t.Fatalf("authority drift projection error=%v, want fail-closed worker unavailable", err)
+	}
+	if got, want := strings.Join(spy.events, ","), "observe,revalidate"; got != want {
+		t.Fatalf("authority drift effect order=%q, want %q", got, want)
+	}
+	after := loadRecoveryPendingOperationMismatchState(t, fixture.db, claim, before.item.ID)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("authority drift left projection effects: before=%+v after=%+v", before, after)
 	}
 }
 
@@ -4465,6 +4767,8 @@ func TestWorkerCancelRollsBackLateTerminalWriteFailure(t *testing.T) {
 		t.Fatalf("execute recovery fixture: %v", err)
 	}
 	coordinator := newRecoveryWorkerCoordinator(t, fixture)
+	metrics := &recoveryMetricsSpy{}
+	coordinator.metrics = metrics
 	claim, found, err := coordinator.ClaimNext(context.Background(), "recovery-worker-a")
 	if err != nil || !found {
 		t.Fatalf("claim recovery job: found=%t err=%v", found, err)
@@ -4517,6 +4821,9 @@ func TestWorkerCancelRollsBackLateTerminalWriteFailure(t *testing.T) {
 	}
 	if activeSource != 1 || activeNode != 1 {
 		t.Fatalf("rolled-back cancellation released source/node leases=%d/%d", activeSource, activeNode)
+	}
+	if len(metrics.outcomes) != 0 {
+		t.Fatalf("rolled-back cancellation emitted terminal metrics=%+v", metrics.outcomes)
 	}
 }
 
@@ -5653,6 +5960,84 @@ func newRecoveryWorkerCoordinator(
 	fixture *authorizationReceiptServiceFixture,
 ) *WorkerCoordinator {
 	return newRecoveryWorkerCoordinatorWithLimit(t, fixture, 8)
+}
+
+func TestRecoveryClaimAndTakeoverObserveRunningOnlyAfterCommit(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+	if _, err := fixture.service.Authorize(context.Background(), fixture.request); err != nil {
+		t.Fatalf("execute recovery fixture: %v", err)
+	}
+	metrics := &recoveryMetricsSpy{}
+	coordinator := newRecoveryWorkerCoordinator(t, fixture)
+	coordinator.metrics = metrics
+
+	claim, found, err := coordinator.ClaimNext(context.Background(), "metrics-claim-worker")
+	if err != nil || !found {
+		t.Fatalf("claim recovery job: claim=%+v found=%t err=%v", claim, found, err)
+	}
+	var source model.RecoveryPointLease
+	if err := fixture.db.Where("id = ?", claim.SourceFence.LeaseID).Take(&source).Error; err != nil {
+		t.Fatal(err)
+	}
+	claimDeadline := reflect.ValueOf(claim).FieldByName("AbsoluteDeadline")
+	if !claimDeadline.IsValid() || !claimDeadline.Interface().(time.Time).Equal(source.AbsoluteDeadline) {
+		t.Fatalf("ClaimNext absolute deadline missing or changed: claim=%+v source=%s", claim, source.AbsoluteDeadline)
+	}
+	metrics.assertSingleState(t, backupasset.ProviderRestic, JobStateRunning)
+
+	if duplicate, duplicateFound, duplicateErr := coordinator.ClaimNext(
+		context.Background(), "metrics-lost-claim-worker",
+	); duplicateErr != nil || duplicateFound || duplicate.JobID != "" {
+		t.Fatalf("lost claim attempt=%+v found=%t err=%v", duplicate, duplicateFound, duplicateErr)
+	}
+	if premature, prematureFound, prematureErr := coordinator.TakeoverExpired(
+		context.Background(), "metrics-premature-takeover-worker",
+	); prematureErr != nil || prematureFound || premature.JobID != "" {
+		t.Fatalf("premature takeover=%+v found=%t err=%v", premature, prematureFound, prematureErr)
+	}
+	if len(metrics.states) != 1 {
+		t.Fatalf("lost claim or premature takeover emitted running metrics: %+v", metrics.states)
+	}
+
+	fixture.now = claim.LeaseExpiresAt.Add(time.Second)
+	takeover, takeoverFound, takeoverErr := coordinator.TakeoverExpired(
+		context.Background(), "metrics-committed-takeover-worker",
+	)
+	if takeoverErr != nil || !takeoverFound || takeover.JobID != claim.JobID || takeover.AttemptID == claim.AttemptID {
+		t.Fatalf("committed takeover=%+v found=%t err=%v", takeover, takeoverFound, takeoverErr)
+	}
+	takeoverDeadline := reflect.ValueOf(takeover).FieldByName("AbsoluteDeadline")
+	if !takeoverDeadline.IsValid() || !takeoverDeadline.Interface().(time.Time).Equal(source.AbsoluteDeadline) {
+		t.Fatalf("takeover absolute deadline missing or changed: claim=%+v source=%s", takeover, source.AbsoluteDeadline)
+	}
+	if len(metrics.states) != 2 {
+		t.Fatalf("running metrics=%+v, want one claim and one takeover", metrics.states)
+	}
+	for index, observation := range metrics.states {
+		if observation.provider != backupasset.ProviderRestic || observation.state != JobStateRunning {
+			t.Fatalf("running metric %d=%+v", index, observation)
+		}
+	}
+}
+
+func TestDeclaredWriteKeyBindsAttemptAndNodeFences(t *testing.T) {
+	entryID := strings.Repeat("e", 32)
+	base := RecoveryWorkerClaim{
+		JobID: strings.Repeat("j", 32), AttemptID: strings.Repeat("a", 32),
+		NodeLeaseID: strings.Repeat("n", 32), AttemptFence: 1, NodeFence: 1,
+	}
+	for name, changed := range map[string]RecoveryWorkerClaim{
+		"attempt id":    {JobID: base.JobID, AttemptID: strings.Repeat("b", 32), NodeLeaseID: base.NodeLeaseID, AttemptFence: base.AttemptFence, NodeFence: base.NodeFence},
+		"node lease":    {JobID: base.JobID, AttemptID: base.AttemptID, NodeLeaseID: strings.Repeat("m", 32), AttemptFence: base.AttemptFence, NodeFence: base.NodeFence},
+		"attempt fence": {JobID: base.JobID, AttemptID: base.AttemptID, NodeLeaseID: base.NodeLeaseID, AttemptFence: 2, NodeFence: base.NodeFence},
+		"node fence":    {JobID: base.JobID, AttemptID: base.AttemptID, NodeLeaseID: base.NodeLeaseID, AttemptFence: base.AttemptFence, NodeFence: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if declaredWriteKey(base, entryID) == declaredWriteKey(changed, entryID) {
+				t.Fatalf("declared write key ignored %s: base=%q changed=%q", name, declaredWriteKey(base, entryID), declaredWriteKey(changed, entryID))
+			}
+		})
+	}
 }
 
 func recoveryRestartObservationForTest() TargetVerifyObservation {

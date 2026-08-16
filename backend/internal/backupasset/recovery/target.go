@@ -30,6 +30,8 @@ import (
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -330,6 +332,80 @@ type recoveryTargetNodeSessionResolver interface {
 		uint,
 		TargetPurpose,
 	) (recoveryTargetNodeSession, error)
+}
+
+// RecoveryNodeRevisionSnapshot is the authoritative scalar revision product
+// supplied by runtime composition. Node credentials never leave Recovery's
+// private session resolver.
+type RecoveryNodeRevisionSnapshot struct {
+	NodeRevision       string `json:"-"`
+	CredentialRevision string `json:"-"`
+}
+
+// RecoveryNodeRevisionSource resolves the current node and credential
+// revisions while the caller-owned transaction loads the same node row.
+type RecoveryNodeRevisionSource interface {
+	ResolveRecoveryNodeRevisionsTx(
+		context.Context,
+		*gorm.DB,
+		uint,
+		TargetPurpose,
+	) (RecoveryNodeRevisionSnapshot, error)
+}
+
+type productionRecoveryTargetNodeSessionResolver struct {
+	db        *gorm.DB
+	revisions RecoveryNodeRevisionSource
+}
+
+func (resolver *productionRecoveryTargetNodeSessionResolver) ResolveRecoveryTargetNodeSession(
+	ctx context.Context,
+	nodeID uint,
+	purpose TargetPurpose,
+) (recoveryTargetNodeSession, error) {
+	if resolver == nil || resolver.db == nil || resolver.revisions == nil || ctx == nil ||
+		nodeID == 0 || !validRecoveryTargetPurpose(purpose) {
+		return recoveryTargetNodeSession{}, ErrRecoveryTargetUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return recoveryTargetNodeSession{}, err
+	}
+	var result recoveryTargetNodeSession
+	err := resolver.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var node model.Node
+		loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND archived = ?", nodeID, false).Limit(1).Find(&node)
+		if loaded.Error != nil || loaded.RowsAffected != 1 || node.ID != nodeID || node.Archived {
+			return ErrRecoveryTargetUnavailable
+		}
+		revisions, err := resolver.revisions.ResolveRecoveryNodeRevisionsTx(ctx, tx, nodeID, purpose)
+		if err != nil || !validOpaqueRevision(revisions.NodeRevision) ||
+			!validOpaqueRevision(revisions.CredentialRevision) {
+			return ErrRecoveryTargetUnavailable
+		}
+		result = recoveryTargetNodeSession{
+			Node: node, NodeRevision: revisions.NodeRevision,
+			CredentialRevision: revisions.CredentialRevision,
+		}
+		return nil
+	})
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return recoveryTargetNodeSession{}, ctxErr
+		}
+		return recoveryTargetNodeSession{}, ErrRecoveryTargetUnavailable
+	}
+	return result, nil
+}
+
+func validRecoveryTargetPurpose(purpose TargetPurpose) bool {
+	switch purpose {
+	case TargetPurposePreflight, TargetPurposeWrite, TargetPurposeVerify,
+		TargetPurposeResultRead, TargetPurposeCleanup, TargetPurposeReconcile:
+		return true
+	default:
+		return false
+	}
 }
 
 type recoveryTargetNodeDialer interface {
@@ -1408,11 +1484,6 @@ func (session *recoveryTargetSession) closeResources() {
 		}
 		client := session.client
 		session.mu.Unlock()
-		for _, file := range trackedFiles {
-			if err := file.Close(); session.closeErr == nil {
-				session.closeErr = err
-			}
-		}
 		if client != nil {
 			if err := client.Close(); session.closeErr == nil {
 				session.closeErr = err
@@ -1420,6 +1491,11 @@ func (session *recoveryTargetSession) closeResources() {
 		}
 		if session.closeSSH != nil {
 			if err := session.closeSSH(session.sshClient); session.closeErr == nil {
+				session.closeErr = err
+			}
+		}
+		for _, file := range trackedFiles {
+			if err := file.Close(); session.closeErr == nil {
 				session.closeErr = err
 			}
 		}
@@ -1493,6 +1569,21 @@ func (client *recoveryResultTrackedSFTPClient) Open(value string) (recoveryTarge
 	return tracked, err
 }
 
+func (client *recoveryResultTrackedSFTPClient) OpenFile(value string, flag int) (recoveryTargetSFTPFile, error) {
+	if client == nil || client.recoveryTargetSFTPClient == nil || client.session == nil {
+		return nil, ErrRecoveryTargetUnavailable
+	}
+	file, err := client.recoveryTargetSFTPClient.OpenFile(value, flag)
+	if file == nil {
+		return nil, err
+	}
+	tracked, trackErr := client.session.trackResultFile(file)
+	if trackErr != nil {
+		return nil, trackErr
+	}
+	return tracked, err
+}
+
 func (session *recoveryTargetSession) Close() error {
 	if session == nil {
 		return ErrRecoveryTargetUnavailable
@@ -1530,6 +1621,65 @@ func (purpose TargetPurpose) valid() bool {
 	default:
 		return false
 	}
+}
+
+// TargetRootRegistrationPurpose identifies the narrow read-only probe used to
+// establish target-root authority. It is intentionally separate from execution
+// target purposes so registration cannot be reused as a mutation permit.
+type TargetRootRegistrationPurpose string
+
+const TargetRootRegistrationPurposeReadOnly TargetRootRegistrationPurpose = "recovery_target_root_registration"
+
+// TargetRootRegistrationRequest carries the complete private input that a
+// read-only target probe must bind before a root record can be persisted.
+type TargetRootRegistrationRequest struct {
+	NodeID             uint
+	RootID             string
+	SafeLabel          string
+	Locator            string                            `json:"-"`
+	Policy             settings.RecoveryTargetRootPolicy `json:"-"`
+	NodeRevision       string                            `json:"-"`
+	CredentialRevision string                            `json:"-"`
+	Purpose            TargetRootRegistrationPurpose     `json:"-"`
+	ReadOnly           bool                              `json:"-"`
+}
+
+func (request TargetRootRegistrationRequest) String() string {
+	return "TargetRootRegistrationRequest{NodeID:" + strconv.FormatUint(uint64(request.NodeID), 10) +
+		", RootID:" + strconv.Quote(request.RootID) + ", SafeLabel:" + strconv.Quote(request.SafeLabel) + "}"
+}
+
+func (request TargetRootRegistrationRequest) GoString() string { return request.String() }
+
+// TargetRootRegistrationObservation is the private, current product of a
+// purpose-exact read-only probe. It never carries a locator or policy input.
+type TargetRootRegistrationObservation struct {
+	NodeID                  uint
+	RootID                  string
+	LocatorDigest           string                        `json:"-"`
+	NodeRevision            string                        `json:"-"`
+	CredentialRevision      string                        `json:"-"`
+	RootObservationRevision string                        `json:"-"`
+	Purpose                 TargetRootRegistrationPurpose `json:"-"`
+	ReadOnly                bool                          `json:"-"`
+	ObservedAt              time.Time                     `json:"-"`
+}
+
+func (observation TargetRootRegistrationObservation) String() string {
+	return "TargetRootRegistrationObservation{NodeID:" + strconv.FormatUint(uint64(observation.NodeID), 10) +
+		", RootID:" + strconv.Quote(observation.RootID) + ", Purpose:" + strconv.Quote(string(observation.Purpose)) +
+		", ReadOnly:" + strconv.FormatBool(observation.ReadOnly) + "}"
+}
+
+func (observation TargetRootRegistrationObservation) GoString() string { return observation.String() }
+
+// TargetRootRegistrationProbe owns the external target observation. It must
+// perform no remote mutation for this purpose.
+type TargetRootRegistrationProbe interface {
+	ObserveRecoveryTargetRoot(
+		context.Context,
+		TargetRootRegistrationRequest,
+	) (TargetRootRegistrationObservation, error)
 }
 
 type TargetObservationPermit struct {
@@ -4204,6 +4354,32 @@ func newRecoverySFTPTarget(
 	), nil
 }
 
+// ProductionTargetDependencies contains only process composition authorities.
+// The concrete target and all usable node/session/locator capabilities remain
+// private to this package.
+type ProductionTargetDependencies struct {
+	DB            *gorm.DB
+	Revisions     RecoveryNodeRevisionSource
+	Dialer        *sshutil.NodeDialer
+	WorkspaceKeys RecoveryWorkspaceKeySource
+}
+
+// NewProductionTarget constructs the single Recovery-owned SSH/SFTP target.
+func NewProductionTarget(dependencies ProductionTargetDependencies) (TargetPort, error) {
+	if dependencies.DB == nil || dependencies.Revisions == nil || dependencies.Dialer == nil ||
+		dependencies.WorkspaceKeys == nil {
+		return nil, ErrRecoveryTargetUnavailable
+	}
+	resolver := &productionRecoveryTargetNodeSessionResolver{
+		db: dependencies.DB, revisions: dependencies.Revisions,
+	}
+	return newRecoverySFTPTarget(
+		resolver,
+		dependencies.Dialer,
+		newRecoveryWorkspaceMarkerCodec(dependencies.WorkspaceKeys, nil),
+	)
+}
+
 func newRecoverySFTPTargetForTest(
 	sessions *recoveryTargetSessionFactory,
 	marker *recoveryWorkspaceMarkerCodec,
@@ -6464,6 +6640,10 @@ func (target *recoverySFTPTarget) WriteAtomic(
 		if err != nil {
 			return TargetWriteResult{}, err
 		}
+		client := &recoveryResultTrackedSFTPClient{
+			recoveryTargetSFTPClient: session.client,
+			session:                  session,
+		}
 		validateLive := func() error {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -6480,7 +6660,7 @@ func (target *recoverySFTPTarget) WriteAtomic(
 			return nil
 		}
 		result, operationErr := driveRecoveryOverwriteTransitions(
-			session.client, authority.sessionBinding, authority, request, validateLive,
+			client, authority.sessionBinding, authority, request, validateLive,
 		)
 		closeErr := session.Close()
 		if err := ctx.Err(); err != nil {
@@ -6516,6 +6696,10 @@ func (target *recoverySFTPTarget) WriteAtomic(
 	if err != nil {
 		return TargetWriteResult{}, err
 	}
+	client := &recoveryResultTrackedSFTPClient{
+		recoveryTargetSFTPClient: session.client,
+		session:                  session,
+	}
 	validateLive := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -6532,17 +6716,17 @@ func (target *recoverySFTPTarget) WriteAtomic(
 		return nil
 	}
 	prepared, operationErr := prepareRecoveryCreateParents(
-		session.client, authority.sessionBinding, authority, request.Object, validateLive,
+		client, authority.sessionBinding, authority, request.Object, validateLive,
 	)
 	result := TargetWriteResult{}
 	if operationErr == nil {
 		operationErr = revalidateRecoveryCreateParents(
-			session.client, authority.sessionBinding, authority, request.Object, prepared,
+			client, authority.sessionBinding, authority, request.Object, prepared,
 		)
 	}
 	if operationErr == nil {
 		result, operationErr = writeRecoveryRegularCreate(
-			session.client, authority.sessionBinding, authority, request.Object,
+			client, authority.sessionBinding, authority, request.Object,
 			request, prepared, tempPath, validateLive,
 		)
 	}
@@ -10272,7 +10456,7 @@ func (permit TargetReconciliationPermit) ValidateRequestAt(
 		!validDigest(permit.RootLocatorDigest) || !validOpaqueRevision(permit.RootRevision) ||
 		!validDigest(permit.ExpectedSetDigest) || permit.PageLimit != recoveryReconciliationPageLimit ||
 		permit.ChainLimit != recoveryReconciliationChainLimit ||
-		permit.FindingLimit != recoveryReconciliationFindingLimit ||
+		permit.FindingLimit <= 0 || permit.FindingLimit > recoveryReconciliationFindingLimit ||
 		len(permit.Cursor) > recoveryReconciliationCursorMax ||
 		(permit.AdmissionGeneration != "" && !validOpaqueRevision(permit.AdmissionGeneration)) ||
 		!permit.ExpiresAt.After(now) || proof == nil || !proof.sessionBinding.valid() ||

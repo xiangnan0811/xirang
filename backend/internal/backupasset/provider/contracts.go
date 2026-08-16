@@ -265,6 +265,22 @@ type RsyncRestoreSourceResolver interface {
 	ResolveRsyncRestoreSource(context.Context, RsyncRestoreSourceRef) (RsyncRestoreSource, error)
 }
 
+// RecoverySourceAuthorityRequest is the closed Provider-aware input to the
+// Repository source authority. Target namespace evidence is deliberately not
+// caller supplied; it must eventually come from the owning target observer.
+type RecoverySourceAuthorityRequest struct {
+	Provider backupasset.ProviderKind `json:"-"`
+	RsyncRef RsyncRestoreSourceRef    `json:"-"`
+}
+
+func (RecoverySourceAuthorityRequest) String() string {
+	return "RecoverySourceAuthorityRequest{redacted}"
+}
+
+func (RecoverySourceAuthorityRequest) GoString() string {
+	return "RecoverySourceAuthorityRequest{redacted}"
+}
+
 // RsyncTargetWriteCall carries one already-declared source stream to the
 // bound target authority. It contains no remote root or path locator.
 type RsyncTargetWriteCall struct {

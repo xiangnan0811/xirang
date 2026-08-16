@@ -56,10 +56,18 @@ func (authorizationReceiptNodeAdmission) AdmitRecoveryTx(context.Context, *gorm.
 
 type authorizationReceiptLiveRevalidator struct{}
 
+func (authorizationReceiptLiveRevalidator) ObserveRecoveryAuthority(
+	context.Context,
+	RecoveryAuthorityBinding,
+) (RecoveryAuthorityObservation, error) {
+	return RecoveryAuthorityObservation{}, nil
+}
+
 func (authorizationReceiptLiveRevalidator) RevalidateRecoveryAuthorityTx(
 	context.Context,
 	*gorm.DB,
 	RecoveryAuthorityBinding,
+	RecoveryAuthorityObservation,
 ) error {
 	return nil
 }
@@ -419,6 +427,7 @@ func newAuthorizationReceiptServiceFixtureConfigured(
 		LocatorKeys: newAuthorizationReceiptLocatorKeys(), AuditWriter: audit,
 		ReceiptReplayTTL: 20 * time.Minute, WriteGrantTTL: 15 * time.Minute,
 		DeleteGrantTTL: 10 * time.Minute, NodeLeaseTTL: 10 * time.Minute,
+		Policy: WorkerPolicy{LeaseRenewMargin: time.Minute, ExecutionTimeout: 30 * time.Minute},
 	}
 	fixture.service, err = NewAuthorizationService(fixture.dependencies)
 	if err != nil {
@@ -792,6 +801,7 @@ func newAuthorizationReceiptServiceFixtureOnDBConfigured(
 		LocatorKeys: newAuthorizationReceiptLocatorKeys(), AuditWriter: audit,
 		ReceiptReplayTTL: 20 * time.Minute, WriteGrantTTL: 15 * time.Minute,
 		DeleteGrantTTL: 10 * time.Minute, NodeLeaseTTL: 10 * time.Minute,
+		Policy: WorkerPolicy{LeaseRenewMargin: time.Minute, ExecutionTimeout: 30 * time.Minute},
 	}
 	fixture.service, err = NewAuthorizationService(fixture.dependencies)
 	if err != nil {

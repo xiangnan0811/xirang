@@ -4821,6 +4821,32 @@ target_test.go:3328:10: value.proof undefined (type *TargetObservationPermit has
 FAIL xirang/backend/internal/backupasset/recovery [build failed]
 ```
 
+The first implementation attempt called a nonexistent package validator instead
+of the existing `JobState.Valid` method and failed to compile. After that
+one-line correction, the unchanged metrics selector was GREEN:
+
+```text
+cd backend
+go test ./internal/backupasset/recovery -run '^TestRecoveryMetrics' -count=1
+ok xirang/backend/internal/backupasset/recovery 0.052s
+```
+
+The managed Recovery settings RED proved the typed snapshot and cross-field
+validation were both missing:
+
+```text
+cd backend
+go test ./internal/backupasset ./internal/settings \
+  -run '^(TestFoundationRecoveryConfig|TestBackupAssetRecoveryManagedRuntime)' -count=1
+
+FoundationService.RecoveryConfig undefined
+accepted unsafe Recovery settings map[
+  backup_assets.recovery.lease_renew_margin:30s
+  backup_assets.recovery.lease_ttl:30s]
+FAIL xirang/backend/internal/backupasset
+FAIL xirang/backend/internal/settings
+```
+
 The failure identity is the missing package-private issuer/proof required by
 design 39.2. It is not an environment, fixture, syntax or unrelated-package
 failure. No product file had been edited before this RED.
@@ -9230,3 +9256,976 @@ Task 7 is delivered and merged. Child 13 remains `in_progress` because Tasks
 12/15. The Child is intentionally not archived. Task 8 remains stopped until the
 bookkeeping branch itself passes CI, merges, receives a post-merge disposition,
 local `main` is resynchronized and the bookkeeping branch is removed.
+
+## Task 8 managed runtime first TDD slice (2026-08-12)
+
+The first lifecycle RED adds focused contracts for metadata reconciliation
+before publication, no queued-work execution during `Startup`, and rejection of
+nil or duplicate graph publication. The initial formatting command used a
+repo-root-relative path while already inside `backend`; it failed before the Go
+compiler and is not counted as RED evidence. The corrected unchanged selector
+produced the genuine missing-feature failure:
+
+```text
+cd backend
+go test ./internal/backupasset/runtime \
+  -run '^TestManagedRecovery(RuntimeStartup|Publication)' -count=1
+
+undefined: newManagedRecoveryPublication
+undefined: managedRecoveryGraph
+undefined: newManagedRecoveryRuntime
+undefined: managedRecoveryRuntimeDependencies
+FAIL xirang/backend/internal/backupasset/runtime [build failed]
+```
+
+The minimal graph owner and worker wrapper then produced GREEN while delegating
+all durable claim and takeover selection to the existing coordinator methods:
+
+```text
+cd backend
+go test ./internal/backupasset/runtime \
+  -run '^TestManagedRecovery(RuntimeStopAccepting|WorkerWake)' -count=1
+ok xirang/backend/internal/backupasset/runtime 0.053s
+```
+
+The genuinely absent Task 8 Recovery metrics test file then produced RED:
+
+```text
+cd backend
+go test ./internal/backupasset/recovery -run '^TestRecoveryMetrics' -count=1
+
+undefined: NewPrometheusMetrics
+undefined: MetricOutcomeSuccess
+undefined: MetricOutcome
+FAIL xirang/backend/internal/backupasset/recovery [build failed]
+```
+
+No production file had been edited when this RED was observed.
+
+The minimal managed publication/runtime implementation then produced GREEN:
+
+```text
+cd backend
+go test ./internal/backupasset/runtime \
+  -run '^TestManagedRecovery(RuntimeStartup|Publication)' -count=1
+ok xirang/backend/internal/backupasset/runtime 0.055s
+```
+
+The next unchanged lifecycle/scheduler selector produced RED for the missing
+ordered graph teardown callbacks, sticky stop/shutdown owner methods, and
+managed worker wrapper:
+
+```text
+cd backend
+go test ./internal/backupasset/runtime \
+  -run '^TestManagedRecovery(RuntimeStopAccepting|WorkerWake)' -count=1
+
+unknown field stopClaims in managedRecoveryGraph
+unknown field cancelJoinAttempts in managedRecoveryGraph
+unknown field fenceOwnership in managedRecoveryGraph
+unknown field revokeDrainDelivery in managedRecoveryGraph
+unknown field shutdownLifecycle in managedRecoveryGraph
+manager.StopAccepting undefined
+manager.Shutdown undefined
+undefined: newManagedRecoveryWorker
+FAIL xirang/backend/internal/backupasset/runtime [build failed]
+```
+
+The managed worker originally selected directly on `time.After` inside its
+loop. A focused timer-ownership test required one reusable timer for the worker
+lifetime, no timer allocation or reset for job wakes, one reset after a
+takeover deadline, and an explicit stop on worker exit. The unchanged test
+produced the genuine missing-seam RED:
+
+```text
+cd backend
+go test ./internal/backupasset/runtime \
+  -run '^TestManagedRecoveryWorkerReusesAndStopsTakeoverTimer$' -count=1
+
+unknown field NewTimer in struct literal of type managedRecoveryWorkerDependencies
+undefined: managedRecoveryTimer
+FAIL xirang/backend/internal/backupasset/runtime [build failed]
+```
+
+The minimal implementation owns one injected/resettable timer and delegates
+all durable claim/takeover decisions to the existing coordinator. The same
+selector then produced GREEN:
+
+```text
+cd backend
+go test ./internal/backupasset/runtime \
+  -run '^TestManagedRecoveryWorkerReusesAndStopsTakeoverTimer$' -count=1
+ok xirang/backend/internal/backupasset/runtime 0.055s
+```
+
+The next lifecycle selector froze single ownership for `Run` and required
+`Shutdown` to cancel and join that owner. Before the lifecycle state existed,
+the unchanged selector observed the genuine duplicate-owner RED:
+
+```text
+cd backend
+go test ./internal/backupasset/runtime \
+  -run '^TestManagedRecoveryRuntimeConcurrentRunHasOneOwnerAndShutdownJoinsIt$' -count=1
+
+concurrent Run started graph 2 times, want one owner
+FAIL
+```
+
+The minimal GREEN records one process-lifetime `Run` owner, its cancel function
+and completion channel under a dedicated mutex. Concurrent `Run` calls return;
+`Shutdown` cancels and context-boundedly joins the owner without waiting under
+the lifecycle lock:
+
+```text
+cd backend
+go test ./internal/backupasset/runtime \
+  -run '^TestManagedRecoveryRuntimeConcurrentRunHasOneOwnerAndShutdownJoinsIt$' -count=1
+ok xirang/backend/internal/backupasset/runtime 0.076s
+```
+
+A follow-up 100-iteration stress matrix concurrently races `Run`,
+`TransitionSettings`, `StopAccepting` and `Shutdown`; it verifies bounded joins,
+closed invalid-state outcomes and zero graph publication after shutdown. It
+passed under the race detector:
+
+```text
+cd backend
+go test -race ./internal/backupasset/runtime \
+  -run '^TestManagedRecoveryRuntimeRunTransitionStopAndShutdownRace$' -count=1
+ok xirang/backend/internal/backupasset/runtime 1.547s
+```
+
+## Task 8 managed runtime continuation (2026-08-13)
+
+### Transition join, readiness, facades and composition
+
+The graph-replacement contract was strengthened so persistence cannot begin
+until the retired graph owner has been canceled and joined. The focused test
+first observed the expected RED because persistence became visible while the
+old graph was still blocked. The minimal GREEN moved the join before the
+persistence callback. The combined lifecycle selector then passed under the
+race detector:
+
+```text
+TestManagedRecoveryRuntimeTransitionCancelsAndJoinsOldGraphBeforePersistence
+RED: old graph was not joined before persistence
+GREEN
+
+go test -race ./internal/backupasset/runtime \
+  -run '^(TestManagedRecoveryRuntimeConcurrentRunHasOneOwnerAndShutdownJoinsIt|TestManagedRecoveryRuntimeRunTransitionStopAndShutdownRace|TestManagedRecoveryRuntimeTransitionCancelsAndJoinsOldGraphBeforePersistence)$' \
+  -count=1
+PASS
+```
+
+The downgrade-readiness matrix was added test-first. The initial selectors
+failed on the absent closed readiness states, sticky fence and database
+inspector. The GREEN provides exactly
+`pristine_downgrade_allowed`, `blocked` and `forward_fix_only`; requires a
+disabled graph; installs the sticky fence before snapshot/reconciliation;
+makes the use latch dominate every other result; treats unavailable or fresh
+non-clear reconciliation as a blocker; and never invokes schema down. A
+production database inspector was then proven against the paired `000069` down
+guard's Recovery aggregate, authority, source/node lease, attempt, Result,
+Recovery Content grant/request/stream, shared usage/content-lease and ordinary
+evidence blockers:
+
+```text
+TestManagedRecoveryRuntimeDowngradeReadinessMatrixIsDisabledStickyAndNeverRunsDown
+TestManagedRecoveryRuntimeDowngradeReadinessRejectsEnabledFeatureWithoutInstallingFence
+TestManagedRecoveryRuntimeDowngradeReadinessFailureStillFencesReenable
+TestManagedRecoveryDowngradeDBInspectorMatchesPairedDownGuard
+RED -> GREEN
+```
+
+Runtime composition originally lacked publication-backed Recovery facades and
+constructed a second node-write coordinator in `cmd/server`. Focused RED/GREEN
+selectors now prove one Recovery publication is shared by the graph, Router
+authorization facade and Content Broker result facade; successful durable
+execute wakes the managed worker; result authorization/source access remains
+available while admission is disabled; and main reuses
+`assetRuntime.NodeWriteCoordinator()`:
+
+```text
+TestManagedRecoveryAuthorizationFacadeBorrowsPublishedAdmissionAndWakesExecutedJob
+TestManagedRecoveryResultFacadeRemainsPublishedWhileAdmissionDisabled
+TestRuntimeNewOwnsDefaultDisabledRecoveryReceiptMaintenance
+shared node-coordinator main/runtime source selectors
+RED -> GREEN
+
+go test ./internal/backupasset/runtime ./internal/api ./cmd/server -count=1
+PASS
+```
+
+### Disabled maintenance ownership
+
+The next test started an enabled graph, transitioned it to disabled and
+required result delivery plus downgrade reconciliation to remain published.
+The unchanged production transition produced the expected RED because the
+disabled candidate contained neither maintenance service:
+
+```text
+=== RUN   TestManagedRecoveryRuntimeDisableRetainsResultAndReconciliationFacades
+disabled graph lost maintenance services: resultDelivery:<nil>
+downgradeReconciler:<nil>
+FAIL
+```
+
+The first GREEN carried those maintenance services into the disabled graph.
+The test was then strengthened to prove the retired mutation graph stops
+claims, joins attempts and fences ownership before persistence, but does not
+drain delivery or stop the lifecycle being retained by the same binary. That
+produced a second genuine RED:
+
+```text
+disable transition events=[stop_claims join_attempts fence_ownership
+drain_delivery shutdown_lifecycle persist]
+want [stop_claims join_attempts fence_ownership persist]
+FAIL
+```
+
+The final GREEN transfers maintenance service and teardown ownership only
+after publication references drain, then retires mutation ownership. A
+wait-idle failure therefore still republishes a fully owned prior graph, while
+persist/install rollback discards the transferred candidate and rebuilds the
+prior graph:
+
+```text
+go test ./internal/backupasset/runtime \
+  -run '^(TestManagedRecoveryRuntimeDisableRetainsResultAndReconciliationFacades|TestManagedRecoveryRuntimeTransition)' \
+  -count=1
+PASS
+
+go test -race ./internal/backupasset/runtime \
+  -run '^(TestManagedRecoveryRuntimeRunTransitionStopAndShutdownRace|TestManagedRecoveryRuntimeTransition|TestManagedRecoveryWorker)' \
+  -count=1
+PASS
+```
+
+### Narrow downgrade facade
+
+Task 9 needs a one-hop runtime boundary rather than access to the managed graph
+or database inspector. The test-first selector produced compile-time RED for
+the missing manager contract and public method:
+
+```text
+runtime.RecoveryDowngradeReadiness undefined
+runtimeRecoveryManagerFake has no readiness contract
+FAIL [build failed]
+```
+
+The minimal GREEN extends only the internal manager interface and delegates
+through `Runtime.RecoveryDowngradeReadiness(ctx)`:
+
+```text
+go test ./internal/backupasset/runtime \
+  -run '^TestRuntimeExposesRecoveryDowngradeReadinessFacade$' -count=1
+PASS
+```
+
+No Task 9 route, handler, proof, reason, idempotency or Swagger change was
+added by this slice.
+
+### Worker concurrency, retry and fencing
+
+Configured Recovery worker concurrency and the configured retry bounds were
+previously parsed but not composed. The new tests first produced clean
+compile-time RED for exactly the missing worker fields:
+
+```text
+unknown field WorkerConcurrency in managedRecoveryWorkerDependencies
+unknown field RetryBase in managedRecoveryWorkerDependencies
+unknown field RetryMaxDelay in managedRecoveryWorkerDependencies
+FAIL [build failed]
+```
+
+The GREEN event loop keeps durable claim and takeover selection inside
+`WorkerCoordinator`, bounds active executions by the frozen
+`WorkerConcurrency`, and gives claim and takeover scheduler failures separate
+lazy exponential timers starting at `RetryBase` and capped at
+`RetryMaxDelay`. Job wake, takeover cadence and the two retry schedules do not
+reset each other. Execution errors do not invent a runtime retry state; durable
+lease expiry and the takeover scheduler remain authoritative.
+
+The teardown test then produced RED for the missing active-claim fence:
+
+```text
+worker.FenceActiveClaims undefined
+FAIL [build failed]
+```
+
+The GREEN tracks each durable active claim, cancels and joins execution first,
+then calls the existing `WorkerCoordinator.CancelJob` transaction for every
+context-interrupted claim. That transaction provides the durable attempt,
+source-lease and node-lease fence/release transition; runtime does not rewrite
+those rows directly.
+
+A review pass then froze two shutdown races. First, an executor may return a
+`context.Canceled`-shaped error while the managed worker context is still live;
+the initial implementation retained that completed claim and the new selector
+failed with `active Recovery claims=1, want 0`. GREEN now retains a claim only
+when the worker run context itself was canceled. Second, a claim may complete
+durably as shutdown arrives; its post-join `CancelJob` correctly returns
+`ErrRecoveryWorkerFenceLost`. The focused selector first failed on that raw
+sentinel, then GREEN normalized only that exact already-lost result while
+preserving database, unavailable and caller-context failures.
+
+```text
+go test ./internal/backupasset/runtime \
+  -run '^(TestManagedRecoveryWorker|TestManagedRecoveryAuthorizationFacade)' \
+  -count=1
+PASS
+
+go test ./internal/backupasset/runtime \
+  -run '^TestManagedRecoveryWorkerShutdownJoinsThenFencesActiveClaims$' \
+  -count=1
+PASS
+
+go test -race ./internal/backupasset/runtime \
+  -run '^(TestManagedRecoveryWorker|TestManagedRecoveryRuntimeRunTransitionStopAndShutdownRace|TestManagedRecoveryRuntimeConcurrentRunHasOneOwnerAndShutdownJoinsIt)$' \
+  -count=1
+PASS
+
+go test ./internal/backupasset/runtime \
+  -run '^(TestManagedRecoveryWorkerFencingAcceptsAlreadyLostOwnership|TestManagedRecoveryWorkerDoesNotFenceCompletedContextError|TestManagedRecoveryWorkerShutdownJoinsThenFencesActiveClaims)$' \
+  -count=1
+PASS
+
+go test ./internal/backupasset/runtime -count=1
+ok xirang/backend/internal/backupasset/runtime
+```
+
+### Open production blockers at this checkpoint
+
+Enabled Recovery still has no production implementation anywhere in the
+repository for the explicit node-revision, preflight-evidence,
+authority-revalidation, typed Rsync restore-runner, reconciliation-revision or
+reconciliation-finding authorities. Only test fakes implement these contracts.
+`Runtime.New` therefore safely supports default-disabled startup, while an
+operator enable transition fails closed before graph publication. No authority,
+credential scope, security evidence, target permission or alert behavior was
+synthesized in runtime to hide this gap.
+
+Periodic result/workspace cleanup is also not safely schedulable yet.
+`ResultLifecycleService` owns fenced candidate-addressed claim and phase
+advancement, but exposes no bounded keyset/high-water candidate-selection port.
+A runtime table scan would duplicate Task 7's private candidate predicates and
+violate the domain boundary. Consequently the retained result/reconciliation
+facades and receipt owner are wired, but the Task 8 cleanup cadence/batch/retry
+owner and ordinary periodic orphan reconciliation remain open pending a
+domain-owned bounded enumeration contract and the missing production
+authorities. The Task 8 checklist remains open; no completion, stage, commit,
+push or PR claim is made by this checkpoint.
+
+### Stale retry timer reset correction (2026-08-13)
+
+The retry scheduler had a latent timer-ownership defect: a successful claim
+lookup reset only the logical retry channel and delay, leaving an already-fired
+physical timer tick queued. The focused regression first failed against the
+unchanged worker because the reset path made zero `Stop` calls:
+
+```text
+go test ./internal/backupasset/runtime \\
+  -run '^TestManagedRecoveryWorkerDoesNotRearmStaleRetryTickAfterSuccess$' -count=1
+
+--- FAIL: TestManagedRecoveryWorkerDoesNotRearmStaleRetryTickAfterSuccess
+    recovery_runtime_test.go:1894: successful retry reset Stop calls=0, want 1
+FAIL
+```
+
+The minimal GREEN adds `stopAndDrainManagedRecoveryTimer`, which stops the
+armed retry timer and drains one expired tick before clearing the logical
+schedule. The same selector then passed, along with the direct expired-timer
+contract and the existing independent bounded-backoff selector:
+
+```text
+go test ./internal/backupasset/runtime \\
+  -run '^TestManagedRecoveryWorkerDoesNotRearmStaleRetryTickAfterSuccess$' -count=1
+ok  xirang/backend/internal/backupasset/runtime  0.104s
+
+go test ./internal/backupasset/runtime \\
+  -run '^(TestManagedRecoveryWorkerRetryResetDrainsExpiredTimer|TestManagedRecoveryWorkerRetriesWithIndependentBoundedBackoff)$' \\
+  -count=1
+ok  xirang/backend/internal/backupasset/runtime  0.052s
+```
+
+The final affected package, race, vet, format, diff and Trellis validation
+commands also passed. Cold-disabled startup remains deliberately fail-closed:
+production Target/revision/finding authorities and a bounded result/workspace
+candidate enumeration port are still absent, so runtime does not invent those
+authorities or duplicate Task 7 predicates.
+
+### Task 8 disabled-runtime cleanup owner slice (2026-08-13)
+
+The first cleanup-owner RED proved that a default-disabled graph still returned
+only a sleeping no-op and had no configured cleanup owner:
+
+```text
+unknown field CleanupWorkerID in managedRecoveryGraphBuildDependencies
+disabledGraph.cleanup undefined
+FAIL
+```
+
+The minimal GREEN composes the real production target and
+`ResultLifecycleService` in disabled mode, installs a stable process worker
+identity, and starts a bounded cleanup owner from the graph. The owner performs
+one immediate pass, uses one reusable cadence timer, applies the existing
+bounded exponential retry formula for operational busy failures, and joins on
+context cancellation. Enabled graphs run restore and cleanup owners together;
+disabled graphs run cleanup only and never publish mutation admission.
+
+The next RED caught an unbounded cleanup loop when a remote directory removal
+returned `Complete=false`: one scheduler pass repeatedly called
+`AdvanceRecovery*Cleanup` until the test hung. GREEN limits each selected
+candidate to one lifecycle advance per pass, leaving durable phase continuation
+for the next cadence.
+
+Candidate enumeration was then moved behind the Recovery domain boundary. The
+new closed `ListScheduledCleanupCandidates` product owns the indexed reads and
+due predicates for ready/expired ResultSets, retryable cleanup-failed or expired
+revoking ResultSets, and terminal unpublished `cleanup_due` workspaces. The
+scheduled claim rechecks the current plaintext deadline after locking, so a
+ResultSet retained after discovery is rejected rather than cleaned. Runtime
+orchestration now calls only this product plus the existing fenced claim/revoke/
+drain/validate/advance lifecycle methods.
+
+Focused RED/GREEN selectors:
+
+```text
+TestManagedRecoveryCleanupOwnerProcessesOnlyBoundedDueLifecycleCandidates
+TestManagedRecoveryCleanupOwnerRunsImmediateCadenceAndBoundedRetry
+TestManagedRecoveryCleanupOwnerAdvancesOneRemoteChunkPerCandidatePass
+TestManagedRecoveryCleanupOwnerRetriesBusyButDefersClaimConflictsToCadence
+TestRecoveryScheduledResultCleanupClaimRechecksCurrentPlaintextDeadline
+TestRecoveryListScheduledCleanupCandidatesIsClosedBoundedAndDueOnly
+TestRecoveryListScheduledCleanupCandidatesIncludesUnpublishedWorkspace
+TestRuntimeNewOwnsDefaultDisabledRecoveryReceiptMaintenance
+RED -> GREEN
+```
+
+Fresh affected verification after the final refactor:
+
+```text
+go test ./internal/backupasset/runtime ./internal/backupasset/recovery \\
+  ./internal/backupasset/repository ./cmd/server -count=1
+ok runtime 7.079s
+ok recovery 34.578s
+ok repository 5.103s
+ok cmd/server 0.058s
+
+go test -race ./internal/backupasset/runtime \\
+  -run '^(TestManagedRecoveryCleanupOwner|TestBuildManagedRecoveryGraphRequiresAuthoritiesAndBindsProductionServices|TestManagedRecoveryRuntimeRunTransitionStopAndShutdownRace|TestManagedRecoveryRuntimeConcurrentRunHasOneOwnerAndShutdownJoinsIt)$' \\
+  -count=1
+ok runtime 1.616s
+
+go vet ./internal/backupasset/runtime ./internal/backupasset/recovery ./cmd/server
+gofmt -l <affected files>  # no output
+git diff --check           # clean
+```
+
+This slice does not claim durable cleanup fairness across restarts: `000069`
+has no cleanup scheduler cursor/high-water or per-row retry eligibility fields,
+and runtime is not allowed to invent them. Ordinary remote-root orphan
+reconciliation also remains fail-closed until a current root-revision registry
+exists. Enabled production Recovery remains fail-closed for the unresolved
+preflight, write-authority, and reconciliation authority sources recorded above.
+
+## Task 8 full-scope quality review and fail-closed checkpoint (2026-08-14)
+
+The final full-scope review found and fixed two Critical and two Important
+runtime/composition defects before this checkpoint:
+
+1. **Critical shutdown lifecycle inversion.** Lifecycle owners could stop before
+   active attempts joined, ownership was durably fenced, and Content delivery
+   drained. Teardown now enforces `stop claims -> join attempts -> fence ->
+   revoke/drain -> stop lifecycle`, including context-bounded worker and graph
+   joins.
+2. **Critical Recovery ticket publication race.** Result authorization released
+   the graph publication borrow before Content had durably registered the grant.
+   Issue-scoped authorization now retains the borrow through durable grant
+   registration and the in-memory binding.
+3. **Important missing facade consumers.** The Recovery authorization facade was
+   injected but its four existing security-override, write-authorization,
+   exact-mirror-delete-authorization and execute routes were absent. They are now
+   registered behind Auth, `backup_assets:recover`, and the applicable Admin
+   boundary; focused tests prove `401`/`403`/`503` behavior. This narrow wiring
+   is Task 8 composition evidence, not Task 9 route-matrix completion.
+4. **Important ignored drain setting.** Parsed `result_drain_timeout` now bounds
+   enabled and disabled graph revoke/drain teardown instead of being inert.
+
+The same review closed missing logical/permanent-cleanup-key reconciliation,
+an unrelated Content downgrade blocker, incomplete delivery shutdown wiring,
+non-context worker fencing, and the staticcheck `S1016` finding. The disabled
+graph now owns independent joined cleanup and logical-reconciliation loops:
+both run immediately, use separate cadence ownership, retry blocked/unavailable
+results, record `clear` only for complete finding-free cursor-free scans, and
+join on cancellation. This supersedes the earlier research audit's dated
+disabled-reconciliation finding.
+
+Final verification recorded after those fixes:
+
+```text
+focused API/Content/runtime normal -count=10                     PASS
+focused API/Content/runtime race -count=10                       PASS
+go test ./... -count=1                                           PASS
+go test -race ./internal/backupasset/content \
+  ./internal/backupasset/runtime \
+  ./internal/backupasset/recovery -count=1                        PASS
+go vet ./...                                                      PASS
+make lint-backend                                                 PASS (0 issues)
+make backend-build                                                PASS
+make check                                                        PASS
+git diff --check                                                  PASS
+```
+
+`make check` included the backend gates plus 168 frontend test files and 1,388
+passing tests, TypeScript checking, and the Vite build. It retained one existing
+non-blocking accessibility warning at
+`web/src/features/backup-assets/export-job-panel.tsx:195`
+(`jsx-a11y/no-noninteractive-tabindex`). The generated
+`backend/xirang-server` artifact was removed after the build.
+
+The required real-PostgreSQL parity gate used one disposable
+`postgres:18-alpine` container. Required/no-skip Recovery normal passed in
+approximately 10.334 seconds; the corresponding race gate passed in
+approximately 14.192 seconds. The container used `--rm`, was stopped, and left
+zero container/volume residue.
+
+### Remaining completion blockers
+
+Enabled production Recovery deliberately remains unavailable because no real
+production implementation yet owns the complete
+`RecoveryPreflightExternalEvidenceAuthority`,
+`RecoveryAuthorityRevalidator`, or
+`RecoveryReconciliationRevisionSource` products. The missing evidence includes
+current policy/finding disposition, overlap and reserve policy, and an
+independent durable target-root revision. Frozen plan fields, timestamps,
+locator digests, or clean/false/zero defaults are prohibited stand-ins.
+
+The following settings are parsed and participate in transition validation but
+have no corresponding production Recovery domain seam: `DefaultRootID`,
+`PreflightTTL`, `MaxSelectionItems`, `MaxLogicalBytes`, `LeaseRenewMargin`,
+`ExecutionTimeout`, `VerificationTimeout`, and `OrphanQuarantineLimit`. A
+focused plan/preflight/worker/executor/reconciliation contract amendment is
+required before they can be consumed honestly.
+
+Therefore Task 8 is `in_progress_fail_closed_checkpoint`, not complete. Tasks
+9--10 remain `not_executed`; no Task 8 stage, commit, push, PR, CI, merge or
+delivery credit is authorized by this evidence.
+
+### Task 8-A encrypted target-root authority v2 completion evidence (2026-08-14)
+
+T8-A was implemented only in its approved six-file product slice. The RED
+selectors first failed against the schema-1 registry and the absent authority
+service; the GREEN implementation now uses a strict schema-v2 encrypted
+document while retaining the `enc:v2:` envelope. Missing, duplicate, unknown,
+tampered, legacy-envelope, substituted-key and substituted-payload documents
+all map to the single unavailable sentinel. Authority and root-observation
+revisions are independent; exact replay and safe-label-only updates preserve
+authority, while locator, observation, reserve or overlap-policy changes rotate
+it. Reserve policy fields are private on every JSON boundary, including direct
+policy serialization.
+
+The target-root authority owner performs a read-only probe outside the write
+transaction, captures distinct pre-probe, post-probe, lock-start and post-lock
+clocks, locks node/credential/exact root state, rechecks credential expiry and
+freshness after the locks, and never probes during delete. Malformed root
+references are rejected before database access with
+`ErrRecoveryTargetRootInvalid`; dependency and persistence failures remain
+sanitized. The shared concurrent mutation matrix covers rotate-vs-rotate,
+register-vs-rotate, register-vs-delete, and register-on-absent-vs-delete-on-
+missing with deterministic ready/start barriers and runs from both engine
+selectors.
+
+RED/GREEN and review evidence:
+
+```text
+go test ./internal/settings ./internal/backupasset/recovery \
+  -run 'RecoveryTargetRootV2|TargetRootAuthorityService' -count=1   PASS
+go test -race ./internal/settings ./internal/backupasset/recovery \
+  -run 'RecoveryTargetRootV2|TargetRootAuthorityService' -count=1   PASS
+go test -race ./internal/backupasset/recovery \
+  -run '^TestTargetRootAuthorityServiceRegisterRotateDelete$' -count=10 PASS
+go test ./internal/settings ./internal/backupasset/recovery \
+  ./internal/api/handlers -count=1                                 PASS
+go vet ./internal/settings ./internal/backupasset/recovery \
+  ./internal/api/handlers                                            PASS
+git diff --check                                                     PASS
+```
+
+The first fresh specification review closed the prior three findings after
+the clock, JSON-null and concurrency fixes, then identified direct policy JSON
+leakage and an incomplete matrix. Those were fixed with private JSON tags, a
+post-lock expiry recheck, and the four-case matrix. The same review's final
+Important finding (malformed nonempty root ID mapping) was fixed by routing
+delete validation through the settings registry validator before any database
+access; the regression test passes even after the fixture database is closed.
+
+Required PostgreSQL parity was run with a disposable `postgres:18-alpine`
+fixture in required/no-skip mode. Both the normal and race
+`TestRecoveryTargetRootAuthorityPostgres` selectors passed after the expanded
+matrix, and the temporary test schema count was zero before the container was
+removed. No migration, `000070`, staging, commit, push, PR, or T8-B work was
+performed by this slice.
+
+#### T8-A deletion lifecycle quality closure (2026-08-14)
+
+The independent quality re-review found one Important lifecycle defect after
+the original T8-A specification gate: deleting a DB-only root still required a
+currently eligible SSH credential. An archived node or a disabled, expired or
+detached credential could therefore leave an undeletable encrypted registry
+row and block reconciliation or downgrade readiness.
+
+The new regression first failed for all four lifecycle states with
+`recovery target unavailable`. `TargetRootAuthorityService.Delete` now locks
+only the exact node row; the registry owner separately locks, decodes and
+ciphertext-CAS-deletes the exact root row. Delete still validates the node/root
+reference before database access, never opens a target session or registration
+probe, and preserves sanitized context/database/not-found behavior.
+
+Fresh closure evidence:
+
+```text
+go test ./internal/backupasset/recovery \
+  -run '^TestTargetRootAuthorityServiceDeleteSurvivesNodeCredentialLifecycle$' \
+  -count=1                                                       PASS
+go test ./internal/settings ./internal/backupasset/recovery \
+  -run 'RecoveryTargetRootV2|TargetRootAuthorityService' -count=1 PASS
+go test -race ./internal/settings ./internal/backupasset/recovery \
+  -run 'RecoveryTargetRootV2|TargetRootAuthorityService' -count=1 PASS
+go test ./internal/settings ./internal/backupasset/recovery -count=1 PASS
+go test -race ./internal/settings ./internal/backupasset/recovery -count=1 PASS
+go vet ./internal/settings ./internal/backupasset/recovery        PASS
+git diff --check                                                  PASS
+```
+
+A fresh read-only reviewer also ran the lifecycle race selector with
+`-count=10`, checked formatting and the SQLite/PostgreSQL lock/CAS shape, and
+returned `QUALITY_OK` with no Critical or Important finding. No review edit,
+staging, commit, push or PR occurred.
+
+### Task 8-B eligibility authority B7 checkpoint (2026-08-15)
+
+T8-B now has one Recovery-owned eligibility authority projected through the
+preflight, live-effect and reconciliation interfaces. Managed Rsync source
+evidence is assembled from the Repository-owned pinned capability plus a
+purpose-exact strict-known-host SSH/SFTP namespace observation; Processing
+contributes one closed plan-level canonical malware product. The target-root
+port locks and revalidates the exact encrypted v2 authority row and independent
+root-observation revision, while the target observer performs a strict,
+read-only canonical namespace and capacity observation. Restic and Rclone stop
+as unavailable before source or target access.
+
+Authorization, worker and executor paths now observe before opening their
+mutation transaction, then revalidate the identical private sealed product in
+the caller-owned transaction. The complete drift matrix covers source and
+capability revisions, security policy/finding evidence, root authority/root
+observation, node/credential, overlap and reserve substitution, partial
+products, request echo, zero defaults and close-once ownership. Repository and
+Processing transaction seams perform durable reads only; Repository,
+Processing artifact, SSH and SFTP work do not occur inside the mutation
+transaction.
+
+The production graph no longer injects the three known-unavailable shells. A
+single `RecoveryEligibilityAuthority` instance supplies all three narrow
+projections. A composition RED first failed because that common owner projector
+did not exist. The first full runtime GREEN attempt then exposed Processing's
+derived-artifact reader as a startup-installed dependency; composition now
+retains the stable Processing runtime owner and validates the late-bound reader
+at observation time. Disabled Recovery maintenance can therefore start before
+Processing artifacts exist, while every live observation still fails closed if
+Processing is unavailable.
+
+The required PostgreSQL selector did not previously exist. Its RED failed on
+the missing PostgreSQL-capable harness. The final test runs the same authority
+over a real PostgreSQL caller-owned transaction, proves exact current
+revalidation succeeds, then mutates the durable root authority after
+observation and proves locked revalidation returns the closed changed result.
+
+Fresh B7 evidence from `backend/`:
+
+```text
+go test ./internal/backupasset/processing ./internal/backupasset/repository \
+  ./internal/backupasset/recovery ./internal/backupasset/runtime \
+  -run 'Recovery(SecurityObservation|RsyncSourceAuthority|EligibilityAuthority|AuthorityRevalidation|ReconciliationRevision)' \
+  -count=1                                                     PASS (2.1s)
+
+go test -race ./internal/backupasset/repository \
+  ./internal/backupasset/recovery ./internal/backupasset/runtime \
+  -run 'Recovery(RsyncSourceAuthority|EligibilityAuthority|AuthorityRevalidation|ReconciliationRevision)' \
+  -count=1                                                     PASS (7.3s)
+
+go test ./internal/backupasset/runtime -count=1                PASS (6.815s)
+
+REQUIRE_POSTGRES_RECOVERY_TEST=1 TEST_POSTGRES_DSN=<redacted> \
+  go test ./internal/backupasset/recovery \
+  -run '^TestRecoveryEligibilityAuthorityPostgres$' -count=1  PASS (0.066s; no skip)
+
+REQUIRE_POSTGRES_RECOVERY_TEST=1 TEST_POSTGRES_DSN=<redacted> \
+  go test -race ./internal/backupasset/recovery \
+  -run '^TestRecoveryEligibilityAuthorityPostgres$' -count=1  PASS (1.564s; no skip)
+
+git diff --check                                               PASS
+```
+
+The PostgreSQL gates used one disposable `postgres:18-alpine` container with a
+command-scoped random password and private DSN. Both scoped schemas were
+dropped by test cleanup; the `--rm` container was removed and the explicit
+residue check returned `TASK8_PG_CLEAN`. Error/privacy tests retain the raw
+source, malware, locator, credential and dependency-error canaries inside test
+fixtures only and reject their appearance at returned error/format/JSON
+boundaries. No staging, commit, push or PR occurred. T8-B is complete at the B7
+checkpoint; T8-C and later slices remain unexecuted by this checkpoint.
+
+### Task 8-C policy, heartbeat and absolute-deadline completion evidence (2026-08-15)
+
+T8-C removed `DefaultRootID`, `VerificationTimeout` and
+`OrphanQuarantineLimit`, installed `ReconciliationFindingLimit`, and rejected
+the removed keys through ordinary, transactional/config-import and batch
+settings update paths without persistence. Immutable plan, preflight, worker
+and reconciliation policies now own every retained setting. Plan limits are
+checked before writes and again against materialized rows. The server freezes
+one preflight expiry at plan creation; caller TTL/expiry substitution and
+advancing-clock idempotency replay cannot change it.
+
+The managed claim carries one immutable absolute deadline equal to the earliest
+execution timeout, grant expiry and preflight expiry. Heartbeat renewal updates
+the source lease, node lease and attempt atomically; renewal failure cancels the
+claim, fences it durably and joins the executor before another target effect.
+Every actual item effect refreshes a private lease-bounded permit from the
+current locked source/node/attempt/latch state without replaying external
+eligibility, while the Provider session remains bounded by the immutable
+absolute deadline. Cancellation closes SFTP and SSH transports before remote
+tracked file cleanup so a blocked `pkg/sftp.File.Close` cannot prevent the
+executor from joining.
+
+Two independent reviews drove additional RED/GREEN closure. Preflight now
+resamples time after external observation and again after locked source
+revalidation; crossing durable expiry during either observation or row-lock
+delay atomically returns conflict with zero preflight rows and an unchanged
+draft plan. The final specification receipt was `SPEC_OK` and the final quality
+receipt was `QUALITY_OK`.
+
+Fresh T8-C evidence from `backend/`:
+
+```text
+go test ./internal/settings ./internal/backupasset \
+  -run 'Recovery(Config|Policy|RemovedSetting|ReconciliationFindingLimit)' \
+  -count=1                                                     PASS
+
+go test ./internal/settings ./internal/backupasset \
+  ./internal/backupasset/recovery ./internal/backupasset/runtime \
+  -run 'Recovery(PlanPolicy|PreflightPolicy|WorkerPolicy|Heartbeat|ExecutionDeadline|ReconciliationFindingLimit|RemovedSetting)' \
+  -count=1                                                     PASS
+
+go test -race ./internal/backupasset/recovery ./internal/backupasset/runtime \
+  -run 'Recovery(Heartbeat|ExecutionDeadline|ReconciliationFindingLimit)' \
+  -count=1                                                     PASS
+
+go test ./internal/settings ./internal/backupasset \
+  ./internal/backupasset/recovery ./internal/backupasset/runtime -count=1 PASS
+
+go vet ./internal/settings ./internal/backupasset \
+  ./internal/backupasset/recovery ./internal/backupasset/runtime PASS
+
+removed-setting and retained-policy scans                      PASS
+git diff --check; staged-zero                                  PASS
+```
+
+No staging, commit, push, PR or T8-D work was credited by this checkpoint.
+
+### Task 8-D production composition and transition completion evidence (2026-08-16)
+
+Production composition now requires genuinely ready Repository, Processing
+and target authorities before enabled Recovery publication. Exactly one
+`RecoveryEligibilityAuthority` supplies the preflight, live and reconciliation
+projections, and publication occurs once only after metadata reconciliation.
+Nil or known-unavailable authorities and disabled/control-plane-only Processing
+security evidence publish no enabled admission graph. After a genuinely ready
+publication, a late Processing reader failure closes effects while preserving
+result and logical-reconciliation maintenance.
+
+The production target-root service uses an independent
+`recovery_target_root_registration` credential purpose and strict
+`known_hosts`; it performs two stable canonical, no-symlink, read-only SFTP
+observations and never accepts an insecure/accept-new `NodeDialer`. The runtime
+facade returns only safe summaries. Register, rotate and delete validate before
+drain and execute through the installed current-config transition owner.
+Recovery alone owns the opaque, redacted rollback token and exact CAS restore
+of the prior encrypted setting row/timestamp or prior absence; Runtime never
+interprets or synthesizes private locator/revision/policy state.
+
+Transitions cover validate, drain, persist, construct, reconcile and install
+failures. A proven restoration restores persistence before rebuilding and
+publishing the prior graph. An unproven old-owner join, root restoration
+failure or graph restoration failure leaves publication nil and a sticky fence
+that blocks admission, re-enable and downgrade readiness. Pre-start current-
+config/root transitions fail before callbacks or publication, so a zero-value
+config cannot suppress the later configured startup. Disabled graphs run and
+join cleanup, logical reconciliation and receipt reaping before schema drain;
+metrics retain only fixed provider/state/outcome/category labels.
+
+The focused amendment's Task 9 boundary was restored during specification
+review: Task 8 retains internal Recovery authorization and target-root facades,
+but does not register the security-override, write-authority, exact-mirror
+delete-authority, execute, target-root or downgrade-readiness routes and does
+not claim their RBAC/audit/Swagger work. Final independent receipts were
+`SPEC_OK` and `QUALITY_OK`, with no open Critical or Important finding.
+
+Fresh T8-D evidence from `backend/`:
+
+```text
+go test ./cmd/server ./internal/api ./internal/backupasset/runtime \
+  ./internal/backupasset/recovery \
+  -run 'Recovery(ProductionAuthority|Runtime|Transition|Disabled|Downgrade|Metrics|RBAC)' \
+  -count=10                                                    PASS
+
+go test -race ./cmd/server ./internal/api ./internal/backupasset/runtime \
+  ./internal/backupasset/recovery \
+  -run 'Recovery(ProductionAuthority|Runtime|Transition|Disabled|Downgrade)' \
+  -count=10                                                    PASS
+
+go test ./internal/backupasset/processing ./internal/backupasset/runtime \
+  ./internal/backupasset/recovery ./internal/api ./cmd/server -count=1 PASS
+
+go vet ./...                                                   PASS
+strict-purpose/insecure-path/000070 scans                      PASS
+git diff --check; staged-zero                                  PASS
+```
+
+The exact D5 normal/race selectors and additional target-root rollback,
+pre-start and Processing-readiness race selectors each passed for ten
+iterations. No staging, commit, push, PR or T8-V1 work occurred. Per the
+approved implementation plan, execution stops here before whole-scope V1 and
+required final PostgreSQL gates.
+
+### Task 8-V1 whole-scope quality and completion evidence (2026-08-16)
+
+The fresh reviewer loaded the task JSONL context first, then the PRD, design
+sections 48.1--48.7, the V1 implementation plan and every affected backend and
+cross-cutting Quality Check section. Review covered encrypted root v2,
+independent authority/observation revisions, eligibility issuance and effect
+revalidation, setting ownership and transitions, enabled/disabled lifecycle,
+SQLite/PostgreSQL parity, privacy and the Task 9 route/RBAC/audit/Swagger
+boundary.
+
+#### Findings fixed
+
+- Seven scoped lint findings were closed: two unchecked target-session closes,
+  two unchecked GORM `AddError` calls and three private-field/nil-safety issues
+  in source-namespace tests. `make lint-backend` then reported zero issues.
+- Repository-root `gofmt` exposed brittle main wiring tests that compared
+  horizontal alignment. `main.go` was formatted and the tests now compare the
+  same wiring fragments/order while ignoring horizontal whitespace.
+- A fresh Important review finding showed a late namespace drift window:
+  `Task.RsyncSource`, the source node or the source credential could change
+  after namespace observation but before eligibility issuance, or after issue
+  but before a caller's effect transaction. Strict TDD first produced a genuine
+  compile RED in
+  `TestRecoveryEligibilityAuthorityRejectsLateSourceNamespaceDrift` because the
+  opaque observation had no durable/request/captured seam. The minimal GREEN
+  retains only the private exact durable snapshot, revalidates it inside both
+  the final issuance transaction and the caller's effect transaction, and adds
+  all six drift cases. The transactions perform only GORM revalidation; they
+  make zero SSH/SFTP/Repository external-observation calls. Opaque JSON and
+  formatting tests prove no path or canary disclosure.
+- Final manifest reconciliation corrected stale ledger-only counts without
+  product expansion. The authoritative union is exactly `9 current + 64
+  create + 84 modify = 157`, unique and disjoint, with zero dirty product path
+  outside the ledger.
+
+The late-drift fix implements the existing task-local sections 48.3, 48.5 and
+48.7 contract that the final transaction revalidate every durable
+source/node/credential revision. The reusable cross-package rule is also
+captured in `.trellis/spec/backend/quality-guidelines.md` as the managed
+Recovery authority/runtime-publication scenario: short capture -> external
+observation -> locked revalidation, private source drift revalidation in both
+issuance and effect transactions, Processing readiness before publication, and
+sticky failure on unproven join or rollback.
+
+#### Fresh dynamic verification
+
+From `backend/`:
+
+```text
+go test ./... -count=1                                      PASS 47.27s
+go test -race ./internal/backupasset/processing \
+  ./internal/backupasset/repository \
+  ./internal/backupasset/recovery \
+  ./internal/backupasset/runtime ./internal/api \
+  ./cmd/server -count=1                                      PASS 122.27s
+go vet ./...                                                 PASS 1.22s
+```
+
+The race packages reported: Processing 8.726s, Repository 16.214s, Recovery
+117.694s, Runtime 13.777s, API 2.735s and server 1.627s.
+
+Focused late-drift TDD and regression evidence:
+
+```text
+go test ./internal/backupasset/recovery \
+  -run '^TestRecoveryEligibilityAuthorityRejectsLateSourceNamespaceDrift$' \
+  -count=1                                                    PASS 0.054s
+go test -race ./internal/backupasset/recovery \
+  -run '^TestRecoveryEligibilityAuthorityRejectsLateSourceNamespaceDrift$' \
+  -count=1                                                    PASS 1.538s
+go test ./internal/backupasset/recovery \
+  -run 'SourceNamespace|Eligibility' -count=1                 PASS 0.114s
+go test -race ./internal/backupasset/recovery \
+  -run 'SourceNamespace|Eligibility' -count=1                 PASS 1.656s
+```
+
+The disposable `postgres:18-alpine` harness used a command-scoped random
+secret, loopback-only random port and PostgreSQL 18's `/var/lib/postgresql`
+data mount. Neither the password nor DSN was printed. With
+`REQUIRE_POSTGRES_RECOVERY_TEST=1`, the complete Recovery `Postgres` selector
+reported:
+
+```text
+normal: PASS 8.780s; 55 pass events; 0 skip; 0 fail
+race:   PASS 12.793s; 55 pass events; 0 skip; 0 fail
+```
+
+Before removal, schemas matching `xirang_recovery_%` were zero and the
+container had zero volume mounts. After graceful stop and `docker rm -v`, the
+exact container residue and named-volume-prefix residue were both zero. Two
+earlier readiness attempts failed before tests because the harness used the
+pre-v18 data mount; their cleanup traps removed both containers. Correcting
+only the harness path produced the no-skip evidence above; no product or test
+code changed for this harness diagnosis.
+
+From repository root:
+
+```text
+make lint-backend                                           PASS 3.93s, 0 issues
+make backend-build                                          PASS 3.94s
+make check                                                  PASS 105.25s
+git diff --check                                            PASS
+both Trellis task validations; task JSON/JSONL jq parses    PASS
+```
+
+`make check` passed backend lint/test/build plus frontend lint, typecheck,
+1,388 tests in 168 files and the Vite build. The sole frontend lint diagnostic
+was the pre-existing non-blocking warning at
+`web/src/components/backup-assets/export-job-panel.tsx:195`. The generated
+`backend/xirang-server` was removed after verification and confirmed absent.
+
+#### Static, privacy and scope receipt
+
+Forbidden direct standard-log/print calls, private production canaries,
+insecure or accept-new SSH host-key behavior, removed Recovery settings,
+merge markers and binary artifacts were absent. All dirty Go files were
+`gofmt` clean. Paired migrations remain exactly four `000069` files with no
+`000070` or `000071`. The exact manifest gate reported `157` unique paths,
+zero duplicates, zero dirty product paths outside the manifest and zero staged
+paths. The user's main-worktree `.codex/agents/trellis-research.toml` still
+exists only as its protected user-owned main-worktree delta and is absent from
+this worktree delta.
+
+Task 8's internal facades remain unregistered: the effect, target-root and
+downgrade-readiness route/response/RBAC/audit/privacy/Swagger matrix remains
+Task 9 work. Tasks 9--10 are `not_executed`; no stage, commit, push, PR, CI,
+merge or archive action occurred.
+
+Fresh review receipt: `QUALITY_OK`. There is no open Critical or Important
+Task 8 finding across design sections 48.1--48.7, settings transitions,
+SQLite/PostgreSQL parity, privacy, runtime lifecycle or the Task 9 boundary.

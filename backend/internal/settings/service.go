@@ -73,7 +73,7 @@ const (
 )
 
 const (
-	recoveryTargetRootSchemaVersion     = 1
+	recoveryTargetRootSchemaVersion     = 2
 	recoveryTargetRootIDMaxBytes        = 32
 	recoveryTargetRootSafeLabelMaxBytes = 128
 	recoveryTargetRootLocatorMaxBytes   = 4096
@@ -91,11 +91,33 @@ var (
 )
 
 type RecoveryTargetRootDefinition struct {
-	NodeID    uint   `json:"node_id"`
-	RootID    string `json:"root_id"`
-	SafeLabel string `json:"safe_label"`
-	Locator   string `json:"-"`
+	NodeID                  uint
+	RootID                  string
+	SafeLabel               string
+	Locator                 string                   `json:"-"`
+	AuthorityRevision       string                   `json:"-"`
+	RootObservationRevision string                   `json:"-"`
+	Policy                  RecoveryTargetRootPolicy `json:"-"`
 }
+
+func (definition RecoveryTargetRootDefinition) String() string {
+	return "RecoveryTargetRootDefinition{NodeID:" + strconv.FormatUint(uint64(definition.NodeID), 10) +
+		", RootID:" + strconv.Quote(definition.RootID) + ", SafeLabel:" + strconv.Quote(definition.SafeLabel) + "}"
+}
+
+func (definition RecoveryTargetRootDefinition) GoString() string { return definition.String() }
+
+type RecoveryTargetRootPolicy struct {
+	ReserveBytes         int64  `json:"-"`
+	ReserveInodes        int64  `json:"-"`
+	OverlapPolicyBinding string `json:"-"`
+}
+
+func (policy RecoveryTargetRootPolicy) String() string {
+	return "RecoveryTargetRootPolicy{}"
+}
+
+func (policy RecoveryTargetRootPolicy) GoString() string { return policy.String() }
 
 type RecoveryTargetRootSummary struct {
 	NodeID    uint   `json:"node_id"`
@@ -108,21 +130,43 @@ type RecoveryTargetRootReference struct {
 	RootID string `json:"root_id"`
 }
 
-type RecoveryTargetRootResolution struct {
-	NodeID        uint   `json:"node_id"`
-	RootID        string `json:"root_id"`
-	SafeLabel     string `json:"safe_label"`
-	Locator       string `json:"-"`
-	LocatorDigest string `json:"-"`
+// ValidateRecoveryTargetRootReference applies the registry's canonical node
+// and root identifier rules without reading durable state.
+func ValidateRecoveryTargetRootReference(reference RecoveryTargetRootReference) error {
+	_, err := recoveryTargetRootKey(reference.NodeID, reference.RootID)
+	return err
 }
 
+type RecoveryTargetRootResolution struct {
+	NodeID                  uint                     `json:"node_id"`
+	RootID                  string                   `json:"root_id"`
+	SafeLabel               string                   `json:"safe_label"`
+	Locator                 string                   `json:"-"`
+	LocatorDigest           string                   `json:"-"`
+	AuthorityRevision       string                   `json:"-"`
+	RootObservationRevision string                   `json:"-"`
+	Policy                  RecoveryTargetRootPolicy `json:"-"`
+}
+
+func (resolution RecoveryTargetRootResolution) String() string {
+	return "RecoveryTargetRootResolution{NodeID:" + strconv.FormatUint(uint64(resolution.NodeID), 10) +
+		", RootID:" + strconv.Quote(resolution.RootID) + ", SafeLabel:" + strconv.Quote(resolution.SafeLabel) + "}"
+}
+
+func (resolution RecoveryTargetRootResolution) GoString() string { return resolution.String() }
+
 type recoveryTargetRootRecord struct {
-	SchemaVersion    int    `json:"schema_version"`
-	NodeID           uint   `json:"node_id"`
-	RootID           string `json:"root_id"`
-	SafeLabel        string `json:"safe_label"`
-	CanonicalLocator string `json:"canonical_locator"`
-	LocatorDigest    string `json:"locator_digest"`
+	SchemaVersion           int    `json:"schema_version"`
+	NodeID                  uint   `json:"node_id"`
+	RootID                  string `json:"root_id"`
+	SafeLabel               string `json:"safe_label"`
+	CanonicalLocator        string `json:"canonical_locator"`
+	LocatorDigest           string `json:"locator_digest"`
+	AuthorityRevision       string `json:"authority_revision"`
+	RootObservationRevision string `json:"root_observation_revision"`
+	ReserveBytes            int64  `json:"reserve_bytes"`
+	ReserveInodes           int64  `json:"reserve_inodes"`
+	OverlapPolicyBinding    string `json:"overlap_policy_binding"`
 }
 
 type ProcessingPipelineRevisions struct {
@@ -401,6 +445,28 @@ var registry = []SettingDef{
 	{Key: "backup_assets.recovery.delete_grant_ttl", EnvVar: "BACKUP_ASSETS_RECOVERY_DELETE_GRANT_TTL", CodeDefault: "10m", Type: TypeDuration, Category: "backup_assets", Description: "恢复精确镜像删除授权有效期", MinDuration: "1m", MaxDuration: "24h"},
 	{Key: "backup_assets.recovery.receipt_reaper_cadence", EnvVar: "BACKUP_ASSETS_RECOVERY_RECEIPT_REAPER_CADENCE", CodeDefault: "1m", Type: TypeDuration, Category: "backup_assets", Description: "恢复授权回执清理周期", MinDuration: "10s", MaxDuration: "1h"},
 	{Key: "backup_assets.recovery.receipt_reaper_batch_size", EnvVar: "BACKUP_ASSETS_RECOVERY_RECEIPT_REAPER_BATCH_SIZE", CodeDefault: "100", Type: TypeInt, Category: "backup_assets", Description: "恢复授权回执单次清理批次", Min: "1", Max: "1000"},
+	{Key: "backup_assets.recovery.enabled", EnvVar: "BACKUP_ASSETS_RECOVERY_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "启用受控恢复"},
+	{Key: "backup_assets.recovery.preflight_ttl", EnvVar: "BACKUP_ASSETS_RECOVERY_PREFLIGHT_TTL", CodeDefault: "10m", Type: TypeDuration, Category: "backup_assets", Description: "受控恢复预检有效期", MinDuration: "1m", MaxDuration: "1h"},
+	{Key: "backup_assets.recovery.max_selection_items", EnvVar: "BACKUP_ASSETS_RECOVERY_MAX_SELECTION_ITEMS", CodeDefault: "10000", Type: TypeInt, Category: "backup_assets", Description: "单次受控恢复条目上限", Min: "1", Max: "100000"},
+	{Key: "backup_assets.recovery.max_logical_bytes", EnvVar: "BACKUP_ASSETS_RECOVERY_MAX_LOGICAL_BYTES", CodeDefault: "10737418240", Type: TypeInt, Category: "backup_assets", Description: "单次受控恢复逻辑字节上限", Min: "65536", Max: "1099511627776"},
+	{Key: "backup_assets.recovery.worker_concurrency", EnvVar: "BACKUP_ASSETS_RECOVERY_WORKER_CONCURRENCY", CodeDefault: "2", Type: TypeInt, Category: "backup_assets", Description: "受控恢复 Worker 并发上限", Min: "1", Max: "16"},
+	{Key: "backup_assets.recovery.lease_ttl", EnvVar: "BACKUP_ASSETS_RECOVERY_LEASE_TTL", CodeDefault: "90s", Type: TypeDuration, Category: "backup_assets", Description: "受控恢复尝试租约时长", MinDuration: "30s", MaxDuration: "10m"},
+	{Key: "backup_assets.recovery.lease_renew_margin", EnvVar: "BACKUP_ASSETS_RECOVERY_LEASE_RENEW_MARGIN", CodeDefault: "20s", Type: TypeDuration, Category: "backup_assets", Description: "受控恢复租约续期余量", MinDuration: "5s", MaxDuration: "5m"},
+	{Key: "backup_assets.recovery.takeover_cadence", EnvVar: "BACKUP_ASSETS_RECOVERY_TAKEOVER_CADENCE", CodeDefault: "15s", Type: TypeDuration, Category: "backup_assets", Description: "受控恢复过期尝试接管周期", MinDuration: "1s", MaxDuration: "5m"},
+	{Key: "backup_assets.recovery.retry_base", EnvVar: "BACKUP_ASSETS_RECOVERY_RETRY_BASE", CodeDefault: "5s", Type: TypeDuration, Category: "backup_assets", Description: "受控恢复重试基础延迟", MinDuration: "1s", MaxDuration: "5m"},
+	{Key: "backup_assets.recovery.retry_max_delay", EnvVar: "BACKUP_ASSETS_RECOVERY_RETRY_MAX_DELAY", CodeDefault: "5m", Type: TypeDuration, Category: "backup_assets", Description: "受控恢复重试最大延迟", MinDuration: "1s", MaxDuration: "1h"},
+	{Key: "backup_assets.recovery.scan_limit", EnvVar: "BACKUP_ASSETS_RECOVERY_SCAN_LIMIT", CodeDefault: "100", Type: TypeInt, Category: "backup_assets", Description: "受控恢复持久调度扫描上限", Min: "1", Max: "1000"},
+	{Key: "backup_assets.recovery.execution_timeout", EnvVar: "BACKUP_ASSETS_RECOVERY_EXECUTION_TIMEOUT", CodeDefault: "2h", Type: TypeDuration, Category: "backup_assets", Description: "受控恢复执行绝对时限", MinDuration: "5m", MaxDuration: "24h"},
+	{Key: "backup_assets.recovery.result_default_ttl", EnvVar: "BACKUP_ASSETS_RECOVERY_RESULT_DEFAULT_TTL", CodeDefault: "1h", Type: TypeDuration, Category: "backup_assets", Description: "恢复结果默认明文有效期", MinDuration: "5m", MaxDuration: "24h"},
+	{Key: "backup_assets.recovery.result_retain_hard_cap", EnvVar: "BACKUP_ASSETS_RECOVERY_RESULT_RETAIN_HARD_CAP", CodeDefault: "24h", Type: TypeDuration, Category: "backup_assets", Description: "恢复结果保留硬上限", MinDuration: "5m", MaxDuration: "720h"},
+	{Key: "backup_assets.recovery.result_read_permit_ttl", EnvVar: "BACKUP_ASSETS_RECOVERY_RESULT_READ_PERMIT_TTL", CodeDefault: "2m", Type: TypeDuration, Category: "backup_assets", Description: "恢复结果读取许可有效期", MinDuration: "10s", MaxDuration: "10m"},
+	{Key: "backup_assets.recovery.result_drain_timeout", EnvVar: "BACKUP_ASSETS_RECOVERY_RESULT_DRAIN_TIMEOUT", CodeDefault: "30s", Type: TypeDuration, Category: "backup_assets", Description: "恢复结果读取排空时限", MinDuration: "1s", MaxDuration: "5m"},
+	{Key: "backup_assets.recovery.cleanup_cadence", EnvVar: "BACKUP_ASSETS_RECOVERY_CLEANUP_CADENCE", CodeDefault: "1m", Type: TypeDuration, Category: "backup_assets", Description: "恢复结果清理周期", MinDuration: "10s", MaxDuration: "1h"},
+	{Key: "backup_assets.recovery.cleanup_batch_size", EnvVar: "BACKUP_ASSETS_RECOVERY_CLEANUP_BATCH_SIZE", CodeDefault: "100", Type: TypeInt, Category: "backup_assets", Description: "恢复结果清理批次", Min: "1", Max: "1000"},
+	{Key: "backup_assets.recovery.cleanup_lease_ttl", EnvVar: "BACKUP_ASSETS_RECOVERY_CLEANUP_LEASE_TTL", CodeDefault: "2m", Type: TypeDuration, Category: "backup_assets", Description: "恢复结果清理租约时长", MinDuration: "30s", MaxDuration: "30m"},
+	{Key: "backup_assets.recovery.cleanup_retry_base", EnvVar: "BACKUP_ASSETS_RECOVERY_CLEANUP_RETRY_BASE", CodeDefault: "10s", Type: TypeDuration, Category: "backup_assets", Description: "恢复结果清理重试基础延迟", MinDuration: "1s", MaxDuration: "10m"},
+	{Key: "backup_assets.recovery.cleanup_retry_max_delay", EnvVar: "BACKUP_ASSETS_RECOVERY_CLEANUP_RETRY_MAX_DELAY", CodeDefault: "10m", Type: TypeDuration, Category: "backup_assets", Description: "恢复结果清理重试最大延迟", MinDuration: "1s", MaxDuration: "2h"},
+	{Key: "backup_assets.recovery.reconciliation_finding_limit", EnvVar: "BACKUP_ASSETS_RECOVERY_RECONCILIATION_FINDING_LIMIT", CodeDefault: "100", Type: TypeInt, Category: "backup_assets", Description: "恢复对账单次 finding 上限", Min: "1", Max: "256"},
 	{Key: "backup_assets.export.enabled", EnvVar: "BACKUP_ASSETS_EXPORT_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "启用备份资产导出"},
 	{Key: "backup_assets.export.root", EnvVar: "BACKUP_ASSETS_EXPORT_ROOT", CodeDefault: "/var/lib/xirang-asset-runtime/export", Type: TypeString, Category: "backup_assets", Description: "备份资产导出密文专用根目录", RequiresRestart: true},
 	{Key: "backup_assets.export.default_profile", EnvVar: "BACKUP_ASSETS_EXPORT_DEFAULT_PROFILE", CodeDefault: "zip_deflate_v1", Type: TypeString, Category: "backup_assets", Description: "备份资产导出默认归档配置"},
@@ -768,8 +834,15 @@ func (s *Service) RegisterRecoveryTargetRootTx(
 		if decodeErr != nil {
 			return RecoveryTargetRootResolution{}, decodeErr
 		}
-		if current == resolution {
-			return current, nil
+		if recoveryTargetRootSecurityEquivalent(current, resolution) {
+			if current.AuthorityRevision != resolution.AuthorityRevision {
+				return RecoveryTargetRootResolution{}, ErrRecoveryTargetRootInvalid
+			}
+			if current == resolution {
+				return current, nil
+			}
+		} else if current.AuthorityRevision == resolution.AuthorityRevision {
+			return RecoveryTargetRootResolution{}, ErrRecoveryTargetRootInvalid
 		}
 	}
 
@@ -777,6 +850,11 @@ func (s *Service) RegisterRecoveryTargetRootTx(
 		SchemaVersion: recoveryTargetRootSchemaVersion, NodeID: resolution.NodeID,
 		RootID: resolution.RootID, SafeLabel: resolution.SafeLabel,
 		CanonicalLocator: resolution.Locator, LocatorDigest: resolution.LocatorDigest,
+		AuthorityRevision:       resolution.AuthorityRevision,
+		RootObservationRevision: resolution.RootObservationRevision,
+		ReserveBytes:            resolution.Policy.ReserveBytes,
+		ReserveInodes:           resolution.Policy.ReserveInodes,
+		OverlapPolicyBinding:    resolution.Policy.OverlapPolicyBinding,
 	}
 	document, marshalErr := json.Marshal(record)
 	if marshalErr != nil || len(document) == 0 || len(document) > recoveryTargetRootDocumentMaxBytes {
@@ -806,12 +884,27 @@ func (s *Service) DeleteRecoveryTargetRootTx(ctx context.Context, tx *gorm.DB, n
 	if err != nil {
 		return err
 	}
-	result := tx.WithContext(ctx).Where("key = ?", key).Delete(&model.SystemSetting{})
+	var rows []model.SystemSetting
+	if queryErr := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("key = ?", key).Limit(2).Find(&rows).Error; queryErr != nil {
+		return recoveryTargetRootUnavailableForContext(ctx)
+	}
+	if len(rows) == 0 {
+		return ErrRecoveryTargetRootNotFound
+	}
+	if len(rows) != 1 {
+		return ErrRecoveryTargetRootUnavailable
+	}
+	resolved, decodeErr := decodeRecoveryTargetRootRow(rows[0].Key, rows[0].Value)
+	if decodeErr != nil || resolved.NodeID != nodeID || resolved.RootID != rootID {
+		return ErrRecoveryTargetRootUnavailable
+	}
+	result := tx.WithContext(ctx).Where("key = ? AND value = ?", key, rows[0].Value).Delete(&model.SystemSetting{})
 	if result.Error != nil {
 		return recoveryTargetRootUnavailableForContext(ctx)
 	}
 	if result.RowsAffected != 1 {
-		return ErrRecoveryTargetRootNotFound
+		return ErrRecoveryTargetRootUnavailable
 	}
 	return nil
 }
@@ -976,7 +1069,11 @@ func validateRecoveryTargetRootCall(s *Service, ctx context.Context, tx *gorm.DB
 }
 
 func normalizeRecoveryTargetRootDefinition(definition RecoveryTargetRootDefinition) (RecoveryTargetRootResolution, error) {
-	if !validRecoveryTargetRootSafeLabel(definition.SafeLabel) {
+	if !validRecoveryTargetRootSafeLabel(definition.SafeLabel) ||
+		!validRecoveryTargetRootAuthorityRevision(definition.AuthorityRevision) ||
+		!validRecoveryTargetRootOpaqueBinding(definition.RootObservationRevision) ||
+		definition.Policy.ReserveBytes < 0 || definition.Policy.ReserveInodes < 0 ||
+		!validRecoveryTargetRootOpaqueBinding(definition.Policy.OverlapPolicyBinding) {
 		return RecoveryTargetRootResolution{}, ErrRecoveryTargetRootInvalid
 	}
 	digest, err := RecoveryTargetRootLocatorDigest(definition.NodeID, definition.RootID, definition.Locator)
@@ -986,7 +1083,17 @@ func normalizeRecoveryTargetRootDefinition(definition RecoveryTargetRootDefiniti
 	return RecoveryTargetRootResolution{
 		NodeID: definition.NodeID, RootID: definition.RootID, SafeLabel: definition.SafeLabel,
 		Locator: definition.Locator, LocatorDigest: digest,
+		AuthorityRevision:       definition.AuthorityRevision,
+		RootObservationRevision: definition.RootObservationRevision,
+		Policy:                  definition.Policy,
 	}, nil
+}
+
+func recoveryTargetRootSecurityEquivalent(left, right RecoveryTargetRootResolution) bool {
+	return left.NodeID == right.NodeID && left.RootID == right.RootID &&
+		left.Locator == right.Locator && left.LocatorDigest == right.LocatorDigest &&
+		left.RootObservationRevision == right.RootObservationRevision &&
+		left.Policy == right.Policy
 }
 
 func requireActiveRecoveryTargetRootNode(ctx context.Context, db *gorm.DB, nodeID uint) error {
@@ -1049,6 +1156,12 @@ func decodeRecoveryTargetRootRow(key, value string) (RecoveryTargetRootResolutio
 	}
 	resolution, normalizeErr := normalizeRecoveryTargetRootDefinition(RecoveryTargetRootDefinition{
 		NodeID: record.NodeID, RootID: record.RootID, SafeLabel: record.SafeLabel, Locator: record.CanonicalLocator,
+		AuthorityRevision:       record.AuthorityRevision,
+		RootObservationRevision: record.RootObservationRevision,
+		Policy: RecoveryTargetRootPolicy{
+			ReserveBytes: record.ReserveBytes, ReserveInodes: record.ReserveInodes,
+			OverlapPolicyBinding: record.OverlapPolicyBinding,
+		},
 	})
 	if normalizeErr != nil || resolution.LocatorDigest != record.LocatorDigest {
 		return RecoveryTargetRootResolution{}, ErrRecoveryTargetRootUnavailable
@@ -1063,7 +1176,7 @@ func decodeRecoveryTargetRootDocument(document string) (recoveryTargetRootRecord
 		return recoveryTargetRootRecord{}, ErrRecoveryTargetRootUnavailable
 	}
 	var record recoveryTargetRootRecord
-	seen := make(map[string]struct{}, 6)
+	seen := make(map[string]struct{}, 11)
 	for decoder.More() {
 		nameToken, tokenErr := decoder.Token()
 		name, ok := nameToken.(string)
@@ -1087,6 +1200,16 @@ func decodeRecoveryTargetRootDocument(document string) (recoveryTargetRootRecord
 			err = decoder.Decode(&record.CanonicalLocator)
 		case "locator_digest":
 			err = decoder.Decode(&record.LocatorDigest)
+		case "authority_revision":
+			err = decoder.Decode(&record.AuthorityRevision)
+		case "root_observation_revision":
+			err = decoder.Decode(&record.RootObservationRevision)
+		case "reserve_bytes":
+			err = decodeRecoveryTargetRootRequiredInt64(decoder, &record.ReserveBytes)
+		case "reserve_inodes":
+			err = decodeRecoveryTargetRootRequiredInt64(decoder, &record.ReserveInodes)
+		case "overlap_policy_binding":
+			err = decoder.Decode(&record.OverlapPolicyBinding)
 		default:
 			return recoveryTargetRootRecord{}, ErrRecoveryTargetRootUnavailable
 		}
@@ -1095,13 +1218,51 @@ func decodeRecoveryTargetRootDocument(document string) (recoveryTargetRootRecord
 		}
 	}
 	closing, err := decoder.Token()
-	if err != nil || closing != json.Delim('}') || len(seen) != 6 {
+	if err != nil || closing != json.Delim('}') || len(seen) != 11 {
 		return recoveryTargetRootRecord{}, ErrRecoveryTargetRootUnavailable
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return recoveryTargetRootRecord{}, ErrRecoveryTargetRootUnavailable
 	}
 	return record, nil
+}
+
+func decodeRecoveryTargetRootRequiredInt64(decoder *json.Decoder, target *int64) error {
+	if decoder == nil || target == nil {
+		return ErrRecoveryTargetRootUnavailable
+	}
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return ErrRecoveryTargetRootUnavailable
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		return ErrRecoveryTargetRootUnavailable
+	}
+	return nil
+}
+
+func validRecoveryTargetRootAuthorityRevision(value string) bool {
+	if len(value) != 32 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func validRecoveryTargetRootOpaqueBinding(value string) bool {
+	if !utf8.ValidString(value) || len(value) == 0 || len(value) > 256 || strings.TrimSpace(value) == "" {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
 }
 
 func validRecoveryTargetRootID(rootID string) bool {
@@ -1697,6 +1858,28 @@ var backupAssetRecoverySettingKeys = []string{
 	"backup_assets.recovery.delete_grant_ttl",
 	"backup_assets.recovery.receipt_reaper_cadence",
 	"backup_assets.recovery.receipt_reaper_batch_size",
+	"backup_assets.recovery.enabled",
+	"backup_assets.recovery.preflight_ttl",
+	"backup_assets.recovery.max_selection_items",
+	"backup_assets.recovery.max_logical_bytes",
+	"backup_assets.recovery.worker_concurrency",
+	"backup_assets.recovery.lease_ttl",
+	"backup_assets.recovery.lease_renew_margin",
+	"backup_assets.recovery.takeover_cadence",
+	"backup_assets.recovery.retry_base",
+	"backup_assets.recovery.retry_max_delay",
+	"backup_assets.recovery.scan_limit",
+	"backup_assets.recovery.execution_timeout",
+	"backup_assets.recovery.result_default_ttl",
+	"backup_assets.recovery.result_retain_hard_cap",
+	"backup_assets.recovery.result_read_permit_ttl",
+	"backup_assets.recovery.result_drain_timeout",
+	"backup_assets.recovery.cleanup_cadence",
+	"backup_assets.recovery.cleanup_batch_size",
+	"backup_assets.recovery.cleanup_lease_ttl",
+	"backup_assets.recovery.cleanup_retry_base",
+	"backup_assets.recovery.cleanup_retry_max_delay",
+	"backup_assets.recovery.reconciliation_finding_limit",
 }
 
 var backupAssetFoundationSettingKeys = func() []string {
@@ -1860,6 +2043,16 @@ func validateBackupAssetFoundationConfig(values map[string]string, requireComple
 	recoveryReceiptReplayTTL, _ := time.ParseDuration(resolved["backup_assets.recovery.receipt_replay_ttl"])
 	recoveryWriteGrantTTL, _ := time.ParseDuration(resolved["backup_assets.recovery.write_grant_ttl"])
 	recoveryDeleteGrantTTL, _ := time.ParseDuration(resolved["backup_assets.recovery.delete_grant_ttl"])
+	recoveryLeaseTTL, _ := time.ParseDuration(resolved["backup_assets.recovery.lease_ttl"])
+	recoveryLeaseRenewMargin, _ := time.ParseDuration(resolved["backup_assets.recovery.lease_renew_margin"])
+	recoveryRetryBase, _ := time.ParseDuration(resolved["backup_assets.recovery.retry_base"])
+	recoveryRetryMaxDelay, _ := time.ParseDuration(resolved["backup_assets.recovery.retry_max_delay"])
+	recoveryResultDefaultTTL, _ := time.ParseDuration(resolved["backup_assets.recovery.result_default_ttl"])
+	recoveryResultRetainHardCap, _ := time.ParseDuration(resolved["backup_assets.recovery.result_retain_hard_cap"])
+	recoveryResultDrainTimeout, _ := time.ParseDuration(resolved["backup_assets.recovery.result_drain_timeout"])
+	recoveryCleanupLeaseTTL, _ := time.ParseDuration(resolved["backup_assets.recovery.cleanup_lease_ttl"])
+	recoveryCleanupRetryBase, _ := time.ParseDuration(resolved["backup_assets.recovery.cleanup_retry_base"])
+	recoveryCleanupRetryMaxDelay, _ := time.ParseDuration(resolved["backup_assets.recovery.cleanup_retry_max_delay"])
 	if heartbeat >= leaseDuration {
 		return fmt.Errorf("backup_assets.lease_heartbeat 必须小于 backup_assets.lease_duration")
 	}
@@ -1916,6 +2109,21 @@ func validateBackupAssetFoundationConfig(values map[string]string, requireComple
 	}
 	if recoveryDeleteGrantTTL > recoveryReceiptReplayTTL {
 		return fmt.Errorf("backup_assets.recovery.delete_grant_ttl 不能超过 receipt_replay_ttl")
+	}
+	if recoveryLeaseRenewMargin >= recoveryLeaseTTL {
+		return fmt.Errorf("backup_assets.recovery.lease_renew_margin 必须小于 lease_ttl")
+	}
+	if recoveryRetryBase > recoveryRetryMaxDelay {
+		return fmt.Errorf("backup_assets.recovery.retry_base 不能超过 retry_max_delay")
+	}
+	if recoveryResultDefaultTTL > recoveryResultRetainHardCap {
+		return fmt.Errorf("backup_assets.recovery.result_default_ttl 不能超过 result_retain_hard_cap")
+	}
+	if recoveryResultDrainTimeout >= recoveryCleanupLeaseTTL {
+		return fmt.Errorf("backup_assets.recovery.result_drain_timeout 必须小于 cleanup_lease_ttl")
+	}
+	if recoveryCleanupRetryBase > recoveryCleanupRetryMaxDelay {
+		return fmt.Errorf("backup_assets.recovery.cleanup_retry_base 不能超过 cleanup_retry_max_delay")
 	}
 	validateContent := requireComplete
 	if !validateContent {
