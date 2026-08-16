@@ -24,6 +24,8 @@ export interface BackupAssetsRouteState {
   entryId?: string;
   savedSearchId?: string;
   exportJobId?: string;
+  planId?: string;
+  jobId?: string;
   scope: BackupAssetsScope;
   types: CatalogEntryType[];
   tagId?: string;
@@ -66,7 +68,7 @@ const DATA_QUERY_KEYS = new Set([
   "layout",
   "inspectorTab",
 ]);
-const RECOVERY_QUERY_KEYS = new Set(["taskId", "recoveryPointId", "inspectorTab"]);
+const RECOVERY_QUERY_KEYS = new Set(["taskId", "recoveryPointId", "planId", "jobId", "inspectorTab"]);
 const ENTRY_TYPES: readonly CatalogEntryType[] = [
   "directory",
   "file",
@@ -125,6 +127,8 @@ export function serializeBackupAssetsRoute(state: BackupAssetsRouteState): strin
   if (normalized.page === "recovery") {
     appendNumber(params, "taskId", normalized.taskId);
     appendString(params, "recoveryPointId", normalized.recoveryPointId);
+    appendString(params, "planId", normalized.planId);
+    appendString(params, "jobId", normalized.jobId);
     if (normalized.inspectorTab !== "evidence") params.set("inspectorTab", normalized.inspectorTab);
     return withQuery(RECOVERY_PATH, params);
   }
@@ -263,10 +267,15 @@ function parseRecoveryRoute(params: URLSearchParams): BackupAssetsRouteResult {
   if (!hasOnlyKeys(params, RECOVERY_QUERY_KEYS) || hasDuplicateSingular(params)) return invalid(RECOVERY_PATH);
   const taskId = parseTaskId(params.get("taskId"));
   const recoveryPointId = parseOpaqueId(params.get("recoveryPointId"));
+  const planId = parseOpaqueId(params.get("planId"));
+  const jobId = parseOpaqueId(params.get("jobId"));
   const tab = params.get("inspectorTab") ?? "evidence";
   if (
     (params.has("taskId") && taskId === undefined) ||
     (params.has("recoveryPointId") && recoveryPointId === undefined) ||
+    (params.has("planId") && planId === undefined) ||
+    (params.has("jobId") && jobId === undefined) ||
+    (jobId !== undefined && planId === undefined) ||
     (tab !== "evidence" && tab !== "diff")
   ) {
     return invalid(RECOVERY_PATH);
@@ -277,6 +286,8 @@ function parseRecoveryRoute(params: URLSearchParams): BackupAssetsRouteResult {
       ...defaultBackupAssetsRouteState("recovery"),
       taskId,
       recoveryPointId,
+      planId,
+      jobId,
       inspectorTab: tab,
     },
   };
@@ -363,6 +374,8 @@ function isValidState(state: BackupAssetsRouteState): boolean {
   if (state.entryId !== undefined && !ENTRY_ID_PATTERN.test(state.entryId)) return false;
   if (state.savedSearchId !== undefined && !OPAQUE_ID_PATTERN.test(state.savedSearchId)) return false;
   if (state.exportJobId !== undefined && !OPAQUE_ID_PATTERN.test(state.exportJobId)) return false;
+  if (state.planId !== undefined && !OPAQUE_ID_PATTERN.test(state.planId)) return false;
+  if (state.jobId !== undefined && !OPAQUE_ID_PATTERN.test(state.jobId)) return false;
   if (state.tagId !== undefined && !OPAQUE_ID_PATTERN.test(state.tagId)) return false;
   if (state.types.length > 6 || new Set(state.types).size !== state.types.length || !state.types.every(isEntryType)) return false;
 
@@ -375,6 +388,7 @@ function isValidState(state: BackupAssetsRouteState): boolean {
       state.entryId === undefined &&
       state.savedSearchId === undefined &&
       state.exportJobId === undefined &&
+      (state.jobId === undefined || state.planId !== undefined) &&
       state.scope === "current" &&
       state.types.length === 0 &&
       state.tagId === undefined &&
@@ -385,6 +399,8 @@ function isValidState(state: BackupAssetsRouteState): boolean {
       (state.inspectorTab === "evidence" || state.inspectorTab === "diff")
     );
   }
+
+  if (state.planId !== undefined || state.jobId !== undefined) return false;
 
   if ((state.parentEntryId !== undefined || state.entryId !== undefined) && state.recoveryPointId === undefined) return false;
   if (state.scope === "all_retained" && state.recoveryPointId !== undefined) return false;

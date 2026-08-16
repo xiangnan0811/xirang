@@ -18,6 +18,7 @@ import {
   vi,
 } from "vitest";
 import { MemoryRouter, Navigate, Route, Routes } from "react-router-dom";
+import { http, HttpResponse } from "msw";
 
 import {
   backupAssetsFixtureIds,
@@ -95,6 +96,7 @@ afterEach(() => {
   server.resetHandlers();
   authRef.current.ensureStepUpProof.mockReset();
   window.localStorage.removeItem(BACKUP_ASSETS_PREFERENCES_KEY);
+  document.documentElement.style.removeProperty("font-size");
 });
 
 afterAll(() => server.close());
@@ -118,6 +120,57 @@ describe("Backups routes accessibility", () => {
     expect(screen.queryByRole("button", { name: /Export|导出|Start recovery|开始恢复/ })).not.toBeInTheDocument();
     expect(await runAxe(recovery.container)).toHaveNoViolations();
   });
+
+  it.each([1440, 1200, 390] as const)(
+    "keeps the durable recovery wizard axe-clean at 200%% zoom and %ipx",
+    async (width) => {
+      useFixture("complete");
+      setViewport(width);
+      document.documentElement.style.fontSize = "200%";
+      const user = userEvent.setup();
+      const planId = "1".repeat(32);
+      server.use(http.get(`/api/v1/recovery-plans/${planId}`, () => HttpResponse.json({
+        code: 0,
+        message: "ok",
+        data: {
+          schema_version: 1,
+          id: planId,
+          state: "preflight_ready",
+          revision: "8",
+          repository_id: backupAssetsFixtureIds.onlineRepository,
+          recovery_point_id: backupAssetsFixtureIds.onlineRecoveryPoint,
+          target_mode: "isolated",
+          target_node_id: 4,
+          target_root_id: "recovery-root",
+          conflict_policy: "fail_on_conflict",
+          security_decision: "allow_clean",
+          selection_digest: "a".repeat(64),
+          operation_set_digest: "b".repeat(64),
+          delete_set_digest: "c".repeat(64),
+          estimated_items: 2,
+          estimated_bytes: 4096,
+          created_at: "2026-08-16T01:00:00Z",
+          updated_at: "2026-08-16T01:01:00Z",
+        },
+      })));
+
+      renderBackups(
+        `/app/backups/recovery?recoveryPointId=${backupAssetsFixtureIds.onlineRecoveryPoint}&planId=${planId}`,
+      );
+
+      const phaseHeading = await screen.findByRole("heading", { name: /Run recovery preflight|运行恢复预检/ });
+      await waitFor(() => expect(phaseHeading).toHaveFocus());
+      const dialog = screen.getByRole("dialog", { name: /Recover backup assets|恢复备份资产/ });
+      const quietAnnouncement = screen.getByTestId("recovery-announcement");
+      expect(quietAnnouncement).toHaveAttribute("aria-live", "polite");
+      expect(quietAnnouncement).toHaveTextContent("");
+      expect(document.body).not.toHaveTextContent(/grant_secret|step-up proof|write proof|delete proof/i);
+      expect(JSON.stringify(browserChannels())).not.toMatch(/grant_secret|step-up proof|write proof|delete proof|ticket/i);
+      await user.keyboard("{Tab}");
+      expect(dialog).toContainElement(document.activeElement as HTMLElement);
+      expect(await runAxe(document.body)).toHaveNoViolations();
+    },
+  );
 
   it("renders an axe-clean desktop workspace with tabs, directory tree, list, and grid semantics", async () => {
     useFixture("complete");
@@ -237,6 +290,7 @@ describe("Backups routes accessibility", () => {
     ]);
 
     expect(leafKeys(zh.backupAssets).sort()).toEqual(leafKeys(en.backupAssets).sort());
+    expect(leafKeys(zh.backupAssets.recovery).sort()).toEqual(leafKeys(en.backupAssets.recovery).sort());
   });
 });
 

@@ -69,6 +69,41 @@ func (source *recoveryOverwriteHistoricalKeySourceForTest) ByVersion(
 	return material, nil
 }
 
+func TestRecoveryDeleteAuthorizationHandoffRequiresLivePendingClaimButAcceptsConsumedProof(t *testing.T) {
+	pending := newPausedAuthorizedExactMirrorDelete(t, "handoff-live-pending")
+	consumed, err := pending.execution.coordinator.ValidateDeleteAuthorizationHandoff(
+		context.Background(), pending.request, pending.result,
+	)
+	if err != nil || consumed {
+		t.Fatalf("live pending handoff consumed=%t err=%v", consumed, err)
+	}
+	source := newRecoveryRepositoryContractSource(t, pending.execution.serviceFixture.db, pending.execution.jobID)
+	if err := pending.execution.coordinator.ExecuteClaim(
+		context.Background(), pending.execution.claim, source, pending.request.GrantSecret,
+	); err != nil {
+		t.Fatalf("consume exact delete handoff: %v", err)
+	}
+	consumed, err = pending.execution.coordinator.ValidateDeleteAuthorizationHandoff(
+		context.Background(), pending.request, pending.result,
+	)
+	if err != nil || !consumed {
+		t.Fatalf("durably consumed handoff consumed=%t err=%v", consumed, err)
+	}
+
+	stale := newPausedAuthorizedExactMirrorDelete(t, "handoff-stale-pending")
+	staleTime := stale.execution.serviceFixture.now.Add(-time.Minute)
+	if err := stale.execution.serviceFixture.db.Model(&model.BackupAssetRecoveryAttempt{}).
+		Where("id = ?", stale.execution.claim.AttemptID).
+		Updates(map[string]any{"state": string(AttemptStateLost), "lease_expires_at": staleTime}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stale.execution.coordinator.ValidateDeleteAuthorizationHandoff(
+		context.Background(), stale.request, stale.result,
+	); !errors.Is(err, ErrRecoveryWorkerFenceLost) {
+		t.Fatalf("stale pending handoff error=%v, want fence lost", err)
+	}
+}
+
 func TestRecoveryOverwriteArtifactBindingUsesHistoricalCleanupKey(t *testing.T) {
 	binding := recoveryTargetSessionBindingForTest(t)
 	material, input := recoveryOverwriteArtifactBindingInputForTest(

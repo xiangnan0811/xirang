@@ -289,6 +289,23 @@ describe("backup assets route state", () => {
     });
   });
 
+  it("carries only opaque recovery plan and job handles on the recovery route", () => {
+    const planId = "d".repeat(32);
+    const jobId = "e".repeat(32);
+    const state = expectValid("/app/backups/recovery", `?planId=${planId}&jobId=${jobId}`);
+
+    expect(state).toMatchObject({ page: "recovery", planId, jobId });
+    expect(serializeBackupAssetsRoute(state)).toBe(`/app/backups/recovery?planId=${planId}&jobId=${jobId}`);
+    expect(parseBackupAssetsRoute("/app/backups/recovery", `?jobId=${jobId}`)).toEqual({
+      status: "invalid",
+      safePath: "/app/backups/recovery",
+    });
+    expect(parseBackupAssetsRoute("/app/backups/recovery", `?planId=${planId}&grantSecret=secret`)).toEqual({
+      status: "invalid",
+      safePath: "/app/backups/recovery",
+    });
+  });
+
   it("builds a task-context compatibility link without legacy snapshot or path state", () => {
     const href = backupAssetsTaskContextHref(101);
 

@@ -72,6 +72,7 @@ const {
   listBackupAssetsMock,
   listBackupRepositoriesMock,
   listRecoveryPointsMock,
+  getRecoveryPlanMock,
   verifyMountMock,
 } = vi.hoisted(() => ({
   authRef: {
@@ -88,6 +89,7 @@ const {
   listBackupAssetsMock: vi.fn(),
   listBackupRepositoriesMock: vi.fn(),
   listRecoveryPointsMock: vi.fn(),
+  getRecoveryPlanMock: vi.fn(),
   verifyMountMock: vi.fn(),
 }));
 
@@ -125,6 +127,30 @@ vi.mock("@/lib/api/client", () => ({
   },
 }));
 
+vi.mock("@/lib/api/backup-recovery-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api/backup-recovery-api")>();
+  return {
+    ...actual,
+    createBackupRecoveryApi: () => ({
+      createPlan: vi.fn(),
+      getPlan: getRecoveryPlanMock,
+      preflight: vi.fn(),
+      overrideSecurity: vi.fn(),
+      authorizeWrite: vi.fn(),
+      execute: vi.fn(),
+      getJob: vi.fn(),
+      authorizeExactMirrorDelete: vi.fn(),
+      getJobItems: vi.fn(),
+      getJobResults: vi.fn(),
+      cancelPlan: vi.fn(),
+      cancelJob: vi.fn(),
+      retainResults: vi.fn(),
+      issueResultDownloadTicket: vi.fn(),
+      cleanupResults: vi.fn(),
+    }),
+  };
+});
+
 vi.mock("recharts", () => ({
   Area: () => null,
   Bar: () => null,
@@ -151,6 +177,7 @@ describe("BackupsPage", () => {
     listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
     listRecoveryPointsMock.mockReset();
     listRecoveryPointsMock.mockResolvedValue({ items: [], nextCursor: null });
+    getRecoveryPlanMock.mockReset();
     verifyMountMock.mockReset();
   });
 
@@ -395,6 +422,49 @@ describe("BackupsPage", () => {
       "/app/tasks"
     );
     expect(screen.queryByRole("button", { name: /Export|导出|Start recovery|开始恢复/ })).not.toBeInTheDocument();
+  });
+
+  it("hydrates the recovery wizard from opaque route handles without putting authority material in the route", async () => {
+    const planId = "1".repeat(32);
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+    getRecoveryPlanMock.mockResolvedValue({
+      status: "available",
+      value: {
+        id: planId,
+        state: "preflight_ready",
+        revision: "8",
+        repositoryId: "2".repeat(32),
+        recoveryPointId: recoveryPoint.id,
+        targetMode: "isolated",
+        targetNodeId: 4,
+        targetRootId: "recovery-root",
+        conflictPolicy: "fail_on_conflict",
+        securityDecision: "allow_clean",
+        estimatedItems: 2,
+        estimatedBytes: 4096,
+        createdAt: "2026-08-16T01:00:00.000Z",
+        updatedAt: "2026-08-16T01:01:00.000Z",
+      },
+    });
+
+    renderBackups(`/app/backups/recovery?recoveryPointId=${recoveryPoint.id}&planId=${planId}`);
+
+    expect(await screen.findByRole("heading", { name: /Run recovery preflight|运行恢复预检/ })).toBeInTheDocument();
+    expect(getRecoveryPlanMock).toHaveBeenCalledWith("test-token", planId, expect.any(AbortSignal));
+    expect(screen.getByTestId("backups-location")).toHaveTextContent(`planId=${planId}`);
+    expect(screen.getByTestId("backups-location")).not.toHaveTextContent(/proof|reason|grant|secret|ticket/i);
+  });
+
+  it("fails closed with an explicit unavailable state when a recovery route lacks admin authority", async () => {
+    const planId = "1".repeat(32);
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+    authRef.current = { token: "test-token", role: "viewer", ensureStepUpProof: vi.fn() };
+
+    renderBackups(`/app/backups/recovery?recoveryPointId=${recoveryPoint.id}&planId=${planId}`);
+
+    expect(await screen.findByText(/Recovery unavailable|恢复不可用/)).toBeInTheDocument();
+    expect(getRecoveryPlanMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /Create recovery plan|创建恢复计划|Start recovery|开始恢复/ })).not.toBeInTheDocument();
   });
 });
 

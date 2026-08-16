@@ -130,6 +130,39 @@ describe("AssetBrowser", () => {
     expect(onExport).toHaveBeenCalledOnce();
   });
 
+  it("keeps recovery stateless and delegates the exact selected refs", async () => {
+    const user = userEvent.setup();
+    const rows = buildAssetRows(2);
+    const state = createInitialBackupAssetsState({
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: "a".repeat(32),
+      recoveryPointId: "b".repeat(32),
+    });
+    state.result = {
+      status: "ready", requestKey: "explicit-recovery", generation: 1, rows,
+      nextCursor: null, coverage: "complete", authoritativeEmpty: false,
+    };
+    state.selection = new Map(rows.map((row) => [assetRefKey(row.ref), row.ref]));
+    const onRecover = vi.fn();
+    render(
+      <AssetBrowser
+        state={state}
+        canRecover
+        onRecover={onRecover}
+        onRoutePatch={vi.fn()}
+        onSearch={vi.fn()}
+        onSearchDraftChange={vi.fn()}
+        onToggleSelection={vi.fn()}
+        onClearSelection={vi.fn()}
+        onOpen={vi.fn()}
+        onLoadMore={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Recover selected|恢复所选/ }));
+    expect(onRecover).toHaveBeenCalledOnce();
+  });
+
   it("does not present partial zero results as an authoritative empty state", () => {
     const route = {
       ...defaultBackupAssetsRouteState("data"),

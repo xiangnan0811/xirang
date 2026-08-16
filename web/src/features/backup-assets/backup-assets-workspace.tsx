@@ -25,6 +25,7 @@ import {
 } from "./backup-assets-preferences";
 import type { BackupAssetsRouteState } from "./backup-assets-route-state";
 import type { BackupAssetsController } from "./use-backup-assets-state";
+import { useBackupRecovery } from "./use-backup-recovery";
 import { AssetBrowser } from "./asset-browser";
 import { AssetEvidence } from "./asset-evidence";
 import { AssetInspector } from "./asset-inspector";
@@ -56,11 +57,16 @@ const LazyExportJobPanel = lazy(() =>
     default: module.ExportJobPanel,
   }))
 );
+const LazyRecoveryPlanWizard = lazy(() =>
+  import("./recovery-plan-wizard").then((module) => ({
+    default: module.RecoveryPlanWizard,
+  }))
+);
 
 type BackupAssetsProcessingRuntime = Pick<
   AuthContextValue,
   "token" | "role" | "ensureStepUpProof"
->;
+> & Partial<Pick<AuthContextValue, "userId">>;
 
 export interface BackupAssetsWorkspaceProps {
   controller: BackupAssetsController;
@@ -88,12 +94,30 @@ export function BackupAssetsWorkspace({
   const online = useBackupAssetsOnline();
   const [overlaySection, setOverlaySection] = useState<BackupAssetsOverlaySection | null>(null);
   const [exportReviewSnapshot, setExportReviewSnapshot] = useState<ExportReviewSnapshot | null>(null);
+  const [recoveryDialogOpen, setRecoveryDialogOpen] = useState(false);
   const overlayTriggerRef = useRef<HTMLButtonElement | null>(null);
   const exportTriggerRef = useRef<HTMLElement | null>(null);
   const resultsRegionRef = useRef<HTMLElement | null>(null);
   const restorationRegistryRef = useRef<BackupAssetsRestorationRegistry | null>(null);
   const lastRestorationContextRef = useRef<string | null>(null);
   const [restorationAnchor, setRestorationAnchor] = useState<BackupAssetsRestorationAnchor | null>(null);
+  const recovery = useBackupRecovery({
+    token: processingRuntime?.token ?? null,
+    role: processingRuntime?.role ?? null,
+    sessionKey: processingRuntime?.userId === null || processingRuntime?.userId === undefined
+      ? null
+      : String(processingRuntime.userId),
+    contextKey: `${controller.state.route.repositoryId ?? ""}:${controller.state.route.recoveryPointId ?? ""}`,
+    ensureStepUpProof: processingRuntime?.ensureStepUpProof,
+    onRouteChange: (handles, options) => {
+      onRoutePatch({
+        page: "recovery",
+        recoveryPointId: controller.state.route.recoveryPointId,
+        planId: handles.planId ?? undefined,
+        jobId: handles.jobId ?? undefined,
+      }, options);
+    },
+  });
   if (restorationRegistryRef.current === null) {
     restorationRegistryRef.current = createBackupAssetsRestorationRegistry();
   }
@@ -149,6 +173,31 @@ export function BackupAssetsWorkspace({
       exportSelection.length > 0 &&
       exportSelection.length === controller.state.selection.size
   );
+  const recoveryGenerationId = selectedCatalog?.generation?.state === "complete"
+    ? selectedCatalog.generation.id
+    : null;
+  const canRecoverRefs = (refs: readonly AssetRef[]) => Boolean(
+    refs.length > 0 &&
+      processingRuntime?.token &&
+      processingRuntime.role === "admin" &&
+      selectedRepository?.accessActive &&
+      selectedRepository.capabilities.restore &&
+      controller.selectedRecoveryPoint?.state === "committed" &&
+      controller.selectedRecoveryPoint.physicalAvailability === "online" &&
+      recoveryGenerationId &&
+      refs.every(
+        (ref) => ref.recoveryPointId === controller.selectedRecoveryPoint?.id,
+      )
+  );
+  const canRecoverSelection = canRecoverRefs([...controller.state.selection.values()]);
+  const openRecovery = (refs: readonly AssetRef[]) => {
+    if (!canRecoverRefs(refs) || selectedRepository === null || recoveryGenerationId === null) return;
+    recovery.open(
+      refs.map((ref) => ({ recoveryPointId: ref.recoveryPointId, entryId: ref.entryId })),
+      { repositoryId: selectedRepository.id, catalogGenerationId: recoveryGenerationId },
+    );
+    setRecoveryDialogOpen(true);
+  };
   const exportDialogOpen = exportReviewSnapshot !== null || Boolean(controller.state.route.exportJobId);
   const favoriteMembershipComplete =
     controller.overlays.favorites.status === "ready" &&
@@ -290,7 +339,9 @@ export function BackupAssetsWorkspace({
         canManageFavorite={canManageFavorite}
         favoriteState={favoriteMembershipComplete ? selectedFavorite?.state ?? null : undefined}
         favoritePending={favoritePending}
+        canRecover={canRecoverRefs([selectedAsset.ref])}
         onToggleFavorite={() => controller.actions.toggleFavorite(selectedAsset.ref, selectedAsset.name)}
+        onRecover={() => openRecovery([selectedAsset.ref])}
         preview={
           <AssetPreview
             asset={selectedAsset}
@@ -434,6 +485,7 @@ export function BackupAssetsWorkspace({
             onToggleSelection={controller.actions.toggleSelection}
             onClearSelection={controller.actions.clearSelection}
             canExport={canExport}
+            canRecover={canRecoverSelection}
             onExport={() => {
               const selection = exportSelection.map((item) => ({
                 ref: {
@@ -449,6 +501,7 @@ export function BackupAssetsWorkspace({
                 : null;
               setExportReviewSnapshot({ selection });
             }}
+            onRecover={() => openRecovery([...controller.state.selection.values()])}
             onOpen={(row, position) => {
               if (row.asset.entryType === "directory") {
                 onRoutePatch({ parentEntryId: row.ref.entryId, entryId: undefined });
@@ -517,6 +570,15 @@ export function BackupAssetsWorkspace({
           });
         }}
       />
+      {processingRuntime?.role === "admin" && recoveryDialogOpen ? (
+        <Suspense fallback={<LoadingState title={t("backupAssets.recovery.title")} rows={6} />}>
+          <LazyRecoveryPlanWizard
+            open={recoveryDialogOpen}
+            recovery={recovery}
+            onOpenChange={setRecoveryDialogOpen}
+          />
+        </Suspense>
+      ) : null}
       {processingRuntime?.role === "admin" ? (
         <Dialog open={exportDialogOpen} onOpenChange={(nextOpen) => {
           if (!nextOpen) {

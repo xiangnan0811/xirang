@@ -427,6 +427,14 @@ type managedRecoveryAuthorizationBackend interface {
 	) (recovery.RecoveryAuthorizationResult, error)
 }
 
+type managedRecoveryDeleteHandoffValidator interface {
+	ValidateDeleteAuthorizationHandoff(
+		context.Context,
+		recovery.RecoveryAuthorizationRequest,
+		recovery.RecoveryAuthorizationResult,
+	) (bool, error)
+}
+
 type managedRecoveryResultBackend interface {
 	content.RecoveryResultAuthorizer
 	content.RecoveryResultSourceResolver
@@ -585,22 +593,23 @@ func (inspector *managedRecoveryDowngradeDBInspector) SnapshotRecoveryDowngradeB
 }
 
 type managedRecoveryGraph struct {
-	admissionEnabled    bool
-	application         *recovery.ApplicationService
-	plan                *recovery.PlanService
-	preflight           *recovery.PreflightService
-	authorization       managedRecoveryAuthorizationBackend
-	target              recovery.TargetPort
-	workerCoordinator   *recovery.WorkerCoordinator
-	worker              *managedRecoveryWorker
-	resultLifecycle     *recovery.ResultLifecycleService
-	cleanup             *managedRecoveryCleanupOwner
-	resultDelivery      managedRecoveryResultBackend
-	reconciliation      *recovery.RecoveryReconciliationService
-	downgradeReconciler managedRecoveryDowngradeReconciler
-	reconciliationOwner *managedRecoveryReconciliationOwner
-	reconciliationState recovery.RecoveryReconciliationState
-	rsyncRestorePort    *managedRecoveryRsyncRestorePort
+	admissionEnabled       bool
+	application            *recovery.ApplicationService
+	plan                   *recovery.PlanService
+	preflight              *recovery.PreflightService
+	authorization          managedRecoveryAuthorizationBackend
+	target                 recovery.TargetPort
+	workerCoordinator      *recovery.WorkerCoordinator
+	deleteHandoffValidator managedRecoveryDeleteHandoffValidator
+	worker                 *managedRecoveryWorker
+	resultLifecycle        *recovery.ResultLifecycleService
+	cleanup                *managedRecoveryCleanupOwner
+	resultDelivery         managedRecoveryResultBackend
+	reconciliation         *recovery.RecoveryReconciliationService
+	downgradeReconciler    managedRecoveryDowngradeReconciler
+	reconciliationOwner    *managedRecoveryReconciliationOwner
+	reconciliationState    recovery.RecoveryReconciliationState
+	rsyncRestorePort       *managedRecoveryRsyncRestorePort
 
 	workerCoordinatorSourceResolver provider.RsyncRestoreSourceResolver
 	reconcileMetadata               func(context.Context) error
@@ -1266,7 +1275,7 @@ func buildManagedRecoveryGraph(
 	graph := &managedRecoveryGraph{
 		admissionEnabled: true,
 		application:      application, plan: plan, preflight: preflight, authorization: authorization, target: target,
-		workerCoordinator: workerCoordinator, worker: worker,
+		workerCoordinator: workerCoordinator, deleteHandoffValidator: workerCoordinator, worker: worker,
 		resultLifecycle: resultLifecycle, cleanup: cleanup, resultDelivery: resultDelivery, reconciliation: reconciliation,
 		downgradeReconciler: reconciliation,
 		rsyncRestorePort:    restorePort, workerCoordinatorSourceResolver: dependencies.SourceResolver,
@@ -1448,7 +1457,14 @@ func (facade *managedRecoveryAuthorizationFacade) ReplayAuthorization(
 		return recovery.RecoveryAuthorizationResult{}, false, recovery.ErrRecoveryPlanUnavailable
 	}
 	defer release()
-	return graph.authorization.ReplayAuthorization(ctx, request)
+	result, found, err := graph.authorization.ReplayAuthorization(ctx, request)
+	if err != nil || !found || request.Operation != recovery.AuthorizationReceiptDeleteAuthorize {
+		return result, found, err
+	}
+	if err := offerManagedRecoveryDeleteAuthorization(ctx, graph, request, result); err != nil {
+		return recovery.RecoveryAuthorizationResult{}, false, err
+	}
+	return result, true, nil
 }
 
 func (facade *managedRecoveryAuthorizationFacade) Authorize(
@@ -1464,10 +1480,38 @@ func (facade *managedRecoveryAuthorizationFacade) Authorize(
 	}
 	defer release()
 	result, err := graph.authorization.Authorize(ctx, request)
-	if err == nil && result.JobID != "" && graph.worker != nil {
+	if err == nil && request.Operation == recovery.AuthorizationReceiptDeleteAuthorize {
+		err = offerManagedRecoveryDeleteAuthorization(ctx, graph, request, result)
+	} else if err == nil && result.JobID != "" && graph.worker != nil {
 		graph.worker.TryWake(result.JobID)
 	}
 	return result, err
+}
+
+func offerManagedRecoveryDeleteAuthorization(
+	ctx context.Context,
+	graph *managedRecoveryGraph,
+	request recovery.RecoveryAuthorizationRequest,
+	result recovery.RecoveryAuthorizationResult,
+) error {
+	if graph == nil || graph.deleteHandoffValidator == nil || graph.worker == nil {
+		return recovery.ErrAuthorizationUnavailable
+	}
+	consumed, err := graph.deleteHandoffValidator.ValidateDeleteAuthorizationHandoff(ctx, request, result)
+	if err != nil {
+		return recovery.ErrAuthorizationUnavailable
+	}
+	if consumed {
+		return nil
+	}
+	if !graph.worker.offerDeleteAuthorization(managedRecoveryDeleteAuthorizationHandoff{
+		JobID: request.JobID, PlanID: request.PlanID, CheckpointID: request.CheckpointID,
+		AttemptID: request.AttemptID, ExpectedPlanRevision: request.ExpectedPlanRevision,
+		GrantID: result.GrantID, GrantSecret: request.GrantSecret,
+	}) {
+		return recovery.ErrAuthorizationUnavailable
+	}
+	return nil
 }
 
 type managedRecoveryResultFacade struct {
@@ -2250,6 +2294,76 @@ type managedRecoveryClaimExecutor interface {
 	ExecuteResolvedClaim(context.Context, recovery.RecoveryWorkerClaim) error
 }
 
+type managedRecoveryDeleteGrantContextKey struct{}
+
+type managedRecoveryDeleteAuthorizationPause struct {
+	JobID                string
+	PlanID               string
+	CheckpointID         string
+	AttemptID            string
+	ExpectedPlanRevision uint64
+}
+
+func (*managedRecoveryDeleteAuthorizationPause) Error() string {
+	return "managed Recovery delete authorization paused"
+}
+
+func (pause managedRecoveryDeleteAuthorizationPause) valid() bool {
+	return backupasset.ValidateOpaqueID(pause.JobID) == nil && backupasset.ValidateOpaqueID(pause.PlanID) == nil &&
+		backupasset.ValidateOpaqueID(pause.CheckpointID) == nil && backupasset.ValidateOpaqueID(pause.AttemptID) == nil &&
+		pause.ExpectedPlanRevision > 0
+}
+
+type managedRecoveryDeleteAuthorizationHandoff struct {
+	JobID                string
+	PlanID               string
+	CheckpointID         string
+	AttemptID            string
+	ExpectedPlanRevision uint64
+	GrantID              string
+	GrantSecret          string
+}
+
+type managedRecoveryDeleteAuthorizationFingerprint struct {
+	JobID                string
+	PlanID               string
+	CheckpointID         string
+	AttemptID            string
+	ExpectedPlanRevision uint64
+	GrantID              string
+	SecretDigest         [sha256.Size]byte
+}
+
+func managedRecoveryDeleteAuthorizationFingerprintFor(
+	handoff managedRecoveryDeleteAuthorizationHandoff,
+) managedRecoveryDeleteAuthorizationFingerprint {
+	return managedRecoveryDeleteAuthorizationFingerprint{
+		JobID: handoff.JobID, PlanID: handoff.PlanID, CheckpointID: handoff.CheckpointID,
+		AttemptID: handoff.AttemptID, ExpectedPlanRevision: handoff.ExpectedPlanRevision,
+		GrantID: handoff.GrantID, SecretDigest: sha256.Sum256([]byte(handoff.GrantSecret)),
+	}
+}
+
+func (handoff managedRecoveryDeleteAuthorizationHandoff) valid() bool {
+	if backupasset.ValidateOpaqueID(handoff.JobID) != nil || backupasset.ValidateOpaqueID(handoff.PlanID) != nil ||
+		backupasset.ValidateOpaqueID(handoff.CheckpointID) != nil ||
+		backupasset.ValidateOpaqueID(handoff.AttemptID) != nil ||
+		backupasset.ValidateOpaqueID(handoff.GrantID) != nil || handoff.ExpectedPlanRevision == 0 ||
+		len(handoff.GrantSecret) != 43 || strings.TrimSpace(handoff.GrantSecret) != handoff.GrantSecret {
+		return false
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(handoff.GrantSecret)
+	return err == nil && len(decoded) == 32 && base64.RawURLEncoding.EncodeToString(decoded) == handoff.GrantSecret
+}
+
+func managedRecoveryDeleteGrantSecret(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	secret, _ := ctx.Value(managedRecoveryDeleteGrantContextKey{}).(string)
+	return secret
+}
+
 type managedRecoveryRestoreRequestBuilder interface {
 	BuildRsyncRestoreRequest(context.Context, recovery.RecoveryWorkerClaim) (provider.RestoreRequest, error)
 	ReleaseRsyncRestoreRequest(recovery.RecoveryWorkerClaim)
@@ -2262,6 +2376,10 @@ type managedRecoveryRestoreExecutionPort interface {
 type managedRecoveryResolvedClaimExecutor struct {
 	builder     managedRecoveryRestoreRequestBuilder
 	restorePort managedRecoveryRestoreExecutionPort
+}
+
+type managedRecoveryDeletePauseTaker interface {
+	TakeDeleteAuthorizationPause(recovery.RecoveryWorkerClaim) (managedRecoveryDeleteAuthorizationPause, bool)
 }
 
 func (executor *managedRecoveryResolvedClaimExecutor) ExecuteResolvedClaim(
@@ -2279,7 +2397,15 @@ func (executor *managedRecoveryResolvedClaimExecutor) ExecuteResolvedClaim(
 	}
 	defer executor.builder.ReleaseRsyncRestoreRequest(claim)
 	_, err = executor.restorePort.Execute(ctx, request, provider.RestoreProgress{})
-	return err
+	if err != nil {
+		return err
+	}
+	if taker, ok := executor.builder.(managedRecoveryDeletePauseTaker); ok {
+		if pause, found := taker.TakeDeleteAuthorizationPause(claim); found {
+			return &pause
+		}
+	}
+	return nil
 }
 
 type managedRecoveryClaimRestoreBridge struct {
@@ -2289,6 +2415,7 @@ type managedRecoveryClaimRestoreBridge struct {
 
 	mu     sync.Mutex
 	claims map[string]recovery.RecoveryWorkerClaim
+	pauses map[string]managedRecoveryDeleteAuthorizationPause
 }
 
 func newManagedRecoveryClaimRestoreBridge(
@@ -2302,6 +2429,7 @@ func newManagedRecoveryClaimRestoreBridge(
 	return &managedRecoveryClaimRestoreBridge{
 		db: db, coordinator: coordinator, now: now,
 		claims: make(map[string]recovery.RecoveryWorkerClaim),
+		pauses: make(map[string]managedRecoveryDeleteAuthorizationPause),
 	}, nil
 }
 
@@ -2448,7 +2576,22 @@ func (bridge *managedRecoveryClaimRestoreBridge) ReleaseRsyncRestoreRequest(
 	}
 	bridge.mu.Lock()
 	delete(bridge.claims, managedRecoveryClaimKey(claim))
+	delete(bridge.pauses, managedRecoveryClaimKey(claim))
 	bridge.mu.Unlock()
+}
+
+func (bridge *managedRecoveryClaimRestoreBridge) TakeDeleteAuthorizationPause(
+	claim recovery.RecoveryWorkerClaim,
+) (managedRecoveryDeleteAuthorizationPause, bool) {
+	if bridge == nil {
+		return managedRecoveryDeleteAuthorizationPause{}, false
+	}
+	key := managedRecoveryClaimKey(claim)
+	bridge.mu.Lock()
+	pause, found := bridge.pauses[key]
+	delete(bridge.pauses, key)
+	bridge.mu.Unlock()
+	return pause, found
 }
 
 func (bridge *managedRecoveryClaimRestoreBridge) claimForExecute(
@@ -2506,12 +2649,76 @@ func (bridge *managedRecoveryClaimRestoreBridge) Execute(
 		}
 		return provider.RsyncRestoreRunnerResult{Checkpoint: call.Checkpoint}, nil
 	}
-	if err := bridge.coordinator.ExecuteClaimWithRsyncTargetWriter(
-		ctx, claim, managedRecoveryPinnedSource{RsyncRestoreSource: call.Source}, call.TargetWriter, call.Target,
-	); err != nil {
+	deleteGrantSecret := managedRecoveryDeleteGrantSecret(ctx)
+	var err error
+	if deleteGrantSecret == "" {
+		err = bridge.coordinator.ExecuteClaimWithRsyncTargetWriter(
+			ctx, claim, managedRecoveryPinnedSource{RsyncRestoreSource: call.Source}, call.TargetWriter, call.Target,
+		)
+	} else {
+		err = bridge.coordinator.ExecuteClaimWithRsyncTargetWriterAndDeleteGrant(
+			ctx, claim, managedRecoveryPinnedSource{RsyncRestoreSource: call.Source}, call.TargetWriter, call.Target,
+			deleteGrantSecret,
+		)
+	}
+	if err != nil {
 		return provider.RsyncRestoreRunnerResult{}, err
 	}
+	if deleteGrantSecret == "" {
+		pause, paused, pauseErr := bridge.currentDeleteAuthorizationPause(ctx, claim)
+		if pauseErr != nil {
+			return provider.RsyncRestoreRunnerResult{}, pauseErr
+		}
+		if paused {
+			bridge.mu.Lock()
+			bridge.pauses[managedRecoveryClaimKey(claim)] = pause
+			bridge.mu.Unlock()
+			return provider.RsyncRestoreRunnerResult{Checkpoint: call.Checkpoint}, nil
+		}
+	}
 	return provider.RsyncRestoreRunnerResult{Checkpoint: call.Checkpoint}, nil
+}
+
+func (bridge *managedRecoveryClaimRestoreBridge) currentDeleteAuthorizationPause(
+	ctx context.Context,
+	claim recovery.RecoveryWorkerClaim,
+) (managedRecoveryDeleteAuthorizationPause, bool, error) {
+	if bridge == nil || bridge.db == nil || bridge.now == nil {
+		return managedRecoveryDeleteAuthorizationPause{}, false, recovery.ErrRecoveryWorkerFenceLost
+	}
+	var owner struct {
+		RequesterID uint `gorm:"column:requester_id"`
+	}
+	loaded := bridge.db.WithContext(ctx).Table((model.BackupAssetRecoveryJob{}).TableName()+" AS jobs").
+		Select("plans.requester_id").
+		Joins("JOIN "+(model.BackupAssetRecoveryPlan{}).TableName()+" AS plans ON plans.id = jobs.plan_id").
+		Where("jobs.id = ?", claim.JobID).Limit(1).Find(&owner)
+	if loaded.Error != nil || loaded.RowsAffected != 1 || owner.RequesterID == 0 {
+		return managedRecoveryDeleteAuthorizationPause{}, false, recovery.ErrRecoveryWorkerFenceLost
+	}
+	api, err := recovery.NewAPIService(recovery.APIServiceDependencies{DB: bridge.db, Now: bridge.now})
+	if err != nil {
+		return managedRecoveryDeleteAuthorizationPause{}, false, recovery.ErrRecoveryWorkerFenceLost
+	}
+	view, err := api.ProjectJob(ctx, owner.RequesterID, claim.JobID)
+	if err != nil {
+		return managedRecoveryDeleteAuthorizationPause{}, false, recovery.ErrRecoveryWorkerFenceLost
+	}
+	if view.DeleteCheckpoint == nil {
+		return managedRecoveryDeleteAuthorizationPause{}, false, nil
+	}
+	revision, err := strconv.ParseUint(view.DeleteCheckpoint.ExpectedPlanRevision, 10, 64)
+	if err != nil || view.DeleteCheckpoint.AttemptID != claim.AttemptID {
+		return managedRecoveryDeleteAuthorizationPause{}, false, recovery.ErrRecoveryWorkerFenceLost
+	}
+	pause := managedRecoveryDeleteAuthorizationPause{
+		JobID: claim.JobID, PlanID: view.PlanID, CheckpointID: view.DeleteCheckpoint.ID,
+		AttemptID: claim.AttemptID, ExpectedPlanRevision: revision,
+	}
+	if !pause.valid() {
+		return managedRecoveryDeleteAuthorizationPause{}, false, recovery.ErrRecoveryWorkerFenceLost
+	}
+	return pause, true, nil
 }
 
 func (*managedRecoveryClaimRestoreBridge) Preflight(
@@ -2611,6 +2818,9 @@ type managedRecoveryWorker struct {
 	runDone           chan struct{}
 	activeMu          sync.Mutex
 	activeClaims      map[string]recovery.RecoveryWorkerClaim
+	deleteHandoffs    map[string]chan managedRecoveryDeleteAuthorizationHandoff
+	deletePauses      map[string]managedRecoveryDeleteAuthorizationPause
+	deleteOffers      map[string]managedRecoveryDeleteAuthorizationFingerprint
 }
 
 func newManagedRecoveryWorker(dependencies managedRecoveryWorkerDependencies) (*managedRecoveryWorker, error) {
@@ -2643,7 +2853,10 @@ func newManagedRecoveryWorker(dependencies managedRecoveryWorkerDependencies) (*
 		heartbeat: heartbeat, fencer: fencer, policy: dependencies.Policy, now: dependencies.Now,
 		newHeartbeatTimer: dependencies.NewHeartbeatTimer,
 		wake:              make(chan string, 1), stop: make(chan struct{}),
-		activeClaims: make(map[string]recovery.RecoveryWorkerClaim),
+		activeClaims:   make(map[string]recovery.RecoveryWorkerClaim),
+		deleteHandoffs: make(map[string]chan managedRecoveryDeleteAuthorizationHandoff),
+		deletePauses:   make(map[string]managedRecoveryDeleteAuthorizationPause),
+		deleteOffers:   make(map[string]managedRecoveryDeleteAuthorizationFingerprint),
 	}, nil
 }
 
@@ -2827,23 +3040,56 @@ func (worker *managedRecoveryWorker) executeClaim(
 	}
 
 	executionDone := make(chan error, 1)
-	go func() {
-		executionDone <- worker.executor.ExecuteResolvedClaim(claimCtx, claim)
-	}()
+	executionActive := false
+	startExecution := func(executionClaim recovery.RecoveryWorkerClaim, secret string) {
+		executionCtx := claimCtx
+		if secret != "" {
+			executionCtx = context.WithValue(executionCtx, managedRecoveryDeleteGrantContextKey{}, secret)
+		}
+		go func() {
+			executionDone <- worker.executor.ExecuteResolvedClaim(executionCtx, executionClaim)
+		}()
+		executionActive = true
+	}
+	startExecution(claim, "")
+	var deleteHandoff <-chan managedRecoveryDeleteAuthorizationHandoff
 	for {
 		select {
 		case err := <-executionDone:
+			executionActive = false
+			var pause *managedRecoveryDeleteAuthorizationPause
+			if errors.As(err, &pause) && pause != nil && pause.valid() &&
+				pause.JobID == current.JobID && pause.AttemptID == current.AttemptID {
+				worker.recordDeleteAuthorizationPause(*pause)
+				deleteHandoff = worker.deleteAuthorizationHandoffChannel(claim)
+				if deleteHandoff == nil {
+					return recovery.ErrRecoveryWorkerFenceLost
+				}
+				continue
+			}
 			return err
+		case handoff := <-deleteHandoff:
+			deleteHandoff = nil
+			if handoff.JobID != current.JobID || handoff.AttemptID != current.AttemptID || !handoff.valid() {
+				return recovery.ErrRecoveryWorkerFenceLost
+			}
+			worker.consumeDeleteAuthorizationHandoff(current.JobID)
+			startExecution(current, handoff.GrantSecret)
+			handoff.GrantSecret = ""
 		case <-claimCtx.Done():
 			cancel()
-			<-executionDone
+			if executionActive {
+				<-executionDone
+			}
 			return claimCtx.Err()
 		case <-heartbeatTick:
 			renewed, err := worker.heartbeat.Heartbeat(claimCtx, current)
 			if err != nil {
 				cancel()
 				fenceErr := worker.fencer.CancelJob(context.WithoutCancel(ctx), claim.JobID)
-				<-executionDone
+				if executionActive {
+					<-executionDone
+				}
 				return errors.Join(err, fenceErr)
 			}
 			now := worker.now().UTC()
@@ -2856,7 +3102,9 @@ func (worker *managedRecoveryWorker) executeClaim(
 				renewed.LeaseExpiresAt.UTC().After(current.AbsoluteDeadline.UTC()) {
 				cancel()
 				fenceErr := worker.fencer.CancelJob(context.WithoutCancel(ctx), claim.JobID)
-				<-executionDone
+				if executionActive {
+					<-executionDone
+				}
 				return errors.Join(recovery.ErrRecoveryWorkerFenceLost, fenceErr)
 			}
 			current = renewed
@@ -2955,6 +3203,9 @@ func (worker *managedRecoveryWorker) FenceActiveClaims(ctx context.Context) erro
 func (worker *managedRecoveryWorker) trackActiveClaim(claim recovery.RecoveryWorkerClaim) {
 	worker.activeMu.Lock()
 	worker.activeClaims[claim.JobID] = claim
+	worker.deleteHandoffs[claim.JobID] = make(chan managedRecoveryDeleteAuthorizationHandoff, 1)
+	delete(worker.deletePauses, claim.JobID)
+	delete(worker.deleteOffers, claim.JobID)
 	worker.activeMu.Unlock()
 }
 
@@ -2969,6 +3220,73 @@ func (worker *managedRecoveryWorker) updateActiveClaim(claim recovery.RecoveryWo
 func (worker *managedRecoveryWorker) finishActiveClaim(claim recovery.RecoveryWorkerClaim) {
 	worker.activeMu.Lock()
 	delete(worker.activeClaims, claim.JobID)
+	delete(worker.deleteHandoffs, claim.JobID)
+	delete(worker.deletePauses, claim.JobID)
+	delete(worker.deleteOffers, claim.JobID)
+	worker.activeMu.Unlock()
+}
+
+func (worker *managedRecoveryWorker) deleteAuthorizationHandoffChannel(
+	claim recovery.RecoveryWorkerClaim,
+) <-chan managedRecoveryDeleteAuthorizationHandoff {
+	worker.activeMu.Lock()
+	defer worker.activeMu.Unlock()
+	active, ok := worker.activeClaims[claim.JobID]
+	if !ok || active.AttemptID != claim.AttemptID || active.NodeLeaseID != claim.NodeLeaseID ||
+		active.AttemptFence != claim.AttemptFence || active.NodeFence != claim.NodeFence {
+		return nil
+	}
+	return worker.deleteHandoffs[claim.JobID]
+}
+
+func (worker *managedRecoveryWorker) offerDeleteAuthorization(
+	handoff managedRecoveryDeleteAuthorizationHandoff,
+) bool {
+	if worker == nil || worker.stopping.Load() || !handoff.valid() {
+		return false
+	}
+	worker.activeMu.Lock()
+	defer worker.activeMu.Unlock()
+	claim, active := worker.activeClaims[handoff.JobID]
+	slot := worker.deleteHandoffs[handoff.JobID]
+	pause, paused := worker.deletePauses[handoff.JobID]
+	fingerprint := managedRecoveryDeleteAuthorizationFingerprintFor(handoff)
+	if !active || claim.AttemptID != handoff.AttemptID {
+		return false
+	}
+	if offered, exists := worker.deleteOffers[handoff.JobID]; exists {
+		return offered == fingerprint
+	}
+	if !paused ||
+		pause.JobID != handoff.JobID || pause.PlanID != handoff.PlanID ||
+		pause.CheckpointID != handoff.CheckpointID || pause.AttemptID != handoff.AttemptID ||
+		pause.ExpectedPlanRevision != handoff.ExpectedPlanRevision {
+		return false
+	}
+	if slot == nil {
+		return false
+	}
+	select {
+	case slot <- handoff:
+		worker.deleteOffers[handoff.JobID] = fingerprint
+		return true
+	default:
+		return false
+	}
+}
+
+func (worker *managedRecoveryWorker) consumeDeleteAuthorizationHandoff(jobID string) {
+	worker.activeMu.Lock()
+	delete(worker.deleteHandoffs, jobID)
+	delete(worker.deletePauses, jobID)
+	worker.activeMu.Unlock()
+}
+
+func (worker *managedRecoveryWorker) recordDeleteAuthorizationPause(
+	pause managedRecoveryDeleteAuthorizationPause,
+) {
+	worker.activeMu.Lock()
+	worker.deletePauses[pause.JobID] = pause
 	worker.activeMu.Unlock()
 }
 

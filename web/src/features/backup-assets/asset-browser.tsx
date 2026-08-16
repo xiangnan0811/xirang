@@ -28,6 +28,8 @@ export interface AssetBrowserProps {
   onClearSelection: () => void;
   canExport?: boolean;
   onExport?: () => void;
+  canRecover?: boolean;
+  onRecover?: () => void;
   onOpen: (row: BackupAssetResultRow, position: Pick<BackupAssetsRestorationAnchor, "index" | "offset">) => void;
   onLoadMore: () => void;
   restorationAnchor?: BackupAssetsRestorationAnchor | null;
@@ -43,6 +45,8 @@ export function AssetBrowser({
   onClearSelection,
   canExport = false,
   onExport,
+  canRecover = false,
+  onRecover,
   onOpen,
   onLoadMore,
   restorationAnchor = null,
@@ -138,8 +142,10 @@ export function AssetBrowser({
       <AssetBulkBar
         count={state.selection.size}
         canExport={canExport}
+        canRecover={canRecover}
         onClear={onClearSelection}
         onExport={onExport}
+        onRecover={onRecover}
         onInspect={() => {
           if (selectedRow) {
             onOpen(selectedRow, {

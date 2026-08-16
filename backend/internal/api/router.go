@@ -448,6 +448,8 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/recovery-plans/:id/execute", append(recoveryRouteHandlers, backupRecoveryHandler.Execute)...)
 	secured.POST("/recovery-plans/:id/cancel", append(recoveryRouteHandlers, backupRecoveryHandler.CancelPlan)...)
 	secured.GET("/recovery-jobs/:id", append(recoveryRouteHandlers, backupRecoveryHandler.GetJob)...)
+	secured.GET("/recovery-jobs/:id/items", append(recoveryRouteHandlers, backupRecoveryHandler.GetJobItems)...)
+	secured.GET("/recovery-jobs/:id/results", append(recoveryRouteHandlers, backupRecoveryHandler.GetJobResults)...)
 	secured.POST("/recovery-jobs/:id/cancel", append(recoveryRouteHandlers, backupRecoveryHandler.CancelJob)...)
 	secured.POST("/recovery-jobs/:id/exact-mirror-delete-authorizations", append(recoveryRouteHandlers, backupRecoveryHandler.AuthorizeExactMirrorDelete)...)
 	secured.POST("/recovery-jobs/:id/results/:resultId/download-ticket", append(recoveryRouteHandlers, backupContentHandler.IssueRecoveryResult)...)

@@ -4902,15 +4902,16 @@ func (service *AuthorizationService) persistDeleteAuthorizationTx(
 		checkpoint.DeleteAuthorityExpiresAt == nil || !now.Before(checkpoint.DeleteAuthorityExpiresAt.UTC()) {
 		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
 	}
-	var nodeLease model.BackupAssetRecoveryNodeLease
+	var nodeLeases []model.BackupAssetRecoveryNodeLease
 	loaded = tx.WithContext(ctx).Where("job_id = ? AND attempt_id = ? AND state = ?",
-		job.ID, normalized.request.AttemptID, "active").Limit(1).Find(&nodeLease)
+		job.ID, normalized.request.AttemptID, "active").Limit(2).Find(&nodeLeases)
 	if loaded.Error != nil {
 		return RecoveryAuthorizationResult{}, loaded.Error
 	}
-	if loaded.RowsAffected != 1 || nodeLease.Fence != checkpoint.NodeFence {
+	if len(nodeLeases) != 1 || nodeLeases[0].Fence != checkpoint.NodeFence {
 		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
 	}
+	nodeLease := nodeLeases[0]
 	var preflight model.BackupAssetRecoveryPreflight
 	loaded = tx.WithContext(ctx).Where("id = ? AND plan_id = ?", job.PreflightID, plan.ID).
 		Limit(1).Find(&preflight)
@@ -4926,6 +4927,50 @@ func (service *AuthorizationService) persistDeleteAuthorizationTx(
 	if err := service.revalidateAuthorizationAuthorityTx(
 		ctx, tx, normalized.request.Operation, *plan, preflight, authority,
 	); err != nil {
+		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
+	}
+	var attempt model.BackupAssetRecoveryAttempt
+	loaded = tx.WithContext(ctx).Where("id = ? AND job_id = ?", normalized.request.AttemptID, job.ID).
+		Limit(1).Find(&attempt)
+	if loaded.Error != nil {
+		return RecoveryAuthorizationResult{}, loaded.Error
+	}
+	var sourceLeases []model.RecoveryPointLease
+	loaded = tx.WithContext(ctx).Where("holder_type = ? AND owner_id = ? AND attempt_id = ? AND status = ?",
+		backupasset.LeaseHolderRecoveryJob, job.ID, attempt.ID, backupasset.LeaseActive).Limit(2).Find(&sourceLeases)
+	if loaded.Error != nil {
+		return RecoveryAuthorizationResult{}, loaded.Error
+	}
+	if attempt.ID == "" || attempt.State != string(AttemptStateRunning) || !attempt.MutationArmed ||
+		attempt.LeaseExpiresAt == nil || !attempt.LeaseExpiresAt.UTC().After(now) ||
+		nodeLease.AttemptID == nil || *nodeLease.AttemptID != attempt.ID ||
+		nodeLease.OwnerID != attempt.OwnerID || nodeLease.Fence != attempt.Fence ||
+		!nodeLease.LeaseExpiresAt.UTC().After(now) || len(sourceLeases) != 1 ||
+		!sourceLeases[0].LeaseExpiresAt.UTC().After(now) {
+		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
+	}
+	claim := RecoveryWorkerClaim{
+		JobID: job.ID, AttemptID: attempt.ID, NodeLeaseID: nodeLease.ID, WorkerID: attempt.OwnerID,
+		AttemptFence: attempt.Fence, NodeFence: nodeLease.Fence, TransitionRevision: job.TransitionRevision,
+		LeaseExpiresAt: attempt.LeaseExpiresAt.UTC(), AbsoluteDeadline: sourceLeases[0].AbsoluteDeadline.UTC(),
+		SourceFence: recoverySourceFence(sourceLeases[0]),
+	}
+	var checkpoints []model.BackupAssetRecoveryCheckpoint
+	loaded = tx.WithContext(ctx).Where("job_id = ?", job.ID).Order("sequence ASC").Find(&checkpoints)
+	if loaded.Error != nil {
+		return RecoveryAuthorizationResult{}, loaded.Error
+	}
+	operations, err := loadInPlaceOrdinaryCheckpointOperationsTx(ctx, tx, *plan, preflight, job)
+	if err != nil {
+		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
+	}
+	required, hasRequired, _, err := validateInPlaceOrdinaryCheckpointHistory(
+		*plan, job, claim, checkpoints, operations, now,
+	)
+	if err != nil || !hasRequired || len(checkpoints) == 0 ||
+		required.ID != checkpoint.ID || required.AttemptID != attempt.ID ||
+		required.AttemptFence != claim.AttemptFence || required.NodeFence != claim.NodeFence ||
+		checkpoints[len(checkpoints)-1].ID != required.ID {
 		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
 	}
 	grantExpiresAt := normalized.grantExpiresAt
@@ -4951,6 +4996,12 @@ func (service *AuthorizationService) persistDeleteAuthorizationTx(
 	}
 	if err := tx.WithContext(ctx).Create(&grant).Error; err != nil {
 		return RecoveryAuthorizationResult{}, err
+	}
+	validatedGrant, err := validatePendingOrdinaryDeleteGrantTx(
+		ctx, tx, *plan, job, claim, required, normalized.request.GrantSecret, now,
+	)
+	if err != nil || validatedGrant.ID != grant.ID || validatedGrant.BindingDigest != grant.BindingDigest {
+		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
 	}
 	return RecoveryAuthorizationResult{
 		PlanID: plan.ID, GrantID: grantID, JobID: job.ID, AttemptID: normalized.request.AttemptID,

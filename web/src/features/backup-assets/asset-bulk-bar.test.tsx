@@ -41,4 +41,21 @@ describe("AssetBulkBar", () => {
     await user.click(screen.getByRole("button", { name: /导出|Export/ }));
     expect(onExport).toHaveBeenCalledOnce();
   });
+
+  it("hands an explicitly authorized recovery selection to its owner", async () => {
+    const onRecover = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <AssetBulkBar
+        count={2}
+        canRecover
+        onRecover={onRecover}
+        onClear={vi.fn()}
+        onInspect={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Recover selected|恢复所选/ }));
+    expect(onRecover).toHaveBeenCalledOnce();
+  });
 });

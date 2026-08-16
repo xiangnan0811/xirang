@@ -12,16 +12,16 @@
   "assignee": "weibo",
   "createdAt": "2026-07-28",
   "completedAt": null,
-  "branch": "codex/task8-managed-runtime",
+  "branch": "codex/task-10-typed-recovery-wizard",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": "1c914722e0d669a793b8e2f8f5ed20152f61c544",
-  "pr_url": "https://github.com/xiangnan0811/xirang/pull/424",
+  "commit": "dcb94ee39fa17c64342ab4169bedb804f3682124",
+  "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [],
-  "notes": "Complex Child 13 planning was independently approved on 2026-07-28 and task.py start ran exactly once. Tasks 1-5 are complete_approved, Task 6 is complete_checked at whole scope, Task 7 was delivered through PR #410, and Task 8 is complete_checked_whole_scope and delivered through PR #424. Final remediation commit 2136b78 passed all 11 required PR checks; PR #424 was squash-merged as 1c91472 and delivery-bookkeeping PR #426 as 42a317c on 2026-08-16. Feature post-merge main CI, Release Please, Dependency Graph and Docker Hub description sync passed. PR #426 post-merge main CI exposed a pre-existing legacy-restore test scheduler race twice; bounded test-only stabilization PR #427 passed all 11 required PR checks, was squash-merged as current main 25e933d, and its exact-head main CI and Release Please completed successfully. Release Please PR #425 was closed without merge and its remote branch was deleted; no v0.47.0 tag, GitHub Release or public image was produced, so latest formal release remains v0.46.0. Task 9 is complete_checked at focused API/RBAC/audit/Swagger and production-composition scope; Task 10 remains not_executed. Child 13 remains in_progress, completedAt remains unset, the parent remains planning, and program delivery remains 12/15. Do not archive the Child at this checkpoint.",
+  "notes": "Complex Child 13 planning was independently approved on 2026-07-28 and task.py start ran exactly once. Tasks 1-5 are complete_approved, Task 6 is complete_checked at whole scope, Task 7 was delivered through PR #410, and Task 8 is complete_checked_whole_scope and delivered through PR #424. Task 9 is complete_checked at focused API/RBAC/audit/Swagger and production-composition scope; PR #428 passed all 11 required checks and was squash-merged as 2538f325 on 2026-08-16. Release PR #429 was squash-merged as current main dcb94ee; exact-head main CI 31951038841, Release Please 31951038854 and Publish Docker Images 31951046761 succeeded, and GitHub Release v0.47.0 was published. Task 10 implementation is complete_checked after an independent Trellis check closed four Important findings and one Minor finding; its exact Git delivery remains pending. Child 13 remains in_progress, completedAt remains unset, the parent remains planning, and program delivery remains 12/15. Do not archive the Child at this checkpoint and do not start Task 11.",
   "meta": {
     "parent_delivery": "12_of_15_complete",
     "planning_basis": "approved parent PRD/design/implement plus Child 13 current-main reconnaissance",
@@ -33,7 +33,7 @@
     "planning_review": "whole_task_6_specification_and_quality_reviews_complete_task_7_publication_resolver_content_adapter_retain_claim_revoke_drain_cleanup_target_validation_target_root_plan_snapshot_workspace_marker_interoperability_exact_plan_sftp_marker_present_regular_file_verify_no_overwrite_regular_file_create_composite_read_only_preflight_published_result_read_delete_oriented_lstat_exact_absence_and_a2e2_r42_r47_overwrite_artifact_authority_historical_key_binding_authenticated_intent_post_preparation_exact_prior_capture_same_invocation_mismatch_restore_closed_tuple_publish_authenticated_acknowledgement_safe_residue_cleanup_source_free_replay_durable_checkpoint_before_finalize_preterminal_takeover_reconciliation_and_authority_error_resource_context_privacy_focused_checks_complete_v13_delete_and_whole_task7_review_open",
     "planning_review_evidence": "independent_security_state_and_plan_manifest_rereviews_approved_2026-07-28_b3_receipt_019fc0c2_cfda_74e3_b218_246f3a425545_approved_f6_spec_019fc136_feca_7fb0_82bc_3c33739aef12_quality_019fc13c_0710_7343_b261_dd866382a8c0_postgres_019fc13d_ea0e_7f93_b1c6_32aebcb7368e_whole_task6_controller_inline_spec_quality_and_fresh_combined_gates_approved_2026-08-03",
     "task_start": "executed_once_2026-07-28",
-    "implementation": "tasks_1_to_5_complete_approved_task_6_complete_checked_whole_scope_task_7_delivered_pr_410_task_8_complete_checked_whole_scope_delivered_pr_424_tasks_9_to_10_not_executed",
+    "implementation": "tasks_1_to_5_complete_approved_task_6_complete_checked_whole_scope_task_7_delivered_pr_410_task_8_complete_checked_whole_scope_delivered_pr_424_task_9_complete_checked_delivered_pr_428_released_v0_47_0_task_10_complete_checked_awaiting_git_delivery",
     "task_7": {
       "status": "complete_checked_whole_scope",
       "focused_complete_checked": [
@@ -379,6 +379,39 @@
       "bookkeeping_branch": "codex/task8-delivery-closure",
       "bookkeeping_pr": "https://github.com/xiangnan0811/xirang/pull/426",
       "next": "merge_bookkeeping_pr_after_green_monitor_its_post_merge_automation_sync_main_cleanup_both_task_8_worktrees_and_branches_then_start_task_9_separately"
+    },
+    "task_9": {
+      "status": "complete_checked",
+      "date": "2026-08-16",
+      "scope": "recovery_api_rbac_ownership_step_up_idempotency_audit_privacy_swagger_and_production_application_materializer",
+      "topic_head": "d7b26ae6d6fdf7e815fdd560040e1335964a51af",
+      "hosted_ci": "pull_request_run_31943743868_success_all_11_required_checks_green",
+      "pr": "https://github.com/xiangnan0811/xirang/pull/428",
+      "squash_commit": "2538f325ff0fabf5ebeca3b5ceda98755e885397",
+      "merged_at": "2026-08-16T11:24:25Z",
+      "release_pr": "https://github.com/xiangnan0811/xirang/pull/429",
+      "release_commit": "dcb94ee39fa17c64342ab4169bedb804f3682124",
+      "post_release": "exact_head_main_ci_31951038841_release_please_31951038854_publish_docker_images_31951046761_success_github_release_v0_47_0_published",
+      "next": "task_10_typed_frontend_recovery_wizard_only"
+    },
+    "task_10": {
+      "status": "complete_checked_awaiting_git_delivery",
+      "date": "2026-08-17",
+      "scope": "typed_frontend_recovery_wizard_plus_minimal_owner_scoped_live_read_products_and_transient_exact_mirror_delete_handoff",
+      "blocker_discovered": "current_job_dto_omits_checkpoint_attempt_resultset_and_pages_while_delete_authorization_secret_has_no_paused_worker_handoff",
+      "focused_amendment": "prd_task_10_live_recovery_read_model_and_delete_handoff_design_section_49_implement_2_5h",
+      "newly_admitted_paths": [
+        "backend/internal/backupasset/recovery/api.go",
+        "backend/internal/backupasset/recovery/api_test.go"
+      ],
+      "existing_manifest_paths_admitted_for_delete_grant_atomicity": [
+        "backend/internal/backupasset/recovery/service.go",
+        "backend/internal/backupasset/recovery/service_test.go"
+      ],
+      "boundary": "no_model_migration_settings_provider_content_publication_task_11_docker_metadata_or_legacy_restore_ga",
+      "tdd": "genuine_backend_live_contract_red_green_then_original_frontend_mapper_red_green_followed_by_controller_panels_wizard_integration_a11y_red_green",
+      "verification": "independent_trellis_check_closed_four_important_and_one_minor_no_open_findings_focused_frontend_6_files_46_tests_full_frontend_173_files_1432_tests_build_node22_bundle_js_499_14_of_500_css_104_97_of_105_focused_backend_four_packages_uncached_full_backend_golangci_lint_zero_scoped_vet_diff_manifest_and_task_validation_green_2026_08_17",
+      "delivery": "staged_commit_push_pr_ci_merge_postmerge_not_executed"
     },
     "task_4_b1_scope_amendment": {
       "status": "complete_approved_as_part_of_task_4_focused_closure",

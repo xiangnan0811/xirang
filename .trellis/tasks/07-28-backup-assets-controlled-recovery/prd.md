@@ -2133,3 +2133,53 @@ target 和 policy evidence。该批准取代“保留 unavailable adapter 即可
 均已由用户批准并写入 `design.md` section 48。focused execution plan 与 convergence review 已完成，blocking open
 questions 为空；final design summary 获得后续明确批准前，不得修改产品代码、运行 `task.py start`、stage、commit、
 push 或创建 PR。
+
+## Task 10 live recovery read model and delete handoff focused amendment (2026-08-16)
+
+Task 10 的 approved wizard contract 依赖 current backend 未发布的两类产品：owner-scoped job/checkpoint/result
+读模型，以及把 exact-mirror delete authorization request 中的 ephemeral grant secret 交给当前 paused fenced
+execution 的瞬时 handoff。当前 `GET /recovery-jobs/:id` 不返回 attempt/checkpoint/result-set product，现有
+result download route 又要求 caller 已知 `resultId`；delete authorization durable mint 后只 wake 普通 claim scan，
+而普通 worker 已在 `delete_authority_required` checkpoint 返回，raw secret 没有进入 resume execution。前端若猜测
+这些字段、轮询不存在的 endpoint，或只展示一个无法继续的按钮，都不满足原 Task 10 acceptance。因此本
+amendment 是 Task 10 的最小 live-contract closure，不是 Task 11、legacy restore GA 或新的 Recovery product line。
+
+### Requirements
+
+- Recovery API 必须提供 owner-scoped、schema-versioned、closed-enum 的 job detail、bounded job-item page 和
+  published-result page。job detail 可包含 aggregate progress、sanitized failure category、current exact-mirror
+  delete checkpoint product 与 ResultSet lifecycle summary；item/result pages 只包含 opaque IDs、ordinal/kind/
+  outcome、non-negative counts/bytes 和 UTC timestamps。它们不得投影 locator、locator/internal digest、ciphertext、
+  credential/revision evidence、workspace phase、fence 或 raw internal error。
+- current delete checkpoint product 只在 exact current `delete_authority_required` binding 可证明时存在，并包含
+  public handoff 所需的 opaque `checkpoint_id`、`attempt_id`、decimal `expected_plan_revision`、closed status 和 UTC
+  expiry。unknown phase、stale attempt、contradictory chain、expired authority window 或 foreign owner 必须把整个
+  product fail closed；不得拼出 partial checkpoint。
+- item/result list 必须使用 real server pagination 和 hard maximum page size。ResultSet lifecycle 与 Job outcome
+  分离；只有 isolated、published、owner-matched result rows可列出并取得既有 download ticket。in-place、partial、
+  revoking/cleaned、foreign 或 private workspace rows不得因 list API 变成可下载。
+- existing exact-mirror delete authorization endpoint 同时拥有 ephemeral handoff：durable authorization 成功或
+  same-intent replay 后，必须把 request 中 exact raw secret 交给同一 job/plan/checkpoint/attempt/fence 的 paused
+  execution，并在 handoff 未被 current managed graph 接受时返回 closed conflict/unavailable，不能报告可继续。
+  durable grant/receipt transaction 本身必须在 commit 前复用完整 checkpoint-history/current lease/operation 与
+  pending-grant authority validation；不得先按 phase-only check 持久化 grant，再依赖 facade 事后拒绝或补偿。
+  raw secret 只存在于 request scope 与 bounded in-memory handoff；不得写入 DB、queue payload、URL、response、
+  audit、log、metric、error 或 formatting。shutdown/context cancellation、definitive consumption、replacement 或
+  stale fence 必须清除它。
+- network/5xx ambiguity 必须允许 caller 使用同 endpoint、同 idempotency key、同 secret 重放 durable receipt 和
+  transient handoff；different intent/secret、expired grant、stale checkpoint/attempt、duplicate concurrent consumer
+  和 process-restart gap 全部 fail closed。runtime 继续负责 heartbeat、absolute deadline、source/target revalidation、
+  grant consumption 与 exactly-once fenced mutation；handler 或 API projection不得直接执行 remote delete。
+- mixed version 必须 closed：新 frontend 遇到缺少这些产品的旧 backend 显示 unavailable 且无 fallback；新 backend
+  仍保持 Recovery default-disabled、Auth/RBAC/ownership/step-up/idempotency/audit 与 legacy route gating。
+
+### Acceptance
+
+- [ ] backend genuine RED -> GREEN 覆盖 owner hiding、closed schema/enums/count/time validation、checkpoint chain
+  contradiction、real pagination bounds、ResultSet/Job separation、download eligibility 与全隐私 canary。
+- [ ] delete handoff genuine RED -> GREEN 覆盖 current pause resume、heartbeat/deadline、same-key same-secret lost-response
+  replay、concurrent duplicate、stale attempt/fence、expired grant、shutdown/cancel/process-memory loss 和零 secret sink。
+- [ ] router/RBAC/Swagger 只增加 Task 10 所需的 two read routes；已有 delete authorization route 保持唯一 public
+  secret handoff mutation，不新增 migration、settings、public delete route 或 legacy fallback。
+- [ ] 原 Task 10 frontend RED/GREEN、a11y/i18n/responsive 与 frozen gates 在 live contract GREEN 后完整执行；在
+  backend closure 与 frontend closure 都通过前，Task 10 保持 `not_executed`/`in_progress` 而不得宣称 complete。

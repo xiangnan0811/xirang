@@ -138,4 +138,30 @@ describe("AssetInspector", () => {
     rendered.rerender(inspector("active", false));
     expect(screen.queryByRole("button", { name: /Remove favorite|移除收藏/ })).not.toBeInTheDocument();
   });
+
+  it("reuses the workspace-owned recovery handoff for one inspected item", async () => {
+    const user = userEvent.setup();
+    const onRecover = vi.fn();
+    render(
+      <AssetInspector
+        asset={buildAssetRows(1)[0].asset}
+        recoveryPoint={recoveryPoint}
+        activeTab="preview"
+        preview={null}
+        evidence={null}
+        diff={null}
+        canRecover
+        onRecover={onRecover}
+        onTabChange={vi.fn()}
+        onPrevious={vi.fn()}
+        onNext={vi.fn()}
+        hasPrevious={false}
+        hasNext={false}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Recover this item|恢复此项/ }));
+    expect(onRecover).toHaveBeenCalledOnce();
+  });
 });

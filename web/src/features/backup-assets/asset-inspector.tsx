@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { ChevronLeft, ChevronRight, Heart, HeartOff, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Heart, HeartOff, RotateCcw, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -27,7 +27,9 @@ export interface AssetInspectorProps {
   canManageFavorite?: boolean;
   favoriteState?: BackupAssetFavorite["state"] | null;
   favoritePending?: boolean;
+  canRecover?: boolean;
   onToggleFavorite?: () => void;
+  onRecover?: () => void;
   onTabChange: (tab: BackupAssetsInspectorTab) => void;
   onPrevious: () => void;
   onNext: () => void;
@@ -46,7 +48,9 @@ export function AssetInspector({
   canManageFavorite = false,
   favoriteState,
   favoritePending = false,
+  canRecover = false,
   onToggleFavorite,
+  onRecover,
   onTabChange,
   onPrevious,
   onNext,
@@ -92,6 +96,19 @@ export function AssetInspector({
             ) : (
               <Heart className="size-4" aria-hidden />
             )}
+          </Button>
+        ) : null}
+        {canRecover && onRecover ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-8 shrink-0"
+            aria-label={t("backupAssets.actions.recoverThisItem")}
+            title={t("backupAssets.actions.recoverThisItem")}
+            onClick={onRecover}
+          >
+            <RotateCcw className="size-4" aria-hidden />
           </Button>
         ) : null}
         <Button

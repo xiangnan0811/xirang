@@ -64,8 +64,9 @@ Task 6 F3:                complete_checked (focused persistent scheduler/pre-wri
 Task 6 F4:                complete_checked (focused workspace/deadline/cleanup-only scope only)
 Task 6 execution:         complete_checked (20 corrections; whole spec/quality review and final gates passed)
 Task 7 execution:         complete_checked_whole_scope; delivered through PR #410
-Task 8 execution:         in_progress_b7_complete_checkpoint
-Tasks 9-10 execution:     not_executed
+Task 8 execution:         complete_checked_whole_scope; delivered through PR #424
+Task 9 execution:         complete_checked; delivered through PR #428 and released in v0.47.0
+Task 10 execution:        complete_checked; exact Git delivery pending
 Task 5 receipt evidence:  focused SQLite/real-PostgreSQL normal and race gates passed; both independent reviews approved
 Task 8 dirty union:       34 paths; approved product/task-local evidence scope; staged zero
 stage/commit/push/PR/CI/merge: not_executed
@@ -759,6 +760,46 @@ They do not alter the product manifest or authorize Tasks 9--10. The authority
 audit is dated discovery evidence; later Task 8 fixes supersede its then-open
 disabled-reconciliation and publication-shell findings, while its production
 authority ownership gaps remain controlling at the checkpoint below.
+
+### 2.5h Task 10 live-contract focused amendment (2026-08-16)
+
+Current live DTO/router inspection before the first frontend RED proved that the approved wizard cannot safely continue:
+delete authorization requires checkpoint/attempt IDs that no read returns; result download requires a result ID that no list
+returns; job polling exposes neither ResultSet lifecycle nor real item progress; and the authorized delete secret has no
+transient route into the paused managed execution. Per the approved expansion rule, Task 10 first closes this live contract
+with backend RED/GREEN, then resumes the frozen frontend RED. This is Task 10 work and does not start Task 11.
+
+The only newly admitted historical-manifest paths are these already-tracked Recovery API files:
+
+```text
+backend/internal/backupasset/recovery/api.go
+backend/internal/backupasset/recovery/api_test.go
+```
+
+Task 10 may also modify only these existing §2.2/§2.3 members for the closure:
+
+```text
+backend/internal/backupasset/recovery/executor.go
+backend/internal/backupasset/recovery/executor_test.go
+backend/internal/backupasset/recovery/service.go
+backend/internal/backupasset/recovery/service_test.go
+backend/internal/backupasset/recovery/worker.go
+backend/internal/backupasset/recovery/worker_test.go
+backend/internal/backupasset/runtime/recovery_runtime.go
+backend/internal/backupasset/runtime/recovery_runtime_test.go
+backend/internal/api/handlers/backup_recovery_handler.go
+backend/internal/api/handlers/backup_recovery_handler_test.go
+backend/internal/api/router.go
+backend/internal/api/router_test.go
+backend/internal/api/backup_asset_rbac_test.go
+backend/internal/api/docs/docs.go
+```
+
+No model/migration/settings/content/provider/publication path is admitted. `recovery/service.go` and `service_test.go` are
+admitted only for pre-commit delete-grant full-history validation. If genuine RED proves another path is unavoidable, stop
+and write another exact-path amendment before editing it. Generated Swagger is updated only after handler/
+router GREEN. Backend tests must preserve the first exact RED and same-selector GREEN in implementation evidence and include
+privacy scans for grant secrets, locators, internal digests/fences/workspace phases and raw errors.
 
 ### 2.6 Explicitly Unchanged Without An Amendment
 
@@ -3080,25 +3121,44 @@ normal/race gates, full Recovery/runtime tests, Swagger generation, vet, lint,
 and diff checks passed. Task 9 is `complete_checked`; Task 10 remains
 `not_executed`.
 
+#### Task 9 delivery and release normalization (2026-08-16)
+
+- PR #428 passed all 11 required checks and was squash-merged as
+  `2538f325ff0fabf5ebeca3b5ceda98755e885397`.
+- Release PR #429 was squash-merged as
+  `dcb94ee39fa17c64342ab4169bedb804f3682124`. Exact-head main CI
+  `31951038841`, Release Please `31951038854`, and Publish Docker Images
+  `31951046761` completed successfully; GitHub Release `v0.47.0` was
+  published from that exact commit.
+- This is a current delivery snapshot only. Historical evidence under
+  `research/current-main-evidence.md` remains immutable evidence for its
+  recorded `5177165` baseline. Task 10 remains `not_executed`, Child 13 remains
+  `in_progress`, the parent remains `planning`, and no Task 11 work is started.
+
 ### Task 10: Typed Frontend Recovery Wizard
 
 **Files:** all frontend paths in §2.2/§2.3.
 
-- [ ] **Write RED API boundary tests.** Raw snake_case DTOs remain private;
+- [x] **Close the live backend contract with genuine RED first.** Add owner-scoped safe job detail/checkpoint projection,
+  bounded real item/result pages, separate Job/ResultSet lifecycle, router/RBAC/Swagger coverage and the transient exact-
+  mirror delete-authorize handoff specified by PRD Task 10 amendment/design §49. Observe RED and same-selector GREEN for
+  API whole-product rejection and managed pause/resume before creating the mandated frontend mapper RED. No migration,
+  persistent secret, internal phase/digest/locator projection, new secret endpoint or legacy fallback.
+- [x] **Write RED API boundary tests.** Raw snake_case DTOs remain private;
   whole-product mapping validates schema version, exact opaque IDs/revisions,
   target mode, operation/delete summary, security decision, authority/checkpoint
   category, times, counts, publication state, URLs and closed errors. Unknown/
   dual/contradictory products reject atomically. Raw source/target/root locator,
   their internal digests/ciphertext and workspace phases are not DTO fields. No
   component calls `fetch`.
-- [ ] **Write RED controller tests.** Explicit selection handoff; create,
+- [x] **Write RED controller tests.** Explicit selection handoff; create,
   preflight, security override, write authority, execute, delete-checkpoint
   authority, poll, cancel, retain and cleanup; endpoint-specific same-key replay
   after network/5xx ambiguity; AbortSignal/timer cleanup; hidden-page pause;
   reload reconciliation; stale-response suppression; separate override/write/
   delete proof/reason/grant and ticket clearing on context/session change with no
   URL/storage persistence.
-- [ ] **Write RED client-secret crypto/lifecycle tests.** The API boundary uses
+- [x] **Write RED client-secret crypto/lifecycle tests.** The API boundary uses
   Web Crypto `getRandomValues` for exactly 32 bytes and canonical 43-character
   unpadded base64url, and fails closed when CSPRNG is absent; `Math.random` and
   server/replay regeneration are forbidden. Network/5xx ambiguity must reuse the
@@ -3108,25 +3168,25 @@ and diff checks passed. Task 9 is `complete_checked`; Task 10 remains
   URL, browser storage, serialized reducer state, log, DOM snapshot or API
   response contains the raw secret, and require both grant expiries no later than
   their receipt replay expiry.
-- [ ] **Write RED wizard/panel tests.** Selection -> target -> preflight ->
+- [x] **Write RED wizard/panel tests.** Selection -> target -> preflight ->
   security decision/override -> impact -> write reason/step-up -> progress ->
   exact-mirror delete checkpoint/reason/step-up when required -> verification ->
   result actions. Unknown/non-overridable finding never exposes override;
   in-place/partial work never exposes result download. Separate Job outcome from
   ResultSet lifecycle; show drift, partial writes, destructive impact, TTL and
   cleanup failure; bound item/impact DOM while retaining real paging.
-- [ ] **Write RED integration tests.** Bulk bar/browser/inspector/workspace and
+- [x] **Write RED integration tests.** Bulk bar/browser/inspector/workspace and
   route/state carry only opaque IDs and explicit selection. Legacy `latest`/
   default-source restore remains gated and no accidental Start Recovery control
   bypasses plan creation. A new frontend against missing old-backend endpoints
   maps to disabled/unavailable and never falls back; the old page route against
   a new default-disabled backend still exposes no recovery mutation.
-- [ ] **Write a11y/i18n/responsive tests.** Keyboard step order, focus transfer/
+- [x] **Write a11y/i18n/responsive tests.** Keyboard step order, focus transfer/
   restoration, DialogTitle/labels, quiet live regions, distinct security-
   override and delete confirmations, reduced motion, axe, zh/en completeness,
   200% zoom and 1440/1200/390 widths. Update the existing page-level Backups
   axe test and data-page integration rather than creating parallel page shells.
-- [ ] Implement minimal GREEN using existing UI primitives and run focused
+- [x] Implement minimal GREEN using existing UI primitives and run focused
   tests, then the full frontend gate.
 
 ```bash
