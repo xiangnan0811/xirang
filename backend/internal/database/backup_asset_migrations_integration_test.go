@@ -5401,20 +5401,36 @@ func (fixture migrationFixture) recoveryWorkerGorm(t *testing.T, sqlDB *sql.DB) 
 
 type recoveryMigrationFirstWriteLiveRevalidator struct{}
 
+func (recoveryMigrationFirstWriteLiveRevalidator) ObserveRecoveryAuthority(
+	context.Context,
+	recovery.RecoveryAuthorityBinding,
+) (recovery.RecoveryAuthorityObservation, error) {
+	return recovery.RecoveryAuthorityObservation{}, nil
+}
+
 func (recoveryMigrationFirstWriteLiveRevalidator) RevalidateRecoveryAuthorityTx(
 	context.Context,
 	*gorm.DB,
 	recovery.RecoveryAuthorityBinding,
+	recovery.RecoveryAuthorityObservation,
 ) error {
 	return nil
 }
 
 type recoveryMigrationFirstWriteAuthorityDriftRevalidator struct{}
 
+func (recoveryMigrationFirstWriteAuthorityDriftRevalidator) ObserveRecoveryAuthority(
+	context.Context,
+	recovery.RecoveryAuthorityBinding,
+) (recovery.RecoveryAuthorityObservation, error) {
+	return recovery.RecoveryAuthorityObservation{}, nil
+}
+
 func (recoveryMigrationFirstWriteAuthorityDriftRevalidator) RevalidateRecoveryAuthorityTx(
 	context.Context,
 	*gorm.DB,
 	recovery.RecoveryAuthorityBinding,
+	recovery.RecoveryAuthorityObservation,
 ) error {
 	return recovery.ErrAuthorizationDenied
 }

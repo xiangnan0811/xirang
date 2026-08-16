@@ -223,6 +223,17 @@ type processingMalwareEvidence struct {
 	PlaintextSize int64
 }
 
+// managedProcessingRecoverySecurityObservation is the private current
+// security product consumed by Recovery authority composition. It contains
+// only closed revisions and scan state; canonical malware bytes and artifact
+// identifiers never cross the runtime boundary.
+type managedProcessingRecoverySecurityObservation struct {
+	PolicyRevision   string
+	FindingSetDigest string
+	ScanState        capabilityspec.ScanState
+	Complete         bool
+}
+
 type secretContinuationCandidate struct {
 	ArtifactID                 string
 	PlaintextDigest            string
@@ -287,6 +298,16 @@ func (runtime *managedProcessingRuntime) Startup(ctx context.Context) error {
 	}
 	runtime.ready.Store(true)
 	return nil
+}
+
+func (runtime *managedProcessingRuntime) recoverySecurityReady() bool {
+	if runtime == nil || !runtime.ready.Load() || runtime.stopped.Load() {
+		return false
+	}
+	runtime.mu.RLock()
+	evidence := runtime.malwareEvidence
+	runtime.mu.RUnlock()
+	return evidence != nil && runtime.ready.Load() && !runtime.stopped.Load()
 }
 
 func (runtime *managedProcessingRuntime) initializeControlPlane(config backupasset.ProcessingConfig) error {
@@ -422,6 +443,70 @@ func (runtime *managedProcessingRuntime) malwareSafetyForAsset(
 		decision.Status = capabilityspec.ScanStale
 		return decision, runtime.requestMalwareContinuation(ctx, asset, profile, pipeline)
 	}
+}
+
+func (runtime *managedProcessingRuntime) recoverySecurityObservation(
+	ctx context.Context,
+	asset content.AuthorizedAsset,
+) (managedProcessingRecoverySecurityObservation, error) {
+	if runtime == nil || runtime.db == nil || runtime.malwareEvidence == nil ||
+		backupasset.ValidateAssetRef(asset.Ref) != nil ||
+		backupasset.ValidateOpaqueID(asset.CatalogGenerationID) != nil ||
+		asset.ProviderCapabilityRevision <= 0 || asset.SourceFingerprint == "" ||
+		asset.EntryFingerprint == "" || asset.Size < 0 {
+		return managedProcessingRecoverySecurityObservation{}, fmt.Errorf("%w: invalid Recovery security observation", backupasset.ErrCapabilityUnavailable)
+	}
+	profile, ok := capabilityspec.Lookup(capabilityspec.CapabilityMalwareScan, capabilityspec.ProfileSignatureScanV1, false)
+	if !ok {
+		return managedProcessingRecoverySecurityObservation{}, backupasset.ErrCapabilityUnavailable
+	}
+	pipeline, err := runtime.activePipelineFingerprint(nonNilRuntimeContext(ctx), profile.Capability, profile.OutputProfile)
+	if err != nil || pipeline == "" {
+		return managedProcessingRecoverySecurityObservation{}, fmt.Errorf("%w: Processing pipeline evidence unavailable", backupasset.ErrCapabilityUnavailable)
+	}
+	bundleFingerprint, err := runtime.activeUpdaterFingerprint(nonNilRuntimeContext(ctx))
+	if err != nil || bundleFingerprint == "" {
+		return managedProcessingRecoverySecurityObservation{}, fmt.Errorf("%w: Processing signature bundle unavailable", backupasset.ErrCapabilityUnavailable)
+	}
+	evidence, found, err := runtime.currentMalwareEvidence(nonNilRuntimeContext(ctx), asset, profile, pipeline)
+	if err != nil || !found || evidence.PlaintextSize <= 0 {
+		return managedProcessingRecoverySecurityObservation{}, fmt.Errorf("%w: current malware evidence unavailable", backupasset.ErrCapabilityUnavailable)
+	}
+	var payload bytes.Buffer
+	if err := runtime.malwareEvidence.ReadAuthorized(nonNilRuntimeContext(ctx), processing.DerivedArtifactAuthorization{
+		ArtifactID: evidence.ArtifactID, RecoveryPointID: asset.Ref.RecoveryPointID,
+		CatalogGenerationID: asset.CatalogGenerationID, EntryID: asset.Ref.EntryID,
+		SourceFingerprint: asset.SourceFingerprint,
+	}, &payload); err != nil {
+		return managedProcessingRecoverySecurityObservation{}, fmt.Errorf("%w: current malware evidence unavailable", backupasset.ErrCapabilityUnavailable)
+	}
+	result, err := processing.DecodeCanonicalMalwareResult(payload.Bytes())
+	if err != nil || result.Completeness != capabilityspec.CoverageComplete || result.ScannedBytes != asset.Size ||
+		result.SignatureBundleFingerprint != bundleFingerprint ||
+		(result.Result != capabilityspec.ScanNoFinding && result.Result != capabilityspec.ScanFinding) {
+		return managedProcessingRecoverySecurityObservation{}, fmt.Errorf("%w: incomplete current malware evidence", backupasset.ErrCapabilityUnavailable)
+	}
+	canonical := backupasset.NewCanonicalSHA256()
+	canonical.String("xirang/recovery/security-finding-set/v1")
+	canonical.String(asset.Ref.RecoveryPointID)
+	canonical.String(asset.Ref.EntryID)
+	canonical.String(asset.CatalogGenerationID)
+	canonical.String(asset.SourceFingerprint)
+	canonical.String(asset.EntryFingerprint)
+	canonical.Int64(asset.ProviderCapabilityRevision)
+	canonical.Int64(asset.Size)
+	canonical.String(pipeline)
+	canonical.String(bundleFingerprint)
+	canonical.String(processingSecurityPolicyRevision)
+	canonical.String(payload.String())
+	findingSetDigest, err := canonical.HexDigest()
+	if _, decodeErr := hex.DecodeString(findingSetDigest); err != nil || decodeErr != nil || len(findingSetDigest) != sha256.Size*2 {
+		return managedProcessingRecoverySecurityObservation{}, fmt.Errorf("%w: current malware digest unavailable", backupasset.ErrCapabilityUnavailable)
+	}
+	return managedProcessingRecoverySecurityObservation{
+		PolicyRevision: processingSecurityPolicyRevision, FindingSetDigest: findingSetDigest,
+		ScanState: result.Result, Complete: true,
+	}, nil
 }
 
 func (runtime *managedProcessingRuntime) currentMalwareEvidence(

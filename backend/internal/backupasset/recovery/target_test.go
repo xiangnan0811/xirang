@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -417,6 +418,7 @@ type recoveryTargetSFTPClientFake struct {
 	lstat                func(string, int) (os.FileInfo, error)
 	readLink             func(string, int) (string, error)
 	statVFS              func(string, int) (*sftp.StatVFS, error)
+	openFile             func(string, int) (recoveryTargetSFTPFile, error)
 	close                func() error
 }
 
@@ -881,6 +883,122 @@ type recoveryCloseCountingSFTPFile struct {
 	closeCalls int
 }
 
+func TestRecoveryHeartbeatCancellationClosesActiveTargetWrite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	writeStarted := make(chan struct{})
+	closed := make(chan struct{})
+	var closeOnce sync.Once
+	file := &recoveryScriptedSFTPFile{
+		write: func([]byte) (int, error) {
+			close(writeStarted)
+			<-closed
+			return 0, os.ErrClosed
+		},
+		close: func() error {
+			closeOnce.Do(func() { close(closed) })
+			return nil
+		},
+	}
+	raw := &recoveryTargetSFTPClientFake{
+		openFile: func(string, int) (recoveryTargetSFTPFile, error) {
+			return file, nil
+		},
+	}
+	session := &recoveryTargetSession{
+		client: raw, watchStop: make(chan struct{}), watchDone: make(chan struct{}),
+	}
+	session.watch(ctx)
+	client := &recoveryResultTrackedSFTPClient{recoveryTargetSFTPClient: raw, session: session}
+	opened, err := client.OpenFile("/srv/recovery-active-write", os.O_WRONLY|os.O_CREATE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("active recovery write")
+	digest := sha256.Sum256(payload)
+	done := make(chan error, 1)
+	go func() {
+		done <- writeRecoveryRegularContent(opened, bytes.NewReader(payload), int64(len(payload)), hex.EncodeToString(digest[:]))
+	}()
+	select {
+	case <-writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("target write did not block")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrRecoveryTargetUnavailable) {
+			t.Fatalf("canceled active write error=%v, want target unavailable", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		_ = file.Close()
+		<-done
+		t.Fatal("context cancellation did not close and unblock the active SFTP write")
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecoveryHeartbeatCancellationClosesTransportBeforeBlockedFileCleanup(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transportClosed := make(chan struct{})
+	var transportOnce sync.Once
+	var fileCloseCalls atomic.Int32
+	closeOrder := make([]string, 0, 3)
+	file := &recoveryScriptedSFTPFile{
+		close: func() error {
+			fileCloseCalls.Add(1)
+			<-transportClosed
+			closeOrder = append(closeOrder, "file")
+			return os.ErrClosed
+		},
+	}
+	raw := &recoveryTargetSFTPClientFake{
+		openFile: func(string, int) (recoveryTargetSFTPFile, error) { return file, nil },
+		close: func() error {
+			closeOrder = append(closeOrder, "sftp")
+			transportOnce.Do(func() { close(transportClosed) })
+			return nil
+		},
+	}
+	session := &recoveryTargetSession{
+		client: raw,
+		closeSSH: func(*ssh.Client) error {
+			closeOrder = append(closeOrder, "ssh")
+			transportOnce.Do(func() { close(transportClosed) })
+			return nil
+		},
+		watchStop: make(chan struct{}), watchDone: make(chan struct{}),
+	}
+	session.watch(ctx)
+	client := &recoveryResultTrackedSFTPClient{recoveryTargetSFTPClient: raw, session: session}
+	if _, err := client.OpenFile("/srv/recovery-blocked-close", os.O_WRONLY|os.O_CREATE); err != nil {
+		t.Fatal(err)
+	}
+
+	cancel()
+	select {
+	case <-session.watchDone:
+	case <-time.After(100 * time.Millisecond):
+		transportOnce.Do(func() { close(transportClosed) })
+		<-session.watchDone
+		t.Fatal("cancellation did not promptly close the target transport")
+	}
+
+	if err := session.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("session close error=%v, want safe best-effort file cleanup error", err)
+	}
+	if got := fileCloseCalls.Load(); got != 1 {
+		t.Fatalf("file Close calls=%d, want exactly one", got)
+	}
+	if raw.closeCalls != 1 || !reflect.DeepEqual(closeOrder, []string{"sftp", "ssh", "file"}) {
+		t.Fatalf("close calls/order=%d/%v, want transport first then exactly-once file cleanup", raw.closeCalls, closeOrder)
+	}
+}
+
 func (file *recoveryCloseCountingSFTPFile) Close() error {
 	file.closeCalls++
 	return file.recoveryTargetSFTPFile.Close()
@@ -1216,8 +1334,11 @@ func (fake *recoveryTargetSFTPClientFake) Open(string) (recoveryTargetSFTPFile, 
 	fake.openCalls++
 	return nil, os.ErrNotExist
 }
-func (fake *recoveryTargetSFTPClientFake) OpenFile(string, int) (recoveryTargetSFTPFile, error) {
+func (fake *recoveryTargetSFTPClientFake) OpenFile(value string, flag int) (recoveryTargetSFTPFile, error) {
 	fake.openFileCalls++
+	if fake.openFile != nil {
+		return fake.openFile(value, flag)
+	}
 	return nil, os.ErrNotExist
 }
 func (fake *recoveryTargetSFTPClientFake) Rename(string, string) error {
@@ -3683,6 +3804,81 @@ func TestRecoverySFTPTargetProductionConstructorRequiresDependencies(t *testing.
 	if target, err := newRecoverySFTPTarget(nil, nil, nil); target != nil ||
 		!errors.Is(err, ErrRecoveryTargetUnavailable) {
 		t.Fatalf("nil production constructor target=%v error=%v, want closed unavailable", target, err)
+	}
+}
+
+type recoveryNodeRevisionSourceFake struct {
+	snapshot RecoveryNodeRevisionSnapshot
+	err      error
+	calls    int
+	nodeID   uint
+	purpose  TargetPurpose
+}
+
+func (source *recoveryNodeRevisionSourceFake) ResolveRecoveryNodeRevisionsTx(
+	_ context.Context,
+	_ *gorm.DB,
+	nodeID uint,
+	purpose TargetPurpose,
+) (RecoveryNodeRevisionSnapshot, error) {
+	source.calls++
+	source.nodeID = nodeID
+	source.purpose = purpose
+	return source.snapshot, source.err
+}
+
+func TestRecoveryProductionTargetOwnsPrivateNodeSessionResolution(t *testing.T) {
+	db := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptWriteAuthorize).db
+	node := model.Node{ID: 42, Name: "target-node", Host: "127.0.0.1", Port: 22, Username: "root", Archived: false}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatal(err)
+	}
+	revisions := &recoveryNodeRevisionSourceFake{snapshot: RecoveryNodeRevisionSnapshot{
+		NodeRevision: "node-revision-1", CredentialRevision: "credential-revision-1",
+	}}
+	workspaceKeys := recoveryWorkerWorkspaceKeySource{}
+	target, err := NewProductionTarget(ProductionTargetDependencies{
+		DB: db, Revisions: revisions, Dialer: sshutil.NewNodeDialer(db), WorkspaceKeys: workspaceKeys,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	concrete, ok := target.(*recoverySFTPTarget)
+	if !ok {
+		t.Fatalf("production target=%T, want Recovery-owned private target", target)
+	}
+	resolver, ok := concrete.sessions.resolver.(*productionRecoveryTargetNodeSessionResolver)
+	if !ok {
+		t.Fatalf("production resolver=%T, want Recovery-owned private resolver", concrete.sessions.resolver)
+	}
+	resolved, err := resolver.ResolveRecoveryTargetNodeSession(context.Background(), node.ID, TargetPurposeWrite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Node.ID != node.ID || resolved.NodeRevision != revisions.snapshot.NodeRevision ||
+		resolved.CredentialRevision != revisions.snapshot.CredentialRevision ||
+		revisions.calls != 1 || revisions.nodeID != node.ID || revisions.purpose != TargetPurposeWrite {
+		t.Fatalf("resolved private session=%+v revisions=%+v", resolved, revisions)
+	}
+
+	if err := db.Model(&model.Node{}).Where("id = ?", node.ID).Update("archived", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolver.ResolveRecoveryTargetNodeSession(context.Background(), node.ID, TargetPurposeWrite); !errors.Is(err, ErrRecoveryTargetUnavailable) {
+		t.Fatalf("archived node resolution error=%v, want unavailable", err)
+	}
+
+	for name, dependencies := range map[string]ProductionTargetDependencies{
+		"database":       {Revisions: revisions, Dialer: sshutil.NewNodeDialer(db), WorkspaceKeys: workspaceKeys},
+		"revisions":      {DB: db, Dialer: sshutil.NewNodeDialer(db), WorkspaceKeys: workspaceKeys},
+		"dialer":         {DB: db, Revisions: revisions, WorkspaceKeys: workspaceKeys},
+		"workspace keys": {DB: db, Revisions: revisions, Dialer: sshutil.NewNodeDialer(db)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NewProductionTarget(dependencies); !errors.Is(err, ErrRecoveryTargetUnavailable) {
+				t.Fatalf("missing %s error=%v, want unavailable", name, err)
+			}
+		})
 	}
 }
 
@@ -16594,7 +16790,7 @@ func TestRecoverySFTPTargetOpenOwnedResultDriftAndResourceMatrix(t *testing.T) {
 		}
 	})
 
-	t.Run("context cancellation closes file before session", func(t *testing.T) {
+	t.Run("context cancellation closes transport before file", func(t *testing.T) {
 		testCase := newRecoveryOwnedResultReadCaseForTest(t, []byte("published-result-content"))
 		base := &recoveryLocalSFTPClient{}
 		finalOpens := 0
@@ -16646,8 +16842,8 @@ func TestRecoverySFTPTargetOpenOwnedResultDriftAndResourceMatrix(t *testing.T) {
 		if closeErr := reader.Close(); closeErr != context.Canceled {
 			t.Fatalf("cancel-order result close error=%v, want context.Canceled", closeErr)
 		}
-		if !reflect.DeepEqual(closeOrder, []string{"file", "sftp", "ssh"}) {
-			t.Fatalf("canceled result close order=%v, want [file sftp ssh]", closeOrder)
+		if !reflect.DeepEqual(closeOrder, []string{"sftp", "ssh", "file"}) {
+			t.Fatalf("canceled result close order=%v, want [sftp ssh file]", closeOrder)
 		}
 	})
 
@@ -18846,7 +19042,7 @@ func TestRecoverySFTPTargetReconciliationResourceErrorAndPrivacyMatrix(t *testin
 		assertCloseState(t, recorder, []string{"jobs", "sftp", "ssh"})
 	})
 
-	t.Run("concurrent cancellation wins close noise and closes in ownership order", func(t *testing.T) {
+	t.Run("concurrent cancellation wins close noise and closes transport before tracked handle", func(t *testing.T) {
 		fixture := newRecoveryLocalSFTPTargetFixture(t)
 		jobsPath := filepath.Join(fixture.root, recoveryWorkspaceLocatorDirectory)
 		if err := os.Mkdir(jobsPath, 0o700); err != nil {
@@ -18924,7 +19120,7 @@ func TestRecoverySFTPTargetReconciliationResourceErrorAndPrivacyMatrix(t *testin
 		if got.err != context.Canceled || !reflect.DeepEqual(got.page, TargetReconciliationPage{}) {
 			t.Fatalf("canceled reconciliation page=%+v error=%v, want exact context cancellation", got.page, got.err)
 		}
-		assertCloseState(t, recorder, []string{"jobs", "sftp", "ssh"})
+		assertCloseState(t, recorder, []string{"sftp", "ssh", "jobs"})
 	})
 
 	t.Run("complete boundary privacy canaries and zero direct logs", func(t *testing.T) {
@@ -19269,6 +19465,37 @@ func recoveryReconciliationPermitWithAuditForTargetTest(
 		}
 	}
 	return permit, request
+}
+
+func TestRecoveryReconciliationFindingLimitAcceptsConfiguredBoundedValues(t *testing.T) {
+	fixture := newRecoveryLocalSFTPTargetFixture(t)
+	key := sha256.Sum256([]byte("recovery-reconciliation-finding-limit-test"))
+	permit, request := recoveryReconciliationPermitWithAuditForTargetTest(
+		t, fixture, nil, key, 1, "reconciliation-generation", "", false,
+	)
+
+	for _, testCase := range []struct {
+		name    string
+		limit   int
+		wantErr error
+	}{
+		{name: "configured default", limit: 100},
+		{name: "configured hard cap", limit: recoveryReconciliationFindingLimit},
+		{name: "zero fails closed", limit: 0, wantErr: ErrInvalidTargetPermit},
+		{name: "above hard cap fails closed", limit: recoveryReconciliationFindingLimit + 1, wantErr: ErrInvalidTargetPermit},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			candidate := cloneRecoveryReconciliationPermitForTest(permit)
+			candidate.FindingLimit = testCase.limit
+			candidate.proof.bindingDigest = targetReconciliationPermitBindingDigest(
+				candidate.proof.auditTokenKey, candidate.proof.auditKeyVersion, candidate,
+				candidate.proof.sessionBinding.bindingDigest,
+			)
+			if err := candidate.ValidateRequestAt(fixture.now, request); !errors.Is(err, testCase.wantErr) {
+				t.Fatalf("finding limit %d error=%v, want %v", testCase.limit, err, testCase.wantErr)
+			}
+		})
+	}
 }
 
 func recoveryReconciliationResumePermitForTargetTest(

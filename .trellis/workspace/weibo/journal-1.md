@@ -1500,3 +1500,38 @@ Recorded post-merge governance evidence, acceptance, and R7 disposition.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 38: Task 8 managed recovery runtime complete
+
+**Date**: 2026-08-16
+**Task**: Task 8 managed recovery runtime complete
+**Branch**: `codex/task8-managed-runtime`
+
+### Summary
+
+Completed and whole-scope checked Child 13 Task 8; recorded local work commit while leaving Child 13 active for Tasks 9-10.
+
+### Main Changes
+
+- Implemented encrypted target-root authority, one eligibility owner, managed runtime policies, transitions, maintenance and closed metrics.
+- Closed late source-namespace drift in both issuance and effect transactions and captured the reusable authority/publication contract in backend quality guidance.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `82dc261fe6e185f4e6e83dbe13f0d0dd12102011` | (see git log) |
+
+### Testing
+
+- [OK] Full backend normal, six-package race, go vet, lint, backend build and make check passed.
+- [OK] Required PostgreSQL 18 normal/race selectors executed without skips and left zero schema/container/volume residue.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Choose whether to keep, push/PR, or otherwise integrate codex/task8-managed-runtime; do not begin Tasks 9-10 without separate authorization.

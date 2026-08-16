@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/provider"
@@ -94,6 +96,579 @@ type RecoveryTargetRootResolver interface {
 	) (settings.RecoveryTargetRootResolution, error)
 }
 
+// RecoveryTargetRootRegistry is the private encrypted-root persistence seam
+// consumed only by the Recovery authority owner.
+type RecoveryTargetRootRegistry interface {
+	RecoveryTargetRootResolver
+	RegisterRecoveryTargetRootTx(
+		context.Context,
+		*gorm.DB,
+		settings.RecoveryTargetRootDefinition,
+	) (settings.RecoveryTargetRootResolution, error)
+	DeleteRecoveryTargetRootTx(context.Context, *gorm.DB, uint, string) error
+	ListRecoveryTargetRoots(context.Context, uint) ([]settings.RecoveryTargetRootSummary, error)
+}
+
+const (
+	targetRootRegistrationProbeFreshness     = 30 * time.Second
+	targetRootRegistrationNodeRevisionDomain = "xirang/recovery/target-root-registration-node/v1"
+	targetRootRegistrationCredentialDomain   = "xirang/recovery/target-root-registration-credential/v1"
+)
+
+// TargetRootAuthorityServiceDependencies supplies the only owner of
+// registration, rotation, and deletion for private Recovery target roots.
+type TargetRootAuthorityServiceDependencies struct {
+	DB          *gorm.DB
+	Registry    RecoveryTargetRootRegistry
+	Probe       TargetRootRegistrationProbe
+	NewRevision func() (string, error)
+	Now         func() time.Time
+}
+
+// TargetRootAuthorityService owns purpose-exact read-only registration probes
+// and their subsequent durable revalidation.
+type TargetRootAuthorityService struct {
+	db          *gorm.DB
+	registry    RecoveryTargetRootRegistry
+	probe       TargetRootRegistrationProbe
+	newRevision func() (string, error)
+	now         func() time.Time
+}
+
+type targetRootPersistedMutationState struct {
+	row     model.SystemSetting
+	present bool
+}
+
+// TargetRootMutationRollback is an opaque, Recovery-owned capability for
+// restoring one exact private root mutation. Its persisted state is never
+// exported, formatted, or serialized.
+type TargetRootMutationRollback struct {
+	owner  *TargetRootAuthorityService
+	key    string
+	before targetRootPersistedMutationState
+	after  targetRootPersistedMutationState
+}
+
+func (TargetRootMutationRollback) String() string               { return "TargetRootMutationRollback{}" }
+func (rollback TargetRootMutationRollback) GoString() string    { return rollback.String() }
+func (TargetRootMutationRollback) MarshalJSON() ([]byte, error) { return []byte("{}"), nil }
+
+func NewTargetRootAuthorityService(
+	dependencies TargetRootAuthorityServiceDependencies,
+) (*TargetRootAuthorityService, error) {
+	if dependencies.DB == nil || dependencies.Registry == nil || dependencies.Probe == nil {
+		return nil, ErrRecoveryTargetUnavailable
+	}
+	if dependencies.NewRevision == nil {
+		dependencies.NewRevision = backupasset.NewOpaqueID
+	}
+	if dependencies.Now == nil {
+		dependencies.Now = func() time.Time { return time.Now().UTC() }
+	}
+	return &TargetRootAuthorityService{
+		db: dependencies.DB, registry: dependencies.Registry, probe: dependencies.Probe,
+		newRevision: dependencies.NewRevision, now: dependencies.Now,
+	}, nil
+}
+
+// ValidateRegistration applies all local registration validation before a
+// runtime transition stops admission or drains owners.
+func (service *TargetRootAuthorityService) ValidateRegistration(request TargetRootRegistrationRequest) error {
+	if service == nil || service.db == nil || service.registry == nil || service.probe == nil ||
+		service.newRevision == nil || service.now == nil {
+		return ErrRecoveryTargetUnavailable
+	}
+	return validateTargetRootRegistrationRequest(request)
+}
+
+// Register performs one fresh read-only target observation outside the
+// transaction, then locks and revalidates the durable node, credential, and
+// exact registry row before persisting the private authority product.
+func (service *TargetRootAuthorityService) Register(
+	ctx context.Context,
+	request TargetRootRegistrationRequest,
+) (settings.RecoveryTargetRootResolution, error) {
+	result, _, err := service.registerMutation(ctx, request)
+	return result, err
+}
+
+// RegisterMutation persists a root while returning only its safe summary and
+// an opaque exact rollback capability for the transition owner.
+func (service *TargetRootAuthorityService) RegisterMutation(
+	ctx context.Context,
+	request TargetRootRegistrationRequest,
+) (settings.RecoveryTargetRootSummary, TargetRootMutationRollback, error) {
+	result, rollback, err := service.registerMutation(ctx, request)
+	if err != nil {
+		return settings.RecoveryTargetRootSummary{}, TargetRootMutationRollback{}, err
+	}
+	return settings.RecoveryTargetRootSummary{
+		NodeID: result.NodeID, RootID: result.RootID, SafeLabel: result.SafeLabel,
+	}, rollback, nil
+}
+
+func (service *TargetRootAuthorityService) registerMutation(
+	ctx context.Context,
+	request TargetRootRegistrationRequest,
+) (settings.RecoveryTargetRootResolution, TargetRootMutationRollback, error) {
+	if service == nil || service.db == nil || service.registry == nil || service.probe == nil ||
+		service.newRevision == nil || service.now == nil || ctx == nil {
+		return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, ErrRecoveryTargetUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, err
+	}
+	if err := validateTargetRootRegistrationRequest(request); err != nil {
+		return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, err
+	}
+	key := targetRootAuthorityRecordKey(request.NodeID, request.RootID)
+	captureNow := service.now().UTC()
+	if captureNow.IsZero() {
+		return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, ErrRecoveryTargetUnavailable
+	}
+	var captured recoveryTargetRootAuthorityNodeCredential
+	captureErr := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		captured, err = loadRecoveryTargetRootAuthorityNodeCredential(ctx, tx, request.NodeID, captureNow, false)
+		return err
+	})
+	if captureErr != nil {
+		return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, recoveryTargetUnavailableForContext(ctx)
+	}
+	probeRequest := request
+	probeRequest.NodeRevision = captured.nodeRevision
+	probeRequest.CredentialRevision = captured.credentialRevision
+	probeRequest.Purpose = TargetRootRegistrationPurposeReadOnly
+	probeRequest.ReadOnly = true
+	observation, probeErr := service.probe.ObserveRecoveryTargetRoot(ctx, probeRequest)
+	if probeErr != nil {
+		return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, recoveryTargetUnavailableForContext(ctx)
+	}
+	postProbeNow := service.now().UTC()
+	if postProbeNow.IsZero() || postProbeNow.Before(captureNow) ||
+		!validTargetRootRegistrationObservation(probeRequest, observation, postProbeNow) {
+		return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, ErrRecoveryTargetUnavailable
+	}
+
+	var result settings.RecoveryTargetRootResolution
+	var before, after targetRootPersistedMutationState
+	transactionErr := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		lockStartedAt := service.now().UTC()
+		if lockStartedAt.IsZero() || lockStartedAt.Before(postProbeNow) {
+			return ErrRecoveryTargetUnavailable
+		}
+		locked, err := loadRecoveryTargetRootAuthorityNodeCredential(ctx, tx, request.NodeID, lockStartedAt, true)
+		if err != nil {
+			return err
+		}
+		lockedNow := service.now().UTC()
+		if lockedNow.IsZero() || lockedNow.Before(lockStartedAt) ||
+			!validTargetRootRegistrationObservation(probeRequest, observation, lockedNow) ||
+			(locked.credentialExpiresAt != nil && !locked.credentialExpiresAt.After(lockedNow)) {
+			return ErrRecoveryTargetUnavailable
+		}
+		if locked.nodeRevision != captured.nodeRevision || locked.credentialRevision != captured.credentialRevision || observation.NodeRevision != locked.nodeRevision ||
+			observation.CredentialRevision != locked.credentialRevision {
+			return ErrRecoveryTargetUnavailable
+		}
+		before, err = loadTargetRootPersistedMutationState(ctx, tx, key, true)
+		if err != nil {
+			return err
+		}
+		current, currentErr := service.registry.ResolveRecoveryTargetRootTx(ctx, tx, request.NodeID, request.RootID)
+		currentExists := currentErr == nil
+		if currentErr != nil && !errors.Is(currentErr, settings.ErrRecoveryTargetRootNotFound) {
+			return ErrRecoveryTargetUnavailable
+		}
+
+		authorityRevision := ""
+		if currentExists && recoveryTargetRootRegistrationSecurityEquivalent(current, request, observation) {
+			authorityRevision = current.AuthorityRevision
+		} else {
+			generated, generationErr := service.newRevision()
+			if generationErr != nil || !validOpaqueID(generated) || (currentExists && generated == current.AuthorityRevision) {
+				return ErrRecoveryTargetUnavailable
+			}
+			authorityRevision = generated
+		}
+
+		registered, registerErr := service.registry.RegisterRecoveryTargetRootTx(ctx, tx, settings.RecoveryTargetRootDefinition{
+			NodeID: request.NodeID, RootID: request.RootID, SafeLabel: request.SafeLabel, Locator: request.Locator,
+			AuthorityRevision: authorityRevision, RootObservationRevision: observation.RootObservationRevision,
+			Policy: request.Policy,
+		})
+		if registerErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			return ErrRecoveryTargetUnavailable
+		}
+		result = registered
+		after, err = loadTargetRootPersistedMutationState(ctx, tx, key, false)
+		if err != nil || !after.present {
+			return ErrRecoveryTargetUnavailable
+		}
+		return nil
+	})
+	if transactionErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, ctxErr
+		}
+		return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, ErrRecoveryTargetUnavailable
+	}
+	return result, TargetRootMutationRollback{owner: service, key: key, before: before, after: after}, nil
+}
+
+// Delete locks the node and exact registry row, then removes only that private
+// record. It never invokes a target probe or any remote mutation path.
+func (service *TargetRootAuthorityService) Delete(ctx context.Context, nodeID uint, rootID string) error {
+	_, err := service.DeleteMutation(ctx, nodeID, rootID)
+	return err
+}
+
+// ValidateDelete applies exact-reference validation before runtime drain.
+func (service *TargetRootAuthorityService) ValidateDelete(nodeID uint, rootID string) error {
+	if service == nil || service.db == nil || service.registry == nil || service.now == nil {
+		return ErrRecoveryTargetUnavailable
+	}
+	return settings.ValidateRecoveryTargetRootReference(settings.RecoveryTargetRootReference{
+		NodeID: nodeID, RootID: rootID,
+	})
+}
+
+// DeleteMutation removes one exact private record and returns an opaque
+// capability that can restore the byte-for-byte prior record.
+func (service *TargetRootAuthorityService) DeleteMutation(
+	ctx context.Context,
+	nodeID uint,
+	rootID string,
+) (TargetRootMutationRollback, error) {
+	if service == nil || service.db == nil || service.registry == nil || service.now == nil || ctx == nil {
+		return TargetRootMutationRollback{}, ErrRecoveryTargetUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return TargetRootMutationRollback{}, err
+	}
+	if err := settings.ValidateRecoveryTargetRootReference(settings.RecoveryTargetRootReference{
+		NodeID: nodeID,
+		RootID: rootID,
+	}); err != nil {
+		return TargetRootMutationRollback{}, err
+	}
+	key := targetRootAuthorityRecordKey(nodeID, rootID)
+	var before targetRootPersistedMutationState
+	transactionErr := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockRecoveryTargetRootAuthorityNode(ctx, tx, nodeID); err != nil {
+			return err
+		}
+		var err error
+		before, err = loadTargetRootPersistedMutationState(ctx, tx, key, true)
+		if err != nil || !before.present {
+			return ErrRecoveryTargetUnavailable
+		}
+		if err := service.registry.DeleteRecoveryTargetRootTx(ctx, tx, nodeID, rootID); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			return ErrRecoveryTargetUnavailable
+		}
+		after, err := loadTargetRootPersistedMutationState(ctx, tx, key, false)
+		if err != nil || after.present {
+			return ErrRecoveryTargetUnavailable
+		}
+		return nil
+	})
+	if transactionErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return TargetRootMutationRollback{}, ctxErr
+		}
+		return TargetRootMutationRollback{}, ErrRecoveryTargetUnavailable
+	}
+	return TargetRootMutationRollback{
+		owner: service, key: key, before: before,
+		after: targetRootPersistedMutationState{},
+	}, nil
+}
+
+// RestoreMutation restores the exact prior encrypted row or exact absence. A
+// stale, replayed, or foreign token fails closed without changing the row.
+func (service *TargetRootAuthorityService) RestoreMutation(
+	ctx context.Context,
+	rollback TargetRootMutationRollback,
+) error {
+	if service == nil || service.db == nil || ctx == nil || rollback.owner != service || rollback.key == "" {
+		return ErrRecoveryTargetUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		current, loadErr := loadTargetRootPersistedMutationState(ctx, tx, rollback.key, true)
+		if loadErr != nil || !targetRootPersistedMutationStatesEqual(current, rollback.after) {
+			return ErrRecoveryTargetUnavailable
+		}
+		switch {
+		case !rollback.before.present && rollback.after.present:
+			result := tx.WithContext(ctx).Where(
+				"key = ? AND value = ? AND updated_at = ?",
+				rollback.key, rollback.after.row.Value, rollback.after.row.UpdatedAt,
+			).
+				Delete(&model.SystemSetting{})
+			if result.Error != nil || result.RowsAffected != 1 {
+				return ErrRecoveryTargetUnavailable
+			}
+		case rollback.before.present && !rollback.after.present:
+			if createErr := tx.WithContext(ctx).Create(&rollback.before.row).Error; createErr != nil {
+				return ErrRecoveryTargetUnavailable
+			}
+		case rollback.before.present && rollback.after.present:
+			result := tx.WithContext(ctx).Model(&model.SystemSetting{}).
+				Where(
+					"key = ? AND value = ? AND updated_at = ?",
+					rollback.key, rollback.after.row.Value, rollback.after.row.UpdatedAt,
+				).
+				UpdateColumns(map[string]any{
+					"value": rollback.before.row.Value, "updated_at": rollback.before.row.UpdatedAt,
+				})
+			if result.Error != nil || result.RowsAffected != 1 {
+				return ErrRecoveryTargetUnavailable
+			}
+		default:
+			return ErrRecoveryTargetUnavailable
+		}
+		restored, loadErr := loadTargetRootPersistedMutationState(ctx, tx, rollback.key, false)
+		if loadErr != nil || !targetRootPersistedMutationStatesEqual(restored, rollback.before) {
+			return ErrRecoveryTargetUnavailable
+		}
+		return nil
+	})
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return ErrRecoveryTargetUnavailable
+	}
+	return nil
+}
+
+func targetRootAuthorityRecordKey(nodeID uint, rootID string) string {
+	return settings.RecoveryTargetRootKeyPrefix + strconv.FormatUint(uint64(nodeID), 10) + "." + rootID
+}
+
+func loadTargetRootPersistedMutationState(
+	ctx context.Context,
+	tx *gorm.DB,
+	key string,
+	lock bool,
+) (targetRootPersistedMutationState, error) {
+	query := tx.WithContext(ctx)
+	if lock {
+		query = query.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate})
+	}
+	var rows []model.SystemSetting
+	if err := query.Where("key = ?", key).Limit(2).Find(&rows).Error; err != nil || len(rows) > 1 {
+		return targetRootPersistedMutationState{}, ErrRecoveryTargetUnavailable
+	}
+	if len(rows) == 0 {
+		return targetRootPersistedMutationState{}, nil
+	}
+	return targetRootPersistedMutationState{row: rows[0], present: true}, nil
+}
+
+func targetRootPersistedMutationStatesEqual(left, right targetRootPersistedMutationState) bool {
+	return left.present == right.present && (!left.present || left.row == right.row)
+}
+
+func lockRecoveryTargetRootAuthorityNode(ctx context.Context, db *gorm.DB, nodeID uint) error {
+	if ctx == nil || db == nil || nodeID == 0 {
+		return ErrRecoveryTargetUnavailable
+	}
+	type nodeRow struct {
+		ID uint
+	}
+	var node nodeRow
+	loaded := db.WithContext(ctx).Table("nodes").Select("id").
+		Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+		Where("id = ?", nodeID).Limit(1).Find(&node)
+	if loaded.Error != nil || loaded.RowsAffected != 1 || node.ID != nodeID {
+		return recoveryTargetUnavailableForContext(ctx)
+	}
+	return nil
+}
+
+// List returns only the registry's reviewed safe summary DTO.
+func (service *TargetRootAuthorityService) List(
+	ctx context.Context,
+	nodeID uint,
+) ([]settings.RecoveryTargetRootSummary, error) {
+	if service == nil || service.registry == nil || ctx == nil {
+		return nil, ErrRecoveryTargetUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if nodeID == 0 {
+		return nil, settings.ErrRecoveryTargetRootInvalid
+	}
+	summaries, err := service.registry.ListRecoveryTargetRoots(ctx, nodeID)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, ErrRecoveryTargetUnavailable
+	}
+	return summaries, nil
+}
+
+func validateTargetRootRegistrationRequest(request TargetRootRegistrationRequest) error {
+	if request.NodeID == 0 || request.RootID == "" || !validTargetRootRegistrationSafeLabel(request.SafeLabel) || request.Locator == "" ||
+		request.Policy.ReserveBytes < 0 || request.Policy.ReserveInodes < 0 ||
+		!validTargetRootRegistrationOpaqueBinding(request.Policy.OverlapPolicyBinding) {
+		return settings.ErrRecoveryTargetRootInvalid
+	}
+	if _, err := settings.RecoveryTargetRootLocatorDigest(request.NodeID, request.RootID, request.Locator); err != nil {
+		return settings.ErrRecoveryTargetRootInvalid
+	}
+	return nil
+}
+
+func validTargetRootRegistrationSafeLabel(value string) bool {
+	if !utf8.ValidString(value) || len(value) == 0 || len(value) > 128 || strings.TrimSpace(value) == "" {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
+}
+
+func validTargetRootRegistrationOpaqueBinding(value string) bool {
+	if !utf8.ValidString(value) || len(value) == 0 || len(value) > 256 || strings.TrimSpace(value) == "" {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
+}
+
+func validTargetRootRegistrationObservation(
+	request TargetRootRegistrationRequest,
+	observation TargetRootRegistrationObservation,
+	now time.Time,
+) bool {
+	expectedDigest, err := settings.RecoveryTargetRootLocatorDigest(request.NodeID, request.RootID, request.Locator)
+	if err != nil || observation.NodeID != request.NodeID || observation.RootID != request.RootID ||
+		observation.LocatorDigest != expectedDigest || observation.Purpose != TargetRootRegistrationPurposeReadOnly ||
+		!observation.ReadOnly || observation.NodeRevision != request.NodeRevision ||
+		observation.CredentialRevision != request.CredentialRevision ||
+		!validOpaqueRevision(observation.NodeRevision) || !validOpaqueRevision(observation.CredentialRevision) ||
+		!validOpaqueRevision(observation.RootObservationRevision) || observation.ObservedAt.IsZero() ||
+		observation.ObservedAt.After(now) || now.Sub(observation.ObservedAt) > targetRootRegistrationProbeFreshness {
+		return false
+	}
+	return true
+}
+
+func recoveryTargetRootRegistrationSecurityEquivalent(
+	current settings.RecoveryTargetRootResolution,
+	request TargetRootRegistrationRequest,
+	observation TargetRootRegistrationObservation,
+) bool {
+	expectedDigest, err := settings.RecoveryTargetRootLocatorDigest(request.NodeID, request.RootID, request.Locator)
+	return err == nil && current.LocatorDigest == expectedDigest &&
+		current.RootObservationRevision == observation.RootObservationRevision && current.Policy == request.Policy
+}
+
+type recoveryTargetRootAuthorityNodeCredential struct {
+	nodeRevision        string
+	credentialRevision  string
+	credentialExpiresAt *time.Time
+}
+
+func loadRecoveryTargetRootAuthorityNodeCredential(
+	ctx context.Context,
+	db *gorm.DB,
+	nodeID uint,
+	now time.Time,
+	lock bool,
+) (recoveryTargetRootAuthorityNodeCredential, error) {
+	if ctx == nil || db == nil || nodeID == 0 || now.IsZero() {
+		return recoveryTargetRootAuthorityNodeCredential{}, ErrRecoveryTargetUnavailable
+	}
+	type nodeRow struct {
+		ID        uint
+		Host      string
+		Port      int
+		Username  string
+		AuthType  string
+		SSHKeyID  *uint
+		Archived  bool
+		UpdatedAt time.Time
+	}
+	nodeQuery := db.WithContext(ctx).Table("nodes").
+		Select("id", "host", "port", "username", "auth_type", "ssh_key_id", "archived", "updated_at").
+		Where("id = ?", nodeID).Limit(1)
+	if lock {
+		nodeQuery = nodeQuery.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate})
+	}
+	var node nodeRow
+	loaded := nodeQuery.Find(&node)
+	if loaded.Error != nil || loaded.RowsAffected != 1 || node.ID != nodeID || node.Archived ||
+		node.AuthType != "key" || node.SSHKeyID == nil || *node.SSHKeyID == 0 {
+		return recoveryTargetRootAuthorityNodeCredential{}, recoveryTargetUnavailableForContext(ctx)
+	}
+
+	type credentialRow struct {
+		ID              uint
+		Username        string
+		KeyType         string
+		PrivateKey      string
+		Fingerprint     string
+		Disabled        bool
+		ExpiresAt       *time.Time
+		AllowedPurposes string
+		AllowedNodeIDs  string
+		AllowedNodeTags string
+		UpdatedAt       time.Time
+	}
+	credentialQuery := db.WithContext(ctx).Table("ssh_keys").
+		Select("id", "username", "key_type", "private_key", "fingerprint", "disabled", "expires_at", "allowed_purposes", "allowed_node_ids", "allowed_node_tags", "updated_at").
+		Where("id = ?", *node.SSHKeyID).Limit(1)
+	if lock {
+		credentialQuery = credentialQuery.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate})
+	}
+	var credential credentialRow
+	loaded = credentialQuery.Find(&credential)
+	if loaded.Error != nil || loaded.RowsAffected != 1 || credential.ID != *node.SSHKeyID || credential.Disabled ||
+		credential.PrivateKey == "" || credential.Fingerprint == "" ||
+		(credential.ExpiresAt != nil && !credential.ExpiresAt.After(now)) {
+		return recoveryTargetRootAuthorityNodeCredential{}, recoveryTargetUnavailableForContext(ctx)
+	}
+
+	return recoveryTargetRootAuthorityNodeCredential{
+		nodeRevision: framedDigest(
+			targetRootRegistrationNodeRevisionDomain,
+			strconv.FormatUint(uint64(node.ID), 10), node.Host, strconv.Itoa(node.Port), node.Username,
+			node.AuthType, strconv.FormatUint(uint64(*node.SSHKeyID), 10), strconv.FormatBool(node.Archived),
+			node.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		),
+		credentialRevision: framedDigest(
+			targetRootRegistrationCredentialDomain,
+			strconv.FormatUint(uint64(credential.ID), 10), credential.Username, credential.KeyType,
+			credential.PrivateKey, credential.Fingerprint, strconv.FormatBool(credential.Disabled),
+			authorizationIntentTimePointer(credential.ExpiresAt), credential.AllowedPurposes,
+			credential.AllowedNodeIDs, credential.AllowedNodeTags,
+			credential.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		), credentialExpiresAt: credential.ExpiresAt,
+	}, nil
+}
+
 // PlanServiceDependencies provides the database, private target-root resolver,
 // and injectable clock for plan creation. It intentionally has no Provider
 // dependency: creating a plan only revalidates durable facts and never performs
@@ -102,7 +677,29 @@ type PlanServiceDependencies struct {
 	DB                 *gorm.DB
 	Now                func() time.Time
 	TargetRootResolver RecoveryTargetRootResolver
+	Policy             PlanPolicy
+	PreflightPolicy    PreflightPolicy
 	beforePersist      func(planCreateStage, int) error
+}
+
+const (
+	recoveryPlanPolicyMaxSelectionItems int64 = 100_000
+	recoveryPlanMaxLogicalBytes         int64 = 1 << 40
+)
+
+// PlanPolicy is the immutable installed admission policy for one plan service.
+type PlanPolicy struct {
+	MaxSelectionItems int64
+	MaxLogicalBytes   int64
+}
+
+func (policy PlanPolicy) valid() bool {
+	return policy.MaxSelectionItems > 0 && policy.MaxSelectionItems <= recoveryPlanPolicyMaxSelectionItems &&
+		policy.MaxLogicalBytes > 0 && policy.MaxLogicalBytes <= recoveryPlanMaxLogicalBytes
+}
+
+func (policy PlanPolicy) effectiveSelectionLimit() int64 {
+	return min(policy.MaxSelectionItems, int64(exactSelectionMaxItems))
 }
 
 // PlanService persists an exact recovery plan and its canonical items as one
@@ -112,12 +709,15 @@ type PlanService struct {
 	db                 *gorm.DB
 	now                func() time.Time
 	targetRootResolver RecoveryTargetRootResolver
+	policy             PlanPolicy
+	preflightPolicy    PreflightPolicy
 	beforePersist      func(planCreateStage, int) error
 }
 
 // NewPlanService creates a plan service over the supplied database.
 func NewPlanService(dependencies PlanServiceDependencies) (*PlanService, error) {
-	if dependencies.DB == nil || dependencies.TargetRootResolver == nil {
+	if dependencies.DB == nil || dependencies.TargetRootResolver == nil || !dependencies.Policy.valid() ||
+		!dependencies.PreflightPolicy.valid() {
 		return nil, ErrRecoveryPlanUnavailable
 	}
 	if dependencies.Now == nil {
@@ -125,7 +725,9 @@ func NewPlanService(dependencies PlanServiceDependencies) (*PlanService, error) 
 	}
 	return &PlanService{
 		db: dependencies.DB, now: dependencies.Now, targetRootResolver: dependencies.TargetRootResolver,
-		beforePersist: dependencies.beforePersist,
+		policy:          dependencies.Policy,
+		preflightPolicy: dependencies.PreflightPolicy,
+		beforePersist:   dependencies.beforePersist,
 	}, nil
 }
 
@@ -140,9 +742,13 @@ func (service *PlanService) CreatePlan(ctx context.Context, request CreatePlanRe
 		return CreatePlanResult{}, err
 	}
 	now := service.now().UTC()
+	request.Plan.PreflightExpiresAt = now.Add(service.preflightPolicy.TTL).UTC()
 	normalized, err := normalizeCreatePlanRequest(request, now)
 	if err != nil {
 		return CreatePlanResult{}, err
+	}
+	if service.validatePlanPolicy(normalized) != nil {
+		return CreatePlanResult{}, ErrExactSelectionLimit
 	}
 	keyDigest := planIdempotencyKeyDigest(normalized.RequesterID, normalized.Endpoint, normalized.IdempotencyKey)
 
@@ -226,9 +832,13 @@ func (service *PlanService) CreatePlanTx(ctx context.Context, tx *gorm.DB, reque
 		return CreatePlanResult{}, err
 	}
 	now := service.now().UTC()
+	request.Plan.PreflightExpiresAt = now.Add(service.preflightPolicy.TTL).UTC()
 	normalized, err := normalizeCreatePlanRequest(request, now)
 	if err != nil {
 		return CreatePlanResult{}, err
+	}
+	if service.validatePlanPolicy(normalized) != nil {
+		return CreatePlanResult{}, ErrExactSelectionLimit
 	}
 
 	savepoint := fmt.Sprintf("recovery_plan_create_%d", planSavepointSequence.Add(1))
@@ -297,15 +907,18 @@ func (service *PlanService) createPlanTx(
 		return CreatePlanResult{}, ErrRecoveryPlanUnavailable
 	}
 	plan := recoveryPlanRow(request, keyDigest, planID, source, targetRoot, now)
+	items, logicalBytes, err := recoveryPlanItemRows(ctx, tx, source, request.Selection, planID, now)
+	if err != nil {
+		return CreatePlanResult{}, err
+	}
+	if int64(len(items)) > service.policy.effectiveSelectionLimit() || logicalBytes > service.policy.MaxLogicalBytes {
+		return CreatePlanResult{}, ErrExactSelectionLimit
+	}
 	if err := service.beforePlanPersist(planCreateBeforePlanInsert, -1); err != nil {
 		return CreatePlanResult{}, err
 	}
 	if err := tx.WithContext(ctx).Create(&plan).Error; err != nil {
 		return CreatePlanResult{}, sanitizePlanDatabaseError(ctx, err)
-	}
-	items, err := recoveryPlanItemRows(ctx, tx, source, request.Selection, planID, now)
-	if err != nil {
-		return CreatePlanResult{}, err
 	}
 	for index := range items {
 		if err := service.beforePlanPersist(planCreateBeforeItemInsert, items[index].Ordinal); err != nil {
@@ -316,6 +929,14 @@ func (service *PlanService) createPlanTx(
 		}
 	}
 	return CreatePlanResult{PlanID: planID, State: PlanStateDraft}, nil
+}
+
+func (service *PlanService) validatePlanPolicy(request CreatePlanRequest) error {
+	if service == nil || !service.policy.valid() || int64(len(request.Selection.AssetRefs)) > service.policy.effectiveSelectionLimit() ||
+		request.EstimatedItems > service.policy.effectiveSelectionLimit() || request.EstimatedBytes > service.policy.MaxLogicalBytes {
+		return ErrExactSelectionLimit
+	}
+	return nil
 }
 
 func (service *PlanService) resolvePlanTargetRoot(
@@ -368,6 +989,7 @@ type planReplayRow struct {
 	ID                         string
 	BindingDigest              string
 	State                      string
+	PreflightExpiresAt         time.Time
 	TargetNodeID               uint
 	TargetRootID               string
 	EncryptedTargetRootLocator string
@@ -375,6 +997,8 @@ type planReplayRow struct {
 }
 
 func planCreateResultFromReplay(request CreatePlanRequest, replay planReplayRow) (CreatePlanResult, error) {
+	request.Plan.PreflightExpiresAt = replay.PreflightExpiresAt.UTC()
+	request.Plan.Binding.PlanDigest = planIntentDigest(request)
 	if replay.BindingDigest != request.Plan.Binding.PlanDigest {
 		return CreatePlanResult{}, ErrPlanIdempotencyConflict
 	}
@@ -389,7 +1013,7 @@ func loadPlanReplayTx(
 ) (planReplayRow, bool, error) {
 	var row planReplayRow
 	result := tx.WithContext(ctx).Table((model.BackupAssetRecoveryPlan{}).TableName()).
-		Select("id, binding_digest, state, target_node_id, target_root_id, encrypted_target_root_locator, root_locator_digest").
+		Select("id, binding_digest, state, preflight_expires_at, target_node_id, target_root_id, encrypted_target_root_locator, root_locator_digest").
 		Where("requester_id = ? AND endpoint = ? AND idempotency_key_digest = ?", requesterID, endpoint, keyDigest).
 		Limit(1).Find(&row)
 	if result.Error != nil {
@@ -399,6 +1023,7 @@ func loadPlanReplayTx(
 		return planReplayRow{}, false, nil
 	}
 	if !validOpaqueID(row.ID) || !validDigest(row.BindingDigest) || !PlanState(row.State).Valid() ||
+		row.PreflightExpiresAt.IsZero() ||
 		!strings.HasPrefix(row.EncryptedTargetRootLocator, "enc:v2:") {
 		return planReplayRow{}, false, ErrRecoveryPlanUnavailable
 	}
@@ -573,26 +1198,26 @@ func recoveryPlanItemRows(
 	selection ExactSelection,
 	planID string,
 	now time.Time,
-) ([]model.BackupAssetRecoveryPlanItem, error) {
+) ([]model.BackupAssetRecoveryPlanItem, int64, error) {
 	entryIDs := make([]string, 0, len(selection.AssetRefs))
 	for _, ref := range selection.AssetRefs {
 		entryIDs = append(entryIDs, ref.EntryID)
 	}
 	var entries []catalogEntrySourceRow
 	result := tx.WithContext(ctx).Table("catalog_entries").Clauses(recoverySourceRowLock()).
-		Select("generation_id, entry_id, recovery_point_id, parent_entry_id, normalized_path, entry_type").
+		Select("generation_id, entry_id, recovery_point_id, parent_entry_id, normalized_path, entry_type, size").
 		Where("generation_id = ? AND recovery_point_id = ? AND entry_id IN ?", selection.CatalogGenerationID, selection.RecoveryPointID, entryIDs).
 		Find(&entries)
 	if result.Error != nil {
-		return nil, sanitizePlanDatabaseError(ctx, result.Error)
+		return nil, 0, sanitizePlanDatabaseError(ctx, result.Error)
 	}
 	if len(entries) != len(selection.AssetRefs) {
-		return nil, ErrRecoverySourceChanged
+		return nil, 0, ErrRecoverySourceChanged
 	}
 	byEntryID := make(map[string]catalogEntrySourceRow, len(entries))
 	for _, entry := range entries {
 		if !validCatalogLeafForSource(entry, source) {
-			return nil, ErrRecoverySourceChanged
+			return nil, 0, ErrRecoverySourceChanged
 		}
 		byEntryID[entry.EntryID] = entry
 	}
@@ -601,14 +1226,19 @@ func recoveryPlanItemRows(
 		sourceFingerprint = selection.SourceRevision.MutableObservation.SourceFingerprint
 	}
 	items := make([]model.BackupAssetRecoveryPlanItem, 0, len(selection.AssetRefs))
+	var logicalBytes int64
 	for ordinal, ref := range selection.AssetRefs {
 		entry, found := byEntryID[ref.EntryID]
 		if !found {
-			return nil, ErrRecoverySourceChanged
+			return nil, 0, ErrRecoverySourceChanged
 		}
+		if entry.Size < 0 || entry.Size > recoveryPlanMaxLogicalBytes-logicalBytes {
+			return nil, 0, ErrExactSelectionLimit
+		}
+		logicalBytes += entry.Size
 		itemID, err := backupasset.NewOpaqueID()
 		if err != nil {
-			return nil, ErrRecoveryPlanUnavailable
+			return nil, 0, ErrRecoveryPlanUnavailable
 		}
 		items = append(items, model.BackupAssetRecoveryPlanItem{
 			ID:                  itemID,
@@ -626,7 +1256,7 @@ func recoveryPlanItemRows(
 			CreatedAt: now,
 		})
 	}
-	return items, nil
+	return items, logicalBytes, nil
 }
 
 func sanitizePlanSourceError(ctx context.Context, err error) error {
@@ -681,7 +1311,7 @@ func classifyPlanCreateError(ctx context.Context, err error) error {
 		return ctxErr
 	}
 	if errors.Is(err, errPlanIdempotencyRace) || errors.Is(err, errPlanDatabaseBusy) ||
-		errors.Is(err, ErrInvalidRecoveryPlan) || errors.Is(err, ErrPlanIdempotencyConflict) ||
+		errors.Is(err, ErrInvalidRecoveryPlan) || errors.Is(err, ErrExactSelectionLimit) || errors.Is(err, ErrPlanIdempotencyConflict) ||
 		errors.Is(err, ErrRecoverySourceUnavailable) || errors.Is(err, ErrRecoverySourceChanged) ||
 		errors.Is(err, ErrRecoveryTargetChanged) || errors.Is(err, ErrRecoveryPlanUnavailable) {
 		return err
@@ -703,7 +1333,7 @@ func publicPlanCreateError(ctx context.Context, err error) error {
 	switch {
 	case isPlanCreateFault(err):
 		return err
-	case errors.Is(err, ErrInvalidRecoveryPlan), errors.Is(err, ErrPlanIdempotencyConflict),
+	case errors.Is(err, ErrInvalidRecoveryPlan), errors.Is(err, ErrExactSelectionLimit), errors.Is(err, ErrPlanIdempotencyConflict),
 		errors.Is(err, ErrRecoverySourceUnavailable), errors.Is(err, ErrRecoverySourceChanged),
 		errors.Is(err, ErrRecoveryTargetChanged), errors.Is(err, ErrRecoveryPlanUnavailable):
 		return err
@@ -1076,6 +1706,7 @@ type catalogEntrySourceRow struct {
 	ParentEntryID   *string `gorm:"column:parent_entry_id"`
 	NormalizedPath  string  `gorm:"column:normalized_path"`
 	EntryType       string  `gorm:"column:entry_type"`
+	Size            int64   `gorm:"column:size"`
 }
 
 func loadValidatedSource(ctx context.Context, tx *gorm.DB, repositoryID, recoveryPointID, catalogGenerationID string) (validatedSource, error) {
@@ -1705,11 +2336,17 @@ type RecoveryLocatorKeyring interface {
 // execute can commit. It deliberately excludes raw locators and credentials.
 type RecoveryAuthorityBinding struct {
 	Operation                     AuthorizationReceiptOperation
+	Provider                      backupasset.ProviderKind
 	PlanID                        string
+	PlanBindingDigest             string
+	PlanTransitionRevision        uint64
 	RepositoryID                  string
 	RecoveryPointID               string
+	CatalogGenerationID           string
 	SelectionDigest               string
 	SourceRevisionDigest          string
+	ManifestDigest                string
+	SourceRef                     provider.RsyncRestoreSourceRef
 	TargetMode                    TargetMode
 	TargetNodeID                  uint
 	TargetRootID                  string
@@ -1732,18 +2369,30 @@ type RecoveryAuthorityBinding struct {
 	PreflightRevision             string
 	PreflightTargetRevision       string
 	PreflightNodeRevision         string
+	RequiredBytes                 int64
+	RequiredInodes                int64
 }
 
 // RecoveryAuthorityRevalidator checks the current target/node/credential,
 // capability, policy, and finding product in the caller-owned transaction.
 // Implementations must fail closed when current evidence is unavailable.
 type RecoveryAuthorityRevalidator interface {
-	RevalidateRecoveryAuthorityTx(context.Context, *gorm.DB, RecoveryAuthorityBinding) error
+	ObserveRecoveryAuthority(
+		context.Context,
+		RecoveryAuthorityBinding,
+	) (RecoveryAuthorityObservation, error)
+	RevalidateRecoveryAuthorityTx(
+		context.Context,
+		*gorm.DB,
+		RecoveryAuthorityBinding,
+		RecoveryAuthorityObservation,
+	) error
 }
 
 type AuthorizationServiceDependencies struct {
 	DB               *gorm.DB
 	Now              func() time.Time
+	Metrics          Metrics
 	SourceLeases     *backupasset.LeaseService
 	NodeAdmission    RecoveryNodeAdmission
 	LiveRevalidator  RecoveryAuthorityRevalidator
@@ -1753,6 +2402,7 @@ type AuthorizationServiceDependencies struct {
 	WriteGrantTTL    time.Duration
 	DeleteGrantTTL   time.Duration
 	NodeLeaseTTL     time.Duration
+	Policy           WorkerPolicy
 }
 
 type authorizationPersistStage uint8
@@ -1764,6 +2414,7 @@ const (
 type AuthorizationService struct {
 	db               *gorm.DB
 	now              func() time.Time
+	metrics          Metrics
 	sourceValidator  *SourceValidator
 	sourceLeases     *backupasset.LeaseService
 	nodeAdmission    RecoveryNodeAdmission
@@ -1774,6 +2425,7 @@ type AuthorizationService struct {
 	writeGrantTTL    time.Duration
 	deleteGrantTTL   time.Duration
 	nodeLeaseTTL     time.Duration
+	policy           WorkerPolicy
 	beforePersist    func(authorizationPersistStage) error
 }
 
@@ -1819,6 +2471,7 @@ func NewAuthorizationService(dependencies AuthorizationServiceDependencies) (*Au
 		dependencies.LiveRevalidator == nil || dependencies.LocatorKeys == nil ||
 		dependencies.ReceiptReplayTTL <= 0 || dependencies.WriteGrantTTL <= 0 ||
 		dependencies.DeleteGrantTTL <= 0 || dependencies.NodeLeaseTTL <= 0 ||
+		!dependencies.Policy.valid() || dependencies.Policy.LeaseRenewMargin >= dependencies.NodeLeaseTTL ||
 		dependencies.WriteGrantTTL > dependencies.ReceiptReplayTTL ||
 		dependencies.DeleteGrantTTL > dependencies.ReceiptReplayTTL {
 		return nil, ErrAuthorizationUnavailable
@@ -1826,16 +2479,20 @@ func NewAuthorizationService(dependencies AuthorizationServiceDependencies) (*Au
 	if dependencies.Now == nil {
 		dependencies.Now = func() time.Time { return time.Now().UTC() }
 	}
+	if dependencies.Metrics == nil {
+		dependencies.Metrics = NoopMetrics{}
+	}
 	sourceValidator, err := NewSourceValidator(dependencies.DB)
 	if err != nil {
 		return nil, ErrAuthorizationUnavailable
 	}
 	return &AuthorizationService{
-		db: dependencies.DB, now: dependencies.Now, sourceValidator: sourceValidator, sourceLeases: dependencies.SourceLeases,
+		db: dependencies.DB, now: dependencies.Now, metrics: dependencies.Metrics, sourceValidator: sourceValidator, sourceLeases: dependencies.SourceLeases,
 		nodeAdmission: dependencies.NodeAdmission, liveRevalidator: dependencies.LiveRevalidator, auditWriter: dependencies.AuditWriter,
 		locatorKeys:      dependencies.LocatorKeys,
 		receiptReplayTTL: dependencies.ReceiptReplayTTL, writeGrantTTL: dependencies.WriteGrantTTL,
 		deleteGrantTTL: dependencies.DeleteGrantTTL, nodeLeaseTTL: dependencies.NodeLeaseTTL,
+		policy: dependencies.Policy,
 	}, nil
 }
 
@@ -1867,10 +2524,16 @@ func (service *AuthorizationService) ReplayAuthorization(
 func (service *AuthorizationService) Authorize(
 	ctx context.Context,
 	request RecoveryAuthorizationRequest,
-) (RecoveryAuthorizationResult, error) {
+) (result RecoveryAuthorizationResult, resultErr error) {
 	if service == nil || service.db == nil {
 		return RecoveryAuthorizationResult{}, ErrAuthorizationUnavailable
 	}
+	effectTransactionStarted := false
+	defer func() {
+		if resultErr != nil && !effectTransactionStarted {
+			service.metrics.ObserveCategory(request.Category, recoveryAuthorizationMetricOutcome(resultErr))
+		}
+	}()
 	ctx = sourceValidationContext(ctx)
 	if err := ctx.Err(); err != nil {
 		return RecoveryAuthorizationResult{}, err
@@ -1947,8 +2610,16 @@ func (service *AuthorizationService) Authorize(
 	}
 
 	for attempt := 0; attempt < authorizationRetryAttempts; attempt++ {
-		result, authorizeErr := service.authorizeOnce(ctx, normalized, preparedExecute)
+		effectTransactionStarted = true
+		result, created, authorizeErr := service.authorizeOnce(ctx, normalized, preparedExecute)
 		if authorizeErr == nil {
+			if created && normalized.request.Operation == AuthorizationReceiptExecute {
+				provider, _ := recoveryJobProvider(ctx, service.db, result.JobID)
+				service.metrics.ObserveState(provider, JobStateQueued)
+			}
+			if created {
+				service.metrics.ObserveCategory(normalized.request.Category, MetricOutcomeSuccess)
+			}
 			service.writeAuthorizationAudit(ctx, normalized.request, result)
 			return result, nil
 		}
@@ -1979,9 +2650,14 @@ func (service *AuthorizationService) authorizeOnce(
 	ctx context.Context,
 	normalized normalizedRecoveryAuthorization,
 	preparedExecute *preparedExecuteAggregate,
-) (RecoveryAuthorizationResult, error) {
+) (RecoveryAuthorizationResult, bool, error) {
+	authority, err := service.observeAuthorizationAuthority(ctx, normalized)
+	if err != nil {
+		return RecoveryAuthorizationResult{}, false, err
+	}
 	var result RecoveryAuthorizationResult
-	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	created := false
+	err = service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if replay, found, err := loadAuthorizationReplay(ctx, tx, normalized, service.now().UTC()); found || err != nil {
 			result = replay
 			return err
@@ -1993,7 +2669,7 @@ func (service *AuthorizationService) authorizeOnce(
 		if used {
 			return ErrAuthorizationProofUsed
 		}
-		result, err = service.persistAuthorizationTx(ctx, tx, normalized, preparedExecute)
+		result, err = service.persistAuthorizationTx(ctx, tx, normalized, preparedExecute, authority)
 		if err != nil {
 			return err
 		}
@@ -2002,12 +2678,64 @@ func (service *AuthorizationService) authorizeOnce(
 				return &authorizationFaultError{cause: err}
 			}
 		}
+		created = true
 		return nil
 	})
 	if err != nil {
-		return RecoveryAuthorizationResult{}, err
+		return RecoveryAuthorizationResult{}, false, err
 	}
-	return result, nil
+	return result, created, nil
+}
+
+type observedAuthorizationAuthority struct {
+	binding     RecoveryAuthorityBinding
+	observation RecoveryAuthorityObservation
+}
+
+func (service *AuthorizationService) observeAuthorizationAuthority(
+	ctx context.Context,
+	normalized normalizedRecoveryAuthorization,
+) (observedAuthorizationAuthority, error) {
+	if service == nil || service.db == nil || service.liveRevalidator == nil {
+		return observedAuthorizationAuthority{}, ErrAuthorizationUnavailable
+	}
+	intent, err := loadAuthorizationIntentBinding(ctx, service.db, normalized.request)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return observedAuthorizationAuthority{}, ctxErr
+		}
+		if isAuthorizationRetryable(err) {
+			return observedAuthorizationAuthority{}, err
+		}
+		return observedAuthorizationAuthority{}, ErrAuthorizationDenied
+	}
+	if intent.plan.RequesterID != normalized.request.RequesterID ||
+		intent.plan.TransitionRevision != normalized.request.ExpectedPlanRevision ||
+		intent.preflight.ID == "" || intent.preflight.PlanID != intent.plan.ID {
+		return observedAuthorizationAuthority{}, ErrAuthorizationDenied
+	}
+	if err := validateAuthorizationPreflightBindings(intent.plan, intent.preflight, service.now().UTC()); err != nil {
+		return observedAuthorizationAuthority{}, ErrAuthorizationDenied
+	}
+	providerKind, err := recoveryAuthorityProvider(ctx, service.db, intent.plan)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return observedAuthorizationAuthority{}, ctxErr
+		}
+		if isAuthorizationRetryable(err) {
+			return observedAuthorizationAuthority{}, err
+		}
+		return observedAuthorizationAuthority{}, ErrAuthorizationDenied
+	}
+	binding := recoveryAuthorityBinding(normalized.request.Operation, providerKind, intent.plan, intent.preflight)
+	observation, err := service.liveRevalidator.ObserveRecoveryAuthority(ctx, binding)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return observedAuthorizationAuthority{}, ctxErr
+		}
+		return observedAuthorizationAuthority{}, ErrAuthorizationDenied
+	}
+	return observedAuthorizationAuthority{binding: binding, observation: observation}, nil
 }
 
 type authorizationFaultError struct{ cause error }
@@ -2730,6 +3458,7 @@ func (service *AuthorizationService) persistAuthorizationTx(
 	tx *gorm.DB,
 	normalized normalizedRecoveryAuthorization,
 	preparedExecute *preparedExecuteAggregate,
+	authority observedAuthorizationAuthority,
 ) (RecoveryAuthorizationResult, error) {
 	now := service.now().UTC()
 	var plan model.BackupAssetRecoveryPlan
@@ -2750,13 +3479,13 @@ func (service *AuthorizationService) persistAuthorizationTx(
 	var err error
 	switch normalized.request.Operation {
 	case AuthorizationReceiptSecurityOverride:
-		result, err = service.persistSecurityOverrideTx(ctx, tx, normalized, &plan, now)
+		result, err = service.persistSecurityOverrideTx(ctx, tx, normalized, &plan, now, authority)
 	case AuthorizationReceiptWriteAuthorize:
-		result, err = service.persistWriteAuthorizationTx(ctx, tx, normalized, &plan, now)
+		result, err = service.persistWriteAuthorizationTx(ctx, tx, normalized, &plan, now, authority)
 	case AuthorizationReceiptExecute:
-		result, err = service.persistExecuteAuthorizationTx(ctx, tx, normalized, &plan, preparedExecute, now)
+		result, err = service.persistExecuteAuthorizationTx(ctx, tx, normalized, &plan, preparedExecute, now, authority)
 	case AuthorizationReceiptDeleteAuthorize:
-		result, err = service.persistDeleteAuthorizationTx(ctx, tx, normalized, &plan, now)
+		result, err = service.persistDeleteAuthorizationTx(ctx, tx, normalized, &plan, now, authority)
 	default:
 		err = ErrInvalidRecoveryAuthorization
 	}
@@ -2787,6 +3516,7 @@ func (service *AuthorizationService) persistSecurityOverrideTx(
 	normalized normalizedRecoveryAuthorization,
 	plan *model.BackupAssetRecoveryPlan,
 	now time.Time,
+	authority observedAuthorizationAuthority,
 ) (RecoveryAuthorizationResult, error) {
 	if PlanState(plan.State) != PlanStatePreflightReady || plan.SecurityDecision != string(SecurityDecisionBlock) ||
 		normalized.request.PreflightID == "" || !validOpaqueID(normalized.request.PreflightID) ||
@@ -2811,8 +3541,9 @@ func (service *AuthorizationService) persistSecurityOverrideTx(
 	if err := service.sourceValidator.RevalidatePlanTx(ctx, tx, *plan); err != nil {
 		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
 	}
-	if err := service.liveRevalidator.RevalidateRecoveryAuthorityTx(ctx, tx,
-		recoveryAuthorityBinding(normalized.request.Operation, *plan, preflight)); err != nil {
+	if err := service.revalidateAuthorizationAuthorityTx(
+		ctx, tx, normalized.request.Operation, *plan, preflight, authority,
+	); err != nil {
 		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
 	}
 	nextRevision := plan.TransitionRevision + 1
@@ -2853,6 +3584,7 @@ func (service *AuthorizationService) persistWriteAuthorizationTx(
 	normalized normalizedRecoveryAuthorization,
 	plan *model.BackupAssetRecoveryPlan,
 	now time.Time,
+	authority observedAuthorizationAuthority,
 ) (RecoveryAuthorizationResult, error) {
 	if PlanState(plan.State) != PlanStatePreflightReady ||
 		(plan.SecurityDecision != string(SecurityDecisionAllowClean) && plan.SecurityDecision != string(SecurityDecisionAdminOverride)) ||
@@ -2874,8 +3606,9 @@ func (service *AuthorizationService) persistWriteAuthorizationTx(
 	if err := service.sourceValidator.RevalidatePlanTx(ctx, tx, *plan); err != nil {
 		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
 	}
-	if err := service.liveRevalidator.RevalidateRecoveryAuthorityTx(ctx, tx,
-		recoveryAuthorityBinding(normalized.request.Operation, *plan, preflight)); err != nil {
+	if err := service.revalidateAuthorizationAuthorityTx(
+		ctx, tx, normalized.request.Operation, *plan, preflight, authority,
+	); err != nil {
 		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
 	}
 	grantID, err := backupasset.NewOpaqueID()
@@ -2917,6 +3650,7 @@ func (service *AuthorizationService) persistExecuteAuthorizationTx(
 	plan *model.BackupAssetRecoveryPlan,
 	prepared *preparedExecuteAggregate,
 	now time.Time,
+	authority observedAuthorizationAuthority,
 ) (RecoveryAuthorizationResult, error) {
 	if PlanState(plan.State) != PlanStateAuthorized || !validOpaqueID(normalized.request.GrantID) ||
 		!validOpaqueID(normalized.request.PreflightID) || !now.Before(plan.PreflightExpiresAt.UTC()) ||
@@ -2938,8 +3672,9 @@ func (service *AuthorizationService) persistExecuteAuthorizationTx(
 	if err := service.sourceValidator.RevalidatePlanTx(ctx, tx, *plan); err != nil {
 		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
 	}
-	if err := service.liveRevalidator.RevalidateRecoveryAuthorityTx(ctx, tx,
-		recoveryAuthorityBinding(normalized.request.Operation, *plan, preflight)); err != nil {
+	if err := service.revalidateAuthorizationAuthorityTx(
+		ctx, tx, normalized.request.Operation, *plan, preflight, authority,
+	); err != nil {
 		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
 	}
 	operationRows, err := rebuildExecuteOperationRows(*plan, preflight, tx.WithContext(ctx))
@@ -2984,8 +3719,18 @@ func (service *AuthorizationService) persistExecuteAuthorizationTx(
 	}
 
 	jobID := prepared.jobID
+	absoluteDeadline := now.Add(service.policy.ExecutionTimeout).UTC()
+	for _, bound := range []time.Time{grant.ExpiresAt.UTC(), preflight.ExpiresAt.UTC()} {
+		if bound.Before(absoluteDeadline) {
+			absoluteDeadline = bound
+		}
+	}
+	if !absoluteDeadline.After(now) {
+		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
+	}
 	sourceLease, err := service.sourceLeases.AcquireTx(ctx, tx, backupasset.AcquireLeaseRequest{
 		RecoveryPointID: plan.RecoveryPointID, HolderType: backupasset.LeaseHolderRecoveryJob, OwnerID: jobID,
+		AbsoluteDeadline: absoluteDeadline,
 	})
 	if err != nil {
 		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
@@ -3024,6 +3769,12 @@ func (service *AuthorizationService) persistExecuteAuthorizationTx(
 		}
 	}
 	leaseExpiresAt := now.Add(service.nodeLeaseTTL)
+	if sourceLease.LeaseExpiresAt.Before(leaseExpiresAt) {
+		leaseExpiresAt = sourceLease.LeaseExpiresAt.UTC()
+	}
+	if sourceLease.AbsoluteDeadline.Before(leaseExpiresAt) {
+		leaseExpiresAt = sourceLease.AbsoluteDeadline.UTC()
+	}
 	attempt := model.BackupAssetRecoveryAttempt{
 		ID: attemptID, JobID: jobID, OwnerID: "recovery-authorization", Fence: 1,
 		State: "claimed", LeaseExpiresAt: timePointerValue(leaseExpiresAt),
@@ -3132,16 +3883,28 @@ func sameRecoveryLocatorKey(left, right backupasset.DomainKeyMaterial) bool {
 
 func recoveryAuthorityBinding(
 	operation AuthorizationReceiptOperation,
+	providerKind backupasset.ProviderKind,
 	plan model.BackupAssetRecoveryPlan,
 	preflight model.BackupAssetRecoveryPreflight,
 ) RecoveryAuthorityBinding {
 	return RecoveryAuthorityBinding{
-		Operation:                     operation,
-		PlanID:                        plan.ID,
-		RepositoryID:                  plan.RepositoryID,
-		RecoveryPointID:               plan.RecoveryPointID,
-		SelectionDigest:               plan.SelectionDigest,
-		SourceRevisionDigest:          plan.SourceRevisionDigest,
+		Operation:              operation,
+		Provider:               providerKind,
+		PlanID:                 plan.ID,
+		PlanBindingDigest:      plan.BindingDigest,
+		PlanTransitionRevision: plan.TransitionRevision,
+		RepositoryID:           plan.RepositoryID,
+		RecoveryPointID:        plan.RecoveryPointID,
+		CatalogGenerationID:    plan.CatalogGenerationID,
+		SelectionDigest:        plan.SelectionDigest,
+		SourceRevisionDigest:   plan.SourceRevisionDigest,
+		ManifestDigest:         plan.ImmutableManifestDigest,
+		SourceRef: provider.RsyncRestoreSourceRef{
+			PlanID: plan.ID, PlanBindingDigest: plan.BindingDigest,
+			RepositoryID: plan.RepositoryID, RecoveryPointID: plan.RecoveryPointID,
+			CatalogGenerationID: plan.CatalogGenerationID, SelectionDigest: plan.SelectionDigest,
+			SourceRevisionDigest: plan.SourceRevisionDigest, ManifestDigest: plan.ImmutableManifestDigest,
+		},
 		TargetMode:                    TargetMode(plan.TargetMode),
 		TargetNodeID:                  plan.TargetNodeID,
 		TargetRootID:                  plan.TargetRootID,
@@ -3164,7 +3927,61 @@ func recoveryAuthorityBinding(
 		PreflightRevision:             preflight.Revision,
 		PreflightTargetRevision:       preflight.TargetRevision,
 		PreflightNodeRevision:         preflight.NodeRevision,
+		RequiredBytes:                 preflight.EstimatedBytes,
+		RequiredInodes:                preflight.EstimatedItems,
 	}
+}
+
+func recoveryAuthorityProvider(
+	ctx context.Context,
+	db *gorm.DB,
+	plan model.BackupAssetRecoveryPlan,
+) (backupasset.ProviderKind, error) {
+	if db == nil || db.Error != nil || !validOpaqueID(plan.RepositoryID) || !validOpaqueID(plan.RecoveryPointID) {
+		return "", ErrRecoverySourceUnavailable
+	}
+	var source struct {
+		RepositoryID    string `gorm:"column:repository_id"`
+		RecoveryPointID string `gorm:"column:recovery_point_id"`
+		ProviderKind    string `gorm:"column:provider_kind"`
+	}
+	loaded := db.WithContext(ctx).Table("backup_repositories AS repositories").
+		Select("repositories.id AS repository_id, points.id AS recovery_point_id, repositories.provider_kind").
+		Joins("JOIN recovery_points AS points ON points.repository_id = repositories.id").
+		Where("repositories.id = ? AND points.id = ?", plan.RepositoryID, plan.RecoveryPointID).
+		Limit(1).Find(&source)
+	if loaded.Error != nil {
+		return "", loaded.Error
+	}
+	providerKind := backupasset.ProviderKind(source.ProviderKind)
+	if loaded.RowsAffected != 1 || source.RepositoryID != plan.RepositoryID ||
+		source.RecoveryPointID != plan.RecoveryPointID || !validRecoveryProvider(providerKind) {
+		return "", ErrRecoverySourceChanged
+	}
+	return providerKind, nil
+}
+
+func (service *AuthorizationService) revalidateAuthorizationAuthorityTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	operation AuthorizationReceiptOperation,
+	plan model.BackupAssetRecoveryPlan,
+	preflight model.BackupAssetRecoveryPreflight,
+	authority observedAuthorizationAuthority,
+) error {
+	if service == nil || service.liveRevalidator == nil || tx == nil || tx.Error != nil ||
+		authority.binding.Operation != operation || authority.binding.PlanID != plan.ID ||
+		authority.binding.PreflightID != preflight.ID {
+		return ErrAuthorizationDenied
+	}
+	providerKind, err := recoveryAuthorityProvider(ctx, tx, plan)
+	if err != nil {
+		return err
+	}
+	lockedBinding := recoveryAuthorityBinding(operation, providerKind, plan, preflight)
+	return service.liveRevalidator.RevalidateRecoveryAuthorityTx(
+		ctx, tx, lockedBinding, authority.observation,
+	)
 }
 
 func validateAuthorizationPreflightBindings(
@@ -3528,6 +4345,7 @@ func (service *AuthorizationService) persistDeleteAuthorizationTx(
 	normalized normalizedRecoveryAuthorization,
 	plan *model.BackupAssetRecoveryPlan,
 	now time.Time,
+	authority observedAuthorizationAuthority,
 ) (RecoveryAuthorizationResult, error) {
 	if PlanState(plan.State) != PlanStateExecuted || plan.TargetMode != string(TargetModeInPlace) ||
 		!validOpaqueID(normalized.request.JobID) || !validOpaqueID(normalized.request.CheckpointID) ||
@@ -3560,6 +4378,23 @@ func (service *AuthorizationService) persistDeleteAuthorizationTx(
 		return RecoveryAuthorizationResult{}, loaded.Error
 	}
 	if loaded.RowsAffected != 1 || nodeLease.Fence != checkpoint.NodeFence {
+		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
+	}
+	var preflight model.BackupAssetRecoveryPreflight
+	loaded = tx.WithContext(ctx).Where("id = ? AND plan_id = ?", job.PreflightID, plan.ID).
+		Limit(1).Find(&preflight)
+	if loaded.Error != nil {
+		return RecoveryAuthorizationResult{}, loaded.Error
+	}
+	if loaded.RowsAffected != 1 || validateAuthorizationPreflightBindings(*plan, preflight, now) != nil {
+		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
+	}
+	if err := service.sourceValidator.RevalidatePlanTx(ctx, tx, *plan); err != nil {
+		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
+	}
+	if err := service.revalidateAuthorizationAuthorityTx(
+		ctx, tx, normalized.request.Operation, *plan, preflight, authority,
+	); err != nil {
 		return RecoveryAuthorizationResult{}, ErrAuthorizationDenied
 	}
 	grantExpiresAt := normalized.grantExpiresAt
@@ -3682,9 +4517,37 @@ func (service *AuthorizationService) ReapAuthorizationReceipts(ctx context.Conte
 	if service == nil || service.db == nil || limit <= 0 || limit > 1000 {
 		return 0, ErrAuthorizationUnavailable
 	}
+	return reapAuthorizationReceipts(ctx, service.db, limit)
+}
+
+// AuthorizationReceiptReaper is the maintenance-only database boundary used
+// when Recovery admission is disabled and the full authorization graph is not
+// constructed.
+type AuthorizationReceiptReaper struct {
+	db *gorm.DB
+}
+
+func NewAuthorizationReceiptReaper(db *gorm.DB) (*AuthorizationReceiptReaper, error) {
+	if db == nil {
+		return nil, ErrAuthorizationUnavailable
+	}
+	return &AuthorizationReceiptReaper{db: db}, nil
+}
+
+func (reaper *AuthorizationReceiptReaper) ReapAuthorizationReceipts(
+	ctx context.Context,
+	limit int,
+) (int, error) {
+	if reaper == nil || reaper.db == nil || limit <= 0 || limit > 1000 {
+		return 0, ErrAuthorizationUnavailable
+	}
+	return reapAuthorizationReceipts(ctx, reaper.db, limit)
+}
+
+func reapAuthorizationReceipts(ctx context.Context, db *gorm.DB, limit int) (int, error) {
 	ctx = sourceValidationContext(ctx)
 	removed := 0
-	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Keep candidate selection and deletion in one statement/transaction. The
 		// predicate is deliberately stricter than the row CHECKs so a malformed
 		// historical receipt cannot be selected ahead of an eligible row.
@@ -3943,6 +4806,17 @@ type RecoveryReconciliationServiceDependencies struct {
 	Target    TargetReconciliationPort
 	Audit     RecoveryAuthorizationAuditWriter
 	Findings  RecoveryReconciliationFindingSink
+	Policy    ReconciliationPolicy
+}
+
+// ReconciliationPolicy owns the configurable finding bound while the target
+// retains the immutable protocol hard cap.
+type ReconciliationPolicy struct {
+	FindingLimit int
+}
+
+func (policy ReconciliationPolicy) valid() bool {
+	return policy.FindingLimit > 0 && policy.FindingLimit <= recoveryReconciliationFindingLimit
 }
 
 type RecoveryReconciliationService struct {
@@ -3954,6 +4828,7 @@ type RecoveryReconciliationService struct {
 	target    TargetReconciliationPort
 	audit     RecoveryAuthorizationAuditWriter
 	findings  RecoveryReconciliationFindingSink
+	policy    ReconciliationPolicy
 }
 
 type recoveryReconciliationExpectedSnapshot struct {
@@ -3978,13 +4853,13 @@ func NewRecoveryReconciliationService(
 ) (*RecoveryReconciliationService, error) {
 	if dependencies.DB == nil || dependencies.Now == nil || dependencies.Roots == nil || dependencies.Revisions == nil ||
 		dependencies.Keys == nil || dependencies.Target == nil || dependencies.Audit == nil ||
-		dependencies.Findings == nil {
+		dependencies.Findings == nil || !dependencies.Policy.valid() {
 		return nil, ErrInvalidRecoveryReconciliation
 	}
 	return &RecoveryReconciliationService{
 		db: dependencies.DB, now: dependencies.Now, roots: dependencies.Roots, revisions: dependencies.Revisions,
 		keys: dependencies.Keys, target: dependencies.Target, audit: dependencies.Audit,
-		findings: dependencies.Findings,
+		findings: dependencies.Findings, policy: dependencies.Policy,
 	}, nil
 }
 
@@ -4066,7 +4941,7 @@ func (service *RecoveryReconciliationService) reconcileRoot(
 		NodeID: request.NodeID, RootID: request.RootID, RootLocatorDigest: snapshot.root.LocatorDigest,
 		RootRevision: snapshot.session.rootRevision, ExpectedSetDigest: expectedDigest,
 		PageLimit: recoveryReconciliationPageLimit, ChainLimit: recoveryReconciliationChainLimit,
-		FindingLimit: recoveryReconciliationFindingLimit, Cursor: request.Cursor,
+		FindingLimit: service.policy.FindingLimit, Cursor: request.Cursor,
 		AdmissionGeneration: admissionGeneration, ExpiresAt: now.Add(recoveryReconciliationPermitTTL),
 	}
 	proof := &targetReconciliationPermitProof{

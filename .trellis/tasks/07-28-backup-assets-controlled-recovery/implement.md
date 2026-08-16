@@ -37,7 +37,7 @@ i18next; Trellis task/PR/CI workflow.
 task:                     .trellis/tasks/07-28-backup-assets-controlled-recovery
 status:                   in_progress
 parent:                   07-12-backup-data-explorer-design (planning)
-branch:                   codex/backup-assets-controlled-recovery
+branch:                   codex/task8-managed-runtime
 planning baseline:        51771654a85967656fe1ca69686590b734ff9214
 delivered program state:  12/15
 original planning artifacts: complete_approved (two independent rereviews, 2026-07-28)
@@ -63,9 +63,11 @@ Task 6 F6:                complete_approved (focused live-mutation-permit scope 
 Task 6 F3:                complete_checked (focused persistent scheduler/pre-write-drift/replay scope only)
 Task 6 F4:                complete_checked (focused workspace/deadline/cleanup-only scope only)
 Task 6 execution:         complete_checked (20 corrections; whole spec/quality review and final gates passed)
-Tasks 7-10 execution:     not_executed
+Task 7 execution:         complete_checked_whole_scope; delivered through PR #410
+Task 8 execution:         in_progress_b7_complete_checkpoint
+Tasks 9-10 execution:     not_executed
 Task 5 receipt evidence:  focused SQLite/real-PostgreSQL normal and race gates passed; both independent reviews approved
-actual dirty union:       82 = 80 manifest + unrelated go.mod + recovery/testdata/rsync_local_to_remote.json
+Task 8 dirty union:       34 paths; approved product/task-local evidence scope; staged zero
 stage/commit/push/PR/CI/merge: not_executed
 parent completion:        forbidden in Child 13
 ```
@@ -725,6 +727,38 @@ value and reuse by another action. The base product manifest remains exactly
 Foundation-owned paths are reported separately as `approved_exception` by the
 structural gate. No other path outside the base manifest or this two-path
 exception is authorized.
+
+### 2.5g Task 8 Current-Baseline Reconciliation (2026-08-12)
+
+Tasks 1--7 were delivered through PR #410 before Task 8 began. The dated
+Phase-1 create/modify classification remains immutable planning history, but
+it is not a current-HEAD assertion. At `987ebc9f94c6a5230e1ab27bf89eaa9d5c150c4c`,
+36 of the 55 historical create paths are already tracked and 19 remain absent.
+This is expected delivery progress, not duplicate creation or scope growth.
+
+For Task 8, the already tracked Recovery service, runtime owner and handler
+paths are modifications. The only Task-8 product paths still genuinely created
+are `backend/internal/backupasset/recovery/metrics.go` and
+`backend/internal/backupasset/recovery/metrics_test.go`. The other absent
+historical create paths remain reserved for later approved Tasks 9--10 or are
+unused fixtures/adapters and receive no Task 8 credit.
+
+The Task 8 structural gate compares changed product paths with the same
+`9 + 55 + 81 = 145` historical union by membership; it must not require old
+create paths to remain absent. It still reports changed paths outside that
+union and the existing R65 exception separately. These research paths are
+task-local, non-product evidence only:
+
+```text
+.trellis/tasks/07-28-backup-assets-controlled-recovery/research/task8-runtime-settings-metrics.md
+.trellis/tasks/07-28-backup-assets-controlled-recovery/research/task8-production-authorities.md
+.trellis/tasks/07-28-backup-assets-controlled-recovery/research/task8-production-authorities-audit.md
+```
+
+They do not alter the product manifest or authorize Tasks 9--10. The authority
+audit is dated discovery evidence; later Task 8 fixes supersede its then-open
+disabled-reconciliation and publication-shell findings, while its production
+authority ownership gaps remain controlling at the checkpoint below.
 
 ### 2.6 Explicitly Unchanged Without An Amendment
 
@@ -2228,21 +2262,21 @@ tests.
 settings/config handler transition files/tests, settings service/tests, recovery
 metrics/tests and CI workflow.
 
-- [ ] **Write RED graph lifecycle tests.** Optional graph installs once only
+- [x] **Write RED graph lifecycle tests.** Optional graph installs once only
   after metadata reconciliation; nil/duplicate publication fails; startup does
   not execute queued restores; `StopAccepting` is sticky; shutdown unpublishes,
   stops claims, cancels/joins, fences attempts, revokes/drains delivery and joins
   cleanup within deadline.
-- [ ] **Write RED wake/retry tests.** Job creation wakes the worker; retries use
+- [x] **Write RED wake/retry tests.** Job creation wakes the worker; retries use
   their own bounded deadline scheduler; cleanup uses durable keyset/high-water
   scheduling; none depend solely on a long GC cadence.
-- [ ] **Write RED receipt-reaper ownership tests.** Runtime starts one bounded
+- [x] **Write RED receipt-reaper ownership tests.** Runtime starts one bounded
   receipt owner after metadata reconciliation, keeps it running while new
   Recovery admission is disabled, and cancels/joins it before schema drain.
   Restart plus old protected/normal/latch rows must still reach later eligible
   receipts through the stateless indexed predicate; no mutable timestamp cursor,
   ordinary evidence mutation or latch mutation is allowed.
-- [ ] **Write RED settings transitions.** validate -> drain -> persist -> install
+- [x] **Write RED settings transitions.** validate -> drain -> persist -> install
   and rollback preserve the old graph on failure. Global disabled prevents new
   plans/security overrides/authorities/jobs/writes while result revoke/cleanup
   and unpublished/orphan reconciliation continue. Retained plaintext is allowed
@@ -2262,10 +2296,646 @@ metrics/tests and CI workflow.
   disabled under the sticky transition generation, returns a bounded blocker
   product/receipt, and never performs schema down itself; latch-present always
   returns forward-fix-only.
-- [ ] **Add closed-label metrics.** Provider/state/outcome/category only; no
+- [x] **Add closed-label metrics.** Provider/state/outcome/category only; no
   repository/job/node/user/path/reason/error-string labels.
-- [ ] **Wire runtime through main.** Router sees narrow recovery facades; no
+- [x] **Wire runtime through main.** Router sees narrow recovery facades; no
   handler builds its own graph or reads raw models.
+
+#### Task 8 fail-closed checkpoint (2026-08-14)
+
+**Status:** `in_progress_fail_closed_checkpoint`. Graph lifecycle, worker
+wake/retry, receipt reaper ownership, settings transition mechanics,
+closed-label metrics, and main/router narrow-facade composition are each
+`complete_checked`. Disabled runtime continues bounded cleanup and logical
+reconciliation; enabled production publication rejects known-unavailable
+authorities instead of synthesizing authority.
+
+The downgrade runtime substrate is implemented: disabled-only execution,
+sticky transition fencing, latch-dominant `forward_fix_only`, durable blocker
+inspection, and fresh-reconciliation failure as a blocker. The Admin endpoint's
+proof, reason, idempotency and receipt contract belongs to Task 9 and has not
+executed. Therefore the downgrade-readiness/mixed-version checklist row remains
+open, and the two-runtime-transition row receives only partial credit.
+
+Production enablement remains blocked on real owning products for all three
+authorities below:
+
+1. `RecoveryPreflightExternalEvidenceAuthority`: current policy/finding,
+   overlap and reserve evidence is absent.
+2. `RecoveryAuthorityRevalidator`: no complete current policy/finding,
+   preflight-freshness and target-root-revision revalidation exists.
+3. `RecoveryReconciliationRevisionSource`: no independent durable current
+   target-root revision exists.
+
+Frozen plan values, timestamps, locator digests, or clean/false/zero defaults
+must not stand in for those authorities. Separately, these parsed and
+transition-validated settings still lack a production Recovery domain seam:
+`DefaultRootID`, `PreflightTTL`, `MaxSelectionItems`, `MaxLogicalBytes`,
+`LeaseRenewMargin`, `ExecutionTimeout`, `VerificationTimeout`, and
+`OrphanQuarantineLimit`. Wiring them requires a focused amendment to the owning
+plan/preflight/worker/executor/reconciliation contracts; silently ignoring them
+or copying private constants is forbidden.
+
+Four existing Recovery authorization routes were registered only so the Task 8
+facade has real consumers and its `401`/`403`/`503` boundary is testable. This
+does not execute Task 9's complete route, response, audit/privacy, or Swagger
+matrix. Tasks 9--10 remain `not_executed`. Do not stage, commit, push, create a
+PR, mark Task 8 complete, or claim Task 9/10 completion at this checkpoint.
+
+#### Task 8 production-authority completion implementation plan (2026-08-14)
+
+> **For agentic workers:** execute one slice at a time with
+> `superpowers:test-driven-development`; after each slice, stop for controller
+> review. Do not stage or commit a partial slice. The final whole-scope check is
+> owned by a fresh `trellis-check` agent.
+
+**Goal:** replace the three known-unavailable production authorities with one
+current Recovery eligibility owner, consume every approved Task 8 setting in
+its owning domain, and enable managed Rsync without weakening disabled-runtime
+maintenance or downgrade safety.
+
+**Architecture:** the existing encrypted per-node/root registry advances to a
+strict document v2. `TargetRootAuthorityService` owns fresh registration probes
+and root mutations; one `RecoveryEligibilityAuthority` performs short durable
+snapshot transaction -> external observation -> short locked revalidation and
+adapts to preflight, live-effect and reconciliation contracts. Runtime injects
+immutable plan, preflight, worker and reconciliation policies.
+
+**Tech stack:** Go 1.26, GORM, SQLite and PostgreSQL, existing Repository pinned
+Rsync source, Processing canonical malware evidence, SSH/SFTP Recovery target
+ports, zerolog/Prometheus closed boundaries.
+
+##### Focused file-manifest amendment
+
+The historical `9 + 55 + 81 = 145` union remains the baseline. Complete
+security authority needs the Processing runtime owner that already validates
+canonical malware artifacts. Add exactly these two tracked modify paths:
+
+```text
+backend/internal/backupasset/runtime/processing_runtime.go
+backend/internal/backupasset/runtime/processing_runtime_test.go
+```
+
+The focused union was initially `9 + 55 + 83 = 147`. Source-namespace research
+proved that a purpose-exact external observer cannot truthfully live inside the
+existing Repository query files. Add exactly these two focused create paths:
+
+```text
+backend/internal/backupasset/recovery/source_namespace.go
+backend/internal/backupasset/recovery/source_namespace_test.go
+```
+
+The corrected union is `9 + 55 + 85 = 149`. No model, migration, workflow or
+frontend path is added. The task-local authority research files remain
+evidence, not product-manifest members. Any further path requires another
+written amendment before edit.
+
+Final V1 reconciliation found that B4--B6's approved closed-owner split was
+described by responsibility but its eight concrete product/test paths were not
+copied into this ledger. Add these seven create paths and one tracked modify
+path; they are the Recovery owner/target ports, Repository constructor/tx seam
+and runtime adapters already required by the completed B4--B6 design:
+
+```text
+backend/internal/backupasset/recovery/eligibility.go
+backend/internal/backupasset/recovery/eligibility_test.go
+backend/internal/backupasset/recovery/eligibility_target.go
+backend/internal/backupasset/recovery/eligibility_target_test.go
+backend/internal/backupasset/repository/service_test.go
+backend/internal/backupasset/runtime/recovery_eligibility.go
+backend/internal/backupasset/runtime/recovery_eligibility_test.go
+backend/internal/backupasset/repository/service.go
+```
+
+The final exact union is therefore `9 current + 64 create + 84 modify = 157`
+unique, disjoint paths. This is a ledger correction for already reviewed Task 8
+authority code, not new product scope; it adds no model, migration, route,
+workflow, dependency or frontend path. Further product paths still require a
+written amendment before edit.
+
+##### Hosted CI security-remediation manifest amendment (2026-08-16)
+
+The first hosted PR run passed both native Worker runtime closures and image
+smoke checks, then Trivy's current database rejected the Go `1.26.5` binaries
+for eight fixed HIGH standard-library vulnerabilities. The reported fixed
+release is Go `1.26.6`. Keep the required same-branch CI remediation narrow and
+version-consistent by adding exactly these seven tracked modify paths:
+
+```text
+backend/go.mod
+backend/internal/backupasset/processing/capabilities/sandbox.go
+deploy/worker/Dockerfile
+deploy/allinone/Dockerfile
+scripts/test-asset-worker.sh
+scripts/test-asset-worker.test.sh
+README.md
+```
+
+The delivery union is therefore `9 current + 64 create + 91 modify = 164`
+unique, disjoint paths. This amendment changes no Recovery behavior, model,
+migration, route, setting or frontend path. The Worker builder reference must
+use the verified multi-architecture `golang:1.26.6-alpine` digest, while the
+All-in-One builders and `backend/go.mod` use the same patch release. Rerun the
+complete local gates and hosted PR CI; do not waive or ignore the scanner.
+
+##### T8-A: encrypted root v2 and target-root authority
+
+**Files:**
+
+- Modify: `backend/internal/settings/service.go`
+- Modify: `backend/internal/settings/service_test.go`
+- Modify: `backend/internal/backupasset/recovery/target.go`
+- Modify: `backend/internal/backupasset/recovery/target_test.go`
+- Modify: `backend/internal/backupasset/recovery/service.go`
+- Modify: `backend/internal/backupasset/recovery/service_test.go`
+
+- [x] **Step A1: write genuine RED registry-v2 tests.** Add table-driven tests
+  named `TestRecoveryTargetRootV2RejectsIncompleteAuthority`,
+  `TestRecoveryTargetRootV2RotationSemantics`, and
+  `TestRecoveryTargetRootV2ConcurrentMutation`. Freeze this contract before
+  implementation:
+
+  ```go
+  type RecoveryTargetRootPolicy struct {
+      ReserveBytes         int64 `json:"-"`
+      ReserveInodes        int64 `json:"-"`
+      OverlapPolicyBinding string `json:"-"`
+  }
+
+  type RecoveryTargetRootDefinition struct {
+      NodeID                  uint
+      RootID                  string
+      SafeLabel               string
+      Locator                 string `json:"-"`
+      AuthorityRevision       string `json:"-"`
+      RootObservationRevision string `json:"-"`
+      Policy                  RecoveryTargetRootPolicy `json:"-"`
+  }
+  ```
+
+  Assert document `schema_version: 1`, missing/duplicate/unknown fields,
+  `enc:v1:`, tamper and substituted key/payload return only
+  `ErrRecoveryTargetRootUnavailable`. Exact replay and safe-label-only update
+  preserve `AuthorityRevision`; locator, observation, reserve or policy change
+  requires a different revision.
+
+- [x] **Step A2: run RED and record the failure.** From `backend/` run:
+
+  ```bash
+  go test ./internal/settings \
+    -run '^TestRecoveryTargetRootV2(RejectsIncompleteAuthority|RotationSemantics|ConcurrentMutation)$' \
+    -count=1
+  ```
+
+  Expected: FAIL because the current document is schema 1 and has no authority,
+  observation or policy fields.
+
+- [x] **Step A3: implement strict registry v2.** Set the document schema to 2,
+  keep the ciphertext envelope at `enc:v2:`, strictly encode/decode every field,
+  and extend `RecoveryTargetRootResolution` with the private revisions/policy.
+  `RegisterRecoveryTargetRootTx` accepts only a complete Recovery-issued
+  definition; it never generates or infers missing authority. Keep safe-list
+  DTOs unchanged and retain the exact internal-key/config-export exclusions.
+
+- [x] **Step A4: write RED target-authority service tests.** Add
+  `TestTargetRootAuthorityServiceRequiresFreshReadOnlyProbe` and
+  `TestTargetRootAuthorityServiceRegisterRotateDelete` using this narrow seam:
+
+  ```go
+  type TargetRootRegistrationProbe interface {
+      ObserveRecoveryTargetRoot(
+          context.Context,
+          TargetRootRegistrationRequest,
+      ) (TargetRootRegistrationObservation, error)
+  }
+
+  type TargetRootAuthorityServiceDependencies struct {
+      DB          *gorm.DB
+      Registry    RecoveryTargetRootRegistry
+      Probe       TargetRootRegistrationProbe
+      NewRevision func() (string, error)
+      Now         func() time.Time
+  }
+  ```
+
+  Test read-only purpose, stale observation, node/credential drift, exact replay,
+  safe-label update, security rotation, delete with zero remote mutation,
+  persistence failure and sanitized dependency errors.
+
+- [x] **Step A5: implement the minimal owner and rerun normal/race tests.** The
+  owner performs probe outside the transaction, then locks node, credential and
+  exact root row before persistence. Use `backupasset.NewOpaqueID` for a new
+  security revision and preserve the old revision only for exact/security-
+  equivalent updates.
+
+  ```bash
+  go test ./internal/settings ./internal/backupasset/recovery \
+    -run 'RecoveryTargetRootV2|TargetRootAuthorityService' -count=1
+  go test -race ./internal/settings ./internal/backupasset/recovery \
+    -run 'RecoveryTargetRootV2|TargetRootAuthorityService' -count=1
+  ```
+
+  Expected: PASS; recognizable locator, revision, policy and raw-error canaries
+  are absent from every error/format/JSON boundary.
+
+- [x] **Step A6: run required PostgreSQL parity and stop.** Use the existing
+  command-scoped secret-preserving DSN harness:
+
+  ```bash
+  REQUIRE_POSTGRES_RECOVERY_TEST=1 TEST_POSTGRES_DSN="$C13_PG_DSN" \
+    go test ./internal/backupasset/recovery \
+      -run '^TestRecoveryTargetRootAuthorityPostgres$' -count=1
+  REQUIRE_POSTGRES_RECOVERY_TEST=1 TEST_POSTGRES_DSN="$C13_PG_DSN" \
+    go test -race ./internal/backupasset/recovery \
+      -run '^TestRecoveryTargetRootAuthorityPostgres$' -count=1
+  ```
+
+  Expected: PASS with no skip and no schema/role residue. Append RED/GREEN and
+  command evidence, then stop before T8-B.
+
+##### T8-B: one eligibility owner and three production adapters
+
+**Files:**
+
+- Modify: `backend/internal/backupasset/runtime/processing_runtime.go`
+- Modify: `backend/internal/backupasset/runtime/processing_runtime_test.go`
+- Modify: `backend/internal/backupasset/provider/contracts.go`
+- Modify: `backend/internal/backupasset/provider/contracts_test.go`
+- Modify: `backend/internal/backupasset/repository/query.go`
+- Modify: `backend/internal/backupasset/repository/query_test.go`
+- Modify: `backend/internal/backupasset/recovery/preflight.go`
+- Modify: `backend/internal/backupasset/recovery/preflight_test.go`
+- Modify: `backend/internal/backupasset/recovery/service.go`
+- Modify: `backend/internal/backupasset/recovery/service_test.go`
+- Modify: `backend/internal/backupasset/recovery/worker.go`
+- Modify: `backend/internal/backupasset/recovery/worker_test.go`
+- Modify: `backend/internal/backupasset/recovery/executor.go`
+- Modify: `backend/internal/backupasset/recovery/executor_test.go`
+- Modify: `backend/internal/backupasset/runtime/recovery_runtime.go`
+- Modify: `backend/internal/backupasset/runtime/recovery_runtime_test.go`
+
+- [x] **Step B1: expose one private current Processing observation.** Add RED
+  tests `TestProcessingRuntimeRecoverySecurityObservationBindsCanonicalEvidence`
+  and `TestProcessingRuntimeRecoverySecurityObservationRejectsIncompleteEvidence`.
+  The runtime-private product is:
+
+  ```go
+  type managedProcessingRecoverySecurityObservation struct {
+      PolicyRevision   string
+      FindingSetDigest string
+      ScanState        capabilityspec.ScanState
+      Complete         bool
+  }
+  ```
+
+  Derive the finding-set digest from the exact asset/source binding, canonical
+  decoded malware result, signature-bundle fingerprint and policy revision with
+  a domain-separated length-framed digest. Do not change public preview DTOs.
+
+- [x] **Step B2: expose a Repository-owned Rsync source authority.** Add RED
+  tests proving it resolves the existing scalar `RsyncRestoreSourceRef`, opens
+  the pinned declared tree, calls `Revalidate`, derives exact capability/source
+  namespace evidence, compares overlap only when node identities match, closes
+  the source on every path, and never returns a locator. Restic/Rclone return
+  `backupasset.ErrCapabilityUnavailable` through this authority.
+
+- [x] **Step B3: run the two owner RED selectors.** From `backend/` run:
+
+  ```bash
+  go test ./internal/backupasset/runtime ./internal/backupasset/repository \
+    -run 'RecoverySecurityObservation|RecoveryRsyncSourceAuthority' -count=1
+  ```
+
+  Expected: FAIL because neither detailed current evidence seam exists.
+
+- [x] **Step B3a: add the purpose-exact source-namespace observer.** Create
+  `recovery/source_namespace.go` and its colocated test. First write RED tests
+  proving short durable capture -> external SSH/SFTP observation -> locked
+  revalidation; exact `recovery_preflight` read-only purpose; strict known-host
+  identity with accept-new/insecure posture unavailable; per-component
+  `Lstat`/`RealPath` canonicalization; symlink, non-directory, node, credential,
+  Task/source and binding drift; cancellation; every close path; and fully
+  redacted private products. Repository contributes only pinned-source and
+  producing-task provenance. Do not hash `Task.RsyncSource`, return a locator or
+  label unequal digests disjoint.
+
+  The Recovery eligibility owner compares source and fresh target private
+  canonical namespaces only after exact authenticated node identity equality,
+  using bidirectional component-boundary containment. Missing source/target
+  observation, unproved host identity, or any drift remains capability
+  unavailable/conflict; Restic/Rclone stop before either observer.
+
+  Run the observer RED/GREEN selector before B4:
+
+  ```bash
+  go test ./internal/backupasset/recovery ./internal/backupasset/repository \
+    -run 'Recovery(SourceNamespaceAuthority|RsyncSourceAuthority)' -count=1
+  go test -race ./internal/backupasset/recovery ./internal/backupasset/repository \
+    -run 'Recovery(SourceNamespaceAuthority|RsyncSourceAuthority)' -count=1
+  ```
+
+  Expected GREEN: managed Rsync exposes a complete source product only when
+  both exact pinned access and the authenticated namespace observation exist;
+  every unavailable arm returns a closed product and zero target access.
+
+- [x] **Step B4: define the sealed eligibility contract.** In Recovery, add
+  one owner with source, security, target-root and target-observation ports.
+  Keep proof fields private and redacted:
+
+  ```go
+  type RecoveryAuthorityObservation struct {
+      observedAt time.Time
+      expiresAt  time.Time
+      binding    recoveryEligibilityBinding
+      proof      *recoveryEligibilityProof
+  }
+
+  type RecoveryAuthorityRevalidator interface {
+      ObserveRecoveryAuthority(
+          context.Context,
+          RecoveryAuthorityBinding,
+      ) (RecoveryAuthorityObservation, error)
+      RevalidateRecoveryAuthorityTx(
+          context.Context,
+          *gorm.DB,
+          RecoveryAuthorityBinding,
+          RecoveryAuthorityObservation,
+      ) error
+  }
+  ```
+
+  `RecoveryEligibilityAuthority` also implements the existing preflight and
+  reconciliation interfaces. Preflight returns only the existing closed scalar
+  observation. Reconciliation returns node/credential/authority revisions;
+  marker root observation stays a separate scan binding.
+
+- [x] **Step B5: write the complete RED matrix.** Add tests for source,
+  capability, policy, finding, root authority, root observation, node,
+  credential, overlap and reserve substitution/unavailable/drift. Each test
+  mutates its durable owner after observation and before locked revalidation.
+  Assert Restic/Rclone, partial success, request echo and zero defaults all
+  produce unavailable/conflict with zero target mutation.
+
+- [x] **Step B6: implement two-phase call sites.** Authorization, worker claim,
+  execute and exact-delete obtain `RecoveryAuthorityObservation` before opening
+  their mutation transaction, then pass it to the locked revalidator. Never
+  run Repository, Processing, SSH or SFTP work inside that transaction. Keep
+  existing per-operation source/target revalidation after commit.
+
+- [x] **Step B7: run focused normal/race and PostgreSQL gates.** Run:
+
+  ```bash
+  go test ./internal/backupasset/processing ./internal/backupasset/repository \
+    ./internal/backupasset/recovery ./internal/backupasset/runtime \
+    -run 'Recovery(SecurityObservation|RsyncSourceAuthority|EligibilityAuthority|AuthorityRevalidation|ReconciliationRevision)' \
+    -count=1
+  go test -race ./internal/backupasset/repository ./internal/backupasset/recovery \
+    ./internal/backupasset/runtime \
+    -run 'Recovery(RsyncSourceAuthority|EligibilityAuthority|AuthorityRevalidation|ReconciliationRevision)' \
+    -count=1
+  REQUIRE_POSTGRES_RECOVERY_TEST=1 TEST_POSTGRES_DSN="$C13_PG_DSN" \
+    go test ./internal/backupasset/recovery \
+      -run '^TestRecoveryEligibilityAuthorityPostgres$' -count=1
+  REQUIRE_POSTGRES_RECOVERY_TEST=1 TEST_POSTGRES_DSN="$C13_PG_DSN" \
+    go test -race ./internal/backupasset/recovery \
+      -run '^TestRecoveryEligibilityAuthorityPostgres$' -count=1
+  ```
+
+  Expected: PASS/no-skip with raw source, malware, locator, credential and error
+  canaries absent. Record evidence and stop before T8-C.
+
+##### T8-C: owning policies, heartbeat and absolute deadline
+
+**Files:**
+
+- Modify: `backend/internal/backupasset/service.go`
+- Modify: `backend/internal/backupasset/service_test.go`
+- Modify: `backend/internal/settings/service.go`
+- Modify: `backend/internal/settings/service_test.go`
+- Modify: `backend/internal/backupasset/recovery/service.go`
+- Modify: `backend/internal/backupasset/recovery/service_test.go`
+- Modify: `backend/internal/backupasset/recovery/preflight.go`
+- Modify: `backend/internal/backupasset/recovery/preflight_test.go`
+- Modify: `backend/internal/backupasset/recovery/worker.go`
+- Modify: `backend/internal/backupasset/recovery/worker_test.go`
+
+- [x] **Step C1: write RED config and constructor tests.** Freeze these domain
+  policies and require positive bounded values:
+
+  ```go
+  type PlanPolicy struct {
+      MaxSelectionItems int64
+      MaxLogicalBytes   int64
+  }
+  type PreflightPolicy struct { TTL time.Duration }
+  type WorkerPolicy struct {
+      LeaseRenewMargin time.Duration
+      ExecutionTimeout time.Duration
+  }
+  type ReconciliationPolicy struct { FindingLimit int }
+  ```
+
+  Remove `DefaultRootID` and `VerificationTimeout`; rename
+  `OrphanQuarantineLimit` to `ReconciliationFindingLimit` in `RecoveryConfig`,
+  registry definitions, fixtures and transition snapshots. Config import must
+  reject all three old names.
+
+- [x] **Step C2: run RED config tests.** Run:
+
+  ```bash
+  go test ./internal/settings ./internal/backupasset \
+    -run 'Recovery(Config|Policy|RemovedSetting|ReconciliationFindingLimit)' \
+    -count=1
+  ```
+
+  Expected: FAIL on current fields and inert parsed values.
+
+- [x] **Step C3: inject plan and preflight policies.** `PlanService` rejects
+  selection/estimated impact above the lower dynamic and immutable hard cap
+  before persistence and repeats the check against materialized rows.
+  `PreflightService` replaces caller TTL with `now + policy.TTL` and validates
+  the same value before commit; no request field can lengthen it.
+
+- [x] **Step C4: inject worker and reconciliation policies.** Source lease
+  creation freezes `AbsoluteDeadline` as the earliest of
+  `now + ExecutionTimeout`, grant expiry and any existing hard authority bound.
+  The managed worker starts one claim-scoped heartbeat scheduled from
+  `LeaseExpiresAt - LeaseRenewMargin`; success atomically propagates the renewed
+  source/node/attempt deadline, while failure cancels the claim context and
+  makes the old fence unusable before another target call. Pass
+  `ReconciliationFindingLimit` into every reconciliation permit without
+  changing immutable chain/cursor caps.
+
+- [x] **Step C5: run focused normal/race tests.** Run:
+
+  ```bash
+  go test ./internal/settings ./internal/backupasset \
+    ./internal/backupasset/recovery ./internal/backupasset/runtime \
+    -run 'Recovery(PlanPolicy|PreflightPolicy|WorkerPolicy|Heartbeat|ExecutionDeadline|ReconciliationFindingLimit|RemovedSetting)' \
+    -count=1
+  go test -race ./internal/backupasset/recovery ./internal/backupasset/runtime \
+    -run 'Recovery(Heartbeat|ExecutionDeadline|ReconciliationFindingLimit)' \
+    -count=1
+  ```
+
+  Expected: PASS; a failed heartbeat causes cancellation and zero subsequent
+  target calls, and timeout preserves post-arm/unresolved semantics.
+
+- [x] **Step C6: run static removal checks and stop.** From repo root run:
+
+  ```bash
+  ! rg -n 'DefaultRootID|VerificationTimeout|OrphanQuarantineLimit|recovery\.default_root_id|recovery\.verification_timeout|recovery\.orphan_quarantine_limit' \
+    backend/internal/backupasset backend/internal/settings
+  rg -n 'PreflightTTL|MaxSelectionItems|MaxLogicalBytes|LeaseRenewMargin|ExecutionTimeout|ReconciliationFindingLimit' \
+    backend/internal/backupasset backend/internal/settings
+  git diff --check
+  ```
+
+  Expected: the first scan is empty, every retained setting has an owning
+  product reference, and diff check passes. Record evidence and stop before
+  T8-D.
+
+##### T8-D: production composition, transitions and maintenance continuity
+
+**Files:**
+
+- Modify: `backend/internal/backupasset/runtime/recovery_runtime.go`
+- Modify: `backend/internal/backupasset/runtime/recovery_runtime_test.go`
+- Modify: `backend/internal/backupasset/runtime/runtime.go`
+- Modify: `backend/internal/backupasset/runtime/runtime_test.go`
+- Modify: `backend/internal/backupasset/recovery/metrics.go`
+- Modify: `backend/internal/backupasset/recovery/metrics_test.go`
+- Modify: `backend/cmd/server/main.go`
+- Modify: `backend/cmd/server/main_test.go`
+- Modify: `backend/internal/api/router.go`
+- Modify: `backend/internal/api/router_test.go`
+- Modify: `backend/internal/api/backup_asset_rbac_test.go`
+
+- [x] **Step D1: write RED production-composition tests.** Add tests proving a
+  complete Repository/Processing/target-root authority publishes exactly once
+  after metadata reconciliation; known-unavailable or nil authorities publish
+  nothing. A dependency that becomes unavailable after publication must close
+  preflight and every effect without unpublishing maintenance facades.
+
+- [x] **Step D2: replace production unavailable adapters.** Construct one
+  `RecoveryEligibilityAuthority`, inject it through all three narrow adapters,
+  and keep unavailable fakes only in explicit negative tests. Compose
+  `TargetRootAuthorityService` behind a narrow runtime facade for Task 9; do not
+  register the Task 9 root routes in this slice.
+
+- [x] **Step D3: complete transition fault tests.** Inject failure at validate,
+  drain, persist, construct and install. Prove the prior persisted config and
+  graph are restored before admission reopens; if restoration is injected to
+  fail, the sticky fence stays closed and downgrade readiness is blocked.
+  Cover fresh-disabled startup, enabled-to-disabled transition, restart,
+  re-enable, no-latch pristine clear and latch-dominant `forward_fix_only`.
+
+- [x] **Step D4: preserve disabled owners and closed metrics.** Disabled graphs
+  run cleanup, logical reconciliation and receipt reaping immediately and join
+  them before schema drain. Metrics use only fixed provider/state/outcome/
+  category labels; root/node/plan/job IDs, revisions, locators and raw errors
+  are forbidden.
+
+- [x] **Step D5: run composition normal/race tests.** Run:
+
+  ```bash
+  go test ./cmd/server ./internal/api ./internal/backupasset/runtime \
+    ./internal/backupasset/recovery \
+    -run 'Recovery(ProductionAuthority|Runtime|Transition|Disabled|Downgrade|Metrics|RBAC)' \
+    -count=10
+  go test -race ./cmd/server ./internal/api ./internal/backupasset/runtime \
+    ./internal/backupasset/recovery \
+    -run 'Recovery(ProductionAuthority|Runtime|Transition|Disabled|Downgrade)' \
+    -count=10
+  ```
+
+  Expected: PASS with stable lifecycle ordering and zero leaked canaries.
+  Record evidence and stop before T8-V1.
+
+##### T8-V1: fresh whole-scope quality and completion decision
+
+- [x] **Step V1: run whole backend normal/race gates.** From `backend/` run:
+
+  ```bash
+  go test ./... -count=1
+  go test -race ./internal/backupasset/processing \
+    ./internal/backupasset/repository \
+    ./internal/backupasset/recovery \
+    ./internal/backupasset/runtime \
+    ./internal/api ./cmd/server -count=1
+  go vet ./...
+  ```
+
+  Expected: PASS.
+
+- [x] **Step V2: run required PostgreSQL normal/race with no skip.** Run the
+  complete Recovery selector under `REQUIRE_POSTGRES_RECOVERY_TEST=1` using the
+  existing disposable PostgreSQL harness; do not print its password or DSN:
+
+  ```bash
+  REQUIRE_POSTGRES_RECOVERY_TEST=1 TEST_POSTGRES_DSN="$C13_PG_DSN" \
+    go test ./internal/backupasset/recovery -run 'Postgres' -count=1
+  REQUIRE_POSTGRES_RECOVERY_TEST=1 TEST_POSTGRES_DSN="$C13_PG_DSN" \
+    go test -race ./internal/backupasset/recovery -run 'Postgres' -count=1
+  ```
+
+  Expected: PASS, no skip and zero schema/role/container/volume residue.
+
+- [x] **Step V3: run project, privacy and structural gates.** From repo root:
+
+  ```bash
+  make lint-backend
+  make backend-build
+  make check
+  git diff --check
+  test -z "$(find backend/internal/database/migrations -type f -name '000070_*' -print -quit)"
+  python3 ./.trellis/scripts/task.py validate \
+    .trellis/tasks/07-28-backup-assets-controlled-recovery
+  python3 ./.trellis/scripts/task.py validate \
+    .trellis/tasks/07-12-backup-data-explorer-design
+  jq -s empty \
+    .trellis/tasks/07-28-backup-assets-controlled-recovery/implement.jsonl \
+    .trellis/tasks/07-28-backup-assets-controlled-recovery/check.jsonl
+  test -z "$(git diff --cached --name-only)"
+  ```
+
+  Also run the established forbidden direct-log, private-canary, migration,
+  manifest-disjointness and protected-user-file scans. Expected: every command
+  passes; the then-current V1 manifest union is exactly 157 and the user's
+  main-worktree `.codex/agents/trellis-research.toml` remains outside this
+  worktree delta. After the hosted-CI security amendment, rerun the same
+  structural gate against the amended 164-path delivery union.
+
+- [x] **Step V4: dispatch one fresh full-scope `trellis-check`.** Require zero
+  open Critical or Important defect across sections 48.1--48.7, runtime
+  lifecycle, settings transitions, SQLite/PostgreSQL parity, privacy and Task 9
+  scope separation. Fix findings in their owning slice and rerun affected plus
+  whole gates.
+
+- [x] **Step V5: record the completion truth and stop before delivery.** Append
+  exact commands, durations, results and reviewer receipt to
+  `research/implementation-evidence.md`. Mark Task 8 complete only if every
+  checkbox above and the full review pass. Tasks 9--10 remain `not_executed`;
+  do not stage, commit, push or create a PR until the controller separately
+  enters Phase 3.3/3.4.
+
+##### Focused planning convergence
+
+| Requirement | Technical design | Execution owner |
+|---|---|---|
+| encrypted root v2, independent authority/observation revisions, no `000070` | sections 48.1--48.2, 48.5--48.7 | T8-A, T8-V1 |
+| one complete eligibility owner and three narrow adapters | sections 48.3, 48.5--48.6 | T8-B, T8-D |
+| managed Rsync exact source; Restic/Rclone unavailable | sections 48.3--48.4, 48.6 | T8-B, T8-D |
+| five retained/renamed settings and two removed settings | sections 48.4--48.7 | T8-C, T8-D |
+| disabled maintenance and latch-dominant downgrade readiness | sections 48.4--48.7 | T8-D, T8-V1 |
+| Task 9 target-root and downgrade Admin route ownership | sections 10, 48.1 | Task 9 route/response/audit/Swagger matrix |
+
+The focused PRD has no unresolved product, scope, compatibility, risk or
+acceptance decision. The design contains no placeholder, the 164-path delivery
+manifest is exact and disjoint by amendment, and every acceptance row has a
+TDD slice plus a whole-scope gate. The approved plan is implemented and
+whole-scope checked through T8-V1; stop before Task 9 until Task 8 delivery,
+hosted CI, merge, post-merge automation and cleanup complete.
 
 ### Task 9: API, RBAC, Audit And Swagger
 
@@ -2278,6 +2948,9 @@ settings/config handler transition files/tests and backup content handler/tests.
   explicit security-override, write-authority and exact-mirror-delete-authority
   routes exist and no undifferentiated authority route exists; cover the Admin downgrade-
   readiness settings route under the same permission and transition owner.
+  Cover the exact Admin target-root register, rotate, delete and node-scoped
+  safe-list routes; all mutations require step-up/idempotency and delegate to
+  the Task 8 transition facade rather than generic settings mutation.
 - [ ] **Write RED response matrix.** Closed 400/403/404/409/413/429/500/503
   mapping uses response helpers; unexpected errors expose no DB/SSH/Provider/
   path/reason detail. Hidden objects do not leak existence.

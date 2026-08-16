@@ -3,6 +3,7 @@ package recovery
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"time"
 
@@ -156,6 +157,18 @@ type recoveryResultCleanupCandidate struct {
 
 type recoveryWorkspaceCleanupCandidate struct {
 	Job model.BackupAssetRecoveryJob
+}
+
+type ScheduledCleanupKind string
+
+const (
+	ScheduledCleanupResultSet ScheduledCleanupKind = "result_set"
+	ScheduledCleanupWorkspace ScheduledCleanupKind = "workspace"
+)
+
+type ScheduledCleanupCandidate struct {
+	Kind ScheduledCleanupKind
+	ID   string
 }
 
 type recoveryCleanupTargetBinding struct {
@@ -510,6 +523,170 @@ func (service *ResultLifecycleService) ClaimCleanup(
 	ctx context.Context,
 	request ClaimRecoveryResultCleanupRequest,
 ) (RecoveryResultCleanupClaim, error) {
+	return service.claimCleanup(ctx, request, false)
+}
+
+func (service *ResultLifecycleService) ListScheduledCleanupCandidates(
+	ctx context.Context,
+	limit int,
+) ([]ScheduledCleanupCandidate, error) {
+	if service == nil || service.db == nil || service.now == nil || limit <= 0 || limit > 1000 {
+		return nil, ErrInvalidResultLifecycle
+	}
+	ctx = nonNilRecoveryContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	now := service.now().UTC()
+	if now.IsZero() {
+		return nil, ErrInvalidResultLifecycle
+	}
+	type scheduledCleanupRow struct {
+		Kind ScheduledCleanupKind `gorm:"column:kind"`
+		ID   string               `gorm:"column:id"`
+	}
+	var rows []scheduledCleanupRow
+	resultSetTable := (model.BackupAssetRecoveryResultSet{}).TableName()
+	jobTable := (model.BackupAssetRecoveryJob{}).TableName()
+	nodeLeaseTable := (model.BackupAssetRecoveryNodeLease{}).TableName()
+	taskRunTable := service.db.NamingStrategy.TableName("TaskRun")
+	query := fmt.Sprintf(`
+		SELECT candidate.kind, candidate.id
+		FROM (
+			SELECT '%s' AS kind, result_set.id AS id,
+				CASE
+					WHEN result_set.state = ? THEN result_set.plaintext_deadline
+					WHEN result_set.cleanup_lease_expires_at IS NOT NULL THEN result_set.cleanup_lease_expires_at
+					ELSE result_set.updated_at
+				END AS scheduled_at,
+				job.target_node_id AS target_node_id
+				FROM %s AS result_set
+				JOIN %s AS job ON job.id = result_set.job_id
+				WHERE length(result_set.id) = 32 AND lower(result_set.id) = result_set.id
+					AND length(result_set.job_id) = 32 AND lower(result_set.job_id) = result_set.job_id
+					AND job.target_node_id > 0 AND job.target_mode = ?
+					AND job.state IN ? AND job.workspace_phase = ?
+					AND length(job.workspace_marker_binding_digest) = 64
+					AND result_set.marker_binding_digest = job.workspace_marker_binding_digest
+					AND (
+						(result_set.state = ? AND result_set.plaintext_deadline <= ?
+							AND result_set.cleanup_phase = ? AND result_set.cleanup_owner = ''
+							AND result_set.cleanup_lease_expires_at IS NULL AND result_set.cleanup_fence = 0
+							AND result_set.node_lease_id IS NULL AND result_set.node_fence = 0
+							AND result_set.cleanup_attempt = 0)
+						OR (result_set.state = ? AND result_set.cleanup_phase IN ?
+							AND result_set.cleanup_owner = '' AND result_set.cleanup_lease_expires_at IS NULL
+							AND result_set.cleanup_fence > 0 AND result_set.node_lease_id IS NULL
+							AND result_set.node_fence = 0 AND result_set.cleanup_attempt > 0)
+						OR (result_set.state = ? AND result_set.cleanup_phase IN ?
+							AND result_set.cleanup_owner <> '' AND result_set.cleanup_lease_expires_at <= ?
+							AND length(result_set.cleanup_owner) <= 64
+							AND trim(result_set.cleanup_owner) = result_set.cleanup_owner
+							AND result_set.cleanup_fence > 0 AND result_set.node_lease_id IS NOT NULL
+							AND length(result_set.node_lease_id) = 32
+							AND lower(result_set.node_lease_id) = result_set.node_lease_id
+							AND result_set.node_fence > 0 AND result_set.cleanup_attempt > 0)
+				)
+			UNION ALL
+			SELECT '%s' AS kind, job.id AS id,
+				CASE
+					WHEN job.workspace_cleanup_lease_expires_at IS NOT NULL THEN job.workspace_cleanup_lease_expires_at
+					ELSE job.updated_at
+				END AS scheduled_at,
+				job.target_node_id AS target_node_id
+			FROM %s AS job
+				WHERE length(job.id) = 32 AND lower(job.id) = job.id
+					AND job.target_node_id > 0 AND job.target_mode = ?
+					AND job.state IN ? AND job.workspace_phase = ?
+					AND job.encrypted_workspace_relative_locator <> ''
+					AND length(job.workspace_binding_digest) = 64
+					AND length(job.workspace_marker_binding_digest) = 64
+					AND job.workspace_owner <> '' AND length(job.workspace_owner) <= 64
+					AND trim(job.workspace_owner) = job.workspace_owner AND job.workspace_fence > 0
+					AND job.plaintext_deadline IS NOT NULL
+					AND ((job.workspace_marker_validation_attempt_id = ''
+							AND job.workspace_marker_validation_attempt_fence = 0
+							AND job.workspace_marker_validation_node_fence = 0)
+						OR (length(job.workspace_marker_validation_attempt_id) = 32
+							AND lower(job.workspace_marker_validation_attempt_id) = job.workspace_marker_validation_attempt_id
+							AND job.workspace_marker_validation_attempt_fence > 0
+							AND job.workspace_marker_validation_node_fence > 0))
+					AND (
+						(job.workspace_cleanup_phase = ? AND job.workspace_cleanup_owner = ''
+							AND job.workspace_cleanup_lease_expires_at IS NULL
+							AND job.workspace_cleanup_fence = 0 AND job.workspace_cleanup_node_lease_id IS NULL
+							AND job.workspace_cleanup_node_fence = 0 AND job.workspace_cleanup_attempt = 0)
+						OR (job.workspace_cleanup_phase IN ? AND job.workspace_cleanup_owner = ''
+							AND job.workspace_cleanup_lease_expires_at IS NULL
+							AND job.workspace_cleanup_fence > 0 AND job.workspace_cleanup_node_lease_id IS NULL
+							AND job.workspace_cleanup_node_fence = 0 AND job.workspace_cleanup_attempt > 0)
+						OR (job.workspace_cleanup_phase IN ? AND job.workspace_cleanup_owner <> ''
+							AND job.workspace_cleanup_lease_expires_at <= ?
+							AND length(job.workspace_cleanup_owner) <= 64
+							AND trim(job.workspace_cleanup_owner) = job.workspace_cleanup_owner
+							AND job.workspace_cleanup_fence > 0 AND job.workspace_cleanup_node_lease_id IS NOT NULL
+							AND length(job.workspace_cleanup_node_lease_id) = 32
+							AND lower(job.workspace_cleanup_node_lease_id) = job.workspace_cleanup_node_lease_id
+							AND job.workspace_cleanup_node_fence > 0 AND job.workspace_cleanup_attempt > 0)
+					)
+		) AS candidate
+		WHERE NOT EXISTS (
+			SELECT 1 FROM %s AS node_lease
+			WHERE node_lease.node_id = candidate.target_node_id
+				AND node_lease.state = 'active' AND node_lease.lease_expires_at > ?
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM %s AS task_run
+			WHERE task_run.node_id_snapshot = candidate.target_node_id
+				AND task_run.status IN ('pending', 'running')
+		)
+		ORDER BY candidate.scheduled_at ASC, candidate.kind ASC, candidate.id ASC
+		LIMIT ?`,
+		ScheduledCleanupResultSet, resultSetTable, jobTable,
+		ScheduledCleanupWorkspace, jobTable, nodeLeaseTable, taskRunTable,
+	)
+	nonterminalCleanupPhases := []string{
+		string(CleanupPhaseClaimed), string(CleanupPhaseRevoked), string(CleanupPhaseDrained),
+		string(CleanupPhaseValidated), string(CleanupPhaseDeleteStarted), string(CleanupPhaseDeleted),
+	}
+	if err := service.db.WithContext(ctx).Raw(query,
+		string(ResultSetStateReady), string(TargetModeIsolated),
+		[]string{string(JobStateSucceeded), string(JobStateDegraded)}, string(WorkspacePhasePublished),
+		string(ResultSetStateReady), now, string(CleanupPhaseClaimed),
+		string(ResultSetStateCleanupFailed), nonterminalCleanupPhases,
+		string(ResultSetStateRevoking), nonterminalCleanupPhases, now,
+		string(TargetModeIsolated),
+		[]string{
+			string(JobStateSucceeded), string(JobStateDegraded), string(JobStateNeedsAttention),
+			string(JobStateFailed), string(JobStateCanceled),
+		}, string(WorkspacePhaseCleanupDue), string(CleanupPhaseClaimed),
+		nonterminalCleanupPhases, nonterminalCleanupPhases, now,
+		now, limit,
+	).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	candidates := make([]ScheduledCleanupCandidate, 0, len(rows))
+	for _, row := range rows {
+		if (row.Kind != ScheduledCleanupResultSet && row.Kind != ScheduledCleanupWorkspace) || !validOpaqueID(row.ID) {
+			return nil, ErrInvalidResultLifecycle
+		}
+		candidates = append(candidates, ScheduledCleanupCandidate(row))
+	}
+	return candidates, nil
+}
+
+func (service *ResultLifecycleService) ClaimScheduledCleanup(
+	ctx context.Context,
+	request ClaimRecoveryResultCleanupRequest,
+) (RecoveryResultCleanupClaim, error) {
+	return service.claimCleanup(ctx, request, true)
+}
+
+func (service *ResultLifecycleService) claimCleanup(
+	ctx context.Context,
+	request ClaimRecoveryResultCleanupRequest,
+	requireDue bool,
+) (RecoveryResultCleanupClaim, error) {
 	if service == nil || service.db == nil || service.now == nil || service.nodeAdmission == nil ||
 		service.newID == nil || service.cleanupLeaseTTL <= 0 ||
 		!validOpaqueID(request.ResultSetID) || !validRecoveryWorkerID(request.WorkerID) {
@@ -529,7 +706,8 @@ func (service *ResultLifecycleService) ClaimCleanup(
 	if loaded.Error != nil {
 		return RecoveryResultCleanupClaim{}, loaded.Error
 	}
-	if loaded.RowsAffected != 1 || !validRecoveryResultCleanupCandidate(candidate.ResultSet, now) {
+	if loaded.RowsAffected != 1 || !validRecoveryResultCleanupCandidate(candidate.ResultSet, now) ||
+		(requireDue && !dueRecoveryResultCleanupCandidate(candidate.ResultSet, now)) {
 		return RecoveryResultCleanupClaim{}, ErrRecoveryResultCleanupConflict
 	}
 	nodeLeaseID, err := service.newID()
@@ -570,7 +748,8 @@ func (service *ResultLifecycleService) ClaimCleanup(
 		}
 		if resultSetResult.RowsAffected != 1 ||
 			!sameRecoveryResultCleanupSnapshot(candidate.ResultSet, resultSet) ||
-			!validRecoveryResultCleanupCandidate(resultSet, now) {
+			!validRecoveryResultCleanupCandidate(resultSet, now) ||
+			(requireDue && !dueRecoveryResultCleanupCandidate(resultSet, now)) {
 			if err := releaseRecoveryResultCleanupNodeLeaseTx(ctx, tx, nodeLease, now); err != nil {
 				return err
 			}
@@ -637,6 +816,13 @@ func (service *ResultLifecycleService) ClaimCleanup(
 		return RecoveryResultCleanupClaim{}, ErrRecoveryResultCleanupConflict
 	}
 	return claim, nil
+}
+
+func dueRecoveryResultCleanupCandidate(resultSet model.BackupAssetRecoveryResultSet, now time.Time) bool {
+	if ResultSetState(resultSet.State) != ResultSetStateReady {
+		return true
+	}
+	return !resultSet.PlaintextDeadline.IsZero() && !resultSet.PlaintextDeadline.UTC().After(now)
 }
 
 func (service *ResultLifecycleService) ClaimWorkspaceCleanup(

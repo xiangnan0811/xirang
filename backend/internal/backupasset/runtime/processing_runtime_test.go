@@ -290,6 +290,93 @@ func TestProcessingRuntimeMalwareSafetyWithoutActivePipelineIsNotDeployedAndQuie
 	}
 }
 
+func TestProcessingRuntimeRecoverySecurityObservationBindsCanonicalEvidence(t *testing.T) {
+	now := time.Date(2026, 7, 21, 2, 0, 0, 0, time.UTC)
+	bundleFingerprint := strings.Repeat("a", 64)
+	asset := content.AuthorizedAsset{
+		Ref:                 backupasset.AssetRef{RecoveryPointID: strings.Repeat("1", 32), EntryID: strings.Repeat("2", 64)},
+		CatalogGenerationID: strings.Repeat("3", 32), Provider: backupasset.ProviderRsync,
+		ProviderCapabilityRevision: 7, SourceFingerprint: "source-fingerprint-v1",
+		EntryFingerprint: strings.Repeat("4", 64), FingerprintStrength: "strong", Size: 4096,
+	}
+	db := openProcessingRuntimeTestDB(t)
+	pipeline := seedProcessingRuntimeMalwareEvidence(t, db, now, asset, bundleFingerprint)
+	result := processingRuntimeMalwareResult(now, bundleFingerprint, capabilityspec.ScanNoFinding, capabilityspec.CoverageComplete, asset.Size)
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &managedProcessingRuntime{
+		db: db, now: func() time.Time { return now },
+		malwareEvidence: &processingRuntimeMalwareEvidenceReaderFake{payload: payload},
+	}
+	observation, err := runtime.recoverySecurityObservation(context.Background(), asset)
+	if err != nil {
+		t.Fatalf("recovery security observation: %v", err)
+	}
+	expected := backupasset.NewCanonicalSHA256()
+	expected.String("xirang/recovery/security-finding-set/v1")
+	expected.String(asset.Ref.RecoveryPointID)
+	expected.String(asset.Ref.EntryID)
+	expected.String(asset.CatalogGenerationID)
+	expected.String(asset.SourceFingerprint)
+	expected.String(asset.EntryFingerprint)
+	expected.Int64(asset.ProviderCapabilityRevision)
+	expected.Int64(asset.Size)
+	expected.String(pipeline)
+	expected.String(bundleFingerprint)
+	expected.String(processingSecurityPolicyRevision)
+	expected.String(string(payload))
+	expectedDigest, err := expected.HexDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !observation.Complete || observation.PolicyRevision != processingSecurityPolicyRevision ||
+		observation.FindingSetDigest != expectedDigest || observation.ScanState != capabilityspec.ScanNoFinding {
+		t.Fatalf("observation=%+v, want complete canonical security evidence", observation)
+	}
+
+	mutated := result
+	mutated.ScannedAt = now.Add(time.Second).UTC().Format(time.RFC3339)
+	mutatedPayload, err := json.Marshal(mutated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.malwareEvidence = &processingRuntimeMalwareEvidenceReaderFake{payload: mutatedPayload}
+	mutatedObservation, err := runtime.recoverySecurityObservation(context.Background(), asset)
+	if err != nil {
+		t.Fatalf("mutated recovery security observation: %v", err)
+	}
+	if mutatedObservation.FindingSetDigest == observation.FindingSetDigest {
+		t.Fatal("canonical malware result mutation did not change finding-set digest")
+	}
+}
+
+func TestProcessingRuntimeRecoverySecurityObservationRejectsIncompleteEvidence(t *testing.T) {
+	now := time.Date(2026, 7, 21, 2, 0, 0, 0, time.UTC)
+	bundleFingerprint := strings.Repeat("b", 64)
+	asset := content.AuthorizedAsset{
+		Ref:                 backupasset.AssetRef{RecoveryPointID: strings.Repeat("1", 32), EntryID: strings.Repeat("2", 64)},
+		CatalogGenerationID: strings.Repeat("3", 32), Provider: backupasset.ProviderRsync,
+		ProviderCapabilityRevision: 7, SourceFingerprint: "source-fingerprint-v1",
+		EntryFingerprint: strings.Repeat("4", 64), FingerprintStrength: "strong", Size: 4096,
+	}
+	db := openProcessingRuntimeTestDB(t)
+	seedProcessingRuntimeMalwareEvidence(t, db, now, asset, bundleFingerprint)
+	partial := processingRuntimeMalwareResult(now, bundleFingerprint, capabilityspec.ScanNoFinding, capabilityspec.CoveragePartial, asset.Size)
+	payload, err := json.Marshal(partial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &managedProcessingRuntime{
+		db: db, now: func() time.Time { return now },
+		malwareEvidence: &processingRuntimeMalwareEvidenceReaderFake{payload: payload},
+	}
+	if _, err := runtime.recoverySecurityObservation(context.Background(), asset); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		t.Fatalf("incomplete recovery security evidence error=%v, want ErrCapabilityUnavailable", err)
+	}
+}
+
 func TestProcessingRuntimeMalwareSafetyRejectsMultipleActivePublications(t *testing.T) {
 	db := openProcessingRuntimeTestDB(t)
 	now := time.Date(2026, 7, 21, 2, 30, 0, 0, time.UTC)

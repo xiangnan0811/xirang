@@ -23,19 +23,20 @@ type CatalogSummaryProjector interface {
 }
 
 type Dependencies struct {
-	DB               *gorm.DB
-	Foundation       *backupasset.FoundationService
-	Registry         *provider.Registry
-	Keyring          *backupasset.Keyring
-	Now              func() time.Time
-	Audit            AssetAuditSink
-	Admission        publication.Admission
-	History          *ManagedHistoryResolver
-	Metrics          publication.Metrics
-	Publication      *PublicationService
-	RclonePreflight  RcloneVersioningPreflighter
-	CatalogOwnership *catalog.Ownership
-	CatalogSummary   CatalogSummaryProjector
+	DB                      *gorm.DB
+	Foundation              *backupasset.FoundationService
+	Registry                *provider.Registry
+	Keyring                 *backupasset.Keyring
+	Now                     func() time.Time
+	Audit                   AssetAuditSink
+	Admission               publication.Admission
+	History                 *ManagedHistoryResolver
+	Metrics                 publication.Metrics
+	Publication             *PublicationService
+	RclonePreflight         RcloneVersioningPreflighter
+	CatalogOwnership        *catalog.Ownership
+	CatalogSummary          CatalogSummaryProjector
+	RecoverySourceNamespace RecoverySourceNamespaceAuthority
 }
 
 type Service struct {
@@ -51,13 +52,14 @@ type Service struct {
 	publication *PublicationService
 	preflights  *rsyncVersioningPreflightStore
 
-	rcloneWorkflowMu  sync.Mutex
-	rcloneSetups      *rcloneVersioningSetupStore
-	rcloneCandidates  *rcloneBindingCandidateStore
-	rclonePreflights  *rcloneVersioningPreflightStore
-	rclonePreflighter RcloneVersioningPreflighter
-	catalogOwnership  *catalog.Ownership
-	catalogSummary    CatalogSummaryProjector
+	rcloneWorkflowMu        sync.Mutex
+	rcloneSetups            *rcloneVersioningSetupStore
+	rcloneCandidates        *rcloneBindingCandidateStore
+	rclonePreflights        *rcloneVersioningPreflightStore
+	rclonePreflighter       RcloneVersioningPreflighter
+	catalogOwnership        *catalog.Ownership
+	catalogSummary          CatalogSummaryProjector
+	recoverySourceNamespace RecoverySourceNamespaceAuthority
 }
 
 func NewService(dependencies Dependencies) (*Service, error) {
@@ -77,11 +79,12 @@ func NewService(dependencies Dependencies) (*Service, error) {
 	return &Service{
 		db: dependencies.DB, foundation: dependencies.Foundation, registry: dependencies.Registry, keyring: dependencies.Keyring,
 		now: dependencies.Now, audit: dependencies.Audit, admission: dependencies.Admission, history: dependencies.History, metrics: dependencies.Metrics,
-		publication:       dependencies.Publication,
-		rclonePreflighter: dependencies.RclonePreflight,
-		catalogOwnership:  dependencies.CatalogOwnership,
-		catalogSummary:    dependencies.CatalogSummary,
-		preflights:        newRsyncVersioningPreflightStore(dependencies.Now),
+		publication:             dependencies.Publication,
+		rclonePreflighter:       dependencies.RclonePreflight,
+		catalogOwnership:        dependencies.CatalogOwnership,
+		catalogSummary:          dependencies.CatalogSummary,
+		recoverySourceNamespace: dependencies.RecoverySourceNamespace,
+		preflights:              newRsyncVersioningPreflightStore(dependencies.Now),
 	}, nil
 }
 

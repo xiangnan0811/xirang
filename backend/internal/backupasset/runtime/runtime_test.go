@@ -2,12 +2,14 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +26,7 @@ import (
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/backupasset/recovery"
+	"xirang/backend/internal/backupasset/repository"
 	"xirang/backend/internal/backupasset/search"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
@@ -53,6 +56,23 @@ func (*runtimeExecutionFake) Join() (provider.CommandCompletion, error) {
 func (*runtimeExecutionFake) Cancel() error { return nil }
 
 type runtimeStagedPayloadFake struct{}
+
+type runtimeRecoverySourceNamespaceAuthorityFake struct {
+	request     recovery.RecoverySourceNamespaceRequest
+	pinned      provider.RsyncRestoreSource
+	observation *recovery.RecoverySourceNamespaceObservation
+	err         error
+}
+
+func (fake *runtimeRecoverySourceNamespaceAuthorityFake) ObserveRecoverySourceNamespace(
+	_ context.Context,
+	request recovery.RecoverySourceNamespaceRequest,
+	pinned provider.RsyncRestoreSource,
+) (*recovery.RecoverySourceNamespaceObservation, error) {
+	fake.request = request
+	fake.pinned = pinned
+	return fake.observation, fake.err
+}
 
 func (*runtimeStagedPayloadFake) Stage(context.Context, provider.RemoteCommandAccess, provider.StagedPayloadRequest) (provider.StagedPayloadRef, error) {
 	return provider.StagedPayloadRef{}, fmt.Errorf("not used")
@@ -501,6 +521,39 @@ func TestTerminalizeExportRuntimeLifecycleBoundsRetryableSweepContention(t *test
 	}
 }
 
+func TestManagedRecoverySourceNamespaceAdapterTranslatesRepositoryHandoffExactly(t *testing.T) {
+	pinned := &managedRecoveryDeclaredSourceFake{}
+	observation := &recovery.RecoverySourceNamespaceObservation{}
+	authority := &runtimeRecoverySourceNamespaceAuthorityFake{observation: observation}
+	adapter := &managedRecoverySourceNamespaceAdapter{authority: authority}
+	request := repository.RecoverySourceNamespaceRequest{
+		SourceRef: provider.RsyncRestoreSourceRef{
+			PlanID: strings.Repeat("1", 32), PlanBindingDigest: strings.Repeat("2", 64),
+			RepositoryID: strings.Repeat("3", 32), RecoveryPointID: strings.Repeat("4", 32),
+			CatalogGenerationID: strings.Repeat("5", 32), SelectionDigest: strings.Repeat("6", 64),
+			SourceRevisionDigest: strings.Repeat("7", 64), ManifestDigest: strings.Repeat("8", 64),
+		},
+		ProducingTaskID: 41, RepositoryBindingRevision: "binding-revision-1",
+		ProvenanceRevision: "provenance-revision-1",
+	}
+
+	got, err := adapter.ObserveRecoverySourceNamespace(context.Background(), request, pinned)
+	if err != nil {
+		t.Fatalf("translate Repository source namespace handoff: %v", err)
+	}
+	if got != observation || authority.pinned != pinned {
+		t.Fatalf("adapter ownership transfer got=%T pinned=%T", got, authority.pinned)
+	}
+	want := recovery.RecoverySourceNamespaceRequest{
+		SourceRef: request.SourceRef, ProducingTaskID: request.ProducingTaskID,
+		RepositoryBindingRevision: request.RepositoryBindingRevision,
+		ProvenanceRevision:        request.ProvenanceRevision,
+	}
+	if authority.request != want {
+		t.Fatalf("translated source namespace request=%+v, want exact scalar handoff", authority.request)
+	}
+}
+
 func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *testing.T) {
 	db := openRuntimeTestDB(t)
 	transport := &runtimeTransportFake{}
@@ -520,6 +573,9 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 		runtime.CatalogService() == nil || runtime.CatalogAuditSink() == nil || runtime.catalogIndexer == nil || runtime.catalogWorker == nil {
 		t.Fatal("runtime omitted a required shared graph port")
 	}
+	if runtime.recoverySourceNamespace == nil {
+		t.Fatal("runtime omitted the production Recovery source-namespace authority")
+	}
 	if runtime.SearchService() == nil || runtime.OverlayService() == nil || runtime.ContentIndexIngest() == nil || runtime.searchIndexer == nil || runtime.searchWorker == nil {
 		t.Fatal("runtime omitted the Search/Overlay graph")
 	}
@@ -532,6 +588,14 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 		runtime.contentBudget == nil || runtime.contentAudit == nil || runtime.contentReconciler == nil || runtime.contentReady == nil {
 		t.Fatal("runtime omitted or duplicated the Content graph")
 	}
+	if runtime.RecoveryAuthorization() == nil || runtime.RecoveryAuthorization() != runtime.recoveryAuthorization ||
+		runtime.RecoveryResults() == nil || runtime.RecoveryResults() != runtime.recoveryResults {
+		t.Fatal("runtime omitted or duplicated the narrow Recovery facades")
+	}
+	contentBrokerValue := reflect.ValueOf(contentBroker).Elem()
+	if contentBrokerValue.FieldByName("recoveryAuthorize").IsNil() || contentBrokerValue.FieldByName("recoverySource").IsNil() {
+		t.Fatal("Content Broker omitted the managed Recovery result facade")
+	}
 	if config, configErr := runtime.ContentConfig(); configErr != nil || config.Enabled {
 		t.Fatalf("default Content config=%+v err=%v, want disabled", config, configErr)
 	}
@@ -540,6 +604,9 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 	}
 	if runtime.archiveMemberService == nil {
 		t.Fatal("runtime omitted the one-hop archive-member service")
+	}
+	if runtime.NodeWriteCoordinator() == nil || runtime.NodeWriteCoordinator() != runtime.nodeWriteCoordinator {
+		t.Fatal("runtime omitted or duplicated the shared Task/Recovery node-write coordinator")
 	}
 	if runtime.exportManager == nil {
 		t.Fatal("runtime omitted the managed Export graph")
@@ -572,6 +639,331 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 	}
 	if runtime.RclonePublicationStrategy().Kind() != backupasset.ProviderRclone {
 		t.Fatalf("publication strategy kind=%q, want %q", runtime.RclonePublicationStrategy().Kind(), backupasset.ProviderRclone)
+	}
+}
+
+func TestRecoveryProductionAuthorityCompositionOwnsTargetRootFacade(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	transport := &runtimeTransportFake{}
+	runtime, err := New(Dependencies{
+		DB: db, Settings: settings.NewService(db), Transport: transport, StreamTransport: transport,
+		StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{},
+		ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{},
+		Now: func() time.Time { return time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("construct production runtime: %v", err)
+	}
+	facade, ok := runtime.RecoveryTargetRoots().(*managedRecoveryTargetRootFacade)
+	if !ok || facade == nil || facade != runtime.recoveryTargetRoots || facade.service == nil || facade.runtime == nil {
+		t.Fatal("production Recovery composition omitted the narrow TargetRootAuthorityService facade")
+	}
+}
+
+func TestRecoveryRuntimeTargetRootFacadeReturnsOnlySafeSummarySurface(t *testing.T) {
+	authorityType := reflect.TypeOf((*RecoveryTargetRootAuthority)(nil)).Elem()
+	register, ok := authorityType.MethodByName("Register")
+	if !ok {
+		t.Fatal("Recovery target-root facade has no Register operation")
+	}
+	safeType := reflect.TypeOf(settings.RecoveryTargetRootSummary{})
+	if got := register.Type.Out(0); got != safeType {
+		t.Fatalf("Register result type=%v, want reviewed safe summary %v", got, safeType)
+	}
+	summary := settings.RecoveryTargetRootSummary{
+		NodeID: 7, RootID: "root-safe", SafeLabel: "safe label",
+	}
+	encoded, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formatted := fmt.Sprintf("%v %+v %#v", summary, summary, summary)
+	for _, forbidden := range []string{
+		"locator", "digest", "revision", "reserve", "policy", "overlap",
+	} {
+		if strings.Contains(strings.ToLower(string(encoded)), forbidden) ||
+			strings.Contains(strings.ToLower(formatted), forbidden) {
+			t.Fatalf("safe target-root summary exposed private field %q: json=%s formatted=%s", forbidden, encoded, formatted)
+		}
+	}
+}
+
+func TestRecoveryRuntimeTargetRootFacadeOwnsRegisterRotateDeleteTransitionsAndRestoration(t *testing.T) {
+	for _, operation := range []string{"register", "rotate", "delete"} {
+		t.Run(operation, func(t *testing.T) {
+			events := make([]string, 0, 16)
+			service := &managedRecoveryTargetRootMutationServiceFake{events: &events}
+			manager, err := newManagedRecoveryRuntime(managedRecoveryRuntimeDependencies{
+				Build: func(context.Context, backupasset.RecoveryConfig) (*managedRecoveryGraph, error) {
+					events = append(events, "construct")
+					return &managedRecoveryGraph{
+						reconcileMetadata: func(context.Context) error {
+							events = append(events, "reconcile")
+							return nil
+						},
+						stopClaims: func() { events = append(events, "stop") },
+						shutdownLifecycle: func(context.Context) error {
+							events = append(events, "drain")
+							return nil
+						},
+					}, nil
+				},
+				Install: func(publication *managedRecoveryPublication, graph *managedRecoveryGraph) error {
+					events = append(events, "install")
+					return publication.publish(graph)
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.StartupWithConfig(context.Background(), backupasset.RecoveryConfig{Enabled: true}); err != nil {
+				t.Fatal(err)
+			}
+			events = events[:0]
+			facade := &managedRecoveryTargetRootFacade{service: service, runtime: manager}
+			switch operation {
+			case "register", "rotate":
+				_, err = facade.Register(context.Background(), recovery.TargetRootRegistrationRequest{
+					NodeID: 1, RootID: "root-a", SafeLabel: operation,
+					Locator: "/srv/" + operation,
+					Policy:  settings.RecoveryTargetRootPolicy{OverlapPolicyBinding: "strict"},
+				})
+			case "delete":
+				err = facade.Delete(context.Background(), 1, "root-a")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantMutation := "mutate:" + operation
+			if operation == "rotate" {
+				wantMutation = "mutate:register"
+			}
+			if operation == "register" {
+				wantMutation = "mutate:register"
+			}
+			if !containsManagedRecoveryOrderedEvents(events, []string{"validate", "stop", "drain", wantMutation, "construct", "reconcile", "install"}) {
+				t.Fatalf("%s transition events=%v", operation, events)
+			}
+		})
+	}
+
+	t.Run("post-mutation failure restores root before graph", func(t *testing.T) {
+		events := make([]string, 0, 20)
+		service := &managedRecoveryTargetRootMutationServiceFake{events: &events}
+		installs := 0
+		manager, err := newManagedRecoveryRuntime(managedRecoveryRuntimeDependencies{
+			Build: func(context.Context, backupasset.RecoveryConfig) (*managedRecoveryGraph, error) {
+				events = append(events, "construct")
+				return &managedRecoveryGraph{
+					reconcileMetadata: func(context.Context) error { events = append(events, "reconcile"); return nil },
+					shutdownLifecycle: func(context.Context) error { events = append(events, "drain"); return nil },
+				}, nil
+			},
+			Install: func(publication *managedRecoveryPublication, graph *managedRecoveryGraph) error {
+				installs++
+				if installs == 2 {
+					events = append(events, "install:failed")
+					return errors.New("candidate install failed")
+				}
+				events = append(events, "install")
+				return publication.publish(graph)
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.StartupWithConfig(context.Background(), backupasset.RecoveryConfig{Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+		events = events[:0]
+		facade := &managedRecoveryTargetRootFacade{service: service, runtime: manager}
+		_, err = facade.Register(context.Background(), recovery.TargetRootRegistrationRequest{
+			NodeID: 1, RootID: "root-a", SafeLabel: "rotate", Locator: "/srv/rotate",
+			Policy: settings.RecoveryTargetRootPolicy{OverlapPolicyBinding: "strict"},
+		})
+		if err == nil {
+			t.Fatal("post-mutation install failure unexpectedly succeeded")
+		}
+		if !containsManagedRecoveryOrderedEvents(events, []string{
+			"mutate:register", "construct", "reconcile", "install:failed", "restore:root", "construct", "reconcile", "install",
+		}) {
+			t.Fatalf("restoration events=%v", events)
+		}
+	})
+
+	t.Run("validation and mutation failures preserve authority ordering", func(t *testing.T) {
+		for _, failure := range []string{"validate", "register", "delete"} {
+			t.Run(failure, func(t *testing.T) {
+				events := make([]string, 0, 16)
+				service := &managedRecoveryTargetRootMutationServiceFake{events: &events}
+				if failure == "validate" {
+					service.validateErr = errors.New("invalid root definition")
+				}
+				if failure == "register" {
+					service.registerErr = errors.New("register mutation failed")
+				}
+				if failure == "delete" {
+					service.deleteErr = errors.New("delete mutation failed")
+				}
+				manager, err := newManagedRecoveryRuntime(managedRecoveryRuntimeDependencies{
+					Build: func(context.Context, backupasset.RecoveryConfig) (*managedRecoveryGraph, error) {
+						events = append(events, "construct")
+						return &managedRecoveryGraph{
+							reconcileMetadata: func(context.Context) error { events = append(events, "reconcile"); return nil },
+							stopClaims:        func() { events = append(events, "stop") },
+							shutdownLifecycle: func(context.Context) error { events = append(events, "drain"); return nil },
+						}, nil
+					},
+					Install: func(publication *managedRecoveryPublication, graph *managedRecoveryGraph) error {
+						events = append(events, "install")
+						return publication.publish(graph)
+					},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := manager.StartupWithConfig(context.Background(), backupasset.RecoveryConfig{Enabled: true}); err != nil {
+					t.Fatal(err)
+				}
+				events = events[:0]
+				facade := &managedRecoveryTargetRootFacade{service: service, runtime: manager}
+				if failure == "delete" {
+					err = facade.Delete(context.Background(), 1, "root-a")
+				} else {
+					_, err = facade.Register(context.Background(), recovery.TargetRootRegistrationRequest{
+						NodeID: 1, RootID: "root-a", SafeLabel: "safe", Locator: "/srv/safe",
+						Policy: settings.RecoveryTargetRootPolicy{OverlapPolicyBinding: "strict"},
+					})
+				}
+				if err == nil {
+					t.Fatalf("%s failure unexpectedly succeeded", failure)
+				}
+				if failure == "validate" {
+					if strings.Join(events, ",") != "validate" {
+						t.Fatalf("validation failure drained or mutated: %v", events)
+					}
+					return
+				}
+				mutation := "mutate:" + failure
+				if !containsManagedRecoveryOrderedEvents(events, []string{
+					"stop", "drain", mutation, "construct", "reconcile", "install",
+				}) || slices.Contains(events, "restore:root") {
+					t.Fatalf("%s atomic mutation failure events=%v", failure, events)
+				}
+			})
+		}
+	})
+
+	t.Run("root restoration failure leaves sticky fence", func(t *testing.T) {
+		events := make([]string, 0, 16)
+		service := &managedRecoveryTargetRootMutationServiceFake{
+			events: &events, restoreErr: errors.New("root restoration failed"),
+		}
+		builds := 0
+		manager, err := newManagedRecoveryRuntime(managedRecoveryRuntimeDependencies{
+			Build: func(context.Context, backupasset.RecoveryConfig) (*managedRecoveryGraph, error) {
+				builds++
+				if builds == 2 {
+					return nil, errors.New("candidate construction failed")
+				}
+				return &managedRecoveryGraph{
+					reconcileMetadata: func(context.Context) error { return nil },
+					shutdownLifecycle: func(context.Context) error { return nil },
+				}, nil
+			},
+			DowngradeInspector: &managedRecoveryDowngradeInspectorFake{},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.StartupWithConfig(context.Background(), backupasset.RecoveryConfig{Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+		facade := &managedRecoveryTargetRootFacade{service: service, runtime: manager}
+		_, err = facade.Register(context.Background(), recovery.TargetRootRegistrationRequest{
+			NodeID: 1, RootID: "root-a", SafeLabel: "safe", Locator: "/srv/safe",
+			Policy: settings.RecoveryTargetRootPolicy{OverlapPolicyBinding: "strict"},
+		})
+		if err == nil || manager.publication.current() != nil || manager.graph != nil || !manager.downgradeFenced {
+			t.Fatalf("failed root restoration err=%v publication=%p graph=%p fenced=%t",
+				err, manager.publication.current(), manager.graph, manager.downgradeFenced)
+		}
+		if _, err := manager.DowngradeReadiness(context.Background()); !errors.Is(err, backupasset.ErrInvalidState) {
+			t.Fatalf("failed root restoration readiness error=%v", err)
+		}
+	})
+}
+
+type managedRecoveryTargetRootMutationServiceFake struct {
+	events      *[]string
+	validateErr error
+	registerErr error
+	deleteErr   error
+	restoreErr  error
+}
+
+func (fake *managedRecoveryTargetRootMutationServiceFake) ValidateRegistration(recovery.TargetRootRegistrationRequest) error {
+	*fake.events = append(*fake.events, "validate")
+	return fake.validateErr
+}
+
+func (fake *managedRecoveryTargetRootMutationServiceFake) ValidateDelete(uint, string) error {
+	*fake.events = append(*fake.events, "validate")
+	return fake.validateErr
+}
+
+func (fake *managedRecoveryTargetRootMutationServiceFake) RegisterMutation(
+	context.Context,
+	recovery.TargetRootRegistrationRequest,
+) (settings.RecoveryTargetRootSummary, recovery.TargetRootMutationRollback, error) {
+	*fake.events = append(*fake.events, "mutate:register")
+	return settings.RecoveryTargetRootSummary{NodeID: 1, RootID: "root-a", SafeLabel: "safe"},
+		recovery.TargetRootMutationRollback{}, fake.registerErr
+}
+
+func (fake *managedRecoveryTargetRootMutationServiceFake) DeleteMutation(
+	context.Context,
+	uint,
+	string,
+) (recovery.TargetRootMutationRollback, error) {
+	*fake.events = append(*fake.events, "mutate:delete")
+	return recovery.TargetRootMutationRollback{}, fake.deleteErr
+}
+
+func (fake *managedRecoveryTargetRootMutationServiceFake) RestoreMutation(
+	context.Context,
+	recovery.TargetRootMutationRollback,
+) error {
+	*fake.events = append(*fake.events, "restore:root")
+	return fake.restoreErr
+}
+
+func (*managedRecoveryTargetRootMutationServiceFake) List(
+	context.Context,
+	uint,
+) ([]settings.RecoveryTargetRootSummary, error) {
+	return nil, nil
+}
+
+func TestRecoveryProductionAuthorityProjectsOneOwnerThroughAllThreeAdapters(t *testing.T) {
+	ports, err := newManagedRecoveryEligibilityAuthorities(recovery.RecoveryEligibilityAuthorityDependencies{
+		DB:                openRuntimeTestDB(t),
+		Source:            managedRecoveryEligibilitySourcePortFake{},
+		Security:          managedRecoveryEligibilitySecurityPortFake{},
+		TargetRoot:        managedRecoveryEligibilityTargetRootPortFake{},
+		TargetObservation: managedRecoveryEligibilityTargetObservationPortFake{},
+		Now: func() time.Time {
+			return time.Date(2026, 8, 15, 12, 1, 0, 0, time.UTC)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preflight, preflightOK := ports.preflight.(*recovery.RecoveryEligibilityAuthority)
+	live, liveOK := ports.live.(*recovery.RecoveryEligibilityAuthority)
+	reconciliation, reconciliationOK := ports.reconciliation.(*recovery.RecoveryEligibilityAuthority)
+	if !preflightOK || !liveOK || !reconciliationOK || preflight != live || live != reconciliation {
+		t.Fatal("Recovery composition projected more than one eligibility authority")
 	}
 }
 
@@ -1501,6 +1893,232 @@ type runtimeExportSettingsManagerFake struct {
 	events        *[]string
 	globalEnabled []bool
 	configs       []backupasset.ExportConfig
+}
+
+type runtimeRecoveryManagerFake struct {
+	events           *[]string
+	configs          []backupasset.RecoveryConfig
+	readiness        RecoveryDowngradeReadiness
+	failAfterPersist bool
+}
+
+func (fake *runtimeRecoveryManagerFake) DowngradeReadiness(context.Context) (RecoveryDowngradeReadiness, error) {
+	*fake.events = append(*fake.events, "recovery-downgrade-readiness")
+	return fake.readiness, nil
+}
+
+func (fake *runtimeRecoveryManagerFake) StartupWithConfig(_ context.Context, config backupasset.RecoveryConfig) error {
+	fake.configs = append(fake.configs, config)
+	*fake.events = append(*fake.events, fmt.Sprintf("recovery-startup-%t", config.Enabled))
+	return nil
+}
+
+func (fake *runtimeRecoveryManagerFake) TransitionSettings(
+	_ context.Context,
+	config backupasset.RecoveryConfig,
+	persist func() error,
+) error {
+	fake.configs = append(fake.configs, config)
+	*fake.events = append(*fake.events, fmt.Sprintf("recovery-settings-%t", config.Enabled))
+	if err := persist(); err != nil {
+		return err
+	}
+	if fake.failAfterPersist {
+		return errors.New("injected Recovery install failure")
+	}
+	return nil
+}
+
+func (fake *runtimeRecoveryManagerFake) TransitionSettingsWithRestore(
+	ctx context.Context,
+	config backupasset.RecoveryConfig,
+	persist func() error,
+	restore func() error,
+) error {
+	err := fake.TransitionSettings(ctx, config, persist)
+	if err != nil && restore != nil {
+		return errors.Join(err, restore())
+	}
+	return err
+}
+
+func (fake *runtimeRecoveryManagerFake) StopAccepting() {
+	*fake.events = append(*fake.events, "recovery-stop-accepting")
+}
+
+func (fake *runtimeRecoveryManagerFake) Run(context.Context) {
+	*fake.events = append(*fake.events, "recovery-run")
+}
+
+func (fake *runtimeRecoveryManagerFake) Shutdown(context.Context) error {
+	*fake.events = append(*fake.events, "recovery-shutdown")
+	return nil
+}
+
+func (fake *runtimeRecoveryManagerFake) PrepareSchemaDown(_ context.Context, callback func() error) error {
+	*fake.events = append(*fake.events, "recovery-schema-drain")
+	return callback()
+}
+
+func TestRuntimeRecoveryLifecycleAndProspectiveSettingsAreCoordinated(t *testing.T) {
+	events := []string{}
+	recoveryManager := &runtimeRecoveryManagerFake{events: &events}
+	exportManager := &runtimeExportSettingsManagerFake{events: &events}
+	settingsService := settings.NewService(openRuntimeTestDB(t))
+	effective, err := settingsService.BackupAssetSettingsSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := make(map[string]string, len(effective))
+	for key, value := range effective {
+		current[key] = value
+	}
+	runtime := &Runtime{
+		recoveryManager: recoveryManager,
+		exportManager:   exportManager,
+		transitioner:    &runtimeFeatureTransitionerFake{events: &events},
+		settings:        settingsService,
+	}
+
+	effective["backup_assets.recovery.enabled"] = "true"
+	effective["backup_assets.recovery.worker_concurrency"] = "3"
+	if err := runtime.TransitionBackupAssetSettings(
+		context.Background(), current,
+		map[string]string{"backup_assets.recovery.enabled": "true", "backup_assets.recovery.worker_concurrency": "3"},
+		effective, backupasset.ExportConfig{}, func() error {
+			events = append(events, "persist")
+			return nil
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(recoveryManager.configs) != 1 || !recoveryManager.configs[0].Enabled ||
+		recoveryManager.configs[0].WorkerConcurrency != 3 {
+		t.Fatalf("Recovery transition configs=%+v", recoveryManager.configs)
+	}
+	if got, want := fmt.Sprint(events), "[admission-transition-false export-settings-false recovery-settings-true persist]"; got != want {
+		t.Fatalf("Recovery settings order=%s want=%s", got, want)
+	}
+
+	events = events[:0]
+	runtime.StopAccepting()
+	if err := runtime.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !containsManagedRecoveryOrderedEvents(events, []string{
+		"recovery-stop-accepting", "recovery-stop-accepting", "recovery-shutdown",
+	}) {
+		t.Fatalf("Recovery shutdown events=%v", events)
+	}
+}
+
+func TestRecoveryTransitionRestoresPriorPersistedSettingsThroughRuntimeOwner(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	settingsService := settings.NewService(db)
+	transport := &runtimeTransportFake{}
+	runtime, err := New(Dependencies{
+		DB: db, Settings: settingsService, Transport: transport, StreamTransport: transport,
+		StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{},
+		ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := settingsService.BackupAssetSettingsSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	effective := make(map[string]string, len(current))
+	for key, value := range current {
+		effective[key] = value
+	}
+	effective["backup_assets.recovery.enabled"] = "true"
+	events := []string{}
+	runtime.recoveryManager = &runtimeRecoveryManagerFake{events: &events, failAfterPersist: true}
+	runtime.exportManager = &runtimeExportSettingsManagerFake{events: &events}
+	runtime.transitioner = &runtimeFeatureTransitionerFake{events: &events}
+
+	err = runtime.TransitionBackupAssetSettings(
+		context.Background(), current,
+		map[string]string{"backup_assets.recovery.enabled": "true"}, effective,
+		backupasset.ExportConfig{},
+		func() error { return settingsService.Update("backup_assets.recovery.enabled", "true") },
+	)
+	if err == nil {
+		t.Fatal("injected Recovery install failure unexpectedly succeeded")
+	}
+	if got := settingsService.GetEffective("backup_assets.recovery.enabled"); got != current["backup_assets.recovery.enabled"] {
+		t.Fatalf("persisted Recovery enabled=%q, want restored prior %q", got, current["backup_assets.recovery.enabled"])
+	}
+}
+
+func TestRuntimeNewOwnsDefaultDisabledRecoveryReceiptMaintenance(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RUNTIME_RECOVERY_DEFAULT_DISABLED_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(&model.BackupAssetRecoveryEvidence{}); err != nil {
+		t.Fatal(err)
+	}
+	transport := &runtimeTransportFake{}
+	runtime, err := New(Dependencies{
+		DB: db, Settings: settings.NewService(db), Transport: transport, StreamTransport: transport,
+		StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{},
+		SessionRevocations: &runtimeSessionRevocationsFake{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.recoveryManager == nil {
+		t.Fatal("Runtime.New did not construct Recovery lifecycle owner")
+	}
+	manager, ok := runtime.recoveryManager.(*managedRecoveryRuntime)
+	if !ok || manager.receiptOwner == nil || manager.downgradeInspector == nil {
+		t.Fatalf("Recovery manager=%T maintenance authorities unavailable", runtime.recoveryManager)
+	}
+	config, err := runtime.foundation.RecoveryConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Enabled {
+		t.Fatal("test requires default-disabled Recovery")
+	}
+	if err := manager.StartupWithConfig(context.Background(), config); err != nil {
+		t.Fatalf("default-disabled Recovery startup: %v", err)
+	}
+	installed := manager.publication.current()
+	if installed == nil || installed != manager.graph || installed.resultLifecycle == nil || installed.cleanup == nil ||
+		installed.cleanup.lifecycle != installed.resultLifecycle || installed.run == nil {
+		t.Fatalf("default-disabled Recovery maintenance graph=%+v", installed)
+	}
+	if _, release, admitted := manager.publication.acquireAdmission(); admitted {
+		release()
+		t.Fatal("default-disabled Recovery published a mutation facade")
+	}
+}
+
+func TestRuntimeExposesRecoveryDowngradeReadinessFacade(t *testing.T) {
+	events := []string{}
+	manager := &runtimeRecoveryManagerFake{
+		events: &events,
+		readiness: RecoveryDowngradeReadiness{
+			State:               RecoveryDowngradePristineAllowed,
+			AdmissionGeneration: "recovery-downgrade-test",
+		},
+	}
+	runtime := &Runtime{recoveryManager: manager}
+
+	result, err := runtime.RecoveryDowngradeReadiness(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != manager.readiness {
+		t.Fatalf("readiness=%+v, want %+v", result, manager.readiness)
+	}
+	if got := fmt.Sprint(events); got != "[recovery-downgrade-readiness]" {
+		t.Fatalf("readiness events=%s", got)
+	}
 }
 
 type runtimeOverlayKeySourceUnused struct{}

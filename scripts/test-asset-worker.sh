@@ -67,7 +67,7 @@ if [[ -n "$VALIDATE_RUNTIME_CLOSURE_ONLY" ]]; then
   exit 0
 fi
 
-grep -Eq '^FROM golang:1\.26\.5-alpine@sha256:[0-9a-f]{64} AS worker-builder$' "$DOCKERFILE" || fail "builder base is not digest pinned"
+grep -Eq '^FROM golang:1\.26\.6-alpine@sha256:[0-9a-f]{64} AS worker-builder$' "$DOCKERFILE" || fail "builder base is not digest pinned"
 grep -Eq '^FROM alpine:3\.23@sha256:[0-9a-f]{64}$' "$DOCKERFILE" || fail "runtime base is not digest pinned"
 grep -Fqx -- 'USER 10000:10000' "$DOCKERFILE" || fail "image metadata user is not fixed non-root"
 if grep -Eq 'addgroup[[:space:]]+asset-worker[[:space:]]+asset-updater' "$DOCKERFILE"; then

@@ -6,11 +6,13 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -509,6 +511,80 @@ type managedRsyncPointReadAdapter interface {
 	OpenRange(context.Context, provider.ReadSnapshot, provider.PointLocator, provider.EntryLocator, provider.ByteRange) (provider.ReadHandle, provider.ContentStat, error)
 }
 
+// RecoveryRsyncSourceAuthorityObservation is the closed Repository-owned
+// source product consumed by Recovery authority composition. It carries only
+// current scalar evidence; filesystem locators remain private to the source.
+type RecoveryRsyncSourceAuthorityObservation struct {
+	Provider                     backupasset.ProviderKind `json:"-"`
+	RepositoryID                 string                   `json:"-"`
+	RecoveryPointID              string                   `json:"-"`
+	CatalogGenerationID          string                   `json:"-"`
+	SourceRevisionDigest         string                   `json:"-"`
+	ManifestDigest               string                   `json:"-"`
+	RepositoryCapabilityRevision int                      `json:"-"`
+	CapabilityRevision           int                      `json:"-"`
+	SourceAccessIdentity         string                   `json:"-"`
+	SourceFingerprint            string                   `json:"-"`
+	ManagedRootIdentity          string                   `json:"-"`
+	RepositoryBindingRevision    string                   `json:"-"`
+	ProvenanceRevision           string                   `json:"-"`
+}
+
+func (RecoveryRsyncSourceAuthorityObservation) String() string {
+	return "RecoveryRsyncSourceAuthorityObservation{redacted}"
+}
+
+func (RecoveryRsyncSourceAuthorityObservation) GoString() string {
+	return "RecoveryRsyncSourceAuthorityObservation{redacted}"
+}
+
+// RecoveryRsyncSourceAuthority admits only the Provider-aware managed Rsync
+// resolver. It remains capability-unavailable after exact source validation
+// until an owning observer supplies purpose-exact source namespace evidence;
+// Restic and Rclone have no equivalent exact source boundary yet.
+type RecoveryRsyncSourceAuthority interface {
+	ObserveRecoverySource(
+		context.Context,
+		provider.RecoverySourceAuthorityRequest,
+	) (provider.RsyncRestoreSource, RecoveryRsyncSourceAuthorityObservation, error)
+	RevalidateRecoverySourceAuthorityTx(
+		context.Context,
+		*gorm.DB,
+		provider.RecoverySourceAuthorityRequest,
+		RecoveryRsyncSourceAuthorityObservation,
+	) error
+}
+
+// RecoverySourceNamespaceRequest is the Repository-owned scalar handoff to a
+// runtime-injected namespace observer. Repository deliberately does not
+// depend on the Recovery package; the runtime composition root translates
+// this request into Recovery's private authority contract.
+type RecoverySourceNamespaceRequest struct {
+	SourceRef                 provider.RsyncRestoreSourceRef `json:"-"`
+	ProducingTaskID           uint                           `json:"-"`
+	RepositoryBindingRevision string                         `json:"-"`
+	ProvenanceRevision        string                         `json:"-"`
+}
+
+func (RecoverySourceNamespaceRequest) String() string {
+	return "RecoverySourceNamespaceRequest{redacted}"
+}
+
+func (RecoverySourceNamespaceRequest) GoString() string {
+	return "RecoverySourceNamespaceRequest{redacted}"
+}
+
+// RecoverySourceNamespaceAuthority transfers one pinned source to the
+// Recovery-owned observer without reversing the Repository -> Recovery
+// package dependency. Ownership transfers when this method is invoked.
+type RecoverySourceNamespaceAuthority interface {
+	ObserveRecoverySourceNamespace(
+		context.Context,
+		RecoverySourceNamespaceRequest,
+		provider.RsyncRestoreSource,
+	) (provider.RsyncRestoreSource, error)
+}
+
 // ManagedRsyncPointReadSession owns the only internal path to a committed
 // managed Rsync tree. It deliberately exposes provider-level opaque locators
 // only; roots, marker material, and point locators remain private to this
@@ -543,52 +619,232 @@ func (service *Service) ResolveRsyncRestoreSource(ctx context.Context, ref provi
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var source *repositoryRsyncRestoreSource
-	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		resolution, err := service.loadRsyncRestoreResolution(ctx, tx, ref)
-		if err != nil {
-			return err
-		}
-		pinned, err := fileaccess.OpenPinnedStrictTree(ctx, resolution.access.Root, fileaccess.RootLocator())
-		if err != nil {
-			return invalidRsyncRestoreSourceRef()
-		}
-		entries := make(map[provider.RestoreEntry]fileaccess.Entry, len(resolution.declared))
-		ordered := make([]provider.RestoreEntry, 0, len(resolution.declared))
-		for _, declaration := range resolution.declared {
-			entry, statErr := resolution.access.Tree.Lstat(ctx, resolution.access.Root, declaration.locator, fileaccess.ProviderPolicy)
-			if statErr != nil || entry.Type != fileaccess.EntryFile || entry.Size != declaration.restore.ExpectedSize ||
-				entry.Name != declaration.name || entry.SourceRevision == "" {
-				_ = pinned.Close()
-				return invalidRsyncRestoreSourceRef()
-			}
-			digest, digestErr := digestPinnedRsyncRestoreEntry(ctx, pinned, entry)
-			if digestErr != nil || declaration.restore.ExpectedDigest != "" && declaration.restore.ExpectedDigest != digest {
-				_ = pinned.Close()
-				return invalidRsyncRestoreSourceRef()
-			}
-			declared := declaration.restore
-			declared.ExpectedDigest = digest
-			entries[declared] = entry
-			ordered = append(ordered, declared)
-		}
-		source = &repositoryRsyncRestoreSource{service: service, ref: ref, tree: pinned, entries: entries, ordered: ordered}
-		return nil
+	return resolveRsyncRestoreSourceWithDependencies(ctx, ref, rsyncRestoreSourceResolverDependencies{
+		loadSnapshot: func(ctx context.Context, ref provider.RsyncRestoreSourceRef) (rsyncRestoreDurableSnapshot, error) {
+			var snapshot rsyncRestoreDurableSnapshot
+			err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				loaded, err := service.loadRsyncRestoreDurableSnapshot(ctx, tx, ref)
+				if err == nil {
+					snapshot = loaded
+				}
+				return err
+			})
+			return snapshot, err
+		},
+		observeFilesystem:  observeRsyncRestoreSourceFilesystem,
+		revalidateSnapshot: service.revalidateRsyncRestoreSnapshot,
+		revalidateSource:   service.revalidateRsyncRestoreSource,
 	})
+}
+
+func (service *Service) ObserveRecoverySource(
+	ctx context.Context,
+	request provider.RecoverySourceAuthorityRequest,
+) (provider.RsyncRestoreSource, RecoveryRsyncSourceAuthorityObservation, error) {
+	if request.Provider != backupasset.ProviderRsync {
+		return nil, RecoveryRsyncSourceAuthorityObservation{}, fmt.Errorf("%w: Recovery source provider unavailable", backupasset.ErrCapabilityUnavailable)
+	}
+	if service == nil {
+		return nil, RecoveryRsyncSourceAuthorityObservation{}, fmt.Errorf("%w: Recovery source namespace authority unavailable", backupasset.ErrCapabilityUnavailable)
+	}
+	return observeRecoveryRsyncSourceWithDependencies(ctx, request, recoveryRsyncSourceAuthorityDependencies{
+		resolve:    service.ResolveRsyncRestoreSource,
+		capture:    service.captureRecoveryRsyncAuthoritySnapshot,
+		revalidate: service.revalidateRecoveryRsyncAuthoritySnapshot,
+		observe: func(ctx context.Context, namespaceRequest RecoverySourceNamespaceRequest, pinned provider.RsyncRestoreSource) (provider.RsyncRestoreSource, error) {
+			if service.recoverySourceNamespace == nil {
+				_ = pinned.Close()
+				return nil, fmt.Errorf("%w: Recovery source namespace authority unavailable", backupasset.ErrCapabilityUnavailable)
+			}
+			return service.recoverySourceNamespace.ObserveRecoverySourceNamespace(ctx, namespaceRequest, pinned)
+		},
+	})
+}
+
+type recoveryRsyncAuthoritySnapshot struct {
+	producingTaskID           uint
+	repositoryBindingRevision string
+	provenanceRevision        string
+	durable                   rsyncRestoreDurableSnapshot
+	observation               RecoveryRsyncSourceAuthorityObservation
+}
+
+type recoveryRsyncSourceAuthorityDependencies struct {
+	resolve    func(context.Context, provider.RsyncRestoreSourceRef) (provider.RsyncRestoreSource, error)
+	capture    func(context.Context, provider.RsyncRestoreSourceRef) (recoveryRsyncAuthoritySnapshot, error)
+	observe    func(context.Context, RecoverySourceNamespaceRequest, provider.RsyncRestoreSource) (provider.RsyncRestoreSource, error)
+	revalidate func(context.Context, provider.RsyncRestoreSourceRef, recoveryRsyncAuthoritySnapshot) error
+}
+
+func observeRecoveryRsyncSourceWithDependencies(
+	ctx context.Context,
+	request provider.RecoverySourceAuthorityRequest,
+	dependencies recoveryRsyncSourceAuthorityDependencies,
+) (provider.RsyncRestoreSource, RecoveryRsyncSourceAuthorityObservation, error) {
+	if request.Provider != backupasset.ProviderRsync || dependencies.resolve == nil || dependencies.capture == nil ||
+		dependencies.observe == nil || dependencies.revalidate == nil {
+		return nil, RecoveryRsyncSourceAuthorityObservation{}, fmt.Errorf("%w: Recovery source provider unavailable", backupasset.ErrCapabilityUnavailable)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	pinned, err := dependencies.resolve(ctx, request.RsyncRef)
+	if err != nil || pinned == nil {
+		if pinned != nil {
+			_ = pinned.Close()
+		}
+		return nil, RecoveryRsyncSourceAuthorityObservation{}, recoveryRsyncAuthorityError(ctx, err)
+	}
+	ownedPinned := true
+	defer func() {
+		if ownedPinned {
+			_ = pinned.Close()
+		}
+	}()
+	if err := pinned.Revalidate(ctx); err != nil {
+		return nil, RecoveryRsyncSourceAuthorityObservation{}, recoveryRsyncAuthorityError(ctx, err)
+	}
+	snapshot, err := dependencies.capture(ctx, request.RsyncRef)
+	if err != nil || snapshot.producingTaskID == 0 || snapshot.repositoryBindingRevision == "" || snapshot.provenanceRevision == "" {
+		return nil, RecoveryRsyncSourceAuthorityObservation{}, recoveryRsyncAuthorityError(ctx, err)
+	}
+	observed, err := dependencies.observe(ctx, RecoverySourceNamespaceRequest{
+		SourceRef: request.RsyncRef, ProducingTaskID: snapshot.producingTaskID,
+		RepositoryBindingRevision: snapshot.repositoryBindingRevision,
+		ProvenanceRevision:        snapshot.provenanceRevision,
+	}, pinned)
+	if err != nil || observed == nil {
+		if observed != nil {
+			ownedPinned = false
+			_ = observed.Close()
+		} else if err != nil {
+			// The Recovery observer owns and closes the transferred pinned source
+			// on every error path. A nil success product transfers nothing, so the
+			// Repository defer remains the owner.
+			ownedPinned = false
+		}
+		return nil, RecoveryRsyncSourceAuthorityObservation{}, recoveryRsyncAuthorityError(ctx, err)
+	}
+	ownedPinned = false
+	if err := observed.Revalidate(ctx); err != nil {
+		_ = observed.Close()
+		return nil, RecoveryRsyncSourceAuthorityObservation{}, recoveryRsyncAuthorityError(ctx, err)
+	}
+	if err := dependencies.revalidate(ctx, request.RsyncRef, snapshot); err != nil {
+		_ = observed.Close()
+		return nil, RecoveryRsyncSourceAuthorityObservation{}, recoveryRsyncAuthorityError(ctx, err)
+	}
+	observation := recoveryRsyncAuthorityObservation(request.RsyncRef, snapshot)
+	return observed, observation, nil
+}
+
+// RevalidateRecoverySourceAuthorityTx re-locks the complete Repository-owned
+// source, capability, binding, and provenance product in the caller-owned
+// transaction. It performs no filesystem or network work and never opens a
+// nested transaction.
+func (service *Service) RevalidateRecoverySourceAuthorityTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	request provider.RecoverySourceAuthorityRequest,
+	expected RecoveryRsyncSourceAuthorityObservation,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if service == nil || tx == nil || request.Provider != backupasset.ProviderRsync ||
+		expected.Provider != backupasset.ProviderRsync || expected.RepositoryID != request.RsyncRef.RepositoryID ||
+		expected.RecoveryPointID != request.RsyncRef.RecoveryPointID ||
+		expected.CatalogGenerationID != request.RsyncRef.CatalogGenerationID ||
+		expected.SourceRevisionDigest != request.RsyncRef.SourceRevisionDigest ||
+		expected.ManifestDigest != request.RsyncRef.ManifestDigest ||
+		expected.RepositoryCapabilityRevision <= 0 || expected.CapabilityRevision <= 0 ||
+		expected.SourceAccessIdentity == "" || expected.SourceFingerprint == "" ||
+		expected.ManagedRootIdentity == "" || expected.RepositoryBindingRevision == "" ||
+		expected.ProvenanceRevision == "" {
+		return invalidRsyncRestoreSourceRef()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	current, err := service.loadRecoveryRsyncAuthoritySnapshotTx(ctx, tx, request.RsyncRef)
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
 		}
-		return nil, invalidRsyncRestoreSourceRef()
+		return invalidRsyncRestoreSourceRef()
 	}
-	if err := source.Revalidate(ctx); err != nil {
-		_ = source.Close()
+	if !reflect.DeepEqual(recoveryRsyncAuthorityObservation(request.RsyncRef, current), expected) {
+		return fmt.Errorf("%w: Recovery source authority changed", backupasset.ErrConflict)
+	}
+	return nil
+}
+
+func recoveryRsyncAuthorityObservation(
+	ref provider.RsyncRestoreSourceRef,
+	snapshot recoveryRsyncAuthoritySnapshot,
+) RecoveryRsyncSourceAuthorityObservation {
+	observation := snapshot.observation
+	observation.Provider = backupasset.ProviderRsync
+	observation.RepositoryID = ref.RepositoryID
+	observation.RecoveryPointID = ref.RecoveryPointID
+	observation.CatalogGenerationID = ref.CatalogGenerationID
+	observation.SourceRevisionDigest = ref.SourceRevisionDigest
+	observation.ManifestDigest = ref.ManifestDigest
+	observation.RepositoryBindingRevision = snapshot.repositoryBindingRevision
+	observation.ProvenanceRevision = snapshot.provenanceRevision
+	return observation
+}
+
+func recoveryRsyncAuthorityError(ctx context.Context, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(err, backupasset.ErrCapabilityUnavailable) {
+		return fmt.Errorf("%w: Recovery source namespace authority unavailable", backupasset.ErrCapabilityUnavailable)
+	}
+	if errors.Is(err, backupasset.ErrConflict) {
+		return fmt.Errorf("%w: Recovery source binding changed", backupasset.ErrConflict)
+	}
+	return invalidRsyncRestoreSourceRef()
+}
+
+func observeRecoveryRsyncSourceWithResolver(
+	ctx context.Context,
+	request provider.RecoverySourceAuthorityRequest,
+	resolve func(context.Context, provider.RsyncRestoreSourceRef) (provider.RsyncRestoreSource, error),
+) (provider.RsyncRestoreSource, RecoveryRsyncSourceAuthorityObservation, error) {
+	if request.Provider != backupasset.ProviderRsync || resolve == nil {
+		return nil, RecoveryRsyncSourceAuthorityObservation{}, fmt.Errorf("%w: Recovery source provider unavailable", backupasset.ErrCapabilityUnavailable)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	source, err := resolve(ctx, request.RsyncRef)
+	if err != nil {
+		if source != nil {
+			_ = source.Close()
+		}
 		if contextErr := rsyncRestorePortContextError(ctx, err); contextErr != nil {
-			return nil, contextErr
+			return nil, RecoveryRsyncSourceAuthorityObservation{}, contextErr
 		}
-		return nil, invalidRsyncRestoreSourceRef()
+		return nil, RecoveryRsyncSourceAuthorityObservation{}, invalidRsyncRestoreSourceRef()
 	}
-	return source, nil
+	if source == nil {
+		return nil, RecoveryRsyncSourceAuthorityObservation{}, invalidRsyncRestoreSourceRef()
+	}
+	defer func() {
+		_ = source.Close()
+	}()
+	if err := source.Revalidate(ctx); err != nil {
+		if contextErr := rsyncRestorePortContextError(ctx, err); contextErr != nil {
+			return nil, RecoveryRsyncSourceAuthorityObservation{}, contextErr
+		}
+		return nil, RecoveryRsyncSourceAuthorityObservation{}, invalidRsyncRestoreSourceRef()
+	}
+	return nil, RecoveryRsyncSourceAuthorityObservation{}, fmt.Errorf(
+		"%w: Recovery source namespace authority unavailable",
+		backupasset.ErrCapabilityUnavailable,
+	)
 }
 
 func digestPinnedRsyncRestoreEntry(ctx context.Context, tree fileaccess.PinnedStrictTree, entry fileaccess.Entry) (string, error) {
@@ -611,17 +867,46 @@ type rsyncRestoreDeclaredEntry struct {
 	name    string
 }
 
-type rsyncRestoreResolution struct {
-	access   provider.RsyncCommittedPointRuntimeAccess
-	declared []rsyncRestoreDeclaredEntry
+type rsyncRestoreDurableSnapshot struct {
+	request                      provider.RsyncCommittedPointReadRequest
+	declared                     []rsyncRestoreDeclaredEntry
+	provider                     backupasset.ProviderKind
+	repositoryID                 string
+	recoveryPointID              string
+	catalogGenerationID          string
+	sourceRevisionDigest         string
+	manifestDigest               string
+	repositoryCapabilityRevision int
+	capabilityRevision           int
+	sourceAccessIdentity         string
+	sourceFingerprint            string
+	managedRootIdentity          string
+}
+
+type rsyncRestoreSourceResolverDependencies struct {
+	loadSnapshot       func(context.Context, provider.RsyncRestoreSourceRef) (rsyncRestoreDurableSnapshot, error)
+	observeFilesystem  func(context.Context, rsyncRestoreDurableSnapshot) (fileaccess.PinnedStrictTree, map[provider.RestoreEntry]fileaccess.Entry, []provider.RestoreEntry, error)
+	revalidateSnapshot func(context.Context, provider.RsyncRestoreSourceRef, rsyncRestoreDurableSnapshot, map[provider.RestoreEntry]fileaccess.Entry) error
+	revalidateSource   func(context.Context, provider.RsyncRestoreSourceRef, rsyncRestoreDurableSnapshot, map[provider.RestoreEntry]fileaccess.Entry) error
 }
 
 type repositoryRsyncRestoreSource struct {
-	service *Service
-	ref     provider.RsyncRestoreSourceRef
-	tree    fileaccess.PinnedStrictTree
-	entries map[provider.RestoreEntry]fileaccess.Entry
-	ordered []provider.RestoreEntry
+	ref                provider.RsyncRestoreSourceRef
+	snapshot           rsyncRestoreDurableSnapshot
+	tree               fileaccess.PinnedStrictTree
+	entries            map[provider.RestoreEntry]fileaccess.Entry
+	ordered            []provider.RestoreEntry
+	revalidateSnapshot func(context.Context, provider.RsyncRestoreSourceRef, rsyncRestoreDurableSnapshot, map[provider.RestoreEntry]fileaccess.Entry) error
+	closeOnce          sync.Once
+	closeErr           error
+}
+
+func (*repositoryRsyncRestoreSource) String() string {
+	return "repositoryRsyncRestoreSource{redacted}"
+}
+
+func (*repositoryRsyncRestoreSource) GoString() string {
+	return "repositoryRsyncRestoreSource{redacted}"
 }
 
 func (source *repositoryRsyncRestoreSource) OpenDeclaredRegular(ctx context.Context, requested provider.RestoreEntry) (provider.RsyncRestoreSourceStream, error) {
@@ -685,10 +970,10 @@ func (source *repositoryRsyncRestoreSource) MaterializeDeclaredEntries(ctx conte
 }
 
 func (source *repositoryRsyncRestoreSource) Revalidate(ctx context.Context) error {
-	if source == nil || source.service == nil || source.tree == nil {
+	if source == nil || source.tree == nil || source.revalidateSnapshot == nil {
 		return provider.ErrRsyncRestoreSourceDrift
 	}
-	if err := source.service.revalidateRsyncRestoreResolution(ctx, source.ref, source.entries); err != nil {
+	if err := source.revalidateSnapshot(ctx, source.ref, source.snapshot, source.entries); err != nil {
 		if contextErr := rsyncRestorePortContextError(ctx, err); contextErr != nil {
 			return contextErr
 		}
@@ -707,38 +992,177 @@ func (source *repositoryRsyncRestoreSource) Close() error {
 	if source == nil || source.tree == nil {
 		return nil
 	}
-	return source.tree.Close()
+	source.closeOnce.Do(func() {
+		source.closeErr = source.tree.Close()
+	})
+	return source.closeErr
 }
 
 var _ provider.RsyncRestoreSource = (*repositoryRsyncRestoreSource)(nil)
 
-func (service *Service) loadRsyncRestoreResolution(
+func resolveRsyncRestoreSourceWithDependencies(
+	ctx context.Context,
+	ref provider.RsyncRestoreSourceRef,
+	dependencies rsyncRestoreSourceResolverDependencies,
+) (provider.RsyncRestoreSource, error) {
+	if dependencies.loadSnapshot == nil || dependencies.observeFilesystem == nil ||
+		dependencies.revalidateSnapshot == nil || dependencies.revalidateSource == nil {
+		return nil, invalidRsyncRestoreSourceRef()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	snapshot, err := dependencies.loadSnapshot(ctx, ref)
+	if err != nil {
+		if contextErr := rsyncRestorePortContextError(ctx, err); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, invalidRsyncRestoreSourceRef()
+	}
+	pinned, entries, ordered, observeErr := dependencies.observeFilesystem(ctx, snapshot)
+	owned := pinned != nil
+	defer func() {
+		if owned {
+			_ = pinned.Close()
+		}
+	}()
+	if observeErr != nil || pinned == nil || len(entries) == 0 || len(ordered) != len(entries) {
+		if contextErr := rsyncRestorePortContextError(ctx, observeErr); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, invalidRsyncRestoreSourceRef()
+	}
+	source := &repositoryRsyncRestoreSource{
+		ref: ref, snapshot: snapshot, tree: pinned, entries: entries, ordered: ordered,
+		revalidateSnapshot: dependencies.revalidateSource,
+	}
+	if err := dependencies.revalidateSnapshot(ctx, ref, snapshot, entries); err != nil {
+		if contextErr := rsyncRestorePortContextError(ctx, err); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, invalidRsyncRestoreSourceRef()
+	}
+	if err := pinned.Revalidate(ctx); err != nil {
+		if contextErr := rsyncRestorePortContextError(ctx, err); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, invalidRsyncRestoreSourceRef()
+	}
+	owned = false
+	return source, nil
+}
+
+func observeRsyncRestoreSourceFilesystem(
+	ctx context.Context,
+	snapshot rsyncRestoreDurableSnapshot,
+) (fileaccess.PinnedStrictTree, map[provider.RestoreEntry]fileaccess.Entry, []provider.RestoreEntry, error) {
+	access, err := provider.NewRsyncCommittedPointRuntimeAccess(ctx, snapshot.request)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	pinned, err := fileaccess.OpenPinnedStrictTree(ctx, access.Root, fileaccess.RootLocator())
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	entries := make(map[provider.RestoreEntry]fileaccess.Entry, len(snapshot.declared))
+	ordered := make([]provider.RestoreEntry, 0, len(snapshot.declared))
+	for _, declaration := range snapshot.declared {
+		entry, statErr := access.Tree.Lstat(ctx, access.Root, declaration.locator, fileaccess.ProviderPolicy)
+		if statErr != nil || entry.Type != fileaccess.EntryFile || entry.Size != declaration.restore.ExpectedSize ||
+			entry.Name != declaration.name || entry.SourceRevision == "" {
+			return pinned, nil, nil, invalidRsyncRestoreSourceRef()
+		}
+		digest, digestErr := digestPinnedRsyncRestoreEntry(ctx, pinned, entry)
+		if digestErr != nil || declaration.restore.ExpectedDigest != "" && declaration.restore.ExpectedDigest != digest {
+			return pinned, nil, nil, invalidRsyncRestoreSourceRef()
+		}
+		declared := declaration.restore
+		declared.ExpectedDigest = digest
+		entries[declared] = entry
+		ordered = append(ordered, declared)
+	}
+	return pinned, entries, ordered, nil
+}
+
+func (service *Service) loadRsyncRestoreDurableSnapshot(
 	ctx context.Context,
 	tx *gorm.DB,
 	ref provider.RsyncRestoreSourceRef,
-) (rsyncRestoreResolution, error) {
+) (rsyncRestoreDurableSnapshot, error) {
 	plan, point, declared, err := loadRsyncRestoreSourceBinding(ctx, tx, ref)
 	if err != nil {
-		return rsyncRestoreResolution{}, err
+		return rsyncRestoreDurableSnapshot{}, err
 	}
-	runtime, err := loadExactManagedRsyncPublicationRuntime(ctx, tx, *point.ProducingTaskID)
-	if err != nil || runtime.task.ID != *point.ProducingTaskID || runtime.repository.ID != plan.RepositoryID {
-		return rsyncRestoreResolution{}, invalidRsyncRestoreSourceRef()
+	runtime, err := loadLockedExactManagedRsyncPublicationRuntime(ctx, tx, *point.ProducingTaskID)
+	if err != nil || runtime.task.ID != *point.ProducingTaskID || runtime.repository.ID != plan.RepositoryID ||
+		runtime.repository.ProviderKind != string(backupasset.ProviderRsync) || runtime.repository.RepositoryIdentity == nil ||
+		runtime.repository.CapabilityRevision <= 0 {
+		return rsyncRestoreDurableSnapshot{}, invalidRsyncRestoreSourceRef()
 	}
 	request, _, err := service.managedRsyncCommittedPointReadRequest(ctx, runtime, point)
 	if err != nil {
-		return rsyncRestoreResolution{}, invalidRsyncRestoreSourceRef()
+		return rsyncRestoreDurableSnapshot{}, invalidRsyncRestoreSourceRef()
 	}
-	access, err := provider.NewRsyncCommittedPointRuntimeAccess(ctx, request)
-	if err != nil {
-		return rsyncRestoreResolution{}, invalidRsyncRestoreSourceRef()
-	}
-	return rsyncRestoreResolution{access: access, declared: declared}, nil
+	return rsyncRestoreDurableSnapshot{
+		request: request, declared: declared, provider: backupasset.ProviderRsync,
+		repositoryID: plan.RepositoryID, recoveryPointID: point.ID, catalogGenerationID: plan.CatalogGenerationID,
+		sourceRevisionDigest: plan.SourceRevisionDigest, manifestDigest: point.ManifestDigest,
+		repositoryCapabilityRevision: runtime.repository.CapabilityRevision, capabilityRevision: point.CapabilityRevision,
+		sourceAccessIdentity: *runtime.repository.RepositoryIdentity, sourceFingerprint: point.SourceFingerprint,
+		managedRootIdentity: runtime.binding.ManagedRootIdentityDigest,
+	}, nil
 }
 
-func (service *Service) revalidateRsyncRestoreResolution(
+func loadLockedExactManagedRsyncPublicationRuntime(
+	ctx context.Context,
+	tx *gorm.DB,
+	taskID uint,
+) (managedRsyncPublicationRuntime, error) {
+	if tx == nil || taskID == 0 {
+		return managedRsyncPublicationRuntime{}, invalidRsyncRestoreSourceRef()
+	}
+	var lockedTask model.Task
+	loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND archived_at IS NULL", taskID).Limit(1).Find(&lockedTask)
+	if loaded.Error != nil || loaded.RowsAffected != 1 || lockedTask.ID != taskID {
+		return managedRsyncPublicationRuntime{}, invalidRsyncRestoreSourceRef()
+	}
+	var lockedLink model.TaskRepositoryLink
+	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("task_id = ? AND unlinked_at IS NULL", taskID).Limit(1).Find(&lockedLink)
+	if loaded.Error != nil || loaded.RowsAffected != 1 || lockedLink.TaskID == nil || *lockedLink.TaskID != taskID {
+		return managedRsyncPublicationRuntime{}, invalidRsyncRestoreSourceRef()
+	}
+	var lockedRepository model.BackupRepository
+	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", lockedLink.RepositoryID).Limit(1).Find(&lockedRepository)
+	if loaded.Error != nil || loaded.RowsAffected != 1 || lockedRepository.ID != lockedLink.RepositoryID {
+		return managedRsyncPublicationRuntime{}, invalidRsyncRestoreSourceRef()
+	}
+	var lockedBinding model.RepositoryAccessBinding
+	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("repository_id = ? AND status = ?", lockedRepository.ID, bindingStatusActive).Limit(1).Find(&lockedBinding)
+	if loaded.Error != nil || loaded.RowsAffected != 1 || lockedBinding.RepositoryID != lockedRepository.ID {
+		return managedRsyncPublicationRuntime{}, invalidRsyncRestoreSourceRef()
+	}
+	stored, err := decodeStoredBindingDocument(lockedBinding.EncryptedConfig)
+	if err != nil || stored.ManagedRsyncV2 == nil || stored.V1 != nil || stored.ManagedRcloneV3 != nil {
+		return managedRsyncPublicationRuntime{}, invalidRsyncRestoreSourceRef()
+	}
+	lockedRuntime := managedRsyncPublicationRuntime{
+		repository: lockedRepository, task: lockedTask, link: lockedLink, binding: *stored.ManagedRsyncV2,
+	}
+	validated, err := loadExactManagedRsyncPublicationRuntime(ctx, tx, taskID)
+	if err != nil || !reflect.DeepEqual(validated, lockedRuntime) {
+		return managedRsyncPublicationRuntime{}, invalidRsyncRestoreSourceRef()
+	}
+	return lockedRuntime, nil
+}
+
+func (service *Service) revalidateRsyncRestoreSnapshot(
 	ctx context.Context,
 	ref provider.RsyncRestoreSourceRef,
+	snapshot rsyncRestoreDurableSnapshot,
 	expected map[provider.RestoreEntry]fileaccess.Entry,
 ) error {
 	if service == nil || service.db == nil || len(expected) == 0 {
@@ -748,8 +1172,8 @@ func (service *Service) revalidateRsyncRestoreResolution(
 		ctx = context.Background()
 	}
 	return service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		resolution, err := service.loadRsyncRestoreResolution(ctx, tx, ref)
-		if err != nil || len(resolution.declared) != len(expected) {
+		current, err := service.loadRsyncRestoreDurableSnapshot(ctx, tx, ref)
+		if err != nil || !reflect.DeepEqual(current, snapshot) || len(current.declared) != len(expected) {
 			return invalidRsyncRestoreSourceRef()
 		}
 		expectedBindings := make(map[rsyncRestoreEntryBinding]string, len(expected))
@@ -760,7 +1184,7 @@ func (service *Service) revalidateRsyncRestoreResolution(
 			}
 			expectedBindings[binding] = entry.ExpectedDigest
 		}
-		for _, declaration := range resolution.declared {
+		for _, declaration := range current.declared {
 			digest, exists := expectedBindings[rsyncRestoreBindingForEntry(declaration.restore)]
 			if !exists || declaration.restore.ExpectedDigest != "" && declaration.restore.ExpectedDigest != digest {
 				return invalidRsyncRestoreSourceRef()
@@ -768,6 +1192,227 @@ func (service *Service) revalidateRsyncRestoreResolution(
 		}
 		return nil
 	})
+}
+
+func (service *Service) revalidateRsyncRestoreSource(
+	ctx context.Context,
+	ref provider.RsyncRestoreSourceRef,
+	snapshot rsyncRestoreDurableSnapshot,
+	expected map[provider.RestoreEntry]fileaccess.Entry,
+) error {
+	if service == nil || service.db == nil || len(expected) == 0 {
+		return invalidRsyncRestoreSourceRef()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var current rsyncRestoreDurableSnapshot
+	if err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		loaded, err := service.loadRsyncRestoreDurableSnapshot(ctx, tx, ref)
+		if err != nil || !reflect.DeepEqual(loaded, snapshot) {
+			return invalidRsyncRestoreSourceRef()
+		}
+		current = loaded
+		return nil
+	}); err != nil {
+		return err
+	}
+	access, err := provider.NewRsyncCommittedPointRuntimeAccess(ctx, current.request)
+	if err != nil || access.SourceRevision != current.sourceFingerprint {
+		if contextErr := rsyncRestorePortContextError(ctx, err); contextErr != nil {
+			return contextErr
+		}
+		return invalidRsyncRestoreSourceRef()
+	}
+	return service.revalidateRsyncRestoreSnapshot(ctx, ref, snapshot, expected)
+}
+
+func (service *Service) captureRecoveryRsyncAuthoritySnapshot(
+	ctx context.Context,
+	ref provider.RsyncRestoreSourceRef,
+) (recoveryRsyncAuthoritySnapshot, error) {
+	if service == nil || service.db == nil {
+		return recoveryRsyncAuthoritySnapshot{}, invalidRsyncRestoreSourceRef()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var snapshot recoveryRsyncAuthoritySnapshot
+	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		loaded, err := service.loadRecoveryRsyncAuthoritySnapshotTx(ctx, tx, ref)
+		if err == nil {
+			snapshot = loaded
+		}
+		return err
+	})
+	return snapshot, err
+}
+
+func (service *Service) revalidateRecoveryRsyncAuthoritySnapshot(
+	ctx context.Context,
+	ref provider.RsyncRestoreSourceRef,
+	expected recoveryRsyncAuthoritySnapshot,
+) error {
+	if service == nil || service.db == nil || expected.producingTaskID == 0 ||
+		expected.repositoryBindingRevision == "" || expected.provenanceRevision == "" {
+		return invalidRsyncRestoreSourceRef()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		current, err := service.loadRecoveryRsyncAuthoritySnapshotTx(ctx, tx, ref)
+		if err != nil || !reflect.DeepEqual(current, expected) {
+			return invalidRsyncRestoreSourceRef()
+		}
+		return nil
+	})
+}
+
+func (service *Service) loadRecoveryRsyncAuthoritySnapshotTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	ref provider.RsyncRestoreSourceRef,
+) (recoveryRsyncAuthoritySnapshot, error) {
+	if service == nil || tx == nil {
+		return recoveryRsyncAuthoritySnapshot{}, invalidRsyncRestoreSourceRef()
+	}
+	durable, err := service.loadRsyncRestoreDurableSnapshot(ctx, tx, ref)
+	if err != nil {
+		return recoveryRsyncAuthoritySnapshot{}, invalidRsyncRestoreSourceRef()
+	}
+
+	var point model.RecoveryPoint
+	loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND repository_id = ?", ref.RecoveryPointID, ref.RepositoryID).Limit(1).Find(&point)
+	if loaded.Error != nil || loaded.RowsAffected != 1 || point.ProducingTaskID == nil || *point.ProducingTaskID == 0 {
+		return recoveryRsyncAuthoritySnapshot{}, invalidRsyncRestoreSourceRef()
+	}
+
+	var task model.Task
+	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND archived_at IS NULL", *point.ProducingTaskID).Limit(1).Find(&task)
+	if loaded.Error != nil || loaded.RowsAffected != 1 || task.ID != *point.ProducingTaskID || task.NodeID == 0 ||
+		bindingProviderForTask(task) != backupasset.ProviderRsync {
+		return recoveryRsyncAuthoritySnapshot{}, invalidRsyncRestoreSourceRef()
+	}
+
+	var link model.TaskRepositoryLink
+	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("task_id = ? AND repository_id = ? AND unlinked_at IS NULL", task.ID, ref.RepositoryID).Limit(1).Find(&link)
+	if loaded.Error != nil || loaded.RowsAffected != 1 || link.TaskID == nil || *link.TaskID != task.ID ||
+		link.NodeIDSnapshot != task.NodeID {
+		return recoveryRsyncAuthoritySnapshot{}, invalidRsyncRestoreSourceRef()
+	}
+
+	var repository model.BackupRepository
+	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", ref.RepositoryID).Limit(1).Find(&repository)
+	if loaded.Error != nil || loaded.RowsAffected != 1 || repository.RepositoryIdentity == nil ||
+		repository.ProviderKind != string(backupasset.ProviderRsync) || repository.ID != durable.repositoryID ||
+		repository.CapabilityRevision != durable.repositoryCapabilityRevision {
+		return recoveryRsyncAuthoritySnapshot{}, invalidRsyncRestoreSourceRef()
+	}
+
+	var binding model.RepositoryAccessBinding
+	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("repository_id = ? AND status = ?", ref.RepositoryID, bindingStatusActive).Limit(1).Find(&binding)
+	if loaded.Error != nil || loaded.RowsAffected != 1 || binding.RepositoryID != repository.ID ||
+		binding.EncryptedConfig == "" {
+		return recoveryRsyncAuthoritySnapshot{}, invalidRsyncRestoreSourceRef()
+	}
+	stored, err := decodeStoredBindingDocument(binding.EncryptedConfig)
+	if err != nil || stored.ManagedRsyncV2 == nil || stored.V1 != nil || stored.ManagedRcloneV3 != nil {
+		return recoveryRsyncAuthoritySnapshot{}, invalidRsyncRestoreSourceRef()
+	}
+	document := *stored.ManagedRsyncV2
+	if document.RollbackPrepared || validateManagedRsyncBindingAssociation(document, managedRsyncBindingAssociation{
+		Task: task, Link: link, RootMarkerDigest: document.RootMarkerDigest,
+	}) != nil {
+		return recoveryRsyncAuthoritySnapshot{}, invalidRsyncRestoreSourceRef()
+	}
+	expectedIdentity, err := managedRsyncRepositoryIdentity(document)
+	if err != nil || *repository.RepositoryIdentity != expectedIdentity ||
+		document.ManagedRootIdentityDigest != durable.managedRootIdentity {
+		return recoveryRsyncAuthoritySnapshot{}, invalidRsyncRestoreSourceRef()
+	}
+
+	repositoryBindingRevision := repositoryRecoveryAuthorityRevision(
+		"xirang/repository/recovery-source-binding/v1",
+		repository.ID, repository.ProviderKind, *repository.RepositoryIdentity, repository.DisplayName,
+		repository.Description, repository.VersionMode, repository.Status,
+		strconv.Itoa(repository.CapabilityRevision), repository.CapabilitiesJSON, repository.ImmutabilityLevel,
+		repositoryAuthorityTime(repository.LastSeenAt), repositoryAuthorityTime(repository.LastReconciledAt),
+		repository.CreatedAt.UTC().Format(time.RFC3339Nano), repository.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		link.ID, strconv.FormatUint(uint64(task.ID), 10), link.RepositoryID, link.TaskNameSnapshot,
+		strconv.FormatUint(uint64(link.NodeIDSnapshot), 10), link.NodeNameSnapshot, link.PublicationMode,
+		link.EncryptedLegacyLocator, link.LinkedAt.UTC().Format(time.RFC3339Nano), repositoryAuthorityTime(link.UnlinkedAt),
+		link.CreatedAt.UTC().Format(time.RFC3339Nano), link.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		binding.ID, binding.RepositoryID, binding.BindingKind, binding.EncryptedConfig, binding.ConfigFingerprint,
+		binding.Status, repositoryAuthorityTime(binding.RevokedAt), binding.CreatedAt.UTC().Format(time.RFC3339Nano),
+		binding.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	provenanceRevision := repositoryRecoveryAuthorityRevision(
+		"xirang/repository/recovery-source-provenance/v1",
+		repositoryBindingRevision, ref.PlanID, ref.PlanBindingDigest, ref.RepositoryID, ref.RecoveryPointID,
+		ref.CatalogGenerationID, ref.SelectionDigest, ref.SourceRevisionDigest, ref.ManifestDigest,
+		point.ID, point.RepositoryID, repositoryAuthorityUint(point.ProducingTaskID), repositoryAuthorityUint(point.ProducingTaskRunID),
+		point.ProducingTaskNameSnapshot, strconv.FormatUint(uint64(point.ProducingNodeIDSnapshot), 10), point.ProducingNodeNameSnapshot,
+		point.LineageJSON, point.EncryptedProviderLocator, point.EncryptedRollbackLocator, point.Semantics, point.State,
+		repositoryAuthorityTime(point.CapturedAt), repositoryAuthorityTime(point.CommittedAt), repositoryAuthorityTime(point.ObservedAt),
+		point.SourceFingerprint, point.ManifestDigestAlgorithm, point.ManifestDigest, strconv.FormatInt(point.EntryCount, 10),
+		strconv.FormatInt(point.LogicalBytes, 10), point.ConsistencyJSON, point.FidelityJSON,
+		strconv.Itoa(point.CapabilityRevision), point.CapabilitiesJSON, point.ImmutabilityLevel, point.PhysicalAvailability,
+		point.HoldState, repositoryAuthorityTime(point.HoldUntil), repositoryAuthorityTime(point.RetentionUntil),
+		repositoryAuthorityString(point.RetirementReason), repositoryAuthorityTime(point.RetiredAt),
+		point.CreatedAt.UTC().Format(time.RFC3339Nano), point.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		durable.catalogGenerationID, durable.sourceRevisionDigest, durable.manifestDigest,
+		strconv.Itoa(durable.repositoryCapabilityRevision), strconv.Itoa(durable.capabilityRevision),
+		durable.sourceAccessIdentity, durable.sourceFingerprint, durable.managedRootIdentity,
+	)
+	return recoveryRsyncAuthoritySnapshot{
+		producingTaskID: task.ID, repositoryBindingRevision: repositoryBindingRevision,
+		provenanceRevision: provenanceRevision, durable: durable,
+		observation: RecoveryRsyncSourceAuthorityObservation{
+			RepositoryCapabilityRevision: repository.CapabilityRevision,
+			CapabilityRevision:           point.CapabilityRevision,
+			SourceAccessIdentity:         durable.sourceAccessIdentity,
+			SourceFingerprint:            point.SourceFingerprint,
+			ManagedRootIdentity:          document.ManagedRootIdentityDigest,
+		},
+	}, nil
+}
+
+func repositoryRecoveryAuthorityRevision(domain string, values ...string) string {
+	hash := sha256.New()
+	var size [8]byte
+	for _, value := range append([]string{domain}, values...) {
+		binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+		_, _ = hash.Write(size[:])
+		_, _ = io.WriteString(hash, value)
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+func repositoryAuthorityTime(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func repositoryAuthorityUint(value *uint) string {
+	if value == nil {
+		return ""
+	}
+	return strconv.FormatUint(uint64(*value), 10)
+}
+
+func repositoryAuthorityString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 type rsyncRestoreEntryBinding struct {
@@ -1326,6 +1971,7 @@ func (service *Service) managedRsyncCommittedPointReadRequest(ctx context.Contex
 		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, err
 	}
 	if consistency.Provider != backupasset.ProviderRsync || consistency.RepositoryIdentityDigest != runtime.binding.ManagedRootIdentityDigest ||
+		consistency.CapabilityRevision != point.CapabilityRevision ||
 		!isLowerHex64(consistency.ProviderCommitDigest) {
 		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, fmt.Errorf("%w: committed Rsync point consistency changed", backupasset.ErrConflict)
 	}

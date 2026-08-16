@@ -206,7 +206,7 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 		{http.MethodGet, "/api/v1/recovery-points/:id/entries/:entryId/processing"},
 	} {
 		if !hasRoute(routes, route.method, route.path) {
-			t.Fatalf("backup asset processing route is missing: %s %s", route.method, route.path)
+			t.Fatalf("backup asset route is missing: %s %s", route.method, route.path)
 		}
 	}
 
@@ -332,6 +332,28 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	deprecatedHookTemplatesPath := "/api/v1/" + "hook" + "-templates"
 	if hasRoute(routes, http.MethodGet, deprecatedHookTemplatesPath) {
 		t.Fatalf("不应继续注册已废弃的 hook templates 接口")
+	}
+}
+
+func TestRecoveryRBACRouterDefersRecoveryEffectRoutesToTaskNine(t *testing.T) {
+	routes := NewRouter(Dependencies{}).Routes()
+	for _, path := range []string{
+		"/api/v1/recovery-plans/:id/security-overrides",
+		"/api/v1/recovery-plans/:id/write-authorizations",
+		"/api/v1/recovery-jobs/:id/exact-mirror-delete-authorizations",
+		"/api/v1/recovery-plans/:id/execute",
+	} {
+		if hasRoute(routes, http.MethodPost, path) {
+			t.Fatalf("Task 8 registered Task 9 Recovery effect route: POST %s", path)
+		}
+	}
+}
+
+func TestRecoveryRBACRouterDefersTargetRootRoutesToTaskNine(t *testing.T) {
+	for _, route := range NewRouter(Dependencies{}).Routes() {
+		if strings.Contains(route.Path, "/settings/backup-assets/recovery/target-roots") {
+			t.Fatalf("Task 8 registered deferred target-root route %s %s", route.Method, route.Path)
+		}
 	}
 }
 

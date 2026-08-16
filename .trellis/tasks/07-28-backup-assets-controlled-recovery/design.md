@@ -1248,6 +1248,10 @@ POST   /recovery-jobs/:id/exact-mirror-delete-authorizations
 POST   /recovery-jobs/:id/results/:resultId/download-ticket
 POST   /recovery-jobs/:id/results/retain
 POST   /recovery-jobs/:id/results/cleanup
+POST   /settings/backup-assets/recovery/target-roots
+PUT    /settings/backup-assets/recovery/target-roots/:nodeId/:rootId
+DELETE /settings/backup-assets/recovery/target-roots/:nodeId/:rootId
+GET    /settings/backup-assets/recovery/target-roots?node_id=:nodeId
 POST   /settings/backup-assets/recovery/downgrade-readiness
 ```
 
@@ -1297,6 +1301,14 @@ Handlers map sentinel errors through standard response helpers:
 
 Swagger annotations and generated docs must reflect required fields, closed
 enums, 401/403/404/409/413/429/500/503 cases and Admin security.
+
+Target-root register requires an absent exact node/root record. Rotate requires
+an existing exact record and treats a byte-equivalent authority definition as
+an idempotent no-op. Both require an endpoint-scoped `Idempotency-Key`, current
+step-up proof and the transition owner; delete requires the same controls and
+never opens a remote mutation session. List is node-scoped and returns only the
+bounded safe summary. These routes remain Task 9 work even though Task 8 owns
+the backing service/facade.
 
 ## 11. Frontend design
 
@@ -6138,3 +6150,401 @@ editing `implement.md`, implementing A3b, changing product code, staging,
 committing, pushing, creating a pull request, switching branches or creating a
 worktree. Those actions remain behind the next user review and implementation-
 plan gates.
+
+## 48. Task 8 production-authority focused amendment
+
+### 48.1 Precedence, scope and ownership
+
+The Task 8 managed runtime is currently a fail-closed shell rather than an
+enabled production graph. This section supersedes any earlier implication that
+the graph can be considered complete while its preflight external-evidence,
+live authority-revalidation or reconciliation-revision dependencies remain
+unavailable. It does not reopen Task 7 products and does not assign Task 9
+handler, RBAC, audit or Swagger credit to Task 8.
+
+No `000070`, new table or new Recovery column is introduced. The production
+authority is composed from existing durable Recovery/Repository/Processing
+state plus the encrypted target-root registry. Existing plan, preflight and
+authorization binding digests persist the exact authority product used by each
+operation; there is no second durable authority ledger.
+
+Recovery owns two production services:
+
+- `TargetRootAuthorityService` is the only owner of target-root registration,
+  rotation, deletion, safe listing and purpose-exact fresh read-only probes.
+  Generic settings update, delete, reset, batch and config-import paths cannot
+  construct or mutate its private records.
+- `RecoveryEligibilityAuthority` is the single owner that combines current
+  source access, provider capability, Processing security evidence, Recovery
+  policy and target-root evidence into one closed eligibility product. No
+  caller, handler or runtime adapter may synthesize a partial success.
+
+Task 8 publishes narrow service/facade methods for later Task 9 Admin routes.
+Task 9 owns the route matrix for register/rotate/delete/list and downgrade
+readiness, including authentication, RBAC, step-up, idempotency, audit,
+privacy-safe responses and Swagger contracts.
+
+### 48.2 Encrypted target-root record v2
+
+The existing private one-row-per-`(node_id, root_id)` settings registry remains
+the storage mechanism. Its encrypted record advances to a strict v2 document
+whose security-bearing fields are:
+
+```text
+node_id + root_id + safe_label
+canonical_locator + locator_digest
+authority_revision
+root_observation_revision
+reserve-bytes policy + reserve-inodes policy
+overlap/policy binding
+```
+
+`locator_digest` continues to identify the canonical private locator and is
+never interpreted as an authority revision. `authority_revision` is an opaque,
+durable current-record revision used to invalidate plan/preflight/live
+authority after a security-bearing change. `root_observation_revision` is the
+independently derived target-filesystem observation revision already consumed
+by marker and reconciliation contracts; the two revisions are deliberately
+not interchangeable.
+
+Registration and rotation obtain a fresh purpose-exact read-only target probe
+before persistence. A locator, root observation, reserve policy or overlap/
+policy-binding change issues a new `authority_revision`. A safe-label-only
+change preserves the security authority. An exact replay is an idempotent
+no-op. Delete removes only the exact node/root record through the Recovery
+owner and invalidates future resolution; it does not authorize remote
+filesystem mutation or rewrite existing plans.
+
+The typed resolution product exposes private locator and revision material only
+inside the domain graph and retains redacted `String`/`GoString` behavior. Safe
+listing exposes only node ID, root ID and safe label. Ciphertext, locator,
+locator digest, authority revision, observation revision, reserve values,
+policy binding and raw probe errors remain absent from generic settings,
+config export/import, JSON responses, audit payloads, alerts, logs and metric
+labels.
+
+### 48.3 One eligibility owner with three narrow adapters
+
+`RecoveryEligibilityAuthority` reads a durable Recovery snapshot, performs
+external source/target/security observation outside the database transaction,
+then re-locks and revalidates the corresponding durable revisions before
+issuing a private sealed product. That product contains only closed scalar
+evidence and binding digests; it carries no raw locator, credential, command,
+malware artifact or target session.
+
+The three existing runtime dependencies become narrow adapters over that same
+owner:
+
+- `RecoveryPreflightExternalEvidenceAuthority` asks for the current complete
+  source/capability/security/target/overlap/reserve observation and returns the
+  already defined closed preflight observation.
+- `RecoveryAuthorityRevalidator` consumes a previously sealed external
+  observation and, inside the caller-owned transaction, re-locks node,
+  credential, plan, target-root, source, capability, security-policy and
+  finding revisions before a write/delete/execute effect can commit.
+- `RecoveryReconciliationRevisionSource` resolves current node, credential and
+  target `authority_revision` in one caller-owned transaction. The subsequent
+  read-only scan separately binds the marker-facing
+  `root_observation_revision`; neither revision can stand in for the other.
+
+Every adapter returns unavailable or conflict unless the whole current product
+is present and coherent. Partial node/source success, an old preflight, a
+single security `safe` boolean, a registration-time probe, caller-supplied
+overlap flags, zero reserve defaults or a locator digest cannot create a clear
+authority result.
+
+### 48.4 Provider coverage and settings ownership
+
+Production enablement is capability-exact rather than provider-name based.
+Managed Rsync can be enabled because Repository already owns a pinned-tree
+source-access and revalidation seam. Restic and Rclone remain explicitly
+unavailable until they have an equivalent exact source authority; there is no
+fallback to Rsync, generic Provider access or a legacy restore path.
+
+Parsed settings are injected as immutable policy structs into their owning
+services rather than read ad hoc from handlers or worker loops:
+
+- plan/preflight policy owns `PreflightTTL`, `MaxSelectionItems` and
+  `MaxLogicalBytes`;
+- managed worker policy owns `LeaseRenewMargin` and `ExecutionTimeout`;
+- reconciliation policy owns the renamed `ReconciliationFindingLimit`.
+
+`DefaultRootID` is removed because root identity is node-scoped.
+`VerificationTimeout` is removed because the current state machine has no
+independent durable verification phase. Settings transitions continue through
+the existing validate -> drain -> persist -> install/rollback owner, and the
+disabled graph continues cleanup, logical reconciliation and receipt reaping.
+
+The architecture and component boundaries in this section are approved. Data
+flow, error/privacy/compatibility behavior, testing/rollback and the final
+execution plan remain behind their separate planning gates. No product edit,
+Task 8 completion or Git-delivery credit follows from this amendment alone.
+
+### 48.5 Approved production-authority data flow
+
+Every external observation uses two short database transactions around bounded
+network/filesystem work. The first transaction captures an exact durable
+snapshot. Observation runs after that transaction closes. The second
+transaction locks and revalidates every durable revision before issuing or
+consuming authority. External I/O never runs while a database transaction is
+held, and omitting the second lock/revalidation is not an allowed optimization.
+
+Target-root registration and rotation follow this sequence:
+
+1. The settings transition owner stops new Recovery admission and validates
+   the requested node-scoped root definition and policy.
+2. `TargetRootAuthorityService` obtains a purpose-exact read-only permit and
+   performs a fresh bounded target probe outside a transaction.
+3. A short transaction locks the node, credential and exact current private
+   root row, revalidates the probe binding and persists one encrypted v2 row.
+4. A locator, root-observation, reserve-policy or overlap/policy-binding change
+   issues a new authority revision. An exact replay is a no-op, while a
+   safe-label-only update preserves the security revision.
+5. The transition owner installs the new registry/runtime snapshot and resumes
+   admission. Construction or installation failure leaves or restores the old
+   record and graph before admission can reopen.
+
+Delete uses the same transition owner and exact node/root lock. It removes only
+the private registry row after draining affected admission; existing plans are
+not rewritten and thereafter resolve unavailable. Delete never opens a target
+session and grants no remote mutation authority. Safe list is a bounded
+read-only service product and returns only node ID, root ID and safe label.
+
+Plan creation accepts only the exact `(node_id, root_id)` reference. It first
+revalidates the frozen source and selection, applies the lower of dynamic
+`MaxSelectionItems`/`MaxLogicalBytes` and the immutable hard caps, then resolves
+the current private target-root authority in the same transaction. The plan's
+existing private binding digest incorporates the target authority revision;
+no locator enters the request or public model and no new column is required.
+
+Preflight uses three explicit stages:
+
+1. a short read transaction captures the current durable plan, source,
+   capability, root-authority, node/credential, policy and finding revisions;
+2. outside the transaction, the eligibility owner opens exact Repository
+   source access, aggregates canonical Processing findings under current
+   Recovery policy, and performs a fresh target probe for overlap, filesystem
+   identity and reserve evidence; and
+3. a short write transaction re-locks the durable records, rejects any drift,
+   and only then persists the preflight and its binding digest.
+
+`PreflightTTL` is supplied exclusively by the installed server policy. The API
+and caller cannot choose or extend it. Any unavailable component aborts the
+flow before a usable preflight is issued.
+
+Write, exact-mirror delete and execute effects repeat the same authority shape.
+The eligibility owner obtains a private sealed external observation outside
+the transaction. The existing caller-owned authorization or claim transaction
+then re-locks plan, node, credential, source, target-root, capability, policy,
+finding and preflight state and compares every revision and binding. Only a
+complete match can commit authority. Existing source and target sessions still
+revalidate their per-operation fence immediately before each remote effect.
+
+Job creation freezes one absolute deadline derived from `ExecutionTimeout`.
+The managed worker renews its durable claim and associated source/node leases
+before expiry according to `LeaseRenewMargin`, and propagates the renewed fence
+deadline to the active attempt. A failed renewal cancels the effect and bars
+the stale lease from further target mutation. Deadline expiry follows the
+existing post-arm/unresolved or safe-takeover contract and never asserts that
+the remote side received zero writes.
+
+Reconciliation first resolves and locks current node, credential and root
+authority revisions in a short transaction. It then performs the existing
+bounded read-only scan outside the transaction, binding the marker-facing root
+observation revision separately. The final transaction must still match both
+the authority revision and root observation revision before publishing clear.
+Revision drift, incomplete scan, any finding, or audit/finding-sink failure
+leaves downgrade readiness blocked.
+
+All policy changes parse complete immutable policy structs before entering the
+shared settings transition. They retain the existing validate -> drain ->
+persist -> construct/install ordering and restore the previous persisted value
+and graph on failure. Disabling Recovery closes new authority and mutation
+admission but deliberately keeps cleanup, logical reconciliation and receipt
+reaping active.
+
+This data flow is approved. Error/privacy/compatibility behavior,
+testing/rollback and the final execution plan remain behind their own planning
+gates.
+
+### 48.6 Approved errors, privacy and compatibility
+
+Production authority preserves the existing Recovery sentinel taxonomy and
+never returns raw dependency failures. Invalid request shape, root policy or
+dynamic limit maps to the relevant stable invalid-domain error. Idempotency
+reuse, preflight expiry and any revision or binding drift map to conflict.
+Missing, corrupt or unreadable private records and unavailable source,
+security, credential or target-probe dependencies map to the owning unavailable
+sentinel without distinguishing absence, decryption, parsing, transport or
+remote probe failure.
+
+Confirmed malware/policy denial, overlap and insufficient reserve are bounded
+preflight reason enums rather than raw errors. An enabled graph is not
+published at startup unless every required production authority is present.
+After publication, loss of any authority closes the current effect rather than
+silently disabling its check. Context cancellation and deadline errors retain
+their existing internal identity; Task 9 owns their final HTTP mapping.
+
+Settings and registry transitions restore the previous persisted policy and
+graph if validation, construction, persistence or installation fails. If the
+owner cannot prove that restoration completed, admission remains sticky closed,
+downgrade readiness remains blocked, and only a bounded sanitized operational
+failure is emitted. It never reopens admission on a guessed rollback result.
+
+All new private products use omitted JSON fields and redacted `String` and
+`GoString` implementations. Locator, credential, ciphertext, locator digest,
+authority/observation revision, reserve and policy binding, finding artifact or
+path, raw dependency error and digest input are prohibited from error strings,
+JSON, audit, alerts, structured logs and metric labels. Authorized Task 9 list
+responses may expose only the reviewed node ID, root ID and safe label summary.
+Other boundaries are limited to fixed reason/outcome enums, bounded counts and
+opaque public IDs. Metrics use fixed low-cardinality labels only.
+
+The ciphertext envelope remains `enc:v2:` while the encrypted target-root JSON
+document advances independently from `schema_version: 1` to
+`schema_version: 2`. Because the schema-v1 registry is an unreleased Task 7
+internal product and lacks the required authority evidence, the v2 runtime
+rejects it as unavailable and requires an explicit fresh re-registration. It
+does not lazily upgrade on read, infer missing fields, or add a database
+migration. Ciphertext-envelope version and document-schema version must never
+be conflated.
+
+Plans and preflights sealed against the incomplete record cannot be silently
+rebound; they resolve changed/unavailable and require a new plan or preflight
+under the current authority. Existing ResultSets, cleanup and logical
+reconciliation retain their already defined forward-only behavior.
+
+`DefaultRootID`, `VerificationTimeout` and the old
+`OrphanQuarantineLimit` setting name receive no compatibility aliases. Stale
+database overrides are not consumed, and config import rejects the removed
+keys. The replacement `ReconciliationFindingLimit` begins from its reviewed
+default unless explicitly configured through the current registry. This
+strictness is acceptable because the Task 8 settings have not been released.
+
+Restic and Rclone recovery remain capability-unavailable without affecting
+their existing non-Recovery products. Older binaries encountering a v2 private
+root remain fail closed. Downgrade permission still requires a fresh complete
+current-binary reconciliation and every existing readiness condition; an
+unavailable authority cannot produce clear, while the permanent use latch
+continues to force `forward_fix_only` regardless of cleanup.
+
+This error, privacy and compatibility design is approved. Testing/rollback and
+the final execution plan remain behind their separate planning gates.
+
+### 48.7 Approved testing and rollback strategy
+
+Implementation proceeds as four independently reviewable TDD slices followed
+by one fresh whole-scope gate. Each slice records genuine pre-change RED,
+minimal GREEN, focused normal and race verification, privacy/static checks and
+an explicit stop point in the implementation evidence ledger. Passing tests
+inherited from the fail-closed runtime shell do not count as RED for a newly
+required authority contract.
+
+The registry and target-authority slice covers strict v2 encode/decode,
+ciphertext-envelope versus document-schema versioning, schema-v1 rejection,
+exact replay, safe-label-only update, every security-bearing rotation and exact
+delete. It injects ciphertext tamper, key substitution, stale probes and
+concurrent register/rotate/delete. Transactional and concurrency behavior runs
+on SQLite and required real PostgreSQL. Tests prove delete opens no target
+session, failed transitions preserve the old ciphertext, and no operation
+creates a `000070` migration.
+
+The eligibility-authority slice covers one complete managed-Rsync path and the
+full source, capability, policy, finding, root, observation, overlap and reserve
+drift/unavailable/substitution matrix. Race tests mutate each durable revision
+between external observation and the second transaction and require the sealed
+product to fail closed. Restic and Rclone return stable capability-unavailable
+with zero target mutation. The three narrow runtime adapters must return the
+same owner's consistent product rather than independently reconstructed
+evidence.
+
+The domain-policy and worker slice proves dynamic selection/logical-byte limits
+are capped by immutable hard limits before persistence, preflight expiry is
+server-owned, heartbeat success propagates the renewed durable fence, heartbeat
+failure cancels the effect, and no stale lease performs another mutation. It
+also covers the frozen absolute execution deadline, the renamed reconciliation
+finding limit and static/behavioral absence of the two removed settings and the
+old quarantine-named key.
+
+The runtime-transition slice requires a complete authority graph before enabled
+publication, fail-closed operation after authority loss, and continued cleanup,
+logical reconciliation and receipt reaping while disabled. Fault injection at
+validate, drain, persist, construct and install proves restoration of the old
+policy/graph. An unprovable restoration leaves the sticky admission fence set.
+Restart, disable/re-enable and fresh downgrade-readiness tests cover both the
+no-latch pristine case and latch-dominant `forward_fix_only`.
+
+Every slice runs canary privacy assertions across returned errors, `%v`, `%+v`,
+`%#v`, JSON, audit, alert, structured logs and metrics. The final gate reruns
+focused normal/race tests, whole Recovery normal/race tests, required real-
+PostgreSQL normal/race with no skip, Go vet, backend lint/build, `make check`,
+owned formatting, `git diff --check`, forbidden-log/privacy scans, manifest and
+Trellis validation. A full-scope `trellis-check` review must report zero open
+Critical or Important issue before Task 8 can receive completion credit.
+
+Rollback is deliberately non-destructive. There is no schema-down operation
+and no automatic rewrite of schema-v1 or schema-v2 private records. A failed
+root transition retains the prior ciphertext and never cleans a remote root.
+A failed running operation follows existing durable phases, marker evidence,
+fences and takeover; it does not rewind state, assert zero remote writes or
+delete unknown content.
+
+Binary rollback is allowed only when the permanent use latch is absent and the
+current binary produces a fresh complete downgrade-readiness clear. Otherwise
+the supported response is forward-fix. A permitted older binary may leave
+encrypted v2 private rows untouched but must treat them as unavailable; a later
+upgrade still requires fresh validation before use. No rollback step silently
+re-enables Recovery or broadens Provider coverage.
+
+This testing and rollback strategy is approved. Sections 48.1--48.7 now form
+the complete focused technical design. The focused execution plan and
+convergence review are complete; only the final implementation-approval summary
+and a subsequent explicit user approval remain before product work resumes.
+
+### 48.8 Source-namespace authority implementation correction
+
+Focused T8-B implementation proved that the Repository pinned-tree resolver
+can authenticate the exact committed recovery-point source, but it cannot
+derive current authority for the original producing node namespace. The
+durable Task node and `rsync_source` values are provenance inputs, not current
+node authentication; a cleaned-path digest, locator digest, source fingerprint
+or managed-root identity cannot be promoted into namespace authority. This
+section clarifies the implementation split already required by sections 48.3
+and 48.5; it does not add schema, provider coverage or a public product.
+
+Repository owns the exact pinned source capability, current repository and
+point revisions, producing-task provenance and post-observation locked
+revalidation. It never returns a source or target locator. Recovery owns a
+separate purpose-exact read-only source-namespace observer. That observer
+captures the exact producing Task/source/node/credential binding in a short
+transaction, opens an authenticated source-node SSH/SFTP session outside the
+transaction, validates every absolute source-path component with `Lstat` and
+`RealPath`, rejects symlinks/non-directories/ambiguous canonicalization, then
+re-locks and compares every captured durable revision in a second short
+transaction. A connection is not authenticated authority unless strict current
+host-key verification is proven; accept-new, insecure or unknown-host posture
+returns unavailable.
+
+The observer returns a private sealed Recovery product containing the exact
+authenticated node identity, node/credential/source-binding revisions,
+observation revision/time and private canonical path. JSON, errors, formatting,
+logs, audit, alerts and metrics expose none of those fields. Session, SFTP and
+pinned source ownership close exactly once on every error, drift, cancellation
+and success transfer path.
+
+The eligibility owner combines that source observation with the fresh target
+probe and registered target-root authority. It compares no namespace when
+authenticated source and target node identities differ. When they are exactly
+equal, overlap is
+`fileaccess.Contains(source, target) || fileaccess.Contains(target, source)`;
+plain string prefix and digest equality are forbidden because they miss
+ancestor/descendant relations and confuse sibling prefixes. Missing private
+canonical paths, unproved host identity, observer drift or unavailable target
+namespace closes the complete eligibility product. Restic and Rclone remain
+capability-unavailable before any source or target access.
+
+This correction can remain transient and use the existing durable rows and
+bindings, so it adds no migration or authority ledger. The focused product
+manifest adds only the Recovery source-observer implementation and test files;
+the previously approved Provider, Repository and runtime files supply the
+narrow ports and production composition.

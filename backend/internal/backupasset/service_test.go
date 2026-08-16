@@ -718,6 +718,90 @@ func TestRecoveryAuthorizationReceiptSettingsDeadlineOrdering(t *testing.T) {
 	}
 }
 
+func TestFoundationRecoveryConfigParsesManagedRuntimeSnapshot(t *testing.T) {
+	values := cloneFoundationTestValues(staticFoundationDefaults)
+	for key, value := range map[string]string{
+		"backup_assets.recovery.enabled":                      "true",
+		"backup_assets.recovery.preflight_ttl":                "8m",
+		"backup_assets.recovery.max_selection_items":          "4000",
+		"backup_assets.recovery.max_logical_bytes":            "8589934592",
+		"backup_assets.recovery.worker_concurrency":           "3",
+		"backup_assets.recovery.lease_ttl":                    "2m",
+		"backup_assets.recovery.lease_renew_margin":           "30s",
+		"backup_assets.recovery.takeover_cadence":             "20s",
+		"backup_assets.recovery.retry_base":                   "4s",
+		"backup_assets.recovery.retry_max_delay":              "2m",
+		"backup_assets.recovery.scan_limit":                   "80",
+		"backup_assets.recovery.execution_timeout":            "3h",
+		"backup_assets.recovery.result_default_ttl":           "2h",
+		"backup_assets.recovery.result_retain_hard_cap":       "12h",
+		"backup_assets.recovery.result_read_permit_ttl":       "90s",
+		"backup_assets.recovery.result_drain_timeout":         "20s",
+		"backup_assets.recovery.cleanup_cadence":              "3m",
+		"backup_assets.recovery.cleanup_batch_size":           "60",
+		"backup_assets.recovery.cleanup_lease_ttl":            "3m",
+		"backup_assets.recovery.cleanup_retry_base":           "10s",
+		"backup_assets.recovery.cleanup_retry_max_delay":      "5m",
+		"backup_assets.recovery.reconciliation_finding_limit": "70",
+	} {
+		values[key] = value
+	}
+	config, err := NewFoundationService(&snapshotSettingsReader{values: values}).RecoveryConfig()
+	if err != nil {
+		t.Fatalf("RecoveryConfig: %v", err)
+	}
+	if !config.Enabled || config.PreflightTTL != 8*time.Minute ||
+		config.MaxSelectionItems != 4000 || config.MaxLogicalBytes != 8589934592 ||
+		config.WorkerConcurrency != 3 || config.LeaseTTL != 2*time.Minute ||
+		config.LeaseRenewMargin != 30*time.Second || config.TakeoverCadence != 20*time.Second ||
+		config.RetryBase != 4*time.Second || config.RetryMaxDelay != 2*time.Minute || config.ScanLimit != 80 ||
+		config.ExecutionTimeout != 3*time.Hour ||
+		config.ResultDefaultTTL != 2*time.Hour || config.ResultRetainHardCap != 12*time.Hour ||
+		config.ResultReadPermitTTL != 90*time.Second || config.ResultDrainTimeout != 20*time.Second ||
+		config.CleanupCadence != 3*time.Minute || config.CleanupBatchSize != 60 ||
+		config.CleanupLeaseTTL != 3*time.Minute || config.CleanupRetryBase != 10*time.Second ||
+		config.CleanupRetryMaxDelay != 5*time.Minute || config.ReconciliationFindingLimit != 70 {
+		t.Fatalf("RecoveryConfig=%+v", config)
+	}
+}
+
+func TestRecoveryPolicyConfigOwnsEveryParsedValue(t *testing.T) {
+	values := cloneFoundationTestValues(staticFoundationDefaults)
+	values["backup_assets.recovery.preflight_ttl"] = "7m"
+	values["backup_assets.recovery.max_selection_items"] = "321"
+	values["backup_assets.recovery.max_logical_bytes"] = "987654321"
+	values["backup_assets.recovery.lease_renew_margin"] = "17s"
+	values["backup_assets.recovery.execution_timeout"] = "75m"
+	values["backup_assets.recovery.reconciliation_finding_limit"] = "43"
+
+	config, err := NewFoundationService(&snapshotSettingsReader{values: values}).RecoveryConfig()
+	if err != nil {
+		t.Fatalf("RecoveryConfig: %v", err)
+	}
+	if config.PreflightTTL != 7*time.Minute || config.MaxSelectionItems != 321 ||
+		config.MaxLogicalBytes != 987654321 || config.LeaseRenewMargin != 17*time.Second ||
+		config.ExecutionTimeout != 75*time.Minute || config.ReconciliationFindingLimit != 43 {
+		t.Fatalf("Recovery policy config=%+v", config)
+	}
+}
+
+func TestRecoveryConfigFromValuesRequiresCompleteProspectiveSnapshot(t *testing.T) {
+	values := cloneFoundationTestValues(staticFoundationDefaults)
+	values["backup_assets.recovery.enabled"] = "true"
+	values["backup_assets.recovery.worker_concurrency"] = "4"
+	config, err := RecoveryConfigFromValues(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.Enabled || config.WorkerConcurrency != 4 {
+		t.Fatalf("prospective Recovery config=%+v", config)
+	}
+	delete(values, "backup_assets.recovery.scan_limit")
+	if _, err := RecoveryConfigFromValues(values); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("incomplete prospective snapshot error=%v, want invalid state", err)
+	}
+}
+
 func callRecoveryAuthorizationConfig(t *testing.T, service *FoundationService) (reflect.Value, error) {
 	t.Helper()
 	method := reflect.ValueOf(service).MethodByName("RecoveryAuthorizationConfig")
@@ -981,4 +1065,26 @@ var staticFoundationDefaults = map[string]string{
 	"backup_assets.recovery.delete_grant_ttl":                  "10m",
 	"backup_assets.recovery.receipt_reaper_cadence":            "1m",
 	"backup_assets.recovery.receipt_reaper_batch_size":         "100",
+	"backup_assets.recovery.enabled":                           "false",
+	"backup_assets.recovery.preflight_ttl":                     "10m",
+	"backup_assets.recovery.max_selection_items":               "10000",
+	"backup_assets.recovery.max_logical_bytes":                 "10737418240",
+	"backup_assets.recovery.worker_concurrency":                "2",
+	"backup_assets.recovery.lease_ttl":                         "90s",
+	"backup_assets.recovery.lease_renew_margin":                "20s",
+	"backup_assets.recovery.takeover_cadence":                  "15s",
+	"backup_assets.recovery.retry_base":                        "5s",
+	"backup_assets.recovery.retry_max_delay":                   "5m",
+	"backup_assets.recovery.scan_limit":                        "100",
+	"backup_assets.recovery.execution_timeout":                 "2h",
+	"backup_assets.recovery.result_default_ttl":                "1h",
+	"backup_assets.recovery.result_retain_hard_cap":            "24h",
+	"backup_assets.recovery.result_read_permit_ttl":            "2m",
+	"backup_assets.recovery.result_drain_timeout":              "30s",
+	"backup_assets.recovery.cleanup_cadence":                   "1m",
+	"backup_assets.recovery.cleanup_batch_size":                "100",
+	"backup_assets.recovery.cleanup_lease_ttl":                 "2m",
+	"backup_assets.recovery.cleanup_retry_base":                "10s",
+	"backup_assets.recovery.cleanup_retry_max_delay":           "10m",
+	"backup_assets.recovery.reconciliation_finding_limit":      "100",
 }

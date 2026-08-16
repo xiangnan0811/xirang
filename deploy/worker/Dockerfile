@@ -1,5 +1,5 @@
-# golang:1.26.5-alpine multi-architecture manifest, resolved from Docker Hub on 2026-07-21.
-FROM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS worker-builder
+# golang:1.26.6-alpine multi-architecture manifest, resolved from Docker Hub on 2026-08-16.
+FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS worker-builder
 
 WORKDIR /src/backend
 ARG TARGETOS

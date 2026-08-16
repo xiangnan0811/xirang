@@ -125,7 +125,14 @@ func TestConfigExportAndImportExcludeRecoveryTargetRootRegistry(t *testing.T) {
 	service := settings.NewService(db)
 	definition := settings.RecoveryTargetRootDefinition{
 		NodeID: node.ID, RootID: "config-root", SafeLabel: "FAKE_CONFIG_RECOVERY_ROOT_LABEL_FOR_TEST_ONLY",
-		Locator: "/srv/FAKE_CONFIG_RECOVERY_ROOT_FOR_TEST_ONLY",
+		Locator:                 "/srv/FAKE_CONFIG_RECOVERY_ROOT_FOR_TEST_ONLY",
+		AuthorityRevision:       "0123456789abcdef0123456789abcdef",
+		RootObservationRevision: "FAKE_CONFIG_ROOT_OBSERVATION_FOR_TEST_ONLY",
+		Policy: settings.RecoveryTargetRootPolicy{
+			ReserveBytes:         4096,
+			ReserveInodes:        32,
+			OverlapPolicyBinding: "FAKE_CONFIG_OVERLAP_POLICY_FOR_TEST_ONLY",
+		},
 	}
 	if err := db.Transaction(func(tx *gorm.DB) error {
 		_, err := service.RegisterRecoveryTargetRootTx(context.Background(), tx, definition)

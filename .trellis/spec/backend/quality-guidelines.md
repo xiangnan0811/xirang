@@ -1060,6 +1060,140 @@ repository-wide selector.
 
 ---
 
+## Scenario: Managed Recovery Authority And Runtime Publication
+
+### 1. Scope / Trigger
+
+- Trigger: changing Recovery preflight/effect/reconciliation authority,
+  Repository or Processing evidence adapters, source/target namespace
+  observation, target-root mutation, managed runtime startup/transition, or
+  disabled maintenance ownership.
+- Applies across `backupasset/recovery`, `backupasset/repository`,
+  `backupasset/runtime`, `settings`, and SSH/SFTP purpose enforcement. It is a
+  cross-layer security contract, not a package-local convenience.
+
+### 2. Signatures
+
+- External issuance:
+  `RecoveryEligibilityAuthority.ObserveRecoveryAuthority(ctx, binding)
+  (RecoveryAuthorityObservation, error)`.
+- Caller transaction:
+  `RecoveryAuthorityRevalidator.RevalidateRecoveryAuthorityTx(ctx, tx,
+  binding, observation) error`.
+- Runtime lifecycle:
+  `StartupWithConfig(ctx, RecoveryConfig)`,
+  `TransitionSettingsWithRestore(ctx, config, persist, restore)`, and
+  `TransitionCurrentWithRestore(ctx, persist, restore)`.
+- Target-root facade returns only `RecoveryTargetRootSummary`; exact encrypted
+  row rollback is carried by a Recovery-owned opaque token with no exported
+  fields.
+
+### 3. Contracts
+
+- Authority uses short durable capture -> bounded external observation ->
+  short locked revalidation. SSH, SFTP, Repository pinned-tree access and
+  Processing artifact reads never run inside the database transaction.
+- The final issuance transaction and every later effect transaction revalidate
+  all durable facts that can change after their owner returns. An opaque
+  source-namespace observation therefore retains a private closed durable
+  snapshot and transaction-only revalidator for Task source, source node and
+  source credential; Repository source revision alone is not a substitute.
+- The sealed observation digest binds that closed source proof plus target,
+  policy, finding, reserve and overlap products. Formatting/JSON/errors expose
+  none of the locator, credential, revision, proof or raw dependency values.
+- Enabled Recovery publishes only after Repository, target and a genuinely
+  ready Processing malware-evidence lifecycle exist and metadata reconciliation
+  succeeds. Disabled Recovery may publish maintenance without Processing
+  evidence, but never admission/effects.
+- Current-config mutations require an already installed graph/config. Before
+  startup they fail before validate/persist/build/publish; a zero-value config
+  must never become an implicit disabled installation.
+- Unproven graph join or rollback leaves publication nil and installs a sticky
+  fence. Reopening admission is allowed only after exact persistence and graph
+  restoration are both proven.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Task source, source node, or source credential changes after namespace observation | Issuance second transaction returns closed conflict/unavailable; no target effect. |
+| The same source fact changes after a sealed observation is issued | Caller effect transaction rejects it; do not replay external observation inside the transaction. |
+| Processing is disabled, control-plane-only, stopped, or lacks its installed malware reader | Enabled Recovery publishes no admission graph; disabled maintenance remains available. |
+| Processing reader fails after a valid publication | Effects fail closed while result/reconciliation maintenance stays published. |
+| Target-root mutation is called before runtime startup | Return wrapped invalid state with zero mutation, persistence, build or publication. |
+| Old graph shutdown/join cannot be proven | Unpublish, clear the graph, sticky-fence re-enable/downgrade, and skip persist/build/install. |
+| Root mutation succeeds but candidate install fails | Restore the exact prior encrypted row or absence before rebuilding the prior graph; restoration failure stays fenced. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: source namespace observation completes, target observation runs, the
+  issuance transaction re-locks source/node/credential, and a later effect
+  transaction repeats the exact private durable comparison before writing.
+- Base: Recovery is disabled while Processing workers are off; cleanup,
+  logical reconciliation and receipt reaping run and join before schema drain,
+  but no effect facade is admitted.
+- Bad: treat a Repository revision as proof that `Task.RsyncSource` and its
+  node credential are unchanged, publish enabled Recovery because a stable
+  Processing object pointer is non-nil, or infer current config from a zero
+  value before startup.
+
+### 6. Tests Required
+
+- Matrix both drift windows (after namespace observation and after sealed
+  issuance) against Task source, source node and source credential. Assert one
+  external observation per owner, transaction-only durable revalidation and
+  zero private canary leakage; run normal and race.
+- Exercise Processing disabled, control-plane-only, genuinely ready and
+  post-publication reader-failure production compositions.
+- Exercise pre-start current mutation, disabled-after-start mutation,
+  validate/drain/persist/construct/reconcile/install failures, unjoinable owner,
+  exact root-row/absence restoration and sticky restoration failure.
+- Run SQLite plus required no-skip PostgreSQL authority selectors, full backend
+  normal/race, lint, vet, build, privacy/static scans and manifest/outside-path
+  checks before completion.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+source, _ := sourceObserver.Observe(ctx, request)
+target, _ := targetObserver.Observe(ctx, request)
+return seal(source, target), nil // source durable facts may have drifted
+```
+
+Correct:
+
+```go
+source, _ := sourceObserver.Observe(ctx, request) // external I/O, no DB tx
+target, _ := targetObserver.Observe(ctx, request)
+err := db.Transaction(func(tx *gorm.DB) error {
+    if err := source.RevalidateTx(ctx, tx); err != nil {
+        return err
+    }
+    return revalidateAndSealTx(ctx, tx, binding, source, target)
+})
+```
+
+Wrong runtime publication:
+
+```go
+if processingRuntime != nil {
+    publication.Publish(enabledGraph)
+}
+```
+
+Correct runtime publication:
+
+```go
+if config.Enabled && !processingRuntime.RecoverySecurityReady() {
+    return ErrInvalidState
+}
+// Build, reconcile metadata, then install exactly once.
+```
+
+---
+
 ## Code Review Checklist
 
 - Are route middleware, RBAC permissions, and ownership checks correct?

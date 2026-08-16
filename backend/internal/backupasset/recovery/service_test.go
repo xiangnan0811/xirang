@@ -15,6 +15,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -34,6 +35,666 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+type targetRootRegistrationProbeFake struct {
+	mu          sync.Mutex
+	calls       []TargetRootRegistrationRequest
+	observation func(TargetRootRegistrationRequest) TargetRootRegistrationObservation
+	err         error
+}
+
+func (probe *targetRootRegistrationProbeFake) ObserveRecoveryTargetRoot(
+	_ context.Context,
+	request TargetRootRegistrationRequest,
+) (TargetRootRegistrationObservation, error) {
+	probe.mu.Lock()
+	probe.calls = append(probe.calls, request)
+	probeErr := probe.err
+	observation := probe.observation
+	probe.mu.Unlock()
+	if probeErr != nil {
+		return TargetRootRegistrationObservation{}, probeErr
+	}
+	return observation(request), nil
+}
+
+type targetRootAuthorityServiceFixture struct {
+	db         *gorm.DB
+	registry   *settings.Service
+	service    *TargetRootAuthorityService
+	probe      *targetRootRegistrationProbeFake
+	now        time.Time
+	revisionMu sync.Mutex
+	revisions  int
+}
+
+func newTargetRootAuthorityServiceFixture(t *testing.T) *targetRootAuthorityServiceFixture {
+	t.Helper()
+	dsn := filepath.Join(t.TempDir(), "target-root-authority.db") +
+		"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON&_synchronous=NORMAL&_txlock=immediate&_loc=UTC"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newTargetRootAuthorityServiceFixtureOnDB(t, db)
+}
+
+func newTargetRootAuthorityServiceFixtureOnDB(t *testing.T, db *gorm.DB) *targetRootAuthorityServiceFixture {
+	t.Helper()
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString([]byte("FAKE_TARGET_ROOT_AUTHORITY_KEY_ONLY")))
+	t.Setenv("DATA_ENCRYPTION_LEGACY_KEY", base64.StdEncoding.EncodeToString([]byte("FAKE_TARGET_ROOT_AUTHORITY_KEY_ONLY")))
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+	if err := db.AutoMigrate(&model.SystemSetting{}, &model.Node{}, &model.SSHKey{}); err != nil {
+		t.Fatal(err)
+	}
+	key := model.SSHKey{
+		Name: "target-root-authority-key", Username: "target-root-authority", KeyType: "ed25519",
+		PrivateKey: "FAKE_TARGET_ROOT_AUTHORITY_PRIVATE_KEY_FOR_TEST_ONLY", Fingerprint: "target-root-authority-fingerprint",
+	}
+	if err := db.Create(&key).Error; err != nil {
+		t.Fatal(err)
+	}
+	node := model.Node{
+		Name: "target-root-authority-node", Host: "target-root-authority.invalid", Port: 22,
+		Username: "target-root-authority", AuthType: "key", SSHKeyID: &key.ID,
+		BackupDir: "target-root-authority-backup",
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatal(err)
+	}
+	fixture := &targetRootAuthorityServiceFixture{
+		db: db, registry: settings.NewService(db), now: time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC),
+	}
+	fixture.probe = &targetRootRegistrationProbeFake{observation: func(request TargetRootRegistrationRequest) TargetRootRegistrationObservation {
+		digest, digestErr := settings.RecoveryTargetRootLocatorDigest(request.NodeID, request.RootID, request.Locator)
+		if digestErr != nil {
+			t.Fatalf("target-root test probe digest: %v", digestErr)
+		}
+		return TargetRootRegistrationObservation{
+			NodeID: request.NodeID, RootID: request.RootID, LocatorDigest: digest,
+			NodeRevision: request.NodeRevision, CredentialRevision: request.CredentialRevision,
+			RootObservationRevision: "target-root-observation-" + digest[:32],
+			Purpose:                 TargetRootRegistrationPurposeReadOnly, ReadOnly: true, ObservedAt: fixture.now,
+		}
+	}}
+	service, err := NewTargetRootAuthorityService(TargetRootAuthorityServiceDependencies{
+		DB: db, Registry: fixture.registry, Probe: fixture.probe,
+		NewRevision: func() (string, error) {
+			fixture.revisionMu.Lock()
+			defer fixture.revisionMu.Unlock()
+			fixture.revisions++
+			return fmt.Sprintf("%032x", fixture.revisions), nil
+		},
+		Now: func() time.Time { return fixture.now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.service = service
+	return fixture
+}
+
+func (fixture *targetRootAuthorityServiceFixture) request(locator, label string) TargetRootRegistrationRequest {
+	return TargetRootRegistrationRequest{
+		NodeID: 1, RootID: "root-a", SafeLabel: label, Locator: locator,
+		Policy: settings.RecoveryTargetRootPolicy{
+			ReserveBytes: 4096, ReserveInodes: 8, OverlapPolicyBinding: "FAKE_TARGET_ROOT_POLICY_FOR_TEST_ONLY",
+		},
+	}
+}
+
+func TestTargetRootAuthorityServiceRequiresFreshReadOnlyProbe(t *testing.T) {
+	t.Run("observation after initial capture uses post-probe clock", func(t *testing.T) {
+		fixture := newTargetRootAuthorityServiceFixture(t)
+		original := fixture.probe.observation
+		fixture.probe.observation = func(request TargetRootRegistrationRequest) TargetRootRegistrationObservation {
+			observation := original(request)
+			fixture.now = fixture.now.Add(time.Second)
+			observation.ObservedAt = fixture.now
+			return observation
+		}
+		if _, err := fixture.service.Register(context.Background(), fixture.request(
+			"/srv/FAKE_TARGET_ROOT_POST_PROBE_CLOCK_FOR_TEST_ONLY", "FAKE_TARGET_ROOT_POST_PROBE_CLOCK_LABEL_FOR_TEST_ONLY",
+		)); err != nil {
+			t.Fatalf("fresh post-probe observation rejected: %v", err)
+		}
+	})
+
+	t.Run("credential expiry during probe fails locked revalidation", func(t *testing.T) {
+		fixture := newTargetRootAuthorityServiceFixture(t)
+		expiresAt := fixture.now.Add(time.Second)
+		if err := fixture.db.Model(&model.SSHKey{}).Where("id = ?", 1).Update("expires_at", expiresAt).Error; err != nil {
+			t.Fatal(err)
+		}
+		original := fixture.probe.observation
+		fixture.probe.observation = func(request TargetRootRegistrationRequest) TargetRootRegistrationObservation {
+			observation := original(request)
+			fixture.now = expiresAt.Add(time.Second)
+			observation.ObservedAt = fixture.now
+			return observation
+		}
+		if _, err := fixture.service.Register(context.Background(), fixture.request(
+			"/srv/FAKE_TARGET_ROOT_EXPIRED_DURING_PROBE_FOR_TEST_ONLY", "FAKE_TARGET_ROOT_EXPIRED_DURING_PROBE_LABEL_FOR_TEST_ONLY",
+		)); !errors.Is(err, ErrRecoveryTargetUnavailable) {
+			t.Fatalf("credential expiry during probe error=%v, want ErrRecoveryTargetUnavailable", err)
+		}
+	})
+
+	t.Run("credential expiry after row lock fails revalidation", func(t *testing.T) {
+		fixture := newTargetRootAuthorityServiceFixture(t)
+		expiresAt := fixture.now.Add(time.Second)
+		if err := fixture.db.Model(&model.SSHKey{}).Where("id = ?", 1).Update("expires_at", expiresAt).Error; err != nil {
+			t.Fatal(err)
+		}
+		base := fixture.now
+		calls := 0
+		fixture.service.now = func() time.Time {
+			calls++
+			switch calls {
+			case 1, 2:
+				return base
+			case 3:
+				return expiresAt.Add(-time.Nanosecond)
+			default:
+				return expiresAt.Add(time.Nanosecond)
+			}
+		}
+		if _, err := fixture.service.Register(context.Background(), fixture.request(
+			"/srv/FAKE_TARGET_ROOT_EXPIRED_AFTER_LOCK_FOR_TEST_ONLY", "FAKE_TARGET_ROOT_EXPIRED_AFTER_LOCK_LABEL_FOR_TEST_ONLY",
+		)); !errors.Is(err, ErrRecoveryTargetUnavailable) {
+			t.Fatalf("credential expiry after row lock error=%v, want ErrRecoveryTargetUnavailable", err)
+		}
+	})
+
+	t.Run("invalid private input stops before probe", func(t *testing.T) {
+		fixture := newTargetRootAuthorityServiceFixture(t)
+		request := fixture.request(
+			"/srv/FAKE_TARGET_ROOT_INVALID_INPUT_FOR_TEST_ONLY", "FAKE_TARGET_ROOT_INVALID_INPUT\x1f_FOR_TEST_ONLY",
+		)
+		if _, err := fixture.service.Register(context.Background(), request); !errors.Is(err, settings.ErrRecoveryTargetRootInvalid) {
+			t.Fatalf("invalid target-root input error=%v, want ErrRecoveryTargetRootInvalid", err)
+		}
+		if len(fixture.probe.calls) != 0 || fixture.revisions != 0 {
+			t.Fatalf("invalid target-root input crossed dependencies: probes=%d revisions=%d", len(fixture.probe.calls), fixture.revisions)
+		}
+	})
+
+	tests := []struct {
+		name        string
+		observation func(*targetRootAuthorityServiceFixture, TargetRootRegistrationObservation) TargetRootRegistrationObservation
+		mutateDB    func(*targetRootAuthorityServiceFixture)
+		probeErr    error
+	}{
+		{name: "wrong purpose", observation: func(_ *targetRootAuthorityServiceFixture, observation TargetRootRegistrationObservation) TargetRootRegistrationObservation {
+			observation.Purpose = "FAKE_WRONG_PURPOSE_FOR_TEST_ONLY"
+			return observation
+		}},
+		{name: "not read only", observation: func(_ *targetRootAuthorityServiceFixture, observation TargetRootRegistrationObservation) TargetRootRegistrationObservation {
+			observation.ReadOnly = false
+			return observation
+		}},
+		{name: "stale observation", observation: func(fixture *targetRootAuthorityServiceFixture, observation TargetRootRegistrationObservation) TargetRootRegistrationObservation {
+			observation.ObservedAt = fixture.now.Add(-targetRootRegistrationProbeFreshness - time.Nanosecond)
+			return observation
+		}},
+		{name: "substituted credential revision", observation: func(_ *targetRootAuthorityServiceFixture, observation TargetRootRegistrationObservation) TargetRootRegistrationObservation {
+			observation.CredentialRevision = "FAKE_SUBSTITUTED_CREDENTIAL_REVISION_FOR_TEST_ONLY"
+			return observation
+		}},
+		{name: "node drift after probe", mutateDB: func(fixture *targetRootAuthorityServiceFixture) {
+			if err := fixture.db.Model(&model.Node{}).Where("id = ?", 1).Update("archived", true).Error; err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "credential drift after probe", mutateDB: func(fixture *targetRootAuthorityServiceFixture) {
+			if err := fixture.db.Model(&model.SSHKey{}).Where("id = ?", 1).Update("disabled", true).Error; err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "raw probe error", probeErr: errors.New("FAKE_TARGET_ROOT_RAW_PROBE_ERROR_FOR_TEST_ONLY")},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newTargetRootAuthorityServiceFixture(t)
+			original := fixture.probe.observation
+			fixture.probe.err = testCase.probeErr
+			fixture.probe.observation = func(request TargetRootRegistrationRequest) TargetRootRegistrationObservation {
+				observation := original(request)
+				if testCase.observation != nil {
+					observation = testCase.observation(fixture, observation)
+				}
+				if testCase.mutateDB != nil {
+					testCase.mutateDB(fixture)
+				}
+				return observation
+			}
+			_, err := fixture.service.Register(context.Background(), fixture.request(
+				"/srv/FAKE_TARGET_ROOT_FRESHNESS_FOR_TEST_ONLY", "FAKE_TARGET_ROOT_FRESHNESS_LABEL_FOR_TEST_ONLY",
+			))
+			if !errors.Is(err, ErrRecoveryTargetUnavailable) || err.Error() != ErrRecoveryTargetUnavailable.Error() {
+				t.Fatalf("register error=%v, want sanitized ErrRecoveryTargetUnavailable", err)
+			}
+			if len(fixture.probe.calls) != 1 {
+				t.Fatalf("probe calls=%d, want one fresh registration probe", len(fixture.probe.calls))
+			}
+			if fixture.revisions != 0 {
+				t.Fatalf("failed probe issued %d authority revisions", fixture.revisions)
+			}
+			var count int64
+			if err := fixture.db.Model(&model.SystemSetting{}).Count(&count).Error; err != nil || count != 0 {
+				t.Fatalf("failed probe persisted private rows=%d error=%v", count, err)
+			}
+			for _, canary := range []string{"FAKE_TARGET_ROOT_RAW_PROBE_ERROR_FOR_TEST_ONLY", "/srv/FAKE_TARGET_ROOT_FRESHNESS_FOR_TEST_ONLY", "FAKE_TARGET_ROOT_POLICY_FOR_TEST_ONLY"} {
+				if strings.Contains(fmt.Sprintf("%v", err), canary) || strings.Contains(fmt.Sprintf("%+v", err), canary) {
+					t.Fatalf("private/dependency canary leaked through error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestTargetRootAuthorityServiceRegisterRotateDelete(t *testing.T) {
+	t.Run("malformed delete reference fails before database access", func(t *testing.T) {
+		fixture := newTargetRootAuthorityServiceFixture(t)
+		sqlDB, err := fixture.db.DB()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sqlDB.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := fixture.service.Delete(context.Background(), 1, "INVALID/ROOT"); !errors.Is(err, settings.ErrRecoveryTargetRootInvalid) {
+			t.Fatalf("malformed delete reference error=%v, want ErrRecoveryTargetRootInvalid", err)
+		}
+	})
+
+	fixture := newTargetRootAuthorityServiceFixture(t)
+	initial := fixture.request(
+		"/srv/FAKE_TARGET_ROOT_REGISTER_FOR_TEST_ONLY", "FAKE_TARGET_ROOT_REGISTER_LABEL_FOR_TEST_ONLY",
+	)
+	registered, err := fixture.service.Register(context.Background(), initial)
+	if err != nil {
+		t.Fatalf("register target root: %v (probe calls=%d revisions=%d)", err, len(fixture.probe.calls), fixture.revisions)
+	}
+	if registered.AuthorityRevision == "" || fixture.revisions != 1 || len(fixture.probe.calls) != 1 {
+		t.Fatalf("register authority=%+v revisions=%d probes=%d", registered, fixture.revisions, len(fixture.probe.calls))
+	}
+	if fixture.probe.calls[0].Purpose != TargetRootRegistrationPurposeReadOnly || !fixture.probe.calls[0].ReadOnly {
+		t.Fatalf("registration probe request=%+v, want purpose-exact read-only", fixture.probe.calls[0])
+	}
+	summaries, err := fixture.service.List(context.Background(), initial.NodeID)
+	if err != nil || len(summaries) != 1 || summaries[0].NodeID != initial.NodeID ||
+		summaries[0].RootID != initial.RootID || summaries[0].SafeLabel != initial.SafeLabel {
+		t.Fatalf("safe target-root list=%+v error=%v", summaries, err)
+	}
+	for _, value := range []any{registered, initial, fixture.probe.calls[0]} {
+		encoded, marshalErr := json.Marshal(value)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		formatted := fmt.Sprintf("%v %+v %#v", value, value, value)
+		for _, canary := range []string{initial.Locator, initial.Policy.OverlapPolicyBinding,
+			registered.AuthorityRevision, registered.RootObservationRevision} {
+			if strings.Contains(string(encoded), canary) || strings.Contains(formatted, canary) {
+				t.Fatalf("private target-root value leaked through JSON/formatting")
+			}
+		}
+	}
+
+	replayed, err := fixture.service.Register(context.Background(), initial)
+	if err != nil || replayed.AuthorityRevision != registered.AuthorityRevision || fixture.revisions != 1 {
+		t.Fatalf("exact replay=%+v error=%v revisions=%d", replayed, err, fixture.revisions)
+	}
+	safeLabel := initial
+	safeLabel.SafeLabel = "FAKE_TARGET_ROOT_SAFE_LABEL_ROTATION_FOR_TEST_ONLY"
+	labelUpdated, err := fixture.service.Register(context.Background(), safeLabel)
+	if err != nil || labelUpdated.AuthorityRevision != registered.AuthorityRevision || fixture.revisions != 1 {
+		t.Fatalf("safe-label update=%+v error=%v revisions=%d", labelUpdated, err, fixture.revisions)
+	}
+	rootKey := settings.RecoveryTargetRootKeyPrefix + strconv.FormatUint(uint64(initial.NodeID), 10) + "." + initial.RootID
+	var ciphertextBeforeFailure string
+	if err := fixture.db.Table("system_settings").Select("value").Where("key = ?", rootKey).Scan(&ciphertextBeforeFailure).Error; err != nil {
+		t.Fatal(err)
+	}
+	callbackName := "target-root-authority-persistence-failure"
+	rawPersistenceErr := errors.New("FAKE_TARGET_ROOT_RAW_PERSISTENCE_ERROR_FOR_TEST_ONLY")
+	callbackRemoved := false
+	if err := fixture.db.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Table == "system_settings" {
+			_ = tx.AddError(rawPersistenceErr)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if !callbackRemoved {
+			_ = fixture.db.Callback().Create().Remove(callbackName)
+		}
+	})
+	failedRotation := safeLabel
+	failedRotation.Locator = "/srv/FAKE_TARGET_ROOT_FAILED_ROTATION_FOR_TEST_ONLY"
+	if _, err := fixture.service.Register(context.Background(), failedRotation); !errors.Is(err, ErrRecoveryTargetUnavailable) ||
+		err.Error() != ErrRecoveryTargetUnavailable.Error() || strings.Contains(err.Error(), rawPersistenceErr.Error()) {
+		t.Fatalf("failed persistence error=%v, want sanitized unavailable", err)
+	}
+	var ciphertextAfterFailure string
+	if err := fixture.db.Table("system_settings").Select("value").Where("key = ?", rootKey).Scan(&ciphertextAfterFailure).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ciphertextAfterFailure != ciphertextBeforeFailure {
+		t.Fatal("failed persistence changed the prior encrypted authority row")
+	}
+	if err := fixture.db.Callback().Create().Remove(callbackName); err != nil {
+		t.Fatal(err)
+	}
+	callbackRemoved = true
+	rotated := safeLabel
+	rotated.Locator = "/srv/FAKE_TARGET_ROOT_SECURITY_ROTATION_FOR_TEST_ONLY"
+	rotatedResult, err := fixture.service.Register(context.Background(), rotated)
+	if err != nil || rotatedResult.AuthorityRevision == registered.AuthorityRevision || fixture.revisions != 3 {
+		t.Fatalf("security rotation=%+v error=%v revisions=%d", rotatedResult, err, fixture.revisions)
+	}
+
+	probeCallsBeforeDelete := len(fixture.probe.calls)
+	if err := fixture.service.Delete(context.Background(), initial.NodeID, initial.RootID); err != nil {
+		t.Fatalf("delete target root: %v", err)
+	}
+	if len(fixture.probe.calls) != probeCallsBeforeDelete {
+		t.Fatal("delete performed a remote registration probe")
+	}
+	if err := fixture.db.Transaction(func(tx *gorm.DB) error {
+		_, resolveErr := fixture.registry.ResolveRecoveryTargetRootTx(context.Background(), tx, initial.NodeID, initial.RootID)
+		return resolveErr
+	}); !errors.Is(err, settings.ErrRecoveryTargetRootNotFound) {
+		t.Fatalf("deleted root resolve error=%v, want ErrRecoveryTargetRootNotFound", err)
+	}
+	runTargetRootAuthorityConcurrentMutationMatrix(t, fixture)
+}
+
+func TestTargetRootAuthorityServiceMutationRollbackRestoresExactPrivateRecordOrAbsence(t *testing.T) {
+	fixture := newTargetRootAuthorityServiceFixture(t)
+	request := fixture.request("/srv/FAKE_TARGET_ROOT_ROLLBACK_ORIGINAL", "rollback original")
+	if _, err := fixture.service.Register(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	rootKey := settings.RecoveryTargetRootKeyPrefix + "1.root-a"
+	loadRow := func() (model.SystemSetting, bool) {
+		t.Helper()
+		var rows []model.SystemSetting
+		if err := fixture.db.Where("key = ?", rootKey).Limit(2).Find(&rows).Error; err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) > 1 {
+			t.Fatalf("duplicate target-root rows: %d", len(rows))
+		}
+		if len(rows) == 0 {
+			return model.SystemSetting{}, false
+		}
+		return rows[0], true
+	}
+	original, exists := loadRow()
+	if !exists {
+		t.Fatal("seed target-root row is absent")
+	}
+	rotated := request
+	rotated.Locator = "/srv/FAKE_TARGET_ROOT_ROLLBACK_ROTATED"
+	summary, rollback, err := fixture.service.RegisterMutation(context.Background(), rotated)
+	if err != nil || summary.NodeID != 1 || summary.RootID != "root-a" || summary.SafeLabel != rotated.SafeLabel {
+		t.Fatalf("rotation summary=%+v err=%v", summary, err)
+	}
+	encoded, err := json.Marshal(rollback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formatted := fmt.Sprintf("%v %+v %#v", rollback, rollback, rollback)
+	if string(encoded) != "{}" {
+		t.Fatalf("rollback token JSON=%s, want opaque object", encoded)
+	}
+	for _, canary := range []string{original.Value, request.Locator, rotated.Locator} {
+		if strings.Contains(formatted, canary) || strings.Contains(string(encoded), canary) {
+			t.Fatalf("rollback token exposed private target-root state")
+		}
+	}
+	rollbackType := reflect.TypeOf(rollback)
+	for index := 0; index < rollbackType.NumField(); index++ {
+		if rollbackType.Field(index).IsExported() {
+			t.Fatalf("rollback token field %q is exported", rollbackType.Field(index).Name)
+		}
+	}
+	if err := fixture.service.RestoreMutation(context.Background(), rollback); err != nil {
+		t.Fatalf("restore rotated record: %v", err)
+	}
+	restored, exists := loadRow()
+	if !exists || restored != original {
+		t.Fatalf("restored row=%+v exists=%t, want exact prior row", restored, exists)
+	}
+
+	createdRequest := fixture.request("/srv/FAKE_TARGET_ROOT_ROLLBACK_CREATED", "rollback created")
+	createdRequest.RootID = "root-created"
+	_, createdRollback, err := fixture.service.RegisterMutation(context.Background(), createdRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdKey := settings.RecoveryTargetRootKeyPrefix + "1.root-created"
+	if err := fixture.service.RestoreMutation(context.Background(), createdRollback); err != nil {
+		t.Fatalf("restore original absence: %v", err)
+	}
+	var createdCount int64
+	if err := fixture.db.Model(&model.SystemSetting{}).Where("key = ?", createdKey).Count(&createdCount).Error; err != nil || createdCount != 0 {
+		t.Fatalf("restored absence count=%d err=%v", createdCount, err)
+	}
+
+	deleteRollback, err := fixture.service.DeleteMutation(context.Background(), request.NodeID, request.RootID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.RestoreMutation(context.Background(), deleteRollback); err != nil {
+		t.Fatalf("restore deleted record: %v", err)
+	}
+	restored, exists = loadRow()
+	if !exists || restored != original {
+		t.Fatalf("delete restoration row=%+v exists=%t, want exact prior row", restored, exists)
+	}
+}
+
+func TestTargetRootAuthorityServiceDeleteSurvivesNodeCredentialLifecycle(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*targetRootAuthorityServiceFixture) error
+	}{
+		{
+			name: "archived node",
+			mutate: func(fixture *targetRootAuthorityServiceFixture) error {
+				return fixture.db.Model(&model.Node{}).Where("id = ?", 1).Update("archived", true).Error
+			},
+		},
+		{
+			name: "disabled credential",
+			mutate: func(fixture *targetRootAuthorityServiceFixture) error {
+				return fixture.db.Model(&model.SSHKey{}).Where("id = ?", 1).Update("disabled", true).Error
+			},
+		},
+		{
+			name: "expired credential",
+			mutate: func(fixture *targetRootAuthorityServiceFixture) error {
+				expired := fixture.now.Add(-time.Second)
+				return fixture.db.Model(&model.SSHKey{}).Where("id = ?", 1).Update("expires_at", expired).Error
+			},
+		},
+		{
+			name: "detached credential",
+			mutate: func(fixture *targetRootAuthorityServiceFixture) error {
+				return fixture.db.Model(&model.Node{}).Where("id = ?", 1).Update("ssh_key_id", nil).Error
+			},
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newTargetRootAuthorityServiceFixture(t)
+			request := fixture.request(
+				"/srv/FAKE_TARGET_ROOT_DELETE_LIFECYCLE_FOR_TEST_ONLY",
+				"FAKE_TARGET_ROOT_DELETE_LIFECYCLE_LABEL_FOR_TEST_ONLY",
+			)
+			if _, err := fixture.service.Register(context.Background(), request); err != nil {
+				t.Fatalf("register target root: %v", err)
+			}
+			if err := testCase.mutate(fixture); err != nil {
+				t.Fatalf("mutate node credential lifecycle: %v", err)
+			}
+
+			probeCallsBeforeDelete := len(fixture.probe.calls)
+			if err := fixture.service.Delete(context.Background(), request.NodeID, request.RootID); err != nil {
+				t.Fatalf("delete DB-only target root after %s: %v", testCase.name, err)
+			}
+			if len(fixture.probe.calls) != probeCallsBeforeDelete {
+				t.Fatal("delete performed a remote registration probe")
+			}
+			if err := fixture.db.Transaction(func(tx *gorm.DB) error {
+				_, resolveErr := fixture.registry.ResolveRecoveryTargetRootTx(
+					context.Background(), tx, request.NodeID, request.RootID,
+				)
+				return resolveErr
+			}); !errors.Is(err, settings.ErrRecoveryTargetRootNotFound) {
+				t.Fatalf("deleted root resolve error=%v, want ErrRecoveryTargetRootNotFound", err)
+			}
+		})
+	}
+}
+
+func TestRecoveryTargetRootAuthorityPostgres(t *testing.T) {
+	fixture := newTargetRootAuthorityServiceFixtureOnDB(t, newAuthorizationReceiptPostgresScopedDB(t))
+	initial := fixture.request(
+		"/srv/FAKE_TARGET_ROOT_POSTGRES_REGISTER_FOR_TEST_ONLY", "FAKE_TARGET_ROOT_POSTGRES_LABEL_FOR_TEST_ONLY",
+	)
+	registered, err := fixture.service.Register(context.Background(), initial)
+	if err != nil || registered.AuthorityRevision == "" || fixture.revisions != 1 {
+		t.Fatalf("PostgreSQL registration=%+v error=%v revisions=%d", registered, err, fixture.revisions)
+	}
+	rotated := initial
+	rotated.Locator = "/srv/FAKE_TARGET_ROOT_POSTGRES_ROTATED_FOR_TEST_ONLY"
+	rotatedResult, err := fixture.service.Register(context.Background(), rotated)
+	if err != nil || rotatedResult.AuthorityRevision == registered.AuthorityRevision || fixture.revisions != 2 {
+		t.Fatalf("PostgreSQL rotation=%+v error=%v revisions=%d", rotatedResult, err, fixture.revisions)
+	}
+	probeCallsBeforeDelete := len(fixture.probe.calls)
+	if err := fixture.service.Delete(context.Background(), initial.NodeID, initial.RootID); err != nil {
+		t.Fatalf("PostgreSQL delete: %v", err)
+	}
+	if len(fixture.probe.calls) != probeCallsBeforeDelete {
+		t.Fatal("PostgreSQL delete performed a target probe")
+	}
+	runTargetRootAuthorityConcurrentMutationMatrix(t, fixture)
+}
+
+func runTargetRootAuthorityConcurrentMutationMatrix(t *testing.T, fixture *targetRootAuthorityServiceFixture) {
+	t.Helper()
+	type concurrentOperation struct {
+		name string
+		call func() error
+		ok   func(error) bool
+	}
+	run := func(name, rootID string, seed *TargetRootRegistrationRequest, allowedLocators []string, operations []concurrentOperation) {
+		t.Helper()
+		if seed != nil {
+			if _, err := fixture.service.Register(context.Background(), *seed); err != nil {
+				t.Fatalf("seed %s target root: %v", name, err)
+			}
+		}
+		start := make(chan struct{})
+		ready := make(chan struct{}, len(operations))
+		results := make(chan struct {
+			name string
+			err  error
+		}, len(operations))
+		for _, operation := range operations {
+			operation := operation
+			go func() {
+				ready <- struct{}{}
+				<-start
+				results <- struct {
+					name string
+					err  error
+				}{name: operation.name, err: operation.call()}
+			}()
+		}
+		for range operations {
+			<-ready
+		}
+		close(start)
+		for range operations {
+			result := <-results
+			for _, operation := range operations {
+				if operation.name == result.name && !operation.ok(result.err) {
+					t.Fatalf("%s/%s returned unexpected error: %v", name, result.name, result.err)
+				}
+			}
+		}
+
+		key := settings.RecoveryTargetRootKeyPrefix + strconv.FormatUint(uint64(fixture.request("", "").NodeID), 10) + "." + rootID
+		var rows []model.SystemSetting
+		if err := fixture.db.Where("key = ?", key).Limit(2).Find(&rows).Error; err != nil || len(rows) > 1 {
+			t.Fatalf("%s authority row count=%d error=%v", name, len(rows), err)
+		}
+		if len(rows) == 1 {
+			if err := fixture.db.Transaction(func(tx *gorm.DB) error {
+				resolved, resolveErr := fixture.registry.ResolveRecoveryTargetRootTx(context.Background(), tx, fixture.request("", "").NodeID, rootID)
+				if resolveErr != nil {
+					return resolveErr
+				}
+				for _, locator := range allowedLocators {
+					if resolved.Locator == locator {
+						return nil
+					}
+				}
+				return errors.New("concurrent authority persisted an unknown locator")
+			}); err != nil {
+				t.Fatalf("resolve %s concurrent authority: %v", name, err)
+			}
+		}
+	}
+
+	base := fixture.request("/srv/FAKE_TARGET_ROOT_CONCURRENT_BASE_FOR_TEST_ONLY", "FAKE_TARGET_ROOT_CONCURRENT_BASE_LABEL_FOR_TEST_ONLY")
+	base.NodeID = 1
+	base.RootID = "root-concurrent-rotate"
+	rotatedOne := base
+	rotatedOne.Locator = "/srv/FAKE_TARGET_ROOT_CONCURRENT_ROTATE_ONE_FOR_TEST_ONLY"
+	rotatedTwo := base
+	rotatedTwo.Locator = "/srv/FAKE_TARGET_ROOT_CONCURRENT_ROTATE_TWO_FOR_TEST_ONLY"
+	run("rotate-vs-rotate", base.RootID, &base, []string{base.Locator, rotatedOne.Locator, rotatedTwo.Locator}, []concurrentOperation{
+		{name: "rotate-one", call: func() error { _, err := fixture.service.Register(context.Background(), rotatedOne); return err }, ok: func(err error) bool { return err == nil }},
+		{name: "rotate-two", call: func() error { _, err := fixture.service.Register(context.Background(), rotatedTwo); return err }, ok: func(err error) bool { return err == nil }},
+	})
+
+	base = fixture.request("/srv/FAKE_TARGET_ROOT_CONCURRENT_REGISTER_BASE_FOR_TEST_ONLY", "FAKE_TARGET_ROOT_CONCURRENT_REGISTER_BASE_LABEL_FOR_TEST_ONLY")
+	base.RootID = "root-concurrent-register-rotate"
+	replayed := base
+	replayed.SafeLabel = "FAKE_TARGET_ROOT_CONCURRENT_REPLAY_LABEL_FOR_TEST_ONLY"
+	rotated := base
+	rotated.Locator = "/srv/FAKE_TARGET_ROOT_CONCURRENT_REGISTER_ROTATED_FOR_TEST_ONLY"
+	run("register-vs-rotate", base.RootID, &base, []string{base.Locator, rotated.Locator}, []concurrentOperation{
+		{name: "replay", call: func() error { _, err := fixture.service.Register(context.Background(), replayed); return err }, ok: func(err error) bool { return err == nil }},
+		{name: "rotate", call: func() error { _, err := fixture.service.Register(context.Background(), rotated); return err }, ok: func(err error) bool { return err == nil }},
+	})
+
+	base = fixture.request("/srv/FAKE_TARGET_ROOT_CONCURRENT_REGISTER_DELETE_BASE_FOR_TEST_ONLY", "FAKE_TARGET_ROOT_CONCURRENT_REGISTER_DELETE_BASE_LABEL_FOR_TEST_ONLY")
+	base.RootID = "root-concurrent-register-delete"
+	rotated = base
+	rotated.Locator = "/srv/FAKE_TARGET_ROOT_CONCURRENT_REGISTER_DELETE_ROTATED_FOR_TEST_ONLY"
+	run("register-vs-delete", base.RootID, &base, []string{base.Locator, rotated.Locator}, []concurrentOperation{
+		{name: "register", call: func() error { _, err := fixture.service.Register(context.Background(), rotated); return err }, ok: func(err error) bool { return err == nil }},
+		{name: "delete", call: func() error { return fixture.service.Delete(context.Background(), base.NodeID, base.RootID) }, ok: func(err error) bool { return err == nil || errors.Is(err, ErrRecoveryTargetUnavailable) }},
+	})
+
+	absent := fixture.request("/srv/FAKE_TARGET_ROOT_CONCURRENT_ABSENT_FOR_TEST_ONLY", "FAKE_TARGET_ROOT_CONCURRENT_ABSENT_LABEL_FOR_TEST_ONLY")
+	absent.RootID = "root-concurrent-absent"
+	run("register-on-absent-vs-delete-on-missing", absent.RootID, nil, []string{absent.Locator}, []concurrentOperation{
+		{name: "register", call: func() error { _, err := fixture.service.Register(context.Background(), absent); return err }, ok: func(err error) bool { return err == nil }},
+		{name: "delete", call: func() error { return fixture.service.Delete(context.Background(), absent.NodeID, absent.RootID) }, ok: func(err error) bool { return err == nil || errors.Is(err, ErrRecoveryTargetUnavailable) }},
+	})
+}
 
 func TestRecoveryExecutePreparedAggregateGrantFirstMatrix(t *testing.T) {
 	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
@@ -179,6 +840,325 @@ func TestRecoveryExecutePreparedAggregateGrantFirstMatrix(t *testing.T) {
 		}
 		assertRecoveryExecuteGrantAndPlanUnchanged(t, rollbackFixture)
 	})
+}
+
+func TestRecoveryAuthorizationObservesCategoryOutcome(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptSecurityOverride)
+	metrics := &recoveryMetricsSpy{}
+	fixture.dependencies.Metrics = metrics
+	service, err := NewAuthorizationService(fixture.dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Authorize(context.Background(), fixture.request); err != nil {
+		t.Fatalf("authorize recovery request: %v", err)
+	}
+	if len(metrics.categories) != 1 || metrics.categories[0].category != AuthorizationReceiptCategorySecurityOverride ||
+		metrics.categories[0].outcome != MetricOutcomeSuccess {
+		t.Fatalf("authorization metrics=%+v, want one successful security-override observation", metrics.categories)
+	}
+	replay, err := service.Authorize(context.Background(), fixture.request)
+	if err != nil || !replay.Replay {
+		t.Fatalf("replay recovery authorization: result=%+v err=%v", replay, err)
+	}
+	if len(metrics.categories) != 1 {
+		t.Fatalf("authorization replay emitted category metrics=%+v, want one committed-effect observation", metrics.categories)
+	}
+}
+
+func TestRecoveryAuthorizationObservesBlockedAndFailureCategories(t *testing.T) {
+	t.Run("blocked", func(t *testing.T) {
+		fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptSecurityOverride)
+		metrics := &recoveryMetricsSpy{}
+		fixture.dependencies.Metrics = metrics
+		service, err := NewAuthorizationService(fixture.dependencies)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := fixture.request
+		request.Proof.Action = "FAKE_INVALID_RECOVERY_ACTION"
+		if _, err := service.Authorize(context.Background(), request); !errors.Is(err, ErrAuthorizationDenied) {
+			t.Fatalf("blocked recovery authorization error=%v, want denied", err)
+		}
+		metrics.assertSingleCategory(
+			t, AuthorizationReceiptCategorySecurityOverride, MetricOutcomeBlocked,
+		)
+	})
+
+	t.Run("failure", func(t *testing.T) {
+		fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptSecurityOverride)
+		metrics := &recoveryMetricsSpy{}
+		fixture.dependencies.Metrics = metrics
+		service, err := NewAuthorizationService(fixture.dependencies)
+		if err != nil {
+			t.Fatal(err)
+		}
+		callbackName := "recovery:authorization-metric-pre-effect-failure:" + strings.ReplaceAll(t.Name(), "/", "_")
+		var injected atomic.Bool
+		if err := fixture.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+			if tx.Statement == nil || tx.Statement.Table != (model.BackupAssetRecoveryEvidence{}).TableName() ||
+				injected.Swap(true) {
+				return
+			}
+			_ = tx.AddError(errors.New("FAKE_RECOVERY_METRIC_PRE_EFFECT_DEPENDENCY_FAILURE"))
+		}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = fixture.db.Callback().Query().Remove(callbackName) })
+
+		if _, err := service.Authorize(context.Background(), fixture.request); !errors.Is(err, ErrAuthorizationUnavailable) {
+			t.Fatalf("failed recovery authorization error=%v, want ErrAuthorizationUnavailable", err)
+		}
+		if !injected.Load() {
+			t.Fatal("pre-effect authorization dependency failure was not injected")
+		}
+		metrics.assertSingleCategory(
+			t, AuthorizationReceiptCategorySecurityOverride, MetricOutcomeFailure,
+		)
+	})
+}
+
+func TestRecoveryExecuteObservesQueuedFromDurableRepositoryOnlyAfterCommit(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+	metrics := &recoveryMetricsSpy{}
+	fixture.dependencies.Metrics = metrics
+	service, err := NewAuthorizationService(fixture.dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Authorize(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("execute recovery authorization: %v", err)
+	}
+	if result.JobID == "" {
+		t.Fatal("execute recovery authorization returned no durable job")
+	}
+	metrics.assertSingleState(t, backupasset.ProviderRestic, JobStateQueued)
+
+	var repository model.BackupRepository
+	if err := fixture.db.Joins(
+		"JOIN backup_asset_recovery_plans ON backup_asset_recovery_plans.repository_id = backup_repositories.id",
+	).Joins(
+		"JOIN backup_asset_recovery_jobs ON backup_asset_recovery_jobs.plan_id = backup_asset_recovery_plans.id",
+	).Where("backup_asset_recovery_jobs.id = ?", result.JobID).Take(&repository).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := backupasset.ProviderKind(repository.ProviderKind); got != metrics.states[0].provider {
+		t.Fatalf("queued metric provider=%q, durable repository provider=%q", metrics.states[0].provider, got)
+	}
+}
+
+func TestRecoveryWorkerPolicyRejectsInvalidBounds(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+	for _, policy := range []WorkerPolicy{
+		{},
+		{LeaseRenewMargin: recoveryWorkerMaxLeaseRenewMargin + time.Second, ExecutionTimeout: time.Minute},
+		{LeaseRenewMargin: time.Second, ExecutionTimeout: recoveryWorkerMaxExecutionTimeout + time.Second},
+	} {
+		dependencies := fixture.dependencies
+		dependencies.Policy = policy
+		service, err := NewAuthorizationService(dependencies)
+		if service != nil || !errors.Is(err, ErrAuthorizationUnavailable) {
+			t.Fatalf("worker policy=%+v service=%v error=%v, want unavailable", policy, service, err)
+		}
+	}
+}
+
+func TestRecoveryExecutionDeadlineFreezesEarliestAuthorityBound(t *testing.T) {
+	for _, testCase := range []struct {
+		name             string
+		executionTimeout time.Duration
+		wantDeadline     time.Duration
+		preflightBound   bool
+	}{
+		{name: "execution timeout", executionTimeout: 5 * time.Minute, wantDeadline: 5 * time.Minute},
+		{name: "grant expiry", executionTimeout: 30 * time.Minute, wantDeadline: 15 * time.Minute},
+		{name: "preflight expiry", executionTimeout: 30 * time.Minute, wantDeadline: 8 * time.Minute, preflightBound: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+			if testCase.preflightBound {
+				preflightExpiry := fixture.now.Add(testCase.wantDeadline)
+				if err := fixture.db.Model(&model.BackupAssetRecoveryPlan{}).
+					Where("id = ?", fixture.request.PlanID).
+					Update("preflight_expires_at", preflightExpiry).Error; err != nil {
+					t.Fatal(err)
+				}
+				if err := fixture.db.Model(&model.BackupAssetRecoveryPreflight{}).
+					Where("id = ?", fixture.request.PreflightID).
+					Update("expires_at", preflightExpiry).Error; err != nil {
+					t.Fatal(err)
+				}
+				if err := fixture.db.Model(&model.BackupAssetRecoveryGrant{}).
+					Where("id = ?", fixture.request.GrantID).
+					Update("expires_at", fixture.now.Add(30*time.Minute)).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			dependencies := fixture.dependencies
+			dependencies.Policy.ExecutionTimeout = testCase.executionTimeout
+			service, err := NewAuthorizationService(dependencies)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := service.Authorize(context.Background(), fixture.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := fixture.now.Add(testCase.wantDeadline)
+			wantLeaseExpiry := fixture.now.Add(10 * time.Minute)
+			if want.Before(wantLeaseExpiry) {
+				wantLeaseExpiry = want
+			}
+			var source model.RecoveryPointLease
+			if err := fixture.db.Where("id = ?", result.SourceLeaseID).Take(&source).Error; err != nil {
+				t.Fatal(err)
+			}
+			var node model.BackupAssetRecoveryNodeLease
+			if err := fixture.db.Where("id = ?", result.NodeLeaseID).Take(&node).Error; err != nil {
+				t.Fatal(err)
+			}
+			var attempt model.BackupAssetRecoveryAttempt
+			if err := fixture.db.Where("id = ?", result.AttemptID).Take(&attempt).Error; err != nil {
+				t.Fatal(err)
+			}
+			if !source.AbsoluteDeadline.Equal(want) || !source.LeaseExpiresAt.Equal(wantLeaseExpiry) ||
+				!node.LeaseExpiresAt.Equal(wantLeaseExpiry) || attempt.LeaseExpiresAt == nil || !attempt.LeaseExpiresAt.Equal(wantLeaseExpiry) {
+				t.Fatalf("deadlines source=%s/%s node=%s attempt=%v, want absolute/lease %s/%s",
+					source.AbsoluteDeadline, source.LeaseExpiresAt, node.LeaseExpiresAt, attempt.LeaseExpiresAt, want, wantLeaseExpiry)
+			}
+		})
+	}
+}
+
+func TestRecoveryExecuteRollbackEmitsNoMetrics(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+	metrics := &recoveryMetricsSpy{}
+	fixture.dependencies.Metrics = metrics
+	service, err := NewAuthorizationService(fixture.dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("FAKE_RECOVERY_QUEUED_METRIC_ROLLBACK")
+	service.beforePersist = func(authorizationPersistStage) error { return injected }
+	if _, err := service.Authorize(context.Background(), fixture.request); !errors.Is(err, injected) {
+		t.Fatalf("rolled-back execute recovery authorization error=%v, want injected failure", err)
+	}
+	if len(metrics.states) != 0 || len(metrics.outcomes) != 0 || len(metrics.categories) != 0 {
+		t.Fatalf("rolled-back execute emitted metrics: states=%+v outcomes=%+v categories=%+v",
+			metrics.states, metrics.outcomes, metrics.categories)
+	}
+}
+
+func TestRecoveryExecuteMetricProviderQueryFailureUsesUnknownAfterCommit(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+	metrics := &recoveryMetricsSpy{}
+	fixture.dependencies.Metrics = metrics
+	service, err := NewAuthorizationService(fixture.dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var failMetricQuery atomic.Bool
+	callbackName := "task8:fail_recovery_metric_provider_query"
+	if err := fixture.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if failMetricQuery.Load() && tx.Statement != nil && tx.Statement.Table == "backup_repositories" {
+			_ = tx.AddError(errors.New("FAKE_RECOVERY_METRIC_PROVIDER_QUERY_FAILURE"))
+		}
+	}); err != nil {
+		t.Fatalf("register metric provider query failure: %v", err)
+	}
+	t.Cleanup(func() { _ = fixture.db.Callback().Query().Remove(callbackName) })
+	service.beforePersist = func(authorizationPersistStage) error {
+		failMetricQuery.Store(true)
+		return nil
+	}
+
+	result, err := service.Authorize(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("execute recovery with failed metric query: %v", err)
+	}
+	if result.JobID == "" {
+		t.Fatal("execute recovery lost its committed job after metric query failure")
+	}
+	metrics.assertSingleState(t, "", JobStateQueued)
+	metrics.assertSingleCategory(t, AuthorizationReceiptCategoryExecute, MetricOutcomeSuccess)
+}
+
+type recoveryMetricsSpy struct {
+	states []struct {
+		provider backupasset.ProviderKind
+		state    JobState
+	}
+	outcomes []struct {
+		provider backupasset.ProviderKind
+		state    JobState
+		outcome  MetricOutcome
+	}
+	categories []struct {
+		category AuthorizationReceiptCategory
+		outcome  MetricOutcome
+	}
+}
+
+func (metrics *recoveryMetricsSpy) ObserveState(provider backupasset.ProviderKind, state JobState) {
+	metrics.states = append(metrics.states, struct {
+		provider backupasset.ProviderKind
+		state    JobState
+	}{provider: provider, state: state})
+}
+func (metrics *recoveryMetricsSpy) ObserveOutcome(
+	provider backupasset.ProviderKind,
+	state JobState,
+	outcome MetricOutcome,
+) {
+	metrics.outcomes = append(metrics.outcomes, struct {
+		provider backupasset.ProviderKind
+		state    JobState
+		outcome  MetricOutcome
+	}{provider: provider, state: state, outcome: outcome})
+}
+func (metrics *recoveryMetricsSpy) ObserveCategory(category AuthorizationReceiptCategory, outcome MetricOutcome) {
+	metrics.categories = append(metrics.categories, struct {
+		category AuthorizationReceiptCategory
+		outcome  MetricOutcome
+	}{category: category, outcome: outcome})
+}
+
+func (metrics *recoveryMetricsSpy) assertSingleCategory(
+	t *testing.T,
+	category AuthorizationReceiptCategory,
+	outcome MetricOutcome,
+) {
+	t.Helper()
+	if len(metrics.categories) != 1 || metrics.categories[0].category != category ||
+		metrics.categories[0].outcome != outcome {
+		t.Fatalf("authorization metrics=%+v, want one %s/%s observation", metrics.categories, category, outcome)
+	}
+}
+
+func (metrics *recoveryMetricsSpy) assertSingleState(
+	t *testing.T,
+	provider backupasset.ProviderKind,
+	state JobState,
+) {
+	t.Helper()
+	if len(metrics.states) != 1 || metrics.states[0].provider != provider || metrics.states[0].state != state {
+		t.Fatalf("state metrics=%+v, want one %s/%s observation", metrics.states, provider, state)
+	}
+}
+
+func (metrics *recoveryMetricsSpy) assertSingleOutcome(
+	t *testing.T,
+	provider backupasset.ProviderKind,
+	state JobState,
+	outcome MetricOutcome,
+) {
+	t.Helper()
+	if len(metrics.outcomes) != 1 || metrics.outcomes[0].provider != provider ||
+		metrics.outcomes[0].state != state || metrics.outcomes[0].outcome != outcome {
+		t.Fatalf("terminal metrics=%+v, want one %s/%s/%s observation", metrics.outcomes, provider, state, outcome)
+	}
 }
 
 type recoveryPreparedExecuteLocatorKeys struct {
@@ -519,7 +1499,7 @@ func TestRecoveryAuthorizationReceiptRevalidatesLiveAuthorityBeforeWriteOrExecut
 	} {
 		t.Run(string(operation), func(t *testing.T) {
 			fixture := newAuthorizationReceiptServiceFixture(t, operation)
-			revalidator := &authorizationReceiptLiveRevalidatorSpy{err: ErrAuthorizationDenied}
+			revalidator := &authorizationReceiptLiveRevalidatorSpy{revalidateErr: ErrAuthorizationDenied}
 			fixture.dependencies.LiveRevalidator = revalidator
 			service, err := NewAuthorizationService(fixture.dependencies)
 			if err != nil {
@@ -568,7 +1548,7 @@ func TestRecoveryAuthorizationReceiptRevalidatesLiveAuthorityBeforeWriteOrExecut
 
 func TestRecoveryAuthorizationReceiptRevalidatesLiveAuthorityBeforeSecurityOverride(t *testing.T) {
 	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptSecurityOverride)
-	revalidator := &authorizationReceiptLiveRevalidatorSpy{err: ErrAuthorizationDenied}
+	revalidator := &authorizationReceiptLiveRevalidatorSpy{revalidateErr: ErrAuthorizationDenied}
 	fixture.dependencies.LiveRevalidator = revalidator
 	service, err := NewAuthorizationService(fixture.dependencies)
 	if err != nil {
@@ -594,17 +1574,208 @@ func TestRecoveryAuthorizationReceiptRevalidatesLiveAuthorityBeforeSecurityOverr
 }
 
 type authorizationReceiptLiveRevalidatorSpy struct {
-	calls []RecoveryAuthorityBinding
-	err   error
+	db                 *gorm.DB
+	observeCalls       []RecoveryAuthorityBinding
+	calls              []RecoveryAuthorityBinding
+	observations       []RecoveryAuthorityObservation
+	events             []string
+	inTransaction      []bool
+	afterObserve       func(RecoveryAuthorityBinding)
+	rejectBindingDrift bool
+	observeErr         error
+	revalidateErr      error
+	err                error
+	observation        RecoveryAuthorityObservation
+}
+
+func (spy *authorizationReceiptLiveRevalidatorSpy) ObserveRecoveryAuthority(
+	_ context.Context,
+	binding RecoveryAuthorityBinding,
+) (RecoveryAuthorityObservation, error) {
+	spy.events = append(spy.events, "observe")
+	spy.observeCalls = append(spy.observeCalls, binding)
+	observation := spy.observation
+	if observation.proof == nil {
+		observation = RecoveryAuthorityObservation{
+			observedAt: time.Unix(1, 0).UTC(), expiresAt: time.Unix(2, 0).UTC(),
+			proof: &recoveryEligibilityProof{bindingDigest: strings.Repeat("e", 64), production: true},
+		}
+	}
+	spy.observation = observation
+	if spy.afterObserve != nil {
+		spy.afterObserve(binding)
+	}
+	return observation, spy.observeErr
 }
 
 func (spy *authorizationReceiptLiveRevalidatorSpy) RevalidateRecoveryAuthorityTx(
 	_ context.Context,
-	_ *gorm.DB,
+	tx *gorm.DB,
 	binding RecoveryAuthorityBinding,
+	observation RecoveryAuthorityObservation,
 ) error {
+	spy.events = append(spy.events, "revalidate")
 	spy.calls = append(spy.calls, binding)
+	spy.observations = append(spy.observations, observation)
+	inTransaction := false
+	if tx != nil && tx.Statement != nil {
+		_, inTransaction = tx.Statement.ConnPool.(*sql.Tx)
+	}
+	spy.inTransaction = append(spy.inTransaction, inTransaction)
+	if spy.rejectBindingDrift && (len(spy.observeCalls) != 1 || binding != spy.observeCalls[0]) {
+		return ErrAuthorizationDenied
+	}
+	if spy.revalidateErr != nil {
+		return spy.revalidateErr
+	}
 	return spy.err
+}
+
+func TestRecoveryAuthorizationObservesOutsideAndRevalidatesInsideMutationTransaction(t *testing.T) {
+	for _, operation := range []AuthorizationReceiptOperation{
+		AuthorizationReceiptSecurityOverride,
+		AuthorizationReceiptWriteAuthorize,
+		AuthorizationReceiptExecute,
+		AuthorizationReceiptDeleteAuthorize,
+	} {
+		t.Run(string(operation), func(t *testing.T) {
+			fixture := newAuthorizationReceiptServiceFixture(t, operation)
+			spy := &authorizationReceiptLiveRevalidatorSpy{db: fixture.db, revalidateErr: ErrAuthorizationDenied}
+			fixture.dependencies.LiveRevalidator = spy
+			service, err := NewAuthorizationService(fixture.dependencies)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := fixture.effectCounts(t)
+
+			if _, err := service.Authorize(context.Background(), fixture.request); !errors.Is(err, ErrAuthorizationDenied) {
+				t.Fatalf("authorize error=%v, want ErrAuthorizationDenied", err)
+			}
+			if got := fixture.effectCounts(t); got != before {
+				t.Fatalf("rejected live authority left durable effects: got=%+v want=%+v", got, before)
+			}
+			if !reflect.DeepEqual(spy.events, []string{"observe", "revalidate"}) {
+				t.Fatalf("live authority events=%v, want [observe revalidate]", spy.events)
+			}
+			if len(spy.observeCalls) != 1 || len(spy.calls) != 1 || len(spy.observations) != 1 {
+				t.Fatalf("live authority calls=(observe=%d revalidate=%d observations=%d), want one each",
+					len(spy.observeCalls), len(spy.calls), len(spy.observations))
+			}
+			if !reflect.DeepEqual(spy.observations[0], spy.observation) {
+				t.Fatal("revalidation did not receive the sealed observation returned before the transaction")
+			}
+			if len(spy.inTransaction) != 1 || !spy.inTransaction[0] {
+				t.Fatal("live authority revalidation did not run in the caller-owned mutation transaction")
+			}
+			if spy.calls[0] != spy.observeCalls[0] {
+				t.Fatalf("locked binding=%+v does not match observed binding=%+v", spy.calls[0], spy.observeCalls[0])
+			}
+
+			var repository model.BackupRepository
+			if err := fixture.db.Where("id = ?", spy.observeCalls[0].RepositoryID).Take(&repository).Error; err != nil {
+				t.Fatal(err)
+			}
+			if got, want := spy.observeCalls[0].Provider, backupasset.ProviderKind(repository.ProviderKind); got != want {
+				t.Fatalf("observed provider=%q, want durable repository provider=%q", got, want)
+			}
+		})
+	}
+}
+
+func TestRecoveryAuthorizationFailsClosedOnPostObservationDurableIntentDrift(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptWriteAuthorize)
+	spy := &authorizationReceiptLiveRevalidatorSpy{db: fixture.db, rejectBindingDrift: true}
+	spy.afterObserve = func(binding RecoveryAuthorityBinding) {
+		if err := fixture.db.Model(&model.BackupAssetRecoveryPlan{}).Where("id = ?", binding.PlanID).
+			Update("root_revision", "root-revision-after-observation").Error; err != nil {
+			t.Fatalf("drift root revision after observation: %v", err)
+		}
+	}
+	fixture.dependencies.LiveRevalidator = spy
+	service, err := NewAuthorizationService(fixture.dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := fixture.effectCounts(t)
+
+	if _, err := service.Authorize(context.Background(), fixture.request); !errors.Is(err, ErrAuthorizationDenied) && !errors.Is(err, ErrAuthorizationIdempotencyConflict) {
+		t.Fatalf("authorization after live drift error=%v, want fail-closed authority or intent rejection", err)
+	}
+	if got := fixture.effectCounts(t); got != before {
+		t.Fatalf("authorization after live drift left durable effects: got=%+v want=%+v", got, before)
+	}
+	if !reflect.DeepEqual(spy.events, []string{"observe"}) || len(spy.calls) != 0 {
+		t.Fatalf("durable intent drift events=%v revalidate calls=%d, want rejection before live revalidation",
+			spy.events, len(spy.calls))
+	}
+}
+
+func TestRecoveryAuthorizationReplayAndProofUsedEarlyPathsDoNotObserveExternally(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptWriteAuthorize)
+	if _, err := fixture.service.Authorize(context.Background(), fixture.request); err != nil {
+		t.Fatalf("create durable authorization receipt: %v", err)
+	}
+	spy := &authorizationReceiptLiveRevalidatorSpy{db: fixture.db}
+	fixture.dependencies.LiveRevalidator = spy
+	service, err := NewAuthorizationService(fixture.dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if replay, err := service.Authorize(context.Background(), fixture.request); err != nil || !replay.Replay {
+		t.Fatalf("authorization replay=(%+v, %v), want replay", replay, err)
+	}
+	if len(spy.events) != 0 {
+		t.Fatalf("replay performed external live authority work: %v", spy.events)
+	}
+
+	proofUsed := fixture.request
+	proofUsed.IdempotencyKey = "authorization-receipt-proof-used-key-0002"
+	if _, err := service.Authorize(context.Background(), proofUsed); !errors.Is(err, ErrAuthorizationProofUsed) {
+		t.Fatalf("proof-used authorization error=%v, want ErrAuthorizationProofUsed", err)
+	}
+	if len(spy.events) != 0 {
+		t.Fatalf("proof-used early path performed external live authority work: %v", spy.events)
+	}
+}
+
+func TestRecoveryAuthorizationRetryTakesFreshAuthorityObservationBeforeEveryMutationTransaction(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptWriteAuthorize)
+	spy := &authorizationReceiptLiveRevalidatorSpy{db: fixture.db}
+	fixture.dependencies.LiveRevalidator = spy
+	service, err := NewAuthorizationService(fixture.dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var injected atomic.Bool
+	callbackName := "test:recovery_authorization_retry_requires_fresh_observation"
+	if err := fixture.db.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Table != (model.BackupAssetRecoveryEvidence{}).TableName() ||
+			injected.Swap(true) {
+			return
+		}
+		_ = tx.AddError(gorm.ErrDuplicatedKey)
+	}); err != nil {
+		t.Fatalf("register one-shot retry callback: %v", err)
+	}
+	t.Cleanup(func() { _ = fixture.db.Callback().Create().Remove(callbackName) })
+
+	result, err := service.Authorize(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("authorize after retryable first transaction: %v", err)
+	}
+	if result.Replay || result.ReceiptID == "" {
+		t.Fatalf("authorize after retry=%+v, want newly committed receipt", result)
+	}
+	if !reflect.DeepEqual(spy.events, []string{"observe", "revalidate", "observe", "revalidate"}) {
+		t.Fatalf("retry live authority events=%v, want a fresh observe before each transaction", spy.events)
+	}
+	if len(spy.observeCalls) != 2 || len(spy.calls) != 2 || len(spy.inTransaction) != 2 ||
+		!spy.inTransaction[0] || !spy.inTransaction[1] {
+		t.Fatalf("retry authority calls=(observe=%d revalidate=%d in-tx=%v), want two complete attempts",
+			len(spy.observeCalls), len(spy.calls), spy.inTransaction)
+	}
 }
 
 func TestRecoveryAuthorizationReceiptExecutePersistsExactOperationRows(t *testing.T) {
@@ -2846,6 +4017,8 @@ func TestRecoveryPlanTargetRootResolutionFailsClosedBeforeWrites(t *testing.T) {
 			resolver := &recoveryTargetRootResolverFake{resolution: resolution}
 			dependencies := PlanServiceDependencies{
 				DB: fixture.db, Now: func() time.Time { return fixture.now }, TargetRootResolver: resolver,
+				Policy:          PlanPolicy{MaxSelectionItems: exactSelectionMaxItems, MaxLogicalBytes: recoveryPlanMaxLogicalBytes},
+				PreflightPolicy: PreflightPolicy{TTL: time.Hour},
 			}
 			ctx := context.Background()
 			wantErr := ErrRecoveryPlanUnavailable
@@ -2968,6 +4141,8 @@ func TestRecoveryPlanIdempotentReplayUsesFrozenTargetRootSnapshot(t *testing.T) 
 	oldDefinition := settings.RecoveryTargetRootDefinition{
 		NodeID: node.ID, RootID: fixture.request.Plan.Binding.Target.RootID,
 		SafeLabel: "FAKE_OLD_PLAN_TARGET_ROOT_LABEL_FOR_TEST_ONLY", Locator: fixture.targetRootLocator,
+		AuthorityRevision: strings.Repeat("a", 32), RootObservationRevision: "FAKE_OLD_PLAN_TARGET_OBSERVATION_FOR_TEST_ONLY",
+		Policy: settings.RecoveryTargetRootPolicy{ReserveBytes: 1, ReserveInodes: 1, OverlapPolicyBinding: "FAKE_OLD_PLAN_TARGET_POLICY_FOR_TEST_ONLY"},
 	}
 	var oldResolution settings.RecoveryTargetRootResolution
 	if err := fixture.db.Transaction(func(tx *gorm.DB) error {
@@ -2996,6 +4171,7 @@ func TestRecoveryPlanIdempotentReplayUsesFrozenTargetRootSnapshot(t *testing.T) 
 	newDefinition := oldDefinition
 	newDefinition.SafeLabel = "FAKE_NEW_PLAN_TARGET_ROOT_LABEL_FOR_TEST_ONLY"
 	newDefinition.Locator = "/srv/FAKE_NEW_PLAN_TARGET_ROOT_FOR_TEST_ONLY"
+	newDefinition.AuthorityRevision = strings.Repeat("b", 32)
 	var newResolution settings.RecoveryTargetRootResolution
 	if err := fixture.db.Transaction(func(tx *gorm.DB) error {
 		var err error
@@ -3078,6 +4254,108 @@ func TestRecoveryPlanIdempotentReplayUsesFrozenTargetRootSnapshot(t *testing.T) 
 	}
 	if len(resolver.snapshotCalls()) != callsBeforeDeletedReplay {
 		t.Fatal("corrupt frozen snapshot fell back to the current registry")
+	}
+}
+
+func TestRecoveryPlanPolicyRejectsInvalidBoundsAndCapsBeforePersistence(t *testing.T) {
+	fixture := newPlanServiceTestFixture(t, false)
+	for _, policy := range []PlanPolicy{
+		{},
+		{MaxSelectionItems: recoveryPlanPolicyMaxSelectionItems + 1, MaxLogicalBytes: 1},
+		{MaxSelectionItems: 1, MaxLogicalBytes: recoveryPlanMaxLogicalBytes + 1},
+	} {
+		service, err := NewPlanService(PlanServiceDependencies{
+			DB: fixture.db, Now: func() time.Time { return fixture.now },
+			TargetRootResolver: fixture.resolver, Policy: policy, PreflightPolicy: PreflightPolicy{TTL: time.Hour},
+		})
+		if service != nil || !errors.Is(err, ErrRecoveryPlanUnavailable) {
+			t.Fatalf("policy=%+v service=%v error=%v, want unavailable", policy, service, err)
+		}
+	}
+
+	service, err := NewPlanService(PlanServiceDependencies{
+		DB: fixture.db, Now: func() time.Time { return fixture.now }, TargetRootResolver: fixture.resolver,
+		Policy:          PlanPolicy{MaxSelectionItems: exactSelectionMaxItems, MaxLogicalBytes: 2},
+		PreflightPolicy: PreflightPolicy{TTL: time.Hour},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.CreatePlan(context.Background(), fixture.request)
+	if !errors.Is(err, ErrExactSelectionLimit) {
+		t.Fatalf("request above PlanPolicy error=%v, want ErrExactSelectionLimit", err)
+	}
+	assertRecoveryPlanAndItemCounts(t, fixture.db, 0, 0)
+}
+
+func TestRecoveryPlanPolicyRechecksMaterializedLogicalBytesBeforePersistence(t *testing.T) {
+	fixture := newPlanServiceTestFixture(t, false)
+	fixture.request.EstimatedBytes = 1
+	selected := fixture.request.Selection.AssetRefs[0].EntryID
+	if err := fixture.db.Model(&model.CatalogEntry{}).
+		Where("generation_id = ? AND entry_id = ?", fixture.request.Selection.CatalogGenerationID, selected).
+		Update("size", int64(3)).Error; err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewPlanService(PlanServiceDependencies{
+		DB: fixture.db, Now: func() time.Time { return fixture.now }, TargetRootResolver: fixture.resolver,
+		Policy:          PlanPolicy{MaxSelectionItems: exactSelectionMaxItems, MaxLogicalBytes: 2},
+		PreflightPolicy: PreflightPolicy{TTL: time.Hour},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.CreatePlan(context.Background(), fixture.request)
+	if !errors.Is(err, ErrExactSelectionLimit) {
+		t.Fatalf("materialized bytes above PlanPolicy error=%v, want ErrExactSelectionLimit", err)
+	}
+	assertRecoveryPlanAndItemCounts(t, fixture.db, 0, 0)
+}
+
+func TestRecoveryPreflightPolicyOwnsPlanExpiryDespiteCallerSubstitution(t *testing.T) {
+	fixture := newPlanServiceTestFixture(t, false)
+	wantExpiry := fixture.now.Add(time.Hour).UTC()
+	fixture.request.Plan.PreflightExpiresAt = fixture.now.Add(24 * time.Hour)
+
+	created, err := fixture.service.CreatePlan(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("CreatePlan() error = %v", err)
+	}
+	var plan model.BackupAssetRecoveryPlan
+	if err := fixture.db.Where("id = ?", created.PlanID).Take(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !plan.PreflightExpiresAt.UTC().Equal(wantExpiry) {
+		t.Fatalf("persisted preflight expiry = %s, want server-owned %s", plan.PreflightExpiresAt, wantExpiry)
+	}
+}
+
+func TestRecoveryPreflightPolicyIdempotentReplayUsesFrozenExpiryAcrossAdvancingClock(t *testing.T) {
+	fixture := newPlanServiceTestFixture(t, false)
+	created, err := fixture.service.CreatePlan(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("CreatePlan() error = %v", err)
+	}
+	var original model.BackupAssetRecoveryPlan
+	if err := fixture.db.Where("id = ?", created.PlanID).Take(&original).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	advancedNow := fixture.now.Add(5 * time.Minute)
+	fixture.service.now = func() time.Time { return advancedNow }
+	replayed, err := fixture.service.CreatePlan(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("advancing-clock replay error = %v", err)
+	}
+	if !replayed.Replay || replayed.PlanID != created.PlanID {
+		t.Fatalf("advancing-clock replay = %+v, want original plan %s", replayed, created.PlanID)
+	}
+	var durable model.BackupAssetRecoveryPlan
+	if err := fixture.db.Where("id = ?", created.PlanID).Take(&durable).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !durable.PreflightExpiresAt.Equal(original.PreflightExpiresAt) || durable.BindingDigest != original.BindingDigest {
+		t.Fatalf("replay changed frozen expiry/binding: before=%+v after=%+v", original, durable)
 	}
 }
 
@@ -3353,12 +4631,6 @@ func TestPlanIdempotencyReplayAndOneFieldConflicts(t *testing.T) {
 			name: "preflight revision",
 			mutate: func(request *CreatePlanRequest) {
 				request.Plan.Binding.PreflightRevision = "preflight-revision-2"
-			},
-		},
-		{
-			name: "preflight expiry",
-			mutate: func(request *CreatePlanRequest) {
-				request.Plan.PreflightExpiresAt = request.Plan.PreflightExpiresAt.Add(time.Minute)
 			},
 		},
 		{
@@ -3937,6 +5209,8 @@ func TestPlanCreateRetryExhaustionWaitsForCommittingWinner(t *testing.T) {
 	winnerService, err := NewPlanService(PlanServiceDependencies{
 		DB: fixture.db, Now: func() time.Time { return fixture.now },
 		TargetRootResolver: fixture.resolver,
+		Policy:             PlanPolicy{MaxSelectionItems: exactSelectionMaxItems, MaxLogicalBytes: recoveryPlanMaxLogicalBytes},
+		PreflightPolicy:    PreflightPolicy{TTL: time.Hour},
 		beforePersist: func(stage planCreateStage, _ int) error {
 			if stage != planCreateBeforeCommit {
 				return nil
@@ -4095,6 +5369,8 @@ func TestPlanCreateRollsBackEveryPersistenceBoundary(t *testing.T) {
 			service, err := NewPlanService(PlanServiceDependencies{
 				DB: fixture.db, Now: func() time.Time { return fixture.now },
 				TargetRootResolver: fixture.resolver,
+				Policy:             PlanPolicy{MaxSelectionItems: exactSelectionMaxItems, MaxLogicalBytes: recoveryPlanMaxLogicalBytes},
+				PreflightPolicy:    PreflightPolicy{TTL: time.Hour},
 				beforePersist: func(stage planCreateStage, itemOrdinal int) error {
 					if stage == testCase.stage && itemOrdinal == testCase.itemOrdinal {
 						return injected
@@ -4176,6 +5452,8 @@ func TestPlanCreateTxLeavesFinalizationToCaller(t *testing.T) {
 	service, err := NewPlanService(PlanServiceDependencies{
 		DB: fixture.db, Now: func() time.Time { return fixture.now },
 		TargetRootResolver: fixture.resolver,
+		Policy:             PlanPolicy{MaxSelectionItems: exactSelectionMaxItems, MaxLogicalBytes: recoveryPlanMaxLogicalBytes},
+		PreflightPolicy:    PreflightPolicy{TTL: time.Hour},
 		beforePersist: func(stage planCreateStage, _ int) error {
 			if stage == planCreateBeforeCommit {
 				finalizationCalls.Add(1)
@@ -4233,6 +5511,8 @@ func TestPlanCreateTxLeavesCallerTransactionOwnedOnFailure(t *testing.T) {
 	service, err := NewPlanService(PlanServiceDependencies{
 		DB: fixture.db, Now: func() time.Time { return fixture.now },
 		TargetRootResolver: fixture.resolver,
+		Policy:             PlanPolicy{MaxSelectionItems: exactSelectionMaxItems, MaxLogicalBytes: recoveryPlanMaxLogicalBytes},
+		PreflightPolicy:    PreflightPolicy{TTL: time.Hour},
 		beforePersist: func(stage planCreateStage, _ int) error {
 			if stage == planCreateBeforePlanInsert {
 				return injected
@@ -4276,6 +5556,8 @@ func TestPlanCreateTxRollsBackItsPartialWriteSetBeforeCallerCommit(t *testing.T)
 	service, err := NewPlanService(PlanServiceDependencies{
 		DB: fixture.db, Now: func() time.Time { return fixture.now },
 		TargetRootResolver: fixture.resolver,
+		Policy:             PlanPolicy{MaxSelectionItems: exactSelectionMaxItems, MaxLogicalBytes: recoveryPlanMaxLogicalBytes},
+		PreflightPolicy:    PreflightPolicy{TTL: time.Hour},
 		beforePersist: func(stage planCreateStage, itemOrdinal int) error {
 			if stage == planCreateBeforeItemInsert && itemOrdinal == 1 {
 				return injected
@@ -4465,6 +5747,8 @@ func newPlanServiceWithResolverForTest(
 	service, err := NewPlanService(PlanServiceDependencies{
 		DB: fixture.db, Now: func() time.Time { return fixture.now },
 		TargetRootResolver: resolver, beforePersist: beforePersist,
+		Policy:          PlanPolicy{MaxSelectionItems: exactSelectionMaxItems, MaxLogicalBytes: recoveryPlanMaxLogicalBytes},
+		PreflightPolicy: PreflightPolicy{TTL: time.Hour},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -4669,6 +5953,8 @@ func newPlanServiceTestFixtureForSemantics(
 	}
 	service, err := NewPlanService(PlanServiceDependencies{
 		DB: source.db, Now: func() time.Time { return now }, TargetRootResolver: resolver,
+		Policy:          PlanPolicy{MaxSelectionItems: exactSelectionMaxItems, MaxLogicalBytes: recoveryPlanMaxLogicalBytes},
+		PreflightPolicy: PreflightPolicy{TTL: time.Hour},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -5060,6 +6346,7 @@ func TestRecoveryReconciliationExpectedSetMatrix(t *testing.T) {
 		}},
 		Keys: keys, Target: target,
 		Audit: &authorizationReceiptAuditSpy{}, Findings: &recoveryReconciliationFindingSinkFake{},
+		Policy: ReconciliationPolicy{FindingLimit: 100},
 	})
 	if err != nil {
 		t.Fatalf("construct reconciliation service: %v", err)
@@ -6390,6 +7677,29 @@ func TestRecoveryReconciliationDependencyErrorAndContextMatrix(t *testing.T) {
 	}
 }
 
+func TestRecoveryReconciliationFindingLimitPolicyPropagatesAndRejectsInvalidBounds(t *testing.T) {
+	fixture := newRecoveryReconciliationServiceTestFixture(t)
+	for _, limit := range []int{0, recoveryReconciliationFindingLimit + 1} {
+		service, err := NewRecoveryReconciliationService(RecoveryReconciliationServiceDependencies{
+			DB: fixture.db, Now: func() time.Time { return fixture.now }, Roots: fixture.service.roots,
+			Revisions: fixture.service.revisions, Keys: fixture.service.keys, Target: fixture.target,
+			Audit: fixture.audit, Findings: fixture.findings, Policy: ReconciliationPolicy{FindingLimit: limit},
+		})
+		if service != nil || !errors.Is(err, ErrInvalidRecoveryReconciliation) {
+			t.Fatalf("finding limit %d service=%v error=%v, want invalid", limit, service, err)
+		}
+	}
+
+	if _, err := fixture.service.ReconcileRoot(context.Background(), ReconcileRecoveryRootRequest{
+		NodeID: fixture.job.TargetNodeID, RootID: fixture.job.TargetRootID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixture.target.permits) != 1 || fixture.target.permits[0].FindingLimit != 100 {
+		t.Fatalf("reconciliation permits=%+v, want configured finding limit 100", fixture.target.permits)
+	}
+}
+
 func TestRecoveryReconciliationPrivacyCanaryMatrix(t *testing.T) {
 	fixture := newRecoveryReconciliationServiceTestFixture(t)
 	fixture.target.page = &TargetReconciliationPage{
@@ -6579,6 +7889,7 @@ func newRecoveryReconciliationServiceTestFixtureOnDB(
 			State: backupasset.DomainKeyActive, Key: []byte("abcdef0123456789abcdef0123456789"), ActivatedAt: now.Add(-time.Hour),
 		}},
 		Target: target, Audit: audit, Findings: findings,
+		Policy: ReconciliationPolicy{FindingLimit: 100},
 	})
 	if err != nil {
 		t.Fatal(err)

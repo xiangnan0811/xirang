@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,8 +16,10 @@ import (
 	"xirang/backend/internal/secure"
 	"xirang/backend/internal/task"
 
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
 
 const (
@@ -771,6 +774,249 @@ func TestRecoveryResultCleanupClaimRetriesFailureAndTakesOverExpiredOwner(t *tes
 			t.Fatalf("old cleanup node lease was not expired: %+v", oldLease)
 		}
 	})
+}
+
+func TestRecoveryScheduledResultCleanupClaimRechecksCurrentPlaintextDeadline(t *testing.T) {
+	fixture := newRecoveryResultLifecycleFixture(t)
+	published, err := fixture.service.Publish(context.Background(), fixture.publishRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := fixture.service.ClaimScheduledCleanup(context.Background(), ClaimRecoveryResultCleanupRequest{
+		ResultSetID: published.ResultSetID, WorkerID: "scheduled-cleanup-worker",
+	}); !errors.Is(err, ErrRecoveryResultCleanupConflict) {
+		t.Fatalf("future scheduled cleanup error=%v, want conflict", err)
+	}
+	if err := fixture.db.Model(&model.BackupAssetRecoveryResultSet{}).
+		Where("id = ?", published.ResultSetID).
+		Updates(map[string]any{
+			"plaintext_deadline": fixture.now.Add(-time.Minute),
+			"updated_at":         fixture.now.Add(time.Second),
+		}).Error; err != nil {
+		t.Fatal(err)
+	}
+	fixture.now = fixture.now.Add(2 * time.Second)
+	claim, err := fixture.service.ClaimScheduledCleanup(context.Background(), ClaimRecoveryResultCleanupRequest{
+		ResultSetID: published.ResultSetID, WorkerID: "scheduled-cleanup-worker",
+	})
+	if err != nil {
+		t.Fatalf("due scheduled cleanup: %v", err)
+	}
+	if claim.ResultSetID != published.ResultSetID || claim.Phase != CleanupPhaseClaimed {
+		t.Fatalf("scheduled cleanup claim=%+v", claim)
+	}
+}
+
+func TestRecoveryListScheduledCleanupCandidatesIsClosedBoundedAndDueOnly(t *testing.T) {
+	fixture := newRecoveryResultLifecycleFixture(t)
+	published, err := fixture.service.Publish(context.Background(), fixture.publishRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Model(&model.BackupAssetRecoveryResultSet{}).
+		Where("id = ?", published.ResultSetID).
+		Updates(map[string]any{
+			"plaintext_deadline": fixture.now.Add(-time.Minute),
+			"updated_at":         fixture.now.Add(time.Second),
+		}).Error; err != nil {
+		t.Fatal(err)
+	}
+	fixture.now = fixture.now.Add(2 * time.Second)
+
+	candidates, err := fixture.service.ListScheduledCleanupCandidates(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0].Kind != ScheduledCleanupResultSet ||
+		candidates[0].ID != published.ResultSetID {
+		t.Fatalf("scheduled cleanup candidates=%+v", candidates)
+	}
+	if _, err := fixture.service.ListScheduledCleanupCandidates(context.Background(), 0); !errors.Is(err, ErrInvalidResultLifecycle) {
+		t.Fatalf("zero-limit scheduled candidates error=%v", err)
+	}
+}
+
+func TestRecoveryListScheduledCleanupCandidatesIncludesUnpublishedWorkspace(t *testing.T) {
+	fixture := newRecoveryResultLifecycleFixture(t)
+	fixture.prepareWorkspaceCleanupDue(t)
+
+	candidates, err := fixture.service.ListScheduledCleanupCandidates(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0].Kind != ScheduledCleanupWorkspace ||
+		candidates[0].ID != fixture.job.ID {
+		t.Fatalf("scheduled workspace cleanup candidates=%+v", candidates)
+	}
+}
+
+func TestRecoveryListScheduledCleanupCandidatesGloballyOrdersLifecycleKinds(t *testing.T) {
+	now := time.Date(2026, 8, 13, 8, 9, 10, 0, time.UTC)
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "cleanup-order.sqlite")),
+		&gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.TaskRun{}, &model.BackupAssetRecoveryJob{}, &model.BackupAssetRecoveryResultSet{},
+		&model.BackupAssetRecoveryNodeLease{}); err != nil {
+		t.Fatal(err)
+	}
+	workspaceID := strings.Repeat("1", 32)
+	workspaceDeadline := now.Add(time.Hour)
+	workspace := model.BackupAssetRecoveryJob{
+		ID: workspaceID, PlanID: strings.Repeat("2", 32), State: string(JobStateFailed),
+		WorkspacePhase: string(WorkspacePhaseCleanupDue), WorkspaceCleanupPhase: string(CleanupPhaseClaimed),
+		EncryptedWorkspaceRelativeLocator: "jobs/" + workspaceID,
+		WorkspaceBindingDigest:            strings.Repeat("d", 64),
+		WorkspaceMarkerBindingDigest:      strings.Repeat("e", 64),
+		WorkspaceOwner:                    "workspace-owner", WorkspaceFence: 1,
+		PlaintextDeadline: &workspaceDeadline, TargetMode: string(TargetModeIsolated), TargetNodeID: 8,
+		UpdatedAt: now.Add(-2 * time.Hour), CreatedAt: now.Add(-3 * time.Hour),
+	}
+	if err := db.Session(&gorm.Session{SkipHooks: true}).Create(&workspace).Error; err != nil {
+		t.Fatal(err)
+	}
+	resultSetID := strings.Repeat("3", 32)
+	resultJob := model.BackupAssetRecoveryJob{
+		ID: strings.Repeat("4", 32), PlanID: strings.Repeat("5", 32), State: string(JobStateSucceeded),
+		WorkspacePhase: string(WorkspacePhasePublished), WorkspaceCleanupPhase: string(CleanupPhaseClaimed),
+		WorkspaceMarkerBindingDigest: strings.Repeat("a", 64), TargetMode: string(TargetModeIsolated), TargetNodeID: 9,
+		UpdatedAt: now.Add(-time.Hour), CreatedAt: now.Add(-2 * time.Hour),
+	}
+	if err := db.Create(&resultJob).Error; err != nil {
+		t.Fatal(err)
+	}
+	resultSet := model.BackupAssetRecoveryResultSet{
+		ID: resultSetID, JobID: resultJob.ID, State: string(ResultSetStateReady),
+		MarkerBindingDigest: resultJob.WorkspaceMarkerBindingDigest,
+		CleanupPhase:        string(CleanupPhaseClaimed), PlaintextDeadline: now.Add(-time.Hour),
+		HardDeadline: now.Add(time.Hour), CreatedAt: now.Add(-2 * time.Hour), UpdatedAt: now.Add(-time.Hour),
+	}
+	if err := db.Create(&resultSet).Error; err != nil {
+		t.Fatal(err)
+	}
+	malformedJob := model.BackupAssetRecoveryJob{
+		ID: strings.Repeat("7", 32), PlanID: strings.Repeat("8", 32), State: string(JobStateSucceeded),
+		WorkspacePhase: string(WorkspacePhasePublished), WorkspaceCleanupPhase: string(CleanupPhaseClaimed),
+		WorkspaceMarkerBindingDigest: strings.Repeat("c", 64), TargetMode: string(TargetModeIsolated), TargetNodeID: 12,
+		UpdatedAt: now.Add(-4 * time.Hour), CreatedAt: now.Add(-5 * time.Hour),
+	}
+	if err := db.Create(&malformedJob).Error; err != nil {
+		t.Fatal(err)
+	}
+	malformed := model.BackupAssetRecoveryResultSet{
+		ID: strings.Repeat("9", 32), JobID: malformedJob.ID, State: string(ResultSetStateCleanupFailed),
+		MarkerBindingDigest: malformedJob.WorkspaceMarkerBindingDigest, CleanupPhase: "FAKE_INVALID_CLEANUP_PHASE",
+		CleanupFence: 1, CleanupAttempt: 1,
+		PlaintextDeadline: now.Add(-5 * time.Hour), HardDeadline: now.Add(time.Hour),
+		CreatedAt: now.Add(-5 * time.Hour), UpdatedAt: now.Add(-4 * time.Hour),
+	}
+	if err := db.Create(&malformed).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := &ResultLifecycleService{db: db, now: func() time.Time { return now }}
+
+	candidates, err := service.ListScheduledCleanupCandidates(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0] != (ScheduledCleanupCandidate{
+		Kind: ScheduledCleanupWorkspace, ID: workspace.ID,
+	}) {
+		t.Fatalf("oldest global cleanup candidate=%+v, want workspace %s", candidates, workspace.ID)
+	}
+
+	activeLease := model.BackupAssetRecoveryNodeLease{
+		ID: strings.Repeat("6", 32), NodeID: workspace.TargetNodeID, HolderKind: "recovery_job",
+		JobID: workspace.ID, OwnerID: "active-writer", Fence: 1, State: "active",
+		LeaseExpiresAt: now.Add(time.Hour), CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
+	}
+	if err := db.Create(&activeLease).Error; err != nil {
+		t.Fatal(err)
+	}
+	candidates, err = service.ListScheduledCleanupCandidates(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0] != (ScheduledCleanupCandidate{
+		Kind: ScheduledCleanupResultSet, ID: resultSet.ID,
+	}) {
+		t.Fatalf("busy-node filtered cleanup candidate=%+v, want result set %s", candidates, resultSet.ID)
+	}
+	if err := db.Delete(&activeLease).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.TaskRun{
+		TaskID: 1, NodeIDSnapshot: workspace.TargetNodeID, Status: "running",
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	candidates, err = service.ListScheduledCleanupCandidates(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0] != (ScheduledCleanupCandidate{
+		Kind: ScheduledCleanupResultSet, ID: resultSet.ID,
+	}) {
+		t.Fatalf("ordinary-writer filtered cleanup candidate=%+v, want result set %s", candidates, resultSet.ID)
+	}
+}
+
+func TestRecoveryListScheduledCleanupCandidatesDurablyRotatesFailedRows(t *testing.T) {
+	now := time.Date(2026, 8, 13, 9, 10, 11, 0, time.UTC)
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "cleanup-restart.sqlite")),
+		&gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.TaskRun{}, &model.BackupAssetRecoveryJob{}, &model.BackupAssetRecoveryResultSet{},
+		&model.BackupAssetRecoveryNodeLease{}); err != nil {
+		t.Fatal(err)
+	}
+	jobs := []model.BackupAssetRecoveryJob{
+		{ID: strings.Repeat("1", 32), PlanID: strings.Repeat("3", 32), State: string(JobStateSucceeded),
+			WorkspacePhase: string(WorkspacePhasePublished), WorkspaceMarkerBindingDigest: strings.Repeat("a", 64),
+			TargetMode: string(TargetModeIsolated), TargetNodeID: 10, CreatedAt: now.Add(-4 * time.Hour), UpdatedAt: now.Add(-4 * time.Hour)},
+		{ID: strings.Repeat("2", 32), PlanID: strings.Repeat("4", 32), State: string(JobStateSucceeded),
+			WorkspacePhase: string(WorkspacePhasePublished), WorkspaceMarkerBindingDigest: strings.Repeat("b", 64),
+			TargetMode: string(TargetModeIsolated), TargetNodeID: 11, CreatedAt: now.Add(-3 * time.Hour), UpdatedAt: now.Add(-3 * time.Hour)},
+	}
+	if err := db.Create(&jobs).Error; err != nil {
+		t.Fatal(err)
+	}
+	resultSets := []model.BackupAssetRecoveryResultSet{
+		{ID: strings.Repeat("5", 32), JobID: jobs[0].ID, State: string(ResultSetStateCleanupFailed),
+			MarkerBindingDigest: jobs[0].WorkspaceMarkerBindingDigest, CleanupPhase: string(CleanupPhaseDrained),
+			CleanupFence: 1, CleanupAttempt: 1,
+			PlaintextDeadline: now.Add(-3 * time.Hour), HardDeadline: now.Add(time.Hour),
+			CreatedAt: now.Add(-4 * time.Hour), UpdatedAt: now.Add(-2 * time.Hour)},
+		{ID: strings.Repeat("6", 32), JobID: jobs[1].ID, State: string(ResultSetStateCleanupFailed),
+			MarkerBindingDigest: jobs[1].WorkspaceMarkerBindingDigest, CleanupPhase: string(CleanupPhaseDrained),
+			CleanupFence: 1, CleanupAttempt: 1,
+			PlaintextDeadline: now.Add(-2 * time.Hour), HardDeadline: now.Add(time.Hour),
+			CreatedAt: now.Add(-3 * time.Hour), UpdatedAt: now.Add(-time.Hour)},
+	}
+	if err := db.Create(&resultSets).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := &ResultLifecycleService{db: db, now: func() time.Time { return now }}
+	first, err := service.ListScheduledCleanupCandidates(context.Background(), 1)
+	if err != nil || len(first) != 1 || first[0].ID != resultSets[0].ID {
+		t.Fatalf("first failed cleanup candidate=%+v error=%v", first, err)
+	}
+
+	now = now.Add(time.Minute)
+	if err := db.Model(&model.BackupAssetRecoveryResultSet{}).Where("id = ?", resultSets[0].ID).
+		Update("updated_at", now).Error; err != nil {
+		t.Fatalf("persist failed cleanup retry: %v", err)
+	}
+	restarted := &ResultLifecycleService{db: db, now: func() time.Time { return now }}
+	second, err := restarted.ListScheduledCleanupCandidates(context.Background(), 1)
+	if err != nil || len(second) != 1 || second[0].ID != resultSets[1].ID {
+		t.Fatalf("post-restart failed cleanup candidate=%+v error=%v, want %s", second, err, resultSets[1].ID)
+	}
 }
 
 func TestRecoveryResultCleanupClaimRejectsActiveTerminalOrBusyCandidate(t *testing.T) {
@@ -3807,6 +4053,11 @@ func newRecoveryResultLifecycleFixtureFromAuthorization(
 	authorization *authorizationReceiptServiceFixture,
 ) *recoveryResultLifecycleFixture {
 	t.Helper()
+	if !authorization.db.Migrator().HasTable(&model.TaskRun{}) {
+		if err := authorization.db.AutoMigrate(&model.Task{}, &model.TaskRun{}); err != nil {
+			t.Fatalf("migrate result lifecycle TaskRun fixture: %v", err)
+		}
+	}
 	executed, err := authorization.service.Authorize(context.Background(), authorization.request)
 	if err != nil {
 		t.Fatalf("execute recovery result fixture: %v", err)
