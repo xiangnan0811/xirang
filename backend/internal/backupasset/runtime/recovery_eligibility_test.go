@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -228,6 +229,97 @@ func TestManagedRecoveryEligibilitySecurityAdapterAggregatesEveryPlanItemAndReva
 	}
 }
 
+func TestManagedRecoveryPlanSecurityAuthorityBuildsBoundedPreCreateEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 16, 6, 0, 0, 0, time.UTC)
+	db := openProcessingRuntimeTestDB(t)
+	if err := db.AutoMigrate(&model.User{}); err != nil {
+		t.Fatal(err)
+	}
+	bundleFingerprint := strings.Repeat("1", 64)
+	if err := db.Create(&model.BackupAssetUpdaterMetadata{
+		ID: strings.Repeat("2", 32), SourceKind: "admin_registered", SourceID: "security-precreate-test",
+		Version: "1.0.0", ManifestDigest: strings.Repeat("3", 64),
+		SigningKeyFingerprint: strings.Repeat("4", 64), BundleFingerprint: bundleFingerprint,
+		State: "active", ActivatedAt: &now, CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	pipeline, err := (&managedProcessingRuntime{db: db}).activePipelineFingerprint(
+		context.Background(), capabilityspec.CapabilityMalwareScan, capabilityspec.ProfileSignatureScanV1,
+	)
+	if err != nil || pipeline == "" {
+		t.Fatalf("active malware pipeline=%q err=%v", pipeline, err)
+	}
+	plan := managedRecoveryEligibilitySecurityPlan(now)
+	items := managedRecoveryEligibilitySecurityItems(now, plan)
+	assets := []content.AuthorizedAsset{
+		managedRecoveryEligibilitySecurityAsset(items[0], plan, strings.Repeat("5", 64), 4096),
+		managedRecoveryEligibilitySecurityAsset(items[1], plan, strings.Repeat("6", 64), 2048),
+	}
+	assets[0].Path = "private/docs/report.txt"
+	assets[1].Path = "private/docs/summary.txt"
+	payloads := make(map[string][]byte, len(items))
+	states := []capabilityspec.ScanState{capabilityspec.ScanNoFinding, capabilityspec.ScanFinding}
+	for index := range items {
+		payload, row := seedManagedRecoveryEligibilitySecurityEvidence(
+			t, db, now, items[index], assets[index], pipeline, bundleFingerprint, states[index], index,
+		)
+		payloads[row.ArtifactID] = payload
+	}
+	if err := db.Create(&model.User{
+		ID: 41, Username: "recovery-owner", PasswordHash: "unused", Role: "admin",
+		CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	selection, err := recovery.NewExactSelection(recovery.ExactSelectionInput{
+		RepositoryID: plan.RepositoryID, RecoveryPointID: plan.RecoveryPointID,
+		CatalogGenerationID: plan.CatalogGenerationID,
+		AssetRefs:           []backupasset.AssetRef{assets[1].Ref, assets[0].Ref},
+		SourceRevision: recovery.SourceRevision{
+			Kind: recovery.SourceRevisionImmutable,
+			Immutable: &recovery.ImmutableSourceRevision{
+				LocatorDigest: plan.ImmutableLocatorDigest, ManifestDigest: plan.ImmutableManifestDigest,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &managedRecoveryEligibilitySecurityReaderFake{payloads: payloads}
+	adapter, err := newManagedRecoveryEligibilitySecurityAdapter(&managedProcessingRuntime{
+		db: db, now: func() time.Time { return now },
+		authorize: managedRecoveryEligibilitySecurityAuthorizerFake{assets: map[backupasset.AssetRef]content.AuthorizedAsset{
+			assets[0].Ref: assets[0], assets[1].Ref: assets[1],
+		}},
+		malwareEvidence: reader,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	evidence, err := adapter.ObserveRecoveryPlanSecurity(context.Background(), recovery.RecoveryPlanSecurityRequest{
+		RequesterID: 41, Selection: selection, MaxItems: 2, MaxBytes: 8192,
+	})
+	if err != nil {
+		t.Fatalf("ObserveRecoveryPlanSecurity() error=%v", err)
+	}
+	if evidence.SelectionDigest != selection.SelectionDigest || evidence.Provider != backupasset.ProviderRsync ||
+		evidence.CapabilityRevision == "" || evidence.Security.Decision.Kind != recovery.SecurityDecisionBlock ||
+		len(evidence.Items) != 2 || evidence.Items[0].AssetRef != selection.AssetRefs[0] ||
+		evidence.Items[0].TargetRelativeLocator != assets[0].Path || evidence.Items[0].ContentDigest != assets[0].EntryFingerprint ||
+		!evidence.ObservedAt.Equal(now) || reader.calls != 2 {
+		t.Fatalf("pre-create security evidence=%#v reads=%d", evidence, reader.calls)
+	}
+	encoded, marshalErr := json.Marshal(evidence)
+	formatted := fmt.Sprintf("%+v %#v", evidence, evidence)
+	for _, private := range []string{assets[0].Path, assets[1].Path, assets[0].EntryFingerprint} {
+		if marshalErr != nil || strings.Contains(string(encoded), private) || strings.Contains(formatted, private) {
+			t.Fatalf("private Processing evidence escaped JSON/formatting: json=%q formatted=%q err=%v", encoded, formatted, marshalErr)
+		}
+	}
+}
+
 func TestManagedRecoveryEligibilitySecurityAdapterRejectsPartialPlanWithoutLeakingArtifact(t *testing.T) {
 	now := time.Date(2026, 8, 15, 4, 0, 0, 0, time.UTC)
 	db := openProcessingRuntimeTestDB(t)
@@ -260,6 +352,37 @@ func TestManagedRecoveryEligibilitySecurityAdapterRejectsPartialPlanWithoutLeaki
 	)
 	if !errors.Is(err, backupasset.ErrCapabilityUnavailable) || strings.Contains(err.Error(), "secret-artifact-path") {
 		t.Fatalf("partial security error=%v, want redacted unavailable", err)
+	}
+}
+
+func TestManagedRecoveryEligibilitySecurityPlanAllowsExactMirrorDeleteImpact(t *testing.T) {
+	now := time.Date(2026, 8, 16, 8, 0, 0, 0, time.UTC)
+	db := openProcessingRuntimeTestDB(t)
+	if err := db.AutoMigrate(&model.BackupAssetRecoveryPlan{}, &model.BackupAssetRecoveryPlanItem{}); err != nil {
+		t.Fatal(err)
+	}
+	plan := managedRecoveryEligibilitySecurityPlan(now)
+	plan.TargetMode = string(recovery.TargetModeInPlace)
+	plan.ConflictPolicy = string(recovery.ConflictExactMirror)
+	plan.SecurityFindingSetDigest = strings.Repeat("0", 64)
+	items := managedRecoveryEligibilitySecurityItems(now, plan)
+	plan.EstimatedItems = int64(len(items) + 1)
+	if err := db.Create(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&items).Error; err != nil {
+		t.Fatal(err)
+	}
+	var snapshot managedRecoveryEligibilitySecurityPlanSnapshot
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var loadErr error
+		snapshot, loadErr = loadManagedRecoveryEligibilitySecurityPlanTx(
+			context.Background(), tx, managedRecoveryEligibilitySecurityBinding(plan), false, false,
+		)
+		return loadErr
+	})
+	if err != nil || len(snapshot.items) != len(items) {
+		t.Fatalf("load exact-mirror security plan items=%d error=%v", len(snapshot.items), err)
 	}
 }
 

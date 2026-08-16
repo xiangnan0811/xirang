@@ -441,6 +441,8 @@ func TestRecoveryResultPublicationRollsBackTheWholeBarrier(t *testing.T) {
 
 func TestRecoveryResultRetainExtendsReadyDeadlineWithinImmutableHardCap(t *testing.T) {
 	fixture := newRecoveryResultLifecycleFixture(t)
+	audit := &recoveryAPIAuditSpy{err: errors.New("FAKE_RETAIN_AUDIT_FAILURE_FOR_TEST_ONLY")}
+	fixture.service.audit = audit
 	published, err := fixture.service.Publish(context.Background(), fixture.publishRequest())
 	if err != nil {
 		t.Fatalf("publish retained recovery result: %v", err)
@@ -476,6 +478,11 @@ func TestRecoveryResultRetainExtendsReadyDeadlineWithinImmutableHardCap(t *testi
 		!resultSet.PlaintextDeadline.Equal(requestedDeadline) ||
 		!resultSet.HardDeadline.Equal(published.HardDeadline) || resultSet.CleanupFence != 0 {
 		t.Fatalf("retain changed more than the ready deadline: %+v", resultSet)
+	}
+	if len(audit.events) != 1 || audit.events[0].Action != backupasset.AuditActionRecoveryRetain ||
+		audit.events[0].Actor.UserID != fixture.requesterID || audit.events[0].RecoveryJobID != published.JobID ||
+		audit.events[0].StepUpProofID != "" || audit.events[0].GrantID != "" {
+		t.Fatalf("retain audit=%+v", audit.events)
 	}
 }
 

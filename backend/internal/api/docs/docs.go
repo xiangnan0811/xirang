@@ -6567,6 +6567,1478 @@ const docTemplate = `{
                 }
             }
         },
+        "/recovery-jobs/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "获取恢复作业",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复作业 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryJobView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-jobs/{id}/cancel": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "取消恢复作业",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复作业 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "opaque decimal revision",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryRevisionPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryJobView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-jobs/{id}/exact-mirror-delete-authorizations": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "授权精确镜像删除",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复作业 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "requester and endpoint scoped key",
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "asset.recover proof",
+                        "name": "X-Xirang-Step-Up",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "delete authorization intent",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryDeleteAuthorizationPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryAuthorizationResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-jobs/{id}/results/cleanup": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "清理恢复结果",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复作业 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "opaque decimal revision",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryRevisionPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryResultCleanupView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-jobs/{id}/results/retain": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "延长恢复结果保留时间",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复作业 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "recovery.result_retain proof",
+                        "name": "X-Xirang-Step-Up",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "retain deadline and opaque revision",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryRetainPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryRetainResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-jobs/{id}/results/{resultId}/download-ticket": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "创建恢复结果下载票据",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复作业 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "恢复结果 opaque ID",
+                        "name": "resultId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "recovery.result_download 精确 proof",
+                        "name": "X-Xirang-Step-Up",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "schema version",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryResultTicketPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_content.TicketDescriptor"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-plans": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "创建恢复计划",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "bounded requester/endpoint scoped key",
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "safe recovery intent",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryCreatePlanPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryCreatePlanResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-plans/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "获取恢复计划",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复计划 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryPlanView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-plans/{id}/cancel": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "取消恢复计划",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复计划 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "opaque decimal revision",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryRevisionPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryPlanView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-plans/{id}/execute": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "执行恢复计划",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复计划 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "requester and endpoint scoped key",
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "asset.recover proof",
+                        "name": "X-Xirang-Step-Up",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "execute intent",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryExecutePayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryAuthorizationResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-plans/{id}/preflights": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "运行恢复预检",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复计划 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "opaque decimal revision",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryRevisionPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryPreflightView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-plans/{id}/security-overrides": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "覆盖恢复安全阻断",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复计划 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "requester and endpoint scoped key",
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "asset.recover proof",
+                        "name": "X-Xirang-Step-Up",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "override intent",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRecoverySecurityOverridePayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryAuthorizationResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-plans/{id}/write-authorizations": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "授权恢复写入",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复计划 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "requester and endpoint scoped key",
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "asset.recover proof",
+                        "name": "X-Xirang-Step-Up",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "write authorization intent",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryWriteAuthorizationPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryAuthorizationResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/recovery-point-diffs": {
             "post": {
                 "security": [
@@ -8833,6 +10305,583 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/settings/backup-assets/recovery/downgrade-readiness": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "检查恢复降级就绪状态",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "requester and endpoint scoped key",
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "asset.recover proof",
+                        "name": "X-Xirang-Step-Up",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "bounded operator reason",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryDowngradePayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryDowngradeResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/settings/backup-assets/recovery/target-roots": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "列出恢复目标根",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "节点 ID",
+                        "name": "node_id",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryTargetRootListResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "注册恢复目标根",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "requester and endpoint scoped key",
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "asset.recover proof",
+                        "name": "X-Xirang-Step-Up",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "target-root definition",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryTargetRootRegisterPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryTargetRootResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/settings/backup-assets/recovery/target-roots/{nodeId}/{rootId}": {
+            "put": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "轮换恢复目标根",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "节点 ID",
+                        "name": "nodeId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "目标根 ID",
+                        "name": "rootId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "requester and endpoint scoped key",
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "asset.recover proof",
+                        "name": "X-Xirang-Step-Up",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "target-root definition",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryTargetRootRotatePayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryTargetRootResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "删除恢复目标根",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "节点 ID",
+                        "name": "nodeId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "目标根 ID",
+                        "name": "rootId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "requester and endpoint scoped key",
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "asset.recover proof",
+                        "name": "X-Xirang-Step-Up",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "schema version",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRecoverySchemaPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.backupRecoveryTargetRootResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -12703,6 +14752,595 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.backupRecoveryAuthorizationResponse": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.AuthorizationReceiptCategory"
+                },
+                "grant_binding_digest": {
+                    "type": "string"
+                },
+                "grant_category": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.AuthorityCategory"
+                },
+                "grant_expires_at": {
+                    "type": "string"
+                },
+                "grant_id": {
+                    "type": "string"
+                },
+                "grant_status": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryAuthorizationGrantStatus"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "operation": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.AuthorizationReceiptOperation"
+                },
+                "plan_id": {
+                    "type": "string"
+                },
+                "plan_transition_revision": {
+                    "type": "string"
+                },
+                "receipt_id": {
+                    "type": "string"
+                },
+                "replay": {
+                    "type": "boolean"
+                },
+                "schema_version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoveryCreatePlanPayload": {
+            "type": "object",
+            "required": [
+                "catalog_generation_id",
+                "conflict_policy",
+                "entry_ids",
+                "recovery_point_id",
+                "repository_id",
+                "schema_version",
+                "target_mode",
+                "target_node_id",
+                "target_root_id"
+            ],
+            "properties": {
+                "catalog_generation_id": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "minLength": 32,
+                    "x-pattern": "^[0-9a-f]{32}$"
+                },
+                "conflict_policy": {
+                    "enum": [
+                        "fail_on_conflict",
+                        "skip_existing",
+                        "overwrite_selected",
+                        "exact_mirror"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.ConflictPolicy"
+                        }
+                    ]
+                },
+                "entry_ids": {
+                    "type": "array",
+                    "maxItems": 10000,
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "recovery_point_id": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "minLength": 32,
+                    "x-pattern": "^[0-9a-f]{32}$"
+                },
+                "repository_id": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "minLength": 32,
+                    "x-pattern": "^[0-9a-f]{32}$"
+                },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                },
+                "target_mode": {
+                    "enum": [
+                        "isolated",
+                        "in_place"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.TargetMode"
+                        }
+                    ]
+                },
+                "target_node_id": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "target_root_id": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "minLength": 1
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoveryCreatePlanResponse": {
+            "type": "object",
+            "properties": {
+                "plan_id": {
+                    "type": "string"
+                },
+                "replay": {
+                    "type": "boolean"
+                },
+                "schema_version": {
+                    "type": "integer"
+                },
+                "state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.PlanState"
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoveryDeleteAuthorizationPayload": {
+            "type": "object",
+            "required": [
+                "attempt_id",
+                "checkpoint_id",
+                "expected_revision",
+                "grant_secret",
+                "plan_id",
+                "reason",
+                "schema_version"
+            ],
+            "properties": {
+                "attempt_id": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "minLength": 32,
+                    "x-pattern": "^[0-9a-f]{32}$"
+                },
+                "checkpoint_id": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "minLength": 32,
+                    "x-pattern": "^[0-9a-f]{32}$"
+                },
+                "expected_revision": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "minLength": 1
+                },
+                "grant_secret": {
+                    "type": "string",
+                    "format": "password",
+                    "maxLength": 43,
+                    "minLength": 43,
+                    "x-pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "plan_id": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "minLength": 32,
+                    "x-pattern": "^[0-9a-f]{32}$"
+                },
+                "reason": {
+                    "type": "string",
+                    "maxLength": 2048,
+                    "minLength": 1
+                },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoveryDowngradePayload": {
+            "type": "object",
+            "required": [
+                "reason",
+                "schema_version"
+            ],
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "maxLength": 2048,
+                    "minLength": 1
+                },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoveryDowngradeResponse": {
+            "type": "object",
+            "properties": {
+                "admission_generation": {
+                    "type": "string"
+                },
+                "blockers": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.RecoveryDowngradeBlockers"
+                },
+                "replay": {
+                    "type": "boolean"
+                },
+                "schema_version": {
+                    "type": "integer"
+                },
+                "state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_runtime.RecoveryDowngradeReadinessState"
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoveryExecutePayload": {
+            "type": "object",
+            "required": [
+                "expected_revision",
+                "grant_id",
+                "grant_secret",
+                "preflight_id",
+                "schema_version"
+            ],
+            "properties": {
+                "expected_revision": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "minLength": 1
+                },
+                "grant_id": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "minLength": 32,
+                    "x-pattern": "^[0-9a-f]{32}$"
+                },
+                "grant_secret": {
+                    "type": "string",
+                    "format": "password",
+                    "maxLength": 43,
+                    "minLength": 43,
+                    "x-pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "preflight_id": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "minLength": 32,
+                    "x-pattern": "^[0-9a-f]{32}$"
+                },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoveryResultTicketPayload": {
+            "type": "object",
+            "required": [
+                "schema_version"
+            ],
+            "properties": {
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoveryRetainPayload": {
+            "type": "object",
+            "required": [
+                "expected_revision",
+                "requested_deadline",
+                "schema_version"
+            ],
+            "properties": {
+                "expected_revision": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "example": "1"
+                },
+                "requested_deadline": {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoveryRetainResponse": {
+            "type": "object",
+            "properties": {
+                "hard_deadline": {
+                    "type": "string"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "job_revision": {
+                    "type": "string"
+                },
+                "plaintext_deadline": {
+                    "type": "string"
+                },
+                "result_set_id": {
+                    "type": "string"
+                },
+                "schema_version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoveryRevisionPayload": {
+            "type": "object",
+            "required": [
+                "expected_revision",
+                "schema_version"
+            ],
+            "properties": {
+                "expected_revision": {
+                    "type": "string",
+                    "example": "1"
+                },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoverySchemaPayload": {
+            "type": "object",
+            "required": [
+                "schema_version"
+            ],
+            "properties": {
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoverySecurityOverridePayload": {
+            "type": "object",
+            "required": [
+                "expected_revision",
+                "finding_category",
+                "preflight_id",
+                "reason",
+                "schema_version"
+            ],
+            "properties": {
+                "expected_revision": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "minLength": 1
+                },
+                "finding_category": {
+                    "type": "string",
+                    "enum": [
+                        "malware",
+                        "suspicious",
+                        "test_signature"
+                    ]
+                },
+                "preflight_id": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "minLength": 32,
+                    "x-pattern": "^[0-9a-f]{32}$"
+                },
+                "reason": {
+                    "type": "string",
+                    "maxLength": 2048,
+                    "minLength": 1
+                },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoveryTargetRootListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_settings.RecoveryTargetRootSummary"
+                    }
+                },
+                "schema_version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoveryTargetRootRegisterPayload": {
+            "type": "object",
+            "required": [
+                "locator",
+                "node_id",
+                "overlap_policy_binding",
+                "root_id",
+                "safe_label",
+                "schema_version"
+            ],
+            "properties": {
+                "locator": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "node_id": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "overlap_policy_binding": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "minLength": 1
+                },
+                "reserve_bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "reserve_inodes": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "root_id": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "minLength": 1,
+                    "x-pattern": "^[A-Za-z0-9_.-]+$"
+                },
+                "safe_label": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "minLength": 1
+                },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoveryTargetRootResponse": {
+            "type": "object",
+            "properties": {
+                "node_id": {
+                    "type": "integer"
+                },
+                "root_id": {
+                    "type": "string"
+                },
+                "safe_label": {
+                    "type": "string"
+                },
+                "schema_version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoveryTargetRootRotatePayload": {
+            "type": "object",
+            "required": [
+                "locator",
+                "overlap_policy_binding",
+                "safe_label",
+                "schema_version"
+            ],
+            "properties": {
+                "locator": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "node_id": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "overlap_policy_binding": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "minLength": 1
+                },
+                "reserve_bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "reserve_inodes": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "root_id": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "minLength": 1,
+                    "x-pattern": "^[A-Za-z0-9_.-]+$"
+                },
+                "safe_label": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "minLength": 1
+                },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
+        "internal_api_handlers.backupRecoveryWriteAuthorizationPayload": {
+            "type": "object",
+            "required": [
+                "expected_revision",
+                "grant_secret",
+                "preflight_id",
+                "reason",
+                "schema_version"
+            ],
+            "properties": {
+                "expected_revision": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "minLength": 1
+                },
+                "grant_secret": {
+                    "type": "string",
+                    "format": "password",
+                    "maxLength": 43,
+                    "minLength": 43,
+                    "x-pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "preflight_id": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "minLength": 32,
+                    "x-pattern": "^[0-9a-f]{32}$"
+                },
+                "reason": {
+                    "type": "string",
+                    "maxLength": 2048,
+                    "minLength": 1
+                },
+                "schema_version": {
+                    "type": "integer",
+                    "maximum": 1,
+                    "minimum": 1,
+                    "example": 1
+                }
+            }
+        },
         "internal_api_handlers.backupRepositoryConnectRequest": {
             "type": "object",
             "properties": {
@@ -16492,6 +19130,444 @@ const docTemplate = `{
                 }
             }
         },
+        "xirang_backend_internal_backupasset_recovery.AuthorityCategory": {
+            "type": "string",
+            "enum": [
+                "write",
+                "exact_mirror_delete"
+            ],
+            "x-enum-varnames": [
+                "AuthorityWrite",
+                "AuthorityExactMirrorDelete"
+            ]
+        },
+        "xirang_backend_internal_backupasset_recovery.AuthorizationReceiptCategory": {
+            "type": "string",
+            "enum": [
+                "security_override",
+                "write",
+                "exact_mirror_delete",
+                "execute"
+            ],
+            "x-enum-varnames": [
+                "AuthorizationReceiptCategorySecurityOverride",
+                "AuthorizationReceiptCategoryWrite",
+                "AuthorizationReceiptCategoryExactMirrorDelete",
+                "AuthorizationReceiptCategoryExecute"
+            ]
+        },
+        "xirang_backend_internal_backupasset_recovery.AuthorizationReceiptOperation": {
+            "type": "string",
+            "enum": [
+                "security_override",
+                "write_authorize",
+                "exact_mirror_delete_authorize",
+                "execute"
+            ],
+            "x-enum-varnames": [
+                "AuthorizationReceiptSecurityOverride",
+                "AuthorizationReceiptWriteAuthorize",
+                "AuthorizationReceiptDeleteAuthorize",
+                "AuthorizationReceiptExecute"
+            ]
+        },
+        "xirang_backend_internal_backupasset_recovery.ConflictPolicy": {
+            "type": "string",
+            "enum": [
+                "fail_on_conflict",
+                "skip_existing",
+                "overwrite_selected",
+                "exact_mirror"
+            ],
+            "x-enum-varnames": [
+                "ConflictFailOnConflict",
+                "ConflictSkipExisting",
+                "ConflictOverwriteSelected",
+                "ConflictExactMirror"
+            ]
+        },
+        "xirang_backend_internal_backupasset_recovery.JobState": {
+            "type": "string",
+            "enum": [
+                "queued",
+                "running",
+                "verifying",
+                "succeeded",
+                "degraded",
+                "needs_attention",
+                "failed",
+                "cancel_requested",
+                "canceled"
+            ],
+            "x-enum-varnames": [
+                "JobStateQueued",
+                "JobStateRunning",
+                "JobStateVerifying",
+                "JobStateSucceeded",
+                "JobStateDegraded",
+                "JobStateNeedsAttention",
+                "JobStateFailed",
+                "JobStateCancelRequested",
+                "JobStateCanceled"
+            ]
+        },
+        "xirang_backend_internal_backupasset_recovery.PlanState": {
+            "type": "string",
+            "enum": [
+                "draft",
+                "preflight_ready",
+                "authorized",
+                "executed",
+                "canceled",
+                "superseded",
+                "expired"
+            ],
+            "x-enum-varnames": [
+                "PlanStateDraft",
+                "PlanStatePreflightReady",
+                "PlanStateAuthorized",
+                "PlanStateExecuted",
+                "PlanStateCanceled",
+                "PlanStateSuperseded",
+                "PlanStateExpired"
+            ]
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryAuthorizationGrantStatus": {
+            "type": "string",
+            "enum": [
+                "issued",
+                "consumed"
+            ],
+            "x-enum-varnames": [
+                "RecoveryAuthorizationGrantIssued",
+                "RecoveryAuthorizationGrantConsumed"
+            ]
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryJobView": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "estimated_bytes": {
+                    "type": "integer"
+                },
+                "estimated_items": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "plaintext_deadline": {
+                    "type": "string"
+                },
+                "plan_id": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "string"
+                },
+                "schema_version": {
+                    "type": "integer"
+                },
+                "state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.JobState"
+                },
+                "target_mode": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.TargetMode"
+                },
+                "target_node_id": {
+                    "type": "integer"
+                },
+                "target_root_id": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryPlanView": {
+            "type": "object",
+            "properties": {
+                "conflict_policy": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.ConflictPolicy"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "delete_set_digest": {
+                    "type": "string"
+                },
+                "estimated_bytes": {
+                    "type": "integer"
+                },
+                "estimated_items": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "operation_set_digest": {
+                    "type": "string"
+                },
+                "recovery_point_id": {
+                    "type": "string"
+                },
+                "repository_id": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "string"
+                },
+                "schema_version": {
+                    "type": "integer"
+                },
+                "security_decision": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.SecurityDecisionKind"
+                },
+                "selection_digest": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.PlanState"
+                },
+                "target_mode": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.TargetMode"
+                },
+                "target_node_id": {
+                    "type": "integer"
+                },
+                "target_root_id": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryPreflightImpactView": {
+            "type": "object",
+            "properties": {
+                "create_count": {
+                    "type": "integer"
+                },
+                "delete_count": {
+                    "type": "integer"
+                },
+                "estimated_bytes": {
+                    "type": "integer"
+                },
+                "estimated_items": {
+                    "type": "integer"
+                },
+                "overwrite_count": {
+                    "type": "integer"
+                },
+                "skip_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryPreflightSecurityView": {
+            "type": "object",
+            "properties": {
+                "decision": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.SecurityDecisionKind"
+                },
+                "finding_count": {
+                    "type": "integer"
+                },
+                "overridable_categories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.SecurityFindingCategory"
+                    }
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryPreflightView": {
+            "type": "object",
+            "properties": {
+                "conflict_policy": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.ConflictPolicy"
+                },
+                "delete_set_digest": {
+                    "type": "string"
+                },
+                "eligible": {
+                    "type": "boolean"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "impact": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryPreflightImpactView"
+                },
+                "observed_at": {
+                    "type": "string"
+                },
+                "operation_set_digest": {
+                    "type": "string"
+                },
+                "persisted": {
+                    "type": "boolean"
+                },
+                "plan_id": {
+                    "type": "string"
+                },
+                "plan_revision": {
+                    "type": "string"
+                },
+                "preferred": {
+                    "type": "boolean"
+                },
+                "preflight_id": {
+                    "type": "string"
+                },
+                "preflight_revision": {
+                    "type": "string"
+                },
+                "reasons": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.TargetPreflightReason"
+                    }
+                },
+                "schema_version": {
+                    "type": "integer"
+                },
+                "security": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryPreflightSecurityView"
+                },
+                "target_mode": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.TargetMode"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryResultCleanupView": {
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string"
+                },
+                "result_set_id": {
+                    "type": "string"
+                },
+                "scheduled_at": {
+                    "type": "string"
+                },
+                "schema_version": {
+                    "type": "integer"
+                },
+                "state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.ResultSetState"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_recovery.ResultSetState": {
+            "type": "string",
+            "enum": [
+                "ready",
+                "revoking",
+                "cleaned",
+                "cleanup_failed"
+            ],
+            "x-enum-varnames": [
+                "ResultSetStateReady",
+                "ResultSetStateRevoking",
+                "ResultSetStateCleaned",
+                "ResultSetStateCleanupFailed"
+            ]
+        },
+        "xirang_backend_internal_backupasset_recovery.SecurityDecisionKind": {
+            "type": "string",
+            "enum": [
+                "allow_clean",
+                "block",
+                "admin_override"
+            ],
+            "x-enum-varnames": [
+                "SecurityDecisionAllowClean",
+                "SecurityDecisionBlock",
+                "SecurityDecisionAdminOverride"
+            ]
+        },
+        "xirang_backend_internal_backupasset_recovery.SecurityFindingCategory": {
+            "type": "string",
+            "enum": [
+                "malware",
+                "suspicious",
+                "test_signature",
+                "unknown"
+            ],
+            "x-enum-varnames": [
+                "SecurityFindingMalware",
+                "SecurityFindingSuspicious",
+                "SecurityFindingTestSignature",
+                "SecurityFindingUnknown"
+            ]
+        },
+        "xirang_backend_internal_backupasset_recovery.TargetMode": {
+            "type": "string",
+            "enum": [
+                "isolated",
+                "in_place"
+            ],
+            "x-enum-varnames": [
+                "TargetModeIsolated",
+                "TargetModeInPlace"
+            ]
+        },
+        "xirang_backend_internal_backupasset_recovery.TargetPreflightReason": {
+            "type": "string",
+            "enum": [
+                "node_unregistered",
+                "node_archived",
+                "node_offline",
+                "node_unauthorized",
+                "credential_purpose_invalid",
+                "tool_unavailable",
+                "source_unavailable",
+                "root_not_real",
+                "root_noncanonical",
+                "device_invalid",
+                "mount_invalid",
+                "owner_invalid",
+                "mode_invalid",
+                "symlink_component",
+                "xirang_root_overlap",
+                "source_root_overlap",
+                "insufficient_bytes",
+                "insufficient_inodes",
+                "active_writer",
+                "target_conflict",
+                "security_blocked"
+            ],
+            "x-enum-varnames": [
+                "TargetPreflightNodeUnregistered",
+                "TargetPreflightNodeArchived",
+                "TargetPreflightNodeOffline",
+                "TargetPreflightNodeUnauthorized",
+                "TargetPreflightCredentialPurpose",
+                "TargetPreflightToolUnavailable",
+                "TargetPreflightSourceUnavailable",
+                "TargetPreflightRootNotReal",
+                "TargetPreflightRootNoncanonical",
+                "TargetPreflightDeviceInvalid",
+                "TargetPreflightMountInvalid",
+                "TargetPreflightOwnerInvalid",
+                "TargetPreflightModeInvalid",
+                "TargetPreflightSymlinkComponent",
+                "TargetPreflightXirangOverlap",
+                "TargetPreflightSourceOverlap",
+                "TargetPreflightInsufficientBytes",
+                "TargetPreflightInsufficientInodes",
+                "TargetPreflightActiveWriter",
+                "TargetPreflightTargetConflict",
+                "TargetPreflightSecurityBlocked"
+            ]
+        },
         "xirang_backend_internal_backupasset_repository.ConnectResult": {
             "type": "object",
             "properties": {
@@ -16847,6 +19923,63 @@ const docTemplate = `{
                     "type": "integer"
                 }
             }
+        },
+        "xirang_backend_internal_backupasset_runtime.RecoveryDowngradeBlockers": {
+            "type": "object",
+            "properties": {
+                "attempts": {
+                    "type": "integer"
+                },
+                "authorities": {
+                    "type": "integer"
+                },
+                "content_grants": {
+                    "type": "integer"
+                },
+                "content_leases": {
+                    "type": "integer"
+                },
+                "content_requests": {
+                    "type": "integer"
+                },
+                "content_streams": {
+                    "type": "integer"
+                },
+                "jobs": {
+                    "type": "integer"
+                },
+                "node_leases": {
+                    "type": "integer"
+                },
+                "other_recovery_rows": {
+                    "type": "integer"
+                },
+                "reconciliation_backlog": {
+                    "type": "integer"
+                },
+                "result_sets": {
+                    "type": "integer"
+                },
+                "results": {
+                    "type": "integer"
+                },
+                "source_leases": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_runtime.RecoveryDowngradeReadinessState": {
+            "type": "string",
+            "enum": [
+                "pristine_downgrade_allowed",
+                "blocked",
+                "forward_fix_only"
+            ],
+            "x-enum-varnames": [
+                "RecoveryDowngradePristineAllowed",
+                "RecoveryDowngradeBlocked",
+                "RecoveryDowngradeForwardFixOnly"
+            ]
         },
         "xirang_backend_internal_backupasset_search.CoverageStatus": {
             "type": "string",
@@ -18001,6 +21134,20 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_settings.RecoveryTargetRootSummary": {
+            "type": "object",
+            "properties": {
+                "node_id": {
+                    "type": "integer"
+                },
+                "root_id": {
+                    "type": "string"
+                },
+                "safe_label": {
                     "type": "string"
                 }
             }

@@ -179,8 +179,11 @@ type Runtime struct {
 	recoveryManager         recoveryRuntimeManager
 	recoverySourceNamespace recovery.RecoverySourceNamespaceAuthority
 	recoveryTargetRoots     *managedRecoveryTargetRootFacade
+	recoveryDowngrade       *managedRecoveryDowngradeFacade
 	nodeWriteCoordinator    *NodeWriteCoordinator
 	recoveryAuthorization   *managedRecoveryAuthorizationFacade
+	recoveryAPI             *recovery.APIService
+	recoveryOperations      *managedRecoveryAPIFacade
 	recoveryResults         *managedRecoveryResultFacade
 	processingManager       *managedProcessingRuntime
 	archiveMemberService    *managedArchiveMemberFacade
@@ -228,15 +231,31 @@ var _ repository.RecoverySourceNamespaceAuthority = (*managedRecoverySourceNames
 // exposes only the reviewed authority operations and never the registry,
 // ciphertext, probe session, or private locator outside Recovery.
 type RecoveryTargetRootAuthority interface {
+	ReplayRegistration(
+		context.Context,
+		recovery.TargetRootRegistrationRequest,
+	) (settings.RecoveryTargetRootSummary, bool, error)
 	Register(
 		context.Context,
 		recovery.TargetRootRegistrationRequest,
 	) (settings.RecoveryTargetRootSummary, error)
 	Delete(context.Context, uint, string) error
-	List(context.Context, uint) ([]settings.RecoveryTargetRootSummary, error)
+	DeleteAuthorized(
+		context.Context,
+		recovery.TargetRootDeletionRequest,
+	) (settings.RecoveryTargetRootSummary, error)
+	ReplayDeletion(
+		context.Context,
+		recovery.TargetRootDeletionRequest,
+	) (settings.RecoveryTargetRootSummary, bool, error)
+	List(context.Context, uint, uint) ([]settings.RecoveryTargetRootSummary, error)
 }
 
 type recoveryTargetRootMutationService interface {
+	ReplayRegistration(
+		context.Context,
+		recovery.TargetRootRegistrationRequest,
+	) (settings.RecoveryTargetRootSummary, bool, error)
 	ValidateRegistration(recovery.TargetRootRegistrationRequest) error
 	ValidateDelete(uint, string) error
 	RegisterMutation(
@@ -244,6 +263,14 @@ type recoveryTargetRootMutationService interface {
 		recovery.TargetRootRegistrationRequest,
 	) (settings.RecoveryTargetRootSummary, recovery.TargetRootMutationRollback, error)
 	DeleteMutation(context.Context, uint, string) (recovery.TargetRootMutationRollback, error)
+	DeleteAuthorizedMutation(
+		context.Context,
+		recovery.TargetRootDeletionRequest,
+	) (settings.RecoveryTargetRootSummary, recovery.TargetRootMutationRollback, error)
+	ReplayDeletion(
+		context.Context,
+		recovery.TargetRootDeletionRequest,
+	) (settings.RecoveryTargetRootSummary, bool, error)
 	RestoreMutation(context.Context, recovery.TargetRootMutationRollback) error
 	List(context.Context, uint) ([]settings.RecoveryTargetRootSummary, error)
 }
@@ -255,6 +282,17 @@ type recoveryTargetRootTransitionOwner interface {
 type managedRecoveryTargetRootFacade struct {
 	service recoveryTargetRootMutationService
 	runtime recoveryTargetRootTransitionOwner
+	audit   recoveryAdministrationAuditWriter
+}
+
+func (facade *managedRecoveryTargetRootFacade) ReplayRegistration(
+	ctx context.Context,
+	request recovery.TargetRootRegistrationRequest,
+) (settings.RecoveryTargetRootSummary, bool, error) {
+	if facade == nil || facade.service == nil {
+		return settings.RecoveryTargetRootSummary{}, false, recovery.ErrRecoveryTargetUnavailable
+	}
+	return facade.service.ReplayRegistration(ctx, request)
 }
 
 func (facade *managedRecoveryTargetRootFacade) Register(
@@ -284,6 +322,13 @@ func (facade *managedRecoveryTargetRootFacade) Register(
 	if err != nil {
 		return settings.RecoveryTargetRootSummary{}, err
 	}
+	operation := "target_root_register"
+	if request.Mutation == recovery.TargetRootMutationRotate {
+		operation = "target_root_rotate"
+	}
+	if !rollback.Replay() {
+		writeRecoveryAdministrationAudit(ctx, facade.audit, request.RequesterID, operation, "succeeded", 1)
+	}
 	return result, nil
 }
 
@@ -309,6 +354,49 @@ func (facade *managedRecoveryTargetRootFacade) Delete(ctx context.Context, nodeI
 	})
 }
 
+func (facade *managedRecoveryTargetRootFacade) DeleteAuthorized(
+	ctx context.Context,
+	request recovery.TargetRootDeletionRequest,
+) (settings.RecoveryTargetRootSummary, error) {
+	if facade == nil || facade.service == nil || facade.runtime == nil {
+		return settings.RecoveryTargetRootSummary{}, recovery.ErrRecoveryTargetUnavailable
+	}
+	if err := facade.service.ValidateDelete(request.NodeID, request.RootID); err != nil {
+		return settings.RecoveryTargetRootSummary{}, err
+	}
+	var result settings.RecoveryTargetRootSummary
+	var rollback recovery.TargetRootMutationRollback
+	mutationApplied := false
+	err := facade.runtime.TransitionCurrentWithRestore(ctx, func() error {
+		var mutationErr error
+		result, rollback, mutationErr = facade.service.DeleteAuthorizedMutation(ctx, request)
+		mutationApplied = mutationErr == nil
+		return mutationErr
+	}, func() error {
+		if !mutationApplied {
+			return nil
+		}
+		return facade.restoreMutation(rollback)
+	})
+	if err != nil {
+		return settings.RecoveryTargetRootSummary{}, err
+	}
+	if !rollback.Replay() {
+		writeRecoveryAdministrationAudit(ctx, facade.audit, request.RequesterID, "target_root_delete", "succeeded", 1)
+	}
+	return result, nil
+}
+
+func (facade *managedRecoveryTargetRootFacade) ReplayDeletion(
+	ctx context.Context,
+	request recovery.TargetRootDeletionRequest,
+) (settings.RecoveryTargetRootSummary, bool, error) {
+	if facade == nil || facade.service == nil {
+		return settings.RecoveryTargetRootSummary{}, false, recovery.ErrRecoveryTargetUnavailable
+	}
+	return facade.service.ReplayDeletion(ctx, request)
+}
+
 func (facade *managedRecoveryTargetRootFacade) restoreMutation(rollback recovery.TargetRootMutationRollback) error {
 	restoreCtx, cancel := context.WithTimeout(context.Background(), recoveryRuntimeTransitionTimeout)
 	defer cancel()
@@ -317,12 +405,18 @@ func (facade *managedRecoveryTargetRootFacade) restoreMutation(rollback recovery
 
 func (facade *managedRecoveryTargetRootFacade) List(
 	ctx context.Context,
+	requesterID uint,
 	nodeID uint,
 ) ([]settings.RecoveryTargetRootSummary, error) {
 	if facade == nil || facade.service == nil {
 		return nil, recovery.ErrRecoveryTargetUnavailable
 	}
-	return facade.service.List(ctx, nodeID)
+	items, err := facade.service.List(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	writeRecoveryAdministrationAudit(ctx, facade.audit, requesterID, "target_root_list", "succeeded", int64(len(items)))
+	return items, nil
 }
 
 var _ RecoveryTargetRootAuthority = (*managedRecoveryTargetRootFacade)(nil)
@@ -721,6 +815,13 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	recoveryPublication := newManagedRecoveryPublication()
 	recoveryAuthorization := &managedRecoveryAuthorizationFacade{publication: recoveryPublication}
 	recoveryResults := &managedRecoveryResultFacade{publication: recoveryPublication}
+	recoveryAPI, err := recovery.NewAPIService(recovery.APIServiceDependencies{
+		DB: dependencies.DB, Now: dependencies.Now, Audit: auditWriter,
+	})
+	if err != nil {
+		return nil, err
+	}
+	recoveryOperations := &managedRecoveryAPIFacade{publication: recoveryPublication, api: recoveryAPI}
 	contentBroker, err := content.NewBroker(content.BrokerDependencies{
 		DB: dependencies.DB, Now: dependencies.Now,
 		FeatureEnabled: func(context.Context) (bool, error) {
@@ -859,6 +960,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 				NodeRevisions:        nodeRevisions,
 				PreflightEvidence:    eligibility.preflight,
 				AuthorityRevalidator: eligibility.live,
+				PlanSecurity:         securityEligibility,
 				WorkspaceKeys:        keyring, Audit: auditWriter, ContentLifecycle: contentBroker,
 				SourceResolver:          repositoryService,
 				Dialer:                  sshutil.NewNodeDialer(dependencies.DB),
@@ -870,7 +972,12 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	targetRootFacade := &managedRecoveryTargetRootFacade{service: targetRootAuthority, runtime: recoveryManager}
+	targetRootFacade := &managedRecoveryTargetRootFacade{service: targetRootAuthority, runtime: recoveryManager, audit: auditWriter}
+	downgradeFacade, err := newManagedRecoveryDowngradeFacade(dependencies.DB, recoveryManager, dependencies.Now)
+	if err != nil {
+		return nil, err
+	}
+	downgradeFacade.audit = auditWriter
 	catalogIndexer, err := catalog.NewIndexer(catalog.IndexerDependencies{
 		DB: dependencies.DB, Factory: repositoryService, Lease: lease, IdentityKeys: keyring, Now: dependencies.Now,
 		Config: catalog.IndexerConfig{
@@ -1032,8 +1139,10 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		exportManager: exportManager, recoveryManager: recoveryManager,
 		recoverySourceNamespace: recoverySourceNamespace,
 		recoveryTargetRoots:     targetRootFacade,
+		recoveryDowngrade:       downgradeFacade,
 		nodeWriteCoordinator:    nodeWriteCoordinator,
-		recoveryAuthorization:   recoveryAuthorization, recoveryResults: recoveryResults,
+		recoveryAuthorization:   recoveryAuthorization, recoveryAPI: recoveryAPI,
+		recoveryOperations: recoveryOperations, recoveryResults: recoveryResults,
 		processingManager: processingManager, archiveMemberService: archiveMemberFacade,
 		transitioner: admission,
 		metrics:      metricsSink,
@@ -1459,6 +1568,18 @@ func (runtime *Runtime) RecoveryAuthorization() *managedRecoveryAuthorizationFac
 	}
 	return runtime.recoveryAuthorization
 }
+func (runtime *Runtime) RecoveryAPI() *recovery.APIService {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.recoveryAPI
+}
+func (runtime *Runtime) RecoveryOperations() *managedRecoveryAPIFacade {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.recoveryOperations
+}
 func (runtime *Runtime) RecoveryTargetRoots() RecoveryTargetRootAuthority {
 	if runtime == nil {
 		return nil
@@ -1476,6 +1597,26 @@ func (runtime *Runtime) RecoveryDowngradeReadiness(ctx context.Context) (Recover
 		return RecoveryDowngradeReadiness{}, fmt.Errorf("%w: Recovery downgrade readiness unavailable", backupasset.ErrInvalidState)
 	}
 	return runtime.recoveryManager.DowngradeReadiness(ctx)
+}
+
+func (runtime *Runtime) ReplayRecoveryDowngradeReadiness(
+	ctx context.Context,
+	request RecoveryDowngradeReadinessRequest,
+) (RecoveryDowngradeReadiness, bool, error) {
+	if runtime == nil || runtime.recoveryDowngrade == nil {
+		return RecoveryDowngradeReadiness{}, false, backupasset.ErrInvalidState
+	}
+	return runtime.recoveryDowngrade.ReplayRecoveryDowngradeReadiness(ctx, request)
+}
+
+func (runtime *Runtime) RequestRecoveryDowngradeReadiness(
+	ctx context.Context,
+	request RecoveryDowngradeReadinessRequest,
+) (RecoveryDowngradeReadiness, error) {
+	if runtime == nil || runtime.recoveryDowngrade == nil {
+		return RecoveryDowngradeReadiness{}, backupasset.ErrInvalidState
+	}
+	return runtime.recoveryDowngrade.RequestRecoveryDowngradeReadiness(ctx, request)
 }
 func (runtime *Runtime) ExportService() *managedExportServiceFacade {
 	if runtime == nil || runtime.exportManager == nil {

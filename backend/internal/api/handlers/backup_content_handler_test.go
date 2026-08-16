@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/auth"
+	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/content"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
@@ -217,6 +218,97 @@ func TestBackupContentIssueEnforcesExactCrossPurposeStepUpMatrix(t *testing.T) {
 				t.Fatalf("status=%d calls=%d body=%s", response.Code, len(fake.issueRequests), response.Body.String())
 			}
 		})
+	}
+}
+
+func TestBackupContentRecoveryResultDownloadTicketUsesExactResourceAndPurpose(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared&_loc=UTC"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.User{}); err != nil {
+		t.Fatal(err)
+	}
+	user := model.User{
+		Username: "recovery-result-admin", PasswordHash: "FAKE_HASH", Role: "admin", TokenVersion: 2, TOTPEnabled: true,
+	}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	jwt := auth.NewJWTManager("FAKE_RECOVERY_RESULT_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	proof, _, err := jwt.GenerateStepUpToken(user, auth.StepUpActionRecoveryResultDownload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &backupContentServiceFake{ticket: backupContentHandlerTestTicket(
+		t, content.DeliveryDownload, content.RendererAttachment, content.ProfileOriginalV1,
+	)}
+	handler := NewBackupContentHandler(fake, db, jwt, func(context.Context) (BackupContentHandlerConfig, error) {
+		return BackupContentHandlerConfig{TicketTimeout: 5 * time.Second}, nil
+	})
+	router := gin.New()
+	router.POST("/api/v1/recovery-jobs/:id/results/:resultId/download-ticket", func(c *gin.Context) {
+		c.Set(middleware.CtxUserID, user.ID)
+		c.Set(middleware.CtxUsername, user.Username)
+		c.Set(middleware.CtxRole, user.Role)
+		c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{
+			JTI: strings.Repeat("f", 32), UserID: user.ID, Role: user.Role,
+			TokenVersion: user.TokenVersion, ExpiresAt: time.Now().UTC().Add(time.Hour),
+		})
+		c.Next()
+	}, handler.IssueRecoveryResult)
+	jobID, resultID := strings.Repeat("a", 32), strings.Repeat("b", 32)
+	request := httptest.NewRequest(http.MethodPost,
+		"https://xirang.example/api/v1/recovery-jobs/"+jobID+"/results/"+resultID+"/download-ticket",
+		strings.NewReader(`{"schema_version":1}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(StepUpHeaderName, proof)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || len(fake.issueRequests) != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, len(fake.issueRequests), response.Body.String())
+	}
+	issued := fake.issueRequests[0]
+	if issued.Resource.Kind != content.DeliveryResourceRecoveryResult || issued.Resource.RecoveryResult == nil ||
+		issued.Resource.RecoveryResult.RecoveryJobID != jobID || issued.Resource.RecoveryResult.ResultID != resultID ||
+		issued.Ref != (backupasset.AssetRef{}) || issued.Action != content.DeliveryDownload ||
+		issued.Proof == nil || issued.Proof.Action != auth.StepUpActionRecoveryResultDownload {
+		t.Fatalf("recovery issue request=%+v", issued)
+	}
+	aliased := httptest.NewRequest(http.MethodPost,
+		"https://xirang.example/api/v1/recovery-jobs/%20"+jobID+"%20/results/%20"+resultID+"%20/download-ticket",
+		strings.NewReader(`{"schema_version":1}`))
+	aliased.Header.Set("Content-Type", "application/json")
+	aliased.Header.Set(StepUpHeaderName, proof)
+	aliasedResponse := httptest.NewRecorder()
+	router.ServeHTTP(aliasedResponse, aliased)
+	if aliasedResponse.Code != http.StatusBadRequest || len(fake.issueRequests) != 1 {
+		t.Fatalf("whitespace-aliased Recovery result status=%d calls=%d body=%s",
+			aliasedResponse.Code, len(fake.issueRequests), aliasedResponse.Body.String())
+	}
+	wrappedProof := httptest.NewRequest(http.MethodPost,
+		"https://xirang.example/api/v1/recovery-jobs/"+jobID+"/results/"+resultID+"/download-ticket",
+		strings.NewReader(`{"schema_version":1}`))
+	wrappedProof.Header.Set("Content-Type", "application/json")
+	wrappedProof.Header.Set(StepUpHeaderName, " "+proof+" ")
+	wrappedProofResponse := httptest.NewRecorder()
+	router.ServeHTTP(wrappedProofResponse, wrappedProof)
+	if wrappedProofResponse.Code != http.StatusForbidden || len(fake.issueRequests) != 1 {
+		t.Fatalf("whitespace-wrapped Recovery result proof status=%d calls=%d body=%s",
+			wrappedProofResponse.Code, len(fake.issueRequests), wrappedProofResponse.Body.String())
+	}
+	invalidContentType := httptest.NewRequest(http.MethodPost,
+		"https://xirang.example/api/v1/recovery-jobs/"+jobID+"/results/"+resultID+"/download-ticket",
+		strings.NewReader(`{"schema_version":1}`))
+	invalidContentType.Header.Set("Content-Type", "application/json; boundary=unsafe")
+	invalidContentType.Header.Set(StepUpHeaderName, proof)
+	invalidContentTypeResponse := httptest.NewRecorder()
+	router.ServeHTTP(invalidContentTypeResponse, invalidContentType)
+	if invalidContentTypeResponse.Code != http.StatusBadRequest || len(fake.issueRequests) != 1 {
+		t.Fatalf("invalid Recovery result content type status=%d calls=%d body=%s",
+			invalidContentTypeResponse.Code, len(fake.issueRequests), invalidContentTypeResponse.Body.String())
 	}
 }
 

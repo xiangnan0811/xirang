@@ -389,6 +389,7 @@ type managedRecoveryGraphBuildDependencies struct {
 	NodeRevisions           recovery.RecoveryNodeRevisionSource
 	PreflightEvidence       recovery.RecoveryPreflightExternalEvidenceAuthority
 	AuthorityRevalidator    recovery.RecoveryAuthorityRevalidator
+	PlanSecurity            recovery.RecoveryPlanSecurityAuthority
 	WorkspaceKeys           *backupasset.Keyring
 	Audit                   recovery.RecoveryAuthorizationAuditWriter
 	ContentLifecycle        recovery.RecoveryResultContentLifecycle
@@ -472,6 +473,7 @@ type RecoveryDowngradeReadiness struct {
 	State               RecoveryDowngradeReadinessState `json:"state"`
 	AdmissionGeneration string                          `json:"admission_generation"`
 	Blockers            RecoveryDowngradeBlockers       `json:"blockers"`
+	Replay              bool                            `json:"replay"`
 }
 
 type managedRecoveryDowngradeDBInspector struct {
@@ -584,6 +586,7 @@ func (inspector *managedRecoveryDowngradeDBInspector) SnapshotRecoveryDowngradeB
 
 type managedRecoveryGraph struct {
 	admissionEnabled    bool
+	application         *recovery.ApplicationService
 	plan                *recovery.PlanService
 	preflight           *recovery.PreflightService
 	authorization       managedRecoveryAuthorizationBackend
@@ -613,6 +616,97 @@ type managedRecoveryGraph struct {
 	runCancel              context.CancelFunc
 	runDone                chan struct{}
 	deliveryShutdownActive atomic.Bool
+}
+
+// managedRecoveryAPIFacade is the narrow live-graph seam used by Task 9
+// handlers. Admission mutations acquire the enabled graph; read/cancel/cleanup
+// projections remain owned by Recovery's API service.
+type managedRecoveryAPIFacade struct {
+	publication *managedRecoveryPublication
+	api         *recovery.APIService
+}
+
+func (facade *managedRecoveryAPIFacade) CreatePlan(
+	ctx context.Context,
+	request recovery.CreatePlanIntentRequest,
+) (recovery.CreatePlanResult, error) {
+	if facade == nil || facade.publication == nil {
+		return recovery.CreatePlanResult{}, recovery.ErrRecoveryPlanUnavailable
+	}
+	graph, release, ok := facade.publication.acquireAdmission()
+	if !ok || graph.application == nil {
+		return recovery.CreatePlanResult{}, recovery.ErrRecoveryPlanUnavailable
+	}
+	defer release()
+	return graph.application.CreatePlan(ctx, request)
+}
+
+func (facade *managedRecoveryAPIFacade) Preflight(
+	ctx context.Context,
+	request recovery.RecoveryPreflightRequest,
+) (recovery.RecoveryPreflightView, error) {
+	if facade == nil || facade.publication == nil {
+		return recovery.RecoveryPreflightView{}, recovery.ErrTargetPreflightUnavailable
+	}
+	graph, release, ok := facade.publication.acquireAdmission()
+	if !ok || graph.application == nil {
+		return recovery.RecoveryPreflightView{}, recovery.ErrTargetPreflightUnavailable
+	}
+	defer release()
+	return graph.application.Preflight(ctx, request)
+}
+
+func (facade *managedRecoveryAPIFacade) CancelJob(
+	ctx context.Context,
+	requesterID uint,
+	jobID string,
+	expectedRevision uint64,
+) (recovery.RecoveryJobView, error) {
+	if facade == nil || facade.publication == nil || facade.api == nil {
+		return recovery.RecoveryJobView{}, recovery.ErrRecoveryAPIUnavailable
+	}
+	graph, release, ok := facade.publication.acquire()
+	if !ok || graph.workerCoordinator == nil {
+		return recovery.RecoveryJobView{}, recovery.ErrRecoveryAPIUnavailable
+	}
+	defer release()
+	if err := graph.workerCoordinator.CancelOwnedJob(ctx, recovery.CancelRecoveryJobRequest{
+		RequesterID: requesterID, JobID: jobID, ExpectedRevision: expectedRevision,
+	}); err != nil {
+		if errors.Is(err, recovery.ErrRecoveryWorkerObjectNotFound) {
+			return recovery.RecoveryJobView{}, recovery.ErrRecoveryAPIObjectNotFound
+		}
+		if errors.Is(err, recovery.ErrRecoveryWorkerFenceLost) {
+			return recovery.RecoveryJobView{}, recovery.ErrRecoveryAPIConflict
+		}
+		return recovery.RecoveryJobView{}, recovery.ErrRecoveryAPIUnavailable
+	}
+	return facade.api.ProjectJob(ctx, requesterID, jobID)
+}
+
+func (facade *managedRecoveryAPIFacade) RetainRecoveryResults(
+	ctx context.Context,
+	request recovery.RetainRecoveryResultsRequest,
+) (recovery.RetainedRecoveryResultSet, error) {
+	if facade == nil || facade.publication == nil {
+		return recovery.RetainedRecoveryResultSet{}, recovery.ErrRecoveryResultUnavailable
+	}
+	graph, release, ok := facade.publication.acquire()
+	if !ok || graph.resultLifecycle == nil {
+		return recovery.RetainedRecoveryResultSet{}, recovery.ErrRecoveryResultUnavailable
+	}
+	defer release()
+	return graph.resultLifecycle.Retain(ctx, request)
+}
+
+func (facade *managedRecoveryAPIFacade) RequestResultCleanup(
+	ctx context.Context,
+	request recovery.RecoveryResultCleanupRequest,
+) (recovery.RecoveryResultCleanupView, error) {
+	if facade == nil || facade.api == nil {
+		return recovery.RecoveryResultCleanupView{}, recovery.ErrRecoveryAPIUnavailable
+	}
+	return facade.api.RequestResultCleanup(ctx, request)
 }
 
 type managedRecoveryReconciliationOwner struct {
@@ -934,7 +1028,8 @@ func buildManagedRecoveryGraph(
 		return nil, fmt.Errorf("build Recovery target: %w", err)
 	}
 	resultLifecycle, err := recovery.NewResultLifecycleService(recovery.ResultLifecycleDependencies{
-		DB: dependencies.DB, Now: dependencies.Now, WorkspaceKeys: dependencies.WorkspaceKeys,
+		DB: dependencies.DB, Now: dependencies.Now, Audit: dependencies.Audit,
+		WorkspaceKeys:       dependencies.WorkspaceKeys,
 		DefaultPlaintextTTL: config.ResultDefaultTTL, RetainHardCap: config.ResultRetainHardCap,
 		NodeAdmission: dependencies.NodeAdmission, ContentLifecycle: dependencies.ContentLifecycle,
 		Target: target, CleanupLeaseTTL: config.CleanupLeaseTTL,
@@ -1046,6 +1141,7 @@ func buildManagedRecoveryGraph(
 		nilManagedRecoveryDependency(dependencies.Metrics) ||
 		nilManagedRecoveryDependency(dependencies.PreflightEvidence) ||
 		nilManagedRecoveryDependency(dependencies.AuthorityRevalidator) ||
+		nilManagedRecoveryDependency(dependencies.PlanSecurity) ||
 		nilManagedRecoveryDependency(dependencies.Audit) ||
 		nilManagedRecoveryDependency(dependencies.SourceResolver) ||
 		nilManagedRecoveryDependency(dependencies.ReconciliationRevisions) ||
@@ -1056,8 +1152,9 @@ func buildManagedRecoveryGraph(
 		return nil, fmt.Errorf("%w: Recovery production authorities unavailable", backupasset.ErrInvalidState)
 	}
 	plan, err := recovery.NewPlanService(recovery.PlanServiceDependencies{
-		DB: dependencies.DB, Now: dependencies.Now, TargetRootResolver: dependencies.Settings,
-		Policy: planPolicy, PreflightPolicy: preflightPolicy,
+		DB: dependencies.DB, Now: dependencies.Now, Audit: dependencies.Audit,
+		TargetRootResolver: dependencies.Settings,
+		Policy:             planPolicy, PreflightPolicy: preflightPolicy,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build Recovery plan service: %w", err)
@@ -1071,10 +1168,50 @@ func buildManagedRecoveryGraph(
 		return nil, fmt.Errorf("build Recovery preflight evaluator: %w", err)
 	}
 	preflight, err := recovery.NewPreflightService(recovery.PreflightServiceDependencies{
-		DB: dependencies.DB, Now: dependencies.Now, Evaluator: evaluator, Policy: preflightPolicy,
+		DB: dependencies.DB, Now: dependencies.Now, Audit: dependencies.Audit,
+		Evaluator: evaluator, Policy: preflightPolicy,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build Recovery preflight service: %w", err)
+	}
+	selections, err := recovery.NewSourceValidator(dependencies.DB)
+	if err != nil {
+		return nil, fmt.Errorf("build Recovery source selection authority: %w", err)
+	}
+	applicationPlans, err := recovery.NewRecoveryApplicationPlanAuthority(dependencies.DB)
+	if err != nil {
+		return nil, fmt.Errorf("build Recovery application plan authority: %w", err)
+	}
+	targetEnumeration, err := recovery.NewRecoveryPlanTargetEnumerationAuthority(
+		dependencies.DB, dependencies.Settings, dependencies.NodeRevisions, dependencies.Now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build Recovery target enumeration authority: %w", err)
+	}
+	materializer, err := recovery.NewProductionApplicationMaterializer(
+		recovery.ProductionApplicationMaterializerDependencies{
+			Selections: selections, Plans: applicationPlans,
+			Security: dependencies.PlanSecurity,
+			Targets:  targetEnumeration,
+			Policy: recovery.RecoveryApplicationMaterializationPolicy{
+				MaxSelectionItems:  config.MaxSelectionItems,
+				MaxLogicalBytes:    config.MaxLogicalBytes,
+				MaxTargetRows:      config.ScanLimit,
+				MaxTargetBytes:     config.MaxLogicalBytes,
+				ObservationTimeout: recoveryRuntimeTransitionTimeout,
+				PreflightTTL:       config.PreflightTTL,
+			},
+			Now: dependencies.Now,
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build Recovery application materializer: %w", err)
+	}
+	application, err := recovery.NewApplicationService(recovery.RecoveryApplicationServiceDependencies{
+		Materializer: materializer, Plans: plan, Preflights: preflight,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build Recovery application service: %w", err)
 	}
 	authorization, err := recovery.NewAuthorizationService(recovery.AuthorizationServiceDependencies{
 		DB: dependencies.DB, Now: dependencies.Now, Metrics: dependencies.Metrics, SourceLeases: dependencies.SourceLeases,
@@ -1088,7 +1225,7 @@ func buildManagedRecoveryGraph(
 		return nil, fmt.Errorf("build Recovery authorization service: %w", err)
 	}
 	workerCoordinator, err := recovery.NewWorkerCoordinator(recovery.WorkerCoordinatorDependencies{
-		DB: dependencies.DB, SourceLeases: dependencies.SourceLeases,
+		DB: dependencies.DB, Audit: dependencies.Audit, SourceLeases: dependencies.SourceLeases,
 		LiveRevalidator: dependencies.AuthorityRevalidator, WorkspaceKeys: dependencies.WorkspaceKeys,
 		Target: target, SourceResolver: dependencies.SourceResolver, Now: dependencies.Now,
 		LeaseTTL: config.LeaseTTL, ScanLimit: config.ScanLimit,
@@ -1128,7 +1265,7 @@ func buildManagedRecoveryGraph(
 	}
 	graph := &managedRecoveryGraph{
 		admissionEnabled: true,
-		plan:             plan, preflight: preflight, authorization: authorization, target: target,
+		application:      application, plan: plan, preflight: preflight, authorization: authorization, target: target,
 		workerCoordinator: workerCoordinator, worker: worker,
 		resultLifecycle: resultLifecycle, cleanup: cleanup, resultDelivery: resultDelivery, reconciliation: reconciliation,
 		downgradeReconciler: reconciliation,
@@ -1432,6 +1569,7 @@ type managedRecoveryRuntime struct {
 	shutdownErr         error
 	downgradeFenced     bool
 	downgradeGeneration string
+	downgradeReadiness  *RecoveryDowngradeReadiness
 }
 
 func newManagedRecoveryRuntime(dependencies managedRecoveryRuntimeDependencies) (*managedRecoveryRuntime, error) {
@@ -1795,7 +1933,28 @@ func (runtime *managedRecoveryRuntime) DowngradeReadiness(
 			result.State = RecoveryDowngradePristineAllowed
 		}
 	}
+	runtime.mu.Lock()
+	stored := result
+	runtime.downgradeReadiness = &stored
+	runtime.mu.Unlock()
 	return result, nil
+}
+
+func (runtime *managedRecoveryRuntime) InspectDowngradeReadiness(
+	ctx context.Context,
+) (RecoveryDowngradeReadiness, bool, error) {
+	if runtime == nil || ctx == nil {
+		return RecoveryDowngradeReadiness{}, false, backupasset.ErrInvalidState
+	}
+	if err := ctx.Err(); err != nil {
+		return RecoveryDowngradeReadiness{}, false, err
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if !runtime.downgradeFenced || runtime.downgradeReadiness == nil {
+		return RecoveryDowngradeReadiness{}, false, nil
+	}
+	return *runtime.downgradeReadiness, true, nil
 }
 
 func (runtime *managedRecoveryRuntime) prepareGraph(

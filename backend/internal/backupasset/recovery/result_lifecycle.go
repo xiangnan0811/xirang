@@ -42,6 +42,7 @@ func (kind RecoveryResultKind) valid() bool {
 type ResultLifecycleDependencies struct {
 	DB                  *gorm.DB
 	Now                 func() time.Time
+	Audit               RecoveryAPIAuditWriter
 	WorkspaceKeys       RecoveryWorkspaceKeySource
 	DefaultPlaintextTTL time.Duration
 	RetainHardCap       time.Duration
@@ -63,6 +64,7 @@ var _ RecoveryResultContentLifecycle = (*content.Broker)(nil)
 type ResultLifecycleService struct {
 	db                  *gorm.DB
 	now                 func() time.Time
+	audit               RecoveryAPIAuditWriter
 	workspaceKeys       RecoveryWorkspaceKeySource
 	defaultPlaintextTTL time.Duration
 	retainHardCap       time.Duration
@@ -193,7 +195,8 @@ func NewResultLifecycleService(dependencies ResultLifecycleDependencies) (*Resul
 		dependencies.NewID = backupasset.NewOpaqueID
 	}
 	return &ResultLifecycleService{
-		db: dependencies.DB, now: dependencies.Now, workspaceKeys: dependencies.WorkspaceKeys,
+		db: dependencies.DB, now: dependencies.Now, audit: dependencies.Audit,
+		workspaceKeys:       dependencies.WorkspaceKeys,
 		defaultPlaintextTTL: dependencies.DefaultPlaintextTTL, retainHardCap: dependencies.RetainHardCap,
 		nodeAdmission: dependencies.NodeAdmission, contentLifecycle: dependencies.ContentLifecycle,
 		target:          dependencies.Target,
@@ -441,6 +444,7 @@ func (service *ResultLifecycleService) Retain(
 	}
 
 	var retained RetainedRecoveryResultSet
+	var auditItemCount, auditByteCount int64
 	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var job model.BackupAssetRecoveryJob
 		loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
@@ -495,6 +499,17 @@ func (service *ResultLifecycleService) Retain(
 		if updated.RowsAffected != 1 {
 			return ErrRecoveryResultRetainConflict
 		}
+		var summary struct {
+			ItemCount int64
+			ByteCount int64
+		}
+		loaded = tx.WithContext(ctx).Model(&model.BackupAssetRecoveryResult{}).
+			Select("COUNT(*) AS item_count, COALESCE(SUM(size), 0) AS byte_count").
+			Where("result_set_id = ? AND job_id = ?", resultSet.ID, job.ID).Scan(&summary)
+		if loaded.Error != nil {
+			return loaded.Error
+		}
+		auditItemCount, auditByteCount = summary.ItemCount, summary.ByteCount
 		retained = RetainedRecoveryResultSet{
 			ResultSetID: resultSet.ID, JobID: job.ID, JobRevision: job.TransitionRevision,
 			PlaintextDeadline: requestedDeadline, HardDeadline: resultSet.HardDeadline.UTC(),
@@ -504,7 +519,31 @@ func (service *ResultLifecycleService) Retain(
 	if err != nil {
 		return RetainedRecoveryResultSet{}, err
 	}
+	service.writeRetainAudit(ctx, request.Actor.UserID, retained.JobID, auditItemCount, auditByteCount)
 	return retained, nil
+}
+
+func (service *ResultLifecycleService) writeRetainAudit(
+	ctx context.Context,
+	requesterID uint,
+	jobID string,
+	itemCount int64,
+	byteCount int64,
+) {
+	if service == nil || service.audit == nil || requesterID == 0 {
+		return
+	}
+	auditCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(nonNilRecoveryAPIContext(ctx)), authorizationAuditTimeout,
+	)
+	defer cancel()
+	_, _ = service.audit.Write(auditCtx, backupasset.AuditEventInput{
+		Actor: backupasset.AuditActor{UserID: requesterID}, Action: backupasset.AuditActionRecoveryRetain,
+		RecoveryJobID: jobID, ItemCount: itemCount, ByteCount: byteCount,
+		Fields: map[backupasset.AuditField]any{
+			backupasset.AuditFieldStage: "result_set", backupasset.AuditFieldStatus: string(ResultSetStateReady),
+		},
+	})
 }
 
 func validRecoveryResultRetainAuthorization(request RetainRecoveryResultsRequest, now time.Time) bool {

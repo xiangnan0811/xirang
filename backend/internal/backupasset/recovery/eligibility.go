@@ -502,7 +502,8 @@ func validRecoveryEligibilityAuthorityBinding(binding RecoveryAuthorityBinding) 
 		validDigest(binding.SecurityFindingSetDigest) && binding.SecurityPolicyRevision != "" &&
 		validOpaqueID(binding.PreflightID) && binding.PreflightRevision != "" &&
 		binding.PreflightTargetRevision != "" && binding.PreflightNodeRevision != "" &&
-		binding.RequiredBytes >= 0 && binding.RequiredInodes >= 0
+		binding.RequiredBytes >= 0 && binding.RequiredInodes >= 0 &&
+		(!binding.draftPreflight || binding.PreflightID == binding.PlanID)
 }
 
 func validRecoveryEligibilitySecurityDecision(decision SecurityDecisionKind) bool {
@@ -652,7 +653,7 @@ func recoveryEligibilityBindingDigest(binding recoveryEligibilityBinding) string
 		binding.authority.SecurityOverrideBindingDigest, binding.authority.PreflightID,
 		binding.authority.PreflightRevision, binding.authority.PreflightTargetRevision,
 		binding.authority.PreflightNodeRevision, strconv.FormatInt(binding.authority.RequiredBytes, 10),
-		strconv.FormatInt(binding.authority.RequiredInodes, 10),
+		strconv.FormatInt(binding.authority.RequiredInodes, 10), strconv.FormatBool(binding.authority.draftPreflight),
 		strconv.Itoa(binding.source.RepositoryCapabilityRevision), strconv.Itoa(binding.source.CapabilityRevision),
 		binding.source.SourceAccessIdentity, binding.source.SourceFingerprint, binding.source.ManagedRootIdentity,
 		binding.source.RepositoryBindingRevision, binding.source.ProvenanceRevision,
@@ -770,7 +771,7 @@ func loadRecoveryEligibilityPreflightBinding(
 		plan.SecurityFindingSetDigest != request.FindingSetDigest ||
 		plan.RootRevision != request.TargetRootRevision ||
 		plan.FilesystemRevision != request.TargetFilesystemRevision ||
-		plan.TargetBaseRevision != request.TargetRevision ||
+		!validOpaqueRevision(request.TargetRevision) ||
 		plan.EstimatedBytes != request.RequiredBytes || plan.EstimatedItems != request.RequiredInodes {
 		return RecoveryAuthorityBinding{}, ErrRecoveryPreflightConflict
 	}
@@ -797,6 +798,7 @@ func loadRecoveryEligibilityPreflightBinding(
 		PreflightID: plan.ID, PreflightRevision: plan.PreflightRevision,
 		PreflightTargetRevision: request.TargetRevision, PreflightNodeRevision: plan.TargetBaseRevision,
 		RequiredBytes: request.RequiredBytes, RequiredInodes: request.RequiredInodes,
+		draftPreflight: true,
 	}
 	binding.SourceRef = provider.RsyncRestoreSourceRef{
 		PlanID: plan.ID, PlanBindingDigest: plan.BindingDigest, RepositoryID: plan.RepositoryID,

@@ -255,6 +255,22 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	backupContentHandler := handlers.NewBackupContentHandler(
 		backupContentService, dep.DB, dep.JWTManager, backupContentConfig,
 	).WithSchemePolicy(backupContentSchemePolicy)
+	var recoveryAuthorization handlers.RecoveryAuthorizationHandlerService
+	var recoveryTargetRoots handlers.RecoveryTargetRootHandlerService
+	var recoveryDowngrade handlers.RecoveryDowngradeHandlerService
+	var recoveryLifecycle handlers.RecoveryLifecycleHandlerService
+	var recoveryOperations handlers.RecoveryOperationsHandlerService
+	if dep.BackupAssets != nil {
+		recoveryAuthorization = dep.BackupAssets.RecoveryAuthorization()
+		recoveryTargetRoots = dep.BackupAssets.RecoveryTargetRoots()
+		recoveryDowngrade = dep.BackupAssets
+		recoveryLifecycle = dep.BackupAssets.RecoveryAPI()
+		recoveryOperations = dep.BackupAssets.RecoveryOperations()
+	}
+	backupRecoveryHandler := handlers.NewBackupRecoveryHandler(recoveryAuthorization, dep.DB, dep.JWTManager).
+		WithRecoveryAdministration(recoveryTargetRoots, recoveryDowngrade).
+		WithRecoveryLifecycle(recoveryLifecycle).
+		WithRecoveryOperations(recoveryOperations)
 	authHandler.WithContentSessionRevoker(backupContentService)
 	overviewHandler := handlers.NewOverviewHandler(dep.DB)
 	overviewTrafficHandler := handlers.NewOverviewTrafficHandler(dep.DB, nil)
@@ -420,6 +436,28 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/recovery-points/:id/entries", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.ListEntries)
 	secured.GET("/recovery-points/:id/entries/:entryId", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetEntry)
 	secured.POST("/recovery-points/:id/entries/:entryId/delivery-tickets", middleware.RBAC(backupasset.PermissionBackupAssetsPreview), backupContentHandler.Issue)
+	recoveryRouteHandlers := []gin.HandlerFunc{
+		middleware.RBAC(backupasset.PermissionBackupAssetsRecover), middleware.RequireRole("admin"),
+		middleware.APIRateLimit(30, time.Minute),
+	}
+	secured.POST("/recovery-plans", append(recoveryRouteHandlers, backupRecoveryHandler.CreatePlan)...)
+	secured.GET("/recovery-plans/:id", append(recoveryRouteHandlers, backupRecoveryHandler.GetPlan)...)
+	secured.POST("/recovery-plans/:id/preflights", append(recoveryRouteHandlers, backupRecoveryHandler.Preflight)...)
+	secured.POST("/recovery-plans/:id/security-overrides", append(recoveryRouteHandlers, backupRecoveryHandler.SecurityOverride)...)
+	secured.POST("/recovery-plans/:id/write-authorizations", append(recoveryRouteHandlers, backupRecoveryHandler.AuthorizeWrite)...)
+	secured.POST("/recovery-plans/:id/execute", append(recoveryRouteHandlers, backupRecoveryHandler.Execute)...)
+	secured.POST("/recovery-plans/:id/cancel", append(recoveryRouteHandlers, backupRecoveryHandler.CancelPlan)...)
+	secured.GET("/recovery-jobs/:id", append(recoveryRouteHandlers, backupRecoveryHandler.GetJob)...)
+	secured.POST("/recovery-jobs/:id/cancel", append(recoveryRouteHandlers, backupRecoveryHandler.CancelJob)...)
+	secured.POST("/recovery-jobs/:id/exact-mirror-delete-authorizations", append(recoveryRouteHandlers, backupRecoveryHandler.AuthorizeExactMirrorDelete)...)
+	secured.POST("/recovery-jobs/:id/results/:resultId/download-ticket", append(recoveryRouteHandlers, backupContentHandler.IssueRecoveryResult)...)
+	secured.POST("/recovery-jobs/:id/results/retain", append(recoveryRouteHandlers, backupRecoveryHandler.RetainResults)...)
+	secured.POST("/recovery-jobs/:id/results/cleanup", append(recoveryRouteHandlers, backupRecoveryHandler.CleanupResults)...)
+	secured.POST("/settings/backup-assets/recovery/target-roots", append(recoveryRouteHandlers, backupRecoveryHandler.RegisterTargetRoot)...)
+	secured.PUT("/settings/backup-assets/recovery/target-roots/:nodeId/:rootId", append(recoveryRouteHandlers, backupRecoveryHandler.RotateTargetRoot)...)
+	secured.DELETE("/settings/backup-assets/recovery/target-roots/:nodeId/:rootId", append(recoveryRouteHandlers, backupRecoveryHandler.DeleteTargetRoot)...)
+	secured.GET("/settings/backup-assets/recovery/target-roots", append(recoveryRouteHandlers, backupRecoveryHandler.ListTargetRoots)...)
+	secured.POST("/settings/backup-assets/recovery/downgrade-readiness", append(recoveryRouteHandlers, backupRecoveryHandler.DowngradeReadiness)...)
 	secured.POST("/recovery-points/:id/entries/:entryId/preview-jobs",
 		middleware.RBAC(backupasset.PermissionBackupAssetsPreview), middleware.APIRateLimit(30, time.Minute),
 		middleware.MaxBodySize(4<<10), backupProcessingHandler.CreatePreview)
