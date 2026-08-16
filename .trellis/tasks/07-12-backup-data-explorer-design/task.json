@@ -35,7 +35,7 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Program delivery remains 12/15 merged and archived (80%); Trellis 12/13 counts only instantiated children. Child 13 remains active/in_progress. Its Tasks 1-6 are checked at their recorded scopes, and Task 7 is complete_checked_whole_scope and delivered through PR #410, squash-merged as def0086 on 2026-08-10 with green required CI and green post-merge main CI/Release Please. No formal release or image publication occurred. Tasks 8-12 remain open, so Child 13 and this parent must not be archived; Children 14-15 are not created.",
+  "notes": "Program delivery remains 12/15 merged and archived (80%); Trellis 12/13 counts only instantiated children. Child 13 remains active/in_progress. Its Tasks 1-6 are checked at their recorded scopes, Task 7 was delivered through PR #410, and Task 8 is complete_checked_whole_scope and delivered through PR #424, squash-merged as 1c91472 on 2026-08-16 with green required CI and green post-merge main CI/Release Please. Release Please opened release PR #425 for 0.47.0; it is green and intentionally remains open, so no new formal release or image publication occurred. Tasks 9-10 remain not_executed, so Child 13 and this parent must not be archived; Children 14-15 are not created.",
   "meta": {
     "program_delivery": {
       "delivered": 12,
@@ -54,6 +54,14 @@
       "pr": "https://github.com/xiangnan0811/xirang/pull/410",
       "squash_commit": "def0086da561bc2c1b26c34c1efa6dacf020c3bc",
       "child_status": "in_progress_tasks_8_to_12_open",
+      "program_delivery": "12_of_15"
+    },
+    "task_8_checkpoint_delivery": {
+      "status": "delivered_merged_post_merge_observed_pending_bookkeeping_pr",
+      "pr": "https://github.com/xiangnan0811/xirang/pull/424",
+      "squash_commit": "1c914722e0d669a793b8e2f8f5ed20152f61c544",
+      "release_pr": "https://github.com/xiangnan0811/xirang/pull/425",
+      "child_status": "in_progress_tasks_9_to_10_not_executed",
       "program_delivery": "12_of_15"
     },
     "r0_execution_rebaseline": {
