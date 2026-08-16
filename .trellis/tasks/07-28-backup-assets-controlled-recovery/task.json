@@ -15,13 +15,13 @@
   "branch": "codex/task8-managed-runtime",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": "82dc261fe6e185f4e6e83dbe13f0d0dd12102011",
+  "commit": "1c914722e0d669a793b8e2f8f5ed20152f61c544",
   "pr_url": "https://github.com/xiangnan0811/xirang/pull/424",
   "subtasks": [],
   "children": [],
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [],
-  "notes": "Complex Child 13 planning was independently approved on 2026-07-28 and task.py start ran exactly once. Tasks 1-5 are complete_approved, Task 6 is complete_checked at whole scope, and Task 7 is complete_checked_whole_scope and delivered through PR #410. Task 8 is complete_checked_whole_scope after T8-A through T8-V1 implementation, strict late source-namespace drift RED/GREEN closure, fresh backend normal/race/vet, required PostgreSQL 18 no-skip normal/race, project, privacy, manifest and full-scope review gates. Ready PR #424 is open from codex/task8-managed-runtime. Its first hosted run 31918892574 exposed a genuine Trivy RED against Go 1.26.5; the same-branch Go 1.26.6 remediation is locally green and must pass a fresh hosted rerun before merge. Tasks 9-10 are not_executed. Child 13 remains in_progress, completedAt remains unset, the parent remains planning, and program delivery remains 12/15. PR #410 is Task 7 delivery only and grants no Task 8 delivery credit.",
+  "notes": "Complex Child 13 planning was independently approved on 2026-07-28 and task.py start ran exactly once. Tasks 1-5 are complete_approved, Task 6 is complete_checked at whole scope, Task 7 was delivered through PR #410, and Task 8 is complete_checked_whole_scope and delivered through PR #424. Final remediation commit 2136b78 passed all 11 required PR checks; PR #424 was squash-merged as 1c91472 on 2026-08-16. Main CI, Release Please, Dependency Graph and Docker Hub description sync passed. Release Please opened green PR #425 for 0.47.0; it remains open, so latest formal release is still v0.46.0 and no new image publication occurred. Tasks 9-10 are not_executed. Child 13 remains in_progress, completedAt remains unset, the parent remains planning, and program delivery remains 12/15. Do not archive the Child at this checkpoint.",
   "meta": {
     "parent_delivery": "12_of_15_complete",
     "planning_basis": "approved parent PRD/design/implement plus Child 13 current-main reconnaissance",
@@ -33,7 +33,7 @@
     "planning_review": "whole_task_6_specification_and_quality_reviews_complete_task_7_publication_resolver_content_adapter_retain_claim_revoke_drain_cleanup_target_validation_target_root_plan_snapshot_workspace_marker_interoperability_exact_plan_sftp_marker_present_regular_file_verify_no_overwrite_regular_file_create_composite_read_only_preflight_published_result_read_delete_oriented_lstat_exact_absence_and_a2e2_r42_r47_overwrite_artifact_authority_historical_key_binding_authenticated_intent_post_preparation_exact_prior_capture_same_invocation_mismatch_restore_closed_tuple_publish_authenticated_acknowledgement_safe_residue_cleanup_source_free_replay_durable_checkpoint_before_finalize_preterminal_takeover_reconciliation_and_authority_error_resource_context_privacy_focused_checks_complete_v13_delete_and_whole_task7_review_open",
     "planning_review_evidence": "independent_security_state_and_plan_manifest_rereviews_approved_2026-07-28_b3_receipt_019fc0c2_cfda_74e3_b218_246f3a425545_approved_f6_spec_019fc136_feca_7fb0_82bc_3c33739aef12_quality_019fc13c_0710_7343_b261_dd866382a8c0_postgres_019fc13d_ea0e_7f93_b1c6_32aebcb7368e_whole_task6_controller_inline_spec_quality_and_fresh_combined_gates_approved_2026-08-03",
     "task_start": "executed_once_2026-07-28",
-    "implementation": "tasks_1_to_5_complete_approved_task_6_complete_checked_whole_scope_task_7_complete_checked_whole_scope_delivered_pr_410_task_8_complete_checked_whole_scope_tasks_9_to_10_not_executed",
+    "implementation": "tasks_1_to_5_complete_approved_task_6_complete_checked_whole_scope_task_7_delivered_pr_410_task_8_complete_checked_whole_scope_delivered_pr_424_tasks_9_to_10_not_executed",
     "task_7": {
       "status": "complete_checked_whole_scope",
       "focused_complete_checked": [
@@ -368,8 +368,17 @@
         "implementation_authority": "granted_and_executed_t8_a_through_t8_v1"
       },
       "task_9_boundary": "task_8_keeps_internal_authorization_and_target_root_facades_but_registers_none_of_the_effect_target_root_or_downgrade_readiness_routes_task_9_route_response_rbac_audit_privacy_and_swagger_matrix_not_executed",
-      "delivery": "ready_pr_424_open_initial_hosted_run_31918892574_trivy_red_go_1_26_6_same_branch_remediation_local_green_fresh_ci_merge_bookkeeping_and_cleanup_pending",
-      "next": "push_same_branch_security_remediation_monitor_all_pr_424_checks_merge_only_when_green_then_monitor_main_release_automation_and_run_separate_delivery_closure_before_task_9"
+      "delivery": "delivered_merged_post_merge_observed_bookkeeping_pr_426_open",
+      "final_fix_commit": "2136b78232e867de27ee89a98e99c003aa80dfb6",
+      "hosted_ci": "pull_request_run_31919970769_success_all_11_required_checks_green",
+      "squash_commit": "1c914722e0d669a793b8e2f8f5ed20152f61c544",
+      "merged_at": "2026-08-16T01:47:06Z",
+      "post_merge": "main_ci_31920353593_release_please_31920353599_dependency_graph_31920355163_and_docker_hub_description_sync_31920353592_success",
+      "release_disposition": "release_pr_425_head_3c23b579874a2a89a141b165b0300d3d6b03f9d7_required_ci_31920367921_success_open_clean_autorelease_pending_latest_release_v0_46_0_no_new_publish_docker_images",
+      "topic_cleanup": "remote_feature_branch_deleted_local_feature_branch_and_worktree_retained_until_bookkeeping_merge",
+      "bookkeeping_branch": "codex/task8-delivery-closure",
+      "bookkeeping_pr": "https://github.com/xiangnan0811/xirang/pull/426",
+      "next": "merge_bookkeeping_pr_after_green_monitor_its_post_merge_automation_sync_main_cleanup_both_task_8_worktrees_and_branches_then_start_task_9_separately"
     },
     "task_4_b1_scope_amendment": {
       "status": "complete_approved_as_part_of_task_4_focused_closure",
@@ -1063,6 +1072,6 @@
         "broad_runtime_cache": "environment_blocked_host_ifree_zero_not_a_product_pass"
       }
     },
-    "delivery_actions": "tasks_1_to_7_pr_410_and_bookkeeping_pr_411_complete_task_8_ready_pr_424_open_initial_ci_security_red_go_1_26_6_same_branch_remediation_local_green_ci_rerun_merge_post_merge_automation_bookkeeping_and_cleanup_pending"
+    "delivery_actions": "tasks_1_to_7_pr_410_and_bookkeeping_pr_411_complete_task_8_pr_424_merged_as_1c91472_main_ci_release_please_dependency_graph_docker_hub_description_sync_and_release_pr_425_ci_success_bookkeeping_pr_and_cleanup_pending"
   }
 }

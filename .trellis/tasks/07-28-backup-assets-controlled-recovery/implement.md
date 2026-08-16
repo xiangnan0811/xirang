@@ -2937,6 +2937,34 @@ TDD slice plus a whole-scope gate. The approved plan is implemented and
 whole-scope checked through T8-V1; stop before Task 9 until Task 8 delivery,
 hosted CI, merge, post-merge automation and cleanup complete.
 
+## Task 8 PR #424 delivery closure (2026-08-16)
+
+- [x] Same-branch security fix
+  `2136b78232e867de27ee89a98e99c003aa80dfb6` closed the initial Go 1.26.5
+  Trivy RED. Pull-request run `31919970769` passed all 11 required backend,
+  PostgreSQL, frontend, Docker, Worker runtime/build/scan, documentation,
+  UTC-safety and title checks on the exact final head.
+- [x] PR #424 was squash-merged at `2026-08-16T01:47:06Z` as
+  `1c914722e0d669a793b8e2f8f5ed20152f61c544`. The remote topic branch was
+  deleted; its local worktree/branch remain only until this bookkeeping PR is
+  green, merged and post-merge observed.
+- [x] Post-merge main CI run `31920353593`, Release Please run `31920353599`,
+  Dependency Graph run `31920355163` and README-triggered Docker Hub description
+  sync `31920353592` passed. Release Please opened PR #425
+  (`chore(main): release 0.47.0`) at
+  `3c23b579874a2a89a141b165b0300d3d6b03f9d7`; its required CI run
+  `31920367921` passed and the PR remains open/CLEAN with
+  `autorelease: pending`.
+- [x] No stable 0.47.0 tag or GitHub Release exists yet, so no new
+  `Publish Docker Images` run occurred. Latest remains v0.46.0. The release PR
+  is intentionally not merged by this Task 8 delivery closure.
+- [x] Task 8 is delivered and merged. Child 13 remains `in_progress`, the
+  parent remains `planning`, program delivery remains `12/15`, and Tasks 9-10
+  remain `not_executed`. Delivery bookkeeping is PR #426. Do not run
+  `task.py archive`. Do not begin Task 9 until PR #426 is green, merged,
+  post-merge automation is observed, local `main` is synchronized and both
+  Task 8 topic worktrees/branches are cleaned.
+
 ### Task 9: API, RBAC, Audit And Swagger
 
 **Files:** recovery handler/tests, router/tests/docs, backup-asset RBAC test,

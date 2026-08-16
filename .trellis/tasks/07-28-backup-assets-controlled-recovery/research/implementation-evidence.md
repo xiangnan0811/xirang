@@ -10295,3 +10295,45 @@ volume residue were all zero after cleanup. Hosted CI must now rerun against
 the remediation commit; merge, post-merge automation, delivery bookkeeping and
 workspace cleanup remain pending. Child 13 stays `in_progress`, the parent
 stays planning, and Tasks 9--10 remain `not_executed`.
+
+## PR #424 merge and post-merge delivery disposition (2026-08-16)
+
+Final same-branch remediation commit
+`2136b78232e867de27ee89a98e99c003aa80dfb6` upgraded every shipped and
+declared Go builder to 1.26.6 after the initial current-database Trivy RED.
+Pull-request run `31919970769` completed successfully with all 11 required
+checks green, including Worker Build & Scan on both amd64 and arm64.
+
+PR #424 was squash-merged at `2026-08-16T01:47:06Z` as
+`1c914722e0d669a793b8e2f8f5ed20152f61c544`. The remote
+`codex/task8-managed-runtime` branch was deleted. The local branch and worktree
+are deliberately retained until this delivery-bookkeeping PR itself merges and
+its post-merge automation is observed.
+
+Main CI run `31920353593` passed on the exact squash commit. Release Please run
+`31920353599`, Dependency Graph run `31920355163` and the README-triggered
+Docker Hub description sync run `31920353592` also passed. Release Please
+created PR #425, `chore(main): release 0.47.0`, with head
+`3c23b579874a2a89a141b165b0300d3d6b03f9d7`. Its own required CI run
+`31920367921` passed all 11 checks; the PR is open, CLEAN and labeled
+`autorelease: pending`.
+
+`gh release list` still reports v0.46.0 as latest. Because PR #425 has not been
+merged, no 0.47.0 tag or GitHub Release exists and no new
+`Publish Docker Images` run was triggered. Task 8 does not merge the release
+PR; the open PR is the expected Release Please handoff. Docker Hub description
+sync was expected and successful because the security remediation updated
+README's minimum Go version.
+
+The shared code-spec review found no new reusable implementation contract to
+promote in this closure: the authority/runtime contracts and the Go
+toolchain-consistency requirement are already recorded in the Task 8 plan,
+evidence and existing backend deployment/quality guidance. No `.trellis/spec/`
+file changes are required by this delivery-history-only PR.
+
+Task 8 is delivered and merged. Delivery bookkeeping is PR #426. Child 13
+remains `in_progress` because Tasks 9-10 are `not_executed`; its parent remains
+`planning` and program delivery remains 12/15. The Child is intentionally not
+archived. Task 9 must remain stopped until PR #426 passes CI, merges, receives
+a post-merge disposition, local `main` is resynchronized and both Task 8 topic
+branches and worktrees are removed.

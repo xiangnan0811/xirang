@@ -1534,4 +1534,53 @@ Completed and whole-scope checked Child 13 Task 8; recorded local work commit wh
 
 ### Next Steps
 
-- Choose whether to keep, push/PR, or otherwise integrate codex/task8-managed-runtime; do not begin Tasks 9-10 without separate authorization.
+- Complete the dedicated Task 8 delivery bookkeeping PR and cleanup; do not
+  begin Tasks 9-10 until that post-merge workflow is closed.
+
+
+## Session 39: Task 8 delivery closure
+
+**Date**: 2026-08-16
+**Task**: Task 8 delivery closure
+**Branch**: `codex/task8-delivery-closure`
+
+### Summary
+
+Recorded PR #424 squash merge, the Go 1.26.6 hosted-CI remediation, green
+feature/main/release-PR checks, Release Please PR #425 disposition and the
+remaining Child 13 Task 9-10 boundary.
+
+### Main Changes
+
+- Recorded final fix `2136b78`, feature squash `1c91472`, all required CI and
+  post-merge automation IDs in Child and parent Trellis memory.
+- Opened delivery bookkeeping PR #426 from the isolated closure branch.
+- Recorded successful Docker Hub description sync, open green release PR #425,
+  latest formal release v0.46.0 and zero new image publication.
+- Kept Child 13 `in_progress`, parent `planning`, program delivery `12/15`, and
+  Tasks 9-10 `not_executed`; no archive or product edit occurred.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2136b78232e867de27ee89a98e99c003aa80dfb6` | `fix(build): upgrade Go to 1.26.6` |
+| `1c914722e0d669a793b8e2f8f5ed20152f61c544` | `feat(backup-assets): complete managed recovery runtime (#424)` |
+
+### Testing
+
+- [OK] PR #424 run `31919970769` passed all 11 required checks.
+- [OK] Main CI `31920353593`, Release Please `31920353599`, Dependency Graph
+  `31920355163` and Docker Hub description sync `31920353592` passed.
+- [OK] Release PR #425 CI `31920367921` passed all 11 checks; the PR remains
+  open/CLEAN with `autorelease: pending` and no 0.47.0 release/image publish.
+
+### Status
+
+[OK] **Task 8 delivered; Child 13 remains in progress**
+
+### Next Steps
+
+- Merge PR #426 after required CI passes, monitor its post-merge automation, resynchronize
+  local `main`, remove both Task 8 branches/worktrees, then begin Task 9 on a
+  fresh dedicated branch when separately started.
