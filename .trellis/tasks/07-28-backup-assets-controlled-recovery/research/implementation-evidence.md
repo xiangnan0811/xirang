@@ -10337,3 +10337,35 @@ remains `in_progress` because Tasks 9-10 are `not_executed`; its parent remains
 archived. Task 9 must remain stopped until PR #426 passes CI, merges, receives
 a post-merge disposition, local `main` is resynchronized and both Task 8 topic
 branches and worktrees are removed.
+
+## PR #426 merge and post-closure main-CI stabilization (2026-08-16)
+
+Delivery-bookkeeping PR #426 passed all 11 required checks and was
+squash-merged as `42a317cc825bd71a7040f8794306d28937616bf4`. Release Please
+run `31921414663` succeeded and preserved open release PR #425; no formal
+0.47.0 release or image publication occurred.
+
+The exact-sha main CI run `31921414701` then failed only Backend Test & Build.
+Attempts 1 and 2 reported the identical failure in
+`TestTriggerRegistersCancelOwnerBeforeReturning/legacy_restore`: after
+`TriggerRestore` returned, the unsynchronized fast fake could finish and remove
+its cancellation owner before the test called `Cancel`. That terminal Task
+correctly rejected cancellation. Both attempts passed every other completed
+job, including PostgreSQL parity, Docker, frontend, both native runtime closures
+and both Worker build/scan jobs. The same focused test passed locally 50 times
+before the hosted rerun, confirming that a scheduler-dependent fixture—not a
+Recovery product path—was under test.
+
+PR #427 carries the narrow test-only stabilization on the already-listed
+`backend/internal/task/manager_test.go`: fill the manager's context-aware
+semaphore before triggering the legacy restore, keep its owner live through the
+cancel assertion, and remove the `GOMAXPROCS` timing assumption. Production
+code is unchanged. Local verification is focused normal `-count=100`, focused
+race `-count=50`, whole `internal/task -count=10`, related cancellation race
+matrix `-count=20`, `go vet ./internal/task`, `make lint-backend`, gofmt and
+`git diff --check`, all passing.
+
+Task 9 remains stopped until PR #427 passes required CI, merges, receives an
+exact-sha post-merge disposition, local `main` is synchronized and the feature,
+closure and CI-stabilization worktrees/branches are removed. Child 13 remains
+`in_progress`; Tasks 9--10 remain `not_executed` and no archive is allowed.

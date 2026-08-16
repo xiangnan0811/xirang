@@ -2965,6 +2965,29 @@ hosted CI, merge, post-merge automation and cleanup complete.
   post-merge automation is observed, local `main` is synchronized and both
   Task 8 topic worktrees/branches are cleaned.
 
+## Task 8 post-closure main-CI stabilization (2026-08-16)
+
+- [x] Delivery-bookkeeping PR #426 passed all 11 required checks and was
+  squash-merged as `42a317cc825bd71a7040f8794306d28937616bf4`.
+- [x] Its exact-sha main run `31921414701` exposed the same pre-existing
+  `TestTriggerRegistersCancelOwnerBeforeReturning/legacy_restore` scheduler
+  race in attempts 1 and 2. Every other completed job, including both Worker
+  build/scan architectures and PostgreSQL parity, passed.
+- [x] The RED was reproduced from hosted logs and isolated from Task 8 product
+  behavior. The test let the fast restore complete before calling `Cancel`, so
+  terminal-state cancellation correctly returned unsupported even though the
+  assertion intended to inspect the still-live trigger owner.
+- [x] PR #427 is the bounded delivery guard. It holds the async restore at the
+  existing context-aware semaphore, removes the scheduler-dependent
+  `GOMAXPROCS` assumption, and leaves production code unchanged. Focused normal
+  `-count=100`, race `-count=50`, whole `internal/task -count=10`, the related
+  cancellation race matrix `-count=20`, `go vet ./internal/task` and
+  `make lint-backend` pass.
+- [ ] Keep Task 9 stopped until PR #427 is green and merged, its exact-sha main
+  CI and Release Please disposition are observed, local `main` is synchronized,
+  and all three Task 8 delivery worktrees/branches are removed. PR #425 remains
+  the open Release Please 0.47.0 handoff and is not merged by Task 8.
+
 ### Task 9: API, RBAC, Audit And Swagger
 
 **Files:** recovery handler/tests, router/tests/docs, backup-asset RBAC test,

@@ -35,7 +35,7 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Program delivery remains 12/15 merged and archived (80%); Trellis 12/13 counts only instantiated children. Child 13 remains active/in_progress. Its Tasks 1-6 are checked at their recorded scopes, Task 7 was delivered through PR #410, and Task 8 is complete_checked_whole_scope and delivered through PR #424, squash-merged as 1c91472 on 2026-08-16 with green required CI and green post-merge main CI/Release Please. Release Please opened release PR #425 for 0.47.0; it is green and intentionally remains open, so no new formal release or image publication occurred. Tasks 9-10 remain not_executed, so Child 13 and this parent must not be archived; Children 14-15 are not created.",
+  "notes": "Program delivery remains 12/15 merged and archived (80%); Trellis 12/13 counts only instantiated children. Child 13 remains active/in_progress. Its Tasks 1-6 are checked at their recorded scopes, Task 7 was delivered through PR #410, and Task 8 is complete_checked_whole_scope and delivered through PR #424, squash-merged as 1c91472 on 2026-08-16 with green required CI and green feature post-merge automation. Delivery-bookkeeping PR #426 merged as 42a317c; its post-merge main CI exposed a pre-existing legacy-restore test scheduler race twice, now bounded by test-only PR #427. Task 9 must not start until #427 passes, merges, receives a post-merge disposition and local cleanup completes. Release Please PR #425 for 0.47.0 remains open, so no new formal release or image publication occurred. Tasks 9-10 remain not_executed, so Child 13 and this parent must not be archived; Children 14-15 are not created.",
   "meta": {
     "program_delivery": {
       "delivered": 12,
