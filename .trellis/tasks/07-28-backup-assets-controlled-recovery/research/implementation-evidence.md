@@ -10223,9 +10223,18 @@ this worktree delta.
 
 Task 8's internal facades remain unregistered: the effect, target-root and
 downgrade-readiness route/response/RBAC/audit/privacy/Swagger matrix remains
-Task 9 work. Tasks 9--10 are `not_executed`; no stage, commit, push, PR, CI,
-merge or archive action occurred.
+Task 9 work. Tasks 9--10 are `not_executed`.
 
 Fresh review receipt: `QUALITY_OK`. There is no open Critical or Important
 Task 8 finding across design sections 48.1--48.7, settings transitions,
 SQLite/PostgreSQL parity, privacy, runtime lifecycle or the Task 9 boundary.
+
+#### Phase 3.4 local delivery receipt
+
+After the whole-scope gates and review were complete, the controller entered
+Phase 3.4 and created local work commit
+`82dc261fe6e185f4e6e83dbe13f0d0dd12102011` (`feat(backup-assets): complete
+managed recovery runtime`) on `codex/task8-managed-runtime`. No push, PR, CI,
+merge, worktree cleanup or task archive occurred. Child 13 remains
+`in_progress`, the parent remains planning, and Tasks 9--10 remain
+`not_executed`.

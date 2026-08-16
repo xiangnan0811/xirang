@@ -15,13 +15,13 @@
   "branch": "codex/task8-managed-runtime",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": "def0086da561bc2c1b26c34c1efa6dacf020c3bc",
-  "pr_url": "https://github.com/xiangnan0811/xirang/pull/410",
+  "commit": "82dc261fe6e185f4e6e83dbe13f0d0dd12102011",
+  "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [],
-  "notes": "Complex Child 13 planning was independently approved on 2026-07-28 and task.py start ran exactly once. Tasks 1-5 are complete_approved, Task 6 is complete_checked at whole scope, and Task 7 is complete_checked_whole_scope and delivered through PR #410. Task 8 is complete_checked_whole_scope after T8-A through T8-V1 implementation, strict late source-namespace drift RED/GREEN closure, fresh backend normal/race/vet, required PostgreSQL 18 no-skip normal/race, project, privacy, manifest and full-scope review gates. Tasks 9-10 are not_executed. Child 13 remains in_progress, completedAt remains unset, the parent remains planning, and program delivery remains 12/15. PR #410 is Task 7 delivery only and grants no Task 8 delivery credit; Task 8 has no stage, commit, push, PR, CI, merge, or archive action.",
+  "notes": "Complex Child 13 planning was independently approved on 2026-07-28 and task.py start ran exactly once. Tasks 1-5 are complete_approved, Task 6 is complete_checked at whole scope, and Task 7 is complete_checked_whole_scope and delivered through PR #410. Task 8 is complete_checked_whole_scope after T8-A through T8-V1 implementation, strict late source-namespace drift RED/GREEN closure, fresh backend normal/race/vet, required PostgreSQL 18 no-skip normal/race, project, privacy, manifest and full-scope review gates. Task 8 has local work commit 82dc261 on codex/task8-managed-runtime; no push, PR, CI, merge or archive action has occurred. Tasks 9-10 are not_executed. Child 13 remains in_progress, completedAt remains unset, the parent remains planning, and program delivery remains 12/15. PR #410 is Task 7 delivery only and grants no Task 8 delivery credit.",
   "meta": {
     "parent_delivery": "12_of_15_complete",
     "planning_basis": "approved parent PRD/design/implement plus Child 13 current-main reconnaissance",
@@ -368,8 +368,8 @@
         "implementation_authority": "granted_and_executed_t8_a_through_t8_v1"
       },
       "task_9_boundary": "task_8_keeps_internal_authorization_and_target_root_facades_but_registers_none_of_the_effect_target_root_or_downgrade_readiness_routes_task_9_route_response_rbac_audit_privacy_and_swagger_matrix_not_executed",
-      "delivery": "not_executed_no_stage_commit_push_pr_ci_merge_or_archive_pr_410_is_task_7_only",
-      "next": "stop_before_task_9_or_task_8_delivery_until_controller_separately_authorizes_the_next_phase"
+      "delivery": "local_work_commit_82dc261_created_no_push_pr_ci_merge_or_archive_pr_410_is_task_7_only",
+      "next": "await_controller_integration_choice_or_separate_task_9_authorization"
     },
     "task_4_b1_scope_amendment": {
       "status": "complete_approved_as_part_of_task_4_focused_closure",
@@ -1063,6 +1063,6 @@
         "broad_runtime_cache": "environment_blocked_host_ifree_zero_not_a_product_pass"
       }
     },
-    "delivery_actions": "tasks_1_to_7_pr_410_and_bookkeeping_pr_411_complete_task_8_complete_checked_but_no_stage_commit_push_pr_ci_merge_or_archive"
+    "delivery_actions": "tasks_1_to_7_pr_410_and_bookkeeping_pr_411_complete_task_8_complete_checked_local_work_commit_82dc261_no_push_pr_ci_merge_or_archive"
   }
 }
