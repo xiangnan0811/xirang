@@ -2413,6 +2413,31 @@ authority code, not new product scope; it adds no model, migration, route,
 workflow, dependency or frontend path. Further product paths still require a
 written amendment before edit.
 
+##### Hosted CI security-remediation manifest amendment (2026-08-16)
+
+The first hosted PR run passed both native Worker runtime closures and image
+smoke checks, then Trivy's current database rejected the Go `1.26.5` binaries
+for eight fixed HIGH standard-library vulnerabilities. The reported fixed
+release is Go `1.26.6`. Keep the required same-branch CI remediation narrow and
+version-consistent by adding exactly these seven tracked modify paths:
+
+```text
+backend/go.mod
+backend/internal/backupasset/processing/capabilities/sandbox.go
+deploy/worker/Dockerfile
+deploy/allinone/Dockerfile
+scripts/test-asset-worker.sh
+scripts/test-asset-worker.test.sh
+README.md
+```
+
+The delivery union is therefore `9 current + 64 create + 91 modify = 164`
+unique, disjoint paths. This amendment changes no Recovery behavior, model,
+migration, route, setting or frontend path. The Worker builder reference must
+use the verified multi-architecture `golang:1.26.6-alpine` digest, while the
+All-in-One builders and `backend/go.mod` use the same patch release. Rerun the
+complete local gates and hosted PR CI; do not waive or ignore the scanner.
+
 ##### T8-A: encrypted root v2 and target-root authority
 
 **Files:**
@@ -2876,8 +2901,10 @@ written amendment before edit.
 
   Also run the established forbidden direct-log, private-canary, migration,
   manifest-disjointness and protected-user-file scans. Expected: every command
-  passes; the manifest union is exactly 157 and the user's main-worktree
-  `.codex/agents/trellis-research.toml` remains outside this worktree delta.
+  passes; the then-current V1 manifest union is exactly 157 and the user's
+  main-worktree `.codex/agents/trellis-research.toml` remains outside this
+  worktree delta. After the hosted-CI security amendment, rerun the same
+  structural gate against the amended 164-path delivery union.
 
 - [x] **Step V4: dispatch one fresh full-scope `trellis-check`.** Require zero
   open Critical or Important defect across sections 48.1--48.7, runtime
@@ -2904,11 +2931,11 @@ written amendment before edit.
 | Task 9 target-root and downgrade Admin route ownership | sections 10, 48.1 | Task 9 route/response/audit/Swagger matrix |
 
 The focused PRD has no unresolved product, scope, compatibility, risk or
-acceptance decision. The design contains no placeholder, the 157-path manifest
-is exact and disjoint by amendment, and every acceptance row has a TDD slice
-plus a whole-scope gate. The approved plan is implemented and whole-scope
-checked through T8-V1; stop before delivery or Task 9 until the controller
-separately authorizes the next phase.
+acceptance decision. The design contains no placeholder, the 164-path delivery
+manifest is exact and disjoint by amendment, and every acceptance row has a
+TDD slice plus a whole-scope gate. The approved plan is implemented and
+whole-scope checked through T8-V1; stop before Task 9 until Task 8 delivery,
+hosted CI, merge, post-merge automation and cleanup complete.
 
 ### Task 9: API, RBAC, Audit And Swagger
 

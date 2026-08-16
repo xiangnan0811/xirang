@@ -10238,3 +10238,60 @@ managed recovery runtime`) on `codex/task8-managed-runtime`. No push, PR, CI,
 merge, worktree cleanup or task archive occurred. Child 13 remains
 `in_progress`, the parent remains planning, and Tasks 9--10 remain
 `not_executed`.
+
+### Task 8 hosted-CI security remediation evidence (2026-08-16)
+
+The controller pushed the reviewed Task 8 work and opened ready PR #424. Its
+first hosted CI run `31918892574` passed both native Worker runtime-closure
+jobs, the Worker image build/smoke path, Docker Build, Frontend Test & Build,
+PR Title, Doc Freshness, Migration UTC Safety, Backend Test & Build and
+PostgreSQL Migration Parity. The amd64 and arm64 Worker scan jobs
+`95095555595` and `95095555560` each built and smoked their images successfully
+before Trivy 0.70.0's current database reported eight fixed HIGH Go
+standard-library CVEs in binaries built by Go 1.26.5. Every finding named Go
+1.26.6 as the fixed release. This was a genuine hosted security RED, not a
+Recovery behavior or test failure, and the scanner was not waived.
+
+The bounded same-branch remediation upgrades `backend/go.mod`, both
+All-in-One Go builders, the digest-pinned multi-architecture Worker builder,
+the Processing toolchain inventory, its smoke contracts and README to Go
+1.26.6. The Worker builder uses verified multi-architecture digest
+`sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df`.
+No Recovery behavior, model, migration, route, setting or frontend path
+changed. The exact delivery manifest is now `9 current + 64 create + 91 modify
+= 164` unique, disjoint paths.
+
+Fresh local RED-to-GREEN evidence after the toolchain update:
+
+```text
+bash scripts/test-asset-worker.test.sh                       PASS
+bash scripts/check-doc-freshness.sh                         PASS
+bash scripts/check-doc-freshness.test.sh                    PASS
+docker build --platform linux/amd64 -f deploy/worker/Dockerfile . PASS
+Trivy 0.70.0 --severity HIGH,CRITICAL --ignore-unfixed      PASS, 0 findings
+go test ./... -count=1                                      PASS
+go test -race ./internal/backupasset/processing \
+  ./internal/backupasset/repository \
+  ./internal/backupasset/recovery \
+  ./internal/backupasset/runtime ./internal/api \
+  ./cmd/server -count=1                                      PASS
+go vet ./...                                                 PASS
+govulncheck ./...                                            PASS, 0 called vulnerabilities
+make lint-backend                                            PASS, 0 issues
+make backend-build                                           PASS
+make check                                                   PASS
+```
+
+The race packages reported Processing 8.783s, Repository 15.987s, Recovery
+116.576s, Runtime 14.047s, API 2.627s and server 1.618s. `make check` again
+passed 1,388 frontend tests in 168 files and the Vite build with only the same
+pre-existing non-blocking `export-job-panel.tsx` warning.
+
+The disposable PostgreSQL 18 rerun used a random unprinted password,
+loopback-only random port and tmpfs at `/var/lib/postgresql`. The complete
+Recovery `Postgres` selector reported 55 pass, 0 skip in both normal and race
+modes. Test schemas, volume mounts, exact container residue and matching named
+volume residue were all zero after cleanup. Hosted CI must now rerun against
+the remediation commit; merge, post-merge automation, delivery bookkeeping and
+workspace cleanup remain pending. Child 13 stays `in_progress`, the parent
+stays planning, and Tasks 9--10 remain `not_executed`.
