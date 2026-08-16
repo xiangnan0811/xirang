@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.48.0](https://github.com/xiangnan0811/xirang/compare/v0.47.0...v0.48.0) (2026-08-16)
+
+
+### ✨ Features
+
+* **backup:** add typed recovery wizard ([#430](https://github.com/xiangnan0811/xirang/issues/430)) ([20c32a9](https://github.com/xiangnan0811/xirang/commit/20c32a969489e4ab9bf9719ed914585c0ac13f84))
+
 ## [0.47.0](https://github.com/xiangnan0811/xirang/compare/v0.46.0...v0.47.0) (2026-08-16)
 
 
