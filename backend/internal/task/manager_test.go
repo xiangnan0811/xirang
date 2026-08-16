@@ -444,11 +444,20 @@ func TestTriggerRegistersCancelOwnerBeforeReturning(t *testing.T) {
 		}).Error; err != nil {
 			t.Fatal(err)
 		}
+		// Hold the async runner at its context-aware semaphore so the test
+		// observes the trigger-owned cancellation boundary, not a restore that
+		// happened to finish before Cancel was called.
+		for range cap(manager.semaphore) {
+			manager.semaphore <- struct{}{}
+		}
+		defer func() {
+			for range cap(manager.semaphore) {
+				<-manager.semaphore
+			}
+		}()
 
-		previousProcs := runtime.GOMAXPROCS(1)
 		runID, triggerErr := manager.TriggerRestore(taskEntity.ID, "/tmp/restore-test")
 		_, registered := manager.chainRunner.Load(taskEntity.ID)
-		runtime.GOMAXPROCS(previousProcs)
 
 		if triggerErr != nil {
 			t.Fatalf("trigger legacy restore: %v", triggerErr)

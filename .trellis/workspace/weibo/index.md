@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 39
+- **Total Sessions**: 40
 - **Last Active**: 2026-08-16
 <!-- @@@/auto:current-status -->
 
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 40 | 2026-08-16 | Task 8 post-closure CI stabilization | `6e91869` | `codex/task8-ci-stabilization` |
 | 39 | 2026-08-16 | Task 8 delivery closure | `1c91472`, `2136b78` | `codex/task8-delivery-closure` |
 | 38 | 2026-08-16 | Task 8 managed recovery runtime complete | `82dc261fe6e185f4e6e83dbe13f0d0dd12102011` | `codex/task8-managed-runtime` |
 | 37 | 2026-08-12 | Complete dependency update governance evidence | `24f58e984912ea2f4a67a1d602ac8345f6f0a47d` | `codex/chore-dependency-governance-evidence` |

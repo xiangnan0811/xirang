@@ -1584,3 +1584,49 @@ remaining Child 13 Task 9-10 boundary.
 - Merge PR #426 after required CI passes, monitor its post-merge automation, resynchronize
   local `main`, remove both Task 8 branches/worktrees, then begin Task 9 on a
   fresh dedicated branch when separately started.
+
+
+## Session 40: Task 8 post-closure CI stabilization
+
+**Date**: 2026-08-16
+**Task**: Task 8 post-closure CI stabilization
+**Branch**: `codex/task8-ci-stabilization`
+
+### Summary
+
+PR #426 merged as `42a317c`; its exact-sha main CI exposed the same
+legacy-restore cancellation fixture race twice. Opened PR #427 with a bounded
+test-only synchronization fix and kept Task 9 stopped pending final delivery
+gates and cleanup.
+
+### Main Changes
+
+- Diagnosed main run `31921414701` attempts 1 and 2 from hosted logs; all other
+  completed backend-independent jobs were green.
+- Replaced the legacy restore subtest's scheduler-dependent `GOMAXPROCS`
+  assumption with the manager's existing context-aware semaphore boundary.
+- Kept production code unchanged and preserved open Release Please PR #425.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6e91869` | `test(task): stabilize restore cancellation boundary` |
+
+### Testing
+
+- [OK] Focused normal 100 rounds and race 50 rounds passed.
+- [OK] Whole `internal/task` 10 rounds and related cancellation race matrix 20
+  rounds passed.
+- [OK] `go vet ./internal/task`, `make lint-backend`, gofmt and diff checks
+  passed.
+
+### Status
+
+[IN PROGRESS] **PR #427 is the final Task 8 delivery guard**
+
+### Next Steps
+
+- Merge PR #427 only after required CI passes, monitor exact-sha main CI and
+  Release Please, then synchronize `main` and remove all Task 8 delivery
+  branches/worktrees. Keep Child 13 active and Tasks 9-10 unexecuted.
