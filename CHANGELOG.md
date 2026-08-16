@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.47.0](https://github.com/xiangnan0811/xirang/compare/v0.46.0...v0.47.0) (2026-08-16)
+
+
+### ✨ Features
+
+* **backup-assets:** complete managed recovery runtime ([#424](https://github.com/xiangnan0811/xirang/issues/424)) ([1c91472](https://github.com/xiangnan0811/xirang/commit/1c914722e0d669a793b8e2f8f5ed20152f61c544))
+* **recovery:** add controlled recovery API ([#428](https://github.com/xiangnan0811/xirang/issues/428)) ([2538f32](https://github.com/xiangnan0811/xirang/commit/2538f325ff0fabf5ebeca3b5ceda98755e885397))
+
 ## [0.46.0](https://github.com/xiangnan0811/xirang/compare/v0.45.0...v0.46.0) (2026-08-12)
 
 
