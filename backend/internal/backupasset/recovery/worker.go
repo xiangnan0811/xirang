@@ -315,6 +315,145 @@ func (coordinator *WorkerCoordinator) ExecuteClaimWithRsyncTargetWriter(
 	return coordinator.executeClaim(ctx, claim, source, "", writer, target)
 }
 
+// ExecuteClaimWithRsyncTargetWriterAndDeleteGrant resumes the same active
+// fenced claim with one request-scoped exact-mirror delete secret. The secret
+// is consumed by the existing durable grant validator and is never retained.
+func (coordinator *WorkerCoordinator) ExecuteClaimWithRsyncTargetWriterAndDeleteGrant(
+	ctx context.Context,
+	claim RecoveryWorkerClaim,
+	source provider.RsyncRestoreSource,
+	writer provider.RsyncTargetWriter,
+	target provider.RsyncBoundRemoteTarget,
+	deleteGrantSecret string,
+) error {
+	if writer == nil || !validAuthorizationGrantSecret(deleteGrantSecret) {
+		return ErrInvalidRecoveryWorker
+	}
+	return coordinator.executeClaim(ctx, claim, source, deleteGrantSecret, writer, target)
+}
+
+// ValidateDeleteAuthorizationHandoff reuses the ordinary checkpoint and grant
+// validators to prove that one transient secret belongs to the exact durable
+// pause. A true result means the grant is already durably consumed.
+func (coordinator *WorkerCoordinator) ValidateDeleteAuthorizationHandoff(
+	ctx context.Context,
+	request RecoveryAuthorizationRequest,
+	result RecoveryAuthorizationResult,
+) (bool, error) {
+	if coordinator == nil || coordinator.db == nil || coordinator.now == nil ||
+		request.Operation != AuthorizationReceiptDeleteAuthorize ||
+		request.Category != AuthorizationReceiptCategoryExactMirrorDelete || request.RequesterID == 0 ||
+		!validOpaqueID(request.PlanID) || !validOpaqueID(request.JobID) || !validOpaqueID(request.CheckpointID) ||
+		!validOpaqueID(request.AttemptID) || request.ExpectedPlanRevision == 0 ||
+		!validAuthorizationGrantSecret(request.GrantSecret) || result.PlanID != request.PlanID ||
+		result.JobID != request.JobID || result.AttemptID != request.AttemptID ||
+		!validOpaqueID(result.GrantID) || result.PlanTransitionRevision != request.ExpectedPlanRevision {
+		return false, ErrRecoveryWorkerFenceLost
+	}
+	ctx = recoveryWorkerContext(ctx)
+	consumed := false
+	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		now := coordinator.now().UTC()
+		var plan model.BackupAssetRecoveryPlan
+		loaded := tx.WithContext(ctx).Where("id = ? AND requester_id = ?", request.PlanID, request.RequesterID).
+			Limit(1).Find(&plan)
+		if loaded.Error != nil {
+			return loaded.Error
+		}
+		if loaded.RowsAffected != 1 || plan.TransitionRevision != request.ExpectedPlanRevision ||
+			TargetMode(plan.TargetMode) != TargetModeInPlace || ConflictPolicy(plan.ConflictPolicy) != ConflictExactMirror {
+			return ErrRecoveryWorkerFenceLost
+		}
+		var job model.BackupAssetRecoveryJob
+		loaded = tx.WithContext(ctx).Where("id = ? AND plan_id = ?", request.JobID, plan.ID).Limit(1).Find(&job)
+		if loaded.Error != nil {
+			return loaded.Error
+		}
+		if loaded.RowsAffected != 1 || TargetMode(job.TargetMode) != TargetModeInPlace {
+			return ErrRecoveryWorkerFenceLost
+		}
+		var preflight model.BackupAssetRecoveryPreflight
+		loaded = tx.WithContext(ctx).Where("id = ? AND plan_id = ?", job.PreflightID, plan.ID).Limit(1).Find(&preflight)
+		if loaded.Error != nil {
+			return loaded.Error
+		}
+		if loaded.RowsAffected != 1 {
+			return ErrRecoveryWorkerFenceLost
+		}
+		var attempt model.BackupAssetRecoveryAttempt
+		loaded = tx.WithContext(ctx).Where("id = ? AND job_id = ?", request.AttemptID, job.ID).Limit(1).Find(&attempt)
+		if loaded.Error != nil {
+			return loaded.Error
+		}
+		var nodes []model.BackupAssetRecoveryNodeLease
+		if loaded = tx.WithContext(ctx).Where("job_id = ? AND attempt_id = ?", job.ID, attempt.ID).Limit(2).Find(&nodes); loaded.Error != nil {
+			return loaded.Error
+		}
+		var sources []model.RecoveryPointLease
+		if loaded = tx.WithContext(ctx).Where("holder_type = ? AND owner_id = ? AND attempt_id = ?",
+			backupasset.LeaseHolderRecoveryJob, job.ID, attempt.ID).Limit(2).Find(&sources); loaded.Error != nil {
+			return loaded.Error
+		}
+		if attempt.ID == "" || attempt.LeaseExpiresAt == nil || len(nodes) != 1 || len(sources) != 1 ||
+			nodes[0].AttemptID == nil || *nodes[0].AttemptID != attempt.ID ||
+			nodes[0].OwnerID != attempt.OwnerID || nodes[0].Fence != attempt.Fence {
+			return ErrRecoveryWorkerFenceLost
+		}
+		claim := RecoveryWorkerClaim{
+			JobID: job.ID, AttemptID: attempt.ID, NodeLeaseID: nodes[0].ID, WorkerID: attempt.OwnerID,
+			AttemptFence: attempt.Fence, NodeFence: nodes[0].Fence, TransitionRevision: job.TransitionRevision,
+			LeaseExpiresAt: attempt.LeaseExpiresAt.UTC(), AbsoluteDeadline: sources[0].AbsoluteDeadline.UTC(),
+			SourceFence: recoverySourceFence(sources[0]),
+		}
+		if !validRecoveryWorkerClaim(claim) {
+			return ErrRecoveryWorkerFenceLost
+		}
+		var checkpoints []model.BackupAssetRecoveryCheckpoint
+		if loaded = tx.WithContext(ctx).Where("job_id = ?", job.ID).Order("sequence ASC").Find(&checkpoints); loaded.Error != nil {
+			return loaded.Error
+		}
+		operations, err := loadInPlaceOrdinaryCheckpointOperationsTx(ctx, tx, plan, preflight, job)
+		if err != nil {
+			return ErrRecoveryWorkerFenceLost
+		}
+		required, hasRequired, _, err := validateInPlaceOrdinaryCheckpointHistory(
+			plan, job, claim, checkpoints, operations, now,
+		)
+		if err != nil || !hasRequired || required.ID != request.CheckpointID ||
+			required.AttemptID != request.AttemptID || required.AttemptFence != claim.AttemptFence ||
+			required.NodeFence != claim.NodeFence {
+			return ErrRecoveryWorkerFenceLost
+		}
+		requiredConsumed, consumedCheckpoint, found := ordinaryConsumedDeleteCheckpoints(checkpoints)
+		if found {
+			if requiredConsumed.ID != required.ID || consumedCheckpoint.DeleteGrantID != result.GrantID ||
+				validateConsumedOrdinaryDeleteGrantTx(ctx, tx, plan, job, requiredConsumed, consumedCheckpoint) != nil {
+				return ErrRecoveryWorkerFenceLost
+			}
+			consumed = true
+			return nil
+		}
+		if attempt.State != string(AttemptStateRunning) || !attempt.MutationArmed ||
+			attempt.LeaseExpiresAt == nil || !attempt.LeaseExpiresAt.UTC().After(now) ||
+			nodes[0].State != "active" || !nodes[0].LeaseExpiresAt.UTC().After(now) ||
+			sources[0].Status != string(backupasset.LeaseActive) ||
+			!sources[0].LeaseExpiresAt.UTC().After(now) || !sources[0].AbsoluteDeadline.UTC().After(now) {
+			return ErrRecoveryWorkerFenceLost
+		}
+		grant, err := validatePendingOrdinaryDeleteGrantTx(
+			ctx, tx, plan, job, claim, required, request.GrantSecret, now,
+		)
+		if err != nil || grant.ID != result.GrantID {
+			return ErrRecoveryWorkerFenceLost
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return consumed, nil
+}
+
 // RsyncTargetWriter returns the only Provider-facing adapter that can consume
 // a declaration registered by this coordinator. The adapter carries no target
 // authority of its own; the private item permit remains inside Recovery.

@@ -66,6 +66,8 @@ func TestRecoverySwaggerDocumentsFullSecuredRouteAndPublicIntentMatrix(t *testin
 		{"post", "/recovery-plans/{id}/execute", "202"},
 		{"post", "/recovery-plans/{id}/cancel", "200"},
 		{"get", "/recovery-jobs/{id}", "200"},
+		{"get", "/recovery-jobs/{id}/items", "200"},
+		{"get", "/recovery-jobs/{id}/results", "200"},
 		{"post", "/recovery-jobs/{id}/cancel", "200"},
 		{"post", "/recovery-jobs/{id}/exact-mirror-delete-authorizations", "200"},
 		{"post", "/recovery-jobs/{id}/results/{resultId}/download-ticket", "200"},
@@ -180,6 +182,8 @@ func TestRecoverySwaggerDocumentsFullSecuredRouteAndPublicIntentMatrix(t *testin
 	}{
 		{"post", "/recovery-plans", "201", prefix + "backupRecoveryCreatePlanResponse"},
 		{"post", "/recovery-plans/{id}/preflights", "200", "xirang_backend_internal_backupasset_recovery.RecoveryPreflightView"},
+		{"get", "/recovery-jobs/{id}/items", "200", "xirang_backend_internal_backupasset_recovery.RecoveryJobItemPage"},
+		{"get", "/recovery-jobs/{id}/results", "200", "xirang_backend_internal_backupasset_recovery.RecoveryResultPage"},
 		{"post", "/recovery-jobs/{id}/results/retain", "200", prefix + "backupRecoveryRetainResponse"},
 		{"post", "/settings/backup-assets/recovery/target-roots", "200", prefix + "backupRecoveryTargetRootResponse"},
 		{"put", "/settings/backup-assets/recovery/target-roots/{nodeId}/{rootId}", "200", prefix + "backupRecoveryTargetRootResponse"},
@@ -582,6 +586,48 @@ func TestRecoveryPlanAndJobReadCancelHandlersDelegateOwnershipToRecovery(t *test
 		if strings.Contains(strings.ToLower(planResponse.Body.String()+jobResponse.Body.String()), private) {
 			t.Fatalf("safe views exposed private field %q: plan=%s job=%s", private, planResponse.Body.String(), jobResponse.Body.String())
 		}
+	}
+}
+
+func TestRecoveryJobCollectionHandlersParseCanonicalServerPage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	jobID := strings.Repeat("d", 32)
+	service := &backupRecoveryLifecycleServiceFake{
+		itemPage: recovery.RecoveryJobItemPage{
+			SchemaVersion: 1, JobID: jobID, Page: 2, PageSize: 25, Total: 30,
+			Items: []recovery.RecoveryJobItemView{},
+		},
+		resultPage: recovery.RecoveryResultPage{
+			SchemaVersion: 1, JobID: jobID, Page: 1, PageSize: 10, Total: 1,
+			Items: []recovery.RecoveryResultView{},
+		},
+	}
+	handler := NewBackupRecoveryHandler(nil, nil, nil).WithRecoveryLifecycle(service)
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set(middleware.CtxUserID, uint(17)); c.Next() })
+	router.GET("/api/v1/recovery-jobs/:id/items", handler.GetJobItems)
+	router.GET("/api/v1/recovery-jobs/:id/results", handler.GetJobResults)
+
+	items := httptest.NewRecorder()
+	router.ServeHTTP(items, httptest.NewRequest(http.MethodGet,
+		"/api/v1/recovery-jobs/"+jobID+"/items?page=2&page_size=25", nil))
+	if items.Code != http.StatusOK || len(service.itemPageReads) != 1 ||
+		service.itemPageReads[0].RequesterID != 17 || service.itemPageReads[0].Page.Page != 2 ||
+		service.itemPageReads[0].Page.PageSize != 25 {
+		t.Fatalf("item page status=%d calls=%+v body=%s", items.Code, service.itemPageReads, items.Body.String())
+	}
+	results := httptest.NewRecorder()
+	router.ServeHTTP(results, httptest.NewRequest(http.MethodGet,
+		"/api/v1/recovery-jobs/"+jobID+"/results?page_size=10", nil))
+	if results.Code != http.StatusOK || len(service.resultPageReads) != 1 ||
+		service.resultPageReads[0].Page.Page != 0 || service.resultPageReads[0].Page.PageSize != 10 {
+		t.Fatalf("result page status=%d calls=%+v body=%s", results.Code, service.resultPageReads, results.Body.String())
+	}
+	invalid := httptest.NewRecorder()
+	router.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet,
+		"/api/v1/recovery-jobs/"+jobID+"/items?page=01", nil))
+	if invalid.Code != http.StatusBadRequest || len(service.itemPageReads) != 1 {
+		t.Fatalf("noncanonical page status=%d calls=%+v body=%s", invalid.Code, service.itemPageReads, invalid.Body.String())
 	}
 }
 
@@ -1222,20 +1268,30 @@ type backupRecoveryObjectRequest struct {
 }
 
 type backupRecoveryLifecycleServiceFake struct {
-	plan          recovery.RecoveryPlanView
-	job           recovery.RecoveryJobView
-	planReads     []backupRecoveryObjectRequest
-	jobReads      []backupRecoveryObjectRequest
-	planMutations []recovery.RecoveryPlanMutationRequest
-	planCreate    recovery.CreatePlanResult
-	planCreates   []recovery.CreatePlanIntentRequest
-	preflight     recovery.RecoveryPreflightView
-	preflights    []recovery.RecoveryPreflightRequest
-	jobCancels    []backupRecoveryJobMutationRequest
-	retained      recovery.RetainedRecoveryResultSet
-	retains       []recovery.RetainRecoveryResultsRequest
-	cleanup       recovery.RecoveryResultCleanupView
-	cleanups      []recovery.RecoveryResultCleanupRequest
+	plan            recovery.RecoveryPlanView
+	job             recovery.RecoveryJobView
+	planReads       []backupRecoveryObjectRequest
+	jobReads        []backupRecoveryObjectRequest
+	itemPage        recovery.RecoveryJobItemPage
+	resultPage      recovery.RecoveryResultPage
+	itemPageReads   []backupRecoveryPageRead
+	resultPageReads []backupRecoveryPageRead
+	planMutations   []recovery.RecoveryPlanMutationRequest
+	planCreate      recovery.CreatePlanResult
+	planCreates     []recovery.CreatePlanIntentRequest
+	preflight       recovery.RecoveryPreflightView
+	preflights      []recovery.RecoveryPreflightRequest
+	jobCancels      []backupRecoveryJobMutationRequest
+	retained        recovery.RetainedRecoveryResultSet
+	retains         []recovery.RetainRecoveryResultsRequest
+	cleanup         recovery.RecoveryResultCleanupView
+	cleanups        []recovery.RecoveryResultCleanupRequest
+}
+
+type backupRecoveryPageRead struct {
+	RequesterID uint
+	JobID       string
+	Page        recovery.RecoveryPageRequest
 }
 
 type backupRecoveryJobMutationRequest struct {
@@ -1270,6 +1326,26 @@ func (service *backupRecoveryLifecycleServiceFake) GetJob(
 ) (recovery.RecoveryJobView, error) {
 	service.jobReads = append(service.jobReads, backupRecoveryObjectRequest{RequesterID: requesterID, ID: id})
 	return service.job, nil
+}
+
+func (service *backupRecoveryLifecycleServiceFake) ListJobItems(
+	_ context.Context,
+	requesterID uint,
+	jobID string,
+	page recovery.RecoveryPageRequest,
+) (recovery.RecoveryJobItemPage, error) {
+	service.itemPageReads = append(service.itemPageReads, backupRecoveryPageRead{RequesterID: requesterID, JobID: jobID, Page: page})
+	return service.itemPage, nil
+}
+
+func (service *backupRecoveryLifecycleServiceFake) ListPublishedResults(
+	_ context.Context,
+	requesterID uint,
+	jobID string,
+	page recovery.RecoveryPageRequest,
+) (recovery.RecoveryResultPage, error) {
+	service.resultPageReads = append(service.resultPageReads, backupRecoveryPageRead{RequesterID: requesterID, JobID: jobID, Page: page})
+	return service.resultPage, nil
 }
 
 func (service *backupRecoveryLifecycleServiceFake) CreatePlan(

@@ -308,6 +308,53 @@ func TestManagedRecoveryAuthorizationFacadeBorrowsPublishedAdmissionAndWakesExec
 	}
 }
 
+func TestManagedRecoveryAuthorizationFacadeOffersExactDeleteHandoffOnFreshAndReplay(t *testing.T) {
+	publication := newManagedRecoveryPublication()
+	facade := &managedRecoveryAuthorizationFacade{publication: publication}
+	claim := recovery.RecoveryWorkerClaim{JobID: strings.Repeat("a", 32), AttemptID: strings.Repeat("b", 32)}
+	worker, err := newManagedRecoveryWorker(managedRecoveryWorkerDependencies{
+		Coordinator: &managedRecoveryWorkerCoordinatorFake{}, WorkerID: "recovery-facade-delete-worker",
+		WorkerConcurrency: 1, TakeoverCadence: time.Hour, RetryBase: time.Second, RetryMaxDelay: time.Minute,
+		Policy: managedRecoveryWorkerPolicyForTest(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.trackActiveClaim(claim)
+	request := recovery.RecoveryAuthorizationRequest{
+		RequesterID: 7, PlanID: strings.Repeat("1", 32), JobID: claim.JobID,
+		CheckpointID: strings.Repeat("2", 32), AttemptID: claim.AttemptID, ExpectedPlanRevision: 8,
+		Operation:   recovery.AuthorizationReceiptDeleteAuthorize,
+		Category:    recovery.AuthorizationReceiptCategoryExactMirrorDelete,
+		GrantSecret: strings.Repeat("s", 43),
+	}
+	result := recovery.RecoveryAuthorizationResult{
+		PlanID: request.PlanID, JobID: request.JobID, AttemptID: request.AttemptID,
+		GrantID: strings.Repeat("3", 32), PlanTransitionRevision: request.ExpectedPlanRevision,
+	}
+	worker.recordDeleteAuthorizationPause(managedRecoveryDeleteAuthorizationPause{
+		JobID: request.JobID, PlanID: request.PlanID, CheckpointID: request.CheckpointID,
+		AttemptID: request.AttemptID, ExpectedPlanRevision: request.ExpectedPlanRevision,
+	})
+	validator := &managedRecoveryDeleteHandoffValidatorFake{}
+	graph := &managedRecoveryGraph{
+		admissionEnabled: true, authorization: &managedRecoveryAuthorizationBackendFake{result: result}, worker: worker,
+		deleteHandoffValidator: validator,
+	}
+	if err := publication.publish(graph); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := facade.Authorize(context.Background(), request); err != nil || got.GrantID != result.GrantID {
+		t.Fatalf("fresh delete facade result=%+v err=%v", got, err)
+	}
+	if got, found, err := facade.ReplayAuthorization(context.Background(), request); err != nil || !found || got.GrantID != result.GrantID {
+		t.Fatalf("replay delete facade result=%+v found=%t err=%v", got, found, err)
+	}
+	if validator.calls != 2 {
+		t.Fatalf("delete handoff validator calls=%d, want fresh and replay", validator.calls)
+	}
+}
+
 func TestRecoveryProductionAuthorityDependencyLossClosesEffectsWithoutUnpublishingMaintenance(t *testing.T) {
 	publication := newManagedRecoveryPublication()
 	authorization := &managedRecoveryAuthorizationBackendFake{}
@@ -546,6 +593,7 @@ type managedRecoveryRestoreRequestBuilderFake struct {
 	claim    recovery.RecoveryWorkerClaim
 	request  provider.RestoreRequest
 	buildErr error
+	pause    *managedRecoveryDeleteAuthorizationPause
 }
 
 func (builder *managedRecoveryRestoreRequestBuilderFake) BuildRsyncRestoreRequest(
@@ -559,6 +607,17 @@ func (builder *managedRecoveryRestoreRequestBuilderFake) BuildRsyncRestoreReques
 func (*managedRecoveryRestoreRequestBuilderFake) ReleaseRsyncRestoreRequest(
 	recovery.RecoveryWorkerClaim,
 ) {
+}
+
+func (builder *managedRecoveryRestoreRequestBuilderFake) TakeDeleteAuthorizationPause(
+	_ recovery.RecoveryWorkerClaim,
+) (managedRecoveryDeleteAuthorizationPause, bool) {
+	if builder.pause == nil {
+		return managedRecoveryDeleteAuthorizationPause{}, false
+	}
+	pause := *builder.pause
+	builder.pause = nil
+	return pause, true
 }
 
 func TestManagedRecoveryClaimExecutorUsesRepositoryRestorePort(t *testing.T) {
@@ -583,6 +642,16 @@ func TestManagedRecoveryClaimExecutorUsesRepositoryRestorePort(t *testing.T) {
 	if len(port.requests) != 1 || port.requests[0].Rsync == nil ||
 		port.requests[0].Rsync.SourceRef.PlanID != request.Rsync.SourceRef.PlanID {
 		t.Fatalf("restore port requests=%+v, want one closed Rsync request", port.requests)
+	}
+	pause := managedRecoveryDeleteAuthorizationPause{
+		JobID: strings.Repeat("1", 32), PlanID: strings.Repeat("2", 32),
+		CheckpointID: strings.Repeat("3", 32), AttemptID: strings.Repeat("4", 32), ExpectedPlanRevision: 5,
+	}
+	builder.pause = &pause
+	var pauseErr *managedRecoveryDeleteAuthorizationPause
+	if err := executor.ExecuteResolvedClaim(context.Background(), claim); !errors.As(err, &pauseErr) ||
+		pauseErr == nil || *pauseErr != pause {
+		t.Fatalf("actual claim executor side-channel pause=%+v err=%v", pauseErr, err)
 	}
 }
 
@@ -3548,6 +3617,124 @@ func TestManagedRecoveryWorkerExecutesEachDurableClaimThroughRecovery(t *testing
 	}
 }
 
+func TestManagedRecoveryWorkerResumesSameActiveClaimFromOneShotDeleteHandoff(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	claim := recovery.RecoveryWorkerClaim{
+		JobID: strings.Repeat("a", 32), AttemptID: strings.Repeat("b", 32),
+		NodeLeaseID: strings.Repeat("c", 32), WorkerID: "recovery-worker-delete-handoff",
+		AttemptFence: 2, NodeFence: 3, TransitionRevision: 4,
+		LeaseExpiresAt: now.Add(time.Minute), AbsoluteDeadline: now.Add(time.Hour),
+		SourceFence: backupasset.LeaseFence{
+			LeaseID: strings.Repeat("d", 32), RecoveryPointID: strings.Repeat("e", 32),
+			HolderType: backupasset.LeaseHolderRecoveryJob, OwnerID: strings.Repeat("a", 32),
+			AttemptID: strings.Repeat("b", 32), FenceToken: strings.Repeat("f", 64),
+		},
+	}
+	handoff := managedRecoveryDeleteAuthorizationHandoff{
+		JobID: claim.JobID, PlanID: strings.Repeat("1", 32), CheckpointID: strings.Repeat("2", 32),
+		AttemptID: claim.AttemptID, ExpectedPlanRevision: 8, GrantID: strings.Repeat("3", 32),
+		GrantSecret: strings.Repeat("s", 43),
+	}
+	executor := &recoveryDeleteHandoffExecutorFake{
+		paused: make(chan struct{}), resumed: make(chan recoveryDeleteResumeObservation, 1),
+		pause: managedRecoveryDeleteAuthorizationPause{
+			JobID: handoff.JobID, PlanID: handoff.PlanID, CheckpointID: handoff.CheckpointID,
+			AttemptID: handoff.AttemptID, ExpectedPlanRevision: handoff.ExpectedPlanRevision,
+		},
+	}
+	coordinator := &managedRecoveryWorkerCoordinatorFake{}
+	worker, err := newManagedRecoveryWorker(managedRecoveryWorkerDependencies{
+		Coordinator: coordinator, Executor: executor, WorkerID: claim.WorkerID, WorkerConcurrency: 1,
+		TakeoverCadence: time.Hour, RetryBase: time.Second, RetryMaxDelay: time.Minute,
+		Policy: managedRecoveryWorkerPolicyForTest(), Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.trackActiveClaim(claim)
+	done := make(chan error, 1)
+	go func() { done <- worker.executeClaim(context.Background(), claim, true, nil) }()
+	select {
+	case <-executor.paused:
+	case <-time.After(time.Second):
+		t.Fatal("same-claim execution did not report durable delete pause")
+	}
+	contradictory := handoff
+	contradictory.CheckpointID = strings.Repeat("4", 32)
+	if worker.offerDeleteAuthorization(contradictory) {
+		t.Fatal("contradictory checkpoint handoff was accepted")
+	}
+	if !worker.offerDeleteAuthorization(handoff) {
+		t.Fatal("active paused claim rejected exact one-shot delete handoff")
+	}
+	select {
+	case resumed := <-executor.resumed:
+		if resumed.claim.JobID != claim.JobID || resumed.claim.AttemptID != claim.AttemptID ||
+			resumed.secret != handoff.GrantSecret {
+			t.Fatalf("resumed claim/secret=%+v/%q", resumed.claim, resumed.secret)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("delete handoff did not resume the same active claim")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("resumed same-claim execution: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("resumed same-claim execution did not complete")
+	}
+	worker.activeMu.Lock()
+	_, rawSlotRetained := worker.deleteHandoffs[claim.JobID]
+	fingerprint, fingerprintRetained := worker.deleteOffers[claim.JobID]
+	worker.activeMu.Unlock()
+	if rawSlotRetained || !fingerprintRetained ||
+		strings.Contains(fmt.Sprintf("%+v", fingerprint), handoff.GrantSecret) {
+		t.Fatalf("delete handoff secret lifecycle slot=%t fingerprint=%+v", rawSlotRetained, fingerprint)
+	}
+	if !worker.offerDeleteAuthorization(handoff) {
+		t.Fatal("same exact in-flight handoff replay was not accepted idempotently")
+	}
+}
+
+func TestManagedRecoveryWorkerPausedDeleteDeadlineDoesNotWaitForFinishedExecutor(t *testing.T) {
+	now := time.Now().UTC()
+	claim := recovery.RecoveryWorkerClaim{
+		JobID: strings.Repeat("a", 32), AttemptID: strings.Repeat("b", 32), NodeLeaseID: strings.Repeat("c", 32),
+		WorkerID: "recovery-worker-paused-deadline", AttemptFence: 1, NodeFence: 1, TransitionRevision: 1,
+		LeaseExpiresAt: now.Add(time.Minute), AbsoluteDeadline: now.Add(time.Hour),
+		SourceFence: backupasset.LeaseFence{LeaseID: strings.Repeat("d", 32), RecoveryPointID: strings.Repeat("e", 32),
+			HolderType: backupasset.LeaseHolderRecoveryJob, OwnerID: strings.Repeat("a", 32),
+			AttemptID: strings.Repeat("b", 32), FenceToken: strings.Repeat("f", 64)},
+	}
+	executor := &recoveryDeleteHandoffExecutorFake{
+		paused: make(chan struct{}), resumed: make(chan recoveryDeleteResumeObservation, 1),
+		pause: managedRecoveryDeleteAuthorizationPause{JobID: claim.JobID, PlanID: strings.Repeat("1", 32),
+			CheckpointID: strings.Repeat("2", 32), AttemptID: claim.AttemptID, ExpectedPlanRevision: 2},
+	}
+	worker, err := newManagedRecoveryWorker(managedRecoveryWorkerDependencies{
+		Coordinator: &managedRecoveryWorkerCoordinatorFake{}, Executor: executor, WorkerID: claim.WorkerID,
+		WorkerConcurrency: 1, TakeoverCadence: time.Hour, RetryBase: time.Second, RetryMaxDelay: time.Minute,
+		Policy: managedRecoveryWorkerPolicyForTest(), Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.trackActiveClaim(claim)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- worker.executeClaim(ctx, claim, true, nil) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("paused deadline error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("paused delete deadline deadlocked waiting for an already-finished executor")
+	}
+}
+
 func TestRecoveryHeartbeatFailureCancelsClaimAndPreventsSubsequentTargetCall(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	claim := recovery.RecoveryWorkerClaim{
@@ -4215,6 +4402,31 @@ type recoveryHeartbeatExecutorFake struct {
 	target  *recoveryHeartbeatTargetFake
 }
 
+type recoveryDeleteResumeObservation struct {
+	claim  recovery.RecoveryWorkerClaim
+	secret string
+}
+
+type recoveryDeleteHandoffExecutorFake struct {
+	paused  chan struct{}
+	resumed chan recoveryDeleteResumeObservation
+	calls   atomic.Int32
+	pause   managedRecoveryDeleteAuthorizationPause
+}
+
+func (fake *recoveryDeleteHandoffExecutorFake) ExecuteResolvedClaim(
+	ctx context.Context,
+	claim recovery.RecoveryWorkerClaim,
+) error {
+	if fake.calls.Add(1) == 1 {
+		close(fake.paused)
+		pause := fake.pause
+		return &pause
+	}
+	fake.resumed <- recoveryDeleteResumeObservation{claim: claim, secret: managedRecoveryDeleteGrantSecret(ctx)}
+	return nil
+}
+
 type recoveryDeadlineObservation struct {
 	deadline time.Time
 	ok       bool
@@ -4622,6 +4834,21 @@ func (inspector *managedRecoveryDowngradeInspectorFake) SnapshotRecoveryDowngrad
 type managedRecoveryAuthorizationBackendFake struct {
 	result recovery.RecoveryAuthorizationResult
 	err    error
+}
+
+type managedRecoveryDeleteHandoffValidatorFake struct {
+	calls    int
+	consumed bool
+	err      error
+}
+
+func (fake *managedRecoveryDeleteHandoffValidatorFake) ValidateDeleteAuthorizationHandoff(
+	context.Context,
+	recovery.RecoveryAuthorizationRequest,
+	recovery.RecoveryAuthorizationResult,
+) (bool, error) {
+	fake.calls++
+	return fake.consumed, fake.err
 }
 
 func (backend *managedRecoveryAuthorizationBackendFake) ReplayAuthorization(

@@ -43,7 +43,7 @@ function BackupsDataWorkspace({
   routeHasExplicitLayout: boolean;
 }) {
   const { t } = useTranslation();
-  const { token, role, ensureStepUpProof } = useAuth();
+  const { token, role, userId, ensureStepUpProof } = useAuth();
   const navigate = useNavigate();
   const [preferences, setPreferences] = useState(readBackupAssetsPreferences);
   const layout = resolveBackupAssetsLayout(
@@ -90,7 +90,7 @@ function BackupsDataWorkspace({
       <BackupAssetsWorkspace
         controller={controller}
         preferences={preferences}
-        processingRuntime={{ token, role, ensureStepUpProof }}
+        processingRuntime={{ token, role, userId, ensureStepUpProof }}
         onRoutePatch={handleRoutePatch}
         onReturnOverview={() => navigate("/app/backups/overview")}
       />

@@ -77,6 +77,8 @@ type RecoveryLifecycleHandlerService interface {
 	GetPlan(context.Context, uint, string) (recovery.RecoveryPlanView, error)
 	CancelPlan(context.Context, recovery.RecoveryPlanMutationRequest) (recovery.RecoveryPlanView, error)
 	GetJob(context.Context, uint, string) (recovery.RecoveryJobView, error)
+	ListJobItems(context.Context, uint, string, recovery.RecoveryPageRequest) (recovery.RecoveryJobItemPage, error)
+	ListPublishedResults(context.Context, uint, string, recovery.RecoveryPageRequest) (recovery.RecoveryResultPage, error)
 }
 
 type RecoveryOperationsHandlerService interface {
@@ -771,6 +773,111 @@ func (handler *BackupRecoveryHandler) GetJob(c *gin.Context) {
 		return
 	}
 	respondOK(c, result)
+}
+
+// GetJobItems returns one bounded owner-scoped page of safe job-item summaries.
+// @Summary      获取恢复作业条目
+// @Tags         backup-assets-recovery
+// @Security     Bearer
+// @Produce      json
+// @Param        id path string true "恢复作业 opaque ID"
+// @Param        page query int false "页码"
+// @Param        page_size query int false "每页条数"
+// @Success      200 {object} handlers.Response{data=recovery.RecoveryJobItemPage}
+// @Failure      400 {object} handlers.Response
+// @Failure      401 {object} handlers.Response
+// @Failure      403 {object} handlers.Response
+// @Failure      404 {object} handlers.Response
+// @Failure      429 {object} handlers.Response
+// @Failure      500 {object} handlers.Response
+// @Failure      503 {object} handlers.Response
+// @Router       /recovery-jobs/{id}/items [get]
+func (handler *BackupRecoveryHandler) GetJobItems(c *gin.Context) {
+	if handler == nil || handler.lifecycle == nil {
+		respondServiceUnavailable(c, "恢复服务暂不可用")
+		return
+	}
+	id, page, ok := prepareRecoveryPageRead(c, "/api/v1/recovery-jobs/:id/items")
+	if !ok {
+		return
+	}
+	result, err := handler.lifecycle.ListJobItems(c.Request.Context(), middleware.CurrentUserID(c), id, page)
+	if err != nil {
+		respondBackupRecoveryLifecycleError(c, err)
+		return
+	}
+	respondOK(c, result)
+}
+
+// GetJobResults returns one bounded page of currently downloadable results.
+// @Summary      获取恢复结果
+// @Tags         backup-assets-recovery
+// @Security     Bearer
+// @Produce      json
+// @Param        id path string true "恢复作业 opaque ID"
+// @Param        page query int false "页码"
+// @Param        page_size query int false "每页条数"
+// @Success      200 {object} handlers.Response{data=recovery.RecoveryResultPage}
+// @Failure      400 {object} handlers.Response
+// @Failure      401 {object} handlers.Response
+// @Failure      403 {object} handlers.Response
+// @Failure      404 {object} handlers.Response
+// @Failure      409 {object} handlers.Response
+// @Failure      429 {object} handlers.Response
+// @Failure      500 {object} handlers.Response
+// @Failure      503 {object} handlers.Response
+// @Router       /recovery-jobs/{id}/results [get]
+func (handler *BackupRecoveryHandler) GetJobResults(c *gin.Context) {
+	if handler == nil || handler.lifecycle == nil {
+		respondServiceUnavailable(c, "恢复服务暂不可用")
+		return
+	}
+	id, page, ok := prepareRecoveryPageRead(c, "/api/v1/recovery-jobs/:id/results")
+	if !ok {
+		return
+	}
+	result, err := handler.lifecycle.ListPublishedResults(c.Request.Context(), middleware.CurrentUserID(c), id, page)
+	if err != nil {
+		respondBackupRecoveryLifecycleError(c, err)
+		return
+	}
+	respondOK(c, result)
+}
+
+func prepareRecoveryPageRead(c *gin.Context, template string) (string, recovery.RecoveryPageRequest, bool) {
+	if c == nil || c.Request == nil || c.Request.URL == nil || c.Request.Method != http.MethodGet ||
+		c.FullPath() != template {
+		if c != nil {
+			respondBadRequest(c, "请求参数不合法")
+		}
+		return "", recovery.RecoveryPageRequest{}, false
+	}
+	query := c.Request.URL.Query()
+	for key := range query {
+		if key != "page" && key != "page_size" {
+			respondBadRequest(c, "请求参数不合法")
+			return "", recovery.RecoveryPageRequest{}, false
+		}
+	}
+	parse := func(key string) (int, bool) {
+		values, present := query[key]
+		if !present {
+			return 0, true
+		}
+		if len(values) != 1 || values[0] == "" {
+			return 0, false
+		}
+		value, err := strconv.Atoi(values[0])
+		return value, err == nil && value > 0 && strconv.Itoa(value) == values[0]
+	}
+	page, pageOK := parse("page")
+	pageSize, pageSizeOK := parse("page_size")
+	id, idOK := backupAssetOpaqueParam(c, "id")
+	if !pageOK || !pageSizeOK || !idOK {
+		respondBadRequest(c, "请求参数不合法")
+		return "", recovery.RecoveryPageRequest{}, false
+	}
+	return id, recovery.RecoveryPageRequest{Page: page, PageSize: pageSize}, true
 }
 
 func (handler *BackupRecoveryHandler) prepareRecoveryRead(c *gin.Context, template string) (string, bool) {
@@ -1831,7 +1938,8 @@ func respondBackupRecoveryLifecycleError(c *gin.Context, err error) {
 	case errors.Is(err, recovery.ErrInvalidRecoveryPlan),
 		errors.Is(err, recovery.ErrInvalidExactSelection),
 		errors.Is(err, recovery.ErrInvalidTargetPreflight),
-		errors.Is(err, recovery.ErrInvalidResultLifecycle):
+		errors.Is(err, recovery.ErrInvalidResultLifecycle),
+		errors.Is(err, recovery.ErrRecoveryAPIInvalidPage):
 		respondBadRequest(c, "请求参数不合法")
 	case errors.Is(err, recovery.ErrRecoveryAPIObjectNotFound), errors.Is(err, backupasset.ErrNotFound):
 		respondNotFound(c, "恢复对象不存在")

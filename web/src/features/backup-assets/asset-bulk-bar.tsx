@@ -1,4 +1,4 @@
-import { Archive, Eye, X } from "lucide-react";
+import { Archive, Eye, RotateCcw, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -6,12 +6,22 @@ import { Button } from "@/components/ui/button";
 export interface AssetBulkBarProps {
   count: number;
   canExport?: boolean;
+  canRecover?: boolean;
   onClear: () => void;
   onInspect: () => void;
   onExport?: () => void;
+  onRecover?: () => void;
 }
 
-export function AssetBulkBar({ count, canExport = false, onClear, onInspect, onExport }: AssetBulkBarProps) {
+export function AssetBulkBar({
+  count,
+  canExport = false,
+  canRecover = false,
+  onClear,
+  onInspect,
+  onExport,
+  onRecover,
+}: AssetBulkBarProps) {
   const { t } = useTranslation();
   if (count === 0) return null;
   return (
@@ -42,6 +52,17 @@ export function AssetBulkBar({ count, canExport = false, onClear, onInspect, onE
           onClick={onExport}
         >
           <Archive className="size-4" aria-hidden />
+        </Button>
+      ) : null}
+      {canRecover && onRecover ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-label={t("backupAssets.actions.recoverSelected")}
+          onClick={onRecover}
+        >
+          <RotateCcw className="size-4" aria-hidden />
         </Button>
       ) : null}
       <Button

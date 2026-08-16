@@ -1340,7 +1340,159 @@ func TestRecoveryAuthorizationReceiptWriteAuthorizeReplayAndConflict(t *testing.
 }
 
 func TestRecoveryAuthorizationReceiptDeleteAuthorizeReplayAndConflict(t *testing.T) {
-	testRecoveryAuthorizationReceiptReplayAndConflict(t, AuthorizationReceiptDeleteAuthorize)
+	execution := newExactMirrorOrdinaryExecutionFixture(t)
+	source := newRecoveryRepositoryContractSource(t, execution.serviceFixture.db, execution.jobID)
+	if err := execution.coordinator.ExecuteClaim(context.Background(), execution.claim, source, ""); err != nil {
+		t.Fatalf("pause exact-mirror execution: %v", err)
+	}
+	var job model.BackupAssetRecoveryJob
+	if err := execution.serviceFixture.db.Where("id = ?", execution.jobID).Take(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	var checkpoints []model.BackupAssetRecoveryCheckpoint
+	if err := execution.serviceFixture.db.Where("job_id = ?", execution.jobID).
+		Order("sequence ASC").Find(&checkpoints).Error; err != nil {
+		t.Fatal(err)
+	}
+	required := checkpoints[len(checkpoints)-1]
+	request := execution.serviceFixture.request
+	request.Operation = AuthorizationReceiptDeleteAuthorize
+	request.Category = AuthorizationReceiptCategoryExactMirrorDelete
+	request.Endpoint = recoveryDeleteAuthorizationEndpoint
+	request.IdempotencyKey = "exact-delete-real-history-replay"
+	request.Proof.JTI = "FAKE_RECOVERY_EXACT_DELETE_REAL_HISTORY_PROOF"
+	request.ExpectedPlanRevision = jobPlanTransitionRevision(t, execution.serviceFixture.db, job.PlanID)
+	request.PreflightID = ""
+	request.JobID = execution.jobID
+	request.CheckpointID = required.ID
+	request.AttemptID = execution.claim.AttemptID
+	request.GrantID = ""
+	request.Reason = "FAKE_RECOVERY_EXACT_DELETE_REAL_HISTORY_REASON"
+	request.GrantSecret = mustAuthorizationReceiptSecretForFixture()
+	first, err := execution.serviceFixture.service.Authorize(context.Background(), request)
+	if err != nil || first.Replay || first.GrantID == "" {
+		t.Fatalf("first real-history delete authorization=%+v err=%v", first, err)
+	}
+	replay, err := execution.serviceFixture.service.Authorize(context.Background(), request)
+	if err != nil || !replay.Replay || !replay.sameDurableEffect(first) {
+		t.Fatalf("real-history delete replay=%+v err=%v, want %+v", replay, err, first)
+	}
+	changed := request
+	changed.Reason = "FAKE_RECOVERY_EXACT_DELETE_CHANGED_REASON"
+	if _, err := execution.serviceFixture.service.Authorize(context.Background(), changed); !errors.Is(err, ErrAuthorizationIdempotencyConflict) {
+		t.Fatalf("changed real-history delete error=%v", err)
+	}
+}
+
+func TestRecoveryDeleteAuthorizationRejectsContradictoryHistoryBeforeGrantCommit(t *testing.T) {
+	execution := newExactMirrorOrdinaryExecutionFixture(t)
+	source := newRecoveryRepositoryContractSource(t, execution.serviceFixture.db, execution.jobID)
+	if err := execution.coordinator.ExecuteClaim(context.Background(), execution.claim, source, ""); err != nil {
+		t.Fatalf("pause exact-mirror execution: %v", err)
+	}
+	var job model.BackupAssetRecoveryJob
+	if err := execution.serviceFixture.db.Where("id = ?", execution.jobID).Take(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	var checkpoints []model.BackupAssetRecoveryCheckpoint
+	if err := execution.serviceFixture.db.Where("job_id = ?", execution.jobID).
+		Order("sequence ASC").Find(&checkpoints).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(checkpoints) < 2 || checkpoints[len(checkpoints)-1].Phase != string(CheckpointPhaseDeleteAuthorityRequired) {
+		t.Fatalf("paused checkpoints=%+v", checkpoints)
+	}
+	required := checkpoints[len(checkpoints)-1]
+	if err := execution.serviceFixture.db.Model(&model.BackupAssetRecoveryCheckpoint{}).
+		Where("id = ?", checkpoints[0].ID).Update("plan_binding_digest", strings.Repeat("f", 64)).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := execution.serviceFixture.request
+	request.Operation = AuthorizationReceiptDeleteAuthorize
+	request.Category = AuthorizationReceiptCategoryExactMirrorDelete
+	request.Endpoint = recoveryDeleteAuthorizationEndpoint
+	request.IdempotencyKey = "reject-contradictory-history-before-grant"
+	request.Proof.JTI = "FAKE_RECOVERY_REJECT_CONTRADICTORY_HISTORY_PROOF"
+	request.ExpectedPlanRevision = jobPlanTransitionRevision(t, execution.serviceFixture.db, job.PlanID)
+	request.PreflightID = ""
+	request.JobID = execution.jobID
+	request.CheckpointID = required.ID
+	request.AttemptID = execution.claim.AttemptID
+	request.GrantID = ""
+	request.Reason = "FAKE_RECOVERY_REJECT_CONTRADICTORY_HISTORY_REASON"
+	request.GrantSecret = mustAuthorizationReceiptSecretForFixture()
+	if _, err := execution.serviceFixture.service.Authorize(context.Background(), request); !errors.Is(err, ErrAuthorizationDenied) {
+		t.Fatalf("contradictory history authorization error=%v, want denied", err)
+	}
+	var grants int64
+	if err := execution.serviceFixture.db.Model(&model.BackupAssetRecoveryGrant{}).
+		Where("job_id = ? AND authority_category = ?", execution.jobID, AuthorityExactMirrorDelete).
+		Count(&grants).Error; err != nil {
+		t.Fatal(err)
+	}
+	if grants != 0 {
+		t.Fatalf("contradictory history committed %d delete grants", grants)
+	}
+}
+
+func newRecoveryServiceTestDeleteAuthorizationFixture(
+	t *testing.T,
+	postgres bool,
+) *authorizationReceiptServiceFixture {
+	t.Helper()
+	var execution exactMirrorOrdinaryExecutionFixture
+	if postgres {
+		execution = newExactMirrorOrdinaryExecutionPostgresMigrationFixture(t)
+	} else {
+		execution = newExactMirrorOrdinaryExecutionFixture(t)
+	}
+	source := newRecoveryRepositoryContractSource(t, execution.serviceFixture.db, execution.jobID)
+	if err := execution.coordinator.ExecuteClaim(context.Background(), execution.claim, source, ""); err != nil {
+		t.Fatalf("pause real delete authorization fixture: %v", err)
+	}
+	var job model.BackupAssetRecoveryJob
+	if err := execution.serviceFixture.db.Where("id = ?", execution.jobID).Take(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	var checkpoints []model.BackupAssetRecoveryCheckpoint
+	if err := execution.serviceFixture.db.Where("job_id = ?", execution.jobID).
+		Order("sequence ASC").Find(&checkpoints).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(checkpoints) == 0 || checkpoints[len(checkpoints)-1].Phase != string(CheckpointPhaseDeleteAuthorityRequired) {
+		t.Fatalf("real delete authorization fixture checkpoints=%+v", checkpoints)
+	}
+	request := execution.serviceFixture.request
+	request.Operation = AuthorizationReceiptDeleteAuthorize
+	request.Category = AuthorizationReceiptCategoryExactMirrorDelete
+	request.Endpoint = recoveryDeleteAuthorizationEndpoint
+	request.IdempotencyKey = "authorization-receipt-delete-real-history-key"
+	request.Proof.JTI = "FAKE_RECOVERY_DELETE_REAL_HISTORY_STEP_UP_PROOF_JTI"
+	request.ExpectedPlanRevision = jobPlanTransitionRevision(t, execution.serviceFixture.db, job.PlanID)
+	request.PreflightID = ""
+	request.JobID = execution.jobID
+	request.CheckpointID = checkpoints[len(checkpoints)-1].ID
+	request.AttemptID = execution.claim.AttemptID
+	request.GrantID = ""
+	request.Reason = "FAKE_RECOVERY_REASON_FOR_AUTHORIZATION_RECEIPT"
+	request.GrantSecret = mustAuthorizationReceiptSecretForFixture()
+	execution.serviceFixture.request = request
+	return execution.serviceFixture
+}
+
+func recoveryServiceTestAuthorizationFixture(
+	t *testing.T,
+	operation AuthorizationReceiptOperation,
+	postgres bool,
+) *authorizationReceiptServiceFixture {
+	t.Helper()
+	if operation == AuthorizationReceiptDeleteAuthorize {
+		return newRecoveryServiceTestDeleteAuthorizationFixture(t, postgres)
+	}
+	if postgres {
+		return newAuthorizationReceiptPostgresServiceFixture(t, operation)
+	}
+	return newAuthorizationReceiptServiceFixture(t, operation)
 }
 
 func TestRecoveryAuthorizationReceiptExecuteReplayAndConflict(t *testing.T) {
@@ -1361,7 +1513,7 @@ func TestRecoveryAuthorizationReceiptReturnsStableSafeGrantMetadata(t *testing.T
 
 	for _, testCase := range testCases {
 		t.Run(string(testCase.operation), func(t *testing.T) {
-			fixture := newAuthorizationReceiptServiceFixture(t, testCase.operation)
+			fixture := recoveryServiceTestAuthorizationFixture(t, testCase.operation, false)
 			first, err := fixture.service.Authorize(context.Background(), fixture.request)
 			if err != nil {
 				t.Fatal(err)
@@ -1603,7 +1755,7 @@ func TestRecoveryAuthorizationReceiptRevalidatesLiveAuthorityBeforeWriteOrExecut
 		AuthorizationReceiptExecute,
 	} {
 		t.Run(string(operation), func(t *testing.T) {
-			fixture := newAuthorizationReceiptServiceFixture(t, operation)
+			fixture := recoveryServiceTestAuthorizationFixture(t, operation, false)
 			revalidator := &authorizationReceiptLiveRevalidatorSpy{revalidateErr: ErrAuthorizationDenied}
 			fixture.dependencies.LiveRevalidator = revalidator
 			service, err := NewAuthorizationService(fixture.dependencies)
@@ -2373,7 +2525,7 @@ func legacyAuthorizationReceiptIntentDigest(request RecoveryAuthorizationRequest
 
 func testRecoveryAuthorizationReceiptReplayAndConflict(t *testing.T, operation AuthorizationReceiptOperation) {
 	t.Helper()
-	fixture := newAuthorizationReceiptServiceFixture(t, operation)
+	fixture := recoveryServiceTestAuthorizationFixture(t, operation, false)
 	before := fixture.effectCounts(t)
 	first, err := fixture.service.Authorize(context.Background(), fixture.request)
 	if err != nil {
@@ -2633,7 +2785,7 @@ func TestRecoveryDeleteGrantSecretLostResponseReplay(t *testing.T) {
 
 func testRecoveryGrantSecretLostResponseReplay(t *testing.T, operation AuthorizationReceiptOperation) {
 	t.Helper()
-	fixture := newAuthorizationReceiptServiceFixture(t, operation)
+	fixture := recoveryServiceTestAuthorizationFixture(t, operation, false)
 	first, err := fixture.service.Authorize(context.Background(), fixture.request)
 	if err != nil {
 		t.Fatal(err)
@@ -2679,7 +2831,7 @@ func TestRecoveryAuthorizationReceiptRollbackBeforeCommit(t *testing.T) {
 		AuthorizationReceiptExecute,
 	} {
 		t.Run(string(operation), func(t *testing.T) {
-			fixture := newAuthorizationReceiptServiceFixture(t, operation)
+			fixture := recoveryServiceTestAuthorizationFixture(t, operation, false)
 			before := fixture.effectCounts(t)
 			injected := errors.New("injected authorization receipt before-commit failure")
 			fixture.service.beforePersist = func(stage authorizationPersistStage) error {
@@ -3140,12 +3292,7 @@ func testRecoveryAuthorizationReceiptReaperHandlesAllEffectKinds(t *testing.T, p
 	}
 	for _, operation := range operations {
 		t.Run(string(operation), func(t *testing.T) {
-			var fixture *authorizationReceiptServiceFixture
-			if postgres {
-				fixture = newAuthorizationReceiptPostgresServiceFixture(t, operation)
-			} else {
-				fixture = newAuthorizationReceiptServiceFixture(t, operation)
-			}
+			fixture := recoveryServiceTestAuthorizationFixture(t, operation, postgres)
 			result, err := fixture.service.Authorize(context.Background(), fixture.request)
 			if err != nil {
 				t.Fatal(err)

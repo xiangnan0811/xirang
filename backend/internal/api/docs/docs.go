@@ -6890,6 +6890,210 @@ const docTemplate = `{
                 }
             }
         },
+        "/recovery-jobs/{id}/items": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "获取恢复作业条目",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复作业 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页条数",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryJobItemPage"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-jobs/{id}/results": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets-recovery"
+                ],
+                "summary": "获取恢复结果",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复作业 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页条数",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryResultPage"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/recovery-jobs/{id}/results/cleanup": {
             "post": {
                 "security": [
@@ -19243,17 +19447,151 @@ const docTemplate = `{
                 "RecoveryAuthorizationGrantConsumed"
             ]
         },
-        "xirang_backend_internal_backupasset_recovery.RecoveryJobView": {
+        "xirang_backend_internal_backupasset_recovery.RecoveryDeleteCheckpointStatus": {
+            "type": "string",
+            "enum": [
+                "awaiting_authorization"
+            ],
+            "x-enum-varnames": [
+                "RecoveryDeleteCheckpointAwaitingAuthorization"
+            ]
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryDeleteCheckpointView": {
             "type": "object",
             "properties": {
+                "attempt_id": {
+                    "type": "string"
+                },
+                "expected_plan_revision": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryDeleteCheckpointStatus"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryJobItemOutcome": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "succeeded",
+                "skipped",
+                "failed"
+            ],
+            "x-enum-varnames": [
+                "RecoveryJobItemPending",
+                "RecoveryJobItemSucceeded",
+                "RecoveryJobItemSkipped",
+                "RecoveryJobItemFailed"
+            ]
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryJobItemPage": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryJobItemView"
+                    }
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "page": {
+                    "type": "integer"
+                },
+                "page_size": {
+                    "type": "integer"
+                },
+                "schema_version": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryJobItemView": {
+            "type": "object",
+            "properties": {
+                "bytes_written": {
+                    "type": "integer"
+                },
                 "created_at": {
                     "type": "string"
                 },
                 "estimated_bytes": {
                     "type": "integer"
                 },
+                "failure_category": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryPublicFailureCategory"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "operation": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryOperationKind"
+                },
+                "ordinal": {
+                    "type": "integer"
+                },
+                "outcome": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryJobItemOutcome"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "verified_size": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryJobProgressView": {
+            "type": "object",
+            "properties": {
+                "bytes_written": {
+                    "type": "integer"
+                },
+                "completed_items": {
+                    "type": "integer"
+                },
+                "failed_items": {
+                    "type": "integer"
+                },
+                "skipped_items": {
+                    "type": "integer"
+                },
+                "succeeded_items": {
+                    "type": "integer"
+                },
+                "total_items": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryJobView": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "delete_checkpoint": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryDeleteCheckpointView"
+                },
+                "estimated_bytes": {
+                    "type": "integer"
+                },
                 "estimated_items": {
                     "type": "integer"
+                },
+                "failure_category": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryPublicFailureCategory"
                 },
                 "id": {
                     "type": "string"
@@ -19263,6 +19601,12 @@ const docTemplate = `{
                 },
                 "plan_id": {
                     "type": "string"
+                },
+                "progress": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryJobProgressView"
+                },
+                "result_set": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryResultSetView"
                 },
                 "revision": {
                     "type": "string"
@@ -19286,6 +19630,21 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryOperationKind": {
+            "type": "string",
+            "enum": [
+                "create",
+                "overwrite",
+                "skip",
+                "delete"
+            ],
+            "x-enum-varnames": [
+                "RecoveryOperationCreate",
+                "RecoveryOperationOverwrite",
+                "RecoveryOperationSkip",
+                "RecoveryOperationDelete"
+            ]
         },
         "xirang_backend_internal_backupasset_recovery.RecoveryPlanView": {
             "type": "object",
@@ -19445,6 +19804,23 @@ const docTemplate = `{
                 }
             }
         },
+        "xirang_backend_internal_backupasset_recovery.RecoveryPublicFailureCategory": {
+            "type": "string",
+            "enum": [
+                "source_drift",
+                "verification_mismatch",
+                "remote_outcome_unresolved",
+                "partial_write",
+                "cleanup_unavailable"
+            ],
+            "x-enum-varnames": [
+                "RecoveryPublicFailureSourceDrift",
+                "RecoveryPublicFailureVerificationMismatch",
+                "RecoveryPublicFailureRemoteOutcomeUnresolved",
+                "RecoveryPublicFailurePartialWrite",
+                "RecoveryPublicFailureCleanupUnavailable"
+            ]
+        },
         "xirang_backend_internal_backupasset_recovery.RecoveryResultCleanupView": {
             "type": "object",
             "properties": {
@@ -19462,6 +19838,89 @@ const docTemplate = `{
                 },
                 "state": {
                     "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.ResultSetState"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryResultKind": {
+            "type": "string",
+            "enum": [
+                "regular_file",
+                "verification_report"
+            ],
+            "x-enum-varnames": [
+                "RecoveryResultKindRegularFile",
+                "RecoveryResultKindVerificationReport"
+            ]
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryResultPage": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryResultView"
+                    }
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "page": {
+                    "type": "integer"
+                },
+                "page_size": {
+                    "type": "integer"
+                },
+                "result_set": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryResultSetView"
+                },
+                "schema_version": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryResultSetView": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "hard_deadline": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "plaintext_deadline": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.ResultSetState"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_recovery.RecoveryResultView": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_recovery.RecoveryResultKind"
+                },
+                "modified_at": {
+                    "type": "string"
+                },
+                "size": {
+                    "type": "integer"
                 }
             }
         },

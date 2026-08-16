@@ -47,6 +47,9 @@ const { exportPanelRenderMock, exportPanelGate } = vi.hoisted(() => {
 const { archivePanelRenderMock } = vi.hoisted(() => ({
   archivePanelRenderMock: vi.fn(),
 }));
+const { recoveryWizardRenderMock } = vi.hoisted(() => ({
+  recoveryWizardRenderMock: vi.fn(),
+}));
 
 vi.mock("./processing-coverage-panel", () => ({
   ProcessingCoveragePanel: (props: unknown) => {
@@ -74,6 +77,13 @@ vi.mock("./archive-member-panel", () => ({
   ArchiveMemberPanel: (props: { online?: boolean }) => {
     archivePanelRenderMock(props);
     return <section data-testid="synthetic-archive-panel">Synthetic archive panel</section>;
+  },
+}));
+
+vi.mock("./recovery-plan-wizard", () => ({
+  RecoveryPlanWizard: (props: unknown) => {
+    recoveryWizardRenderMock(props);
+    return <section data-testid="synthetic-recovery-wizard">Synthetic recovery wizard</section>;
   },
 }));
 
@@ -163,6 +173,94 @@ afterEach(() => {
 });
 
 describe("BackupAssetsWorkspace", () => {
+  it("freezes explicit recovery refs in memory before opening the lazy wizard", async () => {
+    setViewport(1440);
+    recoveryWizardRenderMock.mockClear();
+    const user = userEvent.setup();
+    const rows = buildAssetRows(2);
+    const selectedPoint = {
+      ...recoveryPoint,
+      catalog: recoveryPoint.catalog.status === "available" ? {
+        status: "available" as const,
+        value: {
+          ...recoveryPoint.catalog.value,
+          generation: {
+            id: "c".repeat(32), sequence: 4, state: "complete" as const,
+            startedAt: "2026-08-16T12:00:00Z", finishedAt: "2026-08-16T12:01:00Z",
+            errorCode: "" as const, correlationId: "recovery-generation",
+          },
+        },
+      } : recoveryPoint.catalog,
+    };
+    const state = createInitialBackupAssetsState({
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: repository.id,
+      recoveryPointId: selectedPoint.id,
+    });
+    state.result = { status: "ready", requestKey: "recovery", generation: 1, rows, nextCursor: null, coverage: "complete", authoritativeEmpty: false };
+    state.selection = new Map(rows.map((row) => [`${row.ref.recoveryPointId}:${row.ref.entryId}`, row.ref]));
+    render(
+      <BackupAssetsWorkspace
+        controller={controller({ state, selectedRecoveryPoint: selectedPoint })}
+        processingRuntime={{ token: "admin-token", role: "admin", userId: 17, ensureStepUpProof: vi.fn() }}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Recover selected|恢复所选/ }));
+    expect(await screen.findByTestId("synthetic-recovery-wizard")).toBeInTheDocument();
+    expect(recoveryWizardRenderMock).toHaveBeenCalledWith(expect.objectContaining({
+      open: true,
+      recovery: expect.objectContaining({
+        state: expect.objectContaining({ selection: rows.map((row) => row.ref) }),
+      }),
+    }));
+    expect(window.location.search).not.toMatch(/entry|selection|secret|proof|reason/i);
+  });
+
+  it("recovers one inspected item without requiring it to be bulk-selected", async () => {
+    setViewport(1440);
+    recoveryWizardRenderMock.mockClear();
+    const user = userEvent.setup();
+    const row = buildAssetRows(1)[0];
+    const selectedPoint = {
+      ...recoveryPoint,
+      catalog: recoveryPoint.catalog.status === "available" ? {
+        status: "available" as const,
+        value: {
+          ...recoveryPoint.catalog.value,
+          generation: {
+            id: "c".repeat(32), sequence: 4, state: "complete" as const,
+            startedAt: "2026-08-16T12:00:00Z", finishedAt: "2026-08-16T12:01:00Z",
+            errorCode: "" as const, correlationId: "recovery-generation",
+          },
+        },
+      } : recoveryPoint.catalog,
+    };
+    const state = createInitialBackupAssetsState({
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: repository.id,
+      recoveryPointId: selectedPoint.id,
+      entryId: row.ref.entryId,
+    });
+    state.result = { status: "ready", requestKey: "inspected-recovery", generation: 1, rows: [row], nextCursor: null, coverage: "complete", authoritativeEmpty: false };
+    render(
+      <BackupAssetsWorkspace
+        controller={controller({ state, selectedRecoveryPoint: selectedPoint, selectedEntry: { status: "ready", value: row.asset } })}
+        processingRuntime={{ token: "admin-token", role: "admin", userId: 17, ensureStepUpProof: vi.fn() }}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Recover this item|恢复此项/ }));
+    expect(await screen.findByTestId("synthetic-recovery-wizard")).toBeInTheDocument();
+    expect(recoveryWizardRenderMock).toHaveBeenCalledWith(expect.objectContaining({
+      recovery: expect.objectContaining({ state: expect.objectContaining({ selection: [row.ref] }) }),
+    }));
+  });
+
   it("opens the lazy export dialog only from an Admin explicit selection", async () => {
     setViewport(1440);
     exportPanelRenderMock.mockClear();

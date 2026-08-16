@@ -6548,3 +6548,63 @@ bindings, so it adds no migration or authority ledger. The focused product
 manifest adds only the Recovery source-observer implementation and test files;
 the previously approved Provider, Repository and runtime files supply the
 narrow ports and production composition.
+
+## 49. Task 10 live read products and transient delete continuation
+
+### 49.1 Public read products
+
+`RecoveryJobView` remains the root polling product and is extended only with safe aggregate progress, an optional
+sanitized failure category, an optional current delete-checkpoint view and an optional ResultSet lifecycle summary.
+Two owner-scoped reads complete the graph:
+
+```text
+GET /api/v1/recovery-jobs/:id/items?page=<n>&page_size=<n>
+GET /api/v1/recovery-jobs/:id/results?page=<n>&page_size=<n>
+```
+
+Every response has `schema_version=1`, canonical decimal-string revisions, safe non-negative bounded count/byte products,
+closed enums, opaque IDs and UTC timestamps.
+The item page is ordered by stable `(ordinal,id)` and exposes only operation kind, outcome, safe byte/count values and
+sanitized failure category. The result page returns a separate ResultSet summary plus stable result rows containing only
+result ID, closed public kind, size and public timestamps. Server pagination uses a small default and immutable hard cap;
+invalid/overflowing input rejects instead of widening the query. Owner mismatch and malformed durable products are 404/
+unavailable without partial data.
+
+The current delete-checkpoint view is derived atomically from the owner-matched job, plan, current attempt and the last
+valid checkpoint chain. It exists only for an unexpired `delete_authority_required` product and exports only checkpoint ID,
+attempt ID, expected plan revision, closed handoff status and expiry. Internal checkpoint phase strings, fences, target/source
+revisions, digests and authority bindings never cross the API boundary. Result publication similarly proves job/plan owner,
+isolated mode and public ResultSet state before projecting rows; Job terminal outcome never implies ResultSet availability.
+
+### 49.2 Delete authorization is the transient handoff boundary
+
+No second public secret endpoint is added. `POST /recovery-jobs/:id/exact-mirror-delete-authorizations` first completes the
+existing durable authorization/replay contract, then offers the still request-local secret to the managed worker that owns
+the exact current `(job,plan,checkpoint,attempt)` pause. The response is successful only after the managed graph accepts the
+handoff or proves the exact grant was already consumed. A durable receipt without accepted/consumed continuation maps to a
+closed conflict/unavailable response, so the UI never advances on an inert authorization.
+
+The managed worker owns a bounded, one-shot, in-memory handoff. It keeps or safely reacquires the exact current claim under
+the existing heartbeat and absolute-deadline loop, reopens the pinned source/target through existing authorities, passes the
+secret only to `WorkerCoordinator.ExecuteClaim`, and lets the existing transactional grant consumer append the consumed
+checkpoint before delete mutation. It removes the secret on consumption, context cancellation, shutdown, graph replacement,
+fence/attempt drift or failed validation. It never persists, formats or emits the secret. Same-intent replay can re-offer the
+same secret after an ambiguous response; a different secret is already rejected by the durable intent binding. Concurrent
+offers have one accepted consumer, and a lost process-memory handoff requires an exact replay/current checkpoint rather than
+automatic secret reconstruction.
+
+The authorization transaction is also an effect-authority boundary, not merely a receipt mint. Before inserting the delete
+grant or receipt it privately reloads the complete current plan/job/preflight/attempt/node/source/operation/checkpoint product,
+reuses the full checkpoint-history and pending-delete-grant validators, and exact-binds the request tuple to the current
+required checkpoint. A phase-only checkpoint lookup is insufficient; validation failure rolls back with no durable grant.
+
+### 49.3 Failure, compatibility and verification
+
+API reads execute bounded owner predicates and atomically validate whole products. Unknown enum/state, negative counts,
+non-UTC/invalid ordering, stale checkpoint chain, foreign ResultSet/result, hidden workspace row or unsupported result kind
+rejects the complete response. All errors, audits and log/metric fields use only safe categories and opaque correlation IDs.
+
+The handler/router retain existing Auth + `backup.assets:recover` + Admin ownership policy. The two reads get read-shaped body
+and rate limits; the existing delete mutation retains step-up/idempotency/rate/body limits. Swagger is regenerated from the
+same structs and routes. Old backends lacking these responses are a closed frontend compatibility state. There is no schema
+migration, no Task 11 verification expansion, no Docker metadata change and no legacy restore fallback.

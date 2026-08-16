@@ -10369,3 +10369,980 @@ Task 9 remains stopped until PR #427 passes required CI, merges, receives an
 exact-sha post-merge disposition, local `main` is synchronized and the feature,
 closure and CI-stabilization worktrees/branches are removed. Child 13 remains
 `in_progress`; Tasks 9--10 remain `not_executed` and no archive is allowed.
+
+## Task 10 live Recovery read products
+
+### Owner-scoped whole-product projection and real pagination
+
+Selector:
+
+```bash
+cd backend
+go test ./internal/backupasset/recovery \
+  -run '^TestRecoveryAPIServiceProjectsOwnedWholeJobAndPagedRows$' -count=1
+```
+
+Genuine RED, 2026-08-16, exit 1:
+
+```text
+# xirang/backend/internal/backupasset/recovery [xirang/backend/internal/backupasset/recovery.test]
+internal/backupasset/recovery/api_test.go:329:23: job.DeleteCheckpoint undefined (type RecoveryJobView has no field or method DeleteCheckpoint)
+internal/backupasset/recovery/api_test.go:330:7: job.DeleteCheckpoint undefined (type RecoveryJobView has no field or method DeleteCheckpoint)
+internal/backupasset/recovery/api_test.go:331:7: job.DeleteCheckpoint undefined (type RecoveryJobView has no field or method DeleteCheckpoint)
+internal/backupasset/recovery/api_test.go:331:34: undefined: RecoveryDeleteCheckpointAwaitingAuthorization
+internal/backupasset/recovery/api_test.go:332:7: job.Progress undefined (type RecoveryJobView has no field or method Progress)
+internal/backupasset/recovery/api_test.go:335:27: service.ListJobItems undefined (type *APIService has no field or method ListJobItems)
+internal/backupasset/recovery/api_test.go:335:73: undefined: RecoveryPageRequest
+internal/backupasset/recovery/api_test.go:337:32: undefined: RecoveryJobItemSkipped
+internal/backupasset/recovery/api_test.go:340:29: service.ListPublishedResults undefined (type *APIService has no field or method ListPublishedResults)
+internal/backupasset/recovery/api_test.go:340:83: undefined: RecoveryPageRequest
+internal/backupasset/recovery/api_test.go:340:83: too many errors
+FAIL\txirang/backend/internal/backupasset/recovery [build failed]
+FAIL
+```
+
+The test fixture was corrected before GREEN to model two valid products instead
+of an impossible in-place published result: one exact-mirror job with a
+preceding operation checkpoint and one separate isolated terminal job with a
+ready ResultSet. No production file changed before the RED above.
+
+Same-selector GREEN, 2026-08-16, exit 0:
+
+```text
+ok  \txirang/backend/internal/backupasset/recovery\t0.057s
+```
+
+### Contradictory exact-mirror checkpoint history
+
+Selector:
+
+```bash
+cd backend
+go test ./internal/backupasset/recovery \
+  -run '^TestRecoveryAPIProjectionRejectsContradictoryExactMirrorCheckpointHistory$' -count=1
+```
+
+Genuine RED, 2026-08-16, exit 1:
+
+```text
+api_test.go:424: contradictory private checkpoint projection error=<nil>, want unavailable
+```
+
+The phase/sequence-only projection accepted a deliberately corrupted private
+plan binding. The implementation now reloads the current private plan, job,
+preflight, attempt, node lease and source lease; reconstructs the exact claim
+and operation rows; reuses the complete checkpoint-history validator; and
+exact-binds the required checkpoint to the current attempt/node fences.
+
+Same-selector GREEN, 2026-08-16, exit 0:
+
+```text
+ok  \txirang/backend/internal/backupasset/recovery\t0.094s
+```
+
+### Whole published-result eligibility before paging
+
+Selector:
+
+```bash
+cd backend
+go test ./internal/backupasset/recovery \
+  -run '^TestRecoveryAPIResultPageReusesWholePublishedResultEligibility$' -count=1
+```
+
+Genuine RED, 2026-08-16, exit 1:
+
+```text
+api_test.go:462: off-page ineligible result error=<nil>, want unavailable
+FAIL\txirang/backend/internal/backupasset/recovery\t0.077s
+```
+
+The page boundary had validated only safe scalar row shape. It now invokes the
+existing package-private published-result resolver for every bounded row before
+SQL paging, so private workspace, marker, authority, classification, locator,
+active-attempt and cleanup eligibility remain the single source of truth.
+
+Same-selector GREEN, 2026-08-16, exit 0:
+
+```text
+ok  \txirang/backend/internal/backupasset/recovery\t0.078s
+```
+
+### Same-active-claim exact-mirror delete handoff
+
+Initial selector:
+
+```bash
+cd backend
+go test ./internal/backupasset/runtime \
+  -run '^TestManagedRecoveryWorkerResumesSameActiveClaimFromOneShotDeleteHandoff$' -count=1
+```
+
+Genuine RED, 2026-08-16, exit 1: the package build failed only because the new
+contract did not exist: `managedRecoveryDeleteAuthorizationHandoff`,
+`worker.offerDeleteAuthorization`, the private managed pause signal and the
+request-scoped delete-secret accessor were undefined. No runtime production
+path had been edited before this RED.
+
+The GREEN implementation keeps the same active claim and heartbeat/absolute-
+deadline loop, uses a bridge-private pause side channel so Repository error
+sanitization cannot erase the signal, exact-binds the pause tuple, resumes with
+the latest renewed claim, removes the raw secret slot on dequeue and retains
+only a SHA-256 fingerprint for same-intent ambiguity replay. A companion test
+proves cancellation after the executor has already paused does not deadlock by
+joining a nonexistent goroutine.
+
+Expanded same-scope GREEN, 2026-08-16, exit 0:
+
+```bash
+cd backend
+go test ./internal/backupasset/runtime \
+  -run '^TestManagedRecoveryWorker(ResumesSameActiveClaimFromOneShotDeleteHandoff|PausedDeleteDeadlineDoesNotWaitForFinishedExecutor)$' \
+  -count=1
+```
+
+```text
+ok  \txirang/backend/internal/backupasset/runtime\t0.077s
+```
+
+### Delete grant validation before authorization commit
+
+Selector:
+
+```bash
+cd backend
+go test ./internal/backupasset/recovery \
+  -run '^TestRecoveryDeleteAuthorizationRejectsContradictoryHistoryBeforeGrantCommit$' -count=1
+```
+
+Genuine RED, 2026-08-16, exit 1:
+
+```text
+service_test.go:1384: contradictory history authorization error=<nil>, want denied
+FAIL\txirang/backend/internal/backupasset/recovery\t0.087s
+```
+
+The authorization transaction had accepted the requested required-checkpoint
+row without proving the complete preceding chain. It now reloads and validates
+the exact current plan/job/preflight/attempt/node/source/operation/checkpoint
+product, then invokes the pending-grant validator after insert but before
+transaction commit. Any mismatch rolls back the grant and receipt.
+
+Same-selector GREEN, 2026-08-16, exit 0:
+
+```text
+ok  \txirang/backend/internal/backupasset/recovery\t0.093s
+```
+
+### Fresh and replay authorization facade handoff
+
+Selector:
+
+```bash
+cd backend
+go test ./internal/backupasset/runtime \
+  -run '^TestManagedRecoveryAuthorizationFacadeOffersExactDeleteHandoffOnFreshAndReplay$' -count=1
+```
+
+Genuine RED, 2026-08-16, exit 1: the test package failed to build because the
+managed Recovery graph intentionally lacked the new `deleteHandoffValidator`
+dependency. Same-selector GREEN, exit 0:
+
+```text
+ok  \txirang/backend/internal/backupasset/runtime\t0.056s
+```
+
+Both fresh authorization and same-intent receipt replay now traverse the exact
+durable handoff validator and the same fingerprinted one-shot worker offer.
+
+### Pending versus durably consumed handoff proof
+
+Selector:
+
+```bash
+cd backend
+go test ./internal/backupasset/recovery \
+  -run '^TestRecoveryDeleteAuthorizationHandoffRequiresLivePendingClaimButAcceptsConsumedProof$' -count=1
+```
+
+Genuine RED, exit 1: the stale pending subcase reported
+`error=<nil>, want fence lost`. The pending path now requires current running/
+active/unexpired attempt, node and source leases, while an exact durable
+consumed checkpoint/grant remains replayable after the live claim ends.
+
+Same-selector GREEN, exit 0:
+
+```text
+ok  \txirang/backend/internal/backupasset/recovery\t0.133s
+```
+
+### Read endpoint canonical paging and route registration
+
+Handler selector:
+
+```bash
+cd backend
+go test ./internal/api/handlers \
+  -run '^TestRecoveryJobCollectionHandlersParseCanonicalServerPage$' -count=1
+```
+
+Genuine RED, exit 1: the test package failed to build because
+`GetJobItems` and `GetJobResults` were undefined. Same-selector GREEN:
+
+```text
+ok  \txirang/backend/internal/api/handlers\t0.055s
+```
+
+Router genuine RED reported both missing GET routes under the exact recovery
+route-matrix selector. The route registration plus authenticated Admin/
+`backup.assets:recover` RBAC matrix then passed:
+
+```text
+ok  \txirang/backend/internal/api\t0.065s
+```
+
+Swagger was regenerated with pinned `swag@v1.16.6`; its focused selector
+passed in `0.067s`.
+
+## Task 10 frontend typed recovery boundary
+
+### First mandated mapper RED
+
+The first invocation was an environment prerequisite failure
+(`vitest: command not found` because this isolated worktree had no
+`web/node_modules`) and is explicitly not counted as RED. After installing the
+exact lockfile dependencies, the unchanged target was run with this selector:
+
+```bash
+cd web
+env -u NODE_ENV npm run test -- \
+  src/lib/api/backup-recovery-api.test.ts \
+  -t 'maps one closed snake_case plan product to safe camelCase state'
+```
+
+Genuine RED, 2026-08-16, exit 1:
+
+```text
+Error: Failed to resolve import "./backup-recovery-api" from "src/lib/api/backup-recovery-api.test.ts". Does the file exist?
+Test Files  1 failed (1)
+Tests  no tests
+```
+
+The failure is the exact missing typed API boundary; no frontend production
+file existed before this RED.
+
+Same-selector GREEN, exit 0:
+
+```text
+Test Files  1 passed (1)
+Tests  1 passed (1)
+Duration  529ms
+```
+
+The smallest GREEN adds a private raw-object boundary with exact key closure,
+schema v1, opaque 32-hex IDs, canonical decimal revision, closed state/mode/
+policy/security products, safe counts, UTC normalization and the exact-mirror/
+in-place product constraint.
+
+### Complete API product family
+
+Selector:
+
+```bash
+cd web
+env -u NODE_ENV npm run test -- \
+  src/lib/api/backup-recovery-api.test.ts \
+  -t 'maps complete preflight, authorization, job, item and result products'
+```
+
+Genuine RED, 2026-08-16, exit 1:
+
+```text
+TypeError: mapRecoveryPreflightProduct is not a function
+at src/lib/api/backup-recovery-api.test.ts:217
+Test Files  1 failed (1)
+Tests  1 failed | 5 skipped
+```
+
+The same selector is GREEN, exit 0:
+
+```text
+Test Files  1 passed (1)
+Tests  1 passed | 5 skipped
+Duration  583ms
+```
+
+The mapper family validates and atomically maps the live preflight,
+authorization, job, item-page and result-page products. Private selection,
+operation, delete and grant-binding digests are validated inside the boundary
+and discarded; the public state does not export them. Job outcome and
+ResultSet lifecycle remain separate closed products.
+
+### Client-secret crypto and exact endpoints
+
+The canonical Web Crypto selector first failed with the missing helper:
+
+```text
+TypeError: generateRecoveryGrantSecret is not a function
+```
+
+The same selector then passed. It proves one `getRandomValues` call over
+exactly 32 bytes, canonical 43-character unpadded base64url output, no
+`Math.random` call and fail-closed behavior when CSPRNG is unavailable.
+
+The endpoint selector first failed with:
+
+```text
+TypeError: createBackupRecoveryApi is not a function
+```
+
+The same selector then passed. It covers create/get/preflight, security
+override, write authorization, execute, job read, exact-mirror delete
+authorization, cancel, real item/result paging, retain, download-ticket and
+cleanup. Assertions bind each request to its exact URL, method, request body,
+step-up proof, caller-owned idempotency key/grant secret and `AbortSignal`.
+
+The complete API-boundary file and frontend typecheck are GREEN:
+
+```text
+backup-recovery-api.test.ts: 6 passed
+npm run typecheck: exit 0
+```
+
+### First controller slice
+
+Selector:
+
+```bash
+cd web
+env -u NODE_ENV npm run test -- \
+  src/features/backup-assets/use-backup-recovery.test.tsx \
+  -t 'hands explicit selection through create, preflight, write authority and execute without serializing secrets'
+```
+
+Genuine RED, 2026-08-16, exit 1:
+
+```text
+Failed to resolve import "./use-backup-recovery" from
+"src/features/backup-assets/use-backup-recovery.test.tsx". Does the file exist?
+Test Files  1 failed (1)
+Tests  no tests
+```
+
+No production controller existed before the RED. The same selector is GREEN,
+exit 0:
+
+```text
+Test Files  1 passed (1)
+Tests  1 passed | 3 skipped
+Duration  673ms
+```
+
+This first slice freezes the explicit selection snapshot, creates and
+preflights the plan, obtains write authority, reuses the exact in-memory secret
+for execute, navigates only with opaque plan/job handles and proves that reason,
+step-up proofs and the raw secret are absent from serialized controller state.
+
+### Task 10 focused backend package regression
+
+After all live-contract RED/GREEN selectors, the directly affected backend
+packages were rerun uncached without starting the Task 11 cross-engine matrix:
+
+```bash
+cd backend
+go test ./internal/backupasset/runtime ./internal/api ./internal/api/handlers -count=1
+```
+
+Exit 0:
+
+```text
+ok  xirang/backend/internal/backupasset/runtime  6.774s
+ok  xirang/backend/internal/api                   0.247s
+ok  xirang/backend/internal/api/handlers          4.286s
+```
+
+### Endpoint-specific controller ambiguity replay
+
+The create selector first failed because a network-ambiguous retry regenerated
+the caller-owned key:
+
+```text
+expected: create-1-stable-replay-key
+received: create-2-stable-replay-key
+```
+
+The same selector is GREEN. The pending create intent now retains its exact
+selection, target and endpoint key across network/5xx ambiguity rather than
+creating a second durable intent.
+
+The execute selector then failed independently:
+
+```text
+idempotencyKey: execute-4-stable-replay-key (received)
+                execute-3-stable-replay-key (expected)
+proof: must-not-be-used (received), execute-proof (expected)
+```
+
+The raw grant secret already matched. The same selector is GREEN after moving
+the key and step-up proof into an execute-specific pending slot beside the
+existing in-memory secret. A successful execute receipt now routes the durable
+opaque job handle before GET reconciliation, so a later ambiguous read cannot
+lose the created job.
+
+### Security override controller RED
+
+The explicitly confirmed, overridable-finding selector produced a genuine RED,
+exit 1:
+
+```text
+TypeError: result.current.overrideSecurity is not a function
+at src/features/backup-assets/use-backup-recovery.test.tsx:562
+Test Files  1 failed (1)
+Tests  1 failed | 7 skipped
+```
+
+Production override behavior did not exist before this RED.
+
+The same override selector is GREEN, exit 0:
+
+```text
+Tests  1 passed | 7 skipped
+```
+
+Only an explicit confirmation for a category present in the live preflight's
+closed `overridableCategories` may call the override endpoint. Its reason,
+step-up proof and endpoint replay intent are kept separate from write and
+delete authority.
+
+### Stale read and context replacement RED
+
+Selector:
+
+```bash
+cd web
+env -u NODE_ENV npm run test -- \
+  src/features/backup-assets/use-backup-recovery.test.tsx \
+  -t 'aborts stale route reads and clears all context-owned state when the recovery context changes'
+```
+
+The stale route response and `AbortSignal` assertions already passed. Genuine
+RED, exit 1, was the independent context replacement assertion:
+
+```text
+expected phase=closed and job=null after contextKey replacement
+received phase=progress with the previous job
+Test Files  1 failed (1)
+Tests  1 failed | 8 skipped
+```
+
+The same selector is GREEN, exit 0 (`1 passed | 8 skipped`). It proves the
+first read's `AbortSignal` is aborted, its late response is generation-stale
+and suppressed, and a context replacement closes the controller and clears all
+selection, plan, job, authority, page and ticket state.
+
+### Cancel ambiguity RED
+
+The cancel selector first failed before production support existed:
+
+```text
+TypeError: result.current.cancelRecovery is not a function
+at src/features/backup-assets/use-backup-recovery.test.tsx:651
+Test Files  1 failed (1)
+Tests  1 failed | 9 skipped
+```
+
+Because the live cancel endpoint has no idempotency key, its ambiguous path
+must reconcile the exact opaque plan/job handle rather than blindly issue a
+second mutation.
+
+The same cancel selector is GREEN, exit 0:
+
+```text
+Test Files  1 passed (1)
+Tests  1 passed | 9 skipped
+Duration  714ms
+```
+
+The mutation is called once and the ambiguous result is reconciled through the
+exact opaque handle.
+
+### Retain and cleanup ambiguity RED
+
+Selector:
+
+```bash
+cd web
+env -u NODE_ENV npm run test -- \
+  src/features/backup-assets/use-backup-recovery.test.tsx \
+  -t 'reconciles ambiguous retain and cleanup receipts from the exact job without duplicating either mutation'
+```
+
+Genuine RED, exit 1: after a lost retain 503 the controller retained stale job
+revision `11` instead of reconciling the durable revision `12` from the exact
+job. The selector reported `1 failed | 10 skipped`. Neither live endpoint
+supports an idempotency key, so the required GREEN must call each mutation once
+and resolve its ambiguous outcome with an exact job GET.
+
+The same retain/cleanup selector is GREEN, exit 0 (`1 passed | 10 skipped`).
+Each mutation is called exactly once; the exact job is read three times total
+(initial load plus the two ambiguity reconciliations).
+
+### Preflight ambiguity RED
+
+Selector:
+
+```bash
+cd web
+env -u NODE_ENV npm run test -- \
+  src/features/backup-assets/use-backup-recovery.test.tsx \
+  -t 'reconciles an ambiguous preflight against the exact plan before allowing an explicit same-revision retry'
+```
+
+Genuine RED, exit 1: the selector expected two exact-plan reads (initial create
+load plus ambiguity reconciliation) but observed one, and reported
+`1 failed | 11 skipped`. The live preflight endpoint has no idempotency key;
+the retry must remain disabled unless reconciliation proves the durable plan is
+still the identical draft revision.
+
+The same preflight selector is GREEN, exit 0 (`1 passed | 11 skipped`). The
+controller performs the exact-plan reconciliation and permits a new explicit
+preflight attempt only when the live plan still matches the original draft
+revision.
+
+At this checkpoint, the controller test file is GREEN (`12 passed`, 856ms) and
+`npm run typecheck` exits 0. Explicit delete/override 5xx replay and unmount
+cleanup selectors remain required before the controller gate is considered
+closed; this checkpoint is therefore not Task 10 completion evidence.
+
+The three explicit controller regression locks then passed:
+
+```text
+delete 5xx exact key/proof/secret replay:  1 passed | 12 skipped, 653ms
+override 5xx exact key/proof replay:       1 passed | 12 skipped, 674ms
+unmount active-read abort/timer cleanup:   1 passed | 12 skipped, 677ms
+```
+
+These assertions were GREEN on their first focused invocation because the
+preceding controller fixes already supplied the behavior; they are recorded as
+regression locks, not mislabeled as new RED evidence.
+
+The complete controller file was then rerun:
+
+```bash
+cd web
+env -u NODE_ENV npm run test -- \
+  src/features/backup-assets/use-backup-recovery.test.tsx
+```
+
+Exit 0:
+
+```text
+Test Files  1 passed (1)
+Tests  13 passed (13)
+Duration  866ms
+```
+
+### Recovery impact panel
+
+Selector:
+
+```bash
+cd web
+env -u NODE_ENV npm run test -- \
+  src/features/backup-assets/recovery-impact-panel.test.tsx \
+  -t 'renders the authoritative destructive impact and keeps its expiry out of live regions'
+```
+
+Genuine RED, exit 1: Vite could not resolve the missing
+`./recovery-impact-panel` module; the suite failed before tests and no production
+component existed. The same selector is GREEN, exit 0:
+
+```text
+Test Files  1 passed (1)
+Tests  1 passed (1)
+Duration  663ms
+```
+
+The panel renders the authoritative create/overwrite/skip/delete counts,
+estimated bytes and destructive exact-mirror warning while keeping the
+preflight expiry outside a noisy live region.
+
+### Recovery job and result panel
+
+The first job/result selector produced a genuine RED, exit 1, because Vite
+could not resolve the missing `./recovery-job-panel` import. The same selector
+is GREEN, exit 0 (`1 passed | 1 skipped`, 794ms), and the complete panel file is
+GREEN:
+
+```text
+Test Files  1 passed (1)
+Tests  2 passed (2)
+Duration  798ms
+```
+
+The panel keeps degraded Job outcome distinct from cleanup-failed ResultSet
+lifecycle, renders exactly one bounded server page of 25 item rows, requests
+the next real page with the current `pageSize`, and suppresses download for
+degraded or partial work. Only a complete isolated job with a ready ResultSet
+exposes download, retain and cleanup actions.
+
+### Recovery plan wizard first slice
+
+Selector:
+
+```bash
+cd web
+env -u NODE_ENV npm run test -- \
+  src/features/backup-assets/recovery-plan-wizard.test.tsx \
+  -t 'owns labelled target inputs and advances only through controller actions'
+```
+
+Genuine RED, exit 1: Vite could not resolve the missing
+`./recovery-plan-wizard` module, and the suite failed before tests. The same
+selector is GREEN, exit 0:
+
+```text
+Tests  1 passed | 2 skipped
+Duration  1.03s
+```
+
+The component now owns labeled target controls, calls only the typed controller
+to set target/create the plan, supplies the Dialog accessible description and
+uses a quiet polite announcement region. Frontend typecheck is GREEN at this
+checkpoint; the full phase sequence remains under test and this is not wizard
+completion evidence.
+
+### Expanded wizard phase and context selectors
+
+The full sequence selector is:
+
+```text
+drives preflight, write authority, progress, verification and isolated result actions without exposing authority material
+```
+
+It produced a genuine behavior RED: a ready ResultSet deadline of
+`2026-08-16T13:00:00Z` was sliced directly into a `datetime-local` value and
+submitted as `2026-08-16T05:00:00.000Z` in the configured timezone. The panel
+now converts UTC to the user's local input value and back without shifting the
+instant. The same selector is GREEN, exit 0 (`1 passed | 4 skipped`, 957ms).
+
+A separate plan-context selector produced a genuine RED because the literal
+`sensitive write reason` remained in the controlled textarea after the plan was
+replaced. The reason and confirmation form state now reset on their owning
+plan/preflight/checkpoint identities. The same selector is GREEN, exit 0
+(`1 passed | 4 skipped`, 856ms).
+
+The execution/progress/verification/result focus target was also changed from
+an anonymous focusable container to a named phase heading. The expanded
+sequence exercises preflight, write authority, execution, progress,
+verification, bounded result actions and DOM authority-material absence.
+
+The complete wizard file was independently rerun:
+
+```bash
+cd web
+env -u NODE_ENV npm run test -- \
+  src/features/backup-assets/recovery-plan-wizard.test.tsx
+```
+
+Exit 0:
+
+```text
+Test Files  1 passed (1)
+Tests  5 passed (5)
+Duration  1.20s
+```
+
+### Existing backup-assets integration RED/GREEN
+
+The existing integration surfaces were changed one selector at a time:
+
+- Recovery route handles: genuine RED expected a valid route but received
+  `invalid`; same selector GREEN (`1 passed | 41 skipped`, 542ms). Only opaque
+  `planId`/`jobId` are accepted, and a job requires its plan.
+- Bulk bar: genuine RED could not find `Recover selected`; same selector GREEN
+  (`1 passed | 2 skipped`, 745ms).
+- Browser: genuine RED could not find the recovery action; same selector GREEN
+  (`1 passed | 4 skipped`, 846ms). The browser remains stateless and delegates
+  the exact refs.
+- Inspector: genuine RED could not find the single-item recovery action; same
+  selector GREEN (`1 passed | 4 skipped`, 751ms).
+- Workspace: genuine RED could not find the recovery action; same selector
+  GREEN (`1 passed | 27 skipped`, 1.32s). The workspace freezes cloned explicit
+  refs in memory before opening the lazy wizard.
+
+The route-state and bulk-bar files were also rerun together, exit 0:
+
+```text
+Test Files  2 passed (2)
+Tests  45 passed (45)
+Duration  784ms
+```
+
+The next page/controller selector produced a genuine RED after 1.02s: a reload
+with an exact `planId` left `state.plan` undefined instead of hydrating that
+opaque plan. Production reload hydration did not exist before the RED.
+
+The same plan-reload selector is GREEN, exit 0 (`1 passed | 13 skipped`,
+725ms) after exact `getPlan` hydration.
+
+### Inspector recovery without bulk selection
+
+A workspace selector then reproduced a genuine integration bug:
+
+```text
+recovers one inspected item without requiring it to be bulk-selected
+```
+
+RED, exit 1: the `Recover this item` button was absent because the inspector
+handoff incorrectly reused a gate requiring non-empty bulk selection. The gate
+now validates the exact refs being handed off; bulk recovery derives its own
+predicate from the bulk refs. The same selector is GREEN, exit 0
+(`1 passed | 28 skipped`, 1.34s).
+
+### Mounted recovery-route replacement race
+
+Selector:
+
+```bash
+cd web
+env -u NODE_ENV npm run test -- \
+  src/features/backup-assets/use-backup-recovery.test.tsx \
+  -t 'resets before hydrating a replacement recovery-page plan handle'
+```
+
+Genuine RED, exit 1 (`1 failed | 14 skipped`): after rerendering the same hook
+from plan handle A to B, the expected 32-hex B id was `undefined` at test line
+401. The plan hydration effect started before the context reset effect, which
+then aborted hydration without a dependency change to restart it. The fix must
+use a collision-safe context/route binding and reset before plan/job hydration.
+
+The same selector is GREEN, exit 0 (`1 passed | 14 skipped`, 767ms). A JSON
+tuple binding over session, workspace context, token, role, planId and jobId is
+reset before hydration; the resulting route generation then retriggers the
+exact plan/job reconciliation.
+
+### Recovery page reload shell RED
+
+Selector:
+
+```bash
+cd web
+env -u NODE_ENV npm run test -- \
+  src/pages/backups-page.test.tsx \
+  -t 'hydrates the recovery wizard from opaque route handles'
+```
+
+Genuine RED, exit 1 (`1 failed | 12 skipped`, 2.27s): the valid
+`recoveryPointId` plus `planId` route still rendered the legacy recovery
+evidence panel, and Testing Library could not find the heading
+`Run recovery preflight` / `运行恢复预检`. The typed recovery reload shell did
+not exist before this RED.
+
+The same selector is GREEN, exit 0 (`1 passed | 12 skipped`, 1.43s). A valid
+opaque plan handle hydrates the typed wizard, while the serialized route is
+asserted not to contain proof, reason, grant, secret or ticket material.
+
+### Recovery page authority fail-closed RED
+
+Selector:
+
+```bash
+cd web
+env -u NODE_ENV npm run test -- \
+  src/pages/backups-page.test.tsx \
+  -t 'fails closed with an explicit unavailable state'
+```
+
+Genuine RED, exit 1 (`1 failed | 13 skipped`, 2.43s): a viewer on a valid plan
+route correctly made no `getPlan` call, but rendered an open blank wizard and
+could not find `Recovery unavailable` / `恢复不可用`. The fix must expose only an
+explicit unavailable product, never a legacy recovery mutation.
+
+The same selector is GREEN, exit 0 (`1 passed | 13 skipped`, 1.55s). The page
+renders the closed unavailable alert, makes no plan request and exposes neither
+a legacy restore action nor a plan-creation mutation.
+
+The changed existing integration files were then rerun together:
+
+```text
+asset browser, bulk bar, inspector, workspace, route state and backups page
+Test Files  6 passed (6)
+Tests  98 passed (98)
+Duration  2.62s
+```
+
+This is integration regression evidence; it does not replace the frozen
+recovery API/controller/panel/wizard/a11y command.
+
+### Page accessibility, responsive and language coverage
+
+The mandated page accessibility file now exercises the recovery Dialog portal
+at 1440, 1200 and 390 pixels with simulated 200% root text scaling. It asserts
+named phase-heading focus transfer, keyboard focus containment, a quiet polite
+announcement region, DOM/browser-channel authority privacy, an axe scan over
+`document.body`, and zh/en recovery-subtree parity.
+
+Fresh exact-file result:
+
+```text
+Test Files  1 passed (1)
+Tests  13 passed (13)
+Duration  4.31s
+```
+
+The first full frontend check reached lint and failed on four Task-10-local
+`react-hooks/set-state-in-effect` errors in the wizard/job panels. The sensitive
+reason/confirmation and retention controls were refactored into
+identity-keyed local form components. The affected seven focused tests,
+frontend typecheck and `npm run lint -- --quiet` then passed. This intermediate
+repair is not a substitute for the fresh full frozen gates below.
+
+## Task 10 frozen frontend gates
+
+The exact user-specified six-file command is GREEN:
+
+```text
+Test Files  6 passed (6)
+Tests  42 passed (42)
+Duration  4.44s
+```
+
+A fresh `env -u NODE_ENV npm run check` is also GREEN: typecheck and lint pass
+(one pre-existing `export-job-panel` `tabIndex` warning only), all 173 test
+files and 1,428 tests pass, and the production build completes in 4.50s.
+
+The first fresh bundle-budget invocation produced a genuine gate RED, exit 1:
+
+```text
+main JS   499.14 / 500 KiB  PASS
+main CSS  105.68 / 105 KiB  FAIL by 0.68 KiB
+```
+
+Only Task-10-added utility combinations may be optimized; all three frontend
+gates must be rerun fresh after the repair.
+
+After consolidating only Task-10-added utility combinations and rebuilding,
+the bundle budget is GREEN, exit 0:
+
+```text
+main JS   499.14 / 500 KiB  PASS
+main CSS  104.97 / 105 KiB  PASS
+```
+
+The budget threshold was not changed. A post-optimization full frontend check
+remains required before independent review.
+
+### Fresh post-optimization frontend gates
+
+The exact six-file command was rerun after the CSS repair, exit 0:
+
+```text
+Test Files  6 passed (6)
+Tests  42 passed (42)
+Duration  4.37s
+```
+
+`env -u NODE_ENV npm run check` was rerun fresh, exit 0:
+
+```text
+typecheck: passed
+lint: passed (one pre-existing export-job-panel no-noninteractive-tabindex warning)
+tests: 173 files, 1,428 tests passed, 20.11s
+build: 3,219 modules, 4.50s
+```
+
+The final fresh bundle result remains JS `499.14/500 KiB` and CSS
+`104.97/105 KiB`, exit 0. `git diff --check` is GREEN.
+
+The Task-10-focused backend package regression was also rerun:
+
+```bash
+cd backend
+go test ./internal/backupasset/recovery ./internal/backupasset/runtime \
+  ./internal/api/handlers ./internal/api
+```
+
+Exit 0; runtime completed in 6.876s and the other three packages were GREEN
+from the current cache. This is Task 10 live-contract evidence, not the Task 11
+cross-engine/PostgreSQL matrix.
+
+## Task 10 independent Trellis check and controller-owned final gates (2026-08-17)
+
+The independent `trellis-check` reviewer inspected the approved PRD/design/
+implement manifests, live recovery projection and delete-authority handoff,
+handler/router/RBAC/Swagger wiring, typed frontend API, controller, wizard,
+panels and integration tests. It found and fixed four Important contract gaps:
+
+1. backend Job/ResultSet projections did not yet reject every contradictory
+   aggregate, lifecycle tuple or malformed off-page row before paging;
+2. optional raw frontend DTO keys and cross-product combinations were not
+   uniformly closed;
+3. paging could cancel lifecycle polling and stale authority/ticket/form state
+   was not uniformly context-bound and one-shot;
+4. degraded-result actions were not constrained to an isolated, complete,
+   zero-failure Job with a ready ResultSet.
+
+It also removed one obsolete private checkpoint type/method after the genuine
+full-backend lint RED reported two `unused` issues. The review finished with no
+open Critical, Important or Minor finding inside the frozen Task 10 manifest.
+The reviewer did not modify this protected evidence file.
+
+The corrected ResultSet projection accepts only these closed durable tuples:
+
+- `ready`: `claimed`, empty owner, no leases, all fences/attempt zero;
+- `revoking`: valid non-tombstoned phase, valid owner and node lease, positive
+  cleanup/node fences and attempt;
+- `cleanup_failed`: `drained|delete_started`, empty owner, no leases, retained
+  positive cleanup fence and attempt;
+- `cleaned`: `tombstoned`, empty owner, no leases, retained positive cleanup
+  fence and attempt.
+
+Every tuple also requires `created_at < plaintext_deadline <= hard_deadline`
+and `updated_at >= created_at`. Job/item aggregate validation precedes page
+slicing, and every bounded result row reuses the whole published-result
+eligibility resolver, so malformed or ineligible off-page state rejects the
+whole product atomically.
+
+After those fixes the controller reran the exact user-frozen frontend selector
+under Node 22, exit 0:
+
+```text
+Test Files  6 passed (6)
+Tests       46 passed (46)
+Duration    4.64s
+```
+
+The fresh full frontend gate also exited 0:
+
+```text
+typecheck: passed
+lint: passed (one pre-existing export-job-panel jsx-a11y warning only)
+tests: 173 files, 1,432 tests passed, 22.55s
+build: 3,219 modules, 4.87s
+```
+
+The controller-owned fresh bundle gate exited 0 without changing either
+threshold:
+
+```text
+main JS   499.14 / 500 KiB  PASS
+main CSS  104.97 / 105 KiB  PASS
+```
+
+The Task-10-only live-contract packages were then rerun uncached, exit 0:
+
+```text
+xirang/backend/internal/backupasset/recovery  32.744s
+xirang/backend/internal/backupasset/runtime    6.858s
+xirang/backend/internal/api/handlers           4.291s
+xirang/backend/internal/api                    0.297s
+```
+
+Independent full backend `golangci-lint run ./...` returned `0 issues`, scoped
+`go vet` passed, `git diff --check` passed, and the final manifest audit found
+exactly 44 dirty Task-10-approved paths, 44 allowed, zero outside and zero
+staged. Task 10 implementation is therefore `complete_checked` while staged,
+commit, push, PR, CI, squash merge and post-merge observation remain pending.
+Child 13 stays `in_progress`, the parent stays `planning`, and Task 11 has not
+started.
