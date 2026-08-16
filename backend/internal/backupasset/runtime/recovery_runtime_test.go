@@ -706,6 +706,8 @@ func TestRecoveryHeartbeatProviderSessionFreezesAbsoluteDeadline(t *testing.T) {
 func TestRecoveryProductionAuthorityBuildRequiresAuthoritiesAndBindsServices(t *testing.T) {
 	db := openRuntimeTestDB(t)
 	if err := db.AutoMigrate(
+		&model.BackupRepository{}, &model.RecoveryPoint{}, &model.RecoveryPointManifest{},
+		&model.CatalogGeneration{}, &model.CatalogEntry{},
 		&model.BackupAssetRecoveryPlan{}, &model.BackupAssetRecoveryPlanItem{},
 		&model.BackupAssetRecoveryPreflight{}, &model.BackupAssetRecoveryGrant{},
 		&model.BackupAssetRecoveryJob{}, &model.BackupAssetRecoveryJobItem{},
@@ -741,6 +743,7 @@ func TestRecoveryProductionAuthorityBuildRequiresAuthoritiesAndBindsServices(t *
 		NodeRevisions:        managedRecoveryNodeRevisionSourceFake{},
 		PreflightEvidence:    managedRecoveryPreflightEvidenceAuthorityFake{},
 		AuthorityRevalidator: managedRecoveryAuthorityRevalidatorFake{},
+		PlanSecurity:         managedRecoveryPlanSecurityAuthorityFake{},
 		WorkspaceKeys:        backupasset.NewKeyring(db, func() time.Time { return now }),
 		Audit:                managedRecoveryAuditWriterFake{}, ContentLifecycle: managedRecoveryContentLifecycleFake{},
 		SourceResolver:          repositoryResolver,
@@ -753,11 +756,25 @@ func TestRecoveryProductionAuthorityBuildRequiresAuthoritiesAndBindsServices(t *
 	if err != nil {
 		t.Fatalf("build enabled Recovery graph: %v", err)
 	}
-	if graph == nil || !graph.admissionEnabled || graph.plan == nil || graph.preflight == nil ||
+	if graph == nil || !graph.admissionEnabled || graph.application == nil || graph.plan == nil || graph.preflight == nil ||
 		graph.authorization == nil || graph.target == nil || graph.workerCoordinator == nil || graph.worker == nil ||
 		graph.resultLifecycle == nil || graph.resultDelivery == nil || graph.reconciliation == nil ||
 		graph.rsyncRestorePort == nil || graph.revokeDrainDelivery == nil || graph.shutdownLifecycle == nil {
 		t.Fatalf("incomplete enabled Recovery graph: %+v", graph)
+	}
+	if _, err := graph.application.CreatePlan(context.Background(), recovery.CreatePlanIntentRequest{
+		RequesterID: 7, Endpoint: "/api/v1/recovery-plans", IdempotencyKey: "recovery-production-gap-key",
+		RepositoryID: strings.Repeat("a", 32), RecoveryPointID: strings.Repeat("b", 32),
+		CatalogGenerationID: strings.Repeat("c", 32), EntryIDs: []string{strings.Repeat("d", 64)},
+		TargetMode: recovery.TargetModeInPlace, TargetNodeID: 9, TargetRootID: "recovery-root",
+		ConflictPolicy: recovery.ConflictExactMirror,
+	}); !errors.Is(err, recovery.ErrRecoverySourceUnavailable) {
+		t.Fatalf("production create materialization error=%v, want concrete materializer to reach source freezing", err)
+	}
+	if _, err := graph.application.Preflight(context.Background(), recovery.RecoveryPreflightRequest{
+		RequesterID: 7, PlanID: strings.Repeat("e", 32), ExpectedPlanRevision: 1,
+	}); !errors.Is(err, recovery.ErrRecoveryAPIObjectNotFound) {
+		t.Fatalf("production preflight materialization error=%v, want owner-scoped hidden not found", err)
 	}
 	claimExecutor, ok := graph.worker.executor.(*managedRecoveryResolvedClaimExecutor)
 	if !ok || claimExecutor.restorePort != graph.rsyncRestorePort {
@@ -781,6 +798,7 @@ func TestRecoveryProductionAuthorityBuildRequiresAuthoritiesAndBindsServices(t *
 		"node revisions":              func(value *managedRecoveryGraphBuildDependencies) { value.NodeRevisions = nil },
 		"preflight evidence":          func(value *managedRecoveryGraphBuildDependencies) { value.PreflightEvidence = nil },
 		"authority revalidator":       func(value *managedRecoveryGraphBuildDependencies) { value.AuthorityRevalidator = nil },
+		"plan security":               func(value *managedRecoveryGraphBuildDependencies) { value.PlanSecurity = nil },
 		"reconciliation revisions":    func(value *managedRecoveryGraphBuildDependencies) { value.ReconciliationRevisions = nil },
 		"reconciliation finding sink": func(value *managedRecoveryGraphBuildDependencies) { value.ReconciliationFindings = nil },
 		"metrics":                     func(value *managedRecoveryGraphBuildDependencies) { value.Metrics = nil },
@@ -1058,6 +1076,7 @@ func TestManagedRecoveryEnabledGraphRunsLogicalReconciliationImmediatelyAndOnCad
 		NodeRevisions:           managedRecoveryNodeRevisionSourceFake{},
 		PreflightEvidence:       managedRecoveryPreflightEvidenceAuthorityFake{},
 		AuthorityRevalidator:    managedRecoveryAuthorityRevalidatorFake{},
+		PlanSecurity:            managedRecoveryPlanSecurityAuthorityFake{},
 		WorkspaceKeys:           backupasset.NewKeyring(db, func() time.Time { return now }),
 		Audit:                   managedRecoveryAuditWriterFake{},
 		ContentLifecycle:        managedRecoveryContentLifecycleFake{},
@@ -1939,6 +1958,15 @@ func (managedRecoveryPreflightEvidenceAuthorityFake) ObserveRecoveryPreflightEvi
 	recovery.PreflightExternalEvidenceRequest,
 ) (recovery.PreflightExternalEvidenceObservation, error) {
 	return recovery.PreflightExternalEvidenceObservation{}, nil
+}
+
+type managedRecoveryPlanSecurityAuthorityFake struct{}
+
+func (managedRecoveryPlanSecurityAuthorityFake) ObserveRecoveryPlanSecurity(
+	context.Context,
+	recovery.RecoveryPlanSecurityRequest,
+) (recovery.RecoveryPlanSecurityEvidence, error) {
+	return recovery.RecoveryPlanSecurityEvidence{}, recovery.ErrRecoveryPlanUnavailable
 }
 
 type managedRecoveryAuthorityRevalidatorFake struct{}

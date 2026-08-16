@@ -185,6 +185,13 @@ type recoveryTargetPreflightSessionBinding struct {
 func newRecoveryTargetPreflightSessionBinding(
 	plan model.BackupAssetRecoveryPlan,
 ) (recoveryTargetPreflightSessionBinding, error) {
+	return newRecoveryTargetPreflightSessionBindingForRevision(plan, plan.TargetBaseRevision)
+}
+
+func newRecoveryTargetPreflightSessionBindingForRevision(
+	plan model.BackupAssetRecoveryPlan,
+	targetRevision string,
+) (recoveryTargetPreflightSessionBinding, error) {
 	mode := TargetMode(plan.TargetMode)
 	if !validOpaqueID(plan.ID) || PlanState(plan.State) != PlanStateDraft ||
 		!validDigest(plan.BindingDigest) || plan.TransitionRevision == 0 || mode.Validate() != nil ||
@@ -193,7 +200,7 @@ func newRecoveryTargetPreflightSessionBinding(
 		!validBoundedOpaque(plan.TargetRootID, targetRootIDMax) ||
 		!validDigest(plan.RootLocatorDigest) || !validOpaqueRevision(plan.RootRevision) ||
 		!validOpaqueRevision(plan.FilesystemRevision) || !validOpaqueRevision(plan.TargetBaseRevision) ||
-		!validDigest(plan.PathDigest) || !validOpaqueRevision(plan.PreflightRevision) ||
+		!validDigest(plan.PathDigest) || !validOpaqueRevision(targetRevision) || !validOpaqueRevision(plan.PreflightRevision) ||
 		plan.PreflightExpiresAt.IsZero() || strings.HasPrefix(plan.EncryptedTargetRootLocator, "enc:v2:") ||
 		strings.HasPrefix(plan.EncryptedTargetRelativePath, "enc:v2:") ||
 		!validTargetRelativeLocator(plan.EncryptedTargetRelativePath) {
@@ -220,7 +227,7 @@ func newRecoveryTargetPreflightSessionBinding(
 		rootLocatorDigest: plan.RootLocatorDigest, rootRevision: plan.RootRevision,
 		filesystemRevision: plan.FilesystemRevision, targetPathDigest: plan.PathDigest,
 		privateRelativeLocator: plan.EncryptedTargetRelativePath,
-		targetRevision:         plan.TargetBaseRevision, preflightRevision: plan.PreflightRevision,
+		targetRevision:         targetRevision, preflightRevision: plan.PreflightRevision,
 	}
 	binding.bindingDigest = binding.digest()
 	return binding, nil
@@ -1630,18 +1637,37 @@ type TargetRootRegistrationPurpose string
 
 const TargetRootRegistrationPurposeReadOnly TargetRootRegistrationPurpose = "recovery_target_root_registration"
 
+// TargetRootMutation identifies the closed administrative transition requested
+// by the API. Registration and rotation deliberately remain distinct so the
+// authority owner can enforce absent-versus-present semantics.
+type TargetRootMutation string
+
+const (
+	TargetRootMutationRegister TargetRootMutation = "register"
+	TargetRootMutationRotate   TargetRootMutation = "rotate"
+	TargetRootMutationDelete   TargetRootMutation = "delete"
+)
+
 // TargetRootRegistrationRequest carries the complete private input that a
 // read-only target probe must bind before a root record can be persisted.
 type TargetRootRegistrationRequest struct {
-	NodeID             uint
-	RootID             string
-	SafeLabel          string
-	Locator            string                            `json:"-"`
-	Policy             settings.RecoveryTargetRootPolicy `json:"-"`
-	NodeRevision       string                            `json:"-"`
-	CredentialRevision string                            `json:"-"`
-	Purpose            TargetRootRegistrationPurpose     `json:"-"`
-	ReadOnly           bool                              `json:"-"`
+	Mutation            TargetRootMutation
+	RequesterID         uint
+	Endpoint            string
+	IdempotencyKey      string `json:"-"`
+	SessionJTI          string `json:"-"`
+	SessionRole         string
+	SessionTokenVersion uint
+	SessionExpiresAt    time.Time
+	NodeID              uint
+	RootID              string
+	SafeLabel           string
+	Locator             string                            `json:"-"`
+	Policy              settings.RecoveryTargetRootPolicy `json:"-"`
+	NodeRevision        string                            `json:"-"`
+	CredentialRevision  string                            `json:"-"`
+	Purpose             TargetRootRegistrationPurpose     `json:"-"`
+	ReadOnly            bool                              `json:"-"`
 }
 
 func (request TargetRootRegistrationRequest) String() string {
@@ -1650,6 +1676,21 @@ func (request TargetRootRegistrationRequest) String() string {
 }
 
 func (request TargetRootRegistrationRequest) GoString() string { return request.String() }
+
+// TargetRootDeletionRequest carries the same service-owned replay namespace as
+// registration without exposing any private root definition.
+type TargetRootDeletionRequest struct {
+	Mutation            TargetRootMutation
+	RequesterID         uint
+	Endpoint            string
+	IdempotencyKey      string `json:"-"`
+	SessionJTI          string `json:"-"`
+	SessionRole         string
+	SessionTokenVersion uint
+	SessionExpiresAt    time.Time
+	NodeID              uint
+	RootID              string
+}
 
 // TargetRootRegistrationObservation is the private, current product of a
 // purpose-exact read-only probe. It never carries a locator or policy input.

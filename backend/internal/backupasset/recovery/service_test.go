@@ -145,6 +145,111 @@ func (fixture *targetRootAuthorityServiceFixture) request(locator, label string)
 	}
 }
 
+func (fixture *targetRootAuthorityServiceFixture) authorizedRequest(
+	mutation TargetRootMutation,
+	key string,
+	locator string,
+	label string,
+) TargetRootRegistrationRequest {
+	request := fixture.request(locator, label)
+	request.Mutation = mutation
+	request.RequesterID = 1
+	request.Endpoint = "/api/v1/settings/backup-assets/recovery/target-roots"
+	if mutation == TargetRootMutationRotate {
+		request.Endpoint = "/api/v1/settings/backup-assets/recovery/target-roots/:nodeId/:rootId"
+	}
+	request.IdempotencyKey = key
+	request.SessionJTI = strings.Repeat("9", 32)
+	request.SessionRole = "admin"
+	request.SessionTokenVersion = 1
+	request.SessionExpiresAt = fixture.now.Add(time.Hour)
+	return request
+}
+
+func TestTargetRootAuthorityServiceOwnsMutationModeAndDurableReplay(t *testing.T) {
+	fixture := newTargetRootAuthorityServiceFixture(t)
+	register := fixture.authorizedRequest(
+		TargetRootMutationRegister, "target-root-register-idempotency-key",
+		"/srv/FAKE_TARGET_ROOT_AUTHORIZED_REGISTER_FOR_TEST_ONLY", "authorized-root",
+	)
+	first, firstRollback, err := fixture.service.RegisterMutation(context.Background(), register)
+	if err != nil || first.RootID != register.RootID || firstRollback.Replay() {
+		t.Fatalf("register result=%+v err=%v", first, err)
+	}
+	probeCalls := len(fixture.probe.calls)
+	replayed, replayRollback, err := fixture.service.RegisterMutation(context.Background(), register)
+	if err != nil || replayed != first || !replayRollback.Replay() || len(fixture.probe.calls) != probeCalls {
+		t.Fatalf("receipt-first replay result=%+v err=%v probes=%d want=%d", replayed, err, len(fixture.probe.calls), probeCalls)
+	}
+	otherSession := register
+	otherSession.SessionJTI = strings.Repeat("8", 32)
+	if _, _, err := fixture.service.RegisterMutation(context.Background(), otherSession); !errors.Is(err, backupasset.ErrForbidden) {
+		t.Fatalf("different-session replay error=%v", err)
+	}
+	changed := register
+	changed.SafeLabel = "changed-intent"
+	if _, _, err := fixture.service.RegisterMutation(context.Background(), changed); !errors.Is(err, ErrTargetRootIdempotencyConflict) {
+		t.Fatalf("changed-intent replay error=%v", err)
+	}
+	otherKey := register
+	otherKey.IdempotencyKey = "target-root-register-other-key"
+	if _, _, err := fixture.service.RegisterMutation(context.Background(), otherKey); !errors.Is(err, ErrTargetRootMutationConflict) {
+		t.Fatalf("register-existing error=%v", err)
+	}
+	rotate := fixture.authorizedRequest(
+		TargetRootMutationRotate, "target-root-rotate-idempotency-key",
+		"/srv/FAKE_TARGET_ROOT_AUTHORIZED_ROTATE_FOR_TEST_ONLY", "rotated-root",
+	)
+	rotated, _, err := fixture.service.RegisterMutation(context.Background(), rotate)
+	if err != nil || rotated.SafeLabel != "rotated-root" {
+		t.Fatalf("rotate result=%+v err=%v", rotated, err)
+	}
+	deleteRequest := TargetRootDeletionRequest{
+		Mutation: TargetRootMutationDelete, RequesterID: 1,
+		Endpoint:       "/api/v1/settings/backup-assets/recovery/target-roots/:nodeId/:rootId",
+		IdempotencyKey: "target-root-delete-idempotency-key", SessionJTI: strings.Repeat("9", 32),
+		SessionRole: "admin", SessionTokenVersion: 1, SessionExpiresAt: fixture.now.Add(time.Hour),
+		NodeID: rotate.NodeID, RootID: rotate.RootID,
+	}
+	deleted, _, err := fixture.service.DeleteAuthorizedMutation(context.Background(), deleteRequest)
+	if err != nil || deleted.NodeID != rotate.NodeID || deleted.RootID != rotate.RootID {
+		t.Fatalf("delete result=%+v err=%v", deleted, err)
+	}
+	replayedDelete, _, err := fixture.service.DeleteAuthorizedMutation(context.Background(), deleteRequest)
+	if err != nil || replayedDelete != deleted {
+		t.Fatalf("delete replay result=%+v err=%v", replayedDelete, err)
+	}
+	fixture.now = deleteRequest.SessionExpiresAt
+	if _, _, err := fixture.service.DeleteAuthorizedMutation(context.Background(), deleteRequest); !errors.Is(err, ErrTargetRootIdempotencyConflict) {
+		t.Fatalf("expired-session replay error=%v", err)
+	}
+}
+
+func TestTargetRootAuthorityServiceReturnsHiddenNotFoundForMissingNodes(t *testing.T) {
+	fixture := newTargetRootAuthorityServiceFixture(t)
+	const missingNodeID = uint(999)
+	if _, err := fixture.service.List(context.Background(), missingNodeID); !errors.Is(err, settings.ErrRecoveryTargetRootNotFound) {
+		t.Fatalf("missing-node list error=%v, want ErrRecoveryTargetRootNotFound", err)
+	}
+	register := fixture.authorizedRequest(
+		TargetRootMutationRegister, "target-root-missing-node-register-key",
+		"/srv/FAKE_TARGET_ROOT_MISSING_NODE_FOR_TEST_ONLY", "missing-node-root",
+	)
+	register.NodeID = missingNodeID
+	if _, _, err := fixture.service.RegisterMutation(context.Background(), register); !errors.Is(err, settings.ErrRecoveryTargetRootNotFound) {
+		t.Fatalf("missing-node register error=%v, want ErrRecoveryTargetRootNotFound", err)
+	}
+	deleteRequest := TargetRootDeletionRequest{
+		Mutation: TargetRootMutationDelete, RequesterID: 1, Endpoint: targetRootItemEndpoint,
+		IdempotencyKey: "target-root-missing-node-delete-key", SessionJTI: strings.Repeat("9", 32),
+		SessionRole: "admin", SessionTokenVersion: 1, SessionExpiresAt: fixture.now.Add(time.Hour),
+		NodeID: missingNodeID, RootID: register.RootID,
+	}
+	if _, _, err := fixture.service.DeleteAuthorizedMutation(context.Background(), deleteRequest); !errors.Is(err, settings.ErrRecoveryTargetRootNotFound) {
+		t.Fatalf("missing-node delete error=%v, want ErrRecoveryTargetRootNotFound", err)
+	}
+}
+
 func TestTargetRootAuthorityServiceRequiresFreshReadOnlyProbe(t *testing.T) {
 	t.Run("observation after initial capture uses post-probe clock", func(t *testing.T) {
 		fixture := newTargetRootAuthorityServiceFixture(t)
@@ -2633,6 +2738,30 @@ func TestRecoveryAuthorizationReceiptAuditUsesBoundedDetachedContext(t *testing.
 	}
 }
 
+func TestRecoveryAuthorizationAuditOmitsGrantProofAndSecretMaterial(t *testing.T) {
+	spy := &authorizationReceiptAuditSpy{}
+	service := &AuthorizationService{auditWriter: spy}
+	service.writeAuthorizationAudit(context.Background(), RecoveryAuthorizationRequest{
+		RequesterID: 7,
+		Operation:   AuthorizationReceiptWriteAuthorize,
+		Session:     RecoveryAuthorizationSession{Role: "admin"},
+		Proof: RecoveryAuthorizationProof{
+			JTI: "FAKE_RECOVERY_RAW_PROOF_JTI_FOR_AUDIT_TEST_ONLY",
+		},
+		GrantSecret: "FAKE_RECOVERY_SECRET_FOR_AUDIT_TEST_ONLY",
+	}, RecoveryAuthorizationResult{
+		GrantID: "FAKE_RECOVERY_GRANT_FOR_AUDIT_TEST_ONLY",
+	})
+	if len(spy.inputs) != 1 {
+		t.Fatalf("authorization audit count=%d", len(spy.inputs))
+	}
+	input := spy.inputs[0]
+	if input.GrantID != "" || input.StepUpProofID != "" || input.StepUpAction != "" ||
+		strings.Contains(fmt.Sprintf("%+v", input), "FAKE_RECOVERY") {
+		t.Fatalf("authorization audit exposed grant/proof/secret material: %+v", input)
+	}
+}
+
 type authorizationReceiptAuditContextSpy struct {
 	hasDeadline       bool
 	deadlineRemaining time.Duration
@@ -3996,6 +4125,30 @@ func TestRecoveryPlanSnapshotsResolvedTargetRootLocator(t *testing.T) {
 	}
 }
 
+func TestRecoveryPlanCreateAuditsOnlyCommittedNewIntent(t *testing.T) {
+	fixture := newPlanServiceTestFixture(t, false)
+	audit := &recoveryAPIAuditSpy{err: errors.New("FAKE_PLAN_AUDIT_FAILURE_FOR_TEST_ONLY")}
+	fixture.service.audit = audit
+
+	created, err := fixture.service.CreatePlan(context.Background(), fixture.request)
+	if err != nil || created.Replay {
+		t.Fatalf("CreatePlan() result=%+v error=%v", created, err)
+	}
+	replayed, err := fixture.service.CreatePlan(context.Background(), fixture.request)
+	if err != nil || !replayed.Replay || replayed.PlanID != created.PlanID {
+		t.Fatalf("CreatePlan() replay=%+v error=%v", replayed, err)
+	}
+	if len(audit.events) != 1 || audit.events[0].Action != backupasset.AuditActionRecoveryPlan ||
+		audit.events[0].Actor.UserID != fixture.request.RequesterID ||
+		audit.events[0].RepositoryID != fixture.request.Selection.RepositoryID ||
+		audit.events[0].RecoveryPointID != fixture.request.Selection.RecoveryPointID ||
+		audit.events[0].ItemCount != fixture.request.EstimatedItems ||
+		audit.events[0].ByteCount != fixture.request.EstimatedBytes ||
+		audit.events[0].Fields[backupasset.AuditFieldStage] != "create" {
+		t.Fatalf("plan create audit=%+v", audit.events)
+	}
+}
+
 func TestRecoveryPlanTargetRootResolutionFailsClosedBeforeWrites(t *testing.T) {
 	for _, name := range []string{
 		"nil resolver",
@@ -4628,12 +4781,6 @@ func TestPlanIdempotencyReplayAndOneFieldConflicts(t *testing.T) {
 			},
 		},
 		{
-			name: "preflight revision",
-			mutate: func(request *CreatePlanRequest) {
-				request.Plan.Binding.PreflightRevision = "preflight-revision-2"
-			},
-		},
-		{
 			name: "estimated items",
 			mutate: func(request *CreatePlanRequest) {
 				request.EstimatedItems++
@@ -4744,6 +4891,23 @@ func TestPlanIdempotencyConflictsOnMutablePrivateLocatorOrProviderChange(t *test
 			}
 			assertPlanCreationRows(t, fixture.db, len(fixture.request.Selection.AssetRefs))
 		})
+	}
+}
+
+func TestPlanCreateSequentialReplayIgnoresServerGeneratedPreflightProducts(t *testing.T) {
+	fixture := newPlanServiceTestFixture(t, false)
+	current := fixture.now
+	fixture.service.now = func() time.Time { return current }
+	created, err := fixture.service.CreatePlan(context.Background(), cloneCreatePlanRequest(fixture.request))
+	if err != nil {
+		t.Fatalf("CreatePlan() error=%v", err)
+	}
+	retry := cloneCreatePlanRequest(fixture.request)
+	retry.Plan.Binding.PreflightRevision = "server-preflight-revision-retry"
+	current = fixture.now.Add(time.Minute)
+	replayed, err := fixture.service.CreatePlan(context.Background(), retry)
+	if err != nil || !replayed.Replay || replayed.PlanID != created.PlanID {
+		t.Fatalf("server-product replay=%#v error=%v, want original plan", replayed, err)
 	}
 }
 
@@ -5036,12 +5200,14 @@ func TestPlanCreateConcurrentSameIntent(t *testing.T) {
 	var callersReady sync.WaitGroup
 	callersReady.Add(callers)
 	for index := 0; index < callers; index++ {
-		go func() {
+		go func(index int) {
 			callersReady.Done()
 			<-start
-			result, err := fixture.service.CreatePlan(timeout, cloneCreatePlanRequest(fixture.request))
+			request := cloneCreatePlanRequest(fixture.request)
+			request.Plan.Binding.PreflightRevision = fmt.Sprintf("server-preflight-revision-%d", index+1)
+			result, err := fixture.service.CreatePlan(timeout, request)
 			outcomes <- outcome{result: result, err: err}
-		}()
+		}(index)
 	}
 	callersReady.Wait()
 	close(start)
@@ -7822,6 +7988,36 @@ func newRecoveryReconciliationServiceTestFixture(t *testing.T) *recoveryReconcil
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	return newRecoveryReconciliationServiceTestFixtureOnDB(t, db)
+}
+
+func TestRecoveryReconciliationBindingAcceptsDistinctPreflightTargetRevision(t *testing.T) {
+	rootLocator := "/srv/private-recovery-root"
+	rootDigest, err := settings.RecoveryTargetRootLocatorDigest(92, "root-r62", rootLocator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := model.BackupAssetRecoveryPlan{
+		ID: strings.Repeat("1", 32), TargetMode: string(TargetModeIsolated), TargetNodeID: 92,
+		TargetRootID: "root-r62", EncryptedTargetRootLocator: rootLocator, RootLocatorDigest: rootDigest,
+		TargetBaseRevision: "node-revision-r62", CredentialScopeRevision: "credential-revision-r62",
+		RootRevision: "root-revision-r62",
+	}
+	jobID := strings.Repeat("2", 32)
+	job := model.BackupAssetRecoveryJob{
+		ID: jobID, PlanID: plan.ID, State: string(JobStateRunning), TargetMode: string(TargetModeIsolated),
+		TargetNodeID: plan.TargetNodeID, TargetRootID: plan.TargetRootID, RootLocatorDigest: rootDigest,
+		PathDigest:            framedDigest("xirang/recovery/r62-distinct-target/v1", jobID),
+		PreflightNodeRevision: plan.TargetBaseRevision, PreflightTargetRevision: "target-observation-revision-r62",
+		WorkspacePhase: string(WorkspacePhaseNone), WorkspaceCleanupPhase: string(CleanupPhaseClaimed),
+		EncryptedWorkspaceRelativeLocator: recoveryWorkspaceLocatorDirectory + "/" + jobID,
+		WorkspaceBindingDigest:            framedDigest("xirang/recovery/r62-distinct-workspace/v1", jobID),
+	}
+	root := settings.RecoveryTargetRootResolution{
+		NodeID: plan.TargetNodeID, RootID: plan.TargetRootID, Locator: rootLocator, LocatorDigest: rootDigest,
+	}
+	if !validRecoveryReconciliationUnreservedJobBinding(job, plan, root) {
+		t.Fatal("distinct opaque target observation revision must remain independent from the node revision")
+	}
 }
 
 func newRecoveryReconciliationServiceTestFixtureOnDB(

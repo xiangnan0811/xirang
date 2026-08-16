@@ -807,6 +807,16 @@ func TestRecoveryTargetRootRegistryKeysNeverUseGenericSettings(t *testing.T) {
 	if err := db.Create(&model.SystemSetting{Key: malformedKey, Value: "enc:v2:FAKE_MALFORMED_INTERNAL_ROW_FOR_TEST_ONLY"}).Error; err != nil {
 		t.Fatal(err)
 	}
+	receiptKey := RecoveryTargetRootReceiptKeyPrefix + strings.Repeat("a", 64)
+	receiptValue := "FAKE_PRIVATE_RECOVERY_TARGET_ROOT_RECEIPT_FOR_TEST_ONLY"
+	if err := db.Create(&model.SystemSetting{Key: receiptKey, Value: receiptValue}).Error; err != nil {
+		t.Fatal(err)
+	}
+	downgradeReceiptKey := RecoveryDowngradeReceiptKeyPrefix + strings.Repeat("b", 64)
+	downgradeReceiptValue := "FAKE_PRIVATE_RECOVERY_DOWNGRADE_RECEIPT_FOR_TEST_ONLY"
+	if err := db.Create(&model.SystemSetting{Key: downgradeReceiptKey, Value: downgradeReceiptValue}).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	internalKeys := []string{
 		ProcessingContentPipelineRevisionKey,
@@ -814,6 +824,10 @@ func TestRecoveryTargetRootRegistryKeysNeverUseGenericSettings(t *testing.T) {
 		key,
 		malformedKey,
 		RecoveryTargetRootKeyPrefix + ".",
+		receiptKey,
+		RecoveryTargetRootReceiptKeyPrefix + ".",
+		downgradeReceiptKey,
+		RecoveryDowngradeReceiptKeyPrefix + ".",
 	}
 	for _, internalKey := range internalKeys {
 		if !IsInternalSettingKey(internalKey) {
@@ -825,6 +839,12 @@ func TestRecoveryTargetRootRegistryKeysNeverUseGenericSettings(t *testing.T) {
 		"backup_assets.internal.recovery_target_root.v10.71.root-a",
 		"backup_assets.internal.recovery_target_root.v1x.71.root-a",
 		"backup_assets.internal.recovery_target_roots.v1.71.root-a",
+		"backup_assets.internal.recovery_root_receipt.v1",
+		"backup_assets.internal.recovery_root_receipt.v10." + strings.Repeat("a", 64),
+		"backup_assets.internal.recovery_root_receipt.v1x." + strings.Repeat("a", 64),
+		"backup_assets.internal.recovery_downgrade_receipt.v1",
+		"backup_assets.internal.recovery_downgrade_receipt.v10." + strings.Repeat("b", 64),
+		"backup_assets.internal.recovery_downgrade_receipt.v1x." + strings.Repeat("b", 64),
 	} {
 		if IsInternalSettingKey(lookalike) {
 			t.Fatalf("lookalike key was classified internal: %q", lookalike)
@@ -840,7 +860,7 @@ func TestRecoveryTargetRootRegistryKeysNeverUseGenericSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, internalKey := range []string{key, malformedKey} {
+	for _, internalKey := range []string{key, malformedKey, receiptKey, downgradeReceiptKey} {
 		if _, ok := all[internalKey]; ok {
 			t.Fatalf("internal key appeared in GetAll: %q", internalKey)
 		}
@@ -865,6 +885,15 @@ func TestRecoveryTargetRootRegistryKeysNeverUseGenericSettings(t *testing.T) {
 	}
 	if got := rawRecoveryTargetRootValue(t, db, key); got != original {
 		t.Fatal("generic settings operation changed the private root row")
+	}
+	var receipt model.SystemSetting
+	if err := db.Where("key = ?", receiptKey).Take(&receipt).Error; err != nil || receipt.Value != receiptValue {
+		t.Fatal("generic settings operation changed the private mutation receipt")
+	}
+	var downgradeReceipt model.SystemSetting
+	if err := db.Where("key = ?", downgradeReceiptKey).Take(&downgradeReceipt).Error; err != nil ||
+		downgradeReceipt.Value != downgradeReceiptValue {
+		t.Fatal("generic settings operation changed the private downgrade receipt")
 	}
 }
 

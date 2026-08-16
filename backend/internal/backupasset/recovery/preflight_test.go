@@ -391,6 +391,8 @@ func TestTargetPreflightEvaluatorRequiresIndependentExternalEvidence(t *testing.
 
 func TestPreflightServicePersistsCanonicalEncryptedSnapshotAndCandidate(t *testing.T) {
 	fixture := newPreflightPersistenceFixture(t)
+	audit := &recoveryAPIAuditSpy{err: errors.New("FAKE_PREFLIGHT_AUDIT_FAILURE_FOR_TEST_ONLY")}
+	fixture.service.audit = audit
 
 	result, err := fixture.service.EvaluateAndPersist(context.Background(), fixture.request)
 	if err != nil {
@@ -438,6 +440,35 @@ func TestPreflightServicePersistsCanonicalEncryptedSnapshotAndCandidate(t *testi
 	if rawCiphertext == fixture.encodedOperations || !secure.IsEncrypted(rawCiphertext) ||
 		strings.Contains(rawCiphertext, fixture.operations.Rows[0].TargetPathDigest) {
 		t.Fatalf("operation snapshot was not encrypted at rest: %q", rawCiphertext)
+	}
+	if len(audit.events) != 1 || audit.events[0].Action != backupasset.AuditActionRecoveryPreflight ||
+		audit.events[0].Actor.UserID != fixture.request.RequesterID ||
+		audit.events[0].ItemCount != fixture.operations.Impact.EstimatedItems ||
+		audit.events[0].ByteCount != fixture.operations.Impact.EstimatedBytes ||
+		audit.events[0].Fields[backupasset.AuditFieldStage] != "persist" {
+		t.Fatalf("preflight audit=%+v", audit.events)
+	}
+}
+
+func TestPreflightServicePersistsDistinctCurrentTargetRevisionAfterExactProductMatch(t *testing.T) {
+	fixture := newPreflightPersistenceFixture(t)
+	distinctTargetRevision := "sftpt1:current-target-v2"
+	fixture.request.Input.Frozen.TargetRevision = distinctTargetRevision
+	fixture.target.facts.TargetRevision = distinctTargetRevision
+
+	result, err := fixture.service.EvaluateAndPersist(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("EvaluateAndPersist(distinct target revision) error=%v", err)
+	}
+	if !result.Persisted || result.Evaluation.Snapshot.TargetRevision != distinctTargetRevision {
+		t.Fatalf("result=%#v, want persisted current target revision", result)
+	}
+	var persisted model.BackupAssetRecoveryPreflight
+	if err := fixture.db.Where("plan_id = ?", fixture.planID).Take(&persisted).Error; err != nil {
+		t.Fatal(err)
+	}
+	if persisted.TargetRevision != distinctTargetRevision {
+		t.Fatalf("persisted target revision=%q, want %q", persisted.TargetRevision, distinctTargetRevision)
 	}
 }
 

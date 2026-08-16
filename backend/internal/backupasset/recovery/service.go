@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -39,10 +40,12 @@ const (
 )
 
 var (
-	errPlanIdempotencyRace   = errors.New("recovery plan idempotency race")
-	errPlanDatabaseBusy      = errors.New("recovery plan database busy")
-	ErrRecoveryTargetChanged = errors.New("recovery target changed")
-	planSavepointSequence    atomic.Uint64
+	errPlanIdempotencyRace           = errors.New("recovery plan idempotency race")
+	errPlanDatabaseBusy              = errors.New("recovery plan database busy")
+	ErrRecoveryTargetChanged         = errors.New("recovery target changed")
+	ErrTargetRootIdempotencyConflict = errors.New("recovery target root idempotency conflict")
+	ErrTargetRootMutationConflict    = errors.New("recovery target root mutation conflict")
+	planSavepointSequence            atomic.Uint64
 )
 
 type planCreateStage uint8
@@ -140,19 +143,35 @@ type targetRootPersistedMutationState struct {
 	present bool
 }
 
+type targetRootMutationReceipt struct {
+	SchemaVersion    int                                `json:"schema_version"`
+	IntentDigest     string                             `json:"intent_digest"`
+	SessionDigest    string                             `json:"session_digest"`
+	SessionExpiresAt time.Time                          `json:"session_expires_at"`
+	Result           settings.RecoveryTargetRootSummary `json:"result"`
+}
+
 // TargetRootMutationRollback is an opaque, Recovery-owned capability for
 // restoring one exact private root mutation. Its persisted state is never
 // exported, formatted, or serialized.
 type TargetRootMutationRollback struct {
-	owner  *TargetRootAuthorityService
-	key    string
-	before targetRootPersistedMutationState
-	after  targetRootPersistedMutationState
+	owner         *TargetRootAuthorityService
+	key           string
+	before        targetRootPersistedMutationState
+	after         targetRootPersistedMutationState
+	receiptKey    string
+	receiptBefore targetRootPersistedMutationState
+	receiptAfter  targetRootPersistedMutationState
+	noOp          bool
 }
 
 func (TargetRootMutationRollback) String() string               { return "TargetRootMutationRollback{}" }
 func (rollback TargetRootMutationRollback) GoString() string    { return rollback.String() }
 func (TargetRootMutationRollback) MarshalJSON() ([]byte, error) { return []byte("{}"), nil }
+
+// Replay reports whether the transition callback observed an already committed
+// receipt instead of applying a new durable root mutation.
+func (rollback TargetRootMutationRollback) Replay() bool { return rollback.noOp }
 
 func NewTargetRootAuthorityService(
 	dependencies TargetRootAuthorityServiceDependencies,
@@ -179,7 +198,59 @@ func (service *TargetRootAuthorityService) ValidateRegistration(request TargetRo
 		service.newRevision == nil || service.now == nil {
 		return ErrRecoveryTargetUnavailable
 	}
-	return validateTargetRootRegistrationRequest(request)
+	if err := validateTargetRootRegistrationRequest(request); err != nil {
+		return err
+	}
+	if request.Mutation != "" {
+		now := service.now().UTC()
+		_, _, _, err := targetRootRegistrationReceiptAuthority(request, now)
+		if err != nil {
+			return err
+		}
+		if !now.Before(request.SessionExpiresAt.UTC()) {
+			return backupasset.ErrForbidden
+		}
+	}
+	return nil
+}
+
+// ReplayRegistration returns a durable same-intent, same-session result
+// without opening a probe or runtime transition. It is safe to call before
+// validating a new step-up proof because absence never authorizes a mutation.
+func (service *TargetRootAuthorityService) ReplayRegistration(
+	ctx context.Context,
+	request TargetRootRegistrationRequest,
+) (settings.RecoveryTargetRootSummary, bool, error) {
+	if service == nil || service.db == nil || service.now == nil || ctx == nil {
+		return settings.RecoveryTargetRootSummary{}, false, ErrRecoveryTargetUnavailable
+	}
+	if err := validateTargetRootRegistrationRequest(request); err != nil {
+		return settings.RecoveryTargetRootSummary{}, false, err
+	}
+	receiptKey, intentDigest, sessionDigest, err := targetRootRegistrationReceiptAuthority(
+		request, service.now().UTC(),
+	)
+	if err != nil {
+		return settings.RecoveryTargetRootSummary{}, false, err
+	}
+	return service.replayTargetRootMutation(ctx, receiptKey, intentDigest, sessionDigest)
+}
+
+// ReplayDeletion is the receipt-first counterpart for a closed root delete.
+func (service *TargetRootAuthorityService) ReplayDeletion(
+	ctx context.Context,
+	request TargetRootDeletionRequest,
+) (settings.RecoveryTargetRootSummary, bool, error) {
+	if service == nil || service.db == nil || service.now == nil || ctx == nil {
+		return settings.RecoveryTargetRootSummary{}, false, ErrRecoveryTargetUnavailable
+	}
+	receiptKey, intentDigest, sessionDigest, err := targetRootDeletionReceiptAuthority(
+		request, service.now().UTC(),
+	)
+	if err != nil {
+		return settings.RecoveryTargetRootSummary{}, false, err
+	}
+	return service.replayTargetRootMutation(ctx, receiptKey, intentDigest, sessionDigest)
 }
 
 // Register performs one fresh read-only target observation outside the
@@ -222,6 +293,27 @@ func (service *TargetRootAuthorityService) registerMutation(
 	if err := validateTargetRootRegistrationRequest(request); err != nil {
 		return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, err
 	}
+	receiptKey, intentDigest, sessionDigest := "", "", ""
+	if request.Mutation != "" {
+		var authorityErr error
+		receiptKey, intentDigest, sessionDigest, authorityErr =
+			targetRootRegistrationReceiptAuthority(request, service.now().UTC())
+		if authorityErr != nil {
+			return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, authorityErr
+		}
+		if replay, found, replayErr := service.replayTargetRootMutation(
+			ctx, receiptKey, intentDigest, sessionDigest,
+		); replayErr != nil {
+			return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, replayErr
+		} else if found {
+			return settings.RecoveryTargetRootResolution{
+				NodeID: replay.NodeID, RootID: replay.RootID, SafeLabel: replay.SafeLabel,
+			}, TargetRootMutationRollback{owner: service, noOp: true}, nil
+		}
+		if !service.now().UTC().Before(request.SessionExpiresAt.UTC()) {
+			return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, backupasset.ErrForbidden
+		}
+	}
 	key := targetRootAuthorityRecordKey(request.NodeID, request.RootID)
 	captureNow := service.now().UTC()
 	if captureNow.IsZero() {
@@ -234,6 +326,9 @@ func (service *TargetRootAuthorityService) registerMutation(
 		return err
 	})
 	if captureErr != nil {
+		if errors.Is(captureErr, settings.ErrRecoveryTargetRootNotFound) {
+			return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, captureErr
+		}
 		return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, recoveryTargetUnavailableForContext(ctx)
 	}
 	probeRequest := request
@@ -252,7 +347,8 @@ func (service *TargetRootAuthorityService) registerMutation(
 	}
 
 	var result settings.RecoveryTargetRootResolution
-	var before, after targetRootPersistedMutationState
+	var before, after, receiptBefore, receiptAfter targetRootPersistedMutationState
+	replayed := false
 	transactionErr := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		lockStartedAt := service.now().UTC()
 		if lockStartedAt.IsZero() || lockStartedAt.Before(postProbeNow) {
@@ -260,6 +356,9 @@ func (service *TargetRootAuthorityService) registerMutation(
 		}
 		locked, err := loadRecoveryTargetRootAuthorityNodeCredential(ctx, tx, request.NodeID, lockStartedAt, true)
 		if err != nil {
+			if errors.Is(err, settings.ErrRecoveryTargetRootNotFound) {
+				return ErrRecoveryTargetUnavailable
+			}
 			return err
 		}
 		lockedNow := service.now().UTC()
@@ -280,6 +379,37 @@ func (service *TargetRootAuthorityService) registerMutation(
 		currentExists := currentErr == nil
 		if currentErr != nil && !errors.Is(currentErr, settings.ErrRecoveryTargetRootNotFound) {
 			return ErrRecoveryTargetUnavailable
+		}
+		if receiptKey != "" {
+			receiptBefore, err = loadTargetRootPersistedMutationState(ctx, tx, receiptKey, true)
+			if err != nil {
+				return err
+			}
+			if receiptBefore.present {
+				replay, replayErr := targetRootMutationReceiptFromState(
+					receiptBefore, intentDigest, sessionDigest, service.now().UTC(),
+				)
+				if replayErr != nil {
+					return replayErr
+				}
+				result = settings.RecoveryTargetRootResolution{
+					NodeID: replay.NodeID, RootID: replay.RootID, SafeLabel: replay.SafeLabel,
+				}
+				replayed = true
+				return nil
+			}
+			switch request.Mutation {
+			case TargetRootMutationRegister:
+				if currentExists {
+					return ErrTargetRootMutationConflict
+				}
+			case TargetRootMutationRotate:
+				if !currentExists {
+					return settings.ErrRecoveryTargetRootNotFound
+				}
+			default:
+				return settings.ErrRecoveryTargetRootInvalid
+			}
 		}
 
 		authorityRevision := ""
@@ -309,15 +439,38 @@ func (service *TargetRootAuthorityService) registerMutation(
 		if err != nil || !after.present {
 			return ErrRecoveryTargetUnavailable
 		}
+		if receiptKey != "" {
+			receiptAfter, err = createTargetRootMutationReceiptTx(
+				ctx, tx, receiptKey, intentDigest, sessionDigest,
+				settings.RecoveryTargetRootSummary{NodeID: result.NodeID, RootID: result.RootID, SafeLabel: result.SafeLabel},
+				request.SessionExpiresAt, service.now().UTC(),
+			)
+			if err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if transactionErr != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, ctxErr
 		}
+		if errors.Is(transactionErr, ErrTargetRootIdempotencyConflict) ||
+			errors.Is(transactionErr, ErrTargetRootMutationConflict) ||
+			errors.Is(transactionErr, settings.ErrRecoveryTargetRootNotFound) ||
+			errors.Is(transactionErr, settings.ErrRecoveryTargetRootInvalid) ||
+			errors.Is(transactionErr, backupasset.ErrForbidden) {
+			return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, transactionErr
+		}
 		return settings.RecoveryTargetRootResolution{}, TargetRootMutationRollback{}, ErrRecoveryTargetUnavailable
 	}
-	return result, TargetRootMutationRollback{owner: service, key: key, before: before, after: after}, nil
+	if replayed {
+		return result, TargetRootMutationRollback{owner: service, noOp: true}, nil
+	}
+	return result, TargetRootMutationRollback{
+		owner: service, key: key, before: before, after: after,
+		receiptKey: receiptKey, receiptBefore: receiptBefore, receiptAfter: receiptAfter,
+	}, nil
 }
 
 // Delete locks the node and exact registry row, then removes only that private
@@ -391,57 +544,133 @@ func (service *TargetRootAuthorityService) DeleteMutation(
 	}, nil
 }
 
+// DeleteAuthorizedMutation owns API replay, exact-session binding, the private
+// registry delete, and its receipt in one transaction. It returns only the
+// prior safe summary and an opaque transition rollback capability.
+func (service *TargetRootAuthorityService) DeleteAuthorizedMutation(
+	ctx context.Context,
+	request TargetRootDeletionRequest,
+) (settings.RecoveryTargetRootSummary, TargetRootMutationRollback, error) {
+	if service == nil || service.db == nil || service.registry == nil || service.now == nil || ctx == nil {
+		return settings.RecoveryTargetRootSummary{}, TargetRootMutationRollback{}, ErrRecoveryTargetUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return settings.RecoveryTargetRootSummary{}, TargetRootMutationRollback{}, err
+	}
+	receiptKey, intentDigest, sessionDigest, err := targetRootDeletionReceiptAuthority(request, service.now().UTC())
+	if err != nil {
+		return settings.RecoveryTargetRootSummary{}, TargetRootMutationRollback{}, err
+	}
+	if replay, found, replayErr := service.replayTargetRootMutation(ctx, receiptKey, intentDigest, sessionDigest); replayErr != nil {
+		return settings.RecoveryTargetRootSummary{}, TargetRootMutationRollback{}, replayErr
+	} else if found {
+		return replay, TargetRootMutationRollback{owner: service, noOp: true}, nil
+	}
+	if !service.now().UTC().Before(request.SessionExpiresAt.UTC()) {
+		return settings.RecoveryTargetRootSummary{}, TargetRootMutationRollback{}, backupasset.ErrForbidden
+	}
+	key := targetRootAuthorityRecordKey(request.NodeID, request.RootID)
+	var result settings.RecoveryTargetRootSummary
+	var before, after, receiptBefore, receiptAfter targetRootPersistedMutationState
+	replayed := false
+	err = service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if lockErr := lockRecoveryTargetRootAuthorityNode(ctx, tx, request.NodeID); lockErr != nil {
+			return lockErr
+		}
+		var loadErr error
+		before, loadErr = loadTargetRootPersistedMutationState(ctx, tx, key, true)
+		if loadErr != nil {
+			return loadErr
+		}
+		receiptBefore, loadErr = loadTargetRootPersistedMutationState(ctx, tx, receiptKey, true)
+		if loadErr != nil {
+			return loadErr
+		}
+		if receiptBefore.present {
+			result, loadErr = targetRootMutationReceiptFromState(
+				receiptBefore, intentDigest, sessionDigest, service.now().UTC(),
+			)
+			if loadErr != nil {
+				return loadErr
+			}
+			replayed = true
+			return nil
+		}
+		if !before.present {
+			return settings.ErrRecoveryTargetRootNotFound
+		}
+		current, resolveErr := service.registry.ResolveRecoveryTargetRootTx(
+			ctx, tx, request.NodeID, request.RootID,
+		)
+		if resolveErr != nil {
+			if errors.Is(resolveErr, settings.ErrRecoveryTargetRootNotFound) {
+				return settings.ErrRecoveryTargetRootNotFound
+			}
+			return ErrRecoveryTargetUnavailable
+		}
+		result = settings.RecoveryTargetRootSummary{
+			NodeID: current.NodeID, RootID: current.RootID, SafeLabel: current.SafeLabel,
+		}
+		if deleteErr := service.registry.DeleteRecoveryTargetRootTx(
+			ctx, tx, request.NodeID, request.RootID,
+		); deleteErr != nil {
+			return ErrRecoveryTargetUnavailable
+		}
+		after, loadErr = loadTargetRootPersistedMutationState(ctx, tx, key, false)
+		if loadErr != nil || after.present {
+			return ErrRecoveryTargetUnavailable
+		}
+		receiptAfter, loadErr = createTargetRootMutationReceiptTx(
+			ctx, tx, receiptKey, intentDigest, sessionDigest, result, request.SessionExpiresAt, service.now().UTC(),
+		)
+		return loadErr
+	})
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return settings.RecoveryTargetRootSummary{}, TargetRootMutationRollback{}, ctxErr
+		}
+		if errors.Is(err, ErrTargetRootIdempotencyConflict) || errors.Is(err, backupasset.ErrForbidden) ||
+			errors.Is(err, settings.ErrRecoveryTargetRootNotFound) {
+			return settings.RecoveryTargetRootSummary{}, TargetRootMutationRollback{}, err
+		}
+		return settings.RecoveryTargetRootSummary{}, TargetRootMutationRollback{}, ErrRecoveryTargetUnavailable
+	}
+	if replayed {
+		return result, TargetRootMutationRollback{owner: service, noOp: true}, nil
+	}
+	return result, TargetRootMutationRollback{
+		owner: service, key: key, before: before, after: after,
+		receiptKey: receiptKey, receiptBefore: receiptBefore, receiptAfter: receiptAfter,
+	}, nil
+}
+
 // RestoreMutation restores the exact prior encrypted row or exact absence. A
 // stale, replayed, or foreign token fails closed without changing the row.
 func (service *TargetRootAuthorityService) RestoreMutation(
 	ctx context.Context,
 	rollback TargetRootMutationRollback,
 ) error {
-	if service == nil || service.db == nil || ctx == nil || rollback.owner != service || rollback.key == "" {
+	if service == nil || service.db == nil || ctx == nil || rollback.owner != service {
+		return ErrRecoveryTargetUnavailable
+	}
+	if rollback.noOp {
+		return nil
+	}
+	if rollback.key == "" {
 		return ErrRecoveryTargetUnavailable
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		current, loadErr := loadTargetRootPersistedMutationState(ctx, tx, rollback.key, true)
-		if loadErr != nil || !targetRootPersistedMutationStatesEqual(current, rollback.after) {
-			return ErrRecoveryTargetUnavailable
-		}
-		switch {
-		case !rollback.before.present && rollback.after.present:
-			result := tx.WithContext(ctx).Where(
-				"key = ? AND value = ? AND updated_at = ?",
-				rollback.key, rollback.after.row.Value, rollback.after.row.UpdatedAt,
-			).
-				Delete(&model.SystemSetting{})
-			if result.Error != nil || result.RowsAffected != 1 {
-				return ErrRecoveryTargetUnavailable
+		if rollback.receiptKey != "" {
+			if restoreErr := restoreTargetRootPersistedMutationStateTx(
+				ctx, tx, rollback.receiptKey, rollback.receiptBefore, rollback.receiptAfter,
+			); restoreErr != nil {
+				return restoreErr
 			}
-		case rollback.before.present && !rollback.after.present:
-			if createErr := tx.WithContext(ctx).Create(&rollback.before.row).Error; createErr != nil {
-				return ErrRecoveryTargetUnavailable
-			}
-		case rollback.before.present && rollback.after.present:
-			result := tx.WithContext(ctx).Model(&model.SystemSetting{}).
-				Where(
-					"key = ? AND value = ? AND updated_at = ?",
-					rollback.key, rollback.after.row.Value, rollback.after.row.UpdatedAt,
-				).
-				UpdateColumns(map[string]any{
-					"value": rollback.before.row.Value, "updated_at": rollback.before.row.UpdatedAt,
-				})
-			if result.Error != nil || result.RowsAffected != 1 {
-				return ErrRecoveryTargetUnavailable
-			}
-		default:
-			return ErrRecoveryTargetUnavailable
 		}
-		restored, loadErr := loadTargetRootPersistedMutationState(ctx, tx, rollback.key, false)
-		if loadErr != nil || !targetRootPersistedMutationStatesEqual(restored, rollback.before) {
-			return ErrRecoveryTargetUnavailable
-		}
-		return nil
+		return restoreTargetRootPersistedMutationStateTx(ctx, tx, rollback.key, rollback.before, rollback.after)
 	})
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -454,6 +683,217 @@ func (service *TargetRootAuthorityService) RestoreMutation(
 
 func targetRootAuthorityRecordKey(nodeID uint, rootID string) string {
 	return settings.RecoveryTargetRootKeyPrefix + strconv.FormatUint(uint64(nodeID), 10) + "." + rootID
+}
+
+const (
+	targetRootMutationReceiptSchemaVersion = 1
+	targetRootMutationKeyDigestDomain      = "xirang/recovery/target-root-mutation/idempotency-key/v1"
+	targetRootMutationIntentDigestDomain   = "xirang/recovery/target-root-mutation/intent/v1"
+	targetRootMutationSessionDigestDomain  = "xirang/recovery/target-root-mutation/session/v1"
+	targetRootRegisterEndpoint             = "/api/v1/settings/backup-assets/recovery/target-roots"
+	targetRootItemEndpoint                 = "/api/v1/settings/backup-assets/recovery/target-roots/:nodeId/:rootId"
+)
+
+func targetRootRegistrationReceiptAuthority(
+	request TargetRootRegistrationRequest,
+	now time.Time,
+) (string, string, string, error) {
+	if err := validateTargetRootMutationSession(
+		request.RequesterID, request.Endpoint, request.IdempotencyKey, request.SessionJTI,
+		request.SessionRole, request.SessionTokenVersion, request.SessionExpiresAt, now,
+	); err != nil {
+		return "", "", "", err
+	}
+	expectedEndpoint := targetRootRegisterEndpoint
+	if request.Mutation == TargetRootMutationRotate {
+		expectedEndpoint = targetRootItemEndpoint
+	} else if request.Mutation != TargetRootMutationRegister {
+		return "", "", "", settings.ErrRecoveryTargetRootInvalid
+	}
+	if request.Endpoint != expectedEndpoint {
+		return "", "", "", settings.ErrRecoveryTargetRootInvalid
+	}
+	locatorDigest, err := settings.RecoveryTargetRootLocatorDigest(request.NodeID, request.RootID, request.Locator)
+	if err != nil {
+		return "", "", "", settings.ErrRecoveryTargetRootInvalid
+	}
+	keyDigest := framedDigest(
+		targetRootMutationKeyDigestDomain,
+		strconv.FormatUint(uint64(request.RequesterID), 10), string(request.Mutation), request.Endpoint, request.IdempotencyKey,
+	)
+	intentDigest := framedDigest(
+		targetRootMutationIntentDigestDomain,
+		string(request.Mutation), strconv.FormatUint(uint64(request.NodeID), 10), request.RootID,
+		request.SafeLabel, locatorDigest, strconv.FormatInt(request.Policy.ReserveBytes, 10),
+		strconv.FormatInt(request.Policy.ReserveInodes, 10), request.Policy.OverlapPolicyBinding,
+	)
+	sessionDigest := targetRootMutationSessionDigest(
+		request.RequesterID, request.SessionJTI, request.SessionRole,
+		request.SessionTokenVersion, request.SessionExpiresAt,
+	)
+	return settings.RecoveryTargetRootReceiptKeyPrefix + keyDigest, intentDigest, sessionDigest, nil
+}
+
+func targetRootDeletionReceiptAuthority(
+	request TargetRootDeletionRequest,
+	now time.Time,
+) (string, string, string, error) {
+	if request.Mutation != TargetRootMutationDelete || request.Endpoint != targetRootItemEndpoint {
+		return "", "", "", settings.ErrRecoveryTargetRootInvalid
+	}
+	if err := settings.ValidateRecoveryTargetRootReference(settings.RecoveryTargetRootReference{
+		NodeID: request.NodeID, RootID: request.RootID,
+	}); err != nil {
+		return "", "", "", err
+	}
+	if err := validateTargetRootMutationSession(
+		request.RequesterID, request.Endpoint, request.IdempotencyKey, request.SessionJTI,
+		request.SessionRole, request.SessionTokenVersion, request.SessionExpiresAt, now,
+	); err != nil {
+		return "", "", "", err
+	}
+	keyDigest := framedDigest(
+		targetRootMutationKeyDigestDomain,
+		strconv.FormatUint(uint64(request.RequesterID), 10), string(request.Mutation), request.Endpoint, request.IdempotencyKey,
+	)
+	intentDigest := framedDigest(
+		targetRootMutationIntentDigestDomain,
+		string(request.Mutation), strconv.FormatUint(uint64(request.NodeID), 10), request.RootID,
+	)
+	sessionDigest := targetRootMutationSessionDigest(
+		request.RequesterID, request.SessionJTI, request.SessionRole,
+		request.SessionTokenVersion, request.SessionExpiresAt,
+	)
+	return settings.RecoveryTargetRootReceiptKeyPrefix + keyDigest, intentDigest, sessionDigest, nil
+}
+
+func validateTargetRootMutationSession(
+	requesterID uint,
+	endpoint string,
+	idempotencyKey string,
+	sessionJTI string,
+	sessionRole string,
+	sessionTokenVersion uint,
+	sessionExpiresAt time.Time,
+	now time.Time,
+) error {
+	if requesterID == 0 || endpoint == "" || !validPlanIdempotencyKey(idempotencyKey) ||
+		!validOpaqueID(sessionJTI) || sessionRole != "admin" || sessionTokenVersion == 0 ||
+		now.IsZero() || sessionExpiresAt.IsZero() {
+		return backupasset.ErrForbidden
+	}
+	return nil
+}
+
+func targetRootMutationSessionDigest(
+	requesterID uint,
+	sessionJTI string,
+	sessionRole string,
+	sessionTokenVersion uint,
+	sessionExpiresAt time.Time,
+) string {
+	return framedDigest(
+		targetRootMutationSessionDigestDomain,
+		strconv.FormatUint(uint64(requesterID), 10), sessionJTI, sessionRole,
+		strconv.FormatUint(uint64(sessionTokenVersion), 10), sessionExpiresAt.UTC().Format(time.RFC3339Nano),
+	)
+}
+
+func (service *TargetRootAuthorityService) replayTargetRootMutation(
+	ctx context.Context,
+	receiptKey string,
+	intentDigest string,
+	sessionDigest string,
+) (settings.RecoveryTargetRootSummary, bool, error) {
+	if service == nil || service.db == nil || service.now == nil || ctx == nil ||
+		!strings.HasPrefix(receiptKey, settings.RecoveryTargetRootReceiptKeyPrefix) {
+		return settings.RecoveryTargetRootSummary{}, false, ErrRecoveryTargetUnavailable
+	}
+	state, err := loadTargetRootPersistedMutationState(ctx, service.db, receiptKey, false)
+	if err != nil {
+		return settings.RecoveryTargetRootSummary{}, false, err
+	}
+	if !state.present {
+		return settings.RecoveryTargetRootSummary{}, false, nil
+	}
+	result, err := targetRootMutationReceiptFromState(
+		state, intentDigest, sessionDigest, service.now().UTC(),
+	)
+	if err != nil {
+		return settings.RecoveryTargetRootSummary{}, true, err
+	}
+	return result, true, nil
+}
+
+func targetRootMutationReceiptFromState(
+	state targetRootPersistedMutationState,
+	intentDigest string,
+	sessionDigest string,
+	now time.Time,
+) (settings.RecoveryTargetRootSummary, error) {
+	if !state.present || !validDigest(intentDigest) || !validDigest(sessionDigest) || now.IsZero() {
+		return settings.RecoveryTargetRootSummary{}, ErrRecoveryTargetUnavailable
+	}
+	var receipt targetRootMutationReceipt
+	if err := json.Unmarshal([]byte(state.row.Value), &receipt); err != nil {
+		return settings.RecoveryTargetRootSummary{}, ErrRecoveryTargetUnavailable
+	}
+	canonical, err := json.Marshal(receipt)
+	if err != nil || !bytes.Equal(canonical, []byte(state.row.Value)) ||
+		receipt.SchemaVersion != targetRootMutationReceiptSchemaVersion ||
+		!validDigest(receipt.IntentDigest) || !validDigest(receipt.SessionDigest) ||
+		receipt.SessionExpiresAt.IsZero() ||
+		settings.ValidateRecoveryTargetRootReference(settings.RecoveryTargetRootReference{
+			NodeID: receipt.Result.NodeID, RootID: receipt.Result.RootID,
+		}) != nil || !validTargetRootRegistrationSafeLabel(receipt.Result.SafeLabel) {
+		return settings.RecoveryTargetRootSummary{}, ErrRecoveryTargetUnavailable
+	}
+	if subtle.ConstantTimeCompare([]byte(receipt.IntentDigest), []byte(intentDigest)) != 1 {
+		return settings.RecoveryTargetRootSummary{}, ErrTargetRootIdempotencyConflict
+	}
+	if subtle.ConstantTimeCompare([]byte(receipt.SessionDigest), []byte(sessionDigest)) != 1 {
+		return settings.RecoveryTargetRootSummary{}, backupasset.ErrForbidden
+	}
+	if !now.Before(receipt.SessionExpiresAt.UTC()) {
+		return settings.RecoveryTargetRootSummary{}, ErrTargetRootIdempotencyConflict
+	}
+	return receipt.Result, nil
+}
+
+func createTargetRootMutationReceiptTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	receiptKey string,
+	intentDigest string,
+	sessionDigest string,
+	result settings.RecoveryTargetRootSummary,
+	sessionExpiresAt time.Time,
+	now time.Time,
+) (targetRootPersistedMutationState, error) {
+	if ctx == nil || tx == nil || !strings.HasPrefix(receiptKey, settings.RecoveryTargetRootReceiptKeyPrefix) ||
+		!validDigest(intentDigest) || !validDigest(sessionDigest) || now.IsZero() ||
+		sessionExpiresAt.IsZero() || !now.Before(sessionExpiresAt.UTC()) ||
+		settings.ValidateRecoveryTargetRootReference(settings.RecoveryTargetRootReference{
+			NodeID: result.NodeID, RootID: result.RootID,
+		}) != nil || !validTargetRootRegistrationSafeLabel(result.SafeLabel) {
+		return targetRootPersistedMutationState{}, backupasset.ErrForbidden
+	}
+	encoded, err := json.Marshal(targetRootMutationReceipt{
+		SchemaVersion: targetRootMutationReceiptSchemaVersion, IntentDigest: intentDigest,
+		SessionDigest: sessionDigest, SessionExpiresAt: sessionExpiresAt.UTC(), Result: result,
+	})
+	if err != nil {
+		return targetRootPersistedMutationState{}, ErrRecoveryTargetUnavailable
+	}
+	row := model.SystemSetting{Key: receiptKey, Value: string(encoded)}
+	if err := tx.WithContext(ctx).Create(&row).Error; err != nil {
+		return targetRootPersistedMutationState{}, ErrRecoveryTargetUnavailable
+	}
+	created, err := loadTargetRootPersistedMutationState(ctx, tx, receiptKey, false)
+	if err != nil || !created.present || created.row.Value != string(encoded) {
+		return targetRootPersistedMutationState{}, ErrRecoveryTargetUnavailable
+	}
+	return created, nil
 }
 
 func loadTargetRootPersistedMutationState(
@@ -480,6 +920,48 @@ func targetRootPersistedMutationStatesEqual(left, right targetRootPersistedMutat
 	return left.present == right.present && (!left.present || left.row == right.row)
 }
 
+func restoreTargetRootPersistedMutationStateTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	key string,
+	before targetRootPersistedMutationState,
+	after targetRootPersistedMutationState,
+) error {
+	current, err := loadTargetRootPersistedMutationState(ctx, tx, key, true)
+	if err != nil || !targetRootPersistedMutationStatesEqual(current, after) {
+		return ErrRecoveryTargetUnavailable
+	}
+	switch {
+	case !before.present && after.present:
+		result := tx.WithContext(ctx).Where(
+			"key = ? AND value = ? AND updated_at = ?", key, after.row.Value, after.row.UpdatedAt,
+		).Delete(&model.SystemSetting{})
+		if result.Error != nil || result.RowsAffected != 1 {
+			return ErrRecoveryTargetUnavailable
+		}
+	case before.present && !after.present:
+		if createErr := tx.WithContext(ctx).Create(&before.row).Error; createErr != nil {
+			return ErrRecoveryTargetUnavailable
+		}
+	case before.present && after.present:
+		result := tx.WithContext(ctx).Model(&model.SystemSetting{}).
+			Where("key = ? AND value = ? AND updated_at = ?", key, after.row.Value, after.row.UpdatedAt).
+			UpdateColumns(map[string]any{"value": before.row.Value, "updated_at": before.row.UpdatedAt})
+		if result.Error != nil || result.RowsAffected != 1 {
+			return ErrRecoveryTargetUnavailable
+		}
+	case !before.present && !after.present:
+		return nil
+	default:
+		return ErrRecoveryTargetUnavailable
+	}
+	restored, err := loadTargetRootPersistedMutationState(ctx, tx, key, false)
+	if err != nil || !targetRootPersistedMutationStatesEqual(restored, before) {
+		return ErrRecoveryTargetUnavailable
+	}
+	return nil
+}
+
 func lockRecoveryTargetRootAuthorityNode(ctx context.Context, db *gorm.DB, nodeID uint) error {
 	if ctx == nil || db == nil || nodeID == 0 {
 		return ErrRecoveryTargetUnavailable
@@ -491,8 +973,11 @@ func lockRecoveryTargetRootAuthorityNode(ctx context.Context, db *gorm.DB, nodeI
 	loaded := db.WithContext(ctx).Table("nodes").Select("id").
 		Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
 		Where("id = ?", nodeID).Limit(1).Find(&node)
-	if loaded.Error != nil || loaded.RowsAffected != 1 || node.ID != nodeID {
+	if loaded.Error != nil {
 		return recoveryTargetUnavailableForContext(ctx)
+	}
+	if loaded.RowsAffected != 1 || node.ID != nodeID {
+		return settings.ErrRecoveryTargetRootNotFound
 	}
 	return nil
 }
@@ -515,6 +1000,9 @@ func (service *TargetRootAuthorityService) List(
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
+		}
+		if errors.Is(err, settings.ErrRecoveryTargetRootNotFound) {
+			return nil, err
 		}
 		return nil, ErrRecoveryTargetUnavailable
 	}
@@ -619,9 +1107,14 @@ func loadRecoveryTargetRootAuthorityNodeCredential(
 	}
 	var node nodeRow
 	loaded := nodeQuery.Find(&node)
-	if loaded.Error != nil || loaded.RowsAffected != 1 || node.ID != nodeID || node.Archived ||
-		node.AuthType != "key" || node.SSHKeyID == nil || *node.SSHKeyID == 0 {
+	if loaded.Error != nil {
 		return recoveryTargetRootAuthorityNodeCredential{}, recoveryTargetUnavailableForContext(ctx)
+	}
+	if loaded.RowsAffected != 1 || node.ID != nodeID || node.Archived {
+		return recoveryTargetRootAuthorityNodeCredential{}, settings.ErrRecoveryTargetRootNotFound
+	}
+	if node.AuthType != "key" || node.SSHKeyID == nil || *node.SSHKeyID == 0 {
+		return recoveryTargetRootAuthorityNodeCredential{}, ErrRecoveryTargetUnavailable
 	}
 
 	type credentialRow struct {
@@ -676,6 +1169,7 @@ func loadRecoveryTargetRootAuthorityNodeCredential(
 type PlanServiceDependencies struct {
 	DB                 *gorm.DB
 	Now                func() time.Time
+	Audit              RecoveryAPIAuditWriter
 	TargetRootResolver RecoveryTargetRootResolver
 	Policy             PlanPolicy
 	PreflightPolicy    PreflightPolicy
@@ -708,6 +1202,7 @@ func (policy PlanPolicy) effectiveSelectionLimit() int64 {
 type PlanService struct {
 	db                 *gorm.DB
 	now                func() time.Time
+	audit              RecoveryAPIAuditWriter
 	targetRootResolver RecoveryTargetRootResolver
 	policy             PlanPolicy
 	preflightPolicy    PreflightPolicy
@@ -724,10 +1219,11 @@ func NewPlanService(dependencies PlanServiceDependencies) (*PlanService, error) 
 		dependencies.Now = func() time.Time { return time.Now().UTC() }
 	}
 	return &PlanService{
-		db: dependencies.DB, now: dependencies.Now, targetRootResolver: dependencies.TargetRootResolver,
-		policy:          dependencies.Policy,
-		preflightPolicy: dependencies.PreflightPolicy,
-		beforePersist:   dependencies.beforePersist,
+		db: dependencies.DB, now: dependencies.Now, audit: dependencies.Audit,
+		targetRootResolver: dependencies.TargetRootResolver,
+		policy:             dependencies.Policy,
+		preflightPolicy:    dependencies.PreflightPolicy,
+		beforePersist:      dependencies.beforePersist,
 	}, nil
 }
 
@@ -764,6 +1260,9 @@ func (service *PlanService) CreatePlan(ctx context.Context, request CreatePlanRe
 		})
 		err = classifyPlanCreateError(ctx, err)
 		if err == nil {
+			if !result.Replay {
+				service.writeCreatePlanAudit(ctx, normalized, result)
+			}
 			return result, nil
 		}
 		if !errors.Is(err, errPlanIdempotencyRace) && !errors.Is(err, errPlanDatabaseBusy) {
@@ -794,6 +1293,32 @@ func (service *PlanService) CreatePlan(ctx context.Context, request CreatePlanRe
 		}
 	}
 	return CreatePlanResult{}, ErrRecoveryPlanUnavailable
+}
+
+func (service *PlanService) writeCreatePlanAudit(
+	ctx context.Context,
+	request CreatePlanRequest,
+	result CreatePlanResult,
+) {
+	if service == nil || service.audit == nil {
+		return
+	}
+	auditCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(sourceValidationContext(ctx)), authorizationAuditTimeout,
+	)
+	defer cancel()
+	_, _ = service.audit.Write(auditCtx, backupasset.AuditEventInput{
+		Actor:           backupasset.AuditActor{UserID: request.RequesterID},
+		Action:          backupasset.AuditActionRecoveryPlan,
+		RepositoryID:    request.Selection.RepositoryID,
+		RecoveryPointID: request.Selection.RecoveryPointID,
+		ItemCount:       request.EstimatedItems,
+		ByteCount:       request.EstimatedBytes,
+		Fields: map[backupasset.AuditField]any{
+			backupasset.AuditFieldStage:  "create",
+			backupasset.AuditFieldStatus: string(result.State),
+		},
+	})
 }
 
 func waitForPlanCreateWinner(
@@ -989,6 +1514,7 @@ type planReplayRow struct {
 	ID                         string
 	BindingDigest              string
 	State                      string
+	PreflightRevision          string
 	PreflightExpiresAt         time.Time
 	TargetNodeID               uint
 	TargetRootID               string
@@ -998,6 +1524,7 @@ type planReplayRow struct {
 
 func planCreateResultFromReplay(request CreatePlanRequest, replay planReplayRow) (CreatePlanResult, error) {
 	request.Plan.PreflightExpiresAt = replay.PreflightExpiresAt.UTC()
+	request.Plan.Binding.PreflightRevision = replay.PreflightRevision
 	request.Plan.Binding.PlanDigest = planIntentDigest(request)
 	if replay.BindingDigest != request.Plan.Binding.PlanDigest {
 		return CreatePlanResult{}, ErrPlanIdempotencyConflict
@@ -1013,7 +1540,7 @@ func loadPlanReplayTx(
 ) (planReplayRow, bool, error) {
 	var row planReplayRow
 	result := tx.WithContext(ctx).Table((model.BackupAssetRecoveryPlan{}).TableName()).
-		Select("id, binding_digest, state, preflight_expires_at, target_node_id, target_root_id, encrypted_target_root_locator, root_locator_digest").
+		Select("id, binding_digest, state, preflight_revision, preflight_expires_at, target_node_id, target_root_id, encrypted_target_root_locator, root_locator_digest").
 		Where("requester_id = ? AND endpoint = ? AND idempotency_key_digest = ?", requesterID, endpoint, keyDigest).
 		Limit(1).Find(&row)
 	if result.Error != nil {
@@ -1023,7 +1550,7 @@ func loadPlanReplayTx(
 		return planReplayRow{}, false, nil
 	}
 	if !validOpaqueID(row.ID) || !validDigest(row.BindingDigest) || !PlanState(row.State).Valid() ||
-		row.PreflightExpiresAt.IsZero() ||
+		!validOpaqueRevision(row.PreflightRevision) || row.PreflightExpiresAt.IsZero() ||
 		!strings.HasPrefix(row.EncryptedTargetRootLocator, "enc:v2:") {
 		return planReplayRow{}, false, ErrRecoveryPlanUnavailable
 	}
@@ -1070,6 +1597,9 @@ func copyCreatePlanRequest(request CreatePlanRequest) CreatePlanRequest {
 }
 
 func validPlanEndpoint(value string) bool {
+	if value == "/api/v1/recovery-plans" {
+		return true
+	}
 	if !validBoundedOpaque(value, 64) {
 		return false
 	}
@@ -2371,6 +2901,7 @@ type RecoveryAuthorityBinding struct {
 	PreflightNodeRevision         string
 	RequiredBytes                 int64
 	RequiredInodes                int64
+	draftPreflight                bool
 }
 
 // RecoveryAuthorityRevalidator checks the current target/node/credential,
@@ -4694,8 +5225,8 @@ func (service *AuthorizationService) writeAuthorizationAudit(
 	_, _ = service.auditWriter.Write(auditCtx, backupasset.AuditEventInput{
 		Actor:  backupasset.AuditActor{UserID: request.RequesterID, Role: request.Session.Role},
 		Action: action, Outcome: backupasset.AuditOutcomeSuccess,
-		RecoveryJobID: result.JobID, GrantID: result.GrantID,
-		Fields: map[backupasset.AuditField]any{backupasset.AuditFieldOperation: string(request.Operation)},
+		RecoveryJobID: result.JobID,
+		Fields:        map[backupasset.AuditField]any{backupasset.AuditFieldOperation: string(request.Operation)},
 	})
 }
 
@@ -5467,7 +5998,7 @@ func validRecoveryReconciliationJobPlanRootBinding(
 		plan.EncryptedTargetRootLocator == root.Locator &&
 		validOpaqueRevision(plan.TargetBaseRevision) && validOpaqueRevision(plan.CredentialScopeRevision) &&
 		validOpaqueRevision(plan.RootRevision) && job.PreflightNodeRevision == plan.TargetBaseRevision &&
-		job.PreflightTargetRevision == plan.TargetBaseRevision && validDigest(job.PathDigest) &&
+		validOpaqueRevision(job.PreflightTargetRevision) && validDigest(job.PathDigest) &&
 		job.EncryptedWorkspaceRelativeLocator == recoveryWorkspaceLocatorDirectory+"/"+job.ID &&
 		validDigest(job.WorkspaceBindingDigest)
 }

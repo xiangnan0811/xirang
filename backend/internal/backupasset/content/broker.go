@@ -1992,10 +1992,6 @@ func recoveryResultTicketAuditInput(
 	outcome backupasset.AuditOutcome,
 	failureCode string,
 ) backupasset.AuditEventInput {
-	stepUpAction, stepUpProofID := "", ""
-	if request.Proof != nil {
-		stepUpAction, stepUpProofID = string(request.Proof.Action), request.Proof.ID
-	}
 	return backupasset.AuditEventInput{
 		Actor: backupasset.AuditActor{
 			UserID: request.Actor.UserID, Username: request.Actor.Username, Role: request.Actor.Role,
@@ -2003,8 +1999,7 @@ func recoveryResultTicketAuditInput(
 		Action: backupasset.AuditActionRecoveryResultDownloadTicket, Outcome: outcome,
 		RepositoryID: result.RepositoryID, RecoveryPointID: result.RecoveryPointID,
 		RecoveryJobID: result.Ref.RecoveryJobID, ItemCount: 1, ByteCount: grant.RepresentationSize,
-		StepUpAction: stepUpAction, StepUpProofID: stepUpProofID,
-		GrantID: grant.ID, FailureCode: failureCode,
+		FailureCode: failureCode,
 		Fields: map[backupasset.AuditField]any{
 			backupasset.AuditFieldRenderer: grant.Renderer, backupasset.AuditFieldProfile: grant.Profile,
 			backupasset.AuditFieldSource: grant.Classification,

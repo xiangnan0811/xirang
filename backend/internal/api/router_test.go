@@ -335,24 +335,186 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	}
 }
 
-func TestRecoveryRBACRouterDefersRecoveryEffectRoutesToTaskNine(t *testing.T) {
+func TestRecoveryRBACRouterRegistersTaskNineRouteMatrix(t *testing.T) {
 	routes := NewRouter(Dependencies{}).Routes()
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/recovery-plans"},
+		{http.MethodGet, "/api/v1/recovery-plans/:id"},
+		{http.MethodPost, "/api/v1/recovery-plans/:id/preflights"},
+		{http.MethodPost, "/api/v1/recovery-plans/:id/security-overrides"},
+		{http.MethodPost, "/api/v1/recovery-plans/:id/write-authorizations"},
+		{http.MethodPost, "/api/v1/recovery-plans/:id/execute"},
+		{http.MethodPost, "/api/v1/recovery-plans/:id/cancel"},
+		{http.MethodGet, "/api/v1/recovery-jobs/:id"},
+		{http.MethodPost, "/api/v1/recovery-jobs/:id/cancel"},
+		{http.MethodPost, "/api/v1/recovery-jobs/:id/exact-mirror-delete-authorizations"},
+		{http.MethodPost, "/api/v1/recovery-jobs/:id/results/:resultId/download-ticket"},
+		{http.MethodPost, "/api/v1/recovery-jobs/:id/results/retain"},
+		{http.MethodPost, "/api/v1/recovery-jobs/:id/results/cleanup"},
+		{http.MethodPost, "/api/v1/settings/backup-assets/recovery/target-roots"},
+		{http.MethodPut, "/api/v1/settings/backup-assets/recovery/target-roots/:nodeId/:rootId"},
+		{http.MethodDelete, "/api/v1/settings/backup-assets/recovery/target-roots/:nodeId/:rootId"},
+		{http.MethodGet, "/api/v1/settings/backup-assets/recovery/target-roots"},
+		{http.MethodPost, "/api/v1/settings/backup-assets/recovery/downgrade-readiness"},
+	} {
+		if !hasRoute(routes, route.method, route.path) {
+			t.Errorf("Task 9 Recovery route missing: %s %s", route.method, route.path)
+		}
+	}
 	for _, path := range []string{
-		"/api/v1/recovery-plans/:id/security-overrides",
-		"/api/v1/recovery-plans/:id/write-authorizations",
-		"/api/v1/recovery-jobs/:id/exact-mirror-delete-authorizations",
-		"/api/v1/recovery-plans/:id/execute",
+		"/api/v1/recovery-plans/:id/authorizations",
+		"/api/v1/recovery-jobs/:id/authorizations",
+		"/api/v1/recovery-authorizations",
 	} {
 		if hasRoute(routes, http.MethodPost, path) {
-			t.Fatalf("Task 8 registered Task 9 Recovery effect route: POST %s", path)
+			t.Errorf("undifferentiated Recovery authority route registered: POST %s", path)
 		}
 	}
 }
 
-func TestRecoveryRBACRouterDefersTargetRootRoutesToTaskNine(t *testing.T) {
-	for _, route := range NewRouter(Dependencies{}).Routes() {
-		if strings.Contains(route.Path, "/settings/backup-assets/recovery/target-roots") {
-			t.Fatalf("Task 8 registered deferred target-root route %s %s", route.Method, route.Path)
+func TestRecoveryRouteMatrixEnforcesAuthenticatedAdminRecoverRBACWithClosedEnvelope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}); err != nil {
+		t.Fatal(err)
+	}
+	jwtManager := auth.NewJWTManager("FAKE_RECOVERY_ROUTE_MATRIX_SIGNING_KEY_FOR_TEST_ONLY", time.Hour)
+	tokens := map[string]string{}
+	for _, role := range []string{"admin", "operator"} {
+		user := model.User{
+			Username: "recovery-route-matrix-" + role, PasswordHash: "FAKE_HASH_FOR_TEST_ONLY",
+			Role: role, TokenVersion: 1,
+		}
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatal(err)
+		}
+		token, err := jwtManager.GenerateToken(user)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tokens[role] = token
+	}
+	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager})
+	id := strings.Repeat("a", 32)
+	routes := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/recovery-plans"},
+		{http.MethodGet, "/api/v1/recovery-plans/" + id},
+		{http.MethodPost, "/api/v1/recovery-plans/" + id + "/preflights"},
+		{http.MethodPost, "/api/v1/recovery-plans/" + id + "/security-overrides"},
+		{http.MethodPost, "/api/v1/recovery-plans/" + id + "/write-authorizations"},
+		{http.MethodPost, "/api/v1/recovery-plans/" + id + "/execute"},
+		{http.MethodPost, "/api/v1/recovery-plans/" + id + "/cancel"},
+		{http.MethodGet, "/api/v1/recovery-jobs/" + id},
+		{http.MethodPost, "/api/v1/recovery-jobs/" + id + "/cancel"},
+		{http.MethodPost, "/api/v1/recovery-jobs/" + id + "/exact-mirror-delete-authorizations"},
+		{http.MethodPost, "/api/v1/recovery-jobs/" + id + "/results/" + id + "/download-ticket"},
+		{http.MethodPost, "/api/v1/recovery-jobs/" + id + "/results/retain"},
+		{http.MethodPost, "/api/v1/recovery-jobs/" + id + "/results/cleanup"},
+		{http.MethodPost, "/api/v1/settings/backup-assets/recovery/target-roots"},
+		{http.MethodPut, "/api/v1/settings/backup-assets/recovery/target-roots/1/root-a"},
+		{http.MethodDelete, "/api/v1/settings/backup-assets/recovery/target-roots/1/root-a"},
+		{http.MethodGet, "/api/v1/settings/backup-assets/recovery/target-roots?node_id=1"},
+		{http.MethodPost, "/api/v1/settings/backup-assets/recovery/downgrade-readiness"},
+	}
+	for _, route := range routes {
+		for _, authority := range []struct {
+			name       string
+			token      string
+			wantStatus int
+		}{
+			{name: "unauthenticated", wantStatus: http.StatusUnauthorized},
+			{name: "operator_without_recover", token: tokens["operator"], wantStatus: http.StatusForbidden},
+			{name: "admin_with_recover", token: tokens["admin"]},
+		} {
+			t.Run(authority.name+"_"+route.method+"_"+strings.ReplaceAll(route.path, "/", "_"), func(t *testing.T) {
+				var body *strings.Reader
+				if route.method != http.MethodGet {
+					body = strings.NewReader(`{}`)
+				} else {
+					body = strings.NewReader("")
+				}
+				request := httptest.NewRequest(route.method, route.path, body)
+				if route.method != http.MethodGet {
+					request.Header.Set("Content-Type", "application/json")
+				}
+				if authority.token != "" {
+					request.Header.Set("Authorization", "Bearer "+authority.token)
+				}
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, request)
+				if authority.wantStatus != 0 && response.Code != authority.wantStatus {
+					t.Fatalf("status=%d want=%d body=%s", response.Code, authority.wantStatus, response.Body.String())
+				}
+				if authority.wantStatus == 0 && (response.Code == http.StatusUnauthorized || response.Code == http.StatusForbidden) {
+					t.Fatalf("admin+recover rejected status=%d body=%s", response.Code, response.Body.String())
+				}
+				if authority.wantStatus == 0 {
+					var envelope map[string]any
+					if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil || len(envelope) != 3 ||
+						envelope["code"] == nil || envelope["message"] == nil {
+						t.Fatalf("non-standard closed handler envelope status=%d body=%s err=%v", response.Code, response.Body.String(), err)
+					}
+				}
+				for _, forbidden := range []string{authority.token, "Idempotency-Key", "proof", "secret", "ticket"} {
+					if forbidden != "" && strings.Contains(response.Body.String(), forbidden) {
+						t.Fatalf("RBAC envelope leaked authority %q: %s", forbidden, response.Body.String())
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRecoveryRouteRateLimitReturnsClosed429WithoutAuthorityEvidence(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}); err != nil {
+		t.Fatal(err)
+	}
+	jwtManager := auth.NewJWTManager("FAKE_RECOVERY_RATE_LIMIT_SIGNING_KEY_FOR_TEST_ONLY", time.Hour)
+	user := model.User{
+		Username: "recovery-rate-limit-admin", PasswordHash: "FAKE_HASH_FOR_TEST_ONLY",
+		Role: "admin", TokenVersion: 1,
+	}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	token, err := jwtManager.GenerateToken(user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(Dependencies{DB: db, JWTManager: jwtManager})
+	path := "/api/v1/recovery-plans/" + strings.Repeat("a", 32)
+	var response *httptest.ResponseRecorder
+	for index := 0; index < 31; index++ {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		response = httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+	}
+	if response == nil || response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") == "" {
+		t.Fatalf("rate limit status=%d retry-after=%q body=%s", response.Code, response.Header().Get("Retry-After"), response.Body.String())
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil || len(envelope) != 3 ||
+		envelope["code"] != float64(http.StatusTooManyRequests) {
+		t.Fatalf("rate-limit envelope=%v body=%s err=%v", envelope, response.Body.String(), err)
+	}
+	for _, forbidden := range []string{token, "proof", "secret", "ticket", strings.Repeat("a", 32)} {
+		if strings.Contains(response.Body.String(), forbidden) {
+			t.Fatalf("rate-limit response leaked authority %q: %s", forbidden, response.Body.String())
 		}
 	}
 }

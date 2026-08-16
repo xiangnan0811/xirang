@@ -87,6 +87,7 @@ const (
 	AuditActionRecoveryRetain               AuditAction = "recovery_retain"
 	AuditActionRecoveryResultDownloadTicket AuditAction = "recovery_result_download_ticket"
 	AuditActionRecoveryResultDownload       AuditAction = "recovery_result_download"
+	AuditActionRecoveryAdministration       AuditAction = "recovery_administration"
 
 	AuditActionRetentionPolicyCreate AuditAction = "retention_policy_create"
 	AuditActionRetentionPolicyUpdate AuditAction = "retention_policy_update"
@@ -166,6 +167,7 @@ var AuditActions = []AuditAction{
 	AuditActionRecoveryRetain,
 	AuditActionRecoveryResultDownloadTicket,
 	AuditActionRecoveryResultDownload,
+	AuditActionRecoveryAdministration,
 	AuditActionRetentionPolicyCreate,
 	AuditActionRetentionPolicyUpdate,
 	AuditActionRetentionPolicyDelete,
@@ -393,9 +395,34 @@ func validatePublicationAuditOperationField(action AuditAction, fields map[Audit
 	if !present {
 		return nil
 	}
+	operation, ok := value.(string)
+	if !ok {
+		return fmt.Errorf("%w: invalid audit operation", ErrInvalidState)
+	}
+	if action == AuditActionRecoveryAuthorize {
+		switch operation {
+		case "security_override", "write_authorize", "exact_mirror_delete_authorize":
+			return nil
+		default:
+			return fmt.Errorf("%w: invalid recovery authorization operation", ErrInvalidState)
+		}
+	}
+	if action == AuditActionRecoveryExecute {
+		if operation != "execute" {
+			return fmt.Errorf("%w: invalid recovery execute operation", ErrInvalidState)
+		}
+		return nil
+	}
+	if action == AuditActionRecoveryAdministration {
+		switch operation {
+		case "target_root_register", "target_root_rotate", "target_root_delete", "target_root_list", "downgrade_readiness":
+			return nil
+		default:
+			return fmt.Errorf("%w: invalid Recovery administration operation", ErrInvalidState)
+		}
+	}
 	if action == AuditActionRecoveryCleanup {
-		operation, ok := value.(string)
-		if !ok || operation != "recovery_reconcile" {
+		if operation != "recovery_reconcile" {
 			return fmt.Errorf("%w: invalid recovery cleanup operation", ErrInvalidState)
 		}
 		return nil
@@ -403,8 +430,7 @@ func validatePublicationAuditOperationField(action AuditAction, fields map[Audit
 	if action != AuditActionResticLegacyOperationBlocked {
 		return fmt.Errorf("%w: operation field is only valid for legacy Restic block audits", ErrInvalidState)
 	}
-	operation, ok := value.(string)
-	if !ok || !validLegacyResticAuditOperation(operation) {
+	if !validLegacyResticAuditOperation(operation) {
 		return fmt.Errorf("%w: invalid legacy Restic operation", ErrInvalidState)
 	}
 	return nil

@@ -23,9 +23,10 @@ import (
 )
 
 var (
-	ErrInvalidRecoveryWorker     = errors.New("invalid recovery worker contract")
-	ErrRecoveryWorkerFenceLost   = errors.New("recovery worker fence lost")
-	ErrRecoveryWorkerUnavailable = errors.New("recovery worker unavailable")
+	ErrInvalidRecoveryWorker        = errors.New("invalid recovery worker contract")
+	ErrRecoveryWorkerObjectNotFound = errors.New("recovery worker object not found")
+	ErrRecoveryWorkerFenceLost      = errors.New("recovery worker fence lost")
+	ErrRecoveryWorkerUnavailable    = errors.New("recovery worker unavailable")
 
 	errRecoveryWorkerClaimConflict = errors.New("recovery worker claim conflict")
 	errRecoverySchedulerConflict   = errors.New("recovery worker scheduler conflict")
@@ -97,6 +98,7 @@ type RecoveryWorkspaceKeySource interface {
 type WorkerCoordinatorDependencies struct {
 	DB              *gorm.DB
 	Metrics         Metrics
+	Audit           RecoveryAPIAuditWriter
 	SourceLeases    RecoverySourceLeaseCoordinator
 	LiveRevalidator RecoveryAuthorityRevalidator
 	WorkspaceKeys   RecoveryWorkspaceKeySource
@@ -110,6 +112,7 @@ type WorkerCoordinatorDependencies struct {
 type WorkerCoordinator struct {
 	db              *gorm.DB
 	metrics         Metrics
+	audit           RecoveryAPIAuditWriter
 	sourceValidator *SourceValidator
 	sourceLeases    RecoverySourceLeaseCoordinator
 	liveRevalidator RecoveryAuthorityRevalidator
@@ -286,7 +289,7 @@ func NewWorkerCoordinator(dependencies WorkerCoordinatorDependencies) (*WorkerCo
 		dependencies.Metrics = NoopMetrics{}
 	}
 	return &WorkerCoordinator{
-		db: dependencies.DB, metrics: dependencies.Metrics,
+		db: dependencies.DB, metrics: dependencies.Metrics, audit: dependencies.Audit,
 		sourceValidator: sourceValidator, sourceLeases: dependencies.SourceLeases,
 		liveRevalidator: dependencies.LiveRevalidator, workspaceKeys: dependencies.WorkspaceKeys,
 		target: dependencies.Target, sourceResolver: dependencies.SourceResolver,
@@ -1827,6 +1830,27 @@ func recoveryMarkerValidationMatchesClaim(
 // cancellation disposition. An armed or checkpointed job remains cleanup-only
 // because an external target mutation may already be in flight.
 func (coordinator *WorkerCoordinator) CancelJob(ctx context.Context, jobID string) error {
+	return coordinator.cancelJob(ctx, CancelRecoveryJobRequest{JobID: jobID})
+}
+
+// CancelRecoveryJobRequest binds the API actor and opaque expected revision to
+// the exact plan/job lock boundary. Zero requester/revision is reserved for
+// internal runtime cancellation paths.
+type CancelRecoveryJobRequest struct {
+	RequesterID      uint
+	JobID            string
+	ExpectedRevision uint64
+}
+
+func (coordinator *WorkerCoordinator) CancelOwnedJob(ctx context.Context, request CancelRecoveryJobRequest) error {
+	if request.RequesterID == 0 || request.ExpectedRevision == 0 {
+		return ErrInvalidRecoveryWorker
+	}
+	return coordinator.cancelJob(ctx, request)
+}
+
+func (coordinator *WorkerCoordinator) cancelJob(ctx context.Context, request CancelRecoveryJobRequest) error {
+	jobID := request.JobID
 	if coordinator == nil || coordinator.db == nil || coordinator.sourceLeases == nil || !validOpaqueID(jobID) {
 		return ErrInvalidRecoveryWorker
 	}
@@ -1841,13 +1865,43 @@ func (coordinator *WorkerCoordinator) CancelJob(ctx context.Context, jobID strin
 	var terminalOutcome JobState
 	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := coordinator.now().UTC()
+		planID := ""
+		if request.RequesterID != 0 {
+			var reference struct{ PlanID string }
+			loaded := tx.WithContext(ctx).Table((model.BackupAssetRecoveryJob{}).TableName()).
+				Select("plan_id").Where("id = ?", jobID).Limit(1).Find(&reference)
+			if loaded.Error != nil {
+				return loaded.Error
+			}
+			if loaded.RowsAffected != 1 || !validOpaqueID(reference.PlanID) {
+				return ErrRecoveryWorkerObjectNotFound
+			}
+			var plan struct {
+				ID          string
+				RequesterID uint
+			}
+			loaded = tx.WithContext(ctx).Table((model.BackupAssetRecoveryPlan{}).TableName()).
+				Select("id, requester_id").Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+				Where("id = ?", reference.PlanID).Limit(1).Find(&plan)
+			if loaded.Error != nil {
+				return loaded.Error
+			}
+			if loaded.RowsAffected != 1 || plan.RequesterID != request.RequesterID {
+				return ErrRecoveryWorkerObjectNotFound
+			}
+			planID = plan.ID
+		}
 		var job model.BackupAssetRecoveryJob
-		loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+		jobQuery := tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
 			Where("id = ?", jobID).Limit(1).Find(&job)
+		loaded := jobQuery
 		if loaded.Error != nil {
 			return loaded.Error
 		}
 		if loaded.RowsAffected != 1 {
+			return ErrRecoveryWorkerFenceLost
+		}
+		if request.RequesterID != 0 && (job.PlanID != planID || job.TransitionRevision != request.ExpectedRevision) {
 			return ErrRecoveryWorkerFenceLost
 		}
 		if job.State == string(JobStateCanceled) ||
@@ -1979,15 +2033,41 @@ func (coordinator *WorkerCoordinator) CancelJob(ctx context.Context, jobID strin
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, ErrRecoveryWorkerFenceLost) || errors.Is(err, ErrRecoverySourceChanged) {
+		if errors.Is(err, ErrRecoveryWorkerObjectNotFound) || errors.Is(err, ErrRecoveryWorkerFenceLost) ||
+			errors.Is(err, ErrRecoverySourceChanged) {
 			return err
 		}
 		return fmt.Errorf("%w: cancel recovery job", ErrRecoveryWorkerUnavailable)
 	}
 	if transitioned {
 		coordinator.observeJobOutcome(ctx, jobID, terminalOutcome)
+		coordinator.writeCancelAudit(ctx, request.RequesterID, jobID, terminalOutcome)
 	}
 	return nil
+}
+
+func (coordinator *WorkerCoordinator) writeCancelAudit(
+	ctx context.Context,
+	requesterID uint,
+	jobID string,
+	terminalOutcome JobState,
+) {
+	if coordinator == nil || coordinator.audit == nil || requesterID == 0 {
+		return
+	}
+	auditCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(recoveryWorkerContext(ctx)), authorizationAuditTimeout,
+	)
+	defer cancel()
+	_, _ = coordinator.audit.Write(auditCtx, backupasset.AuditEventInput{
+		Actor:         backupasset.AuditActor{UserID: requesterID},
+		Action:        backupasset.AuditActionRecoveryCancel,
+		RecoveryJobID: jobID,
+		Fields: map[backupasset.AuditField]any{
+			backupasset.AuditFieldStage:  "job",
+			backupasset.AuditFieldStatus: string(terminalOutcome),
+		},
+	})
 }
 
 type interruptedOperationHandoff struct {

@@ -137,6 +137,10 @@ type backupContentTicketPayload struct {
 	Profile       content.RendererProfile `json:"profile" enums:"text_v1,raster_v1,pdf_v1,audio_v1,video_v1,hex_v1,original_v1"`
 }
 
+type backupRecoveryResultTicketPayload struct {
+	SchemaVersion int `json:"schema_version" binding:"required" minimum:"1" maximum:"1" example:"1"`
+}
+
 func NewBackupContentHandler(
 	service BackupContentService,
 	db *gorm.DB,
@@ -268,6 +272,109 @@ func (handler *BackupContentHandler) Issue(c *gin.Context) {
 	respondOK(c, ticket.Descriptor)
 }
 
+// IssueRecoveryResult creates an attachment-only ticket for one owned,
+// published Recovery result. The broker/Recovery resolver retains ownership,
+// classification, deadline, and cleanup-fence validation.
+// @Summary      创建恢复结果下载票据
+// @Tags         backup-assets-recovery
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "恢复作业 opaque ID"
+// @Param        resultId path string true "恢复结果 opaque ID"
+// @Param        X-Xirang-Step-Up header string true "recovery.result_download 精确 proof"
+// @Param        body body backupRecoveryResultTicketPayload true "schema version"
+// @Success      200 {object} handlers.Response{data=content.TicketDescriptor}
+// @Failure      400 {object} handlers.Response
+// @Failure      401 {object} handlers.Response
+// @Failure      403 {object} handlers.Response
+// @Failure      404 {object} handlers.Response
+// @Failure      409 {object} handlers.Response
+// @Failure      413 {object} handlers.Response
+// @Failure      429 {object} handlers.Response
+// @Failure      500 {object} handlers.Response
+// @Failure      503 {object} handlers.Response
+// @Router       /recovery-jobs/{id}/results/{resultId}/download-ticket [post]
+func (handler *BackupContentHandler) IssueRecoveryResult(c *gin.Context) {
+	if c == nil || c.Request == nil || c.Request.URL == nil || c.Request.URL.RawQuery != "" ||
+		c.Request.Method != http.MethodPost ||
+		c.FullPath() != "/api/v1/recovery-jobs/:id/results/:resultId/download-ticket" ||
+		!backupRecoveryAuthorizationJSONContentType(c.Request) {
+		if c != nil {
+			respondBadRequest(c, "请求参数不合法")
+		}
+		return
+	}
+	var body backupRecoveryResultTicketPayload
+	if decodeStrictBackupContentJSON(c, &body) != nil || body.SchemaVersion != 1 {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	jobID, jobIDOK := backupAssetOpaqueParam(c, "id")
+	resultID, resultIDOK := backupAssetOpaqueParam(c, "resultId")
+	if !jobIDOK || !resultIDOK {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	config, ok := handler.loadConfig(c.Request.Context())
+	if !ok {
+		respondServiceUnavailable(c, "备份内容服务暂不可用")
+		return
+	}
+	binding, exists := middleware.CurrentSessionBinding(c)
+	actor := content.DeliveryActor{
+		UserID: middleware.CurrentUserID(c), Username: c.GetString(middleware.CtxUsername), Role: middleware.CurrentRole(c),
+	}
+	if !exists || actor.UserID == 0 || actor.Role != "admin" || binding.UserID != actor.UserID ||
+		binding.Role != actor.Role || backupasset.ValidateOpaqueID(binding.JTI) != nil ||
+		!binding.ExpiresAt.After(time.Now()) {
+		respondUnauthorized(c, "会话无效")
+		return
+	}
+	proof, proofOK := handler.exactDeliveryProof(c, actor, auth.StepUpActionRecoveryResultDownload)
+	if !proofOK {
+		return
+	}
+	secureCookie, err := handler.schemePolicy.SecureCookie(c.Request, config.AllowInsecureLoopback)
+	if err != nil {
+		respondServiceUnavailable(c, "需要安全传输")
+		return
+	}
+	if handler == nil || handler.service == nil {
+		respondServiceUnavailable(c, "备份内容服务暂不可用")
+		return
+	}
+	payload := backupContentTicketPayload{
+		SchemaVersion: 1, Action: content.DeliveryDownload,
+		Renderer: content.RendererAttachment, Profile: content.ProfileOriginalV1,
+	}
+	ticketCtx, cancel := context.WithTimeout(c.Request.Context(), config.TicketTimeout)
+	defer cancel()
+	ticket, err := handler.service.Issue(ticketCtx, content.IssueRequest{
+		Actor: actor,
+		Session: content.DeliverySession{
+			JTI: binding.JTI, UserID: binding.UserID, Role: binding.Role,
+			TokenVersion: binding.TokenVersion, ExpiresAt: binding.ExpiresAt.UTC(),
+		},
+		Resource: content.DeliveryResource{
+			Kind:           content.DeliveryResourceRecoveryResult,
+			RecoveryResult: &content.RecoveryResultRef{RecoveryJobID: jobID, ResultID: resultID},
+		},
+		Action: payload.Action, Renderer: payload.Renderer, Profile: payload.Profile,
+		Proof: proof, SecureCookie: secureCookie,
+	})
+	if err != nil {
+		respondBackupContentIssueError(c, err)
+		return
+	}
+	if !validIssuedBackupContentTicket(ticket, payload, secureCookie) {
+		respondServiceUnavailable(c, "备份内容服务暂不可用")
+		return
+	}
+	http.SetCookie(c.Writer, ticket.Cookie)
+	respondOK(c, ticket.Descriptor)
+}
+
 // Serve is the explicit binary-response exception to JSON response helpers.
 // @Summary      读取备份资产票据内容
 // @Description  Cookie-only 同源内容路由；禁止 Authorization 与 query。支持 HEAD、完整 GET、单个 normal/open/suffix Range 和 If-Range；multipart Range 返回 416。content_url 中的 delivery ID 本身不授权。
@@ -358,6 +465,28 @@ func (handler *BackupContentHandler) deliveryProof(
 			return nil, false
 		}
 		return nil, true
+	}
+	claims, err := validateStepUpProof(handler.db, handler.jwtManager, rawProof, actor.UserID, actor.Role, expected)
+	if err != nil || claims == nil || claims.ExpiresAt == nil || backupasset.ValidateOpaqueID(claims.ID) != nil {
+		if errors.Is(err, ErrStepUpVerifierUnavailable) {
+			respondServiceUnavailable(c, "二次验证服务暂不可用")
+		} else {
+			respondStepUpRequired(c)
+		}
+		return nil, false
+	}
+	return &content.StepUpProof{Action: claims.StepUpAction, ID: claims.ID, ExpiresAt: claims.ExpiresAt.UTC()}, true
+}
+
+func (handler *BackupContentHandler) exactDeliveryProof(
+	c *gin.Context,
+	actor content.DeliveryActor,
+	expected auth.StepUpAction,
+) (*content.StepUpProof, bool) {
+	rawProof, ok := backupRecoveryAuthorizationStepUpProof(c.Request)
+	if !ok {
+		respondStepUpRequired(c)
+		return nil, false
 	}
 	claims, err := validateStepUpProof(handler.db, handler.jwtManager, rawProof, actor.UserID, actor.Role, expected)
 	if err != nil || claims == nil || claims.ExpiresAt == nil || backupasset.ValidateOpaqueID(claims.ID) != nil {

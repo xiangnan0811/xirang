@@ -79,6 +79,7 @@ func TestAuditActionRegistryMatchesDesignContract(t *testing.T) {
 		AuditActionRecoveryRetain,
 		AuditActionRecoveryResultDownloadTicket,
 		AuditActionRecoveryResultDownload,
+		AuditActionRecoveryAdministration,
 		AuditActionRetentionPolicyCreate,
 		AuditActionRetentionPolicyUpdate,
 		AuditActionRetentionPolicyDelete,
@@ -238,6 +239,82 @@ func TestRecoveryReconciliationAuditOperationIsPurposeExact(t *testing.T) {
 				t.Fatalf("operation combination error=%v, want ErrInvalidState", eventErr)
 			}
 		})
+	}
+}
+
+func TestRecoveryAuthorizationAuditOperationIsPurposeExact(t *testing.T) {
+	tests := []struct {
+		name      string
+		action    AuditAction
+		operation string
+	}{
+		{name: "security override", action: AuditActionRecoveryAuthorize, operation: "security_override"},
+		{name: "write authorize", action: AuditActionRecoveryAuthorize, operation: "write_authorize"},
+		{name: "delete authorize", action: AuditActionRecoveryAuthorize, operation: "exact_mirror_delete_authorize"},
+		{name: "execute", action: AuditActionRecoveryExecute, operation: "execute"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			event, err := NewAuditEvent(AuditEventInput{
+				Action: testCase.action,
+				Fields: map[AuditField]any{AuditFieldOperation: testCase.operation},
+			})
+			if err != nil {
+				t.Fatalf("new recovery authorization audit event: %v", err)
+			}
+			if event.Fields[AuditFieldOperation] != testCase.operation {
+				t.Fatalf("recovery operation=%v, want %q", event.Fields[AuditFieldOperation], testCase.operation)
+			}
+		})
+	}
+
+	for _, testCase := range []struct {
+		name      string
+		action    AuditAction
+		operation any
+	}{
+		{name: "unknown authorize", action: AuditActionRecoveryAuthorize, operation: "recover_everything"},
+		{name: "execute uses authorize operation", action: AuditActionRecoveryExecute, operation: "write_authorize"},
+		{name: "authorize uses execute operation", action: AuditActionRecoveryAuthorize, operation: "execute"},
+		{name: "non-string", action: AuditActionRecoveryAuthorize, operation: 1},
+		{name: "other action", action: AuditActionRecoveryPlan, operation: "write_authorize"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := NewAuditEvent(AuditEventInput{
+				Action: testCase.action,
+				Fields: map[AuditField]any{AuditFieldOperation: testCase.operation},
+			}); !errors.Is(err, ErrInvalidState) {
+				t.Fatalf("operation combination error=%v, want ErrInvalidState", err)
+			}
+		})
+	}
+}
+
+func TestRecoveryAdministrationAuditOperationIsPurposeExact(t *testing.T) {
+	if !ValidAuditAction(AuditActionRecoveryAdministration) {
+		t.Fatal("Recovery administration audit action is not registered")
+	}
+	for _, operation := range []string{
+		"target_root_register", "target_root_rotate", "target_root_delete", "target_root_list", "downgrade_readiness",
+	} {
+		event, err := NewAuditEvent(AuditEventInput{
+			Action: AuditActionRecoveryAdministration,
+			Fields: map[AuditField]any{AuditFieldOperation: operation, AuditFieldStatus: "succeeded"},
+		})
+		if err != nil {
+			t.Fatalf("new Recovery administration audit %q: %v", operation, err)
+		}
+		if event.Fields[AuditFieldOperation] != operation {
+			t.Fatalf("Recovery administration operation=%v, want %q", event.Fields[AuditFieldOperation], operation)
+		}
+	}
+	for _, operation := range []any{"root_mutate", "register:/private/root", 1} {
+		if _, err := NewAuditEvent(AuditEventInput{
+			Action: AuditActionRecoveryAdministration,
+			Fields: map[AuditField]any{AuditFieldOperation: operation},
+		}); !errors.Is(err, ErrInvalidState) {
+			t.Fatalf("invalid Recovery administration operation %#v error=%v", operation, err)
+		}
 	}
 }
 

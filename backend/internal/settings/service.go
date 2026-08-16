@@ -70,6 +70,8 @@ const (
 	ProcessingContentPipelineRevisionKey = "backup_assets.internal.processing_content_pipeline_revision"
 	ProcessingOCRPipelineRevisionKey     = "backup_assets.internal.processing_ocr_pipeline_revision"
 	RecoveryTargetRootKeyPrefix          = "backup_assets.internal.recovery_target_root.v1."
+	RecoveryTargetRootReceiptKeyPrefix   = "backup_assets.internal.recovery_root_receipt.v1."
+	RecoveryDowngradeReceiptKeyPrefix    = "backup_assets.internal.recovery_downgrade_receipt.v1."
 )
 
 const (
@@ -780,7 +782,9 @@ func parsePositiveRevision(value string) (int64, error) {
 
 func IsInternalSettingKey(key string) bool {
 	return key == ProcessingContentPipelineRevisionKey || key == ProcessingOCRPipelineRevisionKey ||
-		strings.HasPrefix(key, RecoveryTargetRootKeyPrefix)
+		strings.HasPrefix(key, RecoveryTargetRootKeyPrefix) ||
+		strings.HasPrefix(key, RecoveryTargetRootReceiptKeyPrefix) ||
+		strings.HasPrefix(key, RecoveryDowngradeReceiptKeyPrefix)
 }
 
 // RecoveryTargetRootLocatorDigest validates and binds one canonical private

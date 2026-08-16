@@ -688,8 +688,75 @@ func TestRecoveryRuntimeTargetRootFacadeReturnsOnlySafeSummarySurface(t *testing
 	}
 }
 
+func TestRecoveryTargetRootFacadeAuditsClosedProductsAfterSuccessfulTransition(t *testing.T) {
+	events := []string{}
+	audit := &runtimeRecoveryAdministrationAuditSpy{err: errors.New("FAKE_AUDIT_FAILURE_FOR_TEST_ONLY")}
+	facade := &managedRecoveryTargetRootFacade{
+		service: &managedRecoveryTargetRootMutationServiceFake{events: &events},
+		runtime: runtimeRecoveryImmediateTransitionFake{},
+		audit:   audit,
+	}
+	for _, mutation := range []recovery.TargetRootMutation{
+		recovery.TargetRootMutationRegister, recovery.TargetRootMutationRotate,
+	} {
+		if _, err := facade.Register(context.Background(), recovery.TargetRootRegistrationRequest{
+			Mutation: mutation, RequesterID: 17, NodeID: 1, RootID: "root-a", SafeLabel: "safe",
+			Locator: "/srv/FAKE_PRIVATE_RECOVERY_ROOT_FOR_TEST_ONLY",
+			Policy:  settings.RecoveryTargetRootPolicy{OverlapPolicyBinding: "strict"},
+		}); err != nil {
+			t.Fatalf("%s changed committed result on audit failure: %v", mutation, err)
+		}
+	}
+	if _, err := facade.DeleteAuthorized(context.Background(), recovery.TargetRootDeletionRequest{
+		Mutation: recovery.TargetRootMutationDelete, RequesterID: 17, NodeID: 1, RootID: "root-a",
+	}); err != nil {
+		t.Fatalf("delete changed committed result on audit failure: %v", err)
+	}
+	if _, err := facade.List(context.Background(), 17, 1); err != nil {
+		t.Fatalf("list changed result on audit failure: %v", err)
+	}
+	if len(audit.inputs) != 4 {
+		t.Fatalf("administration audits=%d want=4", len(audit.inputs))
+	}
+	wantOperations := []string{"target_root_register", "target_root_rotate", "target_root_delete", "target_root_list"}
+	for index, input := range audit.inputs {
+		if input.Action != backupasset.AuditActionRecoveryAdministration || input.Actor.UserID != 17 ||
+			input.Fields[backupasset.AuditFieldOperation] != wantOperations[index] ||
+			strings.Contains(fmt.Sprintf("%+v", input), "FAKE_PRIVATE_RECOVERY_ROOT") {
+			t.Fatalf("administration audit[%d]=%+v", index, input)
+		}
+	}
+}
+
+type runtimeRecoveryImmediateTransitionFake struct{}
+
+func (runtimeRecoveryImmediateTransitionFake) TransitionCurrentWithRestore(
+	_ context.Context,
+	mutate func() error,
+	_ func() error,
+) error {
+	return mutate()
+}
+
+type runtimeRecoveryAdministrationAuditSpy struct {
+	inputs []backupasset.AuditEventInput
+	err    error
+}
+
+func (spy *runtimeRecoveryAdministrationAuditSpy) Write(
+	_ context.Context,
+	input backupasset.AuditEventInput,
+) (model.BackupAssetAuditEvent, error) {
+	event, err := backupasset.NewAuditEvent(input)
+	if err != nil {
+		return model.BackupAssetAuditEvent{}, err
+	}
+	spy.inputs = append(spy.inputs, event.AuditEventInput)
+	return model.BackupAssetAuditEvent{}, spy.err
+}
+
 func TestRecoveryRuntimeTargetRootFacadeOwnsRegisterRotateDeleteTransitionsAndRestoration(t *testing.T) {
-	for _, operation := range []string{"register", "rotate", "delete"} {
+	for _, operation := range []string{"register", "rotate", "delete", "delete-authorized"} {
 		t.Run(operation, func(t *testing.T) {
 			events := make([]string, 0, 16)
 			service := &managedRecoveryTargetRootMutationServiceFake{events: &events}
@@ -730,6 +797,15 @@ func TestRecoveryRuntimeTargetRootFacadeOwnsRegisterRotateDeleteTransitionsAndRe
 				})
 			case "delete":
 				err = facade.Delete(context.Background(), 1, "root-a")
+			case "delete-authorized":
+				_, err = facade.DeleteAuthorized(context.Background(), recovery.TargetRootDeletionRequest{
+					Mutation: recovery.TargetRootMutationDelete, RequesterID: 1,
+					Endpoint:       "/api/v1/settings/backup-assets/recovery/target-roots/:nodeId/:rootId",
+					IdempotencyKey: "target-root-authorized-delete-key", SessionJTI: strings.Repeat("9", 32),
+					SessionRole: "admin", SessionTokenVersion: 1,
+					SessionExpiresAt: time.Date(2026, 8, 15, 13, 0, 0, 0, time.UTC),
+					NodeID:           1, RootID: "root-a",
+				})
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -902,6 +978,20 @@ type managedRecoveryTargetRootMutationServiceFake struct {
 	restoreErr  error
 }
 
+func (*managedRecoveryTargetRootMutationServiceFake) ReplayRegistration(
+	context.Context,
+	recovery.TargetRootRegistrationRequest,
+) (settings.RecoveryTargetRootSummary, bool, error) {
+	return settings.RecoveryTargetRootSummary{}, false, nil
+}
+
+func (*managedRecoveryTargetRootMutationServiceFake) ReplayDeletion(
+	context.Context,
+	recovery.TargetRootDeletionRequest,
+) (settings.RecoveryTargetRootSummary, bool, error) {
+	return settings.RecoveryTargetRootSummary{}, false, nil
+}
+
 func (fake *managedRecoveryTargetRootMutationServiceFake) ValidateRegistration(recovery.TargetRootRegistrationRequest) error {
 	*fake.events = append(*fake.events, "validate")
 	return fake.validateErr
@@ -928,6 +1018,15 @@ func (fake *managedRecoveryTargetRootMutationServiceFake) DeleteMutation(
 ) (recovery.TargetRootMutationRollback, error) {
 	*fake.events = append(*fake.events, "mutate:delete")
 	return recovery.TargetRootMutationRollback{}, fake.deleteErr
+}
+
+func (fake *managedRecoveryTargetRootMutationServiceFake) DeleteAuthorizedMutation(
+	context.Context,
+	recovery.TargetRootDeletionRequest,
+) (settings.RecoveryTargetRootSummary, recovery.TargetRootMutationRollback, error) {
+	*fake.events = append(*fake.events, "mutate:delete-authorized")
+	return settings.RecoveryTargetRootSummary{NodeID: 1, RootID: "root-a", SafeLabel: "safe"},
+		recovery.TargetRootMutationRollback{}, fake.deleteErr
 }
 
 func (fake *managedRecoveryTargetRootMutationServiceFake) RestoreMutation(
@@ -2119,6 +2218,88 @@ func TestRuntimeExposesRecoveryDowngradeReadinessFacade(t *testing.T) {
 	if got := fmt.Sprint(events); got != "[recovery-downgrade-readiness]" {
 		t.Fatalf("readiness events=%s", got)
 	}
+}
+
+func TestManagedRecoveryDowngradeFacadePersistsReceiptFirstReplayWithoutRawAuthority(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	owner := &runtimeRecoveryDowngradeTransitionFake{result: RecoveryDowngradeReadiness{
+		State: RecoveryDowngradeBlocked, AdmissionGeneration: "recovery-downgrade-" + strings.Repeat("a", 32),
+		Blockers: RecoveryDowngradeBlockers{Jobs: 1},
+	}}
+	facade, err := newManagedRecoveryDowngradeFacade(db, owner, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit := &runtimeRecoveryAdministrationAuditSpy{err: errors.New("FAKE_DOWNGRADE_AUDIT_FAILURE_FOR_TEST_ONLY")}
+	facade.audit = audit
+	request := RecoveryDowngradeReadinessRequest{
+		RequesterID: 1, Endpoint: "/api/v1/settings/backup-assets/recovery/downgrade-readiness",
+		IdempotencyKey: "downgrade-readiness-idempotency-key", SessionJTI: strings.Repeat("9", 32),
+		SessionRole: "admin", SessionTokenVersion: 1, SessionExpiresAt: now.Add(time.Hour),
+		Reason: "FAKE_PRIVATE_DOWNGRADE_REASON_FOR_TEST_ONLY",
+	}
+	first, err := facade.RequestRecoveryDowngradeReadiness(context.Background(), request)
+	if err != nil || first.Replay || owner.calls != 1 {
+		t.Fatalf("first readiness=%+v err=%v calls=%d", first, err, owner.calls)
+	}
+	if len(audit.inputs) != 1 || audit.inputs[0].Action != backupasset.AuditActionRecoveryAdministration ||
+		audit.inputs[0].Actor.UserID != request.RequesterID ||
+		audit.inputs[0].Fields[backupasset.AuditFieldOperation] != "downgrade_readiness" ||
+		strings.Contains(fmt.Sprintf("%+v", audit.inputs[0]), request.Reason) {
+		t.Fatalf("downgrade administration audit=%+v", audit.inputs)
+	}
+	replayed, err := facade.RequestRecoveryDowngradeReadiness(context.Background(), request)
+	if err != nil || !replayed.Replay || owner.calls != 1 || replayed.State != first.State ||
+		replayed.AdmissionGeneration != first.AdmissionGeneration || replayed.Blockers != first.Blockers {
+		t.Fatalf("replayed readiness=%+v err=%v calls=%d", replayed, err, owner.calls)
+	}
+	if len(audit.inputs) != 1 {
+		t.Fatalf("downgrade replay duplicated audit projection: %+v", audit.inputs)
+	}
+	changed := request
+	changed.Reason = "FAKE_CHANGED_PRIVATE_DOWNGRADE_REASON_FOR_TEST_ONLY"
+	if _, err := facade.RequestRecoveryDowngradeReadiness(context.Background(), changed); !errors.Is(err, ErrRecoveryDowngradeIdempotencyConflict) {
+		t.Fatalf("changed-intent error=%v", err)
+	}
+	otherSession := request
+	otherSession.SessionJTI = strings.Repeat("8", 32)
+	if _, err := facade.RequestRecoveryDowngradeReadiness(context.Background(), otherSession); !errors.Is(err, backupasset.ErrForbidden) {
+		t.Fatalf("other-session error=%v", err)
+	}
+	now = request.SessionExpiresAt
+	if _, err := facade.RequestRecoveryDowngradeReadiness(context.Background(), request); !errors.Is(err, ErrRecoveryDowngradeIdempotencyConflict) {
+		t.Fatalf("expired replay error=%v", err)
+	}
+	var rows []model.SystemSetting
+	if err := db.Where("key LIKE ?", settings.RecoveryDowngradeReceiptKeyPrefix+"%").Find(&rows).Error; err != nil || len(rows) != 1 {
+		t.Fatalf("downgrade receipts=%d err=%v", len(rows), err)
+	}
+	for _, forbidden := range []string{request.IdempotencyKey, request.SessionJTI, request.Reason} {
+		if strings.Contains(rows[0].Key+rows[0].Value, forbidden) {
+			t.Fatalf("downgrade receipt leaked private authority %q", forbidden)
+		}
+	}
+}
+
+type runtimeRecoveryDowngradeTransitionFake struct {
+	result       RecoveryDowngradeReadiness
+	calls        int
+	inspectCalls int
+}
+
+func (fake *runtimeRecoveryDowngradeTransitionFake) DowngradeReadiness(
+	context.Context,
+) (RecoveryDowngradeReadiness, error) {
+	fake.calls++
+	return fake.result, nil
+}
+
+func (fake *runtimeRecoveryDowngradeTransitionFake) InspectDowngradeReadiness(
+	context.Context,
+) (RecoveryDowngradeReadiness, bool, error) {
+	fake.inspectCalls++
+	return fake.result, fake.calls > 0, nil
 }
 
 type runtimeOverlayKeySourceUnused struct{}

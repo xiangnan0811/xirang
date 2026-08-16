@@ -119,7 +119,7 @@ func TestBrokerIssueRecoveryResultUsesClosedResourceAndPlaintextDeadline(t *test
 	audit := harness.audit.inputs[0]
 	if audit.Action != backupasset.AuditActionRecoveryResultDownloadTicket ||
 		audit.RecoveryJobID != harness.recoveryResult.Ref.RecoveryJobID ||
-		audit.GrantID != harness.material.GrantID || audit.ItemCount != 1 ||
+		audit.GrantID != "" || audit.StepUpProofID != "" || audit.StepUpAction != "" || audit.ItemCount != 1 ||
 		audit.ByteCount != harness.recoveryResult.Size {
 		t.Fatalf("recovery ticket audit=%+v", audit)
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
@@ -408,6 +409,7 @@ type PreflightPersistenceResult struct {
 type PreflightServiceDependencies struct {
 	DB        *gorm.DB
 	Now       func() time.Time
+	Audit     RecoveryAPIAuditWriter
 	Evaluator *TargetPreflightEvaluator
 	Policy    PreflightPolicy
 }
@@ -428,6 +430,7 @@ func (policy PreflightPolicy) valid() bool {
 type PreflightService struct {
 	db              *gorm.DB
 	now             func() time.Time
+	audit           RecoveryAPIAuditWriter
 	evaluator       *TargetPreflightEvaluator
 	sourceValidator *SourceValidator
 	policy          PreflightPolicy
@@ -445,7 +448,8 @@ func NewPreflightService(dependencies PreflightServiceDependencies) (*PreflightS
 		return nil, ErrTargetPreflightUnavailable
 	}
 	return &PreflightService{
-		db: dependencies.DB, now: dependencies.Now, evaluator: dependencies.Evaluator,
+		db: dependencies.DB, now: dependencies.Now, audit: dependencies.Audit,
+		evaluator:       dependencies.Evaluator,
 		sourceValidator: sourceValidator, policy: dependencies.Policy,
 	}, nil
 }
@@ -486,7 +490,9 @@ func (service *PreflightService) EvaluateAndPersist(
 	if validatePreflightPlanInput(observedPlan, request.ExpectedPlanRevision, input, now) != nil {
 		return PreflightPersistenceResult{}, ErrRecoveryPreflightConflict
 	}
-	binding, err := newRecoveryTargetPreflightSessionBinding(observedPlan)
+	binding, err := newRecoveryTargetPreflightSessionBindingForRevision(
+		observedPlan, input.Frozen.TargetRevision,
+	)
 	if err != nil {
 		return PreflightPersistenceResult{}, ErrRecoveryPreflightConflict
 	}
@@ -602,7 +608,32 @@ func (service *PreflightService) EvaluateAndPersist(
 	}
 	result.Persisted = true
 	result.PlanTransitionRevision = request.ExpectedPlanRevision + 1
+	service.writePreflightAudit(ctx, request.RequesterID, result)
 	return result, nil
+}
+
+func (service *PreflightService) writePreflightAudit(
+	ctx context.Context,
+	requesterID uint,
+	result PreflightPersistenceResult,
+) {
+	if service == nil || service.audit == nil || requesterID == 0 || !result.Persisted {
+		return
+	}
+	auditCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(sourceValidationContext(ctx)), authorizationAuditTimeout,
+	)
+	defer cancel()
+	_, _ = service.audit.Write(auditCtx, backupasset.AuditEventInput{
+		Actor:     backupasset.AuditActor{UserID: requesterID},
+		Action:    backupasset.AuditActionRecoveryPreflight,
+		ItemCount: result.Evaluation.Snapshot.Impact.EstimatedItems,
+		ByteCount: result.Evaluation.Snapshot.Impact.EstimatedBytes,
+		Fields: map[backupasset.AuditField]any{
+			backupasset.AuditFieldStage:  "persist",
+			backupasset.AuditFieldStatus: "ready",
+		},
+	})
 }
 
 func canonicalPreflightPersistenceInput(input TargetPreflightInput) (TargetPreflightInput, error) {
@@ -638,7 +669,7 @@ func validatePreflightPlanInput(
 		input.Node.NodeID != plan.TargetNodeID || input.Node.NodeRevision != plan.TargetBaseRevision ||
 		input.Frozen.NodeRevision != plan.TargetBaseRevision ||
 		input.Frozen.SourceRevisionDigest != plan.SourceRevisionDigest ||
-		input.Frozen.TargetRevision != plan.TargetBaseRevision ||
+		!validOpaqueRevision(input.Frozen.TargetRevision) ||
 		input.Frozen.CapabilityRevision != plan.CapabilityRevision ||
 		input.Frozen.PolicyRevision != plan.SecurityPolicyRevision ||
 		input.Frozen.FindingSetDigest != plan.SecurityFindingSetDigest ||
@@ -697,7 +728,7 @@ func validatePreflightCommitProduct(
 		snapshot.NodeRevision != plan.TargetBaseRevision ||
 		snapshot.SourceRevisionDigest != plan.SourceRevisionDigest || snapshot.RootID != plan.TargetRootID ||
 		snapshot.RootLocatorDigest != plan.RootLocatorDigest || snapshot.PathDigest != plan.PathDigest ||
-		snapshot.TargetRevision != plan.TargetBaseRevision || snapshot.RootRevision != plan.RootRevision ||
+		snapshot.TargetRevision != input.Frozen.TargetRevision || snapshot.RootRevision != plan.RootRevision ||
 		snapshot.FilesystemRevision != plan.FilesystemRevision ||
 		snapshot.CredentialRevision != plan.CredentialScopeRevision ||
 		snapshot.CapabilityRevision != plan.CapabilityRevision ||

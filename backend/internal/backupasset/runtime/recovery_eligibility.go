@@ -218,6 +218,171 @@ type managedRecoveryEligibilitySecurityEvidenceRow struct {
 	ArtifactPlaintextDigest    string
 }
 
+// ObserveRecoveryPlanSecurity is the pre-create Processing authority. It
+// authorizes every selected asset, verifies current complete malware evidence,
+// and returns only the private sealed product consumed by Recovery.
+func (adapter *managedRecoveryEligibilitySecurityAdapter) ObserveRecoveryPlanSecurity(
+	ctx context.Context,
+	request recovery.RecoveryPlanSecurityRequest,
+) (recovery.RecoveryPlanSecurityEvidence, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return recovery.RecoveryPlanSecurityEvidence{}, err
+	}
+	if adapter == nil || adapter.runtime == nil || adapter.runtime.db == nil ||
+		adapter.runtime.authorize == nil || adapter.runtime.malwareEvidence == nil || adapter.runtime.now == nil ||
+		request.RequesterID == 0 || request.Selection.Validate() != nil || request.MaxItems <= 0 ||
+		request.MaxBytes < 0 || len(request.Selection.AssetRefs) == 0 || len(request.Selection.AssetRefs) > request.MaxItems {
+		return recovery.RecoveryPlanSecurityEvidence{}, managedRecoveryEligibilityUnavailable()
+	}
+	var actor content.DeliveryActor
+	var user model.User
+	loaded := adapter.runtime.db.WithContext(ctx).Where("id = ?", request.RequesterID).Limit(1).Find(&user)
+	if loaded.Error != nil || loaded.RowsAffected != 1 || user.ID != request.RequesterID ||
+		strings.TrimSpace(user.Username) == "" || (user.Role != "admin" && user.Role != "operator") {
+		return recovery.RecoveryPlanSecurityEvidence{}, managedRecoveryEligibilityUnavailable()
+	}
+	actor = content.DeliveryActor{UserID: user.ID, Username: user.Username, Role: user.Role}
+
+	assets := make([]content.AuthorizedAsset, len(request.Selection.AssetRefs))
+	items := make([]model.BackupAssetRecoveryPlanItem, len(request.Selection.AssetRefs))
+	states := make([]capabilityspec.ScanState, len(request.Selection.AssetRefs))
+	var totalBytes int64
+	for index, ref := range request.Selection.AssetRefs {
+		asset, err := adapter.runtime.authorize.Authorize(ctx, actor, ref, content.DeliveryPreview)
+		if err != nil || !validManagedRecoveryPlanSecurityAsset(request.Selection, ref, asset) {
+			return recovery.RecoveryPlanSecurityEvidence{}, managedRecoveryEligibilityDependencyError(ctx, err)
+		}
+		if asset.Size > request.MaxBytes-totalBytes {
+			return recovery.RecoveryPlanSecurityEvidence{}, recovery.ErrExactSelectionLimit
+		}
+		totalBytes += asset.Size
+		observation, err := adapter.runtime.recoverySecurityObservation(ctx, asset)
+		if err != nil || !observation.Complete || observation.PolicyRevision != processingSecurityPolicyRevision ||
+			(observation.ScanState != capabilityspec.ScanNoFinding && observation.ScanState != capabilityspec.ScanFinding) {
+			return recovery.RecoveryPlanSecurityEvidence{}, managedRecoveryEligibilityDependencyError(ctx, err)
+		}
+		assets[index] = asset
+		states[index] = observation.ScanState
+		items[index] = model.BackupAssetRecoveryPlanItem{
+			Ordinal: index, RecoveryPointID: ref.RecoveryPointID,
+			CatalogGenerationID: request.Selection.CatalogGenerationID, EntryID: ref.EntryID,
+			EntryType: string(backupasset.CatalogEntryFile), SourceFingerprint: asset.SourceFingerprint,
+		}
+	}
+
+	var rows []managedRecoveryEligibilitySecurityEvidenceRow
+	var bundleFingerprint string
+	err := adapter.runtime.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var loadErr error
+		rows, bundleFingerprint, loadErr = adapter.loadManagedRecoveryEligibilitySecurityEvidenceTx(ctx, tx, items, false)
+		return loadErr
+	})
+	if err != nil || len(rows) != len(assets) {
+		return recovery.RecoveryPlanSecurityEvidence{}, managedRecoveryEligibilityDependencyError(ctx, err)
+	}
+	for index := range rows {
+		if rows[index].SourceFingerprint != assets[index].SourceFingerprint ||
+			rows[index].EntryFingerprint != assets[index].EntryFingerprint ||
+			rows[index].ProviderCapabilityRevision != assets[index].ProviderCapabilityRevision ||
+			rows[index].ArtifactPlaintextSize <= 0 || rows[index].ArtifactPlaintextDigest == "" {
+			return recovery.RecoveryPlanSecurityEvidence{}, managedRecoveryEligibilityUnavailable()
+		}
+	}
+	findingSetDigest := managedRecoveryEligibilitySecurityDigest(recovery.RecoveryAuthorityBinding{}, bundleFingerprint, rows)
+	capabilityRevision := managedRecoveryPlanCapabilityRevision(bundleFingerprint, rows)
+	if findingSetDigest == "" || capabilityRevision == "" {
+		return recovery.RecoveryPlanSecurityEvidence{}, managedRecoveryEligibilityUnavailable()
+	}
+	findings := make([]recovery.SecurityFinding, 0, 1)
+	for _, state := range states {
+		if state == capabilityspec.ScanFinding {
+			findings = append(findings, recovery.SecurityFinding{Category: recovery.SecurityFindingMalware})
+			break
+		}
+	}
+	decision, err := recovery.NewPreflightSecurityDecision(recovery.PreflightSecurityDecisionInput{
+		FindingSetDigest: findingSetDigest, PolicyRevision: processingSecurityPolicyRevision, Findings: findings,
+	})
+	if err != nil {
+		return recovery.RecoveryPlanSecurityEvidence{}, managedRecoveryEligibilityUnavailable()
+	}
+	privateItems := make([]recovery.RecoveryPlanSourceItemEvidence, len(assets))
+	for index, asset := range assets {
+		privateItems[index] = recovery.RecoveryPlanSourceItemEvidence{
+			AssetRef: asset.Ref, TargetRelativeLocator: asset.Path, ContentDigest: asset.EntryFingerprint,
+			Bytes: asset.Size, DisplayClass: recovery.RecoveryDisplayClassRegular,
+		}
+	}
+	observedAt := adapter.runtime.now().UTC()
+	if observedAt.IsZero() {
+		return recovery.RecoveryPlanSecurityEvidence{}, managedRecoveryEligibilityUnavailable()
+	}
+	return recovery.RecoveryPlanSecurityEvidence{
+		SelectionDigest: request.Selection.SelectionDigest, Provider: backupasset.ProviderRsync,
+		CapabilityRevision: capabilityRevision, Security: decision, Items: privateItems, ObservedAt: observedAt,
+	}, nil
+}
+
+func validManagedRecoveryPlanSecurityAsset(
+	selection recovery.ExactSelection,
+	ref backupasset.AssetRef,
+	asset content.AuthorizedAsset,
+) bool {
+	if asset.Ref != ref || asset.RepositoryID != selection.RepositoryID ||
+		asset.CatalogGenerationID != selection.CatalogGenerationID || asset.Provider != backupasset.ProviderRsync ||
+		asset.ProviderCapabilityRevision <= 0 || asset.SourceFingerprint == "" ||
+		len(asset.EntryFingerprint) != 64 || asset.FingerprintStrength != "strong" ||
+		asset.Size < 0 || !validManagedRecoveryRelativePath(asset.Path) {
+		return false
+	}
+	for _, character := range asset.EntryFingerprint {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func validManagedRecoveryRelativePath(value string) bool {
+	if value == "" || len(value) > 4096 || strings.HasPrefix(value, "/") || strings.HasSuffix(value, "/") ||
+		strings.Contains(value, `\`) || strings.ContainsRune(value, '\x00') {
+		return false
+	}
+	for _, component := range strings.Split(value, "/") {
+		if component == "" || component == "." || component == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func managedRecoveryPlanCapabilityRevision(
+	bundleFingerprint string,
+	rows []managedRecoveryEligibilitySecurityEvidenceRow,
+) string {
+	if bundleFingerprint == "" || len(rows) == 0 {
+		return ""
+	}
+	canonical := backupasset.NewCanonicalSHA256()
+	canonical.String("xirang/recovery/plan-capability/v1")
+	canonical.String(processingSecurityPolicyRevision)
+	canonical.String(bundleFingerprint)
+	canonical.Uint64(uint64(len(rows)))
+	for _, row := range rows {
+		canonical.Int64(row.ProviderCapabilityRevision)
+		canonical.String(row.PipelineFingerprint)
+		canonical.String(row.ArtifactSetManifestDigest)
+	}
+	revision, err := canonical.HexDigest()
+	if err != nil {
+		return ""
+	}
+	return revision
+}
+
 func (adapter *managedRecoveryEligibilitySecurityAdapter) ObserveRecoveryEligibilitySecurity(
 	ctx context.Context,
 	binding recovery.RecoveryAuthorityBinding,
@@ -379,7 +544,11 @@ func loadManagedRecoveryEligibilitySecurityPlanTx(
 	if err := itemQuery.Where("plan_id = ?", plan.ID).Order("ordinal ASC").Find(&items).Error; err != nil {
 		return managedRecoveryEligibilitySecurityPlanSnapshot{}, err
 	}
-	if len(items) == 0 || plan.EstimatedItems != int64(len(items)) {
+	expectedSourceItems := int64(len(items))
+	exactMirror := recovery.TargetMode(plan.TargetMode) == recovery.TargetModeInPlace &&
+		recovery.ConflictPolicy(plan.ConflictPolicy) == recovery.ConflictExactMirror
+	if len(items) == 0 || (!exactMirror && plan.EstimatedItems != expectedSourceItems) ||
+		(exactMirror && plan.EstimatedItems < expectedSourceItems) {
 		return managedRecoveryEligibilitySecurityPlanSnapshot{}, fmt.Errorf("%w: incomplete Recovery security plan", backupasset.ErrConflict)
 	}
 	for ordinal, item := range items {

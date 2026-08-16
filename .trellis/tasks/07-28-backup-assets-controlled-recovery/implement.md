@@ -2983,17 +2983,19 @@ hosted CI, merge, post-merge automation and cleanup complete.
   `-count=100`, race `-count=50`, whole `internal/task -count=10`, the related
   cancellation race matrix `-count=20`, `go vet ./internal/task` and
   `make lint-backend` pass.
-- [ ] Keep Task 9 stopped until PR #427 is green and merged, its exact-sha main
-  CI and Release Please disposition are observed, local `main` is synchronized,
-  and all three Task 8 delivery worktrees/branches are removed. PR #425 remains
-  the open Release Please 0.47.0 handoff and is not merged by Task 8.
+- [x] PR #427 passed all 11 required PR checks, was squash-merged as current
+  `main` `25e933d`, and its exact-head main CI and Release Please completed
+  successfully. Task 8 delivery branches/worktrees were removed before this
+  Task 9 branch started. Release Please PR #425 was closed without merge and
+  its remote branch was deleted; no v0.47.0 tag, GitHub Release or public image
+  was produced, so latest formal release remains v0.46.0.
 
 ### Task 9: API, RBAC, Audit And Swagger
 
 **Files:** recovery handler/tests, router/tests/docs, backup-asset RBAC test,
 settings/config handler transition files/tests and backup content handler/tests.
 
-- [ ] **Write RED route matrix** for every route in `design.md` §10: Auth,
+- [x] **Write RED route matrix** for every route in `design.md` §10: Auth,
   Admin `backup_assets:recover`, ownership, expected revision, idempotency,
   correct proof purpose, registered audit and safe disabled behavior. Assert the
   explicit security-override, write-authority and exact-mirror-delete-authority
@@ -3002,17 +3004,17 @@ settings/config handler transition files/tests and backup content handler/tests.
   Cover the exact Admin target-root register, rotate, delete and node-scoped
   safe-list routes; all mutations require step-up/idempotency and delegate to
   the Task 8 transition facade rather than generic settings mutation.
-- [ ] **Write RED response matrix.** Closed 400/403/404/409/413/429/500/503
+- [x] **Write RED response matrix.** Closed 400/403/404/409/413/429/500/503
   mapping uses response helpers; unexpected errors expose no DB/SSH/Provider/
   path/reason detail. Hidden objects do not leak existence.
-- [ ] **Write RED audit/privacy tests.** Only opaque stable IDs, action, stage,
+- [x] **Write RED audit/privacy tests.** Only opaque stable IDs, action, stage,
   authority/security category, sanitized outcome and counts/bytes. Seed raw
   source locator, configured root, target path and separate reasons; prove none,
   nor credentials, proofs, grants, tickets, marker material or command output,
   enters API, Swagger, audit, logs, metrics or failure evidence.
-- [ ] **Implement thin handlers.** Parse/map/respond only; all ownership,
+- [x] **Implement thin handlers.** Parse/map/respond only; all ownership,
   transitions and transactions stay in Recovery service.
-- [ ] **Regenerate Swagger and verify truth.** Required target-mode, security-
+- [x] **Regenerate Swagger and verify truth.** Required target-mode, security-
   decision and authority enums, bindings, security and all error products match
   live routes. Locator/root/path ciphertext and internal digests/phases are
   absent; generated `docs.go` is the only generated API-doc path.
@@ -3025,6 +3027,58 @@ go test ./internal/api ./internal/api/handlers ./internal/middleware \
 go test -race ./internal/api ./internal/api/handlers \
   -run 'Recovery|BackupContent' -count=1
 ```
+
+#### Task 9 production composition extension (resolved 2026-08-16)
+
+- The HTTP create boundary is now limited to opaque repository, recovery-point,
+  Catalog generation and entry identities plus safe target node/root/mode and
+  conflict intent. It does not accept `ExactSelection`, `RecoveryPlan`,
+  `TargetPreflightInput`, revisions, digests, operation/security products,
+  estimates, locators, permits or credentials. Preflight accepts only the
+  owner-scoped plan ID and opaque expected revision.
+- The user approved the narrow authority-graph extension. Recovery now owns a
+  concrete production application materializer composed from
+  `SourceValidator.FreezeSelection`, a pre-create Processing security evidence
+  authority, a bounded read-only per-target enumeration authority, and an
+  owner/revision-scoped private persisted-plan loader. Production no longer
+  wires `UnavailableApplicationMaterializer`.
+- Create supports isolated, in-place overwrite/skip and exact-mirror delete
+  products from one complete private observation. Target enumeration uses only
+  strict-known-host read operations, explicit row/byte/time bounds, rejects
+  truncation, observes products twice, and revalidates the durable root and
+  node/credential revisions after I/O. Exact-mirror prior identities bind the
+  observed root revision. No private relative locator, prior identity,
+  credential/security evidence or raw failure is JSON/formatted/audited.
+- Preflight loads the owned draft plan and exact opaque transition revision,
+  reconstructs its frozen source selection and private binding, repeats the
+  Processing and target observations, and requires exact selection,
+  operation/delete/security/capability/root/node/path product equality before
+  constructing the private `TargetPreflightInput`. Foreign/missing plans remain
+  hidden and stale/drifted products fail closed; production does not submit an
+  empty input or return the former unavailable seam.
+- Recorded architecture RED -> GREEN selectors:
+
+```bash
+cd backend
+go test ./internal/backupasset/recovery \
+  -run '^TestProductionApplicationMaterializerBuildsAllTargetModesFromFrozenEvidence$' -count=1
+go test ./internal/backupasset/runtime \
+  -run '^TestManagedRecoveryPlanSecurityAuthorityBuildsBoundedPreCreateEvidence$' -count=1
+go test ./internal/backupasset/recovery \
+  -run '^TestRecoveryPlanTargetEnumerationIsBoundedReadOnlyAndCompleteForEveryMode$' -count=1
+go test ./internal/backupasset/recovery \
+  -run '^TestProductionApplicationMaterializerRebuildsOwnedPreflightFromPersistedPlan$' -count=1
+go test ./internal/backupasset/runtime \
+  -run '^TestRecoveryProductionAuthorityBuildRequiresAuthoritiesAndBindsServices$' -count=1
+```
+
+The independent Trellis quality check passed on 2026-08-16 after fixing the
+advancing-clock observation boundary, stable same-intent replay of stored
+server preflight products, context/row/byte-bounded target enumeration, and
+503 mapping for unavailable target/Processing authorities. Fresh focused
+normal/race gates, full Recovery/runtime tests, Swagger generation, vet, lint,
+and diff checks passed. Task 9 is `complete_checked`; Task 10 remains
+`not_executed`.
 
 ### Task 10: Typed Frontend Recovery Wizard
 

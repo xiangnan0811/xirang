@@ -300,6 +300,7 @@ type recoveryEligibilityTargetSession struct {
 	hostIdentityProof         recoverySourceHostIdentityProof
 	protectedRoots            []string
 	sftp                      recoveryEligibilityTargetSFTP
+	planReader                recoveryPlanTargetReader
 	closeSSH                  func() error
 	closeOnce                 sync.Once
 	closeErr                  error
@@ -512,11 +513,15 @@ func (source *recoveryEligibilityTargetGORMPlanSource) ResolveRecoveryEligibilit
 	}
 	var plan model.BackupAssetRecoveryPlan
 	var preflight model.BackupAssetRecoveryPreflight
+	draftPreflight := request.Binding.draftPreflight
 	err := source.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
 			Where("id = ?", request.Binding.PlanID).Limit(1).Find(&plan)
 		if loaded.Error != nil || loaded.RowsAffected != 1 || plan.ID != request.Binding.PlanID {
 			return ErrRecoveryTargetUnavailable
+		}
+		if draftPreflight {
+			return nil
 		}
 		loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
 			Where("id = ? AND plan_id = ?", request.Binding.PreflightID, request.Binding.PlanID).
@@ -539,17 +544,30 @@ func (source *recoveryEligibilityTargetGORMPlanSource) ResolveRecoveryEligibilit
 		plan.EncryptedTargetRootLocator != root.Locator || plan.RootLocatorDigest != root.LocatorDigest ||
 		plan.PathDigest != binding.PathDigest || plan.TargetBaseRevision != binding.TargetBaseRevision ||
 		plan.CredentialScopeRevision != binding.CredentialScopeRevision ||
-		plan.RootRevision != binding.RootRevision || plan.FilesystemRevision != binding.FilesystemRevision ||
-		preflight.Revision != binding.PreflightRevision || preflight.TargetNodeID != root.NodeID ||
+		plan.RootRevision != binding.RootRevision || plan.FilesystemRevision != binding.FilesystemRevision {
+		return recoveryEligibilityTargetPlanSnapshot{}, ErrRecoveryTargetChanged
+	}
+	if draftPreflight {
+		if PlanState(plan.State) != PlanStateDraft || binding.PreflightRevision != plan.PreflightRevision ||
+			binding.PreflightNodeRevision != plan.TargetBaseRevision ||
+			!validOpaqueRevision(binding.PreflightTargetRevision) ||
+			plan.PreflightExpiresAt.IsZero() {
+			return recoveryEligibilityTargetPlanSnapshot{}, ErrRecoveryTargetChanged
+		}
+	} else if preflight.Revision != binding.PreflightRevision || preflight.TargetNodeID != root.NodeID ||
 		preflight.NodeRevision != binding.PreflightNodeRevision || preflight.TargetRootID != root.RootID ||
 		preflight.RootLocatorDigest != root.LocatorDigest || preflight.PathDigest != binding.PathDigest ||
 		preflight.TargetRevision != binding.PreflightTargetRevision ||
 		preflight.ExpiresAt.IsZero() || !preflight.ExpiresAt.Equal(plan.PreflightExpiresAt) {
 		return recoveryEligibilityTargetPlanSnapshot{}, ErrRecoveryTargetChanged
 	}
+	expiresAt := preflight.ExpiresAt.UTC()
+	if draftPreflight {
+		expiresAt = plan.PreflightExpiresAt.UTC()
+	}
 	return recoveryEligibilityTargetPlanSnapshot{
 		privateRelativeLocator: plan.EncryptedTargetRelativePath,
-		expiresAt:              preflight.ExpiresAt.UTC(),
+		expiresAt:              expiresAt,
 	}, nil
 }
 
@@ -918,7 +936,8 @@ func (sessions *recoveryEligibilityTargetProductionSessions) openRecoveryEligibi
 		nodeID: node.ID, nodeRevision: revisions.NodeRevision,
 		credentialRevision: request.credentialRevision, registeredNodeEndpoint: endpoint,
 		authenticatedNodeIdentity: identity, hostIdentityProof: proof,
-		protectedRoots: protectedRoots, sftp: client, closeSSH: connection.Close,
+		protectedRoots: protectedRoots, sftp: client,
+		planReader: recoveryPlanTargetSFTPReader{client: client}, closeSSH: connection.Close,
 	}, nil
 }
 

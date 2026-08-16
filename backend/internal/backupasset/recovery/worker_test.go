@@ -4910,6 +4910,79 @@ func TestWorkerCancelQueuedJobDoesNotCreateTargetMutationState(t *testing.T) {
 	}
 }
 
+func TestWorkerCancelOwnedJobRejectsRevisionDriftInsideLockedBoundary(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+	executed, err := fixture.service.Authorize(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("execute recovery fixture: %v", err)
+	}
+	coordinator := newRecoveryWorkerCoordinator(t, fixture)
+	audit := &recoveryAPIAuditSpy{err: errors.New("FAKE_CANCEL_AUDIT_FAILURE_FOR_TEST_ONLY")}
+	coordinator.audit = audit
+	var job model.BackupAssetRecoveryJob
+	if err := fixture.db.Where("id = ?", executed.JobID).Take(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	staleRevision := job.TransitionRevision
+	if err := fixture.db.Model(&model.BackupAssetRecoveryJob{}).Where("id = ?", job.ID).
+		UpdateColumn("transition_revision", staleRevision+1).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.CancelOwnedJob(context.Background(), CancelRecoveryJobRequest{
+		RequesterID: fixture.request.RequesterID, JobID: job.ID, ExpectedRevision: staleRevision,
+	}); !errors.Is(err, ErrRecoveryWorkerFenceLost) {
+		t.Fatalf("drifted cancellation error=%v, want ErrRecoveryWorkerFenceLost", err)
+	}
+	var after model.BackupAssetRecoveryJob
+	if err := fixture.db.Where("id = ?", job.ID).Take(&after).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after.State != string(JobStateQueued) || after.TransitionRevision != staleRevision+1 {
+		t.Fatalf("drifted cancellation mutated job=%+v", after)
+	}
+	if len(audit.events) != 0 {
+		t.Fatalf("drifted cancellation emitted success audit: %+v", audit.events)
+	}
+	if err := coordinator.CancelOwnedJob(context.Background(), CancelRecoveryJobRequest{
+		RequesterID: fixture.request.RequesterID, JobID: job.ID, ExpectedRevision: after.TransitionRevision,
+	}); err != nil {
+		t.Fatalf("committed cancellation changed response on audit failure: %v", err)
+	}
+	if len(audit.events) != 1 || audit.events[0].Action != backupasset.AuditActionRecoveryCancel ||
+		audit.events[0].Actor.UserID != fixture.request.RequesterID || audit.events[0].RecoveryJobID != job.ID ||
+		audit.events[0].GrantID != "" || audit.events[0].StepUpProofID != "" {
+		t.Fatalf("cancel audit=%+v", audit.events)
+	}
+}
+
+func TestWorkerCancelOwnedJobHidesMissingAndForeignJobs(t *testing.T) {
+	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
+	executed, err := fixture.service.Authorize(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("execute recovery fixture: %v", err)
+	}
+	coordinator := newRecoveryWorkerCoordinator(t, fixture)
+	var job model.BackupAssetRecoveryJob
+	if err := fixture.db.Where("id = ?", executed.JobID).Take(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []CancelRecoveryJobRequest{
+		{RequesterID: fixture.request.RequesterID, JobID: strings.Repeat("f", 32), ExpectedRevision: 1},
+		{RequesterID: fixture.request.RequesterID + 1, JobID: job.ID, ExpectedRevision: job.TransitionRevision},
+	} {
+		if err := coordinator.CancelOwnedJob(context.Background(), request); !errors.Is(err, ErrRecoveryWorkerObjectNotFound) {
+			t.Fatalf("hidden cancellation error=%v, want ErrRecoveryWorkerObjectNotFound", err)
+		}
+	}
+	var after model.BackupAssetRecoveryJob
+	if err := fixture.db.Where("id = ?", job.ID).Take(&after).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after.State != job.State || after.TransitionRevision != job.TransitionRevision {
+		t.Fatalf("hidden cancellation mutated job before=%+v after=%+v", job, after)
+	}
+}
+
 func TestWorkerCancelExpiredQueuedJobReleasesStaleOwnershipWithoutTargetState(t *testing.T) {
 	fixture := newAuthorizationReceiptServiceFixture(t, AuthorizationReceiptExecute)
 	executed, err := fixture.service.Authorize(context.Background(), fixture.request)
