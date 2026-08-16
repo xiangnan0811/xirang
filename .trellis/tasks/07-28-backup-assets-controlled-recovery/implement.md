@@ -2960,10 +2960,10 @@ hosted CI, merge, post-merge automation and cleanup complete.
   is intentionally not merged by this Task 8 delivery closure.
 - [x] Task 8 is delivered and merged. Child 13 remains `in_progress`, the
   parent remains `planning`, program delivery remains `12/15`, and Tasks 9-10
-  remain `not_executed`. Do not run `task.py archive`. Do not begin Task 9 until
-  this bookkeeping PR is green, merged, post-merge automation is observed,
-  local `main` is synchronized and both Task 8 topic worktrees/branches are
-  cleaned.
+  remain `not_executed`. Delivery bookkeeping is PR #426. Do not run
+  `task.py archive`. Do not begin Task 9 until PR #426 is green, merged,
+  post-merge automation is observed, local `main` is synchronized and both
+  Task 8 topic worktrees/branches are cleaned.
 
 ### Task 9: API, RBAC, Audit And Swagger
 

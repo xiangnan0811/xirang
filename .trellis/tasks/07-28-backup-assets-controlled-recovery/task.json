@@ -368,7 +368,7 @@
         "implementation_authority": "granted_and_executed_t8_a_through_t8_v1"
       },
       "task_9_boundary": "task_8_keeps_internal_authorization_and_target_root_facades_but_registers_none_of_the_effect_target_root_or_downgrade_readiness_routes_task_9_route_response_rbac_audit_privacy_and_swagger_matrix_not_executed",
-      "delivery": "delivered_merged_post_merge_observed_pending_bookkeeping_pr",
+      "delivery": "delivered_merged_post_merge_observed_bookkeeping_pr_426_open",
       "final_fix_commit": "2136b78232e867de27ee89a98e99c003aa80dfb6",
       "hosted_ci": "pull_request_run_31919970769_success_all_11_required_checks_green",
       "squash_commit": "1c914722e0d669a793b8e2f8f5ed20152f61c544",
@@ -377,6 +377,7 @@
       "release_disposition": "release_pr_425_head_3c23b579874a2a89a141b165b0300d3d6b03f9d7_required_ci_31920367921_success_open_clean_autorelease_pending_latest_release_v0_46_0_no_new_publish_docker_images",
       "topic_cleanup": "remote_feature_branch_deleted_local_feature_branch_and_worktree_retained_until_bookkeeping_merge",
       "bookkeeping_branch": "codex/task8-delivery-closure",
+      "bookkeeping_pr": "https://github.com/xiangnan0811/xirang/pull/426",
       "next": "merge_bookkeeping_pr_after_green_monitor_its_post_merge_automation_sync_main_cleanup_both_task_8_worktrees_and_branches_then_start_task_9_separately"
     },
     "task_4_b1_scope_amendment": {

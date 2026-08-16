@@ -1554,6 +1554,7 @@ remaining Child 13 Task 9-10 boundary.
 
 - Recorded final fix `2136b78`, feature squash `1c91472`, all required CI and
   post-merge automation IDs in Child and parent Trellis memory.
+- Opened delivery bookkeeping PR #426 from the isolated closure branch.
 - Recorded successful Docker Hub description sync, open green release PR #425,
   latest formal release v0.46.0 and zero new image publication.
 - Kept Child 13 `in_progress`, parent `planning`, program delivery `12/15`, and
@@ -1580,6 +1581,6 @@ remaining Child 13 Task 9-10 boundary.
 
 ### Next Steps
 
-- Merge this bookkeeping PR, monitor its post-merge automation, resynchronize
+- Merge PR #426 after required CI passes, monitor its post-merge automation, resynchronize
   local `main`, remove both Task 8 branches/worktrees, then begin Task 9 on a
   fresh dedicated branch when separately started.

@@ -57,10 +57,11 @@
       "program_delivery": "12_of_15"
     },
     "task_8_checkpoint_delivery": {
-      "status": "delivered_merged_post_merge_observed_pending_bookkeeping_pr",
+      "status": "delivered_merged_post_merge_observed_bookkeeping_pr_426_open",
       "pr": "https://github.com/xiangnan0811/xirang/pull/424",
       "squash_commit": "1c914722e0d669a793b8e2f8f5ed20152f61c544",
       "release_pr": "https://github.com/xiangnan0811/xirang/pull/425",
+      "bookkeeping_pr": "https://github.com/xiangnan0811/xirang/pull/426",
       "child_status": "in_progress_tasks_9_to_10_not_executed",
       "program_delivery": "12_of_15"
     },

@@ -10331,9 +10331,9 @@ toolchain-consistency requirement are already recorded in the Task 8 plan,
 evidence and existing backend deployment/quality guidance. No `.trellis/spec/`
 file changes are required by this delivery-history-only PR.
 
-Task 8 is delivered and merged. Child 13 remains `in_progress` because Tasks
-9-10 are `not_executed`; its parent remains `planning` and program delivery
-remains 12/15. The Child is intentionally not archived. Task 9 must remain
-stopped until this bookkeeping branch passes CI, merges, receives a post-merge
-disposition, local `main` is resynchronized and both Task 8 topic branches and
-worktrees are removed.
+Task 8 is delivered and merged. Delivery bookkeeping is PR #426. Child 13
+remains `in_progress` because Tasks 9-10 are `not_executed`; its parent remains
+`planning` and program delivery remains 12/15. The Child is intentionally not
+archived. Task 9 must remain stopped until PR #426 passes CI, merges, receives
+a post-merge disposition, local `main` is resynchronized and both Task 8 topic
+branches and worktrees are removed.
