@@ -35,15 +35,15 @@ i18next; Trellis task/PR/CI workflow.
 
 ```text
 task:                     .trellis/tasks/07-28-backup-assets-controlled-recovery
-status:                   in_progress
+status:                   completed
 parent:                   07-12-backup-data-explorer-design (planning)
 branch:                   codex/task-11-cross-engine-full-verification
 planning baseline:        793af9f8c29ba6274d4f99c1e104fcc01a72752c (v0.48.0 exact release)
-delivered program state:  12/15
+delivered program state:  13/15
 original planning artifacts: complete_approved (two independent rereviews, 2026-07-28)
 historical planning scope: 9 paths
 historical released manifest: 55 create + 81 modify
-current exact union:      13 unique Task 11 test/evidence paths (9 tracked, 0 cached, 4 untracked)
+current exact union:      delivered 13-path Task 11 test/evidence commit; bookkeeping-only branch cleanly isolated
 migration ownership:      paired 000069; 000070+ reserved
 task.py start:            executed_once (2026-07-28)
 Task 1 execution:         complete_approved (000069/model/contracts)
@@ -68,10 +68,10 @@ Task 8 execution:         complete_checked_whole_scope; delivered through PR #42
 Task 9 execution:         complete_checked; delivered through PR #428 and released in v0.47.0
 Task 10 execution:        complete_checked; delivered through PR #430 and released in v0.48.0
 Task 11 execution:        complete_checked (accepted historical same-selector RED provenance exception recorded)
-Task 12 execution:        in_progress; focused 13-path rebaseline complete, delivery actions not_executed
+Task 12 execution:        delivery_archive_journal_complete; PR #432 merged as 946ee6d8, bookkeeping PR #433 open
 Task 5 receipt evidence:  focused SQLite/real-PostgreSQL normal and race gates passed; both independent reviews approved
 Task 8 dirty union:       34 paths; approved product/task-local evidence scope; staged zero
-Task 11 branch delivery:  stage/commit/push/PR/CI/merge not_executed
+Task 11 branch delivery:  feature head e42e88b; PR #432; 11/11 CI green; squash 946ee6d8
 parent completion:        forbidden in Child 13
 ```
 
@@ -3318,8 +3318,9 @@ remains `not_executed` and no delivery work starts here.
 
 ### Task 12: Exact Delivery, Merge And Child-Only Bookkeeping
 
-**Status:** `in_progress`; focused rebaseline is complete and every delivery
-action remains `not_executed`. Task 5's recorded independent-review receipt
+**Status:** `delivery_archive_journal_complete_bookkeeping_pr_433_open`; focused
+rebaseline, exact staging, feature delivery, post-merge observation and Child
+archive and journal session 41 are complete. Task 5's recorded independent-review receipt
 below is an approval-ledger fact, not a Task 12 checklist row. Historical
 145-path ledgers above describe earlier Child implementation/checkpoint states
 and remain unchanged; they are not the current Task 12 delivery manifest.
@@ -3394,7 +3395,7 @@ and remain unchanged; they are not the current Task 12 delivery manifest.
   git diff --cached --check
   ```
 
-- [ ] **Stage exactly those 13 paths.** Reuse `task12_paths` from the successful
+- [x] **Stage exactly those 13 paths.** Reuse `task12_paths` from the successful
   pre-stage gate; never stage a directory or wildcard. Then require cached
   names to equal the same manifest byte-for-byte after sorting:
 
@@ -3406,19 +3407,21 @@ and remain unchanged; they are not the current Task 12 delivery manifest.
   test "$(git diff --cached --name-only --no-renames | wc -l)" -eq 13
   git diff --cached --check
   ```
-- [ ] **Create a coherent conventional work commit.** Suggested subject:
+- [x] **Create a coherent conventional work commit.** Subject:
   `test(backup): close recovery verification gaps`. Subagent commits are forbidden; the
   controller owns this action.
-- [ ] **Push and open one draft PR to `main`.** Include migration/rollback,
+- [x] **Push and open one draft PR to `main`.** Include migration/rollback,
   security, PostgreSQL, frontend/a11y, scope and release-disposition evidence.
   Monitor every required check, fix failures on this branch with TDD, push and
   keep monitoring. Mark ready and squash merge only when all required checks
   are green and reviews are closed.
-- [ ] **Monitor post-merge automation.** Observe main CI, Release Please and any
+- [x] **Monitor post-merge automation.** Observe main CI, Release Please and any
   actually triggered release/image/description workflow. This feature PR is not
   expected to publish a formal release or image unless automation proves
   otherwise; record actual truth.
-- [ ] **Create a post-merge bookkeeping branch from synchronized `main`.** Update
+- [ ] **Create a post-merge bookkeeping branch from synchronized `main`.** The
+  branch, ledger update, archive, journal and validation are complete; only its
+  own PR delivery/monitoring remains. Update
   the Child delivery ledger with feature head, squash commit, PR, CI and
   post-merge facts; run `task.py archive`; record the journal; validate the
   archived Child while the parent remains `planning`; deliver the bookkeeping

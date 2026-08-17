@@ -11679,3 +11679,63 @@ scope, zero production path, protected refs/config, generated/migration/
 manifest truth, privacy, formatting, staged zero, Node-22 lint/typecheck and
 all frozen F1--F8/frontend selector coverage. The accepted historical
 same-selector RED provenance exception remains recorded unchanged.
+
+## Task 12 Feature Delivery And Post-Merge Evidence (2026-08-17)
+
+The frozen exact pre-stage gate passed with the same 13-path allow-list. The
+NUL-delimited literal pathspec staging command cached exactly those 13 paths,
+left unstaged paths at zero, and passed `git diff --cached --check`. Conventional
+feature commit `e42e88bd769a0929ff42143d0e0a4396d916cbb7`
+(`test(backup): close recovery verification gaps`) has exact parent
+`793af9f8c29ba6274d4f99c1e104fcc01a72752c`, contains exactly the 13 allowed
+paths, and preserves the protected `.codex` blob.
+
+The feature branch was pushed and draft PR #432 was opened against exact base
+`793af9f`. Exact-head CI run `31985755745` passed all 11 jobs: PR title,
+backend, frontend, PostgreSQL migration parity, Docker, migration UTC safety,
+doc freshness, both Worker runtime closures and both architecture-specific
+Worker build/smoke/scans. The PR had zero review threads or unresolved comments,
+was marked ready only after those jobs were green, and squash-merged as
+`946ee6d8cb058fd1a3b358eb453f43cca3f57f7e`. The remote feature branch was
+deleted and local `main` was fast-forwarded cleanly to the squash commit.
+
+Exact-squash main CI run `31986331118` succeeded with ten success jobs and the
+push-event PR-title job correctly skipped. Release Please run `31986331101`
+also succeeded. Only those two workflows ran for the squash commit. The latest
+formal release and tag remain v0.48.0 at
+`793af9f8c29ba6274d4f99c1e104fcc01a72752c`; no GitHub Release, Docker image or
+Docker Hub description publication was expected or triggered by this
+test/evidence-only commit.
+
+Product delivery is complete. Child-only archive and journal bookkeeping is
+now isolated on `codex/task-12-child13-bookkeeping` from exact synchronized
+main. Child 13 remains `in_progress` only until `task.py archive` sets its final
+status/completion date and moves it into the monthly archive. The parent remains
+`planning`, program delivery remains 12/15 until that archive, and Children 14
+and 15 have not been created or started.
+
+### Child-only archive checkpoint
+
+From exact synchronized squash commit `946ee6d8`, the controller created
+`codex/task-12-child13-bookkeeping`, recorded the feature delivery facts in
+commit `f0f0692`, and ran the native Trellis archive command. It set Child 13 to
+`completed`, wrote `completedAt: 2026-08-17`, moved the complete task directory
+to `.trellis/tasks/archive/2026-08/07-28-backup-assets-controlled-recovery`, and
+created scoped archive commit `645d180`. The archived Child validation passed.
+
+The parent remains `planning`. Its mechanical instantiated-child state is now
+13/13 archived, while program delivery is 13/15 because Children 14 and 15 have
+not been created or started. Journal recording and delivery of this bookkeeping
+branch through its own PR are the only remaining Task 12 actions.
+
+Trellis journal session 41 was then appended under the existing `weibo`
+workspace identity. It records the Task 11 exception decision, exact feature
+delivery, both hosted CI layers, archive facts and the explicit stop before
+Children 14/15. The temporary per-worktree ignored developer identity used to
+invoke the native journal command was removed immediately and is not part of
+the Git diff. Only bookkeeping-PR delivery and monitoring remain.
+
+Draft bookkeeping PR #433 was opened against `main` from
+`codex/task-12-child13-bookkeeping`. This self-link is recorded before its
+exact-head CI; the PR must remain unmerged until all required checks pass and
+all review threads are closed.
