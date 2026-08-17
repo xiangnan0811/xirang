@@ -35,7 +35,7 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Program delivery remains 12/15 merged and archived (80%); Trellis 12/13 counts only instantiated children. Child 13 remains active/in_progress and completedAt remains unset. Its Tasks 1-11 are complete at their recorded approved scopes. Task 10 PR #430 passed all 11 required checks, squash-merged as 20c32a969489e4ab9bf9719ed914585c0ac13f84, and release PR #431 published v0.48.0 at 793af9f8c29ba6274d4f99c1e104fcc01a72752c with exact-release CI, Release Please, and multi-architecture image publication green. Task 11 cross-engine/full verification is complete_checked after all runnable gates and two independent reviews passed and the responsible user explicitly accepted the documented historical same-selector RED evidence exception without fabricating it. Task 12 is in_progress after focused rebaseline replaced its obsolete single 145-path delivery assumption with the live exact 13-path Task 11 test/evidence union; all stage, commit, push, PR, CI, merge, archive and post-merge bookkeeping actions remain not_executed. Child 13 and this parent must not be archived; Children 14-15 are not created.",
+  "notes": "Program delivery remains 12/15 merged and archived (80%) until Child 13 archive completes; Trellis 12/13 counts only instantiated children. Child 13 product delivery is complete: Task 11 is complete_checked with the explicitly accepted and unaltered historical RED provenance exception, and Task 12 delivered the exact 13-path test/evidence union through feature head e42e88bd769a0929ff42143d0e0a4396d916cbb7 and PR #432. Required CI run 31985755745 passed all 11 checks, squash commit 946ee6d8cb058fd1a3b358eb453f43cca3f57f7e is on main, and exact-squash main CI 31986331118 plus Release Please 31986331101 succeeded. The latest formal release remains v0.48.0 at 793af9f; no GitHub Release or Docker image was expected or triggered. Child-only archive/journal bookkeeping is now in progress; this parent remains planning and Children 14-15 are not created.",
   "meta": {
     "program_delivery": {
       "delivered": 12,
@@ -79,13 +79,24 @@
       "program_delivery": "12_of_15"
     },
     "task_12_rebaseline": {
-      "status": "in_progress_focused_rebaseline_complete_delivery_actions_not_executed",
+      "status": "delivery_complete_bookkeeping_in_progress",
       "date": "2026-08-17",
       "baseline": "codex_task_11_cross_engine_full_verification_head_origin_main_v0_48_0_exact_793af9f8c29ba6274d4f99c1e104fcc01a72752c",
       "exact_dirty_union": "13_unique_paths_9_tracked_0_cached_4_untracked_all_task11_tests_or_trellis_evidence",
-      "child_status": "in_progress_task_11_complete_checked_task_12_in_progress",
+      "child_status": "in_progress_product_delivered_archive_pending",
       "program_delivery": "12_of_15",
-      "boundary": "no_stage_commit_push_pr_ci_merge_archive_post_merge_bookkeeping_or_child14_child15_work_executed"
+      "boundary": "feature_delivery_complete_archive_journal_and_bookkeeping_pr_in_progress_child14_child15_not_started"
+    },
+    "child_13_delivery": {
+      "status": "product_delivered_child_only_bookkeeping_in_progress",
+      "feature_pr": "https://github.com/xiangnan0811/xirang/pull/432",
+      "feature_head": "e42e88bd769a0929ff42143d0e0a4396d916cbb7",
+      "required_ci": "run_31985755745_success_all_11_checks_green",
+      "squash_commit": "946ee6d8cb058fd1a3b358eb453f43cca3f57f7e",
+      "post_merge": "exact_squash_main_ci_31986331118_and_release_please_31986331101_success",
+      "release_disposition": "no_new_release_or_image_latest_release_v0_48_0_at_793af9f",
+      "program_delivery": "remains_12_of_15_until_archive",
+      "boundary": "parent_planning_children14_15_not_created"
     },
     "r0_execution_rebaseline": {
       "date": "2026-08-02",
