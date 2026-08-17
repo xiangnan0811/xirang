@@ -21,7 +21,7 @@
   "children": [],
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [],
-  "notes": "Complex Child 13 planning was independently approved on 2026-07-28 and task.py start ran exactly once. Tasks 1-11 are complete at their recorded approved scopes; the responsible user explicitly accepted the documented historical same-selector RED provenance exception without fabricating it. Task 12 rebaselined the obsolete 145-path delivery assumption to the exact 13-path Task 11 test/evidence union, staged only that union, and created feature head e42e88bd769a0929ff42143d0e0a4396d916cbb7. PR #432 passed all 11 required checks in CI run 31985755745 and squash-merged as 946ee6d8cb058fd1a3b358eb453f43cca3f57f7e. Exact-squash main CI 31986331118 and Release Please 31986331101 succeeded. The latest formal release remains v0.48.0 at 793af9f; this test/evidence-only delivery triggered no GitHub Release or Docker image publication. task.py archive completed on 2026-08-17 as bookkeeping commit 645d180, so Child 13 is completed and archived under archive/2026-08. Journal session 41 records the delivery and archive. The parent remains planning, program delivery is 13/15, and all 13 instantiated children are archived. Bookkeeping PR #433 is open for final delivery/monitoring. Do not create or start Children 14-15 in this task.",
+  "notes": "Complex Child 13 planning was independently approved on 2026-07-28 and task.py start ran exactly once. Tasks 1-11 are complete at their recorded approved scopes; the responsible user explicitly accepted the documented historical same-selector RED provenance exception without fabricating it. Task 12 rebaselined the obsolete 145-path delivery assumption to the exact 13-path Task 11 test/evidence union, staged only that union, and created feature head e42e88bd769a0929ff42143d0e0a4396d916cbb7. PR #432 passed all 11 required checks in CI run 31985755745 and squash-merged as 946ee6d8cb058fd1a3b358eb453f43cca3f57f7e. Exact-squash main CI 31986331118 and Release Please 31986331101 succeeded. The latest formal release remains v0.48.0 at 793af9f; this test/evidence-only delivery triggered no GitHub Release or Docker image publication. task.py archive completed on 2026-08-17 as bookkeeping commit 645d180, so Child 13 is completed and archived under archive/2026-08. Journal session 41 records the delivery and archive. Bookkeeping head 799ababd2563df2568846c0ef5d7c3231021ccaf passed all 11 checks in CI run 31987493250; PR #433 squash-merged as 898491ffb68f89f673c4d6d96a692af655c01056, and exact-squash main CI 31988104612 plus Release Please 31988104621 succeeded. Task 12 is complete_checked. The parent remains planning, program delivery is 13/15, and all 13 instantiated children are archived. Do not create or start Children 14-15 in this task.",
   "meta": {
     "parent_delivery": "13_of_15_complete_parent_still_planning",
     "planning_basis": "approved parent PRD/design/implement plus Child 13 current-main reconnaissance",
@@ -33,7 +33,7 @@
     "planning_review": "whole_task_6_specification_and_quality_reviews_complete_task_7_publication_resolver_content_adapter_retain_claim_revoke_drain_cleanup_target_validation_target_root_plan_snapshot_workspace_marker_interoperability_exact_plan_sftp_marker_present_regular_file_verify_no_overwrite_regular_file_create_composite_read_only_preflight_published_result_read_delete_oriented_lstat_exact_absence_and_a2e2_r42_r47_overwrite_artifact_authority_historical_key_binding_authenticated_intent_post_preparation_exact_prior_capture_same_invocation_mismatch_restore_closed_tuple_publish_authenticated_acknowledgement_safe_residue_cleanup_source_free_replay_durable_checkpoint_before_finalize_preterminal_takeover_reconciliation_and_authority_error_resource_context_privacy_focused_checks_complete_v13_delete_and_whole_task7_review_open",
     "planning_review_evidence": "independent_security_state_and_plan_manifest_rereviews_approved_2026-07-28_b3_receipt_019fc0c2_cfda_74e3_b218_246f3a425545_approved_f6_spec_019fc136_feca_7fb0_82bc_3c33739aef12_quality_019fc13c_0710_7343_b261_dd866382a8c0_postgres_019fc13d_ea0e_7f93_b1c6_32aebcb7368e_whole_task6_controller_inline_spec_quality_and_fresh_combined_gates_approved_2026-08-03",
     "task_start": "executed_once_2026-07-28",
-    "implementation": "tasks_1_to_5_complete_approved_task_6_complete_checked_whole_scope_task_7_delivered_pr_410_task_8_complete_checked_whole_scope_delivered_pr_424_task_9_complete_checked_delivered_pr_428_released_v0_47_0_task_10_complete_checked_delivered_pr_430_released_v0_48_0_task_11_complete_checked_task_12_delivery_complete_pr_432_squash_946ee6d_post_merge_success_child_archived_journal_session_41_recorded_bookkeeping_pr_pending",
+    "implementation": "tasks_1_to_5_complete_approved_task_6_complete_checked_whole_scope_task_7_delivered_pr_410_task_8_complete_checked_whole_scope_delivered_pr_424_task_9_complete_checked_delivered_pr_428_released_v0_47_0_task_10_complete_checked_delivered_pr_430_released_v0_48_0_task_11_complete_checked_task_12_complete_checked_feature_pr_432_bookkeeping_pr_433_child_archived_journal_recorded_post_merge_success",
     "task_7": {
       "status": "complete_checked_whole_scope",
       "focused_complete_checked": [
@@ -428,8 +428,8 @@
       "completion": "complete_checked_after_all_runnable_gates_two_independent_reviews_and_explicit_historical_evidence_exception_acceptance"
     },
     "task_12": {
-      "status": "delivery_archive_journal_complete_bookkeeping_pr_433_open",
-      "phase": "feature_pr_432_merged_post_merge_observed_child_archived_journal_session_41_recorded_bookkeeping_pr_433_open",
+      "status": "complete_checked",
+      "phase": "feature_and_bookkeeping_prs_merged_post_merge_observed_child_archived_journal_recorded",
       "date": "2026-08-17",
       "baseline": "branch_codex_task_11_cross_engine_full_verification_head_origin_main_v0_48_0_exact_793af9f8c29ba6274d4f99c1e104fcc01a72752c",
       "rebaseline_reason": "historical_single_145_path_delivery_assumption_describes_earlier_child_implementation_state_and_does_not_match_the_released_task_10_baseline_plus_task_11_closure_delta",
@@ -468,8 +468,12 @@
       "archive_path": ".trellis/tasks/archive/2026-08/07-28-backup-assets-controlled-recovery",
       "journal": "weibo_session_41_recorded",
       "bookkeeping_pr": "https://github.com/xiangnan0811/xirang/pull/433",
-      "next": "monitor_and_merge_bookkeeping_pr_433_without_starting_child14_child15",
-      "boundary": "feature_delivery_child_archive_and_journal_complete_bookkeeping_pr_pending_child14_child15_not_started"
+      "bookkeeping_head": "799ababd2563df2568846c0ef5d7c3231021ccaf",
+      "bookkeeping_ci": "run_31987493250_success_all_11_checks_green",
+      "bookkeeping_squash": "898491ffb68f89f673c4d6d96a692af655c01056",
+      "bookkeeping_post_merge": "exact_squash_main_ci_31988104612_and_release_please_31988104621_success",
+      "next": "stop_task_12_before_child14_child15",
+      "boundary": "task12_complete_checked_parent_planning_program_13_of_15_child14_child15_not_started"
     },
     "task_4_b1_scope_amendment": {
       "status": "complete_approved_as_part_of_task_4_focused_closure",
@@ -1163,6 +1167,6 @@
         "broad_runtime_cache": "environment_blocked_host_ifree_zero_not_a_product_pass"
       }
     },
-    "delivery_actions": "tasks_1_to_10_delivered_as_recorded_task_11_complete_checked_task_12_exact_13_path_stage_commit_e42e88b_push_pr_432_ci_31985755745_squash_946ee6d_post_merge_ci_31986331118_release_please_31986331101_archive_645d180_journal_session_41_complete_bookkeeping_pr_433_open"
+    "delivery_actions": "tasks_1_to_10_delivered_as_recorded_task_11_complete_checked_task_12_complete_checked_feature_pr_432_ci_31985755745_squash_946ee6d_post_merge_31986331118_31986331101_archive_645d180_journal_41_bookkeeping_pr_433_ci_31987493250_squash_898491ff_post_merge_31988104612_31988104621"
   }
 }

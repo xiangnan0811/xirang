@@ -68,7 +68,7 @@ Task 8 execution:         complete_checked_whole_scope; delivered through PR #42
 Task 9 execution:         complete_checked; delivered through PR #428 and released in v0.47.0
 Task 10 execution:        complete_checked; delivered through PR #430 and released in v0.48.0
 Task 11 execution:        complete_checked (accepted historical same-selector RED provenance exception recorded)
-Task 12 execution:        delivery_archive_journal_complete; PR #432 merged as 946ee6d8, bookkeeping PR #433 open
+Task 12 execution:        complete_checked; PR #433 merged as 898491ff with post-merge automation green
 Task 5 receipt evidence:  focused SQLite/real-PostgreSQL normal and race gates passed; both independent reviews approved
 Task 8 dirty union:       34 paths; approved product/task-local evidence scope; staged zero
 Task 11 branch delivery:  feature head e42e88b; PR #432; 11/11 CI green; squash 946ee6d8
@@ -3318,7 +3318,7 @@ remains `not_executed` and no delivery work starts here.
 
 ### Task 12: Exact Delivery, Merge And Child-Only Bookkeeping
 
-**Status:** `delivery_archive_journal_complete_bookkeeping_pr_433_open`; focused
+**Status:** `complete_checked`; focused
 rebaseline, exact staging, feature delivery, post-merge observation and Child
 archive and journal session 41 are complete. Task 5's recorded independent-review receipt
 below is an approval-ledger fact, not a Task 12 checklist row. Historical
@@ -3419,14 +3419,14 @@ and remain unchanged; they are not the current Task 12 delivery manifest.
   actually triggered release/image/description workflow. This feature PR is not
   expected to publish a formal release or image unless automation proves
   otherwise; record actual truth.
-- [ ] **Create a post-merge bookkeeping branch from synchronized `main`.** The
+- [x] **Create a post-merge bookkeeping branch from synchronized `main`.** The
   branch, ledger update, archive, journal and validation are complete; only its
   own PR delivery/monitoring remains. Update
   the Child delivery ledger with feature head, squash commit, PR, CI and
   post-merge facts; run `task.py archive`; record the journal; validate the
   archived Child while the parent remains `planning`; deliver the bookkeeping
   through its own PR and monitor its CI/post-merge automation.
-- [ ] **Resync local main.** Require `main...origin/main = 0 0`, clean status,
+- [x] **Resync local main.** Require `main...origin/main = 0 0`, clean status,
   Child 13 archived, parent still planning with mechanical 13/13 instantiated
   children but only 13/15 program deliverables complete. Only then create Child
   14 from the updated main.

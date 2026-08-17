@@ -11739,3 +11739,15 @@ Draft bookkeeping PR #433 was opened against `main` from
 `codex/task-12-child13-bookkeeping`. This self-link is recorded before its
 exact-head CI; the PR must remain unmerged until all required checks pass and
 all review threads are closed.
+
+Bookkeeping head `799ababd2563df2568846c0ef5d7c3231021ccaf` then passed all
+11 required jobs in exact-head CI run `31987493250`, with zero reviews,
+comments or review threads. PR #433 was marked ready and squash-merged as
+`898491ffb68f89f673c4d6d96a692af655c01056`; the remote bookkeeping branch was
+deleted and local `main` was synchronized cleanly. Exact-squash main CI run
+`31988104612` and Release Please run `31988104621` succeeded. No formal release
+or image workflow ran; v0.48.0 remains the latest release.
+
+This closes Task 12 as `complete_checked`. Child 13 is completed and archived,
+the parent remains `planning`, instantiated-child mechanics are 13/13 archived,
+and program delivery is 13/15. Children 14 and 15 were not created or started.
