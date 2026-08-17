@@ -223,7 +223,7 @@ describe("Backups routes accessibility", () => {
     await waitFor(() => expect(trigger).toHaveFocus());
   });
 
-  it("keeps query, selection, fixture names, tickets, and proofs out of browser channels", async () => {
+  it("RecoveryReviewF8 keeps query, selection, fixture names, tickets, and proofs out of browser channels", async () => {
     useFixture("complete");
     setViewport(1440);
     const user = userEvent.setup();

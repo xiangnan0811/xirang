@@ -11346,3 +11346,336 @@ staged. Task 10 implementation is therefore `complete_checked` while staged,
 commit, push, PR, CI, squash merge and post-merge observation remain pending.
 Child 13 stays `in_progress`, the parent stays `planning`, and Task 11 has not
 started.
+
+## Task 10 Git Delivery And v0.48.0 Release Normalization (2026-08-17)
+
+This is a current delivery addendum. It does not rewrite the historical
+`research/current-main-evidence.md` snapshot and grants no Task 11 selector or
+cross-engine completion credit.
+
+- Task 10 is `complete_checked`, delivered, and released. PR #430 head
+  `c891f6daecab99cceabe31156cc63c5ad394a30a` passed 11/11 required checks in
+  run `31961300670` and squash-merged as
+  `20c32a969489e4ab9bf9719ed914585c0ac13f84`.
+- Exact-head post-merge main CI `31961840985` and Release Please
+  `31961841009` succeeded.
+- Release PR #431 merged as exact release commit
+  `793af9f8c29ba6274d4f99c1e104fcc01a72752c`. GitHub Release `v0.48.0` is
+  published; exact-release CI `31978359407`, Release Please `31978359500`, and
+  Publish Docker Images `31978368299` all succeeded.
+- Task 11 is `in_progress` from that exact release baseline. Child 13 remains
+  `in_progress`, `completedAt` remains unset, the parent remains `planning`,
+  and program delivery remains 12/15. Task 12 remains `not_executed` and its
+  historical single 145-path delivery assumption requires a focused rebaseline
+  before Task 12 starts. No Task 12 or Child 14/15 work starts here.
+
+## Task 11 Cross-Engine And Full Verification Ledger (2026-08-17)
+
+Task 11 started on `codex/task-11-cross-engine-full-verification` at exact
+`HEAD == origin/main == v0.48.0 == 793af9f8c29ba6274d4f99c1e104fcc01a72752c`.
+Hosted release evidence remains supplemental only; none of it was substituted
+for the local selector or PostgreSQL ledger below.
+
+### Frozen selector discovery truth and closure
+
+The first unchanged §3.1 backend commands all exited zero, but they did not run
+the frozen ledger completely:
+
+| finding | initially executed frozen names |
+|---|---:|
+| F1 | 1/5 |
+| F2 | 0/3 |
+| F3 | 3/3 |
+| F4 | 2/4 |
+| F5 | 0/4 |
+| F6 | 3/3 |
+| F7 | 0/4 |
+| F8 | 1/4 |
+
+Twenty-two named Go tests were absent. The F3 PostgreSQL name existed only in
+`internal/database`, while the frozen required command targets
+`internal/backupasset/recovery`, so that companion was also not callable by its
+mandated package command. The unchanged frontend command likewise exited zero
+with `4 files skipped`, `28 tests skipped` and zero matching tests. The initial
+required recovery PostgreSQL command could therefore exit zero with
+`[no tests to run]` even under required mode with an empty DSN.
+
+These zero-test exits are historical selector gaps, not RED and not GREEN. A
+separate persistent discovery guard produced a genuine inventory RED for 23
+backend exact-callability gaps and all five frontend finding tags; this guard
+is not the same exact §3.1 selector and is not represented as one. After the
+selector closure, the inventory is `expected_backend_unique=34 missing=0` and
+the frontend has all five unique `RecoveryReviewF(1|2|4|7|8)` tags. There are
+35 Go test functions because the F3 PostgreSQL name intentionally remains in
+its historical database package and is also callable in the required recovery
+package. The frontend frozen command now executes seven matching tests.
+
+Every added backend selector delegates to or directly asserts the substantive
+existing regression for its named finding. Review-driven corrections made the
+following boundaries explicit:
+
+- F1 route closure exercises authenticated admin Recovery RBAC and its closed
+  response envelope, not route registration alone;
+- F5 ordinary-writer exclusion covers live Recovery lease rejection of Task
+  and Recovery admissions, manager trigger refusal without residual runs,
+  pending/running Task blocking and a single durable winner for concurrent
+  Task/Recovery admission on one node;
+- F7 mixed-version closure proves backend recovery routes fail closed when the
+  graph is unavailable and proves API, controller and wizard 404 handling has
+  an explicit unavailable product with one modern request and no legacy restore
+  fallback or mutation.
+
+The repaired unchanged backend selector commands are all exit 0. Final affected
+reruns were F1 (`recovery 1.015s`, `api 0.077s`), F5 (`recovery 1.052s`,
+`runtime 0.096s`) and F7 (`runtime 0.056s`, `api 0.063s`). The final unchanged
+frontend selector is exit 0 with `4 files passed`, `7 tests passed`, `23 tests
+skipped`. An intermediate missing fixture helper caused a compile failure and
+an intermediate localized-text assertion used the wrong copy; both were test
+implementation errors and neither is claimed as a product-contract RED.
+
+The specification/security re-review then found that the first F5 PostgreSQL
+closure was still a sequential winner/loser check. The selector was strengthened
+to hold the job row in an external PostgreSQL transaction, wait through
+`pg_stat_activity` until two independent claim transactions are blocked on
+`FOR UPDATE`, release the barrier, and require exactly one success, one
+`ErrRecoveryResultCleanupBusy` and one durable active cleanup node lease. Its
+first strengthened exact run was immediate-GREEN, exit 0 in 0.435s; this is new
+coverage over an already-correct implementation, not a RED. The affected full
+recovery package then exited 0 in 33.821s, and the F5 SQLite plus real-PostgreSQL
+race selector exited 0 under `-race` in 2.377s.
+
+The immutable §3.1 requirement also requires the first failure to come from the
+same exact named selector and requires that first RED output to be preserved.
+That evidence does not exist: the actual first exact invocations were the
+vacuous exit-zero runs above. No retrospective stub, deliberate production
+breakage or fabricated output was created. Current selectors are substantive
+GREEN, but the historical same-selector RED requirement remains an explicit
+Important process/evidence exception. Without an approved exception, this row
+and Task 11 `complete_checked` remain open.
+
+### Focused normal, race and paired migration gates
+
+The frozen seven-package normal command exited 0:
+
+```text
+recovery 38.425s; provider 1.180s; content 0.929s; runtime 7.495s;
+api 0.421s; handlers 5.262s; middleware 0.078s
+```
+
+After the final F1/F5/F7 test corrections, the frozen six-package race command
+was rerun and exited 0:
+
+```text
+recovery 120.123s; provider 2.352s; content 3.071s; runtime 13.749s;
+api 2.636s; handlers 42.731s
+```
+
+The focused `BackupAssetMigration069` command exited 0 in 19.939s. The affected
+normal selectors and the full normal backend gate were also rerun after the
+review corrections.
+
+### Required real PostgreSQL gates
+
+A disposable loopback PostgreSQL 18 fixture was used without writing its DSN
+or credentials into the repository or evidence. Required-mode negative controls
+with an empty DSN exited 1 for each recovery F3/F4/F5 companion and for the F6
+migration companion with the explicit required-DSN error. An initial 1 GiB
+fixture hit PostgreSQL `No space left on device`; that environmental failure is
+not a product RED or pass. The fixture was recreated with an 8 GiB tmpfs.
+
+The initial exact real-PostgreSQL §3.1 recovery F3/F4/F5 command exited 0 in
+2.468s, and the exact database F6 command exited 0 in 1.558s. After the F5
+concurrency strengthening, the current exact F3/F4/F5 command was rerun and
+exited 0 in 2.695s. The full required PostgreSQL 062--069/UTC/search-path
+migration matrix exited 0 in 203.968s, and `TestRecoveryBehaviorPostgres`
+exited 0 in 0.289s. The first attempt to recreate the already-cleaned fixture
+used PostgreSQL 18's obsolete data mount and exited before server startup; that
+environment setup error is not a test RED. The correctly mounted disposable
+fixture supplied the strengthened results above and is removed after the final
+aggregate/audit pass.
+
+### Frontend, aggregate, static and build gates
+
+All frontend commands used Node `v22.23.1`. The final `npm run check` exited 0:
+typecheck passed, lint produced only the existing
+`export-job-panel.tsx:195 no-noninteractive-tabindex` warning, all 173 files and
+1,434 tests passed, and the 3,219-module production build completed. Bundle
+budget remained GREEN without threshold changes: JavaScript `499.14/500 KiB`
+and CSS `104.97/105 KiB`.
+
+`npm audit --audit-level=moderate` is not clean: it exited 1 with two high
+package records and three unique advisories. Compared with the archived reviewed
+baseline, `GHSA-mh99-v99m-4gvg` remains, `GHSA-qwww-vcr4-c8h2` disappeared, and
+`GHSA-rgw5-rvv9-x895` (`brace-expansion`) plus `GHSA-2v37-7h3g-55p8`
+(`nanoid`) are new. `npm explain` places the affected `brace-expansion`
+versions under ESLint/jsx-a11y/typescript-estree development tooling and
+`nanoid@3.3.16` under the PostCSS/Vite/Tailwind build chain. No direct Recovery
+application import or shipped-runtime exposure was found. Package manifests are
+outside this Child scope, so this is a bounded residual risk assessment, not an
+audit pass or suppression.
+
+Fresh aggregate results after the selector corrections include a final Node-22
+`make check` after the PostgreSQL F5 strengthening: backend lint reported zero
+issues, full backend tests passed (recovery 34.111s), all 173 frontend files and
+1,434 tests passed, and the 3,219-module production build completed in 5.13s.
+The complete aggregate ledger is:
+
+- `make backend-test`: exit 0;
+- `make backend-build`: exit 0, with `backend/xirang-server` removed afterward;
+- Node-22 `make check`: exit 0, including backend lint/test/build and the same
+  173-file/1,434-test frontend gate;
+- migration UTC safety: PASS, 76 migration files checked;
+- doc freshness: exit 0 with one warning caused by current Trellis
+  release/image wording, not generated API drift;
+- compose config, compose config self-test and core compose self-test: PASS;
+- asset-worker self-test: PASS (its intentional mutant FAIL lines remain part
+  of the self-test, not gate failures);
+- `make docker-build`: exit 0, image
+  `linnea7171/xirang:v0.48.0-dirty` / `a788bbcd3797`;
+- the built-image core-only Compose smoke: PASS, followed by cleanup.
+
+Exact-release hosted CI `31978359407`, Release Please `31978359500` and Publish
+Docker Images `31978368299` remain supplemental amd64/arm64 closure/build/smoke/
+scan publication evidence. They do not replace any local selector row.
+
+### Generated truth, privacy and scope audit
+
+`make swag-init` was run with a temporary exact `swag@v1.16.6`; generated API
+docs have zero diff and the temporary tool was removed. Migration audit finds
+only the paired SQLite/PostgreSQL `000069` up/down files and no `000070` or
+`000071`. Package manifests, Go module files and generated docs have zero diff.
+
+The current Task 11 worktree has exactly 13 changed/untracked paths: four
+parent/Child evidence files, five modified selector test files and four new
+backend selector test files. There is no production-code change. Focused diff
+privacy inspection found only test helper identifiers, no raw locator, secret,
+credential or authorization material. `gofmt -d`, `git diff --check`, generated
+truth and migration checks are clean. Staged paths are zero. `.codex` has zero
+diff and `.codex/agents/trellis-research.toml` matches `origin/main` at blob
+`b0b2fef17dff3ad22a0446cd60f458c95f6411f1`. Final refs remain exact
+`HEAD == origin/main == v0.48.0 == 793af9f8c29ba6274d4f99c1e104fcc01a72752c`.
+
+### Responsible acceptance of the historical evidence exception
+
+On 2026-08-17 the responsible user explicitly accepted the already documented
+historical same-exact-selector RED exception. This is an acceptance of incomplete
+historical TDD provenance only, not an acceptance of an open product, security,
+data-flow, PostgreSQL, race, privacy or generated-truth risk. The missing RED is
+still recorded as unavailable and is not relabeled, reconstructed or fabricated.
+
+Both independent final reviews approved the current implementation and closed
+all remediable Critical/Important findings. With the explicit exception
+acceptance, every Task 11 checklist decision is resolved and Task 11 is
+`complete_checked`. Child 13 remains `in_progress`, `completedAt` remains unset,
+the parent remains `planning`, program delivery remains 12/15, and Task 12
+remains `not_executed` pending its focused rebaseline. No stage, commit, push,
+PR, merge, archive, Task 12 or Child 14/15 work was performed.
+
+## Task 12 Focused Delivery Rebaseline (2026-08-17)
+
+Task 12 entered `in_progress` only far enough to replace its obsolete current
+delivery assumption. Historical 145-path ledgers remain historical truth for
+earlier Child implementation/checkpoint states; they are not reused as the
+post-v0.48.0 Task 11 delivery manifest. No stage, commit, push, PR, hosted CI,
+merge, archive, post-merge bookkeeping or Child 14/15 action ran in this
+rebaseline.
+
+### Exact live union and allow-list
+
+The union was recomputed from all three Git surfaces, not copied from the Task
+11 handoff:
+
+```bash
+git diff --name-only --no-renames
+git diff --cached --name-only --no-renames
+git ls-files --others --exclude-standard
+{
+  git diff --name-only --no-renames
+  git diff --cached --name-only --no-renames
+  git ls-files --others --exclude-standard
+} | LC_ALL=C sort -u | sed '/^$/d'
+```
+
+The result is exactly 13 unique paths: 9 tracked, 0 cached and 4 untracked.
+Literal comparison against the focused allow-list passed:
+
+```text
+.trellis/tasks/07-12-backup-data-explorer-design/task.json
+.trellis/tasks/07-28-backup-assets-controlled-recovery/implement.md
+.trellis/tasks/07-28-backup-assets-controlled-recovery/research/implementation-evidence.md
+.trellis/tasks/07-28-backup-assets-controlled-recovery/task.json
+backend/internal/api/recovery_review_closure_test.go
+backend/internal/backupasset/content/recovery_review_closure_test.go
+backend/internal/backupasset/recovery/review_closure_test.go
+backend/internal/backupasset/recovery/worker_test.go
+backend/internal/backupasset/runtime/recovery_review_closure_test.go
+web/src/features/backup-assets/recovery-job-panel.test.tsx
+web/src/features/backup-assets/recovery-plan-wizard.test.tsx
+web/src/lib/api/backup-recovery-api.test.ts
+web/src/pages/__tests__/backups-page.a11y.test.tsx
+```
+
+All 13 paths are Task 11 tests or Trellis evidence. The production-path filter
+returned zero. Task 12's exact pre-stage and `git add --pathspec-from-file=-
+--pathspec-file-nul` commands are frozen in `implement.md`; the controller must
+rerun the union equality immediately before staging and stop on any drift.
+
+### Scope, privacy, generated, migration, staged and ref audit
+
+- `git diff --check` and `git diff --cached --check` exited 0. Cached path count
+  remains zero.
+- Generated Swagger, package manifests, package lockfile, Go modules and
+  `.codex` all have zero diff. No production path is present in the 13-path
+  union.
+- The migration tree contains exactly the four existing paired files:
+  `sqlite/000069_backup_asset_recovery.up.sql`,
+  `sqlite/000069_backup_asset_recovery.down.sql`,
+  `postgres/000069_backup_asset_recovery.up.sql`, and
+  `postgres/000069_backup_asset_recovery.down.sql`. `000070` and `000071` are
+  absent. `backend/xirang-server` is absent.
+- The added-patch high-signal scan for private keys, embedded credential DSNs,
+  bearer values, SSH public-key material, AWS-style access keys and GitHub
+  tokens returned zero. A whole-file scan sees only pre-existing explicitly
+  fake PostgreSQL DSN examples in this historical ledger; none is a new patch
+  addition or live credential.
+- Branch is `codex/task-11-cross-engine-full-verification` and
+  `HEAD == origin/main == v0.48.0 ==
+  793af9f8c29ba6274d4f99c1e104fcc01a72752c`; `HEAD...origin/main` is `0 0`.
+  `.codex/agents/trellis-research.toml` is untouched and its HEAD/origin blob is
+  `b0b2fef17dff3ad22a0446cd60f458c95f6411f1`.
+
+Focused rebaseline is complete. Task 12 remains `in_progress`; all actual
+delivery and Child-only bookkeeping checklist rows remain unexecuted. Child 13
+remains `in_progress` with `completedAt: null`, the parent remains `planning`,
+and program delivery remains 12/15.
+
+### Task 12 pre-delivery verification
+
+After the focused rebaseline, Node `v22.23.1` `make check` exited 0: backend
+lint reported zero issues, all backend packages passed, all 173 frontend test
+files and 1,434 tests passed, and the 3,219-module production build completed.
+Frontend lint retained only the existing
+`export-job-panel.tsx:195 no-noninteractive-tabindex` warning. The generated
+`backend/xirang-server` build artifact was removed immediately afterward and
+is absent from the delivery union.
+
+The built frontend passed the unchanged bundle budgets: JavaScript
+`499.14/500.00 KiB` and CSS `104.97/105.00 KiB`. Doc freshness was rerun with
+the exact 13-path union supplied through `DOC_FRESHNESS_CHANGED_FILES` and
+reported clean. `gofmt -d`, `git diff --check`, both Child/parent Trellis
+validations, JSON/JSONL parsing, generated Swagger, migration, package/module,
+privacy, `.codex`, staged-zero and ref checks all passed. No reusable
+code/infrastructure convention changed: the discovered 145-to-13 delivery
+rebaseline is task-local evidence already governed by the existing branch and
+documentation-truth guides, so no `.trellis/spec` update is warranted.
+
+An independent `trellis-check` review found one Important current-truth issue:
+the generic Child `meta.delivery_actions` field still described the old Task 8
+bookkeeping checkpoint. The controller normalized that field to the delivered
+Task 9/10, complete-checked Task 11 and Task 12 pre-delivery truth. The checker
+re-reviewed the correction and approved the pre-delivery state with no open
+Critical or Important finding. It independently confirmed the exact 13-path
+scope, zero production path, protected refs/config, generated/migration/
+manifest truth, privacy, formatting, staged zero, Node-22 lint/typecheck and
+all frozen F1--F8/frontend selector coverage. The accepted historical
+same-selector RED provenance exception remains recorded unchanged.

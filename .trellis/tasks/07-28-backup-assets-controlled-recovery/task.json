@@ -12,16 +12,16 @@
   "assignee": "weibo",
   "createdAt": "2026-07-28",
   "completedAt": null,
-  "branch": "codex/task-10-typed-recovery-wizard",
+  "branch": "codex/task-11-cross-engine-full-verification",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": "dcb94ee39fa17c64342ab4169bedb804f3682124",
+  "commit": "793af9f8c29ba6274d4f99c1e104fcc01a72752c",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [],
-  "notes": "Complex Child 13 planning was independently approved on 2026-07-28 and task.py start ran exactly once. Tasks 1-5 are complete_approved, Task 6 is complete_checked at whole scope, Task 7 was delivered through PR #410, and Task 8 is complete_checked_whole_scope and delivered through PR #424. Task 9 is complete_checked at focused API/RBAC/audit/Swagger and production-composition scope; PR #428 passed all 11 required checks and was squash-merged as 2538f325 on 2026-08-16. Release PR #429 was squash-merged as current main dcb94ee; exact-head main CI 31951038841, Release Please 31951038854 and Publish Docker Images 31951046761 succeeded, and GitHub Release v0.47.0 was published. Task 10 implementation is complete_checked after an independent Trellis check closed four Important findings and one Minor finding; its exact Git delivery remains pending. Child 13 remains in_progress, completedAt remains unset, the parent remains planning, and program delivery remains 12/15. Do not archive the Child at this checkpoint and do not start Task 11.",
+  "notes": "Complex Child 13 planning was independently approved on 2026-07-28 and task.py start ran exactly once. Tasks 1-11 are complete at their recorded approved scopes. Task 10 is complete_checked, delivered through PR #430 (head c891f6da, 11/11 CI run 31961300670, squash merge 20c32a9), and released by PR #431 as v0.48.0 at exact commit 793af9f with exact-release CI 31978359407, Release Please 31978359500, and Publish Docker Images 31978368299 successful. Task 11 cross-engine/full verification is complete_checked on codex/task-11-cross-engine-full-verification from exact 793af9f after all runnable gates and two independent reviews passed and the responsible user explicitly accepted the documented historical same-selector RED evidence exception without fabricating it. Task 12 is in_progress after its focused rebaseline replaced the obsolete single 145-path delivery assumption with the live exact 13-path Task 11 test/evidence union (9 tracked, 0 cached, 4 untracked). No Task 12 delivery action has run: stage, commit, push, PR, CI, merge, archive and post-merge bookkeeping remain not_executed. Child 13 remains in_progress, completedAt remains unset, the parent remains planning, and program delivery remains 12/15. Do not archive the Child or start Children 14-15.",
   "meta": {
     "parent_delivery": "12_of_15_complete",
     "planning_basis": "approved parent PRD/design/implement plus Child 13 current-main reconnaissance",
@@ -33,7 +33,7 @@
     "planning_review": "whole_task_6_specification_and_quality_reviews_complete_task_7_publication_resolver_content_adapter_retain_claim_revoke_drain_cleanup_target_validation_target_root_plan_snapshot_workspace_marker_interoperability_exact_plan_sftp_marker_present_regular_file_verify_no_overwrite_regular_file_create_composite_read_only_preflight_published_result_read_delete_oriented_lstat_exact_absence_and_a2e2_r42_r47_overwrite_artifact_authority_historical_key_binding_authenticated_intent_post_preparation_exact_prior_capture_same_invocation_mismatch_restore_closed_tuple_publish_authenticated_acknowledgement_safe_residue_cleanup_source_free_replay_durable_checkpoint_before_finalize_preterminal_takeover_reconciliation_and_authority_error_resource_context_privacy_focused_checks_complete_v13_delete_and_whole_task7_review_open",
     "planning_review_evidence": "independent_security_state_and_plan_manifest_rereviews_approved_2026-07-28_b3_receipt_019fc0c2_cfda_74e3_b218_246f3a425545_approved_f6_spec_019fc136_feca_7fb0_82bc_3c33739aef12_quality_019fc13c_0710_7343_b261_dd866382a8c0_postgres_019fc13d_ea0e_7f93_b1c6_32aebcb7368e_whole_task6_controller_inline_spec_quality_and_fresh_combined_gates_approved_2026-08-03",
     "task_start": "executed_once_2026-07-28",
-    "implementation": "tasks_1_to_5_complete_approved_task_6_complete_checked_whole_scope_task_7_delivered_pr_410_task_8_complete_checked_whole_scope_delivered_pr_424_task_9_complete_checked_delivered_pr_428_released_v0_47_0_task_10_complete_checked_awaiting_git_delivery",
+    "implementation": "tasks_1_to_5_complete_approved_task_6_complete_checked_whole_scope_task_7_delivered_pr_410_task_8_complete_checked_whole_scope_delivered_pr_424_task_9_complete_checked_delivered_pr_428_released_v0_47_0_task_10_complete_checked_delivered_pr_430_released_v0_48_0_task_11_complete_checked_task_12_in_progress_focused_rebaseline_complete_delivery_actions_not_executed",
     "task_7": {
       "status": "complete_checked_whole_scope",
       "focused_complete_checked": [
@@ -395,7 +395,7 @@
       "next": "task_10_typed_frontend_recovery_wizard_only"
     },
     "task_10": {
-      "status": "complete_checked_awaiting_git_delivery",
+      "status": "complete_checked_delivered_released",
       "date": "2026-08-17",
       "scope": "typed_frontend_recovery_wizard_plus_minimal_owner_scoped_live_read_products_and_transient_exact_mirror_delete_handoff",
       "blocker_discovered": "current_job_dto_omits_checkpoint_attempt_resultset_and_pages_while_delete_authorization_secret_has_no_paused_worker_handoff",
@@ -411,7 +411,55 @@
       "boundary": "no_model_migration_settings_provider_content_publication_task_11_docker_metadata_or_legacy_restore_ga",
       "tdd": "genuine_backend_live_contract_red_green_then_original_frontend_mapper_red_green_followed_by_controller_panels_wizard_integration_a11y_red_green",
       "verification": "independent_trellis_check_closed_four_important_and_one_minor_no_open_findings_focused_frontend_6_files_46_tests_full_frontend_173_files_1432_tests_build_node22_bundle_js_499_14_of_500_css_104_97_of_105_focused_backend_four_packages_uncached_full_backend_golangci_lint_zero_scoped_vet_diff_manifest_and_task_validation_green_2026_08_17",
-      "delivery": "staged_commit_push_pr_ci_merge_postmerge_not_executed"
+      "delivery": "topic_head_c891f6daecab99cceabe31156cc63c5ad394a30a_pr_430_ci_31961300670_11_of_11_green_squash_20c32a969489e4ab9bf9719ed914585c0ac13f84_postmerge_main_ci_31961840985_release_please_31961841009_green_release_pr_431_release_commit_793af9f8c29ba6274d4f99c1e104fcc01a72752c_v0_48_0_exact_release_ci_31978359407_release_please_31978359500_publish_docker_images_31978368299_green"
+    },
+    "task_11": {
+      "status": "complete_checked",
+      "date": "2026-08-17",
+      "scope": "cross_engine_full_verification_exact_task_11_gates_and_two_independent_reviews",
+      "baseline": "origin_main_and_v0_48_0_exact_793af9f8c29ba6274d4f99c1e104fcc01a72752c",
+      "hosted_evidence_role": "supplemental_only_no_substitution_for_local_exact_selector_ledger",
+      "selector_closure": "all_34_unique_backend_names_and_all_5_frontend_finding_tags_substantive_green_historical_first_exact_commands_were_vacuous_exit_zero_inventory_red_not_same_selector_no_fabricated_red",
+      "postgresql": "required_empty_dsn_fail_closed_real_pg18_f3_f4_f5_exact_2_695s_f6_1_558s_full_062_069_utc_search_path_203_968s_behavior_0_289s_f5_concurrent_for_update_barrier_immediate_green_0_435s",
+      "verification": "focused_normal_and_final_six_package_race_green_node22_frontend_173_files_1434_tests_bundle_green_backend_lint_zero_full_make_check_static_compose_docker_build_and_built_image_smoke_green_npm_audit_exit_1_assessed_not_clean",
+      "reviews": "independent_spec_security_data_flow_and_quality_reuse_privacy_generated_truth_scope_reviews_complete_no_open_product_code_finding",
+      "accepted_process_exception": "responsible_user_explicitly_accepted_2026_08_17_historical_same_exact_selector_red_unavailable_current_green_and_reviews_remain_truth_no_red_fabricated",
+      "open_important": "none_historical_process_exception_explicitly_accepted_not_a_product_risk",
+      "completion": "complete_checked_after_all_runnable_gates_two_independent_reviews_and_explicit_historical_evidence_exception_acceptance"
+    },
+    "task_12": {
+      "status": "in_progress",
+      "phase": "focused_rebaseline_complete_delivery_actions_not_executed",
+      "date": "2026-08-17",
+      "baseline": "branch_codex_task_11_cross_engine_full_verification_head_origin_main_v0_48_0_exact_793af9f8c29ba6274d4f99c1e104fcc01a72752c",
+      "rebaseline_reason": "historical_single_145_path_delivery_assumption_describes_earlier_child_implementation_state_and_does_not_match_the_released_task_10_baseline_plus_task_11_closure_delta",
+      "dirty_union": {
+        "tracked": 9,
+        "cached": 0,
+        "untracked": 4,
+        "unique_total": 13,
+        "exact_paths": [
+          ".trellis/tasks/07-12-backup-data-explorer-design/task.json",
+          ".trellis/tasks/07-28-backup-assets-controlled-recovery/implement.md",
+          ".trellis/tasks/07-28-backup-assets-controlled-recovery/research/implementation-evidence.md",
+          ".trellis/tasks/07-28-backup-assets-controlled-recovery/task.json",
+          "backend/internal/api/recovery_review_closure_test.go",
+          "backend/internal/backupasset/content/recovery_review_closure_test.go",
+          "backend/internal/backupasset/recovery/review_closure_test.go",
+          "backend/internal/backupasset/recovery/worker_test.go",
+          "backend/internal/backupasset/runtime/recovery_review_closure_test.go",
+          "web/src/features/backup-assets/recovery-job-panel.test.tsx",
+          "web/src/features/backup-assets/recovery-plan-wizard.test.tsx",
+          "web/src/lib/api/backup-recovery-api.test.ts",
+          "web/src/pages/__tests__/backups-page.a11y.test.tsx"
+        ]
+      },
+      "scope_audit": "all_13_paths_are_task11_tests_or_trellis_evidence_zero_production_generated_swagger_migration_package_manifest_go_module_or_codex_diff",
+      "migration_audit": "exactly_four_existing_paired_sqlite_postgresql_000069_files_no_000070_or_000071_backend_xirang_server_absent",
+      "privacy_audit": "added_patch_high_signal_secret_credential_key_bearer_and_embedded_dsn_scan_zero_no_raw_runtime_material_added",
+      "protected_codex_blob": "b0b2fef17dff3ad22a0446cd60f458c95f6411f1_matches_origin_main",
+      "next": "controller_recomputes_the_same_exact_union_then_stages_only_the_13_path_allowlist_and_continues_commit_push_pr_ci_merge_and_child_only_bookkeeping",
+      "boundary": "no_stage_commit_push_pr_merge_archive_post_merge_bookkeeping_or_child14_child15_work_executed_during_focused_rebaseline"
     },
     "task_4_b1_scope_amendment": {
       "status": "complete_approved_as_part_of_task_4_focused_closure",
@@ -1105,6 +1153,6 @@
         "broad_runtime_cache": "environment_blocked_host_ifree_zero_not_a_product_pass"
       }
     },
-    "delivery_actions": "tasks_1_to_7_pr_410_and_bookkeeping_pr_411_complete_task_8_pr_424_merged_as_1c91472_main_ci_release_please_dependency_graph_docker_hub_description_sync_and_release_pr_425_ci_success_bookkeeping_pr_and_cleanup_pending"
+    "delivery_actions": "tasks_1_to_8_delivery_and_bookkeeping_complete_task_9_delivered_pr_428_released_v0_47_0_task_10_delivered_pr_430_released_v0_48_0_task_11_complete_checked_task_12_focused_rebaseline_complete_stage_commit_push_pr_ci_merge_archive_and_child_only_bookkeeping_not_executed"
   }
 }

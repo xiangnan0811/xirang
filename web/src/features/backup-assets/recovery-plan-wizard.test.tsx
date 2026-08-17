@@ -1,11 +1,13 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import type { RecoveryJob, RecoveryPlan, RecoveryPreflight } from "@/lib/api/backup-recovery-api";
+import type { BackupRecoveryApi, RecoveryJob, RecoveryPlan, RecoveryPreflight } from "@/lib/api/backup-recovery-api";
+import { ApiError } from "@/lib/api/core";
 import type { BackupRecoveryState } from "./use-backup-recovery";
 
 import { RecoveryPlanWizard } from "./recovery-plan-wizard";
+import { useBackupRecovery } from "./use-backup-recovery";
 
 const plan: RecoveryPlan = {
   id: "1".repeat(32), state: "draft", revision: "2", repositoryId: "3".repeat(32),
@@ -63,6 +65,27 @@ function controller(state: BackupRecoveryState) {
   };
 }
 
+function recoveryApi(overrides: Partial<BackupRecoveryApi> = {}): BackupRecoveryApi {
+  return {
+    createPlan: vi.fn(),
+    getPlan: vi.fn(),
+    preflight: vi.fn(),
+    overrideSecurity: vi.fn(),
+    authorizeWrite: vi.fn(),
+    execute: vi.fn(),
+    getJob: vi.fn(),
+    authorizeExactMirrorDelete: vi.fn(),
+    getJobItems: vi.fn(),
+    getJobResults: vi.fn(),
+    cancelPlan: vi.fn(),
+    cancelJob: vi.fn(),
+    retainResults: vi.fn(),
+    issueResultDownloadTicket: vi.fn(),
+    cleanupResults: vi.fn(),
+    ...overrides,
+  };
+}
+
 function pausedJob(): RecoveryJob {
   return {
     id: "8".repeat(32), planId: plan.id, outcome: "running", revision: "4",
@@ -100,7 +123,7 @@ describe("RecoveryPlanWizard", () => {
     expect(screen.getByTestId("recovery-announcement")).toHaveAttribute("aria-live", "polite");
   });
 
-  it("never exposes override for a non-overridable finding and requires its own confirmation otherwise", async () => {
+  it("RecoveryReviewF2 never exposes override for a non-overridable finding and requires its own confirmation otherwise", async () => {
     const blocked = controller(recoveryState({ phase: "security", plan, preflight }));
     const rendered = render(<RecoveryPlanWizard open recovery={blocked} onOpenChange={vi.fn()} />);
 
@@ -121,6 +144,35 @@ describe("RecoveryPlanWizard", () => {
     fireEvent.click(overrideButton);
     expect(overridable.overrideSecurity).toHaveBeenCalledWith("malware", "Reviewed by incident commander", true);
     expect(screen.getByLabelText(/Security override reason|安全覆盖原因/)).toHaveValue("Reviewed by incident commander");
+  });
+
+  it("RecoveryReviewF7 closes an old-backend 404 as unavailable without a restore fallback", async () => {
+    const getPlan = vi.fn().mockRejectedValue(new ApiError(404, "recovery route missing"));
+    const api = recoveryApi({ getPlan });
+    const onRouteChange = vi.fn();
+    const { result } = renderHook(() => useBackupRecovery({
+      token: "token",
+      role: "admin",
+      sessionKey: "session-1",
+      planId: plan.id,
+      api,
+      onRouteChange,
+    }));
+
+    await waitFor(() => expect(result.current.state).toMatchObject({ phase: "unavailable", error: "not_found" }));
+    expect(getPlan).toHaveBeenCalledWith("token", plan.id, expect.any(AbortSignal));
+    expect(onRouteChange).toHaveBeenCalledWith({ planId: null, jobId: null }, { replace: true });
+    expect(vi.mocked(api.getJob)).not.toHaveBeenCalled();
+    expect(vi.mocked(api.createPlan)).not.toHaveBeenCalled();
+
+    const recovery = controller(result.current.state);
+    render(<RecoveryPlanWizard open recovery={recovery} onOpenChange={vi.fn()} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/Recovery unavailable|恢复不可用/);
+    expect(screen.getByRole("alert")).toHaveTextContent(/no fallback was attempted|未尝试回退/);
+    expect(screen.queryByRole("button", { name: /Create recovery plan|创建恢复计划/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Cancel recovery|取消恢复/ })).not.toBeInTheDocument();
+
+    act(() => result.current.dismiss());
   });
 
   it("uses a second independent confirmation at the exact-mirror delete checkpoint and transfers focus", async () => {

@@ -157,7 +157,7 @@ describe("RecoveryJobPanel", () => {
     },
   );
 
-  it("never offers published result actions for in-place or partial work", () => {
+  it("RecoveryReviewF4 never offers published result actions for in-place or partial work", () => {
     const base = {
       outcome: "degraded" as const,
       resultSet: readyResults().resultSet,

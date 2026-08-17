@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { request } from "./core";
+import { ApiError, request } from "./core";
 import {
   createBackupRecoveryApi,
   generateRecoveryGrantSecret,
@@ -123,7 +123,7 @@ describe("backup recovery API boundary", () => {
   beforeEach(() => {
     requestMock.mockReset();
   });
-  it("maps one closed snake_case plan product to safe camelCase state", () => {
+  it("RecoveryReviewF1 maps one closed snake_case plan product to safe camelCase state", () => {
     const mapped = mapRecoveryPlanProduct({
       schema_version: 1,
       id: planId,
@@ -325,7 +325,7 @@ describe("backup recovery API boundary", () => {
     });
   });
 
-  it("atomically rejects unknown, dual and contradictory products", () => {
+  it("RecoveryReviewF7 atomically rejects unknown, dual and contradictory products", () => {
     expect(mapRecoveryPlanProduct({ ...rawPlan(), workspace_phase: "private" })).toEqual({
       status: "unavailable", reason: "invalid_product",
     });
@@ -433,6 +433,17 @@ describe("backup recovery API boundary", () => {
     expect(mapRecoveryJobItemPageProduct({ ...itemPage({}), total: 2 })).toEqual({
       status: "unavailable", reason: "invalid_product",
     });
+  });
+
+  it("RecoveryReviewF7 propagates an old-backend 404 without attempting a legacy fallback", async () => {
+    const missing = new ApiError(404, "recovery endpoint not found");
+    const requester = vi.fn().mockRejectedValue(missing);
+    const api = createBackupRecoveryApi(requester);
+
+    await expect(api.getPlan("token", planId)).rejects.toBe(missing);
+    expect(requester).toHaveBeenCalledTimes(1);
+    expect(requester).toHaveBeenCalledWith(`/recovery-plans/${planId}`, { token: "token", signal: undefined });
+    expect(requester.mock.calls.some(([path]) => String(path).includes("restore"))).toBe(false);
   });
 
   it("generates one canonical 256-bit grant secret and fails closed without Web Crypto", () => {
