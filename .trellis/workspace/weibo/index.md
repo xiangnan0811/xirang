@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 40
-- **Last Active**: 2026-08-16
+- **Total Sessions**: 41
+- **Last Active**: 2026-08-17
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1600 | Active |
+| `journal-1.md` | ~1669 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 41 | 2026-08-17 | Child 13 exact verification delivery and archive | `e42e88bd769a0929ff42143d0e0a4396d916cbb7`, `f0f0692` | `codex/task-12-child13-bookkeeping` |
 | 40 | 2026-08-16 | Task 8 post-closure CI stabilization | `6e91869` | `codex/task8-ci-stabilization` |
 | 39 | 2026-08-16 | Task 8 delivery closure | `1c91472`, `2136b78` | `codex/task8-delivery-closure` |
 | 38 | 2026-08-16 | Task 8 managed recovery runtime complete | `82dc261fe6e185f4e6e83dbe13f0d0dd12102011` | `codex/task8-managed-runtime` |

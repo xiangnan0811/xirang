@@ -35,15 +35,15 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Program delivery remains 12/15 merged and archived (80%) until Child 13 archive completes; Trellis 12/13 counts only instantiated children. Child 13 product delivery is complete: Task 11 is complete_checked with the explicitly accepted and unaltered historical RED provenance exception, and Task 12 delivered the exact 13-path test/evidence union through feature head e42e88bd769a0929ff42143d0e0a4396d916cbb7 and PR #432. Required CI run 31985755745 passed all 11 checks, squash commit 946ee6d8cb058fd1a3b358eb453f43cca3f57f7e is on main, and exact-squash main CI 31986331118 plus Release Please 31986331101 succeeded. The latest formal release remains v0.48.0 at 793af9f; no GitHub Release or Docker image was expected or triggered. Child-only archive/journal bookkeeping is now in progress; this parent remains planning and Children 14-15 are not created.",
+  "notes": "Program delivery is 13/15 merged and archived (86.67%); Trellis mechanical progress is 13/13 instantiated children archived. Child 13 Task 11 is complete_checked with the explicitly accepted and unaltered historical RED provenance exception. Task 12 delivered the exact 13-path test/evidence union through feature head e42e88bd769a0929ff42143d0e0a4396d916cbb7 and PR #432: required CI run 31985755745 passed all 11 checks, squash commit 946ee6d8cb058fd1a3b358eb453f43cca3f57f7e is on main, and exact-squash main CI 31986331118 plus Release Please 31986331101 succeeded. The latest formal release remains v0.48.0 at 793af9f; no GitHub Release or Docker image was expected or triggered. Child 13 was archived on 2026-08-17 in commit 645d180 under archive/2026-08, and journal session 41 records the closure. This parent remains planning; only the bookkeeping PR is pending, and Children 14-15 are not created or started.",
   "meta": {
     "program_delivery": {
-      "delivered": 12,
+      "delivered": 13,
       "planned": 15,
-      "percent": 80,
+      "percent": 86.67,
       "instantiated_children": 13,
-      "archived_children": 12,
-      "active_child": "07-28-backup-assets-controlled-recovery",
+      "archived_children": 13,
+      "active_child": null,
       "uninstantiated_children": [
         14,
         15
@@ -79,23 +79,27 @@
       "program_delivery": "12_of_15"
     },
     "task_12_rebaseline": {
-      "status": "delivery_complete_bookkeeping_in_progress",
+      "status": "delivery_archive_journal_complete_bookkeeping_pr_pending",
       "date": "2026-08-17",
       "baseline": "codex_task_11_cross_engine_full_verification_head_origin_main_v0_48_0_exact_793af9f8c29ba6274d4f99c1e104fcc01a72752c",
       "exact_dirty_union": "13_unique_paths_9_tracked_0_cached_4_untracked_all_task11_tests_or_trellis_evidence",
-      "child_status": "in_progress_product_delivered_archive_pending",
-      "program_delivery": "12_of_15",
-      "boundary": "feature_delivery_complete_archive_journal_and_bookkeeping_pr_in_progress_child14_child15_not_started"
+      "child_status": "completed_archived_2026_08",
+      "program_delivery": "13_of_15",
+      "boundary": "feature_delivery_child_archive_and_journal_complete_bookkeeping_pr_pending_child14_child15_not_started"
     },
     "child_13_delivery": {
-      "status": "product_delivered_child_only_bookkeeping_in_progress",
+      "status": "completed_archived_journal_recorded_bookkeeping_pr_pending",
       "feature_pr": "https://github.com/xiangnan0811/xirang/pull/432",
       "feature_head": "e42e88bd769a0929ff42143d0e0a4396d916cbb7",
       "required_ci": "run_31985755745_success_all_11_checks_green",
       "squash_commit": "946ee6d8cb058fd1a3b358eb453f43cca3f57f7e",
       "post_merge": "exact_squash_main_ci_31986331118_and_release_please_31986331101_success",
       "release_disposition": "no_new_release_or_image_latest_release_v0_48_0_at_793af9f",
-      "program_delivery": "remains_12_of_15_until_archive",
+      "archive_commit": "645d180",
+      "archive_path": ".trellis/tasks/archive/2026-08/07-28-backup-assets-controlled-recovery",
+      "completed_at": "2026-08-17",
+      "journal": "weibo_session_41_recorded",
+      "program_delivery": "13_of_15",
       "boundary": "parent_planning_children14_15_not_created"
     },
     "r0_execution_rebaseline": {

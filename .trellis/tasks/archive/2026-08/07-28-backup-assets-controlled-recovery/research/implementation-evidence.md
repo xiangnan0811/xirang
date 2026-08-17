@@ -11713,3 +11713,24 @@ main. Child 13 remains `in_progress` only until `task.py archive` sets its final
 status/completion date and moves it into the monthly archive. The parent remains
 `planning`, program delivery remains 12/15 until that archive, and Children 14
 and 15 have not been created or started.
+
+### Child-only archive checkpoint
+
+From exact synchronized squash commit `946ee6d8`, the controller created
+`codex/task-12-child13-bookkeeping`, recorded the feature delivery facts in
+commit `f0f0692`, and ran the native Trellis archive command. It set Child 13 to
+`completed`, wrote `completedAt: 2026-08-17`, moved the complete task directory
+to `.trellis/tasks/archive/2026-08/07-28-backup-assets-controlled-recovery`, and
+created scoped archive commit `645d180`. The archived Child validation passed.
+
+The parent remains `planning`. Its mechanical instantiated-child state is now
+13/13 archived, while program delivery is 13/15 because Children 14 and 15 have
+not been created or started. Journal recording and delivery of this bookkeeping
+branch through its own PR are the only remaining Task 12 actions.
+
+Trellis journal session 41 was then appended under the existing `weibo`
+workspace identity. It records the Task 11 exception decision, exact feature
+delivery, both hosted CI layers, archive facts and the explicit stop before
+Children 14/15. The temporary per-worktree ignored developer identity used to
+invoke the native journal command was removed immediately and is not part of
+the Git diff. Only bookkeeping-PR delivery and monitoring remain.

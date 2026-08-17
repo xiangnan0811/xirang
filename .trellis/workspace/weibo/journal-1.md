@@ -1630,3 +1630,40 @@ gates and cleanup.
 - Merge PR #427 only after required CI passes, monitor exact-sha main CI and
   Release Please, then synchronize `main` and remove all Task 8 delivery
   branches/worktrees. Keep Child 13 active and Tasks 9-10 unexecuted.
+
+
+## Session 41: Child 13 exact verification delivery and archive
+
+**Date**: 2026-08-17
+**Task**: Child 13 exact verification delivery and archive
+**Branch**: `codex/task-12-child13-bookkeeping`
+
+### Summary
+
+Closed Task 11 with the accepted historical RED provenance exception, delivered the exact 13-path verification union through PR #432, observed exact-squash automation, and archived Child 13 while the parent remains planning at 13/15.
+
+### Main Changes
+
+- Rebaselined Task 12 from the obsolete 145-path assumption to the exact 13-path Task 11 test/evidence union and preserved the accepted historical RED provenance exception without fabrication.
+- Delivered feature head e42e88b through PR #432, required CI 31985755745, squash 946ee6d8, main CI 31986331118, and Release Please 31986331101; no new release or image was triggered.
+- Archived Child 13 under archive/2026-08 via 645d180; parent remains planning with 13/13 instantiated children archived and program delivery 13/15.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e42e88bd769a0929ff42143d0e0a4396d916cbb7` | (see git log) |
+| `f0f0692` | (see git log) |
+
+### Testing
+
+- [OK] Node 22 make check passed with 173 frontend files and 1434 tests; bundle budget, doc freshness, formatting, Trellis validation, privacy/generated/migration/ref audits passed.
+- [OK] Feature CI passed all 11 jobs including PostgreSQL parity, Docker, and dual-architecture Worker closure/build/smoke/scan; exact-squash main CI and Release Please passed.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Stop before Child 14/15; deliver and monitor only this Child 13 bookkeeping PR, then resync main.
