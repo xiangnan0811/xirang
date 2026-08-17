@@ -37,13 +37,13 @@ i18next; Trellis task/PR/CI workflow.
 task:                     .trellis/tasks/07-28-backup-assets-controlled-recovery
 status:                   in_progress
 parent:                   07-12-backup-data-explorer-design (planning)
-branch:                   codex/task8-managed-runtime
-planning baseline:        51771654a85967656fe1ca69686590b734ff9214
+branch:                   codex/task-11-cross-engine-full-verification
+planning baseline:        793af9f8c29ba6274d4f99c1e104fcc01a72752c (v0.48.0 exact release)
 delivered program state:  12/15
 original planning artifacts: complete_approved (two independent rereviews, 2026-07-28)
-current planning scope:   9 paths
-future manifest:          55 create + 81 modify
-current exact union:      145 unique, disjoint paths
+historical planning scope: 9 paths
+historical released manifest: 55 create + 81 modify
+current exact union:      13 unique Task 11 test/evidence paths (9 tracked, 0 cached, 4 untracked)
 migration ownership:      paired 000069; 000070+ reserved
 task.py start:            executed_once (2026-07-28)
 Task 1 execution:         complete_approved (000069/model/contracts)
@@ -66,10 +66,12 @@ Task 6 execution:         complete_checked (20 corrections; whole spec/quality r
 Task 7 execution:         complete_checked_whole_scope; delivered through PR #410
 Task 8 execution:         complete_checked_whole_scope; delivered through PR #424
 Task 9 execution:         complete_checked; delivered through PR #428 and released in v0.47.0
-Task 10 execution:        complete_checked; exact Git delivery pending
+Task 10 execution:        complete_checked; delivered through PR #430 and released in v0.48.0
+Task 11 execution:        complete_checked (accepted historical same-selector RED provenance exception recorded)
+Task 12 execution:        in_progress; focused 13-path rebaseline complete, delivery actions not_executed
 Task 5 receipt evidence:  focused SQLite/real-PostgreSQL normal and race gates passed; both independent reviews approved
 Task 8 dirty union:       34 paths; approved product/task-local evidence scope; staged zero
-stage/commit/push/PR/CI/merge: not_executed
+Task 11 branch delivery:  stage/commit/push/PR/CI/merge not_executed
 parent completion:        forbidden in Child 13
 ```
 
@@ -3202,9 +3204,27 @@ env -u NODE_ENV npm run check
 env -u NODE_ENV node scripts/check-bundle-budget.mjs
 ```
 
+#### Task 10 delivery and v0.48.0 release normalization (2026-08-17)
+
+- Task 10 is `complete_checked`, delivered, and released. PR #430 head
+  `c891f6daecab99cceabe31156cc63c5ad394a30a` passed all 11 required checks in
+  run `31961300670` and squash-merged as
+  `20c32a969489e4ab9bf9719ed914585c0ac13f84`.
+- Exact-head post-merge main CI `31961840985` and Release Please
+  `31961841009` succeeded. Release PR #431 merged as exact release commit
+  `793af9f8c29ba6274d4f99c1e104fcc01a72752c`; GitHub Release `v0.48.0` is
+  published, and exact-release CI `31978359407`, Release Please `31978359500`,
+  and Publish Docker Images `31978368299` succeeded.
+- This hosted evidence supplements but does not replace Task 11's exact local
+  selector ledger. Task 11 is now `in_progress`. Child 13 stays `in_progress`,
+  the parent stays `planning`, and program delivery stays 12/15. Task 12 stays
+  `not_executed`; before it starts, its historical single 145-path delivery
+  assumption requires a focused rebaseline. No Task 12 or Child 14/15 work is
+  authorized by this normalization.
+
 ### Task 11: Cross-Engine And Full Verification
 
-- [ ] **Run focused package gates.**
+- [x] **Run focused package gates.**
 
 ```bash
 cd backend
@@ -3217,12 +3237,12 @@ go test -race ./internal/backupasset/recovery ./internal/backupasset/provider \
 go test ./internal/database -run 'BackupAssetMigration069' -count=1
 ```
 
-- [ ] **Rerun every §3.1 finding selector exactly.** Preserve the first RED
+- [x] **Rerun every §3.1 finding selector exactly.** Preserve the first RED
   output in implementation evidence, record the final GREEN output separately,
   and run the F1–F8 backend, required PostgreSQL and frontend commands without
   weakening their regex or substituting an aggregate package pass.
 
-- [ ] **Run required real PostgreSQL gates.** Required mode must fail rather
+- [x] **Run required real PostgreSQL gates.** Required mode must fail rather
   than skip when `TEST_POSTGRES_DSN` is absent or unreachable.
 
 ```bash
@@ -3236,7 +3256,7 @@ REQUIRE_POSTGRES_RECOVERY_TEST=1 TEST_POSTGRES_DSN="$TEST_POSTGRES_DSN" \
   -run '^TestRecoveryBehaviorPostgres$' -count=1
 ```
 
-- [ ] **Run frontend, aggregate, static and build gates.**
+- [x] **Run frontend, aggregate, static and build gates.**
 
 ```bash
 cd /home/murray/code/xirang/web
@@ -3277,28 +3297,118 @@ artifacts, Worker image build/smoke/scan on each architecture and the amd64
 complete Worker Compose profile. A local amd64 image alone cannot substitute
 for those matrix rows.
 
-- [ ] **Run two final independent reviews.** One specification/security/data
+- [x] **Run two final independent reviews.** One specification/security/data
   review traces every PRD requirement and state/authority boundary. One quality
   review inspects code, tests, races, reuse, privacy, generated truth and exact
   scope. Resolve all Critical/Important findings with new RED→GREEN cycles and
   rerun affected/full gates.
 
+**Execution status (2026-08-17): `complete_checked`.** All runnable focused, real-PostgreSQL,
+frontend, aggregate, static, build, Docker and built-image smoke gates are
+GREEN, and every frozen name now selects substantive coverage. The original
+unchanged backend/frontend commands, however, exited zero while many named
+tests did not exist; the separate inventory guard RED is not the same exact
+selector required by §3.1. The missing historical same-selector RED is not
+reconstructed or fabricated. The responsible user explicitly accepted this
+documented process/evidence exception on 2026-08-17 after the two independent
+reviews approved the current implementation with no open product-code finding.
+That acceptance closes the Task 11 verification decision without relabeling the
+missing historical RED as present. Child 13 remains `in_progress`; Task 12
+remains `not_executed` and no delivery work starts here.
+
 ### Task 12: Exact Delivery, Merge And Child-Only Bookkeeping
 
-**Status:** `not_executed`. Task 5's recorded independent-review receipt below
-is an approval-ledger fact, not a Task 12 checklist row.
+**Status:** `in_progress`; focused rebaseline is complete and every delivery
+action remains `not_executed`. Task 5's recorded independent-review receipt
+below is an approval-ledger fact, not a Task 12 checklist row. Historical
+145-path ledgers above describe earlier Child implementation/checkpoint states
+and remain unchanged; they are not the current Task 12 delivery manifest.
 
-- [ ] **Prove exact dirty union.** Union tracked diff, cached diff and untracked
-  files; require exactly 9 Phase 1 + 55 create + 81 modify = 145 paths, no
-  duplicates, no overlap and no extra/missing path. Confirm 000069 is exactly
-  four paired files, 000070+ absent and `backend/xirang-server` absent.
-- [ ] **Stage exact paths only.** Pipe the structurally extracted §2.1-§2.3
-  path lists to `git add --pathspec-from-file=-`; never stage a directory or
-  wildcard. Compare cached names to the same 145-path set and run
-  `git diff --cached --check`.
+- [x] **Focused rebaseline: prove the exact current dirty union.** On
+  `codex/task-11-cross-engine-full-verification` at exact
+  `HEAD == origin/main == v0.48.0 == 793af9f8c29ba6274d4f99c1e104fcc01a72752c`,
+  the live union is exactly 13 unique paths: 9 tracked, 0 cached and 4
+  untracked. All are Task 11 test/evidence paths; there is no production path.
+  The exact current allow-list is:
+
+  ```text
+  .trellis/tasks/07-12-backup-data-explorer-design/task.json
+  .trellis/tasks/07-28-backup-assets-controlled-recovery/implement.md
+  .trellis/tasks/07-28-backup-assets-controlled-recovery/research/implementation-evidence.md
+  .trellis/tasks/07-28-backup-assets-controlled-recovery/task.json
+  backend/internal/api/recovery_review_closure_test.go
+  backend/internal/backupasset/content/recovery_review_closure_test.go
+  backend/internal/backupasset/recovery/review_closure_test.go
+  backend/internal/backupasset/recovery/worker_test.go
+  backend/internal/backupasset/runtime/recovery_review_closure_test.go
+  web/src/features/backup-assets/recovery-job-panel.test.tsx
+  web/src/features/backup-assets/recovery-plan-wizard.test.tsx
+  web/src/lib/api/backup-recovery-api.test.ts
+  web/src/pages/__tests__/backups-page.a11y.test.tsx
+  ```
+
+  Re-run this exact pre-stage gate immediately before staging; any mismatch
+  stops delivery rather than expanding scope:
+
+  ```bash
+  task12_paths=(
+    '.trellis/tasks/07-12-backup-data-explorer-design/task.json'
+    '.trellis/tasks/07-28-backup-assets-controlled-recovery/implement.md'
+    '.trellis/tasks/07-28-backup-assets-controlled-recovery/research/implementation-evidence.md'
+    '.trellis/tasks/07-28-backup-assets-controlled-recovery/task.json'
+    'backend/internal/api/recovery_review_closure_test.go'
+    'backend/internal/backupasset/content/recovery_review_closure_test.go'
+    'backend/internal/backupasset/recovery/review_closure_test.go'
+    'backend/internal/backupasset/recovery/worker_test.go'
+    'backend/internal/backupasset/runtime/recovery_review_closure_test.go'
+    'web/src/features/backup-assets/recovery-job-panel.test.tsx'
+    'web/src/features/backup-assets/recovery-plan-wizard.test.tsx'
+    'web/src/lib/api/backup-recovery-api.test.ts'
+    'web/src/pages/__tests__/backups-page.a11y.test.tsx'
+  )
+  task12_expected=$(printf '%s\n' "${task12_paths[@]}" | LC_ALL=C sort -u)
+  task12_actual=$({
+    git diff --name-only --no-renames
+    git diff --cached --name-only --no-renames
+    git ls-files --others --exclude-standard
+  } | LC_ALL=C sort -u | sed '/^$/d')
+  test "${#task12_paths[@]}" -eq 13
+  test "$(printf '%s\n' "${task12_paths[@]}" | LC_ALL=C sort -u | wc -l)" -eq 13
+  test "$task12_actual" = "$task12_expected"
+  test -z "$(git diff --cached --name-only)"
+  test "$(git rev-parse HEAD)" = 793af9f8c29ba6274d4f99c1e104fcc01a72752c
+  test "$(git rev-parse origin/main)" = 793af9f8c29ba6274d4f99c1e104fcc01a72752c
+  test "$(git rev-list -n1 v0.48.0)" = 793af9f8c29ba6274d4f99c1e104fcc01a72752c
+  test "$(git rev-parse HEAD:.codex/agents/trellis-research.toml)" = \
+    b0b2fef17dff3ad22a0446cd60f458c95f6411f1
+  test "$(git rev-parse origin/main:.codex/agents/trellis-research.toml)" = \
+    b0b2fef17dff3ad22a0446cd60f458c95f6411f1
+  test ! -e backend/xirang-server
+  test "$(rg --files backend/internal/database | rg '000069' | wc -l)" -eq 4
+  test -z "$(rg --files backend/internal/database | rg '00007[0-9]' || true)"
+  test -z "$(git diff --name-only HEAD -- backend/internal/api/docs)"
+  test -z "$(git diff --name-only HEAD -- \
+    backend/go.mod backend/go.sum web/package.json web/package-lock.json)"
+  test -z "$(git diff --name-only HEAD -- .codex)"
+  git diff --check
+  git diff --cached --check
+  ```
+
+- [ ] **Stage exactly those 13 paths.** Reuse `task12_paths` from the successful
+  pre-stage gate; never stage a directory or wildcard. Then require cached
+  names to equal the same manifest byte-for-byte after sorting:
+
+  ```bash
+  printf '%s\0' "${task12_paths[@]}" |
+    git add --pathspec-from-file=- --pathspec-file-nul
+  task12_cached=$(git diff --cached --name-only --no-renames | LC_ALL=C sort -u)
+  test "$task12_cached" = "$task12_expected"
+  test "$(git diff --cached --name-only --no-renames | wc -l)" -eq 13
+  git diff --cached --check
+  ```
 - [ ] **Create a coherent conventional work commit.** Suggested subject:
-  `feat: add controlled backup asset recovery`. Subagent commits are forbidden;
-  the controller owns this action.
+  `test(backup): close recovery verification gaps`. Subagent commits are forbidden; the
+  controller owns this action.
 - [ ] **Push and open one draft PR to `main`.** Include migration/rollback,
   security, PostgreSQL, frontend/a11y, scope and release-disposition evidence.
   Monitor every required check, fix failures on this branch with TDD, push and
@@ -3344,7 +3454,7 @@ is an approval-ledger fact, not a Task 12 checklist row.
 | fatal cleanup key | bounded idempotent DB-only current-post-arm reconciliation before original fatal startup error; sanitized needs_attention/cleanup_due and attempt close; no decrypt/target I/O/checkpoint/success/skip/chain |
 | API/RBAC/audit | explicit override/write/delete/readiness routes, ownership, receipt-first same-session replay, typed errors, response helpers, audit-projection-after-commit non-duplication, full locator/proof/JTI/reason/secret no-leak, Swagger truth |
 | frontend | closed target/security/authority mapper, separate drafts/replay, polling/reload, publication-aware actions, mixed-version/legacy gate, a11y/i18n |
-| delivery | exact 145 paths, full/race/PostgreSQL/frontend/Docker/CI evidence, PR/post-merge/archive truth |
+| delivery | exact rebaselined 13-path Task 11 test/evidence union, full/race/PostgreSQL/frontend/Docker/CI evidence, PR/post-merge/archive truth |
 
 ## 5. Security And Fault-Injection Matrix
 

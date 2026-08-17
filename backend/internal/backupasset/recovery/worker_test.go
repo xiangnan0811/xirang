@@ -2958,9 +2958,22 @@ func TestWorkerPrepareFirstWriteSupersedesSourceDriftBeforeArm(t *testing.T) {
 }
 
 func TestRecoveryReviewF3PreWriteDriftTransactionSQLite(t *testing.T) {
-	fixture := newAuthorizationReceiptSQLiteMigrationServiceFixture(
+	testRecoveryReviewF3PreWriteDriftTransaction(t, newAuthorizationReceiptSQLiteMigrationServiceFixture(
 		t, AuthorizationReceiptExecute, false, true,
-	)
+	))
+}
+
+func TestRecoveryReviewF3PreWriteDriftTransactionPostgres(t *testing.T) {
+	testRecoveryReviewF3PreWriteDriftTransaction(t, newAuthorizationReceiptPostgresMigrationServiceFixtureWithDeleteCount(
+		t, AuthorizationReceiptExecute, false, true, 0,
+	))
+}
+
+func testRecoveryReviewF3PreWriteDriftTransaction(
+	t *testing.T,
+	fixture *authorizationReceiptServiceFixture,
+) {
+	t.Helper()
 	result, err := fixture.service.Authorize(context.Background(), fixture.request)
 	if err != nil {
 		t.Fatalf("execute recovery fixture: %v", err)
