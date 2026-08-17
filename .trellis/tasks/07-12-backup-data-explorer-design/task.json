@@ -35,7 +35,7 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Program delivery is 13/15 merged and archived (86.67%); Trellis mechanical progress is 13/13 instantiated children archived. Child 13 Task 11 is complete_checked with the explicitly accepted and unaltered historical RED provenance exception. Task 12 delivered the exact 13-path test/evidence union through feature head e42e88bd769a0929ff42143d0e0a4396d916cbb7 and PR #432: required CI run 31985755745 passed all 11 checks, squash commit 946ee6d8cb058fd1a3b358eb453f43cca3f57f7e is on main, and exact-squash main CI 31986331118 plus Release Please 31986331101 succeeded. The latest formal release remains v0.48.0 at 793af9f; no GitHub Release or Docker image was expected or triggered. Child 13 was archived on 2026-08-17 in commit 645d180 under archive/2026-08, and journal session 41 records the closure. This parent remains planning; only the bookkeeping PR is pending, and Children 14-15 are not created or started.",
+  "notes": "Program delivery is 13/15 merged and archived (86.67%); Trellis mechanical progress is 13/13 instantiated children archived. Child 13 Task 11 is complete_checked with the explicitly accepted and unaltered historical RED provenance exception. Task 12 delivered the exact 13-path test/evidence union through feature head e42e88bd769a0929ff42143d0e0a4396d916cbb7 and PR #432: required CI run 31985755745 passed all 11 checks, squash commit 946ee6d8cb058fd1a3b358eb453f43cca3f57f7e is on main, and exact-squash main CI 31986331118 plus Release Please 31986331101 succeeded. The latest formal release remains v0.48.0 at 793af9f; no GitHub Release or Docker image was expected or triggered. Child 13 was archived on 2026-08-17 in commit 645d180 under archive/2026-08, and journal session 41 records the closure. Bookkeeping PR #433 is open; this parent remains planning, and Children 14-15 are not created or started.",
   "meta": {
     "program_delivery": {
       "delivered": 13,
@@ -79,7 +79,7 @@
       "program_delivery": "12_of_15"
     },
     "task_12_rebaseline": {
-      "status": "delivery_archive_journal_complete_bookkeeping_pr_pending",
+      "status": "delivery_archive_journal_complete_bookkeeping_pr_433_open",
       "date": "2026-08-17",
       "baseline": "codex_task_11_cross_engine_full_verification_head_origin_main_v0_48_0_exact_793af9f8c29ba6274d4f99c1e104fcc01a72752c",
       "exact_dirty_union": "13_unique_paths_9_tracked_0_cached_4_untracked_all_task11_tests_or_trellis_evidence",
@@ -88,7 +88,7 @@
       "boundary": "feature_delivery_child_archive_and_journal_complete_bookkeeping_pr_pending_child14_child15_not_started"
     },
     "child_13_delivery": {
-      "status": "completed_archived_journal_recorded_bookkeeping_pr_pending",
+      "status": "completed_archived_journal_recorded_bookkeeping_pr_433_open",
       "feature_pr": "https://github.com/xiangnan0811/xirang/pull/432",
       "feature_head": "e42e88bd769a0929ff42143d0e0a4396d916cbb7",
       "required_ci": "run_31985755745_success_all_11_checks_green",
@@ -99,6 +99,7 @@
       "archive_path": ".trellis/tasks/archive/2026-08/07-28-backup-assets-controlled-recovery",
       "completed_at": "2026-08-17",
       "journal": "weibo_session_41_recorded",
+      "bookkeeping_pr": "https://github.com/xiangnan0811/xirang/pull/433",
       "program_delivery": "13_of_15",
       "boundary": "parent_planning_children14_15_not_created"
     },

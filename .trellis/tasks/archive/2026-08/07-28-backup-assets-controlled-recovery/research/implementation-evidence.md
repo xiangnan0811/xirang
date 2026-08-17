@@ -11734,3 +11734,8 @@ delivery, both hosted CI layers, archive facts and the explicit stop before
 Children 14/15. The temporary per-worktree ignored developer identity used to
 invoke the native journal command was removed immediately and is not part of
 the Git diff. Only bookkeeping-PR delivery and monitoring remain.
+
+Draft bookkeeping PR #433 was opened against `main` from
+`codex/task-12-child13-bookkeeping`. This self-link is recorded before its
+exact-head CI; the PR must remain unmerged until all required checks pass and
+all review threads are closed.
