@@ -251,6 +251,9 @@ const preflight = { expiresAt: futureExpiry() };
 - One click inspects at most eight pages. A remaining cursor is stored, not
   drained in the same turn. Continue starts from that cursor.
 - Do not hold the management panel on an unbounded Provider/catalog walk.
+- Keep repository/retention lifecycle APIs and their panels out of the
+  startup `index-*.js` chunk. Follow the existing lazy `apiClient` and
+  workspace `lazy()` pattern so the 500 KiB JS budget stays intact.
 
 ### 4. Validation & Error Matrix
 

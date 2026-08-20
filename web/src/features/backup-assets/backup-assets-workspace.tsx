@@ -19,8 +19,6 @@ import type { AuthContextValue } from "@/context/auth-context.shared";
 import type { AssetRef, CatalogProjection } from "@/types/domain";
 
 import { AssetContextPanel } from "./asset-context-panel";
-import { RepositoryManagementPanel } from "./repository-management-panel";
-import { RetentionPolicyPanel } from "./retention-policy-panel";
 import {
   DEFAULT_BACKUP_ASSETS_PREFERENCES,
   type BackupAssetsPreferencesV1,
@@ -56,6 +54,16 @@ const LazyExportJobPanel = lazy(() =>
 const LazyRecoveryPlanWizard = lazy(() =>
   import("./recovery-plan-wizard").then((module) => ({
     default: module.RecoveryPlanWizard,
+  }))
+);
+const LazyRepositoryManagementPanel = lazy(() =>
+  import("./repository-management-panel").then((module) => ({
+    default: module.RepositoryManagementPanel,
+  }))
+);
+const LazyRetentionPolicyPanel = lazy(() =>
+  import("./retention-policy-panel").then((module) => ({
+    default: module.RetentionPolicyPanel,
   }))
 );
 
@@ -294,22 +302,24 @@ export function BackupAssetsWorkspace({
     };
     return (
       <div className="space-y-0">
-        <RepositoryManagementPanel
-          repositories={controller.repositories.items}
-          selectedRepositoryId={controller.state.route.repositoryId}
-          viewport={viewport}
-          onBrowse={(repositoryId) => onRoutePatch({ view: "browse", repositoryId })}
-          runtime={processingRuntime}
-          onRefresh={refreshLifecycle}
-        />
-        <RetentionPolicyPanel
-          repositories={controller.repositories.items}
-          recoveryPoints={controller.recoveryPoints.items}
-          selectedRepositoryId={controller.state.route.repositoryId}
-          selectedRecoveryPointId={controller.state.route.recoveryPointId}
-          runtime={processingRuntime}
-          onRefresh={refreshLifecycle}
-        />
+        <Suspense fallback={<LoadingState title={t("backupAssets.context.loadingRepositories")} rows={6} />}>
+          <LazyRepositoryManagementPanel
+            repositories={controller.repositories.items}
+            selectedRepositoryId={controller.state.route.repositoryId}
+            viewport={viewport}
+            onBrowse={(repositoryId) => onRoutePatch({ view: "browse", repositoryId })}
+            runtime={processingRuntime}
+            onRefresh={refreshLifecycle}
+          />
+          <LazyRetentionPolicyPanel
+            repositories={controller.repositories.items}
+            recoveryPoints={controller.recoveryPoints.items}
+            selectedRepositoryId={controller.state.route.repositoryId}
+            selectedRecoveryPointId={controller.state.route.recoveryPointId}
+            runtime={processingRuntime}
+            onRefresh={refreshLifecycle}
+          />
+        </Suspense>
       </div>
     );
   }

@@ -16,6 +16,7 @@ import (
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	postgresgorm "gorm.io/driver/postgres"
@@ -760,8 +761,17 @@ func testOpaqueID(value uint64) string {
 	return fmt.Sprintf("%032x", value)
 }
 
+func enableRetentionTestEncryption(t *testing.T) {
+	t.Helper()
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+}
+
 func newRetentionTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
+	enableRetentionTestEncryption(t)
 	dsn := filepath.Join(t.TempDir(), "retention.db") + "?_loc=UTC&_foreign_keys=on&_busy_timeout=5000"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
@@ -787,6 +797,7 @@ func newRetentionTestDB(t *testing.T) *gorm.DB {
 
 func newIsolatedRetentionPostgresTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
+	enableRetentionTestEncryption(t)
 	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
 	if dsn == "" {
 		t.Skip("TEST_POSTGRES_DSN is required for focused PostgreSQL retention regressions")

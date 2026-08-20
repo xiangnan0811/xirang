@@ -568,7 +568,7 @@ describe("BackupAssetsWorkspace", () => {
       />
     );
 
-    const management = screen.getByRole("region", {
+    const management = await screen.findByRole("region", {
       name: /Repository management|仓库管理/,
     });
     expect(management).toHaveTextContent(repository.displayName);
@@ -615,10 +615,10 @@ describe("BackupAssetsWorkspace", () => {
       />,
     );
 
-    const management = screen.getByRole("region", { name: /Repository management|仓库管理/ });
+    const management = await screen.findByRole("region", { name: /Repository management|仓库管理/ });
     expect(within(management).getByRole("button", { name: /Reconnect|重连/ })).toBeInTheDocument();
     expect(within(management).getByRole("button", { name: /Reconcile|重新探测/ })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: /Retention policies|保留策略/ })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: /Retention policies|保留策略/ })).toBeInTheDocument();
     expect(screen.getByLabelText(/Hold recovery point|冻结恢复点/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Create hold|创建冻结/ })).toBeInTheDocument();
 

@@ -1277,6 +1277,9 @@ if config.Enabled && !processingRuntime.RecoverySecurityReady() {
   SecretClassify reopen; failed/canceled reopen including mid-walk cancel.
 - Hold/purge mutation correlation; operational hold expiry in-TX
   `hold_release`.
+- Shared retention DB helpers must set `APP_ENV=development` or
+  `DATA_ENCRYPTION_KEY` plus `secure.ResetForTesting()`. Do not inherit
+  `APP_ENV` from a developer shell; CI has neither.
 
 #### 7. Wrong vs Correct
 
@@ -1300,6 +1303,8 @@ result, err := collectRebuildDerivedDescriptors(ctx, req, false)
 if result.incomplete && len(result.descriptors) == 0 {
     return unprovenMarker, nil
 }
+
+db := newRetentionTestDB(t) // enableRetentionTestEncryption inside
 ```
 
 ---
