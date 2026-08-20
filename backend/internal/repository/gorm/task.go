@@ -2,8 +2,10 @@ package gorm
 
 import (
 	"context"
+	"sort"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/model"
@@ -59,9 +61,21 @@ func (r *TaskRepository) Create(ctx context.Context, task *model.Task) error {
 	return apperr.WrapDBError(r.db.WithContext(ctx).Create(task).Error)
 }
 
-// Update saves changes to an existing task.
+// Update saves changes to an existing unarchived task. A stale Save must not
+// clear archived_at after Archive commits.
 func (r *TaskRepository) Update(ctx context.Context, task *model.Task) error {
-	return apperr.WrapDBError(r.db.WithContext(ctx).Save(task).Error)
+	result := r.db.WithContext(ctx).Model(&model.Task{}).
+		Where("id = ? AND archived_at IS NULL", task.ID).
+		Select("*").
+		Omit("ID", "CreatedAt", "ArchivedAt").
+		Updates(task)
+	if result.Error != nil {
+		return apperr.WrapDBError(result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return repository.ErrTaskArchived
+	}
+	return nil
 }
 
 // Delete removes a task by its primary key.
@@ -76,6 +90,60 @@ func (r *TaskRepository) ExistsByID(ctx context.Context, id uint) (bool, error) 
 		return false, apperr.WrapDBError(err)
 	}
 	return count > 0, nil
+}
+
+// ExistsLiveByID returns true if an unarchived task with the given id exists.
+func (r *TaskRepository) ExistsLiveByID(ctx context.Context, id uint) (bool, error) {
+	var count int64
+	if err := r.db.WithContext(ctx).Model(&model.Task{}).
+		Where("id = ? AND archived_at IS NULL", id).Count(&count).Error; err != nil {
+		return false, apperr.WrapDBError(err)
+	}
+	return count > 0, nil
+}
+
+func (r *TaskRepository) LockIDsForUpdate(ctx context.Context, ids []uint) error {
+	return LockTaskIDsForUpdate(r.db.WithContext(ctx), ids)
+}
+
+func (r *TaskRepository) RunInTransaction(ctx context.Context, fn func(ctx context.Context, txRepo repository.TaskRepository) error) error {
+	if r == nil || r.db == nil {
+		return apperr.WrapDBError(gorm.ErrInvalidDB)
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return fn(ctx, NewTaskRepository(tx))
+	})
+}
+
+// LockTaskIDsForUpdate locks task rows in ascending ID order. SQLite treats
+// FOR UPDATE as a no-op, so the same-row name assignment serializes writers.
+func LockTaskIDsForUpdate(tx *gorm.DB, ids []uint) error {
+	if tx == nil || len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[uint]struct{}, len(ids))
+	sorted := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		sorted = append(sorted, id)
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	for _, id := range sorted {
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Model(&model.Task{}).
+			Where("id = ?", id).
+			UpdateColumn("name", gorm.Expr("name"))
+		if result.Error != nil {
+			return apperr.WrapDBError(result.Error)
+		}
+	}
+	return nil
 }
 
 // CountByID returns the count of tasks matching the id.

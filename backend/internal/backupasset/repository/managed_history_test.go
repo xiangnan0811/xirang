@@ -78,6 +78,41 @@ func TestManagedHistoryLatchTreatsFutureTombstoneAsPermanent(t *testing.T) {
 	}
 }
 
+func TestManagedHistoryLifecycleTombstonesProveHistoryWhenOnlyTombstonesRemain(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	if err := db.AutoMigrate(&model.RecoveryPointLifecycleTombstone{}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 18, 13, 10, 0, 0, time.UTC)
+	repositoryID := strings.Repeat("e", 32)
+	if err := db.Create(&model.RecoveryPointLifecycleTombstone{
+		RecoveryPointID: strings.Repeat("f", 32), RepositoryID: repositoryID,
+		OriginalSemantics: string(backupasset.PointNativeSnapshot),
+		TerminalOperation: string(backupasset.LifecycleRetentionExpire),
+		TerminalState:     string(backupasset.RecoveryPointExpired),
+		ManagedHistory:    true, ResultCode: "provider_deleted", CreatedAt: now,
+	}).Error; err != nil {
+		t.Fatalf("seed lifecycle tombstone: %v", err)
+	}
+	tombstones, err := NewLifecycleManagedHistoryTombstones(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := NewManagedHistoryResolver(ManagedHistoryResolverDependencies{DB: db, Tombstones: tombstones})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := resolver.HasRepositoryManagedHistory(context.Background(), repositoryID); err != nil || !got {
+		t.Fatalf("tombstone-only repository history=%t err=%v, want true/nil", got, err)
+	}
+	if got, err := resolver.HasInstallationManagedHistory(context.Background()); err != nil || !got {
+		t.Fatalf("tombstone-only installation history=%t err=%v, want true/nil", got, err)
+	}
+	if _, err := NewLifecycleManagedHistoryTombstones(nil); err == nil {
+		t.Fatal("nil tombstone source succeeded")
+	}
+}
+
 func TestManagedHistoryLatchDoesNotTripFromMigrationOnlyOrMutableHead(t *testing.T) {
 	db := newRepositoryTestDB(t)
 	now := time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC)

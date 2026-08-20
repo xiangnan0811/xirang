@@ -368,7 +368,7 @@ Expose one bulk endpoint, validate the whole target set first, perform the unres
 
 | Condition | Expected result |
 |---|---|
-| `backup_assets.enabled=false` | 503 `feature_disabled`; no service dependency is touched. |
+| `backup_assets.enabled=false` | 503 `feature_disabled` on backup-asset routes; no Search-key, projection, proof, audit mutation, or Provider access. Task HTTP delete/archive stays online and must not 500 when `backup_retention_policies` is missing. |
 | Provider kind/optional port is unregistered | 501 with a validated capability reason. |
 | Probe exceeds the configured deadline | 503 `provider_operation_timeout`. |
 | Metadata/item/record budget is exceeded | 503 `provider_resource_limit`; no partial-success data. |

@@ -39,6 +39,7 @@ const (
 
 	recoveryWorkspacePlaintextTTL                       = 24 * time.Hour
 	recoveryUnresolvedProjectionTimeout                 = 5 * time.Second
+	recoveryCancellationHandoffTimeout                  = 5 * time.Second
 	recoveryWorkspaceLocatorDirectory                   = "jobs"
 	recoveryWorkspaceMarkerBindingDomain                = "xirang/recovery/workspace-marker/v1"
 	recoveryPreWriteDriftFailureCategory                = "pre_write_drift"
@@ -1972,6 +1973,22 @@ func (coordinator *WorkerCoordinator) CancelJob(ctx context.Context, jobID strin
 	return coordinator.cancelJob(ctx, CancelRecoveryJobRequest{JobID: jobID})
 }
 
+// CancelRecoveryPoint binds source lifecycle authority to the same transaction
+// that performs the existing Recovery cancellation handoff. RecoveryResult and
+// workspace cleanup state remain outside this source-scoped operation.
+func (coordinator *WorkerCoordinator) CancelRecoveryPoint(
+	ctx context.Context,
+	sourceRequest backupasset.SourceLifecycleRequest,
+	jobID string,
+) error {
+	if err := backupasset.ValidateSourceLifecycleRequest(sourceRequest); err != nil {
+		return err
+	}
+	return coordinator.cancelJob(ctx, CancelRecoveryJobRequest{
+		JobID: jobID, sourceLifecycleRequest: &sourceRequest,
+	})
+}
+
 // CancelRecoveryJobRequest binds the API actor and opaque expected revision to
 // the exact plan/job lock boundary. Zero requester/revision is reserved for
 // internal runtime cancellation paths.
@@ -1979,6 +1996,8 @@ type CancelRecoveryJobRequest struct {
 	RequesterID      uint
 	JobID            string
 	ExpectedRevision uint64
+
+	sourceLifecycleRequest *backupasset.SourceLifecycleRequest
 }
 
 func (coordinator *WorkerCoordinator) CancelOwnedJob(ctx context.Context, request CancelRecoveryJobRequest) error {
@@ -1997,15 +2016,19 @@ func (coordinator *WorkerCoordinator) cancelJob(ctx context.Context, request Can
 	if ctx.Err() != nil {
 		// The terminal fence handoff must not be abandoned with a live write
 		// permit solely because its caller has already stopped waiting.
-		ctx = context.WithoutCancel(ctx)
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), recoveryCancellationHandoffTimeout)
+		defer cancel()
 	}
 
 	var transitioned bool
 	var terminalOutcome JobState
 	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := coordinator.now().UTC()
+		sourceScoped := request.sourceLifecycleRequest != nil
 		planID := ""
-		if request.RequesterID != 0 {
+		planRecoveryPointID := ""
+		if request.RequesterID != 0 || sourceScoped {
 			var reference struct{ PlanID string }
 			loaded := tx.WithContext(ctx).Table((model.BackupAssetRecoveryJob{}).TableName()).
 				Select("plan_id").Where("id = ?", jobID).Limit(1).Find(&reference)
@@ -2013,35 +2036,64 @@ func (coordinator *WorkerCoordinator) cancelJob(ctx context.Context, request Can
 				return loaded.Error
 			}
 			if loaded.RowsAffected != 1 || !validOpaqueID(reference.PlanID) {
+				if sourceScoped {
+					return recoverySourceLifecycleConflict()
+				}
 				return ErrRecoveryWorkerObjectNotFound
 			}
 			var plan struct {
-				ID          string
-				RequesterID uint
+				ID              string
+				RequesterID     uint
+				RecoveryPointID string
 			}
 			loaded = tx.WithContext(ctx).Table((model.BackupAssetRecoveryPlan{}).TableName()).
-				Select("id, requester_id").Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+				Select("id, requester_id, recovery_point_id").Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
 				Where("id = ?", reference.PlanID).Limit(1).Find(&plan)
 			if loaded.Error != nil {
 				return loaded.Error
 			}
-			if loaded.RowsAffected != 1 || plan.RequesterID != request.RequesterID {
+			if loaded.RowsAffected != 1 {
+				if sourceScoped {
+					return recoverySourceLifecycleConflict()
+				}
+				return ErrRecoveryWorkerObjectNotFound
+			}
+			if sourceScoped {
+				if plan.RecoveryPointID != request.sourceLifecycleRequest.RecoveryPointID {
+					return recoverySourceLifecycleConflict()
+				}
+			} else if plan.RequesterID != request.RequesterID {
 				return ErrRecoveryWorkerObjectNotFound
 			}
 			planID = plan.ID
+			planRecoveryPointID = plan.RecoveryPointID
 		}
 		var job model.BackupAssetRecoveryJob
-		jobQuery := tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
-			Where("id = ?", jobID).Limit(1).Find(&job)
+		jobQuery := tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).Where("id = ?", jobID)
+		if planID != "" {
+			jobQuery = jobQuery.Where("plan_id = ?", planID)
+		}
+		jobQuery = jobQuery.Limit(1).Find(&job)
 		loaded := jobQuery
 		if loaded.Error != nil {
 			return loaded.Error
 		}
 		if loaded.RowsAffected != 1 {
+			if sourceScoped {
+				return recoverySourceLifecycleConflict()
+			}
 			return ErrRecoveryWorkerFenceLost
 		}
 		if request.RequesterID != 0 && (job.PlanID != planID || job.TransitionRevision != request.ExpectedRevision) {
 			return ErrRecoveryWorkerFenceLost
+		}
+		if sourceScoped {
+			// PrepareFirstWrite owns the canonical plan -> job -> point order.
+			// Validate the exact lifecycle point/attempt only after taking the
+			// same plan and job locks, but before any cancellation mutation.
+			if err := backupasset.ValidateSourceLifecycleAttemptTx(ctx, tx, *request.sourceLifecycleRequest); err != nil {
+				return err
+			}
 		}
 		if job.State == string(JobStateCanceled) ||
 			(job.State == string(JobStateNeedsAttention) &&
@@ -2062,18 +2114,27 @@ func (coordinator *WorkerCoordinator) cancelJob(ctx context.Context, request Can
 			return loaded.Error
 		}
 		if loaded.RowsAffected != 1 || attempt.Fence == 0 {
+			if sourceScoped {
+				return recoverySourceLifecycleConflict()
+			}
 			return ErrRecoveryWorkerFenceLost
 		}
 
 		var source model.RecoveryPointLease
-		loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+		sourceQuery := tx.WithContext(ctx).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
 			Where("holder_type = ? AND owner_id = ? AND attempt_id = ? AND status = ?",
-				backupasset.LeaseHolderRecoveryJob, job.ID, attempt.ID, backupasset.LeaseActive).
-			Limit(1).Find(&source)
+				backupasset.LeaseHolderRecoveryJob, job.ID, attempt.ID, backupasset.LeaseActive)
+		if sourceScoped {
+			sourceQuery = sourceQuery.Where("recovery_point_id = ?", planRecoveryPointID)
+		}
+		loaded = sourceQuery.Limit(1).Find(&source)
 		if loaded.Error != nil {
 			return loaded.Error
 		}
 		if loaded.RowsAffected != 1 {
+			if sourceScoped {
+				return recoverySourceLifecycleConflict()
+			}
 			return ErrRecoveryWorkerFenceLost
 		}
 		sourceCurrent := now.Before(source.LeaseExpiresAt.UTC()) && now.Before(source.AbsoluteDeadline.UTC())
@@ -2172,6 +2233,9 @@ func (coordinator *WorkerCoordinator) cancelJob(ctx context.Context, request Can
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, backupasset.ErrConflict) || errors.Is(err, backupasset.ErrInvalidState) {
+			return err
+		}
 		if errors.Is(err, ErrRecoveryWorkerObjectNotFound) || errors.Is(err, ErrRecoveryWorkerFenceLost) ||
 			errors.Is(err, ErrRecoverySourceChanged) {
 			return err
@@ -2183,6 +2247,10 @@ func (coordinator *WorkerCoordinator) cancelJob(ctx context.Context, request Can
 		coordinator.writeCancelAudit(ctx, request.RequesterID, jobID, terminalOutcome)
 	}
 	return nil
+}
+
+func recoverySourceLifecycleConflict() error {
+	return fmt.Errorf("%w: Recovery source cancellation authority changed", backupasset.ErrConflict)
 }
 
 func (coordinator *WorkerCoordinator) writeCancelAudit(

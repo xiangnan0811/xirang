@@ -582,24 +582,14 @@ func TestOverlayBehaviorPostgres(t *testing.T) {
 	if usageCreateArrivals.Load() != 2 {
 		t.Fatalf("PostgreSQL quota race did not force two missing-row creates: %d", usageCreateArrivals.Load())
 	}
-	now := harness.clock.Now()
-	for index, pointID := range []string{strings.Repeat("a", 32), strings.Repeat("b", 32)} {
-		if err := harness.db.Create(&model.RecoveryPoint{
-			ID: pointID, RepositoryID: fmt.Sprintf("%032x", index+1), Semantics: string(backupasset.PointXirangManifest),
-			State: string(backupasset.RecoveryPointCommitted), LineageJSON: "{}", ConsistencyJSON: "{}", FidelityJSON: "{}",
-			CapabilitiesJSON: "{}", ImmutabilityLevel: string(backupasset.ImmutabilityXirangManaged),
-			PhysicalAvailability: string(backupasset.PhysicalUnknown), HoldState: string(backupasset.HoldNone),
-			CreatedAt: now, UpdatedAt: now,
-		}).Error; err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	missingRef := backupasset.AssetRef{RecoveryPointID: strings.Repeat("c", 32), EntryID: strings.Repeat("3", 64)}
 	harness.assets[missingRef] = true
 	if _, err := service.AddFavorite(context.Background(), Actor{UserID: 9102, Role: "operator"}, AddFavoriteRequest{
 		Ref: missingRef, IdempotencyKey: "postgres-missing-source-favorite",
 	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Where("id = ?", missingRef.RecoveryPointID).Delete(&model.RecoveryPoint{}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if count, err := service.ReconcileInvalidSources(context.Background(), 10); err != nil || count != 1 {
@@ -884,12 +874,25 @@ func configureOverlayTestEnvironment(t *testing.T) {
 func buildOverlayTestHarness(t *testing.T, db *gorm.DB, clock *overlayTestClock) (*Service, *overlayTestHarness) {
 	t.Helper()
 	if err := db.AutoMigrate(
-		&model.RecoveryPoint{},
+		&model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{},
 		&model.WrappedDomainKey{}, &model.BackupAssetSavedSearch{}, &model.BackupAssetSavedSearchScopePoint{},
 		&model.BackupAssetFavorite{}, &model.BackupAssetTagDefinition{}, &model.BackupAssetTagAssignment{},
 		&model.BackupAssetRecentAccess{}, &model.BackupAssetOverlayUsage{}, &model.BackupAssetOverlayIdempotency{},
 	); err != nil {
 		t.Fatalf("migrate overlay test DB: %v", err)
+	}
+	now := clock.Now()
+	for _, digit := range "0123456789abcdef" {
+		pointID := strings.Repeat(string(digit), 32)
+		if err := db.Create(&model.RecoveryPoint{
+			ID: pointID, RepositoryID: strings.Repeat("f", 32), Semantics: string(backupasset.PointXirangManifest),
+			State: string(backupasset.RecoveryPointCommitted), LineageJSON: "{}", ConsistencyJSON: "{}", FidelityJSON: "{}",
+			CapabilitiesJSON: "{}", ImmutabilityLevel: string(backupasset.ImmutabilityXirangManaged),
+			PhysicalAvailability: string(backupasset.PhysicalOnline), HoldState: string(backupasset.HoldNone),
+			PointRevision: 1, CapabilityRevision: 1, CreatedAt: now, UpdatedAt: now,
+		}).Error; err != nil {
+			t.Fatalf("seed overlay test point: %v", err)
+		}
 	}
 	for _, statement := range []string{
 		`CREATE UNIQUE INDEX idx_overlay_test_key_active ON wrapped_domain_keys(domain) WHERE state = 'active'`,

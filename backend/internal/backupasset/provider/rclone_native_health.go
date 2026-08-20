@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"reflect"
 	"sort"
 	"time"
 
@@ -107,7 +106,7 @@ func LoadRcloneNativeHealthReferences(
 	if err := validateRcloneNativeCommitMarker(request, controlPrefix, marker); err != nil {
 		return nil, err
 	}
-	controlGraph, index, chunkDigests, err := reopenRcloneNativeControlGraph(ctx, request, marker, commitVersion)
+	controlGraph, index, chunkDigests, payloads, err := reopenRcloneNativeControlGraph(ctx, request, marker, commitVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -117,9 +116,10 @@ func LoadRcloneNativeHealthReferences(
 			EntryCount: index.EntryCount, LogicalBytes: index.LogicalBytes,
 		}
 	}
+	point := RcloneNativePointGraph{ViewDigest: marker.PointViewDigest, LedgerDigest: marker.MutationLedgerDigest}
 	rebuilt, err := buildRcloneNativeProviderCommit(
 		request,
-		RcloneNativePointGraph{ViewDigest: marker.PointViewDigest, LedgerDigest: marker.MutationLedgerDigest},
+		point,
 		marker.ExactReadProofDigest,
 		RcloneNativeStableGraph{Digest: marker.B0VersionGraphDigest},
 		RcloneNativeStableGraph{Digest: marker.B1VersionGraphDigest},
@@ -131,11 +131,14 @@ func LoadRcloneNativeHealthReferences(
 	if err != nil || rebuilt.Native == nil {
 		return nil, rcloneNativeError(backupasset.RcloneReasonMarkerMismatch, err)
 	}
+	if err := attachRcloneNativeFrozenDeletionVersions(&rebuilt, point, controlGraph, payloads); err != nil {
+		return nil, err
+	}
 	rebuilt.FidelityEvidenceDigest = marker.FidelityEvidenceDigest
 	rebuilt.CostEvidenceDigest = marker.CostEvidenceDigest
 	rebuilt.CapabilityEvidenceDigest = marker.CapabilityEvidenceDigest
 	rebuilt.Native.EncryptionEvidenceDigest = marker.EncryptionEvidenceDigest
-	if !reflect.DeepEqual(rebuilt, commit) {
+	if !rcloneNativeCommitsEqualIgnoringFrozenVersions(rebuilt, commit) {
 		return nil, rcloneNativeError(backupasset.RcloneReasonMarkerMismatch, nil)
 	}
 

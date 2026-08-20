@@ -56,6 +56,104 @@ func TestLeaseAcquireRenewRelease(t *testing.T) {
 	}
 }
 
+func TestRecoveryPointSourceLifecycleAttemptStageFence(t *testing.T) {
+	_, _, db := newLeaseTestHarness(t, standardLeaseConfig())
+	ctx := context.Background()
+	pointID := strings.Repeat("d", 32)
+	attemptID := strings.Repeat("e", 32)
+	point := model.RecoveryPoint{ID: pointID, RepositoryID: strings.Repeat("f", 32)}
+	if err := db.Create(&point).Error; err != nil {
+		t.Fatalf("seed recovery point: %v", err)
+	}
+	attempt := model.RecoveryPointLifecycleAttempt{
+		ID: attemptID, RecoveryPointID: pointID,
+		Operation: string(LifecycleMutableRetire), Phase: string(LifecyclePhaseRevoking),
+	}
+	if err := db.Create(&attempt).Error; err != nil {
+		t.Fatalf("seed lifecycle attempt: %v", err)
+	}
+
+	request := SourceLifecycleRequest{
+		RecoveryPointID: pointID, LifecycleAttemptID: attemptID,
+		Operation: LifecycleMutableRetire, Stage: SourceLifecyclePrepare,
+	}
+	assertFence := func(want error) {
+		t.Helper()
+		err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			return ValidateSourceLifecycleAttemptTx(ctx, tx, request)
+		})
+		if want == nil && err != nil {
+			t.Fatalf("valid lifecycle stage fence rejected: %v", err)
+		}
+		if want != nil && !errors.Is(err, want) {
+			t.Fatalf("lifecycle stage fence error=%v, want %v", err, want)
+		}
+	}
+	assertFence(nil)
+
+	request.Stage = SourceLifecycleCleanup
+	assertFence(ErrConflict)
+	if err := db.Model(&model.RecoveryPointLifecycleAttempt{}).Where("id = ?", attemptID).
+		Update("phase", LifecyclePhaseCleaning).Error; err != nil {
+		t.Fatalf("advance lifecycle attempt: %v", err)
+	}
+	assertFence(nil)
+
+	request.Operation = LifecycleExplicitPurge
+	assertFence(ErrConflict)
+	request.Operation = LifecycleMutableRetire
+	request.LifecycleAttemptID = strings.Repeat("c", 32)
+	assertFence(ErrConflict)
+}
+
+func TestValidateRecoveryPointWriteAdmissionTxEnforcesClosedSemanticsStateMatrix(t *testing.T) {
+	_, _, db := newLeaseTestHarness(t, standardLeaseConfig())
+	tests := []struct {
+		name      string
+		semantics PointVersionSemantics
+		state     RecoveryPointState
+		wantErr   bool
+	}{
+		{name: "mutable observed", semantics: PointMutableHead, state: RecoveryPointObserved},
+		{name: "native committed", semantics: PointNativeSnapshot, state: RecoveryPointCommitted},
+		{name: "native degraded", semantics: PointNativeSnapshot, state: RecoveryPointDegraded},
+		{name: "manifest committed", semantics: PointXirangManifest, state: RecoveryPointCommitted},
+		{name: "manifest degraded", semantics: PointXirangManifest, state: RecoveryPointDegraded},
+		{name: "imported committed", semantics: PointImportedBaseline, state: RecoveryPointCommitted},
+		{name: "imported degraded", semantics: PointImportedBaseline, state: RecoveryPointDegraded},
+		{name: "unknown committed", semantics: PointVersionSemantics("unknown"), state: RecoveryPointCommitted, wantErr: true},
+		{name: "unknown degraded", semantics: PointVersionSemantics("unknown"), state: RecoveryPointDegraded, wantErr: true},
+		{name: "mutable committed", semantics: PointMutableHead, state: RecoveryPointCommitted, wantErr: true},
+		{name: "mutable degraded", semantics: PointMutableHead, state: RecoveryPointDegraded, wantErr: true},
+		{name: "native observed", semantics: PointNativeSnapshot, state: RecoveryPointObserved, wantErr: true},
+		{name: "manifest observed", semantics: PointXirangManifest, state: RecoveryPointObserved, wantErr: true},
+		{name: "imported observed", semantics: PointImportedBaseline, state: RecoveryPointObserved, wantErr: true},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pointID := fmt.Sprintf("%032x", index+1)
+			if err := db.Create(&model.RecoveryPoint{
+				ID: pointID, RepositoryID: strings.Repeat("f", 32),
+				Semantics: string(test.semantics), State: string(test.state),
+			}).Error; err != nil {
+				t.Fatalf("seed recovery point: %v", err)
+			}
+			err := db.Transaction(func(tx *gorm.DB) error {
+				return ValidateRecoveryPointWriteAdmissionTx(context.Background(), tx, pointID)
+			})
+			if test.wantErr {
+				if !errors.Is(err, ErrConflict) {
+					t.Fatalf("admission error=%v, want ErrConflict", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("valid admission rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestLeaseRejectsDuplicateActiveOwnerSlot(t *testing.T) {
 	service, _, _ := newLeaseTestHarness(t, standardLeaseConfig())
 	ctx := context.Background()
@@ -112,6 +210,23 @@ func TestSearchIndexLeaseTakeoverRejectsOldFence(t *testing.T) {
 	}
 	if err := service.ValidateFence(context.Background(), after.Fence); err != nil {
 		t.Fatalf("new search index fence rejected: %v", err)
+	}
+}
+
+func TestRetentionWorkerLeaseHolderIsValid(t *testing.T) {
+	if !validLeaseHolderTypes[LeaseHolderRetentionWorker] {
+		t.Fatal("retention_worker lease holder is not valid")
+	}
+	service, _, _ := newLeaseTestHarness(t, standardLeaseConfig())
+	request := standardAcquireLeaseRequest()
+	request.HolderType = LeaseHolderRetentionWorker
+	request.OwnerID = "retention-worker"
+	lease, err := service.Acquire(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Acquire retention worker lease: %v", err)
+	}
+	if lease.HolderType != LeaseHolderRetentionWorker {
+		t.Fatalf("retention worker holder=%q", lease.HolderType)
 	}
 }
 
@@ -429,7 +544,7 @@ func newLeaseTestHarness(t *testing.T, config LeaseConfig) (*LeaseService, *leas
 	if err != nil {
 		t.Fatalf("open lease database: %v", err)
 	}
-	if err := db.AutoMigrate(&model.RecoveryPointLease{}); err != nil {
+	if err := db.AutoMigrate(&model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{}, &model.RecoveryPointLease{}); err != nil {
 		t.Fatalf("migrate recovery point leases: %v", err)
 	}
 	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_point_leases_active_owner_slot ON recovery_point_leases(recovery_point_id, holder_type, owner_id) WHERE status = 'active'`).Error; err != nil {

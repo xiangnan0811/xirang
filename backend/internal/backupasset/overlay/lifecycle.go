@@ -24,10 +24,60 @@ type LifecycleResult struct {
 	RecentsDeleted int64
 }
 
+func validatePointLifecycleAdmissionTx(ctx context.Context, tx *gorm.DB, pointIDs []string) error {
+	if tx == nil || len(pointIDs) == 0 {
+		return fmt.Errorf("%w: overlay lifecycle admission", backupasset.ErrInvalidState)
+	}
+	unique := make(map[string]struct{}, len(pointIDs))
+	ordered := make([]string, 0, len(pointIDs))
+	for _, pointID := range pointIDs {
+		if backupasset.ValidateOpaqueID(pointID) != nil {
+			return fmt.Errorf("%w: overlay lifecycle admission point", backupasset.ErrInvalidState)
+		}
+		if _, found := unique[pointID]; found {
+			continue
+		}
+		unique[pointID] = struct{}{}
+		ordered = append(ordered, pointID)
+	}
+	sort.Strings(ordered)
+	for _, pointID := range ordered {
+		if err := backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, pointID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (service *Service) ReconcileSource(ctx context.Context, source SourceLifecycle, limit int) (LifecycleResult, error) {
 	if err := service.ensureFeatureEnabled(); err != nil {
 		return LifecycleResult{}, err
 	}
+	return service.reconcileSource(ctx, source, limit, nil)
+}
+
+// ReconcileSourceLifecycle is the lifecycle-coordinator-only maintenance path.
+// It bypasses the user-facing feature gate only while the exact attempt is in
+// Cleaning, and proves that attempt in the same transaction as each batch.
+func (service *Service) ReconcileSourceLifecycle(
+	ctx context.Context,
+	request backupasset.SourceLifecycleRequest,
+	source SourceLifecycle,
+	limit int,
+) (LifecycleResult, error) {
+	if err := backupasset.ValidateSourceLifecycleRequest(request); err != nil ||
+		request.Stage != backupasset.SourceLifecycleCleanup || request.RecoveryPointID != source.RecoveryPointID {
+		return LifecycleResult{}, fmt.Errorf("%w: invalid Overlay lifecycle maintenance request", backupasset.ErrInvalidState)
+	}
+	return service.reconcileSource(ctx, source, limit, &request)
+}
+
+func (service *Service) reconcileSource(
+	ctx context.Context,
+	source SourceLifecycle,
+	limit int,
+	request *backupasset.SourceLifecycleRequest,
+) (LifecycleResult, error) {
 	if ValidateOverlayRefForPoint(source.RecoveryPointID) != nil || limit <= 0 || limit > 100000 {
 		return LifecycleResult{}, ErrInvalidOverlay
 	}
@@ -37,6 +87,11 @@ func (service *Service) ReconcileSource(ctx context.Context, source SourceLifecy
 	}
 	var result LifecycleResult
 	err = service.mutation(ctx, func(tx *gorm.DB) error {
+		if request != nil {
+			if err := backupasset.ValidateSourceLifecycleAttemptTx(ctx, tx, *request); err != nil {
+				return err
+			}
+		}
 		now := service.utcNow()
 		var savedIDs []string
 		if err := tx.Table("backup_asset_saved_searches AS saved").
@@ -53,6 +108,9 @@ func (service *Service) ReconcileSource(ctx context.Context, source SourceLifecy
 				})
 			if updated.Error != nil {
 				return updated.Error
+			}
+			if updated.RowsAffected != int64(len(savedIDs)) {
+				return backupasset.ErrConflict
 			}
 			result.SavedSearches = updated.RowsAffected
 		}
@@ -72,6 +130,9 @@ func (service *Service) ReconcileSource(ctx context.Context, source SourceLifecy
 			if favoriteUpdate.Error != nil {
 				return favoriteUpdate.Error
 			}
+			if favoriteUpdate.RowsAffected != int64(len(favoriteIDs)) {
+				return backupasset.ErrConflict
+			}
 			result.Favorites = favoriteUpdate.RowsAffected
 		}
 		var assignmentIDs []string
@@ -90,20 +151,52 @@ func (service *Service) ReconcileSource(ctx context.Context, source SourceLifecy
 			if assignmentUpdate.Error != nil {
 				return assignmentUpdate.Error
 			}
+			if assignmentUpdate.RowsAffected != int64(len(assignmentIDs)) {
+				return backupasset.ErrConflict
+			}
 			result.TagAssignments = assignmentUpdate.RowsAffected
 		}
-		var recents []model.BackupAssetRecentAccess
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Where("recovery_point_id = ?", source.RecoveryPointID).Order("id ASC").Limit(limit).Find(&recents).Error; err != nil {
+		type recentOwner struct {
+			OwnerUserID uint
+		}
+		var candidates []recentOwner
+		if err := tx.Model(&model.BackupAssetRecentAccess{}).Select("owner_user_id").
+			Where("recovery_point_id = ?", source.RecoveryPointID).Order("id ASC").Limit(limit).Find(&candidates).Error; err != nil {
 			return err
 		}
-		byOwner := make(map[uint]int64)
-		ids := make([]string, 0, len(recents))
-		for _, recent := range recents {
-			ids = append(ids, recent.ID)
-			byOwner[recent.OwnerUserID]++
+		ownersSet := make(map[uint]struct{}, len(candidates))
+		for _, candidate := range candidates {
+			ownersSet[candidate.OwnerUserID] = struct{}{}
 		}
-		if len(ids) > 0 {
+		owners := make([]uint, 0, len(ownersSet))
+		for ownerID := range ownersSet {
+			owners = append(owners, ownerID)
+		}
+		sort.Slice(owners, func(left, right int) bool { return owners[left] < owners[right] })
+		usageByOwner := make(map[uint]model.BackupAssetOverlayUsage, len(owners))
+		for _, ownerID := range owners {
+			usage, err := service.lockUsage(tx, ownerID)
+			if err != nil {
+				return err
+			}
+			usageByOwner[ownerID] = usage
+		}
+
+		var recents []model.BackupAssetRecentAccess
+		if len(owners) > 0 {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("recovery_point_id = ? AND owner_user_id IN ?", source.RecoveryPointID, owners).
+				Order("id ASC").Limit(limit).Find(&recents).Error; err != nil {
+				return err
+			}
+		}
+		if len(recents) > 0 {
+			byOwner := make(map[uint]int64, len(owners))
+			ids := make([]string, 0, len(recents))
+			for _, recent := range recents {
+				ids = append(ids, recent.ID)
+				byOwner[recent.OwnerUserID]++
+			}
 			deleted := tx.Where("id IN ?", ids).Delete(&model.BackupAssetRecentAccess{})
 			if deleted.Error != nil {
 				return deleted.Error
@@ -112,17 +205,13 @@ func (service *Service) ReconcileSource(ctx context.Context, source SourceLifecy
 				return backupasset.ErrConflict
 			}
 			result.RecentsDeleted = deleted.RowsAffected
-			owners := make([]uint, 0, len(byOwner))
-			for ownerID := range byOwner {
-				owners = append(owners, ownerID)
-			}
-			sort.Slice(owners, func(left, right int) bool { return owners[left] < owners[right] })
 			for _, ownerID := range owners {
-				usage, err := service.lockUsage(tx, ownerID)
-				if err != nil {
-					return err
+				deletedForOwner := byOwner[ownerID]
+				if deletedForOwner == 0 {
+					continue
 				}
-				if err := service.updateUsage(tx, usage, map[string]any{"recent_count": max(usage.RecentCount-byOwner[ownerID], 0)}); err != nil {
+				usage := usageByOwner[ownerID]
+				if err := service.updateUsage(tx, usage, map[string]any{"recent_count": max(usage.RecentCount-deletedForOwner, 0)}); err != nil {
 					return err
 				}
 			}
@@ -199,16 +288,46 @@ func (service *Service) CleanupExpiredRecent(ctx context.Context, limit int) (in
 	}
 	var deleted int64
 	err := service.mutation(ctx, func(tx *gorm.DB) error {
-		var rows []model.BackupAssetRecentAccess
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Where("expires_at <= ?", service.utcNow()).Order("expires_at ASC, id ASC").Limit(limit).Find(&rows).Error; err != nil {
+		type recentOwner struct {
+			OwnerUserID uint
+		}
+		now := service.utcNow()
+		var candidates []recentOwner
+		if err := tx.Model(&model.BackupAssetRecentAccess{}).Select("owner_user_id").
+			Where("expires_at <= ?", now).Order("expires_at ASC, id ASC").Limit(limit).Find(&candidates).Error; err != nil {
 			return err
+		}
+		ownersSet := make(map[uint]struct{}, len(candidates))
+		for _, candidate := range candidates {
+			ownersSet[candidate.OwnerUserID] = struct{}{}
+		}
+		owners := make([]uint, 0, len(ownersSet))
+		for ownerID := range ownersSet {
+			owners = append(owners, ownerID)
+		}
+		sort.Slice(owners, func(left, right int) bool { return owners[left] < owners[right] })
+		usageByOwner := make(map[uint]model.BackupAssetOverlayUsage, len(owners))
+		for _, ownerID := range owners {
+			usage, err := service.lockUsage(tx, ownerID)
+			if err != nil {
+				return err
+			}
+			usageByOwner[ownerID] = usage
+		}
+
+		var rows []model.BackupAssetRecentAccess
+		if len(owners) > 0 {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("expires_at <= ? AND owner_user_id IN ?", now, owners).
+				Order("expires_at ASC, id ASC").Limit(limit).Find(&rows).Error; err != nil {
+				return err
+			}
 		}
 		if len(rows) == 0 {
 			return nil
 		}
 		ids := make([]string, 0, len(rows))
-		byOwner := make(map[uint]int64)
+		byOwner := make(map[uint]int64, len(owners))
 		for _, row := range rows {
 			ids = append(ids, row.ID)
 			byOwner[row.OwnerUserID]++
@@ -220,18 +339,14 @@ func (service *Service) CleanupExpiredRecent(ctx context.Context, limit int) (in
 		if result.RowsAffected != int64(len(ids)) {
 			return backupasset.ErrConflict
 		}
-		owners := make([]uint, 0, len(byOwner))
-		for ownerID := range byOwner {
-			owners = append(owners, ownerID)
-		}
-		sort.Slice(owners, func(left, right int) bool { return owners[left] < owners[right] })
 		for _, ownerID := range owners {
-			usage, err := service.lockUsage(tx, ownerID)
-			if err != nil {
-				return err
+			deletedForOwner := byOwner[ownerID]
+			if deletedForOwner == 0 {
+				continue
 			}
+			usage := usageByOwner[ownerID]
 			if err := service.updateUsage(tx, usage, map[string]any{
-				"recent_count": max(usage.RecentCount-byOwner[ownerID], 0),
+				"recent_count": max(usage.RecentCount-deletedForOwner, 0),
 			}); err != nil {
 				return err
 			}

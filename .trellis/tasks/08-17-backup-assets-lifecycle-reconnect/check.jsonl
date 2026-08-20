@@ -1,0 +1,23 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Review paired 000070 apply/down/used-down behavior on both required engines."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review sentinel errors and fail-closed handler mappings."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review selector evidence, races, faults, cross-engine tests, and full gates."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Review redaction and structured lifecycle logs."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Review composition of lifecycle controls from existing primitives."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Review raw-to-domain mappings and prevent unsafe casts or snake_case leakage."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Review typed API wrappers, tests, lint, and build coverage."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Review purpose-exact destructive confirmations, keyboard flow, focus, and announcements."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Review exact changed paths, PR checks, merge, and post-merge evidence."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Detect parallel ownership or duplicated reconnect and cleanup state machines."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review lifecycle truth across database, provider, dependents, API, UI, audit, and DR."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Review that recovery claims match tested reconstructability and key ownership."}
+{"file":".trellis/tasks/08-17-backup-assets-lifecycle-reconnect/research/current-main-evidence.md","reason":"Review the implementation against the exact live baseline and explicit exclusions."}
+{"file":"backend/internal/backupasset/repository/import.go","reason":"Verify Provider-page pending refresh and stale-sweep pause before the next listing cycle."}
+{"file":"backend/internal/backupasset/runtime/rebuild_ports.go","reason":"Verify unproven derived-backfill paging and that ExpectedDescriptors does not apply AdmitBackfill."}
+{"file":"backend/internal/task/archive.go","reason":"Verify archive unlinks Task links and soft-deletes active Task-link retention policies in the same TX."}
+{"file":"backend/internal/task/service.go","reason":"Verify create/update lock archived-parent dependencies with ExistsLiveByID."}
+{"file":"backend/internal/repository/gorm/task.go","reason":"Verify ExistsLiveByID requires archived_at IS NULL and ExistsByID stays unfiltered."}
+{"file":"web/src/features/backup-assets/repository-management-panel.tsx","reason":"Verify scan/rebuild stop after eight pages and Continue resumes from the last cursor."}
+{"file":"backend/internal/api/handlers/backup_retention_handler.go","reason":"Verify hold create/release and purge plan/execute use backupRetentionMutationContext."}
+{"file":"backend/internal/backupasset/retention/hold.go","reason":"Verify automatic operational hold expiry writes in-TX hold_release audit and rolls back on audit failure."}
+{"file":"backend/internal/backupasset/provider/restic_deletion.go","reason":"Verify Restic presence probes the exact snapshot ID, not a whole-repo listing."}
+{"file":"backend/internal/api/handlers/config_backup_assets.go","reason":"Verify config v2 rejects illegal retention policy revision and non-active status."}

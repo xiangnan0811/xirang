@@ -1194,6 +1194,116 @@ if config.Enabled && !processingRuntime.RecoverySecurityReady() {
 
 ---
 
+### Scenario: Backup Asset Lifecycle Control Plane
+
+#### 1. Scope / Trigger
+
+- Trigger: Task HTTP delete/archive, Task-link retention policy settle,
+  derived backfill Expected/Queue, leftover catalog walks, or mutation
+  audits that must carry an HTTP request ID.
+- Applies to `internal/task` archive, `backupasset/runtime` rebuild ports,
+  `backupasset/repository` import/rebuild reconcile, and HTTP handlers that
+  wrap mutation context. `backup_assets.enabled` stays default false.
+  Child 15 / `000071` stay unauthorized.
+
+#### 2. Signatures
+
+- `ArchiveService.Archive(ctx, taskID)` is always-on control plane. It does
+  not read `backup_assets.enabled`.
+- `ExistsLiveByID` is `id = ? AND archived_at IS NULL`. `ExistsByID` remains
+  unfiltered for callers that must still see archived rows.
+- `task` must not import `backupasset/retention` (`retention/task_facade.go`
+  already imports `task`). Use `backupasset.AuditWriter.WriteTx` or a narrow
+  `WriteTx(ctx, *gorm.DB, AuditEventInput)` on `ArchiveDependencies`.
+- Local `WithArchiveActor` / `WithArchiveCorrelationID` copy HTTP identity
+  and `middleware.RequestIDKey`. Do not invent a correlation ID.
+- Derived leftover walks use in-memory keyset cursor + `InspectedLimit`
+  (default 200, max 1000) keyed by catalog generation + recovery point.
+  No `000071`.
+
+#### 3. Contracts
+
+- Before settling Task-link policies, probe `backup_retention_policies` on
+  the **same archive TX** (`sqlite_master` / `pg_tables`). GORM
+  `Migrator.HasTable` opens a second pool connection and deadlocks
+  `MaxOpenConns(1)` fixtures. Missing table: skip settle; archive/unlink
+  still succeed.
+- When the table exists, soft-delete active Task-link policies in the same
+  TX (`status=deleted`, revision bump, `deleted_at`) and write
+  `retention_policy_delete`. Nil/failed audit rolls back task, link, and
+  policy.
+- Create/Update that set `depends_on_task_id` lock involved Task IDs in
+  ascending ID order in the same TX as `ExistsLiveByID`.
+- `ExpectedDescriptors` must not apply `AdmitBackfill`. Empty expected means
+  proven **only** when the leftover walk reached the real catalog end.
+  Budget exhausted with 0 descriptors this page stays unproven (non-empty
+  leftover marker). Queue must never enqueue that marker.
+- Unproven is `(entry_id, capability)`, not the whole catalog row. Walk
+  fingerprint includes sorted advertised names **and** `SecretClassify`.
+  `failed`/`canceled` revision (`count + latest updated_at + id`) clears
+  complete. Bind completeness to the walk-start revision so a cancel behind
+  the cursor cannot bake `complete=true`.
+- Hold create/release and purge plan/execute use the same request-correlation
+  wrapper as policy mutations.
+
+#### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Policy table missing on Task delete | 200 archive/unlink; no 500 `no such table`. |
+| Policy row deleted but audit writer nil/fails | TX rolls back; Task stays live; policy stays active. |
+| Dependency target is archived | Reject create/update; do not use `ExistsByID`. |
+| First leftover page is media-inapplicable | Keep paging under `InspectedLimit`; do not return empty expected. |
+| `SecretClassify` flips on or a job becomes failed/canceled | Reopen complete; rescan under `InspectedLimit`. |
+| HTTP delete has no request ID | Audit has no `correlation_id`; do not invent one. |
+
+#### 5. Good/Base/Bad Cases
+
+- Good: HTTP Task delete AutoMigrates policy+audit in tests, returns 200, and
+  stores one `retention_policy_delete` with the request ID.
+- Base: leftover-heavy catalog with `text.extract` + `image.ocr` advertised
+  walks 200 rows, returns leftover-unproven, resumes from the persisted
+  cursor next tick.
+- Bad: `NOT EXISTS (capability IN advertised)` skipping a whole entry after
+  one sibling job, or `ExpectedDescriptors` calling `AdmitBackfill` so pause
+  looks proven.
+
+#### 6. Tests Required
+
+- Missing policy table archive; HTTP delete 200 + policy settle +
+  correlation ID; audit-failure rollback.
+- Archived-parent create/update/race with shared lock order.
+- InspectedLimit leftover walk; sibling capability; admission-deny expected;
+  SecretClassify reopen; failed/canceled reopen including mid-walk cancel.
+- Hold/purge mutation correlation; operational hold expiry in-TX
+  `hold_release`.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+_ = tx.Find(&policies) // 500 if backup_retention_policies is missing
+expected, _ := rebuildDerivedDescriptors(ctx, req) // applies AdmitBackfill
+if len(expected) == 0 {
+    return false // proven
+}
+```
+
+Correct:
+
+```go
+if !retentionPolicyTableReady(tx) {
+    return nil
+}
+result, err := collectRebuildDerivedDescriptors(ctx, req, false)
+if result.incomplete && len(result.descriptors) == 0 {
+    return unprovenMarker, nil
+}
+```
+
+---
+
 ## Code Review Checklist
 
 - Are route middleware, RBAC permissions, and ownership checks correct?

@@ -329,6 +329,50 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	if hasRoute(routes, http.MethodPost, "/api/v1/backup-repositories/probe") {
 		t.Fatal("standalone backup repository probe route must not be registered")
 	}
+}
+
+func TestBackupLifecycleRoutes(t *testing.T) {
+	routes := NewRouter(Dependencies{}).Routes()
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/v1/backup-retention-policies"},
+		{http.MethodPost, "/api/v1/backup-retention-policies"},
+		{http.MethodPatch, "/api/v1/backup-retention-policies/:id"},
+		{http.MethodDelete, "/api/v1/backup-retention-policies/:id"},
+		{http.MethodPost, "/api/v1/backup-retention-policies/:id/impact"},
+		{http.MethodGet, "/api/v1/recovery-points/:id/holds"},
+		{http.MethodPost, "/api/v1/recovery-points/:id/holds"},
+		{http.MethodPost, "/api/v1/recovery-points/:id/holds/:holdId/release"},
+		{http.MethodPost, "/api/v1/backup-repositories/:id/import-scans"},
+		{http.MethodGet, "/api/v1/backup-repositories/:id/import-candidates"},
+		{http.MethodPost, "/api/v1/backup-repositories/:id/import-candidates/:candidateId/reviews"},
+		{http.MethodPost, "/api/v1/backup-repositories/:id/rebuilds"},
+		{http.MethodPost, "/api/v1/backup-repositories/:id/purge-preview"},
+		{http.MethodPost, "/api/v1/backup-repositories/:id/purge-plans"},
+		{http.MethodPost, "/api/v1/backup-repositories/:id/purges"},
+	} {
+		if !hasRoute(routes, route.method, route.path) {
+			t.Fatalf("backup lifecycle route missing: %s %s", route.method, route.path)
+		}
+	}
+	if hasRoute(routes, http.MethodPost, "/api/v1/backup-repositories/probe") {
+		t.Fatal("standalone backup repository probe route must not be registered")
+	}
+	source, err := os.ReadFile("router.go")
+	if err != nil {
+		t.Fatalf("read router.go: %v", err)
+	}
+	combined := string(source)
+	for _, action := range []string{
+		"auth.StepUpActionRetentionHoldRelease",
+		"auth.StepUpActionRepositoryPurge",
+	} {
+		if !strings.Contains(combined, action) {
+			t.Fatalf("lifecycle routes missing explicit %s", action)
+		}
+	}
 	deprecatedHookTemplatesPath := "/api/v1/" + "hook" + "-templates"
 	if hasRoute(routes, http.MethodGet, deprecatedHookTemplatesPath) {
 		t.Fatalf("不应继续注册已废弃的 hook templates 接口")

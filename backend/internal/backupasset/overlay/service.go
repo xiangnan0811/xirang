@@ -191,6 +191,11 @@ func (service *Service) CreateSavedSearch(ctx context.Context, actor Actor, requ
 	fingerprint := digestStrings("saved-search", string(canonical.JSON))
 	var result SavedSearch
 	err = service.mutation(ctx, func(tx *gorm.DB) error {
+		if canonical.Request.Scope.Mode == assetsearch.SearchScopeExactPoints {
+			if err := validatePointLifecycleAdmissionTx(ctx, tx, canonical.Request.Scope.RecoveryPointIDs); err != nil {
+				return err
+			}
+		}
 		replay, found, err := service.loadIdempotency(tx, actor.UserID, actionSavedSearchCreate, request.IdempotencyKey, fingerprint)
 		if err != nil {
 			return err
@@ -309,6 +314,11 @@ func (service *Service) UpdateSavedSearch(
 	fingerprint := digestStrings("saved-search-update", id, fmt.Sprint(request.ExpectedVersion), string(canonical.JSON))
 	var result SavedSearch
 	err = service.mutation(ctx, func(tx *gorm.DB) error {
+		if canonical.Request.Scope.Mode == assetsearch.SearchScopeExactPoints {
+			if err := validatePointLifecycleAdmissionTx(ctx, tx, canonical.Request.Scope.RecoveryPointIDs); err != nil {
+				return err
+			}
+		}
 		replay, found, err := service.loadIdempotency(tx, actor.UserID, actionSavedSearchUpdate, request.IdempotencyKey, fingerprint)
 		if err != nil {
 			return err
@@ -490,6 +500,9 @@ func (service *Service) AddFavorite(ctx context.Context, actor Actor, request Ad
 	fingerprint := digestStrings("favorite", request.Ref.RecoveryPointID, request.Ref.EntryID, request.Label)
 	var result Favorite
 	err := service.mutation(ctx, func(tx *gorm.DB) error {
+		if err := validatePointLifecycleAdmissionTx(ctx, tx, []string{request.Ref.RecoveryPointID}); err != nil {
+			return err
+		}
 		if err := service.assets.AuthorizeAsset(ctx, tx, actor, request.Ref); err != nil {
 			return err
 		}
@@ -565,6 +578,13 @@ func (service *Service) AddFavorites(ctx context.Context, actor Actor, requests 
 	}
 	var result []Favorite
 	err := service.mutation(ctx, func(tx *gorm.DB) error {
+		pointIDs := make([]string, 0, len(unique))
+		for _, request := range unique {
+			pointIDs = append(pointIDs, request.Ref.RecoveryPointID)
+		}
+		if err := validatePointLifecycleAdmissionTx(ctx, tx, pointIDs); err != nil {
+			return err
+		}
 		for _, request := range unique {
 			if err := service.assets.AuthorizeAsset(ctx, tx, actor, request.Ref); err != nil {
 				return err
@@ -904,6 +924,9 @@ func (service *Service) AssignTag(ctx context.Context, actor Actor, tagID string
 	fingerprint := digestStrings("tag-assignment", tagID, ref.RecoveryPointID, ref.EntryID)
 	var result TagAssignment
 	err = service.mutation(ctx, func(tx *gorm.DB) error {
+		if err := validatePointLifecycleAdmissionTx(ctx, tx, []string{ref.RecoveryPointID}); err != nil {
+			return err
+		}
 		if err := service.assets.AuthorizeAsset(ctx, tx, actor, ref); err != nil {
 			return err
 		}
@@ -1165,6 +1188,9 @@ func (service *Service) RecordRecent(ctx context.Context, actor Actor, ref backu
 	}
 	var result RecentAccess
 	err := service.mutation(ctx, func(tx *gorm.DB) error {
+		if err := validatePointLifecycleAdmissionTx(ctx, tx, []string{ref.RecoveryPointID}); err != nil {
+			return err
+		}
 		if err := service.assets.AuthorizeAsset(ctx, tx, actor, ref); err != nil {
 			return err
 		}

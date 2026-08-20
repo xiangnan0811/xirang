@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/credentialaudit"
+	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	gormrepo "xirang/backend/internal/repository/gorm"
 	"xirang/backend/internal/sshutil"
@@ -33,6 +35,7 @@ type TaskHandler struct {
 	db               *gorm.DB
 	runner           TaskRunner
 	svc              *task.TaskApiService
+	archive          *task.ArchiveService
 	jwtManager       *auth.JWTManager
 	rsyncVersioning  TaskRsyncVersioningService
 	rcloneVersioning TaskRcloneVersioningService
@@ -57,7 +60,46 @@ func (h *TaskHandler) service() *task.TaskApiService {
 	nodeRepo := gormrepo.NewNodeRepository(h.db)
 	policyRepo := gormrepo.NewPolicyRepository(h.db)
 	taskRepo := gormrepo.NewTaskRepository(h.db)
-	return task.NewTaskApiService(taskRepo, nodeRepo, policyRepo, h.runner)
+	return task.NewTaskApiService(taskRepo, nodeRepo, policyRepo, h.runner).WithArchiveService(h.archiveService())
+}
+
+// WithArchiveService injects the Task archive/unlink owner used by HTTP delete.
+func (h *TaskHandler) WithArchiveService(archive *task.ArchiveService) *TaskHandler {
+	h.archive = archive
+	return h
+}
+
+func (h *TaskHandler) archiveService() *task.ArchiveService {
+	if h.archive != nil {
+		return h.archive
+	}
+	return task.NewArchiveService(task.ArchiveDependencies{
+		DB: h.db,
+		RemoveSchedule: func(taskID uint) error {
+			if h.runner == nil {
+				return nil
+			}
+			h.runner.RemoveSchedule(taskID)
+			return nil
+		},
+		WriteTx: task.NewArchiveAuditWriteTx(h.db, nil),
+	})
+}
+
+func archiveRequestContext(c *gin.Context) context.Context {
+	ctx := c.Request.Context()
+	if requestID := strings.TrimSpace(c.GetString(middleware.RequestIDKey)); requestID != "" {
+		ctx = task.WithArchiveCorrelationID(ctx, requestID)
+	}
+	actor := backupasset.AuditActor{
+		UserID:   middleware.CurrentUserID(c),
+		Username: c.GetString(middleware.CtxUsername),
+		Role:     middleware.CurrentRole(c),
+	}
+	if actor.UserID == 0 && strings.TrimSpace(actor.Username) == "" && strings.TrimSpace(actor.Role) == "" {
+		return ctx
+	}
+	return task.WithArchiveActor(ctx, actor)
 }
 
 func (h *TaskHandler) WithJWTManager(jwtManager *auth.JWTManager) *TaskHandler {
@@ -385,6 +427,10 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		CronSpec:        req.CronSpec,
 	})
 	if err != nil {
+		if errors.Is(err, task.ErrTaskArchived) {
+			respondConflict(c, "任务已归档，无法修改")
+			return
+		}
 		if task.IsTaskValidationError(err) {
 			respondBadRequest(c, err.Error())
 		} else {
@@ -396,8 +442,8 @@ func (h *TaskHandler) Update(c *gin.Context) {
 }
 
 // Delete godoc
-// @Summary      删除任务
-// @Description  删除指定任务（有依赖关系时拒绝）
+// @Summary      归档任务
+// @Description  归档指定任务并解除仓库链接（有活依赖时拒绝）；不删除 Provider 字节
 // @Tags         tasks
 // @Security     Bearer
 // @Produce      json
@@ -413,24 +459,20 @@ func (h *TaskHandler) Delete(c *gin.Context) {
 	if !ok {
 		return
 	}
-	// 防止删除被其他任务依赖的任务
-	var depCount int64
-	if err := h.db.Model(&model.Task{}).Where("depends_on_task_id = ?", id).Count(&depCount).Error; err != nil {
+	result, err := h.archiveService().Archive(archiveRequestContext(c), id)
+	if err != nil {
+		if errors.Is(err, task.ErrTaskArchiveNotFound) {
+			respondNotFound(c, "任务不存在")
+			return
+		}
+		if errors.Is(err, task.ErrTaskArchiveHasDependents) {
+			respondConflict(c, "该任务被其他任务依赖，请先解除依赖关系再删除")
+			return
+		}
 		respondInternalError(c, err)
 		return
 	}
-	if depCount > 0 {
-		respondConflict(c, "该任务被其他任务依赖，请先解除依赖关系再删除")
-		return
-	}
-	if err := h.db.Delete(&model.Task{}, id).Error; err != nil {
-		respondInternalError(c, err)
-		return
-	}
-	if h.runner != nil {
-		h.runner.RemoveSchedule(id)
-	}
-	respondMessage(c, "deleted")
+	respondOK(c, result)
 }
 
 // Trigger godoc
@@ -542,6 +584,7 @@ func (h *TaskHandler) Pause(c *gin.Context) {
 // @Success      200  {object}  handlers.Response
 // @Failure      400  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
+// @Failure      409  {object}  handlers.Response
 // @Router       /tasks/{id}/resume [post]
 func (h *TaskHandler) Resume(c *gin.Context) {
 	id, ok := parseID(c, "id")
@@ -549,6 +592,10 @@ func (h *TaskHandler) Resume(c *gin.Context) {
 		return
 	}
 	if err := h.runner.Resume(id); err != nil {
+		if errors.Is(err, task.ErrTaskArchived) {
+			respondConflict(c, "任务已归档，无法恢复")
+			return
+		}
 		respondBadRequest(c, err.Error())
 		return
 	}
@@ -615,6 +662,10 @@ func (h *TaskHandler) Restore(c *gin.Context) {
 				"custom_target": strings.TrimSpace(req.TargetPath) != "",
 			},
 		})
+		if errors.Is(err, task.ErrTaskArchived) {
+			respondConflict(c, "任务已归档，无法恢复")
+			return
+		}
 		respondBadRequest(c, err.Error())
 		return
 	}

@@ -22,6 +22,8 @@ import (
 
 const catalogBuildOwnerPrefix = "catalog:"
 
+const maxCatalogBuildTeardown = 30 * time.Second
+
 type PointReadRequest struct {
 	RepositoryID    string
 	RecoveryPointID string
@@ -76,6 +78,7 @@ type Indexer struct {
 type activeCatalogBuild struct {
 	fence  backupasset.LeaseFence
 	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 type BuildRequest struct {
@@ -139,10 +142,49 @@ func (indexer *Indexer) Build(ctx context.Context, request BuildRequest) (result
 	if err != nil {
 		return model.CatalogGeneration{}, err
 	}
-	release := true
+	registered := false
+	var (
+		buildCancel       context.CancelFunc
+		stopHeartbeat     func()
+		renewalErrors     chan error
+		generation        model.CatalogGeneration
+		generationSettled bool
+	)
 	defer func() {
-		if release {
-			_ = indexer.lease.Release(context.Background(), lease.Fence)
+		if stopHeartbeat != nil {
+			stopHeartbeat()
+		}
+		if buildCancel != nil {
+			buildCancel()
+		}
+		if renewalErrors != nil {
+			select {
+			case renewalErr := <-renewalErrors:
+				if renewalErr != nil && (buildErr == nil || errors.Is(buildErr, context.Canceled) || errors.Is(buildErr, context.DeadlineExceeded)) {
+					buildErr = renewalErr
+				}
+			default:
+			}
+		}
+
+		teardownCtx, cancelTeardown := indexer.newBuildTeardownContext()
+		defer cancelTeardown()
+		if registered && generation.ID != "" && !generationSettled {
+			state, code := classifyCatalogBuildFailure(buildErr)
+			if err := indexer.markGenerationFailure(teardownCtx, generation.ID, lease.Fence, state, code); err != nil {
+				evidenceErr := fmt.Errorf("%w: Catalog failure evidence unavailable", backupasset.ErrInvalidState)
+				buildErr = errors.Join(buildErr, evidenceErr)
+			}
+		}
+		if err := indexer.lease.Release(teardownCtx, lease.Fence); err != nil {
+			if buildErr == nil {
+				buildErr = err
+			} else {
+				buildErr = errors.Join(buildErr, fmt.Errorf("%w: Catalog lease release failed", backupasset.ErrInvalidState))
+			}
+		}
+		if registered {
+			indexer.unregisterActiveBuild(request.RecoveryPointID, lease.Fence)
 		}
 	}()
 
@@ -155,37 +197,17 @@ func (indexer *Indexer) Build(ctx context.Context, request BuildRequest) (result
 		return model.CatalogGeneration{}, fmt.Errorf("%w: Catalog build deadline reached", backupasset.ErrLeaseDeadlineExceeded)
 	}
 	buildContext, cancel := context.WithTimeout(ctx, remaining)
+	buildCancel = cancel
 	if err := indexer.registerActiveBuild(request.RecoveryPointID, lease.Fence, cancel); err != nil {
-		cancel()
 		return model.CatalogGeneration{}, err
 	}
-	renewalErrors := make(chan error, 1)
-	stopHeartbeat := indexer.startLeaseHeartbeat(buildContext, lease.Fence, cancel, renewalErrors)
-	defer func() {
-		stopHeartbeat()
-		indexer.unregisterActiveBuild(request.RecoveryPointID, lease.Fence)
-		cancel()
-	}()
-	generation, err := indexer.beginGeneration(buildContext, request, frozen, lease.Fence)
+	registered = true
+	renewalErrors = make(chan error, 1)
+	stopHeartbeat = indexer.startLeaseHeartbeat(buildContext, lease.Fence, cancel, renewalErrors)
+	generation, err = indexer.beginGeneration(buildContext, request, frozen, lease.Fence)
 	if err != nil {
 		return model.CatalogGeneration{}, err
 	}
-	failed := true
-	defer func() {
-		if failed {
-			state, code := classifyCatalogBuildFailure(buildErr)
-			_ = indexer.markGenerationFailure(context.Background(), generation.ID, lease.Fence, state, code)
-		}
-	}()
-	defer func() {
-		select {
-		case renewalErr := <-renewalErrors:
-			if renewalErr != nil && (buildErr == nil || errors.Is(buildErr, context.Canceled) || errors.Is(buildErr, context.DeadlineExceeded)) {
-				buildErr = renewalErr
-			}
-		default:
-		}
-	}()
 
 	session, err := indexer.factory.OpenCatalogRead(buildContext, PointReadRequest{
 		RepositoryID: request.RepositoryID, RecoveryPointID: request.RecoveryPointID,
@@ -281,12 +303,7 @@ func (indexer *Indexer) Build(ctx context.Context, request BuildRequest) (result
 	if err != nil {
 		return generation, err
 	}
-	stopHeartbeat()
-	if err := indexer.lease.Release(buildContext, lease.Fence); err != nil {
-		return activated, err
-	}
-	release = false
-	failed = false
+	generationSettled = true
 	return activated, nil
 }
 
@@ -352,6 +369,9 @@ func (indexer *Indexer) beginGeneration(
 ) (model.CatalogGeneration, error) {
 	var generation model.CatalogGeneration
 	err := indexer.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, frozen.point.ID); err != nil {
+			return err
+		}
 		var point model.RecoveryPoint
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND repository_id = ?", frozen.point.ID, frozen.repository.ID).
 			First(&point).Error; err != nil {
@@ -471,6 +491,9 @@ func (indexer *Indexer) activate(
 ) (model.CatalogGeneration, error) {
 	var activated model.CatalogGeneration
 	err := indexer.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, frozen.point.ID); err != nil {
+			return err
+		}
 		var point model.RecoveryPoint
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&point, "id = ?", frozen.point.ID).Error; err != nil {
 			return fmt.Errorf("lock Catalog activation point: %w", err)
@@ -748,7 +771,7 @@ func (indexer *Indexer) registerActiveBuild(pointID string, fence backupasset.Le
 	if _, exists := indexer.attempts[pointID]; exists {
 		return fmt.Errorf("%w: Catalog point build already active", backupasset.ErrLeaseHeld)
 	}
-	indexer.attempts[pointID] = activeCatalogBuild{fence: fence, cancel: cancel}
+	indexer.attempts[pointID] = activeCatalogBuild{fence: fence, cancel: cancel, done: make(chan struct{})}
 	return nil
 }
 
@@ -756,8 +779,31 @@ func (indexer *Indexer) unregisterActiveBuild(pointID string, fence backupasset.
 	indexer.attemptsMu.Lock()
 	if attempt, exists := indexer.attempts[pointID]; exists && attempt.fence.FenceToken == fence.FenceToken {
 		delete(indexer.attempts, pointID)
+		close(attempt.done)
 	}
 	indexer.attemptsMu.Unlock()
+}
+
+func (indexer *Indexer) cancelAndJoinActiveBuild(ctx context.Context, pointID string) error {
+	if indexer == nil {
+		return fmt.Errorf("%w: Catalog Indexer is unavailable", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	indexer.attemptsMu.Lock()
+	attempt, exists := indexer.attempts[pointID]
+	indexer.attemptsMu.Unlock()
+	if !exists {
+		return nil
+	}
+	attempt.cancel()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-attempt.done:
+		return nil
+	}
 }
 
 func (indexer *Indexer) startLeaseHeartbeat(
@@ -783,7 +829,6 @@ func (indexer *Indexer) startLeaseHeartbeat(
 			case <-stop:
 				return
 			case <-ctx.Done():
-				_ = indexer.lease.Release(context.Background(), fence)
 				return
 			case <-timer.C:
 				if !renewable {
@@ -792,11 +837,10 @@ func (indexer *Indexer) startLeaseHeartbeat(
 				}
 				if _, err := renewer.Renew(ctx, fence); err != nil {
 					select {
-					case renewalErrors <- fmt.Errorf("%w: Catalog lease heartbeat: %v", backupasset.ErrLeaseFenceLost, err):
+					case renewalErrors <- fmt.Errorf("%w: Catalog lease heartbeat failed", backupasset.ErrLeaseFenceLost):
 					default:
 					}
 					cancel()
-					_ = indexer.lease.Release(context.Background(), fence)
 					return
 				}
 				timer.Reset(indexer.config.HeartbeatInterval)
@@ -806,8 +850,17 @@ func (indexer *Indexer) startLeaseHeartbeat(
 	return stopHeartbeat
 }
 
-// RevokeActiveBuilds cancels every in-process attempt and durably releases its
-// current point fence before the caller waits for Provider sessions to join.
+func (indexer *Indexer) newBuildTeardownContext() (context.Context, context.CancelFunc) {
+	timeout := indexer.config.BuildTimeout
+	if timeout > maxCatalogBuildTeardown {
+		timeout = maxCatalogBuildTeardown
+	}
+	return context.WithTimeout(context.Background(), timeout)
+}
+
+// RevokeActiveBuilds cancels every in-process attempt and joins its unified
+// teardown. Build remains the sole owner of durable failure evidence and exact
+// lease release, so shutdown cannot release a fence ahead of Provider join.
 func (indexer *Indexer) RevokeActiveBuilds(ctx context.Context) error {
 	if indexer == nil || indexer.lease == nil {
 		return nil
@@ -824,14 +877,14 @@ func (indexer *Indexer) RevokeActiveBuilds(ctx context.Context) error {
 	for _, attempt := range attempts {
 		attempt.cancel()
 	}
-	var firstErr error
 	for _, attempt := range attempts {
-		if err := indexer.lease.Release(ctx, attempt.fence); err != nil &&
-			!errors.Is(err, backupasset.ErrLeaseFenceLost) && !errors.Is(err, backupasset.ErrLeaseDeadlineExceeded) && firstErr == nil {
-			firstErr = err
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-attempt.done:
 		}
 	}
-	return firstErr
+	return nil
 }
 
 // ListCandidates derives retry eligibility from durable point/generation facts.

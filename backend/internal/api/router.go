@@ -91,6 +91,22 @@ func (featureDisabledBackupRepositoryService) Disconnect(_ context.Context, _ st
 	return backuprepository.ConnectResult{}, featureDisabledBackupRepositoryError(requestContext)
 }
 
+func (featureDisabledBackupRepositoryService) DiscoverImportCandidates(_ context.Context, _ string, _ backuprepository.ImportDiscoveryRequest, requestContext backuprepository.RequestContext) (backuprepository.ImportDiscoveryResult, error) {
+	return backuprepository.ImportDiscoveryResult{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledBackupRepositoryService) ListImportCandidates(_ context.Context, _ string, _ backuprepository.ImportCandidateListRequest, _ backuprepository.VisibilityScope, requestContext backuprepository.RequestContext) (backuprepository.ImportCandidatePage, error) {
+	return backuprepository.ImportCandidatePage{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledBackupRepositoryService) ReviewImportCandidate(_ context.Context, _, _ string, _ backuprepository.ImportReviewRequest, requestContext backuprepository.RequestContext) (backuprepository.ImportCandidateView, error) {
+	return backuprepository.ImportCandidateView{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
+func (featureDisabledBackupRepositoryService) RebuildAcceptedImports(_ context.Context, _ string, _ backuprepository.RebuildRequest, requestContext backuprepository.RequestContext) (backuprepository.RebuildResult, error) {
+	return backuprepository.RebuildResult{}, featureDisabledBackupRepositoryError(requestContext)
+}
+
 func featureDisabledBackupRepositoryError(requestContext backuprepository.RequestContext) error {
 	return &backuprepository.CapabilityError{
 		Reason:        backupasset.CapabilityReason{Code: backupasset.CapabilityFeatureDisabled},
@@ -338,6 +354,17 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	storageGuideHandler := handlers.NewStorageGuideHandler()
 	wsHandler := handlers.NewWSHandler(dep.Hub, dep.JWTManager, dep.DB)
 	terminalHandler := handlers.NewTerminalHandler(dep.DB, dep.JWTManager, dep.Hub.CheckOrigin)
+	var backupRetentionPolicies handlers.BackupRetentionPolicyService
+	var backupRetentionHolds handlers.BackupRetentionHoldService
+	var backupRetentionPurge handlers.BackupRetentionPurgeService
+	if dep.BackupAssets != nil {
+		backupRetentionPolicies = handlers.NewRetentionPolicyHTTPService(dep.BackupAssets.RetentionPolicies())
+		backupRetentionHolds = handlers.NewRetentionHoldHTTPService(dep.BackupAssets.RetentionHolds())
+		backupRetentionPurge = handlers.NewRetentionPurgeHTTPService(dep.BackupAssets.RetentionPurge())
+	}
+	backupRetentionHandler := handlers.NewBackupRetentionHandler(
+		backupRetentionPolicies, backupRetentionHolds, backupRetentionPurge, backupAssetAuditSink, backupAssetHandlerConfigSource,
+	)
 	backupRepositoryHandler := handlers.NewBackupRepositoryHandler(backupRepositoryService)
 	backupAssetHandler := handlers.NewBackupAssetHandler(backupAssetCatalogService, backupAssetAuditSink)
 	backupAssetSearchHandler := handlers.NewBackupAssetSearchHandler(
@@ -520,6 +547,33 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.POST("/asset-recent/clear", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetOverlayHandler.ClearRecent)
 	secured.POST("/backup-repositories/:id/reconcile", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), backupRepositoryHandler.Reconcile)
 	secured.POST("/backup-repositories/:id/disconnect", middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), backupRepositoryHandler.Disconnect)
+	lifecycleManage := []gin.HandlerFunc{
+		middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), middleware.RequireRole("admin"),
+	}
+	lifecyclePurge := []gin.HandlerFunc{
+		middleware.RBAC(backupasset.PermissionBackupRepositoriesPurge), middleware.RequireRole("admin"),
+	}
+	secured.POST("/backup-repositories/:id/import-scans", append(lifecycleManage, backupRepositoryHandler.ImportScan)...)
+	secured.GET("/backup-repositories/:id/import-candidates", append(lifecycleManage, backupRepositoryHandler.ListImportCandidates)...)
+	secured.POST("/backup-repositories/:id/import-candidates/:candidateId/reviews", append(lifecycleManage, backupRepositoryHandler.ReviewImportCandidate)...)
+	secured.POST("/backup-repositories/:id/rebuilds", append(lifecycleManage, backupRepositoryHandler.Rebuild)...)
+	secured.GET("/backup-retention-policies", append(lifecycleManage, backupRetentionHandler.ListPolicies)...)
+	secured.POST("/backup-retention-policies", append(lifecycleManage, backupRetentionHandler.CreatePolicy)...)
+	secured.PATCH("/backup-retention-policies/:id", append(lifecycleManage, backupRetentionHandler.UpdatePolicy)...)
+	secured.DELETE("/backup-retention-policies/:id", append(lifecycleManage, backupRetentionHandler.DeletePolicy)...)
+	secured.POST("/backup-retention-policies/:id/impact", append(lifecycleManage, backupRetentionHandler.PreviewImpact)...)
+	secured.GET("/recovery-points/:id/holds", append(lifecycleManage, backupRetentionHandler.ListHolds)...)
+	secured.POST("/recovery-points/:id/holds", append(lifecycleManage, backupRetentionHandler.CreateHold)...)
+	secured.POST("/recovery-points/:id/holds/:holdId/release", append(lifecycleManage,
+		handlers.RequireStepUp(dep.DB, dep.JWTManager, auth.StepUpActionRetentionHoldRelease, "retention_hold_release", "hold_release"),
+		backupRetentionHandler.ReleaseHold,
+	)...)
+	secured.POST("/backup-repositories/:id/purge-preview", append(lifecyclePurge, backupRetentionHandler.PreviewPurge)...)
+	secured.POST("/backup-repositories/:id/purge-plans", append(lifecyclePurge, backupRetentionHandler.CreatePurgePlan)...)
+	secured.POST("/backup-repositories/:id/purges", append(lifecyclePurge,
+		handlers.RequireStepUp(dep.DB, dep.JWTManager, auth.StepUpActionRepositoryPurge, "repository_purge", "repository_purge"),
+		backupRetentionHandler.ExecutePurge,
+	)...)
 	secured.GET("/users", middleware.ETag(), middleware.RBAC("users:manage"), userHandler.List)
 	secured.POST("/users", middleware.RBAC("users:manage"), userHandler.Create)
 	secured.PUT("/users/:id", middleware.RBAC("users:manage"), userHandler.Update)

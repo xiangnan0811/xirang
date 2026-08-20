@@ -1,0 +1,15 @@
+{"file":".trellis/spec/backend/index.md","reason":"Route backend implementation to the authoritative package guidelines."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Apply paired SQLite/PostgreSQL migration and rollback conventions for 000070."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Keep lifecycle domain errors typed, wrapped, and mapped without leaking internals."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Follow backend TDD, race, integration, and failure-path quality requirements."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Use structured, redacted lifecycle and retention logging."}
+{"file":".trellis/spec/frontend/index.md","reason":"Route frontend implementation to the authoritative UI guidelines."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Build the repository-management and retention panels from existing UI primitives."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Keep raw lifecycle DTOs at the API boundary and map them to typed domain values."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Apply frontend test, lint, build, and boundary-quality requirements."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Preserve keyboard, focus, naming, and status-announcement semantics for destructive controls."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Keep implementation and delivery on the dedicated branch with PR and CI evidence."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse current reconnect, lease, audit, overlay, and result-cleanup ownership contracts."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace lifecycle state through migrations, owners, API, UI, audit, and recovery."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Keep disaster-recovery and lifecycle documentation aligned with verified behavior."}
+{"file":".trellis/tasks/08-17-backup-assets-lifecycle-reconnect/research/current-main-evidence.md","reason":"Use the focused live rebaseline instead of the parent task's drifted historical manifest."}

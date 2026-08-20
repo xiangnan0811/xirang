@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -263,7 +264,7 @@ func TestCacheRootFailsClosedForForbiddenSymlinkSourceOverlapAndUnverifiedMount(
 			}
 			status := cache.Status()
 			if status.DiskEnabled || status.Reason != testCase.want {
-				t.Fatalf("cache status=%+v", status)
+				t.Fatalf("cache status disk_enabled=%v reason=%q", status.DiskEnabled, status.Reason)
 			}
 			if err := cache.Shutdown(context.Background()); err != nil {
 				t.Fatal(err)
@@ -304,7 +305,7 @@ func TestCacheRootRejectsReplacementBetweenValidationAndOpen(t *testing.T) {
 	defer func() { _ = cache.Shutdown(context.Background()) }()
 
 	if status := cache.Status(); status.DiskEnabled || status.Reason != CacheReasonRootUnverified {
-		t.Fatalf("replaced cache root status=%+v", status)
+		t.Fatalf("replaced cache root disk_enabled=%v reason=%q", status.DiskEnabled, status.Reason)
 	}
 	payload, err := os.ReadFile(sentinel)
 	if err != nil || string(payload) != "external-data" {
@@ -399,7 +400,7 @@ func TestCacheRootStartupDeletesRegularOrphansAndRejectsSpecialEntriesWithoutFol
 		t.Fatal(err)
 	}
 	if status := cache.Status(); status.DiskEnabled || status.Reason != CacheReasonUnsafeRoot {
-		t.Fatalf("special-entry status=%+v", status)
+		t.Fatalf("special-entry disk_enabled=%v reason=%q", status.DiskEnabled, status.Reason)
 	}
 	payload, err := os.ReadFile(target)
 	if err != nil || string(payload) != "do-not-touch" {
@@ -428,7 +429,7 @@ func TestCacheRootStartupDeletesRegularOrphansAndRejectsSpecialEntriesWithoutFol
 		t.Fatal(err)
 	}
 	if status := cache.Status(); status.DiskEnabled {
-		t.Fatalf("symlink lock file enabled disk cache: %+v", status)
+		t.Fatalf("symlink lock file enabled disk cache: reason=%q", status.Reason)
 	}
 	if payload, readErr := os.ReadFile(lockTarget); readErr != nil || string(payload) != "do-not-open-through-symlink" {
 		t.Fatalf("lock symlink target changed: %q err=%v", payload, readErr)
@@ -454,7 +455,8 @@ func TestCacheMaterializesBoundedMemoryAndPartitionsIdentityByOwner(t *testing.T
 	info, err := cache.Materialize(context.Background(), object, source)
 	if err != nil || info.Tier != CacheTierMemory || !info.RangeCapable || info.ProviderBytes != object.Size ||
 		source.readerCalls != 1 || source.closeCalls != 1 {
-		t.Fatalf("memory materialization=%+v source=%+v err=%v", info, source, err)
+		t.Fatalf("memory materialization tier=%q range=%v provider_bytes=%d reader_calls=%d close_calls=%d err=%v",
+			info.Tier, info.RangeCapable, info.ProviderBytes, source.readerCalls, source.closeCalls, err)
 	}
 	lease, err := cache.OpenRange(object, 5, 7)
 	if err != nil {
@@ -474,7 +476,8 @@ func TestCacheMaterializesBoundedMemoryAndPartitionsIdentityByOwner(t *testing.T
 		t.Fatal(err)
 	}
 	if hit.ProviderBytes != 0 || hitSource.readerCalls != 0 || hitSource.closeCalls != 1 {
-		t.Fatalf("cache hit=%+v touched source reader: %+v", hit, hitSource)
+		t.Fatalf("cache hit provider_bytes=%d range=%v source_reader_calls=%d source_close_calls=%d",
+			hit.ProviderBytes, hit.RangeCapable, hitSource.readerCalls, hitSource.closeCalls)
 	}
 	otherOwner := object
 	otherOwner.OwnerUserID++
@@ -592,7 +595,7 @@ func TestCacheDiskChunksAreAuthenticatedOpaqueAndRangeReadableOnlyAfterCommit(t 
 	source := newCacheSourceFake(plaintext, object)
 	info, err := cache.Materialize(context.Background(), object, source)
 	if err != nil || info.Tier != CacheTierDisk || !info.RangeCapable {
-		t.Fatalf("disk materialization=%+v err=%v", info, err)
+		t.Fatalf("disk materialization tier=%q range=%v provider_bytes=%d err=%v", info.Tier, info.RangeCapable, info.ProviderBytes, err)
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -671,7 +674,7 @@ func TestCacheReservesQuotaBeforeSourceAndActiveLeaseBlocksEviction(t *testing.T
 		t.Fatalf("user quota error=%v", err)
 	}
 	if blockedSource.readerCalls != 0 || blockedSource.closeCalls != 1 {
-		t.Fatalf("quota rejection touched source bytes: %+v", blockedSource)
+		t.Fatalf("quota rejection source reader_calls=%d close_calls=%d", blockedSource.readerCalls, blockedSource.closeCalls)
 	}
 	lease, err := cache.OpenRange(first, 0, 1)
 	if err != nil {
@@ -688,6 +691,384 @@ func TestCacheReservesQuotaBeforeSourceAndActiveLeaseBlocksEviction(t *testing.T
 	}
 	if _, err := cache.Materialize(context.Background(), second, blockedSource); err != nil {
 		t.Fatalf("quota was not released after eviction: %v", err)
+	}
+}
+
+func TestCacheEvictRecoveryPointBoundedZeroProofAndBusyFailClosed(t *testing.T) {
+	type recoveryPointEvictor interface {
+		EvictRecoveryPoint(context.Context, string, int) (int, bool, error)
+	}
+
+	root := filepath.Join(t.TempDir(), "cache")
+	config := testCacheConfig(root)
+	config.MemoryObjectBytes = 8
+	cache := newDiskCacheForTest(t, config)
+	t.Cleanup(func() { _ = cache.Shutdown(context.Background()) })
+	evictor, ok := any(cache).(recoveryPointEvictor)
+	if !ok {
+		t.Fatal("authenticated cache has no bounded recovery-point eviction contract")
+	}
+
+	memoryObject := testCacheObject(4)
+	diskObject := testCacheObject(16)
+	diskObject.ContentFingerprint = "content-disk"
+	otherPointObject := testCacheObject(4)
+	otherPointObject.Ref.RecoveryPointID = strings.Repeat("d", 32)
+	otherPointObject.ContentFingerprint = "content-other"
+	for _, fixture := range []struct {
+		object  CacheObject
+		payload string
+	}{
+		{object: memoryObject, payload: "memo"},
+		{object: diskObject, payload: "disk-object-data"},
+		{object: otherPointObject, payload: "stay"},
+	} {
+		if _, err := cache.Materialize(context.Background(), fixture.object, newCacheSourceFake([]byte(fixture.payload), fixture.object)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	diskEntry := cacheEntryForTest(t, cache, diskObject)
+	diskChunkNames := make([]string, 0, len(diskEntry.chunks))
+	for _, chunk := range diskEntry.chunks {
+		diskChunkNames = append(diskChunkNames, chunk.name)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if evicted, remaining, err := evictor.EvictRecoveryPoint(canceled, memoryObject.Ref.RecoveryPointID, 1); !errors.Is(err, context.Canceled) || evicted != 0 || remaining {
+		t.Fatalf("canceled eviction evicted=%d remaining=%v err=%v", evicted, remaining, err)
+	}
+	if !cacheHasEntryForTest(cache, memoryObject) || !cacheHasEntryForTest(cache, diskObject) {
+		t.Fatal("canceled eviction removed exact-point entries")
+	}
+	if evicted, remaining, err := evictor.EvictRecoveryPoint(context.Background(), memoryObject.Ref.RecoveryPointID, 0); !errors.Is(err, ErrInvalidCacheBinding) || evicted != 0 || remaining {
+		t.Fatalf("invalid batch eviction evicted=%d remaining=%v err=%v", evicted, remaining, err)
+	}
+
+	lease, err := cache.OpenRange(memoryObject, 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evicted, remaining, err := evictor.EvictRecoveryPoint(context.Background(), memoryObject.Ref.RecoveryPointID, 1); !errors.Is(err, ErrCacheBusy) || evicted != 0 || remaining {
+		t.Fatalf("leased eviction evicted=%d remaining=%v err=%v", evicted, remaining, err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	pendingObject := memoryObject
+	pendingObject.ContentFingerprint = "content-pending"
+	pending, _, err := cache.BeginMaterialization(pendingObject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evicted, remaining, err := evictor.EvictRecoveryPoint(context.Background(), memoryObject.Ref.RecoveryPointID, 1); !errors.Is(err, ErrCacheBusy) || evicted != 0 || remaining {
+		t.Fatalf("pending-write eviction evicted=%d remaining=%v err=%v", evicted, remaining, err)
+	}
+	if err := pending.Abort(); err != nil {
+		t.Fatal(err)
+	}
+
+	if evicted, remaining, err := evictor.EvictRecoveryPoint(context.Background(), memoryObject.Ref.RecoveryPointID, 1); err != nil || evicted != 1 || !remaining {
+		t.Fatalf("first bounded eviction evicted=%d remaining=%v err=%v", evicted, remaining, err)
+	}
+	if !cacheHasEntryForTest(cache, otherPointObject) {
+		t.Fatal("bounded eviction removed another point")
+	}
+	if evicted, remaining, err := evictor.EvictRecoveryPoint(context.Background(), memoryObject.Ref.RecoveryPointID, 1); err != nil || evicted != 1 || remaining {
+		t.Fatalf("second bounded eviction evicted=%d remaining=%v err=%v", evicted, remaining, err)
+	}
+	if evicted, remaining, err := evictor.EvictRecoveryPoint(context.Background(), memoryObject.Ref.RecoveryPointID, 1); err != nil || evicted != 0 || remaining {
+		t.Fatalf("zero-result proof evicted=%d remaining=%v err=%v", evicted, remaining, err)
+	}
+	if !cacheHasEntryForTest(cache, otherPointObject) {
+		t.Fatal("zero-result proof removed another point")
+	}
+	for _, chunkName := range diskChunkNames {
+		if _, err := os.Stat(filepath.Join(root, chunkName)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("exact-point disk cache chunk remains: %v", err)
+		}
+	}
+}
+
+func TestCacheEvictRecoveryPointZeroByteCardinalityUsesBatchBoundedSelection(t *testing.T) {
+	buildCache := func(entryCount int) *AuthenticatedCache {
+		t.Helper()
+		config := testCacheConfig("")
+		config.DiskEnabled = false
+		config.ReconcileBatchSize = 1
+		cache, err := NewAuthenticatedCache(context.Background(), CacheDependencies{
+			Config: config, Now: time.Now, Random: rand.Reader,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = cache.Shutdown(context.Background()) })
+		for index := 0; index < entryCount; index++ {
+			object := testCacheObject(0)
+			object.Ref.EntryID = fmt.Sprintf("%064x", index+1)
+			if _, err := cache.Materialize(context.Background(), object, newCacheSourceFake(nil, object)); err != nil {
+				t.Fatalf("materialize zero-byte cache object %d: %v", index, err)
+			}
+		}
+		return cache
+	}
+	measureSelection := func(cache *AuthenticatedCache) float64 {
+		t.Helper()
+		var evicted int
+		var remaining bool
+		var evictionErr error
+		allocations := testing.AllocsPerRun(1, func() {
+			evicted, remaining, evictionErr = cache.EvictRecoveryPoint(context.Background(), strings.Repeat("a", 32), 1)
+		})
+		if evictionErr != nil || evicted != 1 || !remaining {
+			t.Fatalf("bounded zero-byte eviction evicted=%d remaining=%v err=%v", evicted, remaining, evictionErr)
+		}
+		return allocations
+	}
+
+	smallAllocations := measureSelection(buildCache(16))
+	largeAllocations := measureSelection(buildCache(4096))
+	if largeAllocations > smallAllocations+3 {
+		t.Fatalf("zero-byte cache selection allocations grew with point cardinality: small=%.0f large=%.0f", smallAllocations, largeAllocations)
+	}
+}
+
+func TestCacheLifecycleEvictionSerializesConcurrentMaintenance(t *testing.T) {
+	t.Run("second lifecycle eviction waits for the exact-point owner", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "cache")
+		config := testCacheConfig(root)
+		config.MemoryObjectBytes = 1
+		cache := newDiskCacheForTest(t, config)
+		t.Cleanup(func() { _ = cache.Shutdown(context.Background()) })
+		memoryObject := testCacheObject(1)
+		diskObject := testCacheObject(8)
+		diskObject.ContentFingerprint = "serialized-disk"
+		for _, fixture := range []struct {
+			object  CacheObject
+			payload string
+		}{
+			{object: memoryObject, payload: "m"},
+			{object: diskObject, payload: "12345678"},
+		} {
+			if _, err := cache.Materialize(context.Background(), fixture.object, newCacheSourceFake([]byte(fixture.payload), fixture.object)); err != nil {
+				t.Fatalf("materialize serialization fixture: %v", err)
+			}
+		}
+
+		originalRemove := cache.removeChunkFile
+		entered := make(chan struct{}, 2)
+		releaseOwner := make(chan struct{})
+		var callsMu sync.Mutex
+		removeCalls := 0
+		cache.removeChunkFile = func(name string) error {
+			callsMu.Lock()
+			removeCalls++
+			call := removeCalls
+			callsMu.Unlock()
+			entered <- struct{}{}
+			if call == 1 {
+				<-releaseOwner
+			}
+			return originalRemove(name)
+		}
+		type evictionResult struct {
+			evicted   int
+			remaining bool
+			err       error
+		}
+		firstDone := make(chan evictionResult, 1)
+		go func() {
+			evicted, remaining, err := cache.EvictRecoveryPoint(context.Background(), memoryObject.Ref.RecoveryPointID, 2)
+			firstDone <- evictionResult{evicted: evicted, remaining: remaining, err: err}
+		}()
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			close(releaseOwner)
+			t.Fatal("first lifecycle eviction did not reach the disk barrier")
+		}
+		secondDone := make(chan evictionResult, 1)
+		go func() {
+			evicted, remaining, err := cache.EvictRecoveryPoint(context.Background(), memoryObject.Ref.RecoveryPointID, 2)
+			secondDone <- evictionResult{evicted: evicted, remaining: remaining, err: err}
+		}()
+		select {
+		case <-entered:
+			close(releaseOwner)
+			first, second := <-firstDone, <-secondDone
+			t.Fatalf("second eviction crossed owner barrier: first_evicted=%d first_remaining=%v first_err=%v second_evicted=%d second_remaining=%v second_err=%v",
+				first.evicted, first.remaining, first.err, second.evicted, second.remaining, second.err)
+		case <-time.After(150 * time.Millisecond):
+		}
+		close(releaseOwner)
+		first, second := <-firstDone, <-secondDone
+		if first.err != nil || first.evicted != 2 || first.remaining {
+			t.Fatalf("serialized owner evicted=%d remaining=%v err=%v, want two exact-point entries", first.evicted, first.remaining, first.err)
+		}
+		if second.err != nil || second.evicted != 0 || second.remaining {
+			t.Fatalf("serialized retry evicted=%d remaining=%v err=%v, want zero-result proof", second.evicted, second.remaining, second.err)
+		}
+	})
+
+	t.Run("reconcile waits for lifecycle eviction ownership", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "cache")
+		config := testCacheConfig(root)
+		config.MemoryObjectBytes = 1
+		cache := newDiskCacheForTest(t, config)
+		t.Cleanup(func() { _ = cache.Shutdown(context.Background()) })
+		object := testCacheObject(8)
+		if _, err := cache.Materialize(context.Background(), object, newCacheSourceFake([]byte("12345678"), object)); err != nil {
+			t.Fatalf("materialize reconcile serialization fixture: %v", err)
+		}
+
+		originalRemove := cache.removeChunkFile
+		entered := make(chan struct{}, 2)
+		releaseOwner := make(chan struct{})
+		var callsMu sync.Mutex
+		removeCalls := 0
+		cache.removeChunkFile = func(name string) error {
+			callsMu.Lock()
+			removeCalls++
+			call := removeCalls
+			callsMu.Unlock()
+			entered <- struct{}{}
+			if call == 1 {
+				<-releaseOwner
+			}
+			return originalRemove(name)
+		}
+		type evictionResult struct {
+			evicted   int
+			remaining bool
+			err       error
+		}
+		evictionDone := make(chan evictionResult, 1)
+		go func() {
+			evicted, remaining, err := cache.EvictRecoveryPoint(context.Background(), object.Ref.RecoveryPointID, 1)
+			evictionDone <- evictionResult{evicted: evicted, remaining: remaining, err: err}
+		}()
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			close(releaseOwner)
+			t.Fatal("lifecycle eviction did not reach the reconcile barrier")
+		}
+		reconcileDone := make(chan error, 1)
+		go func() { reconcileDone <- cache.Reconcile(context.Background()) }()
+		select {
+		case <-entered:
+			close(releaseOwner)
+			eviction, reconcileErr := <-evictionDone, <-reconcileDone
+			t.Fatalf("Reconcile crossed lifecycle owner barrier: evicted=%d remaining=%v eviction_err=%v reconcile_err=%v", eviction.evicted, eviction.remaining, eviction.err, reconcileErr)
+		case <-time.After(150 * time.Millisecond):
+		}
+		close(releaseOwner)
+		eviction, reconcileErr := <-evictionDone, <-reconcileDone
+		if eviction.err != nil || eviction.evicted != 1 || eviction.remaining {
+			t.Fatalf("serialized lifecycle eviction evicted=%d remaining=%v err=%v", eviction.evicted, eviction.remaining, eviction.err)
+		}
+		if reconcileErr != nil {
+			t.Fatalf("serialized Reconcile: %v", reconcileErr)
+		}
+	})
+
+	t.Run("partial disk failure retries only the remaining chunk", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "cache")
+		config := testCacheConfig(root)
+		config.MemoryObjectBytes = 1
+		cache := newDiskCacheForTest(t, config)
+		t.Cleanup(func() { _ = cache.Shutdown(context.Background()) })
+		object := testCacheObject(16)
+		if _, err := cache.Materialize(context.Background(), object, newCacheSourceFake([]byte("1234567890abcdef"), object)); err != nil {
+			t.Fatalf("materialize partial retry fixture: %v", err)
+		}
+		originalRemove := cache.removeChunkFile
+		var callsMu sync.Mutex
+		firstPassNames := make([]string, 0, 2)
+		cache.removeChunkFile = func(name string) error {
+			callsMu.Lock()
+			firstPassNames = append(firstPassNames, name)
+			call := len(firstPassNames)
+			callsMu.Unlock()
+			if call == 2 {
+				return errors.New("closed partial cache cleanup failure")
+			}
+			return originalRemove(name)
+		}
+		if evicted, remaining, err := cache.EvictRecoveryPoint(context.Background(), object.Ref.RecoveryPointID, 1); err == nil || evicted != 0 || !remaining {
+			t.Fatalf("partial first pass evicted=%d remaining=%v err=%v", evicted, remaining, err)
+		}
+		if len(firstPassNames) != 2 || firstPassNames[0] == firstPassNames[1] {
+			t.Fatalf("partial first pass chunk_count=%d distinct=%v, want two exact chunks", len(firstPassNames), len(firstPassNames) == 2 && firstPassNames[0] != firstPassNames[1])
+		}
+		retryNames := make([]string, 0, 1)
+		cache.removeChunkFile = func(name string) error {
+			retryNames = append(retryNames, name)
+			return originalRemove(name)
+		}
+		if evicted, remaining, err := cache.EvictRecoveryPoint(context.Background(), object.Ref.RecoveryPointID, 1); err != nil || evicted != 1 || remaining {
+			t.Fatalf("partial retry evicted=%d remaining=%v err=%v", evicted, remaining, err)
+		}
+		if len(retryNames) != 1 || retryNames[0] != firstPassNames[1] {
+			t.Fatalf("partial retry chunk_count=%d failed_chunk_match=%v", len(retryNames), len(retryNames) == 1 && retryNames[0] == firstPassNames[1])
+		}
+		if evicted, remaining, err := cache.EvictRecoveryPoint(context.Background(), object.Ref.RecoveryPointID, 1); err != nil || evicted != 0 || remaining {
+			t.Fatalf("partial retry zero proof evicted=%d remaining=%v err=%v", evicted, remaining, err)
+		}
+	})
+}
+
+func TestCacheLifecycleFailureFollowedByReconcileFailureRetainsRetryProof(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cache")
+	config := testCacheConfig(root)
+	config.MemoryObjectBytes = 1
+	cache := newDiskCacheForTest(t, config)
+	t.Cleanup(func() { _ = cache.Shutdown(context.Background()) })
+	object := testCacheObject(16)
+	if _, err := cache.Materialize(context.Background(), object, newCacheSourceFake([]byte("1234567890abcdef"), object)); err != nil {
+		t.Fatalf("materialize lifecycle retry-proof fixture: %v", err)
+	}
+	originalRemove := cache.removeChunkFile
+	privateCanary := filepath.Join(t.TempDir(), "private-provider-cache-CANARY")
+	cache.removeChunkFile = func(string) error {
+		return &os.PathError{Op: "remove", Path: privateCanary, Err: syscall.EACCES}
+	}
+
+	evicted, remaining, err := cache.EvictRecoveryPoint(context.Background(), object.Ref.RecoveryPointID, 1)
+	if !errors.Is(err, ErrCacheUnsafeRoot) || evicted != 0 || !remaining {
+		t.Fatalf("initial lifecycle deletion evicted=%d remaining=%v err=%v", evicted, remaining, err)
+	}
+	if strings.Contains(err.Error(), privateCanary) || strings.Contains(err.Error(), filepath.Base(privateCanary)) {
+		t.Errorf("initial lifecycle deletion leaked private path: %v", err)
+	}
+	entry := cacheEntryForTest(t, cache, object)
+	if !entry.invalid || len(entry.chunks) == 0 {
+		t.Fatalf("initial lifecycle deletion lost retry proof: invalid=%v chunks=%d", entry.invalid, len(entry.chunks))
+	}
+
+	reconcileErr := cache.Reconcile(context.Background())
+	if !errors.Is(reconcileErr, ErrCacheUnsafeRoot) {
+		t.Errorf("Reconcile deletion error=%v, want closed ErrCacheUnsafeRoot", reconcileErr)
+	}
+	if reconcileErr != nil && (strings.Contains(reconcileErr.Error(), privateCanary) || strings.Contains(reconcileErr.Error(), filepath.Base(privateCanary))) {
+		t.Errorf("Reconcile deletion error leaked private path: %v", reconcileErr)
+	}
+	if !cacheHasEntryForTest(cache, object) {
+		t.Fatal("Reconcile deletion failure discarded lifecycle retry proof")
+	}
+	entry = cacheEntryForTest(t, cache, object)
+	if !entry.invalid || len(entry.chunks) == 0 {
+		t.Fatalf("Reconcile deletion failure cleared retry proof: invalid=%v chunks=%d", entry.invalid, len(entry.chunks))
+	}
+
+	cache.removeChunkFile = originalRemove
+	evicted, remaining, err = cache.EvictRecoveryPoint(context.Background(), object.Ref.RecoveryPointID, 1)
+	if err != nil || evicted != 1 || remaining {
+		t.Fatalf("lifecycle retry evicted=%d remaining=%v err=%v", evicted, remaining, err)
+	}
+	if evicted, remaining, err = cache.EvictRecoveryPoint(context.Background(), object.Ref.RecoveryPointID, 1); err != nil || evicted != 0 || remaining {
+		t.Fatalf("lifecycle retry zero proof evicted=%d remaining=%v err=%v", evicted, remaining, err)
 	}
 }
 
@@ -709,7 +1090,7 @@ func TestCacheBeginMaterializationReservesBeforeSourceAndAbortReleasesQuota(t *t
 	first := testCacheObject(8)
 	reservation, hit, err := cache.BeginMaterialization(first)
 	if err != nil || reservation == nil || hit.RangeCapable {
-		t.Fatalf("first reservation=%v hit=%+v err=%v", reservation, hit, err)
+		t.Fatalf("first reservation_present=%v hit_range=%v hit_provider_bytes=%d err=%v", reservation != nil, hit.RangeCapable, hit.ProviderBytes, err)
 	}
 	second := first
 	second.ContentFingerprint = "content-v2"
@@ -773,7 +1154,7 @@ func TestCachePartialCancelSourceDriftAndENOSPCNeverPublishOrFallBackPlaintext(t
 				}
 			}
 			if testCase.wantReason != "" && cache.Status().Reason != testCase.wantReason {
-				t.Fatalf("cache status=%+v", cache.Status())
+				t.Fatalf("cache status disk_enabled=%v reason=%q", cache.Status().DiskEnabled, cache.Status().Reason)
 			}
 			if err := cache.Shutdown(context.Background()); err != nil {
 				t.Fatal(err)
@@ -872,7 +1253,7 @@ func TestCacheMetricsObserveStartupKeyLossPeriodicOrphanAndDisable(t *testing.T)
 	}
 	t.Cleanup(func() { _ = cache.Shutdown(context.Background()) })
 	if metrics.cacheCount(MetricCacheKeyLoss) != 1 {
-		t.Fatalf("startup key-loss metrics=%+v", metrics.snapshot())
+		t.Fatalf("startup key-loss metric=%d want=1", metrics.cacheCount(MetricCacheKeyLoss))
 	}
 	if err := os.WriteFile(filepath.Join(root, strings.Repeat("b", 64)), []byte("orphan"), 0o600); err != nil {
 		t.Fatal(err)
@@ -882,7 +1263,7 @@ func TestCacheMetricsObserveStartupKeyLossPeriodicOrphanAndDisable(t *testing.T)
 	}
 	cache.disableDisk(CacheReasonUnsafeRoot)
 	if metrics.cacheCount(MetricCacheOrphan) != 1 || metrics.cacheCount(MetricCacheDisabled) != 1 {
-		t.Fatalf("cache lifecycle metrics=%+v", metrics.snapshot())
+		t.Fatalf("cache lifecycle orphan=%d disabled=%d want=1 each", metrics.cacheCount(MetricCacheOrphan), metrics.cacheCount(MetricCacheDisabled))
 	}
 }
 
@@ -1054,7 +1435,7 @@ func newDiskCacheForTest(t *testing.T, config CacheConfig) *AuthenticatedCache {
 		t.Fatal(err)
 	}
 	if !cache.Status().DiskEnabled {
-		t.Fatalf("disk cache disabled: %+v", cache.Status())
+		t.Fatalf("disk cache disabled: reason=%q", cache.Status().Reason)
 	}
 	return cache
 }

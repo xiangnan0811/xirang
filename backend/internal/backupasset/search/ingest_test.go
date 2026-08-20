@@ -64,6 +64,47 @@ func TestContentIndexIngestPublishesAtomicOpaqueProjection(t *testing.T) {
 	}
 }
 
+func TestLifecycleLateOutputRejectsSearchContentAndOCRIngest(t *testing.T) {
+	for _, field := range []SearchField{SearchFieldContent, SearchFieldOCR} {
+		t.Run(string(field), func(t *testing.T) {
+			indexer, harness := newIndexerTestHarness(t)
+			entryID := strings.Repeat("7", 64)
+			pointID, catalogID := harness.seedCatalog(t, []model.CatalogEntry{{
+				EntryID: entryID, NormalizedPath: "late.txt", Name: "late.txt", EntryType: "file", SecurityState: "non_secret",
+			}})
+			searchGeneration, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ingest, lease := newContentIngestForHarness(t, harness)
+			projection := ContentProjection{
+				Ref: backupasset.AssetRef{RecoveryPointID: pointID, EntryID: entryID}, Field: field,
+				Terms: []TermFrequency{{Term: "late-output", Frequency: 1}}, SourceFingerprint: "source-" + pointID,
+				CatalogGenerationID: catalogID, SearchGenerationID: searchGeneration.ID,
+				ProcessingLeaseID: lease.ID, AttemptID: lease.Fence.AttemptID, FenceToken: lease.Fence.FenceToken,
+				ExpectedClassificationRevision: 1, Classification: SensitivityNonSecret, ClassificationRevision: 1,
+				CoverageRevision: 2, PipelineRevision: 2, IndexRevision: 2, Coverage: FieldCoverageComplete,
+			}
+			attempt := model.RecoveryPointLifecycleAttempt{
+				ID: strings.Repeat("e", 32), RecoveryPointID: pointID,
+				Operation: string(backupasset.LifecycleRetentionExpire), Phase: string(backupasset.LifecyclePhaseRevoking),
+			}
+			if err := harness.db.Create(&attempt).Error; err != nil {
+				t.Fatalf("seed lifecycle attempt: %v", err)
+			}
+			if err := ingest.PublishContentProjection(context.Background(), projection); !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("late %s ingest error=%v, want ErrConflict", field, err)
+			}
+			var postings int64
+			if err := harness.db.Model(&model.BackupAssetSearchPosting{}).
+				Where("search_generation_id = ? AND document_id = ? AND field = ?", searchGeneration.ID, entryID, field).
+				Count(&postings).Error; err != nil || postings != 0 {
+				t.Fatalf("late %s posting count=%d err=%v, want zero", field, postings, err)
+			}
+		})
+	}
+}
+
 func TestContentIndexIngestPublishesEmptyTextCoverageWithoutSyntheticPosting(t *testing.T) {
 	indexer, harness := newIndexerTestHarness(t)
 	entryID := strings.Repeat("3", 64)

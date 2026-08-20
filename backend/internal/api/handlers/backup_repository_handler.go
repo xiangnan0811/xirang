@@ -29,6 +29,10 @@ type BackupRepositoryService interface {
 	Detail(context.Context, string, backuprepository.VisibilityScope, backuprepository.RequestContext) (backuprepository.RepositoryView, error)
 	Reconcile(context.Context, string, backuprepository.RequestContext) (backuprepository.ConnectResult, error)
 	Disconnect(context.Context, string, backuprepository.RequestContext) (backuprepository.ConnectResult, error)
+	DiscoverImportCandidates(context.Context, string, backuprepository.ImportDiscoveryRequest, backuprepository.RequestContext) (backuprepository.ImportDiscoveryResult, error)
+	ListImportCandidates(context.Context, string, backuprepository.ImportCandidateListRequest, backuprepository.VisibilityScope, backuprepository.RequestContext) (backuprepository.ImportCandidatePage, error)
+	ReviewImportCandidate(context.Context, string, string, backuprepository.ImportReviewRequest, backuprepository.RequestContext) (backuprepository.ImportCandidateView, error)
+	RebuildAcceptedImports(context.Context, string, backuprepository.RebuildRequest, backuprepository.RequestContext) (backuprepository.RebuildResult, error)
 }
 
 type BackupRepositoryHandler struct {
@@ -229,6 +233,194 @@ func (handler *BackupRepositoryHandler) Disconnect(c *gin.Context) {
 	}
 	requestContext := backupRepositoryRequestContext(c)
 	result, err := handler.service.Disconnect(c.Request.Context(), id, requestContext)
+	if err != nil {
+		respondBackupRepositoryError(c, err, requestContext.CorrelationID)
+		return
+	}
+	respondOK(c, result)
+}
+
+type backupRepositoryPagePayload struct {
+	Limit  int    `json:"limit,omitempty"`
+	Cursor string `json:"cursor,omitempty"`
+}
+
+type backupRepositoryImportReviewPayload struct {
+	Decision string `json:"decision"`
+	AcceptAs string `json:"accept_as,omitempty"`
+}
+
+// ImportScan godoc
+// @Summary      扫描可导入备份点
+// @Description  Admin 发现可归因 Provider 点并写入待审候选；不接受路径或凭据
+// @Tags         backup-repositories
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      string                         true  "仓库 opaque ID"
+// @Param        body  body      backupRepositoryPagePayload    true  "分页"
+// @Success      200   {object}  handlers.Response{data=backuprepository.ImportDiscoveryResult}
+// @Failure      400   {object}  handlers.Response
+// @Failure      404   {object}  handlers.Response
+// @Failure      409   {object}  handlers.Response
+// @Failure      503   {object}  handlers.Response
+// @Router       /backup-repositories/{id}/import-scans [post]
+func (handler *BackupRepositoryHandler) ImportScan(c *gin.Context) {
+	if handler == nil || handler.service == nil {
+		respondInternalError(c, fmt.Errorf("backup repository service unavailable"))
+		return
+	}
+	id, ok := backupRepositoryOpaqueID(c)
+	if !ok {
+		return
+	}
+	var payload backupRepositoryPagePayload
+	if err := decodeStrictBackupRepositoryJSON(c, &payload); err != nil || payload.Limit < 0 ||
+		len(payload.Cursor) > maxBackupRepositoryCursorBytes || payload.Cursor != strings.TrimSpace(payload.Cursor) {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	requestContext := backupRepositoryRequestContext(c)
+	result, err := handler.service.DiscoverImportCandidates(c.Request.Context(), id, backuprepository.ImportDiscoveryRequest{
+		Limit: payload.Limit, Cursor: payload.Cursor,
+	}, requestContext)
+	if err != nil {
+		respondBackupRepositoryError(c, err, requestContext.CorrelationID)
+		return
+	}
+	respondOK(c, result)
+}
+
+// ListImportCandidates godoc
+// @Summary      列出导入候选
+// @Description  Admin 列出仓库的待审/已审导入候选，不含 Provider locator
+// @Tags         backup-repositories
+// @Security     Bearer
+// @Produce      json
+// @Param        id      path      string  true   "仓库 opaque ID"
+// @Param        limit   query     int     false  "每页数量"
+// @Param        cursor  query     string  false  "签名游标"
+// @Success      200     {object}  handlers.Response{data=backuprepository.ImportCandidatePage}
+// @Failure      400     {object}  handlers.Response
+// @Failure      404     {object}  handlers.Response
+// @Failure      503     {object}  handlers.Response
+// @Router       /backup-repositories/{id}/import-candidates [get]
+func (handler *BackupRepositoryHandler) ListImportCandidates(c *gin.Context) {
+	if handler == nil || handler.service == nil {
+		respondInternalError(c, fmt.Errorf("backup repository service unavailable"))
+		return
+	}
+	id, ok := backupRepositoryOpaqueID(c)
+	if !ok {
+		return
+	}
+	limit := 0
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			respondBadRequest(c, "分页参数不合法")
+			return
+		}
+		limit = parsed
+	}
+	cursor := strings.TrimSpace(c.Query("cursor"))
+	if len(cursor) > maxBackupRepositoryCursorBytes {
+		respondBadRequest(c, "分页参数不合法")
+		return
+	}
+	requestContext := backupRepositoryRequestContext(c)
+	result, err := handler.service.ListImportCandidates(c.Request.Context(), id, backuprepository.ImportCandidateListRequest{
+		Limit: limit, Cursor: cursor,
+	}, backupRepositoryVisibilityScope(c), requestContext)
+	if err != nil {
+		respondBackupRepositoryError(c, err, requestContext.CorrelationID)
+		return
+	}
+	respondOK(c, result)
+}
+
+// ReviewImportCandidate godoc
+// @Summary      审核导入候选
+// @Description  Admin 接受或拒绝精确候选；接受时仅允许封闭候选类型
+// @Tags         backup-repositories
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id           path      string                                 true  "仓库 opaque ID"
+// @Param        candidateId  path      string                                 true  "候选 opaque ID"
+// @Param        body         body      backupRepositoryImportReviewPayload    true  "审核决定"
+// @Success      200          {object}  handlers.Response{data=backuprepository.ImportCandidateView}
+// @Failure      400          {object}  handlers.Response
+// @Failure      404          {object}  handlers.Response
+// @Failure      409          {object}  handlers.Response
+// @Failure      503          {object}  handlers.Response
+// @Router       /backup-repositories/{id}/import-candidates/{candidateId}/reviews [post]
+func (handler *BackupRepositoryHandler) ReviewImportCandidate(c *gin.Context) {
+	if handler == nil || handler.service == nil {
+		respondInternalError(c, fmt.Errorf("backup repository service unavailable"))
+		return
+	}
+	id, ok := backupRepositoryOpaqueID(c)
+	if !ok {
+		return
+	}
+	candidateID := strings.TrimSpace(c.Param("candidateId"))
+	if backupasset.ValidateOpaqueID(candidateID) != nil {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	var payload backupRepositoryImportReviewPayload
+	if decodeStrictBackupRepositoryJSON(c, &payload) != nil ||
+		(payload.Decision != string(backupasset.ImportReviewAccepted) && payload.Decision != string(backupasset.ImportReviewRejected)) ||
+		(payload.AcceptAs != "" && backupasset.ValidateImportCandidateKind(backupasset.ImportCandidateKind(payload.AcceptAs)) != nil) {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	requestContext := backupRepositoryRequestContext(c)
+	result, err := handler.service.ReviewImportCandidate(c.Request.Context(), id, candidateID, backuprepository.ImportReviewRequest{
+		Decision: backupasset.ImportReviewState(payload.Decision), AcceptAs: backupasset.ImportCandidateKind(payload.AcceptAs),
+	}, requestContext)
+	if err != nil {
+		respondBackupRepositoryError(c, err, requestContext.CorrelationID)
+		return
+	}
+	respondOK(c, result)
+}
+
+// Rebuild godoc
+// @Summary      重建已接受导入
+// @Description  Admin 对已接受清单重建 Catalog 与可回填 derived 数据
+// @Tags         backup-repositories
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path      string                       true  "仓库 opaque ID"
+// @Param        body  body      backupRepositoryPagePayload  true  "分页"
+// @Success      200   {object}  handlers.Response{data=backuprepository.RebuildResult}
+// @Failure      400   {object}  handlers.Response
+// @Failure      404   {object}  handlers.Response
+// @Failure      409   {object}  handlers.Response
+// @Failure      503   {object}  handlers.Response
+// @Router       /backup-repositories/{id}/rebuilds [post]
+func (handler *BackupRepositoryHandler) Rebuild(c *gin.Context) {
+	if handler == nil || handler.service == nil {
+		respondInternalError(c, fmt.Errorf("backup repository service unavailable"))
+		return
+	}
+	id, ok := backupRepositoryOpaqueID(c)
+	if !ok {
+		return
+	}
+	var payload backupRepositoryPagePayload
+	if err := decodeStrictBackupRepositoryJSON(c, &payload); err != nil || payload.Limit < 0 ||
+		len(payload.Cursor) > maxBackupRepositoryCursorBytes || payload.Cursor != strings.TrimSpace(payload.Cursor) {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	requestContext := backupRepositoryRequestContext(c)
+	result, err := handler.service.RebuildAcceptedImports(c.Request.Context(), id, backuprepository.RebuildRequest{
+		Limit: payload.Limit, Cursor: payload.Cursor,
+	}, requestContext)
 	if err != nil {
 		respondBackupRepositoryError(c, err, requestContext.CorrelationID)
 		return

@@ -44,6 +44,8 @@ These guides help you **ask the right questions before coding**.
 - [ ] Data format changes between layers
 - [ ] Multiple consumers need the same data
 - [ ] You're not sure where to put some logic
+- [ ] Task delete/archive, leftover derived backfill, or admin scan/rebuild
+      pagination crosses API, runtime, and UI
 
 → Read [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md)
 

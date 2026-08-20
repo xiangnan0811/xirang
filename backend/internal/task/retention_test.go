@@ -3,17 +3,357 @@ package task
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/task/executor"
 )
+
+type managedRecoveryPointRetentionFake struct {
+	calls []ManagedRecoveryPointRetentionRequest
+	err   error
+}
+
+func (fake *managedRecoveryPointRetentionFake) EnforceManagedRetention(_ context.Context, request ManagedRecoveryPointRetentionRequest) error {
+	request.RecoveryPointIDs = append([]string(nil), request.RecoveryPointIDs...)
+	fake.calls = append(fake.calls, request)
+	return fake.err
+}
+
+type managedRetentionLineageSessionFake struct {
+	publication.LineageSession
+	repositoryID    string
+	repositoryIDs   []string
+	repositoryCalls int32
+	points          []publication.CommittedPoint
+	closed          int32
+}
+
+func (session *managedRetentionLineageSessionFake) Mode() publication.LineageMode {
+	return publication.LineageExact
+}
+
+func (session *managedRetentionLineageSessionFake) RepositoryID() string {
+	call := int(atomic.AddInt32(&session.repositoryCalls, 1)) - 1
+	if len(session.repositoryIDs) > 0 {
+		if call < len(session.repositoryIDs) {
+			return session.repositoryIDs[call]
+		}
+		return session.repositoryIDs[len(session.repositoryIDs)-1]
+	}
+	return session.repositoryID
+}
+
+func (session *managedRetentionLineageSessionFake) CommittedPoints() []publication.CommittedPoint {
+	return append([]publication.CommittedPoint(nil), session.points...)
+}
+
+func (session *managedRetentionLineageSessionFake) Close() error {
+	atomic.AddInt32(&session.closed, 1)
+	return nil
+}
+
+func TestManagedTaskRetentionRejectsUnsafeExactAuthorityInputs(t *testing.T) {
+	validRepositoryID := "dddddddddddddddddddddddddddddddd"
+	validPointID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	tests := []struct {
+		name                    string
+		repositoryIDs           []string
+		points                  []publication.CommittedPoint
+		authorityErr            error
+		wantAuthorityCalls      int
+		wantBlocks              int
+		wantRequestRepositoryID string
+	}{
+		{
+			name:               "empty exact set is a managed no-op",
+			repositoryIDs:      []string{validRepositoryID},
+			wantAuthorityCalls: 0,
+			wantBlocks:         0,
+		},
+		{
+			name:               "managed authority error fails closed",
+			repositoryIDs:      []string{validRepositoryID},
+			points:             []publication.CommittedPoint{{RecoveryPointID: validPointID}},
+			authorityErr:       errors.New("managed authority unavailable"),
+			wantAuthorityCalls: 1,
+			wantBlocks:         1,
+		},
+		{
+			name:               "invalid repository ID fails closed",
+			repositoryIDs:      []string{"invalid-repository"},
+			points:             []publication.CommittedPoint{{RecoveryPointID: validPointID}},
+			wantAuthorityCalls: 0,
+			wantBlocks:         1,
+		},
+		{
+			name:               "invalid point ID fails closed",
+			repositoryIDs:      []string{validRepositoryID},
+			points:             []publication.CommittedPoint{{RecoveryPointID: "invalid-point"}},
+			wantAuthorityCalls: 0,
+			wantBlocks:         1,
+		},
+		{
+			name:          "duplicate point ID fails closed",
+			repositoryIDs: []string{validRepositoryID},
+			points: []publication.CommittedPoint{
+				{RecoveryPointID: validPointID},
+				{RecoveryPointID: validPointID},
+			},
+			wantAuthorityCalls: 0,
+			wantBlocks:         1,
+		},
+		{
+			name:                    "validated repository ID is snapshotted once",
+			repositoryIDs:           []string{validRepositoryID, "unsafe-second-read"},
+			points:                  []publication.CommittedPoint{{RecoveryPointID: validPointID}},
+			wantAuthorityCalls:      1,
+			wantBlocks:              0,
+			wantRequestRepositoryID: validRepositoryID,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db := openManagerTestDB(t)
+			manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+			t.Cleanup(func() {
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				_ = manager.Shutdown(shutdownCtx)
+			})
+			taskEntity := seedTaskForManagerTest(t, db)
+			taskEntity.ExecutorType = "restic"
+			session := &managedRetentionLineageSessionFake{repositoryIDs: test.repositoryIDs, points: test.points}
+			guard := &legacyLineageGuardFake{session: session}
+			recorder := &legacyBlockRecorderFake{}
+			authority := &managedRecoveryPointRetentionFake{err: test.authorityErr}
+			manager.SetLineageGuard(guard)
+			manager.SetLegacyBlockRecorder(recorder)
+			manager.SetManagedRecoveryPointRetention(authority)
+			var legacyCalls int32
+			manager.resticRetentionFunc = func(context.Context, model.Policy, model.Task) {
+				atomic.AddInt32(&legacyCalls, 1)
+			}
+
+			manager.enforceResticRetention(model.Policy{ID: 72, RetentionDays: 7}, taskEntity)
+
+			if len(authority.calls) != test.wantAuthorityCalls {
+				t.Fatalf("managed authority calls=%d, want %d", len(authority.calls), test.wantAuthorityCalls)
+			}
+			if len(recorder.blocks) != test.wantBlocks {
+				t.Fatalf("legacy blocks=%+v, want count %d", recorder.blocks, test.wantBlocks)
+			}
+			if test.wantBlocks == 1 {
+				block := recorder.blocks[0]
+				if block.TaskID != taskEntity.ID || block.TaskRunID != nil || block.Operation != publication.OperationLegacyRetention {
+					t.Fatalf("unsafe legacy block=%+v", block)
+				}
+			}
+			if got := atomic.LoadInt32(&legacyCalls); got != 0 {
+				t.Fatalf("unsafe managed input fell through to legacy retention %d time(s)", got)
+			}
+			if got := atomic.LoadInt32(&session.closed); got != 1 {
+				t.Fatalf("session close count=%d, want 1", got)
+			}
+			if got := atomic.LoadInt32(&session.repositoryCalls); got != 1 {
+				t.Fatalf("RepositoryID calls=%d, want exactly 1", got)
+			}
+			if guard.calls != 1 || guard.operation != publication.OperationLegacyRetention {
+				t.Fatalf("guard calls=%d operation=%q", guard.calls, guard.operation)
+			}
+			if test.wantRequestRepositoryID != "" && authority.calls[0].RepositoryID != test.wantRequestRepositoryID {
+				t.Fatalf("delegated repository ID=%q, want snapshotted %q", authority.calls[0].RepositoryID, test.wantRequestRepositoryID)
+			}
+		})
+	}
+}
+
+func TestManagedTaskRetentionDelegatesExactRecoveryPointIDs(t *testing.T) {
+	db := openManagerTestDB(t)
+	if err := db.AutoMigrate(&model.BackupRepository{}, &model.TaskRepositoryLink{}, &model.RecoveryPoint{}); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+
+	now := time.Date(2026, 8, 17, 8, 0, 0, 0, time.UTC)
+	repositoryID := "dddddddddddddddddddddddddddddddd"
+	repository := model.BackupRepository{
+		ID: repositoryID, ProviderKind: string(backupasset.ProviderRestic), DisplayName: "managed-retention",
+		VersionMode: string(backupasset.VersionNativeSnapshot), Status: string(backupasset.RepositoryOnline),
+		CapabilityRevision: 1, CapabilitiesJSON: `{}`, ImmutabilityLevel: string(backupasset.ImmutabilityBackendVersioned),
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&repository).Error; err != nil {
+		t.Fatal(err)
+	}
+	taskID := taskEntity.ID
+	link := model.TaskRepositoryLink{
+		ID: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", TaskID: &taskID, RepositoryID: repositoryID,
+		TaskNameSnapshot: taskEntity.Name, NodeIDSnapshot: taskEntity.NodeID, NodeNameSnapshot: taskEntity.Node.Name,
+		PublicationMode: string(backupasset.PublicationNativeSnapshot), LinkedAt: now, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&link).Error; err != nil {
+		t.Fatal(err)
+	}
+	seedPointIDs := []string{
+		"cccccccccccccccccccccccccccccccc",
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}
+	for index, pointID := range seedPointIDs {
+		capturedAt := now.Add(time.Duration(index) * time.Minute)
+		point := model.RecoveryPoint{
+			ID: pointID, RepositoryID: repositoryID, ProducingTaskID: &taskID,
+			ProducingTaskNameSnapshot: taskEntity.Name, ProducingNodeIDSnapshot: taskEntity.NodeID,
+			ProducingNodeNameSnapshot: taskEntity.Node.Name, LineageJSON: `{}`,
+			Semantics: string(backupasset.PointNativeSnapshot), State: string(backupasset.RecoveryPointCommitted),
+			CapturedAt: &capturedAt, CommittedAt: &capturedAt, ManifestDigestAlgorithm: "sha256",
+			ConsistencyJSON: `{}`, FidelityJSON: `{}`, CapabilityRevision: 1, CapabilitiesJSON: `{}`,
+			ImmutabilityLevel:    string(backupasset.ImmutabilityBackendVersioned),
+			PhysicalAvailability: string(backupasset.PhysicalOnline), HoldState: string(backupasset.HoldNone),
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := db.Create(&point).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var persistedPoints []model.RecoveryPoint
+	if err := db.Where("repository_id = ?", repositoryID).Order("id ASC").Find(&persistedPoints).Error; err != nil {
+		t.Fatal(err)
+	}
+	wantPointIDs := make([]string, 0, len(persistedPoints))
+	for _, point := range persistedPoints {
+		wantPointIDs = append(wantPointIDs, point.ID)
+	}
+	wantSeededPointIDs := []string{
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"cccccccccccccccccccccccccccccccc",
+	}
+	if !reflect.DeepEqual(wantPointIDs, wantSeededPointIDs) {
+		t.Fatalf("persisted managed RecoveryPoint IDs=%v, want %v", wantPointIDs, wantSeededPointIDs)
+	}
+	newSession := func() *managedRetentionLineageSessionFake {
+		return &managedRetentionLineageSessionFake{
+			repositoryID: repositoryID,
+			points: []publication.CommittedPoint{
+				{RecoveryPointID: wantPointIDs[2]},
+				{RecoveryPointID: wantPointIDs[0]},
+				{RecoveryPointID: wantPointIDs[1]},
+			},
+		}
+	}
+	sessions := []*managedRetentionLineageSessionFake{newSession(), newSession(), newSession()}
+	guards := []*legacyLineageGuardFake{
+		{session: sessions[0]},
+		{session: sessions[1]},
+		{session: sessions[2]},
+	}
+	recorder := &legacyBlockRecorderFake{}
+	authority := &managedRecoveryPointRetentionFake{}
+	manager.SetLegacyBlockRecorder(recorder)
+	manager.SetManagedRecoveryPointRetention(authority)
+
+	target := t.TempDir()
+	stale := filepath.Join(target, "stale")
+	if err := os.Mkdir(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	staleAt := now.AddDate(0, 0, -30)
+	if err := os.Chtimes(stale, staleAt, staleAt); err != nil {
+		t.Fatal(err)
+	}
+	var legacyResticCalls int32
+	manager.resticRetentionFunc = func(context.Context, model.Policy, model.Task) {
+		atomic.AddInt32(&legacyResticCalls, 1)
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	sshAttempted := make(chan struct{}, 1)
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		sshAttempted <- struct{}{}
+		_ = connection.Close()
+	}()
+
+	policy := model.Policy{
+		ID: 71, TargetPath: target, RetentionDays: 7, RetentionMode: "gfs",
+		KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12, KeepYearly: 3,
+	}
+	taskEntity.ExecutorConfig = `{"repository_password":"FAKE_MANAGED_RETENTION_PASSWORD_MUST_NOT_BE_READ"}`
+	taskEntity.RsyncTarget = "backup:legacy-must-not-reach-min-age"
+	taskEntity.Node.Host = "127.0.0.1"
+	taskEntity.Node.Port = listener.Addr().(*net.TCPAddr).Port
+
+	taskEntity.ExecutorType = "rsync"
+	manager.SetLineageGuard(guards[0])
+	manager.enforceRsyncRetention(policy, taskEntity, now.AddDate(0, 0, -7))
+	taskEntity.ExecutorType = "restic"
+	manager.SetLineageGuard(guards[1])
+	manager.enforceResticRetention(policy, taskEntity)
+	taskEntity.ExecutorType = "rclone"
+	manager.SetLineageGuard(guards[2])
+	manager.enforceRcloneRetention(policy, taskEntity)
+
+	if len(authority.calls) != 3 {
+		t.Fatalf("managed authority calls=%d, want one per executor", len(authority.calls))
+	}
+	for index, call := range authority.calls {
+		if call.TaskID != taskEntity.ID || call.PolicyID != policy.ID || call.RepositoryID != repositoryID || !reflect.DeepEqual(call.RecoveryPointIDs, wantPointIDs) {
+			t.Fatalf("managed authority call[%d]=%+v, want task=%d policy=%d repository=%s points=%v", index, call, taskEntity.ID, policy.ID, repositoryID, wantPointIDs)
+		}
+	}
+	if _, err := os.Stat(stale); err != nil {
+		t.Fatalf("managed retention reached legacy directory mtime/RemoveAll path: %v", err)
+	}
+	if got := atomic.LoadInt32(&legacyResticCalls); got != 0 {
+		t.Fatalf("managed retention reached legacy credential/SSH or Restic age/GFS path %d time(s)", got)
+	}
+	select {
+	case <-sshAttempted:
+		t.Fatal("managed retention reached legacy Rclone SSH/--min-age path")
+	default:
+	}
+	if len(recorder.blocks) != 0 {
+		t.Fatalf("successful managed delegation recorded legacy blocks: %+v", recorder.blocks)
+	}
+	for index, guard := range guards {
+		if guard.calls != 1 || guard.operation != publication.OperationLegacyRetention {
+			t.Fatalf("guard[%d] calls=%d operation=%q", index, guard.calls, guard.operation)
+		}
+	}
+	for index, session := range sessions {
+		if got := atomic.LoadInt32(&session.closed); got != 1 {
+			t.Fatalf("session[%d] close count=%d, want 1", index, got)
+		}
+		if got := atomic.LoadInt32(&session.repositoryCalls); got != 1 {
+			t.Fatalf("session[%d] RepositoryID calls=%d, want 1", index, got)
+		}
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = manager.Shutdown(shutdownCtx)
+}
 
 func TestManagedResticRetentionBlocksForgetPruneBeforeCredentialAndSSH(t *testing.T) {
 	db := openManagerTestDB(t)

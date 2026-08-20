@@ -245,7 +245,10 @@ func resticBindingForTest() AccessBinding {
 func resticReadSnapshotForTest() ReadSnapshot {
 	binding := resticBindingForTest()
 	binding.AdapterData = ResticRuntimeAccess{NativeRepositoryID: strings.Repeat("a", 64)}
-	return ReadSnapshot{RepositoryID: binding.RepositoryID, CapabilityRevision: 1, SourceRevision: strings.Repeat("f", 64), Access: binding}
+	return ReadSnapshot{
+		RepositoryID: binding.RepositoryID, CapabilityRevision: 1, SourceRevision: strings.Repeat("f", 64),
+		RepositoryIdentity: NativeResticIdentityPrefix + strings.Repeat("a", 64), Access: binding,
+	}
 }
 
 func testOperationLimits() OperationLimits {

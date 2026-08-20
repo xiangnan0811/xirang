@@ -70,23 +70,47 @@ type managedRclonePreparedAttemptRecordV1 struct {
 	ChildFenceDigest string `json:"child_fence_digest"`
 }
 
+type managedRcloneFrozenNativeVersion struct {
+	PhysicalKey string `json:"physical_key"`
+	VersionID   string `json:"version_id"`
+}
+
 type managedRclonePointLocatorV1 struct {
-	Version                 int                             `json:"version"`
-	Provider                backupasset.ProviderKind        `json:"provider"`
-	RepositoryID            string                          `json:"repository_id"`
-	RecoveryPointID         string                          `json:"recovery_point_id"`
-	AttemptID               string                          `json:"attempt_id"`
-	PublicationMode         backupasset.TaskPublicationMode `json:"publication_mode"`
-	TaggedAttempt           string                          `json:"tagged_attempt"`
-	TaggedCommit            string                          `json:"tagged_commit"`
-	ChildFenceDigest        string                          `json:"child_fence_digest"`
-	CommitPayloadDigest     string                          `json:"commit_payload_digest"`
-	PortableAttemptRoot     string                          `json:"portable_attempt_root,omitempty"`
-	NativeCommitKey         string                          `json:"native_commit_key,omitempty"`
-	NativeCommitVersionID   string                          `json:"native_commit_version_id,omitempty"`
-	PhysicalIdentityDigest  string                          `json:"physical_identity_digest"`
-	ProviderCommitDigest    string                          `json:"provider_commit_digest"`
-	ManifestControlIdentity string                          `json:"manifest_control_identity"`
+	Version                 int                                `json:"version"`
+	Provider                backupasset.ProviderKind           `json:"provider"`
+	RepositoryID            string                             `json:"repository_id"`
+	RecoveryPointID         string                             `json:"recovery_point_id"`
+	AttemptID               string                             `json:"attempt_id"`
+	PublicationMode         backupasset.TaskPublicationMode    `json:"publication_mode"`
+	TaggedAttempt           string                             `json:"tagged_attempt"`
+	TaggedCommit            string                             `json:"tagged_commit"`
+	ChildFenceDigest        string                             `json:"child_fence_digest"`
+	CommitPayloadDigest     string                             `json:"commit_payload_digest"`
+	PortableAttemptRoot     string                             `json:"portable_attempt_root,omitempty"`
+	NativeCommitKey         string                             `json:"native_commit_key,omitempty"`
+	NativeCommitVersionID   string                             `json:"native_commit_version_id,omitempty"`
+	FrozenNativeVersions    []managedRcloneFrozenNativeVersion `json:"frozen_native_versions,omitempty"`
+	PhysicalIdentityDigest  string                             `json:"physical_identity_digest"`
+	ProviderCommitDigest    string                             `json:"provider_commit_digest"`
+	ManifestControlIdentity string                             `json:"manifest_control_identity"`
+}
+
+func sameManagedRclonePointLocator(left, right managedRclonePointLocatorV1) bool {
+	return reflect.DeepEqual(left, right)
+}
+
+func managedRcloneFrozenNativeVersions(versions []provider.RcloneNativeExactVersion) []managedRcloneFrozenNativeVersion {
+	if len(versions) == 0 {
+		return nil
+	}
+	frozen := make([]managedRcloneFrozenNativeVersion, 0, len(versions))
+	for _, version := range versions {
+		frozen = append(frozen, managedRcloneFrozenNativeVersion{
+			PhysicalKey: version.PhysicalKey,
+			VersionID:   version.VersionID,
+		})
+	}
+	return frozen
 }
 
 type rclonePublicationExecution struct {
@@ -1298,6 +1322,7 @@ func encodeManagedRclonePointLocator(
 		locator.ManifestControlIdentity = evidence.Native.ManifestControlGraphDigest
 		locator.NativeCommitKey = evidence.Native.CommitKey
 		locator.NativeCommitVersionID = evidence.Native.CommitVersionID
+		locator.FrozenNativeVersions = managedRcloneFrozenNativeVersions(evidence.Native.FrozenNativeVersions)
 		locator.PhysicalIdentityDigest = hex.EncodeToString(rcloneOwnershipDigest(markerKey,
 			"xirang.rclone.native-point-identity.v1", attempt.RepositoryID, evidence.Native.CommitKey,
 			evidence.Native.CommitVersionID, evidence.Native.CommitContentDigest))

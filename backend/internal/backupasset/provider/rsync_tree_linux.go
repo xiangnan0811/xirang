@@ -4,6 +4,7 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -846,6 +847,81 @@ func ensureRsyncManagedTreeControlDir(tree *rsyncManagedTree, name string) error
 		return err
 	}
 	return tree.sync(tree.rootFD)
+}
+
+func (tree *rsyncManagedTree) DeleteCommittedPoint(ctx context.Context, component string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !validRsyncManagedTreeComponent(component) {
+		return fmt.Errorf("%w: invalid committed point component", errRsyncManagedTreeUnsafe)
+	}
+	if err := tree.VerifyRootIdentity(); err != nil {
+		return err
+	}
+	pointsFD, err := openRsyncManagedTreeChildDir(tree.rootFD, "points")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unix.Close(pointsFD) }()
+	if err := unlinkRsyncManagedTreeEntry(ctx, pointsFD, component); err != nil {
+		return err
+	}
+	if err := tree.sync(pointsFD); err != nil {
+		return err
+	}
+	if err := tree.sync(tree.rootFD); err != nil {
+		return err
+	}
+	return tree.VerifyRootIdentity()
+}
+
+func unlinkRsyncManagedTreeEntry(ctx context.Context, parentFD int, name string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if rsyncUnlinkTestHook != nil {
+		rsyncUnlinkTestHook(name)
+	}
+	if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') || strings.ContainsRune(name, '\x00') {
+		return fmt.Errorf("%w: invalid managed deletion name", errRsyncManagedTreeUnsafe)
+	}
+	var stat unix.Stat_t
+	if err := unix.Fstatat(parentFD, name, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return rsyncManagedTreeSystemError(err)
+	}
+	switch stat.Mode & unix.S_IFMT {
+	case unix.S_IFDIR:
+		childFD, err := unix.Openat2(parentFD, name, &unix.OpenHow{
+			Flags:   unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC | unix.O_NOFOLLOW,
+			Resolve: rsyncManagedTreeResolve,
+		})
+		if err != nil {
+			return rsyncManagedTreeSystemError(err)
+		}
+		names, err := rsyncTreeDirectoryNames(childFD)
+		if err != nil {
+			_ = unix.Close(childFD)
+			return err
+		}
+		for _, child := range names {
+			if err := unlinkRsyncManagedTreeEntry(ctx, childFD, child); err != nil {
+				_ = unix.Close(childFD)
+				return err
+			}
+		}
+		if err := unix.Close(childFD); err != nil {
+			return rsyncManagedTreeSystemError(err)
+		}
+		if err := unix.Unlinkat(parentFD, name, unix.AT_REMOVEDIR); err != nil {
+			return rsyncManagedTreeSystemError(err)
+		}
+	default:
+		if err := unix.Unlinkat(parentFD, name, 0); err != nil {
+			return rsyncManagedTreeSystemError(err)
+		}
+	}
+	return nil
 }
 
 func openRsyncManagedTreeChildDir(parentFD int, name string) (int, error) {

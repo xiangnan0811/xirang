@@ -186,6 +186,12 @@ func (coordinator *Coordinator) requestWorkTx(ctx context.Context, tx *gorm.DB, 
 	if !compatible {
 		return WorkResult{}, ErrNotDeployed
 	}
+	// Source lifecycle always locks point, then lifecycle attempt, then job.
+	// RequestWork must establish the same order before it can lock/reuse a job
+	// or mutate an interest.
+	if err := backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, request.Descriptor.Source.RecoveryPointID); err != nil {
+		return WorkResult{}, err
+	}
 	job, created, err := coordinator.findOrCreateJobTx(ctx, tx, request, workKey, canonical)
 	if err != nil {
 		return WorkResult{}, err
@@ -627,6 +633,9 @@ func (coordinator *Coordinator) findOrCreateJobTx(ctx context.Context, tx *gorm.
 		return model.BackupAssetProcessingJob{}, false, fmt.Errorf("load current processing job: %w", result.Error)
 	}
 	if result.RowsAffected == 1 {
+		if existing.RecoveryPointID != request.Descriptor.Source.RecoveryPointID {
+			return model.BackupAssetProcessingJob{}, false, fmt.Errorf("%w: current processing job source changed", ErrInvalidContract)
+		}
 		return existing, false, nil
 	}
 	var queued int64
@@ -756,8 +765,10 @@ func (coordinator *Coordinator) loadReadyWorkerTx(ctx context.Context, tx *gorm.
 
 func (coordinator *Coordinator) selectJobTx(ctx context.Context, tx *gorm.DB, worker model.BackupAssetWorkerIdentity) (model.BackupAssetProcessingJob, SlotClass, error) {
 	var jobs []model.BackupAssetProcessingJob
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-		Where("state = ? AND is_current = ?", ProcessingQueued, true).Find(&jobs).Error; err != nil {
+	// Candidate discovery is deliberately non-locking. Once a candidate is
+	// chosen, admission locks point and validates lifecycle attempt before the
+	// exact job row is locked and revalidated below.
+	if err := tx.WithContext(ctx).Where("state = ? AND is_current = ?", ProcessingQueued, true).Find(&jobs).Error; err != nil {
 		return model.BackupAssetProcessingJob{}, "", fmt.Errorf("load processing queue: %w", err)
 	}
 	var capabilities []model.BackupAssetWorkerCapability
@@ -784,7 +795,22 @@ func (coordinator *Coordinator) selectJobTx(ctx context.Context, tx *gorm.DB, wo
 	for _, candidate := range candidates {
 		slot, ok := ChooseSlot(usage, candidate.PriorityClass)
 		if ok {
-			return byID[candidate.ID], slot, nil
+			selected := byID[candidate.ID]
+			if err := backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, selected.RecoveryPointID); err != nil {
+				return model.BackupAssetProcessingJob{}, "", err
+			}
+			var locked model.BackupAssetProcessingJob
+			loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("id = ? AND recovery_point_id = ? AND state = ? AND is_current = ?",
+					selected.ID, selected.RecoveryPointID, ProcessingQueued, true).
+				Limit(1).Find(&locked)
+			if loaded.Error != nil {
+				return model.BackupAssetProcessingJob{}, "", fmt.Errorf("lock selected processing job: %w", loaded.Error)
+			}
+			if loaded.RowsAffected != 1 {
+				return model.BackupAssetProcessingJob{}, "", ErrNoWork
+			}
+			return locked, slot, nil
 		}
 	}
 	return model.BackupAssetProcessingJob{}, "", ErrNoWork

@@ -208,6 +208,92 @@ func TestDerivedRevokeCommitsProjectionBeforeReferenceKeyAndBlobDestruction(t *t
 	}
 }
 
+func TestLifecycleDependentCleanupProcessingRedactsPrivatePath(t *testing.T) {
+	harness := newDerivedLifecycleHarness(t)
+	payload := []byte("private Derived deletion failure")
+	blob, err := harness.store.PutBlob(context.Background(), derivedDeclaration(payload), bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("seed Derived blob: %v", err)
+	}
+	reference := harness.seedReference(t, blob.BlobID, "5", "e")
+	searchRevoked := false
+	harness.projection.onRevoke = func(*gorm.DB, DerivedProjectionRevoke) error {
+		searchRevoked = true
+		return nil
+	}
+	privatePath := filepath.Join(harness.root, blob.OpaqueLocator)
+	const privateCanary = "derived-delete-root-locator-canary"
+	privateRootCause := errors.New(privateCanary)
+	privateFailure := &os.PathError{Op: "remove", Path: privatePath, Err: privateRootCause}
+	removeCalls := 0
+	harness.store.removeFile = func(path string) error {
+		removeCalls++
+		if !searchRevoked {
+			return errors.New("Search revocation was not proven")
+		}
+		if path != privatePath {
+			return errors.New("Derived deletion did not target the exact private path")
+		}
+		return privateFailure
+	}
+
+	err = harness.lifecycle.RevokeSetFenced(
+		context.Background(), reference.setID, DerivedRevokeExpired,
+		derivedLifecycleFence("5", reference.authorization.RecoveryPointID),
+	)
+	t.Run("runtime error chain is closed", func(t *testing.T) {
+		assertClosedDerivedBlobUnavailableError(t, err, privateFailure, privateRootCause, []string{
+			privateCanary, harness.root, blob.OpaqueLocator, privatePath,
+		})
+	})
+	t.Run("static error type has no cause accessor", func(t *testing.T) {
+		source, readErr := os.ReadFile("derived_lifecycle.go")
+		if readErr != nil {
+			t.Fatalf("read Derived lifecycle source: %v", readErr)
+		}
+		if bytes.Contains(source, []byte("func (err derivedBlobUnavailableError) Unwrap() error")) {
+			t.Fatal("closed Derived error exposes an Unwrap cause accessor")
+		}
+	})
+	if !searchRevoked || harness.projection.revocations != 1 || removeCalls != 1 {
+		t.Fatalf("Derived deletion order search_revoked=%t revocations=%d remove_calls=%d",
+			searchRevoked, harness.projection.revocations, removeCalls)
+	}
+}
+
+func assertClosedDerivedBlobUnavailableError(
+	t *testing.T,
+	err error,
+	privatePathError *os.PathError,
+	privateRootCause error,
+	forbidden []string,
+) {
+	t.Helper()
+	if !errors.Is(err, ErrDerivedBlobUnavailable) {
+		t.Error("Derived deletion error lost ErrDerivedBlobUnavailable identity")
+	}
+	if err == nil || err.Error() != ErrDerivedBlobUnavailable.Error() {
+		t.Error("Derived deletion returned a non-closed public error")
+	}
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		for _, privateValue := range forbidden {
+			if strings.Contains(current.Error(), privateValue) {
+				t.Error("Derived deletion unwrap chain exposed private path material")
+			}
+		}
+		if current == privatePathError || current == privateRootCause {
+			t.Error("Derived deletion unwrap chain exposed a private cause")
+		}
+	}
+	var accessiblePathError *os.PathError
+	if errors.As(err, &accessiblePathError) {
+		t.Error("Derived deletion error supports errors.As to a private PathError")
+	}
+	if errors.Is(err, privatePathError) || errors.Is(err, privateRootCause) {
+		t.Error("Derived deletion error supports errors.Is to a private cause")
+	}
+}
+
 func TestDerivedRevokeStopsBeforeMutationWhenProjectionRevokeFails(t *testing.T) {
 	harness := newDerivedLifecycleHarness(t)
 	payload := []byte("projection-failure")

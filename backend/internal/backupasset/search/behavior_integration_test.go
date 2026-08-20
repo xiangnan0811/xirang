@@ -14,6 +14,7 @@ import (
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/catalog"
+	"xirang/backend/internal/database"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 
@@ -38,6 +39,188 @@ func TestSearchBehaviorPostgres(t *testing.T) {
 		t.Skip("TEST_POSTGRES_DSN is not configured")
 	}
 	runSearchBehaviorContract(t, openSearchBehaviorPostgres(t, dsn))
+}
+
+func TestSearchSourceLifecycleMigratedSchemaSQLite(t *testing.T) {
+	fixture := openSearchBehaviorSQLite(t)
+	if err := database.RunMigrations(fixture.db, fixture.engine); err != nil {
+		t.Fatalf("run %s migrations: %v", fixture.engine, err)
+	}
+	runSearchSourceLifecycleMigratedSchemaContract(t, fixture)
+}
+
+func TestSearchSourceLifecycleMigratedSchemaPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		if strings.TrimSpace(os.Getenv("REQUIRE_POSTGRES_SEARCH_TEST")) == "1" {
+			t.Fatal("TEST_POSTGRES_DSN is required when REQUIRE_POSTGRES_SEARCH_TEST=1")
+		}
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	fixture := openSearchBehaviorPostgres(t, dsn)
+	if err := database.RunMigrations(fixture.db, fixture.engine); err != nil {
+		t.Fatalf("run %s migrations: %v", fixture.engine, err)
+	}
+	runSearchSourceLifecycleMigratedSchemaContract(t, fixture)
+}
+
+func runSearchSourceLifecycleMigratedSchemaContract(t *testing.T, fixture searchBehaviorFixture) {
+	t.Helper()
+	now := fixture.now
+	repository := model.BackupRepository{
+		ID: strings.Repeat("1", 32), ProviderKind: string(backupasset.ProviderRsync),
+		DisplayName: "search-source-lifecycle", VersionMode: string(backupasset.VersionFullCopyTree),
+		Status: string(backupasset.RepositoryOnline), CapabilityRevision: 1, CapabilitiesJSON: "{}",
+		ImmutabilityLevel: string(backupasset.ImmutabilityXirangManaged), CreatedAt: now, UpdatedAt: now,
+	}
+	if err := fixture.db.Create(&repository).Error; err != nil {
+		t.Fatalf("seed %s repository: %v", fixture.engine, err)
+	}
+	pointID := strings.Repeat("2", 32)
+	point := model.RecoveryPoint{
+		ID: pointID, RepositoryID: repository.ID, LineageJSON: "{}",
+		Semantics: string(backupasset.PointXirangManifest), State: string(backupasset.RecoveryPointCommitted),
+		SourceFingerprint: strings.Repeat("a", 64), ManifestDigestAlgorithm: "sha256",
+		ConsistencyJSON: "{}", FidelityJSON: "{}", PointRevision: 1,
+		CapabilityRevision: 1, CapabilitiesJSON: "{}",
+		ImmutabilityLevel:    string(backupasset.ImmutabilityXirangManaged),
+		PhysicalAvailability: string(backupasset.PhysicalOnline), HoldState: string(backupasset.HoldNone),
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := fixture.db.Create(&point).Error; err != nil {
+		t.Fatalf("seed %s point: %v", fixture.engine, err)
+	}
+	catalogID := strings.Repeat("3", 32)
+	finishedAt := now
+	catalogGeneration := model.CatalogGeneration{
+		ID: catalogID, RecoveryPointID: pointID, Generation: 1, State: "complete", IsActive: true,
+		SourceFingerprint: point.SourceFingerprint, ExpectedEntryCount: 3, WrittenEntryCount: 3,
+		StartedAt: now, FinishedAt: &finishedAt,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := fixture.db.Create(&catalogGeneration).Error; err != nil {
+		t.Fatalf("seed %s Catalog generation: %v", fixture.engine, err)
+	}
+	searchGenerationID := strings.Repeat("4", 32)
+	searchGeneration := model.BackupAssetSearchGeneration{
+		ID: searchGenerationID, RecoveryPointID: pointID, CatalogGenerationID: catalogID,
+		Generation: 1, State: string(SearchGenerationBuilding), SourceFingerprint: point.SourceFingerprint,
+		NormalizerVersion: NormalizerVersion, SearchKeyVersion: 1, ProjectionRevision: 1,
+		LeaseID: strings.Repeat("5", 32), BuildAttemptID: strings.Repeat("6", 32),
+		FenceTokenHash: strings.Repeat("7", 64), ExpectedDocumentCount: 3, WrittenDocumentCount: 3,
+		StartedAt: now, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := fixture.db.Create(&searchGeneration).Error; err != nil {
+		t.Fatalf("seed %s Search generation: %v", fixture.engine, err)
+	}
+	for index, entryMarker := range []string{"a", "b", "c"} {
+		entryID := strings.Repeat(entryMarker, 64)
+		entry := model.CatalogEntry{
+			GenerationID: catalogID, EntryID: entryID, RecoveryPointID: pointID,
+			NormalizedPath: "bounded/" + entryMarker, Name: entryMarker, EntryType: "file",
+			SecurityState: "non_secret", CreatedAt: now,
+		}
+		if err := fixture.db.Create(&entry).Error; err != nil {
+			t.Fatalf("seed %s bounded Catalog entry ordinal=%d: %v", fixture.engine, index, err)
+		}
+		document := model.BackupAssetSearchDocument{
+			SearchGenerationID: searchGenerationID, DocumentID: entryID, RecoveryPointID: pointID,
+			CatalogGenerationID: catalogID, EntryID: entryID, Sensitivity: string(SensitivityNonSecret),
+			ClassificationRevision: 1, MetadataRevision: 1, EntryType: "file",
+			LineageToken: strings.Repeat("d", 64), PathGroupToken: strings.Repeat(entryMarker, 64),
+			PathSortKey: entryMarker, NameSortKey: entryMarker, CreatedAt: now, UpdatedAt: now,
+		}
+		if err := fixture.db.Create(&document).Error; err != nil {
+			t.Fatalf("seed %s bounded Search document ordinal=%d: %v", fixture.engine, index, err)
+		}
+		posting := model.BackupAssetSearchPosting{
+			SearchGenerationID: searchGenerationID, DocumentID: entryID, Field: string(SearchFieldName),
+			TokenKind: string(TokenKindExact), KeyVersion: 1, TokenHMAC: strings.Repeat(string(rune('e'+index)), 64), TermFrequency: 1,
+		}
+		if err := fixture.db.Create(&posting).Error; err != nil {
+			t.Fatalf("seed %s bounded Search posting ordinal=%d: %v", fixture.engine, index, err)
+		}
+		field := model.BackupAssetSearchDocumentField{
+			SearchGenerationID: searchGenerationID, DocumentID: entryID, Field: string(SearchFieldName),
+			State: string(FieldCoverageComplete), CoverageRevision: 1, ClassificationRevision: 1,
+			PipelineRevision: 1, IndexRevision: 1, SourceFingerprint: point.SourceFingerprint, UpdatedAt: now,
+		}
+		if err := fixture.db.Create(&field).Error; err != nil {
+			t.Fatalf("seed %s bounded Search field ordinal=%d: %v", fixture.engine, index, err)
+		}
+	}
+	attemptID := strings.Repeat("8", 32)
+	attempt := model.RecoveryPointLifecycleAttempt{
+		ID: attemptID, RecoveryPointID: pointID, Operation: string(backupasset.LifecycleRetentionExpire),
+		Phase: string(backupasset.LifecyclePhaseRevoking), TransitionRevision: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := fixture.db.Create(&attempt).Error; err != nil {
+		t.Fatalf("seed %s lifecycle attempt: %v", fixture.engine, err)
+	}
+	owner, err := NewSourceLifecycle(fixture.db, &Indexer{db: fixture.db}, func() time.Time { return now }, 2)
+	if err != nil {
+		t.Fatalf("NewSourceLifecycle: %v", err)
+	}
+	request := backupasset.SourceLifecycleRequest{
+		RecoveryPointID: pointID, LifecycleAttemptID: attemptID,
+		Operation: backupasset.LifecycleRetentionExpire, Stage: backupasset.SourceLifecyclePrepare,
+	}
+	if err := owner.RevokeRecoveryPoint(context.Background(), request); err != nil {
+		t.Fatalf("prepare %s migrated Search source lifecycle: %v", fixture.engine, err)
+	}
+	var persisted model.BackupAssetSearchGeneration
+	if err := fixture.db.First(&persisted, "id = ?", searchGenerationID).Error; err != nil {
+		t.Fatalf("load %s Search generation: %v", fixture.engine, err)
+	}
+	if persisted.State != string(SearchGenerationFailed) || persisted.IsActive ||
+		persisted.ErrorCode != string(SearchErrorBuildFailed) || persisted.FinishedAt == nil {
+		t.Fatalf("%s Search prepare state=%s active=%t error_code=%s finished=%t",
+			fixture.engine, persisted.State, persisted.IsActive, persisted.ErrorCode, persisted.FinishedAt != nil)
+	}
+	if err := fixture.db.Model(&model.RecoveryPointLifecycleAttempt{}).
+		Where("id = ?", attemptID).Update("phase", backupasset.LifecyclePhaseCleaning).Error; err != nil {
+		t.Fatalf("advance %s lifecycle attempt to cleaning: %v", fixture.engine, err)
+	}
+	request.Stage = backupasset.SourceLifecycleCleanup
+	if err := owner.RevokeRecoveryPoint(context.Background(), request); err != nil {
+		t.Fatalf("cleanup %s migrated Search source lifecycle: %v", fixture.engine, err)
+	}
+	if err := owner.RevokeRecoveryPoint(context.Background(), request); err != nil {
+		t.Fatalf("idempotent cleanup %s migrated Search source lifecycle: %v", fixture.engine, err)
+	}
+	var documents, postings, fields, generations, catalogEntries int64
+	if err := fixture.db.Model(&model.BackupAssetSearchDocument{}).
+		Where("search_generation_id = ?", searchGenerationID).Count(&documents).Error; err != nil {
+		t.Fatalf("count %s cleaned Search documents: %v", fixture.engine, err)
+	}
+	if err := fixture.db.Model(&model.BackupAssetSearchPosting{}).
+		Where("search_generation_id = ?", searchGenerationID).Count(&postings).Error; err != nil {
+		t.Fatalf("count %s cleaned Search postings: %v", fixture.engine, err)
+	}
+	if err := fixture.db.Model(&model.BackupAssetSearchDocumentField{}).
+		Where("search_generation_id = ?", searchGenerationID).Count(&fields).Error; err != nil {
+		t.Fatalf("count %s cleaned Search fields: %v", fixture.engine, err)
+	}
+	if err := fixture.db.Model(&model.BackupAssetSearchGeneration{}).
+		Where("id = ? AND recovery_point_id = ?", searchGenerationID, pointID).Count(&generations).Error; err != nil {
+		t.Fatalf("count %s retained Search generation evidence: %v", fixture.engine, err)
+	}
+	if err := fixture.db.Model(&model.CatalogEntry{}).
+		Where("generation_id = ? AND recovery_point_id = ?", catalogID, pointID).Count(&catalogEntries).Error; err != nil {
+		t.Fatalf("count %s retained Catalog entries: %v", fixture.engine, err)
+	}
+	if documents != 0 || postings != 0 || fields != 0 || generations != 1 || catalogEntries != 3 {
+		t.Fatalf("%s bounded cleanup documents=%d postings=%d fields=%d generations=%d catalog_entries=%d, want 0/0/0/1/3",
+			fixture.engine, documents, postings, fields, generations, catalogEntries)
+	}
+	if err := fixture.db.First(&persisted, "id = ?", searchGenerationID).Error; err != nil {
+		t.Fatalf("reload %s retained Search generation: %v", fixture.engine, err)
+	}
+	if persisted.State != string(SearchGenerationFailed) || persisted.IsActive || persisted.ErrorCode != string(SearchErrorBuildFailed) {
+		t.Fatalf("%s retained Search generation state=%s active=%t error_code=%s",
+			fixture.engine, persisted.State, persisted.IsActive, persisted.ErrorCode)
+	}
 }
 
 type searchBehaviorFixture struct {
@@ -269,7 +452,7 @@ func openSearchBehaviorPostgres(t *testing.T, dsn string) searchBehaviorFixture 
 func prepareSearchBehaviorSchema(t *testing.T, fixture searchBehaviorFixture) {
 	t.Helper()
 	if err := fixture.db.AutoMigrate(
-		&model.RecoveryPoint{}, &model.CatalogGeneration{}, &model.CatalogEntry{},
+		&model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{}, &model.CatalogGeneration{}, &model.CatalogEntry{},
 		&model.WrappedDomainKey{}, &model.RecoveryPointLease{},
 		&model.BackupAssetSearchGeneration{}, &model.BackupAssetSearchDocument{},
 		&model.BackupAssetSearchPosting{}, &model.BackupAssetSearchDocumentField{},

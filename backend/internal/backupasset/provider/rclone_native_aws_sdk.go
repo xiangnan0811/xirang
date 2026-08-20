@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"xirang/backend/internal/backupasset"
 )
@@ -583,6 +585,65 @@ func (adapter *rcloneNativeS3SDK) DeleteCurrentCanary(
 	return RcloneNativeCurrentDeleteResult{VersionID: aws.ToString(result.VersionId)}, nil
 }
 
+func (adapter *rcloneNativeS3SDK) ProbeExactVersion(ctx context.Context, version RcloneNativeExactVersion) (RcloneNativeVersionProbe, error) {
+	if err := adapter.validateExactVersion(ctx, version); err != nil {
+		return RcloneNativeVersionProbe{}, err
+	}
+	output, err := adapter.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(adapter.profile.Bucket), Key: aws.String(version.PhysicalKey), VersionId: aws.String(version.VersionID),
+		ExpectedBucketOwner: aws.String(adapter.expectedAccountID),
+	})
+	if err != nil {
+		if rcloneNativeAWSErrorCode(err, "NotFound", "NoSuchKey", "404", "NoSuchVersion") {
+			return RcloneNativeVersionProbe{}, nil
+		}
+		if rcloneNativeHeadDeleteMarkerPresent(err) {
+			return RcloneNativeVersionProbe{Present: true}, nil
+		}
+		return RcloneNativeVersionProbe{}, rcloneNativeError(backupasset.RcloneReasonProviderUnavailable, err)
+	}
+	if output == nil {
+		return RcloneNativeVersionProbe{}, nil
+	}
+	locked := output.ObjectLockLegalHoldStatus == s3types.ObjectLockLegalHoldStatusOn
+	if output.ObjectLockMode != "" {
+		if output.ObjectLockRetainUntilDate == nil || output.ObjectLockRetainUntilDate.After(time.Now().UTC()) {
+			locked = true
+		}
+	}
+	return RcloneNativeVersionProbe{Present: true, Locked: locked}, nil
+}
+
+func (adapter *rcloneNativeS3SDK) DeleteExactVersion(ctx context.Context, version RcloneNativeExactVersion) error {
+	if version.VersionID == "" {
+		return invalidDeletePointRequest("unversioned current object delete is forbidden")
+	}
+	if err := adapter.validateExactVersion(ctx, version); err != nil {
+		return err
+	}
+	probe, err := adapter.ProbeExactVersion(ctx, version)
+	if err != nil {
+		return err
+	}
+	if probe.Locked {
+		return ErrDeletePointWORM
+	}
+	if !probe.Present {
+		return nil
+	}
+	_, err = adapter.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(adapter.profile.Bucket), Key: aws.String(version.PhysicalKey), VersionId: aws.String(version.VersionID),
+		ExpectedBucketOwner: aws.String(adapter.expectedAccountID),
+	})
+	if err != nil {
+		if rcloneNativeAWSErrorCode(err, "AccessDenied", "ObjectLocked") {
+			return ErrDeletePointWORM
+		}
+		return rcloneNativeError(backupasset.RcloneReasonProviderUnavailable, err)
+	}
+	return nil
+}
+
 func (adapter *rcloneNativeS3SDK) openVersion(ctx context.Context, request RcloneNativeExactReadRequest, byteRange string, baseline bool) (io.ReadCloser, error) {
 	validationErr := adapter.validateExactRead(ctx, request)
 	if baseline {
@@ -629,6 +690,15 @@ func (adapter *rcloneNativeS3SDK) validateConfiguration() error {
 func (adapter *rcloneNativeS3SDK) validateBoundRequest(ctx context.Context) error {
 	if err := adapter.validateConfiguration(); err != nil || ctx == nil {
 		return fmt.Errorf("%w: invalid AWS S3 native adapter request", backupasset.ErrInvalidState)
+	}
+	return nil
+}
+
+func (adapter *rcloneNativeS3SDK) validateExactVersion(ctx context.Context, version RcloneNativeExactVersion) error {
+	if err := adapter.validateBoundRequest(ctx); err != nil ||
+		!validRcloneNativePhysicalKey(version.PhysicalKey) || !validRcloneNativeVersionID(version.VersionID) ||
+		!strings.HasPrefix(version.PhysicalKey, adapter.profile.ManagedPrefix) {
+		return fmt.Errorf("%w: exact native object version is outside the managed prefix", backupasset.ErrInvalidState)
 	}
 	return nil
 }
@@ -762,9 +832,21 @@ func rcloneNativeAWSErrorCode(err error, codes ...string) bool {
 	return false
 }
 
+func rcloneNativeHeadDeleteMarkerPresent(err error) bool {
+	var httpErr *smithyhttp.ResponseError
+	if !errors.As(err, &httpErr) || httpErr == nil || httpErr.Response == nil {
+		return false
+	}
+	if httpErr.HTTPStatusCode() != http.StatusMethodNotAllowed {
+		return false
+	}
+	return strings.EqualFold(httpErr.Response.Header.Get("x-amz-delete-marker"), "true")
+}
+
 var _ STSAssumer = (*RcloneNativeAWSFactory)(nil)
 var _ BootstrapDenyProbe = (*RcloneNativeAWSFactory)(nil)
 var _ RcloneNativeClientFactory = (*RcloneNativeAWSFactory)(nil)
 var _ S3Native = (*rcloneNativeS3SDK)(nil)
 var _ RcloneNativeCanaryS3 = (*rcloneNativeS3SDK)(nil)
+var _ RcloneNativeExactVersionDeleter = (*rcloneNativeS3SDK)(nil)
 var _ KMSKeyInspector = (*rcloneNativeKMSSDK)(nil)

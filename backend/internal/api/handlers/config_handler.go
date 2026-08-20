@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
@@ -30,6 +31,7 @@ type ConfigHandler struct {
 	db           *gorm.DB
 	settingsSvc  *settings.Service
 	transitioner publication.FeatureTransitioner
+	assetProbe   func(operation string)
 }
 
 type configImportData struct {
@@ -296,6 +298,17 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 		})
 	}
 
+	documentID, err := backupasset.NewOpaqueID()
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	assetGraph, assetCounts, err := h.buildConfigAssetExportGraph(includeSecrets)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+
 	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
 		Action:           "config.export",
 		Purpose:          "config_export",
@@ -303,25 +316,34 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 		CredentialSource: "config.export",
 		Outcome:          credentialaudit.OutcomeSuccess,
 		Metadata: map[string]any{
-			"stage":          "success",
-			"with_sensitive": includeSecrets,
-			"node_count":     len(exportNodes),
-			"key_count":      len(exportKeys),
-			"policy_count":   len(exportPolicies),
-			"task_count":     len(exportTasks),
-			"setting_count":  len(exportSettings),
+			"stage":                  "success",
+			"with_sensitive":         includeSecrets,
+			"node_count":             len(exportNodes),
+			"key_count":              len(exportKeys),
+			"policy_count":           len(exportPolicies),
+			"task_count":             len(exportTasks),
+			"setting_count":          len(exportSettings),
+			"repository_count":       assetCounts.Repositories,
+			"link_count":             assetCounts.Links,
+			"retention_policy_count": assetCounts.Policies,
+			"hold_count":             assetCounts.Holds,
 		},
 	})
 
 	respondOK(c, gin.H{
-		"version":     "1.0",
+		"document_id": documentID,
+		"version":     configExportVersion2,
 		"exported_at": time.Now().Format(time.RFC3339),
 		"data": gin.H{
-			"nodes":           exportNodes,
-			"ssh_keys":        exportKeys,
-			"policies":        exportPolicies,
-			"tasks":           exportTasks,
-			"system_settings": exportSettings,
+			"nodes":                     exportNodes,
+			"ssh_keys":                  exportKeys,
+			"policies":                  exportPolicies,
+			"tasks":                     exportTasks,
+			"system_settings":           exportSettings,
+			"backup_repositories":       assetGraph.BackupRepositories,
+			"task_repository_links":     assetGraph.TaskRepositoryLinks,
+			"backup_retention_policies": assetGraph.BackupRetentionPolicies,
+			"recovery_point_holds":      assetGraph.RecoveryPointHolds,
 		},
 	})
 }
@@ -359,11 +381,16 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 		return
 	}
 
-	data, err := decodeConfigImportData(body)
+	envelope, err := decodeConfigImportEnvelope(body)
 	if err != nil {
 		respondBadRequest(c, "无效的导入数据")
 		return
 	}
+	if err := validateConfigImportEnvelope(envelope); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	data := envelope.Classic
 	settingsPlan, foundationSettings, err := h.normalizeImportSettings(data.SystemSettings)
 	if err != nil {
 		respondBadRequest(c, err.Error())
@@ -910,11 +937,25 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				}
 			}
 
+			if envelope.Version == configExportVersion2 {
+				if err := h.importBackupAssetGraph(tx, envelope, configImportActorID(c)); err != nil {
+					return err
+				}
+			}
+
 			return nil
 		})
 	}
 	importErr := h.persistConfigImport(c.Request.Context(), foundationSettings, persistImport)
 	if importErr != nil {
+		if errors.Is(importErr, errConfigAssetGraphConflict) {
+			respondConflict(c, "导入的备份资产图与本地身份冲突")
+			return
+		}
+		if errors.Is(importErr, errConfigAssetGraphInvalid) {
+			respondBadRequest(c, importErr.Error())
+			return
+		}
 		respondInternalError(c, importErr)
 		return
 	}
@@ -966,25 +1007,6 @@ func configExportSettingLooksSensitive(setting model.SystemSetting) bool {
 		}
 	}
 	return false
-}
-
-func decodeConfigImportData(body []byte) (configImportData, error) {
-	var topLevel map[string]json.RawMessage
-	if err := json.Unmarshal(body, &topLevel); err == nil {
-		if rawData, ok := topLevel["data"]; ok {
-			var wrapped configImportData
-			if err := json.Unmarshal(rawData, &wrapped); err != nil {
-				return configImportData{}, err
-			}
-			return wrapped, nil
-		}
-	}
-
-	var direct configImportData
-	if err := json.Unmarshal(body, &direct); err != nil {
-		return configImportData{}, err
-	}
-	return direct, nil
 }
 
 // importValidationError 导入数据校验错误

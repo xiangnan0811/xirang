@@ -540,6 +540,7 @@ func TestRunnerValidatesReadOnlyToolOperationPairs(t *testing.T) {
 		{Tool: ToolRestic, Operation: OperationResticVersion, Args: []string{"version"}},
 		{Tool: ToolRestic, Operation: OperationResticConfig, Args: []string{"--password-file", "/dev/stdin", "cat", "config"}, SecretStdin: resticSecret},
 		{Tool: ToolRestic, Operation: OperationResticSnapshots, Args: []string{"--password-file", "/dev/stdin", "snapshots", "--json"}, SecretStdin: resticSecret},
+		{Tool: ToolRestic, Operation: OperationResticSnapshots, Args: []string{"--password-file", "/dev/stdin", "snapshots", "--json", "--", snapshotID}, SecretStdin: resticSecret},
 		{Tool: ToolRestic, Operation: OperationResticList, Args: []string{"--password-file", "/dev/stdin", "ls", "--json", "--", snapshotID, "/"}, SecretStdin: resticSecret},
 		{Tool: ToolRestic, Operation: OperationResticDump, Args: []string{"--password-file", "/dev/stdin", "dump", "--", snapshotID, "/file"}, SecretStdin: resticSecret},
 		{Tool: ToolRclone, Operation: OperationRcloneVersion, Args: []string{"version"}},
@@ -837,6 +838,7 @@ func TestRunnerPublicationPurposeMapsToSSHScopes(t *testing.T) {
 	for purpose, want := range map[CommandPurpose]string{
 		CommandPurposePublish:  sshutil.PurposeTaskBackup,
 		CommandPurposeManifest: sshutil.PurposeRepositoryList,
+		CommandPurposeDelete:   sshutil.PurposeTaskBackup,
 	} {
 		got, ok := sshPurpose(purpose)
 		if !ok || got != want {

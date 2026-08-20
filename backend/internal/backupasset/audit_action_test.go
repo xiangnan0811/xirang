@@ -83,8 +83,10 @@ func TestAuditActionRegistryMatchesDesignContract(t *testing.T) {
 		AuditActionRetentionPolicyCreate,
 		AuditActionRetentionPolicyUpdate,
 		AuditActionRetentionPolicyDelete,
+		AuditActionRetentionPolicyList,
 		AuditActionHoldCreate,
 		AuditActionHoldRelease,
+		AuditActionHoldList,
 	}
 	if !reflect.DeepEqual(AuditActions, want) {
 		t.Fatalf("audit action registry drifted:\n got: %#v\nwant: %#v", AuditActions, want)

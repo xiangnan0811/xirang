@@ -18,20 +18,33 @@ import (
 )
 
 type fakeBackupRepositoryService struct {
-	connectRequest   backuprepository.ConnectRequest
-	listRequest      backuprepository.RepositoryListRequest
-	detailID         string
-	reconcileID      string
-	disconnectID     string
-	scope            backuprepository.VisibilityScope
-	requestContext   backuprepository.RequestContext
-	calls            int
-	connectResult    backuprepository.ConnectResult
-	listResult       backuprepository.RepositoryPage
-	detailResult     backuprepository.RepositoryView
-	reconcileResult  backuprepository.ConnectResult
-	disconnectResult backuprepository.ConnectResult
-	err              error
+	connectRequest     backuprepository.ConnectRequest
+	listRequest        backuprepository.RepositoryListRequest
+	detailID           string
+	reconcileID        string
+	disconnectID       string
+	importScanID       string
+	importScanRequest  backuprepository.ImportDiscoveryRequest
+	importListID       string
+	importListRequest  backuprepository.ImportCandidateListRequest
+	reviewRepositoryID string
+	reviewCandidateID  string
+	reviewRequest      backuprepository.ImportReviewRequest
+	rebuildID          string
+	rebuildRequest     backuprepository.RebuildRequest
+	scope              backuprepository.VisibilityScope
+	requestContext     backuprepository.RequestContext
+	calls              int
+	connectResult      backuprepository.ConnectResult
+	listResult         backuprepository.RepositoryPage
+	detailResult       backuprepository.RepositoryView
+	reconcileResult    backuprepository.ConnectResult
+	disconnectResult   backuprepository.ConnectResult
+	importScanResult   backuprepository.ImportDiscoveryResult
+	importListResult   backuprepository.ImportCandidatePage
+	reviewResult       backuprepository.ImportCandidateView
+	rebuildResult      backuprepository.RebuildResult
+	err                error
 }
 
 func (service *fakeBackupRepositoryService) Connect(_ context.Context, request backuprepository.ConnectRequest, requestContext backuprepository.RequestContext) (backuprepository.ConnectResult, error) {
@@ -58,6 +71,26 @@ func (service *fakeBackupRepositoryService) Disconnect(_ context.Context, id str
 	service.calls++
 	service.disconnectID, service.requestContext = id, requestContext
 	return service.disconnectResult, service.err
+}
+func (service *fakeBackupRepositoryService) DiscoverImportCandidates(_ context.Context, id string, request backuprepository.ImportDiscoveryRequest, requestContext backuprepository.RequestContext) (backuprepository.ImportDiscoveryResult, error) {
+	service.calls++
+	service.importScanID, service.importScanRequest, service.requestContext = id, request, requestContext
+	return service.importScanResult, service.err
+}
+func (service *fakeBackupRepositoryService) ListImportCandidates(_ context.Context, id string, request backuprepository.ImportCandidateListRequest, scope backuprepository.VisibilityScope, requestContext backuprepository.RequestContext) (backuprepository.ImportCandidatePage, error) {
+	service.calls++
+	service.importListID, service.importListRequest, service.scope, service.requestContext = id, request, scope, requestContext
+	return service.importListResult, service.err
+}
+func (service *fakeBackupRepositoryService) ReviewImportCandidate(_ context.Context, repositoryID, candidateID string, request backuprepository.ImportReviewRequest, requestContext backuprepository.RequestContext) (backuprepository.ImportCandidateView, error) {
+	service.calls++
+	service.reviewRepositoryID, service.reviewCandidateID, service.reviewRequest, service.requestContext = repositoryID, candidateID, request, requestContext
+	return service.reviewResult, service.err
+}
+func (service *fakeBackupRepositoryService) RebuildAcceptedImports(_ context.Context, id string, request backuprepository.RebuildRequest, requestContext backuprepository.RequestContext) (backuprepository.RebuildResult, error) {
+	service.calls++
+	service.rebuildID, service.rebuildRequest, service.requestContext = id, request, requestContext
+	return service.rebuildResult, service.err
 }
 
 func TestBackupRepositoryConnectStrictlyAcceptsOnlyTaskDerivedInput(t *testing.T) {
@@ -163,12 +196,65 @@ func TestBackupRepositoryHandlerNilServiceFailsClosedForEveryRoute(t *testing.T)
 		{http.MethodGet, "/backup-repositories/" + id, ""},
 		{http.MethodPost, "/backup-repositories/" + id + "/reconcile", ""},
 		{http.MethodPost, "/backup-repositories/" + id + "/disconnect", ""},
+		{http.MethodPost, "/backup-repositories/" + id + "/import-scans", `{"limit":1}`},
+		{http.MethodGet, "/backup-repositories/" + id + "/import-candidates", ""},
+		{http.MethodPost, "/backup-repositories/" + id + "/import-candidates/" + id + "/reviews", `{"decision":"rejected"}`},
+		{http.MethodPost, "/backup-repositories/" + id + "/rebuilds", `{"limit":1}`},
 	}
 	for _, request := range requests {
 		response := performBackupRepositoryHandlerRequest(t, router, request.method, request.path, request.body)
 		if response.Code != http.StatusInternalServerError {
 			t.Fatalf("%s %s status=%d body=%s", request.method, request.path, response.Code, response.Body.String())
 		}
+	}
+}
+
+func TestBackupRepositoryLifecycleHandlerImportRebuildAndEmptyBodies(t *testing.T) {
+	service := &fakeBackupRepositoryService{}
+	router := newBackupRepositoryHandlerTestRouter(service)
+	id := strings.Repeat("b", 32)
+	candidateID := strings.Repeat("c", 32)
+
+	response := performBackupRepositoryHandlerRequest(t, router, http.MethodPost, "/backup-repositories/"+id+"/import-scans", `{"limit":25,"cursor":"opaque-cursor"}`)
+	if response.Code != http.StatusOK || service.importScanID != id || service.importScanRequest.Limit != 25 || service.importScanRequest.Cursor != "opaque-cursor" {
+		t.Fatalf("import scan status=%d id=%q request=%+v body=%s", response.Code, service.importScanID, service.importScanRequest, response.Body.String())
+	}
+
+	response = performBackupRepositoryHandlerRequest(t, router, http.MethodGet, "/backup-repositories/"+id+"/import-candidates?limit=10&cursor=opaque-cursor", "")
+	if response.Code != http.StatusOK || service.importListID != id || service.importListRequest.Limit != 10 || service.importListRequest.Cursor != "opaque-cursor" {
+		t.Fatalf("import list status=%d request=%+v", response.Code, service.importListRequest)
+	}
+
+	response = performBackupRepositoryHandlerRequest(t, router, http.MethodPost, "/backup-repositories/"+id+"/import-candidates/"+candidateID+"/reviews", `{"decision":"accepted","accept_as":"imported_baseline"}`)
+	if response.Code != http.StatusOK || service.reviewRepositoryID != id || service.reviewCandidateID != candidateID ||
+		service.reviewRequest.Decision != backupasset.ImportReviewAccepted || service.reviewRequest.AcceptAs != backupasset.ImportCandidateImportedBaseline {
+		t.Fatalf("review status=%d repo=%q candidate=%q request=%+v body=%s", response.Code, service.reviewRepositoryID, service.reviewCandidateID, service.reviewRequest, response.Body.String())
+	}
+
+	response = performBackupRepositoryHandlerRequest(t, router, http.MethodPost, "/backup-repositories/"+id+"/rebuilds", `{"limit":5}`)
+	if response.Code != http.StatusOK || service.rebuildID != id || service.rebuildRequest.Limit != 5 {
+		t.Fatalf("rebuild status=%d request=%+v body=%s", response.Code, service.rebuildRequest, response.Body.String())
+	}
+
+	before := service.calls
+	response = performBackupRepositoryHandlerRequest(t, router, http.MethodPost, "/backup-repositories/"+id+"/import-scans", `{"limit":1,"path":"/secret"}`)
+	if response.Code != http.StatusBadRequest || service.calls != before {
+		t.Fatalf("unknown import field status=%d calls=%d body=%s", response.Code, service.calls, response.Body.String())
+	}
+}
+
+func TestBackupRepositoryLifecycleHandlerMapsFeatureAndConflictErrors(t *testing.T) {
+	service := &fakeBackupRepositoryService{err: &backuprepository.CapabilityError{Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityFeatureDisabled}, CorrelationID: "corr-safe"}}
+	router := newBackupRepositoryHandlerTestRouter(service)
+	id := strings.Repeat("b", 32)
+	response := performBackupRepositoryHandlerRequest(t, router, http.MethodPost, "/backup-repositories/"+id+"/rebuilds", `{"limit":1}`)
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "feature_disabled") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	service.err = backupasset.ErrConflict
+	response = performBackupRepositoryHandlerRequest(t, router, http.MethodPost, "/backup-repositories/"+id+"/import-scans", `{"limit":1}`)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("conflict status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -207,6 +293,10 @@ func newBackupRepositoryHandlerTestRouter(service BackupRepositoryService) *gin.
 	router.GET("/backup-repositories/:id", handler.Detail)
 	router.POST("/backup-repositories/:id/reconcile", handler.Reconcile)
 	router.POST("/backup-repositories/:id/disconnect", handler.Disconnect)
+	router.POST("/backup-repositories/:id/import-scans", handler.ImportScan)
+	router.GET("/backup-repositories/:id/import-candidates", handler.ListImportCandidates)
+	router.POST("/backup-repositories/:id/import-candidates/:candidateId/reviews", handler.ReviewImportCandidate)
+	router.POST("/backup-repositories/:id/rebuilds", handler.Rebuild)
 	return router
 }
 

@@ -32,6 +32,7 @@ import { createAppCredentialsApi } from "./app-credentials";
 import { createAutomationRulesApi } from "./automation-rules";
 import { createServiceMonitorsApi } from "./service-monitors";
 import { createBackupRepositoriesApi } from "./backup-repositories-api";
+import { createBackupRetentionApi } from "./backup-retention-api";
 import { createRecoveryPointsApi } from "./recovery-points-api";
 import { createBackupAssetsApi } from "./backup-assets-api";
 
@@ -168,6 +169,7 @@ export const apiClient = {
   ...createAutomationRulesApi(),
   ...createServiceMonitorsApi(),
   ...createBackupRepositoriesApi(),
+  ...createBackupRetentionApi(),
   ...createRecoveryPointsApi(),
   ...createBackupAssetsApi(),
   ...lazyBackupAssetSearchApi,

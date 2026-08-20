@@ -58,3 +58,10 @@ func (s *CronScheduler) RemoveTask(taskID uint) {
 		delete(s.entries, taskID)
 	}
 }
+
+func (s *CronScheduler) HasTask(taskID uint) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.entries[taskID]
+	return ok
+}

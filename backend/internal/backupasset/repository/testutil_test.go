@@ -86,7 +86,7 @@ func newRepositoryTestDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Task{}, &model.TaskRun{}, &model.BackupRepository{}, &model.RepositoryAccessBinding{}, &model.TaskRepositoryLink{}, &model.RecoveryPoint{}, &model.RecoveryPointManifest{}, &model.RecoveryPointLease{}, &model.BackupAssetManagedHistoryLatch{}, &model.CatalogGeneration{}, &model.CatalogEntry{}, &model.NodeOwner{}, &model.WrappedDomainKey{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Task{}, &model.TaskRun{}, &model.BackupRepository{}, &model.RepositoryAccessBinding{}, &model.TaskRepositoryLink{}, &model.RecoveryPoint{}, &model.RecoveryPointManifest{}, &model.RecoveryPointLease{}, &model.RecoveryPointLifecycleAttempt{}, &model.BackupAssetManagedHistoryLatch{}, &model.CatalogGeneration{}, &model.CatalogEntry{}, &model.NodeOwner{}, &model.WrappedDomainKey{}); err != nil {
 		t.Fatal(err)
 	}
 	statements := []string{
@@ -236,6 +236,9 @@ var repositoryFoundationDefaults = repositorySettings{
 	"backup_assets.catalog_batch_size":                    "2000",
 	"backup_assets.catalog_build_timeout":                 "30m",
 	"backup_assets.repository_reconcile_interval":         "15m",
+	"backup_assets.retention_reconcile_interval":          "5m",
+	"backup_assets.retention_batch_size":                  "100",
+	"backup_assets.retention_drain_timeout":               "30s",
 	"backup_assets.audit_segment_max_events":              "10000",
 	"backup_assets.audit_segment_max_age":                 "24h",
 	"backup_assets.audit_detail_retention_days":           "180",

@@ -192,9 +192,8 @@ export function ExportJobPanel({
             </div>
             {items.length > 0 ? (
               <ul
-                tabIndex={0}
-                className="max-h-64 divide-y divide-border overflow-y-auto rounded-md border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                aria-label={t("backupAssets.export.items")}
+                aria-labelledby="backup-export-items-title"
+                className="max-h-64 divide-y divide-border overflow-y-auto rounded-md border border-border"
               >
                 {items.map((item) => (
                   <li key={item.id} className="flex items-center gap-2 px-3 py-2 text-xs">

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
+	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
 )
@@ -37,6 +39,10 @@ type Dependencies struct {
 	CatalogOwnership        *catalog.Ownership
 	CatalogSummary          CatalogSummaryProjector
 	RecoverySourceNamespace RecoverySourceNamespaceAuthority
+	CatalogRebuild          CatalogRebuildStarter
+	DerivedBackfill         DerivedBackfillQueuer
+	DerivedExpectations     DerivedExpectationSource
+	ManifestProof           ManagedManifestProofVerifier
 }
 
 type Service struct {
@@ -60,6 +66,22 @@ type Service struct {
 	catalogOwnership        *catalog.Ownership
 	catalogSummary          CatalogSummaryProjector
 	recoverySourceNamespace RecoverySourceNamespaceAuthority
+	catalogRebuild          CatalogRebuildStarter
+	derivedBackfill         DerivedBackfillQueuer
+	derivedExpectations     DerivedExpectationSource
+	manifestProof           ManagedManifestProofVerifier
+
+	importListingMu        sync.Mutex
+	importListingCursors   map[string]string
+	importListingSeen      map[string]map[string]normalizedImportCandidate
+	importListingFromEmpty map[string]bool
+	importCycleStartedAt   map[string]time.Time
+	importListingComplete  map[string]bool
+	importStaleAfterID     map[string]string
+	importAfterID          string
+	rebuildAfterID         string
+	pendingDerivedMu       sync.Mutex
+	pendingDerived         map[string]DerivedBackfillRequest
 }
 
 func NewService(dependencies Dependencies) (*Service, error) {
@@ -84,8 +106,42 @@ func NewService(dependencies Dependencies) (*Service, error) {
 		catalogOwnership:        dependencies.CatalogOwnership,
 		catalogSummary:          dependencies.CatalogSummary,
 		recoverySourceNamespace: dependencies.RecoverySourceNamespace,
+		catalogRebuild:          dependencies.CatalogRebuild,
+		derivedBackfill:         dependencies.DerivedBackfill,
+		derivedExpectations:     derivedExpectationSource(dependencies.DerivedExpectations, dependencies.DerivedBackfill),
+		manifestProof:           dependencies.ManifestProof,
 		preflights:              newRsyncVersioningPreflightStore(dependencies.Now),
+		importListingCursors:    map[string]string{},
+		importListingSeen:       map[string]map[string]normalizedImportCandidate{},
+		importListingFromEmpty:  map[string]bool{},
+		importCycleStartedAt:    map[string]time.Time{},
+		importListingComplete:   map[string]bool{},
+		importStaleAfterID:      map[string]string{},
+		pendingDerived:          map[string]DerivedBackfillRequest{},
 	}, nil
+}
+
+func (service *Service) SetRebuildPorts(catalogRebuild CatalogRebuildStarter, derivedBackfill DerivedBackfillQueuer) error {
+	if service == nil {
+		return fmt.Errorf("%w: repository service unavailable", backupasset.ErrInvalidState)
+	}
+	if catalogRebuild == nil || derivedBackfill == nil {
+		return fmt.Errorf("%w: rebuild dependencies unavailable", backupasset.ErrInvalidState)
+	}
+	service.catalogRebuild = catalogRebuild
+	service.derivedBackfill = derivedBackfill
+	service.derivedExpectations = derivedExpectationSource(nil, derivedBackfill)
+	return nil
+}
+
+func derivedExpectationSource(explicit DerivedExpectationSource, queuer DerivedBackfillQueuer) DerivedExpectationSource {
+	if explicit != nil {
+		return explicit
+	}
+	if source, ok := queuer.(DerivedExpectationSource); ok {
+		return source
+	}
+	return nil
 }
 
 func (service *Service) ensureEnabled(correlationID string) error {
@@ -102,4 +158,94 @@ func (service *Service) requireRuntime() error {
 	return nil
 }
 
+func (service *Service) PointDeleter(kind backupasset.ProviderKind) (provider.PointDeleter, error) {
+	if err := service.requireRuntime(); err != nil {
+		return nil, err
+	}
+	return service.registry.PointDeleter(kind)
+}
+
 func (service *Service) utcNow() time.Time { return service.now().UTC() }
+
+func (service *Service) ResolveLifecycleDeletePoint(
+	ctx context.Context,
+	operationID string,
+	point model.RecoveryPoint,
+	repository model.BackupRepository,
+) (provider.DeletePointRequest, error) {
+	if service == nil || service.db == nil || backupasset.ValidateOpaqueID(operationID) != nil ||
+		backupasset.ValidateOpaqueID(point.ID) != nil || backupasset.ValidateOpaqueID(repository.ID) != nil ||
+		point.RepositoryID != repository.ID {
+		return provider.DeletePointRequest{}, fmt.Errorf("%w: invalid lifecycle delete reconstruction", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	native, err := reconstructDeletePointNative(repository.ProviderKind, lifecycleDeleteLocator(point))
+	if err != nil {
+		return provider.DeletePointRequest{}, err
+	}
+	access, err := service.lifecycleDeleteAccess(ctx, repository, point, native)
+	if err != nil {
+		return provider.DeletePointRequest{}, err
+	}
+	access.RepositoryID = repository.ID
+	repositoryIdentity := ""
+	if repository.RepositoryIdentity != nil {
+		repositoryIdentity = strings.TrimSpace(*repository.RepositoryIdentity)
+	}
+	return provider.DeletePointRequest{
+		Snapshot: provider.ReadSnapshot{
+			RepositoryID:       repository.ID,
+			CapabilityRevision: repository.CapabilityRevision,
+			SourceRevision:     point.SourceFingerprint,
+			RepositoryIdentity: repositoryIdentity,
+			Access:             access,
+		},
+		Point:                  provider.PointLocator{Native: native},
+		ExpectedSourceRevision: point.SourceFingerprint,
+		OperationID:            operationID,
+	}, nil
+}
+
+func reconstructDeletePointNative(providerKind string, locator string) (string, error) {
+	switch backupasset.ProviderKind(providerKind) {
+	case backupasset.ProviderRestic:
+		decoded, err := decodeResticPointLocator(locator)
+		if err != nil || decoded.FullSnapshotID == "" {
+			return "", &provider.CapabilityError{
+				Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityDeletionUnavailable},
+			}
+		}
+		return decoded.FullSnapshotID, nil
+	case backupasset.ProviderRsync:
+		decoded, err := decodeManagedRsyncPointLocator(locator)
+		if err != nil || decoded.FinalComponent == "" {
+			return "", &provider.CapabilityError{
+				Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityDeletionUnavailable},
+			}
+		}
+		return decoded.FinalComponent, nil
+	case backupasset.ProviderRclone:
+		decoded, err := decodeManagedRclonePointLocator(locator)
+		if err != nil {
+			return "", &provider.CapabilityError{
+				Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityDeletionUnavailable},
+			}
+		}
+		native := decoded.NativeCommitKey
+		if native == "" {
+			native = decoded.PortableAttemptRoot
+		}
+		if native == "" {
+			return "", &provider.CapabilityError{
+				Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityDeletionUnavailable},
+			}
+		}
+		return native, nil
+	default:
+		return "", &provider.CapabilityError{
+			Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityDeletionUnavailable},
+		}
+	}
+}

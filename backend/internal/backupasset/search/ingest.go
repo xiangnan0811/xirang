@@ -448,6 +448,9 @@ func (service *ContentIngestService) lockAndValidate(
 	sourceFingerprint, catalogGenerationID, searchGenerationID, leaseID, attemptID, fenceToken string,
 	expectedClassificationRevision, keyVersion int,
 ) (contentProjectionControl, error) {
+	if err := backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, ref.RecoveryPointID); err != nil {
+		return contentProjectionControl{}, err
+	}
 	var leaseRow model.RecoveryPointLease
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", leaseID).Take(&leaseRow).Error; err != nil {
 		return contentProjectionControl{}, backupasset.ErrLeaseFenceLost

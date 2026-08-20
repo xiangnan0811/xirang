@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
 type rcloneNativeSTSClientFake struct {
@@ -458,6 +460,204 @@ func TestRcloneNativeAWSSDKWritesVersionedControlWithExplicitEncryption(t *testi
 		EncryptionProfile: RcloneNativeSSEKMSV1, KMSKeyARN: keyARN, KMSKeyDigest: strings.Repeat("b", 64), BucketKeyEnabled: true,
 	}); rcloneNativeReason(err) != backupasset.RcloneReasonIdentityMismatch {
 		t.Fatalf("wrong KMS digest error=%v reason=%q", err, rcloneNativeReason(err))
+	}
+}
+
+func TestRcloneNativeExactVersionMethodsRejectKeysOutsideManagedPrefix(t *testing.T) {
+	profile := validRcloneNativeProfileForTest()
+	outside := RcloneNativeExactVersion{PhysicalKey: "other/v1/data/file.bin", VersionID: "v-outside-1"}
+	owned := RcloneNativeExactVersion{PhysicalKey: profile.ManagedPrefix + "data/file.bin", VersionID: "v-owned-1"}
+
+	t.Run("outside_prefix_probe_and_delete_never_call_s3", func(t *testing.T) {
+		client := &rcloneNativeS3ClientFake{}
+		adapter := newRcloneNativeS3SDK(client, "123456789012", profile, nil)
+		probe, err := adapter.ProbeExactVersion(context.Background(), outside)
+		if !errors.Is(err, backupasset.ErrInvalidState) || probe.Present || probe.Locked {
+			t.Fatalf("outside ProbeExactVersion probe=%+v err=%v, want ErrInvalidState", probe, err)
+		}
+		if client.headInput != nil {
+			t.Fatalf("outside ProbeExactVersion called HeadObject: %+v", client.headInput)
+		}
+		if err := adapter.DeleteExactVersion(context.Background(), outside); !errors.Is(err, backupasset.ErrInvalidState) {
+			t.Fatalf("outside DeleteExactVersion err=%v, want ErrInvalidState", err)
+		}
+		if client.headInput != nil || client.deleteInput != nil {
+			t.Fatalf("outside DeleteExactVersion called S3 head=%+v delete=%+v", client.headInput, client.deleteInput)
+		}
+	})
+
+	t.Run("owned_prefix_probe_present", func(t *testing.T) {
+		client := &rcloneNativeS3ClientFake{headOutput: &s3.HeadObjectOutput{}}
+		adapter := newRcloneNativeS3SDK(client, "123456789012", profile, nil)
+		probe, err := adapter.ProbeExactVersion(context.Background(), owned)
+		if err != nil || !probe.Present || probe.Locked {
+			t.Fatalf("owned ProbeExactVersion probe=%+v err=%v", probe, err)
+		}
+		if client.headInput == nil || aws.ToString(client.headInput.Key) != owned.PhysicalKey ||
+			aws.ToString(client.headInput.VersionId) != owned.VersionID {
+			t.Fatalf("owned HeadObject input=%+v", client.headInput)
+		}
+	})
+
+	t.Run("owned_prefix_already_absent", func(t *testing.T) {
+		client := &rcloneNativeS3ClientFake{headError: &smithy.GenericAPIError{Code: "NotFound"}}
+		adapter := newRcloneNativeS3SDK(client, "123456789012", profile, nil)
+		probe, err := adapter.ProbeExactVersion(context.Background(), owned)
+		if err != nil || probe.Present || probe.Locked {
+			t.Fatalf("absent ProbeExactVersion probe=%+v err=%v", probe, err)
+		}
+		if err := adapter.DeleteExactVersion(context.Background(), owned); err != nil {
+			t.Fatalf("absent DeleteExactVersion err=%v", err)
+		}
+		if client.deleteInput != nil {
+			t.Fatalf("absent DeleteExactVersion still called DeleteObject: %+v", client.deleteInput)
+		}
+	})
+
+	t.Run("owned_prefix_worm", func(t *testing.T) {
+		client := &rcloneNativeS3ClientFake{headOutput: &s3.HeadObjectOutput{ObjectLockMode: s3types.ObjectLockModeCompliance}}
+		adapter := newRcloneNativeS3SDK(client, "123456789012", profile, nil)
+		probe, err := adapter.ProbeExactVersion(context.Background(), owned)
+		if err != nil || !probe.Present || !probe.Locked {
+			t.Fatalf("WORM ProbeExactVersion probe=%+v err=%v", probe, err)
+		}
+		if err := adapter.DeleteExactVersion(context.Background(), owned); !errors.Is(err, ErrDeletePointWORM) {
+			t.Fatalf("WORM DeleteExactVersion err=%v, want ErrDeletePointWORM", err)
+		}
+		if client.deleteInput != nil {
+			t.Fatalf("WORM DeleteExactVersion called DeleteObject: %+v", client.deleteInput)
+		}
+	})
+
+	t.Run("owned_prefix_delete", func(t *testing.T) {
+		client := &rcloneNativeS3ClientFake{
+			headOutput:   &s3.HeadObjectOutput{},
+			deleteOutput: &s3.DeleteObjectOutput{VersionId: aws.String("v-owned-1")},
+		}
+		adapter := newRcloneNativeS3SDK(client, "123456789012", profile, nil)
+		if err := adapter.DeleteExactVersion(context.Background(), owned); err != nil {
+			t.Fatalf("owned DeleteExactVersion: %v", err)
+		}
+		if client.deleteInput == nil || aws.ToString(client.deleteInput.Key) != owned.PhysicalKey ||
+			aws.ToString(client.deleteInput.VersionId) != owned.VersionID {
+			t.Fatalf("owned DeleteObject input=%+v", client.deleteInput)
+		}
+	})
+}
+
+func TestRcloneNativeProbeExactVersionExpiredRetainUntilIsUnlocked(t *testing.T) {
+	profile := validRcloneNativeProfileForTest()
+	owned := RcloneNativeExactVersion{PhysicalKey: profile.ManagedPrefix + "data/file.bin", VersionID: "v-expired-worm-1"}
+	expired := time.Now().UTC().Add(-time.Hour)
+	future := time.Now().UTC().Add(time.Hour)
+
+	t.Run("expired_retain_until_without_legal_hold_is_unlocked", func(t *testing.T) {
+		client := &rcloneNativeS3ClientFake{headOutput: &s3.HeadObjectOutput{
+			ObjectLockMode:            s3types.ObjectLockModeCompliance,
+			ObjectLockRetainUntilDate: aws.Time(expired),
+		}}
+		adapter := newRcloneNativeS3SDK(client, "123456789012", profile, nil)
+		probe, err := adapter.ProbeExactVersion(context.Background(), owned)
+		if err != nil || !probe.Present || probe.Locked {
+			t.Fatalf("expired retain-until probe=%+v err=%v, want present unlocked", probe, err)
+		}
+		if err := adapter.DeleteExactVersion(context.Background(), owned); err != nil {
+			t.Fatalf("expired retain-until DeleteExactVersion: %v", err)
+		}
+	})
+
+	t.Run("missing_retain_until_with_mode_stays_locked", func(t *testing.T) {
+		client := &rcloneNativeS3ClientFake{headOutput: &s3.HeadObjectOutput{
+			ObjectLockMode: s3types.ObjectLockModeCompliance,
+		}}
+		adapter := newRcloneNativeS3SDK(client, "123456789012", profile, nil)
+		probe, err := adapter.ProbeExactVersion(context.Background(), owned)
+		if err != nil || !probe.Present || !probe.Locked {
+			t.Fatalf("missing retain-until probe=%+v err=%v, want locked", probe, err)
+		}
+	})
+
+	t.Run("future_retain_until_stays_locked", func(t *testing.T) {
+		client := &rcloneNativeS3ClientFake{headOutput: &s3.HeadObjectOutput{
+			ObjectLockMode:            s3types.ObjectLockModeGovernance,
+			ObjectLockRetainUntilDate: aws.Time(future),
+		}}
+		adapter := newRcloneNativeS3SDK(client, "123456789012", profile, nil)
+		probe, err := adapter.ProbeExactVersion(context.Background(), owned)
+		if err != nil || !probe.Present || !probe.Locked {
+			t.Fatalf("future retain-until probe=%+v err=%v, want locked", probe, err)
+		}
+	})
+
+	t.Run("legal_hold_stays_locked_after_retain_until_expires", func(t *testing.T) {
+		client := &rcloneNativeS3ClientFake{headOutput: &s3.HeadObjectOutput{
+			ObjectLockLegalHoldStatus: s3types.ObjectLockLegalHoldStatusOn,
+			ObjectLockMode:            s3types.ObjectLockModeCompliance,
+			ObjectLockRetainUntilDate: aws.Time(expired),
+		}}
+		adapter := newRcloneNativeS3SDK(client, "123456789012", profile, nil)
+		probe, err := adapter.ProbeExactVersion(context.Background(), owned)
+		if err != nil || !probe.Present || !probe.Locked {
+			t.Fatalf("legal hold probe=%+v err=%v, want locked", probe, err)
+		}
+	})
+}
+
+func TestRcloneNativeProbeExactVersionTreats405DeleteMarkerAsPresentUnlocked(t *testing.T) {
+	profile := validRcloneNativeProfileForTest()
+	owned := RcloneNativeExactVersion{PhysicalKey: profile.ManagedPrefix + "data/file.bin", VersionID: "v-delete-marker-1"}
+
+	t.Run("405_delete_marker_present_unlocked", func(t *testing.T) {
+		client := &rcloneNativeS3ClientFake{headError: rcloneNativeHeadMethodNotAllowedError("true")}
+		adapter := newRcloneNativeS3SDK(client, "123456789012", profile, nil)
+		probe, err := adapter.ProbeExactVersion(context.Background(), owned)
+		if err != nil || !probe.Present || probe.Locked {
+			t.Fatalf("delete-marker ProbeExactVersion probe=%+v err=%v, want present unlocked", probe, err)
+		}
+		if rcloneNativeReason(err) == backupasset.RcloneReasonProviderUnavailable {
+			t.Fatal("delete-marker Head 405 mapped to provider unavailable")
+		}
+		if err := adapter.DeleteExactVersion(context.Background(), owned); err != nil {
+			t.Fatalf("delete-marker DeleteExactVersion: %v", err)
+		}
+		if client.deleteInput == nil || aws.ToString(client.deleteInput.VersionId) != owned.VersionID {
+			t.Fatalf("delete-marker DeleteObject version=%q", aws.ToString(client.deleteInput.VersionId))
+		}
+	})
+
+	t.Run("405_without_delete_marker_stays_unavailable", func(t *testing.T) {
+		client := &rcloneNativeS3ClientFake{headError: rcloneNativeHeadMethodNotAllowedError("")}
+		adapter := newRcloneNativeS3SDK(client, "123456789012", profile, nil)
+		probe, err := adapter.ProbeExactVersion(context.Background(), owned)
+		if err == nil || probe.Present || rcloneNativeReason(err) != backupasset.RcloneReasonProviderUnavailable {
+			t.Fatalf("bare 405 probe=%+v err=%v reason=%q, want unavailable", probe, err, rcloneNativeReason(err))
+		}
+		if err := adapter.DeleteExactVersion(context.Background(), owned); rcloneNativeReason(err) != backupasset.RcloneReasonProviderUnavailable {
+			t.Fatalf("bare 405 DeleteExactVersion err=%v, want unavailable", err)
+		}
+		if client.deleteInput != nil {
+			t.Fatalf("bare 405 still called DeleteObject: %+v", client.deleteInput)
+		}
+	})
+
+	t.Run("405_delete_marker_false_stays_unavailable", func(t *testing.T) {
+		client := &rcloneNativeS3ClientFake{headError: rcloneNativeHeadMethodNotAllowedError("false")}
+		adapter := newRcloneNativeS3SDK(client, "123456789012", profile, nil)
+		probe, err := adapter.ProbeExactVersion(context.Background(), owned)
+		if err == nil || probe.Present || rcloneNativeReason(err) != backupasset.RcloneReasonProviderUnavailable {
+			t.Fatalf("delete-marker=false probe=%+v err=%v reason=%q, want unavailable", probe, err, rcloneNativeReason(err))
+		}
+	})
+}
+
+func rcloneNativeHeadMethodNotAllowedError(deleteMarker string) error {
+	header := make(http.Header)
+	if deleteMarker != "" {
+		header.Set("x-amz-delete-marker", deleteMarker)
+	}
+	return &smithyhttp.ResponseError{
+		Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusMethodNotAllowed, Header: header}},
+		Err:      &smithy.GenericAPIError{Code: "MethodNotAllowed", Message: "Method Not Allowed"},
 	}
 }
 

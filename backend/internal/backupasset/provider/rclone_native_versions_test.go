@@ -885,6 +885,83 @@ func TestRcloneNativePublisherCapturesExactGraphAndCommitsLast(t *testing.T) {
 	}
 }
 
+func TestRcloneNativePublishIncludesFrozenDeletionVersions(t *testing.T) {
+	now := time.Date(2026, 7, 16, 1, 30, 0, 0, time.UTC)
+	profile := validRcloneNativeProfileForTest()
+	payload := []byte("hello")
+	manifestJSON := fmt.Sprintf(`[{"Path":"a.txt","Name":"a.txt","Size":%d,"ModTime":"2026-07-16T01:00:01Z","IsDir":false,"Hashes":{"sha256":"%s"},"Metadata":{"mode":"100640","uid":"1000","gid":"1000","mtime":"2026-07-16T01:00:01Z"}}]`, len(payload), sha256Hex(payload))
+	manifest, err := BuildRcloneManifestV1(context.Background(), strings.NewReader(manifestJSON), rcloneManifestOptionsForTest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b0, err := NewRcloneNativeStableGraph(RcloneNativeFullObservation{PageCount: 1}, RcloneNativeFullObservation{PageCount: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := validRcloneAttemptForTest(backupasset.PublicationNativeObjectVersions)
+	attempt.Native.B0VersionGraphDigest = b0.Digest
+	session := newRcloneNativeSession(
+		"FAKE_AWS_ACCESS_KEY_ID_FOR_TEST_ONLY", "FAKE_AWS_SECRET_ACCESS_KEY_FOR_TEST_ONLY", "FAKE_AWS_SESSION_TOKEN_FOR_TEST_ONLY",
+		"123456789012", attempt.Native.RoleSessionIdentityDigest, attempt.Native.SessionExpiresAt,
+	)
+	config, err := BuildRcloneNativeRcloneConfig(profile, RcloneNativeEncryptionSelection{Profile: RcloneNativeSSES3V1}, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt.ConfigDigest = sha256Hex(config)
+	events := make([]string, 0)
+	s3 := newRcloneNativePublisherS3Fake(profile, now, &events)
+	publisher := NewRcloneNativePublisher(&rcloneNativeDataPlaneFake{
+		observations: []RcloneManifestBundle{manifest, manifest},
+		s3:           s3, payload: payload, events: &events,
+	}, func() time.Time { return now })
+	request := RcloneNativePublicationRequest{
+		Attempt: attempt, Profile: profile, Session: session, ClientFactory: rcloneNativeClientFactoryFake{s3: s3},
+		Source:       mustRclonePrivateLocatorForTest(t, "/srv/source"),
+		RcloneConfig: config, Runtime: RemoteCommandAccess{Node: model.Node{ID: 9}},
+		Manifest: manifest, ManifestOptions: rcloneManifestOptionsForTest(),
+		ObservationLimits:        RcloneNativeObservationLimits{PageSize: 1000, MaxPages: 4, MaxRecords: 100},
+		Encryption:               RcloneNativeEncryptionSelection{Profile: RcloneNativeSSES3V1},
+		EncryptionEvidence:       RcloneNativeEncryptionEvidence{Profile: RcloneNativeSSES3V1},
+		MarkerKey:                []byte("FAKE_NATIVE_MARKER_AUTH_KEY_32_BYTES_FOR_TEST_ONLY"),
+		CapabilityEvidenceDigest: strings.Repeat("a", 64), CostEvidenceDigest: strings.Repeat("b", 64),
+		MaxVerifyBytes: 1 << 20, ControlPayloadMaxBytes: 1 << 20, LowLevelRetries: 3,
+	}
+	commit, err := publisher.Publish(context.Background(), request)
+	if err != nil || commit.Native == nil {
+		t.Fatalf("publish native point: commit=%+v err=%v", commit, err)
+	}
+	encodedDataPath, err := EncodeRcloneV1744S3Path("a.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataKey := profile.ManagedPrefix + "data/" + encodedDataPath
+	if len(commit.Native.FrozenNativeVersions) < 2 {
+		t.Fatalf("published frozen versions=%d, want >= 2 including commit", len(commit.Native.FrozenNativeVersions))
+	}
+	foundCommit, foundData := false, false
+	for _, version := range commit.Native.FrozenNativeVersions {
+		if version.PhysicalKey == commit.Native.CommitKey && version.VersionID == commit.Native.CommitVersionID {
+			foundCommit = true
+		}
+		if version.PhysicalKey == dataKey && version.VersionID == "opaque-data-v1" {
+			foundData = true
+		}
+	}
+	if !foundCommit || !foundData {
+		t.Fatalf("published frozen versions=%+v missing commit or data %q", commit.Native.FrozenNativeVersions, dataKey)
+	}
+	reconstructed, err := RcloneNativeFrozenDeletionVersions(
+		context.Background(), request, commit.Native.CommitKey, commit.Native.CommitVersionID,
+	)
+	if err != nil {
+		t.Fatalf("reconstruct frozen versions from accepted manifest: %v", err)
+	}
+	if !reflect.DeepEqual(reconstructed, commit.Native.FrozenNativeVersions) {
+		t.Fatalf("reconstructed=%+v want published %+v", reconstructed, commit.Native.FrozenNativeVersions)
+	}
+}
+
 func TestRcloneNativeCatalogReopensExactControlAndObjectVersionsWithoutCurrentFallback(t *testing.T) {
 	now := time.Date(2026, 7, 16, 1, 30, 0, 0, time.UTC)
 	profile := validRcloneNativeProfileForTest()

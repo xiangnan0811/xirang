@@ -233,6 +233,12 @@ type activeContentRead struct {
 	done       chan struct{}
 }
 
+type recoveryPointIssueState struct {
+	active   int
+	draining bool
+	done     chan struct{}
+}
+
 type Broker struct {
 	db                     *gorm.DB
 	now                    func() time.Time
@@ -256,6 +262,7 @@ type Broker struct {
 	closed          bool
 	accepting       bool
 	issues          sync.WaitGroup
+	assetIssues     map[string]*recoveryPointIssueState
 	leases          map[string]*ContentLeaseSession
 	assets          map[string]AuthorizedAsset
 	recoveryResults map[string]AuthorizedRecoveryResult
@@ -303,7 +310,8 @@ func NewBroker(dependencies BrokerDependencies) (*Broker, error) {
 		securityPolicyRevision: dependencies.SecurityPolicyRevision, audit: dependencies.Audit,
 		budget: dependencies.Budget, metrics: dependencies.Metrics,
 		ticketMaterial: dependencies.TicketMaterial, requestID: dependencies.RequestID, config: dependencies.Config,
-		leases: make(map[string]*ContentLeaseSession), assets: make(map[string]AuthorizedAsset),
+		assetIssues: make(map[string]*recoveryPointIssueState),
+		leases:      make(map[string]*ContentLeaseSession), assets: make(map[string]AuthorizedAsset),
 		recoveryResults: make(map[string]AuthorizedRecoveryResult),
 		derivedBindings: make(map[string]DerivedRepresentation),
 		reads:           make(map[string]map[string]activeContentRead), revokedGrants: make(map[string]struct{}),
@@ -368,6 +376,11 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 	if !validAuthorizedAsset(asset, request.Ref) {
 		return IssuedTicket{}, ErrContentSourceUnavailable
 	}
+	unregisterAssetIssue, err := broker.registerAssetIssue(ctx, request.Ref.RecoveryPointID)
+	if err != nil {
+		return IssuedTicket{}, err
+	}
+	defer unregisterAssetIssue()
 	material, err := broker.ticketMaterial()
 	if err != nil || !validTicketMaterial(material) {
 		return IssuedTicket{}, ErrInvalidBrokerRequest
@@ -1304,6 +1317,87 @@ func (broker *Broker) beginIssue() error {
 	}
 	broker.issues.Add(1)
 	return nil
+}
+
+func (broker *Broker) registerAssetIssue(ctx context.Context, recoveryPointID string) (func(), error) {
+	if broker == nil || backupasset.ValidateOpaqueID(recoveryPointID) != nil {
+		return nil, ErrInvalidBrokerRequest
+	}
+	ctx = nonNilContext(ctx)
+	if broker.db == nil {
+		return nil, ErrContentSourceUnavailable
+	}
+	if err := broker.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, recoveryPointID)
+	}); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, ErrContentSourceUnavailable
+	}
+	broker.mu.Lock()
+	if broker.assetIssues == nil {
+		broker.assetIssues = make(map[string]*recoveryPointIssueState)
+	}
+	state := broker.assetIssues[recoveryPointID]
+	if state != nil && state.draining {
+		broker.mu.Unlock()
+		return nil, ErrContentSourceUnavailable
+	}
+	if state == nil {
+		state = &recoveryPointIssueState{done: make(chan struct{})}
+		broker.assetIssues[recoveryPointID] = state
+	}
+	state.active++
+	broker.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			broker.mu.Lock()
+			defer broker.mu.Unlock()
+			current := broker.assetIssues[recoveryPointID]
+			if current != state || state.active <= 0 {
+				return
+			}
+			state.active--
+			if state.active != 0 {
+				return
+			}
+			close(state.done)
+			if !state.draining {
+				delete(broker.assetIssues, recoveryPointID)
+			}
+		})
+	}, nil
+}
+
+func (broker *Broker) waitForAssetIssues(ctx context.Context, recoveryPointID string) error {
+	if broker == nil || backupasset.ValidateOpaqueID(recoveryPointID) != nil {
+		return ErrInvalidBrokerRequest
+	}
+	ctx = nonNilContext(ctx)
+	broker.mu.Lock()
+	if broker.assetIssues == nil {
+		broker.assetIssues = make(map[string]*recoveryPointIssueState)
+	}
+	state := broker.assetIssues[recoveryPointID]
+	if state == nil {
+		state = &recoveryPointIssueState{draining: true, done: make(chan struct{})}
+		close(state.done)
+		broker.assetIssues[recoveryPointID] = state
+	} else {
+		state.draining = true
+	}
+	done := state.done
+	broker.mu.Unlock()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Shutdown closes ticket admission before waiting for in-progress issuance,

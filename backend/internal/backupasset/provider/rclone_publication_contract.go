@@ -139,8 +139,9 @@ type RclonePortableCommitV1 struct {
 }
 
 type RcloneNativeCommitV1 struct {
-	CommitKey                  string `json:"-"`
-	CommitVersionID            string `json:"-"`
+	CommitKey                  string                     `json:"-"`
+	CommitVersionID            string                     `json:"-"`
+	FrozenNativeVersions       []RcloneNativeExactVersion `json:"-"`
 	CommitContentDigest        string
 	ManifestControlGraphDigest string
 	PointViewDigest            string

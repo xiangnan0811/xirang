@@ -27,6 +27,7 @@ import (
 	"github.com/mattn/go-sqlite3"
 	"github.com/robfig/cron/v3"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // nextCronRun 根据 cron 表达式计算下一次执行时间。
@@ -163,6 +164,7 @@ type Manager struct {
 	strategyLocks               sync.Map
 	nodeLocks                   sync.Map                                                         // nodeID → *sync.Mutex, 节点级互斥（restore 与普通任务共享）
 	hookRunFunc                 func(ctx context.Context, task model.Task, command string) error // 可测试注入
+	afterTriggerRestoreLoad     func()                                                           // 可测试注入：归档检查与 run 预约之间
 	drillSSHScriptFunc          func(ctx context.Context, node model.Node, script string) error  // 可测试注入
 	drillRestoreFunc            func(ctx context.Context, srcTask model.Task, sandboxNode model.Node, drillPath string, logf func(string, string)) error
 	ensureRemoteTargetReadyFunc func(ctx context.Context, node model.Node, targetPath string) error
@@ -190,10 +192,12 @@ type Manager struct {
 	exactAnomalyAnalyzer ExactAnomalyFunc
 
 	autoDispatcher *automation.Dispatcher // optional; set via SetAutomationDispatcher
+	scheduleMu     sync.Mutex
 
 	publicationCoordinator publication.Coordinator
 	lineageGuard           publication.LineageGuard
 	legacyBlockRecorder    publication.LegacyBlockRecorder
+	managedRetention       ManagedRecoveryPointRetention
 	resticRetentionFunc    func(context.Context, model.Policy, model.Task)
 
 	rootCtx    context.Context    // worker goroutines 的父级 context
@@ -341,6 +345,12 @@ func (m *Manager) SetLegacyBlockRecorder(recorder publication.LegacyBlockRecorde
 	m.legacyBlockRecorder = recorder
 }
 
+// SetManagedRecoveryPointRetention installs the exact RecoveryPoint lifecycle
+// authority used after the lineage guard proves a managed Task.
+func (m *Manager) SetManagedRecoveryPointRetention(retention ManagedRecoveryPointRetention) {
+	m.managedRetention = retention
+}
+
 // SetNodeWriteAdmission installs the durable Task/Recovery node boundary. It
 // must be wired before schedules are loaded so every production trigger uses
 // the same coordinator.
@@ -366,6 +376,17 @@ func (m *Manager) reserveTaskRun(ctx context.Context, nodeID uint, requested mod
 		candidate.CreatedAt = time.Time{}
 		candidate.UpdatedAt = time.Time{}
 		err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var locked model.Task
+			lock := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", requested.TaskID).Limit(1).Find(&locked)
+			if lock.Error != nil {
+				return lock.Error
+			}
+			if lock.RowsAffected == 0 {
+				return fmt.Errorf("任务不存在")
+			}
+			if locked.ArchivedAt != nil {
+				return ErrTaskArchived
+			}
 			if m.nodeWriteAdmission != nil {
 				if err := m.nodeWriteAdmission.AdmitTaskTx(ctx, tx, nodeID); err != nil {
 					return err
@@ -556,7 +577,7 @@ func waitForNodeWriteReservationRetry(ctx context.Context, attempt int) error {
 
 func (m *Manager) LoadSchedules(ctx context.Context) error {
 	var tasks []model.Task
-	if err := m.db.WithContext(ctx).Where("cron_spec <> '' AND enabled = ?", true).Find(&tasks).Error; err != nil {
+	if err := m.db.WithContext(ctx).Where("cron_spec <> '' AND enabled = ? AND archived_at IS NULL", true).Find(&tasks).Error; err != nil {
 		return err
 	}
 	for _, one := range tasks {
@@ -571,8 +592,16 @@ func (m *Manager) SyncSchedule(task model.Task) error {
 	if m.scheduler == nil {
 		return nil
 	}
-	if !task.Enabled {
-		m.RemoveSchedule(task.ID)
+	m.scheduleMu.Lock()
+	defer m.scheduleMu.Unlock()
+	var current struct {
+		ArchivedAt *time.Time `gorm:"column:archived_at"`
+	}
+	if err := m.db.Model(&model.Task{}).Select("archived_at").Where("id = ?", task.ID).Limit(1).Scan(&current).Error; err != nil {
+		return fmt.Errorf("load task archive state: %w", err)
+	}
+	if !task.Enabled || current.ArchivedAt != nil {
+		m.removeScheduleLocked(task.ID)
 		return nil
 	}
 	// 持久化下次调度时间
@@ -590,7 +619,29 @@ func (m *Manager) RemoveSchedule(taskID uint) {
 	if m.scheduler == nil {
 		return
 	}
+	m.scheduleMu.Lock()
+	defer m.scheduleMu.Unlock()
+	m.removeScheduleLocked(taskID)
+}
+
+func (m *Manager) removeScheduleLocked(taskID uint) {
+	if m.scheduler == nil {
+		return
+	}
 	m.scheduler.RemoveTask(taskID)
+}
+
+// Archive disables the Task, unlinks its active repository binding, then
+// removes the schedule after commit. It never deletes Provider bytes.
+func (m *Manager) Archive(ctx context.Context, taskID uint) (ArchiveResult, error) {
+	return NewArchiveService(ArchiveDependencies{
+		DB: m.db,
+		RemoveSchedule: func(id uint) error {
+			m.RemoveSchedule(id)
+			return nil
+		},
+		WriteTx: NewArchiveAuditWriteTx(m.db, nil),
+	}).Archive(ctx, taskID)
 }
 
 func (m *Manager) TriggerManual(taskID uint) (uint, error) {
@@ -638,6 +689,12 @@ func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
 	var taskEntity model.Task
 	if err := m.db.Preload("Node").Preload("Node.SSHKey").Preload("Policy").First(&taskEntity, taskID).Error; err != nil {
 		return 0, fmt.Errorf("任务不存在")
+	}
+	if taskEntity.ArchivedAt != nil {
+		return 0, ErrTaskArchived
+	}
+	if m.afterTriggerRestoreLoad != nil {
+		m.afterTriggerRestoreLoad()
 	}
 
 	// 仅支持文件级同步执行器的恢复
@@ -903,6 +960,9 @@ func (m *Manager) Resume(taskID uint) error {
 	var taskEntity model.Task
 	if err := m.db.First(&taskEntity, taskID).Error; err != nil {
 		return fmt.Errorf("任务不存在")
+	}
+	if taskEntity.ArchivedAt != nil {
+		return ErrTaskArchived
 	}
 	if taskEntity.Enabled {
 		return nil // 幂等
