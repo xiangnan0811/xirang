@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.50.0](https://github.com/xiangnan0811/xirang/compare/v0.49.1...v0.50.0) (2026-08-20)
+
+
+### ✨ Features
+
+* **backup:** add GA enablement gate and export volume ([2e1e98b](https://github.com/xiangnan0811/xirang/commit/2e1e98baf520961ffc511e6dc6c1cf6939c3a311))
+
 ## [0.49.1](https://github.com/xiangnan0811/xirang/compare/v0.49.0...v0.49.1) (2026-08-20)
 
 
