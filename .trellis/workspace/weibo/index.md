@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 42
+- **Total Sessions**: 43
 - **Last Active**: 2026-08-20
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1703 | Active |
+| `journal-1.md` | ~1738 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 43 | 2026-08-20 | Child 14 delivery and 0.49.1 release | `a303abd08f47c52977036d12e1dfdab540283ee3`, `43a8d067f92dae37ba583f8348fd7441a073d0f9` | `chore/child14-postmerge-truth` |
 | 42 | 2026-08-20 | Child 14 lifecycle reconnect Trellis close | `a080f5b2d13c2c9341212f84d14737302aa77caf` | `codex/backup-assets-lifecycle-reconnect` |
 | 41 | 2026-08-17 | Child 13 exact verification delivery and archive | `e42e88bd769a0929ff42143d0e0a4396d916cbb7`, `f0f0692` | `codex/task-12-child13-bookkeeping` |
 | 40 | 2026-08-16 | Task 8 post-closure CI stabilization | `6e91869` | `codex/task8-ci-stabilization` |

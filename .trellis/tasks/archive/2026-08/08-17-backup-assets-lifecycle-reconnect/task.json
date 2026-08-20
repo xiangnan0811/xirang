@@ -15,20 +15,20 @@
   "branch": "codex/backup-assets-lifecycle-reconnect",
   "base_branch": "main",
   "worktree_path": "/home/murray/.codex/worktrees/0334/xirang",
-  "commit": null,
-  "pr_url": null,
+  "commit": "a303abd08f47c52977036d12e1dfdab540283ee3",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/435",
   "subtasks": [],
   "children": [],
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [
-    ".trellis/tasks/08-17-backup-assets-lifecycle-reconnect/prd.md",
-    ".trellis/tasks/08-17-backup-assets-lifecycle-reconnect/design.md",
-    ".trellis/tasks/08-17-backup-assets-lifecycle-reconnect/implement.md",
-    ".trellis/tasks/08-17-backup-assets-lifecycle-reconnect/research/current-main-evidence.md",
-    ".trellis/tasks/08-17-backup-assets-lifecycle-reconnect/research/review.md",
-    ".trellis/tasks/08-17-backup-assets-lifecycle-reconnect/research/red-green.md"
+    ".trellis/tasks/archive/2026-08/08-17-backup-assets-lifecycle-reconnect/prd.md",
+    ".trellis/tasks/archive/2026-08/08-17-backup-assets-lifecycle-reconnect/design.md",
+    ".trellis/tasks/archive/2026-08/08-17-backup-assets-lifecycle-reconnect/implement.md",
+    ".trellis/tasks/archive/2026-08/08-17-backup-assets-lifecycle-reconnect/research/current-main-evidence.md",
+    ".trellis/tasks/archive/2026-08/08-17-backup-assets-lifecycle-reconnect/research/review.md",
+    ".trellis/tasks/archive/2026-08/08-17-backup-assets-lifecycle-reconnect/research/red-green.md"
   ],
-  "notes": "Child 14 was created from exact live origin/main 19140e80ac34ebab26bc1f8ed141965c5f4d3cdd. Tasks 1 through 16 are complete_checked. Task 17 is authorized as Trellis close then PR: Phase 3.4 one work commit, then finish-work archive and journal, then push/PR/CI. backup_assets.enabled remains false. Child 15, 000071, deploy/GA, and dependency upgrades remain unauthorized until Alan instructs otherwise.",
+  "notes": "Child 14 was created from exact live origin/main 19140e80ac34ebab26bc1f8ed141965c5f4d3cdd. Tasks 1 through 17 are complete_checked. Feature PR #435 head f3d2a6851fb0d8c8548370a8965b8cf5715633a8 passed required CI 32340923138 and squash-merged as a303abd08f47c52977036d12e1dfdab540283ee3. v0.49.0 published from 1a45cf107d47d25a05f471a49ab0284cd02abf87 but Docker 32343632231 failed Trivy on x/mod v0.37.0. Security PR #437 squash 9b012ba2b73e2ddef81ced839f967a95cd8eb84e and release PR #438 squash 43a8d067f92dae37ba583f8348fd7441a073d0f9 published v0.49.1; Docker 32347642009 succeeded for amd64, arm64, and the manifest. Sync Docker Hub Description did not run. backup_assets.enabled remains false. The parent remains planning at program delivery 14/15. Child 15, 000071, and deploy/GA remain unauthorized until Alan instructs otherwise.",
   "meta": {
     "planning_baseline": {
       "date": "2026-08-17",
@@ -46,15 +46,27 @@
       "first_selector_requires_genuine_red_same_selector_green": true
     },
     "program_boundary": {
-      "program_delivery": "13_of_15",
+      "program_delivery": "14_of_15",
       "child_number": 14,
       "child_15_created": false,
       "child_15_authorized": false,
       "backup_assets_enabled_default": false
     },
+    "delivery": {
+      "status": "complete_checked_archived_released_v0_49_1",
+      "feature_pr": "https://github.com/xiangnan0811/xirang/pull/435",
+      "feature_head": "f3d2a6851fb0d8c8548370a8965b8cf5715633a8",
+      "squash_commit": "a303abd08f47c52977036d12e1dfdab540283ee3",
+      "required_ci": "run_32340923138_success_all_11_checks_green",
+      "release_0_49_0": "1a45cf107d47d25a05f471a49ab0284cd02abf87_github_release_published_docker_32343632231_failed",
+      "security_pr": "https://github.com/xiangnan0811/xirang/pull/437",
+      "release_0_49_1": "43a8d067f92dae37ba583f8348fd7441a073d0f9_github_release_published_docker_32347642009_success",
+      "hub_description": "not_run_readme_unchanged_not_expected",
+      "journal": "weibo_session_42_work_commit_session_43_delivery"
+    },
     "execution": {
       "task_start": "executed_once_2026-08-17",
-      "current_step": "task_17_authorized_trellis_close_then_pr",
+      "current_step": "complete_checked_delivered_released_v0_49_1",
       "task_1": {
         "status": "complete_checked",
         "first_red_selector": "TestManagedTaskRetentionDelegatesExactRecoveryPointIDs",
