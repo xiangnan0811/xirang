@@ -1667,3 +1667,37 @@ Closed Task 11 with the accepted historical RED provenance exception, delivered 
 ### Next Steps
 
 - Stop before Child 14/15; deliver and monitor only this Child 13 bookkeeping PR, then resync main.
+
+
+## Session 42: Child 14 lifecycle reconnect Trellis close
+
+**Date**: 2026-08-20
+**Task**: Child 14 lifecycle reconnect Trellis close
+**Branch**: `codex/backup-assets-lifecycle-reconnect`
+
+### Summary
+
+Archived Child 14 after the lifecycle work commit. backup_assets.enabled stays false. Child 15 is not created. Parent remains planning; program delivery on main stays 13/15 until squash merge.
+
+### Main Changes
+
+- Shipped Child 14 retention, holds, exact-point delete, Task archive, and admin reconnect behind the disabled flag.
+- Updated backend and frontend specs for archive missing-table, leftover InspectedLimit, and bounded scan/rebuild.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a080f5b2d13c2c9341212f84d14737302aa77caf` | (see git log) |
+
+### Testing
+
+- [OK] Full-scope check approved with residuals: golangci on touched packages, frontend npm run check, backend go test ./... with TEST_POSTGRES_DSN unset.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Push the branch, open the Child 14 PR, and monitor required CI. Do not create or start Child 15 until Alan instructs.
