@@ -3,7 +3,7 @@
   "name": "backup-assets-lifecycle-reconnect",
   "title": "备份资产生命周期与重连",
   "description": "Plan exact RecoveryPoint lifecycle retention, policy and holds, lifecycle-aware reconnect/import/rebuild, dependent-owner cleanup, Task archive/unlink, admin API/UI, config backup v2, and database disaster recovery without enabling GA.",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": "feature",
   "scope": "full-stack",
   "package": "backend,web,docs",
@@ -11,7 +11,7 @@
   "creator": "weibo",
   "assignee": "weibo",
   "createdAt": "2026-08-17",
-  "completedAt": null,
+  "completedAt": "2026-08-20",
   "branch": "codex/backup-assets-lifecycle-reconnect",
   "base_branch": "main",
   "worktree_path": "/home/murray/.codex/worktrees/0334/xirang",
@@ -225,7 +225,12 @@
         "boundary": "task_17_not_authorized_complete_reopen_checked",
         "alan_review_2026_08_20_complete_reopen": {
           "task_17": "not_authorized",
-          "counts": { "p0": 0, "p1": 1, "p2": 1, "p3": 0 },
+          "counts": {
+            "p0": 0,
+            "p1": 1,
+            "p2": 1,
+            "p3": 0
+          },
           "implement": "b1343bf7-3d46-4372-9e95-ef3b8fe1c4df",
           "check": "dfa7feca-0e1a-40af-baaf-b495d0888b08",
           "check_verdict": "approve_with_residuals_after_important_mid_walk_cancel",
@@ -237,7 +242,12 @@
         },
         "alan_review_2026_08_20_inspected_limit_and_archive_corr": {
           "task_17": "not_authorized",
-          "counts": { "p0": 0, "p1": 1, "p2": 1, "p3": 0 },
+          "counts": {
+            "p0": 0,
+            "p1": 1,
+            "p2": 1,
+            "p3": 0
+          },
           "implement": "0e41d37f-0ced-48a6-ac26-9a9d8064ceae",
           "check": "aa2dc784-44ba-416f-bff0-856d84ece078",
           "check_verdict": "approve_with_residuals_after_important_ad_fingerprint_reopen",
@@ -249,7 +259,12 @@
         },
         "alan_review_2026_08_20_archive_table_per_capability": {
           "task_17": "not_authorized",
-          "counts": { "p0": 0, "p1": 2, "p2": 1, "p3": 0 },
+          "counts": {
+            "p0": 0,
+            "p1": 2,
+            "p2": 1,
+            "p3": 0
+          },
           "implement": "1694ebb4-3238-4015-96f9-10956d958958",
           "check": "b303fd88-a872-4b5e-b27a-1ae5bb699ffe",
           "check_verdict": "approve_with_residuals_after_important_inapplicable_cap_page",
@@ -264,7 +279,12 @@
         },
         "alan_review_2026_08_20_p1_5_p2_5": {
           "task_17": "not_authorized",
-          "counts": { "p0": 0, "p1": 5, "p2": 5, "p3": 0 },
+          "counts": {
+            "p0": 0,
+            "p1": 5,
+            "p2": 5,
+            "p3": 0
+          },
           "implement": "302fd614-b193-4e43-bace-829be124dc65",
           "check": "e5fc03f1-7a75-4e1c-ab16-cb07aad80334",
           "check_verdict": "approve_after_important_expected_descriptors_admission_split",
@@ -273,21 +293,36 @@
         },
         "alan_review_2026_08_19_fifth": {
           "task_17": "not_authorized",
-          "counts": { "p0": 0, "p1": 3, "p2": 10, "p3": 0 },
+          "counts": {
+            "p0": 0,
+            "p1": 3,
+            "p2": 10,
+            "p3": 0
+          },
           "implement": "cb155b4e-6465-42fb-9ff6-927355476aa3",
           "check": "35152e48-da5a-4b75-8ae1-38ee8c930fd3",
           "check_verdict": "approve_without_residuals"
         },
         "alan_review_2026_08_19_fourth": {
           "task_17": "not_authorized",
-          "counts": { "p0": 0, "p1": 7, "p2": 10, "p3": 0 },
+          "counts": {
+            "p0": 0,
+            "p1": 7,
+            "p2": 10,
+            "p3": 0
+          },
           "implement": "869fb3d0-dbaa-4387-ae8e-3d6d2e824cc8",
           "check": "b0054fe8-5e21-403b-90a9-3cf0411393b1",
           "check_verdict": "approve_without_residuals_implementer_wrong_on_unscoped_policy_list"
         },
         "alan_review_2026_08_19_third": {
           "task_17": "not_authorized",
-          "counts": { "p0": 0, "p1": 7, "p2": 8, "p3": 0 },
+          "counts": {
+            "p0": 0,
+            "p1": 7,
+            "p2": 8,
+            "p3": 0
+          },
           "implement": "8b926ed6-6508-4d3c-a74b-a3737b86c07c",
           "check": "709969aa-ebe2-4e37-a06d-2772ceafc332",
           "check_verdict": "approve_without_residuals_implementer_wrong_on_p1_2_same_backend_kind",
@@ -296,7 +331,12 @@
         "delivery": "uncommitted_unstaged_task17_only",
         "alan_review_2026_08_19_second": {
           "task_17": "not_authorized",
-          "counts": { "p0": 0, "p1": 13, "p2": 7, "p3": 1 },
+          "counts": {
+            "p0": 0,
+            "p1": 13,
+            "p2": 7,
+            "p3": 1
+          },
           "implement": "b7a4edad-2a6c-4558-a345-199c0e70ad55",
           "check": "b28219b1-7f23-4ddf-909a-7b1e5c912c0d",
           "check_verdict": "approve_with_residuals_native_encode_and_failed_manifest_proof_were_still_open",
