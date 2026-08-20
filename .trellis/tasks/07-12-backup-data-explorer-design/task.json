@@ -37,15 +37,15 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Program delivery remains 14/15 merged and archived (93.33%) until Child 15 squash-merges. Trellis mechanical progress is 15/15 instantiated children (14 archived; Child 15 in_progress on codex/backup-assets-ga-hardening). Child 15 backup-assets-ga-hardening was created 2026-08-20 from exact origin/main 61cb68d36bad0c4665959fb96d377e3cb36598c1; parent implement.md §16 is superseded. Alan approved planning and task.py start; product implementation Tasks 1-12 are complete_checked. Task 13 is the delivery PR. backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. This parent remains planning and must not be archived in Child 15.",
+  "notes": "Program delivery is 15/15 children instantiated and archived after Child 15 squash 2e1e98baf520961ffc511e6dc6c1cf6939c3a311 (PR #440). Exact-squash main CI 32377898099 and Release Please 32377897976 succeeded; #441 chore(main): release 0.50.0 is open and was not merged here. GitHub Release and Docker Hub publish were not expected from #440; latest public release remains v0.49.1. Sync Docker Hub Description 32377897831 succeeded. backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. This parent remains planning until an explicit parent-final-acceptance instruction.",
   "meta": {
     "program_delivery": {
-      "delivered": 14,
+      "delivered": 15,
       "planned": 15,
-      "percent": 93.33,
+      "percent": 100.0,
       "instantiated_children": 15,
-      "archived_children": 14,
-      "active_child": "08-20-backup-assets-ga-hardening",
+      "archived_children": 15,
+      "active_child": null,
       "uninstantiated_children": []
     },
     "task_7_checkpoint_delivery": {
@@ -154,7 +154,7 @@
       "boundary": "parent_planning_child15_not_created"
     },
     "child_15_planning": {
-      "status": "implementation_complete_task13_pr_pending",
+      "status": "complete_checked_delivered_archived",
       "date": "2026-08-20",
       "task": "08-20-backup-assets-ga-hardening",
       "branch": "codex/backup-assets-ga-hardening",
@@ -163,10 +163,32 @@
       "task_start_authorized": true,
       "product_code_started": true,
       "supersedes_parent_section": "implement.md §16",
-      "program_delivery": "14_of_15_until_squash",
+      "program_delivery": "15_of_15",
       "code_default_enabled": false,
       "worker_publish": "out_of_scope_keep_no_publish",
-      "boundary": "parent_planning_child15_in_progress_not_archived"
+      "boundary": "parent_planning_child15_archived_no_parent_final_acceptance"
+    },
+    "child_15_delivery": {
+      "status": "complete_checked_archived_journal_recorded_bookkeeping_pr",
+      "feature_pr": "https://github.com/xiangnan0811/xirang/pull/440",
+      "work_commits": [
+        "638f9380e02fb963237707325935a49ff9728114",
+        "aa4e8e30ac3c3785d3c595413983e63e4e348157"
+      ],
+      "required_ci": "run_32374486521_success_all_11_checks_green",
+      "squash_commit": "2e1e98baf520961ffc511e6dc6c1cf6939c3a311",
+      "post_merge": "exact_squash_main_ci_32377898099_and_release_please_32377897976_success",
+      "release_pr": "https://github.com/xiangnan0811/xirang/pull/441",
+      "release_disposition": "0.50.0_pr_open_no_github_release_or_docker_publish_from_440_latest_remains_v0.49.1",
+      "hub_description": "run_32377897831_success_readme_changed_expected",
+      "archive_path": ".trellis/tasks/archive/2026-08/08-20-backup-assets-ga-hardening",
+      "archive_commit": "f213c99d75f156fdfb0ad86d61077cc00a55029e",
+      "completed_at": "2026-08-20",
+      "journal": "weibo_session_44_recorded",
+      "program_delivery": "15_of_15",
+      "backup_assets_enabled_default": false,
+      "worker_publish": "out_of_scope_not_triggered",
+      "boundary": "parent_planning_awaiting_explicit_parent_final_acceptance"
     },
     "r0_execution_rebaseline": {
       "date": "2026-08-02",
