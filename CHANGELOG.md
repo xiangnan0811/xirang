@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.49.0](https://github.com/xiangnan0811/xirang/compare/v0.48.0...v0.49.0) (2026-08-20)
+
+
+### ✨ Features
+
+* **backup:** add asset lifecycle retention and reconnect ([a303abd](https://github.com/xiangnan0811/xirang/commit/a303abd08f47c52977036d12e1dfdab540283ee3))
+
 ## [0.48.0](https://github.com/xiangnan0811/xirang/compare/v0.47.0...v0.48.0) (2026-08-16)
 
 
