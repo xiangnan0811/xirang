@@ -459,8 +459,11 @@ func TestRecoveryAuthorizationReceiptSettingsTransitions(t *testing.T) {
 
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/settings/"+replayKey, nil))
-		if response.Code != http.StatusBadRequest || svc.GetEffective(replayKey) != "30m" {
+		if response.Code != http.StatusInternalServerError || svc.GetEffective(replayKey) != "30m" {
 			t.Fatalf("failed reset status=%d effective=%q body=%s", response.Code, svc.GetEffective(replayKey), response.Body.String())
+		}
+		if strings.Contains(response.Body.String(), "FAKE_RECOVERY_SETTINGS_DRAIN_FAILURE_FOR_TEST_ONLY") {
+			t.Fatalf("unexpected delete reset leaked drain error: %s", response.Body.String())
 		}
 
 		spy.beforePersist = nil

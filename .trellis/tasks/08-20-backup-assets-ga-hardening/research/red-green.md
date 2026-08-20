@@ -537,3 +537,27 @@
   ok  xirang/backend/internal/api/handlers  0.103s
   ok  xirang/backend/internal/api/handlers  0.101s
   ```
+
+## Task 13 CI — startup blocked enablement must boot
+
+### RED — GitHub Actions `32372716412`
+
+- UTC timestamp: `2026-08-20T13:18:47Z`
+- Commands: required CI on PR #440
+- Exit status: `1`
+- Failure: Backend `TestRecoveryAuthorizationReceiptSettingsTransitions/delete_reset` expected HTTP 400 after unexpected DELETE drain; Worker amd64 complete profile smoke Fatals `backup asset enablement blocked` because `BACKUP_ASSETS_ENABLED=true` on first boot.
+- Concise output:
+
+  ```text
+  FAIL: TestRecoveryAuthorizationReceiptSettingsTransitions/delete_reset
+  {"level":"fatal","error":"backup asset enablement blocked","message":"备份资产启动对账失败"}
+  ```
+
+### GREEN — boot disabled + 500 DELETE drain
+
+- UTC timestamp: `2026-08-20T13:26:00Z`
+- Commands:
+  - `go test ./internal/api/handlers -run 'TestRecoveryAuthorizationReceiptSettingsTransitions|TestSettingsEnablementDeleteRestoreBlocked|TestSettingsFailedDeleteRestoreTransitionStaysInternalError' -count=1`
+  - `go test ./internal/backupasset/runtime -run 'TestStartupRequestedEnablementWithoutReadinessDoesNotBecomeManaged|TestAdmissionInitializeUsesEnvironmentFallbackAndRollbackSafeHistory|TestTransitionFeatureBlockedReadinessDoesNotBecomeManaged|TestRuntimeStartupManagedModeRequiresInterruptedRunReadiness' -count=1`
+- Exit status: `0` / `0`
+- Result: unexpected DELETE drain is HTTP 500 without leaked `err.Error()`; requested startup enable without readiness initializes admission disabled and still boots; startup DryRun runs before the gate so a fresh Worker-profile install can become managed.

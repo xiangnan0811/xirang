@@ -143,11 +143,15 @@ func TestStartupRequestedEnablementWithoutReadinessDoesNotBecomeManaged(t *testi
 		t.Fatal(err)
 	}
 	err = runtime.StartupPass(context.Background())
-	if !errors.Is(err, ga.ErrEnablementBlocked) {
-		t.Fatalf("startup error=%v, want ErrEnablementBlocked", err)
+	if err != nil {
+		t.Fatalf("blocked requested enablement must still boot: %v", err)
 	}
-	if _, modeErr := runtime.admission.CurrentMode(); !errors.Is(modeErr, ErrAdmissionNotInitialized) {
-		t.Fatalf("blocked requested enablement initialized admission err=%v", modeErr)
+	mode, modeErr := runtime.admission.CurrentMode()
+	if modeErr != nil {
+		t.Fatalf("blocked requested enablement left admission uninitialized: %v", modeErr)
+	}
+	if mode == publication.AdmissionManaged {
+		t.Fatalf("blocked requested enablement became managed mode=%s", mode)
 	}
 }
 

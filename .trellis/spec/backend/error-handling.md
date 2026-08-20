@@ -894,7 +894,7 @@ if secondEnabled && !verifyCaptchaAnswer(store, req.SecondCaptchaID, req.SecondC
 | Settings DELETE-restore to env `true` while blocked | HTTP 409; override remains `"false"`. |
 | Config import `backup_assets.enabled=true` while blocked | HTTP 409; no settings row persisted. |
 | Unexpected transition failure (`errors.New(...)`) | HTTP 500 generic body; no persist. |
-| Startup requested enable without readiness | `ErrEnablementBlocked`; admission uninitialized; process Fatals via existing `main.go`. |
+| Startup requested enable without readiness | Core still boots; admission is initialized disabled (not managed); Admin can run inventory/ack. Process does not Fatal on the gate sentinels. |
 | Stale ack digest | `ErrInventoryDigestMismatch` → dedicated GA route 409 `清单已变化，请重新核对`. |
 | Viewer/Operator hits GA routes | 403; `CATEGORY_ORDER` still omits `backup_assets`. |
 
@@ -906,7 +906,8 @@ if secondEnabled && !verifyCaptchaAnswer(store, req.SecondCaptchaID, req.SecondC
   lets Core boot.
 - Bad: mapping blocked enablement through `respondInternalError`, or calling
   `AdmissionController.Initialize` / `TransitionFeature(true)` without
-  `EvaluateEnablement`.
+  `EvaluateEnablement`, or returning `StartupPass` errors for blocked
+  enablement so Core cannot boot.
 
 ### 6. Tests Required
 

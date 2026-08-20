@@ -207,6 +207,16 @@ func TestAdmissionInitializeUsesEnvironmentFallbackAndRollbackSafeHistory(t *tes
 			t.Fatalf("initialized mode=%s err=%v, want managed/nil", mode, err)
 		}
 	})
+	t.Run("disabled initialize ignores enabled environment", func(t *testing.T) {
+		t.Setenv("BACKUP_ASSETS_ENABLED", "true")
+		fixture := newAdmissionControllerFixtureWithSettings(t, runtimeFoundationSettingsFromEnvironment(), nil)
+		if err := fixture.controller.InitializeDisabled(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if mode, err := fixture.controller.CurrentMode(); err != nil || mode != publication.AdmissionPristineLegacy {
+			t.Fatalf("disabled initialize mode=%s err=%v, want pristine/nil", mode, err)
+		}
+	})
 	t.Run("environment disabled with history remains rollback safe", func(t *testing.T) {
 		t.Setenv("BACKUP_ASSETS_ENABLED", "false")
 		fixture := newAdmissionControllerFixtureWithSettings(t, runtimeFoundationSettingsFromEnvironment(), nil)

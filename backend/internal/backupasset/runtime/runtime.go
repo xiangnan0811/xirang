@@ -2023,7 +2023,16 @@ func (runtime *Runtime) authorizeRequestedStartupEnablement(ctx context.Context)
 	if !enabled {
 		return nil
 	}
+	if runtime.inventory != nil {
+		if _, err := runtime.inventory.DryRun(ctx); err != nil {
+			logger.Module("backup_asset_ga").Warn().Err(err).Msg("启动库存盘点失败，继续按当前就绪状态评估")
+		}
+	}
 	return runtime.authorizeEnablement(ctx)
+}
+
+func startupEnablementBlocked(err error) bool {
+	return errors.Is(err, ga.ErrEnablementBlocked) || errors.Is(err, ga.ErrEnablementAckRequired)
 }
 
 func (runtime *Runtime) TransitionBackupAssetSettings(
@@ -2207,7 +2216,14 @@ func (runtime *Runtime) StartupPass(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	if err := runtime.authorizeRequestedStartupEnablement(ctx); err != nil {
-		return err
+		if !startupEnablementBlocked(err) {
+			return err
+		}
+		logger.Module("backup_asset_ga").Warn().Err(err).Msg("请求启用备份资产但就绪检查未完成，核心服务继续启动")
+		if err := runtime.admission.InitializeDisabled(ctx); err != nil {
+			return err
+		}
+		return nil
 	}
 	if err := runtime.admission.Initialize(ctx); err != nil {
 		return err
@@ -2285,6 +2301,13 @@ func (runtime *Runtime) startupSearch(ctx context.Context) error {
 	if !enabled {
 		runtime.setSearchReady(false)
 		return nil
+	}
+	if runtime.admission != nil {
+		mode, modeErr := runtime.admission.CurrentMode()
+		if modeErr != nil || mode != publication.AdmissionManaged {
+			runtime.setSearchReady(false)
+			return nil
+		}
 	}
 	coreDomains := append([]backupasset.KeyDomain(nil), backupasset.RequiredKeyDomains...)
 	coreDomains = append(coreDomains, backupasset.KeyDomainSearchToken)

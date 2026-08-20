@@ -45,15 +45,33 @@ func (controller *AdmissionController) Initialize(ctx context.Context) error {
 	if controller == nil {
 		return fmt.Errorf("%w: admission controller is unavailable", backupasset.ErrInvalidState)
 	}
+	target, err := controller.initialMode(ctx)
+	if err != nil {
+		return err
+	}
+	return controller.initializeTo(target)
+}
+
+func (controller *AdmissionController) InitializeDisabled(ctx context.Context) error {
+	if controller == nil {
+		return fmt.Errorf("%w: admission controller is unavailable", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	target, err := controller.disabledMode(ctx)
+	if err != nil {
+		return err
+	}
+	return controller.initializeTo(target)
+}
+
+func (controller *AdmissionController) initializeTo(target publication.AdmissionMode) error {
 	controller.mu.RLock()
 	alreadyInitialized := controller.initialized
 	controller.mu.RUnlock()
 	if alreadyInitialized {
 		return nil
-	}
-	target, err := controller.initialMode(ctx)
-	if err != nil {
-		return err
 	}
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
