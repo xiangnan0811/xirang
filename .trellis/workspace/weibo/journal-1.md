@@ -1736,3 +1736,40 @@ Recorded Child 14 squash, v0.49.0 Docker Trivy failure, x/mod bump, and successf
 ### Next Steps
 
 - Do not create or start Child 15 until Alan instructs. Leave /home/murray/code/xirang main untouched.
+
+
+## Session 44: Child 15 GA hardening delivery
+
+**Date**: 2026-08-20
+**Task**: Child 15 GA hardening delivery
+**Branch**: `chore/archive-child15-ga-hardening`
+
+### Summary
+
+Squash-merged Child 15 GA enablement (#440 / 2e1e98b). Exact-squash main CI and Release Please succeeded; 0.50.0 PR #441 is open and was not merged. Archived the child at 15/15 while leaving the parent planning.
+
+### Main Changes
+
+- Merged PR #440 as squash 2e1e98b after required CI 32374486521 and startup-boot CI fix aa4e8e3.
+- Observed exact-squash main CI 32377898099, Release Please 32377897976 opening #441, and Hub description 32377897831; no GitHub Release or Docker publish from #440.
+- Archived 08-20-backup-assets-ga-hardening and updated the parent ledger to 15/15 children with CodeDefault still false.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `638f9380e02fb963237707325935a49ff9728114` | (see git log) |
+| `aa4e8e30ac3c3785d3c595413983e63e4e348157` | (see git log) |
+| `2e1e98baf520961ffc511e6dc6c1cf6939c3a311` | (see git log) |
+
+### Testing
+
+- [OK] Required PR CI 32374486521 all 11 checks green; exact-squash main CI 32377898099 all required jobs green including Worker complete-profile smoke.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Do not archive the parent until Alan gives an explicit parent-final-acceptance instruction. Leave release PR #441 unmerged unless instructed. Keep backup_assets.enabled CodeDefault false.
