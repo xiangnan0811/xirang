@@ -1,15 +1,17 @@
 import React, { Suspense, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { RotateCcw, FolderSearch, GitCompareArrows, SearchCode } from "lucide-react";
+import { RotateCcw, GitCompareArrows, SearchCode } from "lucide-react";
 import { BatchCommandDialog } from "@/components/batch-command-dialog";
 import { BatchResultDialog } from "@/components/batch-result-dialog";
-import { RestoreConfirmDialog } from "@/components/restore-confirm-dialog";
 import { TaskRcloneVersioningDialog } from "@/components/task-rclone-versioning-dialog";
 import { TaskRsyncVersioningDialog } from "@/components/task-rsync-versioning-dialog";
-import { SnapshotBrowser } from "@/components/snapshot-browser";
 import { SnapshotDiffViewer } from "@/components/snapshot-diff-viewer";
-import { SnapshotSearch } from "@/components/snapshot-search";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { BackupAssetsTaskContextLink } from "@/features/backup-assets/backup-assets-task-context-link";
+import {
+  backupAssetsRestoreHref,
+  backupAssetsSearchHref,
+} from "@/features/backup-assets/backup-assets-route-state";
 
 const TaskEditorDialog = React.lazy(() =>
   import("@/components/task-create-dialog").then(m => ({ default: m.TaskEditorDialog }))
@@ -26,7 +28,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { toast } from "@/components/ui/toast-sonner";
 import type {
   NewTaskInput,
   NodeRecord,
@@ -46,12 +47,8 @@ export interface TasksPageDialogsProps {
   setHistoryTask: (task: TaskRecord | null) => void;
   selectedRun: TaskRunRecord | null;
   setSelectedRun: (run: TaskRunRecord | null) => void;
-  showSnapshots: boolean;
-  setShowSnapshots: (show: boolean | ((prev: boolean) => boolean)) => void;
   showDiff: boolean;
   setShowDiff: (show: boolean | ((prev: boolean) => boolean)) => void;
-  showSearch: boolean;
-  setShowSearch: (show: boolean | ((prev: boolean) => boolean)) => void;
   batchDialogOpen: boolean;
   setBatchDialogOpen: (open: boolean) => void;
   batchDefaultNodeIds: number[] | undefined;
@@ -60,8 +57,6 @@ export interface TasksPageDialogsProps {
   setBatchResultId: (id: string | null) => void;
   batchRetain: boolean;
   setBatchRetain: (retain: boolean) => void;
-  restoreDialogOpen: boolean;
-  setRestoreDialogOpen: (open: boolean) => void;
   rsyncVersioningTask: TaskRecord | null;
   setRsyncVersioningTask: (task: TaskRecord | null) => void;
   canManageRsyncVersioning: boolean;
@@ -76,7 +71,6 @@ export interface TasksPageDialogsProps {
   authToken: string | null;
   handleCreateTask: (input: NewTaskInput) => Promise<void>;
   handleUpdateTask: (input: NewTaskInput) => Promise<void>;
-  onRestoreTriggered?: () => void;
   pauseConfirmTask: TaskRecord | null;
   setPauseConfirmTask: (task: TaskRecord | null) => void;
   onConfirmPause: (taskId: number, cancelRunning: boolean) => Promise<void>;
@@ -94,12 +88,8 @@ export function TasksPageDialogs({
   setHistoryTask,
   selectedRun,
   setSelectedRun,
-  showSnapshots,
-  setShowSnapshots,
   showDiff,
   setShowDiff,
-  showSearch,
-  setShowSearch,
   batchDialogOpen,
   setBatchDialogOpen,
   batchDefaultNodeIds,
@@ -108,8 +98,6 @@ export function TasksPageDialogs({
   setBatchResultId,
   batchRetain,
   setBatchRetain,
-  restoreDialogOpen,
-  setRestoreDialogOpen,
   rsyncVersioningTask,
   setRsyncVersioningTask,
   canManageRsyncVersioning,
@@ -118,7 +106,6 @@ export function TasksPageDialogs({
   setRcloneVersioningTask,
   canManageRcloneVersioning,
   onRcloneVersioningUpdated,
-  onRestoreTriggered,
   nodes,
   policies,
   tasks,
@@ -131,15 +118,6 @@ export function TasksPageDialogs({
   onSkipNext,
 }: TasksPageDialogsProps) {
   const { t } = useTranslation();
-  const [navigateToSnapshotId, setNavigateToSnapshotId] = useState<string | undefined>(undefined);
-  const [navigateToPath, setNavigateToPath] = useState<string | undefined>(undefined);
-
-  const handleNavigateToFile = (snapshotId: string, path: string) => {
-    setNavigateToSnapshotId(snapshotId);
-    setNavigateToPath(path);
-    setShowSearch(false);
-    setShowSnapshots(true);
-  };
 
   return (
     <>
@@ -203,10 +181,7 @@ export function TasksPageDialogs({
           if (!open) {
             setHistoryTask(null);
             setSelectedRun(null);
-            setShowSnapshots(false);
-            setShowSearch(false);
-            setNavigateToSnapshotId(undefined);
-            setNavigateToPath(undefined);
+            setShowDiff(false);
           }
         }}
       >
@@ -221,66 +196,44 @@ export function TasksPageDialogs({
             <div className="ml-auto mr-8 flex gap-2 shrink-0">
               {historyTask?.executorType === "restic" && (
                 <>
-                  <Button
-                    size="sm"
-                    variant={showSnapshots ? "default" : "outline"}
-                    onClick={() => { setShowSnapshots((v: boolean) => !v); setShowDiff(false); setShowSearch(false); }}
-                  >
-                    <FolderSearch className="mr-1 size-3.5" aria-hidden="true" />
-                    {t("tasks.browseSnapshots")}
+                  <BackupAssetsTaskContextLink taskId={historyTask.id} />
+                  <Button size="sm" variant="outline" asChild>
+                    <a href={backupAssetsSearchHref(historyTask.id)}>
+                      <SearchCode className="mr-1 size-3.5" aria-hidden="true" />
+                      {t("tasks.searchSnapshots")}
+                    </a>
+                  </Button>
+                  <Button size="sm" variant="outline" asChild>
+                    <a href={backupAssetsRestoreHref(historyTask.id)}>
+                      <RotateCcw className="mr-1 size-3.5" aria-hidden="true" />
+                      {t("tasks.restoreFromBackup")}
+                    </a>
                   </Button>
                   <Button
                     size="sm"
                     variant={showDiff ? "default" : "outline"}
-                    onClick={() => { setShowDiff((v: boolean) => !v); setShowSnapshots(false); setShowSearch(false); }}
+                    onClick={() => { setShowDiff((v: boolean) => !v); }}
                   >
                     <GitCompareArrows className="mr-1 size-3.5" aria-hidden="true" />
                     {t("tasks.compareSnapshots")}
                   </Button>
-                  <Button
-                    size="sm"
-                    variant={showSearch ? "default" : "outline"}
-                    onClick={() => { setShowSearch((v: boolean) => !v); setShowSnapshots(false); setShowDiff(false); }}
-                  >
-                    <SearchCode className="mr-1 size-3.5" aria-hidden="true" />
-                    {t("tasks.searchSnapshots")}
-                  </Button>
                 </>
               )}
               {historyTask?.executorType === "rsync" && historyTask.rsyncPublication?.mode === "legacy_mutable" && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setRestoreDialogOpen(true)}
-                >
-                  <RotateCcw className="mr-1 size-3.5" aria-hidden="true" />
-                  {t("tasks.restoreFromBackup")}
+                <Button size="sm" variant="outline" asChild>
+                  <a href={backupAssetsRestoreHref(historyTask.id)}>
+                    <RotateCcw className="mr-1 size-3.5" aria-hidden="true" />
+                    {t("tasks.restoreFromBackup")}
+                  </a>
                 </Button>
               )}
             </div>
             <DialogCloseButton />
           </DialogHeader>
           <DialogBody>
-            {historyTask && authToken && showSnapshots ? (
-              <ErrorBoundary>
-                <SnapshotBrowser
-                  taskId={historyTask.id}
-                  token={authToken}
-                  initialSnapshotId={navigateToSnapshotId}
-                  initialPath={navigateToPath}
-                />
-              </ErrorBoundary>
-            ) : historyTask && authToken && showDiff ? (
+            {historyTask && authToken && showDiff ? (
               <ErrorBoundary>
                 <SnapshotDiffViewer taskId={historyTask.id} token={authToken} />
-              </ErrorBoundary>
-            ) : historyTask && authToken && showSearch ? (
-              <ErrorBoundary>
-                <SnapshotSearch
-                  taskId={historyTask.id}
-                  token={authToken}
-                  onNavigateToFile={handleNavigateToFile}
-                />
               </ErrorBoundary>
             ) : historyTask && authToken && (
               selectedRun ? (
@@ -361,25 +314,6 @@ export function TasksPageDialogs({
           </DialogBody>
         </DialogContent>
       </Dialog>
-
-      {authToken && historyTask && (
-        <ErrorBoundary>
-          <RestoreConfirmDialog
-            open={restoreDialogOpen}
-            onOpenChange={setRestoreDialogOpen}
-            taskId={historyTask.id}
-            taskName={historyTask.name ?? historyTask.policyName ?? ""}
-            rsyncSource={historyTask.rsyncSource}
-            rsyncTarget={historyTask.rsyncTarget}
-            token={authToken}
-            onSuccess={(runId) => {
-              setRestoreDialogOpen(false);
-              toast.success(t("tasks.restoreSuccess", { runId }));
-              onRestoreTriggered?.();
-            }}
-          />
-        </ErrorBoundary>
-      )}
     </>
   );
 }

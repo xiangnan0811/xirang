@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -10,8 +11,10 @@ import (
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/ga"
 	"xirang/backend/internal/backupasset/overlay"
 	"xirang/backend/internal/backupasset/publication"
+	assetruntime "xirang/backend/internal/backupasset/runtime"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 	"xirang/backend/internal/settings"
@@ -52,8 +55,34 @@ func TestSettingsFailedTransitionLeavesEnabledOverrideUnchanged(t *testing.T) {
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
+	if strings.Contains(response.Body.String(), "FAKE_TRANSITION_DRAIN_FAILURE_FOR_TEST_ONLY") {
+		t.Fatalf("unexpected PUT leaked internal error: %s", response.Body.String())
+	}
 	if len(spy.targets) != 1 || !spy.targets[0] || svc.GetEffective("backup_assets.enabled") != "false" {
 		t.Fatalf("failed transition targets=%v effective=%q", spy.targets, svc.GetEffective("backup_assets.enabled"))
+	}
+}
+
+func TestSettingsFailedDeleteRestoreTransitionStaysInternalError(t *testing.T) {
+	t.Setenv("BACKUP_ASSETS_ENABLED", "true")
+	_, svc, _, spy, router := setupSettingsTransitionHandler(t)
+	if err := svc.Update("backup_assets.enabled", "false"); err != nil {
+		t.Fatal(err)
+	}
+	spy.err = errors.New("FAKE_DELETE_RESTORE_TRANSITION_FAILURE_FOR_TEST_ONLY")
+
+	request := httptest.NewRequest(http.MethodDelete, "/settings/backup_assets.enabled", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "FAKE_DELETE_RESTORE_TRANSITION_FAILURE_FOR_TEST_ONLY") {
+		t.Fatalf("unexpected delete-restore leaked internal error: %s", response.Body.String())
+	}
+	if len(spy.targets) != 1 || !spy.targets[0] || svc.GetEffective("backup_assets.enabled") != "false" {
+		t.Fatalf("failed delete-restore targets=%v effective=%q", spy.targets, svc.GetEffective("backup_assets.enabled"))
 	}
 }
 
@@ -430,8 +459,11 @@ func TestRecoveryAuthorizationReceiptSettingsTransitions(t *testing.T) {
 
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/settings/"+replayKey, nil))
-		if response.Code != http.StatusBadRequest || svc.GetEffective(replayKey) != "30m" {
+		if response.Code != http.StatusInternalServerError || svc.GetEffective(replayKey) != "30m" {
 			t.Fatalf("failed reset status=%d effective=%q body=%s", response.Code, svc.GetEffective(replayKey), response.Body.String())
+		}
+		if strings.Contains(response.Body.String(), "FAKE_RECOVERY_SETTINGS_DRAIN_FAILURE_FOR_TEST_ONLY") {
+			t.Fatalf("unexpected delete reset leaked drain error: %s", response.Body.String())
 		}
 
 		spy.beforePersist = nil
@@ -497,6 +529,131 @@ func setupSettingsTransitionHandler(t *testing.T) (*gorm.DB, *settings.Service, 
 	router.PUT("/settings", handler.BatchUpdate)
 	router.DELETE("/settings/:key", handler.Delete)
 	return db, svc, handler, spy, router
+}
+
+func TestSettingsEnablementBlockedKeepsBackupAssetsDisabled(t *testing.T) {
+	_, svc, _, spy, router := setupSettingsEnablementHandler(t, ga.ReadinessSnapshot{
+		Class:             ga.InstallationFresh,
+		Status:            ga.ReadinessBlocked,
+		InventoryComplete: false,
+	})
+
+	request := httptest.NewRequest(http.MethodPut, "/settings", strings.NewReader(`{"backup_assets.enabled":"true"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	assertBackupAssetEnablementBlockedConflict(t, response)
+	if len(spy.targets) != 0 || svc.GetEffective("backup_assets.enabled") != "false" {
+		t.Fatalf("blocked settings enablement became managed targets=%v effective=%q", spy.targets, svc.GetEffective("backup_assets.enabled"))
+	}
+}
+
+func TestSettingsEnablementFreshReadyWithoutAckMayEnable(t *testing.T) {
+	_, svc, _, spy, router := setupSettingsEnablementHandler(t, ga.ReadinessSnapshot{
+		Class:             ga.InstallationFresh,
+		Status:            ga.ReadinessReady,
+		InventoryComplete: true,
+		InventoryDigest:   "fresh-digest",
+		ExportRootValid:   true,
+		KeyDomainsReady:   true,
+	})
+
+	request := httptest.NewRequest(http.MethodPut, "/settings", strings.NewReader(`{"backup_assets.enabled":"true"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(spy.targets) != 1 || !spy.targets[0] || svc.GetEffective("backup_assets.enabled") != "true" {
+		t.Fatalf("fresh ready targets=%v effective=%q", spy.targets, svc.GetEffective("backup_assets.enabled"))
+	}
+}
+
+func TestSettingsEnablementExistingInstallRequiresAck(t *testing.T) {
+	_, svc, _, spy, router := setupSettingsEnablementHandler(t, ga.ReadinessSnapshot{
+		Class:             ga.InstallationExisting,
+		Status:            ga.ReadinessReady,
+		InventoryComplete: true,
+		InventoryDigest:   "current-digest",
+		ExportRootValid:   true,
+		KeyDomainsReady:   true,
+	})
+
+	request := httptest.NewRequest(http.MethodPut, "/settings", strings.NewReader(`{"backup_assets.enabled":"true"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	assertBackupAssetEnablementBlockedConflict(t, response)
+	if len(spy.targets) != 0 || svc.GetEffective("backup_assets.enabled") != "false" {
+		t.Fatalf("existing without ack became managed targets=%v effective=%q", spy.targets, svc.GetEffective("backup_assets.enabled"))
+	}
+}
+
+func TestSettingsEnablementDeleteRestoreBlockedKeepsBackupAssetsDisabled(t *testing.T) {
+	t.Setenv("BACKUP_ASSETS_ENABLED", "true")
+	_, svc, _, spy, router := setupSettingsEnablementHandler(t, ga.ReadinessSnapshot{
+		Class:             ga.InstallationFresh,
+		Status:            ga.ReadinessBlocked,
+		InventoryComplete: false,
+	})
+	if err := svc.Update("backup_assets.enabled", "false"); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodDelete, "/settings/backup_assets.enabled", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	assertBackupAssetEnablementBlockedConflict(t, response)
+	if len(spy.targets) != 0 || svc.GetEffective("backup_assets.enabled") != "false" {
+		t.Fatalf("blocked delete-restore became managed targets=%v effective=%q", spy.targets, svc.GetEffective("backup_assets.enabled"))
+	}
+}
+
+func setupSettingsEnablementHandler(t *testing.T, snapshot ga.ReadinessSnapshot) (*gorm.DB, *settings.Service, *SettingsHandler, *settingsTransitionSpy, *gin.Engine) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+		t.Fatal(err)
+	}
+	svc := settings.NewService(db)
+	spy := &settingsTransitionSpy{}
+	transitioner := assetruntime.EnablementRuntime(settingsEnablementReadiness{snapshot: snapshot}, spy)
+	handler := NewSettingsHandler(db, svc).WithBackupAssetTransitioner(transitioner)
+	router := gin.New()
+	router.PUT("/settings", handler.BatchUpdate)
+	router.DELETE("/settings/:key", handler.Delete)
+	return db, svc, handler, spy, router
+}
+
+type settingsEnablementReadiness struct {
+	snapshot ga.ReadinessSnapshot
+}
+
+func (source settingsEnablementReadiness) CurrentReadiness(context.Context) (ga.ReadinessSnapshot, error) {
+	return source.snapshot, nil
+}
+
+func assertBackupAssetEnablementBlockedConflict(t *testing.T, response *httptest.ResponseRecorder) {
+	t.Helper()
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var envelope Response
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if envelope.Code != http.StatusConflict || envelope.Message != "就绪检查未完成" {
+		t.Fatalf("expected conflict 就绪检查未完成, got %+v", envelope)
+	}
 }
 
 func TestSettingsEnabledTransitionDrainsBeforePersistingDatabaseValue(t *testing.T) {

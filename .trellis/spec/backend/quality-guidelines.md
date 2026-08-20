@@ -1204,7 +1204,8 @@ if config.Enabled && !processingRuntime.RecoverySecurityReady() {
 - Applies to `internal/task` archive, `backupasset/runtime` rebuild ports,
   `backupasset/repository` import/rebuild reconcile, and HTTP handlers that
   wrap mutation context. `backup_assets.enabled` stays default false.
-  Child 15 / `000071` stay unauthorized.
+  GA schema `000071` exists; archive/leftover walks must not write
+  installation, inventory-run, or conflict rows.
 
 #### 2. Signatures
 
@@ -1219,7 +1220,7 @@ if config.Enabled && !processingRuntime.RecoverySecurityReady() {
   and `middleware.RequestIDKey`. Do not invent a correlation ID.
 - Derived leftover walks use in-memory keyset cursor + `InspectedLimit`
   (default 200, max 1000) keyed by catalog generation + recovery point.
-  No `000071`.
+  Leftover walks do not write `000071` rows.
 
 #### 3. Contracts
 
@@ -1305,6 +1306,84 @@ if result.incomplete && len(result.descriptors) == 0 {
 }
 
 db := newRetentionTestDB(t) // enableRetentionTestEncryption inside
+```
+
+---
+
+### Scenario: Backup Asset GA Enablement And Inventory Isolation
+
+#### 1. Scope / Trigger
+
+- Trigger: composing backup-asset runtime, flipping `backup_assets.enabled`,
+  running Admin inventory/readiness/ack, or adding a Worker/export volume.
+- Applies to `backupasset/ga`, `backupasset/runtime` (`ga_runtime.go`,
+  `StartupPass`, `TransitionFeature`), settings/config handlers, Compose
+  export volume, and `publish-images.yml`.
+
+#### 2. Signatures
+
+- Compose inside `backupasset/runtime`; do not edit
+  `backend/cmd/server/main.go` for GA wiring.
+- `InventoryService.DryRun` classifies Tasks / links / non-secret identity /
+  managed-history latches. `ProviderMutationSurface` is composed as
+  `forbiddenGAMutations` and must not be invoked.
+- `composeGAReadiness` uses `ValidateBackupAssetFoundationConfig` and
+  `Keyring.EnsureRequiredDomains`. A non-empty export-root string is not
+  readiness.
+
+#### 3. Contracts
+
+- Installation class may move `fresh` → `existing` only. Shared Restic
+  identity consolidates without ownership merge. Command stays
+  `command_unsupported`. Unlinked file-backup Tasks with no stored identity
+  are `capability_gap`; never key them by locator.
+- Inventory persist writes run + conflicts in one transaction. DryRun does
+  not call Child 14 import/rebuild/purge.
+- Official image remains `linnea7171/xirang`.
+  `.github/workflows/publish-images.yml` must not grow a Worker image.
+- Worker remains optional and unpublished. Parser/updater must not mount
+  `asset-worker-export-store`.
+
+#### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| DryRun on a linked Restic Task | Candidate or conflict row; Provider bytes unchanged. |
+| `AdmissionController.Initialize` called alone with FeatureEnabled | Still treats enabled as managed; production must authorize first. |
+| Publish workflow lists `xirang-asset-worker` | Reject; no-publish contract broken. |
+| CodeDefault changed from `"false"` | Reject unless a later PRD amends it. |
+
+#### 5. Good/Base/Bad Cases
+
+- Good: settings PUT blocked returns 409 and leaves admission uninitialized.
+- Base: Core boots with CodeDefault false and unpublished Worker.
+- Bad: env `BACKUP_ASSETS_ENABLED=true` skipping `EvaluateEnablement`, or
+  inventory importing Provider bytes.
+
+#### 6. Tests Required
+
+- `TestInventoryDryRunClassifiesProvidersWithoutProviderMutation`.
+- Runtime startup blocked-enablement and stamp tests.
+- `TestBackupAssetsEnabledCodeDefaultRemainsFalse`.
+- Compose `check-compose-config` export-volume isolation.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+_ = runtime.admission.Initialize(ctx) // FeatureEnabled becomes managed
+```
+
+Correct:
+
+```go
+if err := runtime.authorizeRequestedStartupEnablement(ctx); err != nil {
+    return err
+}
+if err := runtime.admission.Initialize(ctx); err != nil {
+    return err
+}
 ```
 
 ---

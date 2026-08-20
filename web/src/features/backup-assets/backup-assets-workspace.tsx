@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FolderTree, PanelRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -285,6 +286,13 @@ export function BackupAssetsWorkspace({
             {controller.repositories.error?.action === "return_overview" ? (
               <Button variant="outline" size="sm" onClick={onReturnOverview}>
                 {t("backupAssets.actions.returnOverview")}
+              </Button>
+            ) : null}
+            {controller.repositories.error?.code === "feature_disabled" && processingRuntime?.role === "admin" ? (
+              <Button variant="outline" size="sm" asChild>
+                <Link to="/app/backups/overview#backup-assets-ga">
+                  {t("backupAssets.ga.openPanel")}
+                </Link>
               </Button>
             ) : null}
           </div>

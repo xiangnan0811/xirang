@@ -116,6 +116,7 @@ Profile 固定使用以下本地身份和权限合同：
 | updater socket volume | `asset-worker-updater-runtime` | updater 只读挂载到 `/run/xirang`；不包含 parser socket volume |
 | bundle root | `10002:10000`, mode `2750` | updater owner 可写；Worker group 可读，但 parser mount 强制只读 |
 | Derived Store volume | `asset-worker-derived-store`, `10000:10000`, mode `0700` | 仅 Core 与 initializer 挂载到 `/var/lib/xirang-asset-runtime/derived`；parser/updater 不可见 |
+| Export Store volume | `asset-worker-export-store`, `10000:10000`, mode `0700` | 仅 Core 与 initializer 挂载到 `/var/lib/xirang-asset-runtime/export`；parser/updater 不可见 |
 | inbox 目录 | `10002:10002`, mode `0555` | updater-only、只读、不得是符号链接 |
 | trust 文件 | `10002:10002`, mode `0440` | updater-only Ed25519 公钥集合，不得是符号链接 |
 
@@ -123,7 +124,7 @@ Core 同时挂载 updater runtime 和嵌套的 Worker runtime，以分别创建 
 
 Core、parser 和 updater 保持各自独立的 PID namespace。Linux 跨 PID namespace 的 `SO_PEERCRED` 可能返回 peer PID `0`；PID 只作为诊断元数据，不参与授权。Core 的 updater listener 依赖受保护的 UDS，并在解码 receipt 前校验精确 UID/GID 与 socket owner/mode。
 
-`asset-worker-init` 还会把独立 Derived Store volume 初始化为 `0700:10000:10000`。该 volume 持久保留 Core 加密产物并与 `/data`、`/backup`、`/logs` 以及所有 Provider 源隔离；parser 和 updater 都不挂载它。
+`asset-worker-init` 还会把独立 Derived Store 与 Export Store volume 初始化为 `0700:10000:10000`。这两个 volume 持久保留 Core 加密产物并与 `/data`、`/backup`、`/logs` 以及所有 Provider 源隔离；parser 和 updater 都不挂载它们。
 
 先准备固定 inbox 和 trust 文件。Trust 文档只包含公钥与 UTC 生效/退役时间；不要把私钥或在线凭据放入该文件：
 
@@ -148,7 +149,7 @@ sudo chmod 0555 asset-worker-inbox
 sudo chmod 0440 asset-worker-updater-trust.json
 ```
 
-在 `.env` 中显式启用全局 feature、本机 UDS 和独立 updater，并让加密 Derived Store 使用 profile 提供的专用 volume 与默认路径。`/data`、`/backup` 和 `/logs` 及其子路径会被 private-runtime guard 拒绝，不能用作 Derived Store。Settings 数据库覆盖优先于环境变量；若已有同名 DB override，必须在设置界面同步更新或删除旧覆盖值：
+在 `.env` 中显式启用全局 feature、本机 UDS 和独立 updater，并让加密 Derived / Export Store 使用 Compose 提供的专用 volume 与默认路径。`BACKUP_ASSETS_ENABLED=true` 仍须通过就绪门禁：全新安装在库存盘点、导出根和密钥域就绪后即可启用；已有安装还须管理员确认当前库存摘要。CodeDefault 与官方 `.env.deploy` 仍是 `false`。`/data`、`/backup` 和 `/logs` 及其子路径会被 private-runtime guard 拒绝，不能用作 Derived 或 Export Store。Settings 数据库覆盖优先于环境变量；若已有同名 DB override，必须在设置界面同步更新或删除旧覆盖值：
 
 ```env
 BACKUP_ASSETS_ENABLED=true
@@ -159,6 +160,7 @@ BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ENABLED=false
 BACKUP_ASSETS_PROCESSING_SECRET_CLASSIFY=false
 BACKUP_ASSETS_PROCESSING_BACKFILL_PAUSED=true
 BACKUP_ASSETS_DERIVED_STORE_ROOT=/var/lib/xirang-asset-runtime/derived
+BACKUP_ASSETS_EXPORT_ROOT=/var/lib/xirang-asset-runtime/export
 
 ASSET_WORKER_IMAGE_TAG=local
 ASSET_WORKER_INBOX_DIR=./asset-worker-inbox
@@ -178,7 +180,7 @@ docker compose --profile asset-worker ps
 docker compose --profile asset-worker logs --tail=200 asset-worker asset-worker-updater
 ```
 
-以下变更需要重启 Core/profile：本机/远程 Worker enablement 与 socket/certificate/trust、updater enablement/online origins、Derived Store root/chunk，以及 inbox、trust 文件或 bundle mount。Backfill pause/quota 与有限秘密分类是动态设置；默认分别为 paused 与 disabled。
+以下变更需要重启 Core/profile：本机/远程 Worker enablement 与 socket/certificate/trust、updater enablement/online origins、Derived Store root/chunk、Export Store root，以及 inbox、trust 文件或 bundle mount。Backfill pause/quota 与有限秘密分类是动态设置；默认分别为 paused 与 disabled。
 
 回退时先暂停 backfill，再关闭本机 Worker 与 updater 设置并重启 Core，然后停止可选服务：
 

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  backupAssetsPathHref,
+  backupAssetsRecoveryPointHref,
+  backupAssetsRestoreHref,
+  backupAssetsSearchHref,
   backupAssetsTaskContextHref,
   defaultBackupAssetsRouteState,
   parseBackupAssetsRoute,
@@ -312,6 +316,80 @@ describe("backup assets route state", () => {
     expect(href).toBe("/app/backups/data?taskId=101");
     expect(href).not.toMatch(/snapshot|path|query|entryId|recoveryPointId/);
     expect(backupAssetsTaskContextHref(0)).toBe("/app/backups/data");
+  });
+
+  it("maps a snapshot-equivalent recovery point onto the data workspace", () => {
+    const href = backupAssetsRecoveryPointHref(101, recoveryPointId);
+
+    expect(href).toBe(`/app/backups/data?taskId=101&recoveryPointId=${recoveryPointId}`);
+    expect(parseBackupAssetsRoute(...splitHref(href))).toEqual({
+      status: "valid",
+      state: {
+        ...defaultBackupAssetsRouteState("data"),
+        taskId: 101,
+        recoveryPointId,
+      },
+    });
+    expect(href).not.toMatch(/snapshot|path|query/);
+    expect(backupAssetsRecoveryPointHref(101, "snap-legacy")).toBe("/app/backups/data?taskId=101");
+    expect(backupAssetsRecoveryPointHref(0, recoveryPointId)).toBe(
+      `/app/backups/data?recoveryPointId=${recoveryPointId}`
+    );
+  });
+
+  it("maps path and search onto opaque workspace routes instead of snapshot query state", () => {
+    const searchHref = backupAssetsSearchHref(19);
+    const pathHref = backupAssetsPathHref(19, recoveryPointId, parentEntryId, entryId);
+
+    expect(searchHref).toBe("/app/backups/data?view=search&taskId=19");
+    expect(parseBackupAssetsRoute(...splitHref(searchHref))).toEqual({
+      status: "valid",
+      state: {
+        ...defaultBackupAssetsRouteState("data"),
+        view: "search",
+        taskId: 19,
+        sort: "relevance",
+        direction: "desc",
+      },
+    });
+    expect(pathHref).toBe(
+      `/app/backups/data?taskId=19&recoveryPointId=${recoveryPointId}` +
+        `&parentEntryId=${parentEntryId}&entryId=${entryId}`
+    );
+    expect(parseBackupAssetsRoute(...splitHref(pathHref))).toEqual({
+      status: "valid",
+      state: {
+        ...defaultBackupAssetsRouteState("data"),
+        taskId: 19,
+        recoveryPointId,
+        parentEntryId,
+        entryId,
+      },
+    });
+    expect(searchHref).not.toMatch(/snapshot|path|query=/);
+    expect(pathHref).not.toMatch(/snapshot|path=|query=/);
+    expect(backupAssetsPathHref(19, recoveryPointId, "/private/backup")).toBe(
+      `/app/backups/data?taskId=19&recoveryPointId=${recoveryPointId}`
+    );
+    expect(backupAssetsSearchHref(0)).toBe("/app/backups/data?view=search");
+  });
+
+  it("maps restore entry into /app/backups/recovery without legacy snapshot restore state", () => {
+    const href = backupAssetsRestoreHref(501, recoveryPointId);
+
+    expect(href).toBe(`/app/backups/recovery?taskId=501&recoveryPointId=${recoveryPointId}`);
+    expect(parseBackupAssetsRoute(...splitHref(href))).toEqual({
+      status: "valid",
+      state: {
+        ...defaultBackupAssetsRouteState("recovery"),
+        taskId: 501,
+        recoveryPointId,
+        inspectorTab: "evidence",
+      },
+    });
+    expect(href).not.toMatch(/snapshot|path|query|grant|ticket/);
+    expect(backupAssetsRestoreHref(501)).toBe("/app/backups/recovery?taskId=501");
+    expect(backupAssetsRestoreHref(0, "snap-legacy")).toBe("/app/backups/recovery");
   });
 });
 

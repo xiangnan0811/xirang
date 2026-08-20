@@ -1189,3 +1189,88 @@ const raw = await request<unknown>(url, {
 });
 return mapBackupContentTicket(raw, input);
 ```
+
+---
+
+## Scenario: Backup GA Admin Readiness Mapper
+
+### 1. Scope / Trigger
+
+- Trigger: changing Admin GA inventory/readiness/ack UI or
+  `web/src/lib/api/backup-ga-api.ts`.
+- Applies to the typed wrapper, `ga-readiness-panel.tsx`, and tests.
+  Do not put GA enablement into `CATEGORY_ORDER` on the settings page.
+
+### 2. Signatures
+
+- `mapBackupGaReadiness(raw: unknown): BackupGaReadiness`.
+- `createBackupGaApi()`:
+  `GET /settings/backup-assets/ga/readiness`,
+  `POST /settings/backup-assets/ga/inventory`,
+  `POST /settings/backup-assets/ga/acknowledge`.
+- Closed class: `"fresh" | "existing"`. Closed status:
+  `"unknown" | "blocked" | "ready" | "acknowledged"`.
+- Closed conflict kinds: `shared_restic_identity`,
+  `task_repository_mismatch`, `capability_gap`, `command_unsupported`.
+- Opaque IDs: repository `^[0-9a-f]{32}$`, digests `^[0-9a-f]{64}$`.
+
+### 3. Contracts
+
+- Require `schema_version === 1`. Unknown fields are dropped. Invalid
+  class/status throws; do not coerce.
+- Components render counts, closed kinds, and i18n only. Do not display
+  locators, proofs, tickets, identity keys, or raw candidate lists even
+  if a future payload includes them.
+- Settings `CATEGORY_ORDER` stays
+  `security, node_monitor, retention, storage, alert, anomaly`.
+- Auth-role test hosts that pass product `role="admin"|"operator"|"viewer"`
+  use the existing `jsx-a11y/aria-role` disable pattern; do not weaken
+  production a11y.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| `schema_version` is not `1` | Mapper throws; UI stays on the previous safe empty/error state. |
+| `repository_id` is not 32-hex | Mapped as `""`; never shown as a locator. |
+| Extra raw fields (`locator`, `proof`, candidates) | Dropped. |
+| Viewer token on GA routes | Backend 403; panel does not invent Admin CTAs. |
+| Enablement PUT blocked | HTTP 409 from settings API; panel must not treat it as a 500 outage. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: mapper accepts counts + closed kinds and the panel shows i18n
+  status plus inventory/ack actions for Admin.
+- Base: Worker remains optional; `workerOptional` is a boolean flag, not
+  a public image claim.
+- Bad: `unknown as BackupGaReadiness`, rendering raw snake_case, or
+  adding `backup_assets` to `CATEGORY_ORDER`.
+
+### 6. Tests Required
+
+- `backup-ga-api.test.ts` for closed enums, opaque IDs, and dropped
+  unknown fields.
+- `ga-readiness-panel.test.tsx` and `.a11y.test.tsx`.
+- Workspace/overview mount tests for the Admin CTA.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+return raw as BackupGaReadiness;
+```
+
+Correct:
+
+```ts
+if (!isRawObject(raw) || raw.schema_version !== 1) {
+  throw new Error("backup GA readiness payload is invalid");
+}
+return {
+  schemaVersion: 1,
+  class: installationClass(raw.class),
+  inventoryDigest: inventoryDigest(raw.inventory_digest),
+  // ...closed fields only
+};
+```

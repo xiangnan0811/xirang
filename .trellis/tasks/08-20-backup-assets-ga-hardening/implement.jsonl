@@ -1,0 +1,18 @@
+{"file":".trellis/spec/backend/index.md","reason":"Route backend implementation to the authoritative package guidelines."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Apply paired SQLite/PostgreSQL migration and used-down conventions for 000071."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Keep GA readiness and inventory errors typed, wrapped, and mapped without leaking internals."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Follow backend TDD, race, integration, and failure-path quality requirements."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Use structured, redacted inventory and enablement logging."}
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Add the export named volume without breaking the official all-in-one Compose contract."}
+{"file":".trellis/spec/frontend/index.md","reason":"Route frontend implementation to the authoritative UI guidelines."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Build the GA readiness panel from existing UI primitives."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Keep raw GA DTOs at the API boundary and map them to typed domain values."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Apply frontend test, lint, build, and boundary-quality requirements."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Preserve keyboard, focus, naming, and status-announcement semantics for enablement controls."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Keep implementation and delivery on the dedicated branch with PR and CI evidence."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse Child 2/14 identity and Child 13 readiness patterns without cloning those owners."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace enablement through migrations, transition drain, API, UI, audit, and Compose volumes."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Keep GA, export-volume, and Worker-optional claims aligned with tested behavior."}
+{"file":".trellis/tasks/08-20-backup-assets-ga-hardening/research/current-main-evidence.md","reason":"Use the focused live rebaseline instead of parent implement.md §16."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/prd.md","reason":"Preserve the parent product contract for GA, migration, and non-goals."}
+{"file":".trellis/tasks/07-12-backup-data-explorer-design/design.md","reason":"Preserve parent compatibility, observability, and rollback semantics."}

@@ -32,22 +32,21 @@
     "07-20-backup-assets-worker-capabilities",
     "07-22-backup-assets-export-archive",
     "07-28-backup-assets-controlled-recovery",
-    "08-17-backup-assets-lifecycle-reconnect"
+    "08-17-backup-assets-lifecycle-reconnect",
+    "08-20-backup-assets-ga-hardening"
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Program delivery is 14/15 merged and archived (93.33%); Trellis mechanical progress is 14/14 instantiated children archived. Child 13 remains complete_checked through PR #432 squash 946ee6d8cb058fd1a3b358eb453f43cca3f57f7e and bookkeeping PR #433 squash 898491ffb68f89f673c4d6d96a692af655c01056. Child 14 backup-assets-lifecycle-reconnect was created from exact origin/main 19140e80ac34ebab26bc1f8ed141965c5f4d3cdd and delivered through PR #435: feature head f3d2a6851fb0d8c8548370a8965b8cf5715633a8, required CI run 32340923138 passed all 11 checks, squash a303abd08f47c52977036d12e1dfdab540283ee3 is on main, and exact-squash main CI 32342716003 plus Release Please 32342716000 succeeded. Release Please opened PR #436; squash 1a45cf107d47d25a05f471a49ab0284cd02abf87 published GitHub Release v0.49.0. Publish Docker Images 32343632231 failed Trivy HIGH on golang.org/x/mod v0.37.0 in usr/local/bin/xirang. Follow-up PR #437 bumped x/mod to v0.40.0 (CI 32345434981), squash 9b012ba2b73e2ddef81ced839f967a95cd8eb84e, exact-main CI 32346456901 plus Release Please 32346456843 opened 0.49.1 PR #438. Release squash 43a8d067f92dae37ba583f8348fd7441a073d0f9 published GitHub Release v0.49.1; Publish Docker Images 32347642009 succeeded for linux/amd64, linux/arm64, and the multi-arch manifest. Exact-release main CI 32347625831 and Release Please 32347625898 succeeded. Sync Docker Hub Description did not run; README.md was unchanged. Child 14 archive lives under archive/2026-08; journal session 42 records work commit a080f5b2d13c2c9341212f84d14737302aa77caf. backup_assets.enabled remains false. This parent remains planning. Child 15 is not created or started and must wait for an explicit instruction.",
+  "notes": "Program delivery remains 14/15 merged and archived (93.33%) until Child 15 squash-merges. Trellis mechanical progress is 15/15 instantiated children (14 archived; Child 15 in_progress on codex/backup-assets-ga-hardening). Child 15 backup-assets-ga-hardening was created 2026-08-20 from exact origin/main 61cb68d36bad0c4665959fb96d377e3cb36598c1; parent implement.md §16 is superseded. Alan approved planning and task.py start; product implementation Tasks 1-12 are complete_checked. Task 13 is the delivery PR. backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. This parent remains planning and must not be archived in Child 15.",
   "meta": {
     "program_delivery": {
       "delivered": 14,
       "planned": 15,
       "percent": 93.33,
-      "instantiated_children": 14,
+      "instantiated_children": 15,
       "archived_children": 14,
-      "active_child": null,
-      "uninstantiated_children": [
-        15
-      ]
+      "active_child": "08-20-backup-assets-ga-hardening",
+      "uninstantiated_children": []
     },
     "task_7_checkpoint_delivery": {
       "status": "delivered_merged_post_merge_observed_pending_bookkeeping_pr",
@@ -153,6 +152,21 @@
       "program_delivery": "14_of_15",
       "backup_assets_enabled_default": false,
       "boundary": "parent_planning_child15_not_created"
+    },
+    "child_15_planning": {
+      "status": "implementation_complete_task13_pr_pending",
+      "date": "2026-08-20",
+      "task": "08-20-backup-assets-ga-hardening",
+      "branch": "codex/backup-assets-ga-hardening",
+      "baseline": "origin_main_exact_61cb68d36bad0c4665959fb96d377e3cb36598c1",
+      "formal_release": "v0.49.1_at_43a8d067f92dae37ba583f8348fd7441a073d0f9",
+      "task_start_authorized": true,
+      "product_code_started": true,
+      "supersedes_parent_section": "implement.md §16",
+      "program_delivery": "14_of_15_until_squash",
+      "code_default_enabled": false,
+      "worker_publish": "out_of_scope_keep_no_publish",
+      "boundary": "parent_planning_child15_in_progress_not_archived"
     },
     "r0_execution_rebaseline": {
       "date": "2026-08-02",

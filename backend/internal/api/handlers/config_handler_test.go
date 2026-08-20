@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/backupasset/ga"
 	"xirang/backend/internal/backupasset/overlay"
+	assetruntime "xirang/backend/internal/backupasset/runtime"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
@@ -203,6 +205,39 @@ func TestConfigExportAndImportExcludeRecoveryTargetRootRegistry(t *testing.T) {
 	}
 	if after != ciphertext {
 		t.Fatal("rejected config import changed the registered target root")
+	}
+}
+
+func TestConfigImportBlockedBackupAssetsEnabledDoesNotPersist(t *testing.T) {
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("migrate import settings: %v", err)
+	}
+	svc := settings.NewService(db)
+	spy := &settingsTransitionSpy{}
+	handler := NewConfigHandler(db, svc).WithBackupAssetTransitioner(assetruntime.EnablementRuntime(
+		settingsEnablementReadiness{snapshot: ga.ReadinessSnapshot{
+			Class:             ga.InstallationExisting,
+			Status:            ga.ReadinessBlocked,
+			InventoryComplete: false,
+		}},
+		spy,
+	))
+	router := gin.New()
+	router.POST("/config/import", handler.Import)
+
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(`{"system_settings":[{"key":"backup_assets.enabled","value":"true"}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	assertBackupAssetEnablementBlockedConflict(t, response)
+	var count int64
+	if err := db.Model(&model.SystemSetting{}).Where("key = ?", "backup_assets.enabled").Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 || svc.GetEffective("backup_assets.enabled") != "false" || len(spy.targets) != 0 {
+		t.Fatalf("blocked import persisted enabled count=%d effective=%q targets=%v", count, svc.GetEffective("backup_assets.enabled"), spy.targets)
 	}
 }
 

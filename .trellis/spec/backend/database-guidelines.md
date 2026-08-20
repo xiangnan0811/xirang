@@ -45,7 +45,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
 - Keep version numbers in lockstep across SQLite and PostgreSQL. The current
-  latest migration is `000069_backup_asset_recovery`.
+  latest migration is `000071_backup_asset_ga`.
 - Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the
   SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
@@ -111,7 +111,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   both SQLite/PostgreSQL definitions and matching down migrations when changing
   traffic-window predicates or index names.
 - Backup-asset schema changes are paired across SQLite and PostgreSQL. The
-  current baseline includes `000062` through `000069_backup_asset_recovery`;
+  current baseline includes `000062` through `000071_backup_asset_ga`;
   later versions must remain paired. After durable Search or publication facts,
   or live content-delivery state exists, schema down must fail closed rather
   than deleting history, Provider facts, grants, reservations, or leases.
@@ -130,7 +130,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 
 - Connection helper: `openPostgresSQLDB(dsn string) (*sql.DB, error)`.
 - CI regression gate:
-  `go test ./internal/database -run '^(TestBackupAssetMigration062PostgresApplyDown|TestBackupAssetMigration0(63|64|65|66|67|68|69)Postgres|TestPostgresTimestamptzScanUsesConfiguredUTC|TestRunMigrationsPostgresDirtyCheckUsesSearchPath)$' -count=1`.
+  `go test ./internal/database -run '^(TestBackupAssetMigration062PostgresApplyDown|TestBackupAssetMigration0(63|64|65|66|67|68|69|70|71)Postgres|TestPostgresTimestamptzScanUsesConfiguredUTC|TestRunMigrationsPostgresDirtyCheckUsesSearchPath)$' -count=1`.
 - Export behavior gate:
   `go test ./internal/backupasset/export -run '^TestExportBehaviorPostgres$' -count=1`.
 - Required pgx registrations per physical connection:
@@ -151,7 +151,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   hook. Configuring only `timestamp` leaves `TIMESTAMPTZ` scans vulnerable to
   `time.Local` on newer Go/pgx combinations.
 - SQLite/PostgreSQL migration parity for backup assets covers 000062 through
-  000069. A new paired migration must be added to this regex deliberately; it
+  000071. A new paired migration must be added to this regex deliberately; it
   must never be silently omitted from the PostgreSQL gate.
 
 ### 4. Validation & Error Matrix
@@ -179,7 +179,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   PostgreSQL service with `TZ` set to a non-UTC value and assert both location
   and RFC3339 value.
 - PostgreSQL migration tests must exercise paired apply/down contracts for
-  000062 through 000069.
+  000062 through 000071.
 - `TestRunMigrationsPostgresDirtyCheckUsesSearchPath` must prove an unrelated
   sibling schema does not interfere while a search-path-visible dirty row still
   fails closed.
@@ -841,6 +841,100 @@ END;
 
 ---
 
+## Scenario: Backup Asset GA Installation Schema (000071)
+
+### 1. Scope / Trigger
+
+- Trigger: changing GA installation, inventory-run, or repository-conflict
+  tables, their used-down guards, or the production writers of
+  `ready` / `enablement_succeeded_at`.
+- Applies to paired
+  `migrations/{sqlite,postgres}/000071_backup_asset_ga.{up,down}.sql`,
+  `model/backup_asset_migration.go`, `InventoryService.MaterializeReadiness`,
+  and `RecordEnablementSucceeded`.
+
+### 2. Signatures
+
+- Tables: `backup_asset_installations` (singleton `slot=1`),
+  `backup_asset_inventory_runs`, `backup_asset_repository_conflicts`.
+- Closed class: `fresh|existing`. Closed readiness:
+  `unknown|blocked|ready|acknowledged`. Closed conflict kinds:
+  `shared_restic_identity`, `task_repository_mismatch`, `capability_gap`,
+  `command_unsupported`.
+- Admission trigger: `trg_backup_asset_ga_downgrade_admission` on
+  `schema_migrations` for `NEW.version < 71`.
+- CI regex already includes `071`; keep
+  `TestBackupAssetMigration071Postgres` in the parity selector.
+- Check script: `scripts/check-backup-asset-migration.sh`.
+
+### 3. Contracts
+
+- Used-down fails closed when any installation row is `ready` or
+  `acknowledged`, `enablement_succeeded_at` is set, or any conflict row
+  exists. Pristine empty down still applies.
+- Production must write the latches the guard reads: passing computed
+  readiness materializes stored `ready`; successful enable stamps
+  `enablement_succeeded_at` once. DryRun persist stays `unknown` and does
+  not stamp.
+- Class never reverses `existing` → `fresh`. Fresh ack columns stay null.
+- Conflict `repository_id` is empty or 32-hex. Digests are empty or 64-hex.
+  `counts_json` / `task_ids_json` must be non-empty valid JSON.
+- Do not add locators, identity keys, proofs, or `SnapshotFileIndex` columns.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Pristine `Steps(-1)` from 71 | Down succeeds; tables and trigger removed; version 70 clean. |
+| Installation `ready` or `acknowledged` | Used-down rejected; version 71 stays clean. |
+| `enablement_succeeded_at` set, readiness still `unknown` | Used-down rejected. |
+| Any `backup_asset_repository_conflicts` row | Used-down rejected. |
+| `unknown`/`blocked`, no conflicts, no stamp | Pristine-style down allowed (failed unused inventory). |
+| Required PostgreSQL DSN missing | Not a skipped pass; start a disposable engine or fail the gate. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: enable persist stamps `enablement_succeeded_at`, so later schema
+  down cannot erase the only durable enablement proof.
+- Base: empty GA tables down to 000070.
+- Bad: testing used-down only by seeding `ready` in SQL while production
+  never writes the column.
+
+### 6. Tests Required
+
+- SQLite and required PostgreSQL
+  `BackupAssetMigration071*` families: ReadyInstallation,
+  AcknowledgedInstallation, RepositoryConflict, SuccessfulEnablement,
+  pristine down.
+- Inventory tests that DryRun does not self-promote or stamp, and that
+  MaterializeReadiness / RecordEnablementSucceeded do.
+- `scripts/check-backup-asset-migration.sh`.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+_ = service.DryRun(ctx) // persist unknown, never stamp, then enable
+// 000071 down still succeeds because used-down latches were never written
+```
+
+Correct:
+
+```go
+if err := service.MaterializeReadiness(ctx, passingSnapshot); err != nil {
+    return err
+}
+persist = func() error {
+    if err := service.RecordEnablementSucceeded(ctx); err != nil {
+        return err
+    }
+    return persistSettings()
+}
+```
+
+---
+
 ## Common Mistakes
 
 - Do not add a migration for only one database engine. SQLite and PostgreSQL
@@ -854,3 +948,6 @@ END;
   from the later migration contract.
 - Do not manually encrypt/decrypt sensitive fields in handlers. Keep encryption
   at model/service boundaries so every caller gets the same behavior.
+- Do not add a used-down latch that production never writes. `000071`
+  `ready` and `enablement_succeeded_at` must be stamped by
+  `MaterializeReadiness` / `RecordEnablementSucceeded`, not only by tests.

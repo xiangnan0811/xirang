@@ -158,7 +158,47 @@ export function serializeBackupAssetsRoute(state: BackupAssetsRouteState): strin
 export function backupAssetsTaskContextHref(taskId: number): string {
   return serializeBackupAssetsRoute({
     ...defaultBackupAssetsRouteState("data"),
-    taskId: Number.isSafeInteger(taskId) && taskId > 0 ? taskId : undefined,
+    taskId: sanitizedTaskId(taskId),
+  });
+}
+
+export function backupAssetsRecoveryPointHref(taskId: number, recoveryPointId: string): string {
+  return serializeBackupAssetsRoute({
+    ...defaultBackupAssetsRouteState("data"),
+    taskId: sanitizedTaskId(taskId),
+    recoveryPointId: parseOpaqueId(recoveryPointId),
+  });
+}
+
+export function backupAssetsSearchHref(taskId: number): string {
+  return serializeBackupAssetsRoute({
+    ...defaultBackupAssetsRouteState("data"),
+    view: "search",
+    taskId: sanitizedTaskId(taskId),
+    ...defaultsForView("search"),
+  });
+}
+
+export function backupAssetsPathHref(
+  taskId: number,
+  recoveryPointId: string,
+  parentEntryId?: string,
+  entryId?: string
+): string {
+  return serializeBackupAssetsRoute({
+    ...defaultBackupAssetsRouteState("data"),
+    taskId: sanitizedTaskId(taskId),
+    recoveryPointId: parseOpaqueId(recoveryPointId),
+    parentEntryId: parentEntryId === undefined ? undefined : parseEntryId(parentEntryId),
+    entryId: entryId === undefined ? undefined : parseEntryId(entryId),
+  });
+}
+
+export function backupAssetsRestoreHref(taskId: number, recoveryPointId?: string): string {
+  return serializeBackupAssetsRoute({
+    ...defaultBackupAssetsRouteState("recovery"),
+    taskId: sanitizedTaskId(taskId),
+    recoveryPointId: recoveryPointId === undefined ? undefined : parseOpaqueId(recoveryPointId),
   });
 }
 
@@ -492,6 +532,10 @@ function hasOnlyKeys(params: URLSearchParams, allowed: ReadonlySet<string>): boo
 
 function hasDuplicateSingular(params: URLSearchParams): boolean {
   return [...new Set(params.keys())].some((key) => key !== "type" && params.getAll(key).length !== 1);
+}
+
+function sanitizedTaskId(taskId: number): number | undefined {
+  return Number.isSafeInteger(taskId) && taskId > 0 ? taskId : undefined;
 }
 
 function parseOpaqueId(value: string | null): string | undefined {

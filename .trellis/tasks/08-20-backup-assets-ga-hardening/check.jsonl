@@ -1,0 +1,17 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Review paired 000071 apply/down/used-down behavior on both required engines."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review sentinel errors and fail-closed handler mappings for blocked enablement."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review selector evidence, races, faults, cross-engine tests, and full gates."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Review redaction of inventory and transition logs."}
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Review official Compose export-volume wiring and all-in-one independence from Worker publish."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Review composition of the readiness panel from existing primitives."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Review raw-to-domain mappings and prevent unsafe casts or snake_case leakage."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Review typed API wrappers, tests, lint, and build coverage."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Review enablement confirmations, keyboard flow, focus, and announcements."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Review exact changed paths, PR checks, merge, and post-merge evidence."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Detect a second import/reconnect/readiness state machine."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review enablement truth across database, transition, API, UI, Compose, and docs."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Review that GA and volume claims match tested behavior."}
+{"file":".trellis/tasks/08-20-backup-assets-ga-hardening/research/current-main-evidence.md","reason":"Review the implementation against the exact live baseline and explicit exclusions."}
+{"file":".trellis/tasks/08-20-backup-assets-ga-hardening/prd.md","reason":"Review acceptance criteria, exclusions, and CodeDefault/Worker-publish decisions."}
+{"file":".trellis/tasks/08-20-backup-assets-ga-hardening/design.md","reason":"Review readiness-before-admission, inventory byte-preservation, and schema down."}
+{"file":".trellis/tasks/08-20-backup-assets-ga-hardening/implement.md","reason":"Review the rebaselined manifest and that parent §16 is not executed as written."}

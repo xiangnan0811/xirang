@@ -104,14 +104,11 @@ export function TasksPage() {
   const [pendingAction, setPendingAction] = useState<PendingActionType>(null);
   const [historyTask, setHistoryTask] = useState<TaskRecord | null>(null);
   const [selectedRun, setSelectedRun] = useState<TaskRunRecord | null>(null);
-  const [showSnapshots, setShowSnapshots] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
-  const [showSearch, setShowSearch] = useState(false);
   const [batchDialogOpen, setBatchDialogOpen] = useState(false);
   const [batchDefaultNodeIds, setBatchDefaultNodeIds] = useState<number[] | undefined>(undefined);
   const [batchResultId, setBatchResultId] = useState<string | null>(null);
   const [batchRetain, setBatchRetain] = useState(false);
-  const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [rsyncVersioningTask, setRsyncVersioningTask] = useState<TaskRecord | null>(null);
   const [rcloneVersioningTask, setRcloneVersioningTask] = useState<TaskRecord | null>(null);
   const [selectedTaskIds, setSelectedTaskIds] = useState<number[]>([]);
@@ -575,12 +572,8 @@ export function TasksPage() {
         setHistoryTask={setHistoryTask}
         selectedRun={selectedRun}
         setSelectedRun={setSelectedRun}
-        showSnapshots={showSnapshots}
-        setShowSnapshots={setShowSnapshots}
         showDiff={showDiff}
         setShowDiff={setShowDiff}
-        showSearch={showSearch}
-        setShowSearch={setShowSearch}
         batchDialogOpen={batchDialogOpen}
         setBatchDialogOpen={setBatchDialogOpen}
         batchDefaultNodeIds={batchDefaultNodeIds}
@@ -589,8 +582,6 @@ export function TasksPage() {
         setBatchResultId={setBatchResultId}
         batchRetain={batchRetain}
         setBatchRetain={setBatchRetain}
-        restoreDialogOpen={restoreDialogOpen}
-        setRestoreDialogOpen={setRestoreDialogOpen}
         rsyncVersioningTask={rsyncVersioningTask}
         setRsyncVersioningTask={setRsyncVersioningTask}
         canManageRsyncVersioning={canManageRsyncVersioning}
@@ -599,7 +590,6 @@ export function TasksPage() {
         setRcloneVersioningTask={setRcloneVersioningTask}
         canManageRcloneVersioning={canManageRcloneVersioning}
         onRcloneVersioningUpdated={refreshTasks}
-        onRestoreTriggered={() => void refreshTasks()}
         nodes={nodes}
         policies={policies}
         tasks={tasks}

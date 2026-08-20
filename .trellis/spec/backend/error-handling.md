@@ -24,7 +24,8 @@ message from `respondInternalError`.
 
 - Domain packages use sentinel errors when handlers need stable HTTP mapping.
   Examples: `dashboards.ErrNotFound`, `dashboards.ErrConflict`,
-  `dashboards.ErrInvalidMetric`, and `escalation.ErrNotFound`.
+  `dashboards.ErrInvalidMetric`, `escalation.ErrNotFound`,
+  `ga.ErrEnablementBlocked`, and `ga.ErrEnablementAckRequired`.
 - Validation functions usually return plain `error` values with user-facing
   messages. Handlers map them to `respondBadRequest`.
 - Database not-found cases should use `errors.Is(err, gorm.ErrRecordNotFound)`
@@ -830,6 +831,117 @@ Correct:
 ```go
 if secondEnabled && !verifyCaptchaAnswer(store, req.SecondCaptchaID, req.SecondCaptchaAnswer) {
     respondBadRequest(c, "二次验证码错误或已过期")
+    return
+}
+```
+
+---
+
+## Scenario: Backup Asset GA Enablement Gate
+
+### 1. Scope / Trigger
+
+- Trigger: enabling `backup_assets.enabled` through settings PUT, settings
+  DELETE-restore, config import, startup `Runtime.StartupPass`, or the Admin
+  GA acknowledge/inventory routes.
+- Applies to `backupasset/ga.EvaluateEnablement`,
+  `backupasset/runtime.Runtime.TransitionFeature`,
+  `authorizeRequestedStartupEnablement`, settings/config handlers, and
+  `respondBackupAssetEnablementConflict`.
+
+### 2. Signatures
+
+- Predicate: `EvaluateEnablement(ReadinessSnapshot) error`.
+- Runtime gate: `Runtime.TransitionFeature(ctx, enabled bool, persist func() error) error`
+  calls `authorizeEnablement` before `PrepareEnable` and before
+  `AdmissionController.TransitionFeature`. `FeatureTransitioner()` returns
+  `*Runtime`, not `*AdmissionController`.
+- Startup: `StartupPass` calls `authorizeRequestedStartupEnablement` before
+  `admission.Initialize`.
+- HTTP helper: `respondBackupAssetEnablementConflict(c, err) bool` maps
+  `ga.ErrEnablementBlocked` and `ga.ErrEnablementAckRequired` to
+  `respondConflict(c, "就绪检查未完成")`.
+- Admin routes (Auth + `backup_repositories:manage` + `RequireRole("admin")`):
+  `POST /api/v1/settings/backup-assets/ga/inventory`,
+  `GET /api/v1/settings/backup-assets/ga/readiness`,
+  `POST /api/v1/settings/backup-assets/ga/acknowledge`.
+  Do not reuse `POST .../recovery/downgrade-readiness`.
+
+### 3. Contracts
+
+- `backup_assets.enabled` CodeDefault stays `"false"`. Do not flip it as a
+  side effect of GA readiness.
+- Blocked or incomplete readiness never persists `true` and never becomes
+  `AdmissionManaged`. Fresh + ready may enable without ack. Existing requires
+  Admin ack of the current 64-hex inventory digest.
+- Disablement still drains; it does not require readiness or ack.
+- Successful enable stamps `enablement_succeeded_at` once inside the persist
+  callback. Inventory dry-run persist stays `unknown` and does not stamp.
+- Passing computed readiness materializes stored `ready` through
+  `InventoryService.MaterializeReadiness`, not through DryRun.
+- Public GA JSON is counts, closed conflict kinds, opaque 32-hex repository
+  IDs, and 64-hex digests. Locators, proofs, tickets, identity keys, and
+  `SnapshotFileIndex` stay off the wire.
+- Unexpected transition failures stay generic HTTP 500. Do not return
+  `err.Error()` from settings DELETE.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Settings PUT `backup_assets.enabled=true` while blocked | HTTP 409 `就绪检查未完成`; effective stays `"false"`; inner transition not called. |
+| Settings PUT existing-class without current-digest ack | HTTP 409 `就绪检查未完成`; not managed. |
+| Settings DELETE-restore to env `true` while blocked | HTTP 409; override remains `"false"`. |
+| Config import `backup_assets.enabled=true` while blocked | HTTP 409; no settings row persisted. |
+| Unexpected transition failure (`errors.New(...)`) | HTTP 500 generic body; no persist. |
+| Startup requested enable without readiness | Core still boots; admission is initialized disabled (not managed); Admin can run inventory/ack. Process does not Fatal on the gate sentinels. |
+| Stale ack digest | `ErrInventoryDigestMismatch` → dedicated GA route 409 `清单已变化，请重新核对`. |
+| Viewer/Operator hits GA routes | 403; `CATEGORY_ORDER` still omits `backup_assets`. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: fresh + ready PUT returns 200, stamps `enablement_succeeded_at`, and
+  admission becomes managed only after persist.
+- Base: CodeDefault `"false"` plus empty inventory keeps the feature off and
+  lets Core boot.
+- Bad: mapping blocked enablement through `respondInternalError`, or calling
+  `AdmissionController.Initialize` / `TransitionFeature(true)` without
+  `EvaluateEnablement`, or returning `StartupPass` errors for blocked
+  enablement so Core cannot boot.
+
+### 6. Tests Required
+
+- `TestSettingsEnablementBlockedKeepsBackupAssetsDisabled` and
+  `TestSettingsEnablementExistingInstallRequiresAck` assert 409 and the
+  Chinese conflict message.
+- `TestSettingsEnablementDeleteRestoreBlockedKeepsBackupAssetsDisabled`
+  asserts DELETE-restore 409.
+- `TestConfigImportBlockedBackupAssetsEnabledDoesNotPersist` asserts import
+  409 and no DB override.
+- Failed PUT/DELETE/import transition tests assert 500 and no leaked
+  sentinel/`err.Error()` text.
+- `TestStartupRequestedEnablement*` and
+  `TestBackupAssetsEnabledCodeDefaultRemainsFalse`.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+if err := h.persistSettingsMutation(ctx, req); err != nil {
+    respondInternalError(c, err)
+    return
+}
+```
+
+Correct:
+
+```go
+if err := h.persistSettingsMutation(ctx, req); err != nil {
+    if respondBackupAssetEnablementConflict(c, err) {
+        return
+    }
+    respondInternalError(c, err)
     return
 }
 ```

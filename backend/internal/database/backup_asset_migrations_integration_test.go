@@ -50,6 +50,7 @@ const (
 	backupAssetExportVersion           = 68
 	backupAssetRecoveryVersion         = 69
 	backupAssetLifecycleVersion        = 70
+	backupAssetGAVersion               = 71
 	recoveryEmptyDeleteSetDigest       = "3f5a5d5213612b170da6ce2f2f90775a31d4e40269bb785042589af64011b7cf"
 	recoveryClaimSchedulerRowID        = "0000000000000000000000000000006a"
 	recoveryTakeoverSchedulerRowID     = "0000000000000000000000000000006b"
@@ -73,6 +74,12 @@ var backupAssetLifecycleTables = []string{
 	"backup_asset_purge_plans",
 	"backup_asset_purge_plan_items",
 	"backup_asset_config_import_refs",
+}
+
+var backupAssetGATables = []string{
+	"backup_asset_installations",
+	"backup_asset_inventory_runs",
+	"backup_asset_repository_conflicts",
 }
 
 var backupAssetRecoveryTables = []string{
@@ -3244,6 +3251,240 @@ func TestBackupAssetMigration070Postgres(t *testing.T) {
 
 func TestBackupAssetMigration070UsedDownAdmissionPostgres(t *testing.T) {
 	runBackupAssetMigration070UsedDownAdmission(t, newRequiredPostgresMigrationFixture(t))
+}
+
+func TestBackupAssetMigration071SQLite(t *testing.T) {
+	runBackupAssetMigration071Contract(t, newSQLiteMigrationFixture(t))
+}
+
+func TestBackupAssetMigration071Postgres(t *testing.T) {
+	runBackupAssetMigration071Contract(t, newRequiredPostgresMigrationFixture(t))
+}
+
+func TestBackupAssetMigration071UsedDownAdmissionSQLite(t *testing.T) {
+	runBackupAssetMigration071UsedDownAdmission(t, newSQLiteMigrationFixture(t))
+}
+
+func TestBackupAssetMigration071UsedDownAdmissionPostgres(t *testing.T) {
+	runBackupAssetMigration071UsedDownAdmission(t, newRequiredPostgresMigrationFixture(t))
+}
+
+func TestBackupAssetMigration071PairedFiles(t *testing.T) {
+	testCases := []struct {
+		name string
+		fs   interface {
+			ReadFile(string) ([]byte, error)
+		}
+		path string
+	}{
+		{name: "SQLiteUp", fs: sqliteMigrationsFS, path: "migrations/sqlite/000071_backup_asset_ga.up.sql"},
+		{name: "SQLiteDown", fs: sqliteMigrationsFS, path: "migrations/sqlite/000071_backup_asset_ga.down.sql"},
+		{name: "PostgresUp", fs: postgresMigrationsFS, path: "migrations/postgres/000071_backup_asset_ga.up.sql"},
+		{name: "PostgresDown", fs: postgresMigrationsFS, path: "migrations/postgres/000071_backup_asset_ga.down.sql"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			script, err := testCase.fs.ReadFile(testCase.path)
+			if err != nil {
+				t.Fatalf("read paired 000071 migration: %v", err)
+			}
+			text := strings.ToLower(string(script))
+			for _, fragment := range append(append([]string(nil), backupAssetGATables...),
+				"schema_migrations", "trg_backup_asset_ga_downgrade_admission",
+				"fresh", "existing", "unknown", "blocked", "ready", "acknowledged",
+				"shared_restic_identity", "task_repository_mismatch", "capability_gap", "command_unsupported") {
+				if !strings.Contains(text, fragment) {
+					t.Fatalf("%s is missing GA contract %q", testCase.path, fragment)
+				}
+			}
+		})
+	}
+}
+
+func runBackupAssetMigration071Contract(t *testing.T, fixture migrationFixture) {
+	t.Helper()
+	t.Run("ApplyAndModelParity", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, backupAssetGAVersion)
+		assertMigrationVersion(t, migrator, backupAssetGAVersion)
+		assertBackupAssetGASchema071(t, fixture, db)
+		if fixture.engine == "sqlite" {
+			assertSQLiteForeignKeyCheck(t, db)
+		}
+	})
+	t.Run("UTCRoundTrip", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetGAVersion)
+		now := "2026-08-20 02:03:04+00:00"
+		installationID := strings.Repeat("a", 32)
+		fixture.mustExec(t, db, `INSERT INTO backup_asset_installations
+			(id, class, readiness, inventory_digest, created_at, updated_at)
+			VALUES (?, 'fresh', 'unknown', '', ?, ?)`, installationID, now, now)
+		var createdAt time.Time
+		if err := db.QueryRow(fixture.bind(`SELECT created_at FROM backup_asset_installations WHERE id = ?`), installationID).Scan(&createdAt); err != nil {
+			t.Fatalf("scan GA UTC created_at: %v", err)
+		}
+		if createdAt.Location() != time.UTC || createdAt.Format(time.RFC3339) != "2026-08-20T02:03:04Z" {
+			t.Fatalf("GA UTC timestamp drifted: %s (%s)", createdAt.Format(time.RFC3339), createdAt.Location())
+		}
+	})
+	t.Run("ClosedConstraints", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetGAVersion)
+		now := time.Date(2026, 8, 20, 4, 0, 0, 0, time.UTC)
+		fixture.expectExecRejected(t, db, `INSERT INTO backup_asset_installations
+			(id, class, readiness, inventory_digest, created_at, updated_at)
+			VALUES (?, 'upgrade', 'unknown', '', ?, ?)`, strings.Repeat("b", 32), now, now)
+		fixture.expectExecRejected(t, db, `INSERT INTO backup_asset_installations
+			(id, class, readiness, inventory_digest, ack_actor_id, ack_at, created_at, updated_at)
+			VALUES (?, 'fresh', 'acknowledged', ?, 1, ?, ?, ?)`,
+			strings.Repeat("c", 32), strings.Repeat("d", 64), now, now, now)
+		fixture.expectExecRejected(t, db, `INSERT INTO backup_asset_inventory_runs
+			(id, digest, status, counts_json, error_category, created_at, updated_at)
+			VALUES (?, ?, 'complete', '{}', 'raw_locator', ?, ?)`,
+			strings.Repeat("e", 32), strings.Repeat("f", 64), now, now)
+		fixture.expectExecRejected(t, db, `INSERT INTO backup_asset_repository_conflicts
+			(id, run_id, kind, task_ids_json, repository_id, stable_reason_code, created_at)
+			VALUES (?, ?, 'owned_merge', '[]', '', 'backup_assets.ga.invalid', ?)`,
+			strings.Repeat("1", 32), strings.Repeat("2", 32), now)
+	})
+	t.Run("PreservesExisting070Facts", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, backupAssetLifecycleVersion)
+		seed := fixture.seedLifecycleMigrationBase(t, db, "7", 7101)
+		seedLifecycleRetentionPolicy(t, fixture, db, seed)
+		migrateToBackupAssetVersion(t, migrator, backupAssetGAVersion)
+		assertMigrationVersion(t, migrator, backupAssetGAVersion)
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM backup_retention_policies`).Scan(&count); err != nil {
+			t.Fatalf("count preserved 000070 policy: %v", err)
+		}
+		if count != 1 {
+			t.Fatalf("%s 000071 migration lost existing 000070 retention policy", fixture.engine)
+		}
+	})
+	t.Run("PristineDownDropsGATables", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, backupAssetGAVersion)
+		if err := migrator.Steps(-1); err != nil {
+			t.Fatalf("step %s pristine 000071 down: %v", fixture.engine, err)
+		}
+		assertMigrationVersion(t, migrator, backupAssetLifecycleVersion)
+		for _, table := range backupAssetGATables {
+			if databaseTableExists(t, db, fixture.engine, table) {
+				t.Fatalf("%s GA table %s remains after pristine down", fixture.engine, table)
+			}
+		}
+		if fixture.recoveryTriggerExists(t, db, "schema_migrations", "trg_backup_asset_ga_downgrade_admission") {
+			t.Fatal("GA downgrade admission trigger remains after pristine down")
+		}
+		if fixture.engine == "sqlite" {
+			assertSQLiteForeignKeyCheck(t, db)
+		}
+	})
+}
+
+func runBackupAssetMigration071UsedDownAdmission(t *testing.T, fixture migrationFixture) {
+	t.Helper()
+	testCases := []struct {
+		name string
+		seed func(*testing.T, migrationFixture, *sql.DB)
+	}{
+		{name: "ReadyInstallation", seed: seedGAReadyInstallation},
+		{name: "AcknowledgedInstallation", seed: seedGAAcknowledgedInstallation},
+		{name: "RepositoryConflict", seed: seedGARepositoryConflict},
+		{name: "SuccessfulEnablement", seed: seedGASuccessfulEnablement},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			migrator, db := fixture.openAt(t, backupAssetGAVersion)
+			testCase.seed(t, fixture, db)
+			admissionBefore := fixture.recoveryTriggerDefinition(t, db, "schema_migrations", "trg_backup_asset_ga_downgrade_admission")
+			if err := migrator.Steps(-1); err == nil {
+				t.Fatalf("%s 000071 down unexpectedly succeeded with %s state", fixture.engine, testCase.name)
+			}
+			assertMigrationVersion(t, migrator, backupAssetGAVersion)
+			if got := fixture.recoveryTriggerDefinition(t, db, "schema_migrations", "trg_backup_asset_ga_downgrade_admission"); got != admissionBefore {
+				t.Fatalf("rejected down changed GA admission trigger\n got: %s\nwant: %s", got, admissionBefore)
+			}
+			for _, table := range backupAssetGATables {
+				if !databaseTableExists(t, db, fixture.engine, table) {
+					t.Fatalf("rejected down dropped GA table %s", table)
+				}
+			}
+		})
+	}
+}
+
+func assertBackupAssetGASchema071(t *testing.T, fixture migrationFixture, db *sql.DB) {
+	t.Helper()
+	for table, persistentModel := range backupAssetGAModels() {
+		if !databaseTableExists(t, db, fixture.engine, table) {
+			t.Fatalf("%s GA migration table %s is missing", fixture.engine, table)
+		}
+		want := gormColumnNames(t, persistentModel)
+		var got []string
+		if fixture.engine == "sqlite" {
+			got = sqliteColumnNames(t, db, table)
+			assertSQLiteTimeColumnsHaveNoDefault(t, db, table)
+		} else {
+			got = postgresColumnNames(t, db, table)
+			assertPostgresTableTimeColumnsHaveNoDefault(t, db, table)
+		}
+		sort.Strings(got)
+		sort.Strings(want)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("%s %s columns mismatch\n got: %v\nwant: %v", fixture.engine, table, got, want)
+		}
+	}
+	if !fixture.recoveryTriggerExists(t, db, "schema_migrations", "trg_backup_asset_ga_downgrade_admission") {
+		t.Fatal("GA downgrade admission trigger is missing")
+	}
+}
+
+func backupAssetGAModels() map[string]any {
+	return map[string]any{
+		"backup_asset_installations":         model.BackupAssetInstallation{},
+		"backup_asset_inventory_runs":        model.BackupAssetInventoryRun{},
+		"backup_asset_repository_conflicts": model.BackupAssetRepositoryConflict{},
+	}
+}
+
+func seedGAReadyInstallation(t *testing.T, fixture migrationFixture, db *sql.DB) {
+	t.Helper()
+	now := time.Date(2026, 8, 20, 5, 0, 0, 0, time.UTC)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_installations
+		(id, class, readiness, inventory_digest, created_at, updated_at)
+		VALUES (?, 'fresh', 'ready', ?, ?, ?)`,
+		strings.Repeat("a", 32), strings.Repeat("b", 64), now, now)
+}
+
+func seedGAAcknowledgedInstallation(t *testing.T, fixture migrationFixture, db *sql.DB) {
+	t.Helper()
+	now := time.Date(2026, 8, 20, 5, 1, 0, 0, time.UTC)
+	digest := strings.Repeat("c", 64)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_installations
+		(id, class, readiness, inventory_digest, ack_actor_id, ack_at, created_at, updated_at)
+		VALUES (?, 'existing', 'acknowledged', ?, 1, ?, ?, ?)`,
+		strings.Repeat("d", 32), digest, now, now, now)
+}
+
+func seedGARepositoryConflict(t *testing.T, fixture migrationFixture, db *sql.DB) {
+	t.Helper()
+	now := time.Date(2026, 8, 20, 5, 2, 0, 0, time.UTC)
+	runID := strings.Repeat("e", 32)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_inventory_runs
+		(id, digest, status, counts_json, error_category, created_at, updated_at)
+		VALUES (?, ?, 'complete', ?, '', ?, ?)`,
+		runID, strings.Repeat("f", 64), `{"candidates":1,"conflicts":1,"unsupported":0,"capability_gaps":0}`, now, now)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_repository_conflicts
+		(id, run_id, kind, task_ids_json, repository_id, stable_reason_code, created_at)
+		VALUES (?, ?, 'shared_restic_identity', ?, '', 'backup_assets.ga.shared_restic_identity', ?)`,
+		strings.Repeat("1", 32), runID, `[11,12]`, now)
+}
+
+func seedGASuccessfulEnablement(t *testing.T, fixture migrationFixture, db *sql.DB) {
+	t.Helper()
+	now := time.Date(2026, 8, 20, 5, 3, 0, 0, time.UTC)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_installations
+		(id, class, readiness, inventory_digest, enablement_succeeded_at, created_at, updated_at)
+		VALUES (?, 'fresh', 'unknown', '', ?, ?, ?)`,
+		strings.Repeat("2", 32), now, now, now)
 }
 
 func TestBackupAssetMigration069WholeTask6ClosurePostgres(t *testing.T) {

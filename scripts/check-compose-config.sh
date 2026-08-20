@@ -59,6 +59,8 @@ jq -e '
   .services.xirang.pid == null and
   ([.services.xirang.volumes[] | select(.source == "asset-worker-derived-store" and .target == "/var/lib/xirang-asset-runtime/derived" and (.read_only // false) == false)] | length) == 1 and
   .volumes["asset-worker-derived-store"] != null and
+  ([.services.xirang.volumes[] | select(.source == "asset-worker-export-store" and .target == "/var/lib/xirang-asset-runtime/export" and (.read_only // false) == false)] | length) == 1 and
+  .volumes["asset-worker-export-store"] != null and
   .services.xirang.depends_on["asset-worker-init"].required == false and
   .services["asset-worker"] == null and
   .services["asset-worker-updater"] == null
@@ -83,6 +85,7 @@ jq -e '
   ([.services["asset-worker"].volumes[] | select(.source == "asset-worker-worker-runtime" and .target == "/run/xirang/worker" and .read_only == true)] | length) == 1 and
   ([.services["asset-worker"].volumes[] | select(.target == "/run/xirang")] | length) == 0 and
   ([.services["asset-worker"].volumes[] | select(.source == "asset-worker-derived-store" or .target == "/var/lib/xirang-asset-runtime/derived")] | length) == 0 and
+  ([.services["asset-worker"].volumes[] | select(.source == "asset-worker-export-store" or .target == "/var/lib/xirang-asset-runtime/export")] | length) == 0 and
   (.services["asset-worker"].tmpfs | sort) == ([
     "/run/xirang/asset-jobs:rw,noexec,nosuid,nodev,size=268435456,nr_inodes=32768,mode=0700,uid=10000,gid=10000",
     "/tmp:rw,noexec,nosuid,nodev,size=67108864,nr_inodes=8192,mode=0700,uid=10000,gid=10000"
@@ -108,6 +111,7 @@ jq -e '
   ([.services["asset-worker-updater"].volumes[] | select(.source == "asset-worker-updater-runtime" and .target == "/run/xirang" and .read_only == true)] | length) == 1 and
   ([.services["asset-worker-updater"].volumes[] | select(.target == "/run/xirang/worker")] | length) == 0 and
   ([.services["asset-worker-updater"].volumes[] | select(.source == "asset-worker-derived-store" or .target == "/var/lib/xirang-asset-runtime/derived")] | length) == 0 and
+  ([.services["asset-worker-updater"].volumes[] | select(.source == "asset-worker-export-store" or .target == "/var/lib/xirang-asset-runtime/export")] | length) == 0 and
   (.services["asset-worker-updater"].secrets | length) == 1
 ' "$TMP_DIR/profile.json" >/dev/null || fail "Updater identity or mount contract changed"
 
@@ -124,9 +128,11 @@ jq -e '
   ([.services["asset-worker-init"].volumes[] | select(.source == "asset-worker-updater-runtime" and .target == "/run/xirang" and (.read_only // false) == false)] | length) == 1 and
   ([.services["asset-worker-init"].volumes[] | select(.source == "asset-worker-worker-runtime" and .target == "/run/xirang/worker" and (.read_only // false) == false)] | length) == 1 and
   ([.services["asset-worker-init"].volumes[] | select(.source == "asset-worker-derived-store" and .target == "/var/lib/xirang-asset-runtime/derived" and (.read_only // false) == false)] | length) == 1 and
+  ([.services["asset-worker-init"].volumes[] | select(.source == "asset-worker-export-store" and .target == "/var/lib/xirang-asset-runtime/export" and (.read_only // false) == false)] | length) == 1 and
   ([.services.xirang.volumes[] | select(.source == "asset-worker-updater-runtime" and .target == "/run/xirang")] | length) == 1 and
   ([.services.xirang.volumes[] | select(.source == "asset-worker-worker-runtime" and .target == "/run/xirang/worker")] | length) == 1 and
   ([.services.xirang.volumes[] | select(.source == "asset-worker-derived-store" and .target == "/var/lib/xirang-asset-runtime/derived")] | length) == 1 and
+  ([.services.xirang.volumes[] | select(.source == "asset-worker-export-store" and .target == "/var/lib/xirang-asset-runtime/export")] | length) == 1 and
   .services["asset-worker-init"].restart == "no"
 ' "$TMP_DIR/profile.json" >/dev/null || fail "profile volume initializer contract changed"
 

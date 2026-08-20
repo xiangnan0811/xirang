@@ -1392,7 +1392,12 @@ func TestRuntimeDerivedSourceAssetResolverRequiresCurrentBoundSource(t *testing.
 
 func TestRuntimeStartupManagedModeRequiresInterruptedRunReadiness(t *testing.T) {
 	db := openRuntimeTestDB(t)
-	if err := db.AutoMigrate(&model.Node{}, &model.Task{}, &model.BackupRepository{}, &model.RepositoryAccessBinding{}, &model.TaskRepositoryLink{}, &model.RecoveryPoint{}, &model.RecoveryPointLease{}, &model.BackupAssetManagedHistoryLatch{}); err != nil {
+	if err := db.AutoMigrate(
+		&model.Node{}, &model.Task{}, &model.BackupRepository{}, &model.RepositoryAccessBinding{},
+		&model.TaskRepositoryLink{}, &model.RecoveryPoint{}, &model.RecoveryPointLease{},
+		&model.BackupAssetManagedHistoryLatch{}, &model.BackupAssetInstallation{},
+		&model.BackupAssetInventoryRun{}, &model.BackupAssetRepositoryConflict{},
+	); err != nil {
 		t.Fatal(err)
 	}
 	settingsService := settings.NewService(db)
@@ -1410,6 +1415,7 @@ func TestRuntimeStartupManagedModeRequiresInterruptedRunReadiness(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	runtime.enablement = readyGAEnablement()
 	if err := runtime.StartupPass(context.Background()); !errors.Is(err, backupasset.ErrInvalidState) {
 		t.Fatalf("managed startup without TaskRun readiness error=%v, want invalid state", err)
 	}
@@ -2003,7 +2009,7 @@ func TestRuntimeContentTransitionAndSchemaDownOrdering(t *testing.T) {
 	events := []string{}
 	manager := &runtimeContentManagerFake{events: &events}
 	transitioner := &runtimeFeatureTransitionerFake{events: &events}
-	runtime := &Runtime{contentManager: manager, transitioner: transitioner}
+	runtime := &Runtime{contentManager: manager, transitioner: transitioner, enablement: readyGAEnablement()}
 	if runtime.FeatureTransitioner() != runtime {
 		t.Fatal("runtime did not expose the composed Content feature transitioner")
 	}
@@ -2512,7 +2518,7 @@ func TestRuntimeContentTransitionRestoresLifecycleAfterPersistenceFailure(t *tes
 	t.Run("failed enable drains provisional content runtime", func(t *testing.T) {
 		events := []string{}
 		manager := &runtimeContentManagerFake{events: &events}
-		runtime := &Runtime{contentManager: manager, transitioner: &runtimeFeatureTransitionerFake{events: &events}}
+		runtime := &Runtime{contentManager: manager, transitioner: &runtimeFeatureTransitionerFake{events: &events}, enablement: readyGAEnablement()}
 		err := runtime.TransitionFeature(context.Background(), true, func() error {
 			events = append(events, "persist-enabled")
 			return persistErr

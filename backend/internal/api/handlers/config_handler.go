@@ -952,6 +952,9 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			respondConflict(c, "导入的备份资产图与本地身份冲突")
 			return
 		}
+		if respondBackupAssetEnablementConflict(c, importErr) {
+			return
+		}
 		if errors.Is(importErr, errConfigAssetGraphInvalid) {
 			respondBadRequest(c, importErr.Error())
 			return

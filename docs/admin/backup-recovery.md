@@ -16,7 +16,7 @@ Xirang 支持三类备份执行器：
 
 ## Restic 精确血缘与安全回退
 
-`backup_assets.enabled` 默认是 `false`。在从未产生过 managed 恢复点的安装上，关闭该开关保持既有 Restic 兼容行为。启用或关闭开关、以及通过设置导入/删除覆盖值时，服务会先停止新的 Restic admission，并排空已经开始的 backup、list、files、search、diff、snapshot restore、anomaly、retention、publication 与 reconciliation 命令；数据库设置只会在该排空完成后写入。
+`backup_assets.enabled` 默认是 `false`，CodeDefault 也不会在升级时改成 `true`。请求启用必须先通过就绪门禁：双引擎迁移、所需密钥域、已校验的导出根，以及一次完成的库存盘点。全新安装（没有文件备份任务、Repository 或 managed-history latch）在就绪后即可启用；已有安装还须管理员确认当前库存摘要，不会静默转换 Provider 数据。在从未产生过 managed 恢复点的安装上，关闭该开关保持既有 Restic 兼容行为。启用或关闭开关、以及通过设置导入/删除覆盖值时，服务会先停止新的 Restic admission，并排空已经开始的 backup、list、files、search、diff、snapshot restore、anomaly、retention、publication 与 reconciliation 命令；数据库设置只会在该排空完成后写入。就绪未通过时，有效功能保持关闭。
 
 启用后，一次 Restic backup 只有在 exit-zero summary、完整原生 snapshot ID、精确 Task/TaskRun 标记、Manifest 和最低验证全部一致时，才会异步发布为可信恢复点。传输成功与发布成功是独立事实：Manifest 或血缘失败不会改写已经发生的 TaskRun 传输结果。
 
@@ -50,7 +50,7 @@ Rsync 任务默认继续使用传统的可变目标。只有管理员可以从�
 
 ## Rclone 版本化恢复点
 
-Rclone 任务默认仍是 `legacy_mutable`：任务把数据同步到一个可变 Remote 目标，不会把旧 TaskRun、对象时间或 Remote 当前内容追认为历史恢复点。`backup_assets.enabled` 仍默认是 `false`；只有管理员显式开启该功能后，才能从现有 Rclone 任务的操作区配置、预检并激活版本化发布。传输完成、Provider 端提交完成和数据库恢复点发布是三个独立事实，只有三者的精确证据收敛后，恢复点才会进入可用状态。
+Rclone 任务默认仍是 `legacy_mutable`：任务把数据同步到一个可变 Remote 目标，不会把旧 TaskRun、对象时间或 Remote 当前内容追认为历史恢复点。`backup_assets.enabled` 仍默认是 `false`；只有管理员在就绪门禁通过后显式开启该功能，才能从现有 Rclone 任务的操作区配置、预检并激活版本化发布。传输完成、Provider 端提交完成和数据库恢复点发布是三个独立事实，只有三者的精确证据收敛后，恢复点才会进入可用状态。
 
 管理员必须为受管任务选择以下一种模式：
 
@@ -102,7 +102,7 @@ Clean rollback 只适用于 `first_new_point` 激活后且从未出现任何受�
 
 本地 profile 把 parser 与 updater UDS 分在 `asset-worker-worker-runtime` 和 `asset-worker-updater-runtime` 两个 named volume 中。Parser 只读挂载前者且不加入 updater GID，updater 只读挂载后者；双方都无法看到对方的 socket。Bundle store 另行共享为 updater 可写、parser 只读，inbox/trust 仍是 updater-only。该隔离不会改变官方 All-in-One image、`10761` 端口，也不会建立 Docker Hub/GitHub Release Worker 发布合同。
 
-加密 Derived Store 使用第四个独立 named volume `asset-worker-derived-store`，由 initializer 设为 `0700:10000:10000` 后只挂载给 Core。它不会复用 `/data`、`/backup`、`/logs` 或任何 Provider 源，parser/updater 也无法观察其中的加密产物。
+加密 Derived Store 使用独立 named volume `asset-worker-derived-store`，由 initializer 设为 `0700:10000:10000` 后只挂载给 Core。加密 Export Store 使用同样权限合同的 `asset-worker-export-store`，挂载到 `/var/lib/xirang-asset-runtime/export`。它们都不会复用 `/data`、`/backup`、`/logs`、Content cache 或任何 Provider 源，parser/updater 也无法观察其中的加密产物。缺少 Worker 不能阻止 Core GA；Worker 当前**不是 GA**，也没有 Docker Hub / GitHub Release 发布合同。
 
 Worker 只从一次性、attempt-bound Input grant 读取源内容，并把产物经一次性 Sink grant 返回 Core。它不能修改 Provider bytes，也不能访问 Repository locator、数据库、SSH/Restic/Rclone/Command 凭据、宿主源路径或网络。增强能力使用闭合 profile/limit，覆盖静态图片缩略图、有界文本/OCR、静态文档页、malware finding、媒体探测/预览以及有界归档索引；不支持或超限的内容保持原生预览、下载或 recovery 路径。
 
@@ -303,7 +303,7 @@ Restic 备份完成后，Xirang 会分析最新两个快照之间的文件变更
 
 ## 控制面灾难恢复
 
-`backup_assets.enabled` 默认仍是 `false`。备份资产控制面与 Provider 仓库是分开的事实：丢失控制面数据库时，不能从 Provider 数据重建用户状态。
+`backup_assets.enabled` 默认仍是 `false`。备份资产控制面与 Provider 仓库是分开的事实：丢失控制面数据库时，不能从 Provider 数据重建用户状态。灾难恢复必须同时恢复原数据库和匹配的 `DATA_ENCRYPTION_KEY`。
 
 | 事实 | 丢失控制面后能否恢复 | 所需条件 |
 |---|---|---|

@@ -379,6 +379,22 @@ func TestBackupLifecycleRoutes(t *testing.T) {
 	}
 }
 
+func TestBackupGARouterRegistersAdminManageRoutes(t *testing.T) {
+	routes := NewRouter(Dependencies{}).Routes()
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/settings/backup-assets/ga/inventory"},
+		{http.MethodGet, "/api/v1/settings/backup-assets/ga/readiness"},
+		{http.MethodPost, "/api/v1/settings/backup-assets/ga/acknowledge"},
+	} {
+		if !hasRoute(routes, route.method, route.path) {
+			t.Errorf("GA route missing: %s %s", route.method, route.path)
+		}
+	}
+}
+
 func TestRecoveryRBACRouterRegistersTaskNineRouteMatrix(t *testing.T) {
 	routes := NewRouter(Dependencies{}).Routes()
 	for _, route := range []struct {

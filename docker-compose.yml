@@ -32,6 +32,11 @@ services:
         target: /var/lib/xirang-asset-runtime/derived
         volume:
           nocopy: true
+      - type: volume
+        source: asset-worker-export-store
+        target: /var/lib/xirang-asset-runtime/export
+        volume:
+          nocopy: true
     ports:
       - "10761:10761"
     healthcheck:
@@ -92,6 +97,11 @@ services:
       - type: volume
         source: asset-worker-derived-store
         target: /var/lib/xirang-asset-runtime/derived
+        volume:
+          nocopy: true
+      - type: volume
+        source: asset-worker-export-store
+        target: /var/lib/xirang-asset-runtime/export
         volume:
           nocopy: true
     restart: "no"
@@ -199,6 +209,7 @@ volumes:
   asset-worker-updater-runtime:
   asset-worker-bundles:
   asset-worker-derived-store:
+  asset-worker-export-store:
 
 secrets:
   asset-worker-updater-trust:
