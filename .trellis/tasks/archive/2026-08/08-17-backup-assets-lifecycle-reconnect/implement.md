@@ -741,6 +741,18 @@ Only after Task 15 gates and Task 16 review are clean:
     to program delivery 14/15, and record the session journal;
 12. stop. Do not create or start Child 15.
 
+Task 17 delivery receipt (2026-08-20): complete_checked. PR #435 squash
+`a303abd08f47c52977036d12e1dfdab540283ee3` is on main; exact-squash CI
+32342716003 and Release Please 32342716000 succeeded. v0.49.0 published from
+`1a45cf107d47d25a05f471a49ab0284cd02abf87`, but Docker 32343632231 failed
+Trivy HIGH on `golang.org/x/mod` v0.37.0 in `usr/local/bin/xirang`. Security
+PR #437 squash `9b012ba2b73e2ddef81ced839f967a95cd8eb84e` and release PR #438
+squash `43a8d067f92dae37ba583f8348fd7441a073d0f9` published v0.49.1; Docker
+32347642009 succeeded for linux/amd64, linux/arm64, and the multi-arch
+manifest. Exact-release main CI 32347625831 and Release Please 32347625898
+succeeded. Sync Docker Hub Description did not run. `backup_assets.enabled`
+remains false. Parent stays planning at 14/15. Child 15 is not created.
+
 ## 4. Parent 12-step coverage map
 
 | Parent Child 14 logical step | Rebaselined tasks |

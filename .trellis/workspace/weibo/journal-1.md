@@ -1701,3 +1701,38 @@ Archived Child 14 after the lifecycle work commit. backup_assets.enabled stays f
 ### Next Steps
 
 - Push the branch, open the Child 14 PR, and monitor required CI. Do not create or start Child 15 until Alan instructs.
+
+
+## Session 43: Child 14 delivery and 0.49.1 release
+
+**Date**: 2026-08-20
+**Task**: Child 14 delivery and 0.49.1 release
+**Branch**: `chore/child14-postmerge-truth`
+
+### Summary
+
+Recorded Child 14 squash, v0.49.0 Docker Trivy failure, x/mod bump, and successful v0.49.1 GitHub Release plus Docker Hub publish. Parent is 14/15 planning. Child 15 is not created.
+
+### Main Changes
+
+- Closed Task 17 after PR #435 squash a303abd, v0.49.0, security PR #437, and v0.49.1 Docker 32347642009 success.
+- Updated parent and archived Child 14 ledgers to program delivery 14/15 with backup_assets.enabled still false.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a303abd08f47c52977036d12e1dfdab540283ee3` | (see git log) |
+| `43a8d067f92dae37ba583f8348fd7441a073d0f9` | (see git log) |
+
+### Testing
+
+- [OK] Required CI green: #435 32340923138, #437 32345434981, #438 32346482511; Docker v0.49.1 32347642009 amd64+arm64+manifest.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Do not create or start Child 15 until Alan instructs. Leave /home/murray/code/xirang main untouched.
