@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.49.1](https://github.com/xiangnan0811/xirang/compare/v0.49.0...v0.49.1) (2026-08-20)
+
+
+### 🐛 Bug Fixes
+
+* **security:** bump golang.org/x/mod for sumdb CVEs ([#437](https://github.com/xiangnan0811/xirang/issues/437)) ([9b012ba](https://github.com/xiangnan0811/xirang/commit/9b012ba2b73e2ddef81ced839f967a95cd8eb84e))
+
 ## [0.49.0](https://github.com/xiangnan0811/xirang/compare/v0.48.0...v0.49.0) (2026-08-20)
 
 
