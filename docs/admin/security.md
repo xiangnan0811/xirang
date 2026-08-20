@@ -99,7 +99,7 @@ Updater 与 parser 使用不同进程、UID/GID `10002:10002`、PID namespace、
 
 Content-addressed bundle volume 是唯一的共享数据 mount：根目录为 updater owner、Worker reader group `10002:10000` 与 setgid mode `2750`。Updater mount 可写，parser mount 强制只读，因此 parser 可验证 active bundle 但不能修改 store。Inbox 与 Ed25519 trust secret 仍只挂载到 updater。Socket volumes、bundle volume 与 secret mounts 不能互相替代或合并。
 
-Core 加密 Derived Store 使用单独的 `asset-worker-derived-store` named volume，由 initializer 固定为 `0700:10000:10000` 并挂载到 `/var/lib/xirang-asset-runtime/derived`。只有 Core 与 initializer 能看到该 volume；parser/updater 不挂载它，且 private-runtime guard 会拒绝把 Derived root 放到 `/data`、`/backup`、`/logs` 或已知 Provider 源路径下。
+Core 加密 Derived Store 使用单独的 `asset-worker-derived-store` named volume，由 initializer 固定为 `0700:10000:10000` 并挂载到 `/var/lib/xirang-asset-runtime/derived`。加密 Export Store 使用同样权限合同的 `asset-worker-export-store`，挂载到 `/var/lib/xirang-asset-runtime/export`。只有 Core 与 initializer 能看到这两个 volume；parser/updater 不挂载它们，且 private-runtime guard 会拒绝把 Derived/Export root 放到 `/data`、`/backup`、`/logs` 或已知 Provider 源路径下。
 
 默认更新路径是 signed offline import：运维人员把候选目录放入固定 updater-only inbox，目录要求 `10002:10002`、mode `0555`；Ed25519 trust 文件要求 `10002:10002`、mode `0440`。Updater no-follow 扫描并验证 canonical manifest、Ed25519 signature、精确 tar/file SHA-256、大小/时间/路径/类型限制，fsync content-addressed store 后通过 journal 与原子 pointer rename 激活。浏览器和 Core HTTP API 不接收 bundle bytes、multipart、URL、服务器路径、inbox 文件名或原始 manifest；Admin API 只使用脱敏 candidate ID 和 expected fingerprint 的小型 JSON 控制请求。
 

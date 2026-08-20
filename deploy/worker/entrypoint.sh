@@ -12,6 +12,7 @@ UPDATER_SOCKET=$RUNTIME_ROOT/asset-worker-updater.sock
 WORKSPACE_ROOT=$RUNTIME_ROOT/asset-jobs
 BUNDLE_ROOT=/var/lib/xirang/asset-worker-bundles
 DERIVED_ROOT=/var/lib/xirang-asset-runtime/derived
+EXPORT_ROOT=/var/lib/xirang-asset-runtime/export
 INBOX_ROOT=/var/lib/xirang/asset-worker-inbox
 TRUST_FILE=/run/secrets/asset-worker-updater-trust.json
 
@@ -157,10 +158,12 @@ initialize_volumes() {
   [ -d "$RUNTIME_ROOT" ] && [ ! -L "$RUNTIME_ROOT" ] || fail
   [ -d "$BUNDLE_ROOT" ] && [ ! -L "$BUNDLE_ROOT" ] || fail
   [ -d "$DERIVED_ROOT" ] && [ ! -L "$DERIVED_ROOT" ] || fail
+  [ -d "$EXPORT_ROOT" ] && [ ! -L "$EXPORT_ROOT" ] || fail
   require_mount_option "$RUNTIME_ROOT" rw
   require_mount_option "$WORKER_SOCKET_DIR" rw
   require_mount_option "$BUNDLE_ROOT" rw
   require_mount_option "$DERIVED_ROOT" rw
+  require_mount_option "$EXPORT_ROOT" rw
 
   mkdir -p "$WORKER_SOCKET_DIR"
   chown "$WORKER_UID:$UPDATER_GID" "$RUNTIME_ROOT"
@@ -172,6 +175,9 @@ initialize_volumes() {
   chown "$WORKER_UID:$WORKER_GID" "$DERIVED_ROOT"
   chmod 0700 "$DERIVED_ROOT"
   require_directory "$DERIVED_ROOT" 700 "$WORKER_UID" "$WORKER_GID"
+  chown "$WORKER_UID:$WORKER_GID" "$EXPORT_ROOT"
+  chmod 0700 "$EXPORT_ROOT"
+  require_directory "$EXPORT_ROOT" 700 "$WORKER_UID" "$WORKER_GID"
 }
 
 case "${1:-}" in

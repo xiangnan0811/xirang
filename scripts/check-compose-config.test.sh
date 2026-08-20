@@ -69,6 +69,22 @@ grep -Fq -- 'source: asset-worker-derived-store' <<<"$init_block" ||
 if grep -Fq -- 'source: asset-worker-derived-store' <<<"$worker_block$updater_block"; then
   fail "parser or updater mounts the Core-only Derived Store"
 fi
+grep -Eq -- '^  asset-worker-export-store:$' "$BASE_COMPOSE" ||
+  fail "Compose is missing the dedicated Export Store volume"
+grep -Fq -- 'source: asset-worker-export-store' <<<"$core_block" ||
+  fail "Core does not mount the dedicated Export Store"
+grep -Fq -- 'target: /var/lib/xirang-asset-runtime/export' <<<"$core_block" ||
+  fail "Core Export Store target path drifted"
+grep -Fq -- 'source: asset-worker-export-store' <<<"$init_block" ||
+  fail "volume initializer does not mount the dedicated Export Store"
+grep -Fq -- 'target: /var/lib/xirang-asset-runtime/export' <<<"$init_block" ||
+  fail "volume initializer Export Store target path drifted"
+if grep -Fq -- 'source: asset-worker-export-store' <<<"$worker_block$updater_block"; then
+  fail "parser or updater mounts the Core-only Export Store"
+fi
+if grep -Fq -- 'target: /var/lib/xirang-asset-runtime/export' <<<"$worker_block$updater_block"; then
+  fail "parser or updater mounts the Export Store target path"
+fi
 
 run_checker "$BASE_COMPOSE"
 
@@ -78,6 +94,9 @@ expect_mutation_failure core-fsetid-drop '/^  xirang:$/,/^  asset-worker-init:$/
 expect_mutation_failure core-derived-source '0,/source: asset-worker-derived-store/s//source: asset-worker-bundles/'
 expect_mutation_failure core-derived-forbidden-root '0,/target: \/var\/lib\/xirang-asset-runtime\/derived/s//target: \/data\/asset-worker-derived/'
 expect_mutation_failure missing-derived-volume '/^  asset-worker-derived-store:$/d'
+expect_mutation_failure core-export-source '0,/source: asset-worker-export-store/s//source: asset-worker-bundles/'
+expect_mutation_failure core-export-forbidden-root '0,/target: \/var\/lib\/xirang-asset-runtime\/export/s//target: \/data\/asset-worker-export/'
+expect_mutation_failure missing-export-volume '/^  asset-worker-export-store:$/d'
 expect_mutation_failure required-profile-dependency 's/required: false/required: true/'
 expect_mutation_failure worker-profile '0,/      - asset-worker/s//      - default/'
 expect_mutation_failure worker-uid '0,/user: "10000:10000"/s//user: "10001:10000"/'
@@ -100,6 +119,7 @@ expect_mutation_failure init-fsetid '/      - FSETID/d'
 expect_mutation_failure worker-bundle-writable '/target: \/var\/lib\/xirang\/asset-worker-bundles/{n;s/read_only: true/read_only: false/;}'
 expect_mutation_failure worker-updater-runtime-mount '0,/source: asset-worker-worker-runtime/s//source: asset-worker-updater-runtime/'
 expect_mutation_failure worker-derived-store-mount '/^  asset-worker:$/,/^  asset-worker-updater:$/ {s/source: asset-worker-bundles/source: asset-worker-derived-store/;}'
+expect_mutation_failure worker-export-store-mount '/^  asset-worker:$/,/^  asset-worker-updater:$/ {s/source: asset-worker-bundles/source: asset-worker-export-store/;}'
 expect_mutation_failure worker-updater-group '/user: "10000:10000"/a\    group_add: ["10002"]'
 expect_mutation_failure worker-fsetid '/container_name: xirang-asset-worker$/a\    cap_add: ["FSETID"]'
 expect_mutation_failure updater-identity '0,/user: "10002:10002"/s//user: "10000:10000"/'
@@ -111,8 +131,10 @@ expect_mutation_failure updater-no-new-privileges '/^  asset-worker-updater:$/,/
 expect_mutation_failure updater-seccomp '/^  asset-worker-updater:$/,/^volumes:$/ {/seccomp=deploy\/worker\/seccomp.json/d;}'
 expect_mutation_failure updater-swap-limit '/^  asset-worker-updater:$/,/^volumes:$/ {s/memswap_limit: 256m/memswap_limit: 512m/;}'
 expect_mutation_failure updater-derived-store-mount '/^  asset-worker-updater:$/,/^volumes:$/ {s/source: asset-worker-bundles/source: asset-worker-derived-store/;}'
+expect_mutation_failure updater-export-store-mount '/^  asset-worker-updater:$/,/^volumes:$/ {s/source: asset-worker-bundles/source: asset-worker-export-store/;}'
 expect_mutation_failure updater-fsetid '/container_name: xirang-asset-worker-updater$/a\    cap_add: ["FSETID"]'
 expect_mutation_failure init-derived-source '/^  asset-worker-init:$/,/^  asset-worker:$/ {s/source: asset-worker-derived-store/source: asset-worker-bundles/;}'
+expect_mutation_failure init-export-source '/^  asset-worker-init:$/,/^  asset-worker:$/ {s/source: asset-worker-export-store/source: asset-worker-bundles/;}'
 expect_mutation_failure worker-public-port '/container_name: xirang-asset-worker/a\    ports: ["9443:9443"]'
 
 echo "compose checker self-test: PASS"

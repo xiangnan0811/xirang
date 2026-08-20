@@ -82,7 +82,7 @@
 | `FILE_BROWSER_ALLOW_ALL` | string | 空（禁用） | 否 | 设为 `true` 允许浏览任意路径（默认仅允许备份目录） |
 | `BACKUP_PATH_ALLOW_SHELL_META` | bool | `false` | 否 | 仅历史数据救援用；设为 `true` 会跳过备份路径 shell 元字符防御校验 |
 | `SNAPSHOT_INDEX_MAX_SECONDS` | int | `1800` | 否 | Restic 快照文件搜索异步索引单次最长构建秒数 |
-| `BACKUP_ASSETS_ENABLED` | bool | `false` | 否 | 备份资产领域 feature gate；默认关闭，关闭时相关公开/Admin 路由在读取资产或创建处理工作前失败关闭 |
+| `BACKUP_ASSETS_ENABLED` | bool | `false` | 否 | 备份资产领域 feature gate；CodeDefault 仍为 `false`。请求启用时必须先通过就绪门禁（双引擎迁移、密钥域、导出根、库存盘点）。全新安装在 `ready` 后可启用；已有安装还须管理员确认当前库存摘要。关闭时相关公开/Admin 路由在读取资产或创建处理工作前失败关闭 |
 | `BACKUP_ASSETS_CATALOG_BATCH_SIZE` | int | `2000` | 否 | 目录构建批次大小，范围 `1..100000` |
 | `BACKUP_ASSETS_CATALOG_BUILD_TIMEOUT` | duration | `30m` | 否 | 单次目录构建超时，范围 `1m..24h` |
 | `BACKUP_ASSETS_REPOSITORY_RECONCILE_INTERVAL` | duration | `15m` | 否 | 仓库元数据对账间隔，范围 `1m..24h` |
@@ -158,13 +158,14 @@
 | `BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ENABLED` | bool | `false` | 否 | 启用 updater 受限在线模式；默认关闭，变更需重启；仓库 Compose profile 不提供在线网络 |
 | `BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ORIGINS` | string | 空 | online 模式必填 | 逗号分隔的 exact HTTPS origin allowlist；变更需重启，不能替代外部 allowlist proxy/firewall |
 | `BACKUP_ASSETS_DERIVED_STORE_ROOT` | string | `/var/lib/xirang-asset-runtime/derived` | 否 | Core 加密 Derived Store 根；变更需重启。Compose profile 在默认路径挂载专用 `asset-worker-derived-store` volume；`/data`、`/backup`、`/logs` 及其子路径会被安全校验拒绝 |
+| `BACKUP_ASSETS_EXPORT_ROOT` | string | `/var/lib/xirang-asset-runtime/export` | 否 | Core 加密 Export Store 根；变更需重启。官方 Compose 在默认路径挂载专用 `asset-worker-export-store` volume（`0700:10000:10000`），仅 Core 与 `asset-worker-init` 挂载；parser/updater 不可见。`/data`、`/backup`、`/logs`、Content cache 与 Derived Store 及其子路径会被安全校验拒绝 |
 | `BACKUP_ASSETS_DERIVED_STORE_CHUNK_BYTES` | int | `1048576` | 否 | Derived 认证加密分块大小，范围 `65536..8388608` 字节；变更需重启 |
 | `BACKUP_ASSETS_DERIVED_STORE_BLOB_MAX_BYTES` | int | `4294967296` | 否 | 单 Derived blob 上限，范围 `65536..17179869184` 字节 |
 | `BACKUP_ASSETS_DERIVED_STORE_GLOBAL_MAX_BYTES` | int | `107374182400` | 否 | Derived Store 全局配额，范围 `65536..1099511627776` 字节 |
 | `BACKUP_ASSETS_DERIVED_STORE_RECONCILE_INTERVAL` | duration | `15m` | 否 | Derived 状态/引用/blob 对账间隔，范围 `1m..24h` |
 | `BACKUP_ASSETS_DERIVED_STORE_RECONCILE_BATCH_SIZE` | int | `256` | 否 | 单次 Derived 对账批次，范围 `1..10000` |
 
-**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器、完整性检查与备份 Repository 只读适配器；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`；`SNAPSHOT_INDEX_MAX_SECONDS` → `backend/internal/snapshot/indexer.go`；`BACKUP_ASSETS_*` → settings 服务的 `backup_assets.*` registry、`backend/internal/backupasset/runtime` 共享运行时与 foundation service（DB override > env > default）。涉及 `BACKUP_ASSETS_ENABLED` 的设置/导入/删除会先关闭新的备份资产 admission，排空当前 generation 中已获准的 legacy 访问、Restic/Rsync/Rclone 发布与调和，再提交新值。表中标注 restart-time 的 Worker/updater/Derived 设置不会热切换 listener、身份或存储根；其它 processing/backfill quota 可动态调整并接受组合校验。
+**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器、完整性检查与备份 Repository 只读适配器；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`；`SNAPSHOT_INDEX_MAX_SECONDS` → `backend/internal/snapshot/indexer.go`；`BACKUP_ASSETS_*` → settings 服务的 `backup_assets.*` registry、`backend/internal/backupasset/runtime` 共享运行时与 foundation service（DB override > env > default）。涉及 `BACKUP_ASSETS_ENABLED` 的设置/导入/删除会先检查 GA 就绪门禁；只有就绪（已有安装还须确认当前库存摘要）后才会关闭新的备份资产 admission，排空当前 generation 中已获准的 legacy 访问、Restic/Rsync/Rclone 发布与调和，再提交新值。表中标注 restart-time 的 Worker/updater/Derived/Export 设置不会热切换 listener、身份或存储根；其它 processing/backfill quota 可动态调整并接受组合校验。
 
 `backup_assets.internal.processing_content_pipeline_revision` 与 `backup_assets.internal.processing_ocr_pipeline_revision` 是 Core 原子激活事务维护的内部发布状态，不是环境变量或公共 settings registry 键。它们不会出现在 Settings API/配置导出中，配置导入也会拒绝调用方写入。
 

@@ -487,6 +487,13 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.DELETE("/settings/backup-assets/recovery/target-roots/:nodeId/:rootId", append(recoveryRouteHandlers, backupRecoveryHandler.DeleteTargetRoot)...)
 	secured.GET("/settings/backup-assets/recovery/target-roots", append(recoveryRouteHandlers, backupRecoveryHandler.ListTargetRoots)...)
 	secured.POST("/settings/backup-assets/recovery/downgrade-readiness", append(recoveryRouteHandlers, backupRecoveryHandler.DowngradeReadiness)...)
+	backupGAHandler := handlers.NewBackupGAHandler(dep.BackupAssets)
+	gaRouteHandlers := []gin.HandlerFunc{
+		middleware.RBAC(backupasset.PermissionBackupRepositoriesManage), middleware.RequireRole("admin"),
+	}
+	secured.POST("/settings/backup-assets/ga/inventory", append(gaRouteHandlers, backupGAHandler.Inventory)...)
+	secured.GET("/settings/backup-assets/ga/readiness", append(gaRouteHandlers, backupGAHandler.Readiness)...)
+	secured.POST("/settings/backup-assets/ga/acknowledge", append(gaRouteHandlers, backupGAHandler.Acknowledge)...)
 	secured.POST("/recovery-points/:id/entries/:entryId/preview-jobs",
 		middleware.RBAC(backupasset.PermissionBackupAssetsPreview), middleware.APIRateLimit(30, time.Minute),
 		middleware.MaxBodySize(4<<10), backupProcessingHandler.CreatePreview)

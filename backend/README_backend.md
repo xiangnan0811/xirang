@@ -16,7 +16,7 @@
 
 `backend/internal/backupasset/runtime` 是备份资产的唯一组合根：它创建一套 Provider transport、admission barrier、Repository service、Restic/Rsync/Rclone publication strategy、manifest/reconciliation worker、Rclone health worker 和 lineage guard。`cmd/server` 在 Task Manager 与 executor factory 之前创建该运行时；同一套 admission 与精确血缘合同同时保护 legacy 读取、受管发布和后台调和。Router 只接收已注入的 runtime/窄端口，不会自行创建第二个 Provider 图。
 
-`backup_assets.enabled` 默认仍为 `false`。启用后，Catalog API 只公开经过 producing-lineage 授权的已提交元数据；每个资产引用必须同时携带恢复点 ID 与 entry ID，不接受 Provider 路径。已经原子提交的 immutable Catalog 在 Provider 离线时仍可浏览，但内容可用性会独立返回 `false`；Catalog 不提供内容字节，也不是恢复源。Rclone 版本化 setup、binding、preflight、activation 与 rollback 继续通过 Task 子资源提供，全部要求认证、Admin、`backup_repositories:manage` 和 Task ownership。
+`backup_assets.enabled` 默认仍为 `false`。请求启用必须先通过 GA 就绪门禁（库存盘点、导出根、密钥域；已有安装还须确认当前库存摘要）。启用后，Catalog API 只公开经过 producing-lineage 授权的已提交元数据；每个资产引用必须同时携带恢复点 ID 与 entry ID，不接受 Provider 路径。已经原子提交的 immutable Catalog 在 Provider 离线时仍可浏览，但内容可用性会独立返回 `false`；Catalog 不提供内容字节，也不是恢复源。Rclone 版本化 setup、binding、preflight、activation 与 rollback 继续通过 Task 子资源提供，全部要求认证、Admin、`backup_repositories:manage` 和 Task ownership。
 
 增强处理复用同一 runtime、Child 10 持久队列/Input-Sink grant、Content Broker 与 Derived Store。全局 feature、本机/远程 Worker transport、独立 updater 和可选秘密分类均默认关闭；生产 capability 只接受编译期闭合的 capability/profile/limit，不接受调用方 executable、argv、路径、URL 或工具配置。公开响应只返回 exact AssetRef、用户作用域的 processing-interest handle、闭合状态/原因、覆盖和 fallback，不返回共享 coordinator job、attempt/fence/grant/Worker/blob 身份、Provider locator、bundle 路径、凭据或原始工具输出。无 Worker 或无匹配 capability 时返回 `not_deployed`/`unsupported`，不会把 Catalog、原生预览、下载或 recovery 变成失败。
 
@@ -362,6 +362,9 @@ Updater receipt 只在独立 Unix socket `/run/xirang/asset-worker-updater.sock`
 | PUT | /settings | 🔒 批量更新 |
 | DELETE | /settings/:key | 🔒 删除设置 |
 | GET | /settings/security-risk-summary | 🔒 安全风险摘要（admin；只读计数与脱敏示例） |
+| POST | /settings/backup-assets/ga/inventory | 🔒 运行备份资产 GA 干跑库存盘点（admin + `backup_repositories:manage`；只返回计数） |
+| GET | /settings/backup-assets/ga/readiness | 🔒 读取备份资产 GA 安装类别与就绪状态（admin + `backup_repositories:manage`） |
+| POST | /settings/backup-assets/ga/acknowledge | 🔒 确认当前库存摘要（admin + `backup_repositories:manage`；仅已有安装） |
 | GET | /settings/logs | 🔒 节点日志保留默认天数（admin） |
 | PATCH | /settings/logs | 🔒 更新节点日志保留默认天数（admin） |
 | GET | /config/export | 🔒 导出配置（include_secrets=true 时需二次验证和 config.export/config_export 临时授权） |

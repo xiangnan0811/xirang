@@ -134,9 +134,12 @@ for contract in \
 	  'require_socket "$WORKER_SOCKET" 600' \
   'require_socket "$UPDATER_SOCKET" 660' \
   'require_directory "$RUNTIME_ROOT" 2770' \
-  'require_directory "$DERIVED_ROOT" 700' \
-  'DERIVED_ROOT=/var/lib/xirang-asset-runtime/derived' \
-  'chmod 0700 "$DERIVED_ROOT"' \
+	  'require_directory "$DERIVED_ROOT" 700' \
+	  'require_directory "$EXPORT_ROOT" 700' \
+	  'DERIVED_ROOT=/var/lib/xirang-asset-runtime/derived' \
+	  'EXPORT_ROOT=/var/lib/xirang-asset-runtime/export' \
+	  'chmod 0700 "$DERIVED_ROOT"' \
+	  'chmod 0700 "$EXPORT_ROOT"' \
   'chmod 2770 "$RUNTIME_ROOT"'; do
   grep -Fq -- "$contract" "$ENTRYPOINT" || fail "entrypoint contract missing: $contract"
 done
@@ -987,7 +990,8 @@ run_profile_smoke() {
     "${PROFILE_PROJECT}_asset-worker-worker-runtime" \
     "${PROFILE_PROJECT}_asset-worker-updater-runtime" \
     "${PROFILE_PROJECT}_asset-worker-bundles" \
-    "${PROFILE_PROJECT}_asset-worker-derived-store"; do
+    "${PROFILE_PROJECT}_asset-worker-derived-store" \
+    "${PROFILE_PROJECT}_asset-worker-export-store"; do
     if "$DOCKER" volume inspect "$resource" >/dev/null 2>&1; then
       fail "profile Compose project volume already exists"
     fi
@@ -1042,6 +1046,7 @@ BACKUP_ASSETS_WORKER_UPDATER_ENABLED=true
 BACKUP_ASSETS_WORKER_UPDATER_ONLINE_ENABLED=false
 BACKUP_ASSETS_PROCESSING_SECRET_CLASSIFY=false
 BACKUP_ASSETS_DERIVED_STORE_ROOT=/var/lib/xirang-asset-runtime/derived
+BACKUP_ASSETS_EXPORT_ROOT=/var/lib/xirang-asset-runtime/export
 ENV
 
   local bundle_volume
@@ -1099,11 +1104,15 @@ ENV
     fail "updater socket ownership or mode is unsafe"
   [[ "$("$DOCKER" exec "$core_id" stat -c '%a:%u:%g' /var/lib/xirang-asset-runtime/derived)" == "700:10000:10000" ]] ||
     fail "Derived Store ownership or mode is unsafe"
+  [[ "$("$DOCKER" exec "$core_id" stat -c '%a:%u:%g' /var/lib/xirang-asset-runtime/export)" == "700:10000:10000" ]] ||
+    fail "Export Store ownership or mode is unsafe"
   if "$DOCKER" logs "$core_id" 2>&1 | grep -Fq -- '备份资产处理运行时不可用'; then
     fail "processing runtime was unavailable during fresh profile startup"
   fi
   "$DOCKER" exec --user 10000:10000 "$core_id" /bin/sh -eu -c \
     'printf "%s\n" profile-derived-persistence > /var/lib/xirang-asset-runtime/derived/.profile-smoke-persistence'
+  "$DOCKER" exec --user 10000:10000 "$core_id" /bin/sh -eu -c \
+    'printf "%s\n" profile-export-persistence > /var/lib/xirang-asset-runtime/export/.profile-smoke-persistence'
 
   "$DOCKER" exec "$worker_id" /bin/sh -eu -c '
     test "$(id -u):$(id -g)" = "10000:10000"
@@ -1123,6 +1132,7 @@ ENV
     test ! -e /var/lib/xirang/asset-worker-inbox/profile-smoke-candidate
     test ! -e /run/secrets/asset-worker-updater-trust.json
     test ! -e /var/lib/xirang-asset-runtime/derived
+    test ! -e /var/lib/xirang-asset-runtime/export
     ! awk '\''$2 == "00000000" { found=1 } END { exit found ? 0 : 1 }'\'' /proc/net/route
   ' || fail "parser mounted the updater socket or gained a forbidden writable/network path"
   "$DOCKER" exec "$updater_id" /bin/sh -eu -c '
@@ -1135,6 +1145,7 @@ ENV
     ! touch /var/lib/xirang/asset-worker-inbox/.profile-smoke
     ! touch /run/secrets/asset-worker-updater-trust.json
     test ! -e /var/lib/xirang-asset-runtime/derived
+    test ! -e /var/lib/xirang-asset-runtime/export
     ! awk '\''$2 == "00000000" { found=1 } END { exit found ? 0 : 1 }'\'' /proc/net/route
   ' || fail "updater violated its identity, mount, or network boundary"
   "$DOCKER" exec "$core_id" test ! -e /var/lib/xirang/asset-worker-inbox ||
@@ -1174,7 +1185,8 @@ ENV
     --arg worker_runtime "${PROFILE_PROJECT}_asset-worker-worker-runtime" \
     --arg updater_runtime "${PROFILE_PROJECT}_asset-worker-updater-runtime" \
     --arg bundle_volume "$bundle_volume" \
-    --arg derived_volume "${PROFILE_PROJECT}_asset-worker-derived-store" '
+    --arg derived_volume "${PROFILE_PROJECT}_asset-worker-derived-store" \
+    --arg export_volume "${PROFILE_PROJECT}_asset-worker-export-store" '
     length == 2 and
     all(.[]; .HostConfig.NetworkMode == "none" and .HostConfig.ReadonlyRootfs == true) and
     all(.[]; .HostConfig.CapDrop == ["ALL"] and
@@ -1185,21 +1197,23 @@ ENV
     .[1].Config.User == "10002:10002" and
     ([.[0].Mounts[] | select(.Name == $worker_runtime and .Destination == "/run/xirang/worker" and .RW == false)] | length) == 1 and
     ([.[0].Mounts[] | select(.Name == $bundle_volume and .Destination == "/var/lib/xirang/asset-worker-bundles" and .RW == false)] | length) == 1 and
-    ([.[0].Mounts[] | select(.Name == $updater_runtime or .Name == $derived_volume or .Destination == "/run/xirang" or .Destination == "/run/secrets/asset-worker-updater-trust.json" or .Destination == "/var/lib/xirang/asset-worker-inbox" or .Destination == "/var/lib/xirang-asset-runtime/derived")] | length) == 0 and
+    ([.[0].Mounts[] | select(.Name == $updater_runtime or .Name == $derived_volume or .Name == $export_volume or .Destination == "/run/xirang" or .Destination == "/run/secrets/asset-worker-updater-trust.json" or .Destination == "/var/lib/xirang/asset-worker-inbox" or .Destination == "/var/lib/xirang-asset-runtime/derived" or .Destination == "/var/lib/xirang-asset-runtime/export")] | length) == 0 and
     ([.[1].Mounts[] | select(.Name == $updater_runtime and .Destination == "/run/xirang" and .RW == false)] | length) == 1 and
     ([.[1].Mounts[] | select(.Name == $bundle_volume and .Destination == "/var/lib/xirang/asset-worker-bundles" and .RW == true)] | length) == 1 and
     ([.[1].Mounts[] | select(.Destination == "/var/lib/xirang/asset-worker-inbox" and .RW == false)] | length) == 1 and
     ([.[1].Mounts[] | select(.Destination == "/run/secrets/asset-worker-updater-trust.json" and .RW == false)] | length) == 1 and
-    ([.[1].Mounts[] | select(.Name == $worker_runtime or .Name == $derived_volume or .Destination == "/run/xirang/worker" or .Destination == "/var/lib/xirang-asset-runtime/derived")] | length) == 0 and
+    ([.[1].Mounts[] | select(.Name == $worker_runtime or .Name == $derived_volume or .Name == $export_volume or .Destination == "/run/xirang/worker" or .Destination == "/var/lib/xirang-asset-runtime/derived" or .Destination == "/var/lib/xirang-asset-runtime/export")] | length) == 0 and
     all(.[].Mounts[]; .Destination != "/data" and .Destination != "/backup" and
       .Destination != "/logs" and .Destination != "/var/run/docker.sock")
   ' >/dev/null || fail "profile container isolation metadata is unsafe"
 
   "$DOCKER" inspect "$core_id" "$init_id" | jq -e \
-    --arg derived_volume "${PROFILE_PROJECT}_asset-worker-derived-store" '
+    --arg derived_volume "${PROFILE_PROJECT}_asset-worker-derived-store" \
+    --arg export_volume "${PROFILE_PROJECT}_asset-worker-export-store" '
     length == 2 and
-    all(.[]; ([.Mounts[] | select(.Name == $derived_volume and .Destination == "/var/lib/xirang-asset-runtime/derived" and .RW == true)] | length) == 1)
-  ' >/dev/null || fail "Derived Store volume is not confined to Core and the initializer"
+    all(.[]; ([.Mounts[] | select(.Name == $derived_volume and .Destination == "/var/lib/xirang-asset-runtime/derived" and .RW == true)] | length) == 1) and
+    all(.[]; ([.Mounts[] | select(.Name == $export_volume and .Destination == "/var/lib/xirang-asset-runtime/export" and .RW == true)] | length) == 1)
+  ' >/dev/null || fail "Derived or Export Store volume is not confined to Core and the initializer"
 
   "$DOCKER" run --rm \
     --network none \
@@ -1355,6 +1369,10 @@ ENV
     fail "Derived Store did not persist across Core restart"
   [[ "$("$DOCKER" exec "$core_id" stat -c '%a:%u:%g' /var/lib/xirang-asset-runtime/derived)" == "700:10000:10000" ]] ||
     fail "Derived Store ownership or mode changed after Core restart"
+  [[ "$("$DOCKER" exec "$core_id" cat /var/lib/xirang-asset-runtime/export/.profile-smoke-persistence)" == "profile-export-persistence" ]] ||
+    fail "Export Store did not persist across Core restart"
+  [[ "$("$DOCKER" exec "$core_id" stat -c '%a:%u:%g' /var/lib/xirang-asset-runtime/export)" == "700:10000:10000" ]] ||
+    fail "Export Store ownership or mode changed after Core restart"
   if "$DOCKER" logs "$core_id" 2>&1 | grep -Fq -- '备份资产处理运行时不可用'; then
     fail "processing runtime was unavailable after Core restart"
   fi

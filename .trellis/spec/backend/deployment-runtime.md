@@ -238,3 +238,100 @@ if !os.SameFile(validated, opened) || !os.SameFile(opened, current) {
     return CacheReasonRootUnverified
 }
 ```
+
+---
+
+## Scenario: Backup Asset Export Named Volume
+
+### 1. Scope / Trigger
+
+- Trigger: changing Compose volumes, Worker init, export-root docs, or
+  image publication for backup-asset runtime.
+- Applies to `docker-compose.yml`, `deploy/worker/entrypoint.sh`
+  `initialize_volumes`, `.env.deploy`, `docs/env-vars.md`,
+  `docs/deployment.md`, and `.github/workflows/publish-images.yml`.
+
+### 2. Signatures
+
+- Named volume: `asset-worker-export-store`.
+- Mount target: `/var/lib/xirang-asset-runtime/export` on Core (`xirang`)
+  and `asset-worker-init` only.
+- Init: `EXPORT_ROOT=/var/lib/xirang-asset-runtime/export`, mode `0700`,
+  owner `10000:10000`, same pattern as derived.
+- Setting/env: `backup_assets.export.root` /
+  `BACKUP_ASSETS_EXPORT_ROOT`. CodeDefault of `backup_assets.enabled`
+  remains `"false"`.
+- Official image: `linnea7171/xirang` on host port `10761`. Worker image
+  stays local/optional and unpublished.
+
+### 3. Contracts
+
+- Parser (`asset-worker`) and updater must not list
+  `asset-worker-export-store` as a source or target.
+- Do not bind the export root under `/data`, `/backup`, `/logs`, content
+  cache, or derived store.
+- Do not edit `deploy/worker/Dockerfile`, seccomp, or
+  `publish-images.yml` to publish a Worker image.
+- New-install env examples may comment that `BACKUP_ASSETS_ENABLED=true`
+  still has to pass the GA gate; copied existing env files are not
+  rewritten, and the committed value stays `false`.
+- Readiness probes validate the live foundation export config, not merely
+  a non-empty path string.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Parser or updater mounts `asset-worker-export-store` | `check-compose-config` fails. |
+| Init skips export-root `0700:10000:10000` | Worker/core volume contract fails. |
+| `publish-images.yml` adds `xirang-asset-worker` | Reject; no-publish contract broken. |
+| Docs claim Worker is GA / Docker Hub image | Reject; docs truth broken. |
+| CodeDefault of `backup_assets.enabled` is `"true"` | Reject unless a later PRD amends it. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: Core + init mount the named volume; replacing the Core container
+  preserves export ciphertext.
+- Base: Worker profile off; Core still has the export volume and boots
+  with the feature disabled.
+- Bad: mounting export on parser/updater, or publishing a Worker image
+  to make GA “complete”.
+
+### 6. Tests Required
+
+- `./scripts/check-compose-config.sh` and its unit test for export
+  isolation.
+- `ASSET_WORKER_STATIC_ONLY=1 ./scripts/test-asset-worker.sh`.
+- `scripts/test-core-compose.sh` when Compose changes.
+- Doc freshness after env/deployment README edits.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```yaml
+asset-worker:
+  volumes:
+    - type: volume
+      source: asset-worker-export-store
+      target: /var/lib/xirang-asset-runtime/export
+```
+
+Correct:
+
+```yaml
+xirang:
+  volumes:
+    - type: volume
+      source: asset-worker-export-store
+      target: /var/lib/xirang-asset-runtime/export
+      volume:
+        nocopy: true
+asset-worker-init:
+  volumes:
+    - type: volume
+      source: asset-worker-export-store
+      target: /var/lib/xirang-asset-runtime/export
+      volume:
+        nocopy: true
+```

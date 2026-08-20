@@ -3659,6 +3659,7 @@ func TestManagedRecoveryWorkerResumesSameActiveClaimFromOneShotDeleteHandoff(t *
 	case <-time.After(time.Second):
 		t.Fatal("same-claim execution did not report durable delete pause")
 	}
+	waitForRecordedDeleteAuthorizationPause(t, worker, claim.JobID)
 	contradictory := handoff
 	contradictory.CheckpointID = strings.Repeat("4", 32)
 	if worker.offerDeleteAuthorization(contradictory) {
@@ -4405,6 +4406,23 @@ type recoveryHeartbeatExecutorFake struct {
 type recoveryDeleteResumeObservation struct {
 	claim  recovery.RecoveryWorkerClaim
 	secret string
+}
+
+func waitForRecordedDeleteAuthorizationPause(t *testing.T, worker *managedRecoveryWorker, jobID string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		worker.activeMu.Lock()
+		_, paused := worker.deletePauses[jobID]
+		worker.activeMu.Unlock()
+		if paused {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("same-claim execution did not record durable delete pause")
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 type recoveryDeleteHandoffExecutorFake struct {

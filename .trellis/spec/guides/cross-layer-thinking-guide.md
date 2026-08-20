@@ -91,6 +91,13 @@ After implementation:
       until the catalog end; see the same backend scenario.
 - [ ] Admin scan/rebuild UI stops at a page budget and resumes with Continue;
       see frontend quality “Bounded Lifecycle Scan And Rebuild”.
+- [ ] Enabling `backup_assets.enabled` shares one predicate across settings
+      PUT, DELETE-restore, config import, and startup; blocked enablement is
+      HTTP 409 `就绪检查未完成`, never 500. See backend error-handling
+      “Backup Asset GA Enablement Gate”.
+- [ ] Admin GA JSON/UI stays counts + opaque IDs; inventory never mutates
+      Provider bytes; Compose export volume is Core+init only. See backend
+      quality “Backup Asset GA Enablement And Inventory Isolation”.
 
 ---
 

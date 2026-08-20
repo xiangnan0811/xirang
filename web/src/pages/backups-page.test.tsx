@@ -114,6 +114,27 @@ vi.mock("@/features/backup-assets/export-job-panel", () => ({
   ),
 }));
 
+vi.mock("@/lib/api/backup-ga-api", () => ({
+  createBackupGaApi: () => ({
+    getReadiness: vi.fn().mockResolvedValue({
+      schemaVersion: 1,
+      class: "fresh",
+      status: "blocked",
+      inventoryComplete: false,
+      inventoryDigest: "",
+      acknowledgedDigest: "",
+      exportRootValid: false,
+      keyDomainsReady: true,
+      workerOptional: true,
+      counts: { candidates: 0, conflicts: 0, unsupported: 0, capabilityGaps: 0 },
+      conflicts: [],
+    }),
+    runInventory: vi.fn(),
+    acknowledge: vi.fn(),
+    enable: vi.fn(),
+  }),
+}));
+
 vi.mock("@/lib/api/client", () => ({
   apiClient: {
     getBackupConfidence: getBackupConfidenceMock,

@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { runAxe } from "@/test/a11y-helpers";
@@ -653,28 +654,62 @@ describe("BackupAssetsWorkspace", () => {
     setViewport(1440);
     const onReturnOverview = vi.fn();
     render(
-      <BackupAssetsWorkspace
-        controller={controller({
-          repositories: {
-            status: "blocked",
-            items: [],
-            nextCursor: null,
-            error: {
-              code: "feature_disabled",
-              translationKey: "backupAssets.errors.featureDisabled",
-              retryable: false,
-              action: "return_overview",
+      <MemoryRouter>
+        <BackupAssetsWorkspace
+          controller={controller({
+            repositories: {
+              status: "blocked",
+              items: [],
+              nextCursor: null,
+              error: {
+                code: "feature_disabled",
+                translationKey: "backupAssets.errors.featureDisabled",
+                retryable: false,
+                action: "return_overview",
+              },
             },
-          },
-        })}
-        onRoutePatch={vi.fn()}
-        onReturnOverview={onReturnOverview}
-      />
+          })}
+          processingRuntime={{ token: "operator-token", role: "operator", ensureStepUpProof: vi.fn() }}
+          onRoutePatch={vi.fn()}
+          onReturnOverview={onReturnOverview}
+        />
+      </MemoryRouter>
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent(/not enabled|未启用/);
+    expect(screen.queryByRole("link", { name: /readiness panel|就绪面板/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: /Asset results|资产结果/ })).not.toBeInTheDocument();
     expect(screen.queryByText(repository.displayName)).not.toBeInTheDocument();
+  });
+
+  it("gives Admin a CTA from the disabled workspace to the readiness panel", () => {
+    setViewport(1440);
+    render(
+      <MemoryRouter>
+        <BackupAssetsWorkspace
+          controller={controller({
+            repositories: {
+              status: "blocked",
+              items: [],
+              nextCursor: null,
+              error: {
+                code: "feature_disabled",
+                translationKey: "backupAssets.errors.featureDisabled",
+                retryable: false,
+                action: "return_overview",
+              },
+            },
+          })}
+          processingRuntime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+          onRoutePatch={vi.fn()}
+          onReturnOverview={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    const cta = screen.getByRole("link", { name: /readiness panel|就绪面板/ });
+    expect(cta).toHaveAttribute("href", "/app/backups/overview#backup-assets-ga");
+    expect(screen.queryByText(/command_unsupported|shared_restic_identity/)).not.toBeInTheDocument();
   });
 
   it("renders a repository load error instead of an empty management panel", () => {

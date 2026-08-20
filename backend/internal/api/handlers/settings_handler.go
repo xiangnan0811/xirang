@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -94,7 +95,7 @@ func transitionBackupAssetSettingsMutation(
 	persist func() error,
 ) error {
 	if err := svc.ValidateBackupAssetEffectiveUpdate(current, overlay); err != nil {
-		return err
+		return wrapSettingsValidation(err)
 	}
 	effective := copyBackupAssetSettings(current)
 	for key, value := range overlay {
@@ -113,7 +114,7 @@ func transitionBackupAssetSettingsMutation(
 	if value, changesEnabled := overlay["backup_assets.enabled"]; changesEnabled {
 		enabled, err := strconv.ParseBool(value)
 		if err != nil {
-			return err
+			return wrapSettingsValidation(err)
 		}
 		if transitioner == nil {
 			return fmt.Errorf("backup asset feature transitioner is unavailable")
@@ -121,6 +122,32 @@ func transitionBackupAssetSettingsMutation(
 		return transitioner.TransitionFeature(ctx, enabled, persist)
 	}
 	return persist()
+}
+
+type settingsValidationError struct {
+	err error
+}
+
+func (e settingsValidationError) Error() string {
+	if e.err == nil {
+		return "settings validation failed"
+	}
+	return e.err.Error()
+}
+
+func (e settingsValidationError) Unwrap() error {
+	return e.err
+}
+
+func wrapSettingsValidation(err error) error {
+	if err == nil {
+		return nil
+	}
+	var existing settingsValidationError
+	if errors.As(err, &existing) {
+		return err
+	}
+	return settingsValidationError{err: err}
 }
 
 func hasLiveBackupAssetRuntimeSettings(overlay map[string]string) bool {
@@ -236,6 +263,9 @@ func (h *SettingsHandler) BatchUpdate(c *gin.Context) {
 	}
 
 	if err := h.persistSettingsMutation(c.Request.Context(), req); err != nil {
+		if respondBackupAssetEnablementConflict(c, err) {
+			return
+		}
 		respondInternalError(c, err)
 		return
 	}
@@ -269,7 +299,15 @@ func (h *SettingsHandler) Delete(c *gin.Context) {
 	key := c.Param("key")
 	oldVal := h.svc.GetEffective(key)
 	if err := h.deleteSettingOverride(c.Request.Context(), key); err != nil {
-		respondBadRequest(c, err.Error())
+		if respondBackupAssetEnablementConflict(c, err) {
+			return
+		}
+		var validation settingsValidationError
+		if errors.As(err, &validation) {
+			respondBadRequest(c, validation.Error())
+			return
+		}
+		respondInternalError(c, err)
 		return
 	}
 	newVal := h.svc.GetEffective(key)
@@ -323,7 +361,7 @@ func (h *SettingsHandler) deleteSettingOverride(ctx context.Context, key string)
 	return h.svc.WithBackupAssetMutation(ctx, func(current map[string]string) error {
 		fallback, err := h.svc.GetFallback(key)
 		if err != nil {
-			return err
+			return wrapSettingsValidation(err)
 		}
 		override := map[string]string{key: fallback}
 		persist := func() error {

@@ -101,6 +101,37 @@ EOF
   [[ ! -s "$mount_log" ]] || fail "$role entrypoint reached mount validation before rejecting supplementary group"
 }
 
+smoke_export_volume_contract() {
+  local smoke=$1
+  local contract
+  for contract in \
+    'asset-worker-export-store' \
+    '"${PROFILE_PROJECT}_asset-worker-export-store"' \
+    'BACKUP_ASSETS_EXPORT_ROOT=/var/lib/xirang-asset-runtime/export' \
+    'printf "%s\n" profile-export-persistence > /var/lib/xirang-asset-runtime/export/.profile-smoke-persistence' \
+    'Export Store ownership or mode is unsafe' \
+    'Export Store did not persist across Core restart' \
+    'Export Store ownership or mode changed after Core restart' \
+    'test ! -e /var/lib/xirang-asset-runtime/export' \
+    '.Destination == "/var/lib/xirang-asset-runtime/export"' \
+    'Name == $export_volume and .Destination == "/var/lib/xirang-asset-runtime/export"'; do
+    grep -Fq -- "$contract" "$smoke" || return 1
+  done
+}
+
+entrypoint_export_volume_contract() {
+  local entrypoint=$1
+  local contract
+  for contract in \
+    'EXPORT_ROOT=/var/lib/xirang-asset-runtime/export' \
+    'require_directory "$EXPORT_ROOT" 700 "$WORKER_UID" "$WORKER_GID"' \
+    'chmod 0700 "$EXPORT_ROOT"' \
+    'chown "$WORKER_UID:$WORKER_GID" "$EXPORT_ROOT"' \
+    'require_mount_option "$EXPORT_ROOT" rw'; do
+    grep -Fq -- "$contract" "$entrypoint" || return 1
+  done
+}
+
 smoke_post_restart_capability_contract() {
   local smoke=$1
   [[ "$(grep -Fc -- 'profile_assert_worker_capabilities "$core_id"' "$smoke" || true)" == "2" ]] &&
@@ -343,6 +374,10 @@ for contract in \
   grep -Fq -- "$contract" "$SMOKE" || fail "runtime decompressor smoke missing: $contract"
 done
 
+smoke_export_volume_contract "$SMOKE" ||
+  fail "Export Store volume smoke contract is incomplete"
+entrypoint_export_volume_contract "$BASE_ENTRYPOINT" ||
+  fail "entrypoint Export Store init contract is incomplete"
 smoke_runtime_closure_contract "$SMOKE" ||
   fail "runtime closure artifact or signed profile contract is incomplete"
 smoke_private_tmpfs_contract "$SMOKE" ||
@@ -405,6 +440,7 @@ for contract in \
 	  'PROFILE_COMPOSE_FILES' \
 	  'ADMIN_INITIAL_PASSWORD=ProfileSmokeAdmin1!' \
 	  'BACKUP_ASSETS_DERIVED_STORE_ROOT=/var/lib/xirang-asset-runtime/derived' \
+	  'BACKUP_ASSETS_EXPORT_ROOT=/var/lib/xirang-asset-runtime/export' \
 	  'cleanup_profile_dir()' \
   '--cap-add DAC_OVERRIDE' \
   'rm -rf /profile/* /profile/.[!.]* /profile/..?*' \
@@ -415,6 +451,7 @@ for contract in \
 	  'asset-worker-worker-runtime' \
   'asset-worker-updater-runtime' \
   'asset-worker-derived-store' \
+  'asset-worker-export-store' \
   '/usr/local/bin/asset-worker-entrypoint' \
   'down --volumes --remove-orphans' \
   'parser mounted the updater socket' \
@@ -502,12 +539,15 @@ for contract in \
 done
 for contract in \
 	  'DERIVED_ROOT=/var/lib/xirang-asset-runtime/derived' \
+	  'EXPORT_ROOT=/var/lib/xirang-asset-runtime/export' \
 	  'require_absent "$UPDATER_SOCKET"' \
 	  'require_absent "$WORKER_SOCKET"' \
 	  'for (field = 1; field <= count; field++)' \
 	  'require_directory "$BUNDLE_ROOT" 2750 "$UPDATER_UID" "$WORKER_GID"' \
 	  'require_directory "$DERIVED_ROOT" 700 "$WORKER_UID" "$WORKER_GID"' \
+	  'require_directory "$EXPORT_ROOT" 700 "$WORKER_UID" "$WORKER_GID"' \
 	  'chmod 0700 "$DERIVED_ROOT"' \
+	  'chmod 0700 "$EXPORT_ROOT"' \
 	  'chmod 2750 "$BUNDLE_ROOT"'; do
   grep -Fq -- "$contract" "$BASE_ENTRYPOINT" || fail "entrypoint peer-mount isolation missing: $contract"
 done
@@ -639,6 +679,7 @@ expect_mutation_failure() {
 		if [[ "$kind" == "smoke" ]]; then
 			if smoke_runtime_closure_contract "$candidate" && smoke_private_tmpfs_contract "$candidate" &&
 			  smoke_worker_group_isolation_contract "$candidate" &&
+			  smoke_export_volume_contract "$candidate" &&
 			  smoke_post_restart_capability_contract "$candidate" && smoke_raster_output_contract "$candidate" &&
 			  smoke_resource_profile_contract "$candidate" &&
 			  smoke_media_probe_contract "$candidate" &&
@@ -717,6 +758,8 @@ expect_mutation_failure permissive-worker-private-tmp-count entrypoint 's/exact_
 expect_mutation_failure permissive-worker-private-tmp-filesystem entrypoint 's/filesystem == "tmpfs"/filesystem != ""/'
 expect_mutation_failure missing-derived-root-check entrypoint '/require_directory "$DERIVED_ROOT" 700/d'
 expect_mutation_failure missing-derived-root-mode entrypoint '/chmod 0700 "$DERIVED_ROOT"/d'
+expect_mutation_failure missing-export-root-check entrypoint '/require_directory "$EXPORT_ROOT" 700/d'
+expect_mutation_failure missing-export-root-mode entrypoint '/chmod 0700 "$EXPORT_ROOT"/d'
 expect_mutation_failure writable-bundle-check entrypoint 's/require_mount_option "$BUNDLE_ROOT" ro/require_mount_option "$BUNDLE_ROOT" rw/'
 expect_mutation_failure permissive-seccomp seccomp 's/"SCMP_ACT_ERRNO"/"SCMP_ACT_ALLOW"/'
 expect_mutation_failure missing-mount-denial seccomp 's/"mount", //'

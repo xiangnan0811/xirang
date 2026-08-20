@@ -22,6 +22,7 @@ import (
 	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/content"
 	assetexport "xirang/backend/internal/backupasset/export"
+	"xirang/backend/internal/backupasset/ga"
 	"xirang/backend/internal/backupasset/overlay"
 	"xirang/backend/internal/backupasset/processing"
 	"xirang/backend/internal/backupasset/processing/capabilityspec"
@@ -65,6 +66,7 @@ type Dependencies struct {
 	ProcessingMetrics  processing.Metrics
 	CatalogMetrics     catalog.Metrics
 	SearchMetrics      search.Metrics
+	GAMetrics          ga.Metrics
 	ContentMetrics     content.Metrics
 	SessionRevocations ContentSessionRevocationSource
 	Tombstones         repository.ManagedHistoryTombstoneSource
@@ -194,8 +196,11 @@ type Runtime struct {
 	retentionHolds          *retention.HoldService
 	retentionPurge          *retention.PurgeService
 	managedTaskRetention    task.ManagedRecoveryPointRetention
+	inventory               *ga.InventoryService
+	enablement              ga.ReadinessSource
 	transitioner            publication.FeatureTransitioner
 	metrics                 publication.Metrics
+	gaMetrics               ga.Metrics
 
 	mu          sync.Mutex
 	searchKeyMu sync.Mutex
@@ -703,7 +708,25 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	}
 	searchMetrics := dependencies.SearchMetrics
 	if searchMetrics == nil {
-		searchMetrics = search.NoopMetrics{}
+		if dependencies.Metrics == nil {
+			searchMetrics, err = search.NewPrometheusMetrics(prometheus.DefaultRegisterer)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			searchMetrics = search.NoopMetrics{}
+		}
+	}
+	gaMetrics := dependencies.GAMetrics
+	if gaMetrics == nil {
+		if dependencies.Metrics == nil {
+			gaMetrics, err = ga.NewPrometheusMetrics(prometheus.DefaultRegisterer)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			gaMetrics = ga.NoopMetrics{}
+		}
 	}
 	searchReady := &atomic.Bool{}
 	searchWorker, err := NewSearchWorker(SearchWorkerDependencies{
@@ -1173,6 +1196,10 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	inventory, err := composeGARuntime(gaRuntimeInput{DB: dependencies.DB, Now: dependencies.Now})
+	if err != nil {
+		return nil, err
+	}
 	return &Runtime{
 		foundation: foundation, settings: dependencies.Settings,
 		repository: repositoryService, publication: publicationService,
@@ -1195,8 +1222,11 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		retentionWorker: retentionWorker, retentionPolicies: retentionPolicies,
 		retentionHolds: retentionHolds, retentionPurge: retentionPurge,
 		managedTaskRetention: managedTaskRetention,
+		inventory:            inventory,
+		enablement:           composeGAReadiness(dependencies.DB, dependencies.Settings, keyring),
 		transitioner:         admission,
 		metrics:              metricsSink,
+		gaMetrics:            gaMetrics,
 	}, nil
 }
 
@@ -1892,6 +1922,17 @@ func (runtime *Runtime) FeatureTransitioner() publication.FeatureTransitioner {
 	return runtime
 }
 
+func (runtime *Runtime) Inventory() *ga.InventoryService {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.inventory
+}
+
+func (runtime *Runtime) inventoryWorkerStarted() bool {
+	return false
+}
+
 func (runtime *Runtime) TransitionFeature(ctx context.Context, enabled bool, persist func() error) error {
 	if runtime == nil || runtime.transitioner == nil || runtime.contentManager == nil {
 		return fmt.Errorf("%w: backup asset feature transition unavailable", backupasset.ErrInvalidState)
@@ -1900,10 +1941,22 @@ func (runtime *Runtime) TransitionFeature(ctx context.Context, enabled bool, per
 		ctx = context.Background()
 	}
 	if enabled {
+		if err := runtime.authorizeEnablement(ctx); err != nil {
+			return err
+		}
 		if err := runtime.contentManager.PrepareEnable(ctx); err != nil {
 			return err
 		}
-		err := runtime.transitioner.TransitionFeature(ctx, true, persist)
+		persistEnablement := persist
+		if persist != nil {
+			persistEnablement = func() error {
+				if err := runtime.recordEnablementSucceeded(ctx); err != nil {
+					return err
+				}
+				return persist()
+			}
+		}
+		err := runtime.transitioner.TransitionFeature(ctx, true, persistEnablement)
 		if err != nil {
 			runtime.contentManager.SetReady(false)
 			return errors.Join(err, runtime.contentManager.PrepareDisable(ctx))
@@ -1922,6 +1975,55 @@ func (runtime *Runtime) TransitionFeature(ctx context.Context, enabled bool, per
 		return errors.Join(err, restoreErr)
 	}
 	return nil
+}
+
+func (runtime *Runtime) authorizeEnablement(ctx context.Context) error {
+	if runtime == nil || runtime.enablement == nil {
+		return fmt.Errorf("%w: readiness unavailable", ga.ErrEnablementBlocked)
+	}
+	snapshot, err := runtime.enablement.CurrentReadiness(ctx)
+	if err != nil {
+		ga.ObserveReadiness(runtime.gaMetrics, snapshot)
+		if runtime.gaMetrics != nil {
+			runtime.gaMetrics.ObserveEnablementReject(ga.RejectReadinessUnavailable)
+		}
+		return fmt.Errorf("%w: %w", ga.ErrEnablementBlocked, err)
+	}
+	if err := ga.EvaluateEnablement(snapshot); err != nil {
+		ga.ObserveReadiness(runtime.gaMetrics, snapshot)
+		if runtime.gaMetrics != nil {
+			runtime.gaMetrics.ObserveEnablementReject(ga.ClassifyEnablementReject(snapshot, err))
+		}
+		return err
+	}
+	if runtime.inventory != nil {
+		if err := runtime.inventory.MaterializeReadiness(ctx, snapshot); err != nil {
+			return err
+		}
+	}
+	ga.ObserveReadiness(runtime.gaMetrics, snapshot)
+	return nil
+}
+
+func (runtime *Runtime) recordEnablementSucceeded(ctx context.Context) error {
+	if runtime == nil || runtime.inventory == nil {
+		return nil
+	}
+	return runtime.inventory.RecordEnablementSucceeded(ctx)
+}
+
+func (runtime *Runtime) authorizeRequestedStartupEnablement(ctx context.Context) error {
+	if runtime == nil || runtime.foundation == nil {
+		return nil
+	}
+	enabled, err := runtime.foundation.FeatureEnabled()
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		return nil
+	}
+	return runtime.authorizeEnablement(ctx)
 }
 
 func (runtime *Runtime) TransitionBackupAssetSettings(
@@ -2103,6 +2205,9 @@ func (runtime *Runtime) StartupPass(ctx context.Context) error {
 	runtime.mu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := runtime.authorizeRequestedStartupEnablement(ctx); err != nil {
+		return err
 	}
 	if err := runtime.admission.Initialize(ctx); err != nil {
 		return err

@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
@@ -152,6 +152,14 @@ vi.mock("@/components/restore-confirm-dialog", () => ({
       </div>
     );
   },
+}));
+
+vi.mock("@/components/snapshot-browser", () => ({
+  SnapshotBrowser: () => <div data-testid="legacy-snapshot-browser" />,
+}));
+
+vi.mock("@/components/snapshot-search", () => ({
+  SnapshotSearch: () => <div data-testid="legacy-snapshot-search" />,
 }));
 
 vi.mock("@/components/ui/toast-sonner", () => ({
@@ -600,7 +608,47 @@ describe("TasksPage", () => {
     vi.useRealTimers();
   });
 
-  it("restore 成功后立即调用 refreshTasks（整页集成，不依赖 5 秒轮询）", async () => {
+  it("Restic 执行历史用资产工作区深链替代快照浏览/搜索弹层", async () => {
+    const user = userEvent.setup();
+    createContext({
+      tasks: [
+        {
+          id: 401,
+          name: "Restic 备份任务",
+          policyName: "Restic 备份",
+          nodeId: 1,
+          nodeName: "node-prod-1",
+          status: "success" as const,
+          progress: 100,
+          startedAt: "2026-02-24 10:00:00",
+          executorType: "restic",
+          speedMbps: 0,
+        },
+      ] as unknown as Record<string, unknown>[],
+    });
+
+    render(
+      <MemoryRouter>
+        <TasksPage />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole("button", { name: "查看任务 #401 执行历史" }));
+
+    expect(screen.getByRole("link", { name: /资产工作区任务上下文|asset workspace task context/i }))
+      .toHaveAttribute("href", "/app/backups/data?taskId=401");
+    expect(screen.getByRole("link", { name: "搜索文件" }))
+      .toHaveAttribute("href", "/app/backups/data?view=search&taskId=401");
+    expect(screen.getByRole("link", { name: "从此备份恢复" }))
+      .toHaveAttribute("href", "/app/backups/recovery?taskId=401");
+    expect(screen.queryByRole("button", { name: "浏览快照" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("legacy-snapshot-browser")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("legacy-snapshot-search")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("restore-dialog")).not.toBeInTheDocument();
+    expect(screen.getByTestId("task-run-history")).toBeInTheDocument();
+  });
+
+  it("Rsync 恢复入口进入 /app/backups/recovery，不再挂载旧恢复对话框", async () => {
     const refreshTasksMock = vi.fn().mockResolvedValue(undefined);
     createContext({
       tasks: [
@@ -637,20 +685,17 @@ describe("TasksPage", () => {
       </MemoryRouter>
     );
 
-    // 初始加载会调用 refreshTasks，清除计数
     refreshTasksMock.mockClear();
 
-    // 1. 点击执行历史按钮，打开历史对话框
     await user.click(screen.getByRole("button", { name: "查看任务 #501 执行历史" }));
 
-    // 2. 点击"从此备份恢复"按钮，打开 restore 对话框
-    fireEvent.click(screen.getByText("从此备份恢复"));
-
-    // 3. 点击 mock 的确认恢复按钮
-    fireEvent.click(screen.getByTestId("restore-confirm-btn"));
-
-    // 4. 断言 refreshTasks 被立即调用（而非等待 5 秒轮询）
-    expect(refreshTasksMock).toHaveBeenCalledTimes(1);
+    const restoreLink = screen.getByRole("link", { name: "从此备份恢复" });
+    expect(restoreLink).toHaveAttribute("href", "/app/backups/recovery?taskId=501");
+    expect(restoreLink.getAttribute("href")).not.toMatch(/snapshot|path|query/);
+    expect(screen.queryByRole("button", { name: "从此备份恢复" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("restore-dialog")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("restore-confirm-btn")).not.toBeInTheDocument();
+    expect(refreshTasksMock).not.toHaveBeenCalled();
   });
 
   it("管理员可从 Rsync 任务操作区打开版本化迁移", async () => {
