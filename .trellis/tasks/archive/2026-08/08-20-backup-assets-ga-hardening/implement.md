@@ -317,6 +317,12 @@ Only after Tasks 11–12:
 7. leave the parent `planning` until an explicit parent-final-acceptance
    instruction. Do not archive the parent in this task.
 
+Delivered 2026-08-20: PR #440 squash `2e1e98b`; required CI `32374486521`;
+exact-squash main CI `32377898099`; Release Please `32377897976` opened
+#441 (`0.50.0`) without publishing a GitHub Release or Docker image from
+#440; Hub description `32377897831` succeeded. Latest public release
+remains `v0.49.1`. CodeDefault stays `"false"`.
+
 ## 4. Rollback
 
 Set `backup_assets.enabled=false` through the existing drain. Keep
