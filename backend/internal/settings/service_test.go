@@ -1112,6 +1112,9 @@ func TestBackupAssetSearchConfigAndOverlayConfigDefinitionsAndSafeDefaults(t *te
 	}
 	want := map[string]expectedDefinition{
 		"backup_assets.enabled":                           {"BACKUP_ASSETS_ENABLED", "false", TypeBool, "", "", "", ""},
+		"backup_assets.retention_reconcile_interval":      {"BACKUP_ASSETS_RETENTION_RECONCILE_INTERVAL", "5m", TypeDuration, "", "", "30s", "24h"},
+		"backup_assets.retention_batch_size":              {"BACKUP_ASSETS_RETENTION_BATCH_SIZE", "100", TypeInt, "1", "1000", "", ""},
+		"backup_assets.retention_drain_timeout":           {"BACKUP_ASSETS_RETENTION_DRAIN_TIMEOUT", "30s", TypeDuration, "", "", "5s", "30m"},
 		"backup_assets.content_preview_ttl":               {"BACKUP_ASSETS_CONTENT_PREVIEW_TTL", "2m", TypeDuration, "", "", "15s", "10m"},
 		"backup_assets.content_media_ttl":                 {"BACKUP_ASSETS_CONTENT_MEDIA_TTL", "15m", TypeDuration, "", "", "1m", "30m"},
 		"backup_assets.content_idle_ttl":                  {"BACKUP_ASSETS_CONTENT_IDLE_TTL", "60s", TypeDuration, "", "", "15s", "10m"},
@@ -1247,6 +1250,48 @@ func TestBackupAssetSearchConfigAndOverlayConfigDefinitionsAndSafeDefaults(t *te
 	t.Setenv("BACKUP_ASSETS_ENABLED", "")
 	service := NewService(setupTestDB(t))
 	if got := service.GetEffective("backup_assets.enabled"); got != "false" {
+		t.Fatalf("backup assets default=%q, want false", got)
+	}
+}
+
+func TestRetentionSettingsDefinitionsAndSafeDefaults(t *testing.T) {
+	type expectedDefinition struct {
+		env          string
+		defaultValue string
+		settingType  SettingType
+		min          string
+		max          string
+		minDuration  string
+		maxDuration  string
+	}
+	want := map[string]expectedDefinition{
+		"backup_assets.retention_reconcile_interval": {"BACKUP_ASSETS_RETENTION_RECONCILE_INTERVAL", "5m", TypeDuration, "", "", "30s", "24h"},
+		"backup_assets.retention_batch_size":         {"BACKUP_ASSETS_RETENTION_BATCH_SIZE", "100", TypeInt, "1", "1000", "", ""},
+		"backup_assets.retention_drain_timeout":      {"BACKUP_ASSETS_RETENTION_DRAIN_TIMEOUT", "30s", TypeDuration, "", "", "5s", "30m"},
+	}
+
+	definitions := NewService(setupTestDB(t)).Registry()
+	got := make(map[string]SettingDef, len(want))
+	for _, definition := range definitions {
+		if _, ok := want[definition.Key]; ok {
+			got[definition.Key] = definition
+		}
+	}
+	for key, expected := range want {
+		definition, ok := got[key]
+		if !ok {
+			t.Fatalf("missing retention setting %s", key)
+		}
+		if definition.EnvVar != expected.env || definition.CodeDefault != expected.defaultValue ||
+			definition.Type != expected.settingType || definition.Min != expected.min || definition.Max != expected.max ||
+			definition.MinDuration != expected.minDuration || definition.MaxDuration != expected.maxDuration ||
+			definition.RequiresRestart || definition.Sensitive {
+			t.Errorf("retention setting %s mismatch: %+v", key, definition)
+		}
+	}
+
+	t.Setenv("BACKUP_ASSETS_ENABLED", "")
+	if got := NewService(setupTestDB(t)).GetEffective("backup_assets.enabled"); got != "false" {
 		t.Fatalf("backup assets default=%q, want false", got)
 	}
 }

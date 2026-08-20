@@ -538,7 +538,7 @@ func TestCatalogIndexerReconcilesOnlyUnfencedAbandonedBuilds(t *testing.T) {
 	}
 }
 
-func TestCatalogIndexerRenewsAndRevokesFenceBeforeCancellationIgnoringSessionReturns(t *testing.T) {
+func TestCatalogIndexerRevokeJoinsProviderBeforeExactFenceRelease(t *testing.T) {
 	fixture := newCatalogIndexerFixture(t, true, 0)
 	lease := &catalogIndexerLeaseSpy{
 		CatalogLease: fixture.lease, renewer: fixture.lease,
@@ -570,27 +570,59 @@ func TestCatalogIndexerRenewsAndRevokesFenceBeforeCancellationIgnoringSessionRet
 	case <-time.After(time.Second):
 		t.Fatal("Catalog fence was not heartbeated")
 	}
-	if err := indexer.RevokeActiveBuilds(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-lease.released:
-	case <-time.After(time.Second):
-		t.Fatal("active Catalog fence was not durably released")
-	}
+	var releaseProvider sync.Once
+	release := func() { releaseProvider.Do(func() { close(session.release) }) }
+	t.Cleanup(release)
+	revokeCtx, cancelRevoke := context.WithTimeout(context.Background(), time.Second)
+	defer cancelRevoke()
+	revokeDone := make(chan error, 1)
+	go func() { revokeDone <- indexer.RevokeActiveBuilds(revokeCtx) }()
 	select {
 	case <-session.canceled:
 	case <-time.After(time.Second):
 		t.Fatal("active Catalog session was not canceled")
 	}
 	select {
+	case <-lease.released:
+		t.Fatal("active Catalog fence was released before Provider join")
+	default:
+	}
+	select {
 	case err := <-buildDone:
 		t.Fatalf("Build returned before cancellation-ignoring session was joined: %v", err)
 	default:
 	}
-	close(session.release)
-	if err := <-buildDone; !errors.Is(err, context.Canceled) && !errors.Is(err, backupasset.ErrLeaseFenceLost) {
-		t.Fatalf("revoked Build error=%v", err)
+	select {
+	case err := <-revokeDone:
+		t.Fatalf("RevokeActiveBuilds returned before builder teardown joined: %v", err)
+	default:
+	}
+	release()
+	select {
+	case <-lease.released:
+	case <-time.After(time.Second):
+		t.Fatal("active Catalog fence was not released after Provider join")
+	}
+	select {
+	case err := <-buildDone:
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, backupasset.ErrLeaseFenceLost) {
+			t.Fatalf("revoked Build error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("revoked Catalog Build did not finish after Provider join")
+	}
+	select {
+	case err := <-revokeDone:
+		if err != nil {
+			t.Fatalf("RevokeActiveBuilds after builder teardown: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RevokeActiveBuilds did not join builder teardown")
+	}
+	select {
+	case <-lease.released:
+		t.Fatal("active Catalog fence was released more than once")
+	default:
 	}
 }
 

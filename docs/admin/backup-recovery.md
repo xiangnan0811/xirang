@@ -300,3 +300,22 @@ Restic 备份完成后，Xirang 会分析最新两个快照之间的文件变更
 - 仅支持 Restic 任务。
 - 检测在备份完成后异步执行，不影响备份任务本身。
 - 首次部署后需要至少 3 次备份才能建立有效基线。
+
+## 控制面灾难恢复
+
+`backup_assets.enabled` 默认仍是 `false`。备份资产控制面与 Provider 仓库是分开的事实：丢失控制面数据库时，不能从 Provider 数据重建用户状态。
+
+| 事实 | 丢失控制面后能否恢复 | 所需条件 |
+|---|---|---|
+| Provider 可验证的 RecoveryPoint / Catalog | 可以，但必须先由 Admin 完成有效重连或导入审查 | 仍存在的 Provider 仓库 + 可读的访问绑定 |
+| 用户 overlays（收藏、标签、已保存搜索、最近访问） | 否 | 必须恢复原数据库 |
+| 审计链、生命周期 attempt / tombstone | 否 | 必须恢复原数据库 |
+| 保留策略、冻结记录、Task 关系 | 否 | 必须恢复原数据库 |
+| 访问绑定、冻结原因、wrapped domain key | 否 | 原数据库 **加上** 匹配的 `DATA_ENCRYPTION_KEY` |
+
+行为边界：
+
+- 全新控制面数据库上，未重连的仓库不能执行 import rebuild，也不会出现策略或冻结。
+- 有效重连 / 导入 / 审查之后，只能重建 Provider 可验证的恢复点与 Catalog 启动事实。
+- 错误或缺失的 `DATA_ENCRYPTION_KEY` 会让绑定解密和重连失败关闭；系统不会静默替换绑定，也不会把 rebuild 报成成功。
+- 不得从 Catalog 反写 Provider 字节。Provider 侧丢失的数据只能走 Provider 原生或独立备份恢复。

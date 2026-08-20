@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/model"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -74,6 +77,540 @@ func TestCoordinatorCoalescesSameWorkKeyAndKeepsIndependentInterests(t *testing.
 		if interest.JobID != first.JobID || interest.OwnerKey != ownerKey || !interest.Active {
 			t.Fatalf("interest handle %q resolved to %+v", interestID, interest)
 		}
+	}
+}
+
+func TestLifecycleLateOutputRejectsProcessingRequestWorkBeforeInterestMutation(t *testing.T) {
+	harness := newCoordinatorHarness(t)
+	harness.registerNoopWorker(t, "e")
+	descriptor := validWorkDescriptor()
+	first, err := harness.coordinator.RequestWork(context.Background(), WorkRequest{
+		Descriptor: descriptor,
+		Interest:   InterestRequest{OwnerKind: InterestWorkspace, OwnerKey: "before-lifecycle", PriorityClass: PriorityBackground, Priority: 10},
+	})
+	if err != nil {
+		t.Fatalf("seed RequestWork: %v", err)
+	}
+	attempt := model.RecoveryPointLifecycleAttempt{
+		ID: strings.Repeat("f", 32), RecoveryPointID: descriptor.Source.RecoveryPointID,
+		Operation: string(backupasset.LifecycleRetentionExpire), Phase: string(backupasset.LifecyclePhaseRevoking),
+	}
+	if err := harness.db.Create(&attempt).Error; err != nil {
+		t.Fatalf("seed lifecycle attempt: %v", err)
+	}
+
+	_, err = harness.coordinator.RequestWork(context.Background(), WorkRequest{
+		Descriptor: descriptor,
+		Interest:   InterestRequest{OwnerKind: InterestSearch, OwnerKey: "late-existing", PriorityClass: PriorityInteractive, Priority: 100},
+	})
+	if !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("late existing-job RequestWork error=%v, want ErrConflict", err)
+	}
+	var interests int64
+	if err := harness.db.Model(&model.BackupAssetProcessingInterest{}).Where("job_id = ? AND active = ?", first.JobID, true).Count(&interests).Error; err != nil || interests != 1 {
+		t.Fatalf("late existing-job interest count=%d err=%v, want unchanged", interests, err)
+	}
+
+	newDescriptor := descriptor
+	newDescriptor.Parameters.Quality++
+	_, err = harness.coordinator.RequestWork(context.Background(), WorkRequest{
+		Descriptor: newDescriptor,
+		Interest:   InterestRequest{OwnerKind: InterestSearch, OwnerKey: "late-new", PriorityClass: PriorityInteractive, Priority: 100},
+	})
+	if !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("late new-job RequestWork error=%v, want ErrConflict", err)
+	}
+	var jobs int64
+	if err := harness.db.Model(&model.BackupAssetProcessingJob{}).Where("recovery_point_id = ?", descriptor.Source.RecoveryPointID).Count(&jobs).Error; err != nil || jobs != 1 {
+		t.Fatalf("late new-job count=%d err=%v, want one original", jobs, err)
+	}
+}
+
+func TestLifecycleLateOutputProcessingRequestWorkRejectsCompletedLifecycleNonReadablePoint(t *testing.T) {
+	for _, state := range []backupasset.RecoveryPointState{
+		backupasset.RecoveryPointRetired,
+		backupasset.RecoveryPointExpired,
+		backupasset.RecoveryPointFailed,
+		backupasset.RecoveryPointPreparing,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			harness := newCoordinatorHarness(t)
+			harness.registerNoopWorker(t, "d")
+			descriptor := validWorkDescriptor()
+			seed, err := harness.coordinator.RequestWork(context.Background(), WorkRequest{
+				Descriptor: descriptor,
+				Interest:   InterestRequest{OwnerKind: InterestWorkspace, OwnerKey: "before-terminal", PriorityClass: PriorityBackground, Priority: 10},
+			})
+			if err != nil {
+				t.Fatalf("seed RequestWork: %v", err)
+			}
+			completedAt := harness.clock.Now()
+			if err := harness.db.Create(&model.RecoveryPointLifecycleAttempt{
+				ID: strings.Repeat("e", 32), RecoveryPointID: descriptor.Source.RecoveryPointID,
+				Operation: string(backupasset.LifecycleRetentionExpire), Phase: string(backupasset.LifecyclePhaseComplete), CompletedAt: &completedAt,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := harness.db.Model(&model.RecoveryPoint{}).Where("id = ?", descriptor.Source.RecoveryPointID).Update("state", state).Error; err != nil {
+				t.Fatal(err)
+			}
+
+			_, err = harness.coordinator.RequestWork(context.Background(), WorkRequest{
+				Descriptor: descriptor,
+				Interest:   InterestRequest{OwnerKind: InterestSearch, OwnerKey: "terminal-existing", PriorityClass: PriorityInteractive, Priority: 100},
+			})
+			if !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("existing-job RequestWork state=%s error=%v, want ErrConflict", state, err)
+			}
+			var interests int64
+			if err := harness.db.Model(&model.BackupAssetProcessingInterest{}).Where("job_id = ? AND active = ?", seed.JobID, true).Count(&interests).Error; err != nil || interests != 1 {
+				t.Fatalf("existing-job interests=%d err=%v, want unchanged", interests, err)
+			}
+
+			newDescriptor := descriptor
+			newDescriptor.Parameters.Quality++
+			_, err = harness.coordinator.RequestWork(context.Background(), WorkRequest{
+				Descriptor: newDescriptor,
+				Interest:   InterestRequest{OwnerKind: InterestSearch, OwnerKey: "terminal-new", PriorityClass: PriorityInteractive, Priority: 100},
+			})
+			if !errors.Is(err, backupasset.ErrConflict) {
+				t.Fatalf("new-job RequestWork state=%s error=%v, want ErrConflict", state, err)
+			}
+			var jobs int64
+			if err := harness.db.Model(&model.BackupAssetProcessingJob{}).Where("recovery_point_id = ?", descriptor.Source.RecoveryPointID).Count(&jobs).Error; err != nil || jobs != 1 {
+				t.Fatalf("new-job count=%d err=%v, want unchanged", jobs, err)
+			}
+		})
+	}
+
+	for _, readable := range []struct {
+		state     backupasset.RecoveryPointState
+		semantics backupasset.PointVersionSemantics
+	}{
+		{state: backupasset.RecoveryPointObserved, semantics: backupasset.PointMutableHead},
+		{state: backupasset.RecoveryPointCommitted, semantics: backupasset.PointXirangManifest},
+		{state: backupasset.RecoveryPointDegraded, semantics: backupasset.PointXirangManifest},
+	} {
+		t.Run("readable_"+string(readable.state), func(t *testing.T) {
+			harness := newCoordinatorHarness(t)
+			harness.registerNoopWorker(t, "c")
+			descriptor := validWorkDescriptor()
+			if err := harness.db.Model(&model.RecoveryPoint{}).Where("id = ?", descriptor.Source.RecoveryPointID).
+				Updates(map[string]any{"state": readable.state, "semantics": readable.semantics}).Error; err != nil {
+				t.Fatal(err)
+			}
+			completedAt := harness.clock.Now()
+			if err := harness.db.Create(&model.RecoveryPointLifecycleAttempt{
+				ID: strings.Repeat("b", 32), RecoveryPointID: descriptor.Source.RecoveryPointID,
+				Operation: string(backupasset.LifecycleRetentionExpire), Phase: string(backupasset.LifecyclePhaseComplete), CompletedAt: &completedAt,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			if _, err := harness.coordinator.RequestWork(context.Background(), WorkRequest{
+				Descriptor: descriptor,
+				Interest:   InterestRequest{OwnerKind: InterestWorkspace, OwnerKey: "readable", PriorityClass: PriorityBackground, Priority: 10},
+			}); err != nil {
+				t.Fatalf("readable RequestWork state=%s semantics=%s: %v", readable.state, readable.semantics, err)
+			}
+		})
+	}
+}
+
+type processingLifecycleLockOrderContextKey struct{}
+
+func TestLifecycleProcessingLocksPointThenValidatesAttemptBeforeJobMutation(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		mutate func(context.Context, processingBehaviorFixture) error
+	}{
+		{
+			name: "request_work",
+			mutate: func(ctx context.Context, fixture processingBehaviorFixture) error {
+				_, err := fixture.coordinator.RequestWork(ctx, WorkRequest{
+					Descriptor: validWorkDescriptor(),
+					Interest: InterestRequest{
+						OwnerKind: InterestSearch, OwnerKey: "sqlite-lock-order-request",
+						PriorityClass: PriorityBackground, Priority: 10,
+					},
+				})
+				return err
+			},
+		},
+		{
+			name: "pull",
+			mutate: func(ctx context.Context, fixture processingBehaviorFixture) error {
+				_, err := fixture.coordinator.Pull(ctx, PullRequest{WorkerID: fixture.workerID})
+				return err
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := openProcessingBehaviorSQLite(t)
+			if fixture.lifecycle == nil {
+				t.Fatal("Processing behavior fixture omitted real lifecycle lease admission")
+			}
+			if _, err := fixture.coordinator.RequestWork(context.Background(), WorkRequest{
+				Descriptor: validWorkDescriptor(),
+				Interest: InterestRequest{
+					OwnerKind: InterestWorkspace, OwnerKey: "sqlite-lock-order-seed",
+					PriorityClass: PriorityInteractive, Priority: 100,
+				},
+			}); err != nil {
+				t.Fatalf("seed SQLite RequestWork: %v", err)
+			}
+
+			const (
+				probeLabel  = "sqlite_processing_lifecycle_lock_order"
+				queryProbe  = "test:sqlite_processing_lifecycle_lock_order:query"
+				createProbe = "test:sqlite_processing_lifecycle_lock_order:create"
+			)
+			var events []string
+			record := func(event string) { events = append(events, event) }
+			if err := fixture.db.Callback().Query().Before("gorm:query").Register(queryProbe, func(callbackDB *gorm.DB) {
+				if callbackDB.Statement == nil || callbackDB.Statement.Context == nil ||
+					callbackDB.Statement.Context.Value(processingLifecycleLockOrderContextKey{}) != probeLabel {
+					return
+				}
+				table := processingCallbackTable(callbackDB)
+				_, locked := callbackDB.Statement.Clauses["FOR"]
+				switch {
+				case table == "recovery_points" && locked:
+					record("point_lock")
+				case table == "recovery_point_lifecycle_attempts":
+					record("lifecycle_attempt_validation")
+				case table == "backup_asset_processing_jobs" && locked:
+					record("job_lock")
+				}
+			}); err != nil {
+				t.Fatalf("register SQLite lock-order query probe: %v", err)
+			}
+			if err := fixture.db.Callback().Create().Before("gorm:create").Register(createProbe, func(callbackDB *gorm.DB) {
+				if callbackDB.Statement == nil || callbackDB.Statement.Context == nil ||
+					callbackDB.Statement.Context.Value(processingLifecycleLockOrderContextKey{}) != probeLabel {
+					return
+				}
+				switch processingCallbackTable(callbackDB) {
+				case "backup_asset_processing_interests", "recovery_point_leases", "backup_asset_processing_attempts":
+					record("mutation")
+				}
+			}); err != nil {
+				_ = fixture.db.Callback().Query().Remove(queryProbe)
+				t.Fatalf("register SQLite lock-order create probe: %v", err)
+			}
+			t.Cleanup(func() {
+				if err := fixture.db.Callback().Create().Remove(createProbe); err != nil {
+					t.Errorf("remove SQLite lock-order create probe: %v", err)
+				}
+				if err := fixture.db.Callback().Query().Remove(queryProbe); err != nil {
+					t.Errorf("remove SQLite lock-order query probe: %v", err)
+				}
+			})
+
+			ctx := context.WithValue(context.Background(), processingLifecycleLockOrderContextKey{}, probeLabel)
+			if err := testCase.mutate(ctx, fixture); err != nil {
+				t.Fatalf("SQLite %s lock-order operation: %v", testCase.name, err)
+			}
+			assertProcessingLifecycleLockOrder(t, events)
+		})
+	}
+}
+
+func TestLifecycleLateOutputProcessingRequestWorkPullPostgresLockOrder(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		if strings.TrimSpace(os.Getenv("REQUIRE_POSTGRES_PROCESSING_TEST")) == "1" {
+			t.Fatal("TEST_POSTGRES_DSN is required when REQUIRE_POSTGRES_PROCESSING_TEST=1")
+		}
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	for _, testCase := range []struct {
+		name       string
+		attemptID  string
+		contender  func(context.Context, processingBehaviorFixture) error
+		wantFenced error
+	}{
+		{
+			name:      "request_work",
+			attemptID: strings.Repeat("f", 31) + "1",
+			contender: func(ctx context.Context, fixture processingBehaviorFixture) error {
+				_, err := fixture.coordinator.RequestWork(ctx, WorkRequest{
+					Descriptor: validWorkDescriptor(),
+					Interest: InterestRequest{
+						OwnerKind: InterestSearch, OwnerKey: "postgres-lock-order-request",
+						PriorityClass: PriorityBackground, Priority: 10,
+					},
+				})
+				return err
+			},
+			wantFenced: backupasset.ErrConflict,
+		},
+		{
+			name:      "pull",
+			attemptID: strings.Repeat("f", 31) + "2",
+			contender: func(ctx context.Context, fixture processingBehaviorFixture) error {
+				_, err := fixture.coordinator.Pull(ctx, PullRequest{WorkerID: fixture.workerID})
+				return err
+			},
+			wantFenced: backupasset.ErrConflict,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := openProcessingBehaviorPostgres(t, dsn)
+			if fixture.lifecycle == nil {
+				t.Fatal("PostgreSQL Processing fixture omitted real lifecycle lease admission")
+			}
+			var versionNumber int
+			if err := fixture.db.Raw("SHOW server_version_num").Scan(&versionNumber).Error; err != nil {
+				t.Fatalf("load PostgreSQL version: %v", err)
+			}
+			if versionNumber/10000 != 17 {
+				t.Fatalf("PostgreSQL major=%d, want 17", versionNumber/10000)
+			}
+			descriptor := validWorkDescriptor()
+			if _, err := fixture.coordinator.RequestWork(context.Background(), WorkRequest{
+				Descriptor: descriptor,
+				Interest: InterestRequest{
+					OwnerKind: InterestWorkspace, OwnerKey: "postgres-lock-order-seed",
+					PriorityClass: PriorityInteractive, Priority: 100,
+				},
+			}); err != nil {
+				t.Fatalf("seed PostgreSQL RequestWork: %v", err)
+			}
+			if err := fixture.db.Create(&model.RecoveryPointLifecycleAttempt{
+				ID: testCase.attemptID, RecoveryPointID: descriptor.Source.RecoveryPointID,
+				Operation: string(backupasset.LifecycleRetentionExpire), Phase: string(backupasset.LifecyclePhaseRevoking),
+			}).Error; err != nil {
+				t.Fatalf("seed PostgreSQL lifecycle attempt: %v", err)
+			}
+			owner, err := NewSourceLifecycle(
+				fixture.db,
+				&DerivedLifecycle{db: fixture.db, store: &DerivedStore{db: fixture.db}},
+				&processingSearchProofSpy{}, fixture.clock.Now, 16,
+			)
+			if err != nil {
+				t.Fatalf("NewSourceLifecycle: %v", err)
+			}
+			request := backupasset.SourceLifecycleRequest{
+				RecoveryPointID: descriptor.Source.RecoveryPointID, LifecycleAttemptID: testCase.attemptID,
+				Operation: backupasset.LifecycleRetentionExpire, Stage: backupasset.SourceLifecyclePrepare,
+			}
+
+			const (
+				sourceLabel    = "source_lifecycle"
+				contenderLabel = "processing_contender"
+				beforeProbe    = "test:processing_lifecycle_lock_order:before"
+				afterProbe     = "test:processing_lifecycle_lock_order:after"
+				createProbe    = "test:processing_lifecycle_lock_order:create"
+				updateProbe    = "test:processing_lifecycle_lock_order:update"
+				deleteProbe    = "test:processing_lifecycle_lock_order:delete"
+				rawProbe       = "test:processing_lifecycle_lock_order:raw"
+				rowProbe       = "test:processing_lifecycle_lock_order:row"
+			)
+			sourcePointLocked := make(chan struct{})
+			contenderFirstLockReady := make(chan struct{})
+			var sourcePointOnce sync.Once
+			var contenderReadyOnce sync.Once
+			var observerMu sync.Mutex
+			sourcePointLocks := 0
+			firstContenderLock := ""
+			firstLockAttempts := 0
+			var retryableCauses []string
+			var observedSQLStates []string
+			recordError := func(kind string, callbackDB *gorm.DB) {
+				if callbackDB == nil || callbackDB.Error == nil || callbackDB.Statement == nil || callbackDB.Statement.Context == nil {
+					return
+				}
+				label, _ := callbackDB.Statement.Context.Value(processingLifecycleLockOrderContextKey{}).(string)
+				if label != sourceLabel && label != contenderLabel {
+					return
+				}
+				code := "unclassified"
+				var postgresError *pgconn.PgError
+				if errors.As(callbackDB.Error, &postgresError) {
+					code = postgresError.Code
+				}
+				observerMu.Lock()
+				observedSQLStates = append(observedSQLStates, kind+":"+code)
+				if retryableCoordinatorConflict(callbackDB.Error) {
+					retryableCauses = append(retryableCauses, kind+":"+code)
+				}
+				observerMu.Unlock()
+			}
+			if err := fixture.db.Callback().Query().Before("gorm:query").Register(beforeProbe, func(callbackDB *gorm.DB) {
+				if callbackDB.Statement == nil || callbackDB.Statement.Context == nil {
+					return
+				}
+				label, _ := callbackDB.Statement.Context.Value(processingLifecycleLockOrderContextKey{}).(string)
+				if label != contenderLabel {
+					return
+				}
+				table := processingCallbackTable(callbackDB)
+				_, locked := callbackDB.Statement.Clauses["FOR"]
+				if !locked || (table != "recovery_points" && table != "backup_asset_processing_jobs") {
+					return
+				}
+				signalBefore := false
+				observerMu.Lock()
+				if firstContenderLock == "" {
+					firstContenderLock = table
+				}
+				if table == firstContenderLock {
+					firstLockAttempts++
+				}
+				if firstContenderLock == "recovery_points" {
+					signalBefore = true
+				}
+				observerMu.Unlock()
+				if signalBefore {
+					contenderReadyOnce.Do(func() { close(contenderFirstLockReady) })
+				}
+			}); err != nil {
+				t.Fatalf("register PostgreSQL lock-order before probe: %v", err)
+			}
+			if err := fixture.db.Callback().Query().After("gorm:query").Register(afterProbe, func(callbackDB *gorm.DB) {
+				recordError("query", callbackDB)
+				if callbackDB.Statement == nil || callbackDB.Statement.Context == nil {
+					return
+				}
+				label, _ := callbackDB.Statement.Context.Value(processingLifecycleLockOrderContextKey{}).(string)
+				table := processingCallbackTable(callbackDB)
+				_, locked := callbackDB.Statement.Clauses["FOR"]
+				if label == sourceLabel && table == "recovery_points" && locked && callbackDB.Error == nil && callbackDB.RowsAffected == 1 {
+					observerMu.Lock()
+					sourcePointLocks++
+					lockNumber := sourcePointLocks
+					observerMu.Unlock()
+					if lockNumber == 2 {
+						sourcePointOnce.Do(func() { close(sourcePointLocked) })
+						select {
+						case <-contenderFirstLockReady:
+						case <-callbackDB.Statement.Context.Done():
+						}
+					}
+				}
+				observerMu.Lock()
+				firstLock := firstContenderLock
+				observerMu.Unlock()
+				if label == contenderLabel && firstLock == "backup_asset_processing_jobs" && table == firstLock && locked && callbackDB.Error == nil && callbackDB.RowsAffected > 0 {
+					contenderReadyOnce.Do(func() { close(contenderFirstLockReady) })
+				}
+			}); err != nil {
+				_ = fixture.db.Callback().Query().Remove(beforeProbe)
+				t.Fatalf("register PostgreSQL lock-order query observer: %v", err)
+			}
+			for _, registration := range []struct {
+				name     string
+				register func(string, func(*gorm.DB)) error
+				observe  func(*gorm.DB)
+			}{
+				{name: createProbe, register: func(name string, callback func(*gorm.DB)) error {
+					return fixture.db.Callback().Create().After("gorm:create").Register(name, callback)
+				}, observe: func(db *gorm.DB) { recordError("exec_create", db) }},
+				{name: updateProbe, register: func(name string, callback func(*gorm.DB)) error {
+					return fixture.db.Callback().Update().After("gorm:update").Register(name, callback)
+				}, observe: func(db *gorm.DB) { recordError("exec_update", db) }},
+				{name: deleteProbe, register: func(name string, callback func(*gorm.DB)) error {
+					return fixture.db.Callback().Delete().After("gorm:delete").Register(name, callback)
+				}, observe: func(db *gorm.DB) { recordError("exec_delete", db) }},
+				{name: rawProbe, register: func(name string, callback func(*gorm.DB)) error {
+					return fixture.db.Callback().Raw().After("gorm:raw").Register(name, callback)
+				}, observe: func(db *gorm.DB) { recordError("exec_raw", db) }},
+				{name: rowProbe, register: func(name string, callback func(*gorm.DB)) error {
+					return fixture.db.Callback().Row().After("gorm:row").Register(name, callback)
+				}, observe: func(db *gorm.DB) { recordError("row", db) }},
+			} {
+				if err := registration.register(registration.name, registration.observe); err != nil {
+					t.Fatalf("register PostgreSQL transaction observer %s: %v", registration.name, err)
+				}
+			}
+			t.Cleanup(func() {
+				for label, remove := range map[string]func() error{
+					"row":          func() error { return fixture.db.Callback().Row().Remove(rowProbe) },
+					"raw":          func() error { return fixture.db.Callback().Raw().Remove(rawProbe) },
+					"delete":       func() error { return fixture.db.Callback().Delete().Remove(deleteProbe) },
+					"update":       func() error { return fixture.db.Callback().Update().Remove(updateProbe) },
+					"create":       func() error { return fixture.db.Callback().Create().Remove(createProbe) },
+					"query_after":  func() error { return fixture.db.Callback().Query().Remove(afterProbe) },
+					"query_before": func() error { return fixture.db.Callback().Query().Remove(beforeProbe) },
+				} {
+					if err := remove(); err != nil {
+						t.Errorf("remove PostgreSQL %s observer: %v", label, err)
+					}
+				}
+			})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			sourceResults := make(chan error, 1)
+			go func() {
+				sourceCtx := context.WithValue(ctx, processingLifecycleLockOrderContextKey{}, sourceLabel)
+				sourceResults <- owner.RevokeRecoveryPoint(sourceCtx, request)
+			}()
+			select {
+			case <-sourcePointLocked:
+			case <-ctx.Done():
+				t.Fatalf("PostgreSQL source lifecycle did not hold point before Processing job: %v", ctx.Err())
+			}
+			contenderResults := make(chan error, 1)
+			go func() {
+				contenderCtx := context.WithValue(ctx, processingLifecycleLockOrderContextKey{}, contenderLabel)
+				contenderResults <- testCase.contender(contenderCtx, fixture)
+			}()
+
+			var sourceErr, contenderErr error
+			select {
+			case sourceErr = <-sourceResults:
+			case <-ctx.Done():
+				t.Fatalf("PostgreSQL source lifecycle did not finish forced interleaving: %v", ctx.Err())
+			}
+			select {
+			case contenderErr = <-contenderResults:
+			case <-ctx.Done():
+				t.Fatalf("PostgreSQL %s did not finish forced interleaving: %v", testCase.name, ctx.Err())
+			}
+
+			observerMu.Lock()
+			firstLock := firstContenderLock
+			attempts := firstLockAttempts
+			causes := append([]string(nil), retryableCauses...)
+			states := append([]string(nil), observedSQLStates...)
+			observerMu.Unlock()
+			if attempts == 0 {
+				t.Fatalf("PostgreSQL %s transaction attempt was not observed", testCase.name)
+			}
+			totalRetries := attempts - 1
+			if sourceErr != nil || !errors.Is(contenderErr, testCase.wantFenced) ||
+				firstLock != "recovery_points" || totalRetries != 0 || len(causes) != 0 {
+				t.Fatalf("PostgreSQL %s forced lifecycle interleaving source_error=%v contender_error=%v want_fence=%v first_lock=%s total_transaction_retries=%d retryable_query_exec_causes=%v states=%v; want point-first and zero retries including commit-caused retries",
+					testCase.name, sourceErr, contenderErr, testCase.wantFenced, firstLock, totalRetries, causes, states)
+			}
+			t.Logf("PostgreSQL %s forced lifecycle interleaving first_lock=%s total_retries=0 query_exec_causes=%v states=%v",
+				testCase.name, firstLock, causes, states)
+		})
+	}
+}
+
+func processingCallbackTable(callbackDB *gorm.DB) string {
+	if callbackDB == nil || callbackDB.Statement == nil {
+		return ""
+	}
+	if callbackDB.Statement.Schema != nil && callbackDB.Statement.Schema.Table != "" {
+		return callbackDB.Statement.Schema.Table
+	}
+	return callbackDB.Statement.Table
+}
+
+func assertProcessingLifecycleLockOrder(t *testing.T, events []string) {
+	t.Helper()
+	want := []string{"point_lock", "lifecycle_attempt_validation", "job_lock", "mutation"}
+	next := 0
+	for _, event := range events {
+		if next < len(want) && event == want[next] {
+			next++
+		}
+	}
+	if next != len(want) {
+		t.Fatalf("Processing lifecycle lock/mutation order=%v, want ordered subsequence %v", events, want)
 	}
 }
 
@@ -609,6 +1146,7 @@ func newCoordinatorHarness(t *testing.T) *coordinatorHarness {
 		sqlDB.SetMaxOpenConns(16)
 	}
 	if err := db.AutoMigrate(
+		&model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{},
 		&model.BackupAssetWorkerIdentity{}, &model.BackupAssetWorkerCapability{},
 		&model.BackupAssetProcessingJob{}, &model.BackupAssetProcessingInterest{},
 		&model.BackupAssetProcessingAttempt{}, &model.BackupAssetProcessingGrant{},
@@ -616,6 +1154,20 @@ func newCoordinatorHarness(t *testing.T) *coordinatorHarness {
 		&model.RecoveryPointLease{},
 	); err != nil {
 		t.Fatalf("migrate coordinator harness: %v", err)
+	}
+	caller, _, _, _ := runtime.Caller(1)
+	callerName := ""
+	if function := runtime.FuncForPC(caller); function != nil {
+		callerName = function.Name()
+	}
+	if !strings.HasSuffix(callerName, ".newManifestHarness") {
+		descriptor := validWorkDescriptor()
+		if err := db.Create(&model.RecoveryPoint{
+			ID: descriptor.Source.RecoveryPointID, RepositoryID: strings.Repeat("f", 32),
+			Semantics: string(backupasset.PointXirangManifest), State: string(backupasset.RecoveryPointCommitted),
+		}).Error; err != nil {
+			t.Fatalf("seed coordinator recovery point: %v", err)
+		}
 	}
 	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_processing_test_current_work ON backup_asset_processing_jobs(work_key) WHERE is_current = 1`).Error; err != nil {
 		t.Fatal(err)

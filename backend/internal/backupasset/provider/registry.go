@@ -18,6 +18,7 @@ type Registration struct {
 	CatalogReader       CatalogReader
 	PublicationStrategy PublicationStrategy
 	RestorePort         RestorePort
+	PointDeleter        PointDeleter
 }
 
 type Registry struct {
@@ -35,6 +36,9 @@ func (registry *Registry) Register(kind backupasset.ProviderKind, registration R
 	}
 	if !interfaceNil(registration.RestorePort) && registration.RestorePort.ProviderKind() != kind {
 		return fmt.Errorf("%w: restore port provider mismatch", backupasset.ErrInvalidState)
+	}
+	if !interfaceNil(registration.PointDeleter) && registration.PointDeleter.ProviderKind() != kind {
+		return fmt.Errorf("%w: point deleter provider mismatch", backupasset.ErrInvalidState)
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
@@ -154,6 +158,23 @@ func (registry *Registry) RestorePort(kind backupasset.ProviderKind) (RestorePor
 		return nil, fmt.Errorf("%w: restore port provider mismatch", backupasset.ErrInvalidState)
 	}
 	return registration.RestorePort, nil
+}
+
+// PointDeleter returns only the exact deletion implementation registered for
+// this Provider. It never falls back to a different Provider or a generic
+// executor, and a missing capability is typed rather than inferred.
+func (registry *Registry) PointDeleter(kind backupasset.ProviderKind) (PointDeleter, error) {
+	registration, err := registry.registration(kind)
+	if err != nil || interfaceNil(registration.PointDeleter) {
+		if err != nil {
+			return nil, err
+		}
+		return nil, newCapabilityError(backupasset.CapabilityDeletionUnavailable)
+	}
+	if registration.PointDeleter.ProviderKind() != kind {
+		return nil, fmt.Errorf("%w: point deleter provider mismatch", backupasset.ErrInvalidState)
+	}
+	return registration.PointDeleter, nil
 }
 
 func (registry *Registry) registration(kind backupasset.ProviderKind) (Registration, error) {

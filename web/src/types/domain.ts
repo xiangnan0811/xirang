@@ -1499,6 +1499,7 @@ export type BackupRepositoryLineageSource = "task_link" | "recovery_point";
 
 export interface BackupRepositoryLineage {
   source: BackupRepositoryLineageSource;
+  taskRepositoryLinkId?: string;
   taskId?: number;
   taskName: string;
   nodeId: number;
@@ -1532,6 +1533,171 @@ export interface BackupRepository {
 export interface BackupRepositoryPage {
   items: Array<CatalogProjection<BackupRepository>>;
   nextCursor: string | null;
+}
+
+export type RetentionPolicyScopeKind = "repository" | "task_link";
+export type RetentionPolicyStatus = "active" | "deleted";
+export type RetentionCalendarUnit = "day" | "week" | "month" | "year";
+export type RecoveryPointHoldType = "operational" | "legal";
+export type RecoveryPointHoldRecordState = "active" | "released";
+export type ImportCandidateKind =
+  | "native_snapshot"
+  | "xirang_manifest"
+  | "imported_baseline"
+  | "mutable_head";
+export type ImportReviewState = "pending" | "accepted" | "rejected";
+export type ImportReviewDecision = "accepted" | "rejected";
+export type BackupRebuildReason =
+  | "invalid_manifest"
+  | "catalog_start_failed"
+  | "derived_queue_failed";
+export type PurgePlanStatus = "ready" | "bound" | "executing" | "consumed" | "invalidated";
+
+export interface RetentionPolicyRules {
+  version: number;
+  age?: { keepDays: number };
+  count?: { keepLatest: number };
+  calendar?: Array<{ unit: RetentionCalendarUnit; keep: number }>;
+}
+
+export interface BackupRetentionPolicy {
+  id: string;
+  scopeKind: RetentionPolicyScopeKind;
+  scopeId: string;
+  revision: number;
+  rules: RetentionPolicyRules;
+  ruleDigest: string;
+  status: RetentionPolicyStatus;
+  createdBy: number;
+  updatedBy: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BackupRetentionPolicyPage {
+  items: Array<CatalogProjection<BackupRetentionPolicy>>;
+  nextCursor: string | null;
+}
+
+export interface BackupRetentionImpactPoint {
+  recoveryPointId: string;
+  pointRevision: number;
+  capabilityRevision: number;
+}
+
+export interface BackupRetentionImpact {
+  policyId: string;
+  policyRevision: number;
+  impactRevision: number;
+  evaluatedAt: string;
+  selectedCount: number;
+  holdCount: number;
+  leaseCount: number;
+  wormCount: number;
+  points: BackupRetentionImpactPoint[];
+  nextCursor?: string | null;
+}
+
+export interface BackupRetentionPurgeImpact {
+  repositoryId: string;
+  impactRevision: number;
+  selectedCount: number;
+  holdCount: number;
+  leaseCount: number;
+  wormCount: number;
+  points: BackupRetentionImpactPoint[];
+}
+
+export interface BackupRetentionHoldRecord {
+  id: string;
+  recoveryPointId: string;
+  holdType: RecoveryPointHoldType;
+  state: RecoveryPointHoldRecordState;
+  createdBy: number;
+  expiresAt: string | null;
+  releasedBy: number | null;
+  releasedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BackupRetentionPurgePlanItem {
+  recoveryPointId: string;
+  pointRevision: number;
+  capabilityRevision: number;
+}
+
+export interface BackupRetentionPurgePlan {
+  id: string;
+  repositoryId: string;
+  revision: number;
+  impactRevision: number;
+  expiresAt: string;
+  holdCount: number;
+  leaseCount: number;
+  wormCount: number;
+  status: PurgePlanStatus;
+  itemCount: number;
+  items: BackupRetentionPurgePlanItem[];
+}
+
+export interface BackupRetentionPurgeResult {
+  planId: string;
+  claimed: number;
+  blocked: number;
+}
+
+export interface BackupImportCandidate {
+  id: string;
+  repositoryId: string;
+  kind: ImportCandidateKind;
+  state: ImportReviewState;
+  acceptedRecoveryPointId?: string;
+  quarantined: boolean;
+  createdAt: string;
+  reviewedAt: string | null;
+}
+
+export interface BackupImportDiscoveryResult {
+  candidates: Array<CatalogProjection<BackupImportCandidate>>;
+  nextCursor: string | null;
+  discovered: number;
+  existing: number;
+}
+
+export interface BackupImportCandidatePage {
+  items: Array<CatalogProjection<BackupImportCandidate>>;
+  nextCursor: string | null;
+}
+
+export interface BackupRebuildResult {
+  accepted: number;
+  catalogStarted: number;
+  derivedQueued: number;
+  partial: number;
+  failed: number;
+  reasons: Partial<Record<BackupRebuildReason, number>>;
+  nextCursor: string | null;
+}
+
+export interface BackupRepositoryMutationSnapshot {
+  id: string;
+  providerKind: BackupProviderKind;
+  displayName: string;
+  description: string;
+  versionMode: BackupVersionMode;
+  status: BackupRepositoryStatus;
+  capabilityRevision: number;
+  capabilities: CatalogCapabilitySet;
+  immutabilityLevel: BackupImmutabilityLevel;
+  lastSeenAt: string | null;
+  lastReconciledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BackupRepositoryMutationResult {
+  repository: BackupRepositoryMutationSnapshot;
 }
 
 export interface RecoveryPointLineage {

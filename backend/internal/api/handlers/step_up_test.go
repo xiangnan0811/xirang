@@ -288,8 +288,14 @@ func TestStepUpProofPairwiseCrossPurposeRejection(t *testing.T) {
 			rejected++
 		}
 	}
-	if accepted != 17 || rejected != 272 {
-		t.Fatalf("pairwise matrix accepted=%d rejected=%d, want 17/272", accepted, rejected)
+	const reviewedActionCount = 18
+	if len(actions) != reviewedActionCount {
+		t.Fatalf("step-up registry has %d actions, want reviewed count %d", len(actions), reviewedActionCount)
+	}
+	wantAccepted := len(actions)
+	wantRejected := len(actions) * (len(actions) - 1)
+	if accepted != wantAccepted || rejected != wantRejected {
+		t.Fatalf("pairwise matrix accepted=%d rejected=%d, want %d/%d", accepted, rejected, wantAccepted, wantRejected)
 	}
 }
 
@@ -723,5 +729,45 @@ func TestSnapshotRestoreWritesSafeCredentialAuditEvidence(t *testing.T) {
 	metadata := assertNoForbiddenAuditMetadata(t, event.Metadata)
 	if metadata["stage"] != "executor" || metadata["include_count"].(float64) != 1 || metadata["target_set"] != true || metadata["snapshot_short"] != "abcdef123456" {
 		t.Fatalf("快照恢复凭据审计 metadata 不符合预期: %#v", metadata)
+	}
+}
+
+func TestStepUpHoldReleaseRejectsRepositoryPurgeProof(t *testing.T) {
+	assertRetentionLifecycleStepUpIsolation(t, auth.StepUpActionRetentionHoldRelease, auth.StepUpActionRepositoryPurge, "/recovery-points/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/holds/cccccccccccccccccccccccccccccccc/release")
+}
+
+func TestStepUpRepositoryPurgeRejectsHoldReleaseProof(t *testing.T) {
+	assertRetentionLifecycleStepUpIsolation(t, auth.StepUpActionRepositoryPurge, auth.StepUpActionRetentionHoldRelease, "/backup-repositories/dddddddddddddddddddddddddddddddd/purges")
+}
+
+func assertRetentionLifecycleStepUpIsolation(t *testing.T, expected, cross auth.StepUpAction, path string) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	admin := seedStepUpUser(t, db, "lifecycle-admin", "admin")
+	token := generatePrimaryToken(t, manager, admin)
+	crossProof := generateStepUpProofForAction(t, manager, admin, cross)
+	validProof := generateStepUpProofForAction(t, manager, admin, expected)
+
+	router := gin.New()
+	router.Use(middleware.AuthMiddleware(manager, db))
+	if expected == auth.StepUpActionRetentionHoldRelease {
+		router.POST("/recovery-points/:id/holds/:holdId/release", RequireStepUp(db, manager, expected, "retention_hold_release", "hold_release"), func(c *gin.Context) {
+			respondOK(c, gin.H{"ok": true})
+		})
+	} else {
+		router.POST("/backup-repositories/:id/purges", RequireStepUp(db, manager, expected, "repository_purge", "repository_purge"), func(c *gin.Context) {
+			respondOK(c, gin.H{"ok": true})
+		})
+	}
+
+	missing := performStepUpRequest(t, router, http.MethodPost, path, token, "", `{"reason":"done"}`)
+	assertStepUpRequiredEnvelope(t, missing)
+	wrong := performStepUpRequest(t, router, http.MethodPost, path, token, crossProof, `{"reason":"done"}`)
+	assertStepUpRequiredEnvelope(t, wrong)
+	okResp := performStepUpRequest(t, router, http.MethodPost, path, token, validProof, `{"reason":"done"}`)
+	if okResp.Code != http.StatusOK {
+		t.Fatalf("matching %s proof should pass, status=%d body=%s", expected, okResp.Code, okResp.Body.String())
 	}
 }

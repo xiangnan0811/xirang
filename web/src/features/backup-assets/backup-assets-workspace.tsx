@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowRight, Database, FolderTree, PanelRight } from "lucide-react";
+import { FolderTree, PanelRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +16,7 @@ import {
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { LoadingState } from "@/components/ui/loading-state";
 import type { AuthContextValue } from "@/context/auth-context.shared";
-import type { AssetRef, BackupRepository, CatalogProjection } from "@/types/domain";
+import type { AssetRef, CatalogProjection } from "@/types/domain";
 
 import { AssetContextPanel } from "./asset-context-panel";
 import {
@@ -33,12 +33,6 @@ import { AssetOverlays } from "./asset-overlays";
 import type { BackupAssetsOverlaySection } from "./use-backup-assets-state";
 import { AssetPreview } from "./asset-preview";
 import { selectBackupAssetPreviewProduct } from "./asset-preview-model";
-import {
-  backupAssetsImmutabilityKey,
-  backupAssetsProviderKey,
-  backupAssetsVersionModeKey,
-  presentBackupAssetsCode,
-} from "./backup-assets-presenters";
 import {
   assetRefKey,
   createBackupAssetsRestorationRegistry,
@@ -60,6 +54,16 @@ const LazyExportJobPanel = lazy(() =>
 const LazyRecoveryPlanWizard = lazy(() =>
   import("./recovery-plan-wizard").then((module) => ({
     default: module.RecoveryPlanWizard,
+  }))
+);
+const LazyRepositoryManagementPanel = lazy(() =>
+  import("./repository-management-panel").then((module) => ({
+    default: module.RepositoryManagementPanel,
+  }))
+);
+const LazyRetentionPolicyPanel = lazy(() =>
+  import("./retention-policy-panel").then((module) => ({
+    default: module.RetentionPolicyPanel,
   }))
 );
 
@@ -272,7 +276,7 @@ export function BackupAssetsWorkspace({
     onRoutePatch({ entryId: undefined });
   };
 
-  if (controller.repositories.status === "blocked") {
+  if (controller.repositories.status === "blocked" || controller.repositories.status === "error") {
     return (
       <div className="min-h-[24rem] py-4">
         <InlineAlert tone="warning">
@@ -292,13 +296,31 @@ export function BackupAssetsWorkspace({
     return <LoadingState title={t("backupAssets.context.loadingRepositories")} rows={6} />;
   }
   if (controller.state.route.view === "repositories") {
+    const refreshLifecycle = () => {
+      controller.actions.refreshRepositories();
+      controller.actions.refreshRecoveryPoints();
+    };
     return (
-      <RepositoryManagementView
-        repositories={controller.repositories.items}
-        selectedRepositoryId={controller.state.route.repositoryId}
-        viewport={viewport}
-        onBrowse={(repositoryId) => onRoutePatch({ view: "browse", repositoryId })}
-      />
+      <div className="space-y-0">
+        <Suspense fallback={<LoadingState title={t("backupAssets.context.loadingRepositories")} rows={6} />}>
+          <LazyRepositoryManagementPanel
+            repositories={controller.repositories.items}
+            selectedRepositoryId={controller.state.route.repositoryId}
+            viewport={viewport}
+            onBrowse={(repositoryId) => onRoutePatch({ view: "browse", repositoryId })}
+            runtime={processingRuntime}
+            onRefresh={refreshLifecycle}
+          />
+          <LazyRetentionPolicyPanel
+            repositories={controller.repositories.items}
+            recoveryPoints={controller.recoveryPoints.items}
+            selectedRepositoryId={controller.state.route.repositoryId}
+            selectedRecoveryPointId={controller.state.route.recoveryPointId}
+            runtime={processingRuntime}
+            onRefresh={refreshLifecycle}
+          />
+        </Suspense>
+      </div>
     );
   }
 
@@ -771,194 +793,6 @@ function FilterBlockedState({
       </div>
     </div>
   );
-}
-
-function RepositoryManagementView({
-  repositories,
-  selectedRepositoryId,
-  viewport,
-  onBrowse,
-}: {
-  repositories: Array<CatalogProjection<BackupRepository>>;
-  selectedRepositoryId: string | undefined;
-  viewport: BackupAssetsViewport;
-  onBrowse: (repositoryId: string) => void;
-}) {
-  const { t } = useTranslation();
-  const availableCount = repositories.filter((repository) => repository.status === "available").length;
-
-  return (
-    <section
-      data-testid="backup-assets-workspace"
-      data-viewport={viewport}
-      aria-label={t("backupAssets.repositories.title")}
-      className="min-h-[36rem] overflow-hidden border-y border-border"
-    >
-      <div className="flex min-h-12 items-center justify-between gap-3 border-b border-border px-3 py-2">
-        <div className="min-w-0">
-          <h2 className="truncate text-sm font-semibold">{t("backupAssets.repositories.title")}</h2>
-          <p className="text-xs text-muted-foreground">
-            {t("backupAssets.repositories.summary", { count: availableCount })}
-          </p>
-        </div>
-        <Badge tone="neutral">{availableCount}</Badge>
-      </div>
-
-      {repositories.length === 0 ? (
-        <WorkspacePendingState icon={Database} text={t("backupAssets.states.noRepositories")} />
-      ) : (
-        <div className="max-h-[calc(100dvh-15rem)] overflow-y-auto">
-          {repositories.map((projection, index) => {
-            if (projection.status === "blocked") {
-              const reason = presentBackupAssetsCode("capability", projection.reason.code);
-              return (
-                <div key={`blocked-repository-${index}`} className="border-b border-border p-3">
-                  <InlineAlert tone="warning">{t(reason.translationKey)}</InlineAlert>
-                </div>
-              );
-            }
-
-            const repository = projection.value;
-            const canBrowse =
-              repository.accessActive && repository.capabilities.list && repository.catalog.permissions.list;
-            const selected = repository.id === selectedRepositoryId;
-            return (
-              <article
-                key={repository.id}
-                data-selected={selected ? "true" : "false"}
-                className={
-                  selected
-                    ? "border-b border-l-2 border-b-border border-l-primary bg-accent/20 px-3 py-4"
-                    : "border-b border-border px-3 py-4"
-                }
-              >
-                <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0 space-y-2">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <Database className="size-4 shrink-0 text-primary" aria-hidden />
-                      <h3 className="min-w-0 break-words text-sm font-medium" title={repository.displayName}>
-                        {repository.displayName}
-                      </h3>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      <Badge tone="neutral">{t(backupAssetsProviderKey(repository.providerKind))}</Badge>
-                      <Badge tone={repository.status === "online" ? "success" : "warning"}>
-                        {t(`backupAssets.codes.repositoryStatus.${repository.status}`)}
-                      </Badge>
-                      <Badge tone="info">{t(backupAssetsVersionModeKey(repository.versionMode))}</Badge>
-                      <Badge tone="neutral">{t(backupAssetsImmutabilityKey(repository.immutabilityLevel))}</Badge>
-                    </div>
-                  </div>
-                  {canBrowse ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      aria-label={t("backupAssets.repositories.browse", { name: repository.displayName })}
-                      onClick={() => onBrowse(repository.id)}
-                    >
-                      {t("backupAssets.repositories.browseShort")}
-                      <ArrowRight className="size-4" aria-hidden />
-                    </Button>
-                  ) : null}
-                </div>
-
-                <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(12rem,0.8fr)_minmax(18rem,1.1fr)_minmax(12rem,0.8fr)]">
-                  <RepositoryFactGroup
-                    title={t("backupAssets.repositories.catalogFacts")}
-                    facts={[
-                      [
-                        t("backupAssets.context.catalog"),
-                        t(`backupAssets.codes.coverage.${repository.catalog.coverage}`),
-                      ],
-                      [
-                        t("backupAssets.repositories.recoveryPointCount"),
-                        String(repository.catalog.recoveryPointCount),
-                      ],
-                      [
-                        t("backupAssets.repositories.completeCatalogCount"),
-                        String(repository.catalog.completeCatalogCount),
-                      ],
-                      [
-                        t("backupAssets.context.content"),
-                        t(
-                          repository.catalog.contentAvailability.available
-                            ? "backupAssets.repositories.available"
-                            : "backupAssets.repositories.unavailable"
-                        ),
-                      ],
-                    ]}
-                  />
-                  <RepositoryFactGroup
-                    title={t("backupAssets.repositories.capabilities")}
-                    facts={repositoryCapabilityFacts(repository, t)}
-                  />
-                  <RepositoryFactGroup
-                    title={t("backupAssets.repositories.permissions")}
-                    facts={[
-                      [t("backupAssets.repositories.permissionList"), availabilityText(repository.catalog.permissions.list, t)],
-                      [
-                        t("backupAssets.repositories.permissionPreview"),
-                        availabilityText(repository.catalog.permissions.preview, t),
-                      ],
-                      [
-                        t("backupAssets.repositories.permissionDownload"),
-                        availabilityText(repository.catalog.permissions.download, t),
-                      ],
-                    ]}
-                  />
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function RepositoryFactGroup({ title, facts }: { title: string; facts: Array<readonly [string, string]> }) {
-  return (
-    <div className="min-w-0">
-      <h4 className="mb-1.5 text-xs font-medium text-muted-foreground">{title}</h4>
-      <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 text-xs">
-        {facts.map(([label, value]) => (
-          <div key={label} className="contents">
-            <dt className="min-w-0 truncate" title={label}>
-              {label}
-            </dt>
-            <dd className="text-right text-muted-foreground">{value}</dd>
-          </div>
-        ))}
-      </dl>
-    </div>
-  );
-}
-
-function repositoryCapabilityFacts(
-  repository: BackupRepository,
-  t: (key: string) => string
-): Array<readonly [string, string]> {
-  return [
-    [t("backupAssets.repositories.capabilityList"), availabilityText(repository.capabilities.list, t)],
-    [t("backupAssets.repositories.capabilitySearch"), availabilityText(repository.capabilities.searchPath, t)],
-    [
-      t("backupAssets.repositories.capabilitySequential"),
-      availabilityText(repository.capabilities.openSequential, t),
-    ],
-    [t("backupAssets.repositories.capabilityRange"), availabilityText(repository.capabilities.openRange, t)],
-    [t("backupAssets.repositories.capabilityDownload"), availabilityText(repository.capabilities.download, t)],
-    [t("backupAssets.repositories.capabilityRestore"), availabilityText(repository.capabilities.restore, t)],
-    [t("backupAssets.repositories.capabilityDiff"), availabilityText(repository.capabilities.diff, t)],
-    [
-      t("backupAssets.repositories.capabilityHistory"),
-      availabilityText(repository.capabilities.nativeHistory, t),
-    ],
-  ];
-}
-
-function availabilityText(available: boolean, t: (key: string) => string): string {
-  return t(available ? "backupAssets.repositories.available" : "backupAssets.repositories.unavailable");
 }
 
 function findAvailable<T extends { id: string }>(

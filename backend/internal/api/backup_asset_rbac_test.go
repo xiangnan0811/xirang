@@ -194,6 +194,65 @@ func TestBackupAssetRBACUsesAuthAndExactRepositoryPermissionsBeforeFeatureGate(t
 	}
 }
 
+func TestBackupLifecycleRBACRequiresAdminManageAndPurgeBeforeFeatureGate(t *testing.T) {
+	fixture := setupBackupAssetRBACFixture(t)
+	const repositoryID = "0123456789abcdef0123456789abcdef"
+	const policyID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const pointID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const holdID = "cccccccccccccccccccccccccccccccc"
+	const candidateID = "dddddddddddddddddddddddddddddddd"
+	routes := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		purge  bool
+	}{
+		{name: "policy list", method: http.MethodGet, path: "/api/v1/backup-retention-policies"},
+		{name: "policy create", method: http.MethodPost, path: "/api/v1/backup-retention-policies", body: `{"scope_kind":"repository","scope_id":"` + repositoryID + `","rules":{"version":1,"age":{"keep_days":7}}}`},
+		{name: "policy update", method: http.MethodPatch, path: "/api/v1/backup-retention-policies/" + policyID, body: `{"expected_revision":1,"rules":{"version":1,"age":{"keep_days":7}}}`},
+		{name: "policy delete", method: http.MethodDelete, path: "/api/v1/backup-retention-policies/" + policyID, body: `{"expected_revision":1}`},
+		{name: "policy impact", method: http.MethodPost, path: "/api/v1/backup-retention-policies/" + policyID + "/impact", body: `{"expected_revision":1}`},
+		{name: "hold list", method: http.MethodGet, path: "/api/v1/recovery-points/" + pointID + "/holds"},
+		{name: "hold create", method: http.MethodPost, path: "/api/v1/recovery-points/" + pointID + "/holds", body: `{"hold_type":"legal","reason":"legal"}`},
+		{name: "hold release", method: http.MethodPost, path: "/api/v1/recovery-points/" + pointID + "/holds/" + holdID + "/release", body: `{"reason":"done"}`},
+		{name: "import scan", method: http.MethodPost, path: "/api/v1/backup-repositories/" + repositoryID + "/import-scans", body: `{"limit":1}`},
+		{name: "import list", method: http.MethodGet, path: "/api/v1/backup-repositories/" + repositoryID + "/import-candidates"},
+		{name: "import review", method: http.MethodPost, path: "/api/v1/backup-repositories/" + repositoryID + "/import-candidates/" + candidateID + "/reviews", body: `{"decision":"rejected"}`},
+		{name: "rebuild", method: http.MethodPost, path: "/api/v1/backup-repositories/" + repositoryID + "/rebuilds", body: `{"limit":1}`},
+		{name: "purge preview", method: http.MethodPost, path: "/api/v1/backup-repositories/" + repositoryID + "/purge-preview", body: `{"items":[{"recovery_point_id":"` + pointID + `","point_revision":1,"capability_revision":1}]}`, purge: true},
+		{name: "purge plan", method: http.MethodPost, path: "/api/v1/backup-repositories/" + repositoryID + "/purge-plans", body: `{"expected_impact_revision":1,"items":[{"recovery_point_id":"` + pointID + `","point_revision":1,"capability_revision":1}]}`, purge: true},
+		{name: "purge execute", method: http.MethodPost, path: "/api/v1/backup-repositories/" + repositoryID + "/purges", body: `{"plan_id":"` + policyID + `","expected_revision":1,"expected_impact_revision":1,"reason":"retire"}`, purge: true},
+	}
+	for _, route := range routes {
+		t.Run(route.name+"/unauthenticated", func(t *testing.T) {
+			response := performBackupAssetRBACRequest(t, fixture, route.method, route.path, route.body, "")
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+		for _, role := range []string{"admin", "operator", "viewer", "unknown"} {
+			role := role
+			t.Run(route.name+"/"+role, func(t *testing.T) {
+				response := performBackupAssetRBACRequest(t, fixture, route.method, route.path, route.body, fixture.tokens[role])
+				expected := http.StatusForbidden
+				if role == "admin" {
+					expected = http.StatusServiceUnavailable
+					if route.name == "hold release" || route.name == "purge execute" {
+						expected = http.StatusForbidden
+					}
+				}
+				if response.Code != expected {
+					t.Fatalf("status=%d want=%d body=%s", response.Code, expected, response.Body.String())
+				}
+				if expected == http.StatusServiceUnavailable && !strings.Contains(response.Body.String(), "feature_disabled") {
+					t.Fatalf("authorized request did not reach feature gate: %s", response.Body.String())
+				}
+			})
+		}
+	}
+}
+
 func TestCatalogRoutesRequireAssetListPermissionBeforeFeatureGate(t *testing.T) {
 	fixture := setupBackupAssetRBACFixture(t)
 	const repositoryID = "0123456789abcdef0123456789abcdef"

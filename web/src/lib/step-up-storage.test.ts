@@ -27,6 +27,21 @@ describe("step-up proof storage", () => {
     expect(localStorage.getItem("xirang-step-up-proofs-v2")).toBeNull();
   });
 
+  it("isolates retention hold release from repository purge", () => {
+    const now = Date.now();
+    expect(STEP_UP_ACTIONS.retentionHoldRelease).toBe("retention.hold_release");
+
+    saveStepUpProof(STEP_UP_ACTIONS.retentionHoldRelease, "hold-proof", now + 60_000);
+    saveStepUpProof(STEP_UP_ACTIONS.repositoryPurge, "purge-proof", now + 60_000);
+
+    expect(readStepUpProof(STEP_UP_ACTIONS.retentionHoldRelease, now)?.proof).toBe("hold-proof");
+    expect(readStepUpProof(STEP_UP_ACTIONS.repositoryPurge, now)?.proof).toBe("purge-proof");
+
+    clearStepUpProof(STEP_UP_ACTIONS.retentionHoldRelease);
+    expect(readStepUpProof(STEP_UP_ACTIONS.retentionHoldRelease, now)).toBeNull();
+    expect(readStepUpProof(STEP_UP_ACTIONS.repositoryPurge, now)?.proof).toBe("purge-proof");
+  });
+
   it("expires one action without clearing another", () => {
     const now = Date.now();
     saveStepUpProof(STEP_UP_ACTIONS.terminalOpen, "terminal-proof", now + 1_000);

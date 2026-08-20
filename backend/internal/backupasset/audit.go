@@ -92,21 +92,65 @@ func resolveAuditConfig(source AuditConfigSource) (AuditConfig, error) {
 }
 
 func (writer *AuditWriter) Write(ctx context.Context, input AuditEventInput) (model.BackupAssetAuditEvent, error) {
-	if writer == nil || writer.db == nil || writer.keyring == nil {
-		return model.BackupAssetAuditEvent{}, fmt.Errorf("%w: audit writer is unavailable", ErrInvalidState)
-	}
-	config, configErr := resolveAuditConfig(writer.configSource)
-	if configErr != nil {
-		return model.BackupAssetAuditEvent{}, configErr
-	}
-	prepared, err := NewAuditEvent(input)
+	record, prepared, config, err := writer.prepareWrite(ctx, input)
 	if err != nil {
 		return model.BackupAssetAuditEvent{}, err
 	}
 
+	auditWriterMu.Lock()
+	defer auditWriterMu.Unlock()
+
+	var lastErr error
+	for attempt := 0; attempt < maxAuditWriteAttempts; attempt++ {
+		candidate := record
+		candidate.ID = 0
+		candidate.SegmentNo = 0
+		candidate.SegmentSequence = 0
+		candidate.PrevHash = ""
+		candidate.EntryHash = ""
+		err = writer.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			return writer.writeTransaction(tx, &candidate, config)
+		})
+		if err == nil {
+			return candidate, nil
+		}
+		lastErr = err
+		if !retryableAuditWrite(err) {
+			break
+		}
+	}
+	writer.logWriteFailure(prepared, lastErr)
+	return model.BackupAssetAuditEvent{}, fmt.Errorf("write backup asset audit event: %w", lastErr)
+}
+
+func (writer *AuditWriter) WriteTx(ctx context.Context, tx *gorm.DB, input AuditEventInput) error {
+	if tx == nil {
+		return fmt.Errorf("%w: audit transaction is unavailable", ErrInvalidState)
+	}
+	record, _, config, err := writer.prepareWrite(ctx, input)
+	if err != nil {
+		return err
+	}
+	auditWriterMu.Lock()
+	defer auditWriterMu.Unlock()
+	return writer.writeTransaction(tx.WithContext(ctx), &record, config)
+}
+
+func (writer *AuditWriter) prepareWrite(ctx context.Context, input AuditEventInput) (model.BackupAssetAuditEvent, AuditEvent, AuditConfig, error) {
+	if writer == nil || writer.db == nil || writer.keyring == nil {
+		return model.BackupAssetAuditEvent{}, AuditEvent{}, AuditConfig{}, fmt.Errorf("%w: audit writer is unavailable", ErrInvalidState)
+	}
+	config, configErr := resolveAuditConfig(writer.configSource)
+	if configErr != nil {
+		return model.BackupAssetAuditEvent{}, AuditEvent{}, AuditConfig{}, configErr
+	}
+	prepared, err := NewAuditEvent(input)
+	if err != nil {
+		return model.BackupAssetAuditEvent{}, AuditEvent{}, AuditConfig{}, err
+	}
 	fieldsJSON, err := marshalAuditFields(prepared.Fields)
 	if err != nil {
-		return model.BackupAssetAuditEvent{}, err
+		return model.BackupAssetAuditEvent{}, AuditEvent{}, AuditConfig{}, err
 	}
 	record := model.BackupAssetAuditEvent{
 		ActorUserID:     prepared.Actor.UserID,
@@ -135,7 +179,7 @@ func (writer *AuditWriter) Write(ctx context.Context, input AuditEventInput) (mo
 	if prepared.fingerprints.Path != "" || prepared.fingerprints.Query != "" {
 		material, keyErr := writer.keyring.Ensure(ctx, KeyDomainAuditFingerprint)
 		if keyErr != nil {
-			return model.BackupAssetAuditEvent{}, keyErr
+			return model.BackupAssetAuditEvent{}, AuditEvent{}, AuditConfig{}, keyErr
 		}
 		version := material.Version
 		record.FingerprintKeyVersion = &version
@@ -146,31 +190,7 @@ func (writer *AuditWriter) Write(ctx context.Context, input AuditEventInput) (mo
 			record.QueryFingerprint = computeAuditFingerprint(material.Key, "query", prepared.fingerprints.Query)
 		}
 	}
-
-	auditWriterMu.Lock()
-	defer auditWriterMu.Unlock()
-
-	var lastErr error
-	for attempt := 0; attempt < maxAuditWriteAttempts; attempt++ {
-		candidate := record
-		candidate.ID = 0
-		candidate.SegmentNo = 0
-		candidate.SegmentSequence = 0
-		candidate.PrevHash = ""
-		candidate.EntryHash = ""
-		err = writer.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			return writer.writeTransaction(tx, &candidate, config)
-		})
-		if err == nil {
-			return candidate, nil
-		}
-		lastErr = err
-		if !retryableAuditWrite(err) {
-			break
-		}
-	}
-	writer.logWriteFailure(prepared, lastErr)
-	return model.BackupAssetAuditEvent{}, fmt.Errorf("write backup asset audit event: %w", lastErr)
+	return record, prepared, config, nil
 }
 
 func (writer *AuditWriter) writeTransaction(tx *gorm.DB, record *model.BackupAssetAuditEvent, config AuditConfig) error {

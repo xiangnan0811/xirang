@@ -533,7 +533,7 @@ func (service *PublicationService) commitReconciledRcloneManifest(
 			return err
 		}
 		locator, err := decodeManagedRclonePointLocator(point.EncryptedProviderLocator)
-		if err != nil || locator != claim.locator || point.ManifestDigest != fact.Commit.ManifestIndexDigest ||
+		if err != nil || !sameManagedRclonePointLocator(locator, claim.locator) || point.ManifestDigest != fact.Commit.ManifestIndexDigest ||
 			point.EntryCount != int64(fact.Commit.ManifestEntryCount) || point.LogicalBytes != int64(fact.Commit.LogicalBytes) {
 			return fmt.Errorf("%w: managed Rclone verifying point evidence changed", backupasset.ErrConflict)
 		}

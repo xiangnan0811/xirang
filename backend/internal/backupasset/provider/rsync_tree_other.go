@@ -2,6 +2,8 @@
 
 package provider
 
+import "context"
+
 func openRsyncManagedTree(string) (*rsyncManagedTree, error) {
 	return nil, errRsyncManagedTreeUnsupported
 }
@@ -54,4 +56,7 @@ func (*rsyncManagedTree) validateLocalSourceRoot(string) (string, error) {
 }
 func (*rsyncManagedTree) capacitySnapshot() (rsyncTreeCapacitySnapshot, error) {
 	return rsyncTreeCapacitySnapshot{}, errRsyncManagedTreeUnsupported
+}
+func (*rsyncManagedTree) DeleteCommittedPoint(context.Context, string) error {
+	return errRsyncManagedTreeUnsupported
 }

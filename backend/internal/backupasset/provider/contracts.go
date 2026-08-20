@@ -105,6 +105,7 @@ type ReadSnapshot struct {
 	RepositoryID       string
 	CapabilityRevision int
 	SourceRevision     string
+	RepositoryIdentity string        `json:"-"`
 	Access             AccessBinding `json:"-"`
 }
 

@@ -1095,6 +1095,10 @@ type recoveryWorkerCanceler interface {
 	CancelJob(context.Context, string) error
 }
 
+type recoveryPointSourceCanceler interface {
+	CancelRecoveryPoint(context.Context, backupasset.SourceLifecycleRequest, string) error
+}
+
 type recoveryPermanentCleanupKeyReconciler interface {
 	ReconcilePermanentCleanupKeyLoss(context.Context) (int, error)
 }
@@ -4706,6 +4710,195 @@ func TestWorkerCancelAfterMutationArmRevokesPermitAndHandsWorkspaceToCleanup(t *
 	}
 	if activeSource != 0 || activeNode != 0 {
 		t.Fatalf("canceled worker retained active source/node leases=%d/%d", activeSource, activeNode)
+	}
+}
+
+func TestRecoveryWorkerCancelRecoveryPointPreservesQueuedRunningAndMutationArmedSemantics(t *testing.T) {
+	testCases := []struct {
+		name               string
+		claim              bool
+		armMutation        bool
+		wantJobState       JobState
+		wantWorkspacePhase WorkspacePhase
+		wantFailure        string
+	}{
+		{name: "queued", wantJobState: JobStateCanceled, wantWorkspacePhase: WorkspacePhaseNone},
+		{name: "running", claim: true, wantJobState: JobStateCanceled, wantWorkspacePhase: WorkspacePhaseNone},
+		{
+			name: "mutation armed", claim: true, armMutation: true,
+			wantJobState: JobStateNeedsAttention, wantWorkspacePhase: WorkspacePhaseCleanupDue,
+			wantFailure: recoveryCancellationAfterMutationArmFailureCategory,
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newRecoveryExecutionFixture(t)
+			executed, err := fixture.service.Authorize(context.Background(), fixture.request)
+			if err != nil {
+				t.Fatalf("execute recovery fixture: %v", err)
+			}
+			coordinator := newRecoveryWorkerCoordinator(t, fixture)
+			canceler, ok := any(coordinator).(recoveryPointSourceCanceler)
+			if !ok {
+				t.Fatal("recovery worker does not provide a typed source-scoped cancellation handoff")
+			}
+			if testCase.claim {
+				claim, found, claimErr := coordinator.ClaimNext(context.Background(), "source-cancel-"+strings.ReplaceAll(testCase.name, " ", "-"))
+				if claimErr != nil || !found || claim.JobID != executed.JobID {
+					t.Fatalf("claim source cancellation job: job_id=%q attempt_id=%q found=%t err=%v",
+						claim.JobID, claim.AttemptID, found, claimErr)
+				}
+				if testCase.armMutation {
+					if _, err := coordinator.PrepareFirstWrite(context.Background(), claim); err != nil {
+						t.Fatalf("arm Recovery mutation: %v", err)
+					}
+				}
+			}
+
+			var beforeJob model.BackupAssetRecoveryJob
+			if err := fixture.db.Where("id = ?", executed.JobID).Take(&beforeJob).Error; err != nil {
+				t.Fatal(err)
+			}
+			var plan model.BackupAssetRecoveryPlan
+			if err := fixture.db.Where("id = ?", beforeJob.PlanID).Take(&plan).Error; err != nil {
+				t.Fatal(err)
+			}
+			var beforeAttempt model.BackupAssetRecoveryAttempt
+			if err := fixture.db.Where("job_id = ? AND state IN ?", beforeJob.ID,
+				[]string{string(AttemptStateClaimed), string(AttemptStateRunning)}).
+				Order("created_at DESC, id DESC").Take(&beforeAttempt).Error; err != nil {
+				t.Fatal(err)
+			}
+			var beforeSource model.RecoveryPointLease
+			if err := fixture.db.Where("holder_type = ? AND owner_id = ? AND attempt_id = ? AND status = ?",
+				backupasset.LeaseHolderRecoveryJob, beforeJob.ID, beforeAttempt.ID, backupasset.LeaseActive).
+				Take(&beforeSource).Error; err != nil {
+				t.Fatal(err)
+			}
+			cleanupBefore := recoveryWorkspaceCleanupTupleForTest(beforeJob)
+			resultSetBefore, resultBefore := seedRecoverySourceCancellationResults(t, fixture, beforeJob.ID)
+			request := seedRecoverySourceLifecycleRequest(t, fixture.db, plan.RecoveryPointID)
+
+			if err := canceler.CancelRecoveryPoint(context.Background(), request, beforeJob.ID); err != nil {
+				t.Fatalf("typed source cancellation: %v", err)
+			}
+			if err := canceler.CancelRecoveryPoint(context.Background(), request, beforeJob.ID); err != nil {
+				t.Fatalf("idempotent typed source cancellation: %v", err)
+			}
+
+			var afterJob model.BackupAssetRecoveryJob
+			if err := fixture.db.Where("id = ?", beforeJob.ID).Take(&afterJob).Error; err != nil {
+				t.Fatal(err)
+			}
+			if JobState(afterJob.State) != testCase.wantJobState ||
+				WorkspacePhase(afterJob.WorkspacePhase) != testCase.wantWorkspacePhase ||
+				afterJob.FailureCategory != testCase.wantFailure {
+				t.Fatalf("typed source cancellation job outcome state=%q workspace=%q failure=%q",
+					afterJob.State, afterJob.WorkspacePhase, afterJob.FailureCategory)
+			}
+			if cleanupAfter := recoveryWorkspaceCleanupTupleForTest(afterJob); cleanupAfter != cleanupBefore {
+				t.Fatalf("typed source cancellation changed workspace cleanup tuple: before_phase=%q after_phase=%q phase_preserved=%t owner_present_before=%t owner_present_after=%t owner_preserved=%t expiry_present_before=%t expiry_present_after=%t expiry_preserved=%t fence_present_before=%t fence_present_after=%t fence_preserved=%t node_lease_present_before=%t node_lease_present_after=%t node_lease_preserved=%t node_fence_present_before=%t node_fence_present_after=%t node_fence_preserved=%t attempt_present_before=%t attempt_present_after=%t attempt_preserved=%t",
+					cleanupBefore.phase, cleanupAfter.phase, cleanupAfter.phase == cleanupBefore.phase,
+					cleanupBefore.owner != "", cleanupAfter.owner != "", cleanupAfter.owner == cleanupBefore.owner,
+					cleanupBefore.leaseExpiresAt != "", cleanupAfter.leaseExpiresAt != "", cleanupAfter.leaseExpiresAt == cleanupBefore.leaseExpiresAt,
+					cleanupBefore.fence != 0, cleanupAfter.fence != 0, cleanupAfter.fence == cleanupBefore.fence,
+					cleanupBefore.nodeLeaseID != "", cleanupAfter.nodeLeaseID != "", cleanupAfter.nodeLeaseID == cleanupBefore.nodeLeaseID,
+					cleanupBefore.nodeFence != 0, cleanupAfter.nodeFence != 0, cleanupAfter.nodeFence == cleanupBefore.nodeFence,
+					cleanupBefore.attempt != 0, cleanupAfter.attempt != 0, cleanupAfter.attempt == cleanupBefore.attempt)
+			}
+			var afterAttempt model.BackupAssetRecoveryAttempt
+			if err := fixture.db.Where("id = ?", beforeAttempt.ID).Take(&afterAttempt).Error; err != nil {
+				t.Fatal(err)
+			}
+			if AttemptState(afterAttempt.State) != AttemptStateCanceled || afterAttempt.ClosedAt == nil {
+				t.Fatalf("typed source cancellation attempt state=%q closed=%t", afterAttempt.State, afterAttempt.ClosedAt != nil)
+			}
+			var afterSource model.RecoveryPointLease
+			if err := fixture.db.Where("id = ?", beforeSource.ID).Take(&afterSource).Error; err != nil {
+				t.Fatal(err)
+			}
+			if afterSource.RecoveryPointID != plan.RecoveryPointID ||
+				afterSource.Status != string(backupasset.LeaseReleased) || afterSource.ReleasedAt == nil {
+				t.Fatalf("typed source cancellation source lease point=%q status=%q released=%t",
+					afterSource.RecoveryPointID, afterSource.Status, afterSource.ReleasedAt != nil)
+			}
+			assertRecoverySourceCancellationResultsUnchanged(t, fixture.db, resultSetBefore, resultBefore)
+		})
+	}
+}
+
+type recoveryWorkspaceCleanupTuple struct {
+	phase          string
+	owner          string
+	leaseExpiresAt string
+	fence          uint64
+	nodeLeaseID    string
+	nodeFence      uint64
+	attempt        uint64
+}
+
+func recoveryWorkspaceCleanupTupleForTest(job model.BackupAssetRecoveryJob) recoveryWorkspaceCleanupTuple {
+	return recoveryWorkspaceCleanupTuple{
+		phase: job.WorkspaceCleanupPhase, owner: job.WorkspaceCleanupOwner,
+		leaseExpiresAt: recoverySourceCancellationTime(job.WorkspaceCleanupLeaseExpiresAt),
+		fence:          job.WorkspaceCleanupFence,
+		nodeLeaseID:    recoverySourceCancellationString(job.WorkspaceCleanupNodeLeaseID),
+		nodeFence:      job.WorkspaceCleanupNodeFence,
+		attempt:        job.WorkspaceCleanupAttempt,
+	}
+}
+
+func seedRecoverySourceCancellationResults(
+	t *testing.T,
+	fixture *authorizationReceiptServiceFixture,
+	jobID string,
+) (model.BackupAssetRecoveryResultSet, model.BackupAssetRecoveryResult) {
+	t.Helper()
+	resultSet := model.BackupAssetRecoveryResultSet{
+		ID: strings.Repeat("d", 32), JobID: jobID, State: string(ResultSetStateReady),
+		MarkerBindingDigest: strings.Repeat("a", 64), PlaintextDeadline: fixture.now.AddDate(0, 0, 1),
+		HardDeadline: fixture.now.AddDate(0, 0, 2), CleanupPhase: string(CleanupPhaseClaimed),
+	}
+	if err := fixture.db.Create(&resultSet).Error; err != nil {
+		t.Fatalf("seed RecoveryResult set: %v", err)
+	}
+	result := model.BackupAssetRecoveryResult{
+		ID: strings.Repeat("e", 32), ResultSetID: resultSet.ID, JobID: jobID,
+		ResultKind: string(RecoveryResultKindRegularFile), Classification: "private",
+		ClassificationRevision: 1, ClassificationSourceRevision: 1,
+		EncryptedRelativeLocator: "results/private", LocatorDigest: strings.Repeat("b", 64),
+	}
+	if err := fixture.db.Create(&result).Error; err != nil {
+		t.Fatalf("seed RecoveryResult: %v", err)
+	}
+	return resultSet, result
+}
+
+func assertRecoverySourceCancellationResultsUnchanged(
+	t *testing.T,
+	db *gorm.DB,
+	wantResultSet model.BackupAssetRecoveryResultSet,
+	wantResult model.BackupAssetRecoveryResult,
+) {
+	t.Helper()
+	var resultSet model.BackupAssetRecoveryResultSet
+	if err := db.Where("id = ?", wantResultSet.ID).Take(&resultSet).Error; err != nil {
+		t.Fatal(err)
+	}
+	if resultSet.State != wantResultSet.State || resultSet.CleanupPhase != wantResultSet.CleanupPhase ||
+		resultSet.CleanupOwner != wantResultSet.CleanupOwner || resultSet.CleanupFence != wantResultSet.CleanupFence ||
+		resultSet.NodeFence != wantResultSet.NodeFence || resultSet.CleanupAttempt != wantResultSet.CleanupAttempt ||
+		recoverySourceCancellationString(resultSet.NodeLeaseID) != recoverySourceCancellationString(wantResultSet.NodeLeaseID) ||
+		recoverySourceCancellationTime(resultSet.CleanupLeaseExpiresAt) != recoverySourceCancellationTime(wantResultSet.CleanupLeaseExpiresAt) {
+		t.Fatalf("typed source cancellation changed RecoveryResult set cleanup tuple")
+	}
+	var result model.BackupAssetRecoveryResult
+	if err := db.Where("id = ?", wantResult.ID).Take(&result).Error; err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != wantResult.ID || result.ResultSetID != wantResult.ResultSetID ||
+		result.JobID != wantResult.JobID || result.LocatorDigest != wantResult.LocatorDigest {
+		t.Fatalf("typed source cancellation changed RecoveryResult identity")
 	}
 }
 

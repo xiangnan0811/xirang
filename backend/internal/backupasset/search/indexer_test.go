@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -37,6 +38,309 @@ func TestIndexerZeroDocumentProjectionActivatesAtomically(t *testing.T) {
 	if documents != 0 {
 		t.Fatalf("zero Catalog produced %d search documents", documents)
 	}
+}
+
+func TestIndexerCancellationWaitsForUnifiedBoundedTeardown(t *testing.T) {
+	_, harness := newIndexerTestHarness(t)
+	pointID, _ := harness.seedCatalog(t, []model.CatalogEntry{{
+		EntryID: strings.Repeat("c", 64), NormalizedPath: "report.txt", Name: "report.txt", EntryType: "file",
+	}})
+
+	projectionStarted := make(chan struct{})
+	projectionCanceled := make(chan struct{})
+	allowProjectionJoin := make(chan struct{})
+	projectionJoined := make(chan struct{})
+	failureWriteStarted := make(chan struct{})
+	failurePersisted := make(chan struct{})
+	finalReleaseStarted := make(chan struct{})
+	allowFinalRelease := make(chan struct{})
+	var projectionOnce sync.Once
+	var failureStartOnce sync.Once
+	var failurePersistOnce sync.Once
+	var projectionGateOnce sync.Once
+	var releaseGateOnce sync.Once
+	var projectionErrorInjected atomic.Bool
+	releaseProjection := func() { projectionGateOnce.Do(func() { close(allowProjectionJoin) }) }
+	releaseFinalLease := func() { releaseGateOnce.Do(func() { close(allowFinalRelease) }) }
+	t.Cleanup(releaseProjection)
+	t.Cleanup(releaseFinalLease)
+
+	const projectionCallback = "search:test_unified_teardown_projection"
+	if err := harness.db.Callback().Query().Before("gorm:query").Register(projectionCallback, func(tx *gorm.DB) {
+		if gormCallbackTable(tx) != (model.CatalogEntry{}).TableName() {
+			return
+		}
+		projectionOnce.Do(func() {
+			close(projectionStarted)
+			<-tx.Statement.Context.Done()
+			close(projectionCanceled)
+			<-allowProjectionJoin
+			close(projectionJoined)
+			if err := tx.AddError(tx.Statement.Context.Err()); errors.Is(err, context.Canceled) {
+				projectionErrorInjected.Store(true)
+			}
+		})
+	}); err != nil {
+		t.Fatalf("register projection barrier: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := harness.db.Callback().Query().Remove(projectionCallback); err != nil {
+			t.Errorf("remove projection barrier: %v", err)
+		}
+	})
+
+	var failureContextBounded atomic.Bool
+	var failureContextUsable atomic.Bool
+	const failureBeforeCallback = "search:test_unified_teardown_failure_before"
+	if err := harness.db.Callback().Update().Before("gorm:update").Register(failureBeforeCallback, func(tx *gorm.DB) {
+		if gormCallbackTable(tx) != (model.BackupAssetSearchGeneration{}).TableName() || !testSignalClosed(projectionJoined) {
+			return
+		}
+		failureStartOnce.Do(func() {
+			_, bounded := tx.Statement.Context.Deadline()
+			failureContextBounded.Store(bounded)
+			failureContextUsable.Store(tx.Statement.Context.Err() == nil)
+			close(failureWriteStarted)
+		})
+	}); err != nil {
+		t.Fatalf("register failure deadline observer: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := harness.db.Callback().Update().Remove(failureBeforeCallback); err != nil {
+			t.Errorf("remove failure deadline observer: %v", err)
+		}
+	})
+	const failureAfterCallback = "search:test_unified_teardown_failure_after"
+	if err := harness.db.Callback().Update().After("gorm:update").Register(failureAfterCallback, func(tx *gorm.DB) {
+		if gormCallbackTable(tx) == (model.BackupAssetSearchGeneration{}).TableName() && testSignalClosed(failureWriteStarted) {
+			failurePersistOnce.Do(func() { close(failurePersisted) })
+		}
+	}); err != nil {
+		t.Fatalf("register failure persistence observer: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := harness.db.Callback().Update().Remove(failureAfterCallback); err != nil {
+			t.Errorf("remove failure persistence observer: %v", err)
+		}
+	})
+
+	lease := &searchTeardownLeaseProbe{
+		now: harness.now, projectionJoined: projectionJoined, failurePersisted: failurePersisted,
+		finalReleaseStarted: finalReleaseStarted, allowFinalRelease: allowFinalRelease,
+	}
+	indexer, err := NewIndexer(IndexerDependencies{
+		DB: harness.db, Lease: lease, Keys: harness.ring,
+		Now: func() time.Time { return harness.now }, Config: standardIndexerConfig(),
+	})
+	if err != nil {
+		t.Fatalf("NewIndexer: %v", err)
+	}
+
+	type buildOutcome struct {
+		err error
+	}
+	buildDone := make(chan buildOutcome, 1)
+	go func() {
+		_, buildErr := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID})
+		buildDone <- buildOutcome{err: buildErr}
+	}()
+	waitForIndexerTestSignal(t, projectionStarted, "projection start")
+
+	indexer.attemptsMu.Lock()
+	attempt, registered := indexer.attempts[pointID]
+	indexer.attemptsMu.Unlock()
+	if !registered {
+		releaseProjection()
+		releaseFinalLease()
+		t.Fatal("Search build was not registered before projection")
+	}
+
+	ownerCtx, cancelOwner := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	ownerDone := make(chan error, 1)
+	go func() { ownerDone <- indexer.cancelAndJoinActiveBuild(ownerCtx, pointID) }()
+	waitForIndexerTestSignal(t, projectionCanceled, "projection cancellation")
+	var ownerErr error
+	select {
+	case ownerErr = <-ownerDone:
+	case <-time.After(time.Second):
+		releaseProjection()
+		releaseFinalLease()
+		t.Fatal("Search cancellation owner exceeded its deadline")
+	}
+	cancelOwner()
+
+	releaseProjection()
+	waitForIndexerTestSignal(t, projectionJoined, "projection join")
+	waitForIndexerTestSignal(t, failureWriteStarted, "failure evidence start")
+	waitForIndexerTestSignal(t, failurePersisted, "durable failure evidence")
+	waitForIndexerTestSignal(t, finalReleaseStarted, "final lease release")
+
+	var failedGeneration model.BackupAssetSearchGeneration
+	if err := harness.db.Where("recovery_point_id = ?", pointID).Take(&failedGeneration).Error; err != nil {
+		releaseFinalLease()
+		t.Fatalf("load failed Search generation: %v", err)
+	}
+	failureDurable := failedGeneration.State == string(SearchGenerationFailed) && failedGeneration.ErrorCode != ""
+	doneClosedBeforeRelease := testSignalClosed(attempt.done)
+	registeredDuringRelease := indexer.activeBuildExists(pointID)
+
+	secondOwnerCtx, cancelSecondOwner := context.WithTimeout(context.Background(), time.Second)
+	defer cancelSecondOwner()
+	secondOwnerDone := make(chan error, 1)
+	go func() { secondOwnerDone <- indexer.cancelAndJoinActiveBuild(secondOwnerCtx, pointID) }()
+	secondOwnerReturnedEarly := false
+	secondOwnerCompleted := false
+	select {
+	case <-secondOwnerDone:
+		secondOwnerReturnedEarly = true
+		secondOwnerCompleted = true
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	releaseObservations := lease.snapshotReleases()
+	releaseFinalLease()
+	var buildErr error
+	select {
+	case outcome := <-buildDone:
+		buildErr = outcome.err
+	case <-time.After(time.Second):
+		t.Fatal("Search build did not finish after final release")
+	}
+	if !secondOwnerCompleted {
+		select {
+		case <-secondOwnerDone:
+		case <-time.After(time.Second):
+			t.Fatal("second cancellation owner did not join completed teardown")
+		}
+	}
+
+	if !errors.Is(ownerErr, context.DeadlineExceeded) {
+		t.Errorf("cancellation owner error=%v, want bounded deadline", ownerErr)
+	}
+	if !errors.Is(buildErr, context.Canceled) {
+		t.Errorf("Build error=%v, want cancellation", buildErr)
+	}
+	if !projectionErrorInjected.Load() {
+		t.Error("projection barrier did not inject the expected cancellation error")
+	}
+	if !failureContextBounded.Load() || !failureContextUsable.Load() {
+		t.Errorf("failure evidence context bounded=%t usable=%t, want finite detached context", failureContextBounded.Load(), failureContextUsable.Load())
+	}
+	if !failureDurable {
+		t.Errorf("failure evidence state=%q code_present=%t, want durable terminal failure", failedGeneration.State, failedGeneration.ErrorCode != "")
+	}
+	if len(releaseObservations) != 1 {
+		t.Errorf("lease release calls=%d, want exactly one unified release", len(releaseObservations))
+	}
+	for releaseIndex, observation := range releaseObservations {
+		if !observation.exactFence || !observation.afterProjectionJoin || !observation.afterFailureEvidence ||
+			!observation.contextBounded || !observation.contextUsable {
+			t.Errorf("lease release call=%d exact=%t after_projection_join=%t after_failure=%t bounded=%t usable=%t, want all true",
+				releaseIndex+1,
+				observation.exactFence, observation.afterProjectionJoin, observation.afterFailureEvidence,
+				observation.contextBounded, observation.contextUsable)
+		}
+	}
+	if doneClosedBeforeRelease || !registeredDuringRelease {
+		t.Errorf("release barrier done_closed=%t registered=%t, want done open and build registered until release completes",
+			doneClosedBeforeRelease, registeredDuringRelease)
+	}
+	if secondOwnerReturnedEarly {
+		t.Error("cancellation owner returned while final lease release was blocked")
+	}
+	if !testSignalClosed(attempt.done) || indexer.activeBuildExists(pointID) {
+		t.Error("Search build did not close done and unregister after unified teardown")
+	}
+}
+
+func TestLifecycleLateOutputRejectsSearchGenerationCreation(t *testing.T) {
+	indexer, harness := newIndexerTestHarness(t)
+	pointID, _ := harness.seedCatalog(t, nil)
+	attempt := model.RecoveryPointLifecycleAttempt{
+		ID: strings.Repeat("e", 32), RecoveryPointID: pointID,
+		Operation: string(backupasset.LifecycleRetentionExpire), Phase: string(backupasset.LifecyclePhaseRevoking),
+	}
+	if err := harness.db.Create(&attempt).Error; err != nil {
+		t.Fatalf("seed lifecycle attempt: %v", err)
+	}
+	if _, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID}); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("late Search generation error=%v, want ErrConflict", err)
+	}
+	var generations int64
+	if err := harness.db.Model(&model.BackupAssetSearchGeneration{}).Where("recovery_point_id = ?", pointID).Count(&generations).Error; err != nil || generations != 0 {
+		t.Fatalf("late Search generation count=%d err=%v, want zero", generations, err)
+	}
+}
+
+func TestIndexerBeginGenerationRejectsStaleOrReleasedFenceWithoutDurableGeneration(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		lease func(*indexerTestHarness) SearchLease
+	}{
+		{
+			name: "stale",
+			lease: func(harness *indexerTestHarness) SearchLease {
+				return &indexerLeaseFake{
+					now: harness.now,
+					validate: func(tx *gorm.DB, fence backupasset.LeaseFence) error {
+						if err := assertNoSearchGenerationBeforeFenceValidation(tx, fence.RecoveryPointID); err != nil {
+							return err
+						}
+						return backupasset.ErrLeaseFenceLost
+					},
+				}
+			},
+		},
+		{
+			name: "released",
+			lease: func(harness *indexerTestHarness) SearchLease {
+				service, err := backupasset.NewLeaseService(
+					harness.db,
+					func() time.Time { return harness.now },
+					backupasset.LeaseConfig{Duration: 5 * time.Minute, Heartbeat: time.Minute, AbsoluteDeadline: time.Hour},
+				)
+				if err != nil {
+					t.Fatalf("new released-fence lease service: %v", err)
+				}
+				return &releaseBeforeSearchFenceValidation{delegate: service}
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, harness := newIndexerTestHarness(t)
+			pointID, _ := harness.seedCatalog(t, nil)
+			indexer, err := NewIndexer(IndexerDependencies{
+				DB: harness.db, Lease: testCase.lease(harness), Keys: harness.ring,
+				Now: func() time.Time { return harness.now }, Config: standardIndexerConfig(),
+			})
+			if err != nil {
+				t.Fatalf("NewIndexer: %v", err)
+			}
+			if _, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID}); !errors.Is(err, backupasset.ErrLeaseFenceLost) {
+				t.Fatalf("Build error=%v, want lease fence lost", err)
+			}
+			var generations int64
+			if err := harness.db.Model(&model.BackupAssetSearchGeneration{}).
+				Where("recovery_point_id = ?", pointID).Count(&generations).Error; err != nil {
+				t.Fatalf("count Search generations: %v", err)
+			}
+			if generations != 0 {
+				t.Fatalf("Search generation count=%d, want zero after %s fence rejection", generations, testCase.name)
+			}
+		})
+	}
+}
+
+func assertNoSearchGenerationBeforeFenceValidation(tx *gorm.DB, pointID string) error {
+	var generations int64
+	if err := tx.Model(&model.BackupAssetSearchGeneration{}).
+		Where("recovery_point_id = ?", pointID).Count(&generations).Error; err != nil {
+		return fmt.Errorf("count Search generations before fence validation: %w", err)
+	}
+	if generations != 0 {
+		return fmt.Errorf("Search fence validation observed %d durable generations", generations)
+	}
+	return nil
 }
 
 func TestIndexerProjectionStoresOnlyHMACsAndMapsLegacySecurityUnknown(t *testing.T) {
@@ -194,7 +498,7 @@ func newIndexerTestHarness(t *testing.T) (*Indexer, *indexerTestHarness) {
 		t.Fatalf("open indexer DB: %v", err)
 	}
 	models := []any{
-		&model.RecoveryPoint{}, &model.CatalogGeneration{}, &model.CatalogEntry{},
+		&model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{}, &model.CatalogGeneration{}, &model.CatalogEntry{},
 		&model.WrappedDomainKey{}, &model.RecoveryPointLease{},
 		&model.BackupAssetSearchGeneration{}, &model.BackupAssetSearchDocument{},
 		&model.BackupAssetSearchPosting{}, &model.BackupAssetSearchDocumentField{},
@@ -300,6 +604,121 @@ type indexerLeaseFake struct {
 	validate func(*gorm.DB, backupasset.LeaseFence) error
 }
 
+type searchReleaseObservation struct {
+	exactFence           bool
+	afterProjectionJoin  bool
+	afterFailureEvidence bool
+	contextBounded       bool
+	contextUsable        bool
+}
+
+type searchTeardownLeaseProbe struct {
+	now                 time.Time
+	projectionJoined    <-chan struct{}
+	failurePersisted    <-chan struct{}
+	finalReleaseStarted chan struct{}
+	allowFinalRelease   <-chan struct{}
+
+	mu               sync.Mutex
+	acquiredFence    backupasset.LeaseFence
+	releases         []searchReleaseObservation
+	finalReleaseOnce sync.Once
+}
+
+func (lease *searchTeardownLeaseProbe) Acquire(
+	_ context.Context,
+	request backupasset.AcquireLeaseRequest,
+) (backupasset.Lease, error) {
+	fence := backupasset.LeaseFence{
+		LeaseID: strings.Repeat("a", 32), RecoveryPointID: request.RecoveryPointID, HolderType: request.HolderType,
+		OwnerID: request.OwnerID, AttemptID: strings.Repeat("b", 32), FenceToken: strings.Repeat("c", 64),
+	}
+	lease.mu.Lock()
+	lease.acquiredFence = fence
+	lease.mu.Unlock()
+	return backupasset.Lease{
+		ID: fence.LeaseID, RecoveryPointID: request.RecoveryPointID, HolderType: request.HolderType,
+		OwnerID: request.OwnerID, AbsoluteDeadline: lease.now.Add(time.Hour), Fence: fence,
+	}, nil
+}
+
+func (lease *searchTeardownLeaseProbe) Release(ctx context.Context, fence backupasset.LeaseFence) error {
+	_, bounded := ctx.Deadline()
+	afterProjectionJoin := testSignalClosed(lease.projectionJoined)
+	afterFailureEvidence := testSignalClosed(lease.failurePersisted)
+	lease.mu.Lock()
+	exactFence := fence == lease.acquiredFence
+	lease.releases = append(lease.releases, searchReleaseObservation{
+		exactFence: exactFence, afterProjectionJoin: afterProjectionJoin, afterFailureEvidence: afterFailureEvidence,
+		contextBounded: bounded, contextUsable: ctx.Err() == nil,
+	})
+	lease.mu.Unlock()
+	if afterProjectionJoin {
+		lease.finalReleaseOnce.Do(func() { close(lease.finalReleaseStarted) })
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-lease.allowFinalRelease:
+		return ctx.Err()
+	}
+}
+
+func (*searchTeardownLeaseProbe) ReleaseTx(context.Context, *gorm.DB, backupasset.LeaseFence) error {
+	return errors.New("unexpected transactional release during canceled Search build")
+}
+
+func (*searchTeardownLeaseProbe) ValidateFenceTx(context.Context, *gorm.DB, backupasset.LeaseFence) error {
+	return nil
+}
+
+func (lease *searchTeardownLeaseProbe) snapshotReleases() []searchReleaseObservation {
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	return append([]searchReleaseObservation(nil), lease.releases...)
+}
+
+type releaseBeforeSearchFenceValidation struct {
+	delegate *backupasset.LeaseService
+}
+
+func (lease *releaseBeforeSearchFenceValidation) Acquire(
+	ctx context.Context,
+	request backupasset.AcquireLeaseRequest,
+) (backupasset.Lease, error) {
+	acquired, err := lease.delegate.Acquire(ctx, request)
+	if err != nil {
+		return backupasset.Lease{}, err
+	}
+	if err := lease.delegate.Release(ctx, acquired.Fence); err != nil {
+		return backupasset.Lease{}, err
+	}
+	return acquired, nil
+}
+
+func (lease *releaseBeforeSearchFenceValidation) Release(ctx context.Context, fence backupasset.LeaseFence) error {
+	return lease.delegate.Release(ctx, fence)
+}
+
+func (lease *releaseBeforeSearchFenceValidation) ReleaseTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	fence backupasset.LeaseFence,
+) error {
+	return lease.delegate.ReleaseTx(ctx, tx, fence)
+}
+
+func (lease *releaseBeforeSearchFenceValidation) ValidateFenceTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	fence backupasset.LeaseFence,
+) error {
+	if err := assertNoSearchGenerationBeforeFenceValidation(tx, fence.RecoveryPointID); err != nil {
+		return err
+	}
+	return lease.delegate.ValidateFenceTx(ctx, tx, fence)
+}
+
 func (lease *indexerLeaseFake) Acquire(_ context.Context, request backupasset.AcquireLeaseRequest) (backupasset.Lease, error) {
 	fence := backupasset.LeaseFence{
 		LeaseID: strings.Repeat("7", 32), RecoveryPointID: request.RecoveryPointID, HolderType: request.HolderType,
@@ -314,6 +733,37 @@ func (*indexerLeaseFake) ReleaseTx(context.Context, *gorm.DB, backupasset.LeaseF
 }
 func (lease *indexerLeaseFake) ValidateFenceTx(_ context.Context, tx *gorm.DB, fence backupasset.LeaseFence) error {
 	return lease.validate(tx, fence)
+}
+
+func gormCallbackTable(tx *gorm.DB) string {
+	if tx == nil || tx.Statement == nil {
+		return ""
+	}
+	if tx.Statement.Table != "" {
+		return tx.Statement.Table
+	}
+	if tx.Statement.Schema != nil {
+		return tx.Statement.Schema.Table
+	}
+	return ""
+}
+
+func testSignalClosed(signal <-chan struct{}) bool {
+	select {
+	case <-signal:
+		return true
+	default:
+		return false
+	}
+}
+
+func waitForIndexerTestSignal(t *testing.T, signal <-chan struct{}, description string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", description)
+	}
 }
 
 func validIndexerLineage(t *testing.T, now time.Time) string {

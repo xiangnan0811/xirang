@@ -19,12 +19,12 @@ import {
   isRawBackupAssetObject,
   mapAssetRef,
   mapBackupAssetEntryId,
-  mapSafeNonNegativeInteger,
 } from "./backup-assets-boundary";
 import {
   mapCatalogCapabilityReason,
   normalizeNullableCatalogTime,
 } from "./recovery-points-api";
+import { finiteInteger } from "./lifecycle-integers";
 
 export type BackupAssetSort = "name_asc" | "name_desc" | "size_desc" | "modified_desc";
 export type RecoveryPointDiffSort = "path_asc";
@@ -51,9 +51,6 @@ function blocked<T>(): CatalogProjection<T> {
   return blockedBackupAssetProjection();
 }
 
-function finiteInteger(value: unknown): number | null {
-  return mapSafeNonNegativeInteger(value);
-}
 
 function entryType(value: unknown): CatalogEntryType | null {
   switch (value) {

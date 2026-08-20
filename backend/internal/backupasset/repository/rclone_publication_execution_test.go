@@ -454,6 +454,7 @@ type rcloneNativeRepositoryFactoryFake struct {
 	baselineHeadCalls  int
 	baselineOpenCalls  int
 	describeKeyCalls   int
+	headVersionCalls   int
 }
 
 func (fake *rcloneNativeRepositoryFactoryFake) BootstrapCredentialsExpire(context.Context) (bool, error) {
@@ -548,7 +549,8 @@ func (fake *rcloneNativeRepositoryFactoryFake) DescribeKey(_ context.Context, ar
 	return key, nil
 }
 
-func (*rcloneNativeRepositoryFactoryFake) HeadVersion(context.Context, provider.RcloneNativeExactReadRequest) (provider.RcloneNativeExactObjectHead, error) {
+func (fake *rcloneNativeRepositoryFactoryFake) HeadVersion(context.Context, provider.RcloneNativeExactReadRequest) (provider.RcloneNativeExactObjectHead, error) {
+	fake.headVersionCalls++
 	return provider.RcloneNativeExactObjectHead{}, errors.New("FAKE_UNEXPECTED_HEAD_FOR_TEST_ONLY")
 }
 
@@ -562,6 +564,14 @@ func (*rcloneNativeRepositoryFactoryFake) OpenVersionRange(context.Context, prov
 
 func (*rcloneNativeRepositoryFactoryFake) PutControlVersion(context.Context, provider.RcloneNativeControlWriteRequest) (provider.RcloneNativeControlWriteResult, error) {
 	return provider.RcloneNativeControlWriteResult{}, errors.New("FAKE_UNEXPECTED_WRITE_FOR_TEST_ONLY")
+}
+
+func (*rcloneNativeRepositoryFactoryFake) ProbeExactVersion(context.Context, provider.RcloneNativeExactVersion) (provider.RcloneNativeVersionProbe, error) {
+	return provider.RcloneNativeVersionProbe{}, nil
+}
+
+func (*rcloneNativeRepositoryFactoryFake) DeleteExactVersion(context.Context, provider.RcloneNativeExactVersion) error {
+	return nil
 }
 
 func (fixture *rclonePublicationFixture) run() publication.Run {

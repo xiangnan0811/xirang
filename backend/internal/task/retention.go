@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
+	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
@@ -15,6 +17,22 @@ import (
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/util"
 )
+
+// ManagedRecoveryPointRetentionRequest is the private, exact handoff from the
+// Task compatibility loop to the managed RecoveryPoint lifecycle owner. It
+// deliberately excludes paths, locators, credentials, and executor policy.
+type ManagedRecoveryPointRetentionRequest struct {
+	TaskID           uint
+	PolicyID         uint
+	RepositoryID     string
+	RecoveryPointIDs []string
+}
+
+// ManagedRecoveryPointRetention owns retention after the lineage guard proves
+// that a Task has managed immutable RecoveryPoints.
+type ManagedRecoveryPointRetention interface {
+	EnforceManagedRetention(context.Context, ManagedRecoveryPointRetentionRequest) error
+}
 
 func (m *Manager) enforceRetention() {
 	log := logger.Module("task")
@@ -65,16 +83,11 @@ func (m *Manager) enforceRsyncRetention(policy model.Policy, task model.Task, cu
 	log := logger.Module("task")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	if m.lineageGuard != nil {
-		session, err := m.lineageGuard.Begin(ctx, task.ID, publication.OperationLegacyRetention)
-		if err != nil || session == nil || session.Mode() != publication.LineageCompatibility {
-			if session != nil {
-				defer func() { _ = session.Close() }()
-			}
-			m.recordLegacyResticBlock(ctx, task.ID, nil, publication.OperationLegacyRetention)
-			log.Warn().Uint("task_id", task.ID).Msg("受管 Rsync 保留清理已被安全边界阻止")
-			return
-		}
+	session, legacy := m.beginRetentionAuthority(ctx, policy, task)
+	if !legacy {
+		return
+	}
+	if session != nil {
 		defer func() { _ = session.Close() }()
 	}
 	targetPath := strings.TrimSpace(policy.TargetPath)
@@ -132,20 +145,13 @@ func (m *Manager) enforceRsyncRetention(policy model.Policy, task model.Task, cu
 }
 
 func (m *Manager) enforceResticRetention(policy model.Policy, task model.Task) {
-	log := logger.Module("task")
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	if m.lineageGuard != nil {
-		session, err := m.lineageGuard.Begin(ctx, task.ID, publication.OperationLegacyRetention)
-		if err != nil || session == nil || session.Mode() != publication.LineageCompatibility {
-			if session != nil {
-				defer func() { _ = session.Close() }()
-			}
-			m.recordLegacyResticBlock(ctx, task.ID, nil, publication.OperationLegacyRetention)
-			log.Warn().Uint("task_id", task.ID).Msg("受管 Restic 保留清理已被安全边界阻止")
-			return
-		}
+	session, legacy := m.beginRetentionAuthority(ctx, policy, task)
+	if !legacy {
+		return
+	}
+	if session != nil {
 		defer func() { _ = session.Close() }()
 	}
 
@@ -212,16 +218,11 @@ func (m *Manager) enforceRcloneRetention(policy model.Policy, task model.Task) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	if m.lineageGuard != nil {
-		session, err := m.lineageGuard.Begin(ctx, task.ID, publication.OperationLegacyRetention)
-		if err != nil || session == nil || session.Mode() != publication.LineageCompatibility {
-			if session != nil {
-				defer func() { _ = session.Close() }()
-			}
-			m.recordLegacyResticBlock(ctx, task.ID, nil, publication.OperationLegacyRetention)
-			log.Warn().Uint("task_id", task.ID).Msg("受管 Rclone 保留清理已被安全边界阻止")
-			return
-		}
+	session, legacy := m.beginRetentionAuthority(ctx, policy, task)
+	if !legacy {
+		return
+	}
+	if session != nil {
 		defer func() { _ = session.Close() }()
 	}
 
@@ -250,6 +251,72 @@ func (m *Manager) enforceRcloneRetention(policy model.Policy, task model.Task) {
 	} else {
 		m.logDispatcher.Dispatch(0, nil, "info", fmt.Sprintf("rclone 保留清理完成 (最小年龄: %s)", minAge), "")
 	}
+}
+
+func (m *Manager) beginRetentionAuthority(ctx context.Context, policy model.Policy, task model.Task) (publication.LineageSession, bool) {
+	if m.lineageGuard == nil {
+		return nil, true
+	}
+	session, err := m.lineageGuard.Begin(ctx, task.ID, publication.OperationLegacyRetention)
+	if err != nil || session == nil {
+		if session != nil {
+			_ = session.Close()
+		}
+		m.blockLegacyRetention(ctx, task.ID)
+		return nil, false
+	}
+	switch session.Mode() {
+	case publication.LineageCompatibility:
+		return session, true
+	case publication.LineageExact:
+		defer func() { _ = session.Close() }()
+		if err := m.delegateManagedRetention(ctx, policy, task, session); err != nil {
+			m.blockLegacyRetention(ctx, task.ID)
+		}
+		return nil, false
+	default:
+		_ = session.Close()
+		m.blockLegacyRetention(ctx, task.ID)
+		return nil, false
+	}
+}
+
+func (m *Manager) delegateManagedRetention(ctx context.Context, policy model.Policy, task model.Task, session publication.LineageSession) error {
+	if m.managedRetention == nil || task.ID == 0 || policy.ID == 0 || session == nil {
+		return fmt.Errorf("managed RecoveryPoint retention authority is unavailable")
+	}
+	repositoryID := session.RepositoryID()
+	if backupasset.ValidateOpaqueID(repositoryID) != nil {
+		return fmt.Errorf("managed RecoveryPoint retention authority is unavailable")
+	}
+	points := session.CommittedPoints()
+	pointIDs := make([]string, 0, len(points))
+	for _, point := range points {
+		if backupasset.ValidateOpaqueID(point.RecoveryPointID) != nil {
+			return fmt.Errorf("managed RecoveryPoint retention identity is invalid")
+		}
+		pointIDs = append(pointIDs, point.RecoveryPointID)
+	}
+	sort.Strings(pointIDs)
+	for index := 1; index < len(pointIDs); index++ {
+		if pointIDs[index] == pointIDs[index-1] {
+			return fmt.Errorf("managed RecoveryPoint retention identity is duplicated")
+		}
+	}
+	if len(pointIDs) == 0 {
+		return nil
+	}
+	return m.managedRetention.EnforceManagedRetention(ctx, ManagedRecoveryPointRetentionRequest{
+		TaskID:           task.ID,
+		PolicyID:         policy.ID,
+		RepositoryID:     repositoryID,
+		RecoveryPointIDs: pointIDs,
+	})
+}
+
+func (m *Manager) blockLegacyRetention(ctx context.Context, taskID uint) {
+	m.recordLegacyResticBlock(ctx, taskID, nil, publication.OperationLegacyRetention)
+	logger.Module("task").Warn().Uint("task_id", taskID).Msg("受管保留清理已被安全边界阻止")
 }
 
 // shellEscape delegates to executor.ShellEscape for consistency.

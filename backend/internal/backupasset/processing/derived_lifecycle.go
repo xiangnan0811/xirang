@@ -326,15 +326,22 @@ func (lifecycle *DerivedLifecycle) revokeSet(
 		return err
 	}
 	for _, blob := range doomed {
-		if !safeOpaqueLocator(blob.locator) {
-			return ErrDerivedBlobUnavailable
-		}
-		path := filepath.Join(lifecycle.store.config.Root, blob.locator)
-		if err := lifecycle.store.removeFile(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := lifecycle.removeCiphertext(blob.locator); err != nil {
 			_ = lifecycle.db.WithContext(ctx).Model(&model.BackupAssetDerivedBlob{}).Where("id = ? AND state = ?", blob.id, "unavailable").
 				Update("state", "purge_failed").Error
-			return errors.Join(ErrDerivedBlobUnavailable, err)
+			return err
 		}
+	}
+	return nil
+}
+
+func (lifecycle *DerivedLifecycle) removeCiphertext(locator string) error {
+	if lifecycle == nil || lifecycle.store == nil || !safeOpaqueLocator(locator) {
+		return ErrDerivedBlobUnavailable
+	}
+	path := filepath.Join(lifecycle.store.config.Root, locator)
+	if err := lifecycle.store.removeFile(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return ErrDerivedBlobUnavailable
 	}
 	return nil
 }

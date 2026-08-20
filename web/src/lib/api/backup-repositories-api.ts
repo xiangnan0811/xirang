@@ -1,16 +1,26 @@
 import type {
+  BackupImportCandidate,
+  BackupImportCandidatePage,
+  BackupImportDiscoveryResult,
   BackupImmutabilityLevel,
   BackupPublicationMode,
   BackupProviderKind,
+  BackupRebuildReason,
+  BackupRebuildResult,
   BackupRepository,
   BackupRepositoryCatalogSummary,
   BackupRepositoryLineage,
   BackupRepositoryLineageSource,
+  BackupRepositoryMutationResult,
+  BackupRepositoryMutationSnapshot,
   BackupRepositoryPage,
   BackupRepositoryStatus,
   BackupVersionMode,
   CatalogCoverageStatus,
   CatalogProjection,
+  ImportCandidateKind,
+  ImportReviewDecision,
+  ImportReviewState,
   RecoveryPointSemantics,
   RecoveryPointState,
 } from "@/types/domain";
@@ -22,6 +32,7 @@ import {
   normalizeCatalogTime,
   normalizeNullableCatalogTime,
 } from "./recovery-points-api";
+import { finiteInteger } from "./lifecycle-integers";
 
 type RawObject = Record<string, unknown>;
 
@@ -45,11 +56,6 @@ function blocked<T>(): CatalogProjection<T> {
     status: "blocked",
     reason: { code: "unknown_internal_state", params: {} },
   };
-}
-
-function finiteInteger(value: unknown, minimum = 0): number | null {
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= minimum ? parsed : null;
 }
 
 function optionalPositiveInteger(value: unknown): number | undefined {
@@ -204,6 +210,7 @@ function mapLineages(value: unknown): BackupRepositoryLineage[] | null {
     }
     result.push({
       source,
+      taskRepositoryLinkId: opaqueId(item.task_repository_link_id) ?? undefined,
       taskId: optionalPositiveInteger(item.task_id),
       taskName: typeof item.task_name === "string" ? item.task_name : "",
       nodeId: finiteInteger(item.node_id) ?? 0,
@@ -238,6 +245,197 @@ function mapCatalogSummary(value: unknown): BackupRepositoryCatalogSummary | nul
     coverage,
     contentAvailability,
     permissions: mapCatalogPermissions(value.permissions),
+  };
+}
+
+function opaqueId(value: unknown): string | null {
+  return typeof value === "string" && /^[0-9a-f]{32}$/.test(value) ? value : null;
+}
+
+function importCandidateKind(value: unknown): ImportCandidateKind | null {
+  switch (value) {
+    case "native_snapshot":
+    case "xirang_manifest":
+    case "imported_baseline":
+    case "mutable_head":
+      return value;
+    default:
+      return null;
+  }
+}
+
+function importReviewState(value: unknown): ImportReviewState | null {
+  switch (value) {
+    case "pending":
+    case "accepted":
+    case "rejected":
+      return value;
+    default:
+      return null;
+  }
+}
+
+function rebuildReason(value: unknown): BackupRebuildReason | null {
+  switch (value) {
+    case "invalid_manifest":
+    case "catalog_start_failed":
+    case "derived_queue_failed":
+      return value;
+    default:
+      return null;
+  }
+}
+
+export function mapBackupImportCandidate(value: unknown): CatalogProjection<BackupImportCandidate> {
+  if (!isRawObject(value)) {
+    return blocked();
+  }
+  const id = opaqueId(value.id);
+  const repositoryId = opaqueId(value.repository_id);
+  const kind = importCandidateKind(value.kind);
+  const state = importReviewState(value.state);
+  const createdAt = normalizeCatalogTime(value.created_at);
+  const acceptedRecoveryPointId = value.accepted_recovery_point_id === undefined || value.accepted_recovery_point_id === ""
+    ? undefined
+    : opaqueId(value.accepted_recovery_point_id) ?? undefined;
+  const reviewedAtPresent = value.reviewed_at !== undefined && value.reviewed_at !== null && value.reviewed_at !== "";
+  const reviewedAt = reviewedAtPresent ? normalizeCatalogTime(value.reviewed_at) : null;
+  const quarantinedPresent = value.quarantined !== undefined && value.quarantined !== null;
+  if (id === null || repositoryId === null || kind === null || state === null || createdAt === null ||
+    (reviewedAtPresent && reviewedAt === null) ||
+    (quarantinedPresent && typeof value.quarantined !== "boolean") ||
+    (state === "accepted" && acceptedRecoveryPointId === undefined) ||
+    (state !== "accepted" && acceptedRecoveryPointId !== undefined) ||
+    (value.accepted_recovery_point_id !== undefined && value.accepted_recovery_point_id !== "" && acceptedRecoveryPointId === undefined)) {
+    return blocked();
+  }
+  return {
+    status: "available",
+    value: {
+      id,
+      repositoryId,
+      kind,
+      state,
+      acceptedRecoveryPointId,
+      quarantined: value.quarantined === true,
+      createdAt,
+      reviewedAt,
+    },
+  };
+}
+
+export function mapBackupImportDiscoveryResult(value: unknown): CatalogProjection<BackupImportDiscoveryResult> {
+  if (!isRawObject(value) || !Array.isArray(value.candidates)) {
+    return blocked();
+  }
+  const discovered = finiteInteger(value.discovered);
+  const existing = finiteInteger(value.existing);
+  if (discovered === null || existing === null) {
+    return blocked();
+  }
+  return {
+    status: "available",
+    value: {
+      candidates: value.candidates.map(mapBackupImportCandidate),
+      nextCursor: typeof value.next_cursor === "string" && value.next_cursor !== "" ? value.next_cursor : null,
+      discovered,
+      existing,
+    },
+  };
+}
+
+export function mapBackupRebuildResult(value: unknown): CatalogProjection<BackupRebuildResult> {
+  if (!isRawObject(value) || !isRawObject(value.reasons)) {
+    return blocked();
+  }
+  const accepted = finiteInteger(value.accepted);
+  const catalogStarted = finiteInteger(value.catalog_started);
+  const derivedQueued = finiteInteger(value.derived_queued);
+  const partial = finiteInteger(value.partial);
+  const failed = finiteInteger(value.failed);
+  if (accepted === null || catalogStarted === null || derivedQueued === null || partial === null || failed === null) {
+    return blocked();
+  }
+  const reasons: Partial<Record<BackupRebuildReason, number>> = {};
+  for (const [key, rawCount] of Object.entries(value.reasons)) {
+    const reason = rebuildReason(key);
+    const count = finiteInteger(rawCount);
+    if (reason === null || count === null) {
+      return blocked();
+    }
+    reasons[reason] = count;
+  }
+  return {
+    status: "available",
+    value: {
+      accepted,
+      catalogStarted,
+      derivedQueued,
+      partial,
+      failed,
+      reasons,
+      nextCursor: typeof value.next_cursor === "string" && value.next_cursor !== "" ? value.next_cursor : null,
+    },
+  };
+}
+
+function firstPresent(value: RawObject, ...keys: string[]): unknown {
+  for (const key of keys) {
+    if (value[key] !== undefined) {
+      return value[key];
+    }
+  }
+  return undefined;
+}
+
+function mapBackupRepositoryMutationSnapshot(value: unknown): CatalogProjection<BackupRepositoryMutationSnapshot> {
+  if (!isRawObject(value)) {
+    return blocked();
+  }
+  const id = opaqueId(value.id);
+  const provider = providerKind(value.provider_kind);
+  const mode = versionMode(value.version_mode);
+  const status = repositoryStatus(value.status);
+  const immutability = immutabilityLevel(value.immutability_level);
+  const capabilityRevision = finiteInteger(value.capability_revision, 1);
+  const createdAt = normalizeCatalogTime(value.created_at);
+  const updatedAt = normalizeCatalogTime(value.updated_at);
+  if (id === null || provider === null || mode === null || status === null || immutability === null ||
+    capabilityRevision === null || createdAt === null || updatedAt === null) {
+    return blocked();
+  }
+  return {
+    status: "available",
+    value: {
+      id,
+      providerKind: provider,
+      displayName: typeof value.display_name === "string" ? value.display_name : "",
+      description: typeof value.description === "string" ? value.description : "",
+      versionMode: mode,
+      status,
+      capabilityRevision,
+      capabilities: mapCatalogCapabilities(value.capabilities),
+      immutabilityLevel: immutability,
+      lastSeenAt: normalizeNullableCatalogTime(value.last_seen_at),
+      lastReconciledAt: normalizeNullableCatalogTime(value.last_reconciled_at),
+      createdAt,
+      updatedAt,
+    },
+  };
+}
+
+export function mapBackupRepositoryMutationResult(value: unknown): CatalogProjection<BackupRepositoryMutationResult> {
+  if (!isRawObject(value)) {
+    return blocked();
+  }
+  const repository = firstPresent(value, "repository", "Repository");
+  const mapped = mapBackupRepositoryMutationSnapshot(repository);
+  if (mapped.status !== "available") {
+    return mapped;
+  }
+  return {
+    status: "available",
+    value: { repository: mapped.value },
   };
 }
 
@@ -318,6 +516,133 @@ export function createBackupRepositoriesApi() {
     ): Promise<CatalogProjection<BackupRepository>> {
       const raw = await request<unknown>(`/backup-repositories/${encodeURIComponent(repositoryId)}`, { token, signal });
       return mapBackupRepository(raw);
+    },
+
+    async connectBackupRepository(
+      token: string,
+      input: {
+        taskId: number;
+        repositoryId?: string;
+        displayName?: string;
+        description?: string;
+        replaceAccess?: boolean;
+      },
+      signal?: AbortSignal,
+    ): Promise<CatalogProjection<BackupRepositoryMutationResult>> {
+      const raw = await request<unknown>("/backup-repositories/connect", {
+        method: "POST",
+        token,
+        signal,
+        body: {
+          task_id: input.taskId,
+          ...(input.repositoryId ? { repository_id: input.repositoryId } : {}),
+          ...(input.displayName ? { display_name: input.displayName } : {}),
+          ...(input.description ? { description: input.description } : {}),
+          ...(input.replaceAccess ? { replace_access: true } : {}),
+        },
+      });
+      return mapBackupRepositoryMutationResult(raw);
+    },
+
+    async reconcileBackupRepository(
+      token: string,
+      repositoryId: string,
+      signal?: AbortSignal,
+    ): Promise<CatalogProjection<BackupRepositoryMutationResult>> {
+      const raw = await request<unknown>(`/backup-repositories/${encodeURIComponent(repositoryId)}/reconcile`, {
+        method: "POST",
+        token,
+        signal,
+      });
+      return mapBackupRepositoryMutationResult(raw);
+    },
+
+    async disconnectBackupRepository(
+      token: string,
+      repositoryId: string,
+      signal?: AbortSignal,
+    ): Promise<CatalogProjection<BackupRepositoryMutationResult>> {
+      const raw = await request<unknown>(`/backup-repositories/${encodeURIComponent(repositoryId)}/disconnect`, {
+        method: "POST",
+        token,
+        signal,
+      });
+      return mapBackupRepositoryMutationResult(raw);
+    },
+
+    async scanBackupRepositoryImports(
+      token: string,
+      repositoryId: string,
+      options: { limit?: number; cursor?: string; signal?: AbortSignal } = {},
+    ): Promise<CatalogProjection<BackupImportDiscoveryResult>> {
+      const raw = await request<unknown>(`/backup-repositories/${encodeURIComponent(repositoryId)}/import-scans`, {
+        method: "POST",
+        token,
+        signal: options.signal,
+        body: {
+          ...(options.limit !== undefined ? { limit: options.limit } : {}),
+          ...(options.cursor ? { cursor: options.cursor } : {}),
+        },
+      });
+      return mapBackupImportDiscoveryResult(raw);
+    },
+
+    async listBackupRepositoryImportCandidates(
+      token: string,
+      repositoryId: string,
+      options: { limit?: number; cursor?: string; signal?: AbortSignal } = {},
+    ): Promise<BackupImportCandidatePage> {
+      const query = new URLSearchParams();
+      if (options.limit !== undefined) query.set("limit", String(options.limit));
+      if (options.cursor) query.set("cursor", options.cursor);
+      const raw = await request<unknown>(
+        appendQuery(`/backup-repositories/${encodeURIComponent(repositoryId)}/import-candidates`, query),
+        { token, signal: options.signal },
+      );
+      const page = isRawObject(raw) ? raw : {};
+      return {
+        items: Array.isArray(page.items) ? page.items.map(mapBackupImportCandidate) : [],
+        nextCursor: typeof page.next_cursor === "string" && page.next_cursor !== "" ? page.next_cursor : null,
+      };
+    },
+
+    async reviewBackupRepositoryImportCandidate(
+      token: string,
+      repositoryId: string,
+      candidateId: string,
+      input: { decision: ImportReviewDecision; acceptAs?: ImportCandidateKind },
+      signal?: AbortSignal,
+    ): Promise<CatalogProjection<BackupImportCandidate>> {
+      const raw = await request<unknown>(
+        `/backup-repositories/${encodeURIComponent(repositoryId)}/import-candidates/${encodeURIComponent(candidateId)}/reviews`,
+        {
+          method: "POST",
+          token,
+          signal,
+          body: {
+            decision: input.decision,
+            ...(input.acceptAs ? { accept_as: input.acceptAs } : {}),
+          },
+        },
+      );
+      return mapBackupImportCandidate(raw);
+    },
+
+    async rebuildBackupRepositoryImports(
+      token: string,
+      repositoryId: string,
+      options: { limit?: number; cursor?: string; signal?: AbortSignal } = {},
+    ): Promise<CatalogProjection<BackupRebuildResult>> {
+      const raw = await request<unknown>(`/backup-repositories/${encodeURIComponent(repositoryId)}/rebuilds`, {
+        method: "POST",
+        token,
+        signal: options.signal,
+        body: {
+          ...(options.limit !== undefined ? { limit: options.limit } : {}),
+          ...(options.cursor ? { cursor: options.cursor } : {}),
+        },
+      });
+      return mapBackupRebuildResult(raw);
     },
   };
 }

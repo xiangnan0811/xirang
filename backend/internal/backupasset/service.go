@@ -29,6 +29,13 @@ type ProviderConfig struct {
 	MetadataLimitBytes int64
 }
 
+type RetentionConfig struct {
+	Enabled           bool
+	ReconcileInterval time.Duration
+	BatchSize         int
+	DrainTimeout      time.Duration
+}
+
 type CatalogConfig struct {
 	Enabled           bool
 	BatchSize         int
@@ -175,6 +182,7 @@ type ProcessingUpdaterConfig struct {
 type ProcessingBackfillConfig struct {
 	Paused                bool
 	BatchSize             int
+	InspectedLimit        int
 	JobsPerHour           int
 	BytesPerHour          int64
 	ProviderConcurrency   int
@@ -315,6 +323,39 @@ func (service *FoundationService) FeatureEnabled() (bool, error) {
 		return false, fmt.Errorf("%w: parse backup_assets.enabled: %v", ErrInvalidState, err)
 	}
 	return enabled, nil
+}
+
+func (service *FoundationService) RetentionConfig() (RetentionConfig, error) {
+	values, err := service.effectiveFoundationValues()
+	if err != nil {
+		return RetentionConfig{}, err
+	}
+	enabled, err := parseFoundationBool(values, "backup_assets.enabled")
+	if err != nil {
+		return RetentionConfig{}, err
+	}
+	reconcileInterval, err := parseFoundationDuration(values, "backup_assets.retention_reconcile_interval")
+	if err != nil {
+		return RetentionConfig{}, err
+	}
+	batchSize, err := parseFoundationInt(values, "backup_assets.retention_batch_size")
+	if err != nil {
+		return RetentionConfig{}, err
+	}
+	drainTimeout, err := parseFoundationDuration(values, "backup_assets.retention_drain_timeout")
+	if err != nil {
+		return RetentionConfig{}, err
+	}
+	if reconcileInterval < 30*time.Second || reconcileInterval > 24*time.Hour || batchSize < 1 || batchSize > 1000 ||
+		drainTimeout < 5*time.Second || drainTimeout > 30*time.Minute {
+		return RetentionConfig{}, fmt.Errorf("%w: invalid Retention settings", ErrInvalidState)
+	}
+	return RetentionConfig{
+		Enabled:           enabled,
+		ReconcileInterval: reconcileInterval,
+		BatchSize:         batchSize,
+		DrainTimeout:      drainTimeout,
+	}, nil
 }
 
 func (service *FoundationService) LeaseConfig() (LeaseConfig, error) {
@@ -956,6 +997,25 @@ func (service *FoundationService) SearchConfig() (SearchConfig, error) {
 func (service *FoundationService) OverlayConfig() (OverlayConfig, error) {
 	_, config, err := service.SearchOverlayConfig()
 	return config, err
+}
+
+func (service *FoundationService) AuditRetentionConfig() (detailDays int, checkpointDays int, err error) {
+	values, err := service.effectiveFoundationValues()
+	if err != nil {
+		return 0, 0, err
+	}
+	detailDays, err = parseFoundationInt(values, "backup_assets.audit_detail_retention_days")
+	if err != nil {
+		return 0, 0, err
+	}
+	checkpointDays, err = parseFoundationInt(values, "backup_assets.audit_checkpoint_retention_days")
+	if err != nil {
+		return 0, 0, err
+	}
+	if detailDays < 1 || detailDays > 3650 || checkpointDays < 180 || checkpointDays > 36500 {
+		return 0, 0, fmt.Errorf("%w: invalid audit retention settings", ErrInvalidState)
+	}
+	return detailDays, checkpointDays, nil
 }
 
 func (service *FoundationService) AuditConfig() (AuditConfig, error) {

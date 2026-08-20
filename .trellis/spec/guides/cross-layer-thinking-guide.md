@@ -85,6 +85,12 @@ After implementation:
 - [ ] For sequential CAS mutations, verified the newest response replaces the
       opaque version token used by the next request (including a value above
       JavaScript's safe-integer range).
+- [ ] Always-on Task delete/archive still works when backup-asset schema is
+      missing; see backend quality “Backup Asset Lifecycle Control Plane”.
+- [ ] Derived Expected/Queue leftover walks are budgeted and stay unproven
+      until the catalog end; see the same backend scenario.
+- [ ] Admin scan/rebuild UI stops at a page budget and resumes with Continue;
+      see frontend quality “Bounded Lifecycle Scan And Rebuild”.
 
 ---
 

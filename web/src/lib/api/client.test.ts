@@ -313,6 +313,42 @@ describe("apiClient 任务请求约束", () => {
       "X-Xirang-Step-Up": "proof-2",
     });
   });
+
+  it("forwards isolated step-up proofs for hold release and repository purge", async () => {
+    fetchMock
+      .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: {} })))
+      .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: {} })));
+
+    const recoveryPointId = "c".repeat(32);
+    const holdId = "d".repeat(32);
+    const repositoryId = "e".repeat(32);
+    await apiClient.releaseRecoveryPointHold("token-lifecycle", recoveryPointId, holdId, {
+      reason: "case-closed",
+      stepUpProof: "hold-proof",
+    });
+    await apiClient.executeRepositoryPurge("token-lifecycle", repositoryId, {
+      planId: "f".repeat(32),
+      expectedRevision: 1,
+      expectedImpactRevision: 11,
+      reason: "approved-purge",
+      stepUpProof: "purge-proof",
+    });
+
+    const [holdUrl, holdInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [purgeUrl, purgeInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(holdUrl).toBe(`/api/v1/recovery-points/${recoveryPointId}/holds/${holdId}/release`);
+    expect(purgeUrl).toBe(`/api/v1/backup-repositories/${repositoryId}/purges`);
+    expect(holdInit.headers).toMatchObject({
+      Authorization: "Bearer token-lifecycle",
+      "X-Xirang-Step-Up": "hold-proof",
+    });
+    expect(purgeInit.headers).toMatchObject({
+      Authorization: "Bearer token-lifecycle",
+      "X-Xirang-Step-Up": "purge-proof",
+    });
+    expect(holdInit.headers).not.toMatchObject({ "X-Xirang-Step-Up": "purge-proof" });
+    expect(purgeInit.headers).not.toMatchObject({ "X-Xirang-Step-Up": "hold-proof" });
+  });
 });
 
 describe("apiClient 会话跳转", () => {

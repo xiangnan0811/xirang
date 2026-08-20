@@ -12,6 +12,7 @@ import (
 	"io"
 	"math"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -912,6 +913,9 @@ func (publisher *RcloneNativePublisher) Publish(ctx context.Context, request Rcl
 	if err != nil {
 		return RcloneCommitV1{}, err
 	}
+	if err := attachRcloneNativeFrozenDeletionVersions(&commit, point, controlGraph, nil); err != nil {
+		return RcloneCommitV1{}, err
+	}
 	return commit, nil
 }
 
@@ -970,7 +974,7 @@ func (publisher *RcloneNativePublisher) Reconcile(ctx context.Context, request R
 	if err != nil || validateRcloneNativeCommitMarker(request, controlPrefix, marker) != nil {
 		return RcloneCommitV1{}, rcloneNativeError(backupasset.RcloneReasonMarkerMismatch, err)
 	}
-	controlGraph, index, chunkDigests, err := reopenRcloneNativeControlGraph(ctx, request, marker, commitVersion)
+	controlGraph, index, chunkDigests, payloads, err := reopenRcloneNativeControlGraph(ctx, request, marker, commitVersion)
 	if err != nil {
 		return RcloneCommitV1{}, err
 	}
@@ -988,6 +992,9 @@ func (publisher *RcloneNativePublisher) Reconcile(ctx context.Context, request R
 		marker.ManifestIndexDigest, marker.ProviderCommittedAt,
 	)
 	if err != nil {
+		return RcloneCommitV1{}, err
+	}
+	if err := attachRcloneNativeFrozenDeletionVersions(&commit, point, controlGraph, payloads); err != nil {
 		return RcloneCommitV1{}, err
 	}
 	if commit.Native == nil || commit.Native.EncryptionEvidenceDigest != marker.EncryptionEvidenceDigest {
@@ -1126,31 +1133,31 @@ func reopenRcloneNativeControlGraph(
 	request RcloneNativePublicationRequest,
 	marker rcloneNativeCommitMarkerV1,
 	commitVersion RcloneNativeControlObjectVersion,
-) (RcloneNativeControlCommitGraph, rcloneNativeManifestIndexV1, []string, error) {
+) (RcloneNativeControlCommitGraph, rcloneNativeManifestIndexV1, []string, [][]byte, error) {
 	graph := RcloneNativeControlCommitGraph{ManifestVersions: make([]RcloneNativeControlObjectVersion, len(marker.ManifestVersions)), CommitVersion: commitVersion}
 	manifestPayloads := make([][]byte, len(marker.ManifestVersions))
 	for index, reference := range marker.ManifestVersions {
 		payload, version, err := reopenRcloneNativeControlVersion(ctx, request, reference)
 		if err != nil {
-			return RcloneNativeControlCommitGraph{}, rcloneNativeManifestIndexV1{}, nil, err
+			return RcloneNativeControlCommitGraph{}, rcloneNativeManifestIndexV1{}, nil, nil, err
 		}
 		manifestPayloads[index] = payload
 		graph.ManifestVersions[index] = version
 	}
 	indexPayload, indexVersion, err := reopenRcloneNativeControlVersion(ctx, request, marker.IndexVersion)
 	if err != nil {
-		return RcloneNativeControlCommitGraph{}, rcloneNativeManifestIndexV1{}, nil, err
+		return RcloneNativeControlCommitGraph{}, rcloneNativeManifestIndexV1{}, nil, nil, err
 	}
 	graph.IndexVersion = indexVersion
 	graph.Digest, err = digestRcloneNativeControlGraph(graph)
 	if err != nil {
-		return RcloneNativeControlCommitGraph{}, rcloneNativeManifestIndexV1{}, nil, rcloneNativeError(backupasset.RcloneReasonMarkerMismatch, err)
+		return RcloneNativeControlCommitGraph{}, rcloneNativeManifestIndexV1{}, nil, nil, rcloneNativeError(backupasset.RcloneReasonMarkerMismatch, err)
 	}
 	index, chunkDigests, err := decodeAndValidateRcloneNativeManifestIndex(request, marker, indexPayload, manifestPayloads)
 	if err != nil {
-		return RcloneNativeControlCommitGraph{}, rcloneNativeManifestIndexV1{}, nil, err
+		return RcloneNativeControlCommitGraph{}, rcloneNativeManifestIndexV1{}, nil, nil, err
 	}
-	return graph, index, chunkDigests, nil
+	return graph, index, chunkDigests, manifestPayloads, nil
 }
 
 func reopenRcloneNativeControlVersion(
@@ -2045,6 +2052,192 @@ func buildRcloneNativeProviderCommit(
 		return RcloneCommitV1{}, err
 	}
 	return commit, nil
+}
+
+func attachRcloneNativeFrozenDeletionVersions(
+	commit *RcloneCommitV1,
+	point RcloneNativePointGraph,
+	control RcloneNativeControlCommitGraph,
+	payloads [][]byte,
+) error {
+	if commit == nil || commit.Native == nil {
+		return rcloneNativeError(backupasset.RcloneReasonMarkerMismatch, nil)
+	}
+	versions, err := rcloneNativeFrozenVersionsFromAccepted(point, control, payloads)
+	if err != nil {
+		return err
+	}
+	commit.Native.FrozenNativeVersions = versions
+	return nil
+}
+
+func rcloneNativeFrozenVersionsFromAccepted(
+	point RcloneNativePointGraph,
+	control RcloneNativeControlCommitGraph,
+	payloads [][]byte,
+) ([]RcloneNativeExactVersion, error) {
+	collector := newRcloneNativeFrozenVersionCollector()
+	if len(point.View) > 0 || len(point.Ledger) > 0 {
+		for _, entry := range point.View {
+			collector.add(entry.PhysicalKey, entry.VersionID)
+		}
+		for _, entry := range point.Ledger {
+			collector.add(entry.PhysicalKey, entry.VersionID)
+		}
+	} else {
+		for _, payload := range payloads {
+			if err := collector.addManifestPayload(payload); err != nil {
+				return nil, err
+			}
+		}
+	}
+	collector.addControl(control)
+	return collector.result(), nil
+}
+
+type rcloneNativeFrozenVersionCollector struct {
+	seen  map[string]bool
+	items []RcloneNativeExactVersion
+}
+
+func newRcloneNativeFrozenVersionCollector() *rcloneNativeFrozenVersionCollector {
+	return &rcloneNativeFrozenVersionCollector{seen: make(map[string]bool)}
+}
+
+func (collector *rcloneNativeFrozenVersionCollector) add(physicalKey, versionID string) {
+	if collector == nil {
+		return
+	}
+	physicalKey = strings.TrimSpace(physicalKey)
+	versionID = strings.TrimSpace(versionID)
+	if !validRcloneNativePhysicalKey(physicalKey) || !validRcloneNativeVersionID(versionID) {
+		return
+	}
+	identity := physicalKey + "\x00" + versionID
+	if collector.seen[identity] {
+		return
+	}
+	collector.seen[identity] = true
+	collector.items = append(collector.items, RcloneNativeExactVersion{PhysicalKey: physicalKey, VersionID: versionID})
+}
+
+func (collector *rcloneNativeFrozenVersionCollector) addControl(control RcloneNativeControlCommitGraph) {
+	for _, version := range control.ManifestVersions {
+		collector.add(version.PhysicalKey, version.VersionID)
+	}
+	collector.add(control.IndexVersion.PhysicalKey, control.IndexVersion.VersionID)
+	collector.add(control.CommitVersion.PhysicalKey, control.CommitVersion.VersionID)
+}
+
+func (collector *rcloneNativeFrozenVersionCollector) addManifestPayload(payload []byte) error {
+	for _, line := range bytes.Split(payload, []byte{'\n'}) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		if rejectDuplicateJSONMembers(string(line)) != nil {
+			return rcloneNativeError(backupasset.RcloneReasonManifestMismatch, nil)
+		}
+		decoder := json.NewDecoder(bytes.NewReader(line))
+		decoder.DisallowUnknownFields()
+		var record rcloneNativeManifestRecordV1
+		if err := decoder.Decode(&record); err != nil || record.Version != 1 {
+			return rcloneNativeError(backupasset.RcloneReasonManifestMismatch, err)
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			return rcloneNativeError(backupasset.RcloneReasonManifestMismatch, err)
+		}
+		if record.State == nil {
+			continue
+		}
+		collector.add(record.State.PhysicalKey, record.State.VersionID)
+	}
+	return nil
+}
+
+func (collector *rcloneNativeFrozenVersionCollector) result() []RcloneNativeExactVersion {
+	if collector == nil {
+		return nil
+	}
+	sort.Slice(collector.items, func(left, right int) bool {
+		if collector.items[left].PhysicalKey != collector.items[right].PhysicalKey {
+			return collector.items[left].PhysicalKey < collector.items[right].PhysicalKey
+		}
+		return collector.items[left].VersionID < collector.items[right].VersionID
+	})
+	return collector.items
+}
+
+func rcloneNativeCommitsEqualIgnoringFrozenVersions(left, right RcloneCommitV1) bool {
+	if left.Native != nil {
+		native := *left.Native
+		native.FrozenNativeVersions = nil
+		left.Native = &native
+	}
+	if right.Native != nil {
+		native := *right.Native
+		native.FrozenNativeVersions = nil
+		right.Native = &native
+	}
+	return reflect.DeepEqual(left, right)
+}
+
+// RcloneNativeFrozenDeletionVersions reconstructs the exact physical-key/version-ID
+// set from the accepted native commit and manifest. It never lists a current prefix.
+func RcloneNativeFrozenDeletionVersions(
+	ctx context.Context,
+	request RcloneNativePublicationRequest,
+	commitKey, commitVersionID string,
+) ([]RcloneNativeExactVersion, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if request.ClientFactory == nil || !validRcloneNativePhysicalKey(commitKey) || !validRcloneNativeVersionID(commitVersionID) {
+		return nil, rcloneNativeError(backupasset.RcloneReasonAdmissionBlocked, nil)
+	}
+	s3, err := request.ClientFactory.S3(request.Session, request.Profile, request.KMSKeyBindings)
+	if err != nil || s3 == nil {
+		return nil, rcloneNativeError(backupasset.RcloneReasonAdmissionBlocked, err)
+	}
+	request.s3 = s3
+	head, err := s3.HeadVersion(ctx, RcloneNativeExactReadRequest{PhysicalKey: commitKey, VersionID: commitVersionID})
+	if err != nil || head.PhysicalKey != commitKey || head.VersionID != commitVersionID ||
+		head.Size == 0 || head.Size > request.ControlPayloadMaxBytes {
+		return nil, rcloneNativeError(backupasset.RcloneReasonMarkerMismatch, err)
+	}
+	candidate := RcloneNativeVersionRecord{
+		PhysicalKey: head.PhysicalKey, VersionID: head.VersionID, Kind: RcloneNativeObjectVersion, Size: head.Size,
+		EncryptionProfile: head.EncryptionProfile, KMSKeyDigest: head.KMSKeyDigest, BucketKeyEnabled: head.BucketKeyEnabled,
+	}
+	payload, commitVersion, err := readRcloneNativeCommitCandidate(ctx, request, candidate)
+	if err != nil {
+		return nil, err
+	}
+	marker, err := decodeRcloneNativeCommitMarker(payload, request.MarkerKey)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateRcloneNativeCommitMarker(request, rcloneNativeAttemptControlPrefix(request), marker); err != nil {
+		return nil, err
+	}
+	controlGraph, _, _, payloads, err := reopenRcloneNativeControlGraph(ctx, request, marker, commitVersion)
+	if err != nil {
+		return nil, err
+	}
+	versions, err := rcloneNativeFrozenVersionsFromAccepted(RcloneNativePointGraph{}, controlGraph, payloads)
+	if err != nil || len(versions) < 2 {
+		return nil, rcloneNativeError(backupasset.RcloneReasonMarkerMismatch, err)
+	}
+	foundCommit := false
+	for _, version := range versions {
+		if version.PhysicalKey == commitKey && version.VersionID == commitVersionID {
+			foundCommit = true
+			break
+		}
+	}
+	if !foundCommit {
+		return nil, rcloneNativeError(backupasset.RcloneReasonMarkerMismatch, nil)
+	}
+	return versions, nil
 }
 
 func rcloneNativeDataPlaneError(ctx context.Context, err error) error {

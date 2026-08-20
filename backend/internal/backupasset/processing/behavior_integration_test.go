@@ -16,6 +16,7 @@ import (
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/content"
 	"xirang/backend/internal/backupasset/processing/capabilityspec"
+	"xirang/backend/internal/backupasset/retention"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/database"
 	"xirang/backend/internal/model"
@@ -46,6 +47,7 @@ type processingBehaviorFixture struct {
 	db          *gorm.DB
 	clock       *coordinatorClock
 	lease       *backupasset.LeaseService
+	lifecycle   *retention.Coordinator
 	coordinator *Coordinator
 	grants      *GrantService
 	workerID    string
@@ -470,6 +472,17 @@ func prepareProcessingBehaviorFixture(t *testing.T, db *gorm.DB, engine string) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	holds, err := retention.NewHoldService(retention.HoldServiceDependencies{DB: db, Now: clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifecycle, err := retention.NewCoordinator(retention.CoordinatorDependencies{
+		DB: db, Leases: lease, Holds: holds, Now: clock.Now,
+		LeaseOwnerID: "processing-behavior-lifecycle",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	coordinator, err := NewCoordinator(db, lease, clock.Now, CoordinatorConfig{
 		QueueMax: 100, InteractiveReservedSlots: 2, BackgroundSlots: 2,
 		PullLease: 30 * time.Second, AttemptTimeout: 2 * time.Hour, RetryMax: 5,
@@ -488,7 +501,8 @@ func prepareProcessingBehaviorFixture(t *testing.T, db *gorm.DB, engine string) 
 	harness := &coordinatorHarness{db: db, clock: clock, coordinator: coordinator}
 	workerID := harness.registerNoopWorker(t, "d")
 	return processingBehaviorFixture{
-		engine: engine, db: db, clock: clock, lease: lease, coordinator: coordinator, grants: grants, workerID: workerID,
+		engine: engine, db: db, clock: clock, lease: lease, lifecycle: lifecycle,
+		coordinator: coordinator, grants: grants, workerID: workerID,
 	}
 }
 

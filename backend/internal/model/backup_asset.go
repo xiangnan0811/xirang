@@ -98,6 +98,7 @@ type RecoveryPoint struct {
 	LogicalBytes              int64      `gorm:"not null;default:0" json:"logical_bytes"`
 	ConsistencyJSON           string     `gorm:"type:text;not null;default:'{}'" json:"-"`
 	FidelityJSON              string     `gorm:"type:text;not null;default:'{}'" json:"-"`
+	PointRevision             int64      `gorm:"not null;default:1" json:"point_revision"`
 	CapabilityRevision        int        `gorm:"not null;default:1" json:"capability_revision"`
 	CapabilitiesJSON          string     `gorm:"type:text;not null;default:'{}'" json:"-"`
 	ImmutabilityLevel         string     `gorm:"size:32;not null" json:"immutability_level"`

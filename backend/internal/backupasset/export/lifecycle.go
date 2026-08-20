@@ -41,9 +41,10 @@ type Lifecycle struct {
 }
 
 const (
-	maxLifecycleReconcileLimit  = 10000
-	lifecycleReconcileScanScale = 32
-	lifecycleSweepLeaseTTL      = 30 * time.Second
+	maxLifecycleReconcileLimit         = 10000
+	lifecycleReconcileScanScale        = 32
+	lifecycleSweepLeaseTTL             = 30 * time.Second
+	lifecycleFailurePersistenceTimeout = 5 * time.Second
 )
 
 var runtimeStopActiveExecutionStates = []string{
@@ -706,6 +707,142 @@ func (port *PersistentLifecyclePort) ReleaseSourcesAndNonStore(ctx context.Conte
 	return nil
 }
 
+// ReleaseRecoveryPointSource releases only the source named by the live
+// lifecycle request. Unlike full cleanup it neither releases other job sources
+// nor touches job/store quota reservations or payload state.
+func (port *PersistentLifecyclePort) ReleaseRecoveryPointSource(
+	ctx context.Context,
+	request backupasset.SourceLifecycleRequest,
+	jobID string,
+) error {
+	if port == nil || backupasset.ValidateOpaqueID(jobID) != nil || request.Stage != backupasset.SourceLifecyclePrepare {
+		return ErrUnavailable
+	}
+	now := port.now().UTC()
+	return port.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := backupasset.ValidateSourceLifecycleAttemptTx(ctx, tx, request); err != nil {
+			return err
+		}
+		var sources []model.BackupAssetExportSourceLease
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("job_id = ? AND recovery_point_id = ?", jobID, request.RecoveryPointID).
+			Order("id ASC").Limit(2).Find(&sources).Error; err != nil {
+			return fmt.Errorf("lock exact Export source lease for release: %w", err)
+		}
+		if len(sources) != 1 {
+			return fmt.Errorf("%w: exact Export source lease is unavailable", backupasset.ErrConflict)
+		}
+		source := sources[0]
+		var lease model.RecoveryPointLease
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", source.LeaseID).Limit(1).Find(&lease)
+		if result.Error != nil {
+			return fmt.Errorf("lock exact Foundation source lease for release: %w", result.Error)
+		}
+		if result.RowsAffected != 1 || lease.RecoveryPointID != request.RecoveryPointID ||
+			lease.HolderType != string(backupasset.LeaseHolderExportJob) || lease.OwnerID != jobID ||
+			!lease.AbsoluteDeadline.UTC().Equal(source.AbsoluteDeadline.UTC()) {
+			return ErrAttemptFenceLost
+		}
+		digest := sha256.Sum256([]byte(lease.FenceToken))
+		if lease.AttemptID != source.LeaseAttemptID || hex.EncodeToString(digest[:]) != source.FenceHash {
+			return ErrAttemptFenceLost
+		}
+
+		switch source.State {
+		case "released":
+			if lease.Status != string(backupasset.LeaseReleased) || source.ReleasedAt == nil || lease.ReleasedAt == nil {
+				return ErrAttemptFenceLost
+			}
+			return nil
+		case "expired":
+			if lease.Status != string(backupasset.LeaseExpired) || source.ReleasedAt == nil {
+				return ErrAttemptFenceLost
+			}
+			return nil
+		case "active":
+		default:
+			return ErrAttemptFenceLost
+		}
+
+		targetState := "released"
+		switch lease.Status {
+		case string(backupasset.LeaseReleased):
+		case string(backupasset.LeaseExpired):
+			targetState = "expired"
+		case string(backupasset.LeaseActive):
+			if !now.Before(lease.AbsoluteDeadline.UTC()) {
+				result = tx.Model(&model.RecoveryPointLease{}).
+					Where(`id = ? AND recovery_point_id = ? AND holder_type = ? AND owner_id = ?
+						AND attempt_id = ? AND fence_token = ? AND status = ? AND absolute_deadline = ?`,
+						lease.ID, lease.RecoveryPointID, lease.HolderType, lease.OwnerID,
+						lease.AttemptID, lease.FenceToken, backupasset.LeaseActive, lease.AbsoluteDeadline).
+					Updates(map[string]any{"status": string(backupasset.LeaseExpired), "updated_at": now})
+				if result.Error != nil {
+					return fmt.Errorf("expire exact Foundation source lease at absolute deadline: %w", result.Error)
+				}
+				if result.RowsAffected != 1 {
+					return ErrAttemptFenceLost
+				}
+				targetState = "expired"
+				break
+			}
+			fence := backupasset.LeaseFence{
+				LeaseID: lease.ID, RecoveryPointID: lease.RecoveryPointID,
+				HolderType: backupasset.LeaseHolderExportJob, OwnerID: lease.OwnerID,
+				AttemptID: lease.AttemptID, FenceToken: lease.FenceToken,
+			}
+			if !now.Before(lease.LeaseExpiresAt.UTC()) {
+				taken, err := port.sources.TakeoverTx(ctx, tx, backupasset.TakeoverLeaseRequest{
+					LeaseID: lease.ID,
+					OwnerID: jobID,
+				})
+				if err != nil {
+					return fmt.Errorf("take over exact Foundation source lease for release: %w", err)
+				}
+				if taken.RecoveryPointID != request.RecoveryPointID || taken.OwnerID != jobID ||
+					taken.HolderType != backupasset.LeaseHolderExportJob ||
+					!taken.AbsoluteDeadline.UTC().Equal(source.AbsoluteDeadline.UTC()) {
+					return ErrAttemptFenceLost
+				}
+				fence = taken.Fence
+				takenDigest := sha256.Sum256([]byte(taken.Fence.FenceToken))
+				result = tx.Model(&model.BackupAssetExportSourceLease{}).
+					Where("id = ? AND job_id = ? AND recovery_point_id = ? AND state = ?", source.ID, jobID, request.RecoveryPointID, "active").
+					Updates(map[string]any{
+						"lease_attempt_id": taken.Fence.AttemptID,
+						"fence_hash":       hex.EncodeToString(takenDigest[:]),
+						"renewed_at":       taken.LastHeartbeatAt.UTC(),
+						"updated_at":       taken.LastHeartbeatAt.UTC(),
+					})
+				if result.Error != nil {
+					return fmt.Errorf("persist exact taken-over Export source lease: %w", result.Error)
+				}
+				if result.RowsAffected != 1 {
+					return ErrAttemptFenceLost
+				}
+			}
+			if err := port.sources.ReleaseTx(ctx, tx, fence); err != nil {
+				return fmt.Errorf("release exact Foundation source lease: %w", err)
+			}
+		default:
+			return ErrAttemptFenceLost
+		}
+
+		releasedAt := now
+		result = tx.Model(&model.BackupAssetExportSourceLease{}).
+			Where("id = ? AND job_id = ? AND recovery_point_id = ? AND state = ?", source.ID, jobID, request.RecoveryPointID, "active").
+			Updates(map[string]any{"state": targetState, "released_at": releasedAt, "updated_at": now})
+		if result.Error != nil {
+			return fmt.Errorf("persist exact released Export source lease: %w", result.Error)
+		}
+		if result.RowsAffected != 1 {
+			return ErrAttemptFenceLost
+		}
+		return nil
+	})
+}
+
 func (port *PersistentLifecyclePort) PurgeCiphertext(ctx context.Context, jobID string) error {
 	if port == nil || backupasset.ValidateOpaqueID(jobID) != nil {
 		return ErrUnavailable
@@ -716,10 +853,20 @@ func (port *PersistentLifecyclePort) PurgeCiphertext(ctx context.Context, jobID 
 		return err
 	}
 	if err := port.store.PurgeBatch(locators); err != nil {
-		if markErr := port.markPurgeFailure(context.WithoutCancel(ctx), jobID, now); markErr != nil {
-			return errors.Join(err, fmt.Errorf("mark export purge failure: %w", markErr))
+		persistenceCtx, cancel := context.WithTimeout(
+			context.WithoutCancel(ctx), lifecycleFailurePersistenceTimeout,
+		)
+		markErr := func() error {
+			defer cancel()
+			return port.markPurgeFailure(persistenceCtx, jobID, now)
+		}()
+		if markErr != nil {
+			return ErrUnavailable
 		}
-		return err
+		if errors.Is(err, ErrInvalidStore) {
+			return ErrInvalidStore
+		}
+		return ErrUnavailable
 	}
 	if err := port.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		purgedAt := now
@@ -1607,6 +1754,69 @@ func (lifecycle *Lifecycle) FailUnpublishable(ctx context.Context, jobID, catego
 	return nil
 }
 
+// prepareSourceExpirationTx moves an active Export into the durable
+// non-authorizing state required by the persistent lifecycle port. It preserves
+// the current attempt pointer so FenceAttempts can close the exact lineage.
+func (lifecycle *Lifecycle) prepareSourceExpirationTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	jobID string,
+) error {
+	if lifecycle == nil || tx == nil || backupasset.ValidateOpaqueID(jobID) != nil {
+		return ErrUnavailable
+	}
+	var job model.BackupAssetExportJob
+	result := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", jobID).Limit(1).Find(&job)
+	if result.Error != nil {
+		return fmt.Errorf("load Export job for source prepare: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return ErrNotFound
+	}
+	if CleanupState(job.CleanupState) != CleanupNone {
+		return ErrInvalidTransition
+	}
+	state := ExecutionState(job.ExecutionState)
+	switch state {
+	case ExecutionSourceExpired, ExecutionExpiring:
+		if job.ErrorCategory != "source_expired" {
+			return ErrInvalidTransition
+		}
+		return nil
+	case ExecutionCancelRequested:
+		return nil
+	case ExecutionFailed:
+		if !validLifecycleFailureCategory(job.ErrorCategory) {
+			return ErrInvalidTransition
+		}
+		return nil
+	}
+
+	next := ExecutionSourceExpired
+	if state == ExecutionReady {
+		next = ExecutionExpiring
+	}
+	if ValidateExecutionTransition(state, next) != nil {
+		return ErrInvalidTransition
+	}
+	now := lifecycle.now().UTC()
+	result = tx.WithContext(ctx).Model(&model.BackupAssetExportJob{}).
+		Where("id = ? AND execution_state = ? AND cleanup_state = ? AND transition_revision = ?",
+			job.ID, state, CleanupNone, job.TransitionRevision).
+		Updates(map[string]any{
+			"execution_state": next, "error_category": "source_expired",
+			"transition_revision": gorm.Expr("transition_revision + 1"), "updated_at": now,
+		})
+	if result.Error != nil {
+		return fmt.Errorf("persist Export source prepare transition: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return ErrInvalidTransition
+	}
+	return nil
+}
+
 func (lifecycle *Lifecycle) FailSourceExpired(ctx context.Context, jobID string) error {
 	if lifecycle == nil || backupasset.ValidateOpaqueID(jobID) != nil {
 		return ErrUnavailable
@@ -1627,7 +1837,7 @@ func (lifecycle *Lifecycle) FailSourceExpired(ctx context.Context, jobID string)
 			cancelRequested = true
 			return nil
 		}
-		if (state == ExecutionSourceExpired || state == ExecutionExpired) && job.ErrorCategory == "source_expired" {
+		if (state == ExecutionSourceExpired || state == ExecutionExpiring || state == ExecutionExpired) && job.ErrorCategory == "source_expired" {
 			return nil
 		}
 		next := ExecutionSourceExpired

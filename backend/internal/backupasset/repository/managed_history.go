@@ -44,6 +44,76 @@ type ManagedHistoryResolver struct {
 	tombstones ManagedHistoryTombstoneSource
 }
 
+type lifecycleManagedHistoryTombstones struct {
+	db *gorm.DB
+}
+
+func NewLifecycleManagedHistoryTombstones(db *gorm.DB) (ManagedHistoryTombstoneSource, error) {
+	if db == nil {
+		return nil, fmt.Errorf("%w: managed history tombstone database is unavailable", backupasset.ErrInvalidState)
+	}
+	return &lifecycleManagedHistoryTombstones{db: db}, nil
+}
+
+func (source *lifecycleManagedHistoryTombstones) HasRepositoryManagedHistory(ctx context.Context, repositoryID string) (bool, error) {
+	if source == nil || source.db == nil || backupasset.ValidateOpaqueID(repositoryID) != nil {
+		return false, fmt.Errorf("%w: invalid managed history tombstone query", backupasset.ErrInvalidState)
+	}
+	if !source.db.Migrator().HasTable(&model.RecoveryPointLifecycleTombstone{}) &&
+		!source.db.Migrator().HasTable(&model.BackupAssetManagedHistoryLatch{}) {
+		return false, nil
+	}
+	var count int64
+	if source.db.Migrator().HasTable(&model.RecoveryPointLifecycleTombstone{}) {
+		if err := source.db.WithContext(ctx).Model(&model.RecoveryPointLifecycleTombstone{}).
+			Where("repository_id = ? AND managed_history = ?", repositoryID, true).
+			Count(&count).Error; err != nil {
+			return false, fmt.Errorf("query repository lifecycle tombstone: %w", err)
+		}
+		if count > 0 {
+			return true, nil
+		}
+	}
+	if source.db.Migrator().HasTable(&model.BackupAssetManagedHistoryLatch{}) {
+		if err := source.db.WithContext(ctx).Model(&model.BackupAssetManagedHistoryLatch{}).
+			Where("scope = ? AND repository_id = ?", managedHistoryLatchScopeRepository, repositoryID).
+			Count(&count).Error; err != nil {
+			return false, fmt.Errorf("query repository managed history latch tombstone: %w", err)
+		}
+		return count > 0, nil
+	}
+	return false, nil
+}
+
+func (source *lifecycleManagedHistoryTombstones) HasInstallationManagedHistory(ctx context.Context) (bool, error) {
+	if source == nil || source.db == nil {
+		return false, fmt.Errorf("%w: managed history tombstone database is unavailable", backupasset.ErrInvalidState)
+	}
+	if !source.db.Migrator().HasTable(&model.RecoveryPointLifecycleTombstone{}) &&
+		!source.db.Migrator().HasTable(&model.BackupAssetManagedHistoryLatch{}) {
+		return false, nil
+	}
+	var count int64
+	if source.db.Migrator().HasTable(&model.RecoveryPointLifecycleTombstone{}) {
+		if err := source.db.WithContext(ctx).Model(&model.RecoveryPointLifecycleTombstone{}).
+			Where("managed_history = ?", true).Count(&count).Error; err != nil {
+			return false, fmt.Errorf("query installation lifecycle tombstone: %w", err)
+		}
+		if count > 0 {
+			return true, nil
+		}
+	}
+	if source.db.Migrator().HasTable(&model.BackupAssetManagedHistoryLatch{}) {
+		if err := source.db.WithContext(ctx).Model(&model.BackupAssetManagedHistoryLatch{}).
+			Where("scope = ?", managedHistoryLatchScopeInstallation).
+			Count(&count).Error; err != nil {
+			return false, fmt.Errorf("query installation managed history latch tombstone: %w", err)
+		}
+		return count > 0, nil
+	}
+	return false, nil
+}
+
 func NewManagedHistoryResolver(dependencies ManagedHistoryResolverDependencies) (*ManagedHistoryResolver, error) {
 	if dependencies.DB == nil {
 		return nil, fmt.Errorf("%w: managed history database is unavailable", backupasset.ErrInvalidState)

@@ -16,6 +16,7 @@ import (
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -34,6 +35,15 @@ type ConnectRequest struct {
 type ConnectResult struct {
 	Repository   backupasset.RepositoryDTO
 	MutablePoint *backupasset.RecoveryPointDTO
+}
+
+type connectTaskLinkSnapshot struct {
+	active *model.TaskRepositoryLink
+}
+
+type connectProbeLineage struct {
+	task    model.Task
+	binding *model.RepositoryAccessBinding
 }
 
 // managedRsyncActivationRequest is an internal hand-off between the future
@@ -74,8 +84,12 @@ func (service *Service) Connect(ctx context.Context, request ConnectRequest, req
 	} else if err != nil {
 		return ConnectResult{}, fmt.Errorf("load Task for repository connect: %w", err)
 	}
+	linkSnapshot, err := service.connectTaskLinkSnapshot(ctx, taskEntity.ID)
+	if err != nil {
+		return ConnectResult{}, err
+	}
 
-	document, access, retainedAccess, err := service.connectAccess(ctx, taskEntity, request)
+	document, access, probeLineage, retainedAccess, err := service.connectAccess(ctx, taskEntity, request)
 	if err != nil {
 		return ConnectResult{}, err
 	}
@@ -121,7 +135,24 @@ func (service *Service) Connect(ctx context.Context, request ConnectRequest, req
 		repository = model.BackupRepository{}
 		mutablePoint = nil
 		return service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			resolved, created, err := service.resolveRepositoryForConnect(tx, request, taskEntity, observation)
+			currentTask, err := lockAndRevalidateConnectTask(tx, taskEntity)
+			if err != nil {
+				return err
+			}
+			if err := lockAndRevalidateConnectTaskLink(tx, currentTask.ID, linkSnapshot); err != nil {
+				return err
+			}
+			if probeLineage.task.ID != currentTask.ID {
+				if _, err := lockAndRevalidateConnectTask(tx, probeLineage.task); err != nil {
+					return err
+				}
+			}
+			if probeLineage.binding != nil {
+				if err := lockAndRevalidateRetainedProbeBinding(tx, *probeLineage.binding, observation); err != nil {
+					return err
+				}
+			}
+			resolved, created, err := service.resolveRepositoryForConnect(tx, request, currentTask, observation)
 			if err != nil {
 				return err
 			}
@@ -139,9 +170,11 @@ func (service *Service) Connect(ctx context.Context, request ConnectRequest, req
 					return fmt.Errorf("create backup repository: %w", err)
 				}
 			} else {
-				if repository.RepositoryIdentity == nil || *repository.RepositoryIdentity != observation.RepositoryIdentity || repository.ProviderKind != string(observation.Provider) {
+				boundIdentity, bindErr := backupasset.BindImportedRepositoryIdentity(repository.RepositoryIdentity, observation.RepositoryIdentity)
+				if bindErr != nil || repository.ProviderKind != string(observation.Provider) {
 					return fmt.Errorf("%w: repository identity mismatch", backupasset.ErrConflict)
 				}
+				repository.RepositoryIdentity = &boundIdentity
 				if repository.CapabilitiesJSON != string(capabilitiesJSON) || (retainedAccess && previousAdapterRevision != observation.AdapterRevision) {
 					repository.CapabilityRevision++
 				}
@@ -166,18 +199,18 @@ func (service *Service) Connect(ctx context.Context, request ConnectRequest, req
 					return fmt.Errorf("update backup repository: %w", err)
 				}
 			}
-			if err := ensureLegacyTaskLink(tx, repository, taskEntity, document, now); err != nil {
+			if err := ensureLegacyTaskLink(tx, repository, currentTask, document, now); err != nil {
 				return err
 			}
 			if err := ensureAccessBinding(tx, repository.ID, bindingPayload, fingerprint, request, retainedAccess, now); err != nil {
 				return err
 			}
 			if observation.VersionMode == backupasset.VersionMutableHead {
-				point, err := ensureMutablePoint(tx, repository, taskEntity, observation, now)
+				point, err := ensureMutablePoint(tx, repository, currentTask, observation, now)
 				if err != nil {
 					return err
 				}
-				mutablePoint = &point
+				mutablePoint = point
 			}
 			return nil
 		})
@@ -204,6 +237,149 @@ func (service *Service) Connect(ctx context.Context, request ConnectRequest, req
 	}
 	service.writeAudit(ctx, requestContext, backupasset.AuditActionRepositoryConnect, backupasset.AuditOutcomeSuccess, repository.ID, &taskEntity.ID, "commit", nil)
 	return result, nil
+}
+
+func (service *Service) connectTaskLinkSnapshot(ctx context.Context, taskID uint) (connectTaskLinkSnapshot, error) {
+	var link model.TaskRepositoryLink
+	err := service.db.WithContext(ctx).Where("task_id = ? AND unlinked_at IS NULL", taskID).First(&link).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return connectTaskLinkSnapshot{}, nil
+	}
+	if err != nil {
+		return connectTaskLinkSnapshot{}, fmt.Errorf("load Task link lineage for repository connect: %w", err)
+	}
+	return connectTaskLinkSnapshot{active: &link}, nil
+}
+
+func lockAndRevalidateConnectTask(tx *gorm.DB, snapshot model.Task) (model.Task, error) {
+	var current model.Task
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, snapshot.ID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return model.Task{}, fmt.Errorf("%w: Task lineage changed during Provider probe", backupasset.ErrConflict)
+		}
+		return model.Task{}, fmt.Errorf("reload Task after Provider probe: %w", err)
+	}
+	if current.ArchivedAt != nil || current.NodeID != snapshot.NodeID || bindingProviderForTask(current) != bindingProviderForTask(snapshot) ||
+		current.RsyncTarget != snapshot.RsyncTarget || current.ExecutorConfig != snapshot.ExecutorConfig || !current.UpdatedAt.Equal(snapshot.UpdatedAt) {
+		return model.Task{}, fmt.Errorf("%w: Task lineage changed during Provider probe", backupasset.ErrConflict)
+	}
+
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current.Node, current.NodeID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return model.Task{}, fmt.Errorf("%w: Task Node lineage changed during Provider probe", backupasset.ErrConflict)
+		}
+		return model.Task{}, fmt.Errorf("reload Task Node after Provider probe: %w", err)
+	}
+	if !sameConnectNodeLineage(snapshot.Node, current.Node) {
+		return model.Task{}, fmt.Errorf("%w: Task Node lineage changed during Provider probe", backupasset.ErrConflict)
+	}
+	if current.Node.SSHKeyID != nil {
+		var key model.SSHKey
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&key, *current.Node.SSHKeyID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return model.Task{}, fmt.Errorf("%w: Task Node credential lineage changed during Provider probe", backupasset.ErrConflict)
+			}
+			return model.Task{}, fmt.Errorf("reload Task Node credential after Provider probe: %w", err)
+		}
+		current.Node.SSHKey = &key
+		if snapshot.Node.SSHKey == nil || !sameConnectSSHCredentialLineage(*snapshot.Node.SSHKey, key) {
+			return model.Task{}, fmt.Errorf("%w: Task Node credential lineage changed during Provider probe", backupasset.ErrConflict)
+		}
+	}
+	return current, nil
+}
+
+func sameConnectNodeLineage(snapshot, current model.Node) bool {
+	if snapshot.ID != current.ID || snapshot.Host != current.Host || snapshot.Port != current.Port || snapshot.Username != current.Username ||
+		snapshot.AuthType != current.AuthType || snapshot.Password != current.Password || snapshot.PrivateKey != current.PrivateKey ||
+		snapshot.Archived != current.Archived || !snapshot.UpdatedAt.Equal(current.UpdatedAt) {
+		return false
+	}
+	if snapshot.SSHKeyID == nil || current.SSHKeyID == nil {
+		return snapshot.SSHKeyID == nil && current.SSHKeyID == nil
+	}
+	return *snapshot.SSHKeyID == *current.SSHKeyID
+}
+
+func sameConnectSSHCredentialLineage(snapshot, current model.SSHKey) bool {
+	if snapshot.ID != current.ID || snapshot.Username != current.Username || snapshot.KeyType != current.KeyType ||
+		snapshot.PrivateKey != current.PrivateKey || snapshot.Fingerprint != current.Fingerprint || snapshot.Disabled != current.Disabled ||
+		snapshot.AllowedPurposes != current.AllowedPurposes || snapshot.AllowedNodeIDs != current.AllowedNodeIDs ||
+		snapshot.AllowedNodeTags != current.AllowedNodeTags {
+		return false
+	}
+	if snapshot.ExpiresAt == nil || current.ExpiresAt == nil {
+		return snapshot.ExpiresAt == nil && current.ExpiresAt == nil
+	}
+	return snapshot.ExpiresAt.Equal(*current.ExpiresAt)
+}
+
+func lockAndRevalidateRetainedProbeBinding(
+	tx *gorm.DB,
+	snapshot model.RepositoryAccessBinding,
+	observation provider.RepositoryObservation,
+) error {
+	var repository model.BackupRepository
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&repository, "id = ?", snapshot.RepositoryID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("%w: retained probe repository changed during Provider probe", backupasset.ErrConflict)
+		}
+		return fmt.Errorf("reload retained probe repository after Provider probe: %w", err)
+	}
+	if repository.RepositoryIdentity == nil || *repository.RepositoryIdentity != observation.RepositoryIdentity ||
+		repository.ProviderKind != string(observation.Provider) {
+		return fmt.Errorf("%w: retained probe repository changed during Provider probe", backupasset.ErrConflict)
+	}
+
+	var current model.RepositoryAccessBinding
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, "id = ?", snapshot.ID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("%w: retained probe binding changed during Provider probe", backupasset.ErrConflict)
+		}
+		return fmt.Errorf("reload retained probe binding after Provider probe: %w", err)
+	}
+	if snapshot.Status != bindingStatusActive || current.RepositoryID != snapshot.RepositoryID || current.BindingKind != snapshot.BindingKind ||
+		current.Status != snapshot.Status || current.EncryptedConfig != snapshot.EncryptedConfig || current.ConfigFingerprint != snapshot.ConfigFingerprint ||
+		!sameConnectOptionalTime(current.RevokedAt, snapshot.RevokedAt) || !current.CreatedAt.Equal(snapshot.CreatedAt) ||
+		!current.UpdatedAt.Equal(snapshot.UpdatedAt) {
+		return fmt.Errorf("%w: retained probe binding changed during Provider probe", backupasset.ErrConflict)
+	}
+	return nil
+}
+
+func sameConnectOptionalTime(first, second *time.Time) bool {
+	if first == nil || second == nil {
+		return first == nil && second == nil
+	}
+	return first.Equal(*second)
+}
+
+func lockAndRevalidateConnectTaskLink(tx *gorm.DB, taskID uint, snapshot connectTaskLinkSnapshot) error {
+	if snapshot.active == nil {
+		var current model.TaskRepositoryLink
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("task_id = ? AND unlinked_at IS NULL", taskID).First(&current).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("reload Task link after Provider probe: %w", err)
+		}
+		return fmt.Errorf("%w: Task link lineage changed during Provider probe", backupasset.ErrConflict)
+	}
+
+	var current model.TaskRepositoryLink
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, "id = ?", snapshot.active.ID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("%w: Task link lineage changed during Provider probe", backupasset.ErrConflict)
+		}
+		return fmt.Errorf("reload Task link after Provider probe: %w", err)
+	}
+	if current.TaskID == nil || *current.TaskID != taskID || current.UnlinkedAt != nil || current.RepositoryID != snapshot.active.RepositoryID ||
+		current.PublicationMode != snapshot.active.PublicationMode || current.EncryptedLegacyLocator != snapshot.active.EncryptedLegacyLocator ||
+		!current.UpdatedAt.Equal(snapshot.active.UpdatedAt) {
+		return fmt.Errorf("%w: Task link lineage changed during Provider probe", backupasset.ErrConflict)
+	}
+	return nil
 }
 
 func (service *Service) prepareManagedRsyncActivation(ctx context.Context, request managedRsyncActivationRequest) (managedRsyncActivationPlan, error) {
@@ -292,13 +468,13 @@ func managedRsyncTaskRevision(taskEntity model.Task) (uint64, error) {
 	return uint64(nanos), nil
 }
 
-func (service *Service) connectAccess(ctx context.Context, taskEntity model.Task, request ConnectRequest) (bindingDocument, provider.AccessBinding, bool, error) {
+func (service *Service) connectAccess(ctx context.Context, taskEntity model.Task, request ConnectRequest) (bindingDocument, provider.AccessBinding, connectProbeLineage, bool, error) {
 	if !request.ReplaceAccess {
 		var link model.TaskRepositoryLink
 		err := service.db.WithContext(ctx).Where("task_id = ? AND unlinked_at IS NULL", taskEntity.ID).First(&link).Error
 		if err == nil {
 			if request.RepositoryID != "" && request.RepositoryID != link.RepositoryID {
-				return bindingDocument{}, provider.AccessBinding{}, false, fmt.Errorf("%w: Task already linked to another repository", backupasset.ErrConflict)
+				return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, fmt.Errorf("%w: Task already linked to another repository", backupasset.ErrConflict)
 			}
 			var binding model.RepositoryAccessBinding
 			bindingErr := service.db.WithContext(ctx).Where("repository_id = ? AND status = ?", link.RepositoryID, bindingStatusActive).First(&binding).Error
@@ -306,60 +482,60 @@ func (service *Service) connectAccess(ctx context.Context, taskEntity model.Task
 			case bindingErr == nil:
 				stored, decodeErr := decodeStoredBindingDocument(binding.EncryptedConfig)
 				if decodeErr != nil {
-					return bindingDocument{}, provider.AccessBinding{}, false, decodeErr
+					return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, decodeErr
 				}
 				if stored.ManagedRsyncV2 != nil {
-					return bindingDocument{}, provider.AccessBinding{}, false, fmt.Errorf("%w: managed Rsync binding requires explicit activation", backupasset.ErrConflict)
+					return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, fmt.Errorf("%w: managed Rsync binding requires explicit activation", backupasset.ErrConflict)
 				}
 				if stored.V1 == nil {
-					return bindingDocument{}, provider.AccessBinding{}, false, fmt.Errorf("%w: unsupported retained binding document", backupasset.ErrInvalidState)
+					return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, fmt.Errorf("%w: unsupported retained binding document", backupasset.ErrInvalidState)
 				}
 				document := *stored.V1
 				currentProvider := bindingProviderForTask(taskEntity)
 				if currentProvider != document.Provider {
-					return bindingDocument{}, provider.AccessBinding{}, false, fmt.Errorf("%w: Task Provider changed", backupasset.ErrConflict)
+					return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, fmt.Errorf("%w: Task Provider changed", backupasset.ErrConflict)
 				}
 				if document.IdentityClass == provider.IdentityTaskScopedEndpoint {
 					salt, saltErr := hexDecodeSalt(document.IdentitySalt)
 					if saltErr != nil {
-						return bindingDocument{}, provider.AccessBinding{}, false, saltErr
+						return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, saltErr
 					}
 					currentDocument, _, currentErr := bindingFromTask(taskEntity, taskEntity.Node, salt)
 					if currentErr != nil || currentDocument.Provider != document.Provider || currentDocument.Locator != document.Locator ||
 						!slices.Equal(currentDocument.EndpointFacts, document.EndpointFacts) {
-						return bindingDocument{}, provider.AccessBinding{}, false, fmt.Errorf("%w: Task repository identity changed", backupasset.ErrConflict)
+						return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, fmt.Errorf("%w: Task repository identity changed", backupasset.ErrConflict)
 					}
 				}
 				var bindingTask model.Task
 				if loadErr := service.db.WithContext(ctx).Where("archived_at IS NULL").Preload("Node.SSHKey").First(&bindingTask, document.TaskID).Error; loadErr != nil {
 					if errors.Is(loadErr, gorm.ErrRecordNotFound) {
-						return bindingDocument{}, provider.AccessBinding{}, false, fmt.Errorf("%w: retained binding Task unavailable", backupasset.ErrConflict)
+						return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, fmt.Errorf("%w: retained binding Task unavailable", backupasset.ErrConflict)
 					}
-					return bindingDocument{}, provider.AccessBinding{}, false, fmt.Errorf("load retained binding Task: %w", loadErr)
+					return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, fmt.Errorf("load retained binding Task: %w", loadErr)
 				}
-				if bindingTask.NodeID != document.NodeID {
-					return bindingDocument{}, provider.AccessBinding{}, false, fmt.Errorf("%w: retained binding lineage changed", backupasset.ErrConflict)
+				if bindingTask.NodeID != document.NodeID || bindingProviderForTask(bindingTask) != document.Provider {
+					return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, fmt.Errorf("%w: retained binding lineage changed", backupasset.ErrConflict)
 				}
 				access, accessErr := accessFromBindingDocument(document, bindingTask.Node)
 				if accessErr != nil {
-					return bindingDocument{}, provider.AccessBinding{}, false, accessErr
+					return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, accessErr
 				}
 				access.RepositoryID = link.RepositoryID
-				return document, access, true, nil
+				return document, access, connectProbeLineage{task: bindingTask, binding: &binding}, true, nil
 			case !errors.Is(bindingErr, gorm.ErrRecordNotFound):
-				return bindingDocument{}, provider.AccessBinding{}, false, fmt.Errorf("load retained repository binding: %w", bindingErr)
+				return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, fmt.Errorf("load retained repository binding: %w", bindingErr)
 			}
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return bindingDocument{}, provider.AccessBinding{}, false, fmt.Errorf("load active Task repository link: %w", err)
+			return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, fmt.Errorf("load active Task repository link: %w", err)
 		}
 	}
 
 	salt, err := service.bindingSalt(ctx, taskEntity.ID, request.RepositoryID)
 	if err != nil {
-		return bindingDocument{}, provider.AccessBinding{}, false, err
+		return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, err
 	}
 	document, access, err := bindingFromTask(taskEntity, taskEntity.Node, salt)
-	return document, access, false, err
+	return document, access, connectProbeLineage{task: taskEntity}, false, err
 }
 
 func (service *Service) bindingSalt(ctx context.Context, taskID uint, repositoryID string) ([]byte, error) {
@@ -419,6 +595,10 @@ func (service *Service) resolveRepositoryForConnect(tx *gorm.DB, request Connect
 		err = tx.First(&repository, "id = ?", requestedID).Error
 	} else {
 		err = tx.Where("provider_kind = ? AND repository_identity = ?", observation.Provider, observation.RepositoryIdentity).First(&repository).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			placeholder := backupasset.FormatImportedRepositoryIdentity(backupasset.ImportedIdentityRef(observation.RepositoryIdentity))
+			err = tx.Where("provider_kind = ? AND repository_identity = ?", observation.Provider, placeholder).First(&repository).Error
+		}
 	}
 	if err == nil {
 		return repository, false, nil
@@ -551,14 +731,20 @@ func ensureRetainedBindingTaskAvailable(tx *gorm.DB, binding model.RepositoryAcc
 	return nil
 }
 
-func ensureMutablePoint(tx *gorm.DB, repository model.BackupRepository, taskEntity model.Task, observation provider.RepositoryObservation, now time.Time) (model.RecoveryPoint, error) {
+func ensureMutablePoint(tx *gorm.DB, repository model.BackupRepository, taskEntity model.Task, observation provider.RepositoryObservation, now time.Time) (*model.RecoveryPoint, error) {
 	var point model.RecoveryPoint
 	err := tx.Where("repository_id = ? AND semantics = ?", repository.ID, backupasset.PointMutableHead).First(&point).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return model.RecoveryPoint{}, err
+		return nil, err
 	}
-	if err == nil && backupasset.RecoveryPointState(point.State) != backupasset.RecoveryPointObserved {
-		return model.RecoveryPoint{}, fmt.Errorf("%w: mutable point cannot be reactivated", backupasset.ErrConflict)
+	if err == nil {
+		switch backupasset.RecoveryPointState(point.State) {
+		case backupasset.RecoveryPointObserved:
+		case backupasset.RecoveryPointRetired:
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("%w: mutable point cannot be reactivated", backupasset.ErrConflict)
+		}
 	}
 	capabilitiesJSON, _ := json.Marshal(observation.Capabilities)
 	lineageJSON, _ := json.Marshal(backupasset.RecoveryPointLineageSummary{ProducingTaskID: &taskEntity.ID})
@@ -566,7 +752,7 @@ func ensureMutablePoint(tx *gorm.DB, repository model.BackupRepository, taskEnti
 	if point.ID == "" {
 		id, err := backupasset.NewOpaqueID()
 		if err != nil {
-			return model.RecoveryPoint{}, err
+			return nil, err
 		}
 		point = model.RecoveryPoint{ID: id, RepositoryID: repository.ID, CreatedAt: now}
 	}
@@ -594,12 +780,12 @@ func ensureMutablePoint(tx *gorm.DB, repository model.BackupRepository, taskEnti
 	point.UpdatedAt = now
 	if err == nil {
 		if saveErr := tx.Save(&point).Error; saveErr != nil {
-			return model.RecoveryPoint{}, saveErr
+			return nil, saveErr
 		}
 	} else if createErr := tx.Create(&point).Error; createErr != nil {
-		return model.RecoveryPoint{}, createErr
+		return nil, createErr
 	}
-	return point, nil
+	return &point, nil
 }
 
 func validateObservation(access provider.AccessBinding, observation provider.RepositoryObservation) error {

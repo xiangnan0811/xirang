@@ -193,6 +193,7 @@ type managedProcessingRuntime struct {
 
 	mu                       sync.RWMutex
 	config                   backupasset.ProcessingConfig
+	derivedBackfillWalk      map[string]derivedBackfillWalkState
 	lastReconciled           *time.Time
 	runCancel                context.CancelFunc
 	runDone                  chan struct{}
@@ -1058,6 +1059,29 @@ func (runtime *managedProcessingRuntime) archiveMemberCoordinator() *processing.
 		return nil
 	}
 	return runtime.coordinator
+}
+
+// sourceLifecycle constructs the Task 6 owner over the already-initialized
+// managed Processing graph. It does not install the owner into Runtime or add
+// any startup/run/shutdown behavior.
+func (runtime *managedProcessingRuntime) sourceLifecycle(
+	search processing.SearchSourceRevocationProof,
+	batchSize int,
+) (*processing.SourceLifecycle, error) {
+	if runtime == nil {
+		return nil, fmt.Errorf("%w: managed Processing source lifecycle is unavailable", backupasset.ErrInvalidState)
+	}
+	runtime.mu.RLock()
+	db, coordinator, store, lifecycle, now := runtime.db, runtime.coordinator, runtime.store, runtime.lifecycle, runtime.now
+	runtime.mu.RUnlock()
+	if db == nil || coordinator == nil || store == nil || lifecycle == nil || now == nil {
+		return nil, fmt.Errorf("%w: managed Processing graph is incomplete", backupasset.ErrInvalidState)
+	}
+	owner, err := processing.NewSourceLifecycle(db, lifecycle, search, now, batchSize)
+	if err != nil {
+		return nil, fmt.Errorf("construct managed Processing source lifecycle: %w", err)
+	}
+	return owner, nil
 }
 
 func (runtime *managedProcessingRuntime) ReadDerivedArtifact(

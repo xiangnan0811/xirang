@@ -1,0 +1,374 @@
+{
+  "id": "backup-assets-lifecycle-reconnect",
+  "name": "backup-assets-lifecycle-reconnect",
+  "title": "备份资产生命周期与重连",
+  "description": "Plan exact RecoveryPoint lifecycle retention, policy and holds, lifecycle-aware reconnect/import/rebuild, dependent-owner cleanup, Task archive/unlink, admin API/UI, config backup v2, and database disaster recovery without enabling GA.",
+  "status": "completed",
+  "dev_type": "feature",
+  "scope": "full-stack",
+  "package": "backend,web,docs",
+  "priority": "P2",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-08-17",
+  "completedAt": "2026-08-20",
+  "branch": "codex/backup-assets-lifecycle-reconnect",
+  "base_branch": "main",
+  "worktree_path": "/home/murray/.codex/worktrees/0334/xirang",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-12-backup-data-explorer-design",
+  "relatedFiles": [
+    ".trellis/tasks/08-17-backup-assets-lifecycle-reconnect/prd.md",
+    ".trellis/tasks/08-17-backup-assets-lifecycle-reconnect/design.md",
+    ".trellis/tasks/08-17-backup-assets-lifecycle-reconnect/implement.md",
+    ".trellis/tasks/08-17-backup-assets-lifecycle-reconnect/research/current-main-evidence.md",
+    ".trellis/tasks/08-17-backup-assets-lifecycle-reconnect/research/review.md",
+    ".trellis/tasks/08-17-backup-assets-lifecycle-reconnect/research/red-green.md"
+  ],
+  "notes": "Child 14 was created from exact live origin/main 19140e80ac34ebab26bc1f8ed141965c5f4d3cdd. Tasks 1 through 16 are complete_checked. Task 17 is authorized as Trellis close then PR: Phase 3.4 one work commit, then finish-work archive and journal, then push/PR/CI. backup_assets.enabled remains false. Child 15, 000071, deploy/GA, and dependency upgrades remain unauthorized until Alan instructs otherwise.",
+  "meta": {
+    "planning_baseline": {
+      "date": "2026-08-17",
+      "origin_main": "19140e80ac34ebab26bc1f8ed141965c5f4d3cdd",
+      "local_main": "19140e80ac34ebab26bc1f8ed141965c5f4d3cdd",
+      "formal_release": "v0.48.0@793af9f8c29ba6274d4f99c1e104fcc01a72752c",
+      "branch": "codex/backup-assets-lifecycle-reconnect",
+      "source_of_truth": "live_repository_parent_prd_design_implement_and_current_code_only"
+    },
+    "planning_gate": {
+      "status": "approved_2026-08-17",
+      "approved": true,
+      "task_start_authorized": true,
+      "product_code_authorized": true,
+      "first_selector_requires_genuine_red_same_selector_green": true
+    },
+    "program_boundary": {
+      "program_delivery": "13_of_15",
+      "child_number": 14,
+      "child_15_created": false,
+      "child_15_authorized": false,
+      "backup_assets_enabled_default": false
+    },
+    "execution": {
+      "task_start": "executed_once_2026-08-17",
+      "current_step": "task_17_authorized_trellis_close_then_pr",
+      "task_1": {
+        "status": "complete_checked",
+        "first_red_selector": "TestManagedTaskRetentionDelegatesExactRecoveryPointIDs",
+        "review_fix_selector": "TestManagedTaskRetentionRejectsUnsafeExactAuthorityInputs",
+        "broader_regression_selector": "Retention_or_Pristine",
+        "spec_review": "approved_no_open_issues",
+        "quality_review": "approved_no_critical_important_or_minor",
+        "delivery": "uncommitted_unstaged_task17_only"
+      },
+      "task_2": {
+        "status": "complete_checked",
+        "first_red_selector": "TestBackupAssetMigration070_SQLite_PairedFiles_UsedDownAdmissionSQLite",
+        "review_fix_selectors": [
+          "TestBackupAssetMigration070PolicyRevisionSnapshotSQLite",
+          "TestLifecycleClosedEnumsAndValidators",
+          "TestBackupAssetLifecycle_count_2",
+          "TestBackupAssetMigration070TombstoneTerminalFactsSQLite",
+          "TestBackupAssetMigration070SharedContractRegistration"
+        ],
+        "sqlite_gate": "green",
+        "paired_postgres_contract": "implemented_and_shared_static_review_approved",
+        "postgres_gate": "green_on_approved_disposable_postgres17_and_independent_second_fixture",
+        "spec_review": "approved_no_open_findings",
+        "quality_review": "approved_no_open_critical_important_or_minor",
+        "fixture_cleanup": "both_containers_and_anonymous_storage_removed_credentials_unset",
+        "next": "task_3_policy_and_hold_services",
+        "delivery": "uncommitted_unstaged_task17_only"
+      },
+      "task_3": {
+        "status": "complete_checked",
+        "contracts": "versioned_policy_hold_step_up_settings_and_distinct_point_revision",
+        "red_green": "all_initial_spec_fix_and_quality_fix_slices_same_selector_green",
+        "cross_engine": "sqlite_and_repeated_disposable_postgres17_migration_lock_and_concurrency_gates_green",
+        "spec_review": "approved_no_open_findings",
+        "quality_review": "approved_no_open_critical_important_or_minor",
+        "fixture_cleanup": "all_containers_anonymous_storage_and_credentials_removed",
+        "boundary": "task_4_not_started_backup_assets_enabled_false_no_task5_plus",
+        "delivery": "uncommitted_unstaged_task17_only"
+      },
+      "task_4": {
+        "status": "complete_checked",
+        "contracts": "retired_head_reconnect_attributable_import_terminal_review_bounded_rebuild_and_exact_probe_authority",
+        "red_green": "all_initial_spec_fix_quality_fix_and_cross_engine_collision_slices_same_selector_green",
+        "cross_engine": "sqlite_and_disposable_postgres17_discovery_collision_gates_green",
+        "spec_review": "approved_no_open_findings",
+        "quality_review": "approved_no_open_critical_important_or_minor",
+        "full_backend": "uncached_go_test_all_green",
+        "fixture_cleanup": "all_containers_tmpfs_or_anonymous_storage_and_credentials_removed",
+        "boundary": "task_5_started_after_task4_complete_checked_backup_assets_enabled_false_no_task6_plus",
+        "delivery": "uncommitted_unstaged_task17_only"
+      },
+      "task_5": {
+        "status": "complete_checked",
+        "contracts": "exact_recovery_point_claim_lease_hold_expiry_mutable_retirement_explicit_purge_and_atomic_task_policy_handoff",
+        "red_green": "all_initial_spec_fix_quality_fix_and_terminal_restart_slices_same_selector_green",
+        "cross_engine": "sqlite_and_disposable_postgres17_composite_event_lock_order_policy_and_fresh_fence_adoption_gates_green",
+        "spec_review": "approved_no_open_findings",
+        "quality_review": "approved_no_open_critical_important_or_minor",
+        "full_backend": "uncached_go_test_all_build_vet_and_lint_green",
+        "fixture_cleanup": "all_containers_tmpfs_or_anonymous_storage_and_credentials_removed",
+        "boundary": "task_6_not_started_task6_task7_owner_ports_fail_closed_task8_production_composition_not_started_backup_assets_enabled_false",
+        "delivery": "uncommitted_unstaged_task17_only"
+      },
+      "task_6": {
+        "status": "complete_checked",
+        "contracts": "closed_prepare_cleanup_owner_ports_content_catalog_search_processing_export_recovery_overlay_zero_proof_pure_runtime_aggregate_and_finite_detached_owner_handoffs",
+        "red_green": "initial_and_all_review_fix_slices_including_search_teardown_and_row_batched_payload_processing_closed_chain_overlay_lock_order_recovery_export_bounded_contexts_mutation_resistant_private_test_diagnostics_and_processing_lock_order_truth_genuine_same_selector_green",
+        "cross_engine": "sqlite_and_disposable_postgres17_migrated_schema_owner_behavior_lock_order_zero_retry_and_restart_gates_green",
+        "spec_review": "approved_no_open_findings_frozen_snapshot_4b96050f",
+        "quality_review": "approved_no_open_critical_important_or_minor_frozen_snapshot_4b96050f",
+        "full_backend": "uncached_go_test_all_build_vet_and_lint_green",
+        "fixture_cleanup": "all_final_postgres17_containers_tmpfs_and_credentials_removed",
+        "boundary": "task_7_complete_checked_task8_runtime_installation_not_started_backup_assets_enabled_false_child13_state_untouched",
+        "delivery": "uncommitted_unstaged_task17_only"
+      },
+      "task_7": {
+        "status": "complete_checked",
+        "contracts": "optional_point_deleter_exact_restic_rsync_rclone_prefix_native_registry_adapter_typed_deletion_unavailable_and_locator_clear_after_receipt",
+        "red_green": "initial_and_review_fix_slices_same_selector_green",
+        "spec_review": "approved_after_rclone_exit_code_typed_block_manifest_and_prefix_escape_fixes",
+        "quality_review": "approved_after_ssh_runtime_prefix_dotdot_and_managed_prefix_admission_fixes",
+        "boundary": "task_8_complete_checked_task_9_not_started_backup_assets_enabled_false",
+        "delivery": "uncommitted_unstaged_task17_only"
+      },
+      "task_8": {
+        "status": "complete_checked",
+        "contracts": "retention_worker_audit_metrics_runtime_composition_tombstone_injection_shutdown_join_before_owners_edge_triggered_blocked_metric",
+        "red_green": "initial_and_quality_fix_slices_same_selector_green",
+        "spec_review": "approved_no_open_findings",
+        "quality_review": "approved_after_shutdown_order_and_blocked_metric_fixes",
+        "boundary": "task_9_not_started_backup_assets_enabled_false",
+        "delivery": "uncommitted_unstaged_task17_only"
+      },
+      "task_9": {
+        "status": "complete_checked",
+        "contracts": "http_task_delete_archives_unlinks_commit_before_schedule_zero_provider_effects",
+        "red_green": "initial_slice_same_selector_green",
+        "spec_review": "approved_no_open_findings",
+        "quality_review": "approved_no_open_critical_important_or_minor",
+        "boundary": "task_10_complete_checked_backup_assets_enabled_false",
+        "delivery": "uncommitted_unstaged_task17_only"
+      },
+      "task_10": {
+        "status": "complete_checked",
+        "contracts": "lifecycle_handlers_routes_rbac_step_up_isolation_feature_gate_first_and_swagger",
+        "red_green": "compile_and_route_red_then_same_selector_green_after_swag_v1_16_6",
+        "spec_review": "approved_no_open_findings",
+        "quality_review": "approved_no_open_critical_important_or_minor",
+        "boundary": "task_11_complete_checked_backup_assets_enabled_false",
+        "delivery": "uncommitted_unstaged_task17_only"
+      },
+      "task_11": {
+        "status": "complete_checked",
+        "contracts": "config_export_import_v2_stable_refs_v1_compat_disconnected_zero_provider",
+        "red_green": "compile_red_then_same_selector_green_after_review_fixes",
+        "spec_review": "approved_no_open_findings",
+        "quality_review": "approved_no_open_critical_important",
+        "boundary": "task_12_complete_checked_backup_assets_enabled_false",
+        "delivery": "uncommitted_unstaged_task17_only"
+      },
+      "task_12": {
+        "status": "complete_checked",
+        "contracts": "typed_lifecycle_apis_camelcase_fail_closed_isolated_step_up_dto_only_mutation_snapshot",
+        "red_green": "review_fix_same_selector_green",
+        "spec_review": "approved_no_open_findings",
+        "quality_review": "approved_with_residuals_no_critical_important",
+        "boundary": "task_13_complete_checked_backup_assets_enabled_false",
+        "delivery": "uncommitted_unstaged_task17_only"
+      },
+      "task_13": {
+        "status": "complete_checked",
+        "contracts": "extracted_repository_panel_admin_lifecycle_retention_crud_purge_hold_dialogs_production_apiclient_per_row_targeting",
+        "red_green": "review_fix_same_selector_green_50_tests",
+        "spec_review": "approved_no_open_critical_important",
+        "quality_review": "approved_with_residuals_no_critical_important",
+        "boundary": "task_14_complete_checked_backup_assets_enabled_false",
+        "delivery": "uncommitted_unstaged_task17_only"
+      },
+      "task_14": {
+        "status": "complete_checked",
+        "contracts": "dr_classifier_rebuild_requires_readable_binding_docs_matrix",
+        "red_green": "compile_red_then_same_selector_green_after_review_fixes",
+        "spec_review": "approved_no_open_critical_important",
+        "quality_review": "approved_no_open_critical_important",
+        "boundary": "task_15_gates_and_task_16_review_backup_assets_enabled_false",
+        "delivery": "uncommitted_unstaged_task17_only"
+      },
+      "task_15": {
+        "status": "complete_checked",
+        "contracts": "focused_race_required_postgres_privacy_and_full_gates",
+        "focused_selector": "green_after_task16_fixes_2026-08-18T17:25:08Z",
+        "race_selector": "green_after_task16_fixes_2026-08-18T17:25:19Z",
+        "postgres_gate": "green_on_disposable_postgres17_then_destroyed",
+        "privacy": "managed_path_delegates_exact_ids_legacy_seam_isolated_no_raw_private_flow",
+        "full_gates": "green_go_test_all_npm_check_make_check_doc_freshness_warning_only",
+        "spec_review": "approved_after_evidence_recorded_untracked_is_task17",
+        "quality_review": "approved_with_residuals_publication_block_test_residual",
+        "boundary": "task_16_then_task_17_single_commit_backup_assets_enabled_false",
+        "delivery": "uncommitted_unstaged_task17_only"
+      },
+      "task_16": {
+        "status": "complete_checked",
+        "contracts": "high_risk_review_c1_c2_i3_i5_fixed_i4_residual_i6_manifest_amended",
+        "review_log": "research/review.md",
+        "red_green": "review_fix_selectors_green",
+        "spec_review": "compliant_i4_i5_i6_2026-08-19",
+        "quality_review": "approved_with_residuals_c1_c2_i3_2026-08-19",
+        "boundary": "task_17_not_authorized_complete_reopen_checked",
+        "alan_review_2026_08_20_complete_reopen": {
+          "task_17": "not_authorized",
+          "counts": {
+            "p0": 0,
+            "p1": 1,
+            "p2": 1,
+            "p3": 0
+          },
+          "implement": "b1343bf7-3d46-4372-9e95-ef3b8fe1c4df",
+          "check": "dfa7feca-0e1a-40af-baaf-b495d0888b08",
+          "check_verdict": "approve_with_residuals_after_important_mid_walk_cancel",
+          "closed_selectors": [
+            "TestRebuildDerivedDescriptorsCompleteWalkReopensWhenJobFails",
+            "TestRebuildDerivedDescriptorsCompleteWalkReopensWhenSecretClassifyEnabled",
+            "TestRebuildDerivedDescriptorsCompleteWalkReopensWhenJobCanceledDuringIncompleteWalk"
+          ]
+        },
+        "alan_review_2026_08_20_inspected_limit_and_archive_corr": {
+          "task_17": "not_authorized",
+          "counts": {
+            "p0": 0,
+            "p1": 1,
+            "p2": 1,
+            "p3": 0
+          },
+          "implement": "0e41d37f-0ced-48a6-ac26-9a9d8064ceae",
+          "check": "aa2dc784-44ba-416f-bff0-856d84ece078",
+          "check_verdict": "approve_with_residuals_after_important_ad_fingerprint_reopen",
+          "closed_selectors": [
+            "TestRebuildDerivedDescriptorsInspectedLimitKeepsLeftoverWalkUnproven",
+            "TestRebuildDerivedDescriptorsCompleteWalkReopensWhenAdvertisementAddsUnprovenWork",
+            "TestTaskArchiveRetentionPolicyDeleteAuditCopiesRequestID"
+          ]
+        },
+        "alan_review_2026_08_20_archive_table_per_capability": {
+          "task_17": "not_authorized",
+          "counts": {
+            "p0": 0,
+            "p1": 2,
+            "p2": 1,
+            "p3": 0
+          },
+          "implement": "1694ebb4-3238-4015-96f9-10956d958958",
+          "check": "b303fd88-a872-4b5e-b27a-1ae5bb699ffe",
+          "check_verdict": "approve_with_residuals_after_important_inapplicable_cap_page",
+          "closed_selectors": [
+            "TestTaskArchiveSucceedsWhenRetentionPolicyTableMissing",
+            "TestTaskDeleteArchivesAndUnlinks",
+            "TestRebuildDerivedDescriptorsKeepsUnprovenCapabilitiesWhenSiblingJobExists",
+            "TestRebuildDerivedDescriptorsPagesPastInapplicableAdvertisedCapabilities",
+            "TestTaskArchiveSoftDeletesTaskLinkRetentionPolicies",
+            "TestTaskArchiveRetentionPolicyDeleteAuditFailureLeavesTaskAndPolicy"
+          ]
+        },
+        "alan_review_2026_08_20_p1_5_p2_5": {
+          "task_17": "not_authorized",
+          "counts": {
+            "p0": 0,
+            "p1": 5,
+            "p2": 5,
+            "p3": 0
+          },
+          "implement": "302fd614-b193-4e43-bace-829be124dc65",
+          "check": "e5fc03f1-7a75-4e1c-ab16-cb07aad80334",
+          "check_verdict": "approve_after_important_expected_descriptors_admission_split",
+          "closed_selector": "TestExpectedDescriptorsStayUnprovenWhenBackfillAdmissionDenies",
+          "note": "Independent check closed P1.3 pause/admission-deny empty-expected-as-proven. Other nine items held on live code. Child 14 is not ready for Task 17."
+        },
+        "alan_review_2026_08_19_fifth": {
+          "task_17": "not_authorized",
+          "counts": {
+            "p0": 0,
+            "p1": 3,
+            "p2": 10,
+            "p3": 0
+          },
+          "implement": "cb155b4e-6465-42fb-9ff6-927355476aa3",
+          "check": "35152e48-da5a-4b75-8ae1-38ee8c930fd3",
+          "check_verdict": "approve_without_residuals"
+        },
+        "alan_review_2026_08_19_fourth": {
+          "task_17": "not_authorized",
+          "counts": {
+            "p0": 0,
+            "p1": 7,
+            "p2": 10,
+            "p3": 0
+          },
+          "implement": "869fb3d0-dbaa-4387-ae8e-3d6d2e824cc8",
+          "check": "b0054fe8-5e21-403b-90a9-3cf0411393b1",
+          "check_verdict": "approve_without_residuals_implementer_wrong_on_unscoped_policy_list"
+        },
+        "alan_review_2026_08_19_third": {
+          "task_17": "not_authorized",
+          "counts": {
+            "p0": 0,
+            "p1": 7,
+            "p2": 8,
+            "p3": 0
+          },
+          "implement": "8b926ed6-6508-4d3c-a74b-a3737b86c07c",
+          "check": "709969aa-ebe2-4e37-a06d-2772ceafc332",
+          "check_verdict": "approve_without_residuals_implementer_wrong_on_p1_2_same_backend_kind",
+          "p1_2_fix": "rclone_prefix_live_identity_now_compares_portable_root_digest_not_backend_kind_only"
+        },
+        "delivery": "uncommitted_unstaged_task17_only",
+        "alan_review_2026_08_19_second": {
+          "task_17": "not_authorized",
+          "counts": {
+            "p0": 0,
+            "p1": 13,
+            "p2": 7,
+            "p3": 1
+          },
+          "implement": "b7a4edad-2a6c-4558-a345-199c0e70ad55",
+          "check": "b28219b1-7f23-4ddf-909a-7b1e5c912c0d",
+          "check_verdict": "approve_with_residuals_native_encode_and_failed_manifest_proof_were_still_open",
+          "quarantine_residual_implement": "40b6116e-4fa2-4a98-966f-d1c616ae154a",
+          "quarantine_residual_check": "3b88f4d6-531a-430b-b680-c9a04523dba3",
+          "quarantine_residual_check_verdict": "approve_with_suggestions_only",
+          "suggestions": [
+            "derived_backfill_adapter_returns_zero_nil_when_unwired_rebuild_counts_partial",
+            "legacy_native_locator_without_frozen_set_reconstructs_from_accepted_commit_or_deletion_unavailable"
+          ],
+          "suggestion_close_implement": "3d0907e1-0031-4bd3-9a8d-66894b494eaf",
+          "suggestion_close_check": "7cd1d00e-2c7d-4c40-8330-dd17bb9db67d",
+          "suggestion_close_verdict": "approve_without_residuals"
+        },
+        "alan_blockers_2026_08_19": {
+          "task_17": "not_authorized",
+          "check_verdict": "approve_with_residuals",
+          "p1": [
+            "rsync_rclone_delete_access_and_unregistered_native_deleter",
+            "archived_task_resume_reschedules",
+            "purge_impact_revision_client_reported",
+            "content_owner_fail_open_without_schema",
+            "frontend_mixed_policy_edit_drops_count_calendar"
+          ],
+          "p2": [
+            "hold_ui_no_persisted_list_or_id",
+            "import_rebuild_reconcile_count_only",
+            "purge_bind_then_claim_non_atomic"
+          ],
+          "contract": "prd_design_hold_restore_vs_fail_closed_reject"
+        }
+      }
+    }
+  }
+}

@@ -19,6 +19,7 @@ export const STEP_UP_ACTIONS = {
   recoveryResultDownload: "recovery.result_download",
   recoveryResultRetain: "recovery.result_retain",
   repositoryPurge: "repository.purge",
+  retentionHoldRelease: "retention.hold_release",
 } as const;
 
 export type StepUpAction = (typeof STEP_UP_ACTIONS)[keyof typeof STEP_UP_ACTIONS];

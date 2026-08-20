@@ -369,27 +369,32 @@ type cacheReservation struct {
 	files    int64
 	ownerID  uint
 	provider backupasset.ProviderKind
+	object   CacheObject
 }
 
 type AuthenticatedCache struct {
-	mu        sync.Mutex
-	config    CacheConfig
-	now       func() time.Time
-	cipher    *CacheCipher
-	metrics   Metrics
-	status    CacheStatus
-	accepting bool
-	closed    bool
-	activeOps int64
-	opsDone   chan struct{}
+	mu               sync.Mutex
+	config           CacheConfig
+	now              func() time.Time
+	cipher           *CacheCipher
+	metrics          Metrics
+	status           CacheStatus
+	accepting        bool
+	closed           bool
+	activeOps        int64
+	opsDone          chan struct{}
+	maintenanceOwner chan struct{}
 
 	rootPath string
 	root     *os.Root
 	lockFile *os.File
 
-	entries     map[string]*cacheEntry
-	writing     map[string]cacheReservation
-	activeFiles map[string]bool
+	entries           map[string]*cacheEntry
+	writing           map[string]cacheReservation
+	activeFiles       map[string]bool
+	pointEntries      map[string]map[string]*cacheEntry
+	pointWriters      map[string]int
+	pointActiveLeases map[string]int64
 
 	memoryGlobal    cacheQuotaUsage
 	memoryUsers     map[uint]cacheQuotaUsage
@@ -439,7 +444,10 @@ func NewAuthenticatedCache(ctx context.Context, dependencies CacheDependencies) 
 	cache := &AuthenticatedCache{
 		config: dependencies.Config, now: dependencies.Now, cipher: cacheCipher, metrics: dependencies.Metrics,
 		status: CacheStatus{Reason: CacheReasonConfigDisabled}, accepting: true, opsDone: done,
-		entries: make(map[string]*cacheEntry), writing: make(map[string]cacheReservation), activeFiles: make(map[string]bool),
+		maintenanceOwner: make(chan struct{}, 1),
+		entries:          make(map[string]*cacheEntry), writing: make(map[string]cacheReservation), activeFiles: make(map[string]bool),
+		pointEntries: make(map[string]map[string]*cacheEntry),
+		pointWriters: make(map[string]int), pointActiveLeases: make(map[string]int64),
 		memoryUsers: make(map[uint]cacheQuotaUsage), memoryProviders: make(map[backupasset.ProviderKind]cacheQuotaUsage),
 		diskUsers: make(map[uint]cacheQuotaUsage), diskProviders: make(map[backupasset.ProviderKind]cacheQuotaUsage),
 	}
@@ -581,7 +589,14 @@ func (materialization *CacheMaterialization) Commit(ctx context.Context, source 
 	entry.absoluteExpiresAt = now.Add(cache.config.AbsoluteTTL)
 	cache.mu.Lock()
 	delete(cache.writing, materialization.key)
+	cache.decrementPointWriterLocked(materialization.object.Ref.RecoveryPointID)
 	cache.entries[materialization.key] = entry
+	pointEntries := cache.pointEntries[entry.object.Ref.RecoveryPointID]
+	if pointEntries == nil {
+		pointEntries = make(map[string]*cacheEntry)
+		cache.pointEntries[entry.object.Ref.RecoveryPointID] = pointEntries
+	}
+	pointEntries[materialization.key] = entry
 	cache.mu.Unlock()
 	committed = true
 	info := cacheEntryInfo(entry)
@@ -627,6 +642,7 @@ func (cache *AuthenticatedCache) OpenRange(object CacheObject, offset, length in
 		return nil, ErrCacheMiss
 	}
 	entry.leases++
+	cache.pointActiveLeases[entry.object.Ref.RecoveryPointID]++
 	refreshed := now.Add(cache.config.IdleTTL)
 	if refreshed.After(entry.absoluteExpiresAt) {
 		refreshed = entry.absoluteExpiresAt
@@ -659,6 +675,68 @@ func (cache *AuthenticatedCache) Evict(object CacheObject) error {
 	return cache.deleteEntryStorage(entry)
 }
 
+// EvictRecoveryPoint removes at most batchSize exact-point cache entries. A
+// zero-result pass is the completion proof; remaining reports an incomplete
+// bounded pass. Active readers and materializations fail closed without
+// removing any entry.
+func (cache *AuthenticatedCache) EvictRecoveryPoint(ctx context.Context, recoveryPointID string, batchSize int) (int, bool, error) {
+	if cache == nil || backupasset.ValidateOpaqueID(recoveryPointID) != nil || batchSize <= 0 {
+		return 0, false, ErrInvalidCacheBinding
+	}
+	if err := cache.beginOperation(); err != nil {
+		return 0, false, err
+	}
+	defer cache.endOperation()
+	ctx = nonNilContext(ctx)
+	if err := cache.acquireMaintenanceOwner(ctx); err != nil {
+		return 0, false, err
+	}
+	defer cache.releaseMaintenanceOwner()
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
+
+	cache.mu.Lock()
+	if batchSize > cache.config.ReconcileBatchSize {
+		cache.mu.Unlock()
+		return 0, false, ErrInvalidCacheBinding
+	}
+	if cache.pointWriters[recoveryPointID] > 0 || cache.pointActiveLeases[recoveryPointID] > 0 {
+		cache.mu.Unlock()
+		return 0, false, ErrCacheBusy
+	}
+	pointEntries := cache.pointEntries[recoveryPointID]
+	if len(pointEntries) == 0 {
+		cache.mu.Unlock()
+		return 0, false, nil
+	}
+	remaining := len(pointEntries) > batchSize
+	entries := make([]*cacheEntry, 0, min(len(pointEntries), batchSize))
+	for _, entry := range pointEntries {
+		entry.invalid = true
+		entries = append(entries, entry)
+		if len(entries) == batchSize {
+			break
+		}
+	}
+	cache.mu.Unlock()
+
+	evicted := 0
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return evicted, true, err
+		}
+		if err := cache.deleteEntryStorageForLifecycle(entry); err != nil {
+			return evicted, true, err
+		}
+		cache.mu.Lock()
+		cache.removeEntryLocked(entry)
+		cache.mu.Unlock()
+		evicted++
+	}
+	return evicted, remaining, nil
+}
+
 func (cache *AuthenticatedCache) Reconcile(ctx context.Context) error {
 	if cache == nil {
 		return ErrCacheClosed
@@ -668,6 +746,10 @@ func (cache *AuthenticatedCache) Reconcile(ctx context.Context) error {
 	}
 	defer cache.endOperation()
 	ctx = nonNilContext(ctx)
+	if err := cache.acquireMaintenanceOwner(ctx); err != nil {
+		return err
+	}
+	defer cache.releaseMaintenanceOwner()
 	now := cache.now().UTC()
 	var removals []*cacheEntry
 	cache.mu.Lock()
@@ -677,16 +759,22 @@ func (cache *AuthenticatedCache) Reconcile(ctx context.Context) error {
 			break
 		}
 		if entry.leases == 0 && (entry.invalid || !now.Before(entry.idleExpiresAt) || !now.Before(entry.absoluteExpiresAt)) {
-			cache.removeEntryLocked(entry)
+			entry.invalid = true
 			removals = append(removals, entry)
 			remaining--
 		}
 	}
 	cache.mu.Unlock()
 	for _, entry := range removals {
-		if err := cache.deleteEntryStorage(entry); err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if err := cache.deleteEntryStorageForLifecycle(entry); err != nil {
+			return err
+		}
+		cache.mu.Lock()
+		cache.removeEntryLocked(entry)
+		cache.mu.Unlock()
 	}
 	if remaining <= 0 || !cache.Status().DiskEnabled {
 		return nil
@@ -803,6 +891,7 @@ func (lease *CacheLease) Close() error {
 	cache := lease.cache
 	cache.mu.Lock()
 	lease.entry.leases--
+	cache.decrementPointActiveLeaseLocked(lease.entry.object.Ref.RecoveryPointID)
 	now := cache.now().UTC()
 	remove := lease.entry.leases == 0 && (lease.entry.invalid || !now.Before(lease.entry.idleExpiresAt) || !now.Before(lease.entry.absoluteExpiresAt))
 	if remove {
@@ -1077,21 +1166,23 @@ func (cache *AuthenticatedCache) reserveMaterialization(key string, object Cache
 		return cacheReservation{}, nil, ErrCacheBusy
 	}
 	if object.Size <= cache.config.MemoryObjectBytes {
-		reservation := cacheReservation{tier: CacheTierMemory, bytes: object.Size, ownerID: object.OwnerUserID, provider: object.Provider}
+		reservation := cacheReservation{tier: CacheTierMemory, bytes: object.Size, ownerID: object.OwnerUserID, provider: object.Provider, object: object}
 		if cache.quotaFits(reservation) {
 			cache.applyQuota(reservation, 1)
 			cache.writing[key] = reservation
+			cache.pointWriters[object.Ref.RecoveryPointID]++
 			return reservation, nil, nil
 		}
 	}
 	files := cacheObjectFiles(object.Size, cache.config.ChunkBytes)
 	reservation := cacheReservation{
 		tier: CacheTierDisk, bytes: object.Size, files: files,
-		ownerID: object.OwnerUserID, provider: object.Provider,
+		ownerID: object.OwnerUserID, provider: object.Provider, object: object,
 	}
 	if cache.status.DiskEnabled && object.Size <= cache.config.ObjectBytes && files <= cache.config.ObjectFiles && cache.quotaFits(reservation) {
 		cache.applyQuota(reservation, 1)
 		cache.writing[key] = reservation
+		cache.pointWriters[object.Ref.RecoveryPointID]++
 		return reservation, nil, nil
 	}
 	return cacheReservation{}, nil, ErrCacheQuota
@@ -1102,8 +1193,25 @@ func (cache *AuthenticatedCache) releaseWriting(key string, reservation cacheRes
 	defer cache.mu.Unlock()
 	if current, exists := cache.writing[key]; exists && current == reservation {
 		delete(cache.writing, key)
+		cache.decrementPointWriterLocked(reservation.object.Ref.RecoveryPointID)
 		cache.applyQuota(reservation, -1)
 	}
+}
+
+func (cache *AuthenticatedCache) decrementPointWriterLocked(recoveryPointID string) {
+	if cache.pointWriters[recoveryPointID] <= 1 {
+		delete(cache.pointWriters, recoveryPointID)
+		return
+	}
+	cache.pointWriters[recoveryPointID]--
+}
+
+func (cache *AuthenticatedCache) decrementPointActiveLeaseLocked(recoveryPointID string) {
+	if cache.pointActiveLeases[recoveryPointID] <= 1 {
+		delete(cache.pointActiveLeases, recoveryPointID)
+		return
+	}
+	cache.pointActiveLeases[recoveryPointID]--
 }
 
 func (cache *AuthenticatedCache) quotaFits(reservation cacheReservation) bool {
@@ -1134,6 +1242,13 @@ func (cache *AuthenticatedCache) removeEntryLocked(entry *cacheEntry) {
 		return
 	}
 	delete(cache.entries, entry.key)
+	pointEntries := cache.pointEntries[entry.object.Ref.RecoveryPointID]
+	if pointEntries[entry.key] == entry {
+		delete(pointEntries, entry.key)
+		if len(pointEntries) == 0 {
+			delete(cache.pointEntries, entry.object.Ref.RecoveryPointID)
+		}
+	}
 	cache.applyQuota(cacheReservation{
 		tier: entry.tier, bytes: entry.quotaBytes, files: entry.quotaFiles,
 		ownerID: entry.object.OwnerUserID, provider: entry.object.Provider,
@@ -1160,6 +1275,36 @@ func (cache *AuthenticatedCache) deleteEntryStorage(entry *cacheEntry) error {
 	}
 	entry.chunks = nil
 	return firstErr
+}
+
+func (cache *AuthenticatedCache) deleteEntryStorageForLifecycle(entry *cacheEntry) error {
+	if entry == nil {
+		return nil
+	}
+	if entry.tier == CacheTierMemory {
+		zeroBytes(entry.memory)
+		entry.memory = nil
+		return nil
+	}
+	remaining := entry.chunks[:0]
+	var firstErr error
+	for _, chunk := range entry.chunks {
+		if cache.removeChunkFile != nil {
+			if err := cache.removeChunkFile(chunk.name); err != nil && !errors.Is(err, os.ErrNotExist) {
+				remaining = append(remaining, chunk)
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+		}
+		cache.trackFile(chunk.name, false)
+	}
+	entry.chunks = remaining
+	if firstErr != nil {
+		return ErrCacheUnsafeRoot
+	}
+	return nil
 }
 
 func (cache *AuthenticatedCache) objectKey(object CacheObject) (string, error) {
@@ -1190,6 +1335,37 @@ func (cache *AuthenticatedCache) beginOperation() error {
 	}
 	cache.activeOps++
 	return nil
+}
+
+func (cache *AuthenticatedCache) acquireMaintenanceOwner(ctx context.Context) error {
+	if cache == nil {
+		return ErrCacheClosed
+	}
+	ctx = nonNilContext(ctx)
+	cache.mu.Lock()
+	if cache.maintenanceOwner == nil {
+		cache.maintenanceOwner = make(chan struct{}, 1)
+	}
+	owner := cache.maintenanceOwner
+	cache.mu.Unlock()
+	select {
+	case owner <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (cache *AuthenticatedCache) releaseMaintenanceOwner() {
+	if cache == nil {
+		return
+	}
+	cache.mu.Lock()
+	owner := cache.maintenanceOwner
+	cache.mu.Unlock()
+	if owner != nil {
+		<-owner
+	}
 }
 
 func (cache *AuthenticatedCache) endOperation() {

@@ -384,6 +384,142 @@ func TestLifecycleRetainsStoreChargeAndResumesPurgeAfterUnlinkFailure(t *testing
 	}
 }
 
+func TestPersistentLifecyclePortPurgeFailureUsesBoundedDetachedSafePersistence(t *testing.T) {
+	fixture := createPersistentSealedFixture(t)
+	quota, err := NewQuotaService(
+		fixture.harness.db,
+		func() time.Time { return fixture.clock },
+		fixture.harness.config.Quota,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := NewPersistentLifecyclePort(PersistentLifecyclePortDependencies{
+		DB: fixture.harness.db, Delivery: &persistentLifecycleDeliveryFake{}, Sources: fixture.harness.lease,
+		Quota: quota, Store: fixture.store, AttemptWork: NewAttemptWorkRegistry(), Now: func() time.Time { return fixture.clock },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type purgeFailureContextKey struct{}
+	type persistenceContextObservation struct {
+		hasDeadline bool
+		remaining   time.Duration
+		contextErr  error
+	}
+	marker := t.Name()
+	var persistencePhase atomic.Bool
+	var observedPersistence atomic.Bool
+	observations := make(chan persistenceContextObservation, 1)
+	const callbackName = "test:observe_export_purge_failure_persistence_context"
+	if err := fixture.harness.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil ||
+			tx.Statement.Schema.Table != "backup_asset_export_jobs" ||
+			tx.Statement.Context.Value(purgeFailureContextKey{}) != marker ||
+			!persistencePhase.Load() || !observedPersistence.CompareAndSwap(false, true) {
+			return
+		}
+		deadline, hasDeadline := tx.Statement.Context.Deadline()
+		observation := persistenceContextObservation{hasDeadline: hasDeadline, contextErr: tx.Statement.Context.Err()}
+		if hasDeadline {
+			observation.remaining = time.Until(deadline)
+		}
+		observations <- observation
+		if !hasDeadline {
+			_ = tx.AddError(fmt.Errorf("%w: unbounded detached purge-failure persistence", ErrUnavailable))
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := fixture.harness.db.Callback().Query().Remove(callbackName); err != nil {
+			t.Errorf("remove purge-failure persistence context callback: %v", err)
+		}
+	})
+
+	rawCause := errors.New("private wrapped-DEK purge path failure")
+	originalOpen := fixture.store.openStoreEntryDescriptor
+	var targetOpens atomic.Int32
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), purgeFailureContextKey{}, marker))
+	t.Cleanup(cancel)
+	fixture.store.openStoreEntryDescriptor = func(directoryFD int, name string, how *unix.OpenHow) (int, error) {
+		fd, openErr := originalOpen(directoryFD, name, how)
+		if openErr == nil && name == fixture.locator && targetOpens.Add(1) == 2 {
+			if closeErr := unix.Close(fd); closeErr != nil {
+				return -1, closeErr
+			}
+			persistencePhase.Store(true)
+			cancel()
+			return -1, rawCause
+		}
+		return fd, openErr
+	}
+	t.Cleanup(func() { fixture.store.openStoreEntryDescriptor = originalOpen })
+
+	finished := make(chan error, 1)
+	go func() { finished <- port.PurgeCiphertext(ctx, fixture.jobID) }()
+	var purgeErr error
+	select {
+	case purgeErr = <-finished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Export purge-failure persistence exceeded its detached completion bound")
+	}
+	fixture.store.openStoreEntryDescriptor = originalOpen
+	if targetOpens.Load() < 2 || !persistencePhase.Load() {
+		t.Fatalf("physical Export purge failure was not injected: target_opens=%d persistence_phase=%t",
+			targetOpens.Load(), persistencePhase.Load())
+	}
+	if purgeErr == nil {
+		t.Fatal("physical Export purge failure returned nil")
+	}
+	if errors.Is(purgeErr, rawCause) || strings.Contains(purgeErr.Error(), rawCause.Error()) {
+		t.Errorf("Export purge failure exposed its private raw cause: %v", purgeErr)
+	}
+	if !errors.Is(purgeErr, ErrInvalidStore) && !errors.Is(purgeErr, ErrUnavailable) {
+		t.Errorf("Export purge failure error=%v, want a closed Export classification", purgeErr)
+	}
+
+	select {
+	case observation := <-observations:
+		if !observation.hasDeadline {
+			t.Error("Export purge-failure persistence detached without a deadline")
+		}
+		if observation.contextErr != nil {
+			t.Errorf("Export purge-failure persistence inherited caller cancellation: %v", observation.contextErr)
+		}
+		if observation.hasDeadline && (observation.remaining <= 0 || observation.remaining > 6*time.Second) {
+			t.Errorf("Export purge-failure persistence deadline remaining=%s, want a live finite five-second budget", observation.remaining)
+		}
+	default:
+		t.Error("Export purge failure never reached durable failure persistence")
+	}
+
+	var artifact model.BackupAssetExportArtifact
+	if err := fixture.harness.db.Where("id = ? AND job_id = ?", fixture.artifactID, fixture.jobID).
+		Take(&artifact).Error; err != nil {
+		t.Fatal(err)
+	}
+	if artifact.State != "purge_failed" || artifact.PurgeError != "purge_failed" {
+		t.Errorf("Export purge failure artifact state=%s category=%q, want purge_failed/purge_failed",
+			artifact.State, artifact.PurgeError)
+	}
+	var reservations []model.BackupAssetExportReservation
+	if err := fixture.harness.db.Where("job_id = ? AND kind = ?", fixture.jobID, "store").
+		Order("bucket_id ASC").Find(&reservations).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(reservations) != 2 {
+		t.Fatalf("Export purge failure store reservations=%d, want exact global/user pair", len(reservations))
+	}
+	for _, reservation := range reservations {
+		if reservation.State != "purge_pending" || reservation.ReleasedAt != nil {
+			t.Errorf("Export purge failure reservation id=%s state=%s released=%t, want purge_pending/false",
+				reservation.ID, reservation.State, reservation.ReleasedAt != nil)
+		}
+	}
+}
+
 func TestPersistentLifecyclePurgeFailureMovesStoreReservationPendingThenRetriesExactRelease(t *testing.T) {
 	fixture := createPersistentSealedFixture(t)
 	clock := fixture.clock

@@ -1,10 +1,12 @@
 # Node
+/node_modules/
 web/node_modules/
 web/dist/
 web/coverage/
 
 # Go
 backend/xirang
+backend/xirang-server
 backend/server
 backend/*.db
 backend/*.db-shm

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthContextValue } from "@/context/auth-context.shared";
+import { runAxe } from "@/test/a11y-helpers";
 import type { BackupExportJob } from "@/types/domain";
 import type { BackupAssetExportApi } from "./use-backup-asset-export";
 
@@ -185,7 +186,7 @@ describe("ExportJobPanel", () => {
     expect(screen.queryByRole("button", { name: /加载更多导出项|Load more export items/ })).not.toBeInTheDocument();
   });
 
-  it("keeps export results natively keyboard-scrollable with a visible focus indicator", async () => {
+  it("keeps export results as a named status list without a fake button tab stop", async () => {
     const firstPage = readyJobPage(readyJob(), 0, 100, "page-two");
     const user = userEvent.setup();
     render(
@@ -202,16 +203,13 @@ describe("ExportJobPanel", () => {
     await user.click(screen.getByRole("button", { name: /创建导出|Create export/ }));
 
     const items = await screen.findByRole("list");
-    expect(items).toHaveClass(
-      "max-h-64",
-      "overflow-y-auto",
-      "focus-visible:outline-none",
-      "focus-visible:ring-2",
-      "focus-visible:ring-inset",
-      "focus-visible:ring-ring",
-    );
-    expect(items).toHaveAttribute("tabindex", "0");
+    expect(items).toHaveAttribute("aria-labelledby", "backup-export-items-title");
+    expect(items).not.toHaveAttribute("tabindex");
+    expect(items).not.toHaveAttribute("role", "button");
+    expect(items).toHaveClass("max-h-64", "overflow-y-auto");
+    expect(screen.queryByRole("button", { name: /^逐项结果$|^Per-item results$/ })).not.toBeInTheDocument();
     expect(screen.getAllByRole("listitem")).toHaveLength(100);
+    expect(await runAxe(screen.getByTestId("export-job-panel"))).toHaveNoViolations();
   });
 
   it("reports authoritative partial counts and each closed item failure", async () => {

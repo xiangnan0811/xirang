@@ -3694,6 +3694,593 @@ const docTemplate = `{
                 }
             }
         },
+        "/backup-repositories/{id}/import-candidates": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Admin 列出仓库的待审/已审导入候选，不含 Provider locator",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-repositories"
+                ],
+                "summary": "列出导入候选",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "仓库 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "签名游标",
+                        "name": "cursor",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_repository.ImportCandidatePage"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-repositories/{id}/import-candidates/{candidateId}/reviews": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Admin 接受或拒绝精确候选；接受时仅允许封闭候选类型",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-repositories"
+                ],
+                "summary": "审核导入候选",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "仓库 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "候选 opaque ID",
+                        "name": "candidateId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "审核决定",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRepositoryImportReviewPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_repository.ImportCandidateView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-repositories/{id}/import-scans": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Admin 发现可归因 Provider 点并写入待审候选；不接受路径或凭据",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-repositories"
+                ],
+                "summary": "扫描可导入备份点",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "仓库 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "分页",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRepositoryPagePayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_repository.ImportDiscoveryResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-repositories/{id}/purge-preview": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "按所选 RecoveryPoint 计算仓库级清理影响修订，不要求仓库范围保留策略",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-retention"
+                ],
+                "summary": "预览精确清理影响",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "仓库 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "精确清理项",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRetentionPurgePreviewPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.BackupRetentionPurgeImpactView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-repositories/{id}/purge-plans": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "冻结仓库内精确 RecoveryPoint 修订与 hold/lease/WORM 影响计数",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-retention"
+                ],
+                "summary": "创建精确清理计划",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "仓库 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "精确清理项",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRetentionPurgePlanPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.BackupRetentionPurgePlanView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-repositories/{id}/purges": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "需要 Admin、backup_repositories:purge 与新鲜的 repository.purge proof；hold_release proof 不能授权",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-retention"
+                ],
+                "summary": "执行精确清理计划",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "仓库 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "计划修订与原因",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRetentionPurgeExecutePayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.BackupRetentionPurgeResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-repositories/{id}/rebuilds": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Admin 对已接受清单重建 Catalog 与可回填 derived 数据",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-repositories"
+                ],
+                "summary": "重建已接受导入",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "仓库 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "分页",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRepositoryPagePayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_repository.RebuildResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/backup-repositories/{id}/reconcile": {
             "post": {
                 "security": [
@@ -3857,6 +4444,404 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-retention-policies": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Admin 列出当前活跃的版本化保留策略；不返回私有 locator 或明文原因",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-retention"
+                ],
+                "summary": "列出活跃备份保留策略",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "每页数量",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "签名游标",
+                        "name": "cursor",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.BackupRetentionPolicyPage"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Admin 创建仓库或 Task 链接范围的版本化保留策略",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-retention"
+                ],
+                "summary": "创建备份保留策略",
+                "parameters": [
+                    {
+                        "description": "策略范围与规则",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRetentionPolicyWritePayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.BackupRetentionPolicyView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-retention-policies/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "按期望修订号停用活跃策略",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-retention"
+                ],
+                "summary": "删除备份保留策略",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "策略 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "期望修订",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRetentionRevisionPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.BackupRetentionPolicyView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "按期望修订号更新活跃策略规则",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-retention"
+                ],
+                "summary": "更新备份保留策略",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "策略 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "期望修订与规则",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRetentionPolicyWritePayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.BackupRetentionPolicyView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-retention-policies/{id}/impact": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回策略选中的精确 RecoveryPoint ID 以及 hold/lease/WORM 计数",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-retention"
+                ],
+                "summary": "预览保留策略精确影响",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "策略 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "期望修订",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRetentionRevisionPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.BackupRetentionImpactView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -9737,6 +10722,251 @@ const docTemplate = `{
                 }
             }
         },
+        "/recovery-points/{id}/holds": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Admin 列出指定恢复点的活跃 hold；不返回加密原因",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-retention"
+                ],
+                "summary": "列出恢复点冻结",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.BackupRetentionHoldPage"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "对精确不可变 RecoveryPoint 创建 operational 或 legal hold",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-retention"
+                ],
+                "summary": "创建恢复点冻结",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "冻结类型与原因",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRetentionHoldCreatePayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_retention.HoldRecord"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/recovery-points/{id}/holds/{holdId}/release": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "需要 Admin 与新鲜的 retention.hold_release proof；仓库 purge proof 不能授权",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-retention"
+                ],
+                "summary": "释放恢复点冻结",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "冻结 opaque ID",
+                        "name": "holdId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "释放原因",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRetentionHoldReleasePayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_retention.HoldRecord"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/report-configs": {
             "get": {
                 "security": [
@@ -12332,14 +13562,14 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "删除指定任务（有依赖关系时拒绝）",
+                "description": "归档指定任务并解除仓库链接（有活依赖时拒绝）；不删除 Provider 字节",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "tasks"
                 ],
-                "summary": "删除任务",
+                "summary": "归档任务",
                 "parameters": [
                     {
                         "type": "integer",
@@ -13227,6 +14457,12 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -14403,6 +15639,216 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.BackupRetentionHoldPage": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_retention.HoldRecord"
+                    }
+                }
+            }
+        },
+        "internal_api_handlers.BackupRetentionImpactPoint": {
+            "type": "object",
+            "properties": {
+                "capability_revision": {
+                    "type": "integer"
+                },
+                "point_revision": {
+                    "type": "integer"
+                },
+                "recovery_point_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.BackupRetentionImpactView": {
+            "type": "object",
+            "properties": {
+                "evaluated_at": {
+                    "type": "string"
+                },
+                "hold_count": {
+                    "type": "integer"
+                },
+                "impact_revision": {
+                    "type": "integer"
+                },
+                "lease_count": {
+                    "type": "integer"
+                },
+                "points": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.BackupRetentionImpactPoint"
+                    }
+                },
+                "policy_id": {
+                    "type": "string"
+                },
+                "policy_revision": {
+                    "type": "integer"
+                },
+                "selected_count": {
+                    "type": "integer"
+                },
+                "worm_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.BackupRetentionPolicyPage": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.BackupRetentionPolicyView"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.BackupRetentionPolicyView": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "integer"
+                },
+                "rule_digest": {
+                    "type": "string"
+                },
+                "rules": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_retention.PolicyRules"
+                },
+                "scope_id": {
+                    "type": "string"
+                },
+                "scope_kind": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RetentionPolicyScopeKind"
+                },
+                "status": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RetentionPolicyStatus"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "updated_by": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.BackupRetentionPurgePlanItemView": {
+            "type": "object",
+            "properties": {
+                "capability_revision": {
+                    "type": "integer"
+                },
+                "point_revision": {
+                    "type": "integer"
+                },
+                "recovery_point_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.BackupRetentionPurgeImpactView": {
+            "type": "object",
+            "properties": {
+                "hold_count": {
+                    "type": "integer"
+                },
+                "impact_revision": {
+                    "type": "integer"
+                },
+                "lease_count": {
+                    "type": "integer"
+                },
+                "points": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.BackupRetentionPurgePlanItemView"
+                    }
+                },
+                "repository_id": {
+                    "type": "string"
+                },
+                "selected_count": {
+                    "type": "integer"
+                },
+                "worm_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.BackupRetentionPurgePlanView": {
+            "type": "object",
+            "properties": {
+                "expires_at": {
+                    "type": "string"
+                },
+                "hold_count": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "impact_revision": {
+                    "type": "integer"
+                },
+                "item_count": {
+                    "type": "integer"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.BackupRetentionPurgePlanItemView"
+                    }
+                },
+                "lease_count": {
+                    "type": "integer"
+                },
+                "repository_id": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "integer"
+                },
+                "status": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.PurgePlanStatus"
+                },
+                "worm_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.BackupRetentionPurgeResult": {
+            "type": "object",
+            "properties": {
+                "blocked": {
+                    "type": "integer"
+                },
+                "claimed": {
+                    "type": "integer"
+                },
+                "plan_id": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api_handlers.MigratePreflightRequest": {
             "type": "object",
             "required": [
@@ -15561,6 +17007,123 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "task_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.backupRepositoryImportReviewPayload": {
+            "type": "object",
+            "properties": {
+                "accept_as": {
+                    "type": "string"
+                },
+                "decision": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.backupRepositoryPagePayload": {
+            "type": "object",
+            "properties": {
+                "cursor": {
+                    "type": "string"
+                },
+                "limit": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.backupRetentionHoldCreatePayload": {
+            "type": "object",
+            "properties": {
+                "expires_at": {
+                    "type": "string"
+                },
+                "hold_type": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.backupRetentionHoldReleasePayload": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.backupRetentionPolicyWritePayload": {
+            "type": "object",
+            "properties": {
+                "expected_revision": {
+                    "type": "integer"
+                },
+                "rules": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_retention.PolicyRules"
+                },
+                "scope_id": {
+                    "type": "string"
+                },
+                "scope_kind": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.backupRetentionPurgeExecutePayload": {
+            "type": "object",
+            "properties": {
+                "expected_impact_revision": {
+                    "type": "integer"
+                },
+                "expected_revision": {
+                    "type": "integer"
+                },
+                "plan_id": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.backupRetentionPurgePreviewPayload": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.BackupRetentionPurgePlanItemView"
+                    }
+                },
+                "recovery_point_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "internal_api_handlers.backupRetentionPurgePlanPayload": {
+            "type": "object",
+            "properties": {
+                "expected_impact_revision": {
+                    "type": "integer"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.BackupRetentionPurgePlanItemView"
+                    }
+                }
+            }
+        },
+        "internal_api_handlers.backupRetentionRevisionPayload": {
+            "type": "object",
+            "properties": {
+                "expected_revision": {
                     "type": "integer"
                 }
             }
@@ -16784,6 +18347,7 @@ const docTemplate = `{
                 "range_unavailable",
                 "download_unavailable",
                 "restore_unavailable",
+                "deletion_unavailable",
                 "diff_unavailable"
             ],
             "x-enum-varnames": [
@@ -16803,6 +18367,7 @@ const docTemplate = `{
                 "CapabilityRangeUnavailable",
                 "CapabilityDownloadUnavailable",
                 "CapabilityRestoreUnavailable",
+                "CapabilityDeletionUnavailable",
                 "CapabilityDiffUnavailable"
             ]
         },
@@ -16827,6 +18392,7 @@ const docTemplate = `{
                         "range_unavailable",
                         "download_unavailable",
                         "restore_unavailable",
+                        "deletion_unavailable",
                         "diff_unavailable"
                     ],
                     "allOf": [
@@ -16920,6 +18486,34 @@ const docTemplate = `{
                 "ImmutabilityXirangManaged",
                 "ImmutabilityBackendVersioned",
                 "ImmutabilityStorageWORM"
+            ]
+        },
+        "xirang_backend_internal_backupasset.ImportCandidateKind": {
+            "type": "string",
+            "enum": [
+                "native_snapshot",
+                "xirang_manifest",
+                "imported_baseline",
+                "mutable_head"
+            ],
+            "x-enum-varnames": [
+                "ImportCandidateNativeSnapshot",
+                "ImportCandidateXirangManifest",
+                "ImportCandidateImportedBaseline",
+                "ImportCandidateMutableHead"
+            ]
+        },
+        "xirang_backend_internal_backupasset.ImportReviewState": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "accepted",
+                "rejected"
+            ],
+            "x-enum-varnames": [
+                "ImportReviewPending",
+                "ImportReviewAccepted",
+                "ImportReviewRejected"
             ]
         },
         "xirang_backend_internal_backupasset.ManifestCompleteness": {
@@ -17062,6 +18656,23 @@ const docTemplate = `{
                 "FailureUnexpectedVersion",
                 "FailureMarkerMismatch",
                 "FailureManifestMismatch"
+            ]
+        },
+        "xirang_backend_internal_backupasset.PurgePlanStatus": {
+            "type": "string",
+            "enum": [
+                "ready",
+                "bound",
+                "executing",
+                "consumed",
+                "invalidated"
+            ],
+            "x-enum-varnames": [
+                "PurgePlanReady",
+                "PurgePlanBound",
+                "PurgePlanExecuting",
+                "PurgePlanConsumed",
+                "PurgePlanInvalidated"
             ]
         },
         "xirang_backend_internal_backupasset.RcloneBindingSetupResult": {
@@ -17444,6 +19055,17 @@ const docTemplate = `{
                 }
             }
         },
+        "xirang_backend_internal_backupasset.RecoveryPointHoldType": {
+            "type": "string",
+            "enum": [
+                "operational",
+                "legal"
+            ],
+            "x-enum-varnames": [
+                "RecoveryPointHoldOperational",
+                "RecoveryPointHoldLegal"
+            ]
+        },
         "xirang_backend_internal_backupasset.RecoveryPointLineageSummary": {
             "type": "object",
             "properties": {
@@ -17548,6 +19170,28 @@ const docTemplate = `{
                 "RepositoryDisconnected",
                 "RepositoryPurging",
                 "RepositoryPurgeBlocked"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RetentionPolicyScopeKind": {
+            "type": "string",
+            "enum": [
+                "repository",
+                "task_link"
+            ],
+            "x-enum-varnames": [
+                "RetentionPolicyScopeRepository",
+                "RetentionPolicyScopeTaskLink"
+            ]
+        },
+        "xirang_backend_internal_backupasset.RetentionPolicyStatus": {
+            "type": "string",
+            "enum": [
+                "active",
+                "deleted"
+            ],
+            "x-enum-varnames": [
+                "RetentionPolicyActive",
+                "RetentionPolicyDeleted"
             ]
         },
         "xirang_backend_internal_backupasset.RsyncVersioningActivationResult": {
@@ -20038,6 +21682,66 @@ const docTemplate = `{
                 }
             }
         },
+        "xirang_backend_internal_backupasset_repository.ImportCandidatePage": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_repository.ImportCandidateView"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_repository.ImportCandidateView": {
+            "type": "object",
+            "properties": {
+                "accepted_recovery_point_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.ImportCandidateKind"
+                },
+                "repository_id": {
+                    "type": "string"
+                },
+                "reviewed_at": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.ImportReviewState"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_repository.ImportDiscoveryResult": {
+            "type": "object",
+            "properties": {
+                "candidates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_repository.ImportCandidateView"
+                    }
+                },
+                "discovered": {
+                    "type": "integer"
+                },
+                "existing": {
+                    "type": "integer"
+                },
+                "next_cursor": {
+                    "type": "string"
+                }
+            }
+        },
         "xirang_backend_internal_backupasset_repository.LineageSummary": {
             "type": "object",
             "properties": {
@@ -20070,6 +21774,35 @@ const docTemplate = `{
                 },
                 "task_name": {
                     "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_repository.RebuildResult": {
+            "type": "object",
+            "properties": {
+                "accepted": {
+                    "type": "integer"
+                },
+                "catalog_started": {
+                    "type": "integer"
+                },
+                "derived_queued": {
+                    "type": "integer"
+                },
+                "failed": {
+                    "type": "integer"
+                },
+                "next_cursor": {
+                    "type": "string"
+                },
+                "partial": {
+                    "type": "integer"
+                },
+                "reasons": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
                 }
             }
         },
@@ -20140,6 +21873,103 @@ const docTemplate = `{
                 },
                 "version_mode": {
                     "$ref": "#/definitions/xirang_backend_internal_backupasset.VersionMode"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_retention.AgeRule": {
+            "type": "object",
+            "properties": {
+                "keep_days": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_retention.CalendarRule": {
+            "type": "object",
+            "properties": {
+                "keep": {
+                    "type": "integer"
+                },
+                "unit": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_retention.CalendarUnit"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_retention.CalendarUnit": {
+            "type": "string",
+            "enum": [
+                "day",
+                "week",
+                "month",
+                "year"
+            ],
+            "x-enum-varnames": [
+                "CalendarDay",
+                "CalendarWeek",
+                "CalendarMonth",
+                "CalendarYear"
+            ]
+        },
+        "xirang_backend_internal_backupasset_retention.CountRule": {
+            "type": "object",
+            "properties": {
+                "keep_latest": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_retention.HoldRecord": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "integer"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "hold_type": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RecoveryPointHoldType"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "recovery_point_id": {
+                    "type": "string"
+                },
+                "released_at": {
+                    "type": "string"
+                },
+                "released_by": {
+                    "type": "integer"
+                },
+                "state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.HoldState"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_retention.PolicyRules": {
+            "type": "object",
+            "properties": {
+                "age": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_retention.AgeRule"
+                },
+                "calendar": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_retention.CalendarRule"
+                    }
+                },
+                "count": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_retention.CountRule"
+                },
+                "version": {
+                    "type": "integer"
                 }
             }
         },

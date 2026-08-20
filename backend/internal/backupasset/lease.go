@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"xirang/backend/internal/model"
@@ -17,7 +18,10 @@ import (
 
 const maxLeaseAbsoluteDeadline = 168 * time.Hour
 
-const LeaseHolderSearchIndex LeaseHolderType = "search_index"
+const (
+	LeaseHolderSearchIndex     LeaseHolderType = "search_index"
+	LeaseHolderRetentionWorker LeaseHolderType = "retention_worker"
+)
 
 type LeaseStatus string
 
@@ -68,9 +72,92 @@ type Lease struct {
 }
 
 type LeaseService struct {
-	db     *gorm.DB
-	now    func() time.Time
-	config LeaseConfig
+	db          *gorm.DB
+	now         func() time.Time
+	config      LeaseConfig
+	admissionMu sync.RWMutex
+	admission   LifecycleLeaseAdmission
+}
+
+// LifecycleLeaseAdmission serializes ordinary lease admission with a durable
+// RecoveryPoint lifecycle attempt. The retention coordinator installs this
+// boundary during composition; retention_worker claims bypass it because they
+// create the fence itself while holding the same point transaction lock.
+type LifecycleLeaseAdmission interface {
+	ValidateLeaseAdmissionTx(context.Context, *gorm.DB, AcquireLeaseRequest) error
+}
+
+// ValidateRecoveryPointWriteAdmissionTx establishes the shared point-before-
+// lease lock order and rejects writes once any non-complete lifecycle attempt
+// is visible for the exact point.
+func ValidateRecoveryPointWriteAdmissionTx(ctx context.Context, tx *gorm.DB, pointID string) error {
+	if tx == nil || ValidateOpaqueID(pointID) != nil {
+		return fmt.Errorf("%w: invalid recovery point write admission", ErrInvalidState)
+	}
+	var point model.RecoveryPoint
+	loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Select("id", "semantics", "state").Where("id = ?", pointID).Limit(1).Find(&point)
+	if loaded.Error != nil {
+		return fmt.Errorf("lock recovery point write admission: %w", loaded.Error)
+	}
+	if loaded.RowsAffected != 1 {
+		return fmt.Errorf("%w: recovery point write source is unavailable", ErrConflict)
+	}
+	state := RecoveryPointState(point.State)
+	semantics := PointVersionSemantics(point.Semantics)
+	immutable := semantics == PointNativeSnapshot || semantics == PointXirangManifest || semantics == PointImportedBaseline
+	readable := semantics == PointMutableHead && state == RecoveryPointObserved ||
+		immutable && (state == RecoveryPointCommitted || state == RecoveryPointDegraded)
+	if !readable {
+		return fmt.Errorf("%w: recovery point write source is not readable", ErrConflict)
+	}
+	var activeAttempts int64
+	if err := tx.WithContext(ctx).Model(&model.RecoveryPointLifecycleAttempt{}).
+		Where("recovery_point_id = ? AND phase <> ?", pointID, LifecyclePhaseComplete).
+		Count(&activeAttempts).Error; err != nil {
+		return fmt.Errorf("check recovery point write lifecycle: %w", err)
+	}
+	if activeAttempts != 0 {
+		return fmt.Errorf("%w: recovery point lifecycle is active", ErrConflict)
+	}
+	return nil
+}
+
+// ValidateSourceLifecycleAttemptTx locks the exact point before proving that
+// an owner request belongs to the live lifecycle attempt and coordinator phase.
+// Owners call this inside the transaction that performs their mutation.
+func ValidateSourceLifecycleAttemptTx(ctx context.Context, tx *gorm.DB, request SourceLifecycleRequest) error {
+	if tx == nil {
+		return fmt.Errorf("%w: source lifecycle transaction is unavailable", ErrInvalidState)
+	}
+	if err := ValidateSourceLifecycleRequest(request); err != nil {
+		return err
+	}
+	var point model.RecoveryPoint
+	loadedPoint := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Select("id").Where("id = ?", request.RecoveryPointID).Limit(1).Find(&point)
+	if loadedPoint.Error != nil {
+		return fmt.Errorf("lock source lifecycle point: %w", loadedPoint.Error)
+	}
+	if loadedPoint.RowsAffected != 1 {
+		return fmt.Errorf("%w: source lifecycle point is unavailable", ErrConflict)
+	}
+
+	expectedPhase := LifecyclePhaseRevoking
+	if request.Stage == SourceLifecycleCleanup {
+		expectedPhase = LifecyclePhaseCleaning
+	}
+	var attempt model.RecoveryPointLifecycleAttempt
+	loadedAttempt := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND recovery_point_id = ?", request.LifecycleAttemptID, request.RecoveryPointID).
+		Limit(1).Find(&attempt)
+	if loadedAttempt.Error != nil {
+		return fmt.Errorf("lock source lifecycle attempt: %w", loadedAttempt.Error)
+	}
+	if loadedAttempt.RowsAffected != 1 || attempt.Operation != string(request.Operation) || attempt.Phase != string(expectedPhase) || attempt.CompletedAt != nil {
+		return fmt.Errorf("%w: source lifecycle attempt stage changed", ErrConflict)
+	}
+	return nil
 }
 
 func NewLeaseService(db *gorm.DB, now func() time.Time, config LeaseConfig) (*LeaseService, error) {
@@ -106,6 +193,16 @@ func (service *LeaseService) AcquireTx(ctx context.Context, tx *gorm.DB, request
 	if err := validateAcquireLeaseRequest(request); err != nil {
 		return Lease{}, err
 	}
+	if request.HolderType != LeaseHolderRetentionWorker {
+		service.admissionMu.RLock()
+		admission := service.admission
+		service.admissionMu.RUnlock()
+		if admission != nil {
+			if err := admission.ValidateLeaseAdmissionTx(ctx, tx, request); err != nil {
+				return Lease{}, err
+			}
+		}
+	}
 	now := service.utcNow()
 	absoluteDeadline, err := service.resolveAcquireDeadlineTx(ctx, tx, request, now)
 	if err != nil {
@@ -132,6 +229,12 @@ func (service *LeaseService) AcquireTx(ctx context.Context, tx *gorm.DB, request
 		return Lease{}, fmt.Errorf("create recovery point lease: %w", err)
 	}
 	return leaseFromModel(row)
+}
+
+func (service *LeaseService) SetLifecycleLeaseAdmission(admission LifecycleLeaseAdmission) {
+	service.admissionMu.Lock()
+	service.admission = admission
+	service.admissionMu.Unlock()
 }
 
 func (service *LeaseService) Renew(ctx context.Context, fence LeaseFence) (Lease, error) {
@@ -547,7 +650,7 @@ var (
 	validLeaseHolderTypes = setOf(
 		LeaseHolderRsyncParent, LeaseHolderCatalogBuild, LeaseHolderContentSession,
 		LeaseHolderProcessingJob, LeaseHolderExportJob, LeaseHolderRecoveryJob, LeaseHolderPointPublication,
-		LeaseHolderSearchIndex,
+		LeaseHolderSearchIndex, LeaseHolderRetentionWorker,
 	)
 	validLeaseStatuses = setOf(LeaseActive, LeaseReleased, LeaseExpired)
 )

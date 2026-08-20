@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"xirang/backend/internal/backupasset"
@@ -17,6 +18,8 @@ import (
 )
 
 const searchBuildOwnerPrefix = "search:"
+
+const maxSearchBuildTeardown = 30 * time.Second
 
 type SearchLease interface {
 	Acquire(context.Context, backupasset.AcquireLeaseRequest) (backupasset.Lease, error)
@@ -49,6 +52,15 @@ type Indexer struct {
 	keys   SearchKeySource
 	now    func() time.Time
 	config IndexerConfig
+
+	attemptsMu sync.Mutex
+	attempts   map[string]activeSearchBuild
+}
+
+type activeSearchBuild struct {
+	fence  backupasset.LeaseFence
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 type BuildRequest struct {
@@ -78,7 +90,11 @@ func NewIndexer(dependencies IndexerDependencies) (*Indexer, error) {
 	if dependencies.Now == nil {
 		dependencies.Now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Indexer{db: dependencies.DB, lease: dependencies.Lease, keys: dependencies.Keys, now: dependencies.Now, config: dependencies.Config}, nil
+	return &Indexer{
+		db: dependencies.DB, lease: dependencies.Lease, keys: dependencies.Keys,
+		now: dependencies.Now, config: dependencies.Config,
+		attempts: make(map[string]activeSearchBuild),
+	}, nil
 }
 
 func (indexer *Indexer) Build(ctx context.Context, request BuildRequest) (result model.BackupAssetSearchGeneration, buildErr error) {
@@ -101,10 +117,28 @@ func (indexer *Indexer) Build(ctx context.Context, request BuildRequest) (result
 	if err != nil {
 		return result, err
 	}
-	released := false
+	registered := false
+	leaseReleased := false
+	generationSettled := false
+	var buildCancel context.CancelFunc
 	defer func() {
-		if !released {
-			_ = indexer.lease.Release(context.Background(), lease.Fence)
+		if buildCancel != nil {
+			buildCancel()
+		}
+		teardownCtx, cancelTeardown := indexer.newBuildTeardownContext(ctx)
+		defer cancelTeardown()
+		if registered && result.ID != "" && !generationSettled {
+			if err := indexer.markFailed(teardownCtx, result.ID, classifySearchBuildError(buildErr)); err != nil {
+				buildErr = errors.Join(buildErr, fmt.Errorf("%w: Search failure evidence unavailable", backupasset.ErrInvalidState))
+			}
+		}
+		if !leaseReleased {
+			if err := indexer.lease.Release(teardownCtx, lease.Fence); err != nil {
+				buildErr = errors.Join(buildErr, fmt.Errorf("%w: Search lease release failed", backupasset.ErrInvalidState))
+			}
+		}
+		if registered {
+			indexer.unregisterActiveBuild(request.RecoveryPointID, lease.Fence)
 		}
 	}()
 	deadline := indexer.utcNow().Add(indexer.config.BuildTimeout)
@@ -116,17 +150,15 @@ func (indexer *Indexer) Build(ctx context.Context, request BuildRequest) (result
 		return result, backupasset.ErrLeaseDeadlineExceeded
 	}
 	buildCtx, cancel := context.WithTimeout(ctx, remaining)
-	defer cancel()
+	buildCancel = cancel
+	if err := indexer.registerActiveBuild(request.RecoveryPointID, lease.Fence, cancel); err != nil {
+		return result, err
+	}
+	registered = true
 	result, err = indexer.beginGeneration(buildCtx, frozen, lease.Fence, request.CorrelationID)
 	if err != nil {
 		return result, err
 	}
-	completed := false
-	defer func() {
-		if !completed {
-			_ = indexer.markFailed(context.Background(), result.ID, classifySearchBuildError(buildErr))
-		}
-	}()
 	if err := indexer.projectCatalog(buildCtx, frozen, lease.Fence, &result); err != nil {
 		return result, err
 	}
@@ -135,9 +167,83 @@ func (indexer *Indexer) Build(ctx context.Context, request BuildRequest) (result
 		return result, err
 	}
 	result = activated
-	released = true
-	completed = true
+	leaseReleased = true
+	generationSettled = true
 	return result, nil
+}
+
+func (indexer *Indexer) registerActiveBuild(
+	pointID string,
+	fence backupasset.LeaseFence,
+	cancel context.CancelFunc,
+) error {
+	if indexer == nil || cancel == nil {
+		return fmt.Errorf("%w: invalid Search active build", backupasset.ErrInvalidState)
+	}
+	indexer.attemptsMu.Lock()
+	defer indexer.attemptsMu.Unlock()
+	if indexer.attempts == nil {
+		indexer.attempts = make(map[string]activeSearchBuild)
+	}
+	if _, exists := indexer.attempts[pointID]; exists {
+		return fmt.Errorf("%w: Search point build already active", backupasset.ErrLeaseHeld)
+	}
+	indexer.attempts[pointID] = activeSearchBuild{fence: fence, cancel: cancel, done: make(chan struct{})}
+	return nil
+}
+
+func (indexer *Indexer) unregisterActiveBuild(pointID string, fence backupasset.LeaseFence) {
+	if indexer == nil {
+		return
+	}
+	indexer.attemptsMu.Lock()
+	defer indexer.attemptsMu.Unlock()
+	attempt, exists := indexer.attempts[pointID]
+	if !exists || attempt.fence.FenceToken != fence.FenceToken {
+		return
+	}
+	delete(indexer.attempts, pointID)
+	close(attempt.done)
+}
+
+func (indexer *Indexer) cancelAndJoinActiveBuild(ctx context.Context, pointID string) error {
+	if indexer == nil {
+		return fmt.Errorf("%w: Search Indexer is unavailable", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	indexer.attemptsMu.Lock()
+	attempt, exists := indexer.attempts[pointID]
+	indexer.attemptsMu.Unlock()
+	if !exists {
+		return nil
+	}
+	attempt.cancel()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-attempt.done:
+		return nil
+	}
+}
+
+func (indexer *Indexer) newBuildTeardownContext(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := indexer.config.BuildTimeout
+	if timeout > maxSearchBuildTeardown {
+		timeout = maxSearchBuildTeardown
+	}
+	return context.WithTimeout(context.WithoutCancel(parent), timeout)
+}
+
+func (indexer *Indexer) activeBuildExists(pointID string) bool {
+	if indexer == nil {
+		return false
+	}
+	indexer.attemptsMu.Lock()
+	defer indexer.attemptsMu.Unlock()
+	_, exists := indexer.attempts[pointID]
+	return exists
 }
 
 func (indexer *Indexer) ListCandidates(ctx context.Context, limit int) ([]BuildCandidate, error) {
@@ -230,6 +336,12 @@ func (indexer *Indexer) beginGeneration(
 ) (model.BackupAssetSearchGeneration, error) {
 	var row model.BackupAssetSearchGeneration
 	err := indexer.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, frozen.point.ID); err != nil {
+			return err
+		}
+		if err := indexer.lease.ValidateFenceTx(ctx, tx, fence); err != nil {
+			return err
+		}
 		var maxGeneration int
 		if err := tx.Model(&model.BackupAssetSearchGeneration{}).Where("recovery_point_id = ?", frozen.point.ID).
 			Select("COALESCE(MAX(generation), 0)").Scan(&maxGeneration).Error; err != nil {
@@ -311,6 +423,9 @@ func (indexer *Indexer) persistProjectionBatch(
 	entries []model.CatalogEntry,
 ) error {
 	return indexer.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, frozen.point.ID); err != nil {
+			return err
+		}
 		if err := indexer.lease.ValidateFenceTx(ctx, tx, fence); err != nil {
 			return err
 		}
@@ -436,6 +551,9 @@ func (indexer *Indexer) activate(
 ) (model.BackupAssetSearchGeneration, error) {
 	var activated model.BackupAssetSearchGeneration
 	err := indexer.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, frozen.point.ID); err != nil {
+			return err
+		}
 		if err := indexer.lease.ValidateFenceTx(ctx, tx, fence); err != nil {
 			return err
 		}
@@ -491,9 +609,16 @@ func (indexer *Indexer) activate(
 
 func (indexer *Indexer) markFailed(ctx context.Context, generationID string, code SearchGenerationError) error {
 	now := indexer.utcNow()
-	return indexer.db.WithContext(ctx).Model(&model.BackupAssetSearchGeneration{}).
+	result := indexer.db.WithContext(ctx).Model(&model.BackupAssetSearchGeneration{}).
 		Where("id = ? AND state = ?", generationID, SearchGenerationBuilding).
-		Updates(map[string]any{"state": SearchGenerationFailed, "is_active": false, "error_code": code, "finished_at": now, "updated_at": now}).Error
+		Updates(map[string]any{"state": SearchGenerationFailed, "is_active": false, "error_code": code, "finished_at": now, "updated_at": now})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("%w: Search failure evidence was not persisted", backupasset.ErrInvalidState)
+	}
+	return nil
 }
 
 func (indexer *Indexer) activeSearchKey(ctx context.Context) (backupasset.DomainKeyMaterial, error) {

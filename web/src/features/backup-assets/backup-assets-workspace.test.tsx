@@ -568,7 +568,7 @@ describe("BackupAssetsWorkspace", () => {
       />
     );
 
-    const management = screen.getByRole("region", {
+    const management = await screen.findByRole("region", {
       name: /Repository management|仓库管理/,
     });
     expect(management).toHaveTextContent(repository.displayName);
@@ -589,6 +589,50 @@ describe("BackupAssetsWorkspace", () => {
       view: "browse",
       repositoryId: repository.id,
     });
+  });
+
+  it("shows Admin lifecycle actions on the repositories view and keeps operators read-only", async () => {
+    setViewport(1440);
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "repositories" as const,
+      repositoryId: repository.id,
+    };
+    const state = createInitialBackupAssetsState(route);
+    const { rerender } = render(
+      <BackupAssetsWorkspace
+        controller={controller({
+          state,
+          recoveryPoints: {
+            status: "ready",
+            items: [{ status: "available", value: recoveryPoint }],
+            nextCursor: null,
+          },
+        })}
+        processingRuntime={{ token: "admin-token", role: "admin", userId: 7, ensureStepUpProof: vi.fn() }}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+
+    const management = await screen.findByRole("region", { name: /Repository management|仓库管理/ });
+    expect(within(management).getByRole("button", { name: /Reconnect|重连/ })).toBeInTheDocument();
+    expect(within(management).getByRole("button", { name: /Reconcile|重新探测/ })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: /Retention policies|保留策略/ })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Hold recovery point|冻结恢复点/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Create hold|创建冻结/ })).toBeInTheDocument();
+
+    rerender(
+      <BackupAssetsWorkspace
+        controller={controller({ state })}
+        processingRuntime={{ token: "operator-token", role: "operator", ensureStepUpProof: vi.fn() }}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+    expect(within(screen.getByRole("region", { name: /Repository management|仓库管理/ }))
+      .queryByRole("button", { name: /Reconnect|重连/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /Retention policies|保留策略/ })).not.toBeInTheDocument();
   });
 
   it("uses a context dialog at intermediate width and returns focus to its trigger", async () => {
@@ -631,6 +675,31 @@ describe("BackupAssetsWorkspace", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(/not enabled|未启用/);
     expect(screen.queryByRole("region", { name: /Asset results|资产结果/ })).not.toBeInTheDocument();
     expect(screen.queryByText(repository.displayName)).not.toBeInTheDocument();
+  });
+
+  it("renders a repository load error instead of an empty management panel", () => {
+    setViewport(1440);
+    render(
+      <BackupAssetsWorkspace
+        controller={controller({
+          repositories: {
+            status: "error",
+            items: [],
+            nextCursor: null,
+            error: {
+              code: "unknown",
+              translationKey: "backupAssets.errors.unknown",
+              retryable: true,
+              action: "retry",
+            },
+          },
+        })}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(/could not be loaded|无法加载/);
+    expect(screen.queryByRole("region", { name: /Repository management|仓库管理/ })).not.toBeInTheDocument();
   });
 
   it("renders an exact recovery-point blocked state without mounting asset controls", async () => {

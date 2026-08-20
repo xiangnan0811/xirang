@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +49,13 @@ type ContentLeaseSession struct {
 	mu              sync.Mutex
 	released        bool
 	releaseErr      error
+}
+
+type contentLeaseSessionSnapshot struct {
+	fence           backupasset.LeaseFence
+	binding         ContentLeaseBinding
+	lastHeartbeatAt time.Time
+	released        bool
 }
 
 func AcquireContentLease(
@@ -162,25 +170,24 @@ func (session *ContentLeaseSession) Release(ctx context.Context) error {
 		return nil
 	}
 	session.mu.Lock()
+	defer session.mu.Unlock()
 	if session.released {
-		err := session.releaseErr
-		session.mu.Unlock()
-		return err
+		return nil
 	}
-	session.released = true
 	fence := session.fence
 	controller := session.controller
-	session.mu.Unlock()
 	if controller == nil {
+		session.releaseErr = ErrInvalidContentLease
 		return ErrInvalidContentLease
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	err := controller.Release(ctx, fence)
-	session.mu.Lock()
 	session.releaseErr = err
-	session.mu.Unlock()
+	if err == nil {
+		session.released = true
+	}
 	return err
 }
 
@@ -241,26 +248,65 @@ func (cleanup *ContentLeaseCleanup) Release(ctx context.Context) error {
 		return nil
 	}
 	cleanup.mu.Lock()
+	defer cleanup.mu.Unlock()
 	if cleanup.released {
-		err := cleanup.releaseErr
-		cleanup.mu.Unlock()
-		return err
+		return nil
 	}
-	cleanup.released = true
 	fence := cleanup.fence
 	controller := cleanup.controller
-	cleanup.mu.Unlock()
 	if controller == nil {
+		cleanup.releaseErr = ErrInvalidContentLease
 		return ErrInvalidContentLease
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	err := controller.Release(ctx, fence)
-	cleanup.mu.Lock()
 	cleanup.releaseErr = err
-	cleanup.mu.Unlock()
+	if err == nil {
+		cleanup.released = true
+	}
 	return err
+}
+
+func (session *ContentLeaseSession) snapshotForLifecycle(expectedController ContentLeaseController) (contentLeaseSessionSnapshot, error) {
+	if session == nil || expectedController == nil {
+		return contentLeaseSessionSnapshot{}, ErrInvalidContentLease
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if !sameContentLeaseController(session.controller, expectedController) {
+		return contentLeaseSessionSnapshot{}, ErrInvalidContentLease
+	}
+	fence := session.fence
+	binding := session.binding
+	if backupasset.ValidateOpaqueID(fence.LeaseID) != nil ||
+		backupasset.ValidateOpaqueID(fence.RecoveryPointID) != nil ||
+		fence.HolderType != backupasset.LeaseHolderContentSession ||
+		backupasset.ValidateOpaqueID(fence.OwnerID) != nil ||
+		backupasset.ValidateOpaqueID(fence.AttemptID) != nil ||
+		!lowerHexOfLength(fence.FenceToken, 64) ||
+		binding.LeaseID != fence.LeaseID || binding.AttemptID != fence.AttemptID ||
+		binding.FenceTokenHash != hashContentLeaseFenceToken(fence.FenceToken) ||
+		binding.LeaseExpiresAt.IsZero() || binding.AbsoluteDeadline.IsZero() ||
+		binding.LeaseExpiresAt.After(binding.AbsoluteDeadline) ||
+		session.lastHeartbeatAt.IsZero() || session.lastHeartbeatAt.After(binding.LeaseExpiresAt) {
+		return contentLeaseSessionSnapshot{}, ErrInvalidContentLease
+	}
+	return contentLeaseSessionSnapshot{
+		fence: fence, binding: binding, lastHeartbeatAt: session.lastHeartbeatAt.UTC(), released: session.released,
+	}, nil
+}
+
+func sameContentLeaseController(left, right ContentLeaseController) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	leftType := reflect.TypeOf(left)
+	if leftType != reflect.TypeOf(right) || !leftType.Comparable() {
+		return false
+	}
+	return left == right
 }
 
 func contentLeaseBinding(lease backupasset.Lease, pointID, grantID string) (ContentLeaseBinding, error) {
@@ -275,11 +321,15 @@ func contentLeaseBinding(lease backupasset.Lease, pointID, grantID string) (Cont
 		lease.LeaseExpiresAt.After(lease.AbsoluteDeadline) {
 		return ContentLeaseBinding{}, ErrInvalidContentLease
 	}
-	sum := sha256.Sum256([]byte(fence.FenceToken))
 	return ContentLeaseBinding{
-		LeaseID: lease.ID, AttemptID: fence.AttemptID, FenceTokenHash: hex.EncodeToString(sum[:]),
+		LeaseID: lease.ID, AttemptID: fence.AttemptID, FenceTokenHash: hashContentLeaseFenceToken(fence.FenceToken),
 		LeaseExpiresAt: lease.LeaseExpiresAt.UTC(), AbsoluteDeadline: lease.AbsoluteDeadline.UTC(),
 	}, nil
+}
+
+func hashContentLeaseFenceToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 func lowerHexOfLength(value string, length int) bool {

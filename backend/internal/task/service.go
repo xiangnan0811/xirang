@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -33,6 +34,7 @@ type TaskApiService struct {
 	nodeRepo   repository.NodeRepository
 	policyRepo repository.PolicyRepository
 	runner     TaskRunner
+	archive    *ArchiveService
 }
 
 // NewTaskApiService creates a new TaskApiService.
@@ -48,6 +50,22 @@ func NewTaskApiService(
 		policyRepo: policyRepo,
 		runner:     runner,
 	}
+}
+
+// WithArchiveService installs the Task archive/unlink owner used by HTTP delete.
+func (s *TaskApiService) WithArchiveService(archive *ArchiveService) *TaskApiService {
+	if s != nil {
+		s.archive = archive
+	}
+	return s
+}
+
+// ArchiveTask disables and unlinks a Task without Provider side effects.
+func (s *TaskApiService) ArchiveTask(ctx context.Context, taskID uint) (ArchiveResult, error) {
+	if s == nil || s.archive == nil {
+		return ArchiveResult{}, fmt.Errorf("任务归档服务未初始化")
+	}
+	return s.archive.Archive(ctx, taskID)
 }
 
 // CreateTaskInput is the input for creating or updating a task.
@@ -108,9 +126,6 @@ func (s *TaskApiService) CreateTask(ctx context.Context, input CreateTaskInput) 
 	if err := ValidateTaskInput(input); err != nil {
 		return model.Task{}, err
 	}
-	if err := ValidateTaskRefs(ctx, s.nodeRepo, s.policyRepo, s.taskRepo, input, 0); err != nil {
-		return model.Task{}, err
-	}
 
 	taskEntity := model.Task{
 		Name:            input.Name,
@@ -125,8 +140,34 @@ func (s *TaskApiService) CreateTask(ctx context.Context, input CreateTaskInput) 
 		CronSpec:        input.CronSpec,
 		Status:          string(StatusPending),
 	}
-	if err := s.taskRepo.Create(ctx, &taskEntity); err != nil {
-		return model.Task{}, apperr.WrapDBError(err)
+	if err := validateTaskNodeAndPolicy(ctx, s.nodeRepo, s.policyRepo, input); err != nil {
+		return model.Task{}, err
+	}
+	persist := func(ctx context.Context, repo repository.TaskRepository) error {
+		if input.DependsOnTaskID != nil {
+			if err := repo.LockIDsForUpdate(ctx, []uint{*input.DependsOnTaskID}); err != nil {
+				return err
+			}
+		}
+		if err := validateTaskDependencyRefs(ctx, repo, input, 0); err != nil {
+			return err
+		}
+		return repo.Create(ctx, &taskEntity)
+	}
+	if input.DependsOnTaskID != nil {
+		if err := s.taskRepo.RunInTransaction(ctx, persist); err != nil {
+			if IsTaskValidationError(err) {
+				return model.Task{}, err
+			}
+			return model.Task{}, err
+		}
+	} else {
+		if err := persist(ctx, s.taskRepo); err != nil {
+			if IsTaskValidationError(err) {
+				return model.Task{}, err
+			}
+			return model.Task{}, apperr.WrapDBError(err)
+		}
 	}
 	if s.runner != nil {
 		if err := s.runner.SyncSchedule(taskEntity); err != nil {
@@ -152,6 +193,9 @@ func (s *TaskApiService) UpdateTask(ctx context.Context, id uint, input CreateTa
 	taskEntity, err := s.taskRepo.FindByID(ctx, id)
 	if err != nil {
 		return model.Task{}, apperr.WrapDBError(err)
+	}
+	if taskEntity.ArchivedAt != nil {
+		return model.Task{}, ErrTaskArchived
 	}
 	// Value copy for compensating rollback; the copy shares pointer fields
 	// (e.g. PolicyID) — callers must not mutate through *previous.PolicyID.
@@ -197,26 +241,60 @@ func (s *TaskApiService) UpdateTask(ctx context.Context, id uint, input CreateTa
 	if err := ValidateTaskInput(input); err != nil {
 		return model.Task{}, err
 	}
-	if err := ValidateTaskRefs(ctx, s.nodeRepo, s.policyRepo, s.taskRepo, input, id); err != nil {
+	if err := validateTaskNodeAndPolicy(ctx, s.nodeRepo, s.policyRepo, input); err != nil {
 		return model.Task{}, err
 	}
 
-	taskEntity.Name = input.Name
-	taskEntity.NodeID = input.NodeID
-	taskEntity.PolicyID = input.PolicyID
-	taskEntity.DependsOnTaskID = input.DependsOnTaskID
-	taskEntity.Command = input.Command
-	taskEntity.RsyncSource = input.RsyncSource
-	taskEntity.RsyncTarget = input.RsyncTarget
-	taskEntity.ExecutorType = input.ExecutorType
-	taskEntity.ExecutorConfig = input.ExecutorConfig
-	taskEntity.CronSpec = input.CronSpec
-
-	if err := s.taskRepo.Update(ctx, taskEntity); err != nil {
-		return model.Task{}, apperr.WrapDBError(err)
+	ids := []uint{id}
+	if input.DependsOnTaskID != nil {
+		ids = append(ids, *input.DependsOnTaskID)
+	}
+	err = s.taskRepo.RunInTransaction(ctx, func(ctx context.Context, txRepo repository.TaskRepository) error {
+		if err := txRepo.LockIDsForUpdate(ctx, ids); err != nil {
+			return err
+		}
+		fresh, err := txRepo.FindByID(ctx, id)
+		if err != nil {
+			return apperr.WrapDBError(err)
+		}
+		if fresh.ArchivedAt != nil {
+			return ErrTaskArchived
+		}
+		if err := validateTaskDependencyRefs(ctx, txRepo, input, id); err != nil {
+			return err
+		}
+		fresh.Name = input.Name
+		fresh.NodeID = input.NodeID
+		fresh.PolicyID = input.PolicyID
+		fresh.DependsOnTaskID = input.DependsOnTaskID
+		fresh.Command = input.Command
+		fresh.RsyncSource = input.RsyncSource
+		fresh.RsyncTarget = input.RsyncTarget
+		fresh.ExecutorType = input.ExecutorType
+		fresh.ExecutorConfig = input.ExecutorConfig
+		fresh.CronSpec = input.CronSpec
+		if err := txRepo.Update(ctx, fresh); err != nil {
+			if errors.Is(err, repository.ErrTaskArchived) {
+				return ErrTaskArchived
+			}
+			return apperr.WrapDBError(err)
+		}
+		*taskEntity = *fresh
+		return nil
+	})
+	if err != nil {
+		return model.Task{}, err
 	}
 	if s.runner != nil {
-		if err := s.runner.SyncSchedule(*taskEntity); err != nil {
+		current, findErr := s.taskRepo.FindByID(ctx, id)
+		if findErr != nil {
+			return model.Task{}, apperr.WrapDBError(findErr)
+		}
+		if current.ArchivedAt != nil {
+			s.runner.RemoveSchedule(id)
+			return *current, ErrTaskArchived
+		}
+		if err := s.runner.SyncSchedule(*current); err != nil {
 			s.runner.RemoveSchedule(taskEntity.ID)
 			if restoreErr := s.taskRepo.Update(ctx, &previous); restoreErr != nil {
 				return model.Task{}, fmt.Errorf("任务调度同步失败且补偿回滚失败: %w", restoreErr)
@@ -227,6 +305,7 @@ func (s *TaskApiService) UpdateTask(ctx context.Context, id uint, input CreateTa
 			}
 			return model.Task{}, newValidationError("任务调度失败，请检查 Cron 表达式是否正确")
 		}
+		return *current, nil
 	}
 	return *taskEntity, nil
 }
@@ -532,6 +611,13 @@ func validateTaskIdentityAndSchedule(req CreateTaskInput) error {
 
 // ValidateTaskRefs validates that referenced nodes, policies, and dependency tasks exist.
 func ValidateTaskRefs(ctx context.Context, nodeRepo repository.NodeRepository, policyRepo repository.PolicyRepository, taskRepo repository.TaskRepository, req CreateTaskInput, selfID uint) error {
+	if err := validateTaskNodeAndPolicy(ctx, nodeRepo, policyRepo, req); err != nil {
+		return err
+	}
+	return validateTaskDependencyRefs(ctx, taskRepo, req, selfID)
+}
+
+func validateTaskNodeAndPolicy(ctx context.Context, nodeRepo repository.NodeRepository, policyRepo repository.PolicyRepository, req CreateTaskInput) error {
 	if req.NodeID != 0 {
 		exists, err := nodeRepo.ExistsByID(ctx, req.NodeID)
 		if err != nil {
@@ -550,28 +636,29 @@ func ValidateTaskRefs(ctx context.Context, nodeRepo repository.NodeRepository, p
 			return newValidationError("所选策略不存在，请重新选择")
 		}
 	}
-	if req.DependsOnTaskID != nil {
-		// cron and dependency are mutually exclusive.
-		if strings.TrimSpace(req.CronSpec) != "" {
-			return newValidationError("设置了前置任务的任务不能同时设置定时调度")
-		}
-		// A task cannot depend on itself.
-		if selfID != 0 && *req.DependsOnTaskID == selfID {
-			return newValidationError("任务不能依赖自身")
-		}
-		// Check that the dependency exists.
-		exists, err := taskRepo.ExistsByID(ctx, *req.DependsOnTaskID)
-		if err != nil {
-			return fmt.Errorf("校验前置任务失败: %w", err)
-		}
-		if !exists {
-			return newValidationError("所选前置任务不存在，请重新选择")
-		}
-		// Cycle detection: trace upward from the dependency, max depth 10.
-		if selfID != 0 {
-			if err := detectDependencyCycle(ctx, taskRepo, selfID, *req.DependsOnTaskID, 10); err != nil {
-				return err
-			}
+	return nil
+}
+
+func validateTaskDependencyRefs(ctx context.Context, taskRepo repository.TaskRepository, req CreateTaskInput, selfID uint) error {
+	if req.DependsOnTaskID == nil {
+		return nil
+	}
+	if strings.TrimSpace(req.CronSpec) != "" {
+		return newValidationError("设置了前置任务的任务不能同时设置定时调度")
+	}
+	if selfID != 0 && *req.DependsOnTaskID == selfID {
+		return newValidationError("任务不能依赖自身")
+	}
+	exists, err := taskRepo.ExistsLiveByID(ctx, *req.DependsOnTaskID)
+	if err != nil {
+		return fmt.Errorf("校验前置任务失败: %w", err)
+	}
+	if !exists {
+		return newValidationError("所选前置任务不存在，请重新选择")
+	}
+	if selfID != 0 {
+		if err := detectDependencyCycle(ctx, taskRepo, selfID, *req.DependsOnTaskID, 10); err != nil {
+			return err
 		}
 	}
 	return nil

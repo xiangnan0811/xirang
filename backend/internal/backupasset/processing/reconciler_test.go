@@ -450,8 +450,8 @@ func TestDerivedReconcilerRetriesFailedPurgeAndClearsFailureState(t *testing.T) 
 		return os.Remove(path)
 	}
 	if err := harness.lifecycle.RevokeSetFenced(context.Background(), reference.setID, DerivedRevokeExpired,
-		derivedLifecycleFence("9", reference.authorization.RecoveryPointID)); !errors.Is(err, injected) {
-		t.Fatalf("RevokeSet removal error=%v, want injected failure", err)
+		derivedLifecycleFence("9", reference.authorization.RecoveryPointID)); !errors.Is(err, ErrDerivedBlobUnavailable) || errors.Is(err, injected) || err.Error() != ErrDerivedBlobUnavailable.Error() {
+		t.Fatalf("RevokeSet removal error=%v, want closed ErrDerivedBlobUnavailable without private cause", err)
 	}
 	var failed model.BackupAssetDerivedBlob
 	if err := harness.db.First(&failed, "id = ?", blob.BlobID).Error; err != nil {

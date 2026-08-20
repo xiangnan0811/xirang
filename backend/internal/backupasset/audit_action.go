@@ -92,8 +92,10 @@ const (
 	AuditActionRetentionPolicyCreate AuditAction = "retention_policy_create"
 	AuditActionRetentionPolicyUpdate AuditAction = "retention_policy_update"
 	AuditActionRetentionPolicyDelete AuditAction = "retention_policy_delete"
+	AuditActionRetentionPolicyList   AuditAction = "retention_policy_list"
 	AuditActionHoldCreate            AuditAction = "hold_create"
 	AuditActionHoldRelease           AuditAction = "hold_release"
+	AuditActionHoldList              AuditAction = "hold_list"
 )
 
 var AuditActions = []AuditAction{
@@ -171,8 +173,10 @@ var AuditActions = []AuditAction{
 	AuditActionRetentionPolicyCreate,
 	AuditActionRetentionPolicyUpdate,
 	AuditActionRetentionPolicyDelete,
+	AuditActionRetentionPolicyList,
 	AuditActionHoldCreate,
 	AuditActionHoldRelease,
+	AuditActionHoldList,
 }
 
 var validAuditActions = setOf(AuditActions...)
@@ -199,6 +203,7 @@ const (
 	AuditFieldGrantID         AuditField = "grant_id"
 	AuditFieldStepUpProofID   AuditField = "step_up_proof_id"
 	AuditFieldStepUpAction    AuditField = "step_up_action"
+	AuditFieldPolicyID        AuditField = "policy_id"
 	AuditFieldItemCount       AuditField = "item_count"
 	AuditFieldByteCount       AuditField = "byte_count"
 	AuditFieldRangeCount      AuditField = "range_count"
@@ -227,6 +232,7 @@ var AuditFields = []AuditField{
 	AuditFieldGrantID,
 	AuditFieldStepUpProofID,
 	AuditFieldStepUpAction,
+	AuditFieldPolicyID,
 	AuditFieldItemCount,
 	AuditFieldByteCount,
 	AuditFieldRangeCount,
@@ -501,7 +507,7 @@ func SanitizeAuditFields(input map[string]any) map[AuditField]any {
 
 func sanitizeAuditFieldValue(field AuditField, value any) (any, bool) {
 	switch field {
-	case AuditFieldRepositoryID, AuditFieldRecoveryPointID, AuditFieldRecoveryJobID, AuditFieldExportJobID, AuditFieldStepUpProofID:
+	case AuditFieldRepositoryID, AuditFieldRecoveryPointID, AuditFieldRecoveryJobID, AuditFieldExportJobID, AuditFieldStepUpProofID, AuditFieldPolicyID:
 		text, ok := value.(string)
 		text = strings.TrimSpace(text)
 		if !ok || ValidateOpaqueID(text) != nil {

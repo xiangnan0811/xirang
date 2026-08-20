@@ -41,7 +41,10 @@ func (settings indexerSettings) GetEffective(key string) string { return setting
 
 func indexerFoundation() *backupasset.FoundationService {
 	return backupasset.NewFoundationService(indexerSettings{
-		"backup_assets.enabled":                          "true",
+		"backup_assets.enabled":                          "false",
+		"backup_assets.retention_reconcile_interval":     "5m",
+		"backup_assets.retention_batch_size":             "100",
+		"backup_assets.retention_drain_timeout":          "30s",
 		"backup_assets.catalog_batch_size":               "2000",
 		"backup_assets.catalog_build_timeout":            "30m",
 		"backup_assets.repository_reconcile_interval":    "15m",

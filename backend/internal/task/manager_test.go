@@ -21,6 +21,7 @@ import (
 	"xirang/backend/internal/secure"
 	"xirang/backend/internal/sshutil"
 	taskexec "xirang/backend/internal/task/executor"
+	"xirang/backend/internal/task/scheduler"
 
 	"github.com/mattn/go-sqlite3"
 	"gorm.io/driver/sqlite"
@@ -2791,5 +2792,76 @@ func TestRestoreNodeMutexRegisteredSynchronously(t *testing.T) {
 	// 恢复取消后，节点应不再标记
 	if m.isNodeRestoring(t1.NodeID) {
 		t.Fatal("恢复取消后，节点不应再标记为正在恢复")
+	}
+}
+
+func TestTaskArchiveSkipsScheduleReloadForArchivedTask(t *testing.T) {
+	db := openManagerTestDB(t)
+	if err := db.AutoMigrate(&model.BackupRepository{}, &model.TaskRepositoryLink{}, &model.RecoveryPoint{}); err != nil {
+		t.Fatalf("migrate archive manager tables: %v", err)
+	}
+	cron := scheduler.NewCronScheduler()
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, cron, nil, nil, 8, 90)
+	t.Cleanup(cron.Stop)
+	taskEntity := seedTaskForManagerTest(t, db)
+	if err := db.Model(&taskEntity).Updates(map[string]any{
+		"enabled":     true,
+		"cron_spec":   "*/5 * * * *",
+		"archived_at": time.Date(2026, 8, 18, 14, 0, 0, 0, time.UTC),
+	}).Error; err != nil {
+		t.Fatalf("seed archived enabled task: %v", err)
+	}
+
+	if err := manager.LoadSchedules(context.Background()); err != nil {
+		t.Fatalf("LoadSchedules: %v", err)
+	}
+	var reloaded model.Task
+	if err := db.First(&reloaded, taskEntity.ID).Error; err != nil {
+		t.Fatalf("reload archived task: %v", err)
+	}
+	if reloaded.NextRunAt != nil {
+		t.Fatalf("archived task was rescheduled, next_run_at=%v", reloaded.NextRunAt)
+	}
+
+	live := model.Task{
+		Name:         "live-archive-source",
+		NodeID:       taskEntity.NodeID,
+		ExecutorType: "rsync",
+		Status:       string(StatusPending),
+		RsyncSource:  "/tmp/src",
+		RsyncTarget:  "/tmp/dst",
+		CronSpec:     "*/5 * * * *",
+		Enabled:      true,
+	}
+	if err := db.Create(&live).Error; err != nil {
+		t.Fatalf("seed live archive source: %v", err)
+	}
+	result, err := manager.Archive(context.Background(), live.ID)
+	if err != nil {
+		t.Fatalf("Manager.Archive: %v", err)
+	}
+	if !result.Archived || result.ProviderBytesDeleted {
+		t.Fatalf("manager archive result=%+v", result)
+	}
+	var archived model.Task
+	if err := db.First(&archived, live.ID).Error; err != nil {
+		t.Fatalf("reload manager-archived task: %v", err)
+	}
+	if archived.Enabled || archived.ArchivedAt == nil {
+		t.Fatalf("manager archive left task enabled=%v archived_at=%v", archived.Enabled, archived.ArchivedAt)
+	}
+
+	if err := manager.Resume(archived.ID); !errors.Is(err, ErrTaskArchived) {
+		t.Fatalf("Resume archived task error=%v, want ErrTaskArchived", err)
+	}
+	if runID, err := manager.TriggerRestore(archived.ID, ""); !errors.Is(err, ErrTaskArchived) || runID != 0 {
+		t.Fatalf("TriggerRestore archived task runID=%d error=%v, want ErrTaskArchived", runID, err)
+	}
+	var stillArchived model.Task
+	if err := db.First(&stillArchived, archived.ID).Error; err != nil {
+		t.Fatalf("reload after archived resume: %v", err)
+	}
+	if stillArchived.Enabled || stillArchived.ArchivedAt == nil || stillArchived.NextRunAt != nil {
+		t.Fatalf("archived resume mutated schedule: enabled=%v archived_at=%v next_run_at=%v", stillArchived.Enabled, stillArchived.ArchivedAt, stillArchived.NextRunAt)
 	}
 }

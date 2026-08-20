@@ -27,6 +27,7 @@ import type {
   TaskStatus,
 } from "@/types/domain";
 import { request } from "./core";
+import { finiteInteger } from "./lifecycle-integers";
 
 type RawObject = Record<string, unknown>;
 
@@ -97,11 +98,6 @@ function stringValue(value: unknown): string {
 
 function booleanValue(value: unknown): boolean {
   return value === true;
-}
-
-function finiteInteger(value: unknown, minimum = 0): number | null {
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= minimum ? parsed : null;
 }
 
 function optionalPositiveInteger(value: unknown): number | undefined {

@@ -31,21 +31,21 @@
     "07-19-backup-assets-worker-protocol",
     "07-20-backup-assets-worker-capabilities",
     "07-22-backup-assets-export-archive",
-    "07-28-backup-assets-controlled-recovery"
+    "07-28-backup-assets-controlled-recovery",
+    "08-17-backup-assets-lifecycle-reconnect"
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Program delivery is 13/15 merged and archived (86.67%); Trellis mechanical progress is 13/13 instantiated children archived. Child 13 Task 11 is complete_checked with the explicitly accepted and unaltered historical RED provenance exception. Task 12 delivered the exact 13-path test/evidence union through feature head e42e88bd769a0929ff42143d0e0a4396d916cbb7 and PR #432: required CI run 31985755745 passed all 11 checks, squash commit 946ee6d8cb058fd1a3b358eb453f43cca3f57f7e is on main, and exact-squash main CI 31986331118 plus Release Please 31986331101 succeeded. The latest formal release remains v0.48.0 at 793af9f; no GitHub Release or Docker image was expected or triggered. Child 13 was archived on 2026-08-17 in commit 645d180 under archive/2026-08, and journal session 41 records the closure. Bookkeeping head 799ababd2563df2568846c0ef5d7c3231021ccaf passed all 11 checks in CI run 31987493250; PR #433 squash-merged as 898491ffb68f89f673c4d6d96a692af655c01056, and exact-squash main CI 31988104612 plus Release Please 31988104621 succeeded. Task 12 is complete_checked. This parent remains planning, and Children 14-15 are not created or started.",
+  "notes": "Program delivery remains 13/15 merged and archived (86.67%); Trellis mechanical progress is now 13 archived children plus Child 14 in progress, for 14 instantiated children. Child 13 Task 11 is complete_checked with the explicitly accepted and unaltered historical RED provenance exception. Task 12 delivered the exact 13-path test/evidence union through feature head e42e88bd769a0929ff42143d0e0a4396d916cbb7 and PR #432: required CI run 31985755745 passed all 11 checks, squash commit 946ee6d8cb058fd1a3b358eb453f43cca3f57f7e is on main, and exact-squash main CI 31986331118 plus Release Please 31986331101 succeeded. The latest formal release remains v0.48.0 at 793af9f; no GitHub Release or Docker image was expected or triggered. Child 13 was archived on 2026-08-17 in commit 645d180 under archive/2026-08, and journal session 41 records the closure. Bookkeeping head 799ababd2563df2568846c0ef5d7c3231021ccaf passed all 11 checks in CI run 31987493250; PR #433 squash-merged as 898491ffb68f89f673c4d6d96a692af655c01056, and exact-squash main CI 31988104612 plus Release Please 31988104621 succeeded. Task 12 is complete_checked. Child 14 backup-assets-lifecycle-reconnect was created from exact origin/main 19140e80ac34ebab26bc1f8ed141965c5f4d3cdd; its focused plan was explicitly approved and task.py start ran once. Child 14 Tasks 1 through 5 are complete_checked with independent spec and quality reviews; paired migration and composite tombstone history, point revision, policy/hold, reconnect/import/rebuild, exact lifecycle retention, concurrency, full-backend, and PostgreSQL gates passed, and all disposable fixtures were removed. Task 6 implementation and every current review-fix slice, including finite Recovery/Export handoffs, mutation-resistant private diagnostics, canonical Processing lock-order truth, and total row-batched/restartable Search payload cleanup under SQLite/PostgreSQL migrated schemas, are GREEN with genuine RED provenance; root repeat/race/full-backend/build/vet/lint and disposable PostgreSQL 17 gates pass, and a fresh independent spec plus quality re-review is the exact next gate. Child 14 is implemented-but-not-yet-delivered on `codex/backup-assets-lifecycle-reconnect` (Task 17 Trellis close then PR). This parent remains planning. Child 15 is not created or started and must wait for an explicit instruction.",
   "meta": {
     "program_delivery": {
       "delivered": 13,
       "planned": 15,
       "percent": 86.67,
-      "instantiated_children": 13,
+      "instantiated_children": 14,
       "archived_children": 13,
-      "active_child": null,
+      "active_child": 14,
       "uninstantiated_children": [
-        14,
         15
       ]
     },
@@ -106,6 +106,23 @@
       "bookkeeping_post_merge": "exact_squash_main_ci_31988104612_and_release_please_31988104621_success",
       "program_delivery": "13_of_15",
       "boundary": "parent_planning_children14_15_not_created"
+    },
+    "child_14_planning": {
+      "status": "in_progress_tasks_1_2_3_4_5_complete_checked_task_6_latest_review_fixes_green_fresh_independent_rereview_next",
+      "date": "2026-08-17",
+      "task": "08-17-backup-assets-lifecycle-reconnect",
+      "branch": "codex/backup-assets-lifecycle-reconnect",
+      "baseline": "origin_main_exact_19140e80ac34ebab26bc1f8ed141965c5f4d3cdd",
+      "formal_release": "v0.48.0_at_793af9f8c29ba6274d4f99c1e104fcc01a72752c",
+      "task_start_authorized": true,
+      "product_code_started": true,
+      "first_selector_rule": "genuine_red_same_selector_green_no_child13_exception",
+      "program_delivery": "13_of_15",
+      "boundary": "child14_task_5_complete_checked_task_6_latest_review_fixes_green_fresh_independent_rereview_next_task7_not_started_child15_not_created",
+        "task_2": "complete_checked_sqlite_and_two_independent_required_postgres17_gates_green",
+        "task_3": "complete_checked_policy_hold_point_revision_and_concurrency_gates_green",
+      "task_4": "complete_checked_reconnect_import_bounded_rebuild_and_exact_authority_gates_green",
+      "task_5": "complete_checked_exact_lifecycle_retention_composite_terminal_events_and_cross_engine_restart_gates_green"
     },
     "r0_execution_rebaseline": {
       "date": "2026-08-02",

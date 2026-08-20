@@ -232,6 +232,72 @@ const preflight = { expiresAt: futureExpiry() };
 
 ---
 
+## Scenario: Bounded Lifecycle Scan And Rebuild
+
+### 1. Scope / Trigger
+
+- Trigger: admin repository scan, rebuild, or import-candidate queue loops
+  that follow `nextCursor` until empty.
+
+### 2. Signatures
+
+- `maxImportCandidatePagesPerTick = 8` in
+  `web/src/features/backup-assets/repository-management-panel.tsx`.
+- Persist `scanCursorByRepository` / `rebuildCursorByRepository` and resume
+  via Continue.
+
+### 3. Contracts
+
+- One click inspects at most eight pages. A remaining cursor is stored, not
+  drained in the same turn. Continue starts from that cursor.
+- Do not hold the management panel on an unbounded Provider/catalog walk.
+- Keep repository/retention lifecycle APIs and their panels out of the
+  startup `index-*.js` chunk. Follow the existing lazy `apiClient` and
+  workspace `lazy()` pattern so the 500 KiB JS budget stays intact.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Page 8 still has `nextCursor` | Stop; show Continue; do not request page 9. |
+| Continue | Resume from the stored cursor, again at most eight pages. |
+| `nextCursor` empty before the budget | Treat the walk as complete. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: eight-page test stops with a stored cursor and Continue.
+- Base: a two-page repo finishes in one click.
+- Bad: `while (nextCursor)` until the Provider is exhausted.
+
+### 6. Tests Required
+
+- `repository-management-panel` “stops scan and rebuild after eight pages”
+  plus Continue resume.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+while (page.nextCursor) {
+  page = await scan(token, id, { cursor: page.nextCursor });
+}
+```
+
+Correct:
+
+```ts
+while (!signal.aborted && pages < maxImportCandidatePagesPerTick) {
+  pages += 1;
+  last = await scan(token, id, { cursor, signal });
+  if (!last.value.nextCursor) return { last, nextCursor: null };
+  cursor = last.value.nextCursor;
+}
+return { last, nextCursor: cursor };
+```
+
+---
+
 ## Code Review Checklist
 
 - Does the change use typed API wrappers and mapped domain data?

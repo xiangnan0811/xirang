@@ -22,6 +22,7 @@ const (
 	StepUpActionRecoveryResultDownload StepUpAction = "recovery.result_download"
 	StepUpActionRecoveryResultRetain   StepUpAction = "recovery.result_retain"
 	StepUpActionRepositoryPurge        StepUpAction = "repository.purge"
+	StepUpActionRetentionHoldRelease   StepUpAction = "retention.hold_release"
 )
 
 var stepUpActions = []StepUpAction{
@@ -42,6 +43,7 @@ var stepUpActions = []StepUpAction{
 	StepUpActionRecoveryResultDownload,
 	StepUpActionRecoveryResultRetain,
 	StepUpActionRepositoryPurge,
+	StepUpActionRetentionHoldRelease,
 }
 
 var validStepUpActions = func() map[StepUpAction]bool {

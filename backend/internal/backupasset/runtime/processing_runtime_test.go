@@ -126,6 +126,51 @@ func TestProcessingRuntimeNoWorkerReturnsNotDeployedWithoutCreatingJob(t *testin
 	}
 }
 
+func TestLifecycleDependentCleanupProcessingRuntimeSourceOwnerUsesLiveGraph(t *testing.T) {
+	db := openProcessingRuntimeTestDB(t)
+	root := filepath.Join(t.TempDir(), "derived")
+	managed, err := newProcessingRuntime(processingRuntimeDependencies{
+		DB: db, Foundation: processingRuntimeFoundation(t, db, root, true, true),
+		Keyring: backupasset.NewKeyring(db, time.Now), Lease: processingRuntimeLease(t, db),
+		Source: processingRuntimeSourceFake{}, Authorize: processingRuntimeAssetAuthorizerFake{},
+		ValidateRoot: processingRuntimeRootValidator, RevalidateSource: processingRuntimeSourceRevalidatorFake{},
+		Projection: processingRuntimeProjectionFake{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := managed.Startup(context.Background()); err != nil {
+		t.Fatalf("start managed Processing graph: %v", err)
+	}
+	proof := &processingRuntimeSearchSourceProofFake{}
+	owner, err := managed.sourceLifecycle(proof, 16)
+	if err != nil {
+		t.Fatalf("build Processing source lifecycle: %v", err)
+	}
+	ownerValue := reflect.ValueOf(owner).Elem()
+	if ownerValue.FieldByName("db").Pointer() != reflect.ValueOf(managed.db).Pointer() ||
+		ownerValue.FieldByName("derived").Pointer() != reflect.ValueOf(managed.lifecycle).Pointer() {
+		t.Fatal("Processing source owner was not constructed from the live managed db/DerivedLifecycle graph")
+	}
+	derivedValue := reflect.ValueOf(managed.lifecycle).Elem()
+	if derivedValue.FieldByName("store").Pointer() != reflect.ValueOf(managed.store).Pointer() {
+		t.Fatal("managed Processing DerivedLifecycle does not retain the live DerivedStore")
+	}
+	managed.coordinator = nil
+	if _, err := managed.sourceLifecycle(proof, 16); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("partial managed Processing graph error=%v, want ErrInvalidState", err)
+	}
+}
+
+type processingRuntimeSearchSourceProofFake struct{}
+
+func (*processingRuntimeSearchSourceProofFake) ProveRecoveryPointRevoked(
+	context.Context,
+	backupasset.SourceLifecycleRequest,
+) error {
+	return nil
+}
+
 func TestProcessingRuntimeArchiveMemberCoordinatorRequiresReadyAndRunning(t *testing.T) {
 	coordinator := &processing.Coordinator{}
 	runtime := &managedProcessingRuntime{coordinator: coordinator}
@@ -1297,6 +1342,7 @@ func TestProcessingRuntimeAtomicProjectionFailureLeavesNoPendingStateAndRetrySuc
 	descriptor.PipelineFingerprint = pipeline
 	descriptor.OutputProfile = profile.OutputProfile
 	descriptor.Parameters = processing.CanonicalProductionParameters(profile)
+	seedProcessingRuntimeWritePoint(t, db, descriptor.Source.RecoveryPointID, backupasset.PointXirangManifest, now)
 	if err := processing.ValidateProductionWorkDescriptorV1(descriptor, false); err != nil {
 		t.Fatalf("production work descriptor: %v", err)
 	}
@@ -1461,6 +1507,7 @@ func TestProcessingRuntimeShutdownRetiresAttemptsGrantsAndRecoveryLease(t *testi
 	}
 	descriptor := processingRuntimeWorkDescriptor()
 	now := time.Now().UTC()
+	seedProcessingRuntimeWritePoint(t, db, descriptor.Source.RecoveryPointID, backupasset.PointXirangManifest, now)
 	workerID := strings.Repeat("6", 32)
 	worker := model.BackupAssetWorkerIdentity{
 		ID: workerID, TransportKind: string(processing.WorkerTransportLocal), TransportFingerprint: strings.Repeat("6", 64),
@@ -2220,7 +2267,8 @@ func openProcessingRuntimeTestDB(t *testing.T) *gorm.DB {
 	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_PROCESSING_RUNTIME_DATA_KEY_FOR_TEST_ONLY")
 	db := openRuntimeTestDB(t)
 	if err := db.AutoMigrate(
-		&model.WrappedDomainKey{}, &model.BackupAssetProcessingJob{}, &model.BackupAssetProcessingInterest{},
+		&model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{}, &model.WrappedDomainKey{},
+		&model.BackupAssetProcessingJob{}, &model.BackupAssetProcessingInterest{},
 		&model.BackupAssetProcessingAttempt{}, &model.BackupAssetProcessingGrant{},
 		&model.BackupAssetProcessingGrantRequest{}, &model.BackupAssetProcessingUpload{},
 		&model.BackupAssetWorkerIdentity{}, &model.BackupAssetWorkerCapability{},
@@ -2231,6 +2279,23 @@ func openProcessingRuntimeTestDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	return db
+}
+
+func seedProcessingRuntimeWritePoint(
+	t *testing.T,
+	db *gorm.DB,
+	pointID string,
+	semantics backupasset.PointVersionSemantics,
+	now time.Time,
+) {
+	t.Helper()
+	if err := db.Create(&model.RecoveryPoint{
+		ID: pointID, RepositoryID: strings.Repeat("f", 32),
+		Semantics: string(semantics), State: string(backupasset.RecoveryPointCommitted),
+		CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func seedProcessingRuntimeSecretContinuation(t *testing.T, db *gorm.DB, now time.Time) {
@@ -2245,6 +2310,7 @@ func seedProcessingRuntimeSecretContinuation(t *testing.T, db *gorm.DB, now time
 	pointID := strings.Repeat("8", 32)
 	catalogID := strings.Repeat("9", 32)
 	entryID := strings.Repeat("a", 64)
+	seedProcessingRuntimeWritePoint(t, db, pointID, backupasset.PointXirangManifest, now)
 	worker := model.BackupAssetWorkerIdentity{
 		ID: workerID, TransportKind: string(processing.WorkerTransportLocal), TransportFingerprint: strings.Repeat("b", 64),
 		InstanceID: strings.Repeat("c", 32), IdentityRevision: 1, ProtocolVersion: processing.WorkerProtocolVersion,
@@ -2306,6 +2372,11 @@ func seedProcessingRuntimeMalwareEvidence(
 	bundleFingerprint string,
 ) string {
 	t.Helper()
+	semantics := backupasset.PointXirangManifest
+	if asset.Provider == backupasset.ProviderRestic {
+		semantics = backupasset.PointNativeSnapshot
+	}
+	seedProcessingRuntimeWritePoint(t, db, asset.Ref.RecoveryPointID, semantics, now)
 	if err := db.Create(&model.BackupAssetUpdaterMetadata{
 		ID: strings.Repeat("a", 32), SourceKind: "admin_registered", SourceID: "offline-test", Version: "1.0.0",
 		ManifestDigest: strings.Repeat("b", 64), SigningKeyFingerprint: strings.Repeat("c", 64),

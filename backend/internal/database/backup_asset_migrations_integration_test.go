@@ -49,6 +49,7 @@ const (
 	backupAssetProcessingVersion       = 67
 	backupAssetExportVersion           = 68
 	backupAssetRecoveryVersion         = 69
+	backupAssetLifecycleVersion        = 70
 	recoveryEmptyDeleteSetDigest       = "3f5a5d5213612b170da6ce2f2f90775a31d4e40269bb785042589af64011b7cf"
 	recoveryClaimSchedulerRowID        = "0000000000000000000000000000006a"
 	recoveryTakeoverSchedulerRowID     = "0000000000000000000000000000006b"
@@ -61,6 +62,17 @@ func (recoveryMigrationSourceResolver) ResolveRsyncRestoreSource(
 	provider.RsyncRestoreSourceRef,
 ) (provider.RsyncRestoreSource, error) {
 	return nil, errors.New("migration fixture source is unavailable")
+}
+
+var backupAssetLifecycleTables = []string{
+	"backup_retention_policies",
+	"recovery_point_holds",
+	"recovery_point_lifecycle_attempts",
+	"recovery_point_lifecycle_tombstones",
+	"backup_repository_import_candidates",
+	"backup_asset_purge_plans",
+	"backup_asset_purge_plan_items",
+	"backup_asset_config_import_refs",
 }
 
 var backupAssetRecoveryTables = []string{
@@ -3112,6 +3124,128 @@ func TestBackupAssetMigration069Postgres(t *testing.T) {
 	runBackupAssetMigration069Contract(t, newRequiredPostgresMigrationFixture(t))
 }
 
+func TestBackupAssetMigration070SQLite(t *testing.T) {
+	runBackupAssetMigration070Contract(t, newSQLiteMigrationFixture(t))
+}
+
+func TestBackupAssetMigration070PointRevisionSQLite(t *testing.T) {
+	assertBackupAssetLifecyclePointRevision(t, newSQLiteMigrationFixture(t))
+}
+
+func TestBackupAssetMigration070PolicyRevisionSnapshotSQLite(t *testing.T) {
+	fixture := newSQLiteMigrationFixture(t)
+	_, db := fixture.openAt(t, backupAssetLifecycleVersion)
+	assertBackupAssetLifecyclePolicyRevisionSnapshot(t, fixture, db)
+}
+
+func TestBackupAssetMigration070TombstoneTerminalFactsSQLite(t *testing.T) {
+	fixture := newSQLiteMigrationFixture(t)
+	_, db := fixture.openAt(t, backupAssetLifecycleVersion)
+	assertBackupAssetLifecycleTombstoneTerminalFacts(t, fixture, db)
+}
+
+func TestBackupAssetMigration070TombstoneCompositeHistorySQLite(t *testing.T) {
+	fixture := newSQLiteMigrationFixture(t)
+	_, db := fixture.openAt(t, backupAssetLifecycleVersion)
+	assertBackupAssetLifecycleTombstoneCompositeHistory(t, fixture, db)
+}
+
+func TestBackupAssetMigration070TombstoneCompositeHistoryPostgres(t *testing.T) {
+	fixture := newRequiredPostgresMigrationFixture(t)
+	_, db := fixture.openAt(t, backupAssetLifecycleVersion)
+	assertBackupAssetLifecycleTombstoneCompositeHistory(t, fixture, db)
+}
+
+func TestBackupAssetMigration070SharedContractRegistersTombstoneTerminalFacts(t *testing.T) {
+	for _, check := range backupAssetMigration070SharedChecks() {
+		if check.name == "TombstoneTerminalFacts" {
+			if check.run == nil {
+				t.Fatal("TombstoneTerminalFacts shared contract check has no executable runner")
+			}
+			return
+		}
+	}
+	t.Fatal("shared 000070 contract does not register TombstoneTerminalFacts")
+}
+
+func TestBackupAssetMigration070SharedContractRegistersTombstoneCompositeHistory(t *testing.T) {
+	for _, check := range backupAssetMigration070SharedChecks() {
+		if check.name == "TombstoneCompositeHistory" {
+			if check.run == nil {
+				t.Fatal("TombstoneCompositeHistory shared contract check has no executable runner")
+			}
+			return
+		}
+	}
+	t.Fatal("shared 000070 contract does not register TombstoneCompositeHistory")
+}
+
+func TestBackupAssetMigration070PairedFiles(t *testing.T) {
+	testCases := []struct {
+		name string
+		fs   interface {
+			ReadFile(string) ([]byte, error)
+		}
+		path string
+	}{
+		{name: "SQLiteUp", fs: sqliteMigrationsFS, path: "migrations/sqlite/000070_backup_asset_lifecycle.up.sql"},
+		{name: "SQLiteDown", fs: sqliteMigrationsFS, path: "migrations/sqlite/000070_backup_asset_lifecycle.down.sql"},
+		{name: "PostgresUp", fs: postgresMigrationsFS, path: "migrations/postgres/000070_backup_asset_lifecycle.up.sql"},
+		{name: "PostgresDown", fs: postgresMigrationsFS, path: "migrations/postgres/000070_backup_asset_lifecycle.down.sql"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			script, err := testCase.fs.ReadFile(testCase.path)
+			if err != nil {
+				t.Fatalf("read paired 000070 migration: %v", err)
+			}
+			text := strings.ToLower(string(script))
+			for _, fragment := range append(append([]string(nil), backupAssetLifecycleTables...),
+				"retention_worker", "point_revision", "trg_recovery_points_point_revision",
+				"schema_migrations", "trg_backup_asset_lifecycle_downgrade_admission") {
+				if !strings.Contains(text, fragment) {
+					t.Fatalf("%s is missing lifecycle contract %q", testCase.path, fragment)
+				}
+			}
+			if strings.HasSuffix(testCase.path, ".up.sql") {
+				for _, fragment := range []string{
+					"repository", "task_link", "operational", "legal", "retention_expire", "explicit_purge",
+					"mutable_retire", "provider_delete", "tombstoning", "managed_history", "encrypted_reason",
+					"encrypted_release_reason", "encrypted_provider_locator", "encrypted_evidence",
+				} {
+					if !strings.Contains(text, fragment) {
+						t.Fatalf("%s is missing closed lifecycle value %q", testCase.path, fragment)
+					}
+				}
+				attemptStart := strings.Index(text, "create table recovery_point_lifecycle_attempts")
+				if attemptStart < 0 {
+					t.Fatalf("%s is missing the lifecycle attempt definition", testCase.path)
+				}
+				attemptEnd := strings.Index(text[attemptStart:], "\n);")
+				if attemptEnd < 0 {
+					t.Fatalf("%s lifecycle attempt definition is incomplete", testCase.path)
+				}
+				attemptDefinition := text[attemptStart : attemptStart+attemptEnd]
+				if strings.Contains(attemptDefinition, "\n    fence_token ") {
+					t.Fatalf("%s persists a raw lifecycle fence token", testCase.path)
+				}
+			}
+		})
+	}
+}
+
+func TestBackupAssetMigration070UsedDownAdmissionSQLite(t *testing.T) {
+	runBackupAssetMigration070UsedDownAdmission(t, newSQLiteMigrationFixture(t))
+}
+
+func TestBackupAssetMigration070Postgres(t *testing.T) {
+	runBackupAssetMigration070Contract(t, newRequiredPostgresMigrationFixture(t))
+}
+
+func TestBackupAssetMigration070UsedDownAdmissionPostgres(t *testing.T) {
+	runBackupAssetMigration070UsedDownAdmission(t, newRequiredPostgresMigrationFixture(t))
+}
+
 func TestBackupAssetMigration069WholeTask6ClosurePostgres(t *testing.T) {
 	newRequiredPostgresRecoveryMigrationFixture(t).test069WholeTask6Closure(t)
 }
@@ -3406,6 +3540,697 @@ func TestBackupAssetSearchModelSensitiveFieldsEncryptAtRest(t *testing.T) {
 			}
 		})
 	}
+}
+
+type backupAssetMigration070SharedCheck struct {
+	name string
+	run  func(*testing.T, migrationFixture, *sql.DB)
+}
+
+func backupAssetMigration070SharedChecks() []backupAssetMigration070SharedCheck {
+	return []backupAssetMigration070SharedCheck{
+		{name: "PolicyRevisionSnapshotDoesNotPinCurrentPolicy", run: assertBackupAssetLifecyclePolicyRevisionSnapshot},
+		{name: "TombstoneTerminalFacts", run: assertBackupAssetLifecycleTombstoneTerminalFacts},
+		{name: "TombstoneCompositeHistory", run: assertBackupAssetLifecycleTombstoneCompositeHistory},
+	}
+}
+
+func runBackupAssetMigration070Contract(t *testing.T, fixture migrationFixture) {
+	t.Helper()
+	t.Run("PointRevision", func(t *testing.T) {
+		assertBackupAssetLifecyclePointRevision(t, fixture)
+	})
+	t.Run("ApplyAndModelParity", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, backupAssetLifecycleVersion)
+		assertMigrationVersion(t, migrator, backupAssetLifecycleVersion)
+		assertBackupAssetLifecycleSchema070(t, fixture, db)
+		if fixture.engine == "sqlite" {
+			assertSQLiteForeignKeyCheck(t, db)
+		}
+	})
+	t.Run("ClosedConstraintsAndPermanentTombstone", func(t *testing.T) {
+		_, db := fixture.openAt(t, backupAssetLifecycleVersion)
+		seed := fixture.seedLifecycleMigrationBase(t, db, "a", 7001)
+		fixture.assertLifecycleClosedConstraints(t, db, seed)
+	})
+	for _, check := range backupAssetMigration070SharedChecks() {
+		t.Run(check.name, func(t *testing.T) {
+			_, db := fixture.openAt(t, backupAssetLifecycleVersion)
+			check.run(t, fixture, db)
+		})
+	}
+	t.Run("PreservesExisting069FactsAndLeaseReferences", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		now := time.Date(2026, 8, 17, 7, 0, 0, 0, time.UTC)
+		aggregate := fixture.seedRecoveryMigrationAggregate(t, db, "7", 70, now)
+		migrateToBackupAssetVersion(t, migrator, backupAssetLifecycleVersion)
+		assertMigrationVersion(t, migrator, backupAssetLifecycleVersion)
+		for table, id := range map[string]string{
+			"backup_asset_recovery_jobs":     aggregate.JobID,
+			"backup_asset_recovery_evidence": aggregate.EvidenceID,
+			"recovery_point_leases":          aggregate.SourceLeaseID,
+		} {
+			var count int
+			if err := db.QueryRow(fixture.bind(`SELECT COUNT(*) FROM `+table+` WHERE id = ?`), id).Scan(&count); err != nil {
+				t.Fatalf("count preserved %s row: %v", table, err)
+			}
+			if count != 1 {
+				t.Fatalf("%s 000070 migration lost existing 000069 %s row", fixture.engine, table)
+			}
+		}
+		if fixture.engine == "sqlite" {
+			assertSQLiteForeignKeyCheck(t, db)
+		}
+	})
+	t.Run("PristineDownRestores069", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, backupAssetRecoveryVersion)
+		pointDefinitionBefore := fixture.tableDefinition(t, db, "recovery_points")
+		leaseDefinitionBefore := fixture.tableDefinition(t, db, "recovery_point_leases")
+		recoveryLeaseIndexBefore := fixture.indexDefinition(t, db, "idx_recovery_point_leases_recovery_job_owner")
+		migrateToBackupAssetVersion(t, migrator, backupAssetLifecycleVersion)
+		if err := migrator.Steps(-1); err != nil {
+			t.Fatalf("step %s pristine 000070 down to 000069: %v", fixture.engine, err)
+		}
+		assertMigrationVersion(t, migrator, backupAssetRecoveryVersion)
+		for _, table := range backupAssetLifecycleTables {
+			if databaseTableExists(t, db, fixture.engine, table) {
+				t.Fatalf("%s lifecycle table %s remains after pristine down", fixture.engine, table)
+			}
+		}
+		if fixture.recoveryTriggerExists(t, db, "schema_migrations", "trg_backup_asset_lifecycle_downgrade_admission") {
+			t.Fatal("lifecycle downgrade admission trigger remains after pristine down")
+		}
+		for _, trigger := range backupAssetPointRevisionTriggers(fixture.engine) {
+			if fixture.recoveryTriggerExists(t, db, "recovery_points", trigger) {
+				t.Fatalf("point revision trigger %s remains after pristine down", trigger)
+			}
+		}
+		if fixture.engine == "postgres" && fixture.recoveryFunctionDefinition(t, db, "recovery_point_revision_advance") != "" {
+			t.Fatal("point revision function remains after pristine down")
+		}
+		if got := fixture.tableDefinition(t, db, "recovery_points"); got != pointDefinitionBefore {
+			t.Fatalf("%s pristine down did not restore the exact 000069 recovery point definition\n got: %s\nwant: %s", fixture.engine, got, pointDefinitionBefore)
+		}
+		var pointColumns []string
+		if fixture.engine == "sqlite" {
+			pointColumns = sqliteColumnNames(t, db, "recovery_points")
+		} else {
+			pointColumns = postgresColumnNames(t, db, "recovery_points")
+		}
+		if containsString(pointColumns, "point_revision") {
+			t.Fatal("point_revision remains after pristine down")
+		}
+		if got := fixture.tableDefinition(t, db, "recovery_point_leases"); got != leaseDefinitionBefore {
+			t.Fatalf("%s pristine down did not restore the exact 000069 lease definition\n got: %s\nwant: %s", fixture.engine, got, leaseDefinitionBefore)
+		}
+		if got := fixture.indexDefinition(t, db, "idx_recovery_point_leases_recovery_job_owner"); got != recoveryLeaseIndexBefore {
+			t.Fatalf("%s pristine down did not restore the 000069 recovery lease index\n got: %s\nwant: %s", fixture.engine, got, recoveryLeaseIndexBefore)
+		}
+		if strings.Contains(fixture.tableDefinition(t, db, "recovery_point_leases"), "retention_worker") {
+			t.Fatal("retention_worker remains in the restored 000069 lease definition")
+		}
+		if fixture.engine == "sqlite" {
+			assertSQLiteForeignKeyCheck(t, db)
+		}
+	})
+}
+
+func assertBackupAssetLifecyclePolicyRevisionSnapshot(t *testing.T, fixture migrationFixture, db *sql.DB) {
+	t.Helper()
+	seed := fixture.seedLifecycleMigrationBase(t, db, "d", 7004)
+	seedLifecycleRetentionPolicy(t, fixture, db, seed)
+	policyID := recoveryMigrationOpaqueID(700001)
+	attemptID := recoveryMigrationOpaqueID(702001)
+	fixture.mustExec(t, db, `INSERT INTO recovery_point_lifecycle_attempts
+		(id, recovery_point_id, operation, phase, transition_revision, policy_id, policy_revision,
+		 policy_rule_digest, evaluation_time, blocked_reason, created_at, updated_at)
+		VALUES (?, ?, 'retention_expire', 'selected', 1, ?, 1, ?, ?, '', ?, ?)`,
+		attemptID, seed.PointID, policyID, recoveryMigrationDigest(702001), seed.Now, seed.Now, seed.Now)
+
+	fixture.mustExec(t, db, `UPDATE backup_retention_policies
+		SET revision = 2, rules_json = '{"version":1,"min_age_days":30}', updated_at = ?
+		WHERE id = ? AND revision = 1`, seed.Now.Add(time.Minute), policyID)
+
+	var currentRevision, snapshotRevision int64
+	if err := db.QueryRow(fixture.bind(`SELECT revision FROM backup_retention_policies WHERE id = ?`), policyID).Scan(&currentRevision); err != nil {
+		t.Fatalf("read current retention policy revision: %v", err)
+	}
+	if err := db.QueryRow(fixture.bind(`SELECT policy_revision FROM recovery_point_lifecycle_attempts WHERE id = ?`), attemptID).Scan(&snapshotRevision); err != nil {
+		t.Fatalf("read lifecycle attempt policy snapshot: %v", err)
+	}
+	if currentRevision != 2 || snapshotRevision != 1 {
+		t.Fatalf("policy/current snapshot revisions = %d/%d, want 2/1", currentRevision, snapshotRevision)
+	}
+}
+
+func assertBackupAssetLifecycleTombstoneTerminalFacts(t *testing.T, fixture migrationFixture, db *sql.DB) {
+	t.Helper()
+	seed := fixture.seedLifecycleMigrationBase(t, db, "e", 7005)
+	semantics := []string{"native_snapshot", "xirang_manifest", "imported_baseline", "mutable_head"}
+	operations := []string{"retention_expire", "explicit_purge", "mutable_retire"}
+	states := []string{"retired", "expired"}
+	times := []any{nil, seed.Now}
+	digests := []any{nil, recoveryMigrationDigest(703001)}
+	resultCodes := []string{"mutable_retired", "provider_deleted", "provider_already_absent"}
+
+	for _, originalSemantics := range semantics {
+		for _, operation := range operations {
+			for _, state := range states {
+				for _, retiredAt := range times {
+					for _, purgedAt := range times {
+						for _, digest := range digests {
+							for _, resultCode := range resultCodes {
+								validMutableRetire := operation == "mutable_retire" && originalSemantics == "mutable_head" &&
+									state == "retired" && retiredAt != nil && purgedAt == nil && digest == nil && resultCode == "mutable_retired"
+								validProviderDelete := (operation == "retention_expire" || operation == "explicit_purge") &&
+									state == "expired" && retiredAt == nil && purgedAt != nil && digest != nil &&
+									(resultCode == "provider_deleted" || resultCode == "provider_already_absent")
+								if validMutableRetire || validProviderDelete {
+									continue
+								}
+								fixture.expectExecRejected(t, db, `INSERT INTO recovery_point_lifecycle_tombstones
+									(recovery_point_id, repository_id, original_semantics, terminal_operation, terminal_state,
+									 managed_history, deletion_receipt_digest, retired_at, purged_at, result_code, created_at)
+									VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+									seed.PointID, seed.RepositoryID, originalSemantics, operation, state, true, digest,
+									retiredAt, purgedAt, resultCode, seed.Now)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+func assertBackupAssetLifecycleTombstoneCompositeHistory(t *testing.T, fixture migrationFixture, db *sql.DB) {
+	t.Helper()
+	wantPrimaryKey := []string{"recovery_point_id", "terminal_operation"}
+	t.Run("ModelPrimaryKeyOrder", func(t *testing.T) {
+		parsed, err := schema.Parse(model.RecoveryPointLifecycleTombstone{}, &sync.Map{}, schema.NamingStrategy{})
+		if err != nil {
+			t.Fatalf("parse tombstone model: %v", err)
+		}
+		got := make([]string, 0, len(parsed.PrimaryFields))
+		for _, field := range parsed.PrimaryFields {
+			got = append(got, field.DBName)
+		}
+		if strings.Join(got, ",") != strings.Join(wantPrimaryKey, ",") {
+			t.Fatalf("tombstone model primary key = %v, want %v", got, wantPrimaryKey)
+		}
+	})
+	t.Run("DatabasePrimaryKeyOrder", func(t *testing.T) {
+		var rows *sql.Rows
+		var err error
+		if fixture.engine == "sqlite" {
+			rows, err = db.Query(`PRAGMA table_info(recovery_point_lifecycle_tombstones)`)
+		} else {
+			rows, err = db.Query(`SELECT key_column_usage.column_name
+				FROM information_schema.table_constraints AS table_constraint
+				JOIN information_schema.key_column_usage AS key_column_usage
+				  ON key_column_usage.constraint_name = table_constraint.constraint_name
+				 AND key_column_usage.constraint_schema = table_constraint.constraint_schema
+				WHERE table_constraint.table_schema = current_schema()
+				  AND table_constraint.table_name = 'recovery_point_lifecycle_tombstones'
+				  AND table_constraint.constraint_type = 'PRIMARY KEY'
+				ORDER BY key_column_usage.ordinal_position`)
+		}
+		if err != nil {
+			t.Fatalf("query %s tombstone primary key: %v", fixture.engine, err)
+		}
+		defer func() {
+			if err := rows.Close(); err != nil {
+				t.Errorf("close %s tombstone primary key rows: %v", fixture.engine, err)
+			}
+		}()
+		got := make([]string, 0, len(wantPrimaryKey))
+		if fixture.engine == "sqlite" {
+			type primaryColumn struct {
+				name    string
+				ordinal int
+			}
+			columns := make([]primaryColumn, 0, len(wantPrimaryKey))
+			for rows.Next() {
+				var cid, notNull, primaryKey int
+				var name, columnType string
+				var defaultValue any
+				if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+					t.Fatalf("scan SQLite tombstone primary key: %v", err)
+				}
+				if primaryKey > 0 {
+					columns = append(columns, primaryColumn{name: name, ordinal: primaryKey})
+				}
+			}
+			sort.Slice(columns, func(i, j int) bool { return columns[i].ordinal < columns[j].ordinal })
+			for _, column := range columns {
+				got = append(got, column.name)
+			}
+		} else {
+			for rows.Next() {
+				var name string
+				if err := rows.Scan(&name); err != nil {
+					t.Fatalf("scan PostgreSQL tombstone primary key: %v", err)
+				}
+				got = append(got, name)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate %s tombstone primary key: %v", fixture.engine, err)
+		}
+		if strings.Join(got, ",") != strings.Join(wantPrimaryKey, ",") {
+			t.Fatalf("%s tombstone primary key = %v, want %v", fixture.engine, got, wantPrimaryKey)
+		}
+	})
+	t.Run("MutableRetireThenExplicitPurge", func(t *testing.T) {
+		seed := fixture.seedLifecycleMigrationBase(t, db, "6", 7006)
+		fixture.mustExec(t, db, `INSERT INTO recovery_point_lifecycle_tombstones
+			(recovery_point_id, repository_id, original_semantics, terminal_operation, terminal_state,
+			 managed_history, retired_at, result_code, created_at)
+			VALUES (?, ?, 'mutable_head', 'mutable_retire', 'retired', ?, ?, 'mutable_retired', ?)`,
+			seed.PointID, seed.RepositoryID, true, seed.Now, seed.Now)
+		fixture.mustExec(t, db, `INSERT INTO recovery_point_lifecycle_tombstones
+			(recovery_point_id, repository_id, original_semantics, terminal_operation, terminal_state,
+			 managed_history, deletion_receipt_digest, purged_at, result_code, created_at)
+			VALUES (?, ?, 'mutable_head', 'explicit_purge', 'expired', ?, ?, ?, 'provider_deleted', ?)`,
+			seed.PointID, seed.RepositoryID, true, recoveryMigrationDigest(704001), seed.Now.Add(time.Minute), seed.Now.Add(time.Minute))
+		var count int
+		if err := db.QueryRow(fixture.bind(`SELECT COUNT(*) FROM recovery_point_lifecycle_tombstones WHERE recovery_point_id = ?`), seed.PointID).Scan(&count); err != nil {
+			t.Fatalf("count tombstone history: %v", err)
+		}
+		if count != 2 {
+			t.Fatalf("%s tombstone history rows = %d, want 2", fixture.engine, count)
+		}
+		fixture.expectExecRejected(t, db, `INSERT INTO recovery_point_lifecycle_tombstones
+			(recovery_point_id, repository_id, original_semantics, terminal_operation, terminal_state,
+			 managed_history, retired_at, result_code, created_at)
+			VALUES (?, ?, 'mutable_head', 'mutable_retire', 'retired', ?, ?, 'mutable_retired', ?)`,
+			seed.PointID, seed.RepositoryID, true, seed.Now.Add(2*time.Minute), seed.Now.Add(2*time.Minute))
+	})
+}
+
+func runBackupAssetMigration070UsedDownAdmission(t *testing.T, fixture migrationFixture) {
+	t.Helper()
+	testCases := []struct {
+		name  string
+		table string
+		seed  func(*testing.T, migrationFixture, *sql.DB, lifecycleMigrationSeed)
+	}{
+		{name: "RetentionPolicy", table: "backup_retention_policies", seed: seedLifecycleRetentionPolicy},
+		{name: "RecoveryPointHold", table: "recovery_point_holds", seed: seedLifecycleHold},
+		{name: "LifecycleAttempt", table: "recovery_point_lifecycle_attempts", seed: seedLifecycleAttempt},
+		{name: "PermanentTombstone", table: "recovery_point_lifecycle_tombstones", seed: seedLifecycleTombstone},
+		{name: "ImportCandidate", table: "backup_repository_import_candidates", seed: seedLifecycleImportCandidate},
+		{name: "PurgePlan", table: "backup_asset_purge_plans", seed: seedLifecyclePurgePlan},
+		{name: "PurgePlanItem", table: "backup_asset_purge_plan_items", seed: seedLifecyclePurgePlanItem},
+		{name: "ConfigImportRef", table: "backup_asset_config_import_refs", seed: seedLifecycleConfigImportRef},
+		{name: "RetentionWorkerLease", table: "recovery_point_leases", seed: seedLifecycleRetentionWorkerLease},
+	}
+	for index, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			migrator, db := fixture.openAt(t, backupAssetLifecycleVersion)
+			seed := fixture.seedLifecycleMigrationBase(t, db, fmt.Sprintf("%x", index+1), int64(7100+index))
+			testCase.seed(t, fixture, db, seed)
+
+			leaseDefinitionBefore := fixture.tableDefinition(t, db, "recovery_point_leases")
+			activeAttemptIndexBefore := fixture.indexDefinition(t, db, "idx_recovery_point_lifecycle_attempts_active")
+			admissionBefore := fixture.recoveryTriggerDefinition(t, db, "schema_migrations", "trg_backup_asset_lifecycle_downgrade_admission")
+			var rowsBefore int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM ` + testCase.table).Scan(&rowsBefore); err != nil {
+				t.Fatalf("count %s before rejected down: %v", testCase.table, err)
+			}
+			if rowsBefore == 0 {
+				t.Fatalf("%s seed did not create a used lifecycle fact", testCase.name)
+			}
+
+			if err := migrator.Steps(-1); err == nil {
+				t.Fatalf("%s 000070 down unexpectedly succeeded with %s state", fixture.engine, testCase.name)
+			}
+			assertMigrationVersion(t, migrator, backupAssetLifecycleVersion)
+			var rowsAfter int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM ` + testCase.table).Scan(&rowsAfter); err != nil {
+				t.Fatalf("count %s after rejected down: %v", testCase.table, err)
+			}
+			if rowsAfter != rowsBefore {
+				t.Fatalf("rejected down changed %s rows: before=%d after=%d", testCase.table, rowsBefore, rowsAfter)
+			}
+			if got := fixture.tableDefinition(t, db, "recovery_point_leases"); got != leaseDefinitionBefore {
+				t.Fatalf("rejected down changed lease definition\n got: %s\nwant: %s", got, leaseDefinitionBefore)
+			}
+			if got := fixture.indexDefinition(t, db, "idx_recovery_point_lifecycle_attempts_active"); got != activeAttemptIndexBefore {
+				t.Fatalf("rejected down changed active-attempt index\n got: %s\nwant: %s", got, activeAttemptIndexBefore)
+			}
+			if got := fixture.recoveryTriggerDefinition(t, db, "schema_migrations", "trg_backup_asset_lifecycle_downgrade_admission"); got != admissionBefore {
+				t.Fatalf("rejected down changed lifecycle admission trigger\n got: %s\nwant: %s", got, admissionBefore)
+			}
+		})
+	}
+	t.Run("PointRevision", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, backupAssetLifecycleVersion)
+		seed := fixture.seedLifecycleMigrationBase(t, db, "f", 7199)
+		fixture.mustExec(t, db, `UPDATE recovery_points SET state = state WHERE id = ?`, seed.PointID)
+
+		var revision int64
+		if err := db.QueryRow(fixture.bind(`SELECT point_revision FROM recovery_points WHERE id = ?`), seed.PointID).Scan(&revision); err != nil {
+			t.Fatalf("read used point revision: %v", err)
+		}
+		if revision != 2 {
+			t.Fatalf("used point revision=%d, want 2", revision)
+		}
+		pointDefinitionBefore := fixture.tableDefinition(t, db, "recovery_points")
+		triggerDefinitionsBefore := make(map[string]string)
+		for _, trigger := range backupAssetPointRevisionTriggers(fixture.engine) {
+			triggerDefinitionsBefore[trigger] = fixture.recoveryTriggerDefinition(t, db, "recovery_points", trigger)
+		}
+
+		if err := migrator.Steps(-1); err == nil {
+			t.Fatalf("%s 000070 down unexpectedly succeeded with advanced point revision", fixture.engine)
+		}
+		assertMigrationVersion(t, migrator, backupAssetLifecycleVersion)
+		if got := fixture.tableDefinition(t, db, "recovery_points"); got != pointDefinitionBefore {
+			t.Fatalf("rejected down changed recovery point definition\n got: %s\nwant: %s", got, pointDefinitionBefore)
+		}
+		for trigger, before := range triggerDefinitionsBefore {
+			if got := fixture.recoveryTriggerDefinition(t, db, "recovery_points", trigger); got != before {
+				t.Fatalf("rejected down changed point revision trigger %s\n got: %s\nwant: %s", trigger, got, before)
+			}
+		}
+		var after int64
+		if err := db.QueryRow(fixture.bind(`SELECT point_revision FROM recovery_points WHERE id = ?`), seed.PointID).Scan(&after); err != nil {
+			t.Fatalf("read point revision after rejected down: %v", err)
+		}
+		if after != revision {
+			t.Fatalf("rejected down changed point revision: before=%d after=%d", revision, after)
+		}
+	})
+}
+
+func assertBackupAssetLifecyclePointRevision(t *testing.T, fixture migrationFixture) {
+	t.Helper()
+	migrator, db := fixture.openAt(t, backupAssetRecoveryVersion)
+	seed := fixture.seedLifecycleMigrationBase(t, db, "f", 7006)
+	migrateToBackupAssetVersion(t, migrator, backupAssetLifecycleVersion)
+
+	var columns []string
+	if fixture.engine == "sqlite" {
+		columns = sqliteColumnNames(t, db, "recovery_points")
+	} else {
+		columns = postgresColumnNames(t, db, "recovery_points")
+	}
+	if !containsString(columns, "point_revision") {
+		t.Fatalf("%s 000070 recovery_points lacks point_revision", fixture.engine)
+	}
+	if !containsString(gormColumnNames(t, model.RecoveryPoint{}), "point_revision") {
+		t.Fatal("RecoveryPoint model lacks point_revision")
+	}
+	wantColumns := gormColumnNames(t, model.RecoveryPoint{})
+	sort.Strings(columns)
+	sort.Strings(wantColumns)
+	if !reflect.DeepEqual(columns, wantColumns) {
+		t.Fatalf("%s recovery_points model columns mismatch\n got: %v\nwant: %v", fixture.engine, columns, wantColumns)
+	}
+	assertPointRevisionColumnContract(t, fixture, db)
+	for _, trigger := range backupAssetPointRevisionTriggers(fixture.engine) {
+		if !fixture.recoveryTriggerExists(t, db, "recovery_points", trigger) {
+			t.Fatalf("%s point revision trigger %s is missing", fixture.engine, trigger)
+		}
+	}
+	if fixture.engine == "postgres" && fixture.recoveryFunctionDefinition(t, db, "recovery_point_revision_advance") == "" {
+		t.Fatal("PostgreSQL point revision function is missing")
+	}
+
+	readRevisions := func() (int64, int) {
+		t.Helper()
+		var pointRevision int64
+		var capabilityRevision int
+		if err := db.QueryRow(fixture.bind(`SELECT point_revision, capability_revision FROM recovery_points WHERE id = ?`), seed.PointID).
+			Scan(&pointRevision, &capabilityRevision); err != nil {
+			t.Fatalf("read recovery point revisions: %v", err)
+		}
+		return pointRevision, capabilityRevision
+	}
+	assertRevisions := func(wantPoint int64, wantCapability int) {
+		t.Helper()
+		gotPoint, gotCapability := readRevisions()
+		if gotPoint != wantPoint || gotCapability != wantCapability {
+			t.Fatalf("point/capability revisions=%d/%d, want %d/%d", gotPoint, gotCapability, wantPoint, wantCapability)
+		}
+	}
+
+	assertRevisions(1, 1)
+	fixture.mustExec(t, db, `UPDATE recovery_points SET state = state WHERE id = ?`, seed.PointID)
+	assertRevisions(2, 1)
+	fixture.mustExec(t, db, `UPDATE recovery_points SET point_revision = ? WHERE id = ?`, 3, seed.PointID)
+	assertRevisions(3, 1)
+	fixture.expectExecRejected(t, db, `UPDATE recovery_points SET point_revision = ? WHERE id = ?`, 5, seed.PointID)
+	fixture.expectExecRejected(t, db, `UPDATE recovery_points SET point_revision = ? WHERE id = ?`, 2, seed.PointID)
+	fixture.expectExecRejected(t, db, `UPDATE recovery_points SET point_revision = ? WHERE id = ?`, 0, seed.PointID)
+	assertRevisions(3, 1)
+	fixture.mustExec(t, db, `UPDATE recovery_points SET capability_revision = capability_revision + 1 WHERE id = ?`, seed.PointID)
+	assertRevisions(4, 2)
+}
+
+func assertPointRevisionColumnContract(t *testing.T, fixture migrationFixture, db *sql.DB) {
+	t.Helper()
+	if fixture.engine == "sqlite" {
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		if err := db.QueryRow(`SELECT type, "notnull", dflt_value FROM pragma_table_info('recovery_points') WHERE name = 'point_revision'`).
+			Scan(&columnType, &notNull, &defaultValue); err != nil {
+			t.Fatalf("load SQLite point revision column contract: %v", err)
+		}
+		if !strings.EqualFold(columnType, "INTEGER") || notNull != 1 || !defaultValue.Valid || defaultValue.String != "1" {
+			t.Fatalf("SQLite point revision column=%q notnull=%d default=%q, want INTEGER/1/1", columnType, notNull, defaultValue.String)
+		}
+		return
+	}
+	var dataType, nullable, defaultValue string
+	if err := db.QueryRow(`SELECT data_type, is_nullable, COALESCE(column_default, '')
+		FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'recovery_points' AND column_name = 'point_revision'`).
+		Scan(&dataType, &nullable, &defaultValue); err != nil {
+		t.Fatalf("load PostgreSQL point revision column contract: %v", err)
+	}
+	if dataType != "bigint" || nullable != "NO" || !strings.HasPrefix(defaultValue, "1") {
+		t.Fatalf("PostgreSQL point revision column=%q nullable=%q default=%q, want bigint/NO/1", dataType, nullable, defaultValue)
+	}
+}
+
+func backupAssetPointRevisionTriggers(engine string) []string {
+	if engine == "sqlite" {
+		return []string{"trg_recovery_points_point_revision_guard", "trg_recovery_points_point_revision_advance"}
+	}
+	return []string{"trg_recovery_points_point_revision"}
+}
+
+func backupAssetLifecycleModels() map[string]any {
+	return map[string]any{
+		"backup_retention_policies":           model.BackupRetentionPolicy{},
+		"recovery_point_holds":                model.RecoveryPointHold{},
+		"recovery_point_lifecycle_attempts":   model.RecoveryPointLifecycleAttempt{},
+		"recovery_point_lifecycle_tombstones": model.RecoveryPointLifecycleTombstone{},
+		"backup_repository_import_candidates": model.BackupRepositoryImportCandidate{},
+		"backup_asset_purge_plans":            model.BackupAssetPurgePlan{},
+		"backup_asset_purge_plan_items":       model.BackupAssetPurgePlanItem{},
+		"backup_asset_config_import_refs":     model.BackupAssetConfigImportRef{},
+	}
+}
+
+func assertBackupAssetLifecycleSchema070(t *testing.T, fixture migrationFixture, db *sql.DB) {
+	t.Helper()
+	for table, persistentModel := range backupAssetLifecycleModels() {
+		if !databaseTableExists(t, db, fixture.engine, table) {
+			t.Fatalf("%s lifecycle migration table %s is missing", fixture.engine, table)
+		}
+		want := gormColumnNames(t, persistentModel)
+		var got []string
+		if fixture.engine == "sqlite" {
+			got = sqliteColumnNames(t, db, table)
+			assertSQLiteTimeColumnsHaveNoDefault(t, db, table)
+		} else {
+			got = postgresColumnNames(t, db, table)
+			assertPostgresTableTimeColumnsHaveNoDefault(t, db, table)
+		}
+		sort.Strings(got)
+		sort.Strings(want)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("%s %s columns mismatch\n got: %v\nwant: %v", fixture.engine, table, got, want)
+		}
+	}
+	for index, fragments := range map[string][]string{
+		"idx_backup_retention_policies_active_scope":     {"unique", "scope_kind", "scope_id", "where", "active"},
+		"idx_recovery_point_holds_active_type":           {"unique", "recovery_point_id", "hold_type", "where", "active"},
+		"idx_recovery_point_lifecycle_attempts_active":   {"unique", "recovery_point_id", "where", "complete"},
+		"idx_backup_repository_import_candidates_source": {"unique", "repository_id", "source_fingerprint"},
+		"idx_backup_asset_purge_plan_items_plan_ordinal": {"unique", "plan_id", "ordinal"},
+		"idx_backup_asset_config_import_refs_source":     {"unique", "source_document_id", "source_reference", "entity_kind"},
+		"idx_backup_asset_config_import_refs_local":      {"unique", "source_document_id", "entity_kind", "local_entity_id"},
+	} {
+		definition := fixture.indexDefinition(t, db, index)
+		if definition == "" {
+			t.Fatalf("%s lifecycle index %s is missing", fixture.engine, index)
+		}
+		for _, fragment := range fragments {
+			if !strings.Contains(definition, fragment) {
+				t.Fatalf("%s lifecycle index %s omits %q: %s", fixture.engine, index, fragment, definition)
+			}
+		}
+	}
+	for table, fragments := range map[string][]string{
+		"backup_retention_policies":           {"repository", "task_link", "active", "deleted"},
+		"recovery_point_holds":                {"operational", "legal", "released"},
+		"recovery_point_lifecycle_attempts":   {"retention_expire", "explicit_purge", "mutable_retire", "provider_delete", "complete"},
+		"recovery_point_lifecycle_tombstones": {"managed_history", "provider_deleted", "provider_already_absent"},
+		"backup_repository_import_candidates": {"native_snapshot", "xirang_manifest", "pending", "accepted", "rejected"},
+		"backup_asset_purge_plans":            {"ready", "bound", "executing", "consumed", "invalidated"},
+		"backup_asset_config_import_refs":     {"repository", "task_link", "retention_policy", "hold"},
+		"recovery_point_leases":               {"retention_worker"},
+	} {
+		definition := fixture.tableDefinition(t, db, table)
+		for _, fragment := range fragments {
+			if !strings.Contains(definition, fragment) {
+				t.Fatalf("%s %s definition omits %q: %s", fixture.engine, table, fragment, definition)
+			}
+		}
+	}
+	for _, trigger := range []struct{ table, name string }{
+		{table: "schema_migrations", name: "trg_backup_asset_lifecycle_downgrade_admission"},
+		{table: "recovery_point_holds", name: "trg_recovery_point_holds_release_one_way"},
+		{table: "recovery_point_lifecycle_tombstones", name: "trg_recovery_point_lifecycle_tombstones_immutable_update"},
+		{table: "recovery_point_lifecycle_tombstones", name: "trg_recovery_point_lifecycle_tombstones_immutable_delete"},
+	} {
+		if !fixture.recoveryTriggerExists(t, db, trigger.table, trigger.name) {
+			t.Fatalf("%s lifecycle trigger %s is missing", fixture.engine, trigger.name)
+		}
+	}
+}
+
+type lifecycleMigrationSeed struct {
+	Now          time.Time
+	UserID       int64
+	RepositoryID string
+	PointID      string
+}
+
+func (fixture migrationFixture) seedLifecycleMigrationBase(t *testing.T, db *sql.DB, marker string, userID int64) lifecycleMigrationSeed {
+	t.Helper()
+	now := time.Date(2026, 8, 17, 5, 0, 0, 0, time.UTC).Add(time.Duration(userID) * time.Second)
+	repositoryID := strings.Repeat(marker, 32)
+	pointID := strings.Repeat(fmt.Sprintf("%x", (userID%14)+1), 32)
+	fixture.insertSearchMigrationUser(t, db, userID, fmt.Sprintf("lifecycle-user-%d", userID), now)
+	fixture.insertRepository(t, db, repositoryID, "restic", now)
+	fixture.mustInsertRecoveryPoint(t, db, publicationPointSeed{
+		ID: pointID, RepositoryID: repositoryID, Semantics: "native_snapshot", State: "committed",
+		SourceFingerprint: "lifecycle-source-" + marker,
+	})
+	return lifecycleMigrationSeed{Now: now, UserID: userID, RepositoryID: repositoryID, PointID: pointID}
+}
+
+func seedLifecycleRetentionPolicy(t *testing.T, fixture migrationFixture, db *sql.DB, seed lifecycleMigrationSeed) {
+	t.Helper()
+	fixture.mustExec(t, db, `INSERT INTO backup_retention_policies
+		(id, scope_kind, scope_id, revision, rules_json, status, created_by, updated_by, created_at, updated_at)
+		VALUES (?, 'repository', ?, 1, '{"version":1}', 'active', ?, ?, ?, ?)`,
+		recoveryMigrationOpaqueID(700001), seed.RepositoryID, seed.UserID, seed.UserID, seed.Now, seed.Now)
+}
+
+func seedLifecycleHold(t *testing.T, fixture migrationFixture, db *sql.DB, seed lifecycleMigrationSeed) {
+	t.Helper()
+	fixture.mustExec(t, db, `INSERT INTO recovery_point_holds
+		(id, recovery_point_id, hold_type, state, encrypted_reason, created_by, expires_at, encrypted_release_reason, created_at, updated_at)
+		VALUES (?, ?, 'operational', 'active', 'enc:v2:fixture', ?, ?, '', ?, ?)`,
+		recoveryMigrationOpaqueID(700002), seed.PointID, seed.UserID, seed.Now.Add(time.Hour), seed.Now, seed.Now)
+}
+
+func seedLifecycleAttempt(t *testing.T, fixture migrationFixture, db *sql.DB, seed lifecycleMigrationSeed) {
+	t.Helper()
+	fixture.mustExec(t, db, `INSERT INTO recovery_point_lifecycle_attempts
+		(id, recovery_point_id, operation, phase, transition_revision, blocked_reason, created_at, updated_at)
+		VALUES (?, ?, 'retention_expire', 'selected', 1, '', ?, ?)`,
+		recoveryMigrationOpaqueID(700003), seed.PointID, seed.Now, seed.Now)
+}
+
+func seedLifecycleTombstone(t *testing.T, fixture migrationFixture, db *sql.DB, seed lifecycleMigrationSeed) {
+	t.Helper()
+	fixture.mustExec(t, db, `INSERT INTO recovery_point_lifecycle_tombstones
+		(recovery_point_id, repository_id, original_semantics, terminal_operation, terminal_state,
+		 managed_history, deletion_receipt_digest, purged_at, result_code, created_at)
+		VALUES (?, ?, 'native_snapshot', 'explicit_purge', 'expired', ?, ?, ?, 'provider_deleted', ?)`,
+		seed.PointID, seed.RepositoryID, true, recoveryMigrationDigest(700004), seed.Now, seed.Now)
+}
+
+func seedLifecycleImportCandidate(t *testing.T, fixture migrationFixture, db *sql.DB, seed lifecycleMigrationSeed) {
+	t.Helper()
+	fixture.mustExec(t, db, `INSERT INTO backup_repository_import_candidates
+		(id, repository_id, candidate_kind, source_fingerprint, encrypted_provider_locator,
+		 encrypted_evidence, review_state, created_at, updated_at)
+		VALUES (?, ?, 'native_snapshot', ?, 'enc:v2:locator', 'enc:v2:evidence', 'pending', ?, ?)`,
+		recoveryMigrationOpaqueID(700005), seed.RepositoryID, recoveryMigrationDigest(700005), seed.Now, seed.Now)
+}
+
+func seedLifecyclePurgePlan(t *testing.T, fixture migrationFixture, db *sql.DB, seed lifecycleMigrationSeed) {
+	t.Helper()
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_purge_plans
+		(id, repository_id, requester_id, revision, impact_revision, expires_at, hold_count, lease_count,
+		 worm_count, status, execute_proof_digest, execute_reason_digest, created_at, updated_at)
+		VALUES (?, ?, ?, 1, 1, ?, 0, 0, 0, 'ready', '', '', ?, ?)`,
+		recoveryMigrationOpaqueID(700006), seed.RepositoryID, seed.UserID, seed.Now.Add(time.Hour), seed.Now, seed.Now)
+}
+
+func seedLifecyclePurgePlanItem(t *testing.T, fixture migrationFixture, db *sql.DB, seed lifecycleMigrationSeed) {
+	t.Helper()
+	seedLifecyclePurgePlan(t, fixture, db, seed)
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_purge_plan_items
+		(id, plan_id, ordinal, recovery_point_id, expected_point_revision, expected_capability_revision, created_at)
+		VALUES (?, ?, 1, ?, 1, 1, ?)`,
+		recoveryMigrationOpaqueID(700007), recoveryMigrationOpaqueID(700006), seed.PointID, seed.Now)
+}
+
+func seedLifecycleConfigImportRef(t *testing.T, fixture migrationFixture, db *sql.DB, seed lifecycleMigrationSeed) {
+	t.Helper()
+	fixture.mustExec(t, db, `INSERT INTO backup_asset_config_import_refs
+		(id, source_document_id, source_reference, entity_kind, local_entity_id, created_at)
+		VALUES (?, ?, 'repository:primary', 'repository', ?, ?)`,
+		recoveryMigrationOpaqueID(700008), recoveryMigrationOpaqueID(700009), seed.RepositoryID, seed.Now)
+}
+
+func seedLifecycleRetentionWorkerLease(t *testing.T, fixture migrationFixture, db *sql.DB, seed lifecycleMigrationSeed) {
+	t.Helper()
+	fixture.insertPublicationLease(t, db, recoveryMigrationOpaqueID(700010), seed.PointID, "retention_worker", "released", seed.Now)
+}
+
+func (fixture migrationFixture) assertLifecycleClosedConstraints(t *testing.T, db *sql.DB, seed lifecycleMigrationSeed) {
+	t.Helper()
+	seedLifecycleRetentionPolicy(t, fixture, db, seed)
+	fixture.expectExecRejected(t, db, `INSERT INTO backup_retention_policies
+		(id, scope_kind, scope_id, revision, rules_json, status, created_by, updated_by, created_at, updated_at)
+		VALUES (?, 'repository', ?, 1, '{}', 'active', ?, ?, ?, ?)`,
+		recoveryMigrationOpaqueID(701001), seed.RepositoryID, seed.UserID, seed.UserID, seed.Now, seed.Now)
+	fixture.expectExecRejected(t, db, `INSERT INTO recovery_point_holds
+		(id, recovery_point_id, hold_type, state, encrypted_reason, created_by, encrypted_release_reason, created_at, updated_at)
+		VALUES (?, ?, 'future_hold', 'active', 'enc:v2:reason', ?, '', ?, ?)`,
+		recoveryMigrationOpaqueID(701002), seed.PointID, seed.UserID, seed.Now, seed.Now)
+	seedLifecycleHold(t, fixture, db, seed)
+	fixture.mustExec(t, db, `UPDATE recovery_point_holds
+		SET state = 'released', released_by = ?, released_at = ?, encrypted_release_reason = 'enc:v2:release', updated_at = ?
+		WHERE id = ?`, seed.UserID, seed.Now.Add(time.Minute), seed.Now.Add(time.Minute), recoveryMigrationOpaqueID(700002))
+	fixture.expectExecRejected(t, db, `UPDATE recovery_point_holds SET state = 'active', released_by = NULL,
+		released_at = NULL, encrypted_release_reason = '', updated_at = ? WHERE id = ?`,
+		seed.Now.Add(2*time.Minute), recoveryMigrationOpaqueID(700002))
+
+	seedLifecycleTombstone(t, fixture, db, seed)
+	fixture.expectExecRejected(t, db, `UPDATE recovery_point_lifecycle_tombstones SET managed_history = ? WHERE recovery_point_id = ?`, false, seed.PointID)
+	fixture.expectExecRejected(t, db, `DELETE FROM recovery_point_lifecycle_tombstones WHERE recovery_point_id = ?`, seed.PointID)
+	fixture.expectExecRejected(t, db, `INSERT INTO recovery_point_lifecycle_attempts
+		(id, recovery_point_id, operation, phase, transition_revision, lease_id, lease_attempt_id,
+		 lease_fence_token_hash, blocked_reason, created_at, updated_at)
+		VALUES (?, ?, 'retention_expire', 'selected', 1, ?, NULL, NULL, '', ?, ?)`,
+		recoveryMigrationOpaqueID(701003), seed.PointID, recoveryMigrationOpaqueID(701004), seed.Now, seed.Now)
+	fixture.expectExecRejected(t, db, `INSERT INTO backup_repository_import_candidates
+		(id, repository_id, candidate_kind, source_fingerprint, encrypted_provider_locator,
+		 encrypted_evidence, review_state, reviewed_by, reviewed_at, accepted_recovery_point_id, created_at, updated_at)
+		VALUES (?, ?, 'native_snapshot', ?, 'enc:v2:locator', 'enc:v2:evidence', 'accepted', ?, ?, NULL, ?, ?)`,
+		recoveryMigrationOpaqueID(701005), seed.RepositoryID, recoveryMigrationDigest(701005), seed.UserID, seed.Now, seed.Now, seed.Now)
 }
 
 type migrationFixture struct {
@@ -8728,25 +9553,26 @@ func assertBackupAssetRecoveryModelParity(t *testing.T, fixture migrationFixture
 }
 
 type recoveryMigrationAggregate struct {
-	UserID       int64
-	NodeID       int64
-	RepositoryID string
-	PlanID       string
-	PlanItemID   string
-	PreflightID  string
-	JobID        string
-	JobItemID    string
-	AttemptID    string
-	CheckpointID string
-	EvidenceID   string
-	NodeLeaseID  string
-	ResultSetID  string
-	ResultID     string
-	WriteGrantID string
-	GrantID      string
-	PointID      string
-	CatalogID    string
-	EntryID      string
+	UserID        int64
+	NodeID        int64
+	RepositoryID  string
+	PlanID        string
+	PlanItemID    string
+	PreflightID   string
+	JobID         string
+	JobItemID     string
+	AttemptID     string
+	CheckpointID  string
+	EvidenceID    string
+	SourceLeaseID string
+	NodeLeaseID   string
+	ResultSetID   string
+	ResultID      string
+	WriteGrantID  string
+	GrantID       string
+	PointID       string
+	CatalogID     string
+	EntryID       string
 }
 
 func recoveryMigrationOpaqueID(value int) string {
@@ -9231,6 +10057,7 @@ func (fixture migrationFixture) seedRecoveryMigrationAggregateWithOptions(
 	}
 	if !options.claimableAttempt && !options.initialOperationHistory {
 		sourceLeaseID := recoveryMigrationOpaqueID(base + 29)
+		aggregate.SourceLeaseID = sourceLeaseID
 		fixture.mustExec(t, db, `INSERT INTO recovery_point_leases
 			(id, recovery_point_id, holder_type, owner_id, attempt_id, fence_token, status,
 			 lease_expires_at, absolute_deadline, last_heartbeat_at, created_at, updated_at)
@@ -12805,6 +13632,9 @@ func assertFoundationModelParity(t *testing.T, db *sql.DB, engine string) {
 	t.Helper()
 	for table, persistentModel := range foundationModels() {
 		want := gormColumnNames(t, persistentModel)
+		if table == "recovery_points" {
+			want = filterStrings(want, "point_revision")
+		}
 		var got []string
 		if engine == "sqlite" {
 			got = sqliteColumnNames(t, db, table)
@@ -12817,6 +13647,16 @@ func assertFoundationModelParity(t *testing.T, db *sql.DB, engine string) {
 			t.Fatalf("%s %s columns mismatch\n got: %v\nwant: %v", engine, table, got, want)
 		}
 	}
+}
+
+func filterStrings(values []string, excluded string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != excluded {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func assertRsyncPublicationModelParity(t *testing.T, db *sql.DB, engine string) {

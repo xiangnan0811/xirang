@@ -30,11 +30,13 @@ import (
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/backupasset/recovery"
 	"xirang/backend/internal/backupasset/repository"
+	"xirang/backend/internal/backupasset/retention"
 	"xirang/backend/internal/backupasset/search"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
+	"xirang/backend/internal/task"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"gorm.io/gorm"
@@ -187,6 +189,11 @@ type Runtime struct {
 	recoveryResults         *managedRecoveryResultFacade
 	processingManager       *managedProcessingRuntime
 	archiveMemberService    *managedArchiveMemberFacade
+	retentionWorker         *retention.Worker
+	retentionPolicies       *retention.PolicyService
+	retentionHolds          *retention.HoldService
+	retentionPurge          *retention.PurgeService
+	managedTaskRetention    task.ManagedRecoveryPointRetention
 	transitioner            publication.FeatureTransitioner
 	metrics                 publication.Metrics
 
@@ -500,7 +507,15 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	history, err := repository.NewManagedHistoryResolver(repository.ManagedHistoryResolverDependencies{DB: dependencies.DB, Tombstones: dependencies.Tombstones})
+	tombstones := dependencies.Tombstones
+	if tombstones == nil {
+		constructed, tombstoneErr := repository.NewLifecycleManagedHistoryTombstones(dependencies.DB)
+		if tombstoneErr != nil {
+			return nil, tombstoneErr
+		}
+		tombstones = constructed
+	}
+	history, err := repository.NewManagedHistoryResolver(repository.ManagedHistoryResolverDependencies{DB: dependencies.DB, Tombstones: tombstones})
 	if err != nil {
 		return nil, err
 	}
@@ -570,14 +585,30 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	resticDeleter, err := provider.NewResticPointDeleter(transport, streamTransport, limitsSource, dependencies.Now)
+	if err != nil {
+		return nil, err
+	}
+	rsyncDeleter, err := provider.NewRsyncPointDeleter(dependencies.Now)
+	if err != nil {
+		return nil, err
+	}
+	rclonePrefixDeleter, err := provider.NewRclonePrefixPointDeleter(transport, limitsSource, dependencies.Now)
+	if err != nil {
+		return nil, err
+	}
+	rcloneDeleter, err := provider.NewRclonePointDeleter(rclonePrefixDeleter, dependencies.Now)
+	if err != nil {
+		return nil, err
+	}
 	registry := provider.NewRegistry()
 	for _, registration := range []struct {
 		kind  backupasset.ProviderKind
 		value provider.Registration
 	}{
-		{backupasset.ProviderRsync, provider.Registration{Prober: rsyncAdapter, PointLister: rsyncAdapter, EntryLister: rsyncAdapter, EntryStatter: rsyncAdapter, SequentialReader: rsyncAdapter, RangeReader: rsyncAdapter, CatalogReader: rsyncAdapter, PublicationStrategy: rsyncStrategy}},
-		{backupasset.ProviderRestic, provider.Registration{Prober: resticAdapter, PointLister: resticAdapter, EntryLister: resticAdapter, EntryStatter: resticAdapter, SequentialReader: resticAdapter, CatalogReader: resticAdapter, PublicationStrategy: resticStrategy}},
-		{backupasset.ProviderRclone, provider.Registration{Prober: rcloneAdapter, PointLister: rcloneAdapter, EntryLister: rcloneAdapter, EntryStatter: rcloneAdapter, SequentialReader: rcloneAdapter, RangeReader: rcloneAdapter, CatalogReader: rcloneCatalogReader, PublicationStrategy: rcloneStrategy}},
+		{backupasset.ProviderRsync, provider.Registration{Prober: rsyncAdapter, PointLister: rsyncAdapter, EntryLister: rsyncAdapter, EntryStatter: rsyncAdapter, SequentialReader: rsyncAdapter, RangeReader: rsyncAdapter, CatalogReader: rsyncAdapter, PublicationStrategy: rsyncStrategy, PointDeleter: rsyncDeleter}},
+		{backupasset.ProviderRestic, provider.Registration{Prober: resticAdapter, PointLister: resticAdapter, EntryLister: resticAdapter, EntryStatter: resticAdapter, SequentialReader: resticAdapter, CatalogReader: resticAdapter, PublicationStrategy: resticStrategy, PointDeleter: resticDeleter}},
+		{backupasset.ProviderRclone, provider.Registration{Prober: rcloneAdapter, PointLister: rcloneAdapter, EntryLister: rcloneAdapter, EntryStatter: rcloneAdapter, SequentialReader: rcloneAdapter, RangeReader: rcloneAdapter, CatalogReader: rcloneCatalogReader, PublicationStrategy: rcloneStrategy, PointDeleter: rcloneDeleter}},
 	} {
 		if err := registry.Register(registration.kind, registration.value); err != nil {
 			return nil, err
@@ -1125,6 +1156,23 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := repositoryService.SetRebuildPorts(
+		newCatalogRebuildAdapter(catalogIndexer),
+		newDerivedBackfillAdapter(processingManager),
+	); err != nil {
+		return nil, err
+	}
+	retentionWorker, retentionPolicies, retentionHolds, retentionPurge, managedTaskRetention, err := composeRetentionRuntime(retentionRuntimeInput{
+		DB: dependencies.DB, Foundation: foundation, Now: dependencies.Now, Lease: lease, Registry: registry,
+		Repository: repositoryService, CatalogIndexer: catalogIndexer, SearchIndexer: searchIndexer,
+		Overlay: overlayService, ContentBroker: contentBroker, ContentManager: contentManager,
+		Processing: processingManager, Export: exportManager, Recovery: recoveryManager,
+		AuditWriter: auditWriter, OverlayBatch: overlayConfig.BulkMaxItems, OverlayPasses: 32,
+		OwnerBatch: retentionOwnerBatch(foundation), Metrics: retentionRuntimeMetrics(dependencies.Metrics),
+	})
+	if err != nil {
+		return nil, err
+	}
 	return &Runtime{
 		foundation: foundation, settings: dependencies.Settings,
 		repository: repositoryService, publication: publicationService,
@@ -1144,8 +1192,11 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		recoveryAuthorization:   recoveryAuthorization, recoveryAPI: recoveryAPI,
 		recoveryOperations: recoveryOperations, recoveryResults: recoveryResults,
 		processingManager: processingManager, archiveMemberService: archiveMemberFacade,
-		transitioner: admission,
-		metrics:      metricsSink,
+		retentionWorker: retentionWorker, retentionPolicies: retentionPolicies,
+		retentionHolds: retentionHolds, retentionPurge: retentionPurge,
+		managedTaskRetention: managedTaskRetention,
+		transitioner:         admission,
+		metrics:              metricsSink,
 	}, nil
 }
 
@@ -1544,6 +1595,27 @@ func (runtime *Runtime) ContentIndexIngest() search.ContentIndexIngest {
 	}
 	return runtime.searchIngest
 }
+func (runtime *Runtime) RetentionPolicies() *retention.PolicyService {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.retentionPolicies
+}
+
+func (runtime *Runtime) RetentionHolds() *retention.HoldService {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.retentionHolds
+}
+
+func (runtime *Runtime) RetentionPurge() *retention.PurgeService {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.retentionPurge
+}
+
 func (runtime *Runtime) ContentBroker() *content.Broker {
 	if runtime == nil {
 		return nil
@@ -2010,11 +2082,17 @@ func (runtime *Runtime) SetInterruptedRunReadiness(readiness publication.Interru
 		return fmt.Errorf("%w: backup asset runtime callback wiring is closed", backupasset.ErrConflict)
 	}
 	runtime.readiness = readiness
+	if installer, ok := readiness.(interface {
+		SetManagedRecoveryPointRetention(task.ManagedRecoveryPointRetention)
+	}); ok && runtime.managedTaskRetention != nil {
+		installer.SetManagedRecoveryPointRetention(runtime.managedTaskRetention)
+	}
 	return nil
 }
 
 // StartupPass initializes admission before any command may be admitted, runs a
-// bounded worker pass, then uses unfiltered publication/TaskRun readiness.
+// bounded catalog/health pass, then uses unfiltered publication/TaskRun
+// readiness before retention or later workers may mutate lifecycle state.
 func (runtime *Runtime) StartupPass(ctx context.Context) error {
 	if runtime == nil || runtime.admission == nil || runtime.worker == nil || runtime.healthWorker == nil || runtime.publication == nil || runtime.contentManager == nil {
 		return fmt.Errorf("%w: backup asset runtime unavailable", backupasset.ErrInvalidState)
@@ -2080,6 +2158,11 @@ func (runtime *Runtime) StartupPass(ctx context.Context) error {
 			return err
 		}
 		if err := runtime.recoveryManager.StartupWithConfig(ctx, config); err != nil {
+			return err
+		}
+	}
+	if runtime.retentionWorker != nil {
+		if err := runtime.retentionWorker.StartupPass(ctx); err != nil {
 			return err
 		}
 	}
@@ -2191,6 +2274,9 @@ func (runtime *Runtime) StopAccepting() {
 	if runtime == nil {
 		return
 	}
+	if runtime.retentionWorker != nil {
+		runtime.retentionWorker.StopAccepting()
+	}
 	if runtime.recoveryManager != nil {
 		runtime.recoveryManager.StopAccepting()
 	}
@@ -2253,6 +2339,13 @@ func (runtime *Runtime) Run(ctx context.Context) {
 			runtime.healthWorker.Run(runCtx)
 		}()
 	}
+	if runtime.retentionWorker != nil {
+		health.Add(1)
+		go func() {
+			defer health.Done()
+			runtime.retentionWorker.Run(runCtx)
+		}()
+	}
 	if runtime.catalogWorker != nil {
 		health.Add(1)
 		go func() {
@@ -2285,6 +2378,11 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	}
 	var shutdownErrors []error
 	runtime.StopAccepting()
+	if runtime.retentionWorker != nil {
+		if err := runtime.retentionWorker.Shutdown(ctx); err != nil {
+			shutdownErrors = append(shutdownErrors, err)
+		}
+	}
 	if runtime.recoveryManager != nil {
 		if err := runtime.recoveryManager.Shutdown(ctx); err != nil {
 			shutdownErrors = append(shutdownErrors, err)

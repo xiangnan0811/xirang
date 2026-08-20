@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	taskPkg "xirang/backend/internal/task"
+	"xirang/backend/internal/task/scheduler"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
@@ -1274,5 +1276,391 @@ func TestTaskListEmptyFiltersScopesToOwnedNodesForOperator(t *testing.T) {
 	}
 	if result.Data[0].ID != ownedTask.ID {
 		t.Fatalf("期望 owned task id=%d，实际 id=%d", ownedTask.ID, result.Data[0].ID)
+	}
+}
+
+func TestTaskDeleteArchivesAndUnlinks(t *testing.T) {
+	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(
+		&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}, &model.TaskRun{}, &model.TaskLog{},
+		&model.BackupRepository{}, &model.TaskRepositoryLink{}, &model.BackupRetentionPolicy{},
+		&model.RecoveryPoint{}, &model.CredentialAuditEvent{},
+		&model.WrappedDomainKey{}, &model.BackupAssetAuditCheckpoint{}, &model.BackupAssetAuditEvent{},
+	); err != nil {
+		t.Fatalf("初始化归档测试表失败: %v", err)
+	}
+
+	admin := model.User{Username: "archive-admin", Role: "admin", PasswordHash: "hash"}
+	operator := model.User{Username: "archive-operator", Role: "operator", PasswordHash: "hash"}
+	if err := db.Create(&admin).Error; err != nil {
+		t.Fatalf("创建 admin 失败: %v", err)
+	}
+	if err := db.Create(&operator).Error; err != nil {
+		t.Fatalf("创建 operator 失败: %v", err)
+	}
+	ownedNode := model.Node{Name: "archive-owned", Host: "10.0.14.1", Username: "root", AuthType: "key", BackupDir: "archive-owned"}
+	unownedNode := model.Node{Name: "archive-unowned", Host: "10.0.14.2", Username: "root", AuthType: "key", BackupDir: "archive-unowned"}
+	if err := db.Create(&ownedNode).Error; err != nil {
+		t.Fatalf("创建 owned 节点失败: %v", err)
+	}
+	if err := db.Create(&unownedNode).Error; err != nil {
+		t.Fatalf("创建 unowned 节点失败: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: ownedNode.ID, UserID: operator.ID}).Error; err != nil {
+		t.Fatalf("创建 ownership 失败: %v", err)
+	}
+
+	unownedTask := model.Task{Name: "unowned-archive", NodeID: unownedNode.ID, ExecutorType: "command", Command: "true", Status: "pending", Enabled: true}
+	if err := db.Create(&unownedTask).Error; err != nil {
+		t.Fatalf("创建未授权任务失败: %v", err)
+	}
+	taskEntity := model.Task{
+		Name: "http-archive-task", NodeID: ownedNode.ID, ExecutorType: "restic", Command: "restic backup /data",
+		RsyncSource: "/data/src", RsyncTarget: "/backup/dst", ExecutorConfig: `{"repository_password":"FAKE_HTTP_ARCHIVE_PASSWORD_FOR_TEST_ONLY"}`,
+		CronSpec: "*/5 * * * *", Status: "pending", Enabled: true,
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+	run := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: "success"}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatalf("创建 TaskRun 失败: %v", err)
+	}
+	if err := db.Create(&model.TaskLog{TaskID: taskEntity.ID, TaskRunID: &run.ID, Level: "info", Message: "http archive history"}).Error; err != nil {
+		t.Fatalf("创建 TaskLog 失败: %v", err)
+	}
+	repositoryID := "dddddddddddddddddddddddddddddddd"
+	if err := db.Create(&model.BackupRepository{
+		ID: repositoryID, ProviderKind: "restic", DisplayName: "http-archive-repo",
+		VersionMode: "native_snapshot", Status: "online", CapabilityRevision: 1, CapabilitiesJSON: `{}`,
+		ImmutabilityLevel: "backend_versioned",
+	}).Error; err != nil {
+		t.Fatalf("创建仓库失败: %v", err)
+	}
+	now := time.Date(2026, 8, 18, 15, 0, 0, 0, time.UTC)
+	legacyLocator := "sftp:http-archive@example.invalid:/protected/legacy"
+	link := model.TaskRepositoryLink{
+		ID: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", TaskID: &taskEntity.ID, RepositoryID: repositoryID,
+		TaskNameSnapshot: "http-archive-task", NodeIDSnapshot: ownedNode.ID, NodeNameSnapshot: ownedNode.Name,
+		PublicationMode: "native_snapshot", EncryptedLegacyLocator: legacyLocator, LinkedAt: now, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&link).Error; err != nil {
+		t.Fatalf("创建 TaskRepositoryLink 失败: %v", err)
+	}
+	captured := now.Add(-time.Hour)
+	point := model.RecoveryPoint{
+		ID: "ffffffffffffffffffffffffffffffff", RepositoryID: repositoryID, ProducingTaskID: &taskEntity.ID, ProducingTaskRunID: &run.ID,
+		ProducingTaskNameSnapshot: "http-archive-task", LineageJSON: `{"version":1}`, EncryptedProviderLocator: `{"snapshot":"keep"}`,
+		Semantics: "native_snapshot", State: "committed", CapturedAt: &captured, CommittedAt: &captured, PointRevision: 1,
+		CapabilityRevision: 1, CapabilitiesJSON: `{}`, ImmutabilityLevel: "backend_versioned", PhysicalAvailability: "online", HoldState: "none",
+	}
+	if err := db.Create(&point).Error; err != nil {
+		t.Fatalf("创建 RecoveryPoint 失败: %v", err)
+	}
+	if err := db.Create(&model.CredentialAuditEvent{
+		Username: "admin", Action: "task.manual_trigger", Purpose: "task_run", CredentialKind: "ssh_key",
+		CredentialSource: "node", TaskID: &taskEntity.ID, Outcome: "success", Metadata: "{}",
+	}).Error; err != nil {
+		t.Fatalf("创建审计失败: %v", err)
+	}
+	policyID := "12121212121212121212121212121212"
+	if err := db.Create(&model.BackupRetentionPolicy{
+		ID: policyID, ScopeKind: "task_link", ScopeID: link.ID, Revision: 1,
+		RulesJSON: `{"version":1,"age":{"keep_days":7}}`, Status: "active",
+		CreatedBy: admin.ID, UpdatedBy: admin.ID, CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatalf("创建 Task-link 保留策略失败: %v", err)
+	}
+
+	dependent := model.Task{Name: "http-dependent", NodeID: ownedNode.ID, DependsOnTaskID: &taskEntity.ID, ExecutorType: "command", Command: "true", Status: "pending", Enabled: true}
+	if err := db.Create(&dependent).Error; err != nil {
+		t.Fatalf("创建依赖任务失败: %v", err)
+	}
+
+	runner := &mockTaskRunner{}
+	handler := NewTaskHandler(db, runner)
+	owned := gin.New()
+	owned.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, "operator")
+		c.Set(middleware.CtxUserID, operator.ID)
+		c.Next()
+	})
+	owned.DELETE("/tasks/:id", middleware.OwnershipTaskCheck(db), handler.Delete)
+	unownedReq := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/tasks/%d", unownedTask.ID), nil)
+	unownedResp := httptest.NewRecorder()
+	owned.ServeHTTP(unownedResp, unownedReq)
+	if unownedResp.Code != http.StatusForbidden {
+		t.Fatalf("operator 删除未授权任务期望 403，实际: %d，响应: %s", unownedResp.Code, unownedResp.Body.String())
+	}
+
+	adminRouter := withAdminRole(gin.New())
+	adminRouter.Use(func(c *gin.Context) {
+		c.Set(middleware.RequestIDKey, "archive-http-request-1")
+		c.Next()
+	})
+	adminRouter.DELETE("/tasks/:id", middleware.OwnershipTaskCheck(db), handler.Delete)
+	conflictReq := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/tasks/%d", taskEntity.ID), nil)
+	conflictResp := httptest.NewRecorder()
+	adminRouter.ServeHTTP(conflictResp, conflictReq)
+	if conflictResp.Code != http.StatusConflict {
+		t.Fatalf("存在活依赖时期望 409，实际: %d，响应: %s", conflictResp.Code, conflictResp.Body.String())
+	}
+	if len(runner.removeCalls) != 0 {
+		t.Fatalf("依赖冲突不应移除调度，实际 removeCalls=%+v", runner.removeCalls)
+	}
+	if err := db.Delete(&dependent).Error; err != nil {
+		t.Fatalf("解除测试依赖失败: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/tasks/%d", taskEntity.ID), nil)
+	resp := httptest.NewRecorder()
+	adminRouter.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("归档删除期望 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			Archived             bool `json:"archived"`
+			Unlinked             bool `json:"unlinked"`
+			ScheduleRemoved      bool `json:"schedule_removed"`
+			ProviderBytesDeleted bool `json:"provider_bytes_deleted"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析归档响应失败: %v", err)
+	}
+	if envelope.Code != http.StatusOK || !envelope.Data.Archived || !envelope.Data.Unlinked || !envelope.Data.ScheduleRemoved || envelope.Data.ProviderBytesDeleted {
+		t.Fatalf("期望标准归档结果，实际: %+v 原文=%s", envelope, resp.Body.String())
+	}
+	if len(runner.removeCalls) != 1 || runner.removeCalls[0] != taskEntity.ID {
+		t.Fatalf("期望提交后移除调度一次，实际 removeCalls=%+v", runner.removeCalls)
+	}
+
+	var archived model.Task
+	if err := db.First(&archived, taskEntity.ID).Error; err != nil {
+		t.Fatalf("任务行应被归档保留: %v", err)
+	}
+	if archived.Enabled || archived.ArchivedAt == nil || archived.ExecutorConfig == "" {
+		t.Fatalf("任务未按归档合同落库: enabled=%v archived_at=%v executor=%q", archived.Enabled, archived.ArchivedAt, archived.ExecutorConfig)
+	}
+	var storedLink model.TaskRepositoryLink
+	if err := db.First(&storedLink, "id = ?", link.ID).Error; err != nil {
+		t.Fatalf("链接行丢失: %v", err)
+	}
+	if storedLink.TaskID != nil || storedLink.UnlinkedAt == nil || storedLink.EncryptedLegacyLocator != legacyLocator {
+		t.Fatalf("链接未按 unlink 合同保留快照: %+v", storedLink)
+	}
+	if err := db.First(&model.BackupRepository{}, "id = ?", repositoryID).Error; err != nil {
+		t.Fatalf("仓库被删除: %v", err)
+	}
+	if err := db.First(&model.RecoveryPoint{}, "id = ?", point.ID).Error; err != nil {
+		t.Fatalf("RecoveryPoint 被删除: %v", err)
+	}
+	if err := db.First(&model.TaskRun{}, run.ID).Error; err != nil {
+		t.Fatalf("TaskRun 被删除: %v", err)
+	}
+	var auditCount int64
+	if err := db.Model(&model.CredentialAuditEvent{}).Where("task_id = ?", taskEntity.ID).Count(&auditCount).Error; err != nil || auditCount != 1 {
+		t.Fatalf("审计应保留，count=%d err=%v", auditCount, err)
+	}
+	var storedPolicy model.BackupRetentionPolicy
+	if err := db.First(&storedPolicy, "id = ?", policyID).Error; err != nil {
+		t.Fatalf("保留策略应被软删除保留: %v", err)
+	}
+	if storedPolicy.Status != "deleted" || storedPolicy.DeletedAt == nil || storedPolicy.Revision != 2 {
+		t.Fatalf("保留策略未按归档合同软删除: status=%q revision=%d deleted_at=%v", storedPolicy.Status, storedPolicy.Revision, storedPolicy.DeletedAt)
+	}
+	var deleteAudits []model.BackupAssetAuditEvent
+	if err := db.Where("action = ? AND repository_id = ?", "retention_policy_delete", repositoryID).
+		Find(&deleteAudits).Error; err != nil || len(deleteAudits) != 1 {
+		t.Fatalf("归档应写入 retention_policy_delete 审计，count=%d err=%v", len(deleteAudits), err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal([]byte(deleteAudits[0].FieldsJSON), &fields); err != nil {
+		t.Fatalf("parse retention_policy_delete fields: %v", err)
+	}
+	if fields["correlation_id"] != "archive-http-request-1" {
+		t.Fatalf("retention_policy_delete correlation=%v fields=%s, want archive-http-request-1", fields["correlation_id"], deleteAudits[0].FieldsJSON)
+	}
+}
+
+func TestTaskDeleteDoesNotRemoveScheduleWhenArchiveFails(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Task{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+	node := model.Node{Name: "archive-fail-node", Host: "10.0.14.3", Username: "root", AuthType: "key", BackupDir: "archive-fail"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+	taskEntity := model.Task{
+		Name: "archive-fail-task", NodeID: node.ID, ExecutorType: "command", Command: "true",
+		CronSpec: "*/5 * * * *", Status: "pending", Enabled: true,
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+	if err := db.Callback().Update().Before("gorm:update").Register("task_archive_fail_"+t.Name(), func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Table == "tasks" {
+			_ = tx.AddError(errors.New("forced archive update failure"))
+		}
+	}); err != nil {
+		t.Fatalf("注册失败回调: %v", err)
+	}
+
+	runner := &mockTaskRunner{}
+	handler := NewTaskHandler(db, runner)
+	r := gin.New()
+	r.DELETE("/tasks/:id", handler.Delete)
+	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/tasks/%d", taskEntity.ID), nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("归档失败期望 500，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	if len(runner.removeCalls) != 0 {
+		t.Fatalf("归档失败时不应移除调度，实际 removeCalls=%+v", runner.removeCalls)
+	}
+	var stillLive model.Task
+	if err := db.First(&stillLive, taskEntity.ID).Error; err != nil {
+		t.Fatalf("归档失败后任务应仍存在: %v", err)
+	}
+	if !stillLive.Enabled || stillLive.ArchivedAt != nil {
+		t.Fatalf("归档失败必须保留可调度任务，enabled=%v archived_at=%v", stillLive.Enabled, stillLive.ArchivedAt)
+	}
+}
+
+func TestTaskResumeRejectsArchivedTask(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Task{}); err != nil {
+		t.Fatalf("migrate archived resume tables: %v", err)
+	}
+	node := model.Node{Name: "archived-resume-node", Host: "10.0.18.1", Username: "root", AuthType: "key", BackupDir: "archived-resume"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	archivedAt := time.Date(2026, 8, 18, 14, 0, 0, 0, time.UTC)
+	taskEntity := model.Task{
+		Name: "archived-resume-task", NodeID: node.ID, ExecutorType: "command", Command: "true",
+		CronSpec: "*/5 * * * *", Status: "pending", Enabled: false, ArchivedAt: &archivedAt,
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("create archived task: %v", err)
+	}
+	if err := db.Model(&taskEntity).Updates(map[string]any{
+		"enabled":     false,
+		"archived_at": archivedAt,
+		"next_run_at": nil,
+	}).Error; err != nil {
+		t.Fatalf("persist archived disabled task: %v", err)
+	}
+	cron := scheduler.NewCronScheduler()
+	manager := taskPkg.NewManager(db, nil, nil, cron, nil, nil, 8, 90)
+	t.Cleanup(func() {
+		_ = manager.Shutdown(context.Background())
+		cron.Stop()
+	})
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/tasks/:id/resume", NewTaskHandler(db, manager).Resume)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/tasks/%d/resume", taskEntity.ID), nil))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("archived resume status=%d body=%s, want 409", response.Code, response.Body.String())
+	}
+
+	var reloaded model.Task
+	if err := db.First(&reloaded, taskEntity.ID).Error; err != nil {
+		t.Fatalf("reload archived resume task: %v", err)
+	}
+	if reloaded.Enabled || reloaded.ArchivedAt == nil || reloaded.NextRunAt != nil {
+		t.Fatalf("archived HTTP resume rescheduled task: enabled=%v archived_at=%v next_run_at=%v", reloaded.Enabled, reloaded.ArchivedAt, reloaded.NextRunAt)
+	}
+}
+
+func TestTaskRestoreRejectsArchivedTask(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Task{}, &model.TaskRun{}); err != nil {
+		t.Fatalf("migrate archived restore tables: %v", err)
+	}
+	node := model.Node{Name: "archived-restore-node", Host: "10.0.18.2", Username: "root", AuthType: "key", BackupDir: "archived-restore"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	archivedAt := time.Date(2026, 8, 18, 14, 0, 0, 0, time.UTC)
+	taskEntity := model.Task{
+		Name: "archived-restore-task", NodeID: node.ID, ExecutorType: "rsync",
+		RsyncSource: "/tmp/src", RsyncTarget: "/tmp/dst", CronSpec: "*/5 * * * *",
+		Status: "pending", Enabled: false, ArchivedAt: &archivedAt,
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("create archived task: %v", err)
+	}
+	if err := db.Create(&model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: "success"}).Error; err != nil {
+		t.Fatalf("create success run: %v", err)
+	}
+	cron := scheduler.NewCronScheduler()
+	manager := taskPkg.NewManager(db, nil, nil, cron, nil, nil, 8, 90)
+	t.Cleanup(func() {
+		_ = manager.Shutdown(context.Background())
+		cron.Stop()
+	})
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/tasks/:id/restore", NewTaskHandler(db, manager).Restore)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/tasks/%d/restore", taskEntity.ID), nil))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("archived restore status=%d body=%s, want 409", response.Code, response.Body.String())
+	}
+	var runs int64
+	if err := db.Model(&model.TaskRun{}).Where("task_id = ? AND trigger_type = ?", taskEntity.ID, "restore").Count(&runs).Error; err != nil {
+		t.Fatalf("count restore runs: %v", err)
+	}
+	if runs != 0 {
+		t.Fatalf("archived restore launched %d run(s)", runs)
+	}
+}
+
+func TestTaskUpdateRejectsArchivedTask(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Task{}); err != nil {
+		t.Fatalf("migrate archived update tables: %v", err)
+	}
+	node := model.Node{Name: "archived-update-node", Host: "10.0.18.3", Username: "root", AuthType: "key", BackupDir: "archived-update"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	archivedAt := time.Date(2026, 8, 18, 14, 0, 0, 0, time.UTC)
+	taskEntity := model.Task{
+		Name: "archived-update-task", NodeID: node.ID, ExecutorType: "rsync",
+		RsyncSource: "/tmp/src", RsyncTarget: "/tmp/dst", CronSpec: "*/5 * * * *",
+		Status: "pending", Enabled: false, ArchivedAt: &archivedAt,
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("create archived task: %v", err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	router := withAdminRole(gin.New())
+	router.PUT("/tasks/:id", NewTaskHandler(db, nil).Update)
+	body := fmt.Sprintf(`{"name":"mutated-archived-task","node_id":%d,"rsync_source":"/tmp/src","rsync_target":"/tmp/dst","cron_spec":"*/10 * * * *"}`, node.ID)
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/tasks/%d", taskEntity.ID), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("archived update status=%d body=%s, want 409", response.Code, response.Body.String())
+	}
+	var reloaded model.Task
+	if err := db.First(&reloaded, taskEntity.ID).Error; err != nil {
+		t.Fatalf("reload archived update task: %v", err)
+	}
+	if reloaded.Name != "archived-update-task" || reloaded.CronSpec != "*/5 * * * *" || reloaded.ArchivedAt == nil {
+		t.Fatalf("archived HTTP update mutated task: name=%q cron=%q archived_at=%v", reloaded.Name, reloaded.CronSpec, reloaded.ArchivedAt)
 	}
 }

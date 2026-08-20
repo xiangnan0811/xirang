@@ -27,10 +27,12 @@ import (
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/backupasset/recovery"
 	"xirang/backend/internal/backupasset/repository"
+	"xirang/backend/internal/backupasset/retention"
 	"xirang/backend/internal/backupasset/search"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 	"xirang/backend/internal/settings"
+	"xirang/backend/internal/task"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -601,6 +603,10 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 	}
 	if runtime.processingManager == nil {
 		t.Fatal("runtime omitted the shared Processing manager")
+	}
+	repositoryService := reflect.ValueOf(runtime.RepositoryService()).Elem()
+	if repositoryService.FieldByName("catalogRebuild").IsNil() || repositoryService.FieldByName("derivedBackfill").IsNil() {
+		t.Fatal("production runtime omitted CatalogRebuild / DerivedBackfill ports")
 	}
 	if runtime.archiveMemberService == nil {
 		t.Fatal("runtime omitted the one-hop archive-member service")
@@ -1406,6 +1412,47 @@ func TestRuntimeStartupManagedModeRequiresInterruptedRunReadiness(t *testing.T) 
 	}
 	if err := runtime.StartupPass(context.Background()); !errors.Is(err, backupasset.ErrInvalidState) {
 		t.Fatalf("managed startup without TaskRun readiness error=%v, want invalid state", err)
+	}
+}
+
+type runtimeReadinessRetentionInstaller struct {
+	retention task.ManagedRecoveryPointRetention
+}
+
+func (installer *runtimeReadinessRetentionInstaller) ReconcileInterruptedRuns(context.Context, int) (bool, error) {
+	return false, nil
+}
+
+func (installer *runtimeReadinessRetentionInstaller) SetManagedRecoveryPointRetention(value task.ManagedRecoveryPointRetention) {
+	installer.retention = value
+}
+
+func TestRuntimeInterruptedRunReadinessInstallsManagedTaskRetention(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(
+		&model.BackupRepository{}, &model.RecoveryPoint{}, &model.TaskRepositoryLink{},
+		&model.BackupRetentionPolicy{}, &model.RecoveryPointHold{},
+		&model.RecoveryPointLifecycleAttempt{}, &model.RecoveryPointLifecycleTombstone{},
+		&model.BackupAssetManagedHistoryLatch{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	transport := &runtimeTransportFake{}
+	runtime, err := New(Dependencies{
+		DB: db, Settings: settings.NewService(db), Transport: transport, StreamTransport: transport,
+		StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{},
+		ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{},
+		Now: func() time.Time { return time.Date(2026, 8, 18, 13, 20, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("construct runtime: %v", err)
+	}
+	installer := &runtimeReadinessRetentionInstaller{}
+	if err := runtime.SetInterruptedRunReadiness(installer); err != nil {
+		t.Fatal(err)
+	}
+	if installer.retention == nil {
+		t.Fatal("interrupted-run readiness did not receive the managed Task retention facade")
 	}
 }
 
@@ -2876,4 +2923,400 @@ func (reconciler *shutdownOrderReconciler) ProcessPoint(ctx context.Context, poi
 }
 func (*shutdownOrderReconciler) HasUnresolvedPublication(context.Context) (bool, error) {
 	return false, nil
+}
+
+func TestRuntimeConstructsAndJoinsRetentionWorker(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(
+		&model.BackupRepository{}, &model.RecoveryPoint{}, &model.TaskRepositoryLink{},
+		&model.BackupRetentionPolicy{}, &model.RecoveryPointHold{},
+		&model.RecoveryPointLifecycleAttempt{}, &model.RecoveryPointLifecycleTombstone{},
+		&model.BackupAssetManagedHistoryLatch{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	transport := &runtimeTransportFake{}
+	runtime, err := New(Dependencies{
+		DB: db, Settings: settings.NewService(db), Transport: transport, StreamTransport: transport,
+		StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{},
+		ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{},
+		Now: func() time.Time { return time.Date(2026, 8, 18, 13, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("construct runtime: %v", err)
+	}
+	if runtime.retentionWorker == nil {
+		t.Fatal("runtime omitted the retention worker")
+	}
+	if runtime.RetentionPolicies() == nil || runtime.RetentionHolds() == nil || runtime.RetentionPurge() == nil {
+		t.Fatal("runtime omitted handler-facing policy/hold/purge facades")
+	}
+	if runtime.RepositoryService() == nil {
+		t.Fatal("runtime omitted repository import/rebuild surface")
+	}
+
+	if err := runtime.StartupPass(context.Background()); err != nil {
+		t.Fatalf("StartupPass: %v", err)
+	}
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runtime.Run(runCtx)
+	}()
+	cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer shutdownCancel()
+	if err := runtime.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("Shutdown did not join retention worker: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Runtime.Run did not return after Shutdown")
+	}
+}
+
+func TestRuntimeRetentionStartupPassUsesConstructedWorker(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(
+		&model.User{}, &model.BackupRepository{}, &model.RecoveryPoint{},
+		&model.TaskRepositoryLink{}, &model.BackupAssetManagedHistoryLatch{},
+		&model.BackupRetentionPolicy{}, &model.RecoveryPointHold{},
+		&model.RecoveryPointLease{}, &model.RecoveryPointLifecycleAttempt{},
+		&model.RecoveryPointLifecycleTombstone{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	settingsService := settings.NewService(db)
+	if err := settingsService.Update("backup_assets.enabled", "false"); err != nil {
+		t.Fatal(err)
+	}
+	transport := &runtimeTransportFake{}
+	runtime, err := New(Dependencies{
+		DB: db, Settings: settingsService, Transport: transport, StreamTransport: transport,
+		StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{},
+		ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{},
+		Now: func() time.Time { return time.Date(2026, 8, 18, 13, 5, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("construct runtime: %v", err)
+	}
+	if runtime.retentionWorker == nil {
+		t.Fatal("runtime omitted the retention worker")
+	}
+	if err := runtime.StartupPass(context.Background()); err != nil {
+		t.Fatalf("disabled retention StartupPass: %v", err)
+	}
+	if err := runtime.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
+func TestRuntimeRetentionInjectsTombstoneSourceBeforeAdmission(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(
+		&model.BackupRepository{}, &model.RecoveryPoint{}, &model.TaskRepositoryLink{},
+		&model.RecoveryPointLifecycleTombstone{}, &model.BackupAssetManagedHistoryLatch{},
+		&model.RecoveryPointLease{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 18, 13, 10, 0, 0, time.UTC)
+	repositoryID := strings.Repeat("a", 32)
+	pointID := strings.Repeat("b", 32)
+	if err := db.Create(&model.RecoveryPointLifecycleTombstone{
+		RecoveryPointID: pointID, RepositoryID: repositoryID,
+		OriginalSemantics: string(backupasset.PointNativeSnapshot),
+		TerminalOperation: string(backupasset.LifecycleRetentionExpire),
+		TerminalState:     string(backupasset.RecoveryPointExpired),
+		ManagedHistory:    true, ResultCode: "provider_deleted", CreatedAt: now,
+	}).Error; err != nil {
+		t.Fatalf("seed lifecycle tombstone: %v", err)
+	}
+	transport := &runtimeTransportFake{}
+	runtime, err := New(Dependencies{
+		DB: db, Settings: settings.NewService(db), Transport: transport, StreamTransport: transport,
+		StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{},
+		ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{},
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("construct runtime: %v", err)
+	}
+	if runtime.admission == nil || runtime.admission.history == nil {
+		t.Fatal("runtime omitted managed-history admission")
+	}
+	repositoryHistory, err := runtime.admission.history.HasRepositoryManagedHistory(context.Background(), repositoryID)
+	if err != nil || !repositoryHistory {
+		t.Fatalf("tombstone-only repository history=%t err=%v, want true/nil", repositoryHistory, err)
+	}
+	installationHistory, err := runtime.admission.history.HasInstallationManagedHistory(context.Background())
+	if err != nil || !installationHistory {
+		t.Fatalf("tombstone-only installation history=%t err=%v, want true/nil", installationHistory, err)
+	}
+}
+
+func TestRuntimeRetentionShutdownKeepsOwnersUpUntilWorkerReturns(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(
+		&model.User{}, &model.BackupRepository{}, &model.RecoveryPoint{},
+		&model.TaskRepositoryLink{}, &model.BackupAssetManagedHistoryLatch{},
+		&model.BackupRetentionPolicy{}, &model.RecoveryPointHold{},
+		&model.RecoveryPointLease{}, &model.RecoveryPointLifecycleAttempt{},
+		&model.RecoveryPointLifecycleTombstone{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	transport := &runtimeTransportFake{}
+	runtime, err := New(Dependencies{
+		DB: db, Settings: settings.NewService(db), Transport: transport, StreamTransport: transport,
+		StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{},
+		ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{},
+		Now: func() time.Time { return time.Date(2026, 8, 18, 13, 20, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("construct runtime: %v", err)
+	}
+
+	contentDown := &atomic.Bool{}
+	exportDown := &atomic.Bool{}
+	recoveryDown := &atomic.Bool{}
+	runtime.contentManager = &runtimeContentShutdownProbe{contentRuntimeManager: runtime.contentManager, down: contentDown}
+	runtime.exportManager = &runtimeExportShutdownProbe{exportRuntimeManager: runtime.exportManager, down: exportDown}
+	runtime.recoveryManager = &runtimeRecoveryShutdownProbe{recoveryRuntimeManager: runtime.recoveryManager, down: recoveryDown}
+
+	worker, hold := newRuntimeRetentionCleanupHoldWorker(t)
+	runtime.retentionWorker = worker
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		runtime.Run(runCtx)
+	}()
+
+	passDone := make(chan error, 1)
+	go func() { passDone <- worker.StartupPass(context.Background()) }()
+	select {
+	case <-hold.started:
+	case <-time.After(2 * time.Second):
+		cancelRun()
+		t.Fatal("retention worker did not enter in-flight owner cleanup")
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- runtime.Shutdown(context.Background()) }()
+
+	ownersDown := func() bool {
+		return contentDown.Load() || exportDown.Load() || recoveryDown.Load() ||
+			(runtime.processingManager != nil && runtime.processingManager.stopped.Load())
+	}
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if ownersDown() {
+			close(hold.release)
+			t.Fatal("owner runtimes shut down before the in-flight retention cleanup returned")
+		}
+		select {
+		case err := <-shutdownDone:
+			t.Fatalf("Shutdown returned while retention cleanup was still held: %v", err)
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(hold.release)
+	if err := <-shutdownDone; err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	select {
+	case err := <-passDone:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("held StartupPass error=%v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("StartupPass did not return after retention join")
+	}
+	if !ownersDown() {
+		t.Fatal("owner runtimes were not shut down after retention returned")
+	}
+	cancelRun()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Runtime.Run did not return after production-order Shutdown")
+	}
+}
+
+type runtimeRetentionCleanupHold struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (hold *runtimeRetentionCleanupHold) CleanupRecoveryPoint(context.Context, retention.LifecyclePointRequest) error {
+	close(hold.started)
+	<-hold.release
+	return nil
+}
+
+type runtimeRetentionAdmissionOK struct{}
+
+func (*runtimeRetentionAdmissionOK) RevokeRecoveryPoint(context.Context, retention.LifecyclePointRequest) error {
+	return nil
+}
+
+type runtimeRetentionWORMDeletion struct{}
+
+func (runtimeRetentionWORMDeletion) DeleteRecoveryPoint(context.Context, retention.LifecyclePointRequest) (retention.PointDeletionResult, error) {
+	return retention.PointDeletionResult{}, retention.ErrPointDeletionWORM
+}
+
+type runtimeRetentionNoopAudit struct{}
+
+func (runtimeRetentionNoopAudit) PurgeEligibleDetails(context.Context, int) (int, error) {
+	return 0, nil
+}
+
+type runtimeRetentionNoopImportRebuild struct{}
+
+func (runtimeRetentionNoopImportRebuild) ReconcileImports(context.Context, int) (int, error) {
+	return 0, nil
+}
+func (runtimeRetentionNoopImportRebuild) ReconcileRebuilds(context.Context, int) (int, error) {
+	return 0, nil
+}
+
+func newRuntimeRetentionCleanupHoldWorker(t *testing.T) (*retention.Worker, *runtimeRetentionCleanupHold) {
+	t.Helper()
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(
+		&model.User{}, &model.BackupRepository{}, &model.RecoveryPoint{},
+		&model.TaskRepositoryLink{}, &model.BackupRetentionPolicy{}, &model.RecoveryPointHold{},
+		&model.RecoveryPointLease{}, &model.RecoveryPointLifecycleAttempt{},
+		&model.RecoveryPointLifecycleTombstone{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_point_leases_active_owner_slot
+		ON recovery_point_leases(recovery_point_id, holder_type, owner_id) WHERE status = 'active'`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_point_lifecycle_attempts_active
+		ON recovery_point_lifecycle_attempts(recovery_point_id) WHERE phase <> 'complete'`).Error; err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Date(2026, 8, 18, 13, 20, 0, 0, time.UTC)
+	now := func() time.Time { return clock }
+	repositoryID := strings.Repeat("c", 32)
+	pointID := strings.Repeat("d", 32)
+	if err := db.Create(&model.User{ID: 1, Username: "admin", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "admin"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.BackupRepository{
+		ID: repositoryID, ProviderKind: string(backupasset.ProviderRestic), DisplayName: "retention-shutdown",
+		VersionMode: string(backupasset.VersionNativeSnapshot), Status: string(backupasset.RepositoryOnline),
+		CapabilityRevision: 1, CapabilitiesJSON: `{}`, ImmutabilityLevel: string(backupasset.ImmutabilityBackendVersioned),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	captured := clock.Add(-48 * time.Hour)
+	if err := db.Create(&model.RecoveryPoint{
+		ID: pointID, RepositoryID: repositoryID, Semantics: string(backupasset.PointNativeSnapshot),
+		State: string(backupasset.RecoveryPointCommitted), CapturedAt: &captured, CommittedAt: &captured,
+		PointRevision: 4, CapabilityRevision: 3, CapabilitiesJSON: `{}`,
+		ImmutabilityLevel:    string(backupasset.ImmutabilityBackendVersioned),
+		PhysicalAvailability: string(backupasset.PhysicalOnline), HoldState: string(backupasset.HoldNone),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	leases, err := backupasset.NewLeaseService(db, now, backupasset.LeaseConfig{
+		Duration: 5 * time.Minute, Heartbeat: time.Minute, AbsoluteDeadline: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	holds, err := retention.NewHoldService(retention.HoldServiceDependencies{DB: db, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold := &runtimeRetentionCleanupHold{started: make(chan struct{}), release: make(chan struct{})}
+	coordinator, err := retention.NewCoordinator(retention.CoordinatorDependencies{
+		DB: db, Leases: leases, Holds: holds, Now: now,
+		LeaseOwnerID: retention.RetentionWorkerLeaseOwnerID,
+		Admissions:   &runtimeRetentionAdmissionOK{},
+		Cleanup:      hold,
+		Deleter:      runtimeRetentionWORMDeletion{},
+		RetryDelay:   time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policies, err := retention.NewPolicyService(retention.PolicyServiceDependencies{DB: db, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := policies.Create(context.Background(), retention.CreatePolicyRequest{
+		Actor:     backupasset.AuditActor{UserID: 1, Username: "admin", Role: "admin"},
+		ScopeKind: backupasset.RetentionPolicyScopeRepository, ScopeID: repositoryID,
+		Rules: retention.PolicyRules{Version: retention.PolicyRulesVersion1, Age: &retention.AgeRule{KeepDays: 1}},
+	}); err != nil {
+		t.Fatalf("create shutdown-order policy: %v", err)
+	}
+	settingsService := settings.NewService(db)
+	if err := settingsService.Update("backup_assets.enabled", "true"); err != nil {
+		t.Fatal(err)
+	}
+	worker, err := retention.NewWorker(retention.WorkerDependencies{
+		Foundation:    backupasset.NewFoundationService(settingsService),
+		Coordinator:   coordinator,
+		Policies:      policies,
+		Holds:         holds,
+		Audit:         runtimeRetentionNoopAudit{},
+		ImportRebuild: runtimeRetentionNoopImportRebuild{},
+		Metrics:       retention.NoopMetrics{},
+		Now:           now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return worker, hold
+}
+
+type runtimeContentShutdownProbe struct {
+	contentRuntimeManager
+	down *atomic.Bool
+}
+
+func (probe *runtimeContentShutdownProbe) Shutdown(ctx context.Context) error {
+	probe.down.Store(true)
+	if probe.contentRuntimeManager == nil {
+		return nil
+	}
+	return probe.contentRuntimeManager.Shutdown(ctx)
+}
+
+type runtimeExportShutdownProbe struct {
+	exportRuntimeManager
+	down *atomic.Bool
+}
+
+func (probe *runtimeExportShutdownProbe) Shutdown(ctx context.Context) error {
+	probe.down.Store(true)
+	if probe.exportRuntimeManager == nil {
+		return nil
+	}
+	return probe.exportRuntimeManager.Shutdown(ctx)
+}
+
+type runtimeRecoveryShutdownProbe struct {
+	recoveryRuntimeManager
+	down *atomic.Bool
+}
+
+func (probe *runtimeRecoveryShutdownProbe) Shutdown(ctx context.Context) error {
+	probe.down.Store(true)
+	if probe.recoveryRuntimeManager == nil {
+		return nil
+	}
+	return probe.recoveryRuntimeManager.Shutdown(ctx)
 }

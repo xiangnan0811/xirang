@@ -65,16 +65,17 @@ type RepositoryView struct {
 }
 
 type LineageSummary struct {
-	Source             string `json:"source"`
-	TaskID             *uint  `json:"task_id,omitempty"`
-	TaskName           string `json:"task_name"`
-	NodeID             uint   `json:"node_id"`
-	NodeName           string `json:"node_name"`
-	PublicationMode    string `json:"publication_mode,omitempty"`
-	RecoveryPointID    string `json:"recovery_point_id,omitempty"`
-	RecoveryPointState string `json:"recovery_point_state,omitempty"`
-	PointSemantics     string `json:"point_semantics,omitempty"`
-	Active             bool   `json:"active"`
+	Source               string `json:"source"`
+	TaskRepositoryLinkID string `json:"task_repository_link_id,omitempty"`
+	TaskID               *uint  `json:"task_id,omitempty"`
+	TaskName             string `json:"task_name"`
+	NodeID               uint   `json:"node_id"`
+	NodeName             string `json:"node_name"`
+	PublicationMode      string `json:"publication_mode,omitempty"`
+	RecoveryPointID      string `json:"recovery_point_id,omitempty"`
+	RecoveryPointState   string `json:"recovery_point_state,omitempty"`
+	PointSemantics       string `json:"point_semantics,omitempty"`
+	Active               bool   `json:"active"`
 }
 
 func (service *Service) List(ctx context.Context, request RepositoryListRequest, scope VisibilityScope, requestContext RequestContext) (RepositoryPage, error) {
@@ -433,6 +434,7 @@ func (service *Service) loadLineages(ctx context.Context, repositoryID string, s
 			Where("links.task_id IS NOT NULL AND links.unlinked_at IS NULL")
 	}
 	var links []struct {
+		ID              string
 		TaskID          *uint
 		TaskName        string
 		NodeID          uint
@@ -440,7 +442,7 @@ func (service *Service) loadLineages(ctx context.Context, repositoryID string, s
 		PublicationMode string
 		UnlinkedAt      *time.Time
 	}
-	if err := linkQuery.Select(`links.task_id, links.task_name_snapshot AS task_name,
+	if err := linkQuery.Select(`links.id, links.task_id, links.task_name_snapshot AS task_name,
 		links.node_id_snapshot AS node_id, links.node_name_snapshot AS node_name,
 		links.publication_mode, links.unlinked_at`).
 		Order("links.created_at ASC, links.id ASC").Scan(&links).Error; err != nil {
@@ -448,8 +450,8 @@ func (service *Service) loadLineages(ctx context.Context, repositoryID string, s
 	}
 	for _, link := range links {
 		lineages = append(lineages, LineageSummary{
-			Source: lineageSourceTaskLink, TaskID: link.TaskID, TaskName: link.TaskName, NodeID: link.NodeID,
-			NodeName: link.NodeName, PublicationMode: link.PublicationMode, Active: link.UnlinkedAt == nil,
+			Source: lineageSourceTaskLink, TaskRepositoryLinkID: link.ID, TaskID: link.TaskID, TaskName: link.TaskName,
+			NodeID: link.NodeID, NodeName: link.NodeName, PublicationMode: link.PublicationMode, Active: link.UnlinkedAt == nil,
 		})
 	}
 

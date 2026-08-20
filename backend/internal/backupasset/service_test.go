@@ -304,6 +304,27 @@ func TestFoundationCatalogConfigUsesRegisteredSettingsAndBounds(t *testing.T) {
 	}
 }
 
+func TestFoundationRetentionConfigUsesRegisteredSettingsAndBounds(t *testing.T) {
+	reader := staticSettingsReader{
+		"backup_assets.enabled":                      "true",
+		"backup_assets.retention_reconcile_interval": "7m",
+		"backup_assets.retention_batch_size":         "73",
+		"backup_assets.retention_drain_timeout":      "45s",
+	}
+	config, err := NewFoundationService(reader).RetentionConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.Enabled || config.ReconcileInterval != 7*time.Minute || config.BatchSize != 73 || config.DrainTimeout != 45*time.Second {
+		t.Fatalf("RetentionConfig=%+v", config)
+	}
+
+	reader["backup_assets.retention_batch_size"] = "0"
+	if _, err := NewFoundationService(reader).RetentionConfig(); err == nil {
+		t.Fatal("invalid retention batch size was accepted")
+	}
+}
+
 func TestFoundationSearchConfigAndOverlayConfigUseOneSnapshot(t *testing.T) {
 	values := cloneFoundationTestValues(staticFoundationDefaults)
 	for key, value := range map[string]string{
@@ -875,6 +896,9 @@ func (reader staticSettingsReader) GetEffective(key string) string {
 
 var staticFoundationDefaults = map[string]string{
 	"backup_assets.enabled":                                    "false",
+	"backup_assets.retention_reconcile_interval":               "5m",
+	"backup_assets.retention_batch_size":                       "100",
+	"backup_assets.retention_drain_timeout":                    "30s",
 	"backup_assets.content_preview_ttl":                        "2m",
 	"backup_assets.content_media_ttl":                          "15m",
 	"backup_assets.content_idle_ttl":                           "60s",

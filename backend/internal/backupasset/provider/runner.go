@@ -28,6 +28,7 @@ const (
 	CommandPurposeRead     CommandPurpose = "read"
 	CommandPurposePublish  CommandPurpose = "publish"
 	CommandPurposeManifest CommandPurpose = "manifest"
+	CommandPurposeDelete   CommandPurpose = "delete"
 )
 
 const (
@@ -35,29 +36,31 @@ const (
 	ToolRclone     CommandTool = "rclone"
 	ToolRemoteFind CommandTool = "remote_find"
 
-	OperationResticVersion              CommandOperation = "restic_version"
-	OperationResticConfig               CommandOperation = "restic_config"
-	OperationResticSnapshots            CommandOperation = "restic_snapshots"
-	OperationResticList                 CommandOperation = "restic_list"
-	OperationResticDump                 CommandOperation = "restic_dump"
-	OperationResticBackup               CommandOperation = "restic_backup"
-	OperationResticSnapshotsByTags      CommandOperation = "restic_snapshots_by_tags"
-	OperationResticManifest             CommandOperation = "restic_manifest"
-	OperationRcloneVersion              CommandOperation = "rclone_version"
-	OperationRcloneFeatures             CommandOperation = "rclone_features"
-	OperationRcloneList                 CommandOperation = "rclone_list"
-	OperationRcloneStat                 CommandOperation = "rclone_stat"
-	OperationRcloneCat                  CommandOperation = "rclone_cat"
-	OperationRcloneManagedVersion       CommandOperation = "rclone_managed_version"
-	OperationRcloneManagedFeatures      CommandOperation = "rclone_managed_features"
-	OperationRcloneManagedRecursiveList CommandOperation = "rclone_managed_recursive_list"
-	OperationRcloneManagedCopy          CommandOperation = "rclone_managed_copy"
-	OperationRcloneManagedNativeSync    CommandOperation = "rclone_managed_native_sync"
-	OperationRcloneManagedCheckDownload CommandOperation = "rclone_managed_check_download"
-	OperationRcloneManagedCopyTo        CommandOperation = "rclone_managed_copyto"
-	OperationRcloneManagedCat           CommandOperation = "rclone_managed_cat"
-	OperationRcloneManagedExactStat     CommandOperation = "rclone_managed_exact_stat"
-	OperationRemoteEnumerate            CommandOperation = "remote_enumerate"
+	OperationResticVersion                  CommandOperation = "restic_version"
+	OperationResticConfig                   CommandOperation = "restic_config"
+	OperationResticSnapshots                CommandOperation = "restic_snapshots"
+	OperationResticList                     CommandOperation = "restic_list"
+	OperationResticDump                     CommandOperation = "restic_dump"
+	OperationResticBackup                   CommandOperation = "restic_backup"
+	OperationResticSnapshotsByTags          CommandOperation = "restic_snapshots_by_tags"
+	OperationResticManifest                 CommandOperation = "restic_manifest"
+	OperationResticForgetExact              CommandOperation = "restic_forget_exact"
+	OperationRcloneVersion                  CommandOperation = "rclone_version"
+	OperationRcloneFeatures                 CommandOperation = "rclone_features"
+	OperationRcloneList                     CommandOperation = "rclone_list"
+	OperationRcloneStat                     CommandOperation = "rclone_stat"
+	OperationRcloneCat                      CommandOperation = "rclone_cat"
+	OperationRcloneManagedVersion           CommandOperation = "rclone_managed_version"
+	OperationRcloneManagedFeatures          CommandOperation = "rclone_managed_features"
+	OperationRcloneManagedRecursiveList     CommandOperation = "rclone_managed_recursive_list"
+	OperationRcloneManagedCopy              CommandOperation = "rclone_managed_copy"
+	OperationRcloneManagedNativeSync        CommandOperation = "rclone_managed_native_sync"
+	OperationRcloneManagedCheckDownload     CommandOperation = "rclone_managed_check_download"
+	OperationRcloneManagedCopyTo            CommandOperation = "rclone_managed_copyto"
+	OperationRcloneManagedCat               CommandOperation = "rclone_managed_cat"
+	OperationRcloneManagedExactStat         CommandOperation = "rclone_managed_exact_stat"
+	OperationRcloneManagedDeleteExactPrefix CommandOperation = "rclone_managed_delete_exact_prefix"
+	OperationRemoteEnumerate                CommandOperation = "remote_enumerate"
 )
 
 type RclonePrivateLocator struct {
@@ -105,6 +108,7 @@ func (invocation CommandInvocation) Validate() error {
 			OperationResticVersion: true, OperationResticConfig: true, OperationResticSnapshots: true,
 			OperationResticList: true, OperationResticDump: true, OperationResticBackup: true,
 			OperationResticSnapshotsByTags: true, OperationResticManifest: true,
+			OperationResticForgetExact: true,
 		},
 		ToolRclone: {
 			OperationRcloneVersion: true, OperationRcloneFeatures: true, OperationRcloneList: true,
@@ -113,6 +117,7 @@ func (invocation CommandInvocation) Validate() error {
 			OperationRcloneManagedRecursiveList: true, OperationRcloneManagedCopy: true,
 			OperationRcloneManagedNativeSync: true, OperationRcloneManagedCheckDownload: true,
 			OperationRcloneManagedCopyTo: true, OperationRcloneManagedCat: true, OperationRcloneManagedExactStat: true,
+			OperationRcloneManagedDeleteExactPrefix: true,
 		},
 		ToolRemoteFind: {OperationRemoteEnumerate: true},
 	}
@@ -147,7 +152,8 @@ func validCommandInvocation(invocation CommandInvocation) bool {
 		case OperationResticConfig:
 			return len(invocation.SecretStdin) > 0 && equalArguments(arguments, "--password-file", "/dev/stdin", "cat", "config")
 		case OperationResticSnapshots:
-			return len(invocation.SecretStdin) > 0 && equalArguments(arguments, "--password-file", "/dev/stdin", "snapshots", "--json")
+			return len(invocation.SecretStdin) > 0 && (equalArguments(arguments, "--password-file", "/dev/stdin", "snapshots", "--json") ||
+				validResticSnapshotsExactArguments(arguments))
 		case OperationResticList:
 			return len(invocation.SecretStdin) > 0 && len(arguments) == 7 && equalArguments(arguments[:5], "--password-file", "/dev/stdin", "ls", "--json", "--") &&
 				lowerHex(arguments[5], 64) && arguments[6] != ""
@@ -160,6 +166,8 @@ func validCommandInvocation(invocation CommandInvocation) bool {
 			return invocation.Purpose == CommandPurposeManifest && len(invocation.SecretStdin) > 0 && validResticSnapshotsByTagsArguments(arguments)
 		case OperationResticManifest:
 			return invocation.Purpose == CommandPurposeManifest && len(invocation.SecretStdin) > 0 && validResticManifestArguments(arguments)
+		case OperationResticForgetExact:
+			return invocation.Purpose == CommandPurposeDelete && len(invocation.SecretStdin) > 0 && validResticForgetExactArguments(arguments)
 		}
 	case ToolRclone:
 		if invocation.Operation == OperationRcloneVersion {
@@ -194,7 +202,8 @@ func isManagedRcloneOperation(operation CommandOperation) bool {
 	switch operation {
 	case OperationRcloneManagedVersion, OperationRcloneManagedFeatures, OperationRcloneManagedRecursiveList,
 		OperationRcloneManagedCopy, OperationRcloneManagedNativeSync, OperationRcloneManagedCheckDownload,
-		OperationRcloneManagedCopyTo, OperationRcloneManagedCat, OperationRcloneManagedExactStat:
+		OperationRcloneManagedCopyTo, OperationRcloneManagedCat, OperationRcloneManagedExactStat,
+		OperationRcloneManagedDeleteExactPrefix:
 		return true
 	default:
 		return false
@@ -232,6 +241,8 @@ func validManagedRcloneInvocation(invocation CommandInvocation) bool {
 		return privateSource && privateDestination && !stagedSource && !stagedDestination
 	case OperationRcloneManagedCopyTo:
 		return (privateSource || stagedSource) && (privateDestination || stagedDestination)
+	case OperationRcloneManagedDeleteExactPrefix:
+		return invocation.Purpose == CommandPurposeDelete && privateSource && !privateDestination && !stagedSource && !stagedDestination
 	default:
 		return false
 	}
@@ -279,6 +290,8 @@ func managedRcloneArguments(invocation CommandInvocation) ([]string, error) {
 		arguments = append(arguments, "cat", "--", source())
 	case OperationRcloneManagedExactStat:
 		arguments = append(arguments, "lsjson", "--stat", "--hash", "--metadata", "--", source())
+	case OperationRcloneManagedDeleteExactPrefix:
+		arguments = append(arguments, "purge", "--", source())
 	default:
 		return nil, fmt.Errorf("%w: unsupported managed Rclone operation", ErrUnsafeInvocation)
 	}
@@ -328,6 +341,20 @@ func validResticSnapshotsByTagsArguments(arguments []string) bool {
 func validResticManifestArguments(arguments []string) bool {
 	return len(arguments) == 8 && equalArguments(arguments[:6], "--password-file", "/dev/stdin", "ls", "--json", "--recursive", "--") &&
 		lowerHex(arguments[6], 64) && arguments[7] == "/"
+}
+
+func validResticSnapshotsExactArguments(arguments []string) bool {
+	if len(arguments) != 6 || !equalArguments(arguments[:5], "--password-file", "/dev/stdin", "snapshots", "--json", "--") {
+		return false
+	}
+	return lowerHex(arguments[5], 64) && arguments[5] != "latest"
+}
+
+func validResticForgetExactArguments(arguments []string) bool {
+	if len(arguments) != 6 || !equalArguments(arguments[:5], "--password-file", "/dev/stdin", "forget", "--prune", "--") {
+		return false
+	}
+	return lowerHex(arguments[5], 64) && arguments[5] != "latest"
 }
 
 func validGeneratedResticTag(value string, index int) bool {
@@ -805,6 +832,8 @@ func sshPurpose(purpose CommandPurpose) (string, bool) {
 		return sshutil.PurposeTaskBackup, true
 	case CommandPurposeManifest:
 		return sshutil.PurposeRepositoryList, true
+	case CommandPurposeDelete:
+		return sshutil.PurposeTaskBackup, true
 	default:
 		return "", false
 	}

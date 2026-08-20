@@ -311,6 +311,102 @@ func TestPublicationLeaseHolderIsValid(t *testing.T) {
 	}
 }
 
+func TestLifecycleClosedEnumsAndValidators(t *testing.T) {
+	for _, scope := range []RetentionPolicyScopeKind{RetentionPolicyScopeRepository, RetentionPolicyScopeTaskLink} {
+		if err := ValidateRetentionPolicyScope(scope, strings.Repeat("a", 32)); err != nil {
+			t.Fatalf("valid retention scope %q rejected: %v", scope, err)
+		}
+	}
+	for _, status := range []RetentionPolicyStatus{RetentionPolicyActive, RetentionPolicyDeleted} {
+		if err := ValidateRetentionPolicyStatus(status); err != nil {
+			t.Fatalf("valid retention policy status %q rejected: %v", status, err)
+		}
+	}
+	for _, holdType := range []RecoveryPointHoldType{RecoveryPointHoldOperational, RecoveryPointHoldLegal} {
+		if err := ValidateRecoveryPointHoldType(holdType); err != nil {
+			t.Fatalf("valid hold type %q rejected: %v", holdType, err)
+		}
+	}
+	for _, state := range []HoldState{HoldActive, HoldReleased} {
+		if err := ValidateRecoveryPointHoldRecordState(state); err != nil {
+			t.Fatalf("valid recovery point hold record state %q rejected: %v", state, err)
+		}
+	}
+	for _, operation := range []LifecycleOperation{LifecycleRetentionExpire, LifecycleExplicitPurge, LifecycleMutableRetire} {
+		if err := ValidateLifecycleOperation(operation); err != nil {
+			t.Fatalf("valid lifecycle operation %q rejected: %v", operation, err)
+		}
+	}
+	for _, reason := range []LifecycleBlockedReason{
+		LifecycleBlockedActiveHold, LifecycleBlockedLeaseLive, LifecycleBlockedLeaseDrainUnproven,
+		LifecycleBlockedOwnerCleanupUnproven, LifecycleBlockedProviderWORM, LifecycleBlockedProviderUnavailable,
+		LifecycleBlockedProviderIdentityConflict, LifecycleBlockedProviderDeleteUnproven,
+		LifecycleBlockedDeletionUnavailable, LifecycleBlockedFenceLost,
+	} {
+		if err := ValidateLifecycleBlockedReason(reason); err != nil {
+			t.Fatalf("valid lifecycle blocked reason %q rejected: %v", reason, err)
+		}
+	}
+	for _, phase := range []LifecyclePhase{
+		LifecyclePhaseSelected, LifecyclePhaseRevoking, LifecyclePhaseDraining, LifecyclePhaseCleaning,
+		LifecyclePhaseProviderDelete, LifecyclePhaseTombstoning, LifecyclePhaseBlocked, LifecyclePhaseComplete,
+	} {
+		if err := ValidateLifecyclePhase(phase); err != nil {
+			t.Fatalf("valid lifecycle phase %q rejected: %v", phase, err)
+		}
+	}
+	for _, state := range []ImportReviewState{ImportReviewPending, ImportReviewAccepted, ImportReviewRejected} {
+		if err := ValidateImportReviewState(state); err != nil {
+			t.Fatalf("valid import review state %q rejected: %v", state, err)
+		}
+	}
+	for _, status := range []PurgePlanStatus{
+		PurgePlanReady, PurgePlanBound, PurgePlanExecuting, PurgePlanConsumed, PurgePlanInvalidated,
+	} {
+		if err := ValidatePurgePlanStatus(status); err != nil {
+			t.Fatalf("valid purge plan status %q rejected: %v", status, err)
+		}
+	}
+	for _, kind := range []ImportCandidateKind{
+		ImportCandidateNativeSnapshot, ImportCandidateXirangManifest, ImportCandidateImportedBaseline, ImportCandidateMutableHead,
+	} {
+		if err := ValidateImportCandidateKind(kind); err != nil {
+			t.Fatalf("valid import kind %q rejected: %v", kind, err)
+		}
+	}
+	for _, kind := range []ConfigImportEntityKind{
+		ConfigImportRepository, ConfigImportTaskLink, ConfigImportRetentionPolicy, ConfigImportHold,
+	} {
+		if err := ValidateConfigImportEntityKind(kind); err != nil {
+			t.Fatalf("valid config import kind %q rejected: %v", kind, err)
+		}
+	}
+
+	invalidCases := []struct {
+		name string
+		err  error
+	}{
+		{name: "scope", err: ValidateRetentionPolicyScope("future", strings.Repeat("a", 32))},
+		{name: "scope id", err: ValidateRetentionPolicyScope(RetentionPolicyScopeRepository, "7")},
+		{name: "policy status", err: ValidateRetentionPolicyStatus("future")},
+		{name: "hold", err: ValidateRecoveryPointHoldType("future")},
+		{name: "hold none", err: ValidateRecoveryPointHoldRecordState(HoldNone)},
+		{name: "hold state", err: ValidateRecoveryPointHoldRecordState("future")},
+		{name: "operation", err: ValidateLifecycleOperation("future")},
+		{name: "phase", err: ValidateLifecyclePhase("future")},
+		{name: "blocked reason", err: ValidateLifecycleBlockedReason("future")},
+		{name: "import", err: ValidateImportCandidateKind("future")},
+		{name: "import review", err: ValidateImportReviewState("future")},
+		{name: "purge plan", err: ValidatePurgePlanStatus("future")},
+		{name: "config", err: ValidateConfigImportEntityKind("future")},
+	}
+	for _, testCase := range invalidCases {
+		if !errors.Is(testCase.err, ErrInvalidState) {
+			t.Fatalf("invalid %s returned %v, want ErrInvalidState", testCase.name, testCase.err)
+		}
+	}
+}
+
 func TestAssetRefRequiresRecoveryPointAndEntry(t *testing.T) {
 	valid := AssetRef{RecoveryPointID: strings.Repeat("a", 32), EntryID: strings.Repeat("b", 64)}
 	if err := ValidateAssetRef(valid); err != nil {
@@ -387,6 +483,32 @@ func TestTaskCapabilitiesDoNotClaimUnprovenRange(t *testing.T) {
 	}
 }
 
+func TestBindImportedRepositoryIdentity(t *testing.T) {
+	observed := "restic:native:config-v2-shared-identity"
+	placeholder := FormatImportedRepositoryIdentity(ImportedIdentityRef(observed))
+
+	bound, err := BindImportedRepositoryIdentity(&placeholder, observed)
+	if err != nil || bound != observed {
+		t.Fatalf("placeholder bind=%q err=%v", bound, err)
+	}
+	if _, err := BindImportedRepositoryIdentity(&placeholder, "restic:native:other"); err == nil {
+		t.Fatal("mismatched placeholder identity should conflict")
+	}
+	bound, err = BindImportedRepositoryIdentity(nil, observed)
+	if err != nil || bound != observed {
+		t.Fatalf("nil identity bind=%q err=%v", bound, err)
+	}
+	same := observed
+	bound, err = BindImportedRepositoryIdentity(&same, observed)
+	if err != nil || bound != observed {
+		t.Fatalf("exact identity bind=%q err=%v", bound, err)
+	}
+	other := "restic:native:other"
+	if _, err := BindImportedRepositoryIdentity(&other, observed); err == nil {
+		t.Fatal("exact identity mismatch should conflict")
+	}
+}
+
 func TestOpaqueIDFormatAndEntropySourceFailure(t *testing.T) {
 	id, err := NewOpaqueID()
 	if err != nil {
@@ -413,6 +535,32 @@ func TestOpaqueIDFormatAndEntropySourceFailure(t *testing.T) {
 	for _, candidate := range []string{"", strings.Repeat("a", 31), strings.Repeat("A", 32), strings.Repeat("g", 32), strings.Repeat("0", 33)} {
 		if err := ValidateOpaqueID(candidate); err == nil {
 			t.Fatalf("invalid opaque ID accepted: %q", candidate)
+		}
+	}
+}
+
+func TestRecoveryPointSourceLifecycleRequestClosedContract(t *testing.T) {
+	request := SourceLifecycleRequest{
+		RecoveryPointID: strings.Repeat("a", 32), LifecycleAttemptID: strings.Repeat("b", 32),
+		Operation: LifecycleMutableRetire, Stage: SourceLifecyclePrepare,
+	}
+	if err := ValidateSourceLifecycleRequest(request); err != nil {
+		t.Fatalf("valid source lifecycle request rejected: %v", err)
+	}
+	request.Stage = SourceLifecycleCleanup
+	if err := ValidateSourceLifecycleRequest(request); err != nil {
+		t.Fatalf("valid cleanup source lifecycle request rejected: %v", err)
+	}
+	for _, mutate := range []func(*SourceLifecycleRequest){
+		func(value *SourceLifecycleRequest) { value.RecoveryPointID = "bad" },
+		func(value *SourceLifecycleRequest) { value.LifecycleAttemptID = "bad" },
+		func(value *SourceLifecycleRequest) { value.Operation = "future_operation" },
+		func(value *SourceLifecycleRequest) { value.Stage = "future_stage" },
+	} {
+		invalid := request
+		mutate(&invalid)
+		if err := ValidateSourceLifecycleRequest(invalid); !errors.Is(err, ErrInvalidState) {
+			t.Fatalf("invalid source lifecycle request error=%v, want ErrInvalidState", err)
 		}
 	}
 }

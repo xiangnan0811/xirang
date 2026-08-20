@@ -10,6 +10,63 @@ import (
 	"testing"
 )
 
+func TestProviderPublicationBoundaryKeepsReadAdaptersNonMutating(t *testing.T) {
+	for _, file := range []string{"restic_publication.go", "restic_manifest.go", "restic.go", "rclone.go", "rsync.go"} {
+		contents, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		source := string(contents)
+		if regexp.MustCompile(`(?i)restic[^\n]*(forget|prune|delete)`).MatchString(source) ||
+			strings.Contains(source, "OperationResticForgetExact") ||
+			strings.Contains(source, "OperationRcloneManagedDeleteExactPrefix") {
+			t.Fatalf("read/publication source %s exposes a deletion operation", file)
+		}
+	}
+	deletion, err := os.ReadFile("restic_deletion.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(deletion), "OperationResticForgetExact") {
+		t.Fatal("exact Restic deletion does not live in restic_deletion.go")
+	}
+	if _, ok := any(&ResticAdapter{}).(PointDeleter); ok {
+		t.Fatal("read Restic adapter unexpectedly implements PointDeleter")
+	}
+	if _, ok := any(&RcloneAdapter{}).(PointDeleter); ok {
+		t.Fatal("read Rclone adapter unexpectedly implements PointDeleter")
+	}
+	if _, ok := any(&RsyncAdapter{}).(PointDeleter); ok {
+		t.Fatal("read Rsync adapter unexpectedly implements PointDeleter")
+	}
+}
+
+func TestResticAdapterReadPortRejectsMutation(t *testing.T) {
+	TestProviderPublicationBoundaryKeepsReadAdaptersNonMutating(t)
+}
+
+func TestRcloneAdapterReadPortRejectsMutation(t *testing.T) {
+	source, err := os.ReadFile("rclone.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"purge", "OperationRcloneManagedDeleteExactPrefix", "deletefile"} {
+		if strings.Contains(string(source), forbidden) {
+			t.Fatalf("read Rclone adapter contains mutation token %q", forbidden)
+		}
+	}
+}
+
+func TestRsyncAdapterReadPortRejectsMutation(t *testing.T) {
+	source, err := os.ReadFile("rsync.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(source), "DeleteCommittedPoint") || strings.Contains(string(source), "os.RemoveAll") {
+		t.Fatal("read Rsync adapter reached handle-relative or path deletion")
+	}
+}
+
 func TestPublicationSourceBoundaries(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {

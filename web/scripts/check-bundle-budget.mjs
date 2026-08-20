@@ -12,8 +12,10 @@ import { fileURLToPath } from 'node:url';
 // Tailwind 4 emits more raw CSS for registered custom properties and modern
 // utility output. The post-migration main CSS is ~99 KiB raw but ~16 KiB gzip,
 // so keep a small raw-size cushion without weakening the JS startup budget.
+// Child 14 lifecycle panels add repository-management and retention-policy
+// utilities that scan into the shared CSS chunk (~105.01 KiB raw / ~17 KiB gzip).
 const DEFAULT_MAIN_JS_BUDGET_KIB = 500;
-const DEFAULT_MAIN_CSS_BUDGET_KIB = 105;
+const DEFAULT_MAIN_CSS_BUDGET_KIB = 106;
 
 function formatKiB(bytes) {
   return `${(bytes / 1024).toFixed(2)} KiB`;

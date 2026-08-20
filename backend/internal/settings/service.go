@@ -294,6 +294,9 @@ var registry = []SettingDef{
 	{Key: "smtp.from", EnvVar: "SMTP_FROM", CodeDefault: "", Type: TypeString, Category: "alerting", Description: "发件人地址；为空时回退到 smtp.user"},
 	{Key: "smtp.require_tls", EnvVar: "SMTP_REQUIRE_TLS", CodeDefault: "true", Type: TypeBool, Category: "alerting", Description: "强制 TLS 连接（465 隐式 / 587 STARTTLS）；false 回退明文"},
 	{Key: "backup_assets.enabled", EnvVar: "BACKUP_ASSETS_ENABLED", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "启用备份资产领域功能"},
+	{Key: "backup_assets.retention_reconcile_interval", EnvVar: "BACKUP_ASSETS_RETENTION_RECONCILE_INTERVAL", CodeDefault: "5m", Type: TypeDuration, Category: "backup_assets", Description: "备份资产保留策略协调间隔", MinDuration: "30s", MaxDuration: "24h"},
+	{Key: "backup_assets.retention_batch_size", EnvVar: "BACKUP_ASSETS_RETENTION_BATCH_SIZE", CodeDefault: "100", Type: TypeInt, Category: "backup_assets", Description: "备份资产保留策略单批处理上限", Min: "1", Max: "1000"},
+	{Key: "backup_assets.retention_drain_timeout", EnvVar: "BACKUP_ASSETS_RETENTION_DRAIN_TIMEOUT", CodeDefault: "30s", Type: TypeDuration, Category: "backup_assets", Description: "备份资产保留策略读取排空超时", MinDuration: "5s", MaxDuration: "30m"},
 	{Key: "backup_assets.content_preview_ttl", EnvVar: "BACKUP_ASSETS_CONTENT_PREVIEW_TTL", CodeDefault: "2m", Type: TypeDuration, Category: "backup_assets", Description: "备份内容预览票据绝对有效期", MinDuration: "15s", MaxDuration: "10m"},
 	{Key: "backup_assets.content_media_ttl", EnvVar: "BACKUP_ASSETS_CONTENT_MEDIA_TTL", CodeDefault: "15m", Type: TypeDuration, Category: "backup_assets", Description: "备份媒体与下载票据绝对有效期", MinDuration: "1m", MaxDuration: "30m"},
 	{Key: "backup_assets.content_idle_ttl", EnvVar: "BACKUP_ASSETS_CONTENT_IDLE_TTL", CodeDefault: "60s", Type: TypeDuration, Category: "backup_assets", Description: "备份内容会话空闲有效期", MinDuration: "15s", MaxDuration: "10m"},
@@ -1657,6 +1660,9 @@ func validateValue(def *SettingDef, value string) error {
 
 var backupAssetCoreSettingKeys = []string{
 	"backup_assets.enabled",
+	"backup_assets.retention_reconcile_interval",
+	"backup_assets.retention_batch_size",
+	"backup_assets.retention_drain_timeout",
 	"backup_assets.catalog_batch_size",
 	"backup_assets.catalog_build_timeout",
 	"backup_assets.repository_reconcile_interval",

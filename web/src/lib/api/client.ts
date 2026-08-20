@@ -31,7 +31,6 @@ import { createAlertDeliveriesApi } from "./alert-deliveries";
 import { createAppCredentialsApi } from "./app-credentials";
 import { createAutomationRulesApi } from "./automation-rules";
 import { createServiceMonitorsApi } from "./service-monitors";
-import { createBackupRepositoriesApi } from "./backup-repositories-api";
 import { createRecoveryPointsApi } from "./recovery-points-api";
 import { createBackupAssetsApi } from "./backup-assets-api";
 
@@ -44,10 +43,18 @@ type BackupAssetOverlaysApi = ReturnType<
   typeof import("./backup-asset-overlays-api").createBackupAssetOverlaysApi
 >;
 type BackupContentApi = ReturnType<typeof import("./backup-content-api").createBackupContentApi>;
+type BackupRetentionApi = ReturnType<
+  typeof import("./backup-retention-api").createBackupRetentionApi
+>;
+type BackupRepositoriesApi = ReturnType<
+  typeof import("./backup-repositories-api").createBackupRepositoriesApi
+>;
 
 let backupAssetSearchApiPromise: Promise<BackupAssetSearchApi> | undefined;
 let backupAssetOverlaysApiPromise: Promise<BackupAssetOverlaysApi> | undefined;
 let backupContentApiPromise: Promise<BackupContentApi> | undefined;
+let backupRetentionApiPromise: Promise<BackupRetentionApi> | undefined;
+let backupRepositoriesApiPromise: Promise<BackupRepositoriesApi> | undefined;
 
 function loadBackupAssetSearchApi(): Promise<BackupAssetSearchApi> {
   backupAssetSearchApiPromise ??= import("./backup-asset-search-api").then((module) =>
@@ -68,6 +75,20 @@ function loadBackupContentApi(): Promise<BackupContentApi> {
     module.createBackupContentApi()
   );
   return backupContentApiPromise;
+}
+
+function loadBackupRetentionApi(): Promise<BackupRetentionApi> {
+  backupRetentionApiPromise ??= import("./backup-retention-api").then((module) =>
+    module.createBackupRetentionApi()
+  );
+  return backupRetentionApiPromise;
+}
+
+function loadBackupRepositoriesApi(): Promise<BackupRepositoriesApi> {
+  backupRepositoriesApiPromise ??= import("./backup-repositories-api").then((module) =>
+    module.createBackupRepositoriesApi()
+  );
+  return backupRepositoriesApiPromise;
 }
 
 const lazyBackupAssetSearchApi: BackupAssetSearchApi = {
@@ -133,6 +154,72 @@ const lazyBackupContentApi: BackupContentApi = {
   },
 };
 
+const lazyBackupRepositoriesApi: BackupRepositoriesApi = {
+  async listBackupRepositories(...args) {
+    return (await loadBackupRepositoriesApi()).listBackupRepositories(...args);
+  },
+  async getBackupRepository(...args) {
+    return (await loadBackupRepositoriesApi()).getBackupRepository(...args);
+  },
+  async connectBackupRepository(...args) {
+    return (await loadBackupRepositoriesApi()).connectBackupRepository(...args);
+  },
+  async reconcileBackupRepository(...args) {
+    return (await loadBackupRepositoriesApi()).reconcileBackupRepository(...args);
+  },
+  async disconnectBackupRepository(...args) {
+    return (await loadBackupRepositoriesApi()).disconnectBackupRepository(...args);
+  },
+  async scanBackupRepositoryImports(...args) {
+    return (await loadBackupRepositoriesApi()).scanBackupRepositoryImports(...args);
+  },
+  async listBackupRepositoryImportCandidates(...args) {
+    return (await loadBackupRepositoriesApi()).listBackupRepositoryImportCandidates(...args);
+  },
+  async reviewBackupRepositoryImportCandidate(...args) {
+    return (await loadBackupRepositoriesApi()).reviewBackupRepositoryImportCandidate(...args);
+  },
+  async rebuildBackupRepositoryImports(...args) {
+    return (await loadBackupRepositoriesApi()).rebuildBackupRepositoryImports(...args);
+  },
+};
+
+const lazyBackupRetentionApi: BackupRetentionApi = {
+  async listRetentionPolicies(...args) {
+    return (await loadBackupRetentionApi()).listRetentionPolicies(...args);
+  },
+  async createRetentionPolicy(...args) {
+    return (await loadBackupRetentionApi()).createRetentionPolicy(...args);
+  },
+  async updateRetentionPolicy(...args) {
+    return (await loadBackupRetentionApi()).updateRetentionPolicy(...args);
+  },
+  async deleteRetentionPolicy(...args) {
+    return (await loadBackupRetentionApi()).deleteRetentionPolicy(...args);
+  },
+  async previewRetentionPolicyImpact(...args) {
+    return (await loadBackupRetentionApi()).previewRetentionPolicyImpact(...args);
+  },
+  async listRecoveryPointHolds(...args) {
+    return (await loadBackupRetentionApi()).listRecoveryPointHolds(...args);
+  },
+  async createRecoveryPointHold(...args) {
+    return (await loadBackupRetentionApi()).createRecoveryPointHold(...args);
+  },
+  async releaseRecoveryPointHold(...args) {
+    return (await loadBackupRetentionApi()).releaseRecoveryPointHold(...args);
+  },
+  async previewRepositoryPurge(...args) {
+    return (await loadBackupRetentionApi()).previewRepositoryPurge(...args);
+  },
+  async createRepositoryPurgePlan(...args) {
+    return (await loadBackupRetentionApi()).createRepositoryPurgePlan(...args);
+  },
+  async executeRepositoryPurge(...args) {
+    return (await loadBackupRetentionApi()).executeRepositoryPurge(...args);
+  },
+};
+
 export const apiClient = {
   ...createAuthApi(),
   ...createNodesApi(),
@@ -167,10 +254,11 @@ export const apiClient = {
   ...createAppCredentialsApi(),
   ...createAutomationRulesApi(),
   ...createServiceMonitorsApi(),
-  ...createBackupRepositoriesApi(),
   ...createRecoveryPointsApi(),
   ...createBackupAssetsApi(),
   ...lazyBackupAssetSearchApi,
   ...lazyBackupAssetOverlaysApi,
   ...lazyBackupContentApi,
+  ...lazyBackupRepositoriesApi,
+  ...lazyBackupRetentionApi,
 };

@@ -2,6 +2,7 @@ package backupasset
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -117,6 +118,113 @@ const (
 	HoldReleased HoldState = "released"
 )
 
+type RetentionPolicyScopeKind string
+
+const (
+	RetentionPolicyScopeRepository RetentionPolicyScopeKind = "repository"
+	RetentionPolicyScopeTaskLink   RetentionPolicyScopeKind = "task_link"
+)
+
+type RetentionPolicyStatus string
+
+const (
+	RetentionPolicyActive  RetentionPolicyStatus = "active"
+	RetentionPolicyDeleted RetentionPolicyStatus = "deleted"
+)
+
+type RecoveryPointHoldType string
+
+const (
+	RecoveryPointHoldOperational RecoveryPointHoldType = "operational"
+	RecoveryPointHoldLegal       RecoveryPointHoldType = "legal"
+)
+
+type LifecycleOperation string
+
+const (
+	LifecycleRetentionExpire LifecycleOperation = "retention_expire"
+	LifecycleExplicitPurge   LifecycleOperation = "explicit_purge"
+	LifecycleMutableRetire   LifecycleOperation = "mutable_retire"
+)
+
+type SourceLifecycleStage string
+
+const (
+	SourceLifecyclePrepare SourceLifecycleStage = "prepare"
+	SourceLifecycleCleanup SourceLifecycleStage = "cleanup"
+)
+
+type SourceLifecycleRequest struct {
+	RecoveryPointID    string
+	LifecycleAttemptID string
+	Operation          LifecycleOperation
+	Stage              SourceLifecycleStage
+}
+
+type LifecyclePhase string
+
+const (
+	LifecyclePhaseSelected       LifecyclePhase = "selected"
+	LifecyclePhaseRevoking       LifecyclePhase = "revoking"
+	LifecyclePhaseDraining       LifecyclePhase = "draining"
+	LifecyclePhaseCleaning       LifecyclePhase = "cleaning"
+	LifecyclePhaseProviderDelete LifecyclePhase = "provider_delete"
+	LifecyclePhaseTombstoning    LifecyclePhase = "tombstoning"
+	LifecyclePhaseBlocked        LifecyclePhase = "blocked"
+	LifecyclePhaseComplete       LifecyclePhase = "complete"
+)
+
+type LifecycleBlockedReason string
+
+const (
+	LifecycleBlockedActiveHold               LifecycleBlockedReason = "active_hold"
+	LifecycleBlockedLeaseLive                LifecycleBlockedReason = "lease_live"
+	LifecycleBlockedLeaseDrainUnproven       LifecycleBlockedReason = "lease_drain_unproven"
+	LifecycleBlockedOwnerCleanupUnproven     LifecycleBlockedReason = "owner_cleanup_unproven"
+	LifecycleBlockedProviderWORM             LifecycleBlockedReason = "provider_worm"
+	LifecycleBlockedProviderUnavailable      LifecycleBlockedReason = "provider_unavailable"
+	LifecycleBlockedProviderIdentityConflict LifecycleBlockedReason = "provider_identity_conflict"
+	LifecycleBlockedProviderDeleteUnproven   LifecycleBlockedReason = "provider_delete_unproven"
+	LifecycleBlockedDeletionUnavailable      LifecycleBlockedReason = "deletion_unavailable"
+	LifecycleBlockedFenceLost                LifecycleBlockedReason = "fence_lost"
+)
+
+type ImportCandidateKind string
+
+const (
+	ImportCandidateNativeSnapshot   ImportCandidateKind = "native_snapshot"
+	ImportCandidateXirangManifest   ImportCandidateKind = "xirang_manifest"
+	ImportCandidateImportedBaseline ImportCandidateKind = "imported_baseline"
+	ImportCandidateMutableHead      ImportCandidateKind = "mutable_head"
+)
+
+type ImportReviewState string
+
+const (
+	ImportReviewPending  ImportReviewState = "pending"
+	ImportReviewAccepted ImportReviewState = "accepted"
+	ImportReviewRejected ImportReviewState = "rejected"
+)
+
+type PurgePlanStatus string
+
+const (
+	PurgePlanReady       PurgePlanStatus = "ready"
+	PurgePlanBound       PurgePlanStatus = "bound"
+	PurgePlanExecuting   PurgePlanStatus = "executing"
+	PurgePlanConsumed    PurgePlanStatus = "consumed"
+	PurgePlanInvalidated PurgePlanStatus = "invalidated"
+)
+
+type ConfigImportEntityKind string
+
+const (
+	ConfigImportRepository      ConfigImportEntityKind = "repository"
+	ConfigImportTaskLink        ConfigImportEntityKind = "task_link"
+	ConfigImportRetentionPolicy ConfigImportEntityKind = "retention_policy"
+	ConfigImportHold            ConfigImportEntityKind = "hold"
+)
+
 type ManifestCompleteness string
 
 const (
@@ -212,11 +320,12 @@ const (
 	CapabilityRangeUnavailable              CapabilityCode = "range_unavailable"
 	CapabilityDownloadUnavailable           CapabilityCode = "download_unavailable"
 	CapabilityRestoreUnavailable            CapabilityCode = "restore_unavailable"
+	CapabilityDeletionUnavailable           CapabilityCode = "deletion_unavailable"
 	CapabilityDiffUnavailable               CapabilityCode = "diff_unavailable"
 )
 
 type CapabilityReason struct {
-	Code   CapabilityCode    `json:"code" enums:"feature_disabled,task_artifact_contract_missing,repository_offline,repository_disconnected,provider_unavailable,repository_identity_unavailable,provider_protocol_incompatible,provider_operation_timeout,provider_resource_limit,point_not_committed,mutable_source_changed,catalog_unavailable,sequential_read_unavailable,range_unavailable,download_unavailable,restore_unavailable,diff_unavailable"`
+	Code   CapabilityCode    `json:"code" enums:"feature_disabled,task_artifact_contract_missing,repository_offline,repository_disconnected,provider_unavailable,repository_identity_unavailable,provider_protocol_incompatible,provider_operation_timeout,provider_resource_limit,point_not_committed,mutable_source_changed,catalog_unavailable,sequential_read_unavailable,range_unavailable,download_unavailable,restore_unavailable,deletion_unavailable,diff_unavailable"`
 	Params map[string]string `json:"params,omitempty"`
 }
 
@@ -238,6 +347,38 @@ type TaskArtifactContract struct {
 	HasArtifactContract bool
 }
 
+const ImportedRepositoryIdentityRefPrefix = "identity_ref:v1:"
+
+func ImportedIdentityRef(identity string) string {
+	sum := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(sum[:])
+}
+
+func FormatImportedRepositoryIdentity(identityRef string) string {
+	return ImportedRepositoryIdentityRefPrefix + strings.TrimSpace(identityRef)
+}
+
+func BindImportedRepositoryIdentity(stored *string, observed string) (string, error) {
+	observed = strings.TrimSpace(observed)
+	if observed == "" {
+		return "", fmt.Errorf("%w: repository identity mismatch", ErrConflict)
+	}
+	if stored == nil || strings.TrimSpace(*stored) == "" {
+		return observed, nil
+	}
+	current := strings.TrimSpace(*stored)
+	if digest, ok := strings.CutPrefix(current, ImportedRepositoryIdentityRefPrefix); ok {
+		if ImportedIdentityRef(observed) != digest {
+			return "", fmt.Errorf("%w: repository identity mismatch", ErrConflict)
+		}
+		return observed, nil
+	}
+	if current != observed {
+		return "", fmt.Errorf("%w: repository identity mismatch", ErrConflict)
+	}
+	return observed, nil
+}
+
 func NewOpaqueID() (string, error) {
 	return newOpaqueIDFrom(rand.Reader)
 }
@@ -253,6 +394,92 @@ func newOpaqueIDFrom(source io.Reader) (string, error) {
 func ValidateOpaqueID(value string) error {
 	if !isLowerHex(value, opaqueIDEncodedSize) {
 		return fmt.Errorf("%w: opaque ID must be 32 lowercase hex characters", ErrInvalidState)
+	}
+	return nil
+}
+
+func ValidateRetentionPolicyScope(kind RetentionPolicyScopeKind, scopeID string) error {
+	if !validRetentionPolicyScopeKinds[kind] || ValidateOpaqueID(scopeID) != nil {
+		return fmt.Errorf("%w: invalid retention policy scope", ErrInvalidState)
+	}
+	return nil
+}
+
+func ValidateRecoveryPointHoldType(holdType RecoveryPointHoldType) error {
+	if !validRecoveryPointHoldTypes[holdType] {
+		return fmt.Errorf("%w: invalid recovery point hold type", ErrInvalidState)
+	}
+	return nil
+}
+
+func ValidateRetentionPolicyStatus(status RetentionPolicyStatus) error {
+	if !validRetentionPolicyStatuses[status] {
+		return fmt.Errorf("%w: invalid retention policy status", ErrInvalidState)
+	}
+	return nil
+}
+
+func ValidateRecoveryPointHoldRecordState(state HoldState) error {
+	if !validRecoveryPointHoldRecordStates[state] {
+		return fmt.Errorf("%w: invalid recovery point hold record state", ErrInvalidState)
+	}
+	return nil
+}
+
+func ValidateLifecycleOperation(operation LifecycleOperation) error {
+	if !validLifecycleOperations[operation] {
+		return fmt.Errorf("%w: invalid recovery point lifecycle operation", ErrInvalidState)
+	}
+	return nil
+}
+
+func ValidateSourceLifecycleRequest(request SourceLifecycleRequest) error {
+	if ValidateOpaqueID(request.RecoveryPointID) != nil || ValidateOpaqueID(request.LifecycleAttemptID) != nil ||
+		ValidateLifecycleOperation(request.Operation) != nil ||
+		request.Stage != SourceLifecyclePrepare && request.Stage != SourceLifecycleCleanup {
+		return fmt.Errorf("%w: invalid source lifecycle request", ErrInvalidState)
+	}
+	return nil
+}
+
+func ValidateLifecyclePhase(phase LifecyclePhase) error {
+	if !validLifecyclePhases[phase] {
+		return fmt.Errorf("%w: invalid recovery point lifecycle phase", ErrInvalidState)
+	}
+	return nil
+}
+
+func ValidateLifecycleBlockedReason(reason LifecycleBlockedReason) error {
+	if !validLifecycleBlockedReasons[reason] {
+		return fmt.Errorf("%w: invalid recovery point lifecycle blocked reason", ErrInvalidState)
+	}
+	return nil
+}
+
+func ValidateImportCandidateKind(kind ImportCandidateKind) error {
+	if !validImportCandidateKinds[kind] {
+		return fmt.Errorf("%w: invalid backup import candidate kind", ErrInvalidState)
+	}
+	return nil
+}
+
+func ValidateImportReviewState(state ImportReviewState) error {
+	if !validImportReviewStates[state] {
+		return fmt.Errorf("%w: invalid backup import review state", ErrInvalidState)
+	}
+	return nil
+}
+
+func ValidatePurgePlanStatus(status PurgePlanStatus) error {
+	if !validPurgePlanStatuses[status] {
+		return fmt.Errorf("%w: invalid backup asset purge plan status", ErrInvalidState)
+	}
+	return nil
+}
+
+func ValidateConfigImportEntityKind(kind ConfigImportEntityKind) error {
+	if !validConfigImportEntityKinds[kind] {
+		return fmt.Errorf("%w: invalid backup config import entity kind", ErrInvalidState)
 	}
 	return nil
 }
@@ -528,13 +755,34 @@ var (
 		VersionNativeSnapshot, VersionHardlinkTree, VersionFullCopyTree,
 		VersionVersionedPrefix, VersionNativeObjectVersions, VersionMutableHead,
 	)
-	validPointSemantics       = setOf(PointNativeSnapshot, PointXirangManifest, PointImportedBaseline, PointMutableHead)
-	validImmutabilityLevels   = setOf(ImmutabilityMutable, ImmutabilityXirangManaged, ImmutabilityBackendVersioned, ImmutabilityStorageWORM)
-	validPhysicalAvailability = setOf(PhysicalOnline, PhysicalOffline, PhysicalMissing, PhysicalUnknown)
-	validHoldStates           = setOf(HoldNone, HoldActive, HoldReleased)
-	validRetirementReasons    = setOf(RetirementCutover, RetirementWithdrawn)
-	validMutableStates        = setOf(RecoveryPointObserved, RecoveryPointRetired, RecoveryPointExpiring, RecoveryPointExpired, RecoveryPointPurgeBlocked)
-	validImmutableStates      = setOf(RecoveryPointPreparing, RecoveryPointVerifying, RecoveryPointCommitted, RecoveryPointDegraded, RecoveryPointExpiring, RecoveryPointExpired, RecoveryPointFailed, RecoveryPointPurgeBlocked)
+	validPointSemantics                = setOf(PointNativeSnapshot, PointXirangManifest, PointImportedBaseline, PointMutableHead)
+	validImmutabilityLevels            = setOf(ImmutabilityMutable, ImmutabilityXirangManaged, ImmutabilityBackendVersioned, ImmutabilityStorageWORM)
+	validPhysicalAvailability          = setOf(PhysicalOnline, PhysicalOffline, PhysicalMissing, PhysicalUnknown)
+	validHoldStates                    = setOf(HoldNone, HoldActive, HoldReleased)
+	validRetirementReasons             = setOf(RetirementCutover, RetirementWithdrawn)
+	validMutableStates                 = setOf(RecoveryPointObserved, RecoveryPointRetired, RecoveryPointExpiring, RecoveryPointExpired, RecoveryPointPurgeBlocked)
+	validImmutableStates               = setOf(RecoveryPointPreparing, RecoveryPointVerifying, RecoveryPointCommitted, RecoveryPointDegraded, RecoveryPointExpiring, RecoveryPointExpired, RecoveryPointFailed, RecoveryPointPurgeBlocked)
+	validRetentionPolicyScopeKinds     = setOf(RetentionPolicyScopeRepository, RetentionPolicyScopeTaskLink)
+	validRetentionPolicyStatuses       = setOf(RetentionPolicyActive, RetentionPolicyDeleted)
+	validRecoveryPointHoldTypes        = setOf(RecoveryPointHoldOperational, RecoveryPointHoldLegal)
+	validRecoveryPointHoldRecordStates = setOf(HoldActive, HoldReleased)
+	validLifecycleOperations           = setOf(LifecycleRetentionExpire, LifecycleExplicitPurge, LifecycleMutableRetire)
+	validLifecyclePhases               = setOf(
+		LifecyclePhaseSelected, LifecyclePhaseRevoking, LifecyclePhaseDraining, LifecyclePhaseCleaning,
+		LifecyclePhaseProviderDelete, LifecyclePhaseTombstoning, LifecyclePhaseBlocked, LifecyclePhaseComplete,
+	)
+	validImportCandidateKinds = setOf(
+		ImportCandidateNativeSnapshot, ImportCandidateXirangManifest, ImportCandidateImportedBaseline, ImportCandidateMutableHead,
+	)
+	validLifecycleBlockedReasons = setOf(
+		LifecycleBlockedActiveHold, LifecycleBlockedLeaseLive, LifecycleBlockedLeaseDrainUnproven,
+		LifecycleBlockedOwnerCleanupUnproven, LifecycleBlockedProviderWORM, LifecycleBlockedProviderUnavailable,
+		LifecycleBlockedProviderIdentityConflict, LifecycleBlockedProviderDeleteUnproven,
+		LifecycleBlockedDeletionUnavailable, LifecycleBlockedFenceLost,
+	)
+	validImportReviewStates      = setOf(ImportReviewPending, ImportReviewAccepted, ImportReviewRejected)
+	validPurgePlanStatuses       = setOf(PurgePlanReady, PurgePlanBound, PurgePlanExecuting, PurgePlanConsumed, PurgePlanInvalidated)
+	validConfigImportEntityKinds = setOf(ConfigImportRepository, ConfigImportTaskLink, ConfigImportRetentionPolicy, ConfigImportHold)
 )
 
 var validImmutableModeSemantics = map[[2]string]bool{
@@ -557,7 +805,7 @@ var validCapabilityCodes = setOf(
 	CapabilityPointNotCommitted,
 	CapabilityMutableSourceChanged, CapabilityCatalogUnavailable, CapabilitySequentialReadUnavailable,
 	CapabilityRangeUnavailable, CapabilityDownloadUnavailable, CapabilityRestoreUnavailable,
-	CapabilityDiffUnavailable,
+	CapabilityDeletionUnavailable, CapabilityDiffUnavailable,
 )
 
 var allowedCapabilityParams = map[string]bool{

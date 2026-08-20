@@ -142,6 +142,48 @@ func TestBrokerIssueRecoveryResultHoldsAuthorizationThroughGrantRegistration(t *
 	}
 }
 
+func TestBrokerShutdownStillWaitsForRecoveryResultIssue(t *testing.T) {
+	harness := newRecoveryBrokerTestHarness(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	harness.lease.acquire = func(ctx context.Context, _ backupasset.AcquireLeaseRequest) (backupasset.Lease, error) {
+		close(started)
+		select {
+		case <-release:
+			return backupasset.Lease{}, backupasset.ErrConflict
+		case <-ctx.Done():
+			return backupasset.Lease{}, ctx.Err()
+		}
+	}
+
+	issueDone := make(chan error, 1)
+	go func() {
+		_, err := harness.broker.Issue(context.Background(), harness.recoveryIssueRequest())
+		issueDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("RecoveryResult Issue did not reach lease acquisition")
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- harness.broker.Shutdown(context.Background()) }()
+	select {
+	case err := <-shutdownDone:
+		close(release)
+		t.Fatalf("Shutdown returned before the RecoveryResult Issue exited: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-issueDone; !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("RecoveryResult Issue error=%v, want ErrConflict", err)
+	}
+	if err := <-shutdownDone; err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
 func TestBrokerServeRecoveryResultReauthorizesBeforeSourceOpen(t *testing.T) {
 	harness := newRecoveryBrokerTestHarness(t)
 	ticket, err := harness.broker.Issue(context.Background(), harness.recoveryIssueRequest())
@@ -1716,6 +1758,7 @@ func newBrokerTestHarness(t *testing.T) *brokerTestHarness {
 	}
 	if err := db.AutoMigrate(
 		&model.BackupAssetDeliveryGrant{}, &model.BackupAssetDeliveryRequest{}, &model.BackupAssetDeliveryUsage{},
+		&model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -1728,6 +1771,14 @@ func newBrokerTestHarness(t *testing.T) *brokerTestHarness {
 		SourceFingerprint: "source-v1", EntryFingerprint: "entry-v1",
 		FingerprintStrength: "strong", Size: int64(len(pngPayload)), MediaType: "image/png", RangeProven: true,
 		Path: "/images/safe.png", Name: "safe.png",
+	}
+	observedAt := now.Add(-time.Hour)
+	if err := db.Create(&model.RecoveryPoint{
+		ID: asset.Ref.RecoveryPointID, RepositoryID: asset.RepositoryID,
+		Semantics: string(backupasset.PointNativeSnapshot), State: string(backupasset.RecoveryPointCommitted),
+		ObservedAt: &observedAt, PhysicalAvailability: string(backupasset.PhysicalOnline),
+	}).Error; err != nil {
+		t.Fatal(err)
 	}
 	materialBytes := append(bytes.Repeat([]byte{0x11}, 16), bytes.Repeat([]byte{0x22}, 16)...)
 	materialBytes = append(materialBytes, bytes.Repeat([]byte{0x33}, 32)...)
@@ -1776,6 +1827,7 @@ func (harness *brokerTestHarness) issueRequest() IssueRequest {
 type brokerAssetAuthorizerFake struct {
 	mu           sync.Mutex
 	asset        *AuthorizedAsset
+	authorize    func(backupasset.AssetRef) (AuthorizedAsset, error)
 	order        *[]string
 	reauthorized []AuthorizedAsset
 }
@@ -1919,7 +1971,12 @@ func (fake *brokerRecoveryResultSourceFake) OpenRecoveryResultSource(
 }
 
 func (fake *brokerAssetAuthorizerFake) Authorize(_ context.Context, _ DeliveryActor, ref backupasset.AssetRef, _ DeliveryAction) (AuthorizedAsset, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
 	*fake.order = append(*fake.order, "authorize")
+	if fake.authorize != nil {
+		return fake.authorize(ref)
+	}
 	if fake.asset == nil || fake.asset.Ref != ref {
 		return AuthorizedAsset{}, backupasset.ErrNotFound
 	}
@@ -1955,6 +2012,7 @@ type brokerLeaseControllerFake struct {
 	mu            sync.Mutex
 	now           time.Time
 	nowFn         func() time.Time
+	acquire       func(context.Context, backupasset.AcquireLeaseRequest) (backupasset.Lease, error)
 	order         *[]string
 	renewFences   []backupasset.LeaseFence
 	releaseFences []backupasset.LeaseFence
@@ -1962,8 +2020,15 @@ type brokerLeaseControllerFake struct {
 	renewed       chan struct{}
 }
 
-func (fake *brokerLeaseControllerFake) Acquire(_ context.Context, request backupasset.AcquireLeaseRequest) (backupasset.Lease, error) {
+func (fake *brokerLeaseControllerFake) Acquire(ctx context.Context, request backupasset.AcquireLeaseRequest) (backupasset.Lease, error) {
+	fake.mu.Lock()
 	*fake.order = append(*fake.order, "lease")
+	acquire := fake.acquire
+	now := fake.now
+	fake.mu.Unlock()
+	if acquire != nil {
+		return acquire(ctx, request)
+	}
 	fence := backupasset.LeaseFence{
 		LeaseID: request.OwnerID, RecoveryPointID: request.RecoveryPointID,
 		HolderType: request.HolderType, OwnerID: request.OwnerID,
@@ -1971,8 +2036,8 @@ func (fake *brokerLeaseControllerFake) Acquire(_ context.Context, request backup
 	}
 	return backupasset.Lease{
 		ID: fence.LeaseID, RecoveryPointID: request.RecoveryPointID, HolderType: request.HolderType,
-		OwnerID: request.OwnerID, Status: backupasset.LeaseActive, LeaseExpiresAt: fake.now.Add(5 * time.Minute),
-		AbsoluteDeadline: fake.now.Add(time.Hour), LastHeartbeatAt: fake.now, Fence: fence,
+		OwnerID: request.OwnerID, Status: backupasset.LeaseActive, LeaseExpiresAt: now.Add(5 * time.Minute),
+		AbsoluteDeadline: now.Add(time.Hour), LastHeartbeatAt: now, Fence: fence,
 	}, nil
 }
 
@@ -2257,6 +2322,7 @@ func (*blockingBrokerSourceReader) Close() error { return nil }
 func (*blockingBrokerSourceReader) ProviderBytes() int64 { return 0 }
 
 type brokerAuditFake struct {
+	mu     sync.Mutex
 	inputs []backupasset.AuditEventInput
 	err    error
 	order  *[]string
@@ -2416,6 +2482,8 @@ func (fake *brokerMetricsFake) snapshot() brokerMetricsSnapshot {
 }
 
 func (fake *brokerAuditFake) Write(_ context.Context, input backupasset.AuditEventInput) error {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
 	*fake.order = append(*fake.order, "audit")
 	fake.inputs = append(fake.inputs, input)
 	return fake.err
