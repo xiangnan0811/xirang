@@ -21,12 +21,12 @@
   "children": [],
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [
-    ".trellis/tasks/08-20-backup-assets-ga-hardening/prd.md",
-    ".trellis/tasks/08-20-backup-assets-ga-hardening/design.md",
-    ".trellis/tasks/08-20-backup-assets-ga-hardening/implement.md",
-    ".trellis/tasks/08-20-backup-assets-ga-hardening/research/current-main-evidence.md",
-    ".trellis/tasks/08-20-backup-assets-ga-hardening/research/review.md",
-    ".trellis/tasks/08-20-backup-assets-ga-hardening/research/red-green.md"
+    ".trellis/tasks/archive/2026-08/08-20-backup-assets-ga-hardening/prd.md",
+    ".trellis/tasks/archive/2026-08/08-20-backup-assets-ga-hardening/design.md",
+    ".trellis/tasks/archive/2026-08/08-20-backup-assets-ga-hardening/implement.md",
+    ".trellis/tasks/archive/2026-08/08-20-backup-assets-ga-hardening/research/current-main-evidence.md",
+    ".trellis/tasks/archive/2026-08/08-20-backup-assets-ga-hardening/research/review.md",
+    ".trellis/tasks/archive/2026-08/08-20-backup-assets-ga-hardening/research/red-green.md"
   ],
   "notes": "Child 15 Tasks 1-13 are complete. Feature PR #440 squash-merged as 2e1e98baf520961ffc511e6dc6c1cf6939c3a311 from work commits 638f9380e02fb963237707325935a49ff9728114 and aa4e8e30ac3c3785d3c595413983e63e4e348157. Required PR CI 32374486521 and exact-squash main CI 32377898099 both succeeded. Release Please 32377897976 opened #441 chore(main): release 0.50.0; GitHub Release and Docker Hub publish were not expected from #440 and did not run. Sync Docker Hub Description 32377897831 succeeded because README changed. backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. The parent remains planning; do not archive the parent in this child.",
   "meta": {
@@ -54,7 +54,9 @@
       "release_disposition": "0.50.0_pr_open_no_github_release_or_docker_publish_from_440_latest_remains_v0.49.1",
       "hub_description": "run_32377897831_success_readme_changed_expected",
       "code_default_enabled": false,
-      "worker_publish": "out_of_scope_not_triggered"
+      "worker_publish": "out_of_scope_not_triggered",
+      "archive_path": ".trellis/tasks/archive/2026-08/08-20-backup-assets-ga-hardening",
+      "archive_commit": "f213c99d75f156fdfb0ad86d61077cc00a55029e"
     }
   }
 }
