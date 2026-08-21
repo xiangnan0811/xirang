@@ -228,6 +228,28 @@ func TestAssetSearchOptionalProofFailureIsClosedBeforeSearchAndAudit(t *testing.
 	}
 }
 
+func TestAssetSearchAuditWriteFailureDoesNotReturnHits(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	searchSpy := &backupAssetSearchServiceSpy{response: assetsearch.SearchResponse{Items: []assetsearch.SearchHit{{
+		Asset: catalog.EntryDTO{Name: "leaked-hit.bin"},
+	}}}}
+	audit := &backupAssetAuditSpy{err: errors.New("audit sink down")}
+	handler := NewBackupAssetSearchHandler(searchSpy, &backupAssetSavedSearchUseSpy{}, audit, backupAssetHandlerConfigEnabled, nil)
+	router := backupAssetHandlerTestRouter()
+	router.POST("/asset-search", handler.Search)
+	body := `{"query":{"schema_version":1,"root":{"op":"term","field":"name","text":"secret.env"},"scope":{"mode":"current"},"sort":"relevance","limit":10}}`
+	request := httptest.NewRequest(http.MethodPost, "/asset-search", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || searchSpy.calls != 1 {
+		t.Fatalf("status=%d body=%s search=%d", response.Code, response.Body.String(), searchSpy.calls)
+	}
+	if strings.Contains(response.Body.String(), "leaked-hit.bin") {
+		t.Fatalf("audit failure leaked search hits: %s", response.Body.String())
+	}
+}
+
 func TestAssetSearchViewerRBACStopsSpyService(t *testing.T) {
 	searchSpy := &backupAssetSearchServiceSpy{}
 	handler := NewBackupAssetSearchHandler(searchSpy, &backupAssetSavedSearchUseSpy{}, nil, backupAssetHandlerConfigEnabled, nil)

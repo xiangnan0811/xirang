@@ -186,7 +186,7 @@ export function AssetPreview({
 
       <div
         data-testid="asset-preview-viewport"
-        className="flex h-[18rem] min-h-[18rem] max-h-[18rem] min-w-0 shrink-0 items-center justify-center overflow-auto bg-muted/20 p-3"
+        className="flex min-h-[24rem] min-w-0 flex-1 items-center justify-center overflow-auto bg-muted/20 p-3"
       >
         <PreviewBody
           asset={asset}

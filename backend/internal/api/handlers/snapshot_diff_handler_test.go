@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"xirang/backend/internal/backupasset/publication"
@@ -30,8 +29,8 @@ func TestSnapshotDiffResolvesOnlyCommittedFullIDs(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/tasks/%d/snapshots/diff?snap1=%s&snap2=%s", taskEntity.ID, left[:12], right[:12]), nil))
-	if response.Code != http.StatusOK || runner.calls != 1 || runner.left != left || runner.right != right || atomic.LoadInt32(&session.closed) != 1 {
-		t.Fatalf("exact diff status=%d calls=%d ids=%q/%q closes=%d body=%s", response.Code, runner.calls, runner.left, runner.right, atomic.LoadInt32(&session.closed), response.Body.String())
+	if response.Code != http.StatusGone || runner.calls != 0 {
+		t.Fatalf("retired diff status=%d calls=%d body=%s", response.Code, runner.calls, response.Body.String())
 	}
 }
 
@@ -42,8 +41,8 @@ func TestSnapshotDiffRejectsCrossTaskOrUnknownPrefixBeforeRunner(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/tasks/%d/snapshots/diff?snap1=%s&snap2=%s", taskEntity.ID, strings.Repeat("a", 12), strings.Repeat("b", 12)), nil))
-	if response.Code != http.StatusBadRequest || runner.calls != 0 {
-		t.Fatalf("unowned diff reference reached runner: status=%d calls=%d body=%s", response.Code, runner.calls, response.Body.String())
+	if response.Code != http.StatusGone || runner.calls != 0 {
+		t.Fatalf("retired diff reached runner: status=%d calls=%d body=%s", response.Code, runner.calls, response.Body.String())
 	}
 }
 
@@ -56,8 +55,8 @@ func TestSnapshotDiffRollbackSafeDisabledKeepsExactGuard(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/tasks/%d/snapshots/diff?snap1=%s&snap2=%s", taskEntity.ID, left[:12], right[:12]), nil))
-	if response.Code != http.StatusOK || runner.left != left || runner.right != right {
-		t.Fatalf("rollback-safe diff did not retain exact resolution: status=%d left=%q right=%q", response.Code, runner.left, runner.right)
+	if response.Code != http.StatusGone || runner.calls != 0 {
+		t.Fatalf("retired diff status=%d calls=%d body=%s", response.Code, runner.calls, response.Body.String())
 	}
 }
 

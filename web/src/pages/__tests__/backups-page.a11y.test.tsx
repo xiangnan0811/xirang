@@ -9,7 +9,6 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
-  afterAll,
   afterEach,
   beforeAll,
   describe,
@@ -67,7 +66,6 @@ import { BackupsRecoveryPage } from "../backups-page.recovery";
 import { BackupsPage } from "../backups-page";
 
 beforeAll(() => {
-  server.listen({ onUnhandledRequest: "error" });
   Object.defineProperties(HTMLElement.prototype, {
     getBoundingClientRect: {
       configurable: true,
@@ -98,8 +96,6 @@ afterEach(() => {
   window.localStorage.removeItem(BACKUP_ASSETS_PREFERENCES_KEY);
   document.documentElement.style.removeProperty("font-size");
 });
-
-afterAll(() => server.close());
 
 describe("Backups routes accessibility", () => {
   it("keeps overview and recovery route panels axe-clean", async () => {

@@ -5,7 +5,9 @@ import "@testing-library/jest-dom/vitest";
 // 2. 上游 extend-expect.d.ts 只 augment `Vi` namespace，与 vitest 4 的 `@vitest/expect#Matchers` 不匹配；
 //    因此 TypeScript 类型扩展放在 `src/types/vitest-axe.d.ts`（被 tsconfig include）。
 import * as axeMatchers from "vitest-axe/matchers";
-import { expect } from "vitest";
+import { afterAll, afterEach, beforeAll, expect } from "vitest";
+
+import { server } from "@/test/mocks/server";
 expect.extend(axeMatchers);
 
 function createMemoryStorage(): Storage {
@@ -88,12 +90,43 @@ if (typeof globalThis !== "undefined" && !("ResizeObserver" in globalThis)) {
   });
 }
 
-// MSW (Mock Service Worker) server is available for opt-in use in tests via:
-//   import { server } from "@/test/mocks/server";
-//   beforeAll(() => server.listen());
-//   afterEach(() => server.resetHandlers());
-//   afterAll(() => server.close());
-// Not enabled globally to avoid conflicts with existing fetch-mock tests.
+beforeAll(() => {
+  server.listen({ onUnhandledRequest: "error" });
+});
+afterEach(() => {
+  server.resetHandlers();
+});
+afterAll(() => {
+  server.close();
+});
+
+const consoleAllowlist: RegExp[] = [
+  /Warning:/,
+  /Not implemented:/,
+  /not wrapped in act/,
+  /The current testing environment is not configured to support act/,
+  /Error: Could not parse CSS stylesheet/,
+  /React does not recognize the `.*` prop on a DOM element/,
+  /The width\(0\) and height\(0\) of chart should be greater than 0/,
+  /The above error occurred in the /,
+  /Consider adding an error boundary/,
+  /React will try to recreate this component tree/,
+];
+
+function installConsoleGate(method: "error" | "warn") {
+  const original = console[method].bind(console);
+  console[method] = (...args: unknown[]) => {
+    const text = args.map((value) => String(value)).join(" ");
+    if (consoleAllowlist.some((pattern) => pattern.test(text))) {
+      original(...args);
+      return;
+    }
+    throw new Error(`unexpected console.${method}: ${text}`);
+  };
+}
+
+installConsoleGate("error");
+installConsoleGate("warn");
 
 if (typeof window !== "undefined" && !window.matchMedia) {
   Object.defineProperty(window, "matchMedia", {

@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "NODE_ENV=test vitest run --coverage"
+    "test": "NODE_ENV=test vitest run --coverage",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",
@@ -46,6 +47,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@playwright/test": "^1.55.1",
     "@tailwindcss/postcss": "^4.3.2",
     "@testing-library/jest-dom": "^6.8.0",
     "@testing-library/react": "^16.3.0",
@@ -70,5 +72,8 @@
     "vite": "^7.3.1",
     "vitest": "^4.0.18",
     "vitest-axe": "^0.1.0"
+  },
+  "overrides": {
+    "nanoid": "3.3.18"
   }
 }

@@ -193,12 +193,8 @@ describe("AssetPreview", () => {
       <AssetPreview {...props} resource={{ status: "idle", value: null }} />
     );
 
-    expect(screen.getByTestId("asset-preview-viewport")).toHaveClass(
-      "h-[18rem]",
-      "min-h-[18rem]",
-      "max-h-[18rem]",
-      "shrink-0"
-    );
+    expect(screen.getByTestId("asset-preview-viewport")).toHaveClass("min-h-[24rem]", "flex-1");
+    expect(screen.getByTestId("asset-preview-viewport")).not.toHaveClass("h-[18rem]", "max-h-[18rem]");
 
     rendered.rerender(
       <AssetPreview
@@ -724,7 +720,7 @@ describe("AssetPreview", () => {
     expect(frame).not.toHaveAttribute("srcdoc");
     const viewport = screen.getByTestId("asset-preview-viewport");
     expect(viewport.querySelector("script, svg")).not.toBeInTheDocument();
-    expect(viewport).toHaveClass("min-h-[18rem]");
+    expect(viewport).toHaveClass("min-h-[24rem]");
   });
 
   it("uses safe native elements for raster, PDF, audio, video, and metadata/hex", () => {

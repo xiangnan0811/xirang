@@ -15003,26 +15003,14 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
                     },
-                    "404": {
-                        "description": "Not Found",
+                    "410": {
+                        "description": "Gone",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -15069,26 +15057,14 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
                     },
-                    "404": {
-                        "description": "Not Found",
+                    "410": {
+                        "description": "Gone",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -15128,20 +15104,14 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK",
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
                     },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
+                    "410": {
+                        "description": "Gone",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -15187,26 +15157,14 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
                     },
-                    "404": {
-                        "description": "Not Found",
+                    "410": {
+                        "description": "Gone",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -15272,6 +15230,12 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }

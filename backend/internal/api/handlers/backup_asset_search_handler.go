@@ -194,9 +194,15 @@ func (handler *BackupAssetSearchHandler) Search(c *gin.Context) {
 		return
 	}
 	if savedSearchUsed {
-		handler.writeTypedAudit(c, backupasset.AuditActionSavedSearchUse, backupasset.AuditOutcomeSuccess, "", 0)
+		if err := handler.writeTypedAudit(c, backupasset.AuditActionSavedSearchUse, backupasset.AuditOutcomeSuccess, "", 0); err != nil {
+			respondServiceUnavailable(c, "备份资产审计暂不可用")
+			return
+		}
 	}
-	handler.writeSearchAudit(c, canonical.JSON, proof, backupasset.AuditOutcomeSuccess, "", int64(len(result.Items)))
+	if err := handler.writeSearchAudit(c, canonical.JSON, proof, backupasset.AuditOutcomeSuccess, "", int64(len(result.Items))); err != nil {
+		respondServiceUnavailable(c, "备份资产审计暂不可用")
+		return
+	}
 	respondOK(c, result)
 }
 
@@ -243,7 +249,7 @@ func (handler *BackupAssetSearchHandler) writeSearchAudit(
 	outcome backupasset.AuditOutcome,
 	failureCode string,
 	itemCount int64,
-) {
+) error {
 	input := backupAssetAuditInput(c, backupasset.AuditActionAssetSearch)
 	input.Outcome = outcome
 	input.FailureCode = failureCode
@@ -253,24 +259,26 @@ func (handler *BackupAssetSearchHandler) writeSearchAudit(
 		input.StepUpAction = string(auth.StepUpActionAssetSecretReveal)
 		input.StepUpProofID = proof.ID
 	}
-	handler.writeAudit(c, input)
+	return handler.writeAudit(c, input)
 }
 
-func (handler *BackupAssetSearchHandler) writeTypedAudit(c *gin.Context, action backupasset.AuditAction, outcome backupasset.AuditOutcome, failureCode string, count int64) {
+func (handler *BackupAssetSearchHandler) writeTypedAudit(c *gin.Context, action backupasset.AuditAction, outcome backupasset.AuditOutcome, failureCode string, count int64) error {
 	input := backupAssetAuditInput(c, action)
 	input.Outcome = outcome
 	input.FailureCode = failureCode
 	input.ItemCount = count
-	handler.writeAudit(c, input)
+	return handler.writeAudit(c, input)
 }
 
-func (handler *BackupAssetSearchHandler) writeAudit(c *gin.Context, input backupasset.AuditEventInput) {
+func (handler *BackupAssetSearchHandler) writeAudit(c *gin.Context, input backupasset.AuditEventInput) error {
 	if handler == nil || handler.audit == nil {
-		return
+		return errors.New("备份资产搜索审计不可用")
 	}
 	if err := handler.audit.Write(c.Request.Context(), input); err != nil {
 		logger.Module("backup_asset_search_handler").Warn().Str("action", string(input.Action)).Msg("备份资产搜索审计写入失败")
+		return err
 	}
+	return nil
 }
 
 func searchOverlayFailureCode(err error) string {

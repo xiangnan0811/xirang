@@ -131,6 +131,25 @@ func TestRespondPaginated(t *testing.T) {
 	}
 }
 
+func TestRespondGone(t *testing.T) {
+	r := setupTestRouter(func(c *gin.Context) {
+		respondGone(c, "遗留快照浏览接口已退役，请使用备份资产目录与搜索")
+	})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/test", nil))
+
+	if w.Code != http.StatusGone {
+		t.Fatalf("期望状态码 410，实际 %d", w.Code)
+	}
+	var resp Response
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("JSON 解析失败: %v", err)
+	}
+	if resp.Code != http.StatusGone || !strings.Contains(resp.Message, "备份资产") || resp.Data != nil {
+		t.Fatalf("410 响应不符合预期: %+v", resp)
+	}
+}
+
 func TestRespondCreated(t *testing.T) {
 	r := setupTestRouter(func(c *gin.Context) {
 		respondCreated(c, gin.H{"id": 42})

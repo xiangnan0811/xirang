@@ -57,6 +57,7 @@ export default defineConfig(({ mode }) => ({
     globals: true,
     css: true,
     testTimeout: 15_000,
+    exclude: ["**/node_modules/**", "**/dist/**", "**/e2e/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],

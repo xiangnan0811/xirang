@@ -178,6 +178,10 @@ func runtimeBackupAssetHandlerConfigSource(runtime *backupruntime.Runtime) handl
 		if runtime == nil || runtime.FoundationService() == nil {
 			return handlers.BackupAssetHandlerConfig{}, fmt.Errorf("backup asset runtime config is unavailable")
 		}
+		live, err := runtime.FeatureLive()
+		if err != nil {
+			return handlers.BackupAssetHandlerConfig{}, err
+		}
 		searchConfig, overlayConfig, err := runtime.FoundationService().SearchOverlayConfig()
 		if err != nil {
 			return handlers.BackupAssetHandlerConfig{}, err
@@ -186,7 +190,7 @@ func runtimeBackupAssetHandlerConfigSource(runtime *backupruntime.Runtime) handl
 			return handlers.BackupAssetHandlerConfig{}, fmt.Errorf("backup asset handler feature snapshot is inconsistent")
 		}
 		return handlers.BackupAssetHandlerConfig{
-			Enabled: searchConfig.Enabled,
+			Enabled: live,
 			QueryLimits: assetsearch.QueryLimits{
 				MaxBodyBytes: searchConfig.BodyMaxBytes, MaxDepth: searchConfig.ASTMaxDepth,
 				MaxNodes: searchConfig.ASTMaxNodes, MaxValuesPerNode: searchConfig.ValuesPerNode,
@@ -344,6 +348,9 @@ func NewRouter(dep Dependencies) *gin.Engine {
 		featureTransitioner = dep.BackupAssets.FeatureTransitioner()
 	}
 	snapshotHandler := handlers.NewSnapshotHandler(dep.DB, lineageGuard, dep.LegacyResticSnapshots)
+	if dep.BackupAssets != nil {
+		snapshotHandler = snapshotHandler.WithFeatureLive(dep.BackupAssets.FeatureLive)
+	}
 	snapshotDiffHandler := handlers.NewSnapshotDiffHandler(dep.DB, lineageGuard, dep.SnapshotDiffRunner)
 	snapshotSearchHandler := handlers.NewSnapshotSearchHandler(dep.DB, lineageGuard, dep.SnapshotIndexer)
 	configHandler := handlers.NewConfigHandler(dep.DB, dep.SettingsService).WithBackupAssetTransitioner(featureTransitioner)

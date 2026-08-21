@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "FeatureLive, leftover HTTP, handler Enabled, and audit fail-closed contracts"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Admin-only reveal, proof reuse, list/grid keys, projection fail-closed"}
+{"file": ".trellis/spec/guides/documentation-truth-guide.md", "reason": "Docs, Swagger, parent version truth, and support-matrix honesty"}
+{"file": ".trellis/tasks/08-21-backup-assets-review-closeout/research/review-2026-08-21.md", "reason": "Authoritative post-v0.50.1 finding list for Child 17"}
+{"file": ".trellis/tasks/08-21-backup-assets-review-closeout/research/risk-ledger.md", "reason": "Status ledger that implementers must update from evidence"}

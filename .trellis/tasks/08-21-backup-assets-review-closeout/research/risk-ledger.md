@@ -1,0 +1,20 @@
+# Risk ledger — backup assets (Child 17 authority)
+
+Supersedes parent-scattered review notes and Child 16 “ready to ship” canvases for closeout status. Update status only from code/test evidence.
+
+| ID | Severity | Status | Summary | Code evidence | Test evidence | Owner | Blocker / waiver | Target |
+|---|---|---|---|---|---|---|---|---|
+| R-P0-legacy-read | P0 | closed | Leftover snapshot read HTTP is 410 for every authenticated role | `snapshot_legacy.go`, `snapshot_*_handler.go`, `docs/admin/backup-recovery.md` | `legacy_snapshot_http_test.go`, handler 410 tests | weibo | — | Child 17 |
+| R-P0-legacy-restore | P0 | closed | Old restore requires FeatureLive on top of Admin + step-up | `SnapshotHandler.WithFeatureLive`, router wiring | `TestSnapshotRestoreRequiresFeatureLive`, `TestFullRouterSnapshotRestoreLiveAndStepUpMatrix` | weibo | — | Child 17 |
+| R-P1-enable-atomic | P1 | closed | `TransitionFeature(true)` starts search; failure rolls back persist | `runtime.go` `startSearchAfterEnable` | `TestTransitionFeatureStartsSearchWithoutStartupPass`, `TestTransitionFeatureSearchFailureDoesNotPersist` | weibo | Worker still optional | Child 17 |
+| R-P1-handler-requested | P1 | closed | Handler Enabled uses `Runtime.FeatureLive()` even when search config is requested | `router.go` `runtimeBackupAssetHandlerConfigSource` | `TestRuntimeBackupAssetHandlerConfigSourceRequestedTrueLiveFalse`, `TestRequestedTrueFeatureLiveFalseClosesCatalogSearchOverlayContentHTTP`, `TestRequestedTrueFeatureLiveFalseClosesProductionCatalogAndContentHTTP` | weibo | Content ticket config has no Enabled flag; broker FeatureLive is the door | Child 17 |
+| R-P1-acceptance | P1 | open | No bound production acceptance record | parent still planning | `acceptance-protocol.md` `not_executed` | Alan + weibo | Blocks parent archive | Child 17 protocol + Alan walkthrough |
+| R-P1-ci-soft | P1 | closed-with-limits | Race + coverage floor + high audit/govulncheck + global MSW error + Playwright path | `.github/workflows/ci.yml`, `vitest.setup.ts`, `web/e2e/backup-assets-gate.spec.ts` | `research/local-gates.md`: race/coverage 73.4%/npm check/govulncheck/audit PASS; chromium+firefox e2e PASS; WebKit host libs FAIL; PR CI still pending | weibo | Codecov upload still non-blocking; WebKit proof is Ubuntu CI | Child 17 |
+| R-P1-scale-cloud | P1 | closed-with-limits | CI runs 10k catalog + zip-bomb + SIGKILL reconcile; million-catalog is the same 10k owner; literal million is not-executed | `scripts/test-backup-asset-load.sh`, `docs/admin/backup-assets-load.md` | `TestCatalogPaginatesTenThousandCommittedEntries`, `TestControlledProcessSIGKILLThenRestartReconciles` | weibo | AWS stays unsupported until live; million-catalog-full refuses | Child 17 |
+| R-P1-search-audit | P1 | closed | Successful search fails closed if audit write fails | `backup_asset_search_handler.go` | `TestAssetSearchAuditWriteFailureDoesNotReturnHits` | weibo | — | Child 17 |
+| R-P2-f7-renew | P2 | closed | Preview renew reuses in-session Admin proof; token/asset change re-proves | `use-backup-assets-state.ts` | renew reuse + logout token + asset-change tests | weibo | — | Child 17 |
+| R-P2-preview-chrome | P2 | closed | Preview pane `min-h-[24rem]`; Restic unproven Range stays none; list keys use `assetRefKey` | `asset-preview.tsx`, `asset-list.tsx`, `broker.go` | preview tests + `TestResticUnprovenRangeIssuesRangeNone` | weibo | 206 only when RangeProven | Child 17 |
+| R-P2-doc-truth | P2 | closed | Parent notes say v0.50.1; Child 17 is active closeout | parent `task.json` | file content | weibo | Parent stays planning | Child 17 |
+| R-LOCK-code-default | lock | closed | CodeDefault false | settings registry | Child 16+ | weibo | Do not flip | standing |
+| R-LOCK-worker | lock | closed | Worker unpublished | `publish-images.yml` | Child 16+ | weibo | Do not publish | standing |
+| R-LOCK-wide-ga | lock | closed | Wide GA No-Go | FeatureLive + default off | n/a | Alan | Independent Go required | standing |

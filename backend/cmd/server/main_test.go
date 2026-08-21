@@ -105,6 +105,7 @@ func TestMainConstructsOneJWTManagerBeforeContentRuntimeAndReusesIt(t *testing.T
 		"settingsSvc := settings.NewService(db)",
 		"jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTTTL)",
 		"jwtManager.SetDB(db)",
+		"alertDispatcher.BackupAssetSLORules()",
 		"assetRuntime, err := backupruntime.New(",
 		"SessionRevocations: jwtManager",
 		"authService := auth.NewService(db, jwtManager, settingsSvc",

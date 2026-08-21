@@ -30,6 +30,34 @@ import (
 
 var brokerTestDBSequence atomic.Uint64
 
+func TestBrokerIssueClosedWhenFeatureLiveFalse(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	budget, err := NewBudgetService(BudgetDependencies{
+		DB: harness.db, Now: func() time.Time { return harness.now },
+		Limits: func(context.Context) (BudgetLimits, error) { return testBudgetLimits(), nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed, err := NewBroker(BrokerDependencies{
+		DB: harness.db, Now: func() time.Time { return harness.now },
+		FeatureEnabled: func(context.Context) (bool, error) { return false, nil },
+		Authorize:      harness.authorizer, Session: brokerSessionValidatorFake{}, Lease: harness.lease, Source: harness.source,
+		Audit: harness.audit, Budget: budget, Metrics: harness.metrics,
+		TicketMaterial: func() (TicketMaterial, error) { return harness.material, nil },
+		Config:         func(context.Context) (BrokerConfig, error) { return testBrokerConfig(), nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, issueErr := closed.Issue(context.Background(), harness.issueRequest()); !errors.Is(issueErr, ErrContentFeatureDisabled) {
+		t.Fatalf("FeatureLive=false issue err=%v", issueErr)
+	}
+	if len(harness.authorizer.reauthorized) != 0 {
+		t.Fatalf("disabled issue reached authorizer: %+v", harness.authorizer.reauthorized)
+	}
+}
+
 func TestBrokerIssueOrdersAuthorizationLeaseSourceAuditBeforeCookieActivation(t *testing.T) {
 	harness := newBrokerTestHarness(t)
 	ticket, err := harness.broker.Issue(context.Background(), harness.issueRequest())
@@ -1400,6 +1428,19 @@ func TestBrokerServeSingleRangeAndMalformedRangeAccounting(t *testing.T) {
 	}
 	if harness.source.openCalls != openCalls {
 		t.Fatalf("duplicate cookie opened source: %d -> %d", openCalls, harness.source.openCalls)
+	}
+}
+
+func TestResticUnprovenRangeIssuesRangeNone(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	harness.asset.RangeProven = false
+	harness.asset.Provider = backupasset.ProviderRestic
+	ticket, err := harness.broker.Issue(context.Background(), harness.issueRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ticket.Descriptor.Range != RangeNone {
+		t.Fatalf("restic without proven Range leaked policy %q", ticket.Descriptor.Range)
 	}
 }
 

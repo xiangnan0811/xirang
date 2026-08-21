@@ -140,7 +140,7 @@ export function AssetList({
             const selected = selectedKeys.has(key);
             return (
               <div
-                key={virtualRow.key}
+                key={key}
                 ref={(node) => {
                   if (node) itemRefs.current.set(virtualRow.index, node);
                   else itemRefs.current.delete(virtualRow.index);

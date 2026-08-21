@@ -355,6 +355,7 @@ export function useBackupAssetsState({
   const overlayPendingRef = useRef<string | null>(null);
   const activePreviewRef = useRef<BackupAsset | null>(null);
   const secretRevealProofRef = useRef<string | null>(null);
+  const secretRevealProofOwnerRef = useRef<string | null>(null);
   const selectionGenerationRef = useRef(state.selectionGeneration);
   const routeRepairRef = useRef(onRouteRepair);
   selectionGenerationRef.current = state.selectionGeneration;
@@ -364,6 +365,11 @@ export function useBackupAssetsState({
   useEffect(() => {
     dispatch({ type: "route_changed", route: routeRef.current.value });
   }, [routeKey]);
+
+  useEffect(() => {
+    secretRevealProofRef.current = null;
+    secretRevealProofOwnerRef.current = null;
+  }, [token, role]);
 
   const refreshRepositories = useCallback(() => {
     if (!token) {
@@ -1240,11 +1246,19 @@ export function useBackupAssetsState({
         (error) => {
           const mapped = mapBackupAssetsError(error, "content_ticket");
           if (
+            mapped.code === "secret_reveal_required" &&
+            product.stepUpProof !== undefined &&
+            secretRevealProofRef.current === product.stepUpProof
+          ) {
+            secretRevealProofRef.current = null;
+            secretRevealProofOwnerRef.current = null;
+          }
+          if (
             options?.revealOnce &&
             mapped.code === "secret_reveal_required" &&
             role === "admin" &&
             ensureStepUpProof &&
-            product.stepUpProof === undefined
+            (product.stepUpProof === undefined || secretRevealProofRef.current === null)
           ) {
             const capturedGeneration = selectionGenerationRef.current;
             void ensureStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, {
@@ -1254,6 +1268,11 @@ export function useBackupAssetsState({
               .then((proof) => {
                 if (selectionGenerationRef.current !== capturedGeneration) return;
                 secretRevealProofRef.current = proof;
+                secretRevealProofOwnerRef.current = [
+                  selectedAsset.ref.recoveryPointId,
+                  selectedAsset.ref.entryId,
+                  product.action,
+                ].join(":");
                 issueContentTicket(selectedAsset, { ...product, stepUpProof: proof });
               })
               .catch(() => {
@@ -1282,13 +1301,34 @@ export function useBackupAssetsState({
     [ensureStepUpProof, role, runLatest, token]
   );
 
+  const previewTicketInput = useCallback((selectedAsset: BackupAsset) => {
+    const product = selectBackupAssetPreviewProduct(selectedAsset);
+    const ownerKey = [selectedAsset.ref.recoveryPointId, selectedAsset.ref.entryId, "preview"].join(":");
+    const cachedProof =
+      secretRevealProofRef.current !== null && secretRevealProofOwnerRef.current === ownerKey
+        ? secretRevealProofRef.current
+        : undefined;
+    return {
+      product: {
+        action: "preview" as const,
+        ...product,
+        ...(cachedProof === undefined ? {} : { stepUpProof: cachedProof }),
+      },
+    };
+  }, []);
+
   const loadPreview = useCallback(
     (selectedAsset: BackupAsset) => {
-      const product = selectBackupAssetPreviewProduct(selectedAsset);
       activePreviewRef.current = selectedAsset;
-      issueContentTicket(selectedAsset, { action: "preview", ...product }, { revealOnce: true });
+      const ownerKey = [selectedAsset.ref.recoveryPointId, selectedAsset.ref.entryId, "preview"].join(":");
+      if (secretRevealProofOwnerRef.current !== null && secretRevealProofOwnerRef.current !== ownerKey) {
+        secretRevealProofRef.current = null;
+        secretRevealProofOwnerRef.current = null;
+      }
+      const { product } = previewTicketInput(selectedAsset);
+      issueContentTicket(selectedAsset, product, { revealOnce: true });
     },
-    [issueContentTicket]
+    [issueContentTicket, previewTicketInput]
   );
 
   const renewPreview = useCallback(() => {
@@ -1302,8 +1342,9 @@ export function useBackupAssetsState({
       activePreviewRef.current = null;
       return;
     }
-    loadPreview(selectedAsset);
-  }, [loadPreview]);
+    const { product } = previewTicketInput(selectedAsset);
+    issueContentTicket(selectedAsset, product, { revealOnce: false });
+  }, [issueContentTicket, previewTicketInput]);
 
   const prepareDownload = useCallback(
     (selectedAsset: BackupAsset) => {

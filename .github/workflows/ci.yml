@@ -58,6 +58,12 @@ jobs:
       - name: Run backend tests
         run: go test -coverprofile=coverage.out ./...
 
+      - name: Race backup-asset packages
+        run: go test -race ./internal/backupasset/... ./internal/api/handlers/ -count=1
+
+      - name: Backup-asset coverage floor
+        run: bash ../scripts/check-backupasset-coverage.sh
+
       - name: Check backend coverage
         continue-on-error: true
         run: |
@@ -74,8 +80,11 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Check Go vulnerabilities
-        continue-on-error: true
         run: govulncheck ./...
+
+      - name: Backup-asset load contract
+        working-directory: .
+        run: BACKUP_ASSET_LOAD_LOCAL=ci-bounded bash scripts/test-backup-asset-load.sh
 
       - name: Upload backend coverage
         if: always()
@@ -173,11 +182,16 @@ jobs:
         run: env -u NODE_ENV npm ci
 
       - name: Check npm vulnerabilities
-        continue-on-error: true
-        run: env -u NODE_ENV npm audit --audit-level=moderate
+        run: bash ../scripts/check-npm-audit.sh
 
       - name: Run frontend check
         run: env -u NODE_ENV npm run check
+
+      - name: Install Playwright browsers
+        run: env -u NODE_ENV npx playwright install --with-deps chromium firefox webkit
+
+      - name: Run backup-asset Playwright matrix
+        run: env -u NODE_ENV npm run e2e
 
       - name: Check frontend bundle budget
         # Requires dist/ produced by 'npm run check' (which includes build)

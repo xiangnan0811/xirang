@@ -34,19 +34,20 @@
     "07-28-backup-assets-controlled-recovery",
     "08-17-backup-assets-lifecycle-reconnect",
     "08-20-backup-assets-ga-hardening",
-    "08-21-backup-assets-closeout"
+    "08-21-backup-assets-closeout",
+    "08-21-backup-assets-review-closeout"
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Children 1–16 archived. Child 16 closeout is 08-21-backup-assets-closeout (PR #444). Formal public release remains v0.50.0 until a later release-please cut. backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. Parent remains planning; parent-final-acceptance is not authorized.",
+  "notes": "Children 1–16 archived. Child 16 closeout is 08-21-backup-assets-closeout (PR #444, v0.50.1). Formal public release is v0.50.1. Child 17 (08-21-backup-assets-review-closeout) is the active closeout. backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. Parent remains planning; parent-final-acceptance is not authorized.",
   "meta": {
     "program_delivery": {
       "delivered": 16,
-      "planned": 16,
-      "percent": 100.0,
-      "instantiated_children": 16,
+      "planned": 17,
+      "percent": 94.1,
+      "instantiated_children": 17,
       "archived_children": 16,
-      "active_child": null,
+      "active_child": "08-21-backup-assets-review-closeout",
       "uninstantiated_children": []
     },
     "task_7_checkpoint_delivery": {

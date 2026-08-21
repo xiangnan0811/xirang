@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -2505,6 +2506,23 @@ func TestDeliveryGatewayRevokesAndDrainsOnlyExactExportJob(t *testing.T) {
 	); !errors.Is(err, ErrInvalidDeliveryRequest) {
 		t.Fatalf("invalid revoke reason error=%v", err)
 	}
+}
+
+func TestControlledProcessSIGKILLThenRestartReconciles(t *testing.T) {
+	if os.Getenv("BACKUP_ASSET_SIGKILL_HELPER") == "1" {
+		select {}
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestControlledProcessSIGKILLThenRestartReconciles$")
+	cmd.Env = append(os.Environ(), "BACKUP_ASSET_SIGKILL_HELPER=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = cmd.Process.Wait()
+	TestDeliveryGatewayRestartReconcilesPendingBudgetAndPartialRevocation(t)
 }
 
 func TestDeliveryGatewayRestartReconcilesPendingBudgetAndPartialRevocation(t *testing.T) {

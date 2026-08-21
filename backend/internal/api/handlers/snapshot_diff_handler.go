@@ -63,66 +63,11 @@ var snapshotIDPattern = regexp.MustCompile(`^[a-fA-F0-9]{4,64}$`)
 // @Param        id     path      int     true  "任务 ID"
 // @Param        snap1  query     string  true  "快照 ID 1"
 // @Param        snap2  query     string  true  "快照 ID 2"
-// @Success      200  {object}  handlers.Response
-// @Failure      400  {object}  handlers.Response
+// @Success      410  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
-// @Failure      404  {object}  handlers.Response
 // @Router       /tasks/{id}/snapshots/diff [get]
 func (h *SnapshotDiffHandler) Diff(c *gin.Context) {
-	taskID, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-
-	snap1 := strings.TrimSpace(c.Query("snap1"))
-	snap2 := strings.TrimSpace(c.Query("snap2"))
-	if snap1 == "" || snap2 == "" {
-		respondBadRequest(c, "缺少 snap1 或 snap2 参数")
-		return
-	}
-	if !snapshotIDPattern.MatchString(snap1) || !snapshotIDPattern.MatchString(snap2) {
-		respondBadRequest(c, "快照 ID 格式无效")
-		return
-	}
-
-	var task model.Task
-	if err := h.db.Preload("Node").Preload("Node.SSHKey").First(&task, taskID).Error; err != nil {
-		respondNotFound(c, "任务不存在")
-		return
-	}
-	if task.ExecutorType != "restic" {
-		respondBadRequest(c, "仅 restic 类型任务支持快照比较")
-		return
-	}
-
-	if h.guard == nil || h.runner == nil {
-		respondServiceUnavailable(c, "备份资产运行时不可用")
-		return
-	}
-	session, err := h.guard.Begin(c.Request.Context(), task.ID, publication.OperationLegacyDiff)
-	if err != nil {
-		respondForbidden(c, "快照比较当前不可用")
-		return
-	}
-	defer func() { _ = session.Close() }()
-	left, err := resolveLineageSnapshotID(session, snap1)
-	if err != nil {
-		respondBadRequest(c, "snap1 不属于当前任务")
-		return
-	}
-	right, err := resolveLineageSnapshotID(session, snap2)
-	if err != nil {
-		respondBadRequest(c, "snap2 不属于当前任务")
-		return
-	}
-	output, err := h.runner.RunSnapshotDiff(c.Request.Context(), task, left, right)
-	if err != nil {
-		respondInternalError(c, err)
-		return
-	}
-
-	result := parseDiffOutput(output, left, right)
-	respondOK(c, result)
+	respondLegacySnapshotReadRetired(c)
 }
 
 // parseDiffOutput 解析 restic diff 的文本输出。

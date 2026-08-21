@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify 410, FeatureLive handlers, atomic enablement, audit fail-closed"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Verify F7 proof reuse and preview/list contracts"}
+{"file": ".trellis/spec/guides/documentation-truth-guide.md", "reason": "Verify admin docs, Swagger, AWS matrix, parent notes"}
+{"file": ".trellis/tasks/08-21-backup-assets-review-closeout/research/review-2026-08-21.md", "reason": "Every review finding must map to evidence or an explicit waiver"}
+{"file": ".trellis/tasks/08-21-backup-assets-review-closeout/research/risk-ledger.md", "reason": "Ledger status must match the branch, not intent"}
+{"file": ".trellis/tasks/08-21-backup-assets-review-closeout/research/acceptance-protocol.md", "reason": "Production walkthrough remains not_executed unless Alan filled it"}
