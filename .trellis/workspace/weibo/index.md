@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 44
-- **Last Active**: 2026-08-20
+- **Total Sessions**: 45
+- **Last Active**: 2026-08-21
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1775 | Active |
+| `journal-1.md` | ~1799 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 45 | 2026-08-21 | Backup assets closeout Wave 1–2 | `982c7bda`, `82390a6d`, `e618dce9`, `42f9d5bd` | `feat/backup-assets-closeout` |
 | 44 | 2026-08-20 | Child 15 GA hardening delivery | `638f9380e02fb963237707325935a49ff9728114`, `aa4e8e30ac3c3785d3c595413983e63e4e348157`, `2e1e98baf520961ffc511e6dc6c1cf6939c3a311` | `chore/archive-child15-ga-hardening` |
 | 43 | 2026-08-20 | Child 14 delivery and 0.49.1 release | `a303abd08f47c52977036d12e1dfdab540283ee3`, `43a8d067f92dae37ba583f8348fd7441a073d0f9` | `chore/child14-postmerge-truth` |
 | 42 | 2026-08-20 | Child 14 lifecycle reconnect Trellis close | `a080f5b2d13c2c9341212f84d14737302aa77caf` | `codex/backup-assets-lifecycle-reconnect` |

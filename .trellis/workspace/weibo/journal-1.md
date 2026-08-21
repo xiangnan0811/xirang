@@ -1773,3 +1773,27 @@ Squash-merged Child 15 GA enablement (#440 / 2e1e98b). Exact-squash main CI and 
 ### Next Steps
 
 - Do not archive the parent until Alan gives an explicit parent-final-acceptance instruction. Leave release PR #441 unmerged unless instructed. Keep backup_assets.enabled CodeDefault false.
+
+
+## Session 45: Backup assets closeout Wave 1–2
+
+**Date**: 2026-08-21
+**Task**: Backup assets closeout Wave 1–2
+**Branch**: `feat/backup-assets-closeout`
+
+### Summary
+
+Closed the requested-vs-live enablement split, Admin-only secret reveal, and visible all-retained version counts. Re-review 2 passed; PR #444. Child 16 archived. Parent stays planning.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `982c7bda` | (see git log) |
+| `82390a6d` | (see git log) |
+| `e618dce9` | (see git log) |
+| `42f9d5bd` | (see git log) |
+
+### Status
+
+[OK] **Completed**
