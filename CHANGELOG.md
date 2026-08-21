@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.50.1](https://github.com/xiangnan0811/xirang/compare/v0.50.0...v0.50.1) (2026-08-21)
+
+
+### 🐛 Bug Fixes
+
+* **backup-assets:** close live-gate, secret-reveal, and version-count gaps ([#444](https://github.com/xiangnan0811/xirang/issues/444)) ([6509d98](https://github.com/xiangnan0811/xirang/commit/6509d9858fe1bf73469c549618a8d5100fbbf390))
+
 ## [0.50.0](https://github.com/xiangnan0811/xirang/compare/v0.49.1...v0.50.0) (2026-08-20)
 
 
