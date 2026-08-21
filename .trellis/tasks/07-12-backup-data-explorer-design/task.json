@@ -37,7 +37,7 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Program delivery is 15/15 children instantiated and archived after Child 15 squash 2e1e98baf520961ffc511e6dc6c1cf6939c3a311 (PR #440). Exact-squash main CI 32377898099 and Release Please 32377897976 succeeded; #441 chore(main): release 0.50.0 is open and was not merged here. GitHub Release and Docker Hub publish were not expected from #440; latest public release remains v0.49.1. Sync Docker Hub Description 32377897831 succeeded. backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. This parent remains planning until an explicit parent-final-acceptance instruction.",
+  "notes": "Program delivery is 15/15 children instantiated and archived. Child 15 squash is 2e1e98baf520961ffc511e6dc6c1cf6939c3a311 (PR #440). Release PR #441 squash-merged as 1750a2384d9db9f33a2c10d1f5ee59b3ee93ed10 and published GitHub Release v0.50.0 plus Docker Hub linnea7171/xirang:0.50.0 (Publish Docker Images 32430922852). backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. Parent remains planning: external review has not started, so parent-final-acceptance is not authorized. Pre-review closeout lives in research/external-review-brief.md and research/pre-review-ux-security-walkthrough.md.",
   "meta": {
     "program_delivery": {
       "delivered": 15,
@@ -179,8 +179,11 @@
       "squash_commit": "2e1e98baf520961ffc511e6dc6c1cf6939c3a311",
       "post_merge": "exact_squash_main_ci_32377898099_and_release_please_32377897976_success",
       "release_pr": "https://github.com/xiangnan0811/xirang/pull/441",
-      "release_disposition": "0.50.0_pr_open_no_github_release_or_docker_publish_from_440_latest_remains_v0.49.1",
-      "hub_description": "run_32377897831_success_readme_changed_expected",
+      "release_disposition": "0.50.0_published_github_release_and_docker_32430922852_latest_is_v0.50.0",
+      "release_commit": "1750a2384d9db9f33a2c10d1f5ee59b3ee93ed10",
+      "github_release_v0_50_0": "https://github.com/xiangnan0811/xirang/releases/tag/v0.50.0",
+      "docker_v0_50_0": "run_32430922852_success_amd64_arm64_and_manifest",
+      "hub_description": "run_32377897831_success_on_440_readme_changed_not_rerun_on_441",
       "archive_path": ".trellis/tasks/archive/2026-08/08-20-backup-assets-ga-hardening",
       "archive_commit": "f213c99d75f156fdfb0ad86d61077cc00a55029e",
       "completed_at": "2026-08-20",
@@ -188,7 +191,7 @@
       "program_delivery": "15_of_15",
       "backup_assets_enabled_default": false,
       "worker_publish": "out_of_scope_not_triggered",
-      "boundary": "parent_planning_awaiting_explicit_parent_final_acceptance"
+      "boundary": "parent_planning_external_review_not_started_no_parent_final_acceptance"
     },
     "r0_execution_rebaseline": {
       "date": "2026-08-02",
