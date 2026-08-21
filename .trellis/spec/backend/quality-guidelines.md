@@ -1324,12 +1324,21 @@ db := newRetentionTestDB(t) // enableRetentionTestEncryption inside
 
 - Compose inside `backupasset/runtime`; do not edit
   `backend/cmd/server/main.go` for GA wiring.
+- `FoundationService.FeatureEnabled()` is the **requested** setting
+  (DB > env > CodeDefault). Product planes inject `Runtime.FeatureLive()`:
+  requested AND `ga.EvaluateEnablement(snapshot) == nil`. Readiness errors
+  fail closed. Blocked / ack-required returns `(false, nil)`.
+- `AdmissionController.Initialize()` always starts `disabledMode`.
+  `InitializeManaged()` is only for `StartupPass` after authorize succeeds.
 - `InventoryService.DryRun` classifies Tasks / links / non-secret identity /
   managed-history latches. `ProviderMutationSurface` is composed as
   `forbiddenGAMutations` and must not be invoked.
 - `composeGAReadiness` uses `ValidateBackupAssetFoundationConfig` and
   `Keyring.EnsureRequiredDomains`. A non-empty export-root string is not
   readiness.
+- Content ticket issue and search verify reject `asset.secret_reveal`
+  unless the actor role is `admin`. `POST /auth/step-up` has no
+  action-role allowlist and is not that door.
 
 #### 3. Contracts
 
@@ -1349,7 +1358,9 @@ db := newRetentionTestDB(t) // enableRetentionTestEncryption inside
 | Condition | Expected result |
 |---|---|
 | DryRun on a linked Restic Task | Candidate or conflict row; Provider bytes unchanged. |
-| `AdmissionController.Initialize` called alone with FeatureEnabled | Still treats enabled as managed; production must authorize first. |
+| `AdmissionController.Initialize` called alone with requested true | Stays disabled / unmanaged. Never `AdmissionManaged`. |
+| env `BACKUP_ASSETS_ENABLED=true` without ack | Core boots; Catalog / Search / Overlay / Content stay closed (`FeatureLive` false). |
+| Operator sends a valid `asset.secret_reveal` proof | Ticket issue and search verify return forbidden. |
 | Publish workflow lists `xirang-asset-worker` | Reject; no-publish contract broken. |
 | CodeDefault changed from `"false"` | Reject unless a later PRD amends it. |
 
@@ -1357,13 +1368,16 @@ db := newRetentionTestDB(t) // enableRetentionTestEncryption inside
 
 - Good: settings PUT blocked returns 409 and leaves admission uninitialized.
 - Base: Core boots with CodeDefault false and unpublished Worker.
-- Bad: env `BACKUP_ASSETS_ENABLED=true` skipping `EvaluateEnablement`, or
-  inventory importing Provider bytes.
+- Bad: Catalog/Search/Content calling `FeatureEnabled` instead of
+  `FeatureLive`, or inventory importing Provider bytes.
 
 #### 6. Tests Required
 
 - `TestInventoryDryRunClassifiesProvidersWithoutProviderMutation`.
 - Runtime startup blocked-enablement and stamp tests.
+- `FeatureLive` requested-true-without-ack is false; Catalog/Search/Content
+  inject that predicate.
+- Non-admin `asset.secret_reveal` is forbidden on ticket issue and search.
 - `TestBackupAssetsEnabledCodeDefaultRemainsFalse`.
 - Compose `check-compose-config` export-volume isolation.
 
@@ -1372,18 +1386,23 @@ db := newRetentionTestDB(t) // enableRetentionTestEncryption inside
 Wrong:
 
 ```go
-_ = runtime.admission.Initialize(ctx) // FeatureEnabled becomes managed
+_ = runtime.admission.Initialize(ctx) // requested true used to become managed
+catalog.FeatureEnabled = foundation.FeatureEnabled
 ```
 
 Correct:
 
 ```go
+if err := runtime.admission.InitializeDisabled(ctx); err != nil {
+    return err
+}
 if err := runtime.authorizeRequestedStartupEnablement(ctx); err != nil {
     return err
 }
-if err := runtime.admission.Initialize(ctx); err != nil {
+if err := runtime.admission.InitializeManaged(ctx); err != nil {
     return err
 }
+catalog.FeatureEnabled = runtime.FeatureLive
 ```
 
 ---

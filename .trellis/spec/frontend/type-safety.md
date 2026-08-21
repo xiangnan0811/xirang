@@ -1026,6 +1026,14 @@ return { mode, encryptionProfile, kmsKeyStatus, kmsReadKeyCount: kmsCount };
   `capabilities.content=true`. `permissions.secret_reveal=false` does not by
   itself invalidate a non-secret content hit; the server owns classification
   and proof evaluation.
+- Invalid `retained_version_count` (missing-when-present, `0`, negative,
+  non-integer) blocks the whole search projection. Valid counts (`>= 1`)
+  map to `retainedVersionCount` on the hit and must survive the result-row
+  mapper so all-retained search can show them.
+- Secret-reveal preview retry is Admin-only (`role === "admin"` and
+  `ensureStepUpProof`). Presence of the helper is not enough. The same
+  session proof is attached to every `search` call (first page, load-more,
+  saved-search reload) and never put in the URL.
 - Inline AST and saved-search use stay in the POST body. Query text, path,
   selection, result, and saved AST are not persisted to local/session storage
   or encoded into URLs; only an opaque saved-search ID may be URL-safe later.
@@ -1044,6 +1052,8 @@ return { mode, encryptionProfile, kmsKeyStatus, kmsReadKeyCount: kmsCount };
 | Hit ref differs from the nested Catalog asset ref | Block the whole projection. |
 | Content hit/snippet/suggestion while content capability is false | Block the whole projection. |
 | Content capability true, secret reveal false, server returns a content hit | Preserve it as a valid non-secret server-authorized hit. |
+| `retained_version_count` is `0` or non-integer | Block the whole search projection. |
+| Operator preview gets `secret_reveal_required` | Stay blocked; do not call `ensureStepUpProof`. |
 | Unknown overlay state/reason/version product | Block the whole overlay projection. |
 | Saved-search ID is not opaque 32-hex | Reject before calling `request()`. |
 

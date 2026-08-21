@@ -74,19 +74,19 @@ Wave 1 合入 **不是** 本 Child 归档条件。复审若有问题：在本 Ch
 
 ### Wave 1（当前终审）
 
-- [ ] AC1 env `BACKUP_ASSETS_ENABLED=true` 且现有安装未 ack：Core 启动成功；Catalog/Search/content/admission 全部保持关闭（自动化测试）。
-- [ ] AC2 设置界面启用未就绪的现有安装仍 409。
-- [ ] AC3 Admin 完成 `asset.secret_reveal` 后可以预览被标为 secret 的条目；无 proof 仍被拒；Operator 不能揭示（即使页面传入了 `ensureStepUpProof`，前端不弹 step-up、不重试票据；后端拒绝 Operator 的 secret-reveal proof）。Admin 揭示后的搜索翻页 / 已保存搜索刷新仍携带同一 proof。
-- [ ] AC4 同一路径存在多个保留恢复点时，全历史搜索命中在结果行上可见保留版本计数；版本检查器能列出并打开其它点。
-- [ ] AC5 切换原地恢复在创建计划前有确认；Worker 缺失和 capability 失败在主预览区可见，且不误报成功。
-- [ ] AC6 Ack 审计日志的 `conflicts` 等于当次库存计数；`Initialize()` 在未授权的 requested-true 下不会进入 managed。
-- [ ] AC7 CodeDefault 仍为 `"false"`；`publish-images.yml` 无 Worker；父任务仍为 `planning`。
-- [ ] AC7b 工作分支复审无误之后，才提交 / 开 PR。复审未通过或未做，不得合入。
+- [x] AC1 env `BACKUP_ASSETS_ENABLED=true` 且现有安装未 ack：Core 启动成功；Catalog/Search/content/admission 全部保持关闭（自动化测试）。
+- [x] AC2 设置界面启用未就绪的现有安装仍 409。
+- [x] AC3 Admin 完成 `asset.secret_reveal` 后可以预览被标为 secret 的条目；无 proof 仍被拒；Operator 不能揭示（即使页面传入了 `ensureStepUpProof`，前端不弹 step-up、不重试票据；后端拒绝 Operator 的 secret-reveal proof）。Admin 揭示后的搜索翻页 / 已保存搜索刷新仍携带同一 proof。
+- [x] AC4 同一路径存在多个保留恢复点时，全历史搜索命中在结果行上可见保留版本计数；版本检查器能列出并打开其它点。
+- [x] AC5 切换原地恢复在创建计划前有确认；Worker 缺失和 capability 失败在主预览区可见，且不误报成功。
+- [x] AC6 Ack 审计日志的 `conflicts` 等于当次库存计数；`Initialize()` 在未授权的 requested-true 下不会进入 managed。
+- [x] AC7 CodeDefault 仍为 `"false"`；`publish-images.yml` 无 Worker；父任务仍为 `planning`。
+- [x] AC7b 工作分支复审无误之后，才提交 / 开 PR。复审未通过或未做，不得合入。
 
 ### 本 Child 关闭（后置，需 Alan 明示）
 
-- [ ] AC8 至少完成一轮 Wave 1 之后的外部复审；新增问题已在本 Child 修完或被 Alan 明确推迟。
-- [ ] AC9 Alan 明确要求归档本 Child。归档本 Child 仍不等于归档父任务。
+- [x] AC8 至少完成一轮 Wave 1 之后的外部复审；新增问题已在本 Child 修完或被 Alan 明确推迟。
+- [x] AC9 Alan 明确要求归档本 Child。归档本 Child 仍不等于归档父任务。
 
 ## Out of scope
 
