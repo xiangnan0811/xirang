@@ -1797,3 +1797,39 @@ Closed the requested-vs-live enablement split, Admin-only secret reveal, and vis
 ### Status
 
 [OK] **Completed**
+
+
+## Session 46: Child 17 review closeout delivery
+
+**Date**: 2026-08-21
+**Task**: Child 17 review closeout delivery
+**Branch**: `chore/backup-assets-child17-bookkeeping`
+
+### Summary
+
+Merged PR #446 and released v0.50.2. Archived Child 17. Parent stays planning; production walkthrough not_executed; GitHub review pending.
+
+### Main Changes
+
+- Squash-merged leftover snapshot 410 / review closeout gates as #446 (c732bc61)
+- Merged Release Please 0.50.2 as #447 (9f059b0b); GitHub Release and Docker Hub publish succeeded
+- Archived Child 17; parent notes now 17/17 children with parent still planning
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c732bc61` | (see git log) |
+| `9f059b0b` | (see git log) |
+
+### Testing
+
+- [OK] PR CI 32472402947 and exact-squash main CI 32475595990 green; Docker publish 32478196001 amd64+arm64+manifest green
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Do not archive the parent. Production walkthrough stays not_executed. Alan will review v0.50.2 on GitHub.

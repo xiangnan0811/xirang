@@ -7,10 +7,10 @@ Fill this from a real walkthrough. Do not invent values. Parent archive stays No
 | Field | Value |
 |---|---|
 | Child | `08-21-backup-assets-review-closeout` |
-| Git SHA | _pending_ |
-| GitHub Release | _pending (not v0.50.1 unless that is the walked image)_ |
-| Image | `docker.io/linnea7171/xirang:<tag>` |
-| Image digest | _pending_ |
+| Git SHA | `9f059b0b3283825b41462c76ea42259a2d9ab9dc` (published review target; not walkthrough evidence) |
+| GitHub Release | [v0.50.2](https://github.com/xiangnan0811/xirang/releases/tag/v0.50.2) |
+| Image | `docker.io/linnea7171/xirang:v0.50.2` |
+| Image digest | _pending (publish run 32478196001 succeeded; digest not copied from logs)_ |
 | DB engine | _pending (expect existing production SQLite or recorded engine)_ |
 | Provider mode | Core-only / Portable rclone / Native AWS (Native AWS is unsupported until live suite) |
 | Browser | _pending_ |

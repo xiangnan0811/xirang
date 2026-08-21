@@ -39,16 +39,40 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Children 1–16 archived. Child 16 closeout is 08-21-backup-assets-closeout (PR #444, v0.50.1). Formal public release is v0.50.1. Child 17 (08-21-backup-assets-review-closeout) is the active closeout. backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. Parent remains planning; parent-final-acceptance is not authorized.",
+  "notes": "Children 1–17 archived. Child 17 closeout is 08-21-backup-assets-review-closeout (PR #446, v0.50.2). Formal public release is v0.50.2. backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. Production walkthrough is not_executed. Parent remains planning; parent-final-acceptance is not authorized. External GitHub review of v0.50.2 is pending.",
   "meta": {
     "program_delivery": {
-      "delivered": 16,
+      "delivered": 17,
       "planned": 17,
-      "percent": 94.1,
+      "percent": 100,
       "instantiated_children": 17,
-      "archived_children": 16,
-      "active_child": "08-21-backup-assets-review-closeout",
+      "archived_children": 17,
+      "active_child": null,
       "uninstantiated_children": []
+    },
+    "child_17_delivery": {
+      "status": "complete_checked_archived_released_parent_planning",
+      "feature_pr": "https://github.com/xiangnan0811/xirang/pull/446",
+      "work_commits": [
+        "6570520ce8b200214db45c3053dfc0116fe3292e",
+        "8e0cca681b8be0dcb436f3c5d37ef0a7cabfeeae",
+        "4f671bd91ac955b9d2cbd15c784466bfac2be2ef"
+      ],
+      "required_ci": "run_32472402947_success_all_required_checks_green_including_webkit",
+      "squash_commit": "c732bc61a8e2934412f83983e60f121afecfe638",
+      "post_merge": "exact_squash_main_ci_32475595990_and_release_please_32475595993_success",
+      "release_pr": "https://github.com/xiangnan0811/xirang/pull/447",
+      "release_commit": "9f059b0b3283825b41462c76ea42259a2d9ab9dc",
+      "github_release_v0_50_2": "https://github.com/xiangnan0811/xirang/releases/tag/v0.50.2",
+      "docker_v0_50_2": "run_32478196001_success_amd64_arm64_and_manifest",
+      "post_release": "exact_release_ci_32478184563_and_release_please_32478184567_success",
+      "hub_description": "not_run_readme_unchanged_not_expected",
+      "archive_path": ".trellis/tasks/archive/2026-08/08-21-backup-assets-review-closeout",
+      "completed_at": "2026-08-21",
+      "production_walkthrough": "not_executed",
+      "backup_assets_enabled_default": false,
+      "worker_publish": "out_of_scope_not_triggered",
+      "boundary": "parent_planning_github_review_pending_no_parent_final_acceptance"
     },
     "task_7_checkpoint_delivery": {
       "status": "delivered_merged_post_merge_observed_pending_bookkeeping_pr",

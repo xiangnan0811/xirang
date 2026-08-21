@@ -1,0 +1,49 @@
+{
+  "id": "backup-assets-review-closeout",
+  "name": "backup-assets-review-closeout",
+  "title": "备份资产审查全量收口",
+  "description": "v0.50.1 终审全量收口：封旧 snapshot 旁路、原子启用、审计、CI、验收台账。父任务继续 planning。",
+  "status": "completed",
+  "dev_type": null,
+  "scope": "backup-assets",
+  "package": null,
+  "priority": "P0",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-08-21",
+  "completedAt": "2026-08-21",
+  "branch": "feat/backup-assets-review-closeout",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": "c732bc61a8e2934412f83983e60f121afecfe638",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/446",
+  "subtasks": [],
+  "children": [],
+  "parent": "07-12-backup-data-explorer-design",
+  "relatedFiles": [],
+  "notes": "Feature PR #446 squash-merged as c732bc61. Required PR CI 32472402947 all required checks green including Ubuntu WebKit. Exact-squash main CI 32475595990 success. Release Please opened #447 chore(main): release 0.50.2; squash-merged as 9f059b0b. GitHub Release v0.50.2 published. Docker Hub publish 32478196001 succeeded (amd64, arm64, manifest). Sync Docker Hub Description not expected (README unchanged) and did not run. backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. Production walkthrough remains not_executed. Parent remains planning; do not archive the parent. External GitHub review of v0.50.2 is pending.",
+  "meta": {
+    "code_default_enabled": false,
+    "worker_publish": "out_of_scope",
+    "parent_archive": "forbidden",
+    "production_walkthrough": "not_executed",
+    "delivery": {
+      "status": "complete_checked_archived_released",
+      "feature_pr": "https://github.com/xiangnan0811/xirang/pull/446",
+      "work_commits": [
+        "6570520ce8b200214db45c3053dfc0116fe3292e",
+        "8e0cca681b8be0dcb436f3c5d37ef0a7cabfeeae",
+        "4f671bd91ac955b9d2cbd15c784466bfac2be2ef"
+      ],
+      "required_ci": "run_32472402947_success_all_required_checks_green_including_webkit",
+      "squash_commit": "c732bc61a8e2934412f83983e60f121afecfe638",
+      "post_merge": "exact_squash_main_ci_32475595990_and_release_please_32475595993_success",
+      "release_pr": "https://github.com/xiangnan0811/xirang/pull/447",
+      "release_commit": "9f059b0b3283825b41462c76ea42259a2d9ab9dc",
+      "github_release_v0_50_2": "https://github.com/xiangnan0811/xirang/releases/tag/v0.50.2",
+      "docker_v0_50_2": "run_32478196001_success_amd64_arm64_and_manifest",
+      "post_release": "exact_release_ci_32478184563_and_release_please_32478184567_success",
+      "hub_description": "not_run_readme_unchanged_not_expected"
+    }
+  }
+}
