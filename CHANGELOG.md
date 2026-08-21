@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.50.2](https://github.com/xiangnan0811/xirang/compare/v0.50.1...v0.50.2) (2026-08-21)
+
+
+### 🐛 Bug Fixes
+
+* **backup-assets:** close leftover snapshot reads and review closeout gates ([#446](https://github.com/xiangnan0811/xirang/issues/446)) ([c732bc6](https://github.com/xiangnan0811/xirang/commit/c732bc61a8e2934412f83983e60f121afecfe638))
+
 ## [0.50.1](https://github.com/xiangnan0811/xirang/compare/v0.50.0...v0.50.1) (2026-08-21)
 
 
