@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -752,7 +753,7 @@ func TestMissingOrLostKeyFailsClosedWithoutRegeneration(t *testing.T) {
 }
 
 func TestConcurrentEnsureCreatesOneActiveKeyPerDomain(t *testing.T) {
-	ring, _ := newKeyringTestHarness(t)
+	ring, _ := newKeyringConcurrentTestHarness(t)
 	ctx := context.Background()
 	const goroutines = 12
 	results := make(chan DomainKeyMaterial, goroutines)
@@ -819,13 +820,24 @@ func (clock *keyringTestClock) Advance(duration time.Duration) {
 
 func newKeyringTestHarness(t *testing.T) (*Keyring, *keyringTestClock) {
 	t.Helper()
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_busy_timeout=30000&_txlock=immediate&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	return newKeyringTestHarnessWithDSN(t, dsn)
+}
+
+func newKeyringConcurrentTestHarness(t *testing.T) (*Keyring, *keyringTestClock) {
+	t.Helper()
+	dsn := filepath.Join(t.TempDir(), "keyring.db") + "?_journal_mode=WAL&_busy_timeout=30000&_txlock=immediate&_loc=UTC"
+	return newKeyringTestHarnessWithDSN(t, dsn)
+}
+
+func newKeyringTestHarnessWithDSN(t *testing.T, dsn string) (*Keyring, *keyringTestClock) {
+	t.Helper()
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_KEYRING_OLD_KEK_FOR_TEST_ONLY")
 	t.Setenv("DATA_ENCRYPTION_LEGACY_KEY", "")
 	secure.ResetForTesting()
 	t.Cleanup(secure.ResetForTesting)
 
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_busy_timeout=5000&_txlock=immediate&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{NowFunc: func() time.Time { return time.Now().UTC() }})
 	if err != nil {
 		t.Fatalf("open keyring database: %v", err)

@@ -98,7 +98,7 @@ func (keyring *Keyring) Ensure(ctx context.Context, domain KeyDomain) (DomainKey
 	}
 
 	var lastErr error
-	for attempt := 0; attempt < 12; attempt++ {
+	for attempt := 0; attempt < 20; attempt++ {
 		var created model.WrappedDomainKey
 		err := keyring.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			rows, err := loadDomainKeyRows(tx, domain, true)
@@ -144,7 +144,7 @@ func (keyring *Keyring) Ensure(ctx context.Context, domain KeyDomain) (DomainKey
 		if !retryableKeyringConflict(err) {
 			return DomainKeyMaterial{}, fmt.Errorf("ensure domain key: %w", err)
 		}
-		delay := time.Duration(attempt+1) * time.Millisecond
+		delay := time.Duration(attempt+1) * 25 * time.Millisecond
 		select {
 		case <-ctx.Done():
 			return DomainKeyMaterial{}, fmt.Errorf("ensure domain key: %w", ctx.Err())
