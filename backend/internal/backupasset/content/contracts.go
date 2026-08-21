@@ -12,6 +12,7 @@ import (
 var (
 	ErrInvalidDeliveryResource = errors.New("invalid delivery resource")
 	ErrInvalidDeliveryProduct  = errors.New("invalid delivery product")
+	ErrSecretRevealRequired    = errors.New("secret reveal required")
 	ErrInvalidDeliveryState    = errors.New("invalid delivery state")
 	ErrInvalidDeliveryCookie   = errors.New("invalid delivery cookie")
 )

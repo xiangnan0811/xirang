@@ -277,7 +277,7 @@ type backupRetentionPurgeExecutePayload struct {
 // @Security     Bearer
 // @Produce      json
 // @Param        limit   query     int     false  "每页数量"
-// @Param        cursor  query     string  false  "签名游标"
+// @Param        cursor  query     string  false  "未签名策略 ID 游标"
 // @Success      200     {object}  handlers.Response{data=BackupRetentionPolicyPage}
 // @Failure      400     {object}  handlers.Response
 // @Failure      401     {object}  handlers.Response

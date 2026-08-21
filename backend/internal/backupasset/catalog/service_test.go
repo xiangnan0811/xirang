@@ -243,6 +243,60 @@ func seedCatalogServiceGeneration(
 	return generation
 }
 
+func TestCatalogListEntryVersionsUsesLineageAndOmitsPaths(t *testing.T) {
+	db, _ := openCatalogBehaviorSQLite(t)
+	now := time.Date(2026, 7, 17, 13, 0, 0, 0, time.UTC)
+	fixture := seedCatalogOwnershipFixture(t, db, now)
+	ownedGeneration := seedCatalogServiceGeneration(t, db, fixture.ownedPointID, 1, true, GenerationComplete, now)
+	unlinkedGeneration := seedCatalogServiceGeneration(t, db, fixture.unlinkedPointID, 1, true, GenerationComplete, now)
+	ownedFile := seedCatalogServiceEntry(t, db, ownedGeneration, strings.Repeat("b", 64), nil, "docs/report.txt", "report.txt", backupasset.CatalogEntryFile, 42, now)
+	seedCatalogServiceEntry(t, db, unlinkedGeneration, strings.Repeat("c", 64), nil, "docs/report.txt", "report.txt", backupasset.CatalogEntryFile, 7, now)
+
+	var owned model.RecoveryPoint
+	if err := db.Where("id = ?", fixture.ownedPointID).First(&owned).Error; err != nil {
+		t.Fatal(err)
+	}
+	newerNow := now.Add(2 * time.Hour)
+	newerRun := seedCatalogOwnershipRun(t, db, *owned.ProducingTaskID, newerNow)
+	ownedLineage, err := backupasset.DecodePublicationLineage(owned.LineageJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newerPoint := owned
+	newerPoint.ID = fmt.Sprintf("%032x", 18)
+	newerPoint.ProducingTaskRunID = &newerRun.ID
+	newerPoint.LineageJSON = catalogOwnershipLineage(t, *owned.ProducingTaskID, newerRun.ID, ownedLineage.TaskRepositoryLinkID, newerNow)
+	newerPoint.CapturedAt = &newerNow
+	newerPoint.CommittedAt = &newerNow
+	newerPoint.SourceFingerprint = fmt.Sprintf("%064x", 18)
+	newerPoint.CreatedAt = newerNow
+	newerPoint.UpdatedAt = newerNow
+	if err := db.Create(&newerPoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	newerGeneration := seedCatalogServiceGeneration(t, db, newerPoint.ID, 1, true, GenerationComplete, newerNow)
+	newerFile := seedCatalogServiceEntry(t, db, newerGeneration, strings.Repeat("e", 64), nil, "docs/report.txt", "report.txt", backupasset.CatalogEntryFile, 50, newerNow)
+
+	service := newCatalogServiceForTest(t, db, now)
+	page, err := service.ListEntryVersions(context.Background(), fixture.ownedPointID, ownedFile.EntryID, AuthorizationScope{Role: "operator", UserID: fixture.operatorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 2 || page.Items[0].EntryID != newerFile.EntryID || page.Items[1].EntryID != ownedFile.EntryID {
+		t.Fatalf("versions=%+v", page.Items)
+	}
+	payload, err := json.Marshal(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(payload)
+	for _, forbidden := range []string{"docs/report.txt", "normalized_path", "provider_locator", fixture.unlinkedPointID} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("versions leaked %q: %s", forbidden, body)
+		}
+	}
+}
+
 func seedCatalogServiceEntry(
 	t *testing.T,
 	db *gorm.DB,

@@ -45,11 +45,21 @@ func (controller *AdmissionController) Initialize(ctx context.Context) error {
 	if controller == nil {
 		return fmt.Errorf("%w: admission controller is unavailable", backupasset.ErrInvalidState)
 	}
-	target, err := controller.initialMode(ctx)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	target, err := controller.disabledMode(ctx)
 	if err != nil {
 		return err
 	}
 	return controller.initializeTo(target)
+}
+
+func (controller *AdmissionController) InitializeManaged(_ context.Context) error {
+	if controller == nil {
+		return fmt.Errorf("%w: admission controller is unavailable", backupasset.ErrInvalidState)
+	}
+	return controller.initializeTo(publication.AdmissionManaged)
 }
 
 func (controller *AdmissionController) InitializeDisabled(ctx context.Context) error {
@@ -147,28 +157,6 @@ func (controller *AdmissionController) StopAccepting() {
 	if initialized {
 		controller.barrier.stopAccepting()
 	}
-}
-
-func (controller *AdmissionController) initialMode(ctx context.Context) (publication.AdmissionMode, error) {
-	enabled, err := controller.foundation.FeatureEnabled()
-	if err != nil {
-		return "", err
-	}
-	history, err := controller.history.HasInstallationManagedHistory(ctx)
-	if err != nil {
-		return "", err
-	}
-	lease, err := controller.history.HasActivePublicationLease(ctx)
-	if err != nil {
-		return "", err
-	}
-	if enabled {
-		return publication.AdmissionManaged, nil
-	}
-	if history || lease {
-		return publication.AdmissionRollbackSafe, nil
-	}
-	return publication.AdmissionPristineLegacy, nil
 }
 
 func (controller *AdmissionController) disabledMode(ctx context.Context) (publication.AdmissionMode, error) {

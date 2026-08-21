@@ -123,6 +123,25 @@ describe("RecoveryPlanWizard", () => {
     expect(screen.getByTestId("recovery-announcement")).toHaveAttribute("aria-live", "polite");
   });
 
+  it("requires an extra confirmation before creating an in-place recovery plan", async () => {
+    const user = userEvent.setup();
+    const recovery = controller(recoveryState());
+    render(<RecoveryPlanWizard open recovery={recovery} onOpenChange={vi.fn()} />);
+
+    await user.selectOptions(screen.getByLabelText(/Target mode|目标模式/), "in_place");
+    await user.clear(screen.getByLabelText(/Target node|目标节点/));
+    await user.type(screen.getByLabelText(/Target node|目标节点/), "9");
+    await user.type(screen.getByLabelText(/Target root|目标根/), "safe-root");
+    await user.click(screen.getByRole("button", { name: /Create recovery plan|创建恢复计划/ }));
+
+    expect(recovery.createPlan).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: /Confirm in-place plan|确认创建原位计划/ }));
+    expect(recovery.setTarget).toHaveBeenCalledWith({
+      targetMode: "in_place", targetNodeId: 9, targetRootId: "safe-root", conflictPolicy: "fail_on_conflict",
+    });
+    expect(recovery.createPlan).toHaveBeenCalledTimes(1);
+  });
+
   it("RecoveryReviewF2 never exposes override for a non-overridable finding and requires its own confirmation otherwise", async () => {
     const blocked = controller(recoveryState({ phase: "security", plan, preflight }));
     const rendered = render(<RecoveryPlanWizard open recovery={blocked} onOpenChange={vi.fn()} />);

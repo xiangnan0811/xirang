@@ -35,6 +35,7 @@ type BackupAssetCatalogService interface {
 	GetEvidence(context.Context, string, catalog.AuthorizationScope) (catalog.EvidenceDTO, error)
 	ListEntries(context.Context, string, catalog.AuthorizationScope, catalog.EntryListRequest) (catalog.EntryPage, error)
 	GetEntry(context.Context, string, string, catalog.AuthorizationScope) (catalog.EntryDTO, error)
+	ListEntryVersions(context.Context, string, string, catalog.AuthorizationScope) (catalog.EntryVersionPage, error)
 	Diff(context.Context, catalog.AuthorizationScope, catalog.DiffRequest) (catalog.DiffPage, error)
 }
 
@@ -81,6 +82,10 @@ func (featureDisabledBackupAssetCatalogService) ListEntries(context.Context, str
 
 func (featureDisabledBackupAssetCatalogService) GetEntry(context.Context, string, string, catalog.AuthorizationScope) (catalog.EntryDTO, error) {
 	return catalog.EntryDTO{}, catalog.ErrFeatureDisabled
+}
+
+func (featureDisabledBackupAssetCatalogService) ListEntryVersions(context.Context, string, string, catalog.AuthorizationScope) (catalog.EntryVersionPage, error) {
+	return catalog.EntryVersionPage{}, catalog.ErrFeatureDisabled
 }
 
 func (featureDisabledBackupAssetCatalogService) Diff(context.Context, catalog.AuthorizationScope, catalog.DiffRequest) (catalog.DiffPage, error) {
@@ -325,6 +330,42 @@ func (handler *BackupAssetHandler) GetEntry(c *gin.Context) {
 		return
 	}
 	result, err := handler.service.GetEntry(c.Request.Context(), pointID, entryID, backupAssetAuthorizationScope(c))
+	handler.finish(c, audit, result, err)
+}
+
+// ListEntryVersions godoc
+// @Summary      列出同一血缘路径的保留版本
+// @Description  只返回 opaque ID、捕获时间、大小和类型；不返回路径或 locator
+// @Tags         backup-assets
+// @Security     Bearer
+// @Produce      json
+// @Param        id       path      string  true  "恢复点 opaque ID"
+// @Param        entryId  path      string  true  "目录项 opaque ID"
+// @Success      200      {object}  handlers.Response{data=catalog.EntryVersionPage}
+// @Failure      400      {object}  handlers.Response
+// @Failure      401      {object}  handlers.Response
+// @Failure      403      {object}  handlers.Response
+// @Failure      404      {object}  handlers.Response
+// @Failure      503      {object}  handlers.Response
+// @Router       /recovery-points/{id}/entries/{entryId}/versions [get]
+func (handler *BackupAssetHandler) ListEntryVersions(c *gin.Context) {
+	audit := backupAssetAuditInput(c, backupasset.AuditActionAssetList)
+	pointID, ok := backupAssetOpaqueParam(c, "id")
+	if !ok {
+		handler.reject(c, audit)
+		return
+	}
+	audit.RecoveryPointID = pointID
+	entryID := strings.TrimSpace(c.Param("entryId"))
+	if c.Param("entryId") != entryID || backupasset.ValidateAssetRef(backupasset.AssetRef{RecoveryPointID: pointID, EntryID: entryID}) != nil {
+		handler.reject(c, audit)
+		return
+	}
+	audit.EntryID = entryID
+	if !handler.available(c, audit) {
+		return
+	}
+	result, err := handler.service.ListEntryVersions(c.Request.Context(), pointID, entryID, backupAssetAuthorizationScope(c))
 	handler.finish(c, audit, result, err)
 }
 

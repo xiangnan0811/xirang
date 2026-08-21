@@ -113,6 +113,34 @@ describe("AssetList", () => {
     await user.click(option);
     expect(onSelectionToggle).toHaveBeenCalledWith(rows[0].ref);
   });
+
+  it("shows a retained version count only on multi-version search rows", async () => {
+    const browse = buildAssetRows(1)[0];
+    const single = { ...browse, source: "search" as const, hitFields: ["name" as const], retainedVersionCount: 1 };
+    const multi = {
+      ...browse,
+      ref: { ...browse.ref, entryId: "2".repeat(64) },
+      source: "search" as const,
+      hitFields: ["name" as const],
+      retainedVersionCount: 2,
+      asset: { ...browse.asset, name: "multi-version.yaml", ref: { ...browse.ref, entryId: "2".repeat(64) } },
+    };
+    render(
+      <AssetList
+        rows={[browse, single, multi]}
+        selectedKeys={new Set()}
+        activeKey={null}
+        onActiveChange={vi.fn()}
+        onSelectionToggle={vi.fn()}
+        onOpen={vi.fn()}
+      />
+    );
+
+    const options = await screen.findAllByRole("option");
+    expect(options[0]).not.toHaveTextContent("个保留版本");
+    expect(options[1]).not.toHaveTextContent("个保留版本");
+    expect(options[2]).toHaveTextContent("2 个保留版本");
+  });
 });
 
 function patchElementMeasurements() {

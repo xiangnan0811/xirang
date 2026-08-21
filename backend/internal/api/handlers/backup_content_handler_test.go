@@ -221,6 +221,36 @@ func TestBackupContentIssueEnforcesExactCrossPurposeStepUpMatrix(t *testing.T) {
 	}
 }
 
+func TestBackupContentIssueRejectsOperatorSecretRevealProof(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &backupContentServiceFake{}
+	handler := NewBackupContentHandler(fake, nil, nil, func(context.Context) (BackupContentHandlerConfig, error) {
+		return BackupContentHandlerConfig{TicketTimeout: 5 * time.Second}, nil
+	})
+	router := gin.New()
+	router.POST("/api/v1/recovery-points/:recoveryPointId/entries/:entryId/delivery-tickets", func(c *gin.Context) {
+		c.Set(middleware.CtxUserID, uint(9))
+		c.Set(middleware.CtxUsername, "content-proof-operator")
+		c.Set(middleware.CtxRole, "operator")
+		c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{
+			JTI: strings.Repeat("f", 32), UserID: 9, Role: "operator",
+			TokenVersion: 1, ExpiresAt: time.Now().UTC().Add(time.Hour),
+		})
+		c.Next()
+	}, handler.Issue)
+	pointID, entryID := strings.Repeat("a", 32), strings.Repeat("b", 64)
+	request := httptest.NewRequest(http.MethodPost,
+		"https://xirang.example/api/v1/recovery-points/"+pointID+"/entries/"+entryID+"/delivery-tickets",
+		strings.NewReader(`{"schema_version":1,"action":"preview","renderer":"safe_raster","profile":"raster_v1"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(StepUpHeaderName, "opaque-proof")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || len(fake.issueRequests) != 0 {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, len(fake.issueRequests), response.Body.String())
+	}
+}
+
 func TestBackupContentRecoveryResultDownloadTicketUsesExactResourceAndPurpose(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared&_loc=UTC"

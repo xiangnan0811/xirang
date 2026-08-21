@@ -60,4 +60,32 @@ describe("AssetGrid", () => {
     await user.click(cell);
     expect(onSelectionToggle).toHaveBeenCalledWith(rows[0].ref);
   });
+
+  it("shows a retained version count only on multi-version search tiles", async () => {
+    const browse = buildAssetRows(1)[0];
+    const single = { ...browse, source: "search" as const, hitFields: ["name" as const], retainedVersionCount: 1 };
+    const multi = {
+      ...browse,
+      ref: { ...browse.ref, entryId: "2".repeat(64) },
+      source: "search" as const,
+      hitFields: ["name" as const],
+      retainedVersionCount: 2,
+      asset: { ...browse.asset, name: "multi-version.yaml", ref: { ...browse.ref, entryId: "2".repeat(64) } },
+    };
+    render(
+      <AssetGrid
+        rows={[browse, single, multi]}
+        selectedKeys={new Set()}
+        activeKey={null}
+        onActiveChange={vi.fn()}
+        onSelectionToggle={vi.fn()}
+        onOpen={vi.fn()}
+      />
+    );
+
+    const cells = await screen.findAllByRole("gridcell");
+    expect(cells[0]).not.toHaveTextContent("个保留版本");
+    expect(cells[1]).not.toHaveTextContent("个保留版本");
+    expect(cells[2]).toHaveTextContent("2 个保留版本");
+  });
 });

@@ -77,6 +77,7 @@ function BackupsDataWorkspace({
 
   const controller = useBackupAssetsState({
     token,
+    role,
     route: resolvedRoute,
     ensureStepUpProof,
     onRouteRepair: handleRouteRepair,

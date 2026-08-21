@@ -121,6 +121,17 @@ describe("backup asset search API boundary", () => {
     });
   });
 
+  it("maps a positive retained version count onto the search hit", () => {
+    const complete = rawSearch();
+    const mapped = mapBackupAssetSearch({
+      ...complete,
+      items: [{ ...complete.items[0], retained_version_count: 2 }],
+    });
+    expect(mapped.status).toBe("available");
+    if (mapped.status !== "available") throw new Error("expected available search");
+    expect(mapped.value.items[0].retainedVersionCount).toBe(2);
+  });
+
   it.each([
     ["unknown coverage", () => ({ ...rawSearch(), coverage: { status: "future" } })],
     ["contradictory empty", () => ({ ...rawSearch(), total: 0, authoritative_empty: true })],
@@ -132,6 +143,10 @@ describe("backup asset search API boundary", () => {
     ["invalid ref", () => ({ ...rawSearch(), items: [{ ...rawSearch().items[0], ref: { recovery_point_id: "bad", entry_id: entryId } }] })],
     ["content hit without capability", () => ({ ...rawSearch(), items: [{ ...rawSearch().items[0], hit_fields: ["content"] }] })],
     ["content suggestion without capability", () => ({ ...rawSearch(), suggestions: [{ field: "content", value: "hidden" }] })],
+    ["invalid retained version count", () => ({
+      ...rawSearch(),
+      items: [{ ...rawSearch().items[0], retained_version_count: 0 }],
+    })],
   ])("blocks the whole projection for %s", (_name, mutate) => {
     const mapped = mapBackupAssetSearch(mutate());
     expect(mapped).toEqual({ status: "blocked", reason: { code: "unknown_internal_state", params: {} } });

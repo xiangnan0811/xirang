@@ -419,6 +419,14 @@ export function BackupAssetsWorkspace({
         hasPrevious={selectedRowIndex > 0}
         hasNext={selectedRowIndex >= 0 && selectedRowIndex < controller.state.result.rows.length - 1}
         onClose={closeInspector}
+        token={processingRuntime?.token ?? null}
+        onOpenVersion={(ref) =>
+          onRoutePatch({
+            recoveryPointId: ref.recoveryPointId,
+            entryId: ref.entryId,
+            inspectorTab: "versions",
+          })
+        }
       />
     ) : null;
   const compactInspector = viewport !== "desktop" && inspector !== null;

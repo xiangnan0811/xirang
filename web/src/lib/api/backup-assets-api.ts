@@ -2,6 +2,8 @@ import type {
   AssetRef,
   BackupAsset,
   BackupAssetPage,
+  BackupAssetVersion,
+  BackupAssetVersionPage,
   CatalogEntryType,
   CatalogFingerprintStrength,
   CatalogProjection,
@@ -271,6 +273,34 @@ export function mapRecoveryPointDiff(value: unknown): CatalogProjection<Recovery
   };
 }
 
+function mapBackupAssetVersionPage(value: unknown): CatalogProjection<BackupAssetVersionPage> {
+  if (!isRawBackupAssetObject(value) || !Array.isArray(value.items)) {
+    return blockedBackupAssetProjection();
+  }
+  const items: BackupAssetVersion[] = [];
+  for (const rawItem of value.items) {
+    if (!isRawBackupAssetObject(rawItem)) {
+      return blockedBackupAssetProjection();
+    }
+    const ref = mapAssetRef({
+      recovery_point_id: rawItem.recovery_point_id,
+      entry_id: rawItem.entry_id,
+    });
+    const size = finiteInteger(rawItem.size);
+    const mappedType = entryType(rawItem.entry_type);
+    if (ref === null || size === null || size < 0 || mappedType === null) {
+      return blockedBackupAssetProjection();
+    }
+    items.push({
+      ref,
+      capturedAt: normalizeNullableCatalogTime(rawItem.captured_at),
+      size,
+      entryType: mappedType,
+    });
+  }
+  return { status: "available", value: { items } };
+}
+
 function mapBackupAssetPage(value: unknown): BackupAssetPage {
   const raw = isRawBackupAssetObject(value) ? value : {};
   return {
@@ -308,6 +338,18 @@ export function createBackupAssetsApi() {
         { token, signal: options.signal },
       );
       return mapBackupAssetPage(raw);
+    },
+
+    async listAssetVersions(
+      token: string,
+      ref: AssetRef,
+      signal?: AbortSignal,
+    ): Promise<CatalogProjection<BackupAssetVersionPage>> {
+      const raw = await request<unknown>(
+        `/recovery-points/${encodeURIComponent(ref.recoveryPointId)}/entries/${encodeURIComponent(ref.entryId)}/versions`,
+        { token, signal },
+      );
+      return mapBackupAssetVersionPage(raw);
     },
 
     async getBackupAsset(

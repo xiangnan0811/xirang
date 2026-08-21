@@ -4,7 +4,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { formatBytes } from "@/lib/utils";
 
-import { AssetSelectionMark, AssetTypeIcon, type AssetResultsViewProps } from "./asset-list";
+import { AssetSelectionMark, AssetTypeIcon, RetainedVersionCount, type AssetResultsViewProps } from "./asset-list";
 import { assetRefKey } from "./backup-assets-state";
 
 const TILE_HEIGHT = 144;
@@ -172,6 +172,7 @@ export function AssetGrid({
                     <span className="mt-3 line-clamp-2 min-w-0 break-all text-xs font-medium" title={row.asset.name}>
                       {row.asset.name}
                     </span>
+                    <RetainedVersionCount row={row} />
                     <span className="mt-auto text-[11px] tabular-nums text-muted-foreground">
                       {formatBytes(row.asset.size)}
                     </span>

@@ -16,7 +16,7 @@ Xirang 支持三类备份执行器：
 
 ## Restic 精确血缘与安全回退
 
-`backup_assets.enabled` 默认是 `false`，CodeDefault 也不会在升级时改成 `true`。请求启用必须先通过就绪门禁：双引擎迁移、所需密钥域、已校验的导出根，以及一次完成的库存盘点。全新安装（没有文件备份任务、Repository 或 managed-history latch）在就绪后即可启用；已有安装还须管理员确认当前库存摘要，不会静默转换 Provider 数据。在从未产生过 managed 恢复点的安装上，关闭该开关保持既有 Restic 兼容行为。启用或关闭开关、以及通过设置导入/删除覆盖值时，服务会先停止新的 Restic admission，并排空已经开始的 backup、list、files、search、diff、snapshot restore、anomaly、retention、publication 与 reconciliation 命令；数据库设置只会在该排空完成后写入。就绪未通过时，有效功能保持关闭。
+`backup_assets.enabled` 默认是 `false`，CodeDefault 也不会在升级时改成 `true`。该键是**请求值**，不是有效开启。请求启用必须先通过就绪门禁：双引擎迁移、所需密钥域、已校验的导出根，以及一次完成的库存盘点。全新安装（没有文件备份任务、Repository 或 managed-history latch）在就绪后即可启用；已有安装还须管理员确认当前库存摘要，不会静默转换 Provider 数据。只把 `BACKUP_ASSETS_ENABLED=true` 写进环境、但现有安装尚未 ack 时，Core 会启动，admission / Catalog / Search / Content 仍保持关闭。在从未产生过 managed 恢复点的安装上，关闭该开关保持既有 Restic 兼容行为。启用或关闭开关、以及通过设置导入/删除覆盖值时，服务会先停止新的 Restic admission，并排空已经开始的 backup、list、files、search、diff、snapshot restore、anomaly、retention、publication 与 reconciliation 命令；数据库设置只会在该排空完成后写入。设置界面启用未就绪的现有安装会返回 409。
 
 启用后，一次 Restic backup 只有在 exit-zero summary、完整原生 snapshot ID、精确 Task/TaskRun 标记、Manifest 和最低验证全部一致时，才会异步发布为可信恢复点。传输成功与发布成功是独立事实：Manifest 或血缘失败不会改写已经发生的 TaskRun 传输结果。
 

@@ -89,6 +89,9 @@ func NewBackupAssetSecretProofVerifier(db *gorm.DB, jwtManager *auth.JWTManager)
 		if proof == "" {
 			return nil, nil
 		}
+		if middleware.CurrentRole(c) != "admin" {
+			return nil, backupasset.ErrForbidden
+		}
 		claims, err := VerifyOptionalStepUpProof(db, jwtManager, proof, middleware.CurrentUserID(c), middleware.CurrentRole(c), auth.StepUpActionAssetSecretReveal)
 		if err != nil || claims == nil {
 			return nil, err

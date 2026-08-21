@@ -1742,6 +1742,184 @@ describe("useBackupAssetsState", () => {
     expect(result.current.content.value).toEqual(previewTicket);
   });
 
+  it("retries secret preview once after Admin secret-reveal step-up", async () => {
+    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
+    const previewTicket = buildContentTicket("escaped_text");
+    listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
+    issueTicketMock
+      .mockRejectedValueOnce(
+        new ApiError(403, "需要二次验证", {
+          code: 403,
+          message: "需要二次验证",
+          data: { reason: { code: "secret_reveal_required", params: {} } },
+        })
+      )
+      .mockResolvedValueOnce({ status: "available", value: previewTicket });
+    const { result } = renderHook(() =>
+      useBackupAssetsState({
+        token: "test-token",
+        role: "admin",
+        route: defaultBackupAssetsRouteState("data"),
+        ensureStepUpProof,
+      })
+    );
+
+    act(() => result.current.actions.loadPreview(asset));
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(ensureStepUpProof).toHaveBeenCalledWith(STEP_UP_ACTIONS.assetSecretReveal, {
+      persist: false,
+      reuseCached: false,
+    });
+    expect(issueTicketMock).toHaveBeenCalledTimes(2);
+    expect(issueTicketMock.mock.calls[1][2]).toEqual(
+      expect.objectContaining({
+        action: "preview",
+        stepUpProof: "proof-secret",
+      })
+    );
+    expect(result.current.content.value).toEqual(previewTicket);
+  });
+
+  it.each(["operator", "viewer"] as const)(
+    "does not request secret-reveal step-up for %s even when the helper is passed",
+    async (role) => {
+      const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
+      listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
+      issueTicketMock.mockRejectedValue(secretRevealRequiredError());
+      const { result } = renderHook(() =>
+        useBackupAssetsState({
+          token: "test-token",
+          role,
+          route: defaultBackupAssetsRouteState("data"),
+          ensureStepUpProof,
+        })
+      );
+
+      act(() => result.current.actions.loadPreview(asset));
+      await waitFor(() => expect(result.current.content.status).toBe("blocked"));
+      expect(ensureStepUpProof).not.toHaveBeenCalled();
+      expect(issueTicketMock).toHaveBeenCalledTimes(1);
+      expect(issueTicketMock.mock.calls[0][2]).not.toHaveProperty("stepUpProof");
+      expect(result.current.content.error?.code).toBe("secret_reveal_required");
+    }
+  );
+
+  it("forwards the same secret-reveal proof on later search pages and saved-search reload", async () => {
+    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
+    const previewTicket = buildContentTicket("escaped_text");
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    issueTicketMock
+      .mockRejectedValueOnce(secretRevealRequiredError())
+      .mockResolvedValueOnce({ status: "available", value: previewTicket });
+    searchMock.mockResolvedValue(availableSearchProjection("cursor-page-2"));
+    const initialRoute = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      types: ["file" as const],
+      sort: "relevance" as const,
+      direction: "desc" as const,
+    };
+    const { result, rerender } = renderHook(
+      ({ route }) =>
+        useBackupAssetsState({
+          token: "test-token",
+          role: "admin",
+          route,
+          ensureStepUpProof,
+        }),
+      { initialProps: { route: initialRoute } }
+    );
+
+    await waitFor(() => expect(result.current.state.result.status).toBe("ready"));
+    act(() => result.current.actions.loadPreview(asset));
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+
+    searchMock.mockClear();
+    searchMock.mockResolvedValue(availableSearchProjection("cursor-page-2"));
+    act(() => result.current.actions.executeSearch("synthetic term"));
+    await waitFor(() => expect(searchMock).toHaveBeenCalled());
+    expect(searchMock).toHaveBeenCalledWith(
+      "test-token",
+      expect.objectContaining({ secretRevealProof: "proof-secret" })
+    );
+
+    await waitFor(() => expect(result.current.state.result.nextCursor).toBe("cursor-page-2"));
+    searchMock.mockClear();
+    searchMock.mockResolvedValue(availableSearchProjection(null));
+    act(() => result.current.actions.loadMore());
+    await waitFor(() => expect(searchMock).toHaveBeenCalled());
+    expect(searchMock).toHaveBeenCalledWith(
+      "test-token",
+      expect.objectContaining({
+        query: expect.objectContaining({ cursor: "cursor-page-2" }),
+        secretRevealProof: "proof-secret",
+      })
+    );
+
+    const savedSearchId = "e".repeat(32);
+    searchMock.mockClear();
+    searchMock.mockResolvedValue(availableSearchProjection(null, 2));
+    rerender({ route: { ...initialRoute, savedSearchId } });
+    await waitFor(() => expect(searchMock).toHaveBeenCalled());
+    expect(searchMock).toHaveBeenCalledWith(
+      "test-token",
+      expect.objectContaining({
+        savedSearchId,
+        secretRevealProof: "proof-secret",
+      })
+    );
+  });
+
+  it("keeps retainedVersionCount on search and saved-search result rows", async () => {
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    searchMock.mockResolvedValue(availableSearchProjection(null, 2));
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      types: ["file" as const],
+      sort: "relevance" as const,
+      direction: "desc" as const,
+    };
+    const { result, rerender } = renderHook(
+      ({ currentRoute }) => useBackupAssetsState({ token: "test-token", role: "admin", route: currentRoute }),
+      { initialProps: { currentRoute: route } }
+    );
+
+    await waitFor(() => expect(result.current.state.result.status).toBe("ready"));
+    expect(result.current.state.result.rows[0]).toMatchObject({
+      source: "search",
+      retainedVersionCount: 2,
+    });
+
+    const savedSearchId = "e".repeat(32);
+    rerender({ currentRoute: { ...route, savedSearchId } });
+    await waitFor(() =>
+      expect(searchMock).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({ savedSearchId })
+      )
+    );
+    await waitFor(() => expect(result.current.state.result.rows[0]?.retainedVersionCount).toBe(2));
+  });
+
   it("does not renew an old preview during the route-to-selection transition", async () => {
     const nextAsset: BackupAsset = {
       ...asset,
@@ -1877,6 +2055,42 @@ describe("useBackupAssetsState", () => {
     expect(result.current.content.status).toBe("idle");
   });
 });
+
+function secretRevealRequiredError(): ApiError {
+  return new ApiError(403, "需要二次验证", {
+    code: 403,
+    message: "需要二次验证",
+    data: { reason: { code: "secret_reveal_required", params: {} } },
+  });
+}
+
+function availableSearchProjection(nextCursor: string | null, retainedVersionCount?: number) {
+  return {
+    status: "available" as const,
+    value: {
+      queryGeneration: "f".repeat(64),
+      indexes: [],
+      items: [
+        {
+          ref: asset.ref,
+          asset,
+          hitFields: ["name" as const],
+          score: 1,
+          snippet: null,
+          ...(retainedVersionCount === undefined ? {} : { retainedVersionCount }),
+        },
+      ],
+      nextCursor,
+      total: 1,
+      totalRelation: "exact" as const,
+      authoritativeEmpty: false,
+      coverage: { status: "complete" as const },
+      suggestions: [],
+      capabilities: { metadata: true, content: false },
+      permissions: { list: true, secretReveal: false },
+    },
+  };
+}
 
 function buildContentTicket(
   renderer: BackupContentTicket["renderer"],

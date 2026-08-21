@@ -100,7 +100,7 @@ func TestAssetSearchHandlerStrictInlineAndSavedRequests(t *testing.T) {
 					proofCalls++
 					return &assetsearch.SecretRevealProof{ID: strings.Repeat("3", 32)}, nil
 				})
-			router := backupAssetHandlerTestRouter()
+			router := backupAssetHandlerTestRouterWithRole("admin")
 			router.POST("/asset-search", handler.Search)
 			request := httptest.NewRequest(http.MethodPost, "/asset-search", strings.NewReader(test.body))
 			request.Header.Set("Content-Type", "application/json")
@@ -111,7 +111,7 @@ func TestAssetSearchHandlerStrictInlineAndSavedRequests(t *testing.T) {
 				t.Fatalf("status=%d body=%s search=%d saved=%d proof=%d", response.Code, response.Body.String(), searchSpy.calls, savedSpy.calls, proofCalls)
 			}
 			if searchSpy.request.Limit != test.wantLimit || searchSpy.request.Cursor != test.wantCursor ||
-				searchSpy.actor.Authorization != (catalog.AuthorizationScope{UserID: 77, Role: "operator"}) || searchSpy.actor.SecretProof == nil {
+				searchSpy.actor.Authorization != (catalog.AuthorizationScope{UserID: 77, Role: "admin"}) || searchSpy.actor.SecretProof == nil {
 				t.Fatalf("request=%+v actor=%+v", searchSpy.request, searchSpy.actor)
 			}
 			expectedAudits := 1 + test.wantSavedCall
@@ -171,6 +171,42 @@ func TestAssetSearchHandlerRejectsTransportAndFeatureBeforeProofServiceOrAudit(t
 	}
 }
 
+func TestAssetSearchHandlerRejectsOperatorSecretRevealProof(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	searchSpy := &backupAssetSearchServiceSpy{}
+	handler := NewBackupAssetSearchHandler(searchSpy, &backupAssetSavedSearchUseSpy{}, &backupAssetAuditSpy{}, backupAssetHandlerConfigEnabled,
+		NewBackupAssetSecretProofVerifier(nil, nil))
+	router := backupAssetHandlerTestRouter()
+	router.POST("/asset-search", handler.Search)
+	body := `{"query":{"schema_version":1,"root":{"op":"term","field":"name","text":"safe"},"scope":{"mode":"current"},"sort":"relevance","limit":10}}`
+	request := httptest.NewRequest(http.MethodPost, "/asset-search", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(StepUpHeaderName, "opaque-proof")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || searchSpy.calls != 0 {
+		t.Fatalf("status=%d body=%s search=%d", response.Code, response.Body.String(), searchSpy.calls)
+	}
+}
+
+func TestBackupAssetSecretProofVerifierRejectsNonAdmin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, role := range []string{"operator", "viewer"} {
+		t.Run(role, func(t *testing.T) {
+			verifier := NewBackupAssetSecretProofVerifier(nil, nil)
+			context, _ := gin.CreateTestContext(httptest.NewRecorder())
+			context.Request = httptest.NewRequest(http.MethodPost, "/asset-search", nil)
+			context.Request.Header.Set(StepUpHeaderName, "opaque-proof")
+			context.Set(middleware.CtxRole, role)
+			context.Set(middleware.CtxUserID, uint(77))
+			proof, err := verifier(context)
+			if proof != nil || !errors.Is(err, backupasset.ErrForbidden) {
+				t.Fatalf("%s verifier proof=%+v err=%v", role, proof, err)
+			}
+		})
+	}
+}
+
 func TestAssetSearchOptionalProofFailureIsClosedBeforeSearchAndAudit(t *testing.T) {
 	searchSpy := &backupAssetSearchServiceSpy{}
 	audit := &backupAssetAuditSpy{}
@@ -218,10 +254,14 @@ func backupAssetHandlerConfigEnabled() (BackupAssetHandlerConfig, error) {
 }
 
 func backupAssetHandlerTestRouter() *gin.Engine {
+	return backupAssetHandlerTestRouterWithRole("operator")
+}
+
+func backupAssetHandlerTestRouterWithRole(role string) *gin.Engine {
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
 		c.Set(middleware.CtxUserID, uint(77))
-		c.Set(middleware.CtxRole, "operator")
+		c.Set(middleware.CtxRole, role)
 		c.Set(middleware.CtxUsername, "search-user")
 		c.Set(middleware.RequestIDKey, "search-correlation")
 		c.Next()

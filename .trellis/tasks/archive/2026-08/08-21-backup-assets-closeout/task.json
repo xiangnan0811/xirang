@@ -1,0 +1,32 @@
+{
+  "id": "backup-assets-closeout",
+  "name": "backup-assets-closeout",
+  "title": "备份资产审查收尾",
+  "description": "",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-08-21",
+  "completedAt": "2026-08-21",
+  "branch": "feat/backup-assets-closeout",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-12-backup-data-explorer-design",
+  "relatedFiles": [],
+  "notes": "Wave 1+2 implemented. Re-review 2 is clean (research/re-review-2.md). Child stays unarchived until Alan says so (AC8–AC9). CodeDefault stays false. Worker unpublished. Parent stays planning. Review process docs stay in this child.",
+  "meta": {
+    "wave": "2_re_review_clean",
+    "code_default_enabled": false,
+    "worker_publish": "out_of_scope",
+    "parent_archive": "forbidden",
+    "re_review_vehicle": true
+  }
+}

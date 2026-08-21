@@ -12,6 +12,24 @@ function capabilityError(status: number, code: string) {
 }
 
 describe("mapBackupAssetsError", () => {
+  it("maps a secret-reveal 403 without treating it as generic permission denial", () => {
+    expect(
+      mapBackupAssetsError(
+        new ApiError(403, "需要二次验证", {
+          code: 403,
+          message: "需要二次验证",
+          data: { reason: { code: "secret_reveal_required", params: {} } },
+        }),
+        "content_ticket"
+      )
+    ).toEqual({
+      code: "secret_reveal_required",
+      translationKey: "backupAssets.errors.secretRevealRequired",
+      retryable: false,
+      action: "none",
+    });
+  });
+
   it("maps a verified feature-disabled capability without exposing detail", () => {
     expect(mapBackupAssetsError(capabilityError(503, "feature_disabled"), "repositories")).toEqual({
       code: "feature_disabled",

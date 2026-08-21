@@ -60,11 +60,12 @@ type VerifiedSnippet struct {
 }
 
 type SearchHit struct {
-	Ref       backupasset.AssetRef `json:"ref"`
-	Asset     catalog.EntryDTO     `json:"asset"`
-	HitFields []SearchField        `json:"hit_fields"`
-	Score     int64                `json:"score"`
-	Snippet   *VerifiedSnippet     `json:"snippet,omitempty"`
+	Ref                  backupasset.AssetRef `json:"ref"`
+	Asset                catalog.EntryDTO     `json:"asset"`
+	HitFields            []SearchField        `json:"hit_fields"`
+	Score                int64                `json:"score"`
+	Snippet              *VerifiedSnippet     `json:"snippet,omitempty"`
+	RetainedVersionCount int                  `json:"retained_version_count,omitempty"`
 }
 
 type SearchCoverage struct {
@@ -249,6 +250,9 @@ func (service *Service) Search(ctx context.Context, actor SearchActor, request S
 	}
 	if err := catalog.ValidateAuthorizationScope(actor.Authorization); err != nil {
 		return SearchResponse{}, err
+	}
+	if actor.SecretProof != nil && actor.Authorization.Role != "admin" {
+		return SearchResponse{}, backupasset.ErrForbidden
 	}
 	canonical, err := ValidateAndCanonicalize(request, service.limits.Query)
 	if err != nil {
@@ -1311,6 +1315,10 @@ func sortEvaluatedHits(values []evaluatedHit, requested SearchSort) {
 }
 
 func groupAllRetainedHits(values []evaluatedHit) []evaluatedHit {
+	counts := make(map[string]int, len(values))
+	for _, value := range values {
+		counts[value.lineageToken+":"+value.pathGroupToken]++
+	}
 	seen := make(map[string]bool, len(values))
 	result := make([]evaluatedHit, 0, len(values))
 	for _, value := range values {
@@ -1319,6 +1327,7 @@ func groupAllRetainedHits(values []evaluatedHit) []evaluatedHit {
 			continue
 		}
 		seen[key] = true
+		value.hit.RetainedVersionCount = counts[key]
 		result = append(result, value)
 	}
 	return result

@@ -218,7 +218,20 @@ function mapHit(value: unknown, indexes: Map<string, AssetSearchIndexStatus>, al
         !mappedFields.includes(value.snippet.field) || typeof value.snippet.text !== "string" || value.snippet.text === "") return null;
     snippet = { field: value.snippet.field, text: value.snippet.text };
   }
-  return { ref, asset: assetProjection.value, hitFields: mappedFields, score, snippet };
+  let retainedVersionCount: number | undefined;
+  if (value.retained_version_count !== undefined) {
+    const mappedCount = mapPositiveSafeInteger(value.retained_version_count);
+    if (mappedCount === null) return null;
+    retainedVersionCount = mappedCount;
+  }
+  return {
+    ref,
+    asset: assetProjection.value,
+    hitFields: mappedFields,
+    score,
+    snippet,
+    ...(retainedVersionCount === undefined ? {} : { retainedVersionCount }),
+  };
 }
 
 function mapSuggestion(value: unknown, allowContent: boolean): AssetSearchSuggestion | null {

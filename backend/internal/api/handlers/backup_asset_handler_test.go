@@ -69,6 +69,12 @@ func (spy *backupAssetServiceSpy) GetEntry(_ context.Context, pointID, entryID s
 	return catalog.EntryDTO{}, spy.err
 }
 
+func (spy *backupAssetServiceSpy) ListEntryVersions(_ context.Context, pointID, entryID string, scope catalog.AuthorizationScope) (catalog.EntryVersionPage, error) {
+	spy.calls++
+	spy.pointID, spy.entryID, spy.scope = pointID, entryID, scope
+	return catalog.EntryVersionPage{Items: []catalog.EntryVersionDTO{}}, spy.err
+}
+
 func (spy *backupAssetServiceSpy) Diff(_ context.Context, scope catalog.AuthorizationScope, request catalog.DiffRequest) (catalog.DiffPage, error) {
 	spy.calls++
 	spy.scope, spy.diffRequest = scope, request
@@ -166,6 +172,17 @@ func TestBackupAssetHandlerStrictBindingAndCompositeRequests(t *testing.T) {
 			assertCall: func(t *testing.T, spy *backupAssetServiceSpy) {
 				if spy.pointID != pointID || spy.entryID != entryID {
 					t.Fatalf("point=%s entry=%s", spy.pointID, spy.entryID)
+				}
+			},
+		},
+		{
+			name: "entry versions", method: http.MethodGet, path: "/recovery-points/" + pointID + "/entries/" + entryID + "/versions",
+			register: func(router *gin.Engine, handler *BackupAssetHandler) {
+				router.GET("/recovery-points/:id/entries/:entryId/versions", handler.ListEntryVersions)
+			},
+			assertCall: func(t *testing.T, spy *backupAssetServiceSpy) {
+				if spy.pointID != pointID || spy.entryID != entryID {
+					t.Fatalf("versions point=%s entry=%s", spy.pointID, spy.entryID)
 				}
 			},
 		},

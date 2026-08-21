@@ -621,3 +621,12 @@ func assertInventoryCountsJSON(t *testing.T, raw string, want InventoryCounts) {
 		t.Fatalf("counts_json contained private material: %s", raw)
 	}
 }
+
+func TestInventoryConflictCountFromCountsJSON(t *testing.T) {
+	if got := inventoryConflictCount(`{"candidates":4,"conflicts":2,"unsupported":0,"capability_gaps":0}`); got != 2 {
+		t.Fatalf("conflicts=%d, want 2", got)
+	}
+	if got := inventoryConflictCount(`not-json`); got != 0 {
+		t.Fatalf("invalid counts=%d, want 0", got)
+	}
+}

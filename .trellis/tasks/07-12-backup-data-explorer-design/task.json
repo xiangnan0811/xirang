@@ -33,18 +33,19 @@
     "07-22-backup-assets-export-archive",
     "07-28-backup-assets-controlled-recovery",
     "08-17-backup-assets-lifecycle-reconnect",
-    "08-20-backup-assets-ga-hardening"
+    "08-20-backup-assets-ga-hardening",
+    "08-21-backup-assets-closeout"
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Program delivery is 15/15 children instantiated and archived. Child 15 squash is 2e1e98baf520961ffc511e6dc6c1cf6939c3a311 (PR #440). Release PR #441 squash-merged as 1750a2384d9db9f33a2c10d1f5ee59b3ee93ed10 and published GitHub Release v0.50.0 plus Docker Hub linnea7171/xirang:0.50.0 (Publish Docker Images 32430922852). backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. Parent remains planning: external review has not started, so parent-final-acceptance is not authorized. Pre-review closeout lives in research/external-review-brief.md and research/pre-review-ux-security-walkthrough.md.",
+  "notes": "Children 1–16 archived. Child 16 closeout is 08-21-backup-assets-closeout (PR #444). Formal public release remains v0.50.0 until a later release-please cut. backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. Parent remains planning; parent-final-acceptance is not authorized.",
   "meta": {
     "program_delivery": {
-      "delivered": 15,
-      "planned": 15,
+      "delivered": 16,
+      "planned": 16,
       "percent": 100.0,
-      "instantiated_children": 15,
-      "archived_children": 15,
+      "instantiated_children": 16,
+      "archived_children": 16,
       "active_child": null,
       "uninstantiated_children": []
     },

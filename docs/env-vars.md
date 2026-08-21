@@ -82,7 +82,7 @@
 | `FILE_BROWSER_ALLOW_ALL` | string | 空（禁用） | 否 | 设为 `true` 允许浏览任意路径（默认仅允许备份目录） |
 | `BACKUP_PATH_ALLOW_SHELL_META` | bool | `false` | 否 | 仅历史数据救援用；设为 `true` 会跳过备份路径 shell 元字符防御校验 |
 | `SNAPSHOT_INDEX_MAX_SECONDS` | int | `1800` | 否 | Restic 快照文件搜索异步索引单次最长构建秒数 |
-| `BACKUP_ASSETS_ENABLED` | bool | `false` | 否 | 备份资产领域 feature gate；CodeDefault 仍为 `false`。请求启用时必须先通过就绪门禁（双引擎迁移、密钥域、导出根、库存盘点）。全新安装在 `ready` 后可启用；已有安装还须管理员确认当前库存摘要。关闭时相关公开/Admin 路由在读取资产或创建处理工作前失败关闭 |
+| `BACKUP_ASSETS_ENABLED` | bool | `false` | 否 | 备份资产领域 **请求**开关；CodeDefault 仍为 `false`。请求启用必须先通过就绪门禁（双引擎迁移、密钥域、导出根、库存盘点）。全新安装在 `ready` 后才算有效开启；已有安装还须管理员确认当前库存摘要。环境变量为 `true` 但门禁未过时，Core 仍会启动，admission / Catalog / Search / Content 保持关闭。设置界面启用现有安装会 409 直到盘点 + ack |
 | `BACKUP_ASSETS_CATALOG_BATCH_SIZE` | int | `2000` | 否 | 目录构建批次大小，范围 `1..100000` |
 | `BACKUP_ASSETS_CATALOG_BUILD_TIMEOUT` | duration | `30m` | 否 | 单次目录构建超时，范围 `1m..24h` |
 | `BACKUP_ASSETS_REPOSITORY_RECONCILE_INTERVAL` | duration | `15m` | 否 | 仓库元数据对账间隔，范围 `1m..24h` |

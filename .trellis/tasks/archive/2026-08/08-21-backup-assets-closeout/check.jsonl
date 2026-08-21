@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend convention index for Wave 1 check"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend quality bar for reveal and versions UI"}
+{"file": ".trellis/spec/guides/branch-workflow-guidelines.md", "reason": "Work stays off main; CI before merge"}
+{"file": ".trellis/tasks/08-21-backup-assets-closeout/prd.md", "reason": "AC1-AC7 Wave 1; AC8-AC9 child archive"}
+{"file": ".trellis/tasks/08-21-backup-assets-closeout/design.md", "reason": "Wave 2 secret reveal and version contracts"}
+{"file": ".trellis/tasks/08-21-backup-assets-closeout/implement.md", "reason": "Wave 2 F1-F3 execution plan"}
+{"file": ".trellis/tasks/08-21-backup-assets-closeout/research/re-review-1.md", "reason": "F1-F3 must-fix evidence from failed re-review"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Search mapper must block invalid retained_version_count"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Proof and version count must survive API to UI"}
+{"file": "web/src/features/backup-assets/use-backup-assets-state.ts", "reason": "Admin-only secret retry and search proof helper"}
+{"file": "web/src/lib/api/backup-asset-search-api.ts", "reason": "retainedVersionCount mapper type contract"}

@@ -1,15 +1,60 @@
+import { useEffect, useState } from "react";
 import { History } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { Button } from "@/components/ui/button";
 import { InlineAlert } from "@/components/ui/inline-alert";
-import type { BackupRecoveryPoint } from "@/types/domain";
+import { LoadingState } from "@/components/ui/loading-state";
+import { apiClient } from "@/lib/api/client";
+import { mapBackupAssetsError, type BackupAssetsUIError } from "@/lib/api/backup-assets-error";
+import type { AssetRef, BackupAsset, BackupAssetVersion, BackupRecoveryPoint } from "@/types/domain";
 
 export interface AssetVersionsProps {
+  token: string | null;
+  asset: BackupAsset;
   recoveryPoint: BackupRecoveryPoint;
+  onOpenVersion: (ref: AssetRef) => void;
 }
 
-export function AssetVersions({ recoveryPoint }: AssetVersionsProps) {
+export function AssetVersions({ token, asset, recoveryPoint, onOpenVersion }: AssetVersionsProps) {
   const { t } = useTranslation();
+  const requestKey = token ? `${token}:${asset.ref.recoveryPointId}:${asset.ref.entryId}` : null;
+  const [loaded, setLoaded] = useState<{ key: string; items: BackupAssetVersion[] } | null>(null);
+  const [failedKey, setFailedKey] = useState<string | null>(null);
+  const [error, setError] = useState<BackupAssetsUIError>();
+
+  useEffect(() => {
+    if (!token || requestKey === null) return;
+    const controller = new AbortController();
+    void apiClient
+      .listAssetVersions(token, asset.ref, controller.signal)
+      .then((projection) => {
+        if (controller.signal.aborted) return;
+        if (projection.status !== "available") {
+          setLoaded(null);
+          setFailedKey(requestKey);
+          setError(undefined);
+          return;
+        }
+        setLoaded({ key: requestKey, items: projection.value.items });
+        setFailedKey(null);
+        setError(undefined);
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted) return;
+        setLoaded(null);
+        setFailedKey(requestKey);
+        setError(mapBackupAssetsError(cause, "entry"));
+      });
+    return () => controller.abort();
+  }, [asset.ref, requestKey, token]);
+
+  const items = loaded?.key === requestKey ? loaded.items : null;
+  const status = requestKey === null || failedKey === requestKey
+    ? "error"
+    : items === null
+      ? "loading"
+      : "ready";
 
   return (
     <div className="space-y-4 p-3">
@@ -30,9 +75,39 @@ export function AssetVersions({ recoveryPoint }: AssetVersionsProps) {
         </dl>
       </div>
 
-      <InlineAlert tone="info">
-        {t("backupAssets.versions.expansionUnavailable")}
-      </InlineAlert>
+      {status === "loading" ? <LoadingState title={t("backupAssets.versions.loading")} rows={3} /> : null}
+      {status === "error" ? (
+        <InlineAlert tone="warning">
+          {t(error?.translationKey ?? "backupAssets.versions.unavailable")}
+        </InlineAlert>
+      ) : null}
+      {status === "ready" && items ? (
+        <ul className="space-y-2" aria-label={t("backupAssets.versions.list")}>
+          {items.map((item) => {
+            const current =
+              item.ref.recoveryPointId === asset.ref.recoveryPointId &&
+              item.ref.entryId === asset.ref.entryId;
+            return (
+              <li key={`${item.ref.recoveryPointId}:${item.ref.entryId}`}>
+                <Button
+                  type="button"
+                  variant={current ? "secondary" : "outline"}
+                  className="h-auto w-full justify-between px-3 py-2 text-left"
+                  onClick={() => onOpenVersion(item.ref)}
+                >
+                  <span className="truncate font-mono text-xs" title={item.ref.recoveryPointId}>
+                    {item.ref.recoveryPointId}
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {formatTimestamp(item.capturedAt)}
+                    {current ? ` · ${t("backupAssets.versions.current")}` : ""}
+                  </span>
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
     </div>
   );
 }

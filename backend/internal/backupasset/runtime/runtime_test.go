@@ -2649,7 +2649,7 @@ func TestRuntimeSearchStartupEnsuresKeyReconcilesAndTreatsRecordedLossAsUnavaila
 		t.Fatalf("NewSearchWorker: %v", err)
 	}
 	ring := backupasset.NewKeyring(db, nil)
-	runtime := &Runtime{foundation: backupasset.NewFoundationService(settingsService), keyring: ring, searchWorker: worker}
+	runtime := &Runtime{foundation: backupasset.NewFoundationService(settingsService), keyring: ring, searchWorker: worker, enablement: readyGAEnablement()}
 	if err := runtime.startupSearch(context.Background()); err != nil {
 		t.Fatalf("enabled Search startup: %v", err)
 	}
@@ -2704,7 +2704,7 @@ func TestRuntimeSearchStartupUnexpectedUnwrapFailureIsFatal(t *testing.T) {
 		},
 		Backend: newSearchWorkerBackendFake(),
 	})
-	runtime := &Runtime{foundation: backupasset.NewFoundationService(settingsService), keyring: ring, searchWorker: worker}
+	runtime := &Runtime{foundation: backupasset.NewFoundationService(settingsService), keyring: ring, searchWorker: worker, enablement: readyGAEnablement()}
 	if err := runtime.startupSearch(context.Background()); !errors.Is(err, backupasset.ErrKeyUnavailable) {
 		t.Fatalf("unexpected Search unwrap failure got %v, want fatal key unavailable", err)
 	}
@@ -2743,7 +2743,7 @@ func TestRuntimeSearchStartupIsolatesUnreadableDerivedKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime := &Runtime{foundation: backupasset.NewFoundationService(settingsService), keyring: ring, searchWorker: worker}
+	runtime := &Runtime{foundation: backupasset.NewFoundationService(settingsService), keyring: ring, searchWorker: worker, enablement: readyGAEnablement()}
 	if err := runtime.startupSearch(context.Background()); err != nil {
 		t.Fatalf("Derived key failure blocked Core Search startup: %v", err)
 	}
@@ -2806,7 +2806,7 @@ func TestRuntimeSearchTokenOperationsCoordinateInvalidationReadinessAndLoss(t *t
 	ready.Store(true)
 	runtime := &Runtime{
 		foundation: backupasset.NewFoundationService(settingsService), keyring: ring,
-		overlayService: overlays, searchReady: ready,
+		overlayService: overlays, searchReady: ready, enablement: readyGAEnablement(),
 	}
 	after, err := runtime.ReplaceSearchTokenForReindex(context.Background())
 	if err != nil {

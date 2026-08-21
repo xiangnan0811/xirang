@@ -219,7 +219,7 @@ func (service *InventoryService) Acknowledge(ctx context.Context, actorID uint, 
 		logger.Module("backup_asset_ga").Info().
 			Uint("actor_id", actorID).
 			Str("class", installation.Class).
-			Int("conflicts", 0).
+			Int("conflicts", inventoryConflictCount(run.CountsJSON)).
 			Msg("备份资产清单已确认")
 		return tx.Model(&model.BackupAssetInstallation{}).Where("id = ?", installation.ID).Updates(map[string]any{
 			"readiness":    string(ReadinessAcknowledged),
@@ -228,6 +228,14 @@ func (service *InventoryService) Acknowledge(ctx context.Context, actorID uint, 
 			"updated_at":   now,
 		}).Error
 	})
+}
+
+func inventoryConflictCount(countsJSON string) int {
+	var counts InventoryCounts
+	if json.Unmarshal([]byte(countsJSON), &counts) != nil || counts.Conflicts < 0 {
+		return 0
+	}
+	return counts.Conflicts
 }
 
 func validInventoryDigest(value string) bool {

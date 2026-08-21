@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend conventions before gate and catalog work"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend conventions before secret-reveal and versions UI"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Requested vs live enablement crosses settings, admission, catalog, search, content"}
+{"file": ".trellis/spec/guides/documentation-truth-guide.md", "reason": "Public docs must say env true is not live enablement"}
+{"file": ".trellis/tasks/08-21-backup-assets-closeout/prd.md", "reason": "Wave 1 requirements and later-wave close rules"}
+{"file": ".trellis/tasks/08-21-backup-assets-closeout/design.md", "reason": "Live predicate, secret reveal, version history"}
