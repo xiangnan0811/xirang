@@ -13,6 +13,17 @@ import (
 	"xirang/backend/internal/model"
 )
 
+func TestGroupAllRetainedHitsCountsCollapsedVersions(t *testing.T) {
+	grouped := groupAllRetainedHits([]evaluatedHit{
+		{lineageToken: "line-a", pathGroupToken: "path-1", hit: SearchHit{Ref: backupasset.AssetRef{RecoveryPointID: strings.Repeat("1", 32), EntryID: strings.Repeat("a", 64)}}},
+		{lineageToken: "line-a", pathGroupToken: "path-1", hit: SearchHit{Ref: backupasset.AssetRef{RecoveryPointID: strings.Repeat("2", 32), EntryID: strings.Repeat("b", 64)}}},
+		{lineageToken: "line-a", pathGroupToken: "path-2", hit: SearchHit{Ref: backupasset.AssetRef{RecoveryPointID: strings.Repeat("3", 32), EntryID: strings.Repeat("c", 64)}}},
+	})
+	if len(grouped) != 2 || grouped[0].hit.RetainedVersionCount != 2 || grouped[1].hit.RetainedVersionCount != 1 {
+		t.Fatalf("grouped=%+v", grouped)
+	}
+}
+
 func TestSearchServiceMetadataRankingCoverageAndCursor(t *testing.T) {
 	indexer, harness := newIndexerTestHarness(t)
 	pointID, _ := harness.seedCatalog(t, []model.CatalogEntry{
@@ -320,6 +331,17 @@ func TestSearchServiceKleeneHiddenContentExposesNoFactsWithoutExactProof(t *test
 	if err != nil || len(withProof.Items) != 1 || !reflect.DeepEqual(withProof.Items[0].HitFields, []SearchField{SearchFieldContent}) ||
 		withProof.Items[0].Snippet == nil || resolver.calls != 1 {
 		t.Fatalf("valid proof content result=%+v calls=%d err=%v", withProof, resolver.calls, err)
+	}
+
+	operator := SearchActor{
+		Authorization: catalog.AuthorizationScope{Role: "operator", UserID: 1},
+		SecretProof:   actor.SecretProof,
+	}
+	if _, err := service.Search(context.Background(), operator, request); !errors.Is(err, backupasset.ErrForbidden) {
+		t.Fatalf("operator secret proof error=%v", err)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("operator secret proof queried excerpts calls=%d", resolver.calls)
 	}
 }
 

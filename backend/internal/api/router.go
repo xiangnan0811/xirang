@@ -462,6 +462,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/recovery-points/:id/evidence", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetEvidence)
 	secured.GET("/recovery-points/:id/entries", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.ListEntries)
 	secured.GET("/recovery-points/:id/entries/:entryId", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetEntry)
+	secured.GET("/recovery-points/:id/entries/:entryId/versions", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.ListEntryVersions)
 	secured.POST("/recovery-points/:id/entries/:entryId/delivery-tickets", middleware.RBAC(backupasset.PermissionBackupAssetsPreview), backupContentHandler.Issue)
 	recoveryRouteHandlers := []gin.HandlerFunc{
 		middleware.RBAC(backupasset.PermissionBackupAssetsRecover), middleware.RequireRole("admin"),

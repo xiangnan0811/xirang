@@ -33,6 +33,37 @@ func composeGARuntime(input gaRuntimeInput) (*ga.InventoryService, error) {
 	}), nil
 }
 
+func featureLive(foundation *backupasset.FoundationService, enablement ga.ReadinessSource) (bool, error) {
+	if foundation == nil {
+		return false, fmt.Errorf("%w: backup asset foundation unavailable", backupasset.ErrInvalidState)
+	}
+	requested, err := foundation.FeatureEnabled()
+	if err != nil {
+		return false, err
+	}
+	if !requested {
+		return false, nil
+	}
+	if enablement == nil {
+		return false, nil
+	}
+	snapshot, err := enablement.CurrentReadiness(context.Background())
+	if err != nil {
+		return false, err
+	}
+	if err := ga.EvaluateEnablement(snapshot); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+func (runtime *Runtime) FeatureLive() (bool, error) {
+	if runtime == nil {
+		return false, fmt.Errorf("%w: backup asset runtime unavailable", backupasset.ErrInvalidState)
+	}
+	return featureLive(runtime.foundation, runtime.enablement)
+}
+
 func composeGAReadiness(db *gorm.DB, settingsService *settings.Service, keyring *backupasset.Keyring) ga.ReadinessSource {
 	return ga.NewDatabaseReadiness(ga.DatabaseReadinessDependencies{
 		DB: db,

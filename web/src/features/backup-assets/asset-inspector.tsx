@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight, Heart, HeartOff, RotateCcw, X } from "lucide
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
-import type { BackupAsset, BackupAssetFavorite, BackupRecoveryPoint } from "@/types/domain";
+import type { AssetRef, BackupAsset, BackupAssetFavorite, BackupRecoveryPoint } from "@/types/domain";
 
 import type { BackupAssetsInspectorTab } from "./backup-assets-route-state";
 import { AssetVersions } from "./asset-versions";
@@ -36,6 +36,8 @@ export interface AssetInspectorProps {
   hasPrevious: boolean;
   hasNext: boolean;
   onClose: () => void;
+  token?: string | null;
+  onOpenVersion?: (ref: AssetRef) => void;
 }
 
 export function AssetInspector({
@@ -57,6 +59,8 @@ export function AssetInspector({
   hasPrevious,
   hasNext,
   onClose,
+  token = null,
+  onOpenVersion,
 }: AssetInspectorProps) {
   const { t } = useTranslation();
   const titleRef = useRef<HTMLHeadingElement | null>(null);
@@ -188,7 +192,9 @@ export function AssetInspector({
           hidden={activeTab !== tab}
           className="min-h-0 flex-1 overflow-y-auto"
         >
-          {activeTab === tab ? panelFor(tab, asset, recoveryPoint, preview, evidence, diff, t) : null}
+          {activeTab === tab
+            ? panelFor(tab, asset, recoveryPoint, preview, evidence, diff, t, token, onOpenVersion)
+            : null}
         </section>
       ))}
 
@@ -224,10 +230,21 @@ function panelFor(
   preview: React.ReactNode,
   evidence: React.ReactNode,
   diff: React.ReactNode,
-  t: (key: string, options?: Record<string, unknown>) => string
+  t: (key: string, options?: Record<string, unknown>) => string,
+  token: string | null,
+  onOpenVersion?: (ref: AssetRef) => void
 ) {
   if (tab === "preview") return preview;
-  if (tab === "versions") return <AssetVersions recoveryPoint={recoveryPoint} />;
+  if (tab === "versions") {
+    return (
+      <AssetVersions
+        token={token}
+        asset={asset}
+        recoveryPoint={recoveryPoint}
+        onOpenVersion={onOpenVersion ?? (() => undefined)}
+      />
+    );
+  }
   if (tab === "evidence") return evidence;
   if (tab === "diff") return diff;
   if (tab === "security") {

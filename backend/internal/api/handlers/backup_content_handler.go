@@ -466,6 +466,10 @@ func (handler *BackupContentHandler) deliveryProof(
 		}
 		return nil, true
 	}
+	if expected == auth.StepUpActionAssetSecretReveal && actor.Role != "admin" {
+		respondForbidden(c, "权限不足")
+		return nil, false
+	}
 	claims, err := validateStepUpProof(handler.db, handler.jwtManager, rawProof, actor.UserID, actor.Role, expected)
 	if err != nil || claims == nil || claims.ExpiresAt == nil || backupasset.ValidateOpaqueID(claims.ID) != nil {
 		if errors.Is(err, ErrStepUpVerifierUnavailable) {
@@ -712,6 +716,10 @@ func respondBackupContentIssueError(c *gin.Context, err error) {
 		respondForbidden(c, "权限不足")
 	case errors.Is(err, backupasset.ErrNotFound), errors.Is(err, content.ErrContentNotFound):
 		respondNotFound(c, "备份资产不存在")
+	case errors.Is(err, content.ErrSecretRevealRequired):
+		respondForbiddenData(c, "需要二次验证", map[string]any{
+			"reason": map[string]any{"code": "secret_reveal_required", "params": map[string]string{}},
+		})
 	case errors.Is(err, content.ErrInvalidDeliveryProduct), errors.Is(err, content.ErrInvalidBrokerRequest):
 		respondBadRequest(c, "请求参数不合法")
 	case errors.Is(err, content.ErrContentFeatureDisabled), errors.Is(err, content.ErrContentAuditUnavailable),

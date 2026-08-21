@@ -197,10 +197,20 @@ func TestPrepareSchemaDownRechecksTombstoneAfterDrain(t *testing.T) {
 }
 
 func TestAdmissionInitializeUsesEnvironmentFallbackAndRollbackSafeHistory(t *testing.T) {
-	t.Run("environment enables managed mode", func(t *testing.T) {
+	t.Run("environment alone does not enable managed mode", func(t *testing.T) {
 		t.Setenv("BACKUP_ASSETS_ENABLED", "true")
 		fixture := newAdmissionControllerFixtureWithSettings(t, runtimeFoundationSettingsFromEnvironment(), nil)
 		if err := fixture.controller.Initialize(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if mode, err := fixture.controller.CurrentMode(); err != nil || mode == publication.AdmissionManaged {
+			t.Fatalf("initialized mode=%s err=%v, want unmanaged", mode, err)
+		}
+	})
+	t.Run("authorized initialize managed ignores disabled setting", func(t *testing.T) {
+		t.Setenv("BACKUP_ASSETS_ENABLED", "false")
+		fixture := newAdmissionControllerFixtureWithSettings(t, runtimeFoundationSettingsFromEnvironment(), nil)
+		if err := fixture.controller.InitializeManaged(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		if mode, err := fixture.controller.CurrentMode(); err != nil || mode != publication.AdmissionManaged {
@@ -301,7 +311,16 @@ func newAdmissionControllerFixtureWithSettings(t *testing.T, settings runtimeSet
 
 func (fixture *admissionControllerFixture) initialize(t *testing.T) {
 	t.Helper()
-	if err := fixture.controller.Initialize(context.Background()); err != nil {
+	enabled, err := fixture.controller.foundation.FeatureEnabled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled {
+		err = fixture.controller.InitializeManaged(context.Background())
+	} else {
+		err = fixture.controller.Initialize(context.Background())
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 }

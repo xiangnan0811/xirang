@@ -401,6 +401,67 @@ func (service *Service) GetEntry(ctx context.Context, pointID, entryID string, s
 	return dto, nil
 }
 
+func (service *Service) ListEntryVersions(ctx context.Context, pointID, entryID string, scope AuthorizationScope) (EntryVersionPage, error) {
+	if backupasset.ValidateAssetRef(backupasset.AssetRef{RecoveryPointID: pointID, EntryID: entryID}) != nil {
+		return EntryVersionPage{}, fmt.Errorf("%w: Catalog entry", backupasset.ErrNotFound)
+	}
+	point, _, generation, err := service.authorizedActivePoint(ctx, pointID, scope)
+	if err != nil {
+		return EntryVersionPage{}, err
+	}
+	entry, err := service.loadCatalogEntry(ctx, generation.ID, point.ID, entryID)
+	if err != nil {
+		return EntryVersionPage{}, fmt.Errorf("%w: Catalog entry", backupasset.ErrNotFound)
+	}
+	query := service.db.WithContext(ctx).
+		Table("catalog_entries AS entries").
+		Select("entries.recovery_point_id AS recovery_point_id, entries.entry_id AS entry_id, points.captured_at AS captured_at, entries.size AS size, entries.entry_type AS entry_type").
+		Joins("JOIN catalog_generations AS gens ON gens.id = entries.generation_id AND gens.is_active = ? AND gens.state = ?", true, GenerationComplete).
+		Joins("JOIN recovery_points AS points ON points.id = entries.recovery_point_id").
+		Where("entries.normalized_path = ? AND points.repository_id = ?", entry.NormalizedPath, point.RepositoryID)
+	if point.ProducingTaskID == nil {
+		query = query.Where("points.producing_task_id IS NULL")
+	} else {
+		query = query.Where("points.producing_task_id = ?", *point.ProducingTaskID)
+	}
+	query = query.Where(`
+		(points.semantics = ? AND points.state = ?) OR
+		(points.semantics IN ? AND points.state IN ?)
+	`,
+		backupasset.PointMutableHead, backupasset.RecoveryPointObserved,
+		[]backupasset.PointVersionSemantics{backupasset.PointNativeSnapshot, backupasset.PointXirangManifest, backupasset.PointImportedBaseline},
+		[]backupasset.RecoveryPointState{backupasset.RecoveryPointCommitted, backupasset.RecoveryPointDegraded},
+	).Order("points.captured_at IS NULL ASC, points.captured_at DESC, points.id DESC, entries.entry_id ASC").
+		Limit(maxCatalogPageLimit)
+	var rows []EntryVersionDTO
+	if err := query.Scan(&rows).Error; err != nil {
+		return EntryVersionPage{}, fmt.Errorf("list Catalog entry versions: %w", err)
+	}
+	pointIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		pointIDs = append(pointIDs, row.RecoveryPointID)
+	}
+	visible, err := service.ownership.AuthorizedPointIDs(ctx, scope, pointIDs)
+	if err != nil {
+		return EntryVersionPage{}, err
+	}
+	allowed := make(map[string]bool, len(visible))
+	for _, id := range visible {
+		allowed[id] = true
+	}
+	items := make([]EntryVersionDTO, 0, len(rows))
+	for _, row := range rows {
+		if !allowed[row.RecoveryPointID] {
+			continue
+		}
+		if err := row.Validate(); err != nil {
+			return EntryVersionPage{}, err
+		}
+		items = append(items, row)
+	}
+	return EntryVersionPage{Items: items}, nil
+}
+
 func (service *Service) authorizedActivePoint(
 	ctx context.Context,
 	pointID string,

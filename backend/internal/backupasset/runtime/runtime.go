@@ -495,6 +495,10 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		}
 	}
 	keyring := backupasset.NewKeyring(dependencies.DB, dependencies.Now)
+	enablement := composeGAReadiness(dependencies.DB, dependencies.Settings, keyring)
+	liveFeature := func() (bool, error) {
+		return featureLive(foundation, enablement)
+	}
 	auditWriter, err := backupasset.NewAuditWriterWithConfigSource(dependencies.DB, keyring, dependencies.Now, foundation.AuditConfig)
 	if err != nil {
 		return nil, err
@@ -507,7 +511,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	catalogService, err := catalog.NewService(catalog.ServiceDependencies{
 		DB: dependencies.DB, Ownership: catalogOwnership,
 		Cursor: catalog.NewCursorCodec(keyring, dependencies.Now, runtimeProviderCursorTTL), Now: dependencies.Now,
-		ReconcileInterval: catalogConfig.ReconcileInterval, FeatureEnabled: foundation.FeatureEnabled,
+		ReconcileInterval: catalogConfig.ReconcileInterval, FeatureEnabled: liveFeature,
 	})
 	if err != nil {
 		return nil, err
@@ -645,7 +649,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	overlayAuthorizer := &runtimeOverlayAuthorizer{catalog: catalogService, ownership: catalogOwnership}
 	overlayService, err := overlay.NewService(overlay.ServiceDependencies{
 		DB: dependencies.DB, Keys: keyring, Assets: overlayAuthorizer, Points: overlayAuthorizer, Now: dependencies.Now,
-		Audit: auditSink, FeatureEnabled: foundation.FeatureEnabled,
+		Audit: auditSink, FeatureEnabled: liveFeature,
 		Config: overlay.Config{
 			SavedSearchQuota: overlayConfig.SavedSearchQuota, FavoriteQuota: overlayConfig.FavoriteQuota,
 			TagDefinitionQuota: overlayConfig.TagDefinitionQuota, TagAssignmentQuota: overlayConfig.TagAssignmentQuota,
@@ -666,7 +670,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		DB: dependencies.DB, Scope: searchScope, Keys: keyring, Excerpts: searchExcerpts,
 		Cursor: search.NewCursorCodec(keyring, dependencies.Now, runtimeProviderCursorTTL), Tags: overlayService, Now: dependencies.Now,
 		Limits:         search.ServiceLimits{Query: searchQueryLimits, MaxCandidates: searchConfig.CandidateLimit, ExecutionTimeout: searchConfig.QueryTimeout},
-		FeatureEnabled: foundation.FeatureEnabled,
+		FeatureEnabled: liveFeature,
 		PipelineRevisions: func(ctx context.Context) (search.ContentPipelineRevisions, error) {
 			revisions, revisionErr := dependencies.Settings.ProcessingPipelineRevisions(ctx)
 			if revisionErr != nil {
@@ -879,7 +883,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	contentBroker, err := content.NewBroker(content.BrokerDependencies{
 		DB: dependencies.DB, Now: dependencies.Now,
 		FeatureEnabled: func(context.Context) (bool, error) {
-			enabled, enabledErr := foundation.FeatureEnabled()
+			enabled, enabledErr := liveFeature()
 			return enabled && contentReady.Load(), enabledErr
 		},
 		Authorize: contentAuthorizer, RecoveryAuthorize: recoveryResults,
@@ -1223,7 +1227,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		retentionHolds: retentionHolds, retentionPurge: retentionPurge,
 		managedTaskRetention: managedTaskRetention,
 		inventory:            inventory,
-		enablement:           composeGAReadiness(dependencies.DB, dependencies.Settings, keyring),
+		enablement:           enablement,
 		transitioner:         admission,
 		metrics:              metricsSink,
 		gaMetrics:            gaMetrics,
@@ -2225,7 +2229,15 @@ func (runtime *Runtime) StartupPass(ctx context.Context) error {
 		}
 		return nil
 	}
-	if err := runtime.admission.Initialize(ctx); err != nil {
+	requested, err := runtime.foundation.FeatureEnabled()
+	if err != nil {
+		return err
+	}
+	if requested {
+		if err := runtime.admission.InitializeManaged(ctx); err != nil {
+			return err
+		}
+	} else if err := runtime.admission.Initialize(ctx); err != nil {
 		return err
 	}
 	mode, err := runtime.admission.CurrentMode()
@@ -2294,7 +2306,7 @@ func (runtime *Runtime) startupSearch(ctx context.Context) error {
 	if runtime == nil || runtime.foundation == nil || runtime.keyring == nil || runtime.searchWorker == nil {
 		return fmt.Errorf("%w: Search runtime unavailable", backupasset.ErrInvalidState)
 	}
-	enabled, err := runtime.foundation.FeatureEnabled()
+	enabled, err := runtime.FeatureLive()
 	if err != nil {
 		return err
 	}
@@ -2345,7 +2357,7 @@ func (runtime *Runtime) ReplaceSearchTokenForReindex(ctx context.Context) (backu
 	}
 	runtime.searchKeyMu.Lock()
 	defer runtime.searchKeyMu.Unlock()
-	enabled, err := runtime.foundation.FeatureEnabled()
+	enabled, err := runtime.FeatureLive()
 	if err != nil {
 		return backupasset.DomainKeyMaterial{}, err
 	}

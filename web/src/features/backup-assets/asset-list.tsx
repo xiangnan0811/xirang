@@ -169,6 +169,7 @@ export function AssetList({
                   <span className="min-w-0 truncate font-medium" title={row.asset.name}>
                     {row.asset.name}
                   </span>
+                  <RetainedVersionCount row={row} />
                 </span>
                 <span className="text-right tabular-nums text-muted-foreground">{formatBytes(row.asset.size)}</span>
                 <time
@@ -184,6 +185,18 @@ export function AssetList({
         </div>
       </div>
     </div>
+  );
+}
+
+export function RetainedVersionCount({ row }: { row: BackupAssetResultRow }) {
+  const { t } = useTranslation();
+  if (row.source !== "search" || row.retainedVersionCount === undefined || row.retainedVersionCount <= 1) {
+    return null;
+  }
+  return (
+    <span className="shrink-0 text-muted-foreground">
+      {t("backupAssets.browser.retainedVersionCount", { count: row.retainedVersionCount })}
+    </span>
   );
 }
 

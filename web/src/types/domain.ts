@@ -1867,6 +1867,17 @@ export interface BackupAssetPage {
   nextCursor: string | null;
 }
 
+export interface BackupAssetVersion {
+  ref: AssetRef;
+  capturedAt: string | null;
+  size: number;
+  entryType: CatalogEntryType;
+}
+
+export interface BackupAssetVersionPage {
+  items: BackupAssetVersion[];
+}
+
 export type BackupContentAction = "preview" | "download";
 export type BackupContentRenderer =
   | "escaped_text"
@@ -2214,6 +2225,7 @@ export interface AssetSearchHit {
   hitFields: AssetSearchHitField[];
   score: number;
   snippet: AssetSearchSnippet | null;
+  retainedVersionCount?: number;
 }
 
 export interface AssetSearchSuggestion {

@@ -284,6 +284,27 @@ type BreadcrumbDTO struct {
 	Name            string `json:"name"`
 }
 
+type EntryVersionDTO struct {
+	RecoveryPointID string                       `json:"recovery_point_id"`
+	EntryID         string                       `json:"entry_id"`
+	CapturedAt      *time.Time                   `json:"captured_at"`
+	Size            int64                        `json:"size"`
+	EntryType       backupasset.CatalogEntryType `json:"entry_type"`
+}
+
+func (version EntryVersionDTO) Validate() error {
+	if backupasset.ValidateAssetRef(backupasset.AssetRef{RecoveryPointID: version.RecoveryPointID, EntryID: version.EntryID}) != nil ||
+		version.Size < 0 || !validCatalogEntryType(version.EntryType) ||
+		(version.CapturedAt != nil && !isUTC(*version.CapturedAt)) {
+		return fmt.Errorf("%w: invalid entry version DTO", ErrInvalidCatalogContract)
+	}
+	return nil
+}
+
+type EntryVersionPage struct {
+	Items []EntryVersionDTO `json:"items"`
+}
+
 type EntryDTO struct {
 	RecoveryPointID     string                       `json:"recovery_point_id"`
 	EntryID             string                       `json:"entry_id"`

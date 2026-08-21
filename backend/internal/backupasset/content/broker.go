@@ -343,6 +343,9 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 	if request.Action == DeliveryDownload && request.Actor.Role != "admin" {
 		return IssuedTicket{}, backupasset.ErrForbidden
 	}
+	if request.Proof != nil && request.Proof.Action == auth.StepUpActionAssetSecretReveal && request.Actor.Role != "admin" {
+		return IssuedTicket{}, backupasset.ErrForbidden
+	}
 	if !validIssueRequest(request, now) {
 		return IssuedTicket{}, ErrInvalidDeliveryProduct
 	}
@@ -492,6 +495,10 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 		Proof: request.Proof, AbsoluteExpiresAt: deadlines.AbsoluteExpiresAt,
 	}
 	if err := ValidateDeliveryProduct(product, now); err != nil {
+		if errors.Is(err, ErrInvalidDeliveryProduct) && request.Action == DeliveryPreview && request.Proof == nil &&
+			(classification.Classification == ClassificationSecret || classification.Classification == ClassificationUnknown) {
+			return IssuedTicket{}, ErrSecretRevealRequired
+		}
 		return IssuedTicket{}, err
 	}
 	etag := representationETag(representationAsset, product, renderPlan, classification)
@@ -2104,7 +2111,8 @@ func recoveryResultTicketAuditInput(
 func ticketFailureAuditOutcome(err error) (backupasset.AuditOutcome, string) {
 	switch {
 	case errors.Is(err, ErrInvalidDeliveryProduct), errors.Is(err, ErrInvalidRendererRequest),
-		errors.Is(err, ErrRendererUnsupported), errors.Is(err, ErrMIMEConfusion), errors.Is(err, ErrRasterLimit):
+		errors.Is(err, ErrRendererUnsupported), errors.Is(err, ErrMIMEConfusion), errors.Is(err, ErrRasterLimit),
+		errors.Is(err, ErrSecretRevealRequired):
 		return backupasset.AuditOutcomeBlocked, "request_blocked"
 	default:
 		return backupasset.AuditOutcomeFailure, "request_failed"

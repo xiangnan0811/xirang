@@ -116,6 +116,50 @@ func TestTransitionFeatureDisablementUsesExistingDrain(t *testing.T) {
 	}
 }
 
+func TestFeatureLiveRequestedTrueWithoutAckIsClosed(t *testing.T) {
+	runtime := EnablementRuntime(gaStaticReadiness{snapshot: ga.ReadinessSnapshot{
+		Class:             ga.InstallationExisting,
+		Status:            ga.ReadinessReady,
+		InventoryComplete: true,
+		InventoryDigest:   "current-digest",
+		ExportRootValid:   true,
+		KeyDomainsReady:   true,
+	}}, nil)
+	runtime.foundation = backupasset.NewFoundationService(runtimeFoundationSettings(true))
+
+	live, err := runtime.FeatureLive()
+	if err != nil {
+		t.Fatalf("FeatureLive: %v", err)
+	}
+	if live {
+		t.Fatal("requested true without ack must not be live")
+	}
+	requested, err := runtime.foundation.FeatureEnabled()
+	if err != nil || !requested {
+		t.Fatalf("requested setting=%t err=%v, want true", requested, err)
+	}
+}
+
+func TestFeatureLiveRequestedTrueWhenReadyIsLive(t *testing.T) {
+	runtime := EnablementRuntime(readyGAEnablement(), nil)
+	runtime.foundation = backupasset.NewFoundationService(runtimeFoundationSettings(true))
+
+	live, err := runtime.FeatureLive()
+	if err != nil || !live {
+		t.Fatalf("FeatureLive=%t err=%v, want live", live, err)
+	}
+}
+
+func TestFeatureLiveRequestedFalseStaysClosed(t *testing.T) {
+	runtime := EnablementRuntime(readyGAEnablement(), nil)
+	runtime.foundation = backupasset.NewFoundationService(runtimeFoundationSettings(false))
+
+	live, err := runtime.FeatureLive()
+	if err != nil || live {
+		t.Fatalf("FeatureLive=%t err=%v, want closed", live, err)
+	}
+}
+
 func TestStartupRequestedEnablementWithoutReadinessDoesNotBecomeManaged(t *testing.T) {
 	db := openRuntimeTestDB(t)
 	if err := db.AutoMigrate(
@@ -152,6 +196,10 @@ func TestStartupRequestedEnablementWithoutReadinessDoesNotBecomeManaged(t *testi
 	}
 	if mode == publication.AdmissionManaged {
 		t.Fatalf("blocked requested enablement became managed mode=%s", mode)
+	}
+	live, liveErr := runtime.FeatureLive()
+	if liveErr != nil || live {
+		t.Fatalf("blocked requested enablement FeatureLive=%t err=%v", live, liveErr)
 	}
 }
 

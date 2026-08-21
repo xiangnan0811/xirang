@@ -200,6 +200,7 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 		method string
 		path   string
 	}{
+		{http.MethodGet, "/api/v1/recovery-points/:id/entries/:entryId/versions"},
 		{http.MethodPost, "/api/v1/recovery-points/:id/entries/:entryId/preview-jobs"},
 		{http.MethodGet, "/api/v1/recovery-points/:id/entries/:entryId/preview-jobs/:jobId"},
 		{http.MethodPost, "/api/v1/recovery-points/:id/entries/:entryId/preview-jobs/:jobId/cancel"},

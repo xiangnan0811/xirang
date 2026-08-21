@@ -664,6 +664,23 @@ func TestBrokerViewerAndWrongDownloadProofFailBeforeProviderOrGrant(t *testing.T
 		assertBrokerGrantCount(t, harness.db, 0)
 	})
 
+	t.Run("operator secret reveal proof", func(t *testing.T) {
+		harness := newBrokerTestHarness(t)
+		harness.asset.Path = "/home/app/.ssh/id_rsa"
+		request := harness.issueRequest()
+		request.Proof = &StepUpProof{
+			Action: auth.StepUpActionAssetSecretReveal, ID: strings.Repeat("e", 32),
+			ExpiresAt: harness.now.Add(time.Minute),
+		}
+		if _, err := harness.broker.Issue(context.Background(), request); !errors.Is(err, backupasset.ErrForbidden) {
+			t.Fatalf("operator secret reveal error=%v", err)
+		}
+		if harness.source.openCalls != 0 || len(*harness.order) != 0 {
+			t.Fatalf("operator secret reveal touched dependencies order=%v source=%d", *harness.order, harness.source.openCalls)
+		}
+		assertBrokerGrantCount(t, harness.db, 0)
+	})
+
 	t.Run("download wrong proof", func(t *testing.T) {
 		harness := newBrokerTestHarness(t)
 		request := harness.issueRequest()
@@ -690,7 +707,7 @@ func TestBrokerSecretPreviewRequiresExactProofAndBindsProofExpiry(t *testing.T) 
 	harness := newBrokerTestHarness(t)
 	harness.asset.Path = "/home/app/.ssh/id_rsa"
 	request := harness.issueRequest()
-	if _, err := harness.broker.Issue(context.Background(), request); !errors.Is(err, ErrInvalidDeliveryProduct) {
+	if _, err := harness.broker.Issue(context.Background(), request); !errors.Is(err, ErrSecretRevealRequired) {
 		t.Fatalf("secret without proof error=%v", err)
 	}
 	assertBrokerGrantCount(t, harness.db, 0)
@@ -700,7 +717,7 @@ func TestBrokerSecretPreviewRequiresExactProofAndBindsProofExpiry(t *testing.T) 
 
 	harness = newBrokerTestHarness(t)
 	harness.asset.Path = "/home/app/.ssh/id_rsa"
-	request = harness.issueRequest()
+	request = harness.adminIssueRequest()
 	proofExpiry := harness.now.Add(45 * time.Second)
 	request.Proof = &StepUpProof{Action: auth.StepUpActionAssetSecretReveal, ID: strings.Repeat("e", 32), ExpiresAt: proofExpiry}
 	ticket, err := harness.broker.Issue(context.Background(), request)
@@ -770,7 +787,7 @@ func TestBrokerIssueSearchSecretEvidenceElevatesPreview(t *testing.T) {
 	harness := newBrokerTestHarness(t)
 	harness.asset.SearchClassification = ClassificationSecret
 	harness.asset.SearchClassificationRevision = 9
-	request := harness.issueRequest()
+	request := harness.adminIssueRequest()
 	request.Proof = &StepUpProof{
 		Action: auth.StepUpActionAssetSecretReveal, ID: strings.Repeat("e", 32),
 		ExpiresAt: harness.now.Add(time.Minute),
@@ -871,7 +888,7 @@ func TestBrokerIssueAuditsBlockedAndFailureOutcomesWithoutTicket(t *testing.T) {
 			mutate: func(harness *brokerTestHarness) {
 				harness.asset.Path = "/home/app/.ssh/id_rsa"
 			},
-			wantErr: ErrInvalidDeliveryProduct, wantOutcome: backupasset.AuditOutcomeBlocked,
+			wantErr: ErrSecretRevealRequired, wantOutcome: backupasset.AuditOutcomeBlocked,
 			wantFailure: "request_blocked", wantMetric: MetricOutcomeBlocked,
 		},
 		{
@@ -1822,6 +1839,14 @@ func (harness *brokerTestHarness) issueRequest() IssueRequest {
 		Ref: harness.asset.Ref, Action: DeliveryPreview, Renderer: RendererSafeRaster, Profile: ProfileRasterV1,
 		SecureCookie: true,
 	}
+}
+
+func (harness *brokerTestHarness) adminIssueRequest() IssueRequest {
+	request := harness.issueRequest()
+	request.Actor.Username = "admin"
+	request.Actor.Role = "admin"
+	request.Session.Role = "admin"
+	return request
 }
 
 type brokerAssetAuthorizerFake struct {

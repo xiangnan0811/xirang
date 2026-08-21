@@ -15,6 +15,7 @@ import { LoadingState } from "@/components/ui/loading-state";
 import type { AuthContextValue } from "@/context/auth-context.shared";
 import type { AssetRef, BackupAsset, BackupContentTicket } from "@/types/domain";
 
+import { presentBackupAssetsCode } from "./backup-assets-presenters";
 import { selectProcessingRepresentation } from "./backup-assets-processing-state";
 import type { ProcessingPreviewSource } from "./backup-asset-processing-panel";
 import type { BackupAssetsValueResource } from "./use-backup-assets-state";
@@ -380,9 +381,16 @@ function PreviewBody({
     return <LoadingState title={t("backupAssets.preview.loading")} rows={4} />;
   }
   if (resource.status === "blocked" || resource.status === "error") {
+    const capabilityKey =
+      resource.error?.capabilityCode === undefined
+        ? null
+        : presentBackupAssetsCode("capability", resource.error.capabilityCode).translationKey;
+    const workerHint =
+      resource.error?.code === "unsupported" || resource.error?.code === "temporarily_unavailable";
     return (
       <InlineAlert tone={resource.status === "blocked" ? "warning" : "critical"}>
-        {t(resource.error?.translationKey ?? "backupAssets.preview.unavailable")}
+        <span>{t(capabilityKey ?? resource.error?.translationKey ?? "backupAssets.preview.unavailable")}</span>
+        {workerHint ? <span className="mt-2 block">{t("backupAssets.preview.optionalWorker")}</span> : null}
       </InlineAlert>
     );
   }

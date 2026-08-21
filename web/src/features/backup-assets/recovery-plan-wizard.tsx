@@ -2,6 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { ShieldAlert, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -195,6 +205,7 @@ export function RecoveryPlanWizard({ open, recovery, onOpenChange }: RecoveryPla
   const [targetNodeId, setTargetNodeId] = useState("");
   const [targetRootId, setTargetRootId] = useState("");
   const [conflictPolicy, setConflictPolicy] = useState<RecoveryConflictPolicy>("fail_on_conflict");
+  const [inPlaceConfirmOpen, setInPlaceConfirmOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -216,6 +227,14 @@ export function RecoveryPlanWizard({ open, recovery, onOpenChange }: RecoveryPla
     await recovery.createPlan();
   };
 
+  const requestCreate = () => {
+    if (targetMode === "in_place") {
+      setInPlaceConfirmOpen(true);
+      return;
+    }
+    void submitTarget();
+  };
+
   const close = () => {
     recovery.dismiss();
     onOpenChange(false);
@@ -232,6 +251,7 @@ export function RecoveryPlanWizard({ open, recovery, onOpenChange }: RecoveryPla
   ];
 
   return (
+    <>
     <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : close())}>
       <DialogContent
         size="lg"
@@ -315,7 +335,7 @@ export function RecoveryPlanWizard({ open, recovery, onOpenChange }: RecoveryPla
                   type="button"
                   loading={state.phase === "creating"}
                   disabled={targetNodeId === "" || targetRootId.trim() === ""}
-                  onClick={() => void submitTarget()}
+                  onClick={requestCreate}
                 >
                   {t("backupAssets.recovery.target.create")}
                 </Button>
@@ -430,5 +450,25 @@ export function RecoveryPlanWizard({ open, recovery, onOpenChange }: RecoveryPla
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <AlertDialog open={inPlaceConfirmOpen} onOpenChange={setInPlaceConfirmOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t("backupAssets.recovery.target.inPlaceConfirmTitle")}</AlertDialogTitle>
+          <AlertDialogDescription>{t("backupAssets.recovery.target.inPlaceConfirmDescription")}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() => {
+              setInPlaceConfirmOpen(false);
+              void submitTarget();
+            }}
+          >
+            {t("backupAssets.recovery.target.inPlaceConfirm")}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }

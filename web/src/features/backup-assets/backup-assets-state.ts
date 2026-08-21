@@ -13,6 +13,7 @@ export interface BackupAssetResultRow {
   source: "browse" | "search";
   hitFields: AssetSearchHitField[];
   snippet: AssetSearchSnippet | null;
+  retainedVersionCount?: number;
 }
 
 export type BackupAssetsResultCoverage = "complete" | "partial" | "building" | "failed" | "unavailable";

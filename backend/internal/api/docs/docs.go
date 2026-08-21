@@ -3941,88 +3941,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/backup-repositories/{id}/purge-preview": {
-            "post": {
-                "security": [
-                    {
-                        "Bearer": []
-                    }
-                ],
-                "description": "按所选 RecoveryPoint 计算仓库级清理影响修订，不要求仓库范围保留策略",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "backup-retention"
-                ],
-                "summary": "预览精确清理影响",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "仓库 opaque ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "精确清理项",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.backupRetentionPurgePreviewPayload"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/internal_api_handlers.Response"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "data": {
-                                            "$ref": "#/definitions/internal_api_handlers.BackupRetentionPurgeImpactView"
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    }
-                }
-            }
-        },
         "/backup-repositories/{id}/purge-plans": {
             "post": {
                 "security": [
@@ -4072,6 +3990,88 @@ const docTemplate = `{
                                     "properties": {
                                         "data": {
                                             "$ref": "#/definitions/internal_api_handlers.BackupRetentionPurgePlanView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-repositories/{id}/purge-preview": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "按所选 RecoveryPoint 计算仓库级清理影响修订，不要求仓库范围保留策略",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-retention"
+                ],
+                "summary": "预览精确清理影响",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "仓库 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "精确清理项",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.backupRetentionPurgePreviewPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/internal_api_handlers.BackupRetentionPurgeImpactView"
                                         }
                                     }
                                 }
@@ -4493,7 +4493,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "签名游标",
+                        "description": "未签名策略 ID 游标",
                         "name": "cursor",
                         "in": "query"
                     }
@@ -10646,6 +10646,89 @@ const docTemplate = `{
                 }
             }
         },
+        "/recovery-points/{id}/entries/{entryId}/versions": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "只返回 opaque ID、捕获时间、大小和类型；不返回路径或 locator",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "列出同一血缘路径的保留版本",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "目录项 opaque ID",
+                        "name": "entryId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.EntryVersionPage"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/recovery-points/{id}/evidence": {
             "get": {
                 "security": [
@@ -15679,6 +15762,9 @@ const docTemplate = `{
                 "lease_count": {
                     "type": "integer"
                 },
+                "next_cursor": {
+                    "type": "string"
+                },
                 "points": {
                     "type": "array",
                     "items": {
@@ -15751,20 +15837,6 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_api_handlers.BackupRetentionPurgePlanItemView": {
-            "type": "object",
-            "properties": {
-                "capability_revision": {
-                    "type": "integer"
-                },
-                "point_revision": {
-                    "type": "integer"
-                },
-                "recovery_point_id": {
-                    "type": "string"
-                }
-            }
-        },
         "internal_api_handlers.BackupRetentionPurgeImpactView": {
             "type": "object",
             "properties": {
@@ -15791,6 +15863,20 @@ const docTemplate = `{
                 },
                 "worm_count": {
                     "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.BackupRetentionPurgePlanItemView": {
+            "type": "object",
+            "properties": {
+                "capability_revision": {
+                    "type": "integer"
+                },
+                "point_revision": {
+                    "type": "integer"
+                },
+                "recovery_point_id": {
+                    "type": "string"
                 }
             }
         },
@@ -17089,6 +17175,20 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.backupRetentionPurgePlanPayload": {
+            "type": "object",
+            "properties": {
+                "expected_impact_revision": {
+                    "type": "integer"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.BackupRetentionPurgePlanItemView"
+                    }
+                }
+            }
+        },
         "internal_api_handlers.backupRetentionPurgePreviewPayload": {
             "type": "object",
             "properties": {
@@ -17106,24 +17206,22 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_api_handlers.backupRetentionPurgePlanPayload": {
-            "type": "object",
-            "properties": {
-                "expected_impact_revision": {
-                    "type": "integer"
-                },
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/internal_api_handlers.BackupRetentionPurgePlanItemView"
-                    }
-                }
-            }
-        },
         "internal_api_handlers.backupRetentionRevisionPayload": {
             "type": "object",
             "properties": {
+                "cursor": {
+                    "type": "string"
+                },
+                "evaluated_at": {
+                    "type": "string"
+                },
                 "expected_revision": {
+                    "type": "integer"
+                },
+                "inspected_limit": {
+                    "type": "integer"
+                },
+                "limit": {
                     "type": "integer"
                 }
             }
@@ -19603,6 +19701,37 @@ const docTemplate = `{
                 }
             }
         },
+        "xirang_backend_internal_backupasset_catalog.EntryVersionDTO": {
+            "type": "object",
+            "properties": {
+                "captured_at": {
+                    "type": "string"
+                },
+                "entry_id": {
+                    "type": "string"
+                },
+                "entry_type": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CatalogEntryType"
+                },
+                "recovery_point_id": {
+                    "type": "string"
+                },
+                "size": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.EntryVersionPage": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.EntryVersionDTO"
+                    }
+                }
+            }
+        },
         "xirang_backend_internal_backupasset_catalog.EvidenceDTO": {
             "type": "object",
             "properties": {
@@ -21711,6 +21840,9 @@ const docTemplate = `{
                 "kind": {
                     "$ref": "#/definitions/xirang_backend_internal_backupasset.ImportCandidateKind"
                 },
+                "quarantined": {
+                    "type": "boolean"
+                },
                 "repository_id": {
                     "type": "string"
                 },
@@ -21773,6 +21905,9 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "task_name": {
+                    "type": "string"
+                },
+                "task_repository_link_id": {
                     "type": "string"
                 }
             }
@@ -22396,6 +22531,9 @@ const docTemplate = `{
                 },
                 "ref": {
                     "$ref": "#/definitions/xirang_backend_internal_backupasset.AssetRef"
+                },
+                "retained_version_count": {
+                    "type": "integer"
                 },
                 "score": {
                     "type": "integer"
