@@ -55,12 +55,9 @@ func (controller *AdmissionController) Initialize(ctx context.Context) error {
 	return controller.initializeTo(target)
 }
 
-func (controller *AdmissionController) InitializeManaged(ctx context.Context) error {
+func (controller *AdmissionController) InitializeManaged(_ context.Context) error {
 	if controller == nil {
 		return fmt.Errorf("%w: admission controller is unavailable", backupasset.ErrInvalidState)
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	return controller.initializeTo(publication.AdmissionManaged)
 }
