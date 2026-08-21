@@ -18,38 +18,43 @@ export interface AssetVersionsProps {
 
 export function AssetVersions({ token, asset, recoveryPoint, onOpenVersion }: AssetVersionsProps) {
   const { t } = useTranslation();
-  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
-  const [items, setItems] = useState<BackupAssetVersion[]>([]);
+  const requestKey = token ? `${token}:${asset.ref.recoveryPointId}:${asset.ref.entryId}` : null;
+  const [loaded, setLoaded] = useState<{ key: string; items: BackupAssetVersion[] } | null>(null);
+  const [failedKey, setFailedKey] = useState<string | null>(null);
   const [error, setError] = useState<BackupAssetsUIError>();
 
   useEffect(() => {
-    if (!token) {
-      setStatus("error");
-      setItems([]);
-      return;
-    }
+    if (!token || requestKey === null) return;
     const controller = new AbortController();
-    setStatus("loading");
-    setError(undefined);
     void apiClient
       .listAssetVersions(token, asset.ref, controller.signal)
       .then((projection) => {
+        if (controller.signal.aborted) return;
         if (projection.status !== "available") {
-          setStatus("error");
-          setItems([]);
+          setLoaded(null);
+          setFailedKey(requestKey);
+          setError(undefined);
           return;
         }
-        setItems(projection.value.items);
-        setStatus("ready");
+        setLoaded({ key: requestKey, items: projection.value.items });
+        setFailedKey(null);
+        setError(undefined);
       })
       .catch((cause: unknown) => {
         if (controller.signal.aborted) return;
+        setLoaded(null);
+        setFailedKey(requestKey);
         setError(mapBackupAssetsError(cause, "entry"));
-        setStatus("error");
-        setItems([]);
       });
     return () => controller.abort();
-  }, [asset.ref.entryId, asset.ref.recoveryPointId, token]);
+  }, [asset.ref, requestKey, token]);
+
+  const items = loaded?.key === requestKey ? loaded.items : null;
+  const status = requestKey === null || failedKey === requestKey
+    ? "error"
+    : items === null
+      ? "loading"
+      : "ready";
 
   return (
     <div className="space-y-4 p-3">
@@ -76,7 +81,7 @@ export function AssetVersions({ token, asset, recoveryPoint, onOpenVersion }: As
           {t(error?.translationKey ?? "backupAssets.versions.unavailable")}
         </InlineAlert>
       ) : null}
-      {status === "ready" ? (
+      {status === "ready" && items ? (
         <ul className="space-y-2" aria-label={t("backupAssets.versions.list")}>
           {items.map((item) => {
             const current =
