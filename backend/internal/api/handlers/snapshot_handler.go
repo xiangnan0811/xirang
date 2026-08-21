@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"xirang/backend/internal/backupasset/publication"
@@ -15,6 +16,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// snapshotIDPattern 校验快照 ID 格式（十六进制字符串，4-64 位）。
+var snapshotIDPattern = regexp.MustCompile(`^[a-fA-F0-9]{4,64}$`)
 
 // dangerousRestorePaths 禁止恢复到的系统目录
 var dangerousRestorePaths = []string{

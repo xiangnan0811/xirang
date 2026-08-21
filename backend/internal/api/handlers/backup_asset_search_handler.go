@@ -189,7 +189,9 @@ func (handler *BackupAssetSearchHandler) Search(c *gin.Context) {
 		Authorization: backupAssetAuthorizationScope(c), SecretProof: proof,
 	}, canonical.Request)
 	if err != nil {
-		handler.writeSearchAudit(c, canonical.JSON, proof, backupasset.AuditOutcomeFailure, searchOverlayFailureCode(err), int64(len(result.Items)))
+		if auditErr := handler.writeSearchAudit(c, canonical.JSON, proof, backupasset.AuditOutcomeFailure, searchOverlayFailureCode(err), int64(len(result.Items))); auditErr != nil {
+			logger.Module("backup-asset-search").Warn().Err(auditErr).Msg("备份资产失败搜索审计写入失败")
+		}
 		respondBackupAssetSearchOverlayError(c, err)
 		return
 	}
