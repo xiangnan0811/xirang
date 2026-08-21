@@ -65,6 +65,7 @@
       "release_commit": "9f059b0b3283825b41462c76ea42259a2d9ab9dc",
       "github_release_v0_50_2": "https://github.com/xiangnan0811/xirang/releases/tag/v0.50.2",
       "docker_v0_50_2": "run_32478196001_success_amd64_arm64_and_manifest",
+      "post_release": "exact_release_ci_32478184563_and_release_please_32478184567_success",
       "hub_description": "not_run_readme_unchanged_not_expected",
       "archive_path": ".trellis/tasks/archive/2026-08/08-21-backup-assets-review-closeout",
       "completed_at": "2026-08-21",
