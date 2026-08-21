@@ -1033,7 +1033,12 @@ return { mode, encryptionProfile, kmsKeyStatus, kmsReadKeyCount: kmsCount };
 - Secret-reveal preview retry is Admin-only (`role === "admin"` and
   `ensureStepUpProof`). Presence of the helper is not enough. The same
   session proof is attached to every `search` call (first page, load-more,
-  saved-search reload) and never put in the URL.
+  saved-search reload) and to preview renew for the same session, user,
+  asset, and action. Never put the proof in the URL. Clear it on
+  token/role change or when the selected asset changes.
+- List/grid rows use `assetRefKey(ref)` (`recoveryPointId + entryId`) as
+  the React key. The preview viewport must stay readable (`min-h-[24rem]`
+  flex-fill, not a locked 18rem pane).
 - Inline AST and saved-search use stay in the POST body. Query text, path,
   selection, result, and saved AST are not persisted to local/session storage
   or encoded into URLs; only an opaque saved-search ID may be URL-safe later.

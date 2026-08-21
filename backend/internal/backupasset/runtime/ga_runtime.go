@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/ga"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/settings"
@@ -61,7 +62,22 @@ func (runtime *Runtime) FeatureLive() (bool, error) {
 	if runtime == nil {
 		return false, fmt.Errorf("%w: backup asset runtime unavailable", backupasset.ErrInvalidState)
 	}
-	return featureLive(runtime.foundation, runtime.enablement)
+	live, err := featureLive(runtime.foundation, runtime.enablement)
+	observeFeatureGates(runtime, live && err == nil)
+	return live, err
+}
+
+func observeFeatureGates(runtime *Runtime, live bool) {
+	if runtime == nil || runtime.gaMetrics == nil {
+		return
+	}
+	requested := false
+	if runtime.foundation != nil {
+		if value, enabledErr := runtime.foundation.FeatureEnabled(); enabledErr == nil {
+			requested = value
+		}
+	}
+	runtime.gaMetrics.SetFeatureGates(requested, live)
 }
 
 func composeGAReadiness(db *gorm.DB, settingsService *settings.Service, keyring *backupasset.Keyring) ga.ReadinessSource {
@@ -167,6 +183,57 @@ func EnablementRuntime(readiness ga.ReadinessSource, inner publication.FeatureTr
 		exportManager:  gaSilentExportManager{},
 		gaMetrics:      ga.NoopMetrics{},
 	}
+}
+
+// WithFoundation attaches the settings-backed foundation used by FeatureLive
+// and handler config. Tests use this to prove requested-true / live-false.
+func (runtime *Runtime) WithFoundation(foundation *backupasset.FoundationService) *Runtime {
+	if runtime != nil {
+		runtime.foundation = foundation
+	}
+	return runtime
+}
+
+// WithCatalogService attaches a production Catalog service so HTTP tests can
+// prove FeatureLive without the FeatureDisabled stub.
+func (runtime *Runtime) WithCatalogService(service *catalog.Service) *Runtime {
+	if runtime != nil {
+		runtime.catalogService = service
+	}
+	return runtime
+}
+
+type staticReadiness struct {
+	snapshot ga.ReadinessSnapshot
+}
+
+func (source staticReadiness) CurrentReadiness(context.Context) (ga.ReadinessSnapshot, error) {
+	return source.snapshot, nil
+}
+
+// ExistingInstallReadyUnacked is an existing install that is inventory-ready
+// but has no Admin ack. FeatureLive stays false even when the setting is on.
+func ExistingInstallReadyUnacked() ga.ReadinessSource {
+	return staticReadiness{snapshot: ga.ReadinessSnapshot{
+		Class:             ga.InstallationExisting,
+		Status:            ga.ReadinessReady,
+		InventoryComplete: true,
+		InventoryDigest:   "current-digest",
+		ExportRootValid:   true,
+		KeyDomainsReady:   true,
+	}}
+}
+
+// FreshInstallReady is a fresh install that may become live when requested.
+func FreshInstallReady() ga.ReadinessSource {
+	return staticReadiness{snapshot: ga.ReadinessSnapshot{
+		Class:             ga.InstallationFresh,
+		Status:            ga.ReadinessReady,
+		InventoryComplete: true,
+		InventoryDigest:   "test-enablement-digest",
+		ExportRootValid:   true,
+		KeyDomainsReady:   true,
+	}}
 }
 
 type gaSilentContentManager struct{}

@@ -1965,10 +1965,17 @@ func (runtime *Runtime) TransitionFeature(ctx context.Context, enabled bool, per
 			runtime.contentManager.SetReady(false)
 			return errors.Join(err, runtime.contentManager.PrepareDisable(ctx))
 		}
+		if err := runtime.startSearchAfterEnable(ctx); err != nil {
+			runtime.contentManager.SetReady(false)
+			disableErr := runtime.contentManager.PrepareDisable(ctx)
+			revertErr := runtime.revertEnabledAfterSearchFailure(ctx)
+			return errors.Join(err, disableErr, revertErr)
+		}
 		runtime.contentManager.SetReady(true)
 		return nil
 	}
 	runtime.contentManager.SetReady(false)
+	runtime.setSearchReady(false)
 	if err := runtime.contentManager.PrepareDisable(ctx); err != nil {
 		return err
 	}
@@ -2300,6 +2307,35 @@ func (runtime *Runtime) StartupPass(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (runtime *Runtime) startSearchAfterEnable(ctx context.Context) error {
+	if runtime == nil {
+		return fmt.Errorf("%w: backup asset runtime unavailable", backupasset.ErrInvalidState)
+	}
+	if runtime.foundation == nil || runtime.keyring == nil || runtime.searchWorker == nil {
+		runtime.setSearchReady(false)
+		return nil
+	}
+	if err := runtime.startupSearch(ctx); err != nil {
+		return err
+	}
+	if runtime.searchReady != nil && !runtime.searchReady.Load() {
+		return fmt.Errorf("%w: search did not become ready after enablement", backupasset.ErrInvalidState)
+	}
+	return nil
+}
+
+func (runtime *Runtime) revertEnabledAfterSearchFailure(ctx context.Context) error {
+	if runtime == nil || runtime.transitioner == nil {
+		return fmt.Errorf("%w: backup asset feature revert unavailable", backupasset.ErrInvalidState)
+	}
+	return runtime.transitioner.TransitionFeature(ctx, false, func() error {
+		if runtime.settings == nil {
+			return nil
+		}
+		return runtime.settings.Update("backup_assets.enabled", "false")
+	})
 }
 
 func (runtime *Runtime) startupSearch(ctx context.Context) error {

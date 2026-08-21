@@ -23,6 +23,7 @@ func TestGAMetricsExposeOnlyFrozenLowCardinalityLabels(t *testing.T) {
 	metrics.SetConflictCount(ConflictSharedResticIdentity, 2)
 	metrics.ObserveEnablementReject(RejectAckRequired)
 	metrics.SetExportRootProbe(true)
+	metrics.SetFeatureGates(true, false)
 
 	actual := gaMetricLabelNames(t, registry)
 	expected := map[string][]string{
@@ -32,6 +33,8 @@ func TestGAMetricsExposeOnlyFrozenLowCardinalityLabels(t *testing.T) {
 		"xirang_backup_asset_ga_conflicts":                {"kind"},
 		"xirang_backup_asset_ga_enablement_rejects_total": {"reason"},
 		"xirang_backup_asset_ga_export_root_probe":        {"result"},
+		FeatureRequestedMetric:                            {},
+		FeatureLiveMetric:                                 {},
 	}
 	if len(actual) != len(expected) {
 		t.Fatalf("metric family count=%d want=%d: %#v", len(actual), len(expected), actual)
@@ -97,6 +100,7 @@ func TestGANoopMetricsAreSafe(t *testing.T) {
 	metrics.SetConflictCount(ConflictCapabilityGap, 1)
 	metrics.ObserveEnablementReject(RejectInventoryIncomplete)
 	metrics.SetExportRootProbe(false)
+	metrics.SetFeatureGates(false, false)
 }
 
 func gaMetricLabelNames(t *testing.T, registry *prometheus.Registry) map[string][]string {

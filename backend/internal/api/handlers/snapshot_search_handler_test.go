@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -59,16 +58,8 @@ func TestSearchSnapshotFiles_EmptyQuery(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("期望 400，实际: %d", w.Code)
-	}
-
-	var resp Response
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("解析响应失败: %v", err)
-	}
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("期望 code=400，实际: %d", resp.Code)
+	if w.Code != http.StatusGone {
+		t.Fatalf("期望 410，实际: %d", w.Code)
 	}
 }
 
@@ -79,8 +70,8 @@ func TestSearchSnapshotFiles_MissingQuery(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("期望 400，实际: %d (body: %s)", w.Code, w.Body.String())
+	if w.Code != http.StatusGone {
+		t.Fatalf("期望 410，实际: %d (body: %s)", w.Code, w.Body.String())
 	}
 }
 
@@ -91,8 +82,8 @@ func TestSearchSnapshotFiles_NonExistentTask(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("期望 404，实际: %d", w.Code)
+	if w.Code != http.StatusGone {
+		t.Fatalf("期望 410，实际: %d", w.Code)
 	}
 }
 
@@ -103,8 +94,8 @@ func TestSearchSnapshotFiles_InvalidTaskID(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("期望 400，实际: %d", w.Code)
+	if w.Code != http.StatusGone {
+		t.Fatalf("期望 410，实际: %d", w.Code)
 	}
 }
 
@@ -162,8 +153,8 @@ func TestSearchSnapshotFiles_NonResticTask(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("期望 400 (非 restic 任务)，实际: %d (body: %s)", w.Code, w.Body.String())
+	if w.Code != http.StatusGone {
+		t.Fatalf("期望 410 (遗留搜索已退役)，实际: %d (body: %s)", w.Code, w.Body.String())
 	}
 }
 
@@ -237,17 +228,13 @@ func TestSnapshotSearchFiltersHistoricalContaminationAndHoldsSearchAdmission(t *
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 
-	if response.Code != http.StatusOK {
-		t.Fatalf("search status=%d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusGone {
+		t.Fatalf("retired search status=%d body=%s", response.Code, response.Body.String())
 	}
-	body := response.Body.String()
-	if !strings.Contains(body, "/allowed-secret.txt") || strings.Contains(body, "/foreign-secret.txt") || strings.Contains(body, "/partial-secret.txt") {
-		t.Fatalf("exact search leaked contaminated rows: %s", body)
+	if strings.Contains(response.Body.String(), "/allowed-secret.txt") || strings.Contains(response.Body.String(), "/foreign-secret.txt") {
+		t.Fatalf("retired search returned paths: %s", response.Body.String())
 	}
-	if guard.calls != 1 || guard.operation != publication.OperationLegacySearch {
-		t.Fatalf("search admissions calls=%d operation=%q", guard.calls, guard.operation)
-	}
-	if got := atomic.LoadInt32(&session.closed); got != 1 {
-		t.Fatalf("search admission close count=%d, want 1", got)
+	if guard.calls != 0 {
+		t.Fatalf("retired search opened lineage admission calls=%d", guard.calls)
 	}
 }

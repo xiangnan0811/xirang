@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"xirang/backend/internal/backupasset/publication"
@@ -15,6 +16,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// snapshotIDPattern 校验快照 ID 格式（十六进制字符串，4-64 位）。
+var snapshotIDPattern = regexp.MustCompile(`^[a-fA-F0-9]{4,64}$`)
 
 // dangerousRestorePaths 禁止恢复到的系统目录
 var dangerousRestorePaths = []string{
@@ -42,9 +46,10 @@ func validateRestoreTargetPath(targetPath string) bool {
 
 // SnapshotHandler 处理 restic 快照浏览和恢复
 type SnapshotHandler struct {
-	db     *gorm.DB
-	guard  publication.LineageGuard
-	restic LegacyResticSnapshots
+	db          *gorm.DB
+	guard       publication.LineageGuard
+	restic      LegacyResticSnapshots
+	featureLive func() (bool, error)
 }
 
 // LegacyResticSnapshots is the narrow legacy command surface retained for
@@ -64,6 +69,13 @@ func NewSnapshotHandler(db *gorm.DB, guard publication.LineageGuard, restic Lega
 	return &SnapshotHandler{db: db, guard: guard, restic: restic}
 }
 
+func (h *SnapshotHandler) WithFeatureLive(featureLive func() (bool, error)) *SnapshotHandler {
+	if h != nil {
+		h.featureLive = featureLive
+	}
+	return h
+}
+
 // ListSnapshots godoc
 // @Summary      列出快照
 // @Description  列出 restic 类型任务的所有备份快照
@@ -71,46 +83,11 @@ func NewSnapshotHandler(db *gorm.DB, guard publication.LineageGuard, restic Lega
 // @Security     Bearer
 // @Produce      json
 // @Param        id  path      int  true  "任务 ID"
-// @Success      200  {object}  handlers.Response
-// @Failure      400  {object}  handlers.Response
+// @Success      410  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
-// @Failure      404  {object}  handlers.Response
 // @Router       /tasks/{id}/snapshots [get]
 func (h *SnapshotHandler) ListSnapshots(c *gin.Context) {
-	taskID, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-	var task model.Task
-	if err := h.db.Preload("Node").Preload("Node.SSHKey").First(&task, taskID).Error; err != nil {
-		respondNotFound(c, "任务不存在")
-		return
-	}
-	if task.ExecutorType != "restic" {
-		respondBadRequest(c, "仅 restic 类型任务支持快照浏览")
-		return
-	}
-
-	session, ok := h.beginSnapshotLineage(c, task.ID, publication.OperationLegacySnapshotList)
-	if !ok {
-		return
-	}
-	defer func() { _ = session.Close() }()
-	var snapshots []executor.ResticSnapshot
-	var err error
-	if session.Mode() == publication.LineageExact {
-		snapshots, err = h.restic.ListSnapshotsByLinkTag(c.Request.Context(), task, session.LinkTag())
-		if err == nil {
-			snapshots = filterCommittedResticSnapshots(snapshots, session.CommittedPoints())
-		}
-	} else {
-		snapshots, err = h.restic.ListSnapshots(c.Request.Context(), task)
-	}
-	if err != nil {
-		respondInternalError(c, err)
-		return
-	}
-	respondOK(c, snapshots)
+	respondLegacySnapshotReadRetired(c)
 }
 
 // ListFiles godoc
@@ -122,53 +99,11 @@ func (h *SnapshotHandler) ListSnapshots(c *gin.Context) {
 // @Param        id    path      int     true   "任务 ID"
 // @Param        sid   path      string  true   "快照 ID"
 // @Param        path  query     string  false  "目录路径（默认 /）"
-// @Success      200  {object}  handlers.Response
-// @Failure      400  {object}  handlers.Response
+// @Success      410  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
-// @Failure      404  {object}  handlers.Response
 // @Router       /tasks/{id}/snapshots/{sid}/files [get]
 func (h *SnapshotHandler) ListFiles(c *gin.Context) {
-	taskID, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-	snapshotID := c.Param("sid")
-	if !snapshotIDPattern.MatchString(snapshotID) {
-		respondBadRequest(c, "快照 ID 格式无效")
-		return
-	}
-	path := filepath.Clean(c.DefaultQuery("path", "/"))
-	if !strings.HasPrefix(path, "/") {
-		respondBadRequest(c, "path 必须以 / 开头")
-		return
-	}
-
-	var task model.Task
-	if err := h.db.Preload("Node").Preload("Node.SSHKey").First(&task, taskID).Error; err != nil {
-		respondNotFound(c, "任务不存在")
-		return
-	}
-	if task.ExecutorType != "restic" {
-		respondBadRequest(c, "仅 restic 类型任务支持快照浏览")
-		return
-	}
-
-	session, ok := h.beginSnapshotLineage(c, task.ID, publication.OperationLegacySnapshotFiles)
-	if !ok {
-		return
-	}
-	defer func() { _ = session.Close() }()
-	resolvedID, err := resolveLineageSnapshotID(session, snapshotID)
-	if err != nil {
-		respondBadRequest(c, "快照 ID 不属于当前任务")
-		return
-	}
-	entries, err := h.restic.ListFiles(c.Request.Context(), task, resolvedID, path)
-	if err != nil {
-		respondInternalError(c, err)
-		return
-	}
-	respondOK(c, entries)
+	respondLegacySnapshotReadRetired(c)
 }
 
 type restoreRequest struct {
@@ -219,9 +154,13 @@ func (h *SnapshotHandler) writeSnapshotRestoreAudit(c *gin.Context, taskID uint,
 // @Success      200  {object}  handlers.Response
 // @Failure      400  {object}  handlers.Response
 // @Failure      401  {object}  handlers.Response
+// @Failure      403  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
 // @Router       /tasks/{id}/snapshots/{sid}/restore [post]
 func (h *SnapshotHandler) Restore(c *gin.Context) {
+	if !ensureLegacySnapshotRestoreLive(c, h.featureLive) {
+		return
+	}
 	taskID, ok := parseID(c, "id")
 	if !ok {
 		return

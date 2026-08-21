@@ -1583,8 +1583,8 @@ func TestSnapshotBrowseRoutesDoNotRequireSnapshotRestoreGrant(t *testing.T) {
 	router.GET("/tasks/:id/snapshots", middleware.RBAC("tasks:read"), handler.ListSnapshots)
 
 	resp := performStepUpRequest(t, router, http.MethodGet, fmt.Sprintf("/tasks/%d/snapshots", taskEntity.ID), token, "", "")
-	if resp.Code != http.StatusBadRequest || strings.Contains(resp.Body.String(), credentialGrantRequiredCode) {
-		t.Fatalf("快照浏览不应要求快照恢复 grant，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	if resp.Code != http.StatusGone || strings.Contains(resp.Body.String(), credentialGrantRequiredCode) {
+		t.Fatalf("快照浏览应退役为 410 且不要求快照恢复 grant，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}
 
 	var grantAuditCount int64

@@ -1,0 +1,9 @@
+{
+  "comment": "eslint/minimatch toolchain only. These packages are not shipped in the production frontend bundle.",
+  "allowedGHSA": [
+    "GHSA-f886-m6hf-6m8v",
+    "GHSA-3jxr-9vmj-r5cp",
+    "GHSA-mh99-v99m-4gvg",
+    "GHSA-rgw5-rvv9-x895"
+  ]
+}

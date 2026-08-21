@@ -69,16 +69,24 @@ class FakeWebSocket {
 
 const originalWebSocket = globalThis.WebSocket;
 
+function installWebSocket(value: unknown) {
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    writable: true,
+    value,
+  });
+}
+
 describe("ReconnectingSocket", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     FakeWebSocket.reset();
-    Object.assign(globalThis, { WebSocket: FakeWebSocket });
+    installWebSocket(FakeWebSocket);
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    Object.assign(globalThis, { WebSocket: originalWebSocket });
+    installWebSocket(originalWebSocket);
   });
 
   it("connects and forwards messages via onMessage", () => {

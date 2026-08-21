@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +14,9 @@ import (
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/settings"
+
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 func TestTransitionFeatureBlockedReadinessDoesNotBecomeManaged(t *testing.T) {
@@ -140,6 +144,39 @@ func TestFeatureLiveRequestedTrueWithoutAckIsClosed(t *testing.T) {
 	}
 }
 
+func TestRequestedSearchConfigEnabledStaysClosedWithoutAck(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	db := openRuntimeTestDB(t)
+	settingsService := settings.NewService(db)
+	if err := settingsService.Update("backup_assets.enabled", "true"); err != nil {
+		t.Fatal(err)
+	}
+	runtime := EnablementRuntime(gaStaticReadiness{snapshot: ga.ReadinessSnapshot{
+		Class:             ga.InstallationExisting,
+		Status:            ga.ReadinessReady,
+		InventoryComplete: true,
+		InventoryDigest:   "current-digest",
+		ExportRootValid:   true,
+		KeyDomainsReady:   true,
+	}}, nil)
+	runtime.foundation = backupasset.NewFoundationService(settingsService)
+
+	live, err := runtime.FeatureLive()
+	if err != nil {
+		t.Fatalf("FeatureLive: %v", err)
+	}
+	if live {
+		t.Fatal("requested search config must not open FeatureLive without ack")
+	}
+	searchConfig, overlayConfig, err := runtime.foundation.SearchOverlayConfig()
+	if err != nil {
+		t.Fatalf("SearchOverlayConfig: %v", err)
+	}
+	if !searchConfig.Enabled || !overlayConfig.Enabled {
+		t.Fatalf("requested search/overlay enabled=%t/%t, want true while FeatureLive is false", searchConfig.Enabled, overlayConfig.Enabled)
+	}
+}
+
 func TestFeatureLiveRequestedTrueWhenReadyIsLive(t *testing.T) {
 	runtime := EnablementRuntime(readyGAEnablement(), nil)
 	runtime.foundation = backupasset.NewFoundationService(runtimeFoundationSettings(true))
@@ -230,6 +267,93 @@ func TestTransitionFeatureSuccessStampsEnablementSucceededAt(t *testing.T) {
 	}
 	if installation.EnablementSucceededAt == nil || !installation.EnablementSucceededAt.Equal(now.UTC()) {
 		t.Fatalf("enablement_succeeded_at=%v, want %s", installation.EnablementSucceededAt, now.UTC())
+	}
+}
+
+func TestTransitionFeatureStartsSearchWithoutStartupPass(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_GA_ENABLEMENT_SEARCH_KEY_FOR_TEST_ONLY")
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(&model.WrappedDomainKey{}); err != nil {
+		t.Fatal(err)
+	}
+	settingsService := settings.NewService(db)
+	backend := newSearchWorkerBackendFake()
+	worker, err := NewSearchWorker(SearchWorkerDependencies{
+		Config: func() (SearchWorkerConfig, error) {
+			return SearchWorkerConfig{Enabled: true, ReconcileInterval: time.Minute, ReconcileBatchSize: 10, WorkerConcurrency: 1}, nil
+		},
+		Backend: backend,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []string{}
+	ready := &atomic.Bool{}
+	runtime := EnablementRuntime(readyGAEnablement(), &runtimeFeatureTransitionerFake{events: &events})
+	runtime.foundation = backupasset.NewFoundationService(settingsService)
+	runtime.settings = settingsService
+	runtime.keyring = backupasset.NewKeyring(db, nil)
+	runtime.searchWorker = worker
+	runtime.searchReady = ready
+	runtime.contentManager = &runtimeContentManagerFake{events: &events}
+
+	if err := runtime.TransitionFeature(context.Background(), true, func() error {
+		return settingsService.Update("backup_assets.enabled", "true")
+	}); err != nil {
+		t.Fatalf("hot enable: %v", err)
+	}
+	if !ready.Load() {
+		t.Fatal("hot enable left search not ready")
+	}
+	if calls := backend.calls(); calls.reconcile != 1 {
+		t.Fatalf("hot enable did not start search: %+v", calls)
+	}
+}
+
+func TestTransitionFeatureSearchFailureDoesNotPersist(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_GA_ENABLEMENT_SEARCH_FAIL_KEY_FOR_TEST_ONLY")
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(&model.WrappedDomainKey{}); err != nil {
+		t.Fatal(err)
+	}
+	settingsService := settings.NewService(db)
+	backend := newSearchWorkerBackendFake()
+	backend.overlayErr = errors.New("search overlay reconcile failed")
+	worker, err := NewSearchWorker(SearchWorkerDependencies{
+		Config: func() (SearchWorkerConfig, error) {
+			return SearchWorkerConfig{Enabled: true, ReconcileInterval: time.Minute, ReconcileBatchSize: 10, WorkerConcurrency: 1}, nil
+		},
+		Backend: backend,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []string{}
+	ready := &atomic.Bool{}
+	runtime := EnablementRuntime(readyGAEnablement(), &runtimeFeatureTransitionerFake{events: &events})
+	runtime.foundation = backupasset.NewFoundationService(settingsService)
+	runtime.settings = settingsService
+	runtime.keyring = backupasset.NewKeyring(db, nil)
+	runtime.searchWorker = worker
+	runtime.searchReady = ready
+	runtime.contentManager = &runtimeContentManagerFake{events: &events}
+
+	if err := runtime.TransitionFeature(context.Background(), true, func() error {
+		return settingsService.Update("backup_assets.enabled", "true")
+	}); err == nil {
+		t.Fatal("hot enable with search failure succeeded")
+	}
+	if ready.Load() {
+		t.Fatal("search failure left search ready")
+	}
+	if settingsService.GetEffective("backup_assets.enabled") != "false" {
+		t.Fatalf("search failure persisted enabled=%q", settingsService.GetEffective("backup_assets.enabled"))
+	}
+	live, liveErr := runtime.FeatureLive()
+	if liveErr != nil || live {
+		t.Fatalf("search failure FeatureLive=%t err=%v, want closed", live, liveErr)
 	}
 }
 
@@ -379,6 +503,54 @@ func readyGAEnablement() ga.ReadinessSource {
 		ExportRootValid:   true,
 		KeyDomainsReady:   true,
 	}}
+}
+
+func TestFeatureLiveObservesRequestedAndLiveGauges(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+		t.Fatal(err)
+	}
+	settingsService := settings.NewService(db)
+	if err := settingsService.Update("backup_assets.enabled", "true"); err != nil {
+		t.Fatal(err)
+	}
+	registry := prometheus.NewRegistry()
+	metrics, err := ga.NewPrometheusMetrics(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := EnablementRuntime(ExistingInstallReadyUnacked(), nil).
+		WithFoundation(backupasset.NewFoundationService(settingsService))
+	runtime.gaMetrics = metrics
+	live, err := runtime.FeatureLive()
+	if err != nil || live {
+		t.Fatalf("requested existing-unacked must stay closed live=%t err=%v", live, err)
+	}
+	requested := gaugeValue(t, registry, ga.FeatureRequestedMetric)
+	liveValue := gaugeValue(t, registry, ga.FeatureLiveMetric)
+	if requested != 1 || liveValue != 0 {
+		t.Fatalf("gauges requested=%v live=%v", requested, liveValue)
+	}
+}
+
+func gaugeValue(t *testing.T, registry *prometheus.Registry, name string) float64 {
+	t.Helper()
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != name || family.GetType() != dto.MetricType_GAUGE {
+			continue
+		}
+		if len(family.GetMetric()) == 0 {
+			t.Fatalf("metric %s has no samples", name)
+		}
+		return family.GetMetric()[0].GetGauge().GetValue()
+	}
+	t.Fatalf("missing metric %s", name)
+	return 0
 }
 
 func stringsContain(values []string, want string) bool {

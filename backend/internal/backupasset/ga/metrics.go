@@ -34,6 +34,7 @@ type Metrics interface {
 	SetConflictCount(ConflictKind, int)
 	ObserveEnablementReject(EnablementRejectReason)
 	SetExportRootProbe(ok bool)
+	SetFeatureGates(requested, live bool)
 }
 
 type NoopMetrics struct{}
@@ -44,6 +45,7 @@ func (NoopMetrics) SetLastInventoryResult(InventoryResult)         {}
 func (NoopMetrics) SetConflictCount(ConflictKind, int)             {}
 func (NoopMetrics) ObserveEnablementReject(EnablementRejectReason) {}
 func (NoopMetrics) SetExportRootProbe(bool)                        {}
+func (NoopMetrics) SetFeatureGates(bool, bool)                     {}
 
 type PrometheusMetrics struct {
 	installationClass *prometheus.GaugeVec
@@ -52,6 +54,8 @@ type PrometheusMetrics struct {
 	conflicts         *prometheus.GaugeVec
 	enablementRejects *prometheus.CounterVec
 	exportRootProbe   *prometheus.GaugeVec
+	featureRequested  prometheus.Gauge
+	featureLive       prometheus.Gauge
 }
 
 func NewPrometheusMetrics(registerer prometheus.Registerer) (*PrometheusMetrics, error) {
@@ -83,10 +87,19 @@ func NewPrometheusMetrics(registerer prometheus.Registerer) (*PrometheusMetrics,
 			Name: "xirang_backup_asset_ga_export_root_probe",
 			Help: "Last backup asset export-root probe result.",
 		}, []string{"result"}),
+		featureRequested: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: FeatureRequestedMetric,
+			Help: "Whether backup_assets.enabled is requested.",
+		}),
+		featureLive: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: FeatureLiveMetric,
+			Help: "Whether backup asset FeatureLive is currently true.",
+		}),
 	}
 	for _, collector := range []prometheus.Collector{
 		metrics.installationClass, metrics.readinessState, metrics.inventoryResult,
 		metrics.conflicts, metrics.enablementRejects, metrics.exportRootProbe,
+		metrics.featureRequested, metrics.featureLive,
 	} {
 		if err := registerer.Register(collector); err != nil {
 			return nil, fmt.Errorf("register backup asset GA metric: %w", err)
@@ -138,6 +151,21 @@ func (metrics *PrometheusMetrics) SetExportRootProbe(ok bool) {
 		result = "ok"
 	}
 	setExclusiveGauge(metrics.exportRootProbe, result, exportRootProbeLabels)
+}
+
+func (metrics *PrometheusMetrics) SetFeatureGates(requested, live bool) {
+	if metrics == nil {
+		return
+	}
+	metrics.featureRequested.Set(boolGauge(requested))
+	metrics.featureLive.Set(boolGauge(live))
+}
+
+func boolGauge(value bool) float64 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func ObserveReadiness(metrics Metrics, snapshot ReadinessSnapshot) {
@@ -248,6 +276,11 @@ var (
 	readinessStateLabels    = []string{string(ReadinessUnknown), string(ReadinessBlocked), string(ReadinessReady), string(ReadinessAcknowledged), "unknown"}
 	inventoryResultLabels   = []string{string(InventoryResultComplete), string(InventoryResultFailed), "unknown"}
 	exportRootProbeLabels   = []string{"ok", "fail"}
+)
+
+const (
+	FeatureRequestedMetric = "xirang_backup_asset_feature_requested"
+	FeatureLiveMetric      = "xirang_backup_asset_feature_live"
 )
 
 var _ Metrics = (*PrometheusMetrics)(nil)

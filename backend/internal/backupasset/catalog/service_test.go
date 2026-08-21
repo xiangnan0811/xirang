@@ -243,6 +243,54 @@ func seedCatalogServiceGeneration(
 	return generation
 }
 
+func TestCatalogPaginatesTenThousandCommittedEntries(t *testing.T) {
+	const total = 10000
+	db, _ := openCatalogBehaviorSQLite(t)
+	now := time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)
+	fixture := seedCatalogOwnershipFixture(t, db, now)
+	generation := seedCatalogServiceGeneration(t, db, fixture.ownedPointID, 1, true, GenerationComplete, now)
+	entries := make([]model.CatalogEntry, 0, total)
+	modified := now.Add(-time.Minute)
+	for i := 0; i < total; i++ {
+		entries = append(entries, model.CatalogEntry{
+			GenerationID: generation.ID, EntryID: fmt.Sprintf("%064x", i), RecoveryPointID: generation.RecoveryPointID,
+			Name: fmt.Sprintf("file-%05d.txt", i), NormalizedPath: fmt.Sprintf("file-%05d.txt", i),
+			EntryType: string(backupasset.CatalogEntryFile), Size: 1,
+			ModifiedAt: &modified, Mode: "0640", Owner: "backup", MimeType: "text/plain",
+			Fingerprint: strings.Repeat("f", 64), FingerprintStrength: string(FingerprintStrong),
+			EncryptedProviderLocator: "FAKE_PROVIDER_LOCATOR_FOR_TEST_ONLY", SecurityState: "sealed",
+			CreatedAt: now,
+		})
+	}
+	if err := db.CreateInBatches(entries, 500).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.CatalogGeneration{}).Where("id = ?", generation.ID).Updates(map[string]any{
+		"expected_entry_count": total, "written_entry_count": total,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := newCatalogServiceForTest(t, db, now)
+	seen := 0
+	cursor := ""
+	for pageNum := 0; pageNum < 80; pageNum++ {
+		page, err := service.ListEntries(context.Background(), fixture.ownedPointID, AuthorizationScope{Role: "admin", UserID: 1}, EntryListRequest{
+			Limit: 200, Sort: EntrySortNameAsc, Cursor: cursor,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen += len(page.Items)
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	if seen != total {
+		t.Fatalf("paged %d entries, want %d", seen, total)
+	}
+}
+
 func TestCatalogListEntryVersionsUsesLineageAndOmitsPaths(t *testing.T) {
 	db, _ := openCatalogBehaviorSQLite(t)
 	now := time.Date(2026, 7, 17, 13, 0, 0, 0, time.UTC)

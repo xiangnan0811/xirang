@@ -138,6 +138,8 @@ func main() {
 		return &alerting.EscalationPolicySummary{Enabled: policy.Enabled, MinSeverity: policy.MinSeverity}, nil
 	})
 	alerting.SetDispatcher(alertDispatcher)
+	log.Info().Int("backup_asset_slo_rules", len(alertDispatcher.BackupAssetSLORules())).
+		Msg("备份资产 SLO 规则已按 backup_assets.enabled 解析")
 	assetRuntime, err := backupruntime.New(backupruntime.Dependencies{
 		DB: db, Settings: settingsSvc, SessionRevocations: jwtManager, AlertDispatcher: alertDispatcher,
 		ToolBinaries: provider.ToolBinaries{

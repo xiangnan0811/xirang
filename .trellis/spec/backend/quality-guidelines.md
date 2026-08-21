@@ -1339,6 +1339,15 @@ db := newRetentionTestDB(t) // enableRetentionTestEncryption inside
 - Content ticket issue and search verify reject `asset.secret_reveal`
   unless the actor role is `admin`. `POST /auth/step-up` has no
   action-role allowlist and is not that door.
+- Leftover snapshot **read** HTTP
+  (`GET /tasks/:id/snapshots`, files, search, diff) returns **410 Gone**
+  for every authenticated role. Catalog / Search replace those reads.
+  Legacy restore stays registered but requires `Runtime.FeatureLive()`
+  on top of Admin + step-up.
+- Handler `Enabled` comes from `Runtime.FeatureLive()`, not the requested
+  `SearchOverlayConfig().Enabled` flag.
+- Search audit write failure after a successful search fails the HTTP
+  request. Do not return hits when the audit sink is down.
 
 #### 3. Contracts
 

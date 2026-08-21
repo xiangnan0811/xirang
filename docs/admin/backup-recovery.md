@@ -59,7 +59,7 @@ Rclone 任务默认仍是 `legacy_mutable`：任务把数据同步到一个可�
 | Portable 独立前缀（`versioned_prefix`） | 默认推荐；通过经过校验的 Rclone v1.74.4 bound config 访问 Remote | 每次运行写入新的受管前缀，生成规范化清单，并最后写入 commit marker。Remote 只提供弱哈希或没有哈希时，Xirang 会逐字节读取并校验源、目标数据；这会增加节点出口流量、Remote API 请求、读取费用和运行时间，超过配置的字节或时限上限时失败关闭。 |
 | AWS 原生对象版本（`native_object_versions`） | 仅 AWS 官方区域端点上的通用型 S3 bucket | 用 S3 `VersionId`、delete marker、完整 mutation ledger 和精确版本读取证明一个恢复点。当前实现范围不覆盖 directory bucket、access point/Outposts、自定义端点、任意 S3-compatible 存储、Azure Blob 或 Google Cloud Storage 的原生版本能力；这些目标应使用 Portable 或保持 legacy。 |
 
-Portable 仍是默认推荐。当前版本保留官方 AWS 的 opt-in live conformance suite，但项目维护者没有为本版本配置专用 AWS fixture，因此不提供 release-level AWS live certification 声明。AWS Native 的每个实际目标仍必须通过自身 bucket、Role、versioning、lifecycle、加密和 KMS 状态的完整运行时预检，缺少或漂移任一证据都会失败关闭。
+Portable 仍是默认推荐，也是本版本唯一进入支持矩阵的 Rclone 模式。AWS Native live suite 仍为 `not_executed`，因此 **AWS Native 不在本版本支持矩阵内**，不得按已认证能力对外承诺。当前版本保留官方 AWS 的 opt-in live conformance suite；在 live suite 跑通并写入验收记录之前，不要把 Native AWS 写成已支持。若运维人员仍打开 Native 绑定，每个实际目标必须通过自身 bucket、Role、versioning、lifecycle、加密和 KMS 状态的完整运行时预检，缺少或漂移任一证据都会失败关闭。
 
 ### 管理员配置与预检
 
@@ -239,37 +239,26 @@ POST /api/v1/policies/:id/drill-trigger
 | 执行位置 | 备份源节点 | 沙箱节点 |
 | RTO 记录 | 否 | 是 |
 
-## 快照文件搜索
+## 备份资产搜索
 
-Restic 任务支持跨快照按文件路径搜索，方便定位某个文件出现在哪些历史快照中。
+备份文件浏览和路径搜索走备份资产目录与搜索，不再使用任务下的遗留 snapshot HTTP。
 
-使用方式：
-
-1. 打开任务列表。
-2. 点击 Restic 任务的“执行历史”。
-3. 点击“搜索文件”。
-4. 输入关键词，例如 `nginx.conf` 或 `data/backup`。
-5. 搜索结果展示匹配路径、快照和文件大小。
-6. 点击结果可跳转到快照文件浏览页面查看或恢复。
-
-索引机制：
-
-- 首次搜索某个任务时，后台运行 `restic ls --json` 构建文件索引。
-- 后续搜索只对新增快照做增量索引。
-- 构建中 API 会返回 `{status: "indexing"}`，前端提示稍后重试。
-
-限制：
-
-- 仅支持 Restic 任务。
-- 搜索范围是文件路径，不搜索文件内容。
-- 单次最多返回 200 条结果。
-- 不支持正则表达式，使用 SQL `LIKE` 匹配。
-
-API：
+下列接口已退役，已认证调用一律返回 410 Gone：
 
 ```text
+GET /api/v1/tasks/:id/snapshots
+GET /api/v1/tasks/:id/snapshots/:sid/files
 GET /api/v1/tasks/:id/snapshots/search?q=<keyword>
+GET /api/v1/tasks/:id/snapshots/diff
 ```
+
+当前搜索 API：
+
+```text
+POST /api/v1/asset-search
+```
+
+旧 `POST /api/v1/tasks/:id/snapshots/:sid/restore` 仅在备份资产功能已上线（FeatureLive）且管理员完成 step-up 时可用。受控恢复是产品主路径。
 
 ## 快照异常检测
 

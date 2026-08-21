@@ -54,75 +54,39 @@ func TestSnapshotHandlerConstructorsUseTypedRuntimePorts(t *testing.T) {
 	}
 }
 
-func TestSnapshotListPristineCompatibilityPreservesLegacyResults(t *testing.T) {
+func TestLegacySnapshotReadsAreGoneWithoutProviderIO(t *testing.T) {
 	session := &snapshotLineageSession{mode: publication.LineageCompatibility}
-	restic := &snapshotResticFake{snapshots: []executor.ResticSnapshot{{ID: strings.Repeat("a", 64)}, {ID: strings.Repeat("b", 64)}}}
+	restic := &snapshotResticFake{snapshots: []executor.ResticSnapshot{{ID: strings.Repeat("a", 64)}}}
 	router, taskEntity := setupSnapshotHandlerRouter(t, session, restic)
 
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/tasks/%d/snapshots", taskEntity.ID), nil))
-	if response.Code != http.StatusOK || restic.listCalls != 1 || restic.taggedCalls != 0 {
-		t.Fatalf("pristine snapshot list status=%d list=%d tagged=%d body=%s", response.Code, restic.listCalls, restic.taggedCalls, response.Body.String())
+	for _, path := range []string{
+		fmt.Sprintf("/tasks/%d/snapshots", taskEntity.ID),
+		fmt.Sprintf("/tasks/%d/snapshots/%s/files?path=/", taskEntity.ID, strings.Repeat("a", 12)),
+	} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusGone || !strings.Contains(response.Body.String(), "备份资产") {
+			t.Fatalf("legacy read %s status=%d body=%s", path, response.Code, response.Body.String())
+		}
 	}
-	if !strings.Contains(response.Body.String(), strings.Repeat("a", 64)) || !strings.Contains(response.Body.String(), strings.Repeat("b", 64)) {
-		t.Fatalf("pristine list lost legacy snapshots: %s", response.Body.String())
+	if restic.listCalls != 0 || restic.taggedCalls != 0 || restic.filesCalls != 0 {
+		t.Fatalf("retired reads reached provider list=%d tagged=%d files=%d", restic.listCalls, restic.taggedCalls, restic.filesCalls)
 	}
 }
 
-func TestSnapshotListExactUsesLinkTagAndIntersectsCommittedTaskPoints(t *testing.T) {
-	allowed := strings.Repeat("a", 64)
-	session := &snapshotLineageSession{mode: publication.LineageExact, linkTag: "xirang.link.v1.11111111111111111111111111111111", points: []publication.CommittedPoint{{RecoveryPointID: strings.Repeat("1", 32), FullNativeID: allowed}}}
-	restic := &snapshotResticFake{taggedSnapshots: []executor.ResticSnapshot{{ID: allowed}, {ID: strings.Repeat("b", 64)}, {ID: allowed}}}
-	router, taskEntity := setupSnapshotHandlerRouter(t, session, restic)
-
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/tasks/%d/snapshots", taskEntity.ID), nil))
-	if response.Code != http.StatusOK || restic.listCalls != 0 || restic.taggedCalls != 1 || restic.linkTag != session.linkTag {
-		t.Fatalf("exact snapshot list status=%d list=%d tagged=%d tag=%q body=%s", response.Code, restic.listCalls, restic.taggedCalls, restic.linkTag, response.Body.String())
-	}
-	if !strings.Contains(response.Body.String(), allowed) || strings.Contains(response.Body.String(), strings.Repeat("b", 64)) {
-		t.Fatalf("exact list leaked a foreign snapshot: %s", response.Body.String())
-	}
-}
-
-func TestSnapshotListNeverReturnsOtherTaskManualOrUncommittedSnapshot(t *testing.T) {
-	allowed := strings.Repeat("a", 64)
-	session := &snapshotLineageSession{mode: publication.LineageExact, linkTag: "xirang.link.v1.11111111111111111111111111111111", points: []publication.CommittedPoint{{RecoveryPointID: strings.Repeat("1", 32), FullNativeID: allowed}}}
-	restic := &snapshotResticFake{taggedSnapshots: []executor.ResticSnapshot{{ID: allowed}, {ID: strings.Repeat("b", 64)}, {ID: strings.Repeat("c", 64)}}}
-	router, taskEntity := setupSnapshotHandlerRouter(t, session, restic)
-
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/tasks/%d/snapshots", taskEntity.ID), nil))
-	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), strings.Repeat("b", 64)) || strings.Contains(response.Body.String(), strings.Repeat("c", 64)) {
-		t.Fatalf("exact list returned unowned/manual/uncommitted snapshot: status=%d body=%s", response.Code, response.Body.String())
-	}
-}
-
-func TestSnapshotFilesResolvesShortPrefixOnlyInsideTaskCommittedSet(t *testing.T) {
+func TestSnapshotRestoreRequiresFeatureLive(t *testing.T) {
 	fullID := strings.Repeat("a", 64)
 	session := &snapshotLineageSession{mode: publication.LineageExact, points: []publication.CommittedPoint{{RecoveryPointID: strings.Repeat("1", 32), FullNativeID: fullID}}}
-	restic := &snapshotResticFake{entries: []executor.ResticEntry{{Name: "file", Path: "/file"}}}
-	router, taskEntity := setupSnapshotHandlerRouter(t, session, restic)
-
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/tasks/%d/snapshots/%s/files?path=/", taskEntity.ID, fullID[:12]), nil))
-	if response.Code != http.StatusOK || restic.filesCalls != 1 || restic.snapshotID != fullID {
-		t.Fatalf("exact files status=%d calls=%d id=%q body=%s", response.Code, restic.filesCalls, restic.snapshotID, response.Body.String())
-	}
-}
-
-func TestSnapshotFilesRejectsAmbiguousCrossTaskAndUnknownPrefixBeforeProvider(t *testing.T) {
-	fullID := strings.Repeat("a", 64)
-	session := &snapshotLineageSession{mode: publication.LineageExact, points: []publication.CommittedPoint{{RecoveryPointID: strings.Repeat("1", 32), FullNativeID: fullID}}, resolveErr: errors.New("not owned")}
 	restic := &snapshotResticFake{}
-	router, taskEntity := setupSnapshotHandlerRouter(t, session, restic)
+	router, taskEntity := setupSnapshotHandlerRouterWithLive(t, session, restic, func() (bool, error) { return false, nil })
 
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/tasks/%d/snapshots/%s/files", taskEntity.ID, strings.Repeat("b", 12)), nil))
-	if response.Code != http.StatusBadRequest || restic.filesCalls != 0 {
-		t.Fatalf("unowned prefix reached provider: status=%d calls=%d body=%s", response.Code, restic.filesCalls, response.Body.String())
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/tasks/%d/snapshots/%s/restore", taskEntity.ID, fullID[:12]), strings.NewReader(`{"includes":["/file"],"targetPath":"/tmp/recovery"}`)))
+	if response.Code != http.StatusForbidden || restic.restoreCalls != 0 {
+		t.Fatalf("not-live restore status=%d calls=%d body=%s", response.Code, restic.restoreCalls, response.Body.String())
 	}
 }
+
 
 func TestSnapshotRestoreUsesResolvedFullIDAndHoldsAdmissionThroughJoinAndResponse(t *testing.T) {
 	fullID := strings.Repeat("a", 64)
@@ -155,17 +119,6 @@ func TestSnapshotRestoreUsesResolvedFullIDAndHoldsAdmissionThroughJoinAndRespons
 	}
 }
 
-func TestSnapshotHandlersRollbackSafeDisabledKeepsExactGuard(t *testing.T) {
-	session := &snapshotLineageSession{mode: publication.LineageExact, linkTag: "xirang.link.v1.11111111111111111111111111111111"}
-	restic := &snapshotResticFake{taggedSnapshots: []executor.ResticSnapshot{{ID: strings.Repeat("b", 64)}}}
-	router, taskEntity := setupSnapshotHandlerRouter(t, session, restic)
-
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/tasks/%d/snapshots", taskEntity.ID), nil))
-	if response.Code != http.StatusOK || restic.listCalls != 0 || restic.taggedCalls != 1 || strings.Contains(response.Body.String(), strings.Repeat("b", 64)) {
-		t.Fatalf("rollback-safe disabled list reopened legacy results: status=%d list=%d tagged=%d body=%s", response.Code, restic.listCalls, restic.taggedCalls, response.Body.String())
-	}
-}
 
 type snapshotLineageSession struct {
 	mode       publication.LineageMode
@@ -254,6 +207,10 @@ func (fake *snapshotResticFake) RestoreFiles(_ context.Context, _ model.Task, sn
 }
 
 func setupSnapshotHandlerRouter(t *testing.T, session publication.LineageSession, restic LegacyResticSnapshots) (*gin.Engine, model.Task) {
+	return setupSnapshotHandlerRouterWithLive(t, session, restic, func() (bool, error) { return true, nil })
+}
+
+func setupSnapshotHandlerRouterWithLive(t *testing.T, session publication.LineageSession, restic LegacyResticSnapshots, featureLive func() (bool, error)) (*gin.Engine, model.Task) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))), &gorm.Config{})
@@ -267,7 +224,7 @@ func setupSnapshotHandlerRouter(t *testing.T, session publication.LineageSession
 	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatal(err)
 	}
-	handler := NewSnapshotHandler(db, &snapshotGuardFake{session: session}, restic)
+	handler := NewSnapshotHandler(db, &snapshotGuardFake{session: session}, restic).WithFeatureLive(featureLive)
 	router := gin.New()
 	router.GET("/tasks/:id/snapshots", handler.ListSnapshots)
 	router.GET("/tasks/:id/snapshots/:sid/files", handler.ListFiles)

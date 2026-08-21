@@ -70,6 +70,10 @@ func respondForbidden(c *gin.Context, msg string) {
 	c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: msg, Data: nil})
 }
 
+func respondGone(c *gin.Context, msg string) {
+	c.JSON(http.StatusGone, Response{Code: http.StatusGone, Message: msg, Data: nil})
+}
+
 func respondForbiddenData(c *gin.Context, msg string, data interface{}) {
 	c.JSON(http.StatusForbidden, Response{Code: http.StatusForbidden, Message: msg, Data: data})
 }

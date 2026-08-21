@@ -1780,6 +1780,141 @@ describe("useBackupAssetsState", () => {
     expect(result.current.content.value).toEqual(previewTicket);
   });
 
+  it("reuses the in-session secret-reveal proof on preview renew", async () => {
+    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
+    const previewTicket = buildContentTicket("escaped_text");
+    listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
+    issueTicketMock
+      .mockRejectedValueOnce(secretRevealRequiredError())
+      .mockResolvedValue({ status: "available", value: previewTicket });
+    const { result } = renderHook(() =>
+      useBackupAssetsState({
+        token: "test-token",
+        role: "admin",
+        route: {
+          ...defaultBackupAssetsRouteState("data"),
+          recoveryPointId: asset.ref.recoveryPointId,
+          entryId: asset.ref.entryId,
+        },
+        ensureStepUpProof,
+      })
+    );
+
+    act(() => result.current.actions.loadPreview(asset));
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
+
+    act(() => result.current.actions.renewPreview());
+    await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(3));
+    expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
+    expect(issueTicketMock.mock.calls[2][2]).toEqual(
+      expect.objectContaining({
+        action: "preview",
+        stepUpProof: "proof-secret",
+      })
+    );
+  });
+
+  it("re-prompts secret-reveal after logout token change", async () => {
+    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
+    const previewTicket = buildContentTicket("escaped_text");
+    listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
+    issueTicketMock
+      .mockRejectedValueOnce(secretRevealRequiredError())
+      .mockResolvedValueOnce({ status: "available", value: previewTicket })
+      .mockRejectedValueOnce(secretRevealRequiredError())
+      .mockResolvedValueOnce({ status: "available", value: previewTicket });
+    const { result, rerender } = renderHook(
+      ({ token }) =>
+        useBackupAssetsState({
+          token,
+          role: "admin",
+          route: defaultBackupAssetsRouteState("data"),
+          ensureStepUpProof,
+        }),
+      { initialProps: { token: "test-token" } }
+    );
+
+    act(() => result.current.actions.loadPreview(asset));
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
+
+    rerender({ token: "next-session-token" });
+    act(() => result.current.actions.loadPreview(asset));
+    await waitFor(() => expect(ensureStepUpProof).toHaveBeenCalledTimes(2));
+    expect(issueTicketMock.mock.calls[3][0]).toBe("next-session-token");
+    expect(issueTicketMock.mock.calls[3][2]).toEqual(
+      expect.objectContaining({ action: "preview", stepUpProof: "proof-secret" })
+    );
+  });
+
+  it("re-prompts secret-reveal after the selected asset changes", async () => {
+    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
+    const previewTicket = buildContentTicket("escaped_text");
+    const nextAsset: BackupAsset = {
+      ...asset,
+      ref: { recoveryPointId: asset.ref.recoveryPointId, entryId: "d".repeat(64) },
+      name: "synthetic-next.yaml",
+    };
+    listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
+    issueTicketMock
+      .mockRejectedValueOnce(secretRevealRequiredError())
+      .mockResolvedValueOnce({ status: "available", value: previewTicket })
+      .mockRejectedValueOnce(secretRevealRequiredError())
+      .mockResolvedValueOnce({ status: "available", value: previewTicket });
+    const { result } = renderHook(() =>
+      useBackupAssetsState({
+        token: "test-token",
+        role: "admin",
+        route: defaultBackupAssetsRouteState("data"),
+        ensureStepUpProof,
+      })
+    );
+
+    act(() => result.current.actions.loadPreview(asset));
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
+
+    act(() => result.current.actions.loadPreview(nextAsset));
+    await waitFor(() => expect(ensureStepUpProof).toHaveBeenCalledTimes(2));
+    expect(issueTicketMock.mock.calls[2][2]).not.toHaveProperty("stepUpProof");
+    expect(issueTicketMock.mock.calls[3][2]).toEqual(
+      expect.objectContaining({ action: "preview", stepUpProof: "proof-secret" })
+    );
+  });
+
+  it("does not re-prompt TOTP on preview renew when the in-session proof is rejected", async () => {
+    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
+    const previewTicket = buildContentTicket("escaped_text");
+    listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
+    issueTicketMock
+      .mockRejectedValueOnce(secretRevealRequiredError())
+      .mockResolvedValueOnce({ status: "available", value: previewTicket })
+      .mockRejectedValueOnce(secretRevealRequiredError());
+    const { result } = renderHook(() =>
+      useBackupAssetsState({
+        token: "test-token",
+        role: "admin",
+        route: {
+          ...defaultBackupAssetsRouteState("data"),
+          recoveryPointId: asset.ref.recoveryPointId,
+          entryId: asset.ref.entryId,
+        },
+        ensureStepUpProof,
+      })
+    );
+
+    act(() => result.current.actions.loadPreview(asset));
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
+
+    act(() => result.current.actions.renewPreview());
+    await waitFor(() => expect(result.current.content.status).toBe("blocked"));
+    expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
+    expect(issueTicketMock).toHaveBeenCalledTimes(3);
+    expect(result.current.content.error?.code).toBe("secret_reveal_required");
+  });
+
   it.each(["operator", "viewer"] as const)(
     "does not request secret-reveal step-up for %s even when the helper is passed",
     async (role) => {
