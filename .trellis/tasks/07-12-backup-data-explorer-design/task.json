@@ -38,15 +38,15 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Children 1–15 archived. Child 16 08-21-backup-assets-closeout is instantiated and planning on feat/backup-assets-closeout. Formal release remains v0.50.0 (1750a238). backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. Parent remains planning; parent-final-acceptance is not authorized.",
+  "notes": "Children 1–16 archived. Child 16 closeout is 08-21-backup-assets-closeout (PR #444). Formal public release remains v0.50.0 until a later release-please cut. backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. Parent remains planning; parent-final-acceptance is not authorized.",
   "meta": {
     "program_delivery": {
-      "delivered": 15,
+      "delivered": 16,
       "planned": 16,
-      "percent": 93.8,
+      "percent": 100.0,
       "instantiated_children": 16,
-      "archived_children": 15,
-      "active_child": "08-21-backup-assets-closeout",
+      "archived_children": 16,
+      "active_child": null,
       "uninstantiated_children": []
     },
     "task_7_checkpoint_delivery": {
