@@ -1,0 +1,32 @@
+{
+  "id": "backup-assets-release-acceptance",
+  "name": "backup-assets-release-acceptance",
+  "title": "备份资产发布验收",
+  "description": "v0.50.2 真实环境发布验收。Native AWS 排除。父任务继续 planning。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "backup-assets",
+  "package": null,
+  "priority": "P1",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-08-21",
+  "completedAt": null,
+  "branch": "chore/backup-assets-release-acceptance",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-12-backup-data-explorer-design",
+  "relatedFiles": [],
+  "notes": "Wave 0/1 complete. Protocol is the v0.50.2 Core-only authority; docs_exclusion verified (Native AWS still out of the public support matrix). production_walkthrough remains not_executed. Wave 2 Alan production drill not started. Parent stays planning. CodeDefault and official .env.deploy untouched.",
+  "meta": {
+    "parent_archive": "forbidden",
+    "production_walkthrough": "not_executed",
+    "native_aws": "excluded",
+    "docs_exclusion": "verified",
+    "code_default_enabled": "false"
+  }
+}
