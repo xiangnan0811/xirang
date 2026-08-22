@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/08-21-backup-assets-release-acceptance/prd.md", "reason": "AC1–AC7 walkthrough and exclusion gates"}
+{"file": ".trellis/tasks/08-21-backup-assets-release-acceptance/design.md", "reason": "No invented evidence; agent does not SSH production"}
+{"file": ".trellis/tasks/08-21-backup-assets-release-acceptance/research/acceptance-protocol.md", "reason": "Must-pass and rollback checkboxes"}
+{"file": ".trellis/tasks/archive/2026-08/08-21-backup-assets-review-closeout/research/risk-ledger.md", "reason": "R-P1-acceptance still open until this protocol is executed"}
+{"file": "docs/admin/backup-assets-slo.md", "reason": "PromQL must be installed or waived; not auto-applied"}
+{"file": ".trellis/tasks/08-21-backup-assets-release-acceptance/research/wave1-docs-exclusion.md", "reason": "Wave 1 docs_exclusion verified quotes; not walkthrough evidence"}
+{"file": "docs/admin/backup-recovery.md", "reason": "Native AWS still out of support matrix; do not treat as GA"}
+{"file": "docs/admin/backup-assets-load.md", "reason": "Second public-doc Native exclusion sentence"}

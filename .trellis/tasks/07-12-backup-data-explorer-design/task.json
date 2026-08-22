@@ -35,19 +35,20 @@
     "08-17-backup-assets-lifecycle-reconnect",
     "08-20-backup-assets-ga-hardening",
     "08-21-backup-assets-closeout",
-    "08-21-backup-assets-review-closeout"
+    "08-21-backup-assets-review-closeout",
+    "08-21-backup-assets-release-acceptance"
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Children 1–17 archived. Child 17 closeout is 08-21-backup-assets-review-closeout (PR #446, v0.50.2). Formal public release is v0.50.2. backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. Production walkthrough is not_executed. Parent remains planning; parent-final-acceptance is not authorized. External GitHub review of v0.50.2 is pending.",
+  "notes": "Children 1–17 archived. Child 18 (08-21-backup-assets-release-acceptance) is the production-acceptance child on v0.50.2. Independent GitHub review concluded code P0/P1 closed; Native AWS stays excluded. Child 18 Wave 1 docs_exclusion verified; public docs still keep Native AWS out of the support matrix. backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. Production walkthrough is not_executed. Parent remains planning; parent-final-acceptance is not authorized.",
   "meta": {
     "program_delivery": {
       "delivered": 17,
-      "planned": 17,
-      "percent": 100,
-      "instantiated_children": 17,
+      "planned": 18,
+      "percent": 94.4,
+      "instantiated_children": 18,
       "archived_children": 17,
-      "active_child": null,
+      "active_child": "08-21-backup-assets-release-acceptance",
       "uninstantiated_children": []
     },
     "child_17_delivery": {
@@ -72,7 +73,7 @@
       "production_walkthrough": "not_executed",
       "backup_assets_enabled_default": false,
       "worker_publish": "out_of_scope_not_triggered",
-      "boundary": "parent_planning_github_review_pending_no_parent_final_acceptance"
+      "boundary": "parent_planning_github_review_recorded_child18_acceptance_pending_no_parent_final_acceptance"
     },
     "task_7_checkpoint_delivery": {
       "status": "delivered_merged_post_merge_observed_pending_bookkeeping_pr",

@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/08-21-backup-assets-release-acceptance/prd.md", "reason": "Child 18 requirements and Core-only walkthrough lock"}
+{"file": ".trellis/tasks/08-21-backup-assets-release-acceptance/design.md", "reason": "Evidence rules, Native exclusion, parent-archive gate"}
+{"file": ".trellis/tasks/08-21-backup-assets-release-acceptance/research/github-review-2026-08-21.md", "reason": "Independent GitHub review that opened this child"}
+{"file": ".trellis/tasks/08-21-backup-assets-release-acceptance/research/acceptance-protocol.md", "reason": "Authoritative protocol template"}
+{"file": ".trellis/spec/guides/documentation-truth-guide.md", "reason": "Do not put process claims into public docs without evidence"}
+{"file": "docs/admin/backup-recovery.md", "reason": "Current Native AWS support-matrix wording to verify, not rewrite unless it lies"}
+{"file": "docs/admin/backup-assets-load.md", "reason": "Second public-doc Native exclusion sentence for Wave 1"}
+{"file": ".trellis/tasks/08-21-backup-assets-release-acceptance/research/wave1-docs-exclusion.md", "reason": "Wave 1 verified exclusion quotes and file:line anchors"}
