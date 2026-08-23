@@ -3,7 +3,7 @@
   "name": "backup-assets-migration-69-compatibility",
   "title": "迁移 69 孤儿运行兼容与脏状态失效保护",
   "description": "修复 v0.50.2 迁移 69 对节点删除后保留历史 task_runs 的不兼容，并永久移除服务端 dirty 自动 force。",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": "backend",
   "scope": "backup-assets",
   "package": "backend",
@@ -12,16 +12,16 @@
   "assignee": "weibo",
   "createdAt": "2026-08-23",
   "completedAt": null,
-  "branch": null,
+  "branch": "codex/backup-assets-migration-69-compatibility",
   "base_branch": "main",
-  "worktree_path": null,
-  "commit": null,
-  "pr_url": null,
+  "worktree_path": "/home/murray/.codex/worktrees/p0-migration.yVcIYx/xirang",
+  "commit": "86769a1d58086085659e500946f3cfbfa8dd3208",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/451",
   "subtasks": [],
   "children": [],
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [],
-  "notes": "Planning complete pending user approval. Preserve terminal orphan TaskRuns as legacy_unknown node snapshot 0; active or unknown orphan states fail closed. Repair released 000069 for below-69 installs and add paired 000072 convergence for already-upgraded installs. Remove ALLOW_DIRTY_STARTUP auto-force and detect clean-version/schema drift. Child 18 remains No-Go until a new release passes production acceptance.",
+  "notes": "Implementation approved and started on an isolated branch from merged planning commit 0853532a. Preserve terminal orphan TaskRuns as legacy_unknown node snapshot 0; active or unknown orphan states fail closed. Repair released 000069 for below-69 installs and add paired 000072 convergence for already-upgraded installs. Remove ALLOW_DIRTY_STARTUP auto-force and detect clean-version/schema drift. Child 18 remains No-Go until a new release passes production acceptance.",
   "meta": {
     "incident": "child_18_v0_50_2_no_go_pre_enable_migration",
     "root_cause": "migration_69_assumed_every_retained_task_run_has_live_task",
@@ -31,6 +31,8 @@
     "schema_drift_policy": "detect_and_refuse_no_startup_repair",
     "planned_forward_migration": 72,
     "production_mutation": "not_authorized",
-    "implementation_authorized": false
+    "implementation_authorized": true,
+    "implementation_baseline_sha": "0853532a5777b92f3f997b9e288c1a10f1c91f4e",
+    "baseline_latest_migration": 71
   }
 }

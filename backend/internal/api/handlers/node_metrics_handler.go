@@ -89,10 +89,9 @@ func (h *NodeMetricsHandler) Status(c *gin.Context) {
 		return
 	}
 
-	// TaskRun has no direct node_id column; join through tasks table.
 	if err := h.db.Table("task_runs").
-		Joins("JOIN tasks ON tasks.id = task_runs.task_id").
-		Where("tasks.node_id = ? AND task_runs.status = ?", id, "running").
+		Where("task_runs.node_id_snapshot = ? AND task_runs.node_id_snapshot > ? AND task_runs.status = ?",
+			id, model.TaskRunNodeIDLegacyUnknown, model.TaskRunStatusRunning).
 		Count(&resp.RunningTasks).Error; err != nil {
 		respondInternalError(c, err)
 		return

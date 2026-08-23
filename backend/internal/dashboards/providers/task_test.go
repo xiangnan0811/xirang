@@ -24,8 +24,13 @@ func openTaskTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func seedTask(db *gorm.DB, id uint, name string) {
-	db.Exec("INSERT INTO tasks (id, name, node_id) VALUES (?, ?, 1)", id, name)
+func seedTask(t *testing.T, db *gorm.DB, id uint, name string) {
+	t.Helper()
+	if err := db.Create(&model.Task{
+		ID: id, Name: name, NodeID: 1, ExecutorType: "local", Status: "success",
+	}).Error; err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
 }
 
 func seedRun(db *gorm.DB, taskID uint, status string, finishedAt time.Time, durationMs int64) {
@@ -54,7 +59,7 @@ func TestTaskProvider_Supports(t *testing.T) {
 
 func TestTaskProvider_SuccessRate_PerTask(t *testing.T) {
 	db := openTaskTestDB(t)
-	seedTask(db, 1, "alpha")
+	seedTask(t, db, 1, "alpha")
 	base := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
 	// Bucket 0 (60s): 3 success + 1 failed = 0.75
 	seedRun(db, 1, "success", base.Add(10*time.Second), 100)
@@ -86,8 +91,8 @@ func TestTaskProvider_SuccessRate_PerTask(t *testing.T) {
 
 func TestTaskProvider_SuccessRate_EmptyFilterAggregates(t *testing.T) {
 	db := openTaskTestDB(t)
-	seedTask(db, 1, "alpha")
-	seedTask(db, 2, "beta")
+	seedTask(t, db, 1, "alpha")
+	seedTask(t, db, 2, "beta")
 	base := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
 	seedRun(db, 1, "success", base.Add(10*time.Second), 100)
 	seedRun(db, 2, "failed", base.Add(20*time.Second), 100)
@@ -107,7 +112,7 @@ func TestTaskProvider_SuccessRate_EmptyFilterAggregates(t *testing.T) {
 
 func TestTaskProvider_Throughput_Sum(t *testing.T) {
 	db := openTaskTestDB(t)
-	seedTask(db, 1, "alpha")
+	seedTask(t, db, 1, "alpha")
 	base := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
 	seedTraffic(db, 1, base.Add(10*time.Second), 10)
 	seedTraffic(db, 1, base.Add(20*time.Second), 20)
@@ -125,7 +130,7 @@ func TestTaskProvider_Throughput_Sum(t *testing.T) {
 
 func TestTaskProvider_DurationP95(t *testing.T) {
 	db := openTaskTestDB(t)
-	seedTask(db, 1, "alpha")
+	seedTask(t, db, 1, "alpha")
 	base := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
 	// 10 runs with durations 100, 200, ..., 1000 ms. p95 nearest-rank = 1000.
 	for i := 1; i <= 10; i++ {
@@ -143,7 +148,7 @@ func TestTaskProvider_DurationP95(t *testing.T) {
 
 func TestTaskProvider_SkipsNilFinishedAt(t *testing.T) {
 	db := openTaskTestDB(t)
-	seedTask(db, 1, "alpha")
+	seedTask(t, db, 1, "alpha")
 	// Run without finished_at (still pending) — should be ignored
 	db.Create(&model.TaskRun{TaskID: 1, Status: "pending"})
 	base := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)

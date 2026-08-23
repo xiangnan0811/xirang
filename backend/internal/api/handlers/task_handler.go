@@ -276,10 +276,21 @@ func (h *TaskHandler) List(c *gin.Context) {
 			Progress int
 		}
 		var rows []taskProgress
-		if err := h.db.Raw(
-			"SELECT task_id, progress FROM task_runs WHERE id IN "+
-				"(SELECT MAX(id) FROM task_runs WHERE task_id IN ? AND status = 'running' GROUP BY task_id)",
-			taskIDs,
+		if err := h.db.Raw(`
+				SELECT current_run.task_id, current_run.progress
+				FROM task_runs AS current_run
+				WHERE current_run.id IN (
+					SELECT MAX(candidate.id)
+					FROM task_runs AS candidate
+					JOIN tasks AS task_entity
+					  ON task_entity.id = candidate.task_id
+					 AND task_entity.node_id = candidate.node_id_snapshot
+					WHERE candidate.task_id IN ?
+					  AND candidate.node_id_snapshot > ?
+					  AND candidate.status = ?
+					GROUP BY candidate.task_id
+				)`,
+			taskIDs, model.TaskRunNodeIDLegacyUnknown, model.TaskRunStatusRunning,
 		).Scan(&rows).Error; err != nil {
 			rows = nil
 		}
@@ -322,7 +333,8 @@ func (h *TaskHandler) Get(c *gin.Context) {
 	// 查询最新 running TaskRun 的进度（覆盖备份和恢复场景）
 	var runProgress []int
 	if err := h.db.Model(&model.TaskRun{}).
-		Where("task_id = ? AND status = ?", taskEntity.ID, "running").
+		Where("task_id = ? AND node_id_snapshot = ? AND node_id_snapshot > ? AND status = ?",
+			taskEntity.ID, taskEntity.NodeID, model.TaskRunNodeIDLegacyUnknown, model.TaskRunStatusRunning).
 		Order("id DESC").Limit(1).
 		Pluck("progress", &runProgress).Error; err == nil && len(runProgress) > 0 {
 		taskEntity.Progress = &runProgress[0]

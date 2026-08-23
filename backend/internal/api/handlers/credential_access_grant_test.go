@@ -61,6 +61,40 @@ func seedSuccessfulCredentialGrantTaskRun(t *testing.T, db *gorm.DB, taskID uint
 	}
 }
 
+func TestTaskRestoreGrantEligibilityRequiresAuthoritativeSuccessSnapshot(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, testCase := range []struct {
+		name     string
+		snapshot func(model.Task) uint
+		wantOK   bool
+	}{
+		{name: "legacy_unknown", snapshot: func(model.Task) uint { return model.TaskRunNodeIDLegacyUnknown }},
+		{name: "mismatched", snapshot: func(taskEntity model.Task) uint { return taskEntity.NodeID + 1 }},
+		{name: "matching", snapshot: func(taskEntity model.Task) uint { return taskEntity.NodeID }, wantOK: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := openStepUpHandlerTestDB(t)
+			taskEntity := seedCredentialGrantTask(t, db, "rsync")
+			run := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: model.TaskRunStatusSuccess}
+			if err := db.Create(&run).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Model(&model.TaskRun{}).Where("id = ?", run.ID).
+				UpdateColumn("node_id_snapshot", testCase.snapshot(taskEntity)).Error; err != nil {
+				t.Fatal(err)
+			}
+
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/credential-access-grants/task-restore", nil)
+			handler := NewCredentialAccessGrantHandler(db, nil)
+			if got := handler.validateTaskRestoreGrantEligibility(ctx, taskEntity.ID); got != testCase.wantOK {
+				t.Fatalf("eligibility=%v status=%d body=%s, want %v", got, recorder.Code, recorder.Body.String(), testCase.wantOK)
+			}
+		})
+	}
+}
+
 func newCredentialGrantTestRouter(db *gorm.DB, manager *auth.JWTManager) *gin.Engine {
 	handler := NewCredentialAccessGrantHandler(db, manager)
 	router := gin.New()

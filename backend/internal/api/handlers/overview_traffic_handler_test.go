@@ -28,6 +28,22 @@ func openOverviewTrafficTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func seedOverviewTrafficTasks(t *testing.T, db *gorm.DB, taskIDs ...uint) {
+	t.Helper()
+	for _, taskID := range taskIDs {
+		task := model.Task{
+			ID:           taskID,
+			Name:         fmt.Sprintf("overview-traffic-task-%d", taskID),
+			NodeID:       taskID,
+			ExecutorType: "local",
+			Status:       "success",
+		}
+		if err := db.Create(&task).Error; err != nil {
+			t.Fatalf("写入 Task 失败: %v", err)
+		}
+	}
+}
+
 func trafficTestRouter(handler *OverviewTrafficHandler) *gin.Engine {
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
@@ -234,6 +250,7 @@ func TestOverviewTrafficUsesTaskRunForStartedCount(t *testing.T) {
 	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
+	seedOverviewTrafficTasks(t, db, 1)
 
 	now := time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
 	startedAt := now.Add(-6 * time.Minute)
@@ -276,6 +293,7 @@ func TestOverviewTrafficIncludesActivityAndEventCounts(t *testing.T) {
 	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
+	seedOverviewTrafficTasks(t, db, 1, 2, 3)
 
 	now := time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
 	samples := []model.TaskTrafficSample{
@@ -515,6 +533,7 @@ func TestOverviewTrafficSetsTruncatedWhenTaskRunCapHit(t *testing.T) {
 	if err := db.AutoMigrate(&model.TaskTrafficSample{}, &model.TaskLog{}, &model.Task{}, &model.TaskRun{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
+	seedOverviewTrafficTasks(t, db, 1, 2, 3)
 
 	prevCap := trafficTaskRunCap
 	trafficTaskRunCap = 2

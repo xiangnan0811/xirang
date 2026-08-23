@@ -377,11 +377,11 @@ scrape_configs:
 schema_migrations.dirty=1
 ```
 
-默认情况下服务会拒绝启动，避免基于半完成 schema 继续写入数据。
+服务会无条件拒绝启动，避免基于半完成 schema 继续写入数据。
 
 处理步骤：
 
-1. **先备份当前数据库文件或 PostgreSQL dump**，不要直接删除 `schema_migrations`。
+1. **先保全现场并制作可验证备份**：SQLite 同时保留数据库、WAL/SHM 和启动日志；PostgreSQL 保留 dump、迁移日志与对应镜像版本。不要直接修改或删除 `schema_migrations`。
 2. 查看 dirty 版本：
    ```bash
    # SQLite
@@ -390,12 +390,11 @@ schema_migrations.dirty=1
    # PostgreSQL
    psql "$DB_DSN" -c "SELECT version, dirty FROM schema_migrations;"
    ```
-3. 根据失败点选择恢复方式：
-   - 如果迁移明显只执行了一部分：恢复最近一次迁移前备份，再重新升级。
-   - 如果确认迁移已完整执行，只是 clean 标记未写入：使用 golang-migrate CLI `force <version>` 标记 clean。
-   - 如果需要短暂启动服务做人工修复，可临时设置 `ALLOW_DIRTY_STARTUP=true`；修复完成后必须移除该变量并重启。
+3. 根据只读诊断结果选择恢复方式：
+   - `dirty=1`：停止服务，优先恢复已验证的迁移前备份，再重新升级。确需保留当前数据时，只能由数据库/迁移负责人执行有审计记录的离线修复，并在完整性校验后再启动服务。
+   - 版本记录为 clean、但日志报告 schema drift：不要提高版本号或补写 clean 标记；恢复已验证备份，或按发布方给出的精确对象清单执行有审计记录的离线修复。
 
-`ALLOW_DIRTY_STARTUP=true` 只适合 rescue，不应作为长期配置。
+服务启动路径不会自动 `force`、重试 dirty 迁移或在 schema 不完整时继续写入。不要用手工版本号变更掩盖失败迁移。
 
 ## UTC 时间戳约定
 

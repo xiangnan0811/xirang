@@ -252,6 +252,51 @@ func TestReconcileInterruptedRunsQueriesOnlyTaskOwnedResticRuns(t *testing.T) {
 	}
 }
 
+func TestReconcileInterruptedRunsIgnoresLegacyUnknownActiveRun(t *testing.T) {
+	manager, db, _, runID, _ := setupInterruptedPublicationRun(t)
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", runID).
+		UpdateColumn("node_id_snapshot", model.TaskRunNodeIDLegacyUnknown).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	unresolved, err := manager.ReconcileInterruptedRuns(context.Background(), 10)
+	if err != nil || unresolved {
+		t.Fatalf("legacy_unknown active row entered reconciliation: unresolved=%v err=%v", unresolved, err)
+	}
+	var run model.TaskRun
+	if err := db.First(&run, runID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != model.TaskRunStatusRunning || run.LastError != "" {
+		t.Fatalf("legacy_unknown active row was mutated: %+v", run)
+	}
+}
+
+func TestReportInterruptedPublicationLegacyUnknownNewerRunDoesNotBlockAggregate(t *testing.T) {
+	manager, db, taskEntity, runID, startedAt := setupInterruptedPublicationRun(t)
+	newer := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "retry", Status: model.TaskRunStatusRunning, StartedAt: &startedAt}
+	if err := db.Create(&newer).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", newer.ID).
+		UpdateColumn("node_id_snapshot", model.TaskRunNodeIDLegacyUnknown).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.ReportInterruptedPublication(context.Background(), publication.Outcome{
+		TaskID: taskEntity.ID, TaskRunID: runID, State: backupasset.RecoveryPointFailed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var taskAfter model.Task
+	if err := db.First(&taskAfter, taskEntity.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if taskAfter.Status != model.TaskRunStatusFailed {
+		t.Fatalf("legacy_unknown newer row blocked authoritative aggregate update: status=%q", taskAfter.Status)
+	}
+}
+
 func TestReconcileInterruptedRunsReportsManagedRsyncProviderCommit(t *testing.T) {
 	manager, db, taskEntity, runID, startedAt := setupInterruptedPublicationRun(t)
 	if err := db.AutoMigrate(&model.RecoveryPoint{}); err != nil {

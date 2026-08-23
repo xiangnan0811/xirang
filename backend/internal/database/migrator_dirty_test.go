@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -105,64 +106,135 @@ func TestCheckMigrationDirty_DirtyTable(t *testing.T) {
 	}
 }
 
-// TestRunMigrations_RejectsDirtyByDefault confirms RunMigrations short-circuits
-// when schema_migrations.dirty=1 and ALLOW_DIRTY_STARTUP is unset. This is the
-// production safety net that prevents continuing on a half-applied schema.
-func TestRunMigrations_RejectsDirtyByDefault(t *testing.T) {
-	t.Setenv("ALLOW_DIRTY_STARTUP", "")
-	_, gdb, _ := openDirtyTestDB(t, true, 50)
-
-	err := RunMigrations(gdb, "sqlite")
-	if err == nil {
-		t.Fatalf("expected error from dirty-state startup, got nil")
-	}
-	if !errors.Is(err, ErrMigrationDirty) {
-		t.Fatalf("expected ErrMigrationDirty, got %v", err)
-	}
-}
-
-// TestRunMigrations_AllowDirtyEscapeHatch confirms ALLOW_DIRTY_STARTUP=true
-// bypasses the guard. We don't care that the actual migrate.Up() may itself
-// fail (the embedded baseline migrations expect a virgin DB schema, not our
-// hand-seeded schema_migrations row); we only care that the dirty-check did
-// NOT short-circuit before reaching the migrator.
-func TestRunMigrations_AllowDirtyEscapeHatch(t *testing.T) {
-	t.Setenv("ALLOW_DIRTY_STARTUP", "true")
-	_, gdb, _ := openDirtyTestDB(t, true, 50)
-
-	err := RunMigrations(gdb, "sqlite")
-	// We expect the migrator itself to fail (because our seeded version=50 is
-	// inconsistent with the embedded baseline), but it must NOT be
-	// ErrMigrationDirty — the escape hatch should have skipped the check.
-	if err != nil && errors.Is(err, ErrMigrationDirty) {
-		t.Fatalf("ALLOW_DIRTY_STARTUP=true should bypass dirty check; got ErrMigrationDirty: %v", err)
-	}
-}
-
-// TestAllowDirtyStartup_ParsesEnvCorrectly covers the boolean parsing edge
-// cases of the escape hatch.
-func TestAllowDirtyStartup_ParsesEnvCorrectly(t *testing.T) {
-	cases := []struct {
-		env  string
-		want bool
+// TestRunMigrationsRejectsDirtyForEveryLegacyEnvValue locks the permanent
+// fail-closed contract: absent, false, and formerly-enabled legacy
+// configuration all reject before metadata or schema mutation.
+func TestRunMigrationsRejectsDirtyForEveryLegacyEnvValue(t *testing.T) {
+	testCases := []struct {
+		name  string
+		value *string
 	}{
-		{"", false},
-		{"true", true},
-		{"True", true},
-		{"1", true},
-		{"false", false},
-		{"0", false},
-		{"yes", false}, // strconv.ParseBool rejects yes; conservative default
-		{"banana", false},
+		{name: "unset"},
+		{name: "empty", value: stringPointer("")},
+		{name: "false", value: stringPointer("false")},
+		{name: "true", value: stringPointer("true")},
+		{name: "one", value: stringPointer("1")},
 	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(fmt.Sprintf("env=%q", tc.env), func(t *testing.T) {
-			t.Setenv("ALLOW_DIRTY_STARTUP", tc.env)
-			got := allowDirtyStartup()
-			if got != tc.want {
-				t.Fatalf("allowDirtyStartup() = %v, want %v", got, tc.want)
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if testCase.value == nil {
+				oldValue, wasSet := os.LookupEnv("ALLOW_DIRTY_STARTUP")
+				if err := os.Unsetenv("ALLOW_DIRTY_STARTUP"); err != nil {
+					t.Fatalf("unset legacy dirty env: %v", err)
+				}
+				t.Cleanup(func() {
+					if wasSet {
+						_ = os.Setenv("ALLOW_DIRTY_STARTUP", oldValue)
+						return
+					}
+					_ = os.Unsetenv("ALLOW_DIRTY_STARTUP")
+				})
+			} else {
+				t.Setenv("ALLOW_DIRTY_STARTUP", *testCase.value)
+			}
+			sqlDB, gdb, _ := openDirtyTestDB(t, true, 50)
+			beforeSchema := snapshotSQLiteSchema(t, sqlDB)
+
+			err := RunMigrations(gdb, "sqlite")
+			if !errors.Is(err, ErrMigrationDirty) {
+				t.Fatalf("dirty startup legacy env case %s returned %v, want ErrMigrationDirty", testCase.name, err)
+			}
+			afterSchema := snapshotSQLiteSchema(t, sqlDB)
+			if afterSchema != beforeSchema {
+				t.Fatalf("dirty rejection mutated schema: before=%q after=%q", beforeSchema, afterSchema)
+			}
+			dirty, version, checkErr := checkMigrationDirty(sqlDB, "sqlite")
+			if checkErr != nil {
+				t.Fatalf("check dirty state after rejection: %v", checkErr)
+			}
+			if !dirty || version != 50 {
+				t.Fatalf("dirty rejection mutated migration metadata: version=%d dirty=%v", version, dirty)
 			}
 		})
+	}
+}
+
+func stringPointer(value string) *string {
+	return &value
+}
+
+func snapshotSQLiteSchema(t *testing.T, db *sql.DB) string {
+	t.Helper()
+	rows, err := db.Query(`
+		SELECT type, name, COALESCE(sql, '')
+		FROM sqlite_master
+		WHERE name NOT LIKE 'sqlite_%'
+		ORDER BY type, name`)
+	if err != nil {
+		t.Fatalf("query sqlite schema: %v", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Errorf("close sqlite schema rows: %v", closeErr)
+		}
+	}()
+	var snapshot strings.Builder
+	for rows.Next() {
+		var kind, name, definition string
+		if err := rows.Scan(&kind, &name, &definition); err != nil {
+			t.Fatalf("scan sqlite schema: %v", err)
+		}
+		fmt.Fprintf(&snapshot, "%s\x00%s\x00%s\n", kind, name, definition)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate sqlite schema: %v", err)
+	}
+	return snapshot.String()
+}
+
+// TestRunMigrationsRejectsCleanVersionSchemaDriftBeforeFixups proves that a
+// falsely-clean post-69 version cannot be mutated or accepted when the minimum
+// recovery schema is absent.
+func TestRunMigrationsRejectsCleanVersionSchemaDriftBeforeFixups(t *testing.T) {
+	_, gdb, _ := openDirtyTestDB(t, false, 71)
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("gorm DB: %v", err)
+	}
+	if _, err := sqlDB.Exec(`CREATE TABLE policies (id INTEGER PRIMARY KEY, bw_limit INTEGER NOT NULL)`); err != nil {
+		t.Fatalf("create legacy policies fixture: %v", err)
+	}
+	if _, err := sqlDB.Exec(`INSERT INTO policies (id, bw_limit) VALUES (1, 23)`); err != nil {
+		t.Fatalf("seed legacy policies fixture: %v", err)
+	}
+
+	var before string
+	if err := sqlDB.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='policies'`).Scan(&before); err != nil {
+		t.Fatalf("snapshot schema before startup: %v", err)
+	}
+	err = RunMigrations(gdb, "sqlite")
+	var after string
+	if scanErr := sqlDB.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='policies'`).Scan(&after); scanErr != nil {
+		t.Fatalf("snapshot schema after startup: %v", scanErr)
+	}
+	if after != before {
+		t.Fatalf("clean-version schema drift was mutated before rejection: before=%q after=%q", before, after)
+	}
+	if !errors.Is(err, ErrMigrationSchemaDrift) || !strings.Contains(strings.ToLower(err.Error()), "schema") || !strings.Contains(strings.ToLower(err.Error()), "drift") {
+		t.Fatalf("clean version 71 without minimum migration-69 schema returned %v, want typed schema-drift rejection", err)
+	}
+	dirty, version, checkErr := checkMigrationDirty(sqlDB, "sqlite")
+	if checkErr != nil {
+		t.Fatalf("check migration metadata after rejection: %v", checkErr)
+	}
+	if dirty || version != 71 {
+		t.Fatalf("schema-drift rejection mutated migration metadata: version=%d dirty=%v", version, dirty)
+	}
+	var bwLimit int
+	if scanErr := sqlDB.QueryRow(`SELECT bw_limit FROM policies WHERE id = 1`).Scan(&bwLimit); scanErr != nil {
+		t.Fatalf("read legacy policies data after rejection: %v", scanErr)
+	}
+	if bwLimit != 23 {
+		t.Fatalf("schema-drift rejection mutated policies data: got %d want 23", bwLimit)
 	}
 }

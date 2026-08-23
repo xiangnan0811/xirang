@@ -436,7 +436,7 @@ func (h *CredentialAccessGrantHandler) RequestBatchCommandGrant(c *gin.Context) 
 
 func (h *CredentialAccessGrantHandler) validateTaskRestoreGrantEligibility(c *gin.Context, taskID uint) bool {
 	var task model.Task
-	if err := h.db.WithContext(c.Request.Context()).Select("id", "executor_type").First(&task, taskID).Error; err != nil {
+	if err := h.db.WithContext(c.Request.Context()).Select("id", "executor_type", "node_id").First(&task, taskID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			respondNotFound(c, "任务不存在")
 			return false
@@ -452,7 +452,9 @@ func (h *CredentialAccessGrantHandler) validateTaskRestoreGrantEligibility(c *gi
 	}
 
 	var successCount int64
-	if err := h.db.WithContext(c.Request.Context()).Model(&model.TaskRun{}).Where("task_id = ? AND status = ?", taskID, "success").Count(&successCount).Error; err != nil {
+	if err := h.db.WithContext(c.Request.Context()).Model(&model.TaskRun{}).
+		Where("task_id = ? AND node_id_snapshot = ? AND status = ?", taskID, task.NodeID, model.TaskRunStatusSuccess).
+		Count(&successCount).Error; err != nil {
 		respondInternalError(c, err)
 		return false
 	}

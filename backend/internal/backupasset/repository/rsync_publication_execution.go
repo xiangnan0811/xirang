@@ -223,7 +223,7 @@ func (service *PublicationService) recordImportedRsyncBaselineTaskRun(ctx contex
 			}
 			return fmt.Errorf("lock imported Rsync baseline TaskRun: %w", err)
 		}
-		if taskRun.TaskID != taskID {
+		if taskRun.TaskID != taskID || !model.IsTaskRunNodeSnapshotAuthoritative(taskRun.NodeIDSnapshot) {
 			return fmt.Errorf("%w: imported Rsync baseline TaskRun lineage changed", backupasset.ErrConflict)
 		}
 		if !activeTaskRunStatus(taskRun.Status) {
@@ -445,7 +445,7 @@ func (service *PublicationService) prepareRsyncPoint(ctx context.Context, run pu
 			}
 			return fmt.Errorf("lock managed Rsync publication TaskRun: %w", err)
 		}
-		if taskRun.TaskID != taskEntity.ID || !activeTaskRunStatus(taskRun.Status) {
+		if !authoritativeTaskRunForTask(taskRun, taskEntity) || !activeTaskRunStatus(taskRun.Status) {
 			return fmt.Errorf("%w: TaskRun is not active for managed Rsync publication", backupasset.ErrConflict)
 		}
 		var link model.TaskRepositoryLink

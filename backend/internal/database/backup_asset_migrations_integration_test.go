@@ -25,6 +25,7 @@ import (
 	"xirang/backend/internal/backupasset/recovery"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/model"
+	gormrepo "xirang/backend/internal/repository/gorm"
 	"xirang/backend/internal/secure"
 	"xirang/backend/internal/settings"
 
@@ -51,6 +52,7 @@ const (
 	backupAssetRecoveryVersion         = 69
 	backupAssetLifecycleVersion        = 70
 	backupAssetGAVersion               = 71
+	backupAssetTaskRunCompatVersion    = 72
 	recoveryEmptyDeleteSetDigest       = "3f5a5d5213612b170da6ce2f2f90775a31d4e40269bb785042589af64011b7cf"
 	recoveryClaimSchedulerRowID        = "0000000000000000000000000000006a"
 	recoveryTakeoverSchedulerRowID     = "0000000000000000000000000000006b"
@@ -370,7 +372,6 @@ func TestBackupAssetMigration062PostgresApplyDown(t *testing.T) {
 }
 
 func TestRunMigrationsPostgresDirtyCheckUsesSearchPath(t *testing.T) {
-	t.Setenv("ALLOW_DIRTY_STARTUP", "")
 	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
 	if dsn == "" {
 		if strings.TrimSpace(os.Getenv("REQUIRE_POSTGRES_MIGRATION_TEST")) == "1" {
@@ -447,6 +448,118 @@ func TestRunMigrationsPostgresDirtyCheckUsesSearchPath(t *testing.T) {
 	err = RunMigrations(firstDB, "postgres")
 	if !errors.Is(err, ErrMigrationDirty) {
 		t.Fatalf("search-path-visible sibling dirty row must fail closed, got %v", err)
+	}
+}
+
+func TestRunMigrationsPostgresSchemaDriftCheckUsesSearchPath(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		if strings.TrimSpace(os.Getenv("REQUIRE_POSTGRES_MIGRATION_TEST")) == "1" {
+			t.Fatal("TEST_POSTGRES_DSN is required when REQUIRE_POSTGRES_MIGRATION_TEST=1")
+		}
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil || parsed.Scheme == "" {
+		t.Fatalf("TEST_POSTGRES_DSN must be a PostgreSQL URL: %v", err)
+	}
+
+	baseDB, err := openPostgresSQLDB(dsn)
+	if err != nil {
+		t.Fatalf("open PostgreSQL schema-drift base: %v", err)
+	}
+	if err := baseDB.Ping(); err != nil {
+		_ = baseDB.Close()
+		t.Fatalf("ping PostgreSQL schema-drift base: %v", err)
+	}
+	t.Cleanup(func() { _ = baseDB.Close() })
+
+	suffix := strings.ReplaceAll(time.Now().UTC().Format("20060102150405.000000000"), ".", "")
+	targetSchema := "xirang_schema_drift_" + suffix
+	if _, err := baseDB.Exec("CREATE SCHEMA " + targetSchema); err != nil {
+		t.Fatalf("create PostgreSQL schema-drift schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := baseDB.Exec("DROP SCHEMA IF EXISTS " + targetSchema + " CASCADE"); err != nil {
+			t.Errorf("drop PostgreSQL schema-drift schema: %v", err)
+		}
+	})
+	if _, err := baseDB.Exec("CREATE TABLE " + targetSchema + ".schema_migrations (version BIGINT NOT NULL PRIMARY KEY, dirty BOOLEAN NOT NULL)"); err != nil {
+		t.Fatalf("create schema-drift schema_migrations: %v", err)
+	}
+	if _, err := baseDB.Exec("INSERT INTO " + targetSchema + ".schema_migrations (version, dirty) VALUES (71, false)"); err != nil {
+		t.Fatalf("seed clean schema-drift migration: %v", err)
+	}
+	if _, err := baseDB.Exec("CREATE TABLE " + targetSchema + ".policies (id BIGINT PRIMARY KEY, bw_limit BIGINT NOT NULL)"); err != nil {
+		t.Fatalf("create schema-drift policies fixture: %v", err)
+	}
+	if _, err := baseDB.Exec("INSERT INTO " + targetSchema + ".policies (id, bw_limit) VALUES (1, 23)"); err != nil {
+		t.Fatalf("seed schema-drift policies fixture: %v", err)
+	}
+
+	scoped := *parsed
+	query := scoped.Query()
+	query.Set("search_path", targetSchema)
+	query.Set("timezone", "UTC")
+	scoped.RawQuery = query.Encode()
+	gdb, err := Open(config.Config{DBType: "postgres", PostgresDSN: scoped.String()})
+	if err != nil {
+		t.Fatalf("open PostgreSQL schema-drift scope: %v", err)
+	}
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("get PostgreSQL schema-drift scope DB: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	err = RunMigrations(gdb, "postgres")
+	if !errors.Is(err, ErrMigrationSchemaDrift) {
+		t.Fatalf("clean version 71 without minimum schema returned %v, want ErrMigrationSchemaDrift", err)
+	}
+	dirty, version, checkErr := checkMigrationDirty(sqlDB, "postgres")
+	if checkErr != nil {
+		t.Fatalf("check PostgreSQL migration metadata after schema-drift rejection: %v", checkErr)
+	}
+	if dirty || version != 71 {
+		t.Fatalf("PostgreSQL schema-drift rejection mutated migration metadata: version=%d dirty=%v", version, dirty)
+	}
+	oldExists, oldErr := migrationColumnExists(sqlDB, "postgres", "policies", "bw_limit")
+	newExists, newErr := migrationColumnExists(sqlDB, "postgres", "policies", "bwlimit")
+	if oldErr != nil || newErr != nil {
+		t.Fatalf("inspect PostgreSQL policies columns after rejection: old=%v new=%v", oldErr, newErr)
+	}
+	if !oldExists || newExists {
+		t.Fatalf("PostgreSQL schema-drift rejection mutated legacy policies schema: old=%v new=%v", oldExists, newExists)
+	}
+	var bwLimit int
+	if scanErr := sqlDB.QueryRow(`SELECT bw_limit FROM policies WHERE id = 1`).Scan(&bwLimit); scanErr != nil {
+		t.Fatalf("read PostgreSQL policies data after rejection: %v", scanErr)
+	}
+	if bwLimit != 23 {
+		t.Fatalf("PostgreSQL schema-drift rejection mutated policies data: got %d want 23", bwLimit)
+	}
+}
+
+func TestRunMigrationsClean071Applies072SQLite(t *testing.T) {
+	fixture := newSQLiteMigrationFixture(t)
+	_, sqlDB := fixture.openAt(t, backupAssetGAVersion)
+	gdb, err := gorm.Open(sqlitegorm.New(sqlitegorm.Config{Conn: sqlDB}), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("wrap clean 071 SQLite fixture: %v", err)
+	}
+
+	if err := RunMigrations(gdb, "sqlite"); err != nil {
+		t.Fatalf("run migration 072 from clean complete 071: %v", err)
+	}
+	dirty, version, err := checkMigrationDirty(sqlDB, "sqlite")
+	if err != nil {
+		t.Fatalf("check migration 072 metadata: %v", err)
+	}
+	if dirty || version != backupAssetTaskRunCompatVersion {
+		t.Fatalf("migration 072 metadata mismatch: version=%d dirty=%v", version, dirty)
+	}
+	if err := validateMinimumRecoverySchema(sqlDB, "sqlite", version); err != nil {
+		t.Fatalf("validate migration 072 minimum recovery schema: %v", err)
 	}
 }
 
@@ -3301,6 +3414,353 @@ func TestBackupAssetMigration071PairedFiles(t *testing.T) {
 	}
 }
 
+func TestBackupAssetMigration072SQLite(t *testing.T) {
+	runBackupAssetMigration072Contract(t, newSQLiteMigrationFixture(t))
+}
+
+func TestBackupAssetMigration072Postgres(t *testing.T) {
+	runBackupAssetMigration072Contract(t, newRequiredPostgresMigrationFixture(t))
+}
+
+func TestBackupAssetMigration072PairedFiles(t *testing.T) {
+	testCases := []struct {
+		name string
+		fs   interface {
+			ReadFile(string) ([]byte, error)
+		}
+		path string
+	}{
+		{name: "SQLiteUp", fs: sqliteMigrationsFS, path: "migrations/sqlite/000072_task_run_snapshot_compatibility.up.sql"},
+		{name: "SQLiteDown", fs: sqliteMigrationsFS, path: "migrations/sqlite/000072_task_run_snapshot_compatibility.down.sql"},
+		{name: "PostgresUp", fs: postgresMigrationsFS, path: "migrations/postgres/000072_task_run_snapshot_compatibility.up.sql"},
+		{name: "PostgresDown", fs: postgresMigrationsFS, path: "migrations/postgres/000072_task_run_snapshot_compatibility.down.sql"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			script, err := testCase.fs.ReadFile(testCase.path)
+			if err != nil {
+				t.Fatalf("read paired 000072 migration: %v", err)
+			}
+			text := strings.ToLower(string(script))
+			for _, fragment := range []string{
+				"task_runs", "node_id_snapshot", "success", "failed", "canceled", "warning", "skipped",
+				"trg_backup_asset_recovery_task_runs_node_snapshot_insert",
+				"trg_backup_asset_recovery_task_runs_node_snapshot_immutable",
+				"trg_backup_asset_task_runs_legacy_unknown_status_immutable",
+				"trg_backup_asset_task_run_snapshot_compatibility_downgrade_admission",
+			} {
+				if !strings.Contains(text, fragment) {
+					t.Fatalf("%s is missing TaskRun compatibility contract %q", testCase.path, fragment)
+				}
+			}
+		})
+	}
+}
+
+func runBackupAssetMigration072Contract(t *testing.T, fixture migrationFixture) {
+	t.Helper()
+	t.Run("ConvergesFromPre69AndOriginalClean71", fixture.test072ConvergesUpgradePaths)
+	t.Run("LegacyUnknownActiveDriftIsRejectedAtomically", fixture.test072RejectsLegacyUnknownActiveDrift)
+	t.Run("OrdinaryWritesAndLegacyStatusAreClosed", fixture.test072TaskRunWriteContract)
+	t.Run("CleanVersionMissingFinalContractIsRejected", fixture.test072SchemaDriftIsRejected)
+	t.Run("SingleNodeDeletePreservesPre69TerminalRun", fixture.testNodeDeletePreservesPre69TerminalRun)
+	t.Run("BatchNodeDeletePreservesPositiveSnapshots", fixture.testBatchNodeDeletePreservesPositiveSnapshots)
+	t.Run("UsedDownWithLegacyUnknownIsRejectedAtomically", fixture.test072UsedDownWithLegacyUnknownIsAtomic)
+	t.Run("PristineDownRestores071", fixture.test072PristineDown)
+}
+
+type taskRunCompatibilitySchema struct {
+	tableDefinition   string
+	indexDefinition   string
+	insertTrigger     string
+	immutableTrigger  string
+	statusTrigger     string
+	admissionTrigger  string
+	guardFunction     string
+	statusFunction    string
+	admissionFunction string
+}
+
+func (fixture migrationFixture) captureTaskRunCompatibilitySchema(t *testing.T, db *sql.DB) taskRunCompatibilitySchema {
+	t.Helper()
+	normalize := func(definition string) string { return definition }
+	if fixture.engine == "postgres" {
+		var schema string
+		if err := db.QueryRow(`SELECT current_schema()`).Scan(&schema); err != nil {
+			t.Fatalf("load PostgreSQL schema for TaskRun compatibility comparison: %v", err)
+		}
+		schemaPrefix := strings.ToLower(schema) + "."
+		normalize = func(definition string) string {
+			return strings.ReplaceAll(definition, schemaPrefix, "")
+		}
+	}
+	statusTrigger := ""
+	if fixture.recoveryTriggerExists(t, db, "task_runs", "trg_backup_asset_task_runs_legacy_unknown_status_immutable") {
+		statusTrigger = fixture.recoveryTriggerDefinition(t, db, "task_runs", "trg_backup_asset_task_runs_legacy_unknown_status_immutable")
+	}
+	return taskRunCompatibilitySchema{
+		tableDefinition:   normalize(fixture.tableDefinition(t, db, "task_runs")),
+		indexDefinition:   normalize(fixture.indexDefinition(t, db, "idx_task_runs_node_snapshot_status")),
+		insertTrigger:     normalize(fixture.recoveryTriggerDefinition(t, db, "task_runs", "trg_backup_asset_recovery_task_runs_node_snapshot_insert")),
+		immutableTrigger:  normalize(fixture.recoveryTriggerDefinition(t, db, "task_runs", "trg_backup_asset_recovery_task_runs_node_snapshot_immutable")),
+		statusTrigger:     normalize(statusTrigger),
+		admissionTrigger:  normalize(fixture.recoveryTriggerDefinition(t, db, "schema_migrations", "trg_backup_asset_task_run_snapshot_compatibility_downgrade_admission")),
+		guardFunction:     normalize(fixture.recoveryFunctionDefinition(t, db, "backup_asset_recovery_task_run_node_snapshot_guard")),
+		statusFunction:    normalize(fixture.recoveryFunctionDefinition(t, db, "backup_asset_task_run_legacy_unknown_status_guard")),
+		admissionFunction: normalize(fixture.recoveryFunctionDefinition(t, db, "backup_asset_task_run_snapshot_compatibility_downgrade_admission")),
+	}
+}
+
+func (fixture migrationFixture) seedTerminalOrphanBefore069(t *testing.T, db *sql.DB, runID, taskID int64) {
+	t.Helper()
+	now := time.Date(2026, 8, 23, 6, 7, 8, 0, time.UTC)
+	fixture.mustExec(t, db, `INSERT INTO task_runs
+		(id, task_id, trigger_type, status, created_at, updated_at)
+		VALUES (?, ?, 'scheduled', 'success', ?, ?)`, runID, taskID, now, now)
+}
+
+func (fixture migrationFixture) test072ConvergesUpgradePaths(t *testing.T) {
+	pre69Migrator, pre69DB := fixture.openAt(t, backupAssetExportVersion)
+	fixture.seedTerminalOrphanBefore069(t, pre69DB, 772001, 772099)
+	migrateToBackupAssetVersion(t, pre69Migrator, backupAssetTaskRunCompatVersion)
+	assertMigrationVersion(t, pre69Migrator, backupAssetTaskRunCompatVersion)
+	var snapshot int64
+	if err := pre69DB.QueryRow(fixture.bind(`SELECT node_id_snapshot FROM task_runs WHERE id = ?`), int64(772001)).Scan(&snapshot); err != nil {
+		t.Fatalf("load %s pre-69 terminal orphan after 000072: %v", fixture.engine, err)
+	}
+	if snapshot != 0 {
+		t.Fatalf("%s pre-69 terminal orphan snapshot=%d, want legacy_unknown 0", fixture.engine, snapshot)
+	}
+	pre69Schema := fixture.captureTaskRunCompatibilitySchema(t, pre69DB)
+
+	clean71Migrator, clean71DB := fixture.openAt(t, backupAssetGAVersion)
+	if fixture.engine == "postgres" {
+		fixture.mustExec(t, clean71DB, `ALTER TABLE task_runs DROP CONSTRAINT task_runs_node_id_snapshot_positive`)
+		fixture.mustExec(t, clean71DB, `ALTER TABLE task_runs ADD CONSTRAINT task_runs_node_id_snapshot_positive CHECK (node_id_snapshot > 0)`)
+	}
+	migrateToBackupAssetVersion(t, clean71Migrator, backupAssetTaskRunCompatVersion)
+	assertMigrationVersion(t, clean71Migrator, backupAssetTaskRunCompatVersion)
+	clean71Schema := fixture.captureTaskRunCompatibilitySchema(t, clean71DB)
+	if !reflect.DeepEqual(pre69Schema, clean71Schema) {
+		t.Fatalf("%s 000072 did not converge pre-69 and original-clean-71 schemas\npre-69: %#v\nclean-71: %#v",
+			fixture.engine, pre69Schema, clean71Schema)
+	}
+}
+
+func (fixture migrationFixture) test072RejectsLegacyUnknownActiveDrift(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetExportVersion)
+	fixture.seedTerminalOrphanBefore069(t, db, 772051, 772059)
+	migrateToBackupAssetVersion(t, migrator, backupAssetGAVersion)
+	if fixture.engine == "postgres" {
+		fixture.mustExec(t, db, `ALTER TABLE task_runs DROP CONSTRAINT task_runs_node_id_snapshot_positive`)
+	}
+	fixture.mustExec(t, db, `UPDATE task_runs SET status = 'running' WHERE id = ?`, int64(772051))
+
+	if err := migrator.Steps(1); err == nil {
+		t.Fatalf("%s 000072 unexpectedly accepted active legacy_unknown TaskRun drift", fixture.engine)
+	}
+	_, dirty, err := migrator.Version()
+	if err != nil {
+		t.Fatalf("read %s migration version after rejected 000072: %v", fixture.engine, err)
+	}
+	if !dirty {
+		t.Fatalf("%s rejected 000072 did not leave a dirty fail-closed version", fixture.engine)
+	}
+	if fixture.recoveryTriggerExists(t, db, "task_runs", "trg_backup_asset_task_runs_legacy_unknown_status_immutable") {
+		t.Fatalf("%s rejected 000072 left a partial legacy_unknown status trigger", fixture.engine)
+	}
+	var count int
+	if err := db.QueryRow(fixture.bind(`SELECT COUNT(*) FROM task_runs
+		WHERE id = ? AND node_id_snapshot = 0 AND status = 'running'`), int64(772051)).Scan(&count); err != nil {
+		t.Fatalf("count %s active legacy_unknown row after rejected 000072: %v", fixture.engine, err)
+	}
+	if count != 1 {
+		t.Fatalf("%s rejected 000072 changed active legacy_unknown row count=%d, want 1", fixture.engine, count)
+	}
+}
+
+func (fixture migrationFixture) test072TaskRunWriteContract(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetExportVersion)
+	fixture.seedTerminalOrphanBefore069(t, db, 772101, 772199)
+	now := time.Date(2026, 8, 23, 7, 8, 9, 0, time.UTC)
+	fixture.mustExec(t, db, `INSERT INTO nodes
+		(id, name, host, username, backup_dir, created_at, updated_at)
+		VALUES (?, 'compat-node', '127.0.0.1', 'root', '/tmp/compat-node', ?, ?)`, int64(772102), now, now)
+	fixture.mustExec(t, db, `INSERT INTO tasks
+		(id, name, node_id, executor_type, status, created_at, updated_at)
+		VALUES (?, 'compat-task', ?, 'rsync', 'running', ?, ?)`, int64(772103), int64(772102), now, now)
+	migrateToBackupAssetVersion(t, migrator, backupAssetTaskRunCompatVersion)
+
+	fixture.expectExecRejectedInRollback(t, db, `INSERT INTO task_runs
+		(id, task_id, node_id_snapshot, trigger_type, status, created_at, updated_at)
+		VALUES (?, ?, 0, 'manual', 'success', ?, ?)`, int64(772104), int64(772199), now, now)
+	fixture.expectExecRejectedInRollback(t, db, `INSERT INTO task_runs
+		(id, task_id, node_id_snapshot, trigger_type, status, created_at, updated_at)
+		VALUES (?, ?, ?, 'manual', 'running', ?, ?)`, int64(772105), int64(772103), int64(772102+1), now, now)
+	fixture.mustExec(t, db, `INSERT INTO task_runs
+		(id, task_id, node_id_snapshot, trigger_type, status, created_at, updated_at)
+		VALUES (?, ?, ?, 'manual', 'running', ?, ?)`, int64(772106), int64(772103), int64(772102), now, now)
+	fixture.expectExecRejectedInRollback(t, db, `UPDATE task_runs SET task_id = ? WHERE id = ?`, int64(772199), int64(772106))
+	fixture.expectExecRejectedInRollback(t, db, `UPDATE task_runs SET node_id_snapshot = ? WHERE id = ?`, int64(772102+1), int64(772106))
+	fixture.expectExecRejectedInRollback(t, db, `UPDATE task_runs SET status = 'running' WHERE id = ?`, int64(772101))
+}
+
+func (fixture migrationFixture) test072SchemaDriftIsRejected(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetTaskRunCompatVersion)
+	if fixture.engine == "postgres" {
+		fixture.mustExec(t, db, `DROP TRIGGER trg_backup_asset_task_runs_legacy_unknown_status_immutable ON task_runs`)
+	} else {
+		fixture.mustExec(t, db, `DROP TRIGGER trg_backup_asset_task_runs_legacy_unknown_status_immutable`)
+	}
+	before := fixture.captureTaskRunCompatibilitySchema(t, db)
+	gdb := fixture.recoveryWorkerGorm(t, db)
+	err := RunMigrations(gdb, fixture.engine)
+	if !errors.Is(err, ErrMigrationSchemaDrift) {
+		t.Fatalf("clean %s version 72 missing final contract returned %v, want ErrMigrationSchemaDrift", fixture.engine, err)
+	}
+	assertMigrationVersion(t, migrator, backupAssetTaskRunCompatVersion)
+	after := fixture.captureTaskRunCompatibilitySchema(t, db)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("%s final-schema drift rejection mutated schema\nbefore: %#v\nafter: %#v", fixture.engine, before, after)
+	}
+}
+
+func (fixture migrationFixture) testNodeDeletePreservesPre69TerminalRun(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetExportVersion)
+	now := time.Date(2026, 8, 23, 9, 10, 11, 0, time.UTC)
+	const nodeID, taskID, runID int64 = 772301, 772302, 772303
+	fixture.mustExec(t, db, `INSERT INTO nodes
+		(id, name, host, username, backup_dir, created_at, updated_at)
+		VALUES (?, 'pre69-delete-node', '192.0.2.31', 'root', '/srv/pre69-delete', ?, ?)`, nodeID, now, now)
+	fixture.mustExec(t, db, `INSERT INTO tasks
+		(id, name, node_id, executor_type, status, created_at, updated_at)
+		VALUES (?, 'pre69-delete-task', ?, 'rsync', 'success', ?, ?)`, taskID, nodeID, now, now)
+	fixture.mustExec(t, db, `INSERT INTO task_runs
+		(id, task_id, trigger_type, status, created_at, updated_at)
+		VALUES (?, ?, 'scheduled', 'success', ?, ?)`, runID, taskID, now, now)
+
+	repository := gormrepo.NewNodeRepository(fixture.recoveryWorkerGorm(t, db))
+	if err := repository.DeleteWithAssociations(context.Background(), uint(nodeID)); err != nil {
+		t.Fatalf("delete %s pre-69 node with associations: %v", fixture.engine, err)
+	}
+	fixture.assertTaskDeletedRunRetained(t, db, taskID, runID)
+
+	migrateToBackupAssetVersion(t, migrator, backupAssetTaskRunCompatVersion)
+	var snapshot int64
+	if err := db.QueryRow(fixture.bind(`SELECT node_id_snapshot FROM task_runs WHERE id = ?`), runID).Scan(&snapshot); err != nil {
+		t.Fatalf("load %s retained pre-69 TaskRun after upgrade: %v", fixture.engine, err)
+	}
+	if snapshot != int64(model.TaskRunNodeIDLegacyUnknown) {
+		t.Fatalf("%s retained pre-69 TaskRun snapshot=%d, want legacy_unknown 0", fixture.engine, snapshot)
+	}
+}
+
+func (fixture migrationFixture) testBatchNodeDeletePreservesPositiveSnapshots(t *testing.T) {
+	_, db := fixture.openAt(t, backupAssetTaskRunCompatVersion)
+	now := time.Date(2026, 8, 23, 10, 11, 12, 0, time.UTC)
+	for offset := int64(0); offset < 2; offset++ {
+		nodeID := int64(772401) + offset
+		taskID := int64(772411) + offset
+		runID := int64(772421) + offset
+		fixture.mustExec(t, db, `INSERT INTO nodes
+			(id, name, host, username, backup_dir, created_at, updated_at)
+			VALUES (?, ?, ?, 'root', ?, ?, ?)`, nodeID, fmt.Sprintf("post69-delete-node-%d", offset), fmt.Sprintf("192.0.2.%d", 41+offset), fmt.Sprintf("/srv/post69-delete-%d", offset), now, now)
+		fixture.mustExec(t, db, `INSERT INTO tasks
+			(id, name, node_id, executor_type, status, created_at, updated_at)
+			VALUES (?, ?, ?, 'rsync', 'success', ?, ?)`, taskID, fmt.Sprintf("post69-delete-task-%d", offset), nodeID, now, now)
+		fixture.mustExec(t, db, `INSERT INTO task_runs
+			(id, task_id, node_id_snapshot, trigger_type, status, created_at, updated_at)
+			VALUES (?, ?, ?, 'scheduled', 'success', ?, ?)`, runID, taskID, nodeID, now, now)
+	}
+
+	repository := gormrepo.NewNodeRepository(fixture.recoveryWorkerGorm(t, db))
+	deleted, notFound, err := repository.BatchDeleteWithAssociations(context.Background(), []uint{772401, 772402, 772499})
+	if err != nil {
+		t.Fatalf("batch delete %s nodes with associations: %v", fixture.engine, err)
+	}
+	if deleted != 2 || !reflect.DeepEqual(notFound, []uint{772499}) {
+		t.Fatalf("%s batch node delete result deleted=%d notFound=%v", fixture.engine, deleted, notFound)
+	}
+	for offset := int64(0); offset < 2; offset++ {
+		taskID := int64(772411) + offset
+		runID := int64(772421) + offset
+		fixture.assertTaskDeletedRunRetained(t, db, taskID, runID)
+		var snapshot int64
+		if err := db.QueryRow(fixture.bind(`SELECT node_id_snapshot FROM task_runs WHERE id = ?`), runID).Scan(&snapshot); err != nil {
+			t.Fatalf("load %s retained post-69 TaskRun: %v", fixture.engine, err)
+		}
+		if snapshot != int64(772401)+offset {
+			t.Fatalf("%s retained post-69 TaskRun snapshot=%d, want %d", fixture.engine, snapshot, int64(772401)+offset)
+		}
+	}
+}
+
+func (fixture migrationFixture) assertTaskDeletedRunRetained(t *testing.T, db *sql.DB, taskID, runID int64) {
+	t.Helper()
+	var taskCount, runCount int
+	if err := db.QueryRow(fixture.bind(`SELECT COUNT(*) FROM tasks WHERE id = ?`), taskID).Scan(&taskCount); err != nil {
+		t.Fatalf("count %s task after node delete: %v", fixture.engine, err)
+	}
+	if err := db.QueryRow(fixture.bind(`SELECT COUNT(*) FROM task_runs WHERE id = ?`), runID).Scan(&runCount); err != nil {
+		t.Fatalf("count %s TaskRun after node delete: %v", fixture.engine, err)
+	}
+	if taskCount != 0 || runCount != 1 {
+		t.Fatalf("%s node delete task count=%d TaskRun count=%d, want 0 and 1", fixture.engine, taskCount, runCount)
+	}
+}
+
+func (fixture migrationFixture) test072UsedDownWithLegacyUnknownIsAtomic(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetExportVersion)
+	fixture.seedTerminalOrphanBefore069(t, db, 772201, 772299)
+	migrateToBackupAssetVersion(t, migrator, backupAssetTaskRunCompatVersion)
+	before := fixture.captureTaskRunCompatibilitySchema(t, db)
+	if err := migrator.Steps(-1); err == nil {
+		t.Fatalf("%s 000072 down unexpectedly accepted legacy_unknown TaskRun", fixture.engine)
+	}
+	assertMigrationVersion(t, migrator, backupAssetTaskRunCompatVersion)
+	after := fixture.captureTaskRunCompatibilitySchema(t, db)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("%s rejected 000072 down changed compatibility schema\nbefore: %#v\nafter: %#v", fixture.engine, before, after)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_runs WHERE node_id_snapshot = 0`).Scan(&count); err != nil {
+		t.Fatalf("count %s legacy_unknown TaskRuns after rejected 000072 down: %v", fixture.engine, err)
+	}
+	if count != 1 {
+		t.Fatalf("%s rejected 000072 down changed legacy_unknown count=%d, want 1", fixture.engine, count)
+	}
+}
+
+func (fixture migrationFixture) test072PristineDown(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetTaskRunCompatVersion)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("step %s pristine 000072 down: %v", fixture.engine, err)
+	}
+	assertMigrationVersion(t, migrator, backupAssetGAVersion)
+	for _, trigger := range []struct{ table, name string }{
+		{table: "task_runs", name: "trg_backup_asset_task_runs_legacy_unknown_status_immutable"},
+		{table: "schema_migrations", name: "trg_backup_asset_task_run_snapshot_compatibility_downgrade_admission"},
+	} {
+		if fixture.recoveryTriggerExists(t, db, trigger.table, trigger.name) {
+			t.Fatalf("%s pristine 000072 down left trigger %s", fixture.engine, trigger.name)
+		}
+	}
+	for _, trigger := range []string{
+		"trg_backup_asset_recovery_task_runs_node_snapshot_insert",
+		"trg_backup_asset_recovery_task_runs_node_snapshot_immutable",
+	} {
+		if !fixture.recoveryTriggerExists(t, db, "task_runs", trigger) {
+			t.Fatalf("%s pristine 000072 down removed 000069 trigger %s", fixture.engine, trigger)
+		}
+	}
+	if fixture.engine == "postgres" {
+		definition := fixture.tableDefinition(t, db, "task_runs")
+		if !strings.Contains(definition, "node_id_snapshot > 0") {
+			t.Fatalf("PostgreSQL pristine 000072 down did not restore positive snapshot constraint: %s", definition)
+		}
+	}
+}
+
 func runBackupAssetMigration071Contract(t *testing.T, fixture migrationFixture) {
 	t.Helper()
 	t.Run("ApplyAndModelParity", func(t *testing.T) {
@@ -3439,8 +3899,8 @@ func assertBackupAssetGASchema071(t *testing.T, fixture migrationFixture, db *sq
 
 func backupAssetGAModels() map[string]any {
 	return map[string]any{
-		"backup_asset_installations":         model.BackupAssetInstallation{},
-		"backup_asset_inventory_runs":        model.BackupAssetInventoryRun{},
+		"backup_asset_installations":        model.BackupAssetInstallation{},
+		"backup_asset_inventory_runs":       model.BackupAssetInventoryRun{},
 		"backup_asset_repository_conflicts": model.BackupAssetRepositoryConflict{},
 	}
 }
@@ -4788,6 +5248,7 @@ func runBackupAssetMigration069Contract(t *testing.T, fixture migrationFixture) 
 }
 
 func (fixture migrationFixture) test069TaskRunNodeSnapshot(t *testing.T) {
+	fixture.test069TaskRunNodeSnapshotPreservesTerminalOrphan(t)
 	fixture.test069TaskRunNodeSnapshotRejectsUnbackfillableLegacyRows(t)
 
 	migrator, db := fixture.openAt(t, backupAssetExportVersion)
@@ -4862,46 +5323,88 @@ func (fixture migrationFixture) test069TaskRunNodeSnapshot(t *testing.T) {
 	}
 }
 
+func (fixture migrationFixture) test069TaskRunNodeSnapshotPreservesTerminalOrphan(t *testing.T) {
+	t.Run("TerminalOrphanPreservedAsLegacyUnknown", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, backupAssetExportVersion)
+		now := time.Date(2026, 8, 23, 4, 5, 6, 0, time.UTC)
+		const (
+			orphanTaskID = int64(769090)
+			runID        = int64(769091)
+		)
+		fixture.mustExec(t, db, `INSERT INTO task_runs
+			(id, task_id, trigger_type, status, created_at, updated_at)
+			VALUES (?, ?, 'scheduled', 'success', ?, ?)`, runID, orphanTaskID, now, now)
+
+		if err := migrator.Steps(1); err != nil {
+			t.Fatalf("apply %s 000069 for terminal orphan TaskRun: %v", fixture.engine, err)
+		}
+
+		var (
+			gotTaskID   int64
+			gotSnapshot int64
+			gotStatus   string
+		)
+		if err := db.QueryRow(fixture.bind(`SELECT task_id, node_id_snapshot, status
+			FROM task_runs WHERE id = ?`), runID).Scan(&gotTaskID, &gotSnapshot, &gotStatus); err != nil {
+			t.Fatalf("load %s terminal orphan TaskRun after 000069: %v", fixture.engine, err)
+		}
+		if gotTaskID != orphanTaskID || gotSnapshot != 0 || gotStatus != "success" {
+			t.Fatalf("%s 000069 changed or misclassified terminal orphan TaskRun: "+
+				"task_id=%d snapshot=%d status=%q", fixture.engine, gotTaskID, gotSnapshot, gotStatus)
+		}
+	})
+}
+
 func (fixture migrationFixture) test069TaskRunNodeSnapshotRejectsUnbackfillableLegacyRows(t *testing.T) {
 	for _, testCase := range []struct {
 		name string
-		seed func(*testing.T, migrationFixture, *sql.DB, time.Time)
+		seed func(*testing.T, migrationFixture, *sql.DB, time.Time) int64
 	}{
 		{
-			name: "missing task",
-			seed: func(t *testing.T, fixture migrationFixture, db *sql.DB, now time.Time) {
+			name: "active orphan",
+			seed: func(t *testing.T, fixture migrationFixture, db *sql.DB, now time.Time) int64 {
 				t.Helper()
+				const runID = int64(769101)
 				fixture.mustExec(t, db, `INSERT INTO task_runs
-					(id, task_id, trigger_type, status, created_at, updated_at)
-					VALUES (?, ?, 'manual', 'running', ?, ?)`, int64(769101), int64(769199), now, now)
+						(id, task_id, trigger_type, status, created_at, updated_at)
+						VALUES (?, ?, 'manual', 'running', ?, ?)`, runID, int64(769199), now, now)
+				return runID
+			},
+		},
+		{
+			name: "unknown-state orphan",
+			seed: func(t *testing.T, fixture migrationFixture, db *sql.DB, now time.Time) int64 {
+				t.Helper()
+				const runID = int64(769104)
+				fixture.mustExec(t, db, `INSERT INTO task_runs
+						(id, task_id, trigger_type, status, created_at, updated_at)
+						VALUES (?, ?, 'manual', 'state_outside_closed_contract', ?, ?)`,
+					runID, int64(769198), now, now)
+				return runID
 			},
 		},
 		{
 			name: "nonpositive task node",
-			seed: func(t *testing.T, fixture migrationFixture, db *sql.DB, now time.Time) {
+			seed: func(t *testing.T, fixture migrationFixture, db *sql.DB, now time.Time) int64 {
 				t.Helper()
 				fixture.mustExec(t, db, `INSERT INTO tasks
-					(id, name, node_id, executor_type, status, created_at, updated_at)
-					VALUES (?, 'recovery-taskrun-invalid-node', 0, 'rsync', 'running', ?, ?)`, int64(769102), now, now)
+						(id, name, node_id, executor_type, status, created_at, updated_at)
+						VALUES (?, 'recovery-taskrun-invalid-node', 0, 'rsync', 'running', ?, ?)`, int64(769102), now, now)
+				const runID = int64(769103)
 				fixture.mustExec(t, db, `INSERT INTO task_runs
-					(id, task_id, trigger_type, status, created_at, updated_at)
-					VALUES (?, ?, 'manual', 'running', ?, ?)`, int64(769103), int64(769102), now, now)
+						(id, task_id, trigger_type, status, created_at, updated_at)
+						VALUES (?, ?, 'manual', 'running', ?, ?)`, runID, int64(769102), now, now)
+				return runID
 			},
 		},
 	} {
 		t.Run("FailClosed/"+testCase.name, func(t *testing.T) {
 			migrator, db := fixture.openAt(t, backupAssetExportVersion)
 			now := time.Now().UTC().Truncate(time.Second)
-			testCase.seed(t, fixture, db, now)
+			runID := testCase.seed(t, fixture, db, now)
 
 			if err := migrator.Steps(1); err == nil {
 				t.Fatalf("%s 000069 unexpectedly accepted an unbackfillable legacy TaskRun (%s)", fixture.engine, testCase.name)
-			}
-			if fixture.engine == "postgres" {
-				// PostgreSQL owns an explicit BEGIN plus SET NOT NULL/positive
-				// CHECK. The expected error leaves that session aborted until
-				// cleanup; SQLite needs the additional rollback assertions below.
-				return
 			}
 			_, dirty, err := migrator.Version()
 			if err != nil {
@@ -4920,6 +5423,13 @@ func (fixture migrationFixture) test069TaskRunNodeSnapshotRejectsUnbackfillableL
 				if databaseTableExists(t, db, fixture.engine, table) {
 					t.Fatalf("%s rejected 000069 left partial recovery table %s", fixture.engine, table)
 				}
+			}
+			var runCount int
+			if err := db.QueryRow(fixture.bind(`SELECT COUNT(*) FROM task_runs WHERE id = ?`), runID).Scan(&runCount); err != nil {
+				t.Fatalf("count %s rejected orphan TaskRun after 000069: %v", fixture.engine, err)
+			}
+			if runCount != 1 {
+				t.Fatalf("%s rejected 000069 changed orphan TaskRun row count=%d, want 1", fixture.engine, runCount)
 			}
 		})
 	}

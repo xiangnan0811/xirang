@@ -359,6 +359,9 @@ func (m *Manager) SetNodeWriteAdmission(admission NodeWriteAdmission) {
 }
 
 func (m *Manager) reserveTaskRun(ctx context.Context, nodeID uint, requested model.TaskRun) (model.TaskRun, error) {
+	if !model.IsTaskRunNodeSnapshotAuthoritative(nodeID) {
+		return model.TaskRun{}, ErrNodeWriteStartLost
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -386,6 +389,9 @@ func (m *Manager) reserveTaskRun(ctx context.Context, nodeID uint, requested mod
 			}
 			if locked.ArchivedAt != nil {
 				return ErrTaskArchived
+			}
+			if locked.NodeID != nodeID {
+				return ErrNodeWriteStartLost
 			}
 			if m.nodeWriteAdmission != nil {
 				if err := m.nodeWriteAdmission.AdmitTaskTx(ctx, tx, nodeID); err != nil {
@@ -420,6 +426,9 @@ func (m *Manager) enterTaskExecution(
 	startedAt time.Time,
 	taskEntity *model.Task,
 ) error {
+	if !model.IsTaskRunNodeSnapshotAuthoritative(nodeID) {
+		return ErrNodeWriteStartLost
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -460,8 +469,8 @@ func (m *Manager) enterTaskExecution(
 			}
 		} else {
 			result := tx.Model(&model.TaskRun{}).
-				Where("id = ? AND node_id_snapshot = ? AND status = ?", runID, nodeID, "pending").
-				Updates(map[string]interface{}{"status": "running", "started_at": &startedAt})
+				Where("id = ? AND node_id_snapshot = ? AND status = ?", runID, nodeID, model.TaskRunStatusPending).
+				Updates(map[string]interface{}{"status": model.TaskRunStatusRunning, "started_at": &startedAt})
 			if result.Error != nil {
 				return result.Error
 			}
@@ -693,6 +702,9 @@ func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
 	if taskEntity.ArchivedAt != nil {
 		return 0, ErrTaskArchived
 	}
+	if !model.IsTaskRunNodeSnapshotAuthoritative(taskEntity.NodeID) {
+		return 0, ErrNodeWriteStartLost
+	}
 	if m.afterTriggerRestoreLoad != nil {
 		m.afterTriggerRestoreLoad()
 	}
@@ -706,7 +718,9 @@ func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
 
 	// 校验是否有成功的执行记录
 	var successCount int64
-	if err := m.db.Model(&model.TaskRun{}).Where("task_id = ? AND status = ?", taskID, "success").Count(&successCount).Error; err != nil {
+	if err := m.db.Model(&model.TaskRun{}).
+		Where("task_id = ? AND node_id_snapshot = ? AND status = ?", taskID, taskEntity.NodeID, model.TaskRunStatusSuccess).
+		Count(&successCount).Error; err != nil {
 		return 0, err
 	}
 	if successCount == 0 {
@@ -757,7 +771,7 @@ func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
 	requestedRun := model.TaskRun{
 		TaskID:      taskID,
 		TriggerType: "restore",
-		Status:      "pending",
+		Status:      model.TaskRunStatusPending,
 	}
 	run, err := m.reserveTaskRun(execCtx, taskEntity.NodeID, requestedRun)
 	if err != nil {
@@ -903,9 +917,12 @@ func (m *Manager) cancelTaskRunOwner(taskID uint) bool {
 func (m *Manager) cancelPendingTaskRuns(taskID uint, message string) (int64, error) {
 	canceledAt := time.Now().UTC()
 	result := m.db.Model(&model.TaskRun{}).
-		Where("task_id = ? AND status = ?", taskID, "pending").
+		Where(`task_id = ?
+			AND node_id_snapshot > ?
+			AND node_id_snapshot = (SELECT node_id FROM tasks WHERE tasks.id = task_runs.task_id)
+			AND status = ?`, taskID, model.TaskRunNodeIDLegacyUnknown, model.TaskRunStatusPending).
 		Updates(map[string]interface{}{
-			"status":      "canceled",
+			"status":      model.TaskRunStatusCanceled,
 			"started_at":  nil,
 			"finished_at": &canceledAt,
 			"duration_ms": int64(0),

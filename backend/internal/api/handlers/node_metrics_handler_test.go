@@ -48,6 +48,26 @@ func TestNodeMetricsHandler_Status(t *testing.T) {
 			t.Fatalf("seed sample: %v", err)
 		}
 	}
+	taskEntity := model.Task{Name: "status-task", NodeID: node.ID, ExecutorType: "rsync", Status: "running"}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	authoritativeRun := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: model.TaskRunStatusRunning}
+	legacyRun := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: model.TaskRunStatusRunning}
+	mismatchedRun := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: model.TaskRunStatusRunning}
+	for _, run := range []*model.TaskRun{&authoritativeRun, &legacyRun, &mismatchedRun} {
+		if err := db.Create(run).Error; err != nil {
+			t.Fatalf("seed TaskRun: %v", err)
+		}
+	}
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", legacyRun.ID).
+		UpdateColumn("node_id_snapshot", model.TaskRunNodeIDLegacyUnknown).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", mismatchedRun.ID).
+		UpdateColumn("node_id_snapshot", node.ID+1).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -64,8 +84,9 @@ func TestNodeMetricsHandler_Status(t *testing.T) {
 	var envelope struct {
 		Code int `json:"code"`
 		Data struct {
-			Online  bool `json:"online"`
-			Current struct {
+			Online       bool `json:"online"`
+			RunningTasks int  `json:"running_tasks"`
+			Current      struct {
 				CPUPct float64 `json:"cpu_pct"`
 			} `json:"current"`
 		} `json:"data"`
@@ -81,6 +102,9 @@ func TestNodeMetricsHandler_Status(t *testing.T) {
 	}
 	if envelope.Data.Current.CPUPct < 10 {
 		t.Fatalf("current cpu_pct too low: %f", envelope.Data.Current.CPUPct)
+	}
+	if envelope.Data.RunningTasks != 1 {
+		t.Fatalf("running_tasks=%d, want one authoritative TaskRun", envelope.Data.RunningTasks)
 	}
 }
 

@@ -446,6 +446,56 @@ func TestFindTaskForPolicyPrefersSuccessful(t *testing.T) {
 	}
 }
 
+func TestDrillSourceIgnoresNonAuthoritativeSuccessRuns(t *testing.T) {
+	db := openManagerTestDB(t)
+	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+
+	nodeA := seedDrillNodeWithBackupDir(t, db, "drill-authority-a", "192.0.2.71", "drill-authority-a")
+	nodeB := seedDrillNodeWithBackupDir(t, db, "drill-authority-b", "192.0.2.72", "drill-authority-b")
+	policy := model.Policy{Name: "policy-drill-authority", SourcePath: "/safe/source", TargetPath: "/safe/target", CronSpec: "@daily"}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatal(err)
+	}
+	taskA := model.Task{Name: "drill-authority-task-a", NodeID: nodeA.ID, PolicyID: &policy.ID, ExecutorType: "rsync", Status: string(StatusSuccess)}
+	taskB := model.Task{Name: "drill-authority-task-b", NodeID: nodeB.ID, PolicyID: &policy.ID, ExecutorType: "rsync", Status: string(StatusSuccess)}
+	if err := db.Create(&taskA).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&taskB).Error; err != nil {
+		t.Fatal(err)
+	}
+	legacy := model.TaskRun{TaskID: taskA.ID, TriggerType: "manual", Status: model.TaskRunStatusSuccess}
+	mismatched := model.TaskRun{TaskID: taskA.ID, TriggerType: "manual", Status: model.TaskRunStatusSuccess}
+	authoritative := model.TaskRun{TaskID: taskB.ID, TriggerType: "manual", Status: model.TaskRunStatusSuccess}
+	for _, run := range []*model.TaskRun{&legacy, &mismatched, &authoritative} {
+		if err := db.Create(run).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", legacy.ID).
+		UpdateColumn("node_id_snapshot", model.TaskRunNodeIDLegacyUnknown).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", mismatched.ID).
+		UpdateColumn("node_id_snapshot", nodeB.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	found, err := m.findTaskForPolicy(policy.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found.ID != taskB.ID {
+		t.Fatalf("drill source task=%d, want authoritative task %d", found.ID, taskB.ID)
+	}
+	if runID, err := m.latestSuccessfulRunID(taskA.ID, taskA.NodeID); err != nil || runID != nil {
+		t.Fatalf("non-authoritative TaskRuns produced source run=%v err=%v", runID, err)
+	}
+	if runID, err := m.latestSuccessfulRunID(taskB.ID, taskB.NodeID); err != nil || runID == nil || *runID != authoritative.ID {
+		t.Fatalf("authoritative TaskRun source=%v err=%v, want %d", runID, err, authoritative.ID)
+	}
+}
+
 // TestTriggerDrillSandboxNotFound 测试沙箱节点不存在。
 func TestTriggerDrillSandboxNotFound(t *testing.T) {
 	db := openManagerTestDB(t)

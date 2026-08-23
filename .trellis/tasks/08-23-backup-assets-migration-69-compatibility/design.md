@@ -63,7 +63,10 @@ SQLite 无需重建 4GB 级 `task_runs` 表；兼容性由 backfill guard + trig
 
 ### PostgreSQL
 
-- 000069 在一个显式事务内回填，先对所有不安全行执行 guard，再 `SET NOT NULL`。
+- 000069 作为一个 PostgreSQL simple-query migration 执行，依赖该多语句消息的单个
+  隐式事务完成回填、guard 和 `SET NOT NULL`。不要在会主动抛错的 up body 内再写
+  `BEGIN/COMMIT`：guard 失败时显式事务会把池中连接留在 aborted 状态；隐式事务会
+  原子回滚并自动结束。
 - 为兼容路径建立 nonnegative 基线；普通 INSERT 仍由触发器要求 `>0` 且匹配 Task。
 - 000072 `DROP CONSTRAINT IF EXISTS task_runs_node_id_snapshot_positive`，再建立一个
   规范命名的最终 CHECK：正数，或 0 且状态为闭合集合。

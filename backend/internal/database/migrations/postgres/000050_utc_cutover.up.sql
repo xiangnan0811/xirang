@@ -21,9 +21,9 @@
 -- PG 支持嵌套 BEGIN（subsequent BEGIN 报 warning 不报错），所以即使将来驱动改为 wrap tx
 -- 也能向前兼容。
 --
--- schema_migrations.dirty=1 标记仍会被设置（驱动语义）；下次启动时由 migrator.go 通过
--- ALLOW_DIRTY_STARTUP 守卫拒绝启动，强制运维介入修复。
--- 完整流程见 docs/deployment.md#utc-时间戳约定「Rollback」与「Dirty 状态恢复」章节。
+-- schema_migrations.dirty=1 标记仍会被设置（驱动语义）；下次启动时由 migrator.go
+-- 无条件拒绝 dirty 状态，要求先保全备份并执行有审计记录的离线诊断或恢复。
+-- 完整流程见 docs/deployment.md#迁移-dirty-状态排障。
 
 BEGIN;
 

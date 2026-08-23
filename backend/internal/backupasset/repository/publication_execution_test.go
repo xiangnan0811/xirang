@@ -19,6 +19,46 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestAuthoritativeTaskRunForTaskRequiresMatchingPositiveSnapshot(t *testing.T) {
+	taskEntity := model.Task{ID: 11, NodeID: 17}
+	matching := model.TaskRun{TaskID: taskEntity.ID, NodeIDSnapshot: taskEntity.NodeID}
+	if !authoritativeTaskRunForTask(matching, taskEntity) {
+		t.Fatal("matching positive TaskRun snapshot was rejected")
+	}
+	for _, testCase := range []struct {
+		name string
+		run  model.TaskRun
+	}{
+		{name: "legacy_unknown", run: model.TaskRun{TaskID: taskEntity.ID, NodeIDSnapshot: model.TaskRunNodeIDLegacyUnknown}},
+		{name: "mismatched_node", run: model.TaskRun{TaskID: taskEntity.ID, NodeIDSnapshot: taskEntity.NodeID + 1}},
+		{name: "mismatched_task", run: model.TaskRun{TaskID: taskEntity.ID + 1, NodeIDSnapshot: taskEntity.NodeID}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if authoritativeTaskRunForTask(testCase.run, taskEntity) {
+				t.Fatalf("non-authoritative TaskRun was accepted: %+v", testCase.run)
+			}
+		})
+	}
+}
+
+func TestCountAuthoritativeActiveTaskRunsFailsClosedOnInvalidSnapshot(t *testing.T) {
+	fixture := newPublicationFixture(t, true, publication.AdmissionManaged)
+	active, err := countAuthoritativeActiveTaskRuns(fixture.db, fixture.task)
+	if err != nil || active != 1 {
+		t.Fatalf("matching active TaskRun count=%d error=%v", active, err)
+	}
+
+	for _, snapshot := range []uint{model.TaskRunNodeIDLegacyUnknown, fixture.task.NodeID + 1} {
+		if err := fixture.db.Model(&model.TaskRun{}).Where("id = ?", fixture.taskRun.ID).
+			UpdateColumn("node_id_snapshot", snapshot).Error; err != nil {
+			t.Fatal(err)
+		}
+		if active, err := countAuthoritativeActiveTaskRuns(fixture.db, fixture.task); err == nil {
+			t.Fatalf("invalid snapshot %d returned active=%d without fail-closed error", snapshot, active)
+		}
+	}
+}
+
 func TestPreparePristineDisabledReturnsSideEffectFreeCompatibilitySession(t *testing.T) {
 	fixture := newPublicationFixture(t, false, publication.AdmissionPristineLegacy)
 	execution, err := fixture.service.Prepare(context.Background(), fixture.run())

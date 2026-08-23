@@ -159,7 +159,7 @@ func (m *Manager) findTaskForPolicy(policyID uint, allowedSourceNodeIDs []uint) 
 	for _, t := range tasks {
 		var count int64
 		if err := m.db.Model(&model.TaskRun{}).
-			Where("task_id = ? AND status = ?", t.ID, "success").
+			Where("task_id = ? AND node_id_snapshot = ? AND status = ?", t.ID, t.NodeID, model.TaskRunStatusSuccess).
 			Count(&count).Error; err != nil {
 			return model.Task{}, fmt.Errorf("查询任务成功执行记录失败: %w", err)
 		}
@@ -180,7 +180,7 @@ func (m *Manager) executeDrill(policy *model.Policy, task model.Task, sandboxNod
 	if restorePath == "" {
 		restorePath = "/tmp/xirang-drill"
 	}
-	sourceRunID, err := m.latestSuccessfulRunID(task.ID)
+	sourceRunID, err := m.latestSuccessfulRunID(task.ID, task.NodeID)
 	if err != nil {
 		logger.Module("task").Warn().Uint("task_id", task.ID).Err(err).Msg("查询恢复演练来源执行记录失败")
 	}
@@ -626,9 +626,14 @@ func drillDurationMs(startedAt, finishedAt time.Time) int64 {
 	return duration
 }
 
-func (m *Manager) latestSuccessfulRunID(taskID uint) (*uint, error) {
+func (m *Manager) latestSuccessfulRunID(taskID, nodeID uint) (*uint, error) {
+	if !model.IsTaskRunNodeSnapshotAuthoritative(nodeID) {
+		return nil, nil
+	}
 	var run model.TaskRun
-	err := m.db.Select("id").Where("task_id = ? AND status = ?", taskID, "success").Order("finished_at desc, id desc").First(&run).Error
+	err := m.db.Select("id").
+		Where("task_id = ? AND node_id_snapshot = ? AND status = ?", taskID, nodeID, model.TaskRunStatusSuccess).
+		Order("finished_at desc, id desc").First(&run).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
