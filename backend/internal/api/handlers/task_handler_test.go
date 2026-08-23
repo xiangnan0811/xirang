@@ -219,6 +219,14 @@ func TestTaskListSanitizesLegacyLastErrorAndPolicyHooksWithoutMutatingRows(t *te
 	if err := db.Create(&runningRun).Error; err != nil {
 		t.Fatalf("创建运行记录失败: %v", err)
 	}
+	nonAuthoritativeRun := model.TaskRun{TaskID: taskEntity.ID, Status: model.TaskRunStatusRunning, TriggerType: "manual", Progress: 99}
+	if err := db.Create(&nonAuthoritativeRun).Error; err != nil {
+		t.Fatalf("创建非权威运行记录失败: %v", err)
+	}
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", nonAuthoritativeRun.ID).
+		UpdateColumn("node_id_snapshot", model.TaskRunNodeIDLegacyUnknown).Error; err != nil {
+		t.Fatalf("伪造 legacy_unknown 运行记录失败: %v", err)
+	}
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -330,6 +338,14 @@ func TestTaskGetSanitizesLegacyLastErrorAndPolicyHooksWithoutMutatingRows(t *tes
 	runningRun := model.TaskRun{TaskID: taskEntity.ID, Status: "running", TriggerType: "manual", Progress: 42}
 	if err := db.Create(&runningRun).Error; err != nil {
 		t.Fatalf("创建运行记录失败: %v", err)
+	}
+	nonAuthoritativeRun := model.TaskRun{TaskID: taskEntity.ID, Status: model.TaskRunStatusRunning, TriggerType: "manual", Progress: 99}
+	if err := db.Create(&nonAuthoritativeRun).Error; err != nil {
+		t.Fatalf("创建非权威运行记录失败: %v", err)
+	}
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", nonAuthoritativeRun.ID).
+		UpdateColumn("node_id_snapshot", taskEntity.NodeID+1).Error; err != nil {
+		t.Fatalf("伪造错节点运行记录失败: %v", err)
 	}
 
 	router := gin.New()

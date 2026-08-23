@@ -97,7 +97,7 @@ func (coordinator *NodeWriteCoordinator) EnterTaskExecutionTx(
 	if result.Error != nil {
 		return safeNodeWriteDatabaseError(ctx)
 	}
-	if result.RowsAffected != 1 || runSnapshot.NodeIDSnapshot == 0 {
+	if result.RowsAffected != 1 || !model.IsTaskRunNodeSnapshotAuthoritative(runSnapshot.NodeIDSnapshot) {
 		return task.ErrNodeWriteStartLost
 	}
 	if err := coordinator.lockNodeBoundary(ctx, tx, runSnapshot.NodeIDSnapshot); err != nil {
@@ -115,8 +115,8 @@ func (coordinator *NodeWriteCoordinator) EnterTaskExecutionTx(
 	}
 
 	result = tx.WithContext(ctx).Model(&model.TaskRun{}).
-		Where("id = ? AND node_id_snapshot = ? AND status = ?", runID, expectedNodeID, "pending").
-		Updates(map[string]interface{}{"status": "running", "started_at": &startedAt})
+		Where("id = ? AND node_id_snapshot = ? AND status = ?", runID, expectedNodeID, model.TaskRunStatusPending).
+		Updates(map[string]interface{}{"status": model.TaskRunStatusRunning, "started_at": &startedAt})
 	if result.Error != nil {
 		return safeNodeWriteDatabaseError(ctx)
 	}
@@ -146,7 +146,7 @@ func (coordinator *NodeWriteCoordinator) AdmitRecoveryTx(ctx context.Context, tx
 	}
 	var activeTaskRuns int64
 	err = tx.WithContext(ctx).Model(&model.TaskRun{}).
-		Where("node_id_snapshot = ? AND status IN ?", nodeID, []string{"pending", "running"}).
+		Where("node_id_snapshot = ? AND status IN ?", nodeID, model.TaskRunActiveStatuses()).
 		Count(&activeTaskRuns).Error
 	if err != nil {
 		return safeNodeWriteDatabaseError(ctx)
@@ -158,7 +158,7 @@ func (coordinator *NodeWriteCoordinator) AdmitRecoveryTx(ctx context.Context, tx
 }
 
 func (coordinator *NodeWriteCoordinator) validateCaller(ctx context.Context, tx *gorm.DB, nodeID uint) error {
-	if coordinator == nil || coordinator.db == nil || tx == nil || tx.Error != nil || nodeID == 0 {
+	if coordinator == nil || coordinator.db == nil || tx == nil || tx.Error != nil || !model.IsTaskRunNodeSnapshotAuthoritative(nodeID) {
 		return task.ErrNodeWriteUnavailable
 	}
 	if err := nonNilNodeWriteContext(ctx).Err(); err != nil {

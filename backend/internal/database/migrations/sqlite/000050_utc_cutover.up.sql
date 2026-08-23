@@ -20,8 +20,8 @@
 -- migrations/postgres/000050_utc_cutover.up.sql 需要显式加 BEGIN/COMMIT。）
 --
 -- 但 schema_migrations.dirty=1 标记仍会被设置（驱动语义，发生在 commit 后才报错
--- 的极端场景）；下次启动时由 migrator.go 通过 ALLOW_DIRTY_STARTUP 守卫拒绝启动，
--- 强制运维介入修复。完整流程见 docs/deployment.md#utc-时间戳约定「Dirty 状态恢复」。
+-- 的极端场景）；下次启动时由 migrator.go 无条件拒绝 dirty 状态，要求先保全备份
+-- 并执行有审计记录的离线诊断或恢复。完整流程见 docs/deployment.md#迁移-dirty-状态排障。
 --
 -- 平移涉及的所有 (table.column)：
 --   users.created_at, users.updated_at

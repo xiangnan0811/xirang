@@ -7,7 +7,7 @@ import "testing"
 func TestRecoveryReviewF5OrdinaryWriterExclusion(t *testing.T) {
 	TestNodeWriteCoordinatorUnexpiredRecoveryLeaseBlocksTaskAndRecovery(t)
 	TestNodeWriteCoordinatorActiveLeaseRejectsManagerTriggersWithoutResidualRuns(t)
-	TestNodeWriteCoordinatorRecoveryAdmissionBlocksOnlyPendingAndRunningTaskRuns(t)
+	TestNodeWriteCoordinatorRecoveryAdmissionBlocksActiveTaskRuns(t)
 	TestNodeWriteCoordinatorSameNodeConcurrentTaskAndRecoveryHaveOneDurableWinner(t)
 }
 

@@ -399,6 +399,65 @@ func TestRunTaskCleansUpLockEntries(t *testing.T) {
 	}
 }
 
+func TestRunTaskRejectsNonAuthoritativeNodeSnapshotBeforeExecutor(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		snapshot func(model.Task) uint
+	}{
+		{name: "legacy_unknown", snapshot: func(model.Task) uint { return model.TaskRunNodeIDLegacyUnknown }},
+		{name: "mismatch", snapshot: func(taskEntity model.Task) uint { return taskEntity.NodeID + 1 }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := openManagerTestDB(t)
+			exec := &successExecutor{}
+			manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+			taskEntity := seedTaskForManagerTest(t, db)
+			runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
+			if err := db.Model(&model.TaskRun{}).Where("id = ?", runID).UpdateColumn("node_id_snapshot", testCase.snapshot(taskEntity)).Error; err != nil {
+				t.Fatal(err)
+			}
+
+			manager.runTask(taskEntity.ID, runID, "manual", generateChainRunID())
+			if exec.Calls() != 0 {
+				t.Fatalf("non-authoritative TaskRun reached executor %d time(s)", exec.Calls())
+			}
+			var run model.TaskRun
+			if err := db.First(&run, runID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if run.Status != model.TaskRunStatusFailed {
+				t.Fatalf("non-authoritative TaskRun status=%q, want failed", run.Status)
+			}
+		})
+	}
+}
+
+func TestRunTaskRejectsTaskRunOwnedByAnotherTaskBeforeExecutor(t *testing.T) {
+	db := openManagerTestDB(t)
+	exec := &successExecutor{}
+	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	otherTask := model.Task{
+		Name: "same-node-other-task", NodeID: taskEntity.NodeID, ExecutorType: "rsync", Status: string(StatusPending),
+	}
+	if err := db.Create(&otherTask).Error; err != nil {
+		t.Fatal(err)
+	}
+	runID := createTestTaskRun(t, db, otherTask.ID, "manual")
+
+	manager.runTask(taskEntity.ID, runID, "manual", generateChainRunID())
+	if exec.Calls() != 0 {
+		t.Fatalf("foreign TaskRun reached executor %d time(s)", exec.Calls())
+	}
+	var run model.TaskRun
+	if err := db.First(&run, runID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != model.TaskRunStatusFailed {
+		t.Fatalf("foreign TaskRun status=%q, want failed", run.Status)
+	}
+}
+
 func TestTriggerRegistersCancelOwnerBeforeReturning(t *testing.T) {
 	t.Run("ordinary", func(t *testing.T) {
 		db := openConcurrentManagerTestDB(t)
@@ -1745,6 +1804,114 @@ func TestTriggerManualNodeWriteConflictLeavesNoReservationOrMarker(t *testing.T)
 	defer cancel()
 	if err := manager.Shutdown(shutdownCtx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReserveTaskRunRejectsUnknownOrMismatchedNodeBeforeAdmission(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		nodeID func(model.Task) uint
+	}{
+		{name: "legacy_unknown", nodeID: func(model.Task) uint { return model.TaskRunNodeIDLegacyUnknown }},
+		{name: "mismatch", nodeID: func(taskEntity model.Task) uint { return taskEntity.NodeID + 1 }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := openManagerTestDB(t)
+			manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+			taskEntity := seedTaskForManagerTest(t, db)
+			admission := &nodeWriteAdmissionFake{}
+			manager.SetNodeWriteAdmission(admission)
+
+			_, err := manager.reserveTaskRun(context.Background(), testCase.nodeID(taskEntity), model.TaskRun{
+				TaskID:      taskEntity.ID,
+				TriggerType: "manual",
+				Status:      model.TaskRunStatusPending,
+			})
+			if !errors.Is(err, ErrNodeWriteStartLost) {
+				t.Fatalf("reserveTaskRun error=%v, want ErrNodeWriteStartLost", err)
+			}
+			calls, _, _ := admission.snapshot()
+			if calls != 0 {
+				t.Fatalf("invalid snapshot reached admission %d time(s)", calls)
+			}
+			var runCount int64
+			if err := db.Model(&model.TaskRun{}).Count(&runCount).Error; err != nil {
+				t.Fatal(err)
+			}
+			if runCount != 0 {
+				t.Fatalf("invalid snapshot created %d TaskRun rows", runCount)
+			}
+		})
+	}
+}
+
+func TestCancelPendingTaskRunsIgnoresNonAuthoritativeSnapshots(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	authoritative := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: model.TaskRunStatusPending}
+	legacy := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: model.TaskRunStatusPending}
+	mismatched := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: model.TaskRunStatusPending}
+	for _, run := range []*model.TaskRun{&authoritative, &legacy, &mismatched} {
+		if err := db.Create(run).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", legacy.ID).
+		UpdateColumn("node_id_snapshot", model.TaskRunNodeIDLegacyUnknown).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", mismatched.ID).
+		UpdateColumn("node_id_snapshot", taskEntity.NodeID+1).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	count, err := manager.cancelPendingTaskRuns(taskEntity.ID, "task canceled")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("canceled TaskRuns=%d, want one authoritative row", count)
+	}
+	for _, run := range []struct {
+		id         uint
+		wantStatus string
+	}{
+		{id: authoritative.ID, wantStatus: model.TaskRunStatusCanceled},
+		{id: legacy.ID, wantStatus: model.TaskRunStatusPending},
+		{id: mismatched.ID, wantStatus: model.TaskRunStatusPending},
+	} {
+		var stored model.TaskRun
+		if err := db.First(&stored, run.id).Error; err != nil {
+			t.Fatal(err)
+		}
+		if stored.Status != run.wantStatus {
+			t.Fatalf("TaskRun %d status=%q, want %q", run.id, stored.Status, run.wantStatus)
+		}
+	}
+}
+
+func TestTriggerRestoreRejectsLegacyUnknownSuccessBeforeAdmission(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	run := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "scheduled", Status: model.TaskRunStatusSuccess}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", run.ID).UpdateColumn("node_id_snapshot", model.TaskRunNodeIDLegacyUnknown).Error; err != nil {
+		t.Fatal(err)
+	}
+	admission := &nodeWriteAdmissionFake{errs: []error{ErrNodeWriteConflict}}
+	manager.SetNodeWriteAdmission(admission)
+
+	runID, err := manager.TriggerRestore(taskEntity.ID, "/tmp/legacy-unknown-restore")
+	if err == nil || !strings.Contains(err.Error(), "没有成功的执行记录") {
+		t.Fatalf("TriggerRestore legacy_unknown prerequisite run ID=%d error=%v", runID, err)
+	}
+	calls, _, _ := admission.snapshot()
+	if calls != 0 {
+		t.Fatalf("legacy_unknown restore prerequisite reached admission %d time(s)", calls)
 	}
 }
 

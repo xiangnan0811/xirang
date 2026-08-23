@@ -1,13 +1,49 @@
-BEGIN;
-
 ALTER TABLE task_runs ADD COLUMN node_id_snapshot BIGINT;
 UPDATE task_runs AS run
-SET node_id_snapshot = task_row.node_id
-FROM tasks AS task_row
-WHERE task_row.id = run.task_id;
+SET node_id_snapshot = CASE
+    WHEN EXISTS (SELECT 1 FROM tasks AS task_row WHERE task_row.id = run.task_id)
+        THEN (SELECT task_row.node_id FROM tasks AS task_row WHERE task_row.id = run.task_id)
+    WHEN run.status IN ('success', 'failed', 'canceled', 'warning', 'skipped')
+        THEN 0
+    ELSE NULL
+END;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM task_runs AS run
+        LEFT JOIN tasks AS task_row ON task_row.id = run.task_id
+        WHERE run.node_id_snapshot IS NULL
+           OR run.node_id_snapshot < 0
+           OR (
+                task_row.id IS NULL
+                AND (
+                    run.node_id_snapshot <> 0
+                    OR run.status NOT IN ('success', 'failed', 'canceled', 'warning', 'skipped')
+                )
+           )
+           OR (
+                task_row.id IS NOT NULL
+                AND (
+                    task_row.node_id <= 0
+                    OR run.node_id_snapshot <= 0
+                    OR run.node_id_snapshot IS DISTINCT FROM task_row.node_id
+                )
+           )
+    ) THEN
+        RAISE EXCEPTION '000069 TaskRun node snapshot backfill rejected unsafe legacy rows';
+    END IF;
+END
+$$;
 ALTER TABLE task_runs
     ALTER COLUMN node_id_snapshot SET NOT NULL,
-    ADD CONSTRAINT task_runs_node_id_snapshot_positive CHECK (node_id_snapshot > 0);
+    ADD CONSTRAINT task_runs_node_id_snapshot_positive CHECK (
+        node_id_snapshot > 0
+        OR (
+            node_id_snapshot = 0
+            AND status IN ('success', 'failed', 'canceled', 'warning', 'skipped')
+        )
+    );
 CREATE INDEX idx_task_runs_node_snapshot_status
     ON task_runs(node_id_snapshot, status);
 
@@ -2582,5 +2618,3 @@ $$;
 CREATE TRIGGER trg_backup_asset_recovery_downgrade_admission
 BEFORE INSERT ON schema_migrations
 FOR EACH ROW EXECUTE FUNCTION backup_asset_recovery_downgrade_admission();
-
-COMMIT;

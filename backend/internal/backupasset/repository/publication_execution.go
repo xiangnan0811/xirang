@@ -253,7 +253,7 @@ func (service *PublicationService) preparePoint(ctx context.Context, run publica
 			}
 			return fmt.Errorf("lock publication TaskRun: %w", err)
 		}
-		if taskRun.TaskID != runtime.task.ID || !activeTaskRunStatus(taskRun.Status) {
+		if !authoritativeTaskRunForTask(taskRun, runtime.task) || !activeTaskRunStatus(taskRun.Status) {
 			return fmt.Errorf("%w: TaskRun is not active for publication", backupasset.ErrConflict)
 		}
 		pointID, err := deriveRecoveryPointID(link.ID, taskRun.ID)
@@ -451,12 +451,37 @@ func publicationLineageForRun(link model.TaskRepositoryLink, taskEntity model.Ta
 }
 
 func activeTaskRunStatus(status string) bool {
-	switch status {
-	case "pending", "running", "retrying":
-		return true
-	default:
-		return false
+	return model.IsActiveTaskRunStatus(status)
+}
+
+func authoritativeTaskRunForTask(run model.TaskRun, taskEntity model.Task) bool {
+	return run.TaskID == taskEntity.ID &&
+		model.IsTaskRunNodeSnapshotAuthoritative(run.NodeIDSnapshot) &&
+		run.NodeIDSnapshot == taskEntity.NodeID
+}
+
+func countAuthoritativeActiveTaskRuns(tx *gorm.DB, taskEntity model.Task) (int64, error) {
+	if tx == nil || !model.IsTaskRunNodeSnapshotAuthoritative(taskEntity.NodeID) {
+		return 0, fmt.Errorf("%w: Task node identity is not authoritative", backupasset.ErrConflict)
 	}
+	activeStatuses := model.TaskRunActiveStatuses()
+	var invalid int64
+	if err := tx.Model(&model.TaskRun{}).
+		Where("task_id = ? AND status IN ? AND (node_id_snapshot <= ? OR node_id_snapshot <> ?)",
+			taskEntity.ID, activeStatuses, model.TaskRunNodeIDLegacyUnknown, taskEntity.NodeID).
+		Count(&invalid).Error; err != nil {
+		return 0, err
+	}
+	if invalid != 0 {
+		return 0, fmt.Errorf("%w: active TaskRun node snapshot is not authoritative", backupasset.ErrConflict)
+	}
+	var active int64
+	if err := tx.Model(&model.TaskRun{}).
+		Where("task_id = ? AND node_id_snapshot = ? AND status IN ?", taskEntity.ID, taskEntity.NodeID, activeStatuses).
+		Count(&active).Error; err != nil {
+		return 0, err
+	}
+	return active, nil
 }
 
 func samePreparedPublicationPoint(left, right model.RecoveryPoint) bool {

@@ -677,7 +677,8 @@ func (service *ResultLifecycleService) ListScheduledCleanupCandidates(
 		AND NOT EXISTS (
 			SELECT 1 FROM %s AS task_run
 			WHERE task_run.node_id_snapshot = candidate.target_node_id
-				AND task_run.status IN ('pending', 'running')
+				AND task_run.node_id_snapshot > 0
+				AND task_run.status IN ('pending', 'running', 'retrying')
 		)
 		ORDER BY candidate.scheduled_at ASC, candidate.kind ASC, candidate.id ASC
 		LIMIT ?`,

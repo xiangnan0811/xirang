@@ -10,6 +10,70 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	TaskRunNodeIDLegacyUnknown uint = 0
+
+	TaskRunStatusPending  = "pending"
+	TaskRunStatusRunning  = "running"
+	TaskRunStatusRetrying = "retrying"
+	TaskRunStatusSuccess  = "success"
+	TaskRunStatusFailed   = "failed"
+	TaskRunStatusCanceled = "canceled"
+	TaskRunStatusWarning  = "warning"
+	TaskRunStatusSkipped  = "skipped"
+)
+
+var (
+	taskRunActiveStatuses = [...]string{
+		TaskRunStatusPending,
+		TaskRunStatusRunning,
+		TaskRunStatusRetrying,
+	}
+	taskRunTerminalStatuses = [...]string{
+		TaskRunStatusSuccess,
+		TaskRunStatusFailed,
+		TaskRunStatusCanceled,
+		TaskRunStatusWarning,
+		TaskRunStatusSkipped,
+	}
+)
+
+func TaskRunActiveStatuses() []string {
+	return append([]string(nil), taskRunActiveStatuses[:]...)
+}
+
+func TaskRunTerminalStatuses() []string {
+	return append([]string(nil), taskRunTerminalStatuses[:]...)
+}
+
+func IsActiveTaskRunStatus(status string) bool {
+	for _, active := range taskRunActiveStatuses {
+		if status == active {
+			return true
+		}
+	}
+	return false
+}
+
+func IsTerminalTaskRunStatus(status string) bool {
+	for _, terminal := range taskRunTerminalStatuses {
+		if status == terminal {
+			return true
+		}
+	}
+	return false
+}
+
+func IsKnownTaskRunStatus(status string) bool {
+	return IsActiveTaskRunStatus(status) || IsTerminalTaskRunStatus(status)
+}
+
+// IsTaskRunNodeSnapshotAuthoritative separates ordinary positive node identity
+// from the migration-owned legacy_unknown terminal-history sentinel.
+func IsTaskRunNodeSnapshotAuthoritative(nodeID uint) bool {
+	return nodeID > TaskRunNodeIDLegacyUnknown
+}
+
 type Task struct {
 	ID                 uint       `gorm:"primaryKey" json:"id"`
 	Name               string     `gorm:"size:128;not null" json:"name"`
@@ -91,8 +155,11 @@ type TaskRun struct {
 // reject explicit mismatches; the hook keeps legacy TaskRun producers on the
 // same immutable identity contract without duplicating node lookups.
 func (r *TaskRun) BeforeCreate(tx *gorm.DB) error {
-	if r == nil || tx == nil || r.TaskID == 0 {
-		return nil
+	if r == nil || tx == nil {
+		return fmt.Errorf("task run authority is unavailable")
+	}
+	if r.TaskID == 0 {
+		return fmt.Errorf("task run requires an authoritative task")
 	}
 	var taskNode struct {
 		NodeID uint
@@ -101,10 +168,11 @@ func (r *TaskRun) BeforeCreate(tx *gorm.DB) error {
 	if result.Error != nil {
 		return result.Error
 	}
-	// Let the existing Task FK (and the paired 000069 insert guard) own a
-	// missing Task. Some isolated model consumers intentionally omit FKs.
 	if result.RowsAffected == 0 {
-		return nil
+		return fmt.Errorf("task run requires an authoritative task")
+	}
+	if !IsTaskRunNodeSnapshotAuthoritative(taskNode.NodeID) {
+		return fmt.Errorf("task run requires an authoritative task node snapshot")
 	}
 	if r.NodeIDSnapshot == 0 {
 		r.NodeIDSnapshot = taskNode.NodeID

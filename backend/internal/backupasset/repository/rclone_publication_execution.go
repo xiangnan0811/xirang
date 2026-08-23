@@ -419,7 +419,7 @@ func (service *PublicationService) recordImportedRcloneBaselineTaskRun(
 			}
 			return fmt.Errorf("lock imported Rclone baseline TaskRun: %w", err)
 		}
-		if taskRun.TaskID != taskID {
+		if taskRun.TaskID != taskID || !model.IsTaskRunNodeSnapshotAuthoritative(taskRun.NodeIDSnapshot) {
 			return fmt.Errorf("%w: imported Rclone baseline TaskRun lineage changed", backupasset.ErrConflict)
 		}
 		if !activeTaskRunStatus(taskRun.Status) {
@@ -855,7 +855,7 @@ func (service *PublicationService) prepareRclonePointTx(
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&taskRun, run.TaskRunID).Error; err != nil {
 		return provider.RcloneAttemptV1{}, backupasset.Lease{}, fmt.Errorf("lock managed Rclone publication TaskRun: %w", err)
 	}
-	if taskRun.TaskID != taskEntity.ID || !activeTaskRunStatus(taskRun.Status) {
+	if !authoritativeTaskRunForTask(taskRun, taskEntity) || !activeTaskRunStatus(taskRun.Status) {
 		return provider.RcloneAttemptV1{}, backupasset.Lease{}, fmt.Errorf("%w: TaskRun is not active for managed Rclone publication", backupasset.ErrConflict)
 	}
 	var link model.TaskRepositoryLink

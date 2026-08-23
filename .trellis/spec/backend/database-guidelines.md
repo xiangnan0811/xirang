@@ -45,7 +45,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
 - Keep version numbers in lockstep across SQLite and PostgreSQL. The current
-  latest migration is `000071_backup_asset_ga`.
+  latest migration is `000072_task_run_snapshot_compatibility`.
 - Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the
   SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
@@ -54,6 +54,14 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 - Only add pre-migration Go fixups for historical schema drift that cannot be
   expressed safely in SQL. Existing example: `fixupLegacyPolicyBwlimit` in
   `backend/internal/database/migrator.go`.
+- `RunMigrations` rejects every dirty version before fixups, regardless of
+  legacy environment values. The service process must not call migration
+  `Force`, auto-clean metadata, or retry over a dirty version.
+- For a clean version at or beyond 000069, validate the minimum Recovery schema
+  before fixups and validate it again after `Up`. At 000072 or newer, also
+  validate the final TaskRun compatibility triggers and PostgreSQL constraint.
+  Missing objects are typed, sanitized schema drift and never authorization for
+  forward writes.
 
 ---
 
@@ -111,10 +119,92 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   both SQLite/PostgreSQL definitions and matching down migrations when changing
   traffic-window predicates or index names.
 - Backup-asset schema changes are paired across SQLite and PostgreSQL. The
-  current baseline includes `000062` through `000071_backup_asset_ga`;
+  current baseline includes `000062` through
+  `000072_task_run_snapshot_compatibility`;
   later versions must remain paired. After durable Search or publication facts,
   or live content-delivery state exists, schema down must fail closed rather
   than deleting history, Provider facts, grants, reservations, or leases.
+- `task_runs.node_id_snapshot` has a closed product contract. Ordinary TaskRun
+  writes must freeze a positive node ID matching the live Task at creation;
+  `task_id` and the snapshot are immutable. Snapshot `0` is not authority: it is
+  the migration-owned `legacy_unknown` sentinel only for retained terminal
+  orphan history in `success`, `failed`, `canceled`, `warning`, or `skipped`.
+  Its status is immutable, executable consumers reject it explicitly, and
+  active/unknown orphan rows fail migration atomically.
+- Paired 000072 up converges repaired pre-69 upgrades and already-clean 69-71
+  upgrades on those semantics. A used 000072 down must reject through
+  `schema_migrations` admission before version mutation whenever any
+  `legacy_unknown` row exists; pristine down alone may return cleanly to 000071.
+
+## Scenario: TaskRun Snapshot Compatibility and Startup Drift
+
+### 1. Scope / Trigger
+
+- Applies when changing `task_runs`, node deletion, task execution/recovery
+  authority, or startup migration handling at versions 000069 and newer.
+- Trigger this scenario for both fresh databases and upgrades crossing 000069
+  or 000072 on SQLite and PostgreSQL.
+
+### 2. Signatures
+
+- Startup boundary: `RunMigrations(*gorm.DB, dbType string) error`.
+- Product boundary: `TaskRun.NodeIDSnapshot`,
+  `TaskRunActiveStatuses()`, and `IsTaskRunNodeSnapshotAuthoritative(uint)`.
+- Typed failures: `ErrMigrationDirty` and `ErrMigrationSchemaDrift`.
+
+### 3. Contracts
+
+- Ordinary TaskRun creation freezes the live Task's positive node ID; later
+  execution, restore, drill, publication, and admission queries require the
+  matching positive snapshot and the expected Task ID/status.
+- Migration 000069 may retain only orphaned terminal history as snapshot `0`.
+  Migration 000072 closes ordinary writes and makes that legacy status
+  immutable. Active, unknown-status, or nonpositive live-Task rows reject the
+  migration atomically.
+- Startup never forces dirty metadata. Clean versions >=69 are validated before
+  fixups and after migration; versions >=72 also require the final triggers and
+  PostgreSQL constraint.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Dirty version, regardless of legacy env value | Return `ErrMigrationDirty`; preserve metadata and schema. |
+| Clean version >=69 with missing minimum object | Return sanitized `ErrMigrationSchemaDrift` before fixups. |
+| Terminal orphan crossing 000069 | Preserve row with snapshot `0`; never use it as authority. |
+| Active/unknown orphan or mismatched live TaskRun | Reject upgrade atomically. |
+| Used 000072 down with any snapshot `0` row | Reject before migration version mutation. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: pre-69 and clean 69-71 paths converge at 72 with paired definitions and
+  only authoritative positive snapshots entering executable flows.
+- Base: pristine 72 down returns cleanly to 71.
+- Bad: infer a deleted node for orphan history, accept snapshot `0` as wildcard,
+  or repair dirty metadata through `Force` during service startup.
+
+### 6. Tests Required
+
+- Run shared SQLite and required real-PostgreSQL 000069/000072 contract suites,
+  including both upgrade paths, single/batch node deletion, atomic rejection,
+  used/pristine down, dirty-env matrix, and `search_path` schema-drift checks.
+- Exercise every executable consumer with legacy-zero, mismatched, and matching
+  snapshots; include repetition/race gates for admission and migration code.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+db.Where("task_id = ? AND status = ?", taskID, "success")
+```
+
+Correct:
+
+```go
+db.Where("task_id = ? AND node_id_snapshot = ? AND status = ?",
+    taskID, task.NodeID, model.TaskRunStatusSuccess)
+```
 
 ## Scenario: PostgreSQL Timestamp Scan-Location Parity
 
@@ -130,7 +220,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 
 - Connection helper: `openPostgresSQLDB(dsn string) (*sql.DB, error)`.
 - CI regression gate:
-  `go test ./internal/database -run '^(TestBackupAssetMigration062PostgresApplyDown|TestBackupAssetMigration0(63|64|65|66|67|68|69|70|71)Postgres|TestPostgresTimestamptzScanUsesConfiguredUTC|TestRunMigrationsPostgresDirtyCheckUsesSearchPath)$' -count=1`.
+  `go test ./internal/database -run '^(TestBackupAssetMigration062PostgresApplyDown|TestBackupAssetMigration0(63|64|65|66|67|68|69|70|71|72)Postgres|TestPostgresTimestamptzScanUsesConfiguredUTC|TestRunMigrationsPostgres(Dirty|SchemaDrift)CheckUsesSearchPath)$' -count=1`.
 - Export behavior gate:
   `go test ./internal/backupasset/export -run '^TestExportBehaviorPostgres$' -count=1`.
 - Required pgx registrations per physical connection:
@@ -151,7 +241,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   hook. Configuring only `timestamp` leaves `TIMESTAMPTZ` scans vulnerable to
   `time.Local` on newer Go/pgx combinations.
 - SQLite/PostgreSQL migration parity for backup assets covers 000062 through
-  000071. A new paired migration must be added to this regex deliberately; it
+  000072. A new paired migration must be added to this regex deliberately; it
   must never be silently omitted from the PostgreSQL gate.
 
 ### 4. Validation & Error Matrix
@@ -179,7 +269,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   PostgreSQL service with `TZ` set to a non-UTC value and assert both location
   and RFC3339 value.
 - PostgreSQL migration tests must exercise paired apply/down contracts for
-  000062 through 000071.
+  000062 through 000072.
 - `TestRunMigrationsPostgresDirtyCheckUsesSearchPath` must prove an unrelated
   sibling schema does not interfere while a search-path-visible dirty row still
   fails closed.

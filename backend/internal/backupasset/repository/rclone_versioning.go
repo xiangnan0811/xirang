@@ -1167,8 +1167,8 @@ func (service *Service) activateRcloneVersioning(
 		if revision != request.ExpectedTaskRevision || bindingProviderForTask(taskEntity) != backupasset.ProviderRclone {
 			return fmt.Errorf("%w: Rclone activation Task revision changed", backupasset.ErrConflict)
 		}
-		var activeRuns int64
-		if err := tx.Model(&model.TaskRun{}).Where("task_id = ? AND status IN ?", taskEntity.ID, []string{"pending", "running", "retrying"}).Count(&activeRuns).Error; err != nil {
+		activeRuns, err := countAuthoritativeActiveTaskRuns(tx, taskEntity)
+		if err != nil {
 			return fmt.Errorf("count active Rclone TaskRuns: %w", err)
 		}
 		if activeRuns != 0 {
@@ -1469,8 +1469,8 @@ func (service *Service) restoreRcloneLegacyState(ctx context.Context, request ba
 		if revision != request.ExpectedTaskRevision || taskEntity.Enabled || taskEntity.RsyncTarget != "" {
 			return fmt.Errorf("%w: Rclone clean rollback Task changed", backupasset.ErrConflict)
 		}
-		var activeRuns int64
-		if err := tx.Model(&model.TaskRun{}).Where("task_id = ? AND status IN ?", taskEntity.ID, []string{"pending", "running", "retrying"}).Count(&activeRuns).Error; err != nil {
+		activeRuns, err := countAuthoritativeActiveTaskRuns(tx, taskEntity)
+		if err != nil {
 			return fmt.Errorf("count active Rclone rollback TaskRuns: %w", err)
 		}
 		if activeRuns != 0 {
@@ -1683,8 +1683,8 @@ func (service *Service) prepareRcloneRollbackAfterDrain(ctx context.Context, req
 		if revision != request.ExpectedTaskRevision || taskEntity.Enabled || taskEntity.RsyncTarget != "" {
 			return fmt.Errorf("%w: Rclone rollback preparation Task changed", backupasset.ErrConflict)
 		}
-		var activeRuns int64
-		if err := tx.Model(&model.TaskRun{}).Where("task_id = ? AND status IN ?", taskEntity.ID, []string{"pending", "running", "retrying"}).Count(&activeRuns).Error; err != nil {
+		activeRuns, err := countAuthoritativeActiveTaskRuns(tx, taskEntity)
+		if err != nil {
 			return fmt.Errorf("count active Rclone rollback preparation runs: %w", err)
 		}
 		if activeRuns != 0 {

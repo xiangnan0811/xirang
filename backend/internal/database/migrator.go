@@ -6,9 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
-	"strconv"
-	"strings"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/pgx/v5"
@@ -17,17 +14,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// ErrMigrationDirty 表示 schema_migrations.dirty=1，上一次迁移在执行过程中失败但未
-// 被自动标记为干净。继续启动可能基于半完成的 schema 写入腐化数据；服务必须拒绝
-// 启动并要求人工介入。
-//
-// 修复路径：
-//  1. 阅读 docs/deployment.md「迁移 dirty 状态排障」章节判断是否需要 down + 恢复备份
-//  2. 用 golang-migrate CLI 跑 `migrate force <version>` 标记 clean（仅当确认数据无中间态损坏）
-//  3. 重新启动服务
-//
-// 紧急 escape hatch：设置环境变量 ALLOW_DIRTY_STARTUP=true 跳过本检查（仅用于 rescue
-// 场景，例如手工修复后短暂启动校验数据）。
+// ErrMigrationDirty 表示 schema_migrations.dirty=1。上一次迁移可能只执行了一部分，
+// 服务必须在任何 schema 修复或前向迁移之前拒绝启动，交由备份恢复或离线核验流程处理。
 var ErrMigrationDirty = errors.New("schema_migrations.dirty=1，前次迁移未正常完成，拒绝启动")
 
 //go:embed migrations/sqlite/*.sql
@@ -56,24 +44,25 @@ func RunMigrations(db *gorm.DB, dbType string) error {
 		return fmt.Errorf("不支持的数据库类型: %s", dbType)
 	}
 
-	if err := preMigrationFixups(sqlDB, dbType); err != nil {
-		return fmt.Errorf("执行迁移前置修复失败: %w", err)
-	}
-
 	// 在启动 migrator 之前先检查 schema_migrations.dirty 状态。dirty=1 表示前次迁移
 	// 失败且 golang-migrate 没有自动恢复 —— 继续 Up() 会基于损坏的 schema 写入更多
 	// 数据，最坏情况导致不可恢复的双时区污染（参考 migration 000050 风险说明）。
 	// 这里直接读底层 sqlDB 而非 migrator 句柄，因为 migrator.Version() 在 dirty 时
 	// 会返回 dirty=true 但调用方仍然有可能继续走 Up；显式 fast-fail 才是预期行为。
-	if !allowDirtyStartup() {
-		dirty, version, err := checkMigrationDirty(sqlDB, dbType)
-		if err != nil {
-			return fmt.Errorf("检查 schema_migrations dirty 状态失败: %w", err)
-		}
-		if dirty {
-			log.Printf("FATAL: schema_migrations.dirty=1, version=%d. 拒绝启动；请按 docs/deployment.md「迁移 dirty 状态排障」章节修复后重启，或临时设置 ALLOW_DIRTY_STARTUP=true 跳过本检查（仅用于 rescue）", version)
-			return fmt.Errorf("%w (version=%d)", ErrMigrationDirty, version)
-		}
+	dirty, version, err := checkMigrationDirty(sqlDB, dbType)
+	if err != nil {
+		return fmt.Errorf("检查 schema_migrations dirty 状态失败: %w", err)
+	}
+	if dirty {
+		log.Printf("FATAL: schema_migrations.dirty=1, version=%d. 拒绝启动；请从校验备份恢复或执行离线核验", version)
+		return fmt.Errorf("%w (version=%d)", ErrMigrationDirty, version)
+	}
+	if err := validateMinimumRecoverySchema(sqlDB, dbType, version); err != nil {
+		return err
+	}
+
+	if err := preMigrationFixups(sqlDB, dbType); err != nil {
+		return fmt.Errorf("执行迁移前置修复失败: %w", err)
 	}
 
 	source, err := iofs.New(fs, subdir)
@@ -109,35 +98,26 @@ func RunMigrations(db *gorm.DB, dbType string) error {
 	}
 
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		// golang-migrate 在 Up() 内部还会做一次 dirty 检查。
-		// 如果上一次迁移 commit 成功但 dirty 标记未清除（进程在 commit 后、
-		// clean 标记写入前被 kill），会报 Dirty database version N。
-		// ALLOW_DIRTY_STARTUP=true 允许自动 force + 重试，不需要人工介入。
+		// golang-migrate 在 Up() 内部还会做一次 dirty 检查。即便状态在上面的
+		// 只读检查后发生变化，这里也必须保持 fail-closed，绝不 Force 或重试。
 		var dirtyErr migrate.ErrDirty
 		if errors.As(err, &dirtyErr) {
-			if allowDirtyStartup() {
-				log.Printf("WARNING: schema_migrations.dirty=1 (version=%d)，ALLOW_DIRTY_STARTUP=true，"+
-					"自动强制标记为 clean", dirtyErr.Version)
-				if forceErr := m.Force(dirtyErr.Version); forceErr != nil {
-					return fmt.Errorf("强制标记迁移版本 %d 为 clean 失败: %w", dirtyErr.Version, forceErr)
-				}
-				if retryErr := m.Up(); retryErr != nil && !errors.Is(retryErr, migrate.ErrNoChange) {
-					return fmt.Errorf("强制执行迁移失败: %w", retryErr)
-				}
-			} else {
-				return fmt.Errorf("数据库处于 dirty 状态（版本 %d），上一次迁移未正常完成。"+
-					"这是已知问题（进程在迁移 commit 后被 kill），通常无需恢复备份。"+
-					"设置环境变量 ALLOW_DIRTY_STARTUP=true 可自动修复。"+
-					"详情见 docs/deployment.md「迁移 dirty 状态排障」。"+
-					"原始错误: %w", dirtyErr.Version, err)
-			}
-		} else {
-			return fmt.Errorf("执行迁移失败: %w", err)
+			return fmt.Errorf("%w (version=%d)", ErrMigrationDirty, dirtyErr.Version)
 		}
+		return fmt.Errorf("执行迁移失败: %w", err)
 	}
 
-	version, dirty, _ := m.Version()
-	log.Printf("数据库迁移完成，当前版本: %d, dirty: %v", version, dirty)
+	versionAfter, dirtyAfter, err := m.Version()
+	if err != nil {
+		return fmt.Errorf("读取迁移后版本失败: %w", err)
+	}
+	if dirtyAfter {
+		return fmt.Errorf("%w (version=%d)", ErrMigrationDirty, versionAfter)
+	}
+	if err := validateMinimumRecoverySchema(sqlDB, dbType, int64(versionAfter)); err != nil {
+		return err
+	}
+	log.Printf("数据库迁移完成，当前版本: %d, dirty: %v", versionAfter, dirtyAfter)
 
 	return nil
 }
@@ -147,21 +127,6 @@ func RunMigrations(db *gorm.DB, dbType string) error {
 // 的版本化迁移之前执行，因为后续迁移可能假设修复已完成。
 func preMigrationFixups(db *sql.DB, dbType string) error {
 	return fixupLegacyPolicyBwlimit(db, dbType)
-}
-
-// allowDirtyStartup 返回 true 表示运维已设置 escape hatch 跳过 dirty 拒启动检查。
-// 仅在确认数据无中间态损坏 + 短暂 rescue 操作时使用。
-func allowDirtyStartup() bool {
-	v := strings.TrimSpace(os.Getenv("ALLOW_DIRTY_STARTUP"))
-	if v == "" {
-		return false
-	}
-	allow, err := strconv.ParseBool(v)
-	if err != nil {
-		// 容错：任何无法解析的值视为 false（保守拒启动）
-		return false
-	}
-	return allow
 }
 
 // checkMigrationDirty 直接读 schema_migrations 表判断当前迁移是否处于 dirty 状态。

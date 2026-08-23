@@ -613,18 +613,19 @@ func TestNodeWriteCoordinatorActiveLeaseRejectsManagerTriggersWithoutResidualRun
 	}
 }
 
-func TestNodeWriteCoordinatorRecoveryAdmissionBlocksOnlyPendingAndRunningTaskRuns(t *testing.T) {
+func TestNodeWriteCoordinatorRecoveryAdmissionBlocksActiveTaskRuns(t *testing.T) {
 	for _, testCase := range []struct {
 		status  string
 		blocked bool
 	}{
-		{status: "pending", blocked: true},
-		{status: "running", blocked: true},
-		{status: "success"},
-		{status: "failed"},
-		{status: "canceled"},
-		{status: "warning"},
-		{status: "skipped"},
+		{status: model.TaskRunStatusPending, blocked: true},
+		{status: model.TaskRunStatusRunning, blocked: true},
+		{status: model.TaskRunStatusRetrying, blocked: true},
+		{status: model.TaskRunStatusSuccess},
+		{status: model.TaskRunStatusFailed},
+		{status: model.TaskRunStatusCanceled},
+		{status: model.TaskRunStatusWarning},
+		{status: model.TaskRunStatusSkipped},
 	} {
 		t.Run(testCase.status, func(t *testing.T) {
 			db := openNodeWriteCoordinatorTestDB(t)

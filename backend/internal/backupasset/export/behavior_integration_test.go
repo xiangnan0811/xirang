@@ -646,47 +646,36 @@ func runExportBehaviorContract(t *testing.T, open func(*testing.T) exportBehavio
 	})
 	if fixture.engine == "postgres" {
 		t.Run("CancellationSerialization/HeartbeatHoldingJobRowPrecedesCancel", func(t *testing.T) {
-			t.Setenv("ALLOW_DIRTY_STARTUP", "true")
 			runPostgresHeartbeatVersusCancelBarrier(t, open(t))
 		})
 		t.Run("LifecycleLockOrder/FenceAttemptsVersusClaim", func(t *testing.T) {
-			t.Setenv("ALLOW_DIRTY_STARTUP", "true")
 			runPostgresFenceAttemptsVersusClaimBarrier(t, open(t))
 		})
 		t.Run("LifecycleLockOrder/ReleaseSourcesBeforeFoundationLease", func(t *testing.T) {
-			t.Setenv("ALLOW_DIRTY_STARTUP", "true")
 			runPostgresReleaseSourcesBeforeFoundationLeaseBarrier(t, open(t), actor, selection)
 		})
 		t.Run("AttemptTupleLockOrder/ReaderReserveVersusLoader", func(t *testing.T) {
-			t.Setenv("ALLOW_DIRTY_STARTUP", "true")
 			runPostgresReaderReserveVersusLoaderBarrier(t, open(t))
 		})
 		t.Run("AttemptTupleLockOrder/ReaderReserveVersusHeartbeat", func(t *testing.T) {
-			t.Setenv("ALLOW_DIRTY_STARTUP", "true")
 			runPostgresReaderReserveVersusHeartbeatBarrier(t, open(t))
 		})
 		t.Run("AttemptTupleLockOrder/ReaderReserveVersusSpoolPersistence", func(t *testing.T) {
-			t.Setenv("ALLOW_DIRTY_STARTUP", "true")
 			runPostgresReaderReserveVersusSpoolPersistenceBarrier(t, open(t))
 		})
 		t.Run("Idempotency/ConcurrentUniqueWaitDifferentIntent", func(t *testing.T) {
-			t.Setenv("ALLOW_DIRTY_STARTUP", "true")
 			runPostgresConcurrentDifferentIntentUniqueWait(t, open(t))
 		})
 		t.Run("QuotaLockOrder/CreateVersusLifecycleNonStoreRelease", func(t *testing.T) {
-			t.Setenv("ALLOW_DIRTY_STARTUP", "true")
 			runPostgresCreateVersusLifecycleReleaseBarrier(t, open(t), actor, selection)
 		})
 		t.Run("QuotaLockOrder/ReaderReserveVersusFinalize", func(t *testing.T) {
-			t.Setenv("ALLOW_DIRTY_STARTUP", "true")
 			runPostgresReaderReserveVersusFinalizeBarrier(t, open(t))
 		})
 		t.Run("QuotaLockOrder/BlockedBucketContextCancellationRollsBack", func(t *testing.T) {
-			t.Setenv("ALLOW_DIRTY_STARTUP", "true")
 			runPostgresBlockedQuotaContextBarrier(t, open(t), selection)
 		})
 		t.Run("ReaderSweep/LiveLeaseTakeoverAndStaleProgress", func(t *testing.T) {
-			t.Setenv("ALLOW_DIRTY_STARTUP", "true")
 			runPostgresReaderSweepLeaseBarrier(t, open(t))
 		})
 	}

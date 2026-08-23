@@ -630,8 +630,8 @@ func (service *Service) activateRsyncVersioningWithPreflight(ctx context.Context
 		if revision != request.ExpectedTaskRevision || bindingProviderForTask(taskEntity) != backupasset.ProviderRsync {
 			return fmt.Errorf("%w: Rsync versioning Task revision changed", backupasset.ErrConflict)
 		}
-		var activeRuns int64
-		if err := tx.Model(&model.TaskRun{}).Where("task_id = ? AND status IN ?", taskEntity.ID, []string{"pending", "running", "retrying"}).Count(&activeRuns).Error; err != nil {
+		activeRuns, err := countAuthoritativeActiveTaskRuns(tx, taskEntity)
+		if err != nil {
 			return fmt.Errorf("count active Rsync versioning TaskRuns: %w", err)
 		}
 		if activeRuns != 0 {

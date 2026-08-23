@@ -67,16 +67,17 @@ func (manager *Manager) reportInterruptedPublication(ctx context.Context, taskID
 		ctx = context.Background()
 	}
 	now := time.Now().UTC()
+	activeStatuses := model.TaskRunActiveStatuses()
 	return manager.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var run model.TaskRun
-		if err := tx.Where("id = ? AND task_id = ? AND status IN ?", taskRunID, taskID, []string{"pending", "running", "retrying"}).First(&run).Error; err != nil {
+		if err := tx.Where("id = ? AND task_id = ? AND node_id_snapshot > ? AND status IN ?", taskRunID, taskID, model.TaskRunNodeIDLegacyUnknown, activeStatuses).First(&run).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return nil
 			}
 			return fmt.Errorf("load interrupted TaskRun: %w", err)
 		}
 		updated := tx.Model(&model.TaskRun{}).
-			Where("id = ? AND task_id = ? AND status IN ?", taskRunID, taskID, []string{"pending", "running", "retrying"}).
+			Where("id = ? AND task_id = ? AND node_id_snapshot > ? AND status IN ?", taskRunID, taskID, model.TaskRunNodeIDLegacyUnknown, activeStatuses).
 			Updates(map[string]any{"status": targetStatus, "finished_at": &now, "last_error": code})
 		if updated.Error != nil {
 			return fmt.Errorf("mark interrupted TaskRun: %w", updated.Error)
@@ -88,7 +89,7 @@ func (manager *Manager) reportInterruptedPublication(ctx context.Context, taskID
 		// must never have its Task status overwritten by this stale reporter.
 		result := tx.Model(&model.Task{}).
 			Where("id = ? AND status = ? AND last_run_at = ?", taskID, "running", run.StartedAt.UTC()).
-			Where("NOT EXISTS (SELECT 1 FROM task_runs AS newer WHERE newer.task_id = ? AND newer.id <> ? AND newer.status IN ?)", taskID, taskRunID, []string{"pending", "running", "retrying"}).
+			Where("NOT EXISTS (SELECT 1 FROM task_runs AS newer WHERE newer.task_id = ? AND newer.id <> ? AND newer.node_id_snapshot > ? AND newer.status IN ?)", taskID, taskRunID, model.TaskRunNodeIDLegacyUnknown, activeStatuses).
 			Updates(map[string]any{"status": targetStatus, "last_error": code})
 		if result.Error != nil {
 			return fmt.Errorf("mark interrupted Task aggregate: %w", result.Error)
@@ -107,10 +108,11 @@ func (manager *Manager) ReconcileInterruptedRuns(ctx context.Context, limit int)
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	activeStatuses := model.TaskRunActiveStatuses()
 	var runs []model.TaskRun
 	if err := interruptedPublicationRunsQuery(manager.db.WithContext(ctx)).
 		Select("task_runs.*").Joins("JOIN tasks ON tasks.id = task_runs.task_id").
-		Where("task_runs.status IN ?", []string{"pending", "running", "retrying"}).
+		Where("task_runs.node_id_snapshot > ? AND task_runs.status IN ?", model.TaskRunNodeIDLegacyUnknown, activeStatuses).
 		Order("task_runs.id ASC").Limit(limit).Find(&runs).Error; err != nil {
 		return false, fmt.Errorf("list interrupted managed publication TaskRuns: %w", err)
 	}
@@ -140,7 +142,7 @@ func (manager *Manager) ReconcileInterruptedRuns(ctx context.Context, limit int)
 	var remaining int64
 	if err := interruptedPublicationRunsQuery(manager.db.WithContext(ctx)).
 		Joins("JOIN tasks ON tasks.id = task_runs.task_id").
-		Where("task_runs.status IN ?", []string{"pending", "running", "retrying"}).
+		Where("task_runs.node_id_snapshot > ? AND task_runs.status IN ?", model.TaskRunNodeIDLegacyUnknown, activeStatuses).
 		Count(&remaining).Error; err != nil {
 		return false, fmt.Errorf("count unresolved managed publication TaskRuns: %w", err)
 	}

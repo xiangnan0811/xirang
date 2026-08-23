@@ -865,7 +865,7 @@ func TestRecoveryListScheduledCleanupCandidatesGloballyOrdersLifecycleKinds(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.TaskRun{}, &model.BackupAssetRecoveryJob{}, &model.BackupAssetRecoveryResultSet{},
+	if err := db.AutoMigrate(&model.Task{}, &model.TaskRun{}, &model.BackupAssetRecoveryJob{}, &model.BackupAssetRecoveryResultSet{},
 		&model.BackupAssetRecoveryNodeLease{}); err != nil {
 		t.Fatal(err)
 	}
@@ -952,6 +952,11 @@ func TestRecoveryListScheduledCleanupCandidatesGloballyOrdersLifecycleKinds(t *t
 		t.Fatalf("busy-node filtered cleanup candidate=%+v, want result set %s", candidates, resultSet.ID)
 	}
 	if err := db.Delete(&activeLease).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.Task{
+		ID: 1, Name: "cleanup-writer", NodeID: workspace.TargetNodeID, ExecutorType: "local", Status: "success",
+	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&model.TaskRun{

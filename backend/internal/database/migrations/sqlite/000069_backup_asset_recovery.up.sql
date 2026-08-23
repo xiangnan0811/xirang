@@ -1,8 +1,12 @@
 ALTER TABLE task_runs ADD COLUMN node_id_snapshot INTEGER;
 UPDATE task_runs
-SET node_id_snapshot = (
-    SELECT tasks.node_id FROM tasks WHERE tasks.id = task_runs.task_id
-);
+SET node_id_snapshot = CASE
+    WHEN EXISTS (SELECT 1 FROM tasks WHERE tasks.id = task_runs.task_id)
+        THEN (SELECT tasks.node_id FROM tasks WHERE tasks.id = task_runs.task_id)
+    WHEN status IN ('success', 'failed', 'canceled', 'warning', 'skipped')
+        THEN 0
+    ELSE NULL
+END;
 -- SQLite cannot tighten an added column to NOT NULL without rebuilding the
 -- shared TaskRun table. Validate every legacy row inside the migration
 -- transaction before installing any 000069 object; a failure rolls the ALTER
@@ -12,8 +16,26 @@ CREATE TEMP TABLE backup_asset_069_task_run_snapshot_guard (
 );
 INSERT INTO backup_asset_069_task_run_snapshot_guard(valid)
 SELECT CASE WHEN EXISTS (
-    SELECT 1 FROM task_runs
-    WHERE node_id_snapshot IS NULL OR node_id_snapshot <= 0
+    SELECT 1
+    FROM task_runs AS run
+    WHERE run.node_id_snapshot IS NULL
+       OR run.node_id_snapshot < 0
+       OR (
+            run.node_id_snapshot = 0
+            AND (
+                run.status NOT IN ('success', 'failed', 'canceled', 'warning', 'skipped')
+                OR EXISTS (SELECT 1 FROM tasks AS task_row WHERE task_row.id = run.task_id)
+            )
+       )
+       OR (
+            run.node_id_snapshot > 0
+            AND NOT EXISTS (
+                SELECT 1 FROM tasks AS task_row
+                WHERE task_row.id = run.task_id
+                  AND task_row.node_id = run.node_id_snapshot
+                  AND task_row.node_id > 0
+            )
+       )
 ) THEN 0 ELSE 1 END;
 DROP TABLE backup_asset_069_task_run_snapshot_guard;
 CREATE INDEX idx_task_runs_node_snapshot_status

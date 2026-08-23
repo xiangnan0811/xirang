@@ -25,9 +25,8 @@
 | `DB_TYPE` | string | `sqlite` | 否 | 数据库类型：`sqlite` / `postgres` |
 | `SQLITE_PATH` | string | `./xirang.db` | 否 | SQLite 文件路径 |
 | `DB_DSN` | string | — | PG 时必填 | PostgreSQL 连接串，生产建议 `sslmode=require` |
-| `ALLOW_DIRTY_STARTUP` | bool | `false` | 否 | 仅 dirty migration 救援时临时设为 `true`；正常部署不要开启 |
 
-**读取位置**：`backend/internal/config/config.go` 的 `Load`；系统自助备份接口也会读取 `DB_TYPE` / `SQLITE_PATH`；dirty migration 救援由 `backend/internal/database/migrator.go` 读取 `ALLOW_DIRTY_STARTUP`。
+**读取位置**：`backend/internal/config/config.go` 的 `Load`；系统自助备份接口也会读取 `DB_TYPE` / `SQLITE_PATH`。数据库迁移 dirty 或 clean-version/schema-drift 状态都会无条件拒绝启动，参见[部署指南](deployment.md#迁移-dirty-状态排障)。
 
 ## 3. 认证与安全
 

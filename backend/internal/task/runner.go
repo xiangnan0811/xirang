@@ -237,7 +237,7 @@ func (m *Manager) runTaskWithContext(
 		if !runCompleted {
 			now := time.Now()
 			result := m.db.Model(&model.TaskRun{}).
-				Where("id = ? AND status IN ?", runID, []string{"pending", "running"}).
+				Where("id = ? AND status IN ?", runID, []string{model.TaskRunStatusPending, model.TaskRunStatusRunning}).
 				Updates(map[string]interface{}{
 					"status":      "failed",
 					"finished_at": &now,
@@ -279,14 +279,19 @@ func (m *Manager) runTaskWithContext(
 	}
 
 	var currentRun struct {
+		TaskID         uint
 		Status         string
 		NodeIDSnapshot uint
 	}
-	if err := m.db.Model(&model.TaskRun{}).Select("status", "node_id_snapshot").Where("id = ?", runID).Take(&currentRun).Error; err != nil {
+	if err := m.db.Model(&model.TaskRun{}).Select("task_id", "status", "node_id_snapshot").Where("id = ?", runID).Take(&currentRun).Error; err != nil {
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("加载执行记录失败: %v", err), taskEntity.Status)
 		return
 	}
-	if currentRun.Status == "canceled" || runCtx.Err() != nil {
+	if currentRun.TaskID != taskID || !model.IsTaskRunNodeSnapshotAuthoritative(currentRun.NodeIDSnapshot) || currentRun.NodeIDSnapshot != taskEntity.NodeID {
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", "执行记录节点快照不具备执行权限，跳过执行", taskEntity.Status)
+		return
+	}
+	if currentRun.Status == model.TaskRunStatusCanceled || runCtx.Err() != nil {
 		if err := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("保留启动前取消状态失败")
 		}

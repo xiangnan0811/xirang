@@ -138,7 +138,7 @@ jobs:
         run: go mod download
 
       - name: Run PostgreSQL migration parity
-        run: go test ./internal/database -run '^(TestBackupAssetMigration062PostgresApplyDown|TestBackupAssetMigration0(63|64|65|66|67|68|69|70|71)Postgres|TestPostgresTimestamptzScanUsesConfiguredUTC|TestRunMigrationsPostgresDirtyCheckUsesSearchPath)$' -count=1
+        run: go test ./internal/database -run '^(TestBackupAssetMigration062PostgresApplyDown|TestBackupAssetMigration0(63|64|65|66|67|68|69|70|71|72)Postgres|TestPostgresTimestamptzScanUsesConfiguredUTC|TestRunMigrationsPostgresDirtyCheckUsesSearchPath|TestRunMigrationsPostgresSchemaDriftCheckUsesSearchPath)$' -count=1
 
       - name: Run PostgreSQL Recovery behavior parity
         run: go test ./internal/backupasset/recovery -run '^TestRecoveryBehaviorPostgres$' -count=1
