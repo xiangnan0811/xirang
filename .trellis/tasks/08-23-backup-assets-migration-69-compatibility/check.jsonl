@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/deployment-runtime.md", "reason": "Verify dirty/schema-drift startup fails closed and docs no longer recommend auto-force"}
+{"file": ".trellis/spec/guides/documentation-truth-guide.md", "reason": "Verify release, env, rollback, and Child 18 acceptance statements remain truthful"}
+{"file": ".trellis/tasks/08-23-backup-assets-migration-69-compatibility/research/spec-contracts.md", "reason": "Verify 69/72, used-down, PostgreSQL, TaskRun, race, lint, and build contracts from focused spec routes"}
+{"file": ".trellis/tasks/08-23-backup-assets-migration-69-compatibility/research/root-cause.md", "reason": "Every implemented change must close a confirmed cause without leaking production evidence"}
