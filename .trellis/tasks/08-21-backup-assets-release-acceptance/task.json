@@ -21,10 +21,14 @@
   "children": [],
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [],
-  "notes": "Wave 0/1 complete. Protocol is the v0.50.2 Core-only authority; docs_exclusion verified (Native AWS still out of the public support matrix). production_walkthrough remains not_executed. Wave 2 Alan production drill not started. Parent stays planning. CodeDefault and official .env.deploy untouched.",
+  "notes": "Wave 0/1 complete. The v0.50.2 Core-only production attempt failed before backup-assets inventory/enablement: migration 69 rejected 848 retained task runs whose task and node had been removed through the supported node-delete workflow. ALLOW_DIRTY_STARTUP then forced the dirty migration clean and allowed an incomplete schema to report 71|0. The failed state was preserved, the escape hatch removed, and production restored to healthy v0.44.8 schema 61|0. Child 18 is a recorded No-Go; P0 repair planning lives in 08-23-backup-assets-migration-69-compatibility. Parent stays planning and parent archive remains forbidden. CodeDefault and official .env.deploy remain false.",
   "meta": {
     "parent_archive": "forbidden",
-    "production_walkthrough": "not_executed",
+    "production_walkthrough": "failed_pre_enable_migration",
+    "release_acceptance": "no_go_v0_50_2",
+    "rollback": "healthy_v0_44_8_schema_61",
+    "repair_required": "migration_69_orphan_runs_and_dirty_startup_fail_closed",
+    "repair_task": "08-23-backup-assets-migration-69-compatibility",
     "native_aws": "excluded",
     "docs_exclusion": "verified",
     "code_default_enabled": "false"

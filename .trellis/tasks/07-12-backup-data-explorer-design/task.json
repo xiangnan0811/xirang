@@ -36,20 +36,34 @@
     "08-20-backup-assets-ga-hardening",
     "08-21-backup-assets-closeout",
     "08-21-backup-assets-review-closeout",
-    "08-21-backup-assets-release-acceptance"
+    "08-21-backup-assets-release-acceptance",
+    "08-23-backup-assets-migration-69-compatibility"
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Children 1–17 archived. Child 18 (08-21-backup-assets-release-acceptance) is the production-acceptance child on v0.50.2. Independent GitHub review concluded code P0/P1 closed; Native AWS stays excluded. Child 18 Wave 1 docs_exclusion verified; public docs still keep Native AWS out of the support matrix. backup_assets.enabled CodeDefault remains false. Worker publish stays out of scope. Production walkthrough is not_executed. Parent remains planning; parent-final-acceptance is not authorized.",
+  "notes": "Children 1–17 archived. Child 18 production acceptance on v0.50.2 is a recorded No-Go: migration 69 was incompatible with retained historical TaskRuns after a supported node deletion, and the dirty-startup escape hatch allowed incomplete schema to report clean. Production was restored to healthy v0.44.8/schema 61. Child 19 (08-23-backup-assets-migration-69-compatibility) is the P0 repair and remains planning pending approval. Native AWS stays excluded, backup_assets.enabled CodeDefault remains false, Worker publish stays out of scope, and parent-final-acceptance is not authorized.",
   "meta": {
     "program_delivery": {
       "delivered": 17,
-      "planned": 18,
-      "percent": 94.4,
-      "instantiated_children": 18,
+      "planned": 19,
+      "percent": 89.5,
+      "instantiated_children": 19,
       "archived_children": 17,
-      "active_child": "08-21-backup-assets-release-acceptance",
+      "active_child": "08-23-backup-assets-migration-69-compatibility",
       "uninstantiated_children": []
+    },
+    "child_18_acceptance": {
+      "status": "no_go_v0_50_2_failed_pre_enable_migration",
+      "production_state": "restored_healthy_v0_44_8_schema_61",
+      "root_cause": "migration_69_orphan_task_runs_plus_dirty_auto_force",
+      "acceptance_task": "08-21-backup-assets-release-acceptance",
+      "rerun": "required_after_new_repair_release"
+    },
+    "child_19_planning": {
+      "status": "planning_pending_user_approval",
+      "task": "08-23-backup-assets-migration-69-compatibility",
+      "priority": "P0",
+      "product_code_started": false
     },
     "child_17_delivery": {
       "status": "complete_checked_archived_released_parent_planning",
