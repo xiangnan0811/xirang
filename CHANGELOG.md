@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.50.3](https://github.com/xiangnan0811/xirang/compare/v0.50.2...v0.50.3) (2026-08-23)
+
+
+### 🐛 Bug Fixes
+
+* **database:** preserve orphan task run history ([#451](https://github.com/xiangnan0811/xirang/issues/451)) ([23e3160](https://github.com/xiangnan0811/xirang/commit/23e316017aa7a41ecec4dbbbd54da6b2f0211681))
+
 ## [0.50.2](https://github.com/xiangnan0811/xirang/compare/v0.50.1...v0.50.2) (2026-08-21)
 
 
