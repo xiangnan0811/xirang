@@ -71,14 +71,14 @@ v0.50.3 process with the feature disabled.
 
 ## Phase 6 — PR, release and production acceptance
 
-- [ ] Commit/push/open PR only after local gates; monitor every required CI job and fix on the same branch.
-- [ ] Merge only when required CI is green; monitor exact post-merge CI and Release Please.
-- [ ] Merge the release PR when authorized and monitor GitHub Release, amd64/arm64 image builds, manifest publish
+- [x] Commit/push/open PR only after local gates; monitor every required CI job and fix on the same branch.
+- [x] Merge only when required CI is green; monitor exact post-merge CI and Release Please.
+- [x] Merge the release PR when authorized and monitor GitHub Release, amd64/arm64 image builds, manifest publish
   and Docker Hub description when expected.
-- [ ] Record immutable version/commit/manifest/image evidence and provide the user a single-copy production runbook.
-- [ ] User creates/verifies a pre-upgrade logical SQLite backup, upgrades Core, and verifies safe disabled baseline.
-- [ ] User clicks enable exactly once under timed observation and returns HTTP/DB/readiness/log/health evidence.
-- [ ] Keep Child 18 release acceptance failed until production evidence passes; do not start node-logs P1 earlier.
+- [x] Record immutable version/commit/manifest/image evidence and provide the user a single-copy production runbook.
+- [x] User creates/verifies a pre-upgrade logical SQLite backup, upgrades Core, and verifies safe disabled baseline.
+- [x] User clicks enable exactly once under timed observation and returns HTTP/DB/readiness/log/health evidence.
+- [x] Keep Child 18 release acceptance failed until production evidence passes; do not start node-logs P1 earlier.
 
 ## Risky boundaries
 

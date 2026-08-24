@@ -128,34 +128,35 @@ goroutine、错误的 `backup_assets.enabled` 值或虚假的启用成功时间�
 
 ## Acceptance Criteria
 
-- [ ] AC1：真实 mutation regression 在修复前确定性超时/RED，修复后同一 selector 在明确
+- [x] AC1：真实 mutation regression 在修复前确定性超时/RED，修复后同一 selector 在明确
   deadline 内返回，不遗留锁或 goroutine。
-- [ ] AC2：Content 与 Search enable path 均消费 prospective typed config，source guard
+- [x] AC2：Content 与 Search enable path 均消费 prospective typed config，source guard
   证明 mutation-inner path 没有 Foundation snapshot/current getter。
-- [ ] AC3：prospective parser 与普通 current getter 对同一完整 values 返回完全相同配置；
+- [x] AC3：prospective parser 与普通 current getter 对同一完整 values 返回完全相同配置；
   缺 key、非法组合或错误类型 fail closed。
-- [ ] AC4：PUT true、DELETE fallback true、config import true 均在 production-equivalent
+- [x] AC4：PUT true、DELETE fallback true、config import true 均在 production-equivalent
   runtime 下完成，并持久化正确值；blocked readiness 仍为 409 且零副作用。
-- [ ] AC5：并发第二个 mutation 在等待 owner 时取消，及时返回 context error、零持久化、
+- [x] AC5：并发第二个 mutation 在等待 owner 时取消，及时返回 context error、零持久化、
   owner 不受影响，gate 随后可复用。
-- [ ] AC6：mutation 中的外部 snapshot reader 阻塞；成功后只见完整新值，失败后只见完整
+- [x] AC6：mutation 中的外部 snapshot reader 阻塞；成功后只见完整新值，失败后只见完整
   旧值；现有 atomic snapshot regression 保持绿色。
-- [ ] AC7：Content prepare、Admission、persist、stamp、Search startup 各故障点都得到独立
+- [x] AC7：Content prepare、Admission、persist、stamp、Search startup 各故障点都得到独立
   测试；setting/stamp/readiness/admission 全部恢复到精确 prior state。
-- [ ] AC8：disable persistence failure 使用 prior config 恢复 Content/Search，不重读设置，
+- [x] AC8：disable persistence failure 使用 prior config 恢复 Content/Search，不重读设置，
   不留下 half-disabled runtime。
-- [ ] AC9：timeout/cancel 等待全部本次工作 join 后返回；focused tests 在 `-count=50` 与
+- [x] AC9：timeout/cancel 等待全部本次工作 join 后返回；focused tests 在 `-count=50` 与
   `-race` 下稳定，没有 goroutine/lock 泄漏。
-- [ ] AC10：settings、backupasset/runtime、handler/config-import owned package tests、全
+- [x] AC10：settings、backupasset/runtime、handler/config-import owned package tests、全
   backend tests/build/lint/vet、privacy/source scans 与 `git diff --check` 全绿。
-- [ ] AC11：错误响应使用标准 envelope；日志/错误/指标不含 settings values、root paths、
+- [x] AC11：错误响应使用标准 envelope；日志/错误/指标不含 settings values、root paths、
   secrets、locators 或 Provider evidence。
-- [ ] AC12：PR required CI 全绿，merge/post-merge/release/image publish 证据齐全并记录 immutable
+- [x] AC12：PR required CI 全绿，merge/post-merge/release/image publish 证据齐全并记录 immutable
   image digest。
-- [ ] AC13：用户提供一次生产启用复验证据并满足 R7；在此之前 Child 18 发布验收保持失败，
+- [x] AC13：用户提供一次生产启用复验证据并满足 R7；在此之前 Child 18 发布验收保持失败，
   父任务不得宣称最终完成，节点日志 P1 不启动。
 
 ## User action after implementation
 
-当前不需要用户执行任何生产操作，也不要再次点击“启用备份资产”。实现、发布和镜像摘要
-验证完成后，用户只需按交付的单次受控验收步骤执行启用并回传结果。
+单次受控生产操作已于 2026-08-24 完成：用户先验证逻辑 SQLite 备份和关闭态升级基线，
+随后只点击一次“启用备份资产”并回传 HTTP、DB、运行态指标、日志、容器健康与数据页搜索
+证据。不得重复执行该启用操作；后续只需按正常产品流程配置 Repository/RecoveryPoint 数据。
