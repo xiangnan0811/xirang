@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,8 +16,10 @@ import (
 	"xirang/backend/internal/database"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
+	"xirang/backend/internal/settings"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 type catalogIndexerKeySource struct{ key []byte }
@@ -129,6 +132,12 @@ type catalogIndexerFixture struct {
 
 func newCatalogIndexerFixture(t *testing.T, mutable bool, expectedEntries int64) catalogIndexerFixture {
 	t.Helper()
+	db, now := newCatalogIndexerTestDatabase(t)
+	return seedCatalogIndexerFixture(t, db, now, mutable, expectedEntries)
+}
+
+func newCatalogIndexerTestDatabase(t *testing.T) (*gorm.DB, time.Time) {
+	t.Helper()
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_CATALOG_INDEXER_DATA_KEY_FOR_TEST_ONLY")
 	secure.ResetForTesting()
@@ -146,6 +155,11 @@ func newCatalogIndexerFixture(t *testing.T, mutable bool, expectedEntries int64)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	now := time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC)
+	return db, now
+}
+
+func seedCatalogIndexerFixture(t *testing.T, db *gorm.DB, now time.Time, mutable bool, expectedEntries int64) catalogIndexerFixture {
+	t.Helper()
 	repository := model.BackupRepository{
 		ID: strings.Repeat("1", 32), ProviderKind: string(backupasset.ProviderRsync), DisplayName: "catalog-fixture",
 		VersionMode: string(backupasset.VersionFullCopyTree), Status: string(backupasset.RepositoryOnline),
@@ -240,6 +254,76 @@ func sealedCatalogRecordForTest(t *testing.T, path, parent, name string, entryTy
 		NormalizedPath: path, ParentNormalizedPath: parent, Name: name, Type: entryType, Size: size,
 		ModifiedAt: &modified, Fingerprint: strings.Repeat("d", 64), FingerprintStrength: string(FingerprintStrong),
 		SealedProviderLocator: sealed,
+	}
+}
+
+func TestCatalogIndexerSQLiteDefaultLogicalBatchUsesDatabaseSafePersistenceChunks(t *testing.T) {
+	t.Setenv("BACKUP_ASSETS_CATALOG_BATCH_SIZE", "")
+	db, now := newCatalogIndexerTestDatabase(t)
+	catalogConfig, err := backupasset.NewFoundationService(settings.NewService(db)).CatalogConfig()
+	if err != nil {
+		t.Fatal("failed to resolve registered Catalog defaults")
+	}
+	if catalogConfig.BatchSize != 2000 {
+		t.Fatalf("registered default Catalog batch size=%d", catalogConfig.BatchSize)
+	}
+	logicalBatchSize := catalogConfig.BatchSize
+	expectedEntryCount := int64(logicalBatchSize)
+	fixture := seedCatalogIndexerFixture(t, db, now, true, expectedEntryCount)
+	fixture.db = fixture.db.Session(&gorm.Session{Logger: logger.Discard})
+	records := make([]provider.CatalogRecord, 0, logicalBatchSize)
+	for index := 0; index < logicalBatchSize; index++ {
+		name := fmt.Sprintf("entry-%04d", index)
+		records = append(records, sealedCatalogRecordForTest(
+			t, name, "", name, backupasset.CatalogEntryFile, int64(index),
+		))
+	}
+	factory := fixture.factory(records...)
+	indexer, err := NewIndexer(IndexerDependencies{
+		DB: fixture.db, Factory: factory, Lease: fixture.lease, IdentityKeys: fixture.keys,
+		Now: func() time.Time { return fixture.now }, Config: IndexerConfig{
+			BatchSize: logicalBatchSize, BuildTimeout: catalogConfig.BuildTimeout, MaxEntries: expectedEntryCount,
+		},
+	})
+	if err != nil {
+		t.Fatal("failed to create Catalog indexer")
+	}
+
+	generation, buildErr := indexer.Build(context.Background(), BuildRequest{
+		RepositoryID: fixture.point.RepositoryID, RecoveryPointID: fixture.point.ID,
+	})
+	if buildErr != nil {
+		if !strings.Contains(buildErr.Error(), "too many SQL variables") {
+			t.Fatal("Catalog build failed before reaching the expected persistence boundary")
+		}
+		var stored model.CatalogGeneration
+		if err := fixture.db.Where("recovery_point_id = ?", fixture.point.ID).First(&stored).Error; err != nil {
+			t.Fatal("failed to load rejected Catalog generation")
+		}
+		if stored.State == string(GenerationComplete) || stored.IsActive {
+			t.Fatal("rejected Catalog generation became complete or active")
+		}
+		t.Log("RED confirmed: SQLite rejected the full logical batch at its bind-variable boundary")
+		t.Fatal("Catalog build did not complete")
+	}
+
+	if generation.State != string(GenerationComplete) || !generation.IsActive || generation.WrittenEntryCount != expectedEntryCount {
+		t.Fatalf("Catalog generation state=%q active=%t written=%d", generation.State, generation.IsActive, generation.WrittenEntryCount)
+	}
+	var storedCount int64
+	if err := fixture.db.Model(&model.CatalogEntry{}).Where("generation_id = ?", generation.ID).Count(&storedCount).Error; err != nil {
+		t.Fatal("failed to count persisted Catalog entries")
+	}
+	if storedCount != expectedEntryCount {
+		t.Fatalf("persisted Catalog entry count=%d", storedCount)
+	}
+	var storedLocator string
+	if err := fixture.db.Table("catalog_entries").Select("encrypted_provider_locator").
+		Where("generation_id = ?", generation.ID).Limit(1).Scan(&storedLocator).Error; err != nil {
+		t.Fatal("failed to inspect persisted Catalog locator")
+	}
+	if !secure.IsEncrypted(storedLocator) {
+		t.Fatal("persisted Catalog locator is not encrypted")
 	}
 }
 

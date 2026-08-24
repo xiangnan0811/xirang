@@ -24,6 +24,10 @@ const catalogBuildOwnerPrefix = "catalog:"
 
 const maxCatalogBuildTeardown = 30 * time.Second
 
+// A CatalogEntry currently binds 17 columns, so 1,000 rows use about 17,000
+// variables and retain roughly 48% headroom below SQLite's 32,766 default cap.
+const catalogEntryPersistenceBatchSize = 1000
+
 type PointReadRequest struct {
 	RepositoryID    string
 	RecoveryPointID string
@@ -458,7 +462,7 @@ func (indexer *Indexer) insertBatch(ctx context.Context, entries []model.Catalog
 	if len(entries) == 0 || len(entries) > indexer.config.BatchSize {
 		return fmt.Errorf("%w: invalid Catalog entry batch", backupasset.ErrInvalidState)
 	}
-	if err := indexer.db.WithContext(ctx).Create(&entries).Error; err != nil {
+	if err := indexer.db.WithContext(ctx).CreateInBatches(&entries, catalogEntryPersistenceBatchSize).Error; err != nil {
 		return fmt.Errorf("write Catalog entry batch: %w", err)
 	}
 	return nil
