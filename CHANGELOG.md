@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.50.4](https://github.com/xiangnan0811/xirang/compare/v0.50.3...v0.50.4) (2026-08-24)
+
+
+### 🐛 Bug Fixes
+
+* **backup-assets:** prevent enable transition deadlocks ([#453](https://github.com/xiangnan0811/xirang/issues/453)) ([bb295c8](https://github.com/xiangnan0811/xirang/commit/bb295c830285377af439e6021b51234e09df5127))
+
 ## [0.50.3](https://github.com/xiangnan0811/xirang/compare/v0.50.2...v0.50.3) (2026-08-23)
 
 
