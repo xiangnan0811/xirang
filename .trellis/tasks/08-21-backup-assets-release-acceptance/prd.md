@@ -1,86 +1,79 @@
-# 备份资产发布验收
+# 备份资产 v0.50.4 真实数据发布验收
 
 ## Goal
 
-在已发布的 **v0.50.2**（`9f059b0b` / `docker.io/linnea7171/xirang:v0.50.2`）上，由 Alan 在**现网 Core-only 生产机**完成真实走查并填完验收协议。通过后，父任务才具备归档条件。本 Child 不是代码修复任务。
+在已发布且已启用的 **v0.50.4**（`214f5e18b47974d4e353227fa52782992cef70f7` / `docker.io/linnea7171/xirang:v0.50.4`）线上实例中，通过产品正式领域/API 链路接入一个确有真实文件的本地 Rsync 任务，使“备份 -> 数据”能够搜索、选择并预览真实资产；完成可复核的健康、权限、目录、搜索和内容端到端证据。
 
-## User value
+历史 v0.50.2 No-Go 保留在 `research/acceptance-protocol.md`，P0 启用死锁修复保留在归档任务 `08-24-backup-assets-enable-transition-deadlock`。两者不得重做。
 
-运维能在默认关闭、Admin 可控的前提下，按**本次实际走查过的形态**试点备份资产浏览器。上线承诺不超出 Core-only 走查；Rclone Native AWS 不进入承诺；未走查的 Restic / Rsync / Rclone Portable 保持「代码支持、本次未验收」。
+## Current verified baseline
 
-## Background
-
-Children 1–17 已归档。Child 17（PR #446 / #448）关掉代码级 P0/P1，并把 Child 17 协议留在 `not_executed`。正式公开发布是 v0.50.2。
-
-2026-08-21 独立 GitHub 复审（`research/github-review-2026-08-21.md`）结论：代码 P0/P1 已关；默认关闭受控试点 Go；Native AWS 排除后其他已声明 Provider 为有条件 Go；父任务归档等真实走查。该复审不是生产走查。
-
-Alan 现网：一台 Admin、生产、Core-only、已运行 3+ 个月。启用需要 dry-run inventory + Admin ack + 进程重启（若产品仍要求）。
-
-仓库已有事实：官方 `.env.deploy` 与 CodeDefault 均为 `BACKUP_ASSETS_ENABLED=false`。`docs/admin/backup-recovery.md` 已写 AWS Native 不在本版本支持矩阵。UI 仍提供 Native 绑定入口，运行时预检失败关闭；本 Child 不借验收之机改掉该入口。
+- v0.50.4 正式发布 revision 为 `214f5e18b47974d4e353227fa52782992cef70f7`。
+- 线上容器运行且健康，restart count 为 0，`/healthz` 正常，SQLite schema 为 `72|0`。
+- `backup_assets.enabled=true`，FeatureRequested 与 FeatureLive 指标均为 1。
+- 仓库列表和两次资产搜索均返回 HTTP 200；当前空态来自 `backup_repositories=0`、活动 `task_repository_links=0`、`recovery_points=0`，不是预览故障。
+- GA 清单为 candidates 0、conflicts 1、unsupported 0、capability gaps 12；12 个 Rsync 任务均由 GA readiness 归类为 `no_repository`。Task API 的安全发布摘要则正确保持 `legacy_mutable / legacy / legacy`，两者是不同契约，不可混作 Connect 前置条件。
+- 节点日志收集器均保持关闭；真实数据预览验收前不得重新开启。
 
 ## Locked decisions
 
-1. 制品：GitHub Release [v0.50.2](https://github.com/xiangnan0811/xirang/releases/tag/v0.50.2)，commit `9f059b0b3283825b41462c76ea42259a2d9ab9dc`，镜像 `docker.io/linnea7171/xirang:v0.50.2`。digest 只能从已发布镜像或走查现场抄入。
-2. **走查环境 = Alan 现网 Core-only 生产机。** 不另搭 Restic / Rsync / Rclone Portable 验收场。
-3. Restic / Rsync / Rclone Portable：代码支持矩阵可保留；本 Child 协议记 `not_executed`，不挡本 Child 通过，也不把它们写成「已在 v0.50.2 生产验收」。
-4. Rclone Native AWS：**本次 GA 正式排除**。协议写排除声明。不得用 mock S3 替代。
-5. CodeDefault 与官方 `.env.deploy` 保持 `false`。不公开发 Worker，不改 `publish-images.yml`。
-6. 父任务保持 `planning`，直到本 Child 协议通过且 Alan 另发归档指令。
-7. 不把 CI、fixture、静态阅读或 GitHub 复审勾成生产走查通过。
-8. 复审三条 P2 为非阻断维护项，不进本 Child 通过门。
-9. 审查与验收记录只留在本 Child。
-10. 启用前应在部署环境安装 `docs/admin/backup-assets-slo.md` 中的 PromQL（应用不会自动写入 Alertmanager）。未安装必须记入豁免，不得假装已告警。
-11. 「至少一个完整备份周期」是受控试点观察项：能记则记；未到周期记 `not_elapsed`，不单独阻断本 Child 的启用/回滚演练通过。
+1. 首选并仅允许产品正式接入：`POST /api/v1/backup-repositories/connect`，请求只含确定的 `task_id`。服务从 Task 派生访问绑定，先做只读 Provider 探测，再在事务内建立仓库、活动任务关联与 Rsync `mutable_head` 恢复点。
+2. 禁止手工写生产数据库、拼接 Provider locator、复制凭据、打印或回传令牌、Rsync 路径、文件名、命令或原始错误正文。
+3. 初次零仓库接入由 Admin 在同源已登录页面的 DevTools 调正式 API；现有 UI 只覆盖已存在仓库的重连，不把 SQL 或 UI 假数据当替代方案。
+4. 写入前必须完成只读预检：v0.50.4 健康、Admin 身份、仓库仍为 0、目标 Task 为启用的 Rsync、本地绝对目标、无活动运行、存在近期成功运行、备份根目录确有条目。
+5. Connect 只执行一次且不自动重试。HTTP 非 200 立即停止；服务的探测先于事务，失败不得用 SQL 补状态。
+6. 若接入后验收失败或明确中止，回退为正式 `POST /api/v1/backup-repositories/{id}/disconnect`：撤销访问绑定与活动关联，不删除或改写备份文件。成功验收不主动断开。
+7. Catalog 默认最多等待一个 repository reconcile 周期（15 分钟），随后最多等待一个 search reconcile 周期（1 分钟）；用状态轮询，不用进程重启催化。
+8. 如果没有满足预检的 Task，或正式 Connect 暴露产品缺失能力，则在 Trellis 下新建边界清晰的子任务，使用专用分支/工作树、TDD、`trellis-implement`、`trellis-check`、PR/CI 实现；不得绕过领域层。
+9. 只有本任务真实数据 UI 预览全部通过后，才创建或恢复节点日志 P1 修复任务；此前日志收集器继续全部关闭。
 
 ## Requirements
 
-### R1 — 绑定发布制品
+### R1 — 精确、无敏感泄漏的预检
 
-本 Child `research/acceptance-protocol.md` 必须写清 git SHA、GitHub Release、镜像 tag、镜像 digest、DB 引擎、Provider 模式、浏览器、验收人、记录人。SHA / Release / tag 已由 v0.50.2 确定；digest 与环境字段只来自现场。
+只输出 HTTP 状态、角色、GA 计数、仓库计数，以及候选 Task 的 ID、节点 ID、启用/运行/校验状态、最后运行时间、是否本地绝对目标和安全 publication 摘要。任何敏感值只留在浏览器会话闭包内。
 
-### R2 — Core-only 真实走查
+### R2 — 正式仓库和活动任务关联
 
-必须在指定制品上，由 Alan 完成：启用前默认关闭、dry-run inventory、Admin ack、进程重启（若仍需要）、FeatureLive 后 Catalog / Search / Content 一致、旧 snapshot 读 410、旧 restore 在未 live 或非 Admin 时失败、Admin-only secret reveal、预览续期不重复 TOTP、就地恢复确认、disable 回滚、Worker 未作为官方镜像拉取。Agent 不得代替 SSH 进生产机，也不得代填未报告的勾选。
+Connect HTTP 200 后，仓库详情必须显示在线且 `access_active=true`，并存在 `source=task_link`、`task_id` 等于目标 Task、`active=true` 的谱系。opaque 仓库、关联和恢复点 ID 可以记录；不得记录 locator 或凭据。
 
-### R3 — Native AWS 排除声明
+### R3 — 恢复点与目录
 
-验收协议必须含本次范围排除声明。核对 `docs/admin/backup-recovery.md` 与 `docs/admin/backup-assets-load.md` 仍写不在支持矩阵。发现文档改口成「已支持」才允许改文档；不把 Native UI 入口拆除列入本 Child。
+仓库至少存在一个由目标 Task 产生的 `mutable_head`、`observed` 恢复点。目录状态必须达到 complete，`indexed_entries>0`，内容可用且 Catalog list 权限成立；失败 build 必须记录稳定错误码并停止。Catalog 状态的权限投影是 list-only，内容预览授权由独立 delivery-ticket/UI 路径验收，不得错误要求 Catalog `permissions.preview=true`。
 
-### R4 — 未走查 Provider 诚实
+### R4 — 搜索与真实资产
 
-协议明确：本走查 Provider 模式 = `core-only`。Restic / Rsync / Rclone Portable = `declared_supported_not_executed`。Native AWS = `excluded_this_ga`。
+对该恢复点执行精确范围、`type=file` 的 schema v1 搜索。HTTP 必须为 200，索引 coverage 为 complete/partial，返回至少一个真实文件。证据只记录总数、opaque AssetRef、类型、大小、MIME 和时间，不记录名称或 breadcrumb。
 
-### R5 — 失败与豁免诚实
+### R5 — 页面元数据与内容预览
 
-失败项写入协议，带 owner。未执行不得标通过。
+在 `/app/backups/data` 打开绑定仓库、恢复点和 AssetRef，页面必须显示真实资产元数据，并按产品支持的 renderer 显示内容预览。若资产被分类为 secret/unknown，只能在 UI 内完成正常 step-up；不得把密码、TOTP 或 proof 粘贴给 agent。
 
-### R6 — 父任务归档门
+### R6 — 健康与错误观测
 
-仅当本协议 `production_walkthrough` 不再是 `not_executed`，且 R3/R4 声明已落盘，才允许**请求**父任务归档。真正归档仍要 Alan 明确指令。
+验收后容器仍 running/healthy、restart count 不增加、`/healthz` 正常；验收窗口无 backup-assets 关键错误。节点日志 collector 数仍为 0，queue_full/fetch_failed/critical 不因本次操作复发。
 
-### R7 — 默认关闭合同不变
+### R7 — 证据与后续门禁
 
-走查全程不得把 CodeDefault 或官方 `.env.deploy` 改成 true。试点启用只发生在该生产实例的设置/环境覆盖，并在回滚演练中关掉。
+所有实际时间、HTTP、opaque ID、状态和 UI 结果写入 `research/v0504-real-data-acceptance.md`。未执行不得勾选。只有全部通过才允许启动节点日志 P1。
 
-## Acceptance Criteria
+## Acceptance criteria
 
-- [ ] AC1：协议绑定 v0.50.2 SHA、Release、镜像 tag 和现场抄录的 digest。
-- [ ] AC2：must-pass 与回滚按 Alan 现场勾选；未跑保持未勾选并说明。
-- [ ] AC3：Native AWS 在协议中为 `excluded_this_ga`；公开文档仍不把它写成已支持。
-- [ ] AC4：Provider 模式为 `core-only`；Restic / Rsync / Portable 为 `declared_supported_not_executed`。
-- [ ] AC5：CodeDefault 与 `.env.deploy` 仍为 false；Worker 仍未公开发。
-- [ ] AC6：父任务在本 Child 通过前保持 `planning`。
-- [ ] AC7：SLO PromQL 已在该实例安装，或豁免写明未安装及 owner。
+- [ ] AC1：v0.50.4 绑定、健康、schema 72|0、FeatureRequested/FeatureLive=1 已复核。
+- [ ] AC2：一个确定 Rsync Task 通过只读预检，含成功历史且备份根目录有真实条目。
+- [ ] AC3：仓库存在、访问活动、目标 Task 的活动 `task_link` 谱系存在。
+- [ ] AC4：目标恢复点存在，Catalog complete、`indexed_entries>0`、Content available、Catalog list permitted。
+- [ ] AC5：精确恢复点资产搜索 HTTP 200，至少返回一个真实 file AssetRef。
+- [ ] AC6：数据页选择该资产后显示元数据和产品支持的内容预览。
+- [ ] AC7：容器健康、restart count 不增加、无关键错误，节点日志 collectors 仍为 0。
+- [ ] AC8：证据落盘；没有密钥、密码、令牌、proof、locator、路径或文件名泄漏。
+- [ ] AC9：AC1–AC8 通过后才启动节点日志 P1。
 
 ## Out of scope
 
-- 翻转 CodeDefault 或官方 deploy env。
-- 公开发 Worker。
-- 把 Native AWS 纳入本次 GA，或为它跑 mock/live suite。
-- 为 Restic / Rsync / Rclone Portable 另建验收环境。
-- 代码修复（P0/P1 已在 Child 17 关闭）。
-- 把三条 P2 当成通过门。
-- 拆除 Native 绑定 UI。
-- 百万级目录 soak / 多小时压测。
-- 伪造生产证据。
-- 在本 Child 通过前，或未经 Alan 指令，归档父任务。
+- 重做 v0.50.2 migration No-Go 或已归档的 P0 启用死锁修复。
+- 修改 CodeDefault、官方 `.env.deploy` 或公开 Worker。
+- 手工生产 SQL、伪造仓库/关联/恢复点/索引数据。
+- 为验收而重启进程、提前重新开启节点日志收集器。
+- 在真实数据预览通过前实现节点日志 P1。
+- 打印或收集任何敏感认证、Provider locator、备份路径或资产名称。
