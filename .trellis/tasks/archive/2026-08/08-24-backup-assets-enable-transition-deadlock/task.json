@@ -3,7 +3,7 @@
   "name": "backup-assets-enable-transition-deadlock",
   "title": "备份资产启用事务死锁修复",
   "description": "修复 settings PUT 启用备份资产时同一 goroutine 重入 backupAssetMutationMu 导致请求永久挂起的问题，补齐可取消/有界的真实回归测试与发布复验。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": "backend",
   "scope": "backup-assets-settings-runtime",
   "package": "backend",
@@ -11,12 +11,12 @@
   "creator": "weibo",
   "assignee": "weibo",
   "createdAt": "2026-08-24",
-  "completedAt": null,
+  "completedAt": "2026-08-24",
   "branch": "codex/backup-assets-enable-transition-deadlock",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
-  "pr_url": null,
+  "commit": "bb295c830285377af439e6021b51234e09df5127",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/453",
   "subtasks": [],
   "children": [],
   "parent": "07-12-backup-data-explorer-design",
@@ -28,7 +28,7 @@
     "backend/internal/api/handlers/settings_handler.go",
     "backend/internal/api/handlers/config_handler.go"
   ],
-  "notes": "Planning complete pending explicit user approval. Production v0.50.3 is healthy with backup_assets.enabled absent after a controlled restart. The confirmed root cause is a deterministic same-goroutine settings snapshot re-entry while WithBackupAssetMutation owns the mutation lock; Content prepare and Search startup both contain affected reads. The planned repair uses one validated prospective snapshot, config-aware runtime transitions, a context-aware exclusive gate, bounded joined cleanup, and exact rollback. Do not retry production enablement before a fixed release passes acceptance.",
+  "notes": "Completed through PR #453 and release v0.50.4. Required CI, post-merge CI, Release Please, GitHub Release and multi-architecture Docker publication passed. Production verified the immutable v0.50.4 manifest, a pre-upgrade logical SQLite backup, healthy disabled baseline, one 200 enable PUT in 0.046 seconds, durable enabled setting and success stamp, FeatureRequested/FeatureLive 1/1, two successful empty-state asset searches, zero critical logs, and a healthy container with restart count 0. The feature is live; this installation still has zero repositories, active links and recovery points, so preview remains an authoritative empty state until repositories and recovery points are configured.",
   "meta": {
     "incident": "v0.50.3_backup_assets_enable_put_499",
     "root_cause": "reentrant_backup_asset_settings_snapshot_under_mutation_lock",
@@ -36,9 +36,12 @@
     "atomicity_policy": "preserve_all_or_nothing_snapshot_visibility",
     "transition_policy": "prospective_config_no_lock_inner_snapshot_reads",
     "cancellation_policy": "context_aware_exclusive_gate_and_bounded_joined_runtime_transition",
-    "release_acceptance": "failed_pending_fixed_release_enablement_retest",
-    "dependent_p1": "08-23-node-logs-collector-stall_waiting",
-    "production_mutation": "not_authorized",
-    "implementation_authorized": false
+    "release_acceptance": "passed_v0_50_4_single_enablement_and_preview",
+    "release_version": "v0.50.4",
+    "release_commit": "214f5e18b47974d4e353227fa52782992cef70f7",
+    "image_manifest_digest": "sha256:9dcfddade668ee0a9b2d1940cc66004df002cd4a435be9d2c1e0f95f60a11ab9",
+    "dependent_p1": "08-23-node-logs-collector-stall_unblocked_not_started",
+    "production_mutation": "single_enablement_retest_completed",
+    "implementation_authorized": true
   }
 }
