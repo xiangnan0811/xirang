@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,48 @@ import (
 )
 
 const enableTransitionDeadlockHelperEnv = "XIRANG_TEST_ENABLE_TRANSITION_DEADLOCK_HELPER"
+
+const (
+	enableTransitionHelperStartupTimeout    = 15 * time.Second
+	enableTransitionHelperCompletionTimeout = 2 * time.Second
+)
+
+type enableTransitionHelperOutput struct {
+	mu      sync.Mutex
+	buffer  bytes.Buffer
+	marker  []byte
+	reached chan struct{}
+	once    sync.Once
+}
+
+func newEnableTransitionHelperOutput(marker []byte) *enableTransitionHelperOutput {
+	return &enableTransitionHelperOutput{
+		marker:  append([]byte(nil), marker...),
+		reached: make(chan struct{}),
+	}
+}
+
+func (output *enableTransitionHelperOutput) Write(payload []byte) (int, error) {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	written, err := output.buffer.Write(payload)
+	if bytes.Contains(output.buffer.Bytes(), output.marker) {
+		output.once.Do(func() { close(output.reached) })
+	}
+	return written, err
+}
+
+func (output *enableTransitionHelperOutput) String() string {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	return output.buffer.String()
+}
+
+func (output *enableTransitionHelperOutput) reachedStage() bool {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	return bytes.Contains(output.buffer.Bytes(), output.marker)
+}
 
 type productionDeadlockContentManager struct {
 	*managedContentRuntime
@@ -48,6 +91,17 @@ func TestRuntimeEnableTransitionSearchConfigDoesNotReenterSettingsMutation(t *te
 	}
 
 	requireEnableTransitionHelperCompletes(t, "search")
+}
+
+func TestEnableTransitionHelperAllowsSlowStartupBeforeStageDeadline(t *testing.T) {
+	const helper = "delayed-stage"
+	if os.Getenv(enableTransitionDeadlockHelperEnv) == helper {
+		time.Sleep(2500 * time.Millisecond)
+		writeEnableTransitionHelperReady(helper)
+		return
+	}
+
+	requireEnableTransitionHelperCompletes(t, helper)
 }
 
 func runContentConfigDeadlockHelper(t *testing.T) {
@@ -96,6 +150,7 @@ func runContentConfigDeadlockHelper(t *testing.T) {
 	runtime.searchWorker = nil
 	runtime.enablement = readyGAEnablement()
 
+	writeEnableTransitionHelperReady("content")
 	if err := runRealEnabledSettingsMutation(settingsService, runtime); err != nil {
 		t.Fatalf("run real Content enable transition: %v", err)
 	}
@@ -151,9 +206,14 @@ func runSearchConfigDeadlockHelper(t *testing.T) {
 	}
 	runtime.searchWorker.backend = newSearchWorkerBackendFake()
 
+	writeEnableTransitionHelperReady("search")
 	if err := runRealEnabledSettingsMutation(settingsService, runtime); err != nil {
 		t.Fatalf("run real Search enable transition: %v", err)
 	}
+}
+
+func writeEnableTransitionHelperReady(helper string) {
+	_, _ = fmt.Fprintln(os.Stdout, "helper-ready="+helper)
 }
 
 func runRealEnabledSettingsMutation(settingsService *settings.Service, runtime *Runtime) error {
@@ -180,29 +240,57 @@ func runRealEnabledSettingsMutation(settingsService *settings.Service, runtime *
 
 func requireEnableTransitionHelperCompletes(t *testing.T, helper string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatalf("resolve test executable: %v", err)
 	}
-	cmd := exec.CommandContext(
-		ctx,
+	cmd := exec.Command(
 		executable,
 		"-test.run=^"+regexp.QuoteMeta(t.Name())+"$",
 		"-test.count=1",
 		"-test.v",
 	)
 	cmd.Env = append(os.Environ(), enableTransitionDeadlockHelperEnv+"="+helper)
-	output, err := cmd.CombinedOutput()
-	if ctx.Err() != nil {
-		expectedMarker := []byte("deadlock-stage=" + helper)
-		if !bytes.Contains(output, expectedMarker) {
-			t.Fatalf("%s enable-transition helper exceeded its deadline before reaching the expected config-read stage\n%s", helper, output)
-		}
-		t.Fatalf("%s enable-transition helper exceeded its deadline; settings mutation re-entered its snapshot gate\n%s", helper, output)
+	output := newEnableTransitionHelperOutput([]byte("helper-ready=" + helper))
+	cmd.Stdout = output
+	cmd.Stderr = output
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start %s enable-transition helper: %v", helper, err)
 	}
-	if err != nil {
-		t.Fatalf("%s enable-transition helper failed before its deadline: %v\n%s", helper, err, output)
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	startupTimer := time.NewTimer(enableTransitionHelperStartupTimeout)
+	defer startupTimer.Stop()
+	select {
+	case err := <-done:
+		if !output.reachedStage() {
+			t.Fatalf("%s enable-transition helper exited before signaling fixture readiness: %v\n%s", helper, err, output.String())
+		}
+		if err != nil {
+			t.Fatalf("%s enable-transition helper failed after signaling fixture readiness: %v\n%s", helper, err, output.String())
+		}
+		return
+	case <-output.reached:
+	case <-startupTimer.C:
+		_ = cmd.Process.Kill()
+		<-done
+		t.Fatalf("%s enable-transition helper exceeded its startup deadline before signaling fixture readiness\n%s", helper, output.String())
+	}
+
+	completionTimer := time.NewTimer(enableTransitionHelperCompletionTimeout)
+	defer completionTimer.Stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("%s enable-transition helper failed after signaling fixture readiness: %v\n%s", helper, err, output.String())
+		}
+	case <-completionTimer.C:
+		_ = cmd.Process.Kill()
+		<-done
+		if !bytes.Contains([]byte(output.String()), []byte("deadlock-stage="+helper)) {
+			t.Fatalf("%s enable-transition helper exceeded its completion deadline before reaching the expected config-read stage\n%s", helper, output.String())
+		}
+		t.Fatalf("%s enable-transition helper exceeded its completion deadline; settings mutation re-entered its snapshot gate\n%s", helper, output.String())
 	}
 }
