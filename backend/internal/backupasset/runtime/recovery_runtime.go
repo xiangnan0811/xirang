@@ -1789,6 +1789,23 @@ func (runtime *managedRecoveryRuntime) TransitionSettingsWithRestore(
 	persist func() error,
 	restorePersisted func() error,
 ) error {
+	if persist == nil || restorePersisted == nil {
+		return fmt.Errorf("%w: Recovery settings transition unavailable", backupasset.ErrInvalidState)
+	}
+	return runtime.TransitionSettingsContextWithRestore(
+		ctx,
+		config,
+		func(context.Context) error { return persist() },
+		func(context.Context) error { return restorePersisted() },
+	)
+}
+
+func (runtime *managedRecoveryRuntime) TransitionSettingsContextWithRestore(
+	ctx context.Context,
+	config backupasset.RecoveryConfig,
+	persist func(context.Context) error,
+	restorePersisted func(context.Context) error,
+) error {
 	return runtime.transitionWithRestore(ctx, config, false, persist, restorePersisted)
 }
 
@@ -1796,6 +1813,21 @@ func (runtime *managedRecoveryRuntime) TransitionCurrentWithRestore(
 	ctx context.Context,
 	persist func() error,
 	restorePersisted func() error,
+) error {
+	if persist == nil || restorePersisted == nil {
+		return fmt.Errorf("%w: Recovery settings transition unavailable", backupasset.ErrInvalidState)
+	}
+	return runtime.TransitionCurrentContextWithRestore(
+		ctx,
+		func(context.Context) error { return persist() },
+		func(context.Context) error { return restorePersisted() },
+	)
+}
+
+func (runtime *managedRecoveryRuntime) TransitionCurrentContextWithRestore(
+	ctx context.Context,
+	persist func(context.Context) error,
+	restorePersisted func(context.Context) error,
 ) error {
 	return runtime.transitionWithRestore(
 		ctx, backupasset.RecoveryConfig{}, true, persist, restorePersisted,
@@ -1806,14 +1838,19 @@ func (runtime *managedRecoveryRuntime) transitionWithRestore(
 	ctx context.Context,
 	config backupasset.RecoveryConfig,
 	useCurrentConfig bool,
-	persist func() error,
-	restorePersisted func() error,
+	persist func(context.Context) error,
+	restorePersisted func(context.Context) error,
 ) error {
 	if runtime == nil || persist == nil || restorePersisted == nil ||
 		runtime.stopped.Load() || !runtime.accepting.Load() {
 		return fmt.Errorf("%w: Recovery settings transition unavailable", backupasset.ErrInvalidState)
 	}
 	ctx = nonNilRecoveryRuntimeContext(ctx)
+	if budget, _ := ctx.Value(featureTransitionBudgetContextKey{}).(*featureTransitionBudget); budget == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = newFeatureTransitionContext(ctx)
+		defer cancel()
+	}
 	runtime.transitionMu.Lock()
 	defer runtime.transitionMu.Unlock()
 	if runtime.stopped.Load() || !runtime.accepting.Load() {
@@ -1837,21 +1874,21 @@ func (runtime *managedRecoveryRuntime) transitionWithRestore(
 		return fmt.Errorf("validate Recovery settings transition: %w", err)
 	}
 	discardCandidate := func(candidate *managedRecoveryGraph) error {
-		discardCtx, cancel := context.WithTimeout(context.Background(), recoveryRuntimeTransitionTimeout)
+		discardCtx, cancel := newFeatureTransitionCleanupContext(ctx)
 		defer cancel()
 		return shutdownManagedRecoveryGraph(discardCtx, candidate)
 	}
 	if previousGraph == nil {
-		if err := persist(); err != nil {
-			return runtime.restoreManagedRecoveryTransitionLocked(err, previousConfig, restorePersisted, true)
+		if err := persist(ctx); err != nil {
+			return runtime.restoreManagedRecoveryTransitionLocked(ctx, err, previousConfig, restorePersisted, true)
 		}
 		candidate, err := runtime.prepareGraph(ctx, config)
 		if err != nil {
-			return runtime.restoreManagedRecoveryTransitionLocked(err, previousConfig, restorePersisted, true)
+			return runtime.restoreManagedRecoveryTransitionLocked(ctx, err, previousConfig, restorePersisted, true)
 		}
 		if err := runtime.publishPreparedGraph(candidate, config); err != nil {
 			return runtime.restoreManagedRecoveryTransitionLocked(
-				errors.Join(err, discardCandidate(candidate)), previousConfig, restorePersisted, true,
+				ctx, errors.Join(err, discardCandidate(candidate)), previousConfig, restorePersisted, true,
 			)
 		}
 		return nil
@@ -1871,33 +1908,36 @@ func (runtime *managedRecoveryRuntime) transitionWithRestore(
 		runtime.signalChangedLocked()
 	}
 	runtime.mu.Unlock()
-	if err := persist(); err != nil {
-		return runtime.restoreManagedRecoveryTransitionLocked(err, previousConfig, restorePersisted, true)
+	if err := persist(ctx); err != nil {
+		return runtime.restoreManagedRecoveryTransitionLocked(ctx, err, previousConfig, restorePersisted, true)
 	}
 	candidate, err := runtime.prepareGraph(ctx, config)
 	if err != nil {
-		return runtime.restoreManagedRecoveryTransitionLocked(err, previousConfig, restorePersisted, true)
+		return runtime.restoreManagedRecoveryTransitionLocked(ctx, err, previousConfig, restorePersisted, true)
 	}
 	if err := runtime.publishPreparedGraph(candidate, config); err != nil {
 		return runtime.restoreManagedRecoveryTransitionLocked(
-			errors.Join(err, discardCandidate(candidate)), previousConfig, restorePersisted, true,
+			ctx, errors.Join(err, discardCandidate(candidate)), previousConfig, restorePersisted, true,
 		)
 	}
 	return nil
 }
 
 func (runtime *managedRecoveryRuntime) restoreManagedRecoveryTransitionLocked(
+	ctx context.Context,
 	transitionErr error,
 	previousConfig backupasset.RecoveryConfig,
-	restorePersisted func() error,
+	restorePersisted func(context.Context) error,
 	persistMayHaveChanged bool,
 ) error {
+	cleanupCtx, cancelCleanup := newFeatureTransitionCleanupContext(ctx)
+	defer cancelCleanup()
 	var restoreErr error
 	if persistMayHaveChanged {
-		restoreErr = restorePersisted()
+		restoreErr = restorePersisted(cleanupCtx)
 	}
 	if restoreErr == nil {
-		restoreErr = runtime.restoreManagedRecoveryGraphLocked(previousConfig)
+		restoreErr = runtime.restoreManagedRecoveryGraphLocked(cleanupCtx, previousConfig)
 	}
 	if restoreErr != nil {
 		runtime.fenceFailedRecoveryRestorationLocked()
@@ -2013,8 +2053,12 @@ func (runtime *managedRecoveryRuntime) prepareGraph(
 		return nil, fmt.Errorf("%w: Recovery runtime graph unavailable", backupasset.ErrInvalidState)
 	}
 	if err := graph.reconcileMetadata(ctx); err != nil {
-		_ = shutdownManagedRecoveryGraph(context.Background(), graph)
-		return nil, fmt.Errorf("reconcile Recovery metadata: %w", err)
+		cleanupCtx, cancelCleanup := newFeatureTransitionCleanupContext(ctx)
+		defer cancelCleanup()
+		return nil, errors.Join(
+			fmt.Errorf("reconcile Recovery metadata: %w", err),
+			shutdownManagedRecoveryGraph(cleanupCtx, graph),
+		)
 	}
 	return graph, nil
 }
@@ -2040,7 +2084,7 @@ func (runtime *managedRecoveryRuntime) publishPreparedGraph(
 	return nil
 }
 
-func (runtime *managedRecoveryRuntime) installWithConfigLocked(
+func (runtime *managedRecoveryRuntime) restoreManagedRecoveryGraphLocked(
 	ctx context.Context,
 	config backupasset.RecoveryConfig,
 ) error {
@@ -2048,15 +2092,10 @@ func (runtime *managedRecoveryRuntime) installWithConfigLocked(
 	if err != nil {
 		return err
 	}
-	return runtime.publishPreparedGraph(graph, config)
-}
-
-func (runtime *managedRecoveryRuntime) restoreManagedRecoveryGraphLocked(
-	config backupasset.RecoveryConfig,
-) error {
-	recoveryCtx, cancel := context.WithTimeout(context.Background(), recoveryRuntimeTransitionTimeout)
-	defer cancel()
-	return runtime.installWithConfigLocked(recoveryCtx, config)
+	if err := runtime.publishPreparedGraph(graph, config); err != nil {
+		return errors.Join(err, shutdownManagedRecoveryGraph(ctx, graph))
+	}
+	return nil
 }
 
 func shutdownManagedRecoveryGraph(ctx context.Context, graph *managedRecoveryGraph) error {

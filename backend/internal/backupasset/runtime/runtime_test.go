@@ -1505,7 +1505,11 @@ func TestRuntimeAuthenticatedCacheUsesSharedContentMetrics(t *testing.T) {
 		t.Fatalf("content manager type=%T", runtime.contentManager)
 	}
 	t.Cleanup(func() { _ = manager.Shutdown(context.Background()) })
-	if err := manager.PrepareEnable(context.Background()); err != nil {
+	contentConfig, err := runtime.foundation.ContentConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.PrepareEnable(context.Background(), contentConfig); err != nil {
 		t.Fatal(err)
 	}
 	if manager.cache == nil || !manager.cache.Status().DiskEnabled {
@@ -1513,6 +1517,82 @@ func TestRuntimeAuthenticatedCacheUsesSharedContentMetrics(t *testing.T) {
 	}
 	if got := metrics.cache[content.MetricCacheKeyLoss]; got != 1 {
 		t.Fatalf("runtime cache key-loss metric=%d, want 1", got)
+	}
+}
+
+type runtimeManagedContentPrepareFailureProbe struct {
+	*managedContentRuntime
+	cleanupContexts []context.Context
+}
+
+func (probe *runtimeManagedContentPrepareFailureProbe) PrepareDisable(ctx context.Context) error {
+	probe.cleanupContexts = append(probe.cleanupContexts, ctx)
+	return probe.managedContentRuntime.PrepareDisable(ctx)
+}
+
+func TestFeatureEnableContentPrepareFailureRunsBoundedCleanupAndFencesFailedCompensation(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(&model.Task{}, &model.TaskRepositoryLink{}, &model.RepositoryAccessBinding{}); err != nil {
+		t.Fatal(err)
+	}
+	settingsService := settings.NewService(db)
+	if err := settingsService.Update("backup_assets.content_cache_root", filepath.Join(t.TempDir(), "content-cache")); err != nil {
+		t.Fatal(err)
+	}
+	transport := &runtimeTransportFake{}
+	runtime, err := New(Dependencies{
+		DB: db, Settings: settingsService, Transport: transport, StreamTransport: transport,
+		StagedPayload: &runtimeStagedPayloadFake{}, Metrics: publication.NoopMetrics{},
+		ContentMetrics: content.NoopMetrics{}, SessionRevocations: &runtimeSessionRevocationsFake{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, ok := runtime.contentManager.(*managedContentRuntime)
+	if !ok {
+		t.Fatalf("content manager type=%T", runtime.contentManager)
+	}
+	t.Cleanup(func() { _ = manager.Shutdown(context.Background()) })
+	contentConfig, err := runtime.foundation.ContentConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.PrepareEnable(context.Background(), contentConfig); err != nil {
+		t.Fatal(err)
+	}
+	if manager.cache == nil || !manager.cacheAttached {
+		t.Fatal("managed Content fixture did not attach its candidate cache")
+	}
+	if err := manager.broker.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	probe := &runtimeManagedContentPrepareFailureProbe{managedContentRuntime: manager}
+	runtime.contentManager = probe
+	runtime.transitioner = &runtimeFeatureTransitionerFake{events: &[]string{}}
+	runtime.enablement = readyGAEnablement()
+	runtime.inventory = nil
+	persistCalled := false
+	err = runtime.transitionFeatureWithConfigs(
+		context.Background(), testFoundationTransitionConfigs(t, false, true),
+		func() error { persistCalled = true; return nil },
+	)
+	if !errors.Is(err, content.ErrBrokerClosed) || !errors.Is(err, ErrFeatureTransitionCompensation) {
+		t.Fatalf("Content prepare/cleanup error=%v, want primary BrokerClosed and typed compensation failure", err)
+	}
+	if persistCalled {
+		t.Fatal("Content prepare failure reached persistence")
+	}
+	if len(probe.cleanupContexts) != 1 {
+		t.Fatalf("Content prepare failure cleanup calls=%d, want one synchronous cleanup", len(probe.cleanupContexts))
+	}
+	cleanupDeadline, ok := probe.cleanupContexts[0].Deadline()
+	if !ok || time.Until(cleanupDeadline) <= 0 || time.Until(cleanupDeadline) > featureTransitionCleanupReserve {
+		t.Fatalf("Content prepare cleanup deadline=%s ok=%t, want live shared reserve <=%s", cleanupDeadline, ok, featureTransitionCleanupReserve)
+	}
+	if runtime.featureTransitionReady() || !runtime.featureTransitionFenced.Load() || manager.ready.Load() {
+		t.Fatalf("failed Content compensation ready=%t fenced=%t content-ready=%t",
+			runtime.featureTransitionReady(), runtime.featureTransitionFenced.Load(), manager.ready.Load())
 	}
 }
 
@@ -1952,7 +2032,12 @@ func (fake *runtimeContentManagerFake) Startup(context.Context) error {
 	return nil
 }
 
-func (fake *runtimeContentManagerFake) PrepareEnable(context.Context) error {
+func (fake *runtimeContentManagerFake) PrepareEnable(context.Context, backupasset.ContentConfig) error {
+	*fake.events = append(*fake.events, "content-prepare-enable")
+	return fake.prepareEnableErr
+}
+
+func (fake *runtimeContentManagerFake) RestoreEnable(context.Context, backupasset.ContentConfig) error {
 	*fake.events = append(*fake.events, "content-prepare-enable")
 	return fake.prepareEnableErr
 }
@@ -1988,11 +2073,25 @@ func (fake *runtimeContentManagerFake) PrepareSchemaDown(_ context.Context, down
 	return down()
 }
 
-type runtimeFeatureTransitionerFake struct{ events *[]string }
+type runtimeFeatureTransitionerFake struct {
+	events  *[]string
+	enabled bool
+}
 
 func (fake *runtimeFeatureTransitionerFake) TransitionFeature(_ context.Context, enabled bool, persist func() error) error {
 	*fake.events = append(*fake.events, fmt.Sprintf("admission-transition-%t", enabled))
-	return persist()
+	if err := persist(); err != nil {
+		return err
+	}
+	fake.enabled = enabled
+	return nil
+}
+
+func (fake *runtimeFeatureTransitionerFake) CurrentMode() (publication.AdmissionMode, error) {
+	if fake.enabled {
+		return publication.AdmissionManaged, nil
+	}
+	return publication.AdmissionPristineLegacy, nil
 }
 
 func (fake *runtimeFeatureTransitionerFake) PrepareApplicationDowngrade(_ context.Context, callback func() error) error {
@@ -2042,9 +2141,11 @@ func TestRuntimeContentTransitionAndSchemaDownOrdering(t *testing.T) {
 }
 
 type runtimeExportSettingsManagerFake struct {
-	events        *[]string
-	globalEnabled []bool
-	configs       []backupasset.ExportConfig
+	events           *[]string
+	globalEnabled    []bool
+	configs          []backupasset.ExportConfig
+	failAfterPersist error
+	restoreCalls     int
 }
 
 type runtimeRecoveryManagerFake struct {
@@ -2382,16 +2483,39 @@ func (fake *runtimeExportSettingsManagerFake) TransitionSettings(
 	fake.globalEnabled = append(fake.globalEnabled, globalEnabled)
 	fake.configs = append(fake.configs, config)
 	*fake.events = append(*fake.events, fmt.Sprintf("export-settings-%t", globalEnabled))
-	return persist()
+	if err := persist(); err != nil {
+		return err
+	}
+	return fake.failAfterPersist
+}
+
+func (fake *runtimeExportSettingsManagerFake) TransitionSettingsWithRestore(
+	ctx context.Context,
+	globalEnabled bool,
+	config backupasset.ExportConfig,
+	persist func() error,
+	restore func() error,
+) error {
+	err := fake.TransitionSettings(ctx, globalEnabled, config, persist)
+	if err == nil {
+		return nil
+	}
+	fake.restoreCalls++
+	return errors.Join(err, restore())
 }
 
 func TestRuntimeBackupAssetSettingsTransitionCoordinatesGlobalDisable(t *testing.T) {
+	settingsService := settings.NewService(openRuntimeTestDB(t))
+	if err := settingsService.Update("backup_assets.enabled", "true"); err != nil {
+		t.Fatal(err)
+	}
 	events := []string{}
 	exportManager := &runtimeExportSettingsManagerFake{events: &events}
 	runtime := &Runtime{
 		exportManager:  exportManager,
 		contentManager: &runtimeContentManagerFake{events: &events},
 		transitioner:   &runtimeFeatureTransitionerFake{events: &events},
+		settings:       settingsService,
 	}
 	transitioner, ok := any(runtime).(interface {
 		TransitionBackupAssetSettings(
@@ -2406,16 +2530,22 @@ func TestRuntimeBackupAssetSettingsTransitionCoordinatesGlobalDisable(t *testing
 	if !ok {
 		t.Fatal("Runtime does not provide backup asset settings transition")
 	}
-	config := backupasset.ExportConfig{Enabled: false, WorkerConcurrency: 3}
+	current := runtimeFoundationSettings(true)
+	effective := runtimeFoundationSettings(false)
+	effective["backup_assets.export.worker_concurrency"] = "3"
+	config, err := backupasset.ExportConfigFromValues(effective)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := transitioner.TransitionBackupAssetSettings(
 		context.Background(),
-		map[string]string{"backup_assets.enabled": "true"},
+		current,
 		map[string]string{"backup_assets.enabled": "false"},
-		map[string]string{"backup_assets.enabled": "false"},
+		effective,
 		config,
 		func() error {
 			events = append(events, "persist")
-			return nil
+			return settingsService.UpdateMany(map[string]string{"backup_assets.enabled": "false"})
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -2448,23 +2578,35 @@ func TestRuntimeBackupAssetSettingsTransitionCoordinatesIdempotencyAcrossExportA
 	if err != nil {
 		t.Fatalf("construct Overlay service: %v", err)
 	}
+	settingsService := settings.NewService(db)
 	events := []string{}
 	exportManager := &runtimeExportSettingsManagerFake{events: &events}
 	runtime := &Runtime{
 		overlayService: overlayService,
 		exportManager:  exportManager,
 		transitioner:   &runtimeFeatureTransitionerFake{events: &events},
+		settings:       settingsService,
 	}
-	config := backupasset.ExportConfig{Enabled: false, IdempotencyTTL: 2 * time.Hour, IdempotencyKeyMaxBytes: 32}
+	current := runtimeFoundationSettings(false)
+	effective := runtimeFoundationSettings(false)
+	effective["backup_assets.idempotency_ttl"] = "2h"
+	effective["backup_assets.idempotency_key_max_bytes"] = "32"
+	config, err := backupasset.ExportConfigFromValues(effective)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := runtime.TransitionBackupAssetSettings(
 		context.Background(),
-		map[string]string{"backup_assets.idempotency_ttl": "24h", "backup_assets.idempotency_key_max_bytes": "128"},
+		current,
 		map[string]string{"backup_assets.idempotency_ttl": "2h", "backup_assets.idempotency_key_max_bytes": "32"},
-		map[string]string{"backup_assets.enabled": "false", "backup_assets.idempotency_ttl": "2h", "backup_assets.idempotency_key_max_bytes": "32"},
+		effective,
 		config,
 		func() error {
 			events = append(events, "persist")
-			return nil
+			return settingsService.UpdateMany(map[string]string{
+				"backup_assets.idempotency_ttl":           "2h",
+				"backup_assets.idempotency_key_max_bytes": "32",
+			})
 		},
 	); err != nil {
 		t.Fatalf("transition idempotency settings: %v", err)
@@ -2491,11 +2633,17 @@ func TestRuntimeBackupAssetSettingsTransitionCoordinatesIdempotencyAcrossExportA
 	}
 
 	persistErr := errors.New("FAKE_RUNTIME_IDEMPOTENCY_PERSIST_FAILURE_FOR_TEST_ONLY")
+	failedCurrent := runtimeFoundationSettings(false)
+	failedCurrent["backup_assets.idempotency_ttl"] = "2h"
+	failedCurrent["backup_assets.idempotency_key_max_bytes"] = "32"
+	failedEffective := runtimeFoundationSettings(false)
+	failedEffective["backup_assets.idempotency_ttl"] = "3h"
+	failedEffective["backup_assets.idempotency_key_max_bytes"] = "64"
 	if err := runtime.TransitionBackupAssetSettings(
-		context.Background(), nil,
-		map[string]string{"backup_assets.idempotency_ttl": "3h", "backup_assets.idempotency_key_max_bytes": "16"},
-		map[string]string{"backup_assets.enabled": "false", "backup_assets.idempotency_ttl": "3h", "backup_assets.idempotency_key_max_bytes": "16"},
-		backupasset.ExportConfig{Enabled: false, IdempotencyTTL: 3 * time.Hour, IdempotencyKeyMaxBytes: 16},
+		context.Background(), failedCurrent,
+		map[string]string{"backup_assets.idempotency_ttl": "3h", "backup_assets.idempotency_key_max_bytes": "64"},
+		failedEffective,
+		backupasset.ExportConfig{Enabled: false, IdempotencyTTL: 3 * time.Hour, IdempotencyKeyMaxBytes: 64},
 		func() error { return persistErr },
 	); !errors.Is(err, persistErr) {
 		t.Fatalf("failed idempotency transition error=%v, want %v", err, persistErr)
@@ -2528,7 +2676,7 @@ func TestRuntimeContentTransitionRestoresLifecycleAfterPersistenceFailure(t *tes
 		}
 		want := []string{
 			"content-prepare-enable", "admission-transition-true", "persist-enabled",
-			"content-ready-false", "content-prepare-disable",
+			"content-ready-false", "admission-transition-false", "content-prepare-disable",
 		}
 		if fmt.Sprint(events) != fmt.Sprint(want) {
 			t.Fatalf("failed enable lifecycle=%v, want %v", events, want)
@@ -2548,7 +2696,7 @@ func TestRuntimeContentTransitionRestoresLifecycleAfterPersistenceFailure(t *tes
 		}
 		want := []string{
 			"content-ready-false", "content-prepare-disable", "admission-transition-false", "persist-disabled",
-			"content-prepare-enable", "content-ready-true",
+			"admission-transition-true", "content-prepare-enable", "content-ready-true",
 		}
 		if fmt.Sprint(events) != fmt.Sprint(want) {
 			t.Fatalf("failed disable lifecycle=%v, want %v", events, want)

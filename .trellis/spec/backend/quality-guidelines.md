@@ -1416,6 +1416,157 @@ catalog.FeatureEnabled = runtime.FeatureLive
 
 ---
 
+### Scenario: Foundation Settings Lock Order And Prospective Runtime Transition
+
+#### 1. Scope / Trigger
+
+- Trigger: a settings PUT, settings DELETE-restore, or config import can change
+  any Foundation key used by Content, Search, Overlay, Export, Recovery, GA
+  readiness, or admission state while the settings mutation gate is held.
+- Applies across `settings.Service`, settings/config handlers,
+  `backupasset/runtime`, and every runtime component prepared or shut down by
+  the transition. It also applies when adding a new Foundation getter or a new
+  persistence stage to that graph.
+
+#### 2. Signatures
+
+- The mutation owner calls
+  `settings.Service.WithBackupAssetMutation(ctx, func(map[string]string) error)`
+  exactly once. External readers may keep using the blocking
+  `BackupAssetSettingsSnapshot()` API.
+- Prospective parsers consume one complete immutable value bundle:
+  `backupasset.ContentConfigFromValues`, `SearchOverlayConfigFromValues`,
+  `ExportConfigFromValues`, `RecoveryConfigFromValues`, and
+  `backupasset.FoundationTransitionConfigFromValues`.
+- Runtime mutation uses `TransitionBackupAssetSettingsContext` or
+  `TransitionBackupAssetSettingsContextWithRestore`; persistence and restore
+  callbacks accept the runtime-supplied `context.Context`.
+- Content enablement receives an explicit `backupasset.ContentConfig` through
+  `PrepareEnable`; Search startup receives an explicit `SearchWorkerConfig`
+  through `StartupPassWithConfig`. These mutation-inner paths must not call
+  Foundation getters.
+- Config import installs a post-persist undo journal only after its import
+  transaction commits; the journal's `Restore(ctx)` reverses every imported
+  database mutation required by the production runtime graph.
+- A settings PUT that mixes Foundation and ordinary settings uses
+  `CaptureSettingOverridesContext` / `RestoreSettingOverridesContext` for the
+  entire request key set, not only the Foundation overlay.
+
+#### 3. Contracts
+
+- Lock order is explicit: the handler/config-import owner acquires the settings
+  mutation gate, derives the complete current and prospective transition
+  configurations from the supplied snapshot/value bundle, and only then calls
+  runtime. No inner runtime, Content, Search, Overlay, Export, Recovery,
+  admission, persistence, or compensation step may reacquire a Foundation
+  getter. This includes disabled components because they still participate in
+  validation and rollback.
+- Do not repair one observed edge only. A Content-only fix leaves the Search
+  callback deadlock; a fake-only test can omit production callbacks and report
+  false green. Transition tests must exercise the production-composed object
+  graph or a probe proven equivalent to every production edge.
+- Propagate the runtime operation context through handler seams, database
+  transactions, Content/Search work, overlay/export/recovery work, persistence,
+  and restoration. Compatibility adapters may remain only outside the
+  mutation-inner path; they must not downgrade a context-aware implementation.
+- Runtime work has one bounded operation context. Compensation detaches from
+  caller cancellation but every cleanup step shares the same absolute cleanup
+  deadline; nested cleanup must not receive a fresh budget.
+- Before mutation, capture exact raw overrides, including row absence, plus the
+  prior admission state and success stamp. For a mixed settings PUT, capture
+  every co-committed request key so a later runtime failure cannot leave an
+  ordinary setting partially committed. Rollback restores those exact facts,
+  not merely the effective value. Stop or discard any candidate component that
+  was created during a failed transition.
+- Config import is one transaction followed by runtime transition. If a later
+  runtime stage fails, its post-persist undo journal restores settings and all
+  imported graph rows/relationships in dependency-safe order and invalidates
+  caches. Installing or running only a settings rollback is insufficient.
+- A compensation failure joins the primary and compensation errors and places
+  runtime behind a restart-only fence. There is no online clear path: readiness
+  and all further transitions fail closed until process restart reconstructs
+  the production graph.
+
+#### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Prospective bundle is missing or contains an invalid Foundation value | Fail before runtime mutation or persistence; current state remains exact. |
+| A second mutation waits on the gate and its context is canceled | Waiter returns the context error without entering the callback. |
+| Content or Search needs configuration during the owner-held mutation | Uses the explicit prospective config; no Foundation getter or nested gate acquisition. |
+| Caller cancels during runtime work | In-flight context-aware work stops; compensation uses the single shared absolute cleanup deadline. |
+| Failure occurs after settings PUT/DELETE persistence | Exact prior raw override row or exact absence for every co-committed PUT key, admission state, stamp, readiness, and candidate lifecycle are restored. |
+| Failure occurs after config import persistence | Post-persist undo journal restores every imported production-graph mutation and settings override. |
+| Any compensation step fails | Return joined primary + compensation failure, engage restart-only fence, and reject future readiness/transitions. |
+
+#### 5. Good/Base/Bad Cases
+
+- Good: PUT/import derives one prospective bundle, runs Content and Search with
+  explicit configs, persists with the runtime context, and either commits all
+  layers or restores exact prior state within the shared deadline. A mixed PUT
+  restores both its Foundation and ordinary setting overrides atomically.
+- Base: a non-Foundation mutation never enters the Foundation runtime graph;
+  external snapshots retain their existing blocking consistency semantics.
+- Bad: calling `ContentConfig()`, `SearchOverlayConfig()`, or another Foundation
+  getter from the mutation callback; giving each cleanup stage a new timeout;
+  snapshotting only the Foundation subset of a mixed PUT; restoring only the
+  effective value; or declaring success with a fake runtime that omits a
+  production callback.
+
+#### 6. Tests Required
+
+- Deterministic real-path Content and Search deadlock regressions, including a
+  subprocess watchdog, must prove completion through the production-equivalent
+  handler/runtime graph.
+- Settings gate and prospective parsers run at high repetition; a canceled
+  waiter proves the callback is never entered. Context-aware runtime, settings,
+  and handler selectors also run under the race detector.
+- Source/AST guards reject Foundation getters in mutation-inner functions and
+  reject context-aware seam downgrades.
+- Stage-by-stage transition rollback tests cover Content, Search, Overlay,
+  Export, Recovery, persistence, and config-import post-persist failures. They
+  assert exact override absence/value, stamp, admission/readiness, candidate
+  shutdown, bounded elapsed time, and production graph parity.
+- A mixed Foundation + ordinary settings PUT post-persist failure test asserts
+  raw value, timestamp, prior absence, atomic restoration, and cache invalidation
+  for the complete request key set.
+- Compensation-failure tests assert joined error identity, sticky restart-only
+  fencing, and no online recovery API.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+return settings.WithBackupAssetMutation(ctx, func(_ map[string]string) error {
+    cfg, err := foundation.ContentConfig() // reacquires the gate
+    if err != nil {
+        return err
+    }
+    return runtime.TransitionBackupAssetSettings(current, next, func() error {
+        return persist(context.Background()) // drops cancellation and deadline
+    })
+})
+```
+
+Correct:
+
+```go
+return settings.WithBackupAssetMutation(ctx, func(current map[string]string) error {
+    prospective, err := backupasset.FoundationTransitionConfigFromValues(effective)
+    if err != nil {
+        return err
+    }
+    return runtime.TransitionBackupAssetSettingsContextWithRestore(
+        ctx, current, overlay, effective, prospective.Export,
+        func(persistCtx context.Context) error { return persist(persistCtx) },
+        func(restoreCtx context.Context) error { return journal.Restore(restoreCtx) },
+    )
+})
+```
+
+---
+
 ## Code Review Checklist
 
 - Are route middleware, RBAC permissions, and ownership checks correct?

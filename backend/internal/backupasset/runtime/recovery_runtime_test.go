@@ -3101,6 +3101,66 @@ func TestRecoveryTransitionInstallFailureRestoresPersistedConfigBeforePriorGraph
 	}
 }
 
+func TestRecoveryTransitionFailureCleanupSharesFeatureDeadline(t *testing.T) {
+	prior := backupasset.RecoveryConfig{Enabled: false}
+	prospective := backupasset.RecoveryConfig{Enabled: true}
+	primaryErr := errors.New("FAKE_PHASE3_RECOVERY_RECONCILE_FAILURE_FOR_TEST_ONLY")
+	var candidateCleanupDeadline time.Time
+	var restoreBuildDeadline time.Time
+	builds := 0
+	manager, err := newManagedRecoveryRuntime(managedRecoveryRuntimeDependencies{
+		Build: func(ctx context.Context, config backupasset.RecoveryConfig) (*managedRecoveryGraph, error) {
+			builds++
+			if builds == 3 {
+				deadline, ok := ctx.Deadline()
+				if !ok {
+					return nil, errors.New("restoration build received no cleanup deadline")
+				}
+				restoreBuildDeadline = deadline
+			}
+			graph := &managedRecoveryGraph{
+				admissionEnabled:  config.Enabled,
+				reconcileMetadata: func(context.Context) error { return nil },
+				cancelJoinAttempts: func(cleanupCtx context.Context) error {
+					deadline, ok := cleanupCtx.Deadline()
+					if !ok {
+						return errors.New("candidate cleanup received no deadline")
+					}
+					candidateCleanupDeadline = deadline
+					return nil
+				},
+			}
+			if builds == 2 {
+				graph.reconcileMetadata = func(context.Context) error { return primaryErr }
+			}
+			return graph, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.StartupWithConfig(context.Background(), prior); err != nil {
+		t.Fatal(err)
+	}
+	opCtx, cancel := newFeatureTransitionContext(context.Background())
+	defer cancel()
+	err = manager.TransitionSettingsWithRestore(
+		opCtx, prospective, func() error { return nil }, func() error { return nil },
+	)
+	if !errors.Is(err, primaryErr) {
+		t.Fatalf("transition error=%v, want reconcile failure", err)
+	}
+	if candidateCleanupDeadline.IsZero() || restoreBuildDeadline.IsZero() {
+		t.Fatalf("cleanup deadlines candidate=%s restore=%s", candidateCleanupDeadline, restoreBuildDeadline)
+	}
+	if !candidateCleanupDeadline.Equal(restoreBuildDeadline) {
+		t.Fatalf("nested cleanup deadlines candidate=%s restore=%s, want one shared absolute deadline", candidateCleanupDeadline, restoreBuildDeadline)
+	}
+	if remaining := time.Until(candidateCleanupDeadline); remaining <= 0 || remaining > featureTransitionCleanupReserve {
+		t.Fatalf("shared cleanup deadline remaining=%s, want within %s", remaining, featureTransitionCleanupReserve)
+	}
+}
+
 func TestRecoveryTransitionNonJoiningOwnerLeavesStickyFenceWithoutRestoration(t *testing.T) {
 	releaseOwner := make(chan struct{})
 	ownerStarted := make(chan struct{})
@@ -3257,6 +3317,65 @@ func TestRecoveryTransitionRestorationFailureLeavesStickyFenceClosed(t *testing.
 	}
 	if _, err := manager.DowngradeReadiness(context.Background()); !errors.Is(err, backupasset.ErrInvalidState) {
 		t.Fatalf("sticky fence downgrade readiness error=%v", err)
+	}
+}
+
+func TestRecoveryTransitionRestorationInstallFailureShutsDownCandidateBeforeFence(t *testing.T) {
+	installErr := errors.New("FAKE_PHASE3_RECOVERY_RESTORATION_INSTALL_FAILURE_FOR_TEST_ONLY")
+	builds, installs, shutdowns, restoreCalls := 0, 0, 0, 0
+	var restorationShutdownDeadline time.Time
+	manager, err := newManagedRecoveryRuntime(managedRecoveryRuntimeDependencies{
+		Build: func(_ context.Context, config backupasset.RecoveryConfig) (*managedRecoveryGraph, error) {
+			builds++
+			buildOrdinal := builds
+			return &managedRecoveryGraph{
+				admissionEnabled:  config.Enabled,
+				reconcileMetadata: func(context.Context) error { return nil },
+				shutdownLifecycle: func(ctx context.Context) error {
+					shutdowns++
+					if buildOrdinal == 3 {
+						deadline, ok := ctx.Deadline()
+						if !ok {
+							return errors.New("restoration candidate shutdown received no cleanup deadline")
+						}
+						restorationShutdownDeadline = deadline
+					}
+					return nil
+				},
+			}, nil
+		},
+		Install: func(publication *managedRecoveryPublication, graph *managedRecoveryGraph) error {
+			installs++
+			if installs >= 2 {
+				return installErr
+			}
+			return publication.publish(graph)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.StartupWithConfig(context.Background(), backupasset.RecoveryConfig{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	err = manager.TransitionSettingsWithRestore(
+		context.Background(), backupasset.RecoveryConfig{Enabled: false},
+		func() error { return nil },
+		func() error { restoreCalls++; return nil },
+	)
+	if !errors.Is(err, installErr) {
+		t.Fatalf("transition error=%v, want restoration install failure", err)
+	}
+	if builds != 3 || installs != 3 || shutdowns != 3 || restoreCalls != 1 {
+		t.Fatalf("restoration cleanup builds=%d installs=%d shutdowns=%d restores=%d, want 3/3/3/1",
+			builds, installs, shutdowns, restoreCalls)
+	}
+	if restorationShutdownDeadline.IsZero() {
+		t.Fatal("failed restoration candidate was not shut down with the shared cleanup deadline")
+	}
+	if manager.publication.current() != nil || manager.graph != nil || !manager.downgradeFenced {
+		t.Fatalf("failed restoration publication=%p graph=%p fenced=%t",
+			manager.publication.current(), manager.graph, manager.downgradeFenced)
 	}
 }
 

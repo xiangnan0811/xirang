@@ -129,6 +129,20 @@ func (controller *AdmissionController) TransitionFeature(ctx context.Context, en
 	}, persist)
 }
 
+func (controller *AdmissionController) transitionAdmissionMode(
+	ctx context.Context,
+	target publication.AdmissionMode,
+	persist func() error,
+) error {
+	if err := controller.requireInitialized(); err != nil {
+		return err
+	}
+	if persist == nil {
+		return fmt.Errorf("%w: admission mode transition persistence is unavailable", backupasset.ErrInvalidState)
+	}
+	return controller.barrier.transition(ctx, target, persist)
+}
+
 func (controller *AdmissionController) PrepareApplicationDowngrade(ctx context.Context, downgrade func() error) error {
 	return controller.prepareDowngrade(ctx, downgrade)
 }

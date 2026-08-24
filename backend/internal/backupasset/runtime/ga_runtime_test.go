@@ -291,6 +291,10 @@ func TestTransitionFeatureStartsSearchWithoutStartupPass(t *testing.T) {
 	events := []string{}
 	ready := &atomic.Bool{}
 	runtime := EnablementRuntime(readyGAEnablement(), &runtimeFeatureTransitionerFake{events: &events})
+	admission := newAdmissionControllerFixture(t, false, nil)
+	admission.initialize(t)
+	runtime.admission = admission.controller
+	runtime.transitioner = admission.controller
 	runtime.foundation = backupasset.NewFoundationService(settingsService)
 	runtime.settings = settingsService
 	runtime.keyring = backupasset.NewKeyring(db, nil)
@@ -333,6 +337,10 @@ func TestTransitionFeatureSearchFailureDoesNotPersist(t *testing.T) {
 	events := []string{}
 	ready := &atomic.Bool{}
 	runtime := EnablementRuntime(readyGAEnablement(), &runtimeFeatureTransitionerFake{events: &events})
+	admission := newAdmissionControllerFixture(t, false, nil)
+	admission.initialize(t)
+	runtime.admission = admission.controller
+	runtime.transitioner = admission.controller
 	runtime.foundation = backupasset.NewFoundationService(settingsService)
 	runtime.settings = settingsService
 	runtime.keyring = backupasset.NewKeyring(db, nil)
@@ -347,6 +355,9 @@ func TestTransitionFeatureSearchFailureDoesNotPersist(t *testing.T) {
 	}
 	if ready.Load() {
 		t.Fatal("search failure left search ready")
+	}
+	if calls := backend.calls(); calls.overlay != 1 {
+		t.Fatalf("hot enable did not reach the configured Search failure: %+v", calls)
 	}
 	if settingsService.GetEffective("backup_assets.enabled") != "false" {
 		t.Fatalf("search failure persisted enabled=%q", settingsService.GetEffective("backup_assets.enabled"))

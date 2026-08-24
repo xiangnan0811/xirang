@@ -44,6 +44,29 @@ type backupAssetRuntimeSettingsTransitioner interface {
 	) error
 }
 
+type backupAssetRuntimeContextSettingsTransitioner interface {
+	TransitionBackupAssetSettingsContext(
+		context.Context,
+		map[string]string,
+		map[string]string,
+		map[string]string,
+		backupasset.ExportConfig,
+		func(context.Context) error,
+	) error
+}
+
+type backupAssetRuntimeContextSettingsRestorer interface {
+	TransitionBackupAssetSettingsContextWithRestore(
+		context.Context,
+		map[string]string,
+		map[string]string,
+		map[string]string,
+		backupasset.ExportConfig,
+		func(context.Context) error,
+		func(context.Context) error,
+	) error
+}
+
 type securityRiskSummaryResponse struct {
 	GeneratedAt time.Time               `json:"generated_at"`
 	Summary     securityRiskSummaryStat `json:"summary"`
@@ -92,7 +115,21 @@ func transitionBackupAssetSettingsMutation(
 	transitioner publication.FeatureTransitioner,
 	current map[string]string,
 	overlay map[string]string,
-	persist func() error,
+	persist func(context.Context) error,
+) error {
+	return transitionBackupAssetSettingsMutationWithRestore(
+		ctx, svc, transitioner, current, overlay, persist, nil,
+	)
+}
+
+func transitionBackupAssetSettingsMutationWithRestore(
+	ctx context.Context,
+	svc *settings.Service,
+	transitioner publication.FeatureTransitioner,
+	current map[string]string,
+	overlay map[string]string,
+	persist func(context.Context) error,
+	restore func(context.Context) error,
 ) error {
 	if err := svc.ValidateBackupAssetEffectiveUpdate(current, overlay); err != nil {
 		return wrapSettingsValidation(err)
@@ -101,7 +138,7 @@ func transitionBackupAssetSettingsMutation(
 	for key, value := range overlay {
 		effective[key] = value
 	}
-	if runtimeTransitioner, ok := transitioner.(backupAssetRuntimeSettingsTransitioner); ok && hasLiveBackupAssetRuntimeSettings(overlay) {
+	if runtimeTransitioner, ok := transitioner.(backupAssetRuntimeContextSettingsRestorer); ok && restore != nil {
 		config, err := backupasset.ExportConfigFromValues(effective)
 		if err != nil {
 			return err
@@ -109,7 +146,31 @@ func transitionBackupAssetSettingsMutation(
 		if _, changesRoot := overlay["backup_assets.export.root"]; changesRoot {
 			config.Root = strings.TrimSpace(current["backup_assets.export.root"])
 		}
-		return runtimeTransitioner.TransitionBackupAssetSettings(ctx, current, overlay, effective, config, persist)
+		return runtimeTransitioner.TransitionBackupAssetSettingsContextWithRestore(
+			ctx, current, overlay, effective, config, persist, restore,
+		)
+	}
+	if runtimeTransitioner, ok := transitioner.(backupAssetRuntimeContextSettingsTransitioner); ok {
+		config, err := backupasset.ExportConfigFromValues(effective)
+		if err != nil {
+			return err
+		}
+		if _, changesRoot := overlay["backup_assets.export.root"]; changesRoot {
+			config.Root = strings.TrimSpace(current["backup_assets.export.root"])
+		}
+		return runtimeTransitioner.TransitionBackupAssetSettingsContext(ctx, current, overlay, effective, config, persist)
+	}
+	if runtimeTransitioner, ok := transitioner.(backupAssetRuntimeSettingsTransitioner); ok {
+		config, err := backupasset.ExportConfigFromValues(effective)
+		if err != nil {
+			return err
+		}
+		if _, changesRoot := overlay["backup_assets.export.root"]; changesRoot {
+			config.Root = strings.TrimSpace(current["backup_assets.export.root"])
+		}
+		return runtimeTransitioner.TransitionBackupAssetSettings(
+			ctx, current, overlay, effective, config, func() error { return persist(ctx) },
+		)
 	}
 	if value, changesEnabled := overlay["backup_assets.enabled"]; changesEnabled {
 		enabled, err := strconv.ParseBool(value)
@@ -119,9 +180,9 @@ func transitionBackupAssetSettingsMutation(
 		if transitioner == nil {
 			return fmt.Errorf("backup asset feature transitioner is unavailable")
 		}
-		return transitioner.TransitionFeature(ctx, enabled, persist)
+		return transitioner.TransitionFeature(ctx, enabled, func() error { return persist(ctx) })
 	}
-	return persist()
+	return persist(ctx)
 }
 
 type settingsValidationError struct {
@@ -148,23 +209,6 @@ func wrapSettingsValidation(err error) error {
 		return err
 	}
 	return settingsValidationError{err: err}
-}
-
-func hasLiveBackupAssetRuntimeSettings(overlay map[string]string) bool {
-	for key := range overlay {
-		if key == "backup_assets.enabled" {
-			return true
-		}
-		if key == "backup_assets.export.root" {
-			continue
-		}
-		if strings.HasPrefix(key, "backup_assets.export.") || strings.HasPrefix(key, "backup_assets.archive.") ||
-			strings.HasPrefix(key, "backup_assets.recovery.") || key == "backup_assets.idempotency_ttl" ||
-			key == "backup_assets.idempotency_key_max_bytes" {
-			return true
-		}
-	}
-	return false
 }
 
 func copyBackupAssetSettings(values map[string]string) map[string]string {
@@ -333,10 +377,10 @@ func (h *SettingsHandler) persistSettingsMutation(ctx context.Context, values ma
 			foundationOverlay[key] = value
 		}
 	}
-	persist := func() error {
-		return h.db.Transaction(func(tx *gorm.DB) error {
+	persist := func(persistCtx context.Context) error {
+		return h.db.WithContext(persistCtx).Transaction(func(tx *gorm.DB) error {
 			for key, value := range values {
-				if err := h.svc.UpdateWithTx(tx, key, value); err != nil {
+				if err := h.svc.UpdateWithTxContext(persistCtx, tx, key, value); err != nil {
 					return err
 				}
 			}
@@ -344,10 +388,23 @@ func (h *SettingsHandler) persistSettingsMutation(ctx context.Context, values ma
 		})
 	}
 	if !containsFoundation {
-		return persist()
+		return persist(ctx)
 	}
 	return h.svc.WithBackupAssetMutation(ctx, func(current map[string]string) error {
-		return transitionBackupAssetSettingsMutation(ctx, h.svc, h.transitioner, current, foundationOverlay, persist)
+		keys := make([]string, 0, len(values))
+		for key := range values {
+			keys = append(keys, key)
+		}
+		overrides, err := h.svc.CaptureSettingOverridesContext(ctx, keys)
+		if err != nil {
+			return err
+		}
+		restore := func(restoreCtx context.Context) error {
+			return h.svc.RestoreSettingOverridesContext(restoreCtx, overrides)
+		}
+		return transitionBackupAssetSettingsMutationWithRestore(
+			ctx, h.svc, h.transitioner, current, foundationOverlay, persist, restore,
+		)
 	})
 }
 
@@ -356,7 +413,7 @@ func (h *SettingsHandler) deleteSettingOverride(ctx context.Context, key string)
 		return fmt.Errorf("settings handler is unavailable")
 	}
 	if !settings.IsBackupAssetFoundationSetting(key) {
-		return h.svc.Delete(key)
+		return h.svc.DeleteContext(ctx, key)
 	}
 	return h.svc.WithBackupAssetMutation(ctx, func(current map[string]string) error {
 		fallback, err := h.svc.GetFallback(key)
@@ -364,9 +421,9 @@ func (h *SettingsHandler) deleteSettingOverride(ctx context.Context, key string)
 			return wrapSettingsValidation(err)
 		}
 		override := map[string]string{key: fallback}
-		persist := func() error {
-			return h.db.Transaction(func(tx *gorm.DB) error {
-				return h.svc.DeleteWithTx(tx, key)
+		persist := func(persistCtx context.Context) error {
+			return h.db.WithContext(persistCtx).Transaction(func(tx *gorm.DB) error {
+				return h.svc.DeleteWithTxContext(persistCtx, tx, key)
 			})
 		}
 		return transitionBackupAssetSettingsMutation(ctx, h.svc, h.transitioner, current, override, persist)

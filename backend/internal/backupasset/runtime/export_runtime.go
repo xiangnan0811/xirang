@@ -2396,7 +2396,36 @@ func (runtime *managedExportRuntime) TransitionSettings(
 	config backupasset.ExportConfig,
 	persist func() error,
 ) error {
-	if runtime == nil || persist == nil {
+	return runtime.TransitionSettingsWithRestore(ctx, globalEnabled, config, persist, func() error { return nil })
+}
+
+func (runtime *managedExportRuntime) TransitionSettingsWithRestore(
+	ctx context.Context,
+	globalEnabled bool,
+	config backupasset.ExportConfig,
+	persist func() error,
+	restorePersisted func() error,
+) error {
+	if persist == nil || restorePersisted == nil {
+		return fmt.Errorf("%w: Export settings transition unavailable", backupasset.ErrInvalidState)
+	}
+	return runtime.TransitionSettingsContextWithRestore(
+		ctx,
+		globalEnabled,
+		config,
+		func(context.Context) error { return persist() },
+		func(context.Context) error { return restorePersisted() },
+	)
+}
+
+func (runtime *managedExportRuntime) TransitionSettingsContextWithRestore(
+	ctx context.Context,
+	globalEnabled bool,
+	config backupasset.ExportConfig,
+	persist func(context.Context) error,
+	restorePersisted func(context.Context) error,
+) error {
+	if runtime == nil || persist == nil || restorePersisted == nil {
 		return fmt.Errorf("%w: Export settings transition unavailable", backupasset.ErrInvalidState)
 	}
 	if runtime.beforeTransitionLock != nil {
@@ -2423,15 +2452,25 @@ func (runtime *managedExportRuntime) TransitionSettings(
 	}
 	runtime.mu.Unlock()
 	if graph == nil {
-		if err := persist(); err != nil {
+		if err := persist(transitionCtx); err != nil {
+			recoveryCtx, cancelRecovery := runtime.boundedDetachedRecoveryContext(transitionCtx)
+			defer cancelRecovery()
 			runtime.shutdownMu.Unlock()
-			return err
+			return errors.Join(err, runtime.restoreExportPersisted(recoveryCtx, restorePersisted))
 		}
 		runtime.shutdownMu.Unlock()
+		var startErr error
 		if !globalEnabled || !config.Enabled {
-			return runtime.startDisabledMaintenance(ctx, config)
+			startErr = runtime.startDisabledMaintenance(ctx, config)
+		} else {
+			startErr = runtime.startWithConfig(ctx, config)
 		}
-		return runtime.startWithConfig(ctx, config)
+		if startErr != nil {
+			recoveryCtx, cancelRecovery := runtime.boundedDetachedRecoveryContext(transitionCtx)
+			defer cancelRecovery()
+			return errors.Join(startErr, runtime.restoreExportPersisted(recoveryCtx, restorePersisted))
+		}
+		return nil
 	}
 
 	runtime.mu.Lock()
@@ -2487,17 +2526,38 @@ func (runtime *managedExportRuntime) TransitionSettings(
 		runtime.signalGraphChangedLocked()
 	}
 	runtime.mu.Unlock()
-	if err := persist(); err != nil {
+	if err := persist(transitionCtx); err != nil {
 		recoveryCtx, cancelRecovery := runtime.boundedDetachedRecoveryContext(transitionCtx)
 		defer cancelRecovery()
 		runtime.shutdownMu.Unlock()
-		return errors.Join(err, runtime.startWithConfig(recoveryCtx, previousConfig))
+		return errors.Join(err, runtime.restoreExportPersisted(recoveryCtx, restorePersisted), runtime.startWithConfig(recoveryCtx, previousConfig))
 	}
 	runtime.shutdownMu.Unlock()
+	var startErr error
 	if !globalEnabled || !config.Enabled {
-		return runtime.startDisabledMaintenance(ctx, config)
+		startErr = runtime.startDisabledMaintenance(ctx, config)
+	} else {
+		startErr = runtime.startWithConfig(ctx, config)
 	}
-	return runtime.startWithConfig(ctx, config)
+	if startErr == nil {
+		return nil
+	}
+	recoveryCtx, cancelRecovery := runtime.boundedDetachedRecoveryContext(transitionCtx)
+	defer cancelRecovery()
+	return errors.Join(startErr, runtime.restoreExportPersisted(recoveryCtx, restorePersisted), runtime.startWithConfig(recoveryCtx, previousConfig))
+}
+
+func (runtime *managedExportRuntime) restoreExportPersisted(ctx context.Context, restore func(context.Context) error) error {
+	err := restore(ctx)
+	if err == nil {
+		return nil
+	}
+	runtime.ready.Store(false)
+	runtime.accepting.Store(false)
+	if runtime.publication != nil {
+		runtime.publication.unpublish()
+	}
+	return err
 }
 
 func (runtime *managedExportRuntime) shutdownStoppedTransitionGraph(ctx context.Context, graph *managedExportGraph) error {
@@ -3191,6 +3251,9 @@ func (runtime *managedExportRuntime) boundedTransitionDrainContext(parent contex
 
 func (runtime *managedExportRuntime) boundedDetachedRecoveryContext(parent context.Context) (context.Context, context.CancelFunc) {
 	parent = nonNilExportRuntimeContext(parent)
+	if budget, _ := parent.Value(featureTransitionBudgetContextKey{}).(*featureTransitionBudget); budget != nil {
+		return newFeatureTransitionCleanupContext(parent)
+	}
 	deadline := time.Now().Add(runtime.transitionTimeout)
 	if parentDeadline, ok := parent.Deadline(); ok && parentDeadline.Before(deadline) {
 		deadline = parentDeadline

@@ -100,18 +100,25 @@ func (h *ConfigHandler) normalizeImportSettings(records []map[string]interface{}
 	return plan, foundation, nil
 }
 
-func (h *ConfigHandler) persistConfigImport(ctx context.Context, foundation map[string]string, persist func() error) error {
+func (h *ConfigHandler) persistConfigImport(
+	ctx context.Context,
+	foundation map[string]string,
+	persist func(context.Context) error,
+	restore func(context.Context) error,
+) error {
 	if persist == nil {
 		return fmt.Errorf("config import persistence callback is required")
 	}
 	if len(foundation) == 0 {
-		return persist()
+		return persist(ctx)
 	}
 	if h == nil || h.settingsSvc == nil {
 		return fmt.Errorf("settings service is unavailable for backup asset import")
 	}
 	return h.settingsSvc.WithBackupAssetMutation(ctx, func(current map[string]string) error {
-		return transitionBackupAssetSettingsMutation(ctx, h.settingsSvc, h.transitioner, current, foundation, persist)
+		return transitionBackupAssetSettingsMutationWithRestore(
+			ctx, h.settingsSvc, h.transitioner, current, foundation, persist, restore,
+		)
 	})
 }
 
@@ -491,9 +498,18 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 	}
 
 	var importedNodes, importedKeys, importedPolicies, importedTasks, importedSettings int
+	rollbackJournal := newConfigImportRollbackJournal(h.db, h.settingsSvc)
 
-	persistImport := func() error {
-		return h.db.Transaction(func(tx *gorm.DB) error {
+	persistImport := func(persistCtx context.Context) error {
+		var rollbackSnapshot *configImportRollbackSnapshot
+		err := h.db.WithContext(persistCtx).Transaction(func(tx *gorm.DB) error {
+			var captureErr error
+			rollbackSnapshot, captureErr = captureConfigImportRollbackSnapshot(
+				persistCtx, tx, data, settingsPlan, envelope,
+			)
+			if captureErr != nil {
+				return captureErr
+			}
 			// Create repos from tx for task helper functions.
 			importNodeRepo := gormrepo.NewNodeRepository(tx)
 			importPolicyRepo := gormrepo.NewPolicyRepository(tx)
@@ -773,7 +789,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				}
 				dependencyKey, hasDependency := resolveImportedDependencyKey(tx, taskData)
 				explicitCronSpec := req.CronSpec
-				taskPkg.HydrateTaskDefaultsFromPolicy(c.Request.Context(), importPolicyRepo, importNodeRepo, &req)
+				taskPkg.HydrateTaskDefaultsFromPolicy(persistCtx, importPolicyRepo, importNodeRepo, &req)
 				taskPkg.TrimTaskInput(&req)
 				taskPkg.InferTaskExecutor(&req, "")
 				managedRsyncImport := importedRsyncConfigRequiresDisconnect(req.ExecutorType, req.ExecutorConfig)
@@ -786,13 +802,13 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					req.RsyncTarget = ""
 					req.ExecutorConfig = canonicalLegacyRcloneImportConfig()
 				} else {
-					taskPkg.EnsureNodeTargetPrefix(c.Request.Context(), importNodeRepo, &req)
+					taskPkg.EnsureNodeTargetPrefix(persistCtx, importNodeRepo, &req)
 				}
 				if hasDependency && strings.TrimSpace(explicitCronSpec) == "" {
 					req.CronSpec = ""
 				}
 				if !managedRsyncImport && !managedRcloneImport {
-					taskPkg.AutoGenerateTarget(c.Request.Context(), importNodeRepo, &req)
+					taskPkg.AutoGenerateTarget(persistCtx, importNodeRepo, &req)
 				}
 				var validationErr error
 				if managedRsyncImport {
@@ -809,7 +825,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 						Msg("导入任务校验失败，跳过")
 					continue
 				}
-				if err := taskPkg.ValidateTaskRefs(c.Request.Context(), importNodeRepo, importPolicyRepo, importTaskRepo, req, 0); err != nil {
+				if err := taskPkg.ValidateTaskRefs(persistCtx, importNodeRepo, importPolicyRepo, importTaskRepo, req, 0); err != nil {
 					logger.Module("config").Warn().
 						Str("task", req.Name).
 						Err(err).
@@ -911,7 +927,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					ExecutorConfig:  current.ExecutorConfig,
 					CronSpec:        current.CronSpec,
 				}
-				if err := taskPkg.ValidateTaskRefs(c.Request.Context(), importNodeRepo, importPolicyRepo, importTaskRepo, req, current.ID); err != nil {
+				if err := taskPkg.ValidateTaskRefs(persistCtx, importNodeRepo, importPolicyRepo, importTaskRepo, req, current.ID); err != nil {
 					logger.Module("config").Warn().
 						Str("task", current.Name).
 						Err(err).
@@ -930,7 +946,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			// 导入系统设置（使用事务 handle 确保原子性）
 			if h.settingsSvc != nil {
 				for _, setting := range settingsPlan {
-					if err := h.settingsSvc.UpdateWithTx(tx, setting.key, setting.value); err != nil {
+					if err := h.settingsSvc.UpdateWithTxContext(persistCtx, tx, setting.key, setting.value); err != nil {
 						return err
 					}
 					importedSettings++
@@ -943,10 +959,14 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				}
 			}
 
-			return nil
+			return rollbackSnapshot.seal(persistCtx, tx)
 		})
+		if err == nil {
+			rollbackJournal.install(rollbackSnapshot)
+		}
+		return err
 	}
-	importErr := h.persistConfigImport(c.Request.Context(), foundationSettings, persistImport)
+	importErr := h.persistConfigImport(c.Request.Context(), foundationSettings, persistImport, rollbackJournal.Restore)
 	if importErr != nil {
 		if errors.Is(importErr, errConfigAssetGraphConflict) {
 			respondConflict(c, "导入的备份资产图与本地身份冲突")

@@ -37,7 +37,8 @@
     "08-21-backup-assets-closeout",
     "08-21-backup-assets-review-closeout",
     "08-21-backup-assets-release-acceptance",
-    "08-23-backup-assets-migration-69-compatibility"
+    "08-23-backup-assets-migration-69-compatibility",
+    "08-24-backup-assets-enable-transition-deadlock"
   ],
   "parent": null,
   "relatedFiles": [],

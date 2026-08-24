@@ -301,6 +301,17 @@ type RecoveryConfig struct {
 	ReconciliationFindingLimit int
 }
 
+// FoundationTransitionConfig is the complete typed configuration needed to
+// prepare one backup-assets enable transition without rereading settings.
+type FoundationTransitionConfig struct {
+	Enabled  bool
+	Content  ContentConfig
+	Search   SearchConfig
+	Overlay  OverlayConfig
+	Export   ExportConfig
+	Recovery RecoveryConfig
+}
+
 func NewFoundationService(reader SettingsReader) *FoundationService {
 	return &FoundationService{settings: reader}
 }
@@ -457,11 +468,24 @@ func (service *FoundationService) CatalogConfig() (CatalogConfig, error) {
 }
 
 func (service *FoundationService) SearchOverlayConfig() (SearchConfig, OverlayConfig, error) {
-	values, err := service.atomicFoundationValues()
+	values, err := service.foundationValuesSnapshot()
 	if err != nil {
 		return SearchConfig{}, OverlayConfig{}, err
 	}
+	return SearchOverlayConfigFromValues(values)
+}
 
+// SearchOverlayConfigFromValues parses Search and Overlay from one complete,
+// validated foundation snapshot without reading settings.
+func SearchOverlayConfigFromValues(values map[string]string) (SearchConfig, OverlayConfig, error) {
+	if err := validateCompleteFoundationValues(values); err != nil {
+		return SearchConfig{}, OverlayConfig{}, err
+	}
+	return searchOverlayConfigFromValidatedValues(values)
+}
+
+func searchOverlayConfigFromValidatedValues(values map[string]string) (SearchConfig, OverlayConfig, error) {
+	var err error
 	enabled, err := parseFoundationBool(values, "backup_assets.enabled")
 	if err != nil {
 		return SearchConfig{}, OverlayConfig{}, err
@@ -598,10 +622,24 @@ func (service *FoundationService) SearchOverlayConfig() (SearchConfig, OverlayCo
 }
 
 func (service *FoundationService) ContentConfig() (ContentConfig, error) {
-	values, err := service.atomicFoundationValues()
+	values, err := service.foundationValuesSnapshot()
 	if err != nil {
 		return ContentConfig{}, err
 	}
+	return ContentConfigFromValues(values)
+}
+
+// ContentConfigFromValues parses Content from one complete, validated
+// foundation snapshot without reading settings.
+func ContentConfigFromValues(values map[string]string) (ContentConfig, error) {
+	if err := validateCompleteFoundationValues(values); err != nil {
+		return ContentConfig{}, err
+	}
+	return contentConfigFromValidatedValues(values)
+}
+
+func contentConfigFromValidatedValues(values map[string]string) (ContentConfig, error) {
+	var err error
 	result := ContentConfig{}
 	if result.Enabled, err = parseFoundationBool(values, "backup_assets.enabled"); err != nil {
 		return ContentConfig{}, err
@@ -810,13 +848,8 @@ func (service *FoundationService) RecoveryConfig() (RecoveryConfig, error) {
 // snapshot. Settings transitions use it before persistence so graph validation
 // never rereads the old effective values.
 func RecoveryConfigFromValues(values map[string]string) (RecoveryConfig, error) {
-	for _, key := range settings.BackupAssetFoundationSettingKeys() {
-		if _, exists := values[key]; !exists {
-			return RecoveryConfig{}, fmt.Errorf("%w: incomplete backup asset settings snapshot", ErrInvalidState)
-		}
-	}
-	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
-		return RecoveryConfig{}, fmt.Errorf("%w: %v", ErrInvalidState, err)
+	if err := validateCompleteFoundationValues(values); err != nil {
+		return RecoveryConfig{}, err
 	}
 	return recoveryConfigFromValidatedValues(values)
 }
@@ -878,15 +911,10 @@ func recoveryConfigFromValidatedValues(values map[string]string) (RecoveryConfig
 
 // ExportConfigFromValues parses one complete, validated foundation snapshot
 // without reading settings. Callers that already hold the settings mutation
-// lock use it to prepare a prospective Export graph safely.
+// gate use it to prepare a prospective Export graph safely.
 func ExportConfigFromValues(values map[string]string) (ExportConfig, error) {
-	for _, key := range settings.BackupAssetFoundationSettingKeys() {
-		if _, exists := values[key]; !exists {
-			return ExportConfig{}, fmt.Errorf("%w: incomplete backup asset settings snapshot", ErrInvalidState)
-		}
-	}
-	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
-		return ExportConfig{}, fmt.Errorf("%w: %v", ErrInvalidState, err)
+	if err := validateCompleteFoundationValues(values); err != nil {
+		return ExportConfig{}, err
 	}
 	return exportConfigFromValidatedValues(values)
 }
@@ -966,7 +994,65 @@ func exportConfigFromValidatedValues(values map[string]string) (ExportConfig, er
 	return result, nil
 }
 
-func (service *FoundationService) atomicFoundationValues() (map[string]string, error) {
+// FoundationTransitionConfigFromValues validates one complete snapshot once
+// and builds every typed config used by the enable transition.
+func FoundationTransitionConfigFromValues(values map[string]string) (FoundationTransitionConfig, error) {
+	if err := validateCompleteFoundationValues(values); err != nil {
+		return FoundationTransitionConfig{}, err
+	}
+	enabled, err := parseFoundationBool(values, "backup_assets.enabled")
+	if err != nil {
+		return FoundationTransitionConfig{}, err
+	}
+	contentConfig, err := contentConfigFromValidatedValues(values)
+	if err != nil {
+		return FoundationTransitionConfig{}, err
+	}
+	searchConfig, overlayConfig, err := searchOverlayConfigFromValidatedValues(values)
+	if err != nil {
+		return FoundationTransitionConfig{}, err
+	}
+	exportConfig, err := exportConfigFromValidatedValues(values)
+	if err != nil {
+		return FoundationTransitionConfig{}, err
+	}
+	recoveryConfig, err := recoveryConfigFromValidatedValues(values)
+	if err != nil {
+		return FoundationTransitionConfig{}, err
+	}
+	return FoundationTransitionConfig{
+		Enabled:  enabled,
+		Content:  contentConfig,
+		Search:   searchConfig,
+		Overlay:  overlayConfig,
+		Export:   exportConfig,
+		Recovery: recoveryConfig,
+	}, nil
+}
+
+// TransitionConfig reads one complete atomic Foundation snapshot and builds
+// the typed bundle used by runtime transitions outside a settings mutation.
+func (service *FoundationService) TransitionConfig() (FoundationTransitionConfig, error) {
+	values, err := service.foundationValuesSnapshot()
+	if err != nil {
+		return FoundationTransitionConfig{}, err
+	}
+	return FoundationTransitionConfigFromValues(values)
+}
+
+func validateCompleteFoundationValues(values map[string]string) error {
+	for _, key := range settings.BackupAssetFoundationSettingKeys() {
+		if _, exists := values[key]; !exists {
+			return fmt.Errorf("%w: incomplete backup asset settings snapshot", ErrInvalidState)
+		}
+	}
+	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidState, err)
+	}
+	return nil
+}
+
+func (service *FoundationService) foundationValuesSnapshot() (map[string]string, error) {
 	if service == nil || service.settings == nil {
 		return nil, fmt.Errorf("%w: settings service is unavailable", ErrInvalidState)
 	}
@@ -978,13 +1064,16 @@ func (service *FoundationService) atomicFoundationValues() (map[string]string, e
 	if err != nil {
 		return nil, fmt.Errorf("%w: read backup asset settings snapshot: %v", ErrInvalidState, err)
 	}
-	for _, key := range settings.BackupAssetFoundationSettingKeys() {
-		if _, exists := values[key]; !exists {
-			return nil, fmt.Errorf("%w: incomplete backup asset settings snapshot", ErrInvalidState)
-		}
+	return values, nil
+}
+
+func (service *FoundationService) atomicFoundationValues() (map[string]string, error) {
+	values, err := service.foundationValuesSnapshot()
+	if err != nil {
+		return nil, err
 	}
-	if err := settings.ValidateBackupAssetFoundationConfig(values); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidState, err)
+	if err := validateCompleteFoundationValues(values); err != nil {
+		return nil, err
 	}
 	return values, nil
 }

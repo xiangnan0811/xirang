@@ -67,6 +67,19 @@ func (worker *SearchWorker) StartupPass(ctx context.Context) error {
 	return worker.runPass(ctx)
 }
 
+// StartupPassWithConfig runs one bounded pass from an already validated
+// transition snapshot. It deliberately does not invoke the dynamic Config
+// source because settings mutations already own the Foundation snapshot gate.
+func (worker *SearchWorker) StartupPassWithConfig(ctx context.Context, config SearchWorkerConfig) error {
+	if worker == nil {
+		return fmt.Errorf("%w: Search worker unavailable", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return worker.runPassWithConfig(ctx, config)
+}
+
 func (worker *SearchWorker) Run(ctx context.Context) {
 	if worker == nil {
 		return
@@ -136,6 +149,10 @@ func (worker *SearchWorker) runPass(ctx context.Context) error {
 		worker.metrics.ObserveScan(search.ScanOutcomeFailure)
 		return err
 	}
+	return worker.runPassWithConfig(ctx, config)
+}
+
+func (worker *SearchWorker) runPassWithConfig(ctx context.Context, config SearchWorkerConfig) error {
 	if !config.Enabled {
 		worker.metrics.ObserveScan(search.ScanOutcomeDisabled)
 		return nil

@@ -158,12 +158,28 @@ func NewService(dependencies ServiceDependencies) (*Service, error) {
 // TransitionIdempotencySettings keeps the dynamically shared Overlay settings
 // aligned with Export only after their durable setting mutation succeeds.
 func (service *Service) TransitionIdempotencySettings(ttl time.Duration, keyMaxBytes int, persist func() error) error {
-	if service == nil || persist == nil || ttl <= 0 || keyMaxBytes < 16 {
+	if persist == nil {
+		return fmt.Errorf("%w: Overlay idempotency settings", backupasset.ErrInvalidState)
+	}
+	return service.TransitionIdempotencySettingsContext(
+		context.Background(), ttl, keyMaxBytes, func(context.Context) error { return persist() },
+	)
+}
+
+// TransitionIdempotencySettingsContext keeps the bounded transition context
+// attached to the durable mutation before publishing the in-memory settings.
+func (service *Service) TransitionIdempotencySettingsContext(
+	ctx context.Context,
+	ttl time.Duration,
+	keyMaxBytes int,
+	persist func(context.Context) error,
+) error {
+	if service == nil || ctx == nil || persist == nil || ttl <= 0 || keyMaxBytes < 16 {
 		return fmt.Errorf("%w: Overlay idempotency settings", backupasset.ErrInvalidState)
 	}
 	service.idempotencyTransitionMu.Lock()
 	defer service.idempotencyTransitionMu.Unlock()
-	if err := persist(); err != nil {
+	if err := persist(ctx); err != nil {
 		return err
 	}
 	service.idempotencyMu.Lock()

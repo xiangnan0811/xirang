@@ -1,0 +1,3 @@
+{"file":".trellis/tasks/08-24-backup-assets-enable-transition-deadlock/research/spec-contracts.md","reason":"Task-scoped routing for atomic settings transitions, cancellation, error mapping, logging, testing, and delivery."}
+{"file":".trellis/tasks/08-24-backup-assets-enable-transition-deadlock/research/root-cause-and-test-surface.md","reason":"Confirmed production evidence, exact Content/Search lock re-entry chains, affected entry points, and test gaps."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Secret-safe structured logging and bounded cancellation/cleanup conventions for transition failures."}

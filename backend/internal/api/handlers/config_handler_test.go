@@ -215,14 +215,14 @@ func TestConfigImportBlockedBackupAssetsEnabledDoesNotPersist(t *testing.T) {
 	}
 	svc := settings.NewService(db)
 	spy := &settingsTransitionSpy{}
-	handler := NewConfigHandler(db, svc).WithBackupAssetTransitioner(assetruntime.EnablementRuntime(
+	handler := NewConfigHandler(db, svc).WithBackupAssetTransitioner(settingsFeatureTransitionOnly{FeatureTransitioner: assetruntime.EnablementRuntime(
 		settingsEnablementReadiness{snapshot: ga.ReadinessSnapshot{
 			Class:             ga.InstallationExisting,
 			Status:            ga.ReadinessBlocked,
 			InventoryComplete: false,
 		}},
 		spy,
-	))
+	)})
 	router := gin.New()
 	router.POST("/config/import", handler.Import)
 
@@ -301,6 +301,275 @@ func TestConfigImportDynamicExportMutationUsesRuntimeSettingsTransition(t *testi
 	}
 	if spy.effective["backup_assets.export.ticket_max_requests"] != "128" || spy.config.Ticket.MaxRequests != 128 {
 		t.Fatalf("effective=%q config=%+v", spy.effective["backup_assets.export.ticket_max_requests"], spy.config)
+	}
+}
+
+func TestConfigImportPersistenceHonorsRuntimeOperationCancellationWithoutPartialImport(t *testing.T) {
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("migrate canceled import fixtures: %v", err)
+	}
+	svc := settings.NewService(db)
+	runtime := &settingsCanceledPersistenceRuntime{cancelPersist: true}
+	handler := NewConfigHandler(db, svc).WithBackupAssetTransitioner(runtime)
+	router := gin.New()
+	router.POST("/config/import", handler.Import)
+	body := `{
+  "nodes":[{"name":"canceled-import-node","host":"10.0.0.18","port":22,"username":"root","auth_type":"key"}],
+  "system_settings":[
+    {"key":"login.rate_limit","value":"11"},
+    {"key":"backup_assets.export.worker_concurrency","value":"3"}
+  ]
+}`
+
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want canceled import persistence to return generic 500", response.Code, response.Body.String())
+	}
+	if !runtime.called {
+		t.Fatal("config import did not use the context-aware runtime settings transition")
+	}
+	var envelope Response
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode canceled import response: %v", err)
+	}
+	if envelope.Code != http.StatusInternalServerError || envelope.Message != "服务器内部错误" {
+		t.Fatalf("unexpected canceled import envelope: %+v", envelope)
+	}
+	var nodeCount, settingCount int64
+	if err := db.Model(&model.Node{}).Where("name = ?", "canceled-import-node").Count(&nodeCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.SystemSetting{}).
+		Where("key IN ?", []string{"login.rate_limit", "backup_assets.export.worker_concurrency"}).
+		Count(&settingCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if nodeCount != 0 || settingCount != 0 {
+		t.Fatalf("canceled import partially persisted nodes=%d settings=%d", nodeCount, settingCount)
+	}
+}
+
+func TestConfigImportPostPersistRuntimeFailureRestoresEntireImport(t *testing.T) {
+	setConfigHandlerTestEncryption(t)
+	db := openConfigHandlerTestDB(t)
+	migrateConfigAssetGraphDB(t, db)
+	svc := settings.NewService(db)
+	runtimeErr := errors.New("FAKE_POST_PERSIST_SEARCH_FAILURE_FOR_TEST_ONLY")
+	runtime := &settingsCanceledPersistenceRuntime{failAfterPersist: runtimeErr}
+	handler := NewConfigHandler(db, svc).WithBackupAssetTransitioner(runtime)
+	router := gin.New()
+	router.POST("/config/import", handler.Import)
+	body := `{
+  "version":"2.0",
+  "document_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "data":{
+    "nodes":[{"name":"post-persist-node","host":"10.0.0.20","port":22,"username":"root","auth_type":"key"}],
+    "tasks":[{
+      "name":"post-persist-task","node_name":"post-persist-node","executor_type":"rsync",
+      "executor_config":"{\"version\":1,\"publication_mode\":\"versioned_hardlink\",\"managed_root\":\"/foreign/managed\"}"
+    }],
+    "system_settings":[
+      {"key":"login.rate_limit","value":"11"},
+      {"key":"backup_assets.content_preview_ttl","value":"3m"}
+    ],
+    "backup_repositories":[{
+      "repository_ref":"repository_1","provider_kind":"restic","display_name":"post-persist-repository",
+      "version_mode":"native_snapshot","status":"online","immutability_level":"xirang_managed",
+      "identity_ref":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }],
+    "task_repository_links":[],"backup_retention_policies":[],"recovery_point_holds":[]
+  }
+}`
+
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want post-persist runtime failure to return generic 500", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), runtimeErr.Error()) {
+		t.Fatalf("post-persist runtime error leaked: %s", response.Body.String())
+	}
+	for name, query := range map[string]*gorm.DB{
+		"node":       db.Model(&model.Node{}).Where("name = ?", "post-persist-node"),
+		"task":       db.Model(&model.Task{}).Where("name = ?", "post-persist-task"),
+		"settings":   db.Model(&model.SystemSetting{}).Where("key IN ?", []string{"login.rate_limit", "backup_assets.content_preview_ttl"}),
+		"repository": db.Model(&model.BackupRepository{}).Where("display_name = ?", "post-persist-repository"),
+		"import-ref": db.Model(&model.BackupAssetConfigImportRef{}).Where("source_document_id = ?", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+	} {
+		var count int64
+		if err := query.Count(&count).Error; err != nil {
+			t.Fatalf("count %s: %v", name, err)
+		}
+		if count != 0 {
+			t.Fatalf("post-persist failure left %s rows=%d", name, count)
+		}
+	}
+	if got := svc.GetEffective("backup_assets.content_preview_ttl"); got != "2m" {
+		t.Fatalf("post-persist failure left Foundation value=%q", got)
+	}
+}
+
+func TestConfigImportPostPersistRuntimeFailureRestoresOverwritesAndCompleteAssetGraph(t *testing.T) {
+	setConfigHandlerTestEncryption(t)
+	source := openConfigHandlerTestDB(t)
+	migrateConfigAssetGraphDB(t, source)
+	seedConfigV2SharedAssetGraph(t, source)
+	payload := parseConfigExportPayload(t, serveConfigExport(t, source, true))
+	data, _ := payload["data"].(map[string]any)
+	data["system_settings"] = []map[string]string{
+		{"key": "backup_assets.enabled", "value": "true"},
+		{"key": "backup_assets.content_preview_ttl", "value": "3m"},
+		{"key": "login.rate_limit", "value": "11"},
+	}
+	payload["data"] = data
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	target := openConfigHandlerTestDB(t)
+	migrateConfigAssetGraphDB(t, target)
+	oldNode := model.Node{
+		Name: "asset-node", Host: "10.99.0.1", Port: 2222, Username: "prior-user", AuthType: "key", BackupDir: "prior-asset-node",
+	}
+	if err := target.Create(&oldNode).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldTask := model.Task{
+		Name: "asset-task-a", NodeID: oldNode.ID, ExecutorType: "local", Command: "prior-command",
+		Status: "pending", Source: "manual", Enabled: false,
+	}
+	if err := target.Create(&oldTask).Error; err != nil {
+		t.Fatal(err)
+	}
+	priorUpdatedAt := time.Date(2026, 8, 24, 9, 30, 0, 0, time.UTC)
+	for _, row := range []model.SystemSetting{
+		{Key: "backup_assets.content_preview_ttl", Value: "4m", UpdatedAt: priorUpdatedAt},
+		{Key: "login.rate_limit", Value: "7", UpdatedAt: priorUpdatedAt},
+	} {
+		if err := target.Create(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := settings.NewService(target)
+	runtimeErr := errors.New("FAKE_POST_PERSIST_STAMP_FAILURE_FOR_TEST_ONLY")
+	runtime := &settingsCanceledPersistenceRuntime{failAfterPersist: runtimeErr}
+	handler := NewConfigHandler(target, svc).WithBackupAssetTransitioner(runtime)
+	router := gin.New()
+	router.POST("/config/import", func(c *gin.Context) {
+		c.Set("user_id", uint(9))
+		handler.Import(c)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/config/import?conflict=overwrite", strings.NewReader(string(body)))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), runtimeErr.Error()) {
+		t.Fatalf("status=%d body=%s, want generic non-leaking 500", response.Code, response.Body.String())
+	}
+	var restoredNode model.Node
+	if err := target.Where("id = ?", oldNode.ID).Take(&restoredNode).Error; err != nil {
+		t.Fatal(err)
+	}
+	if restoredNode.Host != oldNode.Host || restoredNode.Port != oldNode.Port || restoredNode.Username != oldNode.Username {
+		t.Fatalf("node overwrite not restored: got=%+v prior=%+v", restoredNode.Sanitized(), oldNode.Sanitized())
+	}
+	var restoredTask model.Task
+	if err := target.Where("id = ?", oldTask.ID).Take(&restoredTask).Error; err != nil {
+		t.Fatal(err)
+	}
+	if restoredTask.Command != oldTask.Command || restoredTask.ExecutorType != oldTask.ExecutorType || restoredTask.Enabled != oldTask.Enabled {
+		t.Fatalf("task overwrite not restored: command=%q executor=%q enabled=%t", restoredTask.Command, restoredTask.ExecutorType, restoredTask.Enabled)
+	}
+	var createdClassic int64
+	if err := target.Model(&model.Task{}).Where("name = ?", "asset-task-b").Count(&createdClassic).Error; err != nil || createdClassic != 0 {
+		t.Fatalf("created task remained count=%d err=%v", createdClassic, err)
+	}
+	for key, want := range map[string]string{
+		"backup_assets.content_preview_ttl": "4m",
+		"login.rate_limit":                  "7",
+	} {
+		var row model.SystemSetting
+		if err := target.Where("key = ?", key).Take(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+		if row.Value != want || !row.UpdatedAt.Equal(priorUpdatedAt) {
+			t.Fatalf("setting %s restored value/time=%q/%s, want %q/%s", key, row.Value, row.UpdatedAt, want, priorUpdatedAt)
+		}
+	}
+	var enabledCount int64
+	if err := target.Model(&model.SystemSetting{}).Where("key = ?", "backup_assets.enabled").Count(&enabledCount).Error; err != nil || enabledCount != 0 {
+		t.Fatalf("absent enabled override restored count=%d err=%v", enabledCount, err)
+	}
+	for name, query := range map[string]*gorm.DB{
+		"repository": target.Model(&model.BackupRepository{}),
+		"binding":    target.Model(&model.RepositoryAccessBinding{}),
+		"link":       target.Model(&model.TaskRepositoryLink{}),
+		"policy":     target.Model(&model.BackupRetentionPolicy{}),
+		"import-ref": target.Model(&model.BackupAssetConfigImportRef{}),
+	} {
+		var count int64
+		if err := query.Count(&count).Error; err != nil || count != 0 {
+			t.Fatalf("asset graph %s remained count=%d err=%v", name, count, err)
+		}
+	}
+}
+
+func TestConfigImportUsesOneProspectiveContentSearchPersistenceBoundary(t *testing.T) {
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatalf("migrate prospective import fixtures: %v", err)
+	}
+	svc := settings.NewService(db)
+	runtime := &settingsCanceledPersistenceRuntime{}
+	handler := NewConfigHandler(db, svc).WithBackupAssetTransitioner(runtime)
+	router := gin.New()
+	router.POST("/config/import", handler.Import)
+	body := `{
+  "nodes":[{"name":"prospective-import-node","host":"10.0.0.19","port":22,"username":"root","auth_type":"key"}],
+  "system_settings":[
+    {"key":"login.rate_limit","value":"11"},
+    {"key":"backup_assets.content_preview_ttl","value":"3m"},
+    {"key":"backup_assets.search_page_size_max","value":"250"}
+  ]
+}`
+
+	request := httptest.NewRequest(http.MethodPost, "/config/import", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !runtime.called || runtime.calls != 1 || runtime.bundle.Content.PreviewTTL != 3*time.Minute || runtime.bundle.Search.PageSizeMax != 250 {
+		t.Fatalf("import prospective transition calls=%d preview_ttl=%s page_size=%d", runtime.calls, runtime.bundle.Content.PreviewTTL, runtime.bundle.Search.PageSizeMax)
+	}
+	if runtime.current["backup_assets.content_preview_ttl"] != "2m" ||
+		runtime.effective["backup_assets.content_preview_ttl"] != "3m" ||
+		runtime.effective["backup_assets.search_page_size_max"] != "250" {
+		t.Fatalf("import current/effective preview=%q/%q page_size=%q", runtime.current["backup_assets.content_preview_ttl"], runtime.effective["backup_assets.content_preview_ttl"], runtime.effective["backup_assets.search_page_size_max"])
+	}
+	var nodeCount, settingCount int64
+	if err := db.Model(&model.Node{}).Where("name = ?", "prospective-import-node").Count(&nodeCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.SystemSetting{}).
+		Where("key IN ?", []string{"login.rate_limit", "backup_assets.content_preview_ttl", "backup_assets.search_page_size_max"}).
+		Count(&settingCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if nodeCount != 1 || settingCount != 3 {
+		t.Fatalf("import persistence boundary nodes=%d settings=%d", nodeCount, settingCount)
 	}
 }
 

@@ -98,6 +98,11 @@ After implementation:
 - [ ] Admin GA JSON/UI stays counts + opaque IDs; inventory never mutates
       Provider bytes; Compose export volume is Core+init only. See backend
       quality “Backup Asset GA Enablement And Inventory Isolation”.
+- [ ] Foundation PUT/DELETE/import derives one prospective bundle and carries
+      one context/restore contract through settings, runtime, and persistence;
+      see backend quality “Foundation Settings Lock Order And Prospective
+      Runtime Transition” and backend error-handling “Foundation Transition
+      Cancellation And Compensation Errors”.
 
 ---
 
