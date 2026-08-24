@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.50.5](https://github.com/xiangnan0811/xirang/compare/v0.50.4...v0.50.5) (2026-08-24)
+
+
+### 🐛 Bug Fixes
+
+* **catalog:** batch SQLite entry persistence ([#457](https://github.com/xiangnan0811/xirang/issues/457)) ([5618510](https://github.com/xiangnan0811/xirang/commit/56185103c90f67c16fb9ca119eb2e068c0154756))
+
 ## [0.50.4](https://github.com/xiangnan0811/xirang/compare/v0.50.3...v0.50.4) (2026-08-24)
 
 
