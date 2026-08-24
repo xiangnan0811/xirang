@@ -934,6 +934,136 @@ if err := h.persistSettingsMutation(ctx, req); err != nil {
 }
 ```
 
+---
+
+## Scenario: Foundation Transition Cancellation And Compensation Errors
+
+### 1. Scope / Trigger
+
+- Trigger: any context cancellation, timeout, validation failure, runtime-stage
+  failure, persistence failure, or compensation failure while PUT,
+  DELETE-restore, or config import changes Foundation settings.
+- Applies to settings-gate acquisition, prospective parsing, runtime
+  transition, Content/Search/Overlay/Export/Recovery work, handler response
+  mapping, exact override restore, and the config-import post-persist undo
+  journal.
+
+### 2. Signatures
+
+- `TransitionBackupAssetSettingsContext(..., persist func(context.Context) error) error`
+  and `TransitionBackupAssetSettingsContextWithRestore(...,
+  persist func(context.Context) error, restore func(context.Context) error) error`
+  are the mutation-inner runtime seams.
+- `settings.Service.UpdateContext`, `UpdateWithTxContext`,
+  `UpdateManyContext`, `DeleteContext`, and `DeleteWithTxContext` preserve the
+  runtime-supplied context through GORM.
+- `CaptureBackupAssetOverridesContext` records exact rows or exact absence;
+  `RestoreBackupAssetOverridesContext` restores them transactionally and
+  invalidates the settings cache after commit.
+- Mixed settings PUT uses `CaptureSettingOverridesContext` and
+  `RestoreSettingOverridesContext` so Foundation and ordinary request keys share
+  the same exact rollback boundary.
+- Compensation failure is discoverable with
+  `errors.Is(err, runtime.ErrFeatureTransitionCompensation)` while the primary
+  error identity remains discoverable. A fenced runtime rejects work with
+  `backupasset.ErrInvalidState` until restart.
+
+### 3. Contracts
+
+- Return validation errors before side effects. Preserve sentinel and context
+  identity with `%w`, `errors.Join`, or an equivalent `Unwrap`; never replace a
+  cancellation, primary transition error, or compensation error with text.
+- The operation context is propagated through all forward work. Compensation
+  may detach from caller cancellation so it can undo persisted state, but all
+  cleanup callbacks share one absolute deadline reserved from the bounded
+  transition budget. A nested restore may not start a fresh timeout.
+- On forward failure, stop joined asynchronous work before returning. Run
+  compensation in reverse dependency order, restore exact override absence/raw
+  rows and prior runtime facts, and join every compensation failure with the
+  primary error.
+- If a PUT transaction co-commits ordinary settings with a Foundation change,
+  the runtime-supplied shared cleanup context restores the whole request key set
+  in one context-bound transaction. Restoring only the Foundation overlay is a
+  partial commit.
+- Config import persistence must install a sealed post-persist undo journal.
+  If runtime fails after commit, restore the complete imported database graph,
+  not just settings. Tests/fakes must match the production graph and callback
+  order so missing rollback edges cannot hide behind fake-only green tests.
+- If compensation fails, mark runtime not ready and engage the sticky
+  restart-only fence before returning. Never offer an online clear/retry that
+  assumes the partially compensated object graph is trustworthy.
+- HTTP 409 remains reserved for recognized GA enablement sentinels. Unexpected
+  transition, cancellation, persistence, and compensation failures use the
+  existing generic 500 response. Errors, logs, and responses must not expose
+  raw setting values, root paths, secrets, locators, credentials, proofs,
+  tickets, provider evidence, or `err.Error()`.
+
+### 4. Validation & Error Matrix
+
+| Condition | Returned error / response | Required state |
+|---|---|---|
+| Gate wait is canceled before ownership | Context error; generic response at HTTP boundary | Mutation callback was never entered. |
+| Prospective parser rejects an incomplete or invalid bundle | Wrapped validation sentinel; safe client mapping where already defined | No runtime or persistence side effects. |
+| GA readiness blocks enablement | Existing GA sentinel; HTTP 409 `就绪检查未完成` | Requested value not persisted; admission unchanged. |
+| Forward runtime/persistence stage fails and compensation succeeds | Original error identity; generic HTTP 500 | Exact prior settings/runtime/import graph, including every key in a mixed PUT, restored within the shared deadline. |
+| Caller cancels after a side effect | Cancellation/primary identity retained; generic HTTP 500 | Joined work stopped and bounded compensation completed. |
+| Compensation also fails | Primary identity plus `ErrFeatureTransitionCompensation`; generic HTTP 500 | Runtime not ready and restart-only fence engaged. |
+| Request reaches an already fenced runtime | `ErrInvalidState`; generic HTTP 500 | No forward work or persistence; fence remains set. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a post-persist import failure returns a generic 500, preserves the
+  primary error for internal matching, restores the exact prior graph within
+  the shared deadline, and emits only structural logging fields.
+- Base: validation or GA conflict fails before side effects and retains its
+  established safe response mapping.
+- Bad: `fmt.Errorf("transition failed: %v", err)`, `context.Background()` for
+  forward persistence, a new timeout per cleanup callback, returning the first
+  compensation error alone, logging a raw root/locator/value, or clearing a
+  compensation fence online.
+
+### 6. Tests Required
+
+- Cancellation tests cover gate wait, each context-aware forward stage,
+  persistence, and bounded cleanup; assertions use `errors.Is` for context,
+  primary, and compensation identities.
+- Table-driven failure injection covers every stage and exact rollback of raw
+  override rows/absence, admission/readiness/stamp, candidates, and the complete
+  config-import graph.
+- Mixed PUT failure injection covers an existing ordinary override and an
+  absent ordinary override alongside a Foundation key; it asserts exact raw
+  timestamp/value, absence, cache state, atomicity, and generic HTTP 500.
+- A compensation-failure test proves sticky restart-only fencing and rejection
+  of subsequent readiness/transition attempts.
+- Real production-equivalent handler probes cover PUT, DELETE, and import; fake
+  seam tests remain supplemental rather than the only coverage.
+- Privacy tests and source scans prove generic 500 responses and absence of raw
+  settings, filesystem roots, secrets, locators, credentials, proofs, tickets,
+  and provider evidence in errors/logs/responses.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+if err := persist(context.Background()); err != nil {
+    _ = restore(context.Background())
+    return fmt.Errorf("transition failed for %s: %v", rawRoot, err)
+}
+```
+
+Correct:
+
+```go
+if err := persist(opCtx); err != nil {
+    if restoreErr := restore(sharedCleanupCtx); restoreErr != nil {
+        runtime.fenceAfterCompensationFailure()
+        return errors.Join(err, runtime.ErrFeatureTransitionCompensation, restoreErr)
+    }
+    return fmt.Errorf("persist Foundation transition: %w", err)
+}
+```
+
 Correct:
 
 ```go
