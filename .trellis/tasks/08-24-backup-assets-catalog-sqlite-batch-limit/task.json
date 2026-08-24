@@ -1,0 +1,38 @@
+{
+  "id": "backup-assets-catalog-sqlite-batch-limit",
+  "name": "backup-assets-catalog-sqlite-batch-limit",
+  "title": "Catalog SQLite 默认批次变量上限修复",
+  "description": "修复有效 Rsync mutable point 在默认 2000 条 Catalog 批次下反复快速失败，确保 SQLite 持久化分块并恢复真实资产索引。",
+  "status": "in_progress",
+  "dev_type": "backend",
+  "scope": "backup-assets",
+  "package": "backend",
+  "priority": "P0",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-08-24",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "backup-assets-release-acceptance",
+  "relatedFiles": [
+    "backend/internal/backupasset/catalog/indexer.go",
+    "backend/internal/backupasset/catalog/indexer_test.go"
+  ],
+  "notes": "Production v0.50.4 formal Connect succeeded, but Catalog generations 1 through 4 failed in about 0.4 seconds with catalog_build_failed, zero indexed entries, an online/access-active repository, available content/list, and no concurrent Task run. Leading hypothesis: default logical batch 2000 multiplied by CatalogEntry persisted columns exceeds bundled go-sqlite3's 32766 variable ceiling. TDD must confirm the exact SQLite RED before implementation. Production repository remains connected; no SQL repair, manual retry, restart, or node-log re-enable.",
+  "meta": {
+    "incident": "v0_50_4_real_rsync_catalog_repeated_build_failed",
+    "implementation_authorized": true,
+    "root_cause_state": "hypothesis_pending_red",
+    "root_cause_hypothesis": "catalog_entry_logical_batch_exceeds_sqlite_bind_variable_limit",
+    "production_mutation": "not_authorized_until_fixed_release_upgrade",
+    "schema_change": "none_expected",
+    "privacy": "no_paths_names_locators_content_credentials_or_raw_errors",
+    "release_gate": "fixed_image_then_resume_parent_real_data_acceptance"
+  }
+}
