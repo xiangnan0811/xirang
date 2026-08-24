@@ -79,7 +79,8 @@ type ContentSessionRevocationSource interface {
 
 type contentRuntimeManager interface {
 	Startup(context.Context) error
-	PrepareEnable(context.Context) error
+	PrepareEnable(context.Context, backupasset.ContentConfig) error
+	RestoreEnable(context.Context, backupasset.ContentConfig) error
 	PrepareDisable(context.Context) error
 	SetReady(bool)
 	StopAccepting()
@@ -100,6 +101,26 @@ type exportRuntimeManager interface {
 	PrepareSchemaDown(context.Context, func() error) error
 }
 
+type exportRuntimeSettingsRestorer interface {
+	TransitionSettingsWithRestore(
+		context.Context,
+		bool,
+		backupasset.ExportConfig,
+		func() error,
+		func() error,
+	) error
+}
+
+type exportRuntimeContextSettingsRestorer interface {
+	TransitionSettingsContextWithRestore(
+		context.Context,
+		bool,
+		backupasset.ExportConfig,
+		func(context.Context) error,
+		func(context.Context) error,
+	) error
+}
+
 type recoveryRuntimeManager interface {
 	StartupWithConfig(context.Context, backupasset.RecoveryConfig) error
 	TransitionSettingsWithRestore(
@@ -113,6 +134,15 @@ type recoveryRuntimeManager interface {
 	Run(context.Context)
 	Shutdown(context.Context) error
 	PrepareSchemaDown(context.Context, func() error) error
+}
+
+type recoveryRuntimeContextSettingsRestorer interface {
+	TransitionSettingsContextWithRestore(
+		context.Context,
+		backupasset.RecoveryConfig,
+		func(context.Context) error,
+		func(context.Context) error,
+	) error
 }
 
 type runtimeStopTerminalizer interface {
@@ -201,6 +231,7 @@ type Runtime struct {
 	transitioner            publication.FeatureTransitioner
 	metrics                 publication.Metrics
 	gaMetrics               ga.Metrics
+	featureTransitionFenced atomic.Bool
 
 	mu          sync.Mutex
 	searchKeyMu sync.Mutex
@@ -735,14 +766,13 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	searchReady := &atomic.Bool{}
 	searchWorker, err := NewSearchWorker(SearchWorkerDependencies{
 		Config: func() (SearchWorkerConfig, error) {
-			config, err := foundation.SearchConfig()
+			searchConfig, overlayConfig, err := foundation.SearchOverlayConfig()
 			if err != nil {
 				return SearchWorkerConfig{}, err
 			}
-			return SearchWorkerConfig{
-				Enabled: config.Enabled && searchReady.Load(), ReconcileInterval: config.ReconcileInterval,
-				ReconcileBatchSize: config.BatchSize, WorkerConcurrency: config.MaxConcurrency, AbandonedAfter: config.BuildTimeout,
-			}, nil
+			return runtimeSearchWorkerConfig(backupasset.FoundationTransitionConfig{
+				Enabled: searchConfig.Enabled, Search: searchConfig, Overlay: overlayConfig,
+			}, searchReady.Load()), nil
 		},
 		Backend: searchIndexerWorkerBackend{indexer: searchIndexer, overlays: overlayService}, Metrics: searchMetrics, Now: dependencies.Now,
 	})
@@ -1938,52 +1968,131 @@ func (runtime *Runtime) inventoryWorkerStarted() bool {
 }
 
 func (runtime *Runtime) TransitionFeature(ctx context.Context, enabled bool, persist func() error) error {
+	configs, err := runtime.currentFeatureTransitionConfigs(enabled)
+	if err != nil {
+		return err
+	}
+	return runtime.transitionFeatureWithConfigs(ctx, configs, persist)
+}
+
+// currentFeatureTransitionConfigs is the dynamic compatibility path used by
+// callers outside a settings mutation. Mutation owners must instead pass the
+// prior/prospective bundle they already validated under their exclusive gate.
+func (runtime *Runtime) currentFeatureTransitionConfigs(enabled bool) (foundationTransitionConfigs, error) {
+	prior := backupasset.FoundationTransitionConfig{Enabled: !enabled}
+	if runtime != nil && runtime.foundation != nil {
+		currentConfig, err := runtime.foundation.TransitionConfig()
+		if err != nil {
+			return foundationTransitionConfigs{}, err
+		}
+		prior = currentConfig
+	}
+	prospective := prior
+	prospective.Enabled = enabled
+	prospective.Content.Enabled = enabled
+	prospective.Search.Enabled = enabled
+	prospective.Overlay.Enabled = enabled
+	return foundationTransitionConfigs{Prior: prior, Prospective: prospective}, nil
+}
+
+func (runtime *Runtime) transitionFeatureWithConfigs(
+	ctx context.Context,
+	configs foundationTransitionConfigs,
+	persist func() error,
+) error {
+	opCtx, cancel := newFeatureTransitionContext(ctx)
+	defer cancel()
+	return runtime.transitionFeatureWithOperationContext(opCtx, configs, persist)
+}
+
+func (runtime *Runtime) transitionFeatureWithOperationContext(
+	ctx context.Context,
+	configs foundationTransitionConfigs,
+	persist func() error,
+) error {
+	return runtime.transitionFeatureWithOperationContextAndRestore(ctx, configs, persist, nil)
+}
+
+func (runtime *Runtime) transitionFeatureWithOperationContextAndRestore(
+	ctx context.Context,
+	configs foundationTransitionConfigs,
+	persist func() error,
+	restore func(context.Context) error,
+) error {
 	if runtime == nil || runtime.transitioner == nil || runtime.contentManager == nil {
 		return fmt.Errorf("%w: backup asset feature transition unavailable", backupasset.ErrInvalidState)
+	}
+	if runtime.featureTransitionFenced.Load() {
+		return fmt.Errorf("%w: backup asset feature transition is compensation-fenced", backupasset.ErrInvalidState)
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if enabled {
+	if restore == nil {
+		restore = func(cleanupCtx context.Context) error {
+			return runtime.revertEnabledAfterSearchFailure(cleanupCtx, configs.Prior.Enabled)
+		}
+	}
+	if configs.Prospective.Enabled {
 		if err := runtime.authorizeEnablement(ctx); err != nil {
 			return err
 		}
-		if err := runtime.contentManager.PrepareEnable(ctx); err != nil {
-			return err
+		if err := runtime.contentManager.PrepareEnable(ctx, configs.Prospective.Content); err != nil {
+			runtime.contentManager.SetReady(false)
+			cleanupCtx, cancelCleanup := newFeatureTransitionCleanupContext(ctx)
+			defer cancelCleanup()
+			disableErr := runtime.contentManager.PrepareDisable(cleanupCtx)
+			return runtime.joinFeatureTransitionFailure(err, disableErr)
 		}
-		persistEnablement := persist
-		if persist != nil {
-			persistEnablement = func() error {
-				if err := runtime.recordEnablementSucceeded(ctx); err != nil {
-					return err
-				}
-				return persist()
-			}
-		}
-		err := runtime.transitioner.TransitionFeature(ctx, true, persistEnablement)
+		err := runtime.transitioner.TransitionFeature(ctx, true, persist)
 		if err != nil {
 			runtime.contentManager.SetReady(false)
-			return errors.Join(err, runtime.contentManager.PrepareDisable(ctx))
+			cleanupCtx, cancelCleanup := newFeatureTransitionCleanupContext(ctx)
+			defer cancelCleanup()
+			restoreErr := restore(cleanupCtx)
+			disableErr := runtime.contentManager.PrepareDisable(cleanupCtx)
+			return runtime.joinFeatureTransitionFailure(err, restoreErr, disableErr)
 		}
-		if err := runtime.startSearchAfterEnable(ctx); err != nil {
+		if err := runtime.startSearchAfterEnableWithConfig(ctx, configs.Prospective, true); err != nil {
 			runtime.contentManager.SetReady(false)
-			disableErr := runtime.contentManager.PrepareDisable(ctx)
-			revertErr := runtime.revertEnabledAfterSearchFailure(ctx)
-			return errors.Join(err, disableErr, revertErr)
+			cleanupCtx, cancelCleanup := newFeatureTransitionCleanupContext(ctx)
+			defer cancelCleanup()
+			revertErr := restore(cleanupCtx)
+			disableErr := runtime.contentManager.PrepareDisable(cleanupCtx)
+			return runtime.joinFeatureTransitionFailure(err, revertErr, disableErr)
+		}
+		if err := runtime.recordEnablementSucceeded(ctx); err != nil {
+			runtime.setSearchReady(false)
+			runtime.contentManager.SetReady(false)
+			cleanupCtx, cancelCleanup := newFeatureTransitionCleanupContext(ctx)
+			defer cancelCleanup()
+			revertErr := restore(cleanupCtx)
+			disableErr := runtime.contentManager.PrepareDisable(cleanupCtx)
+			return runtime.joinFeatureTransitionFailure(err, revertErr, disableErr)
 		}
 		runtime.contentManager.SetReady(true)
 		return nil
 	}
+	priorSearchReady := runtime.searchReady != nil && runtime.searchReady.Load()
 	runtime.contentManager.SetReady(false)
 	runtime.setSearchReady(false)
 	if err := runtime.contentManager.PrepareDisable(ctx); err != nil {
-		return err
+		cleanupCtx, cancelCleanup := newFeatureTransitionCleanupContext(ctx)
+		defer cancelCleanup()
+		restoreSearchErr := runtime.restorePriorSearchReadiness(cleanupCtx, configs.Prior, priorSearchReady)
+		restoreContentErr := runtime.contentManager.RestoreEnable(cleanupCtx, configs.Prior.Content)
+		runtime.contentManager.SetReady(restoreSearchErr == nil && restoreContentErr == nil)
+		return runtime.joinFeatureTransitionFailure(err, restoreSearchErr, restoreContentErr)
 	}
 	err := runtime.transitioner.TransitionFeature(ctx, false, persist)
 	if err != nil {
-		restoreErr := runtime.contentManager.PrepareEnable(ctx)
-		runtime.contentManager.SetReady(restoreErr == nil)
-		return errors.Join(err, restoreErr)
+		cleanupCtx, cancelCleanup := newFeatureTransitionCleanupContext(ctx)
+		defer cancelCleanup()
+		restoreSettingsErr := restore(cleanupCtx)
+		restoreSearchErr := runtime.restorePriorSearchReadiness(cleanupCtx, configs.Prior, priorSearchReady)
+		restoreErr := runtime.contentManager.RestoreEnable(cleanupCtx, configs.Prior.Content)
+		runtime.contentManager.SetReady(restoreSettingsErr == nil && restoreSearchErr == nil && restoreErr == nil)
+		return runtime.joinFeatureTransitionFailure(err, restoreSettingsErr, restoreSearchErr, restoreErr)
 	}
 	return nil
 }
@@ -2054,67 +2163,195 @@ func (runtime *Runtime) TransitionBackupAssetSettings(
 	config backupasset.ExportConfig,
 	persist func() error,
 ) error {
+	if persist == nil {
+		return fmt.Errorf("%w: backup asset settings transition unavailable", backupasset.ErrInvalidState)
+	}
+	return runtime.TransitionBackupAssetSettingsContext(
+		ctx, current, overlay, effective, config, func(context.Context) error { return persist() },
+	)
+}
+
+// TransitionBackupAssetSettingsContext is the Foundation-mutation path. Its
+// persistence callback receives the bounded operation context owned by the
+// runtime rather than merely closing over the handler request context.
+func (runtime *Runtime) TransitionBackupAssetSettingsContext(
+	ctx context.Context,
+	current map[string]string,
+	overlay map[string]string,
+	effective map[string]string,
+	config backupasset.ExportConfig,
+	persist func(context.Context) error,
+) error {
+	return runtime.transitionBackupAssetSettingsContextWithRestore(
+		ctx, current, overlay, effective, config, persist, nil,
+	)
+}
+
+// TransitionBackupAssetSettingsContextWithRestore lets an atomic caller restore
+// its complete persistence boundary under the runtime-owned cleanup deadline.
+func (runtime *Runtime) TransitionBackupAssetSettingsContextWithRestore(
+	ctx context.Context,
+	current map[string]string,
+	overlay map[string]string,
+	effective map[string]string,
+	config backupasset.ExportConfig,
+	persist func(context.Context) error,
+	restore func(context.Context) error,
+) error {
+	if restore == nil {
+		return fmt.Errorf("%w: backup asset settings restoration unavailable", backupasset.ErrInvalidState)
+	}
+	return runtime.transitionBackupAssetSettingsContextWithRestore(
+		ctx, current, overlay, effective, config, persist, restore,
+	)
+}
+
+func (runtime *Runtime) transitionBackupAssetSettingsContextWithRestore(
+	ctx context.Context,
+	current map[string]string,
+	overlay map[string]string,
+	effective map[string]string,
+	_ backupasset.ExportConfig,
+	persist func(context.Context) error,
+	restore func(context.Context) error,
+) error {
 	if runtime == nil || runtime.exportManager == nil || runtime.transitioner == nil || persist == nil {
 		return fmt.Errorf("%w: backup asset settings transition unavailable", backupasset.ErrInvalidState)
 	}
-	enabled, err := strconv.ParseBool(strings.TrimSpace(effective["backup_assets.enabled"]))
+	if runtime.featureTransitionFenced.Load() {
+		return fmt.Errorf("%w: backup asset feature transition is compensation-fenced", backupasset.ErrInvalidState)
+	}
+	opCtx, cancel := newFeatureTransitionContext(ctx)
+	defer cancel()
+	configs, err := foundationTransitionConfigsFromValues(current, effective)
 	if err != nil {
-		return fmt.Errorf("%w: parse effective backup asset enabled setting: %v", backupasset.ErrInvalidState, err)
+		return err
+	}
+	enabled := configs.Prospective.Enabled
+	keys := make([]string, 0, len(overlay))
+	for key := range overlay {
+		if _, exists := current[key]; !exists {
+			return fmt.Errorf("%w: prior backup asset setting unavailable", backupasset.ErrInvalidState)
+		}
+		keys = append(keys, key)
+	}
+	var overrideSnapshot *settings.BackupAssetOverrideSnapshot
+	if restore == nil && len(keys) > 0 {
+		if runtime.settings == nil {
+			return fmt.Errorf("%w: backup asset settings restoration unavailable", backupasset.ErrInvalidState)
+		}
+		overrideSnapshot, err = runtime.settings.CaptureBackupAssetOverridesContext(opCtx, keys)
+		if err != nil {
+			return fmt.Errorf("capture prior backup asset settings: %w", err)
+		}
+	}
+	restorePersisted := restore
+	if restorePersisted == nil {
+		restorePersisted = func(restoreCtx context.Context) error {
+			if overrideSnapshot == nil {
+				return nil
+			}
+			return runtime.settings.RestoreBackupAssetOverridesContext(restoreCtx, overrideSnapshot)
+		}
+	}
+	var priorAdmissionMode publication.AdmissionMode
+	hasPriorAdmissionMode := false
+	if runtime.admission != nil {
+		priorAdmissionMode, err = runtime.admission.CurrentMode()
+		if err != nil {
+			return err
+		}
+		hasPriorAdmissionMode = true
 	}
 	_, changesIdempotencyTTL := overlay["backup_assets.idempotency_ttl"]
 	_, changesIdempotencyKeyMaxBytes := overlay["backup_assets.idempotency_key_max_bytes"]
 	if (changesIdempotencyTTL || changesIdempotencyKeyMaxBytes) && runtime.overlayService == nil {
 		return fmt.Errorf("%w: Overlay idempotency settings transition unavailable", backupasset.ErrInvalidState)
 	}
-	transitionExport := func() error {
-		transitionPersist := persist
+	transitionBundle := func(
+		transitionCtx context.Context,
+		target foundationTransitionConfigs,
+		transitionPersist func(context.Context) error,
+		restoreTarget func(context.Context) error,
+	) error {
 		if changesIdempotencyTTL || changesIdempotencyKeyMaxBytes {
-			transitionPersist = func() error {
-				return runtime.overlayService.TransitionIdempotencySettings(
-					config.IdempotencyTTL,
-					config.IdempotencyKeyMaxBytes,
-					persist,
+			persistTarget := transitionPersist
+			transitionPersist = func(persistCtx context.Context) error {
+				return runtime.overlayService.TransitionIdempotencySettingsContext(
+					persistCtx,
+					target.Prospective.Export.IdempotencyTTL,
+					target.Prospective.Export.IdempotencyKeyMaxBytes,
+					persistTarget,
 				)
 			}
 		}
 		transitionRecovery := transitionPersist
 		if runtime.recoveryManager != nil {
-			recoveryConfig, recoveryErr := backupasset.RecoveryConfigFromValues(effective)
-			if recoveryErr != nil {
-				return recoveryErr
-			}
-			restoreValues := make(map[string]string)
-			for key := range overlay {
-				if !strings.HasPrefix(key, "backup_assets.recovery.") {
-					continue
+			if restorer, ok := runtime.recoveryManager.(recoveryRuntimeContextSettingsRestorer); ok {
+				transitionRecovery = func(persistCtx context.Context) error {
+					return restorer.TransitionSettingsContextWithRestore(
+						persistCtx,
+						target.Prospective.Recovery,
+						transitionPersist,
+						restoreTarget,
+					)
 				}
-				value, exists := current[key]
-				if !exists {
-					return fmt.Errorf("%w: prior Recovery setting unavailable", backupasset.ErrInvalidState)
+			} else {
+				transitionRecovery = func(persistCtx context.Context) error {
+					return runtime.recoveryManager.TransitionSettingsWithRestore(
+						persistCtx,
+						target.Prospective.Recovery,
+						func() error { return transitionPersist(persistCtx) },
+						func() error { return restoreTarget(persistCtx) },
+					)
 				}
-				restoreValues[key] = value
-			}
-			restoreRecovery := func() error {
-				if len(restoreValues) == 0 {
-					return nil
-				}
-				if runtime.settings == nil {
-					return fmt.Errorf("%w: Recovery settings restoration unavailable", backupasset.ErrInvalidState)
-				}
-				return runtime.settings.UpdateMany(restoreValues)
-			}
-			transitionRecovery = func() error {
-				return runtime.recoveryManager.TransitionSettingsWithRestore(
-					ctx, recoveryConfig, transitionPersist, restoreRecovery,
-				)
 			}
 		}
-		return runtime.exportManager.TransitionSettings(ctx, enabled, config, transitionRecovery)
+		if restorer, ok := runtime.exportManager.(exportRuntimeContextSettingsRestorer); ok {
+			return restorer.TransitionSettingsContextWithRestore(
+				transitionCtx,
+				target.Prospective.Enabled,
+				target.Prospective.Export,
+				transitionRecovery,
+				restoreTarget,
+			)
+		}
+		if restorer, ok := runtime.exportManager.(exportRuntimeSettingsRestorer); ok {
+			return restorer.TransitionSettingsWithRestore(
+				transitionCtx,
+				target.Prospective.Enabled,
+				target.Prospective.Export,
+				func() error { return transitionRecovery(transitionCtx) },
+				func() error { return restoreTarget(transitionCtx) },
+			)
+		}
+		return runtime.exportManager.TransitionSettings(
+			transitionCtx,
+			target.Prospective.Enabled,
+			target.Prospective.Export,
+			func() error { return transitionRecovery(transitionCtx) },
+		)
+	}
+	transitionExport := func() error {
+		return transitionBundle(opCtx, configs, persist, restorePersisted)
+	}
+	restoreRuntimeBundle := func(cleanupCtx context.Context) error {
+		priorTarget := foundationTransitionConfigs{Prior: configs.Prospective, Prospective: configs.Prior}
+		if hasPriorAdmissionMode {
+			return runtime.admission.transitionAdmissionMode(cleanupCtx, priorAdmissionMode, func() error {
+				return transitionBundle(cleanupCtx, priorTarget, restorePersisted, restorePersisted)
+			})
+		}
+		return runtime.transitioner.TransitionFeature(cleanupCtx, configs.Prior.Enabled, func() error {
+			return transitionBundle(cleanupCtx, priorTarget, restorePersisted, restorePersisted)
+		})
 	}
 	if _, changesGlobalEnabled := overlay["backup_assets.enabled"]; changesGlobalEnabled {
-		return runtime.TransitionFeature(ctx, enabled, transitionExport)
+		return runtime.transitionFeatureWithOperationContextAndRestore(
+			opCtx, configs, transitionExport, restoreRuntimeBundle,
+		)
 	}
-	return runtime.transitioner.TransitionFeature(ctx, enabled, transitionExport)
+	return runtime.transitioner.TransitionFeature(opCtx, enabled, transitionExport)
 }
 
 func (runtime *Runtime) PrepareApplicationDowngrade(ctx context.Context, callback func() error) error {
@@ -2309,15 +2546,20 @@ func (runtime *Runtime) StartupPass(ctx context.Context) error {
 	return nil
 }
 
-func (runtime *Runtime) startSearchAfterEnable(ctx context.Context) error {
+func (runtime *Runtime) startSearchAfterEnableWithConfig(
+	ctx context.Context,
+	config backupasset.FoundationTransitionConfig,
+	readinessAuthorized bool,
+) error {
 	if runtime == nil {
 		return fmt.Errorf("%w: backup asset runtime unavailable", backupasset.ErrInvalidState)
 	}
-	if runtime.foundation == nil || runtime.keyring == nil || runtime.searchWorker == nil {
+	if runtime.keyring == nil || runtime.searchWorker == nil {
 		runtime.setSearchReady(false)
 		return nil
 	}
-	if err := runtime.startupSearch(ctx); err != nil {
+	live := runtime.prospectiveFeatureLive(config.Enabled, readinessAuthorized)
+	if err := runtime.startupSearchWithConfig(ctx, config, live); err != nil {
 		return err
 	}
 	if runtime.searchReady != nil && !runtime.searchReady.Load() {
@@ -2326,15 +2568,31 @@ func (runtime *Runtime) startSearchAfterEnable(ctx context.Context) error {
 	return nil
 }
 
-func (runtime *Runtime) revertEnabledAfterSearchFailure(ctx context.Context) error {
+func (runtime *Runtime) restorePriorSearchReadiness(
+	ctx context.Context,
+	config backupasset.FoundationTransitionConfig,
+	wasReady bool,
+) error {
+	if !wasReady {
+		runtime.setSearchReady(false)
+		return nil
+	}
+	if runtime.keyring == nil || runtime.searchWorker == nil {
+		runtime.setSearchReady(true)
+		return nil
+	}
+	return runtime.startSearchAfterEnableWithConfig(ctx, config, true)
+}
+
+func (runtime *Runtime) revertEnabledAfterSearchFailure(ctx context.Context, priorEnabled bool) error {
 	if runtime == nil || runtime.transitioner == nil {
 		return fmt.Errorf("%w: backup asset feature revert unavailable", backupasset.ErrInvalidState)
 	}
-	return runtime.transitioner.TransitionFeature(ctx, false, func() error {
+	return runtime.transitioner.TransitionFeature(ctx, priorEnabled, func() error {
 		if runtime.settings == nil {
 			return nil
 		}
-		return runtime.settings.Update("backup_assets.enabled", "false")
+		return runtime.settings.UpdateContext(ctx, "backup_assets.enabled", strconv.FormatBool(priorEnabled))
 	})
 }
 
@@ -2350,12 +2608,45 @@ func (runtime *Runtime) startupSearch(ctx context.Context) error {
 		runtime.setSearchReady(false)
 		return nil
 	}
+	searchConfig, overlayConfig, err := runtime.foundation.SearchOverlayConfig()
+	if err != nil {
+		return err
+	}
+	live := true
 	if runtime.admission != nil {
 		mode, modeErr := runtime.admission.CurrentMode()
 		if modeErr != nil || mode != publication.AdmissionManaged {
-			runtime.setSearchReady(false)
-			return nil
+			live = false
 		}
+	}
+	return runtime.startupSearchWithConfig(ctx, backupasset.FoundationTransitionConfig{
+		Enabled: enabled, Search: searchConfig, Overlay: overlayConfig,
+	}, live)
+}
+
+func (runtime *Runtime) prospectiveFeatureLive(prospectiveEnabled, readinessAuthorized bool) bool {
+	if runtime == nil || !prospectiveEnabled || !readinessAuthorized {
+		return false
+	}
+	if runtime.admission == nil {
+		return false
+	}
+	mode, err := runtime.admission.CurrentMode()
+	return err == nil && mode == publication.AdmissionManaged
+}
+
+func (runtime *Runtime) startupSearchWithConfig(
+	ctx context.Context,
+	config backupasset.FoundationTransitionConfig,
+	liveAuthorized bool,
+) error {
+	if runtime == nil || runtime.keyring == nil || runtime.searchWorker == nil {
+		return fmt.Errorf("%w: Search runtime unavailable", backupasset.ErrInvalidState)
+	}
+	workerConfig := runtimeSearchWorkerConfig(config, liveAuthorized)
+	if !workerConfig.Enabled {
+		runtime.setSearchReady(false)
+		return nil
 	}
 	coreDomains := append([]backupasset.KeyDomain(nil), backupasset.RequiredKeyDomains...)
 	coreDomains = append(coreDomains, backupasset.KeyDomainSearchToken)
@@ -2371,11 +2662,21 @@ func (runtime *Runtime) startupSearch(ctx context.Context) error {
 		return err
 	}
 	runtime.setSearchReady(true)
-	if err := runtime.searchWorker.StartupPass(ctx); err != nil {
+	if err := runtime.searchWorker.StartupPassWithConfig(ctx, workerConfig); err != nil {
 		runtime.setSearchReady(false)
 		return err
 	}
 	return nil
+}
+
+func runtimeSearchWorkerConfig(config backupasset.FoundationTransitionConfig, liveAuthorized bool) SearchWorkerConfig {
+	return SearchWorkerConfig{
+		Enabled:            liveAuthorized && config.Enabled && config.Search.Enabled && config.Overlay.Enabled,
+		ReconcileInterval:  config.Search.ReconcileInterval,
+		ReconcileBatchSize: config.Search.BatchSize,
+		WorkerConcurrency:  config.Search.MaxConcurrency,
+		AbandonedAfter:     config.Search.BuildTimeout,
+	}
 }
 
 func (runtime *Runtime) setSearchReady(ready bool) {
@@ -2650,8 +2951,16 @@ func (runtime *managedContentRuntime) Startup(ctx context.Context) error {
 	return nil
 }
 
-func (runtime *managedContentRuntime) PrepareEnable(ctx context.Context) error {
-	if runtime == nil || runtime.reconciler == nil || runtime.foundation == nil {
+func (runtime *managedContentRuntime) PrepareEnable(ctx context.Context, config backupasset.ContentConfig) error {
+	return runtime.prepareEnableWithConfig(ctx, config)
+}
+
+func (runtime *managedContentRuntime) RestoreEnable(ctx context.Context, config backupasset.ContentConfig) error {
+	return runtime.prepareEnableWithConfig(ctx, config)
+}
+
+func (runtime *managedContentRuntime) prepareEnableWithConfig(ctx context.Context, config backupasset.ContentConfig) error {
+	if runtime == nil || runtime.reconciler == nil || runtime.ready == nil {
 		return fmt.Errorf("%w: Content runtime unavailable", backupasset.ErrInvalidState)
 	}
 	if ctx == nil {
@@ -2659,10 +2968,6 @@ func (runtime *managedContentRuntime) PrepareEnable(ctx context.Context) error {
 	}
 	runtime.ready.Store(false)
 	if err := runtime.reconciler.Startup(ctx); err != nil {
-		return err
-	}
-	config, err := runtime.foundation.ContentConfig()
-	if err != nil {
 		return err
 	}
 	if err := runtime.ensureCache(ctx, config); err != nil {
@@ -3256,6 +3561,19 @@ func sameRuntimeContentTime(left, right *time.Time) bool {
 var _ content.DeliverySessionValidator = (*runtimeContentSessionValidator)(nil)
 var _ content.AssetAuthorizer = (*runtimeContentAuthorizer)(nil)
 var _ publication.FeatureTransitioner = (*Runtime)(nil)
+var _ exportRuntimeContextSettingsRestorer = (*managedExportRuntime)(nil)
+var _ recoveryRuntimeContextSettingsRestorer = (*managedRecoveryRuntime)(nil)
+var _ interface {
+	TransitionBackupAssetSettingsContextWithRestore(
+		context.Context,
+		map[string]string,
+		map[string]string,
+		map[string]string,
+		backupasset.ExportConfig,
+		func(context.Context) error,
+		func(context.Context) error,
+	) error
+} = (*Runtime)(nil)
 
 func runtimeSearchQueryLimits(config backupasset.SearchConfig) search.QueryLimits {
 	return search.QueryLimits{

@@ -204,19 +204,53 @@ type cachedValue struct {
 	expiresAt time.Time
 }
 
+type exclusiveMutationGate chan struct{}
+
+func newExclusiveMutationGate() exclusiveMutationGate {
+	gate := make(exclusiveMutationGate, 1)
+	gate <- struct{}{}
+	return gate
+}
+
+func (gate exclusiveMutationGate) acquire(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-gate:
+		return nil
+	}
+}
+
+func (gate exclusiveMutationGate) acquireBlocking() {
+	<-gate
+}
+
+func (gate exclusiveMutationGate) release() {
+	gate <- struct{}{}
+}
+
 // Service 系统设置服务
 type Service struct {
-	db                    *gorm.DB
-	mu                    sync.RWMutex
-	backupAssetMutationMu sync.Mutex
-	cache                 map[string]cachedValue
+	db                      *gorm.DB
+	mu                      sync.RWMutex
+	backupAssetMutationGate exclusiveMutationGate
+	cache                   map[string]cachedValue
+}
+
+// BackupAssetOverrideSnapshot is an opaque, exact database-override snapshot.
+// It records both raw stored rows and row absence so compensation can restore
+// the same DB > env > default state without re-encrypting values.
+type BackupAssetOverrideSnapshot struct {
+	keys []string
+	rows map[string]model.SystemSetting
 }
 
 // NewService 创建设置服务
 func NewService(db *gorm.DB) *Service {
 	return &Service{
-		db:    db,
-		cache: make(map[string]cachedValue),
+		db:                      db,
+		backupAssetMutationGate: newExclusiveMutationGate(),
+		cache:                   make(map[string]cachedValue),
 	}
 }
 
@@ -1406,8 +1440,10 @@ func (s *Service) WithBackupAssetMutation(ctx context.Context, callback func(cur
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	s.backupAssetMutationMu.Lock()
-	defer s.backupAssetMutationMu.Unlock()
+	if err := s.backupAssetMutationGate.acquire(ctx); err != nil {
+		return err
+	}
+	defer s.backupAssetMutationGate.release()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1424,8 +1460,8 @@ func (s *Service) BackupAssetSettingsSnapshot() (map[string]string, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("settings service is unavailable")
 	}
-	s.backupAssetMutationMu.Lock()
-	defer s.backupAssetMutationMu.Unlock()
+	s.backupAssetMutationGate.acquireBlocking()
+	defer s.backupAssetMutationGate.release()
 	values, err := s.backupAssetFoundationSnapshot()
 	if err != nil {
 		return nil, err
@@ -1473,10 +1509,21 @@ func (s *Service) Validate(key, value string) error {
 
 // Update 更新设置值（含校验），写入后自动失效缓存
 func (s *Service) Update(key, value string) error {
+	return s.UpdateContext(context.Background(), key, value)
+}
+
+// UpdateContext updates one setting while honoring the caller's cancellation.
+func (s *Service) UpdateContext(ctx context.Context, key, value string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := s.Validate(key, value); err != nil {
 		return err
 	}
-	if err := s.upsert(s.db, key, value); err != nil {
+	if err := s.upsert(s.db.WithContext(ctx), key, value); err != nil {
 		return err
 	}
 	s.invalidateCache(key)
@@ -1485,10 +1532,25 @@ func (s *Service) Update(key, value string) error {
 
 // UpdateWithTx 在指定事务内更新设置值（供 config import 使用）
 func (s *Service) UpdateWithTx(tx *gorm.DB, key, value string) error {
+	return s.UpdateWithTxContext(context.Background(), tx, key, value)
+}
+
+// UpdateWithTxContext updates one setting through the caller-owned transaction
+// while binding every database operation to the supplied context.
+func (s *Service) UpdateWithTxContext(ctx context.Context, tx *gorm.DB, key, value string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if tx == nil {
+		return fmt.Errorf("settings transaction is unavailable")
+	}
 	if err := s.Validate(key, value); err != nil {
 		return err
 	}
-	if err := s.upsert(tx, key, value); err != nil {
+	if err := s.upsert(tx.WithContext(ctx), key, value); err != nil {
 		return err
 	}
 	s.invalidateCache(key)
@@ -1497,8 +1559,20 @@ func (s *Service) UpdateWithTx(tx *gorm.DB, key, value string) error {
 
 // UpdateMany validates and persists a bounded setting set atomically.
 func (s *Service) UpdateMany(values map[string]string) error {
+	return s.UpdateManyContext(context.Background(), values)
+}
+
+// UpdateManyContext validates and persists a bounded setting set atomically
+// while honoring the caller's cancellation.
+func (s *Service) UpdateManyContext(ctx context.Context, values map[string]string) error {
 	if s == nil || s.db == nil || len(values) == 0 || len(values) > 64 {
 		return fmt.Errorf("settings batch is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	keys := make([]string, 0, len(values))
 	for key, value := range values {
@@ -1508,7 +1582,7 @@ func (s *Service) UpdateMany(values map[string]string) error {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	if err := s.db.Transaction(func(tx *gorm.DB) error {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, key := range keys {
 			if err := s.upsert(tx, key, values[key]); err != nil {
 				return err
@@ -1519,6 +1593,140 @@ func (s *Service) UpdateMany(values map[string]string) error {
 		return err
 	}
 	for _, key := range keys {
+		s.invalidateCache(key)
+	}
+	return nil
+}
+
+// CaptureSettingOverridesContext snapshots the exact persisted state for a
+// bounded set of registered settings. A caller that also mutates Foundation
+// settings must already own the higher-level mutation gate.
+func (s *Service) CaptureSettingOverridesContext(
+	ctx context.Context,
+	keys []string,
+) (*BackupAssetOverrideSnapshot, error) {
+	return s.captureSettingOverridesContext(ctx, keys, false)
+}
+
+// CaptureBackupAssetOverridesContext snapshots the exact persisted state for a
+// bounded set of Foundation settings. The caller owns higher-level mutation
+// serialization; this method deliberately does not reacquire that gate.
+func (s *Service) CaptureBackupAssetOverridesContext(
+	ctx context.Context,
+	keys []string,
+) (*BackupAssetOverrideSnapshot, error) {
+	return s.captureSettingOverridesContext(ctx, keys, true)
+}
+
+func (s *Service) captureSettingOverridesContext(
+	ctx context.Context,
+	keys []string,
+	foundationOnly bool,
+) (*BackupAssetOverrideSnapshot, error) {
+	maxKeys := len(registry)
+	if foundationOnly {
+		maxKeys = 64
+	}
+	if s == nil || s.db == nil || len(keys) == 0 || len(keys) > maxKeys {
+		return nil, fmt.Errorf("settings override snapshot is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	sortedKeys := append([]string(nil), keys...)
+	sort.Strings(sortedKeys)
+	for index, key := range sortedKeys {
+		if findDef(key) == nil || (foundationOnly && !IsBackupAssetFoundationSetting(key)) ||
+			(index > 0 && key == sortedKeys[index-1]) {
+			return nil, fmt.Errorf("invalid settings override snapshot key: %s", key)
+		}
+	}
+	var rows []model.SystemSetting
+	if err := s.db.WithContext(ctx).Where("key IN ?", sortedKeys).Limit(len(sortedKeys) + 1).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	requested := make(map[string]bool, len(sortedKeys))
+	for _, key := range sortedKeys {
+		requested[key] = true
+	}
+	rowByKey := make(map[string]model.SystemSetting, len(rows))
+	for _, row := range rows {
+		if !requested[row.Key] {
+			return nil, fmt.Errorf("unexpected backup asset override snapshot row: %s", row.Key)
+		}
+		if _, duplicate := rowByKey[row.Key]; duplicate {
+			return nil, fmt.Errorf("duplicate backup asset override snapshot row: %s", row.Key)
+		}
+		rowByKey[row.Key] = row
+	}
+	return &BackupAssetOverrideSnapshot{keys: sortedKeys, rows: rowByKey}, nil
+}
+
+// RestoreSettingOverridesContext atomically restores every captured raw row
+// and deletes keys that were absent. Cache invalidation occurs only after the
+// transaction commits.
+func (s *Service) RestoreSettingOverridesContext(
+	ctx context.Context,
+	snapshot *BackupAssetOverrideSnapshot,
+) error {
+	return s.restoreSettingOverridesContext(ctx, snapshot, false)
+}
+
+// RestoreBackupAssetOverridesContext atomically restores every captured raw row
+// and deletes keys that were absent. Cache invalidation occurs only after the
+// transaction commits, matching UpdateManyContext semantics.
+func (s *Service) RestoreBackupAssetOverridesContext(
+	ctx context.Context,
+	snapshot *BackupAssetOverrideSnapshot,
+) error {
+	return s.restoreSettingOverridesContext(ctx, snapshot, true)
+}
+
+func (s *Service) restoreSettingOverridesContext(
+	ctx context.Context,
+	snapshot *BackupAssetOverrideSnapshot,
+	foundationOnly bool,
+) error {
+	maxKeys := len(registry)
+	if foundationOnly {
+		maxKeys = 64
+	}
+	if s == nil || s.db == nil || snapshot == nil || len(snapshot.keys) == 0 || len(snapshot.keys) > maxKeys {
+		return fmt.Errorf("settings override restoration is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, key := range snapshot.keys {
+			row, exists := snapshot.rows[key]
+			if !exists {
+				if err := tx.WithContext(ctx).Where("key = ?", key).Delete(&model.SystemSetting{}).Error; err != nil {
+					return err
+				}
+				continue
+			}
+			if row.Key != key || findDef(key) == nil || (foundationOnly && !IsBackupAssetFoundationSetting(key)) {
+				return fmt.Errorf("invalid settings override restoration row: %s", key)
+			}
+			if err := tx.WithContext(ctx).Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "key"}},
+				DoUpdates: clause.AssignmentColumns([]string{"value", "updated_at"}),
+			}).Create(&row).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, key := range snapshot.keys {
 		s.invalidateCache(key)
 	}
 	return nil
@@ -1562,6 +1770,11 @@ func decryptSettingValue(key, value string) string {
 
 // Delete 删除 DB 覆盖值（恢复为环境变量或默认值），写入后自动失效缓存
 func (s *Service) Delete(key string) error {
+	return s.DeleteContext(context.Background(), key)
+}
+
+// DeleteContext removes one database override while honoring cancellation.
+func (s *Service) DeleteContext(ctx context.Context, key string) error {
 	if IsInternalSettingKey(key) {
 		return ErrInternalSettingUnavailable
 	}
@@ -1569,7 +1782,7 @@ func (s *Service) Delete(key string) error {
 	if def == nil {
 		return fmt.Errorf("未知的设置项: %s", key)
 	}
-	if err := s.DeleteWithTx(s.db, key); err != nil {
+	if err := s.DeleteWithTxContext(ctx, s.db, key); err != nil {
 		return err
 	}
 	return nil
@@ -1579,6 +1792,18 @@ func (s *Service) Delete(key string) error {
 // transaction. Foundation-setting callers use it only after the admission
 // transition has drained, so a rollback leaves the prior persisted value.
 func (s *Service) DeleteWithTx(tx *gorm.DB, key string) error {
+	return s.DeleteWithTxContext(context.Background(), tx, key)
+}
+
+// DeleteWithTxContext removes one override through a caller-owned transaction
+// while binding the delete to the supplied context.
+func (s *Service) DeleteWithTxContext(ctx context.Context, tx *gorm.DB, key string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if IsInternalSettingKey(key) {
 		return ErrInternalSettingUnavailable
 	}
@@ -1589,7 +1814,7 @@ func (s *Service) DeleteWithTx(tx *gorm.DB, key string) error {
 	if tx == nil {
 		return fmt.Errorf("settings transaction is unavailable")
 	}
-	if err := tx.Where("key = ?", key).Delete(&model.SystemSetting{}).Error; err != nil {
+	if err := tx.WithContext(ctx).Where("key = ?", key).Delete(&model.SystemSetting{}).Error; err != nil {
 		return err
 	}
 	s.invalidateCache(key)
@@ -1601,6 +1826,17 @@ func (s *Service) invalidateCache(key string) {
 	s.mu.Lock()
 	delete(s.cache, key)
 	s.mu.Unlock()
+}
+
+// InvalidateCachedValues discards only the named values after a caller-owned
+// transaction restores their raw rows. It does not read or persist settings.
+func (s *Service) InvalidateCachedValues(keys []string) {
+	if s == nil {
+		return
+	}
+	for _, key := range keys {
+		s.invalidateCache(key)
+	}
 }
 
 // findDef O(1) 查找设置定义

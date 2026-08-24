@@ -5,11 +5,75 @@ import (
 	"errors"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"xirang/backend/internal/backupasset/search"
 )
+
+func TestSearchWorkerStartupPassWithConfigDoesNotReadDynamicConfig(t *testing.T) {
+	backend := newSearchWorkerBackendFake()
+	dynamicCalls := &atomic.Int64{}
+	worker, err := NewSearchWorker(SearchWorkerDependencies{
+		Config: func() (SearchWorkerConfig, error) {
+			dynamicCalls.Add(1)
+			return SearchWorkerConfig{}, errors.New("dynamic Search config must not be read during enable transition")
+		},
+		Backend: backend,
+		Metrics: search.NoopMetrics{},
+	})
+	if err != nil {
+		t.Fatalf("NewSearchWorker: %v", err)
+	}
+
+	config := SearchWorkerConfig{
+		Enabled: true, ReconcileInterval: time.Minute, ReconcileBatchSize: 17, WorkerConcurrency: 2,
+	}
+	if err := worker.StartupPassWithConfig(context.Background(), config); err != nil {
+		t.Fatalf("StartupPassWithConfig: %v", err)
+	}
+	if got := dynamicCalls.Load(); got != 0 {
+		t.Fatalf("explicit Search startup read dynamic config %d times", got)
+	}
+	if got := backend.calls(); got.reconcile != 1 || got.overlay != 1 || got.list != 1 {
+		t.Fatalf("explicit Search startup backend calls=%+v", got)
+	}
+}
+
+func TestSearchWorkerBackgroundRunStillReadsDynamicConfig(t *testing.T) {
+	backend := newSearchWorkerBackendFake()
+	configRead := make(chan struct{}, 2)
+	worker, err := NewSearchWorker(SearchWorkerDependencies{
+		Config: func() (SearchWorkerConfig, error) {
+			configRead <- struct{}{}
+			return SearchWorkerConfig{Enabled: false, ReconcileInterval: time.Hour, ReconcileBatchSize: 10, WorkerConcurrency: 1}, nil
+		},
+		Backend: backend,
+		Metrics: search.NoopMetrics{},
+	})
+	if err != nil {
+		t.Fatalf("NewSearchWorker: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		worker.Run(ctx)
+		close(done)
+	}()
+	select {
+	case <-configRead:
+		cancel()
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("background Search Run did not read dynamic config")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("background Search Run did not stop after cancellation")
+	}
+}
 
 func TestSearchWorkerDynamicDisableTouchesNoBackend(t *testing.T) {
 	backend := newSearchWorkerBackendFake()

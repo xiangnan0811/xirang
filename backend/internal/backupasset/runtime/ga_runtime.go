@@ -63,6 +63,9 @@ func (runtime *Runtime) FeatureLive() (bool, error) {
 		return false, fmt.Errorf("%w: backup asset runtime unavailable", backupasset.ErrInvalidState)
 	}
 	live, err := featureLive(runtime.foundation, runtime.enablement)
+	if runtime.featureTransitionFenced.Load() {
+		live = false
+	}
 	observeFeatureGates(runtime, live && err == nil)
 	return live, err
 }
@@ -239,7 +242,10 @@ func FreshInstallReady() ga.ReadinessSource {
 type gaSilentContentManager struct{}
 
 func (gaSilentContentManager) Startup(context.Context) error { return nil }
-func (gaSilentContentManager) PrepareEnable(context.Context) error {
+func (gaSilentContentManager) PrepareEnable(context.Context, backupasset.ContentConfig) error {
+	return nil
+}
+func (gaSilentContentManager) RestoreEnable(context.Context, backupasset.ContentConfig) error {
 	return nil
 }
 func (gaSilentContentManager) PrepareDisable(context.Context) error { return nil }

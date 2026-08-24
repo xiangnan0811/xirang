@@ -93,6 +93,13 @@ func (*settingsTransitionSpy) PrepareSchemaDown(context.Context, func() error) e
 
 var _ publication.FeatureTransitioner = (*settingsTransitionSpy)(nil)
 
+// settingsFeatureTransitionOnly keeps readiness-only fixtures on the public
+// admission contract. Production handlers receive the fully wired Runtime,
+// whose settings transition extension is exercised separately below.
+type settingsFeatureTransitionOnly struct {
+	publication.FeatureTransitioner
+}
+
 type settingsRuntimeSettingsTransitionSpy struct {
 	settingsTransitionSpy
 	current        map[string]string
@@ -101,6 +108,323 @@ type settingsRuntimeSettingsTransitionSpy struct {
 	config         backupasset.ExportConfig
 	overlayService *overlay.Service
 	calls          int
+}
+
+type settingsCanceledPersistenceRuntime struct {
+	settingsTransitionSpy
+	called           bool
+	calls            int
+	current          map[string]string
+	overlay          map[string]string
+	effective        map[string]string
+	bundle           backupasset.FoundationTransitionConfig
+	cancelPersist    bool
+	failAfterPersist error
+}
+
+func (runtime *settingsCanceledPersistenceRuntime) TransitionBackupAssetSettingsContext(
+	ctx context.Context,
+	current map[string]string,
+	overlay map[string]string,
+	effective map[string]string,
+	config backupasset.ExportConfig,
+	persist func(context.Context) error,
+) error {
+	runtime.called = true
+	runtime.calls++
+	bundle, err := backupasset.FoundationTransitionConfigFromValues(effective)
+	if err != nil {
+		return err
+	}
+	contentConfig, err := backupasset.ContentConfigFromValues(effective)
+	if err != nil {
+		return err
+	}
+	searchConfig, overlayConfig, err := backupasset.SearchOverlayConfigFromValues(effective)
+	if err != nil {
+		return err
+	}
+	if contentConfig.PreviewTTL != bundle.Content.PreviewTTL ||
+		searchConfig.PageSizeMax != bundle.Search.PageSizeMax ||
+		overlayConfig.IdempotencyTTL != bundle.Overlay.IdempotencyTTL ||
+		config.WorkerConcurrency != bundle.Export.WorkerConcurrency {
+		return errors.New("FAKE_PROSPECTIVE_CONTENT_SEARCH_CONFIG_MISMATCH_FOR_TEST_ONLY")
+	}
+	runtime.current = current
+	runtime.overlay = overlay
+	runtime.effective = effective
+	runtime.bundle = bundle
+	if !runtime.cancelPersist {
+		if err := persist(ctx); err != nil {
+			return err
+		}
+		return runtime.failAfterPersist
+	}
+	opCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	return persist(opCtx)
+}
+
+func (runtime *settingsCanceledPersistenceRuntime) TransitionBackupAssetSettingsContextWithRestore(
+	ctx context.Context,
+	current map[string]string,
+	overlay map[string]string,
+	effective map[string]string,
+	config backupasset.ExportConfig,
+	persist func(context.Context) error,
+	restore func(context.Context) error,
+) error {
+	err := runtime.TransitionBackupAssetSettingsContext(ctx, current, overlay, effective, config, persist)
+	if err == nil {
+		return nil
+	}
+	return errors.Join(err, restore(ctx))
+}
+
+func TestSettingsPUTPersistenceHonorsRuntimeOperationCancellation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+		t.Fatal(err)
+	}
+	svc := settings.NewService(db)
+	runtime := &settingsCanceledPersistenceRuntime{cancelPersist: true}
+	handler := NewSettingsHandler(db, svc).WithBackupAssetTransitioner(runtime)
+	router := gin.New()
+	router.PUT("/settings", handler.BatchUpdate)
+
+	const key = "backup_assets.export.worker_concurrency"
+	request := httptest.NewRequest(http.MethodPut, "/settings", strings.NewReader(`{"`+key+`":"3"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want canceled runtime persistence to return generic 500", response.Code, response.Body.String())
+	}
+	if !runtime.called {
+		t.Fatal("handler did not use the context-aware runtime settings transition")
+	}
+	var envelope Response
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if envelope.Code != http.StatusInternalServerError || envelope.Message != "服务器内部错误" {
+		t.Fatalf("unexpected canceled persistence envelope: %+v", envelope)
+	}
+	var count int64
+	if err := db.Model(&model.SystemSetting{}).Where("key = ?", key).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("canceled runtime persistence created %s row count=%d", key, count)
+	}
+}
+
+func TestSettingsPUTUsesProspectiveContentAndSearchBundleBeforePersistence(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+		t.Fatal(err)
+	}
+	svc := settings.NewService(db)
+	runtime := &settingsCanceledPersistenceRuntime{}
+	handler := NewSettingsHandler(db, svc).WithBackupAssetTransitioner(runtime)
+	router := gin.New()
+	router.PUT("/settings", handler.BatchUpdate)
+
+	request := httptest.NewRequest(http.MethodPut, "/settings", strings.NewReader(`{
+  "backup_assets.content_preview_ttl":"3m",
+  "backup_assets.search_page_size_max":"250"
+}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !runtime.called || runtime.bundle.Content.PreviewTTL != 3*time.Minute || runtime.bundle.Search.PageSizeMax != 250 {
+		t.Fatalf("PUT prospective Content/Search called=%t preview_ttl=%s page_size=%d", runtime.called, runtime.bundle.Content.PreviewTTL, runtime.bundle.Search.PageSizeMax)
+	}
+	if runtime.current["backup_assets.content_preview_ttl"] != "2m" ||
+		runtime.effective["backup_assets.content_preview_ttl"] != "3m" ||
+		runtime.effective["backup_assets.search_page_size_max"] != "250" {
+		t.Fatalf("PUT current/effective preview=%q/%q page_size=%q", runtime.current["backup_assets.content_preview_ttl"], runtime.effective["backup_assets.content_preview_ttl"], runtime.effective["backup_assets.search_page_size_max"])
+	}
+	if svc.GetEffective("backup_assets.content_preview_ttl") != "3m" ||
+		svc.GetEffective("backup_assets.search_page_size_max") != "250" {
+		t.Fatal("PUT did not persist prospective Content/Search values")
+	}
+}
+
+func TestSettingsMixedPUTPostPersistFailureRestoresEveryExactOverride(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openConfigHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+		t.Fatal(err)
+	}
+	priorUpdatedAt := time.Date(2026, 8, 24, 9, 30, 0, 0, time.UTC)
+	for _, row := range []model.SystemSetting{
+		{Key: "backup_assets.export.worker_concurrency", Value: "2", UpdatedAt: priorUpdatedAt},
+		{Key: "login.captcha_enabled", Value: "false", UpdatedAt: priorUpdatedAt},
+	} {
+		if err := db.Create(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	svc := settings.NewService(db)
+	_ = svc.GetEffective("backup_assets.export.worker_concurrency")
+	_ = svc.GetEffective("login.captcha_enabled")
+	_ = svc.GetEffective("login.second_captcha_enabled")
+	runtimeFailure := errors.New("FAKE_MIXED_SETTINGS_POST_PERSIST_RUNTIME_FAILURE_FOR_TEST_ONLY")
+	runtime := &settingsCanceledPersistenceRuntime{failAfterPersist: runtimeFailure}
+	handler := NewSettingsHandler(db, svc).WithBackupAssetTransitioner(runtime)
+	router := gin.New()
+	router.PUT("/settings", handler.BatchUpdate)
+
+	request := httptest.NewRequest(http.MethodPut, "/settings", strings.NewReader(`{
+  "backup_assets.export.worker_concurrency":"3",
+  "login.captcha_enabled":"true",
+  "login.second_captcha_enabled":"true"
+}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), runtimeFailure.Error()) {
+		t.Fatalf("mixed PUT leaked runtime failure: %s", response.Body.String())
+	}
+
+	for _, want := range []struct {
+		key   string
+		value string
+	}{
+		{key: "login.captcha_enabled", value: "false"},
+		{key: "backup_assets.export.worker_concurrency", value: "2"},
+	} {
+		var row model.SystemSetting
+		if err := db.Where("key = ?", want.key).First(&row).Error; err != nil {
+			t.Fatalf("load restored %s: %v", want.key, err)
+		}
+		if row.Value != want.value || !row.UpdatedAt.Equal(priorUpdatedAt) {
+			t.Fatalf("restored %s value=%q updated_at=%s, want value=%q updated_at=%s",
+				want.key, row.Value, row.UpdatedAt, want.value, priorUpdatedAt)
+		}
+	}
+	var absentCount int64
+	if err := db.Model(&model.SystemSetting{}).Where("key = ?", "login.second_captcha_enabled").Count(&absentCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if absentCount != 0 {
+		t.Fatalf("mixed PUT rollback retained previously absent override count=%d", absentCount)
+	}
+	if svc.GetEffective("backup_assets.export.worker_concurrency") != "2" ||
+		svc.GetEffective("login.captcha_enabled") != "false" ||
+		svc.GetEffective("login.second_captcha_enabled") != "false" {
+		t.Fatal("mixed PUT rollback left stale effective values in settings cache")
+	}
+}
+
+func TestSettingsDELETEPersistenceHonorsRuntimeOperationCancellation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+		t.Fatal(err)
+	}
+	svc := settings.NewService(db)
+	const key = "backup_assets.content_preview_ttl"
+	if err := svc.Update(key, "3m"); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &settingsCanceledPersistenceRuntime{cancelPersist: true}
+	handler := NewSettingsHandler(db, svc).WithBackupAssetTransitioner(runtime)
+	router := gin.New()
+	router.DELETE("/settings/:key", handler.Delete)
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/settings/"+key, nil))
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want canceled runtime delete to return generic 500", response.Code, response.Body.String())
+	}
+	if !runtime.called || runtime.bundle.Content.PreviewTTL != 2*time.Minute || runtime.bundle.Search.PageSizeMax <= 0 {
+		t.Fatalf("DELETE prospective Content/Search called=%t preview_ttl=%s page_size=%d", runtime.called, runtime.bundle.Content.PreviewTTL, runtime.bundle.Search.PageSizeMax)
+	}
+	var envelope Response
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode canceled DELETE response: %v", err)
+	}
+	if envelope.Code != http.StatusInternalServerError || envelope.Message != "服务器内部错误" {
+		t.Fatalf("unexpected canceled DELETE envelope: %+v", envelope)
+	}
+	var row model.SystemSetting
+	if err := db.Where("key = ?", key).Take(&row).Error; err != nil {
+		t.Fatalf("canceled DELETE removed the exact override: %v", err)
+	}
+	if row.Value != "3m" || svc.GetEffective(key) != "3m" {
+		t.Fatalf("canceled DELETE changed override row=%q effective=%q", row.Value, svc.GetEffective(key))
+	}
+}
+
+func TestSettingsDELETEEnabledFallbackUsesProspectiveBundleAndRemovesExactOverride(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		fallback    string
+		override    string
+		wantEnabled bool
+	}{
+		{name: "fallback true", fallback: "true", override: "false", wantEnabled: true},
+		{name: "fallback false", fallback: "false", override: "true", wantEnabled: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv("BACKUP_ASSETS_ENABLED", testCase.fallback)
+			gin.SetMode(gin.TestMode)
+			db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+				t.Fatal(err)
+			}
+			svc := settings.NewService(db)
+			const key = "backup_assets.enabled"
+			if err := svc.Update(key, testCase.override); err != nil {
+				t.Fatal(err)
+			}
+			runtime := &settingsCanceledPersistenceRuntime{}
+			handler := NewSettingsHandler(db, svc).WithBackupAssetTransitioner(runtime)
+			router := gin.New()
+			router.DELETE("/settings/:key", handler.Delete)
+
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/settings/"+key, nil))
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if !runtime.called || runtime.bundle.Enabled != testCase.wantEnabled ||
+				runtime.bundle.Content.Enabled != testCase.wantEnabled || runtime.bundle.Search.Enabled != testCase.wantEnabled {
+				t.Fatalf("fallback prospective enabled global/content/search=%t/%t/%t called=%t", runtime.bundle.Enabled, runtime.bundle.Content.Enabled, runtime.bundle.Search.Enabled, runtime.called)
+			}
+			var count int64
+			if err := db.Model(&model.SystemSetting{}).Where("key = ?", key).Count(&count).Error; err != nil {
+				t.Fatal(err)
+			}
+			if count != 0 || svc.GetEffective(key) != testCase.fallback {
+				t.Fatalf("DELETE exact absence count=%d effective=%q fallback=%q", count, svc.GetEffective(key), testCase.fallback)
+			}
+		})
+	}
 }
 
 func (spy *settingsRuntimeSettingsTransitionSpy) TransitionBackupAssetSettings(
@@ -351,7 +675,7 @@ func TestSettingsSharedIdempotencyResetUsesRuntimeSettingsTransition(t *testing.
 	}
 }
 
-func TestSettingsRootOnlyExportMutationPersistsWithoutRuntimeSettingsTransition(t *testing.T) {
+func TestSettingsRootOnlyExportMutationUsesRuntimeContractAndPersists(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -375,8 +699,8 @@ func TestSettingsRootOnlyExportMutationPersistsWithoutRuntimeSettingsTransition(
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	if spy.calls != 0 || len(spy.targets) != 0 {
-		t.Fatalf("root-only mutation invoked runtime transition calls=%d feature targets=%v", spy.calls, spy.targets)
+	if spy.calls != 1 || len(spy.targets) != 0 {
+		t.Fatalf("root-only mutation runtime transition calls=%d feature targets=%v", spy.calls, spy.targets)
 	}
 	if got := svc.GetEffective("backup_assets.export.root"); got != root {
 		t.Fatalf("persisted Export root=%q, want %q", got, root)
@@ -531,6 +855,32 @@ func setupSettingsTransitionHandler(t *testing.T) (*gorm.DB, *settings.Service, 
 	return db, svc, handler, spy, router
 }
 
+func TestSettingsNonFoundationMutationsBypassBackupAssetTransitioner(t *testing.T) {
+	_, svc, _, spy, router := setupSettingsTransitionHandler(t)
+	spy.err = errors.New("backup asset runtime is compensation-fenced")
+
+	request := httptest.NewRequest(http.MethodPut, "/settings", strings.NewReader(`{"login.captcha_enabled":"true"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(spy.targets) != 0 || svc.GetEffective("login.captcha_enabled") != "true" {
+		t.Fatalf("PUT targets=%v effective=%q", spy.targets, svc.GetEffective("login.captcha_enabled"))
+	}
+
+	request = httptest.NewRequest(http.MethodDelete, "/settings/login.captcha_enabled", nil)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("DELETE status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(spy.targets) != 0 || svc.GetEffective("login.captcha_enabled") != "false" {
+		t.Fatalf("DELETE targets=%v effective=%q", spy.targets, svc.GetEffective("login.captcha_enabled"))
+	}
+}
+
 func TestSettingsEnablementBlockedKeepsBackupAssetsDisabled(t *testing.T) {
 	_, svc, _, spy, router := setupSettingsEnablementHandler(t, ga.ReadinessSnapshot{
 		Class:             ga.InstallationFresh,
@@ -626,7 +976,7 @@ func setupSettingsEnablementHandler(t *testing.T, snapshot ga.ReadinessSnapshot)
 	}
 	svc := settings.NewService(db)
 	spy := &settingsTransitionSpy{}
-	transitioner := assetruntime.EnablementRuntime(settingsEnablementReadiness{snapshot: snapshot}, spy)
+	transitioner := settingsFeatureTransitionOnly{FeatureTransitioner: assetruntime.EnablementRuntime(settingsEnablementReadiness{snapshot: snapshot}, spy)}
 	handler := NewSettingsHandler(db, svc).WithBackupAssetTransitioner(transitioner)
 	router := gin.New()
 	router.PUT("/settings", handler.BatchUpdate)

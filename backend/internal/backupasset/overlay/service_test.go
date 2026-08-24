@@ -522,6 +522,37 @@ func TestOverlayIdempotencySettingsTransitionPersistsBeforeAtomicallySwapping(t 
 	}
 }
 
+func TestOverlayIdempotencySettingsTransitionPassesOperationContextToPersistence(t *testing.T) {
+	service, _ := newOverlayTestHarness(t)
+	oldKey := strings.Repeat("a", 64)
+	if !service.validIdempotencyKey(oldKey) {
+		t.Fatal("default idempotency key bound rejected the control key")
+	}
+
+	contextAware, ok := any(service).(interface {
+		TransitionIdempotencySettingsContext(context.Context, time.Duration, int, func(context.Context) error) error
+	})
+	if !ok {
+		t.Fatal("Overlay idempotency persistence callback is not context-aware")
+	}
+	opCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	called := false
+	err := contextAware.TransitionIdempotencySettingsContext(opCtx, 2*time.Hour, 32, func(persistCtx context.Context) error {
+		called = true
+		if persistCtx != opCtx {
+			t.Fatal("Overlay persistence callback did not receive the transition operation context")
+		}
+		return persistCtx.Err()
+	})
+	if !called || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled Overlay persistence called=%t err=%v", called, err)
+	}
+	if !service.validIdempotencyKey(oldKey) {
+		t.Fatal("canceled persistence changed Overlay idempotency bounds")
+	}
+}
+
 func TestOverlayFeatureDisabledBeforeAuthorizationKeyOrDatabaseAccess(t *testing.T) {
 	_, harness := newOverlayTestHarness(t)
 	authorizer := &overlayAuthorizerFake{assets: harness.assets, points: harness.points}
