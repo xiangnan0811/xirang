@@ -1,0 +1,3 @@
+{"file":".trellis/tasks/08-24-backup-assets-enable-transition-deadlock/research/spec-contracts.md","reason":"Review checklist for all-or-nothing visibility, typed errors, cancellation/join, privacy, and branch/release gates."}
+{"file":".trellis/tasks/08-24-backup-assets-enable-transition-deadlock/research/root-cause-and-test-surface.md","reason":"Review the fix against both confirmed re-entry chains and all three settings mutation entry points."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review the complete PUT, DELETE, import, settings, runtime, persistence, and rollback flow across package boundaries."}
