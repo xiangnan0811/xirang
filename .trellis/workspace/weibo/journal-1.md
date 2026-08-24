@@ -1833,3 +1833,26 @@ Merged PR #446 and released v0.50.2. Archived Child 17. Parent stays planning; p
 ### Next Steps
 
 - Do not archive the parent. Production walkthrough stays not_executed. Alan will review v0.50.2 on GitHub.
+
+
+## Session 47: 完成备份资产启用死锁修复与 v0.50.4 生产验收
+
+**Date**: 2026-08-24
+**Task**: 完成备份资产启用死锁修复与 v0.50.4 生产验收
+**Branch**: `chore/backup-assets-release-acceptance`
+
+### Summary
+
+PR #453 与 v0.50.4 发布链路全绿；生产完成逻辑备份、关闭态升级、单次启用和数据页搜索验收，FeatureRequested/FeatureLive 为 1/1，无关键日志，当前空结果仅因尚无 Repository/RecoveryPoint。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bb295c830285377af439e6021b51234e09df5127` | (see git log) |
+| `214f5e18b47974d4e353227fa52782992cef70f7` | (see git log) |
+| `3235ca5f` | (see git log) |
+
+### Status
+
+[OK] **Completed**
