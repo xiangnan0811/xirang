@@ -1,0 +1,39 @@
+{
+  "id": "catalog-lifecycle-race-stability",
+  "name": "catalog-lifecycle-race-stability",
+  "title": "Catalog 生命周期 race 稳定性",
+  "description": "消除主干 CI 中 Catalog 续租取消与统一 builder teardown 生命周期测试在 race/高负载下的不确定等待，恢复发布后主干门禁全绿。",
+  "status": "in_progress",
+  "dev_type": "backend",
+  "scope": "backupasset-catalog",
+  "package": "backend",
+  "priority": "P0",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-08-25",
+  "completedAt": null,
+  "branch": "codex/catalog-lifecycle-race-stability",
+  "base_branch": "main",
+  "worktree_path": "/home/murray/code/xirang/.worktrees/catalog-lifecycle-race-stability",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "08-21-backup-assets-release-acceptance",
+  "relatedFiles": [
+    "backend/internal/backupasset/catalog/indexer_test.go",
+    "backend/internal/backupasset/catalog/source_lifecycle_test.go",
+    ".trellis/tasks/08-25-catalog-lifecycle-race-stability/research/root-cause.md"
+  ],
+  "notes": "Two independent GitHub Actions race failures confirmed that immediate test lease-renewal loss could occur before Provider enumeration. The test-only phase gates are implemented and independently approved under pinned Go 1.26.6; production heartbeat and lifecycle code remain unchanged. Focused repeated/race, Catalog package, lint, vet, format, and diff gates pass. The local runner quota blocks multi-package race/full-backend compile-link, so PR CI is the remaining authoritative gate.",
+  "meta": {
+    "incident": "post_merge_catalog_race_flakes",
+    "implementation_authorized": "true",
+    "ci_red_runs": "32811380329,32814904444",
+    "production_change_expected": "false",
+    "production_upgrade": "paused_until_fixed_release",
+    "trellis_check": "SPEC_COMPLIANCE_OK_QUALITY_OK",
+    "local_verification": "focused_green_full_backend_runner_quota_blocked",
+    "next_gate": "pull_request_ci"
+  }
+}

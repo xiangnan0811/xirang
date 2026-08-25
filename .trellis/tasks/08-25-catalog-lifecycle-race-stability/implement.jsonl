@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Timing-safe context cancellation, explicit channel synchronization, asynchronous lifecycle assertions, repetition, and race verification."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Preserve the production lease/build lifecycle and reuse existing Provider session signals instead of adding timing seams."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Confirm the test-only fix does not drift database, runtime, API, settings, frontend, or privacy contracts."}
+{"file":".trellis/tasks/08-25-catalog-lifecycle-race-stability/research/root-cause.md","reason":"Exact CI RED evidence, confirmed fixture race, selected synchronization boundary, and verification targets."}

@@ -148,7 +148,7 @@ func TestRecoveryPointSourceLifecycleCatalogWaitsForUnifiedBuilderTeardown(t *te
 		releaseProvider: make(chan struct{}), closed: make(chan struct{}),
 	}
 	lease := &catalogUnifiedTeardownLease{
-		CatalogLease: fixture.lease, providerJoined: session.providerJoined,
+		CatalogLease: fixture.lease, providerEntered: session.entered, providerJoined: session.providerJoined,
 		renewed: make(chan struct{}), prematureRelease: make(chan struct{}),
 		finalReleaseEntered: make(chan struct{}), allowFinalRelease: make(chan struct{}),
 	}
@@ -163,10 +163,11 @@ func TestRecoveryPointSourceLifecycleCatalogWaitsForUnifiedBuilderTeardown(t *te
 		t.Fatalf("NewIndexer: %v", err)
 	}
 
+	buildCtx, cancelBuild := context.WithCancel(context.Background())
 	buildDone := make(chan error, 1)
 	buildExited := make(chan struct{})
 	go func() {
-		_, buildErr := indexer.Build(context.Background(), BuildRequest{
+		_, buildErr := indexer.Build(buildCtx, BuildRequest{
 			RepositoryID: fixture.point.RepositoryID, RecoveryPointID: fixture.point.ID,
 		})
 		buildDone <- buildErr
@@ -176,11 +177,13 @@ func TestRecoveryPointSourceLifecycleCatalogWaitsForUnifiedBuilderTeardown(t *te
 	releaseProvider := func() { releaseProviderOnce.Do(func() { close(session.releaseProvider) }) }
 	releaseLease := func() { releaseLeaseOnce.Do(func() { close(lease.allowFinalRelease) }) }
 	t.Cleanup(func() {
+		cancelBuild()
 		releaseProvider()
 		releaseLease()
 		select {
 		case <-buildExited:
 		case <-time.After(catalogLifecycleTestTimeout):
+			t.Error("Catalog Build did not exit during unified-teardown cleanup")
 		}
 	})
 
@@ -657,6 +660,7 @@ func (lease *catalogAcquireBarrierLease) Acquire(ctx context.Context, request ba
 
 type catalogUnifiedTeardownLease struct {
 	CatalogLease
+	providerEntered     <-chan struct{}
 	providerJoined      <-chan struct{}
 	renewed             chan struct{}
 	prematureRelease    chan struct{}
@@ -687,9 +691,14 @@ func (lease *catalogUnifiedTeardownLease) Acquire(ctx context.Context, request b
 	return acquired, nil
 }
 
-func (lease *catalogUnifiedTeardownLease) Renew(context.Context, backupasset.LeaseFence) (backupasset.Lease, error) {
-	lease.renewOnce.Do(func() { close(lease.renewed) })
-	return backupasset.Lease{}, backupasset.ErrLeaseFenceLost
+func (lease *catalogUnifiedTeardownLease) Renew(ctx context.Context, _ backupasset.LeaseFence) (backupasset.Lease, error) {
+	select {
+	case <-lease.providerEntered:
+		lease.renewOnce.Do(func() { close(lease.renewed) })
+		return backupasset.Lease{}, backupasset.ErrLeaseFenceLost
+	case <-ctx.Done():
+		return backupasset.Lease{}, ctx.Err()
+	}
 }
 
 func (lease *catalogUnifiedTeardownLease) Release(ctx context.Context, fence backupasset.LeaseFence) error {

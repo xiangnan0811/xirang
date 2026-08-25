@@ -20,21 +20,24 @@
   "subtasks": [],
   "children": [
     "backup-assets-catalog-sqlite-batch-limit",
-    "08-25-task-run-orphan-reconciliation"
+    "08-25-task-run-orphan-reconciliation",
+    "08-25-catalog-lifecycle-race-stability"
   ],
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [
     ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v0504-console-runbook.md",
     ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v0504-real-data-acceptance.md"
   ],
-  "notes": "Historical v0.50.2 No-Go remains in research/acceptance-protocol.md. v0.50.4 is currently restored and healthy with schema 72|0, backup_assets enabled, an online Rsync repository, active task link, and observed mutable point. The Catalog SQLite batch-limit fix shipped in v0.50.5, but the first production upgrade rolled back automatically when post-upgrade acceptance found one authoritative scheduled TaskRun still active after process replacement with no live transfer process or produced point. Child task-run-orphan-reconciliation owns the formal Cancel repair and stable follow-up release. No production SQL, no manual Catalog retry, and no further upgrade attempt before that fixed release. Node-log collectors stay disabled and P1 cannot start until this gate passes.",
+  "notes": "Historical v0.50.2 No-Go remains in research/acceptance-protocol.md. Production is restored and healthy on v0.50.4 with schema 72|0, backup_assets enabled, an online Rsync repository, active task link, and observed mutable point. The Catalog SQLite batch-limit fix shipped in v0.50.5; the first upgrade rolled back automatically on an authoritative orphan TaskRun. Formal Cancel reconciliation shipped in v0.50.6, but the v0.50.6 post-merge main race gate exposed a second Catalog lifecycle test flake after an earlier sibling flake. Child catalog-lifecycle-race-stability owns the deterministic test-only repair and next stable release. No production SQL, no manual Catalog retry, and no further upgrade attempt before that release is fully green and published. Node-log collectors stay disabled and P1 cannot start until the real-data preview gate passes.",
   "meta": {
     "parent_archive": "forbidden",
     "production_walkthrough": "v0_50_5_upgrade_rolled_back_on_authoritative_orphan_run",
-    "release_acceptance": "awaiting_orphan_reconciliation_release_then_real_data_preview",
+    "release_acceptance": "awaiting_catalog_race_stable_release_then_real_data_preview",
     "rollback": "disconnect_repository_access_without_touching_backup_files",
     "historical_no_go": "v0_50_2_failed_pre_enable_migration",
     "p0_enable_deadlock": "completed_archived_do_not_repeat",
+    "orphan_reconciliation_release": "v0.50.6_published_not_yet_deployed",
+    "release_blocker": "catalog_lifecycle_race_stability",
     "next_gate": "node_log_p1_after_real_data_acceptance",
     "native_aws": "excluded",
     "docs_exclusion": "verified",
