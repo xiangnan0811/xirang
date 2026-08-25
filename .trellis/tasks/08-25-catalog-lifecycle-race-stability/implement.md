@@ -26,7 +26,7 @@
 
 ## Phase 3 — PR, release, and production gate
 
-- [ ] Commit/push, open a conventional-title PR, monitor all required CI, and fix failures on the same branch until green.
+- [ ] Commit/push and PR #461 are complete; monitor all required CI and fix failures on the same branch until green.
 - [ ] Merge only when green; monitor post-merge main CI and do not accept a rerun-only resolution to another Catalog timing failure.
 - [ ] Merge the subsequent stable Release Please PR only when green; monitor GitHub Release and multi-arch Docker publication and verify labels/digests.
 - [ ] Only after the fixed release is verified, provide the root-safe no-`test`, no-`cd` production upgrade/rollback/acceptance command.
