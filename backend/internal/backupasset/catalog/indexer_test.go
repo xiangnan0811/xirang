@@ -712,8 +712,11 @@ func TestCatalogIndexerRevokeJoinsProviderBeforeExactFenceRelease(t *testing.T) 
 
 func TestCatalogIndexerRenewalLossCancelsBuild(t *testing.T) {
 	fixture := newCatalogIndexerFixture(t, true, 0)
+	blockingRenewer := &catalogBlockingLeaseRenewer{
+		inner: catalogFailingLeaseRenewer{}, entered: make(chan struct{}), release: make(chan struct{}),
+	}
 	lease := &catalogIndexerLeaseSpy{
-		CatalogLease: fixture.lease, renewer: catalogFailingLeaseRenewer{},
+		CatalogLease: fixture.lease, renewer: blockingRenewer,
 		renewed: make(chan struct{}, 1), released: make(chan struct{}, 2),
 	}
 	session := &catalogCancellationIgnoringSession{
@@ -727,19 +730,51 @@ func TestCatalogIndexerRenewalLossCancelsBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	buildCtx, cancelBuild := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	buildExited := make(chan struct{})
+	var releaseRenewalOnce, releaseSessionOnce sync.Once
+	releaseRenewal := func() { releaseRenewalOnce.Do(func() { close(blockingRenewer.release) }) }
+	releaseSession := func() { releaseSessionOnce.Do(func() { close(session.release) }) }
+	t.Cleanup(func() {
+		cancelBuild()
+		releaseSession()
+		select {
+		case <-buildExited:
+			releaseRenewal()
+		case <-time.After(time.Second):
+			t.Error("Catalog Build did not exit during renewal-loss cleanup")
+		}
+	})
 	go func() {
-		_, buildErr := indexer.Build(context.Background(), BuildRequest{RepositoryID: fixture.point.RepositoryID, RecoveryPointID: fixture.point.ID})
+		_, buildErr := indexer.Build(buildCtx, BuildRequest{RepositoryID: fixture.point.RepositoryID, RecoveryPointID: fixture.point.ID})
 		done <- buildErr
+		close(buildExited)
 	}()
+	select {
+	case <-blockingRenewer.entered:
+	case <-time.After(time.Second):
+		t.Fatal("Catalog heartbeat did not enter renewal")
+	}
+	select {
+	case <-session.entered:
+	case <-time.After(time.Second):
+		t.Fatal("Catalog session did not enter enumeration")
+	}
+	releaseRenewal()
 	select {
 	case <-session.canceled:
 	case <-time.After(time.Second):
 		t.Fatal("lease renewal loss did not cancel Catalog enumeration")
 	}
-	close(session.release)
-	if err := <-done; !errors.Is(err, backupasset.ErrLeaseFenceLost) {
-		t.Fatalf("renewal-loss Build error=%v", err)
+	releaseSession()
+	select {
+	case err := <-done:
+		if !errors.Is(err, backupasset.ErrLeaseFenceLost) {
+			t.Fatalf("renewal-loss Build error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("renewal-loss Catalog Build did not finish after Provider join")
 	}
 }
 

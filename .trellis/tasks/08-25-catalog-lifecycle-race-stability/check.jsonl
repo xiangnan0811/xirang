@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review explicit cancellation-phase synchronization, bounded channel/context waits, repetition, and race coverage."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Review that existing lifecycle signals are reused and production heartbeat semantics remain unchanged."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review for unintended runtime, database, API, settings, frontend, release, or privacy drift."}
+{"file":".trellis/tasks/08-25-catalog-lifecycle-race-stability/research/root-cause.md","reason":"Review against both observed CI failures and the selected test-only phase gate."}
