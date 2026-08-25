@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Review Search database completeness and dual-engine safety"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review sentinel preservation and safe failures"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review focused/repeated/race/lint/privacy evidence"}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Review branch, PR, CI, and automation delivery state"}
+{"file":".trellis/tasks/08-25-backup-assets-mutable-search-projection/research/root-cause.md","reason":"Reconcile implementation against production root cause"}
+{"file":".trellis/tasks/archive/2026-07/07-18-backup-assets-search-overlays/prd.md","reason":"Review immutable and mutable projection requirements"}
+{"file":".trellis/tasks/archive/2026-07/07-18-backup-assets-search-overlays/design.md","reason":"Review atomic projection, drift, and activation invariants"}

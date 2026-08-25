@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -37,6 +38,246 @@ func TestIndexerZeroDocumentProjectionActivatesAtomically(t *testing.T) {
 	}
 	if documents != 0 {
 		t.Fatalf("zero Catalog produced %d search documents", documents)
+	}
+}
+
+func TestIndexerManifestlessMutableCatalogProjectionActivates(t *testing.T) {
+	indexer, harness := newIndexerTestHarness(t)
+	pointID, catalogID := harness.seedMutableCatalog(t, []model.CatalogEntry{
+		{EntryID: strings.Repeat("1", 64), NormalizedPath: "alpha.txt", Name: "alpha.txt", EntryType: "file"},
+		{EntryID: strings.Repeat("2", 64), NormalizedPath: "beta.txt", Name: "beta.txt", EntryType: "file"},
+	})
+
+	generation, buildErr := indexer.Build(context.Background(), BuildRequest{
+		RecoveryPointID: pointID,
+		CorrelationID:   "mutable-catalog",
+	})
+	var generationCount int64
+	if err := harness.db.Model(&model.BackupAssetSearchGeneration{}).
+		Where("recovery_point_id = ?", pointID).Count(&generationCount).Error; err != nil {
+		t.Fatalf("count Search generations: %v", err)
+	}
+	if buildErr != nil {
+		if !errors.Is(buildErr, ErrSearchCatalogChanged) {
+			t.Fatalf("Build error=%v, want successful mutable Catalog projection", buildErr)
+		}
+		if generationCount != 0 {
+			t.Fatalf("behavioral RED: ErrSearchCatalogChanged with %d Search generations, want zero before the fix", generationCount)
+		}
+		t.Fatalf("behavioral RED: ErrSearchCatalogChanged with zero Search generations; want active mutable Catalog projection")
+	}
+	if generationCount != 1 || generation.State != string(SearchGenerationComplete) || !generation.IsActive ||
+		generation.CatalogGenerationID != catalogID || generation.ExpectedDocumentCount != 2 || generation.WrittenDocumentCount != 2 {
+		t.Fatalf("mutable Catalog Search generation count=%d row=%+v", generationCount, generation)
+	}
+	var documents int64
+	if err := harness.db.Model(&model.BackupAssetSearchDocument{}).
+		Where("search_generation_id = ?", generation.ID).Count(&documents).Error; err != nil {
+		t.Fatalf("count mutable Catalog Search documents: %v", err)
+	}
+	if documents != generation.ExpectedDocumentCount || documents != generation.WrittenDocumentCount {
+		t.Fatalf("mutable Catalog Search documents=%d expected=%d written=%d", documents, generation.ExpectedDocumentCount, generation.WrittenDocumentCount)
+	}
+}
+
+func TestIndexerCatalogReadinessRemainsFailClosed(t *testing.T) {
+	testCases := []struct {
+		name string
+		seed func(*testing.T, *indexerTestHarness) string
+		want error
+	}{
+		{
+			name: "manifest-backed mutable mismatch",
+			seed: func(t *testing.T, harness *indexerTestHarness) string {
+				pointID, catalogID := harness.seedMutableCatalog(t, twoIndexerCatalogEntries())
+				manifestID := strings.Repeat("a", 32)
+				if err := harness.db.Model(&model.CatalogGeneration{}).Where("id = ?", catalogID).Updates(map[string]any{
+					"manifest_id": &manifestID, "expected_entry_count": int64(1),
+				}).Error; err != nil {
+					t.Fatalf("make mutable Catalog manifest-backed: %v", err)
+				}
+				return pointID
+			},
+			want: ErrSearchCatalogChanged,
+		},
+		{
+			name: "manifest-less immutable mismatch",
+			seed: func(t *testing.T, harness *indexerTestHarness) string {
+				pointID, catalogID := harness.seedCatalog(t, twoIndexerCatalogEntries())
+				if err := harness.db.Model(&model.CatalogGeneration{}).Where("id = ?", catalogID).
+					Update("expected_entry_count", int64(1)).Error; err != nil {
+					t.Fatalf("mismatch immutable Catalog count: %v", err)
+				}
+				return pointID
+			},
+			want: ErrSearchCatalogChanged,
+		},
+		{
+			name: "mutable source drift",
+			seed: func(t *testing.T, harness *indexerTestHarness) string {
+				pointID, _ := harness.seedMutableCatalog(t, twoIndexerCatalogEntries())
+				if err := harness.db.Model(&model.RecoveryPoint{}).Where("id = ?", pointID).
+					Update("source_fingerprint", "drifted-source").Error; err != nil {
+					t.Fatalf("drift mutable source: %v", err)
+				}
+				return pointID
+			},
+			want: ErrSearchCatalogChanged,
+		},
+		{
+			name: "mutable point ineligible",
+			seed: func(t *testing.T, harness *indexerTestHarness) string {
+				pointID, _ := harness.seedMutableCatalog(t, twoIndexerCatalogEntries())
+				if err := harness.db.Model(&model.RecoveryPoint{}).Where("id = ?", pointID).
+					Update("state", backupasset.RecoveryPointRetired).Error; err != nil {
+					t.Fatalf("make mutable point ineligible: %v", err)
+				}
+				return pointID
+			},
+			want: ErrSearchSourceChanged,
+		},
+		{
+			name: "mutable negative written count",
+			seed: func(t *testing.T, harness *indexerTestHarness) string {
+				pointID, catalogID := harness.seedMutableCatalog(t, twoIndexerCatalogEntries())
+				if err := harness.db.Model(&model.CatalogGeneration{}).Where("id = ?", catalogID).
+					Update("written_entry_count", int64(-1)).Error; err != nil {
+					t.Fatalf("make mutable Catalog count negative: %v", err)
+				}
+				return pointID
+			},
+			want: ErrSearchCatalogChanged,
+		},
+		{
+			name: "manifest-less mutable unexpected expected count",
+			seed: func(t *testing.T, harness *indexerTestHarness) string {
+				pointID, catalogID := harness.seedMutableCatalog(t, twoIndexerCatalogEntries())
+				if err := harness.db.Model(&model.CatalogGeneration{}).Where("id = ?", catalogID).
+					Update("expected_entry_count", int64(1)).Error; err != nil {
+					t.Fatalf("set unexpected manifest-less expected count: %v", err)
+				}
+				return pointID
+			},
+			want: ErrSearchCatalogChanged,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			indexer, harness := newIndexerTestHarness(t)
+			pointID := testCase.seed(t, harness)
+			if _, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID}); !errors.Is(err, testCase.want) {
+				t.Fatalf("Build error=%v, want %v", err, testCase.want)
+			}
+			var generations int64
+			if err := harness.db.Model(&model.BackupAssetSearchGeneration{}).
+				Where("recovery_point_id = ?", pointID).Count(&generations).Error; err != nil {
+				t.Fatalf("count rejected Search generations: %v", err)
+			}
+			if generations != 0 {
+				t.Fatalf("rejected Search generation count=%d, want zero", generations)
+			}
+		})
+	}
+}
+
+func TestIndexerActivationRevalidatesMutableCatalogAndDocumentCounts(t *testing.T) {
+	testCases := []struct {
+		name    string
+		mutable bool
+		mutate  func(*gorm.DB, string, string) error
+		want    error
+	}{
+		{
+			name:    "manifest-less expected count drift",
+			mutable: true,
+			mutate: func(tx *gorm.DB, _ string, catalogID string) error {
+				return tx.Model(&model.CatalogGeneration{}).Where("id = ?", catalogID).
+					Update("expected_entry_count", int64(1)).Error
+			},
+			want: ErrSearchCatalogChanged,
+		},
+		{
+			name:    "eligible point state drift",
+			mutable: false,
+			mutate: func(tx *gorm.DB, pointID, _ string) error {
+				return tx.Model(&model.RecoveryPoint{}).Where("id = ?", pointID).
+					Update("state", backupasset.RecoveryPointDegraded).Error
+			},
+			want: ErrSearchSourceChanged,
+		},
+		{
+			name:    "eligible point semantics drift",
+			mutable: false,
+			mutate: func(tx *gorm.DB, pointID, _ string) error {
+				return tx.Model(&model.RecoveryPoint{}).Where("id = ?", pointID).
+					Update("semantics", backupasset.PointNativeSnapshot).Error
+			},
+			want: ErrSearchSourceChanged,
+		},
+		{
+			name:    "Catalog manifest identity drift",
+			mutable: false,
+			mutate: func(tx *gorm.DB, _ string, catalogID string) error {
+				manifestID := strings.Repeat("b", 32)
+				return tx.Model(&model.CatalogGeneration{}).Where("id = ?", catalogID).
+					Update("manifest_id", &manifestID).Error
+			},
+			want: ErrSearchCatalogChanged,
+		},
+		{
+			name:    "physical document count drift",
+			mutable: false,
+			mutate: func(tx *gorm.DB, pointID, _ string) error {
+				return tx.Where("recovery_point_id = ?", pointID).
+					Limit(1).Delete(&model.BackupAssetSearchDocument{}).Error
+			},
+			want: ErrSearchCatalogChanged,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, harness := newIndexerTestHarness(t)
+			var pointID, catalogID string
+			if testCase.mutable {
+				pointID, catalogID = harness.seedMutableCatalog(t, twoIndexerCatalogEntries())
+			} else {
+				pointID, catalogID = harness.seedCatalog(t, twoIndexerCatalogEntries())
+			}
+			var validations atomic.Int32
+			lease := &indexerLeaseFake{now: harness.now, validate: func(tx *gorm.DB, _ backupasset.LeaseFence) error {
+				if validations.Add(1) != 3 {
+					return nil
+				}
+				return testCase.mutate(tx, pointID, catalogID)
+			}}
+			indexer, err := NewIndexer(IndexerDependencies{
+				DB: harness.db, Lease: lease, Keys: harness.ring,
+				Now: func() time.Time { return harness.now }, Config: standardIndexerConfig(),
+			})
+			if err != nil {
+				t.Fatalf("NewIndexer: %v", err)
+			}
+			if _, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID}); !errors.Is(err, testCase.want) {
+				t.Fatalf("Build error=%v, want %v", err, testCase.want)
+			}
+			if validations.Load() != 3 {
+				t.Fatalf("lease validations=%d, want activation-time mutation on third validation", validations.Load())
+			}
+			var active, failed int64
+			if err := harness.db.Model(&model.BackupAssetSearchGeneration{}).
+				Where("recovery_point_id = ? AND is_active = ?", pointID, true).Count(&active).Error; err != nil {
+				t.Fatalf("count active Search generations: %v", err)
+			}
+			if err := harness.db.Model(&model.BackupAssetSearchGeneration{}).
+				Where("recovery_point_id = ? AND state = ?", pointID, SearchGenerationFailed).Count(&failed).Error; err != nil {
+				t.Fatalf("count failed Search generations: %v", err)
+			}
+			if active != 0 || failed != 1 {
+				t.Fatalf("activation drift active=%d failed=%d, want zero active and one failed", active, failed)
+			}
+		})
 	}
 }
 
@@ -536,6 +777,13 @@ func standardIndexerConfig() IndexerConfig {
 	return IndexerConfig{BatchSize: 50, BuildTimeout: time.Minute, MaxDocuments: 1000}
 }
 
+func twoIndexerCatalogEntries() []model.CatalogEntry {
+	return []model.CatalogEntry{
+		{EntryID: strings.Repeat("3", 64), NormalizedPath: "first.txt", Name: "first.txt", EntryType: "file"},
+		{EntryID: strings.Repeat("4", 64), NormalizedPath: "second.txt", Name: "second.txt", EntryType: "file"},
+	}
+}
+
 func (harness *indexerTestHarness) seedCatalog(t *testing.T, entries []model.CatalogEntry) (string, string) {
 	t.Helper()
 	pointID := fmt.Sprintf("%032x", time.Now().UnixNano()&0xfffffff)
@@ -563,6 +811,34 @@ func (harness *indexerTestHarness) seedCatalog(t *testing.T, entries []model.Cat
 		if err := harness.db.Create(&entries[index]).Error; err != nil {
 			t.Fatalf("seed Catalog entry: %v", err)
 		}
+	}
+	return pointID, catalogID
+}
+
+func (harness *indexerTestHarness) seedMutableCatalog(t *testing.T, entries []model.CatalogEntry) (string, string) {
+	t.Helper()
+	pointID, catalogID := harness.seedCatalog(t, entries)
+	lineage, err := json.Marshal(backupasset.RecoveryPointLineageSummary{ProducingTaskID: uintPointer(11)})
+	if err != nil {
+		t.Fatalf("encode mutable Catalog lineage: %v", err)
+	}
+	if err := harness.db.Model(&model.RecoveryPoint{}).Where("id = ?", pointID).Updates(map[string]any{
+		"producing_task_run_id": nil,
+		"lineage_json":          string(lineage),
+		"semantics":             backupasset.PointMutableHead,
+		"state":                 backupasset.RecoveryPointObserved,
+		"captured_at":           nil,
+		"committed_at":          nil,
+		"observed_at":           harness.now,
+	}).Error; err != nil {
+		t.Fatalf("make Catalog point mutable: %v", err)
+	}
+	if err := harness.db.Model(&model.CatalogGeneration{}).Where("id = ?", catalogID).Updates(map[string]any{
+		"manifest_id":          nil,
+		"expected_entry_count": 0,
+		"written_entry_count":  int64(len(entries)),
+	}).Error; err != nil {
+		t.Fatalf("make Catalog generation manifest-less: %v", err)
 	}
 	return pointID, catalogID
 }

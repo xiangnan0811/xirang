@@ -317,8 +317,7 @@ func (indexer *Indexer) loadFrozenProjection(ctx context.Context, request BuildR
 	} else if err != nil {
 		return frozenProjection{}, fmt.Errorf("load active Catalog for Search: %w", err)
 	}
-	if catalogGeneration.SourceFingerprint != point.SourceFingerprint || catalogGeneration.WrittenEntryCount < 0 ||
-		catalogGeneration.WrittenEntryCount != catalogGeneration.ExpectedEntryCount {
+	if catalogGeneration.SourceFingerprint != point.SourceFingerprint || !catalogCountReadyForSearch(point, catalogGeneration) {
 		return frozenProjection{}, ErrSearchCatalogChanged
 	}
 	key, err := indexer.activeSearchKey(ctx)
@@ -561,13 +560,18 @@ func (indexer *Indexer) activate(
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", frozen.point.ID).Take(&point).Error; err != nil {
 			return ErrSearchSourceChanged
 		}
-		if point.SourceFingerprint != frozen.point.SourceFingerprint || !eligibleSearchPoint(point) {
+		if point.SourceFingerprint != frozen.point.SourceFingerprint || point.Semantics != frozen.point.Semantics ||
+			point.State != frozen.point.State || !eligibleSearchPoint(point) {
 			return ErrSearchSourceChanged
 		}
 		var catalogGeneration model.CatalogGeneration
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", frozen.catalog.ID).Take(&catalogGeneration).Error; err != nil ||
 			catalogGeneration.RecoveryPointID != frozen.point.ID || !catalogGeneration.IsActive || catalogGeneration.State != "complete" ||
-			catalogGeneration.SourceFingerprint != frozen.point.SourceFingerprint || catalogGeneration.WrittenEntryCount != frozen.catalog.WrittenEntryCount {
+			catalogGeneration.SourceFingerprint != frozen.point.SourceFingerprint || catalogGeneration.WrittenEntryCount != frozen.catalog.WrittenEntryCount ||
+			catalogGeneration.ExpectedEntryCount != frozen.catalog.ExpectedEntryCount ||
+			(catalogGeneration.ManifestID == nil) != (frozen.catalog.ManifestID == nil) ||
+			(catalogGeneration.ManifestID != nil && *catalogGeneration.ManifestID != *frozen.catalog.ManifestID) ||
+			!catalogCountReadyForSearch(point, catalogGeneration) {
 			return ErrSearchCatalogChanged
 		}
 		var keyRow model.WrappedDomainKey
@@ -650,6 +654,16 @@ func eligibleSearchPoint(point model.RecoveryPoint) bool {
 	return (semantics == backupasset.PointMutableHead && state == backupasset.RecoveryPointObserved) ||
 		((semantics == backupasset.PointNativeSnapshot || semantics == backupasset.PointXirangManifest || semantics == backupasset.PointImportedBaseline) &&
 			(state == backupasset.RecoveryPointCommitted || state == backupasset.RecoveryPointDegraded))
+}
+
+func catalogCountReadyForSearch(point model.RecoveryPoint, generation model.CatalogGeneration) bool {
+	if generation.ExpectedEntryCount < 0 || generation.WrittenEntryCount < 0 {
+		return false
+	}
+	if backupasset.PointVersionSemantics(point.Semantics) == backupasset.PointMutableHead && generation.ManifestID == nil {
+		return generation.ExpectedEntryCount == 0
+	}
+	return generation.WrittenEntryCount == generation.ExpectedEntryCount
 }
 
 func indexerLineageIdentity(point model.RecoveryPoint) (string, error) {

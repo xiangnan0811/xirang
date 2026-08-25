@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Search projection database and cross-engine count-proof contracts"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Typed fail-closed Search error behavior and privacy"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Backend TDD, Search projection, race, lint, and privacy requirements"}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Dedicated branch, PR, CI, merge, and post-merge automation"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Catalog to Search to API/UI count and coverage data flow"}
+{"file":".trellis/tasks/08-25-backup-assets-mutable-search-projection/research/root-cause.md","reason":"Production and code root-cause evidence"}
+{"file":".trellis/tasks/archive/2026-07/07-18-backup-assets-search-overlays/prd.md","reason":"Approved mutable-head, projection completeness, and coverage requirements"}
+{"file":".trellis/tasks/archive/2026-07/07-18-backup-assets-search-overlays/design.md","reason":"Approved atomic Search projection and activation design"}
