@@ -15,8 +15,8 @@
   "branch": "codex/backup-assets-mutable-search-projection",
   "base_branch": "main",
   "worktree_path": "/home/murray/code/xirang/.worktrees/backup-assets-mutable-search-projection",
-  "commit": null,
-  "pr_url": null,
+  "commit": "6b036467d96362c2d84d8b825e23718dbe8b5f3a",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/462",
   "subtasks": [],
   "children": [],
   "parent": "08-21-backup-assets-release-acceptance",
@@ -34,6 +34,6 @@
     "schema_change": "none_expected",
     "api_change": "none_expected",
     "production_task3": "paused_disabled_zero_active_runs",
-    "next_gate": "commit_pr_and_required_ci"
+    "next_gate": "required_pr_ci"
   }
 }

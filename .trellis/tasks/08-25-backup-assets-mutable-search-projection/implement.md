@@ -32,7 +32,7 @@
 
 ## Phase 4 — Delivery and production acceptance
 
-- [ ] Commit and push the dedicated branch; open one conventional-title PR.
+- [x] Commit and push the dedicated branch; open one conventional-title PR.
 - [ ] Monitor required CI, fix failures on this branch, and merge only when all
   required checks are green.
 - [ ] Monitor Release Please, GitHub Release, Docker multi-arch publish, and
