@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.50.6](https://github.com/xiangnan0811/xirang/compare/v0.50.5...v0.50.6) (2026-08-25)
+
+
+### 🐛 Bug Fixes
+
+* **task:** reconcile orphaned runs on cancel ([#459](https://github.com/xiangnan0811/xirang/issues/459)) ([d773448](https://github.com/xiangnan0811/xirang/commit/d77344879c937b641d7e741a6e31549c119565ba))
+
 ## [0.50.5](https://github.com/xiangnan0811/xirang/compare/v0.50.4...v0.50.5) (2026-08-24)
 
 
