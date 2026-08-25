@@ -695,6 +695,80 @@ func TestCancelAtPublicTriggerOwnerRegistrationPreventsScheduling(t *testing.T) 
 	}
 }
 
+func TestCancelReadsTaskOutcomeBeforeSignalingLiveOwner(t *testing.T) {
+	db := openConcurrentManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Update("status", string(StatusSuccess)).Error; err != nil {
+		t.Fatal(err)
+	}
+	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
+
+	ownerCanceled := make(chan struct{})
+	ownership := &pendingRunOwnership{}
+	ownership.addCancel(func() { close(ownerCanceled) })
+	manager.pendingRuns.Store(taskEntity.ID, ownership)
+	t.Cleanup(func() { manager.pendingRuns.CompareAndDelete(taskEntity.ID, ownership) })
+
+	readEntered := make(chan struct{})
+	readRelease := make(chan struct{})
+	var readEnteredOnce sync.Once
+	var readReleaseOnce sync.Once
+	releaseRead := func() { readReleaseOnce.Do(func() { close(readRelease) }) }
+	var blockRead atomic.Bool
+	blockRead.Store(true)
+	callbackName := fmt.Sprintf("test:cancel-read-before-owner-signal-%d", taskEntity.ID)
+	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "tasks" || !blockRead.CompareAndSwap(true, false) {
+			return
+		}
+		readEnteredOnce.Do(func() { close(readEntered) })
+		<-readRelease
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		releaseRead()
+		_ = db.Callback().Query().Remove(callbackName)
+	})
+
+	cancelResult := make(chan error, 1)
+	go func() { cancelResult <- manager.Cancel(taskEntity.ID) }()
+	select {
+	case <-readEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Cancel did not read the prior Task outcome")
+	}
+	select {
+	case <-ownerCanceled:
+		t.Fatal("Cancel signaled the live owner before reading the prior Task outcome")
+	default:
+	}
+
+	releaseRead()
+	select {
+	case <-ownerCanceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Cancel did not signal the live owner after reading the Task outcome")
+	}
+	select {
+	case err := <-cancelResult:
+		if err != nil {
+			t.Fatalf("Cancel live owner: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Cancel did not return after signaling the live owner")
+	}
+
+	var finalRun model.TaskRun
+	if err := db.First(&finalRun, runID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if finalRun.Status != model.TaskRunStatusCanceled {
+		t.Fatalf("TaskRun status=%q, want canceled", finalRun.Status)
+	}
+}
+
 func TestCancelTerminalPausedTaskReconcilesAuthoritativeRunningOrphan(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)

@@ -35,7 +35,7 @@
     "schema_change": "none_expected",
     "api_change": "none_expected",
     "privacy": "static_sanitized_terminal_messages_only",
-    "implementation_gate": "full_backend_test_lint_vet_build_and_two_independent_trellis_reviews_passed",
+    "implementation_gate": "postgres_ci_red_reproduced_locally_and_ordering_repair_passed_full_backend_gates_and_independent_review",
     "release_gate": "fixed_image_then_formal_cancel_resume_and_parent_asset_acceptance"
   }
 }

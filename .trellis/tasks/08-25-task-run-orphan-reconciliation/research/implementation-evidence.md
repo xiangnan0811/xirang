@@ -46,6 +46,19 @@
 - Server build: `GOTOOLCHAIN=go1.26.6 TMPDIR=/run/user/1000 GOTMPDIR=/run/user/1000 go build -o /run/user/1000/xirang-orphan-server ./cmd/server`, exit 0.
 - The successful suite used the direct, non-symlinked per-user runtime tmpfs and serialized package builds. Earlier attempts under a long Btrfs path and the capacity-constrained shared `/tmp` did not satisfy Unix-socket path, free-inode, or linker-space prerequisites and are not counted as code-test evidence.
 
+## PostgreSQL CI regression and ordering repair
+
+- PR #459 first ran against commit `e7d2173075aaf57857b74f32890a85440295f775`. Its PostgreSQL Recovery behavior parity job reached a real behavioral RED: `ManagerCancelAfterEntryCommitPreservesPriorOutcome` failed because the executor-entry transaction did not durably commit.
+- Log analysis proved this was not PostgreSQL lock contention. `Cancel` signaled the live `pendingRunOwnership` before reading the durable Task outcome; the canceled executor context then failed admission and rolled back the entry transaction. The approximately five-second Task query timing came from the test's deliberate post-query callback barrier.
+- A deterministic public `Manager.Cancel` regression, `TestCancelReadsTaskOutcomeBeforeSignalingLiveOwner`, reproduced the ordering defect locally and failed because the owner was signaled before the prior Task outcome was read.
+- The first repair moved every owner signal after the Task read. That made the new regression green but correctly exposed a separate direct/legacy-runner regression: `TestDirectRunnerCleanupDoesNotDeleteCancelBarrier` timed out because that path must be signaled while the Cancel barrier owns `pendingRuns`.
+- The final repair distinguishes the paths. Trigger-owned `pendingRunOwnership` reads the Task outcome before signaling; a direct/legacy `chainRunner` under the Cancel barrier is signaled before the read. If a trigger owner disappears between the read and signal, Cancel returns the fixed in-progress error and never falls through to orphan reconciliation.
+- Final focused ordering/direct-runner/executor-entry selectors passed with `-count=10` (`ok xirang/backend/internal/task 0.878s`). The complete Cancel/direct race surface passed with `-race -count=3` (`ok xirang/backend/internal/task 2.959s`).
+- Post-repair package verification passed: `go test ./internal/task -count=1` (`ok xirang/backend/internal/task 3.280s`), Go 1.26.6 package vet, focused lint (`0 issues`), `gofmt -d`, and `git diff --check`.
+- Post-repair full backend verification passed: serialized `go test -p 1 ./...`, full Go 1.26.6 vet, full lint (`0 issues`), and `go build ./cmd/server`.
+- Independent read-only review found no blocking issue and confirmed the two-path ordering repair. The actual PostgreSQL selector remains intentionally unclaimed locally because `TEST_POSTGRES_DSN` is unavailable; the next CI run is the required proof.
+
 ## Deliberately not claimed
 
-- No commit, push, PR, CI, release, or production acceptance has been completed yet.
+- The implementation and task metadata commits were pushed and PR #459 is open. The first CI run exposed the PostgreSQL ordering RED described above; the repaired head still requires a new green CI run before merge.
+- No merge, fixed release, production upgrade, formal production Cancel/Resume, or backup-assets production acceptance has been completed yet.

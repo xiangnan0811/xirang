@@ -38,10 +38,12 @@
 - [x] Run task-package tests, package lint/vet, focused race/repetition checks, formatting, and
   `git diff --check`.
 - [x] Run the remaining full-backend lint/test/build gates.
+- [x] Reproduce the PostgreSQL CI live-owner ordering failure with a deterministic public-path RED,
+  preserve the distinct direct-runner barrier ordering, and re-run focused race plus full-backend gates.
 
 ## Phase 4 — PR, release, and production acceptance
 
-- [ ] Commit/push, open PR, monitor every required CI job, fix on the same branch, and merge only green.
+- [ ] Commit/push and open PR #459; monitor every required CI job, fix on the same branch, and merge only green.
 - [ ] Monitor post-merge Release Please, merge the release PR when green, and monitor Docker publish.
 - [ ] Give the operator a no-`test`, no-`cd` root-safe preflight/backup/upgrade/rollback runbook.
 - [ ] On the fixed stable image, use formal Cancel to prove zero active runs before formal Resume.

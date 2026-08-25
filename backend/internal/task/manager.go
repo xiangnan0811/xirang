@@ -845,17 +845,17 @@ func (m *Manager) Cancel(taskID uint) error {
 		if _, canceling := existing.(*taskCancelTriggerBarrier); canceling {
 			return errTaskCancelInProgress
 		}
-		if !m.cancelTaskRunOwner(taskID) {
+		if _, owned := existing.(*pendingRunOwnership); !owned {
 			return errTaskCancelInProgress
 		}
-		return m.cancelLiveOwnedTask(taskID)
+		return m.cancelLiveOwnedTask(taskID, false)
 	}
 
 	// A legacy/direct runner may have registered only in chainRunner. Preserve
 	// that live-owner path even though the barrier won pendingRuns.
-	if m.cancelTaskRunOwner(taskID) {
+	if _, owned := m.chainRunner.Load(taskID); owned {
 		defer m.pendingRuns.CompareAndDelete(taskID, barrier)
-		return m.cancelLiveOwnedTask(taskID)
+		return m.cancelLiveOwnedTask(taskID, true)
 	}
 	defer m.pendingRuns.CompareAndDelete(taskID, barrier)
 
@@ -869,10 +869,20 @@ func (m *Manager) Cancel(taskID uint) error {
 	return nil
 }
 
-func (m *Manager) cancelLiveOwnedTask(taskID uint) error {
+func (m *Manager) cancelLiveOwnedTask(taskID uint, signalBeforeRead bool) error {
+	if signalBeforeRead && !m.cancelTaskRunOwner(taskID) {
+		return errTaskCancelInProgress
+	}
 	var taskEntity model.Task
 	if err := m.db.First(&taskEntity, taskID).Error; err != nil {
 		return err
+	}
+	// Trigger-owned runners may be inside the executor-entry transaction. Keep
+	// the established boundary by capturing the durable Task outcome before
+	// signaling them; context-aware database transactions may otherwise abort
+	// before committing the outcome cancellation must preserve and compensate.
+	if !signalBeforeRead && !m.cancelTaskRunOwner(taskID) {
+		return errTaskCancelInProgress
 	}
 
 	switch ParseStatus(taskEntity.Status) {
