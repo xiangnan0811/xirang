@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Review authority filtering, atomicity, rollback, and SQLite/PostgreSQL-compatible CAS behavior."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review unsupported terminal behavior, error propagation, and fail-closed outcomes."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review TDD evidence, concurrency coverage, race detection, and backend gates."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Review durable and logged cancellation text for privacy and sanitization."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Confirm no unintended API, scheduler, publication, schema, or frontend contract drift."}
+{"file":".trellis/tasks/08-25-task-run-orphan-reconciliation/research/orphan-run-contract.md","reason":"Review against the chosen operator-controlled reconciliation contract and rejected alternatives."}
