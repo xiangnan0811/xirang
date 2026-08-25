@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.50.7](https://github.com/xiangnan0811/xirang/compare/v0.50.6...v0.50.7) (2026-08-25)
+
+
+### 🐛 Bug Fixes
+
+* **backup-assets:** project mutable catalogs into search ([#462](https://github.com/xiangnan0811/xirang/issues/462)) ([dc755c1](https://github.com/xiangnan0811/xirang/commit/dc755c10fc8946f91013f132e6e0a6404fd4aef6))
+
 ## [0.50.6](https://github.com/xiangnan0811/xirang/compare/v0.50.5...v0.50.6) (2026-08-25)
 
 
