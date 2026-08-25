@@ -1,0 +1,39 @@
+{
+  "id": "backup-assets-mutable-search-projection",
+  "name": "backup-assets-mutable-search-projection",
+  "title": "Backup Assets Mutable Catalog Search Projection",
+  "description": "Allow Search to project an active complete mutable-head Catalog whose manifest expected count is unavailable, while preserving immutable count and drift fail-closed checks.",
+  "status": "in_progress",
+  "dev_type": "backend",
+  "scope": "backupasset-search",
+  "package": "backend",
+  "priority": "P0",
+  "creator": "murray",
+  "assignee": "murray",
+  "createdAt": "2026-08-25",
+  "completedAt": null,
+  "branch": "codex/backup-assets-mutable-search-projection",
+  "base_branch": "main",
+  "worktree_path": "/home/murray/code/xirang/.worktrees/backup-assets-mutable-search-projection",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "08-21-backup-assets-release-acceptance",
+  "relatedFiles": [
+    "backend/internal/backupasset/search/indexer.go",
+    "backend/internal/backupasset/search/indexer_test.go",
+    ".trellis/tasks/08-25-backup-assets-mutable-search-projection/research/root-cause.md"
+  ],
+  "notes": "Production v0.50.6 completed mutable Catalog generation 37 with 60,515 entries after formal Repository Reconcile, but Search stayed unavailable beyond its reconcile interval. Code and independent read-only review confirm manifest-less mutable Catalog expected_entry_count=0 means unknown, while Search rejects written_entry_count>0 before lease or generation creation. Task 3 stays paused; no production SQL or Provider mutation is permitted.",
+  "meta": {
+    "worktree_path": "/home/murray/code/xirang/.worktrees/backup-assets-mutable-search-projection",
+    "incident": "mutable_catalog_search_prefirstwrite_rejection",
+    "implementation_authorized": true,
+    "root_cause_state": "confirmed_by_production_and_code_path",
+    "schema_change": "none_expected",
+    "api_change": "none_expected",
+    "production_task3": "paused_disabled_zero_active_runs",
+    "next_gate": "commit_pr_and_required_ci"
+  }
+}
