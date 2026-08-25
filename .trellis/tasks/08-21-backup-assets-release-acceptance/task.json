@@ -19,18 +19,19 @@
   "pr_url": null,
   "subtasks": [],
   "children": [
-    "backup-assets-catalog-sqlite-batch-limit"
+    "backup-assets-catalog-sqlite-batch-limit",
+    "08-25-task-run-orphan-reconciliation"
   ],
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [
     ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v0504-console-runbook.md",
     ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v0504-real-data-acceptance.md"
   ],
-  "notes": "Historical v0.50.2 No-Go remains in research/acceptance-protocol.md. v0.50.4 (214f5e18) is released, healthy, schema 72|0, backup_assets enabled and FeatureLive. Formal Connect for Rsync Task 3 succeeded and produced an online repository, active link, and observed mutable point, but four automatic Catalog generations failed deterministically with catalog_build_failed before Search. Child backup-assets-catalog-sqlite-batch-limit owns the TDD product fix. No production SQL or manual Catalog retry. Node-log collectors stay disabled and P1 cannot start until this gate passes.",
+  "notes": "Historical v0.50.2 No-Go remains in research/acceptance-protocol.md. v0.50.4 is currently restored and healthy with schema 72|0, backup_assets enabled, an online Rsync repository, active task link, and observed mutable point. The Catalog SQLite batch-limit fix shipped in v0.50.5, but the first production upgrade rolled back automatically when post-upgrade acceptance found one authoritative scheduled TaskRun still active after process replacement with no live transfer process or produced point. Child task-run-orphan-reconciliation owns the formal Cancel repair and stable follow-up release. No production SQL, no manual Catalog retry, and no further upgrade attempt before that fixed release. Node-log collectors stay disabled and P1 cannot start until this gate passes.",
   "meta": {
     "parent_archive": "forbidden",
-    "production_walkthrough": "v0_50_4_catalog_automatic_retry_observation",
-    "release_acceptance": "v0_50_4_feature_live_catalog_automatic_retry_observation",
+    "production_walkthrough": "v0_50_5_upgrade_rolled_back_on_authoritative_orphan_run",
+    "release_acceptance": "awaiting_orphan_reconciliation_release_then_real_data_preview",
     "rollback": "disconnect_repository_access_without_touching_backup_files",
     "historical_no_go": "v0_50_2_failed_pre_enable_migration",
     "p0_enable_deadlock": "completed_archived_do_not_repeat",

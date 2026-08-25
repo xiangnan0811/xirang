@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Authoritative TaskRun node snapshots, transaction boundaries, and compare-and-swap requirements."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Fail-closed domain errors and safe wrapping for cancellation fallback failures."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Async task-run regression, race, and integration verification requirements."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Structured and sanitized runtime cancellation evidence."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse the formal Cancel path and existing ownership/status contracts instead of adding repair APIs."}
+{"file":".trellis/tasks/08-25-task-run-orphan-reconciliation/research/orphan-run-contract.md","reason":"Confirmed failure path and selected minimal release-safe reconciliation boundary."}

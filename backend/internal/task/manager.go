@@ -59,9 +59,13 @@ const (
 )
 
 var (
-	ErrNodeWriteConflict    = errors.New("node write conflict")
-	ErrNodeWriteUnavailable = errors.New("node write admission unavailable")
-	ErrNodeWriteStartLost   = errors.New("node write start compare-and-swap lost")
+	ErrNodeWriteConflict     = errors.New("node write conflict")
+	ErrNodeWriteUnavailable  = errors.New("node write admission unavailable")
+	ErrNodeWriteStartLost    = errors.New("node write start compare-and-swap lost")
+	errTaskCancelInProgress  = errors.New("任务取消操作正在进行，请稍候再试")
+	errTaskCancelConflict    = errors.New("任务状态已变化，请重试")
+	errTaskCancelUnavailable = errors.New("取消任务失败，请稍后重试")
+	errTaskCancelUnsupported = errors.New("仅支持取消待执行、重试中或运行中的任务")
 )
 
 // NodeWriteAdmission serializes TaskRun reservations with durable Recovery
@@ -96,6 +100,12 @@ type pendingRunOwnership struct {
 	canceled bool
 	cancels  []context.CancelFunc
 }
+
+// taskCancelTriggerBarrier occupies the same process-local ownership slot as a
+// trigger while no-owner cancellation inspects and terminalizes durable state.
+// Its distinct type prevents a concurrent Cancel from treating the barrier as
+// a live runner.
+type taskCancelTriggerBarrier struct{}
 
 func (ownership *pendingRunOwnership) addCancel(cancel context.CancelFunc) {
 	if ownership == nil || cancel == nil {
@@ -691,7 +701,7 @@ func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
 			if nodeIDForCleanup > 0 {
 				m.restoreNodes.Delete(nodeIDForCleanup)
 			}
-			m.pendingRuns.Delete(taskID)
+			m.pendingRuns.CompareAndDelete(taskID, ownership)
 		}
 	}()
 
@@ -799,7 +809,7 @@ func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
 	m.taskWG.Add(1)
 	go func() {
 		defer m.taskWG.Done()
-		m.runRestoreTaskWithContext(taskID, run.ID, restoreTask, execCtx, ownership.cancel)
+		m.runRestoreTaskWithContext(taskID, run.ID, restoreTask, execCtx, ownership, ownership.cancel)
 	}()
 	return run.ID, nil
 }
@@ -829,6 +839,37 @@ func validateRestorePath(path string) error {
 }
 
 func (m *Manager) Cancel(taskID uint) error {
+	barrier := &taskCancelTriggerBarrier{}
+	existing, loaded := m.pendingRuns.LoadOrStore(taskID, barrier)
+	if loaded {
+		if _, canceling := existing.(*taskCancelTriggerBarrier); canceling {
+			return errTaskCancelInProgress
+		}
+		if !m.cancelTaskRunOwner(taskID) {
+			return errTaskCancelInProgress
+		}
+		return m.cancelLiveOwnedTask(taskID)
+	}
+
+	// A legacy/direct runner may have registered only in chainRunner. Preserve
+	// that live-owner path even though the barrier won pendingRuns.
+	if m.cancelTaskRunOwner(taskID) {
+		defer m.pendingRuns.CompareAndDelete(taskID, barrier)
+		return m.cancelLiveOwnedTask(taskID)
+	}
+	defer m.pendingRuns.CompareAndDelete(taskID, barrier)
+
+	m.stopRetryTimer(taskID)
+	m.retryChainContexts.Delete(taskID)
+	status, err := m.reconcileOrphanTaskRuns(taskID)
+	if err != nil {
+		return err
+	}
+	m.logDispatcher.Dispatch(taskID, nil, "warn", "任务已取消", status)
+	return nil
+}
+
+func (m *Manager) cancelLiveOwnedTask(taskID uint) error {
 	var taskEntity model.Task
 	if err := m.db.First(&taskEntity, taskID).Error; err != nil {
 		return err
@@ -841,12 +882,11 @@ func (m *Manager) Cancel(taskID uint) error {
 		// Runners register their cancel function before competing for any
 		// executor-entry lock. Signal it before the pending-row CAS so a start
 		// transaction cannot advance after cancellation authority is observed.
-		runnerOwnsCancellation := m.cancelTaskRunOwner(taskID)
 		canceledRuns, err := m.cancelPendingTaskRuns(taskID, "任务已取消")
 		if err != nil {
 			return err
 		}
-		if runnerOwnsCancellation && canceledRuns == 0 {
+		if canceledRuns == 0 {
 			// The runner may already have committed its atomic entry. It owns the
 			// matching no-executor compensation and the captured Task snapshot.
 			m.logDispatcher.Dispatch(taskID, nil, "warn", "任务取消请求已发送", taskEntity.Status)
@@ -862,41 +902,117 @@ func (m *Manager) Cancel(taskID uint) error {
 		return nil
 	case StatusRunning:
 		m.stopRetryTimer(taskID)
-		if m.cancelTaskRunOwner(taskID) {
-			// Once a runner owns cancellation, it also owns the atomic terminal
-			// update. An independent Task overwrite here can race its no-executor
-			// compensation and destroy the exact pre-entry outcome.
-			m.logDispatcher.Dispatch(taskID, nil, "warn", "任务已取消，正在终止执行进程", taskEntity.Status)
-			return nil
-		}
-		// Compatibility fallback for a persisted running Task with no live
-		// process owner (for example after an older process crashed).
-		var current struct{ Status string }
-		if err := m.db.Model(&model.Task{}).Select("status").Where("id = ?", taskID).Take(&current).Error; err != nil {
-			return err
-		}
-		// 只有在 runTask 尚未处理取消（状态仍为 running）时才主动写入 canceled。
-		// runTask 检测到 ctx 取消后会将状态更新为 canceled，此处作为 fallback。
-		if ParseStatus(current.Status) == StatusRunning {
-			_ = m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
-				"next_run_at": nextCronRun(taskEntity.CronSpec),
-				"last_error":  "任务已取消",
-			})
-		}
+		// Once a runner owns cancellation, it also owns the atomic terminal
+		// update. An independent Task overwrite here can race its no-executor
+		// compensation and destroy the exact pre-entry outcome.
 		m.logDispatcher.Dispatch(taskID, nil, "warn", "任务已取消，正在终止执行进程", taskEntity.Status)
 		return nil
 	default:
 		// Terminal-state Tasks may own either an ordinary or legacy-restore runner
 		// between reservation and executor entry.
-		if m.cancelTaskRunOwner(taskID) {
-			if _, err := m.cancelPendingTaskRuns(taskID, "任务已取消"); err != nil {
-				return err
+		if _, err := m.cancelPendingTaskRuns(taskID, "任务已取消"); err != nil {
+			return err
+		}
+		m.logDispatcher.Dispatch(taskID, nil, "warn", "任务已取消", taskEntity.Status)
+		return nil
+	}
+}
+
+func (m *Manager) reconcileOrphanTaskRuns(taskID uint) (string, error) {
+	finishedAt := time.Now().UTC()
+	activeStatuses := model.TaskRunActiveStatuses()
+	observedTaskStatus := ""
+	err := m.db.Transaction(func(tx *gorm.DB) error {
+		var taskEntity model.Task
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", taskID).Limit(1).Find(&taskEntity)
+		if result.Error != nil {
+			logger.Module("task").Error().Err(result.Error).Uint("task_id", taskID).Msg("加载待取消任务失败")
+			return errTaskCancelUnavailable
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		observedTaskStatus = taskEntity.Status
+		if !model.IsTaskRunNodeSnapshotAuthoritative(taskEntity.NodeID) {
+			return errTaskCancelConflict
+		}
+
+		var runs []model.TaskRun
+		if err := tx.Where("task_id = ? AND node_id_snapshot = ? AND status IN ?", taskID, taskEntity.NodeID, activeStatuses).
+			Order("id ASC").Find(&runs).Error; err != nil {
+			logger.Module("task").Error().Err(err).Uint("task_id", taskID).Msg("加载待取消执行记录失败")
+			return errTaskCancelUnavailable
+		}
+
+		taskStatus := TaskStatus(taskEntity.Status)
+		taskIsActive := taskStatus == StatusPending || taskStatus == StatusRunning || taskStatus == StatusRetrying
+		taskIsTerminal := taskStatus == StatusSuccess || taskStatus == StatusFailed || taskStatus == StatusCanceled ||
+			taskStatus == StatusWarning || taskStatus == StatusSkipped
+		if taskIsActive && len(runs) == 0 {
+			return errTaskCancelConflict
+		}
+		if !taskIsActive && (!taskIsTerminal || len(runs) == 0) {
+			return errTaskCancelUnsupported
+		}
+
+		for i := range runs {
+			run := &runs[i]
+			durationMs := int64(0)
+			if run.StartedAt != nil {
+				durationMs = finishedAt.Sub(run.StartedAt.UTC()).Milliseconds()
+				if durationMs < 0 {
+					durationMs = 0
+				}
 			}
-			m.logDispatcher.Dispatch(taskID, nil, "warn", "任务已取消", taskEntity.Status)
+			updates := map[string]any{
+				"status":      model.TaskRunStatusCanceled,
+				"finished_at": &finishedAt,
+				"duration_ms": durationMs,
+				"last_error":  "任务已取消",
+			}
+			if run.Status == model.TaskRunStatusPending {
+				updates["started_at"] = nil
+				updates["duration_ms"] = int64(0)
+			}
+			updated := tx.Model(&model.TaskRun{}).
+				Where("id = ? AND task_id = ? AND node_id_snapshot = ? AND status = ?", run.ID, taskID, taskEntity.NodeID, run.Status).
+				Updates(updates)
+			if updated.Error != nil {
+				logger.Module("task").Error().Err(updated.Error).Uint("task_id", taskID).Uint("task_run_id", run.ID).Msg("取消孤立执行记录失败")
+				return errTaskCancelUnavailable
+			}
+			if updated.RowsAffected != 1 {
+				return errTaskCancelConflict
+			}
+		}
+
+		if !taskIsActive {
 			return nil
 		}
-		return fmt.Errorf("仅支持取消待执行、重试中或运行中的任务")
+		updated := tx.Model(&model.Task{}).
+			Where("id = ? AND node_id = ? AND status = ?", taskID, taskEntity.NodeID, taskEntity.Status).
+			Updates(map[string]any{
+				"status":      string(StatusCanceled),
+				"next_run_at": nextCronRun(taskEntity.CronSpec),
+				"last_error":  "任务已取消",
+			})
+		if updated.Error != nil {
+			logger.Module("task").Error().Err(updated.Error).Uint("task_id", taskID).Msg("取消任务聚合状态失败")
+			return errTaskCancelUnavailable
+		}
+		if updated.RowsAffected != 1 {
+			return errTaskCancelConflict
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) &&
+		!errors.Is(err, errTaskCancelConflict) && !errors.Is(err, errTaskCancelUnavailable) &&
+		!errors.Is(err, errTaskCancelUnsupported) {
+		logger.Module("task").Error().Err(err).Uint("task_id", taskID).Msg("取消任务事务失败")
+		err = errTaskCancelUnavailable
 	}
+	return observedTaskStatus, err
 }
 
 func (m *Manager) cancelTaskRunOwner(taskID uint) bool {

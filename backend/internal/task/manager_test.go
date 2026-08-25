@@ -1,10 +1,12 @@
 package task
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -17,6 +19,7 @@ import (
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/credentialaudit"
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 	"xirang/backend/internal/sshutil"
@@ -24,6 +27,7 @@ import (
 	"xirang/backend/internal/task/scheduler"
 
 	"github.com/mattn/go-sqlite3"
+	"github.com/rs/zerolog"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -691,6 +695,719 @@ func TestCancelAtPublicTriggerOwnerRegistrationPreventsScheduling(t *testing.T) 
 	}
 }
 
+func TestCancelTerminalPausedTaskReconcilesAuthoritativeRunningOrphan(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := manager.Shutdown(shutdownCtx); err != nil {
+			t.Fatalf("shutdown task manager: %v", err)
+		}
+	})
+
+	taskEntity := seedTaskForManagerTest(t, db)
+	startedAt := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Millisecond)
+	nextRunAt := startedAt.Add(30 * time.Minute)
+	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Updates(map[string]any{
+		"status":        string(StatusCanceled),
+		"enabled":       false,
+		"last_run_at":   &startedAt,
+		"next_run_at":   &nextRunAt,
+		"last_error":    "previous terminal outcome",
+		"retry_count":   2,
+		"skip_next":     true,
+		"verify_status": "warning",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	var before model.Task
+	if err := db.First(&before, taskEntity.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	orphan := model.TaskRun{
+		TaskID:       taskEntity.ID,
+		TriggerType:  "cron",
+		Status:       model.TaskRunStatusRunning,
+		StartedAt:    &startedAt,
+		DurationMs:   0,
+		LastError:    "",
+		VerifyStatus: "none",
+		Progress:     37,
+	}
+	if err := db.Create(&orphan).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.Cancel(taskEntity.ID); err != nil {
+		t.Fatalf("Cancel terminal paused orphan: %v", err)
+	}
+
+	var after model.Task
+	if err := db.First(&after, taskEntity.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("terminal Task aggregate changed:\n before=%+v\n after=%+v", before, after)
+	}
+	var reconciled model.TaskRun
+	if err := db.First(&reconciled, orphan.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if reconciled.Status != model.TaskRunStatusCanceled {
+		t.Fatalf("TaskRun status=%q, want canceled", reconciled.Status)
+	}
+	if reconciled.FinishedAt == nil {
+		t.Fatal("reconciled TaskRun finished_at is nil")
+	}
+	if reconciled.StartedAt == nil || !reconciled.StartedAt.Equal(startedAt) {
+		t.Fatalf("reconciled TaskRun started_at=%v, want preserved %v", reconciled.StartedAt, startedAt)
+	}
+	wantDuration := reconciled.FinishedAt.Sub(startedAt).Milliseconds()
+	if wantDuration < 0 {
+		wantDuration = 0
+	}
+	if reconciled.DurationMs != wantDuration {
+		t.Fatalf("reconciled TaskRun duration_ms=%d, want %d", reconciled.DurationMs, wantDuration)
+	}
+	if reconciled.LastError != "任务已取消" {
+		t.Fatalf("reconciled TaskRun last_error=%q, want fixed sanitized reason", reconciled.LastError)
+	}
+	if _, owned := manager.pendingRuns.Load(taskEntity.ID); owned {
+		t.Fatal("Cancel leaked process-local trigger barrier")
+	}
+}
+
+func TestCancelActiveTaskWithoutAuthoritativeActiveRunFailsClosed(t *testing.T) {
+	for _, testCase := range []struct {
+		name           string
+		seedMismatched bool
+	}{
+		{name: "missing"},
+		{name: "node_mismatched", seedMismatched: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := openManagerTestDB(t)
+			manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+			t.Cleanup(func() {
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				if err := manager.Shutdown(shutdownCtx); err != nil {
+					t.Fatalf("shutdown task manager: %v", err)
+				}
+			})
+
+			taskEntity := seedTaskForManagerTest(t, db)
+			lastRunAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+			if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Updates(map[string]any{
+				"status":      string(StatusRunning),
+				"last_run_at": &lastRunAt,
+				"last_error":  "previous active outcome",
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			var mismatched *model.TaskRun
+			if testCase.seedMismatched {
+				run := model.TaskRun{
+					TaskID: taskEntity.ID, TriggerType: "cron", Status: model.TaskRunStatusRunning, StartedAt: &lastRunAt,
+				}
+				if err := db.Create(&run).Error; err != nil {
+					t.Fatal(err)
+				}
+				if err := db.Model(&model.TaskRun{}).Where("id = ?", run.ID).
+					UpdateColumn("node_id_snapshot", taskEntity.NodeID+1).Error; err != nil {
+					t.Fatal(err)
+				}
+				if err := db.First(&run, run.ID).Error; err != nil {
+					t.Fatal(err)
+				}
+				mismatched = &run
+			}
+			var before model.Task
+			if err := db.First(&before, taskEntity.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+
+			err := manager.Cancel(taskEntity.ID)
+			if !errors.Is(err, errTaskCancelConflict) {
+				t.Fatalf("Cancel error=%v, want fixed authority conflict", err)
+			}
+			var after model.Task
+			if err := db.First(&after, taskEntity.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("authority-gap Cancel changed Task:\n before=%+v\n after=%+v", before, after)
+			}
+			if mismatched != nil {
+				var afterRun model.TaskRun
+				if err := db.First(&afterRun, mismatched.ID).Error; err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(afterRun, *mismatched) {
+					t.Fatalf("authority-gap Cancel changed mismatched TaskRun:\n before=%+v\n after=%+v", *mismatched, afterRun)
+				}
+			}
+			if _, owned := manager.pendingRuns.Load(taskEntity.ID); owned {
+				t.Fatal("failed Cancel leaked process-local trigger barrier")
+			}
+		})
+	}
+}
+
+func TestCancelActiveTaskAndAuthoritativeRunsCommitAtomically(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := manager.Shutdown(shutdownCtx); err != nil {
+			t.Fatalf("shutdown task manager: %v", err)
+		}
+	})
+
+	taskEntity := seedTaskForManagerTest(t, db)
+	lastRunAt := time.Now().UTC().Add(-3 * time.Minute).Truncate(time.Millisecond)
+	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Updates(map[string]any{
+		"status":      string(StatusRunning),
+		"last_run_at": &lastRunAt,
+		"last_error":  "previous active outcome",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	runningStartedAt := lastRunAt
+	retryingStartedAt := lastRunAt.Add(-time.Minute)
+	matching := []model.TaskRun{
+		{TaskID: taskEntity.ID, TriggerType: "manual", Status: model.TaskRunStatusPending},
+		{TaskID: taskEntity.ID, TriggerType: "cron", Status: model.TaskRunStatusRunning, StartedAt: &runningStartedAt},
+		{TaskID: taskEntity.ID, TriggerType: "retry", Status: model.TaskRunStatusRetrying, StartedAt: &retryingStartedAt},
+	}
+	for i := range matching {
+		if err := db.Create(&matching[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	alreadyTerminalAt := lastRunAt.Add(-time.Minute)
+	alreadyTerminal := model.TaskRun{
+		TaskID: taskEntity.ID, TriggerType: "manual", Status: model.TaskRunStatusSuccess,
+		StartedAt: &alreadyTerminalAt, FinishedAt: &lastRunAt, DurationMs: time.Minute.Milliseconds(),
+	}
+	if err := db.Create(&alreadyTerminal).Error; err != nil {
+		t.Fatal(err)
+	}
+	mismatched := model.TaskRun{
+		TaskID: taskEntity.ID, TriggerType: "cron", Status: model.TaskRunStatusRunning, StartedAt: &lastRunAt,
+	}
+	if err := db.Create(&mismatched).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", mismatched.ID).
+		UpdateColumn("node_id_snapshot", taskEntity.NodeID+1).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&mismatched, mismatched.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	legacyUnknown := model.TaskRun{
+		TaskID: taskEntity.ID, TriggerType: "retry", Status: model.TaskRunStatusRetrying, StartedAt: &retryingStartedAt,
+	}
+	if err := db.Create(&legacyUnknown).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", legacyUnknown.ID).
+		UpdateColumn("node_id_snapshot", model.TaskRunNodeIDLegacyUnknown).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&legacyUnknown, legacyUnknown.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	otherTask := model.Task{
+		Name:         "task-manager-other",
+		NodeID:       taskEntity.NodeID,
+		ExecutorType: "rsync",
+		Status:       string(StatusRunning),
+		RsyncSource:  "/tmp/src-other",
+		RsyncTarget:  "/tmp/dst-other",
+	}
+	if err := db.Create(&otherTask).Error; err != nil {
+		t.Fatal(err)
+	}
+	otherStartedAt := time.Now().UTC().Truncate(time.Millisecond)
+	otherRun := model.TaskRun{
+		TaskID: otherTask.ID, TriggerType: "cron", Status: model.TaskRunStatusRunning, StartedAt: &otherStartedAt,
+	}
+	if err := db.Create(&otherRun).Error; err != nil {
+		t.Fatal(err)
+	}
+	untouchedBefore := make([]model.TaskRun, 0, 4)
+	for _, runID := range []uint{alreadyTerminal.ID, mismatched.ID, legacyUnknown.ID, otherRun.ID} {
+		var run model.TaskRun
+		if err := db.First(&run, runID).Error; err != nil {
+			t.Fatal(err)
+		}
+		untouchedBefore = append(untouchedBefore, run)
+	}
+
+	if err := manager.Cancel(taskEntity.ID); err != nil {
+		t.Fatalf("Cancel active orphan set: %v", err)
+	}
+
+	var sharedFinishedAt *time.Time
+	for i := range matching {
+		var run model.TaskRun
+		if err := db.First(&run, matching[i].ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if run.Status != model.TaskRunStatusCanceled || run.FinishedAt == nil || run.LastError != "任务已取消" {
+			t.Fatalf("matching TaskRun %d terminal evidence status/finished/error=%q/%v/%q",
+				run.ID, run.Status, run.FinishedAt, run.LastError)
+		}
+		if sharedFinishedAt == nil {
+			finishedAt := *run.FinishedAt
+			sharedFinishedAt = &finishedAt
+		} else if !run.FinishedAt.Equal(*sharedFinishedAt) {
+			t.Fatalf("matching TaskRun %d finished_at=%v, want shared %v", run.ID, run.FinishedAt, sharedFinishedAt)
+		}
+		if matching[i].Status == model.TaskRunStatusPending {
+			if run.StartedAt != nil || run.DurationMs != 0 {
+				t.Fatalf("pending TaskRun timing started_at/duration=%v/%d, want nil/0", run.StartedAt, run.DurationMs)
+			}
+			continue
+		}
+		if run.StartedAt == nil || matching[i].StartedAt == nil || !run.StartedAt.Equal(*matching[i].StartedAt) {
+			t.Fatalf("started TaskRun %d start evidence changed: got=%v want=%v", run.ID, run.StartedAt, matching[i].StartedAt)
+		}
+		wantDuration := run.FinishedAt.Sub(run.StartedAt.UTC()).Milliseconds()
+		if wantDuration < 0 {
+			wantDuration = 0
+		}
+		if run.DurationMs != wantDuration {
+			t.Fatalf("started TaskRun %d duration_ms=%d, want %d", run.ID, run.DurationMs, wantDuration)
+		}
+	}
+
+	var finalTask model.Task
+	if err := db.First(&finalTask, taskEntity.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if finalTask.Status != string(StatusCanceled) || finalTask.LastError != "任务已取消" || !finalTask.Enabled {
+		t.Fatalf("active Task terminal status/error/enabled=%q/%q/%v", finalTask.Status, finalTask.LastError, finalTask.Enabled)
+	}
+	for _, untouched := range untouchedBefore {
+		var after model.TaskRun
+		if err := db.First(&after, untouched.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(after, untouched) {
+			t.Fatalf("out-of-authority TaskRun %d changed:\n before=%+v\n after=%+v", untouched.ID, untouched, after)
+		}
+	}
+	if _, owned := manager.pendingRuns.Load(taskEntity.ID); owned {
+		t.Fatal("successful active-set Cancel leaked process-local trigger barrier")
+	}
+}
+
+func TestCancelTerminalTaskWithoutAuthoritativeActiveRunRetainsUnsupported(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := manager.Shutdown(shutdownCtx); err != nil {
+			t.Fatalf("shutdown task manager: %v", err)
+		}
+	})
+	taskEntity := seedTaskForManagerTest(t, db)
+	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Updates(map[string]any{
+		"status":     string(StatusSuccess),
+		"last_error": "previous terminal outcome",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	terminalRun := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: model.TaskRunStatusSuccess}
+	if err := db.Create(&terminalRun).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&terminalRun, terminalRun.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	var beforeTask model.Task
+	if err := db.First(&beforeTask, taskEntity.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	err := manager.Cancel(taskEntity.ID)
+	if !errors.Is(err, errTaskCancelUnsupported) {
+		t.Fatalf("terminal Task Cancel error=%v, want existing unsupported result", err)
+	}
+	var afterTask model.Task
+	if err := db.First(&afterTask, taskEntity.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(afterTask, beforeTask) {
+		t.Fatalf("unsupported terminal Cancel changed Task:\n before=%+v\n after=%+v", beforeTask, afterTask)
+	}
+	var afterRun model.TaskRun
+	if err := db.First(&afterRun, terminalRun.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(afterRun, terminalRun) {
+		t.Fatalf("unsupported terminal Cancel changed TaskRun:\n before=%+v\n after=%+v", terminalRun, afterRun)
+	}
+}
+
+func TestCancelTriggerBarrierBlocksNewOwnerAndConcurrentCancel(t *testing.T) {
+	db := openConcurrentManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	orphan := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: model.TaskRunStatusPending}
+	if err := db.Create(&orphan).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	queryEntered := make(chan struct{})
+	queryRelease := make(chan struct{})
+	var enteredOnce sync.Once
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(queryRelease) }) }
+	callbackName := fmt.Sprintf("test:block-orphan-cancel-task-read-%d", taskEntity.ID)
+	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "tasks" {
+			return
+		}
+		enteredOnce.Do(func() { close(queryEntered) })
+		<-queryRelease
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		release()
+		_ = db.Callback().Query().Remove(callbackName)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := manager.Shutdown(shutdownCtx); err != nil {
+			t.Fatalf("shutdown task manager: %v", err)
+		}
+	})
+
+	firstCancel := make(chan error, 1)
+	go func() { firstCancel <- manager.Cancel(taskEntity.ID) }()
+	select {
+	case <-queryEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Cancel did not acquire its barrier before durable inspection")
+	}
+	if _, err := manager.TriggerManual(taskEntity.ID); err == nil || !strings.Contains(err.Error(), "正在执行") {
+		t.Fatalf("trigger under Cancel barrier error=%v, want existing duplicate-trigger rejection", err)
+	}
+	if err := manager.Cancel(taskEntity.ID); !errors.Is(err, errTaskCancelInProgress) {
+		t.Fatalf("concurrent Cancel error=%v, want fixed in-progress result", err)
+	}
+	var runCount int64
+	if err := db.Model(&model.TaskRun{}).Where("task_id = ?", taskEntity.ID).Count(&runCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if runCount != 1 {
+		t.Fatalf("trigger under Cancel barrier created TaskRun count=%d, want existing orphan only", runCount)
+	}
+	release()
+	select {
+	case err := <-firstCancel:
+		if err != nil {
+			t.Fatalf("barrier-owning Cancel: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("barrier-owning Cancel did not complete")
+	}
+	var reconciled model.TaskRun
+	if err := db.First(&reconciled, orphan.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if reconciled.Status != model.TaskRunStatusCanceled {
+		t.Fatalf("barrier-owning Cancel left TaskRun status=%q", reconciled.Status)
+	}
+	if _, owned := manager.pendingRuns.Load(taskEntity.ID); owned {
+		t.Fatal("barrier-owning Cancel leaked process-local trigger barrier")
+	}
+}
+
+func TestDirectRunnerCleanupDoesNotDeleteCancelBarrier(t *testing.T) {
+	db := openConcurrentManagerTestDB(t)
+	exec := newBlockingExecutor()
+	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	taskEntity := seedTaskForManagerTest(t, db)
+	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
+
+	queryEntered := make(chan struct{})
+	queryRelease := make(chan struct{})
+	var enteredOnce sync.Once
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(queryRelease) }) }
+	var blockNextTaskQuery atomic.Bool
+	callbackName := fmt.Sprintf("test:block-direct-runner-live-cancel-read-%d", taskEntity.ID)
+	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "tasks" || !blockNextTaskQuery.CompareAndSwap(true, false) {
+			return
+		}
+		enteredOnce.Do(func() { close(queryEntered) })
+		<-queryRelease
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		release()
+		_ = db.Callback().Query().Remove(callbackName)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := manager.Shutdown(shutdownCtx); err != nil {
+			t.Fatalf("shutdown task manager: %v", err)
+		}
+	})
+
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		manager.runTask(taskEntity.ID, runID, "manual", generateChainRunID())
+	}()
+	select {
+	case <-exec.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("direct runner did not enter executor")
+	}
+
+	blockNextTaskQuery.Store(true)
+	cancelResult := make(chan error, 1)
+	go func() { cancelResult <- manager.Cancel(taskEntity.ID) }()
+	select {
+	case <-queryEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Cancel did not reach the blocked live-owner Task read")
+	}
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("direct runner did not finish after cancellation")
+	}
+	value, ok := manager.pendingRuns.Load(taskEntity.ID)
+	if !ok {
+		t.Fatal("direct runner cleanup erased the Cancel-owned trigger barrier")
+	}
+	if _, barrier := value.(*taskCancelTriggerBarrier); !barrier {
+		t.Fatalf("pendingRuns value=%T, want Cancel-owned trigger barrier", value)
+	}
+
+	release()
+	select {
+	case err := <-cancelResult:
+		if err != nil {
+			t.Fatalf("Cancel direct runner: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Cancel did not finish after releasing its Task read")
+	}
+	if _, ok := manager.pendingRuns.Load(taskEntity.ID); ok {
+		t.Fatal("Cancel leaked its trigger barrier after returning")
+	}
+}
+
+func TestCancelOrphanReconciliationRollsBackOnCASDrift(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		driftTask bool
+	}{
+		{name: "task_run"},
+		{name: "task", driftTask: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := openManagerTestDB(t)
+			manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+			t.Cleanup(func() {
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				if err := manager.Shutdown(shutdownCtx); err != nil {
+					t.Fatalf("shutdown task manager: %v", err)
+				}
+			})
+
+			taskEntity := seedTaskForManagerTest(t, db)
+			startedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+			if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Updates(map[string]any{
+				"status":      string(StatusRunning),
+				"last_run_at": &startedAt,
+				"last_error":  "previous active outcome",
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			runs := []model.TaskRun{
+				{TaskID: taskEntity.ID, TriggerType: "cron", Status: model.TaskRunStatusRunning, StartedAt: &startedAt},
+				{TaskID: taskEntity.ID, TriggerType: "retry", Status: model.TaskRunStatusRetrying, StartedAt: &startedAt},
+			}
+			for i := range runs {
+				if err := db.Create(&runs[i]).Error; err != nil {
+					t.Fatal(err)
+				}
+				if err := db.First(&runs[i], runs[i].ID).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			var beforeTask model.Task
+			if err := db.First(&beforeTask, taskEntity.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+
+			var runUpdateCount atomic.Int32
+			var injected atomic.Bool
+			callbackName := fmt.Sprintf("test:orphan-cancel-cas-drift-%s-%d", testCase.name, taskEntity.ID)
+			if err := db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+				updates, ok := tx.Statement.Dest.(map[string]any)
+				if !ok || updates["status"] != model.TaskRunStatusCanceled {
+					return
+				}
+				if testCase.driftTask {
+					if tx.Statement.Table != "tasks" || !injected.CompareAndSwap(false, true) {
+						return
+					}
+					if err := tx.Session(&gorm.Session{NewDB: true}).Exec(
+						"UPDATE tasks SET status = ? WHERE id = ?", string(StatusWarning), taskEntity.ID,
+					).Error; err != nil {
+						_ = tx.AddError(err)
+					}
+					return
+				}
+				if tx.Statement.Table != "task_runs" || runUpdateCount.Add(1) != 2 || !injected.CompareAndSwap(false, true) {
+					return
+				}
+				if err := tx.Session(&gorm.Session{NewDB: true}).Exec(
+					"UPDATE task_runs SET status = ? WHERE id = ?", model.TaskRunStatusSuccess, runs[1].ID,
+				).Error; err != nil {
+					_ = tx.AddError(err)
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Callback().Update().Remove(callbackName) })
+
+			err := manager.Cancel(taskEntity.ID)
+			if !errors.Is(err, errTaskCancelConflict) {
+				t.Fatalf("Cancel after %s CAS drift error=%v, want fixed conflict", testCase.name, err)
+			}
+			if !injected.Load() {
+				t.Fatalf("%s CAS drift was not injected", testCase.name)
+			}
+			var afterTask model.Task
+			if err := db.First(&afterTask, taskEntity.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(afterTask, beforeTask) {
+				t.Fatalf("%s CAS drift partially changed Task:\n before=%+v\n after=%+v", testCase.name, beforeTask, afterTask)
+			}
+			for _, beforeRun := range runs {
+				var afterRun model.TaskRun
+				if err := db.First(&afterRun, beforeRun.ID).Error; err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(afterRun, beforeRun) {
+					t.Fatalf("%s CAS drift partially changed TaskRun %d:\n before=%+v\n after=%+v",
+						testCase.name, beforeRun.ID, beforeRun, afterRun)
+				}
+			}
+			if _, owned := manager.pendingRuns.Load(taskEntity.ID); owned {
+				t.Fatalf("%s CAS drift leaked process-local trigger barrier", testCase.name)
+			}
+		})
+	}
+}
+
+func TestCancelOrphanReconciliationReturnsFixedSafeDatabaseError(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	var logBuffer bytes.Buffer
+	previousLogger := logger.Log
+	logger.Log = zerolog.New(&logBuffer)
+	t.Cleanup(func() {
+		logger.Log = previousLogger
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := manager.Shutdown(shutdownCtx); err != nil {
+			t.Fatalf("shutdown task manager: %v", err)
+		}
+	})
+
+	taskEntity := seedTaskForManagerTest(t, db)
+	startedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Updates(map[string]any{
+		"status":      string(StatusRunning),
+		"last_run_at": &startedAt,
+		"last_error":  "previous active outcome",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	orphan := model.TaskRun{
+		TaskID: taskEntity.ID, TriggerType: "cron", Status: model.TaskRunStatusRunning, StartedAt: &startedAt,
+	}
+	if err := db.Create(&orphan).Error; err != nil {
+		t.Fatal(err)
+	}
+	var beforeTask model.Task
+	if err := db.First(&beforeTask, taskEntity.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&orphan, orphan.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	rawCanary := "INTERNAL_DB_CANARY_FOR_TEST_ONLY"
+	var injected atomic.Bool
+	callbackName := fmt.Sprintf("test:orphan-cancel-db-error-%d", taskEntity.ID)
+	if err := db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		updates, ok := tx.Statement.Dest.(map[string]any)
+		if !ok || tx.Statement.Table != "task_runs" || updates["status"] != model.TaskRunStatusCanceled ||
+			!injected.CompareAndSwap(false, true) {
+			return
+		}
+		_ = tx.AddError(errors.New(rawCanary))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Update().Remove(callbackName) })
+
+	err := manager.Cancel(taskEntity.ID)
+	if !errors.Is(err, errTaskCancelUnavailable) {
+		t.Fatalf("Cancel database error=%v, want fixed unavailable result", err)
+	}
+	if strings.Contains(err.Error(), rawCanary) || err.Error() != errTaskCancelUnavailable.Error() {
+		t.Fatalf("Cancel exposed raw database error: %q", err)
+	}
+	if !injected.Load() {
+		t.Fatal("database error was not injected")
+	}
+	logOutput := logBuffer.String()
+	if !strings.Contains(logOutput, rawCanary) ||
+		!strings.Contains(logOutput, fmt.Sprintf(`"task_id":%d`, taskEntity.ID)) ||
+		!strings.Contains(logOutput, fmt.Sprintf(`"task_run_id":%d`, orphan.ID)) {
+		t.Fatalf("structured server log omitted internal error/identifiers: %s", logOutput)
+	}
+	var afterTask model.Task
+	if err := db.First(&afterTask, taskEntity.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(afterTask, beforeTask) {
+		t.Fatalf("database error partially changed Task:\n before=%+v\n after=%+v", beforeTask, afterTask)
+	}
+	var afterRun model.TaskRun
+	if err := db.First(&afterRun, orphan.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(afterRun, orphan) {
+		t.Fatalf("database error partially changed TaskRun:\n before=%+v\n after=%+v", orphan, afterRun)
+	}
+	if _, owned := manager.pendingRuns.Load(taskEntity.ID); owned {
+		t.Fatal("database error leaked process-local trigger barrier")
+	}
+}
+
 func TestCancelAfterTriggerDurablyTerminatesPendingRunBeforeExecutor(t *testing.T) {
 	for _, testCase := range []struct {
 		name    string
@@ -1205,10 +1922,10 @@ func testNoExecutorCompensationAfterDurableEntry(
 			restoreTask := taskEntity
 			restoreTask.RsyncSource = taskEntity.RsyncTarget
 			restoreTask.RsyncTarget = "/tmp/no-executor-restore"
-			manager.runRestoreTaskWithContext(taskEntity.ID, runID, restoreTask, runCtx, runCancel)
+			manager.runRestoreTaskWithContext(taskEntity.ID, runID, restoreTask, runCtx, nil, runCancel)
 			return
 		}
-		manager.runTaskWithContext(taskEntity.ID, runID, "manual", generateChainRunID(), runCtx, runCancel)
+		manager.runTaskWithContext(taskEntity.ID, runID, "manual", generateChainRunID(), runCtx, nil, runCancel)
 	}()
 
 	select {

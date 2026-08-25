@@ -100,7 +100,7 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 				registeredCancel()
 				m.chainRunner.Delete(taskID)
 			}
-			m.pendingRuns.Delete(taskID)
+			m.pendingRuns.CompareAndDelete(taskID, ownership)
 		}
 	}()
 
@@ -208,7 +208,7 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 	m.taskWG.Add(1)
 	go func() {
 		defer m.taskWG.Done()
-		m.runTaskWithContext(taskID, run.ID, reason, chainRunID, runCtx, ownership.cancel)
+		m.runTaskWithContext(taskID, run.ID, reason, chainRunID, runCtx, ownership, ownership.cancel)
 	}()
 	return run.ID, nil
 }
@@ -216,7 +216,7 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID string) {
 	runCtx, runCancel := context.WithCancel(context.Background())
 	m.chainRunner.Store(taskID, runCancel)
-	m.runTaskWithContext(taskID, runID, reason, chainRunID, runCtx, runCancel)
+	m.runTaskWithContext(taskID, runID, reason, chainRunID, runCtx, nil, runCancel)
 }
 
 func (m *Manager) runTaskWithContext(
@@ -225,9 +225,12 @@ func (m *Manager) runTaskWithContext(
 	reason string,
 	chainRunID string,
 	runCtx context.Context,
+	ownership *pendingRunOwnership,
 	runCancel context.CancelFunc,
 ) {
-	defer m.pendingRuns.Delete(taskID)
+	if ownership != nil {
+		defer m.pendingRuns.CompareAndDelete(taskID, ownership)
+	}
 	defer m.locks.Delete(taskID) // 清理任务锁，防止 sync.Map 无限增长
 	defer m.chainRunner.Delete(taskID)
 	defer runCancel()
@@ -815,7 +818,7 @@ func (m *Manager) runRestoreTask(taskID uint, runID uint, restoreTask model.Task
 		"operation": "restore_task",
 	})
 	m.chainRunner.Store(taskID, cancel)
-	m.runRestoreTaskWithContext(taskID, runID, restoreTask, execCtx, cancel)
+	m.runRestoreTaskWithContext(taskID, runID, restoreTask, execCtx, nil, cancel)
 }
 
 func (m *Manager) runRestoreTaskWithContext(
@@ -823,9 +826,12 @@ func (m *Manager) runRestoreTaskWithContext(
 	runID uint,
 	restoreTask model.Task,
 	execCtx context.Context,
+	ownership *pendingRunOwnership,
 	cancel context.CancelFunc,
 ) {
-	defer m.pendingRuns.Delete(taskID)
+	if ownership != nil {
+		defer m.pendingRuns.CompareAndDelete(taskID, ownership)
+	}
 	defer m.locks.Delete(taskID) // 清理任务锁，防止 sync.Map 无限增长
 	defer m.restoreNodes.Delete(restoreTask.NodeID)
 

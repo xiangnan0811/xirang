@@ -1,0 +1,41 @@
+{
+  "id": "task-run-orphan-reconciliation",
+  "name": "task-run-orphan-reconciliation",
+  "title": "任务运行中断孤儿状态收敛",
+  "description": "修复进程重建后无活动执行所有者的 running Task/TaskRun 无法通过正式取消或启动恢复收敛的问题，并为生产升级与备份资产验收恢复安全门禁。",
+  "status": "in_progress",
+  "dev_type": "backend",
+  "scope": "task-runtime",
+  "package": "backend",
+  "priority": "P0",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-08-25",
+  "completedAt": null,
+  "branch": "codex/task-run-orphan-reconciliation",
+  "base_branch": "main",
+  "worktree_path": "/home/murray/code/xirang/.worktrees/task-run-orphan-reconciliation",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "08-21-backup-assets-release-acceptance",
+  "relatedFiles": [
+    "backend/internal/task/manager.go",
+    "backend/internal/task/manager_test.go",
+    "backend/internal/task/runner.go"
+  ],
+  "notes": "Production evidence after a container replacement proves one authoritative scheduled TaskRun remained running without a live transfer process, durable recovery point, newer active run, or progress update. On the old release, formal Pause(cancel_running=true) can disable the schedule and change the Task aggregate to canceled while leaving the active TaskRun behind, so the repair must support both the observed running aggregate and that narrow paused shape. The release-safe repair uses the existing Cancel command, authoritative node snapshots, a process-local trigger barrier, and transactional compare-and-swap updates; it must not use direct production SQL, broaden publication startup reconciliation, or expose runtime details.",
+  "meta": {
+    "incident": "authoritative_task_run_orphan_after_process_replacement",
+    "implementation_authorized": true,
+    "root_cause_state": "confirmed_by_production_evidence_and_code_path",
+    "production_state": "observed_running_enabled_with_authoritative_active_run_pause_result_pending",
+    "production_mutation": "formal_cancel_only_after_fixed_release_upgrade",
+    "schema_change": "none_expected",
+    "api_change": "none_expected",
+    "privacy": "static_sanitized_terminal_messages_only",
+    "implementation_gate": "full_backend_test_lint_vet_build_and_two_independent_trellis_reviews_passed",
+    "release_gate": "fixed_image_then_formal_cancel_resume_and_parent_asset_acceptance"
+  }
+}
