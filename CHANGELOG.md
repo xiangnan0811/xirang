@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.50.8](https://github.com/xiangnan0811/xirang/compare/v0.50.7...v0.50.8) (2026-08-26)
+
+
+### 🐛 Bug Fixes
+
+* **backup-assets:** isolate search startup failures ([#464](https://github.com/xiangnan0811/xirang/issues/464)) ([6c124d9](https://github.com/xiangnan0811/xirang/commit/6c124d95fdf2b4432ab62b4a2b1d00669fd5ee61))
+
 ## [0.50.7](https://github.com/xiangnan0811/xirang/compare/v0.50.6...v0.50.7) (2026-08-25)
 
 
