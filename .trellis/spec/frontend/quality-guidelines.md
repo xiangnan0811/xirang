@@ -298,6 +298,96 @@ return { last, nextCursor: cursor };
 
 ---
 
+## Scenario: Backup Asset Native Preview UI Eligibility
+
+### 1. Scope / Trigger
+
+- Trigger: changing the backup-asset workspace preview action, Catalog
+  permission fixtures, authenticated role handling, renderer selection, or
+  recovery-point read capabilities.
+
+### 2. Signatures
+
+- UI boundary: `BackupAssetsWorkspace` derives `canPreview` and passes it to
+  `AssetPreview`.
+- Server authority:
+  `POST /recovery-points/:id/entries/:entryId/delivery-tickets` guarded by
+  `backup_assets:preview`.
+- Sequential renderers: `escaped_text` and `metadata_hex`; the remaining native
+  preview renderers require Range reads.
+
+### 3. Contracts
+
+- Native preview UI eligibility requires a non-empty auth token, exact role
+  `admin` or `operator`, Catalog `permissions.list=true`, available content, a
+  selected recovery point, and the selected renderer's exact read capability.
+- Catalog `permissions.preview` is not the native delivery-ticket authorization
+  source and must not gate this action. Keep the upstream Catalog projection
+  list-only; never fabricate `preview=true` in a fixture, mapper, or producer.
+- Frontend eligibility is advisory and fail-closed. The delivery-ticket route
+  RBAC remains final authority; 401, 403, capability denial, and typed secret
+  reveal errors continue through the existing safe state mapper.
+- Keep download, export, recover, archive, renderer selection, and ticket API
+  behavior independent. Secret/unknown preview step-up remains Admin-only;
+  Operator never acquires or requests Admin step-up capability.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Admin/Operator + token + list-only Catalog + content + exact capability | Show Load Preview and send the exact selected asset only after user action. |
+| Viewer, normalized unknown/null role, or missing token | Hide Load Preview and do not request a ticket. |
+| Catalog list is false or content is unavailable | Hide Load Preview and do not request a ticket. |
+| Text/metadata-hex without `openSequential` | Hide Load Preview even if `openRange` is true. |
+| Range renderer without `openRange` | Hide Load Preview even if `openSequential` is true. |
+| Server returns 401/403/capability denial | Remain blocked through the existing safe error mapping. |
+| Operator receives `secret_reveal_required` | Remain blocked; do not call `ensureStepUpProof`. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: an Operator with a valid token sees Load Preview for a metadata-hex
+  asset when the real list-only Catalog says `preview=false` and sequential read
+  is available; the server still evaluates `backup_assets:preview`.
+- Base: Viewer or missing runtime keeps the action hidden without issuing a
+  ticket.
+- Bad: requiring `catalog.permissions.preview`, rewriting it to true, or showing
+  the action to every listed role silently conflates browse and ticket authority.
+
+### 6. Tests Required
+
+- Workspace tests must use a producer-realistic Catalog fixture with
+  `list=true`, `preview=false`, content available, and explicit renderer
+  capabilities; cover Admin and Operator positive cases.
+- Cover missing token, Viewer/null role, list=false, content unavailable,
+  missing selected recovery point, sequential-capability denial, and
+  Range-capability denial. Assert no ticket action is called in negative cases.
+- Keep state tests for ordinary ticket issue, Admin secret-reveal retry, Operator
+  fail-closed behavior, and typed/untyped denial mapping.
+- Run the backend delivery-ticket RBAC selector for unauthenticated,
+  Admin/Operator, Viewer, and unknown roles plus the full frontend gate.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+const canPreview = catalog.permissions.preview && contentAvailable;
+```
+
+Correct:
+
+```ts
+const eligibleRole = role === "admin" || role === "operator";
+const canPreview = Boolean(
+  token && eligibleRole && catalog.permissions.list && contentAvailable &&
+    recoveryPoint && (needsRange
+      ? recoveryPoint.capabilities.openRange
+      : recoveryPoint.capabilities.openSequential)
+);
+```
+
+---
+
 ## Code Review Checklist
 
 - Does the change use typed API wrappers and mapped domain data?

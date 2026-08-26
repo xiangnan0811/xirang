@@ -1,0 +1,30 @@
+{
+  "id": "backup-assets-preview-authorization-ui",
+  "name": "backup-assets-preview-authorization-ui",
+  "title": "Backup assets preview authorization UI acceptance",
+  "description": "Restore the formal delivery-ticket preview path when Catalog permissions are intentionally list-only, then complete the production content-preview acceptance without changing backend authorization.",
+  "status": "in_progress",
+  "dev_type": "bugfix",
+  "scope": "frontend",
+  "package": "web",
+  "priority": "P0",
+  "creator": "weibo",
+  "assignee": "weibo",
+  "createdAt": "2026-08-26",
+  "completedAt": null,
+  "branch": "codex/backup-assets-preview-authorization-ui",
+  "base_branch": "main",
+  "worktree_path": "/home/murray/code/xirang/.worktrees/backup-assets-preview-authorization-ui",
+  "commit": null,
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/468",
+  "subtasks": [],
+  "children": [],
+  "parent": "08-21-backup-assets-release-acceptance",
+  "relatedFiles": [
+    "web/src/features/backup-assets/backup-assets-workspace.tsx",
+    "web/src/features/backup-assets/backup-assets-workspace.test.tsx",
+    ".trellis/spec/frontend/quality-guidelines.md"
+  ],
+  "notes": "Plan explicitly approved by the user on 2026-08-26. Implementation must begin in the newly created continuation session, not the originating long session.",
+  "meta": {}
+}

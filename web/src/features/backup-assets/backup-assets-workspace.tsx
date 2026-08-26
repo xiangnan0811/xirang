@@ -153,9 +153,12 @@ export function BackupAssetsWorkspace({
     previewProduct.renderer !== "escaped_text" &&
     previewProduct.renderer !== "metadata_hex";
   const canPreview = Boolean(
-    selectedCatalog?.permissions.preview &&
+    processingRuntime?.token &&
+      (processingRuntime.role === "admin" || processingRuntime.role === "operator") &&
+      selectedCatalog?.permissions.list &&
       selectedCatalog.contentAvailability.available &&
       controller.selectedRecoveryPoint &&
+      previewProduct &&
       (previewNeedsRange
         ? controller.selectedRecoveryPoint.capabilities.openRange
         : controller.selectedRecoveryPoint.capabilities.openSequential)

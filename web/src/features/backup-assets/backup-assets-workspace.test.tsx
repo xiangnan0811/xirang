@@ -5,6 +5,8 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { runAxe } from "@/test/a11y-helpers";
+import type { AuthRole } from "@/context/auth-context.shared";
+import type { BackupAsset, BackupRecoveryPoint } from "@/types/domain";
 
 import { createInitialBackupAssetsState } from "./backup-assets-state";
 import { defaultBackupAssetsRouteState } from "./backup-assets-route-state";
@@ -143,6 +145,98 @@ function controller(overrides: Partial<BackupAssetsController> = {}): BackupAsse
 function setViewport(width: number) {
   Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
   fireEvent(window, new Event("resize"));
+}
+
+function productionListOnlyRecoveryPoint(overrides: {
+  list?: boolean;
+  contentAvailable?: boolean;
+  openSequential?: boolean;
+  openRange?: boolean;
+} = {}): BackupRecoveryPoint {
+  if (recoveryPoint.catalog.status !== "available") {
+    throw new Error("expected the shared recovery-point fixture to expose a Catalog");
+  }
+  return {
+    ...recoveryPoint,
+    capabilities: {
+      ...recoveryPoint.capabilities,
+      openSequential: overrides.openSequential ?? true,
+      openRange: overrides.openRange ?? false,
+    },
+    catalog: {
+      status: "available",
+      value: {
+        ...recoveryPoint.catalog.value,
+        contentAvailability: {
+          available: overrides.contentAvailable ?? true,
+          reason:
+            overrides.contentAvailable === false
+              ? { code: "catalog_unavailable", params: {} }
+              : null,
+        },
+        permissions: {
+          list: overrides.list ?? true,
+          preview: false,
+          download: false,
+        },
+      },
+    },
+  };
+}
+
+function renderPreviewEligibility(options: {
+  token: string | null;
+  role: AuthRole | null;
+  recoveryPoint?: BackupRecoveryPoint | null;
+  asset?: Partial<BackupAsset>;
+}) {
+  setViewport(1440);
+  const row = buildAssetRows(1)[0];
+  const asset: BackupAsset = {
+    ...row.asset,
+    entryType: "file",
+    mimeType: "",
+    ...options.asset,
+    ref: row.asset.ref,
+  };
+  const point = options.recoveryPoint === undefined
+    ? productionListOnlyRecoveryPoint()
+    : options.recoveryPoint;
+  const route = {
+    ...defaultBackupAssetsRouteState("data"),
+    repositoryId: repository.id,
+    recoveryPointId: recoveryPoint.id,
+    entryId: asset.ref.entryId,
+  };
+  const state = createInitialBackupAssetsState(route);
+  state.result = {
+    status: "ready",
+    requestKey: "preview-eligibility",
+    generation: 1,
+    rows: [{ ...row, asset }],
+    nextCursor: null,
+    coverage: "complete",
+    authoritativeEmpty: false,
+  };
+  const loadPreview = vi.fn();
+  render(
+    <BackupAssetsWorkspace
+      controller={controller({
+        state,
+        selectedRecoveryPoint: point,
+        selectedEntry: { status: "ready", value: asset },
+        actions: { ...controller().actions, loadPreview },
+      })}
+      processingRuntime={{
+        token: options.token,
+        role: options.role,
+        ensureStepUpProof: vi.fn(),
+      }}
+      onRoutePatch={vi.fn()}
+      onReturnOverview={vi.fn()}
+    />
+  );
+  return { asset, loadPreview };
 }
 
 beforeAll(() => {
@@ -1068,6 +1162,105 @@ describe("BackupAssetsWorkspace", () => {
     expect(screen.queryByRole("region", { name: /Asset results|资产结果/ })).not.toBeInTheDocument();
   });
 
+  it.each(["admin", "operator"] as const)(
+    "allows %s to load a sequential native preview from a list-only Catalog",
+    async (role) => {
+      const user = userEvent.setup();
+      const { asset, loadPreview } = renderPreviewEligibility({
+        token: `${role}-token`,
+        role,
+      });
+
+      await user.click(screen.getByRole("button", { name: /Load preview|加载预览/ }));
+      expect(loadPreview).toHaveBeenCalledWith(asset);
+    }
+  );
+
+  it("uses Range capability for a range-native renderer without requiring sequential read", async () => {
+    const user = userEvent.setup();
+    const { asset, loadPreview } = renderPreviewEligibility({
+      token: "operator-token",
+      role: "operator",
+      recoveryPoint: productionListOnlyRecoveryPoint({
+        openSequential: false,
+        openRange: true,
+      }),
+      asset: { mimeType: "image/png" },
+    });
+
+    await user.click(screen.getByRole("button", { name: /Load preview|加载预览/ }));
+    expect(loadPreview).toHaveBeenCalledWith(asset);
+  });
+
+  it.each([
+    {
+      name: "missing token",
+      token: null,
+      role: "admin" as const,
+      point: productionListOnlyRecoveryPoint(),
+      asset: {},
+    },
+    {
+      name: "Viewer role",
+      token: "viewer-token",
+      role: "viewer" as const,
+      point: productionListOnlyRecoveryPoint(),
+      asset: {},
+    },
+    {
+      name: "unknown or missing role normalized to null",
+      token: "unknown-role-token",
+      role: null,
+      point: productionListOnlyRecoveryPoint(),
+      asset: {},
+    },
+    {
+      name: "Catalog list permission denied",
+      token: "admin-token",
+      role: "admin" as const,
+      point: productionListOnlyRecoveryPoint({ list: false }),
+      asset: {},
+    },
+    {
+      name: "content unavailable",
+      token: "admin-token",
+      role: "admin" as const,
+      point: productionListOnlyRecoveryPoint({ contentAvailable: false }),
+      asset: {},
+    },
+    {
+      name: "sequential capability unavailable for metadata hex",
+      token: "admin-token",
+      role: "admin" as const,
+      point: productionListOnlyRecoveryPoint({ openSequential: false, openRange: true }),
+      asset: {},
+    },
+    {
+      name: "Range capability unavailable for safe raster",
+      token: "admin-token",
+      role: "admin" as const,
+      point: productionListOnlyRecoveryPoint({ openSequential: true, openRange: false }),
+      asset: { mimeType: "image/png" },
+    },
+    {
+      name: "selected recovery point missing",
+      token: "admin-token",
+      role: "admin" as const,
+      point: null,
+      asset: {},
+    },
+  ])("hides native preview and does not request a ticket when $name", ({ token, role, point, asset }) => {
+    const { loadPreview } = renderPreviewEligibility({
+      token,
+      role,
+      recoveryPoint: point,
+      asset,
+    });
+
+    expect(screen.queryByRole("button", { name: /Load preview|加载预览/ })).not.toBeInTheDocument();
+    expect(loadPreview).not.toHaveBeenCalled();
+  });
+
   it.each([
     { layout: "list" as const, containerRole: "listbox", itemRole: "option" },
     { layout: "grid" as const, containerRole: "grid", itemRole: "gridcell" },
@@ -1134,7 +1327,7 @@ describe("BackupAssetsWorkspace", () => {
     await waitFor(() => expect(restoredTarget).toHaveFocus());
   });
 
-  it("binds preview and download commands to exact server permissions and detaches on unmount", async () => {
+  it("binds preview and download commands to their independent eligibility paths and detaches on unmount", async () => {
     setViewport(1440);
     const user = userEvent.setup();
     const row = buildAssetRows(1)[0];
@@ -1160,6 +1353,7 @@ describe("BackupAssetsWorkspace", () => {
             detachContent,
           },
         })}
+        processingRuntime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
         onRoutePatch={vi.fn()}
         onReturnOverview={vi.fn()}
       />
