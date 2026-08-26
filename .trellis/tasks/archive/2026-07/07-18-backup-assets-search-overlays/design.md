@@ -221,9 +221,13 @@ restores the exact 000064 closed sets, not the older 000062 set.
   expands beyond PostgreSQL's index-entry limit; Go sorts only after the hard
   candidate bound.
 
-Legacy Catalog `security_state = ''` maps only to `unknown`. Known persisted
-values are exactly `non_secret|secret|unknown`; any other non-empty value fails
-the generation instead of guessing a field-level fallback.
+Catalog `security_state` and Search sensitivity are different semantic domains.
+The Catalog producer persists exact `sealed` when its Provider locator is
+authenticated and encrypted; Search maps exact, case-sensitive `sealed` and
+legacy `''` to conservative `unknown`. Native Search-compatible persisted values
+`non_secret|secret|unknown` retain their value. Any other non-empty value fails
+the generation instead of guessing a field-level fallback; no trim, case-fold,
+or wildcard mapping is allowed.
 
 `backup_asset_search_postings`
 
@@ -548,11 +552,12 @@ Build sequence:
 2. freeze point, source fingerprint, active complete Catalog generation,
    Search Token key version, normalizer version, and fence;
 3. create a non-active `building` Search generation;
-4. stream exact Catalog rows in deterministic keyset batches; normalize and
-   insert documents/postings/field rows into staging only;
+4. stream exact Catalog rows in deterministic keyset batches; explicitly map
+   the Catalog locator-seal domain to the Search content-sensitivity domain,
+   then normalize and insert documents/postings/field rows into staging only;
 5. in one transaction re-lock and revalidate point/source, active Catalog,
    Search key, generation counts, lease owner/attempt/fence/deadline, and every
-   closed security state;
+   frozen Catalog security state and closed Search sensitivity mapping;
 6. supersede the prior active Search generation, activate the complete staging
    generation, advance projection revision, and release the lease.
 

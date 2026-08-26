@@ -2797,9 +2797,16 @@ func TestRuntimeSearchStartupEnsuresKeyReconcilesAndTreatsRecordedLossAsUnavaila
 		t.Fatalf("NewSearchWorker: %v", err)
 	}
 	ring := backupasset.NewKeyring(db, nil)
-	runtime := &Runtime{foundation: backupasset.NewFoundationService(settingsService), keyring: ring, searchWorker: worker, enablement: readyGAEnablement()}
+	ready := &atomic.Bool{}
+	runtime := &Runtime{
+		foundation: backupasset.NewFoundationService(settingsService), keyring: ring, searchWorker: worker,
+		searchReady: ready, enablement: readyGAEnablement(),
+	}
 	if err := runtime.startupSearch(context.Background()); err != nil {
 		t.Fatalf("enabled Search startup: %v", err)
+	}
+	if !ready.Load() {
+		t.Fatal("successful Search startup remained unready")
 	}
 	material, err := ring.Active(context.Background(), backupasset.KeyDomainSearchToken)
 	if err != nil || material.Version != 1 {
@@ -2818,11 +2825,110 @@ func TestRuntimeSearchStartupEnsuresKeyReconcilesAndTreatsRecordedLossAsUnavaila
 	if err := runtime.startupSearch(context.Background()); err != nil {
 		t.Fatalf("intentional Search key loss should preserve Catalog runtime: %v", err)
 	}
+	if ready.Load() {
+		t.Fatal("Search remained ready after intentional Search key loss")
+	}
 	if after := backend.calls(); after != before {
 		t.Fatalf("lost Search key still ran worker: before=%+v after=%+v", before, after)
 	}
 	if _, err := ring.Active(context.Background(), backupasset.KeyDomainSearchToken); !errors.Is(err, backupasset.ErrKeyLost) {
 		t.Fatalf("lost Search key was regenerated: %v", err)
+	}
+}
+
+func TestRuntimeSearchStartupKeepsReadyAfterCandidateBuildFailure(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RUNTIME_SEARCH_ISOLATION_KEK_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+	db := openRuntimeTestDB(t)
+	if err := db.AutoMigrate(&model.WrappedDomainKey{}); err != nil {
+		t.Fatalf("migrate wrapped keys: %v", err)
+	}
+	settingsService := settings.NewService(db)
+	if err := settingsService.Update("backup_assets.enabled", "true"); err != nil {
+		t.Fatalf("enable backup assets: %v", err)
+	}
+	candidateErr := errors.New("FAKE_RUNTIME_SEARCH_CANDIDATE_FAILURE_FOR_TEST_ONLY")
+	backend := newSearchWorkerBackendFake()
+	backend.candidates = []search.BuildCandidate{{RepositoryID: "repo-a", RecoveryPointID: "point-a"}}
+	backend.build = func(context.Context, search.BuildRequest) error { return candidateErr }
+	worker, err := NewSearchWorker(SearchWorkerDependencies{
+		Config: func() (SearchWorkerConfig, error) {
+			return SearchWorkerConfig{Enabled: true, ReconcileInterval: time.Minute, ReconcileBatchSize: 10, WorkerConcurrency: 1}, nil
+		},
+		Backend: backend,
+	})
+	if err != nil {
+		t.Fatalf("NewSearchWorker: %v", err)
+	}
+	ready := &atomic.Bool{}
+	runtime := &Runtime{
+		foundation: backupasset.NewFoundationService(settingsService), keyring: backupasset.NewKeyring(db, nil),
+		searchWorker: worker, searchReady: ready, enablement: readyGAEnablement(),
+	}
+	if err := runtime.startupSearch(context.Background()); err != nil {
+		t.Fatalf("behavioral RED: candidate-local Build failure escaped runtime Search startup: %v", err)
+	}
+	if !ready.Load() {
+		t.Fatal("runtime Search remained unready after isolated candidate-local Build failure")
+	}
+}
+
+func TestRuntimeSearchStartupPropagatesInfrastructureFailuresAndKeepsUnready(t *testing.T) {
+	reconcileErr := errors.New("FAKE_RUNTIME_SEARCH_RECONCILE_FAILURE_FOR_TEST_ONLY")
+	overlayErr := errors.New("FAKE_RUNTIME_SEARCH_OVERLAY_FAILURE_FOR_TEST_ONLY")
+	listErr := errors.New("FAKE_RUNTIME_SEARCH_LIST_FAILURE_FOR_TEST_ONLY")
+	for _, testCase := range []struct {
+		name         string
+		reconcileErr error
+		overlayErr   error
+		listErr      error
+		want         error
+	}{
+		{name: "abandoned reconciliation", reconcileErr: reconcileErr, want: reconcileErr},
+		{name: "overlay reconciliation", overlayErr: overlayErr, want: overlayErr},
+		{name: "candidate list", listErr: listErr, want: listErr},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv("APP_ENV", "development")
+			t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RUNTIME_SEARCH_INFRA_KEK_FOR_TEST_ONLY")
+			secure.ResetForTesting()
+			t.Cleanup(secure.ResetForTesting)
+			db := openRuntimeTestDB(t)
+			if err := db.AutoMigrate(&model.WrappedDomainKey{}); err != nil {
+				t.Fatalf("migrate wrapped keys: %v", err)
+			}
+			settingsService := settings.NewService(db)
+			if err := settingsService.Update("backup_assets.enabled", "true"); err != nil {
+				t.Fatalf("enable backup assets: %v", err)
+			}
+			backend := newSearchWorkerBackendFake()
+			backend.reconcileErr = testCase.reconcileErr
+			backend.overlayErr = testCase.overlayErr
+			backend.listErr = testCase.listErr
+			worker, err := NewSearchWorker(SearchWorkerDependencies{
+				Config: func() (SearchWorkerConfig, error) {
+					return SearchWorkerConfig{Enabled: true, ReconcileInterval: time.Minute, ReconcileBatchSize: 10, WorkerConcurrency: 1}, nil
+				},
+				Backend: backend,
+			})
+			if err != nil {
+				t.Fatalf("NewSearchWorker: %v", err)
+			}
+			ready := &atomic.Bool{}
+			ready.Store(true)
+			runtime := &Runtime{
+				foundation: backupasset.NewFoundationService(settingsService), keyring: backupasset.NewKeyring(db, nil),
+				searchWorker: worker, searchReady: ready, enablement: readyGAEnablement(),
+			}
+			if err := runtime.startupSearch(context.Background()); !errors.Is(err, testCase.want) {
+				t.Fatalf("runtime Search startup error=%v, want %v", err, testCase.want)
+			}
+			if ready.Load() {
+				t.Fatal("runtime Search remained ready after pass-level infrastructure failure")
+			}
+		})
 	}
 }
 
@@ -2852,9 +2958,17 @@ func TestRuntimeSearchStartupUnexpectedUnwrapFailureIsFatal(t *testing.T) {
 		},
 		Backend: newSearchWorkerBackendFake(),
 	})
-	runtime := &Runtime{foundation: backupasset.NewFoundationService(settingsService), keyring: ring, searchWorker: worker, enablement: readyGAEnablement()}
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	runtime := &Runtime{
+		foundation: backupasset.NewFoundationService(settingsService), keyring: ring, searchWorker: worker,
+		searchReady: ready, enablement: readyGAEnablement(),
+	}
 	if err := runtime.startupSearch(context.Background()); !errors.Is(err, backupasset.ErrKeyUnavailable) {
 		t.Fatalf("unexpected Search unwrap failure got %v, want fatal key unavailable", err)
+	}
+	if ready.Load() {
+		t.Fatal("runtime Search remained ready after fatal key unwrap failure")
 	}
 }
 

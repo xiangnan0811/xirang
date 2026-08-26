@@ -1567,6 +1567,103 @@ return settings.WithBackupAssetMutation(ctx, func(current map[string]string) err
 
 ---
 
+### Backup Asset Producer/Consumer Enum Interoperability And Candidate Isolation
+
+#### 1. Scope And Trigger
+
+Use this scenario when one backup-asset layer persists a closed token that a
+downstream projection interprets in a different semantic domain, or when a
+startup reconciliation pass fans out over independently rebuildable
+candidates. The concrete contract spans Catalog `security_state`, Search
+sensitivity, and Search worker startup readiness.
+
+#### 2. Failure Signatures
+
+- Catalog rows contain `security_state = "sealed"`, while Search fails every
+  generation with `search_invalid_security_state`, zero written documents, and
+  no active projection.
+- A single candidate `Build` error escapes `buildCandidates`, propagates through
+  startup reconciliation, and terminates the server before health/API startup.
+- Tests stay green only because they hand-write a downstream-native
+  `non_secret` value instead of consuming the upstream producer's real
+  persisted value.
+
+#### 3. Required Contracts
+
+- Catalog `sealed` proves that the Provider locator is authenticated and
+  encrypted. It is not a content-sensitivity classification, and the Catalog
+  writer must preserve it.
+- Search maps exact, case-sensitive Catalog `sealed` and the legacy empty value
+  to conservative `unknown`. Native `non_secret|secret|unknown` values retain
+  their meaning. Any other non-empty value fails closed as
+  `search_invalid_security_state`; no trimming, case folding, or wildcard
+  fallback is allowed.
+- Candidate-local Search build failures remain metrics and durable generation
+  evidence, but do not fail the whole startup pass. Caller cancellation and
+  pass-infrastructure failures such as invalid config, missing key, abandoned
+  state reconciliation, overlay failure, or candidate listing failure still
+  propagate.
+- This boundary needs no schema migration, SQL repair, Catalog rewrite,
+  Provider enumeration, or Provider-byte mutation. Failed generations remain
+  immutable evidence and the next generation may converge monotonically.
+
+#### 4. Contract Matrix
+
+| Input/condition | Search result | Startup-pass result |
+|---|---|---|
+| Catalog `sealed` | sensitivity `unknown` | candidate may complete |
+| Catalog empty legacy state | sensitivity `unknown` | candidate may complete |
+| `non_secret|secret|unknown` | same sensitivity | candidate may complete |
+| unknown non-empty token | failed generation, `search_invalid_security_state` | isolated candidate failure |
+| ordinary candidate Build error | durable failure evidence | pass remains ready after all joins |
+| caller canceled or pass infrastructure fails | no guessed recovery | exact error propagates |
+
+#### 5. Good, Base, And Bad
+
+- Good: create Catalog rows through the real Catalog producer, feed them to
+  Search, assert raw Catalog state remains `sealed`, Search stores `unknown`,
+  and activation is atomic.
+- Base: table-test every exact token and the worker/runtime ownership boundary.
+- Bad: replace producer output with a handwritten consumer-native token, change
+  Catalog `sealed` to `unknown`, swallow infrastructure errors, or repair rows
+  directly in production.
+
+#### 6. Tests Required
+
+- A real producer-to-consumer fixture on SQLite and real PostgreSQL proves
+  Catalog `sealed` to Search `unknown`, without Provider mutation.
+- Future, case-varied, and whitespace-varied non-empty states remain exact
+  fail-closed negatives; a prior active generation remains unchanged.
+- Worker/runtime tests cover candidate-local failure, bounded join, metrics,
+  caller cancellation, and every pass-infrastructure error that must still
+  leave Search unready.
+- A convergence test preserves prior failed generations, creates the next
+  sequence, projects all Catalog rows, and activates atomically.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+entry := CatalogEntry{SecurityState: "non_secret"} // not producer-realistic
+if err := worker.Build(candidate); err != nil {
+    return err // one candidate kills global startup
+}
+```
+
+Correct:
+
+```go
+entry := catalogIndexerOutput() // persists exact "sealed"
+sensitivity, err := mapCatalogSensitivity(entry.SecurityState) // unknown
+for _, candidate := range candidates {
+    group.Go(func() { observeCandidateBuild(candidate) })
+}
+return ctx.Err() // candidate errors are already durable; infrastructure returned earlier
+```
+
+---
+
 ## Code Review Checklist
 
 - Are route middleware, RBAC permissions, and ownership checks correct?

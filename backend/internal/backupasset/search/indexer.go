@@ -643,6 +643,8 @@ func mapCatalogSensitivity(value string) (Sensitivity, error) {
 		return SensitivitySecret, nil
 	case string(SensitivityUnknown):
 		return SensitivityUnknown, nil
+	case "sealed":
+		return SensitivityUnknown, nil
 	default:
 		return "", ErrInvalidSecurityState
 	}

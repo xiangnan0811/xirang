@@ -22,14 +22,15 @@
     "backup-assets-catalog-sqlite-batch-limit",
     "08-25-task-run-orphan-reconciliation",
     "08-25-catalog-lifecycle-race-stability",
-    "08-25-backup-assets-mutable-search-projection"
+    "08-25-backup-assets-mutable-search-projection",
+    "08-26-backup-assets-search-startup-isolation"
   ],
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [
     ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v0504-console-runbook.md",
     ".trellis/tasks/08-21-backup-assets-release-acceptance/research/v0504-real-data-acceptance.md"
   ],
-  "notes": "Historical v0.50.2 No-Go remains in research/acceptance-protocol.md. Production is healthy on v0.50.6 with schema 72|0; Task 3 is formally paused/disabled with zero active runs, while the online Rsync repository, active task link, and observed mutable point remain intact. Formal Repository Reconcile produced active complete Catalog generation 37 with 60,515 entries. Search stayed unavailable because manifest-less mutable Catalog expected_entry_count=0 means unknown, but Search rejected written_entry_count>0 before lease or generation creation. Child 08-25-backup-assets-mutable-search-projection owns the TDD fix and release. No production SQL or Provider data mutation is permitted. Node-log collectors stay disabled and P1 cannot start until the real-data metadata/content preview gate passes.",
+  "notes": "Historical v0.50.2 No-Go remains in research/acceptance-protocol.md. Production core service is healthy on v0.50.6 with backup_assets.enabled temporarily disabled by a guarded one-row emergency CAS after a v0.50.7 Search startup crash loop. Task 3 remains paused/disabled with zero active runs; the online Rsync repository, active task link, observed mutable point, and active complete 60,515-entry Catalog remain intact. Ten Search generations failed before writing any document with stable code search_invalid_security_state. Child 08-26-backup-assets-search-startup-isolation owns the P0 TDD fix for candidate-local startup isolation and the exact Catalog sealed-state interoperability gap. No Catalog/Search/Provider row repair is permitted. Node-log collectors stay disabled and P1 cannot start until real-data metadata/content preview passes.",
   "meta": {
     "parent_archive": "forbidden",
     "production_walkthrough": "v0_50_6_catalog_complete_60515_search_unavailable",
@@ -38,7 +39,7 @@
     "historical_no_go": "v0_50_2_failed_pre_enable_migration",
     "p0_enable_deadlock": "completed_archived_do_not_repeat",
     "orphan_reconciliation_release": "v0.50.6_deployed_and_formally_accepted",
-    "release_blocker": "backup_assets_mutable_search_projection",
+    "release_blocker": "pr_464_required_ci_then_v0_50_8_release_and_production_acceptance",
     "next_gate": "node_log_p1_after_real_data_acceptance",
     "native_aws": "excluded",
     "docs_exclusion": "verified",
