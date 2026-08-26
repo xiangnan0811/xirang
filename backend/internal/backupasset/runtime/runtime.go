@@ -2071,6 +2071,9 @@ func (runtime *Runtime) transitionFeatureWithOperationContextAndRestore(
 			return runtime.joinFeatureTransitionFailure(err, revertErr, disableErr)
 		}
 		runtime.contentManager.SetReady(true)
+		if runtime.searchWorker != nil {
+			runtime.searchWorker.TryWake()
+		}
 		return nil
 	}
 	priorSearchReady := runtime.searchReady != nil && runtime.searchReady.Load()
@@ -2661,11 +2664,11 @@ func (runtime *Runtime) startupSearchWithConfig(
 		runtime.setSearchReady(false)
 		return err
 	}
-	runtime.setSearchReady(true)
-	if err := runtime.searchWorker.StartupPassWithConfig(ctx, workerConfig); err != nil {
+	if err := runtime.searchWorker.PrepareWithConfig(ctx, workerConfig); err != nil {
 		runtime.setSearchReady(false)
 		return err
 	}
+	runtime.setSearchReady(true)
 	return nil
 }
 

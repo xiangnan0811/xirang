@@ -1442,9 +1442,12 @@ catalog.FeatureEnabled = runtime.FeatureLive
   `TransitionBackupAssetSettingsContextWithRestore`; persistence and restore
   callbacks accept the runtime-supplied `context.Context`.
 - Content enablement receives an explicit `backupasset.ContentConfig` through
-  `PrepareEnable`; Search startup receives an explicit `SearchWorkerConfig`
-  through `StartupPassWithConfig`. These mutation-inner paths must not call
-  Foundation getters.
+  `PrepareEnable`; Search control-plane readiness receives an explicit
+  `SearchWorkerConfig` through
+  `PrepareWithConfig(context.Context, SearchWorkerConfig) error`. These
+  mutation-inner paths must not call Foundation getters or execute candidate
+  `Build` work. `SearchWorker.TryWake()` is a non-blocking, capacity-one,
+  coalescing signal to the lifecycle-owned worker; it is not a build API.
 - Config import installs a post-persist undo journal only after its import
   transaction commits; the journal's `Restore(ctx)` reverses every imported
   database mutation required by the production runtime graph.
@@ -1472,6 +1475,16 @@ catalog.FeatureEnabled = runtime.FeatureLive
 - Runtime work has one bounded operation context. Compensation detaches from
   caller cancellation but every cleanup step shares the same absolute cleanup
   deadline; nested cleanup must not receive a fresh budget.
+- The bounded transition owns Search config/key validation, abandoned-state
+  reconciliation, overlay reconciliation, and candidate listing only. Candidate
+  projection is data-plane work owned by the existing lifecycle worker and its
+  configured Search timeout; it must not inherit an HTTP/settings deadline.
+- Hot enable calls `TryWake` only after settings persistence, the durable
+  enablement-success stamp, Content readiness, and every fallible transition
+  stage have succeeded. Failed or compensated transitions emit no wake. Cold
+  startup emits no extra wake because the lifecycle worker already performs an
+  initial pass. A dequeued wake re-reads committed dynamic config; committed
+  disabled state performs no backend work.
 - Before mutation, capture exact raw overrides, including row absence, plus the
   prior admission state and success stamp. For a mixed settings PUT, capture
   every co-committed request key so a later runtime failure cannot leave an
@@ -1494,6 +1507,10 @@ catalog.FeatureEnabled = runtime.FeatureLive
 | Prospective bundle is missing or contains an invalid Foundation value | Fail before runtime mutation or persistence; current state remains exact. |
 | A second mutation waits on the gate and its context is canceled | Waiter returns the context error without entering the callback. |
 | Content or Search needs configuration during the owner-held mutation | Uses the explicit prospective config; no Foundation getter or nested gate acquisition. |
+| Search infrastructure preparation fails or its context is canceled | Exact error propagates; Search stays unready; persistence/compensation remains exact; no wake is emitted. |
+| Candidate projection exceeds the settings/HTTP operation budget | It is not owned by the transition; successful enablement returns after infrastructure readiness, then the lifecycle worker converges under the Search build timeout. |
+| Persistence, success stamp, Content readiness, or later enable stage fails | Exact prior state is restored and wake count remains zero. |
+| A queued wake observes committed `enabled=false` | Worker performs zero reconciliation, listing, or candidate Build work. |
 | Caller cancels during runtime work | In-flight context-aware work stops; compensation uses the single shared absolute cleanup deadline. |
 | Failure occurs after settings PUT/DELETE persistence | Exact prior raw override row or exact absence for every co-committed PUT key, admission state, stamp, readiness, and candidate lifecycle are restored. |
 | Failure occurs after config import persistence | Post-persist undo journal restores every imported production-graph mutation and settings override. |
@@ -1501,14 +1518,18 @@ catalog.FeatureEnabled = runtime.FeatureLive
 
 #### 5. Good/Base/Bad Cases
 
-- Good: PUT/import derives one prospective bundle, runs Content and Search with
-  explicit configs, persists with the runtime context, and either commits all
-  layers or restores exact prior state within the shared deadline. A mixed PUT
-  restores both its Foundation and ordinary setting overrides atomically.
+- Good: PUT/import derives one prospective bundle, prepares Content and Search
+  infrastructure with explicit configs, persists/stamps/marks Content ready,
+  and emits one coalesced Search wake immediately before successful return. The
+  lifecycle worker re-reads committed config and owns candidate convergence.
+  A mixed PUT restores both Foundation and ordinary overrides atomically.
 - Base: a non-Foundation mutation never enters the Foundation runtime graph;
-  external snapshots retain their existing blocking consistency semantics.
+  cold startup prepares Search infrastructure and relies on the worker's normal
+  initial pass; external snapshots retain their blocking consistency semantics.
 - Bad: calling `ContentConfig()`, `SearchOverlayConfig()`, or another Foundation
   getter from the mutation callback; giving each cleanup stage a new timeout;
+  synchronously running Search candidate fan-out under the transition context;
+  spawning an unowned build goroutine; waking before the final fallible stage;
   snapshotting only the Foundation subset of a mixed PUT; restoring only the
   effective value; or declaring success with a fake runtime that omits a
   production callback.
@@ -1527,6 +1548,18 @@ catalog.FeatureEnabled = runtime.FeatureLive
   Export, Recovery, persistence, and config-import post-persist failures. They
   assert exact override absence/value, stamp, admission/readiness, candidate
   shutdown, bounded elapsed time, and production graph parity.
+- Search preparation tests prove explicit config is used without a dynamic
+  getter; reconcile/overlay/list each run while candidate `Build` count stays
+  zero; every infrastructure and context error propagates exactly.
+- A blocked candidate proves settings PUT/hot enable returns successfully before
+  release. Persist, stamp, Content-readiness, later-stage, and compensation
+  failures assert zero wakes. A queued wake with committed disabled config
+  asserts zero backend calls.
+- Worker tests use deterministic channels to prove an hour-long timer is
+  interrupted by one coalesced wake, repeated wakes do not create concurrent
+  passes, a wake queued before `Run` is consumed by the initial pass without a
+  duplicate follow-up, and shutdown cancels/joins the woken Build with active
+  gauge zero.
 - A mixed Foundation + ordinary settings PUT post-persist failure test asserts
   raw value, timestamp, prior absence, atomic restoration, and cache invalidation
   for the complete request key set.
@@ -1543,9 +1576,7 @@ return settings.WithBackupAssetMutation(ctx, func(_ map[string]string) error {
     if err != nil {
         return err
     }
-    return runtime.TransitionBackupAssetSettings(current, next, func() error {
-        return persist(context.Background()) // drops cancellation and deadline
-    })
+    return searchWorker.StartupPassWithConfig(ctx, prospective.Search) // Build under PUT deadline
 })
 ```
 
@@ -1557,11 +1588,17 @@ return settings.WithBackupAssetMutation(ctx, func(current map[string]string) err
     if err != nil {
         return err
     }
-    return runtime.TransitionBackupAssetSettingsContextWithRestore(
+    err = runtime.TransitionBackupAssetSettingsContextWithRestore(
         ctx, current, overlay, effective, prospective.Export,
         func(persistCtx context.Context) error { return persist(persistCtx) },
         func(restoreCtx context.Context) error { return journal.Restore(restoreCtx) },
     )
+    if err != nil {
+        return err // Runtime's failed/compensated paths never wake
+    }
+    // Runtime prepared Search infrastructure without Build and emitted the
+    // coalesced wake only after commit, durable stamp, and Content readiness.
+    return nil
 })
 ```
 

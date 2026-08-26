@@ -334,6 +334,9 @@ type searchWorkerBackendFake struct {
 	mu                sync.Mutex
 	candidates        []search.BuildCandidate
 	build             func(context.Context, search.BuildRequest) error
+	list              func(context.Context, int) ([]search.BuildCandidate, error)
+	reconcile         func(context.Context, time.Time, int) (int64, error)
+	overlay           func(context.Context, int) (int64, error)
 	reconcileErr      error
 	listErr           error
 	overlayErr        error
@@ -347,11 +350,17 @@ func newSearchWorkerBackendFake() *searchWorkerBackendFake {
 	return &searchWorkerBackendFake{started: make(chan search.BuildCandidate, 8)}
 }
 
-func (backend *searchWorkerBackendFake) ListCandidates(context.Context, int) ([]search.BuildCandidate, error) {
+func (backend *searchWorkerBackendFake) ListCandidates(ctx context.Context, limit int) ([]search.BuildCandidate, error) {
 	backend.mu.Lock()
-	defer backend.mu.Unlock()
 	backend.callsValue.list++
-	return append([]search.BuildCandidate(nil), backend.candidates...), backend.listErr
+	list := backend.list
+	candidates := append([]search.BuildCandidate(nil), backend.candidates...)
+	err := backend.listErr
+	backend.mu.Unlock()
+	if list != nil {
+		return list(ctx, limit)
+	}
+	return candidates, err
 }
 
 func (backend *searchWorkerBackendFake) Build(ctx context.Context, candidate search.BuildRequest) error {
@@ -373,18 +382,29 @@ func (backend *searchWorkerBackendFake) Build(ctx context.Context, candidate sea
 	return ctx.Err()
 }
 
-func (backend *searchWorkerBackendFake) ReconcileAbandoned(context.Context, time.Time, int) (int64, error) {
+func (backend *searchWorkerBackendFake) ReconcileAbandoned(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
 	backend.mu.Lock()
-	defer backend.mu.Unlock()
 	backend.callsValue.reconcile++
-	return 0, backend.reconcileErr
+	reconcile := backend.reconcile
+	err := backend.reconcileErr
+	backend.mu.Unlock()
+	if reconcile != nil {
+		return reconcile(ctx, cutoff, limit)
+	}
+	return 0, err
 }
 
-func (backend *searchWorkerBackendFake) ReconcileOverlays(context.Context, int) (int64, error) {
+func (backend *searchWorkerBackendFake) ReconcileOverlays(ctx context.Context, limit int) (int64, error) {
 	backend.mu.Lock()
-	defer backend.mu.Unlock()
 	backend.callsValue.overlay++
-	return backend.overlayReconciled, backend.overlayErr
+	overlay := backend.overlay
+	reconciled := backend.overlayReconciled
+	err := backend.overlayErr
+	backend.mu.Unlock()
+	if overlay != nil {
+		return overlay(ctx, limit)
+	}
+	return reconciled, err
 }
 
 func (backend *searchWorkerBackendFake) waitStarted(t *testing.T) search.BuildCandidate {

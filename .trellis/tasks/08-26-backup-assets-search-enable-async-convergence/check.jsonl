@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Review bounded readiness and owned background lifecycle"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review infrastructure propagation and candidate isolation"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Review stable non-sensitive operational evidence"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review TDD, race, lint, package, and privacy evidence"}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Review delivery and post-merge automation state"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review settings-to-worker-to-query state transitions"}
+{"file":".trellis/tasks/08-26-backup-assets-search-enable-async-convergence/research/root-cause.md","reason":"Reconcile code against exact production timeout signature"}
+{"file":".trellis/tasks/08-26-backup-assets-search-startup-isolation/design.md","reason":"Review preserved candidate-local isolation contract"}
+{"file":".trellis/tasks/archive/2026-07/07-18-backup-assets-search-overlays/design.md","reason":"Review generation immutability and activation invariants"}
