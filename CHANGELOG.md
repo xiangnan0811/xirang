@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.50.10](https://github.com/xiangnan0811/xirang/compare/v0.50.9...v0.50.10) (2026-08-26)
+
+
+### 🐛 Bug Fixes
+
+* **web:** decouple backup asset preview eligibility ([#468](https://github.com/xiangnan0811/xirang/issues/468)) ([eff1be7](https://github.com/xiangnan0811/xirang/commit/eff1be7e8b87306adbe68a83f45bc52659759002))
+
 ## [0.50.9](https://github.com/xiangnan0811/xirang/compare/v0.50.8...v0.50.9) (2026-08-26)
 
 
