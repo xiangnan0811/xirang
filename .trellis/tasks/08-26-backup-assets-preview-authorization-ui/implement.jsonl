@@ -1,0 +1,7 @@
+{"file":".trellis/tasks/08-26-backup-assets-preview-authorization-ui/research/root-cause.md","reason":"Production evidence, exact cross-layer failure, and safe correction boundary."}
+{"file":".trellis/tasks/08-26-backup-assets-preview-authorization-ui/research/session-handoff.md","reason":"Approved fresh-session starting state, production baseline, delivery sequence, and NAS safety constraints."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Frontend permission, async-state, a11y, testing, and full npm gate requirements."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Backup content ticket closed-product, opaque URL, proof, and error-boundary contracts."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Auth token/role ownership and explicit feature runtime boundary."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Producer-consumer contract and upstream-realistic fixture requirements."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Dedicated worktree, PR, CI monitoring, merge, and post-merge automation contract."}

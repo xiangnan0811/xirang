@@ -108,6 +108,11 @@ After implementation:
       any semantic-domain mapping plus unknown-token rejection; see backend
       quality “Backup Asset Producer/Consumer Enum Interoperability And
       Candidate Isolation”.
+- [ ] Backup-asset native preview UI tests use the real list-only Catalog shape
+      (`list=true`, `preview=false`), mirror only the closed Admin/Operator role
+      matrix for action eligibility, and rerun the independent delivery-ticket
+      RBAC selector so server authorization remains final; see frontend quality
+      “Backup Asset Native Preview UI Eligibility”.
 - [ ] A settings/startup control-plane deadline never owns data-size-dependent
       candidate projection. Prepare infrastructure synchronously, emit a
       coalesced wake only after the final committed hot-enable stage, and let the

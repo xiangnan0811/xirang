@@ -1,0 +1,7 @@
+{"file":".trellis/tasks/08-26-backup-assets-preview-authorization-ui/research/root-cause.md","reason":"Independently verify the production signature and that the final diff fixes only the proven boundary."}
+{"file":".trellis/tasks/08-26-backup-assets-preview-authorization-ui/research/session-handoff.md","reason":"Verify implementation and delivery match the user-approved fresh-session boundary and production safety constraints."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check permission/error states, accessibility, tests, and the full frontend gate."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check delivery-ticket proof, URL, role, and whole-projection safety invariants."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Check that auth runtime is explicit and no feature reads token storage directly."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check real producer fixtures, authority ownership, and unknown/negative cases."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Check isolated branch, scoped diff, PR/CI, merge, and release monitoring evidence."}
