@@ -48,7 +48,7 @@ binary under a task-owned `/dev/shm` temporary root. PostgreSQL remains
 
 ## Phase 4 — Delivery and production acceptance
 
-- [ ] Commit and push the dedicated branch; open a conventional-title PR.
+- [x] Commit and push the dedicated branch; open conventional-title PR #466.
 - [ ] Monitor all required CI jobs, fix failures on the same branch, and merge
   only when all required checks are green.
 - [ ] Monitor Release Please; merge the release PR when green and monitor GitHub

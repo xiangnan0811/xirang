@@ -15,8 +15,8 @@
   "branch": "codex/backup-assets-search-enable-async-convergence",
   "base_branch": "main",
   "worktree_path": "/home/murray/code/xirang/.worktrees/backup-assets-search-enable-async-convergence",
-  "commit": null,
-  "pr_url": null,
+  "commit": "f57a88fd3208a280f5be9037cb30d1bd0f28c04f",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/466",
   "subtasks": [],
   "children": [],
   "parent": "08-21-backup-assets-release-acceptance",
@@ -30,7 +30,7 @@
     ".trellis/spec/backend/quality-guidelines.md",
     ".trellis/spec/guides/cross-layer-thinking-guide.md"
   ],
-  "notes": "",
+  "notes": "Implementation commit f57a88fd opened PR #466. Independent Trellis check and fresh main-session verification are green; required PR CI, merge, release, and production acceptance remain active.",
   "meta": {
     "root_cause": "feature_transition_25s_context_owned_large_search_candidate_build",
     "selected_boundary": "infrastructure_prepare_then_committed_hot_enable_worker_wake",
