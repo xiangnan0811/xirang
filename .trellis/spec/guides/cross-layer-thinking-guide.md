@@ -108,6 +108,12 @@ After implementation:
       any semantic-domain mapping plus unknown-token rejection; see backend
       quality “Backup Asset Producer/Consumer Enum Interoperability And
       Candidate Isolation”.
+- [ ] A settings/startup control-plane deadline never owns data-size-dependent
+      candidate projection. Prepare infrastructure synchronously, emit a
+      coalesced wake only after the final committed hot-enable stage, and let the
+      lifecycle worker re-read committed config and own Build cancellation/join;
+      see backend quality “Foundation Settings Lock Order And Prospective Runtime
+      Transition”.
 
 ---
 

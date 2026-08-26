@@ -1,0 +1,41 @@
+{
+  "id": "backup-assets-search-enable-async-convergence",
+  "name": "backup-assets-search-enable-async-convergence",
+  "title": "Search 启用异步收敛",
+  "description": "v0.50.8 生产首次 Search 投影 60515 条在正式启用事务 25 秒上限内仅完成 8000 条并以 search_build_timeout 回退；让启用同步验证基础设施与就绪、候选投影由后台 worker 收敛，保留失败证据且不触碰 provider 数据。",
+  "status": "in_progress",
+  "dev_type": "backend",
+  "scope": "backup-assets-search-runtime",
+  "package": "backend",
+  "priority": "P0",
+  "creator": "murray",
+  "assignee": "murray",
+  "createdAt": "2026-08-26",
+  "completedAt": null,
+  "branch": "codex/backup-assets-search-enable-async-convergence",
+  "base_branch": "main",
+  "worktree_path": "/home/murray/code/xirang/.worktrees/backup-assets-search-enable-async-convergence",
+  "commit": "f57a88fd3208a280f5be9037cb30d1bd0f28c04f",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/466",
+  "subtasks": [],
+  "children": [],
+  "parent": "08-21-backup-assets-release-acceptance",
+  "relatedFiles": [
+    "backend/internal/backupasset/runtime/search_worker.go",
+    "backend/internal/backupasset/runtime/runtime.go",
+    "backend/internal/backupasset/runtime/search_enable_async_test.go",
+    "backend/internal/backupasset/runtime/search_worker_test.go",
+    "backend/internal/backupasset/runtime/runtime_test.go",
+    "backend/internal/backupasset/runtime/feature_transition_test.go",
+    ".trellis/spec/backend/quality-guidelines.md",
+    ".trellis/spec/guides/cross-layer-thinking-guide.md"
+  ],
+  "notes": "Implementation commit f57a88fd opened PR #466. Independent Trellis check and fresh main-session verification are green; required PR CI, merge, release, and production acceptance remain active.",
+  "meta": {
+    "root_cause": "feature_transition_25s_context_owned_large_search_candidate_build",
+    "selected_boundary": "infrastructure_prepare_then_committed_hot_enable_worker_wake",
+    "production_safe_state": "v0.50.8_healthy_backup_assets_disabled",
+    "local_verification": "focused_repeat_race_runtime_search_handler_vet_lint_format_privacy_green",
+    "postgresql": "not_executed_missing_TEST_POSTGRES_DSN"
+  }
+}

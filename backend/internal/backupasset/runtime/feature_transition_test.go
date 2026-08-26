@@ -14,7 +14,6 @@ import (
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/ga"
 	"xirang/backend/internal/backupasset/publication"
-	"xirang/backend/internal/backupasset/search"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 	"xirang/backend/internal/settings"
@@ -62,137 +61,6 @@ func TestFeatureTransitionCleanupContextIsLiveAfterCancellationAndKeepsTotalBelo
 	deadline, ok := cleanupCtx.Deadline()
 	if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > featureTransitionCleanupReserve {
 		t.Fatalf("cleanup deadline=%s ok=%t, want live bounded reserve <=%s", deadline, ok, featureTransitionCleanupReserve)
-	}
-}
-
-type featureTransitionBlockingSearchBackend struct {
-	started      chan struct{}
-	canceled     chan struct{}
-	release      chan struct{}
-	active       atomic.Int32
-	mutations    atomic.Int32
-	canceledOnce sync.Once
-}
-
-func (backend *featureTransitionBlockingSearchBackend) ListCandidates(context.Context, int) ([]search.BuildCandidate, error) {
-	return []search.BuildCandidate{{RepositoryID: strings.Repeat("1", 32), RecoveryPointID: strings.Repeat("2", 32)}}, nil
-}
-
-func (backend *featureTransitionBlockingSearchBackend) Build(ctx context.Context, _ search.BuildRequest) error {
-	backend.active.Add(1)
-	defer backend.active.Add(-1)
-	close(backend.started)
-	<-ctx.Done()
-	backend.canceledOnce.Do(func() { close(backend.canceled) })
-	<-backend.release
-	backend.mutations.Add(1)
-	return ctx.Err()
-}
-
-func (*featureTransitionBlockingSearchBackend) ReconcileAbandoned(context.Context, time.Time, int) (int64, error) {
-	return 0, nil
-}
-
-func (*featureTransitionBlockingSearchBackend) ReconcileOverlays(context.Context, int) (int64, error) {
-	return 0, nil
-}
-
-type featureTransitionCleanupContentProbe struct {
-	runtimeContentManagerFake
-	cleanupCtxErr error
-	joined        atomic.Bool
-}
-
-func (probe *featureTransitionCleanupContentProbe) PrepareDisable(ctx context.Context) error {
-	probe.cleanupCtxErr = ctx.Err()
-	ownedDone := make(chan struct{})
-	go func() {
-		defer close(ownedDone)
-		select {
-		case <-ctx.Done():
-		case <-time.After(time.Millisecond):
-		}
-		probe.joined.Store(true)
-	}()
-	<-ownedDone
-	return probe.cleanupCtxErr
-}
-
-func TestFeatureTransitionCancellationJoinsSearchAndCleanupOwnedWorkBeforeReturn(t *testing.T) {
-	t.Setenv("APP_ENV", "development")
-	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_PHASE3_CANCEL_JOIN_KEY_FOR_TEST_ONLY")
-	secure.ResetForTesting()
-	t.Cleanup(secure.ResetForTesting)
-	db := openRuntimeTestDB(t)
-	if err := db.AutoMigrate(&model.WrappedDomainKey{}); err != nil {
-		t.Fatal(err)
-	}
-	settingsService := settings.NewService(db)
-	backend := &featureTransitionBlockingSearchBackend{
-		started: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{}),
-	}
-	worker, err := NewSearchWorker(SearchWorkerDependencies{
-		Config: func() (SearchWorkerConfig, error) {
-			return SearchWorkerConfig{Enabled: true, ReconcileInterval: time.Minute, ReconcileBatchSize: 10, WorkerConcurrency: 1}, nil
-		},
-		Backend: backend,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	events := []string{}
-	content := &featureTransitionCleanupContentProbe{runtimeContentManagerFake: runtimeContentManagerFake{events: &events}}
-	admission := newAdmissionControllerFixture(t, false, nil)
-	admission.initialize(t)
-	runtime := EnablementRuntime(readyGAEnablement(), admission.controller)
-	runtime.admission = admission.controller
-	runtime.foundation = backupasset.NewFoundationService(settingsService)
-	runtime.settings = settingsService
-	runtime.keyring = backupasset.NewKeyring(db, time.Now)
-	runtime.searchWorker = worker
-	runtime.contentManager = content
-
-	callerCtx, cancelCaller := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		done <- runtime.TransitionFeature(callerCtx, true, func() error {
-			return settingsService.UpdateContext(callerCtx, "backup_assets.enabled", "true")
-		})
-	}()
-	select {
-	case <-backend.started:
-	case <-time.After(time.Second):
-		t.Fatal("Search build did not start")
-	}
-	cancelCaller()
-	select {
-	case <-backend.canceled:
-	case <-time.After(time.Second):
-		t.Fatal("Search build did not observe cancellation")
-	}
-	select {
-	case err := <-done:
-		t.Fatalf("transition returned before owned Search build joined: %v", err)
-	default:
-	}
-	close(backend.release)
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) || errors.Is(err, ErrFeatureTransitionCompensation) {
-			t.Fatalf("transition error=%v, want primary cancellation without cleanup failure", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("transition did not return after Search and cleanup work joined")
-	}
-	if backend.active.Load() != 0 || backend.mutations.Load() != 1 || !content.joined.Load() {
-		t.Fatalf("return preceded join: search active=%d mutations=%d content joined=%t", backend.active.Load(), backend.mutations.Load(), content.joined.Load())
-	}
-	if content.cleanupCtxErr != nil {
-		t.Fatalf("Content cleanup inherited canceled operation context: %v", content.cleanupCtxErr)
-	}
-	time.Sleep(5 * time.Millisecond)
-	if backend.mutations.Load() != 1 {
-		t.Fatalf("Search mutated after transition return: mutations=%d", backend.mutations.Load())
 	}
 }
 
@@ -259,6 +127,9 @@ func TestFeatureTransitionSearchFailureRestoresExactPriorSettingAndEmptyStamp(t 
 	}
 	if installation.EnablementSucceededAt != nil {
 		t.Fatalf("failed full enable retained false success stamp=%s", installation.EnablementSucceededAt)
+	}
+	if got := len(worker.wake); got != 0 {
+		t.Fatalf("Search preparation failure queued wakes=%d, want zero", got)
 	}
 }
 
@@ -1296,9 +1167,14 @@ func TestBackupAssetSettingsSearchFailureRestoresEntirePriorBundleAndStamp(t *te
 }
 
 func TestFeatureTransitionStampFailureRestoresExactPriorSettingAndStamp(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_ASYNC_SEARCH_STAMP_FAILURE_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
 	now := time.Date(2026, 8, 24, 17, 0, 0, 0, time.UTC)
 	db := openRuntimeTestDB(t)
 	if err := db.AutoMigrate(
+		&model.WrappedDomainKey{},
 		&model.BackupAssetInstallation{}, &model.BackupAssetInventoryRun{},
 		&model.BackupAssetRepositoryConflict{},
 	); err != nil {
@@ -1327,12 +1203,18 @@ func TestFeatureTransitionStampFailureRestoresExactPriorSettingAndStamp(t *testi
 	}
 	t.Cleanup(func() { _ = db.Callback().Update().Remove(callbackName) })
 	events := []string{}
+	backend := newSearchWorkerBackendFake()
+	worker := newAsyncSearchTestWorker(t, backend, func() SearchWorkerConfig {
+		return validAsyncSearchWorkerConfig(true)
+	})
 	admission := newAdmissionControllerFixture(t, false, nil)
 	admission.initialize(t)
 	runtime := EnablementRuntime(readyGAEnablement(), admission.controller)
 	runtime.admission = admission.controller
 	runtime.foundation = backupasset.NewFoundationService(settingsService)
 	runtime.settings = settingsService
+	runtime.keyring = backupasset.NewKeyring(db, func() time.Time { return now })
+	runtime.searchWorker = worker
 	runtime.contentManager = &runtimeContentManagerFake{events: &events}
 	runtime.inventory = ga.NewInventoryService(ga.InventoryDependencies{DB: db, Now: func() time.Time { return now }})
 	err := runtime.TransitionFeature(context.Background(), true, func() error {
@@ -1354,6 +1236,9 @@ func TestFeatureTransitionStampFailureRestoresExactPriorSettingAndStamp(t *testi
 	}
 	if installation.EnablementSucceededAt != nil {
 		t.Fatalf("stamp failure restored stamp=%v, want exact prior nil", installation.EnablementSucceededAt)
+	}
+	if got := len(worker.wake); got != 0 {
+		t.Fatalf("success-stamp failure queued wakes=%d, want zero", got)
 	}
 }
 

@@ -1,0 +1,10 @@
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Bounded startup and settings transitions versus background worker convergence"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Pass-infrastructure failures remain synchronous while candidate failures stay local"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Low-cardinality timeout and convergence evidence without asset metadata"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"TDD, deterministic concurrency, race, lint, and privacy gates"}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Dedicated branch, PR, CI, release, and production monitoring"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Settings transition through Search readiness, worker convergence, and API coverage"}
+{"file":".trellis/tasks/08-26-backup-assets-search-enable-async-convergence/research/root-cause.md","reason":"Confirmed production 25-second timeout and 8000-row partial-generation evidence"}
+{"file":".trellis/tasks/08-26-backup-assets-search-startup-isolation/prd.md","reason":"Delivered candidate-local isolation and sealed-state interoperability boundary"}
+{"file":".trellis/tasks/08-26-backup-assets-search-startup-isolation/design.md","reason":"Existing worker fan-out and Search readiness design"}
+{"file":".trellis/tasks/archive/2026-07/07-18-backup-assets-search-overlays/design.md","reason":"Search worker, generation, failure evidence, and atomic activation contracts"}

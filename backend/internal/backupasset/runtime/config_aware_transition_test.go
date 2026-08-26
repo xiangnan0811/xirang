@@ -365,6 +365,7 @@ func TestConfigAwareTransitionFunctionsDoNotReadCurrentFoundationSettings(t *tes
 		"Runtime.startupSearchWithConfig",
 		"managedContentRuntime.PrepareEnable",
 		"managedContentRuntime.RestoreEnable",
+		"SearchWorker.PrepareWithConfig",
 		"SearchWorker.StartupPassWithConfig",
 	})
 	if err != nil {

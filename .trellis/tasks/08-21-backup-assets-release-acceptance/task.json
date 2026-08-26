@@ -23,7 +23,8 @@
     "08-25-task-run-orphan-reconciliation",
     "08-25-catalog-lifecycle-race-stability",
     "08-25-backup-assets-mutable-search-projection",
-    "08-26-backup-assets-search-startup-isolation"
+    "08-26-backup-assets-search-startup-isolation",
+    "08-26-backup-assets-search-enable-async-convergence"
   ],
   "parent": "07-12-backup-data-explorer-design",
   "relatedFiles": [

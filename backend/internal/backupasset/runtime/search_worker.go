@@ -38,6 +38,7 @@ type SearchWorker struct {
 	backend SearchWorkerBackend
 	metrics search.Metrics
 	now     func() time.Time
+	wake    chan struct{}
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -54,7 +55,10 @@ func NewSearchWorker(dependencies SearchWorkerDependencies) (*SearchWorker, erro
 	if dependencies.Now == nil {
 		dependencies.Now = func() time.Time { return time.Now().UTC() }
 	}
-	return &SearchWorker{config: dependencies.Config, backend: dependencies.Backend, metrics: dependencies.Metrics, now: dependencies.Now}, nil
+	return &SearchWorker{
+		config: dependencies.Config, backend: dependencies.Backend, metrics: dependencies.Metrics,
+		now: dependencies.Now, wake: make(chan struct{}, 1),
+	}, nil
 }
 
 func (worker *SearchWorker) StartupPass(ctx context.Context) error {
@@ -80,6 +84,31 @@ func (worker *SearchWorker) StartupPassWithConfig(ctx context.Context, config Se
 	return worker.runPassWithConfig(ctx, config)
 }
 
+// PrepareWithConfig performs the explicit-config infrastructure portion of a
+// Search pass without owning any candidate Build work.
+func (worker *SearchWorker) PrepareWithConfig(ctx context.Context, config SearchWorkerConfig) error {
+	if worker == nil {
+		return fmt.Errorf("%w: Search worker unavailable", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	_, _, _, err := worker.prepareWithConfig(ctx, config)
+	return err
+}
+
+// TryWake coalesces a request for the lifecycle-owned Run loop. It never
+// starts candidate work or blocks the caller.
+func (worker *SearchWorker) TryWake() {
+	if worker == nil {
+		return
+	}
+	select {
+	case worker.wake <- struct{}{}:
+	default:
+	}
+}
+
 func (worker *SearchWorker) Run(ctx context.Context) {
 	if worker == nil {
 		return
@@ -101,6 +130,13 @@ func (worker *SearchWorker) Run(ctx context.Context) {
 		worker.done = nil
 		worker.mu.Unlock()
 	}()
+	// A wake queued before Run starts is preserved as a request for the normal
+	// initial full pass. Consume it now so it cannot cause an immediate duplicate
+	// pass after that initial convergence work completes.
+	select {
+	case <-worker.wake:
+	default:
+	}
 
 	for {
 		_ = worker.runPass(runCtx)
@@ -116,6 +152,13 @@ func (worker *SearchWorker) Run(ctx context.Context) {
 		case <-runCtx.Done():
 			timer.Stop()
 			return
+		case <-worker.wake:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 		case <-timer.C:
 		}
 	}
@@ -153,14 +196,25 @@ func (worker *SearchWorker) runPass(ctx context.Context) error {
 }
 
 func (worker *SearchWorker) runPassWithConfig(ctx context.Context, config SearchWorkerConfig) error {
+	candidates, concurrency, enabled, err := worker.prepareWithConfig(ctx, config)
+	if err != nil || !enabled {
+		return err
+	}
+	return worker.buildCandidates(ctx, candidates, concurrency)
+}
+
+func (worker *SearchWorker) prepareWithConfig(
+	ctx context.Context,
+	config SearchWorkerConfig,
+) ([]search.BuildCandidate, int, bool, error) {
 	if !config.Enabled {
 		worker.metrics.ObserveScan(search.ScanOutcomeDisabled)
-		return nil
+		return nil, 0, false, nil
 	}
 	if config.ReconcileInterval <= 0 || config.ReconcileBatchSize <= 0 || config.ReconcileBatchSize > 100000 ||
 		config.WorkerConcurrency <= 0 || config.WorkerConcurrency > 256 {
 		worker.metrics.ObserveScan(search.ScanOutcomeFailure)
-		return fmt.Errorf("%w: invalid Search worker config", backupasset.ErrInvalidState)
+		return nil, 0, false, fmt.Errorf("%w: invalid Search worker config", backupasset.ErrInvalidState)
 	}
 	abandonedAfter := config.AbandonedAfter
 	if abandonedAfter <= 0 {
@@ -169,22 +223,22 @@ func (worker *SearchWorker) runPassWithConfig(ctx context.Context, config Search
 	reconciled, err := worker.backend.ReconcileAbandoned(ctx, worker.now().UTC().Add(-abandonedAfter), config.ReconcileBatchSize)
 	if err != nil {
 		worker.metrics.ObserveScan(search.ScanOutcomeFailure)
-		return err
+		return nil, 0, false, err
 	}
 	worker.metrics.AddReconciledAbandoned(reconciled)
 	overlays, err := worker.backend.ReconcileOverlays(ctx, config.ReconcileBatchSize)
 	if err != nil {
 		worker.metrics.ObserveScan(search.ScanOutcomeFailure)
-		return err
+		return nil, 0, false, err
 	}
 	worker.metrics.AddReconciledOverlays(overlays)
 	candidates, err := worker.backend.ListCandidates(ctx, config.ReconcileBatchSize)
 	if err != nil {
 		worker.metrics.ObserveScan(search.ScanOutcomeFailure)
-		return err
+		return nil, 0, false, err
 	}
 	worker.metrics.ObserveScan(search.ScanOutcomeSuccess)
-	return worker.buildCandidates(ctx, fairSearchCandidates(candidates), config.WorkerConcurrency)
+	return fairSearchCandidates(candidates), config.WorkerConcurrency, true, nil
 }
 
 func (worker *SearchWorker) buildCandidates(ctx context.Context, candidates []search.BuildCandidate, concurrency int) error {

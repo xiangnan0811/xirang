@@ -2836,7 +2836,7 @@ func TestRuntimeSearchStartupEnsuresKeyReconcilesAndTreatsRecordedLossAsUnavaila
 	}
 }
 
-func TestRuntimeSearchStartupKeepsReadyAfterCandidateBuildFailure(t *testing.T) {
+func TestRuntimeSearchStartupPreparesInfrastructureWithoutOwningCandidateBuild(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_RUNTIME_SEARCH_ISOLATION_KEK_FOR_TEST_ONLY")
 	secure.ResetForTesting()
@@ -2849,10 +2849,8 @@ func TestRuntimeSearchStartupKeepsReadyAfterCandidateBuildFailure(t *testing.T) 
 	if err := settingsService.Update("backup_assets.enabled", "true"); err != nil {
 		t.Fatalf("enable backup assets: %v", err)
 	}
-	candidateErr := errors.New("FAKE_RUNTIME_SEARCH_CANDIDATE_FAILURE_FOR_TEST_ONLY")
 	backend := newSearchWorkerBackendFake()
 	backend.candidates = []search.BuildCandidate{{RepositoryID: "repo-a", RecoveryPointID: "point-a"}}
-	backend.build = func(context.Context, search.BuildRequest) error { return candidateErr }
 	worker, err := NewSearchWorker(SearchWorkerDependencies{
 		Config: func() (SearchWorkerConfig, error) {
 			return SearchWorkerConfig{Enabled: true, ReconcileInterval: time.Minute, ReconcileBatchSize: 10, WorkerConcurrency: 1}, nil
@@ -2868,10 +2866,13 @@ func TestRuntimeSearchStartupKeepsReadyAfterCandidateBuildFailure(t *testing.T) 
 		searchWorker: worker, searchReady: ready, enablement: readyGAEnablement(),
 	}
 	if err := runtime.startupSearch(context.Background()); err != nil {
-		t.Fatalf("behavioral RED: candidate-local Build failure escaped runtime Search startup: %v", err)
+		t.Fatalf("runtime Search infrastructure preparation: %v", err)
 	}
 	if !ready.Load() {
-		t.Fatal("runtime Search remained unready after isolated candidate-local Build failure")
+		t.Fatal("runtime Search remained unready after infrastructure preparation")
+	}
+	if calls := backend.calls(); calls != (searchWorkerCalls{reconcile: 1, overlay: 1, list: 1}) {
+		t.Fatalf("runtime startup calls=%+v, want infrastructure-only preparation", calls)
 	}
 }
 
