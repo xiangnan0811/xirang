@@ -189,7 +189,6 @@ func (worker *SearchWorker) runPassWithConfig(ctx context.Context, config Search
 
 func (worker *SearchWorker) buildCandidates(ctx context.Context, candidates []search.BuildCandidate, concurrency int) error {
 	semaphore := make(chan struct{}, concurrency)
-	errorsCh := make(chan error, len(candidates))
 	var wait sync.WaitGroup
 candidateLoop:
 	for _, candidate := range candidates {
@@ -220,16 +219,11 @@ candidateLoop:
 				worker.metrics.ObserveBuild(search.BuildOutcomeFenced)
 			default:
 				worker.metrics.ObserveBuild(search.BuildOutcomeFailure)
-				errorsCh <- err
 			}
 		}()
 	}
 	wait.Wait()
 	worker.metrics.SetActiveBuilds(0)
-	close(errorsCh)
-	for err := range errorsCh {
-		return err
-	}
 	return ctx.Err()
 }
 

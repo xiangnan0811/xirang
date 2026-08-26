@@ -1,0 +1,43 @@
+{
+  "id": "backup-assets-search-startup-isolation",
+  "name": "backup-assets-search-startup-isolation",
+  "title": "Backup Assets Search Startup Isolation",
+  "description": "Prevent candidate-local Search projection failures from crashing the whole service at startup and resolve the exact sealed Catalog security-state interoperability gap without weakening Search integrity.",
+  "status": "in_progress",
+  "dev_type": "backend",
+  "scope": "backupasset-runtime-search",
+  "package": "backend",
+  "priority": "P0",
+  "creator": "murray",
+  "assignee": "murray",
+  "createdAt": "2026-08-26",
+  "completedAt": null,
+  "branch": "codex/backup-assets-search-startup-isolation",
+  "base_branch": "main",
+  "worktree_path": "/home/murray/code/xirang/.worktrees/backup-assets-search-startup-isolation",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "08-21-backup-assets-release-acceptance",
+  "relatedFiles": [
+    "backend/internal/backupasset/runtime/search_worker.go",
+    "backend/internal/backupasset/runtime/search_worker_test.go",
+    "backend/internal/backupasset/runtime/runtime_test.go",
+    "backend/internal/backupasset/search/indexer.go",
+    "backend/internal/backupasset/search/indexer_test.go",
+    ".trellis/tasks/08-26-backup-assets-search-startup-isolation/research/root-cause.md"
+  ],
+  "notes": "Production v0.50.7 entered a deterministic startup crash loop. Guarded recovery disabled only backup_assets.enabled and restored healthy v0.50.6 while preserving the complete 60,515-row Catalog and ten failed Search generations. The latest stable error is search_invalid_security_state with expected=60515, written=0. Task 3 and node-log collectors remain disabled.",
+  "meta": {
+    "incident": "search_candidate_failure_global_startup_fatal",
+    "implementation_authorized": true,
+    "production_feature_state": "temporarily_disabled_fail_closed",
+    "production_task3": "paused_disabled_zero_active_runs",
+    "schema_change": "none_expected",
+    "api_change": "none_expected",
+    "provider_mutation": "forbidden",
+    "next_gate": "commit_and_pr",
+    "trellis_check": "passed_no_unresolved_findings"
+  }
+}

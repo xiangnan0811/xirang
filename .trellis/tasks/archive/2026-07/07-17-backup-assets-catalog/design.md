@@ -104,7 +104,7 @@ type CatalogReadProof struct {
 - enumeration 只前进，不回退到 `latest`、mutable root 或另一个 point；cursor/source revision 变化立即失败；
 - `Finalize` 只有在遍历到 EOF 且 provider-specific canonical codec 完成时成功；中途 cancel/limit/duplicate/invalid record 不能伪造 complete；
 - `Close` 幂等并释放 admission token/handle；context cancel 必须终止/收拢 Provider command；
-- native Provider locator 只存在于 Repository wrapper 内；wrapper 在返回 `CatalogRecord` 前封装成 authenticated encrypted locator，Catalog 只把 ciphertext 写入 staging row。模型 `EncryptIfNeeded` 不得双重加密；明文 locator 绝不进入 Catalog service/API、日志、audit 或 error。
+- native Provider locator 只存在于 Repository wrapper 内；wrapper 在返回 `CatalogRecord` 前封装成 authenticated encrypted locator，Catalog 只把 ciphertext 写入 staging row，并保留精确 `security_state = "sealed"`。该 token 证明 locator 密封状态，不是内容敏感度分类；下游必须显式转换语义域，不能把 Catalog writer 改写为 `unknown`。模型 `EncryptIfNeeded` 不得双重加密；明文 locator 绝不进入 Catalog service/API、日志、audit 或 error。
 
 ### 3.3 Provider mapping
 

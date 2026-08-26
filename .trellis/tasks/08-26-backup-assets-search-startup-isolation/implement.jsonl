@@ -1,0 +1,10 @@
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Startup availability and worker lifecycle boundary"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Typed candidate-local versus pass-infrastructure failures"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Low-cardinality failure evidence without sensitive entry metadata"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Backend TDD, focused repetition/race, lint, and privacy verification"}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Dedicated branch, PR, CI, merge, release, and production monitoring"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Catalog security state through Search readiness and API coverage"}
+{"file":".trellis/tasks/08-26-backup-assets-search-startup-isolation/research/root-cause.md","reason":"Production crash, recovery, and exact stable-error evidence"}
+{"file":".trellis/tasks/archive/2026-07/07-18-backup-assets-search-overlays/prd.md","reason":"Search sensitivity, unavailable coverage, and privacy contracts"}
+{"file":".trellis/tasks/archive/2026-07/07-18-backup-assets-search-overlays/design.md","reason":"Closed sensitivity, projection completeness, and activation design"}
+{"file":".trellis/tasks/archive/2026-07/07-17-backup-assets-catalog/design.md","reason":"Upstream Catalog locator-seal producer contract"}

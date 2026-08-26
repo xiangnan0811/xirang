@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/catalog"
+	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/secure"
 
@@ -634,30 +636,102 @@ func TestIndexerProjectionStoresOnlyHMACsAndMapsLegacySecurityUnknown(t *testing
 	}
 }
 
-func TestIndexerInvalidSecurityFailsAndPreservesOldActiveProjection(t *testing.T) {
+func TestIndexerSealedCatalogProjectsConservativeUnknownAndActivates(t *testing.T) {
 	indexer, harness := newIndexerTestHarness(t)
-	pointID, catalogID := harness.seedCatalog(t, []model.CatalogEntry{{
-		EntryID: strings.Repeat("e", 64), NormalizedPath: "bad.txt", Name: "bad.txt",
-		EntryType: "file", SecurityState: "future_security",
-	}})
-	old := harness.seedActiveSearch(t, pointID, catalogID, 1)
-	if _, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID, CorrelationID: "bad-security"}); !errors.Is(err, ErrInvalidSecurityState) {
-		t.Fatalf("Build got %v, want ErrInvalidSecurityState", err)
+	pointID, catalogID, sealedLocator := harness.produceMutableCatalog(t)
+	beforeSearch := harness.loadRawCatalogEntry(t, catalogID)
+	if beforeSearch.SecurityState != "sealed" || beforeSearch.EncryptedProviderLocator != sealedLocator ||
+		!secure.IsEncrypted(beforeSearch.EncryptedProviderLocator) {
+		t.Fatalf("Catalog producer output security_state=%q sealed_locator=%t preserved=%t",
+			beforeSearch.SecurityState, secure.IsEncrypted(beforeSearch.EncryptedProviderLocator), beforeSearch.EncryptedProviderLocator == sealedLocator)
 	}
-	var persisted model.BackupAssetSearchGeneration
-	if err := harness.db.First(&persisted, "id = ?", old.ID).Error; err != nil {
-		t.Fatalf("load old active: %v", err)
+	for generation := 1; generation <= 10; generation++ {
+		harness.seedFailedSearch(t, pointID, catalogID, generation)
 	}
-	if !persisted.IsActive || persisted.State != string(SearchGenerationComplete) {
-		t.Fatalf("failed build replaced old active projection: %+v", persisted)
+	generation, buildErr := indexer.Build(context.Background(), BuildRequest{
+		RecoveryPointID: pointID, CorrelationID: "sealed-security",
+	})
+	if buildErr != nil {
+		var failed model.BackupAssetSearchGeneration
+		if err := harness.db.Where("recovery_point_id = ?", pointID).Order("generation DESC").First(&failed).Error; err != nil {
+			t.Fatalf("behavioral RED: sealed Catalog build=%v and failed generation unavailable: %v", buildErr, err)
+		}
+		var documents int64
+		if err := harness.db.Model(&model.BackupAssetSearchDocument{}).
+			Where("search_generation_id = ?", failed.ID).Count(&documents).Error; err != nil {
+			t.Fatalf("count failed sealed documents: %v", err)
+		}
+		t.Fatalf("behavioral RED: exact sealed Catalog rejected: error=%v state=%q code=%q expected=%d written=%d active=%t documents=%d",
+			buildErr, failed.State, failed.ErrorCode, failed.ExpectedDocumentCount, failed.WrittenDocumentCount, failed.IsActive, documents)
 	}
-	var failed int64
+	if generation.Generation != 11 || generation.State != string(SearchGenerationComplete) || !generation.IsActive ||
+		generation.CatalogGenerationID != catalogID || generation.ExpectedDocumentCount != 1 || generation.WrittenDocumentCount != 1 {
+		t.Fatalf("sealed Catalog Search generation=%+v", generation)
+	}
+	var priorFailed int64
 	if err := harness.db.Model(&model.BackupAssetSearchGeneration{}).
-		Where("recovery_point_id = ? AND state = ?", pointID, SearchGenerationFailed).Count(&failed).Error; err != nil {
-		t.Fatalf("count failed generation: %v", err)
+		Where("recovery_point_id = ? AND state = ?", pointID, SearchGenerationFailed).Count(&priorFailed).Error; err != nil {
+		t.Fatalf("count prior failed Search generations: %v", err)
 	}
-	if failed != 1 {
-		t.Fatalf("failed generation count=%d, want 1", failed)
+	if priorFailed != 10 {
+		t.Fatalf("sealed convergence retained failed generations=%d, want 10", priorFailed)
+	}
+	var document model.BackupAssetSearchDocument
+	if err := harness.db.Where("search_generation_id = ?", generation.ID).First(&document).Error; err != nil {
+		t.Fatalf("load sealed Search document: %v", err)
+	}
+	if document.Sensitivity != string(SensitivityUnknown) {
+		t.Fatalf("sealed Search sensitivity=%q, want conservative unknown", document.Sensitivity)
+	}
+	afterSearch := harness.loadRawCatalogEntry(t, catalogID)
+	if afterSearch != beforeSearch {
+		t.Fatalf("Search projection rewrote raw Catalog producer output: before=%+v after=%+v", beforeSearch, afterSearch)
+	}
+}
+
+func TestIndexerInvalidSecurityFailsAndPreservesOldActiveProjection(t *testing.T) {
+	for _, securityState := range []string{"future_security", "SEALED", " sealed", "sealed "} {
+		t.Run(fmt.Sprintf("%q", securityState), func(t *testing.T) {
+			indexer, harness := newIndexerTestHarness(t)
+			pointID, catalogID := harness.seedCatalog(t, []model.CatalogEntry{{
+				EntryID: strings.Repeat("e", 64), NormalizedPath: "bad.txt", Name: "bad.txt",
+				EntryType: "file", SecurityState: securityState,
+			}})
+			old := harness.seedActiveSearch(t, pointID, catalogID, 1)
+			if _, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID, CorrelationID: "bad-security"}); !errors.Is(err, ErrInvalidSecurityState) {
+				t.Fatalf("Build got %v, want ErrInvalidSecurityState", err)
+			}
+			var persisted model.BackupAssetSearchGeneration
+			if err := harness.db.First(&persisted, "id = ?", old.ID).Error; err != nil {
+				t.Fatalf("load old active: %v", err)
+			}
+			if !persisted.IsActive || persisted.State != string(SearchGenerationComplete) {
+				t.Fatalf("failed build replaced old active projection: %+v", persisted)
+			}
+			var failed model.BackupAssetSearchGeneration
+			if err := harness.db.Where("recovery_point_id = ? AND state = ?", pointID, SearchGenerationFailed).First(&failed).Error; err != nil {
+				t.Fatalf("load failed generation: %v", err)
+			}
+			if failed.ErrorCode != string(SearchErrorInvalidSecurityState) || failed.ExpectedDocumentCount != 1 ||
+				failed.WrittenDocumentCount != 0 || failed.IsActive {
+				t.Fatalf("invalid security failed generation=%+v", failed)
+			}
+			var documents int64
+			if err := harness.db.Model(&model.BackupAssetSearchDocument{}).
+				Where("search_generation_id = ?", failed.ID).Count(&documents).Error; err != nil {
+				t.Fatalf("count failed generation documents: %v", err)
+			}
+			if documents != 0 {
+				t.Fatalf("invalid security wrote %d documents before failure", documents)
+			}
+			var catalogEntry model.CatalogEntry
+			if err := harness.db.Where("generation_id = ?", catalogID).First(&catalogEntry).Error; err != nil {
+				t.Fatalf("reload invalid security Catalog entry: %v", err)
+			}
+			if catalogEntry.SecurityState != securityState {
+				t.Fatalf("Search projection rewrote raw Catalog security_state=%q, want %q", catalogEntry.SecurityState, securityState)
+			}
+		})
 	}
 }
 
@@ -720,9 +794,10 @@ func TestIndexerCandidateAndAbandonedProjectionReconciliation(t *testing.T) {
 }
 
 type indexerTestHarness struct {
-	db   *gorm.DB
-	ring *backupasset.Keyring
-	now  time.Time
+	db    *gorm.DB
+	ring  *backupasset.Keyring
+	lease *backupasset.LeaseService
+	now   time.Time
 }
 
 func newIndexerTestHarness(t *testing.T) (*Indexer, *indexerTestHarness) {
@@ -739,7 +814,7 @@ func newIndexerTestHarness(t *testing.T) (*Indexer, *indexerTestHarness) {
 		t.Fatalf("open indexer DB: %v", err)
 	}
 	models := []any{
-		&model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{}, &model.CatalogGeneration{}, &model.CatalogEntry{},
+		&model.BackupRepository{}, &model.RecoveryPoint{}, &model.RecoveryPointLifecycleAttempt{}, &model.CatalogGeneration{}, &model.CatalogEntry{},
 		&model.WrappedDomainKey{}, &model.RecoveryPointLease{},
 		&model.BackupAssetSearchGeneration{}, &model.BackupAssetSearchDocument{},
 		&model.BackupAssetSearchPosting{}, &model.BackupAssetSearchDocumentField{},
@@ -765,12 +840,158 @@ func newIndexerTestHarness(t *testing.T) (*Indexer, *indexerTestHarness) {
 	if err != nil {
 		t.Fatalf("new lease service: %v", err)
 	}
-	harness := &indexerTestHarness{db: db, ring: ring, now: now}
+	harness := &indexerTestHarness{db: db, ring: ring, lease: lease, now: now}
 	indexer, err := NewIndexer(IndexerDependencies{DB: db, Lease: lease, Keys: ring, Now: func() time.Time { return now }, Config: standardIndexerConfig()})
 	if err != nil {
 		t.Fatalf("NewIndexer: %v", err)
 	}
 	return indexer, harness
+}
+
+type rawCatalogProducerEntry struct {
+	SecurityState            string
+	EncryptedProviderLocator string
+}
+
+func (harness *indexerTestHarness) loadRawCatalogEntry(t *testing.T, catalogID string) rawCatalogProducerEntry {
+	t.Helper()
+	var entry rawCatalogProducerEntry
+	if err := harness.db.Table("catalog_entries").
+		Select("security_state", "encrypted_provider_locator").Where("generation_id = ?", catalogID).Take(&entry).Error; err != nil {
+		t.Fatalf("load raw Catalog producer entry: %v", err)
+	}
+	return entry
+}
+
+func (harness *indexerTestHarness) produceMutableCatalog(t *testing.T) (string, string, string) {
+	t.Helper()
+	repository := model.BackupRepository{
+		ID: strings.Repeat("8", 32), ProviderKind: string(backupasset.ProviderRsync), DisplayName: "Search producer fixture",
+		VersionMode: string(backupasset.VersionMutableHead), Status: string(backupasset.RepositoryOnline),
+		CapabilityRevision: 1, CapabilitiesJSON: "{}", ImmutabilityLevel: string(backupasset.ImmutabilityMutable),
+		CreatedAt: harness.now, UpdatedAt: harness.now,
+	}
+	if err := harness.db.Create(&repository).Error; err != nil {
+		t.Fatalf("seed Catalog producer repository: %v", err)
+	}
+	pointID := strings.Repeat("9", 32)
+	observedAt := harness.now
+	lineage, err := json.Marshal(backupasset.RecoveryPointLineageSummary{ProducingTaskID: uintPointer(11)})
+	if err != nil {
+		t.Fatalf("encode Catalog producer lineage: %v", err)
+	}
+	point := model.RecoveryPoint{
+		ID: pointID, RepositoryID: repository.ID, Semantics: string(backupasset.PointMutableHead), State: string(backupasset.RecoveryPointObserved),
+		ProducingTaskID: uintPointer(11), LineageJSON: string(lineage), SourceFingerprint: strings.Repeat("a", 64),
+		CapabilityRevision: repository.CapabilityRevision, CapabilitiesJSON: "{}", ImmutabilityLevel: repository.ImmutabilityLevel,
+		PhysicalAvailability: string(backupasset.PhysicalOnline), HoldState: string(backupasset.HoldNone),
+		ObservedAt: &observedAt, CreatedAt: harness.now, UpdatedAt: harness.now,
+	}
+	if err := harness.db.Create(&point).Error; err != nil {
+		t.Fatalf("seed Catalog producer point: %v", err)
+	}
+	if _, err := harness.ring.Ensure(context.Background(), backupasset.KeyDomainEntryIdentity); err != nil {
+		t.Fatalf("ensure Catalog producer identity key: %v", err)
+	}
+	sealedLocator, err := secure.EncryptIfNeeded(`{"version":1,"native":"FAKE_SEARCH_PRODUCER_LOCATOR_FOR_TEST_ONLY"}`)
+	if err != nil {
+		t.Fatalf("seal Catalog producer locator: %v", err)
+	}
+	modifiedAt := harness.now.Add(-time.Hour)
+	record := provider.CatalogRecord{
+		NormalizedPath: "sealed.txt", Name: "sealed.txt", Type: backupasset.CatalogEntryFile, Size: 17,
+		ModifiedAt: &modifiedAt, MIMEType: "text/plain", Fingerprint: strings.Repeat("d", 64),
+		FingerprintStrength: string(catalog.FingerprintStrong), SealedProviderLocator: sealedLocator,
+	}
+	producer, err := catalog.NewIndexer(catalog.IndexerDependencies{
+		DB: harness.db, Factory: &searchCatalogProducerFactory{
+			provider: backupasset.ProviderRsync, source: point.SourceFingerprint, record: record,
+		},
+		Lease: harness.lease, IdentityKeys: harness.ring, Now: func() time.Time { return harness.now },
+		Config: catalog.IndexerConfig{BatchSize: 1, BuildTimeout: time.Minute, MaxEntries: 10},
+	})
+	if err != nil {
+		t.Fatalf("New Catalog producer: %v", err)
+	}
+	generation, err := producer.Build(context.Background(), catalog.BuildRequest{
+		RepositoryID: repository.ID, RecoveryPointID: pointID, CorrelationID: "search-producer",
+	})
+	if err != nil {
+		t.Fatalf("Catalog producer Build: %v", err)
+	}
+	if generation.State != string(catalog.GenerationComplete) || !generation.IsActive || generation.WrittenEntryCount != 1 {
+		t.Fatalf("Catalog producer generation=%+v", generation)
+	}
+	return pointID, generation.ID, sealedLocator
+}
+
+type searchCatalogProducerFactory struct {
+	provider backupasset.ProviderKind
+	source   string
+	record   provider.CatalogRecord
+}
+
+func (factory *searchCatalogProducerFactory) OpenCatalogRead(
+	_ context.Context,
+	request catalog.PointReadRequest,
+) (provider.CatalogReadSession, error) {
+	accumulator, err := provider.NewCatalogProjectionAccumulator(
+		factory.provider, request.RepositoryID, request.RecoveryPointID, factory.source,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := accumulator.Write(factory.record); err != nil {
+		return nil, err
+	}
+	digest, count, err := accumulator.Finalize()
+	if err != nil {
+		return nil, err
+	}
+	return &searchCatalogProducerSession{
+		record: factory.record,
+		proof: provider.CatalogReadProof{
+			Provider: factory.provider, Mode: provider.CatalogProofMutableObservation, SourceRevision: factory.source,
+			Catalog: provider.CatalogProjectionProof{DigestAlgorithm: "sha256", Digest: digest, EntryCount: count, Complete: true},
+		},
+	}, nil
+}
+
+type searchCatalogProducerSession struct {
+	record provider.CatalogRecord
+	proof  provider.CatalogReadProof
+	listed bool
+	closed bool
+}
+
+func (session *searchCatalogProducerSession) SourceRevision() string {
+	return session.proof.SourceRevision
+}
+
+func (session *searchCatalogProducerSession) ListCanonical(
+	_ context.Context,
+	_ provider.PageRequest,
+) (provider.CatalogRecordPage, error) {
+	if session.closed {
+		return provider.CatalogRecordPage{}, provider.ErrCatalogSessionClosed
+	}
+	if session.listed {
+		return provider.CatalogRecordPage{}, nil
+	}
+	session.listed = true
+	return provider.CatalogRecordPage{Items: []provider.CatalogRecord{session.record}}, nil
+}
+
+func (session *searchCatalogProducerSession) Finalize(context.Context) (provider.CatalogReadProof, error) {
+	if session.closed || !session.listed {
+		return provider.CatalogReadProof{}, provider.ErrCatalogSessionIncomplete
+	}
+	return session.proof, nil
+}
+
+func (session *searchCatalogProducerSession) Close() error {
+	session.closed = true
+	return nil
 }
 
 func standardIndexerConfig() IndexerConfig {
@@ -855,6 +1076,24 @@ func (harness *indexerTestHarness) seedActiveSearch(t *testing.T, pointID, catal
 	}
 	if err := harness.db.Create(&row).Error; err != nil {
 		t.Fatalf("seed active Search: %v", err)
+	}
+	return row
+}
+
+func (harness *indexerTestHarness) seedFailedSearch(t *testing.T, pointID, catalogID string, generation int) model.BackupAssetSearchGeneration {
+	t.Helper()
+	key, _ := harness.ring.Active(context.Background(), backupasset.KeyDomainSearchToken)
+	row := model.BackupAssetSearchGeneration{
+		ID: fmt.Sprintf("%032x", 0x100000+generation), RecoveryPointID: pointID, CatalogGenerationID: catalogID,
+		Generation: generation, State: string(SearchGenerationFailed), IsActive: false,
+		NormalizerVersion: NormalizerVersion, SearchKeyVersion: key.Version, ProjectionRevision: 1,
+		ExpectedDocumentCount: 1, WrittenDocumentCount: 0, ErrorCode: string(SearchErrorInvalidSecurityState),
+		LeaseID: fmt.Sprintf("%032x", 0x200000+generation), BuildAttemptID: fmt.Sprintf("%032x", 0x300000+generation),
+		FenceTokenHash: strings.Repeat("7", 64), StartedAt: harness.now, FinishedAt: timePointer(harness.now),
+		CreatedAt: harness.now, UpdatedAt: harness.now,
+	}
+	if err := harness.db.Create(&row).Error; err != nil {
+		t.Fatalf("seed failed Search generation %d: %v", generation, err)
 	}
 	return row
 }
