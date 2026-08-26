@@ -39,7 +39,7 @@
     "historical_no_go": "v0_50_2_failed_pre_enable_migration",
     "p0_enable_deadlock": "completed_archived_do_not_repeat",
     "orphan_reconciliation_release": "v0.50.6_deployed_and_formally_accepted",
-    "release_blocker": "backup_assets_search_startup_isolation_and_sealed_state_interop",
+    "release_blocker": "pr_464_required_ci_then_v0_50_8_release_and_production_acceptance",
     "next_gate": "node_log_p1_after_real_data_acceptance",
     "native_aws": "excluded",
     "docs_exclusion": "verified",

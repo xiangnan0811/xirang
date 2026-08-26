@@ -15,8 +15,8 @@
   "branch": "codex/backup-assets-search-startup-isolation",
   "base_branch": "main",
   "worktree_path": "/home/murray/code/xirang/.worktrees/backup-assets-search-startup-isolation",
-  "commit": null,
-  "pr_url": null,
+  "commit": "024d6d7e",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/464",
   "subtasks": [],
   "children": [],
   "parent": "08-21-backup-assets-release-acceptance",
@@ -37,7 +37,7 @@
     "schema_change": "none_expected",
     "api_change": "none_expected",
     "provider_mutation": "forbidden",
-    "next_gate": "commit_and_pr",
+    "next_gate": "pr_464_required_ci",
     "trellis_check": "passed_no_unresolved_findings"
   }
 }
