@@ -16,7 +16,7 @@
   "base_branch": "main",
   "worktree_path": "/home/murray/code/xirang/.worktrees/backup-assets-preview-authorization-ui",
   "commit": null,
-  "pr_url": null,
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/468",
   "subtasks": [],
   "children": [],
   "parent": "08-21-backup-assets-release-acceptance",

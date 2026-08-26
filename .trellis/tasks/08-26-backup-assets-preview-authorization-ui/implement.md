@@ -31,7 +31,7 @@
 
 ## Phase 5 — PR, CI, merge, and release
 
-- [ ] Commit on `codex/backup-assets-preview-authorization-ui`, push, and open a ready PR against main.
+- [x] Commit on `codex/backup-assets-preview-authorization-ui`, push, and open a ready PR against main.
 - [ ] Monitor all required CI; fix failures on the same branch and continue until green.
 - [ ] Squash merge only when required checks are green.
 - [ ] Sync main and monitor Release Please, GitHub Release, Docker image publishing, and any relevant post-merge automation.
