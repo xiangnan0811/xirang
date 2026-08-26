@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.50.9](https://github.com/xiangnan0811/xirang/compare/v0.50.8...v0.50.9) (2026-08-26)
+
+
+### 🐛 Bug Fixes
+
+* **backup-assets:** decouple search enable convergence ([#466](https://github.com/xiangnan0811/xirang/issues/466)) ([ff7d0d0](https://github.com/xiangnan0811/xirang/commit/ff7d0d02c3403139aa50ab05a7b54ae6bca063ff))
+
 ## [0.50.8](https://github.com/xiangnan0811/xirang/compare/v0.50.7...v0.50.8) (2026-08-26)
 
 
