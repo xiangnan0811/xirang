@@ -15,7 +15,7 @@
   "branch": "codex/backup-assets-search-startup-isolation",
   "base_branch": "main",
   "worktree_path": "/home/murray/code/xirang/.worktrees/backup-assets-search-startup-isolation",
-  "commit": "024d6d7e",
+  "commit": "024d6d71b9ab0a21bf256504b26bf4cdd56761d1",
   "pr_url": "https://github.com/xiangnan0811/xirang/pull/464",
   "subtasks": [],
   "children": [],
