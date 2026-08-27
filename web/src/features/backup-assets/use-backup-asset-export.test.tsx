@@ -114,6 +114,24 @@ describe("useBackupAssetExport", () => {
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
   });
 
+  it("keeps the exact secure-transport ticket denial distinct from generic export unavailability", async () => {
+    const api: BackupAssetExportApi = {
+      create: vi.fn(),
+      status: vi.fn(),
+      cancel: vi.fn(),
+      issueDownloadTicket: vi.fn().mockRejectedValue(new ApiError(503, "localized", {
+        data: { reason: { code: "secure_transport_required", params: {} } },
+      })),
+    };
+    const { result } = renderHook(() => useBackupAssetExport(baseOptions(api)));
+    act(() => result.current.hydrate(readyJob()));
+
+    await act(async () => result.current.download());
+
+    expect(result.current.state.error).toBe("secure_transport_required");
+    expect(JSON.stringify(result.current.state)).not.toContain("localized");
+  });
+
   it("uses a one-time create proof and replaces estimates with authoritative job totals", async () => {
     const api: BackupAssetExportApi = {
       create: vi.fn().mockResolvedValue({ job: job(), replay: false }),

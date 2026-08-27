@@ -103,6 +103,16 @@ function pausedJob(): RecoveryJob {
 }
 
 describe("RecoveryPlanWizard", () => {
+  it("renders the Admin transport action for an exact Recovery result ticket denial", () => {
+    const recovery = controller(recoveryState({ phase: "error", error: "secure_transport_required" }));
+    const rendered = render(<RecoveryPlanWizard open recovery={recovery} authRole="admin" onOpenChange={vi.fn()} />);
+
+    expect(screen.getByRole("link", { name: /content transport|内容传输/i })).toHaveAttribute(
+      "href", "/app/backups/overview#backup-assets-content-transport",
+    );
+    expect(rendered.container.textContent).not.toContain("private/recovery/result");
+  });
+
   it("owns labelled target inputs and advances only through controller actions", async () => {
     const user = userEvent.setup();
     const recovery = controller(recoveryState());

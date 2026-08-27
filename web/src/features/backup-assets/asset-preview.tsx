@@ -19,6 +19,7 @@ import { presentBackupAssetsCode } from "./backup-assets-presenters";
 import { selectProcessingRepresentation } from "./backup-assets-processing-state";
 import type { ProcessingPreviewSource } from "./backup-asset-processing-panel";
 import type { BackupAssetsValueResource } from "./use-backup-assets-state";
+import { ContentTransportGuidance } from "./content-transport-guidance";
 
 const RENEW_BEFORE_MS = 30_000;
 const MEDIA_DESCRIPTION_ID = "backup-assets-preview-media-description";
@@ -194,6 +195,7 @@ export function AssetPreview({
           ticket={ticket}
           canPreview={canPreview}
           canDownload={canDownload}
+          role={processingRuntime?.role ?? null}
           rememberContentNode={rememberContentNode}
           onMediaError={handleMediaError}
         />
@@ -365,6 +367,7 @@ function PreviewBody({
   ticket,
   canPreview,
   canDownload,
+  role,
   rememberContentNode,
   onMediaError,
 }: {
@@ -373,6 +376,7 @@ function PreviewBody({
   ticket: BackupContentTicket | null;
   canPreview: boolean;
   canDownload: boolean;
+  role: AuthContextValue["role"];
   rememberContentNode: (node: HTMLIFrameElement | HTMLImageElement | HTMLMediaElement | null) => void;
   onMediaError: () => void;
 }) {
@@ -390,6 +394,9 @@ function PreviewBody({
     return (
       <InlineAlert tone={resource.status === "blocked" ? "warning" : "critical"}>
         <span>{t(capabilityKey ?? resource.error?.translationKey ?? "backupAssets.preview.unavailable")}</span>
+        {resource.error?.code === "secure_transport_required" ? (
+          <ContentTransportGuidance authRole={role} />
+        ) : null}
         {workerHint ? <span className="mt-2 block">{t("backupAssets.preview.optionalWorker")}</span> : null}
       </InlineAlert>
     );

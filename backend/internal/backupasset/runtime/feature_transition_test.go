@@ -1054,6 +1054,54 @@ func TestBackupAssetSettingsExportFailureRestoresPriorOverrideAbsence(t *testing
 	}
 }
 
+func TestBackupAssetSettingsPrivateNetworkFailureRestoresExactFoundationConfig(t *testing.T) {
+	db := openRuntimeTestDB(t)
+	settingsService := settings.NewService(db)
+	const key = "backup_assets.content_allow_insecure_private_network"
+	if err := settingsService.Update(key, "false"); err != nil {
+		t.Fatal(err)
+	}
+	current, err := settingsService.BackupAssetSettingsSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	effective := make(map[string]string, len(current))
+	for settingKey, value := range current {
+		effective[settingKey] = value
+	}
+	effective[key] = "true"
+	config, err := backupasset.ExportConfigFromValues(effective)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primaryErr := errors.New("FAKE_PRIVATE_NETWORK_CONTENT_AFTER_PERSIST_FAILURE_FOR_TEST_ONLY")
+	events := []string{}
+	export := &runtimeExportSettingsManagerFake{events: &events, failAfterPersist: primaryErr}
+	runtime := &Runtime{
+		exportManager: export,
+		transitioner:  &runtimeFeatureTransitionerFake{events: &events},
+		settings:      settingsService,
+	}
+	err = runtime.TransitionBackupAssetSettings(
+		context.Background(), current, map[string]string{key: "true"}, effective, config,
+		func() error { return settingsService.UpdateMany(map[string]string{key: "true"}) },
+	)
+	if !errors.Is(err, primaryErr) {
+		t.Fatalf("transition error=%v, want Export failure", err)
+	}
+	var row model.SystemSetting
+	if err := db.Where("key = ?", key).Take(&row).Error; err != nil || row.Value != "false" {
+		t.Fatalf("restored override=%+v err=%v", row, err)
+	}
+	contentConfig, err := backupasset.NewFoundationService(settingsService).ContentConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contentConfig.AllowInsecurePrivateNetwork || export.restoreCalls != 1 {
+		t.Fatalf("restored Content config private_network=%t restore_calls=%d", contentConfig.AllowInsecurePrivateNetwork, export.restoreCalls)
+	}
+}
+
 func TestBackupAssetSettingsSearchFailureRestoresEntirePriorBundleAndStamp(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_PHASE3_BUNDLE_SEARCH_ROLLBACK_KEY_FOR_TEST_ONLY")

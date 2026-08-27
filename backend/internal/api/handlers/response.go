@@ -102,6 +102,25 @@ func respondServiceUnavailable(c *gin.Context, msg string) {
 	c.JSON(http.StatusServiceUnavailable, Response{Code: http.StatusServiceUnavailable, Message: msg, Data: nil})
 }
 
+type backupContentTransportErrorData struct {
+	Reason backupContentTransportErrorReason `json:"reason"`
+}
+
+type backupContentTransportErrorReason struct {
+	Code   string            `json:"code"`
+	Params map[string]string `json:"params"`
+}
+
+func respondBackupContentSecureTransportRequired(c *gin.Context) {
+	c.JSON(http.StatusServiceUnavailable, Response{
+		Code:    http.StatusServiceUnavailable,
+		Message: "需要安全传输",
+		Data: backupContentTransportErrorData{Reason: backupContentTransportErrorReason{
+			Code: "secure_transport_required", Params: map[string]string{},
+		}},
+	})
+}
+
 func respondNotImplemented(c *gin.Context, msg string) {
 	c.JSON(http.StatusNotImplemented, Response{Code: http.StatusNotImplemented, Message: msg, Data: nil})
 }

@@ -13,12 +13,6 @@ map $http_upgrade $connection_upgrade {
   '' close;
 }
 
-map $http_x_forwarded_proto $xirang_effective_proto {
-  default $scheme;
-  ~^http$ http;
-  ~^https$ https;
-}
-
 log_format xirang_access '$request_method $uri $status';
 log_format xirang_asset_content
     '$request_id $status $body_bytes_sent '
@@ -50,7 +44,9 @@ server {
     proxy_send_timeout 75s;
     send_timeout 75s;
     proxy_set_header Host $http_host;
-    proxy_set_header X-Forwarded-Proto $xirang_effective_proto;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP "";
     proxy_set_header Range $http_range;
     proxy_set_header If-Range $http_if_range;
   }
@@ -64,7 +60,9 @@ server {
     proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;
     proxy_set_header Host $http_host;
-    proxy_set_header X-Forwarded-Proto $xirang_effective_proto;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For "";
+    proxy_set_header X-Real-IP "";
   }
 
   location /api/v1/ {
@@ -134,8 +132,15 @@ expect_mutation_failure changed-port 's/listen 10761;/listen 10762;/'
 expect_mutation_failure missing-generic-api 's#location /api/v1/ {#location /api/v2/ {#'
 expect_mutation_failure changed-generic-timeout 's/proxy_read_timeout 3600s;/proxy_read_timeout 0;/'
 expect_mutation_failure host-port-loss 's/proxy_set_header Host \$http_host;/proxy_set_header Host \$host;/'
-expect_mutation_failure untrusted-forwarded-proto 's/proxy_set_header X-Forwarded-Proto \$xirang_effective_proto;/proxy_set_header X-Forwarded-Proto \$http_x_forwarded_proto;/'
-expect_mutation_failure open-proto-map 's/default \$scheme;/default \$http_x_forwarded_proto;/'
+expect_mutation_failure untrusted-forwarded-proto '0,/proxy_set_header X-Forwarded-Proto \$scheme;/s//proxy_set_header X-Forwarded-Proto \$http_x_forwarded_proto;/'
+expect_mutation_failure shaped-untrusted-forwarded-proto '0,/proxy_set_header X-Forwarded-Proto \$scheme;/! s//proxy_set_header X-Forwarded-Proto \$http_x_forwarded_proto;/'
+expect_mutation_failure missing-content-xff 's/proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;/# exact content XFF removed;/'
+expect_mutation_failure missing-content-x-real-ip '0,/proxy_set_header X-Real-IP "";/s//# exact content X-Real-IP removal removed;/'
+expect_mutation_failure content-x-real-ip '0,/proxy_set_header X-Real-IP "";/s//proxy_set_header X-Real-IP \$remote_addr;/'
+expect_mutation_failure missing-shaped-xff '0,/proxy_set_header X-Forwarded-For "";/s//# shaped XFF removal removed;/'
+expect_mutation_failure shaped-forwarded-xff '0,/proxy_set_header X-Forwarded-For "";/s//proxy_set_header X-Forwarded-For \$http_x_forwarded_for;/'
+expect_mutation_failure missing-shaped-x-real-ip '0,/proxy_set_header X-Real-IP "";/! s//# shaped X-Real-IP removal removed;/'
+expect_mutation_failure shaped-x-real-ip '0,/proxy_set_header X-Real-IP "";/! s//proxy_set_header X-Real-IP \$remote_addr;/'
 expect_mutation_failure missing-nosniff 's/add_header X-Content-Type-Options "nosniff" always;/# nosniff removed;/'
 expect_mutation_failure stripped-range 's/proxy_set_header Range \$http_range;/proxy_set_header Range "";/'
 

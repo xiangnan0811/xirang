@@ -64,6 +64,33 @@ function downloadTicket(): BackupExportDownloadTicket {
 describe("useBackupArchive", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("keeps the exact secure-transport member ticket denial distinct", async () => {
+    const archiveApi = api();
+    vi.mocked(archiveApi.status).mockResolvedValue(status({
+      state: "ready",
+      failureProduct: null,
+      fallback: { action: null, reason: null },
+    }));
+    vi.mocked(archiveApi.issueTicket).mockRejectedValue(new ApiError(503, "localized", {
+      data: { reason: { code: "secure_transport_required", params: {} } },
+    }));
+    const { result } = renderHook(() => useBackupArchive({
+      token: "token",
+      role: "operator",
+      ref,
+      ensureStepUpProof: vi.fn().mockResolvedValue("fresh-proof"),
+      api: archiveApi,
+      onPrepareDownload: vi.fn(),
+    }));
+
+    await act(async () => result.current.open());
+    await act(async () => result.current.create(memberId));
+    await act(async () => result.current.download());
+
+    expect(result.current.state.error).toBe("secure_transport_required");
+    expect(JSON.stringify(result.current.state)).not.toContain("localized");
+  });
+
   it("binds a member job to the returned index revision and one-hop member id", async () => {
     const archiveApi = api();
     const { result } = renderHook(() => useBackupArchive({

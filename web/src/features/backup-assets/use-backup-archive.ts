@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AuthContextValue, AuthRole } from "@/context/auth-context.shared";
 import { ApiError } from "@/lib/api/core";
+import { mapBackupAssetsError } from "@/lib/api/backup-assets-error";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type {
   AssetRef,
@@ -15,7 +16,7 @@ import type { createBackupArchiveApi } from "@/lib/api/backup-archive-api";
 export type BackupArchiveApi = ReturnType<typeof createBackupArchiveApi>;
 
 export type BackupArchivePhase = "closed" | "indexing" | "review" | "creating" | "active" | "terminal" | "error";
-export type BackupArchiveError = "forbidden" | "not_found" | "unavailable" | "invalid";
+export type BackupArchiveError = "forbidden" | "not_found" | "unavailable" | "invalid" | "secure_transport_required";
 
 export interface BackupArchiveState {
   phase: BackupArchivePhase;
@@ -89,6 +90,9 @@ function initialState(): BackupArchiveState {
 }
 
 function classify(error: unknown): BackupArchiveError {
+  if (mapBackupAssetsError(error, "content_ticket").code === "secure_transport_required") {
+    return "secure_transport_required";
+  }
   if (error instanceof ApiError) {
     if (error.status === 403) return "forbidden";
     if (error.status === 404) return "not_found";

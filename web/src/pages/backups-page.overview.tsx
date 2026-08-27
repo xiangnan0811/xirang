@@ -4,6 +4,7 @@ import { StorageGuideCard } from "@/components/storage-guide-card";
 import { StorageUsagePanel } from "@/components/storage-usage-panel";
 import { useAuth } from "@/context/auth-context.hooks";
 import { GaReadinessPanel } from "@/features/backup-assets/ga-readiness-panel";
+import { PrivateNetworkContentTransportPanel } from "@/features/backup-assets/private-network-content-transport-panel";
 import { useTranslation } from "react-i18next";
 
 export function BackupsOverviewPage() {
@@ -14,9 +15,12 @@ export function BackupsOverviewPage() {
     <div className="flex min-h-0 flex-col space-y-5">
       <h2 className="sr-only">{t("backups.tabs.overview")}</h2>
       {role === "admin" && token ? (
-        <section className="flex min-h-0 shrink-0 flex-col">
-          <GaReadinessPanel token={token} role={role} />
-        </section>
+        <>
+          <section className="flex min-h-0 shrink-0 flex-col">
+            <GaReadinessPanel token={token} role={role} />
+          </section>
+          <PrivateNetworkContentTransportPanel token={token} />
+        </>
       ) : null}
       <section className="flex min-h-0 shrink-0 flex-col">
         <BackupConfidencePanel />

@@ -82,6 +82,7 @@
 | `BACKUP_PATH_ALLOW_SHELL_META` | bool | `false` | 否 | 仅历史数据救援用；设为 `true` 会跳过备份路径 shell 元字符防御校验 |
 | `SNAPSHOT_INDEX_MAX_SECONDS` | int | `1800` | 否 | Restic 快照文件搜索异步索引单次最长构建秒数 |
 | `BACKUP_ASSETS_ENABLED` | bool | `false` | 否 | 备份资产领域 **请求**开关；CodeDefault 仍为 `false`。请求启用必须先通过就绪门禁（双引擎迁移、密钥域、导出根、库存盘点）。全新安装在 `ready` 后才算有效开启；已有安装还须管理员确认当前库存摘要。环境变量为 `true` 但门禁未过时，Core 仍会启动，admission / Catalog / Search / Content 保持关闭。设置界面启用现有安装会 409 直到盘点 + ack |
+| `BACKUP_ASSETS_CONTENT_ALLOW_INSECURE_PRIVATE_NETWORK` | bool | `false` | 否 | 允许私有网络客户端通过 HTTP 获取备份预览、原始下载、导出产物、归档成员和恢复结果；可动态调整。默认拒绝非 HTTPS。数据库设置 `backup_assets.content_allow_insecure_private_network` 优先；只有删除该 DB override 后才回退到本环境变量或代码默认值 |
 | `BACKUP_ASSETS_CATALOG_BATCH_SIZE` | int | `2000` | 否 | 目录构建批次大小，范围 `1..100000` |
 | `BACKUP_ASSETS_CATALOG_BUILD_TIMEOUT` | duration | `30m` | 否 | 单次目录构建超时，范围 `1m..24h` |
 | `BACKUP_ASSETS_REPOSITORY_RECONCILE_INTERVAL` | duration | `15m` | 否 | 仓库元数据对账间隔，范围 `1m..24h` |
@@ -164,7 +165,9 @@
 | `BACKUP_ASSETS_DERIVED_STORE_RECONCILE_INTERVAL` | duration | `15m` | 否 | Derived 状态/引用/blob 对账间隔，范围 `1m..24h` |
 | `BACKUP_ASSETS_DERIVED_STORE_RECONCILE_BATCH_SIZE` | int | `256` | 否 | 单次 Derived 对账批次，范围 `1..10000` |
 
-**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器、完整性检查与备份 Repository 只读适配器；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`；`SNAPSHOT_INDEX_MAX_SECONDS` → `backend/internal/snapshot/indexer.go`；`BACKUP_ASSETS_*` → settings 服务的 `backup_assets.*` registry、`backend/internal/backupasset/runtime` 共享运行时与 foundation service（DB override > env > default）。涉及 `BACKUP_ASSETS_ENABLED` 的设置/导入/删除会先检查 GA 就绪门禁；只有就绪（已有安装还须确认当前库存摘要）后才会关闭新的备份资产 admission，排空当前 generation 中已获准的 legacy 访问、Restic/Rsync/Rclone 发布与调和，再提交新值。表中标注 restart-time 的 Worker/updater/Derived/Export 设置不会热切换 listener、身份或存储根；其它 processing/backfill quota 可动态调整并接受组合校验。
+**读取位置**：`RSYNC_BINARY` → `backend/internal/config/config.go`；`RSYNC_ALLOWED_*` / `RSYNC_MIN_FREE_GB` → rsync 任务处理与执行器；`RCLONE_BINARY` / `RESTIC_BINARY` → 对应执行器、完整性检查与备份 Repository 只读适配器；`BATCH_COMMAND_BLACKLIST` → `backend/internal/api/handlers/batch_handler.go`；`FILE_BROWSER_ALLOW_ALL` → `backend/internal/api/handlers/file_handler.go`（仅开发环境允许放开）；`BACKUP_PATH_ALLOW_SHELL_META` → `backend/internal/api/handlers/helpers.go`；`SNAPSHOT_INDEX_MAX_SECONDS` → `backend/internal/snapshot/indexer.go`；`BACKUP_ASSETS_*` → settings 服务的 `backup_assets.*` registry、`backend/internal/backupasset/runtime` 共享运行时与 foundation service（DB override > env > default）。涉及 `BACKUP_ASSETS_ENABLED` 的设置/导入/删除会先检查 GA 就绪门禁；只有就绪（已有安装还须确认当前库存摘要）后才会关闭新的备份资产 admission，排空当前 generation 中已获准的 legacy 访问、Restic/Rsync/Rclone 发布与调和，再提交新值。`BACKUP_ASSETS_CONTENT_ALLOW_INSECURE_PRIVATE_NETWORK` 可在“备份 > 概览”由 Admin 动态切换，无需重启；关闭后新的签票和已有票据的后续 HTTP Serve 都会立即失败关闭。表中标注 restart-time 的 Worker/updater/Derived/Export 设置不会热切换 listener、身份或存储根；其它 processing/backfill quota 可动态调整并接受组合校验。
+
+私网 HTTP 是显式风险接受，不是 TLS 替代品。允许范围闭合为 IPv4 RFC 1918（`10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16`）、IPv6 ULA（`fc00::/7`）以及回环地址；CGNAT、链路本地、未指定、多播和公网地址仍会拒绝。经代理访问时，必须把 `TRUSTED_PROXIES` 限定为实际代理 IP/CIDR；服务只从可信代理链向右到左剥离跳点，并依据最近的非可信客户端判断。不要信任全网段，也不要让上游保留客户端伪造的 `X-Forwarded-Proto` 或 `X-Forwarded-For`。
 
 `backup_assets.internal.processing_content_pipeline_revision` 与 `backup_assets.internal.processing_ocr_pipeline_revision` 是 Core 原子激活事务维护的内部发布状态，不是环境变量或公共 settings registry 键。它们不会出现在 Settings API/配置导出中，配置导入也会拒绝调用方写入。
 

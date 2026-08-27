@@ -174,6 +174,37 @@ describe("useBackupRecovery", () => {
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
   });
 
+  it("keeps the exact secure-transport result ticket denial distinct", async () => {
+    const resultSet = {
+      id: "a".repeat(32), lifecycle: "ready" as const,
+      plaintextDeadline: "2026-08-16T01:20:00.000Z", hardDeadline: "2026-08-16T02:20:00.000Z",
+      createdAt: "2026-08-16T01:00:00.000Z", updatedAt: "2026-08-16T01:10:00.000Z",
+    };
+    const resultPage = {
+      jobId, resultSet, page: 1, pageSize: 25, total: 1,
+      items: [{ id: "e".repeat(32), kind: "regular_file" as const, size: 10, modifiedAt: null, createdAt: "2026-08-16T01:10:00.000Z" }],
+    };
+    const api = mockApi({
+      getJob: vi.fn().mockResolvedValue(available(job({
+        outcome: "succeeded", targetMode: "isolated", deleteCheckpoint: null, resultSet,
+        progress: { totalItems: 1, completedItems: 1, succeededItems: 1, skippedItems: 0, failedItems: 0, bytesWritten: 10 },
+      }))),
+      getJobResults: vi.fn().mockResolvedValue(available(resultPage)),
+      issueResultDownloadTicket: vi.fn().mockRejectedValue(new ApiError(503, "localized", {
+        data: { reason: { code: "secure_transport_required", params: {} } },
+      })),
+    });
+    const hookOptions = { ...options(api), planId, jobId };
+    const { result } = renderHook(() => useBackupRecovery(hookOptions));
+    await waitFor(() => expect(result.current.state.job?.id).toBe(jobId));
+    await act(async () => result.current.loadJobResults(1));
+
+    await act(async () => result.current.downloadResult(resultPage.items[0]!.id));
+
+    expect(result.current.state.error).toBe("secure_transport_required");
+    expect(JSON.stringify(result.current.state)).not.toContain("localized");
+  });
+
   it("hands explicit selection through create, preflight, write authority and execute without serializing secrets", async () => {
     const executeReceipt = authorization({
       grant: { id: grantId, category: "write", expiresAt: "2026-08-16T01:10:00.000Z", status: "consumed" },

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import { ApiError } from "@/lib/api/core";
 import { runAxe } from "@/test/a11y-helpers";
 import type {
   AssetRef,
@@ -114,6 +115,32 @@ function archiveApi(): BackupArchiveApi {
 }
 
 describe("ArchiveMemberPanel", () => {
+  it("renders the Admin transport action only for the exact archive-member ticket denial", async () => {
+    const user = userEvent.setup();
+    const api = archiveApi();
+    vi.mocked(api.issueTicket).mockRejectedValue(new ApiError(503, "private/archive/member", {
+      data: { reason: { code: "secure_transport_required", params: {} } },
+    }));
+    const rendered = render(
+      <ArchiveMemberPanel
+        refValue={ref}
+        runtime={{ token: "token", role: "admin", ensureStepUpProof: vi.fn().mockResolvedValue("proof") }}
+        contentAvailable
+        downloadAllowed
+        online
+        onPrepareDownload={vi.fn()}
+        api={api}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: /summary\.txt/i }));
+    await user.click(await screen.findByRole("button", { name: /download member|下载成员/i }));
+
+    expect(await screen.findByRole("link", { name: /content transport|内容传输/i })).toHaveAttribute(
+      "href", "/app/backups/overview#backup-assets-content-transport",
+    );
+    expect(rendered.container.textContent).not.toContain("private/archive/member");
+  });
+
   it("orders hierarchy before pagination and describes an off-page parent", async () => {
     const user = userEvent.setup();
     const api = archiveApi();

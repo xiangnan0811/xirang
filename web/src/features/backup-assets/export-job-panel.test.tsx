@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthContextValue } from "@/context/auth-context.shared";
+import { ApiError } from "@/lib/api/core";
 import { runAxe } from "@/test/a11y-helpers";
 import type { BackupExportJob } from "@/types/domain";
 import type { BackupAssetExportApi } from "./use-backup-asset-export";
@@ -58,6 +59,31 @@ const runtime: Pick<AuthContextValue, "token" | "role" | "ensureStepUpProof"> = 
 
 describe("ExportJobPanel", () => {
   afterEach(() => vi.useRealTimers());
+
+  it("renders the Admin transport action only for the exact export ticket denial", async () => {
+    const user = userEvent.setup();
+    const exportApi = api();
+    vi.mocked(exportApi.issueDownloadTicket).mockRejectedValue(new ApiError(503, "private/export/path", {
+      data: { reason: { code: "secure_transport_required", params: {} } },
+    }));
+    const rendered = render(
+      <ExportJobPanel
+        open
+        selection={[{ ref, logicalBytes: 77 }]}
+        runtime={runtime}
+        onRouteChange={vi.fn()}
+        onDismiss={vi.fn()}
+        api={exportApi}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /创建导出|Create export/ }));
+    await user.click(await screen.findByRole("button", { name: /下载归档|Download archive/ }));
+
+    expect(await screen.findByRole("link", { name: /content transport|内容传输/i })).toHaveAttribute(
+      "href", "/app/backups/overview#backup-assets-content-transport",
+    );
+    expect(rendered.container.textContent).not.toContain("private/export/path");
+  });
 
   it("replaces a local estimate with authoritative totals after create", async () => {
     const user = userEvent.setup();

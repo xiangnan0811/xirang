@@ -20,6 +20,7 @@ import {
   type RecoveryTargetMode,
 } from "@/lib/api/backup-recovery-api";
 import { ApiError } from "@/lib/api/core";
+import { mapBackupAssetsError } from "@/lib/api/backup-assets-error";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import type { AssetRef } from "@/types/domain";
 
@@ -39,7 +40,7 @@ export type BackupRecoveryPhase =
   | "unavailable"
   | "error";
 
-export type BackupRecoveryError = "forbidden" | "not_found" | "invalid" | "conflict" | "unavailable";
+export type BackupRecoveryError = "forbidden" | "not_found" | "invalid" | "conflict" | "unavailable" | "secure_transport_required";
 
 export interface RecoverySourceContext {
   repositoryId: string;
@@ -163,6 +164,9 @@ function initialState(): BackupRecoveryState {
 }
 
 function classifyError(error: unknown): BackupRecoveryError {
+  if (mapBackupAssetsError(error, "content_ticket").code === "secure_transport_required") {
+    return "secure_transport_required";
+  }
   if (error instanceof ApiError) {
     if (error.status === 400) return "invalid";
     if (error.status === 401 || error.status === 403) return "forbidden";

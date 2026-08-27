@@ -26,6 +26,7 @@ export type BackupAssetsUIErrorCode =
   | "temporarily_unavailable"
   | "rate_limited"
   | "secret_reveal_required"
+  | "secure_transport_required"
   | "unknown";
 
 export type BackupAssetsUIErrorAction =
@@ -49,6 +50,7 @@ export interface BackupAssetsUIError {
     | "backupAssets.errors.temporarilyUnavailable"
     | "backupAssets.errors.rateLimited"
     | "backupAssets.errors.secretRevealRequired"
+    | "backupAssets.errors.secureTransportRequired"
     | "backupAssets.errors.unknown";
   retryable: boolean;
   action: BackupAssetsUIErrorAction;
@@ -94,6 +96,9 @@ export function mapBackupAssetsError(
   if (error.status === 403 && isSecretRevealRequired(error.detail)) {
     return uiError("secret_reveal_required", false, "none");
   }
+  if (error.status === 503 && context === "content_ticket" && isSecureTransportRequired(error.detail)) {
+    return uiError("secure_transport_required", false, "none");
+  }
   if (error.status === 403) return uiError("permission_denied", false, "none");
   if (error.status === 404) return uiError("not_found", false, "return_context");
   if (error.status === 400) return uiError("invalid_request", false, "none");
@@ -136,6 +141,7 @@ function uiError(
     temporarily_unavailable: "backupAssets.errors.temporarilyUnavailable",
     rate_limited: "backupAssets.errors.rateLimited",
     secret_reveal_required: "backupAssets.errors.secretRevealRequired",
+    secure_transport_required: "backupAssets.errors.secureTransportRequired",
     unknown: "backupAssets.errors.unknown",
   };
   return { code, translationKey: keys[code], retryable, action };
@@ -160,6 +166,20 @@ function isSecretRevealRequired(detail: unknown): boolean {
   if (!isPlainRecord(data)) return false;
   const reason = data.reason;
   return isPlainRecord(reason) && reason.code === "secret_reveal_required" && validReasonParams(reason.params ?? {});
+}
+
+function isSecureTransportRequired(detail: unknown): boolean {
+  if (!boundedSerializableObject(detail)) return false;
+  const data = detail.data;
+  if (!isPlainRecord(data)) return false;
+  const reason = data.reason;
+  return (
+    isPlainRecord(reason) &&
+    Object.keys(reason).length === 2 &&
+    reason.code === "secure_transport_required" &&
+    isPlainRecord(reason.params) &&
+    Object.keys(reason.params).length === 0
+  );
 }
 
 function parseCapabilityCode(detail: unknown): CatalogCapabilityCode | undefined {

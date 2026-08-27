@@ -681,8 +681,12 @@ func TestBackupArchiveHandlerCollapsesForeignAndMalformedBindings(t *testing.T) 
 	}
 }
 
-func TestBackupArchiveHandlerDeliveryTicketRequiresExactAssetDownloadPurpose(t *testing.T) {
+func TestBackupArchiveHandlerPrivateNetworkHTTPDeliveryTicketRequiresExactAssetDownloadPurpose(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	policy, err := NewBackupContentSchemePolicy([]string{"127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	db, jwtManager, user := backupAssetExportHandlerProofFixture(t)
 	proofs := make(map[auth.StepUpAction]string)
 	for _, action := range []auth.StepUpAction{
@@ -714,10 +718,13 @@ func TestBackupArchiveHandlerDeliveryTicketRequiresExactAssetDownloadPurpose(t *
 			ticket := backupAssetExportHandlerTicket(t)
 			ticket.Descriptor.ContentType = "application/octet-stream"
 			ticket.Descriptor.Range = content.RangeNone
+			ticket.Cookie.Secure = false
 			delivery := &backupArchiveDeliveryFake{ticket: ticket}
 			handler := NewBackupArchiveHandler(service, delivery, db, jwtManager, nil, func(context.Context) (BackupContentHandlerConfig, error) {
-				return BackupContentHandlerConfig{TicketTimeout: 5 * time.Second}, nil
-			})
+				return BackupContentHandlerConfig{
+					TicketTimeout: 5 * time.Second, AllowInsecurePrivateNetwork: true,
+				}, nil
+			}).WithSchemePolicy(policy)
 			router := gin.New()
 			base := "/api/v1/recovery-points/:id/entries/:entryId/archive-member-jobs/:jobId/delivery-ticket"
 			router.POST(base, func(c *gin.Context) {
@@ -731,10 +738,13 @@ func TestBackupArchiveHandlerDeliveryTicketRequiresExactAssetDownloadPurpose(t *
 				c.Next()
 			}, handler.DeliveryTicket)
 			request := httptest.NewRequest(http.MethodPost,
-				"https://xirang.example/api/v1/recovery-points/"+pointID+"/entries/"+entryID+
+				"http://xirang.example/api/v1/recovery-points/"+pointID+"/entries/"+entryID+
 					"/archive-member-jobs/"+requestID+"/delivery-ticket",
 				strings.NewReader(`{"schema_version":1}`))
+			request.RemoteAddr = "127.0.0.1:43210"
 			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("X-Forwarded-Proto", "http")
+			request.Header.Set("X-Forwarded-For", "192.168.20.45")
 			if testCase.proof != "" {
 				request.Header.Set(StepUpHeaderName, testCase.proof)
 			}
@@ -743,13 +753,44 @@ func TestBackupArchiveHandlerDeliveryTicketRequiresExactAssetDownloadPurpose(t *
 			if testCase.wantOK {
 				if response.Code != http.StatusOK || len(service.readyLookups) != 1 || len(delivery.requests) != 1 ||
 					delivery.requests[0].Proof.Action != auth.StepUpActionAssetDownload ||
-					delivery.requests[0].MemberRequestID != requestID || delivery.requests[0].Asset.Ref != ref {
+					delivery.requests[0].MemberRequestID != requestID || delivery.requests[0].Asset.Ref != ref ||
+					delivery.requests[0].SecureCookie {
 					t.Fatalf("status=%d lookups=%+v requests=%+v body=%s", response.Code, service.readyLookups, delivery.requests, response.Body.String())
 				}
 			} else if response.Code != http.StatusForbidden || len(service.readyLookups) != 0 || len(delivery.requests) != 0 {
 				t.Fatalf("status=%d lookups=%+v requests=%+v body=%s", response.Code, service.readyLookups, delivery.requests, response.Body.String())
 			}
 		})
+	}
+	service := &backupArchiveServiceFake{readyAsset: content.AuthorizedAsset{Ref: ref}}
+	delivery := &backupArchiveDeliveryFake{ticket: backupAssetExportHandlerTicket(t)}
+	handler := NewBackupArchiveHandler(service, delivery, db, jwtManager, nil, func(context.Context) (BackupContentHandlerConfig, error) {
+		return BackupContentHandlerConfig{TicketTimeout: 5 * time.Second}, nil
+	})
+	router := gin.New()
+	base := "/api/v1/recovery-points/:id/entries/:entryId/archive-member-jobs/:jobId/delivery-ticket"
+	router.POST(base, func(c *gin.Context) {
+		c.Set(middleware.CtxUserID, user.ID)
+		c.Set(middleware.CtxUsername, user.Username)
+		c.Set(middleware.CtxRole, user.Role)
+		c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{
+			JTI: strings.Repeat("f", 32), UserID: user.ID, Role: user.Role,
+			TokenVersion: user.TokenVersion, ExpiresAt: time.Now().UTC().Add(time.Hour),
+		})
+		c.Next()
+	}, handler.DeliveryTicket)
+	insecure := httptest.NewRequest(http.MethodPost,
+		"http://xirang.example/api/v1/recovery-points/"+pointID+"/entries/"+entryID+
+			"/archive-member-jobs/"+requestID+"/delivery-ticket",
+		strings.NewReader(`{"schema_version":1}`))
+	insecure.RemoteAddr = "203.0.113.5:43210"
+	insecure.Header.Set("Content-Type", "application/json")
+	insecure.Header.Set(StepUpHeaderName, proofs[auth.StepUpActionAssetDownload])
+	insecureResponse := httptest.NewRecorder()
+	router.ServeHTTP(insecureResponse, insecure)
+	assertSecureTransportRequiredResponse(t, insecureResponse)
+	if len(service.readyLookups) != 0 || len(delivery.requests) != 0 {
+		t.Fatalf("insecure Archive ticket reached services lookups=%d delivery=%d", len(service.readyLookups), len(delivery.requests))
 	}
 }
 

@@ -375,6 +375,7 @@ var registry = []SettingDef{
 	{Key: "backup_assets.content_reconcile_batch_size", EnvVar: "BACKUP_ASSETS_CONTENT_RECONCILE_BATCH_SIZE", CodeDefault: "100", Type: TypeInt, Category: "backup_assets", Description: "备份内容状态对账批次", Min: "1", Max: "1000"},
 	{Key: "backup_assets.content_audit_backlog_max", EnvVar: "BACKUP_ASSETS_CONTENT_AUDIT_BACKLOG_MAX", CodeDefault: "10000", Type: TypeInt, Category: "backup_assets", Description: "备份内容审计积压上限", Min: "100", Max: "100000"},
 	{Key: "backup_assets.content_allow_insecure_loopback", EnvVar: "BACKUP_ASSETS_CONTENT_ALLOW_INSECURE_LOOPBACK", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "仅允许受控本机 HTTP 开发票据 Cookie"},
+	{Key: "backup_assets.content_allow_insecure_private_network", EnvVar: "BACKUP_ASSETS_CONTENT_ALLOW_INSECURE_PRIVATE_NETWORK", CodeDefault: "false", Type: TypeBool, Category: "backup_assets", Description: "允许私有网络通过 HTTP 交付备份内容"},
 	{Key: "backup_assets.catalog_batch_size", EnvVar: "BACKUP_ASSETS_CATALOG_BATCH_SIZE", CodeDefault: "2000", Type: TypeInt, Category: "backup_assets", Description: "目录构建批次大小", Min: "1", Max: "100000"},
 	{Key: "backup_assets.catalog_build_timeout", EnvVar: "BACKUP_ASSETS_CATALOG_BUILD_TIMEOUT", CodeDefault: "30m", Type: TypeDuration, Category: "backup_assets", Description: "目录构建超时", MinDuration: "1m", MaxDuration: "24h"},
 	{Key: "backup_assets.repository_reconcile_interval", EnvVar: "BACKUP_ASSETS_REPOSITORY_RECONCILE_INTERVAL", CodeDefault: "15m", Type: TypeDuration, Category: "backup_assets", Description: "备份仓库对账间隔", MinDuration: "1m", MaxDuration: "24h"},
@@ -2010,6 +2011,7 @@ var backupAssetContentSettingKeys = []string{
 	"backup_assets.content_reconcile_batch_size",
 	"backup_assets.content_audit_backlog_max",
 	"backup_assets.content_allow_insecure_loopback",
+	"backup_assets.content_allow_insecure_private_network",
 }
 
 var backupAssetProcessingSettingKeys = []string{

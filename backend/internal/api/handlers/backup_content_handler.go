@@ -24,10 +24,28 @@ import (
 
 const maxBackupContentTicketBytes = 4 << 10
 
+const (
+	maxBackupContentForwardedProtoBytes = 16
+	maxBackupContentForwardedForBytes   = 1024
+	maxBackupContentForwardedForHops    = 16
+)
+
 var errInvalidBackupContentTrustedProxy = errors.New("invalid backup content trusted proxy")
 
 type BackupContentSchemePolicy struct {
 	trustedProxies []netip.Prefix
+}
+
+type BackupContentTransportOptions struct {
+	AllowInsecureLoopback       bool
+	AllowInsecurePrivateNetwork bool
+}
+
+type backupContentTransportEvidence struct {
+	scheme             string
+	client             netip.Addr
+	hasForwardedIP     bool
+	hasForwardedScheme bool
 }
 
 func NewBackupContentSchemePolicy(entries []string) (BackupContentSchemePolicy, error) {
@@ -56,48 +74,83 @@ func NewBackupContentSchemePolicy(entries []string) (BackupContentSchemePolicy, 
 
 func (policy BackupContentSchemePolicy) SecureCookie(
 	request *http.Request,
-	allowInsecureLoopback bool,
+	options BackupContentTransportOptions,
 ) (bool, error) {
-	scheme, ok := policy.effectiveScheme(request)
+	evidence, ok := policy.transportEvidence(request)
 	if !ok {
 		return false, content.ErrContentUnavailable
 	}
-	if scheme == "https" {
+	if evidence.scheme == "https" {
 		return true, nil
 	}
-	if !allowInsecureLoopback || request == nil || request.URL == nil || request.TLS != nil ||
-		len(request.Header.Values("Forwarded")) != 0 || len(request.Header.Values("X-Forwarded-Proto")) != 0 ||
-		!backupContentLoopbackRemote(request.RemoteAddr) || !backupContentLocalhost(request.Host) {
-		return false, content.ErrContentUnavailable
+	if options.AllowInsecurePrivateNetwork && backupContentPrivateOrLoopback(evidence.client) {
+		return false, nil
 	}
-	return false, nil
+	if options.AllowInsecureLoopback && request != nil && request.URL != nil && request.TLS == nil &&
+		!evidence.hasForwardedIP && !evidence.hasForwardedScheme && evidence.client.IsLoopback() &&
+		backupContentLocalhost(request.Host) {
+		return false, nil
+	}
+	return false, content.ErrContentUnavailable
 }
 
 func (policy BackupContentSchemePolicy) effectiveScheme(request *http.Request) (string, bool) {
-	if request == nil || len(request.Header.Values("Forwarded")) != 0 {
-		return "", false
-	}
-	forwarded := request.Header.Values("X-Forwarded-Proto")
-	if len(forwarded) == 0 {
-		if request.TLS != nil {
-			return "https", true
-		}
-		return "http", true
-	}
-	if len(forwarded) != 1 || strings.TrimSpace(forwarded[0]) != "https" ||
-		!policy.trustsRemote(request.RemoteAddr) {
-		return "", false
-	}
-	return "https", true
+	evidence, ok := policy.transportEvidence(request)
+	return evidence.scheme, ok
 }
 
-func (policy BackupContentSchemePolicy) trustsRemote(remote string) bool {
-	host, _, err := net.SplitHostPort(remote)
-	if err != nil {
-		host = remote
+func (policy BackupContentSchemePolicy) transportEvidence(request *http.Request) (backupContentTransportEvidence, bool) {
+	if request == nil || len(request.Header.Values("Forwarded")) != 0 {
+		return backupContentTransportEvidence{}, false
 	}
-	address, err := netip.ParseAddr(strings.Trim(host, "[]"))
-	if err != nil || address.Zone() != "" {
+	remote, ok := backupContentRemoteAddr(request.RemoteAddr)
+	if !ok {
+		return backupContentTransportEvidence{}, false
+	}
+	evidence := backupContentTransportEvidence{client: remote}
+	forwardedScheme := request.Header.Values("X-Forwarded-Proto")
+	if len(forwardedScheme) == 0 {
+		if request.TLS != nil {
+			evidence.scheme = "https"
+		} else {
+			evidence.scheme = "http"
+		}
+	} else {
+		if len(forwardedScheme) != 1 || !policy.trustsAddr(remote) {
+			return backupContentTransportEvidence{}, false
+		}
+		if len(forwardedScheme[0]) > maxBackupContentForwardedProtoBytes {
+			return backupContentTransportEvidence{}, false
+		}
+		evidence.scheme = strings.TrimSpace(forwardedScheme[0])
+		if evidence.scheme != "http" && evidence.scheme != "https" {
+			return backupContentTransportEvidence{}, false
+		}
+		if request.TLS != nil && evidence.scheme != "https" {
+			return backupContentTransportEvidence{}, false
+		}
+		evidence.hasForwardedScheme = true
+	}
+
+	forwardedFor := request.Header.Values("X-Forwarded-For")
+	if len(forwardedFor) != 0 {
+		if len(forwardedFor) != 1 || !policy.trustsAddr(remote) {
+			return backupContentTransportEvidence{}, false
+		}
+		client, clientOK := policy.forwardedClient(forwardedFor[0], remote)
+		if !clientOK {
+			return backupContentTransportEvidence{}, false
+		}
+		evidence.client = client
+		evidence.hasForwardedIP = true
+	} else if request.TLS == nil && evidence.hasForwardedScheme {
+		return backupContentTransportEvidence{}, false
+	}
+	return evidence, true
+}
+
+func (policy BackupContentSchemePolicy) trustsAddr(address netip.Addr) bool {
+	if !address.IsValid() || address.Zone() != "" {
 		return false
 	}
 	address = address.Unmap()
@@ -109,6 +162,49 @@ func (policy BackupContentSchemePolicy) trustsRemote(remote string) bool {
 	return false
 }
 
+func (policy BackupContentSchemePolicy) forwardedClient(raw string, remote netip.Addr) (netip.Addr, bool) {
+	if raw == "" || len(raw) > maxBackupContentForwardedForBytes {
+		return netip.Addr{}, false
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) == 0 || len(parts) > maxBackupContentForwardedForHops {
+		return netip.Addr{}, false
+	}
+	hops := make([]netip.Addr, 0, len(parts)+1)
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		address, err := netip.ParseAddr(value)
+		if value == "" || err != nil || address.Zone() != "" {
+			return netip.Addr{}, false
+		}
+		hops = append(hops, address.Unmap())
+	}
+	hops = append(hops, remote.Unmap())
+	for index := len(hops) - 1; index >= 0; index-- {
+		if policy.trustsAddr(hops[index]) {
+			continue
+		}
+		return hops[index], true
+	}
+	return netip.Addr{}, false
+}
+
+func backupContentRemoteAddr(remote string) (netip.Addr, bool) {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = remote
+	}
+	address, err := netip.ParseAddr(host)
+	if err != nil || address.Zone() != "" {
+		return netip.Addr{}, false
+	}
+	return address.Unmap(), true
+}
+
+func backupContentPrivateOrLoopback(address netip.Addr) bool {
+	return address.IsValid() && (address.IsPrivate() || address.IsLoopback())
+}
+
 type BackupContentService interface {
 	Issue(context.Context, content.IssueRequest) (content.IssuedTicket, error)
 	Serve(context.Context, content.GatewayRequest, http.ResponseWriter) error
@@ -116,8 +212,9 @@ type BackupContentService interface {
 }
 
 type BackupContentHandlerConfig struct {
-	TicketTimeout         time.Duration
-	AllowInsecureLoopback bool
+	TicketTimeout               time.Duration
+	AllowInsecureLoopback       bool
+	AllowInsecurePrivateNetwork bool
 }
 
 type BackupContentHandlerConfigSource func(context.Context) (BackupContentHandlerConfig, error)
@@ -240,9 +337,9 @@ func (handler *BackupContentHandler) Issue(c *gin.Context) {
 	if !proofOK {
 		return
 	}
-	secureCookie, err := handler.schemePolicy.SecureCookie(c.Request, config.AllowInsecureLoopback)
+	secureCookie, err := handler.schemePolicy.SecureCookie(c.Request, config.transportOptions())
 	if err != nil {
-		respondServiceUnavailable(c, "需要安全传输")
+		respondBackupContentSecureTransportRequired(c)
 		return
 	}
 	if handler == nil || handler.service == nil {
@@ -335,9 +432,9 @@ func (handler *BackupContentHandler) IssueRecoveryResult(c *gin.Context) {
 	if !proofOK {
 		return
 	}
-	secureCookie, err := handler.schemePolicy.SecureCookie(c.Request, config.AllowInsecureLoopback)
+	secureCookie, err := handler.schemePolicy.SecureCookie(c.Request, config.transportOptions())
 	if err != nil {
-		respondServiceUnavailable(c, "需要安全传输")
+		respondBackupContentSecureTransportRequired(c)
 		return
 	}
 	if handler == nil || handler.service == nil {
@@ -412,6 +509,15 @@ func (handler *BackupContentHandler) Serve(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 		return
 	}
+	config, ok := handler.loadConfig(request.Context())
+	if !ok {
+		c.Status(http.StatusServiceUnavailable)
+		return
+	}
+	if _, err := handler.schemePolicy.SecureCookie(request, config.transportOptions()); err != nil {
+		c.Status(http.StatusServiceUnavailable)
+		return
+	}
 	rawCookie := strings.Join(request.Header.Values("Cookie"), "; ")
 	err := handler.service.Serve(request.Context(), content.GatewayRequest{
 		DeliveryID: deliveryID, Method: request.Method, RawCookie: rawCookie,
@@ -445,6 +551,13 @@ func (handler *BackupContentHandler) loadConfig(ctx context.Context) (BackupCont
 	}
 	config, err := handler.configSource(ctx)
 	return config, err == nil && config.TicketTimeout >= time.Second && config.TicketTimeout <= 25*time.Second
+}
+
+func (config BackupContentHandlerConfig) transportOptions() BackupContentTransportOptions {
+	return BackupContentTransportOptions{
+		AllowInsecureLoopback:       config.AllowInsecureLoopback,
+		AllowInsecurePrivateNetwork: config.AllowInsecurePrivateNetwork,
+	}
 }
 
 func (handler *BackupContentHandler) deliveryProof(
@@ -649,16 +762,9 @@ func validIssuedBackupContentTicket(
 }
 
 func backupContentSecureCookie(request *http.Request, allowInsecureLoopback bool) (bool, error) {
-	return (BackupContentSchemePolicy{}).SecureCookie(request, allowInsecureLoopback)
-}
-
-func backupContentLoopbackRemote(remote string) bool {
-	host, _, err := net.SplitHostPort(remote)
-	if err != nil {
-		host = remote
-	}
-	ip := net.ParseIP(strings.Trim(host, "[]"))
-	return ip != nil && ip.IsLoopback()
+	return (BackupContentSchemePolicy{}).SecureCookie(request, BackupContentTransportOptions{
+		AllowInsecureLoopback: allowInsecureLoopback,
+	})
 }
 
 func backupContentLocalhost(hostport string) bool {

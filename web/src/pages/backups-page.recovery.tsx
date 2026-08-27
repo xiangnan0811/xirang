@@ -83,6 +83,7 @@ function BackupsRecoveryContent({ route }: { route: BackupAssetsRouteState }) {
         <RecoveryPlanWizard
           open
           recovery={recovery}
+          authRole={role}
           onOpenChange={(open) => {
             if (open) return;
             routeToRecovery(null, null, true);

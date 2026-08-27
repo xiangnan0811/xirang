@@ -134,9 +134,15 @@ services:
 - The content access format contains only request ID, status, response bytes,
   and upstream/request timing. URI, args, cookies, referrer, user agent,
   client identity, and request line are forbidden.
-- The exact route preserves an explicit Host port through `$http_host`; its
-  effective proto is selected only from exact `http|https`, otherwise falling
-  back to inner `$scheme`. These headers are origin evidence, not authorization.
+- Both content routes overwrite `X-Forwarded-Proto` with their actual `$scheme`;
+  they never preserve a client-supplied forwarded proto. The exact route also
+  preserves an explicit Host port through `$http_host`, appends the peer to
+  `X-Forwarded-For` with `$proxy_add_x_forwarded_for`, and explicitly removes
+  `X-Real-IP` with `proxy_set_header X-Real-IP ""`. The shaped fallback
+  explicitly removes both `X-Forwarded-For` and `X-Real-IP`; merely omitting a
+  `proxy_set_header` directive is insufficient because Nginx otherwise passes
+  inbound request headers through. These headers are closed transport/origin
+  evidence, not authorization.
 - Generic API/WebSocket behavior, HTTP port `10761`, external TLS ownership,
   health route, SPA/image policy, and official image name remain unchanged.
 - The cache root is dedicated and non-persistent, outside `/data`, `/backup`,
@@ -157,7 +163,7 @@ services:
 | Exact route enables buffering, gzip, cache, temp files, or unbounded timeout | Checker fails. |
 | Shaped fallback gains Range/If-Range or exact-route streaming directives | Checker fails; malformed requests must stay rejection-only. |
 | Content route inherits normal Nginx error logging | Checker fails because opaque IDs may enter error logs. |
-| Host uses `$host` or forwarded proto accepts compound/arbitrary values | Checker fails; same-origin evidence became ambiguous. |
+| Host uses `$host`, a content route trusts inbound XFP, exact content omits appended XFF or explicit X-Real-IP removal, or shaped fallback omits explicit XFF/X-Real-IP removal | Checker fails; transport/origin evidence became ambiguous or over-broad. |
 | Generic API route, port 10761, or external TLS contract changes | Checker fails or deployment review rejects the change. |
 | Cache path is persistent or overlaps data/backup/log/source storage | Runtime cache disables; no plaintext/disk fallback is permitted. |
 | Cache root is replaced after validation but before `os.OpenRoot` | Identity comparison fails, disk cache stays disabled, and replacement files remain untouched. |
@@ -182,7 +188,14 @@ services:
   directive.
 - Mutation self-tests must independently break log variables, error logging,
   exact route, fallback isolation, buffering/cache/temp/gzip, finite timeouts,
-  Host, proto map, port, and generic API behavior and observe checker failure.
+  Host, `$scheme` ownership, exact-route XFF append/X-Real-IP removal,
+  fallback XFF/X-Real-IP removal, port, and generic API behavior and observe
+  checker failure.
+- A hermetic runtime probe must render the official template and verify that an
+  inbound XFP `https` reaches the upstream as actual `http`, exact content
+  appends XFF while removing a spoofed X-Real-IP, shaped content removes
+  spoofed XFF and X-Real-IP, and GET/HEAD preserve Host, cookie, Range/If-Range,
+  bytes, and the dedicated redacted log contract.
 - Build the All-in-One Dockerfile and assert the cache root exists with runtime
   ownership while `/data`, `/backup`, `/logs`, image, TLS, and `10761` remain
   unchanged.
