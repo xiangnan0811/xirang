@@ -85,6 +85,8 @@ function BackupsDataWorkspace({
     onRouteRepair: handleRouteRepair,
   });
   const fileSources = useBackupFileSources({ token, route: resolvedRoute, onRoutePatch: handleRoutePatch });
+  const sourceWorkspaceUnavailable =
+    fileSources.status === "blocked" || fileSources.status === "permission_denied";
 
   return (
     <div className="flex min-h-[32rem] flex-col" aria-labelledby="backup-assets-data-title">
@@ -112,13 +114,15 @@ function BackupsDataWorkspace({
         onLoadMoreSets={fileSources.loadMoreSets}
         onLoadMoreVersions={fileSources.loadMoreVersions}
       />
-      <BackupAssetsWorkspace
-        controller={controller}
-        preferences={preferences}
-        processingRuntime={{ token, role, userId, ensureStepUpProof }}
-        onRoutePatch={handleRoutePatch}
-        onReturnOverview={() => navigate("/app/backups/overview")}
-      />
+      {sourceWorkspaceUnavailable ? null : (
+        <BackupAssetsWorkspace
+          controller={controller}
+          preferences={preferences}
+          processingRuntime={{ token, role, userId, ensureStepUpProof }}
+          onRoutePatch={handleRoutePatch}
+          onReturnOverview={() => navigate("/app/backups/overview")}
+        />
+      )}
     </div>
   );
 }

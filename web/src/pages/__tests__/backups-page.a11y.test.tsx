@@ -20,6 +20,7 @@ import { MemoryRouter, Navigate, Route, Routes } from "react-router-dom";
 import { http, HttpResponse } from "msw";
 
 import {
+  backupAssetsFileSourceIds,
   backupAssetsFixtureIds,
   createBackupAssetsHandlers,
   type BackupAssetsFixtureScenario,
@@ -206,7 +207,9 @@ describe("Backups routes accessibility", () => {
     setViewport(1440);
     const user = userEvent.setup();
     const page = renderBackups(
-      `/app/backups/data?repositoryId=${backupAssetsFixtureIds.offlineRepository}` +
+      `/app/backups/data?nodeId=${backupAssetsFileSourceIds.offline.nodeId}` +
+        `&backupSetId=${backupAssetsFileSourceIds.offline.backupSetId}` +
+        `&repositoryId=${backupAssetsFixtureIds.offlineRepository}` +
         `&recoveryPointId=${backupAssetsFixtureIds.offlineRecoveryPoint}`
     );
 
@@ -305,7 +308,9 @@ describe("Backups routes accessibility", () => {
     await waitFor(() => expect(heading).toHaveFocus());
     expect(screen.queryByRole("region", { name: /Asset results|资产结果/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Close asset inspector|关闭资产检查器/ })).toBeInTheDocument();
-    expect(await runAxe(inspector)).toHaveNoViolations();
+    // The preview iframe is opaque/sandboxed and has focused renderer coverage;
+    // jsdom cannot establish axe's cross-frame messaging target reliably.
+    expect(await runAxe(inspector, { iframes: false })).toHaveNoViolations();
   });
 
   it("keeps every backup-assets locale leaf in zh/en parity", async () => {
@@ -342,7 +347,9 @@ function renderBackups(initialEntry: string) {
 
 function completeRoute() {
   return (
-    `/app/backups/data?repositoryId=${backupAssetsFixtureIds.onlineRepository}` +
+    `/app/backups/data?nodeId=${backupAssetsFileSourceIds.online.nodeId}` +
+    `&backupSetId=${backupAssetsFileSourceIds.online.backupSetId}` +
+    `&repositoryId=${backupAssetsFixtureIds.onlineRepository}` +
     `&recoveryPointId=${backupAssetsFixtureIds.onlineRecoveryPoint}`
   );
 }

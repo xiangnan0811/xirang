@@ -2,8 +2,11 @@ import { expect, test, type Page } from "@playwright/test";
 
 import fixture from "../src/lib/api/__fixtures__/backup-assets.fixture.json" with { type: "json" };
 
+const fileSourceNodeId = 17;
+const fileSourceSetId = "12121212121212121212121212121212";
 const liveRoute =
-  `/app/backups/data?repositoryId=${fixture.ids.onlineRepository}` +
+  `/app/backups/data?nodeId=${fileSourceNodeId}&backupSetId=${fileSourceSetId}` +
+  `&repositoryId=${fixture.ids.onlineRepository}&taskId=71` +
   `&recoveryPointId=${fixture.ids.onlineRecoveryPoint}`;
 
 async function seedAdminSession(page: Page) {
@@ -40,7 +43,11 @@ async function mockClosedFeature(page: Page) {
       await route.fulfill(envelope({ id: 1, username: "admin", role: "admin", totp_enabled: true, onboarded: true }));
       return;
     }
-    if (url.includes("/backup-repositories") || url.includes("/asset-search")) {
+    if (
+      url.includes("/backup-file-sources/") ||
+      url.includes("/backup-repositories") ||
+      url.includes("/asset-search")
+    ) {
       await route.fulfill(
         envelope({ reason: { code: "feature_disabled", params: {} } }, 503)
       );
@@ -60,6 +67,54 @@ async function mockLiveFeature(page: Page) {
     }
     if (url.includes("/auth/me") || url.includes("/auth/captcha")) {
       await route.fulfill(envelope({ id: 1, username: "admin", role: "admin", totp_enabled: true, onboarded: true }));
+      return;
+    }
+    if (url.includes(`/backup-file-sources/nodes/${fileSourceNodeId}/sets`)) {
+      await route.fulfill(envelope({
+        items: [{
+          backup_set_id: fileSourceSetId,
+          node_id: fileSourceNodeId,
+          display_label: "合成夜间备份 · Synthetic nightly archive",
+          lineage_kind: "task",
+          version_count: 2,
+          latest_retained_at: "2026-07-19T00:05:00Z",
+          catalog_coverage: "complete",
+        }],
+        next_cursor: null,
+      }));
+      return;
+    }
+    if (url.includes(`/backup-file-sources/sets/${fileSourceSetId}/versions`)) {
+      await route.fulfill(envelope({
+        items: [{
+          recovery_point_id: fixture.ids.onlineRecoveryPoint,
+          repository_id: fixture.ids.onlineRepository,
+          producing_task_id: 71,
+          captured_at: "2026-07-19T00:00:00Z",
+          committed_at: "2026-07-19T00:05:00Z",
+          created_at: "2026-07-19T00:00:00Z",
+          lifecycle_state: "committed",
+          catalog_coverage: "complete",
+          content_availability: { available: true, reason: null },
+          entry_count: 240,
+          logical_bytes: 8388608,
+          permissions: { list: true, preview: false, download: false },
+        }],
+        next_cursor: null,
+      }));
+      return;
+    }
+    if (url.includes("/backup-file-sources/nodes")) {
+      await route.fulfill(envelope({
+        items: [{
+          node_id: fileSourceNodeId,
+          display_name: "合成节点 · Synthetic node",
+          backup_set_count: 1,
+          latest_retained_at: "2026-07-19T00:05:00Z",
+          catalog_coverage: "complete",
+        }],
+        next_cursor: null,
+      }));
       return;
     }
     if (method === "POST" && url.includes("/asset-search")) {
@@ -101,10 +156,11 @@ async function mockLiveFeature(page: Page) {
           schema_version: 1,
           content_url: `/api/v1/asset-content/${"5".repeat(32)}`,
           action: "preview",
-          renderer: "escaped_text",
-          profile: "text_v1",
+          renderer: "plain_text",
+          profile: "text_v2",
           content_type: "text/plain; charset=utf-8",
           content_length: 128,
+          truncated: false,
           etag: '"e2e-ticket-v1"',
           last_modified: "2026-07-19T00:00:00Z",
           range: "none",
@@ -172,7 +228,7 @@ test("closed FeatureLive does not open a searchable workspace", async ({ page })
   await seedAdminSession(page);
   await mockClosedFeature(page);
   await page.goto("/app/backups/data");
-  await expect(page.getByText(/备份资产功能未启用|Backup assets are not enabled/)).toBeVisible();
+  await expect(page.getByText(/文件来源当前不可用|The file source is currently unavailable/)).toBeVisible();
   await expect(page.getByRole("searchbox")).toHaveCount(0);
 });
 
@@ -181,7 +237,7 @@ test("live FeatureLive can browse, search, and preview fixtures", async ({ page 
   await mockLiveFeature(page);
   await page.goto(liveRoute);
   await expect(page.getByText(/备份资产功能未启用|Backup assets are not enabled/)).toHaveCount(0);
-  await expect(page.getByRole("listbox", { name: /Backup asset list|备份资产列表/ })).toBeVisible();
+  await expect(page.getByRole("list", { name: /Backup asset list|备份资产列表/ })).toBeVisible();
   await expect(page.getByText("合成审计日志-synthetic-audit.log")).toBeVisible();
 
   const search = page.getByRole("searchbox", { name: /Search backup assets|搜索备份资产/ });
@@ -194,14 +250,17 @@ test("live FeatureLive can browse, search, and preview fixtures", async ({ page 
   await searchPosted;
   await expect(page.getByText("合成审计日志-synthetic-audit.log")).toBeVisible();
 
-  await page.getByRole("option", { name: /synthetic-audit/ }).dblclick();
-  const loadPreview = page.getByRole("button", { name: /Load preview|加载预览/ });
-  await expect(loadPreview).toBeVisible();
   const previewPosted = page.waitForRequest(
     (request) => request.method() === "POST" && request.url().includes("/delivery-tickets")
   );
-  await loadPreview.click();
-  await previewPosted;
+  await page.getByRole("button", { name: /(?:Open asset|打开资产).*synthetic-audit/ }).click();
+  const previewRequest = await previewPosted;
+  expect(previewRequest.postDataJSON()).toEqual({
+    schema_version: 1,
+    action: "preview",
+    preview_intent: "safe_preview_v1",
+  });
+  await expect(page.getByRole("button", { name: /Load preview|加载预览/ })).toHaveCount(0);
   const viewport = page.getByTestId("asset-preview-viewport");
   await expect(viewport).toBeVisible();
   await expect(viewport.locator("iframe")).toBeVisible();

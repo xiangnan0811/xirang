@@ -313,6 +313,17 @@ describe("BackupsPage", () => {
     expect(await screen.findByRole("region", { name: /Asset results|资产结果/ })).toBeInTheDocument();
   });
 
+  it("keeps a blocked file-source projection out of the searchable workspace", async () => {
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+    listBackupFileSourceNodesMock.mockRejectedValue(new Error("synthetic source unavailable"));
+
+    renderBackups("/app/backups/data");
+
+    expect(await screen.findByText(/The file source is currently unavailable|文件来源当前不可用/)).toBeInTheDocument();
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /Asset results|资产结果/ })).not.toBeInTheDocument();
+  });
+
   it("issues one automatic safe preview when a generic-MIME file is activated", async () => {
     Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
       configurable: true,

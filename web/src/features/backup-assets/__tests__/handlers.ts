@@ -7,6 +7,10 @@ const API_BASE = "/api/v1";
 export type BackupAssetsFixtureScenario = "complete" | "partial_offline" | "feature_disabled";
 
 export const backupAssetsFixtureIds = fixture.ids;
+export const backupAssetsFileSourceIds = {
+  online: { nodeId: 17, backupSetId: "12121212121212121212121212121212" },
+  offline: { nodeId: 18, backupSetId: "34343434343434343434343434343434" },
+} as const;
 
 export function createBackupAssetsHandlers(
   scenario: BackupAssetsFixtureScenario = "complete"
@@ -14,11 +18,80 @@ export function createBackupAssetsHandlers(
   const offline = scenario === "partial_offline";
   const repositoryId = offline ? fixture.ids.offlineRepository : fixture.ids.onlineRepository;
   const recoveryPoints = offline ? fixture.recoveryPoints.offline : fixture.recoveryPoints.online;
+  const sourceIds = offline ? backupAssetsFileSourceIds.offline : backupAssetsFileSourceIds.online;
+  const sourceNodeId = sourceIds.nodeId;
+  const sourceNodeName = offline ? "synthetic-node-18" : "synthetic-node-17";
+  const sourceTaskId = offline ? 72 : 71;
+  const sourceSetId = sourceIds.backupSetId;
 
   return [
     http.get(`${API_BASE}/overview/backup-health`, () => ok(fixture.overview.backupHealth)),
     http.get(`${API_BASE}/overview/backup-confidence`, () => ok(fixture.overview.backupConfidence)),
     http.get(`${API_BASE}/overview/storage-usage`, () => ok(fixture.overview.storageUsage)),
+
+    http.get(`${API_BASE}/backup-file-sources/recovery-points/:recoveryPointId/source`, ({ params }) => {
+      if (scenario === "feature_disabled") return featureDisabled();
+      const point = recoveryPoints.find((candidate) => candidate.id === params.recoveryPointId);
+      return point
+        ? ok({
+            node_id: sourceNodeId,
+            backup_set_id: sourceSetId,
+            recovery_point_id: point.id,
+            repository_id: point.repository_id,
+            producing_task_id: sourceTaskId,
+          })
+        : notFound();
+    }),
+    http.get(`${API_BASE}/backup-file-sources/nodes`, () => {
+      if (scenario === "feature_disabled") return featureDisabled();
+      const latestPoint = recoveryPoints[0];
+      return ok({
+        items: latestPoint ? [{
+          node_id: sourceNodeId,
+          display_name: sourceNodeName,
+          backup_set_count: 1,
+          latest_retained_at: latestPoint.committed_at,
+          catalog_coverage: latestPoint.catalog.coverage.status,
+        }] : [],
+        next_cursor: null,
+      });
+    }),
+    http.get(`${API_BASE}/backup-file-sources/nodes/:nodeId/sets`, ({ params }) => {
+      if (scenario === "feature_disabled") return featureDisabled();
+      const latestPoint = recoveryPoints[0];
+      return ok({
+        items: Number(params.nodeId) === sourceNodeId && latestPoint ? [{
+          backup_set_id: sourceSetId,
+          node_id: sourceNodeId,
+          display_label: offline ? "Synthetic offline archive" : "Synthetic nightly archive",
+          lineage_kind: "task",
+          version_count: recoveryPoints.length,
+          latest_retained_at: latestPoint.committed_at,
+          catalog_coverage: latestPoint.catalog.coverage.status,
+        }] : [],
+        next_cursor: null,
+      });
+    }),
+    http.get(`${API_BASE}/backup-file-sources/sets/:backupSetId/versions`, ({ params }) => {
+      if (scenario === "feature_disabled") return featureDisabled();
+      return ok({
+        items: params.backupSetId === sourceSetId ? recoveryPoints.map((point) => ({
+          recovery_point_id: point.id,
+          repository_id: point.repository_id,
+          producing_task_id: sourceTaskId,
+          captured_at: point.captured_at,
+          committed_at: point.committed_at,
+          created_at: point.created_at,
+          lifecycle_state: point.state,
+          catalog_coverage: point.catalog.coverage.status,
+          content_availability: point.catalog.content_availability,
+          entry_count: point.entry_count,
+          logical_bytes: point.logical_bytes,
+          permissions: { list: true, preview: false, download: false },
+        })) : [],
+        next_cursor: null,
+      });
+    }),
 
     http.get(`${API_BASE}/backup-repositories`, () => {
       if (scenario === "feature_disabled") {
@@ -116,8 +189,10 @@ export function createBackupAssetsHandlers(
     http.post(`${API_BASE}/recovery-points/:recoveryPointId/entries/:entryId/delivery-tickets`, async ({ request }) => {
       const body = await request.json();
       if (!isTicketBody(body)) return badRequest();
-      const renderer = body.renderer;
-      const range = renderer === "escaped_text" || renderer === "metadata_hex" ? "none" : "single";
+      const safePreview = "preview_intent" in body;
+      const renderer = safePreview ? "plain_text" : body.renderer;
+      const profile = safePreview ? "text_v2" : body.profile;
+      const range = renderer === "escaped_text" || renderer === "plain_text" || renderer === "metadata_hex" ? "none" : "single";
       const contentType = ticketContentType(renderer);
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
       const idleExpiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
@@ -126,9 +201,10 @@ export function createBackupAssetsHandlers(
         content_url: `/api/v1/asset-content/${"5".repeat(32)}`,
         action: body.action,
         renderer,
-        profile: body.profile,
+        profile,
         content_type: contentType,
         content_length: 128,
+        truncated: false,
         etag: '"synthetic-ticket-v1"',
         last_modified: "2026-07-19T00:00:00Z",
         range,
@@ -159,10 +235,21 @@ function badRequest() {
   return HttpResponse.json({ code: 400, message: "bad request", data: null }, { status: 400 });
 }
 
-function isTicketBody(value: unknown): value is { action: string; renderer: string; profile: string } {
+function featureDisabled() {
+  return HttpResponse.json(
+    { code: 503, message: "unavailable", data: { reason: { code: "feature_disabled", params: {} } } },
+    { status: 503 }
+  );
+}
+
+type TicketBody =
+  | { action: "preview"; preview_intent: "safe_preview_v1" }
+  | { action: string; renderer: string; profile: string };
+
+function isTicketBody(value: unknown): value is TicketBody {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const body = value as Record<string, unknown>;
-  return (
+  return body.action === "preview" && body.preview_intent === "safe_preview_v1" || (
     typeof body.action === "string" &&
     typeof body.renderer === "string" &&
     typeof body.profile === "string"
@@ -172,6 +259,7 @@ function isTicketBody(value: unknown): value is { action: string; renderer: stri
 function ticketContentType(renderer: string): string {
   const contentTypes: Record<string, string> = {
     escaped_text: "text/plain; charset=utf-8",
+    plain_text: "text/plain; charset=utf-8",
     safe_raster: "image/png",
     same_origin_pdf: "application/pdf",
     native_audio: "audio/mpeg",

@@ -29,8 +29,9 @@ import { axe } from "vitest-axe";
  *
  * @param target axe 扫描根（通常是 `render()` 返回的 `container`，或 `document.body`）
  */
-export function runAxe(target: Element | string) {
+export function runAxe(target: Element | string, options: { iframes?: boolean } = {}) {
   return axe(target, {
+    iframes: options.iframes,
     rules: {
       "color-contrast": { enabled: false },
     },

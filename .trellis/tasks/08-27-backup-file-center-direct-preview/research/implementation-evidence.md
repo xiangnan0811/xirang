@@ -1265,3 +1265,54 @@ collector-zero acceptance remain the later explicit Phase 7 steps.
 
 The independent Trellis check is GREEN. Only the first Phase 7 checklist item is
 complete; every commit/PR/release/production/collector item remains unchecked.
+
+## Phase 7 — first CI browser-gate repair (2026-08-27)
+
+### Initial ready-PR result and diagnosis
+
+- Ready PR #472 was opened from `codex/backup-file-center-direct-preview` at
+  commit `871470e9dfebda8ee842a1ba7fcd9caf505bd955`.
+- CI run `33075494788` completed with every backend, PostgreSQL parity, Docker,
+  worker runtime/build/scan, PR-title, migration-UTC, and documentation job
+  GREEN. The sole failure was Frontend Test & Build job `98528485194`, in the
+  backup-assets Playwright matrix on Chromium, Firefox, and WebKit.
+- The browser test still asserted the pre-Phase-5 `listbox`/`option` roles,
+  double-click activation, and a second `Load preview` click. Those selectors
+  contradicted the approved native list/button and single-activation direct
+  preview contract; this was a stale gate, not a product rollback signal.
+
+### RED/GREEN repair
+
+- The closed-feature scenario also exposed a genuine boundary: a blocked
+  file-source projection still left the searchable workspace visible. A new
+  page regression first observed the searchbox and result region (RED).
+  `BackupsDataPage` now keeps source controls and their bounded status visible
+  while omitting the workspace for `blocked` and `permission_denied` source
+  states (GREEN).
+- The Playwright fixture now uses the canonical node/set/version route, mocks
+  the additive file-source projection, activates the file with one native
+  button click, and proves exactly one request body of
+  `{schema_version:1, action:"preview", preview_intent:"safe_preview_v1"}`.
+  It also proves there is no `Load preview` button and accepts only the resolved
+  `plain_text/text_v2` descriptor with required `truncated:false`.
+- Shared MSW fixtures were brought to the same live contract for page and axe
+  suites. The mobile inspector axe pass excludes opaque sandbox iframe
+  traversal because jsdom cannot provide axe cross-frame messaging; focused
+  renderer tests remain the owner of iframe sandbox/content safety.
+
+### Verification before the repair commit
+
+- Node 22 full `npm run check`: GREEN — typecheck, ESLint, 190 Vitest files /
+  1,683 tests, coverage, and the 3,230-module production build.
+- Focused page regression: 17/17 GREEN. Focused page axe: 13/13 GREEN.
+- Playwright Chromium + Firefox: 4/4 GREEN for closed and live scenarios.
+- Local WebKit could not launch because this Ubuntu host lacks the fallback
+  browser's ICU 66, libxml2, and libffi 7 shared libraries. This is recorded as
+  a local environment limitation; CI installs browser system dependencies and
+  remains the required three-browser verdict.
+- Targeted ESLint across all six repair files and final `git diff --check` are
+  GREEN. No product content, path, ticket, proof, locator, or production asset
+  identity was captured or written.
+
+The Phase 7 commit/PR/CI checkbox remains unchecked until a repair commit is
+pushed and the resulting required CI run is fully GREEN.
