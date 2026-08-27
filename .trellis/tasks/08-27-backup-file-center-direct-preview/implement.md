@@ -297,11 +297,11 @@ Privacy and compatibility checks:
 - [x] After implementation gates pass, run an independent Trellis check against
   check.jsonl. Resolve Critical/Important findings on the same branch and rerun
   affected plus full gates.
-- [ ] Commit, push, open a ready PR, and monitor every required CI job. Do not
+- [x] Commit, push, open a ready PR, and monitor every required CI job. Do not
   merge while any required job is failing, pending, or missing.
 - [ ] Squash merge when green, sync local main, then monitor Release Please,
   GitHub Release, Docker image publication, and relevant post-merge workflows.
-- [ ] Prepare a recoverable NAS upgrade/rollback runbook that uses root
+- [x] Prepare a recoverable NAS upgrade/rollback runbook that uses root
   /volume2/docker/xirang, external 19927, internal 10761, and no test, [, [[, cd,
   su, or sudo commands. Do not request or print secrets or content identity.
 - [ ] Production acceptance must prove over the authorized LAN HTTP path: one

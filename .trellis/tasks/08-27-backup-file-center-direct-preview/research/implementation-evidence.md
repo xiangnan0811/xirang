@@ -1339,3 +1339,37 @@ pushed and the resulting required CI run is fully GREEN.
   worktree was removed after measurement.
 
 The required final CI run remains pending; no Phase 7 checkbox advances yet.
+
+### Final code-head CI and prepared NAS runbook
+
+- Budget-fix commit `bb8ccd2354ce25a5388429d22f8b4f1bd300af98` was pushed to
+  ready PR #472. CI run `33078441208` completed GREEN with all 11 jobs:
+  PR title, documentation freshness, migration UTC, frontend, backend,
+  PostgreSQL parity, Docker, both runtime-closure architectures, and both
+  Worker build/scan architectures.
+- Frontend CI proved full check, 1,683 Vitest tests, production build,
+  Chromium/Firefox/WebKit direct-preview matrix, 108.83/110 KiB CSS budget,
+  coverage gate, and upload. Backend CI proved lint, all tests, race across the
+  backupasset and handler packages, backupasset coverage floor, build,
+  govulncheck, bounded load contract, and coverage upload. PostgreSQL proved
+  migration plus Recovery/Catalog/Search/Overlay/Content/Processing/Export
+  behavior parity. No required job was failing, pending, or missing.
+- The two Worker jobs emitted only their existing non-blocking Go cache
+  annotation because their workflow scope has no root `go.mod`; their actual
+  builds, Compose smoke, and scans were GREEN.
+- The recoverable production protocol is recorded in
+  `research/nas-upgrade-acceptance-runbook.md`. It was derived from the proven
+  v0.51.0 NAS sequence recovered through Trellis session insight, then stripped
+  of all production identity. It fixes the compose root/file, old stable image,
+  external 19927/internal 10761 health boundary, exact release digest/revision
+  gate, verified database backup, compose snapshot, automatic rollback, bounded
+  postflight, seven usable-preview booleans, and collector-zero stop boundary.
+- The runbook contains no credential, token, proof, Provider locator, backup
+  path, repository/recovery-point/entry ID, asset name, asset content, or raw
+  log output. Target tag/digest/revision remain deliberately blank until the
+  merged stable release and official image publication are verified.
+
+The commit/ready-PR/required-CI and NAS-runbook Phase 7 checklist items are now
+complete. The following documentation-only evidence commit must also pass its
+triggered CI before squash merge; release, NAS write, production acceptance, and
+collector-zero completion remain pending.
