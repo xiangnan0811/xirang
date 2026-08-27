@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
-import { FolderSearch, LoaderCircle, RefreshCw } from "lucide-react";
+import { ChevronRight, FolderSearch, LoaderCircle, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -54,13 +54,15 @@ export function AssetBrowser({
 }: AssetBrowserProps) {
   const { t } = useTranslation();
   const [activeKey, setActiveKey] = useState<string | null>(() => routeActiveKey(state));
-  const resolvedActiveKey = routeActiveKey(state) ?? activeKey;
+  const currentKey = routeActiveKey(state);
+  const resolvedActiveKey = currentKey ?? activeKey;
   const finishRestoration = useCallback(() => {
     if (restorationAnchor) setActiveKey(assetRefKey(restorationAnchor.ref));
     onRestorationComplete?.();
   }, [onRestorationComplete, restorationAnchor]);
 
   const selectedKeys = useMemo(() => new Set(state.selection.keys()), [state.selection]);
+  const breadcrumb = state.result.rows.find((row) => row.asset.breadcrumb.length > 0)?.asset.breadcrumb ?? [];
   const selectedRow =
     state.selection.size === 1
       ? state.result.rows.find((row) => state.selection.has(assetRefKey(row.ref))) ?? null
@@ -70,7 +72,23 @@ export function AssetBrowser({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="grid h-24 shrink-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[36px_36px] items-center gap-2 border-b border-border px-2 py-2">
+      <nav
+        aria-label={t("backupAssets.browser.breadcrumb")}
+        className="flex h-11 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border bg-muted/15 px-2 lg:h-10"
+      >
+        <Button type="button" variant="ghost" size="sm" className="touch-target min-h-11 shrink-0 px-2 text-xs lg:min-h-7" onClick={() => onRoutePatch({ parentEntryId: undefined, entryId: undefined })}>
+          {t("backupAssets.context.rootDirectory")}
+        </Button>
+        {breadcrumb.map((item) => (
+          <span key={item.ref.entryId} className="flex shrink-0 items-center gap-0.5">
+            <ChevronRight className="size-3.5 text-muted-foreground" aria-hidden />
+            <Button type="button" variant="ghost" size="sm" className="touch-target min-h-11 max-w-48 px-2 text-xs lg:min-h-7" onClick={() => onRoutePatch({ parentEntryId: item.ref.entryId, entryId: undefined })}>
+              <span className="truncate">{item.name}</span>
+            </Button>
+          </span>
+        ))}
+      </nav>
+      <div className="grid h-28 shrink-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[44px_44px] items-center gap-2 border-b border-border px-2 py-2 lg:h-24 lg:grid-rows-[36px_36px]">
         <AssetSearch
           draft={state.searchDraft}
           scope={state.route.scope}
@@ -82,6 +100,7 @@ export function AssetBrowser({
         <Select
           aria-label={t("backupAssets.browser.sort")}
           value={sortValue(state.route)}
+          className="touch-target min-h-11 lg:min-h-9"
           containerClassName="w-40 max-w-full min-w-0"
           onChange={(event) => onRoutePatch(sortPatch(event.target.value))}
         >
@@ -105,7 +124,8 @@ export function AssetBrowser({
           listButtonLabel={t("backupAssets.browser.list")}
           cardsText={t("backupAssets.browser.grid")}
           listText={t("backupAssets.browser.list")}
-          className="shrink-0 justify-self-end"
+          className="shrink-0 justify-self-end p-0"
+          buttonClassName="touch-target min-h-11 lg:min-h-8"
         />
       </div>
 
@@ -118,6 +138,7 @@ export function AssetBrowser({
       <ResultBody
         state={state}
         activeKey={resolvedActiveKey}
+        currentKey={currentKey}
         selectedKeys={selectedKeys}
         onActiveChange={handleActiveChange}
         onSelectionToggle={onToggleSelection}
@@ -128,7 +149,7 @@ export function AssetBrowser({
 
       {state.result.nextCursor ? (
         <div className="flex h-11 shrink-0 items-center justify-center border-t border-border">
-          <Button type="button" variant="ghost" size="sm" onClick={onLoadMore}>
+          <Button type="button" variant="ghost" size="sm" className="touch-target min-h-11 lg:min-h-8" onClick={onLoadMore}>
             {state.result.status === "loading" ? (
               <LoaderCircle className="size-4 animate-spin" aria-hidden />
             ) : (
@@ -165,6 +186,7 @@ export function AssetBrowser({
 function ResultBody({
   state,
   activeKey,
+  currentKey,
   selectedKeys,
   onActiveChange,
   onSelectionToggle,
@@ -174,6 +196,7 @@ function ResultBody({
 }: {
   state: BackupAssetsState;
   activeKey: string | null;
+  currentKey: string | null;
   selectedKeys: ReadonlySet<string>;
   onActiveChange: (row: BackupAssetResultRow) => void;
   onSelectionToggle: (ref: BackupAssetResultRow["ref"]) => void;
@@ -183,7 +206,7 @@ function ResultBody({
 }) {
   const { t } = useTranslation();
   if (state.result.status === "loading" && state.result.rows.length === 0) {
-    return <BrowserState icon={<LoaderCircle className="size-5 animate-spin" />} text={t("backupAssets.states.loadingAssets")} />;
+    return <BrowserState busy icon={<LoaderCircle className="size-5 animate-spin" />} text={t("backupAssets.states.loadingAssets")} />;
   }
   if (state.result.status === "failed") {
     return (
@@ -211,6 +234,7 @@ function ResultBody({
     rows: state.result.rows,
     selectedKeys,
     activeKey,
+    currentKey,
     onActiveChange,
     onSelectionToggle,
     onOpen,
@@ -220,9 +244,14 @@ function ResultBody({
   return state.route.layout === "grid" ? <AssetGrid {...props} /> : <AssetList {...props} />;
 }
 
-function BrowserState({ icon, text }: { icon: ReactNode; text: string }) {
+function BrowserState({ icon, text, busy = false }: { icon: ReactNode; text: string; busy?: boolean }) {
   return (
-    <div className="flex min-h-56 flex-1 flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
+    <div
+      role={busy ? "status" : undefined}
+      aria-live={busy ? "polite" : undefined}
+      aria-busy={busy ? "true" : undefined}
+      className="flex min-h-56 flex-1 flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground"
+    >
       <span aria-hidden>{icon}</span>
       <span>{text}</span>
     </div>

@@ -1013,7 +1013,7 @@ func (fake *derivedMalwareSafetyFake) Check(_ context.Context, asset AuthorizedA
 
 func derivedResolverFixture(t *testing.T) (*gorm.DB, derivedResolverTestBinding) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:"+contentTestDBName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

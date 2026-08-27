@@ -28,6 +28,7 @@ export interface AssetInspectorProps {
   favoriteState?: BackupAssetFavorite["state"] | null;
   favoritePending?: boolean;
   canRecover?: boolean;
+  focusTitle?: boolean;
   onToggleFavorite?: () => void;
   onRecover?: () => void;
   onTabChange: (tab: BackupAssetsInspectorTab) => void;
@@ -51,6 +52,7 @@ export function AssetInspector({
   favoriteState,
   favoritePending = false,
   canRecover = false,
+  focusTitle = true,
   onToggleFavorite,
   onRecover,
   onTabChange,
@@ -73,8 +75,8 @@ export function AssetInspector({
   );
 
   useEffect(() => {
-    titleRef.current?.focus();
-  }, [asset.ref.entryId, asset.ref.recoveryPointId]);
+    if (focusTitle) titleRef.current?.focus();
+  }, [asset.ref.entryId, asset.ref.recoveryPointId, focusTitle]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -89,7 +91,7 @@ export function AssetInspector({
             type="button"
             variant="ghost"
             size="icon"
-            className="size-8 shrink-0"
+            className="touch-target size-11 shrink-0 lg:size-8"
             aria-label={favoriteLabel}
             title={favoriteLabel}
             disabled={favoritePending}
@@ -107,7 +109,7 @@ export function AssetInspector({
             type="button"
             variant="ghost"
             size="icon"
-            className="size-8 shrink-0"
+            className="touch-target size-11 shrink-0 lg:size-8"
             aria-label={t("backupAssets.actions.recoverThisItem")}
             title={t("backupAssets.actions.recoverThisItem")}
             onClick={onRecover}
@@ -119,7 +121,7 @@ export function AssetInspector({
           type="button"
           variant="ghost"
           size="icon"
-          className="size-8 shrink-0"
+          className="touch-target size-11 shrink-0 lg:size-8"
           aria-label={t("backupAssets.actions.previousAsset")}
           title={t("backupAssets.actions.previousAsset")}
           disabled={!hasPrevious}
@@ -131,7 +133,7 @@ export function AssetInspector({
           type="button"
           variant="ghost"
           size="icon"
-          className="size-8 shrink-0"
+          className="touch-target size-11 shrink-0 lg:size-8"
           aria-label={t("backupAssets.actions.nextAsset")}
           title={t("backupAssets.actions.nextAsset")}
           disabled={!hasNext}
@@ -143,7 +145,7 @@ export function AssetInspector({
           type="button"
           variant="ghost"
           size="icon"
-          className="size-8 shrink-0"
+          className="touch-target size-11 shrink-0 lg:size-8"
           aria-label={t("backupAssets.actions.closeInspector")}
           title={t("backupAssets.actions.closeInspector")}
           onClick={onClose}
@@ -155,7 +157,7 @@ export function AssetInspector({
       <div
         role="tablist"
         aria-label={t("backupAssets.inspector.tabList")}
-        className="flex h-10 shrink-0 overflow-x-auto border-b border-border px-1"
+        className="flex min-h-11 shrink-0 overflow-x-auto border-b border-border px-1 lg:min-h-10"
       >
         {INSPECTOR_TABS.map((tab, index) => (
           <button
@@ -169,7 +171,7 @@ export function AssetInspector({
             aria-selected={activeTab === tab}
             aria-controls={`backup-assets-inspector-panel-${tab}`}
             tabIndex={activeTab === tab ? 0 : -1}
-            className="h-10 shrink-0 border-b-2 border-transparent px-2 text-xs text-muted-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 aria-selected:border-primary aria-selected:text-foreground"
+            className="touch-target min-h-11 shrink-0 border-b-2 border-transparent px-2 text-xs text-muted-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 aria-selected:border-primary aria-selected:text-foreground lg:min-h-10"
             onClick={() => onTabChange(tab)}
             onKeyDown={(event) =>
               handleTabKeyDown(event, tab, onTabChange, (targetIndex) => {

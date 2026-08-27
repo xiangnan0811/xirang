@@ -1,4 +1,10 @@
-import type { CatalogEntryType } from "@/types/domain";
+import type {
+  BackupFileSourceNode,
+  BackupFileSourceRecoveryPoint,
+  BackupFileSourceSet,
+  BackupFileSourceVersion,
+  CatalogEntryType,
+} from "@/types/domain";
 
 export type BackupsPageRoute = "overview" | "data" | "recovery";
 export type BackupAssetsDataView = "browse" | "search" | "repositories";
@@ -17,6 +23,8 @@ export type BackupAssetsInspectorTab =
 export interface BackupAssetsRouteState {
   page: BackupsPageRoute;
   view: BackupAssetsDataView;
+  nodeId?: number;
+  backupSetId?: string;
   repositoryId?: string;
   taskId?: number;
   recoveryPointId?: string;
@@ -52,6 +60,8 @@ const ENTRY_ID_PATTERN = /^[0-9a-f]{64}$/;
 const POSITIVE_INTEGER_PATTERN = /^[1-9][0-9]*$/;
 const DATA_QUERY_KEYS = new Set([
   "view",
+  "nodeId",
+  "backupSetId",
   "repositoryId",
   "taskId",
   "recoveryPointId",
@@ -135,6 +145,8 @@ export function serializeBackupAssetsRoute(state: BackupAssetsRouteState): strin
 
   const defaults = defaultsForView(normalized.view);
   if (normalized.view !== "browse") params.set("view", normalized.view);
+  appendNumber(params, "nodeId", normalized.nodeId);
+  appendString(params, "backupSetId", normalized.backupSetId);
   appendString(params, "repositoryId", normalized.repositoryId);
   appendNumber(params, "taskId", normalized.taskId);
   appendString(params, "recoveryPointId", normalized.recoveryPointId);
@@ -214,12 +226,35 @@ export function updateBackupAssetsRoute(
   }
 
   let state: BackupAssetsRouteState = { ...source, ...patch };
+  const nodeChanged = hasOwn(patch, "nodeId") && patch.nodeId !== source.nodeId;
+  const backupSetChanged = hasOwn(patch, "backupSetId") && patch.backupSetId !== source.backupSetId;
   const repositoryChanged = hasOwn(patch, "repositoryId") && patch.repositoryId !== source.repositoryId;
   const recoveryPointChanged =
     hasOwn(patch, "recoveryPointId") && patch.recoveryPointId !== source.recoveryPointId;
   const parentChanged = hasOwn(patch, "parentEntryId") && patch.parentEntryId !== source.parentEntryId;
 
-  if (repositoryChanged) {
+  if (nodeChanged) {
+    state = {
+      ...state,
+      backupSetId: hasOwn(patch, "backupSetId") ? state.backupSetId : undefined,
+      repositoryId: hasOwn(patch, "repositoryId") ? state.repositoryId : undefined,
+      taskId: hasOwn(patch, "taskId") ? state.taskId : undefined,
+      recoveryPointId: hasOwn(patch, "recoveryPointId") ? state.recoveryPointId : undefined,
+      parentEntryId: hasOwn(patch, "parentEntryId") ? state.parentEntryId : undefined,
+      entryId: hasOwn(patch, "entryId") ? state.entryId : undefined,
+      exportJobId: hasOwn(patch, "exportJobId") ? state.exportJobId : undefined,
+    };
+  } else if (backupSetChanged) {
+    state = {
+      ...state,
+      repositoryId: hasOwn(patch, "repositoryId") ? state.repositoryId : undefined,
+      taskId: hasOwn(patch, "taskId") ? state.taskId : undefined,
+      recoveryPointId: hasOwn(patch, "recoveryPointId") ? state.recoveryPointId : undefined,
+      parentEntryId: hasOwn(patch, "parentEntryId") ? state.parentEntryId : undefined,
+      entryId: hasOwn(patch, "entryId") ? state.entryId : undefined,
+      exportJobId: hasOwn(patch, "exportJobId") ? state.exportJobId : undefined,
+    };
+  } else if (repositoryChanged) {
     state = {
       ...state,
       recoveryPointId: hasOwn(patch, "recoveryPointId") ? state.recoveryPointId : undefined,
@@ -295,6 +330,8 @@ export function updateBackupAssetsRoute(
     state.exportJobId === undefined &&
     (
       repositoryChanged ||
+      nodeChanged ||
+      backupSetChanged ||
       recoveryPointChanged ||
       (patch.view !== undefined && patch.view !== source.view) ||
       (hasOwn(patch, "savedSearchId") && patch.savedSearchId !== undefined) ||
@@ -337,6 +374,8 @@ function parseDataRoute(params: URLSearchParams): BackupAssetsRouteResult {
   if (!hasOnlyKeys(params, DATA_QUERY_KEYS) || hasDuplicateSingular(params)) return invalid(DATA_PATH);
 
   const view = parseOneOf(params.get("view") ?? "browse", ["browse", "search", "repositories"] as const);
+  const nodeId = parseTaskId(params.get("nodeId"));
+  const backupSetId = parseOpaqueId(params.get("backupSetId"));
   const repositoryId = parseOpaqueId(params.get("repositoryId"));
   const taskId = parseTaskId(params.get("taskId"));
   const recoveryPointId = parseOpaqueId(params.get("recoveryPointId"));
@@ -356,6 +395,8 @@ function parseDataRoute(params: URLSearchParams): BackupAssetsRouteResult {
     scope === undefined ||
     layout === undefined ||
     inspectorTab === undefined ||
+    (params.has("nodeId") && nodeId === undefined) ||
+    (params.has("backupSetId") && backupSetId === undefined) ||
     (params.has("repositoryId") && repositoryId === undefined) ||
     (params.has("taskId") && taskId === undefined) ||
     (params.has("recoveryPointId") && recoveryPointId === undefined) ||
@@ -380,6 +421,8 @@ function parseDataRoute(params: URLSearchParams): BackupAssetsRouteResult {
   const state = normalizeState({
     page: "data",
     view,
+    nodeId,
+    backupSetId,
     repositoryId,
     taskId,
     recoveryPointId,
@@ -407,6 +450,9 @@ function normalizeState(state: BackupAssetsRouteState): BackupAssetsRouteState {
 function isValidState(state: BackupAssetsRouteState): boolean {
   if (!isPage(state.page) || !isDataView(state.view) || !isScope(state.scope)) return false;
   if (!isLayout(state.layout) || !INSPECTOR_TABS.includes(state.inspectorTab)) return false;
+  if (state.nodeId !== undefined && (!Number.isSafeInteger(state.nodeId) || state.nodeId <= 0)) return false;
+  if (state.backupSetId !== undefined && !OPAQUE_ID_PATTERN.test(state.backupSetId)) return false;
+  if (state.backupSetId !== undefined && state.nodeId === undefined) return false;
   if (state.repositoryId !== undefined && !OPAQUE_ID_PATTERN.test(state.repositoryId)) return false;
   if (state.taskId !== undefined && (!Number.isSafeInteger(state.taskId) || state.taskId <= 0)) return false;
   if (state.recoveryPointId !== undefined && !OPAQUE_ID_PATTERN.test(state.recoveryPointId)) return false;
@@ -423,6 +469,8 @@ function isValidState(state: BackupAssetsRouteState): boolean {
   if (state.page === "recovery") {
     return (
       state.view === "browse" &&
+      state.nodeId === undefined &&
+      state.backupSetId === undefined &&
       state.repositoryId === undefined &&
       state.parentEntryId === undefined &&
       state.entryId === undefined &&
@@ -447,6 +495,8 @@ function isValidState(state: BackupAssetsRouteState): boolean {
   if (state.view === "repositories") {
     return (
       state.taskId === undefined &&
+      state.nodeId === undefined &&
+      state.backupSetId === undefined &&
       state.recoveryPointId === undefined &&
       state.parentEntryId === undefined &&
       state.entryId === undefined &&
@@ -475,6 +525,82 @@ function isValidState(state: BackupAssetsRouteState): boolean {
     }
   }
   return validSortPair(state.view, state.sort, state.direction);
+}
+
+export function reconcileBackupAssetsSourceRoute(
+  state: BackupAssetsRouteState,
+  nodes: readonly BackupFileSourceNode[],
+  sets: readonly BackupFileSourceSet[],
+  versions: readonly BackupFileSourceVersion[],
+): Partial<BackupAssetsRouteState> | null {
+  if (state.nodeId === undefined) return null;
+  if (!nodes.some((node) => node.nodeId === state.nodeId)) {
+    return clearSourceRoute({ nodeId: undefined });
+  }
+  if (state.backupSetId === undefined) return null;
+  if (!sets.some((set) => set.nodeId === state.nodeId && set.backupSetId === state.backupSetId)) {
+    return clearSourceRoute({ backupSetId: undefined });
+  }
+  if (state.recoveryPointId === undefined) return null;
+  const version = versions.find((item) => item.recoveryPointId === state.recoveryPointId);
+  if (!version || (state.repositoryId !== undefined && state.repositoryId !== version.repositoryId) ||
+    (state.taskId !== undefined && state.taskId !== version.producingTaskId)) {
+    return {
+      repositoryId: undefined,
+      taskId: undefined,
+      recoveryPointId: undefined,
+      parentEntryId: undefined,
+      entryId: undefined,
+      exportJobId: undefined,
+    };
+  }
+  return null;
+}
+
+export function resolveBackupAssetsLegacySourceRoute(
+  state: Pick<BackupAssetsRouteState, "nodeId" | "backupSetId" | "repositoryId" | "taskId" | "recoveryPointId">,
+  resolved: BackupFileSourceRecoveryPoint,
+): Partial<BackupAssetsRouteState> {
+  if ((state.nodeId !== undefined && state.nodeId !== resolved.nodeId) ||
+    (state.backupSetId !== undefined && state.backupSetId !== resolved.backupSetId)) {
+    return clearSourceRoute({ backupSetId: undefined });
+  }
+  if (state.recoveryPointId !== resolved.recoveryPointId ||
+    (state.repositoryId !== undefined && state.repositoryId !== resolved.repositoryId) ||
+    (state.taskId !== undefined && state.taskId !== resolved.producingTaskId)) {
+    return clearBackupAssetsLegacySourceRoute();
+  }
+  return {
+    nodeId: resolved.nodeId,
+    backupSetId: resolved.backupSetId,
+    repositoryId: resolved.repositoryId,
+    taskId: resolved.producingTaskId,
+    recoveryPointId: resolved.recoveryPointId,
+  };
+}
+
+export function clearBackupAssetsLegacySourceRoute(): Partial<BackupAssetsRouteState> {
+  return {
+    recoveryPointId: undefined,
+    parentEntryId: undefined,
+    entryId: undefined,
+    exportJobId: undefined,
+  };
+}
+
+function clearSourceRoute(
+  selection: Pick<Partial<BackupAssetsRouteState>, "nodeId" | "backupSetId">,
+): Partial<BackupAssetsRouteState> {
+  return {
+    ...selection,
+    ...(hasOwn(selection, "nodeId") ? { backupSetId: undefined } : {}),
+    repositoryId: undefined,
+    taskId: undefined,
+    recoveryPointId: undefined,
+    parentEntryId: undefined,
+    entryId: undefined,
+    exportJobId: undefined,
+  };
 }
 
 function validSortPair(

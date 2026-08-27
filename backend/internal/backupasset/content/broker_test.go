@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,8 +27,6 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
-
-var brokerTestDBSequence atomic.Uint64
 
 func TestBrokerIssueClosedWhenFeatureLiveFalse(t *testing.T) {
 	harness := newBrokerTestHarness(t)
@@ -99,6 +97,425 @@ func TestBrokerIssueOrdersAuthorizationLeaseSourceAuditBeforeCookieActivation(t 
 		if strings.Contains(stringifyAuditInput(audit), forbidden) {
 			t.Fatalf("audit contains forbidden fact %q: %+v", forbidden, audit)
 		}
+	}
+}
+
+func TestBrokerSafePreviewResolvesExactPlainTextBeforePersistenceAndServe(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	payload := []byte("name = \"值\"\r\nline\t<safe & readable>\n")
+	harness.source.payload = payload
+	harness.asset.Size = int64(len(payload))
+	harness.asset.MediaType = "application/octet-stream"
+	harness.asset.Path = "/configs/service.conf"
+	harness.asset.Name = "service.conf"
+	harness.asset.RangeProven = false
+
+	ticket, err := harness.broker.Issue(context.Background(), harness.safePreviewRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ticket.Descriptor.Renderer != RendererPlainText || ticket.Descriptor.Profile != ProfileTextV2 ||
+		ticket.Descriptor.ContentType != "text/plain; charset=utf-8" || ticket.Descriptor.Range != RangeNone ||
+		ticket.Descriptor.Truncated || ticket.Descriptor.ContentLength != int64(len(payload)) {
+		t.Fatalf("safe text descriptor=%+v", ticket.Descriptor)
+	}
+	var grant model.BackupAssetDeliveryGrant
+	if err := harness.db.First(&grant, "id = ?", harness.material.GrantID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if grant.Renderer != string(RendererPlainText) || grant.Profile != string(ProfileTextV2) ||
+		strings.Contains(grant.Renderer, string(PreviewIntentSafePreviewV1)) ||
+		strings.Contains(grant.Profile, string(PreviewIntentSafePreviewV1)) || grant.RepresentationTruncated {
+		t.Fatalf("safe text grant=%+v", grant)
+	}
+	if len(harness.audit.inputs) != 1 {
+		t.Fatalf("ticket audit count=%d", len(harness.audit.inputs))
+	}
+	audit := harness.audit.inputs[0]
+	if audit.Fields[backupasset.AuditFieldRenderer] != string(RendererPlainText) ||
+		audit.Fields[backupasset.AuditFieldProfile] != string(ProfileTextV2) ||
+		audit.Fields[backupasset.AuditFieldMode] != nil {
+		t.Fatalf("safe text success audit=%+v", audit)
+	}
+	if harness.source.openCalls != 1 {
+		t.Fatalf("ticket prefix reads=%d want=1", harness.source.openCalls)
+	}
+
+	response := &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	if err := harness.broker.Serve(context.Background(), GatewayRequest{
+		DeliveryID: harness.material.DeliveryID, Method: http.MethodGet,
+		RawCookie: ticket.Cookie.Name + "=" + ticket.Cookie.Value,
+	}, response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), payload) ||
+		strings.Contains(response.Body.String(), "&lt;") || strings.Contains(response.Body.String(), "00000000") {
+		t.Fatalf("safe text response status=%d body=%q", response.Code, response.Body.Bytes())
+	}
+}
+
+func TestBrokerSafePreviewPlainTextTruncationMatchesDescriptorGrantAndServe(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	payload := []byte("abcdefghijkl")
+	harness.source.payload = payload
+	harness.asset.Size = int64(len(payload))
+	harness.asset.MediaType = "application/octet-stream"
+	harness.asset.Path = "/configs/service.conf"
+	harness.asset.Name = "service.conf"
+	harness.asset.RangeProven = false
+	config := testBrokerConfig()
+	config.Renderer.TextBytes = 8
+	harness.broker.config = func(context.Context) (BrokerConfig, error) { return config, nil }
+
+	ticket, err := harness.broker.Issue(context.Background(), harness.safePreviewRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ticket.Descriptor.Renderer != RendererPlainText || ticket.Descriptor.Profile != ProfileTextV2 ||
+		!ticket.Descriptor.Truncated || ticket.Descriptor.ContentLength != 8 || ticket.Descriptor.Range != RangeNone {
+		t.Fatalf("truncated text descriptor=%+v", ticket.Descriptor)
+	}
+	var grant model.BackupAssetDeliveryGrant
+	if err := harness.db.First(&grant, "id = ?", harness.material.GrantID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !grant.RepresentationTruncated || grant.RepresentationSourceBytes != 8 || grant.RepresentationSize != 8 {
+		t.Fatalf("truncated text grant=%+v", grant)
+	}
+
+	response := &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	if err := harness.broker.Serve(context.Background(), GatewayRequest{
+		DeliveryID: harness.material.DeliveryID, Method: http.MethodGet,
+		RawCookie: ticket.Cookie.Name + "=" + ticket.Cookie.Value,
+	}, response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || response.Body.String() != "abcdefgh" {
+		t.Fatalf("truncated text response status=%d body=%q", response.Code, response.Body.String())
+	}
+}
+
+func TestBrokerSafePreviewResolvesBinaryToHexAndPublishesTruncation(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	payload := []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+	harness.source.payload = payload
+	harness.asset.Size = int64(len(payload))
+	harness.asset.MediaType = "text/plain"
+	harness.asset.Path = "/configs/deceptive.yaml"
+	harness.asset.Name = "deceptive.yaml"
+	harness.asset.RangeProven = false
+	config := testBrokerConfig()
+	config.Renderer.HexBytes = 8
+	harness.broker.config = func(context.Context) (BrokerConfig, error) { return config, nil }
+	request := harness.adminSafePreviewRequest()
+	request.Proof = &StepUpProof{
+		Action: auth.StepUpActionAssetSecretReveal, ID: strings.Repeat("e", 32), ExpiresAt: harness.now.Add(time.Minute),
+	}
+
+	ticket, err := harness.broker.Issue(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ticket.Descriptor.Renderer != RendererMetadataHex || ticket.Descriptor.Profile != ProfileHexV1 ||
+		!ticket.Descriptor.Truncated || ticket.Descriptor.Range != RangeNone {
+		t.Fatalf("safe hex descriptor=%+v", ticket.Descriptor)
+	}
+	var grant model.BackupAssetDeliveryGrant
+	if err := harness.db.First(&grant, "id = ?", harness.material.GrantID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if grant.Renderer != string(RendererMetadataHex) || grant.Profile != string(ProfileHexV1) || !grant.RepresentationTruncated {
+		t.Fatalf("safe hex grant=%+v", grant)
+	}
+}
+
+func TestBrokerSafePreviewNativeRequiresRangeAndNeverFallsBackToHex(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	harness.asset.RangeProven = false
+	harness.asset.Provider = backupasset.ProviderRestic
+	harness.asset.MediaType = "application/octet-stream"
+	request := harness.safePreviewRequest()
+	ticket, err := harness.broker.Issue(context.Background(), request)
+	if !errors.Is(err, backupasset.ErrCapabilityUnavailable) || ticket.Cookie != nil {
+		t.Fatalf("native missing Range ticket=%+v err=%v", ticket, err)
+	}
+	reason, ok := CapabilityFromError(err)
+	if !ok || reason.Code != backupasset.CapabilityRangeUnavailable || reason.Params != nil {
+		t.Fatalf("native missing Range reason=%+v ok=%t", reason, ok)
+	}
+	assertBrokerGrantCount(t, harness.db, 0)
+	if len(harness.audit.inputs) != 1 {
+		t.Fatalf("failure audit count=%d", len(harness.audit.inputs))
+	}
+	audit := harness.audit.inputs[0]
+	if audit.Fields[backupasset.AuditFieldMode] != string(PreviewIntentSafePreviewV1) ||
+		audit.Fields[backupasset.AuditFieldRenderer] != nil || audit.Fields[backupasset.AuditFieldProfile] != nil ||
+		audit.FailureCode != "request_failed" {
+		t.Fatalf("native Range failure audit=%+v", audit)
+	}
+}
+
+func TestBrokerSafePreviewMIMEConfusionAuditsIntentWithoutFakeProductOrPrivateEvidence(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	harness.asset.MediaType = "application/pdf"
+	request := harness.adminSafePreviewRequest()
+	request.Proof = &StepUpProof{
+		Action: auth.StepUpActionAssetSecretReveal, ID: strings.Repeat("e", 32), ExpiresAt: harness.now.Add(time.Minute),
+	}
+	ticket, err := harness.broker.Issue(context.Background(), request)
+	if !errors.Is(err, ErrMIMEConfusion) || ticket.Cookie != nil {
+		t.Fatalf("MIME confusion ticket=%+v err=%v", ticket, err)
+	}
+	assertBrokerGrantCount(t, harness.db, 0)
+	if len(harness.audit.inputs) != 1 {
+		t.Fatalf("failure audit count=%d", len(harness.audit.inputs))
+	}
+	audit := harness.audit.inputs[0]
+	if audit.Outcome != backupasset.AuditOutcomeBlocked || audit.FailureCode != "request_blocked" ||
+		audit.Fields[backupasset.AuditFieldMode] != string(PreviewIntentSafePreviewV1) ||
+		audit.Fields[backupasset.AuditFieldRenderer] != nil || audit.Fields[backupasset.AuditFieldProfile] != nil {
+		t.Fatalf("MIME confusion audit=%+v", audit)
+	}
+	serialized := fmt.Sprintf("%+v", audit)
+	for _, forbidden := range []string{harness.asset.Path, harness.asset.Name, string(harness.source.payload), harness.material.CookieSecret} {
+		if strings.Contains(serialized, forbidden) {
+			t.Fatalf("failure audit contains forbidden evidence %q: %s", forbidden, serialized)
+		}
+	}
+	sanitized, err := backupasset.NewAuditEvent(audit)
+	if err != nil || len(sanitized.Fields) != 1 ||
+		sanitized.Fields[backupasset.AuditFieldMode] != string(PreviewIntentSafePreviewV1) {
+		t.Fatalf("sanitized safe-preview failure audit=%+v err=%v", sanitized, err)
+	}
+}
+
+func TestBrokerSafePreviewRequiresStepUpBeforeResolvedProductErrors(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*brokerTestHarness)
+	}{
+		{
+			name: "secret native without Range",
+			mutate: func(harness *brokerTestHarness) {
+				harness.asset.RangeProven = false
+				harness.asset.Provider = backupasset.ProviderRestic
+				harness.asset.MediaType = "application/octet-stream"
+			},
+		},
+		{
+			name: "secret native MIME confusion",
+			mutate: func(harness *brokerTestHarness) {
+				harness.asset.MediaType = "application/pdf"
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			harness := newBrokerTestHarness(t)
+			harness.asset.Path = "/home/app/.ssh/id_rsa"
+			harness.asset.Name = "id_rsa"
+			testCase.mutate(harness)
+
+			ticket, err := harness.broker.Issue(context.Background(), harness.adminSafePreviewRequest())
+			if !errors.Is(err, ErrSecretRevealRequired) || ticket.Cookie != nil {
+				t.Fatalf("secret safe-preview ticket=%+v err=%v", ticket, err)
+			}
+			assertBrokerGrantCount(t, harness.db, 0)
+			if len(harness.audit.inputs) != 1 {
+				t.Fatalf("failure audit count=%d", len(harness.audit.inputs))
+			}
+			audit := harness.audit.inputs[0]
+			if audit.Fields[backupasset.AuditFieldMode] != string(PreviewIntentSafePreviewV1) ||
+				audit.Fields[backupasset.AuditFieldRenderer] != nil || audit.Fields[backupasset.AuditFieldProfile] != nil {
+				t.Fatalf("step-up failure audit leaked a resolved product: %+v", audit)
+			}
+		})
+	}
+}
+
+func TestBrokerSafePreviewKeepsClassificationAndStepUpIndependentFromResolvedText(t *testing.T) {
+	active := []byte("<!doctype html><script>visible</script>")
+	operator := newBrokerTestHarness(t)
+	operator.source.payload = active
+	operator.asset.Size = int64(len(active))
+	operator.asset.MediaType = "text/html"
+	operator.asset.Path = "/public/page.html"
+	operator.asset.Name = "page.html"
+	if _, err := operator.broker.Issue(context.Background(), operator.safePreviewRequest()); !errors.Is(err, ErrSecretRevealRequired) {
+		t.Fatalf("Operator active text error=%v", err)
+	}
+	assertBrokerGrantCount(t, operator.db, 0)
+
+	admin := newBrokerTestHarness(t)
+	admin.source.payload = active
+	admin.asset.Size = int64(len(active))
+	admin.asset.MediaType = "text/html"
+	admin.asset.Path = "/public/page.html"
+	admin.asset.Name = "page.html"
+	request := admin.adminSafePreviewRequest()
+	if _, err := admin.broker.Issue(context.Background(), request); !errors.Is(err, ErrSecretRevealRequired) {
+		t.Fatalf("Admin active text without proof error=%v", err)
+	}
+	request.Proof = &StepUpProof{
+		Action: auth.StepUpActionAssetSecretReveal, ID: strings.Repeat("e", 32), ExpiresAt: admin.now.Add(time.Minute),
+	}
+	ticket, err := admin.broker.Issue(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ticket.Descriptor.Renderer != RendererPlainText || ticket.Descriptor.Profile != ProfileTextV2 ||
+		ticket.Descriptor.Classification != ClassificationUnknown {
+		t.Fatalf("Admin resolved active text ticket=%+v", ticket.Descriptor)
+	}
+}
+
+func TestBrokerSafePreviewNeverStartsDerivedResolution(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	payload := []byte("plain source text\n")
+	harness.source.payload = payload
+	harness.asset.Size = int64(len(payload))
+	harness.asset.MediaType = "text/plain"
+	harness.asset.Path = "/documents/source.txt"
+	harness.asset.Name = "source.txt"
+	derived := &brokerDerivedResolverFake{}
+	harness.broker.derived = derived
+	harness.broker.securityPolicyRevision = func(context.Context) (string, error) {
+		t.Fatal("safe preview requested a derived security policy")
+		return "", nil
+	}
+	ticket, err := harness.broker.Issue(context.Background(), harness.safePreviewRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ticket.Descriptor.Renderer != RendererPlainText || derived.resolveCalls != 0 || derived.openCalls != 0 {
+		t.Fatalf("ticket=%+v derived resolve/open=%d/%d", ticket.Descriptor, derived.resolveCalls, derived.openCalls)
+	}
+}
+
+func TestBrokerSafePreviewStrictIntentUnionPreservesExactCompatibility(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	if !validIssueRequest(harness.safePreviewRequest(), harness.now) {
+		t.Fatal("safe preview intent rejected")
+	}
+	if !validIssueRequest(harness.issueRequest(), harness.now) {
+		t.Fatal("existing exact preview rejected")
+	}
+	for _, mutate := range []func(*IssueRequest){
+		func(request *IssueRequest) { request.Renderer, request.Profile = RendererSafeRaster, ProfileRasterV1 },
+		func(request *IssueRequest) { request.PreviewIntent = PreviewIntent("future_preview_v2") },
+		func(request *IssueRequest) { request.Action = DeliveryDownload },
+		func(request *IssueRequest) { request.PreviewIntent, request.Renderer = "", RendererPlainText },
+	} {
+		request := harness.safePreviewRequest()
+		mutate(&request)
+		if validIssueRequest(request, harness.now) {
+			t.Fatalf("invalid issue union accepted: %+v", request)
+		}
+	}
+	adminDownload := harness.adminIssueRequest()
+	adminDownload.Action, adminDownload.Renderer, adminDownload.Profile = DeliveryDownload, RendererAttachment, ProfileOriginalV1
+	adminDownload.Proof = &StepUpProof{
+		Action: auth.StepUpActionAssetDownload, ID: strings.Repeat("e", 32), ExpiresAt: harness.now.Add(time.Minute),
+	}
+	if !validIssueRequest(adminDownload, harness.now) {
+		t.Fatal("existing exact download rejected")
+	}
+}
+
+func TestBrokerSafePreviewServesUTF16AsFaithfulUTF8Text(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	payload := []byte{0xff, 0xfe}
+	for _, value := range []uint16{'名', '=', '值', '\t', '<', '&', '>', '\r', '\n'} {
+		var encoded [2]byte
+		binary.LittleEndian.PutUint16(encoded[:], value)
+		payload = append(payload, encoded[:]...)
+	}
+	harness.source.payload = payload
+	harness.asset.Size = int64(len(payload))
+	harness.asset.MediaType = "application/octet-stream"
+	harness.asset.Path = "/configs/service.ini"
+	harness.asset.Name = "service.ini"
+	request := harness.adminSafePreviewRequest()
+	request.Proof = &StepUpProof{
+		Action: auth.StepUpActionAssetSecretReveal, ID: strings.Repeat("e", 32), ExpiresAt: harness.now.Add(time.Minute),
+	}
+	ticket, err := harness.broker.Issue(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	if err := harness.broker.Serve(context.Background(), GatewayRequest{
+		DeliveryID: harness.material.DeliveryID, Method: http.MethodGet,
+		RawCookie: ticket.Cookie.Name + "=" + ticket.Cookie.Value,
+	}, response); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := response.Body.String(), "名=值\t<&>\r\n"; got != want {
+		t.Fatalf("UTF-16 preview body=%q want=%q", got, want)
+	}
+}
+
+func TestBrokerSafePreviewResolvesSignatureProvenNativeWithRange(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	ticket, err := harness.broker.Issue(context.Background(), harness.safePreviewRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ticket.Descriptor.Renderer != RendererSafeRaster || ticket.Descriptor.Profile != ProfileRasterV1 ||
+		ticket.Descriptor.Range != RangeSingle || ticket.Descriptor.Truncated {
+		t.Fatalf("safe native descriptor=%+v", ticket.Descriptor)
+	}
+}
+
+func TestBrokerSafePreviewCancellationStopsPrefixReadWithoutGrant(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	harness.source.blockReads = true
+	harness.source.readStarted = make(chan struct{})
+	harness.source.readCanceled = make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := harness.broker.Issue(ctx, harness.safePreviewRequest())
+		done <- err
+	}()
+	select {
+	case <-harness.source.readStarted:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("safe preview prefix read did not start")
+	}
+	cancel()
+	select {
+	case <-harness.source.readCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("safe preview prefix read did not observe cancellation")
+	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("safe preview cancellation error=%v", err)
+	}
+	assertBrokerGrantCount(t, harness.db, 0)
+	if len(harness.audit.inputs) != 1 ||
+		harness.audit.inputs[0].Fields[backupasset.AuditFieldMode] != string(PreviewIntentSafePreviewV1) {
+		t.Fatalf("safe preview cancellation audit=%+v", harness.audit.inputs)
+	}
+}
+
+func TestBrokerServeRejectsUnresolvedPreviewIntentAsGrantProduct(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	ticket, err := harness.broker.Issue(context.Background(), harness.safePreviewRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialSourceCalls := harness.source.openCalls
+	if err := harness.db.Model(&model.BackupAssetDeliveryGrant{}).Where("id = ?", harness.material.GrantID).
+		Update("renderer", string(PreviewIntentSafePreviewV1)).Error; err != nil {
+		t.Fatal(err)
+	}
+	err = harness.broker.Serve(context.Background(), GatewayRequest{
+		DeliveryID: harness.material.DeliveryID, Method: http.MethodGet,
+		RawCookie: ticket.Cookie.Name + "=" + ticket.Cookie.Value,
+	}, &brokerDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()})
+	if !errors.Is(err, ErrContentNotFound) || harness.source.openCalls != initialSourceCalls {
+		t.Fatalf("unresolved intent Serve error=%v source calls=%d want=%d", err, harness.source.openCalls, initialSourceCalls)
 	}
 }
 
@@ -1808,8 +2225,8 @@ func (harness *recoveryBrokerTestHarness) recoveryIssueRequest() IssueRequest {
 
 func newBrokerTestHarness(t *testing.T) *brokerTestHarness {
 	t.Helper()
-	dsn := fmt.Sprintf("file:%s-%d?mode=memory&cache=shared&_busy_timeout=5000&_txlock=immediate&_loc=UTC",
-		strings.ReplaceAll(t.Name(), "/", "_"), brokerTestDBSequence.Add(1))
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_busy_timeout=5000&_txlock=immediate&_loc=UTC",
+		contentTestDBName(t))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatal(err)
@@ -1882,8 +2299,24 @@ func (harness *brokerTestHarness) issueRequest() IssueRequest {
 	}
 }
 
+func (harness *brokerTestHarness) safePreviewRequest() IssueRequest {
+	request := harness.issueRequest()
+	request.Renderer = ""
+	request.Profile = ""
+	request.PreviewIntent = PreviewIntentSafePreviewV1
+	return request
+}
+
 func (harness *brokerTestHarness) adminIssueRequest() IssueRequest {
 	request := harness.issueRequest()
+	request.Actor.Username = "admin"
+	request.Actor.Role = "admin"
+	request.Session.Role = "admin"
+	return request
+}
+
+func (harness *brokerTestHarness) adminSafePreviewRequest() IssueRequest {
+	request := harness.safePreviewRequest()
 	request.Actor.Username = "admin"
 	request.Actor.Role = "admin"
 	request.Session.Role = "admin"

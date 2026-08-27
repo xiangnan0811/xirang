@@ -9,7 +9,8 @@ const rasterTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp
 const audioTypes = new Set(["audio/wav", "audio/flac", "audio/ogg", "audio/mpeg"]);
 const videoTypes = new Set(["video/mp4", "video/webm", "video/ogg"]);
 
-export function selectBackupAssetPreviewProduct(asset: BackupAsset): BackupAssetPreviewProduct {
+/** Selects a caller-bound exact product for processing/backcompat flows only. */
+export function selectBackupAssetExactPreviewProduct(asset: BackupAsset): BackupAssetPreviewProduct {
   if (asset.entryType !== "file") return { renderer: "metadata_hex", profile: "hex_v1" };
 
   const mimeType = asset.mimeType.trim().toLowerCase().split(";", 1)[0];

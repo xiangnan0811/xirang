@@ -4,7 +4,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { formatBytes } from "@/lib/utils";
 
-import { AssetSelectionMark, AssetTypeIcon, RetainedVersionCount, type AssetResultsViewProps } from "./asset-list";
+import { AssetSelectionCheckbox, AssetTypeIcon, RetainedVersionCount, type AssetResultsViewProps } from "./asset-list";
 import { assetRefKey } from "./backup-assets-state";
 
 const TILE_HEIGHT = 144;
@@ -15,6 +15,7 @@ export function AssetGrid({
   rows,
   selectedKeys,
   activeKey,
+  currentKey = activeKey,
   onActiveChange,
   onSelectionToggle,
   onOpen,
@@ -23,7 +24,7 @@ export function AssetGrid({
 }: AssetResultsViewProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const itemRefs = useRef(new Map<number, HTMLDivElement>());
+  const itemRefs = useRef(new Map<number, HTMLButtonElement>());
   const [columns, setColumns] = useState(4);
   const [focusIndex, setFocusIndex] = useState(0);
 
@@ -97,23 +98,23 @@ export function AssetGrid({
     else requestAnimationFrame(() => itemRefs.current.get(bounded)?.focus());
   };
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>, index: number) => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     if (event.key === "ArrowRight") moveFocus(index + 1);
     else if (event.key === "ArrowLeft") moveFocus(index - 1);
     else if (event.key === "ArrowDown") moveFocus(index + columns);
     else if (event.key === "ArrowUp") moveFocus(index - columns);
     else if (event.key === "Home") moveFocus(0);
     else if (event.key === "End") moveFocus(rows.length - 1);
-    else if (event.key === " ") {
-      event.preventDefault();
-      onSelectionToggle(rows[index].ref);
-      return;
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      onOpen(rows[index], { index, offset: scrollRef.current?.scrollTop ?? 0 });
-      return;
-    } else return;
+    else return;
     event.preventDefault();
+  };
+
+  const activate = (index: number) => {
+    const row = rows[index];
+    if (!row) return;
+    setFocusIndex(index);
+    onActiveChange(row);
+    onOpen(row, { index, offset: scrollRef.current?.scrollTop ?? 0 });
   };
 
   return (
@@ -145,36 +146,40 @@ export function AssetGrid({
                 return (
                   <div
                     key={key}
-                    ref={(node) => {
-                      if (node) itemRefs.current.set(index, node);
-                      else itemRefs.current.delete(index);
-                    }}
                     role="gridcell"
                     aria-selected={selected}
-                    tabIndex={index === focusIndex ? 0 : -1}
-                    className="group relative flex h-36 min-w-0 flex-col border border-border bg-card p-3 outline-none transition-colors hover:border-primary/45 hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-ring aria-selected:border-primary aria-selected:bg-primary/8"
-                    onClick={() => {
-                      setFocusIndex(index);
-                      onActiveChange(row);
-                      onSelectionToggle(row.ref);
-                    }}
-                    onDoubleClick={() =>
-                      onOpen(row, { index, offset: scrollRef.current?.scrollTop ?? 0 })
-                    }
-                    onKeyDown={(event) => handleKeyDown(event, index)}
+                    className="group relative h-36 min-w-0 border border-border bg-card transition-colors hover:border-primary/45 aria-selected:border-primary aria-selected:bg-primary/8"
                   >
-                    <span className="absolute right-2 top-2">
-                      <AssetSelectionMark selected={selected} />
-                    </span>
-                    <span className="flex size-9 items-center justify-center border border-border bg-background">
-                      <AssetTypeIcon type={row.asset.entryType} />
-                    </span>
-                    <span className="mt-3 line-clamp-2 min-w-0 break-all text-xs font-medium" title={row.asset.name}>
-                      {row.asset.name}
-                    </span>
-                    <RetainedVersionCount row={row} />
-                    <span className="mt-auto text-[11px] tabular-nums text-muted-foreground">
-                      {formatBytes(row.asset.size)}
+                    <button
+                      ref={(node) => {
+                        if (node) itemRefs.current.set(index, node);
+                        else itemRefs.current.delete(index);
+                      }}
+                      type="button"
+                      aria-current={key === currentKey ? "true" : undefined}
+                      aria-label={`${t("backupAssets.actions.openAsset")} ${row.asset.name}`}
+                      tabIndex={index === focusIndex ? 0 : -1}
+                      className="flex h-full w-full min-w-0 flex-col p-3 pr-12 text-left outline-none transition-colors hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-[current=true]:bg-accent/40"
+                      onClick={() => activate(index)}
+                      onKeyDown={(event) => handleKeyDown(event, index)}
+                    >
+                      <span className="flex size-9 items-center justify-center border border-border bg-background">
+                        <AssetTypeIcon type={row.asset.entryType} />
+                      </span>
+                      <span className="mt-3 line-clamp-2 min-w-0 break-all text-xs font-medium" title={row.asset.name}>
+                        {row.asset.name}
+                      </span>
+                      <RetainedVersionCount row={row} />
+                      <span className="mt-auto text-[11px] tabular-nums text-muted-foreground">
+                        {formatBytes(row.asset.size)}
+                      </span>
+                    </button>
+                    <span className="absolute right-0 top-0 z-10">
+                      <AssetSelectionCheckbox
+                        row={row}
+                        selected={selected}
+                        onSelectionToggle={onSelectionToggle}
+                      />
                     </span>
                   </div>
                 );

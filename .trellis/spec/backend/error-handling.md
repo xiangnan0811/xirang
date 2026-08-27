@@ -358,6 +358,13 @@ Expose one bulk endpoint, validate the whole target set first, perform the unres
 - Unsupported Provider/port and missing Task artifact contracts map to 501.
   Feature disabled, Provider offline, timeout, disconnect, and resource-limit
   conditions map to 503 with a safe reason and request correlation ID.
+- The backup-content Issue boundary is narrower than a general Repository route:
+  typed 503 responses accept only feature/offline/disconnected/unavailable/
+  timeout/resource-limit codes, typed 501 responses accept only artifact,
+  identity, protocol, committed-point, mutable-source, Catalog, sequential-read,
+  Range, or download capability codes, and `params` must serialize as the exact
+  empty object `{}`. A valid but out-of-scope code or any parameterized reason
+  becomes a generic detail-free 503.
 - Invalid request/opaque locator maps to 400, an Operator-unowned or missing
   Repository maps to the same 404, and identity/binding/state conflicts map to
   409. Unexpected DB, crypto, SSH, or protocol failures use

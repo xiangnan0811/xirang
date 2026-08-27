@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
@@ -9,7 +10,7 @@ import { BackupsDataPage } from "./backups-page.data";
 import { BackupsOverviewPage } from "./backups-page.overview";
 import { BackupsRecoveryPage } from "./backups-page.recovery";
 import type { BackupConfidenceData, BackupHealthData, StorageUsageData } from "@/types/domain";
-import { recoveryPoint, repository } from "@/features/backup-assets/__tests__/test-utils";
+import { buildAssetRows, recoveryPoint, repository } from "@/features/backup-assets/__tests__/test-utils";
 import { BACKUP_ASSETS_PREFERENCES_KEY } from "@/features/backup-assets/backup-assets-preferences";
 
 const backupHealth: BackupHealthData = {
@@ -69,9 +70,15 @@ const {
   getBackupHealthMock,
   getStorageUsageMock,
   getRecoveryPointMock,
+  getBackupAssetMock,
+  issueTicketMock,
   listBackupAssetsMock,
   listBackupRepositoriesMock,
   listRecoveryPointsMock,
+  listBackupFileSourceNodesMock,
+  listBackupFileSourceSetsMock,
+  listBackupFileSourceVersionsMock,
+  resolveBackupFileSourceRecoveryPointMock,
   getRecoveryPlanMock,
   verifyMountMock,
 } = vi.hoisted(() => ({
@@ -86,9 +93,15 @@ const {
   getBackupHealthMock: vi.fn(),
   getStorageUsageMock: vi.fn(),
   getRecoveryPointMock: vi.fn(),
+  getBackupAssetMock: vi.fn(),
+  issueTicketMock: vi.fn(),
   listBackupAssetsMock: vi.fn(),
   listBackupRepositoriesMock: vi.fn(),
   listRecoveryPointsMock: vi.fn(),
+  listBackupFileSourceNodesMock: vi.fn(),
+  listBackupFileSourceSetsMock: vi.fn(),
+  listBackupFileSourceVersionsMock: vi.fn(),
+  resolveBackupFileSourceRecoveryPointMock: vi.fn(),
   getRecoveryPlanMock: vi.fn(),
   verifyMountMock: vi.fn(),
 }));
@@ -147,9 +160,15 @@ vi.mock("@/lib/api/client", () => ({
     getBackupHealth: getBackupHealthMock,
     getStorageUsage: getStorageUsageMock,
     getRecoveryPoint: getRecoveryPointMock,
+    getBackupAsset: getBackupAssetMock,
+    issueTicket: issueTicketMock,
     listBackupAssets: listBackupAssetsMock,
     listBackupRepositories: listBackupRepositoriesMock,
     listRecoveryPoints: listRecoveryPointsMock,
+    listBackupFileSourceNodes: listBackupFileSourceNodesMock,
+    listBackupFileSourceSets: listBackupFileSourceSetsMock,
+    listBackupFileSourceVersions: listBackupFileSourceVersionsMock,
+    resolveBackupFileSourceRecoveryPoint: resolveBackupFileSourceRecoveryPointMock,
     verifyMount: verifyMountMock,
   },
 }));
@@ -199,11 +218,24 @@ describe("BackupsPage", () => {
     getBackupHealthMock.mockReset();
     getStorageUsageMock.mockReset();
     getRecoveryPointMock.mockReset();
+    getBackupAssetMock.mockReset();
+    issueTicketMock.mockReset();
     listBackupAssetsMock.mockReset();
     listBackupRepositoriesMock.mockReset();
     listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
     listRecoveryPointsMock.mockReset();
     listRecoveryPointsMock.mockResolvedValue({ items: [], nextCursor: null });
+    listBackupFileSourceNodesMock.mockReset();
+    listBackupFileSourceNodesMock.mockResolvedValue({ status: "available", value: { items: [], nextCursor: null } });
+    listBackupFileSourceSetsMock.mockReset();
+    listBackupFileSourceSetsMock.mockResolvedValue({ status: "available", value: { items: [], nextCursor: null } });
+    listBackupFileSourceVersionsMock.mockReset();
+    listBackupFileSourceVersionsMock.mockResolvedValue({ status: "available", value: { items: [], nextCursor: null } });
+    resolveBackupFileSourceRecoveryPointMock.mockReset();
+    resolveBackupFileSourceRecoveryPointMock.mockResolvedValue({
+      status: "blocked",
+      reason: { code: "unknown_internal_state", params: {} },
+    });
     getRecoveryPlanMock.mockReset();
     verifyMountMock.mockReset();
   });
@@ -251,7 +283,7 @@ describe("BackupsPage", () => {
     expect(getBackupConfidenceMock).not.toHaveBeenCalled();
   });
 
-  it("redirects the backups index to overview with replace semantics", async () => {
+  it("redirects the backups index to Files with replace semantics", async () => {
     getBackupConfidenceMock.mockResolvedValue(backupConfidence);
     getBackupHealthMock.mockResolvedValue(backupHealth);
     getStorageUsageMock.mockResolvedValue(storageUsage);
@@ -259,9 +291,9 @@ describe("BackupsPage", () => {
     renderBackups("/app/backups");
 
     expect(await screen.findByTestId("backups-location")).toHaveTextContent(
-      "/app/backups/overview"
+      "/app/backups/data"
     );
-    expect(await screen.findByText(/Backup Confidence|备份可信度/)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Files|文件/ })).toBeInTheDocument();
   });
 
   it("renders one route tablist with mounted tabpanels and the active data panel", async () => {
@@ -271,13 +303,130 @@ describe("BackupsPage", () => {
 
     const tablist = await screen.findByRole("tablist", { name: /Backup views|备份视图/ });
     expect(tablist).toBeInTheDocument();
+    expect(within(tablist).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["文件", "概览", "恢复"]);
     expect(screen.getByRole("tab", { name: /Overview|概览/ })).toHaveAttribute("aria-selected", "false");
-    expect(screen.getByRole("tab", { name: /Data|数据/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /Files|文件/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: /Recovery|恢复/ })).toHaveAttribute("aria-selected", "false");
     expect(screen.getAllByRole("tabpanel", { hidden: true })).toHaveLength(3);
-    expect(screen.getByRole("tabpanel", { name: /Data|数据/ })).not.toHaveAttribute("hidden");
-    expect(screen.getByRole("heading", { name: /Backup data|备份数据/ })).toBeInTheDocument();
+    expect(screen.getByRole("tabpanel", { name: /Files|文件/ })).not.toHaveAttribute("hidden");
+    expect(screen.getByRole("heading", { name: /Files|文件/ })).toBeInTheDocument();
     expect(await screen.findByRole("region", { name: /Asset results|资产结果/ })).toBeInTheDocument();
+  });
+
+  it("issues one automatic safe preview when a generic-MIME file is activated", async () => {
+    Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 1024,
+        bottom: 640,
+        width: 1024,
+        height: 640,
+        toJSON: () => ({}),
+      }) as DOMRect,
+    });
+    Object.defineProperties(HTMLElement.prototype, {
+      offsetHeight: { configurable: true, get: () => 640 },
+      offsetWidth: { configurable: true, get: () => 1024 },
+      clientHeight: { configurable: true, get: () => 640 },
+      clientWidth: { configurable: true, get: () => 1024 },
+    });
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+    const backupSetId = "c".repeat(32);
+    const row = buildAssetRows(2)[1];
+    const asset = { ...row.asset, mimeType: "application/octet-stream" };
+    const genericRow = { ...row, asset };
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    getRecoveryPointMock.mockResolvedValue({ status: "available", value: recoveryPoint });
+    listBackupAssetsMock.mockResolvedValue({
+      items: [{ status: "available", value: asset }],
+      nextCursor: null,
+    });
+    getBackupAssetMock.mockResolvedValue({ status: "available", value: asset });
+    listBackupFileSourceNodesMock.mockResolvedValue({
+      status: "available",
+      value: {
+        items: [{ nodeId: 3, displayName: "节点", backupSetCount: 1, latestRetainedAt: null, catalogCoverage: "complete" }],
+        nextCursor: null,
+      },
+    });
+    listBackupFileSourceSetsMock.mockResolvedValue({
+      status: "available",
+      value: {
+        items: [{ backupSetId, nodeId: 3, displayLabel: "每日", lineageKind: "task", versionCount: 1, latestRetainedAt: null, catalogCoverage: "complete" }],
+        nextCursor: null,
+      },
+    });
+    listBackupFileSourceVersionsMock.mockResolvedValue({
+      status: "available",
+      value: {
+        items: [{
+          recoveryPointId: recoveryPoint.id,
+          repositoryId: repository.id,
+          producingTaskId: 7,
+          capturedAt: recoveryPoint.capturedAt,
+          committedAt: recoveryPoint.committedAt,
+          createdAt: recoveryPoint.createdAt,
+          lifecycleState: "committed",
+          catalogCoverage: "complete",
+          contentAvailability: { available: true, reason: null },
+          entryCount: 1,
+          logicalBytes: asset.size,
+          permissions: { list: true, preview: false, download: false },
+        }],
+        nextCursor: null,
+      },
+    });
+    issueTicketMock.mockResolvedValue({
+      status: "available",
+      value: {
+        schemaVersion: 1,
+        action: "preview",
+        assetRef: asset.ref,
+        renderer: "plain_text",
+        profile: "text_v2",
+        contentUrl: "/api/v1/backup-assets/content/synthetic",
+        method: "GET",
+        contentType: "text/plain; charset=utf-8",
+        disposition: "inline",
+        range: { supported: false, maxBytes: 262_144 },
+        classification: "ordinary",
+        expiresAt: "2026-08-27T12:00:00.000Z",
+        truncated: false,
+      },
+    });
+
+    const route = `/app/backups/data?nodeId=3&backupSetId=${backupSetId}&repositoryId=${repository.id}&taskId=7&recoveryPointId=${recoveryPoint.id}`;
+    const user = userEvent.setup();
+    renderBackups(route, undefined, { strict: true });
+
+    await waitFor(() => expect(listBackupAssetsMock).toHaveBeenCalled());
+    await user.click(await screen.findByRole("button", { name: new RegExp(`(?:Open asset|打开资产) ${genericRow.asset.name}`) }));
+
+    await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(1));
+    expect(issueTicketMock).toHaveBeenCalledWith(
+      "test-token",
+      genericRow.ref,
+      expect.objectContaining({
+        schemaVersion: 1,
+        action: "preview",
+        previewIntent: "safePreviewV1",
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(issueTicketMock.mock.calls[0]?.[2]).not.toHaveProperty("renderer");
+    expect(issueTicketMock.mock.calls[0]?.[2]).not.toHaveProperty("profile");
+    expect(screen.queryByRole("button", { name: /Load preview|加载预览/ })).not.toBeInTheDocument();
   });
 
   it("passes the authenticated role and token only through the data-page processing boundary", async () => {
@@ -327,7 +476,7 @@ describe("BackupsPage", () => {
     await waitFor(() => expect(screen.getByTestId("backups-location")).toHaveTextContent("/app/backups/overview"));
   });
 
-  it("replace-clears an incompatible export handle on repository change so Back cannot reopen it", async () => {
+  it("replace-clears an incompatible export handle on primary source change so Back cannot reopen it", async () => {
     getBackupHealthMock.mockResolvedValue(backupHealth);
     getBackupConfidenceMock.mockResolvedValue(backupConfidence);
     getStorageUsageMock.mockResolvedValue(storageUsage);
@@ -343,21 +492,31 @@ describe("BackupsPage", () => {
       ],
       nextCursor: null,
     });
+    listBackupFileSourceNodesMock.mockResolvedValue({
+      status: "available",
+      value: {
+        items: [
+          { nodeId: 7, displayName: "节点 A", backupSetCount: 1, latestRetainedAt: null, catalogCoverage: "complete" },
+          { nodeId: 8, displayName: "节点 B", backupSetCount: 1, latestRetainedAt: null, catalogCoverage: "complete" },
+        ],
+        nextCursor: null,
+      },
+    });
     const exportJobId = "d".repeat(32);
     renderBackups([
       "/app/backups/overview",
       `/app/backups/data?repositoryId=${repository.id}&exportJobId=${exportJobId}`,
     ], 1);
 
-    const repositorySelect = await waitFor(() => {
-      const element = document.querySelector("#backup-assets-repository");
+    const nodeSelect = await waitFor(() => {
+      const element = document.querySelector('select[aria-label="节点"]');
       expect(element).toBeInstanceOf(HTMLSelectElement);
       return element as HTMLSelectElement;
     });
-    fireEvent.change(repositorySelect, { target: { value: replacementRepository.id } });
+    fireEvent.change(nodeSelect, { target: { value: "8" } });
 
     await waitFor(() => expect(screen.getByTestId("backups-location")).toHaveTextContent(
-      `/app/backups/data?repositoryId=${replacementRepository.id}`,
+      "/app/backups/data?nodeId=8",
     ));
     expect(screen.getByTestId("backups-location")).not.toHaveTextContent("exportJobId");
 
@@ -426,6 +585,16 @@ describe("BackupsPage", () => {
     });
     const mismatchedRecoveryPoint = { ...recoveryPoint, repositoryId: "d".repeat(32) };
     getRecoveryPointMock.mockResolvedValue({ status: "available", value: mismatchedRecoveryPoint });
+    resolveBackupFileSourceRecoveryPointMock.mockResolvedValue({
+      status: "available",
+      value: {
+        nodeId: 7,
+        backupSetId: "a".repeat(32),
+        recoveryPointId: recoveryPoint.id,
+        repositoryId: mismatchedRecoveryPoint.repositoryId,
+        producingTaskId: 9,
+      },
+    });
 
     renderBackups(
       `/app/backups/data?repositoryId=${repository.id}&recoveryPointId=${recoveryPoint.id}&entryId=${"c".repeat(64)}`
@@ -439,6 +608,7 @@ describe("BackupsPage", () => {
     expect(screen.getByTestId("backups-location")).not.toHaveTextContent("recoveryPointId");
     expect(screen.getByTestId("backups-location")).not.toHaveTextContent("entryId");
     expect(listBackupAssetsMock).not.toHaveBeenCalled();
+    expect(resolveBackupFileSourceRecoveryPointMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps recovery evidence context separate from future recovery controls", async () => {
@@ -513,13 +683,17 @@ describe("BackupsPage", () => {
   });
 });
 
-function renderBackups(initialEntry: string | string[], initialIndex?: number) {
+function renderBackups(
+  initialEntry: string | string[],
+  initialIndex?: number,
+  options?: { strict?: boolean },
+) {
   const initialEntries = Array.isArray(initialEntry) ? initialEntry : [initialEntry];
-  return render(
+  const tree = (
     <MemoryRouter initialEntries={initialEntries} initialIndex={initialIndex}>
       <Routes>
         <Route path="/app/backups" element={<BackupsPage />}>
-          <Route index element={<Navigate to="overview" replace />} />
+          <Route index element={<Navigate to="data" replace />} />
           <Route path="overview" element={<BackupsOverviewPage />} />
           <Route path="data" element={<BackupsDataPage />} />
           <Route path="recovery" element={<BackupsRecoveryPage />} />
@@ -528,6 +702,7 @@ function renderBackups(initialEntry: string | string[], initialIndex?: number) {
       <LocationProbe />
     </MemoryRouter>
   );
+  return render(options?.strict ? <StrictMode>{tree}</StrictMode> : tree);
 }
 
 function LocationProbe() {

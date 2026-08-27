@@ -206,6 +206,9 @@ func newCatalogServiceForTest(t *testing.T, db *gorm.DB, now time.Time) *Service
 	if _, err := keyring.Ensure(context.Background(), backupasset.KeyDomainCursorSigning); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := keyring.Ensure(context.Background(), backupasset.KeyDomainEntryIdentity); err != nil {
+		t.Fatal(err)
+	}
 	service, err := NewService(ServiceDependencies{
 		DB: db, Ownership: ownership, Cursor: NewCursorCodec(keyring, func() time.Time { return now }, 15*time.Minute),
 		Now: func() time.Time { return now }, ReconcileInterval: 5 * time.Minute,

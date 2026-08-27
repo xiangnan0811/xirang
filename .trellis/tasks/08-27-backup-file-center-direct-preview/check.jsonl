@@ -1,0 +1,10 @@
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Verify loading, stale, error, role/capability, preview eligibility, tests, and the full frontend gate."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Verify keyboard semantics, focus restoration, labels, live states, contrast, and axe coverage."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Check exact renderer/profile/MIME/range products, mapper fail-closed behavior, and URL/storage non-persistence."}
+{"file":".trellis/spec/frontend/backup-content-transport.md","reason":"Check that all delivery errors retain exact transport mapping and no asset or authorization detail leaks."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check strict payload validation, safe typed error mapping, standard envelopes, and absence of raw backend/provider details."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check route RBAC/ownership, sanitized projections, security negative tests, full backend gates, and generated API freshness."}
+{"file":".trellis/spec/backend/backup-content-transport.md","reason":"Verify preview intent does not bypass Issue/Serve transport, cookie, origin, grant, lease, audit, or budget enforcement."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Require dedicated-branch, PR, CI, release, and post-merge evidence before completion."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check the complete selection-to-ticket-to-content data flow and every cancellation and authority boundary."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Verify Swagger and current product documentation match the additive file-source and preview-intent contracts."}

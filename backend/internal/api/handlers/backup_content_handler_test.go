@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"xirang/backend/internal/api/docs"
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/content"
+	backuprepository "xirang/backend/internal/backupasset/repository"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 
@@ -20,6 +23,27 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+func TestBackupContentSwaggerRequiresTruncationFact(t *testing.T) {
+	var document struct {
+		Definitions map[string]struct {
+			Required []string `json:"required"`
+		} `json:"definitions"`
+	}
+	if err := json.Unmarshal([]byte(docs.SwaggerInfo.ReadDoc()), &document); err != nil {
+		t.Fatal(err)
+	}
+	schema, ok := document.Definitions["xirang_backend_internal_backupasset_content.TicketDescriptor"]
+	if !ok {
+		t.Fatal("ticket descriptor Swagger schema is missing")
+	}
+	for _, field := range schema.Required {
+		if field == "truncated" {
+			return
+		}
+	}
+	t.Fatalf("ticket descriptor Swagger required fields=%v; truncated is missing", schema.Required)
+}
 
 func TestBackupContentIssueStrictJSONUsesSafeSessionAndSetsOneCookie(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -83,8 +107,288 @@ func TestBackupContentIssueStrictJSONUsesSafeSessionAndSetsOneCookie(t *testing.
 	}
 	encoded, _ := json.Marshal(envelope.Data)
 	if !strings.Contains(string(encoded), `"schema_version":1`) || !strings.Contains(string(encoded), `"content_url"`) ||
+		!strings.Contains(string(encoded), `"truncated":false`) ||
 		strings.Contains(string(encoded), "Cookie") || strings.Contains(string(encoded), "Grant") {
 		t.Fatalf("ticket envelope=%s", encoded)
+	}
+}
+
+func TestBackupContentIssueAcceptsSafePreviewIntentAndReturnsResolvedProduct(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	now := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	fake := &backupContentServiceFake{ticket: backupContentHandlerTestTicket(
+		t, content.DeliveryPreview, content.RendererPlainText, content.ProfileTextV2,
+	)}
+	fake.ticket.Descriptor.ContentType = "text/plain; charset=utf-8"
+	handler := NewBackupContentHandler(fake, nil, nil, func(context.Context) (BackupContentHandlerConfig, error) {
+		return BackupContentHandlerConfig{TicketTimeout: 5 * time.Second}, nil
+	})
+	router := gin.New()
+	router.POST("/api/v1/recovery-points/:recoveryPointId/entries/:entryId/delivery-tickets", func(c *gin.Context) {
+		c.Set(middleware.CtxUserID, uint(42))
+		c.Set(middleware.CtxUsername, "operator")
+		c.Set(middleware.CtxRole, "operator")
+		c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{
+			JTI: strings.Repeat("f", 32), UserID: 42, Role: "operator", TokenVersion: 3, ExpiresAt: now,
+		})
+		c.Next()
+	}, handler.Issue)
+
+	pointID, entryID := strings.Repeat("a", 32), strings.Repeat("b", 64)
+	request := httptest.NewRequest(http.MethodPost,
+		"https://xirang.example/api/v1/recovery-points/"+pointID+"/entries/"+entryID+"/delivery-tickets",
+		strings.NewReader(`{"schema_version":1,"action":"preview","preview_intent":"safe_preview_v1"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || len(fake.issueRequests) != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, len(fake.issueRequests), response.Body.String())
+	}
+	issued := fake.issueRequests[0]
+	if issued.Action != content.DeliveryPreview || issued.PreviewIntent != content.PreviewIntentSafePreviewV1 ||
+		issued.Renderer != "" || issued.Profile != "" {
+		t.Fatalf("safe preview issue request=%+v", issued)
+	}
+	if fake.ticket.Descriptor.Renderer != content.RendererPlainText || fake.ticket.Descriptor.Profile != content.ProfileTextV2 {
+		t.Fatalf("resolved descriptor=%+v", fake.ticket.Descriptor)
+	}
+}
+
+func TestBackupContentIssueRejectsInvalidPreviewIntentUnionBeforeService(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	pointID, entryID := strings.Repeat("a", 32), strings.Repeat("b", 64)
+	path := "/api/v1/recovery-points/" + pointID + "/entries/" + entryID + "/delivery-tickets"
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "unknown intent", body: `{"schema_version":1,"action":"preview","preview_intent":"future_preview_v2"}`},
+		{name: "mixed intent and exact product", body: `{"schema_version":1,"action":"preview","preview_intent":"safe_preview_v1","renderer":"safe_raster","profile":"raster_v1"}`},
+		{name: "intent missing action", body: `{"schema_version":1,"preview_intent":"safe_preview_v1"}`},
+		{name: "exact preview missing profile", body: `{"schema_version":1,"action":"preview","renderer":"safe_raster"}`},
+		{name: "exact preview missing renderer", body: `{"schema_version":1,"action":"preview","profile":"raster_v1"}`},
+		{name: "download intent", body: `{"schema_version":1,"action":"download","preview_intent":"safe_preview_v1"}`},
+		{name: "intent with null renderer field", body: `{"schema_version":1,"action":"preview","preview_intent":"safe_preview_v1","renderer":null}`},
+		{name: "null intent with exact product", body: `{"schema_version":1,"action":"preview","preview_intent":null,"renderer":"safe_raster","profile":"raster_v1"}`},
+		{name: "extra field", body: `{"schema_version":1,"action":"preview","preview_intent":"safe_preview_v1","selection":"auto"}`},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fake := &backupContentServiceFake{}
+			handler := NewBackupContentHandler(fake, nil, nil, func(context.Context) (BackupContentHandlerConfig, error) {
+				return BackupContentHandlerConfig{TicketTimeout: 5 * time.Second}, nil
+			})
+			router := gin.New()
+			router.POST("/api/v1/recovery-points/:recoveryPointId/entries/:entryId/delivery-tickets", func(c *gin.Context) {
+				c.Set(middleware.CtxUserID, uint(42))
+				c.Set(middleware.CtxUsername, "operator")
+				c.Set(middleware.CtxRole, "operator")
+				c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{
+					JTI: strings.Repeat("f", 32), UserID: 42, Role: "operator", TokenVersion: 3,
+					ExpiresAt: time.Now().UTC().Add(time.Hour),
+				})
+				c.Next()
+			}, handler.Issue)
+			request := httptest.NewRequest(http.MethodPost, "https://xirang.example"+path, strings.NewReader(testCase.body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest || len(fake.issueRequests) != 0 || len(response.Header().Values("Set-Cookie")) != 0 {
+				t.Fatalf("status=%d calls=%d cookie=%v body=%s", response.Code, len(fake.issueRequests), response.Header().Values("Set-Cookie"), response.Body.String())
+			}
+		})
+	}
+}
+
+func TestBackupContentIssueMapsUnsafeRendererResolutionToTypedUnprocessableEntity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	pointID, entryID := strings.Repeat("a", 32), strings.Repeat("b", 64)
+	for _, issueErr := range []error{content.ErrRendererUnsupported, content.ErrMIMEConfusion} {
+		fake := &backupContentServiceFake{issueErr: issueErr}
+		handler := NewBackupContentHandler(fake, nil, nil, func(context.Context) (BackupContentHandlerConfig, error) {
+			return BackupContentHandlerConfig{TicketTimeout: 5 * time.Second}, nil
+		})
+		router := gin.New()
+		router.POST("/api/v1/recovery-points/:recoveryPointId/entries/:entryId/delivery-tickets", func(c *gin.Context) {
+			c.Set(middleware.CtxUserID, uint(42))
+			c.Set(middleware.CtxUsername, "operator")
+			c.Set(middleware.CtxRole, "operator")
+			c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{
+				JTI: strings.Repeat("f", 32), UserID: 42, Role: "operator", TokenVersion: 3,
+				ExpiresAt: time.Now().UTC().Add(time.Hour),
+			})
+			c.Next()
+		}, handler.Issue)
+		request := httptest.NewRequest(http.MethodPost,
+			"https://xirang.example/api/v1/recovery-points/"+pointID+"/entries/"+entryID+"/delivery-tickets",
+			strings.NewReader(`{"schema_version":1,"action":"preview","preview_intent":"safe_preview_v1"}`))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		var envelope struct {
+			Code int `json:"code"`
+			Data struct {
+				Reason struct {
+					Code   string            `json:"code"`
+					Params map[string]string `json:"params"`
+				} `json:"reason"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+			t.Fatalf("decode renderer error: %v body=%s", err, response.Body.String())
+		}
+		if response.Code != http.StatusUnprocessableEntity || envelope.Code != http.StatusUnprocessableEntity ||
+			envelope.Data.Reason.Code != "preview_renderer_unsupported" || envelope.Data.Reason.Params == nil ||
+			len(envelope.Data.Reason.Params) != 0 || len(response.Header().Values("Set-Cookie")) != 0 {
+			t.Fatalf("issueErr=%v status=%d envelope=%+v cookie=%v body=%s", issueErr, response.Code, envelope,
+				response.Header().Values("Set-Cookie"), response.Body.String())
+		}
+	}
+}
+
+func TestBackupContentIssueMapsTypedContentCapabilityWithoutPrivateEvidence(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, testCase := range []struct {
+		name   string
+		reason backupasset.CapabilityReason
+	}{
+		{name: "sequential read", reason: backupasset.CapabilityReason{Code: backupasset.CapabilitySequentialReadUnavailable}},
+		{name: "native range", reason: backupasset.CapabilityReason{Code: backupasset.CapabilityRangeUnavailable}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(response)
+			context.Set(middleware.RequestIDKey, "safe-correlation")
+			respondBackupContentIssueError(context, &content.CapabilityError{Reason: testCase.reason})
+
+			var envelope struct {
+				Code int `json:"code"`
+				Data struct {
+					Reason        backupasset.CapabilityReason `json:"reason"`
+					CorrelationID string                       `json:"correlation_id"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("decode capability error: %v body=%s", err, response.Body.String())
+			}
+			if response.Code != http.StatusNotImplemented || envelope.Code != http.StatusNotImplemented ||
+				envelope.Data.Reason.Code != testCase.reason.Code || envelope.Data.Reason.Params == nil ||
+				len(envelope.Data.Reason.Params) != 0 ||
+				envelope.Data.CorrelationID != "safe-correlation" ||
+				strings.Contains(response.Body.String(), "provider locator") || strings.Contains(response.Body.String(), "private/path") {
+				t.Fatalf("status=%d envelope=%+v body=%s", response.Code, envelope, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestBackupContentIssueCapabilityStatusAndCodeSetAreClosed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, testCase := range []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   backupasset.CapabilityCode
+	}{
+		{
+			name: "transient provider is retryable service unavailable",
+			err: &backuprepository.CapabilityError{
+				Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityProviderUnavailable},
+			},
+			wantStatus: http.StatusServiceUnavailable,
+			wantCode:   backupasset.CapabilityProviderUnavailable,
+		},
+		{
+			name: "out of scope restore reason is generic",
+			err: &backuprepository.CapabilityError{
+				Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityRestoreUnavailable},
+			},
+			wantStatus: http.StatusServiceUnavailable,
+		},
+		{
+			name: "repository reason with params is generic",
+			err: &backuprepository.CapabilityError{Reason: backupasset.CapabilityReason{
+				Code: backupasset.CapabilityProviderUnavailable, Params: map[string]string{"capability": "private-detail"},
+			}},
+			wantStatus: http.StatusServiceUnavailable,
+		},
+		{
+			name: "content reason with params is generic",
+			err: &content.CapabilityError{Reason: backupasset.CapabilityReason{
+				Code: backupasset.CapabilityRangeUnavailable, Params: map[string]string{"capability": "private-detail"},
+			}},
+			wantStatus: http.StatusServiceUnavailable,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(response)
+			context.Set(middleware.RequestIDKey, "safe-correlation")
+			respondBackupContentIssueError(context, testCase.err)
+
+			var envelope struct {
+				Code int `json:"code"`
+				Data *struct {
+					Reason        backupasset.CapabilityReason `json:"reason"`
+					CorrelationID string                       `json:"correlation_id"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("decode capability error: %v body=%s", err, response.Body.String())
+			}
+			if response.Code != testCase.wantStatus || envelope.Code != testCase.wantStatus {
+				t.Fatalf("status=%d envelope=%+v body=%s", response.Code, envelope, response.Body.String())
+			}
+			if testCase.wantCode == "" {
+				if envelope.Data != nil || strings.Contains(response.Body.String(), "private-detail") {
+					t.Fatalf("unexpected out-of-scope capability detail envelope=%+v body=%s", envelope, response.Body.String())
+				}
+				return
+			}
+			if envelope.Data == nil || envelope.Data.Reason.Code != testCase.wantCode ||
+				envelope.Data.CorrelationID != "safe-correlation" {
+				t.Fatalf("typed capability envelope=%+v body=%s", envelope, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestValidIssuedBackupContentTicketAcceptsOnlyResolvedExactSafePreviewProduct(t *testing.T) {
+	var payload backupContentTicketPayload
+	if err := json.Unmarshal([]byte(`{"schema_version":1,"action":"preview","preview_intent":"safe_preview_v1"}`), &payload); err != nil {
+		t.Fatal(err)
+	}
+	plain := backupContentHandlerTestTicket(t, content.DeliveryPreview, content.RendererPlainText, content.ProfileTextV2)
+	if !validIssuedBackupContentTicket(plain, payload, true) {
+		t.Fatalf("faithful plain-text ticket rejected: %+v", plain.Descriptor)
+	}
+	truncated := plain
+	truncated.Descriptor.Truncated = true
+	if !validIssuedBackupContentTicket(truncated, payload, true) {
+		t.Fatalf("truncated faithful text ticket rejected: %+v", truncated.Descriptor)
+	}
+	for _, mutate := range []func(*content.IssuedTicket){
+		func(ticket *content.IssuedTicket) {
+			ticket.Descriptor.Renderer = content.Renderer(content.PreviewIntentSafePreviewV1)
+		},
+		func(ticket *content.IssuedTicket) { ticket.Descriptor.Profile = "" },
+		func(ticket *content.IssuedTicket) { ticket.Descriptor.Range = content.RangeSingle },
+	} {
+		ticket := plain
+		mutate(&ticket)
+		if validIssuedBackupContentTicket(ticket, payload, true) {
+			t.Fatalf("unresolved or invalid safe-preview ticket accepted: %+v", ticket.Descriptor)
+		}
+	}
+	native := backupContentHandlerTestTicket(t, content.DeliveryPreview, content.RendererSafeRaster, content.ProfileRasterV1)
+	native.Descriptor.Truncated = true
+	if validIssuedBackupContentTicket(native, payload, true) {
+		t.Fatalf("truncated native ticket accepted: %+v", native.Descriptor)
+	}
+	native.Descriptor.Truncated = false
+	native.Descriptor.Range = content.RangeNone
+	if validIssuedBackupContentTicket(native, payload, true) {
+		t.Fatalf("safe native ticket without Range accepted: %+v", native.Descriptor)
 	}
 }
 
@@ -139,7 +443,7 @@ func TestBackupContentIssuePrivateNetworkHTTPEnforcesExactCrossPurposeStepUpMatr
 	if err != nil {
 		t.Fatal(err)
 	}
-	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared&_loc=UTC"
+	dsn := filepath.Join(t.TempDir(), "content-proof.db") + "?_loc=UTC"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatal(err)
@@ -270,7 +574,7 @@ func TestBackupContentPrivateNetworkHTTPRecoveryResultDownloadTicketUsesExactRes
 	if err != nil {
 		t.Fatal(err)
 	}
-	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared&_loc=UTC"
+	dsn := "file:" + handlerTestDBName(t) + "?mode=memory&cache=shared&_loc=UTC"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatal(err)
@@ -799,13 +1103,17 @@ func backupContentHandlerTestTicket(
 		t.Fatal(err)
 	}
 	mediaType := "image/png"
+	rangePolicy := content.RangeSingle
 	if action == content.DeliveryDownload {
 		mediaType = "application/octet-stream"
+	} else if renderer == content.RendererEscapedText || renderer == content.RendererPlainText || renderer == content.RendererMetadataHex {
+		mediaType = "text/plain; charset=utf-8"
+		rangePolicy = content.RangeNone
 	}
 	return content.IssuedTicket{
 		Descriptor: content.TicketDescriptor{
 			SchemaVersion: 1, ContentURL: cookie.Path, Action: action, Renderer: renderer, Profile: profile,
-			ContentType: mediaType, ContentLength: 1, ETag: `"test"`, Range: content.RangeSingle,
+			ContentType: mediaType, ContentLength: 1, ETag: `"test"`, Range: rangePolicy,
 			Classification: content.ClassificationNonSecret, ExpiresAt: cookie.Expires,
 			IdleExpiresAt: now.Add(30 * time.Second), FallbackActions: []content.DeliveryAction{},
 		},

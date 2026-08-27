@@ -21,7 +21,6 @@ import type { AssetRef, CatalogProjection } from "@/types/domain";
 
 import { AssetContextPanel } from "./asset-context-panel";
 import {
-  DEFAULT_BACKUP_ASSETS_PREFERENCES,
   type BackupAssetsPreferencesV1,
 } from "./backup-assets-preferences";
 import type { BackupAssetsRouteState } from "./backup-assets-route-state";
@@ -33,7 +32,7 @@ import { AssetInspector } from "./asset-inspector";
 import { AssetOverlays } from "./asset-overlays";
 import type { BackupAssetsOverlaySection } from "./use-backup-assets-state";
 import { AssetPreview } from "./asset-preview";
-import { selectBackupAssetPreviewProduct } from "./asset-preview-model";
+import { BackupFileSplitPane } from "./backup-file-split-pane";
 import {
   assetRefKey,
   createBackupAssetsRestorationRegistry,
@@ -89,7 +88,6 @@ type ExportReviewSnapshot = {
 
 export function BackupAssetsWorkspace({
   controller,
-  preferences = DEFAULT_BACKUP_ASSETS_PREFERENCES,
   processingRuntime,
   onRoutePatch,
   onReturnOverview,
@@ -100,6 +98,7 @@ export function BackupAssetsWorkspace({
   const [overlaySection, setOverlaySection] = useState<BackupAssetsOverlaySection | null>(null);
   const [exportReviewSnapshot, setExportReviewSnapshot] = useState<ExportReviewSnapshot | null>(null);
   const [recoveryDialogOpen, setRecoveryDialogOpen] = useState(false);
+  const [sequentialLayout, setSequentialLayout] = useState(false);
   const overlayTriggerRef = useRef<HTMLButtonElement | null>(null);
   const exportTriggerRef = useRef<HTMLElement | null>(null);
   const resultsRegionRef = useRef<HTMLElement | null>(null);
@@ -147,21 +146,13 @@ export function BackupAssetsWorkspace({
     controller.selectedRecoveryPoint?.catalog.status === "available"
       ? controller.selectedRecoveryPoint.catalog.value
       : null;
-  const previewProduct = selectedAsset ? selectBackupAssetPreviewProduct(selectedAsset) : null;
-  const previewNeedsRange =
-    previewProduct !== null &&
-    previewProduct.renderer !== "escaped_text" &&
-    previewProduct.renderer !== "metadata_hex";
   const canPreview = Boolean(
     processingRuntime?.token &&
       (processingRuntime.role === "admin" || processingRuntime.role === "operator") &&
       selectedCatalog?.permissions.list &&
       selectedCatalog.contentAvailability.available &&
       controller.selectedRecoveryPoint &&
-      previewProduct &&
-      (previewNeedsRange
-        ? controller.selectedRecoveryPoint.capabilities.openRange
-        : controller.selectedRecoveryPoint.capabilities.openSequential)
+      controller.selectedRecoveryPoint.capabilities.openSequential
   );
   const canDownload = Boolean(
     selectedCatalog?.permissions.download &&
@@ -280,7 +271,8 @@ export function BackupAssetsWorkspace({
     onRoutePatch({ entryId: undefined });
   };
 
-  if (controller.repositories.status === "blocked" || controller.repositories.status === "error") {
+  const repositoryLifecycleView = controller.state.route.view === "repositories";
+  if (repositoryLifecycleView && (controller.repositories.status === "blocked" || controller.repositories.status === "error")) {
     return (
       <div className="min-h-[24rem] py-4">
         <InlineAlert tone="warning">
@@ -303,10 +295,10 @@ export function BackupAssetsWorkspace({
       </div>
     );
   }
-  if (controller.repositories.status === "loading" || controller.repositories.status === "idle") {
+  if (repositoryLifecycleView && (controller.repositories.status === "loading" || controller.repositories.status === "idle")) {
     return <LoadingState title={t("backupAssets.context.loadingRepositories")} rows={6} />;
   }
-  if (controller.state.route.view === "repositories") {
+  if (repositoryLifecycleView) {
     const refreshLifecycle = () => {
       controller.actions.refreshRepositories();
       controller.actions.refreshRecoveryPoints();
@@ -337,9 +329,6 @@ export function BackupAssetsWorkspace({
 
   const contextPanel = (
     <>
-      {processingRuntime?.token && processingRuntime.role === "admin" ? (
-        <ProcessingCoverageDialog runtime={processingRuntime} />
-      ) : null}
       <AssetContextPanel
         route={controller.state.route}
         repositories={controller.repositories}
@@ -373,6 +362,7 @@ export function BackupAssetsWorkspace({
         favoriteState={favoriteMembershipComplete ? selectedFavorite?.state ?? null : undefined}
         favoritePending={favoritePending}
         canRecover={canRecoverRefs([selectedAsset.ref])}
+        focusTitle={sequentialLayout}
         onToggleFavorite={() => controller.actions.toggleFavorite(selectedAsset.ref, selectedAsset.name)}
         onRecover={() => openRecovery([selectedAsset.ref])}
         preview={
@@ -388,7 +378,8 @@ export function BackupAssetsWorkspace({
             )}
             archiveDownloadAllowed={Boolean(selectedCatalog?.permissions.download)}
             online={online}
-            onLoadPreview={controller.actions.loadPreview}
+            onLoadExactPreview={controller.actions.loadExactPreview}
+            onRetry={controller.actions.retryPreview}
             onRenew={controller.actions.renewPreview}
             onPrepareDownload={controller.actions.prepareDownload}
             onDetach={controller.actions.detachContent}
@@ -432,142 +423,121 @@ export function BackupAssetsWorkspace({
         }
       />
     ) : null;
-  const compactInspector = viewport !== "desktop" && inspector !== null;
+  const browser = (
+    <section
+      ref={resultsRegionRef}
+      tabIndex={-1}
+      aria-label={t("backupAssets.regions.results")}
+      className="flex min-w-0 flex-1 flex-col overflow-hidden"
+    >
+      {controller.semanticIssue ? (
+        <RecoveryPointBlockedState
+          issue={controller.semanticIssue}
+          recoveryPoint={controller.selectedRecoveryPoint}
+          onReturn={() => onRoutePatch({ recoveryPointId: undefined, parentEntryId: undefined, entryId: undefined })}
+        />
+      ) : controller.filterIssue ? (
+        <FilterBlockedState issue={controller.filterIssue} onClear={() => onRoutePatch(controller.filterIssue?.patch ?? {})} />
+      ) : (
+        <AssetBrowser
+          state={controller.state}
+          onRoutePatch={onRoutePatch}
+          onSearch={(query, scope) => {
+            controller.actions.setSearchDraft(query);
+            if (controller.state.route.view === "search" && controller.state.route.scope === scope) {
+              controller.actions.executeSearch(query);
+            } else {
+              onRoutePatch({ view: "search", scope });
+            }
+          }}
+          onSearchDraftChange={controller.actions.setSearchDraft}
+          onToggleSelection={controller.actions.toggleSelection}
+          onClearSelection={controller.actions.clearSelection}
+          canExport={canExport}
+          canRecover={canRecoverSelection}
+          onExport={() => {
+            const selection = exportSelection.map((item) => ({
+              ref: { recoveryPointId: item.ref.recoveryPointId, entryId: item.ref.entryId },
+              logicalBytes: Number.isSafeInteger(item.logicalBytes) && item.logicalBytes >= 0 ? item.logicalBytes : 0,
+            }));
+            exportTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            setExportReviewSnapshot({ selection });
+          }}
+          onRecover={() => openRecovery([...controller.state.selection.values()])}
+          onOpen={(row, position) => {
+            if (row.asset.entryType === "directory") {
+              onRoutePatch({ parentEntryId: row.ref.entryId, entryId: undefined });
+              return;
+            }
+            recordResultAnchor(row, position);
+            onRoutePatch({ entryId: row.ref.entryId });
+          }}
+          onLoadMore={controller.actions.loadMore}
+          restorationAnchor={restorationAnchor}
+          onRestorationComplete={handleRestorationComplete}
+        />
+      )}
+    </section>
+  );
 
   return (
     <>
       <div
         data-testid="backup-assets-workspace"
         data-viewport={viewport}
-        className={
-          viewport === "desktop"
-            ? "grid min-h-[36rem] overflow-hidden border-y border-border"
-            : viewport === "mobile"
-              ? "flex min-h-[20rem] flex-col overflow-hidden border-y border-border"
-              : "flex min-h-[36rem] flex-col overflow-hidden border-y border-border"
-        }
+        className={viewport === "mobile"
+          ? "flex min-h-[20rem] flex-col overflow-hidden border-b border-border"
+          : "flex min-h-[36rem] flex-col overflow-hidden border-b border-border"}
         style={{
           height:
             viewport === "mobile"
               ? "calc(100dvh - 20.5rem)"
               : "calc(100dvh - 14.25rem)",
-          ...(viewport === "desktop"
-            ? {
-                gridTemplateColumns:
-                  `minmax(224px, ${preferences.contextWidth}px) minmax(420px, 1fr) minmax(300px, ${preferences.inspectorWidth}px)`,
-              }
-            : {}),
         }}
       >
-      {compactInspector ? (
-        <section
-          data-testid="backup-assets-mobile-inspector"
-          aria-label={t("backupAssets.regions.inspector")}
-          className="flex min-h-0 flex-1 flex-col overflow-hidden"
-        >
-          {inspector}
-        </section>
-      ) : (
-        <>
-      {viewport === "desktop" ? (
-        <aside
-          aria-label={t("backupAssets.regions.context")}
-          className="min-w-0 overflow-y-auto border-r border-border"
-        >
-          {contextPanel}
-        </aside>
-      ) : (
-        <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-2">
+        <div className="flex min-h-11 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2">
           <ContextDialog triggerLabel={t("backupAssets.actions.openContext")} title={t("backupAssets.regions.context")}>
             {contextPanel}
           </ContextDialog>
+          {(["saved", "favorites", "tags", "recent"] as const).map((section) => (
+            <Button
+              key={section}
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="touch-target min-h-11 shrink-0 lg:min-h-8"
+              aria-label={`${t(`backupAssets.context.${section === "saved" ? "savedSearches" : section}`)} ${overlaySectionCount(controller, section)}`}
+              onClick={(event) => {
+                overlayTriggerRef.current = event.currentTarget;
+                setOverlaySection(section);
+                controller.actions.loadOverlaySection(section);
+              }}
+            >
+              {t(`backupAssets.context.${section === "saved" ? "savedSearches" : section}`)}
+            </Button>
+          ))}
+          {processingRuntime?.token && processingRuntime.role === "admin" ? (
+            <ProcessingCoverageDialog runtime={processingRuntime} />
+          ) : null}
           <span className="min-w-0 truncate px-2 text-xs text-muted-foreground">
-            {selectedRepository?.displayName ?? t("backupAssets.context.selectRepository")}
+            {controller.selectedRecoveryPoint?.producingNodeName ?? t("backupAssets.sources.title")}
           </span>
         </div>
-      )}
-
-      <section
-        ref={resultsRegionRef}
-        tabIndex={-1}
-        aria-label={t("backupAssets.regions.results")}
-        className="flex min-w-0 flex-1 flex-col overflow-hidden"
-      >
-        {controller.semanticIssue ? (
-          <RecoveryPointBlockedState
-            issue={controller.semanticIssue}
-            recoveryPoint={controller.selectedRecoveryPoint}
-            onReturn={() =>
-              onRoutePatch({
-                recoveryPointId: undefined,
-                parentEntryId: undefined,
-                entryId: undefined,
-              })
-            }
-          />
-        ) : controller.filterIssue ? (
-          <FilterBlockedState
-            issue={controller.filterIssue}
-            onClear={() => onRoutePatch(controller.filterIssue?.patch ?? {})}
-          />
-        ) : (
-          <AssetBrowser
-            state={controller.state}
-            onRoutePatch={onRoutePatch}
-            onSearch={(query, scope) => {
-              controller.actions.setSearchDraft(query);
-              if (controller.state.route.view === "search" && controller.state.route.scope === scope) {
-                controller.actions.executeSearch(query);
-              } else {
-                onRoutePatch({ view: "search", scope });
-              }
-            }}
-            onSearchDraftChange={controller.actions.setSearchDraft}
-            onToggleSelection={controller.actions.toggleSelection}
-            onClearSelection={controller.actions.clearSelection}
-            canExport={canExport}
-            canRecover={canRecoverSelection}
-            onExport={() => {
-              const selection = exportSelection.map((item) => ({
-                ref: {
-                  recoveryPointId: item.ref.recoveryPointId,
-                  entryId: item.ref.entryId,
-                },
-                logicalBytes: Number.isSafeInteger(item.logicalBytes) && item.logicalBytes >= 0
-                  ? item.logicalBytes
-                  : 0,
-              }));
-              exportTriggerRef.current = document.activeElement instanceof HTMLElement
-                ? document.activeElement
-                : null;
-              setExportReviewSnapshot({ selection });
-            }}
-            onRecover={() => openRecovery([...controller.state.selection.values()])}
-            onOpen={(row, position) => {
-              if (row.asset.entryType === "directory") {
-                onRoutePatch({ parentEntryId: row.ref.entryId, entryId: undefined });
-                return;
-              }
-              recordResultAnchor(row, position);
-              onRoutePatch({ entryId: row.ref.entryId });
-            }}
-            onLoadMore={controller.actions.loadMore}
-            restorationAnchor={restorationAnchor}
-            onRestorationComplete={handleRestorationComplete}
-          />
-        )}
-      </section>
-
-      {viewport === "desktop" ? (
-        <aside
-          aria-label={t("backupAssets.regions.inspector")}
-          className="min-w-0 overflow-y-auto border-l border-border"
-        >
-          {inspector ?? <WorkspacePendingState icon={PanelRight} text={t("backupAssets.states.selectAsset")} />}
-        </aside>
-      ) : null}
-        </>
-      )}
+        <BackupFileSplitPane
+          browser={browser}
+          preview={
+            <aside
+              aria-label={t("backupAssets.regions.inspector")}
+              data-testid={viewport === "mobile" ? "backup-assets-mobile-inspector" : undefined}
+              className="flex h-full min-h-0 flex-col overflow-hidden"
+            >
+              {inspector ?? <WorkspacePendingState icon={PanelRight} text={t("backupAssets.states.selectAsset")} />}
+            </aside>
+          }
+          previewActive={inspector !== null}
+          onBack={closeInspector}
+          onSequentialChange={setSequentialLayout}
+        />
       </div>
       <AssetOverlays
         section={overlaySection}
@@ -670,7 +640,7 @@ function ProcessingCoverageDialog({ runtime }: { runtime: BackupAssetsProcessing
     <div className="flex min-h-11 items-center border-b border-border px-2">
       <Dialog>
         <DialogTrigger asChild>
-          <Button type="button" variant="ghost" size="sm">
+          <Button type="button" variant="ghost" size="sm" className="touch-target min-h-11 lg:min-h-8">
             <PanelRight className="size-4" aria-hidden />
             {title}
           </Button>
@@ -713,6 +683,11 @@ function selectedAssetRef(controller: BackupAssetsController) {
   return recoveryPointId && entryId ? { recoveryPointId, entryId } : null;
 }
 
+function overlaySectionCount(controller: BackupAssetsController, section: BackupAssetsOverlaySection): number {
+  if (section === "saved") return controller.overlays.savedSearches.items.length;
+  return controller.overlays[section].items.length;
+}
+
 function restorationContextKey(route: BackupAssetsRouteState): string | null {
   const parts = [route.repositoryId, route.recoveryPointId, route.parentEntryId, route.savedSearchId].filter(
     (value): value is string => value !== undefined
@@ -732,7 +707,7 @@ function ContextDialog({
   return (
     <Dialog>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="sm" aria-label={triggerLabel}>
+        <Button variant="ghost" size="sm" className="touch-target min-h-11 lg:min-h-8" aria-label={triggerLabel}>
           <FolderTree className="size-4" aria-hidden />
           <span className="hidden sm:inline">{triggerLabel}</span>
         </Button>
@@ -786,7 +761,7 @@ function RecoveryPointBlockedState({
         </div>
       ) : null}
       <div>
-        <Button type="button" variant="outline" size="sm" onClick={onReturn}>
+        <Button type="button" variant="outline" size="sm" className="touch-target" onClick={onReturn}>
           {t("backupAssets.actions.returnRepositoryContext")}
         </Button>
       </div>
@@ -806,7 +781,7 @@ function FilterBlockedState({
     <div className="flex min-h-56 flex-1 flex-col justify-center gap-3 p-4">
       <InlineAlert tone="warning">{t(issue.translationKey)}</InlineAlert>
       <div>
-        <Button type="button" variant="outline" size="sm" onClick={onClear}>
+        <Button type="button" variant="outline" size="sm" className="touch-target" onClick={onClear}>
           {t("backupAssets.actions.clearUnavailableFilter")}
         </Button>
       </div>

@@ -133,7 +133,8 @@ function controller(overrides: Partial<BackupAssetsController> = {}): BackupAsse
       assignTag: vi.fn(),
       clearRecent: vi.fn(),
       compareRecoveryPoints: vi.fn(),
-      loadPreview: vi.fn(),
+      loadExactPreview: vi.fn(),
+      retryPreview: vi.fn(),
       renewPreview: vi.fn(),
       prepareDownload: vi.fn(),
       detachContent: vi.fn(),
@@ -145,6 +146,23 @@ function controller(overrides: Partial<BackupAssetsController> = {}): BackupAsse
 function setViewport(width: number) {
   Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
   fireEvent(window, new Event("resize"));
+}
+
+function setElementRect(width: number) {
+  Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
+    configurable: true,
+    value: () => ({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: width,
+      bottom: 480,
+      width,
+      height: 480,
+      toJSON: () => ({}),
+    }) as DOMRect,
+  });
 }
 
 function productionListOnlyRecoveryPoint(overrides: {
@@ -218,14 +236,14 @@ function renderPreviewEligibility(options: {
     coverage: "complete",
     authoritativeEmpty: false,
   };
-  const loadPreview = vi.fn();
+  const loadExactPreview = vi.fn();
   render(
     <BackupAssetsWorkspace
       controller={controller({
         state,
         selectedRecoveryPoint: point,
         selectedEntry: { status: "ready", value: asset },
-        actions: { ...controller().actions, loadPreview },
+        actions: { ...controller().actions, loadExactPreview },
       })}
       processingRuntime={{
         token: options.token,
@@ -236,25 +254,12 @@ function renderPreviewEligibility(options: {
       onReturnOverview={vi.fn()}
     />
   );
-  return { asset, loadPreview };
+  return { asset, loadExactPreview };
 }
 
 beforeAll(() => {
+  setElementRect(800);
   Object.defineProperties(HTMLElement.prototype, {
-    getBoundingClientRect: {
-      configurable: true,
-      value: () => ({
-        x: 0,
-        y: 0,
-        top: 0,
-        left: 0,
-        right: 800,
-        bottom: 480,
-        width: 800,
-        height: 480,
-        toJSON: () => ({}),
-      }) as DOMRect,
-    },
     offsetHeight: { configurable: true, get: () => 480 },
     offsetWidth: { configurable: true, get: () => 800 },
     clientHeight: { configurable: true, get: () => 480 },
@@ -264,6 +269,7 @@ beforeAll(() => {
 
 afterEach(() => {
   exportPanelGate.reset();
+  setElementRect(800);
   Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
 });
 
@@ -574,24 +580,46 @@ describe("BackupAssetsWorkspace", () => {
     expect(screen.queryByRole("button", { name: /Processing coverage|处理覆盖/ })).not.toBeInTheDocument();
   });
 
-  it("renders stable unframed three-track desktop regions", () => {
+  it("renders the canonical browser-preview shell with support context kept optional", () => {
     setViewport(1440);
+    setElementRect(1440);
     const { container } = render(
       <BackupAssetsWorkspace controller={controller()} onRoutePatch={vi.fn()} onReturnOverview={vi.fn()} />
     );
 
     expect(screen.getByTestId("backup-assets-workspace")).toHaveAttribute("data-viewport", "desktop");
-    expect(screen.getByRole("complementary", { name: /Asset context|资产上下文/ })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: /Asset results|资产结果/ })).toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: /Asset inspector|资产检查器/ })).toBeInTheDocument();
-    expect(screen.getByTestId("backup-assets-workspace")).toHaveStyle({
-      gridTemplateColumns: "minmax(224px, 288px) minmax(420px, 1fr) minmax(300px, 416px)",
-    });
+    expect(screen.getByRole("separator")).toHaveAttribute("aria-valuenow", "42");
+    expect(screen.getByRole("button", { name: /Open asset context|打开资产上下文/ })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Repository|仓库/)).not.toBeInTheDocument();
     expect(container.querySelectorAll('[data-component="data-surface"], [data-component="card"]')).toHaveLength(0);
   });
 
-  it("applies validated desktop panel-width preferences to stable tracks", () => {
+  it("keeps the mobile context toolbar controls at 44px touch targets", () => {
+    setViewport(390);
+    render(
+      <BackupAssetsWorkspace
+        controller={controller()}
+        processingRuntime={{ token: "admin-token", role: "admin", ensureStepUpProof: vi.fn() }}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+
+    const touchTargets = [
+      screen.getByRole("button", { name: /Open asset context|打开资产上下文/ }),
+      screen.getByRole("button", { name: /Saved searches|保存搜索/ }),
+      screen.getByRole("button", { name: /Favorites|收藏/ }),
+      screen.getByRole("button", { name: /Tags|标签/ }),
+      screen.getByRole("button", { name: /Recent|最近/ }),
+      screen.getByRole("button", { name: /Processing coverage|处理覆盖/ }),
+    ];
+    for (const target of touchTargets) expect(target).toHaveClass("min-h-11", "touch-target");
+  });
+
+  it("does not persist presentation widths through legacy workspace preferences", () => {
     setViewport(1440);
+    setElementRect(1440);
 
     render(
       <BackupAssetsWorkspace
@@ -602,13 +630,11 @@ describe("BackupAssetsWorkspace", () => {
       />
     );
 
-    expect(screen.getByTestId("backup-assets-workspace")).toHaveStyle({
-      gridTemplateColumns: "minmax(224px, 320px) minmax(420px, 1fr) minmax(300px, 480px)",
-    });
+    expect(screen.getByRole("separator")).toHaveAttribute("aria-valuenow", "42");
   });
 
   it("uses the sequential layout before the AppShell can contain all desktop track minima", () => {
-    setViewport(1200);
+    setViewport(700);
 
     render(
       <BackupAssetsWorkspace controller={controller()} onRoutePatch={vi.fn()} onReturnOverview={vi.fn()} />
@@ -751,6 +777,9 @@ describe("BackupAssetsWorkspace", () => {
       <MemoryRouter>
         <BackupAssetsWorkspace
           controller={controller({
+            state: createInitialBackupAssetsState({
+              ...defaultBackupAssetsRouteState("data"), view: "repositories", repositoryId: repository.id,
+            }),
             repositories: {
               status: "blocked",
               items: [],
@@ -782,6 +811,9 @@ describe("BackupAssetsWorkspace", () => {
       <MemoryRouter>
         <BackupAssetsWorkspace
           controller={controller({
+            state: createInitialBackupAssetsState({
+              ...defaultBackupAssetsRouteState("data"), view: "repositories", repositoryId: repository.id,
+            }),
             repositories: {
               status: "blocked",
               items: [],
@@ -811,6 +843,9 @@ describe("BackupAssetsWorkspace", () => {
     render(
       <BackupAssetsWorkspace
         controller={controller({
+          state: createInitialBackupAssetsState({
+            ...defaultBackupAssetsRouteState("data"), view: "repositories", repositoryId: repository.id,
+          }),
           repositories: {
             status: "error",
             items: [],
@@ -829,6 +864,32 @@ describe("BackupAssetsWorkspace", () => {
     );
     expect(screen.getByRole("alert")).toHaveTextContent(/could not be loaded|无法加载/);
     expect(screen.queryByRole("region", { name: /Repository management|仓库管理/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps Files browsing usable when optional repository context fails to load", () => {
+    setViewport(1440);
+    render(
+      <BackupAssetsWorkspace
+        controller={controller({
+          repositories: {
+            status: "error",
+            items: [],
+            nextCursor: null,
+            error: {
+              code: "unknown",
+              translationKey: "backupAssets.errors.unknown",
+              retryable: true,
+              action: "retry",
+            },
+          },
+        })}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: /Asset results|资产结果/ })).toBeInTheDocument();
+    expect(screen.getByTestId("backup-assets-workspace")).toBeInTheDocument();
   });
 
   it("renders an exact recovery-point blocked state without mounting asset controls", async () => {
@@ -939,7 +1000,8 @@ describe("BackupAssetsWorkspace", () => {
             assignTag: vi.fn(),
             clearRecent: vi.fn(),
             compareRecoveryPoints: vi.fn(),
-            loadPreview: vi.fn(),
+            loadExactPreview: vi.fn(),
+            retryPreview: vi.fn(),
             renewPreview: vi.fn(),
             prepareDownload: vi.fn(),
             detachContent: vi.fn(),
@@ -1163,22 +1225,21 @@ describe("BackupAssetsWorkspace", () => {
   });
 
   it.each(["admin", "operator"] as const)(
-    "allows %s to load a sequential native preview from a list-only Catalog",
-    async (role) => {
-      const user = userEvent.setup();
-      const { asset, loadPreview } = renderPreviewEligibility({
+    "allows %s ordinary automatic preview from a list-only Catalog without exposing exact controls",
+    (role) => {
+      const { loadExactPreview } = renderPreviewEligibility({
         token: `${role}-token`,
         role,
       });
 
-      await user.click(screen.getByRole("button", { name: /Load preview|加载预览/ }));
-      expect(loadPreview).toHaveBeenCalledWith(asset);
+      expect(screen.getByText(/Preview has not been loaded|尚未加载预览/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Load preview|加载预览/ })).not.toBeInTheDocument();
+      expect(loadExactPreview).not.toHaveBeenCalled();
     }
   );
 
-  it("uses Range capability for a range-native renderer without requiring sequential read", async () => {
-    const user = userEvent.setup();
-    const { asset, loadPreview } = renderPreviewEligibility({
+  it("fails closed when safe automatic preview lacks sequential-read capability", () => {
+    const { loadExactPreview } = renderPreviewEligibility({
       token: "operator-token",
       role: "operator",
       recoveryPoint: productionListOnlyRecoveryPoint({
@@ -1188,8 +1249,8 @@ describe("BackupAssetsWorkspace", () => {
       asset: { mimeType: "image/png" },
     });
 
-    await user.click(screen.getByRole("button", { name: /Load preview|加载预览/ }));
-    expect(loadPreview).toHaveBeenCalledWith(asset);
+    expect(screen.getByText(/Content actions are unavailable|内容操作不可用/)).toBeInTheDocument();
+    expect(loadExactPreview).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1236,13 +1297,6 @@ describe("BackupAssetsWorkspace", () => {
       asset: {},
     },
     {
-      name: "Range capability unavailable for safe raster",
-      token: "admin-token",
-      role: "admin" as const,
-      point: productionListOnlyRecoveryPoint({ openSequential: true, openRange: false }),
-      asset: { mimeType: "image/png" },
-    },
-    {
       name: "selected recovery point missing",
       token: "admin-token",
       role: "admin" as const,
@@ -1250,7 +1304,7 @@ describe("BackupAssetsWorkspace", () => {
       asset: {},
     },
   ])("hides native preview and does not request a ticket when $name", ({ token, role, point, asset }) => {
-    const { loadPreview } = renderPreviewEligibility({
+    const { loadExactPreview } = renderPreviewEligibility({
       token,
       role,
       recoveryPoint: point,
@@ -1258,16 +1312,15 @@ describe("BackupAssetsWorkspace", () => {
     });
 
     expect(screen.queryByRole("button", { name: /Load preview|加载预览/ })).not.toBeInTheDocument();
-    expect(loadPreview).not.toHaveBeenCalled();
+    expect(loadExactPreview).not.toHaveBeenCalled();
   });
 
   it.each([
-    { layout: "list" as const, containerRole: "listbox", itemRole: "option" },
-    { layout: "grid" as const, containerRole: "grid", itemRole: "gridcell" },
+    { layout: "list" as const, containerRole: "list" },
+    { layout: "grid" as const, containerRole: "grid" },
   ])("restores the exact $layout result focus and virtual scroll after closing the mobile inspector", async ({
     layout,
     containerRole,
-    itemRole,
   }) => {
     setViewport(390);
     const user = userEvent.setup();
@@ -1309,11 +1362,9 @@ describe("BackupAssetsWorkspace", () => {
     const { rerender } = render(renderWorkspace(false));
     const resultContainer = await screen.findByRole(containerRole);
     resultContainer.scrollTop = 88;
-    const target = screen.getByTitle(rows[2].asset.name).closest(`[role="${itemRole}"]`);
-    expect(target).not.toBeNull();
-    if (!(target instanceof HTMLElement)) return;
+    const target = screen.getByRole("button", { name: new RegExp(rows[2].asset.name) });
 
-    await user.dblClick(target);
+    await user.click(target);
     expect(onRoutePatch).toHaveBeenCalledWith({ entryId: rows[2].ref.entryId });
 
     rerender(renderWorkspace(true));
@@ -1323,11 +1374,64 @@ describe("BackupAssetsWorkspace", () => {
 
     const restoredResultContainer = await screen.findByRole(containerRole);
     await waitFor(() => expect(restoredResultContainer.scrollTop).toBe(88));
-    const restoredTarget = screen.getByTitle(rows[2].asset.name).closest(`[role="${itemRole}"]`);
+    const restoredTarget = screen.getByRole("button", { name: new RegExp(rows[2].asset.name) });
     await waitFor(() => expect(restoredTarget).toHaveFocus());
   });
 
-  it("binds preview and download commands to their independent eligibility paths and detaches on unmount", async () => {
+  it("falls back to the mobile results container when the originating result was deleted", async () => {
+    setViewport(390);
+    const user = userEvent.setup();
+    const rows = buildAssetRows(24);
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      layout: "list" as const,
+    };
+    const onRoutePatch = vi.fn();
+    const renderWorkspace = (selected: boolean, resultRows: typeof rows) => {
+      const state = createInitialBackupAssetsState(
+        selected ? { ...route, entryId: rows[2].ref.entryId } : route,
+      );
+      state.result = {
+        status: "ready",
+        requestKey: "deleted-mobile-origin",
+        generation: 1,
+        rows: resultRows,
+        nextCursor: null,
+        coverage: "complete",
+        authoritativeEmpty: false,
+      };
+      return (
+        <BackupAssetsWorkspace
+          controller={controller({
+            state,
+            selectedRecoveryPoint: recoveryPoint,
+            selectedEntry: selected ? { status: "ready", value: rows[2].asset } : { status: "idle", value: null },
+          })}
+          onRoutePatch={onRoutePatch}
+          onReturnOverview={vi.fn()}
+        />
+      );
+    };
+
+    const rendered = render(renderWorkspace(false, rows));
+    const results = await screen.findByRole("list");
+    results.scrollTop = 88;
+    await user.click(screen.getByRole("button", { name: new RegExp(rows[2].asset.name) }));
+    rendered.rerender(renderWorkspace(true, rows));
+    await waitFor(() => expect(screen.getByRole("heading", { name: rows[2].asset.name })).toHaveFocus());
+    await user.click(screen.getByRole("button", { name: /Close asset inspector|关闭资产检查器/ }));
+
+    const remainingRows = rows.filter((row) => row.ref.entryId !== rows[2].ref.entryId);
+    rendered.rerender(renderWorkspace(false, remainingRows));
+    const restoredResults = await screen.findByRole("list");
+    await waitFor(() => expect(restoredResults.scrollTop).toBe(88));
+    await waitFor(() => expect(restoredResults).toHaveFocus());
+    expect(screen.queryByRole("button", { name: new RegExp(rows[2].asset.name) })).not.toBeInTheDocument();
+  });
+
+  it("keeps ordinary preview away from exact actions while preserving download and detach", async () => {
     setViewport(1440);
     const user = userEvent.setup();
     const row = buildAssetRows(1)[0];
@@ -1337,7 +1441,7 @@ describe("BackupAssetsWorkspace", () => {
       recoveryPointId: recoveryPoint.id,
       entryId: row.ref.entryId,
     };
-    const loadPreview = vi.fn();
+    const loadExactPreview = vi.fn();
     const prepareDownload = vi.fn();
     const detachContent = vi.fn();
     const { unmount } = render(
@@ -1348,7 +1452,7 @@ describe("BackupAssetsWorkspace", () => {
           selectedEntry: { status: "ready", value: row.asset },
           actions: {
             ...controller().actions,
-            loadPreview,
+            loadExactPreview,
             prepareDownload,
             detachContent,
           },
@@ -1359,12 +1463,12 @@ describe("BackupAssetsWorkspace", () => {
       />
     );
 
-    await user.click(screen.getByRole("button", { name: /Load preview|加载预览/ }));
+    expect(screen.queryByRole("button", { name: /Load preview|加载预览/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Prepare download|准备下载/ }));
-    expect(loadPreview).toHaveBeenCalledWith(row.asset);
+    expect(loadExactPreview).not.toHaveBeenCalled();
     expect(prepareDownload).toHaveBeenCalledWith(row.asset);
     unmount();
-    expect(detachContent).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(detachContent).toHaveBeenCalledTimes(1));
   });
 
   it("passes live browser connectivity to the archive fallback panel", async () => {

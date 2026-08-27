@@ -94,6 +94,10 @@ func respondPayloadTooLarge(c *gin.Context, msg string) {
 	c.JSON(http.StatusRequestEntityTooLarge, Response{Code: http.StatusRequestEntityTooLarge, Message: msg, Data: nil})
 }
 
+func respondUnprocessableEntityData(c *gin.Context, msg string, data interface{}) {
+	c.JSON(http.StatusUnprocessableEntity, Response{Code: http.StatusUnprocessableEntity, Message: msg, Data: data})
+}
+
 func respondBadGateway(c *gin.Context, msg string) {
 	c.JSON(http.StatusBadGateway, Response{Code: http.StatusBadGateway, Message: msg, Data: nil})
 }
@@ -126,8 +130,13 @@ func respondNotImplemented(c *gin.Context, msg string) {
 }
 
 type backupCapabilityErrorData struct {
-	Reason        backupasset.CapabilityReason `json:"reason"`
-	CorrelationID string                       `json:"correlation_id,omitempty"`
+	Reason        backupCapabilityErrorReason `json:"reason"`
+	CorrelationID string                      `json:"correlation_id,omitempty"`
+}
+
+type backupCapabilityErrorReason struct {
+	Code   backupasset.CapabilityCode `json:"code"`
+	Params map[string]string          `json:"params"`
 }
 
 func respondBackupCapabilityError(c *gin.Context, status int, reason backupasset.CapabilityReason, correlationID string) {
@@ -142,7 +151,17 @@ func respondBackupCapabilityError(c *gin.Context, status int, reason backupasset
 			message = "备份资产功能未启用"
 		}
 	}
-	c.JSON(status, Response{Code: status, Message: message, Data: backupCapabilityErrorData{Reason: reason, CorrelationID: correlationID}})
+	params := reason.Params
+	if params == nil {
+		params = map[string]string{}
+	}
+	c.JSON(status, Response{Code: status, Message: message, Data: backupCapabilityErrorData{
+		Reason: backupCapabilityErrorReason{
+			Code:   reason.Code,
+			Params: params,
+		},
+		CorrelationID: correlationID,
+	}})
 }
 
 func respondInternalError(c *gin.Context, err error) {

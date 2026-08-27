@@ -35,6 +35,37 @@ describe("AssetInspector", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: rows[1].asset.name })).toHaveFocus());
   });
 
+  it("preserves browser focus when heading focus is disabled for a split desktop layout", async () => {
+    const rows = buildAssetRows(2);
+    const inspector = (asset: (typeof rows)[number]["asset"]) => (
+      <>
+        <button type="button">Origin row</button>
+        <AssetInspector
+          asset={asset}
+          recoveryPoint={recoveryPoint}
+          activeTab="preview"
+          preview={null}
+          evidence={null}
+          diff={null}
+          focusTitle={false}
+          onTabChange={vi.fn()}
+          onPrevious={vi.fn()}
+          onNext={vi.fn()}
+          hasPrevious={false}
+          hasNext={false}
+          onClose={vi.fn()}
+        />
+      </>
+    );
+    const { rerender } = render(inspector(rows[0].asset));
+    const origin = screen.getByRole("button", { name: "Origin row" });
+    origin.focus();
+
+    rerender(inspector(rows[1].asset));
+
+    await waitFor(() => expect(origin).toHaveFocus());
+  });
+
   it("uses route-owned tabs and supports tab keyboard movement", async () => {
     const user = userEvent.setup();
     const onTabChange = vi.fn();
@@ -98,6 +129,36 @@ describe("AssetInspector", () => {
     expect(screen.getByRole("button", { name: /Previous asset|上一个资产/ })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: /Next asset|下一个资产/ }));
     expect(onNext).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the mobile inspector navigation and tabs at 44px touch targets", () => {
+    render(
+      <AssetInspector
+        asset={buildAssetRows(1)[0].asset}
+        recoveryPoint={recoveryPoint}
+        activeTab="preview"
+        preview={null}
+        evidence={null}
+        diff={null}
+        onTabChange={vi.fn()}
+        onPrevious={vi.fn()}
+        onNext={vi.fn()}
+        hasPrevious={false}
+        hasNext={false}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const headerControls = [
+      screen.getByRole("button", { name: /Previous asset|上一个资产/ }),
+      screen.getByRole("button", { name: /Next asset|下一个资产/ }),
+      screen.getByRole("button", { name: /Close asset inspector|关闭资产检查器/ }),
+    ];
+    expect(headerControls.every((control) => control.classList.contains("size-11"))).toBe(true);
+    expect(headerControls.every((control) => control.classList.contains("touch-target"))).toBe(true);
+    expect(screen.getByRole("tablist")).toHaveClass("min-h-11", "lg:min-h-10");
+    expect(screen.getAllByRole("tab").every((tab) => tab.classList.contains("min-h-11"))).toBe(true);
+    expect(screen.getAllByRole("tab").every((tab) => tab.classList.contains("touch-target"))).toBe(true);
   });
 
   it("exposes a favorite toggle only after permission and complete membership are known", async () => {

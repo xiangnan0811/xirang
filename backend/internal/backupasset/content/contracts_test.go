@@ -113,6 +113,11 @@ func TestDeliveryProductClosesRendererAndProofPurposes(t *testing.T) {
 		valid bool
 	}{
 		{name: "non secret preview", edit: func(v DeliveryProduct) DeliveryProduct { return v }, valid: true},
+		{name: "faithful plain text preview", edit: func(v DeliveryProduct) DeliveryProduct {
+			v.Renderer = RendererPlainText
+			v.Profile = ProfileTextV2
+			return v
+		}, valid: true},
 		{name: "secret exact proof", edit: func(v DeliveryProduct) DeliveryProduct {
 			v.Classification = ClassificationSecret
 			v.Proof = secretProof

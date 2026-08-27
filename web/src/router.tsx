@@ -89,7 +89,7 @@ export const AppRouter = createBrowserRouter([
         children: [
           {
             index: true,
-            element: <Navigate to="overview" replace />
+            element: <Navigate to="data" replace />
           },
           {
             path: "overview",

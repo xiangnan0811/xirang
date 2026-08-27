@@ -541,7 +541,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	}
 	catalogService, err := catalog.NewService(catalog.ServiceDependencies{
 		DB: dependencies.DB, Ownership: catalogOwnership,
-		Cursor: catalog.NewCursorCodec(keyring, dependencies.Now, runtimeProviderCursorTTL), Now: dependencies.Now,
+		Cursor: catalog.NewCursorCodec(keyring, dependencies.Now, runtimeProviderCursorTTL), IdentityKeys: keyring, Now: dependencies.Now,
 		ReconcileInterval: catalogConfig.ReconcileInterval, FeatureEnabled: liveFeature,
 	})
 	if err != nil {

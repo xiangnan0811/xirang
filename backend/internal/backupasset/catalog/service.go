@@ -23,6 +23,7 @@ type ServiceDependencies struct {
 	DB                *gorm.DB
 	Ownership         *Ownership
 	Cursor            *CursorCodec
+	IdentityKeys      IdentityKeySource
 	Now               func() time.Time
 	ReconcileInterval time.Duration
 	FeatureEnabled    func() (bool, error)
@@ -32,6 +33,7 @@ type Service struct {
 	db                *gorm.DB
 	ownership         *Ownership
 	cursor            *CursorCodec
+	identityKeys      IdentityKeySource
 	now               func() time.Time
 	reconcileInterval time.Duration
 	featureEnabled    func() (bool, error)
@@ -84,15 +86,18 @@ type recoveryPointSortControl struct {
 }
 
 func NewService(dependencies ServiceDependencies) (*Service, error) {
+	if dependencies.IdentityKeys == nil && dependencies.Cursor != nil {
+		dependencies.IdentityKeys = dependencies.Cursor.keys
+	}
 	if dependencies.DB == nil || dependencies.Ownership == nil || dependencies.Cursor == nil ||
-		dependencies.ReconcileInterval <= 0 {
+		dependencies.IdentityKeys == nil || dependencies.ReconcileInterval <= 0 {
 		return nil, fmt.Errorf("%w: invalid Catalog service dependencies", backupasset.ErrInvalidState)
 	}
 	if dependencies.Now == nil {
 		dependencies.Now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Service{
-		db: dependencies.DB, ownership: dependencies.Ownership, cursor: dependencies.Cursor,
+		db: dependencies.DB, ownership: dependencies.Ownership, cursor: dependencies.Cursor, identityKeys: dependencies.IdentityKeys,
 		now: dependencies.Now, reconcileInterval: dependencies.ReconcileInterval,
 		featureEnabled: dependencies.FeatureEnabled,
 	}, nil

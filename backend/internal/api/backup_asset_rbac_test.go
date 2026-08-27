@@ -259,6 +259,7 @@ func TestCatalogRoutesRequireAssetListPermissionBeforeFeatureGate(t *testing.T) 
 	const pointID = "11111111111111111111111111111111"
 	const comparePointID = "22222222222222222222222222222222"
 	const entryID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const backupSetID = "33333333333333333333333333333333"
 	routes := []struct {
 		name   string
 		method string
@@ -272,6 +273,10 @@ func TestCatalogRoutesRequireAssetListPermissionBeforeFeatureGate(t *testing.T) 
 		{"entry list", http.MethodGet, "/api/v1/recovery-points/" + pointID + "/entries", ""},
 		{"entry detail", http.MethodGet, "/api/v1/recovery-points/" + pointID + "/entries/" + entryID, ""},
 		{"exact diff", http.MethodPost, "/api/v1/recovery-point-diffs", `{"base_recovery_point_id":"` + pointID + `","compare_recovery_point_id":"` + comparePointID + `"}`},
+		{"file-source nodes", http.MethodGet, "/api/v1/backup-file-sources/nodes", ""},
+		{"file-source sets", http.MethodGet, "/api/v1/backup-file-sources/nodes/1/sets", ""},
+		{"file-source versions", http.MethodGet, "/api/v1/backup-file-sources/sets/" + backupSetID + "/versions", ""},
+		{"file-source recovery point resolver", http.MethodGet, "/api/v1/backup-file-sources/recovery-points/" + pointID + "/source", ""},
 	}
 
 	for _, route := range routes {

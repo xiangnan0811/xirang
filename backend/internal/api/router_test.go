@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -37,11 +38,17 @@ func (service *routerBackupContentSchemeService) Issue(
 	if err != nil {
 		return content.IssuedTicket{}, err
 	}
+	renderer, profile := request.Renderer, request.Profile
+	mediaType, rangePolicy := "image/png", content.RangeSingle
+	if request.PreviewIntent == content.PreviewIntentSafePreviewV1 {
+		renderer, profile = content.RendererPlainText, content.ProfileTextV2
+		mediaType, rangePolicy = "text/plain; charset=utf-8", content.RangeNone
+	}
 	return content.IssuedTicket{
 		Descriptor: content.TicketDescriptor{
-			SchemaVersion: 1, ContentURL: cookie.Path, Action: request.Action, Renderer: request.Renderer,
-			Profile: request.Profile, ContentType: "image/png", ContentLength: 1, ETag: `"router-test"`,
-			Range: content.RangeSingle, Classification: content.ClassificationNonSecret, ExpiresAt: expiresAt,
+			SchemaVersion: 1, ContentURL: cookie.Path, Action: request.Action, Renderer: renderer,
+			Profile: profile, ContentType: mediaType, ContentLength: 1, ETag: `"router-test"`,
+			Range: rangePolicy, Classification: content.ClassificationNonSecret, ExpiresAt: expiresAt,
 			IdleExpiresAt: expiresAt, FallbackActions: []content.DeliveryAction{},
 		},
 		Cookie: cookie,
@@ -633,7 +640,7 @@ func TestBackupContentRoutesSplitAuthorizationFromCookieGateway(t *testing.T) {
 func TestRouterInjectsTrustedProxySchemePolicyIntoBackupContent(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	gin.SetMode(gin.TestMode)
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	dsn := filepath.Join(t.TempDir(), "content-scheme.db") + "?_loc=UTC"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -661,7 +668,7 @@ func TestRouterInjectsTrustedProxySchemePolicyIntoBackupContent(t *testing.T) {
 	})
 	pointID, entryID := strings.Repeat("1", 32), strings.Repeat("a", 64)
 	target := "http://xirang.example/api/v1/recovery-points/" + pointID + "/entries/" + entryID + "/delivery-tickets"
-	body := `{"schema_version":1,"action":"preview","renderer":"safe_raster","profile":"raster_v1"}`
+	body := `{"schema_version":1,"action":"preview","preview_intent":"safe_preview_v1"}`
 
 	request := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
 	request.RemoteAddr = "127.0.0.1:43210"
@@ -671,7 +678,12 @@ func TestRouterInjectsTrustedProxySchemePolicyIntoBackupContent(t *testing.T) {
 	request.Header.Set("X-Forwarded-For", "198.51.100.77")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || len(service.issueRequests) != 1 || !service.issueRequests[0].SecureCookie {
+	if response.Code != http.StatusOK || len(service.issueRequests) != 1 || !service.issueRequests[0].SecureCookie ||
+		service.issueRequests[0].PreviewIntent != content.PreviewIntentSafePreviewV1 ||
+		service.issueRequests[0].Renderer != "" || service.issueRequests[0].Profile != "" ||
+		!strings.Contains(response.Body.String(), `"renderer":"plain_text"`) ||
+		!strings.Contains(response.Body.String(), `"truncated":false`) ||
+		strings.Contains(response.Body.String(), "safe_preview_v1") {
 		t.Fatalf("trusted status=%d calls=%d body=%s", response.Code, len(service.issueRequests), response.Body.String())
 	}
 

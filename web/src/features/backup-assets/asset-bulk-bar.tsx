@@ -37,6 +37,7 @@ export function AssetBulkBar({
         type="button"
         variant="ghost"
         size="sm"
+        className="touch-target min-h-11 min-w-11 lg:min-h-8 lg:min-w-0"
         disabled={count !== 1}
         aria-label={t("backupAssets.actions.inspectSelected")}
         onClick={onInspect}
@@ -48,6 +49,7 @@ export function AssetBulkBar({
           type="button"
           variant="ghost"
           size="sm"
+          className="touch-target min-h-11 min-w-11 lg:min-h-8 lg:min-w-0"
           aria-label={t("backupAssets.actions.exportSelected")}
           onClick={onExport}
         >
@@ -59,6 +61,7 @@ export function AssetBulkBar({
           type="button"
           variant="ghost"
           size="sm"
+          className="touch-target min-h-11 min-w-11 lg:min-h-8 lg:min-w-0"
           aria-label={t("backupAssets.actions.recoverSelected")}
           onClick={onRecover}
         >
@@ -69,6 +72,7 @@ export function AssetBulkBar({
         type="button"
         variant="ghost"
         size="sm"
+        className="touch-target min-h-11 min-w-11 lg:min-h-8 lg:min-w-0"
         aria-label={t("backupAssets.actions.clearSelection")}
         onClick={onClear}
       >

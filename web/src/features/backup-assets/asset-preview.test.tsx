@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { useEffect, useRef, useState } from "react";
+import { StrictMode, useEffect, useRef, useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +8,7 @@ import type { BackupAsset, BackupContentRenderer, BackupContentTicket } from "@/
 
 import { buildAssetRows } from "./__tests__/test-utils";
 import { AssetPreview } from "./asset-preview";
-import { selectBackupAssetPreviewProduct } from "./asset-preview-model";
+import { selectBackupAssetExactPreviewProduct } from "./asset-preview-model";
 
 const {
   archiveDismissMock,
@@ -77,6 +77,12 @@ function ticket(
     BackupContentRenderer,
     Pick<BackupContentTicket, "profile" | "contentType" | "range" | "action">
   > = {
+    plain_text: {
+      profile: "text_v2",
+      contentType: "text/plain; charset=utf-8",
+      range: "none",
+      action: "preview",
+    },
     escaped_text: {
       profile: "text_v1",
       contentType: "text/plain; charset=utf-8",
@@ -113,6 +119,7 @@ function ticket(
     idleExpiresAt: new Date(now + 5 * 60_000).toISOString(),
     capabilityReason: null,
     fallbackActions: [],
+    truncated: false,
     ...products[renderer],
     ...overrides,
   };
@@ -133,7 +140,8 @@ function renderPreview(
       resource={{ status: "ready", value: ticket(renderer, options.ticket) }}
       canPreview
       canDownload
-      onLoadPreview={vi.fn()}
+      onLoadExactPreview={vi.fn()}
+      onRetry={vi.fn()}
       onRenew={options.onRenew ?? vi.fn()}
       onPrepareDownload={vi.fn()}
       onDetach={options.onDetach ?? vi.fn()}
@@ -153,11 +161,11 @@ describe("backup asset preview product", () => {
     ["video/mp4", "native_video", "video_v1"],
     ["application/octet-stream", "metadata_hex", "hex_v1"],
   ] as const)("maps %s to the closed %s renderer", (mimeType, renderer, profile) => {
-    expect(selectBackupAssetPreviewProduct(asset({ mimeType }))).toEqual({ renderer, profile });
+    expect(selectBackupAssetExactPreviewProduct(asset({ mimeType }))).toEqual({ renderer, profile });
   });
 
   it("forces non-file entries to metadata/hex", () => {
-    expect(selectBackupAssetPreviewProduct(asset({ entryType: "directory", mimeType: "image/png" }))).toEqual({
+    expect(selectBackupAssetExactPreviewProduct(asset({ entryType: "directory", mimeType: "image/png" }))).toEqual({
       renderer: "metadata_hex",
       profile: "hex_v1",
     });
@@ -196,7 +204,8 @@ describe("AssetPreview", () => {
         canPreview={surface === "preview"}
         canDownload={surface === "original download"}
         processingRuntime={{ ...processingRuntime, role: "admin" }}
-        onLoadPreview={vi.fn()}
+        onLoadExactPreview={vi.fn()}
+        onRetry={vi.fn()}
         onRenew={vi.fn()}
         onPrepareDownload={vi.fn()}
         onDetach={vi.fn()}
@@ -224,7 +233,8 @@ describe("AssetPreview", () => {
       },
       canPreview: true,
       canDownload: true,
-      onLoadPreview: vi.fn(),
+      onLoadExactPreview: vi.fn(),
+      onRetry: vi.fn(),
       onRenew: vi.fn(),
       onPrepareDownload: vi.fn(),
       onDetach: vi.fn(),
@@ -244,7 +254,8 @@ describe("AssetPreview", () => {
       asset: previewAsset,
       canPreview: true,
       canDownload: true,
-      onLoadPreview: vi.fn(),
+      onLoadExactPreview: vi.fn(),
+      onRetry: vi.fn(),
       onRenew: vi.fn(),
       onPrepareDownload: vi.fn(),
       onDetach: vi.fn(),
@@ -265,6 +276,46 @@ describe("AssetPreview", () => {
     expect(screen.getByTitle(/Asset preview|资产预览/)).toHaveClass("h-full", "max-h-full");
   });
 
+  it("announces current loading and typed error states without putting the filename in the error region", () => {
+    const previewAsset = asset({ name: "synthetic-visible-only.yml" });
+    const common = {
+      asset: previewAsset,
+      canPreview: true,
+      canDownload: false,
+      onLoadExactPreview: vi.fn(),
+      onRetry: vi.fn(),
+      onRenew: vi.fn(),
+      onPrepareDownload: vi.fn(),
+      onDetach: vi.fn(),
+    };
+    const rendered = render(
+      <AssetPreview {...common} resource={{ status: "loading", value: null }} />,
+    );
+
+    expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
+    expect(screen.getByRole("status")).toHaveAttribute("aria-busy", "true");
+
+    rendered.rerender(
+      <AssetPreview
+        {...common}
+        resource={{
+          status: "error",
+          value: null,
+          error: {
+            code: "temporarily_unavailable",
+            translationKey: "backupAssets.errors.temporarilyUnavailable",
+            retryable: true,
+            action: "retry",
+          },
+        }}
+      />,
+    );
+
+    const alert = screen.getByRole("alert");
+    expect(alert).not.toHaveTextContent(previewAsset.name);
+    expect(screen.getByRole("button", { name: /Retry preview|重试预览/ })).toBeInTheDocument();
+  });
+
   it("loads the processing controller only after explicit interaction", async () => {
     const user = userEvent.setup();
     const previewAsset = asset({ mimeType: "image/png" });
@@ -275,7 +326,8 @@ describe("AssetPreview", () => {
         canPreview
         canDownload
         processingRuntime={processingRuntime}
-        onLoadPreview={vi.fn()}
+        onLoadExactPreview={vi.fn()}
+        onRetry={vi.fn()}
         onRenew={vi.fn()}
         onPrepareDownload={vi.fn()}
         onDetach={vi.fn()}
@@ -284,7 +336,9 @@ describe("AssetPreview", () => {
 
     expect(screen.queryByTestId("synthetic-processing-panel")).not.toBeInTheDocument();
     expect(processingPanelRenderMock).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
+    const processingButton = screen.getByRole("button", { name: /Processing status|增强处理状态/ });
+    expect(processingButton).toHaveClass("min-h-11", "touch-target");
+    await user.click(processingButton);
     expect(await screen.findByTestId("synthetic-processing-panel")).toBeInTheDocument();
     expect(processingPanelRenderMock).toHaveBeenCalledWith(expect.objectContaining({
       token: "processing-token",
@@ -304,7 +358,8 @@ describe("AssetPreview", () => {
         processingRuntime={{ token: "processing-token", role: "operator", ensureStepUpProof: vi.fn() }}
         archiveContentAvailable
         archiveDownloadAllowed
-        onLoadPreview={vi.fn()}
+        onLoadExactPreview={vi.fn()}
+        onRetry={vi.fn()}
         onRenew={vi.fn()}
         onPrepareDownload={vi.fn()}
         onDetach={vi.fn()}
@@ -334,7 +389,8 @@ describe("AssetPreview", () => {
         canPreview
         canDownload
         processingRuntime={{ token: "processing-token", role: "operator", ensureStepUpProof: vi.fn() }}
-        onLoadPreview={vi.fn()}
+        onLoadExactPreview={vi.fn()}
+        onRetry={vi.fn()}
         onRenew={vi.fn()}
         onPrepareDownload={vi.fn()}
         onDetach={vi.fn()}
@@ -363,7 +419,8 @@ describe("AssetPreview", () => {
             canPreview
             canDownload
             processingRuntime={{ token: "processing-token", role: "operator", ensureStepUpProof: vi.fn() }}
-            onLoadPreview={vi.fn()}
+            onLoadExactPreview={vi.fn()}
+            onRetry={vi.fn()}
             onRenew={vi.fn()}
             onPrepareDownload={vi.fn()}
             onDetach={vi.fn()}
@@ -401,7 +458,8 @@ describe("AssetPreview", () => {
                   canPreview
                   canDownload
                   processingRuntime={{ token: "processing-token", role: "operator", ensureStepUpProof: vi.fn() }}
-                  onLoadPreview={vi.fn()}
+                  onLoadExactPreview={vi.fn()}
+                  onRetry={vi.fn()}
                   onRenew={vi.fn()}
                   onPrepareDownload={vi.fn()}
                   onDetach={vi.fn()}
@@ -439,7 +497,8 @@ describe("AssetPreview", () => {
       canPreview: true,
       canDownload: true,
       processingRuntime: { token: "processing-token", role: "operator" as const, ensureStepUpProof: vi.fn() },
-      onLoadPreview: vi.fn(),
+      onLoadExactPreview: vi.fn(),
+      onRetry: vi.fn(),
       onRenew: vi.fn(),
       onPrepareDownload: vi.fn(),
       onDetach: vi.fn(),
@@ -470,7 +529,8 @@ describe("AssetPreview", () => {
       canPreview: true,
       canDownload: true,
       processingRuntime: { token: "processing-token", role: "operator" as const, ensureStepUpProof: vi.fn() },
-      onLoadPreview: vi.fn(),
+      onLoadExactPreview: vi.fn(),
+      onRetry: vi.fn(),
       onRenew: vi.fn(),
       onPrepareDownload: vi.fn(),
       onDetach: vi.fn(),
@@ -509,7 +569,8 @@ describe("AssetPreview", () => {
       archiveContentAvailable: true,
       archiveDownloadAllowed: true,
       online: true,
-      onLoadPreview: vi.fn(),
+      onLoadExactPreview: vi.fn(),
+      onRetry: vi.fn(),
       onRenew: vi.fn(),
       onPrepareDownload: vi.fn(),
       onDetach: vi.fn(),
@@ -583,7 +644,8 @@ describe("AssetPreview", () => {
       canDownload: true,
       archiveContentAvailable: true,
       archiveDownloadAllowed: true,
-      onLoadPreview: vi.fn(),
+      onLoadExactPreview: vi.fn(),
+      onRetry: vi.fn(),
       onRenew: vi.fn(),
       onPrepareDownload: vi.fn(),
       onDetach: vi.fn(),
@@ -630,7 +692,8 @@ describe("AssetPreview", () => {
         canPreview
         canDownload
         processingRuntime={{ token: "processing-token", role: "viewer", ensureStepUpProof: vi.fn() }}
-        onLoadPreview={vi.fn()}
+        onLoadExactPreview={vi.fn()}
+        onRetry={vi.fn()}
         onRenew={vi.fn()}
         onPrepareDownload={vi.fn()}
         onDetach={vi.fn()}
@@ -650,7 +713,7 @@ describe("AssetPreview", () => {
   ])("adapts derived %s preview MIME without changing its identity fields", async (mimeType, derivedMimeType) => {
     const user = userEvent.setup();
     const previewAsset = asset({ mimeType });
-    const onLoadPreview = vi.fn();
+    const onLoadExactPreview = vi.fn();
     render(
       <AssetPreview
         asset={previewAsset}
@@ -658,7 +721,8 @@ describe("AssetPreview", () => {
         canPreview
         canDownload
         processingRuntime={processingRuntime}
-        onLoadPreview={onLoadPreview}
+        onLoadExactPreview={onLoadExactPreview}
+        onRetry={vi.fn()}
         onRenew={vi.fn()}
         onPrepareDownload={vi.fn()}
         onDetach={vi.fn()}
@@ -668,8 +732,8 @@ describe("AssetPreview", () => {
     await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
     await user.click(await screen.findByTestId("synthetic-derived-preview"));
 
-    expect(onLoadPreview).toHaveBeenCalledTimes(1);
-    const selected = onLoadPreview.mock.calls[0][0] as BackupAsset;
+    expect(onLoadExactPreview).toHaveBeenCalledTimes(1);
+    const selected = onLoadExactPreview.mock.calls[0][0] as BackupAsset;
     expect(selected).not.toBe(previewAsset);
     expect(selected.ref).toBe(previewAsset.ref);
     expect(selected.mimeType).toBe(derivedMimeType);
@@ -682,7 +746,7 @@ describe("AssetPreview", () => {
   it("passes the exact original asset object for native fallback", async () => {
     const user = userEvent.setup();
     const previewAsset = asset({ mimeType: "application/pdf" });
-    const onLoadPreview = vi.fn();
+    const onLoadExactPreview = vi.fn();
     render(
       <AssetPreview
         asset={previewAsset}
@@ -690,7 +754,8 @@ describe("AssetPreview", () => {
         canPreview
         canDownload
         processingRuntime={processingRuntime}
-        onLoadPreview={onLoadPreview}
+        onLoadExactPreview={onLoadExactPreview}
+        onRetry={vi.fn()}
         onRenew={vi.fn()}
         onPrepareDownload={vi.fn()}
         onDetach={vi.fn()}
@@ -700,28 +765,25 @@ describe("AssetPreview", () => {
     await user.click(screen.getByRole("button", { name: /Processing status|增强处理状态/ }));
     await user.click(await screen.findByTestId("synthetic-native-preview"));
 
-    expect(onLoadPreview).toHaveBeenCalledTimes(1);
-    expect(onLoadPreview.mock.calls[0][0]).toBe(previewAsset);
+    expect(onLoadExactPreview).toHaveBeenCalledTimes(1);
+    expect(onLoadExactPreview.mock.calls[0][0]).toBe(previewAsset);
   });
 
-  it("renews the renderer selected by a derived document preview", async () => {
+  it("keeps derived exact preview separate from ordinary automatic preview controls", async () => {
     const user = userEvent.setup();
     const previewAsset = asset({ mimeType: "application/pdf" });
-    let activePreview: BackupAsset | null = null;
     const issuedProducts = vi.fn();
-    const onLoadPreview = vi.fn((selected: BackupAsset) => {
-      activePreview = selected;
-      issuedProducts(selectBackupAssetPreviewProduct(selected));
+    const onLoadExactPreview = vi.fn((selected: BackupAsset) => {
+      issuedProducts(selectBackupAssetExactPreviewProduct(selected));
     });
-    const onRenew = vi.fn(() => {
-      if (activePreview) onLoadPreview(activePreview);
-    });
+    const onRenew = vi.fn();
     const commonProps = {
       asset: previewAsset,
       canPreview: true,
       canDownload: true,
       processingRuntime,
-      onLoadPreview,
+      onLoadExactPreview,
+      onRetry: vi.fn(),
       onRenew,
       onPrepareDownload: vi.fn(),
       onDetach: vi.fn(),
@@ -737,17 +799,16 @@ describe("AssetPreview", () => {
     rendered.rerender(
       <AssetPreview {...commonProps} resource={{ status: "ready", value: ticket("safe_raster") }} />
     );
-    await user.click(screen.getByRole("button", { name: /Refresh preview|刷新预览/ }));
-
-    expect(onRenew).toHaveBeenCalledTimes(1);
-    expect(onLoadPreview).toHaveBeenCalledTimes(2);
-    expect(onLoadPreview.mock.calls[1][0]).toBe(onLoadPreview.mock.calls[0][0]);
+    expect(screen.queryByRole("button", { name: /Refresh preview|刷新预览/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Load preview|加载预览/ })).not.toBeInTheDocument();
+    expect(onRenew).not.toHaveBeenCalled();
+    expect(onLoadExactPreview).toHaveBeenCalledTimes(1);
     expect(issuedProducts).toHaveBeenLastCalledWith({ renderer: "safe_raster", profile: "raster_v1" });
   });
 
   it("detaches once without selecting a processing preview on unmount", async () => {
     const user = userEvent.setup();
-    const onLoadPreview = vi.fn();
+    const onLoadExactPreview = vi.fn();
     const onDetach = vi.fn();
     const rendered = render(
       <AssetPreview
@@ -756,7 +817,8 @@ describe("AssetPreview", () => {
         canPreview
         canDownload
         processingRuntime={processingRuntime}
-        onLoadPreview={onLoadPreview}
+        onLoadExactPreview={onLoadExactPreview}
+        onRetry={vi.fn()}
         onRenew={vi.fn()}
         onPrepareDownload={vi.fn()}
         onDetach={onDetach}
@@ -767,8 +829,52 @@ describe("AssetPreview", () => {
     expect(await screen.findByTestId("synthetic-processing-panel")).toBeInTheDocument();
     rendered.unmount();
 
-    expect(onDetach).toHaveBeenCalledTimes(1);
-    expect(onLoadPreview).not.toHaveBeenCalled();
+    await waitFor(() => expect(onDetach).toHaveBeenCalledTimes(1));
+    expect(onLoadExactPreview).not.toHaveBeenCalled();
+  });
+
+  it("does not detach during StrictMode effect replay and detaches once on real unmount", async () => {
+    const onDetach = vi.fn();
+    const rendered = render(
+      <StrictMode>
+        <AssetPreview
+          asset={asset()}
+          resource={{ status: "idle", value: null }}
+          canPreview
+          canDownload
+          onLoadExactPreview={vi.fn()}
+          onRetry={vi.fn()}
+          onRenew={vi.fn()}
+          onPrepareDownload={vi.fn()}
+          onDetach={onDetach}
+        />
+      </StrictMode>,
+    );
+
+    expect(onDetach).not.toHaveBeenCalled();
+    rendered.unmount();
+    await waitFor(() => expect(onDetach).toHaveBeenCalledTimes(1));
+  });
+
+  it.each(["plain_text", "escaped_text"] as const)(
+    "renders %s faithfully in a sandboxed opaque frame without active markup",
+    (renderer) => {
+      renderPreview(renderer, { asset: asset({ name: "unsafe.html", mimeType: "text/html" }) });
+
+      const frame = screen.getByTitle(/Asset preview|资产预览/);
+      expect(frame).toHaveAttribute("src", contentUrl);
+      expect(frame).toHaveAttribute("sandbox", "");
+      expect(frame).not.toHaveAttribute("srcdoc");
+      const viewport = screen.getByTestId("asset-preview-viewport");
+      expect(viewport.querySelector("script, svg")).not.toBeInTheDocument();
+      expect(viewport).toHaveClass("min-h-[24rem]");
+    },
+  );
+
+  it("shows a localized notice for a bounded truncated text preview", () => {
+    renderPreview("plain_text", { ticket: { truncated: true } });
+
+    expect(screen.getByRole("status")).toHaveTextContent(/beginning of the file|文件开头/);
   });
 
   it("renders escaped content in a sandboxed opaque frame without active markup", () => {
@@ -815,9 +921,9 @@ describe("AssetPreview", () => {
     hex.unmount();
   });
 
-  it("shows only permission-backed load and download commands", async () => {
+  it("removes first-run load and refresh while keeping permission-backed download", async () => {
     const user = userEvent.setup();
-    const onLoadPreview = vi.fn();
+    const onLoadExactPreview = vi.fn();
     const onPrepareDownload = vi.fn();
     const previewAsset = asset();
     const { rerender } = render(
@@ -826,16 +932,20 @@ describe("AssetPreview", () => {
         resource={{ status: "idle", value: null }}
         canPreview
         canDownload
-        onLoadPreview={onLoadPreview}
+        onLoadExactPreview={onLoadExactPreview}
+        onRetry={vi.fn()}
         onRenew={vi.fn()}
         onPrepareDownload={onPrepareDownload}
         onDetach={vi.fn()}
       />
     );
 
-    await user.click(screen.getByRole("button", { name: /Load preview|加载预览/ }));
-    await user.click(screen.getByRole("button", { name: /Prepare download|准备下载/ }));
-    expect(onLoadPreview).toHaveBeenCalledWith(previewAsset);
+    expect(screen.queryByRole("button", { name: /Load preview|加载预览/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Refresh preview|刷新预览/ })).not.toBeInTheDocument();
+    const prepareDownload = screen.getByRole("button", { name: /Prepare download|准备下载/ });
+    expect(prepareDownload).toHaveClass("min-h-11", "touch-target");
+    await user.click(prepareDownload);
+    expect(onLoadExactPreview).not.toHaveBeenCalled();
     expect(onPrepareDownload).toHaveBeenCalledWith(previewAsset);
 
     rerender(
@@ -844,7 +954,8 @@ describe("AssetPreview", () => {
         resource={{ status: "idle", value: null }}
         canPreview={false}
         canDownload={false}
-        onLoadPreview={onLoadPreview}
+        onLoadExactPreview={onLoadExactPreview}
+        onRetry={vi.fn()}
         onRenew={vi.fn()}
         onPrepareDownload={onPrepareDownload}
         onDetach={vi.fn()}
@@ -852,6 +963,82 @@ describe("AssetPreview", () => {
     );
     expect(screen.queryByRole("button", { name: /Load preview|加载预览/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Prepare download|准备下载/ })).not.toBeInTheDocument();
+  });
+
+  it("offers manual Retry only for the current retryable preview failure", async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    const common = {
+      asset: asset(),
+      canPreview: true,
+      canDownload: false,
+      onLoadExactPreview: vi.fn(),
+      onRetry,
+      onRenew: vi.fn(),
+      onPrepareDownload: vi.fn(),
+      onDetach: vi.fn(),
+    };
+    const rendered = render(
+      <AssetPreview
+        {...common}
+        resource={{
+          status: "error",
+          value: null,
+          error: {
+            code: "temporarily_unavailable",
+            translationKey: "backupAssets.errors.temporarilyUnavailable",
+            retryable: true,
+            action: "retry",
+          },
+        }}
+      />,
+    );
+
+    const retry = screen.getByRole("button", { name: /Retry preview|重试预览/ });
+    expect(retry).toHaveClass("min-h-11", "touch-target");
+    await user.click(retry);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    rendered.rerender(
+      <AssetPreview
+        {...common}
+        resource={{
+          status: "blocked",
+          value: null,
+          error: {
+            code: "preview_renderer_unsupported",
+            translationKey: "backupAssets.errors.previewRendererUnsupported",
+            retryable: false,
+            action: "none",
+          },
+        }}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /Retry preview|重试预览/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/cannot be previewed safely|无法安全预览/)).toBeInTheDocument();
+  });
+
+  it("unmounts a native renderer before a replacement ticket can attach", () => {
+    const rendered = renderPreview("native_video");
+    const media = rendered.container.querySelector("video");
+    expect(media).toHaveAttribute("src", contentUrl);
+
+    rendered.rerender(
+      <AssetPreview
+        asset={asset({ ref: { recoveryPointId: "1".repeat(32), entryId: "2".repeat(64) } })}
+        resource={{ status: "loading", value: null }}
+        canPreview
+        canDownload
+        onLoadExactPreview={vi.fn()}
+        onRetry={vi.fn()}
+        onRenew={vi.fn()}
+        onPrepareDownload={vi.fn()}
+        onDetach={vi.fn()}
+      />,
+    );
+
+    expect(media).not.toHaveAttribute("src");
+    expect(rendered.container.querySelector("video")).toBeNull();
   });
 
   it("renders an exact attachment ticket as a download without reading its URL", () => {
@@ -904,7 +1091,8 @@ describe("AssetPreview", () => {
         }}
         canPreview
         canDownload
-        onLoadPreview={vi.fn()}
+        onLoadExactPreview={vi.fn()}
+        onRetry={vi.fn()}
         onRenew={onRenew}
         onPrepareDownload={vi.fn()}
         onDetach={onDetach}
@@ -915,6 +1103,6 @@ describe("AssetPreview", () => {
 
     rendered.unmount();
     expect(image).not.toHaveAttribute("src");
-    expect(onDetach).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onDetach).toHaveBeenCalledTimes(1));
   });
 });

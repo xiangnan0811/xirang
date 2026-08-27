@@ -230,6 +230,8 @@ func validCacheRendererProfile(renderer Renderer, profile RendererProfile) bool 
 	switch renderer {
 	case RendererEscapedText:
 		return profile == ProfileTextV1
+	case RendererPlainText:
+		return profile == ProfileTextV2
 	case RendererSafeRaster:
 		return profile == ProfileRasterV1
 	case RendererSameOriginPDF:

@@ -30,6 +30,11 @@ import type {
   SavedAssetSearch,
 } from "@/types/domain";
 import type { BackupAssetSort } from "@/lib/api/backup-assets-api";
+import type {
+  BackupContentExactPreviewTicketInput,
+  BackupContentSafePreviewTicketInput,
+  BackupContentTicketInput,
+} from "@/lib/api/backup-content-api";
 
 import {
   backupAssetsReducer,
@@ -42,7 +47,7 @@ import {
   serializeBackupAssetsRoute,
   type BackupAssetsRouteState,
 } from "./backup-assets-route-state";
-import { selectBackupAssetPreviewProduct } from "./asset-preview-model";
+import { selectBackupAssetExactPreviewProduct } from "./asset-preview-model";
 
 export const BACKUP_ASSETS_REQUEST_CHANNELS = [
   "repositories",
@@ -224,7 +229,8 @@ export interface BackupAssetsController {
     assignTag(tagId: string, ref: AssetRef): void;
     clearRecent(): void;
     compareRecoveryPoints(baseRecoveryPointId: string, compareRecoveryPointId: string): void;
-    loadPreview(asset: BackupAsset): void;
+    loadExactPreview(asset: BackupAsset): void;
+    retryPreview(): void;
     renewPreview(): void;
     prepareDownload(asset: BackupAsset): void;
     detachContent(): void;
@@ -344,6 +350,9 @@ export function useBackupAssetsState({
   const { runLatest, abort } = useBackupAssetsRequestCoordinator(state.selectionGeneration);
   const routeKey = serializeBackupAssetsRoute(route);
   const resultRouteKey = backupAssetsResultRequestKey(route);
+  const selectedEntryOwnerKey = selectedEntryOwnerKeyFor(token, role, route);
+  const stateSelectedEntryOwnerKey = selectedEntryOwnerKeyFor(token, role, state.route);
+  const contentSelectionKey = contentSelectionKeyFor(token, role, route);
   const routeRef = useRef({ key: routeKey, value: route });
   const searchAttemptRef = useRef(0);
   const overlayAttemptRef = useRef(0);
@@ -353,12 +362,24 @@ export function useBackupAssetsState({
     attemptKey: string;
   } | null>(null);
   const overlayPendingRef = useRef<string | null>(null);
-  const activePreviewRef = useRef<BackupAsset | null>(null);
+  const activePreviewRef = useRef<{
+    asset: BackupAsset;
+    input: BackupContentSafePreviewTicketInput | BackupContentExactPreviewTicketInput;
+    attempt: number;
+  } | null>(null);
+  const selectedEntryOwnerKeyRef = useRef<string | null>(null);
+  const contentRef = useRef(content);
+  const contentOwnerKeyRef = useRef<string | null>(null);
+  const contentSelectionKeyRef = useRef(contentSelectionKey);
+  const previewAttemptRef = useRef(0);
+  const startedPreviewKeyRef = useRef<string | null>(null);
   const secretRevealProofRef = useRef<string | null>(null);
   const secretRevealProofOwnerRef = useRef<string | null>(null);
   const selectionGenerationRef = useRef(state.selectionGeneration);
   const routeRepairRef = useRef(onRouteRepair);
   selectionGenerationRef.current = state.selectionGeneration;
+  contentRef.current = content;
+  contentSelectionKeyRef.current = contentSelectionKey;
   routeRepairRef.current = onRouteRepair;
   if (routeRef.current.key !== routeKey) routeRef.current = { key: routeKey, value: route };
 
@@ -369,6 +390,7 @@ export function useBackupAssetsState({
   useEffect(() => {
     secretRevealProofRef.current = null;
     secretRevealProofOwnerRef.current = null;
+    startedPreviewKeyRef.current = null;
   }, [token, role]);
 
   const refreshRepositories = useCallback(() => {
@@ -1110,18 +1132,24 @@ export function useBackupAssetsState({
       recoveryPointContext.status !== "ready" ||
       semanticIssue !== null
     ) {
+      selectedEntryOwnerKeyRef.current = null;
       setSelectedEntry(emptyValueResource());
       return;
     }
     const ref = { recoveryPointId, entryId };
     const requestKey = `entry:${recoveryPointId}:${entryId}`;
+    selectedEntryOwnerKeyRef.current = null;
     setSelectedEntry({ status: "loading", value: null });
     void runLatest(
       "entry",
       requestKey,
       (signal) => apiClient.getBackupAsset(token, ref, signal),
-      (projection) => setProjectionValue(projection, setSelectedEntry),
+      (projection) => {
+        selectedEntryOwnerKeyRef.current = projection.status === "available" ? stateSelectedEntryOwnerKey : null;
+        setProjectionValue(projection, setSelectedEntry);
+      },
       (error) => {
+        selectedEntryOwnerKeyRef.current = null;
         const mapped = mapBackupAssetsError(error, "entry");
         setSelectedEntry({
           status: mapped.code === "permission_denied" || mapped.code === "not_found" ? "blocked" : "error",
@@ -1135,6 +1163,7 @@ export function useBackupAssetsState({
     recoveryPointContext.status,
     runLatest,
     semanticIssue,
+    stateSelectedEntryOwnerKey,
     state.selectionGeneration,
     state.route.entryId,
     state.route.recoveryPointId,
@@ -1202,19 +1231,12 @@ export function useBackupAssetsState({
   const issueContentTicket = useCallback(
     (
       selectedAsset: BackupAsset,
-      product: Pick<BackupContentTicket, "action" | "renderer" | "profile"> & {
-        stepUpProof?: string;
-      },
-      options?: { revealOnce?: boolean }
+      input: BackupContentTicketInput,
+      options: { revealOnce: boolean; attempt: number },
     ) => {
       if (!token) return;
-      const bindingKey = [
-        selectedAsset.ref.recoveryPointId,
-        selectedAsset.ref.entryId,
-        product.action,
-        product.renderer,
-        product.profile,
-      ].join(":");
+      const bindingKey = contentTicketBindingKey(selectedAsset, input, options.attempt);
+      contentOwnerKeyRef.current = contentSelectionKey;
       setContent({ status: "loading", value: null });
       dispatch({ type: "ticket_issuing", bindingKey });
       void runLatest(
@@ -1222,11 +1244,7 @@ export function useBackupAssetsState({
         bindingKey,
         (signal) =>
           apiClient.issueTicket(token, selectedAsset.ref, {
-            schemaVersion: 1,
-            action: product.action,
-            renderer: product.renderer,
-            profile: product.profile,
-            ...(product.stepUpProof === undefined ? {} : { stepUpProof: product.stepUpProof }),
+            ...input,
             signal,
           }),
         (projection) => {
@@ -1247,36 +1265,47 @@ export function useBackupAssetsState({
           const mapped = mapBackupAssetsError(error, "content_ticket");
           if (
             mapped.code === "secret_reveal_required" &&
-            product.stepUpProof !== undefined &&
-            secretRevealProofRef.current === product.stepUpProof
+            input.stepUpProof !== undefined &&
+            secretRevealProofRef.current === input.stepUpProof
           ) {
             secretRevealProofRef.current = null;
             secretRevealProofOwnerRef.current = null;
           }
           if (
-            options?.revealOnce &&
+            options.revealOnce &&
+            input.action === "preview" &&
             mapped.code === "secret_reveal_required" &&
             role === "admin" &&
             ensureStepUpProof &&
-            (product.stepUpProof === undefined || secretRevealProofRef.current === null)
+            (input.stepUpProof === undefined || secretRevealProofRef.current === null)
           ) {
             const capturedGeneration = selectionGenerationRef.current;
+            const capturedOwnerKey = contentSelectionKeyRef.current;
             void ensureStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, {
               persist: false,
               reuseCached: false,
             })
               .then((proof) => {
-                if (selectionGenerationRef.current !== capturedGeneration) return;
+                if (selectionGenerationRef.current !== capturedGeneration ||
+                    contentSelectionKeyRef.current !== capturedOwnerKey) return;
+                const active = activePreviewRef.current;
+                if (!active || contentTicketBindingKey(active.asset, active.input, active.attempt) !== bindingKey) return;
                 secretRevealProofRef.current = proof;
                 secretRevealProofOwnerRef.current = [
                   selectedAsset.ref.recoveryPointId,
                   selectedAsset.ref.entryId,
-                  product.action,
+                  input.action,
                 ].join(":");
-                issueContentTicket(selectedAsset, { ...product, stepUpProof: proof });
+                const revealedInput = withContentStepUpProof(input, proof);
+                activePreviewRef.current = { asset: selectedAsset, input: revealedInput, attempt: options.attempt };
+                issueContentTicket(selectedAsset, revealedInput, {
+                  revealOnce: false,
+                  attempt: options.attempt,
+                });
               })
               .catch(() => {
-                if (selectionGenerationRef.current !== capturedGeneration) return;
+                if (selectionGenerationRef.current !== capturedGeneration ||
+                    contentSelectionKeyRef.current !== capturedOwnerKey) return;
                 setContent({ status: "blocked", value: null, error: mapped });
                 dispatch({ type: "ticket_failed", bindingKey });
               });
@@ -1288,6 +1317,7 @@ export function useBackupAssetsState({
               mapped.code === "invalid_request" ||
               mapped.code === "not_found" ||
               mapped.code === "unsupported" ||
+              mapped.code === "preview_renderer_unsupported" ||
               mapped.code === "secret_reveal_required"
                 ? "blocked"
                 : "error",
@@ -1298,42 +1328,45 @@ export function useBackupAssetsState({
         }
       );
     },
-    [ensureStepUpProof, role, runLatest, token]
+    [contentSelectionKey, ensureStepUpProof, role, runLatest, token]
   );
 
-  const previewTicketInput = useCallback((selectedAsset: BackupAsset) => {
-    const product = selectBackupAssetPreviewProduct(selectedAsset);
+  const exactPreviewTicketInput = useCallback((selectedAsset: BackupAsset): BackupContentExactPreviewTicketInput => {
+    const product = selectBackupAssetExactPreviewProduct(selectedAsset);
     const ownerKey = [selectedAsset.ref.recoveryPointId, selectedAsset.ref.entryId, "preview"].join(":");
     const cachedProof =
       secretRevealProofRef.current !== null && secretRevealProofOwnerRef.current === ownerKey
         ? secretRevealProofRef.current
         : undefined;
     return {
-      product: {
-        action: "preview" as const,
-        ...product,
-        ...(cachedProof === undefined ? {} : { stepUpProof: cachedProof }),
-      },
+      schemaVersion: 1,
+      action: "preview",
+      ...product,
+      ...(cachedProof === undefined ? {} : { stepUpProof: cachedProof }),
     };
   }, []);
 
-  const loadPreview = useCallback(
+  const loadExactPreview = useCallback(
     (selectedAsset: BackupAsset) => {
-      activePreviewRef.current = selectedAsset;
       const ownerKey = [selectedAsset.ref.recoveryPointId, selectedAsset.ref.entryId, "preview"].join(":");
       if (secretRevealProofOwnerRef.current !== null && secretRevealProofOwnerRef.current !== ownerKey) {
         secretRevealProofRef.current = null;
         secretRevealProofOwnerRef.current = null;
       }
-      const { product } = previewTicketInput(selectedAsset);
-      issueContentTicket(selectedAsset, product, { revealOnce: true });
+      const input = exactPreviewTicketInput(selectedAsset);
+      const attempt = ++previewAttemptRef.current;
+      activePreviewRef.current = { asset: selectedAsset, input, attempt };
+      issueContentTicket(selectedAsset, input, { revealOnce: true, attempt });
     },
-    [issueContentTicket, previewTicketInput]
+    [exactPreviewTicketInput, issueContentTicket]
   );
 
   const renewPreview = useCallback(() => {
-    const selectedAsset = activePreviewRef.current;
-    if (!selectedAsset) return;
+    const active = activePreviewRef.current;
+    const currentTicket = contentRef.current.status === "ready" ? contentRef.current.value : null;
+    if (contentOwnerKeyRef.current !== contentSelectionKeyRef.current ||
+        !active || !currentTicket || currentTicket.action !== "preview") return;
+    const selectedAsset = active.asset;
     const currentRoute = routeRef.current.value;
     if (
       currentRoute.recoveryPointId !== selectedAsset.ref.recoveryPointId ||
@@ -1342,42 +1375,88 @@ export function useBackupAssetsState({
       activePreviewRef.current = null;
       return;
     }
-    const { product } = previewTicketInput(selectedAsset);
-    issueContentTicket(selectedAsset, product, { revealOnce: false });
-  }, [issueContentTicket, previewTicketInput]);
+    const ownerKey = [selectedAsset.ref.recoveryPointId, selectedAsset.ref.entryId, "preview"].join(":");
+    const cachedProof =
+      secretRevealProofRef.current !== null && secretRevealProofOwnerRef.current === ownerKey
+        ? secretRevealProofRef.current
+        : undefined;
+    const resolvedProduct = exactPreviewProduct(currentTicket);
+    if (resolvedProduct === null) return;
+    const input: BackupContentExactPreviewTicketInput = {
+      schemaVersion: 1,
+      action: "preview",
+      ...resolvedProduct,
+      ...(cachedProof === undefined ? {} : { stepUpProof: cachedProof }),
+    };
+    const attempt = ++previewAttemptRef.current;
+    activePreviewRef.current = { asset: selectedAsset, input, attempt };
+    issueContentTicket(selectedAsset, input, { revealOnce: false, attempt });
+  }, [issueContentTicket]);
+
+  const retryPreview = useCallback(() => {
+    const active = activePreviewRef.current;
+    const currentContent = contentRef.current;
+    if (contentOwnerKeyRef.current !== contentSelectionKeyRef.current ||
+        !active || (currentContent.status !== "error" && currentContent.status !== "blocked") ||
+        currentContent.error?.retryable !== true) {
+      return;
+    }
+    const currentRoute = routeRef.current.value;
+    if (currentRoute.recoveryPointId !== active.asset.ref.recoveryPointId ||
+        currentRoute.entryId !== active.asset.ref.entryId) {
+      return;
+    }
+    const attempt = ++previewAttemptRef.current;
+    activePreviewRef.current = { ...active, attempt };
+    issueContentTicket(active.asset, active.input, {
+      revealOnce: false,
+      attempt,
+    });
+  }, [issueContentTicket]);
 
   const prepareDownload = useCallback(
     (selectedAsset: BackupAsset) => {
+      contentOwnerKeyRef.current = contentSelectionKey;
       if (!ensureStepUpProof) {
         setContent({ status: "blocked", value: null, error: closedUnsupportedError() });
         return;
       }
       activePreviewRef.current = null;
       const capturedGeneration = selectionGenerationRef.current;
+      const capturedOwnerKey = contentSelectionKeyRef.current;
       void ensureStepUpProof(STEP_UP_ACTIONS.assetDownload, {
         persist: false,
         reuseCached: false,
       })
         .then((stepUpProof) => {
-          if (selectionGenerationRef.current !== capturedGeneration) return;
-          issueContentTicket(selectedAsset, {
+          if (selectionGenerationRef.current !== capturedGeneration ||
+              contentSelectionKeyRef.current !== capturedOwnerKey) return;
+          const input: BackupContentTicketInput = {
             action: "download",
+            schemaVersion: 1,
             renderer: "attachment",
             profile: "original_v1",
             stepUpProof,
+          };
+          issueContentTicket(selectedAsset, input, {
+            revealOnce: false,
+            attempt: ++previewAttemptRef.current,
           });
         })
         .catch(() => {
-          if (selectionGenerationRef.current !== capturedGeneration) return;
+          if (selectionGenerationRef.current !== capturedGeneration ||
+              contentSelectionKeyRef.current !== capturedOwnerKey) return;
           setContent({ status: "blocked", value: null, error: closedUnsupportedError() });
         });
     },
-    [ensureStepUpProof, issueContentTicket]
+    [contentSelectionKey, ensureStepUpProof, issueContentTicket]
   );
 
   const detachContent = useCallback(() => {
     abort("contentTicket");
     activePreviewRef.current = null;
+    startedPreviewKeyRef.current = null;
+    contentOwnerKeyRef.current = null;
     setContent(emptyValueResource());
     dispatch({ type: "ticket_detached" });
   }, [abort]);
@@ -1385,19 +1464,55 @@ export function useBackupAssetsState({
   useEffect(() => {
     abort("contentTicket");
     activePreviewRef.current = null;
+    startedPreviewKeyRef.current = null;
+    previewAttemptRef.current = 0;
+    secretRevealProofRef.current = null;
+    secretRevealProofOwnerRef.current = null;
+    contentOwnerKeyRef.current = null;
     setContent(emptyValueResource());
     dispatch({ type: "ticket_detached" });
-  }, [abort, route.entryId, route.recoveryPointId]);
+  }, [abort, contentSelectionKey]);
+
+  useEffect(() => {
+    const selectedAsset = selectedEntry.status === "ready" ? selectedEntry.value : null;
+    if (selectedEntryOwnerKeyRef.current !== selectedEntryOwnerKey || !selectedAsset ||
+        !safePreviewEligible(role, selectedRecoveryPoint, selectedAsset, route)) return;
+    const attempt = 0;
+    const startedKey = [
+      state.selectionGeneration,
+      selectedAsset.ref.recoveryPointId,
+      selectedAsset.ref.entryId,
+      "safePreviewV1",
+      attempt,
+    ].join(":");
+    if (startedPreviewKeyRef.current === startedKey) return;
+    startedPreviewKeyRef.current = startedKey;
+    const input: BackupContentSafePreviewTicketInput = {
+      schemaVersion: 1,
+      action: "preview",
+      previewIntent: "safePreviewV1",
+    };
+    activePreviewRef.current = { asset: selectedAsset, input, attempt };
+    issueContentTicket(selectedAsset, input, { revealOnce: true, attempt });
+  }, [issueContentTicket, role, route, selectedEntry, selectedEntryOwnerKey, selectedRecoveryPoint, state.selectionGeneration]);
+
+  const visibleSelectedEntry = selectedEntry.status === "loading" ||
+      selectedEntryOwnerKeyRef.current === selectedEntryOwnerKey
+    ? selectedEntry
+    : emptyValueResource<BackupAsset>();
+  const visibleContent = contentOwnerKeyRef.current === contentSelectionKey
+    ? content
+    : emptyValueResource<BackupContentTicket>();
 
   return {
     state,
     repositories,
     recoveryPoints,
     selectedRecoveryPoint,
-    selectedEntry,
+    selectedEntry: visibleSelectedEntry,
     evidence,
     diff,
-    content,
+    content: visibleContent,
     overlays: { savedSearches, favorites, tags, recent },
     semanticIssue,
     filterIssue,
@@ -1422,12 +1537,97 @@ export function useBackupAssetsState({
       assignTag,
       clearRecent,
       compareRecoveryPoints,
-      loadPreview,
+      loadExactPreview,
+      retryPreview,
       renewPreview,
       prepareDownload,
       detachContent,
     },
   };
+}
+
+function contentTicketBindingKey(
+  asset: BackupAsset,
+  input: BackupContentTicketInput,
+  attempt: number,
+): string {
+  const product = input.action === "preview" && input.previewIntent === "safePreviewV1"
+    ? "safePreviewV1"
+    : `${input.renderer}:${input.profile}`;
+  return [asset.ref.recoveryPointId, asset.ref.entryId, input.action, product, attempt].join(":");
+}
+
+function contentSelectionKeyFor(
+  token: string | null,
+  role: AuthContextValue["role"] | undefined,
+  route: BackupAssetsRouteState,
+): string {
+  return JSON.stringify([
+    token,
+    role ?? null,
+    route.view,
+    route.nodeId ?? null,
+    route.backupSetId ?? null,
+    route.repositoryId ?? null,
+    route.taskId ?? null,
+    route.recoveryPointId ?? null,
+    route.parentEntryId ?? null,
+    route.entryId ?? null,
+    route.inspectorTab,
+  ]);
+}
+
+function selectedEntryOwnerKeyFor(
+  token: string | null,
+  role: AuthContextValue["role"] | undefined,
+  route: BackupAssetsRouteState,
+): string {
+  return JSON.stringify([
+    token,
+    role ?? null,
+    route.view,
+    route.nodeId ?? null,
+    route.backupSetId ?? null,
+    route.repositoryId ?? null,
+    route.taskId ?? null,
+    route.recoveryPointId ?? null,
+    route.parentEntryId ?? null,
+    route.entryId ?? null,
+  ]);
+}
+
+function withContentStepUpProof(
+  input: BackupContentSafePreviewTicketInput | BackupContentExactPreviewTicketInput,
+  stepUpProof: string,
+): BackupContentSafePreviewTicketInput | BackupContentExactPreviewTicketInput {
+  if (input.action === "preview" && input.previewIntent === "safePreviewV1") {
+    return { ...input, stepUpProof };
+  }
+  return { ...input, stepUpProof };
+}
+
+function exactPreviewProduct(
+  ticket: BackupContentTicket,
+): Pick<BackupContentExactPreviewTicketInput, "renderer" | "profile"> | null {
+  if (ticket.renderer === "attachment" || ticket.profile === "original_v1") return null;
+  return { renderer: ticket.renderer, profile: ticket.profile };
+}
+
+function safePreviewEligible(
+  role: AuthContextValue["role"] | undefined,
+  recoveryPoint: BackupRecoveryPoint | null,
+  asset: BackupAsset,
+  route: BackupAssetsRouteState,
+): boolean {
+  if ((role !== "admin" && role !== "operator") || asset.entryType !== "file" ||
+      route.inspectorTab !== "preview" ||
+      route.recoveryPointId !== asset.ref.recoveryPointId || route.entryId !== asset.ref.entryId ||
+      recoveryPoint?.id !== asset.ref.recoveryPointId || !recoveryPoint.capabilities.openSequential ||
+      recoveryPoint.catalog.status !== "available") {
+    return false;
+  }
+  return recoveryPoint.catalog.value.permissions.list &&
+    recoveryPoint.catalog.value.contentAvailability.available;
 }
 
 function setProjectionValue<T>(

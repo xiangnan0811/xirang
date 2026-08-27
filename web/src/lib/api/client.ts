@@ -49,12 +49,16 @@ type BackupRetentionApi = ReturnType<
 type BackupRepositoriesApi = ReturnType<
   typeof import("./backup-repositories-api").createBackupRepositoriesApi
 >;
+type BackupFileSourcesApi = ReturnType<
+  typeof import("./backup-file-sources-api").createBackupFileSourcesApi
+>;
 
 let backupAssetSearchApiPromise: Promise<BackupAssetSearchApi> | undefined;
 let backupAssetOverlaysApiPromise: Promise<BackupAssetOverlaysApi> | undefined;
 let backupContentApiPromise: Promise<BackupContentApi> | undefined;
 let backupRetentionApiPromise: Promise<BackupRetentionApi> | undefined;
 let backupRepositoriesApiPromise: Promise<BackupRepositoriesApi> | undefined;
+let backupFileSourcesApiPromise: Promise<BackupFileSourcesApi> | undefined;
 
 function loadBackupAssetSearchApi(): Promise<BackupAssetSearchApi> {
   backupAssetSearchApiPromise ??= import("./backup-asset-search-api").then((module) =>
@@ -89,6 +93,11 @@ function loadBackupRepositoriesApi(): Promise<BackupRepositoriesApi> {
     module.createBackupRepositoriesApi()
   );
   return backupRepositoriesApiPromise;
+}
+
+function loadBackupFileSourcesApi(): Promise<BackupFileSourcesApi> {
+  backupFileSourcesApiPromise ??= import("./backup-file-sources-api").then((module) => module.createBackupFileSourcesApi());
+  return backupFileSourcesApiPromise;
 }
 
 const lazyBackupAssetSearchApi: BackupAssetSearchApi = {
@@ -151,6 +160,21 @@ const lazyBackupAssetOverlaysApi: BackupAssetOverlaysApi = {
 const lazyBackupContentApi: BackupContentApi = {
   async issueTicket(...args) {
     return (await loadBackupContentApi()).issueTicket(...args);
+  },
+};
+
+const lazyBackupFileSourcesApi: BackupFileSourcesApi = {
+  async resolveBackupFileSourceRecoveryPoint(...args) {
+    return (await loadBackupFileSourcesApi()).resolveBackupFileSourceRecoveryPoint(...args);
+  },
+  async listBackupFileSourceNodes(...args) {
+    return (await loadBackupFileSourcesApi()).listBackupFileSourceNodes(...args);
+  },
+  async listBackupFileSourceSets(...args) {
+    return (await loadBackupFileSourcesApi()).listBackupFileSourceSets(...args);
+  },
+  async listBackupFileSourceVersions(...args) {
+    return (await loadBackupFileSourcesApi()).listBackupFileSourceVersions(...args);
   },
 };
 
@@ -259,6 +283,7 @@ export const apiClient = {
   ...lazyBackupAssetSearchApi,
   ...lazyBackupAssetOverlaysApi,
   ...lazyBackupContentApi,
+  ...lazyBackupFileSourcesApi,
   ...lazyBackupRepositoriesApi,
   ...lazyBackupRetentionApi,
 };

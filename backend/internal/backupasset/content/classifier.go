@@ -308,6 +308,8 @@ func closedSafeBinaryMedia(payload []byte) string {
 		return "audio/wav"
 	case len(payload) >= 4 && string(payload[:4]) == "fLaC":
 		return "audio/flac"
+	case validID3Header(payload):
+		return "audio/mpeg"
 	case len(payload) >= 4 && string(payload[:4]) == "OggS":
 		return "application/ogg"
 	case len(payload) >= 8 && string(payload[4:8]) == "ftyp":

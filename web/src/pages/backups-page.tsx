@@ -11,8 +11,8 @@ import { cn } from "@/lib/utils";
 import type { BackupHealthData } from "@/types/domain";
 
 const routeTabs = [
-  { page: "overview", path: "/app/backups/overview", labelKey: "backups.tabs.overview" },
   { page: "data", path: "/app/backups/data", labelKey: "backups.tabs.data" },
+  { page: "overview", path: "/app/backups/overview", labelKey: "backups.tabs.overview" },
   { page: "recovery", path: "/app/backups/recovery", labelKey: "backups.tabs.recovery" },
 ] as const;
 
