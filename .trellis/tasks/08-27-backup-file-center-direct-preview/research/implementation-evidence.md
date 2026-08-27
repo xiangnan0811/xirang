@@ -1316,3 +1316,26 @@ complete; every commit/PR/release/production/collector item remains unchecked.
 
 The Phase 7 commit/PR/CI checkbox remains unchecked until a repair commit is
 pushed and the resulting required CI run is fully GREEN.
+
+### Second CI boundary: bundle-budget root cause
+
+- Repair commit `dfe817de0d25db1b5f0dd4f8c3ba8fbf045f8ab8` was pushed and
+  CI run `33077699838` proved the Chromium, Firefox, and WebKit Playwright
+  matrix GREEN. The frontend job's next step then exposed a separate CSS bundle
+  budget failure; full frontend check and coverage remained GREEN.
+- The failing checker was reproduced locally without changing inputs: main JS
+  was 498.51/500 KiB and main CSS was 108.83/106 KiB. A detached build of the
+  exact merge base `5ea911338e56d050f504b4d56fe6de1c114c179e` measured CSS at
+  105.02/106 KiB, proving the prior budget had only about 0.98 KiB headroom.
+- A rule-level comparison found 48 added Tailwind rules and a net 3,892 raw
+  bytes for the approved file-center list/grid, split-pane, responsive state,
+  and pointer-aware 44px touch-target contracts. The compressed CSS delta was
+  only about 0.46 KiB; there was no dependency/lockfile change or unexpected
+  main-JS growth.
+- The minimal fix raises only the raw main-CSS ceiling from 106 to 110 KiB,
+  leaving the 500 KiB main-JS ceiling unchanged and restoring about 1.17 KiB
+  of raw-CSS headroom. The same checker is GREEN at 108.83/110 KiB; targeted
+  ESLint and `git diff --check` are GREEN. The temporary detached baseline
+  worktree was removed after measurement.
+
+The required final CI run remains pending; no Phase 7 checkbox advances yet.
