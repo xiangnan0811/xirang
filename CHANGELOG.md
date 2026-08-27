@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.51.0](https://github.com/xiangnan0811/xirang/compare/v0.50.10...v0.51.0) (2026-08-27)
+
+
+### ✨ Features
+
+* **backup:** allow private-network HTTP content delivery ([#470](https://github.com/xiangnan0811/xirang/issues/470)) ([013518f](https://github.com/xiangnan0811/xirang/commit/013518ff10737a81e01d6b252f969899c2b970d4))
+
 ## [0.50.10](https://github.com/xiangnan0811/xirang/compare/v0.50.9...v0.50.10) (2026-08-26)
 
 
