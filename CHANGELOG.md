@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.52.0](https://github.com/xiangnan0811/xirang/compare/v0.51.0...v0.52.0) (2026-08-27)
+
+
+### ✨ Features
+
+* **backup-assets:** add direct file preview center ([#472](https://github.com/xiangnan0811/xirang/issues/472)) ([93c4144](https://github.com/xiangnan0811/xirang/commit/93c4144e273aa33d3e9dc2989aa859cb0ca67838))
+
 ## [0.51.0](https://github.com/xiangnan0811/xirang/compare/v0.50.10...v0.51.0) (2026-08-27)
 
 
