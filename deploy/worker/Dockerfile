@@ -31,7 +31,9 @@ RUN apk add --no-cache \
       ffmpeg=8.0.1-r1 \
       font-noto=2025.12.01-r0 \
       font-noto-cjk=0_git20220127-r1 \
+      libcrypto3=3.5.8-r0 \
       libreoffice=25.8.1.1-r5 \
+      libssl3=3.5.8-r0 \
       poppler-utils=25.12.0-r0 \
       tesseract-ocr=5.5.1-r0 \
       tesseract-ocr-data-chi_sim=5.5.1-r0 \
