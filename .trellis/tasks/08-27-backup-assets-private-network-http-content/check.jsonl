@@ -1,0 +1,14 @@
+{"file":".trellis/tasks/08-27-backup-assets-private-network-http-content/research/current-state.md","reason":"Independently verify the implementation fixes the actual all-in-one LAN HTTP blocker and does not regress the released preview authorization path."}
+{"file":".trellis/tasks/08-27-backup-assets-private-network-http-content/research/design-review.md","reason":"Re-audit every independent design finding, especially content-shaped application logs, closed transport error mapping, and archive-member delivery."}
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Audit Nginx content-route evidence, redacted logs, external TLS ownership, checker coverage, and unchanged official runtime."}
+{"file":".trellis/spec/backend/backup-content-transport.md","reason":"Audit exact private-client classification, bounded trusted-hop peeling, dynamic setting rollback, issue/Serve recheck, and every delivery surface."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Audit settings snapshot/runtime propagation, security negatives, authorization invariants, privacy, and full backend gates."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Audit fail-closed status mapping and absence of raw transport/settings/content evidence."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Audit every-method content-shaped client identity omission plus application/Nginx canary and mutation coverage."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Audit Admin-only composition, existing primitive reuse, visible states, and role parity."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Audit UI eligibility independence, typed API use, behavior tests, a11y, and full web check."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Audit closed boolean/source mapping and absence of raw/storage/query bypasses."}
+{"file":".trellis/spec/frontend/backup-content-transport.md","reason":"Audit exact Admin mapper/control, bounded reason parsing, role-aware non-leaking guidance, and all delivery surfaces."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Audit warning confirmation, switch/dialog labels, keyboard behavior, and axe coverage."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace Admin setting through Settings, runtime config, issuance, Nginx, Serve, and browser origin."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Verify PR/CI/release and post-merge delivery evidence before completion."}

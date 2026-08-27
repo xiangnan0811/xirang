@@ -38,8 +38,9 @@ the change is intentionally minimal.
 
 - Use `logger.Module("name").Level()` and attach stable fields with typed
   zerolog helpers (`Uint`, `Int`, `Str`, `Err`, `Time`, etc.).
-- HTTP access logs include `method`, `path`, `status`, `latency_ms`,
-  `client_ip`, optional `request_id`, and optional `user_id`.
+- Ordinary HTTP access logs include `method`, `path`, `status`, `latency_ms`,
+  `client_ip`, optional `request_id`, and optional `user_id`. Content-shaped
+  requests are the deliberate privacy exception below.
 - Include identifiers that let maintainers connect logs to data:
   `task_id`, `task_run_id`, `node_id`, `alert_id`, `integration_id`,
   `policy_id`, and `worker` are established examples.
@@ -112,6 +113,10 @@ the change is intentionally minimal.
   constant safe route label. Never log the raw delivery ID, URL path,
   `RequestURI`, query, Cookie/Authorization header, session JTI, cookie secret,
   Catalog path/name, Provider locator, or content.
+- For every method and content-shaped path, `StructuredLogger` must omit
+  `client_ip`, `user_id`, XFF, X-Real-IP, and all other raw request identity
+  evidence. Retain only the safe route label, method, status, latency, and
+  optional request ID. Ordinary-route identity logging remains unchanged.
 - Content-local recovery catches panics before Gin's outer recovery can dump a
   request. It logs only module, fixed category, and optional request ID; panic
   values and request metadata are excluded.

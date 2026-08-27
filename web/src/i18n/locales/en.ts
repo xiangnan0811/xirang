@@ -2428,6 +2428,28 @@ const en = {
   },
 
   backupAssets: {
+    transport: {
+      title: "Private network HTTP content transport",
+      description: "HTTPS is required by default. HTTP delivery is limited to private client addresses identified through trusted proxies.",
+      loading: "Loading content transport setting",
+      switchLabel: "Allow private network HTTP content transport",
+      source: "Current source: {{source}}",
+      sources: { db: "Database", env: "Environment", default: "Secure default" },
+      warningTitle: "Private network HTTP is enabled",
+      warningBody: "Previews, original downloads, exports, archive members, and recovery results will travel unencrypted over the LAN.",
+      errorTitle: "Content transport setting could not be saved",
+      errorBody: "The last confirmed setting was retained. Try again later.",
+      saved: "Content transport setting saved",
+      confirmTitle: "Enable unencrypted LAN content delivery?",
+      confirmBody: "Preview, original download, export, archive-member, and Recovery result bytes may travel unencrypted over HTTP.",
+      enable: "Enable",
+      guidance: {
+        admin: "Use HTTPS, or review the private-network HTTP content transport setting.",
+        operator: "Use HTTPS, or contact an Admin to enable private-network HTTP content transport.",
+        generic: "Retry over a secure connection.",
+        action: "Review content transport setting",
+      },
+    },
     regions: {
       context: "Asset context",
       results: "Asset results",
@@ -3141,6 +3163,7 @@ const en = {
       temporarilyUnavailable: "Backup assets are temporarily unavailable",
       rateLimited: "Too many requests",
       secretRevealRequired: "Viewing this file requires a second verification",
+      secureTransportRequired: "The current connection cannot deliver backup content securely",
       recoveryPointMismatch: "This recovery point does not belong to the selected repository",
       recoveryPointTaskMismatch: "This recovery point does not belong to the selected task context",
       recoveryPointRetired: "This recovery point has been retired",

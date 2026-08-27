@@ -20,6 +20,7 @@ examples so implementation and review agents match the existing codebase.
 | [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | Filled |
 | [Error Handling](./error-handling.md) | Error types, handling strategies | Filled |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Filled |
+| [Backup Content Transport](./backup-content-transport.md) | Private-LAN HTTP evidence, dynamic setting, and shared delivery policy | Filled |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | Filled |
 | [Deployment Runtime Guidelines](./deployment-runtime.md) | Docker Compose and All-in-One image contracts | Filled |
 

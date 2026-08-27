@@ -15,6 +15,7 @@ func TestFoundationTransitionConfigsFromValuesBuildsPriorAndProspectiveBeforeRun
 	}
 	prospectiveValues["backup_assets.enabled"] = "true"
 	prospectiveValues["backup_assets.content_preview_ttl"] = "3m"
+	prospectiveValues["backup_assets.content_allow_insecure_private_network"] = "true"
 	prospectiveValues["backup_assets.search_candidate_limit"] = "20000"
 
 	configs, err := foundationTransitionConfigsFromValues(priorValues, prospectiveValues)
@@ -24,7 +25,9 @@ func TestFoundationTransitionConfigsFromValuesBuildsPriorAndProspectiveBeforeRun
 	if configs.Prior.Enabled || !configs.Prospective.Enabled {
 		t.Fatalf("transition enabled states: prior=%t prospective=%t", configs.Prior.Enabled, configs.Prospective.Enabled)
 	}
-	if configs.Prospective.Content.PreviewTTL.String() != "3m0s" || configs.Prospective.Search.CandidateLimit != 20000 {
+	if configs.Prospective.Content.PreviewTTL.String() != "3m0s" ||
+		!configs.Prospective.Content.AllowInsecurePrivateNetwork || configs.Prior.Content.AllowInsecurePrivateNetwork ||
+		configs.Prospective.Search.CandidateLimit != 20000 {
 		t.Fatalf("prospective transition config=%+v", configs.Prospective)
 	}
 	if configs.Prior.Content.PreviewTTL == configs.Prospective.Content.PreviewTTL ||

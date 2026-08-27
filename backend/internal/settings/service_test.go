@@ -1159,6 +1159,7 @@ func TestBackupAssetSearchConfigAndOverlayConfigDefinitionsAndSafeDefaults(t *te
 		"backup_assets.content_reconcile_batch_size":      {"BACKUP_ASSETS_CONTENT_RECONCILE_BATCH_SIZE", "100", TypeInt, "1", "1000", "", ""},
 		"backup_assets.content_audit_backlog_max":         {"BACKUP_ASSETS_CONTENT_AUDIT_BACKLOG_MAX", "10000", TypeInt, "100", "100000", "", ""},
 		"backup_assets.content_allow_insecure_loopback":   {"BACKUP_ASSETS_CONTENT_ALLOW_INSECURE_LOOPBACK", "false", TypeBool, "", "", "", ""},
+		"backup_assets.content_allow_insecure_private_network": {"BACKUP_ASSETS_CONTENT_ALLOW_INSECURE_PRIVATE_NETWORK", "false", TypeBool, "", "", "", ""},
 		"backup_assets.catalog_batch_size":                {"BACKUP_ASSETS_CATALOG_BATCH_SIZE", "2000", TypeInt, "1", "100000", "", ""},
 		"backup_assets.catalog_build_timeout":             {"BACKUP_ASSETS_CATALOG_BUILD_TIMEOUT", "30m", TypeDuration, "", "", "1m", "24h"},
 		"backup_assets.repository_reconcile_interval":     {"BACKUP_ASSETS_REPOSITORY_RECONCILE_INTERVAL", "15m", TypeDuration, "", "", "1m", "24h"},
@@ -2184,6 +2185,7 @@ func TestBackupAssetContentSettingsUseDBEnvDefaultPrecedenceInAtomicSnapshot(t *
 		"backup_assets.content_memory_provider_bytes",
 		"backup_assets.content_cache_object_files",
 		"backup_assets.content_allow_insecure_loopback",
+		"backup_assets.content_allow_insecure_private_network",
 	} {
 		if _, exists := values[key]; !exists {
 			t.Fatalf("atomic snapshot omitted %s", key)

@@ -110,7 +110,9 @@ require_unique_prefix "$CONTENT_BLOCK" 'proxy_read_timeout ' 'proxy_read_timeout
 require_unique_prefix "$CONTENT_BLOCK" 'proxy_send_timeout ' 'proxy_send_timeout 75s;'
 require_unique_prefix "$CONTENT_BLOCK" 'send_timeout ' 'send_timeout 75s;'
 require_unique_prefix "$CONTENT_BLOCK" 'proxy_set_header Host ' 'proxy_set_header Host $http_host;'
-require_unique_prefix "$CONTENT_BLOCK" 'proxy_set_header X-Forwarded-Proto ' 'proxy_set_header X-Forwarded-Proto $xirang_effective_proto;'
+require_unique_prefix "$CONTENT_BLOCK" 'proxy_set_header X-Forwarded-Proto ' 'proxy_set_header X-Forwarded-Proto $scheme;'
+require_unique_prefix "$CONTENT_BLOCK" 'proxy_set_header X-Forwarded-For ' 'proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;'
+require_unique_prefix "$CONTENT_BLOCK" 'proxy_set_header X-Real-IP ' 'proxy_set_header X-Real-IP "";'
 require_unique_prefix "$CONTENT_BLOCK" 'proxy_set_header Range ' 'proxy_set_header Range $http_range;'
 require_unique_prefix "$CONTENT_BLOCK" 'proxy_set_header If-Range ' 'proxy_set_header If-Range $http_if_range;'
 
@@ -136,7 +138,9 @@ require_unique_prefix "$SHAPED_BLOCK" 'error_log ' 'error_log /dev/null crit;'
 require_unique_prefix "$SHAPED_BLOCK" 'proxy_pass ' 'proxy_pass http://127.0.0.1:3000;'
 require_unique_prefix "$SHAPED_BLOCK" 'proxy_http_version ' 'proxy_http_version 1.1;'
 require_unique_prefix "$SHAPED_BLOCK" 'proxy_set_header Host ' 'proxy_set_header Host $http_host;'
-require_unique_prefix "$SHAPED_BLOCK" 'proxy_set_header X-Forwarded-Proto ' 'proxy_set_header X-Forwarded-Proto $xirang_effective_proto;'
+require_unique_prefix "$SHAPED_BLOCK" 'proxy_set_header X-Forwarded-Proto ' 'proxy_set_header X-Forwarded-Proto $scheme;'
+require_unique_prefix "$SHAPED_BLOCK" 'proxy_set_header X-Forwarded-For ' 'proxy_set_header X-Forwarded-For "";'
+require_unique_prefix "$SHAPED_BLOCK" 'proxy_set_header X-Real-IP ' 'proxy_set_header X-Real-IP "";'
 
 SHAPED_ADD_HEADER_COUNT=$(grep -Ec '^add_header[[:space:]]' "$SHAPED_BLOCK" || true)
 if [[ "$SHAPED_ADD_HEADER_COUNT" -ne 3 ]]; then
@@ -178,23 +182,12 @@ for variable in '$request_id' '$status' '$body_bytes_sent' '$request_time' '$ups
   fi
 done
 
-PROTO_OPENING='map $http_x_forwarded_proto $xirang_effective_proto {'
-PROTO_COUNT=$(grep -Fc -- "$PROTO_OPENING" "$RENDERED" || true)
-if [[ "$PROTO_COUNT" -ne 1 ]]; then
-  fail "closed forwarded-proto map must occur once"
+if grep -Fq -- '$http_x_forwarded_proto' "$CONTENT_BLOCK" ||
+   grep -Fq -- '$http_x_forwarded_proto' "$SHAPED_BLOCK" ||
+   grep -Fq -- '$xirang_effective_proto' "$CONTENT_BLOCK" ||
+   grep -Fq -- '$xirang_effective_proto' "$SHAPED_BLOCK"; then
+  fail "content routes must overwrite forwarded scheme with the actual nginx scheme"
 fi
-PROTO_RAW="$TMP_DIR/proto.raw"
-PROTO_BLOCK="$TMP_DIR/proto.block"
-extract_simple_block "$RENDERED" "$PROTO_OPENING" "$PROTO_RAW"
-normalize_block "$PROTO_RAW" "$PROTO_BLOCK"
-PROTO_LINES=$(grep -Evc '^[[:space:]]*(#|$)' "$PROTO_BLOCK" || true)
-if [[ "$PROTO_LINES" -ne 5 ]]; then
-  fail "forwarded-proto map must contain only default/http/https products"
-fi
-require_once_line "$PROTO_BLOCK" "$PROTO_OPENING"
-require_once_line "$PROTO_BLOCK" 'default $scheme;'
-require_once_line "$PROTO_BLOCK" '~^http$ http;'
-require_once_line "$PROTO_BLOCK" '~^https$ https;'
 
 GENERIC_OPENING='location /api/v1/ {'
 GENERIC_COUNT=$(grep -Fc -- "$GENERIC_OPENING" "$RENDERED" || true)

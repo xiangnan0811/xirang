@@ -2428,6 +2428,28 @@ const zh = {
   },
 
   backupAssets: {
+    transport: {
+      title: "私有网络 HTTP 内容传输",
+      description: "默认要求 HTTPS。仅在受信代理识别到私有客户端地址时，允许通过 HTTP 交付备份内容。",
+      loading: "正在加载内容传输设置",
+      switchLabel: "允许私有网络 HTTP 内容传输",
+      source: "当前来源：{{source}}",
+      sources: { db: "数据库", env: "环境变量", default: "安全默认值" },
+      warningTitle: "私有网络 HTTP 已启用",
+      warningBody: "预览、原文件下载、导出文件、压缩包成员和恢复结果将通过局域网明文传输。",
+      errorTitle: "无法保存内容传输设置",
+      errorBody: "已保留上次确认的设置，请稍后重试。",
+      saved: "内容传输设置已保存",
+      confirmTitle: "启用未加密的局域网内容传输？",
+      confirmBody: "启用后，预览、原文件下载、导出文件、压缩包成员和恢复结果字节可能通过 HTTP 未加密传输。",
+      enable: "启用",
+      guidance: {
+        admin: "请改用 HTTPS，或检查私有网络 HTTP 内容传输设置。",
+        operator: "请改用 HTTPS，或联系管理员启用私有网络 HTTP 内容传输。",
+        generic: "请通过安全连接重试。",
+        action: "检查内容传输设置",
+      },
+    },
     regions: {
       context: "资产上下文",
       results: "资产结果",
@@ -3141,6 +3163,7 @@ const zh = {
       temporarilyUnavailable: "备份资产暂不可用",
       rateLimited: "请求过于频繁",
       secretRevealRequired: "查看该文件需要二次验证",
+      secureTransportRequired: "当前连接不能安全交付备份内容",
       recoveryPointMismatch: "该恢复点不属于所选仓库",
       recoveryPointTaskMismatch: "该恢复点不属于所选任务上下文",
       recoveryPointRetired: "该恢复点已退役",

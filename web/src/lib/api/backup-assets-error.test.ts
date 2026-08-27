@@ -12,6 +12,37 @@ function capabilityError(status: number, code: string) {
 }
 
 describe("mapBackupAssetsError", () => {
+  it("maps only the exact parameter-free secure transport reason for content tickets", () => {
+    const exact = new ApiError(503, "localized transport message", {
+      code: 503,
+      message: "localized transport message",
+      data: { reason: { code: "secure_transport_required", params: {} } },
+    });
+    expect(mapBackupAssetsError(exact, "content_ticket")).toEqual({
+      code: "secure_transport_required",
+      translationKey: "backupAssets.errors.secureTransportRequired",
+      retryable: false,
+      action: "none",
+    });
+
+    for (const detail of [
+      { data: { reason: { code: "secure_transport_required", params: { address: "10.0.0.8" } } } },
+      { data: { reason: { code: "secure_transport_required", params: [] } } },
+      { data: { reason: { code: "secure_transport_required" } } },
+      { data: { reason: { code: "secure_transport_required", params: {}, client_ip: "10.0.0.8" } } },
+    ]) {
+      expect(mapBackupAssetsError(new ApiError(503, "raw", detail), "content_ticket")).toEqual({
+        code: "temporarily_unavailable",
+        translationKey: "backupAssets.errors.temporarilyUnavailable",
+        retryable: true,
+        action: "retry",
+      });
+    }
+    expect(mapBackupAssetsError(exact, "repositories")).toMatchObject({
+      code: "temporarily_unavailable",
+    });
+  });
+
   it("maps a secret-reveal 403 without treating it as generic permission denial", () => {
     expect(
       mapBackupAssetsError(

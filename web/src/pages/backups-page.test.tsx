@@ -114,6 +114,12 @@ vi.mock("@/features/backup-assets/export-job-panel", () => ({
   ),
 }));
 
+vi.mock("@/features/backup-assets/private-network-content-transport-panel", () => ({
+  PrivateNetworkContentTransportPanel: ({ token }: { token: string }) => (
+    <section data-testid="private-network-content-transport">{token}</section>
+  ),
+}));
+
 vi.mock("@/lib/api/backup-ga-api", () => ({
   createBackupGaApi: () => ({
     getReadiness: vi.fn().mockResolvedValue({
@@ -213,6 +219,24 @@ describe("BackupsPage", () => {
     expect(await screen.findByText(/Backup Confidence|备份可信度/)).toBeInTheDocument();
     expect((await screen.findAllByText(/Insufficient proof|证据不足/)).length).toBeGreaterThan(0);
     expect(await screen.findByText(/Never backed up|从未备份/)).toBeInTheDocument();
+  });
+
+  it("mounts the private-network content control only for an authenticated Admin", async () => {
+    getBackupConfidenceMock.mockResolvedValue(backupConfidence);
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+    getStorageUsageMock.mockResolvedValue(storageUsage);
+
+    const admin = renderBackups("/app/backups/overview");
+    expect(await screen.findByTestId("private-network-content-transport")).toHaveTextContent("test-token");
+    admin.unmount();
+
+    for (const role of ["operator", "viewer"] as const) {
+      authRef.current = { token: "test-token", role, ensureStepUpProof: vi.fn() };
+      const page = renderBackups("/app/backups/overview");
+      await screen.findByText(/Backup Confidence|备份可信度/);
+      expect(screen.queryByTestId("private-network-content-transport")).not.toBeInTheDocument();
+      page.unmount();
+    }
   });
 
   it("demo 模式无 token 时展示 mock 可信路径和故障路径", async () => {

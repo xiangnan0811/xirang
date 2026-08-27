@@ -30,16 +30,19 @@ import type {
   RecoverySecurityFindingCategory,
   RecoveryTargetMode,
 } from "@/lib/api/backup-recovery-api";
+import type { AuthRole } from "@/context/auth-context.shared";
 
 import { RecoveryImpactPanel } from "./recovery-impact-panel";
 import { RecoveryJobPanel } from "./recovery-job-panel";
 import type { useBackupRecovery } from "./use-backup-recovery";
+import { ContentTransportGuidance } from "./content-transport-guidance";
 
 type BackupRecoveryController = ReturnType<typeof useBackupRecovery>;
 
 export interface RecoveryPlanWizardProps {
   open: boolean;
   recovery: BackupRecoveryController;
+  authRole?: AuthRole | null;
   onOpenChange: (open: boolean) => void;
 }
 
@@ -197,7 +200,7 @@ function DeleteAuthorizationForm({
   );
 }
 
-export function RecoveryPlanWizard({ open, recovery, onOpenChange }: RecoveryPlanWizardProps) {
+export function RecoveryPlanWizard({ open, recovery, authRole = null, onOpenChange }: RecoveryPlanWizardProps) {
   const { t } = useTranslation();
   const { state } = recovery;
   const phaseHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -432,7 +435,12 @@ export function RecoveryPlanWizard({ open, recovery, onOpenChange }: RecoveryPla
             </InlineAlert>
           ) : null}
           {state.error !== null && state.phase !== "unavailable" ? (
-            <InlineAlert tone="critical">{t(`backupAssets.recovery.error.${state.error}`)}</InlineAlert>
+            <InlineAlert tone="critical">
+              {t(state.error === "secure_transport_required"
+                ? "backupAssets.errors.secureTransportRequired"
+                : `backupAssets.recovery.error.${state.error}`)}
+              {state.error === "secure_transport_required" ? <ContentTransportGuidance authRole={authRole} /> : null}
+            </InlineAlert>
           ) : null}
 
           <p id="recovery-announcement" data-testid="recovery-announcement" aria-live="polite" aria-atomic="true" className="sr-only">

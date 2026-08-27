@@ -133,8 +133,12 @@ func TestBackupContentIssueRejectsUnknownTrailingQueryAndMissingSessionBeforeSer
 	}
 }
 
-func TestBackupContentIssueEnforcesExactCrossPurposeStepUpMatrix(t *testing.T) {
+func TestBackupContentIssuePrivateNetworkHTTPEnforcesExactCrossPurposeStepUpMatrix(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	policy, err := NewBackupContentSchemePolicy([]string{"127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared&_loc=UTC"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
@@ -183,9 +187,12 @@ func TestBackupContentIssueEnforcesExactCrossPurposeStepUpMatrix(t *testing.T) {
 				action, renderer, profile = content.DeliveryDownload, content.RendererAttachment, content.ProfileOriginalV1
 			}
 			fake.ticket = backupContentHandlerTestTicket(t, action, renderer, profile)
+			fake.ticket.Cookie.Secure = false
 			handler := NewBackupContentHandler(fake, db, jwt, func(context.Context) (BackupContentHandlerConfig, error) {
-				return BackupContentHandlerConfig{TicketTimeout: 5 * time.Second}, nil
-			})
+				return BackupContentHandlerConfig{
+					TicketTimeout: 5 * time.Second, AllowInsecurePrivateNetwork: true,
+				}, nil
+			}).WithSchemePolicy(policy)
 			router := gin.New()
 			router.POST("/api/v1/recovery-points/:recoveryPointId/entries/:entryId/delivery-tickets", func(c *gin.Context) {
 				c.Set(middleware.CtxUserID, user.ID)
@@ -198,9 +205,12 @@ func TestBackupContentIssueEnforcesExactCrossPurposeStepUpMatrix(t *testing.T) {
 				c.Next()
 			}, handler.Issue)
 			request := httptest.NewRequest(http.MethodPost,
-				"https://xirang.example/api/v1/recovery-points/"+pointID+"/entries/"+entryID+"/delivery-tickets",
+				"http://xirang.example/api/v1/recovery-points/"+pointID+"/entries/"+entryID+"/delivery-tickets",
 				strings.NewReader(testCase.body))
+			request.RemoteAddr = "127.0.0.1:43210"
 			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("X-Forwarded-Proto", "http")
+			request.Header.Set("X-Forwarded-For", "192.168.20.45")
 			if testCase.proof != "" {
 				request.Header.Set(StepUpHeaderName, testCase.proof)
 			}
@@ -209,6 +219,9 @@ func TestBackupContentIssueEnforcesExactCrossPurposeStepUpMatrix(t *testing.T) {
 			if testCase.wantOK {
 				if response.Code != http.StatusOK || len(fake.issueRequests) != 1 {
 					t.Fatalf("status=%d calls=%d body=%s", response.Code, len(fake.issueRequests), response.Body.String())
+				}
+				if fake.issueRequests[0].SecureCookie {
+					t.Fatal("private-network HTTP issue requested a Secure cookie")
 				}
 				proof := fake.issueRequests[0].Proof
 				if testCase.wantAction == "" && proof != nil || testCase.wantAction != "" && (proof == nil || proof.Action != testCase.wantAction) {
@@ -251,8 +264,12 @@ func TestBackupContentIssueRejectsOperatorSecretRevealProof(t *testing.T) {
 	}
 }
 
-func TestBackupContentRecoveryResultDownloadTicketUsesExactResourceAndPurpose(t *testing.T) {
+func TestBackupContentPrivateNetworkHTTPRecoveryResultDownloadTicketUsesExactResourceAndPurpose(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	policy, err := NewBackupContentSchemePolicy([]string{"127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared&_loc=UTC"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
@@ -275,9 +292,12 @@ func TestBackupContentRecoveryResultDownloadTicketUsesExactResourceAndPurpose(t 
 	fake := &backupContentServiceFake{ticket: backupContentHandlerTestTicket(
 		t, content.DeliveryDownload, content.RendererAttachment, content.ProfileOriginalV1,
 	)}
+	fake.ticket.Cookie.Secure = false
 	handler := NewBackupContentHandler(fake, db, jwt, func(context.Context) (BackupContentHandlerConfig, error) {
-		return BackupContentHandlerConfig{TicketTimeout: 5 * time.Second}, nil
-	})
+		return BackupContentHandlerConfig{
+			TicketTimeout: 5 * time.Second, AllowInsecurePrivateNetwork: true,
+		}, nil
+	}).WithSchemePolicy(policy)
 	router := gin.New()
 	router.POST("/api/v1/recovery-jobs/:id/results/:resultId/download-ticket", func(c *gin.Context) {
 		c.Set(middleware.CtxUserID, user.ID)
@@ -291,9 +311,12 @@ func TestBackupContentRecoveryResultDownloadTicketUsesExactResourceAndPurpose(t 
 	}, handler.IssueRecoveryResult)
 	jobID, resultID := strings.Repeat("a", 32), strings.Repeat("b", 32)
 	request := httptest.NewRequest(http.MethodPost,
-		"https://xirang.example/api/v1/recovery-jobs/"+jobID+"/results/"+resultID+"/download-ticket",
+		"http://xirang.example/api/v1/recovery-jobs/"+jobID+"/results/"+resultID+"/download-ticket",
 		strings.NewReader(`{"schema_version":1}`))
+	request.RemoteAddr = "127.0.0.1:43210"
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Forwarded-Proto", "http")
+	request.Header.Set("X-Forwarded-For", "192.168.20.45")
 	request.Header.Set(StepUpHeaderName, proof)
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
@@ -304,7 +327,7 @@ func TestBackupContentRecoveryResultDownloadTicketUsesExactResourceAndPurpose(t 
 	if issued.Resource.Kind != content.DeliveryResourceRecoveryResult || issued.Resource.RecoveryResult == nil ||
 		issued.Resource.RecoveryResult.RecoveryJobID != jobID || issued.Resource.RecoveryResult.ResultID != resultID ||
 		issued.Ref != (backupasset.AssetRef{}) || issued.Action != content.DeliveryDownload ||
-		issued.Proof == nil || issued.Proof.Action != auth.StepUpActionRecoveryResultDownload {
+		issued.Proof == nil || issued.Proof.Action != auth.StepUpActionRecoveryResultDownload || issued.SecureCookie {
 		t.Fatalf("recovery issue request=%+v", issued)
 	}
 	aliased := httptest.NewRequest(http.MethodPost,
@@ -339,6 +362,18 @@ func TestBackupContentRecoveryResultDownloadTicketUsesExactResourceAndPurpose(t 
 	if invalidContentTypeResponse.Code != http.StatusBadRequest || len(fake.issueRequests) != 1 {
 		t.Fatalf("invalid Recovery result content type status=%d calls=%d body=%s",
 			invalidContentTypeResponse.Code, len(fake.issueRequests), invalidContentTypeResponse.Body.String())
+	}
+	insecure := httptest.NewRequest(http.MethodPost,
+		"http://xirang.example/api/v1/recovery-jobs/"+jobID+"/results/"+resultID+"/download-ticket",
+		strings.NewReader(`{"schema_version":1}`))
+	insecure.RemoteAddr = "203.0.113.5:43210"
+	insecure.Header.Set("Content-Type", "application/json")
+	insecure.Header.Set(StepUpHeaderName, proof)
+	insecureResponse := httptest.NewRecorder()
+	router.ServeHTTP(insecureResponse, insecure)
+	assertSecureTransportRequiredResponse(t, insecureResponse)
+	if len(fake.issueRequests) != 1 {
+		t.Fatalf("insecure Recovery result reached service calls=%d", len(fake.issueRequests))
 	}
 }
 
@@ -394,6 +429,7 @@ func TestBackupContentServeUsesTrustedProxySchemeForOrigin(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "http://xirang.example/api/v1/asset-content/"+deliveryID, nil)
 	request.RemoteAddr = "127.0.0.1:43210"
 	request.Header.Set("X-Forwarded-Proto", "https")
+	request.Header.Set("X-Forwarded-For", "198.51.100.77")
 	request.Header.Set("Cookie", content.DeliveryCookieName+"=v1."+strings.Repeat("A", 43))
 	request.Header.Set("Sec-Fetch-Site", "same-origin")
 	request.Header.Set("Origin", "https://xirang.example")
@@ -473,7 +509,7 @@ func TestBackupContentSchemePolicyRequiresTrustedProxyForForwardedHTTPS(t *testi
 	}
 
 	directTLS := httptest.NewRequest(http.MethodPost, "https://xirang.example/ticket", nil)
-	if secure, err := policy.SecureCookie(directTLS, false); err != nil || !secure {
+	if secure, err := policy.SecureCookie(directTLS, BackupContentTransportOptions{}); err != nil || !secure {
 		t.Fatalf("direct TLS secure=%v err=%v", secure, err)
 	}
 
@@ -482,13 +518,15 @@ func TestBackupContentSchemePolicyRequiresTrustedProxyForForwardedHTTPS(t *testi
 		remote string
 		tls    bool
 		xfp    []string
+		xff    []string
 		fwd    []string
 		wantOK bool
 	}{
-		{name: "trusted IPv4", remote: "127.0.0.1:43210", xfp: []string{"https"}, wantOK: true},
-		{name: "trusted CIDR", remote: "10.23.4.5:43210", xfp: []string{"https"}, wantOK: true},
-		{name: "trusted IPv6 CIDR", remote: "[2001:db8::42]:43210", xfp: []string{"https"}, wantOK: true},
+		{name: "trusted IPv4", remote: "127.0.0.1:43210", xfp: []string{"https"}, xff: []string{"198.51.100.77"}, wantOK: true},
+		{name: "trusted CIDR", remote: "10.23.4.5:43210", xfp: []string{"https"}, xff: []string{"198.51.100.77"}, wantOK: true},
+		{name: "trusted IPv6 CIDR", remote: "[2001:db8::42]:43210", xfp: []string{"https"}, xff: []string{"198.51.100.77"}, wantOK: true},
 		{name: "untrusted peer", remote: "192.0.2.10:43210", xfp: []string{"https"}},
+		{name: "forwarded HTTPS without XFF", remote: "127.0.0.1:43210", xfp: []string{"https"}},
 		{name: "missing forwarded proto", remote: "127.0.0.1:43210"},
 		{name: "empty forwarded proto", remote: "127.0.0.1:43210", xfp: []string{""}},
 		{name: "multiple forwarded proto", remote: "127.0.0.1:43210", xfp: []string{"https", "https"}},
@@ -509,10 +547,13 @@ func TestBackupContentSchemePolicyRequiresTrustedProxyForForwardedHTTPS(t *testi
 			for _, value := range testCase.xfp {
 				request.Header.Add("X-Forwarded-Proto", value)
 			}
+			for _, value := range testCase.xff {
+				request.Header.Add("X-Forwarded-For", value)
+			}
 			for _, value := range testCase.fwd {
 				request.Header.Add("Forwarded", value)
 			}
-			secure, err := policy.SecureCookie(request, false)
+			secure, err := policy.SecureCookie(request, BackupContentTransportOptions{})
 			if testCase.wantOK {
 				if err != nil || !secure {
 					t.Fatalf("secure=%v err=%v", secure, err)
@@ -527,6 +568,123 @@ func TestBackupContentSchemePolicyRequiresTrustedProxyForForwardedHTTPS(t *testi
 
 	if _, err := NewBackupContentSchemePolicy([]string{"127.0.0.1", "not-a-cidr"}); err == nil {
 		t.Fatal("invalid trusted proxy entry accepted")
+	}
+}
+
+func TestBackupContentSchemePolicyPrivateNetworkMatrix(t *testing.T) {
+	policy, err := NewBackupContentSchemePolicy([]string{"127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowPrivate := BackupContentTransportOptions{AllowInsecurePrivateNetwork: true}
+	tooManyHops := strings.TrimSuffix(strings.Repeat("192.168.1.2,", 17), ",")
+	overLimitXFF := "192.168.1.2" + strings.Repeat(" ", maxBackupContentForwardedForBytes)
+	overLimitXFP := "http" + strings.Repeat(" ", 1024)
+	tests := []struct {
+		name       string
+		target     string
+		remote     string
+		xfp        []string
+		xff        []string
+		forwarded  string
+		options    BackupContentTransportOptions
+		wantOK     bool
+		wantSecure bool
+	}{
+		{name: "direct TLS", target: "https://xirang.example/ticket", remote: "203.0.113.5:4000", wantOK: true, wantSecure: true},
+		{name: "trusted proxy HTTPS", target: "http://xirang.example/ticket", remote: "127.0.0.1:4000", xfp: []string{"https"}, xff: []string{"198.51.100.77"}, wantOK: true, wantSecure: true},
+		{name: "direct RFC1918", target: "http://xirang.example/ticket", remote: "192.168.4.5:4000", options: allowPrivate, wantOK: true},
+		{name: "direct ULA", target: "http://xirang.example/ticket", remote: "[fd12:3456::5]:4000", options: allowPrivate, wantOK: true},
+		{name: "direct loopback", target: "http://xirang.example/ticket", remote: "127.0.0.1:4000", options: allowPrivate, wantOK: true},
+		{name: "trusted proxy RFC1918", target: "http://xirang.example/ticket", remote: "127.0.0.1:4000", xfp: []string{"http"}, xff: []string{"192.168.4.5"}, options: allowPrivate, wantOK: true},
+		{name: "trusted proxy ULA", target: "http://xirang.example/ticket", remote: "127.0.0.1:4000", xfp: []string{"http"}, xff: []string{"fd12:3456::5"}, options: allowPrivate, wantOK: true},
+		{name: "public IPv4", target: "http://xirang.example/ticket", remote: "203.0.113.5:4000", options: allowPrivate},
+		{name: "public IPv6", target: "http://xirang.example/ticket", remote: "[2001:db8::5]:4000", options: allowPrivate},
+		{name: "CGNAT", target: "http://xirang.example/ticket", remote: "100.64.0.5:4000", options: allowPrivate},
+		{name: "link local IPv4", target: "http://xirang.example/ticket", remote: "169.254.1.5:4000", options: allowPrivate},
+		{name: "link local IPv6", target: "http://xirang.example/ticket", remote: "[fe80::5]:4000", options: allowPrivate},
+		{name: "unspecified", target: "http://xirang.example/ticket", remote: "0.0.0.0:4000", options: allowPrivate},
+		{name: "multicast", target: "http://xirang.example/ticket", remote: "224.0.0.5:4000", options: allowPrivate},
+		{name: "zone qualified", target: "http://xirang.example/ticket", remote: "[fd00::5%eth0]:4000", options: allowPrivate},
+		{name: "malformed bracketed peer", target: "http://xirang.example/ticket", remote: "[[192.168.4.5]]", options: allowPrivate},
+		{name: "forwarded HTTP without XFF", target: "http://xirang.example/ticket", remote: "127.0.0.1:4000", xfp: []string{"http"}, options: allowPrivate},
+		{name: "spoofed leftmost private", target: "http://xirang.example/ticket", remote: "127.0.0.1:4000", xfp: []string{"http"}, xff: []string{"192.168.1.2, 203.0.113.5"}, options: allowPrivate},
+		{name: "all trusted no client", target: "http://xirang.example/ticket", remote: "127.0.0.1:4000", xfp: []string{"http"}, xff: []string{"127.0.0.1"}, options: allowPrivate},
+		{name: "malformed XFF", target: "http://xirang.example/ticket", remote: "127.0.0.1:4000", xfp: []string{"http"}, xff: []string{"192.168.1.2, bad"}, options: allowPrivate},
+		{name: "multiple XFF headers", target: "http://xirang.example/ticket", remote: "127.0.0.1:4000", xfp: []string{"http"}, xff: []string{"192.168.1.2", "192.168.1.3"}, options: allowPrivate},
+		{name: "too many XFF hops", target: "http://xirang.example/ticket", remote: "127.0.0.1:4000", xfp: []string{"http"}, xff: []string{tooManyHops}, options: allowPrivate},
+		{name: "empty XFF item", target: "http://xirang.example/ticket", remote: "127.0.0.1:4000", xfp: []string{"http"}, xff: []string{"192.168.1.2,"}, options: allowPrivate},
+		{name: "over-limit XFF", target: "http://xirang.example/ticket", remote: "127.0.0.1:4000", xfp: []string{"http"}, xff: []string{overLimitXFF}, options: allowPrivate},
+		{name: "over-limit XFP", target: "http://xirang.example/ticket", remote: "127.0.0.1:4000", xfp: []string{overLimitXFP}, xff: []string{"192.168.1.2"}, options: allowPrivate},
+		{name: "untrusted proxy headers", target: "http://xirang.example/ticket", remote: "203.0.113.5:4000", xfp: []string{"http"}, xff: []string{"192.168.1.2"}, options: allowPrivate},
+		{name: "compound XFP", target: "http://xirang.example/ticket", remote: "127.0.0.1:4000", xfp: []string{"http,https"}, xff: []string{"192.168.1.2"}, options: allowPrivate},
+		{name: "duplicate XFP", target: "http://xirang.example/ticket", remote: "127.0.0.1:4000", xfp: []string{"http", "http"}, xff: []string{"192.168.1.2"}, options: allowPrivate},
+		{name: "Forwarded is rejected", target: "http://xirang.example/ticket", remote: "192.168.1.2:4000", forwarded: "for=192.168.1.2;proto=http", options: allowPrivate},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, testCase.target, nil)
+			request.RemoteAddr = testCase.remote
+			for _, value := range testCase.xfp {
+				request.Header.Add("X-Forwarded-Proto", value)
+			}
+			for _, value := range testCase.xff {
+				request.Header.Add("X-Forwarded-For", value)
+			}
+			if testCase.forwarded != "" {
+				request.Header.Set("Forwarded", testCase.forwarded)
+			}
+			secure, secureErr := policy.SecureCookie(request, testCase.options)
+			if testCase.wantOK {
+				if secureErr != nil || secure != testCase.wantSecure {
+					t.Fatalf("secure=%v err=%v", secure, secureErr)
+				}
+				return
+			}
+			if secureErr == nil {
+				t.Fatalf("request unexpectedly accepted with secure=%v", secure)
+			}
+		})
+	}
+}
+
+func TestBackupContentServeRechecksPrivateNetworkSettingBeforeService(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	policy, err := NewBackupContentSchemePolicy([]string{"127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowPrivate := true
+	fake := &backupContentServiceFake{}
+	handler := NewBackupContentHandler(fake, nil, nil, func(context.Context) (BackupContentHandlerConfig, error) {
+		return BackupContentHandlerConfig{
+			TicketTimeout: 5 * time.Second, AllowInsecurePrivateNetwork: allowPrivate,
+		}, nil
+	}).WithSchemePolicy(policy)
+	router := gin.New()
+	router.GET("/api/v1/asset-content/:deliveryId", handler.Serve)
+	deliveryID := strings.Repeat("d", 32)
+	issueRequest := func() *http.Request {
+		request := httptest.NewRequest(http.MethodGet, "http://xirang.example/api/v1/asset-content/"+deliveryID, nil)
+		request.RemoteAddr = "127.0.0.1:43210"
+		request.Header.Set("X-Forwarded-Proto", "http")
+		request.Header.Set("X-Forwarded-For", "192.168.20.45")
+		request.Header.Set("Origin", "http://xirang.example")
+		request.Header.Set("Sec-Fetch-Site", "same-origin")
+		request.Header.Set("Cookie", content.DeliveryCookieName+"=v1."+strings.Repeat("A", 43))
+		return request
+	}
+
+	allowed := httptest.NewRecorder()
+	router.ServeHTTP(allowed, issueRequest())
+	if allowed.Code != http.StatusOK || len(fake.gatewayRequests) != 1 {
+		t.Fatalf("enabled status=%d calls=%d", allowed.Code, len(fake.gatewayRequests))
+	}
+	allowPrivate = false
+	denied := httptest.NewRecorder()
+	router.ServeHTTP(denied, issueRequest())
+	if denied.Code != http.StatusServiceUnavailable || denied.Body.Len() != 0 || len(fake.gatewayRequests) != 1 {
+		t.Fatalf("disabled status=%d body=%q calls=%d", denied.Code, denied.Body.String(), len(fake.gatewayRequests))
 	}
 }
 
@@ -563,6 +721,59 @@ func TestBackupContentIssueRejectsForwardedHTTPSFromUntrustedPeer(t *testing.T) 
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable || len(fake.issueRequests) != 0 {
 		t.Fatalf("status=%d calls=%d body=%s", response.Code, len(fake.issueRequests), response.Body.String())
+	}
+	assertSecureTransportRequiredResponse(t, response)
+}
+
+func TestBackupContentIssueAllowsPrivateNetworkHTTPThroughTrustedProxy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	policy, err := NewBackupContentSchemePolicy([]string{"127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &backupContentServiceFake{}
+	fake.ticket = backupContentHandlerTestTicket(
+		t, content.DeliveryPreview, content.RendererSafeRaster, content.ProfileRasterV1,
+	)
+	fake.ticket.Cookie.Secure = false
+	handler := NewBackupContentHandler(fake, nil, nil, func(context.Context) (BackupContentHandlerConfig, error) {
+		return BackupContentHandlerConfig{
+			TicketTimeout: 5 * time.Second, AllowInsecurePrivateNetwork: true,
+		}, nil
+	}).WithSchemePolicy(policy)
+	now := time.Now().UTC()
+	router := gin.New()
+	router.POST("/api/v1/recovery-points/:recoveryPointId/entries/:entryId/delivery-tickets", func(c *gin.Context) {
+		c.Set(middleware.CtxUserID, uint(42))
+		c.Set(middleware.CtxUsername, "operator")
+		c.Set(middleware.CtxRole, "operator")
+		c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{
+			JTI: strings.Repeat("f", 32), UserID: 42, Role: "operator", TokenVersion: 3,
+			ExpiresAt: now.Add(time.Hour),
+		})
+		c.Next()
+	}, handler.Issue)
+	pointID, entryID := strings.Repeat("a", 32), strings.Repeat("b", 64)
+	request := httptest.NewRequest(http.MethodPost,
+		"http://xirang.example/api/v1/recovery-points/"+pointID+"/entries/"+entryID+"/delivery-tickets",
+		strings.NewReader(`{"schema_version":1,"action":"preview","renderer":"safe_raster","profile":"raster_v1"}`))
+	request.RemoteAddr = "127.0.0.1:43210"
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Forwarded-Proto", "http")
+	request.Header.Set("X-Forwarded-For", "192.168.20.45")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || len(fake.issueRequests) != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, len(fake.issueRequests), response.Body.String())
+	}
+	if fake.issueRequests[0].SecureCookie {
+		t.Fatal("private-network HTTP issue requested a Secure cookie")
+	}
+	setCookie := response.Header().Get("Set-Cookie")
+	if !strings.Contains(setCookie, "HttpOnly") || !strings.Contains(setCookie, "SameSite=Strict") ||
+		strings.Contains(setCookie, "Secure") || !strings.Contains(setCookie, "Path="+fake.ticket.Cookie.Path) {
+		t.Fatalf("Set-Cookie=%q", setCookie)
 	}
 }
 
@@ -619,5 +830,28 @@ func (fake *backupContentServiceFake) Serve(_ context.Context, request content.G
 }
 
 func (*backupContentServiceFake) RevokeSession(context.Context, string, string) error { return nil }
+
+func assertSecureTransportRequiredResponse(t *testing.T, response *httptest.ResponseRecorder) {
+	t.Helper()
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			Reason struct {
+				Code   string            `json:"code"`
+				Params map[string]string `json:"params"`
+			} `json:"reason"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode secure transport response: %v body=%s", err, response.Body.String())
+	}
+	if envelope.Code != http.StatusServiceUnavailable || envelope.Data.Reason.Code != "secure_transport_required" ||
+		envelope.Data.Reason.Params == nil || len(envelope.Data.Reason.Params) != 0 {
+		t.Fatalf("secure transport response=%+v body=%s", envelope, response.Body.String())
+	}
+}
 
 var _ BackupContentService = (*backupContentServiceFake)(nil)

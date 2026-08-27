@@ -205,6 +205,14 @@ https://xirang.example.com ──> 外部反向代理 ──> http://127.0.0.1:1
 CORS_ALLOWED_ORIGINS=https://xirang.example.com
 ```
 
+### 6. 可选：私网 HTTP 备份内容
+
+备份内容默认只允许 HTTPS 交付。若受控内网暂时无法终止 TLS，Admin 可在“备份 > 概览 > 私网 HTTP 内容传输”确认风险后动态启用；该开关同时覆盖原生预览/原始下载、导出产物、归档成员和恢复结果，且不需要重启。HTTP 会以明文传输内容和非 `Secure` 的短期票据 Cookie，链路上的设备或用户可能读取内容或重放票据，因此优先部署 HTTPS，并只在隔离且可信的网络中短期启用。
+
+允许的客户端地址严格限定为 IPv4 RFC 1918（`10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16`）、IPv6 ULA（`fc00::/7`）和回环地址。CGNAT（`100.64.0.0/10`）、链路本地、未指定、多播及公网地址不会被视为私网。经反向代理访问时，将 `TRUSTED_PROXIES` 只配置为实际代理 IP/CIDR，并确保每一层覆盖 `X-Forwarded-Proto`、正确追加 `X-Forwarded-For`；不要信任全网段。Xirang 会从右向左剥离可信代理跳点，以最近的非可信地址作客户端判断，证据缺失、越界或格式异常都会失败关闭。
+
+回滚时，在同一面板关闭开关即可立即拒绝新的 HTTP 签票和已有票据的后续 HTTP Serve。环境变量 `BACKUP_ASSETS_CONTENT_ALLOW_INSECURE_PRIVATE_NETWORK=true` 只在没有数据库覆盖时生效；若要恢复安全默认，可关闭面板，或删除 DB override 并将环境变量设为 `false`/移除后重新加载配置。此功能不提供内置 TLS，也不改变公网应由外部反向代理终止 HTTPS 的部署边界。
+
 ## Docker Run 部署
 
 ```bash

@@ -1,0 +1,14 @@
+{"file":".trellis/tasks/08-27-backup-assets-private-network-http-content/research/current-state.md","reason":"Production trigger, root cause, reusable boundaries, approved approach, and rejected alternatives."}
+{"file":".trellis/tasks/08-27-backup-assets-private-network-http-content/research/design-review.md","reason":"Independent findings and resolved contracts for application-log privacy, closed transport-error UX, and explicit archive-member coverage."}
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Official HTTP/TLS ownership plus exact content gateway, Nginx, log-redaction, Host, proto, Range, and checker contracts."}
+{"file":".trellis/spec/backend/backup-content-transport.md","reason":"Exact private-client classification, bounded trusted-proxy peeling, dynamic Foundation setting, issue/Serve recheck, rollback, and all delivery surfaces."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Dynamic settings, backup-content security, RBAC/privacy, Foundation prospective transition, testing, and full backend quality requirements."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Standard 503/generic error mapping, Foundation transition errors, and non-leakage requirements."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Method-independent content-shaped path redaction, application/Nginx log ownership, canary capture, and mutation-test requirements."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Admin-console component composition, existing primitives, async states, and accessibility expectations."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Typed API boundary, behavior/a11y tests, native preview invariants, and full web gate."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Closed DTO mapping and backup content ticket boundary constraints."}
+{"file":".trellis/spec/frontend/backup-content-transport.md","reason":"Exact Admin setting mapper, closed transport-reason parser, role-aware non-leaking guidance, and all delivery surfaces."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Switch/dialog/form labels, focus, status, and axe expectations for the new Admin control."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Setting-to-runtime-to-proxy-to-browser data-flow and validation ownership review."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Dedicated branch, PR, CI, merge, release, and post-merge monitoring contract."}

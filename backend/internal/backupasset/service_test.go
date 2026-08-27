@@ -451,6 +451,7 @@ func TestFoundationContentConfigUsesOneAtomicSnapshot(t *testing.T) {
 		"backup_assets.content_reconcile_batch_size":      "80",
 		"backup_assets.content_audit_backlog_max":         "5000",
 		"backup_assets.content_allow_insecure_loopback":   "true",
+		"backup_assets.content_allow_insecure_private_network": "true",
 		"backup_assets.provider_max_concurrency":          "4",
 	} {
 		values[key] = value
@@ -484,7 +485,7 @@ func TestFoundationContentConfigUsesOneAtomicSnapshot(t *testing.T) {
 		t.Fatalf("ContentConfig cache=%+v", config.Cache)
 	}
 	if config.ReconcileInterval != 45*time.Second || config.ReconcileBatchSize != 80 || config.AuditBacklogMax != 5000 ||
-		!config.AllowInsecureLoopback {
+		!config.AllowInsecureLoopback || !config.AllowInsecurePrivateNetwork {
 		t.Fatalf("ContentConfig lifecycle=%+v", config)
 	}
 	if reader.effectiveReads != 0 || reader.snapshotReads != 1 {
@@ -943,6 +944,7 @@ var staticFoundationDefaults = map[string]string{
 	"backup_assets.content_reconcile_batch_size":               "100",
 	"backup_assets.content_audit_backlog_max":                  "10000",
 	"backup_assets.content_allow_insecure_loopback":            "false",
+	"backup_assets.content_allow_insecure_private_network":     "false",
 	"backup_assets.catalog_batch_size":                         "2000",
 	"backup_assets.catalog_build_timeout":                      "30m",
 	"backup_assets.repository_reconcile_interval":              "15m",

@@ -668,6 +668,7 @@ func TestRouterInjectsTrustedProxySchemePolicyIntoBackupContent(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Forwarded-Proto", "https")
+	request.Header.Set("X-Forwarded-For", "198.51.100.77")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || len(service.issueRequests) != 1 || !service.issueRequests[0].SecureCookie {

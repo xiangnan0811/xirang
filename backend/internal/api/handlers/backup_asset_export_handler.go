@@ -374,9 +374,9 @@ func (handler *BackupAssetExportHandler) secureCookie(c *gin.Context) (bool, boo
 		respondServiceUnavailable(c, "备份资产导出服务暂不可用")
 		return false, false
 	}
-	secure, err := handler.schemePolicy.SecureCookie(c.Request, config.AllowInsecureLoopback)
+	secure, err := handler.schemePolicy.SecureCookie(c.Request, config.transportOptions())
 	if err != nil {
-		respondServiceUnavailable(c, "需要安全传输")
+		respondBackupContentSecureTransportRequired(c)
 		return false, false
 	}
 	return secure, true

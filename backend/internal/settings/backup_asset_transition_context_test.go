@@ -88,7 +88,7 @@ func TestBackupAssetOverrideSnapshotRestoresRawRowAbsenceAndInvalidatesCache(t *
 	db := setupRecoveryTargetRootTestDB(t)
 	service := NewService(db)
 	const (
-		absentKey  = "backup_assets.enabled"
+		absentKey  = "backup_assets.content_allow_insecure_private_network"
 		presentKey = "backup_assets.export.worker_concurrency"
 	)
 	priorUpdatedAt := time.Date(2026, 8, 24, 9, 30, 0, 123456000, time.UTC)
@@ -140,7 +140,7 @@ func TestBackupAssetOverrideSnapshotFailureRollsBackAtomicallyAndKeepsCache(t *t
 	db := setupRecoveryTargetRootTestDB(t)
 	service := NewService(db)
 	const (
-		absentKey  = "backup_assets.enabled"
+		absentKey  = "backup_assets.content_allow_insecure_private_network"
 		presentKey = "backup_assets.export.worker_concurrency"
 	)
 	if err := service.UpdateContext(context.Background(), presentKey, "2"); err != nil {

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { InlineAlert } from "@/components/ui/inline-alert";
 import type { AuthContextValue } from "@/context/auth-context.shared";
 import { formatBytes } from "@/lib/utils";
 import type { AssetRef, BackupExportArchiveFormat, BackupExportArchiveProfile } from "@/types/domain";
@@ -13,6 +14,7 @@ import {
   type BackupAssetExportApi,
   type BackupAssetExportCreateOptions,
 } from "./use-backup-asset-export";
+import { ContentTransportGuidance } from "./content-transport-guidance";
 
 export interface ExportJobPanelSelection {
   ref: AssetRef;
@@ -221,7 +223,14 @@ export function ExportJobPanel({
           </section>
         ) : null}
 
-        {controller.state.error ? <p role="alert" className="text-xs text-destructive">{t("backupAssets.export.error")}</p> : null}
+        {controller.state.error === "secure_transport_required" ? (
+          <InlineAlert tone="critical">
+            <span>{t("backupAssets.errors.secureTransportRequired")}</span>
+            <ContentTransportGuidance authRole={runtime.role} />
+          </InlineAlert>
+        ) : controller.state.error ? (
+          <p role="alert" className="text-xs text-destructive">{t("backupAssets.export.error")}</p>
+        ) : null}
         <p className="sr-only" aria-live="polite">{announcementText(controller.state.announcement, t)}</p>
       </div>
 

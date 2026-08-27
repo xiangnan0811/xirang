@@ -233,6 +233,7 @@ var repositoryFoundationDefaults = repositorySettings{
 	"backup_assets.content_reconcile_batch_size":          "100",
 	"backup_assets.content_audit_backlog_max":             "10000",
 	"backup_assets.content_allow_insecure_loopback":       "false",
+	"backup_assets.content_allow_insecure_private_network": "false",
 	"backup_assets.catalog_batch_size":                    "2000",
 	"backup_assets.catalog_build_timeout":                 "30m",
 	"backup_assets.repository_reconcile_interval":         "15m",

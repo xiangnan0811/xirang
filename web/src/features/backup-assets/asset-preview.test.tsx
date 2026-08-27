@@ -178,6 +178,66 @@ describe("AssetPreview", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["preview", "original download"])("renders Admin transport guidance for %s without leaking identifiers", (surface) => {
+    const previewAsset = asset();
+    const rendered = render(
+      <AssetPreview
+        asset={previewAsset}
+        resource={{
+          status: "error",
+          value: null,
+          error: {
+            code: "secure_transport_required",
+            translationKey: "backupAssets.errors.secureTransportRequired",
+            retryable: false,
+            action: "none",
+          },
+        }}
+        canPreview={surface === "preview"}
+        canDownload={surface === "original download"}
+        processingRuntime={{ ...processingRuntime, role: "admin" }}
+        onLoadPreview={vi.fn()}
+        onRenew={vi.fn()}
+        onPrepareDownload={vi.fn()}
+        onDetach={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("link", { name: /content transport|内容传输/i })).toHaveAttribute(
+      "href", "/app/backups/overview#backup-assets-content-transport",
+    );
+    expect(rendered.container.textContent).not.toContain(previewAsset.ref.entryId);
+  });
+
+  it("shows Operator transport guidance without an action and keeps Viewer guidance generic", () => {
+    const props = {
+      asset: asset(),
+      resource: {
+        status: "error" as const,
+        value: null,
+        error: {
+          code: "secure_transport_required" as const,
+          translationKey: "backupAssets.errors.secureTransportRequired" as const,
+          retryable: false,
+          action: "none" as const,
+        },
+      },
+      canPreview: true,
+      canDownload: true,
+      onLoadPreview: vi.fn(),
+      onRenew: vi.fn(),
+      onPrepareDownload: vi.fn(),
+      onDetach: vi.fn(),
+    };
+    const rendered = render(<AssetPreview {...props} processingRuntime={{ ...processingRuntime, role: "operator" }} />);
+    expect(screen.getByText(/HTTPS/i)).toBeInTheDocument();
+    expect(screen.getByText(/Admin|管理员/i)).toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+
+    rendered.rerender(<AssetPreview {...props} processingRuntime={{ ...processingRuntime, role: "viewer" }} />);
+    expect(screen.queryByText(/Admin|管理员|settings|设置/i)).not.toBeInTheDocument();
+  });
+
   it("keeps one bounded viewport height before and after content loads", () => {
     const previewAsset = asset();
     const props = {

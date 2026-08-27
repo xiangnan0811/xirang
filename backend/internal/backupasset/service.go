@@ -110,31 +110,32 @@ type ContentCacheConfig struct {
 }
 
 type ContentConfig struct {
-	Enabled                 bool
-	PreviewTTL              time.Duration
-	MediaTTL                time.Duration
-	IdleTTL                 time.Duration
-	WriteIdleTimeout        time.Duration
-	LeaseHeartbeat          time.Duration
-	TicketTimeout           time.Duration
-	RequestMaxBytes         int64
-	CumulativeMaxBytes      int64
-	MaxRequests             int64
-	GrantMaxInFlight        int64
-	RateWindow              time.Duration
-	User                    ContentScopeConfig
-	Provider                ContentScopeConfig
-	Global                  ContentScopeConfig
-	ClassificationScanBytes int64
-	TextPreviewBytes        int64
-	HexPreviewBytes         int64
-	RasterMaxPixels         int64
-	Memory                  ContentMemoryConfig
-	Cache                   ContentCacheConfig
-	ReconcileInterval       time.Duration
-	ReconcileBatchSize      int
-	AuditBacklogMax         int64
-	AllowInsecureLoopback   bool
+	Enabled                     bool
+	PreviewTTL                  time.Duration
+	MediaTTL                    time.Duration
+	IdleTTL                     time.Duration
+	WriteIdleTimeout            time.Duration
+	LeaseHeartbeat              time.Duration
+	TicketTimeout               time.Duration
+	RequestMaxBytes             int64
+	CumulativeMaxBytes          int64
+	MaxRequests                 int64
+	GrantMaxInFlight            int64
+	RateWindow                  time.Duration
+	User                        ContentScopeConfig
+	Provider                    ContentScopeConfig
+	Global                      ContentScopeConfig
+	ClassificationScanBytes     int64
+	TextPreviewBytes            int64
+	HexPreviewBytes             int64
+	RasterMaxPixels             int64
+	Memory                      ContentMemoryConfig
+	Cache                       ContentCacheConfig
+	ReconcileInterval           time.Duration
+	ReconcileBatchSize          int
+	AuditBacklogMax             int64
+	AllowInsecureLoopback       bool
+	AllowInsecurePrivateNetwork bool
 }
 
 type ProcessingInputConfig struct {
@@ -705,6 +706,9 @@ func contentConfigFromValidatedValues(values map[string]string) (ContentConfig, 
 	}
 	result.Cache.Root = strings.TrimSpace(values["backup_assets.content_cache_root"])
 	if result.AllowInsecureLoopback, err = parseFoundationBool(values, "backup_assets.content_allow_insecure_loopback"); err != nil {
+		return ContentConfig{}, err
+	}
+	if result.AllowInsecurePrivateNetwork, err = parseFoundationBool(values, "backup_assets.content_allow_insecure_private_network"); err != nil {
 		return ContentConfig{}, err
 	}
 	return result, nil

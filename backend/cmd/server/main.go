@@ -347,6 +347,7 @@ func main() {
 			}
 			return handlers.BackupContentHandlerConfig{
 				TicketTimeout: contentConfig.TicketTimeout, AllowInsecureLoopback: contentConfig.AllowInsecureLoopback,
+				AllowInsecurePrivateNetwork: contentConfig.AllowInsecurePrivateNetwork,
 			}, nil
 		},
 		LegacyResticSnapshots: legacyRestic,

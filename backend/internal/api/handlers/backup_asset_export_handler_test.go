@@ -275,8 +275,12 @@ func TestBackupAssetExportHandlerRejectsEmptyExplicitSelectionBeforeService(t *t
 	}
 }
 
-func TestBackupAssetExportHandlerDownloadTicketRequiresExactExportDownloadPurpose(t *testing.T) {
+func TestBackupAssetExportHandlerPrivateNetworkHTTPDownloadTicketRequiresExactExportDownloadPurpose(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	policy, err := NewBackupContentSchemePolicy([]string{"127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	db, jwtManager, user := backupAssetExportHandlerProofFixture(t)
 	proofs := make(map[auth.StepUpAction]string)
 	for _, action := range []auth.StepUpAction{
@@ -303,10 +307,14 @@ func TestBackupAssetExportHandlerDownloadTicketRequiresExactExportDownloadPurpos
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			delivery := &backupAssetExportDeliveryFake{ticket: backupAssetExportHandlerTicket(t)}
+			ticket := backupAssetExportHandlerTicket(t)
+			ticket.Cookie.Secure = false
+			delivery := &backupAssetExportDeliveryFake{ticket: ticket}
 			handler := NewBackupAssetExportHandler(nil, delivery, db, jwtManager, nil, func(context.Context) (BackupContentHandlerConfig, error) {
-				return BackupContentHandlerConfig{TicketTimeout: 5 * time.Second}, nil
-			})
+				return BackupContentHandlerConfig{
+					TicketTimeout: 5 * time.Second, AllowInsecurePrivateNetwork: true,
+				}, nil
+			}).WithSchemePolicy(policy)
 			router := gin.New()
 			router.POST("/api/v1/asset-exports/:id/download-ticket", func(c *gin.Context) {
 				c.Set(middleware.CtxUserID, user.ID)
@@ -319,9 +327,12 @@ func TestBackupAssetExportHandlerDownloadTicketRequiresExactExportDownloadPurpos
 				c.Next()
 			}, handler.DownloadTicket)
 			request := httptest.NewRequest(http.MethodPost,
-				"https://xirang.example/api/v1/asset-exports/"+jobID+"/download-ticket",
+				"http://xirang.example/api/v1/asset-exports/"+jobID+"/download-ticket",
 				strings.NewReader(`{"schema_version":1}`))
+			request.RemoteAddr = "127.0.0.1:43210"
 			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("X-Forwarded-Proto", "http")
+			request.Header.Set("X-Forwarded-For", "192.168.20.45")
 			if testCase.proof != "" {
 				request.Header.Set(StepUpHeaderName, testCase.proof)
 			}
@@ -330,17 +341,44 @@ func TestBackupAssetExportHandlerDownloadTicketRequiresExactExportDownloadPurpos
 			if testCase.wantOK {
 				if response.Code != http.StatusOK || len(delivery.requests) != 1 ||
 					delivery.requests[0].Proof.Action != auth.StepUpActionAssetExportDownload ||
-					delivery.requests[0].Session.JTI != strings.Repeat("f", 32) || !delivery.requests[0].SecureCookie {
+					delivery.requests[0].Session.JTI != strings.Repeat("f", 32) || delivery.requests[0].SecureCookie {
 					t.Fatalf("status=%d requests=%+v body=%s", response.Code, delivery.requests, response.Body.String())
 				}
 				if cookies := response.Header().Values("Set-Cookie"); len(cookies) != 1 ||
-					!strings.Contains(cookies[0], "Path=/api/v1/asset-content/") || !strings.Contains(cookies[0], "Secure") {
+					!strings.Contains(cookies[0], "Path=/api/v1/asset-content/") || strings.Contains(cookies[0], "Secure") {
 					t.Fatalf("Set-Cookie=%v", cookies)
 				}
 			} else if response.Code != http.StatusForbidden || len(delivery.requests) != 0 {
 				t.Fatalf("status=%d requests=%+v body=%s", response.Code, delivery.requests, response.Body.String())
 			}
 		})
+	}
+	delivery := &backupAssetExportDeliveryFake{ticket: backupAssetExportHandlerTicket(t)}
+	handler := NewBackupAssetExportHandler(nil, delivery, db, jwtManager, nil, func(context.Context) (BackupContentHandlerConfig, error) {
+		return BackupContentHandlerConfig{TicketTimeout: 5 * time.Second}, nil
+	})
+	router := gin.New()
+	router.POST("/api/v1/asset-exports/:id/download-ticket", func(c *gin.Context) {
+		c.Set(middleware.CtxUserID, user.ID)
+		c.Set(middleware.CtxUsername, user.Username)
+		c.Set(middleware.CtxRole, user.Role)
+		c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{
+			JTI: strings.Repeat("f", 32), UserID: user.ID, Role: user.Role,
+			TokenVersion: user.TokenVersion, ExpiresAt: time.Now().UTC().Add(time.Hour),
+		})
+		c.Next()
+	}, handler.DownloadTicket)
+	insecure := httptest.NewRequest(http.MethodPost,
+		"http://xirang.example/api/v1/asset-exports/"+jobID+"/download-ticket",
+		strings.NewReader(`{"schema_version":1}`))
+	insecure.RemoteAddr = "203.0.113.5:43210"
+	insecure.Header.Set("Content-Type", "application/json")
+	insecure.Header.Set(StepUpHeaderName, proofs[auth.StepUpActionAssetExportDownload])
+	insecureResponse := httptest.NewRecorder()
+	router.ServeHTTP(insecureResponse, insecure)
+	assertSecureTransportRequiredResponse(t, insecureResponse)
+	if len(delivery.requests) != 0 {
+		t.Fatalf("insecure Export ticket reached delivery requests=%d", len(delivery.requests))
 	}
 }
 

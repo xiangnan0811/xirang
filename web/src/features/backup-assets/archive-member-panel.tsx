@@ -13,6 +13,7 @@ import { formatBytes } from "@/lib/utils";
 import type { AssetRef, BackupArchiveIndexEntry, BackupExportDownloadTicket } from "@/types/domain";
 
 import { useBackupArchive, type BackupArchiveApi } from "./use-backup-archive";
+import { ContentTransportGuidance } from "./content-transport-guidance";
 
 const ARCHIVE_MEMBER_PAGE_SIZE = 100;
 const EMPTY_ARCHIVE_ENTRIES: BackupArchiveIndexEntry[] = [];
@@ -81,9 +82,15 @@ export function ArchiveMemberPanel({
     return <LoadingState title={t("backupAssets.archive.loading")} rows={6} />;
   }
   if (controller.state.phase === "error") {
+    const secureTransport = controller.state.error === "secure_transport_required";
     return (
       <div className="p-4">
-        <InlineAlert tone="warning">{t(`backupAssets.archive.error.${controller.state.error ?? "unavailable"}`)}</InlineAlert>
+        <InlineAlert tone="warning">
+          {t(secureTransport
+            ? "backupAssets.errors.secureTransportRequired"
+            : `backupAssets.archive.error.${controller.state.error ?? "unavailable"}`)}
+          {secureTransport ? <ContentTransportGuidance authRole={runtime.role} /> : null}
+        </InlineAlert>
         <div className="mt-3 flex flex-wrap justify-end gap-2">
           {controller.state.requestId ? (
             <Button type="button" variant="outline" size="sm" onClick={() => void controller.cancel()}>
@@ -162,7 +169,12 @@ export function ArchiveMemberPanel({
             ) : null}
             {controller.state.error ? (
               <InlineAlert tone="warning" className="mt-3">
-                {t(`backupAssets.archive.error.${controller.state.error}`)}
+                {t(controller.state.error === "secure_transport_required"
+                  ? "backupAssets.errors.secureTransportRequired"
+                  : `backupAssets.archive.error.${controller.state.error}`)}
+                {controller.state.error === "secure_transport_required" ? (
+                  <ContentTransportGuidance authRole={runtime.role} />
+                ) : null}
               </InlineAlert>
             ) : null}
           </div>
