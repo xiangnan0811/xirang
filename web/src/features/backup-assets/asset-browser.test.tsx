@@ -25,6 +25,24 @@ beforeAll(() => {
 });
 
 describe("AssetBrowser", () => {
+  it("renders a navigable directory breadcrumb without exposing a raw path", async () => {
+    const rows = buildAssetRows(1);
+    const directoryId = "c".repeat(64);
+    rows[0].asset.breadcrumb = [{ name: "配置", ref: { recoveryPointId: rows[0].ref.recoveryPointId, entryId: directoryId } }];
+    const state = createInitialBackupAssetsState({
+      ...defaultBackupAssetsRouteState("data"), recoveryPointId: rows[0].ref.recoveryPointId, parentEntryId: directoryId,
+    });
+    state.result = { status: "ready", requestKey: "breadcrumb", generation: 1, rows, nextCursor: null, coverage: "complete", authoritativeEmpty: false };
+    const onRoutePatch = vi.fn();
+    render(<AssetBrowser state={state} onRoutePatch={onRoutePatch} onSearch={vi.fn()} onSearchDraftChange={vi.fn()}
+      onToggleSelection={vi.fn()} onClearSelection={vi.fn()} onOpen={vi.fn()} onLoadMore={vi.fn()} />);
+    const breadcrumb = screen.getByRole("navigation", { name: /Directory breadcrumb|目录位置/ });
+    expect(breadcrumb).toHaveTextContent("配置");
+    expect(breadcrumb).not.toHaveTextContent("/");
+    await userEvent.click(screen.getByRole("button", { name: /Root|根目录/ }));
+    expect(onRoutePatch).toHaveBeenCalledWith({ parentEntryId: undefined, entryId: undefined });
+  });
+
   it("reserves a full toolbar row for search before secondary controls", () => {
     const route = {
       ...defaultBackupAssetsRouteState("data"),
@@ -50,6 +68,50 @@ describe("AssetBrowser", () => {
     expect(search).toHaveClass("col-span-full");
     expect(screen.getByRole("searchbox").parentElement).toHaveClass("min-w-0");
     expect(screen.getByRole("combobox", { name: /Search scope|搜索范围/ }).parentElement).toHaveClass("w-32");
+  });
+
+  it("keeps every primary browser control at least 44px tall on touch layouts", async () => {
+    const rows = buildAssetRows(1);
+    const state = createInitialBackupAssetsState({
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: "a".repeat(32),
+      recoveryPointId: "b".repeat(32),
+    });
+    state.result = {
+      status: "ready",
+      requestKey: "touch-targets",
+      generation: 1,
+      rows,
+      nextCursor: "next-page",
+      coverage: "complete",
+      authoritativeEmpty: false,
+    };
+    render(
+      <AssetBrowser
+        state={state}
+        onRoutePatch={vi.fn()}
+        onSearch={vi.fn()}
+        onSearchDraftChange={vi.fn()}
+        onToggleSelection={vi.fn()}
+        onClearSelection={vi.fn()}
+        onOpen={vi.fn()}
+        onLoadMore={vi.fn()}
+      />,
+    );
+
+    const touchTargets = [
+      screen.getByRole("button", { name: /^(Root|根目录)$/ }),
+      screen.getByRole("searchbox"),
+      screen.getByRole("combobox", { name: /Search scope|搜索范围/ }),
+      screen.getByRole("button", { name: /^(Search|搜索)$/ }),
+      screen.getByRole("combobox", { name: /Sort|排序/ }),
+      ...screen.getAllByRole("radio"),
+      screen.getByRole("button", { name: /Load more|加载更多/ }),
+    ];
+    for (const target of touchTargets) expect(target).toHaveClass("min-h-11", "touch-target");
+    expect(screen.getByRole("navigation", { name: /Directory breadcrumb|目录位置/ })).toHaveClass("lg:h-10");
+    expect(screen.getByRole("radiogroup", { name: /Layout|布局/ })).toHaveClass("p-0");
+    expect(screen.getByRole("radiogroup", { name: /Layout|布局/ })).not.toHaveClass("lg:p-1");
   });
 
   it("shares selection and active state while switching list and grid", async () => {
@@ -85,10 +147,52 @@ describe("AssetBrowser", () => {
       />
     );
 
-    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: /Backup asset list|备份资产列表/ })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent(/1.*selected|已选择.*1/);
     await user.click(screen.getByRole("radio", { name: /Grid|网格/ }));
     expect(onRoutePatch).toHaveBeenCalledWith({ layout: "grid" });
+  });
+
+  it("moves roving focus without claiming a current file before preview activation", async () => {
+    const user = userEvent.setup();
+    const rows = buildAssetRows(3);
+    const state = createInitialBackupAssetsState({
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: "a".repeat(32),
+      recoveryPointId: "b".repeat(32),
+    });
+    state.result = {
+      status: "ready",
+      requestKey: "focus-without-preview",
+      generation: 1,
+      rows,
+      nextCursor: null,
+      coverage: "complete",
+      authoritativeEmpty: false,
+    };
+    const onOpen = vi.fn();
+    render(
+      <AssetBrowser
+        state={state}
+        onRoutePatch={vi.fn()}
+        onSearch={vi.fn()}
+        onSearchDraftChange={vi.fn()}
+        onToggleSelection={vi.fn()}
+        onClearSelection={vi.fn()}
+        onOpen={onOpen}
+        onLoadMore={vi.fn()}
+      />,
+    );
+
+    const first = await screen.findByRole("button", { name: new RegExp(rows[0].asset.name) });
+    const second = screen.getByRole("button", { name: new RegExp(rows[1].asset.name) });
+    first.focus();
+    await user.keyboard("{ArrowDown}");
+
+    expect(second).toHaveFocus();
+    expect(first).not.toHaveAttribute("aria-current");
+    expect(second).not.toHaveAttribute("aria-current");
+    expect(onOpen).not.toHaveBeenCalled();
   });
 
   it("delegates the bulk export command only through the explicit authorization prop", async () => {
@@ -195,5 +299,31 @@ describe("AssetBrowser", () => {
 
     expect(screen.getByRole("status")).toHaveTextContent(/partial|部分|不完整/i);
     expect(screen.queryByText(/No matching assets|没有匹配的资产/)).not.toBeInTheDocument();
+  });
+
+  it("announces browser loading and failure as scoped live states", () => {
+    const state = createInitialBackupAssetsState(defaultBackupAssetsRouteState("data"));
+    state.result = {
+      ...state.result,
+      status: "loading",
+      requestKey: "live-state",
+    };
+    const props = {
+      onRoutePatch: vi.fn(),
+      onSearch: vi.fn(),
+      onSearchDraftChange: vi.fn(),
+      onToggleSelection: vi.fn(),
+      onClearSelection: vi.fn(),
+      onOpen: vi.fn(),
+      onLoadMore: vi.fn(),
+    };
+    const rendered = render(<AssetBrowser state={state} {...props} />);
+
+    expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
+    expect(screen.getByRole("status")).toHaveAttribute("aria-busy", "true");
+
+    state.result = { ...state.result, status: "failed" };
+    rendered.rerender(<AssetBrowser state={state} {...props} />);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
   });
 });

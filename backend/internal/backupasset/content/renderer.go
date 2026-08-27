@@ -2,6 +2,7 @@ package content
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"html"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -36,6 +38,13 @@ type RenderRequest struct {
 	Renderer          Renderer
 	Profile           RendererProfile
 	Range             RangePolicy
+	SourceSize        int64
+	Prefix            []byte
+	ProviderMediaType string
+	Filename          string
+}
+
+type SafePreviewSelectionRequest struct {
 	SourceSize        int64
 	Prefix            []byte
 	ProviderMediaType string
@@ -71,6 +80,8 @@ func (policy *RendererPolicy) Prepare(request RenderRequest) (RenderPlan, error)
 	switch request.Renderer {
 	case RendererEscapedText:
 		return policy.prepareText(request)
+	case RendererPlainText:
+		return policy.preparePlainText(request)
 	case RendererMetadataHex:
 		return policy.prepareHex(request), nil
 	case RendererSafeRaster:
@@ -86,6 +97,56 @@ func (policy *RendererPolicy) Prepare(request RenderRequest) (RenderPlan, error)
 	}
 }
 
+func (policy *RendererPolicy) SelectSafePreview(request SafePreviewSelectionRequest) (Renderer, RendererProfile, error) {
+	if policy == nil || request.SourceSize < 0 || int64(len(request.Prefix)) > request.SourceSize ||
+		len(request.ProviderMediaType) > 256 || len(request.Filename) > 4096 || request.Filename == "" {
+		return "", "", ErrInvalidRendererRequest
+	}
+	if strings.TrimSpace(request.ProviderMediaType) != "" && normalizedMediaType(request.ProviderMediaType) == "" {
+		return "", "", ErrMIMEConfusion
+	}
+	base := RenderRequest{
+		Action: DeliveryPreview, Range: RangeSingle, SourceSize: request.SourceSize, Prefix: request.Prefix,
+		ProviderMediaType: request.ProviderMediaType, Filename: request.Filename,
+	}
+	var renderer Renderer
+	var profile RendererProfile
+	switch closedSafeBinaryMedia(request.Prefix) {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		renderer, profile = RendererSafeRaster, ProfileRasterV1
+	case "application/pdf":
+		renderer, profile = RendererSameOriginPDF, ProfilePDFV1
+	case "audio/wav", "audio/flac", "audio/mpeg":
+		renderer, profile = RendererNativeAudio, ProfileAudioV1
+	case "video/mp4", "video/webm":
+		renderer, profile = RendererNativeVideo, ProfileVideoV1
+	case "application/ogg":
+		switch detectOggCodecMedia(request.Prefix) {
+		case "audio/ogg":
+			renderer, profile = RendererNativeAudio, ProfileAudioV1
+		case "video/ogg":
+			renderer, profile = RendererNativeVideo, ProfileVideoV1
+		default:
+			return "", "", ErrRendererUnsupported
+		}
+	}
+	if renderer != "" {
+		base.Renderer, base.Profile = renderer, profile
+		if _, err := policy.Prepare(base); err != nil {
+			return "", "", err
+		}
+		return renderer, profile, nil
+	}
+	if providerClaimsNativePreview(request.ProviderMediaType) {
+		return "", "", ErrMIMEConfusion
+	}
+	limit := min(int64(len(request.Prefix)), min(request.SourceSize, policy.config.TextBytes))
+	if _, _, ok := decodePlainTextPrefix(request.Prefix[:limit], limit < request.SourceSize); ok {
+		return RendererPlainText, ProfileTextV2, nil
+	}
+	return RendererMetadataHex, ProfileHexV1, nil
+}
+
 func (policy *RendererPolicy) prepareText(request RenderRequest) (RenderPlan, error) {
 	limit := min(int64(len(request.Prefix)), min(request.SourceSize, policy.config.TextBytes))
 	decoded, ok := decodeTextBytes(request.Prefix[:limit])
@@ -98,6 +159,20 @@ func (policy *RendererPolicy) prepareText(request RenderRequest) (RenderPlan, er
 		MediaType: "text/plain; charset=utf-8", ContentDisposition: safeContentDisposition("inline", request.Filename),
 		Range: RangeNone, SourceBytes: limit, Size: int64(len(payload)),
 		Truncated: limit < request.SourceSize, Bytes: payload,
+	}, nil
+}
+
+func (policy *RendererPolicy) preparePlainText(request RenderRequest) (RenderPlan, error) {
+	limit := min(int64(len(request.Prefix)), min(request.SourceSize, policy.config.TextBytes))
+	decoded, consumed, ok := decodePlainTextPrefix(request.Prefix[:limit], limit < request.SourceSize)
+	if !ok {
+		return RenderPlan{}, ErrRendererUnsupported
+	}
+	payload := []byte(decoded)
+	return RenderPlan{
+		MediaType: "text/plain; charset=utf-8", ContentDisposition: safeContentDisposition("inline", request.Filename),
+		Range: RangeNone, SourceBytes: consumed, Size: int64(len(payload)),
+		Truncated: consumed < request.SourceSize, Bytes: payload,
 	}, nil
 }
 
@@ -172,6 +247,118 @@ func validRenderRequest(request RenderRequest) bool {
 	return request.Action == DeliveryPreview && request.Renderer != RendererAttachment
 }
 
+func providerClaimsNativePreview(value string) bool {
+	mediaType := normalizedMediaType(value)
+	if mediaType == "image/svg+xml" {
+		return false
+	}
+	return mediaType == "application/pdf" || mediaType == "application/ogg" ||
+		strings.HasPrefix(mediaType, "image/") || strings.HasPrefix(mediaType, "audio/") ||
+		strings.HasPrefix(mediaType, "video/")
+}
+
+func decodePlainTextPrefix(payload []byte, truncated bool) (string, int64, bool) {
+	originalLength := len(payload)
+	if len(payload) >= 3 && bytes.Equal(payload[:3], []byte{0xef, 0xbb, 0xbf}) {
+		decoded, consumed, ok := decodeUTF8TextPrefix(payload[3:], truncated)
+		return decoded, int64(consumed + 3), ok
+	}
+	if len(payload) >= 2 && (bytes.Equal(payload[:2], []byte{0xff, 0xfe}) || bytes.Equal(payload[:2], []byte{0xfe, 0xff})) {
+		little := payload[0] == 0xff
+		body := payload[2:]
+		if len(body)%2 != 0 {
+			if !truncated {
+				return "", 0, false
+			}
+			body = body[:len(body)-1]
+		}
+		units := make([]uint16, len(body)/2)
+		for index := range units {
+			if little {
+				units[index] = binary.LittleEndian.Uint16(body[index*2:])
+			} else {
+				units[index] = binary.BigEndian.Uint16(body[index*2:])
+			}
+		}
+		if truncated && len(units) > 0 && units[len(units)-1] >= 0xd800 && units[len(units)-1] <= 0xdbff {
+			units = units[:len(units)-1]
+			body = body[:len(body)-2]
+		}
+		if !validUTF16Units(units) {
+			return "", 0, false
+		}
+		decoded := utf16.Decode(units)
+		if !validPlainTextRunes(decoded) {
+			return "", 0, false
+		}
+		return string(decoded), int64(2 + len(body)), true
+	}
+	decoded, consumed, ok := decodeUTF8TextPrefix(payload, truncated)
+	if !ok {
+		return "", 0, false
+	}
+	if consumed > originalLength {
+		return "", 0, false
+	}
+	return decoded, int64(consumed), true
+}
+
+func decodeUTF8TextPrefix(payload []byte, truncated bool) (string, int, bool) {
+	consumed := len(payload)
+	if !utf8.Valid(payload) && truncated {
+		if complete, ok := trimIncompleteUTF8Suffix(payload); ok {
+			payload = complete
+			consumed = len(payload)
+		}
+	}
+	if !utf8.Valid(payload) {
+		return "", 0, false
+	}
+	runes := []rune(string(payload))
+	if !validPlainTextRunes(runes) {
+		return "", 0, false
+	}
+	return string(runes), consumed, true
+}
+
+func trimIncompleteUTF8Suffix(payload []byte) ([]byte, bool) {
+	start := max(0, len(payload)-(utf8.UTFMax-1))
+	for ; start < len(payload); start++ {
+		if utf8.Valid(payload[:start]) && !utf8.FullRune(payload[start:]) {
+			return payload[:start], true
+		}
+	}
+	return nil, false
+}
+
+func validUTF16Units(units []uint16) bool {
+	for index := 0; index < len(units); index++ {
+		value := units[index]
+		switch {
+		case value >= 0xd800 && value <= 0xdbff:
+			if index+1 >= len(units) || units[index+1] < 0xdc00 || units[index+1] > 0xdfff {
+				return false
+			}
+			index++
+		case value >= 0xdc00 && value <= 0xdfff:
+			return false
+		}
+	}
+	return true
+}
+
+func validPlainTextRunes(values []rune) bool {
+	for _, value := range values {
+		if value == '\t' || value == '\n' || value == '\r' {
+			continue
+		}
+		if unicode.IsControl(value) {
+			return false
+		}
+	}
+	return true
+}
+
 func rawRenderPlan(request RenderRequest, mediaType, disposition string) RenderPlan {
 	return RenderPlan{
 		MediaType: mediaType, ContentDisposition: safeContentDisposition(disposition, request.Filename),
@@ -240,9 +427,9 @@ func detectNativeMedia(payload []byte, renderer Renderer) string {
 			return "audio/wav"
 		case len(payload) >= 4 && string(payload[:4]) == "fLaC":
 			return "audio/flac"
-		case len(payload) >= 4 && string(payload[:4]) == "OggS":
+		case detectOggCodecMedia(payload) == "audio/ogg":
 			return "audio/ogg"
-		case len(payload) >= 3 && string(payload[:3]) == "ID3":
+		case validID3Header(payload):
 			return "audio/mpeg"
 		}
 	case RendererNativeVideo:
@@ -251,16 +438,67 @@ func detectNativeMedia(payload []byte, renderer Renderer) string {
 			return "video/mp4"
 		case len(payload) >= 4 && bytes.Equal(payload[:4], []byte{0x1a, 0x45, 0xdf, 0xa3}):
 			return "video/webm"
-		case len(payload) >= 4 && string(payload[:4]) == "OggS":
+		case detectOggCodecMedia(payload) == "video/ogg":
 			return "video/ogg"
 		}
 	}
 	return ""
 }
 
+func detectOggCodecMedia(payload []byte) string {
+	if len(payload) < 28 || string(payload[:4]) != "OggS" || payload[4] != 0 || payload[5]&0x02 == 0 {
+		return ""
+	}
+	segmentCount := int(payload[26])
+	packetOffset := 27 + segmentCount
+	if segmentCount == 0 || packetOffset > len(payload) {
+		return ""
+	}
+	packetLength := 0
+	packetComplete := false
+	for _, segmentLength := range payload[27:packetOffset] {
+		packetLength += int(segmentLength)
+		if segmentLength < 255 {
+			packetComplete = true
+			break
+		}
+	}
+	if !packetComplete || packetLength > len(payload)-packetOffset {
+		return ""
+	}
+	packet := payload[packetOffset : packetOffset+packetLength]
+	switch {
+	case bytes.HasPrefix(packet, []byte("OpusHead")),
+		bytes.HasPrefix(packet, []byte{0x01, 'v', 'o', 'r', 'b', 'i', 's'}),
+		bytes.HasPrefix(packet, []byte("Speex   ")),
+		bytes.HasPrefix(packet, []byte{0x7f, 'F', 'L', 'A', 'C'}),
+		bytes.HasPrefix(packet, []byte("fLaC")):
+		return "audio/ogg"
+	case bytes.HasPrefix(packet, []byte{0x80, 't', 'h', 'e', 'o', 'r', 'a'}):
+		return "video/ogg"
+	default:
+		return ""
+	}
+}
+
+func validID3Header(payload []byte) bool {
+	if len(payload) < 10 || string(payload[:3]) != "ID3" || payload[3] < 2 || payload[3] > 4 || payload[4] == 0xff {
+		return false
+	}
+	for _, value := range payload[6:10] {
+		if value&0x80 != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func nativeProviderMediaCompatible(providerValue, detected string, renderer Renderer) bool {
 	providerType := normalizedMediaType(providerValue)
 	if providerType == "" || providerType == "application/octet-stream" {
+		return true
+	}
+	if providerType == "application/ogg" && (detected == "audio/ogg" || detected == "video/ogg") {
 		return true
 	}
 	prefix := "audio/"

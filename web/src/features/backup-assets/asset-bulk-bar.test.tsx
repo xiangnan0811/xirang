@@ -38,7 +38,9 @@ describe("AssetBulkBar", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /导出|Export/ }));
+    const exportButton = screen.getByRole("button", { name: /导出|Export/ });
+    expect(exportButton).toHaveClass("min-h-11", "min-w-11", "touch-target");
+    await user.click(exportButton);
     expect(onExport).toHaveBeenCalledOnce();
   });
 

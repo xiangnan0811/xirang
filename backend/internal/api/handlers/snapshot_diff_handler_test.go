@@ -78,7 +78,7 @@ func (runner *snapshotDiffRunnerFake) RunSnapshotDiff(_ context.Context, _ model
 func setupSnapshotDiffHandlerRouter(t *testing.T, session publication.LineageSession, runner SnapshotDiffRunner) (*gin.Engine, model.Task) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", handlerTestDBName(t))), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,6 +5,7 @@ import {
   createBackupContentApi,
   mapBackupContentTicket,
   type BackupContentTicketInput,
+  type BackupContentSafePreviewTicketInput,
 } from "./backup-content-api";
 
 vi.mock("./core", async () => {
@@ -23,6 +24,11 @@ const previewInput: BackupContentTicketInput = {
   renderer: "safe_raster",
   profile: "raster_v1",
 };
+const safePreviewInput: BackupContentSafePreviewTicketInput = {
+  schemaVersion: 1,
+  action: "preview",
+  previewIntent: "safePreviewV1",
+};
 
 function rawTicket() {
   return {
@@ -33,6 +39,7 @@ function rawTicket() {
     profile: "raster_v1",
     content_type: "image/png",
     content_length: 12345,
+    truncated: false,
     etag: `W/"${"e".repeat(64)}"`,
     last_modified: "2026-07-18T08:00:00+08:00",
     range: "single",
@@ -76,6 +83,7 @@ describe("backup content API boundary", () => {
       profile: "raster_v1",
       contentType: "image/png",
       contentLength: 12345,
+      truncated: false,
       etag: `W/"${"e".repeat(64)}"`,
       lastModified: "2026-07-18T00:00:00.000Z",
       range: "single",
@@ -88,6 +96,108 @@ describe("backup content API boundary", () => {
     expect(JSON.stringify(mapped)).not.toContain("PRIVATE");
     expect(JSON.stringify(mapped)).not.toContain("delivery_id");
     expect(JSON.stringify(mapped)).not.toContain("cookie_secret");
+  });
+
+  it("accepts only a resolved exact product for the safe preview intent", () => {
+    const plainText = {
+      ...rawTicket(),
+      renderer: "plain_text",
+      profile: "text_v2",
+      content_type: "text/plain; charset=utf-8",
+      range: "none",
+      truncated: true,
+    };
+    const mapped = mapBackupContentTicket(plainText, safePreviewInput);
+    expect(mapped.status).toBe("available");
+    if (mapped.status !== "available") throw new Error("expected safe resolved ticket");
+    expect(mapped.value).toMatchObject({
+      renderer: "plain_text",
+      profile: "text_v2",
+      contentType: "text/plain; charset=utf-8",
+      range: "none",
+      truncated: true,
+    });
+    expect(JSON.stringify(mapped)).not.toContain("safePreviewV1");
+  });
+
+  it("blocks any unresolved intent field in safe, exact, and download ticket responses", () => {
+    const downloadInput: BackupContentTicketInput = {
+      schemaVersion: 1,
+      action: "download",
+      renderer: "attachment",
+      profile: "original_v1",
+      stepUpProof: "download-proof",
+    };
+    const products = [
+      { input: safePreviewInput, ticket: rawTicket() },
+      { input: previewInput, ticket: rawTicket() },
+      {
+        input: downloadInput,
+        ticket: {
+          ...rawTicket(),
+          action: "download",
+          renderer: "attachment",
+          profile: "original_v1",
+          content_type: "application/octet-stream",
+          etag: `"${"f".repeat(64)}"`,
+        },
+      },
+    ];
+    for (const { input, ticket } of products) {
+      for (const previewIntent of ["safe_preview_v1", "", null]) {
+        expectBlocked(mapBackupContentTicket({ ...ticket, preview_intent: previewIntent }, input));
+      }
+    }
+  });
+
+  it.each([
+    ["escaped_text", "text_v1", "text/plain; charset=utf-8", "none"],
+    ["metadata_hex", "hex_v1", "text/plain; charset=utf-8", "none"],
+    ["safe_raster", "raster_v1", "image/png", "single"],
+    ["same_origin_pdf", "pdf_v1", "application/pdf", "single"],
+    ["native_audio", "audio_v1", "audio/mpeg", "single"],
+    ["native_video", "video_v1", "video/mp4", "single"],
+  ] as const)("accepts the closed %s safe-preview resolution", (renderer, profile, contentType, range) => {
+    expect(mapBackupContentTicket({
+      ...rawTicket(),
+      renderer,
+      profile,
+      content_type: contentType,
+      range,
+    }, safePreviewInput).status).toBe("available");
+  });
+
+  it("keeps exact-preview response matching strict for processing/backcompat", () => {
+    expectBlocked(mapBackupContentTicket({
+      ...rawTicket(),
+      renderer: "plain_text",
+      profile: "text_v2",
+      content_type: "text/plain; charset=utf-8",
+      range: "none",
+    }, previewInput));
+  });
+
+  it("preserves Range-none compatibility for exact native preview and original download tickets", () => {
+    expect(mapBackupContentTicket({ ...rawTicket(), range: "none" }, previewInput).status).toBe("available");
+
+    const downloadInput: BackupContentTicketInput = {
+      schemaVersion: 1,
+      action: "download",
+      renderer: "attachment",
+      profile: "original_v1",
+      stepUpProof: "download-proof",
+    };
+    expect(mapBackupContentTicket({
+      ...rawTicket(),
+      action: "download",
+      renderer: "attachment",
+      profile: "original_v1",
+      content_type: "application/octet-stream",
+      range: "none",
+      etag: `"${"f".repeat(64)}"`,
+    }, downloadInput).status).toBe("available");
+
+    expectBlocked(mapBackupContentTicket({ ...rawTicket(), range: "none" }, safePreviewInput));
   });
 
   it.each([
@@ -103,6 +213,9 @@ describe("backup content API boundary", () => {
     ["unknown classification", { classification: "public" }],
     ["unsafe ETag", { etag: "opaque-unquoted" }],
     ["unsafe length", { content_length: Number.MAX_SAFE_INTEGER + 1 }],
+    ["missing truncation", { truncated: undefined }],
+    ["non-boolean truncation", { truncated: "false" }],
+    ["truncated native product", { truncated: true }],
     ["invalid modified time", { last_modified: "not-a-time" }],
     ["expired ticket", { expires_at: "2026-07-17T23:59:59Z" }],
     ["idle after absolute", { idle_expires_at: "2026-07-18T00:03:00Z" }],
@@ -134,6 +247,7 @@ describe("backup content API boundary", () => {
       etag: `"${"f".repeat(64)}"`,
     };
     expect(mapBackupContentTicket(download, downloadInput).status).toBe("available");
+    // @ts-expect-error a download without proof is rejected by both the type and runtime boundaries
     expectBlocked(mapBackupContentTicket(download, { ...downloadInput, stepUpProof: undefined }));
   });
 
@@ -162,8 +276,47 @@ describe("backup content API boundary", () => {
     expect(JSON.stringify(requestMock.mock.calls)).not.toContain("?jwt=");
   });
 
+  it("posts only the discriminated safe-preview intent and maps the resolved product", async () => {
+    requestMock.mockResolvedValueOnce({
+      ...rawTicket(),
+      renderer: "plain_text",
+      profile: "text_v2",
+      content_type: "text/plain; charset=utf-8",
+      range: "none",
+    });
+
+    const mapped = await createBackupContentApi().issueTicket("login-token", ref, safePreviewInput);
+
+    expect(mapped.status).toBe("available");
+    expect(requestMock).toHaveBeenCalledWith(
+      `/recovery-points/${ref.recoveryPointId}/entries/${ref.entryId}/delivery-tickets`,
+      {
+        method: "POST",
+        token: "login-token",
+        stepUpProof: undefined,
+        signal: undefined,
+        body: {
+          schema_version: 1,
+          action: "preview",
+          preview_intent: "safe_preview_v1",
+        },
+      },
+    );
+    const body = requestMock.mock.calls[0]?.[1]?.body;
+    expect(body).not.toHaveProperty("renderer");
+    expect(body).not.toHaveProperty("profile");
+  });
+
   it("rejects malformed refs and illegal request products before transport", async () => {
     await expect(createBackupContentApi().issueTicket("token", { ...ref, entryId: "latest" }, previewInput)).rejects.toThrow();
+    // @ts-expect-error an exact preview cannot request the attachment product
+    await expect(createBackupContentApi().issueTicket("token", ref, {
+      schemaVersion: 1,
+      action: "preview",
+      renderer: "attachment",
+      profile: "original_v1",
+    })).rejects.toThrow();
+    // @ts-expect-error a download cannot request a preview renderer
     await expect(createBackupContentApi().issueTicket("token", ref, {
       schemaVersion: 1,
       action: "download",

@@ -183,7 +183,7 @@ func (runtime *settingsCanceledPersistenceRuntime) TransitionBackupAssetSettings
 
 func TestSettingsPUTPersistenceHonorsRuntimeOperationCancellation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:"+handlerTestDBName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,7 @@ func TestSettingsMixedPUTPostPersistFailureRestoresEveryExactOverride(t *testing
 
 func TestSettingsDELETEPersistenceHonorsRuntimeOperationCancellation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:"+handlerTestDBName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +389,7 @@ func TestSettingsDELETEEnabledFallbackUsesProspectiveBundleAndRemovesExactOverri
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Setenv("BACKUP_ASSETS_ENABLED", testCase.fallback)
 			gin.SetMode(gin.TestMode)
-			db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+			db, err := gorm.Open(sqlite.Open("file:"+handlerTestDBName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -508,7 +508,7 @@ func assertSettingsOverlayReceiptTTL(t *testing.T, db *gorm.DB, ownerID uint, no
 
 func TestSettingsDynamicExportMutationUsesRuntimeSettingsTransition(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:"+handlerTestDBName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,7 +545,7 @@ func TestSettingsDynamicExportMutationUsesRuntimeSettingsTransition(t *testing.T
 
 func TestSettingsDynamicExportResetUsesRuntimeSettingsTransition(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:"+handlerTestDBName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +584,7 @@ func TestSettingsDynamicExportResetUsesRuntimeSettingsTransition(t *testing.T) {
 
 func TestSettingsSharedIdempotencyMutationUsesRuntimeSettingsTransition(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:"+handlerTestDBName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -617,7 +617,7 @@ func TestSettingsSharedIdempotencyMutationUsesRuntimeSettingsTransition(t *testi
 
 func TestSettingsSharedIdempotencyResetUsesRuntimeSettingsTransition(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:"+handlerTestDBName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,7 +677,7 @@ func TestSettingsSharedIdempotencyResetUsesRuntimeSettingsTransition(t *testing.
 
 func TestSettingsRootOnlyExportMutationUsesRuntimeContractAndPersists(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:"+handlerTestDBName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -716,7 +716,7 @@ func TestRecoveryAuthorizationReceiptSettingsTransitions(t *testing.T) {
 
 	t.Run("batch update", func(t *testing.T) {
 		gin.SetMode(gin.TestMode)
-		db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+		db, err := gorm.Open(sqlite.Open("file:"+handlerTestDBName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -759,7 +759,7 @@ func TestRecoveryAuthorizationReceiptSettingsTransitions(t *testing.T) {
 
 	t.Run("delete reset", func(t *testing.T) {
 		gin.SetMode(gin.TestMode)
-		db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+		db, err := gorm.Open(sqlite.Open("file:"+handlerTestDBName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -839,7 +839,7 @@ func TestRecoveryAuthorizationReceiptSettingsTransitions(t *testing.T) {
 func setupSettingsTransitionHandler(t *testing.T) (*gorm.DB, *settings.Service, *SettingsHandler, *settingsTransitionSpy, *gin.Engine) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:"+handlerTestDBName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -967,7 +967,7 @@ func TestSettingsEnablementDeleteRestoreBlockedKeepsBackupAssetsDisabled(t *test
 func setupSettingsEnablementHandler(t *testing.T, snapshot ga.ReadinessSnapshot) (*gorm.DB, *settings.Service, *SettingsHandler, *settingsTransitionSpy, *gin.Engine) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:"+handlerTestDBName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

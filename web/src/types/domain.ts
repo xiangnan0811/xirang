@@ -1487,6 +1487,54 @@ export interface CatalogStatus {
   permissions: CatalogPermissions;
 }
 
+export type BackupFileSourceLineageKind = "task" | "imported";
+
+export interface BackupFileSourceNode {
+  nodeId: number;
+  displayName: string;
+  backupSetCount: number;
+  latestRetainedAt: string | null;
+  catalogCoverage: CatalogCoverageStatus;
+}
+
+export interface BackupFileSourceSet {
+  backupSetId: string;
+  nodeId: number;
+  displayLabel: string;
+  lineageKind: BackupFileSourceLineageKind;
+  versionCount: number;
+  latestRetainedAt: string | null;
+  catalogCoverage: CatalogCoverageStatus;
+}
+
+export interface BackupFileSourceVersion {
+  recoveryPointId: string;
+  repositoryId: string;
+  producingTaskId?: number;
+  capturedAt: string | null;
+  committedAt: string | null;
+  createdAt: string;
+  lifecycleState: "observed" | "committed" | "degraded";
+  catalogCoverage: CatalogCoverageStatus;
+  contentAvailability: CatalogContentAvailability;
+  entryCount: number;
+  logicalBytes: number;
+  permissions: CatalogPermissions;
+}
+
+export interface BackupFileSourceRecoveryPoint {
+  nodeId: number;
+  backupSetId: string;
+  recoveryPointId: string;
+  repositoryId: string;
+  producingTaskId?: number;
+}
+
+export interface BackupFileSourcePage<T> {
+  items: T[];
+  nextCursor: string | null;
+}
+
 export interface BackupRepositoryCatalogSummary {
   recoveryPointCount: number;
   completeCatalogCount: number;
@@ -1881,6 +1929,7 @@ export interface BackupAssetVersionPage {
 export type BackupContentAction = "preview" | "download";
 export type BackupContentRenderer =
   | "escaped_text"
+  | "plain_text"
   | "safe_raster"
   | "same_origin_pdf"
   | "native_audio"
@@ -1889,6 +1938,7 @@ export type BackupContentRenderer =
   | "attachment";
 export type BackupContentProfile =
   | "text_v1"
+  | "text_v2"
   | "raster_v1"
   | "pdf_v1"
   | "audio_v1"
@@ -1906,6 +1956,7 @@ export interface BackupContentTicket {
   profile: BackupContentProfile;
   contentType: string;
   contentLength: number;
+  truncated: boolean;
   etag: string;
   lastModified: string | null;
   range: BackupContentRangePolicy;

@@ -566,7 +566,7 @@ func (fake *backupAssetExportAuditFake) Write(_ context.Context, input backupass
 
 func backupAssetExportHandlerProofFixture(t *testing.T) (*gorm.DB, *auth.JWTManager, model.User) {
 	t.Helper()
-	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared&_loc=UTC"
+	dsn := "file:" + handlerTestDBName(t) + "?mode=memory&cache=shared&_loc=UTC"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: gormlogger.Default.LogMode(gormlogger.Silent)})
 	if err != nil {
 		t.Fatal(err)

@@ -47,6 +47,13 @@ web/src/
   `web/src/router.tsx`. Examples: `overview-page.tsx`, `tasks-page.tsx`,
   `credential-audit-page.tsx`, `credential-access-grants-page.tsx`, and
   `settings-page.tsx`.
+- Keep the Backups route family split by responsibility: `/app/backups` redirects
+  to the everyday file center at `/app/backups/data`; `overview` and `recovery`
+  remain explicit sibling routes, while repository management remains the
+  explicit `repositories` view inside the data route.
+  `pages/backups-page.data.tsx` owns route composition; reusable browser,
+  source-selector, direct-preview, and responsive split-pane code belongs in
+  `features/backup-assets/`.
 - Keep `web/src/router.tsx` responsible for route object construction only.
   Put lazy page component exports and the shared lazy page fallback in
   `web/src/router-pages.tsx` so the router module does not mix component exports

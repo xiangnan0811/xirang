@@ -140,6 +140,10 @@ ADMIN_INITIAL_PASSWORD='LocalDev#2026' APP_ENV=development \
 | GET | /backup-repositories/:id/recovery-points | 🔒 列出谱系授权后的恢复点与 Catalog 状态（`backup_assets:list`） |
 | POST | /backup-repositories/:id/reconcile | 🔒 执行有界只读重新探测（`backup_repositories:manage`） |
 | POST | /backup-repositories/:id/disconnect | 🔒 撤销访问但保留 Repository、恢复点及 Provider 数据（`backup_repositories:manage`） |
+| GET | /backup-file-sources/nodes | 🔒 列出当前谱系授权的脱敏文件源节点（`backup_assets:list`） |
+| GET | /backup-file-sources/nodes/:nodeId/sets | 🔒 列出节点下由服务端投影的脱敏 Backup Set（`backup_assets:list`） |
+| GET | /backup-file-sources/sets/:backupSetId/versions | 🔒 列出 Backup Set 的脱敏版本摘要（`backup_assets:list`） |
+| GET | /backup-file-sources/recovery-points/:recoveryPointId/source | 🔒 将已授权恢复点精确解析为脱敏节点、Backup Set、仓库和任务坐标（`backup_assets:list`，不访问 Provider） |
 | GET | /recovery-points/:id | 🔒 查看脱敏恢复点详情（`backup_assets:list`） |
 | GET | /recovery-points/:id/catalog-status | 🔒 独立查看 generation、coverage、staleness 与内容可用性（`backup_assets:list`） |
 | GET | /recovery-points/:id/evidence | 🔒 查看分层且不提升信任结论的精确证据（`backup_assets:list`） |

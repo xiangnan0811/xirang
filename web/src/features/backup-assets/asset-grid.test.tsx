@@ -5,6 +5,8 @@ import userEvent from "@testing-library/user-event";
 
 import { buildAssetRows } from "./__tests__/test-utils";
 import { AssetGrid } from "./asset-grid";
+import { assetRefKey } from "./backup-assets-state";
+import { runAxe } from "@/test/a11y-helpers";
 
 beforeAll(() => {
   Object.defineProperties(HTMLElement.prototype, {
@@ -40,10 +42,11 @@ describe("AssetGrid", () => {
     expect(screen.getAllByRole("gridcell")[0]).toHaveClass("h-36");
   });
 
-  it("uses the gridcell itself for pointer selection without nesting a checkbox", async () => {
+  it("keeps selection and activation as sibling controls with pointer, Enter, and Space parity", async () => {
     const user = userEvent.setup();
     const rows = buildAssetRows(2);
     const onSelectionToggle = vi.fn();
+    const onOpen = vi.fn();
     render(
       <AssetGrid
         rows={rows}
@@ -51,19 +54,56 @@ describe("AssetGrid", () => {
         activeKey={null}
         onActiveChange={vi.fn()}
         onSelectionToggle={onSelectionToggle}
-        onOpen={vi.fn()}
+        onOpen={onOpen}
       />
     );
 
-    const cell = (await screen.findAllByRole("gridcell"))[0];
-    expect(cell.querySelector('[role="checkbox"]')).toBeNull();
-    await user.click(cell);
-    expect(onSelectionToggle).toHaveBeenCalledWith(rows[0].ref);
+    const cell = (await screen.findAllByRole("gridcell"))[1];
+    const checkbox = screen.getAllByRole("checkbox")[1];
+    const activation = screen.getByRole("button", { name: new RegExp(rows[1].asset.name) });
+    expect(activation).not.toContainElement(checkbox);
+    expect(cell).toContainElement(checkbox);
+    expect(cell).toContainElement(activation);
+
+    await user.click(activation);
+    expect(onOpen).toHaveBeenCalledOnce();
+    expect(onSelectionToggle).not.toHaveBeenCalled();
+
+    activation.focus();
+    await user.keyboard("{Enter}");
+    await user.keyboard(" ");
+    expect(onOpen).toHaveBeenCalledTimes(3);
+
+    checkbox.focus();
+    await user.keyboard(" ");
+    expect(onSelectionToggle).toHaveBeenCalledOnce();
+    expect(onSelectionToggle).toHaveBeenCalledWith(rows[1].ref);
+    expect(onOpen).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps the spatial grid axe-clean with native selection and current activation state", async () => {
+    const rows = buildAssetRows(2);
+    const { container } = render(
+      <AssetGrid
+        rows={rows}
+        selectedKeys={new Set([assetRefKey(rows[1].ref)])}
+        activeKey={assetRefKey(rows[0].ref)}
+        onActiveChange={vi.fn()}
+        onSelectionToggle={vi.fn()}
+        onOpen={vi.fn()}
+      />,
+    );
+
+    const current = await screen.findByRole("button", { name: new RegExp(rows[0].asset.name) });
+    const selected = screen.getByRole("checkbox", { name: new RegExp(rows[1].asset.name) });
+    expect(current).toHaveAttribute("aria-current", "true");
+    expect(selected).toBeChecked();
+    expect(await runAxe(container)).toHaveNoViolations();
   });
 
   it("shows a retained version count only on multi-version search tiles", async () => {
-    const browse = buildAssetRows(1)[0];
-    const single = { ...browse, source: "search" as const, hitFields: ["name" as const], retainedVersionCount: 1 };
+    const [browse, singleBase] = buildAssetRows(2);
+    const single = { ...singleBase, source: "search" as const, hitFields: ["name" as const], retainedVersionCount: 1 };
     const multi = {
       ...browse,
       ref: { ...browse.ref, entryId: "2".repeat(64) },

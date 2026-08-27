@@ -13,6 +13,8 @@ import {
   type BackupAssetsRouteState,
 } from "@/features/backup-assets/backup-assets-route-state";
 import { BackupAssetsWorkspace } from "@/features/backup-assets/backup-assets-workspace";
+import { BackupFileSourceControls } from "@/features/backup-assets/backup-file-source-controls";
+import { useBackupFileSources } from "@/features/backup-assets/use-backup-file-sources";
 import {
   useBackupAssetsState,
   type BackupAssetsSemanticIssue,
@@ -82,19 +84,45 @@ function BackupsDataWorkspace({
     ensureStepUpProof,
     onRouteRepair: handleRouteRepair,
   });
+  const fileSources = useBackupFileSources({ token, route: resolvedRoute, onRoutePatch: handleRoutePatch });
+  const sourceWorkspaceUnavailable =
+    fileSources.status === "blocked" || fileSources.status === "permission_denied";
 
   return (
     <div className="flex min-h-[32rem] flex-col" aria-labelledby="backup-assets-data-title">
       <h2 id="backup-assets-data-title" className="sr-only">
         {t("backups.dataTitle")}
       </h2>
-      <BackupAssetsWorkspace
-        controller={controller}
-        preferences={preferences}
-        processingRuntime={{ token, role, userId, ensureStepUpProof }}
-        onRoutePatch={handleRoutePatch}
-        onReturnOverview={() => navigate("/app/backups/overview")}
+      <BackupFileSourceControls
+        status={fileSources.status}
+        nodes={fileSources.nodes}
+        sets={fileSources.sets}
+        versions={fileSources.versions}
+        selectedNodeId={resolvedRoute.nodeId}
+        selectedBackupSetId={resolvedRoute.backupSetId}
+        selectedRecoveryPointId={resolvedRoute.recoveryPointId}
+        onSelectNode={fileSources.selectNode}
+        onSelectSet={fileSources.selectSet}
+        onSelectVersion={fileSources.selectVersion}
+        hasMoreNodes={fileSources.hasMoreNodes}
+        hasMoreSets={fileSources.hasMoreSets}
+        hasMoreVersions={fileSources.hasMoreVersions}
+        loadingMoreNodes={fileSources.loadingMoreNodes}
+        loadingMoreSets={fileSources.loadingMoreSets}
+        loadingMoreVersions={fileSources.loadingMoreVersions}
+        onLoadMoreNodes={fileSources.loadMoreNodes}
+        onLoadMoreSets={fileSources.loadMoreSets}
+        onLoadMoreVersions={fileSources.loadMoreVersions}
       />
+      {sourceWorkspaceUnavailable ? null : (
+        <BackupAssetsWorkspace
+          controller={controller}
+          preferences={preferences}
+          processingRuntime={{ token, role, userId, ensureStepUpProof }}
+          onRoutePatch={handleRoutePatch}
+          onReturnOverview={() => navigate("/app/backups/overview")}
+        />
+      )}
     </div>
   );
 }

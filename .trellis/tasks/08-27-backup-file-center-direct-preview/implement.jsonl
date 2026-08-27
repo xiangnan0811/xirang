@@ -1,0 +1,13 @@
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"Place the canonical route page, feature modules, API mappers, and tests in established frontend layers."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Reuse workbench shells, permission-aware navigation, UI primitives, responsive composition, and accessible interactions."}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"Implement cancellable latest-request data orchestration through typed wrappers and cleanup-safe hooks."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Keep opaque route and page state local, derive UI state, and preserve auth-token ownership boundaries."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Maintain closed renderer/ticket products, defensive API mapping, and non-leaking opaque URL contracts."}
+{"file":".trellis/spec/frontend/backup-content-transport.md","reason":"Reuse the released private-network transport setting and typed role-aware delivery errors without broadening policy."}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Place the file-source Catalog projection, handlers, content contract changes, and tests in the owning backend packages."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Use standard response envelopes, typed capability/content errors, sentinel wrapping, and generic non-leaking internal failures."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Preserve route authentication/RBAC/ownership, sanitized DTOs, security denial tests, Swagger freshness, and backend gates."}
+{"file":".trellis/spec/backend/backup-content-transport.md","reason":"Keep Issue and Serve transport, cookie, origin, ticket, lease, budget, and private-LAN policy authoritative while adding preview selection intent."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Extend the existing backup-assets browser, preview, cancellation, and renderer components instead of duplicating them."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Define the renderer negotiation and node/version projection across Catalog, ticket, backend policy, API mapper, state, and UI boundaries."}
+{"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Keep generated Swagger and any current user/admin route documentation aligned with the implemented API and Files landing behavior."}

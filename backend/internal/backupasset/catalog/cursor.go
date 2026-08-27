@@ -26,10 +26,13 @@ const (
 type CursorEndpoint string
 
 const (
-	CursorEndpointRepositories   CursorEndpoint = "repositories"
-	CursorEndpointRecoveryPoints CursorEndpoint = "recovery_points"
-	CursorEndpointEntries        CursorEndpoint = "entries"
-	CursorEndpointDiff           CursorEndpoint = "diff"
+	CursorEndpointRepositories       CursorEndpoint = "repositories"
+	CursorEndpointRecoveryPoints     CursorEndpoint = "recovery_points"
+	CursorEndpointEntries            CursorEndpoint = "entries"
+	CursorEndpointDiff               CursorEndpoint = "diff"
+	CursorEndpointFileSourceNodes    CursorEndpoint = "file_source_nodes"
+	CursorEndpointFileSourceSets     CursorEndpoint = "file_source_sets"
+	CursorEndpointFileSourceVersions CursorEndpoint = "file_source_versions"
 )
 
 type CursorAnchor struct {
@@ -39,6 +42,8 @@ type CursorAnchor struct {
 	BaseEntryID     string         `json:"base_entry_id,omitempty"`
 	CompareEntryID  string         `json:"compare_entry_id,omitempty"`
 	ChangeKind      DiffChangeKind `json:"change_kind,omitempty"`
+	NodeID          uint           `json:"node_id,omitempty"`
+	BackupSetID     string         `json:"backup_set_id,omitempty"`
 }
 
 type CursorScope struct {
@@ -47,6 +52,9 @@ type CursorScope struct {
 	UserID                 uint           `json:"user_id"`
 	Role                   string         `json:"role"`
 	Sort                   string         `json:"-"`
+	NodeID                 uint           `json:"node_id,omitempty"`
+	BackupSetID            string         `json:"backup_set_id,omitempty"`
+	ProjectionDigest       string         `json:"projection_digest,omitempty"`
 	RepositoryID           string         `json:"repository_id,omitempty"`
 	RecoveryPointID        string         `json:"recovery_point_id,omitempty"`
 	GenerationID           string         `json:"generation_id,omitempty"`
@@ -68,6 +76,9 @@ type cursorClaims struct {
 	UserID                 uint           `json:"user_id"`
 	Role                   string         `json:"role"`
 	Sort                   string         `json:"sort"`
+	NodeID                 uint           `json:"node_id,omitempty"`
+	BackupSetID            string         `json:"backup_set_id,omitempty"`
+	ProjectionDigest       string         `json:"projection_digest,omitempty"`
 	RepositoryID           string         `json:"repository_id,omitempty"`
 	RecoveryPointID        string         `json:"recovery_point_id,omitempty"`
 	GenerationID           string         `json:"generation_id,omitempty"`
@@ -202,7 +213,8 @@ func (claims cursorClaims) toScope() (CursorScope, error) {
 	}
 	scope := CursorScope{
 		Endpoint: claims.Endpoint, Direction: claims.Direction, UserID: claims.UserID, Role: claims.Role,
-		RepositoryID: claims.RepositoryID, RecoveryPointID: claims.RecoveryPointID, GenerationID: claims.GenerationID,
+		NodeID: claims.NodeID, BackupSetID: claims.BackupSetID, ProjectionDigest: claims.ProjectionDigest, RepositoryID: claims.RepositoryID,
+		RecoveryPointID: claims.RecoveryPointID, GenerationID: claims.GenerationID,
 		ParentEntryID: claims.ParentEntryID, BaseRecoveryPointID: claims.BaseRecoveryPointID,
 		CompareRecoveryPointID: claims.CompareRecoveryPointID, BaseGenerationID: claims.BaseGenerationID,
 		CompareGenerationID: claims.CompareGenerationID, BaseParentEntryID: claims.BaseParentEntryID,
@@ -219,27 +231,29 @@ func (claims cursorClaims) validate(requireAnchor bool) error {
 	}
 	entryID := func(value string) bool { return value == "" || lowerHexLength(value, 64) }
 	opaqueID := func(value string) bool { return value == "" || backupasset.ValidateOpaqueID(value) == nil }
-	if !opaqueID(claims.RepositoryID) || !opaqueID(claims.RecoveryPointID) || !opaqueID(claims.GenerationID) ||
+	if !opaqueID(claims.BackupSetID) || (claims.ProjectionDigest != "" && !lowerHexLength(claims.ProjectionDigest, 64)) ||
+		!opaqueID(claims.RepositoryID) || !opaqueID(claims.RecoveryPointID) || !opaqueID(claims.GenerationID) ||
 		!opaqueID(claims.BaseRecoveryPointID) || !opaqueID(claims.CompareRecoveryPointID) ||
 		!opaqueID(claims.BaseGenerationID) || !opaqueID(claims.CompareGenerationID) ||
 		!entryID(claims.ParentEntryID) || !entryID(claims.BaseParentEntryID) || !entryID(claims.CompareParentEntryID) ||
 		!opaqueID(claims.Anchor.RepositoryID) || !opaqueID(claims.Anchor.RecoveryPointID) ||
-		!entryID(claims.Anchor.EntryID) || !entryID(claims.Anchor.BaseEntryID) || !entryID(claims.Anchor.CompareEntryID) {
+		!entryID(claims.Anchor.EntryID) || !entryID(claims.Anchor.BaseEntryID) || !entryID(claims.Anchor.CompareEntryID) ||
+		!opaqueID(claims.Anchor.BackupSetID) {
 		return fmt.Errorf("%w: cursor resource scope", ErrInvalidCursor)
 	}
 	switch claims.Endpoint {
 	case CursorEndpointRepositories:
-		if claims.Sort != RepositorySortCreatedDesc || (requireAnchor && claims.Anchor.RepositoryID == "") || claims.hasPointScope() {
+		if claims.Sort != RepositorySortCreatedDesc || (requireAnchor && claims.Anchor.RepositoryID == "") || claims.hasPointScope() || claims.hasFileSourceScope() {
 			return fmt.Errorf("%w: repository cursor scope", ErrInvalidCursor)
 		}
 	case CursorEndpointRecoveryPoints:
 		if claims.RepositoryID == "" || (requireAnchor && claims.Anchor.RecoveryPointID == "") ||
-			!validRecoveryPointSort(RecoveryPointSort(claims.Sort)) || claims.hasEntryOrDiffScope() {
+			!validRecoveryPointSort(RecoveryPointSort(claims.Sort)) || claims.hasEntryOrDiffScope() || claims.hasFileSourceScope() {
 			return fmt.Errorf("%w: recovery point cursor scope", ErrInvalidCursor)
 		}
 	case CursorEndpointEntries:
 		if claims.RepositoryID == "" || claims.RecoveryPointID == "" || claims.GenerationID == "" || (requireAnchor && claims.Anchor.EntryID == "") ||
-			!validEntrySort(EntrySort(claims.Sort)) || claims.hasDiffScope() {
+			!validEntrySort(EntrySort(claims.Sort)) || claims.hasDiffScope() || claims.hasFileSourceScope() {
 			return fmt.Errorf("%w: entry cursor scope", ErrInvalidCursor)
 		}
 	case CursorEndpointDiff:
@@ -247,8 +261,24 @@ func (claims cursorClaims) validate(requireAnchor bool) error {
 			claims.BaseRecoveryPointID == claims.CompareRecoveryPointID || claims.BaseGenerationID == "" || claims.CompareGenerationID == "" ||
 			claims.Sort != DiffSortPathAsc || (requireAnchor && claims.Anchor.BaseEntryID == "" && claims.Anchor.CompareEntryID == "") ||
 			((claims.Anchor.BaseEntryID != "" || claims.Anchor.CompareEntryID != "") && !validDiffChangeKinds[claims.Anchor.ChangeKind]) ||
-			claims.RecoveryPointID != "" || claims.GenerationID != "" || claims.ParentEntryID != "" {
+			claims.RecoveryPointID != "" || claims.GenerationID != "" || claims.ParentEntryID != "" || claims.hasFileSourceScope() {
 			return fmt.Errorf("%w: diff cursor scope", ErrInvalidCursor)
+		}
+	case CursorEndpointFileSourceSets:
+		if claims.NodeID == 0 || claims.BackupSetID != "" || !lowerHexLength(claims.ProjectionDigest, 64) || claims.Sort != fileSourceBackupSetSort ||
+			(requireAnchor && claims.Anchor.BackupSetID == "") || claims.Anchor.NodeID != 0 || claims.hasLegacyCatalogScope() {
+			return fmt.Errorf("%w: file-source set cursor scope", ErrInvalidCursor)
+		}
+	case CursorEndpointFileSourceNodes:
+		if claims.NodeID != 0 || claims.BackupSetID != "" || !lowerHexLength(claims.ProjectionDigest, 64) || claims.Sort != fileSourceNodeSort ||
+			(requireAnchor && claims.Anchor.NodeID == 0) || claims.Anchor.BackupSetID != "" || claims.hasLegacyCatalogScope() {
+			return fmt.Errorf("%w: file-source node cursor scope", ErrInvalidCursor)
+		}
+	case CursorEndpointFileSourceVersions:
+		if claims.NodeID != 0 || claims.BackupSetID == "" || !lowerHexLength(claims.ProjectionDigest, 64) || claims.Sort != fileSourceVersionSort ||
+			(requireAnchor && claims.Anchor.RecoveryPointID == "") || claims.Anchor.NodeID != 0 ||
+			claims.Anchor.BackupSetID != "" || claims.hasLegacyCatalogScopeExceptRecoveryPointAnchor() {
+			return fmt.Errorf("%w: file-source version cursor scope", ErrInvalidCursor)
 		}
 	default:
 		return fmt.Errorf("%w: cursor endpoint", ErrInvalidCursor)
@@ -271,6 +301,27 @@ func (claims cursorClaims) hasDiffScope() bool {
 		claims.Anchor.BaseEntryID != "" || claims.Anchor.CompareEntryID != "" || claims.Anchor.ChangeKind != ""
 }
 
+func (claims cursorClaims) hasFileSourceScope() bool {
+	return claims.NodeID != 0 || claims.BackupSetID != "" || claims.ProjectionDigest != "" ||
+		claims.Anchor.NodeID != 0 || claims.Anchor.BackupSetID != ""
+}
+
+func (claims cursorClaims) hasLegacyCatalogScope() bool {
+	return claims.RepositoryID != "" || claims.RecoveryPointID != "" || claims.GenerationID != "" || claims.ParentEntryID != "" ||
+		claims.BaseRecoveryPointID != "" || claims.CompareRecoveryPointID != "" || claims.BaseGenerationID != "" ||
+		claims.CompareGenerationID != "" || claims.BaseParentEntryID != "" || claims.CompareParentEntryID != "" ||
+		claims.Anchor.RepositoryID != "" || claims.Anchor.RecoveryPointID != "" || claims.Anchor.EntryID != "" ||
+		claims.Anchor.BaseEntryID != "" || claims.Anchor.CompareEntryID != "" || claims.Anchor.ChangeKind != ""
+}
+
+func (claims cursorClaims) hasLegacyCatalogScopeExceptRecoveryPointAnchor() bool {
+	return claims.RepositoryID != "" || claims.RecoveryPointID != "" || claims.GenerationID != "" || claims.ParentEntryID != "" ||
+		claims.BaseRecoveryPointID != "" || claims.CompareRecoveryPointID != "" || claims.BaseGenerationID != "" ||
+		claims.CompareGenerationID != "" || claims.BaseParentEntryID != "" || claims.CompareParentEntryID != "" ||
+		claims.Anchor.RepositoryID != "" || claims.Anchor.EntryID != "" || claims.Anchor.BaseEntryID != "" ||
+		claims.Anchor.CompareEntryID != "" || claims.Anchor.ChangeKind != ""
+}
+
 func validRecoveryPointSort(value RecoveryPointSort) bool {
 	return value == RecoveryPointSortCapturedDesc || value == RecoveryPointSortCapturedAsc || value == RecoveryPointSortCreatedDesc
 }
@@ -281,7 +332,8 @@ func validEntrySort(value EntrySort) bool {
 
 func cursorClaimsMatch(actual, expected cursorClaims) bool {
 	if actual.Endpoint != expected.Endpoint || actual.Direction != expected.Direction || actual.UserID != expected.UserID ||
-		actual.Role != expected.Role || actual.Sort != expected.Sort || actual.RepositoryID != expected.RepositoryID ||
+		actual.Role != expected.Role || actual.Sort != expected.Sort || actual.NodeID != expected.NodeID ||
+		actual.BackupSetID != expected.BackupSetID || actual.ProjectionDigest != expected.ProjectionDigest || actual.RepositoryID != expected.RepositoryID ||
 		actual.RecoveryPointID != expected.RecoveryPointID || actual.GenerationID != expected.GenerationID ||
 		actual.ParentEntryID != expected.ParentEntryID || actual.BaseRecoveryPointID != expected.BaseRecoveryPointID ||
 		actual.CompareRecoveryPointID != expected.CompareRecoveryPointID || actual.BaseGenerationID != expected.BaseGenerationID ||

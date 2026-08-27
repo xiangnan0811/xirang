@@ -16,6 +16,7 @@ import (
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/content"
+	backuprepository "xirang/backend/internal/backupasset/repository"
 	"xirang/backend/internal/middleware"
 
 	"github.com/gin-gonic/gin"
@@ -228,10 +229,39 @@ type BackupContentHandler struct {
 }
 
 type backupContentTicketPayload struct {
-	SchemaVersion int                     `json:"schema_version" minimum:"1" maximum:"1" example:"1"`
-	Action        content.DeliveryAction  `json:"action" enums:"preview,download"`
-	Renderer      content.Renderer        `json:"renderer" enums:"escaped_text,safe_raster,same_origin_pdf,native_audio,native_video,metadata_hex,attachment"`
-	Profile       content.RendererProfile `json:"profile" enums:"text_v1,raster_v1,pdf_v1,audio_v1,video_v1,hex_v1,original_v1"`
+	SchemaVersion int                      `json:"schema_version" minimum:"1" maximum:"1" example:"1"`
+	Action        content.DeliveryAction   `json:"action" enums:"preview,download"`
+	PreviewIntent *content.PreviewIntent   `json:"preview_intent,omitempty" enums:"safe_preview_v1"`
+	Renderer      *content.Renderer        `json:"renderer,omitempty" enums:"escaped_text,plain_text,safe_raster,same_origin_pdf,native_audio,native_video,metadata_hex,attachment"`
+	Profile       *content.RendererProfile `json:"profile,omitempty" enums:"text_v1,text_v2,raster_v1,pdf_v1,audio_v1,video_v1,hex_v1,original_v1"`
+	hasIntent     bool
+	hasRenderer   bool
+	hasProfile    bool
+}
+
+func (payload *backupContentTicketPayload) UnmarshalJSON(value []byte) error {
+	if payload == nil {
+		return io.ErrUnexpectedEOF
+	}
+	type wirePayload backupContentTicketPayload
+	var decoded wirePayload
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return io.ErrUnexpectedEOF
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(value, &members); err != nil {
+		return err
+	}
+	*payload = backupContentTicketPayload(decoded)
+	_, payload.hasIntent = members["preview_intent"]
+	_, payload.hasRenderer = members["renderer"]
+	_, payload.hasProfile = members["profile"]
+	return nil
 }
 
 type backupRecoveryResultTicketPayload struct {
@@ -280,7 +310,7 @@ func NewFeatureDisabledBackupContentHandlerConfigSource() BackupContentHandlerCo
 
 // Issue creates a secured, cookie-scoped backup asset delivery ticket.
 // @Summary      创建备份资产内容交付票据
-// @Description  只接受 URI 中的精确 backup AssetRef；普通非敏感预览无需二次验证，secret/unknown 预览与原件下载分别要求精确 step-up。成功响应只包含无授权能力的同源 content_url，Cookie secret 仅通过精确 Path 的 HttpOnly Strict Cookie 返回。
+// @Description  只接受 URI 中的精确 backup AssetRef；预览请求必须是 safe_preview_v1 选择意图（无 renderer/profile）或现有精确 renderer/profile，下载保持 attachment/original_v1。普通非敏感预览无需二次验证，secret/unknown 预览与原件下载分别要求精确 step-up。成功响应只包含解析后的精确交付产品和无授权能力的同源 content_url，Cookie secret 仅通过精确 Path 的 HttpOnly Strict Cookie 返回。
 // @Tags         backup-assets
 // @Security     Bearer
 // @Accept       json
@@ -288,7 +318,7 @@ func NewFeatureDisabledBackupContentHandlerConfigSource() BackupContentHandlerCo
 // @Param        id               path      string                      true   "恢复点 opaque ID"
 // @Param        entryId          path      string                      true   "Catalog entry opaque ID"
 // @Param        X-Xirang-Step-Up header    string                      false  "asset.secret_reveal 或 asset.download 精确 proof"
-// @Param        body             body      backupContentTicketPayload  true   "闭合 renderer/profile 请求；不接受资源 locator"
+// @Param        body             body      backupContentTicketPayload  true   "闭合 safe_preview_v1 意图或精确 renderer/profile；不接受资源 locator"
 // @Success      200              {object}  handlers.Response{data=content.TicketDescriptor}
 // @Failure      400              {object}  handlers.Response
 // @Failure      401              {object}  handlers.Response
@@ -296,6 +326,8 @@ func NewFeatureDisabledBackupContentHandlerConfigSource() BackupContentHandlerCo
 // @Failure      404              {object}  handlers.Response
 // @Failure      409              {object}  handlers.Response
 // @Failure      413              {object}  handlers.Response
+// @Failure      422              {object}  handlers.Response
+// @Failure      501              {object}  handlers.Response
 // @Failure      503              {object}  handlers.Response
 // @Router       /recovery-points/{id}/entries/{entryId}/delivery-tickets [post]
 func (handler *BackupContentHandler) Issue(c *gin.Context) {
@@ -348,13 +380,14 @@ func (handler *BackupContentHandler) Issue(c *gin.Context) {
 	}
 	ticketCtx, cancel := context.WithTimeout(c.Request.Context(), config.TicketTimeout)
 	defer cancel()
+	previewIntent, renderer, profile := backupContentTicketPayloadValues(payload)
 	ticket, err := handler.service.Issue(ticketCtx, content.IssueRequest{
 		Actor: actor,
 		Session: content.DeliverySession{
 			JTI: binding.JTI, UserID: binding.UserID, Role: binding.Role,
 			TokenVersion: binding.TokenVersion, ExpiresAt: binding.ExpiresAt.UTC(),
 		},
-		Ref: ref, Action: payload.Action, Renderer: payload.Renderer, Profile: payload.Profile,
+		Ref: ref, Action: payload.Action, PreviewIntent: previewIntent, Renderer: renderer, Profile: profile,
 		Proof: proof, SecureCookie: secureCookie,
 	})
 	if err != nil {
@@ -441,9 +474,9 @@ func (handler *BackupContentHandler) IssueRecoveryResult(c *gin.Context) {
 		respondServiceUnavailable(c, "备份内容服务暂不可用")
 		return
 	}
+	renderer, profile := content.RendererAttachment, content.ProfileOriginalV1
 	payload := backupContentTicketPayload{
-		SchemaVersion: 1, Action: content.DeliveryDownload,
-		Renderer: content.RendererAttachment, Profile: content.ProfileOriginalV1,
+		SchemaVersion: 1, Action: content.DeliveryDownload, Renderer: &renderer, Profile: &profile,
 	}
 	ticketCtx, cancel := context.WithTimeout(c.Request.Context(), config.TicketTimeout)
 	defer cancel()
@@ -457,7 +490,7 @@ func (handler *BackupContentHandler) IssueRecoveryResult(c *gin.Context) {
 			Kind:           content.DeliveryResourceRecoveryResult,
 			RecoveryResult: &content.RecoveryResultRef{RecoveryJobID: jobID, ResultID: resultID},
 		},
-		Action: payload.Action, Renderer: payload.Renderer, Profile: payload.Profile,
+		Action: payload.Action, Renderer: renderer, Profile: profile,
 		Proof: proof, SecureCookie: secureCookie,
 	})
 	if err != nil {
@@ -712,9 +745,16 @@ func validBackupContentTicketPayload(payload backupContentTicketPayload) bool {
 	}
 	switch payload.Action {
 	case content.DeliveryPreview:
-		return payload.Renderer != content.RendererAttachment && validBackupContentRendererProfile(payload.Renderer, payload.Profile)
+		if payload.hasIntent {
+			return payload.PreviewIntent != nil && *payload.PreviewIntent == content.PreviewIntentSafePreviewV1 &&
+				!payload.hasRenderer && !payload.hasProfile
+		}
+		return payload.hasRenderer && payload.hasProfile && payload.Renderer != nil && payload.Profile != nil &&
+			*payload.Renderer != content.RendererAttachment &&
+			validBackupContentRendererProfile(*payload.Renderer, *payload.Profile)
 	case content.DeliveryDownload:
-		return payload.Renderer == content.RendererAttachment && payload.Profile == content.ProfileOriginalV1
+		return !payload.hasIntent && payload.hasRenderer && payload.hasProfile && payload.Renderer != nil && payload.Profile != nil &&
+			*payload.Renderer == content.RendererAttachment && *payload.Profile == content.ProfileOriginalV1
 	default:
 		return false
 	}
@@ -724,6 +764,8 @@ func validBackupContentRendererProfile(renderer content.Renderer, profile conten
 	switch renderer {
 	case content.RendererEscapedText:
 		return profile == content.ProfileTextV1
+	case content.RendererPlainText:
+		return profile == content.ProfileTextV2
 	case content.RendererSafeRaster:
 		return profile == content.ProfileRasterV1
 	case content.RendererSameOriginPDF:
@@ -739,17 +781,54 @@ func validBackupContentRendererProfile(renderer content.Renderer, profile conten
 	}
 }
 
+func backupContentTicketPayloadValues(payload backupContentTicketPayload) (
+	content.PreviewIntent,
+	content.Renderer,
+	content.RendererProfile,
+) {
+	var previewIntent content.PreviewIntent
+	if payload.PreviewIntent != nil {
+		previewIntent = *payload.PreviewIntent
+	}
+	var renderer content.Renderer
+	if payload.Renderer != nil {
+		renderer = *payload.Renderer
+	}
+	var profile content.RendererProfile
+	if payload.Profile != nil {
+		profile = *payload.Profile
+	}
+	return previewIntent, renderer, profile
+}
+
 func validIssuedBackupContentTicket(
 	ticket content.IssuedTicket,
 	payload backupContentTicketPayload,
 	secure bool,
 ) bool {
 	if ticket.Cookie == nil || ticket.Descriptor.SchemaVersion != 1 || ticket.Descriptor.Action != payload.Action ||
-		ticket.Descriptor.Renderer != payload.Renderer || ticket.Descriptor.Profile != payload.Profile ||
 		ticket.Descriptor.ContentURL != ticket.Cookie.Path || ticket.Cookie.Name != content.DeliveryCookieName ||
 		ticket.Cookie.Domain != "" || !ticket.Cookie.HttpOnly || ticket.Cookie.Secure != secure ||
 		ticket.Cookie.SameSite != http.SameSiteStrictMode || !ticket.Cookie.Expires.Equal(ticket.Descriptor.ExpiresAt) ||
 		!ticket.Descriptor.ExpiresAt.After(time.Now()) || ticket.Descriptor.IdleExpiresAt.After(ticket.Descriptor.ExpiresAt) {
+		return false
+	}
+	if payload.PreviewIntent != nil {
+		if *payload.PreviewIntent != content.PreviewIntentSafePreviewV1 ||
+			!validBackupContentRendererProfile(ticket.Descriptor.Renderer, ticket.Descriptor.Profile) ||
+			ticket.Descriptor.Renderer == content.RendererAttachment {
+			return false
+		}
+		if backupContentNativeRenderer(ticket.Descriptor.Renderer) && ticket.Descriptor.Range != content.RangeSingle {
+			return false
+		}
+	} else if payload.Renderer == nil || payload.Profile == nil ||
+		ticket.Descriptor.Renderer != *payload.Renderer || ticket.Descriptor.Profile != *payload.Profile {
+		return false
+	}
+	transformed := ticket.Descriptor.Renderer == content.RendererEscapedText ||
+		ticket.Descriptor.Renderer == content.RendererPlainText || ticket.Descriptor.Renderer == content.RendererMetadataHex
+	if transformed && ticket.Descriptor.Range != content.RangeNone || !transformed && ticket.Descriptor.Truncated {
 		return false
 	}
 	parsed, err := url.Parse(ticket.Descriptor.ContentURL)
@@ -759,6 +838,11 @@ func validIssuedBackupContentTicket(
 	}
 	_, err = content.ParseDeliveryCookie(ticket.Cookie.Name + "=" + ticket.Cookie.Value)
 	return err == nil
+}
+
+func backupContentNativeRenderer(renderer content.Renderer) bool {
+	return renderer == content.RendererSafeRaster || renderer == content.RendererSameOriginPDF ||
+		renderer == content.RendererNativeAudio || renderer == content.RendererNativeVideo
 }
 
 func backupContentSecureCookie(request *http.Request, allowInsecureLoopback bool) (bool, error) {
@@ -817,6 +901,21 @@ func setBackupContentSecurityHeaders(header http.Header) {
 }
 
 func respondBackupContentIssueError(c *gin.Context, err error) {
+	if reason, correlationID, ok := backuprepository.CapabilityFromError(err); ok {
+		if len(reason.Params) != 0 {
+			respondServiceUnavailable(c, "备份内容服务暂不可用")
+			return
+		}
+		if correlationID == "" {
+			correlationID = c.GetString(middleware.RequestIDKey)
+		}
+		respondBackupContentCapabilityError(c, reason, correlationID)
+		return
+	}
+	if reason, ok := content.CapabilityFromError(err); ok {
+		respondBackupContentCapabilityError(c, reason, c.GetString(middleware.RequestIDKey))
+		return
+	}
 	switch {
 	case errors.Is(err, backupasset.ErrForbidden):
 		respondForbidden(c, "权限不足")
@@ -825,6 +924,10 @@ func respondBackupContentIssueError(c *gin.Context, err error) {
 	case errors.Is(err, content.ErrSecretRevealRequired):
 		respondForbiddenData(c, "需要二次验证", map[string]any{
 			"reason": map[string]any{"code": "secret_reveal_required", "params": map[string]string{}},
+		})
+	case errors.Is(err, content.ErrRendererUnsupported), errors.Is(err, content.ErrMIMEConfusion):
+		respondUnprocessableEntityData(c, "无法安全预览此文件", map[string]any{
+			"reason": map[string]any{"code": "preview_renderer_unsupported", "params": map[string]string{}},
 		})
 	case errors.Is(err, content.ErrInvalidDeliveryProduct), errors.Is(err, content.ErrInvalidBrokerRequest):
 		respondBadRequest(c, "请求参数不合法")
@@ -835,4 +938,27 @@ func respondBackupContentIssueError(c *gin.Context, err error) {
 	default:
 		respondServiceUnavailable(c, "备份内容服务暂不可用")
 	}
+}
+
+func respondBackupContentCapabilityError(c *gin.Context, reason backupasset.CapabilityReason, correlationID string) {
+	status := http.StatusNotImplemented
+	switch reason.Code {
+	case backupasset.CapabilityFeatureDisabled, backupasset.CapabilityRepositoryOffline,
+		backupasset.CapabilityRepositoryDisconnected, backupasset.CapabilityProviderUnavailable,
+		backupasset.CapabilityProviderOperationTimeout, backupasset.CapabilityProviderResourceLimit:
+		status = http.StatusServiceUnavailable
+	case backupasset.CapabilityTaskArtifactContractMissing, backupasset.CapabilityRepositoryIdentityUnavailable,
+		backupasset.CapabilityProviderProtocolIncompatible, backupasset.CapabilityPointNotCommitted,
+		backupasset.CapabilityMutableSourceChanged, backupasset.CapabilityCatalogUnavailable,
+		backupasset.CapabilitySequentialReadUnavailable, backupasset.CapabilityRangeUnavailable,
+		backupasset.CapabilityDownloadUnavailable:
+	default:
+		respondServiceUnavailable(c, "备份内容服务暂不可用")
+		return
+	}
+	// Keep the typed error product exact for the strict frontend boundary. A nil
+	// map would be omitted by CapabilityReason's JSON tag and become indistinguishable
+	// from a malformed/future reason instead of the closed parameter-free product.
+	reason.Params = map[string]string{}
+	respondBackupCapabilityError(c, status, reason, correlationID)
 }

@@ -31,10 +31,15 @@ const (
 	DeliveryDownload DeliveryAction = "download"
 )
 
+type PreviewIntent string
+
+const PreviewIntentSafePreviewV1 PreviewIntent = "safe_preview_v1"
+
 type Renderer string
 
 const (
 	RendererEscapedText   Renderer = "escaped_text"
+	RendererPlainText     Renderer = "plain_text"
 	RendererSafeRaster    Renderer = "safe_raster"
 	RendererSameOriginPDF Renderer = "same_origin_pdf"
 	RendererNativeAudio   Renderer = "native_audio"
@@ -47,6 +52,7 @@ type RendererProfile string
 
 const (
 	ProfileTextV1     RendererProfile = "text_v1"
+	ProfileTextV2     RendererProfile = "text_v2"
 	ProfileRasterV1   RendererProfile = "raster_v1"
 	ProfilePDFV1      RendererProfile = "pdf_v1"
 	ProfileAudioV1    RendererProfile = "audio_v1"
@@ -191,6 +197,8 @@ func validRendererProduct(product DeliveryProduct) bool {
 	switch product.Renderer {
 	case RendererEscapedText:
 		return product.Profile == ProfileTextV1 && product.Range == RangeNone
+	case RendererPlainText:
+		return product.Profile == ProfileTextV2 && product.Range == RangeNone
 	case RendererSafeRaster:
 		return product.Profile == ProfileRasterV1
 	case RendererSameOriginPDF:

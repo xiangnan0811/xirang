@@ -3374,6 +3374,375 @@ const docTemplate = `{
                 }
             }
         },
+        "/backup-file-sources/nodes": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "按当前权限返回安全的节点级文件来源投影；不访问 Provider",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "列出可浏览备份文件的节点",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "每页数量（最大 200）",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "签名游标",
+                        "name": "cursor",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceNodePage"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-file-sources/nodes/{nodeId}/sets": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "按 producing task 或权威导入 lineage 返回隔离的备份集；不访问 Provider",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "列出节点的备份集",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "节点 ID",
+                        "name": "nodeId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量（最大 200）",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "签名游标",
+                        "name": "cursor",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceBackupSetPage"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-file-sources/recovery-points/{recoveryPointId}/source": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "以当前权限将一个 opaque 恢复点解析为脱敏的节点、备份集、仓库和任务坐标；不访问 Provider 或内容",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "解析恢复点的精确备份文件来源",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "恢复点 opaque ID",
+                        "name": "recoveryPointId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceRecoveryPointDTO"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/backup-file-sources/sets/{backupSetId}/versions": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "返回备份集内已授权恢复点的安全版本事实；不访问 Provider 或内容",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup-assets"
+                ],
+                "summary": "列出备份集版本",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "备份集 opaque ID",
+                        "name": "backupSetId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量（最大 200）",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "签名游标",
+                        "name": "cursor",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/internal_api_handlers.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceVersionPage"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/backup-repositories": {
             "get": {
                 "security": [
@@ -10166,7 +10535,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "只接受 URI 中的精确 backup AssetRef；普通非敏感预览无需二次验证，secret/unknown 预览与原件下载分别要求精确 step-up。成功响应只包含无授权能力的同源 content_url，Cookie secret 仅通过精确 Path 的 HttpOnly Strict Cookie 返回。",
+                "description": "只接受 URI 中的精确 backup AssetRef；预览请求必须是 safe_preview_v1 选择意图（无 renderer/profile）或现有精确 renderer/profile，下载保持 attachment/original_v1。普通非敏感预览无需二次验证，secret/unknown 预览与原件下载分别要求精确 step-up。成功响应只包含解析后的精确交付产品和无授权能力的同源 content_url，Cookie secret 仅通过精确 Path 的 HttpOnly Strict Cookie 返回。",
                 "consumes": [
                     "application/json"
                 ],
@@ -10199,7 +10568,7 @@ const docTemplate = `{
                         "in": "header"
                     },
                     {
-                        "description": "闭合 renderer/profile 请求；不接受资源 locator",
+                        "description": "闭合 safe_preview_v1 意图或精确 renderer/profile；不接受资源 locator",
                         "name": "body",
                         "in": "body",
                         "required": true,
@@ -10259,6 +10628,18 @@ const docTemplate = `{
                     },
                     "413": {
                         "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -16362,9 +16743,20 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "preview_intent": {
+                    "enum": [
+                        "safe_preview_v1"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_content.PreviewIntent"
+                        }
+                    ]
+                },
                 "profile": {
                     "enum": [
                         "text_v1",
+                        "text_v2",
                         "raster_v1",
                         "pdf_v1",
                         "audio_v1",
@@ -16381,6 +16773,7 @@ const docTemplate = `{
                 "renderer": {
                     "enum": [
                         "escaped_text",
+                        "plain_text",
                         "safe_raster",
                         "same_origin_pdf",
                         "native_audio",
@@ -19731,6 +20124,174 @@ const docTemplate = `{
                 "EvidenceInvalid"
             ]
         },
+        "xirang_backend_internal_backupasset_catalog.FileSourceBackupSetDTO": {
+            "type": "object",
+            "properties": {
+                "backup_set_id": {
+                    "type": "string"
+                },
+                "catalog_coverage": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.CoverageStatus"
+                },
+                "display_label": {
+                    "type": "string"
+                },
+                "latest_retained_at": {
+                    "type": "string"
+                },
+                "lineage_kind": {
+                    "enum": [
+                        "task",
+                        "imported"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceLineageKind"
+                        }
+                    ]
+                },
+                "node_id": {
+                    "type": "integer"
+                },
+                "version_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.FileSourceBackupSetPage": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceBackupSetDTO"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.FileSourceLineageKind": {
+            "type": "string",
+            "enum": [
+                "task",
+                "imported"
+            ],
+            "x-enum-varnames": [
+                "FileSourceLineageTask",
+                "FileSourceLineageImported"
+            ]
+        },
+        "xirang_backend_internal_backupasset_catalog.FileSourceNodeDTO": {
+            "type": "object",
+            "properties": {
+                "backup_set_count": {
+                    "type": "integer"
+                },
+                "catalog_coverage": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.CoverageStatus"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "latest_retained_at": {
+                    "type": "string"
+                },
+                "node_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.FileSourceNodePage": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceNodeDTO"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.FileSourceRecoveryPointDTO": {
+            "type": "object",
+            "properties": {
+                "backup_set_id": {
+                    "type": "string"
+                },
+                "node_id": {
+                    "type": "integer"
+                },
+                "producing_task_id": {
+                    "type": "integer"
+                },
+                "recovery_point_id": {
+                    "type": "string"
+                },
+                "repository_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.FileSourceVersionDTO": {
+            "type": "object",
+            "properties": {
+                "captured_at": {
+                    "type": "string"
+                },
+                "catalog_coverage": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.CoverageStatus"
+                },
+                "committed_at": {
+                    "type": "string"
+                },
+                "content_availability": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.ContentAvailabilityDTO"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "entry_count": {
+                    "type": "integer"
+                },
+                "lifecycle_state": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RecoveryPointState"
+                },
+                "logical_bytes": {
+                    "type": "integer"
+                },
+                "permissions": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.PermissionsDTO"
+                },
+                "producing_task_id": {
+                    "type": "integer"
+                },
+                "recovery_point_id": {
+                    "type": "string"
+                },
+                "repository_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.FileSourceVersionPage": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceVersionDTO"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                }
+            }
+        },
         "xirang_backend_internal_backupasset_catalog.FingerprintStrength": {
             "type": "string",
             "enum": [
@@ -20187,6 +20748,15 @@ const docTemplate = `{
                 "DeliveryDownload"
             ]
         },
+        "xirang_backend_internal_backupasset_content.PreviewIntent": {
+            "type": "string",
+            "enum": [
+                "safe_preview_v1"
+            ],
+            "x-enum-varnames": [
+                "PreviewIntentSafePreviewV1"
+            ]
+        },
         "xirang_backend_internal_backupasset_content.RangePolicy": {
             "type": "string",
             "enum": [
@@ -20202,6 +20772,7 @@ const docTemplate = `{
             "type": "string",
             "enum": [
                 "escaped_text",
+                "plain_text",
                 "safe_raster",
                 "same_origin_pdf",
                 "native_audio",
@@ -20211,6 +20782,7 @@ const docTemplate = `{
             ],
             "x-enum-varnames": [
                 "RendererEscapedText",
+                "RendererPlainText",
                 "RendererSafeRaster",
                 "RendererSameOriginPDF",
                 "RendererNativeAudio",
@@ -20223,6 +20795,7 @@ const docTemplate = `{
             "type": "string",
             "enum": [
                 "text_v1",
+                "text_v2",
                 "raster_v1",
                 "pdf_v1",
                 "audio_v1",
@@ -20232,6 +20805,7 @@ const docTemplate = `{
             ],
             "x-enum-varnames": [
                 "ProfileTextV1",
+                "ProfileTextV2",
                 "ProfileRasterV1",
                 "ProfilePDFV1",
                 "ProfileAudioV1",
@@ -20242,6 +20816,9 @@ const docTemplate = `{
         },
         "xirang_backend_internal_backupasset_content.TicketDescriptor": {
             "type": "object",
+            "required": [
+                "truncated"
+            ],
             "properties": {
                 "action": {
                     "enum": [
@@ -20303,6 +20880,7 @@ const docTemplate = `{
                 "profile": {
                     "enum": [
                         "text_v1",
+                        "text_v2",
                         "raster_v1",
                         "pdf_v1",
                         "audio_v1",
@@ -20330,6 +20908,7 @@ const docTemplate = `{
                 "renderer": {
                     "enum": [
                         "escaped_text",
+                        "plain_text",
                         "safe_raster",
                         "same_origin_pdf",
                         "native_audio",
@@ -20348,6 +20927,9 @@ const docTemplate = `{
                     "maximum": 1,
                     "minimum": 1,
                     "example": 1
+                },
+                "truncated": {
+                    "type": "boolean"
                 }
             }
         },

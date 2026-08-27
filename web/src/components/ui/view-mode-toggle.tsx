@@ -17,6 +17,7 @@ type ViewModeToggleProps = {
   cardsText?: string;
   listText?: string;
   className?: string;
+  buttonClassName?: string;
 };
 
 export function ViewModeToggle({
@@ -28,6 +29,7 @@ export function ViewModeToggle({
   cardsText,
   listText,
   className,
+  buttonClassName,
 }: ViewModeToggleProps) {
   const { t } = useTranslation();
   const resolvedCardsText = cardsText ?? t('viewMode.cards');
@@ -66,6 +68,7 @@ export function ViewModeToggle({
         aria-checked={value === "cards"}
         aria-label={cardsButtonLabel}
         tabIndex={value === "cards" ? 0 : -1}
+        className={buttonClassName}
         onClick={() => onChange("cards")}
         onKeyDown={(e) => handleKeyDown(e, 0)}
       >
@@ -81,6 +84,7 @@ export function ViewModeToggle({
         aria-checked={value === "list"}
         aria-label={listButtonLabel}
         tabIndex={value === "list" ? 0 : -1}
+        className={buttonClassName}
         onClick={() => onChange("list")}
         onKeyDown={(e) => handleKeyDown(e, 1)}
       >

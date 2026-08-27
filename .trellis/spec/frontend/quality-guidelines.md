@@ -298,71 +298,92 @@ return { last, nextCursor: cursor };
 
 ---
 
-## Scenario: Backup Asset Native Preview UI Eligibility
+## Scenario: Backup Asset Direct Safe Preview
 
 ### 1. Scope / Trigger
 
-- Trigger: changing the backup-asset workspace preview action, Catalog
-  permission fixtures, authenticated role handling, renderer selection, or
-  recovery-point read capabilities.
+- Trigger: changing backup-file activation, the preview request state machine,
+  Catalog permission fixtures, authenticated role handling, ticket response
+  mapping, or recovery-point content capabilities.
 
 ### 2. Signatures
 
-- UI boundary: `BackupAssetsWorkspace` derives `canPreview` and passes it to
-  `AssetPreview`.
+- UI boundary: `BackupAssetsWorkspace` derives advisory `canPreview`; selecting a
+  file on the preview tab causes `useBackupAssetsState` to issue exactly one
+  `safePreviewV1` request for that selection generation.
 - Server authority:
   `POST /recovery-points/:id/entries/:entryId/delivery-tickets` guarded by
   `backup_assets:preview`.
-- Sequential renderers: `escaped_text` and `metadata_hex`; the remaining native
-  preview renderers require Range reads.
+- Ordinary request union: `{schemaVersion: 1, action: "preview",
+  previewIntent: "safePreviewV1"}` with no client-selected renderer/profile.
+- Resolved response: one exact closed renderer/profile/content-type/range product.
+  Renewal reissues that exact resolved product; compatibility and explicit
+  processing callers may still use the exact-product request union.
 
 ### 3. Contracts
 
-- Native preview UI eligibility requires a non-empty auth token, exact role
-  `admin` or `operator`, Catalog `permissions.list=true`, available content, a
-  selected recovery point, and the selected renderer's exact read capability.
+- Direct preview eligibility requires a non-empty auth token, exact role `admin`
+  or `operator`, Catalog `permissions.list=true`, available content, the exact
+  selected recovery point/file, the preview tab, and `openSequential=true` for
+  the bounded server-side probe.
 - Catalog `permissions.preview` is not the native delivery-ticket authorization
   source and must not gate this action. Keep the upstream Catalog projection
   list-only; never fabricate `preview=true` in a fixture, mapper, or producer.
+- The frontend must not choose the ordinary renderer from MIME, filename, or
+  extension. The broker classifies bounded bytes and selects the renderer. Known
+  native content without required Range fails with the typed capability reason;
+  the client must not disguise it as text or hex.
+- File activation, node/version/directory changes, auth-owner changes, and preview
+  tab changes abort/detach the old ticket and content. Latest selection wins;
+  StrictMode or unrelated rerenders must not duplicate the current ticket.
 - Frontend eligibility is advisory and fail-closed. The delivery-ticket route
   RBAC remains final authority; 401, 403, capability denial, and typed secret
   reveal errors continue through the existing safe state mapper.
-- Keep download, export, recover, archive, renderer selection, and ticket API
-  behavior independent. Secret/unknown preview step-up remains Admin-only;
-  Operator never acquires or requests Admin step-up capability.
+- Keep download, export, recover, archive, and explicit derived-processing
+  behavior independent. Secret/unknown preview step-up remains Admin-only and
+  retries the same safe intent once; Operator never acquires or requests Admin
+  step-up capability. Proof and ticket material remain in memory only.
 
 ### 4. Validation & Error Matrix
 
 | Condition | Expected result |
 |---|---|
-| Admin/Operator + token + list-only Catalog + content + exact capability | Show Load Preview and send the exact selected asset only after user action. |
-| Viewer, normalized unknown/null role, or missing token | Hide Load Preview and do not request a ticket. |
-| Catalog list is false or content is unavailable | Hide Load Preview and do not request a ticket. |
-| Text/metadata-hex without `openSequential` | Hide Load Preview even if `openRange` is true. |
-| Range renderer without `openRange` | Hide Load Preview even if `openSequential` is true. |
-| Server returns 401/403/capability denial | Remain blocked through the existing safe error mapping. |
+| Admin/Operator + token + list-only Catalog + content + sequential probe + selected file on preview tab | Issue exactly one `safePreviewV1` ticket automatically. |
+| Viewer, normalized unknown/null role, or missing token | Do not issue a ticket. |
+| Catalog list is false, content is unavailable, or `openSequential` is false | Do not issue a ticket even if Range is available. |
+| Backend resolves native content but Range is unavailable | Surface the closed typed capability denial; do not retry as hex/text. |
+| Rapid A -> B selection or node/version/directory change | Abort/detach A; never render or retry A after B owns the selection. |
+| Admin receives `secret_reveal_required` | Prompt once and retry the same safe intent once with in-memory proof. |
 | Operator receives `secret_reveal_required` | Remain blocked; do not call `ensureStepUpProof`. |
+| Renewal of a ready safe preview | Send the current exact resolved renderer/profile and exact AssetRef; do not reselect by MIME. |
 
 ### 5. Good/Base/Bad Cases
 
-- Good: an Operator with a valid token sees Load Preview for a metadata-hex
-  asset when the real list-only Catalog says `preview=false` and sequential read
-  is available; the server still evaluates `backup_assets:preview`.
-- Base: Viewer or missing runtime keeps the action hidden without issuing a
-  ticket.
-- Bad: requiring `catalog.permissions.preview`, rewriting it to true, or showing
-  the action to every listed role silently conflates browse and ticket authority.
+- Good: an Operator activates a generic-MIME YAML file while the real list-only
+  Catalog says `preview=false`; one safe-intent request is issued and the backend
+  may resolve readable `plain_text/text_v2`.
+- Base: Viewer, missing runtime, or a recovery point without sequential access
+  does not issue a ticket.
+- Bad: showing a first-run Load Preview button, selecting `metadata_hex` from
+  `application/octet-stream` on the client, requiring
+  `catalog.permissions.preview`, or retrying a native Range denial as hex.
 
 ### 6. Tests Required
 
-- Workspace tests must use a producer-realistic Catalog fixture with
-  `list=true`, `preview=false`, content available, and explicit renderer
-  capabilities; cover Admin and Operator positive cases.
+- Workspace/state tests must use a producer-realistic Catalog fixture with
+  `list=true`, `preview=false`, content available, and sequential access; cover
+  Admin and Operator one-activation/one-safe-intent cases, including StrictMode.
 - Cover missing token, Viewer/null role, list=false, content unavailable,
-  missing selected recovery point, sequential-capability denial, and
-  Range-capability denial. Assert no ticket action is called in negative cases.
-- Keep state tests for ordinary ticket issue, Admin secret-reveal retry, Operator
-  fail-closed behavior, and typed/untyped denial mapping.
+  missing selected recovery point, preview-tab exit, and sequential denial.
+  Assert no ticket is issued in ineligible cases.
+- Cover rapid selection cancellation with no stale commit, node/version/directory
+  owner changes, Admin one-prompt/one-retry, Operator no prompt, proof rejection,
+  token/logout changes, typed capability/renderer failures, manual retry only for
+  the current retryable failure, and renewal from the resolved exact product.
+- API mapper tests must reject unresolved intent echoes, renderer/profile/content
+  contradictions, unsafe content types, malformed future fields, and safe-native
+  responses without `range=single`. Exact legacy native/download responses retain
+  their established `none|single` Range compatibility only.
 - Run the backend delivery-ticket RBAC selector for unauthenticated,
   Admin/Operator, Viewer, and unknown roles plus the full frontend gate.
 
@@ -371,7 +392,8 @@ return { last, nextCursor: cursor };
 Wrong:
 
 ```ts
-const canPreview = catalog.permissions.preview && contentAvailable;
+const product = selectPreviewProduct(asset.mimeType);
+await issueTicket({ action: "preview", ...product });
 ```
 
 Correct:
@@ -380,10 +402,10 @@ Correct:
 const eligibleRole = role === "admin" || role === "operator";
 const canPreview = Boolean(
   token && eligibleRole && catalog.permissions.list && contentAvailable &&
-    recoveryPoint && (needsRange
-      ? recoveryPoint.capabilities.openRange
-      : recoveryPoint.capabilities.openSequential)
+    recoveryPoint?.capabilities.openSequential
 );
+// The selected-file effect sends safePreviewV1 once for its selection generation;
+// the backend resolves renderer/profile and enforces any native Range requirement.
 ```
 
 ---

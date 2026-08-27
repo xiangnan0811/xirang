@@ -213,7 +213,7 @@ func setupSnapshotHandlerRouter(t *testing.T, session publication.LineageSession
 func setupSnapshotHandlerRouterWithLive(t *testing.T, session publication.LineageSession, restic LegacyResticSnapshots, featureLive func() (bool, error)) (*gin.Engine, model.Task) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", handlerTestDBName(t))), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

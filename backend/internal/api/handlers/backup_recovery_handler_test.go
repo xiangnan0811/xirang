@@ -1435,7 +1435,7 @@ func newBackupRecoveryAuthorizationHandlerProofFixture(
 	t *testing.T,
 ) (*gorm.DB, *auth.JWTManager, model.User, string) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"),
+	db, err := gorm.Open(sqlite.Open("file:"+handlerTestDBName(t)+"?mode=memory&cache=shared"),
 		&gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatal(err)

@@ -61,6 +61,26 @@ describe("mapBackupAssetsError", () => {
     });
   });
 
+  it("maps only the exact preview-renderer 422 reason without exposing raw server text", () => {
+    const error = new ApiError(422, "raw provider /private/config.yaml", {
+      code: 422,
+      message: "raw provider /private/config.yaml",
+      data: { reason: { code: "preview_renderer_unsupported", params: {} } },
+    });
+    const mapped = mapBackupAssetsError(error, "content_ticket");
+    expect(mapped).toEqual({
+      code: "preview_renderer_unsupported",
+      translationKey: "backupAssets.errors.previewRendererUnsupported",
+      retryable: false,
+      action: "none",
+    });
+    expect(JSON.stringify(mapped)).not.toMatch(/private|config\.yaml|provider/);
+
+    expect(mapBackupAssetsError(new ApiError(422, "raw", {
+      data: { reason: { code: "preview_renderer_unsupported", params: { renderer: "raw" } } },
+    }), "content_ticket")).toMatchObject({ code: "unknown" });
+  });
+
   it("maps a verified feature-disabled capability without exposing detail", () => {
     expect(mapBackupAssetsError(capabilityError(503, "feature_disabled"), "repositories")).toEqual({
       code: "feature_disabled",
@@ -80,6 +100,19 @@ describe("mapBackupAssetsError", () => {
       capabilityCode: "repository_offline",
     });
   });
+
+  it.each(["sequential_read_unavailable", "range_unavailable"] as const)(
+    "preserves the typed 501 content capability %s from the exact empty-params envelope",
+    (code) => {
+      expect(mapBackupAssetsError(capabilityError(501, code), "content_ticket")).toEqual({
+        code: "unsupported",
+        translationKey: "backupAssets.errors.unsupported",
+        retryable: false,
+        action: "none",
+        capabilityCode: code,
+      });
+    }
+  );
 
   it.each([
     [new ApiError(403, "raw forbidden", null), "directory", "permission_denied", "none"],

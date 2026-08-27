@@ -349,7 +349,7 @@ func (writer *contentFoundationAuditWriterFake) Write(_ context.Context, input b
 
 func newContentAuditTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared&_busy_timeout=5000&_txlock=immediate&_loc=UTC"
+	dsn := "file:" + contentTestDBName(t) + "?mode=memory&cache=shared&_busy_timeout=5000&_txlock=immediate&_loc=UTC"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatal(err)

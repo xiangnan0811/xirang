@@ -323,6 +323,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	reportHandler := handlers.NewReportHandler(dep.DB)
 	var backupRepositoryService handlers.BackupRepositoryService = featureDisabledBackupRepositoryService{}
 	backupAssetCatalogService := handlers.NewFeatureDisabledBackupAssetCatalogService()
+	backupFileSourceService := handlers.NewFeatureDisabledBackupFileSourceService()
 	backupAssetSearchService := handlers.NewFeatureDisabledBackupAssetSearchService()
 	backupAssetSavedSearchUseService := handlers.NewFeatureDisabledBackupAssetSavedSearchUseService()
 	backupAssetOverlayService := handlers.NewFeatureDisabledBackupAssetOverlayService()
@@ -333,7 +334,9 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	if dep.BackupAssets != nil {
 		backupRepositoryService = dep.BackupAssets.RepositoryService()
 		if dep.BackupAssets.CatalogService() != nil {
-			backupAssetCatalogService = dep.BackupAssets.CatalogService()
+			catalogService := dep.BackupAssets.CatalogService()
+			backupAssetCatalogService = catalogService
+			backupFileSourceService = catalogService
 			backupAssetAuditSink = dep.BackupAssets.CatalogAuditSink()
 		}
 		if dep.BackupAssets.SearchService() != nil {
@@ -374,6 +377,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	)
 	backupRepositoryHandler := handlers.NewBackupRepositoryHandler(backupRepositoryService)
 	backupAssetHandler := handlers.NewBackupAssetHandler(backupAssetCatalogService, backupAssetAuditSink)
+	backupFileSourceHandler := handlers.NewBackupFileSourceHandler(backupFileSourceService, backupAssetAuditSink)
 	backupAssetSearchHandler := handlers.NewBackupAssetSearchHandler(
 		backupAssetSearchService, backupAssetSavedSearchUseService, backupAssetAuditSink,
 		backupAssetHandlerConfigSource, handlers.NewBackupAssetSecretProofVerifier(dep.DB, dep.JWTManager),
@@ -464,6 +468,10 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/backup-repositories", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupRepositoryHandler.List)
 	secured.GET("/backup-repositories/:id", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupRepositoryHandler.Detail)
 	secured.GET("/backup-repositories/:id/recovery-points", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.ListRecoveryPoints)
+	secured.GET("/backup-file-sources/nodes", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupFileSourceHandler.ListNodes)
+	secured.GET("/backup-file-sources/nodes/:nodeId/sets", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupFileSourceHandler.ListBackupSets)
+	secured.GET("/backup-file-sources/sets/:backupSetId/versions", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupFileSourceHandler.ListVersions)
+	secured.GET("/backup-file-sources/recovery-points/:recoveryPointId/source", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupFileSourceHandler.ResolveRecoveryPointSource)
 	secured.GET("/recovery-points/:id", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetRecoveryPoint)
 	secured.GET("/recovery-points/:id/catalog-status", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetCatalogStatus)
 	secured.GET("/recovery-points/:id/evidence", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetEvidence)

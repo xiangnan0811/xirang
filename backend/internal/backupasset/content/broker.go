@@ -184,25 +184,27 @@ type BrokerDependencies struct {
 }
 
 type IssueRequest struct {
-	Actor        DeliveryActor
-	Session      DeliverySession
-	Ref          backupasset.AssetRef
-	Resource     DeliveryResource
-	Action       DeliveryAction
-	Renderer     Renderer
-	Profile      RendererProfile
-	Proof        *StepUpProof
-	SecureCookie bool
+	Actor         DeliveryActor
+	Session       DeliverySession
+	Ref           backupasset.AssetRef
+	Resource      DeliveryResource
+	Action        DeliveryAction
+	PreviewIntent PreviewIntent
+	Renderer      Renderer
+	Profile       RendererProfile
+	Proof         *StepUpProof
+	SecureCookie  bool
 }
 
 type TicketDescriptor struct {
 	SchemaVersion    int                           `json:"schema_version" minimum:"1" maximum:"1" example:"1"`
 	ContentURL       string                        `json:"content_url"`
 	Action           DeliveryAction                `json:"action" enums:"preview,download"`
-	Renderer         Renderer                      `json:"renderer" enums:"escaped_text,safe_raster,same_origin_pdf,native_audio,native_video,metadata_hex,attachment"`
-	Profile          RendererProfile               `json:"profile" enums:"text_v1,raster_v1,pdf_v1,audio_v1,video_v1,hex_v1,original_v1"`
+	Renderer         Renderer                      `json:"renderer" enums:"escaped_text,plain_text,safe_raster,same_origin_pdf,native_audio,native_video,metadata_hex,attachment"`
+	Profile          RendererProfile               `json:"profile" enums:"text_v1,text_v2,raster_v1,pdf_v1,audio_v1,video_v1,hex_v1,original_v1"`
 	ContentType      string                        `json:"content_type"`
 	ContentLength    int64                         `json:"content_length"`
+	Truncated        bool                          `json:"truncated" binding:"required"`
 	ETag             string                        `json:"etag"`
 	LastModified     *time.Time                    `json:"last_modified"`
 	Range            RangePolicy                   `json:"range" enums:"none,single"`
@@ -433,40 +435,32 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 	if err != nil {
 		return IssuedTicket{}, ErrInvalidBrokerRequest
 	}
-	representationAsset := asset
-	derivedBinding, err := broker.resolveDerivedRepresentation(ctx, request, asset)
-	if err != nil {
-		return IssuedTicket{}, err
-	}
-	if derivedBinding != nil {
-		representationAsset = authorizedAssetForDerived(asset, *derivedBinding)
-	}
-	profileTTL := config.PreviewTTL
-	if request.Action == DeliveryDownload || request.Renderer == RendererNativeAudio || request.Renderer == RendererNativeVideo {
-		profileTTL = config.MediaTTL
-	}
-	profileExpiry := now.Add(profileTTL)
 	leaseBinding := lease.Binding()
 	proofExpiry := (*time.Time)(nil)
 	if request.Proof != nil {
 		value := request.Proof.ExpiresAt.UTC()
 		proofExpiry = &value
 	}
-	deadlines, err := ResolveGrantDeadlines(GrantDeadlineInput{
-		Now: now, SessionExpiresAt: request.Session.ExpiresAt, ProfileExpiresAt: profileExpiry,
-		LeaseDeadline: leaseBinding.AbsoluteDeadline, ProofExpiresAt: proofExpiry, IdleTTL: config.IdleTTL,
-	})
+	probeDeadline := minTime(now.Add(config.TicketTimeout), minTime(request.Session.ExpiresAt.UTC(), leaseBinding.AbsoluteDeadline.UTC()))
+	if proofExpiry != nil {
+		probeDeadline = minTime(probeDeadline, *proofExpiry)
+	}
+	probeCtx, cancelProbe := context.WithDeadline(ctx, probeDeadline)
+	defer cancelProbe()
+	representationAsset := asset
+	derivedBinding, err := broker.resolveDerivedRepresentation(probeCtx, request, asset)
 	if err != nil {
 		return IssuedTicket{}, err
 	}
-	ticketDeadline := minTime(now.Add(config.TicketTimeout), deadlines.AbsoluteExpiresAt)
-	ticketCtx, cancel := context.WithDeadline(ctx, ticketDeadline)
-	defer cancel()
-	prefix, stat, capabilities, err := broker.readTicketPrefix(ticketCtx, representationAsset, derivedBinding, classifier, renderer)
+	if derivedBinding != nil {
+		representationAsset = authorizedAssetForDerived(asset, *derivedBinding)
+	}
+	prefix, stat, capabilities, err := broker.readTicketPrefix(probeCtx, representationAsset, derivedBinding, classifier, renderer)
 	if err != nil {
 		return IssuedTicket{}, err
 	}
-	classification, err := classifier.Classify(ticketCtx, ClassificationRequest{
+	defer zeroBytes(prefix)
+	classification, err := classifier.Classify(probeCtx, ClassificationRequest{
 		Path: asset.Path, Name: asset.Name, SourceSize: stat.Size,
 		ProviderMediaType:   classificationMediaTypeForRepresentation(representationAsset, derivedBinding),
 		CatalogGenerationID: asset.CatalogGenerationID, SourceFingerprint: asset.SourceFingerprint,
@@ -476,11 +470,27 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 		return IssuedTicket{}, err
 	}
 	auditGrant.Classification = string(classification.Classification)
+	if request.PreviewIntent == PreviewIntentSafePreviewV1 && request.Proof == nil &&
+		(classification.Classification == ClassificationSecret || classification.Classification == ClassificationUnknown) {
+		return IssuedTicket{}, ErrSecretRevealRequired
+	}
+	if request.PreviewIntent == PreviewIntentSafePreviewV1 {
+		resolvedRenderer, resolvedProfile, selectErr := renderer.SelectSafePreview(SafePreviewSelectionRequest{
+			SourceSize: stat.Size, Prefix: prefix, ProviderMediaType: representationAsset.MediaType, Filename: asset.Name,
+		})
+		if selectErr != nil {
+			return IssuedTicket{}, selectErr
+		}
+		request.Renderer, request.Profile = resolvedRenderer, resolvedProfile
+	}
 	representationAsset.RangeProven = representationAsset.RangeProven && capabilities.Range
 	rangePolicy := RangeNone
 	if cacheEligibleRenderer(request.Renderer) &&
 		(representationAsset.RangeProven || broker.cacheRangeAvailable(cacheObjectForAsset(request.Actor.UserID, representationAsset, request.Renderer, request.Profile))) {
 		rangePolicy = RangeSingle
+	}
+	if request.PreviewIntent == PreviewIntentSafePreviewV1 && safePreviewRequiresRange(request.Renderer) && rangePolicy != RangeSingle {
+		return IssuedTicket{}, contentCapabilityError(backupasset.CapabilityRangeUnavailable)
 	}
 	renderPlan, err := renderer.Prepare(RenderRequest{
 		Action: request.Action, Renderer: request.Renderer, Profile: request.Profile, Range: rangePolicy,
@@ -489,6 +499,21 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 	if err != nil {
 		return IssuedTicket{}, err
 	}
+	profileTTL := config.PreviewTTL
+	if request.Action == DeliveryDownload || request.Renderer == RendererNativeAudio || request.Renderer == RendererNativeVideo {
+		profileTTL = config.MediaTTL
+	}
+	profileExpiry := now.Add(profileTTL)
+	deadlines, err := ResolveGrantDeadlines(GrantDeadlineInput{
+		Now: now, SessionExpiresAt: request.Session.ExpiresAt, ProfileExpiresAt: profileExpiry,
+		LeaseDeadline: leaseBinding.AbsoluteDeadline, ProofExpiresAt: proofExpiry, IdleTTL: config.IdleTTL,
+	})
+	if err != nil {
+		return IssuedTicket{}, err
+	}
+	ticketDeadline := minTime(now.Add(config.TicketTimeout), deadlines.AbsoluteExpiresAt)
+	ticketCtx, cancelTicket := context.WithDeadline(ctx, ticketDeadline)
+	defer cancelTicket()
 	product := DeliveryProduct{
 		Action: request.Action, Method: MethodGetHead, Range: rangePolicy,
 		Renderer: request.Renderer, Profile: request.Profile, Classification: classification.Classification,
@@ -538,7 +563,7 @@ func (broker *Broker) Issue(ctx context.Context, request IssueRequest) (ticket I
 		Descriptor: TicketDescriptor{
 			SchemaVersion: 1, ContentURL: cookie.Path, Action: request.Action,
 			Renderer: request.Renderer, Profile: request.Profile, ContentType: renderPlan.MediaType,
-			ContentLength: renderPlan.Size, ETag: etag, LastModified: representationAsset.ModifiedAt,
+			ContentLength: renderPlan.Size, Truncated: renderPlan.Truncated, ETag: etag, LastModified: representationAsset.ModifiedAt,
 			Range: rangePolicy, Classification: classification.Classification,
 			ExpiresAt: deadlines.AbsoluteExpiresAt, IdleExpiresAt: deadlines.IdleExpiresAt,
 			FallbackActions: []DeliveryAction{},
@@ -665,7 +690,7 @@ func (broker *Broker) issueRecoveryResult(
 		Descriptor: TicketDescriptor{
 			SchemaVersion: 1, ContentURL: cookie.Path, Action: DeliveryDownload,
 			Renderer: RendererAttachment, Profile: ProfileOriginalV1,
-			ContentType: result.MediaType, ContentLength: result.Size, ETag: etag,
+			ContentType: result.MediaType, ContentLength: result.Size, Truncated: false, ETag: etag,
 			LastModified: result.ModifiedAt, Range: rangePolicy, Classification: result.Classification,
 			ExpiresAt: deadlines.AbsoluteExpiresAt, IdleExpiresAt: deadlines.IdleExpiresAt,
 			FallbackActions: []DeliveryAction{},
@@ -1708,7 +1733,7 @@ func (broker *Broker) resolveDerivedRepresentation(
 	request IssueRequest,
 	asset AuthorizedAsset,
 ) (*DerivedRepresentation, error) {
-	if broker.derived == nil || request.Action != DeliveryPreview {
+	if broker.derived == nil || request.Action != DeliveryPreview || request.PreviewIntent != "" {
 		return nil, nil
 	}
 	intent, ok := inferDerivedDeliveryIntent(asset.MediaType, request.Renderer, request.Profile)
@@ -1799,6 +1824,10 @@ func (broker *Broker) readTicketPrefix(
 		_ = session.Close()
 		return nil, stat, capabilities, ErrContentSourceUnavailable
 	}
+	if mode == SourceModeSequential && !capabilities.Sequential {
+		_ = session.Close()
+		return nil, stat, capabilities, contentCapabilityError(backupasset.CapabilitySequentialReadUnavailable)
+	}
 	prefix := make([]byte, int(readLimit))
 	if readLimit > 0 {
 		reader := session.Reader()
@@ -1809,6 +1838,9 @@ func (broker *Broker) readTicketPrefix(
 		if _, err := io.ReadFull(reader, prefix); err != nil {
 			_ = session.Close()
 			zeroBytes(prefix)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, stat, capabilities, ctxErr
+			}
 			return nil, stat, capabilities, ErrContentSourceUnavailable
 		}
 	}
@@ -1843,20 +1875,31 @@ func validIssueRequest(request IssueRequest, now time.Time) bool {
 		return false
 	}
 	if resource.Kind == DeliveryResourceRecoveryResult {
-		return request.Actor.Role == "admin" && request.Proof != nil && request.Action == DeliveryDownload &&
+		return request.PreviewIntent == "" && request.Actor.Role == "admin" && request.Proof != nil && request.Action == DeliveryDownload &&
 			request.Renderer == RendererAttachment && request.Profile == ProfileOriginalV1 &&
 			validProof(request.Proof, auth.StepUpActionRecoveryResultDownload,
 				minTime(request.Proof.ExpiresAt, request.Session.ExpiresAt), now)
 	}
 	if request.Action == DeliveryDownload {
-		if request.Proof == nil {
+		if request.PreviewIntent != "" || request.Proof == nil {
 			return false
 		}
 		return request.Renderer == RendererAttachment && request.Profile == ProfileOriginalV1 &&
 			validProof(request.Proof, auth.StepUpActionAssetDownload, minTime(request.Proof.ExpiresAt, request.Session.ExpiresAt), now)
 	}
-	if request.Action != DeliveryPreview || request.Renderer == RendererAttachment ||
-		!validCacheRendererProfile(request.Renderer, request.Profile) {
+	if request.Action != DeliveryPreview {
+		return false
+	}
+	switch request.PreviewIntent {
+	case PreviewIntentSafePreviewV1:
+		if request.Renderer != "" || request.Profile != "" {
+			return false
+		}
+	case "":
+		if request.Renderer == RendererAttachment || !validCacheRendererProfile(request.Renderer, request.Profile) {
+			return false
+		}
+	default:
 		return false
 	}
 	return request.Proof == nil || request.Proof.Action == auth.StepUpActionAssetSecretReveal &&
@@ -2073,16 +2116,21 @@ func ticketAuditInput(
 	if request.Proof != nil {
 		stepUpAction, stepUpProofID = string(request.Proof.Action), request.Proof.ID
 	}
+	fields := map[backupasset.AuditField]any{}
+	if request.PreviewIntent == PreviewIntentSafePreviewV1 && (grant.Renderer == "" || grant.Profile == "") {
+		fields[backupasset.AuditFieldMode] = string(PreviewIntentSafePreviewV1)
+	} else {
+		fields[backupasset.AuditFieldRenderer] = grant.Renderer
+		fields[backupasset.AuditFieldProfile] = grant.Profile
+		fields[backupasset.AuditFieldSource] = grant.Classification
+	}
 	return backupasset.AuditEventInput{
 		Actor:  backupasset.AuditActor{UserID: request.Actor.UserID, Username: request.Actor.Username, Role: request.Actor.Role},
 		Action: action, Outcome: outcome,
 		RepositoryID: asset.RepositoryID, RecoveryPointID: asset.Ref.RecoveryPointID, EntryID: asset.Ref.EntryID,
 		ItemCount: 1, ByteCount: grant.RepresentationSize, StepUpAction: stepUpAction, StepUpProofID: stepUpProofID,
 		GrantID: grant.ID, FailureCode: failureCode,
-		Fields: map[backupasset.AuditField]any{
-			backupasset.AuditFieldRenderer: grant.Renderer, backupasset.AuditFieldProfile: grant.Profile,
-			backupasset.AuditFieldSource: grant.Classification,
-		},
+		Fields: fields,
 	}
 }
 
@@ -2314,7 +2362,7 @@ func validGatewayGrant(grant model.BackupAssetDeliveryGrant, deliveryID string, 
 	if ValidateDeliveryProduct(product, now) != nil {
 		return false
 	}
-	transformed := grant.Renderer == string(RendererEscapedText) || grant.Renderer == string(RendererMetadataHex)
+	transformed := transformedRenderer(Renderer(grant.Renderer))
 	if transformed {
 		return grant.RangePolicy == string(RangeNone) && grant.RepresentationTruncated == (grant.RepresentationSourceBytes < grant.SourceSize)
 	}
@@ -2374,7 +2422,7 @@ func validGatewayMediaType(grant model.BackupAssetDeliveryGrant) bool {
 		return false
 	}
 	switch Renderer(grant.Renderer) {
-	case RendererEscapedText, RendererMetadataHex:
+	case RendererEscapedText, RendererPlainText, RendererMetadataHex:
 		return grant.DetectedMediaType == "text/plain; charset=utf-8"
 	case RendererSafeRaster:
 		return grant.DetectedMediaType == "image/png" || grant.DetectedMediaType == "image/jpeg" ||
@@ -2463,6 +2511,15 @@ func cacheEligibleRenderer(renderer Renderer) bool {
 		renderer == RendererNativeAudio || renderer == RendererNativeVideo || renderer == RendererAttachment
 }
 
+func transformedRenderer(renderer Renderer) bool {
+	return renderer == RendererEscapedText || renderer == RendererPlainText || renderer == RendererMetadataHex
+}
+
+func safePreviewRequiresRange(renderer Renderer) bool {
+	return renderer == RendererSafeRaster || renderer == RendererSameOriginPDF ||
+		renderer == RendererNativeAudio || renderer == RendererNativeVideo
+}
+
 func cacheObjectForAsset(ownerUserID uint, asset AuthorizedAsset, renderer Renderer, profile RendererProfile) CacheObject {
 	return CacheObject{
 		OwnerUserID: ownerUserID, Provider: asset.Provider, Ref: asset.Ref,
@@ -2530,7 +2587,7 @@ func gatewayReservationBytes(grant model.BackupAssetDeliveryGrant, plan Represen
 	}
 	providerLimit := plan.ContentLength
 	probePossible := plan.ContentLength > 0 && plan.Range.Kind == HTTPRangeFull
-	if grant.Renderer == string(RendererEscapedText) || grant.Renderer == string(RendererMetadataHex) {
+	if transformedRenderer(Renderer(grant.Renderer)) {
 		providerLimit = grant.RepresentationSourceBytes
 		probePossible = providerLimit > 0 && !grant.RepresentationTruncated
 	} else if plan.Range.Kind != HTTPRangeFull {
@@ -2545,7 +2602,7 @@ func gatewaySourceRequest(grant model.BackupAssetDeliveryGrant, plan Representat
 		CatalogGenerationID: *grant.CatalogGenerationID,
 		ExpectedSource:      grant.SourceFingerprint, ExpectedEntry: grant.EntryFingerprint,
 	}
-	transformed := grant.Renderer == string(RendererEscapedText) || grant.Renderer == string(RendererMetadataHex)
+	transformed := transformedRenderer(Renderer(grant.Renderer))
 	switch {
 	case method == http.MethodHead || plan.ContentLength == 0:
 		request.Mode = SourceModeStat

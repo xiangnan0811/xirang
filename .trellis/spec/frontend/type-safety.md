@@ -1033,9 +1033,11 @@ return { mode, encryptionProfile, kmsKeyStatus, kmsReadKeyCount: kmsCount };
 - Secret-reveal preview retry is Admin-only (`role === "admin"` and
   `ensureStepUpProof`). Presence of the helper is not enough. The same
   session proof is attached to every `search` call (first page, load-more,
-  saved-search reload) and to preview renew for the same session, user,
-  asset, and action. Never put the proof in the URL. Clear it on
-  token/role change or when the selected asset changes.
+  saved-search reload) and to preview renew/retry for the same auth/source
+  owner, exact `AssetRef`, action, and current attempt. Never put the proof in
+  the URL. Clear it on token/role change, source/directory/version/asset owner
+  change, or preview detachment; a late proof result must not cross those
+  boundaries.
 - List/grid rows use `assetRefKey(ref)` (`recoveryPointId + entryId`) as
   the React key. The preview viewport must stay readable (`min-h-[24rem]`
   flex-fill, not a locked 18rem pane).
@@ -1129,19 +1131,33 @@ if (hit === null) return blockedBackupAssetProjection();
 - Closed domain unions: `BackupContentAction`, `BackupContentRenderer`,
   `BackupContentProfile`, `BackupContentRangePolicy`, and
   `BackupContentClassification`.
+- Ticket input is a discriminated union: ordinary automatic preview sends
+  `{ schemaVersion: 1, action: "preview", previewIntent: "safePreviewV1" }`
+  without a renderer/profile; processing/backcompat exact preview sends one
+  closed non-attachment renderer/profile pair; download sends only
+  `attachment/original_v1` with step-up proof.
 
 ### 3. Contracts
 
 - Raw snake_case DTOs stay private. The JSON request uses the central
-  `request<unknown>()` wrapper and serializes only `schema_version`, `action`,
-  `renderer`, and `profile`; step-up proof stays in `RequestOptions.stepUpProof`.
+  `request<unknown>()` wrapper. A safe preview serializes only
+  `schema_version`, `action`, and `preview_intent: "safe_preview_v1"`; an exact
+  preview/download serializes only `schema_version`, `action`, `renderer`, and
+  `profile`. Never send both intent and requested product. Step-up proof stays
+  in `RequestOptions.stepUpProof`.
 - Validate the response as one closed product. Schema, URL, action, renderer,
   profile, MIME, Range policy, classification/proof, ETag, non-negative safe
-  content length, UTC expiry ordering, capability reason, and fallbacks must all
-  agree or the whole projection becomes blocked.
+  content length, truncation, UTC expiry ordering, capability reason, and
+  fallbacks must all agree or the whole projection becomes blocked. A safe
+  preview accepts the server's one resolved exact non-attachment product; an
+  exact preview must match the requested product exactly.
 - Download is only `attachment/original_v1` and requires a proof. Preview never
   uses attachment; non-secret preview has no proof, while secret/unknown preview
   requires a proof. The frontend forwards proof but never interprets or stores it.
+- Only text/hex products may be truncated. Text/hex require `range=none`; native
+  raster/PDF/audio/video products resolved from the safe-preview intent require
+  the closed single-range policy. Legacy exact native preview/download products
+  retain their established `none|single` compatibility.
 - Treat `contentUrl` as an opaque same-origin path. Do not extract/rebuild the
   delivery ID, append JWT/proof/query data, resolve a Provider path, or persist
   the URL/ticket in local storage, session storage, history, or router state.
@@ -1154,10 +1170,11 @@ if (hit === null) return blockedBackupAssetProjection();
 
 | Raw/input condition | Domain result |
 |---|---|
-| AssetRef ID, schema, enum, or requested renderer/profile product is invalid | Reject before request or block the returned projection. |
+| AssetRef ID, schema, enum, safe intent, or requested renderer/profile product is invalid | Reject before request; no transport call. |
+| Safe intent includes renderer/profile, or exact intent includes `attachment/original_v1` | Reject before request; never repair or downgrade it. |
 | URL is absolute, cross-origin, query-bearing, fragmented, malformed, or wrong path | Block the whole projection. |
 | MIME does not belong to the exact renderer | Block the whole projection. |
-| Text/hex advertises Range or attachment is used for preview | Block the whole projection. |
+| Text/hex advertises Range, a safe-intent native resolution omits single Range, attachment is used for preview, or native content claims truncation | Block the whole projection. |
 | Download lacks proof, secret/unknown preview lacks proof, or non-secret preview carries proof | Reject/block; never repair the purpose product. |
 | ETag/time/size is malformed, expired, unsafe, or idle expiry exceeds absolute expiry | Block the whole projection. |
 | Available response contains a capability reason or fallback action | Block the contradiction. |
@@ -1174,9 +1191,11 @@ if (hit === null) return blockedBackupAssetProjection();
 
 ### 6. Tests Required
 
-- Cover exact snake_case request encoding, composite AssetRef validation,
+- Cover exact discriminated safe/exact snake_case request encoding, runtime
+  pre-transport rejection, composite AssetRef validation,
   step-up header forwarding, closed action/renderer/profile/MIME/range/
-  classification/proof products, UTC/ETag/safe-integer validation, and whole-
+  classification/proof/truncation products, UTC/ETag/safe-integer validation,
+  safe-intent resolved-product acceptance, exact-product matching, and whole-
   projection blocking.
 - Assert the source contains no direct `fetch`, Blob/media construction,
   delivery-ID extraction, URL/query rewriting, local/session storage, history,

@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { useLayoutEffect, useRef } from "react";
+import { StrictMode, useLayoutEffect, useRef, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/core";
@@ -343,6 +343,33 @@ function useBackupAssetsStateWithTransitionRenew(
     previousEntryRef.current = route.entryId;
   }, [controller.actions, renewDuringTransition, route.entryId]);
 
+  return controller;
+}
+
+function useBackupAssetsStateWithTransitionRetry(
+  route: BackupAssetsRouteState,
+  retryDuringTransition: boolean,
+) {
+  const controller = useBackupAssetsState({ token: "test-token", role: "operator", route });
+  const previousNodeRef = useRef(route.nodeId);
+
+  useLayoutEffect(() => {
+    if (retryDuringTransition && previousNodeRef.current !== route.nodeId) {
+      controller.actions.retryPreview();
+    }
+    previousNodeRef.current = route.nodeId;
+  }, [controller.actions, retryDuringTransition, route.nodeId]);
+
+  return controller;
+}
+
+function useBackupAssetsStateWithLayoutObservation(
+  token: string | null,
+  route: BackupAssetsRouteState,
+  onLayout: (content: ReturnType<typeof useBackupAssetsState>["content"]) => void,
+) {
+  const controller = useBackupAssetsState({ token, role: "operator", route });
+  useLayoutEffect(() => onLayout(controller.content), [controller.content, onLayout, route]);
   return controller;
 }
 
@@ -1711,6 +1738,432 @@ describe("useBackupAssetsState", () => {
     );
   });
 
+  it("issues exactly one safe-preview attempt for the selected file in StrictMode", async () => {
+    const resolved = buildContentTicket("plain_text");
+    prepareSelectedAssetRequests(asset);
+    issueTicketMock.mockResolvedValue({ status: "available", value: resolved });
+    const route = selectedAssetRoute(asset);
+
+    const { result } = renderHook(
+      () => useBackupAssetsState({ token: "test-token", role: "operator", route }),
+      { wrapper: ({ children }: { children: ReactNode }) => <StrictMode>{children}</StrictMode> },
+    );
+
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+    expect(issueTicketMock).toHaveBeenCalledWith(
+      "test-token",
+      asset.ref,
+      expect.objectContaining({
+        schemaVersion: 1,
+        action: "preview",
+        previewIntent: "safePreviewV1",
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(issueTicketMock.mock.calls[0]?.[2]).not.toHaveProperty("renderer");
+    expect(issueTicketMock.mock.calls[0]?.[2]).not.toHaveProperty("profile");
+  });
+
+  it("aborts A before B can attach and ignores A when it resolves late", async () => {
+    const first = deferred<{ status: "available"; value: BackupContentTicket }>();
+    const second = deferred<{ status: "available"; value: BackupContentTicket }>();
+    const nextAsset: BackupAsset = {
+      ...asset,
+      ref: { ...asset.ref, entryId: "d".repeat(64) },
+      name: "next-config.yaml",
+    };
+    let firstSignal: AbortSignal | undefined;
+    prepareSelectedAssetRequests(asset, nextAsset);
+    issueTicketMock.mockImplementation(
+      (_token: string, ref: BackupAsset["ref"], input: { signal?: AbortSignal }) => {
+        if (ref.entryId === asset.ref.entryId) {
+          firstSignal = input.signal;
+          return first.promise;
+        }
+        return second.promise;
+      },
+    );
+    const { result, rerender } = renderHook(
+      ({ route }) => useBackupAssetsState({ token: "test-token", role: "operator", route }),
+      { initialProps: { route: selectedAssetRoute(asset) } },
+    );
+    await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(1));
+
+    rerender({ route: selectedAssetRoute(nextAsset) });
+
+    await waitFor(() => expect(firstSignal?.aborted).toBe(true));
+    await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(2));
+    expect(result.current.content).toEqual({ status: "loading", value: null });
+    second.resolve({
+      status: "available",
+      value: buildContentTicket("safe_raster", {
+        contentUrl: `/api/v1/asset-content/${"9".repeat(32)}`,
+        profile: "raster_v1",
+        contentType: "image/png",
+        range: "single",
+      }),
+    });
+    await waitFor(() => expect(result.current.content.value?.contentUrl).toBe(
+      `/api/v1/asset-content/${"9".repeat(32)}`,
+    ));
+    first.resolve({
+      status: "available",
+      value: buildContentTicket("plain_text", {
+        contentUrl: `/api/v1/asset-content/${"8".repeat(32)}`,
+      }),
+    });
+    await act(async () => first.promise);
+    expect(result.current.content.value?.contentUrl).toBe(`/api/v1/asset-content/${"9".repeat(32)}`);
+  });
+
+  it.each([
+    ["node", { nodeId: 4, entryId: undefined }],
+    ["backup set", { backupSetId: "e".repeat(32), entryId: undefined }],
+    ["version", { recoveryPointId: "f".repeat(32), entryId: undefined }],
+    ["directory", { parentEntryId: "9".repeat(64), entryId: undefined }],
+  ] as const)("detaches a pending preview silently when the %s selection changes", async (_label, patch) => {
+    const pending = deferred<{ status: "available"; value: BackupContentTicket }>();
+    let signal: AbortSignal | undefined;
+    prepareSelectedAssetRequests(asset);
+    issueTicketMock.mockImplementation(
+      (_token: string, _ref: BackupAsset["ref"], input: { signal?: AbortSignal }) => {
+        signal = input.signal;
+        return pending.promise;
+      },
+    );
+    const initialRoute = {
+      ...selectedAssetRoute(asset),
+      nodeId: 3,
+      backupSetId: "d".repeat(32),
+    };
+    const { result, rerender } = renderHook(
+      ({ route }) => useBackupAssetsState({ token: "test-token", role: "operator", route }),
+      { initialProps: { route: initialRoute } },
+    );
+    await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(1));
+
+    rerender({ route: { ...initialRoute, ...patch } });
+
+    await waitFor(() => expect(signal?.aborted).toBe(true));
+    expect(result.current.content).toEqual({ status: "idle", value: null });
+    pending.resolve({ status: "available", value: buildContentTicket("plain_text") });
+    await act(async () => pending.promise);
+    expect(result.current.content).toEqual({ status: "idle", value: null });
+  });
+
+  it("detaches on leaving Preview and does not start a hidden attempt", async () => {
+    const first = deferred<{ status: "available"; value: BackupContentTicket }>();
+    const second = deferred<{ status: "available"; value: BackupContentTicket }>();
+    let firstSignal: AbortSignal | undefined;
+    prepareSelectedAssetRequests(asset);
+    issueTicketMock
+      .mockImplementationOnce((_token, _ref, input: { signal?: AbortSignal }) => {
+        firstSignal = input.signal;
+        return first.promise;
+      })
+      .mockReturnValueOnce(second.promise);
+    const initialRoute = selectedAssetRoute(asset);
+    const { result, rerender } = renderHook(
+      ({ route }) => useBackupAssetsState({ token: "test-token", role: "operator", route }),
+      { initialProps: { route: initialRoute } },
+    );
+    await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(1));
+
+    rerender({ route: { ...initialRoute, inspectorTab: "metadata" } });
+
+    await waitFor(() => expect(firstSignal?.aborted).toBe(true));
+    expect(result.current.content).toEqual({ status: "idle", value: null });
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+
+    rerender({ route: initialRoute });
+    await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(2));
+    expect(result.current.state.ticket).toMatchObject({
+      status: "issuing",
+      bindingKey: expect.stringMatching(/:safePreviewV1:0$/),
+    });
+  });
+
+  it("hides attached content during layout before a newer selection's passive detach runs", async () => {
+    const observeLayout = vi.fn();
+    prepareSelectedAssetRequests(asset);
+    issueTicketMock.mockResolvedValue({ status: "available", value: buildContentTicket("plain_text") });
+    const initialRoute = selectedAssetRoute(asset);
+    const { result, rerender } = renderHook(
+      ({ route }) => useBackupAssetsStateWithLayoutObservation("test-token", route, observeLayout),
+      { initialProps: { route: initialRoute } },
+    );
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    observeLayout.mockClear();
+
+    rerender({ route: { ...initialRoute, parentEntryId: "9".repeat(64), entryId: undefined } });
+
+    expect(observeLayout).toHaveBeenCalled();
+    expect(observeLayout.mock.calls[0]?.[0]).toEqual({ status: "idle", value: null });
+  });
+
+  it("aborts and hides an old ticket when the auth token changes", async () => {
+    const pending = deferred<{ status: "available"; value: BackupContentTicket }>();
+    let signal: AbortSignal | undefined;
+    prepareSelectedAssetRequests(asset);
+    issueTicketMock.mockImplementation(
+      (_token: string, _ref: BackupAsset["ref"], input: { signal?: AbortSignal }) => {
+        signal = input.signal;
+        return pending.promise;
+      },
+    );
+    const route = selectedAssetRoute(asset);
+    const { result, rerender } = renderHook(
+      ({ token }) => useBackupAssetsState({ token, role: "operator", route }),
+      { initialProps: { token: "test-token" as string | null } },
+    );
+    await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(1));
+
+    rerender({ token: null });
+
+    await waitFor(() => expect(signal?.aborted).toBe(true));
+    expect(result.current.content).toEqual({ status: "idle", value: null });
+    pending.resolve({ status: "available", value: buildContentTicket("plain_text") });
+    await act(async () => pending.promise);
+    expect(result.current.content).toEqual({ status: "idle", value: null });
+  });
+
+  it("does not issue under a new token until that token reloads the selected asset", async () => {
+    const refreshedEntry = deferred<{ status: "available"; value: BackupAsset }>();
+    prepareSelectedAssetRequests(asset);
+    getBackupAssetMock.mockImplementation((requestToken: string) =>
+      requestToken === "next-session-token"
+        ? refreshedEntry.promise
+        : Promise.resolve({ status: "available" as const, value: asset })
+    );
+    issueTicketMock.mockResolvedValue({ status: "available", value: buildContentTicket("plain_text") });
+    const route = selectedAssetRoute(asset);
+    const { result, rerender } = renderHook(
+      ({ token }) => useBackupAssetsState({ token, role: "operator", route }),
+      { initialProps: { token: "first-session-token" } },
+    );
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+
+    rerender({ token: "next-session-token" });
+
+    await waitFor(() => expect(getBackupAssetMock).toHaveBeenCalledWith(
+      "next-session-token",
+      asset.ref,
+      expect.any(AbortSignal),
+    ));
+    expect(result.current.selectedEntry).toEqual({ status: "loading", value: null });
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+
+    refreshedEntry.resolve({ status: "available", value: asset });
+    await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(2));
+    expect(issueTicketMock.mock.calls[1]?.[0]).toBe("next-session-token");
+  });
+
+  it("renews the current safe resolution as an exact product instead of re-selecting by MIME", async () => {
+    const resolved = buildContentTicket("plain_text");
+    prepareSelectedAssetRequests(asset);
+    issueTicketMock.mockResolvedValue({ status: "available", value: resolved });
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "operator",
+      route: selectedAssetRoute(asset),
+    }));
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+
+    act(() => result.current.actions.renewPreview());
+
+    await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(2));
+    expect(issueTicketMock.mock.calls[1]?.[2]).toEqual(expect.objectContaining({
+      action: "preview",
+      renderer: "plain_text",
+      profile: "text_v2",
+      signal: expect.any(AbortSignal),
+    }));
+    expect(issueTicketMock.mock.calls[1]?.[2]).not.toHaveProperty("previewIntent");
+  });
+
+  it("prompts Admin once and retries the same safe-preview intent once", async () => {
+    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
+    prepareSelectedAssetRequests(asset);
+    issueTicketMock
+      .mockRejectedValueOnce(secretRevealRequiredError())
+      .mockResolvedValueOnce({ status: "available", value: buildContentTicket("plain_text", {
+        classification: "secret",
+      }) });
+
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "admin",
+      route: selectedAssetRoute(asset),
+      ensureStepUpProof,
+    }));
+
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
+    expect(issueTicketMock).toHaveBeenCalledTimes(2);
+    expect(issueTicketMock.mock.calls[0]?.[2]).toEqual(expect.objectContaining({
+      previewIntent: "safePreviewV1",
+    }));
+    expect(issueTicketMock.mock.calls[1]?.[2]).toEqual(expect.objectContaining({
+      previewIntent: "safePreviewV1",
+      stepUpProof: "proof-secret",
+    }));
+  });
+
+  it("keeps the current Admin proof when the proof retry needs a manual retry", async () => {
+    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
+    prepareSelectedAssetRequests(asset);
+    issueTicketMock
+      .mockRejectedValueOnce(secretRevealRequiredError())
+      .mockRejectedValueOnce(new ApiError(503, "raw provider unavailable", null))
+      .mockResolvedValueOnce({ status: "available", value: buildContentTicket("plain_text", {
+        classification: "secret",
+      }) });
+
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "admin",
+      route: selectedAssetRoute(asset),
+      ensureStepUpProof,
+    }));
+
+    await waitFor(() => expect(result.current.content.status).toBe("error"));
+    expect(issueTicketMock).toHaveBeenCalledTimes(2);
+    expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
+
+    act(() => result.current.actions.retryPreview());
+
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(issueTicketMock).toHaveBeenCalledTimes(3);
+    expect(issueTicketMock.mock.calls[2]?.[2]).toEqual(expect.objectContaining({
+      previewIntent: "safePreviewV1",
+      stepUpProof: "proof-secret",
+      signal: expect.any(AbortSignal),
+    }));
+    expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a pending Admin proof when logout changes the ticket owner", async () => {
+    const proof = deferred<string>();
+    const ensureStepUpProof = vi.fn().mockReturnValue(proof.promise);
+    prepareSelectedAssetRequests(asset);
+    issueTicketMock.mockRejectedValueOnce(secretRevealRequiredError());
+    const route = selectedAssetRoute(asset);
+    const { result, rerender } = renderHook(
+      ({ token }) => useBackupAssetsState({
+        token,
+        role: "admin",
+        route,
+        ensureStepUpProof,
+      }),
+      { initialProps: { token: "test-token" as string | null } },
+    );
+    await waitFor(() => expect(ensureStepUpProof).toHaveBeenCalledTimes(1));
+
+    rerender({ token: null });
+    await act(async () => {
+      proof.resolve("proof-secret");
+      await proof.promise;
+    });
+
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+    expect(result.current.content).toEqual({ status: "idle", value: null });
+  });
+
+  it("never prompts Operator after a typed safe-preview secret denial", async () => {
+    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
+    prepareSelectedAssetRequests(asset);
+    issueTicketMock.mockRejectedValue(secretRevealRequiredError());
+
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "operator",
+      route: selectedAssetRoute(asset),
+      ensureStepUpProof,
+    }));
+
+    await waitFor(() => expect(result.current.content.status).toBe("blocked"));
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+    expect(ensureStepUpProof).not.toHaveBeenCalled();
+    expect(result.current.content.error?.code).toBe("secret_reveal_required");
+  });
+
+  it("retries only the current failed safe intent with a newer attempt key", async () => {
+    prepareSelectedAssetRequests(asset);
+    issueTicketMock
+      .mockRejectedValueOnce(new ApiError(503, "raw provider unavailable", null))
+      .mockResolvedValueOnce({ status: "available", value: buildContentTicket("plain_text") });
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "operator",
+      route: selectedAssetRoute(asset),
+    }));
+    await waitFor(() => expect(result.current.content.status).toBe("error"));
+    expect(result.current.state.ticket).toMatchObject({
+      status: "failed",
+      bindingKey: expect.stringMatching(/:safePreviewV1:0$/),
+    });
+
+    act(() => result.current.actions.retryPreview());
+
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(issueTicketMock).toHaveBeenCalledTimes(2);
+    expect(issueTicketMock.mock.calls[1]?.[2]).toEqual(expect.objectContaining({
+      action: "preview",
+      previewIntent: "safePreviewV1",
+      signal: expect.any(AbortSignal),
+    }));
+    expect(result.current.state.ticket).toMatchObject({
+      status: "ready",
+      bindingKey: expect.stringMatching(/:safePreviewV1:1$/),
+    });
+  });
+
+  it("does not retry a failed ticket during a source-owner transition", async () => {
+    prepareSelectedAssetRequests(asset);
+    issueTicketMock.mockRejectedValue(new ApiError(503, "raw provider unavailable", null));
+    const initialRoute = { ...selectedAssetRoute(asset), nodeId: 3 };
+    const { result, rerender } = renderHook(
+      ({ route, retryDuringTransition }) =>
+        useBackupAssetsStateWithTransitionRetry(route, retryDuringTransition),
+      { initialProps: { route: initialRoute, retryDuringTransition: false } },
+    );
+    await waitFor(() => expect(result.current.content.status).toBe("error"));
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+
+    rerender({
+      route: { ...initialRoute, nodeId: 4 },
+      retryDuringTransition: true,
+    });
+
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(result.current.content).toEqual({ status: "idle", value: null }));
+  });
+
+  it("maps an exact renderer rejection to a closed non-retryable preview state", async () => {
+    prepareSelectedAssetRequests(asset);
+    issueTicketMock.mockRejectedValue(new ApiError(422, "raw /private/config.yaml", {
+      data: { reason: { code: "preview_renderer_unsupported", params: {} } },
+    }));
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "operator",
+      route: selectedAssetRoute(asset),
+    }));
+
+    await waitFor(() => expect(result.current.content.status).toBe("blocked"));
+    expect(result.current.content.error).toEqual({
+      code: "preview_renderer_unsupported",
+      translationKey: "backupAssets.errors.previewRendererUnsupported",
+      retryable: false,
+      action: "none",
+    });
+    act(() => result.current.actions.retryPreview());
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(result.current.content)).not.toMatch(/private|config\.yaml/);
+  });
+
   it("issues an exact ordinary preview ticket without unnecessary step-up", async () => {
     const ensureStepUpProof = vi.fn();
     const previewTicket = buildContentTicket("escaped_text");
@@ -1724,7 +2177,7 @@ describe("useBackupAssetsState", () => {
       })
     );
 
-    act(() => result.current.actions.loadPreview(asset));
+    act(() => result.current.actions.loadExactPreview(asset));
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
     expect(ensureStepUpProof).not.toHaveBeenCalled();
     expect(issueTicketMock).toHaveBeenCalledWith(
@@ -1764,7 +2217,7 @@ describe("useBackupAssetsState", () => {
       })
     );
 
-    act(() => result.current.actions.loadPreview(asset));
+    act(() => result.current.actions.loadExactPreview(asset));
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
     expect(ensureStepUpProof).toHaveBeenCalledWith(STEP_UP_ACTIONS.assetSecretReveal, {
       persist: false,
@@ -1800,7 +2253,7 @@ describe("useBackupAssetsState", () => {
       })
     );
 
-    act(() => result.current.actions.loadPreview(asset));
+    act(() => result.current.actions.loadExactPreview(asset));
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
     expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
 
@@ -1835,17 +2288,51 @@ describe("useBackupAssetsState", () => {
       { initialProps: { token: "test-token" } }
     );
 
-    act(() => result.current.actions.loadPreview(asset));
+    act(() => result.current.actions.loadExactPreview(asset));
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
     expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
 
     rerender({ token: "next-session-token" });
-    act(() => result.current.actions.loadPreview(asset));
+    act(() => result.current.actions.loadExactPreview(asset));
     await waitFor(() => expect(ensureStepUpProof).toHaveBeenCalledTimes(2));
     expect(issueTicketMock.mock.calls[3][0]).toBe("next-session-token");
     expect(issueTicketMock.mock.calls[3][2]).toEqual(
       expect.objectContaining({ action: "preview", stepUpProof: "proof-secret" })
     );
+  });
+
+  it("clears secret-reveal proof when the source owner changes", async () => {
+    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
+    const secretTicket = buildContentTicket("plain_text", { classification: "secret" });
+    prepareSelectedAssetRequests(asset);
+    issueTicketMock
+      .mockRejectedValueOnce(secretRevealRequiredError())
+      .mockResolvedValueOnce({ status: "available", value: secretTicket })
+      .mockRejectedValueOnce(secretRevealRequiredError())
+      .mockResolvedValueOnce({ status: "available", value: secretTicket });
+    const initialRoute = { ...selectedAssetRoute(asset), nodeId: 3 };
+    const { result, rerender } = renderHook(
+      ({ route }) => useBackupAssetsState({
+        token: "test-token",
+        role: "admin",
+        route,
+        ensureStepUpProof,
+      }),
+      { initialProps: { route: initialRoute } },
+    );
+
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
+
+    rerender({ route: { ...initialRoute, nodeId: 4 } });
+
+    await waitFor(() => expect(ensureStepUpProof).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(4));
+    expect(issueTicketMock.mock.calls[2]?.[2]).not.toHaveProperty("stepUpProof");
+    expect(issueTicketMock.mock.calls[3]?.[2]).toEqual(expect.objectContaining({
+      previewIntent: "safePreviewV1",
+      stepUpProof: "proof-secret",
+    }));
   });
 
   it("re-prompts secret-reveal after the selected asset changes", async () => {
@@ -1871,11 +2358,11 @@ describe("useBackupAssetsState", () => {
       })
     );
 
-    act(() => result.current.actions.loadPreview(asset));
+    act(() => result.current.actions.loadExactPreview(asset));
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
     expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
 
-    act(() => result.current.actions.loadPreview(nextAsset));
+    act(() => result.current.actions.loadExactPreview(nextAsset));
     await waitFor(() => expect(ensureStepUpProof).toHaveBeenCalledTimes(2));
     expect(issueTicketMock.mock.calls[2][2]).not.toHaveProperty("stepUpProof");
     expect(issueTicketMock.mock.calls[3][2]).toEqual(
@@ -1904,7 +2391,7 @@ describe("useBackupAssetsState", () => {
       })
     );
 
-    act(() => result.current.actions.loadPreview(asset));
+    act(() => result.current.actions.loadExactPreview(asset));
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
     expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
 
@@ -1930,7 +2417,7 @@ describe("useBackupAssetsState", () => {
         })
       );
 
-      act(() => result.current.actions.loadPreview(asset));
+      act(() => result.current.actions.loadExactPreview(asset));
       await waitFor(() => expect(result.current.content.status).toBe("blocked"));
       expect(ensureStepUpProof).not.toHaveBeenCalled();
       expect(issueTicketMock).toHaveBeenCalledTimes(1);
@@ -1975,7 +2462,7 @@ describe("useBackupAssetsState", () => {
     );
 
     await waitFor(() => expect(result.current.state.result.status).toBe("ready"));
-    act(() => result.current.actions.loadPreview(asset));
+    act(() => result.current.actions.loadExactPreview(asset));
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
 
     searchMock.mockClear();
@@ -2097,7 +2584,7 @@ describe("useBackupAssetsState", () => {
       { initialProps: { route: initialRoute, renewDuringTransition: false } }
     );
     await waitFor(() => expect(result.current.selectedEntry.value).toEqual(asset));
-    act(() => result.current.actions.loadPreview(asset));
+    act(() => result.current.actions.loadExactPreview(asset));
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
     expect(issueTicketMock).toHaveBeenCalledTimes(1);
 
@@ -2160,7 +2647,7 @@ describe("useBackupAssetsState", () => {
       })
     );
 
-    act(() => result.current.actions.loadPreview(asset));
+    act(() => result.current.actions.loadExactPreview(asset));
     await waitFor(() => expect(result.current.content.status).toBe("blocked"));
     expect(ensureStepUpProof).not.toHaveBeenCalled();
     expect(JSON.stringify(result.current.content)).not.toContain("secret/path");
@@ -2180,7 +2667,7 @@ describe("useBackupAssetsState", () => {
       useBackupAssetsState({ token: "test-token", route: defaultBackupAssetsRouteState("data") })
     );
 
-    act(() => result.current.actions.loadPreview(asset));
+    act(() => result.current.actions.loadExactPreview(asset));
     await waitFor(() => expect(result.current.content.status).toBe("loading"));
     act(() => result.current.actions.detachContent());
     expect(signal?.aborted).toBe(true);
@@ -2237,9 +2724,10 @@ function buildContentTicket(
     contentUrl: `/api/v1/asset-content/${"8".repeat(32)}`,
     action: "preview",
     renderer,
-    profile: renderer === "escaped_text" ? "text_v1" : "hex_v1",
+    profile: renderer === "escaped_text" ? "text_v1" : renderer === "plain_text" ? "text_v2" : "hex_v1",
     contentType: "text/plain; charset=utf-8",
     contentLength: 12,
+    truncated: false,
     etag: '"synthetic"',
     lastModified: null,
     range: "none",
@@ -2250,4 +2738,31 @@ function buildContentTicket(
     fallbackActions: [],
     ...overrides,
   };
+}
+
+function selectedAssetRoute(selectedAsset: BackupAsset): BackupAssetsRouteState {
+  return {
+    ...defaultBackupAssetsRouteState("data"),
+    repositoryId: repository.id,
+    recoveryPointId: selectedAsset.ref.recoveryPointId,
+    entryId: selectedAsset.ref.entryId,
+  };
+}
+
+function prepareSelectedAssetRequests(...assets: BackupAsset[]): void {
+  listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
+  listRecoveryPointsMock.mockResolvedValue({
+    items: [{ status: "available", value: recoveryPoint }],
+    nextCursor: null,
+  });
+  listBackupAssetsMock.mockResolvedValue({
+    items: assets.map((value) => ({ status: "available" as const, value })),
+    nextCursor: null,
+  });
+  getBackupAssetMock.mockImplementation((_token: string, ref: BackupAsset["ref"]) => {
+    const value = assets.find((candidate) => candidate.ref.entryId === ref.entryId);
+    return Promise.resolve(value
+      ? { status: "available" as const, value }
+      : { status: "blocked" as const, reason: { code: "unknown_internal_state" as const, params: {} } });
+  });
 }

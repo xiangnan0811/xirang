@@ -943,7 +943,7 @@ func backupArchiveHandlerReplayDB(t *testing.T, now time.Time) *gorm.DB {
 	t.Helper()
 	dsn := fmt.Sprintf(
 		"file:%s-%d?mode=memory&cache=shared&_busy_timeout=5000&_foreign_keys=ON&_txlock=immediate&_loc=UTC",
-		strings.ReplaceAll(t.Name(), "/", "_"), backupArchiveHandlerReplayDBSequence.Add(1),
+		handlerTestDBName(t), backupArchiveHandlerReplayDBSequence.Add(1),
 	)
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		NowFunc: func() time.Time { return now }, DisableForeignKeyConstraintWhenMigrating: true,

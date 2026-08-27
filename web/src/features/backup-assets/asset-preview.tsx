@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Download, Eye, RefreshCw, Sparkles } from "lucide-react";
+import { Download, RefreshCw, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -74,7 +74,8 @@ export interface AssetPreviewProps {
   archiveContentAvailable?: boolean;
   archiveDownloadAllowed?: boolean;
   online?: boolean;
-  onLoadPreview: (asset: BackupAsset) => void;
+  onLoadExactPreview: (asset: BackupAsset) => void;
+  onRetry: () => void;
   onRenew: () => void;
   onPrepareDownload: (asset: BackupAsset) => void;
   onDetach: () => void;
@@ -89,7 +90,8 @@ export function AssetPreview({
   archiveContentAvailable = canDownload,
   archiveDownloadAllowed = canDownload,
   online,
-  onLoadPreview,
+  onLoadExactPreview,
+  onRetry,
   onRenew,
   onPrepareDownload,
   onDetach,
@@ -97,6 +99,7 @@ export function AssetPreview({
   const { t } = useTranslation();
   const contentNodeRef = useRef<HTMLIFrameElement | HTMLImageElement | HTMLMediaElement | null>(null);
   const detachRef = useRef(onDetach);
+  const detachEffectStateRef = useRef({ generation: 0 });
   const mediaRetryRef = useRef({ binding: "", count: 0 });
   const [processingOpen, setProcessingOpen] = useState(false);
   const archiveAssetKey = `${asset.ref.recoveryPointId}:${asset.ref.entryId}`;
@@ -134,7 +137,15 @@ export function AssetPreview({
     };
   }, [contentUrl]);
 
-  useEffect(() => () => detachRef.current(), []);
+  useEffect(() => {
+    const state = detachEffectStateRef.current;
+    const generation = ++state.generation;
+    return () => {
+      queueMicrotask(() => {
+        if (state.generation === generation) detachRef.current();
+      });
+    };
+  }, []);
 
   useEffect(() => {
     if (!ticket || ticket.action !== "preview") return;
@@ -160,25 +171,21 @@ export function AssetPreview({
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex min-h-11 shrink-0 flex-wrap items-center justify-end gap-2 border-b border-border px-2 py-1.5">
         {processingRuntime?.token ? (
-          <Button type="button" variant="ghost" size="sm" onClick={() => setProcessingOpen(true)}>
+          <Button type="button" variant="ghost" size="sm" className="touch-target min-h-11 lg:min-h-8" onClick={() => setProcessingOpen(true)}>
             <Sparkles className="size-4" aria-hidden />
             {t("backupAssets.preview.processingStatus")}
           </Button>
         ) : null}
-        {canPreview && resource.status !== "loading" && ticket?.action !== "preview" ? (
-          <Button type="button" variant="ghost" size="sm" onClick={() => onLoadPreview(asset)}>
-            <Eye className="size-4" aria-hidden />
-            {t("backupAssets.preview.load")}
-          </Button>
-        ) : null}
-        {canPreview && ticket?.action === "preview" ? (
-          <Button type="button" variant="ghost" size="sm" onClick={onRenew}>
+        {canPreview &&
+        (resource.status === "blocked" || resource.status === "error") &&
+        resource.error?.retryable ? (
+          <Button type="button" variant="ghost" size="sm" className="touch-target min-h-11 lg:min-h-8" onClick={onRetry}>
             <RefreshCw className="size-4" aria-hidden />
-            {t("backupAssets.preview.refresh")}
+            {t("backupAssets.preview.retry")}
           </Button>
         ) : null}
         {canDownload && ticket?.action !== "download" ? (
-          <Button type="button" variant="ghost" size="sm" onClick={() => onPrepareDownload(asset)}>
+          <Button type="button" variant="ghost" size="sm" className="touch-target min-h-11 lg:min-h-8" onClick={() => onPrepareDownload(asset)}>
             <Download className="size-4" aria-hidden />
             {t("backupAssets.preview.prepareDownload")}
           </Button>
@@ -200,6 +207,11 @@ export function AssetPreview({
           onMediaError={handleMediaError}
         />
       </div>
+      {ticket?.action === "preview" && ticket.truncated ? (
+        <p className="shrink-0 border-t border-border bg-muted/25 px-3 py-2 text-xs text-muted-foreground" role="status">
+          {t("backupAssets.preview.truncated")}
+        </p>
+      ) : null}
       {processingOpen && processingRuntime?.token ? (
         <Suspense
           fallback={(
@@ -218,7 +230,7 @@ export function AssetPreview({
             contentAvailable={archiveContentAvailable}
             downloadAllowed={archiveDownloadAllowed}
             online={online}
-            onOpenPreview={(source) => onLoadPreview(assetForProcessingPreview(asset, source))}
+            onOpenPreview={(source) => onLoadExactPreview(assetForProcessingPreview(asset, source))}
             onPrepareDownload={(ref) => {
               if (
                 ref.recoveryPointId === asset.ref.recoveryPointId &&

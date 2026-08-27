@@ -20,6 +20,7 @@ import { MemoryRouter, Navigate, Route, Routes } from "react-router-dom";
 import { http, HttpResponse } from "msw";
 
 import {
+  backupAssetsFileSourceIds,
   backupAssetsFixtureIds,
   createBackupAssetsHandlers,
   type BackupAssetsFixtureScenario,
@@ -69,18 +70,20 @@ beforeAll(() => {
   Object.defineProperties(HTMLElement.prototype, {
     getBoundingClientRect: {
       configurable: true,
-      value: () =>
-        ({
+      value: () => {
+        const width = Math.min(960, window.innerWidth);
+        return ({
           x: 0,
           y: 0,
           top: 0,
           left: 0,
-          right: 960,
+          right: width,
           bottom: 560,
-          width: 960,
+          width,
           height: 560,
           toJSON: () => ({}),
-        }) as DOMRect,
+        }) as DOMRect;
+      },
     },
     offsetHeight: { configurable: true, get: () => 560 },
     offsetWidth: { configurable: true, get: () => 960 },
@@ -168,17 +171,30 @@ describe("Backups routes accessibility", () => {
     },
   );
 
-  it("renders an axe-clean desktop workspace with tabs, directory tree, list, and grid semantics", async () => {
+  it("renders an axe-clean desktop workspace with tabs, directory tree, explicit selection, and grid semantics", async () => {
     useFixture("complete");
     setViewport(1440);
     const user = userEvent.setup();
     const page = renderBackups(completeRoute());
 
-    expect(await screen.findByRole("listbox", { name: /Asset list|资产列表/ })).toBeInTheDocument();
-    expect(screen.getByRole("tree")).toBeInTheDocument();
-    expect(screen.getAllByRole("option").length).toBeGreaterThan(0);
+    const list = await screen.findByRole("list", { name: /Backup asset list|备份资产列表/ });
+    expect(within(list).getAllByRole("listitem").length).toBeGreaterThan(0);
+    expect(within(list).getAllByRole("checkbox").length).toBeGreaterThan(0);
+    expect(within(list).getAllByRole("button", { name: /Open asset|打开资产/ }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("tabpanel", { hidden: true })).toHaveLength(3);
     expect(await runAxe(page.container)).toHaveNoViolations();
+
+    const contextTrigger = screen.getByRole("button", {
+      name: /Open asset context|打开资产上下文/,
+    });
+    await user.click(contextTrigger);
+    const contextDialog = await screen.findByRole("dialog", {
+      name: /Asset context|资产上下文/,
+    });
+    expect(within(contextDialog).getByRole("tree")).toBeInTheDocument();
+    expect(await runAxe(document.body)).toHaveNoViolations();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(contextTrigger).toHaveFocus());
 
     await user.click(screen.getByRole("radio", { name: /Grid|网格/ }));
     expect(await screen.findByRole("grid", { name: /Asset grid|资产网格/ })).toBeInTheDocument();
@@ -189,17 +205,28 @@ describe("Backups routes accessibility", () => {
   it("announces partial offline coverage without claiming an authoritative empty result", async () => {
     useFixture("partial_offline");
     setViewport(1440);
+    const user = userEvent.setup();
     const page = renderBackups(
-      `/app/backups/data?repositoryId=${backupAssetsFixtureIds.offlineRepository}` +
+      `/app/backups/data?nodeId=${backupAssetsFileSourceIds.offline.nodeId}` +
+        `&backupSetId=${backupAssetsFileSourceIds.offline.backupSetId}` +
+        `&repositoryId=${backupAssetsFixtureIds.offlineRepository}` +
         `&recoveryPointId=${backupAssetsFixtureIds.offlineRecoveryPoint}`
     );
 
     expect(
       await screen.findByText(/Partial catalog coverage|目录覆盖不完整/, {}, { timeout: 3_000 })
     ).toBeInTheDocument();
-    expect(screen.getAllByText(/Offline|离线/).length).toBeGreaterThan(0);
     expect(screen.queryByText(/No matching assets|没有匹配的资产/)).not.toBeInTheDocument();
     expect(await runAxe(page.container)).toHaveNoViolations();
+
+    await user.click(screen.getByRole("button", {
+      name: /Open asset context|打开资产上下文/,
+    }));
+    const contextDialog = await screen.findByRole("dialog", {
+      name: /Asset context|资产上下文/,
+    });
+    expect(within(contextDialog).getAllByText(/Offline|离线/).length).toBeGreaterThan(0);
+    expect(await runAxe(document.body)).toHaveNoViolations();
   });
 
   it("scans an open overlay portal and returns focus to the invoking control", async () => {
@@ -208,7 +235,7 @@ describe("Backups routes accessibility", () => {
     const user = userEvent.setup();
     renderBackups(completeRoute());
 
-    await screen.findByRole("listbox", { name: /Asset list|资产列表/ });
+    await screen.findByRole("list", { name: /Backup asset list|备份资产列表/ });
     const trigger = screen.getByRole("button", { name: /Favorites.*0|收藏.*0/ });
     await user.click(trigger);
     expect(await screen.findByRole("dialog", { name: /Favorites|收藏/ })).toBeInTheDocument();
@@ -226,13 +253,15 @@ describe("Backups routes accessibility", () => {
     const before = browserChannels();
     renderBackups(completeRoute());
 
-    await screen.findByRole("listbox", { name: /Asset list|资产列表/ });
+    const list = await screen.findByRole("list", { name: /Backup asset list|备份资产列表/ });
     const temporaryQuery = "synthetic-memory-only-investigation";
     await user.type(
       screen.getByRole("searchbox", { name: /Search backup assets|搜索备份资产/ }),
       temporaryQuery
     );
-    await user.click(within(screen.getByRole("listbox")).getAllByRole("option")[0]);
+    const bulkSelectionTarget = within(list).getAllByRole("checkbox")[0];
+    bulkSelectionTarget.focus();
+    await user.keyboard(" ");
     await user.click(screen.getByRole("button", { name: /Export selected|导出所选/ }));
     expect(await screen.findByRole("dialog", { name: /Export backup assets|导出备份资产/ })).toBeInTheDocument();
 
@@ -248,13 +277,16 @@ describe("Backups routes accessibility", () => {
     [1440, "desktop"],
     [1200, "intermediate"],
     [390, "mobile"],
-  ] as const)("keeps the lazy export review axe-clean at %ipx", async (width, viewport) => {
+  ] as const)("keeps explicit checkbox selection and the lazy export review axe-clean at %ipx", async (width, viewport) => {
     useFixture("complete");
     setViewport(width);
     const user = userEvent.setup();
     renderBackups(completeRoute());
 
-    await user.click(within(await screen.findByRole("listbox")).getAllByRole("option")[0]);
+    const list = await screen.findByRole("list", { name: /Backup asset list|备份资产列表/ });
+    const bulkSelectionTarget = within(list).getAllByRole("checkbox")[0];
+    bulkSelectionTarget.focus();
+    await user.keyboard(" ");
     await user.click(screen.getByRole("button", { name: /Export selected|导出所选/ }));
 
     expect(await screen.findByRole("dialog", { name: /Export backup assets|导出备份资产/ })).toBeInTheDocument();
@@ -276,7 +308,9 @@ describe("Backups routes accessibility", () => {
     await waitFor(() => expect(heading).toHaveFocus());
     expect(screen.queryByRole("region", { name: /Asset results|资产结果/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Close asset inspector|关闭资产检查器/ })).toBeInTheDocument();
-    expect(await runAxe(inspector)).toHaveNoViolations();
+    // The preview iframe is opaque/sandboxed and has focused renderer coverage;
+    // jsdom cannot establish axe's cross-frame messaging target reliably.
+    expect(await runAxe(inspector, { iframes: false })).toHaveNoViolations();
   });
 
   it("keeps every backup-assets locale leaf in zh/en parity", async () => {
@@ -300,7 +334,7 @@ function renderBackups(initialEntry: string) {
       <main aria-label="Xirang test application">
         <Routes>
           <Route path="/app/backups" element={<BackupsPage />}>
-            <Route index element={<Navigate to="overview" replace />} />
+            <Route index element={<Navigate to="data" replace />} />
             <Route path="overview" element={<BackupsOverviewPage />} />
             <Route path="data" element={<BackupsDataPage />} />
             <Route path="recovery" element={<BackupsRecoveryPage />} />
@@ -313,7 +347,9 @@ function renderBackups(initialEntry: string) {
 
 function completeRoute() {
   return (
-    `/app/backups/data?repositoryId=${backupAssetsFixtureIds.onlineRepository}` +
+    `/app/backups/data?nodeId=${backupAssetsFileSourceIds.online.nodeId}` +
+    `&backupSetId=${backupAssetsFileSourceIds.online.backupSetId}` +
+    `&repositoryId=${backupAssetsFixtureIds.onlineRepository}` +
     `&recoveryPointId=${backupAssetsFixtureIds.onlineRecoveryPoint}`
   );
 }

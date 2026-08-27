@@ -14,8 +14,11 @@ import { fileURLToPath } from 'node:url';
 // so keep a small raw-size cushion without weakening the JS startup budget.
 // Child 14 lifecycle panels add repository-management and retention-policy
 // utilities that scan into the shared CSS chunk (~105.01 KiB raw / ~17 KiB gzip).
+// The backup file center adds list/grid, split-pane, responsive, and accessible
+// touch-target utilities (~108.83 KiB raw / ~17.62 KiB gzip). Preserve roughly
+// the same small raw-size cushion while keeping the 500 KiB JS budget unchanged.
 const DEFAULT_MAIN_JS_BUDGET_KIB = 500;
-const DEFAULT_MAIN_CSS_BUDGET_KIB = 106;
+const DEFAULT_MAIN_CSS_BUDGET_KIB = 110;
 
 function formatKiB(bytes) {
   return `${(bytes / 1024).toFixed(2)} KiB`;
