@@ -2234,3 +2234,28 @@ required CI must provide the supported WebKit result. This task is not complete:
 commit/push/PR/CI/merge, Release Please and any release/image automation, NAS
 upgrade, production product acceptance, collectors, and node logs remain open.
 No such action was performed by this audit.
+
+## Ready-PR browser and CI remediation checkpoint
+
+Date: 2026-08-28
+
+- The user explicitly authorized the delivery workflow after independent review.
+  Commit `ef371d5` was pushed on
+  `codex/backup-file-center-production-remediation`, and ready PR #474 was opened.
+- The first required CI browser matrix executed all nine Playwright cases across
+  Chromium, Firefox, and WebKit successfully. This closes the external local
+  WebKit-host-library blocker and the Phase 12 frontend/browser verification item.
+- The same first CI run exposed two deterministic delivery-gate failures after
+  browser success. The backend Phase 8 vertical fixture inherited a local
+  development environment and lacked an explicit test encryption key in CI. It
+  now supplies only a deterministic fake test key and resets the secure test
+  cache before and after the test; production behavior is unchanged.
+- The frontend startup chunk was 697 bytes over its fixed 500 KiB budget. The
+  core backup-assets API now uses the existing cached dynamic-import boundary;
+  its public asynchronous methods are unchanged. Node 22 production output is
+  493.85 KiB for the startup chunk, 6,297 bytes below budget, with a dedicated
+  6.96 KiB raw backup-assets API chunk. The budget itself was not increased.
+- Focused frontend tests, Node 22 `npm run check` (190 files / 1,743 tests), the
+  exact bundle-budget script, and the CI-shaped backend fixture selector are
+  GREEN. Required CI must rerun on the remediation commit before merge; the
+  compound Phase 12 delivery/merge checkbox remains open.

@@ -20,6 +20,7 @@ import (
 	backuprepository "xirang/backend/internal/backupasset/repository"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 	settingservice "xirang/backend/internal/settings"
 
 	"github.com/gin-gonic/gin"
@@ -234,6 +235,9 @@ func TestBackupContentSafePreviewCrossesActualRepositoryRsyncBrokerAndLiveIssueH
 
 func openPhase8BackupContentIntegrationDB(t *testing.T) *gorm.DB {
 	t.Helper()
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_PHASE8_CONTENT_DATA_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
 	dsn := fmt.Sprintf("file:%s-phase8?mode=memory&cache=shared&_busy_timeout=5000&_foreign_keys=ON&_loc=UTC", handlerTestDBName(t))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {

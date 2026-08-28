@@ -32,10 +32,10 @@ import { createAppCredentialsApi } from "./app-credentials";
 import { createAutomationRulesApi } from "./automation-rules";
 import { createServiceMonitorsApi } from "./service-monitors";
 import { createRecoveryPointsApi } from "./recovery-points-api";
-import { createBackupAssetsApi } from "./backup-assets-api";
 
 export { ApiError } from "./core";
 
+type BackupAssetsApi = ReturnType<typeof import("./backup-assets-api").createBackupAssetsApi>;
 type BackupAssetSearchApi = ReturnType<
   typeof import("./backup-asset-search-api").createBackupAssetSearchApi
 >;
@@ -53,12 +53,20 @@ type BackupFileSourcesApi = ReturnType<
   typeof import("./backup-file-sources-api").createBackupFileSourcesApi
 >;
 
+let backupAssetsApiPromise: Promise<BackupAssetsApi> | undefined;
 let backupAssetSearchApiPromise: Promise<BackupAssetSearchApi> | undefined;
 let backupAssetOverlaysApiPromise: Promise<BackupAssetOverlaysApi> | undefined;
 let backupContentApiPromise: Promise<BackupContentApi> | undefined;
 let backupRetentionApiPromise: Promise<BackupRetentionApi> | undefined;
 let backupRepositoriesApiPromise: Promise<BackupRepositoriesApi> | undefined;
 let backupFileSourcesApiPromise: Promise<BackupFileSourcesApi> | undefined;
+
+function loadBackupAssetsApi(): Promise<BackupAssetsApi> {
+  backupAssetsApiPromise ??= import("./backup-assets-api").then((module) =>
+    module.createBackupAssetsApi()
+  );
+  return backupAssetsApiPromise;
+}
 
 function loadBackupAssetSearchApi(): Promise<BackupAssetSearchApi> {
   backupAssetSearchApiPromise ??= import("./backup-asset-search-api").then((module) =>
@@ -99,6 +107,21 @@ function loadBackupFileSourcesApi(): Promise<BackupFileSourcesApi> {
   backupFileSourcesApiPromise ??= import("./backup-file-sources-api").then((module) => module.createBackupFileSourcesApi());
   return backupFileSourcesApiPromise;
 }
+
+const lazyBackupAssetsApi: BackupAssetsApi = {
+  async listBackupAssets(...args) {
+    return (await loadBackupAssetsApi()).listBackupAssets(...args);
+  },
+  async listAssetVersions(...args) {
+    return (await loadBackupAssetsApi()).listAssetVersions(...args);
+  },
+  async getBackupAsset(...args) {
+    return (await loadBackupAssetsApi()).getBackupAsset(...args);
+  },
+  async diffRecoveryPoints(...args) {
+    return (await loadBackupAssetsApi()).diffRecoveryPoints(...args);
+  },
+};
 
 const lazyBackupAssetSearchApi: BackupAssetSearchApi = {
   async search(...args) {
@@ -279,7 +302,7 @@ export const apiClient = {
   ...createAutomationRulesApi(),
   ...createServiceMonitorsApi(),
   ...createRecoveryPointsApi(),
-  ...createBackupAssetsApi(),
+  ...lazyBackupAssetsApi,
   ...lazyBackupAssetSearchApi,
   ...lazyBackupAssetOverlaysApi,
   ...lazyBackupContentApi,

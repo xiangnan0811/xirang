@@ -411,7 +411,7 @@ items complete. Continue only through the newly approved remediation phases belo
   RED/GREEN slice, then `-count=3`, focused `-race`, `go test ./...`, build, vet,
   pinned golangci-lint, Swagger deterministic regeneration, doc freshness, and
   SQLite/PostgreSQL parity where affected.
-- [ ] Run Node 22 focused API/hook/browser/preview/page tests, typecheck, lint,
+- [x] Run Node 22 focused API/hook/browser/preview/page tests, typecheck, lint,
   `npm run check`, production build, Playwright Chromium/Firefox/WebKit, supported
   viewports/zoom, accessibility, and privacy/type-escape scans.
 - [x] Run `make check`, dependency/migration/scope scans, response canaries, and
