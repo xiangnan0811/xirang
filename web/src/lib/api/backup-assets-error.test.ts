@@ -12,6 +12,47 @@ function capabilityError(status: number, code: string) {
 }
 
 describe("mapBackupAssetsError", () => {
+  it.each([
+    ["preview_source_open_failed", "open"],
+    ["preview_source_read_failed", "read"],
+    ["preview_source_changed", "changed"],
+    ["preview_source_timeout", "timeout"],
+    ["preview_source_canceled", "cancellation"],
+    ["preview_source_capability", "capability"],
+  ] as const)("maps the closed content source stage %s with only a safe correlation ID", (reasonCode, sourceStage) => {
+    const mapped = mapBackupAssetsError(new ApiError(503, "raw provider /private/path", {
+      code: 503,
+      message: "raw provider /private/path",
+      data: { reason: { code: reasonCode, params: {} }, correlation_id: "safe-correlation" },
+    }), "content_ticket");
+    expect(mapped).toEqual({
+      code: "temporarily_unavailable",
+      translationKey: "backupAssets.errors.temporarilyUnavailable",
+      retryable: sourceStage !== "cancellation" && sourceStage !== "capability",
+      action: sourceStage !== "cancellation" && sourceStage !== "capability" ? "retry" : "none",
+      sourceStage,
+      correlationId: "safe-correlation",
+    });
+    expect(JSON.stringify(mapped)).not.toMatch(/private|path|provider/);
+  });
+
+  it.each(["toString", "constructor", "__proto__"])(
+    "rejects inherited object key %s as an unknown source-stage reason",
+    (reasonCode) => {
+      const mapped = mapBackupAssetsError(new ApiError(503, "raw provider /private/path", {
+        code: 503,
+        message: "raw provider /private/path",
+        data: { reason: { code: reasonCode, params: {} }, correlation_id: "safe-correlation" },
+      }), "content_ticket");
+      expect(mapped).toEqual({
+        code: "temporarily_unavailable",
+        translationKey: "backupAssets.errors.temporarilyUnavailable",
+        retryable: true,
+        action: "retry",
+      });
+    }
+  );
+
   it("maps only the exact parameter-free secure transport reason for content tickets", () => {
     const exact = new ApiError(503, "localized transport message", {
       code: 503,

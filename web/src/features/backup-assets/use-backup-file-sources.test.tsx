@@ -20,15 +20,29 @@ vi.mock("@/lib/api/client", () => ({ apiClient: {
   resolveBackupFileSourceRecoveryPoint: mocks.resolve,
 } }));
 
-const node: BackupFileSourceNode = { nodeId: 7, displayName: "节点", backupSetCount: 1, latestRetainedAt: null, catalogCoverage: "complete" };
-const set: BackupFileSourceSet = { backupSetId: "a".repeat(32), nodeId: 7, displayLabel: "每日", lineageKind: "task", versionCount: 1, latestRetainedAt: null, catalogCoverage: "complete" };
-const version: BackupFileSourceVersion = { recoveryPointId: "b".repeat(32), repositoryId: "c".repeat(32), producingTaskId: 9, capturedAt: null, committedAt: null, createdAt: "2026-08-27T00:00:00.000Z", lifecycleState: "committed", catalogCoverage: "complete", contentAvailability: { available: false, reason: { code: "range_unavailable", params: {} } }, entryCount: 1, logicalBytes: 1, permissions: { list: true, preview: false, download: false } };
+const node: BackupFileSourceNode = {
+  nodeId: 7, displayName: "节点", backupSetCount: 1, retainedVersionCount: 1, latestRetainedAt: null,
+  catalogCoverage: "complete", browseState: "browsable", unavailableReason: null,
+};
+const set: BackupFileSourceSet = {
+  backupSetId: "a".repeat(32), nodeId: 7, displayLabel: "每日", lineageKind: "task", versionCount: 1,
+  latestRetainedAt: null, catalogCoverage: "complete", browseState: "browsable", unavailableReason: null,
+};
+const version: BackupFileSourceVersion = {
+  recoveryPointId: "b".repeat(32), repositoryId: "c".repeat(32), producingTaskId: 9, capturedAt: null,
+  committedAt: null, createdAt: "2026-08-27T00:00:00.000Z", lifecycleState: "committed", catalogCoverage: "complete",
+  browseState: "browsable", unavailableReason: null,
+  contentAvailability: { available: false, reason: { code: "range_unavailable", params: {} } },
+  entryCount: 1, logicalBytes: 1, permissions: { list: true, preview: false, download: false },
+};
 const resolution: BackupFileSourceRecoveryPoint = {
   nodeId: node.nodeId,
   backupSetId: set.backupSetId,
   recoveryPointId: version.recoveryPointId,
   repositoryId: version.repositoryId,
   producingTaskId: version.producingTaskId,
+  browseState: "browsable",
+  unavailableReason: null,
 };
 const secondNode: BackupFileSourceNode = { ...node, nodeId: 8, displayName: "归档节点" };
 const pageCursor = "eyJvZmZzZXQiOjEwMH0.signature";
@@ -65,6 +79,36 @@ describe("useBackupFileSources", () => {
     expect(mocks.resolve).toHaveBeenCalledWith("token", version.recoveryPointId, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(mocks.sets).not.toHaveBeenCalled();
     expect(mocks.versions).not.toHaveBeenCalled();
+  });
+
+  it("keeps a retained non-browsable legacy resolution out of active browsing context", async () => {
+    mocks.resolve.mockResolvedValue({
+      status: "available",
+      value: {
+        ...resolution,
+        browseState: "indexing",
+      },
+    });
+    const onRoutePatch = vi.fn();
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      recoveryPointId: version.recoveryPointId,
+      parentEntryId: "d".repeat(64),
+      entryId: "e".repeat(64),
+    };
+
+    renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch }));
+
+    await waitFor(() => expect(onRoutePatch).toHaveBeenCalledWith({
+      nodeId: resolution.nodeId,
+      backupSetId: resolution.backupSetId,
+      repositoryId: undefined,
+      taskId: undefined,
+      recoveryPointId: undefined,
+      parentEntryId: undefined,
+      entryId: undefined,
+      exportJobId: undefined,
+    }, { replace: true }));
   });
 
   it("coalesces StrictMode effect replay into one legacy resolver request", async () => {
@@ -302,6 +346,24 @@ describe("useBackupFileSources", () => {
     expect(mocks.versions).toHaveBeenCalledWith("token", set.backupSetId, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     act(() => result.current.selectVersion(version, set.backupSetId));
     expect(onRoutePatch).toHaveBeenCalledWith({ nodeId: 7, backupSetId: set.backupSetId, repositoryId: version.repositoryId, taskId: 9, recoveryPointId: version.recoveryPointId });
+  });
+
+  it("never patches a non-browsable retained version into active browsing context", async () => {
+    const unavailable = {
+      ...version,
+      lifecycleState: "verifying" as const,
+      browseState: "unavailable" as const,
+      unavailableReason: { code: "repository_offline" as const, params: {} },
+    };
+    mocks.versions.mockResolvedValue({ status: "available", value: { items: [unavailable], nextCursor: null } });
+    const onRoutePatch = vi.fn();
+    const route = { ...defaultBackupAssetsRouteState("data"), nodeId: 7 };
+    const { result } = renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch }));
+    await waitFor(() => expect(result.current.versions).toEqual([unavailable]));
+
+    act(() => result.current.selectVersion(unavailable, set.backupSetId));
+
+    expect(onRoutePatch).not.toHaveBeenCalledWith(expect.objectContaining({ recoveryPointId: unavailable.recoveryPointId }));
   });
 
   it("continues cursor pages to resolve an explicit node before reconciling the route", async () => {

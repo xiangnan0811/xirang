@@ -213,7 +213,7 @@ func (service *PublicationService) expireAtDeadline(ctx context.Context, pointID
 }
 
 func (service *PublicationService) ListCandidates(ctx context.Context, limit int) ([]string, error) {
-	if service == nil || service.db == nil || limit <= 0 {
+	if service == nil || service.db == nil || limit <= 0 || limit > 1000 {
 		return nil, fmt.Errorf("%w: invalid publication candidate request", backupasset.ErrInvalidState)
 	}
 	if ctx == nil {
@@ -225,12 +225,17 @@ func (service *PublicationService) ListCandidates(ctx context.Context, limit int
 	if scanLimit < limit {
 		scanLimit = limit
 	}
-	if err := service.db.WithContext(ctx).
+	query := service.db.WithContext(ctx).
 		Where("semantics IN ? AND state IN ?", []backupasset.PointVersionSemantics{backupasset.PointNativeSnapshot, backupasset.PointXirangManifest, backupasset.PointImportedBaseline}, []string{string(backupasset.RecoveryPointPreparing), string(backupasset.RecoveryPointVerifying)}).
-		Order("updated_at ASC, id ASC").Limit(scanLimit).Find(&points).Error; err != nil {
+		Order("updated_at ASC").Order("id ASC").Limit(scanLimit)
+	if err := query.Find(&points).Error; err != nil {
 		return nil, fmt.Errorf("list publication candidates: %w", err)
 	}
-	result := make([]string, 0, limit)
+	if len(points) == 0 {
+		return []string{}, nil
+	}
+	eligible := make([]string, 0, len(points))
+	eligibleSet := make(map[string]struct{}, len(points))
 	for _, point := range points {
 		_, lineage, consistency, err := publicationReconciliationFacts(point)
 		if err != nil {
@@ -239,16 +244,33 @@ func (service *PublicationService) ListCandidates(ctx context.Context, limit int
 		if consistency.LastAttemptAt != nil && now.Before(consistency.LastAttemptAt.Add(publicationBackoff(consistency.AttemptCount))) && now.Before(lineage.PointDeadlineAt) {
 			continue
 		}
-		var live int64
-		if err := service.db.WithContext(ctx).Model(&model.RecoveryPointLease{}).
-			Where("recovery_point_id = ? AND status = ? AND lease_expires_at > ?", point.ID, backupasset.LeaseActive, now).
-			Count(&live).Error; err != nil {
-			return nil, fmt.Errorf("check candidate publication lease: %w", err)
-		}
-		if live > 0 {
+		eligible = append(eligible, point.ID)
+		eligibleSet[point.ID] = struct{}{}
+	}
+	if len(eligible) == 0 {
+		return []string{}, nil
+	}
+	var leased []string
+	if err := service.db.WithContext(ctx).Model(&model.RecoveryPointLease{}).
+		Distinct("recovery_point_id").
+		Where("recovery_point_id IN ? AND status = ? AND lease_expires_at > ?", eligible, backupasset.LeaseActive, now).
+		Pluck("recovery_point_id", &leased).Error; err != nil {
+		return nil, fmt.Errorf("check candidate publication leases: %w", err)
+	}
+	live := make(map[string]struct{}, len(leased))
+	for _, pointID := range leased {
+		live[pointID] = struct{}{}
+	}
+	result := make([]string, 0, limit)
+	for _, point := range points {
+		pointID := point.ID
+		if _, exists := eligibleSet[pointID]; !exists {
 			continue
 		}
-		result = append(result, point.ID)
+		if _, exists := live[pointID]; exists {
+			continue
+		}
+		result = append(result, pointID)
 		if len(result) == limit {
 			break
 		}

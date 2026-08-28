@@ -457,6 +457,11 @@ func (h *AuthHandler) StepUp(c *gin.Context) {
 		respondUnauthorized(c, "未登录")
 		return
 	}
+	session, ok := middleware.CurrentSessionBinding(c)
+	if !ok || session.UserID != userID {
+		respondUnauthorized(c, "登录会话无效")
+		return
+	}
 	var user model.User
 	if err := h.db.First(&user, userID).Error; err != nil {
 		respondUnauthorized(c, "用户不存在")
@@ -472,13 +477,16 @@ func (h *AuthHandler) StepUp(c *gin.Context) {
 		respondForbidden(c, "二次验证失败")
 		return
 	}
-	proof, expiresAt, err := h.jwtManager.GenerateStepUpToken(user, req.StepUpAction)
+	proof, expiresAt, err := h.jwtManager.GenerateStepUpToken(user, req.StepUpAction, session.JTI)
 	if err != nil {
 		respondInternalError(c, fmt.Errorf("生成 step-up proof 失败: %w", err))
 		return
 	}
 	writeStepUpCredentialAudit(c, h.db, nil, stepUpAuditOperation{ExpectedAction: req.StepUpAction, Action: string(req.StepUpAction), Purpose: auth.PurposeStepUp, Operation: "step_up"}, credentialaudit.OutcomeSuccess, "issued")
-	respondOK(c, stepUpResponse{Proof: proof, ExpiresAt: expiresAt.UTC(), ProofTTLSeconds: stepUpProofTTLSeconds})
+	respondOK(c, stepUpResponse{
+		Proof: proof, ExpiresAt: expiresAt.UTC(),
+		ProofTTLSeconds: stepUpProofTTLSecondsForAction(req.StepUpAction),
+	})
 }
 
 type totpDisableRequest struct {

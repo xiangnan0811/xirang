@@ -81,6 +81,139 @@ func TestCatalogOwnershipFailsClosedForViewerUnknownAndQueryFailure(t *testing.T
 	}
 }
 
+func TestCatalogOwnershipFollowsLiveCurrentTaskOwnershipAfterNodeMigration(t *testing.T) {
+	db, _ := openCatalogBehaviorSQLite(t)
+	now := time.Date(2026, 8, 28, 18, 0, 0, 0, time.UTC)
+	fixture := seedCatalogOwnershipFixture(t, db, now)
+	driftedNode := seedCatalogOwnershipNode(t, db, 6203, "drifted-owned", now)
+	const currentOwnerID uint = 6102
+	if err := db.Create(&model.User{
+		ID: currentOwnerID, Username: "catalog-current-owner", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
+		Role: "operator", CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: driftedNode.ID, UserID: currentOwnerID, CreatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	var point model.RecoveryPoint
+	if err := db.Select("producing_task_id").Where("id = ?", fixture.ownedPointID).Take(&point).Error; err != nil {
+		t.Fatal(err)
+	}
+	if point.ProducingTaskID == nil {
+		t.Fatal("owned point has no producing task")
+	}
+	if err := db.Model(&model.Task{}).Where("id = ?", *point.ProducingTaskID).Update("node_id", driftedNode.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	ownership, err := NewOwnership(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formerOwnerVisible, err := ownership.AuthorizedPointIDs(context.Background(), AuthorizationScope{
+		Role: "operator", UserID: fixture.operatorID,
+	}, []string{fixture.ownedPointID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(formerOwnerVisible) != 0 {
+		t.Fatalf("former node owner saw migrated Task point: %v", formerOwnerVisible)
+	}
+	currentOwnerVisible, err := ownership.AuthorizedPointIDs(context.Background(), AuthorizationScope{
+		Role: "operator", UserID: currentOwnerID,
+	}, []string{fixture.ownedPointID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(currentOwnerVisible, []string{fixture.ownedPointID}) {
+		t.Fatalf("current node owner visibility=%v, want migrated Task point", currentOwnerVisible)
+	}
+	adminVisible, err := ownership.AuthorizedPointIDs(context.Background(), AuthorizationScope{
+		Role: "admin", UserID: 1,
+	}, []string{fixture.ownedPointID})
+	if err != nil || !reflect.DeepEqual(adminVisible, []string{fixture.ownedPointID}) {
+		t.Fatalf("admin retained-lineage visibility=%v err=%v", adminVisible, err)
+	}
+}
+
+func TestCatalogOwnershipRequiresLiveCurrentTaskNode(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		missingNode bool
+	}{
+		{name: "archived"},
+		{name: "missing_with_stale_owner", missingNode: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, _ := openCatalogBehaviorSQLite(t)
+			now := time.Date(2026, 8, 28, 19, 0, 0, 0, time.UTC)
+			fixture := seedCatalogOwnershipFixture(t, db, now)
+			var point model.RecoveryPoint
+			if err := db.Select("producing_task_id").Where("id = ?", fixture.ownedPointID).Take(&point).Error; err != nil {
+				t.Fatal(err)
+			}
+			if point.ProducingTaskID == nil {
+				t.Fatal("owned point has no producing task")
+			}
+			var task model.Task
+			if err := db.Select("id", "node_id").Where("id = ?", *point.ProducingTaskID).Take(&task).Error; err != nil {
+				t.Fatal(err)
+			}
+			if testCase.missingNode {
+				deleteCatalogOwnershipNodeRetainingOwner(t, db, task.NodeID)
+			} else if err := db.Model(&model.Node{}).Where("id = ?", task.NodeID).Update("archived", true).Error; err != nil {
+				t.Fatal(err)
+			}
+
+			ownership, err := NewOwnership(db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			operatorVisible, err := ownership.AuthorizedPointIDs(context.Background(), AuthorizationScope{
+				Role: "operator", UserID: fixture.operatorID,
+			}, []string{fixture.ownedPointID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(operatorVisible) != 0 {
+				t.Fatalf("operator saw point through unavailable current node: %v", operatorVisible)
+			}
+			adminVisible, err := ownership.AuthorizedPointIDs(context.Background(), AuthorizationScope{
+				Role: "admin", UserID: 1,
+			}, []string{fixture.ownedPointID})
+			if err != nil || !reflect.DeepEqual(adminVisible, []string{fixture.ownedPointID}) {
+				t.Fatalf("admin provenance visibility=%v err=%v", adminVisible, err)
+			}
+		})
+	}
+}
+
+func deleteCatalogOwnershipNodeRetainingOwner(t *testing.T, db *gorm.DB, nodeID uint) {
+	t.Helper()
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	if err := db.Exec("PRAGMA foreign_keys = OFF").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("DELETE FROM nodes WHERE id = ?", nodeID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
+		t.Fatal(err)
+	}
+	var owners int64
+	if err := db.Model(&model.NodeOwner{}).Where("node_id = ?", nodeID).Count(&owners).Error; err != nil {
+		t.Fatal(err)
+	}
+	if owners == 0 {
+		t.Fatal("missing-node fixture did not retain stale ownership evidence")
+	}
+}
+
 type catalogOwnershipFixture struct {
 	operatorID          uint
 	ownedPointID        string
@@ -192,7 +325,7 @@ func seedCatalogOwnershipRepository(t *testing.T, db *gorm.DB, id string, now ti
 	repository := model.BackupRepository{
 		ID: id, ProviderKind: string(backupasset.ProviderRestic), DisplayName: "shared-sensitive-repository",
 		VersionMode: string(backupasset.VersionNativeSnapshot), Status: string(backupasset.RepositoryOnline), CapabilityRevision: 1,
-		CapabilitiesJSON: `{}`, ImmutabilityLevel: string(backupasset.ImmutabilityBackendVersioned), CreatedAt: now, UpdatedAt: now,
+		CapabilitiesJSON: `{"list":true,"open_sequential":true}`, ImmutabilityLevel: string(backupasset.ImmutabilityBackendVersioned), CreatedAt: now, UpdatedAt: now,
 	}
 	if err := db.Create(&repository).Error; err != nil {
 		t.Fatal(err)
@@ -209,9 +342,17 @@ func seedCatalogOwnershipLink(
 	now time.Time,
 ) model.TaskRepositoryLink {
 	t.Helper()
+	var task model.Task
+	if err := db.Select("id", "name", "node_id").Where("id = ?", taskID).Take(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	var node model.Node
+	if err := db.Select("id", "name").Where("id = ?", task.NodeID).Take(&node).Error; err != nil {
+		t.Fatal(err)
+	}
 	link := model.TaskRepositoryLink{
-		ID: id, TaskID: &taskID, RepositoryID: repositoryID, TaskNameSnapshot: "sensitive-link-name",
-		NodeIDSnapshot: 999999, NodeNameSnapshot: "sensitive-node-name", PublicationMode: string(backupasset.PublicationNativeSnapshot),
+		ID: id, TaskID: &taskID, RepositoryID: repositoryID, TaskNameSnapshot: task.Name,
+		NodeIDSnapshot: task.NodeID, NodeNameSnapshot: node.Name, PublicationMode: string(backupasset.PublicationNativeSnapshot),
 		EncryptedLegacyLocator: "FAKE_PROVIDER_LOCATOR_FOR_TEST_ONLY", LinkedAt: now, UnlinkedAt: unlinkedAt,
 		CreatedAt: now, UpdatedAt: now,
 	}
@@ -240,8 +381,8 @@ func seedCatalogOwnershipPoint(
 	}
 	point := model.RecoveryPoint{
 		ID: fmt.Sprintf("%032x", seed), RepositoryID: repository.ID, ProducingTaskID: &task.ID, ProducingTaskRunID: &run.ID,
-		ProducingTaskNameSnapshot: "sensitive-point-task", ProducingNodeIDSnapshot: 999999,
-		ProducingNodeNameSnapshot: "sensitive-point-node", LineageJSON: lineage,
+		ProducingTaskNameSnapshot: link.TaskNameSnapshot, ProducingNodeIDSnapshot: link.NodeIDSnapshot,
+		ProducingNodeNameSnapshot: link.NodeNameSnapshot, LineageJSON: lineage,
 		EncryptedProviderLocator: "FAKE_PROVIDER_LOCATOR_FOR_TEST_ONLY", Semantics: string(semantics),
 		State: string(backupasset.RecoveryPointCommitted), CapturedAt: &now, CommittedAt: &now,
 		SourceFingerprint: fmt.Sprintf("%064x", seed), ManifestDigestAlgorithm: "sha256", ManifestDigest: strings.Repeat("b", 64),

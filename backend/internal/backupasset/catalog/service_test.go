@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -172,6 +173,204 @@ func TestCatalogServiceEntryCursorBindsActiveGenerationAndStableBinaryOrder(t *t
 		Limit: 1, Sort: EntrySortNameAsc, Cursor: first.NextCursor,
 	}); !errors.Is(err, ErrStaleCursor) {
 		t.Fatalf("generation-drift cursor error=%v", err)
+	}
+}
+
+func TestCatalogServiceEntryPageCarriesValidatedDirectoryContextAcrossEmptyAndCursorPages(t *testing.T) {
+	db, _ := openCatalogBehaviorSQLite(t)
+	now := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
+	fixture := seedCatalogOwnershipFixture(t, db, now)
+	generation := seedCatalogServiceGeneration(t, db, fixture.ownedPointID, 1, true, GenerationComplete, now)
+	parent := seedCatalogServiceEntry(t, db, generation, strings.Repeat("a", 64), nil, "parent", "parent", backupasset.CatalogEntryDirectory, 0, now)
+	current := seedCatalogServiceEntry(t, db, generation, strings.Repeat("b", 64), &parent.EntryID, "parent/current", "current", backupasset.CatalogEntryDirectory, 0, now)
+	for index, name := range []string{"one.txt", "two.txt"} {
+		seedCatalogServiceEntry(t, db, generation, strings.Repeat(string(rune('c'+index)), 64), &current.EntryID, "parent/current/"+name, name, backupasset.CatalogEntryFile, 1, now)
+	}
+	empty := seedCatalogServiceEntry(t, db, generation, strings.Repeat("e", 64), nil, "empty", "empty", backupasset.CatalogEntryDirectory, 0, now)
+	service := newCatalogServiceForTest(t, db, now)
+	scope := AuthorizationScope{Role: "operator", UserID: fixture.operatorID}
+
+	root, err := service.ListEntries(context.Background(), fixture.ownedPointID, scope, EntryListRequest{Limit: 10, Sort: EntrySortNameAsc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root.Directory.Current != nil || root.Directory.Parent != nil || len(root.Directory.Breadcrumb) != 0 {
+		t.Fatalf("root directory context=%+v", root.Directory)
+	}
+
+	first, err := service.ListEntries(context.Background(), fixture.ownedPointID, scope, EntryListRequest{
+		ParentEntryID: current.EntryID, Limit: 1, Sort: EntrySortNameAsc,
+	})
+	if err != nil || first.NextCursor == "" {
+		t.Fatalf("first page=%+v err=%v", first, err)
+	}
+	second, err := service.ListEntries(context.Background(), fixture.ownedPointID, scope, EntryListRequest{
+		ParentEntryID: current.EntryID, Limit: 1, Sort: EntrySortNameAsc, Cursor: first.NextCursor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := DirectoryContextDTO{
+		Current: &DirectoryEntryDTO{RecoveryPointID: fixture.ownedPointID, EntryID: current.EntryID, Name: current.Name},
+		Parent:  &DirectoryRefDTO{RecoveryPointID: fixture.ownedPointID, EntryID: parent.EntryID},
+		Breadcrumb: []BreadcrumbDTO{
+			{RecoveryPointID: fixture.ownedPointID, EntryID: parent.EntryID, Name: parent.Name},
+			{RecoveryPointID: fixture.ownedPointID, EntryID: current.EntryID, Name: current.Name},
+		},
+	}
+	if !reflect.DeepEqual(first.Directory, want) || !reflect.DeepEqual(second.Directory, want) {
+		t.Fatalf("directory context changed across cursor pages: first=%+v second=%+v want=%+v", first.Directory, second.Directory, want)
+	}
+	if err := db.Model(&model.CatalogEntry{}).
+		Where("generation_id = ? AND recovery_point_id = ? AND entry_id = ?", generation.ID, fixture.ownedPointID, current.EntryID).
+		Update("name", "renamed-current").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ListEntries(context.Background(), fixture.ownedPointID, scope, EntryListRequest{
+		ParentEntryID: current.EntryID, Limit: 1, Sort: EntrySortNameAsc, Cursor: first.NextCursor,
+	}); !errors.Is(err, ErrStaleCursor) {
+		t.Fatalf("directory-context drift cursor error=%v", err)
+	}
+
+	emptyPage, err := service.ListEntries(context.Background(), fixture.ownedPointID, scope, EntryListRequest{
+		ParentEntryID: empty.EntryID, Limit: 10, Sort: EntrySortNameAsc,
+	})
+	if err != nil || len(emptyPage.Items) != 0 || emptyPage.Directory.Current == nil || emptyPage.Directory.Current.EntryID != empty.EntryID ||
+		emptyPage.Directory.Parent != nil || len(emptyPage.Directory.Breadcrumb) != 1 {
+		t.Fatalf("empty directory page=%+v err=%v", emptyPage, err)
+	}
+}
+
+func TestCatalogServiceEntryCursorRejectsGenerationReplayBeforeMissingDirectoryLookup(t *testing.T) {
+	db, _ := openCatalogBehaviorSQLite(t)
+	now := time.Date(2026, 8, 28, 9, 10, 0, 0, time.UTC)
+	fixture := seedCatalogOwnershipFixture(t, db, now)
+	generation := seedCatalogServiceGeneration(t, db, fixture.ownedPointID, 1, true, GenerationComplete, now)
+	current := seedCatalogServiceEntry(t, db, generation, strings.Repeat("a", 64), nil,
+		"current", "current", backupasset.CatalogEntryDirectory, 0, now)
+	for index, name := range []string{"one.txt", "two.txt"} {
+		seedCatalogServiceEntry(t, db, generation, strings.Repeat(string(rune('b'+index)), 64), &current.EntryID,
+			"current/"+name, name, backupasset.CatalogEntryFile, 1, now)
+	}
+	service := newCatalogServiceForTest(t, db, now)
+	scope := AuthorizationScope{Role: "operator", UserID: fixture.operatorID}
+	first, err := service.ListEntries(context.Background(), fixture.ownedPointID, scope, EntryListRequest{
+		ParentEntryID: current.EntryID, Limit: 1, Sort: EntrySortNameAsc,
+	})
+	if err != nil || first.NextCursor == "" {
+		t.Fatalf("first directory page=%+v err=%v", first, err)
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.CatalogGeneration{}).Where("id = ?", generation.ID).
+			Updates(map[string]any{"state": GenerationSuperseded, "is_active": false}).Error; err != nil {
+			return err
+		}
+		newGeneration := model.CatalogGeneration{
+			ID: strings.Repeat("e", 32), RecoveryPointID: fixture.ownedPointID, Generation: 2,
+			State: string(GenerationComplete), IsActive: true, SourceFingerprint: fmt.Sprintf("%064x", 10),
+			WrittenDigest: strings.Repeat("e", 64), StartedAt: now.Add(time.Minute), FinishedAt: timePointer(now.Add(time.Minute)),
+			CreatedAt: now.Add(time.Minute), UpdatedAt: now.Add(time.Minute),
+		}
+		return tx.Create(&newGeneration).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.ListEntries(context.Background(), fixture.ownedPointID, scope, EntryListRequest{
+		ParentEntryID: current.EntryID, Limit: 1, Sort: EntrySortNameAsc, Cursor: first.NextCursor,
+	}); !errors.Is(err, ErrStaleCursor) {
+		t.Fatalf("non-root generation replay error=%v", err)
+	}
+	tampered := first.NextCursor + "x"
+	if _, err := service.ListEntries(context.Background(), fixture.ownedPointID, scope, EntryListRequest{
+		ParentEntryID: current.EntryID, Limit: 1, Sort: EntrySortNameAsc, Cursor: tampered,
+	}); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("tampered non-root cursor error=%v", err)
+	}
+}
+
+func TestCatalogServiceEntryPageRejectsMalformedDirectoryAncestry(t *testing.T) {
+	db, _ := openCatalogBehaviorSQLite(t)
+	now := time.Date(2026, 8, 28, 9, 15, 0, 0, time.UTC)
+	fixture := seedCatalogOwnershipFixture(t, db, now)
+	generation := seedCatalogServiceGeneration(t, db, fixture.ownedPointID, 1, true, GenerationComplete, now)
+	ancestor := seedCatalogServiceEntry(t, db, generation, strings.Repeat("a", 64), nil, "ancestor", "ancestor", backupasset.CatalogEntryDirectory, 0, now)
+	current := seedCatalogServiceEntry(t, db, generation, strings.Repeat("b", 64), &ancestor.EntryID, "ancestor/current", "current", backupasset.CatalogEntryDirectory, 0, now)
+	service := newCatalogServiceForTest(t, db, now)
+	scope := AuthorizationScope{Role: "operator", UserID: fixture.operatorID}
+
+	if err := db.Model(&model.CatalogEntry{}).
+		Where("generation_id = ? AND recovery_point_id = ? AND entry_id = ?", generation.ID, fixture.ownedPointID, ancestor.EntryID).
+		Update("entry_type", backupasset.CatalogEntryFile).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ListEntries(context.Background(), fixture.ownedPointID, scope, EntryListRequest{
+		ParentEntryID: current.EntryID, Sort: EntrySortNameAsc,
+	}); !errors.Is(err, ErrInvalidCatalogContract) {
+		t.Fatalf("non-directory ancestor error=%v", err)
+	}
+	if err := db.Model(&model.CatalogEntry{}).
+		Where("generation_id = ? AND recovery_point_id = ? AND entry_id = ?", generation.ID, fixture.ownedPointID, ancestor.EntryID).
+		Updates(map[string]any{"entry_type": backupasset.CatalogEntryDirectory, "parent_entry_id": current.EntryID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ListEntries(context.Background(), fixture.ownedPointID, scope, EntryListRequest{
+		ParentEntryID: current.EntryID, Sort: EntrySortNameAsc,
+	}); !errors.Is(err, ErrInvalidCatalogContract) {
+		t.Fatalf("cyclic ancestor error=%v", err)
+	}
+}
+
+func TestCatalogServiceEntryPagePreservesCurrentDirectoryStorageFailure(t *testing.T) {
+	db, _ := openCatalogBehaviorSQLite(t)
+	now := time.Date(2026, 8, 28, 9, 20, 0, 0, time.UTC)
+	fixture := seedCatalogOwnershipFixture(t, db, now)
+	generation := seedCatalogServiceGeneration(t, db, fixture.ownedPointID, 1, true, GenerationComplete, now)
+	current := seedCatalogServiceEntry(t, db, generation, strings.Repeat("a", 64), nil,
+		"current", "current", backupasset.CatalogEntryDirectory, 0, now)
+	service := newCatalogServiceForTest(t, db, now)
+	if err := db.Migrator().DropTable(&model.CatalogEntry{}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := service.ListEntries(context.Background(), fixture.ownedPointID,
+		AuthorizationScope{Role: "operator", UserID: fixture.operatorID},
+		EntryListRequest{ParentEntryID: current.EntryID, Sort: EntrySortNameAsc})
+	if err == nil || errors.Is(err, backupasset.ErrNotFound) {
+		t.Fatalf("directory storage failure must remain internal, got %v", err)
+	}
+}
+
+func TestCatalogServiceEntryPageAcceptsExactly256AncestorsAndRejects257(t *testing.T) {
+	db, _ := openCatalogBehaviorSQLite(t)
+	now := time.Date(2026, 8, 28, 9, 30, 0, 0, time.UTC)
+	fixture := seedCatalogOwnershipFixture(t, db, now)
+	generation := seedCatalogServiceGeneration(t, db, fixture.ownedPointID, 1, true, GenerationComplete, now)
+	var parentID *string
+	var current model.CatalogEntry
+	for index := 0; index < maxBreadcrumbDepth; index++ {
+		entryID := fmt.Sprintf("%064x", index+1)
+		current = seedCatalogServiceEntry(t, db, generation, entryID, parentID,
+			fmt.Sprintf("directory-%d", index), fmt.Sprintf("directory-%d", index),
+			backupasset.CatalogEntryDirectory, 0, now)
+		parentID = &current.EntryID
+	}
+	service := newCatalogServiceForTest(t, db, now)
+	scope := AuthorizationScope{Role: "operator", UserID: fixture.operatorID}
+
+	page, err := service.ListEntries(context.Background(), fixture.ownedPointID, scope, EntryListRequest{
+		ParentEntryID: current.EntryID, Sort: EntrySortNameAsc,
+	})
+	if err != nil || len(page.Directory.Breadcrumb) != maxBreadcrumbDepth {
+		t.Fatalf("256-level directory context=%+v err=%v", page.Directory, err)
+	}
+
+	tooDeep := seedCatalogServiceEntry(t, db, generation, strings.Repeat("f", 64), &current.EntryID,
+		"too-deep", "too-deep", backupasset.CatalogEntryDirectory, 0, now)
+	if _, err := service.ListEntries(context.Background(), fixture.ownedPointID, scope, EntryListRequest{
+		ParentEntryID: tooDeep.EntryID, Sort: EntrySortNameAsc,
+	}); !errors.Is(err, ErrInvalidCatalogContract) {
+		t.Fatalf("257-level directory error=%v", err)
 	}
 }
 

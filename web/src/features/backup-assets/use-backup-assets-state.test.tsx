@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/core";
 import type {
+  AssetRef,
   BackupAsset,
+  BackupAssetPage,
   BackupAssetFavorite,
   BackupAssetRecentAccess,
   BackupAssetTag,
@@ -15,6 +17,11 @@ import type {
   SavedAssetSearch,
 } from "@/types/domain";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import {
+  clearStepUpProof as clearStoredStepUpProof,
+  saveStepUpProof,
+  type StepUpAction,
+} from "@/lib/step-up-storage";
 import {
   defaultBackupAssetsRouteState,
   type BackupAssetsRouteState,
@@ -111,6 +118,16 @@ function deferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+function rootDirectoryContext() {
+  return { current: null, parent: null, breadcrumb: [] };
+}
+
+function directChildDirectoryContext(entryId: string, name = "nested") {
+  const ref = { recoveryPointId: recoveryPoint.id, entryId };
+  const current = { ref, name };
+  return { current, parent: null, breadcrumb: [current] };
 }
 
 describe("useBackupAssetsRequestCoordinator", () => {
@@ -375,6 +392,7 @@ function useBackupAssetsStateWithLayoutObservation(
 
 describe("useBackupAssetsState", () => {
   beforeEach(() => {
+    sessionStorage.clear();
     getBackupAssetMock.mockReset();
     addFavoriteMock.mockReset();
     assignTagMock.mockReset();
@@ -449,6 +467,7 @@ describe("useBackupAssetsState", () => {
     listBackupAssetsMock.mockResolvedValue({
       items: [{ status: "available", value: asset }],
       nextCursor: null,
+      directory: rootDirectoryContext(),
     });
 
     const route = {
@@ -476,6 +495,103 @@ describe("useBackupAssetsState", () => {
     );
   });
 
+  it("loads the exact opaque directory context again after a deep-link reload", async () => {
+    const directoryId = "d".repeat(64);
+    const directory = directChildDirectoryContext(directoryId, "empty-deep-link");
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    listBackupAssetsMock.mockResolvedValue({ items: [], nextCursor: null, directory });
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      parentEntryId: directoryId,
+    };
+
+    const first = renderHook(() => useBackupAssetsState({ token: "test-token", route }));
+    await waitFor(() => expect(first.result.current.state.result.directory).toEqual(directory));
+    first.unmount();
+    const reloaded = renderHook(() => useBackupAssetsState({ token: "test-token", route }));
+    await waitFor(() => expect(reloaded.result.current.state.result.directory).toEqual(directory));
+
+    expect(listBackupAssetsMock).toHaveBeenCalledTimes(2);
+    expect(listBackupAssetsMock).toHaveBeenLastCalledWith(
+      "test-token",
+      recoveryPoint.id,
+      expect.objectContaining({
+        parent: { recoveryPointId: recoveryPoint.id, entryId: directoryId },
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(JSON.stringify(reloaded.result.current.state.result)).not.toContain("/");
+  });
+
+  it("aborts rapid directory navigation and ignores the late page", async () => {
+    const firstId = "d".repeat(64);
+    const secondId = "e".repeat(64);
+    const firstPage = deferred<BackupAssetPage>();
+    const secondPage = deferred<BackupAssetPage>();
+    let firstSignal: AbortSignal | undefined;
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    listBackupAssetsMock.mockImplementation(
+      (_token: string, _recoveryPointId: string, options: { parent?: AssetRef; signal: AbortSignal }) => {
+        if (options.parent?.entryId === firstId) {
+          firstSignal = options.signal;
+          return firstPage.promise;
+        }
+        return secondPage.promise;
+      },
+    );
+    const firstRoute = {
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      parentEntryId: firstId,
+    };
+    const { result, rerender } = renderHook(
+      ({ route }) => useBackupAssetsState({ token: "test-token", route }),
+      { initialProps: { route: firstRoute } },
+    );
+    await waitFor(() => expect(listBackupAssetsMock).toHaveBeenCalledTimes(1));
+
+    rerender({ route: { ...firstRoute, parentEntryId: secondId } });
+    await waitFor(() => expect(listBackupAssetsMock).toHaveBeenCalledTimes(2));
+    expect(firstSignal?.aborted).toBe(true);
+
+    await act(async () => {
+      secondPage.resolve({
+        items: [],
+        nextCursor: null,
+        directory: directChildDirectoryContext(secondId, "second"),
+      });
+      await secondPage.promise;
+    });
+    await waitFor(() => expect(result.current.state.result.directory?.current?.ref.entryId).toBe(secondId));
+
+    await act(async () => {
+      firstPage.resolve({
+        items: [],
+        nextCursor: null,
+        directory: directChildDirectoryContext(firstId, "first"),
+      });
+      await firstPage.promise;
+    });
+    expect(result.current.state.result.directory?.current?.ref.entryId).toBe(secondId);
+  });
+
   it("does not reload directory results for entry, inspector, or layout-only route changes", async () => {
     listBackupRepositoriesMock.mockResolvedValue({
       items: [{ status: "available", value: repository }],
@@ -488,6 +604,7 @@ describe("useBackupAssetsState", () => {
     listBackupAssetsMock.mockResolvedValue({
       items: [{ status: "available", value: asset }],
       nextCursor: null,
+      directory: rootDirectoryContext(),
     });
     getBackupAssetMock.mockResolvedValue({ status: "available", value: asset });
 
@@ -554,7 +671,11 @@ describe("useBackupAssetsState", () => {
       items: [{ status: "available", value: partialRecoveryPoint }],
       nextCursor: null,
     });
-    listBackupAssetsMock.mockResolvedValue({ items: [], nextCursor: null });
+    listBackupAssetsMock.mockResolvedValue({
+      items: [],
+      nextCursor: null,
+      directory: rootDirectoryContext(),
+    });
     const route = {
       ...defaultBackupAssetsRouteState("data"),
       repositoryId: repository.id,
@@ -799,6 +920,7 @@ describe("useBackupAssetsState", () => {
     const directoryRequest = deferred<{
       items: Array<{ status: "available"; value: BackupAsset }>;
       nextCursor: null;
+      directory: ReturnType<typeof rootDirectoryContext>;
     }>();
     const entryRequest = deferred<{ status: "available"; value: BackupAsset }>();
     listBackupRepositoriesMock.mockResolvedValue({
@@ -825,6 +947,7 @@ describe("useBackupAssetsState", () => {
       directoryRequest.resolve({
         items: [{ status: "available", value: asset }],
         nextCursor: null,
+        directory: rootDirectoryContext(),
       });
       await directoryRequest.promise;
     });
@@ -847,6 +970,7 @@ describe("useBackupAssetsState", () => {
     const directoryRequest = deferred<{
       items: Array<{ status: "available"; value: BackupAsset }>;
       nextCursor: null;
+      directory: ReturnType<typeof rootDirectoryContext>;
     }>();
     const oldEntryRequest = deferred<{ status: "available"; value: BackupAsset }>();
     const nextEntryRequest = deferred<{ status: "available"; value: BackupAsset }>();
@@ -889,6 +1013,7 @@ describe("useBackupAssetsState", () => {
           { status: "available", value: nextAsset },
         ],
         nextCursor: null,
+        directory: rootDirectoryContext(),
       });
       await directoryRequest.promise;
     });
@@ -1107,8 +1232,16 @@ describe("useBackupAssetsState", () => {
       nextCursor: null,
     });
     listBackupAssetsMock
-      .mockResolvedValueOnce({ items: [{ status: "available", value: asset }], nextCursor: "cursor-1" })
-      .mockResolvedValueOnce({ items: [{ status: "available", value: secondAsset }], nextCursor: null });
+      .mockResolvedValueOnce({
+        items: [{ status: "available", value: asset }],
+        nextCursor: "cursor-1",
+        directory: rootDirectoryContext(),
+      })
+      .mockResolvedValueOnce({
+        items: [{ status: "available", value: secondAsset }],
+        nextCursor: null,
+        directory: rootDirectoryContext(),
+      });
     const route = {
       ...defaultBackupAssetsRouteState("data"),
       repositoryId: repository.id,
@@ -1143,9 +1276,17 @@ describe("useBackupAssetsState", () => {
       nextCursor: null,
     });
     listBackupAssetsMock
-      .mockResolvedValueOnce({ items: [{ status: "available", value: asset }], nextCursor: "stale-cursor" })
+      .mockResolvedValueOnce({
+        items: [{ status: "available", value: asset }],
+        nextCursor: "stale-cursor",
+        directory: rootDirectoryContext(),
+      })
       .mockRejectedValueOnce(new ApiError(409, "raw stale cursor", { code: 409 }))
-      .mockResolvedValueOnce({ items: [{ status: "available", value: refreshedAsset }], nextCursor: null });
+      .mockResolvedValueOnce({
+        items: [{ status: "available", value: refreshedAsset }],
+        nextCursor: null,
+        directory: rootDirectoryContext(),
+      });
     const route = {
       ...defaultBackupAssetsRouteState("data"),
       repositoryId: repository.id,
@@ -1685,7 +1826,11 @@ describe("useBackupAssetsState", () => {
       items: [{ status: "available", value: recoveryPoint }],
       nextCursor: null,
     });
-    listBackupAssetsMock.mockResolvedValue({ items: [{ status: "available", value: asset }], nextCursor: null });
+    listBackupAssetsMock.mockResolvedValue({
+      items: [{ status: "available", value: asset }],
+      nextCursor: null,
+      directory: rootDirectoryContext(),
+    });
     getBackupAssetMock.mockResolvedValue({ status: "available", value: asset });
     getRecoveryPointEvidenceMock.mockResolvedValue({ status: "available", value: evidence });
     const route = {
@@ -2011,8 +2156,11 @@ describe("useBackupAssetsState", () => {
     }));
   });
 
-  it("keeps the current Admin proof when the proof retry needs a manual retry", async () => {
-    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
+  it("retains the central Admin proof when the proof retry needs a manual retry", async () => {
+    const ensureStepUpProof = vi.fn().mockImplementation(async () => {
+      saveStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, "proof-secret", Date.now() + 45 * 60_000);
+      return "proof-secret";
+    });
     prepareSelectedAssetRequests(asset);
     issueTicketMock
       .mockRejectedValueOnce(secretRevealRequiredError())
@@ -2220,8 +2368,8 @@ describe("useBackupAssetsState", () => {
     act(() => result.current.actions.loadExactPreview(asset));
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
     expect(ensureStepUpProof).toHaveBeenCalledWith(STEP_UP_ACTIONS.assetSecretReveal, {
-      persist: false,
-      reuseCached: false,
+      persist: true,
+      reuseCached: true,
     });
     expect(issueTicketMock).toHaveBeenCalledTimes(2);
     expect(issueTicketMock.mock.calls[1][2]).toEqual(
@@ -2233,13 +2381,17 @@ describe("useBackupAssetsState", () => {
     expect(result.current.content.value).toEqual(previewTicket);
   });
 
-  it("reuses the in-session secret-reveal proof on preview renew", async () => {
-    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
-    const previewTicket = buildContentTicket("escaped_text");
+  it("reuses the central in-session secret-reveal proof on preview renew", async () => {
+    const ensureStepUpProof = vi.fn().mockImplementation(async () => {
+      saveStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, "proof-secret", Date.now() + 45 * 60_000);
+      return "proof-secret";
+    });
+    const previewTicket = buildContentTicket("escaped_text", { classification: "secret" });
     listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
     issueTicketMock
       .mockRejectedValueOnce(secretRevealRequiredError())
-      .mockResolvedValue({ status: "available", value: previewTicket });
+      .mockResolvedValueOnce({ status: "available", value: previewTicket })
+      .mockResolvedValueOnce({ status: "available", value: previewTicket });
     const { result } = renderHook(() =>
       useBackupAssetsState({
         token: "test-token",
@@ -2301,8 +2453,11 @@ describe("useBackupAssetsState", () => {
     );
   });
 
-  it("clears secret-reveal proof when the source owner changes", async () => {
-    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
+  it("reuses the central secret-reveal proof when the source owner changes", async () => {
+    const ensureStepUpProof = vi.fn().mockImplementation(async () => {
+      saveStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, "proof-secret", Date.now() + 45 * 60_000);
+      return "proof-secret";
+    });
     const secretTicket = buildContentTicket("plain_text", { classification: "secret" });
     prepareSelectedAssetRequests(asset);
     issueTicketMock
@@ -2333,10 +2488,17 @@ describe("useBackupAssetsState", () => {
       previewIntent: "safePreviewV1",
       stepUpProof: "proof-secret",
     }));
+    expect(ensureStepUpProof).not.toHaveBeenCalledWith(
+      STEP_UP_ACTIONS.assetSecretReveal,
+      expect.objectContaining({ reuseCached: false }),
+    );
   });
 
-  it("re-prompts secret-reveal after the selected asset changes", async () => {
-    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
+  it("reuses the central secret-reveal proof after the selected version changes", async () => {
+    const ensureStepUpProof = vi.fn().mockImplementation(async () => {
+      saveStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, "proof-secret", Date.now() + 45 * 60_000);
+      return "proof-secret";
+    });
     const previewTicket = buildContentTicket("escaped_text");
     const nextAsset: BackupAsset = {
       ...asset,
@@ -2368,15 +2530,28 @@ describe("useBackupAssetsState", () => {
     expect(issueTicketMock.mock.calls[3][2]).toEqual(
       expect.objectContaining({ action: "preview", stepUpProof: "proof-secret" })
     );
+    expect(ensureStepUpProof).not.toHaveBeenCalledWith(
+      STEP_UP_ACTIONS.assetSecretReveal,
+      expect.objectContaining({ reuseCached: false }),
+    );
   });
 
-  it("does not re-prompt TOTP on preview renew when the in-session proof is rejected", async () => {
-    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
-    const previewTicket = buildContentTicket("escaped_text");
+  it("clears a rejected cached proof and permits only one fresh Admin prompt and retry", async () => {
+    saveStepUpProof(
+      STEP_UP_ACTIONS.assetSecretReveal,
+      "cached-proof-secret",
+      Date.now() + 45 * 60 * 1000,
+    );
+    const ensureStepUpProof = vi.fn()
+      .mockResolvedValueOnce("cached-proof-secret")
+      .mockResolvedValueOnce("fresh-proof-secret");
+    const clearStepUpProof = vi.fn((action?: StepUpAction) => {
+      clearStoredStepUpProof(action);
+    });
     listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
     issueTicketMock
       .mockRejectedValueOnce(secretRevealRequiredError())
-      .mockResolvedValueOnce({ status: "available", value: previewTicket })
+      .mockRejectedValueOnce(secretRevealRequiredError())
       .mockRejectedValueOnce(secretRevealRequiredError());
     const { result } = renderHook(() =>
       useBackupAssetsState({
@@ -2388,17 +2563,29 @@ describe("useBackupAssetsState", () => {
           entryId: asset.ref.entryId,
         },
         ensureStepUpProof,
+        clearStepUpProof,
       })
     );
 
     act(() => result.current.actions.loadExactPreview(asset));
-    await waitFor(() => expect(result.current.content.status).toBe("ready"));
-    expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
-
-    act(() => result.current.actions.renewPreview());
     await waitFor(() => expect(result.current.content.status).toBe("blocked"));
-    expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
+    expect(ensureStepUpProof).toHaveBeenCalledTimes(2);
+    expect(ensureStepUpProof).toHaveBeenNthCalledWith(1, STEP_UP_ACTIONS.assetSecretReveal, {
+      persist: true,
+      reuseCached: true,
+    });
+    expect(ensureStepUpProof).toHaveBeenNthCalledWith(2, STEP_UP_ACTIONS.assetSecretReveal, {
+      persist: true,
+      reuseCached: false,
+    });
     expect(issueTicketMock).toHaveBeenCalledTimes(3);
+    expect(issueTicketMock.mock.calls[1]?.[2]).toEqual(expect.objectContaining({
+      stepUpProof: "cached-proof-secret",
+    }));
+    expect(issueTicketMock.mock.calls[2]?.[2]).toEqual(expect.objectContaining({
+      stepUpProof: "fresh-proof-secret",
+    }));
+    expect(clearStepUpProof).toHaveBeenCalledTimes(2);
     expect(result.current.content.error?.code).toBe("secret_reveal_required");
   });
 
@@ -2427,7 +2614,10 @@ describe("useBackupAssetsState", () => {
   );
 
   it("forwards the same secret-reveal proof on later search pages and saved-search reload", async () => {
-    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-secret");
+    const ensureStepUpProof = vi.fn().mockImplementation(async () => {
+      saveStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, "proof-secret", Date.now() + 45 * 60_000);
+      return "proof-secret";
+    });
     const previewTicket = buildContentTicket("escaped_text");
     listBackupRepositoriesMock.mockResolvedValue({
       items: [{ status: "available", value: repository }],
@@ -2501,6 +2691,88 @@ describe("useBackupAssetsState", () => {
     );
   });
 
+  it("clears the central secret-reveal proof after a typed search rejection", async () => {
+    saveStepUpProof(
+      STEP_UP_ACTIONS.assetSecretReveal,
+      "rejected-search-proof",
+      Date.now() + 45 * 60_000,
+    );
+    listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    searchMock.mockRejectedValue(secretRevealRequiredError());
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      types: ["file" as const],
+      sort: "relevance" as const,
+      direction: "desc" as const,
+    };
+
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "admin",
+      route,
+    }));
+
+    await waitFor(() => expect(result.current.state.result.status).toBe("failed"));
+    expect(searchMock).toHaveBeenCalledWith(
+      "test-token",
+      expect.objectContaining({ secretRevealProof: "rejected-search-proof" }),
+    );
+    expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toBeNull();
+  });
+
+  it("reuses the central secret-reveal proof after a file-center remount", async () => {
+    saveStepUpProof(
+      STEP_UP_ACTIONS.assetSecretReveal,
+      "proof-after-refresh",
+      Date.now() + 45 * 60_000,
+    );
+    const ensureStepUpProof = vi.fn().mockResolvedValue("proof-after-refresh");
+    const previewTicket = buildContentTicket("escaped_text");
+    listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
+    issueTicketMock
+      .mockRejectedValueOnce(secretRevealRequiredError())
+      .mockResolvedValueOnce({ status: "available", value: previewTicket })
+      .mockRejectedValueOnce(secretRevealRequiredError())
+      .mockResolvedValueOnce({ status: "available", value: previewTicket });
+    const options = {
+      token: "test-token",
+      role: "admin" as const,
+      route: defaultBackupAssetsRouteState("data"),
+      ensureStepUpProof,
+    };
+
+    const firstMount = renderHook(() => useBackupAssetsState(options));
+    act(() => firstMount.result.current.actions.loadExactPreview(asset));
+    await waitFor(() => expect(firstMount.result.current.content.status).toBe("ready"));
+    firstMount.unmount();
+
+    const secondMount = renderHook(() => useBackupAssetsState(options));
+    act(() => secondMount.result.current.actions.loadExactPreview({
+      ...asset,
+      ref: { ...asset.ref, entryId: "f".repeat(64) },
+    }));
+    await waitFor(() => expect(secondMount.result.current.content.status).toBe("ready"));
+
+    expect(ensureStepUpProof).toHaveBeenCalledTimes(2);
+    expect(ensureStepUpProof).not.toHaveBeenCalledWith(
+      STEP_UP_ACTIONS.assetSecretReveal,
+      expect.objectContaining({ reuseCached: false }),
+    );
+    expect(issueTicketMock.mock.calls[1]?.[2]).toEqual(expect.objectContaining({
+      stepUpProof: "proof-after-refresh",
+    }));
+    expect(issueTicketMock.mock.calls[3]?.[2]).toEqual(expect.objectContaining({
+      stepUpProof: "proof-after-refresh",
+    }));
+  });
+
   it("keeps retainedVersionCount on search and saved-search result rows", async () => {
     listBackupRepositoriesMock.mockResolvedValue({
       items: [{ status: "available", value: repository }],
@@ -2563,6 +2835,7 @@ describe("useBackupAssetsState", () => {
         { status: "available", value: nextAsset },
       ],
       nextCursor: null,
+      directory: rootDirectoryContext(),
     });
     getBackupAssetMock.mockImplementation(
       (_token: string, ref: BackupAsset["ref"]) =>
@@ -2758,6 +3031,7 @@ function prepareSelectedAssetRequests(...assets: BackupAsset[]): void {
   listBackupAssetsMock.mockResolvedValue({
     items: assets.map((value) => ({ status: "available" as const, value })),
     nextCursor: null,
+    directory: rootDirectoryContext(),
   });
   getBackupAssetMock.mockImplementation((_token: string, ref: BackupAsset["ref"]) => {
     const value = assets.find((candidate) => candidate.ref.entryId === ref.entryId);

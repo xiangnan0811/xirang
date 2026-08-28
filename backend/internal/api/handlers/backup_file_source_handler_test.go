@@ -29,6 +29,9 @@ type backupFileSourceServiceSpy struct {
 	recoveryPointID string
 	scope           catalog.AuthorizationScope
 	request         catalog.FileSourcePageRequest
+	nodePage        catalog.FileSourceNodePage
+	setPage         catalog.FileSourceBackupSetPage
+	versionPage     catalog.FileSourceVersionPage
 	resolution      catalog.FileSourceRecoveryPointDTO
 	err             error
 }
@@ -45,19 +48,28 @@ func (spy *backupFileSourceAuditSpy) Write(_ context.Context, input backupasset.
 func (spy *backupFileSourceServiceSpy) ListFileSourceNodes(_ context.Context, scope catalog.AuthorizationScope, request catalog.FileSourcePageRequest) (catalog.FileSourceNodePage, error) {
 	spy.calls++
 	spy.scope, spy.request = scope, request
-	return catalog.FileSourceNodePage{Items: []catalog.FileSourceNodeDTO{}}, spy.err
+	if spy.nodePage.Items == nil {
+		spy.nodePage.Items = []catalog.FileSourceNodeDTO{}
+	}
+	return spy.nodePage, spy.err
 }
 
 func (spy *backupFileSourceServiceSpy) ListFileSourceBackupSets(_ context.Context, nodeID uint, scope catalog.AuthorizationScope, request catalog.FileSourcePageRequest) (catalog.FileSourceBackupSetPage, error) {
 	spy.calls++
 	spy.nodeID, spy.scope, spy.request = nodeID, scope, request
-	return catalog.FileSourceBackupSetPage{Items: []catalog.FileSourceBackupSetDTO{}}, spy.err
+	if spy.setPage.Items == nil {
+		spy.setPage.Items = []catalog.FileSourceBackupSetDTO{}
+	}
+	return spy.setPage, spy.err
 }
 
 func (spy *backupFileSourceServiceSpy) ListFileSourceVersions(_ context.Context, backupSetID string, scope catalog.AuthorizationScope, request catalog.FileSourcePageRequest) (catalog.FileSourceVersionPage, error) {
 	spy.calls++
 	spy.backupSetID, spy.scope, spy.request = backupSetID, scope, request
-	return catalog.FileSourceVersionPage{Items: []catalog.FileSourceVersionDTO{}}, spy.err
+	if spy.versionPage.Items == nil {
+		spy.versionPage.Items = []catalog.FileSourceVersionDTO{}
+	}
+	return spy.versionPage, spy.err
 }
 
 func (spy *backupFileSourceServiceSpy) ResolveFileSourceRecoveryPoint(_ context.Context, recoveryPointID string, scope catalog.AuthorizationScope) (catalog.FileSourceRecoveryPointDTO, error) {
@@ -68,7 +80,10 @@ func (spy *backupFileSourceServiceSpy) ResolveFileSourceRecoveryPoint(_ context.
 
 func TestBackupFileSourceHandlerListsNodesWithStandardEnvelope(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	service := &backupFileSourceServiceSpy{}
+	service := &backupFileSourceServiceSpy{nodePage: catalog.FileSourceNodePage{Items: []catalog.FileSourceNodeDTO{{
+		NodeID: 7, DisplayName: "retained-node", BackupSetCount: 2, RetainedVersionCount: 3,
+		CatalogCoverage: catalog.CoveragePartial, BrowseState: catalog.FileSourceBrowseStateIndexing,
+	}}}}
 	handler := NewBackupFileSourceHandler(service, nil)
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -85,6 +100,10 @@ func TestBackupFileSourceHandlerListsNodesWithStandardEnvelope(t *testing.T) {
 	}
 	if got := response.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
 		t.Fatalf("content type=%q", got)
+	}
+	if body := response.Body.String(); !strings.Contains(body, `"retained_version_count":3`) || !strings.Contains(body, `"browse_state":"indexing"`) ||
+		strings.Contains(body, "unavailable_reason") || strings.Contains(strings.ToLower(body), "provider") {
+		t.Fatalf("unsafe or incomplete state projection: %s", body)
 	}
 }
 
@@ -109,7 +128,11 @@ func TestBackupFileSourceHandlerListsNodeBackupSets(t *testing.T) {
 
 func TestBackupFileSourceHandlerListsBackupSetVersions(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	service := &backupFileSourceServiceSpy{}
+	service := &backupFileSourceServiceSpy{versionPage: catalog.FileSourceVersionPage{Items: []catalog.FileSourceVersionDTO{{
+		RecoveryPointID: strings.Repeat("b", 32), RepositoryID: strings.Repeat("c", 32),
+		BrowseState:       catalog.FileSourceBrowseStateUnavailable,
+		UnavailableReason: &backupasset.CapabilityReason{Code: backupasset.CapabilityRepositoryOffline},
+	}}}}
 	handler := NewBackupFileSourceHandler(service, nil)
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -125,6 +148,10 @@ func TestBackupFileSourceHandlerListsBackupSetVersions(t *testing.T) {
 		service.scope != (catalog.AuthorizationScope{Role: "operator", UserID: 79}) || service.request.Cursor != "next" {
 		t.Fatalf("status=%d body=%s calls=%d set=%q scope=%+v request=%+v", response.Code, response.Body.String(), service.calls, service.backupSetID, service.scope, service.request)
 	}
+	if body := response.Body.String(); !strings.Contains(body, `"browse_state":"unavailable"`) ||
+		!strings.Contains(body, `"unavailable_reason":{"code":"repository_offline"}`) || strings.Contains(body, `"params"`) {
+		t.Fatalf("unavailable state did not stay parameter-free: %s", body)
+	}
 }
 
 func TestBackupFileSourceHandlerResolvesExactRecoveryPointSource(t *testing.T) {
@@ -133,6 +160,7 @@ func TestBackupFileSourceHandlerResolvesExactRecoveryPointSource(t *testing.T) {
 	service := &backupFileSourceServiceSpy{resolution: catalog.FileSourceRecoveryPointDTO{
 		NodeID: 7, BackupSetID: strings.Repeat("a", 32), RecoveryPointID: pointID,
 		RepositoryID: strings.Repeat("c", 32), ProducingTaskID: uintPointer(9),
+		BrowseState: catalog.FileSourceBrowseStateBrowsable,
 	}}
 	audit := &backupFileSourceAuditSpy{}
 	handler := NewBackupFileSourceHandler(service, audit)
@@ -156,6 +184,9 @@ func TestBackupFileSourceHandlerResolvesExactRecoveryPointSource(t *testing.T) {
 		if strings.Contains(strings.ToLower(response.Body.String()), forbidden) {
 			t.Fatalf("response leaked %q: %s", forbidden, response.Body.String())
 		}
+	}
+	if !strings.Contains(response.Body.String(), `"browse_state":"browsable"`) || strings.Contains(response.Body.String(), "unavailable_reason") {
+		t.Fatalf("resolver omitted or contradicted browse state: %s", response.Body.String())
 	}
 }
 

@@ -2,6 +2,9 @@ package catalog
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -74,8 +77,9 @@ type EntryListRequest struct {
 }
 
 type EntryPage struct {
-	Items      []EntryDTO `json:"items"`
-	NextCursor string     `json:"next_cursor,omitempty"`
+	Items      []EntryDTO          `json:"items"`
+	NextCursor string              `json:"next_cursor,omitempty"`
+	Directory  DirectoryContextDTO `json:"directory" binding:"required"`
 }
 
 type recoveryPointSortControl struct {
@@ -323,27 +327,47 @@ func (service *Service) ListEntries(
 	if !validEntrySort(request.Sort) {
 		return EntryPage{}, fmt.Errorf("%w: entry sort", ErrInvalidCatalogContract)
 	}
-	if request.ParentEntryID != "" {
-		if backupasset.ValidateAssetRef(backupasset.AssetRef{RecoveryPointID: point.ID, EntryID: request.ParentEntryID}) != nil {
-			return EntryPage{}, fmt.Errorf("%w: parent entry", backupasset.ErrNotFound)
-		}
-		parent, parentErr := service.loadCatalogEntry(ctx, generation.ID, point.ID, request.ParentEntryID)
-		if parentErr != nil || parent.EntryType != string(backupasset.CatalogEntryDirectory) {
-			return EntryPage{}, fmt.Errorf("%w: parent entry", backupasset.ErrNotFound)
-		}
-	}
 	cursorScope := CursorScope{
 		Endpoint: CursorEndpointEntries, Direction: CursorForward, UserID: scope.UserID, Role: scope.Role,
 		Sort: string(request.Sort), RepositoryID: repository.ID, RecoveryPointID: point.ID,
 		GenerationID: generation.ID, ParentEntryID: request.ParentEntryID,
 	}
-	var anchor *model.CatalogEntry
+	var decodedCursor *CursorScope
 	if strings.TrimSpace(request.Cursor) != "" {
-		decoded, decodeErr := service.cursor.Decode(ctx, request.Cursor, cursorScope)
+		decoded, decodeErr := service.cursor.decodeAuthenticated(ctx, request.Cursor)
 		if decodeErr != nil {
 			return EntryPage{}, decodeErr
 		}
-		loaded, loadErr := service.loadCatalogEntry(ctx, generation.ID, point.ID, decoded.Anchor.EntryID)
+		preDirectoryScope := cursorScope
+		preDirectoryScope.ProjectionDigest = decoded.ProjectionDigest
+		if !cursorClaimsMatch(cursorClaims(decoded), cursorClaims(preDirectoryScope)) {
+			return EntryPage{}, fmt.Errorf("%w: entry cursor scope changed", ErrStaleCursor)
+		}
+		decodedCursor = &decoded
+	}
+	directory, err := service.loadDirectoryContext(ctx, generation.ID, point.ID, request.ParentEntryID)
+	if err != nil {
+		if decodedCursor != nil && errors.Is(err, backupasset.ErrNotFound) {
+			return EntryPage{}, fmt.Errorf("%w: entry cursor directory changed", ErrStaleCursor)
+		}
+		return EntryPage{}, err
+	}
+	if request.ParentEntryID != "" {
+		if backupasset.ValidateAssetRef(backupasset.AssetRef{RecoveryPointID: point.ID, EntryID: request.ParentEntryID}) != nil {
+			return EntryPage{}, fmt.Errorf("%w: parent entry", backupasset.ErrNotFound)
+		}
+	}
+	directoryDigest, err := catalogDirectoryDigest(directory)
+	if err != nil {
+		return EntryPage{}, err
+	}
+	cursorScope.ProjectionDigest = directoryDigest
+	var anchor *model.CatalogEntry
+	if decodedCursor != nil {
+		if !cursorClaimsMatch(cursorClaims(*decodedCursor), cursorClaims(cursorScope)) {
+			return EntryPage{}, fmt.Errorf("%w: entry cursor directory changed", ErrStaleCursor)
+		}
+		loaded, loadErr := service.loadCatalogEntry(ctx, generation.ID, point.ID, decodedCursor.Anchor.EntryID)
 		if loadErr != nil || !sameOptionalString(loaded.ParentEntryID, request.ParentEntryID) {
 			return EntryPage{}, fmt.Errorf("%w: entry cursor anchor", ErrStaleCursor)
 		}
@@ -364,7 +388,7 @@ func (service *Service) ListEntries(
 	if hasMore {
 		rows = rows[:limit]
 	}
-	page := EntryPage{Items: make([]EntryDTO, 0, len(rows))}
+	page := EntryPage{Items: make([]EntryDTO, 0, len(rows)), Directory: directory}
 	for _, row := range rows {
 		dto, mapErr := catalogEntryDTO(row, false)
 		if mapErr != nil {
@@ -806,7 +830,10 @@ func (service *Service) loadBreadcrumb(ctx context.Context, generationID, pointI
 		seen[*parentID] = struct{}{}
 		entry, err := service.loadCatalogEntry(ctx, generationID, pointID, *parentID)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: Catalog breadcrumb ancestor", ErrInvalidCatalogContract)
+		}
+		if entry.EntryType != string(backupasset.CatalogEntryDirectory) {
+			return nil, fmt.Errorf("%w: Catalog breadcrumb ancestor type", ErrInvalidCatalogContract)
 		}
 		reversed = append(reversed, BreadcrumbDTO{RecoveryPointID: pointID, EntryID: entry.EntryID, Name: entry.Name})
 		parentID = entry.ParentEntryID
@@ -816,6 +843,53 @@ func (service *Service) loadBreadcrumb(ctx context.Context, generationID, pointI
 		result[len(reversed)-1-index] = reversed[index]
 	}
 	return result, nil
+}
+
+func (service *Service) loadDirectoryContext(ctx context.Context, generationID, pointID, currentEntryID string) (DirectoryContextDTO, error) {
+	directory := DirectoryContextDTO{Breadcrumb: []BreadcrumbDTO{}}
+	if currentEntryID == "" {
+		return directory, nil
+	}
+	if backupasset.ValidateAssetRef(backupasset.AssetRef{RecoveryPointID: pointID, EntryID: currentEntryID}) != nil {
+		return DirectoryContextDTO{}, fmt.Errorf("%w: parent entry", backupasset.ErrNotFound)
+	}
+	current, err := service.loadCatalogEntry(ctx, generationID, pointID, currentEntryID)
+	if err != nil {
+		if errors.Is(err, backupasset.ErrNotFound) {
+			return DirectoryContextDTO{}, fmt.Errorf("%w: parent entry", backupasset.ErrNotFound)
+		}
+		return DirectoryContextDTO{}, err
+	}
+	if current.EntryType != string(backupasset.CatalogEntryDirectory) {
+		return DirectoryContextDTO{}, fmt.Errorf("%w: parent entry", backupasset.ErrNotFound)
+	}
+	directory.Current = &DirectoryEntryDTO{RecoveryPointID: pointID, EntryID: current.EntryID, Name: current.Name}
+	directory.Breadcrumb, err = service.loadBreadcrumb(ctx, generationID, pointID, &current.EntryID)
+	if err != nil {
+		return DirectoryContextDTO{}, err
+	}
+	if current.ParentEntryID != nil {
+		if len(directory.Breadcrumb) < 2 || directory.Breadcrumb[len(directory.Breadcrumb)-2].EntryID != *current.ParentEntryID {
+			return DirectoryContextDTO{}, fmt.Errorf("%w: Catalog directory parent contradiction", ErrInvalidCatalogContract)
+		}
+		directory.Parent = &DirectoryRefDTO{RecoveryPointID: pointID, EntryID: *current.ParentEntryID}
+	}
+	if err := directory.Validate(pointID, currentEntryID); err != nil {
+		return DirectoryContextDTO{}, err
+	}
+	return directory, nil
+}
+
+func catalogDirectoryDigest(directory DirectoryContextDTO) (string, error) {
+	payload, err := json.Marshal(directory)
+	if err != nil {
+		return "", fmt.Errorf("%w: marshal directory context", ErrInvalidCatalogContract)
+	}
+	digest := sha256.New()
+	_, _ = digest.Write([]byte("xirang.catalog.directory-context.v1"))
+	_, _ = digest.Write([]byte{0})
+	_, _ = digest.Write(payload)
+	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 func catalogEntryDTO(entry model.CatalogEntry, includeBreadcrumb bool) (EntryDTO, error) {

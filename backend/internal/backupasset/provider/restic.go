@@ -625,11 +625,25 @@ func (handle *boundedReadHandle) Read(buffer []byte) (int, error) {
 }
 
 func (handle *boundedReadHandle) Close() error {
+	return handle.finish(false)
+}
+
+func (handle *boundedReadHandle) ClosePrefix() error {
+	return handle.finish(true)
+}
+
+func (handle *boundedReadHandle) finish(prefix bool) error {
 	handle.closeOnce.Do(func() {
 		handle.mu.Lock()
 		handle.closed = true
+		closePrefix := prefix && handle.remaining > 0 && handle.limitErr == nil && !handle.reachedEOF
 		handle.mu.Unlock()
-		closeErr := handle.underlying.Close()
+		var closeErr error
+		if prefixCloser, ok := handle.underlying.(interface{ ClosePrefix() error }); ok && closePrefix {
+			closeErr = prefixCloser.ClosePrefix()
+		} else {
+			closeErr = handle.underlying.Close()
+		}
 		handle.mu.Lock()
 		for handle.readInFlight {
 			handle.readDrained.Wait()

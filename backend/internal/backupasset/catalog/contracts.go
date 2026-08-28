@@ -279,9 +279,69 @@ func (generation GenerationDTO) validate() error {
 }
 
 type BreadcrumbDTO struct {
-	RecoveryPointID string `json:"recovery_point_id"`
-	EntryID         string `json:"entry_id"`
-	Name            string `json:"name"`
+	RecoveryPointID string `json:"recovery_point_id" binding:"required"`
+	EntryID         string `json:"entry_id" binding:"required"`
+	Name            string `json:"name" binding:"required"`
+}
+
+type DirectoryEntryDTO struct {
+	RecoveryPointID string `json:"recovery_point_id" binding:"required"`
+	EntryID         string `json:"entry_id" binding:"required"`
+	Name            string `json:"name" binding:"required"`
+}
+
+type DirectoryRefDTO struct {
+	RecoveryPointID string `json:"recovery_point_id" binding:"required"`
+	EntryID         string `json:"entry_id" binding:"required"`
+}
+
+type DirectoryContextDTO struct {
+	Current    *DirectoryEntryDTO `json:"current" binding:"required" extensions:"x-nullable"`
+	Parent     *DirectoryRefDTO   `json:"parent" binding:"required" extensions:"x-nullable"`
+	Breadcrumb []BreadcrumbDTO    `json:"breadcrumb" binding:"required"`
+}
+
+func (directory DirectoryContextDTO) Validate(pointID, currentEntryID string) error {
+	if currentEntryID == "" {
+		if directory.Current != nil || directory.Parent != nil || len(directory.Breadcrumb) != 0 {
+			return fmt.Errorf("%w: root directory context", ErrInvalidCatalogContract)
+		}
+		return nil
+	}
+	if directory.Current == nil || directory.Current.EntryID != currentEntryID ||
+		backupasset.ValidateAssetRef(backupasset.AssetRef{RecoveryPointID: directory.Current.RecoveryPointID, EntryID: directory.Current.EntryID}) != nil ||
+		directory.Current.RecoveryPointID != pointID || strings.TrimSpace(directory.Current.Name) == "" ||
+		strings.ContainsRune(directory.Current.Name, '\x00') || len(directory.Current.Name) > 4096 ||
+		len(directory.Breadcrumb) == 0 || len(directory.Breadcrumb) > maxBreadcrumbDepth {
+		return fmt.Errorf("%w: current directory context", ErrInvalidCatalogContract)
+	}
+	seen := make(map[string]struct{}, len(directory.Breadcrumb))
+	for _, crumb := range directory.Breadcrumb {
+		if backupasset.ValidateAssetRef(backupasset.AssetRef{RecoveryPointID: crumb.RecoveryPointID, EntryID: crumb.EntryID}) != nil ||
+			crumb.RecoveryPointID != pointID || strings.TrimSpace(crumb.Name) == "" || strings.ContainsRune(crumb.Name, '\x00') || len(crumb.Name) > 4096 {
+			return fmt.Errorf("%w: directory breadcrumb", ErrInvalidCatalogContract)
+		}
+		if _, exists := seen[crumb.EntryID]; exists {
+			return fmt.Errorf("%w: directory breadcrumb cycle", ErrInvalidCatalogContract)
+		}
+		seen[crumb.EntryID] = struct{}{}
+	}
+	last := directory.Breadcrumb[len(directory.Breadcrumb)-1]
+	if last.RecoveryPointID != directory.Current.RecoveryPointID || last.EntryID != directory.Current.EntryID || last.Name != directory.Current.Name {
+		return fmt.Errorf("%w: directory breadcrumb current contradiction", ErrInvalidCatalogContract)
+	}
+	if len(directory.Breadcrumb) == 1 {
+		if directory.Parent != nil {
+			return fmt.Errorf("%w: root-child parent contradiction", ErrInvalidCatalogContract)
+		}
+		return nil
+	}
+	wantParent := directory.Breadcrumb[len(directory.Breadcrumb)-2]
+	if directory.Parent == nil || directory.Parent.RecoveryPointID != pointID || directory.Parent.EntryID != wantParent.EntryID ||
+		backupasset.ValidateAssetRef(backupasset.AssetRef{RecoveryPointID: directory.Parent.RecoveryPointID, EntryID: directory.Parent.EntryID}) != nil {
+		return fmt.Errorf("%w: directory parent contradiction", ErrInvalidCatalogContract)
+	}
+	return nil
 }
 
 type EntryVersionDTO struct {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
+
+	"gorm.io/gorm"
 )
 
 func TestProcessVerifyingPointOutcomeSelectsImmutableSameTaskPreviousCommittedPoint(t *testing.T) {
@@ -390,6 +393,106 @@ func TestListCandidatesSkipsLiveLeaseWhileReadinessIncludesEveryUnresolvedPoint(
 	unresolved, err = fixture.service.HasUnresolvedPublication(context.Background())
 	if err != nil || unresolved {
 		t.Fatalf("terminal unresolved=%v err=%v", unresolved, err)
+	}
+}
+
+func TestListCandidatesUsesFixedDatabaseQueriesForBatch(t *testing.T) {
+	fixture := newPublicationFixture(t, true, publication.AdmissionManaged)
+	fixture.connectExactResticBinding(t)
+	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := resticAttemptForExecution(t, execution)
+	if err := fixture.db.Model(&model.RecoveryPointLease{}).Where("id = ?", attempt.Fence.LeaseID).Updates(map[string]any{
+		"status": backupasset.LeaseReleased, "released_at": fixture.now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	var point model.RecoveryPoint
+	if err := fixture.db.First(&point, "id = ?", attempt.RecoveryPointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, digit := range []string{"1", "2", "3", "4"} {
+		clone := point
+		clone.ID = strings.Repeat(digit, 32)
+		clone.ProducingTaskRunID = nil
+		if err := fixture.db.Create(&clone).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	queryCount := 0
+	const callbackName = "phase10:count-publication-candidate-queries"
+	if err := fixture.db.Callback().Query().Before("gorm:query").Register(callbackName, func(*gorm.DB) {
+		queryCount++
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = fixture.db.Callback().Query().Remove(callbackName) }()
+
+	candidates, err := fixture.service.ListCandidates(context.Background(), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 3 {
+		t.Fatalf("candidate count=%d, want 3", len(candidates))
+	}
+	if queryCount > 2 {
+		t.Fatalf("publication candidate queries=%d, want fixed maximum 2", queryCount)
+	}
+}
+
+func TestListCandidatesFreshServiceWalksPastBackedOffPrefix(t *testing.T) {
+	fixture := newPublicationFixture(t, true, publication.AdmissionManaged)
+	fixture.connectExactResticBinding(t)
+	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := resticAttemptForExecution(t, execution)
+	var template model.RecoveryPoint
+	if err := fixture.db.First(&template, "id = ?", attempt.RecoveryPointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", template.ID).
+		Update("state", backupasset.RecoveryPointFailed).Error; err != nil {
+		t.Fatal(err)
+	}
+	consistency, err := backupasset.DecodePublicationConsistency(template.ConsistencyJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consistency.AttemptCount = 1
+	consistency.LastAttemptAt = &fixture.now
+	backedOff, err := backupasset.EncodePublicationConsistency(consistency)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetID := fmt.Sprintf("%032x", 11)
+	for index := 1; index <= 11; index++ {
+		clone := template
+		clone.ID = fmt.Sprintf("%032x", index)
+		clone.ProducingTaskRunID = nil
+		clone.UpdatedAt = fixture.now.Add(-time.Hour)
+		if index <= 10 {
+			clone.ConsistencyJSON = backedOff
+			clone.UpdatedAt = fixture.now
+		}
+		if err := fixture.db.Create(&clone).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for restart := 0; restart < 2; restart++ {
+		restarted := *fixture.service
+		candidates, err := restarted.ListCandidates(context.Background(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(candidates) != 1 || candidates[0] != targetID {
+			t.Fatalf("restart %d candidates=%v, want [%s]", restart, candidates, targetID)
+		}
 	}
 }
 

@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { runAxe } from "@/test/a11y-helpers";
 import { buildAssetRows } from "./__tests__/test-utils";
 import { AssetBrowser } from "./asset-browser";
 import { assetRefKey, createInitialBackupAssetsState } from "./backup-assets-state";
@@ -28,19 +29,129 @@ describe("AssetBrowser", () => {
   it("renders a navigable directory breadcrumb without exposing a raw path", async () => {
     const rows = buildAssetRows(1);
     const directoryId = "c".repeat(64);
-    rows[0].asset.breadcrumb = [{ name: "配置", ref: { recoveryPointId: rows[0].ref.recoveryPointId, entryId: directoryId } }];
+    rows[0].asset.breadcrumb = [{ name: "ROW_ONLY", ref: { recoveryPointId: rows[0].ref.recoveryPointId, entryId: "d".repeat(64) } }];
     const state = createInitialBackupAssetsState({
       ...defaultBackupAssetsRouteState("data"), recoveryPointId: rows[0].ref.recoveryPointId, parentEntryId: directoryId,
     });
-    state.result = { status: "ready", requestKey: "breadcrumb", generation: 1, rows, nextCursor: null, coverage: "complete", authoritativeEmpty: false };
+    state.result = {
+      status: "ready", requestKey: "breadcrumb", generation: 1, rows, nextCursor: null,
+      coverage: "complete", authoritativeEmpty: false,
+      directory: {
+        current: { name: "配置", ref: { recoveryPointId: rows[0].ref.recoveryPointId, entryId: directoryId } },
+        parent: null,
+        breadcrumb: [{ name: "配置", ref: { recoveryPointId: rows[0].ref.recoveryPointId, entryId: directoryId } }],
+      },
+    };
     const onRoutePatch = vi.fn();
-    render(<AssetBrowser state={state} onRoutePatch={onRoutePatch} onSearch={vi.fn()} onSearchDraftChange={vi.fn()}
+    const { container } = render(<AssetBrowser state={state} onRoutePatch={onRoutePatch} onSearch={vi.fn()} onSearchDraftChange={vi.fn()}
       onToggleSelection={vi.fn()} onClearSelection={vi.fn()} onOpen={vi.fn()} onLoadMore={vi.fn()} />);
     const breadcrumb = screen.getByRole("navigation", { name: /Directory breadcrumb|目录位置/ });
     expect(breadcrumb).toHaveTextContent("配置");
     expect(breadcrumb).not.toHaveTextContent("/");
+    expect(breadcrumb).not.toHaveTextContent("ROW_ONLY");
+    await userEvent.click(screen.getByRole("button", { name: /Up one directory|返回上级目录/ }));
+    expect(onRoutePatch).toHaveBeenLastCalledWith({ parentEntryId: undefined, entryId: undefined });
     await userEvent.click(screen.getByRole("button", { name: /Root|根目录/ }));
-    expect(onRoutePatch).toHaveBeenCalledWith({ parentEntryId: undefined, entryId: undefined });
+    expect(onRoutePatch).toHaveBeenLastCalledWith({ parentEntryId: undefined, entryId: undefined });
+    expect(screen.getByRole("button", { name: "配置" })).toHaveAttribute("aria-current", "page");
+    expect(await runAxe(container)).toHaveNoViolations();
+  });
+
+  it("keeps Up and opaque ancestor navigation available in an empty directory", async () => {
+    const recoveryPointId = "b".repeat(32);
+    const ancestorId = "c".repeat(64);
+    const currentId = "d".repeat(64);
+    const state = createInitialBackupAssetsState({
+      ...defaultBackupAssetsRouteState("data"), recoveryPointId, parentEntryId: currentId,
+    });
+    state.result = {
+      status: "ready", requestKey: "empty-directory", generation: 1, rows: [], nextCursor: null,
+      coverage: "complete", authoritativeEmpty: true,
+      directory: {
+        current: { name: "empty", ref: { recoveryPointId, entryId: currentId } },
+        parent: { recoveryPointId, entryId: ancestorId },
+        breadcrumb: [
+          { name: "ancestor", ref: { recoveryPointId, entryId: ancestorId } },
+          { name: "empty", ref: { recoveryPointId, entryId: currentId } },
+        ],
+      },
+    };
+    const onRoutePatch = vi.fn();
+    render(<AssetBrowser state={state} onRoutePatch={onRoutePatch} onSearch={vi.fn()} onSearchDraftChange={vi.fn()}
+      onToggleSelection={vi.fn()} onClearSelection={vi.fn()} onOpen={vi.fn()} onLoadMore={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /Up one directory|返回上级目录/ }));
+    expect(onRoutePatch).toHaveBeenLastCalledWith({ parentEntryId: ancestorId, entryId: undefined });
+    await userEvent.click(screen.getByRole("button", { name: "ancestor" }));
+    expect(onRoutePatch).toHaveBeenLastCalledWith({ parentEntryId: ancestorId, entryId: undefined });
+  });
+
+  it("does not navigate or detach state when the current breadcrumb is activated", async () => {
+    const recoveryPointId = "b".repeat(32);
+    const currentId = "c".repeat(64);
+    const state = createInitialBackupAssetsState({
+      ...defaultBackupAssetsRouteState("data"), recoveryPointId, parentEntryId: currentId,
+    });
+    state.result = {
+      ...state.result, status: "ready", requestKey: "current-directory", generation: 1,
+      coverage: "complete", authoritativeEmpty: true,
+      directory: {
+        current: { name: "current", ref: { recoveryPointId, entryId: currentId } },
+        parent: null,
+        breadcrumb: [{ name: "current", ref: { recoveryPointId, entryId: currentId } }],
+      },
+    };
+    const onNavigateDirectory = vi.fn();
+    render(
+      <AssetBrowser
+        state={state}
+        onRoutePatch={vi.fn()}
+        onNavigateDirectory={onNavigateDirectory}
+        onSearch={vi.fn()}
+        onSearchDraftChange={vi.fn()}
+        onToggleSelection={vi.fn()}
+        onClearSelection={vi.fn()}
+        onOpen={vi.fn()}
+        onLoadMore={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "current" }));
+
+    expect(onNavigateDirectory).not.toHaveBeenCalled();
+  });
+
+  it("disables Up at root and restores focus to the root crumb after navigating there", async () => {
+    const recoveryPointId = "b".repeat(32);
+    const currentId = "c".repeat(64);
+    const nested = createInitialBackupAssetsState({
+      ...defaultBackupAssetsRouteState("data"), recoveryPointId, parentEntryId: currentId,
+    });
+    nested.result = {
+      ...nested.result, status: "ready", requestKey: "nested", generation: 1,
+      coverage: "complete", authoritativeEmpty: true,
+      directory: {
+        current: { name: "nested", ref: { recoveryPointId, entryId: currentId } },
+        parent: null,
+        breadcrumb: [{ name: "nested", ref: { recoveryPointId, entryId: currentId } }],
+      },
+    };
+    const props = { onRoutePatch: vi.fn(), onSearch: vi.fn(), onSearchDraftChange: vi.fn(), onToggleSelection: vi.fn(),
+      onClearSelection: vi.fn(), onOpen: vi.fn(), onLoadMore: vi.fn() };
+    const rendered = render(<AssetBrowser state={nested} {...props} />);
+    await userEvent.click(screen.getByRole("button", { name: /Up one directory|返回上级目录/ }));
+
+    const root = createInitialBackupAssetsState({ ...defaultBackupAssetsRouteState("data"), recoveryPointId });
+    root.result = {
+      ...root.result, status: "ready", requestKey: "root", generation: 2,
+      coverage: "complete", authoritativeEmpty: true,
+      directory: { current: null, parent: null, breadcrumb: [] },
+    };
+    rendered.rerender(<AssetBrowser state={root} {...props} />);
+
+    expect(screen.getByRole("button", { name: /Up one directory|返回上级目录/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Root directory|根目录/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: /Root directory|根目录/ })).toHaveFocus();
   });
 
   it("reserves a full toolbar row for search before secondary controls", () => {
@@ -85,6 +196,7 @@ describe("AssetBrowser", () => {
       nextCursor: "next-page",
       coverage: "complete",
       authoritativeEmpty: false,
+      directory: null,
     };
     render(
       <AssetBrowser
@@ -100,7 +212,8 @@ describe("AssetBrowser", () => {
     );
 
     const touchTargets = [
-      screen.getByRole("button", { name: /^(Root|根目录)$/ }),
+      screen.getByRole("button", { name: /Up one directory|返回上级目录/ }),
+      screen.getByRole("button", { name: /^(Root directory|根目录)$/ }),
       screen.getByRole("searchbox"),
       screen.getByRole("combobox", { name: /Search scope|搜索范围/ }),
       screen.getByRole("button", { name: /^(Search|搜索)$/ }),
@@ -131,6 +244,7 @@ describe("AssetBrowser", () => {
       nextCursor: null,
       coverage: "complete",
       authoritativeEmpty: false,
+      directory: null,
     };
     state.selection = new Map([[assetRefKey(rows[0].ref), rows[0].ref]]);
     const onRoutePatch = vi.fn();
@@ -147,7 +261,7 @@ describe("AssetBrowser", () => {
       />
     );
 
-    expect(screen.getByRole("list", { name: /Backup asset list|备份资产列表/ })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: /File list|文件列表/ })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent(/1.*selected|已选择.*1/);
     await user.click(screen.getByRole("radio", { name: /Grid|网格/ }));
     expect(onRoutePatch).toHaveBeenCalledWith({ layout: "grid" });
@@ -169,6 +283,7 @@ describe("AssetBrowser", () => {
       nextCursor: null,
       coverage: "complete",
       authoritativeEmpty: false,
+      directory: null,
     };
     const onOpen = vi.fn();
     render(
@@ -211,6 +326,7 @@ describe("AssetBrowser", () => {
       nextCursor: null,
       coverage: "complete",
       authoritativeEmpty: false,
+      directory: null,
     };
     state.selection = new Map([[assetRefKey(rows[0].ref), rows[0].ref]]);
     const onExport = vi.fn();
@@ -244,7 +360,7 @@ describe("AssetBrowser", () => {
     });
     state.result = {
       status: "ready", requestKey: "explicit-recovery", generation: 1, rows,
-      nextCursor: null, coverage: "complete", authoritativeEmpty: false,
+      nextCursor: null, coverage: "complete", authoritativeEmpty: false, directory: null,
     };
     state.selection = new Map(rows.map((row) => [assetRefKey(row.ref), row.ref]));
     const onRecover = vi.fn();
@@ -283,6 +399,7 @@ describe("AssetBrowser", () => {
       nextCursor: null,
       coverage: "partial",
       authoritativeEmpty: false,
+      directory: null,
     };
     render(
       <AssetBrowser
@@ -298,7 +415,7 @@ describe("AssetBrowser", () => {
     );
 
     expect(screen.getByRole("status")).toHaveTextContent(/partial|部分|不完整/i);
-    expect(screen.queryByText(/No matching assets|没有匹配的资产/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No matching files|没有匹配的文件/)).not.toBeInTheDocument();
   });
 
   it("announces browser loading and failure as scoped live states", () => {

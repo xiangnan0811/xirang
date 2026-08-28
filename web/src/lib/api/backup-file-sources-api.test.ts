@@ -24,8 +24,10 @@ const rawNode = {
   node_id: 7,
   display_name: "数据库节点",
   backup_set_count: 2,
+  retained_version_count: 3,
   latest_retained_at: "2026-08-27T00:00:00Z",
   catalog_coverage: "partial",
+  browse_state: "browsable",
 };
 
 const rawSet = {
@@ -36,6 +38,7 @@ const rawSet = {
   version_count: 3,
   latest_retained_at: null,
   catalog_coverage: "complete",
+  browse_state: "browsable",
 };
 
 const rawVersion = {
@@ -47,10 +50,11 @@ const rawVersion = {
   created_at: "2026-08-27T00:00:30Z",
   lifecycle_state: "committed",
   catalog_coverage: "complete",
-  content_availability: { available: false, reason: { code: "range_unavailable", params: {} } },
+  content_availability: { available: true, reason: null },
   entry_count: 12,
   logical_bytes: 4096,
   permissions: { list: true, preview: false, download: false },
+  browse_state: "browsable",
 };
 
 const rawResolution = {
@@ -59,6 +63,7 @@ const rawResolution = {
   recovery_point_id: pointId,
   repository_id: repositoryId,
   producing_task_id: 9,
+  browse_state: "browsable",
 };
 
 describe("backup file source API boundary", () => {
@@ -73,7 +78,7 @@ describe("backup file source API boundary", () => {
     });
     expect(mapBackupFileSourceVersionPage({ items: [{ ...rawVersion, raw_locator: "PRIVATE" }] })).toMatchObject({
       status: "available",
-      value: { items: [{ recoveryPointId: pointId, repositoryId, producingTaskId: 9 }] },
+      value: { items: [{ recoveryPointId: pointId, repositoryId, producingTaskId: 9, browseState: "browsable" }] },
     });
     expect(JSON.stringify(mapBackupFileSourceVersionPage({ items: [{ ...rawVersion, raw_locator: "PRIVATE" }] })))
       .not.toContain("PRIVATE");
@@ -96,6 +101,8 @@ describe("backup file source API boundary", () => {
         recoveryPointId: pointId,
         repositoryId,
         producingTaskId: 9,
+        browseState: "browsable",
+        unavailableReason: null,
       },
     });
     expect(JSON.stringify(mapped)).not.toMatch(/PRIVATE|locator|path|content|proof/i);
@@ -112,6 +119,8 @@ describe("backup file source API boundary", () => {
         recoveryPointId: pointId,
         repositoryId,
         producingTaskId: undefined,
+        browseState: "browsable",
+        unavailableReason: null,
       },
     });
   });
@@ -141,6 +150,10 @@ describe("backup file source API boundary", () => {
     { page: "version", value: { items: [{ ...rawVersion, permissions: { list: true, preview: true } }] } },
     { page: "version", value: { items: [{ ...rawVersion, captured_at: "not-time" }] } },
     { page: "version", value: { items: [{ ...rawVersion, producing_task_id: 0 }] } },
+    { page: "version", value: { items: [{ ...rawVersion, browse_state: "future" }] } },
+    { page: "version", value: { items: [{ ...rawVersion, browse_state: "unavailable" }] } },
+    { page: "version", value: { items: [{ ...rawVersion, content_availability: { available: false, reason: { code: "provider_unavailable", params: {} } } }] } },
+    { page: "version", value: { items: [{ ...rawVersion, unavailable_reason: { code: "repository_offline", params: { repository_status: "SECRET" } } }] } },
   ])("blocks the complete $page page for malformed or partial items", ({ page, value }) => {
     const mapped = page === "node"
       ? mapBackupFileSourceNodePage(value)
@@ -148,6 +161,23 @@ describe("backup file source API boundary", () => {
         ? mapBackupFileSourceSetPage(value)
         : mapBackupFileSourceVersionPage(value);
     expect(mapped).toEqual({ status: "blocked", reason: { code: "unknown_internal_state", params: {} } });
+  });
+
+  it("maps retained indexing and parameter-free unavailable states without internal facts", () => {
+    expect(mapBackupFileSourceVersionPage({ items: [{
+      ...rawVersion,
+      lifecycle_state: "verifying",
+      catalog_coverage: "building",
+      browse_state: "indexing",
+    }] })).toMatchObject({ status: "available", value: { items: [{ browseState: "indexing", unavailableReason: null }] } });
+    expect(mapBackupFileSourceSetPage({ items: [{
+      ...rawSet,
+      browse_state: "unavailable",
+      unavailable_reason: { code: "repository_offline" },
+    }] })).toMatchObject({
+      status: "available",
+      value: { items: [{ browseState: "unavailable", unavailableReason: { code: "repository_offline", params: {} } }] },
+    });
   });
 
   it("blocks malformed and oversized cursors instead of making them reusable", () => {

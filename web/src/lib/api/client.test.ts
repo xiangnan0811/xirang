@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "./client";
 import { ApiError, buildLoginRedirectPath, isStepUpRequiredError, normalizeRedirectTarget, request } from "./core";
+import { saveStepUpProof, STEP_UP_ACTIONS } from "@/lib/step-up-storage";
 
 function createMockResponse(status = 200, body = "") {
   return {
@@ -418,5 +419,34 @@ describe("apiClient 会话跳转", () => {
     expect(sessionStorage.getItem("xirang-auth-token")).toBe("token-1");
     expect(sessionStorage.getItem("xirang-step-up-proof")).toBe("proof-1");
     expect(window.location.href).toBe(originalHref);
+  });
+
+  it("401 会清除全部 action 级 step-up proof", async () => {
+    const location = {
+      href: "http://localhost/app/backups/data",
+      hostname: "localhost",
+      pathname: "/app/backups/data",
+      search: "",
+      hash: "",
+    };
+    vi.stubGlobal("window", { location, sessionStorage });
+    sessionStorage.setItem("xirang-auth-token", "expired-token");
+    saveStepUpProof(
+      STEP_UP_ACTIONS.assetSecretReveal,
+      "secret-proof-before-401",
+      Date.now() + 45 * 60_000,
+    );
+    saveStepUpProof(
+      STEP_UP_ACTIONS.taskManualTrigger,
+      "task-proof-before-401",
+      Date.now() + 60_000,
+    );
+    fetchMock.mockResolvedValueOnce(createMockResponse(401, JSON.stringify({ code: 401, message: "expired" })));
+
+    await expect(request("/protected", { token: "expired-token" })).rejects.toMatchObject({ status: 401 });
+
+    expect(sessionStorage.getItem("xirang-auth-token")).toBeNull();
+    expect(sessionStorage.getItem("xirang-step-up-proofs-v2")).toBeNull();
+    expect(location.href).toContain("/login?redirect=");
   });
 });

@@ -115,6 +115,11 @@ type backupContentTransportErrorReason struct {
 	Params map[string]string `json:"params"`
 }
 
+type backupContentSourceErrorData struct {
+	Reason        backupContentTransportErrorReason `json:"reason"`
+	CorrelationID string                            `json:"correlation_id,omitempty"`
+}
+
 func respondBackupContentSecureTransportRequired(c *gin.Context) {
 	c.JSON(http.StatusServiceUnavailable, Response{
 		Code:    http.StatusServiceUnavailable,
@@ -122,6 +127,19 @@ func respondBackupContentSecureTransportRequired(c *gin.Context) {
 		Data: backupContentTransportErrorData{Reason: backupContentTransportErrorReason{
 			Code: "secure_transport_required", Params: map[string]string{},
 		}},
+	})
+}
+
+func respondBackupContentSourceError(c *gin.Context, code, correlationID string) {
+	c.JSON(http.StatusServiceUnavailable, Response{
+		Code:    http.StatusServiceUnavailable,
+		Message: "备份内容源暂不可用",
+		Data: backupContentSourceErrorData{
+			Reason: backupContentTransportErrorReason{
+				Code: code, Params: map[string]string{},
+			},
+			CorrelationID: correlationID,
+		},
 	})
 }
 

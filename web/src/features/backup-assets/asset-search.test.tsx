@@ -31,7 +31,7 @@ describe("AssetSearch", () => {
     }
     render(<Harness />);
 
-    const input = screen.getByRole("searchbox", { name: /Search backup assets|搜索备份资产/ });
+    const input = screen.getByRole("searchbox", { name: /Search files|搜索文件/ });
     await user.type(input, "private-name.yaml");
     expect(onDraftChange).toHaveBeenLastCalledWith("private-name.yaml");
     await user.click(screen.getByRole("button", { name: /Search$|搜索$/ }));

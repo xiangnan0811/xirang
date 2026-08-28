@@ -401,15 +401,18 @@ function PreviewBody({
       resource.error?.capabilityCode === undefined
         ? null
         : presentBackupAssetsCode("capability", resource.error.capabilityCode).translationKey;
-    const workerHint =
-      resource.error?.code === "unsupported" || resource.error?.code === "temporarily_unavailable";
+    const sourceFailureKey = resource.error?.sourceStage === undefined
+      ? null
+      : `backupAssets.preview.sourceFailure.${resource.error.sourceStage}`;
     return (
       <InlineAlert tone={resource.status === "blocked" ? "warning" : "critical"}>
-        <span>{t(capabilityKey ?? resource.error?.translationKey ?? "backupAssets.preview.unavailable")}</span>
+        <span>{t(sourceFailureKey ?? capabilityKey ?? resource.error?.translationKey ?? "backupAssets.preview.unavailable")}</span>
+        {resource.error?.correlationId ? (
+          <span className="mt-2 block text-xs">{t("backupAssets.preview.correlation", { id: resource.error.correlationId })}</span>
+        ) : null}
         {resource.error?.code === "secure_transport_required" ? (
           <ContentTransportGuidance authRole={role} />
         ) : null}
-        {workerHint ? <span className="mt-2 block">{t("backupAssets.preview.optionalWorker")}</span> : null}
       </InlineAlert>
     );
   }

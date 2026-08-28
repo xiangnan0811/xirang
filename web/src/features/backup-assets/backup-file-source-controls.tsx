@@ -39,6 +39,7 @@ export function BackupFileSourceControls({
     ? sets[0]
     : sets.find((item) => item.backupSetId === selectedBackupSetId) ?? null;
   const controlsBlocked = status === "loading" || status === "blocked" || status === "permission_denied";
+  const stateLabel = (state: BackupFileSourceNode["browseState"]) => t(`backupAssets.sources.states.${state}`);
 
   return (
     <section aria-label={t("backupAssets.sources.title")} className="border-y border-border bg-card/45 px-3 py-3">
@@ -52,7 +53,7 @@ export function BackupFileSourceControls({
             onChange={(event) => onSelectNode(event.target.value === "" ? undefined : Number(event.target.value))}
           >
             <option value="">{t("backupAssets.sources.selectNode")}</option>
-            {nodes.map((node) => <option key={node.nodeId} value={node.nodeId}>{node.displayName}</option>)}
+            {nodes.map((node) => <option key={node.nodeId} value={node.nodeId}>{node.displayName} · {stateLabel(node.browseState)}</option>)}
           </Select>
           <SourcePaginationButton
             visible={hasMoreNodes}
@@ -73,7 +74,7 @@ export function BackupFileSourceControls({
               onChange={(event) => onSelectSet(event.target.value || undefined)}
             >
               <option value="">{t("backupAssets.sources.selectSet")}</option>
-              {sets.map((set) => <option key={set.backupSetId} value={set.backupSetId}>{set.displayLabel}</option>)}
+              {sets.map((set) => <option key={set.backupSetId} value={set.backupSetId}>{set.displayLabel} · {stateLabel(set.browseState)}</option>)}
             </Select>
             <SourcePaginationButton
               visible={hasMoreSets}
@@ -86,7 +87,9 @@ export function BackupFileSourceControls({
         ) : (
           <div className="min-w-0 border-l-2 border-primary/40 pl-3">
             <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">{t("backupAssets.sources.set")}</div>
-            <div className="mt-1 truncate text-sm font-medium">{selectedSet?.displayLabel ?? t("backupAssets.sources.noSet")}</div>
+            <div className="mt-1 truncate text-sm font-medium">
+              {selectedSet ? `${selectedSet.displayLabel} · ${stateLabel(selectedSet.browseState)}` : t("backupAssets.sources.noSet")}
+            </div>
           </div>
         )}
 
@@ -98,13 +101,14 @@ export function BackupFileSourceControls({
             disabled={controlsBlocked || selectedSet === null || versions.length === 0}
             onChange={(event) => {
               const selected = versions.find((item) => item.recoveryPointId === event.target.value);
-              if (selected && selectedSet) onSelectVersion(selected, selectedSet.backupSetId);
+              if (selected?.browseState === "browsable" && selectedSet) onSelectVersion(selected, selectedSet.backupSetId);
             }}
           >
             <option value="">{t("backupAssets.sources.selectVersion")}</option>
             {versions.map((version) => (
-              <option key={version.recoveryPointId} value={version.recoveryPointId}>
+              <option key={version.recoveryPointId} value={version.recoveryPointId} disabled={version.browseState !== "browsable"}>
                 {new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: "short" }).format(new Date(version.capturedAt ?? version.committedAt ?? version.createdAt))}
+                {` · ${stateLabel(version.browseState)}`}
               </option>
             ))}
           </Select>
@@ -125,6 +129,8 @@ export function BackupFileSourceControls({
       {status === "ready" && selectedSet !== null && versions.length === 0 && !hasMoreVersions ? (
         <p role="status" className="mt-2 text-xs text-muted-foreground">{t("backupAssets.sources.emptyVersions")}</p>
       ) : null}
+      {selectedSet?.browseState === "indexing" ? <p role="status" className="mt-2 text-xs text-muted-foreground">{t("backupAssets.sources.indexing")}</p> : null}
+      {selectedSet?.browseState === "unavailable" ? <InlineAlert tone="warning" className="mt-2">{t("backupAssets.sources.unavailable")}</InlineAlert> : null}
       {status === "partial" ? <p role="status" className="mt-2 text-xs text-amber-600 dark:text-amber-400">{t("backupAssets.sources.partial")}</p> : null}
       {status === "permission_denied" ? <InlineAlert tone="warning" className="mt-2">{t("backupAssets.sources.permissionDenied")}</InlineAlert> : null}
       {status === "blocked" ? <InlineAlert tone="warning" className="mt-2">{t("backupAssets.sources.blocked")}</InlineAlert> : null}

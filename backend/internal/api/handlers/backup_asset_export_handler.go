@@ -357,7 +357,7 @@ func (handler *BackupAssetExportHandler) exactDeliveryProof(
 		if errors.Is(err, ErrStepUpVerifierUnavailable) {
 			respondServiceUnavailable(c, "二次验证服务暂不可用")
 		} else {
-			respondStepUpRequired(c)
+			respondStepUpRequired(c, expected)
 		}
 		return content.StepUpProof{}, false
 	}

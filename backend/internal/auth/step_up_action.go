@@ -1,6 +1,9 @@
 package auth
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 type StepUpAction string
 
@@ -62,6 +65,16 @@ func AllStepUpActions() []StepUpAction {
 
 func IsValidStepUpAction(action StepUpAction) bool {
 	return validStepUpActions[action]
+}
+
+func StepUpProofTTLForAction(action StepUpAction) time.Duration {
+	if !IsValidStepUpAction(action) {
+		return 0
+	}
+	if action == StepUpActionAssetSecretReveal {
+		return 45 * time.Minute
+	}
+	return StepUpProofTTL
 }
 
 func ParseStepUpAction(value string) (StepUpAction, error) {

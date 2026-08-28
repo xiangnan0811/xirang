@@ -310,7 +310,7 @@ describe("BackupsPage", () => {
     expect(screen.getAllByRole("tabpanel", { hidden: true })).toHaveLength(3);
     expect(screen.getByRole("tabpanel", { name: /Files|文件/ })).not.toHaveAttribute("hidden");
     expect(screen.getByRole("heading", { name: /Files|文件/ })).toBeInTheDocument();
-    expect(await screen.findByRole("region", { name: /Asset results|资产结果/ })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: /File results|文件结果/ })).toBeInTheDocument();
   });
 
   it("keeps a blocked file-source projection out of the searchable workspace", async () => {
@@ -321,7 +321,7 @@ describe("BackupsPage", () => {
 
     expect(await screen.findByText(/The file source is currently unavailable|文件来源当前不可用/)).toBeInTheDocument();
     expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: /Asset results|资产结果/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /File results|文件结果/ })).not.toBeInTheDocument();
   });
 
   it("issues one automatic safe preview when a generic-MIME file is activated", async () => {
@@ -367,14 +367,14 @@ describe("BackupsPage", () => {
     listBackupFileSourceNodesMock.mockResolvedValue({
       status: "available",
       value: {
-        items: [{ nodeId: 3, displayName: "节点", backupSetCount: 1, latestRetainedAt: null, catalogCoverage: "complete" }],
+        items: [{ nodeId: 3, displayName: "节点", backupSetCount: 1, retainedVersionCount: 1, latestRetainedAt: null, catalogCoverage: "complete", browseState: "browsable", unavailableReason: null }],
         nextCursor: null,
       },
     });
     listBackupFileSourceSetsMock.mockResolvedValue({
       status: "available",
       value: {
-        items: [{ backupSetId, nodeId: 3, displayLabel: "每日", lineageKind: "task", versionCount: 1, latestRetainedAt: null, catalogCoverage: "complete" }],
+        items: [{ backupSetId, nodeId: 3, displayLabel: "每日", lineageKind: "task", versionCount: 1, latestRetainedAt: null, catalogCoverage: "complete", browseState: "browsable", unavailableReason: null }],
         nextCursor: null,
       },
     });
@@ -390,6 +390,8 @@ describe("BackupsPage", () => {
           createdAt: recoveryPoint.createdAt,
           lifecycleState: "committed",
           catalogCoverage: "complete",
+          browseState: "browsable",
+          unavailableReason: null,
           contentAvailability: { available: true, reason: null },
           entryCount: 1,
           logicalBytes: asset.size,
@@ -422,7 +424,7 @@ describe("BackupsPage", () => {
     renderBackups(route, undefined, { strict: true });
 
     await waitFor(() => expect(listBackupAssetsMock).toHaveBeenCalled());
-    await user.click(await screen.findByRole("button", { name: new RegExp(`(?:Open asset|打开资产) ${genericRow.asset.name}`) }));
+    await user.click(await screen.findByRole("button", { name: new RegExp(`(?:Open file or directory|打开文件或目录) ${genericRow.asset.name}`) }));
 
     await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(1));
     expect(issueTicketMock).toHaveBeenCalledWith(
@@ -459,7 +461,7 @@ describe("BackupsPage", () => {
       ensureStepUpProof: vi.fn(),
     };
     renderBackups(route);
-    expect(await screen.findByRole("region", { name: /Asset results|资产结果/ })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: /File results|文件结果/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Processing coverage|处理覆盖/ })).not.toBeInTheDocument();
   });
 
@@ -507,8 +509,8 @@ describe("BackupsPage", () => {
       status: "available",
       value: {
         items: [
-          { nodeId: 7, displayName: "节点 A", backupSetCount: 1, latestRetainedAt: null, catalogCoverage: "complete" },
-          { nodeId: 8, displayName: "节点 B", backupSetCount: 1, latestRetainedAt: null, catalogCoverage: "complete" },
+          { nodeId: 7, displayName: "节点 A", backupSetCount: 1, retainedVersionCount: 1, latestRetainedAt: null, catalogCoverage: "complete", browseState: "browsable", unavailableReason: null },
+          { nodeId: 8, displayName: "节点 B", backupSetCount: 1, retainedVersionCount: 1, latestRetainedAt: null, catalogCoverage: "complete", browseState: "browsable", unavailableReason: null },
         ],
         nextCursor: null,
       },
@@ -604,6 +606,8 @@ describe("BackupsPage", () => {
         recoveryPointId: recoveryPoint.id,
         repositoryId: mismatchedRecoveryPoint.repositoryId,
         producingTaskId: 9,
+        browseState: "browsable",
+        unavailableReason: null,
       },
     });
 

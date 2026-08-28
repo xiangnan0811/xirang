@@ -115,3 +115,117 @@ if err != nil {
 secure, err := schemePolicy.SecureCookie(request, config.transportOptions())
 // Existing RBAC, purpose, origin, ticket, grant, and budget checks still apply.
 ```
+
+---
+
+## Scenario: Safe-Preview Bounded Prefix Reads
+
+### 1. Scope / Trigger
+
+- Trigger: changing `safe_preview_v1`, Broker classification, sequential source
+  reads, Restic/Rclone/Rsync adapters, SSH command streams, or preview source
+  error mapping.
+- This scenario governs the bounded prefix used to resolve a safe-preview intent
+  and the later exact-product Serve read. It does not broaden AssetRef authority,
+  RBAC, step-up, lease, ticket, origin, or transport policy.
+
+### 2. Signatures
+
+- The client sends intent only: `action=preview` plus
+  `preview_intent=safe_preview_v1`; renderer/profile are forbidden in that form.
+- The server resolves and persists an exact closed renderer/profile product.
+  Faithful generic text resolves to `plain_text/text_v2`; only true binary falls
+  back to the bounded hex product.
+- A sequential handle may additionally implement the internal capability
+  `ClosePrefix() error`. It means that the consumer intentionally finished after
+  a valid bounded prefix, not that arbitrary close errors may be ignored.
+- Closed source-stage failures expose only safe codes for open, read, changed,
+  timeout, or capability failure, with empty parameters and request correlation.
+  Provider commands, locators, paths, tokens, proof, and bytes never cross the
+  API or audit boundary.
+
+### 3. Contracts
+
+- Issue performs exactly one bounded source open/read for classification. Serve
+  performs its own exactly one authorized bounded/exact read; classification,
+  selection, grant preparation, and auditing must not reopen the source.
+- Restic and Rclone command-backed sequential adapters forward intentional
+  prefix close through every wrapper down to the command stream. Rsync retains
+  its ordinary strict tree-handle close when it has no such capability.
+- `ClosePrefix` may suppress only the wait error caused by terminating a still
+  running command after a successfully consumed prefix. It must preserve a
+  command failure that completed before intentional termination, and preserve
+  read, cancel, timeout, byte-limit, background, invariant, and ordinary-close
+  failures.
+- The safe-preview classifier consumes only the bounded in-memory prefix. It
+  accepts strict UTF-8 and approved, well-formed UTF-16 text, keeps active markup
+  inert, and selects native media only from closed signatures/capabilities.
+  Provider MIME cannot upgrade ambiguous bytes.
+- Core source failures use direct, localized source guidance. Worker-enhancement
+  copy is reserved for actual derived ZIP/Office/OCR states and must not mask a
+  failed core text read.
+- Success grants, descriptors, Serve validation, and success audit contain only
+  the resolved exact product. Pre-resolution failures contain the closed intent
+  and safe reason only.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+|---|---|
+| Valid generic text prefix, command still running | Resolve `plain_text/text_v2`; intentional prefix close suppresses only its induced wait error. |
+| Command already failed before prefix close | Preserve the command/source failure; issue no grant. |
+| Prefix read canceled, timed out, exceeds bounds, or violates an invariant | Preserve the authoritative typed failure; do not call intentional-success cleanup. |
+| Generic binary bytes | Resolve bounded hex with exact `truncated` fact. |
+| Signature-proven supported media with required capability | Resolve the matching native exact product. |
+| Ambiguous/deceptive media or missing native capability | Fail with the closed renderer/capability product; do not trust MIME or downgrade authorization. |
+| Core source open/read/change failure | Return localized core guidance and safe correlation; never a generic Worker hint or raw provider detail. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: an actual command-backed adapter yields a valid text prefix, Issue
+  resolves one exact text grant, intentional prefix close joins safely, and Serve
+  returns matching bytes under the same policy.
+- Base: a strict local-tree adapter uses ordinary close and the same Broker
+  contract without implementing `ClosePrefix`.
+- Bad: ignore every close/wait error; infer text/native solely from MIME; reopen
+  during classification; persist `safe_preview_v1` in the grant; expose the
+  provider error; or tell the user to deploy a Worker when the core read failed.
+
+### 6. Tests Required
+
+- Unit-test command streams where termination causes the wait error and where a
+  failure completes naturally before prefix close. Cover ordinary close, limit,
+  cancellation, timeout, and session cleanup separately.
+- Compose actual Restic, Rsync, and Rclone adapters through Issue, resolved grant,
+  and Serve. Assert one source open/read per stage, exact product/truncation, and
+  no ordinary aborted-close promotion for command-backed prefix success.
+- Include one live handler vertical slice through the real Repository Service,
+  an actual adapter, Broker, persisted grant, and Serve; fake-only Broker tests
+  are insufficient production evidence.
+- Test the strict request union, closed error envelope, audit/privacy canaries,
+  repeated focused selectors, race detector, and full backend/frontend gates.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+prefix, err := io.ReadAll(source)
+closeErr := source.Close()
+return prefix, errors.Join(err, closeErr) // expected early command stop becomes 503
+```
+
+Correct:
+
+```go
+prefix, complete, err := readBoundedPrefix(source)
+if err != nil {
+    return nil, authoritativeClose(source, err)
+}
+if !complete {
+    if closer, ok := source.(interface{ ClosePrefix() error }); ok {
+        return prefix, closer.ClosePrefix() // suppress induced wait only
+    }
+}
+return prefix, source.Close()
+```

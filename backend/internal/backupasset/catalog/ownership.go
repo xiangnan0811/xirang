@@ -26,13 +26,14 @@ type Ownership struct {
 }
 
 type pointOwnershipControl struct {
-	ID                 string
-	RepositoryID       string
-	ProducingTaskID    *uint
-	ProducingTaskRunID *uint
-	Semantics          string
-	State              string
-	LineageJSON        string
+	ID                      string
+	RepositoryID            string
+	ProducingTaskID         *uint
+	ProducingTaskRunID      *uint
+	ProducingNodeIDSnapshot uint
+	Semantics               string
+	State                   string
+	LineageJSON             string
 }
 
 type taskRunOwnershipControl struct {
@@ -41,10 +42,11 @@ type taskRunOwnershipControl struct {
 }
 
 type linkOwnershipControl struct {
-	ID           string
-	TaskID       *uint
-	RepositoryID string
-	UnlinkedAt   *time.Time
+	ID             string
+	TaskID         *uint
+	RepositoryID   string
+	NodeIDSnapshot uint
+	UnlinkedAt     *time.Time
 }
 
 func NewOwnership(db *gorm.DB) (*Ownership, error) {
@@ -97,13 +99,17 @@ func (ownership *Ownership) AuthorizedPointIDs(
 	}
 
 	query := ownership.db.WithContext(ctx).Table("recovery_points AS points").
-		Select(`points.id, points.repository_id, points.producing_task_id, points.producing_task_run_id,
-			points.semantics, points.state, points.lineage_json`).
+		Select(`points.id, points.repository_id, points.producing_task_id, points.producing_task_run_id, points.producing_node_id_snapshot,
+				points.semantics, points.state, points.lineage_json`).
 		Where("points.id IN ?", unique)
 	if scope.Role == "operator" {
+		// Current ownership follows the live Task node. Historical point/link
+		// snapshots are validated together below as immutable lineage evidence.
 		query = query.
-			Joins("JOIN tasks AS producing_tasks ON producing_tasks.id = points.producing_task_id AND producing_tasks.archived_at IS NULL").
-			Joins("JOIN node_owners AS producing_owners ON producing_owners.node_id = producing_tasks.node_id AND producing_owners.user_id = ?", scope.UserID).
+			Joins(`JOIN tasks AS producing_tasks ON producing_tasks.id = points.producing_task_id
+				AND producing_tasks.archived_at IS NULL`).
+			Joins("JOIN nodes AS producing_nodes ON producing_nodes.id = producing_tasks.node_id AND producing_nodes.archived = ?", false).
+			Joins("JOIN node_owners AS producing_owners ON producing_owners.node_id = producing_nodes.id AND producing_owners.user_id = ?", scope.UserID).
 			Where("points.producing_task_id IS NOT NULL AND points.semantics <> ?", backupasset.PointImportedBaseline)
 	}
 	var controls []pointOwnershipControl
@@ -175,7 +181,7 @@ func (ownership *Ownership) validateOperatorLineages(
 	if len(linkIDs) > 0 {
 		var rows []linkOwnershipControl
 		if err := ownership.db.WithContext(ctx).Table("task_repository_links").
-			Select("id", "task_id", "repository_id", "unlinked_at").Where("id IN ?", linkIDs).Scan(&rows).Error; err != nil {
+			Select("id", "task_id", "repository_id", "node_id_snapshot", "unlinked_at").Where("id IN ?", linkIDs).Scan(&rows).Error; err != nil {
 			return nil, fmt.Errorf("load Catalog producing links: %w", err)
 		}
 		for _, row := range rows {
@@ -193,7 +199,7 @@ func (ownership *Ownership) validateOperatorLineages(
 		run, runExists := runs[lineage.TaskRunID]
 		link, linkExists := links[lineage.TaskRepositoryLinkID]
 		if !runExists || run.TaskID != lineage.TaskID || !linkExists || link.TaskID == nil || *link.TaskID != lineage.TaskID ||
-			link.RepositoryID != control.RepositoryID {
+			link.RepositoryID != control.RepositoryID || link.NodeIDSnapshot != control.ProducingNodeIDSnapshot {
 			continue
 		}
 		authorized[pointID] = struct{}{}
@@ -202,13 +208,14 @@ func (ownership *Ownership) validateOperatorLineages(
 	if len(mutableTasks) > 0 {
 		var activeLinks []linkOwnershipControl
 		if err := ownership.db.WithContext(ctx).Table("task_repository_links").
-			Select("id", "task_id", "repository_id", "unlinked_at").
+			Select("id", "task_id", "repository_id", "node_id_snapshot", "unlinked_at").
 			Where("task_id IN ? AND unlinked_at IS NULL", mutableTasks).Scan(&activeLinks).Error; err != nil {
 			return nil, fmt.Errorf("load mutable Catalog producing links: %w", err)
 		}
 		for pointID, control := range mutableCandidates {
 			for _, link := range activeLinks {
-				if link.TaskID != nil && *link.TaskID == *control.ProducingTaskID && link.RepositoryID == control.RepositoryID {
+				if link.TaskID != nil && *link.TaskID == *control.ProducingTaskID && link.RepositoryID == control.RepositoryID &&
+					link.NodeIDSnapshot == control.ProducingNodeIDSnapshot {
 					authorized[pointID] = struct{}{}
 					break
 				}

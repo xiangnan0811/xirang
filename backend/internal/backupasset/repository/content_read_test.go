@@ -149,11 +149,12 @@ func (spy *contentSourceProviderSpy) closedHandles() int {
 }
 
 type contentReadHandleSpy struct {
-	ctx    context.Context
-	reader *bytes.Reader
-	mu     sync.Mutex
-	closed int
-	read   int64
+	ctx          context.Context
+	reader       *bytes.Reader
+	mu           sync.Mutex
+	closed       int
+	prefixClosed int
+	read         int64
 }
 
 type contentCloseErrorReader struct{ err error }
@@ -197,10 +198,23 @@ func (handle *contentReadHandleSpy) Close() error {
 	return nil
 }
 
+func (handle *contentReadHandleSpy) ClosePrefix() error {
+	handle.mu.Lock()
+	handle.prefixClosed++
+	handle.mu.Unlock()
+	return nil
+}
+
 func (handle *contentReadHandleSpy) closeCount() int {
 	handle.mu.Lock()
 	defer handle.mu.Unlock()
 	return handle.closed
+}
+
+func (handle *contentReadHandleSpy) prefixCloseCount() int {
+	handle.mu.Lock()
+	defer handle.mu.Unlock()
+	return handle.prefixClosed
 }
 
 func (handle *contentReadHandleSpy) ProviderBytes() int64 {
@@ -361,6 +375,33 @@ func TestContentSourceExactActiveCompositeReadHidesPrivateLocator(t *testing.T) 
 	}
 	if fixture.admission.closedCount() != 1 || fixture.provider.closedHandles() != 1 {
 		t.Fatalf("close counts token=%d handle=%d", fixture.admission.closedCount(), fixture.provider.closedHandles())
+	}
+}
+
+func TestContentSourceExplicitPrefixClosePropagatesWithoutOrdinaryClose(t *testing.T) {
+	fixture := newMutableContentFixture(t)
+	session, err := fixture.service.OpenContentSource(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("OpenContentSource: %v", err)
+	}
+	prefix := make([]byte, 4)
+	if _, err := io.ReadFull(session.Reader(), prefix); err != nil {
+		t.Fatalf("read prefix: %v", err)
+	}
+	prefixCloser, ok := session.(interface{ ClosePrefix() error })
+	if !ok {
+		t.Fatal("Repository content source session does not expose intentional prefix close")
+	}
+	if err := prefixCloser.ClosePrefix(); err != nil {
+		t.Fatalf("close content source prefix: %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("second ordinary close content source: %v", err)
+	}
+	if len(fixture.provider.handles) != 1 || fixture.provider.handles[0].prefixCloseCount() != 1 ||
+		fixture.provider.handles[0].closeCount() != 0 || fixture.admission.closedCount() != 1 {
+		t.Fatalf("prefix closes=%d ordinary closes=%d admission closes=%d",
+			fixture.provider.handles[0].prefixCloseCount(), fixture.provider.handles[0].closeCount(), fixture.admission.closedCount())
 	}
 }
 

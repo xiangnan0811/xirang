@@ -3,6 +3,7 @@ import { request } from "./core";
 import {
   createBackupAssetsApi,
   mapBackupAsset,
+  mapBackupAssetPage,
   mapRecoveryPointDiff,
 } from "./backup-assets-api";
 
@@ -20,6 +21,7 @@ const compareRecoveryPointId = "2".repeat(32);
 const baseEntryId = "a".repeat(64);
 const compareEntryId = "b".repeat(64);
 const parentEntryId = "c".repeat(64);
+const ancestorEntryId = "d".repeat(64);
 
 function rawEntry() {
   return {
@@ -96,6 +98,35 @@ function rawDiff() {
   };
 }
 
+function rawDirectory() {
+  return {
+    current: {
+      recovery_point_id: baseRecoveryPointId,
+      entry_id: parentEntryId,
+      name: "exports",
+      normalized_path: "/PRIVATE/exports",
+    },
+    parent: {
+      recovery_point_id: baseRecoveryPointId,
+      entry_id: ancestorEntryId,
+      normalized_path: "/PRIVATE",
+    },
+    breadcrumb: [
+      {
+        recovery_point_id: baseRecoveryPointId,
+        entry_id: ancestorEntryId,
+        name: "backup",
+      },
+      {
+        recovery_point_id: baseRecoveryPointId,
+        entry_id: parentEntryId,
+        name: "exports",
+      },
+    ],
+    raw_path: "/PRIVATE/exports",
+  };
+}
+
 describe("backup assets API boundary", () => {
   beforeEach(() => {
     requestMock.mockReset();
@@ -138,6 +169,66 @@ describe("backup assets API boundary", () => {
     expect(JSON.stringify(mapped)).not.toContain("future_type");
   });
 
+  it("maps required root and nested directory context without persisting raw paths", () => {
+    expect(mapBackupAssetPage({
+      items: [],
+      next_cursor: null,
+      directory: { current: null, parent: null, breadcrumb: [] },
+    }, baseRecoveryPointId)).toEqual({
+      items: [],
+      nextCursor: null,
+      directory: { current: null, parent: null, breadcrumb: [] },
+    });
+    expect(mapBackupAssetPage({
+      items: [{ ...rawEntry(), parent_entry_id: null, breadcrumb: [] }],
+      next_cursor: null,
+      directory: { current: null, parent: null, breadcrumb: [] },
+    }, baseRecoveryPointId).items).toHaveLength(1);
+    expect(() => mapBackupAssetPage({
+      items: [rawEntry()],
+      next_cursor: null,
+      directory: { current: null, parent: null, breadcrumb: [] },
+    }, baseRecoveryPointId)).toThrow("invalid backup asset page response");
+
+    const mapped = mapBackupAssetPage({
+      items: [rawEntry()],
+      next_cursor: "next-entry",
+      directory: rawDirectory(),
+    }, baseRecoveryPointId, parentEntryId);
+
+    expect(mapped.directory).toEqual({
+      current: {
+        ref: { recoveryPointId: baseRecoveryPointId, entryId: parentEntryId },
+        name: "exports",
+      },
+      parent: { recoveryPointId: baseRecoveryPointId, entryId: ancestorEntryId },
+      breadcrumb: [
+        { ref: { recoveryPointId: baseRecoveryPointId, entryId: ancestorEntryId }, name: "backup" },
+        { ref: { recoveryPointId: baseRecoveryPointId, entryId: parentEntryId }, name: "exports" },
+      ],
+    });
+    expect(JSON.stringify(mapped)).not.toMatch(/PRIVATE|raw_path|normalized_path/);
+  });
+
+  it.each([
+    ["missing directory", { items: [], next_cursor: null }],
+    ["missing required member", { items: [], directory: { current: null, breadcrumb: [] } }],
+    ["root contradiction", { items: [], directory: { current: null, parent: null, breadcrumb: [rawDirectory().breadcrumb[0]] } }],
+    ["cross-point current", { items: [], directory: { ...rawDirectory(), current: { ...rawDirectory().current, recovery_point_id: compareRecoveryPointId } } }],
+    ["blank current name", { items: [], directory: { ...rawDirectory(), current: { ...rawDirectory().current, name: "   " }, breadcrumb: [rawDirectory().breadcrumb[0], { ...rawDirectory().breadcrumb[1], name: "   " }] } }],
+    ["cyclic breadcrumb", { items: [], directory: { ...rawDirectory(), breadcrumb: [rawDirectory().breadcrumb[0], rawDirectory().breadcrumb[0]] } }],
+    ["contradictory parent", { items: [], directory: { ...rawDirectory(), parent: { recovery_point_id: baseRecoveryPointId, entry_id: "e".repeat(64) } } }],
+    ["contradictory current", { items: [], directory: { ...rawDirectory(), current: { ...rawDirectory().current, entry_id: "f".repeat(64) } } }],
+    ["cross-point page item", { items: [{ ...rawEntry(), recovery_point_id: compareRecoveryPointId }], directory: rawDirectory() }],
+    ["cross-directory page item", { items: [{ ...rawEntry(), parent_entry_id: ancestorEntryId }], directory: rawDirectory() }],
+    ["malformed page item", { items: [{ ...rawEntry(), entry_type: "future_type" }], directory: rawDirectory() }],
+    ["blank page item name", { items: [{ ...rawEntry(), name: "   " }], directory: rawDirectory() }],
+    ["NUL page item name", { items: [{ ...rawEntry(), name: "unsafe\0name" }], directory: rawDirectory() }],
+    ["oversized page item name", { items: [{ ...rawEntry(), name: "n".repeat(4097) }], directory: rawDirectory() }],
+  ])("atomically rejects a %s directory page", (_case, raw) => {
+    expect(() => mapBackupAssetPage(raw, baseRecoveryPointId, parentEntryId)).toThrow("invalid backup asset page response");
+  });
+
   it("maps both diff sides to distinct composite refs and drops raw fingerprints", () => {
     const mapped = mapRecoveryPointDiff(rawDiff());
 
@@ -170,7 +261,7 @@ describe("backup assets API boundary", () => {
   it("sends exact list/detail/diff shapes using opaque refs and AbortSignal", async () => {
     const signal = new AbortController().signal;
     requestMock
-      .mockResolvedValueOnce({ items: [rawEntry()], next_cursor: "next-entry" })
+      .mockResolvedValueOnce({ items: [rawEntry()], next_cursor: "next-entry", directory: rawDirectory() })
       .mockResolvedValueOnce(rawEntry())
       .mockResolvedValueOnce(rawDiff());
 

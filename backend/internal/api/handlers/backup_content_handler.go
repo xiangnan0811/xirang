@@ -607,7 +607,7 @@ func (handler *BackupContentHandler) deliveryProof(
 	}
 	if rawProof == "" {
 		if required {
-			respondStepUpRequired(c)
+			respondStepUpRequired(c, expected)
 			return nil, false
 		}
 		return nil, true
@@ -616,12 +616,23 @@ func (handler *BackupContentHandler) deliveryProof(
 		respondForbidden(c, "权限不足")
 		return nil, false
 	}
-	claims, err := validateStepUpProof(handler.db, handler.jwtManager, rawProof, actor.UserID, actor.Role, expected)
+	sessionIDs := []string(nil)
+	if expected == auth.StepUpActionAssetSecretReveal {
+		session, ok := middleware.CurrentSessionBinding(c)
+		if !ok || session.UserID != actor.UserID || session.Role != actor.Role {
+			respondSecretRevealRequired(c)
+			return nil, false
+		}
+		sessionIDs = []string{session.JTI}
+	}
+	claims, err := validateStepUpProof(handler.db, handler.jwtManager, rawProof, actor.UserID, actor.Role, expected, sessionIDs...)
 	if err != nil || claims == nil || claims.ExpiresAt == nil || backupasset.ValidateOpaqueID(claims.ID) != nil {
 		if errors.Is(err, ErrStepUpVerifierUnavailable) {
 			respondServiceUnavailable(c, "二次验证服务暂不可用")
+		} else if expected == auth.StepUpActionAssetSecretReveal {
+			respondSecretRevealRequired(c)
 		} else {
-			respondStepUpRequired(c)
+			respondStepUpRequired(c, expected)
 		}
 		return nil, false
 	}
@@ -635,7 +646,7 @@ func (handler *BackupContentHandler) exactDeliveryProof(
 ) (*content.StepUpProof, bool) {
 	rawProof, ok := backupRecoveryAuthorizationStepUpProof(c.Request)
 	if !ok {
-		respondStepUpRequired(c)
+		respondStepUpRequired(c, expected)
 		return nil, false
 	}
 	claims, err := validateStepUpProof(handler.db, handler.jwtManager, rawProof, actor.UserID, actor.Role, expected)
@@ -643,7 +654,7 @@ func (handler *BackupContentHandler) exactDeliveryProof(
 		if errors.Is(err, ErrStepUpVerifierUnavailable) {
 			respondServiceUnavailable(c, "二次验证服务暂不可用")
 		} else {
-			respondStepUpRequired(c)
+			respondStepUpRequired(c, expected)
 		}
 		return nil, false
 	}
@@ -901,6 +912,10 @@ func setBackupContentSecurityHeaders(header http.Header) {
 }
 
 func respondBackupContentIssueError(c *gin.Context, err error) {
+	if stage, ok := content.SourceFailureStageFromError(err); ok {
+		respondBackupContentSourceFailure(c, stage, c.GetString(middleware.RequestIDKey))
+		return
+	}
 	if reason, correlationID, ok := backuprepository.CapabilityFromError(err); ok {
 		if len(reason.Params) != 0 {
 			respondServiceUnavailable(c, "备份内容服务暂不可用")
@@ -922,9 +937,7 @@ func respondBackupContentIssueError(c *gin.Context, err error) {
 	case errors.Is(err, backupasset.ErrNotFound), errors.Is(err, content.ErrContentNotFound):
 		respondNotFound(c, "备份资产不存在")
 	case errors.Is(err, content.ErrSecretRevealRequired):
-		respondForbiddenData(c, "需要二次验证", map[string]any{
-			"reason": map[string]any{"code": "secret_reveal_required", "params": map[string]string{}},
-		})
+		respondSecretRevealRequired(c)
 	case errors.Is(err, content.ErrRendererUnsupported), errors.Is(err, content.ErrMIMEConfusion):
 		respondUnprocessableEntityData(c, "无法安全预览此文件", map[string]any{
 			"reason": map[string]any{"code": "preview_renderer_unsupported", "params": map[string]string{}},
@@ -938,6 +951,28 @@ func respondBackupContentIssueError(c *gin.Context, err error) {
 	default:
 		respondServiceUnavailable(c, "备份内容服务暂不可用")
 	}
+}
+
+func respondBackupContentSourceFailure(c *gin.Context, stage content.SourceFailureStage, correlationID string) {
+	code := ""
+	switch stage {
+	case content.SourceFailureOpen:
+		code = "preview_source_open_failed"
+	case content.SourceFailureRead:
+		code = "preview_source_read_failed"
+	case content.SourceFailureChanged:
+		code = "preview_source_changed"
+	case content.SourceFailureTimeout:
+		code = "preview_source_timeout"
+	case content.SourceFailureCancellation:
+		code = "preview_source_canceled"
+	case content.SourceFailureCapability:
+		code = "preview_source_capability"
+	default:
+		respondServiceUnavailable(c, "备份内容服务暂不可用")
+		return
+	}
+	respondBackupContentSourceError(c, code, correlationID)
 }
 
 func respondBackupContentCapabilityError(c *gin.Context, reason backupasset.CapabilityReason, correlationID string) {

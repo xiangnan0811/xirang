@@ -9,6 +9,7 @@ import {
 } from "@/features/backup-assets/backup-assets-preferences";
 import {
   parseBackupAssetsRoute,
+  gateBackupAssetsBrowseRoute,
   updateBackupAssetsRoute,
   type BackupAssetsRouteState,
 } from "@/features/backup-assets/backup-assets-route-state";
@@ -45,7 +46,7 @@ function BackupsDataWorkspace({
   routeHasExplicitLayout: boolean;
 }) {
   const { t } = useTranslation();
-  const { token, role, userId, ensureStepUpProof } = useAuth();
+  const { token, role, userId, ensureStepUpProof, clearStepUpProof } = useAuth();
   const navigate = useNavigate();
   const [preferences, setPreferences] = useState(readBackupAssetsPreferences);
   const layout = resolveBackupAssetsLayout(
@@ -77,16 +78,22 @@ function BackupsDataWorkspace({
     navigate(result.status === "valid" ? result.href : result.safePath, { replace: true });
   };
 
+  const fileSources = useBackupFileSources({ token, route: resolvedRoute, onRoutePatch: handleRoutePatch });
+  const controllerRoute = gateBackupAssetsBrowseRoute(
+    resolvedRoute,
+    fileSources.selectedVersion?.browseState ?? null,
+  );
   const controller = useBackupAssetsState({
     token,
     role,
-    route: resolvedRoute,
+    route: controllerRoute,
     ensureStepUpProof,
+    clearStepUpProof,
     onRouteRepair: handleRouteRepair,
   });
-  const fileSources = useBackupFileSources({ token, route: resolvedRoute, onRoutePatch: handleRoutePatch });
   const sourceWorkspaceUnavailable =
-    fileSources.status === "blocked" || fileSources.status === "permission_denied";
+    fileSources.status === "blocked" || fileSources.status === "permission_denied" ||
+    (resolvedRoute.recoveryPointId !== undefined && fileSources.selectedVersion?.browseState !== "browsable");
 
   return (
     <div className="flex min-h-[32rem] flex-col" aria-labelledby="backup-assets-data-title">

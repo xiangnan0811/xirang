@@ -63,6 +63,22 @@ func TestRcloneInvariantHandleForwardsProviderByteReporter(t *testing.T) {
 	}
 }
 
+func TestRcloneInvariantPrefixClosePreservesCommandAndInvariantFailures(t *testing.T) {
+	commandErr := errors.New("FAKE_COMMAND_CLOSE_FAILURE_FOR_TEST_ONLY")
+	invariantErr := errors.New("FAKE_RCLONE_INVARIANT_FAILURE_FOR_TEST_ONLY")
+	underlying := &prefixCloseProviderReadHandle{
+		Reader:    strings.NewReader("prefix-and-more"),
+		prefixErr: commandErr,
+	}
+	handle := &commandInvariantHandle{underlying: underlying, verify: func() error { return invariantErr }}
+	if err := handle.ClosePrefix(); !errors.Is(err, commandErr) || !errors.Is(err, invariantErr) {
+		t.Fatalf("prefix close lost command or invariant failure: %v", err)
+	}
+	if !underlying.prefixClosed || underlying.closed {
+		t.Fatalf("prefix close=%t ordinary close=%t", underlying.prefixClosed, underlying.closed)
+	}
+}
+
 func TestRcloneNodeDefaultConfigOmitsSecretTransport(t *testing.T) {
 	transport := rcloneProbeTransport(true)
 	adapter := newRcloneAdapterForTest(t, transport)

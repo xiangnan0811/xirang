@@ -139,6 +139,41 @@ func TestPublicationWorkerShutdownStopsRunWithoutWaitingForPeriodicTimer(t *test
 	}
 }
 
+func TestPublicationWorkerWakeTrafficDoesNotStarvePeriodicScan(t *testing.T) {
+	reconciler := &workerReconciler{}
+	worker, err := NewPublicationWorker(PublicationWorkerDependencies{
+		Foundation: workerFoundation(true), Reconciler: reconciler, Metrics: publication.NoopMetrics{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		worker.runLoop(ctx, backupasset.PublicationConfig{ReconcileInterval: 25 * time.Millisecond})
+		close(done)
+	}()
+	deadline := time.NewTimer(125 * time.Millisecond)
+	defer deadline.Stop()
+	wakes := time.NewTicker(5 * time.Millisecond)
+	defer wakes.Stop()
+	for {
+		select {
+		case <-wakes.C:
+			if !worker.TryWake(workerPointIDOne) {
+				t.Fatal("wake traffic was unexpectedly rejected")
+			}
+		case <-deadline.C:
+			cancel()
+			<-done
+			if got := reconciler.listCallCount(); got == 0 {
+				t.Fatal("wake traffic starved the periodic durable candidate scan")
+			}
+			return
+		}
+	}
+}
+
 func TestPublicationWorkerWakeIsNonblockingAndDurableStateRecoversLostWake(t *testing.T) {
 	reconciler := &workerReconciler{candidates: []string{workerPointIDOne}}
 	worker, err := NewPublicationWorker(PublicationWorkerDependencies{
@@ -355,6 +390,12 @@ func (reconciler *workerReconciler) processedIDs() []string {
 	reconciler.mu.Lock()
 	defer reconciler.mu.Unlock()
 	return append([]string(nil), reconciler.processed...)
+}
+
+func (reconciler *workerReconciler) listCallCount() int {
+	reconciler.mu.Lock()
+	defer reconciler.mu.Unlock()
+	return reconciler.listCalls
 }
 
 func containsWorkerPoint(points []string, want string) bool {

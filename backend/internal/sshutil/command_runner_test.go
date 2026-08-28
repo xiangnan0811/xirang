@@ -22,6 +22,7 @@ type fakeCommandSession struct {
 	closed    chan struct{}
 	started   chan struct{}
 	blockWait bool
+	closeErr  error
 	once      sync.Once
 }
 
@@ -50,7 +51,7 @@ func (session *fakeCommandSession) Wait() error {
 func (*fakeCommandSession) Signal(ssh.Signal) error { return nil }
 func (session *fakeCommandSession) Close() error {
 	session.once.Do(func() { close(session.closed) })
-	return nil
+	return session.closeErr
 }
 
 type trackingWriteCloser struct {
@@ -68,6 +69,25 @@ func (writer *trackingWriteCloser) Close() error { writer.closed = true; return 
 type naturallyCompletingCommandSession struct {
 	*fakeCommandSession
 	delay time.Duration
+}
+
+type interruptedPrefixCommandSession struct {
+	*fakeCommandSession
+}
+
+type naturallyFailedPrefixCommandSession struct {
+	*fakeCommandSession
+	waited chan struct{}
+}
+
+func (session *interruptedPrefixCommandSession) Wait() error {
+	<-session.closed
+	return errors.New("FAKE_EXPECTED_PREFIX_ABORT_FOR_TEST_ONLY")
+}
+
+func (session *naturallyFailedPrefixCommandSession) Wait() error {
+	close(session.waited)
+	return errors.New("FAKE_NATURAL_PREFIX_COMMAND_FAILURE_FOR_TEST_ONLY")
 }
 
 func (session *naturallyCompletingCommandSession) Wait() error {
@@ -220,6 +240,104 @@ func TestCommandRunnerOpenJoinsNaturallyCompletedStreamBeforeClosingSession(t *t
 	}
 	if err := handle.Close(); err != nil {
 		t.Fatalf("natural stream close killed the command before Wait completed: %v", err)
+	}
+}
+
+func TestCommandRunnerOpenSupportsIntentionalBoundedPrefixClose(t *testing.T) {
+	base := newFakeCommandSession()
+	base.stdout = []byte("prefix-and-more")
+	session := &interruptedPrefixCommandSession{fakeCommandSession: base}
+	runner := NewCommandRunner(func(context.Context) (CommandSession, error) { return session, nil }, 1)
+	handle, err := runner.Open(context.Background(), CommandSpec{
+		Binary: "restic", Args: []string{"dump"}, MaxStdoutBytes: 8, Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := make([]byte, 7)
+	if _, err := io.ReadFull(handle, prefix); err != nil || string(prefix) != "prefix-" {
+		t.Fatalf("prefix=%q err=%v", prefix, err)
+	}
+	prefixCloser, ok := handle.(interface{ ClosePrefix() error })
+	if !ok {
+		t.Fatal("command stream does not expose intentional prefix close")
+	}
+	if err := prefixCloser.ClosePrefix(); err != nil {
+		t.Fatalf("intentional prefix close=%v", err)
+	}
+	select {
+	case <-session.closed:
+	case <-time.After(time.Second):
+		t.Fatal("prefix close did not terminate the command session")
+	}
+}
+
+func TestCommandRunnerOpenOrdinaryEarlyClosePreservesAbortedWaitFailure(t *testing.T) {
+	base := newFakeCommandSession()
+	base.stdout = []byte("prefix-and-more")
+	session := &interruptedPrefixCommandSession{fakeCommandSession: base}
+	runner := NewCommandRunner(func(context.Context) (CommandSession, error) { return session, nil }, 1)
+	handle, err := runner.Open(context.Background(), CommandSpec{
+		Binary: "restic", Args: []string{"dump"}, MaxStdoutBytes: 8, Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := make([]byte, 7)
+	if _, err := io.ReadFull(handle, prefix); err != nil || string(prefix) != "prefix-" {
+		t.Fatalf("prefix=%q err=%v", prefix, err)
+	}
+	if err := handle.Close(); !errors.Is(err, ErrCommandFailed) {
+		t.Fatalf("ordinary early close suppressed aborted wait failure: %v", err)
+	}
+}
+
+func TestCommandRunnerOpenPrefixClosePreservesCompletedCommandFailure(t *testing.T) {
+	base := newFakeCommandSession()
+	base.stdout = []byte("prefix-and-more")
+	session := &naturallyFailedPrefixCommandSession{fakeCommandSession: base, waited: make(chan struct{})}
+	runner := NewCommandRunner(func(context.Context) (CommandSession, error) { return session, nil }, 1)
+	handle, err := runner.Open(context.Background(), CommandSpec{
+		Binary: "restic", Args: []string{"dump"}, MaxStdoutBytes: 8, Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-session.waited
+	prefix := make([]byte, 7)
+	if _, err := io.ReadFull(handle, prefix); err != nil || string(prefix) != "prefix-" {
+		t.Fatalf("prefix=%q err=%v", prefix, err)
+	}
+	prefixCloser, ok := handle.(interface{ ClosePrefix() error })
+	if !ok {
+		t.Fatal("command stream does not expose intentional prefix close")
+	}
+	if err := prefixCloser.ClosePrefix(); !errors.Is(err, ErrCommandFailed) {
+		t.Fatalf("completed command failure was suppressed: %v", err)
+	}
+}
+
+func TestCommandRunnerOpenPrefixClosePreservesSessionCleanupFailure(t *testing.T) {
+	base := newFakeCommandSession()
+	base.stdout = []byte("prefix-and-more")
+	base.closeErr = errors.New("FAKE_PRIVATE_SESSION_CLEANUP_FAILURE_FOR_TEST_ONLY")
+	session := &interruptedPrefixCommandSession{fakeCommandSession: base}
+	runner := NewCommandRunner(func(context.Context) (CommandSession, error) { return session, nil }, 1)
+	handle, err := runner.Open(context.Background(), CommandSpec{
+		Binary: "restic", Args: []string{"dump"}, MaxStdoutBytes: 8, Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := make([]byte, 7)
+	if _, err := io.ReadFull(handle, prefix); err != nil || string(prefix) != "prefix-" {
+		t.Fatalf("prefix=%q err=%v", prefix, err)
+	}
+	prefixCloser := handle.(interface{ ClosePrefix() error })
+	if err := prefixCloser.ClosePrefix(); !errors.Is(err, ErrCommandFailed) {
+		t.Fatalf("session cleanup failure was suppressed: %v", err)
+	} else if strings.Contains(err.Error(), "FAKE_PRIVATE") {
+		t.Fatalf("session cleanup failure leaked private evidence: %v", err)
 	}
 }
 

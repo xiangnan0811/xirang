@@ -1,6 +1,7 @@
 import type {
   AssetRef,
   BackupAsset,
+  BackupAssetDirectoryContext,
   BackupAssetPage,
   BackupAssetVersion,
   BackupAssetVersionPage,
@@ -140,10 +141,11 @@ function mapBreadcrumb(value: unknown, recoveryPointId: string) {
       return null;
     }
     const ref = mapAssetRef(item);
-    if (ref === null || ref.recoveryPointId !== recoveryPointId || typeof item.name !== "string" || item.name === "") {
+    const name = mapDirectoryName(item.name);
+    if (ref === null || ref.recoveryPointId !== recoveryPointId || name === null) {
       return null;
     }
-    result.push({ ref, name: item.name });
+    result.push({ ref, name });
   }
   return result;
 }
@@ -156,8 +158,9 @@ export function mapBackupAsset(value: unknown): CatalogProjection<BackupAsset> {
   const mappedEntryType = entryType(value.entry_type);
   const size = finiteInteger(value.size);
   const strength = fingerprintStrength(value.fingerprint_strength);
+  const name = mapDirectoryName(value.name);
   if (ref === null || mappedEntryType === null || size === null || strength === null ||
-    typeof value.name !== "string" || value.name === "") {
+    name === null) {
     return blocked();
   }
   let parentRef: AssetRef | null = null;
@@ -177,7 +180,7 @@ export function mapBackupAsset(value: unknown): CatalogProjection<BackupAsset> {
     value: {
       ref,
       parentRef,
-      name: value.name,
+      name,
       entryType: mappedEntryType,
       size,
       modifiedAt: normalizeNullableCatalogTime(value.modified_at),
@@ -301,12 +304,100 @@ function mapBackupAssetVersionPage(value: unknown): CatalogProjection<BackupAsse
   return { status: "available", value: { items } };
 }
 
-function mapBackupAssetPage(value: unknown): BackupAssetPage {
-  const raw = isRawBackupAssetObject(value) ? value : {};
-  return {
-    items: Array.isArray(raw.items) ? raw.items.map(mapBackupAsset) : [],
-    nextCursor: typeof raw.next_cursor === "string" && raw.next_cursor !== "" ? raw.next_cursor : null,
-  };
+function invalidBackupAssetPage(): never {
+  throw new Error("invalid backup asset page response");
+}
+
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function mapDirectoryName(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 4096 && !value.includes("\0")
+    ? value
+    : null;
+}
+
+function mapDirectoryContext(
+  value: unknown,
+  recoveryPointId: string,
+  currentEntryId: string | undefined,
+): BackupAssetDirectoryContext | null {
+  if (!isRawBackupAssetObject(value) ||
+    !hasOwn(value, "current") || !hasOwn(value, "parent") || !hasOwn(value, "breadcrumb") ||
+    !Array.isArray(value.breadcrumb) || value.breadcrumb.length > 256) {
+    return null;
+  }
+  if (currentEntryId === undefined) {
+    return value.current === null && value.parent === null && value.breadcrumb.length === 0
+      ? { current: null, parent: null, breadcrumb: [] }
+      : null;
+  }
+  if (!isRawBackupAssetObject(value.current)) return null;
+  const currentRef = mapAssetRef(value.current);
+  const currentName = mapDirectoryName(value.current.name);
+  if (currentRef === null || currentName === null ||
+    currentRef.recoveryPointId !== recoveryPointId || currentRef.entryId !== currentEntryId ||
+    value.breadcrumb.length === 0) {
+    return null;
+  }
+
+  const breadcrumb = [];
+  const seen = new Set<string>();
+  for (const rawItem of value.breadcrumb) {
+    if (!isRawBackupAssetObject(rawItem)) return null;
+    const ref = mapAssetRef(rawItem);
+    const name = mapDirectoryName(rawItem.name);
+    if (ref === null || name === null || ref.recoveryPointId !== recoveryPointId || seen.has(ref.entryId)) {
+      return null;
+    }
+    seen.add(ref.entryId);
+    breadcrumb.push({ ref, name });
+  }
+  const last = breadcrumb[breadcrumb.length - 1];
+  if (last.ref.entryId !== currentRef.entryId || last.name !== currentName) return null;
+
+  if (breadcrumb.length === 1) {
+    if (value.parent !== null) return null;
+    return { current: { ref: currentRef, name: currentName }, parent: null, breadcrumb };
+  }
+  const parent = mapAssetRef(value.parent);
+  const expectedParent = breadcrumb[breadcrumb.length - 2].ref;
+  if (parent === null || parent.recoveryPointId !== recoveryPointId || parent.entryId !== expectedParent.entryId) {
+    return null;
+  }
+  return { current: { ref: currentRef, name: currentName }, parent, breadcrumb };
+}
+
+export function mapBackupAssetPage(
+  value: unknown,
+  recoveryPointId: string,
+  currentEntryId?: string,
+): BackupAssetPage {
+  if (!isRawBackupAssetObject(value) || !Array.isArray(value.items)) invalidBackupAssetPage();
+  const directory = mapDirectoryContext(value.directory, recoveryPointId, currentEntryId);
+  if (directory === null) invalidBackupAssetPage();
+  const items = value.items.map(mapBackupAsset);
+  if (items.some((item) => item.status !== "available")) invalidBackupAssetPage();
+  for (const item of items) {
+    if (item.status !== "available" || item.value.ref.recoveryPointId !== recoveryPointId) {
+      invalidBackupAssetPage();
+    }
+    const expectedParentEntryId = currentEntryId ?? null;
+    if (expectedParentEntryId === null) {
+      if (item.value.parentRef !== null) invalidBackupAssetPage();
+    } else if (item.value.parentRef === null ||
+      item.value.parentRef.recoveryPointId !== recoveryPointId ||
+      item.value.parentRef.entryId !== expectedParentEntryId) {
+      invalidBackupAssetPage();
+    }
+  }
+  const nextCursor = value.next_cursor === undefined || value.next_cursor === null || value.next_cursor === ""
+    ? null
+    : typeof value.next_cursor === "string" && value.next_cursor.length <= 8192
+      ? value.next_cursor
+      : invalidBackupAssetPage();
+  return { items, nextCursor, directory };
 }
 
 function appendQuery(path: string, query: URLSearchParams): string {
@@ -337,7 +428,7 @@ export function createBackupAssetsApi() {
         appendQuery(`/recovery-points/${encodeURIComponent(recoveryPointId)}/entries`, query),
         { token, signal: options.signal },
       );
-      return mapBackupAssetPage(raw);
+      return mapBackupAssetPage(raw, recoveryPointId, options.parent?.entryId);
     },
 
     async listAssetVersions(

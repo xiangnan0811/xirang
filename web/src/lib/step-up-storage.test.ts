@@ -51,6 +51,22 @@ describe("step-up proof storage", () => {
     expect(readStepUpProof(STEP_UP_ACTIONS.configExport, now + 1_001)?.proof).toBe("config-proof");
   });
 
+  it("keeps secret reveal until its exact fixed 45-minute expiry without sliding", () => {
+    const issuedAt = Date.now();
+    const expiresAt = issuedAt + 45 * 60_000;
+    saveStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, "secret-proof", expiresAt);
+
+    expect(readStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, issuedAt + 30 * 60_000)).toEqual({
+      proof: "secret-proof",
+      expiresAt,
+    });
+    expect(readStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, expiresAt - 1)).toEqual({
+      proof: "secret-proof",
+      expiresAt,
+    });
+    expect(readStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, expiresAt)).toBeNull();
+  });
+
   it("clears one action or all actions", () => {
     const now = Date.now();
     saveStepUpProof(STEP_UP_ACTIONS.terminalOpen, "terminal-proof", now + 10_000);

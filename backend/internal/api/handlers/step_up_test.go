@@ -26,7 +26,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const stepUpTestJWTSecret = "step-up-test-signing-marker"
+const (
+	stepUpTestJWTSecret = "step-up-test-signing-marker"
+	stepUpTestSessionID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
 
 func openStepUpHandlerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
@@ -99,6 +102,7 @@ func signExpiredStepUpProofForActionForTest(t *testing.T, user model.User, actio
 		Role:         user.Role,
 		Purpose:      auth.PurposeStepUp,
 		StepUpAction: action,
+		SessionID:    stepUpTestSessionID,
 		TokenVersion: user.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        fmt.Sprintf("expired-step-up-%d", user.ID),
@@ -122,8 +126,11 @@ func TestOptionalStepUpAcceptsOnlyExactAssetSecretRevealAndFailsInfrastructureCl
 	other := seedStepUpUser(t, db, "optional-secret-other", "admin")
 	exactProof := generateStepUpProofForAction(t, manager, user, auth.StepUpActionAssetSecretReveal)
 
+	claims, err := VerifyOptionalStepUpProof(db, manager, "", user.ID, user.Role, auth.StepUpActionAssetSecretReveal, stepUpTestSessionID)
+	if err != nil || claims != nil {
+		t.Fatalf("absent optional proof should remain absent: claims=%+v err=%v", claims, err)
+	}
 	invalidProofs := map[string]string{
-		"absent":        "",
 		"malformed":     "malformed-proof",
 		"expired":       signExpiredStepUpProofForActionForTest(t, user, auth.StepUpActionAssetSecretReveal),
 		"wrong user":    generateStepUpProofForAction(t, manager, other, auth.StepUpActionAssetSecretReveal),
@@ -132,25 +139,25 @@ func TestOptionalStepUpAcceptsOnlyExactAssetSecretRevealAndFailsInfrastructureCl
 	}
 	for name, proof := range invalidProofs {
 		t.Run(name, func(t *testing.T) {
-			claims, err := VerifyOptionalStepUpProof(db, manager, proof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal)
-			if err != nil || claims != nil {
-				t.Fatalf("invalid optional proof became a capability: claims=%+v err=%v", claims, err)
+			claims, err := VerifyOptionalStepUpProof(db, manager, proof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal, stepUpTestSessionID)
+			if !errors.Is(err, ErrStepUpProofInvalid) || claims != nil {
+				t.Fatalf("attached invalid optional proof was not rejected: claims=%+v err=%v", claims, err)
 			}
 		})
 	}
 
 	missingUser := model.User{ID: 999999, Username: "missing", Role: "admin", TokenVersion: 1, TOTPEnabled: true}
 	missingProof := generateStepUpProofForAction(t, manager, missingUser, auth.StepUpActionAssetSecretReveal)
-	if _, err := validateStepUpProof(db, manager, missingProof, missingUser.ID, missingUser.Role, auth.StepUpActionAssetSecretReveal); !errors.Is(err, ErrStepUpProofInvalid) {
+	if _, err := validateStepUpProof(db, manager, missingProof, missingUser.ID, missingUser.Role, auth.StepUpActionAssetSecretReveal, stepUpTestSessionID); !errors.Is(err, ErrStepUpProofInvalid) {
 		t.Fatalf("missing proof user got %v, want invalid proof", err)
 	}
 
 	if err := db.Model(&model.User{}).Where("id = ?", user.ID).Update("totp_enabled", false).Error; err != nil {
 		t.Fatalf("disable TOTP: %v", err)
 	}
-	claims, err := VerifyOptionalStepUpProof(db, manager, exactProof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal)
-	if err != nil || claims != nil {
-		t.Fatalf("disabled TOTP proof became a capability: claims=%+v err=%v", claims, err)
+	claims, err = VerifyOptionalStepUpProof(db, manager, exactProof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal, stepUpTestSessionID)
+	if !errors.Is(err, ErrStepUpProofInvalid) || claims != nil {
+		t.Fatalf("disabled TOTP proof was not rejected: claims=%+v err=%v", claims, err)
 	}
 	if err := db.Model(&model.User{}).Where("id = ?", user.ID).Update("totp_enabled", true).Error; err != nil {
 		t.Fatalf("restore TOTP: %v", err)
@@ -161,20 +168,20 @@ func TestOptionalStepUpAcceptsOnlyExactAssetSecretRevealAndFailsInfrastructureCl
 			continue
 		}
 		proof := generateStepUpProofForAction(t, manager, user, action)
-		claims, err := VerifyOptionalStepUpProof(db, manager, proof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal)
-		if err != nil || claims != nil {
-			t.Fatalf("proof for %q became secret reveal: claims=%+v err=%v", action, claims, err)
+		claims, err := VerifyOptionalStepUpProof(db, manager, proof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal, stepUpTestSessionID)
+		if !errors.Is(err, ErrStepUpProofInvalid) || claims != nil {
+			t.Fatalf("proof for %q was not rejected as secret reveal: claims=%+v err=%v", action, claims, err)
 		}
 	}
 
-	claims, err = VerifyOptionalStepUpProof(db, manager, exactProof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal)
+	claims, err = VerifyOptionalStepUpProof(db, manager, exactProof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal, stepUpTestSessionID)
 	if err != nil || claims == nil || claims.ID == "" || claims.ExpiresAt == nil || claims.StepUpAction != auth.StepUpActionAssetSecretReveal {
 		t.Fatalf("exact secret-reveal proof rejected: claims=%+v err=%v", claims, err)
 	}
-	if _, err := VerifyOptionalStepUpProof(nil, manager, exactProof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal); !errors.Is(err, ErrStepUpVerifierUnavailable) {
+	if _, err := VerifyOptionalStepUpProof(nil, manager, exactProof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal, stepUpTestSessionID); !errors.Is(err, ErrStepUpVerifierUnavailable) {
 		t.Fatalf("nil DB got %v, want verifier unavailable", err)
 	}
-	if _, err := VerifyOptionalStepUpProof(db, nil, exactProof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal); !errors.Is(err, ErrStepUpVerifierUnavailable) {
+	if _, err := VerifyOptionalStepUpProof(db, nil, exactProof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal, stepUpTestSessionID); !errors.Is(err, ErrStepUpVerifierUnavailable) {
 		t.Fatalf("nil JWT manager got %v, want verifier unavailable", err)
 	}
 
@@ -185,9 +192,161 @@ func TestOptionalStepUpAcceptsOnlyExactAssetSecretRevealAndFailsInfrastructureCl
 	if err := sqlDB.Close(); err != nil {
 		t.Fatalf("close SQL DB: %v", err)
 	}
-	if _, err := VerifyOptionalStepUpProof(db, manager, exactProof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal); !errors.Is(err, ErrStepUpVerifierUnavailable) {
+	if _, err := VerifyOptionalStepUpProof(db, manager, exactProof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal, stepUpTestSessionID); !errors.Is(err, ErrStepUpVerifierUnavailable) {
 		t.Fatalf("DB infrastructure failure got %v, want verifier unavailable", err)
 	}
+}
+
+func TestStepUpProofValidationBindsSessionAndExactIssuedLifetime(t *testing.T) {
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	user := seedStepUpUser(t, db, "session-bound-secret-reveal", "admin")
+	proof := generateStepUpProofForAction(
+		t,
+		manager,
+		user,
+		auth.StepUpActionAssetSecretReveal,
+		stepUpTestSessionID,
+	)
+
+	first, err := validateStepUpProof(
+		db, manager, proof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal, stepUpTestSessionID,
+	)
+	if err != nil {
+		t.Fatalf("valid session-bound proof rejected: %v", err)
+	}
+	second, err := validateStepUpProof(
+		db, manager, proof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal, stepUpTestSessionID,
+	)
+	if err != nil || first.IssuedAt == nil || first.ExpiresAt == nil || second.ExpiresAt == nil ||
+		!second.ExpiresAt.Equal(first.ExpiresAt.Time) {
+		t.Fatalf("proof reuse changed fixed expiry: first=%+v second=%+v err=%v", first, second, err)
+	}
+	if _, err := validateStepUpProof(
+		db, manager, proof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal, "cccccccccccccccccccccccccccccccc",
+	); !errors.Is(err, ErrStepUpProofInvalid) {
+		t.Fatalf("wrong login session got %v, want invalid proof", err)
+	}
+	if _, err := validateStepUpProof(
+		db, manager, proof, user.ID, "", auth.StepUpActionAssetSecretReveal, stepUpTestSessionID,
+	); !errors.Is(err, ErrStepUpProofInvalid) {
+		t.Fatalf("missing caller role got %v, want invalid proof", err)
+	}
+
+	tampered := proof[:len(proof)-1] + "x"
+	if tampered == proof {
+		tampered = proof[:len(proof)-1] + "y"
+	}
+	if _, err := validateStepUpProof(
+		db, manager, tampered, user.ID, user.Role, auth.StepUpActionAssetSecretReveal, stepUpTestSessionID,
+	); !errors.Is(err, ErrStepUpProofInvalid) {
+		t.Fatalf("tampered proof got %v, want invalid proof", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	baseClaims := auth.Claims{
+		UserID:       user.ID,
+		Username:     user.Username,
+		Role:         user.Role,
+		Purpose:      auth.PurposeStepUp,
+		StepUpAction: auth.StepUpActionAssetSecretReveal,
+		SessionID:    stepUpTestSessionID,
+		TokenVersion: user.TokenVersion,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        "dddddddddddddddddddddddddddddddd",
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(45 * time.Minute)),
+			Subject:   fmt.Sprintf("%d", user.ID),
+		},
+	}
+	invalidClaims := map[string]auth.Claims{
+		"missing proof jti": func() auth.Claims {
+			claims := baseClaims
+			claims.ID = ""
+			return claims
+		}(),
+		"missing issued-at": func() auth.Claims {
+			claims := baseClaims
+			claims.IssuedAt = nil
+			return claims
+		}(),
+		"future issued-at": func() auth.Claims {
+			claims := baseClaims
+			claims.IssuedAt = jwt.NewNumericDate(now.Add(time.Minute))
+			claims.ExpiresAt = jwt.NewNumericDate(now.Add(46 * time.Minute))
+			return claims
+		}(),
+		"wrong lifetime": func() auth.Claims {
+			claims := baseClaims
+			claims.ExpiresAt = jwt.NewNumericDate(now.Add(5 * time.Minute))
+			return claims
+		}(),
+		"wrong subject": func() auth.Claims {
+			claims := baseClaims
+			claims.Subject = "999"
+			return claims
+		}(),
+		"future action": func() auth.Claims {
+			claims := baseClaims
+			claims.StepUpAction = auth.StepUpAction("future.action")
+			return claims
+		}(),
+	}
+	for name, claims := range invalidClaims {
+		t.Run(name, func(t *testing.T) {
+			signed := signStepUpClaimsForTest(t, claims)
+			if _, err := validateStepUpProof(
+				db, manager, signed, user.ID, user.Role, auth.StepUpActionAssetSecretReveal, stepUpTestSessionID,
+			); !errors.Is(err, ErrStepUpProofInvalid) {
+				t.Fatalf("invalid proof got %v, want invalid proof", err)
+			}
+		})
+	}
+
+	if err := manager.RevokeSession(stepUpTestSessionID, user.ID, now.Add(time.Hour)); err != nil {
+		t.Fatalf("revoke primary session: %v", err)
+	}
+	if _, err := validateStepUpProof(
+		db, manager, proof, user.ID, user.Role, auth.StepUpActionAssetSecretReveal, stepUpTestSessionID,
+	); !errors.Is(err, ErrStepUpProofInvalid) {
+		t.Fatalf("revoked login session got %v, want invalid proof", err)
+	}
+}
+
+func TestStepUpRequiredEnvelopeReportsExactActionPolicyTTL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	user := seedStepUpUser(t, db, "step-up-required-ttl", "admin")
+	primaryToken := generatePrimaryToken(t, manager, user)
+
+	router := gin.New()
+	router.Use(middleware.AuthMiddleware(manager, db))
+	router.GET("/secret", RequireStepUp(
+		db,
+		manager,
+		auth.StepUpActionAssetSecretReveal,
+		"asset_secret_reveal",
+		"content_issue",
+	), func(c *gin.Context) {
+		respondOK(c, gin.H{"ok": true})
+	})
+
+	resp := performStepUpRequest(t, router, http.MethodGet, "/secret", primaryToken, "", "")
+	assertStepUpRequiredEnvelopeForAction(t, resp, auth.StepUpActionAssetSecretReveal)
+	if got := stepUpProofTTLSecondsForAction(auth.StepUpAction("future.action")); got != 0 {
+		t.Fatalf("unknown action response/audit TTL = %d, want zero", got)
+	}
+}
+
+func signStepUpClaimsForTest(t *testing.T, claims auth.Claims) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString([]byte(stepUpTestJWTSecret))
+	if err != nil {
+		t.Fatalf("sign step-up claims: %v", err)
+	}
+	return signed
 }
 
 func generatePrimaryToken(t *testing.T, manager *auth.JWTManager, user model.User) string {
@@ -204,9 +363,13 @@ func generateStepUpProof(t *testing.T, manager *auth.JWTManager, user model.User
 	return generateStepUpProofForAction(t, manager, user, auth.StepUpActionTaskManualTrigger)
 }
 
-func generateStepUpProofForAction(t *testing.T, manager *auth.JWTManager, user model.User, action auth.StepUpAction) string {
+func generateStepUpProofForAction(t *testing.T, manager *auth.JWTManager, user model.User, action auth.StepUpAction, sessionIDs ...string) string {
 	t.Helper()
-	proof, _, err := manager.GenerateStepUpToken(user, action)
+	sessionID := stepUpTestSessionID
+	if len(sessionIDs) == 1 {
+		sessionID = sessionIDs[0]
+	}
+	proof, _, err := manager.GenerateStepUpToken(user, action, sessionID)
 	if err != nil {
 		t.Fatalf("生成 step-up proof 失败: %v", err)
 	}
@@ -274,7 +437,7 @@ func TestStepUpProofPairwiseCrossPurposeRejection(t *testing.T) {
 	for _, issuedAction := range actions {
 		proof := generateStepUpProofForAction(t, manager, user, issuedAction)
 		for _, expectedAction := range actions {
-			_, err := validateStepUpProof(db, manager, proof, user.ID, user.Role, expectedAction)
+			_, err := validateStepUpProof(db, manager, proof, user.ID, user.Role, expectedAction, stepUpTestSessionID)
 			if issuedAction == expectedAction {
 				if err != nil {
 					t.Fatalf("matching action %q rejected: %v", issuedAction, err)
@@ -317,6 +480,10 @@ func performStepUpRequest(t *testing.T, router *gin.Engine, method, path, token,
 }
 
 func assertStepUpRequiredEnvelope(t *testing.T, resp *httptest.ResponseRecorder) {
+	assertStepUpRequiredEnvelopeForAction(t, resp, auth.StepUpActionTaskManualTrigger)
+}
+
+func assertStepUpRequiredEnvelopeForAction(t *testing.T, resp *httptest.ResponseRecorder, action auth.StepUpAction) {
 	t.Helper()
 	if resp.Code != http.StatusForbidden {
 		t.Fatalf("期望 step-up required 返回 403，实际: %d，响应: %s", resp.Code, resp.Body.String())
@@ -331,7 +498,8 @@ func assertStepUpRequiredEnvelope(t *testing.T, resp *httptest.ResponseRecorder)
 	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("解析 step-up required 响应失败: %v", err)
 	}
-	if payload.Code != http.StatusForbidden || payload.Data.ErrorCode != stepUpRequiredCode || payload.Data.ProofTTLSeconds != stepUpProofTTLSeconds {
+	wantTTL := int(auth.StepUpProofTTLForAction(action).Seconds())
+	if payload.Code != http.StatusForbidden || payload.Data.ErrorCode != stepUpRequiredCode || payload.Data.ProofTTLSeconds != wantTTL {
 		t.Fatalf("step-up required 响应缺少机器可读字段: %+v", payload)
 	}
 }
@@ -404,6 +572,66 @@ func TestAuthHandlerStepUpIssuesProofForEnabledTOTP(t *testing.T) {
 	metadata := assertNoForbiddenAuditMetadata(t, events[0].Metadata)
 	if metadata["stage"] != "step_up" || metadata["proof"] != "issued" || metadata["operation"] != "step_up" {
 		t.Fatalf("step-up 成功审计 metadata 不符合预期: %#v", metadata)
+	}
+}
+
+func TestAuthHandlerStepUpReportsExactActionPolicyTTL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := openStepUpHandlerTestDB(t)
+	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	user := seedStepUpUser(t, db, "step-up-action-ttl", "admin")
+	primaryToken := generatePrimaryToken(t, manager, user)
+	handler := NewAuthHandler(nil, manager, nil).WithDB(db)
+	router := gin.New()
+	router.Use(middleware.AuthMiddleware(manager, db))
+	router.POST("/auth/step-up", handler.StepUp)
+
+	for _, tc := range []struct {
+		action  auth.StepUpAction
+		seconds int
+	}{
+		{action: auth.StepUpActionTaskManualTrigger, seconds: 300},
+		{action: auth.StepUpActionAssetSecretReveal, seconds: 45 * 60},
+	} {
+		t.Run(string(tc.action), func(t *testing.T) {
+			resp := performStepUpRequest(
+				t,
+				router,
+				http.MethodPost,
+				"/auth/step-up",
+				primaryToken,
+				"",
+				fmt.Sprintf(`{"code":%q,"step_up_action":%q}`, currentStepUpCode(t, user), tc.action),
+			)
+			if resp.Code != http.StatusOK {
+				t.Fatalf("step-up status=%d body=%s", resp.Code, resp.Body.String())
+			}
+			var payload struct {
+				Data stepUpResponse `json:"data"`
+			}
+			if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("decode step-up response: %v", err)
+			}
+			if payload.Data.ProofTTLSeconds != tc.seconds {
+				t.Fatalf("proof_ttl_seconds for %q = %d, want %d", tc.action, payload.Data.ProofTTLSeconds, tc.seconds)
+			}
+			claims, err := manager.ParseToken(payload.Data.Proof)
+			if err != nil || claims.IssuedAt == nil || claims.ExpiresAt == nil {
+				t.Fatalf("parse issued proof for %q: claims=%+v err=%v", tc.action, claims, err)
+			}
+			if got := int(claims.ExpiresAt.Sub(claims.IssuedAt.Time).Seconds()); got != tc.seconds {
+				t.Fatalf("claim TTL for %q = %d, want %d", tc.action, got, tc.seconds)
+			}
+
+			events := loadCredentialAuditEvents(t, db, string(tc.action))
+			if len(events) != 1 {
+				t.Fatalf("audit events for %q = %d, want 1", tc.action, len(events))
+			}
+			metadata := assertNoForbiddenAuditMetadata(t, events[0].Metadata)
+			if metadata["ttl_seconds"] != float64(tc.seconds) {
+				t.Fatalf("audit TTL for %q = %#v, want %d", tc.action, metadata["ttl_seconds"], tc.seconds)
+			}
+		})
 	}
 }
 

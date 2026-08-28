@@ -637,12 +637,24 @@ func (handle *commandInvariantHandle) Read(buffer []byte) (int, error) {
 	return handle.underlying.Read(buffer)
 }
 func (handle *commandInvariantHandle) Close() error {
-	closeErr := handle.underlying.Close()
-	verifyErr := handle.verify()
-	if closeErr != nil {
-		return closeErr
+	return handle.finish(false)
+}
+
+func (handle *commandInvariantHandle) ClosePrefix() error {
+	return handle.finish(true)
+}
+
+func (handle *commandInvariantHandle) finish(prefix bool) error {
+	var closeErr error
+	if prefixCloser, ok := handle.underlying.(interface{ ClosePrefix() error }); ok && prefix {
+		closeErr = prefixCloser.ClosePrefix()
+	} else {
+		closeErr = handle.underlying.Close()
 	}
-	return verifyErr
+	verifyErr := handle.verify()
+	// The post-read object/root invariant is authoritative, but a concurrent
+	// command close failure is still source evidence and must not be discarded.
+	return errors.Join(verifyErr, closeErr)
 }
 
 func (handle *commandInvariantHandle) ProviderBytes() int64 {

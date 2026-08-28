@@ -273,7 +273,7 @@ describe("AssetPreview", () => {
         resource={{ status: "ready", value: ticket("escaped_text") }}
       />
     );
-    expect(screen.getByTitle(/Asset preview|资产预览/)).toHaveClass("h-full", "max-h-full");
+    expect(screen.getByTitle(/File preview|文件预览/)).toHaveClass("h-full", "max-h-full");
   });
 
   it("announces current loading and typed error states without putting the filename in the error region", () => {
@@ -314,6 +314,37 @@ describe("AssetPreview", () => {
     const alert = screen.getByRole("alert");
     expect(alert).not.toHaveTextContent(previewAsset.name);
     expect(screen.getByRole("button", { name: /Retry preview|重试预览/ })).toBeInTheDocument();
+  });
+
+  it("shows direct source guidance and a safe correlation ID without Worker guidance", () => {
+    const rendered = render(
+      <AssetPreview
+        asset={asset()}
+        resource={{
+          status: "error",
+          value: null,
+          error: {
+            code: "temporarily_unavailable",
+            translationKey: "backupAssets.errors.temporarilyUnavailable",
+            retryable: true,
+            action: "retry",
+            sourceStage: "read",
+            correlationId: "safe-correlation",
+          },
+        }}
+        canPreview
+        canDownload={false}
+        onLoadExactPreview={vi.fn()}
+        onRetry={vi.fn()}
+        onRenew={vi.fn()}
+        onPrepareDownload={vi.fn()}
+        onDetach={vi.fn()}
+      />,
+    );
+
+    expect(rendered.container).toHaveTextContent(/source.*read|读取.*内容源/i);
+    expect(rendered.container).toHaveTextContent(/safe-correlation/);
+    expect(screen.queryByText(/ZIP browsing|ZIP 浏览/)).not.toBeInTheDocument();
   });
 
   it("loads the processing controller only after explicit interaction", async () => {
@@ -861,7 +892,7 @@ describe("AssetPreview", () => {
     (renderer) => {
       renderPreview(renderer, { asset: asset({ name: "unsafe.html", mimeType: "text/html" }) });
 
-      const frame = screen.getByTitle(/Asset preview|资产预览/);
+      const frame = screen.getByTitle(/File preview|文件预览/);
       expect(frame).toHaveAttribute("src", contentUrl);
       expect(frame).toHaveAttribute("sandbox", "");
       expect(frame).not.toHaveAttribute("srcdoc");
@@ -880,7 +911,7 @@ describe("AssetPreview", () => {
   it("renders escaped content in a sandboxed opaque frame without active markup", () => {
     renderPreview("escaped_text", { asset: asset({ name: "unsafe.html", mimeType: "text/html" }) });
 
-    const frame = screen.getByTitle(/Asset preview|资产预览/);
+    const frame = screen.getByTitle(/File preview|文件预览/);
     expect(frame).toHaveAttribute("src", contentUrl);
     expect(frame).toHaveAttribute("sandbox", "");
     expect(frame).not.toHaveAttribute("srcdoc");
@@ -996,6 +1027,7 @@ describe("AssetPreview", () => {
 
     const retry = screen.getByRole("button", { name: /Retry preview|重试预览/ });
     expect(retry).toHaveClass("min-h-11", "touch-target");
+		expect(screen.queryByText(/ZIP browsing|ZIP 浏览/)).not.toBeInTheDocument();
     await user.click(retry);
     expect(onRetry).toHaveBeenCalledTimes(1);
 
@@ -1016,6 +1048,7 @@ describe("AssetPreview", () => {
     );
     expect(screen.queryByRole("button", { name: /Retry preview|重试预览/ })).not.toBeInTheDocument();
     expect(screen.getByText(/cannot be previewed safely|无法安全预览/)).toBeInTheDocument();
+		expect(screen.queryByText(/ZIP browsing|ZIP 浏览/)).not.toBeInTheDocument();
   });
 
   it("unmounts a native renderer before a replacement ticket can attach", () => {

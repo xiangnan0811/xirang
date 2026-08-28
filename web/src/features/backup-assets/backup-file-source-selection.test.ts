@@ -7,20 +7,26 @@ const node: BackupFileSourceNode = {
   nodeId: 7,
   displayName: "数据库节点",
   backupSetCount: 1,
+  retainedVersionCount: 3,
   latestRetainedAt: "2026-08-27T00:00:00.000Z",
   catalogCoverage: "complete",
+  browseState: "browsable",
+  unavailableReason: null,
 };
 const taskSet: BackupFileSourceSet = {
   backupSetId: "a".repeat(32), nodeId: 7, displayLabel: "每日备份", lineageKind: "task",
   versionCount: 2, latestRetainedAt: "2026-08-27T00:00:00.000Z", catalogCoverage: "complete",
+  browseState: "browsable", unavailableReason: null,
 };
 const importedSet: BackupFileSourceSet = {
   backupSetId: "b".repeat(32), nodeId: 7, displayLabel: "历史导入", lineageKind: "imported",
   versionCount: 1, latestRetainedAt: null, catalogCoverage: "partial",
+  browseState: "indexing", unavailableReason: null,
 };
 const version = (id: string, capturedAt: string | null, createdAt: string): BackupFileSourceVersion => ({
   recoveryPointId: id.repeat(32), repositoryId: "f".repeat(32), capturedAt, committedAt: null, createdAt,
   lifecycleState: "committed", catalogCoverage: "complete",
+  browseState: "browsable", unavailableReason: null,
   contentAvailability: { available: false, reason: { code: "range_unavailable", params: {} } },
   entryCount: 1, logicalBytes: 2, permissions: { list: true, preview: false, download: false },
 });

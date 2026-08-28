@@ -1,11 +1,13 @@
 # Design: unified backup file center and direct preview
 
-## 0. Planning status and guard
+## 0. Approval and delivery status
 
-This design is complete for planning, but implementation is not started. The
-task stays in planning until the user reviews the complete PRD/design/plan and
-explicitly approves implementation in a later message. Do not run task.py start
-from the planning turn.
+Phases 1-7 shipped in `v0.52.0`, but production product acceptance exposed four
+P0 gaps. Sections 13-17 are the revised remediation design. The user's 45-minute
+step-up choice initially resolved only one design question; the user later reviewed
+and explicitly approved the complete revised PRD/design/plan. That approval covered
+bounded implementation, not commit, push, PR, CI, merge, release, NAS upgrade,
+production acceptance, collectors, or node-log work.
 
 The node-log P1 is outside this task. Its collectors remain zero until this file
 center passes real usable-content production acceptance.
@@ -23,6 +25,8 @@ The three user decisions are authoritative:
 3. Use a 42/58 resizable desktop browser/preview split, with focused reading and
    a sequential browser -> preview fallback when the minimum pane widths do not
    fit.
+4. Reuse `asset.secret_reveal` step-up for 45 non-sliding minutes within one login
+   session; source/file changes and refresh do not invalidate it.
 
 The preview itself has two co-equal jobs: let the user confirm that a retained
 backup contains the expected information, and let the user directly read that
@@ -172,11 +176,12 @@ Modern nodeId+backupSetId routes never call the resolver. Resolver requests use
 AbortSignal plus the existing generation/latest-result guard, so superseded or
 late responses cannot rewrite current route state.
 
-Changing node clears set, version, directory, entry, content, error, and
-secret-reveal state. Changing set clears all descendants. Changing version
-clears directory, entry, content, error, and proof. Directory navigation clears
-entry/content/error/proof. Each transition increments the existing selection
-generation so late results cannot attach to the new context.
+Changing node clears set, version, directory, entry, content, and error. Changing
+set clears all descendants. Changing version clears directory, entry, content,
+and error. Directory navigation clears entry/content/error. These transitions do
+not clear an unexpired session-owned `asset.secret_reveal` proof. Each transition
+increments the existing selection generation so late results cannot attach to the
+new context.
 
 ## 5. UI composition
 
@@ -387,10 +392,13 @@ Unchanged authorities:
 - same-origin opaque content URL, exact-path HttpOnly SameSite cookie, no-store,
   CSP sandbox, signature/MIME checks, and content-route log redaction.
 
-Forbidden in source projection, route/query, browser storage, analytics, errors,
-logs, docs, fixtures, and screenshots: Provider locator, raw backup path, content
-bytes, production asset identity, credentials, token, Cookie, ticket secret/URL,
-TOTP, proof, command/output, or private client evidence.
+Forbidden in source projection, route/query, analytics, errors, logs, docs,
+fixtures, and screenshots: Provider locator, raw backup path, content bytes,
+production asset identity, credentials, token, Cookie, ticket secret/URL, TOTP,
+proof, command/output, or private client evidence. Browser storage has one narrow
+exception: the approved action-keyed `asset.secret_reveal` proof plus expiry may
+live in current-login `sessionStorage`; no proof metadata or other sensitive value
+may be stored.
 
 The simplified UI never turns list permission into content permission and never
 uses a client renderer guess as authorization.
@@ -453,11 +461,13 @@ intermediate contracts that either retain the unusable UI or expose a new API
 without its consumer. Implementation is divided into independently testable
 phases in implement.md; no child task is created during planning.
 
-No schema migration is planned. Rollback is a normal application-image rollback:
-old clients continue using exact escaped_text/text_v1 or other renderer/profile
-tickets, old routes remain valid, and the additive read-only projection,
-safe_preview_v1 intent, and plain_text/text_v2 product are unused. Do not remove
-the exact ticket request path.
+Phases 1-7 required no schema migration. Remediation reuses the existing schema by
+default; Phase 10 may request a separately approved paired SQLite/PostgreSQL
+migration only if a genuine RED proves durable attribution cannot be represented.
+Rollback is otherwise a normal application-image rollback: old clients continue
+using exact escaped_text/text_v1 or other renderer/profile tickets, old routes
+remain valid, and the additive read-only projection, safe_preview_v1 intent, and
+plain_text/text_v2 product are unused. Do not remove the exact ticket request path.
 
 Production acceptance uses the already established NAS deployment constraints:
 root /volume2/docker/xirang, external 19927, internal 10761, and no test, [, [[,
@@ -465,3 +475,178 @@ cd, su, or sudo commands. It records only version/health/status evidence, never
 secrets or asset identity/content. Collectors remain zero until a representative
 generic-MIME text/config asset is visibly readable, a true binary stays non-text,
 single-click switching works, and the security/privacy checks pass.
+
+## 13. `v0.52.0` production-remediation boundary
+
+The infrastructure deployment is healthy, but product acceptance failed. The
+following observations are proven by production UI plus current source:
+
+- the text/config preview request reaches a generic unavailable state; the exact
+  Provider failure stage is not yet observable safely;
+- `AssetPreview` currently shows optional Worker guidance for every unsupported or
+  temporarily-unavailable error, including core preview failures;
+- `asset.secret_reveal` currently asks the global helper for a non-persistent,
+  non-reusable proof, clears its local copy on selection changes, and the server
+  issues every step-up action with a five-minute lifetime;
+- file-source nodes are projected only from already-public Recovery Points;
+- entry-list pages contain children and a cursor, but not explicit current/parent
+  directory context.
+
+These findings constrain the remediation but do not prove the exact production
+source-open failure. Phase 8 must first reproduce the real Repository Service ->
+Provider adapter -> Broker -> Issue/Serve path with synthetic fixtures and add
+sanitized stage evidence before selecting the minimal content-path fix.
+
+## 14. Backup-bearing source discovery and projection
+
+### 14.1 Inclusion truth
+
+The primary selector represents **authorized retained data**, not active task
+rows and not only public Recovery Points:
+
+1. An existing public Recovery Point with an authorized lineage is `browsable`
+   when it has a complete active Catalog.
+2. A task/repository lineage is included as `indexing` when bounded Provider
+   observation plus existing managed publication evidence proves retained bytes
+   and exact node/task attribution, but the point/Catalog is not ready.
+3. The same proven lineage is `unavailable` when its repository or required
+   sequential capability is currently unavailable.
+4. A configured task with no durable retained-data evidence is omitted. An
+   ambiguous or unattributable Provider candidate stays in the existing Admin
+   import-review boundary and is never guessed into a task-backed set.
+
+Task enabled/running/success/archived/deleted status is presentation metadata only.
+The stable TaskRepositoryLink and RecoveryPoint node/task snapshots preserve
+identity after the mutable task row changes. Admin visibility follows the existing
+global list authority. Operator visibility is rechecked against current node
+ownership; missing or ambiguous ownership fails closed even when bytes exist.
+
+### 14.2 Bounded reconciliation
+
+Extend the existing repository import/rebuild and backup-asset lifecycle runtime,
+not the node-log collector, with a bounded cursor-driven reconciliation pass:
+
+- enumerate only configured/authorized repositories and managed task lineages;
+- use the existing Provider native-point listing and managed-manifest proof rules;
+- repair a publication that reached durable Provider commit but lost the final
+  control-plane transition by creating/finalizing the exact Recovery Point and
+  scheduling the existing Catalog build;
+- preserve interrupted-run attribution only when task/run/link snapshots and
+  managed evidence agree; otherwise quarantine or leave unavailable;
+- never perform an N+1 Provider scan from a Files HTTP request. The selector reads
+  the resulting database projection; discovery is asynchronous, bounded,
+  cancellable, observable, and rate limited.
+
+Reuse existing RecoveryPoint and import-candidate truth wherever it is sufficient.
+If durable attribution state cannot be represented without a schema change, add a
+paired SQLite/PostgreSQL migration only after a Phase 10 RED proves the need; do
+not add a speculative duplicate inventory table.
+
+### 14.3 Source DTO evolution
+
+Evolve the source DTOs additively with a closed `browse_state` of `browsable`,
+`indexing`, or `unavailable`, plus a parameter-free safe reason and safe retained
+version counts. Nodes and sets may therefore remain visible before any version is
+browseable. Cursor projection digests include state/count/availability facts.
+No DTO exposes a Provider locator, raw path, credential, proof, content, or raw
+discovery evidence.
+
+## 15. Core text-preview diagnosis and error truth
+
+The automatic preview pipeline remains one exact owner:
+
+    authorize exact AssetRef
+      -> open one bounded sequential source
+      -> revalidate stat/fingerprint/capabilities
+      -> read one bounded prefix
+      -> classify sensitivity
+      -> resolve plain_text/native/hex
+      -> prepare exact product
+      -> persist grant
+      -> Serve the same exact product
+
+Add production-shaped integration fixtures for Restic, Rsync, and Rclone source
+adapters. Each must prove generic-MIME UTF-8/UTF-16 text reaches
+`plain_text/text_v2`, Issue/grant/Serve agree, short reads and truncation are
+faithful, and no Worker dependency is touched. Negative fixtures cover source
+open/read/close, stat/fingerprint drift, sequential capability, timeout,
+cancellation, malformed text, native signature, and true binary hex fallback.
+
+Replace the generic failure collapse at the API boundary with a closed preview
+source reason set sufficient to distinguish `open`, `read`, `changed`, `timeout`,
+and `capability` without returning raw errors. Responses carry the normal request
+correlation ID and empty params. Structured server logs/audits may include only
+that closed stage, result code, correlation ID, and safe provider kind; never a
+locator, raw path, asset identity/content, token, proof, or command output.
+
+The frontend Worker hint is rendered only for an explicit derived-processing
+Worker capability/status. Core source and renderer errors get direct localized
+guidance such as retry/current-source-unavailable and the safe correlation ID.
+
+## 16. 45-minute `asset.secret_reveal` session proof
+
+Do not change the TTL or reuse policy of unrelated step-up actions. Replace the
+single global TTL decision with a server-owned action policy: default/current
+lifetimes remain unchanged, while `asset.secret_reveal` is exactly 45 minutes.
+Claims remain signed and validate purpose, action, user, role, token version,
+issued-at, expiry, and token/session state on every content Issue request.
+
+The file-center state machine no longer owns a per-asset proof. On a typed Admin
+secret-reveal requirement it calls the central helper with
+`persist: true, reuseCached: true`; a cached proof returns without opening the
+dialog, and the same safe preview intent is retried once. The central action-keyed
+store keeps only proof+expiry in `sessionStorage`, so refresh works but closing the
+login session does not persist authority.
+
+Selection, directory, version, set, and node changes detach content but retain the
+valid action proof. Login replacement, logout, TOTP disablement, role/user/token
+version change, 401, expiry, or a typed proof rejection clears it. A rejected
+cached proof permits at most one fresh dialog and one retry; proof rejection must
+never create a prompt loop. Operator/Viewer continue to fail closed without an
+Admin dialog, and ordinary non-secret preview never prompts.
+
+## 17. Explicit parent-directory navigation
+
+Extend `EntryPage` with a required safe directory context:
+
+    directory: {
+      current: { recovery_point_id, entry_id, name } | null,
+      parent: { recovery_point_id, entry_id } | null,
+      breadcrumb: [{ recovery_point_id, entry_id, name }]
+    }
+
+At root, current and parent are null and breadcrumb is empty. For a non-root page,
+the Catalog validates that current is a directory in the same active generation,
+loads its parent chain within the existing depth bound, and returns the context
+even when `items` is empty. The cursor scope/digest binds this directory context.
+The frontend mapper rejects malformed, cross-point, cyclic, contradictory, or
+missing context atomically.
+
+The browser replaces the Root button with a native 44px **Up one level** button.
+It navigates to the server-provided parent, never derives a path string, and is
+disabled/absent at root. The first breadcrumb remains the direct root jump and
+later crumbs jump to ancestors. Up/crumb navigation aborts and detaches the
+current preview, clears selected/bulk descendants, ignores late completion, and
+restores focus to a deterministic browser target on desktop/mobile.
+
+## 18. Remediation test and release gates
+
+In addition to the existing matrices, require:
+
+- adapter-real core text-preview tests for all supported repository providers and
+  sanitized stage/correlation error serialization;
+- 45-minute exact action TTL, non-sliding expiry, cached refresh reuse, cross-file
+  and cross-source reuse, server rejection, logout/login/token-version/role/user
+  clearing, ordinary-file no-prompt, and unrelated-action TTL isolation;
+- active, interrupted, disabled, archived, deleted-task, no-data, ambiguous,
+  operator-owned/unowned, multi-page, indexing, unavailable, and reconcile-repair
+  source fixtures with bounded Provider-call counts;
+- root/non-root/empty/deep directory envelopes, stale cursor, Up/breadcrumb,
+  cancellation, focus restoration, 390px/desktop/200%-zoom, keyboard, and axe;
+- no Worker copy for core errors and explicit Worker copy only for derived Worker
+  states.
+
+Release and NAS acceptance are a new remediation cycle. `v0.52.0` remains the
+rollback image. Collectors stay zero until a newly released image proves all four
+reported defects fixed over the authorized LAN path without printing sensitive
+production identity or content.

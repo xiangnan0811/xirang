@@ -10,14 +10,17 @@ expected data, and let the user read the concrete backed-up content. Internal
 storage concepts remain available only as supporting context, while the existing
 security and content-delivery authority stays unchanged.
 
-This is a new P0 product task. It is not a continuation of the already released
-preview-authorization or private-network HTTP transport fixes, and planning
-approval is not implementation approval.
+The original P0 implementation shipped in `v0.52.0`, but real production product
+acceptance failed on 2026-08-28. This document now also governs the bounded P0
+remediation. The user's choice of a 45-minute step-up window was initially only a
+product-design decision; the user later explicitly approved the complete revised
+PRD/design/plan, as recorded in `implement.md`.
 
 ## User Problem
 
-Production acceptance on `v0.51.0` proved that private-network HTTP content
-transfer works, but the preview experience is not product-acceptable:
+Initial production acceptance on `v0.51.0` proved that private-network HTTP
+content transfer works. The redesigned file center then shipped in `v0.52.0`,
+but its production product acceptance is still not acceptable:
 
 - A text configuration asset whose catalog MIME was generic binary was rendered
   as metadata/hex instead of readable text.
@@ -32,6 +35,20 @@ transfer works, but the preview experience is not product-acceptable:
   right-side inspector after source context and the file list consume most of the
   workspace. Its content is an offset-prefixed hexadecimal dump, not the readable
   file text a user needs to validate or inspect the backup.
+- In `v0.52.0`, activating a representative text/configuration file returns the
+  generic unavailable state. The UI incorrectly appends optional Worker guidance
+  even though core file browsing and text preview must not depend on a Worker.
+- The Admin secret-reveal flow explicitly disables the existing action-scoped
+  proof cache and clears the local proof on every source or file change. Combined
+  with a five-minute server proof lifetime, this causes repeated TOTP dialogs while
+  browsing ordinary neighboring files.
+- The source projection starts from already-public Recovery Points. Nodes and
+  task lineages with retained backup bytes but no qualifying public point are
+  omitted, so the selector can show one node even when many backup-bearing tasks
+  or interrupted lineages still have data.
+- Directory browsing has a standalone Root action but no direct Up action. Empty
+  directories also cannot derive a parent solely from child rows, making ordinary
+  parent navigation impossible.
 
 The production screenshots were inspected read-only. No production asset name,
 path, locator, content, proof, or credential is copied into this task.
@@ -60,15 +77,32 @@ path, locator, content, proof, or credential is copied into this task.
   main table plus narrow inspector. Support an explicit focused-reading mode and
   a sequential full-width preview on mobile.
 - Preserve opaque route state. Raw backup paths, provider locators, ticket URLs,
-  tokens, proofs, and content must not enter browser storage, analytics, logs,
-  history, or user-visible error guidance.
+  tokens, content, and proof metadata beyond the approved action-keyed proof plus
+  expiry must not enter browser storage, analytics, logs, history, or user-visible
+  error guidance.
+- Enumerate every authorized lineage for which the system has durable evidence of
+  retained backup bytes, independent of whether its task is enabled, running,
+  interrupted, archived, or later deleted. A configured task with no durable data
+  is not presented as a backup source.
+- Add a direct **Up one level** action backed by opaque Catalog parent identity and
+  remove the standalone Root action. Breadcrumb ancestors still allow a direct
+  jump to the retained version root.
+- Cache only the `asset.secret_reveal` proof for 45 minutes from successful
+  verification within the current login session. Reuse it across files,
+  directories, versions, nodes, and page refresh; clear it on session/identity
+  change, expiry, or server rejection. Other step-up actions keep their existing
+  lifetimes and one-shot policies.
+- Show Worker guidance only for an explicitly typed derived-processing Worker
+  capability. Core source-open/read failures use their own bounded, actionable
+  message and correlation ID without implying that a Worker is required.
 - Support desktop, touch/mobile, keyboard, screen-reader, reduced-motion, and
   WCAG 2.1 AA workflows.
 
 ## Evidence And Existing Contracts
 
-- `v0.51.0` is the current production baseline for this task; image, manifest,
-  health, database, and service-log acceptance already passed.
+- `v0.52.0` was deployed and infrastructure acceptance passed: image identity,
+  health, database schema/integrity, and bounded service-log checks were clean.
+  Those facts prove deployment health, not usable file preview.
 - Catalog listing and content delivery are separate planes. Catalog list
   permission does not itself authorize a content ticket.
 - Native preview remains limited to authenticated Admin or Operator sessions
@@ -106,10 +140,12 @@ path, locator, content, proof, or credential is copied into this task.
 
 ### 2. Source and version selection
 
-- First select or restore the last valid node scope. Group its authorized recovery
-  points into backup sets by producing task/scope, never across tasks. Show the
-  backup-set selector only when the node has more than one set; otherwise select
-  the sole set without adding a visible step.
+- First select or restore the last valid node scope. The node page includes every
+  authorized backup-bearing lineage, not only nodes that already have a public
+  Recovery Point. Group retained versions into backup sets by producing
+  task/scope, never across tasks. Show the backup-set selector only when the node
+  has more than one set; otherwise select the sole set without adding a visible
+  step.
 - Introduce a bounded, cursor-paged, read-only file-source projection so the UI can
   enumerate authorized nodes, backup sets, and their retained versions without an
   N+1 walk over every repository. The projection reuses Catalog ownership and
@@ -118,10 +154,20 @@ path, locator, content, proof, or credential is copied into this task.
 - A task-less/imported lineage is isolated as its own server-projected backup set;
   it is never guessed into, or merged with, a producing task's set. Repository and
   Provider remain hidden from the normal selector.
+- Source inclusion is evidence based. Existing public points are immediately
+  browseable. A managed task/repository lineage with provider-proven retained
+  bytes but no complete Catalog remains visible as `indexing` or `unavailable`
+  until bounded reconciliation makes an exact version browseable. A task row or
+  configuration alone is not evidence that backup data exists.
+- Task runtime state is display metadata, never the visibility gate. Interrupted,
+  disabled, archived, or deleted tasks retain their safely attributed versions
+  while the durable bytes, lineage snapshot, authorization, and retention facts
+  remain valid.
 - Order versions by a clear retained-time label and expose task/repository details
   only in an optional context/details surface.
 - Switching node or version atomically clears incompatible directory selection,
-  selected entry, ticket, preview, stale errors, and secret-reveal proof.
+  selected entry, ticket, preview, and stale errors. It does not clear an
+  unexpired action-scoped session proof.
 - Empty, partially indexed, unavailable, and permission-denied source states are
   distinct and do not imply authoritative emptiness when the Catalog does not.
 
@@ -129,6 +175,11 @@ path, locator, content, proof, or credential is copied into this task.
 
 - Use familiar breadcrumb navigation, directory rows/cards, file rows/cards,
   sortable metadata, and a bounded page/cursor model.
+- Every directory page returns explicit opaque current-directory, parent, and
+  breadcrumb context even when it has zero children. The UI exposes a native
+  **Up one level** control; at the retained-version root it is disabled or absent.
+  Remove the standalone Root control while retaining the first breadcrumb as the
+  direct root jump.
 - Directories are activated as navigation targets; files are selected as preview
   targets. Keyboard activation must match pointer activation.
 - Keep selected state and directory state separate so a stale selected file does
@@ -147,8 +198,10 @@ path, locator, content, proof, or credential is copied into this task.
 - Loading is visible without obscuring the selected filename/context. A rapid
   switch must not flash old content in the new selection.
 - Secret/unknown classification may interrupt the automatic path with the
-  existing Admin step-up flow; this exception must be explicit, bounded, and tied
-  to the exact asset/action.
+  existing Admin step-up flow. The resulting proof is tied to the authenticated
+  user/session/token version and exact `asset.secret_reveal` action, not to one
+  filename or AssetRef, and is reusable for exactly 45 minutes without sliding
+  renewal.
 - On expiry or a bounded native-media failure, renew only the current asset's
   exact renderer product. Never renew a superseded selection.
 
@@ -189,6 +242,10 @@ path, locator, content, proof, or credential is copied into this task.
   as a workaround.
 - Errors and guidance are localized, bounded, role-aware, and contain no asset
   identity beyond already authorized display metadata.
+- Source-open, source-read, source-changed, timeout, capability, renderer, and
+  derived-Worker failures remain distinct closed outcomes. A generic 503 must not
+  be decorated with Worker guidance. Server logs/audit may record only a closed
+  failure stage and correlation ID, never raw Provider errors or locations.
 
 ### 7. Accessibility and responsive behavior
 
@@ -211,7 +268,9 @@ path, locator, content, proof, or credential is copied into this task.
   widen authority.
 - Never request or print credentials, token, password, TOTP, proof, Provider
   locator, raw backup path, production asset name, or content in planning,
-  diagnostics, task artifacts, client logs, route state, storage, or analytics.
+  diagnostics, task artifacts, client logs, route state, analytics, or persistent
+  storage. The already-established action-keyed step-up proof store may retain only
+  the proof and expiry in `sessionStorage` for the current login session.
 - Ticket and content URLs remain opaque, same-origin, cookie-bound, query-free,
   and transient. Switching selection detaches them.
 - Renderer negotiation must fail closed on future/unknown products and MIME or
@@ -221,7 +280,8 @@ path, locator, content, proof, or credential is copied into this task.
 
 - Unrelated download, export, archive, or recovery workflow redesign.
 - Provider publication, backup scheduling, retention, restore orchestration, or
-  Catalog schema redesign not strictly required by the file-center projection.
+  Catalog schema redesign not strictly required to discover and project retained
+  backup-bearing lineages.
 - Node-log collector work. The P1 remains stopped and collectors remain `0` until
   this task passes real usable-content production acceptance.
 - Copying production asset identity or content into fixtures, screenshots, docs,
@@ -262,10 +322,27 @@ The user selected **A** on 2026-08-27:
 - A focused-reading action expands the preview to the work area. Exiting focused
   mode restores the prior split, selected file, scroll position, and focus.
 - Pane ratio and focused mode are transient presentation state and reset safely on
-  reload; filenames, paths, content, tickets, and proofs are never persisted.
+  reload; filenames, paths, content, and tickets are never persisted. The only
+  proof persistence is the action-keyed session proof defined in Key Decision 4.
 - When the viewport cannot preserve both minimum pane widths, the layout switches
   to browser -> full-width preview -> Back rather than recreating a narrow
   inspector.
+
+## Key Decision 4: 45-minute Session Step-up
+
+The user selected **A with a 45-minute lifetime** on 2026-08-28:
+
+- A successful Admin verification for `asset.secret_reveal` is reusable across
+  files, directories, versions, and nodes in the same login session and survives
+  a page refresh.
+- The 45 minutes are measured from proof issuance and do not slide on use.
+- The proof is action scoped and bound server-side to the authenticated user,
+  role, token version/session, and expiry. It is not bound to one asset and never
+  grants list/content authority by itself.
+- Logout, login replacement, user/role/token-version change, TOTP disablement,
+  expiry, 401, or a typed proof rejection clears it immediately. A rejected cached
+  proof may cause one fresh verification prompt; loops are forbidden.
+- Other sensitive actions retain their existing proof TTL and reuse rules.
 
 ## Acceptance Criteria
 
@@ -275,6 +352,9 @@ The user selected **A** on 2026-08-27:
 - [ ] A node with one authorized backup set proceeds directly to its retained
   versions, while a node with multiple sets shows a clear Backup Set selector;
   neither flow exposes Repository or Provider as required vocabulary.
+- [ ] Every authorized task lineage with provider-proven retained backup bytes is
+  represented even when the task is interrupted, disabled, archived, or deleted;
+  no-data tasks remain absent, and incomplete discovery is never called empty.
 - [ ] Versions are grouped by one producing task/scope, task-less/imported lineage
   is isolated, and no cross-task interleaving or virtual merge occurs.
 - [ ] The file-source projection is bounded, cursor-paged, RBAC/ownership filtered,
@@ -282,6 +362,9 @@ The user selected **A** on 2026-08-27:
 - [ ] A user can choose a node, conditionally choose a backup set, choose a
   retained version, browse directories, and activate a file using pointer or
   keyboard.
+- [ ] A non-root directory, including an empty directory, has a working Up action
+  driven by server-provided opaque parent context; there is no standalone Root
+  button, and breadcrumb root/ancestors remain navigable.
 - [ ] Desktop opens with an approximately 42/58 browser/preview split; pointer and
   keyboard resizing preserve usable minimum widths, focused reading fills the
   work area, and exiting restores the prior split and focus.
@@ -289,6 +372,9 @@ The user selected **A** on 2026-08-27:
   flow and never collapses the preview back into a narrow inspector.
 - [ ] Activating an eligible ordinary file automatically starts preview exactly
   once; no initial load/refresh button is required.
+- [ ] Core UTF-8/UTF-16 text preview succeeds through real Restic, Rsync, and
+  Rclone adapter-shaped integration fixtures without a Worker. Core source
+  failures never show the optional-Worker hint.
 - [ ] Rapidly selecting file A then file B cancels/detaches A, ignores late A
   results, and never renders A in B's preview context.
 - [ ] JSON, YAML, TOML, configuration, log, and representative code fixtures with
@@ -301,8 +387,9 @@ The user selected **A** on 2026-08-27:
   resolve to metadata/hex (or a closed unsupported state) according to policy.
 - [ ] Raster image, PDF, audio, and video previews continue to use their existing
   signature-validated, sandboxed/native products and Range/size limits.
-- [ ] Node/version/directory changes clear stale selection, ticket, content,
-  error, and exact step-up proof state.
+- [ ] Node/version/directory changes clear stale selection, ticket, content, and
+  error while preserving a valid 45-minute `asset.secret_reveal` proof. The proof
+  is reused after refresh and cleared on every defined session/rejection boundary.
 - [ ] Admin, Operator, Viewer/unknown, list/content capability, secret/unknown,
   transport, rate-limit, expiry, and unavailable matrices fail closed and match
   backend authority.
@@ -320,15 +407,15 @@ The user selected **A** on 2026-08-27:
 
 ## Notes
 
-- Planning source: user-approved handoff from the production acceptance session,
-  current `origin/main` at the `v0.51.0` release commit, repository source, current
-  Trellis specs, related task artifacts, and two read-only production screenshots.
+- Planning source: the released `v0.52.0` production acceptance, repository source,
+  current Trellis specs, prior task evidence, and read-only production screenshots.
   No production asset name or content is copied into this task.
 - The earlier backup explorer decision to avoid a second first-level navigation
   entry is retained, but production evidence changes the Backups default from
   Overview to Files and requires a full file-manager page-shell redesign.
 - This is a complex cross-layer task. `design.md`, `implement.md`,
-  `implement.jsonl`, and `check.jsonl` must be complete before the user is asked
-  for implementation approval.
-- Do not run `task.py start`, dispatch implementation agents, edit product code,
-  commit, push, or open a PR during planning.
+  `implement.jsonl`, and `check.jsonl` were completed before the user explicitly
+  approved implementation of the revised remediation plan.
+- That approval authorized bounded implementation, not delivery. Commit, push,
+  PR, CI, merge, release, NAS upgrade, production acceptance, collectors, and the
+  node-log P1 remain separately gated.

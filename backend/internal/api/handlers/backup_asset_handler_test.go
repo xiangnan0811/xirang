@@ -60,7 +60,10 @@ func (spy *backupAssetServiceSpy) GetEvidence(_ context.Context, pointID string,
 func (spy *backupAssetServiceSpy) ListEntries(_ context.Context, pointID string, scope catalog.AuthorizationScope, request catalog.EntryListRequest) (catalog.EntryPage, error) {
 	spy.calls++
 	spy.pointID, spy.scope, spy.entryRequest = pointID, scope, request
-	return catalog.EntryPage{Items: []catalog.EntryDTO{}}, spy.err
+	return catalog.EntryPage{
+		Items:     []catalog.EntryDTO{},
+		Directory: catalog.DirectoryContextDTO{Breadcrumb: []catalog.BreadcrumbDTO{}},
+	}, spy.err
 }
 
 func (spy *backupAssetServiceSpy) GetEntry(_ context.Context, pointID, entryID string, scope catalog.AuthorizationScope) (catalog.EntryDTO, error) {
@@ -281,6 +284,7 @@ func TestBackupAssetHandlerMapsErrorsAndAuditsOnlySafeFields(t *testing.T) {
 		{"catalog unavailable", catalog.ErrCatalogUnavailable, http.StatusServiceUnavailable},
 		{"projection limit", catalog.ErrOwnershipProjectionLimit, http.StatusServiceUnavailable},
 		{"command unsupported", backupasset.ErrCapabilityUnavailable, http.StatusNotImplemented},
+		{"invalid internal catalog contract", catalog.ErrInvalidCatalogContract, http.StatusInternalServerError},
 		{"internal", errors.New("SECRET_INTERNAL_PROVIDER_PATH"), http.StatusInternalServerError},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -348,5 +352,48 @@ func TestBackupAssetHandlerHasNoProviderCommandDependency(t *testing.T) {
 		if bytes.Contains(payload, forbidden) {
 			t.Fatalf("handler source contains forbidden %q", forbidden)
 		}
+	}
+}
+
+func TestBackupAssetEntryPageSwaggerRequiresExplicitDirectoryContext(t *testing.T) {
+	document := readBackupAssetSwagger(t)
+	operation, ok := document.Paths["/recovery-points/{id}/entries"]["get"]
+	if !ok {
+		t.Fatal("generated Swagger is missing GET /recovery-points/{id}/entries")
+	}
+	if _, ok := operation.Responses["500"]; !ok {
+		t.Error("generated Swagger is missing the generic 500 directory-contract response")
+	}
+	page := requireBackupAssetSwaggerDefinition(t, document, "xirang_backend_internal_backupasset_catalog.EntryPage")
+	if _, ok := page.Properties["directory"]; !ok {
+		t.Fatal("EntryPage Swagger schema is missing directory")
+	}
+	requireBackupAssetSwaggerFields(t, page, "directory")
+	directory := requireBackupAssetSwaggerDefinition(t, document, "xirang_backend_internal_backupasset_catalog.DirectoryContextDTO")
+	requireBackupAssetSwaggerFields(t, directory, "breadcrumb", "current", "parent")
+	breadcrumb := requireBackupAssetSwaggerDefinition(t, document, "xirang_backend_internal_backupasset_catalog.BreadcrumbDTO")
+	requireBackupAssetSwaggerFields(t, breadcrumb, "entry_id", "name", "recovery_point_id")
+}
+
+func TestBackupAssetEntryPageHandlerAlwaysSerializesRootDirectoryContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	pointID := strings.Repeat("2", 32)
+	handler := NewBackupAssetHandler(&backupAssetServiceSpy{}, nil)
+	router := backupAssetHandlerTestRouterWithRole("operator")
+	router.GET("/recovery-points/:id/entries", handler.ListEntries)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/recovery-points/"+pointID+"/entries", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Data catalog.EntryPage `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Data.Directory.Current != nil || envelope.Data.Directory.Parent != nil ||
+		envelope.Data.Directory.Breadcrumb == nil || len(envelope.Data.Directory.Breadcrumb) != 0 {
+		t.Fatalf("root directory context=%+v body=%s", envelope.Data.Directory, response.Body.String())
 	}
 }

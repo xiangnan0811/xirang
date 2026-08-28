@@ -1373,3 +1373,864 @@ The commit/ready-PR/required-CI and NAS-runbook Phase 7 checklist items are now
 complete. The following documentation-only evidence commit must also pass its
 triggered CI before squash merge; release, NAS write, production acceptance, and
 collector-zero completion remain pending.
+
+## Phase 8 — Production-shaped core preview diagnosis and repair
+
+Date: 2026-08-28
+
+Scope stopped at Phase 8. No schema migration, interactive Provider scan, node-log
+work, collector change, runtime configuration edit, NAS command, commit, push,
+PR, deployment, or Phase 9-12 work occurred.
+
+### Reproduced failure and smallest repair
+
+The production-shaped failure was reproduced at the bounded source-close seam.
+For a longer object, Broker `safe_preview_v1` intentionally reads its bounded
+classification/rendering prefix and closes before command EOF. The command-backed
+Restic and Rclone paths treated the expected remote `Wait` error caused by that
+intentional cancellation as a source failure; Broker then returned the generic
+503 path even though the complete requested prefix was already available.
+
+- First genuine RED:
+  `go test ./internal/backupasset/provider -run '^TestBoundedReadHandleClosesAnUnreadPrefixAsIntentionalCancellation$' -count=1`
+  failed with
+  `intentional bounded-prefix close=FAKE_ABORTED_COMMAND_WAIT_FOR_TEST_ONLY`.
+- Transport RED:
+  `TestTransportReadHandleForwardsIntentionalPrefixClose` failed because the
+  transport wrapper did not expose the intentional prefix-close contract.
+- SSH RED:
+  `TestCommandRunnerOpenSupportsIntentionalBoundedPrefixClose` failed because the
+  command stream promoted the expected remote wait result to `ErrCommandFailed`.
+- Adapter/Broker RED: the first actual-adapter matrix run reached Restic/Rsync but
+  Rclone returned `backup asset content source read failure`, proving its
+  invariant wrapper also failed to forward the close contract.
+
+The repair is limited to an optional `ClosePrefix()` contract threaded through
+the existing bounded Restic handle, transport handle, SSH command stream, and
+Rclone invariant handle. Ordinary close behavior, output limits, parent
+cancellation, timeout, background stream failures, connection release, and
+Rclone post-read invariant verification retain precedence. Rsync local-file close
+behavior is unchanged.
+
+Independent review added a natural-failure RED before accepting that boundary:
+`TestCommandRunnerOpenPrefixClosePreservesCompletedCommandFailure` initially
+reported `completed command failure was suppressed: <nil>`. The command stream
+now records whether `Wait` completed before bounded-prefix termination begins.
+Only a wait result produced after intentional termination is suppressible;
+pre-existing command failure, output-limit, cancellation, timeout, background
+stream failure, and natural-EOF join results remain authoritative. The focused
+SSH RED/GREEN selector and the race gate are GREEN.
+
+### Adapter, Broker, failure-stage, and UI evidence
+
+- `TestBrokerSafePreviewUsesActualProviderAdaptersThroughIssueGrantAndServe`
+  runs actual Restic, Rsync LocalTree, and Rclone adapters with synthetic generic
+  configuration text. Each resolves `plain_text/text_v2`, persists one grant,
+  reports truncation, and Serves matching readable bytes. Each operation has one
+  bounded source open/read: two total per case because Issue and Serve each
+  re-open under their existing authority boundary. Restic and Rclone both prove
+  intentional prefix-close rather than ordinary aborted close.
+- `TestBackupContentSafePreviewCrossesActualRepositoryRsyncBrokerAndLiveIssueHandler`
+  closes the remaining composition gap with an actual SQLite-backed Repository
+  Service, actual Registry/Rsync adapter, Content Broker, live Gin Issue handler,
+  persisted resolved grant, and Broker Serve. It uses generic-MIME synthetic
+  configuration text, resolves `plain_text/text_v2`, and proves exactly two
+  sequential opens: one bounded read for Issue and one for Serve. Repository
+  Service selects adapters through the same closed Provider registry path; the
+  three-adapter matrix above independently proves the provider-specific Restic,
+  Rsync, and Rclone behavior. Repeating identical handler plumbing for all three
+  providers would add no distinct production boundary.
+- Existing renderer/Broker coverage remains GREEN for UTF-8 and UTF-16, short,
+  exact, and truncated text, retained line endings, inert HTML characters,
+  malformed text, binary hex, and signature-proven native formats without a
+  derived Worker dependency.
+- Broker failures now carry only the closed stages `open`, `read`, `changed`,
+  `timeout`, `cancellation`, and `capability`. Handler responses use the standard
+  503 envelope, an empty `params` object, and the request correlation ID. The
+  opaque outer error string never includes the wrapped Provider cause.
+- The strict frontend mapper accepts only the six exact reason codes, empty
+  params, the exact response shape, and a bounded safe correlation ID. Preview
+  renders localized source-specific guidance. Generic unavailable, capability,
+  and renderer errors no longer render the optional Worker hint; Worker language
+  remains owned by explicit derived-processing states.
+- Cancellation stops the prefix reader before grant persistence. Existing broker
+  audit/failure paths plus the new stage and handler canaries remain free of raw
+  Provider evidence. Production source files contain none of the synthetic
+  fixture markers or private canaries.
+
+### Verification
+
+All frontend commands used Node `v22.23.1`.
+
+- Exact Phase 8 selectors across sshutil/provider/content/handlers, `-count=3`:
+  GREEN.
+- The same exact selector set under `go test -race`, `-count=1`: GREEN.
+- Focused backend package gate across sshutil/provider/content/handlers,
+  `-count=1`: GREEN.
+- `go test ./...`: GREEN across the complete backend.
+- `go vet ./...`: GREEN.
+- `go build ./...`: GREEN.
+- Focused frontend ESLint plus two affected Vitest files: GREEN, 2 files / 67
+  tests.
+- Full Node-22 `npm run check`: GREEN — typecheck, ESLint, 190 Vitest files /
+  1,690 tests, coverage, and the 3,230-module production build.
+- `git diff --check`: GREEN.
+- The default documentation-freshness invocation exited 0 but emitted one
+  release/deployment documentation reminder from its `HEAD~1` baseline; Phase 8
+  changes contain no release, image, deployment, version, route, model, migration,
+  or public-contract file requiring that rule's documentation update.
+
+### Independent review closure
+
+The required production-shaped boundary is now covered by complementary tests:
+the actual three-adapter Broker matrix proves provider-specific behavior, and the
+actual Repository/Rsync/Broker/live-handler vertical slice proves the previously
+missing production composition seam. The first Phase 8 checkbox is therefore
+complete without inventing a Phase 9 source-discovery dependency.
+
+The affected-package `-count=3` gate also exposed a test-only SQLite namespace
+collision in `internal/sshutil`: the credential fixture named a shared in-memory
+database only from `t.Name()`, so repetitions observed retained unique node/key
+rows. The fixture now uses a unique `t.TempDir()` database name and explicitly
+closes its SQL pool. Production behavior is unchanged; `go test
+./internal/sshutil -count=3` is GREEN.
+
+#### Final core-transport recheck
+
+A later findings-first review caught four precedence/closed-union gaps that the
+original Phase 8 gate did not distinguish:
+
+- RED: `go test ./internal/backupasset/provider ./internal/backupasset/repository
+  -run 'TestBoundedReadHandle(ClosesAnUnreadPrefixAsIntentionalCancellation|OrdinaryEarlyClosePreservesUnderlyingFailure)|TestContentSourceExplicitPrefixClosePropagatesWithoutOrdinaryClose'
+  -count=1` failed because `boundedReadHandle` exposed no explicit prefix close,
+  ordinary early `Close` incorrectly inferred prefix success, and Repository did
+  not propagate the intent. GREEN makes `ClosePrefix` explicit through Broker,
+  Repository session/once wrappers, bounded Provider handles, and truncated
+  Serve cleanup; ordinary close is strict again.
+- RED: `go test ./internal/backupasset/content -run
+  TestBrokerSafePreviewPreservesReadAndOrdinaryCloseFailuresWithoutLeakingThem
+  -count=1` lost the ordinary-close cause. GREEN preserves both errors behind
+  closed non-leaking source-stage wrappers.
+- REDs: `TestRcloneInvariantPrefixClosePreservesCommandAndInvariantFailures` lost
+  the Rclone post-read invariant, and
+  `TestCommandRunnerOpenPrefixClosePreservesSessionCleanupFailure` returned nil
+  for a failed session cleanup. GREEN joins the invariant with command-close
+  evidence and gives session cleanup failure precedence over induced-wait
+  suppression while retaining the generic sentinel boundary.
+- Frontend RED: the focused `backup-assets-error.test.ts` run accepted inherited
+  object keys such as `toString`, `constructor`, and `__proto__` as future source
+  stages. GREEN requires an own member of the closed reason map.
+
+Fresh GREEN evidence after the repairs:
+
+- full affected backend packages once: sshutil, provider, repository, content,
+  and handlers;
+- the exact cross-layer prefix/source/handler selector at `-count=3`, plus the
+  same selector under `go test -race -count=1`;
+- `GOTOOLCHAIN=go1.26.6 golangci-lint run ./...`: `0 issues.`;
+- `npm run typecheck`, full `npm run lint`, and focused error/preview tests:
+  2 files / 70 tests;
+- owned-path `git diff --check`: GREEN.
+
+Fresh independent gates after these fixes are GREEN: provider, content,
+repository, handler, and sshutil affected packages at `-count=3`; the focused
+five-package race selector; complete backend tests; build; vet; pinned Go-1.26.6
+golangci-lint (`0 issues`); deterministic pinned Swagger regeneration; Node
+22.23.1 focused tests (67/67); and the full frontend check (190 files / 1,690
+tests plus production build). The workstation's bare golangci-lint binary is
+built with Go 1.26 and panics when pointed at the host Go 1.27 standard library;
+the repository-pinned version executed under Go 1.26.6 is the authoritative
+GREEN lint result.
+
+All Phase 8 implementation checkboxes are complete. Work freezes here before
+Phase 9.
+
+## Phase 9 — 45-minute action-scoped secret-reveal session
+
+Date: 2026-08-28
+
+Scope stopped at Phase 9. No schema migration, Provider scan, node-log or
+collector work, NAS command, commit, push, PR, deployment, release, or Phase
+10-12 work occurred.
+
+### Backend RED / GREEN and fixed policy
+
+- TTL RED:
+  `TestJWTManagerGenerateStepUpTokenUsesExactActionTTLPolicy` first failed to
+  compile because the per-action policy selector did not exist;
+  `TestAuthHandlerStepUpReportsExactActionPolicyTTL` then observed 300 seconds
+  where `asset.secret_reveal` requires 2,700. GREEN introduces one closed
+  selector: invalid actions map to zero, exact secret reveal maps to 45 minutes,
+  and every other registered action maps to the existing five-minute TTL. The
+  issuance response and safe credential-audit `ttl_seconds` use the same
+  selector.
+- Session-binding RED:
+  `TestStepUpProofValidationBindsSessionAndExactIssuedLifetime` first failed at
+  the validator interface because no presenting login session could be supplied.
+  GREEN binds newly issued proofs to the authenticated primary JWT session ID
+  and requires exact session equality plus a non-revoked session for
+  `asset.secret_reveal`.
+- Proof validation retains the signed purpose/action/user/role/token-version
+  claims and now also requires subject, issued-at, expiry, exact fixed
+  `exp - iat`, current DB user/role/token-version/TOTP state, and, for secret
+  reveal, the current login session. Tests reject signature tamper, missing or
+  future issued-at, wrong lifetime, subject, purpose/action, user/role/token
+  version, disabled TOTP, unknown action, wrong session, and revoked/logout
+  session. Repeated validation preserves the original expiry and therefore does
+  not slide.
+- `TestStepUpProofPairwiseCrossPurposeRejection` covers the complete 18-action
+  matrix. Existing non-secret actions retain their prior five-minute issuance
+  and reuse behavior; only exact `asset.secret_reveal` requires the new session
+  binding and 45-minute lifetime.
+
+### Frontend RED / GREEN and ownership
+
+- First state-machine RED:
+  `clears a rejected cached proof and permits only one fresh Admin prompt and
+  retry` stopped after one cached helper result; it called the helper once where
+  the contract requires cached reuse followed by at most one fresh prompt.
+  GREEN performs exactly three bounded ticket attempts when both proofs are
+  rejected: unproved, cached proof, fresh proof. It calls the central helper
+  exactly twice with `{persist:true,reuseCached:true}` then
+  `{persist:true,reuseCached:false}`, clears the rejected action before fresh
+  issuance, clears a rejected fresh proof, and terminates without a loop.
+- Forced-refresh invalidation RED:
+  `强制刷新可持久 proof 时会先清除被拒绝的缓存` found the rejected marker still
+  in session storage while the fresh TOTP dialog was open. GREEN makes
+  `reuseCached:false` clear that action before prompting even when the replacement
+  proof will be persisted.
+- File-center state no longer contains `secretRevealProofRef` or
+  `secretRevealProofOwnerRef`. A proof-bearing ticket input remains an ephemeral
+  request value; after a successful central step-up it is retained only in the
+  current in-memory active-preview attempt so exact manual retry can reuse the
+  same authority. It is never persisted with ticket/content state. Search reads
+  the same central action-keyed cache at request time, so later pages and saved
+  searches share the proof without file/source ownership.
+- Focused tests prove Admin first prompt, central proof reuse on safe/manual
+  retry, preview renew, different asset/version, different node/source, later
+  search pages, saved-search/directory reload, and hook remount/page refresh.
+  Operator and Viewer never prompt, and ordinary non-secret previews never
+  prompt. The cached-rejection/remount selectors passed three consecutive runs.
+- The exact secret-reveal storage test preserves the server-supplied fixed expiry
+  through intermediate reads, remains usable at `expiresAt - 1`, and removes the
+  action at `expiresAt`; reads never extend expiry.
+
+### Invalidation and privacy evidence
+
+- The current-login session store remains a versioned action-keyed map containing
+  only action, proof, and expiry. Login replacement (covering user/role/token
+  replacement), logout, TOTP disablement, 401, expiry, and typed proof rejection
+  clear the applicable proof or all proofs. The explicit 401 test clears both
+  secret reveal and an unrelated action before redirecting to login.
+- Production scans found no proof adjacent to `localStorage`, history,
+  `URLSearchParams`, console, analytics/logging, content URL, expiry ticket state,
+  or content-ticket persistence. Search and content clients transmit proof only
+  through the central `X-Xirang-Step-Up` request option/header; it is absent from
+  URLs, history, response DTOs, analytics, and logs. No content or ticket is
+  persisted by the proof store.
+
+### Verification
+
+- Backend exact TTL/session/cross-purpose selectors at `-count=3`: GREEN.
+- Backend exact selectors under `go test -race`, `-count=3`: GREEN.
+- `GOTOOLCHAIN=go1.26.6 go test ./internal/auth ./internal/api/handlers`:
+  GREEN. This affected gate found and fixed one test-matrix omission: the matching
+  secret-reveal cell now supplies its presenting session ID.
+- `GOTOOLCHAIN=go1.26.6 go test ./...`: GREEN across the complete backend.
+- `GOTOOLCHAIN=go1.26.6 go vet ./...` and `go build ./...`: GREEN.
+- Node `v22.23.1` affected typecheck/ESLint and four affected Vitest files:
+  GREEN (107 tests before the final exact-expiry storage addition).
+- Node `v22.23.1` full `npm run check`: GREEN — typecheck, full ESLint, 190
+  Vitest files / 1,693 tests with coverage, and the 3,230-module production build.
+- Privacy scans and `git diff --check`: GREEN.
+
+All Phase 9 implementation checkboxes are complete. Work freezes here before
+Phase 10.
+
+### Phase 9 independent quality review addendum (2026-08-28)
+
+- **Important — API and audit TTL facts could drift from the signed proof.** RED
+  observed every returned `expires_at` retaining sub-second precision after JWT
+  `NumericDate` truncated signed `exp`, the secret-reveal required envelope still
+  advertising 300 seconds, and an unknown action inheriting 300 audit seconds.
+  GREEN truncates issuance once before signing/returning and derives response and
+  audit TTLs from the closed action policy: exact `asset.secret_reveal` is 2,700,
+  every other registered action remains 300, and invalid/future actions are zero
+  and fail closed.
+- **Important — proof validation did not require the signed proof JTI.** RED
+  accepted an otherwise valid proof with no `jti`. GREEN requires the generated
+  32-character lowercase-hex proof ID in addition to the existing exact purpose,
+  action, user/subject, role, token version, TOTP, `iat`/`exp`, login-session JTI,
+  and revocation checks.
+- **Important — typed search rejection did not invalidate the central action
+  cache.** RED left the rejected `asset.secret_reveal` entry reusable after
+  initial search, saved-search reload, or cursor failure. GREEN clears exactly
+  that action on typed `secret_reveal_required` and remains fail-closed without
+  prompting or looping.
+- **Important — concurrent same-action callers could replace/orphan one another,
+  and a late issuance response could repersist after an auth boundary.** RED made
+  the first of two current callers reject while the second resolved. GREEN
+  coalesces matching action/persistence requests onto one promise/dialog/result;
+  login replacement, logout, TOTP disablement, and 401/token removal reject the
+  pending owner, advance auth ownership, close the dialog, and prevent the late
+  response from saving or resolving a stale proof. Selection-generation guards
+  still prevent replay to a stale asset.
+- **Important — an attached invalid proof was not a typed rejection on the live
+  content/search paths.** Content returned the generic step-up envelope, which the
+  file-center mapper could not use to clear and refresh a cached proof; optional
+  search verification silently converted every invalid non-empty proof to no
+  proof. Focused REDs reproduced both paths. GREEN preserves truly absent proof as
+  optional, propagates non-empty invalid proof, and returns the closed
+  parameter-free `secret_reveal_required` reason from search and secret-preview
+  ticket issuance. No proof value enters the response.
+- **Important — preview retry/renewal dropped valid session authority.** The
+  successful step-up retry did not update the active in-memory request, and renewal
+  rebuilt a proofless exact product. GREEN retains the proof-bearing active attempt
+  for manual retry and adds the current central proof to renewal only when the
+  server ticket classification is `secret` or `unknown`; `non_secret` renewal never
+  receives a proof. The helper now generically preserves the exact preview-input
+  discriminant, with no cast or union weakening.
+- **Important — two exact binding/expiry edges were open.** Validation accepted an
+  empty caller role because role comparison was conditional, and the browser
+  derived `Date.now() + proof_ttl_seconds` when the server expiry was malformed.
+  GREEN requires non-empty exact caller and current-DB roles, and persists only a
+  finite server-supplied `expires_at`; malformed expiry can be used for the current
+  request but cannot establish a sliding cache window.
+- The backend error-handling and frontend quality/type-safety specs were corrected
+  to record the fixed action TTL/session binding, central session store ownership,
+  cross-owner reuse, exact invalidation boundaries, bounded rejection retry, and
+  concurrency contract. No Phase 10 behavior was added.
+
+Reviewer verification is GREEN: exact backend selectors at `-count=3` and under
+`go test -race` at `-count=3`; complete `GOTOOLCHAIN=go1.26.6 go test ./...`,
+`go vet ./...`, and `go build ./...`; Node `v22.23.1` focused auth/file-center
+tests for 86 tests on each of three consecutive runs; and the final full
+`npm run check` including typecheck, ESLint, coverage tests, and production build.
+The final reviewer reran Node 22.23.1 typecheck, ESLint, and the four affected
+auth/storage/client/file-center files (117 tests), plus complete auth and handler
+Go packages; all passed.
+`git diff --check` and production privacy scans are GREEN: proof values appear
+only in the action-keyed `sessionStorage` store and the step-up transport header,
+never in URL/history, localStorage, analytics, console/log output, raw errors, or
+content-ticket products. No confirmed Critical or Important finding remains.
+
+## Phase 10 — All backup-bearing source lineages
+
+Date: 2026-08-28
+
+Scope stopped at Phase 10. No schema migration, node-log or collector work, NAS
+command, commit, push, PR, deployment, release, or Phase 11-12 work occurred.
+
+### Existing-schema gate
+
+The gate is satisfied without a migration. Existing `RecoveryPoint` rows carry
+the immutable producing-node/repository/task/run snapshots, publication lineage,
+publication consistency, provider-commit lifecycle, and imported-baseline state
+needed to prove retained bytes and exact attribution. Existing
+`TaskRepositoryLink`, `BackupRepository`, `CatalogGeneration`, import/rebuild, and
+publication lifecycle facts express current authorization, repository sequential
+capability/availability, and whether a complete public Catalog point exists.
+Neither SQLite nor PostgreSQL schema changed.
+
+### Projection RED / GREEN
+
+- The initial retained-lineage RED did not compile because source DTOs had no
+  closed browse state or retained-version count. GREEN enumerates exact active,
+  interrupted, disabled, archived, and deleted lineages for Admin when durable
+  point/link/provenance facts agree. Mutable task status does not gate durable
+  bytes. Configured tasks with no retained point are absent; malformed,
+  ambiguous, task-attributed imported, or otherwise unproven candidates are
+  omitted rather than guessed.
+- `TestBackupFileSourceProjectionEnumeratesRetainedLineagesIndependentOfMutableTaskState`
+  proves five Admin sets and exactly the three currently owned, non-archived task
+  lineages for Operator. Deleted and archived ownership fails closed for Operator;
+  Admin retains snapshot-backed visibility after task deletion.
+- `TestBackupFileSourceProjectionClosesUnavailableReasonsAndOmitsUnprovenLineages`
+  proves `browsable` only for a public point with an active complete Catalog,
+  `indexing` for proven retained bytes without that complete point, and
+  `unavailable` for an offline repository or missing sequential-read capability.
+  Reasons are closed and parameter-free; mixed node summaries use only the safe
+  generic reason. No repository identity, locator, path, evidence, content,
+  credential, token, or proof is serialized.
+- Visible-fact cursor RED/GREEN now includes availability and browse state. Signed
+  projection digests bind the complete sanitized DTO facts, authorization scope,
+  endpoint/resource, order, and paging position; changing repository availability
+  makes an old continuation return `ErrStaleCursor`.
+
+### Database-only HTTP and bounded reconciliation
+
+- `TestBackupFileSourceProjectionHasNoProviderCommandDependency` and
+  `TestBackupFileSourceHandlerHasNoProviderCommandDependency` prove the projection
+  and Files handlers contain no Provider/runner/SSH/exec dependency. Listing is a
+  bounded database/Catalog projection and makes zero Provider calls.
+- The first batching RED counted four database queries for three candidates.
+  `TestListCandidatesUsesFixedDatabaseQueriesForBatch` is GREEN after replacing
+  per-point lease lookups with one bounded point scan and one set-based live-lease
+  query: at most two queries, independent of batch size.
+- An independent restart-fairness RED created eleven unresolved points with ten
+  recently backed off ahead of one due target; a fresh service returned an empty
+  page. GREEN removes the process-local cursor and has
+  `TestListCandidatesFreshServiceWalksPastBackedOffPrefix` select the durable
+  oldest `updated_at, id` candidate on every restart. A successful fenced claim
+  persists both `LastAttemptAt` and `updated_at`, rotating attempted work behind
+  older unresolved rows consistently across processes and instances. The scan
+  stays bounded, the live-lease lookup stays set-based, and request limits outside
+  1..1000 fail closed.
+- The existing publication worker remains the sole Provider-observation boundary:
+  one bounded candidate page per pass, configured bounded concurrency, at most one
+  reconciliation call per claimed point, context cancellation and joined shutdown,
+  durable retry/backoff facts, and restart recovery from preparing/verifying rows.
+  `TestPublicationWorkerWakeTrafficDoesNotStarvePeriodicScan` additionally proves
+  that wake traffic cannot reset or indefinitely postpone the durable scan timer.
+  Exact Restic tags plus stored-summary provenance, exact Rclone commit/manifest,
+  and exact Rsync final-marker evidence may repair an interrupted publication.
+  Missing, multiple, rewritten, staging-only, or provenance-drift observations
+  fail closed and remain failed/quarantined instead of becoming Catalog truth.
+
+### RBAC, API, frontend, and privacy RED / GREEN
+
+- Admin continues to use the existing global list authority. Operator visibility
+  is rechecked through the current non-archived task and current node owner; a
+  missing/deleted/ambiguous owner, archived task, cross-user node, identity
+  collision, or malformed provenance fails closed. Handler tests prove safe
+  state/count/display/opaque-ID responses and standard envelopes without Provider
+  calls or reason parameters.
+- The strict frontend mapper/control RED first reported seven failures because the
+  new fields and state controls did not exist. GREEN (36 tests) requires the exact
+  browse-state union, non-negative retained count, known parameter-free unavailable
+  reasons, and state/reason consistency while dropping raw extras. Non-browsable
+  versions are visibly disabled and cannot invoke selection.
+- The hook RED observed a non-browsable version reaching the selection callback;
+  GREEN (20 tests) guards it. The route/page RED then reported three failures for
+  retaining legacy repository/task/recovery/entry browsing state; GREEN (29 tests)
+  preserves the safe node/set hierarchy but clears incompatible browse descendants
+  until the exact version is `browsable`.
+- The first complete frontend gate found nine stale test fixtures missing required
+  browse truth. They were repaired as strict public-contract fixtures, including
+  the unavailable accessibility state; the exact page/a11y gate is GREEN (30
+  tests). Chinese/English primary controls use user-facing indexing/unavailable
+  language and do not introduce Repository/Provider terminology.
+
+### Verification
+
+All backend commands used `GOTOOLCHAIN=go1.26.6`; all frontend commands used Node
+`v22.23.1` with `NODE_ENV` unset.
+
+- Catalog/handler/repository/runtime affected packages at `-count=3`: GREEN.
+- The same affected package set under `go test -race`, `-count=1`: GREEN.
+- Exact provider repair, candidate query-count, cursor-progress, import/rebuild,
+  cancellation, retry/backoff, and worker selectors: GREEN; the final repository
+  selector also passed `-count=3` and `-race`.
+- Frontend mapper, controls, hook, selection, and route/page focused tests at
+  `-count=3`: GREEN (73 tests per run).
+- `GOTOOLCHAIN=go1.26.6 go test ./...`: GREEN across the complete backend after
+  the cursor-progress change.
+- `GOTOOLCHAIN=go1.26.6 go vet ./...`, `go build ./...`, and pinned
+  golangci-lint v2.11.4: GREEN (`0 issues`). The bare host Go is 1.27 while the
+  pinned linter was built with Go 1.26, so the authoritative lint invocation pins
+  Go 1.26.6 as required by `go.mod`.
+- Node-22 `npm run check`: GREEN — typecheck, ESLint, 190 Vitest files / 1,709
+  tests with coverage, and the 3,230-module production build.
+- Backend and frontend privacy canaries and production scans are GREEN. No raw
+  locator/path/evidence/content/credential/token/proof or reason parameters cross
+  the source DTO/control boundary.
+- `git diff --check`: GREEN. No migration file was added or modified.
+
+All Phase 10 implementation checkboxes are complete. Work freezes here before
+Phase 11.
+
+### Phase 10 independent quality review addendum (2026-08-28)
+
+The reviewer reproduced and fixed three Important defects before the Phase 11
+freeze:
+
+1. A mutable point whose strict lineage JSON named a task but whose durable
+   `producing_task_id` column was NULL was accepted for Admin projection. The RED
+   returned no error; GREEN requires the live task ID to exist and exactly match
+   the lineage, and rejects any mutable producing-run ID.
+2. The process-local fairness cursor deterministically restarted at a backed-off
+   prefix and was inconsistent across workers. The RED returned no due target on
+   restart; GREEN uses the shared durable ordering and existing lease fencing
+   described above, with no schema change.
+3. Every wake recreated the publication worker timer, so sustained wake traffic
+   could starve periodic database recovery. The RED observed zero list calls;
+   GREEN holds the timer deadline across wakes and resets it only after the
+   periodic pass.
+
+All three focused selectors passed `-count=3` and `go test -race -count=3`.
+`GOTOOLCHAIN=go1.26.6 go test ./... -count=1`, `go vet ./...`, `go build ./...`,
+and golangci-lint v2.11.4 (`0 issues`) passed. Node 22.14 directly ran TypeScript
+typecheck, ESLint, 190 Vitest files / 1,709 tests with coverage, and the 3,230-module
+production build. Focused backend privacy/RBAC/dependency selectors passed
+`-count=3`; `git diff --check` passed and the model/database/migration diff remained
+empty. A full runtime-package `-count=3` diagnostic exposed three unrelated
+repeat-run/global-state tests; those exact tests pass together at `-count=1`, and
+the authoritative complete backend count=1 gate is green.
+
+The existing schema is sufficient: no duplicate inventory or migration is
+justified. No confirmed Critical or Important Phase 10 finding remains; Phase 10
+is complete and remains frozen before Phase 11.
+
+### Phase 10 retained-lineage reconciliation addendum (2026-08-28)
+
+A later production-shape review reproduced and repaired four further Important
+projection-boundary defects:
+
+1. Managed immutable points are persisted with physical availability `unknown`.
+   Even when the repository was online and exact provider-commit/repository
+   identity evidence was present, the Files projection classified those retained
+   points as unavailable forever. The RED now uses that production-shaped state;
+   GREEN treats exact managed retained evidence as content-available while keeping
+   explicit offline, missing, non-sequential, and ambiguous states fail closed.
+2. The frontend mapper accepted `browsable` or `indexing` while the same version's
+   `content_availability.available` was false. The malformed DTO RED is now blocked;
+   reachable non-unavailable browse states require available retained content.
+3. Backend DTO validation permitted that contradictory state and also permitted
+   unavailable content without a closed reason. The producer-side RED now rejects
+   both forms, preventing malformed availability from becoming an HTTP product.
+4. Restic verifying points were accepted with generic non-empty commit/identity
+   digests even when the required tag digest and capture interval were absent.
+   The backend-specific RED now requires the exact Restic consistency shape and
+   exact managed Rclone/Rsync consistency shape, including matching point
+   capability revision and closed success state, before treating physical
+   `unknown` as retained availability.
+
+The Catalog spec was also reconciled with the approved implementation contract:
+HTTP performs zero Provider work; one claimed point receives at most one
+reconciliation invocation. A backend may make its fixed, bounded set of exact
+identity/provenance observations inside that invocation. The prohibition is on
+N+1 or unbounded observation/retry loops, not on the multiple fixed observations
+needed to prove identity.
+
+Fresh focused file-source and dependency/privacy selectors passed `-count=3`; the
+affected race selector passed without a race report. Complete backend `go test
+./...`, build, vet, and golangci-lint passed. Frontend typecheck, ESLint, production
+build, and the five-file file-source slice passed (75 tests on each of three runs).
+An initial full frontend test gate exposed seven stale cross-owner UI/i18n
+expectations in six non-file-source suites. After their owning reviewer reconciled
+those fixtures, a fresh Node-22 `npm run check` passed typecheck, ESLint, all 190
+Vitest files / 1,743 tests with coverage, and the 3,230-module production build.
+
+A cross-owner Important authority defect was also reproduced and repaired:
+Operator authorization joined current Task ownership but did not require the
+current Node row itself to be live, so an archived current node with a stale owner
+could authorize a retained point. The dedicated ownership fix joins the live,
+non-archived current Node while preserving immutable lineage validation and Admin
+provenance visibility. Archived and missing current-node REDs plus the current-task
+migration and repository visibility selectors passed `-count=3` and race.
+
+## Phase 11 — Explicit Up navigation and revised browser UX
+
+Date: 2026-08-28
+
+Scope stopped at Phase 11. No schema migration, Provider scan, node-log or
+collector work, NAS command, commit, push, PR, deployment, release, or Phase 12
+work occurred.
+
+### RED to GREEN evidence
+
+- Backend EntryPage compile RED proved the page had no required directory
+  context. GREEN adds `directory:{current,parent,breadcrumb}` on root, nested,
+  empty, and every cursor page. Catalog tests cover current directory type,
+  same recovery-point/active-generation lookup, bounded acyclic directory-only
+  ancestry, parent/current contradictions, missing ancestors, cursor-page
+  identity, and stale rename rejection through a directory-context digest.
+- The handler serialization RED showed an invalid root response with
+  `breadcrumb:null`. GREEN serializes `current:null`, `parent:null`, and
+  `breadcrumb:[]`; generated Swagger requires the directory object and all three
+  members.
+- The frontend mapper RED rejected none of the missing/malformed contexts. GREEN
+  atomically rejects missing members, malformed/blank names, cross-point refs,
+  cycles, parent/current contradictions, and malformed items while stripping
+  unknown raw/normalized path fields.
+- Reducer/UI REDs showed missing cursor context, no native Up affordance, and a
+  directory transition that did not detach preview. GREEN binds append pages to
+  identical directory context, fails closed on contradiction, replaces the
+  standalone Root action with a native 44px Up control, retains root/ancestor
+  crumbs, and detaches preview then clears selection before the opaque route
+  patch.
+- Browser/workspace tests cover pointer activation, list/grid keyboard behavior,
+  empty nested directories, exact deep-link reload, rapid A-to-B navigation
+  abort with late-A suppression, root/direct/deep Up, ancestor jumps, origin
+  scroll and row-focus restoration at 390px and 1440px, 200% zoom layout,
+  animation-free focus/scroll restoration, localized accessible names, and axe.
+  Existing direct-source preview tests continue to prove Worker guidance is not
+  shown unless the state explicitly describes a Worker-derived enhancement.
+
+### Verification
+
+- Catalog Phase 11 selectors at `-count=3`: GREEN.
+- Focused Catalog `go test -race`: GREEN.
+- Handler serialization and Swagger selectors at `-count=3`: GREEN.
+- `go test ./...`: GREEN across all backend packages.
+- Pinned `swag` v1.16.6 regeneration: byte-deterministic. SHA-256 remained
+  `43bb796a...` for `docs.go`, `65fec3fb...` for `swagger.json`, and
+  `fba646ab...` for `swagger.yaml`.
+- Node 22 focused backup-assets suite: 41 files / 609 tests GREEN; final targeted
+  runs were workspace 47/47, state hook 77/77, and strict API mapper 14/14.
+- Node 22 `npm run check`: GREEN — typecheck, ESLint, 190 Vitest files / 1,726
+  tests with coverage, and the 3,230-module production build.
+- `git diff --check`: GREEN. Production-addition privacy scan found no raw path,
+  normalized path, Provider locator, localStorage, or sessionStorage addition in
+  the Phase 11 surfaces. Directory restoration state remains in memory and uses
+  only opaque composite references and numeric scroll offsets.
+
+All Phase 11 implementation checkboxes are complete. Work freezes here before
+Phase 12.
+
+## Phase 11 independent reviewer remediation
+
+Date: 2026-08-28
+
+The independent Phase 11 check reproduced and repaired five Important contract
+gaps with focused RED-to-GREEN tests:
+
+- `catalog.ErrInvalidCatalogContract` was exposed as caller error HTTP 400 even
+  when it represented malformed persisted directory ancestry or a DTO contract
+  violation. The shared handler mapping now leaves this internal sentinel on the
+  generic, detail-free HTTP 500 path; request syntax/ref/cursor errors retain
+  their existing 400 mapping.
+- `BreadcrumbDTO` members were optional in generated Swagger, and the entry-list
+  operation omitted its generic 500 response. All three breadcrumb fields are
+  now required and the route documents 500. Pinned Swagger was regenerated.
+- The frontend page mapper validated directory context but accepted an available
+  item whose `parentRef` belonged to a different directory. It now atomically
+  requires every item to use the exact recovery point and exact requested parent
+  (`null` at root).
+- Reducer append equality returned early for root contexts and ignored their
+  breadcrumb. It now compares current, parent, and every breadcrumb item for
+  both root and non-root pages, failing closed and clearing mixed results and
+  selection on any contradiction.
+- The authoritative specs had no executable Phase 11 directory-context,
+  navigation, or accessibility contract. Backend error handling plus frontend
+  type-safety, quality, and a11y specs now record the exact API, cursor, mapper,
+  navigation, focus, privacy, and test requirements.
+
+Additional boundary tests prove exact 256-level directory ancestry succeeds and
+257 fails, and that an entry cursor rejects user, role, direction, sort,
+Repository, recovery point, generation, parent, directory-digest changes, and
+HMAC tamper.
+
+### Independent final gates
+
+- Catalog/handler Phase 11 selectors: GREEN at `-count=3`; the same focused Go
+  selectors are GREEN under `go test -race -count=3`.
+- Node 22.23.1 navigation/API/state selector: 5 files / 162 tests GREEN in each
+  of three independent runs.
+- `GOTOOLCHAIN=go1.26.6 go test ./... -count=1`: GREEN across every backend
+  package after the final handler/Swagger change. `go vet ./...` and
+  `go build ./...` are GREEN.
+- `GOTOOLCHAIN=go1.26.6 golangci-lint run ./...`: GREEN, `0 issues.` The first
+  unpinned invocation inherited ambient Go 1.27 and panicked because the linter
+  binary was built with Go 1.26; pinning the repository toolchain removed that
+  environment mismatch without any source change.
+- Node 22.23.1 `npm run check`: GREEN — typecheck, ESLint, 190/190 Vitest files
+  and 1,729 tests with coverage, plus the 3,230-module production build.
+- Two consecutive pinned `swag` v1.16.6 generations are byte-identical:
+  `2ac3308a270803079e2ed4fa62fe9a225c9677f164030eb32739b6ff29d56046`
+  (`docs.go`),
+  `70f0fabe42b4339ae84955b2f62a24b07de193cac13a1247a6fb7210f09e9e0d`
+  (`swagger.json`), and
+  `35882dc18d0e35f4c403cebb706dcd0987f62cc7c9e4bd14e2fc858dc7aa51fc`
+  (`swagger.yaml`).
+- Task context validation and `git diff --check` are GREEN. Production-addition
+  scanning found no raw/normalized path, Provider locator, browser-storage, or
+  cookie sink in Phase 11 surfaces. Package manifests, Go modules, and database/
+  migration paths have no diff.
+
+Phase 11 is complete after reviewer remediation and remains frozen before Phase
+12. No schema/Provider scan, node-log/collector, NAS, commit, push, PR, deploy,
+or release action was performed by this review.
+
+## Phase 12 independent full-scope verification
+
+Date: 2026-08-28
+
+The independent Phase 12 reviewer loaded the complete Phase 8-11 task artifacts,
+package specs, nested `AGENTS.md` files, and the actual dirty diff. The review
+traced Repository Service/provider adapters through Broker Issue/grant/Serve,
+bounded-prefix close precedence and closed source-failure products; the exact
+45-minute secret-reveal policy, signed session/JTI binding, central cache
+concurrency and invalidation; retained-lineage/RBAC/cursor truth, fixed-query
+listing and the durable publication reconciler; and required directory context,
+strict frontend mapping/reduction, cancellation, focus, accessibility, and
+deep-link compatibility.
+
+### Finding repaired with RED -> GREEN
+
+- **Important — the live Playwright fixture had drifted from the Phase 10/11
+  required API contracts.** `web/e2e/backup-assets-gate.spec.ts` omitted
+  `retained_version_count`, `browse_state`, and `EntryPage.directory`, so the
+  real Chromium live flow failed before reaching the list. The focused live
+  Chromium command reproduced one failure. The fixture now supplies the strict
+  file-source and directory-context fields, models an empty nested directory,
+  and adds a 390x844, 200%-text-zoom keyboard/Up regression that proves return
+  to root and origin-row focus restoration. Chromium and Firefox are now 3/3
+  GREEN. No production code change was required.
+
+No other Critical or Important finding remained after complete cross-layer and
+privacy review. The closed error responses expose only enumerated reason/code
+and safe correlation ID; no raw/normalized path, Provider locator, command
+output, cause, proof, ticket, content, or private evidence enters those errors,
+audit, or logs. Public DTO/Swagger additions expose no private source evidence;
+the established opaque content URL remains the only ticket-bearing response
+contract. Frontend additions contain no `any`, unsafe `unknown as` cast, or
+component-level `fetch`; proof caching and transmission remain behind the
+central authenticated API boundary and are invalidated by the reviewed session
+events. Existing preview, download, and opaque deep-link contracts remain
+covered.
+
+### Fresh verification gates
+
+- Go 1.26.6 focused Phase 8-11 selectors: 24 selectors across auth, handlers,
+  catalog, content, provider, repository, runtime, and sshutil are GREEN at
+  `-count=3` and under focused `go test -race -count=1`.
+- `GOTOOLCHAIN=go1.26.6 go test ./... -count=1`, `go build ./...`, and
+  `go vet ./...`: GREEN. Pinned golangci-lint 2.11.4 reports `0 issues.`
+- Pinned `swag` v1.16.6 regenerated twice with no byte drift. SHA-256 remains
+  `2ac3308a270803079e2ed4fa62fe9a225c9677f164030eb32739b6ff29d56046`
+  (`docs.go`),
+  `70f0fabe42b4339ae84955b2f62a24b07de193cac13a1247a6fb7210f09e9e0d`
+  (`swagger.json`), and
+  `35882dc18d0e35f4c403cebb706dcd0987f62cc7c9e4bd14e2fc858dc7aa51fc`
+  (`swagger.yaml`). Documentation freshness is GREEN.
+- Node 22.23.1 focused auth/API/browser/preview/page suite: 15 files / 343 tests
+  GREEN in each of three independent runs. Typecheck and ESLint are GREEN.
+  `npm run check` is GREEN: 190/190 Vitest files, 1,729 tests with coverage,
+  and the 3,230-module production build. Axe selectors report no violations;
+  existing non-fatal React `act(...)` warnings remain in test output.
+- Playwright Chromium: 3/3 GREEN. Playwright Firefox: 3/3 GREEN. The nine-test
+  matrix includes closed/live flow plus mobile 390x844/200%-text-zoom Up/focus.
+- Playwright WebKit: externally blocked before test execution because the host
+  lacks `libicudata.so.66`, `libicui18n.so.66`, `libicuuc.so.66`,
+  `libxml2.so.2`, and `libffi.so.7`. No browser or system dependency was
+  downloaded or installed. The Phase 12 frontend/browser checkbox therefore
+  remains open.
+- Exact repository gate
+  `PATH=/home/murray/.nvm/versions/node/v22.23.1/bin:$PATH GOTOOLCHAIN=go1.26.6 env -u NODE_ENV make check`:
+  GREEN, including lint, full Go/frontend tests, and both production builds.
+- Task-context validation, documentation freshness, dependency/manifest,
+  migration/schema, workflow/deploy, collector/node-log, response/privacy,
+  and TypeScript escape scans are GREEN. `git diff --check` is GREEN.
+  `TEST_POSTGRES_DSN` is unavailable, but no database model, migration, schema,
+  or database path changed, so PostgreSQL parity was not affected by Phases
+  8-11.
+
+Phase 12 verification is complete except for the explicitly blocked WebKit
+matrix. Delivery, CI/merge/release, NAS upgrade, production acceptance, and
+collector/node-log steps remain unchecked and require separate authorization.
+No commit, stage, push, PR, merge, deploy, release, NAS, production, Provider
+scan, collector, or node-log action was performed by this review.
+
+## Phase 11 final directory-contract audit
+
+Date: 2026-08-28
+
+A final independent audit reproduced and repaired four additional Important
+directory API/state defects with focused RED-to-GREEN tests:
+
+- Entry cursors were decoded only after the requested directory lookup. A valid
+  old-generation cursor could therefore return 404 when the new active
+  generation lacked that directory, and a tampered cursor could also reach the
+  lookup first. Cursor authentication and all non-directory scope checks now run
+  before directory lookup; authenticated point/generation/parent/sort/user/role
+  drift returns 409, while malformed or unauthenticated tokens return 400.
+- Unexpected storage failures while loading the requested directory were
+  collapsed to not-found. Only an actual missing directory now maps to not-found
+  (or stale cursor); storage failures remain internal and reach the handler's
+  generic, detail-free 500 response path.
+- The strict frontend page mapper applied bounded, non-blank directory names to
+  context members but not page items. Item names now use the same validation and
+  atomically reject blank, NUL-containing, or over-4096-byte values without
+  exposing raw/normalized paths.
+- `results_replaced` accepted a response for an obsolete request key and could
+  overwrite the newest route/result. Replacement and append actions now both
+  require the currently active request identity; late responses are ignored.
+
+### Fresh audit gates
+
+- Focused Catalog/handler selectors: GREEN at `-count=3` and under
+  `go test -race -count=1`, including stale generation-before-lookup, tamper,
+  missing directory, storage failure, exact 256/257 depth, ancestry, Swagger,
+  and HTTP privacy cases.
+- `GOTOOLCHAIN=go1.26.6 go test ./... -count=1`, `go vet ./...`, and
+  `go build ./...`: GREEN. Pinned golangci-lint reports `0 issues.`
+- Node 22.23.1 focused API/state/route/hook suite: 4 files / 116 tests GREEN;
+  ESLint is GREEN. The repository-wide typecheck was temporarily blocked by a
+  concurrent translation-literal mismatch in
+  `web/src/pages/__tests__/backups-page.a11y.test.tsx`; the final frontend audit
+  replaced the inferred English-literal helper with the exact English/Chinese
+  resource union, and the current repository typecheck is GREEN.
+- Two consecutive pinned `swag` v1.16.6 generations are byte-identical:
+  `2ac3308a270803079e2ed4fa62fe9a225c9677f164030eb32739b6ff29d56046`
+  (`docs.go`),
+  `70f0fabe42b4339ae84955b2f62a24b07de193cac13a1247a6fb7210f09e9e0d`
+  (`swagger.json`), and
+  `35882dc18d0e35f4c403cebb706dcd0987f62cc7c9e4bd14e2fc858dc7aa51fc`
+  (`swagger.yaml`). The explicit required directory-context Swagger selector is
+  GREEN at `-count=3`.
+- `git diff --check` is GREEN. Phase 11 production surfaces add no raw path,
+  normalized path, Provider locator, browser-storage, IndexedDB, or cookie sink.
+
+No schema/Provider scan, node-log/collector, NAS, commit, push, PR, deploy, or
+release action was performed by this audit.
+
+## Final release-readiness audit
+
+Date: 2026-08-28
+
+### Findings and task truth
+
+- An Important final ownership RED proved that Operator point, Repository, and
+  link-lineage visibility trusted the current Task plus a stale `node_owners` row
+  without requiring the Task's current Node to exist and remain non-archived.
+  Catalog and Repository now join the live non-archived current Node before
+  applying current ownership. Regression coverage proves legitimate Task moves
+  transfer authority to the current owner, deny the former owner, and fail closed
+  for archived or missing current Nodes even when stale ownership evidence
+  remains. The migration/live-node selectors pass at `-count=3` and under race.
+- PRD, design, task metadata, implementation plan, and the production-remediation
+  research note now distinguish the historical product-choice pause from the
+  user's later explicit implementation approval. The implementation plan names
+  the actual remediation branch, and task metadata includes the Phase 8-11
+  production touchpoints. Delivery, production, NAS, collector, and node-log
+  authority remain separate and ungranted.
+- The backup-file Catalog spec now states the intended authority split exactly:
+  current live Task/Node ownership grants present authority, while immutable
+  link/point snapshots must agree with each other as historical attribution and
+  are not rewritten by a legitimate Task move. Required tests cover migration,
+  archived/missing current Nodes, and stale ownership rows across point and
+  Repository/link projections.
+
+### Stable verification
+
+- Exact repository gate
+  `env -u NODE_ENV PATH=/home/murray/.nvm/versions/node/v22.23.1/bin:$PATH GOTOOLCHAIN=go1.26.6 make check`:
+  GREEN. Backend golangci-lint reports `0 issues`; all backend tests and the
+  production binary build pass. Frontend ESLint, typecheck, 190/190 Vitest files
+  and 1,743/1,743 tests with coverage, and the 3,230-module production build pass.
+- Sequential Playwright is GREEN on Chromium 3/3 and Firefox 3/3, including the
+  390x844/200%-zoom Up/focus case. WebKit remains externally blocked before test
+  execution because this host lacks `libicudata.so.66`, `libicui18n.so.66`,
+  `libicuuc.so.66`, `libxml2.so.2`, and `libffi.so.7`; no dependency was installed.
+  The Phase 12 frontend/browser checkbox therefore remains open until CI or a
+  supported host runs the three WebKit cases.
+- Task validation passes with 19 implementation and 15 check entries. Its only
+  notices are known context-injection size warnings for specs that were read in
+  full by this review. Dirty-diff documentation freshness, 88-file migration UTC
+  safety, JSON parsing, gofmt, scope/dependency/config scans, privacy/secret scans,
+  and `git diff --check` are GREEN.
+- Branch `codex/backup-file-center-production-remediation` is based exactly on
+  `origin/main` at `85082407c0873566125b4b13660ab2dabce0e4d9` with ahead/behind
+  `0/0`. All task work remains dirty and uncommitted. Candidate PR title
+  `fix(backup-assets): remediate file center production gaps` passes policy. A
+  squash with that `fix` title should feed the next patch Release Please PR from
+  current manifest `0.52.0`; it does not itself publish a public release or image.
+
+### Readiness boundary
+
+The code is ready to proceed to a separately authorized commit/ready PR, where
+required CI must provide the supported WebKit result. This task is not complete:
+commit/push/PR/CI/merge, Release Please and any release/image automation, NAS
+upgrade, production product acceptance, collectors, and node logs remain open.
+No such action was performed by this audit.

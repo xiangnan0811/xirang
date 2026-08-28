@@ -1071,6 +1071,7 @@ type gatewayReadState struct {
 	cacheLease    *CacheLease
 	body          io.Reader
 	providerBytes int64
+	closePrefix   bool
 	closed        bool
 }
 
@@ -1088,7 +1089,7 @@ func (state *gatewayReadState) close() (int64, error) {
 	}
 	var sourceErr error
 	if state.source != nil {
-		sourceErr = state.source.Close()
+		sourceErr = closeSourceSession(state.source, state.closePrefix)
 	}
 	if state.sourceReader != nil {
 		observed := state.sourceReader.ProviderBytes()
@@ -1127,6 +1128,7 @@ func (broker *Broker) prepareGatewayRead(
 				zeroBytes(payload)
 				return state, ErrContentUnavailable
 			}
+			state.closePrefix = grant.RepresentationTruncated && grant.RepresentationSourceBytes < grant.SourceSize
 			renderPlan, renderErr := renderer.Prepare(RenderRequest{
 				Action: DeliveryAction(grant.Action), Renderer: Renderer(grant.Renderer), Profile: RendererProfile(grant.Profile),
 				Range: RangePolicy(grant.RangePolicy), SourceSize: grant.SourceSize, Prefix: payload,
@@ -1816,39 +1818,65 @@ func (broker *Broker) readTicketPrefix(
 		Mode: mode, MaxBytes: providerLimit,
 	})
 	if err != nil {
-		return nil, SourceStat{}, SourceCapabilities{}, err
+		return nil, SourceStat{}, SourceCapabilities{}, classifySourceFailure(SourceFailureOpen, err)
 	}
 	stat, capabilities := session.Stat(), session.Capabilities()
 	if stat.Size != asset.Size || stat.SourceFingerprint != asset.SourceFingerprint ||
 		stat.EntryFingerprint != asset.EntryFingerprint || capabilities.Provider != asset.Provider {
-		_ = session.Close()
-		return nil, stat, capabilities, ErrContentSourceUnavailable
+		failure := NewSourceFailureError(SourceFailureChanged, ErrContentSourceUnavailable)
+		return nil, stat, capabilities, closeSourceAfterFailure(session, failure)
 	}
 	if mode == SourceModeSequential && !capabilities.Sequential {
-		_ = session.Close()
-		return nil, stat, capabilities, contentCapabilityError(backupasset.CapabilitySequentialReadUnavailable)
+		failure := NewSourceFailureError(
+			SourceFailureCapability,
+			contentCapabilityError(backupasset.CapabilitySequentialReadUnavailable),
+		)
+		return nil, stat, capabilities, closeSourceAfterFailure(session, failure)
 	}
 	prefix := make([]byte, int(readLimit))
 	if readLimit > 0 {
 		reader := session.Reader()
 		if reader == nil {
-			_ = session.Close()
-			return nil, stat, capabilities, ErrContentSourceUnavailable
+			failure := NewSourceFailureError(SourceFailureRead, ErrContentSourceUnavailable)
+			return nil, stat, capabilities, closeSourceAfterFailure(session, failure)
 		}
 		if _, err := io.ReadFull(reader, prefix); err != nil {
-			_ = session.Close()
 			zeroBytes(prefix)
+			failure := classifySourceFailure(SourceFailureRead, err)
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return nil, stat, capabilities, ctxErr
+				failure = classifySourceFailure(SourceFailureRead, ctxErr)
 			}
-			return nil, stat, capabilities, ErrContentSourceUnavailable
+			return nil, stat, capabilities, closeSourceAfterFailure(session, failure)
 		}
 	}
-	if err := session.Close(); err != nil {
+	if err := closeSourceSession(session, readLimit < asset.Size); err != nil {
 		zeroBytes(prefix)
-		return nil, stat, capabilities, err
+		return nil, stat, capabilities, classifySourceFailure(SourceFailureRead, err)
 	}
 	return prefix, stat, capabilities, nil
+}
+
+func closeSourceSession(session SourceSession, prefix bool) error {
+	if session == nil {
+		return nil
+	}
+	if prefix {
+		if prefixCloser, ok := session.(interface{ ClosePrefix() error }); ok {
+			return prefixCloser.ClosePrefix()
+		}
+	}
+	return session.Close()
+}
+
+func closeSourceAfterFailure(session SourceSession, failure error) error {
+	if session == nil {
+		return failure
+	}
+	closeErr := session.Close()
+	if closeErr == nil {
+		return failure
+	}
+	return errors.Join(failure, classifySourceFailure(SourceFailureRead, closeErr))
 }
 
 func (broker *Broker) openRepresentationSource(

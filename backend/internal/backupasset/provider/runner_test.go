@@ -84,6 +84,47 @@ func TestBoundedReadHandleCloseDetectsUnreadOverflowAtExactLimit(t *testing.T) {
 	}
 }
 
+func TestBoundedReadHandleClosesAnUnreadPrefixAsIntentionalCancellation(t *testing.T) {
+	underlying := &prefixCloseProviderReadHandle{
+		Reader:   strings.NewReader("12345"),
+		closeErr: errors.New("FAKE_ABORTED_COMMAND_WAIT_FOR_TEST_ONLY"),
+	}
+	handle := newBoundedReadHandle(underlying, 5)
+	buffer := make([]byte, 4)
+	if _, err := io.ReadFull(handle, buffer); err != nil || string(buffer) != "1234" {
+		t.Fatalf("read value=%q err=%v", buffer, err)
+	}
+	prefixCloser, ok := handle.(interface{ ClosePrefix() error })
+	if !ok {
+		t.Fatal("bounded read handle does not expose intentional prefix close")
+	}
+	if err := prefixCloser.ClosePrefix(); err != nil {
+		t.Fatalf("intentional bounded-prefix close=%v", err)
+	}
+	if !underlying.prefixClosed || underlying.closed {
+		t.Fatalf("prefix close=%t ordinary close=%t", underlying.prefixClosed, underlying.closed)
+	}
+}
+
+func TestBoundedReadHandleOrdinaryEarlyClosePreservesUnderlyingFailure(t *testing.T) {
+	closeErr := errors.New("FAKE_ORDINARY_EARLY_CLOSE_FAILURE_FOR_TEST_ONLY")
+	underlying := &prefixCloseProviderReadHandle{
+		Reader:   strings.NewReader("12345"),
+		closeErr: closeErr,
+	}
+	handle := newBoundedReadHandle(underlying, 5)
+	buffer := make([]byte, 4)
+	if _, err := io.ReadFull(handle, buffer); err != nil || string(buffer) != "1234" {
+		t.Fatalf("read value=%q err=%v", buffer, err)
+	}
+	if err := handle.Close(); !errors.Is(err, closeErr) {
+		t.Fatalf("ordinary bounded close=%v, want %v", err, closeErr)
+	}
+	if underlying.prefixClosed || !underlying.closed {
+		t.Fatalf("prefix close=%t ordinary close=%t", underlying.prefixClosed, underlying.closed)
+	}
+}
+
 func TestBoundedReadHandleReportsProbeInclusiveProviderBytes(t *testing.T) {
 	t.Run("overflow proof", func(t *testing.T) {
 		underlying := &trackingProviderReadHandle{Reader: strings.NewReader("12345")}
@@ -636,6 +677,24 @@ type trackingCloser struct{ closed bool }
 
 func (closer *trackingCloser) Close() error { closer.closed = true; return nil }
 
+type prefixCloseCommandReadHandle struct {
+	closeErr     error
+	closed       bool
+	prefixClosed bool
+}
+
+func (*prefixCloseCommandReadHandle) Read([]byte) (int, error) { return 0, io.EOF }
+
+func (handle *prefixCloseCommandReadHandle) Close() error {
+	handle.closed = true
+	return handle.closeErr
+}
+
+func (handle *prefixCloseCommandReadHandle) ClosePrefix() error {
+	handle.prefixClosed = true
+	return nil
+}
+
 func TestSSHCommandTransportMapsToolsPurposesAndPrivateOperands(t *testing.T) {
 	runner := &fakeRemoteCommandRunner{result: sshutil.CommandResult{Stdout: []byte("ok")}}
 	closer := &trackingCloser{}
@@ -695,6 +754,23 @@ func TestSSHCommandTransportKeepsReadConnectionUntilHandleClose(t *testing.T) {
 	value, readErr := io.ReadAll(handle)
 	if closeErr := handle.Close(); readErr != nil || closeErr != nil || string(value) != "data" || !underlying.closed || !closer.closed {
 		t.Fatalf("value=%q read=%v close=%v underlying=%v connection=%v", value, readErr, closeErr, underlying.closed, closer.closed)
+	}
+}
+
+func TestTransportReadHandleForwardsIntentionalPrefixClose(t *testing.T) {
+	underlying := &prefixCloseCommandReadHandle{closeErr: errors.New("FAKE_ABORTED_REMOTE_WAIT_FOR_TEST_ONLY")}
+	connection := &trackingCloser{}
+	released := false
+	handle := &transportReadHandle{underlying: underlying, closer: connection, release: func() { released = true }}
+	prefixCloser, ok := any(handle).(interface{ ClosePrefix() error })
+	if !ok {
+		t.Fatal("transport read handle does not expose intentional prefix close")
+	}
+	if err := prefixCloser.ClosePrefix(); err != nil {
+		t.Fatalf("transport prefix close=%v", err)
+	}
+	if !underlying.prefixClosed || underlying.closed || !connection.closed || !released {
+		t.Fatalf("prefix=%t ordinary=%t connection=%t released=%t", underlying.prefixClosed, underlying.closed, connection.closed, released)
 	}
 }
 
@@ -1052,6 +1128,24 @@ func (execution *fakeSSHExecution) Cancel() error { return execution.cancelErr }
 type trackingProviderReadHandle struct {
 	io.Reader
 	closed bool
+}
+
+type prefixCloseProviderReadHandle struct {
+	io.Reader
+	closeErr     error
+	prefixErr    error
+	closed       bool
+	prefixClosed bool
+}
+
+func (handle *prefixCloseProviderReadHandle) Close() error {
+	handle.closed = true
+	return handle.closeErr
+}
+
+func (handle *prefixCloseProviderReadHandle) ClosePrefix() error {
+	handle.prefixClosed = true
+	return handle.prefixErr
 }
 
 func (handle *trackingProviderReadHandle) Close() error { handle.closed = true; return nil }

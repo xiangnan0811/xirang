@@ -9849,7 +9849,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "只接受 opaque parent entry ID，不接受 Provider 路径",
+                "description": "只接受 opaque parent entry ID，不接受 Provider 路径；每页（含空目录与游标页）都返回显式 current、parent、breadcrumb 目录上下文",
                 "produces": [
                     "application/json"
                 ],
@@ -9935,6 +9935,12 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -19837,6 +19843,11 @@ const docTemplate = `{
         },
         "xirang_backend_internal_backupasset_catalog.BreadcrumbDTO": {
             "type": "object",
+            "required": [
+                "entry_id",
+                "name",
+                "recovery_point_id"
+            ],
             "properties": {
                 "entry_id": {
                     "type": "string"
@@ -20000,6 +20011,72 @@ const docTemplate = `{
                 }
             }
         },
+        "xirang_backend_internal_backupasset_catalog.DirectoryContextDTO": {
+            "type": "object",
+            "required": [
+                "breadcrumb",
+                "current",
+                "parent"
+            ],
+            "properties": {
+                "breadcrumb": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.BreadcrumbDTO"
+                    }
+                },
+                "current": {
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.DirectoryEntryDTO"
+                        }
+                    ],
+                    "x-nullable": true
+                },
+                "parent": {
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.DirectoryRefDTO"
+                        }
+                    ],
+                    "x-nullable": true
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.DirectoryEntryDTO": {
+            "type": "object",
+            "required": [
+                "entry_id",
+                "name",
+                "recovery_point_id"
+            ],
+            "properties": {
+                "entry_id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "recovery_point_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "xirang_backend_internal_backupasset_catalog.DirectoryRefDTO": {
+            "type": "object",
+            "required": [
+                "entry_id",
+                "recovery_point_id"
+            ],
+            "properties": {
+                "entry_id": {
+                    "type": "string"
+                },
+                "recovery_point_id": {
+                    "type": "string"
+                }
+            }
+        },
         "xirang_backend_internal_backupasset_catalog.EntryDTO": {
             "type": "object",
             "properties": {
@@ -20046,7 +20123,13 @@ const docTemplate = `{
         },
         "xirang_backend_internal_backupasset_catalog.EntryPage": {
             "type": "object",
+            "required": [
+                "directory"
+            ],
             "properties": {
+                "directory": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.DirectoryContextDTO"
+                },
                 "items": {
                     "type": "array",
                     "items": {
@@ -20130,6 +20213,18 @@ const docTemplate = `{
                 "backup_set_id": {
                     "type": "string"
                 },
+                "browse_state": {
+                    "enum": [
+                        "browsable",
+                        "indexing",
+                        "unavailable"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceBrowseState"
+                        }
+                    ]
+                },
                 "catalog_coverage": {
                     "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.CoverageStatus"
                 },
@@ -20153,6 +20248,9 @@ const docTemplate = `{
                 "node_id": {
                     "type": "integer"
                 },
+                "unavailable_reason": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilityReason"
+                },
                 "version_count": {
                     "type": "integer"
                 }
@@ -20172,6 +20270,19 @@ const docTemplate = `{
                 }
             }
         },
+        "xirang_backend_internal_backupasset_catalog.FileSourceBrowseState": {
+            "type": "string",
+            "enum": [
+                "browsable",
+                "indexing",
+                "unavailable"
+            ],
+            "x-enum-varnames": [
+                "FileSourceBrowseStateBrowsable",
+                "FileSourceBrowseStateIndexing",
+                "FileSourceBrowseStateUnavailable"
+            ]
+        },
         "xirang_backend_internal_backupasset_catalog.FileSourceLineageKind": {
             "type": "string",
             "enum": [
@@ -20189,6 +20300,18 @@ const docTemplate = `{
                 "backup_set_count": {
                     "type": "integer"
                 },
+                "browse_state": {
+                    "enum": [
+                        "browsable",
+                        "indexing",
+                        "unavailable"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceBrowseState"
+                        }
+                    ]
+                },
                 "catalog_coverage": {
                     "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.CoverageStatus"
                 },
@@ -20200,6 +20323,12 @@ const docTemplate = `{
                 },
                 "node_id": {
                     "type": "integer"
+                },
+                "retained_version_count": {
+                    "type": "integer"
+                },
+                "unavailable_reason": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilityReason"
                 }
             }
         },
@@ -20223,6 +20352,18 @@ const docTemplate = `{
                 "backup_set_id": {
                     "type": "string"
                 },
+                "browse_state": {
+                    "enum": [
+                        "browsable",
+                        "indexing",
+                        "unavailable"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceBrowseState"
+                        }
+                    ]
+                },
                 "node_id": {
                     "type": "integer"
                 },
@@ -20234,12 +20375,27 @@ const docTemplate = `{
                 },
                 "repository_id": {
                     "type": "string"
+                },
+                "unavailable_reason": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilityReason"
                 }
             }
         },
         "xirang_backend_internal_backupasset_catalog.FileSourceVersionDTO": {
             "type": "object",
             "properties": {
+                "browse_state": {
+                    "enum": [
+                        "browsable",
+                        "indexing",
+                        "unavailable"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/xirang_backend_internal_backupasset_catalog.FileSourceBrowseState"
+                        }
+                    ]
+                },
                 "captured_at": {
                     "type": "string"
                 },
@@ -20275,6 +20431,9 @@ const docTemplate = `{
                 },
                 "repository_id": {
                     "type": "string"
+                },
+                "unavailable_reason": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.CapabilityReason"
                 }
             }
         },

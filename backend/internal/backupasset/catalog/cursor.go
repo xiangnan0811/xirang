@@ -148,12 +148,23 @@ func (codec *CursorCodec) Encode(ctx context.Context, scope CursorScope) (string
 }
 
 func (codec *CursorCodec) Decode(ctx context.Context, token string, expected CursorScope) (CursorScope, error) {
-	if codec == nil || codec.keys == nil || token == "" || len(token) > maxCursorTokenBytes {
-		return CursorScope{}, fmt.Errorf("%w: cursor token unavailable", ErrInvalidCursor)
-	}
 	expectedClaims, err := cursorClaimsFromScope(expected, false)
 	if err != nil {
 		return CursorScope{}, err
+	}
+	actualScope, err := codec.decodeAuthenticated(ctx, token)
+	if err != nil {
+		return CursorScope{}, err
+	}
+	if !cursorClaimsMatch(cursorClaims(actualScope), expectedClaims) {
+		return CursorScope{}, fmt.Errorf("%w: cursor scope changed", ErrStaleCursor)
+	}
+	return actualScope, nil
+}
+
+func (codec *CursorCodec) decodeAuthenticated(ctx context.Context, token string) (CursorScope, error) {
+	if codec == nil || codec.keys == nil || token == "" || len(token) > maxCursorTokenBytes {
+		return CursorScope{}, fmt.Errorf("%w: cursor token unavailable", ErrInvalidCursor)
 	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 2 {
@@ -192,9 +203,6 @@ func (codec *CursorCodec) Decode(ctx context.Context, token string, expected Cur
 	if envelope.IssuedAt <= 0 || envelope.ExpiresAt <= envelope.IssuedAt || !now.Before(time.Unix(envelope.ExpiresAt, 0).UTC()) ||
 		envelope.IssuedAt > now.Add(time.Minute).Unix() {
 		return CursorScope{}, fmt.Errorf("%w: cursor expired", ErrStaleCursor)
-	}
-	if !cursorClaimsMatch(envelope.Scope, expectedClaims) {
-		return CursorScope{}, fmt.Errorf("%w: cursor scope changed", ErrStaleCursor)
 	}
 	return actualScope, nil
 }
@@ -252,8 +260,8 @@ func (claims cursorClaims) validate(requireAnchor bool) error {
 			return fmt.Errorf("%w: recovery point cursor scope", ErrInvalidCursor)
 		}
 	case CursorEndpointEntries:
-		if claims.RepositoryID == "" || claims.RecoveryPointID == "" || claims.GenerationID == "" || (requireAnchor && claims.Anchor.EntryID == "") ||
-			!validEntrySort(EntrySort(claims.Sort)) || claims.hasDiffScope() || claims.hasFileSourceScope() {
+		if claims.RepositoryID == "" || claims.RecoveryPointID == "" || claims.GenerationID == "" || !lowerHexLength(claims.ProjectionDigest, 64) ||
+			(requireAnchor && claims.Anchor.EntryID == "") || !validEntrySort(EntrySort(claims.Sort)) || claims.hasDiffScope() || claims.hasFileSourceIdentityScope() {
 			return fmt.Errorf("%w: entry cursor scope", ErrInvalidCursor)
 		}
 	case CursorEndpointDiff:
@@ -304,6 +312,10 @@ func (claims cursorClaims) hasDiffScope() bool {
 func (claims cursorClaims) hasFileSourceScope() bool {
 	return claims.NodeID != 0 || claims.BackupSetID != "" || claims.ProjectionDigest != "" ||
 		claims.Anchor.NodeID != 0 || claims.Anchor.BackupSetID != ""
+}
+
+func (claims cursorClaims) hasFileSourceIdentityScope() bool {
+	return claims.NodeID != 0 || claims.BackupSetID != "" || claims.Anchor.NodeID != 0 || claims.Anchor.BackupSetID != ""
 }
 
 func (claims cursorClaims) hasLegacyCatalogScope() bool {

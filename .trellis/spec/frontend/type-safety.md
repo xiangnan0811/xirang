@@ -1033,11 +1033,14 @@ return { mode, encryptionProfile, kmsKeyStatus, kmsReadKeyCount: kmsCount };
 - Secret-reveal preview retry is Admin-only (`role === "admin"` and
   `ensureStepUpProof`). Presence of the helper is not enough. The same
   session proof is attached to every `search` call (first page, load-more,
-  saved-search reload) and to preview renew/retry for the same auth/source
-  owner, exact `AssetRef`, action, and current attempt. Never put the proof in
-  the URL. Clear it on token/role change, source/directory/version/asset owner
-  change, or preview detachment; a late proof result must not cross those
-  boundaries.
+  saved-search reload) and to preview renew/retry for the current exact
+  `AssetRef`, action, and attempt. Keep only action + proof + fixed expiry in
+  current-login `sessionStorage`; never put the proof in URL/history,
+  localStorage, analytics, console/log output, a content-ticket product, or a
+  raw error. Retain a valid proof across source/directory/version/asset changes
+  and preview detachment. Clear it on login replacement, logout,
+  user/role/token-version change, TOTP disablement, 401, expiry, or typed proof
+  rejection; a late proof result must not cross auth or selection ownership.
 - List/grid rows use `assetRefKey(ref)` (`recoveryPointId + entryId`) as
   the React key. The preview viewport must stay readable (`min-h-[24rem]`
   flex-fill, not a locked 18rem pane).
@@ -1061,6 +1064,8 @@ return { mode, encryptionProfile, kmsKeyStatus, kmsReadKeyCount: kmsCount };
 | Content capability true, secret reveal false, server returns a content hit | Preserve it as a valid non-secret server-authorized hit. |
 | `retained_version_count` is `0` or non-integer | Block the whole search projection. |
 | Operator preview gets `secret_reveal_required` | Stay blocked; do not call `ensureStepUpProof`. |
+| Search rejects an attached `asset.secret_reveal` proof | Clear that exact action entry and fail closed. |
+| Two current callers request the same action concurrently | Share one pending prompt/result; do not replace or orphan either caller. |
 | Unknown overlay state/reason/version product | Block the whole overlay projection. |
 | Saved-search ID is not opaque 32-hex | Reject before calling `request()`. |
 
@@ -1308,3 +1313,36 @@ return {
   // ...closed fields only
 };
 ```
+
+---
+
+## Scenario: Catalog Entry-Page Directory Authority
+
+### 1. Scope / Trigger
+
+- Trigger: changing the Catalog entry-page API mapper, directory domain types,
+  cursor append reducer, or browse route parent identity.
+
+### 2. Contracts
+
+- The API boundary requires own `current`, `parent`, and `breadcrumb` members;
+  missing, blank, malformed, cross-point, cyclic, over-256, or contradictory
+  context rejects the complete page atomically.
+- Root is exactly `current=null`, `parent=null`, and `breadcrumb=[]`. Non-root
+  context must match the requested opaque parent, end at the same current name
+  and ref, and derive its nullable parent from the preceding breadcrumb item.
+- Every mapped page item belongs to the requested recovery point and has exactly
+  the requested parent (`null` at root). A blocked item or cross-directory item
+  rejects the whole page; no partial rows enter state.
+- Map only the closed camelCase domain shape. Extra raw paths, normalized paths,
+  Provider locators, proofs, tickets, and response-only future fields are
+  discarded and are never stored in route or restoration state.
+- Cursor append is permitted only when the complete canonical directory context
+  is equal, including the root breadcrumb. A mismatch clears rows, selection,
+  and directory context and enters a failed state.
+
+### 3. Tests Required
+
+- Cover valid root/nested/empty pages; every missing or contradictory member;
+  cross-point and cross-parent items; extra-field dropping; and root/non-root
+  append contradictions.

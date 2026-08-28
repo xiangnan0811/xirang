@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -122,6 +122,33 @@ describe("BackupFileSplitPane", () => {
     expect(screen.getByText("Browser")).toBeVisible();
     expect(screen.queryByRole("separator")).not.toBeInTheDocument();
     expect(screen.getByText("Browser").closest("[data-layout]"))?.toHaveAttribute("data-layout", "sequential");
+  });
+
+  it("omits focused reading when sequential preview already fills the work area", () => {
+    document.documentElement.style.fontSize = "32px";
+
+    render(<BackupFileSplitPane browser={<div>Browser</div>} preview={<div>Preview</div>} previewActive onBack={vi.fn()} />);
+
+    expect(screen.getByText("Preview")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Focused reading|专注阅读/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Exit focused reading|退出专注阅读/ })).not.toBeInTheDocument();
+  });
+
+  it("exits focused reading when the active preview closes so the browser cannot stay hidden", async () => {
+    const user = userEvent.setup();
+    const rendered = render(
+      <BackupFileSplitPane browser={<div>Browser</div>} preview={<div>Preview</div>} previewActive onBack={vi.fn()} />,
+    );
+    await user.click(screen.getByRole("button", { name: /Focused reading|专注阅读/ }));
+    expect(screen.getByText("Browser")).not.toBeVisible();
+
+    rendered.rerender(
+      <BackupFileSplitPane browser={<div>Browser</div>} preview={<div>Preview</div>} previewActive={false} onBack={vi.fn()} />,
+    );
+
+    await waitFor(() => expect(screen.getByText("Browser")).toBeVisible());
+    expect(screen.queryByRole("button", { name: /Exit focused reading|退出专注阅读/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Focused reading|专注阅读/ })).toBeDisabled();
   });
 
   it("resets its ratio on remount without writing layout state to browser storage", () => {

@@ -102,7 +102,7 @@ describe("AssetOverlays", () => {
 
     expect(screen.queryByText(favorite.label)).not.toBeInTheDocument();
     expect(screen.getByText(/Source recovery point expired|源恢复点已过期/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Open asset|打开资产/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Open file or directory|打开文件或目录/ })).not.toBeInTheDocument();
     const remove = screen.getByRole("button", { name: /Remove favorite|移除收藏/ });
     expect(remove).toBeEnabled();
     await user.click(remove);

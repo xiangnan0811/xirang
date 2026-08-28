@@ -136,42 +136,35 @@ func (worker *PublicationWorker) Run(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	config, err := worker.foundation.PublicationConfig()
+	if err != nil {
+		return
+	}
+	worker.runLoop(ctx, config)
+}
+
+func (worker *PublicationWorker) runLoop(ctx context.Context, config backupasset.PublicationConfig) {
+	timer := time.NewTimer(config.ReconcileInterval)
+	defer timer.Stop()
 	for {
 		if worker.isStopping() {
 			return
 		}
-		config, err := worker.foundation.PublicationConfig()
-		if err != nil {
-			return
-		}
-		timer := time.NewTimer(config.ReconcileInterval)
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
 			return
 		case <-worker.stop:
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
 			return
 		case pointID := <-worker.wake:
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
 			go worker.process(ctx, pointID)
 		case <-timer.C:
 			_ = worker.StartupPass(ctx)
+			nextConfig, err := worker.foundation.PublicationConfig()
+			if err != nil {
+				return
+			}
+			config = nextConfig
+			timer.Reset(config.ReconcileInterval)
 		}
 	}
 }

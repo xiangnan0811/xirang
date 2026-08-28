@@ -376,7 +376,8 @@ func (service *Service) operatorRepositoryAuthorized(ctx context.Context, reposi
 	var activeLinks int64
 	if err := service.db.WithContext(ctx).Table("task_repository_links AS links").
 		Joins("JOIN tasks AS link_tasks ON link_tasks.id = links.task_id AND link_tasks.archived_at IS NULL").
-		Joins("JOIN node_owners AS link_owners ON link_owners.node_id = link_tasks.node_id AND link_owners.user_id = ?", scope.UserID).
+		Joins("JOIN nodes AS link_nodes ON link_nodes.id = link_tasks.node_id AND link_nodes.archived = ?", false).
+		Joins("JOIN node_owners AS link_owners ON link_owners.node_id = link_nodes.id AND link_owners.user_id = ?", scope.UserID).
 		Where("links.repository_id = ? AND links.task_id IS NOT NULL AND links.unlinked_at IS NULL", repositoryID).
 		Count(&activeLinks).Error; err != nil {
 		return false, fmt.Errorf("check repository current lineage ownership: %w", err)
@@ -430,7 +431,8 @@ func (service *Service) loadLineages(ctx context.Context, repositoryID string, s
 	if scope.Role == "operator" {
 		linkQuery = linkQuery.
 			Joins("JOIN tasks AS link_tasks ON link_tasks.id = links.task_id AND link_tasks.archived_at IS NULL").
-			Joins("JOIN node_owners AS link_owners ON link_owners.node_id = link_tasks.node_id AND link_owners.user_id = ?", scope.UserID).
+			Joins("JOIN nodes AS link_nodes ON link_nodes.id = link_tasks.node_id AND link_nodes.archived = ?", false).
+			Joins("JOIN node_owners AS link_owners ON link_owners.node_id = link_nodes.id AND link_owners.user_id = ?", scope.UserID).
 			Where("links.task_id IS NOT NULL AND links.unlinked_at IS NULL")
 	}
 	var links []struct {

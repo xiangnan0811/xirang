@@ -2,6 +2,7 @@ package sshutil
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -261,11 +262,16 @@ func newCredentialProviderTestDB(t *testing.T) *gorm.DB {
 	secure.ResetForTesting()
 	t.Cleanup(secure.ResetForTesting)
 
-	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared&_loc=UTC"
+	dsn := "file:" + filepath.Join(t.TempDir(), "credentials.db") + "?mode=memory&cache=shared&_loc=UTC"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("读取测试数据库连接失败: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}); err != nil {
 		t.Fatalf("迁移测试数据库失败: %v", err)
 	}

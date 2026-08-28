@@ -235,6 +235,7 @@ function renderPreviewEligibility(options: {
     nextCursor: null,
     coverage: "complete",
     authoritativeEmpty: false,
+    directory: null,
   };
   const loadExactPreview = vi.fn();
   render(
@@ -298,7 +299,7 @@ describe("BackupAssetsWorkspace", () => {
       repositoryId: repository.id,
       recoveryPointId: selectedPoint.id,
     });
-    state.result = { status: "ready", requestKey: "recovery", generation: 1, rows, nextCursor: null, coverage: "complete", authoritativeEmpty: false };
+    state.result = { status: "ready", requestKey: "recovery", generation: 1, rows, nextCursor: null, coverage: "complete", authoritativeEmpty: false, directory: null };
     state.selection = new Map(rows.map((row) => [`${row.ref.recoveryPointId}:${row.ref.entryId}`, row.ref]));
     render(
       <BackupAssetsWorkspace
@@ -345,7 +346,7 @@ describe("BackupAssetsWorkspace", () => {
       recoveryPointId: selectedPoint.id,
       entryId: row.ref.entryId,
     });
-    state.result = { status: "ready", requestKey: "inspected-recovery", generation: 1, rows: [row], nextCursor: null, coverage: "complete", authoritativeEmpty: false };
+    state.result = { status: "ready", requestKey: "inspected-recovery", generation: 1, rows: [row], nextCursor: null, coverage: "complete", authoritativeEmpty: false, directory: null };
     render(
       <BackupAssetsWorkspace
         controller={controller({ state, selectedRecoveryPoint: selectedPoint, selectedEntry: { status: "ready", value: row.asset } })}
@@ -372,7 +373,7 @@ describe("BackupAssetsWorkspace", () => {
       repositoryId: repository.id,
       recoveryPointId: recoveryPoint.id,
     });
-    state.result = { status: "ready", requestKey: "test", generation: 1, rows, nextCursor: null, coverage: "complete", authoritativeEmpty: false };
+    state.result = { status: "ready", requestKey: "test", generation: 1, rows, nextCursor: null, coverage: "complete", authoritativeEmpty: false, directory: null };
     state.selection = new Map([[`${rows[0].ref.recoveryPointId}:${rows[0].ref.entryId}`, rows[0].ref]]);
     const onRoutePatch = vi.fn();
     render(
@@ -415,6 +416,7 @@ describe("BackupAssetsWorkspace", () => {
       nextCursor: null,
       coverage: "complete",
       authoritativeEmpty: false,
+      directory: null,
     };
     initialState.selection = new Map([[`${rows[0].ref.recoveryPointId}:${rows[0].ref.entryId}`, rows[0].ref]]);
     const rendered = render(
@@ -442,6 +444,7 @@ describe("BackupAssetsWorkspace", () => {
       nextCursor: null,
       coverage: "complete",
       authoritativeEmpty: false,
+      directory: null,
     };
     replacementState.selection = new Map([[`${rows[1].ref.recoveryPointId}:${rows[1].ref.entryId}`, rows[1].ref]]);
     rendered.rerender(
@@ -472,7 +475,7 @@ describe("BackupAssetsWorkspace", () => {
       repositoryId: repository.id,
       recoveryPointId: recoveryPoint.id,
     });
-    state.result = { status: "ready", requestKey: "role-matrix", generation: 1, rows, nextCursor: null, coverage: "complete", authoritativeEmpty: false };
+    state.result = { status: "ready", requestKey: "role-matrix", generation: 1, rows, nextCursor: null, coverage: "complete", authoritativeEmpty: false, directory: null };
     state.selection = new Map([[`${rows[0].ref.recoveryPointId}:${rows[0].ref.entryId}`, rows[0].ref]]);
     render(
       <BackupAssetsWorkspace
@@ -517,7 +520,7 @@ describe("BackupAssetsWorkspace", () => {
     );
 
     await waitFor(() => expect(screen.queryByRole("dialog", { name: /导出备份资产|Export backup assets/ })).not.toBeInTheDocument());
-    expect(screen.getByRole("region", { name: /Asset results|资产结果/ })).toHaveFocus();
+    expect(screen.getByRole("region", { name: /File results|文件结果/ })).toHaveFocus();
   });
 
   it("loads the Admin processing surface only after an authorized interaction", async () => {
@@ -588,12 +591,78 @@ describe("BackupAssetsWorkspace", () => {
     );
 
     expect(screen.getByTestId("backup-assets-workspace")).toHaveAttribute("data-viewport", "desktop");
-    expect(screen.getByRole("region", { name: /Asset results|资产结果/ })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /File results|文件结果/ })).toBeInTheDocument();
     expect(screen.getByRole("separator")).toHaveAttribute("aria-valuenow", "42");
-    expect(screen.getByRole("button", { name: /Open asset context|打开资产上下文/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Open file context|打开文件上下文/ })).toBeInTheDocument();
     expect(screen.queryByLabelText(/Repository|仓库/)).not.toBeInTheDocument();
     expect(container.querySelectorAll('[data-component="data-surface"], [data-component="card"]')).toHaveLength(0);
   });
+
+  it.each([390, 1440])(
+    "detaches preview and selection before directory navigation, then restores the valid origin at %ipx",
+    async (viewport) => {
+    setViewport(viewport);
+    const user = userEvent.setup();
+    const row = buildAssetRows(1)[0];
+    row.asset.entryType = "directory";
+    row.asset.name = "nested-directory";
+    const rootRoute = {
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+    };
+    const nestedRoute = { ...rootRoute, parentEntryId: row.ref.entryId };
+    const rootState = createInitialBackupAssetsState(rootRoute);
+    rootState.result = {
+      status: "ready", requestKey: "directory-root", generation: 1, rows: [row], nextCursor: null,
+      coverage: "complete", authoritativeEmpty: false,
+      directory: { current: null, parent: null, breadcrumb: [] },
+    };
+    rootState.selection = new Map([[`${row.ref.recoveryPointId}:${row.ref.entryId}`, row.ref]]);
+    const nestedState = createInitialBackupAssetsState(nestedRoute);
+    nestedState.result = {
+      status: "ready", requestKey: "directory-child", generation: 2, rows: [], nextCursor: null,
+      coverage: "complete", authoritativeEmpty: true,
+      directory: {
+        current: { ref: row.ref, name: row.asset.name },
+        parent: null,
+        breadcrumb: [{ ref: row.ref, name: row.asset.name }],
+      },
+    };
+    const detachContent = vi.fn();
+    const clearSelection = vi.fn();
+    const actions = { ...controller().actions, detachContent, clearSelection };
+    const onRoutePatch = vi.fn();
+    const renderWorkspace = (state: typeof rootState) => (
+      <BackupAssetsWorkspace
+        controller={controller({ state, selectedRecoveryPoint: recoveryPoint, actions })}
+        onRoutePatch={onRoutePatch}
+        onReturnOverview={vi.fn()}
+      />
+    );
+    const rendered = render(renderWorkspace(rootState));
+    const list = await screen.findByRole("list");
+    list.scrollTop = 88;
+
+    await user.click(screen.getByRole("button", { name: new RegExp(row.asset.name) }));
+    expect(detachContent).toHaveBeenCalledTimes(1);
+    expect(clearSelection).toHaveBeenCalledTimes(1);
+    expect(detachContent.mock.invocationCallOrder[0]).toBeLessThan(onRoutePatch.mock.invocationCallOrder[0]);
+    expect(clearSelection.mock.invocationCallOrder[0]).toBeLessThan(onRoutePatch.mock.invocationCallOrder[0]);
+    expect(onRoutePatch).toHaveBeenLastCalledWith({ parentEntryId: row.ref.entryId, entryId: undefined });
+
+    rendered.rerender(renderWorkspace(nestedState));
+    await user.click(screen.getByRole("button", { name: /Up one directory|返回上级目录/ }));
+    expect(detachContent).toHaveBeenCalledTimes(2);
+    expect(clearSelection).toHaveBeenCalledTimes(2);
+    expect(onRoutePatch).toHaveBeenLastCalledWith({ parentEntryId: undefined, entryId: undefined });
+
+    rendered.rerender(renderWorkspace(rootState));
+    const restoredList = await screen.findByRole("list");
+    await waitFor(() => expect(restoredList.scrollTop).toBe(88));
+    await waitFor(() => expect(screen.getByRole("button", { name: new RegExp(row.asset.name) })).toHaveFocus());
+    },
+  );
 
   it("keeps the mobile context toolbar controls at 44px touch targets", () => {
     setViewport(390);
@@ -607,7 +676,7 @@ describe("BackupAssetsWorkspace", () => {
     );
 
     const touchTargets = [
-      screen.getByRole("button", { name: /Open asset context|打开资产上下文/ }),
+      screen.getByRole("button", { name: /Open file context|打开文件上下文/ }),
       screen.getByRole("button", { name: /Saved searches|保存搜索/ }),
       screen.getByRole("button", { name: /Favorites|收藏/ }),
       screen.getByRole("button", { name: /Tags|标签/ }),
@@ -644,9 +713,9 @@ describe("BackupAssetsWorkspace", () => {
       "data-viewport",
       "intermediate"
     );
-    expect(screen.getByRole("button", { name: /Open asset context|打开资产上下文/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Open file context|打开文件上下文/ })).toBeInTheDocument();
     expect(
-      screen.queryByRole("complementary", { name: /Asset inspector|资产检查器/ })
+      screen.queryByRole("complementary", { name: /File inspector|文件检查器/ })
     ).not.toBeInTheDocument();
   });
 
@@ -762,12 +831,12 @@ describe("BackupAssetsWorkspace", () => {
     render(<BackupAssetsWorkspace controller={controller()} onRoutePatch={vi.fn()} onReturnOverview={vi.fn()} />);
 
     expect(screen.getByTestId("backup-assets-workspace")).toHaveAttribute("data-viewport", "intermediate");
-    const trigger = screen.getByRole("button", { name: /Open asset context|打开资产上下文/ });
+    const trigger = screen.getByRole("button", { name: /Open file context|打开文件上下文/ });
     await user.click(trigger);
-    expect(screen.getByRole("dialog", { name: /Asset context|资产上下文/ })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: /File context|文件上下文/ })).toBeInTheDocument();
     await user.keyboard("{Escape}");
     expect(trigger).toHaveFocus();
-    expect(screen.queryByRole("complementary", { name: /Asset inspector|资产检查器/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: /File inspector|文件检查器/ })).not.toBeInTheDocument();
   });
 
   it("renders a closed feature-disabled region without asset probes or fake data", () => {
@@ -801,7 +870,7 @@ describe("BackupAssetsWorkspace", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent(/not enabled|未启用/);
     expect(screen.queryByRole("link", { name: /readiness panel|就绪面板/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: /Asset results|资产结果/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /File results|文件结果/ })).not.toBeInTheDocument();
     expect(screen.queryByText(repository.displayName)).not.toBeInTheDocument();
   });
 
@@ -888,7 +957,7 @@ describe("BackupAssetsWorkspace", () => {
       />,
     );
 
-    expect(screen.getByRole("region", { name: /Asset results|资产结果/ })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /File results|文件结果/ })).toBeInTheDocument();
     expect(screen.getByTestId("backup-assets-workspace")).toBeInTheDocument();
   });
 
@@ -919,10 +988,10 @@ describe("BackupAssetsWorkspace", () => {
       />
     );
 
-    const results = screen.getByRole("region", { name: /Asset results|资产结果/ });
+    const results = screen.getByRole("region", { name: /File results|文件结果/ });
     expect(within(results).getByRole("alert")).toHaveTextContent(/expired|已过期/i);
     expect(results).toHaveTextContent(expiredRecoveryPoint.producingTaskName);
-    expect(screen.queryByRole("searchbox", { name: /Search backup assets|搜索备份资产/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("searchbox", { name: /Search files|搜索文件/ })).not.toBeInTheDocument();
 
     await user.click(
       within(results).getByRole("button", { name: /Return to repository context|返回仓库上下文/ })
@@ -964,7 +1033,7 @@ describe("BackupAssetsWorkspace", () => {
       />
     );
 
-    const results = screen.getByRole("region", { name: /Asset results|资产结果/ });
+    const results = screen.getByRole("region", { name: /File results|文件结果/ });
     expect(within(results).getByRole("alert")).toHaveTextContent(/favorite filter|收藏筛选/i);
     expect(within(results).queryByRole("searchbox")).not.toBeInTheDocument();
     await user.click(
@@ -1013,7 +1082,7 @@ describe("BackupAssetsWorkspace", () => {
     );
 
     await user.type(
-      screen.getByRole("searchbox", { name: /Search backup assets|搜索备份资产/ }),
+      screen.getByRole("searchbox", { name: /Search files|搜索文件/ }),
       "term"
     );
     expect(setSearchDraft).toHaveBeenCalled();
@@ -1078,7 +1147,7 @@ describe("BackupAssetsWorkspace", () => {
     );
 
     await user.click(screen.getByRole("button", { name: /Favorites.*1|收藏.*1/ }));
-    await user.click(screen.getByRole("button", { name: /Open asset|打开资产/ }));
+    await user.click(screen.getByRole("button", { name: /Open file or directory|打开文件或目录/ }));
 
     expect(onRoutePatch).toHaveBeenCalledWith({
       view: "browse",
@@ -1110,6 +1179,7 @@ describe("BackupAssetsWorkspace", () => {
       nextCursor: null,
       coverage: "complete",
       authoritativeEmpty: false,
+      directory: null,
     };
     const onRoutePatch = vi.fn();
 
@@ -1130,17 +1200,17 @@ describe("BackupAssetsWorkspace", () => {
       />
     );
 
-    expect(screen.getByRole("complementary", { name: /Asset inspector|资产检查器/ })).toHaveTextContent(
+    expect(screen.getByRole("complementary", { name: /File inspector|文件检查器/ })).toHaveTextContent(
       rows[0].asset.name
     );
     await user.click(screen.getByRole("tab", { name: /Metadata|元数据/ }));
     expect(onRoutePatch).toHaveBeenCalledWith({ inspectorTab: "metadata" });
-    await user.click(screen.getByRole("button", { name: /Next asset|下一个资产/ }));
+    await user.click(screen.getByRole("button", { name: /Next file|下一个文件/ }));
     expect(onRoutePatch).toHaveBeenCalledWith({
       recoveryPointId: rows[1].ref.recoveryPointId,
       entryId: rows[1].ref.entryId,
     });
-    await user.click(screen.getByRole("button", { name: /Close asset inspector|关闭资产检查器/ }));
+    await user.click(screen.getByRole("button", { name: /Close file inspector|关闭文件检查器/ }));
     expect(onRoutePatch).toHaveBeenCalledWith({ entryId: undefined });
   });
 
@@ -1221,7 +1291,7 @@ describe("BackupAssetsWorkspace", () => {
     );
 
     expect(screen.getByTestId("backup-assets-mobile-inspector")).toHaveTextContent(row.asset.name);
-    expect(screen.queryByRole("region", { name: /Asset results|资产结果/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /File results|文件结果/ })).not.toBeInTheDocument();
   });
 
   it.each(["admin", "operator"] as const)(
@@ -1340,6 +1410,7 @@ describe("BackupAssetsWorkspace", () => {
       nextCursor: null,
       coverage: "complete",
       authoritativeEmpty: false,
+      directory: null,
     };
     const onRoutePatch = vi.fn();
     const renderWorkspace = (selected: boolean) => {
@@ -1369,7 +1440,7 @@ describe("BackupAssetsWorkspace", () => {
 
     rerender(renderWorkspace(true));
     await waitFor(() => expect(screen.getByRole("heading", { name: rows[2].asset.name })).toHaveFocus());
-    await user.click(screen.getByRole("button", { name: /Close asset inspector|关闭资产检查器/ }));
+    await user.click(screen.getByRole("button", { name: /Close file inspector|关闭文件检查器/ }));
     rerender(renderWorkspace(false));
 
     const restoredResultContainer = await screen.findByRole(containerRole);
@@ -1401,6 +1472,7 @@ describe("BackupAssetsWorkspace", () => {
         nextCursor: null,
         coverage: "complete",
         authoritativeEmpty: false,
+        directory: null,
       };
       return (
         <BackupAssetsWorkspace
@@ -1421,7 +1493,7 @@ describe("BackupAssetsWorkspace", () => {
     await user.click(screen.getByRole("button", { name: new RegExp(rows[2].asset.name) }));
     rendered.rerender(renderWorkspace(true, rows));
     await waitFor(() => expect(screen.getByRole("heading", { name: rows[2].asset.name })).toHaveFocus());
-    await user.click(screen.getByRole("button", { name: /Close asset inspector|关闭资产检查器/ }));
+    await user.click(screen.getByRole("button", { name: /Close file inspector|关闭文件检查器/ }));
 
     const remainingRows = rows.filter((row) => row.ref.entryId !== rows[2].ref.entryId);
     rendered.rerender(renderWorkspace(false, remainingRows));
