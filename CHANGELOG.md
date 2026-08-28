@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.52.1](https://github.com/xiangnan0811/xirang/compare/v0.52.0...v0.52.1) (2026-08-28)
+
+
+### 🐛 Bug Fixes
+
+* **backup-assets:** remediate file center production gaps ([#474](https://github.com/xiangnan0811/xirang/issues/474)) ([bb55852](https://github.com/xiangnan0811/xirang/commit/bb5585286c2e51667929dd14492fb8d5d5ef7811))
+
 ## [0.52.0](https://github.com/xiangnan0811/xirang/compare/v0.51.0...v0.52.0) (2026-08-27)
 
 
