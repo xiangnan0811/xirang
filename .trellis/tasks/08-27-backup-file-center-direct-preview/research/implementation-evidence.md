@@ -2259,3 +2259,108 @@ Date: 2026-08-28
   exact bundle-budget script, and the CI-shaped backend fixture selector are
   GREEN. Required CI must rerun on the remediation commit before merge; the
   compound Phase 12 delivery/merge checkbox remains open.
+
+## Production-blocking plain-text grant schema hotfix
+
+Date: 2026-08-28
+
+Production evidence showed `safe_preview_v1` successfully resolving a
+17,861-byte source to `plain_text/text_v2`, with its nearest `content_session`
+lease created and released in the same second, but no delivery grant in the
+surrounding window and a generic 503. The clean production schema was version 72;
+migration 000066 admitted only `escaped_text/text_v1`. This localized the failure
+to a cross-layer schema propagation gap at grant persistence.
+
+### TDD transitions
+
+All Go commands ran from `backend/`.
+
+1. Real migration contract RED:
+   `go test ./internal/database -run '^TestBackupAssetMigration073SQLite$' -count=1`
+   failed all four initial contract subtests because migration 73 did not exist:
+   `no migration found for version 73 ... file does not exist`.
+2. Startup drift RED:
+   `go test ./internal/database -run '^TestBackupAssetMigration073SQLite/CleanVersionMissingFinalContractIsRejected$' -count=1`
+   returned a successful startup for falsely-clean version 73 instead of
+   `ErrMigrationSchemaDrift`.
+3. Release propagation RED:
+   `go test ./internal/database -run '^TestBackupAssetMigration073ReleasePropagation$' -count=1`
+   reported both the migration checker and PostgreSQL CI selector missing 000073.
+
+The smallest fix is paired migration
+`000073_backup_asset_plain_text_content` for both engines. It adds only the
+`plain_text` renderer, `text_v2` profile, their exact `range_policy='none'`
+pairing, and the matching bounded-representation arm. PostgreSQL replaces the
+four named CHECK constraints. SQLite rebuilds the grant/request pair while
+preserving request rows, six grant indexes, two request indexes, all three
+Recovery Content triggers, the migration-69 Recovery downgrade trigger, and all
+foreign keys. Both engines add downgrade admission, and the down body also has a
+direct guard; any persisted `plain_text` or `text_v2` fact blocks downgrade
+before metadata or schema changes.
+
+The integration contract accepts the exact production-shaped 17,861-byte grant,
+preserves legacy products and all unrelated schema/data invariants, and rejects
+`plain_text/text_v1`, `escaped_text/text_v2`, plain text with a single-range
+policy, inconsistent non-truncated representation bytes, and the pre-existing
+invalid attachment-preview security product. Pristine down restores the exact
+version-72 schema; used down remains clean at 73 and unchanged. Startup now checks
+the 73 downgrade trigger and all four engine-specific constraint definitions,
+with separate drift tests for missing checks and a missing trigger.
+
+### Verification and blocker
+
+- `GOTOOLCHAIN=go1.26.6 go test ./internal/database -run '^(TestBackupAssetMigration073SQLite|TestBackupAssetMigration073PairedFiles|TestBackupAssetMigration073ReleasePropagation|TestRunMigrationsClean072Applies073SQLite)$' -count=1` — GREEN (`ok`, 1.007s).
+- `GOTOOLCHAIN=go1.26.6 go test ./internal/database -count=1` — GREEN (`ok`, 28.039s).
+- `bash scripts/check-backup-asset-migration.sh` — GREEN; paired 71/72/73
+  files, static constraint/trigger ownership, and SQLite used-down contracts pass.
+- `bash scripts/check-migration-utc-safety.sh` and its self-test — GREEN; 92
+  migration files scanned and all safety fixtures passed.
+- `GOTOOLCHAIN=go1.26.6 go test ./...`, `go vet ./...`, and the server build —
+  GREEN. Pinned golangci-lint 2.11.4 reports `0 issues.`
+- `REQUIRE_POSTGRES_MIGRATION_TEST=1 go test ./internal/database -run '^TestBackupAssetMigration073Postgres$' -count=1` — BLOCKED, not skipped:
+  `TEST_POSTGRES_DSN is required when REQUIRE_POSTGRES_MIGRATION_TEST=1`.
+  The required PostgreSQL CI job now selects migration 73 and supplies both the
+  DSN and required-test flag.
+- `git diff --check` — GREEN.
+
+No product content/broker/frontend/auth/catalog/repository code changed. No
+commit, push, PR, merge, release, deployment, NAS, production, collector, or node
+log action was performed by this hotfix.
+
+### Independent hotfix review
+
+The reviewer inspected the complete 066/069/070-073 migration chain and current
+worktree rather than relying on the implementation handoff. Three gaps were fixed:
+
+1. **Important — startup trusted only the 073 admission trigger name.** RED:
+   `go test ./internal/database -run '^TestBackupAssetMigration073SQLite/CleanVersionMalformedAdmissionTriggerIsRejected$' -count=1`
+   completed startup successfully after the real trigger was replaced by a
+   same-named no-op. Startup now reads and validates the SQLite trigger definition
+   and, for PostgreSQL, both the catalog-owned trigger definition and its actual
+   trigger-function definition. Missing and malformed admission objects return
+   sanitized typed schema drift without mutation. The focused 073 contract is
+   GREEN with the added regression on both engine fixtures.
+2. **Important — the database source-of-truth still ended at 000072.**
+   `.trellis/spec/backend/database-guidelines.md` now records 000073 as latest,
+   extends PostgreSQL parity through 73, and captures the exact
+   `plain_text/text_v2/range_policy=none` and fail-closed downgrade contracts.
+3. **Minor — CI propagation could pass from inert text.** The release regression
+   now parses active `run:` commands, compiles their `-run` expression, and proves
+   it actually selects `TestBackupAssetMigration073Postgres`. A dedicated unit
+   table rejects comment-only and non-matching selectors.
+
+Independent verification (all Go commands used `GOTOOLCHAIN=go1.26.6`):
+
+- Focused SQLite/paired/release/startup selectors — GREEN with `-count=3`
+  (`ok`, 3.264s); focused SQLite/startup `-race` — GREEN (`ok`, 3.037s).
+- Full `internal/database` — GREEN (`ok`, 28.198s); full backend
+  `go test ./... -count=1` — GREEN on final confirmation. One earlier full-backend run exposed an
+  unrelated intermittent step-up proof test failure; its exact selector passed
+  `-count=3` before the clean full rerun.
+- `go vet ./...`, `go build ./...`, pinned `golangci-lint run ./...` (`0 issues`),
+  migration checker, UTC checker/self-test, doc-freshness checker/self-test, and
+  `git diff --check` — GREEN.
+- Required PostgreSQL 073 remains BLOCKED, not skipped: with the DSN explicitly
+  absent and `REQUIRE_POSTGRES_MIGRATION_TEST=1`, the test failed at fixture
+  admission with `TEST_POSTGRES_DSN is required when
+  REQUIRE_POSTGRES_MIGRATION_TEST=1`.

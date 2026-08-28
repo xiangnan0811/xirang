@@ -4,12 +4,52 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 const (
 	minimumRecoverySchemaVersion      int64 = 69
 	taskRunCompatibilitySchemaVersion int64 = 72
+	plainTextContentSchemaVersion     int64 = 73
 )
+
+const plainTextContentAdmissionTrigger = "trg_backup_asset_plain_text_content_downgrade_admission"
+
+var plainTextContentSQLiteAdmissionFragments = []string{
+	"before insert on schema_migrations",
+	"when new.version < 73",
+	"select 1 from backup_asset_delivery_grants",
+	"where renderer = 'plain_text' or profile = 'text_v2'",
+	"raise(abort, '000073 downgrade blocked: plain_text/text_v2 delivery grant exists')",
+}
+
+var plainTextContentPostgresAdmissionTriggerFragments = []string{
+	"before insert on",
+	"schema_migrations",
+	"execute function",
+	"backup_asset_plain_text_content_downgrade_admission()",
+}
+
+var plainTextContentPostgresAdmissionFunctionFragments = []string{
+	"if new.version < 73",
+	"select 1 from backup_asset_delivery_grants",
+	"where renderer = 'plain_text' or profile = 'text_v2'",
+	"raise exception '000073 downgrade blocked: plain_text/text_v2 delivery grant exists'",
+}
+
+var plainTextContentSQLiteCheckFragments = []string{
+	"renderer in ('escaped_text', 'plain_text'",
+	"profile in ('text_v1', 'text_v2'",
+	"renderer = 'plain_text' and profile = 'text_v2' and range_policy = 'none'",
+	"renderer in ('escaped_text', 'plain_text', 'metadata_hex')",
+}
+
+var plainTextContentPostgresConstraintFragments = map[string][]string{
+	"backup_asset_delivery_grants_renderer_check":               {"plain_text"},
+	"backup_asset_delivery_grants_profile_check":                {"text_v2"},
+	"backup_asset_delivery_grants_renderer_product_check":       {"renderer", "plain_text", "profile", "text_v2", "range_policy", "none"},
+	"backup_asset_delivery_grants_representation_product_check": {"renderer", "plain_text", "representation_source_bytes", "source_size"},
+}
 
 // ErrMigrationSchemaDrift means schema_migrations records a clean migration-69
 // or newer database, but the minimum recovery schema is incomplete. The error is
@@ -113,7 +153,100 @@ func validateMinimumRecoverySchema(db *sql.DB, dbType string, version int64) err
 			return migrationSchemaDriftError(version, "missing_task_run_compatibility_constraint")
 		}
 	}
+	if version < plainTextContentSchemaVersion {
+		return nil
+	}
 
+	if err := validatePlainTextContentChecks(db, dbType); err != nil {
+		return migrationSchemaDriftError(version, err.Error())
+	}
+	if err := validatePlainTextContentAdmission(db, dbType); err != nil {
+		return migrationSchemaDriftError(version, err.Error())
+	}
+
+	return nil
+}
+
+func validatePlainTextContentAdmission(db *sql.DB, dbType string) error {
+	definition, err := migrationTriggerDefinition(db, dbType, "schema_migrations", plainTextContentAdmissionTrigger)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_plain_text_content_admission_trigger")
+		}
+		return errors.New("catalog_query_failed")
+	}
+
+	fragments := plainTextContentSQLiteAdmissionFragments
+	if dbType == "postgres" {
+		fragments = plainTextContentPostgresAdmissionTriggerFragments
+	}
+	definition = normalizeMigrationDefinition(definition)
+	for _, fragment := range fragments {
+		if !strings.Contains(definition, fragment) {
+			return errors.New("invalid_plain_text_content_admission_trigger")
+		}
+	}
+
+	if dbType == "postgres" {
+		functionDefinition, functionErr := migrationTriggerFunctionDefinition(
+			db,
+			"schema_migrations",
+			plainTextContentAdmissionTrigger,
+		)
+		if functionErr != nil {
+			if errors.Is(functionErr, sql.ErrNoRows) {
+				return errors.New("invalid_plain_text_content_admission_trigger")
+			}
+			return errors.New("catalog_query_failed")
+		}
+		functionDefinition = normalizeMigrationDefinition(functionDefinition)
+		for _, fragment := range plainTextContentPostgresAdmissionFunctionFragments {
+			if !strings.Contains(functionDefinition, fragment) {
+				return errors.New("invalid_plain_text_content_admission_trigger")
+			}
+		}
+	}
+	return nil
+}
+
+func normalizeMigrationDefinition(definition string) string {
+	return strings.Join(strings.Fields(strings.ToLower(definition)), " ")
+}
+
+func validatePlainTextContentChecks(db *sql.DB, dbType string) error {
+	switch dbType {
+	case "sqlite":
+		var definition string
+		if err := db.QueryRow(
+			"SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'backup_asset_delivery_grants'",
+		).Scan(&definition); err != nil {
+			return errors.New("catalog_query_failed")
+		}
+		definition = strings.ToLower(definition)
+		for _, fragment := range plainTextContentSQLiteCheckFragments {
+			if !strings.Contains(definition, fragment) {
+				return errors.New("missing_plain_text_content_constraint")
+			}
+		}
+	case "postgres":
+		for constraint, fragments := range plainTextContentPostgresConstraintFragments {
+			definition, err := migrationConstraintDefinition(db, "backup_asset_delivery_grants", constraint)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return errors.New("missing_plain_text_content_constraint")
+				}
+				return errors.New("catalog_query_failed")
+			}
+			definition = strings.ToLower(definition)
+			for _, fragment := range fragments {
+				if !strings.Contains(definition, fragment) {
+					return errors.New("missing_plain_text_content_constraint")
+				}
+			}
+		}
+	default:
+		return errors.New("catalog_query_failed")
+	}
 	return nil
 }
 
@@ -190,6 +323,40 @@ func migrationTriggerExists(db *sql.DB, dbType, table, trigger string) (bool, er
 	return count == 1, err
 }
 
+func migrationTriggerDefinition(db *sql.DB, dbType, table, trigger string) (string, error) {
+	var definition string
+	var err error
+	switch dbType {
+	case "sqlite":
+		err = db.QueryRow(
+			"SELECT sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ? AND name = ?",
+			table,
+			trigger,
+		).Scan(&definition)
+	case "postgres":
+		err = db.QueryRow(`
+			SELECT pg_catalog.pg_get_triggerdef(oid)
+			FROM pg_catalog.pg_trigger
+			WHERE tgrelid = pg_catalog.to_regclass($1)
+			  AND tgname = $2
+			  AND NOT tgisinternal`, table, trigger).Scan(&definition)
+	default:
+		return "", fmt.Errorf("unsupported database type")
+	}
+	return definition, err
+}
+
+func migrationTriggerFunctionDefinition(db *sql.DB, table, trigger string) (string, error) {
+	var definition string
+	err := db.QueryRow(`
+		SELECT pg_catalog.pg_get_functiondef(t.tgfoid)
+		FROM pg_catalog.pg_trigger AS t
+		WHERE t.tgrelid = pg_catalog.to_regclass($1)
+		  AND t.tgname = $2
+		  AND NOT t.tgisinternal`, table, trigger).Scan(&definition)
+	return definition, err
+}
+
 func migrationConstraintExists(db *sql.DB, table, constraint string) (bool, error) {
 	var count int
 	err := db.QueryRow(`
@@ -198,4 +365,14 @@ func migrationConstraintExists(db *sql.DB, table, constraint string) (bool, erro
 		WHERE conrelid = pg_catalog.to_regclass($1)
 		  AND conname = $2`, table, constraint).Scan(&count)
 	return count == 1, err
+}
+
+func migrationConstraintDefinition(db *sql.DB, table, constraint string) (string, error) {
+	var definition string
+	err := db.QueryRow(`
+		SELECT pg_catalog.pg_get_constraintdef(oid)
+		FROM pg_catalog.pg_constraint
+		WHERE conrelid = pg_catalog.to_regclass($1)
+		  AND conname = $2`, table, constraint).Scan(&definition)
+	return definition, err
 }

@@ -431,6 +431,28 @@ items complete. Continue only through the newly approved remediation phases belo
 - [ ] Keep collectors at zero after acceptance evidence is reviewed. Node-log P1
   still requires its own explicit start approval; this task never starts it.
 
+## Phase 12 hotfix — plain-text grant schema propagation
+
+- [x] Reconcile the production `safe_preview_v1` evidence with schema version 72
+  and prove the persisted grant boundary, rather than the source read or lease,
+  rejects the resolved `plain_text/text_v2` product.
+- [x] Add a real migration RED for the exact 17,861-byte
+  `plain_text/text_v2/range=none` grant and invalid cross-product combinations.
+- [x] Add paired forward/down migration 000073 for SQLite and PostgreSQL. Preserve
+  every other grant/request constraint, row, index, Recovery trigger, function,
+  and foreign key; block used downgrade before metadata or schema mutation.
+- [x] Make startup reject falsely-clean version 73 schemas missing either the
+  exact grant checks or the downgrade admission trigger, including a same-named
+  trigger/function whose body no longer enforces the used-downgrade guard.
+- [x] Propagate 000073 into the migration checker and required PostgreSQL CI
+  selector, with a static regression owner for both paths.
+- [x] Run focused SQLite forward/invalid/used-down/pristine-down checks, migration
+  checker/UTC gates, full database/backend tests, vet, build, lint, and diff checks.
+- [ ] Execute the required PostgreSQL migration contract locally. This remains
+  blocked because `TEST_POSTGRES_DSN` is absent; the fail-closed owner was run with
+  `REQUIRE_POSTGRES_MIGRATION_TEST=1` and failed rather than skipping. Required CI
+  is configured to execute `TestBackupAssetMigration073Postgres` against PostgreSQL.
+
 ## Risky boundaries and rollback
 
 - File-source identity/ownership: wrong grouping could expose or merge another
