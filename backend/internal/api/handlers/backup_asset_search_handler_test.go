@@ -3,7 +3,9 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"net/http"
@@ -225,6 +227,47 @@ func TestAssetSearchOptionalProofFailureIsClosedBeforeSearchAndAudit(t *testing.
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable || proofCalls != 1 || searchSpy.calls != 0 || len(audit.inputs) != 0 {
 		t.Fatalf("status=%d body=%s proof=%d search=%d audit=%d", response.Code, response.Body.String(), proofCalls, searchSpy.calls, len(audit.inputs))
+	}
+}
+
+func TestAssetSearchRejectedAttachedProofReturnsTypedFreshRetryReason(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	searchSpy := &backupAssetSearchServiceSpy{}
+	audit := &backupAssetAuditSpy{}
+	proofCalls := 0
+	handler := NewBackupAssetSearchHandler(searchSpy, &backupAssetSavedSearchUseSpy{}, audit, backupAssetHandlerConfigEnabled,
+		func(*gin.Context) (*assetsearch.SecretRevealProof, error) {
+			proofCalls++
+			return nil, fmt.Errorf("rejected proof: %w", ErrStepUpProofInvalid)
+		})
+	router := backupAssetHandlerTestRouterWithRole("admin")
+	router.POST("/asset-search", handler.Search)
+	body := `{"query":{"schema_version":1,"root":{"op":"term","field":"name","text":"safe"},"scope":{"mode":"current"},"sort":"relevance","limit":10}}`
+	request := httptest.NewRequest(http.MethodPost, "/asset-search", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(StepUpHeaderName, "opaque-proof")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden || proofCalls != 1 || searchSpy.calls != 0 || len(audit.inputs) != 0 {
+		t.Fatalf("status=%d body=%s proof=%d search=%d audit=%d", response.Code, response.Body.String(), proofCalls, searchSpy.calls, len(audit.inputs))
+	}
+	var envelope struct {
+		Data struct {
+			Reason struct {
+				Code   string         `json:"code"`
+				Params map[string]any `json:"params"`
+			} `json:"reason"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, response.Body.String())
+	}
+	if envelope.Data.Reason.Code != "secret_reveal_required" || envelope.Data.Reason.Params == nil || len(envelope.Data.Reason.Params) != 0 {
+		t.Fatalf("unexpected retry reason: %+v body=%s", envelope.Data.Reason, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "opaque-proof") {
+		t.Fatalf("response leaked rejected proof: %s", response.Body.String())
 	}
 }
 

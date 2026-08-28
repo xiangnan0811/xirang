@@ -11,3 +11,9 @@
 {"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Extend the existing backup-assets browser, preview, cancellation, and renderer components instead of duplicating them."}
 {"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Define the renderer negotiation and node/version projection across Catalog, ticket, backend policy, API mapper, state, and UI boundaries."}
 {"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Keep generated Swagger and any current user/admin route documentation aligned with the implemented API and Files landing behavior."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"If and only if durable managed-lineage attribution cannot be represented by existing RecoveryPoint/import facts, require a minimal paired SQLite/PostgreSQL migration with parity and rollback evidence."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Add closed preview source stages and correlation evidence without raw Provider error, locator, path, asset, content, token, or proof leakage."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Implement production-remediation loading/error truth, cached step-up behavior, source-state reachability, Up navigation, and real integration coverage."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Verify native Up/breadcrumb interaction, focus restoration, mobile sequential flow, live errors, touch targets, zoom, and axe coverage."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Treat remediation as a new dedicated-branch PR/CI/release/production-acceptance cycle and keep collectors at zero."}
+{"file": ".trellis/spec/backend/backup-file-catalog.md", "reason": "Retained-lineage projection and fair reconciliation contract"}

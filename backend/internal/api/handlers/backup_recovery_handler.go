@@ -652,7 +652,7 @@ func (handler *BackupRecoveryHandler) prepareRecoveryResultRetainProof(
 	}
 	rawProof, proofOK := backupRecoveryAuthorizationStepUpProof(c.Request)
 	if !proofOK {
-		respondStepUpRequired(c)
+		respondStepUpRequired(c, auth.StepUpActionRecoveryResultRetain)
 		return content.DeliveryActor{}, nil, false
 	}
 	claims, err := validateStepUpProof(
@@ -664,7 +664,7 @@ func (handler *BackupRecoveryHandler) prepareRecoveryResultRetainProof(
 		if errors.Is(err, ErrStepUpVerifierUnavailable) {
 			respondServiceUnavailable(c, "二次验证服务暂不可用")
 		} else {
-			respondStepUpRequired(c)
+			respondStepUpRequired(c, auth.StepUpActionRecoveryResultRetain)
 		}
 		return content.DeliveryActor{}, nil, false
 	}
@@ -1305,7 +1305,7 @@ func (handler *BackupRecoveryHandler) validateRecoveryAdminMutationStepUp(
 ) bool {
 	proof, ok := backupRecoveryAuthorizationStepUpProof(c.Request)
 	if !ok {
-		respondStepUpRequired(c)
+		respondStepUpRequired(c, auth.StepUpActionAssetRecover)
 		return false
 	}
 	claims, err := validateStepUpProof(
@@ -1315,7 +1315,7 @@ func (handler *BackupRecoveryHandler) validateRecoveryAdminMutationStepUp(
 		if errors.Is(err, ErrStepUpVerifierUnavailable) {
 			respondServiceUnavailable(c, "二次验证服务暂不可用")
 		} else {
-			respondStepUpRequired(c)
+			respondStepUpRequired(c, auth.StepUpActionAssetRecover)
 		}
 		return false
 	}
@@ -1584,7 +1584,7 @@ func (handler *BackupRecoveryHandler) authorize(
 	}
 	proof, ok := backupRecoveryAuthorizationStepUpProof(c.Request)
 	if !ok {
-		respondStepUpRequired(c)
+		respondStepUpRequired(c, auth.StepUpActionAssetRecover)
 		return
 	}
 	claims, err := validateStepUpProof(
@@ -1599,7 +1599,7 @@ func (handler *BackupRecoveryHandler) authorize(
 		if errors.Is(err, ErrStepUpVerifierUnavailable) {
 			respondServiceUnavailable(c, "二次验证服务暂不可用")
 		} else {
-			respondStepUpRequired(c)
+			respondStepUpRequired(c, auth.StepUpActionAssetRecover)
 		}
 		return
 	}
@@ -1765,7 +1765,7 @@ func respondBackupRecoveryAuthorizationError(c *gin.Context, err error) {
 		errors.Is(err, recovery.ErrAuthorizationProofUsed):
 		respondConflict(c, "授权请求冲突")
 	case errors.Is(err, recovery.ErrAuthorizationProofLifetime):
-		respondStepUpRequired(c)
+		respondStepUpRequired(c, auth.StepUpActionAssetRecover)
 	case errors.Is(err, recovery.ErrAuthorizationSessionMismatch),
 		errors.Is(err, recovery.ErrAuthorizationDenied):
 		respondForbidden(c, "权限不足")

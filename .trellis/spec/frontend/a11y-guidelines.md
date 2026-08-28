@@ -133,6 +133,26 @@ page in the wrong language and WCAG 3.1.1 / 3.1.2 fail.
 
 ---
 
+## Backup Catalog Directory Navigation
+
+- Expose directory location as a labelled `<nav>`. Keep the root crumb present,
+  render ancestor crumbs as native buttons, and set `aria-current="page"` only
+  on the current directory.
+- Use one localized native Up button with a minimum 44-by-44-pixel target.
+  Disable it at root; in a direct root child, activation navigates to root by the
+  server's nullable opaque parent rather than a guessed path.
+- Empty directories retain Up and breadcrumb navigation. Directory activation,
+  selection, and layout controls remain distinct native keyboard targets in
+  list and grid views.
+- After navigation commits, focus the exact current/root crumb or restored
+  origin without unexpected scroll. Late requests must not steal focus. Verify
+  this at 390px, desktop width, 200-percent zoom, and reduced motion.
+- Loading, stale, failed, and empty transitions use localized live status; tests
+  cover pointer, Enter, Space, touch targets, `aria-current`, disabled root,
+  focus/scroll restoration, and axe.
+
+---
+
 ## Known exemptions
 
 The following gaps are intentional and do not need a fix in component code.

@@ -1488,13 +1488,17 @@ export interface CatalogStatus {
 }
 
 export type BackupFileSourceLineageKind = "task" | "imported";
+export type BackupFileSourceBrowseState = "browsable" | "indexing" | "unavailable";
 
 export interface BackupFileSourceNode {
   nodeId: number;
   displayName: string;
   backupSetCount: number;
+  retainedVersionCount: number;
   latestRetainedAt: string | null;
   catalogCoverage: CatalogCoverageStatus;
+  browseState: BackupFileSourceBrowseState;
+  unavailableReason: CatalogCapabilityReason | null;
 }
 
 export interface BackupFileSourceSet {
@@ -1505,6 +1509,8 @@ export interface BackupFileSourceSet {
   versionCount: number;
   latestRetainedAt: string | null;
   catalogCoverage: CatalogCoverageStatus;
+  browseState: BackupFileSourceBrowseState;
+  unavailableReason: CatalogCapabilityReason | null;
 }
 
 export interface BackupFileSourceVersion {
@@ -1514,8 +1520,10 @@ export interface BackupFileSourceVersion {
   capturedAt: string | null;
   committedAt: string | null;
   createdAt: string;
-  lifecycleState: "observed" | "committed" | "degraded";
+  lifecycleState: "observed" | "verifying" | "committed" | "degraded";
   catalogCoverage: CatalogCoverageStatus;
+  browseState: BackupFileSourceBrowseState;
+  unavailableReason: CatalogCapabilityReason | null;
   contentAvailability: CatalogContentAvailability;
   entryCount: number;
   logicalBytes: number;
@@ -1528,6 +1536,8 @@ export interface BackupFileSourceRecoveryPoint {
   recoveryPointId: string;
   repositoryId: string;
   producingTaskId?: number;
+  browseState: BackupFileSourceBrowseState;
+  unavailableReason: CatalogCapabilityReason | null;
 }
 
 export interface BackupFileSourcePage<T> {
@@ -1896,6 +1906,17 @@ export interface BackupAssetBreadcrumb {
   name: string;
 }
 
+export interface BackupAssetDirectoryEntry {
+  ref: AssetRef;
+  name: string;
+}
+
+export interface BackupAssetDirectoryContext {
+  current: BackupAssetDirectoryEntry | null;
+  parent: AssetRef | null;
+  breadcrumb: BackupAssetBreadcrumb[];
+}
+
 export interface BackupAsset {
   ref: AssetRef;
   parentRef: AssetRef | null;
@@ -1913,6 +1934,7 @@ export interface BackupAsset {
 export interface BackupAssetPage {
   items: Array<CatalogProjection<BackupAsset>>;
   nextCursor: string | null;
+  directory: BackupAssetDirectoryContext;
 }
 
 export interface BackupAssetVersion {

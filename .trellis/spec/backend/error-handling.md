@@ -943,6 +943,75 @@ if err := h.persistSettingsMutation(ctx, req); err != nil {
 
 ---
 
+## Scenario: Catalog Directory Context And Cursor Errors
+
+### 1. Scope / Trigger
+
+- Trigger: changing the Catalog entry-page DTO, directory ancestry traversal,
+  entry cursor scope, or `GET /recovery-points/:id/entries` error mapping.
+
+### 2. Contracts
+
+- Every successful entry page, including root, an empty directory, and every
+  cursor page, contains required `directory.current`, `directory.parent`, and
+  `directory.breadcrumb` members. Root is exactly `null`, `null`, and `[]`.
+- A non-root context is built only from directory entries in the exact active
+  recovery-point generation. It contains 1 through 256 unique ancestors, ends
+  at `current`, and derives `parent` from the immediately preceding ancestor.
+- The signed cursor scope includes user, role, direction, sort, Repository,
+  recovery point, generation, requested parent, and a canonical digest of the
+  complete directory context. Tamper is invalid input; a valid token replayed
+  after any scope or context change is stale.
+- Handler-validated request errors remain 400 and stale cursors remain 409.
+  Malformed persisted Catalog ancestry or a DTO contract violation is an
+  internal server failure and must use the generic 500 response without raw
+  path, locator, cursor, or storage details.
+- Swagger marks the entry-page directory members and every breadcrumb member
+  (`recovery_point_id`, `entry_id`, `name`) as required.
+
+### 3. Tests Required
+
+- Cover root, empty and nested pages, every cursor page, direct-root children,
+  directory-only ancestry, cycles, 256/257 depth, context drift, all cursor
+  scope dimensions, HMAC tamper, generic internal-error mapping, generated
+  Swagger required fields, and response/privacy scans.
+
+---
+
+## Scenario: Action-Scoped Step-up Proof Truth
+
+### 1. Scope / Trigger
+
+- Trigger: changing step-up action registration, proof issuance/validation,
+  `STEP_UP_REQUIRED` responses, login-session revocation, or step-up audit facts.
+
+### 2. Contracts
+
+- `asset.secret_reveal` alone has an exact signed 2700-second non-sliding
+  lifetime. Every other registered action retains the existing 300-second
+  lifetime and reuse policy; unknown or future actions have no TTL and fail
+  closed.
+- Validate signed purpose, exact action, proof JTI, user ID and subject, role,
+  token version, TOTP-enabled state, issued-at, expiry, exact action lifetime,
+  and, for `asset.secret_reveal`, the current login-session JTI plus revocation
+  state. Reuse never changes `iat` or `exp`.
+- Returned `expires_at` is exactly the signed `exp`. Response and audit
+  `proof_ttl_seconds` derive from the same action policy; invalid actions report
+  zero rather than inheriting the default.
+- Responses, audit metadata, and logs never contain raw proof/session tokens,
+  TOTP values, private data, content, locators, tickets, or raw errors.
+
+### 3. Tests Required
+
+- Cover all registered actions and a future action, exact returned/signed expiry,
+  missing/malformed JTI, cross-purpose proofs, tamper, expiry, user/subject/role/
+  token-version/TOTP changes, current-session mismatch/revocation, non-sliding
+  reuse, and exact safe response/audit TTL facts.
+- Run focused tests with `-count=3` and `-race`, then full backend gates and a
+  privacy/diff scan.
+
+---
+
 ## Scenario: Foundation Transition Cancellation And Compensation Errors
 
 ### 1. Scope / Trigger

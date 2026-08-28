@@ -1,4 +1,5 @@
 import type {
+  BackupFileSourceBrowseState,
   BackupFileSourceNode,
   BackupFileSourceRecoveryPoint,
   BackupFileSourceSet,
@@ -576,6 +577,22 @@ export function resolveBackupAssetsLegacySourceRoute(
     repositoryId: resolved.repositoryId,
     taskId: resolved.producingTaskId,
     recoveryPointId: resolved.recoveryPointId,
+  };
+}
+
+export function gateBackupAssetsBrowseRoute(
+  state: BackupAssetsRouteState,
+  browseState: BackupFileSourceBrowseState | null,
+): BackupAssetsRouteState {
+  if (state.recoveryPointId === undefined || browseState === "browsable") return state;
+  return {
+    ...state,
+    repositoryId: undefined,
+    taskId: undefined,
+    recoveryPointId: undefined,
+    parentEntryId: undefined,
+    entryId: undefined,
+    exportJobId: undefined,
   };
 }
 

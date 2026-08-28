@@ -1,18 +1,26 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { setLanguage } from "@/i18n";
 import { runAxe } from "@/test/a11y-helpers";
 import type { BackupFileSourceNode, BackupFileSourceSet, BackupFileSourceVersion } from "@/types/domain";
 import { BackupFileSourceControls } from "./backup-file-source-controls";
 
-const node: BackupFileSourceNode = { nodeId: 7, displayName: "数据库节点", backupSetCount: 1, latestRetainedAt: null, catalogCoverage: "complete" };
-const set: BackupFileSourceSet = { backupSetId: "a".repeat(32), nodeId: 7, displayLabel: "每日备份", lineageKind: "task", versionCount: 1, latestRetainedAt: null, catalogCoverage: "complete" };
+const node: BackupFileSourceNode = {
+  nodeId: 7, displayName: "数据库节点", backupSetCount: 1, retainedVersionCount: 1,
+  latestRetainedAt: null, catalogCoverage: "complete", browseState: "browsable", unavailableReason: null,
+};
+const set: BackupFileSourceSet = {
+  backupSetId: "a".repeat(32), nodeId: 7, displayLabel: "每日备份", lineageKind: "task", versionCount: 1,
+  latestRetainedAt: null, catalogCoverage: "complete", browseState: "browsable", unavailableReason: null,
+};
 const version: BackupFileSourceVersion = {
   recoveryPointId: "b".repeat(32), repositoryId: "c".repeat(32), producingTaskId: 9,
   capturedAt: "2026-08-27T00:00:00.000Z", committedAt: null, createdAt: "2026-08-27T00:00:00.000Z",
-  lifecycleState: "committed", catalogCoverage: "complete", contentAvailability: { available: false, reason: { code: "range_unavailable", params: {} } },
+  lifecycleState: "committed", catalogCoverage: "complete", browseState: "browsable", unavailableReason: null,
+  contentAvailability: { available: false, reason: { code: "range_unavailable", params: {} } },
   entryCount: 1, logicalBytes: 1, permissions: { list: true, preview: false, download: false },
 };
 const pagingProps = {
@@ -26,6 +34,12 @@ const pagingProps = {
   onLoadMoreSets: vi.fn(),
   onLoadMoreVersions: vi.fn(),
 };
+
+afterEach(async () => {
+  await act(async () => {
+    await setLanguage("zh");
+  });
+});
 
 describe("BackupFileSourceControls", () => {
   it("keeps a sole set implicit and emits exact opaque version context", async () => {
@@ -49,6 +63,51 @@ describe("BackupFileSourceControls", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/partial|不完整/i);
     rerender(<BackupFileSourceControls {...props} status="blocked" />);
     expect(screen.getByRole("alert")).toHaveTextContent(/unavailable|不可用/i);
+  });
+
+  it("describes incomplete source results without internal Catalog or Provider vocabulary", async () => {
+    await setLanguage("en");
+    const rendered = render(
+      <BackupFileSourceControls
+        status="partial"
+        nodes={[node]}
+        sets={[set]}
+        versions={[]}
+        selectedNodeId={7}
+        selectedBackupSetId={undefined}
+        selectedRecoveryPointId={undefined}
+        onSelectNode={vi.fn()}
+        onSelectSet={vi.fn()}
+        onSelectVersion={vi.fn()}
+        {...pagingProps}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(/file index is incomplete/i);
+    expect(screen.getByRole("status")).not.toHaveTextContent(/Catalog|Provider/i);
+    rendered.unmount();
+    await setLanguage("zh");
+  });
+
+  it("keeps retained indexing and unavailable lineages visible but prevents premature browsing", () => {
+    const indexingNode = { ...node, browseState: "indexing" as const, retainedVersionCount: 1, unavailableReason: null };
+    const indexingSet = { ...set, browseState: "indexing" as const, unavailableReason: null };
+    const unavailableVersion = {
+      ...version,
+      lifecycleState: "verifying" as const,
+      browseState: "unavailable" as const,
+      unavailableReason: { code: "repository_offline" as const, params: {} },
+    };
+    render(<BackupFileSourceControls
+      status="ready" nodes={[indexingNode]} sets={[indexingSet]} versions={[unavailableVersion]} selectedNodeId={7}
+      selectedBackupSetId={undefined} selectedRecoveryPointId={undefined}
+      onSelectNode={vi.fn()} onSelectSet={vi.fn()} onSelectVersion={vi.fn()}
+      {...pagingProps}
+    />);
+
+    expect(screen.getByRole("option", { name: /数据库节点.*索引|数据库节点.*index/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /不可用|unavailable/i })).toBeDisabled();
+    expect(screen.queryByText(/Repository|Provider|仓库|提供商/i)).not.toBeInTheDocument();
   });
 
   it("keeps every cursor chain reachable and does not infer a sole set from an incomplete page", async () => {
@@ -111,8 +170,8 @@ describe("BackupFileSourceControls", () => {
     expect(controls.every((control) => control.classList.contains("h-11"))).toBe(true);
     expect(controls.every((control) => control.classList.contains("lg:h-9"))).toBe(true);
     expect(controls.every((control) => control.classList.contains("touch-target"))).toBe(true);
-    expect(screen.getByRole("option", { name: longChineseName })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: longEnglishName })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: new RegExp(longChineseName) })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: new RegExp(longEnglishName) })).toBeInTheDocument();
     expect(await runAxe(container)).toHaveNoViolations();
   });
 });

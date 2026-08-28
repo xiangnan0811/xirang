@@ -8,3 +8,8 @@
 {"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Require dedicated-branch, PR, CI, release, and post-merge evidence before completion."}
 {"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check the complete selection-to-ticket-to-content data flow and every cancellation and authority boundary."}
 {"file":".trellis/spec/guides/documentation-truth-guide.md","reason":"Verify Swagger and current product documentation match the additive file-source and preview-intent contracts."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Verify the backup-bearing lineage solution reuses existing durable truth or, if proven necessary, has paired SQLite/PostgreSQL migration, parity, rollback, and no duplicate source of truth."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Verify source-open/read/change/timeout/capability diagnostics use closed stages and correlation only, with no raw Provider error or sensitive identity."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Verify core preview never suggests a Worker, all paged backup-bearing sources are reachable, 45-minute proof reuse is humane and bounded, and Up navigation works in empty/deep directories."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Verify Up/breadcrumb native semantics, 44px touch targets, focus restoration, 390px/desktop/200-percent zoom, live errors, keyboard, and axe."}
+{"file": ".trellis/spec/backend/backup-file-catalog.md", "reason": "Verify retained-lineage truth, zero-Provider listing, and fair reconciliation"}

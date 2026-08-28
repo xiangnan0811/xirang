@@ -47,11 +47,12 @@ func TestCatalogCursorBindsEntryScopeWithoutPrivateSortFacts(t *testing.T) {
 	scope := CursorScope{
 		Endpoint: CursorEndpointEntries, Direction: CursorForward,
 		UserID: 7, Role: "operator", Sort: EntrySortNameAsc,
-		RepositoryID:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		RecoveryPointID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		GenerationID:    "cccccccccccccccccccccccccccccccc",
-		ParentEntryID:   strings.Repeat("d", 64),
-		Anchor:          CursorAnchor{EntryID: strings.Repeat("e", 64)},
+		RepositoryID:     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		RecoveryPointID:  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		GenerationID:     "cccccccccccccccccccccccccccccccc",
+		ParentEntryID:    strings.Repeat("d", 64),
+		ProjectionDigest: strings.Repeat("f", 64),
+		Anchor:           CursorAnchor{EntryID: strings.Repeat("e", 64)},
 	}
 	token, err := codec.Encode(context.Background(), scope)
 	if err != nil {
@@ -74,15 +75,30 @@ func TestCatalogCursorBindsEntryScopeWithoutPrivateSortFacts(t *testing.T) {
 		t.Fatalf("decode with server-known scope: decoded=%#v err=%v", decoded, err)
 	}
 
-	changedRole := scope
-	changedRole.Role = "admin"
-	if _, err := codec.Decode(context.Background(), token, changedRole); !errors.Is(err, ErrStaleCursor) {
-		t.Fatalf("role change error=%v", err)
+	for _, test := range []struct {
+		name   string
+		mutate func(*CursorScope)
+	}{
+		{"user", func(changed *CursorScope) { changed.UserID++ }},
+		{"role", func(changed *CursorScope) { changed.Role = "admin" }},
+		{"direction", func(changed *CursorScope) { changed.Direction = CursorBackward }},
+		{"sort", func(changed *CursorScope) { changed.Sort = EntrySortNameDesc }},
+		{"repository", func(changed *CursorScope) { changed.RepositoryID = strings.Repeat("0", 32) }},
+		{"recovery point", func(changed *CursorScope) { changed.RecoveryPointID = strings.Repeat("1", 32) }},
+		{"generation", func(changed *CursorScope) { changed.GenerationID = strings.Repeat("2", 32) }},
+		{"parent", func(changed *CursorScope) { changed.ParentEntryID = strings.Repeat("3", 64) }},
+		{"directory digest", func(changed *CursorScope) { changed.ProjectionDigest = strings.Repeat("0", 64) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			changed := expectedWithoutAnchor
+			test.mutate(&changed)
+			if _, err := codec.Decode(context.Background(), token, changed); !errors.Is(err, ErrStaleCursor) {
+				t.Fatalf("scope change error=%v", err)
+			}
+		})
 	}
-	changedGeneration := scope
-	changedGeneration.GenerationID = "ffffffffffffffffffffffffffffffff"
-	if _, err := codec.Decode(context.Background(), token, changedGeneration); !errors.Is(err, ErrStaleCursor) {
-		t.Fatalf("generation change error=%v", err)
+	if _, err := codec.Decode(context.Background(), token+"x", expectedWithoutAnchor); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("tampered entry cursor error=%v", err)
 	}
 }
 

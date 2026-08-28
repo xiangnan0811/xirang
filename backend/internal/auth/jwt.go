@@ -28,6 +28,7 @@ type Claims struct {
 	Role         string       `json:"role"`
 	Purpose      string       `json:"purpose,omitempty"`
 	StepUpAction StepUpAction `json:"step_up_action,omitempty"`
+	SessionID    string       `json:"sid,omitempty"`
 	TokenVersion uint         `json:"ver"`
 	jwt.RegisteredClaims
 }
@@ -96,12 +97,24 @@ func (m *JWTManager) Generate2FAPendingToken(user model.User) (string, error) {
 	return token.SignedString(m.secret)
 }
 
-func (m *JWTManager) GenerateStepUpToken(user model.User, action StepUpAction) (string, time.Time, error) {
+func (m *JWTManager) GenerateStepUpToken(user model.User, action StepUpAction, sessionIDs ...string) (string, time.Time, error) {
 	if !IsValidStepUpAction(action) {
 		return "", time.Time{}, fmt.Errorf("step-up action 无效")
 	}
-	now := time.Now()
-	expiresAt := now.Add(StepUpProofTTL)
+	if len(sessionIDs) > 1 {
+		return "", time.Time{}, fmt.Errorf("step-up session binding 无效")
+	}
+	sessionID := ""
+	if len(sessionIDs) == 1 {
+		sessionID = sessionIDs[0]
+	}
+	if action == StepUpActionAssetSecretReveal && !lowerHexID(sessionID) || sessionID != "" && !lowerHexID(sessionID) {
+		return "", time.Time{}, fmt.Errorf("step-up session binding 无效")
+	}
+	// NumericDate is serialized at whole-second precision. Return the same exact
+	// expiry carried by the signed claim so API/storage facts cannot outlive it.
+	now := time.Now().UTC().Truncate(time.Second)
+	expiresAt := now.Add(StepUpProofTTLForAction(action))
 	tokenID, err := generateTokenID()
 	if err != nil {
 		return "", time.Time{}, err
@@ -112,6 +125,7 @@ func (m *JWTManager) GenerateStepUpToken(user model.User, action StepUpAction) (
 		Role:         user.Role,
 		Purpose:      PurposeStepUp,
 		StepUpAction: action,
+		SessionID:    sessionID,
 		TokenVersion: user.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        tokenID,

@@ -102,13 +102,29 @@ export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFi
           return;
         }
         setLegacyResolution({ key: legacyResolutionKey, status: "ready" });
-        onRoutePatchRef.current(resolveBackupAssetsLegacySourceRoute({
+        const patch = resolveBackupAssetsLegacySourceRoute({
           nodeId: route.nodeId,
           backupSetId: route.backupSetId,
           repositoryId: route.repositoryId,
           taskId: route.taskId,
           recoveryPointId: route.recoveryPointId,
-        }, resolved.value), { replace: true });
+        }, resolved.value);
+        const exactResolvedPoint = patch.recoveryPointId === resolved.value.recoveryPointId;
+        onRoutePatchRef.current(
+          resolved.value.browseState === "browsable" || !exactResolvedPoint
+            ? patch
+            : {
+                nodeId: resolved.value.nodeId,
+                backupSetId: resolved.value.backupSetId,
+                repositoryId: undefined,
+                taskId: undefined,
+                recoveryPointId: undefined,
+                parentEntryId: undefined,
+                entryId: undefined,
+                exportJobId: undefined,
+              },
+          { replace: true },
+        );
       })
       .catch((error: unknown) => {
         if (!active || activeRequest.controller.signal.aborted || legacyRequestRef.current !== activeRequest || isAbort(error)) return;
@@ -343,6 +359,7 @@ export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFi
     nodes: activeNodes.items,
     sets: projection.sets,
     versions: projection.versions,
+    selectedVersion: projection.selectedVersion,
     hasMoreNodes: activeNodes.nextCursor !== null,
     hasMoreSets: activeSets.nextCursor !== null,
     hasMoreVersions: activeVersions.nextCursor !== null,
@@ -351,13 +368,16 @@ export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFi
     loadingMoreVersions: activeVersions.status === "loading_more",
     selectNode: (nodeId: number | undefined) => onRoutePatch({ nodeId }),
     selectSet: (backupSetId: string | undefined) => onRoutePatch({ backupSetId }),
-    selectVersion: (version: BackupFileSourceVersion, backupSetId: string) => onRoutePatch({
-      nodeId: route.nodeId,
-      backupSetId,
-      repositoryId: version.repositoryId,
-      taskId: version.producingTaskId,
-      recoveryPointId: version.recoveryPointId,
-    }),
+    selectVersion: (version: BackupFileSourceVersion, backupSetId: string) => {
+      if (version.browseState !== "browsable") return;
+      onRoutePatch({
+        nodeId: route.nodeId,
+        backupSetId,
+        repositoryId: version.repositoryId,
+        taskId: version.producingTaskId,
+        recoveryPointId: version.recoveryPointId,
+      });
+    },
     loadMoreNodes,
     loadMoreSets,
     loadMoreVersions,

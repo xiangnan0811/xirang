@@ -11,6 +11,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const testStepUpSessionID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
 func TestJWTManagerRevokeToken(t *testing.T) {
 	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
 	user := model.User{ID: 7, Username: "alice", Role: "admin"}
@@ -43,7 +45,7 @@ func TestJWTManagerGenerateStepUpTokenIncludesDedicatedPurposeTTLAndVersion(t *t
 	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
 	user := model.User{ID: 9, Username: "alice", Role: "admin", TokenVersion: 3}
 
-	proof, expiresAt, err := manager.GenerateStepUpToken(user, StepUpActionTaskManualTrigger)
+	proof, expiresAt, err := manager.GenerateStepUpToken(user, StepUpActionTaskManualTrigger, testStepUpSessionID)
 	if err != nil {
 		t.Fatalf("生成 step-up proof 失败: %v", err)
 	}
@@ -64,18 +66,78 @@ func TestJWTManagerGenerateStepUpTokenIncludesDedicatedPurposeTTLAndVersion(t *t
 	if claims.UserID != user.ID || claims.Username != user.Username || claims.Role != user.Role || claims.TokenVersion != user.TokenVersion {
 		t.Fatalf("step-up claims 未包含当前用户身份、角色和 token version: %+v", claims)
 	}
+	if claims.SessionID != testStepUpSessionID {
+		t.Fatalf("step-up claims session binding = %q, want %q", claims.SessionID, testStepUpSessionID)
+	}
 	if claims.ID == "" {
 		t.Fatalf("step-up proof 应包含 jti")
 	}
 	if claims.IssuedAt == nil || claims.ExpiresAt == nil {
 		t.Fatalf("step-up proof 应包含 iat/exp")
 	}
-	if !claims.ExpiresAt.Equal(expiresAt.Truncate(time.Second)) {
+	if !claims.ExpiresAt.Equal(expiresAt) {
 		t.Fatalf("返回的 expiresAt 应与 claims exp 一致，claims=%s returned=%s", claims.ExpiresAt.Time, expiresAt)
 	}
 	ttl := claims.ExpiresAt.Sub(claims.IssuedAt.Time)
 	if ttl != StepUpProofTTL {
 		t.Fatalf("step-up proof TTL 应为 %s，实际 %s", StepUpProofTTL, ttl)
+	}
+}
+
+func TestJWTManagerGenerateStepUpTokenUsesExactActionTTLPolicy(t *testing.T) {
+	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	user := model.User{ID: 9, Username: "alice", Role: "admin", TokenVersion: 3}
+
+	for _, action := range AllStepUpActions() {
+		t.Run(string(action), func(t *testing.T) {
+			wantTTL := StepUpProofTTL
+			if action == StepUpActionAssetSecretReveal {
+				wantTTL = 45 * time.Minute
+			}
+			if got := StepUpProofTTLForAction(action); got != wantTTL {
+				t.Fatalf("StepUpProofTTLForAction(%q) = %s, want %s", action, got, wantTTL)
+			}
+
+			proof, returnedExpiry, err := manager.GenerateStepUpToken(user, action, testStepUpSessionID)
+			if err != nil {
+				t.Fatalf("GenerateStepUpToken(%q): %v", action, err)
+			}
+			first, err := manager.ParseToken(proof)
+			if err != nil {
+				t.Fatalf("ParseToken(%q): %v", action, err)
+			}
+			second, err := manager.ParseToken(proof)
+			if err != nil {
+				t.Fatalf("second ParseToken(%q): %v", action, err)
+			}
+			if first.IssuedAt == nil || first.ExpiresAt == nil || second.ExpiresAt == nil {
+				t.Fatalf("proof for %q is missing iat/exp", action)
+			}
+			if got := first.ExpiresAt.Sub(first.IssuedAt.Time); got != wantTTL {
+				t.Fatalf("proof TTL for %q = %s, want %s", action, got, wantTTL)
+			}
+			if !first.ExpiresAt.Equal(returnedExpiry) {
+				t.Fatalf("returned expiry for %q = %s, claim exp = %s", action, returnedExpiry, first.ExpiresAt.Time)
+			}
+			if !second.ExpiresAt.Equal(first.ExpiresAt.Time) {
+				t.Fatalf("proof expiry slid on reuse for %q: first=%s second=%s", action, first.ExpiresAt.Time, second.ExpiresAt.Time)
+			}
+		})
+	}
+
+	if got := StepUpProofTTLForAction(StepUpAction("future.action")); got != 0 {
+		t.Fatalf("unknown action TTL = %s, want zero", got)
+	}
+}
+
+func TestJWTManagerGenerateStepUpTokenRejectsMissingOrInvalidSessionBinding(t *testing.T) {
+	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	user := model.User{ID: 9, Username: "alice", Role: "admin", TokenVersion: 3}
+
+	for _, sessionID := range []string{"", "not-a-session", strings.Repeat("A", 32)} {
+		if _, _, err := manager.GenerateStepUpToken(user, StepUpActionAssetSecretReveal, sessionID); err == nil {
+			t.Fatalf("GenerateStepUpToken accepted invalid session binding %q", sessionID)
+		}
 	}
 }
 

@@ -126,8 +126,8 @@ describe("AssetInspector", () => {
     );
 
     expect(screen.getByRole("tabpanel", { name: /Metadata|元数据/ })).toHaveTextContent(asset.mimeType);
-    expect(screen.getByRole("button", { name: /Previous asset|上一个资产/ })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: /Next asset|下一个资产/ }));
+    expect(screen.getByRole("button", { name: /Previous file|上一个文件/ })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: /Next file|下一个文件/ }));
     expect(onNext).toHaveBeenCalledTimes(1);
   });
 
@@ -150,9 +150,9 @@ describe("AssetInspector", () => {
     );
 
     const headerControls = [
-      screen.getByRole("button", { name: /Previous asset|上一个资产/ }),
-      screen.getByRole("button", { name: /Next asset|下一个资产/ }),
-      screen.getByRole("button", { name: /Close asset inspector|关闭资产检查器/ }),
+      screen.getByRole("button", { name: /Previous file|上一个文件/ }),
+      screen.getByRole("button", { name: /Next file|下一个文件/ }),
+      screen.getByRole("button", { name: /Close file inspector|关闭文件检查器/ }),
     ];
     expect(headerControls.every((control) => control.classList.contains("size-11"))).toBe(true);
     expect(headerControls.every((control) => control.classList.contains("touch-target"))).toBe(true);

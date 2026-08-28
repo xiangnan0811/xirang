@@ -888,6 +888,7 @@ type commandStream struct {
 	mu            sync.Mutex
 	backgroundErr error
 	waitErr       error
+	waitCompleted bool
 	limitErr      error
 	reachedEOF    bool
 	closeErr      error
@@ -955,11 +956,24 @@ func (stream *commandStream) Read(buffer []byte) (int, error) {
 }
 
 func (stream *commandStream) Close() error {
+	return stream.finish(false)
+}
+
+// ClosePrefix terminates a command after its caller has consumed the complete
+// bounded prefix it requested. Expected remote wait errors caused by that
+// intentional termination are not source failures; limit, context, timeout,
+// and background stream errors remain authoritative.
+func (stream *commandStream) ClosePrefix() error {
+	return stream.finish(true)
+}
+
+func (stream *commandStream) finish(prefix bool) error {
 	stream.closeOnce.Do(func() {
 		stream.mu.Lock()
 		joinNaturally := stream.reachedEOF && stream.limitErr == nil && stream.backgroundErr == nil
 		stream.mu.Unlock()
 		joined := false
+		var sessionCloseErr error
 		if joinNaturally {
 			grace := stream.terminationGrace
 			if grace <= 0 {
@@ -975,15 +989,23 @@ func (stream *commandStream) Close() error {
 			case <-timer.C:
 			}
 		}
+		suppressTerminationWaitErr := false
 		if !joined {
+			stream.mu.Lock()
+			suppressTerminationWaitErr = prefix && !stream.waitCompleted
+			stream.mu.Unlock()
 			stream.cancel()
-			_ = stream.session.Close()
+			sessionCloseErr = stream.session.Close()
 		}
 		<-stream.stderrDone
 		<-stream.stdinDone
 		<-stream.waitDone
 		stream.cancel()
-		_ = stream.session.Close()
+		if joined {
+			sessionCloseErr = stream.session.Close()
+		} else {
+			_ = stream.session.Close()
+		}
 		close(stream.lifecycleDone)
 		stream.mu.Lock()
 		switch {
@@ -995,6 +1017,10 @@ func (stream *commandStream) Close() error {
 			stream.closeErr = ErrCommandTimeout
 		case stream.backgroundErr != nil:
 			stream.closeErr = stream.backgroundErr
+		case sessionCloseErr != nil:
+			stream.closeErr = ErrCommandFailed
+		case suppressTerminationWaitErr:
+			stream.closeErr = nil
 		case stream.waitErr != nil:
 			stream.closeErr = ErrCommandFailed
 		}
@@ -1025,6 +1051,7 @@ func (stream *commandStream) setBackgroundError(err error) {
 func (stream *commandStream) setWaitError(err error) {
 	stream.mu.Lock()
 	stream.waitErr = err
+	stream.waitCompleted = true
 	stream.mu.Unlock()
 }
 

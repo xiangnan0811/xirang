@@ -177,19 +177,19 @@ describe("Backups routes accessibility", () => {
     const user = userEvent.setup();
     const page = renderBackups(completeRoute());
 
-    const list = await screen.findByRole("list", { name: /Backup asset list|备份资产列表/ });
+    const list = await screen.findByRole("list", { name: /File list|文件列表/ });
     expect(within(list).getAllByRole("listitem").length).toBeGreaterThan(0);
     expect(within(list).getAllByRole("checkbox").length).toBeGreaterThan(0);
-    expect(within(list).getAllByRole("button", { name: /Open asset|打开资产/ }).length).toBeGreaterThan(0);
+    expect(within(list).getAllByRole("button", { name: /Open file or directory|打开文件或目录/ }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("tabpanel", { hidden: true })).toHaveLength(3);
     expect(await runAxe(page.container)).toHaveNoViolations();
 
     const contextTrigger = screen.getByRole("button", {
-      name: /Open asset context|打开资产上下文/,
+      name: /Open file context|打开文件上下文/,
     });
     await user.click(contextTrigger);
     const contextDialog = await screen.findByRole("dialog", {
-      name: /Asset context|资产上下文/,
+      name: /File context|文件上下文/,
     });
     expect(within(contextDialog).getByRole("tree")).toBeInTheDocument();
     expect(await runAxe(document.body)).toHaveNoViolations();
@@ -197,15 +197,14 @@ describe("Backups routes accessibility", () => {
     await waitFor(() => expect(contextTrigger).toHaveFocus());
 
     await user.click(screen.getByRole("radio", { name: /Grid|网格/ }));
-    expect(await screen.findByRole("grid", { name: /Asset grid|资产网格/ })).toBeInTheDocument();
+    expect(await screen.findByRole("grid", { name: /File grid|文件网格/ })).toBeInTheDocument();
     expect(screen.getAllByRole("gridcell").length).toBeGreaterThan(0);
     expect(await runAxe(page.container)).toHaveNoViolations();
   });
 
-  it("announces partial offline coverage without claiming an authoritative empty result", async () => {
+  it("announces a retained offline source without opening active browsing context", async () => {
     useFixture("partial_offline");
     setViewport(1440);
-    const user = userEvent.setup();
     const page = renderBackups(
       `/app/backups/data?nodeId=${backupAssetsFileSourceIds.offline.nodeId}` +
         `&backupSetId=${backupAssetsFileSourceIds.offline.backupSetId}` +
@@ -214,19 +213,12 @@ describe("Backups routes accessibility", () => {
     );
 
     expect(
-      await screen.findByText(/Partial catalog coverage|目录覆盖不完整/, {}, { timeout: 3_000 })
+      await screen.findByText(/This backup source is currently unavailable|此备份来源当前不可用/, {}, { timeout: 3_000 })
     ).toBeInTheDocument();
-    expect(screen.queryByText(/No matching assets|没有匹配的资产/)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("option", { name: /Unavailable|不可用/ }).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/No matching files|没有匹配的文件/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Open file context|打开文件上下文/ })).not.toBeInTheDocument();
     expect(await runAxe(page.container)).toHaveNoViolations();
-
-    await user.click(screen.getByRole("button", {
-      name: /Open asset context|打开资产上下文/,
-    }));
-    const contextDialog = await screen.findByRole("dialog", {
-      name: /Asset context|资产上下文/,
-    });
-    expect(within(contextDialog).getAllByText(/Offline|离线/).length).toBeGreaterThan(0);
-    expect(await runAxe(document.body)).toHaveNoViolations();
   });
 
   it("scans an open overlay portal and returns focus to the invoking control", async () => {
@@ -235,7 +227,7 @@ describe("Backups routes accessibility", () => {
     const user = userEvent.setup();
     renderBackups(completeRoute());
 
-    await screen.findByRole("list", { name: /Backup asset list|备份资产列表/ });
+    await screen.findByRole("list", { name: /File list|文件列表/ });
     const trigger = screen.getByRole("button", { name: /Favorites.*0|收藏.*0/ });
     await user.click(trigger);
     expect(await screen.findByRole("dialog", { name: /Favorites|收藏/ })).toBeInTheDocument();
@@ -253,10 +245,10 @@ describe("Backups routes accessibility", () => {
     const before = browserChannels();
     renderBackups(completeRoute());
 
-    const list = await screen.findByRole("list", { name: /Backup asset list|备份资产列表/ });
+    const list = await screen.findByRole("list", { name: /File list|文件列表/ });
     const temporaryQuery = "synthetic-memory-only-investigation";
     await user.type(
-      screen.getByRole("searchbox", { name: /Search backup assets|搜索备份资产/ }),
+      screen.getByRole("searchbox", { name: /Search files|搜索文件/ }),
       temporaryQuery
     );
     const bulkSelectionTarget = within(list).getAllByRole("checkbox")[0];
@@ -283,7 +275,7 @@ describe("Backups routes accessibility", () => {
     const user = userEvent.setup();
     renderBackups(completeRoute());
 
-    const list = await screen.findByRole("list", { name: /Backup asset list|备份资产列表/ });
+    const list = await screen.findByRole("list", { name: /File list|文件列表/ });
     const bulkSelectionTarget = within(list).getAllByRole("checkbox")[0];
     bulkSelectionTarget.focus();
     await user.keyboard(" ");
@@ -306,8 +298,8 @@ describe("Backups routes accessibility", () => {
       name: /synthetic-service-config-with-a-deliberately-long-name/,
     });
     await waitFor(() => expect(heading).toHaveFocus());
-    expect(screen.queryByRole("region", { name: /Asset results|资产结果/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Close asset inspector|关闭资产检查器/ })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /File results|文件结果/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Close file inspector|关闭文件检查器/ })).toBeInTheDocument();
     // The preview iframe is opaque/sandboxed and has focused renderer coverage;
     // jsdom cannot establish axe's cross-frame messaging target reliably.
     expect(await runAxe(inspector, { iframes: false })).toHaveNoViolations();
@@ -321,6 +313,16 @@ describe("Backups routes accessibility", () => {
 
     expect(leafKeys(zh.backupAssets).sort()).toEqual(leafKeys(en.backupAssets).sort());
     expect(leafKeys(zh.backupAssets.recovery).sort()).toEqual(leafKeys(en.backupAssets.recovery).sort());
+  });
+
+  it("uses file language throughout the primary Files workflow", async () => {
+    const [{ default: zh }, { default: en }] = await Promise.all([
+      import("@/i18n/locales/zh"),
+      import("@/i18n/locales/en"),
+    ]);
+
+    expect(primaryFilesCopy(en)).not.toMatch(/\b(?:asset|catalog|provider)s?\b/i);
+    expect(primaryFilesCopy(zh)).not.toMatch(/资产|目录覆盖|Provider/i);
   });
 });
 
@@ -381,4 +383,44 @@ function leafKeys(value: unknown, prefix = ""): string[] {
   return Object.entries(value).flatMap(([key, child]) =>
     leafKeys(child, prefix ? `${prefix}.${key}` : key)
   );
+}
+
+function primaryFilesCopy(
+  locale:
+    | typeof import("@/i18n/locales/en").default
+    | typeof import("@/i18n/locales/zh").default
+) {
+  const { backupAssets } = locale;
+  return [
+    locale.backups.dataLoading,
+    ...Object.values(backupAssets.regions),
+    backupAssets.states.selectAsset,
+    backupAssets.states.loadingAssets,
+    backupAssets.states.partialCoverage,
+    backupAssets.states.noMatchingAssets,
+    backupAssets.states.noIndexedResults,
+    backupAssets.actions.openContext,
+    backupAssets.actions.closeOverlay,
+    backupAssets.actions.openAsset,
+    backupAssets.actions.previousAsset,
+    backupAssets.actions.nextAsset,
+    backupAssets.actions.closeInspector,
+    backupAssets.actions.openTaskContext,
+    backupAssets.inspector.tabList,
+    backupAssets.preview.loading,
+    backupAssets.preview.unavailable,
+    backupAssets.preview.frameTitle,
+    backupAssets.search.label,
+    backupAssets.search.placeholder,
+    backupAssets.browser.listLabel,
+    backupAssets.browser.gridLabel,
+    backupAssets.browser.selectAsset,
+    backupAssets.browser.resultSummary,
+    backupAssets.errors.featureDisabled,
+    backupAssets.errors.permissionDenied,
+    backupAssets.errors.notFound,
+    backupAssets.errors.invalidRequest,
+    backupAssets.errors.temporarilyUnavailable,
+    backupAssets.errors.unknown,
+  ].join("\n");
 }

@@ -39,6 +39,8 @@ export function createBackupAssetsHandlers(
             recovery_point_id: point.id,
             repository_id: point.repository_id,
             producing_task_id: sourceTaskId,
+            browse_state: offline ? "unavailable" : "browsable",
+            unavailable_reason: offline ? { code: "repository_offline" } : null,
           })
         : notFound();
     }),
@@ -50,8 +52,11 @@ export function createBackupAssetsHandlers(
           node_id: sourceNodeId,
           display_name: sourceNodeName,
           backup_set_count: 1,
+          retained_version_count: recoveryPoints.length,
           latest_retained_at: latestPoint.committed_at,
           catalog_coverage: latestPoint.catalog.coverage.status,
+          browse_state: offline ? "unavailable" : "browsable",
+          unavailable_reason: offline ? { code: "repository_offline" } : null,
         }] : [],
         next_cursor: null,
       });
@@ -68,6 +73,8 @@ export function createBackupAssetsHandlers(
           version_count: recoveryPoints.length,
           latest_retained_at: latestPoint.committed_at,
           catalog_coverage: latestPoint.catalog.coverage.status,
+          browse_state: offline ? "unavailable" : "browsable",
+          unavailable_reason: offline ? { code: "repository_offline" } : null,
         }] : [],
         next_cursor: null,
       });
@@ -84,6 +91,8 @@ export function createBackupAssetsHandlers(
           created_at: point.created_at,
           lifecycle_state: point.state,
           catalog_coverage: point.catalog.coverage.status,
+          browse_state: offline ? "unavailable" : "browsable",
+          unavailable_reason: offline ? { code: "repository_offline" } : null,
           content_availability: point.catalog.content_availability,
           entry_count: point.entry_count,
           logical_bytes: point.logical_bytes,
@@ -122,12 +131,41 @@ export function createBackupAssetsHandlers(
       return point ? ok(point.catalog) : notFound();
     }),
 
-    http.get(`${API_BASE}/recovery-points/:recoveryPointId/entries`, ({ params }) => {
+    http.get(`${API_BASE}/recovery-points/:recoveryPointId/entries`, ({ params, request }) => {
+      const recoveryPointId = String(params.recoveryPointId);
+      const parentEntryId = new URL(request.url).searchParams.get("parent");
       if (params.recoveryPointId === fixture.ids.offlineRecoveryPoint) {
-        return ok({ items: [], next_cursor: null });
+        return ok({
+          items: [], next_cursor: null,
+          directory: { current: null, parent: null, breadcrumb: [] },
+        });
       }
-      const items = params.recoveryPointId === fixture.ids.onlineRecoveryPoint ? fixture.entries : [];
-      return ok({ items, next_cursor: null });
+      if (recoveryPointId === fixture.ids.onlineRecoveryPoint && parentEntryId === fixture.ids.directoryEntry) {
+        const directory = fixture.entries.find((entry) => entry.entry_id === parentEntryId);
+        return ok({
+          items: [],
+          next_cursor: null,
+          directory: {
+            current: {
+              recovery_point_id: recoveryPointId,
+              entry_id: parentEntryId,
+              name: directory?.name ?? "synthetic-directory",
+            },
+            parent: null,
+            breadcrumb: [{
+              recovery_point_id: recoveryPointId,
+              entry_id: parentEntryId,
+              name: directory?.name ?? "synthetic-directory",
+            }],
+          },
+        });
+      }
+      const items = recoveryPointId === fixture.ids.onlineRecoveryPoint ? fixture.entries : [];
+      return ok({
+        items,
+        next_cursor: null,
+        directory: { current: null, parent: null, breadcrumb: [] },
+      });
     }),
 
     http.get(`${API_BASE}/recovery-points/:recoveryPointId/entries/:entryId`, ({ params }) => {

@@ -342,7 +342,16 @@ return { last, nextCursor: cursor };
 - Keep download, export, recover, archive, and explicit derived-processing
   behavior independent. Secret/unknown preview step-up remains Admin-only and
   retries the same safe intent once; Operator never acquires or requests Admin
-  step-up capability. Proof and ticket material remain in memory only.
+  step-up capability. The central action-keyed store may keep only proof and
+  fixed expiry in current-login `sessionStorage`; tickets remain memory-only.
+  Never place proof or ticket material in localStorage, URL/history, analytics,
+  console output, logs, raw errors, or content-ticket products.
+- A valid `asset.secret_reveal` proof survives refresh and file, directory,
+  version, set, node, search, retry, and renewal changes. Clear it on login
+  replacement, logout, user/role/token-version change, TOTP disablement, 401,
+  fixed expiry, or a typed proof rejection. Selection changes alone never clear
+  it. Concurrent same-action requests share one pending dialog/result, and late
+  results from an old auth or selection owner are ignored.
 
 ### 4. Validation & Error Matrix
 
@@ -353,7 +362,9 @@ return { last, nextCursor: cursor };
 | Catalog list is false, content is unavailable, or `openSequential` is false | Do not issue a ticket even if Range is available. |
 | Backend resolves native content but Range is unavailable | Surface the closed typed capability denial; do not retry as hex/text. |
 | Rapid A -> B selection or node/version/directory change | Abort/detach A; never render or retry A after B owns the selection. |
-| Admin receives `secret_reveal_required` | Prompt once and retry the same safe intent once with in-memory proof. |
+| Admin receives `secret_reveal_required` with no cached proof | Prompt once, persist the action proof for the current login session, and retry the same safe intent once. |
+| Admin cached proof is rejected | Clear it, permit at most one fresh prompt and one retry, then stop. |
+| Search rejects an attached secret-reveal proof | Clear the central action proof and fail closed; do not leak or loop. |
 | Operator receives `secret_reveal_required` | Remain blocked; do not call `ensureStepUpProof`. |
 | Renewal of a ready safe preview | Send the current exact resolved renderer/profile and exact AssetRef; do not reselect by MIME. |
 
@@ -377,9 +388,11 @@ return { last, nextCursor: cursor };
   missing selected recovery point, preview-tab exit, and sequential denial.
   Assert no ticket is issued in ineligible cases.
 - Cover rapid selection cancellation with no stale commit, node/version/directory
-  owner changes, Admin one-prompt/one-retry, Operator no prompt, proof rejection,
-  token/logout changes, typed capability/renderer failures, manual retry only for
-  the current retryable failure, and renewal from the resolved exact product.
+  owner changes, refresh and cross-owner proof reuse, Admin one-prompt/one-retry,
+  rejected-cache clear plus one fresh retry maximum, concurrent same-action
+  prompt coalescing, Operator no prompt, search proof rejection, token/logout/TOTP
+  changes, typed capability/renderer failures, manual retry only for the current
+  retryable failure, and renewal from the resolved exact product.
 - API mapper tests must reject unresolved intent echoes, renderer/profile/content
   contradictions, unsafe content types, malformed future fields, and safe-native
   responses without `range=single`. Exact legacy native/download responses retain
@@ -407,6 +420,28 @@ const canPreview = Boolean(
 // The selected-file effect sends safePreviewV1 once for its selection generation;
 // the backend resolves renderer/profile and enforces any native Range requirement.
 ```
+
+---
+
+## Scenario: Opaque Directory Navigation
+
+- Render one native, localized Up control rather than a standalone Root action.
+  Up uses the server-provided opaque parent; a direct root child therefore
+  navigates with no parent. Disable Up at root and keep root plus every ancestor
+  in the breadcrumb, with only the current crumb marked current.
+- Directory rows activate consistently in list and grid with pointer, Enter,
+  and Space. Up and breadcrumbs remain usable for empty directories and use at
+  least 44-by-44-pixel touch targets.
+- A navigation event synchronously aborts and detaches content before clearing
+  selected/bulk descendants and patching the route. Request generations ignore
+  late results from rapid Up/crumb changes and StrictMode effect replay.
+- Restoration state is memory-only and contains only opaque refs, index, and
+  scroll offset. Restore the exact valid origin after data commits; otherwise
+  focus the current/root crumb or results container deterministically on 390px
+  mobile and desktop, including 200-percent zoom and reduced motion.
+- Tests cover direct-root and deep/empty navigation, call ordering, late
+  completion suppression, list/grid keyboard parity, deterministic focus and
+  scroll, localized labels/live errors, axe, and the full Node 22 gate.
 
 ---
 

@@ -1,6 +1,7 @@
 import type {
   BackupFileSourceNode,
   BackupFileSourcePage,
+  BackupFileSourceBrowseState,
   BackupFileSourceRecoveryPoint,
   BackupFileSourceSet,
   BackupFileSourceVersion,
@@ -92,6 +93,23 @@ function reason(value: unknown): CatalogCapabilityReason | null | undefined {
   return { code: value.code as CatalogCapabilityCode, params };
 }
 
+function browseState(value: unknown): BackupFileSourceBrowseState | null {
+  return value === "browsable" || value === "indexing" || value === "unavailable" ? value : null;
+}
+
+function unavailableReason(
+  value: unknown,
+  state: BackupFileSourceBrowseState | null,
+): CatalogCapabilityReason | null | undefined {
+  if (state === null) return undefined;
+  if (state !== "unavailable") return value === undefined || value === null ? null : undefined;
+  if (!isObject(value) || typeof value.code !== "string" || !CAPABILITY_CODES.has(value.code as CatalogCapabilityCode)) {
+    return undefined;
+  }
+  if (value.params !== undefined && (!isObject(value.params) || Object.keys(value.params).length > 0)) return undefined;
+  return { code: value.code as CatalogCapabilityCode, params: {} };
+}
+
 function cursor(value: unknown): string | null | undefined {
   if (value === undefined || value === null || value === "") return null;
   return typeof value === "string" && value.length <= 8192 && CURSOR.test(value) ? value : undefined;
@@ -121,11 +139,15 @@ function mapNode(value: unknown): BackupFileSourceNode | null {
   const nodeId = integer(value.node_id, 1);
   const displayName = label(value.display_name);
   const backupSetCount = integer(value.backup_set_count, 1);
+  const retainedVersionCount = integer(value.retained_version_count, 1);
   const latestRetainedAt = time(value.latest_retained_at, true);
   const catalogCoverage = coverage(value.catalog_coverage);
-  return nodeId === null || displayName === null || backupSetCount === null || latestRetainedAt === undefined || catalogCoverage === null
+  const state = browseState(value.browse_state);
+  const unavailable = unavailableReason(value.unavailable_reason, state);
+  return nodeId === null || displayName === null || backupSetCount === null || retainedVersionCount === null ||
+    retainedVersionCount < backupSetCount || latestRetainedAt === undefined || catalogCoverage === null || state === null || unavailable === undefined
     ? null
-    : { nodeId, displayName, backupSetCount, latestRetainedAt, catalogCoverage };
+    : { nodeId, displayName, backupSetCount, retainedVersionCount, latestRetainedAt, catalogCoverage, browseState: state, unavailableReason: unavailable };
 }
 
 function mapSet(value: unknown): BackupFileSourceSet | null {
@@ -137,10 +159,12 @@ function mapSet(value: unknown): BackupFileSourceSet | null {
   const versionCount = integer(value.version_count, 1);
   const latestRetainedAt = time(value.latest_retained_at, true);
   const catalogCoverage = coverage(value.catalog_coverage);
+  const state = browseState(value.browse_state);
+  const unavailable = unavailableReason(value.unavailable_reason, state);
   return backupSetId === null || nodeId === null || displayLabel === null || lineageKind === null || versionCount === null ||
-    latestRetainedAt === undefined || catalogCoverage === null
+    latestRetainedAt === undefined || catalogCoverage === null || state === null || unavailable === undefined
     ? null
-    : { backupSetId, nodeId, displayLabel, lineageKind, versionCount, latestRetainedAt, catalogCoverage };
+    : { backupSetId, nodeId, displayLabel, lineageKind, versionCount, latestRetainedAt, catalogCoverage, browseState: state, unavailableReason: unavailable };
 }
 
 function mapVersion(value: unknown): BackupFileSourceVersion | null {
@@ -151,23 +175,28 @@ function mapVersion(value: unknown): BackupFileSourceVersion | null {
   const capturedAt = time(value.captured_at, true);
   const committedAt = time(value.committed_at, true);
   const createdAt = time(value.created_at, false);
-  const lifecycleState = value.lifecycle_state === "observed" || value.lifecycle_state === "committed" || value.lifecycle_state === "degraded"
+  const lifecycleState = value.lifecycle_state === "observed" || value.lifecycle_state === "verifying" ||
+    value.lifecycle_state === "committed" || value.lifecycle_state === "degraded"
     ? value.lifecycle_state
     : null;
   const catalogCoverage = coverage(value.catalog_coverage);
+  const state = browseState(value.browse_state);
+  const unavailable = unavailableReason(value.unavailable_reason, state);
   const entryCount = integer(value.entry_count);
   const logicalBytes = integer(value.logical_bytes);
   if (!isObject(value.permissions) || value.permissions.list !== true || value.permissions.preview !== false || value.permissions.download !== false) return null;
   if (!isObject(value.content_availability) || typeof value.content_availability.available !== "boolean") return null;
   const availabilityReason = reason(value.content_availability.reason);
   if (availabilityReason === undefined || (value.content_availability.available && availabilityReason !== null) ||
-    (!value.content_availability.available && availabilityReason === null)) return null;
+    (!value.content_availability.available && availabilityReason === null) ||
+    (state !== "unavailable" && !value.content_availability.available)) return null;
   if (recoveryPointId === null || repositoryId === null || producingTaskId === null || capturedAt === undefined ||
     committedAt === undefined || createdAt === undefined || createdAt === null || lifecycleState === null || catalogCoverage === null ||
-    entryCount === null || logicalBytes === null) return null;
+    state === null || unavailable === undefined || entryCount === null || logicalBytes === null) return null;
   return {
     recoveryPointId, repositoryId, producingTaskId, capturedAt, committedAt, createdAt, lifecycleState,
     catalogCoverage, contentAvailability: { available: value.content_availability.available, reason: availabilityReason },
+    browseState: state, unavailableReason: unavailable,
     entryCount, logicalBytes, permissions: { list: true, preview: false, download: false },
   };
 }
@@ -183,12 +212,15 @@ export function mapBackupFileSourceRecoveryPoint(value: unknown): CatalogProject
   const recoveryPointId = opaqueId(value.recovery_point_id);
   const repositoryId = opaqueId(value.repository_id);
   const producingTaskId = value.producing_task_id === undefined ? undefined : integer(value.producing_task_id, 1);
-  if (nodeId === null || backupSetId === null || recoveryPointId === null || repositoryId === null || producingTaskId === null) {
+  const state = browseState(value.browse_state);
+  const unavailable = unavailableReason(value.unavailable_reason, state);
+  if (nodeId === null || backupSetId === null || recoveryPointId === null || repositoryId === null || producingTaskId === null ||
+    state === null || unavailable === undefined) {
     return blocked();
   }
   return {
     status: "available",
-    value: { nodeId, backupSetId, recoveryPointId, repositoryId, producingTaskId },
+    value: { nodeId, backupSetId, recoveryPointId, repositoryId, producingTaskId, browseState: state, unavailableReason: unavailable },
   };
 }
 

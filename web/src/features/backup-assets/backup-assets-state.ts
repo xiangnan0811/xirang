@@ -3,6 +3,7 @@ import type {
   AssetSearchHitField,
   AssetSearchSnippet,
   BackupAsset,
+  BackupAssetDirectoryContext,
 } from "@/types/domain";
 
 import type { BackupAssetsRouteState } from "./backup-assets-route-state";
@@ -26,6 +27,7 @@ export interface BackupAssetsResultState {
   nextCursor: string | null;
   coverage: BackupAssetsResultCoverage;
   authoritativeEmpty: boolean;
+  directory: BackupAssetDirectoryContext | null;
 }
 
 export type BackupAssetsOverlayState =
@@ -61,8 +63,15 @@ export type BackupAssetsAction =
       nextCursor: string | null;
       coverage: BackupAssetsResultCoverage;
       authoritativeEmpty: boolean;
+      directory: BackupAssetDirectoryContext | null;
     }
-  | { type: "results_appended"; requestKey: string; rows: BackupAssetResultRow[]; nextCursor: string | null }
+  | {
+      type: "results_appended";
+      requestKey: string;
+      rows: BackupAssetResultRow[];
+      nextCursor: string | null;
+      directory: BackupAssetDirectoryContext | null;
+    }
   | { type: "results_failed"; requestKey: string }
   | { type: "cursor_stale"; requestKey: string }
   | { type: "toggle_selection"; ref: AssetRef }
@@ -107,6 +116,7 @@ export function backupAssetsReducer(state: BackupAssetsState, action: BackupAsse
         },
       };
     case "results_replaced":
+      if (state.result.requestKey !== action.requestKey) return state;
       return {
         ...state,
         result: {
@@ -117,12 +127,26 @@ export function backupAssetsReducer(state: BackupAssetsState, action: BackupAsse
           nextCursor: action.nextCursor,
           coverage: action.coverage,
           authoritativeEmpty: action.authoritativeEmpty,
+          directory: action.directory,
         },
         selection: new Map(),
         tombstone: null,
       };
     case "results_appended": {
       if (state.result.requestKey !== action.requestKey) return state;
+      if (!sameDirectoryContext(state.result.directory, action.directory)) {
+        return {
+          ...state,
+          result: {
+            ...emptyResultState(),
+            status: "failed",
+            requestKey: action.requestKey,
+            generation: state.result.generation + 1,
+          },
+          selection: new Map(),
+          selectionGeneration: state.selectionGeneration + 1,
+        };
+      }
       return {
         ...state,
         result: {
@@ -294,7 +318,29 @@ function emptyResultState(): BackupAssetsResultState {
     nextCursor: null,
     coverage: "unavailable",
     authoritativeEmpty: false,
+    directory: null,
   };
+}
+
+function sameDirectoryContext(
+  left: BackupAssetDirectoryContext | null,
+  right: BackupAssetDirectoryContext | null,
+): boolean {
+  if (left === null || right === null) return left === right;
+  if (left.current === null || right.current === null) {
+    if (left.current !== right.current) return false;
+  } else if (!sameAssetRef(left.current.ref, right.current.ref) || left.current.name !== right.current.name) return false;
+  if (left.parent === null || right.parent === null) {
+    if (left.parent !== right.parent) return false;
+  } else if (!sameAssetRef(left.parent, right.parent)) return false;
+  return left.breadcrumb.length === right.breadcrumb.length && left.breadcrumb.every((item, index) => {
+    const other = right.breadcrumb[index];
+    return other !== undefined && item.name === other.name && sameAssetRef(item.ref, other.ref);
+  });
+}
+
+function sameAssetRef(left: AssetRef, right: AssetRef): boolean {
+  return left.recoveryPointId === right.recoveryPointId && left.entryId === right.entryId;
 }
 
 function deduplicateRows(rows: BackupAssetResultRow[]): BackupAssetResultRow[] {

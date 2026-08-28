@@ -14,6 +14,13 @@ plain-text/native/hex product; the existing Issue/Serve grant boundary remains
 final. The frontend composes the projection, route, browser, split pane, and
 latest-selection state machine without persisting sensitive context.
 
+**Production remediation:** Phases 1-7 are released history. `v0.52.0`
+infrastructure acceptance passed but product acceptance failed. Phases 8-12 are the
+approved remediation covering core text delivery, a 45-minute action-scoped session
+proof, backup-bearing source discovery, and parent navigation. The user explicitly
+approved implementation after reviewing the completed revision; delivery and
+production actions remain separately gated.
+
 **Tech Stack:** Go 1.26, Gin, GORM, React 18, TypeScript 5.8 strict, Vite 7,
 Vitest, Tailwind CSS, Radix/shadcn primitives, and i18next.
 
@@ -22,7 +29,7 @@ Vitest, Tailwind CSS, Radix/shadcn primitives, and i18next.
 ## Preconditions and phase gate
 
 - [x] Work only in /home/murray/.codex/worktrees/e0a9/xirang on
-  codex/backup-file-center-direct-preview.
+  codex/backup-file-center-production-remediation.
 - [x] Confirm task.json was planning and the user explicitly approved
   implementation after reviewing the completed PRD/design/plan.
 - [x] Only then run task.py start and load every entry in implement.jsonl before
@@ -299,7 +306,7 @@ Privacy and compatibility checks:
   affected plus full gates.
 - [x] Commit, push, open a ready PR, and monitor every required CI job. Do not
   merge while any required job is failing, pending, or missing.
-- [ ] Squash merge when green, sync local main, then monitor Release Please,
+- [x] Squash merge when green, sync local main, then monitor Release Please,
   GitHub Release, Docker image publication, and relevant post-merge workflows.
 - [x] Prepare a recoverable NAS upgrade/rollback runbook that uses root
   /volume2/docker/xirang, external 19927, internal 10761, and no test, [, [[, cd,
@@ -312,6 +319,117 @@ Privacy and compatibility checks:
 - [ ] Keep collectors at zero throughout. Only after usable-content acceptance
   succeeds may the separately planned node-log P1 be considered for its own
   explicit start approval.
+
+`v0.52.0` was subsequently released and infrastructure acceptance passed, but the
+usable-content production acceptance above failed. Do not mark those acceptance
+items complete. Continue only through the newly approved remediation phases below.
+
+## Phase 8 — Production-shaped core preview diagnosis and repair
+
+- [x] Create the first genuine RED through Repository Service plus each supported
+  Restic/Rsync/Rclone source adapter, Content Broker safe_preview_v1, handler Issue,
+  persisted grant, and Serve using synthetic generic-MIME text/config fixtures.
+- [x] Prove core UTF-8/UTF-16 text preview succeeds without any derived Worker port;
+  cover short/exact/truncated content, retained line endings, HTML-inert text,
+  malformed text, true binary hex, and signature-proven native files.
+- [x] Add closed non-leaking source failure stages for open, read, changed, timeout,
+  cancellation, and capability. Preserve standard envelopes, empty params, and a
+  safe correlation ID; never expose raw Provider errors or identity.
+- [x] Reproduce the production-shaped 503 at the narrowest layer, record the exact
+  RED, and implement only the smallest proven source/descriptor/handler fix. Do
+  not guess the Provider root cause from the screenshot.
+- [x] Restrict optional Worker guidance to typed derived-processing Worker states.
+  Core preview unavailable/capability/renderer errors receive their own localized
+  guidance and never imply that a Worker is required.
+- [x] Prove exactly one bounded source open/read, exact Issue/grant/Serve product
+  agreement, cancellation, audit/log sanitization, and no locator/path/content/
+  proof leakage.
+
+## Phase 9 — 45-minute action-scoped secret-reveal session
+
+- [x] Add backend REDs for per-action proof TTL policy: `asset.secret_reveal` is
+  exactly 45 non-sliding minutes; every unrelated action preserves its existing
+  TTL and one-shot/reuse contract.
+- [x] Bind and revalidate the proof to purpose, exact action, user, role, token
+  version/session, issued-at, and expiry. Cover tamper, expired, logout/revocation,
+  user/role/token-version change, and future/unknown action failure.
+- [x] Replace file-center one-shot calls with the central helper's
+  `persist: true, reuseCached: true` path. Remove per-asset/source proof ownership
+  and never clear a valid proof merely because selection changes.
+- [x] RED/GREEN Admin first prompt then cross-file/directory/version/node reuse,
+  page-refresh reuse, exact 45-minute expiry, rejected-cache clear plus at most one
+  fresh prompt, retry-loop prevention, Operator/Viewer no prompt, and ordinary
+  non-secret no prompt.
+- [x] Keep only action+proof+expiry in current-login `sessionStorage`; prove no
+  localStorage, URL/history, analytics, console, log, or content-ticket persistence.
+
+## Phase 10 — All backup-bearing source lineages
+
+- [x] Add RED fixtures for active, interrupted, disabled, archived, and deleted
+  task lineages whose provider-proven retained bytes remain, plus configured
+  no-data tasks and ambiguous/unattributable candidates.
+- [x] Extend the bounded projection with closed `browsable`, `indexing`, and
+  `unavailable` states. Task status must not gate retained-data visibility; no-data
+  tasks stay absent and incomplete discovery is never reported as empty.
+- [x] Reuse TaskRepositoryLink/RecoveryPoint snapshots and the existing
+  import/rebuild lifecycle. Add a cursor-bounded asynchronous managed-lineage
+  reconciler that repairs Provider-committed/interrupted publications only when
+  exact managed provenance agrees; ambiguous data remains quarantined/import-only.
+- [x] Keep Files HTTP listing database-only. Prove zero Provider calls from the
+  selector, fixed/bounded calls from reconciliation, no N+1, cancellation,
+  retry/backoff, cursor stability, and projection digests over all visible facts.
+- [x] Preserve Admin/list RBAC and recheck Operator against current node ownership.
+  Add cross-user, archived-task, deleted-task, missing-node, identity-collision,
+  malformed-evidence, offline-repository, and privacy canaries.
+- [x] Use existing schema if it can express durable attribution truth. If the RED
+  proves otherwise, pause product edits, amend this design with the exact minimal
+  model, and add paired SQLite/PostgreSQL migration/parity/rollback tests.
+- [x] Update strict frontend DTOs and source controls so all authorized nodes/sets
+  are paged and reachable, with clear indexing/unavailable states and no internal
+  Repository/Provider vocabulary in the primary workflow.
+
+## Phase 11 — Explicit Up navigation and revised browser UX
+
+- [x] Extend the entry-page contract with required current directory, parent, and
+  breadcrumb context; return it for root, non-root, empty, and every cursor page.
+- [x] Validate same-point/generation identity, directory type, bounded acyclic
+  ancestry, stale cursors, and strict frontend mapping. No raw/normalized path is
+  added to the API or route.
+- [x] Replace the standalone Root button with a native 44px Up button. Disable or
+  omit Up at root; retain breadcrumb root/ancestor jumps.
+- [x] On Up or breadcrumb navigation, abort/detach preview, clear incompatible
+  selected/bulk descendants, ignore late results, preserve list origin where
+  valid, and restore deterministic focus on desktop and mobile.
+- [x] Add pointer, Enter/Space, empty-directory, deep-link/reload, rapid navigation,
+  list/grid, 390px/desktop/200%-zoom, reduced-motion, screen-reader, and axe tests.
+- [x] Update localized source/preview/navigation/error copy. Prove Worker guidance
+  appears only for explicit derived Worker states.
+
+## Phase 12 — Independent verification, release, and production re-acceptance
+
+- [x] Run focused backend provider/content/catalog/handler selectors after every
+  RED/GREEN slice, then `-count=3`, focused `-race`, `go test ./...`, build, vet,
+  pinned golangci-lint, Swagger deterministic regeneration, doc freshness, and
+  SQLite/PostgreSQL parity where affected.
+- [x] Run Node 22 focused API/hook/browser/preview/page tests, typecheck, lint,
+  `npm run check`, production build, Playwright Chromium/Firefox/WebKit, supported
+  viewports/zoom, accessibility, and privacy/type-escape scans.
+- [x] Run `make check`, dependency/migration/scope scans, response canaries, and
+  `git diff --check`; complete an independent Trellis review and resolve every
+  Critical/Important finding before PR.
+- [ ] Commit/push/open a ready PR only after the user separately authorizes
+  implementation delivery; monitor all required CI, squash merge, sync main, and
+  monitor Release Please, GitHub Release, Docker publication, and post-merge jobs.
+- [ ] Upgrade the NAS only through the approved recoverable protocol. Reconfirm
+  health 200/200, schema/integrity, clean bounded logs, active runs 0, and
+  collectors 0 without printing any sensitive identity or content.
+- [ ] Real production product acceptance must prove: readable representative core
+  text without Worker, true binary non-text, native preview, one step-up followed
+  by 45-minute cross-file/refresh reuse, every known backup-bearing lineage visible
+  with truthful state, Up navigation including an empty directory, rapid-switch
+  cancellation, and bounded non-leaking errors.
+- [ ] Keep collectors at zero after acceptance evidence is reviewed. Node-log P1
+  still requires its own explicit start approval; this task never starts it.
 
 ## Risky boundaries and rollback
 
@@ -329,6 +447,9 @@ Privacy and compatibility checks:
 - Responsive shell: details must not reclaim the preview width or break mobile
   focus restoration.
 
-No destructive data migration is planned. If implementation discovers that a
-schema change or Provider read is required, stop, update PRD/design, and obtain a
-new explicit plan approval before expanding scope.
+No destructive data migration is planned. For Phases 8-12, bounded Provider reads
+are authorized only inside the approved diagnostic integration tests and
+asynchronous managed-lineage reconciler described above, never in an interactive
+source-list request. Any Provider read outside those boundaries, or any schema
+change not first justified by the Phase 10 RED and approved as an amended plan,
+requires an immediate stop and new explicit approval.

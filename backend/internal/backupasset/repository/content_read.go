@@ -629,11 +629,11 @@ func (service *Service) resolveManagedRclonePortableContentBinding(
 	}
 	record.locator = provider.EntryLocator{Native: physicalPath}
 	return provider.ReadSnapshot{
-			RepositoryID: record.repository.ID, CapabilityRevision: record.point.CapabilityRevision,
-			SourceRevision: commit.DestinationObservationDigest, Access: access,
-		}, provider.PointLocator{
-			Native: "managed:" + record.point.ID + ":" + attempt.AttemptID + ":" + record.point.ManifestDigest,
-		}, record, capabilities.OpenRange, nil
+		RepositoryID: record.repository.ID, CapabilityRevision: record.point.CapabilityRevision,
+		SourceRevision: commit.DestinationObservationDigest, Access: access,
+	}, provider.PointLocator{
+		Native: "managed:" + record.point.ID + ":" + attempt.AttemptID + ":" + record.point.ManifestDigest,
+	}, record, capabilities.OpenRange, nil
 }
 
 func (service *Service) openManagedRsyncContentSource(
@@ -1009,10 +1009,24 @@ func (reader *onceReadCloser) Read(buffer []byte) (int, error) {
 }
 
 func (reader *onceReadCloser) Close() error {
+	return reader.finish(false)
+}
+
+func (reader *onceReadCloser) ClosePrefix() error {
+	return reader.finish(true)
+}
+
+func (reader *onceReadCloser) finish(prefix bool) error {
 	if reader == nil {
 		return nil
 	}
-	reader.once.Do(func() { reader.err = reader.inner.Close() })
+	reader.once.Do(func() {
+		if prefixCloser, ok := reader.inner.(interface{ ClosePrefix() error }); ok && prefix {
+			reader.err = prefixCloser.ClosePrefix()
+			return
+		}
+		reader.err = reader.inner.Close()
+	})
 	return reader.err
 }
 
@@ -1088,13 +1102,25 @@ func (session *sealedContentSourceSession) Revalidate(ctx context.Context) error
 }
 
 func (session *sealedContentSourceSession) Close() error {
+	return session.finish(false)
+}
+
+func (session *sealedContentSourceSession) ClosePrefix() error {
+	return session.finish(true)
+}
+
+func (session *sealedContentSourceSession) finish(prefix bool) error {
 	if session == nil {
 		return nil
 	}
 	session.closeOnce.Do(func() {
 		var readerErr error
 		if session.reader != nil {
-			readerErr = session.reader.Close()
+			if prefix {
+				readerErr = session.reader.ClosePrefix()
+			} else {
+				readerErr = session.reader.Close()
+			}
 		}
 		var revalidateErr error
 		if session.revalidate != nil {

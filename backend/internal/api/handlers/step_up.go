@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/credentialaudit"
@@ -65,7 +67,7 @@ func EnforceStepUp(c *gin.Context, db *gorm.DB, jwtManager *auth.JWTManager, exp
 func enforceStepUpForContext(c *gin.Context, db *gorm.DB, jwtManager *auth.JWTManager, op stepUpAuditOperation) bool {
 	if !auth.IsValidStepUpAction(op.ExpectedAction) {
 		writeStepUpCredentialAudit(c, db, nil, op, credentialaudit.OutcomeBlocked, "invalid_action")
-		respondStepUpRequired(c)
+		respondStepUpRequired(c, op.ExpectedAction)
 		return false
 	}
 	userID := middleware.CurrentUserID(c)
@@ -73,20 +75,38 @@ func enforceStepUpForContext(c *gin.Context, db *gorm.DB, jwtManager *auth.JWTMa
 	proof := strings.TrimSpace(c.GetHeader(StepUpHeaderName))
 	if proof == "" {
 		writeStepUpCredentialAudit(c, db, nil, op, credentialaudit.OutcomeBlocked, "required")
-		respondStepUpRequired(c)
+		respondStepUpRequired(c, op.ExpectedAction)
 		return false
 	}
-	claims, err := validateStepUpProof(db, jwtManager, proof, userID, role, op.ExpectedAction)
+	sessionID := ""
+	if op.ExpectedAction == auth.StepUpActionAssetSecretReveal {
+		session, ok := middleware.CurrentSessionBinding(c)
+		if !ok || session.UserID != userID || session.Role != role {
+			writeStepUpCredentialAudit(c, db, nil, op, credentialaudit.OutcomeBlocked, "failed")
+			respondStepUpRequired(c, op.ExpectedAction)
+			return false
+		}
+		sessionID = session.JTI
+	}
+	claims, err := validateStepUpProof(db, jwtManager, proof, userID, role, op.ExpectedAction, sessionID)
 	if err != nil {
 		writeStepUpCredentialAudit(c, db, nil, op, credentialaudit.OutcomeBlocked, "failed")
-		respondStepUpRequired(c)
+		respondStepUpRequired(c, op.ExpectedAction)
 		return false
 	}
 	writeStepUpCredentialAudit(c, db, claims, op, credentialaudit.OutcomeSuccess, "satisfied")
 	return true
 }
 
-func validateStepUpProof(db *gorm.DB, jwtManager *auth.JWTManager, proof string, userID uint, role string, expectedAction auth.StepUpAction) (*auth.Claims, error) {
+func validateStepUpProof(
+	db *gorm.DB,
+	jwtManager *auth.JWTManager,
+	proof string,
+	userID uint,
+	role string,
+	expectedAction auth.StepUpAction,
+	sessionIDs ...string,
+) (*auth.Claims, error) {
 	if db == nil || jwtManager == nil {
 		return nil, fmt.Errorf("%w: missing verifier dependency", ErrStepUpVerifierUnavailable)
 	}
@@ -110,8 +130,29 @@ func validateStepUpProof(db *gorm.DB, jwtManager *auth.JWTManager, proof string,
 	if claims.UserID == 0 || claims.UserID != userID {
 		return nil, fmt.Errorf("%w: proof user", ErrStepUpProofInvalid)
 	}
-	if strings.TrimSpace(role) != "" && claims.Role != role {
+	if !validStepUpProofID(claims.ID) {
+		return nil, fmt.Errorf("%w: proof jti", ErrStepUpProofInvalid)
+	}
+	if claims.Subject != strconv.FormatUint(uint64(userID), 10) {
+		return nil, fmt.Errorf("%w: proof subject", ErrStepUpProofInvalid)
+	}
+	if strings.TrimSpace(role) == "" || claims.Role != role {
 		return nil, fmt.Errorf("%w: proof role", ErrStepUpProofInvalid)
+	}
+	if claims.IssuedAt == nil || claims.ExpiresAt == nil || claims.ExpiresAt.Sub(claims.IssuedAt.Time) != auth.StepUpProofTTLForAction(expectedAction) || claims.IssuedAt.After(time.Now().UTC()) {
+		return nil, fmt.Errorf("%w: proof lifetime", ErrStepUpProofInvalid)
+	}
+	if expectedAction == auth.StepUpActionAssetSecretReveal {
+		if len(sessionIDs) != 1 || strings.TrimSpace(sessionIDs[0]) == "" || claims.SessionID != sessionIDs[0] {
+			return nil, fmt.Errorf("%w: proof session", ErrStepUpProofInvalid)
+		}
+		revoked, revokeErr := jwtManager.IsSessionRevoked(claims.SessionID)
+		if revokeErr != nil {
+			return nil, fmt.Errorf("%w: verify proof session", ErrStepUpVerifierUnavailable)
+		}
+		if revoked {
+			return nil, fmt.Errorf("%w: proof session revoked", ErrStepUpProofInvalid)
+		}
 	}
 	var user model.User
 	if err := db.Select("id", "role", "token_version", "totp_enabled").First(&user, claims.UserID).Error; errors.Is(err, gorm.ErrRecordNotFound) {
@@ -122,7 +163,7 @@ func validateStepUpProof(db *gorm.DB, jwtManager *auth.JWTManager, proof string,
 	if user.TokenVersion != claims.TokenVersion {
 		return nil, fmt.Errorf("%w: proof token version", ErrStepUpProofInvalid)
 	}
-	if strings.TrimSpace(user.Role) != "" && user.Role != claims.Role {
+	if strings.TrimSpace(user.Role) == "" || user.Role != claims.Role {
 		return nil, fmt.Errorf("%w: proof role changed", ErrStepUpProofInvalid)
 	}
 	if !user.TOTPEnabled {
@@ -138,6 +179,7 @@ func VerifyOptionalStepUpProof(
 	userID uint,
 	role string,
 	expectedAction auth.StepUpAction,
+	sessionIDs ...string,
 ) (*auth.Claims, error) {
 	if strings.TrimSpace(proof) == "" {
 		return nil, nil
@@ -145,25 +187,48 @@ func VerifyOptionalStepUpProof(
 	if !auth.IsValidStepUpAction(expectedAction) {
 		return nil, fmt.Errorf("%w: invalid expected action", ErrStepUpVerifierUnavailable)
 	}
-	claims, err := validateStepUpProof(db, jwtManager, proof, userID, role, expectedAction)
-	if errors.Is(err, ErrStepUpProofInvalid) {
-		return nil, nil
-	}
+	claims, err := validateStepUpProof(db, jwtManager, proof, userID, role, expectedAction, sessionIDs...)
 	if err != nil {
 		return nil, err
 	}
 	return claims, nil
 }
 
-func respondStepUpRequired(c *gin.Context) {
+func respondStepUpRequired(c *gin.Context, action auth.StepUpAction) {
 	c.JSON(http.StatusForbidden, Response{
 		Code:    http.StatusForbidden,
 		Message: "需要二次验证",
 		Data: stepUpRequiredData{
 			ErrorCode:       stepUpRequiredCode,
-			ProofTTLSeconds: stepUpProofTTLSeconds,
+			ProofTTLSeconds: stepUpProofTTLSecondsForAction(action),
 		},
 	})
+}
+
+func respondSecretRevealRequired(c *gin.Context) {
+	respondForbiddenData(c, "需要二次验证", map[string]any{
+		"reason": map[string]any{"code": "secret_reveal_required", "params": map[string]string{}},
+	})
+}
+
+func stepUpProofTTLSecondsForAction(action auth.StepUpAction) int {
+	ttl := auth.StepUpProofTTLForAction(action)
+	if ttl <= 0 {
+		return 0
+	}
+	return int(ttl.Seconds())
+}
+
+func validStepUpProofID(value string) bool {
+	if len(value) != 32 {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func writeStepUpCredentialAudit(c *gin.Context, db *gorm.DB, claims *auth.Claims, op stepUpAuditOperation, outcome, proofState string) {
@@ -186,7 +251,7 @@ func writeStepUpCredentialAudit(c *gin.Context, db *gorm.DB, claims *auth.Claims
 			"stage":       "step_up",
 			"proof":       proofState,
 			"operation":   op.Operation,
-			"ttl_seconds": stepUpProofTTLSeconds,
+			"ttl_seconds": stepUpProofTTLSecondsForAction(op.ExpectedAction),
 		},
 	}
 	if claims != nil {

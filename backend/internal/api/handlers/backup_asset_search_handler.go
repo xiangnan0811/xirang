@@ -92,7 +92,11 @@ func NewBackupAssetSecretProofVerifier(db *gorm.DB, jwtManager *auth.JWTManager)
 		if middleware.CurrentRole(c) != "admin" {
 			return nil, backupasset.ErrForbidden
 		}
-		claims, err := VerifyOptionalStepUpProof(db, jwtManager, proof, middleware.CurrentUserID(c), middleware.CurrentRole(c), auth.StepUpActionAssetSecretReveal)
+		session, ok := middleware.CurrentSessionBinding(c)
+		if !ok || session.UserID != middleware.CurrentUserID(c) || session.Role != middleware.CurrentRole(c) {
+			return nil, ErrStepUpVerifierUnavailable
+		}
+		claims, err := VerifyOptionalStepUpProof(db, jwtManager, proof, middleware.CurrentUserID(c), middleware.CurrentRole(c), auth.StepUpActionAssetSecretReveal, session.JTI)
 		if err != nil || claims == nil {
 			return nil, err
 		}
@@ -181,6 +185,10 @@ func (handler *BackupAssetSearchHandler) Search(c *gin.Context) {
 		}
 		proof, err = handler.verifyProof(c)
 		if err != nil {
+			if errors.Is(err, ErrStepUpProofInvalid) {
+				respondSecretRevealRequired(c)
+				return
+			}
 			respondBackupAssetSearchOverlayError(c, err)
 			return
 		}

@@ -15,7 +15,7 @@ describe("SnapshotSearch compatibility", () => {
     const onNavigateToFile = vi.fn();
     render(<SnapshotSearch taskId={73} token="auth-marker" onNavigateToFile={onNavigateToFile} />);
 
-    const link = screen.getByRole("link", { name: /asset workspace task context|资产工作区任务上下文/i });
+    const link = screen.getByRole("link", { name: /file workspace task context|文件工作区任务上下文/i });
     expect(link).toHaveAttribute("href", "/app/backups/data?taskId=73");
     expect(link.getAttribute("href")).not.toMatch(/snapshot|path|query|entryId|recoveryPointId/);
     expect(onNavigateToFile).not.toHaveBeenCalled();

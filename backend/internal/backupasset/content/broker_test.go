@@ -499,6 +499,81 @@ func TestBrokerSafePreviewCancellationStopsPrefixReadWithoutGrant(t *testing.T) 
 	}
 }
 
+func TestBrokerSafePreviewClassifiesClosedSourceFailureStages(t *testing.T) {
+	privateFailure := errors.New("FAKE_PRIVATE_PROVIDER_FAILURE_FOR_TEST_ONLY")
+	for _, testCase := range []struct {
+		name   string
+		stage  SourceFailureStage
+		mutate func(*brokerTestHarness)
+	}{
+		{name: "open", stage: SourceFailureOpen, mutate: func(harness *brokerTestHarness) {
+			harness.source.openErr = privateFailure
+		}},
+		{name: "read", stage: SourceFailureRead, mutate: func(harness *brokerTestHarness) {
+			harness.source.readErr = privateFailure
+		}},
+		{name: "changed", stage: SourceFailureChanged, mutate: func(harness *brokerTestHarness) {
+			harness.source.statSourceFingerprint = "changed-source"
+		}},
+		{name: "timeout", stage: SourceFailureTimeout, mutate: func(harness *brokerTestHarness) {
+			harness.source.openErr = context.DeadlineExceeded
+		}},
+		{name: "cancellation", stage: SourceFailureCancellation, mutate: func(harness *brokerTestHarness) {
+			harness.source.openErr = context.Canceled
+		}},
+		{name: "capability", stage: SourceFailureCapability, mutate: func(harness *brokerTestHarness) {
+			harness.source.sequentialUnavailable = true
+		}},
+		{name: "close is read lifecycle", stage: SourceFailureRead, mutate: func(harness *brokerTestHarness) {
+			harness.source.closeErr = privateFailure
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			harness := newBrokerTestHarness(t)
+			harness.source.payload = []byte("generic text fixture\r\n")
+			harness.asset.Size = int64(len(harness.source.payload))
+			harness.asset.MediaType = "application/octet-stream"
+			harness.asset.Path = "/synthetic/config"
+			harness.asset.Name = "config"
+			testCase.mutate(harness)
+
+			_, err := harness.broker.Issue(context.Background(), harness.safePreviewRequest())
+			if stage, ok := SourceFailureStageFromError(err); !ok || stage != testCase.stage {
+				t.Fatalf("Issue error=%v stage=%q ok=%t want=%q", err, stage, ok, testCase.stage)
+			}
+			if strings.Contains(fmt.Sprint(err), "FAKE_PRIVATE") {
+				t.Fatalf("source failure leaked private cause: %v", err)
+			}
+			assertBrokerGrantCount(t, harness.db, 0)
+		})
+	}
+}
+
+func TestBrokerSafePreviewPreservesReadAndOrdinaryCloseFailuresWithoutLeakingThem(t *testing.T) {
+	harness := newBrokerTestHarness(t)
+	harness.source.payload = []byte("generic text fixture\r\n")
+	harness.asset.Size = int64(len(harness.source.payload))
+	harness.asset.MediaType = "application/octet-stream"
+	harness.asset.Path = "/synthetic/config"
+	harness.asset.Name = "config"
+	readErr := errors.New("FAKE_PRIVATE_READ_FAILURE_FOR_TEST_ONLY")
+	closeErr := errors.New("FAKE_PRIVATE_ORDINARY_CLOSE_FAILURE_FOR_TEST_ONLY")
+	harness.source.readErr = readErr
+	harness.source.closeErr = closeErr
+
+	_, err := harness.broker.Issue(context.Background(), harness.safePreviewRequest())
+	if stage, ok := SourceFailureStageFromError(err); !ok || stage != SourceFailureRead {
+		t.Fatalf("Issue error=%v stage=%q ok=%t, want read", err, stage, ok)
+	}
+	if !errors.Is(err, readErr) || !errors.Is(err, closeErr) {
+		t.Fatalf("Issue error lost read or ordinary-close evidence: %v", err)
+	}
+	if strings.Contains(fmt.Sprint(err), "FAKE_PRIVATE") {
+		t.Fatalf("source failure leaked private cause: %v", err)
+	}
+	assertBrokerGrantCount(t, harness.db, 0)
+}
+
 func TestBrokerServeRejectsUnresolvedPreviewIntentAsGrantProduct(t *testing.T) {
 	harness := newBrokerTestHarness(t)
 	ticket, err := harness.broker.Issue(context.Background(), harness.safePreviewRequest())
@@ -2592,15 +2667,20 @@ func (*brokerLeaseControllerFake) Takeover(context.Context, backupasset.Takeover
 }
 
 type brokerSourceResolverFake struct {
-	payload      []byte
-	asset        *AuthorizedAsset
-	order        *[]string
-	openCalls    int
-	requests     []SourceRequest
-	onOpen       func(SourceRequest)
-	blockReads   bool
-	readStarted  chan struct{}
-	readCanceled chan struct{}
+	payload               []byte
+	asset                 *AuthorizedAsset
+	order                 *[]string
+	openCalls             int
+	requests              []SourceRequest
+	onOpen                func(SourceRequest)
+	blockReads            bool
+	readStarted           chan struct{}
+	readCanceled          chan struct{}
+	openErr               error
+	readErr               error
+	closeErr              error
+	statSourceFingerprint string
+	sequentialUnavailable bool
 }
 
 type brokerDerivedResolverFake struct {
@@ -2685,6 +2765,9 @@ func (fake *brokerSourceResolverFake) OpenContentSource(ctx context.Context, req
 	fake.openCalls++
 	fake.requests = append(fake.requests, request)
 	*fake.order = append(*fake.order, "source")
+	if fake.openErr != nil {
+		return nil, fake.openErr
+	}
 	if fake.asset == nil || request.Ref != fake.asset.Ref || request.CatalogGenerationID != fake.asset.CatalogGenerationID ||
 		request.ExpectedSource != fake.asset.SourceFingerprint || request.ExpectedEntry != fake.asset.EntryFingerprint {
 		return nil, ErrInvalidSourceRequest
@@ -2700,16 +2783,24 @@ func (fake *brokerSourceResolverFake) OpenContentSource(ctx context.Context, req
 		}
 		payload = payload[request.Range.Offset:end]
 	}
+	sourceFingerprint := fake.asset.SourceFingerprint
+	if fake.statSourceFingerprint != "" {
+		sourceFingerprint = fake.statSourceFingerprint
+	}
 	session := &brokerSourceSessionFake{
 		payload: append([]byte(nil), payload...),
 		stat: SourceStat{
 			Size: int64(len(fake.payload)), ModifiedAt: fake.asset.ModifiedAt, MediaType: fake.asset.MediaType,
-			SourceFingerprint: fake.asset.SourceFingerprint, EntryFingerprint: fake.asset.EntryFingerprint,
+			SourceFingerprint: sourceFingerprint, EntryFingerprint: fake.asset.EntryFingerprint,
 			FingerprintStrong: fake.asset.FingerprintStrength == "strong",
 		},
 		capabilities: SourceCapabilities{
-			Provider: fake.asset.Provider, Sequential: true, Range: fake.asset.RangeProven,
+			Provider: fake.asset.Provider, Sequential: !fake.sequentialUnavailable, Range: fake.asset.RangeProven,
 		},
+		closeErr: fake.closeErr,
+	}
+	if fake.readErr != nil && request.Mode != SourceModeStat {
+		session.reader = &failingBrokerSourceReader{err: fake.readErr}
 	}
 	if fake.blockReads && request.Mode != SourceModeStat {
 		session.reader = &blockingBrokerSourceReader{
@@ -2718,6 +2809,12 @@ func (fake *brokerSourceResolverFake) OpenContentSource(ctx context.Context, req
 	}
 	return session, nil
 }
+
+type failingBrokerSourceReader struct{ err error }
+
+func (reader *failingBrokerSourceReader) Read([]byte) (int, error) { return 0, reader.err }
+func (*failingBrokerSourceReader) Close() error                    { return nil }
+func (*failingBrokerSourceReader) ProviderBytes() int64            { return 0 }
 
 func (*brokerSourceResolverFake) ValidateContentCacheRoot(context.Context, string) error { return nil }
 

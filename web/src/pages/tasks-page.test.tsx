@@ -635,7 +635,7 @@ describe("TasksPage", () => {
 
     await user.click(screen.getByRole("button", { name: "查看任务 #401 执行历史" }));
 
-    expect(screen.getByRole("link", { name: /资产工作区任务上下文|asset workspace task context/i }))
+    expect(screen.getByRole("link", { name: /文件工作区任务上下文|file workspace task context/i }))
       .toHaveAttribute("href", "/app/backups/data?taskId=401");
     expect(screen.getByRole("link", { name: "搜索文件" }))
       .toHaveAttribute("href", "/app/backups/data?view=search&taskId=401");

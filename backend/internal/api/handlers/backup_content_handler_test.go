@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -282,6 +283,51 @@ func TestBackupContentIssueMapsTypedContentCapabilityWithoutPrivateEvidence(t *t
 	}
 }
 
+func TestBackupContentIssueMapsClosedSourceStagesWithoutPrivateEvidence(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, testCase := range []struct {
+		stage content.SourceFailureStage
+		code  string
+	}{
+		{stage: content.SourceFailureOpen, code: "preview_source_open_failed"},
+		{stage: content.SourceFailureRead, code: "preview_source_read_failed"},
+		{stage: content.SourceFailureChanged, code: "preview_source_changed"},
+		{stage: content.SourceFailureTimeout, code: "preview_source_timeout"},
+		{stage: content.SourceFailureCancellation, code: "preview_source_canceled"},
+		{stage: content.SourceFailureCapability, code: "preview_source_capability"},
+	} {
+		t.Run(string(testCase.stage), func(t *testing.T) {
+			response := httptest.NewRecorder()
+			requestContext, _ := gin.CreateTestContext(response)
+			requestContext.Set(middleware.RequestIDKey, "safe-correlation")
+			respondBackupContentIssueError(requestContext, content.NewSourceFailureError(
+				testCase.stage,
+				errors.New("FAKE_PRIVATE_PROVIDER_LOCATOR_AND_OUTPUT_FOR_TEST_ONLY"),
+			))
+
+			var envelope struct {
+				Code int `json:"code"`
+				Data struct {
+					Reason struct {
+						Code   string            `json:"code"`
+						Params map[string]string `json:"params"`
+					} `json:"reason"`
+					CorrelationID string `json:"correlation_id"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("decode source-stage error: %v body=%s", err, response.Body.String())
+			}
+			if response.Code != http.StatusServiceUnavailable || envelope.Code != http.StatusServiceUnavailable ||
+				envelope.Data.Reason.Code != testCase.code || envelope.Data.Reason.Params == nil ||
+				len(envelope.Data.Reason.Params) != 0 || envelope.Data.CorrelationID != "safe-correlation" ||
+				strings.Contains(response.Body.String(), "FAKE_PRIVATE") {
+				t.Fatalf("stage=%s status=%d envelope=%+v body=%s", testCase.stage, response.Code, envelope, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestBackupContentIssueCapabilityStatusAndCodeSetAreClosed(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, testCase := range []struct {
@@ -459,7 +505,7 @@ func TestBackupContentIssuePrivateNetworkHTTPEnforcesExactCrossPurposeStepUpMatr
 		t.Fatal(err)
 	}
 	jwt := auth.NewJWTManager("FAKE_CONTENT_PROOF_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
-	secretProof, _, err := jwt.GenerateStepUpToken(user, auth.StepUpActionAssetSecretReveal)
+	secretProof, _, err := jwt.GenerateStepUpToken(user, auth.StepUpActionAssetSecretReveal, strings.Repeat("f", 32))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -535,6 +581,45 @@ func TestBackupContentIssuePrivateNetworkHTTPEnforcesExactCrossPurposeStepUpMatr
 				t.Fatalf("status=%d calls=%d body=%s", response.Code, len(fake.issueRequests), response.Body.String())
 			}
 		})
+	}
+}
+
+func TestBackupContentRejectedAttachedSecretProofReturnsTypedFreshRetryReason(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	response := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(response)
+	c.Request = httptest.NewRequest(http.MethodPost, "/delivery-tickets", nil)
+	c.Request.Header.Set(StepUpHeaderName, "malformed-proof")
+	c.Set(middleware.CtxSessionBinding, middleware.SessionBinding{
+		JTI: stepUpTestSessionID, UserID: 42, Role: "admin", TokenVersion: 1,
+		ExpiresAt: time.Now().UTC().Add(time.Hour),
+	})
+	handler := NewBackupContentHandler(
+		&backupContentServiceFake{},
+		openStepUpHandlerTestDB(t),
+		auth.NewJWTManager(stepUpTestJWTSecret, time.Hour),
+		nil,
+	)
+	proof, ok := handler.deliveryProof(c, backupContentTicketPayload{Action: content.DeliveryPreview}, content.DeliveryActor{
+		UserID: 42, Role: "admin",
+	})
+	if ok || proof != nil || response.Code != http.StatusForbidden {
+		t.Fatalf("rejected proof ok=%v proof=%+v status=%d body=%s", ok, proof, response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Data struct {
+			Reason struct {
+				Code   string            `json:"code"`
+				Params map[string]string `json:"params"`
+			} `json:"reason"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode rejected proof response: %v body=%s", err, response.Body.String())
+	}
+	if envelope.Data.Reason.Code != "secret_reveal_required" || envelope.Data.Reason.Params == nil ||
+		len(envelope.Data.Reason.Params) != 0 || strings.Contains(response.Body.String(), "malformed-proof") {
+		t.Fatalf("typed fresh-retry response=%+v body=%s", envelope, response.Body.String())
 	}
 }
 

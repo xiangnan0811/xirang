@@ -65,7 +65,7 @@ describe("SnapshotBrowser", () => {
     const user = userEvent.setup();
     render(<SnapshotBrowser taskId={101} token="auth-marker" />);
 
-    expect(await screen.findByRole("link", { name: /asset workspace task context|资产工作区任务上下文/i })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: /file workspace task context|文件工作区任务上下文/i })).toHaveAttribute(
       "href",
       "/app/backups/data?taskId=101"
     );

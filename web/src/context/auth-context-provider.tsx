@@ -37,8 +37,10 @@ type StoredAuthState = {
 type PendingStepUpRequest = {
   resolve: (proof: string) => void;
   reject: (error: Error) => void;
+  promise: Promise<string>;
   persist: boolean;
   action: StepUpAction;
+  authGeneration: number;
 };
 
 function getSessionStorage() {
@@ -145,6 +147,7 @@ function readStoredAuthState(): StoredAuthState {
 export function AuthProvider({ children }: PropsWithChildren) {
   const [{ token, username, role, userId, totpEnabled }, setAuthState] = useState<StoredAuthState>(() => readStoredAuthState());
   const pendingStepUpRef = useRef<PendingStepUpRequest | null>(null);
+  const authGenerationRef = useRef(0);
   const [stepUpDialogOpen, setStepUpDialogOpen] = useState(false);
   const [stepUpCode, setStepUpCode] = useState("");
   const [stepUpError, setStepUpError] = useState<string | null>(null);
@@ -159,6 +162,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
   ) => {
     const sessionStorageRef = getSessionStorage();
     const localStorageRef = getLocalStorage();
+    authGenerationRef.current += 1;
+    pendingStepUpRef.current?.reject(new Error(i18n.t("stepUp.loginRequired")));
+    pendingStepUpRef.current = null;
+    setStepUpDialogOpen(false);
+    setStepUpCode("");
+    setStepUpError(null);
+    setStepUpSubmitting(false);
     clearStoredStepUpProof();
     const validUserId = typeof nextUserID === "number" && Number.isFinite(nextUserID) && nextUserID > 0
       ? nextUserID
@@ -196,6 +206,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
     const sessionStorageRef = getSessionStorage();
     const localStorageRef = getLocalStorage();
 
+    authGenerationRef.current += 1;
+    pendingStepUpRef.current?.reject(new Error(i18n.t("stepUp.loginRequired")));
+    pendingStepUpRef.current = null;
+    setStepUpDialogOpen(false);
+    setStepUpCode("");
+    setStepUpError(null);
+    setStepUpSubmitting(false);
     safeRemoveItem(sessionStorageRef, AUTH_TOKEN_KEY);
     safeRemoveItem(sessionStorageRef, AUTH_USERNAME_KEY);
     safeRemoveItem(sessionStorageRef, AUTH_ROLE_KEY);
@@ -214,6 +231,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
     const sessionStorageRef = getSessionStorage();
     safeSetItem(sessionStorageRef, AUTH_TOTP_ENABLED_KEY, String(enabled));
     if (!enabled) {
+      authGenerationRef.current += 1;
+      pendingStepUpRef.current?.reject(new Error(i18n.t("stepUp.totpRequired")));
+      pendingStepUpRef.current = null;
+      setStepUpDialogOpen(false);
+      setStepUpCode("");
+      setStepUpError(null);
+      setStepUpSubmitting(false);
       clearStoredStepUpProof();
     }
     setAuthState((prev) => ({ ...prev, totpEnabled: enabled }));
@@ -232,7 +256,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         return cached.proof;
       }
     }
-    if (!persist) {
+    if (!reuseCached) {
       clearStoredStepUpProof(action);
     }
     if (!token) {
@@ -242,15 +266,29 @@ export function AuthProvider({ children }: PropsWithChildren) {
       throw new Error(i18n.t("stepUp.totpRequired"));
     }
     if (pendingStepUpRef.current) {
-      pendingStepUpRef.current.reject(new Error(i18n.t("stepUp.alreadyOpen")));
-      pendingStepUpRef.current = null;
+      if (pendingStepUpRef.current.action === action && pendingStepUpRef.current.persist === persist) {
+        return pendingStepUpRef.current.promise;
+      }
+      throw new Error(i18n.t("stepUp.alreadyOpen"));
     }
     setStepUpCode("");
     setStepUpError(null);
     setStepUpDialogOpen(true);
-    return new Promise<string>((resolve, reject) => {
-      pendingStepUpRef.current = { resolve, reject, persist, action };
+    let resolveRequest!: (proof: string) => void;
+    let rejectRequest!: (error: Error) => void;
+    const promise = new Promise<string>((resolve, reject) => {
+      resolveRequest = resolve;
+      rejectRequest = reject;
     });
+    pendingStepUpRef.current = {
+      resolve: resolveRequest,
+      reject: rejectRequest,
+      promise,
+      persist,
+      action,
+      authGeneration: authGenerationRef.current,
+    };
+    return promise;
   }, [token, totpEnabled]);
 
   const closeStepUpDialog = useCallback(() => {
@@ -279,13 +317,26 @@ export function AuthProvider({ children }: PropsWithChildren) {
     try {
       const pendingRequest = pendingStepUpRef.current;
       const response = await apiClient.requestStepUpProof(token, code, pendingRequest.action);
+      if (
+        pendingStepUpRef.current !== pendingRequest ||
+        pendingRequest.authGeneration !== authGenerationRef.current ||
+        safeGetItem(getSessionStorage(), AUTH_TOKEN_KEY) !== token
+      ) {
+        pendingRequest.reject(new Error(i18n.t("stepUp.loginRequired")));
+        if (pendingStepUpRef.current === pendingRequest) {
+          pendingStepUpRef.current = null;
+          setStepUpDialogOpen(false);
+          setStepUpCode("");
+          setStepUpError(null);
+        }
+        return;
+      }
       const shouldPersistProof = pendingRequest.persist;
       if (shouldPersistProof) {
         const expiresAt = Date.parse(response.expires_at);
-        const ttlMillis = Number(response.proof_ttl_seconds || 0) * 1000;
-        const fallbackExpiresAt = ttlMillis > 0 ? Date.now() + ttlMillis : Date.now();
-        const proofExpiresAt = Number.isFinite(expiresAt) ? expiresAt : fallbackExpiresAt;
-        saveStepUpProof(pendingRequest.action, response.proof, proofExpiresAt);
+        if (Number.isFinite(expiresAt)) {
+          saveStepUpProof(pendingRequest.action, response.proof, expiresAt);
+        }
       }
       pendingRequest.resolve(response.proof);
       pendingStepUpRef.current = null;

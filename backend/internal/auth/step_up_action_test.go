@@ -50,7 +50,7 @@ func TestGenerateStepUpTokenRejectsUnknownAction(t *testing.T) {
 	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
 	user := model.User{ID: 9, Username: "alice", Role: "admin", TokenVersion: 3}
 	for _, action := range []StepUpAction{"", "future.action"} {
-		if _, _, err := manager.GenerateStepUpToken(user, action); err == nil {
+		if _, _, err := manager.GenerateStepUpToken(user, action, testStepUpSessionID); err == nil {
 			t.Fatalf("GenerateStepUpToken accepted action %q", action)
 		}
 	}
@@ -74,7 +74,7 @@ func TestStepUpActionRetentionHoldRelease(t *testing.T) {
 
 	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
 	user := model.User{ID: 9, Username: "alice", Role: "admin", TokenVersion: 3}
-	proof, _, err := manager.GenerateStepUpToken(user, StepUpActionRetentionHoldRelease)
+	proof, _, err := manager.GenerateStepUpToken(user, StepUpActionRetentionHoldRelease, testStepUpSessionID)
 	if err != nil {
 		t.Fatalf("generate retention hold-release proof: %v", err)
 	}

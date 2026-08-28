@@ -8,7 +8,7 @@ import {
   type BackupAssetResultRow,
 } from "./backup-assets-state";
 import { defaultBackupAssetsRouteState } from "./backup-assets-route-state";
-import type { AssetRef, BackupAsset } from "@/types/domain";
+import type { AssetRef, BackupAsset, BackupAssetDirectoryContext } from "@/types/domain";
 
 const repositoryId = "a".repeat(32);
 const nextRepositoryId = "b".repeat(32);
@@ -47,9 +47,22 @@ function route(overrides = {}) {
   };
 }
 
+function directory(currentCharacter = "e", parentCharacter?: string): BackupAssetDirectoryContext {
+  const current = { ref: ref(currentCharacter), name: `directory-${currentCharacter}` };
+  const parent = parentCharacter ? ref(parentCharacter) : null;
+  return {
+    current,
+    parent,
+    breadcrumb: parent
+      ? [{ ref: parent, name: `directory-${parentCharacter}` }, current]
+      : [current],
+  };
+}
+
 describe("backupAssetsReducer", () => {
   it("clears every dependent product when repository changes", () => {
     let state = createInitialBackupAssetsState(route());
+    state = backupAssetsReducer(state, { type: "results_loading", requestKey: "browse:one" });
     state = backupAssetsReducer(state, {
       type: "results_replaced",
       requestKey: "browse:one",
@@ -57,6 +70,7 @@ describe("backupAssetsReducer", () => {
       nextCursor: "f".repeat(32),
       coverage: "complete",
       authoritativeEmpty: false,
+      directory: null,
     });
     state = backupAssetsReducer(state, { type: "toggle_selection", ref: ref("1") });
     state = backupAssetsReducer(state, {
@@ -97,6 +111,7 @@ describe("backupAssetsReducer", () => {
 
   it("deduplicates cursor pages and keeps selection within one result generation", () => {
     let state = createInitialBackupAssetsState(route());
+    state = backupAssetsReducer(state, { type: "results_loading", requestKey: "browse:one" });
     state = backupAssetsReducer(state, {
       type: "results_replaced",
       requestKey: "browse:one",
@@ -104,6 +119,7 @@ describe("backupAssetsReducer", () => {
       nextCursor: "f".repeat(32),
       coverage: "complete",
       authoritativeEmpty: false,
+      directory: null,
     });
     state = backupAssetsReducer(state, { type: "toggle_selection", ref: ref("2") });
     state = backupAssetsReducer(state, {
@@ -111,6 +127,7 @@ describe("backupAssetsReducer", () => {
       requestKey: "browse:one",
       rows: [row("2"), row("3")],
       nextCursor: null,
+      directory: null,
     });
 
     expect(state.result.rows.map((item) => item.asset.name)).toEqual([
@@ -123,6 +140,7 @@ describe("backupAssetsReducer", () => {
 
   it("ignores an append for an obsolete result key", () => {
     let state = createInitialBackupAssetsState(route());
+    state = backupAssetsReducer(state, { type: "results_loading", requestKey: "browse:new" });
     state = backupAssetsReducer(state, {
       type: "results_replaced",
       requestKey: "browse:new",
@@ -130,6 +148,7 @@ describe("backupAssetsReducer", () => {
       nextCursor: null,
       coverage: "complete",
       authoritativeEmpty: false,
+      directory: null,
     });
 
     expect(
@@ -138,6 +157,24 @@ describe("backupAssetsReducer", () => {
         requestKey: "browse:old",
         rows: [row("2")],
         nextCursor: null,
+        directory: null,
+      })
+    ).toBe(state);
+  });
+
+  it("ignores a replacement for an obsolete result key", () => {
+    let state = createInitialBackupAssetsState(route());
+    state = backupAssetsReducer(state, { type: "results_loading", requestKey: "browse:new" });
+
+    expect(
+      backupAssetsReducer(state, {
+        type: "results_replaced",
+        requestKey: "browse:old",
+        rows: [row("2")],
+        nextCursor: null,
+        coverage: "complete",
+        authoritativeEmpty: false,
+        directory: null,
       })
     ).toBe(state);
   });
@@ -145,6 +182,7 @@ describe("backupAssetsReducer", () => {
   it("resets stale cursor pages while retaining the in-memory search draft", () => {
     let state = createInitialBackupAssetsState(route({ view: "search", sort: "relevance", direction: "desc" }));
     state = backupAssetsReducer(state, { type: "search_draft_changed", text: "synthetic query" });
+    state = backupAssetsReducer(state, { type: "results_loading", requestKey: "search:one" });
     state = backupAssetsReducer(state, {
       type: "results_replaced",
       requestKey: "search:one",
@@ -152,6 +190,7 @@ describe("backupAssetsReducer", () => {
       nextCursor: "f".repeat(32),
       coverage: "partial",
       authoritativeEmpty: false,
+      directory: null,
     });
 
     state = backupAssetsReducer(state, { type: "cursor_stale", requestKey: "search:one" });
@@ -160,6 +199,67 @@ describe("backupAssetsReducer", () => {
     expect(state.result.status).toBe("loading");
     expect(state.result.nextCursor).toBeNull();
     expect(state.searchDraft).toBe("synthetic query");
+  });
+
+  it("keeps one explicit directory context across cursor pages and fails closed on contradiction", () => {
+    let state = createInitialBackupAssetsState(route({ parentEntryId }));
+    const current = directory();
+    state = backupAssetsReducer(state, { type: "results_loading", requestKey: "browse:directory" });
+    state = backupAssetsReducer(state, {
+      type: "results_replaced",
+      requestKey: "browse:directory",
+      rows: [row("1")],
+      nextCursor: "next",
+      coverage: "complete",
+      authoritativeEmpty: false,
+      directory: current,
+    });
+    state = backupAssetsReducer(state, {
+      type: "results_appended",
+      requestKey: "browse:directory",
+      rows: [row("2")],
+      nextCursor: null,
+      directory: current,
+    });
+    expect(state.result.directory).toEqual(current);
+    expect(state.result.rows).toHaveLength(2);
+
+    state = backupAssetsReducer(state, {
+      type: "results_appended",
+      requestKey: "browse:directory",
+      rows: [row("3")],
+      nextCursor: null,
+      directory: directory("e", "d"),
+    });
+    expect(state.result.status).toBe("failed");
+    expect(state.result.rows).toEqual([]);
+    expect(state.result.directory).toBeNull();
+  });
+
+  it("fails closed when a root cursor page contradicts the canonical empty breadcrumb", () => {
+    const root: BackupAssetDirectoryContext = { current: null, parent: null, breadcrumb: [] };
+    let state = createInitialBackupAssetsState(route());
+    state = backupAssetsReducer(state, { type: "results_loading", requestKey: "browse:root" });
+    state = backupAssetsReducer(state, {
+      type: "results_replaced",
+      requestKey: "browse:root",
+      rows: [row("1")],
+      nextCursor: "next",
+      coverage: "complete",
+      authoritativeEmpty: false,
+      directory: root,
+    });
+    state = backupAssetsReducer(state, {
+      type: "results_appended",
+      requestKey: "browse:root",
+      rows: [row("2")],
+      nextCursor: null,
+      directory: { ...root, breadcrumb: [{ ref: ref("e"), name: "contradiction" }] },
+    });
+
+    expect(state.result.status).toBe("failed");
+    expect(state.result.rows).toEqual([]);
+    expect(state.result.directory).toBeNull();
   });
 
   it("turns an exact tombstone into a blocked state and drops sensitive transient state", () => {

@@ -252,6 +252,23 @@ export function BackupAssetsWorkspace({
     recordResultAnchor(row, { index, offset: previous?.offset ?? 0 }, contextKey);
   };
 
+  const navigateDirectory = (entryId?: string) => {
+    controller.actions.detachContent();
+    controller.actions.clearSelection();
+    const destinationRoute = {
+      ...controller.state.route,
+      parentEntryId: entryId,
+      entryId: undefined,
+    };
+    const destinationContextKey = restorationContextKey(destinationRoute);
+    const recorded = destinationContextKey === null
+      ? null
+      : restorationRegistryRef.current?.read(destinationContextKey) ?? null;
+    lastRestorationContextRef.current = destinationContextKey;
+    setRestorationAnchor(recorded);
+    onRoutePatch({ parentEntryId: entryId, entryId: undefined });
+  };
+
   const closeInspector = () => {
     const contextKey = lastRestorationContextRef.current;
     const recorded = contextKey === null ? null : restorationRegistryRef.current?.read(contextKey) ?? null;
@@ -442,6 +459,7 @@ export function BackupAssetsWorkspace({
         <AssetBrowser
           state={controller.state}
           onRoutePatch={onRoutePatch}
+          onNavigateDirectory={navigateDirectory}
           onSearch={(query, scope) => {
             controller.actions.setSearchDraft(query);
             if (controller.state.route.view === "search" && controller.state.route.scope === scope) {
@@ -466,7 +484,8 @@ export function BackupAssetsWorkspace({
           onRecover={() => openRecovery([...controller.state.selection.values()])}
           onOpen={(row, position) => {
             if (row.asset.entryType === "directory") {
-              onRoutePatch({ parentEntryId: row.ref.entryId, entryId: undefined });
+              recordResultAnchor(row, position);
+              navigateDirectory(row.ref.entryId);
               return;
             }
             recordResultAnchor(row, position);

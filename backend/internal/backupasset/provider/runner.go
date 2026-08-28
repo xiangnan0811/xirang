@@ -858,8 +858,21 @@ func (handle *transportReadHandle) Read(buffer []byte) (int, error) {
 }
 
 func (handle *transportReadHandle) Close() error {
+	return handle.finish(false)
+}
+
+func (handle *transportReadHandle) ClosePrefix() error {
+	return handle.finish(true)
+}
+
+func (handle *transportReadHandle) finish(prefix bool) error {
 	handle.once.Do(func() {
-		streamErr := handle.underlying.Close()
+		var streamErr error
+		if prefixCloser, ok := handle.underlying.(interface{ ClosePrefix() error }); ok && prefix {
+			streamErr = prefixCloser.ClosePrefix()
+		} else {
+			streamErr = handle.underlying.Close()
+		}
 		closeErr := handle.closer.Close()
 		if streamErr != nil {
 			handle.err = streamErr

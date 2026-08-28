@@ -47,7 +47,8 @@ func TestVisibilityFiltersSharedRepositoryByLiveCurrentTaskOwnership(t *testing.
 	shared := seedVisibilityRepository(t, db, strings.Repeat("1", 32), "shared", now)
 	unownedOnly := seedVisibilityRepository(t, db, strings.Repeat("2", 32), "unowned-only", now.Add(time.Second))
 	seedVisibilityLink(t, db, strings.Repeat("3", 32), shared.ID, &ownedTask.ID, "owned-link", unownedTask.NodeID, now)
-	// Snapshot ownership is deliberately misleading: authorization must use the live Task's current NodeID.
+	// Historical link/point snapshots remain immutable after a Task moves nodes;
+	// Operator authority follows the live Task's current NodeID.
 	seedVisibilityLink(t, db, strings.Repeat("4", 32), shared.ID, &unownedTask.ID, "unowned-link", ownedTask.NodeID, now)
 	seedVisibilityLink(t, db, strings.Repeat("5", 32), shared.ID, &archivedTask.ID, "archived-link", ownedTask.NodeID, now)
 	seedVisibilityLink(t, db, strings.Repeat("6", 32), shared.ID, nil, "deleted-link", ownedTask.NodeID, now)
@@ -99,6 +100,95 @@ func TestVisibilityFiltersSharedRepositoryByLiveCurrentTaskOwnership(t *testing.
 	}
 	if _, err := service.Detail(context.Background(), strings.Repeat("f", 32), operatorScope, RequestContext{}); !errors.Is(err, backupasset.ErrNotFound) {
 		t.Fatalf("missing detail error=%v", err)
+	}
+}
+
+func TestVisibilityRequiresLiveCurrentTaskNodeAcrossRepositoryAndLineages(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		missingNode bool
+	}{
+		{name: "archived"},
+		{name: "missing_with_stale_owner", missingNode: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := newRepositoryTestDB(t)
+			now := time.Date(2026, 8, 28, 19, 30, 0, 0, time.UTC)
+			task := seedTask(t, db, "restic", "sftp:user@example.invalid:/unavailable-node", `{"repository_password":"FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY"}`)
+			const operatorID uint = 703
+			if err := db.Create(&model.User{
+				ID: operatorID, Username: "node-liveness-operator", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY",
+				Role: "operator", CreatedAt: now, UpdatedAt: now,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Create(&model.NodeOwner{NodeID: task.NodeID, UserID: operatorID, CreatedAt: now}).Error; err != nil {
+				t.Fatal(err)
+			}
+			repository := seedVisibilityRepository(t, db, strings.Repeat("b", 32), "unavailable-current-node", now)
+			seedVisibilityLink(t, db, strings.Repeat("c", 32), repository.ID, &task.ID, "retained-link", task.NodeID, now)
+			point := seedVisibilityPoint(t, db, strings.Repeat("d", 32), repository.ID, &task.ID, "retained-point", task.NodeID, now)
+			if testCase.missingNode {
+				deleteVisibilityNodeRetainingOwner(t, db, task.NodeID)
+			} else if err := db.Model(&model.Node{}).Where("id = ?", task.NodeID).Update("archived", true).Error; err != nil {
+				t.Fatal(err)
+			}
+
+			service := newVisibilityServiceForTest(t, db, now)
+			operatorScope := VisibilityScope{Role: "operator", UserID: operatorID}
+			operatorPage, err := service.List(context.Background(), RepositoryListRequest{Limit: 20}, operatorScope, RequestContext{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(operatorPage.Items) != 0 {
+				t.Fatalf("operator repository visibility=%+v through unavailable current node", operatorPage.Items)
+			}
+			operatorLineages, err := service.loadLineages(context.Background(), repository.ID, operatorScope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(operatorLineages) != 0 {
+				t.Fatalf("operator lineages=%+v through unavailable current node", operatorLineages)
+			}
+
+			adminScope := VisibilityScope{Role: "admin", UserID: 1}
+			adminPage, err := service.List(context.Background(), RepositoryListRequest{Limit: 20}, adminScope, RequestContext{})
+			if err != nil || len(adminPage.Items) != 1 || adminPage.Items[0].ID != repository.ID {
+				t.Fatalf("admin repository visibility=%+v err=%v", adminPage, err)
+			}
+			adminLineages, err := service.loadLineages(context.Background(), repository.ID, adminScope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(adminLineages) != 2 || adminLineages[0].TaskRepositoryLinkID == "" || adminLineages[1].RecoveryPointID != point.ID {
+				t.Fatalf("admin provenance lineages=%+v", adminLineages)
+			}
+		})
+	}
+}
+
+func deleteVisibilityNodeRetainingOwner(t *testing.T, db *gorm.DB, nodeID uint) {
+	t.Helper()
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	if err := db.Exec("PRAGMA foreign_keys = OFF").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("DELETE FROM nodes WHERE id = ?", nodeID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
+		t.Fatal(err)
+	}
+	var owners int64
+	if err := db.Model(&model.NodeOwner{}).Where("node_id = ?", nodeID).Count(&owners).Error; err != nil {
+		t.Fatal(err)
+	}
+	if owners == 0 {
+		t.Fatal("missing-node fixture did not retain stale ownership evidence")
 	}
 }
 

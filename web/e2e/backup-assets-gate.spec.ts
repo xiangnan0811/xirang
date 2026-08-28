@@ -76,9 +76,10 @@ async function mockLiveFeature(page: Page) {
           node_id: fileSourceNodeId,
           display_label: "合成夜间备份 · Synthetic nightly archive",
           lineage_kind: "task",
-          version_count: 2,
+          version_count: 1,
           latest_retained_at: "2026-07-19T00:05:00Z",
           catalog_coverage: "complete",
+          browse_state: "browsable",
         }],
         next_cursor: null,
       }));
@@ -95,6 +96,7 @@ async function mockLiveFeature(page: Page) {
           created_at: "2026-07-19T00:00:00Z",
           lifecycle_state: "committed",
           catalog_coverage: "complete",
+          browse_state: "browsable",
           content_availability: { available: true, reason: null },
           entry_count: 240,
           logical_bytes: 8388608,
@@ -110,8 +112,10 @@ async function mockLiveFeature(page: Page) {
           node_id: fileSourceNodeId,
           display_name: "合成节点 · Synthetic node",
           backup_set_count: 1,
+          retained_version_count: 1,
           latest_retained_at: "2026-07-19T00:05:00Z",
           catalog_coverage: "complete",
+          browse_state: "browsable",
         }],
         next_cursor: null,
       }));
@@ -200,7 +204,30 @@ async function mockLiveFeature(page: Page) {
       return;
     }
     if (url.includes("/recovery-points/") && url.includes("/entries")) {
-      await route.fulfill(envelope({ items: fixture.entries, next_cursor: null }));
+      const parentEntryId = new URL(url).searchParams.get("parent");
+      await route.fulfill(envelope(parentEntryId === fixture.ids.directoryEntry
+        ? {
+            items: [],
+            next_cursor: null,
+            directory: {
+              current: {
+                recovery_point_id: fixture.ids.onlineRecoveryPoint,
+                entry_id: fixture.ids.directoryEntry,
+                name: "synthetic-directory",
+              },
+              parent: null,
+              breadcrumb: [{
+                recovery_point_id: fixture.ids.onlineRecoveryPoint,
+                entry_id: fixture.ids.directoryEntry,
+                name: "synthetic-directory",
+              }],
+            },
+          }
+        : {
+            items: fixture.entries,
+            next_cursor: null,
+            directory: { current: null, parent: null, breadcrumb: [] },
+          }));
       return;
     }
     if (url.includes("/recovery-points/") && url.includes("/evidence")) {
@@ -236,11 +263,11 @@ test("live FeatureLive can browse, search, and preview fixtures", async ({ page 
   await seedAdminSession(page);
   await mockLiveFeature(page);
   await page.goto(liveRoute);
-  await expect(page.getByText(/备份资产功能未启用|Backup assets are not enabled/)).toHaveCount(0);
-  await expect(page.getByRole("list", { name: /Backup asset list|备份资产列表/ })).toBeVisible();
+  await expect(page.getByText(/文件浏览功能未启用|File browsing is not enabled/)).toHaveCount(0);
+  await expect(page.getByRole("list", { name: /File list|文件列表/ })).toBeVisible();
   await expect(page.getByText("合成审计日志-synthetic-audit.log")).toBeVisible();
 
-  const search = page.getByRole("searchbox", { name: /Search backup assets|搜索备份资产/ });
+  const search = page.getByRole("searchbox", { name: /Search files|搜索文件/ });
   await expect(search).toBeVisible();
   const searchPosted = page.waitForRequest(
     (request) => request.method() === "POST" && request.url().includes("/asset-search")
@@ -253,7 +280,7 @@ test("live FeatureLive can browse, search, and preview fixtures", async ({ page 
   const previewPosted = page.waitForRequest(
     (request) => request.method() === "POST" && request.url().includes("/delivery-tickets")
   );
-  await page.getByRole("button", { name: /(?:Open asset|打开资产).*synthetic-audit/ }).click();
+  await page.getByRole("button", { name: /(?:Open file or directory|打开文件或目录).*synthetic-audit/ }).click();
   const previewRequest = await previewPosted;
   expect(previewRequest.postDataJSON()).toEqual({
     schema_version: 1,
@@ -267,4 +294,25 @@ test("live FeatureLive can browse, search, and preview fixtures", async ({ page 
   await expect(viewport.frameLocator("iframe").locator("body")).toContainText(
     "Synthetic escaped preview fixture"
   );
+});
+
+test("directory Up navigation restores origin focus on mobile at 200% text zoom", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await seedAdminSession(page);
+  await mockLiveFeature(page);
+  await page.goto(liveRoute);
+  await expect(page.getByRole("list", { name: /File list|文件列表/ })).toBeVisible();
+  await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
+
+  const directory = page.getByRole("button", { name: /(?:Open file or directory|打开文件或目录).*synthetic-directory/ });
+  await directory.focus();
+  await directory.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`parentEntryId=${fixture.ids.directoryEntry}`));
+  const up = page.getByRole("button", { name: /Up one directory|返回上级目录/ });
+  await expect(up).toBeEnabled();
+  await up.click();
+
+  await expect(page).not.toHaveURL(/parentEntryId=/);
+  await expect(directory).toBeFocused();
+  await expect(page.getByText("合成审计日志-synthetic-audit.log")).toBeVisible();
 });

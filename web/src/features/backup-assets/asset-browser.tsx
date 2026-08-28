@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
-import { ChevronRight, FolderSearch, LoaderCircle, RefreshCw } from "lucide-react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ArrowUp, ChevronRight, FolderSearch, LoaderCircle, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,7 @@ import type { BackupAssetsRouteState, BackupAssetsScope } from "./backup-assets-
 export interface AssetBrowserProps {
   state: BackupAssetsState;
   onRoutePatch: (patch: Partial<BackupAssetsRouteState>) => void;
+  onNavigateDirectory?: (entryId?: string) => void;
   onSearch: (query: string, scope: BackupAssetsScope) => void;
   onSearchDraftChange: (value: string) => void;
   onToggleSelection: (ref: BackupAssetResultRow["ref"]) => void;
@@ -39,6 +40,7 @@ export interface AssetBrowserProps {
 export function AssetBrowser({
   state,
   onRoutePatch,
+  onNavigateDirectory,
   onSearch,
   onSearchDraftChange,
   onToggleSelection,
@@ -54,6 +56,9 @@ export function AssetBrowser({
 }: AssetBrowserProps) {
   const { t } = useTranslation();
   const [activeKey, setActiveKey] = useState<string | null>(() => routeActiveKey(state));
+  const pendingNavigationFocusRef = useRef<"root" | "current" | null>(null);
+  const rootBreadcrumbRef = useRef<HTMLButtonElement>(null);
+  const currentBreadcrumbRef = useRef<HTMLButtonElement>(null);
   const currentKey = routeActiveKey(state);
   const resolvedActiveKey = currentKey ?? activeKey;
   const finishRestoration = useCallback(() => {
@@ -62,13 +67,32 @@ export function AssetBrowser({
   }, [onRestorationComplete, restorationAnchor]);
 
   const selectedKeys = useMemo(() => new Set(state.selection.keys()), [state.selection]);
-  const breadcrumb = state.result.rows.find((row) => row.asset.breadcrumb.length > 0)?.asset.breadcrumb ?? [];
+  const directory = state.route.view === "browse" ? state.result.directory : null;
+  const breadcrumb = directory?.breadcrumb ?? [];
+  const atRoot = state.route.parentEntryId === undefined;
   const selectedRow =
     state.selection.size === 1
       ? state.result.rows.find((row) => state.selection.has(assetRefKey(row.ref))) ?? null
       : null;
 
   const handleActiveChange = (row: BackupAssetResultRow) => setActiveKey(assetRefKey(row.ref));
+  const navigateDirectory = useCallback((entryId?: string) => {
+    if (entryId === state.route.parentEntryId) return;
+    pendingNavigationFocusRef.current = entryId === undefined ? "root" : "current";
+    if (onNavigateDirectory) onNavigateDirectory(entryId);
+    else onRoutePatch({ parentEntryId: entryId, entryId: undefined });
+  }, [onNavigateDirectory, onRoutePatch, state.route.parentEntryId]);
+
+  useLayoutEffect(() => {
+    const target = pendingNavigationFocusRef.current;
+    if (target === null || state.result.status !== "ready") return;
+    const contextReady = state.route.parentEntryId === undefined
+      ? directory?.current === null
+      : directory?.current?.ref.entryId === state.route.parentEntryId;
+    if (!contextReady) return;
+    (target === "root" ? rootBreadcrumbRef.current : currentBreadcrumbRef.current)?.focus({ preventScroll: true });
+    pendingNavigationFocusRef.current = null;
+  }, [directory, state.result.status, state.route.parentEntryId]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -76,17 +100,48 @@ export function AssetBrowser({
         aria-label={t("backupAssets.browser.breadcrumb")}
         className="flex h-11 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border bg-muted/15 px-2 lg:h-10"
       >
-        <Button type="button" variant="ghost" size="sm" className="touch-target min-h-11 shrink-0 px-2 text-xs lg:min-h-7" onClick={() => onRoutePatch({ parentEntryId: undefined, entryId: undefined })}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label={t("backupAssets.actions.upDirectory")}
+          title={t("backupAssets.actions.upDirectory")}
+          disabled={atRoot || directory?.current === undefined || directory?.current === null}
+          className="touch-target min-h-11 min-w-11 shrink-0 lg:min-h-11 lg:min-w-11"
+          onClick={() => navigateDirectory(directory?.parent?.entryId)}
+        >
+          <ArrowUp className="size-4" aria-hidden />
+        </Button>
+        <Button
+          ref={rootBreadcrumbRef}
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-current={atRoot ? "page" : undefined}
+          className="touch-target min-h-11 shrink-0 px-2 text-xs lg:min-h-11"
+          onClick={() => navigateDirectory()}
+        >
           {t("backupAssets.context.rootDirectory")}
         </Button>
-        {breadcrumb.map((item) => (
+        {breadcrumb.map((item, index) => {
+          const isCurrent = index === breadcrumb.length - 1;
+          return (
           <span key={item.ref.entryId} className="flex shrink-0 items-center gap-0.5">
             <ChevronRight className="size-3.5 text-muted-foreground" aria-hidden />
-            <Button type="button" variant="ghost" size="sm" className="touch-target min-h-11 max-w-48 px-2 text-xs lg:min-h-7" onClick={() => onRoutePatch({ parentEntryId: item.ref.entryId, entryId: undefined })}>
+            <Button
+              ref={isCurrent ? currentBreadcrumbRef : undefined}
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-current={isCurrent ? "page" : undefined}
+              className="touch-target min-h-11 max-w-48 px-2 text-xs lg:min-h-11"
+              onClick={() => navigateDirectory(item.ref.entryId)}
+            >
               <span className="truncate">{item.name}</span>
             </Button>
           </span>
-        ))}
+          );
+        })}
       </nav>
       <div className="grid h-28 shrink-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[44px_44px] items-center gap-2 border-b border-border px-2 py-2 lg:h-24 lg:grid-rows-[36px_36px]">
         <AssetSearch

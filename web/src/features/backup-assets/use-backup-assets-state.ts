@@ -11,6 +11,10 @@ import {
 import { apiClient } from "@/lib/api/client";
 import { mapBackupAssetsError, type BackupAssetsUIError } from "@/lib/api/backup-assets-error";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import {
+  clearStepUpProof as clearStoredStepUpProof,
+  readStepUpProof,
+} from "@/lib/step-up-storage";
 import type { AuthContextValue } from "@/context/auth-context.shared";
 import type {
   AssetRef,
@@ -244,6 +248,7 @@ export interface UseBackupAssetsStateOptions {
   role?: AuthContextValue["role"];
   route: BackupAssetsRouteState;
   ensureStepUpProof?: AuthContextValue["ensureStepUpProof"];
+  clearStepUpProof?: AuthContextValue["clearStepUpProof"];
   onRouteRepair?: (repair: BackupAssetsSemanticIssue) => void;
 }
 
@@ -315,6 +320,7 @@ export function useBackupAssetsState({
   role,
   route,
   ensureStepUpProof,
+  clearStepUpProof,
   onRouteRepair,
 }: UseBackupAssetsStateOptions): BackupAssetsController {
   const [state, dispatch] = useReducer(backupAssetsReducer, route, createInitialBackupAssetsState);
@@ -373,8 +379,6 @@ export function useBackupAssetsState({
   const contentSelectionKeyRef = useRef(contentSelectionKey);
   const previewAttemptRef = useRef(0);
   const startedPreviewKeyRef = useRef<string | null>(null);
-  const secretRevealProofRef = useRef<string | null>(null);
-  const secretRevealProofOwnerRef = useRef<string | null>(null);
   const selectionGenerationRef = useRef(state.selectionGeneration);
   const routeRepairRef = useRef(onRouteRepair);
   selectionGenerationRef.current = state.selectionGeneration;
@@ -388,8 +392,6 @@ export function useBackupAssetsState({
   }, [routeKey]);
 
   useEffect(() => {
-    secretRevealProofRef.current = null;
-    secretRevealProofOwnerRef.current = null;
     startedPreviewKeyRef.current = null;
   }, [token, role]);
 
@@ -596,6 +598,7 @@ export function useBackupAssetsState({
             nextCursor: page.nextCursor,
             coverage,
             authoritativeEmpty: coverage === "complete" && page.items.length === 0,
+            directory: page.directory,
           });
         },
         () => dispatch({ type: "results_failed", requestKey })
@@ -609,7 +612,7 @@ export function useBackupAssetsState({
         "search",
         requestKey,
         (signal) =>
-          apiClient.search(token, withSecretRevealProof({ savedSearchId: currentRoute.savedSearchId!, limit: 200, signal }, secretRevealProofRef.current)),
+          apiClient.search(token, withSecretRevealProof({ savedSearchId: currentRoute.savedSearchId!, limit: 200, signal })),
         (projection) => {
           if (projection.status !== "available") {
             dispatch({ type: "results_failed", requestKey });
@@ -623,12 +626,16 @@ export function useBackupAssetsState({
             nextCursor: response.nextCursor,
             coverage: response.coverage.status,
             authoritativeEmpty: response.authoritativeEmpty,
+            directory: null,
           });
         },
-        () => dispatch({ type: "results_failed", requestKey })
+        (error) => {
+          clearRejectedSecretRevealProof(error, clearStepUpProof);
+          dispatch({ type: "results_failed", requestKey });
+        }
       );
     }
-  }, [abort, recoveryPointContext.status, resultRouteKey, runLatest, selectedRecoveryPoint, semanticIssue, token]);
+  }, [abort, clearStepUpProof, recoveryPointContext.status, resultRouteKey, runLatest, selectedRecoveryPoint, semanticIssue, token]);
 
   useEffect(() => {
     refreshResults();
@@ -651,12 +658,15 @@ export function useBackupAssetsState({
         "search",
         requestKey,
         (signal) =>
-          apiClient.search(token, withSecretRevealProof({ query: request, signal }, secretRevealProofRef.current)),
+          apiClient.search(token, withSecretRevealProof({ query: request, signal })),
         (projection) => commitSearchProjection(projection, requestKey, false, dispatch),
-        () => dispatch({ type: "results_failed", requestKey })
+        (error) => {
+          clearRejectedSecretRevealProof(error, clearStepUpProof);
+          dispatch({ type: "results_failed", requestKey });
+        }
       );
     },
-    [runLatest, state.searchDraft, token]
+    [clearStepUpProof, runLatest, state.searchDraft, token]
   );
 
   useEffect(() => {
@@ -708,6 +718,7 @@ export function useBackupAssetsState({
             requestKey,
             rows: availableAssets(page.items),
             nextCursor: page.nextCursor,
+            directory: page.directory,
           }),
         (error) => {
           const mapped = mapBackupAssetsError(error, "cursor");
@@ -734,11 +745,12 @@ export function useBackupAssetsState({
         (signal) =>
           apiClient.search(
             token,
-            withSecretRevealProof(input ? { ...input, signal } : { query: query!, signal }, secretRevealProofRef.current)
+            withSecretRevealProof(input ? { ...input, signal } : { query: query!, signal })
           ),
         (projection) => commitSearchProjection(projection, requestKey, true, dispatch),
         (error) => {
           const mapped = mapBackupAssetsError(error, "cursor");
+          clearRejectedSecretRevealProof(error, clearStepUpProof);
           if (mapped.code === "stale_cursor") {
             dispatch({ type: "cursor_stale", requestKey });
             refreshResults();
@@ -748,7 +760,7 @@ export function useBackupAssetsState({
         }
       );
     }
-  }, [refreshResults, runLatest, state.result.nextCursor, state.result.requestKey, state.searchDraft, token]);
+  }, [clearStepUpProof, refreshResults, runLatest, state.result.nextCursor, state.result.requestKey, state.searchDraft, token]);
 
   const loadSavedSearches = useCallback(() => {
     if (!token) {
@@ -1232,7 +1244,11 @@ export function useBackupAssetsState({
     (
       selectedAsset: BackupAsset,
       input: BackupContentTicketInput,
-      options: { revealOnce: boolean; attempt: number },
+      options: {
+        revealOnce: boolean;
+        attempt: number;
+        proofAttempt?: "none" | "cached" | "fresh";
+      },
     ) => {
       if (!token) return;
       const bindingKey = contentTicketBindingKey(selectedAsset, input, options.attempt);
@@ -1263,13 +1279,11 @@ export function useBackupAssetsState({
         },
         (error) => {
           const mapped = mapBackupAssetsError(error, "content_ticket");
-          if (
-            mapped.code === "secret_reveal_required" &&
-            input.stepUpProof !== undefined &&
-            secretRevealProofRef.current === input.stepUpProof
-          ) {
-            secretRevealProofRef.current = null;
-            secretRevealProofOwnerRef.current = null;
+          const proofAttempt = options.proofAttempt ?? "none";
+          const secretProofRejected = mapped.code === "secret_reveal_required" && input.stepUpProof !== undefined;
+          if (secretProofRejected) {
+            if (clearStepUpProof) clearStepUpProof(STEP_UP_ACTIONS.assetSecretReveal);
+            else clearStoredStepUpProof(STEP_UP_ACTIONS.assetSecretReveal);
           }
           if (
             options.revealOnce &&
@@ -1277,30 +1291,27 @@ export function useBackupAssetsState({
             mapped.code === "secret_reveal_required" &&
             role === "admin" &&
             ensureStepUpProof &&
-            (input.stepUpProof === undefined || secretRevealProofRef.current === null)
+            proofAttempt !== "fresh"
           ) {
             const capturedGeneration = selectionGenerationRef.current;
             const capturedOwnerKey = contentSelectionKeyRef.current;
+            const reuseCached = proofAttempt === "none";
+            const hadCachedProof = reuseCached && readStepUpProof(STEP_UP_ACTIONS.assetSecretReveal) !== null;
             void ensureStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, {
-              persist: false,
-              reuseCached: false,
+              persist: true,
+              reuseCached,
             })
               .then((proof) => {
                 if (selectionGenerationRef.current !== capturedGeneration ||
                     contentSelectionKeyRef.current !== capturedOwnerKey) return;
                 const active = activePreviewRef.current;
                 if (!active || contentTicketBindingKey(active.asset, active.input, active.attempt) !== bindingKey) return;
-                secretRevealProofRef.current = proof;
-                secretRevealProofOwnerRef.current = [
-                  selectedAsset.ref.recoveryPointId,
-                  selectedAsset.ref.entryId,
-                  input.action,
-                ].join(":");
                 const revealedInput = withContentStepUpProof(input, proof);
                 activePreviewRef.current = { asset: selectedAsset, input: revealedInput, attempt: options.attempt };
                 issueContentTicket(selectedAsset, revealedInput, {
-                  revealOnce: false,
+                  revealOnce: true,
                   attempt: options.attempt,
+                  proofAttempt: hadCachedProof ? "cached" : "fresh",
                 });
               })
               .catch(() => {
@@ -1328,31 +1339,20 @@ export function useBackupAssetsState({
         }
       );
     },
-    [contentSelectionKey, ensureStepUpProof, role, runLatest, token]
+    [clearStepUpProof, contentSelectionKey, ensureStepUpProof, role, runLatest, token]
   );
 
   const exactPreviewTicketInput = useCallback((selectedAsset: BackupAsset): BackupContentExactPreviewTicketInput => {
     const product = selectBackupAssetExactPreviewProduct(selectedAsset);
-    const ownerKey = [selectedAsset.ref.recoveryPointId, selectedAsset.ref.entryId, "preview"].join(":");
-    const cachedProof =
-      secretRevealProofRef.current !== null && secretRevealProofOwnerRef.current === ownerKey
-        ? secretRevealProofRef.current
-        : undefined;
     return {
       schemaVersion: 1,
       action: "preview",
       ...product,
-      ...(cachedProof === undefined ? {} : { stepUpProof: cachedProof }),
     };
   }, []);
 
   const loadExactPreview = useCallback(
     (selectedAsset: BackupAsset) => {
-      const ownerKey = [selectedAsset.ref.recoveryPointId, selectedAsset.ref.entryId, "preview"].join(":");
-      if (secretRevealProofOwnerRef.current !== null && secretRevealProofOwnerRef.current !== ownerKey) {
-        secretRevealProofRef.current = null;
-        secretRevealProofOwnerRef.current = null;
-      }
       const input = exactPreviewTicketInput(selectedAsset);
       const attempt = ++previewAttemptRef.current;
       activePreviewRef.current = { asset: selectedAsset, input, attempt };
@@ -1375,22 +1375,20 @@ export function useBackupAssetsState({
       activePreviewRef.current = null;
       return;
     }
-    const ownerKey = [selectedAsset.ref.recoveryPointId, selectedAsset.ref.entryId, "preview"].join(":");
-    const cachedProof =
-      secretRevealProofRef.current !== null && secretRevealProofOwnerRef.current === ownerKey
-        ? secretRevealProofRef.current
-        : undefined;
     const resolvedProduct = exactPreviewProduct(currentTicket);
     if (resolvedProduct === null) return;
-    const input: BackupContentExactPreviewTicketInput = {
+    let input: BackupContentExactPreviewTicketInput = {
       schemaVersion: 1,
       action: "preview",
       ...resolvedProduct,
-      ...(cachedProof === undefined ? {} : { stepUpProof: cachedProof }),
     };
+    const cachedProof = currentTicket.classification === "non_secret"
+      ? null
+      : readStepUpProof(STEP_UP_ACTIONS.assetSecretReveal);
+    if (cachedProof !== null) input = withContentStepUpProof(input, cachedProof.proof);
     const attempt = ++previewAttemptRef.current;
     activePreviewRef.current = { asset: selectedAsset, input, attempt };
-    issueContentTicket(selectedAsset, input, { revealOnce: false, attempt });
+    issueContentTicket(selectedAsset, input, { revealOnce: true, attempt });
   }, [issueContentTicket]);
 
   const retryPreview = useCallback(() => {
@@ -1409,7 +1407,7 @@ export function useBackupAssetsState({
     const attempt = ++previewAttemptRef.current;
     activePreviewRef.current = { ...active, attempt };
     issueContentTicket(active.asset, active.input, {
-      revealOnce: false,
+      revealOnce: true,
       attempt,
     });
   }, [issueContentTicket]);
@@ -1466,8 +1464,6 @@ export function useBackupAssetsState({
     activePreviewRef.current = null;
     startedPreviewKeyRef.current = null;
     previewAttemptRef.current = 0;
-    secretRevealProofRef.current = null;
-    secretRevealProofOwnerRef.current = null;
     contentOwnerKeyRef.current = null;
     setContent(emptyValueResource());
     dispatch({ type: "ticket_detached" });
@@ -1596,13 +1592,12 @@ function selectedEntryOwnerKeyFor(
   ]);
 }
 
-function withContentStepUpProof(
-  input: BackupContentSafePreviewTicketInput | BackupContentExactPreviewTicketInput,
+function withContentStepUpProof<
+  T extends BackupContentSafePreviewTicketInput | BackupContentExactPreviewTicketInput,
+>(
+  input: T,
   stepUpProof: string,
-): BackupContentSafePreviewTicketInput | BackupContentExactPreviewTicketInput {
-  if (input.action === "preview" && input.previewIntent === "safePreviewV1") {
-    return { ...input, stepUpProof };
-  }
+): T & { stepUpProof: string } {
   return { ...input, stepUpProof };
 }
 
@@ -1728,9 +1723,18 @@ function availableAssets(items: Array<CatalogProjection<BackupAsset>>) {
 
 function withSecretRevealProof<T extends object>(
   input: T,
-  proof: string | null
 ): T & { secretRevealProof?: string } {
-  return proof === null ? input : { ...input, secretRevealProof: proof };
+  const cached = readStepUpProof(STEP_UP_ACTIONS.assetSecretReveal);
+  return cached === null ? input : { ...input, secretRevealProof: cached.proof };
+}
+
+function clearRejectedSecretRevealProof(
+  error: unknown,
+  clearProof: AuthContextValue["clearStepUpProof"] | undefined,
+): void {
+  if (mapBackupAssetsError(error, "search").code !== "secret_reveal_required") return;
+  if (clearProof) clearProof(STEP_UP_ACTIONS.assetSecretReveal);
+  else clearStoredStepUpProof(STEP_UP_ACTIONS.assetSecretReveal);
 }
 
 function searchHitToResultRow(hit: AssetSearchHit): BackupAssetResultRow {
@@ -1758,7 +1762,7 @@ function commitSearchProjection(
   const rows = response.items.map(searchHitToResultRow);
   dispatch(
     append
-      ? { type: "results_appended", requestKey, rows, nextCursor: response.nextCursor }
+      ? { type: "results_appended", requestKey, rows, nextCursor: response.nextCursor, directory: null }
       : {
           type: "results_replaced",
           requestKey,
@@ -1766,6 +1770,7 @@ function commitSearchProjection(
           nextCursor: response.nextCursor,
           coverage: response.coverage.status,
           authoritativeEmpty: response.authoritativeEmpty,
+          directory: null,
         }
   );
 }

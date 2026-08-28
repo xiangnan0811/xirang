@@ -38,6 +38,14 @@ export type BackupAssetsUIErrorAction =
   | "return_context"
   | "return_overview";
 
+export type BackupContentSourceFailureStage =
+  | "open"
+  | "read"
+  | "changed"
+  | "timeout"
+  | "cancellation"
+  | "capability";
+
 export interface BackupAssetsUIError {
   code: BackupAssetsUIErrorCode;
   translationKey:
@@ -58,6 +66,8 @@ export interface BackupAssetsUIError {
   action: BackupAssetsUIErrorAction;
   retryAfter?: number;
   capabilityCode?: CatalogCapabilityCode;
+  sourceStage?: BackupContentSourceFailureStage;
+  correlationId?: string;
 }
 
 const MAX_DETAIL_LENGTH = 4096;
@@ -83,6 +93,14 @@ const capabilityCodes = new Set<CatalogCapabilityCode>([
   "diff_unavailable",
   "unknown_internal_state",
 ]);
+const sourceFailureStages: Readonly<Record<string, BackupContentSourceFailureStage>> = {
+  preview_source_open_failed: "open",
+  preview_source_read_failed: "read",
+  preview_source_changed: "changed",
+  preview_source_timeout: "timeout",
+  preview_source_canceled: "cancellation",
+  preview_source_capability: "capability",
+};
 
 export function mapBackupAssetsError(
   error: unknown,
@@ -100,6 +118,17 @@ export function mapBackupAssetsError(
   }
   if (error.status === 503 && context === "content_ticket" && isSecureTransportRequired(error.detail)) {
     return uiError("secure_transport_required", false, "none");
+  }
+  if (error.status === 503 && context === "content_ticket") {
+    const sourceFailure = parseSourceFailure(error.detail);
+    if (sourceFailure !== null) {
+      const retryable = sourceFailure.stage !== "cancellation" && sourceFailure.stage !== "capability";
+      return {
+        ...uiError("temporarily_unavailable", retryable, retryable ? "retry" : "none"),
+        sourceStage: sourceFailure.stage,
+        correlationId: sourceFailure.correlationId,
+      };
+    }
   }
   if (error.status === 422 && context === "content_ticket" && isPreviewRendererUnsupported(error.detail)) {
     return uiError("preview_renderer_unsupported", false, "none");
@@ -200,6 +229,21 @@ function isPreviewRendererUnsupported(detail: unknown): boolean {
     isPlainRecord(reason.params) &&
     Object.keys(reason.params).length === 0
   );
+}
+
+function parseSourceFailure(detail: unknown): { stage: BackupContentSourceFailureStage; correlationId: string } | null {
+  if (!boundedSerializableObject(detail)) return null;
+  const data = detail.data;
+  if (!isPlainRecord(data) || Object.keys(data).length !== 2) return null;
+  const reason = data.reason;
+  const correlationId = data.correlation_id;
+  if (!isPlainRecord(reason) || Object.keys(reason).length !== 2 ||
+    typeof reason.code !== "string" || !Object.prototype.hasOwnProperty.call(sourceFailureStages, reason.code) ||
+    !isPlainRecord(reason.params) || Object.keys(reason.params).length !== 0 ||
+    typeof correlationId !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(correlationId)) {
+    return null;
+  }
+  return { stage: sourceFailureStages[reason.code], correlationId };
 }
 
 function parseCapabilityCode(detail: unknown): CatalogCapabilityCode | undefined {

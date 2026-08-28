@@ -237,7 +237,7 @@ func (handler *BackupAssetHandler) GetEvidence(c *gin.Context) {
 
 // ListEntries godoc
 // @Summary      列出恢复点 Catalog 目录项
-// @Description  只接受 opaque parent entry ID，不接受 Provider 路径
+// @Description  只接受 opaque parent entry ID，不接受 Provider 路径；每页（含空目录与游标页）都返回显式 current、parent、breadcrumb 目录上下文
 // @Tags         backup-assets
 // @Security     Bearer
 // @Produce      json
@@ -252,6 +252,7 @@ func (handler *BackupAssetHandler) GetEvidence(c *gin.Context) {
 // @Failure      403     {object}  handlers.Response
 // @Failure      404     {object}  handlers.Response
 // @Failure      409     {object}  handlers.Response
+// @Failure      500     {object}  handlers.Response
 // @Failure      503     {object}  handlers.Response
 // @Router       /recovery-points/{id}/entries [get]
 func (handler *BackupAssetHandler) ListEntries(c *gin.Context) {
@@ -621,7 +622,7 @@ func validBackupAssetDiffRequest(request backupAssetDiffRequest) bool {
 
 func backupAssetErrorStatus(err error) (int, string) {
 	switch {
-	case errors.Is(err, catalog.ErrInvalidCursor), errors.Is(err, catalog.ErrInvalidCatalogContract),
+	case errors.Is(err, catalog.ErrInvalidCursor),
 		errors.Is(err, catalog.ErrInvalidAssetReference), errors.Is(err, backupasset.ErrInvalidAssetRef),
 		errors.Is(err, backupasset.ErrInvalidState):
 		return http.StatusBadRequest, "invalid_request"

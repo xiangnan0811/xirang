@@ -62,6 +62,12 @@ export function BackupFileSplitPane({ browser, preview, previewActive, onBack, o
   }, [measured, onSequentialChange, sequential]);
 
   useLayoutEffect(() => {
+    if (!focused || (previewActive && !sequential)) return;
+    setBrowserRatio(priorRatioRef.current);
+    setFocused(false);
+  }, [focused, previewActive, sequential]);
+
+  useLayoutEffect(() => {
     if (focused) exitFocusRef.current?.focus();
   }, [focused]);
 
@@ -108,24 +114,26 @@ export function BackupFileSplitPane({ browser, preview, previewActive, onBack, o
   return (
     <div ref={rootRef} className="flex min-h-0 flex-1 flex-col overflow-hidden" data-layout={!measured ? "pending" : sequential ? "sequential" : "split"}>
       <div className="flex min-h-11 shrink-0 items-center justify-end gap-1 border-b border-border bg-muted/20 px-2 lg:min-h-10">
-        <Button
-          ref={focusTriggerRef}
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={!previewActive}
-          hidden={focused}
-          tabIndex={focused ? -1 : 0}
-          className="touch-target min-h-11 gap-2 lg:min-h-8"
-          onClick={() => {
-            priorRatioRef.current = browserRatio;
-            setFocused(true);
-          }}
-        >
-          <Maximize2 className="size-4" aria-hidden />
-          {t("backupAssets.splitPane.focus")}
-        </Button>
-        {focused ? (
+        {!sequential ? (
+          <Button
+            ref={focusTriggerRef}
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={!previewActive}
+            hidden={focused}
+            tabIndex={focused ? -1 : 0}
+            className="touch-target min-h-11 gap-2 lg:min-h-8"
+            onClick={() => {
+              priorRatioRef.current = browserRatio;
+              setFocused(true);
+            }}
+          >
+            <Maximize2 className="size-4" aria-hidden />
+            {t("backupAssets.splitPane.focus")}
+          </Button>
+        ) : null}
+        {focused && !sequential ? (
           <Button ref={exitFocusRef} type="button" variant="ghost" size="sm" className="touch-target min-h-11 gap-2 lg:min-h-8" onClick={exitFocused}>
             <Minimize2 className="size-4" aria-hidden />
             {t("backupAssets.splitPane.exitFocus")}
