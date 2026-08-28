@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,6 +54,7 @@ const (
 	backupAssetLifecycleVersion        = 70
 	backupAssetGAVersion               = 71
 	backupAssetTaskRunCompatVersion    = 72
+	backupAssetPlainTextContentVersion = 73
 	recoveryEmptyDeleteSetDigest       = "3f5a5d5213612b170da6ce2f2f90775a31d4e40269bb785042589af64011b7cf"
 	recoveryClaimSchedulerRowID        = "0000000000000000000000000000006a"
 	recoveryTakeoverSchedulerRowID     = "0000000000000000000000000000006b"
@@ -540,26 +542,26 @@ func TestRunMigrationsPostgresSchemaDriftCheckUsesSearchPath(t *testing.T) {
 	}
 }
 
-func TestRunMigrationsClean071Applies072SQLite(t *testing.T) {
+func TestRunMigrationsClean072Applies073SQLite(t *testing.T) {
 	fixture := newSQLiteMigrationFixture(t)
-	_, sqlDB := fixture.openAt(t, backupAssetGAVersion)
+	_, sqlDB := fixture.openAt(t, backupAssetTaskRunCompatVersion)
 	gdb, err := gorm.Open(sqlitegorm.New(sqlitegorm.Config{Conn: sqlDB}), &gorm.Config{})
 	if err != nil {
-		t.Fatalf("wrap clean 071 SQLite fixture: %v", err)
+		t.Fatalf("wrap clean 072 SQLite fixture: %v", err)
 	}
 
 	if err := RunMigrations(gdb, "sqlite"); err != nil {
-		t.Fatalf("run migration 072 from clean complete 071: %v", err)
+		t.Fatalf("run migration 073 from clean complete 072: %v", err)
 	}
 	dirty, version, err := checkMigrationDirty(sqlDB, "sqlite")
 	if err != nil {
-		t.Fatalf("check migration 072 metadata: %v", err)
+		t.Fatalf("check migration 073 metadata: %v", err)
 	}
-	if dirty || version != backupAssetTaskRunCompatVersion {
-		t.Fatalf("migration 072 metadata mismatch: version=%d dirty=%v", version, dirty)
+	if dirty || version != backupAssetPlainTextContentVersion {
+		t.Fatalf("migration 073 metadata mismatch: version=%d dirty=%v", version, dirty)
 	}
 	if err := validateMinimumRecoverySchema(sqlDB, "sqlite", version); err != nil {
-		t.Fatalf("validate migration 072 minimum recovery schema: %v", err)
+		t.Fatalf("validate migration 073 minimum recovery schema: %v", err)
 	}
 }
 
@@ -3420,6 +3422,390 @@ func TestBackupAssetMigration072SQLite(t *testing.T) {
 
 func TestBackupAssetMigration072Postgres(t *testing.T) {
 	runBackupAssetMigration072Contract(t, newRequiredPostgresMigrationFixture(t))
+}
+
+func TestBackupAssetMigration073SQLite(t *testing.T) {
+	runBackupAssetMigration073Contract(t, newSQLiteMigrationFixture(t))
+}
+
+func TestBackupAssetMigration073Postgres(t *testing.T) {
+	runBackupAssetMigration073Contract(t, newRequiredPostgresMigrationFixture(t))
+}
+
+func TestBackupAssetMigration073PairedFiles(t *testing.T) {
+	testCases := []struct {
+		name string
+		fs   interface {
+			ReadFile(string) ([]byte, error)
+		}
+		path string
+	}{
+		{name: "SQLiteUp", fs: sqliteMigrationsFS, path: "migrations/sqlite/000073_backup_asset_plain_text_content.up.sql"},
+		{name: "SQLiteDown", fs: sqliteMigrationsFS, path: "migrations/sqlite/000073_backup_asset_plain_text_content.down.sql"},
+		{name: "PostgresUp", fs: postgresMigrationsFS, path: "migrations/postgres/000073_backup_asset_plain_text_content.up.sql"},
+		{name: "PostgresDown", fs: postgresMigrationsFS, path: "migrations/postgres/000073_backup_asset_plain_text_content.down.sql"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			script, err := testCase.fs.ReadFile(testCase.path)
+			if err != nil {
+				t.Fatalf("read paired 000073 migration: %v", err)
+			}
+			text := strings.ToLower(string(script))
+			for _, fragment := range []string{
+				"backup_asset_delivery_grants", "plain_text", "text_v2",
+				"trg_backup_asset_plain_text_content_downgrade_admission",
+			} {
+				if !strings.Contains(text, fragment) {
+					t.Fatalf("%s is missing plain-text Content contract %q", testCase.path, fragment)
+				}
+			}
+			if strings.HasPrefix(testCase.name, "SQLite") {
+				for _, fragment := range []string{
+					"backup_asset_delivery_requests", "idx_backup_asset_delivery_grants_delivery_state",
+					"idx_backup_asset_delivery_requests_grant_state",
+					"trg_backup_asset_recovery_content_authorization_insert",
+					"trg_backup_asset_recovery_content_authorization_update",
+					"trg_backup_asset_recovery_content_binding_immutable",
+				} {
+					if !strings.Contains(text, fragment) {
+						t.Fatalf("%s is missing preserved SQLite Content contract %q", testCase.path, fragment)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestBackupAssetMigration073ReleasePropagation(t *testing.T) {
+	testCases := []struct {
+		name      string
+		path      string
+		fragments []string
+	}{
+		{
+			name: "MigrationChecker",
+			path: filepath.Join("..", "..", "..", "scripts", "check-backup-asset-migration.sh"),
+			fragments: []string{
+				"PLAIN_TEXT_VERSION=000073",
+				"PLAIN_TEXT_NAME=backup_asset_plain_text_content",
+				"trg_backup_asset_plain_text_content_downgrade_admission",
+				"TestBackupAssetMigration073SQLite",
+				"TestBackupAssetMigration073PairedFiles",
+			},
+		},
+		{
+			name: "PostgresCI",
+			path: filepath.Join("..", "..", "..", ".github", "workflows", "ci.yml"),
+			fragments: []string{
+				"TestBackupAssetMigration0(63|64|65|66|67|68|69|70|71|72|73)Postgres",
+			},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			contents, err := os.ReadFile(testCase.path)
+			if err != nil {
+				t.Fatalf("read release propagation owner %s: %v", testCase.path, err)
+			}
+			for _, fragment := range testCase.fragments {
+				if !strings.Contains(string(contents), fragment) {
+					t.Fatalf("%s is missing 000073 release propagation %q", testCase.path, fragment)
+				}
+			}
+			if testCase.name == "PostgresCI" && !activeGoTestSelectorMatches(string(contents), "TestBackupAssetMigration073Postgres") {
+				t.Fatalf("%s has no active Go test selector matching TestBackupAssetMigration073Postgres", testCase.path)
+			}
+		})
+	}
+}
+
+func activeGoTestSelectorMatches(workflow, testName string) bool {
+	for _, rawLine := range strings.Split(workflow, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if !strings.HasPrefix(line, "run:") {
+			continue
+		}
+		command := strings.TrimSpace(strings.TrimPrefix(line, "run:"))
+		if !strings.Contains(command, "go test ./internal/database") {
+			continue
+		}
+		selectorAt := strings.Index(command, "-run ")
+		if selectorAt == -1 {
+			continue
+		}
+		tail := strings.TrimSpace(command[selectorAt+len("-run "):])
+		if tail == "" {
+			continue
+		}
+		var selector string
+		if tail[0] == '\'' || tail[0] == '"' {
+			if closingAt := strings.IndexByte(tail[1:], tail[0]); closingAt >= 0 {
+				selector = tail[1 : closingAt+1]
+			}
+		} else if fields := strings.Fields(tail); len(fields) > 0 {
+			selector = fields[0]
+		}
+		compiled, err := regexp.Compile(selector)
+		if err == nil && compiled.MatchString(testName) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBackupAssetMigration073CISelectorRecognition(t *testing.T) {
+	const testName = "TestBackupAssetMigration073Postgres"
+	for _, testCase := range []struct {
+		name     string
+		workflow string
+		want     bool
+	}{
+		{
+			name:     "CommentOnlyCannotPass",
+			workflow: "# run: go test ./internal/database -run '^TestBackupAssetMigration0(72|73)Postgres$' -count=1",
+			want:     false,
+		},
+		{
+			name:     "ActiveMatchingSelectorPasses",
+			workflow: "run: go test ./internal/database -run '^TestBackupAssetMigration0(72|73)Postgres$' -count=1",
+			want:     true,
+		},
+		{
+			name:     "ActiveNonMatchingSelectorFails",
+			workflow: "run: go test ./internal/database -run '^TestBackupAssetMigration072Postgres$' -count=1",
+			want:     false,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := activeGoTestSelectorMatches(testCase.workflow, testName); got != testCase.want {
+				t.Fatalf("active selector match = %t, want %t", got, testCase.want)
+			}
+		})
+	}
+}
+
+func runBackupAssetMigration073Contract(t *testing.T, fixture migrationFixture) {
+	t.Helper()
+	t.Run("AcceptsPlainTextV2AndPreservesGrantContract", fixture.test073AcceptsPlainTextV2AndPreservesGrantContract)
+	t.Run("RejectsInvalidRendererProfileProducts", fixture.test073RejectsInvalidRendererProfileProducts)
+	t.Run("CleanVersionMissingGrantChecksIsRejected", fixture.test073SchemaDriftIsRejected)
+	t.Run("CleanVersionMissingAdmissionTriggerIsRejected", fixture.test073AdmissionDriftIsRejected)
+	t.Run("CleanVersionMalformedAdmissionTriggerIsRejected", fixture.test073MalformedAdmissionDriftIsRejected)
+	t.Run("UsedDownWithPlainTextIsRejectedAtomically", fixture.test073UsedDownWithPlainTextIsAtomic)
+	t.Run("PristineDownRestores072", fixture.test073PristineDown)
+}
+
+func (fixture migrationFixture) seed073LegacyContent(
+	t *testing.T,
+	db *sql.DB,
+	marker string,
+	userID int64,
+) (time.Time, string, string, string, string) {
+	t.Helper()
+	now := time.Date(2026, 8, 28, 3, 4, 5, 0, time.UTC).Add(time.Duration(userID) * time.Second)
+	pointID, catalogID, entryID := fixture.insertSearchMigrationCatalog(t, db, marker, now)
+	fixture.insertSearchMigrationUser(t, db, userID, fmt.Sprintf("plain-text-user-%d", userID), now)
+	leaseID := recoveryMigrationOpaqueID(730000 + int(userID))
+	fixture.insertSearchMigrationLease(t, db, leaseID, pointID, "content_session", now)
+	grantID := recoveryMigrationOpaqueID(731000 + int(userID))
+	fixture.insertContentMigrationGrant(t, db, userID, grantID, recoveryMigrationOpaqueID(732000+int(userID)),
+		pointID, catalogID, entryID, leaseID, now)
+	fixture.insertContentMigrationRequest(t, db, recoveryMigrationOpaqueID(733000+int(userID)), grantID, now)
+	return now, pointID, catalogID, entryID, leaseID
+}
+
+func normalize073PreservationSnapshot(snapshot recoveryMigrationSnapshot) recoveryMigrationSnapshot {
+	snapshot.version = 0
+	delete(snapshot.definitions, "backup_asset_delivery_grants")
+	return snapshot
+}
+
+func (fixture migrationFixture) test073SchemaDriftIsRejected(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetTaskRunCompatVersion)
+	if err := migrator.Force(backupAssetPlainTextContentVersion); err != nil {
+		t.Fatalf("force falsely-clean %s 000073 metadata: %v", fixture.engine, err)
+	}
+	if fixture.engine == "postgres" {
+		fixture.mustExec(t, db, `CREATE FUNCTION backup_asset_plain_text_content_downgrade_admission()
+			RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$`)
+		fixture.mustExec(t, db, `CREATE TRIGGER trg_backup_asset_plain_text_content_downgrade_admission
+			BEFORE INSERT ON schema_migrations
+			FOR EACH ROW EXECUTE FUNCTION backup_asset_plain_text_content_downgrade_admission()`)
+	} else {
+		fixture.mustExec(t, db, `CREATE TRIGGER trg_backup_asset_plain_text_content_downgrade_admission
+			BEFORE INSERT ON schema_migrations BEGIN SELECT 1; END`)
+	}
+	before := fixture.captureRecoveryMigrationSnapshot(t, migrator, db)
+	gdb := fixture.recoveryWorkerGorm(t, db)
+	err := RunMigrations(gdb, fixture.engine)
+	if !errors.Is(err, ErrMigrationSchemaDrift) || !strings.Contains(err.Error(), "missing_plain_text_content_constraint") {
+		t.Fatalf("clean %s version 73 missing grant checks returned %v, want typed constraint drift", fixture.engine, err)
+	}
+	assertMigrationVersion(t, migrator, backupAssetPlainTextContentVersion)
+	after := fixture.captureRecoveryMigrationSnapshot(t, migrator, db)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("%s 000073 schema-drift rejection mutated schema\nbefore: %#v\nafter: %#v", fixture.engine, before, after)
+	}
+}
+
+func (fixture migrationFixture) test073AdmissionDriftIsRejected(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetPlainTextContentVersion)
+	if fixture.engine == "postgres" {
+		fixture.mustExec(t, db, `DROP TRIGGER trg_backup_asset_plain_text_content_downgrade_admission ON schema_migrations`)
+	} else {
+		fixture.mustExec(t, db, `DROP TRIGGER trg_backup_asset_plain_text_content_downgrade_admission`)
+	}
+	before := fixture.captureRecoveryMigrationSnapshot(t, migrator, db)
+	gdb := fixture.recoveryWorkerGorm(t, db)
+	err := RunMigrations(gdb, fixture.engine)
+	if !errors.Is(err, ErrMigrationSchemaDrift) || !strings.Contains(err.Error(), "missing_plain_text_content_admission_trigger") {
+		t.Fatalf("clean %s version 73 missing admission trigger returned %v, want typed trigger drift", fixture.engine, err)
+	}
+	assertMigrationVersion(t, migrator, backupAssetPlainTextContentVersion)
+	if fixture.recoveryTriggerExists(t, db, "schema_migrations", plainTextContentAdmissionTrigger) {
+		t.Fatalf("%s 000073 schema-drift rejection recreated missing admission trigger", fixture.engine)
+	}
+	after := fixture.captureRecoveryMigrationSnapshot(t, migrator, db)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("%s 000073 admission-drift rejection mutated schema\nbefore: %#v\nafter: %#v", fixture.engine, before, after)
+	}
+}
+
+func (fixture migrationFixture) test073MalformedAdmissionDriftIsRejected(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetPlainTextContentVersion)
+	if fixture.engine == "postgres" {
+		fixture.mustExec(t, db, `CREATE OR REPLACE FUNCTION backup_asset_plain_text_content_downgrade_admission()
+			RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$`)
+	} else {
+		fixture.mustExec(t, db, `DROP TRIGGER trg_backup_asset_plain_text_content_downgrade_admission`)
+		fixture.mustExec(t, db, `CREATE TRIGGER trg_backup_asset_plain_text_content_downgrade_admission
+			BEFORE INSERT ON schema_migrations BEGIN SELECT 1; END`)
+	}
+	before := fixture.captureRecoveryMigrationSnapshot(t, migrator, db)
+	gdb := fixture.recoveryWorkerGorm(t, db)
+	err := RunMigrations(gdb, fixture.engine)
+	if !errors.Is(err, ErrMigrationSchemaDrift) || !strings.Contains(err.Error(), "invalid_plain_text_content_admission_trigger") {
+		t.Fatalf("clean %s version 73 malformed admission trigger returned %v, want typed trigger drift", fixture.engine, err)
+	}
+	assertMigrationVersion(t, migrator, backupAssetPlainTextContentVersion)
+	after := fixture.captureRecoveryMigrationSnapshot(t, migrator, db)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("%s 000073 malformed-admission rejection mutated schema\nbefore: %#v\nafter: %#v", fixture.engine, before, after)
+	}
+}
+
+func (fixture migrationFixture) test073AcceptsPlainTextV2AndPreservesGrantContract(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetTaskRunCompatVersion)
+	now, pointID, catalogID, entryID, _ := fixture.seed073LegacyContent(t, db, "3", 7301)
+	before := normalize073PreservationSnapshot(fixture.captureRecoveryMigrationSnapshot(t, migrator, db))
+
+	migrateToBackupAssetVersion(t, migrator, backupAssetPlainTextContentVersion)
+	assertMigrationVersion(t, migrator, backupAssetPlainTextContentVersion)
+	after := normalize073PreservationSnapshot(fixture.captureRecoveryMigrationSnapshot(t, migrator, db))
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("%s 000073 changed a non-product Content contract\nbefore: %#v\nafter: %#v", fixture.engine, before, after)
+	}
+
+	grantID := recoveryMigrationOpaqueID(730101)
+	leaseID := recoveryMigrationOpaqueID(730103)
+	fixture.insertSearchMigrationLease(t, db, leaseID, pointID, "content_session", now)
+	fixture.insertContentMigrationGrantProduct(t, db, 7301, grantID, recoveryMigrationOpaqueID(730102),
+		pointID, catalogID, entryID, leaseID, "none", "plain_text", "text_v2", 17861, 17861, 17861, false, now)
+	var renderer, profile string
+	var sourceSize, sourceBytes, representationSize int64
+	if err := db.QueryRow(fixture.bind(`SELECT renderer, profile, source_size,
+		representation_source_bytes, representation_size
+		FROM backup_asset_delivery_grants WHERE id = ?`), grantID).
+		Scan(&renderer, &profile, &sourceSize, &sourceBytes, &representationSize); err != nil {
+		t.Fatalf("load %s 000073 plain-text grant: %v", fixture.engine, err)
+	}
+	if renderer != "plain_text" || profile != "text_v2" || sourceSize != 17861 ||
+		sourceBytes != 17861 || representationSize != 17861 {
+		t.Fatalf("%s 000073 plain-text grant product=%q/%q bytes=%d/%d/%d",
+			fixture.engine, renderer, profile, sourceSize, sourceBytes, representationSize)
+	}
+	if fixture.engine == "sqlite" {
+		assertSQLiteForeignKeyCheck(t, db)
+	}
+}
+
+func (fixture migrationFixture) test073RejectsInvalidRendererProfileProducts(t *testing.T) {
+	_, db := fixture.openAt(t, backupAssetPlainTextContentVersion)
+	now, pointID, catalogID, entryID, _ := fixture.seed073LegacyContent(t, db, "4", 7302)
+	leaseID := recoveryMigrationOpaqueID(730199)
+	fixture.insertSearchMigrationLease(t, db, leaseID, pointID, "content_session", now)
+	testCases := []struct {
+		name                                string
+		rangePolicy, renderer, profile      string
+		sourceSize, sourceBytes, resultSize int64
+		truncated                           bool
+	}{
+		{name: "plain text with legacy profile", rangePolicy: "none", renderer: "plain_text", profile: "text_v1", sourceSize: 1, sourceBytes: 1, resultSize: 1},
+		{name: "escaped text with v2 profile", rangePolicy: "none", renderer: "escaped_text", profile: "text_v2", sourceSize: 1, sourceBytes: 1, resultSize: 1},
+		{name: "plain text with range", rangePolicy: "single", renderer: "plain_text", profile: "text_v2", sourceSize: 1, sourceBytes: 1, resultSize: 1},
+		{name: "plain text false truncation product", rangePolicy: "none", renderer: "plain_text", profile: "text_v2", sourceSize: 2, sourceBytes: 1, resultSize: 1},
+	}
+	for index, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture.expectContentMigrationGrantProductRejectedInRollback(t, db, 7302,
+				recoveryMigrationOpaqueID(730200+index), recoveryMigrationOpaqueID(730300+index),
+				pointID, catalogID, entryID, leaseID, testCase.rangePolicy, testCase.renderer, testCase.profile,
+				testCase.sourceSize, testCase.sourceBytes, testCase.resultSize, testCase.truncated, now)
+		})
+	}
+	fixture.expectContentMigrationGrantProductRejectedInRollback(t, db, 7302,
+		recoveryMigrationOpaqueID(730250), recoveryMigrationOpaqueID(730350), pointID, catalogID, entryID,
+		leaseID, "none", "attachment", "original_v1", 1, 1, 1, false, now)
+}
+
+func (fixture migrationFixture) test073UsedDownWithPlainTextIsAtomic(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetTaskRunCompatVersion)
+	now, pointID, catalogID, entryID, _ := fixture.seed073LegacyContent(t, db, "5", 7303)
+	migrateToBackupAssetVersion(t, migrator, backupAssetPlainTextContentVersion)
+	leaseID := recoveryMigrationOpaqueID(730403)
+	fixture.insertSearchMigrationLease(t, db, leaseID, pointID, "content_session", now)
+	fixture.insertContentMigrationGrantProduct(t, db, 7303,
+		recoveryMigrationOpaqueID(730401), recoveryMigrationOpaqueID(730402), pointID, catalogID, entryID,
+		leaseID, "none", "plain_text", "text_v2", 17861, 17861, 17861, false, now)
+	before := fixture.captureRecoveryMigrationSnapshot(t, migrator, db)
+	admissionBefore := fixture.recoveryTriggerDefinition(t, db, "schema_migrations", "trg_backup_asset_plain_text_content_downgrade_admission")
+	if err := migrator.Steps(-1); err == nil {
+		t.Fatalf("%s 000073 down unexpectedly accepted plain_text/text_v2 grant", fixture.engine)
+	}
+	assertMigrationVersion(t, migrator, backupAssetPlainTextContentVersion)
+	after := fixture.captureRecoveryMigrationSnapshot(t, migrator, db)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("%s rejected 000073 down changed migration state\nbefore: %#v\nafter: %#v", fixture.engine, before, after)
+	}
+	if got := fixture.recoveryTriggerDefinition(t, db, "schema_migrations", "trg_backup_asset_plain_text_content_downgrade_admission"); got != admissionBefore {
+		t.Fatalf("%s rejected 000073 down changed admission trigger\n got: %s\nwant: %s", fixture.engine, got, admissionBefore)
+	}
+}
+
+func (fixture migrationFixture) test073PristineDown(t *testing.T) {
+	migrator, db := fixture.openAt(t, backupAssetTaskRunCompatVersion)
+	fixture.seed073LegacyContent(t, db, "6", 7304)
+	before := fixture.captureRecoveryMigrationSnapshot(t, migrator, db)
+	migrateToBackupAssetVersion(t, migrator, backupAssetPlainTextContentVersion)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("step %s pristine 000073 down: %v", fixture.engine, err)
+	}
+	assertMigrationVersion(t, migrator, backupAssetTaskRunCompatVersion)
+	after := fixture.captureRecoveryMigrationSnapshot(t, migrator, db)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("%s pristine 000073 down did not restore 000072\nbefore: %#v\nafter: %#v", fixture.engine, before, after)
+	}
+	if fixture.recoveryTriggerExists(t, db, "schema_migrations", "trg_backup_asset_plain_text_content_downgrade_admission") {
+		t.Fatalf("%s pristine 000073 down left downgrade admission trigger", fixture.engine)
+	}
+	definition := fixture.tableDefinition(t, db, "backup_asset_delivery_grants")
+	if strings.Contains(definition, "plain_text") || strings.Contains(definition, "text_v2") {
+		t.Fatalf("%s pristine 000073 down retained the plain-text product: %s", fixture.engine, definition)
+	}
+	if fixture.engine == "sqlite" {
+		assertSQLiteForeignKeyCheck(t, db)
+	}
 }
 
 func TestBackupAssetMigration072PairedFiles(t *testing.T) {
@@ -13093,9 +13479,50 @@ func (fixture migrationFixture) insertContentMigrationGrant(
 	now time.Time,
 ) {
 	t.Helper()
-	fixture.mustExec(t, db, `INSERT INTO backup_asset_delivery_grants
-		(id, delivery_id, resource_kind, recovery_point_id, catalog_generation_id, entry_id,
-		 owner_user_id, session_jti, session_token_version, session_role, session_expires_at,
+	fixture.insertContentMigrationGrantProduct(t, db, ownerUserID, grantID, deliveryID,
+		pointID, catalogID, entryID, leaseID, "none", "escaped_text", "text_v1", 1, 1, 1, false, now)
+}
+
+func (fixture migrationFixture) insertContentMigrationGrantProduct(
+	t *testing.T,
+	db *sql.DB,
+	ownerUserID int64,
+	grantID, deliveryID, pointID, catalogID, entryID, leaseID string,
+	rangePolicy, renderer, profile string,
+	sourceSize, representationSourceBytes, representationSize int64,
+	representationTruncated bool,
+	now time.Time,
+) {
+	t.Helper()
+	fixture.mustExec(t, db, contentMigrationGrantInsert(), contentMigrationGrantArgs(
+		ownerUserID, grantID, deliveryID, pointID, catalogID, entryID, leaseID,
+		rangePolicy, renderer, profile, sourceSize, representationSourceBytes,
+		representationSize, representationTruncated, now,
+	)...)
+}
+
+func (fixture migrationFixture) expectContentMigrationGrantProductRejectedInRollback(
+	t *testing.T,
+	db *sql.DB,
+	ownerUserID int64,
+	grantID, deliveryID, pointID, catalogID, entryID, leaseID string,
+	rangePolicy, renderer, profile string,
+	sourceSize, representationSourceBytes, representationSize int64,
+	representationTruncated bool,
+	now time.Time,
+) {
+	t.Helper()
+	fixture.expectExecRejectedInRollback(t, db, contentMigrationGrantInsert(), contentMigrationGrantArgs(
+		ownerUserID, grantID, deliveryID, pointID, catalogID, entryID, leaseID,
+		rangePolicy, renderer, profile, sourceSize, representationSourceBytes,
+		representationSize, representationTruncated, now,
+	)...)
+}
+
+func contentMigrationGrantInsert() string {
+	return `INSERT INTO backup_asset_delivery_grants
+			(id, delivery_id, resource_kind, recovery_point_id, catalog_generation_id, entry_id,
+			 owner_user_id, session_jti, session_token_version, session_role, session_expires_at,
 		 action, method_policy, range_policy, renderer, profile, classification,
 		 classification_revision, classification_source_revision, provider_kind,
 			 source_fingerprint, entry_fingerprint, fingerprint_strength, representation_etag,
@@ -13108,14 +13535,27 @@ func (fixture migrationFixture) insertContentMigrationGrant(
 		 audit_range_count, audit_range_bytes, audit_request_count, audit_success_count,
 		 audit_blocked_count, audit_failure_count, audit_failure_code, audit_attempt_count,
 		 created_at, updated_at)
-		VALUES (?, ?, 'backup_asset', ?, ?, ?, ?, ?, 0, 'operator', ?,
-		 'preview', 'get_head', 'none', 'escaped_text', 'text_v1', 'non_secret',
-		 1, 1, 'rsync', 'content-source-v1', 'entry-v1', 'strong', '"content-etag"',
-			 1, ?, 'text/plain', 1, 1, ?, ?, 'active', '', ?, ?, ?, ?, ?, 60, ?,
-		 64, 256, 10, 2, 0, 0, 0, 0, 1, 'none', 0, 0, 0, 0, 0, 0, '', 0, ?, ?)`,
+			VALUES (?, ?, 'backup_asset', ?, ?, ?, ?, ?, 0, 'operator', ?,
+			 'preview', 'get_head', ?, ?, ?, 'non_secret',
+			 1, 1, 'rsync', 'content-source-v1', 'entry-v1', 'strong', '"content-etag"',
+				 ?, ?, 'text/plain', ?, ?, ?, ?, 'active', '', ?, ?, ?, ?, ?, 60, ?,
+			 65536, 262144, 10, 2, 0, 0, 0, 0, 1, 'none', 0, 0, 0, 0, 0, 0, '', 0, ?, ?)`
+}
+
+func contentMigrationGrantArgs(
+	ownerUserID int64,
+	grantID, deliveryID, pointID, catalogID, entryID, leaseID string,
+	rangePolicy, renderer, profile string,
+	sourceSize, representationSourceBytes, representationSize int64,
+	representationTruncated bool,
+	now time.Time,
+) []any {
+	return []any{
 		grantID, deliveryID, pointID, catalogID, entryID, ownerUserID, strings.Repeat("a", 32), now.Add(time.Hour),
-		now, false, strings.Repeat("b", 64), leaseID, strings.Repeat("c", 32), strings.Repeat("d", 64),
-		now.Add(10*time.Minute), now.Add(time.Minute), now, now, now)
+		rangePolicy, renderer, profile, sourceSize, now, representationSourceBytes, representationSize,
+		representationTruncated, strings.Repeat("b", 64), leaseID, strings.Repeat("c", 32), strings.Repeat("d", 64),
+		now.Add(10 * time.Minute), now.Add(time.Minute), now, now, now,
+	}
 }
 
 func (fixture migrationFixture) insertContentMigrationRequest(t *testing.T, db *sql.DB, requestID, grantID string, now time.Time) {

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # scripts/check-backup-asset-migration.sh
 #
-# Fast schema contract for paired 000071_backup_asset_ga and
-# 000072_task_run_snapshot_compatibility files plus fail-closed used-down
+# Fast schema contract for paired 000071_backup_asset_ga,
+# 000072_task_run_snapshot_compatibility, and
+# 000073_backup_asset_plain_text_content files plus fail-closed used-down
 # admission. This checker inspects SQL/triggers and
 # reuses the existing SQLite used-down owner. It does not apply unbounded
 # datasets. Million-row / bomb / restart soaks stay local-only comments
@@ -21,6 +22,8 @@ GA_VERSION=000071
 GA_NAME=backup_asset_ga
 COMPAT_VERSION=000072
 COMPAT_NAME=task_run_snapshot_compatibility
+PLAIN_TEXT_VERSION=000073
+PLAIN_TEXT_NAME=backup_asset_plain_text_content
 
 fail() {
   echo "backup-asset migration check: $*" >&2
@@ -52,10 +55,15 @@ SQLITE_COMPAT_UP="$SQLITE_DIR/${COMPAT_VERSION}_${COMPAT_NAME}.up.sql"
 SQLITE_COMPAT_DOWN="$SQLITE_DIR/${COMPAT_VERSION}_${COMPAT_NAME}.down.sql"
 POSTGRES_COMPAT_UP="$POSTGRES_DIR/${COMPAT_VERSION}_${COMPAT_NAME}.up.sql"
 POSTGRES_COMPAT_DOWN="$POSTGRES_DIR/${COMPAT_VERSION}_${COMPAT_NAME}.down.sql"
+SQLITE_PLAIN_TEXT_UP="$SQLITE_DIR/${PLAIN_TEXT_VERSION}_${PLAIN_TEXT_NAME}.up.sql"
+SQLITE_PLAIN_TEXT_DOWN="$SQLITE_DIR/${PLAIN_TEXT_VERSION}_${PLAIN_TEXT_NAME}.down.sql"
+POSTGRES_PLAIN_TEXT_UP="$POSTGRES_DIR/${PLAIN_TEXT_VERSION}_${PLAIN_TEXT_NAME}.up.sql"
+POSTGRES_PLAIN_TEXT_DOWN="$POSTGRES_DIR/${PLAIN_TEXT_VERSION}_${PLAIN_TEXT_NAME}.down.sql"
 
 for path in \
   "$SQLITE_UP" "$SQLITE_DOWN" "$POSTGRES_UP" "$POSTGRES_DOWN" \
-  "$SQLITE_COMPAT_UP" "$SQLITE_COMPAT_DOWN" "$POSTGRES_COMPAT_UP" "$POSTGRES_COMPAT_DOWN"; do
+  "$SQLITE_COMPAT_UP" "$SQLITE_COMPAT_DOWN" "$POSTGRES_COMPAT_UP" "$POSTGRES_COMPAT_DOWN" \
+  "$SQLITE_PLAIN_TEXT_UP" "$SQLITE_PLAIN_TEXT_DOWN" "$POSTGRES_PLAIN_TEXT_UP" "$POSTGRES_PLAIN_TEXT_DOWN"; do
   require_file "$path"
 done
 
@@ -63,10 +71,14 @@ sqlite_071=$(find "$SQLITE_DIR" -maxdepth 1 -type f -name "${GA_VERSION}_*" | wc
 postgres_071=$(find "$POSTGRES_DIR" -maxdepth 1 -type f -name "${GA_VERSION}_*" | wc -l)
 sqlite_072=$(find "$SQLITE_DIR" -maxdepth 1 -type f -name "${COMPAT_VERSION}_*" | wc -l)
 postgres_072=$(find "$POSTGRES_DIR" -maxdepth 1 -type f -name "${COMPAT_VERSION}_*" | wc -l)
+sqlite_073=$(find "$SQLITE_DIR" -maxdepth 1 -type f -name "${PLAIN_TEXT_VERSION}_*" | wc -l)
+postgres_073=$(find "$POSTGRES_DIR" -maxdepth 1 -type f -name "${PLAIN_TEXT_VERSION}_*" | wc -l)
 [[ "$sqlite_071" -eq 2 ]] || fail "SQLite must have exactly two ${GA_VERSION}_* files"
 [[ "$postgres_071" -eq 2 ]] || fail "PostgreSQL must have exactly two ${GA_VERSION}_* files"
 [[ "$sqlite_072" -eq 2 ]] || fail "SQLite must have exactly two ${COMPAT_VERSION}_* files"
 [[ "$postgres_072" -eq 2 ]] || fail "PostgreSQL must have exactly two ${COMPAT_VERSION}_* files"
+[[ "$sqlite_073" -eq 2 ]] || fail "SQLite must have exactly two ${PLAIN_TEXT_VERSION}_* files"
+[[ "$postgres_073" -eq 2 ]] || fail "PostgreSQL must have exactly two ${PLAIN_TEXT_VERSION}_* files"
 
 for path in "$SQLITE_UP" "$SQLITE_DOWN" "$POSTGRES_UP" "$POSTGRES_DOWN"; do
   require_text "$path" "backup_asset_installations"
@@ -106,6 +118,34 @@ require_text "$SQLITE_COMPAT_DOWN" "CREATE TEMP TABLE backup_asset_072_down_guar
 require_text "$POSTGRES_COMPAT_UP" "ADD CONSTRAINT task_runs_node_id_snapshot_compatibility"
 require_text "$POSTGRES_COMPAT_DOWN" "ADD CONSTRAINT task_runs_node_id_snapshot_positive CHECK (node_id_snapshot > 0)"
 
+for path in "$SQLITE_PLAIN_TEXT_UP" "$SQLITE_PLAIN_TEXT_DOWN" "$POSTGRES_PLAIN_TEXT_UP" "$POSTGRES_PLAIN_TEXT_DOWN"; do
+  require_text "$path" "backup_asset_delivery_grants"
+  require_text "$path" "plain_text"
+  require_text "$path" "text_v2"
+  require_text "$path" "trg_backup_asset_plain_text_content_downgrade_admission"
+done
+
+for path in "$SQLITE_PLAIN_TEXT_UP" "$SQLITE_PLAIN_TEXT_DOWN"; do
+  require_text "$path" "CREATE TEMP TABLE backup_asset_delivery_requests_000073_hold"
+  require_text "$path" "idx_backup_asset_delivery_grants_delivery_state"
+  require_text "$path" "idx_backup_asset_delivery_requests_grant_state"
+  require_text "$path" "trg_backup_asset_recovery_content_authorization_insert"
+  require_text "$path" "trg_backup_asset_recovery_content_authorization_update"
+  require_text "$path" "trg_backup_asset_recovery_content_binding_immutable"
+  require_text "$path" "trg_backup_asset_recovery_downgrade_admission"
+done
+
+require_text "$SQLITE_PLAIN_TEXT_UP" "renderer = 'plain_text' AND profile = 'text_v2' AND range_policy = 'none'"
+require_text "$SQLITE_PLAIN_TEXT_DOWN" "WHERE renderer = 'plain_text' OR profile = 'text_v2'"
+for path in "$POSTGRES_PLAIN_TEXT_UP" "$POSTGRES_PLAIN_TEXT_DOWN"; do
+  require_text "$path" "backup_asset_delivery_grants_renderer_check"
+  require_text "$path" "backup_asset_delivery_grants_profile_check"
+  require_text "$path" "backup_asset_delivery_grants_renderer_product_check"
+  require_text "$path" "backup_asset_delivery_grants_representation_product_check"
+done
+require_text "$POSTGRES_PLAIN_TEXT_UP" "CREATE OR REPLACE FUNCTION backup_asset_plain_text_content_downgrade_admission()"
+require_text "$POSTGRES_PLAIN_TEXT_DOWN" "RAISE EXCEPTION '000073 down blocked: plain_text/text_v2 delivery grant exists';"
+
 if ! command -v go >/dev/null 2>&1; then
   echo "backup-asset migration check: go is required for the used-down owner" >&2
   exit 2
@@ -114,9 +154,9 @@ fi
 (
   cd "$ROOT_DIR/backend"
   go test ./internal/database \
-    -run '^(TestBackupAssetMigration071PairedFiles|TestBackupAssetMigration071UsedDownAdmissionSQLite|TestBackupAssetMigration072PairedFiles|TestBackupAssetMigration072SQLite)$' \
+    -run '^(TestBackupAssetMigration071PairedFiles|TestBackupAssetMigration071UsedDownAdmissionSQLite|TestBackupAssetMigration072PairedFiles|TestBackupAssetMigration072SQLite|TestBackupAssetMigration073PairedFiles|TestBackupAssetMigration073SQLite|TestRunMigrationsClean072Applies073SQLite)$' \
     -count=1
-) || fail "000071/000072 paired-file or SQLite used-down owner failed"
+) || fail "000071/000072/000073 paired-file or SQLite used-down owner failed"
 
 echo "backup-asset migration check: PASS"
-echo "backup-asset migration check: paired ${GA_VERSION}_${GA_NAME} and ${COMPAT_VERSION}_${COMPAT_NAME} files exist; used-down admission is fail-closed"
+echo "backup-asset migration check: paired ${GA_VERSION}_${GA_NAME}, ${COMPAT_VERSION}_${COMPAT_NAME}, and ${PLAIN_TEXT_VERSION}_${PLAIN_TEXT_NAME} files exist; used-down admission is fail-closed"

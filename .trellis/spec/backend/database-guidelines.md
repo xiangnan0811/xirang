@@ -45,7 +45,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
 - Keep version numbers in lockstep across SQLite and PostgreSQL. The current
-  latest migration is `000072_task_run_snapshot_compatibility`.
+  latest migration is `000073_backup_asset_plain_text_content`.
 - Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the
   SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
@@ -60,6 +60,9 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 - For a clean version at or beyond 000069, validate the minimum Recovery schema
   before fixups and validate it again after `Up`. At 000072 or newer, also
   validate the final TaskRun compatibility triggers and PostgreSQL constraint.
+  At 000073 or newer, validate both the exact plain-text grant constraints and
+  the semantics of the downgrade-admission trigger/function; a same-named no-op
+  database object is schema drift, not startup authorization.
   Missing objects are typed, sanitized schema drift and never authorization for
   forward writes.
 
@@ -120,7 +123,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   traffic-window predicates or index names.
 - Backup-asset schema changes are paired across SQLite and PostgreSQL. The
   current baseline includes `000062` through
-  `000072_task_run_snapshot_compatibility`;
+  `000073_backup_asset_plain_text_content`;
   later versions must remain paired. After durable Search or publication facts,
   or live content-delivery state exists, schema down must fail closed rather
   than deleting history, Provider facts, grants, reservations, or leases.
@@ -135,6 +138,14 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   upgrades on those semantics. A used 000072 down must reject through
   `schema_migrations` admission before version mutation whenever any
   `legacy_unknown` row exists; pristine down alone may return cleanly to 000071.
+- Paired 000073 adds exactly the `plain_text` / `text_v2` / `range_policy=none`
+  delivery-grant product for the existing `safe_preview_v1` action. It must not
+  relax renderer/profile, action/range, classification, truncation, step-up,
+  audit, or budget products. SQLite rebuilds must preserve every grant/request
+  row, foreign key, index, trigger, and unrelated constraint; PostgreSQL must
+  replace only the four named renderer/profile product constraints inside one
+  transaction. Both direct down and migration-metadata admission must reject
+  while any grant uses either 000073-only value.
 
 ## Scenario: TaskRun Snapshot Compatibility and Startup Drift
 
@@ -220,7 +231,7 @@ db.Where("task_id = ? AND node_id_snapshot = ? AND status = ?",
 
 - Connection helper: `openPostgresSQLDB(dsn string) (*sql.DB, error)`.
 - CI regression gate:
-  `go test ./internal/database -run '^(TestBackupAssetMigration062PostgresApplyDown|TestBackupAssetMigration0(63|64|65|66|67|68|69|70|71|72)Postgres|TestPostgresTimestamptzScanUsesConfiguredUTC|TestRunMigrationsPostgres(Dirty|SchemaDrift)CheckUsesSearchPath)$' -count=1`.
+  `go test ./internal/database -run '^(TestBackupAssetMigration062PostgresApplyDown|TestBackupAssetMigration0(63|64|65|66|67|68|69|70|71|72|73)Postgres|TestPostgresTimestamptzScanUsesConfiguredUTC|TestRunMigrationsPostgres(Dirty|SchemaDrift)CheckUsesSearchPath)$' -count=1`.
 - Export behavior gate:
   `go test ./internal/backupasset/export -run '^TestExportBehaviorPostgres$' -count=1`.
 - Required pgx registrations per physical connection:
@@ -241,7 +252,7 @@ db.Where("task_id = ? AND node_id_snapshot = ? AND status = ?",
   hook. Configuring only `timestamp` leaves `TIMESTAMPTZ` scans vulnerable to
   `time.Local` on newer Go/pgx combinations.
 - SQLite/PostgreSQL migration parity for backup assets covers 000062 through
-  000072. A new paired migration must be added to this regex deliberately; it
+  000073. A new paired migration must be added to this regex deliberately; it
   must never be silently omitted from the PostgreSQL gate.
 
 ### 4. Validation & Error Matrix
@@ -269,7 +280,7 @@ db.Where("task_id = ? AND node_id_snapshot = ? AND status = ?",
   PostgreSQL service with `TZ` set to a non-UTC value and assert both location
   and RFC3339 value.
 - PostgreSQL migration tests must exercise paired apply/down contracts for
-  000062 through 000072.
+  000062 through 000073.
 - `TestRunMigrationsPostgresDirtyCheckUsesSearchPath` must prove an unrelated
   sibling schema does not interfere while a search-path-visible dirty row still
   fails closed.
