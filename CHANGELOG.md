@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.52.2](https://github.com/xiangnan0811/xirang/compare/v0.52.1...v0.52.2) (2026-08-28)
+
+
+### 🐛 Bug Fixes
+
+* **backup-assets:** allow plain-text preview grants ([#476](https://github.com/xiangnan0811/xirang/issues/476)) ([b4c1411](https://github.com/xiangnan0811/xirang/commit/b4c1411aae18e675dd9a90b2e0324477261da38b))
+
 ## [0.52.1](https://github.com/xiangnan0811/xirang/compare/v0.52.0...v0.52.1) (2026-08-28)
 
 
