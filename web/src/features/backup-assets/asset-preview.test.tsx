@@ -248,7 +248,7 @@ describe("AssetPreview", () => {
     expect(screen.queryByText(/Admin|管理员|settings|设置/i)).not.toBeInTheDocument();
   });
 
-  it("keeps one bounded viewport height before and after content loads", () => {
+  it("gives frame-based previews a dedicated stretching layout inside the bounded viewport", () => {
     const previewAsset = asset();
     const props = {
       asset: previewAsset,
@@ -273,7 +273,66 @@ describe("AssetPreview", () => {
         resource={{ status: "ready", value: ticket("escaped_text") }}
       />
     );
-    expect(screen.getByTitle(/File preview|文件预览/)).toHaveClass("h-full", "max-h-full");
+    const frameLayout = screen.getByTestId("asset-preview-frame-layout");
+    const frame = screen.getByTitle(/File preview|文件预览/);
+    expect(frameLayout).toHaveClass("min-h-0", "flex-1", "self-stretch");
+    expect(frameLayout).toContainElement(frame);
+    expect(frame).toHaveClass("min-h-0", "flex-1", "self-stretch");
+    expect(frame).not.toHaveClass("h-full", "max-h-full");
+  });
+
+  it.each(["safe_raster", "native_audio", "native_video"] as const)(
+    "keeps the %s renderer in the centered native layout",
+    (renderer) => {
+      const rendered = renderPreview(renderer);
+
+      expect(screen.getByTestId("asset-preview-viewport")).toHaveClass("items-center", "justify-center");
+      expect(screen.queryByTestId("asset-preview-frame-layout")).not.toBeInTheDocument();
+      rendered.unmount();
+    },
+  );
+
+  it("keeps loading, empty, and error bodies in the centered status layout", () => {
+    const commonProps = {
+      asset: asset(),
+      canPreview: true,
+      canDownload: false,
+      onLoadExactPreview: vi.fn(),
+      onRetry: vi.fn(),
+      onRenew: vi.fn(),
+      onPrepareDownload: vi.fn(),
+      onDetach: vi.fn(),
+    };
+    const rendered = render(
+      <AssetPreview {...commonProps} resource={{ status: "loading", value: null }} />,
+    );
+    const viewport = screen.getByTestId("asset-preview-viewport");
+    const expectCenteredStatus = () => {
+      expect(viewport).toHaveClass("items-center", "justify-center");
+      expect(screen.queryByTestId("asset-preview-frame-layout")).not.toBeInTheDocument();
+    };
+
+    expectCenteredStatus();
+    rendered.rerender(
+      <AssetPreview {...commonProps} resource={{ status: "idle", value: null }} />,
+    );
+    expectCenteredStatus();
+    rendered.rerender(
+      <AssetPreview
+        {...commonProps}
+        resource={{
+          status: "error",
+          value: null,
+          error: {
+            code: "temporarily_unavailable",
+            translationKey: "backupAssets.errors.temporarilyUnavailable",
+            retryable: true,
+            action: "retry",
+          },
+        }}
+      />,
+    );
+    expectCenteredStatus();
   });
 
   it("announces current loading and typed error states without putting the filename in the error region", () => {
@@ -930,7 +989,7 @@ describe("AssetPreview", () => {
     const pdf = renderPreview("same_origin_pdf");
     expect(screen.getByTitle(/PDF preview|PDF 预览/))
       .toHaveAttribute("sandbox", "");
-    expect(screen.getByTitle(/PDF preview|PDF 预览/)).toHaveClass("h-full", "max-h-full");
+    expect(screen.getByTitle(/PDF preview|PDF 预览/)).toHaveClass("min-h-0", "flex-1", "self-stretch");
     pdf.unmount();
 
     const audio = renderPreview("native_audio");
@@ -948,7 +1007,7 @@ describe("AssetPreview", () => {
 
     const hex = renderPreview("metadata_hex");
     expect(screen.getByTitle(/Metadata and hex preview|元数据与十六进制预览/)).toHaveAttribute("sandbox", "");
-    expect(screen.getByTitle(/Metadata and hex preview|元数据与十六进制预览/)).toHaveClass("h-full", "max-h-full");
+    expect(screen.getByTitle(/Metadata and hex preview|元数据与十六进制预览/)).toHaveClass("min-h-0", "flex-1", "self-stretch");
     hex.unmount();
   });
 

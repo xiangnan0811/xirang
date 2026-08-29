@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import fixture from "../src/lib/api/__fixtures__/backup-assets.fixture.json" with { type: "json" };
 
@@ -30,6 +30,23 @@ function envelope(data: unknown, status = 200) {
     contentType: "application/json",
     body: JSON.stringify({ code: status === 200 ? 0 : status, message: status === 200 ? "ok" : "unavailable", data }),
   };
+}
+
+async function expectPreviewFrameToFillViewport(viewport: Locator, label: string) {
+  await expect.poll(
+    () => viewport.evaluate((node) => {
+      const frame = node.querySelector("iframe");
+      if (!(frame instanceof HTMLIFrameElement)) return 1_000_000;
+
+      const style = window.getComputedStyle(node);
+      const verticalInset =
+        (Number.parseFloat(style.paddingTop) || 0) +
+        (Number.parseFloat(style.paddingBottom) || 0);
+      const availableHeight = node.getBoundingClientRect().height - verticalInset;
+      return Math.abs(availableHeight - frame.getBoundingClientRect().height);
+    }),
+    { message: `${label} preview frame should fill the viewport content box` },
+  ).toBeLessThanOrEqual(1);
 }
 
 async function mockClosedFeature(page: Page) {
@@ -259,7 +276,7 @@ test("closed FeatureLive does not open a searchable workspace", async ({ page })
   await expect(page.getByRole("searchbox")).toHaveCount(0);
 });
 
-test("live FeatureLive can browse, search, and preview fixtures", async ({ page }) => {
+test("live FeatureLive can browse, search, and preview fixtures at a usable height", async ({ page }) => {
   await seedAdminSession(page);
   await mockLiveFeature(page);
   await page.goto(liveRoute);
@@ -294,6 +311,12 @@ test("live FeatureLive can browse, search, and preview fixtures", async ({ page 
   await expect(viewport.frameLocator("iframe").locator("body")).toContainText(
     "Synthetic escaped preview fixture"
   );
+
+  await expectPreviewFrameToFillViewport(viewport, "split");
+
+  await page.getByRole("button", { name: /Focused reading|专注阅读/ }).click();
+  await expect(page.getByRole("button", { name: /Exit focused reading|退出专注阅读/ })).toBeVisible();
+  await expectPreviewFrameToFillViewport(viewport, "focused");
 });
 
 test("directory Up navigation restores origin focus on mobile at 200% text zoom", async ({ page }) => {

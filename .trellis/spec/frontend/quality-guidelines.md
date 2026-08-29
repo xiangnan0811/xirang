@@ -352,6 +352,13 @@ return { last, nextCursor: cursor };
   fixed expiry, or a typed proof rejection. Selection changes alone never clear
   it. Concurrent same-action requests share one pending dialog/result, and late
   results from an old auth or selection owner are ignored.
+- Frame-based preview products (plain text, compatibility text, metadata/hex, and
+  same-origin PDF) must consume the preview viewport's available content-box
+  height. In a dynamically sized Flex chain, do not rely on `height: 100%` unless
+  every containing block has a definite block size; otherwise an iframe can
+  silently retain its browser fallback height. Use a dedicated `min-height: 0`
+  stretching Flex item for frame products while keeping native media and status
+  bodies on the centered viewport layout.
 
 ### 4. Validation & Error Matrix
 
@@ -367,6 +374,8 @@ return { last, nextCursor: cursor };
 | Search rejects an attached secret-reveal proof | Clear the central action proof and fail closed; do not leak or loop. |
 | Operator receives `secret_reveal_required` | Remain blocked; do not call `ensureStepUpProof`. |
 | Renewal of a ready safe preview | Send the current exact resolved renderer/profile and exact AssetRef; do not reselect by MIME. |
+| Ready frame is shorter than the viewport content box | Treat as a layout failure even when the iframe has `height: 100%`; stretch the frame layout through the Flex chain. |
+| Image, audio, video, loading, empty, or error body | Retain its centered/native layout; do not apply the frame-only stretch wrapper. |
 
 ### 5. Good/Base/Bad Cases
 
@@ -397,6 +406,11 @@ return { last, nextCursor: cursor };
   contradictions, unsafe content types, malformed future fields, and safe-native
   responses without `range=single`. Exact legacy native/download responses retain
   their established `none|single` Range compatibility only.
+- Component tests must prove frame products use the dedicated stretching layout
+  and non-frame products do not. A real-browser gate must poll rendered geometry
+  after layout changes and assert the iframe height matches the viewport content
+  box within one CSS pixel in ordinary desktop and focused-reading modes; class
+  assertions alone are insufficient for percentage-height regressions.
 - Run the backend delivery-ticket RBAC selector for unauthenticated,
   Admin/Operator, Viewer, and unknown roles plus the full frontend gate.
 
@@ -419,6 +433,24 @@ const canPreview = Boolean(
 );
 // The selected-file effect sends safePreviewV1 once for its selection generation;
 // the backend resolves renderer/profile and enforces any native Range requirement.
+```
+
+Frame layout — wrong:
+
+```tsx
+<div className="flex min-h-[24rem] flex-1 items-center">
+  <iframe className="h-full" />
+</div>
+```
+
+Frame layout — correct:
+
+```tsx
+<div className="flex min-h-[24rem] flex-1 items-center">
+  <div className="flex min-h-0 flex-1 self-stretch">
+    <iframe className="min-h-0 flex-1 self-stretch" />
+  </div>
+</div>
 ```
 
 ---

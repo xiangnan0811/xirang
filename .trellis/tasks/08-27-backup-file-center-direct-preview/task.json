@@ -12,9 +12,9 @@
   "assignee": "murray",
   "createdAt": "2026-08-27",
   "completedAt": null,
-  "branch": "codex/backup-file-center-production-remediation",
+  "branch": "codex/backup-preview-height-hotfix",
   "base_branch": "main",
-  "worktree_path": "/home/murray/.codex/worktrees/e0a9/xirang",
+  "worktree_path": "/home/murray/code/xirang/.worktrees/backup-preview-height-hotfix",
   "commit": null,
   "pr_url": null,
   "subtasks": [],
@@ -66,6 +66,6 @@
     "backend/internal/backupasset/provider/runner.go",
     "backend/internal/sshutil/command_runner.go"
   ],
-  "notes": "The original user-approved design shipped in v0.52.0, but production product acceptance on 2026-08-28 failed: core text preview was unavailable and received misleading Worker guidance; secret-reveal TOTP repeated on file/source changes; the Recovery-Point-only projection hid backup-bearing task lineages; and there was no Up navigation. The user selected remediation option A with an exact 45-minute non-sliding asset.secret_reveal proof reusable across files, directories, versions, nodes, and refresh within one login session, then explicitly approved the complete revised PRD/design/plan. Phases 8-11 are implemented and the available Phase 12 gates are green; the three-browser line remains open because local WebKit cannot launch with the host libraries currently installed. Commit/push/PR/CI/merge/release, NAS upgrade, production acceptance, collectors, and node-log P1 remain separately gated and were not authorized by implementation approval.",
+  "notes": "The original user-approved design shipped in v0.52.0, but production product acceptance on 2026-08-28 failed: core text preview was unavailable and received misleading Worker guidance; secret-reveal TOTP repeated on file/source changes; the Recovery-Point-only projection hid backup-bearing task lineages; and there was no Up navigation. The user selected remediation option A with an exact 45-minute non-sliding asset.secret_reveal proof reusable across files, directories, versions, nodes, and refresh within one login session, then explicitly approved the complete revised PRD/design/plan. Those remediations shipped through v0.52.2 and production proved single-click readable plain-text rendering, but acceptance on 2026-08-29 exposed a new layout failure: frame-based content retained the browser's approximately 150px fallback height inside a much taller preview viewport. The user explicitly authorized a bounded height hotfix. No production asset identity or content is recorded. Collectors and node-log work remain separately gated.",
   "meta": {}
 }
