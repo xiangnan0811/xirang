@@ -16,7 +16,7 @@
   "base_branch": "main",
   "worktree_path": "/home/murray/code/xirang/.worktrees/backup-task-preview-connect-ui",
   "commit": null,
-  "pr_url": null,
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/480",
   "subtasks": [],
   "children": [],
   "parent": "08-21-backup-assets-release-acceptance",
@@ -26,7 +26,7 @@
     ".trellis/tasks/08-29-backup-task-preview-connect-ui/implement.md",
     ".trellis/tasks/08-29-backup-task-preview-connect-ui/research/current-main-evidence.md"
   ],
-  "notes": "Product direction and implementation were explicitly approved on 2026-08-29. Local implementation is complete with verification concerns recorded in implement.md; commit, PR, CI, merge, release, and production acceptance remain pending.",
+  "notes": "Product direction and implementation were explicitly approved on 2026-08-29. PR #480 is open; the first backend CI run exposed a reproducible main-baseline non-canonical JWT decoding gap, which was repaired on the same branch with deterministic RED/GREEN and complete local gates. CI rerun, merge, post-merge automation, and production acceptance remain pending.",
   "meta": {
     "planning_base": "b3fbd0b3dd1be8c6b509973b510460d4d350b849",
     "product_decision": "Per-task connect-or-refresh preview action backed by task-derived Connect and an internal catalog wake.",

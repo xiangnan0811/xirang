@@ -148,6 +148,7 @@ Create:
 
 Modify:
 
+- `.trellis/spec/backend/error-handling.md`
 - `backend/internal/backupasset/runtime/catalog_worker.go`
 - `backend/internal/backupasset/runtime/catalog_worker_test.go`
 - `backend/internal/backupasset/runtime/runtime.go`
@@ -155,6 +156,8 @@ Modify:
 - `backend/internal/backupasset/repository/service.go`
 - `backend/internal/backupasset/repository/connect.go`
 - `backend/internal/backupasset/repository/connect_test.go`
+- `backend/internal/auth/jwt.go`
+- `backend/internal/auth/jwt_test.go`
 - `web/src/types/domain.ts`
 - `web/src/lib/api/recovery-points-api.ts`
 - `web/src/lib/api/recovery-points-api.test.ts`
@@ -175,6 +178,8 @@ Modify:
 Implementation note: the reviewed frontend boundary fix authorizes `tasks-api.ts` and its focused tests so an unknown nonempty executor is not collapsed to historical Rsync. This is mapper hardening only; it does not change the backend Task API, public routes, or Swagger contract.
 
 Implementation note: the second reviewed accessibility fix authorizes the existing backup-assets Playwright gate for first/last table-row tooltip geometry in zh/en under keyboard focus and hover. It verifies the tooltip remains inside the horizontal scrollport without introducing a shared primitive or changing the grid implementation.
+
+Implementation note: the first PR CI run exposed a pre-existing Step-up tamper test failure caused by permissive Base64URL decoding. Repository workflow requires CI failures to be fixed on the same work branch. The authorized repair is limited to the shared JWT parser's library-provided strict decoding option and a deterministic byte-equivalent/non-canonical signature regression in `internal/auth`; it changes no valid-token, TTL, revocation, route, schema, or response contract.
 
 The first RED may prove that a smaller existing test file is the correct ownership point. Any further expansion into schema, route/Swagger, deploy, backend Task API or provider mutation requires a design amendment and renewed approval before proceeding.
 
