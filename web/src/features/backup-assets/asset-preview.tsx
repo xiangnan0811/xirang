@@ -503,13 +503,18 @@ function PreviewBody({
         ? t("backupAssets.preview.hexTitle")
         : t("backupAssets.preview.frameTitle");
   return (
-    <iframe
-      ref={rememberContentNode}
-      src={ticket.contentUrl}
-      title={title}
-      sandbox=""
-      className="h-full max-h-full w-full border-0 bg-card"
-      onError={onMediaError}
-    />
+    <div
+      data-testid="asset-preview-frame-layout"
+      className="flex min-h-0 min-w-0 flex-1 self-stretch"
+    >
+      <iframe
+        ref={rememberContentNode}
+        src={ticket.contentUrl}
+        title={title}
+        sandbox=""
+        className="min-h-0 min-w-0 flex-1 self-stretch border-0 bg-card"
+        onError={onMediaError}
+      />
+    </div>
   );
 }

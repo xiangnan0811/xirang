@@ -453,6 +453,22 @@ items complete. Continue only through the newly approved remediation phases belo
   `REQUIRE_POSTGRES_MIGRATION_TEST=1` and failed rather than skipping. Required CI
   is configured to execute `TestBackupAssetMigration073Postgres` against PostgreSQL.
 
+## Phase 13 hotfix — usable frame height
+
+- [x] Add the first genuine RED in a real browser: a ready frame-based preview must
+  consume the available preview viewport height in ordinary desktop and focused
+  reading rather than remain at the browser's approximately 150px fallback height.
+- [x] Add focused component coverage that distinguishes stretching frame products
+  from centered image/audio/video/loading/error bodies without asserting only a
+  misleading `h-full` class.
+- [x] Implement the smallest `AssetPreview` layout correction. Preserve iframe
+  title, sandbox, referrer policy, same-origin URL ownership, renderer selection,
+  ticket lifecycle, and every security/privacy boundary.
+- [x] Run the focused preview/split/workspace tests, the real-browser regression,
+  Node 22 typecheck/lint/full frontend check, privacy scan, and `git diff --check`.
+- [x] Record RED/GREEN evidence without production asset identity or content, then
+  dispatch an independent Trellis check before commit/delivery.
+
 ## Risky boundaries and rollback
 
 - File-source identity/ownership: wrong grouping could expose or merge another

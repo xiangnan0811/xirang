@@ -2364,3 +2364,116 @@ Independent verification (all Go commands used `GOTOOLCHAIN=go1.26.6`):
   absent and `REQUIRE_POSTGRES_MIGRATION_TEST=1`, the test failed at fixture
   admission with `TEST_POSTGRES_DSN is required when
   REQUIRE_POSTGRES_MIGRATION_TEST=1`.
+
+## Phase 13 — usable frame-height hotfix
+
+Date: 2026-08-29
+
+### Real-browser and component RED
+
+- Node 22.23.1 Chromium command:
+  `env -u NODE_ENV PATH=/home/murray/.nvm/versions/node/v22.23.1/bin:/usr/local/bin:/usr/bin:/bin npm run e2e -- e2e/backup-assets-gate.spec.ts --project=chromium --grep "usable height"`
+  failed the new geometry assertions before the product edit. Both ordinary split
+  view and focused reading reported an iframe/viewport height ratio of `0.390625`,
+  proving the browser's approximately 150px iframe fallback rather than a class-name
+  proxy.
+- Node 22.23.1 component command:
+  `env -u NODE_ENV PATH=/home/murray/.nvm/versions/node/v22.23.1/bin:/usr/local/bin:/usr/bin:/bin npx vitest run src/features/backup-assets/asset-preview.test.tsx -t "dedicated stretching layout"`
+  failed because the dedicated stretching frame layout did not exist.
+
+### Minimal GREEN
+
+`AssetPreview` now wraps only iframe-based text, compatibility-text, metadata/hex,
+and PDF renderers in a `min-h-0` Flex child that stretches across the viewport's
+cross axis. The iframe also uses Flex stretching instead of an unresolved percentage
+height. Its title selection, empty sandbox, same-origin opaque URL, existing referrer
+behavior, error renewal, ticket lifecycle, and renderer selection are unchanged.
+Raster, audio, video, loading, empty, and error bodies retain the existing centered
+native/status layout, with focused component coverage for both layout families.
+
+### Verification
+
+- The exact Chromium RED command above is GREEN after the layout edit. The same
+  geometry regression is GREEN in Firefox; WebKit could not start locally because
+  the host lacks its required ICU 66, libxml2, and libffi 7 shared libraries. The
+  existing CI Playwright matrix remains the WebKit owner.
+- Node 22.23.1 focused Vitest command:
+  `npx vitest run src/features/backup-assets/asset-preview.test.tsx src/features/backup-assets/backup-file-split-pane.test.tsx src/features/backup-assets/backup-assets-workspace.test.tsx`
+  — GREEN: 3 files / 106 tests.
+- Node 22.23.1 `npm run typecheck` and `npm run lint` — GREEN.
+- Node 22.23.1 `npm run check` — GREEN on the clean confirmation run: 190
+  Vitest files / 1,747 tests with coverage plus the production build. An initial
+  coverage run had one unrelated state-hook timing failure; its exact selector and
+  the complete confirmation run both passed without an out-of-scope product edit.
+- Added-production-line privacy scan found no direct `fetch`, browser storage,
+  history/location, cookie, console/analytics/beacon writer, `URLSearchParams`,
+  `unknown as`, or TypeScript `any` addition.
+- `git diff --check` — GREEN.
+
+No backend, API, schema, migration, authority, content transport, ticket, proof,
+storage, analytics, NAS, collector, node-log, deployment, or production-data change
+was made. Independent Trellis review, commit, delivery, release, and NAS verification
+remain outside this implementation handoff.
+
+### Independent Phase 13 quality review
+
+The independent review found no product-code defect in the Flex correction. The
+preview viewport remains the shared centered layout, while the frame-only wrapper
+overrides cross-axis alignment and gives its iframe the resolved content-box block
+size. Text v2, compatibility text, metadata/hex, and PDF share that branch; raster,
+audio, video, loading, empty, and error bodies remain outside it. Iframe title,
+empty sandbox, same-origin opaque URL ownership, referrer behavior, error renewal,
+ticket lifecycle, responsive split/sequential ownership, and focus behavior are
+unchanged.
+
+Two test-quality findings were fixed:
+
+1. **Important — the browser assertion permitted more blank space than the design
+   contract and used one-shot geometry reads.** The 90-percent ratio could admit a
+   growing gap on a tall viewport, and a future asynchronous layout transition could
+   make the focused measurement timing-sensitive. The helper now polls the rendered
+   geometry after each layout state, derives the intentional vertical inset from the
+   viewport's computed padding, and requires the iframe to match the remaining
+   content-box height within one CSS pixel.
+2. **Minor — the new centered native-renderer table left audio/video mounted until
+   after the media mock was restored.** Focused Vitest still passed but jsdom printed
+   two `HTMLMediaElement.load` not-implemented errors during cleanup. Each case now
+   unmounts explicitly while the mock is active; the same 106-test gate is clean.
+
+Fresh reviewer verification used Node 22.23.1 with `NODE_ENV` unset:
+
+- Chromium and Firefox usable-height geometry repeated five times per browser:
+  GREEN, 10/10. Every split and focused-reading measurement matched the computed
+  viewport content-box height within one CSS pixel.
+- WebKit remained externally blocked before test execution by the host's missing
+  ICU 66, libxml2, and libffi 7 shared libraries. No dependency was installed; the
+  required CI three-browser matrix remains the WebKit owner.
+- Focused preview/split/workspace Vitest: GREEN, 3 files / 106 tests, with no media
+  cleanup error output.
+- Standalone TypeScript typecheck and ESLint: GREEN.
+- Full `npm run check`: GREEN — 190/190 Vitest files, 1,747 tests with coverage,
+  and the 3,230-module production build.
+- Bundle budget: GREEN — main JS 493.85/500.00 KiB and main CSS
+  108.91/110.00 KiB.
+- Task context validation: GREEN, 19 implementation and 15 check entries; only the
+  established context-injection size notices remain.
+- Added production lines contain no direct fetch, storage/history/cookie,
+  console/analytics/beacon, URL rewrite, `unknown as`, or TypeScript `any` sink.
+  No backend, dependency, lockfile, schema, migration, deployment, collector, or
+  node-log path changed. Final `git diff --check` is GREEN.
+
+No Critical or Important finding remains. Phase 13 is ready for the main-session
+Trellis spec update and commit/delivery workflow; CI must supply the WebKit result
+before merge.
+
+### Main-session spec and pre-commit verification
+
+- The reusable Flex/iframe contract and real-browser geometry requirement are now
+  recorded in `.trellis/spec/frontend/quality-guidelines.md`; no API, schema, or
+  cross-layer signature changed.
+- Fresh Node 22.23.1 `npm run e2e -- e2e/backup-assets-gate.spec.ts
+  --project=chromium --project=firefox --grep "usable height"` — GREEN: 2/2.
+- Fresh Node 22.23.1 `npm run check` — GREEN: typecheck and lint exited 0; all
+  190 Vitest files / 1,747 tests passed with coverage; the production build
+  transformed 3,230 modules and exited 0.
+- `git diff --check` — GREEN. No production asset identity or content was recorded.

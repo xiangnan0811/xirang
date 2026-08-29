@@ -397,6 +397,11 @@ The user selected **A with a 45-minute lifetime** on 2026-08-28:
   content, ticket, proof, or locator persistence.
 - [ ] Desktop and mobile flows have explicit loading/empty/error/truncation states,
   correct focus restoration, and a top-level Files-page axe smoke.
+- [ ] Frame-based readable text, compatibility text, hex, and PDF content stretches
+  to the preview viewport's available block size on desktop and in focused-reading
+  mode instead of falling back to the browser's approximately 150px iframe height;
+  image, audio, video, loading, and error presentations retain their intended
+  centered or native layout.
 - [ ] Frontend and focused backend tests pass, `env -u NODE_ENV npm run check`
   passes under Node 22, focused Go gates pass, privacy source scans pass, and the
   implementation PR/CI/post-merge evidence is recorded before release completion.

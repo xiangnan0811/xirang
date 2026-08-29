@@ -650,3 +650,26 @@ Release and NAS acceptance are a new remediation cycle. `v0.52.0` remains the
 rollback image. Collectors stay zero until a newly released image proves all four
 reported defects fixed over the authorized LAN path without printing sensitive
 production identity or content.
+
+## 19. `v0.52.2` preview-height hotfix
+
+Production proved that single-click `plain_text/text_v2` rendering is readable and
+non-hex, but its iframe occupies only the browser fallback height inside a taller
+preview viewport. The workspace and split pane already provide available block
+size; focused reading changes only the grid columns. The failure is local to the
+frame layout: percentage height cannot resolve through the current flex/min-height
+chain, and centering makes the short frame appear between large blank regions.
+
+Keep `AssetPreview` as the renderer owner. Give frame-based products a dedicated
+stretching wrapper/layout contract that consumes the available preview viewport
+without depending on an unresolved percentage height. Keep image, audio, video,
+loading, empty, and error bodies on their existing centered/native presentation.
+Do not change ticket, URL, sandbox, content, selection, route, proof, or authority
+contracts. Focused reading remains a width-only presentation state and inherits
+the corrected frame height automatically.
+
+The RED must run in a real browser and assert rendered geometry, not only Tailwind
+class strings: after preview readiness, the frame height tracks the preview
+viewport (with only the intentional inset) in both ordinary desktop and focused
+reading. Focused component tests continue to cover the structural split between
+stretching frame products and centered non-frame bodies.
