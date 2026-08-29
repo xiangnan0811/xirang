@@ -1,0 +1,16 @@
+{"file":".trellis/tasks/08-29-backup-task-preview-connect-ui/prd.md","reason":"Approved product requirements, safety boundaries, and acceptance criteria for the task."}
+{"file":".trellis/tasks/08-29-backup-task-preview-connect-ui/design.md","reason":"Selected cross-layer design, scheduler invariants, UI state machine, and expected file ownership."}
+{"file":".trellis/tasks/08-29-backup-task-preview-connect-ui/research/current-main-evidence.md","reason":"Current-main backend/frontend contract evidence and verified baseline."}
+{"file":".trellis/spec/backend/backup-file-catalog.md","reason":"Authoritative catalog scheduling, fairness, lifecycle, and privacy contract."}
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Production runtime composition and lifecycle ownership rules."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Fail-closed service/API error boundaries and safe client messages."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Backend test, concurrency, race, and production-wiring expectations."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Dialog and task action component boundaries."}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"Polling, cancellation, effects, and cleanup conventions."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Page-local state ownership and async state modeling."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Raw DTO mapping, strict types, and unsafe-cast prohibitions."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Frontend test, lint, build, and full-gate requirements."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Dialog focus, live status, tooltips, and accessible action naming."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"End-to-end data flow and production composition verification."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse existing Connect, recovery-point mapper, route helper, and UI primitives."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Dedicated branch, PR, CI, merge, and post-merge delivery contract."}

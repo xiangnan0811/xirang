@@ -995,6 +995,9 @@ if err := h.persistSettingsMutation(ctx, req); err != nil {
   token version, TOTP-enabled state, issued-at, expiry, exact action lifetime,
   and, for `asset.secret_reveal`, the current login-session JTI plus revocation
   state. Reuse never changes `iat` or `exp`.
+- Parse every JWT segment with strict Base64URL decoding. A non-canonical text
+  encoding that decodes to the same header, claims, or signature bytes is still
+  invalid and must fail closed; token text has one accepted canonical form.
 - Returned `expires_at` is exactly the signed `exp`. Response and audit
   `proof_ttl_seconds` derive from the same action policy; invalid actions report
   zero rather than inheriting the default.
@@ -1007,6 +1010,10 @@ if err := h.persistSettingsMutation(ctx, req); err != nil {
   missing/malformed JTI, cross-purpose proofs, tamper, expiry, user/subject/role/
   token-version/TOTP changes, current-session mismatch/revocation, non-sliding
   reuse, and exact safe response/audit TTL facts.
+- Include a deterministic parser regression that constructs a non-canonical
+  Base64URL signature with the same decoded bytes and proves it is rejected. Do
+  not rely on replacing an arbitrary final character, because unused padding
+  bits can make that test probabilistic under permissive decoders.
 - Run focused tests with `-count=3` and `-race`, then full backend gates and a
   privacy/diff scan.
 

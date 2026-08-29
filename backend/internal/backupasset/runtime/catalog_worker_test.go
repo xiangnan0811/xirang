@@ -110,11 +110,182 @@ func TestCatalogWorkerStartupIsAsyncPeriodicAndDynamicallyDisabled(t *testing.T)
 	}
 }
 
+func TestCatalogWorkerWakeInterruptsLongPeriodicWaitAndCoalesces(t *testing.T) {
+	backend := newCatalogWorkerBackendFake(nil)
+	ticks := make(chan time.Time)
+	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		Foundation: workerFoundation(true), Backend: backend, Metrics: catalog.NoopMetrics{},
+		After: func(time.Duration) <-chan time.Time { return ticks },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go worker.Run(ctx)
+	backend.waitForListCalls(t, 1)
+
+	if !worker.TryWake() {
+		t.Fatal("first Catalog wake was not accepted")
+	}
+	if worker.TryWake() {
+		t.Fatal("duplicate Catalog wake was not coalesced")
+	}
+	backend.waitForListCalls(t, 2)
+	if got := backend.listCallCount(); got != 2 {
+		t.Fatalf("wake-triggered Catalog scans=%d, want initial plus one wake", got)
+	}
+}
+
+func TestCatalogWorkerTryWakeNeverBlocksWhenQueueIsSaturated(t *testing.T) {
+	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		Foundation: workerFoundation(true), Backend: newCatalogWorkerBackendFake(nil), Metrics: catalog.NoopMetrics{},
+		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.wake <- struct{}{}
+	result := make(chan bool, 1)
+	go func() { result <- worker.TryWake() }()
+
+	select {
+	case accepted := <-result:
+		if accepted {
+			t.Fatal("saturated Catalog wake queue accepted another request")
+		}
+	case <-time.After(100 * time.Millisecond):
+		<-worker.wake
+		<-result
+		t.Fatal("TryWake blocked on a saturated Catalog wake queue")
+	}
+}
+
+func TestCatalogWorkerWakeDuringScanRemainsPending(t *testing.T) {
+	backend := newCatalogWorkerBackendFake([]catalog.BuildCandidate{{RepositoryID: catalogWorkerID('a'), RecoveryPointID: catalogWorkerID('1')}})
+	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		Foundation: workerFoundation(true), Backend: backend, Metrics: catalog.NoopMetrics{},
+		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go worker.Run(ctx)
+	first := backend.nextBuild(t)
+	if !worker.TryWake() {
+		t.Fatal("wake during active Catalog scan was not accepted")
+	}
+	close(first.release)
+	second := backend.nextBuild(t)
+	close(second.release)
+	backend.waitForListCalls(t, 2)
+}
+
+func TestCatalogWorkerOverduePeriodicPassWinsOverSustainedWake(t *testing.T) {
+	backend := newCatalogWorkerBackendFake([]catalog.BuildCandidate{{RepositoryID: catalogWorkerID('a'), RecoveryPointID: catalogWorkerID('1')}})
+	ticks := make(chan time.Time)
+	afterCalled := make(chan time.Duration, 4)
+	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		Foundation: workerFoundation(true), Backend: backend, Metrics: catalog.NoopMetrics{},
+		After: func(duration time.Duration) <-chan time.Time {
+			afterCalled <- duration
+			return ticks
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go worker.Run(ctx)
+	first := backend.nextBuild(t)
+	waitForCatalogAfterCalls(t, afterCalled, 1)
+
+	if !worker.TryWake() {
+		t.Fatal("wake during initial Catalog scan was not accepted")
+	}
+	tickDelivered := make(chan struct{})
+	go func() {
+		ticks <- time.Now()
+		close(tickDelivered)
+	}()
+	select {
+	case <-tickDelivered:
+	case <-time.After(time.Second):
+		t.Fatal("overdue periodic tick was not observed during the active scan")
+	}
+	close(first.release)
+	periodic := backend.nextBuild(t)
+	if worker.TryWake() {
+		t.Fatal("wake during overdue periodic Catalog scan was not coalesced with the pending wake")
+	}
+	close(periodic.release)
+	waitForCatalogAfterCalls(t, afterCalled, 1)
+
+	wakeFollowUp := backend.nextBuild(t)
+	close(wakeFollowUp.release)
+	backend.waitForListCalls(t, 3)
+}
+
+func TestCatalogWorkerChoosesDuePeriodicWhenScanCompletionAndTimerAreReadyTogether(t *testing.T) {
+	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		Foundation: workerFoundation(true), Backend: newCatalogWorkerBackendFake(nil), Metrics: catalog.NoopMetrics{},
+		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !worker.TryWake() {
+		t.Fatal("pending Catalog wake was not accepted")
+	}
+	periodic := make(chan time.Time, 1)
+	periodic <- time.Now()
+
+	trigger, ready, remainingPeriodic := worker.nextIdleScan(periodic, false)
+	if !ready || trigger != catalogScanPeriodic {
+		t.Fatalf("simultaneously ready next scan=(%d, %t), want periodic", trigger, ready)
+	}
+	if remainingPeriodic != nil {
+		t.Fatal("due periodic timer was not consumed")
+	}
+	if !worker.hasPendingWake() {
+		t.Fatal("periodic priority consumed the pending wake")
+	}
+}
+
+func TestCatalogWorkerPreRunWakeFoldsIntoInitialPass(t *testing.T) {
+	backend := newCatalogWorkerBackendFake(nil)
+	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		Foundation: workerFoundation(true), Backend: backend, Metrics: catalog.NoopMetrics{},
+		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !worker.TryWake() {
+		t.Fatal("pre-Run Catalog wake was not accepted")
+	}
+	if worker.TryWake() {
+		t.Fatal("duplicate pre-Run Catalog wake was not coalesced")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go worker.Run(ctx)
+	backend.waitForListCalls(t, 1)
+	time.Sleep(20 * time.Millisecond)
+	if got := backend.listCallCount(); got != 1 {
+		t.Fatalf("pre-Run wake caused %d scans, want one initial pass", got)
+	}
+}
+
 func TestCatalogWorkerShutdownRevokesCancelsAndBoundedlyJoins(t *testing.T) {
 	backend := newCatalogWorkerBackendFake([]catalog.BuildCandidate{{RepositoryID: catalogWorkerID('a'), RecoveryPointID: catalogWorkerID('1')}})
 	backend.ignoreCancellation = true
+	metrics := &catalogWorkerMetricsFake{scans: make(chan catalog.MetricScanOutcome, 4)}
 	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
-		Foundation: workerFoundation(true), Backend: backend, Metrics: catalog.NoopMetrics{},
+		Foundation: workerFoundation(true), Backend: backend, Metrics: metrics,
 		After: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
 	})
 	if err != nil {
@@ -141,6 +312,12 @@ func TestCatalogWorkerShutdownRevokesCancelsAndBoundedlyJoins(t *testing.T) {
 	if err := worker.Shutdown(context.Background()); err != nil {
 		t.Fatalf("repeated shutdown: %v", err)
 	}
+	if worker.TryWake() {
+		t.Fatal("stopped Catalog worker accepted a wake")
+	}
+	if got := metrics.activeBuildCount(); got != 0 {
+		t.Fatalf("Catalog active-build gauge=%d after shutdown, want 0", got)
+	}
 
 	stuckBackend := newCatalogWorkerBackendFake([]catalog.BuildCandidate{{RepositoryID: catalogWorkerID('b'), RecoveryPointID: catalogWorkerID('2')}})
 	stuckBackend.ignoreCancellation = true
@@ -159,6 +336,53 @@ func TestCatalogWorkerShutdownRevokesCancelsAndBoundedlyJoins(t *testing.T) {
 		t.Fatalf("stuck shutdown error=%v", err)
 	}
 	close(stuckCall.release)
+}
+
+func TestCatalogWorkerActiveBuildGaugeCannotPublishStaleCountAfterJoin(t *testing.T) {
+	backend := newCatalogWorkerBackendFake(nil)
+	metrics := newOrderedCatalogWorkerMetricsFake()
+	worker, err := NewCatalogWorker(CatalogWorkerDependencies{
+		Foundation: workerFoundation(true), Backend: backend, Metrics: metrics,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{}, 2)
+	for _, candidate := range []catalog.BuildCandidate{
+		{RepositoryID: catalogWorkerID('a'), RecoveryPointID: catalogWorkerID('1')},
+		{RepositoryID: catalogWorkerID('b'), RecoveryPointID: catalogWorkerID('2')},
+	} {
+		candidate := candidate
+		go func() {
+			worker.buildCandidate(context.Background(), candidate)
+			done <- struct{}{}
+		}()
+	}
+	first := backend.nextBuild(t)
+	second := backend.nextBuild(t)
+	close(first.release)
+	select {
+	case <-metrics.staleOneBlocked:
+	case <-time.After(time.Second):
+		t.Fatal("first decrement did not reach the controlled gauge update")
+	}
+	close(second.release)
+	select {
+	case <-metrics.zeroPublished:
+	case <-time.After(100 * time.Millisecond):
+		// A serialized publisher correctly holds zero until the earlier update finishes.
+	}
+	close(metrics.releaseStaleOne)
+	for range 2 {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("Catalog build did not join after the gauge was released")
+		}
+	}
+	if got := metrics.activeBuildCount(); got != 0 {
+		t.Fatalf("Catalog active-build gauge=%d after concurrent builds joined, want 0", got)
+	}
 }
 
 func TestCatalogRetryDelayIsDeterministicBoundedAndResets(t *testing.T) {
@@ -325,15 +549,83 @@ func (backend *catalogWorkerBackendFake) reconcileCallCount() int {
 }
 
 type catalogWorkerMetricsFake struct {
-	scans chan catalog.MetricScanOutcome
+	mu           sync.Mutex
+	scans        chan catalog.MetricScanOutcome
+	activeBuilds int
+}
+
+type orderedCatalogWorkerMetricsFake struct {
+	mu              sync.Mutex
+	activeBuilds    int
+	oneCalls        int
+	staleOneBlocked chan struct{}
+	releaseStaleOne chan struct{}
+	zeroPublished   chan struct{}
+	staleBlockOnce  sync.Once
+	zeroOnce        sync.Once
+}
+
+func newOrderedCatalogWorkerMetricsFake() *orderedCatalogWorkerMetricsFake {
+	return &orderedCatalogWorkerMetricsFake{
+		staleOneBlocked: make(chan struct{}), releaseStaleOne: make(chan struct{}), zeroPublished: make(chan struct{}),
+	}
+}
+
+func (*orderedCatalogWorkerMetricsFake) ObserveBuild(catalog.MetricBuildOutcome, time.Duration) {}
+func (*orderedCatalogWorkerMetricsFake) ObserveScan(catalog.MetricScanOutcome)                  {}
+func (*orderedCatalogWorkerMetricsFake) AddReconciledAbandoned(int)                             {}
+func (metrics *orderedCatalogWorkerMetricsFake) SetActiveBuilds(count int) {
+	metrics.mu.Lock()
+	if count == 1 {
+		metrics.oneCalls++
+	}
+	block := count == 1 && metrics.oneCalls == 2
+	metrics.mu.Unlock()
+	if block {
+		metrics.staleBlockOnce.Do(func() { close(metrics.staleOneBlocked) })
+		<-metrics.releaseStaleOne
+	}
+	metrics.mu.Lock()
+	metrics.activeBuilds = count
+	metrics.mu.Unlock()
+	if count == 0 {
+		metrics.zeroOnce.Do(func() { close(metrics.zeroPublished) })
+	}
+}
+
+func (metrics *orderedCatalogWorkerMetricsFake) activeBuildCount() int {
+	metrics.mu.Lock()
+	defer metrics.mu.Unlock()
+	return metrics.activeBuilds
 }
 
 func (*catalogWorkerMetricsFake) ObserveBuild(catalog.MetricBuildOutcome, time.Duration) {}
 func (metrics *catalogWorkerMetricsFake) ObserveScan(outcome catalog.MetricScanOutcome) {
 	metrics.scans <- outcome
 }
-func (*catalogWorkerMetricsFake) SetActiveBuilds(int)        {}
+func (metrics *catalogWorkerMetricsFake) SetActiveBuilds(count int) {
+	metrics.mu.Lock()
+	metrics.activeBuilds = count
+	metrics.mu.Unlock()
+}
 func (*catalogWorkerMetricsFake) AddReconciledAbandoned(int) {}
+
+func (metrics *catalogWorkerMetricsFake) activeBuildCount() int {
+	metrics.mu.Lock()
+	defer metrics.mu.Unlock()
+	return metrics.activeBuilds
+}
+
+func waitForCatalogAfterCalls(t *testing.T, calls <-chan time.Duration, want int) {
+	t.Helper()
+	for index := 0; index < want; index++ {
+		select {
+		case <-calls:
+		case <-time.After(time.Second):
+			t.Fatalf("Catalog periodic timer armed %d times, want at least %d", index, want)
+		}
+	}
+}
 
 func catalogWorkerID(character byte) string {
 	return strings.Repeat(string(character), 32)

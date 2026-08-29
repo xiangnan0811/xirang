@@ -130,6 +130,48 @@ describe("Rsync versioning task API", () => {
     });
   });
 
+  it("distinguishes an unknown nonempty executor from an absent historical executor", async () => {
+    fetchMock
+      .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          id: 73,
+          name: "future-executor",
+          status: "pending",
+          node_id: 7,
+          executor_type: "future_copy_engine",
+          rsync_publication: {
+            mode: "legacy_mutable",
+            state: "legacy",
+            reason_code: "legacy",
+          },
+        },
+      })))
+      .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          id: 74,
+          name: "historical-rsync",
+          status: "pending",
+          node_id: 7,
+        },
+      })));
+
+    const unknown = await api.getTask("token", 73);
+    const historical = await api.getTask("token", 74);
+
+    expect(unknown.executorType).toBeUndefined();
+    expect(unknown.rsyncPublication).toBeUndefined();
+    expect(historical.executorType).toBe("rsync");
+    expect(historical.rsyncPublication).toMatchObject({
+      mode: "legacy_mutable",
+      state: "legacy",
+      reasonCode: "legacy",
+    });
+  });
+
   it("serializes only typed Rsync versioning request fields", async () => {
     fetchMock
       .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({

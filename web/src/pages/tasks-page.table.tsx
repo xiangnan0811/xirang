@@ -6,6 +6,7 @@ import {
   Cloud,
   GitFork,
   GitBranch,
+  FolderSearch,
   History,
   Loader2,
   Pause,
@@ -24,7 +25,7 @@ import { FilteredEmptyState } from "@/components/ui/filtered-empty-state";
 import { getTaskStatusMeta } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import type { TasksViewProps } from "@/pages/tasks-page.utils";
-import { buildChainParentMap, canCancel, canTrigger, rclonePublicationStateTone } from "@/pages/tasks-page.utils";
+import { buildChainParentMap, canCancel, canTrigger, rclonePublicationStateTone, taskPreviewConnectEligibility } from "@/pages/tasks-page.utils";
 
 export const TasksTable = React.memo(function TasksTable({
   loading,
@@ -40,6 +41,8 @@ export const TasksTable = React.memo(function TasksTable({
   handleResume,
   onEdit,
   onViewHistory,
+  canConnectTaskPreview,
+  onConnectTaskPreview,
   canManageRsyncVersioning,
   onManageRsyncVersioning,
   canManageRcloneVersioning,
@@ -107,6 +110,8 @@ export const TasksTable = React.memo(function TasksTable({
               const chainKey = String(task.id);
               const isExpanded = expandedChains?.has(chainKey) ?? true;
               const isRunning = task.status === "running" || task.status === "retrying";
+              const previewConnect = taskPreviewConnectEligibility(task, canConnectTaskPreview);
+              const previewTooltipId = `task-preview-connect-tooltip-table-${task.id}`;
 
               return (
                 <tr
@@ -270,6 +275,31 @@ export const TasksTable = React.memo(function TasksTable({
                           onClick={() => onManageRsyncVersioning(task)}
                         >
                           <GitBranch className="size-4" aria-hidden />
+                        </Button>
+                      ) : null}
+                      {previewConnect.visible ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="group relative size-8 text-muted-foreground hover:bg-accent hover:text-foreground aria-disabled:opacity-50"
+                          aria-label={t("tasks.previewConnectAriaLabel", { name: task.name || task.policyName })}
+                          aria-describedby={previewConnect.disabled ? previewTooltipId : undefined}
+                          aria-disabled={previewConnect.disabled || undefined}
+                          disabled={isPendingAny}
+                          onClick={() => {
+                            if (!previewConnect.disabled) onConnectTaskPreview(task);
+                          }}
+                        >
+                          <FolderSearch className="size-4" aria-hidden />
+                          {previewConnect.disabled ? (
+                            <span
+                              id={previewTooltipId}
+                              role="tooltip"
+                              className="pointer-events-none absolute right-full bottom-0 z-20 mr-2 w-64 rounded-md border border-border bg-popover px-2.5 py-2 text-left text-xs font-normal text-popover-foreground opacity-0 shadow-md transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+                            >
+                              {t("tasks.previewConnectDisabledActive")}
+                            </span>
+                          ) : null}
                         </Button>
                       ) : null}
                       {canManageRcloneVersioning && task.executorType === "rclone" && task.rclonePublication ? (

@@ -1,0 +1,16 @@
+{"file":".trellis/tasks/08-29-backup-task-preview-connect-ui/prd.md","reason":"Check every acceptance criterion against code, tests, and delivery evidence."}
+{"file":".trellis/tasks/08-29-backup-task-preview-connect-ui/design.md","reason":"Check implementation matches selected architecture and rejected-scope boundaries."}
+{"file":".trellis/tasks/08-29-backup-task-preview-connect-ui/research/current-main-evidence.md","reason":"Reconcile implementation against the captured baseline and refresh drift-prone facts."}
+{"file":".trellis/spec/backend/backup-file-catalog.md","reason":"Review wake fairness, pending work, periodic cadence, shutdown, metrics, and privacy."}
+{"file":".trellis/spec/backend/deployment-runtime.md","reason":"Review exact production composition and lifecycle ownership."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review fail-closed errors and leakage boundaries."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review backend tests, race/repeat coverage, and gate evidence."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Review component responsibility and primitive reuse."}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"Review polling cancellation, timers, effects, and stale-update protection."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Review dialog/page async-state ownership."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Review DTO mapper strictness and absence of unsafe casts/raw response leakage."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Review frontend tests and complete npm gate evidence."}
+{"file":".trellis/spec/frontend/a11y-guidelines.md","reason":"Review dialog semantics, keyboard/focus, live announcements, and disabled explanations."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review API-to-worker-to-UI behavior across real production wiring."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Review reuse of existing service, mapper, route, and component patterns."}
+{"file":".trellis/spec/guides/branch-workflow-guidelines.md","reason":"Review PR, CI, merge, release, and post-merge evidence boundaries."}

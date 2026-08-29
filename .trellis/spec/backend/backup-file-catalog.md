@@ -129,3 +129,151 @@ for _, claimed := range claimWithLease(candidates) {
 }
 // Wake coalescing does not reset the already-running periodic timer.
 ```
+
+## Scenario: Task-Derived Preview Connection And Prompt Catalog Wake
+
+### 1. Scope / Trigger
+
+Use this scenario when a Task-derived repository connection creates or refreshes
+an observed mutable recovery point and a caller needs prompt Files convergence.
+The connection is still an explicit administrator action and a bounded read-only
+Provider observation; the wake is only an internal best-effort scheduling hint.
+
+### 2. Signatures
+
+- Task UI connection request: `POST /api/v1/backup-repositories/connect` with
+  `{ "task_id": <positive Task ID> }`. The task entry point does not accept a
+  locator, credential, replacement flag, display name, or provider proof.
+- Repository/runtime composition: `SetCatalogWake(CatalogWakeRequester) error`,
+  where `CatalogWakeRequester` exposes `TryWake() bool` and is wired to the one
+  lifecycle-owned production `CatalogWorker` instance.
+- Connect response contains a sanitized repository projection plus an optional
+  mutable recovery-point snapshot. Current clients accept one internally
+  consistent envelope: emitted Go keys `Repository` / `MutablePoint` or
+  normalized `repository` / `mutable_point`. Duplicate repository/point keys,
+  mixed casing envelopes, or a present malformed point block the projection;
+  an absent or null point remains valid for reconcile/disconnect.
+- The mutable-point snapshot contains core RecoveryPoint fields only. It is not
+  a full RecoveryPoint catalog projection; clients fetch catalog status by the
+  exact returned point ID.
+
+### 3. Contracts
+
+- Connect derives repository access from authoritative Task, Node, and credential
+  state, probes outside the transaction, then locks and revalidates lineage before
+  commit. It must not enable managed Rsync/versioning or mutate Provider data.
+- Request the catalog wake only after the transaction commits and only for a
+  valid, observed, non-retired mutable point. Probe failure, validation failure,
+  rollback, nil point, or retired point never requests a wake.
+- Wake delivery is capacity-one, coalesced, and actually non-blocking: the send
+  itself uses a `select` with `default`. Queue saturation, duplicate wake,
+  stopped worker, or `TryWake()==false` never reverses a successful Connect.
+- A wake received during an active scan remains pending for a follow-up pass. A
+  wake queued before `Run` is absorbed by the initial pass. Wake-triggered passes
+  do not reset or postpone the independent periodic deadline; a due periodic pass
+  has priority after the active scan finishes, including when scan completion and
+  the periodic timer become ready at the same scheduler boundary.
+- The repository service copies the requester under its lock and calls
+  `TryWake` after releasing the lock. Production composition rejects nil,
+  typed-nil, or duplicate wiring, retains the original requester after a rejected
+  duplicate, and never creates a second CatalogWorker for this path.
+- Active-build gauge count changes and publications are serialized independently
+  of the worker lifecycle lock, so concurrent completions cannot publish an older
+  nonzero count after the exact zero observed when all builds join.
+- The preview client polls only the exact returned point. Catalog readiness is
+  complete generation + complete coverage + available content + list permission;
+  preview permission and a positive entry count are not readiness requirements.
+  Missing/malformed point data, failed/partial/unavailable Catalog state, or an
+  expired foreground polling budget fails closed with a stable localized message.
+- Closing the dialog or changing Task/token aborts the in-flight operation and
+  clears its timer and prevents stale/late updates. A two-minute wall-clock
+  deadline also aborts a catalog call that never settles and transitions only to
+  background-timeout guidance; lifecycle/task/token/close aborts remain silent.
+  UI errors remain a closed localized set; raw backend, database, Provider,
+  locator, credential, proof, or exception detail is never rendered.
+- Task preview eligibility requires a canonical Rsync legacy publication triple:
+  `legacy_mutable` / `legacy` / `legacy`. Missing historical executor data may use
+  the Rsync default, but an unknown nonempty executor or a blocked/malformed
+  publication sentinel is never eligible.
+
+### 4. Validation & Error Matrix
+
+| Condition | Connect result | Wake / preview behavior |
+|---|---|---|
+| Commit succeeds with valid observed mutable point | Sanitized repository + point snapshot | Request one best-effort wake, then poll that point. |
+| Repeated Connect resolves the same valid point | Successful idempotent refresh | A repeated wake is allowed and may coalesce. |
+| Probe/validation/transaction fails | Existing safe error contract | No wake and no catalog polling. |
+| Commit succeeds but point is nil, retired, or invalid | Repository result may remain valid | No wake; task preview flow blocks without guessing a point ID. |
+| Wake queue is full or worker is stopping | Connect remains successful | `TryWake` returns false immediately; periodic scan remains the fallback. |
+| Catalog is complete, available, listable, and empty | Connection remains successful | Preview is ready and opens the exact empty point. |
+| Catalog is failed, partial, unavailable, or the two-minute wall-clock budget expires (including a hung request) | Connection remains successful | Abort foreground work, show background-timeout/closed guidance as appropriate; never disconnect or expose raw details. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: an administrator connects a legacy mutable Rsync Task with only its Task
+  ID; commit creates an observed point, the non-blocking wake starts a prompt
+  catalog pass, and the exact complete empty point opens as a valid workspace.
+- Base: a previously connected Task is refreshed while the wake queue already
+  holds a signal. Connect succeeds immediately, the wake coalesces, and the
+  periodic scan remains scheduled as the eventual fallback.
+- Bad: collect a locator or credential in the Task UI; wake before commit; call a
+  potentially blocking channel send while holding the service lock; reset the
+  periodic timer for every wake; cast the partial point to a full Catalog DTO;
+  require preview permission or nonzero entries; disconnect after indexing
+  failure; or render `err.Error()`/backend detail to the operator.
+
+### 6. Tests Required
+
+- CatalogWorker tests prove a long deadline is interrupted, duplicate wakes
+  coalesce without blocking, a saturated channel cannot block the caller, wake
+  during scan is retained, simultaneous scan completion/timer readiness and
+  continuous wakes cannot starve a periodic pass, concurrent gauge updates finish
+  at exact zero, a pre-Run wake folds into initial work, and shutdown cancels/joins
+  then rejects later wakes. Run focused repeat and race variants.
+- Repository tests prove wake occurs exactly once after a committed valid point;
+  repeated Connect remains safe; probe/transaction failure and nil/retired points
+  do not wake; nil/typed-nil/duplicate wiring is rejected; and a false/rejected
+  wake cannot fail Connect. Production runtime tests assert the exact
+  lifecycle-owned worker is injected once.
+- API mapper tests cover `MutablePoint` and `mutable_point`, absent/null values,
+  duplicate/mixed/malformed envelope fail-closed behavior, task-only request
+  shape, and reuse of the strict recovery-point snapshot mapper. Task mapper tests
+  distinguish unknown nonempty executors from absent historical data.
+- UI tests cover administrator-only canonical legacy-Rsync eligibility in table
+  and grid, paused/disabled eligibility, running/retrying/active-run disabling and
+  accessible tooltip parity; table tooltips stay inside the horizontal scrollport
+  for first and last rows in zh/en under keyboard focus and hover. Tests also cover
+  safety copy, exact-point readiness including empty
+  Catalog, failed/partial/unavailable state, a hung-request wall-clock timeout,
+  Task/token/close/unmount cancellation with timer cleanup and late-result
+  suppression, localized close names, closed errors, and exact deep-link navigation.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+tx.Create(&point)
+worker.TryWake()           // transaction may still roll back
+worker.wake <- struct{}{}  // can block the Connect request
+```
+
+Correct:
+
+```go
+if err := db.Transaction(persistPoint); err != nil {
+    return err
+}
+if pointIsObservedAndWakeable(point) {
+    _ = catalogWake.TryWake() // post-commit, best effort, non-blocking
+}
+
+func (worker *CatalogWorker) TryWake() bool {
+    select {
+    case worker.wake <- struct{}{}:
+        return true
+    default:
+        return false
+    }
+}
+```

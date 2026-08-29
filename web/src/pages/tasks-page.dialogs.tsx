@@ -5,6 +5,7 @@ import { BatchCommandDialog } from "@/components/batch-command-dialog";
 import { BatchResultDialog } from "@/components/batch-result-dialog";
 import { TaskRcloneVersioningDialog } from "@/components/task-rclone-versioning-dialog";
 import { TaskRsyncVersioningDialog } from "@/components/task-rsync-versioning-dialog";
+import { TaskPreviewConnectDialog } from "@/components/task-preview-connect-dialog";
 import { SnapshotDiffViewer } from "@/components/snapshot-diff-viewer";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { BackupAssetsTaskContextLink } from "@/features/backup-assets/backup-assets-task-context-link";
@@ -61,6 +62,9 @@ export interface TasksPageDialogsProps {
   setRsyncVersioningTask: (task: TaskRecord | null) => void;
   canManageRsyncVersioning: boolean;
   onRsyncVersioningUpdated: () => void | Promise<void>;
+  previewConnectTask: TaskRecord | null;
+  setPreviewConnectTask: (task: TaskRecord | null) => void;
+  canConnectTaskPreview: boolean;
   rcloneVersioningTask: TaskRecord | null;
   setRcloneVersioningTask: (task: TaskRecord | null) => void;
   canManageRcloneVersioning: boolean;
@@ -102,6 +106,9 @@ export function TasksPageDialogs({
   setRsyncVersioningTask,
   canManageRsyncVersioning,
   onRsyncVersioningUpdated,
+  previewConnectTask,
+  setPreviewConnectTask,
+  canConnectTaskPreview,
   rcloneVersioningTask,
   setRcloneVersioningTask,
   canManageRcloneVersioning,
@@ -143,6 +150,17 @@ export function TasksPageDialogs({
           task={rsyncVersioningTask}
           token={authToken}
           onUpdated={onRsyncVersioningUpdated}
+        />
+      ) : null}
+
+      {canConnectTaskPreview ? (
+        <TaskPreviewConnectDialog
+          open={previewConnectTask !== null}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) setPreviewConnectTask(null);
+          }}
+          task={previewConnectTask}
+          token={authToken}
         />
       ) : null}
 

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,42 @@ import (
 )
 
 const testStepUpSessionID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+func TestJWTManagerRejectsNonCanonicalBase64URLSignature(t *testing.T) {
+	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	token, err := manager.GenerateToken(model.User{ID: 7, Username: "alice", Role: "admin"})
+	if err != nil {
+		t.Fatalf("生成 token 失败: %v", err)
+	}
+
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || len(parts[2]) == 0 {
+		t.Fatalf("生成的 token 格式无效: segments=%d", len(parts))
+	}
+	const base64URLAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	lastIndex := strings.IndexByte(base64URLAlphabet, parts[2][len(parts[2])-1])
+	if lastIndex < 0 || lastIndex%4 != 0 {
+		t.Fatalf("签名末字符不是规范的 32-byte Base64URL 结尾: %q", parts[2][len(parts[2])-1])
+	}
+	nonCanonicalLast := base64URLAlphabet[lastIndex+1]
+	nonCanonicalSignature := parts[2][:len(parts[2])-1] + string(nonCanonicalLast)
+	canonicalBytes, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		t.Fatalf("解码规范签名失败: %v", err)
+	}
+	nonCanonicalBytes, err := base64.RawURLEncoding.DecodeString(nonCanonicalSignature)
+	if err != nil {
+		t.Fatalf("构造的非规范签名未被宽松解码器接受: %v", err)
+	}
+	if string(nonCanonicalBytes) != string(canonicalBytes) {
+		t.Fatal("构造的非规范签名没有保持相同签名字节")
+	}
+
+	parts[2] = nonCanonicalSignature
+	if _, err := manager.ParseToken(strings.Join(parts, ".")); err == nil {
+		t.Fatal("非规范 Base64URL 签名被接受")
+	}
+}
 
 func TestJWTManagerRevokeToken(t *testing.T) {
 	manager := NewJWTManager("FAKE_JWT_SECRET_FOR_TEST_ONLY", time.Hour)

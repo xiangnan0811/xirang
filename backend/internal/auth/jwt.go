@@ -262,7 +262,7 @@ func (m *JWTManager) parseToken(tokenString string, checkRevoked bool) (*Claims,
 			return nil, fmt.Errorf("不支持的签名算法")
 		}
 		return m.secret, nil
-	})
+	}, jwt.WithStrictDecoding())
 	if err != nil {
 		return nil, err
 	}

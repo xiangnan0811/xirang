@@ -1856,3 +1856,24 @@ PR #453 与 v0.50.4 发布链路全绿；生产完成逻辑备份、关闭态升
 ### Status
 
 [OK] **Completed**
+
+
+## Session 48: Deliver task preview connection workflow
+
+**Date**: 2026-08-29
+**Task**: Deliver task preview connection workflow
+**Branch**: `codex/backup-task-preview-connect-ui`
+
+### Summary
+
+Implemented and independently reviewed task-derived backup preview connection, prompt Catalog convergence, strict frontend mapping, accessible task actions, and real-browser tooltip geometry; Go 1.26.6 and Node 22 full gates passed with the documented sibling runtime repeat-fixture limitation.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f038f513` | (see git log) |
+
+### Status
+
+[OK] **Completed**

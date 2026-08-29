@@ -199,10 +199,13 @@ function mapVerifyStatus(raw?: string): TaskRecord["verifyStatus"] {
 
 function mapTaskExecutor(raw?: string): TaskRecord["executorType"] {
   switch (raw) {
+    case undefined:
+    case "":        return "rsync";
+    case "rsync":   return "rsync";
     case "command": return "command";
     case "restic":  return "restic";
     case "rclone":  return "rclone";
-    default:        return "rsync";
+    default:        return undefined;
   }
 }
 

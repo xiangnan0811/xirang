@@ -33,6 +33,21 @@ export function canCancel(status: TaskStatus) {
   return status === "running" || status === "retrying";
 }
 
+export function taskPreviewConnectEligibility(
+  task: TaskRecord,
+  isAdmin: boolean,
+): { visible: boolean; disabled: boolean } {
+  const visible = isAdmin &&
+    task.executorType === "rsync" &&
+    task.rsyncPublication?.mode === "legacy_mutable" &&
+    task.rsyncPublication.state === "legacy" &&
+    task.rsyncPublication.reasonCode === "legacy";
+  return {
+    visible,
+    disabled: visible && (task.status === "running" || task.status === "retrying" || task.hasActiveRun === true),
+  };
+}
+
 export function normalizeStatusFilter(value: string): "all" | "paused" | TaskStatus {
   if (
     value === "all" ||
@@ -66,6 +81,8 @@ export type TasksViewProps = {
   handleResume: (taskId: number) => Promise<void>;
   onEdit: (task: TaskRecord) => void;
   onViewHistory: (task: TaskRecord) => void;
+  canConnectTaskPreview: boolean;
+  onConnectTaskPreview: (task: TaskRecord) => void;
   canManageRsyncVersioning: boolean;
   onManageRsyncVersioning: (task: TaskRecord) => void;
   canManageRcloneVersioning: boolean;
