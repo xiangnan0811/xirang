@@ -78,6 +78,40 @@ function rawRepository() {
   };
 }
 
+function rawMutablePoint() {
+  return {
+    id: "2".repeat(32),
+    repository_id: repositoryId,
+    lineage: { producing_task_id: 42 },
+    semantics: "mutable_head",
+    state: "observed",
+    physical_availability: "online",
+    hold_state: "none",
+    immutability_level: "mutable",
+    manifest_digest: "",
+    entry_count: 0,
+    logical_bytes: 0,
+    captured_at: null,
+    committed_at: null,
+    observed_at: "2026-08-17T00:00:00Z",
+    capability_revision: 1,
+    capabilities: {
+      list: true,
+      search_path: true,
+      open_sequential: true,
+      open_range: true,
+      download: true,
+      restore: true,
+      diff: false,
+      native_history: false,
+      reason: null,
+    },
+    created_at: "2026-08-17T00:00:00Z",
+    updated_at: "2026-08-17T00:00:00Z",
+    encrypted_provider_locator: "PRIVATE LOCATOR",
+  };
+}
+
 describe("backup repositories API boundary", () => {
   beforeEach(() => {
     requestMock.mockReset();
@@ -308,6 +342,82 @@ describe("backup repositories API boundary", () => {
     })).toEqual({
       status: "blocked",
       reason: { code: "unknown_internal_state", params: {} },
+    });
+  });
+
+  it("maps PascalCase and snake_case mutable-point snapshots and fails closed when present but malformed", () => {
+    for (const raw of [
+      { Repository: rawRepository(), MutablePoint: rawMutablePoint() },
+      { repository: rawRepository(), mutable_point: rawMutablePoint() },
+    ]) {
+      const mapped = mapBackupRepositoryMutationResult(raw);
+      expect(mapped.status).toBe("available");
+      if (mapped.status !== "available") {
+        throw new Error("expected available mutation result");
+      }
+      expect(mapped.value.mutablePoint).toMatchObject({
+        id: "2".repeat(32),
+        repositoryId,
+        semantics: "mutable_head",
+        state: "observed",
+      });
+      expect(JSON.stringify(mapped)).not.toMatch(/mutable_point|MutablePoint|PRIVATE|provider_locator/);
+    }
+
+    for (const raw of [
+      { repository: rawRepository() },
+      { repository: rawRepository(), mutable_point: null },
+      { Repository: rawRepository(), MutablePoint: null },
+    ]) {
+      const mapped = mapBackupRepositoryMutationResult(raw);
+      expect(mapped.status).toBe("available");
+      if (mapped.status === "available") {
+        expect(mapped.value.mutablePoint).toBeNull();
+      }
+    }
+
+    expect(mapBackupRepositoryMutationResult({
+      repository: rawRepository(),
+      mutable_point: { ...rawMutablePoint(), observed_at: "PRIVATE INVALID TIME" },
+    })).toEqual({
+      status: "blocked",
+      reason: { code: "unknown_internal_state", params: {} },
+    });
+  });
+
+  it("fails closed for duplicate, conflicting, or mixed mutation envelopes", () => {
+    const blockedResult = {
+      status: "blocked",
+      reason: { code: "unknown_internal_state", params: {} },
+    };
+    for (const raw of [
+      { Repository: rawRepository(), repository: rawRepository() },
+      {
+        Repository: rawRepository(),
+        repository: { ...rawRepository(), id: "9".repeat(32) },
+      },
+      {
+        Repository: rawRepository(),
+        MutablePoint: rawMutablePoint(),
+        mutable_point: rawMutablePoint(),
+      },
+      { Repository: rawRepository(), mutable_point: rawMutablePoint() },
+      { repository: rawRepository(), MutablePoint: rawMutablePoint() },
+    ]) {
+      expect(mapBackupRepositoryMutationResult(raw)).toEqual(blockedResult);
+    }
+  });
+
+  it("sends a task-only connect body for preview association", async () => {
+    requestMock.mockResolvedValueOnce({ repository: rawRepository(), mutable_point: rawMutablePoint() });
+
+    await createBackupRepositoriesApi().connectBackupRepository("token", { taskId: 42 });
+
+    expect(requestMock).toHaveBeenCalledWith("/backup-repositories/connect", {
+      method: "POST",
+      token: "token",
+      signal: undefined,
+      body: { task_id: 42 },
     });
   });
 

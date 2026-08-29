@@ -1027,6 +1027,8 @@ const zh = {
     editAriaLabel: "编辑任务",
     rsyncVersioningAriaLabel: "管理任务 {{name}} 的 Rsync 版本化恢复点",
     rcloneVersioningAriaLabel: "管理任务 {{name}} 的 Rclone 版本化恢复点",
+    previewConnectAriaLabel: "接入或刷新任务 {{name}} 的文件预览",
+    previewConnectDisabledActive: "任务正在执行，请等待当前运行结束后再接入文件预览。",
     cancelAriaLabel: "取消任务",
     deleteAriaLabel: "删除任务",
     trigger: "触发",
@@ -1045,6 +1047,32 @@ const zh = {
     createTask: "新建任务",
     expandChain: "展开依赖链",
     collapseChain: "收起依赖链",
+  },
+
+  taskPreviewConnect: {
+    title: "接入文件预览 — {{name}}",
+    description: "从任务配置派生只读访问并为当前备份建立文件目录。",
+    safetyProbe: "系统只执行有界只读探测，并创建或刷新文件预览关联与目录观察。",
+    safetyMutation: "此操作不会启用多版本，也不会修改或删除备份文件。",
+    confirm: "接入或刷新文件预览",
+    working: "处理中",
+    openPreview: "打开文件预览",
+    status: {
+      idle: "确认后将开始只读探测。",
+      connecting: "正在安全接入备份任务…",
+      indexing: "接入成功，正在构建文件目录…",
+      ready: "文件预览已就绪",
+      timedOut: "目录仍在后台构建，可稍后从任务再次打开。",
+    },
+    notice: {
+      connectBlocked: "无法安全接入文件预览，请稍后重试或检查任务配置。",
+      missingPoint: "接入结果未返回可验证的恢复点，请刷新任务后重试。",
+      catalogBlocked: "当前恢复点暂不可浏览，请稍后重试。",
+      catalogFailed: "目录索引失败，请稍后重试。",
+      catalogPartial: "目录索引不完整，请稍后重试。",
+      catalogUnavailable: "目录索引当前不可用，请稍后重试。",
+      requestFailed: "接入文件预览失败，请稍后重试。",
+    },
   },
 
   rsyncVersioning: {

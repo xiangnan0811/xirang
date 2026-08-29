@@ -23,7 +23,7 @@ import type { NewTaskInput, TaskRecord, TaskRunRecord } from "@/types/domain";
 import { TasksGrid } from "@/pages/tasks-page.grid";
 import type { PendingActionType } from "@/pages/tasks-page.utils";
 import { TasksTable } from "@/pages/tasks-page.table";
-import { normalizeStatusFilter } from "@/pages/tasks-page.utils";
+import { normalizeStatusFilter, taskPreviewConnectEligibility } from "@/pages/tasks-page.utils";
 import { TasksPageDialogs } from "@/pages/tasks-page.dialogs";
 import { TasksFilters } from "@/pages/tasks-page.filters";
 import { TasksHero } from "@/pages/tasks-page.hero";
@@ -111,6 +111,7 @@ export function TasksPage() {
   const [batchRetain, setBatchRetain] = useState(false);
   const [rsyncVersioningTask, setRsyncVersioningTask] = useState<TaskRecord | null>(null);
   const [rcloneVersioningTask, setRcloneVersioningTask] = useState<TaskRecord | null>(null);
+  const [previewConnectTask, setPreviewConnectTask] = useState<TaskRecord | null>(null);
   const [selectedTaskIds, setSelectedTaskIds] = useState<number[]>([]);
   const [pauseConfirmTask, setPauseConfirmTask] = useState<TaskRecord | null>(null);
   // Chain folding state: set of parent task ids whose children are expanded
@@ -236,6 +237,13 @@ export function TasksPage() {
 
   const canManageRsyncVersioning = role === "admin";
   const canManageRcloneVersioning = role === "admin";
+  const canConnectTaskPreview = role === "admin";
+
+  const handleConnectTaskPreview = (task: TaskRecord) => {
+    const eligibility = taskPreviewConnectEligibility(task, canConnectTaskPreview);
+    if (!eligibility.visible || eligibility.disabled) return;
+    setPreviewConnectTask(task);
+  };
 
   const handleManageRsyncVersioning = (task: TaskRecord) => {
     if (!canManageRsyncVersioning || task.executorType !== "rsync" || !task.rsyncPublication) {
@@ -514,6 +522,8 @@ export function TasksPage() {
               handleResume={handleResume}
               onEdit={handleEdit}
               onViewHistory={handleViewHistory}
+              canConnectTaskPreview={canConnectTaskPreview}
+              onConnectTaskPreview={handleConnectTaskPreview}
               canManageRsyncVersioning={canManageRsyncVersioning}
               onManageRsyncVersioning={handleManageRsyncVersioning}
               canManageRcloneVersioning={canManageRcloneVersioning}
@@ -538,6 +548,8 @@ export function TasksPage() {
               handleResume={handleResume}
               onEdit={handleEdit}
               onViewHistory={handleViewHistory}
+              canConnectTaskPreview={canConnectTaskPreview}
+              onConnectTaskPreview={handleConnectTaskPreview}
               canManageRsyncVersioning={canManageRsyncVersioning}
               onManageRsyncVersioning={handleManageRsyncVersioning}
               canManageRcloneVersioning={canManageRcloneVersioning}
@@ -586,6 +598,9 @@ export function TasksPage() {
         setRsyncVersioningTask={setRsyncVersioningTask}
         canManageRsyncVersioning={canManageRsyncVersioning}
         onRsyncVersioningUpdated={refreshTasks}
+        previewConnectTask={previewConnectTask}
+        setPreviewConnectTask={setPreviewConnectTask}
+        canConnectTaskPreview={canConnectTaskPreview}
         rcloneVersioningTask={rcloneVersioningTask}
         setRcloneVersioningTask={setRcloneVersioningTask}
         canManageRcloneVersioning={canManageRcloneVersioning}

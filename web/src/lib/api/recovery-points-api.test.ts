@@ -4,6 +4,7 @@ import {
   createRecoveryPointsApi,
   mapCatalogStatus,
   mapRecoveryPoint,
+  mapRecoveryPointSnapshot,
   mapRecoveryPointEvidence,
 } from "./recovery-points-api";
 
@@ -249,6 +250,39 @@ describe("recovery points API boundary", () => {
     for (const forbidden of ["PRIVATE", "source_fingerprint", "rollback_locator", "lineage_json"]) {
       expect(serialized).not.toContain(forbidden);
     }
+  });
+
+  it("shares strict recovery-point snapshot parsing with the full projection", () => {
+    const raw = rawRecoveryPoint();
+    const snapshot = mapRecoveryPointSnapshot(raw);
+    expect(snapshot.status).toBe("available");
+    if (snapshot.status !== "available") {
+      throw new Error("expected available recovery-point snapshot");
+    }
+    expect(snapshot.value).toMatchObject({
+      id: recoveryPointId,
+      repositoryId,
+      semantics: "native_snapshot",
+      state: "committed",
+      capturedAt: "2026-07-18T00:00:00.000Z",
+      observedAt: null,
+    });
+    expect(snapshot.value).not.toHaveProperty("catalog");
+    expect(snapshot.value).not.toHaveProperty("producingTaskName");
+    expect(JSON.stringify(snapshot)).not.toMatch(/repository_id|captured_at|PRIVATE/);
+
+    expect(mapRecoveryPointSnapshot({ ...raw, semantics: "future_private_semantics" })).toEqual({
+      status: "blocked",
+      reason: { code: "unknown_internal_state", params: {} },
+    });
+    expect(mapRecoveryPointSnapshot({ ...raw, observed_at: "not-a-time" })).toEqual({
+      status: "blocked",
+      reason: { code: "unknown_internal_state", params: {} },
+    });
+    expect(mapRecoveryPoint({ ...raw, captured_at: "not-a-time" })).toEqual({
+      status: "blocked",
+      reason: { code: "unknown_internal_state", params: {} },
+    });
   });
 
   it("maps independent evidence layers without raw errors, output, or sandbox details", () => {

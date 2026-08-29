@@ -223,6 +223,9 @@ func (service *Service) Connect(ctx context.Context, request ConnectRequest, req
 		service.writeAudit(ctx, requestContext, backupasset.AuditActionRepositoryConnect, backupasset.AuditOutcomeBlocked, "", &taskEntity.ID, "commit", err)
 		return ConnectResult{}, err
 	}
+	if mutablePointCatalogWakeable(mutablePoint) {
+		service.requestCatalogWake()
+	}
 	repositoryDTO, err := backupasset.ToRepositoryDTO(repository)
 	if err != nil {
 		return ConnectResult{}, err
@@ -237,6 +240,11 @@ func (service *Service) Connect(ctx context.Context, request ConnectRequest, req
 	}
 	service.writeAudit(ctx, requestContext, backupasset.AuditActionRepositoryConnect, backupasset.AuditOutcomeSuccess, repository.ID, &taskEntity.ID, "commit", nil)
 	return result, nil
+}
+
+func mutablePointCatalogWakeable(point *model.RecoveryPoint) bool {
+	return point != nil && backupasset.ValidateOpaqueID(point.ID) == nil &&
+		backupasset.RecoveryPointState(point.State) == backupasset.RecoveryPointObserved && point.RetiredAt == nil
 }
 
 func (service *Service) connectTaskLinkSnapshot(ctx context.Context, taskID uint) (connectTaskLinkSnapshot, error) {

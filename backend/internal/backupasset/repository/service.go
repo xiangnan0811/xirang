@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,10 @@ type AssetAuditSink interface {
 
 type CatalogSummaryProjector interface {
 	RepositorySummary(context.Context, string, catalog.AuthorizationScope) (catalog.RepositorySummaryDTO, error)
+}
+
+type CatalogWakeRequester interface {
+	TryWake() bool
 }
 
 type Dependencies struct {
@@ -65,6 +70,8 @@ type Service struct {
 	rclonePreflighter       RcloneVersioningPreflighter
 	catalogOwnership        *catalog.Ownership
 	catalogSummary          CatalogSummaryProjector
+	catalogWakeMu           sync.RWMutex
+	catalogWake             CatalogWakeRequester
 	recoverySourceNamespace RecoverySourceNamespaceAuthority
 	catalogRebuild          CatalogRebuildStarter
 	derivedBackfill         DerivedBackfillQueuer
@@ -132,6 +139,44 @@ func (service *Service) SetRebuildPorts(catalogRebuild CatalogRebuildStarter, de
 	service.derivedBackfill = derivedBackfill
 	service.derivedExpectations = derivedExpectationSource(nil, derivedBackfill)
 	return nil
+}
+
+func (service *Service) SetCatalogWake(requester CatalogWakeRequester) error {
+	if service == nil {
+		return fmt.Errorf("%w: repository service unavailable", backupasset.ErrInvalidState)
+	}
+	if requester == nil || isNilCatalogWakeRequester(requester) {
+		return fmt.Errorf("%w: Catalog wake requester unavailable", backupasset.ErrInvalidState)
+	}
+	service.catalogWakeMu.Lock()
+	defer service.catalogWakeMu.Unlock()
+	if service.catalogWake != nil {
+		return fmt.Errorf("%w: Catalog wake requester already configured", backupasset.ErrInvalidState)
+	}
+	service.catalogWake = requester
+	return nil
+}
+
+func isNilCatalogWakeRequester(requester CatalogWakeRequester) bool {
+	value := reflect.ValueOf(requester)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+func (service *Service) requestCatalogWake() {
+	if service == nil {
+		return
+	}
+	service.catalogWakeMu.RLock()
+	requester := service.catalogWake
+	service.catalogWakeMu.RUnlock()
+	if requester != nil {
+		_ = requester.TryWake()
+	}
 }
 
 func derivedExpectationSource(explicit DerivedExpectationSource, queuer DerivedBackfillQueuer) DerivedExpectationSource {

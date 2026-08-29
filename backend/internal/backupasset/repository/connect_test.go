@@ -21,6 +21,48 @@ type typedAssetAuditWriterSpy struct {
 	err   error
 }
 
+type catalogWakeRequesterSpy struct {
+	calls  atomic.Int64
+	accept bool
+}
+
+func (spy *catalogWakeRequesterSpy) TryWake() bool {
+	spy.calls.Add(1)
+	return spy.accept
+}
+
+func TestSetCatalogWakeRejectsTypedNilRequester(t *testing.T) {
+	service := &Service{}
+	var requester *catalogWakeRequesterSpy
+
+	if err := service.SetCatalogWake(requester); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("typed-nil Catalog wake error=%v, want invalid state", err)
+	}
+	if service.catalogWake != nil {
+		t.Fatal("typed-nil Catalog wake requester was retained")
+	}
+}
+
+func TestSetCatalogWakeRejectsDuplicateWiringAndKeepsOriginal(t *testing.T) {
+	service := &Service{}
+	first := &catalogWakeRequesterSpy{accept: true}
+	second := &catalogWakeRequesterSpy{accept: true}
+	if err := service.SetCatalogWake(first); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := service.SetCatalogWake(second); !errors.Is(err, backupasset.ErrInvalidState) {
+		t.Fatalf("duplicate Catalog wake error=%v, want invalid state", err)
+	}
+	service.requestCatalogWake()
+	if got := first.calls.Load(); got != 1 {
+		t.Fatalf("original Catalog wake calls=%d want=1", got)
+	}
+	if got := second.calls.Load(); got != 0 {
+		t.Fatalf("duplicate Catalog wake calls=%d want=0", got)
+	}
+}
+
 func (spy *typedAssetAuditWriterSpy) Write(_ context.Context, input backupasset.AuditEventInput) (model.BackupAssetAuditEvent, error) {
 	spy.input = input
 	return model.BackupAssetAuditEvent{}, spy.err
@@ -476,6 +518,10 @@ func TestConnectRsyncIsProbeFirstIdempotentAndEncryptedAtRest(t *testing.T) {
 	taskEntity := seedTask(t, db, "rsync", t.TempDir(), "")
 	prober := scopedObservationProber(backupasset.ProviderRsync)
 	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, prober)
+	wake := &catalogWakeRequesterSpy{accept: true}
+	if err := service.SetCatalogWake(wake); err != nil {
+		t.Fatal(err)
+	}
 	first, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID, DisplayName: "backup"}, RequestContext{CorrelationID: "corr-1"})
 	if err != nil {
 		t.Fatal(err)
@@ -486,6 +532,9 @@ func TestConnectRsyncIsProbeFirstIdempotentAndEncryptedAtRest(t *testing.T) {
 	}
 	if prober.calls != 2 {
 		t.Fatalf("probe calls=%d", prober.calls)
+	}
+	if got := wake.calls.Load(); got != 2 {
+		t.Fatalf("Catalog wake calls=%d want=2 for two committed mutable connects", got)
 	}
 	for modelType, want := range map[any]int64{&model.BackupRepository{}: 1, &model.RepositoryAccessBinding{}: 1, &model.TaskRepositoryLink{}: 1, &model.RecoveryPoint{}: 1} {
 		var count int64
@@ -532,6 +581,10 @@ func TestLifecycleReconnectRetiredHeadDoesNotReactivate(t *testing.T) {
 	if err := db.First(&before, "id = ?", connected.MutablePoint.ID).Error; err != nil {
 		t.Fatal(err)
 	}
+	wake := &catalogWakeRequesterSpy{accept: true}
+	if err := service.SetCatalogWake(wake); err != nil {
+		t.Fatal(err)
+	}
 
 	reconnected, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{})
 	if err != nil {
@@ -539,6 +592,9 @@ func TestLifecycleReconnectRetiredHeadDoesNotReactivate(t *testing.T) {
 	}
 	if reconnected.Repository.Status != backupasset.RepositoryOnline || reconnected.MutablePoint != nil {
 		t.Fatalf("reconnected=%+v", reconnected)
+	}
+	if got := wake.calls.Load(); got != 0 {
+		t.Fatalf("retired mutable point requested %d Catalog wakes", got)
 	}
 	var after model.RecoveryPoint
 	if err := db.First(&after, "id = ?", connected.MutablePoint.ID).Error; err != nil {
@@ -561,6 +617,10 @@ func TestConnectPersistsNativeSnapshotModeForRestic(t *testing.T) {
 	taskEntity := seedTask(t, db, "restic", "/backup/repository", `{"repository_password":"FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY"}`)
 	prober := &scriptedProber{observation: testObservation(backupasset.ProviderRestic, provider.NativeResticIdentityPrefix+strings.Repeat("a", 64))}
 	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRestic, prober)
+	wake := &catalogWakeRequesterSpy{accept: true}
+	if err := service.SetCatalogWake(wake); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{}); err != nil {
 		t.Fatalf("connect Restic repository: %v", err)
 	}
@@ -570,6 +630,26 @@ func TestConnectPersistsNativeSnapshotModeForRestic(t *testing.T) {
 	}
 	if link.PublicationMode != string(backupasset.PublicationNativeSnapshot) {
 		t.Fatalf("publication mode = %q", link.PublicationMode)
+	}
+	if got := wake.calls.Load(); got != 0 {
+		t.Fatalf("native snapshot connect requested %d mutable Catalog wakes", got)
+	}
+}
+
+func TestConnectIgnoresRejectedCatalogWakeAfterCommittedMutablePoint(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	taskEntity := seedTask(t, db, "rsync", t.TempDir(), "")
+	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, scopedObservationProber(backupasset.ProviderRsync))
+	wake := &catalogWakeRequesterSpy{accept: false}
+	if err := service.SetCatalogWake(wake); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{})
+	if err != nil || result.MutablePoint == nil {
+		t.Fatalf("committed connect result=%+v err=%v", result, err)
+	}
+	if got := wake.calls.Load(); got != 1 {
+		t.Fatalf("rejected Catalog wake calls=%d want=1", got)
 	}
 }
 
@@ -622,12 +702,19 @@ func TestConnectProbeFailureWritesNothing(t *testing.T) {
 	taskEntity := seedTask(t, db, "rsync", t.TempDir(), "")
 	prober := &scriptedProber{err: errors.New("provider unavailable")}
 	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, prober)
+	wake := &catalogWakeRequesterSpy{accept: true}
+	if err := service.SetCatalogWake(wake); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{}); err == nil {
 		t.Fatal("probe failure accepted")
 	}
 	var count int64
 	if err := db.Model(&model.BackupRepository{}).Count(&count).Error; err != nil || count != 0 {
 		t.Fatalf("repository count=%d err=%v", count, err)
+	}
+	if got := wake.calls.Load(); got != 0 {
+		t.Fatalf("failed probe requested %d Catalog wakes", got)
 	}
 }
 
@@ -1026,6 +1113,10 @@ func TestConnectRollsBackEveryRowWhenLinkInsertFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, scopedObservationProber(backupasset.ProviderRsync))
+	wake := &catalogWakeRequesterSpy{accept: true}
+	if err := service.SetCatalogWake(wake); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{}); !errors.Is(err, injected) {
 		t.Fatalf("connect error=%v", err)
 	}
@@ -1036,6 +1127,9 @@ func TestConnectRollsBackEveryRowWhenLinkInsertFails(t *testing.T) {
 		if err := db.Model(modelType).Count(&count).Error; err != nil || count != 0 {
 			t.Fatalf("%T count=%d err=%v", modelType, count, err)
 		}
+	}
+	if got := wake.calls.Load(); got != 0 {
+		t.Fatalf("rolled-back connect requested %d Catalog wakes", got)
 	}
 }
 

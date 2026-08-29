@@ -1756,6 +1756,7 @@ export interface BackupRepositoryMutationSnapshot {
 
 export interface BackupRepositoryMutationResult {
   repository: BackupRepositoryMutationSnapshot;
+  mutablePoint: BackupRecoveryPointSnapshot | null;
 }
 
 export interface RecoveryPointLineage {
@@ -1764,7 +1765,7 @@ export interface RecoveryPointLineage {
   sourceRecoveryPointId?: string;
 }
 
-export interface BackupRecoveryPoint {
+export interface BackupRecoveryPointSnapshot {
   id: string;
   repositoryId: string;
   lineage: RecoveryPointLineage;
@@ -1783,6 +1784,9 @@ export interface BackupRecoveryPoint {
   capabilities: CatalogCapabilitySet;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface BackupRecoveryPoint extends BackupRecoveryPointSnapshot {
   producingTaskName: string;
   producingNodeId: number;
   producingNodeName: string;

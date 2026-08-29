@@ -1082,6 +1082,9 @@ func New(dependencies Dependencies) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := repositoryService.SetCatalogWake(catalogWorker); err != nil {
+		return nil, err
+	}
 	processingManager, err = newProcessingRuntime(processingRuntimeDependencies{
 		DB: dependencies.DB, Foundation: foundation, Settings: dependencies.Settings, Keyring: keyring, Lease: lease,
 		Source: processingSource, Authorize: contentAuthorizer, ValidateRoot: repositoryService.ValidatePrivateRuntimeRoot,

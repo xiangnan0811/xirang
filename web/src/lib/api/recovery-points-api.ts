@@ -2,6 +2,7 @@ import type {
   BackupImmutabilityLevel,
   BackupProviderKind,
   BackupRecoveryPoint,
+  BackupRecoveryPointSnapshot,
   CatalogCapabilityCode,
   CatalogCapabilityReason,
   CatalogCapabilitySet,
@@ -522,6 +523,24 @@ export function mapCatalogStatus(value: unknown): CatalogProjection<CatalogStatu
 }
 
 export function mapRecoveryPoint(value: unknown): CatalogProjection<BackupRecoveryPoint> {
+  const snapshot = mapRecoveryPointSnapshot(value);
+  if (snapshot.status !== "available" || !isRawObject(value)) {
+    return blocked();
+  }
+  const catalog = mapCatalogStatus(value.catalog);
+  if (catalog.status !== "available") {
+    return blocked();
+  }
+  return available({
+    ...snapshot.value,
+    producingTaskName: stringValue(value.producing_task_name),
+    producingNodeId: finiteInteger(value.producing_node_id) ?? 0,
+    producingNodeName: stringValue(value.producing_node_name),
+    catalog,
+  });
+}
+
+export function mapRecoveryPointSnapshot(value: unknown): CatalogProjection<BackupRecoveryPointSnapshot> {
   if (!isRawObject(value)) {
     return blocked();
   }
@@ -537,22 +556,36 @@ export function mapRecoveryPoint(value: unknown): CatalogProjection<BackupRecove
   const capabilityRevision = finiteInteger(value.capability_revision, 1);
   const createdAt = normalizeCatalogTime(value.created_at);
   const updatedAt = normalizeCatalogTime(value.updated_at);
-  const catalog = mapCatalogStatus(value.catalog);
-  if (id === null || repositoryId === null || semantics === null || state === null || availabilityValue === null ||
-    hold === null || immutability === null || entryCount === null || logicalBytes === null || capabilityRevision === null ||
-    createdAt === null || updatedAt === null || catalog.status !== "available") {
-    return blocked();
-  }
-  const lineage = isRawObject(value.lineage) ? value.lineage : {};
-  const sourceRecoveryPointId = lineage.source_recovery_point_id === undefined || lineage.source_recovery_point_id === ""
+  const lineage = isRawObject(value.lineage) ? value.lineage : null;
+  const producingTaskId = lineage === null || lineage.producing_task_id === undefined
+    ? undefined
+    : optionalPositiveInteger(lineage.producing_task_id);
+  const producingTaskRunId = lineage === null || lineage.producing_task_run_id === undefined
+    ? undefined
+    : optionalPositiveInteger(lineage.producing_task_run_id);
+  const sourceRecoveryPointId = lineage === null || lineage.source_recovery_point_id === undefined || lineage.source_recovery_point_id === ""
     ? undefined
     : opaqueId(lineage.source_recovery_point_id) ?? undefined;
+  const capturedAt = normalizeNullableCatalogTime(value.captured_at);
+  const committedAt = normalizeNullableCatalogTime(value.committed_at);
+  const observedAt = normalizeNullableCatalogTime(value.observed_at);
+  if (id === null || repositoryId === null || semantics === null || state === null || availabilityValue === null ||
+    hold === null || immutability === null || entryCount === null || logicalBytes === null || capabilityRevision === null ||
+    createdAt === null || updatedAt === null || lineage === null ||
+    (lineage.producing_task_id !== undefined && producingTaskId === undefined) ||
+    (lineage.producing_task_run_id !== undefined && producingTaskRunId === undefined) ||
+    (lineage.source_recovery_point_id !== undefined && lineage.source_recovery_point_id !== "" && sourceRecoveryPointId === undefined) ||
+    (value.captured_at !== undefined && value.captured_at !== null && value.captured_at !== "" && capturedAt === null) ||
+    (value.committed_at !== undefined && value.committed_at !== null && value.committed_at !== "" && committedAt === null) ||
+    (value.observed_at !== undefined && value.observed_at !== null && value.observed_at !== "" && observedAt === null)) {
+    return blocked();
+  }
   return available({
     id,
     repositoryId,
     lineage: {
-      producingTaskId: optionalPositiveInteger(lineage.producing_task_id),
-      producingTaskRunId: optionalPositiveInteger(lineage.producing_task_run_id),
+      producingTaskId,
+      producingTaskRunId,
       sourceRecoveryPointId,
     },
     semantics,
@@ -563,17 +596,13 @@ export function mapRecoveryPoint(value: unknown): CatalogProjection<BackupRecove
     manifestDigest: stringValue(value.manifest_digest),
     entryCount,
     logicalBytes,
-    capturedAt: normalizeNullableCatalogTime(value.captured_at),
-    committedAt: normalizeNullableCatalogTime(value.committed_at),
-    observedAt: normalizeNullableCatalogTime(value.observed_at),
+    capturedAt,
+    committedAt,
+    observedAt,
     capabilityRevision,
     capabilities: mapCatalogCapabilities(value.capabilities),
     createdAt,
     updatedAt,
-    producingTaskName: stringValue(value.producing_task_name),
-    producingNodeId: finiteInteger(value.producing_node_id) ?? 0,
-    producingNodeName: stringValue(value.producing_node_name),
-    catalog,
   });
 }
 

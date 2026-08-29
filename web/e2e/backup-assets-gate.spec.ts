@@ -9,19 +9,19 @@ const liveRoute =
   `&repositoryId=${fixture.ids.onlineRepository}&taskId=71` +
   `&recoveryPointId=${fixture.ids.onlineRecoveryPoint}`;
 
-async function seedAdminSession(page: Page) {
-  await page.addInitScript(() => {
+async function seedAdminSession(page: Page, language: "zh" | "en" = "zh") {
+  await page.addInitScript((selectedLanguage) => {
     sessionStorage.setItem("xirang-auth-token", "e2e-admin-token");
     sessionStorage.setItem("xirang-username", "admin");
     sessionStorage.setItem("xirang-role", "admin");
     sessionStorage.setItem("xirang-user-id", "1");
     sessionStorage.setItem("xirang-totp-enabled", "true");
-    localStorage.setItem("xirang.language", "zh");
+    localStorage.setItem("xirang.language", selectedLanguage);
     localStorage.setItem(
       "xirang.setup-wizard",
       JSON.stringify({ completed: true, dismissed: true, currentStep: 0 })
     );
-  });
+  }, language);
 }
 
 function envelope(data: unknown, status = 200) {
@@ -268,6 +268,113 @@ async function mockLiveFeature(page: Page) {
   });
 }
 
+function paginatedEnvelope(data: unknown[]) {
+  return {
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      code: 0,
+      message: "ok",
+      data,
+      total: data.length,
+      page: 1,
+      page_size: 20,
+    }),
+  };
+}
+
+function tooltipTask(id: number, name: string, executorType = "rsync") {
+  return {
+    id,
+    name,
+    status: executorType === "rsync" ? "retrying" : "success",
+    node_id: 17,
+    node: { id: 17, name: "Synthetic node" },
+    executor_type: executorType,
+    enabled: true,
+    rsync_publication: executorType === "rsync"
+      ? {
+          mode: "legacy_mutable",
+          state: "legacy",
+          reason_code: "legacy",
+          capability_revision: 1,
+          task_revision: "1",
+          seed_full_copy_required: false,
+        }
+      : undefined,
+  };
+}
+
+async function mockTasksTooltip(page: Page) {
+  const tasks = [
+    tooltipTask(901, "tooltip-first"),
+    tooltipTask(902, "filler-one", "command"),
+    tooltipTask(903, "filler-two", "command"),
+    tooltipTask(904, "tooltip-last"),
+  ];
+
+  await page.route("**/api/v1/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/me/onboarded")) {
+      await route.fulfill(envelope({ ok: true }));
+      return;
+    }
+    if (url.pathname.endsWith("/auth/me") || url.pathname.endsWith("/auth/captcha")) {
+      await route.fulfill(envelope({ id: 1, username: "admin", role: "admin", totp_enabled: true, onboarded: true }));
+      return;
+    }
+    if (url.pathname === "/api/v1/tasks") {
+      await route.fulfill(paginatedEnvelope(tasks));
+      return;
+    }
+    if (url.pathname === "/api/v1/nodes" || url.pathname === "/api/v1/policies") {
+      await route.fulfill(envelope([]));
+      return;
+    }
+    await route.fulfill(envelope({}));
+  });
+}
+
+async function expectTooltipInsideScrollport(action: Locator, trigger: "focus" | "hover") {
+  const tooltip = action.locator('[role="tooltip"]');
+  if (trigger === "focus") {
+    await action.focus();
+    await expect(action).toBeFocused();
+  } else {
+    await action.evaluate((node) => (node as HTMLElement).blur());
+    await action.hover();
+  }
+  await expect(tooltip).toBeVisible();
+
+  const geometry = await tooltip.evaluate((node) => {
+    const scrollport = node.closest(".overflow-x-auto");
+    if (!(scrollport instanceof HTMLElement)) return null;
+    const rect = node.getBoundingClientRect();
+    const clip = scrollport.getBoundingClientRect();
+    return {
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      left: rect.left,
+      clipTop: clip.top,
+      clipRight: clip.right,
+      clipBottom: clip.bottom,
+      clipLeft: clip.left,
+      overflowX: window.getComputedStyle(scrollport).overflowX,
+      scrollWidth: scrollport.scrollWidth,
+      clientWidth: scrollport.clientWidth,
+    };
+  });
+
+  expect(geometry).not.toBeNull();
+  expect(geometry!.overflowX).toBe("auto");
+  expect(geometry!.scrollWidth).toBeGreaterThan(geometry!.clientWidth);
+  expect(geometry!.top).toBeGreaterThanOrEqual(geometry!.clipTop - 1);
+  expect(geometry!.right).toBeLessThanOrEqual(geometry!.clipRight + 1);
+  expect(geometry!.bottom).toBeLessThanOrEqual(geometry!.clipBottom + 1);
+  expect(geometry!.left).toBeGreaterThanOrEqual(geometry!.clipLeft - 1);
+}
+
 test("closed FeatureLive does not open a searchable workspace", async ({ page }) => {
   await seedAdminSession(page);
   await mockClosedFeature(page);
@@ -339,3 +446,38 @@ test("directory Up navigation restores origin focus on mobile at 200% text zoom"
   await expect(directory).toBeFocused();
   await expect(page.getByText("合成审计日志-synthetic-audit.log")).toBeVisible();
 });
+
+for (const scenario of [
+  {
+    language: "zh" as const,
+    firstName: "接入或刷新任务 tooltip-first 的文件预览",
+    lastName: "接入或刷新任务 tooltip-last 的文件预览",
+  },
+  {
+    language: "en" as const,
+    firstName: "Connect or refresh file preview for task tooltip-first",
+    lastName: "Connect or refresh file preview for task tooltip-last",
+  },
+]) {
+  test(`task table keeps first and last disabled tooltips inside the horizontal scrollport in ${scenario.language}`, async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 720 });
+    await seedAdminSession(page, scenario.language);
+    await page.addInitScript(() => {
+      localStorage.setItem("xirang.tasks.view", JSON.stringify("list"));
+    });
+    await mockTasksTooltip(page);
+    await page.goto("/app/tasks");
+
+    const table = page.getByRole("table");
+    await expect(table).toBeVisible();
+    const firstAction = page.getByRole("button", { name: scenario.firstName });
+    const lastAction = page.getByRole("button", { name: scenario.lastName });
+
+    for (const action of [firstAction, lastAction]) {
+      await expect(action).toHaveAttribute("aria-disabled", "true");
+      await expect(action).toHaveAttribute("aria-describedby", /task-preview-connect-tooltip-table-/);
+      await expectTooltipInsideScrollport(action, "focus");
+      await expectTooltipInsideScrollport(action, "hover");
+    }
+  });
+}

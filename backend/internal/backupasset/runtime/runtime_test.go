@@ -608,6 +608,11 @@ func TestRuntimeSearchExposesOneRepositoryPublicationLineageAndWorkerGraph(t *te
 	if repositoryService.FieldByName("catalogRebuild").IsNil() || repositoryService.FieldByName("derivedBackfill").IsNil() {
 		t.Fatal("production runtime omitted CatalogRebuild / DerivedBackfill ports")
 	}
+	catalogWake := repositoryService.FieldByName("catalogWake")
+	if !catalogWake.IsValid() || catalogWake.IsNil() || catalogWake.Elem().Kind() != reflect.Ptr ||
+		catalogWake.Elem().Pointer() != reflect.ValueOf(runtime.catalogWorker).Pointer() {
+		t.Fatal("production Repository service did not receive the exact CatalogWorker wake requester")
+	}
 	if runtime.archiveMemberService == nil {
 		t.Fatal("runtime omitted the one-hop archive-member service")
 	}

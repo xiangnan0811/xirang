@@ -4,6 +4,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
+import { taskPreviewConnectEligibility } from "./tasks-page.utils";
 import { TasksPage } from "./tasks-page";
 
 const confirmMock = vi.fn().mockResolvedValue(true);
@@ -52,6 +53,30 @@ function createMemoryStorage() {
       return store.size;
     },
   } satisfies Storage;
+}
+
+function legacyRsyncTask(id: number, name: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    name,
+    policyName: name,
+    nodeId: 1,
+    nodeName: "node-prod-1",
+    status: "success" as const,
+    progress: 100,
+    startedAt: "-",
+    speedMbps: 0,
+    executorType: "rsync" as const,
+    rsyncPublication: {
+      mode: "legacy_mutable" as const,
+      state: "legacy" as const,
+      reasonCode: "legacy" as const,
+      capabilityRevision: 1,
+      taskRevision: "1",
+      seedFullCopyRequired: false,
+    },
+    ...overrides,
+  };
 }
 
 vi.mock("react-router-dom", async () => {
@@ -128,6 +153,12 @@ vi.mock("@/components/task-rsync-versioning-dialog", () => ({
 vi.mock("@/components/task-rclone-versioning-dialog", () => ({
   TaskRcloneVersioningDialog: ({ open, task }: { open: boolean; task: { id: number } | null }) => (
     open ? <div data-testid="rclone-versioning-dialog">{task?.id}</div> : null
+  ),
+}));
+
+vi.mock("@/components/task-preview-connect-dialog", () => ({
+  TaskPreviewConnectDialog: ({ open, task }: { open: boolean; task: { id: number } | null }) => (
+    open ? <div data-testid="task-preview-connect-dialog">{task?.id}</div> : null
   ),
 }));
 
@@ -299,6 +330,129 @@ describe("TasksPage", () => {
       logout: vi.fn(),
     };
     createContext();
+  });
+
+  it("shares strict preview-connect eligibility across task layouts", () => {
+    const legacyRsync = {
+      id: 701,
+      name: "Legacy Rsync",
+      policyName: "Legacy Rsync",
+      nodeId: 1,
+      nodeName: "node-prod-1",
+      status: "success" as const,
+      progress: 100,
+      startedAt: "-",
+      speedMbps: 0,
+      enabled: false,
+      executorType: "rsync" as const,
+      rsyncPublication: {
+        mode: "legacy_mutable" as const,
+        state: "legacy" as const,
+        reasonCode: "legacy" as const,
+        capabilityRevision: 1,
+        taskRevision: "1",
+        seedFullCopyRequired: false,
+      },
+    };
+
+    expect(taskPreviewConnectEligibility(legacyRsync, true)).toEqual({ visible: true, disabled: false });
+    expect(taskPreviewConnectEligibility({ ...legacyRsync, status: "running" }, true)).toEqual({ visible: true, disabled: true });
+    expect(taskPreviewConnectEligibility({ ...legacyRsync, status: "retrying" }, true)).toEqual({ visible: true, disabled: true });
+    expect(taskPreviewConnectEligibility({ ...legacyRsync, hasActiveRun: true }, true)).toEqual({ visible: true, disabled: true });
+    expect(taskPreviewConnectEligibility(legacyRsync, false).visible).toBe(false);
+    expect(taskPreviewConnectEligibility({
+      ...legacyRsync,
+      rsyncPublication: { ...legacyRsync.rsyncPublication, mode: "versioned_hardlink" },
+    }, true).visible).toBe(false);
+    expect(taskPreviewConnectEligibility({
+      ...legacyRsync,
+      rsyncPublication: {
+        ...legacyRsync.rsyncPublication,
+        state: "blocked",
+        reasonCode: "unsupported",
+      },
+    }, true).visible).toBe(false);
+    expect(taskPreviewConnectEligibility({
+      ...legacyRsync,
+      rsyncPublication: { ...legacyRsync.rsyncPublication, reasonCode: "unsupported" },
+    }, true).visible).toBe(false);
+    expect(taskPreviewConnectEligibility({ ...legacyRsync, executorType: "rclone" }, true).visible).toBe(false);
+    expect(taskPreviewConnectEligibility({ ...legacyRsync, executorType: undefined }, true).visible).toBe(false);
+  });
+
+  it("shows the card action only for admin legacy Rsync and explains active-run disabling", async () => {
+    const user = userEvent.setup();
+    createContext({
+      tasks: [
+        legacyRsyncTask(711, "暂停的旧 Rsync", { enabled: false }),
+        legacyRsyncTask(712, "运行中的旧 Rsync", { status: "running", hasActiveRun: true }),
+        legacyRsyncTask(713, "受管 Rsync", {
+          rsyncPublication: {
+            ...legacyRsyncTask(713, "受管 Rsync").rsyncPublication,
+            mode: "versioned_hardlink",
+          },
+        }),
+        { ...legacyRsyncTask(714, "Rclone 任务"), executorType: "rclone", rsyncPublication: undefined },
+      ],
+    });
+
+    render(<MemoryRouter><TasksPage /></MemoryRouter>);
+
+    const pausedAction = screen.getByRole("button", { name: "接入或刷新任务 暂停的旧 Rsync 的文件预览" });
+    expect(pausedAction).toBeEnabled();
+    await user.click(pausedAction);
+    expect(screen.getByTestId("task-preview-connect-dialog")).toHaveTextContent("711");
+
+    const activeAction = screen.getByRole("button", { name: "接入或刷新任务 运行中的旧 Rsync 的文件预览" });
+    expect(activeAction).toHaveAttribute("aria-disabled", "true");
+    const tooltipId = activeAction.getAttribute("aria-describedby");
+    expect(tooltipId).toBeTruthy();
+    expect(document.getElementById(tooltipId!)).toHaveAttribute("role", "tooltip");
+    expect(document.getElementById(tooltipId!)).toHaveTextContent("任务正在执行，请等待当前运行结束后再接入文件预览。");
+    expect(screen.queryByRole("button", { name: "接入或刷新任务 受管 Rsync 的文件预览" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "接入或刷新任务 Rclone 任务 的文件预览" })).not.toBeInTheDocument();
+  });
+
+  it("exposes the same preview-connect action in list view", async () => {
+    window.localStorage.setItem("xirang.tasks.view", JSON.stringify("list"));
+    createContext({
+      tasks: [
+        legacyRsyncTask(721, "列表旧 Rsync", { enabled: false }),
+        legacyRsyncTask(722, "列表重试 Rsync", { status: "retrying", hasActiveRun: true }),
+      ],
+    });
+    const user = userEvent.setup();
+
+    render(<MemoryRouter><TasksPage /></MemoryRouter>);
+
+    const table = screen.getByRole("table");
+    expect(table).toBeInTheDocument();
+    expect(table.parentElement).toHaveClass("overflow-x-auto");
+    const retryingAction = screen.getByRole("button", { name: "接入或刷新任务 列表重试 Rsync 的文件预览" });
+    expect(retryingAction).toHaveAttribute("aria-disabled", "true");
+    const tooltipId = retryingAction.getAttribute("aria-describedby");
+    expect(tooltipId).toBeTruthy();
+    const tooltip = document.getElementById(tooltipId!);
+    expect(tooltip).toHaveAttribute("role", "tooltip");
+    expect(tooltip).toHaveTextContent("任务正在执行，请等待当前运行结束后再接入文件预览。");
+    expect(tooltip).toHaveClass("right-full", "bottom-0", "mr-2", "group-hover:opacity-100", "group-focus-visible:opacity-100");
+    expect(tooltip).not.toHaveClass("top-0", "bottom-full", "mb-2");
+    await user.click(screen.getByRole("button", { name: "接入或刷新任务 列表旧 Rsync 的文件预览" }));
+    expect(screen.getByTestId("task-preview-connect-dialog")).toHaveTextContent("721");
+  });
+
+  it("hides preview-connect actions from non-admin roles", () => {
+    authRef.current = {
+      token: "test-token",
+      username: "operator",
+      role: "operator",
+      logout: vi.fn(),
+    };
+    createContext({ tasks: [legacyRsyncTask(731, "受限旧 Rsync")] });
+
+    render(<MemoryRouter><TasksPage /></MemoryRouter>);
+
+    expect(screen.queryByRole("button", { name: "接入或刷新任务 受限旧 Rsync 的文件预览" })).not.toBeInTheDocument();
   });
 
   it("支持筛选到空态并可重置恢复", async () => {

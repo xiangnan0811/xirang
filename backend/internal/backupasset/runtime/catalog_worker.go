@@ -40,15 +40,28 @@ type CatalogWorker struct {
 	metrics    catalog.Metrics
 	now        func() time.Time
 	after      func(time.Duration) <-chan time.Time
+	wake       chan struct{}
 
-	mu           sync.Mutex
-	stopping     bool
-	scanning     bool
-	activeBuilds int
-	runCancel    context.CancelFunc
-	stop         chan struct{}
-	wg           sync.WaitGroup
+	mu          sync.Mutex
+	stopping    bool
+	runFinished bool
+	wakePending bool
+	scanning    bool
+	runCancel   context.CancelFunc
+	stop        chan struct{}
+	wg          sync.WaitGroup
+
+	activeBuildMu sync.Mutex
+	activeBuilds  int
 }
+
+type catalogScanTrigger uint8
+
+const (
+	catalogScanInitial catalogScanTrigger = iota
+	catalogScanWake
+	catalogScanPeriodic
+)
 
 func NewCatalogWorker(dependencies CatalogWorkerDependencies) (*CatalogWorker, error) {
 	if dependencies.Foundation == nil || dependencies.Backend == nil || dependencies.Metrics == nil {
@@ -62,12 +75,33 @@ func NewCatalogWorker(dependencies CatalogWorkerDependencies) (*CatalogWorker, e
 	}
 	return &CatalogWorker{
 		foundation: dependencies.Foundation, backend: dependencies.Backend, metrics: dependencies.Metrics,
-		now: dependencies.Now, after: dependencies.After, stop: make(chan struct{}),
+		now: dependencies.Now, after: dependencies.After, wake: make(chan struct{}, 1), stop: make(chan struct{}),
 	}, nil
 }
 
+// TryWake coalesces a request for the lifecycle-owned Run loop without blocking
+// the caller. A wake queued before Run is absorbed by the initial pass.
+func (worker *CatalogWorker) TryWake() bool {
+	if worker == nil {
+		return false
+	}
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if worker.stopping || worker.runFinished || worker.wakePending {
+		return false
+	}
+	select {
+	case worker.wake <- struct{}{}:
+		worker.wakePending = true
+		return true
+	default:
+		return false
+	}
+}
+
 // Run starts the first scan asynchronously so HTTP readiness is never coupled
-// to Provider enumeration, then re-reads the dynamic interval before each pass.
+// to Provider enumeration. Wake passes never reset the independently tracked
+// periodic deadline; only completion of a periodic pass arms the next one.
 func (worker *CatalogWorker) Run(ctx context.Context) {
 	if worker == nil {
 		return
@@ -84,31 +118,100 @@ func (worker *CatalogWorker) Run(ctx context.Context) {
 	}
 	worker.runCancel = cancel
 	worker.mu.Unlock()
-	defer cancel()
-	worker.startScan(runCtx)
+	defer func() {
+		cancel()
+		worker.mu.Lock()
+		worker.runCancel = nil
+		worker.runFinished = true
+		worker.mu.Unlock()
+	}()
+	scanDone := make(chan catalogScanTrigger, 1)
+	scanActive := worker.startScan(runCtx, catalogScanInitial, scanDone)
+	periodic, ok := worker.catalogPeriodicTimer()
+	if !ok {
+		return
+	}
+	periodicDue := false
 	for {
-		config, err := worker.foundation.CatalogConfig()
-		if err != nil {
-			logger.Module("backupasset.catalog").Error().Str("stage", "schedule").Msg("Catalog 调度配置不可用")
-			return
+		if !scanActive {
+			trigger, ready, remainingPeriodic := worker.nextIdleScan(periodic, periodicDue)
+			periodic = remainingPeriodic
+			if ready {
+				if trigger == catalogScanPeriodic {
+					periodicDue = false
+				}
+				scanActive = worker.startScan(runCtx, trigger, scanDone)
+			}
 		}
 		select {
 		case <-runCtx.Done():
 			return
 		case <-worker.stop:
 			return
-		case <-worker.after(config.ReconcileInterval):
-			worker.startScan(runCtx)
+		case <-worker.wake:
+			// wakePending remains true until the next scan atomically consumes it.
+		case <-periodic:
+			periodicDue = true
+			periodic = nil
+		case trigger := <-scanDone:
+			scanActive = false
+			if trigger == catalogScanPeriodic {
+				var armed bool
+				periodic, armed = worker.catalogPeriodicTimer()
+				if !armed {
+					return
+				}
+			}
 		}
 	}
 }
 
-func (worker *CatalogWorker) startScan(ctx context.Context) bool {
+func (worker *CatalogWorker) nextIdleScan(periodic <-chan time.Time, periodicDue bool) (catalogScanTrigger, bool, <-chan time.Time) {
+	if !periodicDue && periodic != nil {
+		select {
+		case <-periodic:
+			periodicDue = true
+			periodic = nil
+		default:
+		}
+	}
+	if periodicDue {
+		return catalogScanPeriodic, true, periodic
+	}
+	if worker.hasPendingWake() {
+		return catalogScanWake, true, periodic
+	}
+	return catalogScanInitial, false, periodic
+}
+
+func (worker *CatalogWorker) catalogPeriodicTimer() (<-chan time.Time, bool) {
+	config, err := worker.foundation.CatalogConfig()
+	if err != nil {
+		logger.Module("backupasset.catalog").Error().Str("stage", "schedule").Msg("Catalog 调度配置不可用")
+		return nil, false
+	}
+	return worker.after(config.ReconcileInterval), true
+}
+
+func (worker *CatalogWorker) hasPendingWake() bool {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	return worker.wakePending
+}
+
+func (worker *CatalogWorker) startScan(ctx context.Context, trigger catalogScanTrigger, done chan<- catalogScanTrigger) bool {
 	worker.mu.Lock()
 	if worker.stopping || worker.scanning {
 		worker.mu.Unlock()
 		worker.metrics.ObserveScan(catalog.MetricScanSkipped)
 		return false
+	}
+	if worker.wakePending && trigger != catalogScanPeriodic {
+		worker.wakePending = false
+		select {
+		case <-worker.wake:
+		default:
+		}
 	}
 	worker.scanning = true
 	worker.wg.Add(1)
@@ -119,6 +222,7 @@ func (worker *CatalogWorker) startScan(ctx context.Context) bool {
 			worker.scanning = false
 			worker.mu.Unlock()
 			worker.wg.Done()
+			done <- trigger
 		}()
 		if err := worker.runScan(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Module("backupasset.catalog").Warn().Str("stage", "scan").Msg("Catalog 调度扫描失败")
@@ -234,18 +338,8 @@ func (worker *CatalogWorker) buildCandidate(ctx context.Context, candidate catal
 		return
 	}
 	startedAt := worker.now().UTC()
-	worker.mu.Lock()
-	worker.activeBuilds++
-	active := worker.activeBuilds
-	worker.mu.Unlock()
-	worker.metrics.SetActiveBuilds(active)
-	defer func() {
-		worker.mu.Lock()
-		worker.activeBuilds--
-		active := worker.activeBuilds
-		worker.mu.Unlock()
-		worker.metrics.SetActiveBuilds(active)
-	}()
+	worker.adjustActiveBuilds(1)
+	defer worker.adjustActiveBuilds(-1)
 	generation, buildErr := worker.backend.Build(ctx, catalog.BuildRequest{
 		RepositoryID: candidate.RepositoryID, RecoveryPointID: candidate.RecoveryPointID,
 	})
@@ -259,6 +353,13 @@ func (worker *CatalogWorker) buildCandidate(ctx context.Context, candidate catal
 		outcome = catalog.MetricBuildFailed
 	}
 	worker.metrics.ObserveBuild(outcome, worker.now().UTC().Sub(startedAt))
+}
+
+func (worker *CatalogWorker) adjustActiveBuilds(delta int) {
+	worker.activeBuildMu.Lock()
+	defer worker.activeBuildMu.Unlock()
+	worker.activeBuilds += delta
+	worker.metrics.SetActiveBuilds(worker.activeBuilds)
 }
 
 // Shutdown cancels schedules, revokes every active durable point fence, then
@@ -300,5 +401,6 @@ func catalogRetryDelay(config backupasset.CatalogConfig, failureCount int, point
 
 var _ interface {
 	Run(context.Context)
+	TryWake() bool
 	Shutdown(context.Context) error
 } = (*CatalogWorker)(nil)

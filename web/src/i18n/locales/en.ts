@@ -1027,6 +1027,8 @@ const en = {
     editAriaLabel: "Edit task",
     rsyncVersioningAriaLabel: "Manage Rsync versioned recovery points for {{name}}",
     rcloneVersioningAriaLabel: "Manage Rclone versioned recovery points for {{name}}",
+    previewConnectAriaLabel: "Connect or refresh file preview for task {{name}}",
+    previewConnectDisabledActive: "The task is running. Wait for the active run to finish before connecting file preview.",
     cancelAriaLabel: "Cancel task",
     deleteAriaLabel: "Delete task",
     trigger: "Trigger",
@@ -1045,6 +1047,32 @@ const en = {
     createTask: "New task",
     expandChain: "Expand dependency chain",
     collapseChain: "Collapse dependency chain",
+  },
+
+  taskPreviewConnect: {
+    title: "Connect file preview — {{name}}",
+    description: "Derive read-only access from the task and build a file catalog for the current backup.",
+    safetyProbe: "The system performs a bounded read-only probe and creates or refreshes the preview association and catalog observation.",
+    safetyMutation: "This does not enable multi-versioning or modify or delete backup files.",
+    confirm: "Connect or refresh file preview",
+    working: "Working",
+    openPreview: "Open file preview",
+    status: {
+      idle: "Confirm to begin the read-only probe.",
+      connecting: "Safely connecting the backup task…",
+      indexing: "Connected. Building the file catalog…",
+      ready: "File preview is ready",
+      timedOut: "The catalog is still building in the background. You can open it from the task later.",
+    },
+    notice: {
+      connectBlocked: "File preview could not be connected safely. Try again later or check the task configuration.",
+      missingPoint: "The connection did not return a verifiable recovery point. Refresh the task and try again.",
+      catalogBlocked: "This recovery point is not currently browsable. Try again later.",
+      catalogFailed: "Catalog indexing failed. Try again later.",
+      catalogPartial: "Catalog indexing is incomplete. Try again later.",
+      catalogUnavailable: "Catalog indexing is currently unavailable. Try again later.",
+      requestFailed: "File preview connection failed. Try again later.",
+    },
   },
 
   rsyncVersioning: {

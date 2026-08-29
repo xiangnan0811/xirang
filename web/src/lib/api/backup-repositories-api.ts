@@ -29,6 +29,7 @@ import {
   mapCatalogCapabilities,
   mapCatalogContentAvailability,
   mapCatalogPermissions,
+  mapRecoveryPointSnapshot,
   normalizeCatalogTime,
   normalizeNullableCatalogTime,
 } from "./recovery-points-api";
@@ -379,15 +380,6 @@ export function mapBackupRebuildResult(value: unknown): CatalogProjection<Backup
   };
 }
 
-function firstPresent(value: RawObject, ...keys: string[]): unknown {
-  for (const key of keys) {
-    if (value[key] !== undefined) {
-      return value[key];
-    }
-  }
-  return undefined;
-}
-
 function mapBackupRepositoryMutationSnapshot(value: unknown): CatalogProjection<BackupRepositoryMutationSnapshot> {
   if (!isRawObject(value)) {
     return blocked();
@@ -428,14 +420,35 @@ export function mapBackupRepositoryMutationResult(value: unknown): CatalogProjec
   if (!isRawObject(value)) {
     return blocked();
   }
-  const repository = firstPresent(value, "repository", "Repository");
+  const hasPascalRepository = Object.prototype.hasOwnProperty.call(value, "Repository");
+  const hasSnakeRepository = Object.prototype.hasOwnProperty.call(value, "repository");
+  if (hasPascalRepository === hasSnakeRepository) {
+    return blocked();
+  }
+  const usesPascalEnvelope = hasPascalRepository;
+  const mutablePointKey = usesPascalEnvelope ? "MutablePoint" : "mutable_point";
+  const mixedMutablePointKey = usesPascalEnvelope ? "mutable_point" : "MutablePoint";
+  if (Object.prototype.hasOwnProperty.call(value, mixedMutablePointKey)) {
+    return blocked();
+  }
+  const repository = value[usesPascalEnvelope ? "Repository" : "repository"];
   const mapped = mapBackupRepositoryMutationSnapshot(repository);
   if (mapped.status !== "available") {
     return mapped;
   }
+  const mutablePoint = value[mutablePointKey];
+  const mappedMutablePoint = mutablePoint === undefined || mutablePoint === null
+    ? null
+    : mapRecoveryPointSnapshot(mutablePoint);
+  if (mappedMutablePoint !== null && mappedMutablePoint.status !== "available") {
+    return blocked();
+  }
   return {
     status: "available",
-    value: { repository: mapped.value },
+    value: {
+      repository: mapped.value,
+      mutablePoint: mappedMutablePoint === null ? null : mappedMutablePoint.value,
+    },
   };
 }
 
