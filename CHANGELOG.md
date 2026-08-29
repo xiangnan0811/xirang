@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.53.0](https://github.com/xiangnan0811/xirang/compare/v0.52.3...v0.53.0) (2026-08-29)
+
+
+### ✨ Features
+
+* **backup-assets:** connect task file previews ([#480](https://github.com/xiangnan0811/xirang/issues/480)) ([6785bba](https://github.com/xiangnan0811/xirang/commit/6785bba52053f80e84da954181ef8d5e32309ff0))
+
 ## [0.52.3](https://github.com/xiangnan0811/xirang/compare/v0.52.2...v0.52.3) (2026-08-29)
 
 
