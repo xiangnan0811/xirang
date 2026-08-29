@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 47
-- **Last Active**: 2026-08-24
+- **Total Sessions**: 48
+- **Last Active**: 2026-08-29
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1858 | Active |
+| `journal-1.md` | ~1879 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 48 | 2026-08-29 | Deliver task preview connection workflow | `f038f513` | `codex/backup-task-preview-connect-ui` |
 | 47 | 2026-08-24 | 完成备份资产启用死锁修复与 v0.50.4 生产验收 | `bb295c830285377af439e6021b51234e09df5127`, `214f5e18b47974d4e353227fa52782992cef70f7`, `3235ca5f` | `chore/backup-assets-release-acceptance` |
 | 46 | 2026-08-21 | Child 17 review closeout delivery | `c732bc61`, `9f059b0b` | `chore/backup-assets-child17-bookkeeping` |
 | 45 | 2026-08-21 | Backup assets closeout Wave 1–2 | `982c7bda`, `82390a6d`, `e618dce9`, `42f9d5bd` | `feat/backup-assets-closeout` |
