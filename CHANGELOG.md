@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.52.3](https://github.com/xiangnan0811/xirang/compare/v0.52.2...v0.52.3) (2026-08-29)
+
+
+### 🐛 Bug Fixes
+
+* **backup-assets:** stretch frame previews ([#478](https://github.com/xiangnan0811/xirang/issues/478)) ([380725c](https://github.com/xiangnan0811/xirang/commit/380725ca81f05c85ba4e652b9ef417cc1104dd03))
+
 ## [0.52.2](https://github.com/xiangnan0811/xirang/compare/v0.52.1...v0.52.2) (2026-08-28)
 
 
