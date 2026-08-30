@@ -14,25 +14,41 @@
   "completedAt": "2026-08-29",
   "branch": "codex/backup-task-preview-connect-ui",
   "base_branch": "main",
-  "worktree_path": "/home/murray/code/xirang/.worktrees/backup-task-preview-connect-ui",
-  "commit": null,
+  "worktree_path": null,
+  "commit": "6785bba52053f80e84da954181ef8d5e32309ff0",
   "pr_url": "https://github.com/xiangnan0811/xirang/pull/480",
   "subtasks": [],
   "children": [],
   "parent": "08-21-backup-assets-release-acceptance",
   "relatedFiles": [
-    ".trellis/tasks/08-29-backup-task-preview-connect-ui/prd.md",
-    ".trellis/tasks/08-29-backup-task-preview-connect-ui/design.md",
-    ".trellis/tasks/08-29-backup-task-preview-connect-ui/implement.md",
-    ".trellis/tasks/08-29-backup-task-preview-connect-ui/research/current-main-evidence.md"
+    ".trellis/tasks/archive/2026-08/08-29-backup-task-preview-connect-ui/prd.md",
+    ".trellis/tasks/archive/2026-08/08-29-backup-task-preview-connect-ui/design.md",
+    ".trellis/tasks/archive/2026-08/08-29-backup-task-preview-connect-ui/implement.md",
+    ".trellis/tasks/archive/2026-08/08-29-backup-task-preview-connect-ui/research/current-main-evidence.md"
   ],
-  "notes": "Product direction and implementation were explicitly approved on 2026-08-29. PR #480 is open; the first backend CI run exposed a reproducible main-baseline non-canonical JWT decoding gap, which was repaired on the same branch with deterministic RED/GREEN and complete local gates. CI rerun, merge, post-merge automation, and production acceptance remain pending.",
+  "notes": "Product direction and implementation were explicitly approved on 2026-08-29. PR #480 passed all required CI and squash-merged as 6785bba52053f80e84da954181ef8d5e32309ff0; exact-squash main CI and Release Please succeeded. Release PR #481 published stable v0.53.0 and the official amd64/arm64 Docker manifest. Cleanup PR #482 repaired stale Trellis worktree metadata, passed PR and exact-main CI, and left only a clean main worktree. AC11 remains unchecked solely because three unchanged sibling runtime fixtures cannot pass package-wide -count=10 isolation; focused repeat/race and full single-run project gates are green. Production real-data preview acceptance remains tracked by the parent task.",
   "meta": {
     "planning_base": "b3fbd0b3dd1be8c6b509973b510460d4d350b849",
     "product_decision": "Per-task connect-or-refresh preview action backed by task-derived Connect and an internal catalog wake.",
     "implementation_authorized": true,
     "schema_change_expected": false,
     "public_api_route_change_expected": false,
-    "provider_mutation_allowed": false
+    "provider_mutation_allowed": false,
+    "delivery": {
+      "status": "complete_checked_archived_released_cleanup_verified",
+      "feature_pr": "https://github.com/xiangnan0811/xirang/pull/480",
+      "required_ci": "run_33256285994_success_all_11_required_checks_green",
+      "squash_commit": "6785bba52053f80e84da954181ef8d5e32309ff0",
+      "post_merge": "exact_squash_main_ci_33257026300_and_release_please_33257026275_success",
+      "release_pr": "https://github.com/xiangnan0811/xirang/pull/481",
+      "release_commit": "1ca35f75cd1500ed42e475f4612970b44e4b8b4d",
+      "github_release": "https://github.com/xiangnan0811/xirang/releases/tag/v0.53.0",
+      "docker_publish": "run_33282937634_success_amd64_arm64_manifest_sha256_98d19eeb0d8fd1ae87d6efe18877ce3986150da32c431bcf545d91aa1756d954",
+      "cleanup_pr": "https://github.com/xiangnan0811/xirang/pull/482",
+      "cleanup_commit": "8c5e2f4864aa4e414fe321b8666475dca14d40f5",
+      "cleanup_post_merge": "exact_main_ci_33284939426_and_release_please_33284939434_success",
+      "topic_cleanup": "feature_and_cleanup_branches_deleted_only_clean_main_worktree_remains",
+      "accepted_external_limit": "package_wide_runtime_count_10_fails_only_three_unchanged_sibling_shared_memory_fixtures"
+    }
   }
 }
