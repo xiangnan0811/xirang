@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.53.1](https://github.com/xiangnan0811/xirang/compare/v0.53.0...v0.53.1) (2026-08-31)
+
+
+### 🐛 Bug Fixes
+
+* harden recovery and release safety ([#484](https://github.com/xiangnan0811/xirang/issues/484)) ([be3f086](https://github.com/xiangnan0811/xirang/commit/be3f086db7ea20bbe72d18bba40ad34ec6a9a352))
+
 ## [0.53.0](https://github.com/xiangnan0811/xirang/compare/v0.52.3...v0.53.0) (2026-08-29)
 
 
