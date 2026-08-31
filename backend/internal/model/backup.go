@@ -36,6 +36,8 @@ type RestoreDrillEvidence struct {
 	CleanupStartedAt     *time.Time `json:"cleanup_started_at"`
 	CleanupFinishedAt    *time.Time `json:"cleanup_finished_at"`
 	CleanupError         string     `gorm:"type:text" json:"cleanup_error"`
+	RecoveryOwnerID      string     `gorm:"size:64;not null;default:''" json:"-"`
+	RecoveryLeaseUntil   *time.Time `gorm:"index:idx_restore_drill_recovery_lease" json:"-"`
 	CreatedAt            time.Time  `json:"created_at"`
 	UpdatedAt            time.Time  `json:"updated_at"`
 }

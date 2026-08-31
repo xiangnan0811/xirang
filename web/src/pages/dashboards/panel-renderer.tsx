@@ -108,7 +108,7 @@ export function PanelRenderer({ panel, data }: RendererProps) {
   };
   const tooltipFormatter = (v: unknown): [string, undefined] => [formatValue(v), undefined];
 
-  switch (panel.chart_type) {
+  switch (panel.chartType) {
     case "line": {
       return (
         <ResponsiveContainer

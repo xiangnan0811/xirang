@@ -98,7 +98,7 @@ export function SLOPanel() {
       {/* Header row: title + subtitle + actions */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">{t("slo.tabSLO")}</h1>
+          <h2 className="text-xl font-semibold">{t("slo.tabSLO")}</h2>
           {summary && (
             <p className="mt-0.5 text-sm text-muted-foreground">
               {t("slo.summary.total")}: {summary.total} · {t("slo.summary.healthy")}: {summary.healthy} · {t("slo.summary.warning")}: {summary.warning} · {t("slo.summary.breached")}: {summary.breached}
@@ -149,14 +149,14 @@ export function SLOPanel() {
                     <tr key={row.id} className="border-b border-border/20 last:border-0">
                       <td className="px-4 py-2">{row.name}</td>
                       <td className="px-4 py-2 text-muted-foreground">
-                        {t(METRIC_TYPES.find((m) => m.value === row.metric_type)?.i18nKey ?? "")}
+                        {t(METRIC_TYPES.find((m) => m.value === row.metricType)?.i18nKey ?? "")}
                       </td>
                       <td className="px-4 py-2 tabular-nums">{(row.threshold * 100).toFixed(2)}%</td>
                       <td className="px-4 py-2 tabular-nums">
                         {c ? `${(c.observed * 100).toFixed(2)}%` : "—"}
                       </td>
                       <td className="px-4 py-2 tabular-nums">
-                        {c ? `${c.error_budget_remaining_pct.toFixed(0)}%` : "—"}
+                        {c ? `${c.errorBudgetRemainingPct.toFixed(0)}%` : "—"}
                       </td>
                       <td className="px-4 py-2">
                         {cErr ? (
@@ -277,12 +277,12 @@ function SLODialog({
   useEffect(() => {
     if (existing) {
       setName(existing.name);
-      setMetricType(existing.metric_type);
+      setMetricType(existing.metricType);
       setTags(parseSLOTags(existing));
       setThreshold((existing.threshold * 100).toString());
-      setWindowDays(existing.window_days);
+      setWindowDays(existing.windowDays);
       setEnabled(existing.enabled);
-      setEscalationPolicyId(existing.escalation_policy_id ?? null);
+      setEscalationPolicyId(existing.escalationPolicyId ?? null);
     } else {
       setName("");
       setMetricType("availability");
@@ -303,12 +303,12 @@ function SLODialog({
     }
     const input: SLOInput = {
       name,
-      metric_type: metricType,
-      match_tags: tags,
+      metricType: metricType,
+      matchTags: tags,
       threshold: n / 100,
-      window_days: windowDays,
+      windowDays: windowDays,
       enabled,
-      escalation_policy_id: escalationPolicyId,
+      escalationPolicyId: escalationPolicyId,
     };
     setSaving(true);
     try {

@@ -170,7 +170,7 @@ const en = {
     totpLabel: "Verification code",
     loginButton: "Sign in",
     demoTitle: "Demo mode uses mock data only",
-    demoDesc: "It does not connect to real servers, SSH keys, or backup storage. Use it to inspect backup confidence, restore drills, Fleet Doctor, and incident explanations.",
+    demoDesc: "It does not connect to real servers, SSH keys, or backup storage. Use it to inspect backup confidence, historical restore-drill evidence, Fleet Doctor, and incident explanations.",
     demoEnter: "Enter demo console",
     verifyButton: "Verify",
     backToLogin: "Back to login",
@@ -387,6 +387,7 @@ const en = {
     selectAllVisible: "Select all visible nodes on this page",
     loadingTitle: "Loading nodes",
     loadingDesc: "Refreshing probe status and availability...",
+    loadFailed: "Failed to load nodes. Previous data is kept when available.",
     emptyTitle: "No nodes match the current filters",
     emptyDesc: "Try resetting filters, or add a new node.",
     emptyCreateLabel: "Add Node",
@@ -748,6 +749,7 @@ const en = {
     enabledRatio: "Enabled {{active}}/{{total}}",
     loadingTitle: "Loading policies",
     loadingDesc: "Fetching policy configurations and status...",
+    loadFailed: "Failed to load policies. Previous data is kept when available.",
     noMatchTitle: "No matching policies",
     noMatchDesc: "Try adjusting filter keywords, or add a new policy template.",
     noMatchDescAlt: "Try adjusting filter keywords, or add a new policy.",
@@ -880,6 +882,8 @@ const en = {
       triggerSuccess: "Drill triggered (Run #{{id}})",
       triggerFailed: "Trigger failed",
       sandboxMustNotBeSource: "All available nodes are selected as backup sources. No sandbox node available.",
+      unavailableTitle: "Recovery drills are unavailable",
+      unavailableDesc: "Production restore drills are disabled until a secure source-to-sandbox transfer exists. Manual and scheduled drills cannot be started. Historical drill results remain visible.",
     },
   },
 
@@ -950,6 +954,7 @@ const en = {
     taskUnit: "tasks",
     loadingTitle: "Loading tasks",
     loadingDesc: "Syncing task status, progress and recent execution info...",
+    loadFailed: "Failed to load tasks. Previous data is kept when available.",
     statPending: "Pending",
     statPendingDesc: "Awaiting schedule trigger",
     statSuccess: "Success",
@@ -2220,6 +2225,8 @@ const en = {
     updateFailed: "Update failed",
     scopeNodeIdsLabel: "Specify Node IDs (JSON array)",
     enabledConfig: "Enabled",
+    description: "Create a scheduled SLA report and choose who receives it.",
+    descriptionEdit: "Update this report schedule, scope, and notification channels.",
   },
 
   // ── batch command dialog ──
@@ -3589,6 +3596,13 @@ const en = {
   errorBoundary: {
     unknownError: "An unknown error occurred",
     renderError: "Page render error",
+    description: "Something went wrong while rendering this page. You can retry without exposing internal details.",
+  },
+
+  notFound: {
+    title: "Page not found",
+    description: "This address does not match a console page. Check the URL or return to Overview.",
+    goHome: "Back to Overview",
   },
 
   // ── filtered empty state ──
@@ -3930,6 +3944,7 @@ const en = {
     note: "Note",
     noteHint: "Optional note",
     create: "Create",
+    dialogDesc: "Create a silence window so matching alerts stay quiet until it ends.",
     creating: "Creating...",
     revoke: "End now",
     empty: "No silence rules yet",

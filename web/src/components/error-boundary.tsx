@@ -1,7 +1,8 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
-import i18next from "i18next";
-import { AlertTriangle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import { PageHero } from "@/components/ui/page-hero";
+import { useDocumentTitle } from "@/hooks/use-document-title";
 import { safeLog } from "@/lib/utils";
 
 interface ErrorBoundaryProps {
@@ -12,6 +13,26 @@ interface ErrorBoundaryProps {
 interface ErrorBoundaryState {
   hasError: boolean;
   error: Error | null;
+}
+
+function ErrorFallback({ onRetry }: { onRetry: () => void }) {
+  const { t } = useTranslation();
+  const title = t("errorBoundary.renderError");
+  useDocumentTitle(title);
+
+  return (
+    <div className="animate-fade-in space-y-5">
+      <PageHero
+        title={title}
+        subtitle={t("errorBoundary.description")}
+        actions={
+          <Button variant="outline" size="sm" onClick={onRetry}>
+            {t("common.retry")}
+          </Button>
+        }
+      />
+    </div>
+  );
 }
 
 class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
@@ -25,8 +46,6 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    // ErrorBoundary 是合理的日志场景，用于记录未捕获的渲染错误
-    // 生产环境仅记录错误信息，避免泄漏敏感数据
     safeLog("error", "ErrorBoundary caught:", error.message, errorInfo.componentStack);
   }
 
@@ -40,25 +59,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
         return this.props.fallback;
       }
 
-      return (
-        <div className="flex flex-col items-center justify-center py-16 text-center">
-          <div className="mb-4 rounded-full bg-destructive/10 p-3">
-            <AlertTriangle className="size-6 text-destructive" />
-          </div>
-          <h3 className="text-sm font-semibold">{i18next.t('errorBoundary.renderError')}</h3>
-          <p className="mt-1 max-w-md text-sm text-muted-foreground">
-            {this.state.error?.message ?? i18next.t('errorBoundary.unknownError')}
-          </p>
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-4"
-            onClick={this.handleReset}
-          >
-            {i18next.t('common.retry')}
-          </Button>
-        </div>
-      );
+      return <ErrorFallback onRetry={this.handleReset} />;
     }
 
     return this.props.children;

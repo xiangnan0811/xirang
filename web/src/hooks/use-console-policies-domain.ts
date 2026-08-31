@@ -1,5 +1,8 @@
-import { useCallback, useRef, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { apiClient } from "@/lib/api/client";
+import i18n from "@/i18n";
+import { getErrorMessage } from "@/lib/utils";
+import { idleInventoryRequestState, isAbortError, type InventoryRequestState } from "@/hooks/inventory-request-state";
 import { usePolicyOperations } from "@/hooks/use-console-policy-operations";
 import type {
   AlertRecord,
@@ -30,17 +33,35 @@ export function usePoliciesDomain({
   handleWriteApiError,
 }: UsePoliciesDomainParams) {
   const refreshPoliciesAbortRef = useRef<AbortController | null>(null);
+  const [policiesRequest, setPoliciesRequest] = useState<InventoryRequestState>(idleInventoryRequestState);
+  const policiesRequestGenRef = useRef(0);
 
   const refreshPolicies = useCallback(async () => {
-    if (!token) return;
+    if (!token) {
+      setPoliciesRequest({ loading: false, error: null, loaded: true });
+      return;
+    }
     refreshPoliciesAbortRef.current?.abort();
     const controller = new AbortController();
     refreshPoliciesAbortRef.current = controller;
+    const requestGen = ++policiesRequestGenRef.current;
+    setPoliciesRequest((prev) => ({ ...prev, loading: true }));
     try {
-      const result = await apiClient.getPolicies(token);
+      const result = await apiClient.getPolicies(token, { signal: controller.signal });
+      if (requestGen !== policiesRequestGenRef.current || controller.signal.aborted) {
+        return;
+      }
       setPolicies(result);
-    } catch {
-      // 按需刷新失败时静默处理
+      setPoliciesRequest({ loading: false, error: null, loaded: true });
+    } catch (error) {
+      if (requestGen !== policiesRequestGenRef.current || controller.signal.aborted || isAbortError(error)) {
+        return;
+      }
+      setPoliciesRequest((prev) => ({
+        loading: false,
+        error: getErrorMessage(error, i18n.t("policies.loadFailed")),
+        loaded: prev.loaded,
+      }));
     }
   }, [token, setPolicies]);
 
@@ -63,6 +84,9 @@ export function usePoliciesDomain({
 
   return {
     policies,
+    policiesLoading: policiesRequest.loading,
+    policiesError: policiesRequest.error,
+    policiesLoaded: policiesRequest.loaded,
     refreshPolicies,
     createPolicy,
     updatePolicy,

@@ -29,9 +29,9 @@ const intApi = createIntegrationsApi();
 const MAX_LEVELS = 5;
 
 const defaultLevel = (): EscalationLevel => ({
-  delay_seconds: 0,
-  integration_ids: [],
-  severity_override: "",
+  delaySeconds: 0,
+  integrationIds: [],
+  severityOverride: "",
   tags: [],
 });
 
@@ -57,13 +57,13 @@ function validateForm(
 
   const levelErrors: LevelErrors[] = levels.map((lv, i) => {
     const le: LevelErrors = {};
-    if (i === 0 && lv.delay_seconds !== 0) {
+    if (i === 0 && lv.delaySeconds !== 0) {
       le.delay = t("escalation.validation.firstDelayMustBeZero");
     }
-    if (i > 0 && lv.delay_seconds <= levels[i - 1].delay_seconds) {
+    if (i > 0 && lv.delaySeconds <= levels[i - 1].delaySeconds) {
       le.delay = t("escalation.validation.delayMustIncrease");
     }
-    if (lv.integration_ids.length === 0) {
+    if (lv.integrationIds.length === 0) {
       le.integrations = t("escalation.validation.integrationsRequired");
     }
     const longTag = lv.tags.find((tag) => tag.length > 32);
@@ -121,7 +121,7 @@ export function EscalationPolicyEditor({ open, onOpenChange, policy, onSaved }: 
     if (policy) {
       setName(policy.name);
       setDescription(policy.description ?? "");
-      setMinSeverity(policy.min_severity);
+      setMinSeverity(policy.minSeverity);
       setEnabled(policy.enabled);
       setLevels(policy.levels.length > 0 ? policy.levels : [defaultLevel()]);
     } else {
@@ -148,10 +148,10 @@ export function EscalationPolicyEditor({ open, onOpenChange, policy, onSaved }: 
 
   const addLevel = () => {
     if (levels.length >= MAX_LEVELS) return;
-    const prevDelay = levels[levels.length - 1]?.delay_seconds ?? 0;
+    const prevDelay = levels[levels.length - 1]?.delaySeconds ?? 0;
     setLevels((prev) => [
       ...prev,
-      { ...defaultLevel(), delay_seconds: prevDelay + 300 },
+      { ...defaultLevel(), delaySeconds: prevDelay + 300 },
     ]);
   };
 
@@ -164,13 +164,13 @@ export function EscalationPolicyEditor({ open, onOpenChange, policy, onSaved }: 
 
     // Force first-level delay to 0
     const safeLevels: EscalationLevel[] = levels.map((lv, i) =>
-      i === 0 ? { ...lv, delay_seconds: 0 } : lv
+      i === 0 ? { ...lv, delaySeconds: 0 } : lv
     );
 
     const input: EscalationPolicyInput = {
       name: name.trim(),
       description: description.trim(),
-      min_severity: minSeverity,
+      minSeverity: minSeverity,
       enabled,
       levels: safeLevels,
     };

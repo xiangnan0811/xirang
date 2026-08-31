@@ -350,6 +350,7 @@ export function IntegrationCreateDialog({
           <div className="flex items-center justify-between rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
             <span>{t("integration.sampleHint")}</span>
             <Button
+              type="button"
               size="sm"
               variant="outline"
               onClick={() =>
@@ -401,6 +402,7 @@ export function IntegrationCreateDialog({
         <InlineAlert tone="warning" title={pendingHint} className="mt-4">
           <div className="flex justify-end gap-2 mt-2">
             <Button
+              type="button"
               size="sm"
               variant="outline"
               onClick={() => setPendingHint(null)}
@@ -408,6 +410,7 @@ export function IntegrationCreateDialog({
               {t("integration.recheck")}
             </Button>
             <Button
+              type="button"
               size="sm"
               onClick={() => handleSave(true)}
               disabled={saving}

@@ -102,13 +102,13 @@ export function buildDemoPolicy(input: NewPolicyInput, policies: PolicyRecord[])
     nodeIds: input.nodeIds ?? [],
     verifyEnabled: input.verifyEnabled ?? false,
     verifySampleRate: input.verifySampleRate ?? 0,
-    drill_enabled: input.drill_enabled ?? false,
-    drill_cron: input.drill_cron ?? "",
-    drill_restore_path: input.drill_restore_path ?? "/tmp/xirang-drill",
-    drill_pre_verify: input.drill_pre_verify ?? "",
-    drill_verify: input.drill_verify ?? "",
-    drill_post_verify: input.drill_post_verify ?? "",
-    drill_auto_cleanup: input.drill_auto_cleanup ?? true,
+    drillEnabled: input.drillEnabled ?? false,
+    drillCron: input.drillCron ?? "",
+    drillRestorePath: input.drillRestorePath ?? "/tmp/xirang-drill",
+    drillPreVerify: input.drillPreVerify ?? "",
+    drillVerify: input.drillVerify ?? "",
+    drillPostVerify: input.drillPostVerify ?? "",
+    drillAutoCleanup: input.drillAutoCleanup ?? true,
   };
 }
 

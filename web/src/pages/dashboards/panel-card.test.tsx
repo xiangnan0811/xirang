@@ -45,16 +45,16 @@ const mockUsePanelData = vi.mocked(usePanelData);
 
 const mockPanel: Panel = {
   id: 1,
-  dashboard_id: 1,
+  dashboardId: 1,
   title: "CPU 使用率",
-  chart_type: "line",
+  chartType: "line",
   metric: "node.cpu",
   filters: {},
   aggregation: "avg",
-  layout_x: 0,
-  layout_y: 0,
-  layout_w: 6,
-  layout_h: 4,
+  layoutX: 0,
+  layoutY: 0,
+  layoutW: 6,
+  layoutH: 4,
 };
 
 const mockData: PanelQueryResult = {
@@ -67,7 +67,7 @@ const mockData: PanelQueryResult = {
       ],
     },
   ],
-  step_seconds: 60,
+  stepSeconds: 60,
 };
 
 // ─── 渲染辅助 ─────────────────────────────────────────────────────
@@ -161,7 +161,7 @@ describe("PanelCard", () => {
 
   it("数据为空 series 时显示空态文字", () => {
     mockUsePanelData.mockReturnValue({
-      data: { series: [], step_seconds: 60 },
+      data: { series: [], stepSeconds: 60 },
       loading: false,
       error: null,
       retry: vi.fn(),

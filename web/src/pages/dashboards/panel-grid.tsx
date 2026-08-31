@@ -60,10 +60,10 @@ type ResponsiveProps = {
 
 export type LayoutItem = {
   id: number;
-  layout_x: number;
-  layout_y: number;
-  layout_w: number;
-  layout_h: number;
+  layoutX: number;
+  layoutY: number;
+  layoutW: number;
+  layoutH: number;
 };
 
 type PanelGridProps = {
@@ -76,10 +76,10 @@ type PanelGridProps = {
 function panelToLayout(panel: Panel): RGLLayout {
   return {
     i: String(panel.id),
-    x: panel.layout_x,
-    y: panel.layout_y,
-    w: panel.layout_w,
-    h: panel.layout_h,
+    x: panel.layoutX,
+    y: panel.layoutY,
+    w: panel.layoutW,
+    h: panel.layoutH,
     minW: 2,
     minH: 2,
   };
@@ -103,10 +103,10 @@ export function PanelGrid({
   function handleLayoutChange(currentLayout: RGLLayout[]) {
     const items: LayoutItem[] = currentLayout.map((l) => ({
       id: Number(l.i),
-      layout_x: l.x,
-      layout_y: l.y,
-      layout_w: l.w,
-      layout_h: l.h,
+      layoutX: l.x,
+      layoutY: l.y,
+      layoutW: l.w,
+      layoutH: l.h,
     }));
     onLayoutChange(items);
   }

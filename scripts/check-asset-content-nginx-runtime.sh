@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 TEMPLATE=${ASSET_CONTENT_NGINX_TEMPLATE:-"$ROOT_DIR/deploy/nginx/templates/default.conf.template"}
-NGINX_IMAGE=${ASSET_CONTENT_NGINX_IMAGE:-nginx:1.29-alpine}
+NGINX_IMAGE=${ASSET_CONTENT_NGINX_IMAGE:-"nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de"}
 TMP_DIR=$(mktemp -d)
 CONTAINER_ID=
 
@@ -57,6 +57,10 @@ server {
     return 200 "ok";
   }
 
+  location = /readyz {
+    return 200 "ready";
+  }
+
   location = /api/v1/probe-ticket {
     add_header Set-Cookie "xirang_asset_content=$CANARY_COOKIE; Path=$CONTENT_PATH; HttpOnly; SameSite=Strict" always;
     return 200 "ticket-issued";
@@ -105,7 +109,7 @@ BASE_URL="http://127.0.0.1:$PORT"
 
 ready=0
 for _ in $(seq 1 40); do
-  if curl -fsS --max-time 1 "$BASE_URL/healthz" >/dev/null 2>&1; then
+  if curl -fsS --max-time 1 "$BASE_URL/readyz" >/dev/null 2>&1; then
     ready=1
     break
   fi

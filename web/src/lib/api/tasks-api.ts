@@ -776,13 +776,57 @@ function mapTaskLog(row: TaskLogResponse): LogEvent {
   };
 }
 
+const TASK_INVENTORY_PAGE_SIZE = 100;
+
 export function createTasksApi() {
   return {
     async getTasks(token: string, options?: { signal?: AbortSignal }): Promise<TaskRecord[]> {
-      // 后端 /tasks 返回 paginated envelope，与 /alerts 情况相同，需 unwrap。
-      const payload = await request<PaginatedEnvelope<TaskResponse[]>>("/tasks", { token, signal: options?.signal });
-      const { items } = unwrapPaginated(payload);
-      return items.map((row, index) => mapTask(row, index));
+      const collected: TaskRecord[] = [];
+      const seenIds = new Set<number>();
+      let page = 1;
+      let knownTotal: number | null = null;
+
+      while (true) {
+        const params = new URLSearchParams({
+          page: String(page),
+          page_size: String(TASK_INVENTORY_PAGE_SIZE),
+        });
+        const payload = await request<PaginatedEnvelope<TaskResponse[]>>(`/tasks?${params.toString()}`, {
+          token,
+          signal: options?.signal,
+        });
+        const unwrapped = unwrapPaginated(payload);
+        if (Number.isFinite(unwrapped.total) && unwrapped.total > 0) {
+          knownTotal = unwrapped.total;
+        }
+        const rows = unwrapped.items;
+        if (rows.length === 0) {
+          break;
+        }
+
+        let added = 0;
+        for (const row of rows) {
+          const mapped = mapTask(row, collected.length);
+          if (seenIds.has(mapped.id)) {
+            continue;
+          }
+          seenIds.add(mapped.id);
+          collected.push(mapped);
+          added += 1;
+        }
+        if (added === 0) {
+          break;
+        }
+        if (knownTotal !== null && collected.length >= knownTotal) {
+          break;
+        }
+        if (rows.length < TASK_INVENTORY_PAGE_SIZE) {
+          break;
+        }
+        page += 1;
+      }
+
+      return collected;
     },
 
     async getTask(token: string, taskId: number): Promise<TaskRecord> {

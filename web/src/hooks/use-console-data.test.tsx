@@ -97,6 +97,15 @@ vi.mock("@/hooks/use-step-up-action", () => ({
   useStepUpAction: useStepUpActionMock,
 }));
 
+vi.mock("@/components/ui/toast-sonner", () => ({
+  toast: {
+    warning: vi.fn(),
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+
 function createNode(id: number, name: string): NodeRecord {
   return {
     id,
@@ -465,5 +474,175 @@ describe("useConsoleData", () => {
     expect(logs.some((log) => log.message.includes("XR-AUTH-011"))).toBe(true);
 
     vi.unstubAllEnvs();
+  });
+
+  it("updateNode 使用 {node, warning} 更新列表并展示 warning", async () => {
+    const existing = createNode(1, "node-old");
+    apiClientMock.getNodes.mockResolvedValue([existing]);
+    apiClientMock.updateNode.mockResolvedValue({
+      node: { ...existing, name: "node-updated", host: "updated.example.com" },
+      warning: "备份目录标识已更改",
+    });
+
+    const { result } = renderHook(() => useConsoleData("token-1"));
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    await act(async () => {
+      await result.current.refreshNodes();
+    });
+    expect(result.current.nodes[0]?.name).toBe("node-old");
+
+    await act(async () => {
+      await result.current.updateNode(1, {
+        name: "node-updated",
+        host: "updated.example.com",
+        username: existing.username,
+        port: existing.port,
+        authType: "key",
+        keyId: existing.keyId,
+        tags: existing.tags.join(","),
+        basePath: existing.basePath,
+      });
+    });
+
+    expect(result.current.nodes).toHaveLength(1);
+    expect(result.current.nodes[0]?.id).toBe(1);
+    expect(result.current.nodes[0]?.name).toBe("node-updated");
+    expect(result.current.nodes[0]?.host).toBe("updated.example.com");
+    expect(result.current.warning).toBe("备份目录标识已更改");
+  });
+
+  it("任务刷新失败时保留旧数据并暴露可重试错误", async () => {
+    apiClientMock.getNodes.mockResolvedValue([]);
+    apiClientMock.getTasks.mockReset();
+    apiClientMock.getTasks
+      .mockResolvedValueOnce([createTask(101, "running", 18)])
+      .mockRejectedValueOnce(new Error("tasks down"));
+
+    const { result } = renderHook(() => useConsoleData("token-1"));
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    await act(async () => {
+      await result.current.refreshTasks();
+    });
+    expect(result.current.tasks).toHaveLength(1);
+    expect(result.current.tasks[0]?.id).toBe(101);
+    expect(result.current.tasksLoaded).toBe(true);
+    expect(result.current.tasksError).toBeNull();
+
+    await act(async () => {
+      await result.current.refreshTasks();
+    });
+    expect(result.current.tasks).toHaveLength(1);
+    expect(result.current.tasks[0]?.id).toBe(101);
+    expect(result.current.tasksError).toBeTruthy();
+    expect(result.current.tasksLoading).toBe(false);
+  });
+
+  it("中止中的节点刷新不会覆盖当前状态或写入错误", async () => {
+    const existing = createNode(1, "keep-me");
+    const pending = createDeferred<NodeRecord[]>();
+    apiClientMock.getNodes
+      .mockResolvedValueOnce([existing])
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce([existing]);
+
+    const { result } = renderHook(() => useConsoleData("token-1"));
+    await act(async () => {
+      await result.current.refreshNodes();
+    });
+    expect(result.current.nodes[0]?.name).toBe("keep-me");
+
+    let abortedRefresh: Promise<void> | undefined;
+    await act(async () => {
+      abortedRefresh = result.current.refreshNodes();
+    });
+    await act(async () => {
+      const successor = result.current.refreshNodes();
+      pending.reject(new DOMException("Aborted", "AbortError"));
+      await abortedRefresh;
+      await successor;
+    });
+
+    expect(result.current.nodes[0]?.name).toBe("keep-me");
+    expect(result.current.nodesError).toBeNull();
+  });
+
+  it("slow multi-page task refresh is not aborted by a 5s poll and eventually commits all tasks", async () => {
+    vi.useFakeTimers();
+    try {
+      apiClientMock.getNodes.mockResolvedValue([]);
+      let capturedSignal: AbortSignal | undefined;
+      apiClientMock.getTasks.mockImplementation((_token: string, options?: { signal?: AbortSignal }) => {
+        capturedSignal = options?.signal;
+        return new Promise<TaskRecord[]>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            resolve([
+              createTask(1, "running", 10),
+              createTask(2, "pending", 0),
+            ]);
+          }, 6_000);
+          options?.signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new DOMException("Aborted", "AbortError"));
+          });
+        });
+      });
+
+      const { result } = renderHook(() => useConsoleData("token-1"));
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      let refreshPromise!: Promise<void>;
+      await act(async () => {
+        refreshPromise = result.current.refreshTasks();
+      });
+      expect(apiClientMock.getTasks).toHaveBeenCalledTimes(1);
+      expect(capturedSignal?.aborted).toBe(false);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+        void result.current.refreshTasks();
+      });
+      expect(apiClientMock.getTasks).toHaveBeenCalledTimes(1);
+      expect(capturedSignal?.aborted).toBe(false);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_200);
+        await refreshPromise;
+      });
+
+      expect(result.current.tasks.map((task) => task.id)).toEqual([1, 2]);
+      expect(result.current.tasksLoaded).toBe(true);
+      expect(result.current.tasksError).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("unmount aborts an in-flight task inventory fetch", async () => {
+    const pending = createDeferred<TaskRecord[]>();
+    let capturedSignal: AbortSignal | undefined;
+    apiClientMock.getNodes.mockResolvedValue([]);
+    apiClientMock.getTasks.mockImplementation((_token: string, options?: { signal?: AbortSignal }) => {
+      capturedSignal = options?.signal;
+      return pending.promise;
+    });
+
+    const { result, unmount } = renderHook(() => useConsoleData("token-1"));
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    await act(async () => {
+      void result.current.refreshTasks();
+    });
+    expect(capturedSignal?.aborted).toBe(false);
+
+    unmount();
+    expect(capturedSignal?.aborted).toBe(true);
+    pending.reject(new DOMException("Aborted", "AbortError"));
   });
 });

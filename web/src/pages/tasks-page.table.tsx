@@ -29,6 +29,7 @@ import { buildChainParentMap, canCancel, canTrigger, rclonePublicationStateTone,
 
 export const TasksTable = React.memo(function TasksTable({
   loading,
+  requestFailed,
   filteredTasks,
   pendingAction,
   resetFilters,
@@ -414,7 +415,7 @@ export const TasksTable = React.memo(function TasksTable({
                 </tr>
               );
             })
-          ) : !loading ? (
+          ) : !loading && !requestFailed ? (
             <tr>
               <td colSpan={9} className="px-3 py-6">
                 <FilteredEmptyState

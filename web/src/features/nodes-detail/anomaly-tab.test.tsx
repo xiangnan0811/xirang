@@ -48,17 +48,17 @@ vi.mock("react-i18next", () => ({
 
 const makeEvent = (overrides: Partial<AnomalyEvent> = {}): AnomalyEvent => ({
   id: 1,
-  node_id: 10,
+  nodeId: 10,
   detector: "ewma",
   metric: "cpu_percent",
   severity: "warning",
-  observed_value: 95.5,
-  baseline_value: 30.2,
+  observedValue: 95.5,
+  baselineValue: 30.2,
   sigma: 3.14,
-  forecast_days: null,
-  alert_id: null,
-  raised_alert: true,
-  fired_at: "2026-04-21T10:00:00Z",
+  forecastDays: null,
+  alertId: null,
+  raisedAlert: true,
+  firedAt: "2026-04-21T10:00:00Z",
   ...overrides,
 });
 
@@ -108,7 +108,7 @@ describe("AnomalyTab", () => {
   it("renders different detector badges for ewma and disk_forecast events", async () => {
     mockListNodeAnomalyEvents.mockResolvedValue([
       makeEvent({ id: 1, detector: "ewma" }),
-      makeEvent({ id: 2, detector: "disk_forecast", sigma: null, forecast_days: 5.0 }),
+      makeEvent({ id: 2, detector: "disk_forecast", sigma: null, forecastDays: 5.0 }),
     ]);
     renderTab();
     await waitFor(() => {

@@ -50,6 +50,9 @@ vi.mock("@/context/nodes-context.hooks", () => ({
       },
     ],
     refreshNodes: vi.fn().mockResolvedValue(undefined),
+    nodesLoading: false,
+    nodesError: null,
+    nodesLoaded: true,
     createNode: vi.fn(),
     updateNode: vi.fn(),
     deleteNode: vi.fn(),
@@ -67,7 +70,7 @@ beforeEach(() => {
 
 describe("NodeLogsPanel", () => {
   it("renders filter UI and shows empty state when query returns 0 rows", async () => {
-    queryNodeLogsMock.mockResolvedValueOnce({ data: [], total: 0, has_more: false });
+    queryNodeLogsMock.mockResolvedValueOnce({ data: [], total: 0, hasMore: false });
 
     const user = userEvent.setup();
     render(<NodeLogsPanel />);
@@ -83,7 +86,7 @@ describe("NodeLogsPanel", () => {
   });
 
   it("calls queryNodeLogs with expected query when Apply is clicked", async () => {
-    queryNodeLogsMock.mockResolvedValueOnce({ data: [], total: 0, has_more: false });
+    queryNodeLogsMock.mockResolvedValueOnce({ data: [], total: 0, hasMore: false });
 
     const user = userEvent.setup();
     render(<NodeLogsPanel />);
@@ -95,7 +98,7 @@ describe("NodeLogsPanel", () => {
       const [token, query] = queryNodeLogsMock.mock.calls[0] as [string, Record<string, unknown>];
       expect(token).toBe("test-token");
       expect(query.page).toBe(1);
-      expect(query.page_size).toBe(50);
+      expect(query.pageSize).toBe(50);
     });
   });
 
@@ -104,18 +107,18 @@ describe("NodeLogsPanel", () => {
       .mockResolvedValueOnce({
         data: Array.from({ length: 50 }, (_, i) => ({
           id: i + 1,
-          node_id: 1,
+          nodeId: 1,
           source: "journalctl",
           path: "/var/log/syslog",
           timestamp: "2026-04-20T10:00:00Z",
           priority: "info",
           message: `log line ${i + 1}`,
-          created_at: "2026-04-20T10:00:00Z",
+          createdAt: "2026-04-20T10:00:00Z",
         })),
         total: 100,
-        has_more: true,
+        hasMore: true,
       })
-      .mockResolvedValueOnce({ data: [], total: 100, has_more: false });
+      .mockResolvedValueOnce({ data: [], total: 100, hasMore: false });
 
     const user = userEvent.setup();
     render(<NodeLogsPanel />);

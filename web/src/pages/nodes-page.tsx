@@ -6,6 +6,7 @@ import { useNodesPageState } from "@/pages/nodes-page.state";
 import { NodesPageDialogs } from "@/pages/nodes-page.dialogs";
 import { NodesPageToolbar } from "@/pages/nodes-page.toolbar";
 import { Button } from "@/components/ui/button";
+import { InventoryRetryAlert } from "@/components/ui/inventory-retry-alert";
 import { DataSurface, DataSurfaceContent, DataSurfaceToolbar } from "@/components/ui/data-surface";
 import { Select } from "@/components/ui/select";
 import { FilterPanel, FilterSummary } from "@/components/ui/filter-panel";
@@ -24,6 +25,8 @@ export function NodesPage() {
     nodes,
     sshKeys,
     loading,
+    requestFailed,
+    nodesError,
     keyword,
     setKeyword,
     statusFilter,
@@ -94,6 +97,7 @@ export function NodesPage() {
 
   const nodesViewProps = {
     loading,
+    requestFailed,
     sortedNodes: groupView ? sortedNodes : pagedNodes,
     sshKeys,
     selectedNodeSet,
@@ -250,6 +254,9 @@ export function NodesPage() {
         </DataSurfaceToolbar>
 
         <DataSurfaceContent className="space-y-4">
+          {nodesError ? (
+            <InventoryRetryAlert error={nodesError} onRetry={() => { void state.refreshNodes(); }} />
+          ) : null}
           {/* 分组视图 */}
           {groupView && groupedNodes ? (
             <div className="space-y-4">

@@ -29,6 +29,9 @@ jobs:
       IMAGE_WAIT_MAX_ATTEMPTS: ${{ vars.IMAGE_WAIT_MAX_ATTEMPTS || 90 }}
       IMAGE_WAIT_INTERVAL_SECONDS: ${{ vars.IMAGE_WAIT_INTERVAL_SECONDS || 10 }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+
       - name: DockerHub login
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -59,40 +62,16 @@ jobs:
 
       - name: Backup database before upgrade
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ vars.DEPLOY_SSH_PORT || secrets.DEPLOY_SSH_PORT || 22 }}
           script_stop: true
-          script: |
-            set -euo pipefail
-            cd "${{ secrets.DEPLOY_PATH }}"
-
-            if [ -f backups/db-backup-$(date +%Y%m%d-%H%M%S).sqlite ]; then
-              echo "Backup already exists, skipping"
-              exit 0
-            fi
-
-            mkdir -p backups
-
-            container_id=$(docker inspect xirang --format='{{.Id}}' 2>/dev/null || echo "")
-            if [ -n "${container_id}" ] && [ "$(docker inspect xirang --format='{{.State.Running}}' 2>/dev/null)" = "true" ]; then
-              timestamp=$(date +%Y%m%d-%H%M%S)
-              # Try to copy the database file from the container; fall back to
-              # the named volume path if the container path doesn't exist.
-              backup_file="backups/db-backup-${timestamp}.sqlite"
-              if docker cp xirang:/app/data/xirang.db "${backup_file}" 2>/dev/null; then
-                echo "Database backup created: ${backup_file}"
-              elif [ -f data/xirang.db ]; then
-                cp data/xirang.db "${backup_file}"
-                echo "Database backup created (volume path): ${backup_file}"
-              else
-                echo "Warning: could not locate database file to back up" >&2
-              fi
-            else
-              echo "Container not running, skipping database backup"
-            fi
+          envs: IMAGE_TAG,DEPLOY_PATH
+          script_path: scripts/predeploy-backup.sh
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5

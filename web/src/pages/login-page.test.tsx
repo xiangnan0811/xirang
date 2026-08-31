@@ -219,8 +219,8 @@ describe("LoginPage", () => {
   it("响应包含 requires_2fa 时显示两步验证步骤", async () => {
     const user = userEvent.setup();
     apiLoginMock.mockResolvedValue({
-      requires_2fa: true,
-      login_token: "temp-login-token",
+      requires2FA: true,
+      loginToken: "temp-login-token",
     });
 
     renderLoginPage();
@@ -240,12 +240,12 @@ describe("LoginPage", () => {
   it("两步验证成功后调用 login 并跳转", async () => {
     const user = userEvent.setup();
     apiLoginMock.mockResolvedValue({
-      requires_2fa: true,
-      login_token: "temp-login-token",
+      requires2FA: true,
+      loginToken: "temp-login-token",
     });
     apiTotpLoginMock.mockResolvedValue({
       token: "jwt-token-2fa",
-      user: { id: 2, username: "admin", role: "admin" },
+      user: { id: 2, username: "admin", role: "admin", totpEnabled: true },
     });
 
     renderLoginPage();
@@ -262,7 +262,7 @@ describe("LoginPage", () => {
     await user.click(screen.getByRole("button", { name: "验证" }));
 
     await waitFor(() => {
-      expect(loginMock).toHaveBeenCalledWith("jwt-token-2fa", "admin", "admin", 2, undefined);
+      expect(loginMock).toHaveBeenCalledWith("jwt-token-2fa", "admin", "admin", 2, true);
     });
     expect(navigateMock).toHaveBeenCalledWith("/app/overview", { replace: true });
   });

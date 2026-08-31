@@ -1,7 +1,10 @@
 package ws
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -9,6 +12,8 @@ import (
 
 	"xirang/backend/internal/model"
 
+	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -452,4 +457,149 @@ func openHubTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
 	return db
+}
+func newRawLogsServer(t *testing.T, hub *Hub, authorize func(string) (AccessScope, error)) *httptest.Server {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	runnerCtx, runnerCancel := context.WithCancel(context.Background())
+	go hub.Run(runnerCtx)
+	router := gin.New()
+	router.GET("/ws/logs", func(c *gin.Context) {
+		hub.ServeWS(c, authorize)
+	})
+	server := httptest.NewServer(router)
+	t.Cleanup(func() {
+		runnerCancel()
+		server.Close()
+	})
+	return server
+}
+func dialRawLogs(t *testing.T, server *httptest.Server) *websocket.Conn {
+	t.Helper()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/logs"
+	conn, response, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		if response != nil {
+			t.Fatalf("logs websocket 握手失败: %v (status=%s)", err, response.Status)
+		}
+		t.Fatalf("logs websocket 握手失败: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+func pendingLogsConnections(hub *Hub) int {
+	hub.mu.RLock()
+	defer hub.mu.RUnlock()
+	return hub.pendingClients
+}
+
+func waitForPendingLogsConnections(t *testing.T, hub *Hub, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := pendingLogsConnections(hub); got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("pending logs websocket 数量未达到 %d，实际 %d", want, pendingLogsConnections(hub))
+}
+
+func readRawLogsClose(t *testing.T, conn *websocket.Conn) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := conn.ReadMessage(); err == nil {
+		t.Fatal("期望 logs websocket 在握手失败后关闭")
+	}
+}
+
+func TestServeWSRejectsOversizedAuthenticationFrame(t *testing.T) {
+	hub := NewHub(nil, nil, true)
+	server := newRawLogsServer(t, hub, func(string) (AccessScope, error) {
+		return AccessScope{}, nil
+	})
+	conn := dialRawLogs(t, server)
+
+	authFrame := `{"type":"auth","token":"` + strings.Repeat("a", maxWSAuthMessageBytes) + `"}`
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(authFrame)); err != nil {
+		t.Fatalf("发送 oversized logs auth frame 失败: %v", err)
+	}
+	readRawLogsClose(t, conn)
+	waitForPendingLogsConnections(t, hub, 0)
+	if got := hub.ClientCount(); got != 0 {
+		t.Fatalf("oversized auth frame 后不应保留活跃 logs 客户端，实际 %d", got)
+	}
+}
+
+func TestServeWSRejectsCapPlusOnePendingUnauthenticatedConnections(t *testing.T) {
+	hub := NewHub(nil, nil, true)
+	hub.maxClients = 2
+	server := newRawLogsServer(t, hub, func(string) (AccessScope, error) {
+		return AccessScope{}, nil
+	})
+
+	first := dialRawLogs(t, server)
+	second := dialRawLogs(t, server)
+	waitForPendingLogsConnections(t, hub, hub.maxClients)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/logs"
+	third, response, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err == nil {
+		_ = third.Close()
+		t.Fatal("cap+1 unauthenticated logs connection 应在 HTTP 升级前被拒绝")
+	}
+	if response == nil || response.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("cap+1 logs connection 应返回 503，response=%v err=%v", response, err)
+	}
+
+	_ = first.Close()
+	_ = second.Close()
+	waitForPendingLogsConnections(t, hub, 0)
+	if got := hub.ClientCount(); got != 0 {
+		t.Fatalf("未认证 logs sockets 关闭后不应保留客户端，实际 %d", got)
+	}
+}
+
+func TestServeWSReleasesCapacityAfterFailedAuthentication(t *testing.T) {
+	hub := NewHub(nil, nil, true)
+	server := newRawLogsServer(t, hub, func(string) (AccessScope, error) {
+		return AccessScope{}, errors.New("invalid token")
+	})
+	conn := dialRawLogs(t, server)
+	if err := conn.WriteJSON(map[string]string{"type": "auth", "token": "invalid"}); err != nil {
+		t.Fatalf("发送 logs auth frame 失败: %v", err)
+	}
+	readRawLogsClose(t, conn)
+	waitForPendingLogsConnections(t, hub, 0)
+
+	// A released reservation must be immediately reusable by another handshake.
+	second := dialRawLogs(t, server)
+	if err := second.WriteJSON(map[string]string{"type": "auth", "token": "invalid"}); err != nil {
+		t.Fatalf("复用释放后的 logs capacity 失败: %v", err)
+	}
+	readRawLogsClose(t, second)
+	waitForPendingLogsConnections(t, hub, 0)
+}
+
+func TestServeWSAuthenticatedFrameLimitIsApplied(t *testing.T) {
+	hub := NewHub(nil, nil, true)
+	server := newRawLogsServer(t, hub, func(string) (AccessScope, error) {
+		return AccessScope{Role: "admin"}, nil
+	})
+	conn := dialRawLogs(t, server)
+	if err := conn.WriteJSON(map[string]string{"type": "auth", "token": "valid"}); err != nil {
+		t.Fatalf("发送 logs auth frame 失败: %v", err)
+	}
+	// The handler does not send an application-level auth acknowledgement. A
+	// ping confirms that the authenticated client was admitted before the
+	// oversized control frame is sent.
+	if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("发送 logs ping 失败: %v", err)
+	}
+	waitForPendingLogsConnections(t, hub, 0)
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(strings.Repeat("x", maxWSLogMessageBytes+1))); err != nil {
+		t.Fatalf("发送 oversized authenticated logs frame 失败: %v", err)
+	}
+	readRawLogsClose(t, conn)
 }

@@ -78,6 +78,7 @@ export function getDiskBarToneClass(percent: number) {
 
 export type NodesViewProps = {
   loading: boolean;
+  requestFailed?: boolean;
   sortedNodes: NodeRecord[];
   sshKeys: SSHKeyRecord[];
   selectedNodeSet: Set<number>;

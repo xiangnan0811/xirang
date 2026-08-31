@@ -209,29 +209,29 @@ export interface PolicyRecord {
   maxRetries?: number;
   retryBaseSeconds?: number;
   bandwidthSchedule?: string;
-  escalation_policy_id?: number | null;
-  app_profile?: string;
-  app_credential_id?: number | null;
+  escalationPolicyId?: number | null;
+  appProfile?: string;
+  appCredentialId?: number | null;
 
   // Retention & SLA
-  retention_days?: number;
-  retention_mode?: string;
-  keep_daily?: number;
-  keep_weekly?: number;
-  keep_monthly?: number;
-  keep_yearly?: number;
-  rpo_minutes?: number;
-  rto_minutes?: number;
+  retentionDays?: number;
+  retentionMode?: string;
+  keepDaily?: number;
+  keepWeekly?: number;
+  keepMonthly?: number;
+  keepYearly?: number;
+  rpoMinutes?: number;
+  rtoMinutes?: number;
 
-  // Recovery drill
-  drill_enabled: boolean;
-  drill_cron: string;
-  drill_target_node_id?: number | null;
-  drill_restore_path: string;
-  drill_pre_verify: string;
-  drill_verify: string;
-  drill_post_verify: string;
-  drill_auto_cleanup: boolean;
+  // Recovery drill config is persisted for future enablement; execution is unavailable.
+  drillEnabled: boolean;
+  drillCron: string;
+  drillTargetNodeId?: number | null;
+  drillRestorePath: string;
+  drillPreVerify: string;
+  drillVerify: string;
+  drillPostVerify: string;
+  drillAutoCleanup: boolean;
   latestDrill?: PolicyLatestDrillSummary | null;
 }
 
@@ -251,29 +251,28 @@ export interface NewPolicyInput {
   maxRetries?: number;
   retryBaseSeconds?: number;
   bandwidthSchedule?: string;
-  escalation_policy_id?: number | null;
-  app_profile?: string;
-  app_credential_id?: number | null;
+  escalationPolicyId?: number | null;
+  appProfile?: string;
+  appCredentialId?: number | null;
 
   // Retention & SLA
-  retention_days?: number;
-  retention_mode?: string;
-  keep_daily?: number;
-  keep_weekly?: number;
-  keep_monthly?: number;
-  keep_yearly?: number;
-  rpo_minutes?: number;
-  rto_minutes?: number;
+  retentionDays?: number;
+  retentionMode?: string;
+  keepDaily?: number;
+  keepWeekly?: number;
+  keepMonthly?: number;
+  keepYearly?: number;
+  rpoMinutes?: number;
+  rtoMinutes?: number;
 
-  // Recovery drill
-  drill_enabled?: boolean;
-  drill_cron?: string;
-  drill_target_node_id?: number | null;
-  drill_restore_path?: string;
-  drill_pre_verify?: string;
-  drill_verify?: string;
-  drill_post_verify?: string;
-  drill_auto_cleanup?: boolean;
+  drillEnabled?: boolean;
+  drillCron?: string;
+  drillTargetNodeId?: number | null;
+  drillRestorePath?: string;
+  drillPreVerify?: string;
+  drillVerify?: string;
+  drillPostVerify?: string;
+  drillAutoCleanup?: boolean;
 }
 
 export type RsyncPublicationMode =
@@ -743,10 +742,10 @@ export interface LoginResponse {
     id: number;
     username: string;
     role: "admin" | "operator" | "viewer";
-    totp_enabled?: boolean;
+    totpEnabled?: boolean;
   };
-  requires_2fa?: boolean;
-  login_token?: string;
+  requires2FA?: boolean;
+  loginToken?: string;
 }
 
 export interface UserRecord {
@@ -1011,28 +1010,28 @@ export type SLOStatus = "healthy" | "warning" | "breached" | "insufficient_data"
 export type SLODefinition = {
   id: number;
   name: string;
-  metric_type: SLOMetricType;
-  match_tags: string | string[] | null;
+  metricType: SLOMetricType;
+  matchTags: string | string[] | null;
   threshold: number;
-  window_days: number;
+  windowDays: number;
   enabled: boolean;
-  created_by: number;
-  created_at: string;
-  updated_at: string;
-  escalation_policy_id?: number | null;
+  createdBy: number;
+  createdAt: string;
+  updatedAt: string;
+  escalationPolicyId?: number | null;
 };
 
 export type SLOComplianceResult = {
-  slo_id: number;
+  sloId: number;
   name: string;
-  metric_type: SLOMetricType;
-  window_start: string;
-  window_end: string;
+  metricType: SLOMetricType;
+  windowStart: string;
+  windowEnd: string;
   threshold: number;
   observed: number;
-  sample_count: number;
-  error_budget_remaining_pct: number;
-  burn_rate_1h: number;
+  sampleCount: number;
+  errorBudgetRemainingPct: number;
+  burnRate1h: number;
   status: SLOStatus;
 };
 
@@ -1058,37 +1057,37 @@ export type NodeLogPriority =
 
 export type NodeLogEntry = {
   id: number;
-  node_id: number;
+  nodeId: number;
   source: NodeLogSource;
   path: string;
   timestamp: string;
   priority: NodeLogPriority;
   message: string;
-  created_at: string;
+  createdAt: string;
 };
 
 export type NodeLogQueryResult = {
   data: NodeLogEntry[];
   total: number;
-  has_more: boolean;
+  hasMore: boolean;
 };
 
 export type NodeLogConfig = {
-  log_paths: string[];
-  log_journalctl_enabled: boolean;
-  log_retention_days: number;
+  logPaths: string[];
+  logJournalctlEnabled: boolean;
+  logRetentionDays: number;
 };
 
 export type AlertLogsResult = {
   data: NodeLogEntry[];
-  node_id: number;
-  window_start: string;
-  window_end: string;
+  nodeId: number;
+  windowStart: string;
+  windowEnd: string;
   hint?: string;
 };
 
 export type NodeLogsSettings = {
-  default_retention_days: number;
+  defaultRetentionDays: number;
 };
 
 export type DashboardTimeRange = "1h" | "6h" | "24h" | "7d" | "custom";
@@ -1096,35 +1095,35 @@ export type ChartType = "line" | "area" | "bar" | "number" | "table";
 export type Aggregation = "avg" | "max" | "min" | "sum" | "p50" | "p95" | "p99";
 
 export type PanelFilters = {
-  node_ids?: number[];
-  task_ids?: number[];
+  nodeIds?: number[];
+  taskIds?: number[];
 };
 
 export type Panel = {
   id: number;
-  dashboard_id: number;
+  dashboardId: number;
   title: string;
-  chart_type: ChartType;
+  chartType: ChartType;
   metric: string;
   filters: PanelFilters;
   aggregation: Aggregation;
-  layout_x: number;
-  layout_y: number;
-  layout_w: number;
-  layout_h: number;
+  layoutX: number;
+  layoutY: number;
+  layoutW: number;
+  layoutH: number;
 };
 
 export type Dashboard = {
   id: number;
-  owner_id: number;
+  ownerId: number;
   name: string;
   description: string;
-  time_range: DashboardTimeRange;
-  custom_start?: string | null;
-  custom_end?: string | null;
-  auto_refresh_seconds: number;
-  created_at: string;
-  updated_at: string;
+  timeRange: DashboardTimeRange;
+  customStart?: string | null;
+  customEnd?: string | null;
+  autoRefreshSeconds: number;
+  createdAt: string;
+  updatedAt: string;
   panels?: Panel[];
 };
 
@@ -1132,15 +1131,15 @@ export type MetricDescriptor = {
   key: string;
   label: string;
   family: "node" | "task";
-  default_aggregation: Aggregation;
-  supported_aggregations: Aggregation[];
+  defaultAggregation: Aggregation;
+  supportedAggregations: Aggregation[];
 };
 
 export type PanelQueryPoint = { ts: string; value: number };
 export type PanelQuerySeries = { name: string; points: PanelQueryPoint[] };
 export type PanelQueryResult = {
   series: PanelQuerySeries[];
-  step_seconds: number;
+  stepSeconds: number;
   /** Set when the backend fetch hit MaxRowsPerQuery. UI should warn the user
    *  their series is incomplete and suggest narrowing the range/filters. */
   truncated?: boolean;
@@ -1174,9 +1173,9 @@ export interface SilenceInput {
 }
 
 export type EscalationLevel = {
-  delay_seconds: number;
-  integration_ids: number[];
-  severity_override: "" | "info" | "warning" | "critical";
+  delaySeconds: number;
+  integrationIds: number[];
+  severityOverride: "" | "info" | "warning" | "critical";
   tags: string[];
 };
 
@@ -1184,116 +1183,72 @@ export type EscalationPolicy = {
   id: number;
   name: string;
   description: string;
-  min_severity: "info" | "warning" | "critical";
+  minSeverity: "info" | "warning" | "critical";
   enabled: boolean;
   levels: EscalationLevel[];
-  created_at: string;
-  updated_at: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type EscalationEvent = {
   id: number;
-  alert_id: number;
-  escalation_policy_id: number | null;
-  level_index: number;
-  integration_ids: number[];
-  severity_before: "info" | "warning" | "critical";
-  severity_after: "info" | "warning" | "critical";
-  tags_added: string[];
-  fired_at: string;
+  alertId: number;
+  escalationPolicyId: number | null;
+  levelIndex: number;
+  integrationIds: number[];
+  severityBefore: "info" | "warning" | "critical";
+  severityAfter: "info" | "warning" | "critical";
+  tagsAdded: string[];
+  firedAt: string;
 };
 
 export type AnomalyDetector = "ewma" | "disk_forecast";
 
 export type AnomalyEvent = {
   id: number;
-  node_id: number;
+  nodeId: number;
   detector: AnomalyDetector;
   metric: string;
   severity: "warning" | "critical";
-  observed_value: number;
-  baseline_value: number;
+  observedValue: number;
+  baselineValue: number;
   sigma?: number | null;
-  forecast_days?: number | null;
-  alert_id?: number | null;
-  raised_alert: boolean;
+  forecastDays?: number | null;
+  alertId?: number | null;
+  raisedAlert: boolean;
   details?: string;
-  fired_at: string;
+  firedAt: string;
 };
 
 export type AnomalyListResult = {
   data: AnomalyEvent[];
   total: number;
-  has_more: boolean;
+  hasMore: boolean;
 };
-
 export interface AutomationRule {
   id: number;
   name: string;
   description: string;
-  event_type: string;
-  event_filter: Record<string, string>;
-  action_type: string;
-  action_config: Record<string, string>;
+  eventType: string;
+  eventFilter: Record<string, string>;
+  actionType: string;
+  actionConfig: Record<string, string>;
   enabled: boolean;
-  created_at: string;
-  updated_at: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AutomationRuleInput {
   name: string;
   description?: string;
-  event_type: string;
-  event_filter?: Record<string, string>;
-  action_type: string;
-  action_config?: Record<string, string>;
+  eventType: string;
+  eventFilter?: Record<string, string>;
+  actionType: string;
+  actionConfig?: Record<string, string>;
   enabled?: boolean;
 }
 
 export type HttpMethod = "GET" | "POST" | "HEAD";
-
-/** Backend wire shape for ServiceMonitorView. Never consumed by components — mapped at the API boundary (lib/api/service-monitors.ts). */
-export interface RawServiceMonitor {
-  id: number;
-  name: string;
-  description: string;
-  type: string;
-  target: string;
-  interval_seconds: number;
-  timeout_seconds: number;
-  http_method: string;
-  http_expected_status: number;
-  http_headers: string;
-  enabled: boolean;
-  last_status: string;
-  uptime_pct: number;
-  last_checked_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-/** Backend wire shape for NewServiceMonitorInput (outbound). */
-export interface RawNewServiceMonitorInput {
-  name: string;
-  description?: string;
-  type: "http" | "tcp";
-  target: string;
-  interval_seconds?: number;
-  timeout_seconds?: number;
-  http_method?: string;
-  http_expected_status?: number;
-  http_headers?: string;
-  enabled?: boolean;
-}
-
-/** Backend wire shape for StatusPageItem. */
-export interface RawStatusPageItem {
-  name: string;
-  type: string;
-  status: string;
-  uptime_pct: number;
-  last_checked_at: string | null;
-}
 
 export interface ServiceMonitorView {
   id: number;

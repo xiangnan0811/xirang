@@ -15,7 +15,8 @@
 
 - `/api/v1/asset-content/<opaque-id>`：仅转发精确 32 位小写十六进制内容交付 ID；关闭代理缓冲、请求缓冲、缓存、临时文件与 gzip，并保留单 Range/If-Range 请求头
 - `/api/v1/*`：转发到后端 API（含 WebSocket 升级）
-- `/healthz`：转发到后端健康检查
+- `/healthz`：转发到后端进程存活检查（不访问数据库）
+- `/readyz`：转发到后端数据库就绪检查（数据库 Ping 失败返回 503）
 - 其它路径：前端 SPA 静态资源与 history 回退
 
 内容交付 ID 不具备独立授权能力；后端仅接受精确路径 Cookie，并在每次请求重新校验会话、权限、资源与预算。该专用路由不改变普通 API 的超时或 WebSocket 合同。

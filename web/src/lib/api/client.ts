@@ -31,7 +31,6 @@ import { createAlertDeliveriesApi } from "./alert-deliveries";
 import { createAppCredentialsApi } from "./app-credentials";
 import { createAutomationRulesApi } from "./automation-rules";
 import { createServiceMonitorsApi } from "./service-monitors";
-import { createRecoveryPointsApi } from "./recovery-points-api";
 
 export { ApiError } from "./core";
 
@@ -52,6 +51,9 @@ type BackupRepositoriesApi = ReturnType<
 type BackupFileSourcesApi = ReturnType<
   typeof import("./backup-file-sources-api").createBackupFileSourcesApi
 >;
+type RecoveryPointsApi = ReturnType<
+  typeof import("./recovery-points-api").createRecoveryPointsApi
+>;
 
 let backupAssetsApiPromise: Promise<BackupAssetsApi> | undefined;
 let backupAssetSearchApiPromise: Promise<BackupAssetSearchApi> | undefined;
@@ -60,6 +62,7 @@ let backupContentApiPromise: Promise<BackupContentApi> | undefined;
 let backupRetentionApiPromise: Promise<BackupRetentionApi> | undefined;
 let backupRepositoriesApiPromise: Promise<BackupRepositoriesApi> | undefined;
 let backupFileSourcesApiPromise: Promise<BackupFileSourcesApi> | undefined;
+let recoveryPointsApiPromise: Promise<RecoveryPointsApi> | undefined;
 
 function loadBackupAssetsApi(): Promise<BackupAssetsApi> {
   backupAssetsApiPromise ??= import("./backup-assets-api").then((module) =>
@@ -106,6 +109,13 @@ function loadBackupRepositoriesApi(): Promise<BackupRepositoriesApi> {
 function loadBackupFileSourcesApi(): Promise<BackupFileSourcesApi> {
   backupFileSourcesApiPromise ??= import("./backup-file-sources-api").then((module) => module.createBackupFileSourcesApi());
   return backupFileSourcesApiPromise;
+}
+
+function loadRecoveryPointsApi(): Promise<RecoveryPointsApi> {
+  recoveryPointsApiPromise ??= import("./recovery-points-api").then((module) =>
+    module.createRecoveryPointsApi()
+  );
+  return recoveryPointsApiPromise;
 }
 
 const lazyBackupAssetsApi: BackupAssetsApi = {
@@ -198,6 +208,21 @@ const lazyBackupFileSourcesApi: BackupFileSourcesApi = {
   },
   async listBackupFileSourceVersions(...args) {
     return (await loadBackupFileSourcesApi()).listBackupFileSourceVersions(...args);
+  },
+};
+
+const lazyRecoveryPointsApi: RecoveryPointsApi = {
+  async listRecoveryPoints(...args) {
+    return (await loadRecoveryPointsApi()).listRecoveryPoints(...args);
+  },
+  async getRecoveryPoint(...args) {
+    return (await loadRecoveryPointsApi()).getRecoveryPoint(...args);
+  },
+  async getRecoveryPointCatalogStatus(...args) {
+    return (await loadRecoveryPointsApi()).getRecoveryPointCatalogStatus(...args);
+  },
+  async getRecoveryPointEvidence(...args) {
+    return (await loadRecoveryPointsApi()).getRecoveryPointEvidence(...args);
   },
 };
 
@@ -301,7 +326,7 @@ export const apiClient = {
   ...createAppCredentialsApi(),
   ...createAutomationRulesApi(),
   ...createServiceMonitorsApi(),
-  ...createRecoveryPointsApi(),
+  ...lazyRecoveryPointsApi,
   ...lazyBackupAssetsApi,
   ...lazyBackupAssetSearchApi,
   ...lazyBackupAssetOverlaysApi,

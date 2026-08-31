@@ -131,7 +131,7 @@ export function BackupFileSourceControls({
       ) : null}
       {selectedSet?.browseState === "indexing" ? <p role="status" className="mt-2 text-xs text-muted-foreground">{t("backupAssets.sources.indexing")}</p> : null}
       {selectedSet?.browseState === "unavailable" ? <InlineAlert tone="warning" className="mt-2">{t("backupAssets.sources.unavailable")}</InlineAlert> : null}
-      {status === "partial" ? <p role="status" className="mt-2 text-xs text-amber-600 dark:text-amber-400">{t("backupAssets.sources.partial")}</p> : null}
+      {status === "partial" ? <p role="status" className="mt-2 text-xs text-warning">{t("backupAssets.sources.partial")}</p> : null}
       {status === "permission_denied" ? <InlineAlert tone="warning" className="mt-2">{t("backupAssets.sources.permissionDenied")}</InlineAlert> : null}
       {status === "blocked" ? <InlineAlert tone="warning" className="mt-2">{t("backupAssets.sources.blocked")}</InlineAlert> : null}
     </section>

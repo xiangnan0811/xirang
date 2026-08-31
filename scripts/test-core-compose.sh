@@ -98,6 +98,7 @@ core_logs=$("$DOCKER" logs "$container_id" 2>&1)
 if grep -Eq 'module=backup_asset_processing.*stage=startup|备份资产处理运行时不可用' <<<"$core_logs"; then
   fail "disabled processing emitted startup failure noise"
 fi
+"$CURL" -fsS --max-time 5 http://127.0.0.1:10761/readyz >/dev/null
 "$CURL" -fsS --max-time 5 http://127.0.0.1:10761/healthz >/dev/null
 
 echo "core-only Compose smoke: PASS"

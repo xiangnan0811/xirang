@@ -64,37 +64,37 @@ const nodeCpuMetric: MetricDescriptor = {
   key: "node.cpu",
   label: "CPU 使用率",
   family: "node",
-  default_aggregation: "avg",
-  supported_aggregations: ["avg", "max", "min"],
+  defaultAggregation: "avg",
+  supportedAggregations: ["avg", "max", "min"],
 };
 
 const taskMetric: MetricDescriptor = {
   key: "task.success_rate",
   label: "任务成功率",
   family: "task",
-  default_aggregation: "avg",
-  supported_aggregations: ["avg"],
+  defaultAggregation: "avg",
+  supportedAggregations: ["avg"],
 };
 
 const mockMetrics: MetricDescriptor[] = [nodeCpuMetric, taskMetric];
 
 const mockPanelData = {
   series: [{ name: "node-a", points: [{ ts: "2026-04-21T00:00:00Z", value: 50 }] }],
-  step_seconds: 60,
+  stepSeconds: 60,
 };
 
 const editPanel: Panel = {
   id: 42,
-  dashboard_id: 1,
+  dashboardId: 1,
   title: "现有面板",
-  chart_type: "bar",
+  chartType: "bar",
   metric: "node.cpu",
-  filters: { node_ids: [1] },
+  filters: { nodeIds: [1] },
   aggregation: "max",
-  layout_x: 0,
-  layout_y: 0,
-  layout_w: 6,
-  layout_h: 4,
+  layoutX: 0,
+  layoutY: 0,
+  layoutW: 6,
+  layoutH: 4,
 };
 
 // ─── 渲染辅助 ─────────────────────────────────────────────────────
@@ -137,16 +137,16 @@ describe("PanelEditorDialog", () => {
     mockQueryPanel.mockResolvedValue(mockPanelData);
     mockAddPanel.mockResolvedValue({
       id: 99,
-      dashboard_id: 1,
+      dashboardId: 1,
       title: "新面板",
-      chart_type: "line",
+      chartType: "line",
       metric: "node.cpu",
       filters: {},
       aggregation: "avg",
-      layout_x: 0,
-      layout_y: 0,
-      layout_w: 6,
-      layout_h: 4,
+      layoutX: 0,
+      layoutY: 0,
+      layoutW: 6,
+      layoutH: 4,
     });
     mockUpdatePanel.mockResolvedValue({
       ...editPanel,
@@ -211,7 +211,7 @@ describe("PanelEditorDialog", () => {
         1,
         expect.objectContaining({
           title: "新面板",
-          chart_type: expect.any(String),
+          chartType: expect.any(String),
           metric: expect.any(String),
           aggregation: expect.any(String),
         })

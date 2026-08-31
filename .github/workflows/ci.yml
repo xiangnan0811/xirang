@@ -58,26 +58,30 @@ jobs:
       - name: Run backend tests
         run: go test -coverprofile=coverage.out ./...
 
-      - name: Race backup-asset packages
-        run: go test -race ./internal/backupasset/... ./internal/api/handlers/ -count=1
+      - name: Race concurrency-sensitive backend packages
+        run: go test -race ./internal/backupasset/... ./internal/api/handlers/ ./internal/task ./internal/ws -count=1
 
       - name: Backup-asset coverage floor
         run: bash ../scripts/check-backupasset-coverage.sh
 
       - name: Check backend coverage
-        continue-on-error: true
         run: |
-          COV=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          COV=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | sed 's/%//')
+          if [ -z "${COV}" ]; then
+            echo "::error::Backend coverage report has no total percentage"
+            exit 1
+          fi
           echo "Backend coverage: ${COV}%"
-          if (( $(echo "$COV < 60" | bc -l) )); then
-            echo "::warning ::Backend coverage ${COV}% is below 60% threshold"
+          if ! awk -v coverage="${COV}" 'BEGIN { exit !(coverage >= 60) }'; then
+            echo "::error::Backend coverage ${COV}% is below the enforced 60% threshold"
+            exit 1
           fi
 
       - name: Build backend
         run: go build ./...
 
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
 
       - name: Check Go vulnerabilities
         run: govulncheck ./...
@@ -103,7 +107,7 @@ jobs:
         working-directory: backend
     services:
       postgres:
-        image: postgres:18-alpine
+        image: postgres:18-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
         env:
           POSTGRES_DB: xirang_test
           POSTGRES_PASSWORD: FAKE_POSTGRES_PASSWORD_FOR_TEST_ONLY
@@ -124,6 +128,7 @@ jobs:
       REQUIRE_POSTGRES_CONTENT_TEST: "1"
       REQUIRE_POSTGRES_PROCESSING_TEST: "1"
       REQUIRE_POSTGRES_EXPORT_TEST: "1"
+      REQUIRE_POSTGRES_GENERAL_TEST: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
@@ -138,7 +143,7 @@ jobs:
         run: go mod download
 
       - name: Run PostgreSQL migration parity
-        run: go test ./internal/database -run '^(TestBackupAssetMigration062PostgresApplyDown|TestBackupAssetMigration0(63|64|65|66|67|68|69|70|71|72|73)Postgres|TestPostgresTimestamptzScanUsesConfiguredUTC|TestRunMigrationsPostgresDirtyCheckUsesSearchPath|TestRunMigrationsPostgresSchemaDriftCheckUsesSearchPath)$' -count=1
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL migration parity' ./internal/database '^(Test.*Migration.*Postgres.*|TestPostgresTimestamptzScanUsesConfiguredUTC)$'
 
       - name: Run PostgreSQL Recovery behavior parity
         run: go test ./internal/backupasset/recovery -run '^TestRecoveryBehaviorPostgres$' -count=1
@@ -160,6 +165,22 @@ jobs:
 
       - name: Run PostgreSQL Export behavior parity
         run: go test ./internal/backupasset/export -run '^TestExportBehaviorPostgres$' -count=1
+      - name: Run PostgreSQL general API surface parity
+        run: go test ./internal/api -run '^TestGeneralSurfacePostgres$' -count=1
+
+      - name: Run PostgreSQL backup and restore round-trip
+        working-directory: .
+        env:
+          POSTGRES_SERVICE_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          test -n "${POSTGRES_SERVICE_CONTAINER}"
+          docker exec "${POSTGRES_SERVICE_CONTAINER}" mkdir -p /tmp/xirang-contract/scripts
+          docker cp scripts/. "${POSTGRES_SERVICE_CONTAINER}:/tmp/xirang-contract/scripts"
+          docker exec \
+            -e TEST_POSTGRES_DSN="${TEST_POSTGRES_DSN}" \
+            "${POSTGRES_SERVICE_CONTAINER}" \
+            bash /tmp/xirang-contract/scripts/postgres-backup-restore.integration.test.sh
 
   frontend:
     name: Frontend Test & Build
@@ -170,6 +191,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: backend/go.mod
+          cache: true
 
       - name: Setup Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -192,6 +219,8 @@ jobs:
 
       - name: Run backup-asset Playwright matrix
         run: env -u NODE_ENV npm run e2e
+      - name: Run real-backend Playwright smoke
+        run: env -u NODE_ENV npx playwright test e2e/real-backend-smoke.spec.ts --config=playwright.real-backend.config.ts --project=chromium
 
       - name: Check frontend bundle budget
         # Requires dist/ produced by 'npm run check' (which includes build)
@@ -199,16 +228,16 @@ jobs:
 
       - name: Check frontend coverage
         if: always()
-        continue-on-error: true
+        # Enforce report generation; no percentage threshold exists in the repository source of truth.
         run: |
-          if [ -f coverage/lcov.info ]; then
-            LINES=$(grep -c "^SF:" coverage/lcov.info || echo 0)
-            COVERED=$(grep -c "^DA:" coverage/lcov.info || echo 0)
-            echo "Frontend source files: ${LINES}"
-            echo "Frontend covered lines entries: ${COVERED}"
-          else
-            echo "::warning ::Frontend coverage report not found"
+          if [ ! -s coverage/lcov.info ]; then
+            echo "::error::Frontend coverage report not found"
+            exit 1
           fi
+          LINES=$(grep -c "^SF:" coverage/lcov.info || echo 0)
+          COVERED=$(grep -c "^DA:" coverage/lcov.info || echo 0)
+          echo "Frontend source files: ${LINES}"
+          echo "Frontend covered lines entries: ${COVERED}"
 
       - name: Upload frontend coverage
         if: always()
@@ -231,6 +260,15 @@ jobs:
 
       - name: Self-test asset-content Nginx checker
         run: bash scripts/check-asset-content-nginx.test.sh
+
+      - name: Check Compose configuration
+        run: bash scripts/check-compose-config.sh
+
+      - name: Self-test database backup and restore scripts
+        run: bash scripts/backup-restore.test.sh
+
+      - name: Self-test predeploy backup state handling
+        run: bash scripts/predeploy-backup.test.sh
 
       - name: Build Docker image
         run: docker build -t linnea7171/xirang:ci-core-smoke -f deploy/allinone/Dockerfile .
@@ -394,6 +432,12 @@ jobs:
 
       - name: Self-test doc freshness script
         run: bash scripts/check-doc-freshness.test.sh
+
+      - name: Check migration documentation version
+        run: bash scripts/check-migration-version.sh
+
+      - name: Self-test migration documentation checker
+        run: bash scripts/check-migration-version.test.sh
 
   migration-utc-safety:
     name: Migration UTC Safety

@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 TEMPLATE=${ASSET_CONTENT_NGINX_TEMPLATE:-"$ROOT_DIR/deploy/nginx/templates/default.conf.template"}
-NGINX_IMAGE=${ASSET_CONTENT_NGINX_IMAGE:-nginx:1.29-alpine}
+NGINX_IMAGE=${ASSET_CONTENT_NGINX_IMAGE:-"nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de"}
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf -- "$TMP_DIR"' EXIT
 
@@ -221,8 +221,13 @@ LISTEN_10761_COUNT=$(grep -Ec '^[[:space:]]*listen[[:space:]]+10761;[[:space:]]*
 if [[ "$LISTEN_COUNT" -ne 1 || "$LISTEN_10761_COUNT" -ne 1 ]]; then
   fail "the all-in-one nginx entrypoint must remain exactly HTTP port 10761"
 fi
-if ! grep -Fq -- 'location = /healthz {' "$RENDERED"; then
-  fail "healthz proxy route is missing"
+if ! grep -Fq -- 'location = /healthz {' "$RENDERED" ||
+   ! grep -Fq -- 'proxy_pass http://127.0.0.1:3000/healthz;' "$RENDERED"; then
+  fail "healthz liveness proxy route is missing"
+fi
+if ! grep -Fq -- 'location = /readyz {' "$RENDERED" ||
+   ! grep -Fq -- 'proxy_pass http://127.0.0.1:3000/readyz;' "$RENDERED"; then
+  fail "readyz readiness proxy route is missing"
 fi
 if grep -Eq '^[[:space:]]*(ssl_certificate|ssl_certificate_key)[[:space:]]|^[[:space:]]*listen[[:space:]].*(443|ssl)' "$RENDERED"; then
   fail "TLS directives are outside the all-in-one image contract"

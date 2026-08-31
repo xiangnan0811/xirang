@@ -26,13 +26,13 @@ const mockGetDashboard = vi.mocked(apiClient.getDashboard);
 
 const mockDashboard: Dashboard = {
   id: 1,
-  owner_id: 1,
+  ownerId: 1,
   name: "测试看板",
   description: "",
-  time_range: "1h",
-  auto_refresh_seconds: 0,
-  created_at: "2026-04-21T00:00:00Z",
-  updated_at: "2026-04-21T00:00:00Z",
+  timeRange: "1h",
+  autoRefreshSeconds: 0,
+  createdAt: "2026-04-21T00:00:00Z",
+  updatedAt: "2026-04-21T00:00:00Z",
   panels: [],
 };
 

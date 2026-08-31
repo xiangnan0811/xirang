@@ -1,23 +1,47 @@
 import { request } from "./core";
 import { finiteNumber } from "./number-utils";
 
-export type SettingDef = {
-  key: string;
-  env_var: string;
-  code_default: string;
-  type: "int" | "bool" | "duration" | "string";
-  category: string;
-  description: string;
+type SettingDefRaw = {
+  key?: string;
+  env_var?: string;
+  code_default?: string;
+  type?: string;
+  category?: string;
+  description?: string;
   min?: string;
   max?: string;
   requires_restart?: boolean;
   sensitive?: boolean;
 };
 
+export type SettingDef = {
+  key: string;
+  envVar: string;
+  codeDefault: string;
+  type: "int" | "bool" | "duration" | "string";
+  category: string;
+  description: string;
+  min?: string;
+  max?: string;
+  requiresRestart?: boolean;
+  sensitive?: boolean;
+};
+
+type ResolvedSettingRaw = {
+  value?: string;
+  source?: string;
+  updated_at?: string | null;
+};
+
 export type ResolvedSetting = {
   value: string;
   source: "db" | "env" | "default";
-  updated_at: string | null;
+  updatedAt: string | null;
+};
+
+type SettingsResponseRaw = {
+  definitions?: SettingDefRaw[];
+  values?: Record<string, ResolvedSettingRaw>;
 };
 
 export type SettingsResponse = {
@@ -132,10 +156,51 @@ export function mapSecurityRiskSummary(raw: SecurityRiskSummaryRaw | null | unde
   };
 }
 
+function mapSettingDef(row: SettingDefRaw): SettingDef {
+  const type = row.type === "int" || row.type === "bool" || row.type === "duration" || row.type === "string"
+    ? row.type
+    : "string";
+  return {
+    key: String(row.key ?? ""),
+    envVar: String(row.env_var ?? ""),
+    codeDefault: String(row.code_default ?? ""),
+    type,
+    category: String(row.category ?? ""),
+    description: String(row.description ?? ""),
+    min: row.min,
+    max: row.max,
+    requiresRestart: Boolean(row.requires_restart),
+    sensitive: Boolean(row.sensitive),
+  };
+}
+
+function mapResolvedSetting(row: ResolvedSettingRaw): ResolvedSetting {
+  return {
+    value: String(row.value ?? ""),
+    source: row.source === "db" || row.source === "env" ? row.source : "default",
+    updatedAt: row.updated_at ?? null,
+  };
+}
+
+/** @internal exported for mapper tests */
+export function mapSettingsResponse(raw: SettingsResponseRaw | null | undefined): SettingsResponse {
+  const values: Record<string, ResolvedSetting> = {};
+  if (raw?.values && typeof raw.values === "object") {
+    for (const [key, value] of Object.entries(raw.values)) {
+      values[key] = mapResolvedSetting(value ?? {});
+    }
+  }
+  return {
+    definitions: Array.isArray(raw?.definitions) ? raw.definitions.map(mapSettingDef) : [],
+    values,
+  };
+}
+
 export function createSettingsApi() {
   return {
     async getSettings(token: string): Promise<SettingsResponse> {
-      return (await request<SettingsResponse>("/settings", { token })) ?? { definitions: [], values: {} };
+      const raw = await request<SettingsResponseRaw>("/settings", { token });
+      return mapSettingsResponse(raw);
     },
 
     async getSecurityRiskSummary(token: string): Promise<SecurityRiskSummary> {

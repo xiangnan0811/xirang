@@ -1,4 +1,5 @@
 import { request } from "./core";
+import { finiteNumber } from "./number-utils";
 import type { StepUpAction } from "@/lib/step-up-storage";
 
 export { ALL_STEP_UP_ACTIONS, STEP_UP_ACTIONS } from "@/lib/step-up-storage";
@@ -6,12 +7,12 @@ export type { StepUpAction } from "@/lib/step-up-storage";
 
 export interface TOTPSetupResponse {
   secret: string;
-  qr_url: string;
+  qrUrl: string;
   issuer: string;
 }
 
 export interface TOTPVerifyResponse {
-  recovery_codes: string[];
+  recoveryCodes: string[];
 }
 
 export interface TOTPLoginResponse {
@@ -19,32 +20,100 @@ export interface TOTPLoginResponse {
   user: {
     id: number;
     username: string;
-    role: string;
-    totp_enabled: boolean;
+    role: "admin" | "operator" | "viewer";
+    totpEnabled: boolean;
   };
 }
 
 export interface StepUpProofResponse {
   proof: string;
-  expires_at: string;
-  proof_ttl_seconds: number;
+  expiresAt: string;
+  proofTtlSeconds: number;
+}
+
+type RawTOTPSetupResponse = {
+  secret?: unknown;
+  qr_url?: unknown;
+  issuer?: unknown;
+};
+
+type RawTOTPVerifyResponse = {
+  recovery_codes?: unknown;
+};
+
+type RawTOTPLoginResponse = {
+  token?: unknown;
+  user?: {
+    id?: unknown;
+    username?: unknown;
+    role?: unknown;
+    totp_enabled?: unknown;
+  };
+};
+
+type RawStepUpProofResponse = {
+  proof?: unknown;
+  expires_at?: unknown;
+  proof_ttl_seconds?: unknown;
+};
+
+function mapRole(raw: unknown): "admin" | "operator" | "viewer" {
+  return raw === "admin" || raw === "operator" || raw === "viewer" ? raw : "viewer";
+}
+
+export function mapTOTPSetupResponse(raw: RawTOTPSetupResponse | null | undefined): TOTPSetupResponse {
+  return {
+    secret: String(raw?.secret ?? ""),
+    qrUrl: String(raw?.qr_url ?? ""),
+    issuer: String(raw?.issuer ?? ""),
+  };
+}
+
+export function mapTOTPVerifyResponse(raw: RawTOTPVerifyResponse | null | undefined): TOTPVerifyResponse {
+  return {
+    recoveryCodes: Array.isArray(raw?.recovery_codes)
+      ? raw.recovery_codes.map((code) => String(code))
+      : [],
+  };
+}
+
+export function mapTOTPLoginResponse(raw: RawTOTPLoginResponse | null | undefined): TOTPLoginResponse {
+  return {
+    token: String(raw?.token ?? ""),
+    user: {
+      id: finiteNumber(raw?.user?.id),
+      username: String(raw?.user?.username ?? ""),
+      role: mapRole(raw?.user?.role),
+      totpEnabled: Boolean(raw?.user?.totp_enabled),
+    },
+  };
+}
+
+export function mapStepUpProofResponse(raw: RawStepUpProofResponse | null | undefined): StepUpProofResponse {
+  return {
+    proof: String(raw?.proof ?? ""),
+    expiresAt: String(raw?.expires_at ?? ""),
+    proofTtlSeconds: finiteNumber(raw?.proof_ttl_seconds),
+  };
 }
 
 export function createTOTPApi() {
   return {
     async totpSetup(token: string): Promise<TOTPSetupResponse> {
-      return request<TOTPSetupResponse>("/auth/2fa/setup", {
+      const raw = await request<RawTOTPSetupResponse>("/auth/2fa/setup", {
         method: "POST",
         token,
       });
+      return mapTOTPSetupResponse(raw);
     },
 
     async totpVerify(token: string, code: string): Promise<TOTPVerifyResponse> {
-      return request<TOTPVerifyResponse>("/auth/2fa/verify", {
+      const raw = await request<RawTOTPVerifyResponse>("/auth/2fa/verify", {
         method: "POST",
         token,
         body: { code },
       });
+      return mapTOTPVerifyResponse(raw);
     },
 
     async totpDisable(token: string, password: string, totpCode: string): Promise<void> {
@@ -56,18 +125,20 @@ export function createTOTPApi() {
     },
 
     async totpLogin(loginToken: string, totpCode: string): Promise<TOTPLoginResponse> {
-      return request<TOTPLoginResponse>("/auth/2fa/login", {
+      const raw = await request<RawTOTPLoginResponse>("/auth/2fa/login", {
         method: "POST",
         body: { login_token: loginToken, totp_code: totpCode },
       });
+      return mapTOTPLoginResponse(raw);
     },
 
     async requestStepUpProof(token: string, code: string, action: StepUpAction): Promise<StepUpProofResponse> {
-      return request<StepUpProofResponse>("/auth/step-up", {
+      const raw = await request<RawStepUpProofResponse>("/auth/step-up", {
         method: "POST",
         token,
         body: { code, step_up_action: action },
       });
+      return mapStepUpProofResponse(raw);
     },
   };
 }

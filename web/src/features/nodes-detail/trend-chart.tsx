@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { chartSeriesColors } from "@/lib/chart-colors";
 import { useTranslation } from "react-i18next";
 import {
   CartesianGrid,
@@ -55,7 +56,7 @@ function buildFrames(series: MetricSeries[]): Array<Record<string, number | stri
   );
 }
 
-const COLORS = ["#60a5fa", "#34d399", "#f472b6", "#fbbf24", "#a78bfa", "#f87171"];
+const COLORS = chartSeriesColors();
 
 // Round to 2 decimals and strip trailing zeros so "25.00" → "25" and
 // "5.50833" → "5.51". Non-numeric inputs pass through as "—".

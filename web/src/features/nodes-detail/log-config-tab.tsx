@@ -41,9 +41,9 @@ export default function LogConfigTab({ nodeId, token }: NodeDetailTabProps) {
     try {
       const cfg = await apiClient.getNodeLogConfig(token, nodeId, { signal });
       if (!signal.aborted) {
-        setLogPaths((cfg.log_paths ?? []).join("\n"));
-        setJournalctlEnabled(cfg.log_journalctl_enabled);
-        setRetentionDays(cfg.log_retention_days);
+        setLogPaths((cfg.logPaths ?? []).join("\n"));
+        setJournalctlEnabled(cfg.logJournalctlEnabled);
+        setRetentionDays(cfg.logRetentionDays);
       }
     } catch {
       // ignore aborts and network errors on load
@@ -83,13 +83,13 @@ export default function LogConfigTab({ nodeId, token }: NodeDetailTabProps) {
     setSaving(true);
     try {
       const updated = await apiClient.updateNodeLogConfig(token, nodeId, {
-        log_paths: paths,
-        log_journalctl_enabled: journalctlEnabled,
-        log_retention_days: retentionDays,
+        logPaths: paths,
+        logJournalctlEnabled: journalctlEnabled,
+        logRetentionDays: retentionDays,
       });
-      setLogPaths((updated.log_paths ?? []).join("\n"));
-      setJournalctlEnabled(updated.log_journalctl_enabled);
-      setRetentionDays(updated.log_retention_days);
+      setLogPaths((updated.logPaths ?? []).join("\n"));
+      setJournalctlEnabled(updated.logJournalctlEnabled);
+      setRetentionDays(updated.logRetentionDays);
       toast.success(t("nodeLogs.nodeConfig.saved"));
     } catch (err: unknown) {
       toast.error(getErrorMessage(err));

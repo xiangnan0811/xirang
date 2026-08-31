@@ -260,3 +260,30 @@ func TestNewUpdaterHTTPServerHasIndependentBoundsAndConnContext(t *testing.T) {
 		}
 	}
 }
+
+func TestMainGatesDrillSchedulerOnTransportAvailability(t *testing.T) {
+	sourceBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	source := string(sourceBytes)
+	availability := strings.Index(source, "if taskManager.DrillAvailable()")
+	start := strings.Index(source, "taskManager.StartDrillLoop()")
+	if availability < 0 || start < 0 {
+		t.Fatal("main.go must check drill transport availability before starting the drill scheduler")
+	}
+	if start <= availability {
+		t.Fatal("main.go starts the drill scheduler before checking transport availability")
+	}
+	if strings.Count(source, "taskManager.StartDrillLoop()") != 1 {
+		t.Fatal("main.go must have exactly one availability-gated drill scheduler start")
+	}
+	gatedBlock := source[availability:]
+	blockEnd := strings.Index(gatedBlock, "\n\t}\n")
+	if blockEnd < 0 || !strings.Contains(gatedBlock[:blockEnd], "taskManager.StartDrillLoop()") {
+		t.Fatal("main.go drill scheduler start is not inside the availability guard")
+	}
+	if !strings.Contains(gatedBlock[:blockEnd], "taskManager.DrillAvailable()") {
+		t.Fatal("main.go drill scheduler guard does not use Manager.DrillAvailable")
+	}
+}

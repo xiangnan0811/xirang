@@ -478,6 +478,23 @@ func TestProductionToolchainInventoryFingerprintAndPartialPreflight(t *testing.T
 	}
 }
 
+func TestProductionToolchainRuntimePackagePinsMatchWorkerDockerfile(t *testing.T) {
+	dockerfilePath := filepath.Join("..", "..", "..", "..", "..", "deploy", "worker", "Dockerfile")
+	dockerfile, err := os.ReadFile(dockerfilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, packageValue := range productionToolchainInventory().Packages {
+		if !packageValue.Runtime {
+			continue
+		}
+		pin := packageValue.Name + "=" + packageValue.Version
+		if !bytes.Contains(dockerfile, []byte(pin)) {
+			t.Errorf("runtime inventory pin %q is absent from Worker Dockerfile", pin)
+		}
+	}
+}
+
 func TestToolchainPreflightPreservesClosedRuntimeClosureDiagnostics(t *testing.T) {
 	ready := map[string]bool{
 		capabilityspec.CapabilityImageOCR:   true,

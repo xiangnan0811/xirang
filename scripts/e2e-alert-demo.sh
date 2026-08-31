@@ -15,7 +15,7 @@ api_root="${API_BASE_URL%/api/v1}"
 if [[ "${api_root}" == "${API_BASE_URL}" ]]; then
   api_root="${API_BASE_URL%/}"
 fi
-HEALTH_URL="${HEALTH_URL:-${api_root}/healthz}"
+HEALTH_URL="${HEALTH_URL:-${api_root}/readyz}"
 
 created_node_id=""
 created_integration_id=""

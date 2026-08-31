@@ -62,10 +62,10 @@ start_backend
 trap cleanup EXIT
 trap 'exit 143' TERM INT
 
-# 等待后端就绪（后端监听在容器内部端口 3000）
+# 等待后端就绪（后端监听在容器内部端口 3000）；/healthz 仅表示进程存活
 attempts=0
 max_attempts=30
-until curl -fsS http://127.0.0.1:3000/healthz >/dev/null 2>&1; do
+until curl -fsS http://127.0.0.1:3000/readyz >/dev/null 2>&1; do
   attempts=$((attempts + 1))
   if ! is_running "${XIRANG_PID}"; then
     echo "==> 后端在就绪前提前退出，中止启动" >&2

@@ -72,7 +72,7 @@ export function SystemTab() {
         setEditValues(edits);
       }
       if (logSettingsResult.status === "fulfilled") {
-        setLogRetentionDays(logSettingsResult.value.default_retention_days);
+        setLogRetentionDays(logSettingsResult.value.defaultRetentionDays);
       }
       if (riskResult.status === "fulfilled") {
         setSecurityRisk(riskResult.value);
@@ -92,8 +92,8 @@ export function SystemTab() {
     if (!token) return;
     setLogRetentionSaving(true);
     try {
-      const updated = await apiClient.updateLogsSettings(token, { default_retention_days: logRetentionDays });
-      setLogRetentionDays(updated.default_retention_days);
+      const updated = await apiClient.updateLogsSettings(token, { defaultRetentionDays: logRetentionDays });
+      setLogRetentionDays(updated.defaultRetentionDays);
       toast.success(t("settings.system.saved"));
     } catch (err: unknown) {
       toast.error(getErrorMessage(err));
@@ -253,7 +253,7 @@ export function SystemTab() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-medium truncate">{def.description}</p>
-                    {def.requires_restart && (
+                    {def.requiresRestart && (
                       <span className="inline-flex items-center gap-0.5 text-micro text-warning-foreground dark:text-warning" title={t("settings.system.requiresRestart")}>
                         <AlertTriangle className="size-3" aria-hidden />
                         {t("settings.system.restart")}

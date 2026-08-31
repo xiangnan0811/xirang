@@ -108,3 +108,37 @@ describe("auth-api getCaptcha mapping", () => {
     });
   });
 });
+
+describe("auth-api login mapping", () => {
+  const fetchMock = vi.fn();
+  const api = createAuthApi();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("maps 2FA challenge fields to camelCase", async () => {
+    fetchMock.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      headers: { get: vi.fn().mockReturnValue(null) },
+      text: vi.fn().mockResolvedValue(JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: { requires_2fa: true, login_token: "temp" },
+      })),
+    } as unknown as Response);
+
+    await expect(api.login("admin", "secret")).resolves.toEqual({
+      token: undefined,
+      user: undefined,
+      requires2FA: true,
+      loginToken: "temp",
+    });
+  });
+});

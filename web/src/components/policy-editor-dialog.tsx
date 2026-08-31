@@ -6,22 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/confirm-dialog";
+import { InlineAlert } from "@/components/ui/inline-alert";
 import { useDialogDraft } from "@/hooks/use-dialog-draft";
 import { CronGenerator } from "@/components/cron-generator";
 import { BandwidthScheduleEditor } from "@/components/bandwidth-schedule-editor";
 import { apiClient } from "@/lib/api/client";
 import { useAuth } from "@/context/auth-context.hooks";
-import { toast } from "@/components/ui/toast-sonner";
 import type { AppCredential, ProfileSchema } from "@/lib/api/credentials";
 import type { EscalationPolicy, NewPolicyInput, NodeRecord, PolicyRecord } from "@/types/domain";
 
@@ -45,25 +35,25 @@ const emptyDraft: PolicyDraft = {
   maxRetries: 2,
   retryBaseSeconds: 30,
   bandwidthSchedule: "",
-  retention_days: 7,
-  retention_mode: "simple",
-  keep_daily: 0,
-  keep_weekly: 0,
-  keep_monthly: 0,
-  keep_yearly: 0,
-  rpo_minutes: 0,
-  rto_minutes: 0,
-  escalation_policy_id: null,
-  app_profile: "",
-  app_credential_id: null,
-  drill_enabled: false,
-  drill_cron: "",
-  drill_target_node_id: null,
-  drill_restore_path: "/tmp/xirang-drill",
-  drill_pre_verify: "",
-  drill_verify: "",
-  drill_post_verify: "",
-  drill_auto_cleanup: true,
+  retentionDays: 7,
+  retentionMode: "simple",
+  keepDaily: 0,
+  keepWeekly: 0,
+  keepMonthly: 0,
+  keepYearly: 0,
+  rpoMinutes: 0,
+  rtoMinutes: 0,
+  escalationPolicyId: null,
+  appProfile: "",
+  appCredentialId: null,
+  drillEnabled: false,
+  drillCron: "",
+  drillTargetNodeId: null,
+  drillRestorePath: "/tmp/xirang-drill",
+  drillPreVerify: "",
+  drillVerify: "",
+  drillPostVerify: "",
+  drillAutoCleanup: true,
 };
 
 function toBoundedInt(value: string, fallback: number, min: number, max: number): number {
@@ -92,25 +82,25 @@ function toDraft(policy: PolicyRecord): PolicyDraft {
     maxRetries: policy.maxRetries ?? 2,
     retryBaseSeconds: policy.retryBaseSeconds ?? 30,
     bandwidthSchedule: policy.bandwidthSchedule ?? "",
-    retention_days: policy.retention_days ?? 7,
-    retention_mode: policy.retention_mode ?? "simple",
-    keep_daily: policy.keep_daily ?? 0,
-    keep_weekly: policy.keep_weekly ?? 0,
-    keep_monthly: policy.keep_monthly ?? 0,
-    keep_yearly: policy.keep_yearly ?? 0,
-    rpo_minutes: policy.rpo_minutes ?? 0,
-    rto_minutes: policy.rto_minutes ?? 0,
-    escalation_policy_id: policy.escalation_policy_id ?? null,
-    app_profile: policy.app_profile ?? "",
-    app_credential_id: policy.app_credential_id ?? null,
-    drill_enabled: policy.drill_enabled ?? false,
-    drill_cron: policy.drill_cron ?? "",
-    drill_target_node_id: policy.drill_target_node_id ?? null,
-    drill_restore_path: policy.drill_restore_path ?? "/tmp/xirang-drill",
-    drill_pre_verify: policy.drill_pre_verify ?? "",
-    drill_verify: policy.drill_verify ?? "",
-    drill_post_verify: policy.drill_post_verify ?? "",
-    drill_auto_cleanup: policy.drill_auto_cleanup ?? true,
+    retentionDays: policy.retentionDays ?? 7,
+    retentionMode: policy.retentionMode ?? "simple",
+    keepDaily: policy.keepDaily ?? 0,
+    keepWeekly: policy.keepWeekly ?? 0,
+    keepMonthly: policy.keepMonthly ?? 0,
+    keepYearly: policy.keepYearly ?? 0,
+    rpoMinutes: policy.rpoMinutes ?? 0,
+    rtoMinutes: policy.rtoMinutes ?? 0,
+    escalationPolicyId: policy.escalationPolicyId ?? null,
+    appProfile: policy.appProfile ?? "",
+    appCredentialId: policy.appCredentialId ?? null,
+    drillEnabled: false,
+    drillCron: policy.drillCron ?? "",
+    drillTargetNodeId: policy.drillTargetNodeId ?? null,
+    drillRestorePath: policy.drillRestorePath ?? "/tmp/xirang-drill",
+    drillPreVerify: policy.drillPreVerify ?? "",
+    drillVerify: policy.drillVerify ?? "",
+    drillPostVerify: policy.drillPostVerify ?? "",
+    drillAutoCleanup: policy.drillAutoCleanup ?? true,
   };
 }
 
@@ -136,8 +126,6 @@ export function PolicyEditorDialog({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [retentionOpen, setRetentionOpen] = useState(false);
   const [drillOpen, setDrillOpen] = useState(false);
-  const [triggering, setTriggering] = useState(false);
-  const [drillConfirmOpen, setDrillConfirmOpen] = useState(false);
   const [escalationPolicies, setEscalationPolicies] = useState<EscalationPolicy[]>([]);
   const [profiles, setProfiles] = useState<ProfileSchema[]>([]);
   const [credentials, setCredentials] = useState<AppCredential[]>([]);
@@ -171,26 +159,10 @@ export function PolicyEditorDialog({
     }));
   };
 
-  const handleTriggerDrill = async () => {
-    if (!draft.id || !token) return;
-    setDrillConfirmOpen(false);
-    setTriggering(true);
-    try {
-      const result = await apiClient.triggerDrill(token, draft.id);
-      toast.success(t('policyEditor.drill.triggerSuccess', { id: result.task_run_id }));
-    } catch {
-      toast.error(t('policyEditor.drill.triggerFailed'));
-    } finally {
-      setTriggering(false);
-    }
-  };
-
-  const selectedProfileMeta = profiles.find((p) => p.id === draft.app_profile);
+  const selectedProfileMeta = profiles.find((p) => p.id === draft.appProfile);
   const filteredCredentials = credentials.filter(
-    (c) => !draft.app_profile ? false : c.type === selectedProfileMeta?.credentialType
+    (c) => !draft.appProfile ? false : c.type === selectedProfileMeta?.credentialType
   );
-  const sourceNodeIds = new Set(draft.nodeIds);
-  const sandboxNodes = nodes.filter((n) => !sourceNodeIds.has(n.id));
 
   return (
     <FormDialog
@@ -346,13 +318,13 @@ export function PolicyEditorDialog({
             </label>
             <Select
               id="policy-edit-app-profile"
-              value={draft.app_profile ?? ""}
+              value={draft.appProfile ?? ""}
               onChange={(e) => {
                 const profileId = e.target.value;
                 setDraft((prev) => ({
                   ...prev,
-                  app_profile: profileId,
-                  app_credential_id: profileId === "" || profileId !== prev.app_profile ? null : prev.app_credential_id,
+                  appProfile: profileId,
+                  appCredentialId: profileId === "" || profileId !== prev.appProfile ? null : prev.appCredentialId,
                 }));
               }}
             >
@@ -369,18 +341,18 @@ export function PolicyEditorDialog({
             <p className="text-xs text-muted-foreground">{selectedProfileMeta.description}</p>
           )}
 
-          {draft.app_profile && (
+          {draft.appProfile && (
             <div>
               <label htmlFor="policy-edit-app-credential" className="mb-1 block text-sm font-medium">
                 {t('policyEditor.selectCredential')}
               </label>
               <Select
                 id="policy-edit-app-credential"
-                value={draft.app_credential_id == null ? "" : String(draft.app_credential_id)}
+                value={draft.appCredentialId == null ? "" : String(draft.appCredentialId)}
                 onChange={(e) =>
                   setDraft((prev) => ({
                     ...prev,
-                    app_credential_id: e.target.value === "" ? null : Number(e.target.value),
+                    appCredentialId: e.target.value === "" ? null : Number(e.target.value),
                   }))
                 }
               >
@@ -394,7 +366,7 @@ export function PolicyEditorDialog({
             </div>
           )}
 
-          {draft.app_profile && draft.app_credential_id != null && (
+          {draft.appProfile && draft.appCredentialId != null && (
             <p className="text-xs text-muted-foreground">{t('policyEditor.appAwareHint')}</p>
           )}
         </div>
@@ -444,11 +416,11 @@ export function PolicyEditorDialog({
         </label>
         <Select
           id="policy-edit-escalation"
-          value={draft.escalation_policy_id == null ? "" : String(draft.escalation_policy_id)}
+          value={draft.escalationPolicyId == null ? "" : String(draft.escalationPolicyId)}
           onChange={(e) =>
             setDraft((prev) => ({
               ...prev,
-              escalation_policy_id: e.target.value === "" ? null : Number(e.target.value),
+              escalationPolicyId: e.target.value === "" ? null : Number(e.target.value),
             }))
           }
         >
@@ -482,11 +454,11 @@ export function PolicyEditorDialog({
                 <label className="flex items-center gap-2 text-sm cursor-pointer">
                   <input
                     type="radio"
-                    name="retention_mode"
+                    name="retentionMode"
                     value="simple"
-                    checked={draft.retention_mode === "simple"}
+                    checked={draft.retentionMode === "simple"}
                     onChange={() =>
-                      setDraft((prev) => ({ ...prev, retention_mode: "simple" }))
+                      setDraft((prev) => ({ ...prev, retentionMode: "simple" }))
                     }
                   />
                   {t('policyEditor.retentionSimple')}
@@ -494,23 +466,23 @@ export function PolicyEditorDialog({
                 <label className="flex items-center gap-2 text-sm cursor-pointer">
                   <input
                     type="radio"
-                    name="retention_mode"
+                    name="retentionMode"
                     value="gfs"
-                    checked={draft.retention_mode === "gfs"}
+                    checked={draft.retentionMode === "gfs"}
                     onChange={() =>
-                      setDraft((prev) => ({ ...prev, retention_mode: "gfs" }))
+                      setDraft((prev) => ({ ...prev, retentionMode: "gfs" }))
                     }
                   />
                   {t('policyEditor.retentionGFS')}
                 </label>
               </div>
-              {draft.retention_mode === "gfs" && (
+              {draft.retentionMode === "gfs" && (
                 <p className="mt-1 text-xs text-muted-foreground">{t('policyEditor.retentionGFSHint')}</p>
               )}
             </div>
 
-            {/* Simple 模式：retention_days */}
-            {draft.retention_mode === "simple" && (
+            {/* Simple 模式：retentionDays */}
+            {draft.retentionMode === "simple" && (
               <div>
                 <label htmlFor="policy-edit-retention-days" className="mb-1 block text-sm font-medium">
                   {t('policyEditor.retentionDays')}
@@ -520,11 +492,11 @@ export function PolicyEditorDialog({
                   type="number"
                   min={1}
                   max={3650}
-                  value={draft.retention_days ?? 7}
+                  value={draft.retentionDays ?? 7}
                   onChange={(e) =>
                     setDraft((prev) => ({
                       ...prev,
-                      retention_days: toBoundedInt(e.target.value, 7, 1, 3650),
+                      retentionDays: toBoundedInt(e.target.value, 7, 1, 3650),
                     }))
                   }
                 />
@@ -532,8 +504,8 @@ export function PolicyEditorDialog({
               </div>
             )}
 
-            {/* GFS 模式：keep_daily/weekly/monthly/yearly */}
-            {draft.retention_mode === "gfs" && (
+            {/* GFS 模式：keepDaily/weekly/monthly/yearly */}
+            {draft.retentionMode === "gfs" && (
               <>
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
@@ -545,11 +517,11 @@ export function PolicyEditorDialog({
                       type="number"
                       min={0}
                       max={365}
-                      value={draft.keep_daily ?? 0}
+                      value={draft.keepDaily ?? 0}
                       onChange={(e) =>
                         setDraft((prev) => ({
                           ...prev,
-                          keep_daily: toBoundedInt(e.target.value, 0, 0, 365),
+                          keepDaily: toBoundedInt(e.target.value, 0, 0, 365),
                         }))
                       }
                     />
@@ -563,11 +535,11 @@ export function PolicyEditorDialog({
                       type="number"
                       min={0}
                       max={104}
-                      value={draft.keep_weekly ?? 0}
+                      value={draft.keepWeekly ?? 0}
                       onChange={(e) =>
                         setDraft((prev) => ({
                           ...prev,
-                          keep_weekly: toBoundedInt(e.target.value, 0, 0, 104),
+                          keepWeekly: toBoundedInt(e.target.value, 0, 0, 104),
                         }))
                       }
                     />
@@ -583,11 +555,11 @@ export function PolicyEditorDialog({
                       type="number"
                       min={0}
                       max={120}
-                      value={draft.keep_monthly ?? 0}
+                      value={draft.keepMonthly ?? 0}
                       onChange={(e) =>
                         setDraft((prev) => ({
                           ...prev,
-                          keep_monthly: toBoundedInt(e.target.value, 0, 0, 120),
+                          keepMonthly: toBoundedInt(e.target.value, 0, 0, 120),
                         }))
                       }
                     />
@@ -601,11 +573,11 @@ export function PolicyEditorDialog({
                       type="number"
                       min={0}
                       max={30}
-                      value={draft.keep_yearly ?? 0}
+                      value={draft.keepYearly ?? 0}
                       onChange={(e) =>
                         setDraft((prev) => ({
                           ...prev,
-                          keep_yearly: toBoundedInt(e.target.value, 0, 0, 30),
+                          keepYearly: toBoundedInt(e.target.value, 0, 0, 30),
                         }))
                       }
                     />
@@ -627,11 +599,11 @@ export function PolicyEditorDialog({
                     type="number"
                     min={0}
                     max={10080}
-                    value={draft.rpo_minutes ?? 0}
+                    value={draft.rpoMinutes ?? 0}
                     onChange={(e) =>
                       setDraft((prev) => ({
                         ...prev,
-                        rpo_minutes: toBoundedInt(e.target.value, 0, 0, 10080),
+                        rpoMinutes: toBoundedInt(e.target.value, 0, 0, 10080),
                       }))
                     }
                   />
@@ -645,11 +617,11 @@ export function PolicyEditorDialog({
                     type="number"
                     min={0}
                     max={10080}
-                    value={draft.rto_minutes ?? 0}
+                    value={draft.rtoMinutes ?? 0}
                     onChange={(e) =>
                       setDraft((prev) => ({
                         ...prev,
-                        rto_minutes: toBoundedInt(e.target.value, 0, 0, 10080),
+                        rtoMinutes: toBoundedInt(e.target.value, 0, 0, 10080),
                       }))
                     }
                   />
@@ -797,171 +769,12 @@ export function PolicyEditorDialog({
 
         {drillOpen && (
           <div className="space-y-3 border-t border-border/40 px-3 py-3 animate-in slide-in-from-top-1 fade-in duration-150">
-            {/* 启用开关 */}
-            <div className="flex items-center justify-between">
-              <span className="text-sm">{t('policyEditor.drill.enable')}</span>
-              <Switch
-                aria-label={t('policyEditor.drill.enable')}
-                checked={draft.drill_enabled ?? false}
-                onCheckedChange={(checked) =>
-                  setDraft((prev) => ({ ...prev, drill_enabled: checked }))
-                }
-              />
-            </div>
-
-            {draft.drill_enabled && (
-              <>
-                {/* Cron 表达式 */}
-                <div>
-                  <label htmlFor="policy-edit-drill-cron" className="mb-1 block text-sm font-medium">
-                    {t('policyEditor.drill.cron')}
-                  </label>
-                  <CronGenerator
-                    id="policy-edit-drill-cron"
-                    value={draft.drill_cron ?? ""}
-                    onChange={(val) => setDraft((prev) => ({ ...prev, drill_cron: val }))}
-                    disabled={saving}
-                  />
-                </div>
-
-                {/* 沙箱节点 */}
-                <div>
-                  <label htmlFor="policy-edit-drill-node" className="mb-1 block text-sm font-medium">
-                    {t('policyEditor.drill.sandboxNode')}
-                  </label>
-                  <Select
-                    id="policy-edit-drill-node"
-                    value={draft.drill_target_node_id == null ? "" : String(draft.drill_target_node_id)}
-                    onChange={(e) =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        drill_target_node_id: e.target.value === "" ? null : Number(e.target.value),
-                      }))
-                    }
-                  >
-                    <option value="">{t('policyEditor.drill.sandboxNodeSelect')}</option>
-                    {sandboxNodes.map((n) => (
-                      <option key={n.id} value={String(n.id)}>
-                        {n.name} ({n.host})
-                      </option>
-                    ))}
-                  </Select>
-                  {sandboxNodes.length === 0 && nodes.length > 0 && (
-                    <p className="mt-1 text-xs text-muted-foreground">{t('policyEditor.drill.sandboxMustNotBeSource')}</p>
-                  )}
-                </div>
-
-                {/* 恢复路径 */}
-                <div>
-                  <label htmlFor="policy-edit-drill-path" className="mb-1 block text-sm font-medium">
-                    {t('policyEditor.drill.restorePath')}
-                  </label>
-                  <Input
-                    id="policy-edit-drill-path"
-                    placeholder="/tmp/xirang-drill"
-                    value={draft.drill_restore_path ?? "/tmp/xirang-drill"}
-                    onChange={(e) =>
-                      setDraft((prev) => ({ ...prev, drill_restore_path: e.target.value }))
-                    }
-                  />
-                </div>
-
-                {/* pre_verify */}
-                <div>
-                  <label htmlFor="policy-edit-drill-pre-verify" className="mb-1 block text-sm font-medium">
-                    {t('policyEditor.drill.preVerify')}
-                  </label>
-                  <Textarea
-                    id="policy-edit-drill-pre-verify"
-                    className="min-h-16 text-xs font-mono"
-                    placeholder={t('policyEditor.drill.preVerifyPlaceholder')}
-                    value={draft.drill_pre_verify ?? ""}
-                    onChange={(e) =>
-                      setDraft((prev) => ({ ...prev, drill_pre_verify: e.target.value }))
-                    }
-                  />
-                </div>
-
-                {/* verify */}
-                <div>
-                  <label htmlFor="policy-edit-drill-verify" className="mb-1 block text-sm font-medium">
-                    {t('policyEditor.drill.verify')}
-                  </label>
-                  <Textarea
-                    id="policy-edit-drill-verify"
-                    className="min-h-16 text-xs font-mono"
-                    placeholder={t('policyEditor.drill.verifyPlaceholder')}
-                    value={draft.drill_verify ?? ""}
-                    onChange={(e) =>
-                      setDraft((prev) => ({ ...prev, drill_verify: e.target.value }))
-                    }
-                  />
-                </div>
-
-                {/* post_verify */}
-                <div>
-                  <label htmlFor="policy-edit-drill-post-verify" className="mb-1 block text-sm font-medium">
-                    {t('policyEditor.drill.postVerify')}
-                  </label>
-                  <Textarea
-                    id="policy-edit-drill-post-verify"
-                    className="min-h-16 text-xs font-mono"
-                    placeholder={t('policyEditor.drill.postVerifyPlaceholder')}
-                    value={draft.drill_post_verify ?? ""}
-                    onChange={(e) =>
-                      setDraft((prev) => ({ ...prev, drill_post_verify: e.target.value }))
-                    }
-                  />
-                </div>
-
-                {/* 自动清理开关 */}
-                <div className="flex items-center justify-between">
-                  <span className="text-sm">{t('policyEditor.drill.autoCleanup')}</span>
-                  <Switch
-                    aria-label={t('policyEditor.drill.autoCleanup')}
-                    checked={draft.drill_auto_cleanup ?? true}
-                    onCheckedChange={(checked) =>
-                      setDraft((prev) => ({ ...prev, drill_auto_cleanup: checked }))
-                    }
-                  />
-                </div>
-
-                {/* 手动触发按钮（仅编辑已有策略时可用） */}
-                {isEditing && (
-                  <div>
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
-                      disabled={triggering}
-                      onClick={() => setDrillConfirmOpen(true)}
-                    >
-                      {triggering ? t('common.executing') : t('policyEditor.drill.trigger')}
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
+            <InlineAlert tone="warning" title={t("policyEditor.drill.unavailableTitle")}>
+              {t("policyEditor.drill.unavailableDesc")}
+            </InlineAlert>
           </div>
         )}
       </div>
-
-      {/* 手动触发确认对话框 */}
-      <AlertDialog open={drillConfirmOpen} onOpenChange={setDrillConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t('policyEditor.drill.trigger')}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t('policyEditor.drill.triggerConfirm')}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
-            <AlertDialogAction onClick={handleTriggerDrill}>
-              {t('common.confirm')}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </FormDialog>
   );
 }

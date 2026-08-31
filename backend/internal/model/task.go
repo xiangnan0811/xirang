@@ -131,7 +131,7 @@ func (t *Task) AfterFind(_ *gorm.DB) error {
 
 type TaskRun struct {
 	ID                uint       `gorm:"primaryKey" json:"id"`
-	TaskID            uint       `gorm:"not null;index" json:"task_id"`
+	TaskID            uint       `gorm:"not null;index;uniqueIndex:idx_task_runs_active_drill,where:trigger_type = 'drill' AND (status = 'pending' OR status = 'running' OR status = 'retrying')" json:"task_id"`
 	Task              Task       `gorm:"foreignKey:TaskID" json:"-"`
 	NodeIDSnapshot    uint       `gorm:"not null;index:idx_task_runs_node_snapshot_status,priority:1" json:"-"`
 	TriggerType       string     `gorm:"size:32;not null;default:manual" json:"trigger_type"`

@@ -1,9 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Outlet, Route, Routes, Link } from "react-router-dom";
 import * as React from "react";
 import { AppShell } from "./app-shell";
+import { appLayoutKey } from "./app-layout-key";
 
 const mockConsoleData = {
   globalSearch: "",
@@ -95,5 +97,48 @@ describe("AppShell", () => {
       .getByRole("button", { name: "收起侧边栏" })
       .closest("aside");
     expect(sidebar).toHaveClass("pt-14");
+  });
+
+  it("keys nested /app sections so parent layouts survive tab changes", () => {
+    expect(appLayoutKey("/app/backups/data")).toBe("/app/backups");
+    expect(appLayoutKey("/app/backups/overview")).toBe("/app/backups");
+    expect(appLayoutKey("/app/overview")).toBe("/app/overview");
+  });
+
+  it("does not remount a nested layout parent when switching child tabs", async () => {
+    const user = userEvent.setup();
+    let parentMounts = 0;
+    function Parent() {
+      React.useEffect(() => {
+        parentMounts += 1;
+      }, []);
+      return (
+        <div>
+          <Link to="/app/backups/data">Data tab</Link>
+          <Link to="/app/backups/overview">Overview tab</Link>
+          <Outlet />
+        </div>
+      );
+    }
+
+    mockConsoleData.warning = null;
+    render(
+      <MemoryRouter initialEntries={["/app/backups/data"]}>
+        <Routes>
+          <Route path="/app" element={<AppShell />}>
+            <Route path="backups" element={<Parent />}>
+              <Route path="data" element={<div>data-panel</div>} />
+              <Route path="overview" element={<div>overview-panel</div>} />
+            </Route>
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("data-panel")).toBeInTheDocument();
+    expect(parentMounts).toBe(1);
+    await user.click(screen.getByRole("link", { name: "Overview tab" }));
+    expect(await screen.findByText("overview-panel")).toBeInTheDocument();
+    expect(parentMounts).toBe(1);
   });
 });

@@ -8,6 +8,7 @@ import { DataSurface, DataSurfaceContent, DataSurfaceToolbar } from "@/component
 import { LoadingState } from "@/components/ui/loading-state";
 import { Pagination } from "@/components/ui/pagination";
 import { StatCardsSection } from "@/components/ui/stat-cards-section";
+import { InventoryRetryAlert } from "@/components/ui/inventory-retry-alert";
 import { toast } from "@/components/ui/toast-sonner";
 import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { useClientPagination } from "@/hooks/use-client-pagination";
@@ -38,10 +39,13 @@ type TasksViewMode = "cards" | "list";
 
 export function TasksPage() {
   const { t } = useTranslation();
-  const { loading, globalSearch, setGlobalSearch } = useSharedContext();
+  const { globalSearch, setGlobalSearch } = useSharedContext();
   const { nodes, refreshNodes } = useNodesContext();
   const {
     tasks,
+    tasksLoading,
+    tasksError,
+    tasksLoaded,
     createTask,
     updateTask,
     deleteTask,
@@ -54,6 +58,8 @@ export function TasksPage() {
     refreshTasks,
   } = useTasksContext();
   const { policies, refreshPolicies } = usePoliciesContext();
+  const loading = (tasksLoading || !tasksLoaded) && tasks.length === 0 && !tasksError;
+  const requestFailed = Boolean(tasksError) && tasks.length === 0;
 
   useEffect(() => {
     void refreshTasks();
@@ -499,6 +505,9 @@ export function TasksPage() {
         </DataSurfaceToolbar>
 
         <DataSurfaceContent className="space-y-4">
+          {tasksError ? (
+            <InventoryRetryAlert error={tasksError} onRetry={() => { void refreshTasks(); }} />
+          ) : null}
           {loading ? (
             <LoadingState
               title={t("tasks.loadingTitle")}
@@ -510,6 +519,7 @@ export function TasksPage() {
           {viewMode === "cards" ? (
             <TasksGrid
               loading={loading}
+              requestFailed={requestFailed}
               filteredTasks={pagedTasks}
               pendingAction={pendingAction}
               resetFilters={resetFilters}
@@ -536,6 +546,7 @@ export function TasksPage() {
           ) : (
             <TasksTable
               loading={loading}
+              requestFailed={requestFailed}
               filteredTasks={pagedTasks}
               pendingAction={pendingAction}
               resetFilters={resetFilters}

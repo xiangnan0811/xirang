@@ -69,6 +69,7 @@ export type PendingActionType = { id: number; action: "retry" | "cancel" | "dele
 
 export type TasksViewProps = {
   loading: boolean;
+  requestFailed?: boolean;
   filteredTasks: TaskRecord[];
   pendingAction: PendingActionType;
   resetFilters: () => void;

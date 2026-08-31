@@ -68,11 +68,11 @@ const makePolicy = (overrides?: Partial<EscalationPolicy>): EscalationPolicy => 
   id: 1,
   name: "策略A",
   description: "",
-  min_severity: "warning",
+  minSeverity: "warning",
   enabled: true,
-  levels: [{ delay_seconds: 0, integration_ids: [1], severity_override: "", tags: [] }],
-  created_at: "2026-01-01T00:00:00Z",
-  updated_at: "2026-01-02T00:00:00Z",
+  levels: [{ delaySeconds: 0, integrationIds: [1], severityOverride: "", tags: [] }],
+  createdAt: "2026-01-01T00:00:00Z",
+  updatedAt: "2026-01-02T00:00:00Z",
   ...overrides,
 });
 
@@ -84,7 +84,7 @@ beforeEach(() => {
 describe("SettingsPageEscalation", () => {
   it("renders list of policies (mock returns 2)", async () => {
     const p1 = makePolicy({ id: 1, name: "策略A" });
-    const p2 = makePolicy({ id: 2, name: "策略B", min_severity: "critical" });
+    const p2 = makePolicy({ id: 2, name: "策略B", minSeverity: "critical" });
     mockList.mockResolvedValue([p1, p2]);
 
     render(<SettingsPageEscalation />);

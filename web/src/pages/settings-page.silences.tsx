@@ -151,6 +151,7 @@ function CreateSilenceDialog({ open, onOpenChange, onCreated, token }: CreateSil
       open={open}
       onOpenChange={onOpenChange}
       title={t("silences.new")}
+      description={t("silences.dialogDesc")}
       size="md"
       saving={submitting}
       onSubmit={handleSubmit}

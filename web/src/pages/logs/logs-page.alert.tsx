@@ -68,7 +68,7 @@ export function AlertLogsPanel() {
     return null;
   }
 
-  const isPlatformAlert = result.node_id === 0;
+  const isPlatformAlert = result.nodeId === 0;
 
   if (isPlatformAlert) {
     return (
@@ -78,7 +78,7 @@ export function AlertLogsPanel() {
     );
   }
 
-  const nodeName = nodes.find((n) => n.id === result.node_id)?.name ?? String(result.node_id);
+  const nodeName = nodes.find((n) => n.id === result.nodeId)?.name ?? String(result.nodeId);
 
   return (
     <div className="space-y-3">
@@ -87,7 +87,7 @@ export function AlertLogsPanel() {
           {t("nodeLogs.alertHeader", { id: alertId, node: nodeName })}
         </p>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {result.window_start} — {result.window_end}
+          {result.windowStart} — {result.windowEnd}
         </p>
       </div>
 

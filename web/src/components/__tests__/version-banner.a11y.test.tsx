@@ -35,10 +35,10 @@ describe("VersionBanner a11y", () => {
 
   it("smoke: 提示横幅渲染无 axe 违规", async () => {
     checkVersionMock.mockResolvedValue({
-      current_version: "1.0.0",
-      latest_version: "1.1.0",
-      release_url: "https://example.com/release",
-      update_available: true,
+      currentVersion: "1.0.0",
+      latestVersion: "1.1.0",
+      releaseUrl: "https://example.com/release",
+      updateAvailable: true,
     });
 
     const { container } = render(<VersionBanner />);

@@ -22,14 +22,14 @@ export function VersionBanner() {
 
     void apiClient.checkVersion(token, { signal: controller.signal }).then((result) => {
       if (controller.signal.aborted) return;
-      setCurrentVersion(result.current_version);
-      setLatestVersion(result.latest_version);
-      setReleaseUrl(result.release_url);
+      setCurrentVersion(result.currentVersion);
+      setLatestVersion(result.latestVersion);
+      setReleaseUrl(result.releaseUrl);
 
-      if (result.update_available) {
+      if (result.updateAvailable) {
         try {
           const dismissedVersion = localStorage.getItem(DISMISSED_VERSION_KEY);
-          if (dismissedVersion === result.latest_version) {
+          if (dismissedVersion === result.latestVersion) {
             setDismissed(true);
           } else {
             setUpdateAvailable(true);

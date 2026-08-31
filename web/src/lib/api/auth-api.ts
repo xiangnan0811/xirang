@@ -1,6 +1,7 @@
 import type { LoginResponse } from "@/types/domain";
 import i18n from "@/i18n";
 import { ApiError, request } from "./core";
+import { finiteNumber } from "./number-utils";
 
 export type CaptchaResponse = {
   /** True when login.captcha_enabled — only then are id/question present. */
@@ -20,6 +21,38 @@ type RawCaptchaResponse = {
   second_id?: unknown;
   second_question?: unknown;
 };
+
+type RawLoginResponse = {
+  token?: unknown;
+  user?: {
+    id?: unknown;
+    username?: unknown;
+    role?: unknown;
+    totp_enabled?: unknown;
+  };
+  requires_2fa?: unknown;
+  login_token?: unknown;
+};
+
+function mapLoginRole(raw: unknown): "admin" | "operator" | "viewer" {
+  return raw === "admin" || raw === "operator" || raw === "viewer" ? raw : "viewer";
+}
+
+export function mapLoginResponse(raw: RawLoginResponse): LoginResponse {
+  return {
+    token: typeof raw.token === "string" ? raw.token : undefined,
+    user: raw.user
+      ? {
+          id: finiteNumber(raw.user.id),
+          username: String(raw.user.username ?? ""),
+          role: mapLoginRole(raw.user.role),
+          totpEnabled: Boolean(raw.user.totp_enabled),
+        }
+      : undefined,
+    requires2FA: Boolean(raw.requires_2fa),
+    loginToken: typeof raw.login_token === "string" ? raw.login_token : undefined,
+  };
+}
 
 export type LoginCaptchaPayload = {
   captchaId?: string;
@@ -66,7 +99,7 @@ export function createAuthApi() {
         if (captcha) body.captcha_id = captcha;
         if (captchaAnswer) body.captcha_answer = captchaAnswer;
       }
-      const result = await request<LoginResponse>("/auth/login", {
+      const result = await request<RawLoginResponse>("/auth/login", {
         method: "POST",
         body
       });
@@ -76,7 +109,7 @@ export function createAuthApi() {
       if (!("token" in result) && !("requires_2fa" in result)) {
         throw new ApiError(500, i18n.t("login.errorLoginFormat"), result);
       }
-      return result;
+      return mapLoginResponse(result);
     },
 
     async logout(token: string): Promise<void> {

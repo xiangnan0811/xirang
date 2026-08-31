@@ -5,6 +5,11 @@
 
 set -euo pipefail
 
+ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+if ! bash "$ROOT_DIR/scripts/check-migration-version.sh"; then
+  echo "❌ 迁移版本文档新鲜度检查失败" >&2
+  exit 1
+fi
 WARN=0
 
 # 获取本次变更的文件列表。DOC_FRESHNESS_CHANGED_FILES 仅供脚本自测注入 fixture。

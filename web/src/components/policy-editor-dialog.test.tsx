@@ -63,6 +63,11 @@ vi.mock("react-i18next", () => ({
         "policyEditor.targetPath": "Target Path",
         "policyEditor.targetPathPlaceholder": "/backup",
         "policyEditor.titleCreate": "Create Policy",
+        "policyEditor.drill.title": "Recovery Drill",
+        "policyEditor.drill.unavailableTitle": "Recovery drills are unavailable",
+        "policyEditor.drill.unavailableDesc": "Production restore drills are disabled.",
+        "policyEditor.drill.enable": "Enable automatic recovery drill",
+        "policyEditor.drill.trigger": "Trigger drill manually",
       };
       return labels[key] ?? key;
     },
@@ -123,4 +128,23 @@ describe("PolicyEditorDialog", () => {
 
     expect(screen.queryByText("Insert Template")).not.toBeInTheDocument();
   });
+
+  it("does not present manual or scheduled drill execution as working", async () => {
+    const user = userEvent.setup();
+    render(
+      <PolicyEditorDialog
+        open
+        onOpenChange={vi.fn()}
+        onSave={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Recovery Drill" }));
+
+    expect(screen.getByText("Recovery drills are unavailable")).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Enable automatic recovery drill" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Trigger drill manually" })).not.toBeInTheDocument();
+    expect(apiMocks.triggerDrill).not.toHaveBeenCalled();
+  });
+
 });

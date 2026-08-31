@@ -19,6 +19,8 @@ import { VersionBanner } from "@/components/version-banner";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { usePersistentState } from "@/hooks/use-persistent-state";
+import { useDocumentTitle, titleKeyForPathname } from "@/hooks/use-document-title";
+import { appLayoutKey } from "@/components/layout/app-layout-key";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/auth-context.hooks";
 import { SharedContextProvider } from "@/context/shared-context";
@@ -40,11 +42,12 @@ function AnimatedOutlet() {
   // useOutlet() captures the current outlet element so AnimatePresence can
   // hold on to the exiting page while the entering page mounts.
   const outlet = useOutlet();
+  const layoutKey = appLayoutKey(location.pathname);
 
   return (
     <AnimatePresence mode="wait" initial={false}>
       <motion.div
-        key={location.pathname}
+        key={layoutKey}
         initial={reduced ? false : { opacity: 0, y: 10, scale: 0.99 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={reduced ? { opacity: 0 } : { opacity: 0, y: -6, scale: 0.995 }}
@@ -59,7 +62,9 @@ function AnimatedOutlet() {
 
 function AppShellInner() {
   const { t } = useTranslation();
+  const location = useLocation();
   const navigate = useNavigate();
+  useDocumentTitle(t(titleKeyForPathname(location.pathname)));
   const { username, role, token, logout } = useAuth();
   const demoModeEnabled = import.meta.env.VITE_ENABLE_DEMO_MODE === "true" && !token;
   const displayUsername = username ?? (demoModeEnabled ? t("appShell.demoUser") : null);
@@ -96,6 +101,9 @@ function AppShellInner() {
 
   const nodesContextValue = useMemo(() => ({
     nodes: consoleData.nodes,
+    nodesLoading: consoleData.nodesLoading,
+    nodesError: consoleData.nodesError,
+    nodesLoaded: consoleData.nodesLoaded,
     refreshNodes: consoleData.refreshNodes,
     createNode: consoleData.createNode,
     updateNode: consoleData.updateNode,
@@ -103,10 +111,13 @@ function AppShellInner() {
     deleteNodes: consoleData.deleteNodes,
     testNodeConnection: consoleData.testNodeConnection,
     triggerNodeBackup: consoleData.triggerNodeBackup,
-  }), [consoleData.nodes, consoleData.refreshNodes, consoleData.createNode, consoleData.updateNode, consoleData.deleteNode, consoleData.deleteNodes, consoleData.testNodeConnection, consoleData.triggerNodeBackup]);
+  }), [consoleData.nodes, consoleData.nodesLoading, consoleData.nodesError, consoleData.nodesLoaded, consoleData.refreshNodes, consoleData.createNode, consoleData.updateNode, consoleData.deleteNode, consoleData.deleteNodes, consoleData.testNodeConnection, consoleData.triggerNodeBackup]);
 
   const tasksContextValue = useMemo(() => ({
     tasks: consoleData.tasks,
+    tasksLoading: consoleData.tasksLoading,
+    tasksError: consoleData.tasksError,
+    tasksLoaded: consoleData.tasksLoaded,
     refreshTasks: consoleData.refreshTasks,
     createTask: consoleData.createTask,
     updateTask: consoleData.updateTask,
@@ -119,17 +130,20 @@ function AppShellInner() {
     skipNextTask: consoleData.skipNextTask,
     refreshTask: consoleData.refreshTask,
     fetchTaskLogs: consoleData.fetchTaskLogs,
-  }), [consoleData.tasks, consoleData.refreshTasks, consoleData.createTask, consoleData.updateTask, consoleData.deleteTask, consoleData.triggerTask, consoleData.cancelTask, consoleData.retryTask, consoleData.pauseTask, consoleData.resumeTask, consoleData.skipNextTask, consoleData.refreshTask, consoleData.fetchTaskLogs]);
+  }), [consoleData.tasks, consoleData.tasksLoading, consoleData.tasksError, consoleData.tasksLoaded, consoleData.refreshTasks, consoleData.createTask, consoleData.updateTask, consoleData.deleteTask, consoleData.triggerTask, consoleData.cancelTask, consoleData.retryTask, consoleData.pauseTask, consoleData.resumeTask, consoleData.skipNextTask, consoleData.refreshTask, consoleData.fetchTaskLogs]);
 
   const policiesContextValue = useMemo(() => ({
     policies: consoleData.policies,
+    policiesLoading: consoleData.policiesLoading,
+    policiesError: consoleData.policiesError,
+    policiesLoaded: consoleData.policiesLoaded,
     refreshPolicies: consoleData.refreshPolicies,
     createPolicy: consoleData.createPolicy,
     updatePolicy: consoleData.updatePolicy,
     deletePolicy: consoleData.deletePolicy,
     togglePolicy: consoleData.togglePolicy,
     updatePolicySchedule: consoleData.updatePolicySchedule,
-  }), [consoleData.policies, consoleData.refreshPolicies, consoleData.createPolicy, consoleData.updatePolicy, consoleData.deletePolicy, consoleData.togglePolicy, consoleData.updatePolicySchedule]);
+  }), [consoleData.policies, consoleData.policiesLoading, consoleData.policiesError, consoleData.policiesLoaded, consoleData.refreshPolicies, consoleData.createPolicy, consoleData.updatePolicy, consoleData.deletePolicy, consoleData.togglePolicy, consoleData.updatePolicySchedule]);
 
   const alertsContextValue = useMemo(() => ({
     alerts: consoleData.alerts,

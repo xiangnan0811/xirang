@@ -3,7 +3,7 @@
 [![CI](https://github.com/xiangnan0811/xirang/actions/workflows/ci.yml/badge.svg)](https://github.com/xiangnan0811/xirang/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-轻量、易部署的服务器运维管理平台。Xirang 通过 SSH 集中管理多台服务器，把备份可信度、恢复演练、节点诊断、监控告警、Web 终端和审计日志放在同一个可解释的运维闭环里。
+轻量、易部署的服务器运维管理平台。Xirang 通过 SSH 集中管理多台服务器，把备份可信度、节点诊断、监控告警、Web 终端和审计日志放在同一个可解释的运维闭环里。
 
 > 名字寓意来自《山海经》中的“息壤”：自适应增长、永不耗减。
 
@@ -11,7 +11,7 @@
 
 - **Agentless 管理**：通过 SSH 接入目标服务器，无需在被管理节点安装 Agent。
 - **单容器部署**：前端、后端和 Nginx 打包为 All-in-One 镜像，默认 SQLite 开箱即用，也支持 PostgreSQL。
-- **可信备份与恢复**：支持 Rsync、Restic、Rclone，多级保留策略、恢复演练、快照浏览与文件搜索，并在控制台汇总备份可信度证据。备份资产工作区已具备 GA 就绪门禁：默认关闭；全新安装在盘点、导出根和密钥域通过后即可启用浏览/预览/导出/恢复，已有安装还需管理员确认。可选 Worker 仍不是 GA，也不会发布到 Docker Hub。
+- **可信备份与恢复**：支持 Rsync、Restic、Rclone，多级保留策略、快照浏览与文件搜索，并在控制台汇总备份可信度证据。生产环境恢复演练在安全的源到沙箱传输实现前不可用；历史演练结果仍可查看。备份资产工作区已具备 GA 就绪门禁：默认关闭；全新安装在盘点、导出根和密钥域通过后即可启用浏览/预览/导出/恢复，已有安装还需管理员确认。可选 Worker 仍不是 GA，也不会发布到 Docker Hub。
 - **任务与自动化**：支持 cron 调度、任务依赖链、批量命令、失败重试、事件触发动作编排。
 - **监控、告警与诊断**：节点资源采样、HTTP/TCP uptime 监控、异常检测、SSH Fleet Doctor，以及邮件/Webhook/Slack/Telegram/飞书/钉钉/企业微信通知。
 - **安全与审计**：JWT、RBAC、TOTP 两步验证、登录防护、敏感字段加密、操作审计日志。
@@ -45,7 +45,7 @@ docker compose up -d
 
 ## Demo 模式
 
-前端可通过 `VITE_ENABLE_DEMO_MODE=true` 启用本地 mock 数据演示。Demo 仅用于了解可信备份、恢复演练、SSH 诊断和事件解释流程，不会连接真实服务器、SSH Key 或备份存储，也不代表托管演示服务。
+前端可通过 `VITE_ENABLE_DEMO_MODE=true` 启用本地 mock 数据演示。Demo 仅用于了解可信备份、历史恢复演练证据、SSH 诊断和事件解释流程，不会连接真实服务器、SSH Key 或备份存储，也不代表托管演示服务。
 
 ## 从源码运行
 

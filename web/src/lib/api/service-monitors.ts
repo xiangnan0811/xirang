@@ -2,14 +2,51 @@ import type {
   HeaderKV,
   HttpMethod,
   NewServiceMonitorInput,
-  RawNewServiceMonitorInput,
-  RawServiceMonitor,
-  RawStatusPageItem,
   ServiceMonitorView,
   StatusPageItem,
 } from "@/types/domain";
 import { headersToJSON } from "@/lib/service-monitor-headers";
 import { request } from "./core";
+
+type RawServiceMonitor = {
+  id: number;
+  name: string;
+  description: string;
+  type: string;
+  target: string;
+  interval_seconds: number;
+  timeout_seconds: number;
+  http_method: string;
+  http_expected_status: number;
+  http_headers: string;
+  enabled: boolean;
+  last_status: string;
+  uptime_pct: number;
+  last_checked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type RawNewServiceMonitorInput = {
+  name: string;
+  description?: string;
+  type: "http" | "tcp";
+  target: string;
+  interval_seconds?: number;
+  timeout_seconds?: number;
+  http_method?: string;
+  http_expected_status?: number;
+  http_headers?: string;
+  enabled?: boolean;
+};
+
+type RawStatusPageItem = {
+  name: string;
+  type: string;
+  status: string;
+  uptime_pct: number;
+  last_checked_at: string | null;
+};
 
 const BASE_PATH = "/service-monitors";
 

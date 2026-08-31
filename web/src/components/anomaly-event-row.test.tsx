@@ -23,17 +23,17 @@ vi.mock("react-i18next", () => ({
 
 const baseEvent: AnomalyEvent = {
   id: 1,
-  node_id: 10,
+  nodeId: 10,
   detector: "ewma",
   metric: "cpu_percent",
   severity: "warning",
-  observed_value: 95.5,
-  baseline_value: 30.2,
+  observedValue: 95.5,
+  baselineValue: 30.2,
   sigma: 3.14,
-  forecast_days: null,
-  alert_id: null,
-  raised_alert: true,
-  fired_at: "2026-04-21T10:00:00Z",
+  forecastDays: null,
+  alertId: null,
+  raisedAlert: true,
+  firedAt: "2026-04-21T10:00:00Z",
 };
 
 function renderRow(event: AnomalyEvent) {
@@ -60,14 +60,14 @@ describe("AnomalyEventRow", () => {
     expect(screen.getByText("3.14σ")).toBeInTheDocument();
   });
 
-  it("renders disk forecast event with forecast_days text", () => {
+  it("renders disk forecast event with forecastDays text", () => {
     const event: AnomalyEvent = {
       ...baseEvent,
       id: 2,
       detector: "disk_forecast",
       metric: "disk_used_percent",
       sigma: null,
-      forecast_days: 5.3,
+      forecastDays: 5.3,
     };
     renderRow(event);
 
@@ -75,8 +75,8 @@ describe("AnomalyEventRow", () => {
     expect(screen.getByText(/5\.3.*天爆满|预计.*5\.3/)).toBeInTheDocument();
   });
 
-  it("renders alert link when alert_id is set", () => {
-    const event: AnomalyEvent = { ...baseEvent, id: 3, alert_id: 42 };
+  it("renders alert link when alertId is set", () => {
+    const event: AnomalyEvent = { ...baseEvent, id: 3, alertId: 42 };
     renderRow(event);
 
     const link = screen.getByTestId("anomaly-alert-link-3");
@@ -84,8 +84,8 @@ describe("AnomalyEventRow", () => {
     expect(link).toHaveAttribute("href", "/app/notifications?alert=42");
   });
 
-  it("does not render alert link when alert_id is null", () => {
-    renderRow({ ...baseEvent, id: 4, alert_id: null });
+  it("does not render alert link when alertId is null", () => {
+    renderRow({ ...baseEvent, id: 4, alertId: null });
 
     expect(screen.queryByTestId("anomaly-alert-link-4")).not.toBeInTheDocument();
   });

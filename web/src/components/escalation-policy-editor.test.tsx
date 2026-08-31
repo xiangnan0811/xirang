@@ -96,14 +96,14 @@ const samplePolicy: EscalationPolicy = {
   id: 7,
   name: "测试策略",
   description: "一段描述",
-  min_severity: "critical",
+  minSeverity: "critical",
   enabled: false,
   levels: [
-    { delay_seconds: 0, integration_ids: [1], severity_override: "critical", tags: ["urgent"] },
-    { delay_seconds: 300, integration_ids: [1], severity_override: "", tags: [] },
+    { delaySeconds: 0, integrationIds: [1], severityOverride: "critical", tags: ["urgent"] },
+    { delaySeconds: 300, integrationIds: [1], severityOverride: "", tags: [] },
   ],
-  created_at: "2026-01-01T00:00:00Z",
-  updated_at: "2026-01-01T00:00:00Z",
+  createdAt: "2026-01-01T00:00:00Z",
+  updatedAt: "2026-01-01T00:00:00Z",
 };
 
 function renderEditor(props?: Partial<Parameters<typeof EscalationPolicyEditor>[0]>) {
@@ -153,7 +153,7 @@ describe("EscalationPolicyEditor", () => {
     expect(calledInput).toMatchObject({
       name: "新策略",
       levels: expect.arrayContaining([
-        expect.objectContaining({ delay_seconds: 0, integration_ids: [1] }),
+        expect.objectContaining({ delaySeconds: 0, integrationIds: [1] }),
       ]),
     });
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith(returnedPolicy));

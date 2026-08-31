@@ -64,8 +64,8 @@ function initialFilter(): FilterState {
 }
 
 function filterToQuery(f: FilterState): NodeLogQuery {
-  const q: NodeLogQuery = { page: f.page, page_size: DEFAULT_PAGE_SIZE };
-  if (f.nodeIds.length > 0) q.node_ids = f.nodeIds;
+  const q: NodeLogQuery = { page: f.page, pageSize: DEFAULT_PAGE_SIZE };
+  if (f.nodeIds.length > 0) q.nodeIds = f.nodeIds;
   if (f.sources.length > 0) q.source = f.sources;
   if (f.path.trim()) q.path = f.path.trim();
   if (f.priorities.length > 0) q.priority = f.priorities;
@@ -347,7 +347,7 @@ export function NodeLogsPanel() {
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={!result.has_more || loading}
+                  disabled={!result.hasMore || loading}
                   onClick={() => handlePageChange(filter.page + 1)}
                   aria-label="下一页"
                 >
@@ -393,7 +393,7 @@ function NodeLogsTable({
                 return entry.timestamp;
               }
             })();
-            const nodeName = nodeNameMap.get(entry.node_id) ?? String(entry.node_id);
+            const nodeName = nodeNameMap.get(entry.nodeId) ?? String(entry.nodeId);
             const pathShort = entry.path.length > 28
               ? "…" + entry.path.slice(-26)
               : entry.path;

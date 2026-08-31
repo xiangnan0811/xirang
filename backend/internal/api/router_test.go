@@ -203,6 +203,9 @@ func TestResolveAllowedOrigin(t *testing.T) {
 func TestNewRouterRegisterRoutes(t *testing.T) {
 	g := NewRouter(Dependencies{})
 	routes := g.Routes()
+	if !hasRoute(routes, http.MethodGet, "/readyz") {
+		t.Fatalf("未注册就绪检查接口")
+	}
 	for _, route := range []struct {
 		method string
 		path   string
@@ -336,6 +339,56 @@ func TestNewRouterRegisterRoutes(t *testing.T) {
 	}
 	if hasRoute(routes, http.MethodPost, "/api/v1/backup-repositories/probe") {
 		t.Fatal("standalone backup repository probe route must not be registered")
+	}
+}
+
+func TestHealthAndReadyEndpoints(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open test database: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("open SQL database: %v", err)
+	}
+	defer func() { _ = sqlDB.Close() }()
+
+	router := NewRouter(Dependencies{DB: db})
+	healthReq := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	healthResp := httptest.NewRecorder()
+	router.ServeHTTP(healthResp, healthReq)
+	if healthResp.Code != http.StatusOK {
+		t.Fatalf("healthz status = %d, want %d", healthResp.Code, http.StatusOK)
+	}
+
+	readyReq := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	readyResp := httptest.NewRecorder()
+	router.ServeHTTP(readyResp, readyReq)
+	if readyResp.Code != http.StatusOK {
+		t.Fatalf("readyz status = %d, want %d", readyResp.Code, http.StatusOK)
+	}
+
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close SQL database: %v", err)
+	}
+	readyAfterClose := httptest.NewRecorder()
+	router.ServeHTTP(readyAfterClose, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if readyAfterClose.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz after database close = %d, want %d", readyAfterClose.Code, http.StatusServiceUnavailable)
+	}
+
+	healthAfterClose := httptest.NewRecorder()
+	router.ServeHTTP(healthAfterClose, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if healthAfterClose.Code != http.StatusOK {
+		t.Fatalf("healthz after database close = %d, want %d", healthAfterClose.Code, http.StatusOK)
+	}
+
+	nilReady := httptest.NewRecorder()
+	NewRouter(Dependencies{}).ServeHTTP(nilReady, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if nilReady.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz without database = %d, want %d", nilReady.Code, http.StatusServiceUnavailable)
 	}
 }
 

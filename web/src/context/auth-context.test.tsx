@@ -200,8 +200,8 @@ describe("AuthProvider", () => {
     saveStepUpProof(STEP_UP_ACTIONS.taskManualTrigger, "cached-step-up-marker", Date.now() + 60_000);
     requestStepUpProofMock.mockResolvedValueOnce({
       proof: "one-time-step-up-marker",
-      expires_at: new Date(Date.now() + 60_000).toISOString(),
-      proof_ttl_seconds: 60,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      proofTtlSeconds: 60,
     });
 
     render(
@@ -226,8 +226,8 @@ describe("AuthProvider", () => {
     const user = userEvent.setup();
     requestStepUpProofMock.mockResolvedValueOnce({
       proof: "fresh-secret-proof-marker",
-      expires_at: new Date(Date.now() + 45 * 60_000).toISOString(),
-      proof_ttl_seconds: 45 * 60,
+      expiresAt: new Date(Date.now() + 45 * 60_000).toISOString(),
+      proofTtlSeconds: 45 * 60,
     });
     render(
       <AuthProvider>
@@ -255,8 +255,8 @@ describe("AuthProvider", () => {
     const user = userEvent.setup();
     requestStepUpProofMock.mockResolvedValueOnce({
       proof: "invalid-expiry-proof-marker",
-      expires_at: "not-an-expiry",
-      proof_ttl_seconds: 45 * 60,
+      expiresAt: "not-an-expiry",
+      proofTtlSeconds: 45 * 60,
     });
     render(
       <AuthProvider>
@@ -276,8 +276,8 @@ describe("AuthProvider", () => {
     const user = userEvent.setup();
     requestStepUpProofMock.mockResolvedValueOnce({
       proof: "shared-secret-proof-marker",
-      expires_at: new Date(Date.now() + 45 * 60_000).toISOString(),
-      proof_ttl_seconds: 45 * 60,
+      expiresAt: new Date(Date.now() + 45 * 60_000).toISOString(),
+      proofTtlSeconds: 45 * 60,
     });
     render(
       <AuthProvider>
@@ -308,8 +308,8 @@ describe("AuthProvider", () => {
       const user = userEvent.setup();
       const pending = deferred<{
         proof: string;
-        expires_at: string;
-        proof_ttl_seconds: number;
+        expiresAt: string;
+        proofTtlSeconds: number;
       }>();
       requestStepUpProofMock.mockReturnValueOnce(pending.promise);
       render(
@@ -328,8 +328,8 @@ describe("AuthProvider", () => {
       await act(async () => {
         pending.resolve({
           proof: "stale-boundary-proof",
-          expires_at: new Date(Date.now() + 45 * 60_000).toISOString(),
-          proof_ttl_seconds: 45 * 60,
+          expiresAt: new Date(Date.now() + 45 * 60_000).toISOString(),
+          proofTtlSeconds: 45 * 60,
         });
         await pending.promise;
       });

@@ -313,6 +313,23 @@ describe("BackupsPage", () => {
     expect(await screen.findByRole("region", { name: /File results|文件结果/ })).toBeInTheDocument();
   });
 
+  it("does not refetch parent backup health when switching nested tabs", async () => {
+    const user = userEvent.setup();
+    getBackupHealthMock.mockResolvedValue(backupHealth);
+
+    renderBackups("/app/backups/data");
+
+    expect(await screen.findByRole("tab", { name: /Files|文件/ })).toHaveAttribute("aria-selected", "true");
+    const healthCalls = getBackupHealthMock.mock.calls.length;
+    expect(healthCalls).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("tab", { name: /Recovery|恢复/ }));
+    expect(await screen.findByRole("tab", { name: /Recovery|恢复/ })).toHaveAttribute("aria-selected", "true");
+    await user.click(screen.getByRole("tab", { name: /Files|文件/ }));
+    expect(await screen.findByRole("tab", { name: /Files|文件/ })).toHaveAttribute("aria-selected", "true");
+    expect(getBackupHealthMock).toHaveBeenCalledTimes(healthCalls);
+  });
+
   it("keeps a blocked file-source projection out of the searchable workspace", async () => {
     getBackupHealthMock.mockResolvedValue(backupHealth);
     listBackupFileSourceNodesMock.mockRejectedValue(new Error("synthetic source unavailable"));

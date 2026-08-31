@@ -3,6 +3,9 @@ import type { LogEvent, NewTaskInput, TaskRecord } from "@/types/domain";
 
 export interface TasksContextValue {
   tasks: TaskRecord[];
+  tasksLoading: boolean;
+  tasksError: string | null;
+  tasksLoaded: boolean;
   refreshTasks: (options?: { limit?: number; offset?: number }) => Promise<void>;
   createTask: (input: NewTaskInput) => Promise<number>;
   updateTask: (taskId: number, input: NewTaskInput) => Promise<void>;
@@ -18,6 +21,6 @@ export interface TasksContextValue {
     taskId: number,
     options?: { beforeId?: number; limit?: number }
   ) => Promise<LogEvent[]>;
-}
+};
 
 export const TasksContext = createContext<TasksContextValue | null>(null);

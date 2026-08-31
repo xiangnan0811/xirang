@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"xirang/backend/internal/model"
 	nodePkg "xirang/backend/internal/node"
 	gormrepo "xirang/backend/internal/repository/gorm"
+	"xirang/backend/internal/secure"
 	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
@@ -405,5 +407,65 @@ func TestParseDiskProbeAcceptsFullUsage(t *testing.T) {
 	}
 	if used != 100 || total != 100 {
 		t.Fatalf("解析结果不符合预期，used=%d total=%d", used, total)
+	}
+}
+
+func TestNodeUpdateResponseUsesNestedNodeAndOptionalWarning(t *testing.T) {
+	db := openNodeHandlerTestDB(t)
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_NODE_UPDATE_DATA_KEY_32_BYTES")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+	if err := db.AutoMigrate(&model.Node{}, &model.SSHKey{}); err != nil {
+		t.Fatalf("初始化节点更新测试表失败: %v", err)
+	}
+
+	node := model.Node{
+		Name:      "node-update-before",
+		Host:      "10.0.0.31",
+		Port:      22,
+		Username:  "root",
+		AuthType:  "password",
+		Password:  "FAKE_NODE_UPDATE_PASSWORD_FOR_TEST_ONLY",
+		BackupDir: "node-update-before",
+		Status:    "offline",
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+
+	router := gin.New()
+	handler := NewNodeHandler(db, nil, nodePkg.NewNodeService(gormrepo.NewNodeRepository(db)))
+	router.PUT("/nodes/:id", handler.Update)
+	body := `{"name":"node-update-after","host":"10.0.0.32","port":22,"username":"root","auth_type":"password","password":"FAKE_NODE_UPDATE_PASSWORD_FOR_TEST_ONLY","backup_dir":"node-update-after"}`
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/nodes/%d", node.ID), bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("节点更新期望 200，实际 status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			Node    model.Node `json:"node"`
+			Warning string     `json:"warning"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析节点更新响应失败: %v", err)
+	}
+	if envelope.Code != http.StatusOK {
+		t.Fatalf("节点更新响应 code 不符合预期: %+v", envelope)
+	}
+	if envelope.Data.Node.ID != node.ID || envelope.Data.Node.Name != "node-update-after" || envelope.Data.Node.BackupDir != "node-update-after" {
+		t.Fatalf("响应 data.node 未包含更新后的节点: %+v", envelope.Data.Node)
+	}
+	wantWarning := "备份目录标识已更改，旧路径 /backup/node-update-before 下的数据不会自动迁移"
+	if envelope.Data.Warning != wantWarning {
+		t.Fatalf("响应 warning 不符合预期，want=%q got=%q", wantWarning, envelope.Data.Warning)
+	}
+	if strings.Contains(resp.Body.String(), "FAKE_NODE_UPDATE_PASSWORD_FOR_TEST_ONLY") {
+		t.Fatalf("节点更新响应泄漏敏感密码: %s", resp.Body.String())
 	}
 }

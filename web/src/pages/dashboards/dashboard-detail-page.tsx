@@ -13,6 +13,7 @@ import { PanelGrid, type LayoutItem } from "./panel-grid";
 import { PanelCard } from "./panel-card";
 import { PanelEditorDialog } from "./panel-editor-dialog";
 import { Button } from "@/components/ui/button";
+import { PageHero } from "@/components/ui/page-hero";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -37,7 +38,7 @@ const AUTO_REFRESH_OPTIONS = [
 
 function DetailPageSkeleton() {
   return (
-    <div className="flex flex-col gap-4 p-6">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center gap-3">
         <Skeleton className="h-8 w-8 rounded" />
         <Skeleton className="h-6 w-48" />
@@ -140,8 +141,8 @@ export function DashboardDetailPage() {
   // 不替换鼠标拖拽，只是补足键盘可达通路；变更同样会触发 layoutDirty，由"保存布局"持久化。
   function getOrderedPanels(): Panel[] {
     return [...(dashboard?.panels ?? [])].sort((a, b) => {
-      if (a.layout_y !== b.layout_y) return a.layout_y - b.layout_y;
-      return a.layout_x - b.layout_x;
+      if (a.layoutY !== b.layoutY) return a.layoutY - b.layoutY;
+      return a.layoutX - b.layoutX;
     });
   }
 
@@ -159,27 +160,27 @@ export function DashboardDetailPage() {
       if (p.id === panel.id) {
         return {
           id: p.id,
-          layout_x: p.layout_x,
-          layout_y: neighbor.layout_y,
-          layout_w: p.layout_w,
-          layout_h: p.layout_h,
+          layoutX: p.layoutX,
+          layoutY: neighbor.layoutY,
+          layoutW: p.layoutW,
+          layoutH: p.layoutH,
         };
       }
       if (p.id === neighbor.id) {
         return {
           id: p.id,
-          layout_x: p.layout_x,
-          layout_y: panel.layout_y,
-          layout_w: p.layout_w,
-          layout_h: p.layout_h,
+          layoutX: p.layoutX,
+          layoutY: panel.layoutY,
+          layoutW: p.layoutW,
+          layoutH: p.layoutH,
         };
       }
       return {
         id: p.id,
-        layout_x: p.layout_x,
-        layout_y: p.layout_y,
-        layout_w: p.layout_w,
-        layout_h: p.layout_h,
+        layoutX: p.layoutX,
+        layoutY: p.layoutY,
+        layoutW: p.layoutW,
+        layoutH: p.layoutH,
       };
     });
     setPendingLayout(items);
@@ -209,116 +210,99 @@ export function DashboardDetailPage() {
         if (!override) return p;
         return {
           ...p,
-          layout_x: override.layout_x,
-          layout_y: override.layout_y,
-          layout_w: override.layout_w,
-          layout_h: override.layout_h,
+          layoutX: override.layoutX,
+          layoutY: override.layoutY,
+          layoutW: override.layoutW,
+          layoutH: override.layoutH,
         };
       })
     : rawPanels;
 
   return (
-    <div className="flex flex-col gap-0 min-h-screen">
-      {/* ── 页头 ──────────────────────────────────────────────── */}
-      <div className="flex flex-col gap-1 border-b border-border px-6 py-4">
-        <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7"
-            onClick={() => navigate("/app/dashboards")}
-            aria-label={t("common.back")}
-          >
-            <ArrowLeft className="size-4" />
-          </Button>
-          <div className="flex flex-col">
-            <h1 className="text-base font-semibold leading-tight">{dashboard.name}</h1>
-            {dashboard.description && (
-              <p className="text-xs text-muted-foreground">{dashboard.description}</p>
-            )}
-          </div>
-        </div>
-
-        {/* ── 工具栏 ────────────────────────────────────────────── */}
-        <div className="flex flex-wrap items-center gap-2 pt-2">
-          {/* 时间范围 */}
-          <Select
-            value={dashboard.time_range}
-            onChange={(e) => setTimeRange(e.target.value as DashboardTimeRange)}
-            className="h-7 text-xs w-32"
-            aria-label={t("dashboards.fields.timeRange")}
-          >
-            {TIME_RANGE_OPTIONS.map((r) => (
-              <option key={r.value} value={r.value}>
-                {t(r.labelKey)}
-              </option>
-            ))}
-          </Select>
-
-          {/* 自动刷新 */}
-          <Select
-            value={String(dashboard.auto_refresh_seconds)}
-            onChange={(e) => updateAutoRefresh(Number(e.target.value))}
-            className="h-7 text-xs w-24"
-            aria-label={t("dashboards.fields.autoRefresh")}
-          >
-            {AUTO_REFRESH_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {t(o.labelKey)}
-              </option>
-            ))}
-          </Select>
-
-          {/* 手动刷新 */}
-          <Button
-            variant="outline"
-            size="icon"
-            className="size-7"
-            onClick={refresh}
-            aria-label={t("common.refresh")}
-          >
-            <RefreshCw className="size-3.5" />
-          </Button>
-
-          {/* 编辑模式切换 */}
-          <Button
-            variant={editMode ? "default" : "outline"}
-            size="sm"
-            className="h-7 text-xs"
-            onClick={() => {
-              setEditMode((v) => !v);
-              if (editMode && layoutDirty) {
-                // 退出编辑时放弃未保存布局
-                setLayoutDirty(false);
-              }
-            }}
-            aria-pressed={editMode}
-          >
-            {editMode
-              ? t("dashboards.editToggle.on")
-              : t("dashboards.editToggle.off")}
-          </Button>
-
-          {/* 保存布局（仅在 dirty 时显示） */}
-          {editMode && layoutDirty && (
+    <div className="animate-fade-in space-y-5">
+      <PageHero
+        title={dashboard.name}
+        subtitle={dashboard.description || undefined}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
             <Button
-              variant="default"
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              onClick={() => navigate("/app/dashboards")}
+              aria-label={t("common.back")}
+            >
+              <ArrowLeft className="size-4" />
+            </Button>
+            <Select
+              value={dashboard.timeRange}
+              onChange={(e) => setTimeRange(e.target.value as DashboardTimeRange)}
+              className="h-7 text-xs w-32"
+              aria-label={t("dashboards.fields.timeRange")}
+            >
+              {TIME_RANGE_OPTIONS.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {t(r.labelKey)}
+                </option>
+              ))}
+            </Select>
+            <Select
+              value={String(dashboard.autoRefreshSeconds)}
+              onChange={(e) => updateAutoRefresh(Number(e.target.value))}
+              className="h-7 text-xs w-24"
+              aria-label={t("dashboards.fields.autoRefresh")}
+            >
+              {AUTO_REFRESH_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {t(o.labelKey)}
+                </option>
+              ))}
+            </Select>
+            <Button
+              variant="outline"
+              size="icon"
+              className="size-7"
+              onClick={refresh}
+              aria-label={t("common.refresh")}
+            >
+              <RefreshCw className="size-3.5" />
+            </Button>
+            <Button
+              variant={editMode ? "default" : "outline"}
               size="sm"
               className="h-7 text-xs"
-              onClick={handleSaveLayout}
-              disabled={savingLayout}
+              onClick={() => {
+                setEditMode((v) => !v);
+                if (editMode && layoutDirty) {
+                  setLayoutDirty(false);
+                }
+              }}
+              aria-pressed={editMode}
             >
-              <Save className="mr-1.5 size-3.5" />
-              {savingLayout
-                ? t("dashboards.panel.savingLayout")
-                : t("common.save")}
+              {editMode
+                ? t("dashboards.editToggle.on")
+                : t("dashboards.editToggle.off")}
             </Button>
-          )}
-        </div>
-      </div>
+            {editMode && layoutDirty && (
+              <Button
+                variant="default"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={handleSaveLayout}
+                disabled={savingLayout}
+              >
+                <Save className="mr-1.5 size-3.5" />
+                {savingLayout
+                  ? t("dashboards.panel.savingLayout")
+                  : t("common.save")}
+              </Button>
+            )}
+          </div>
+        }
+      />
 
       {/* ── 面板网格 ──────────────────────────────────────────────── */}
-      <div className="flex-1 p-4">
+      <div>
         {panels.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
             <p className="text-sm text-muted-foreground">
@@ -339,8 +323,8 @@ export function DashboardDetailPage() {
           >
             {(panel) => {
               const ordered = [...panels].sort((a, b) => {
-                if (a.layout_y !== b.layout_y) return a.layout_y - b.layout_y;
-                return a.layout_x - b.layout_x;
+                if (a.layoutY !== b.layoutY) return a.layoutY - b.layoutY;
+                return a.layoutX - b.layoutX;
               });
               const idx = ordered.findIndex((p) => p.id === panel.id);
               return (

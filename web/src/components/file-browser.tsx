@@ -99,7 +99,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
   };
 
   const handleEntryClick = (entry: FileEntry) => {
-    if (entry.is_dir) {
+    if (entry.isDir) {
       handleNavigate(entry.path);
     } else {
       setPreviewPath(entry.path);
@@ -112,7 +112,7 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
 
   // 目录优先，文件其次，各自按名称排序
   const sorted = [...entries].sort((a, b) => {
-    if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
 
@@ -216,28 +216,28 @@ export function FileBrowser({ fetchDir, fetchContent, rootPath = "/", className 
                       if (e.key === "Enter" || e.key === " ") handleEntryClick(entry);
                     }}
                     role="button"
-                    aria-label={`${entry.is_dir ? t('fileBrowser.enterDir') : t('fileBrowser.previewFile')} ${entry.name}`}
+                    aria-label={`${entry.isDir ? t('fileBrowser.enterDir') : t('fileBrowser.previewFile')} ${entry.name}`}
                   >
                     <td className="px-4 py-2">
                       <div className="flex items-center gap-2">
-                        {entry.is_dir ? (
+                        {entry.isDir ? (
                           <FolderOpen className="size-4 shrink-0 text-warning" />
                         ) : (
                           <File className="size-4 shrink-0 text-muted-foreground" />
                         )}
-                        <span className={`truncate max-w-[240px] ${entry.is_dir ? "font-medium" : ""}`}>
+                        <span className={`truncate max-w-[240px] ${entry.isDir ? "font-medium" : ""}`}>
                           {entry.name}
                         </span>
                       </div>
                     </td>
                     <td className="hidden px-4 py-2 text-right tabular-nums text-muted-foreground sm:table-cell">
-                      {formatSize(entry.size, entry.is_dir)}
+                      {formatSize(entry.size, entry.isDir)}
                     </td>
                     <td className="hidden px-4 py-2 font-mono text-xs text-muted-foreground md:table-cell">
                       {entry.mode}
                     </td>
                     <td className="hidden px-4 py-2 text-muted-foreground lg:table-cell">
-                      {formatModTime(entry.mod_time)}
+                      {formatModTime(entry.modTime)}
                     </td>
                   </tr>
                 ))}

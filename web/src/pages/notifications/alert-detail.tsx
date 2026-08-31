@@ -18,9 +18,9 @@ function EscalationEventItem({
   integrationNameMap: Map<number, string>;
 }) {
   const { t } = useTranslation();
-  const levelLabel = t("escalation.timeline.levelLabel", { n: event.level_index + 1 });
-  const firedAt = new Date(event.fired_at).toLocaleString();
-  const silenced = event.integration_ids.length === 0;
+  const levelLabel = t("escalation.timeline.levelLabel", { n: event.levelIndex + 1 });
+  const firedAt = new Date(event.firedAt).toLocaleString();
+  const silenced = event.integrationIds.length === 0;
 
   return (
     <li className="rounded-md border border-border bg-card px-3 py-2 text-sm">
@@ -34,23 +34,23 @@ function EscalationEventItem({
       {!silenced && (
         <p className="mt-1 text-xs text-muted-foreground">
           {t("escalation.timeline.integrations")}:{" "}
-          {event.integration_ids
+          {event.integrationIds
             .map((id) => integrationNameMap.get(id) ?? String(id))
             .join(", ")}
         </p>
       )}
-      {event.severity_before !== event.severity_after && (
+      {event.severityBefore !== event.severityAfter && (
         <p className="mt-0.5 text-xs">
           {t("escalation.timeline.severityChange", {
-            before: event.severity_before,
-            after: event.severity_after,
+            before: event.severityBefore,
+            after: event.severityAfter,
           })}
         </p>
       )}
-      {event.tags_added.length > 0 && (
+      {event.tagsAdded.length > 0 && (
         <p className="mt-0.5 text-xs text-muted-foreground">
           {t("escalation.timeline.tagsAdded", {
-            tags: event.tags_added.join(", "),
+            tags: event.tagsAdded.join(", "),
           })}
         </p>
       )}
@@ -97,7 +97,7 @@ export function AlertEscalationTimeline({
   const integrationNameMap = new Map<number, string>();
   for (const policy of policies) {
     for (const level of policy.levels) {
-      for (const id of level.integration_ids) {
+      for (const id of level.integrationIds) {
         if (!integrationNameMap.has(id)) {
           integrationNameMap.set(id, `#${id}`);
         }
@@ -154,7 +154,7 @@ export function AnomalyAlertContext({
   useEffect(() => {
     if (!detector || !nodeId) return;
     let cancelled = false;
-    apiClient.listAnomalyEvents(token, { node_id: nodeId, detector, page_size: 1 }).then(
+    apiClient.listAnomalyEvents(token, { nodeId: nodeId, detector, pageSize: 1 }).then(
       (res) => {
         if (!cancelled) {
           setEvent(res.data[0] ?? null);
@@ -195,10 +195,10 @@ export function AnomalyAlertContext({
       ) : (
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
           <dt className="text-muted-foreground">{t("anomaly.alertDetail.baseline")}</dt>
-          <dd>{event.baseline_value.toFixed(2)}</dd>
+          <dd>{event.baselineValue.toFixed(2)}</dd>
 
           <dt className="text-muted-foreground">{t("anomaly.alertDetail.observed")}</dt>
-          <dd>{event.observed_value.toFixed(2)}</dd>
+          <dd>{event.observedValue.toFixed(2)}</dd>
 
           {detector === "ewma" && event.sigma != null && (
             <>
@@ -207,10 +207,10 @@ export function AnomalyAlertContext({
             </>
           )}
 
-          {detector === "disk_forecast" && event.forecast_days != null && (
+          {detector === "disk_forecast" && event.forecastDays != null && (
             <>
               <dt className="text-muted-foreground">{t("anomaly.alertDetail.forecastDays")}</dt>
-              <dd>{event.forecast_days.toFixed(1)}</dd>
+              <dd>{event.forecastDays.toFixed(1)}</dd>
             </>
           )}
         </dl>

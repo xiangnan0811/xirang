@@ -49,7 +49,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
       .then((data) => {
         if (cancelled) return;
         setSecret(data.secret);
-        setQrUrl(data.qr_url);
+        setQrUrl(data.qrUrl);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -99,7 +99,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
     setError(null);
     try {
       const data = await apiClient.totpVerify(token, verifyCode);
-      setRecoveryCodes(data.recovery_codes);
+      setRecoveryCodes(data.recoveryCodes);
       setStep("recovery");
     } catch (err) {
       const msg = err instanceof ApiError

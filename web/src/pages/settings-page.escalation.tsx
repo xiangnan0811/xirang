@@ -90,7 +90,7 @@ export function SettingsPageEscalation() {
       const input: EscalationPolicyInput = {
         name: policy.name,
         description: policy.description,
-        min_severity: policy.min_severity,
+        minSeverity: policy.minSeverity,
         enabled: checked,
         levels: policy.levels,
       };
@@ -167,8 +167,8 @@ export function SettingsPageEscalation() {
                   <tr key={policy.id} className="border-b border-border/50 last:border-0">
                     <td className="py-2 pr-4 font-medium">{policy.name}</td>
                     <td className="py-2 pr-4">
-                      <Badge tone={severityBadgeTone(policy.min_severity)}>
-                        {policy.min_severity}
+                      <Badge tone={severityBadgeTone(policy.minSeverity)}>
+                        {policy.minSeverity}
                       </Badge>
                     </td>
                     <td className="py-2 pr-4 text-muted-foreground">{policy.levels.length}</td>
@@ -181,7 +181,7 @@ export function SettingsPageEscalation() {
                       />
                     </td>
                     <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">
-                      {formatDate(policy.updated_at)}
+                      {formatDate(policy.updatedAt)}
                     </td>
                     <td className="py-2">
                       <div className="flex items-center gap-1">

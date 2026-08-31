@@ -201,6 +201,7 @@ export function NodeEditorDialog({
       submitLabel={t('nodeEditor.submitLabel')}
       extraFooter={isEditing ? (
         <Button
+          type="button"
           variant="outline"
           onClick={handleTestConnection}
           disabled={saving}

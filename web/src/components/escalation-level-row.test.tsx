@@ -28,9 +28,9 @@ vi.mock("react-i18next", () => ({
 }));
 
 const makeLevel = (overrides?: Partial<EscalationLevel>): EscalationLevel => ({
-  delay_seconds: 0,
-  integration_ids: [],
-  severity_override: "",
+  delaySeconds: 0,
+  integrationIds: [],
+  severityOverride: "",
   tags: [],
   ...overrides,
 });
@@ -40,11 +40,11 @@ const integrations: IntegrationChannel[] = [
 ];
 
 describe("EscalationLevelRow", () => {
-  it("changing delay calls onChange with new delay_seconds", () => {
+  it("changing delay calls onChange with new delaySeconds", () => {
     const onChange = vi.fn();
     render(
       <EscalationLevelRow
-        level={makeLevel({ delay_seconds: 60 })}
+        level={makeLevel({ delaySeconds: 60 })}
         index={1}
         isFirst={false}
         integrations={integrations}
@@ -54,14 +54,14 @@ describe("EscalationLevelRow", () => {
     const input = screen.getByLabelText("延迟 (秒)");
     fireEvent.change(input, { target: { value: "120" } });
     expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({ delay_seconds: 120 })
+      expect.objectContaining({ delaySeconds: 120 })
     );
   });
 
   it("first level delay input is disabled when isFirst=true", () => {
     render(
       <EscalationLevelRow
-        level={makeLevel({ delay_seconds: 0 })}
+        level={makeLevel({ delaySeconds: 0 })}
         index={0}
         isFirst={true}
         integrations={integrations}

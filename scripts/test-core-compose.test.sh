@@ -82,8 +82,11 @@ fi
 if grep -Eq -- '(^| )(system prune|container prune|rm -f|--profile asset-worker)( |$)' "$DOCKER_LOG"; then
   fail "smoke used broad cleanup or enabled the Worker profile"
 fi
+if ! grep -Fq -- 'http://127.0.0.1:10761/readyz' "$CURL_LOG"; then
+  fail "smoke did not probe the readiness endpoint"
+fi
 if ! grep -Fq -- 'http://127.0.0.1:10761/healthz' "$CURL_LOG"; then
-  fail "smoke did not probe the unchanged core health endpoint"
+  fail "smoke did not preserve the external liveness endpoint"
 fi
 if ! grep -Fq -- 'logs core-smoke-container' "$DOCKER_LOG"; then
   fail "smoke did not inspect Core logs for disabled processing startup noise"

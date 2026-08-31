@@ -55,11 +55,11 @@ run_in_dir "$BACKEND_DIR" go test ./...
 section "Backend: go build ./..."
 run_in_dir "$BACKEND_DIR" go build ./...
 
-section "Backend: govulncheck ./... (warning only)"
-run_in_dir "$BACKEND_DIR" go run golang.org/x/vuln/cmd/govulncheck@latest ./... || echo "[WARN] govulncheck found vulnerabilities (non-blocking)"
+section "Backend: govulncheck ./..."
+run_in_dir "$BACKEND_DIR" go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
-section "Frontend: npm audit --audit-level=moderate (warning only)"
-run_in_dir "$WEB_DIR" npm audit --audit-level=moderate || echo "[WARN] npm audit found vulnerabilities (non-blocking)"
+section "Frontend: npm audit --audit-level=moderate"
+run_in_dir "$WEB_DIR" npm audit --audit-level=moderate
 
 section "Frontend: npm run check"
 run_in_dir "$WEB_DIR" npm run check
@@ -72,6 +72,9 @@ run_script "$ROOT_DIR/scripts/check-doc-freshness.sh"
 
 section "Docs: freshness self-test"
 run_script "$ROOT_DIR/scripts/check-doc-freshness.test.sh"
+
+section "Docs: migration version freshness self-test"
+run_script "$ROOT_DIR/scripts/check-migration-version.test.sh"
 
 section "Migrations: UTC safety check"
 run_script "$ROOT_DIR/scripts/check-migration-utc-safety.sh"

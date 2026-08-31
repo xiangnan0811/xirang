@@ -14,11 +14,14 @@ import (
 	"time"
 
 	"xirang/backend/internal/credentialaudit"
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/mattn/go-sqlite3"
 	"gorm.io/gorm"
 )
 
@@ -29,6 +32,39 @@ type SSHKeyHandler struct {
 func NewSSHKeyHandler(db *gorm.DB) *SSHKeyHandler {
 	return &SSHKeyHandler{db: db}
 }
+
+// isSSHKeyDuplicateError classifies driver-level unique violations without
+// exposing their SQL, table, or constraint details to API clients.
+func isSSHKeyDuplicateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
+	}
+	var sqliteErr sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		return sqliteErr.Code == sqlite3.ErrConstraint && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique
+	}
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+func logSSHKeyPersistenceError(operation, name string, err error) {
+	logger.Module("api").Error().
+		Err(err).
+		Str("operation", operation).
+		Str("ssh_key_name", name).
+		Msg("SSH key persistence failed")
+}
+
+const (
+	sshKeyDuplicateMessage    = "名称已存在"
+	sshKeyPersistenceMessage  = "服务器内部错误"
+	sshKeyValidationErrorCode = "validation_error"
+	sshKeyDuplicateErrorCode  = "duplicate_name"
+	sshKeyPersistenceCode     = "persistence_error"
+)
 
 type sshKeyScopeRequest struct {
 	Disabled        bool       `json:"disabled"`
@@ -318,7 +354,12 @@ func (h *SSHKeyHandler) Create(c *gin.Context) {
 		return
 	}
 	if err := h.db.Create(&item).Error; err != nil {
-		respondBadRequest(c, err.Error())
+		if isSSHKeyDuplicateError(err) {
+			respondConflict(c, sshKeyDuplicateMessage)
+			return
+		}
+		logSSHKeyPersistenceError("create", normalizedName, err)
+		respondInternalError(c, err)
 		return
 	}
 	respondCreated(c, toSSHKeyResponse(item))
@@ -352,7 +393,12 @@ func (h *SSHKeyHandler) Update(c *gin.Context) {
 
 	var item model.SSHKey
 	if err := h.db.First(&item, id).Error; err != nil {
-		respondNotFound(c, "ssh key 不存在")
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "ssh key 不存在")
+			return
+		}
+		logSSHKeyPersistenceError("load", strconv.FormatUint(uint64(id), 10), err)
+		respondInternalError(c, err)
 		return
 	}
 
@@ -400,7 +446,12 @@ func (h *SSHKeyHandler) Update(c *gin.Context) {
 		return
 	}
 	if err := h.db.Save(&item).Error; err != nil {
-		respondBadRequest(c, err.Error())
+		if isSSHKeyDuplicateError(err) {
+			respondConflict(c, sshKeyDuplicateMessage)
+			return
+		}
+		logSSHKeyPersistenceError("update", normalizedName, err)
+		respondInternalError(c, err)
 		return
 	}
 	respondOK(c, toSSHKeyResponse(item))
@@ -608,9 +659,10 @@ func (h *SSHKeyHandler) BatchCreate(c *gin.Context) {
 	}
 
 	type batchResult struct {
-		Name   string `json:"name"`
-		Status string `json:"status"` // created | skipped | error
-		Error  string `json:"error,omitempty"`
+		Name      string `json:"name"`
+		Status    string `json:"status"` // created | skipped | error
+		ErrorCode string `json:"error_code,omitempty"`
+		Error     string `json:"error,omitempty"`
 	}
 
 	results := make([]batchResult, 0, len(req.Keys))
@@ -619,15 +671,34 @@ func (h *SSHKeyHandler) BatchCreate(c *gin.Context) {
 			k.Name, k.Username, k.KeyType, k.PrivateKey,
 		)
 		if err != nil {
-			results = append(results, batchResult{Name: strings.TrimSpace(k.Name), Status: "error", Error: err.Error()})
+			results = append(results, batchResult{
+				Name:      strings.TrimSpace(k.Name),
+				Status:    "error",
+				ErrorCode: sshKeyValidationErrorCode,
+				Error:     err.Error(),
+			})
 			continue
 		}
 
 		// 检查名称唯一性
 		var exists int64
-		h.db.Model(&model.SSHKey{}).Where("name = ?", normalizedName).Count(&exists)
+		if err := h.db.Model(&model.SSHKey{}).Where("name = ?", normalizedName).Count(&exists).Error; err != nil {
+			logSSHKeyPersistenceError("check-duplicate", normalizedName, err)
+			results = append(results, batchResult{
+				Name:      normalizedName,
+				Status:    "error",
+				ErrorCode: sshKeyPersistenceCode,
+				Error:     sshKeyPersistenceMessage,
+			})
+			continue
+		}
 		if exists > 0 {
-			results = append(results, batchResult{Name: normalizedName, Status: "skipped", Error: "名称已存在"})
+			results = append(results, batchResult{
+				Name:      normalizedName,
+				Status:    "skipped",
+				ErrorCode: sshKeyDuplicateErrorCode,
+				Error:     sshKeyDuplicateMessage,
+			})
 			continue
 		}
 
@@ -639,17 +710,38 @@ func (h *SSHKeyHandler) BatchCreate(c *gin.Context) {
 			Fingerprint: generateFingerprint(preparedKey),
 		}
 		if err := applySSHKeyScopeInput(&item, k.sshKeyScopeRequest); err != nil {
-			results = append(results, batchResult{Name: normalizedName, Status: "error", Error: err.Error()})
+			results = append(results, batchResult{
+				Name:      normalizedName,
+				Status:    "error",
+				ErrorCode: sshKeyValidationErrorCode,
+				Error:     err.Error(),
+			})
 			continue
 		}
 		if err := h.db.Create(&item).Error; err != nil {
-			results = append(results, batchResult{Name: normalizedName, Status: "error", Error: err.Error()})
+			if isSSHKeyDuplicateError(err) {
+				results = append(results, batchResult{
+					Name:      normalizedName,
+					Status:    "skipped",
+					ErrorCode: sshKeyDuplicateErrorCode,
+					Error:     sshKeyDuplicateMessage,
+				})
+				continue
+			}
+			logSSHKeyPersistenceError("batch-create", normalizedName, err)
+			results = append(results, batchResult{
+				Name:      normalizedName,
+				Status:    "error",
+				ErrorCode: sshKeyPersistenceCode,
+				Error:     sshKeyPersistenceMessage,
+			})
 			continue
 		}
 		results = append(results, batchResult{Name: normalizedName, Status: "created"})
 	}
 
 	respondOK(c, results)
+
 }
 
 // Export godoc

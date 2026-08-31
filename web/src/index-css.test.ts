@@ -233,3 +233,45 @@ describe("global CSS motion and decoration guardrails", () => {
     }]);
   });
 });
+
+describe("DESIGN.md dark tokens stay aligned with index.css", () => {
+  const designMd = readFileSync(path.join(process.cwd(), "..", "DESIGN.md"), "utf8");
+  const darkBlock = css.match(/\.dark\s*\{([\s\S]*?)\n {2}\}/)?.[1] ?? "";
+
+  const semanticTokens = [
+    "--background",
+    "--foreground",
+    "--card",
+    "--card-foreground",
+    "--popover",
+    "--popover-foreground",
+    "--primary",
+    "--primary-foreground",
+    "--secondary",
+    "--secondary-foreground",
+    "--muted",
+    "--muted-foreground",
+    "--accent",
+    "--accent-foreground",
+    "--accent-brand",
+    "--destructive",
+    "--destructive-foreground",
+    "--success",
+    "--success-foreground",
+    "--warning",
+    "--warning-foreground",
+    "--info",
+    "--info-foreground",
+    "--border",
+    "--input",
+    "--ring",
+  ];
+
+  it("records every implemented dark semantic token value", () => {
+    for (const token of semanticTokens) {
+      const match = darkBlock.match(new RegExp(`${token}:\\s*([^;]+);`));
+      expect(match?.[1]?.trim(), token).toBeTruthy();
+      expect(designMd).toContain(`\`${match?.[1]?.trim()}\``);
+    }
+  });
+});

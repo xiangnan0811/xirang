@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/data-surface";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingState } from "@/components/ui/loading-state";
+import { InventoryRetryAlert } from "@/components/ui/inventory-retry-alert";
 import { Pagination } from "@/components/ui/pagination";
 import { PageHero } from "@/components/ui/page-hero";
 import { Switch } from "@/components/ui/switch";
@@ -57,16 +58,21 @@ function drillTone(status?: string): "success" | "destructive" | "warning" | "ne
 export function PoliciesPage() {
   const { t } = useTranslation();
   const { token } = useAuth();
-  const { loading, globalSearch, setGlobalSearch } = useSharedContext();
+  const { globalSearch, setGlobalSearch } = useSharedContext();
   const { nodes, refreshNodes } = useNodesContext();
   const {
     policies,
+    policiesLoading,
+    policiesError,
+    policiesLoaded,
     createPolicy,
     updatePolicy,
     deletePolicy,
     togglePolicy,
     refreshPolicies,
   } = usePoliciesContext();
+  const loading = (policiesLoading || !policiesLoaded) && policies.length === 0 && !policiesError;
+  const requestFailed = Boolean(policiesError) && policies.length === 0;
 
   useEffect(() => {
     void refreshPolicies();
@@ -159,25 +165,25 @@ export function PoliciesPage() {
       maxRetries: draft.maxRetries,
       retryBaseSeconds: draft.retryBaseSeconds,
       bandwidthSchedule: draft.bandwidthSchedule ?? "",
-      retention_days: draft.retention_days,
-      retention_mode: draft.retention_mode,
-      keep_daily: draft.keep_daily,
-      keep_weekly: draft.keep_weekly,
-      keep_monthly: draft.keep_monthly,
-      keep_yearly: draft.keep_yearly,
-      rpo_minutes: draft.rpo_minutes,
-      rto_minutes: draft.rto_minutes,
-      escalation_policy_id: draft.escalation_policy_id ?? null,
-      app_profile: draft.app_profile ?? "",
-      app_credential_id: draft.app_credential_id ?? null,
-      drill_enabled: draft.drill_enabled ?? false,
-      drill_cron: draft.drill_cron ?? "",
-      drill_target_node_id: draft.drill_target_node_id ?? null,
-      drill_restore_path: draft.drill_restore_path ?? "/tmp/xirang-drill",
-      drill_pre_verify: draft.drill_pre_verify ?? "",
-      drill_verify: draft.drill_verify ?? "",
-      drill_post_verify: draft.drill_post_verify ?? "",
-      drill_auto_cleanup: draft.drill_auto_cleanup ?? true,
+      retentionDays: draft.retentionDays,
+      retentionMode: draft.retentionMode,
+      keepDaily: draft.keepDaily,
+      keepWeekly: draft.keepWeekly,
+      keepMonthly: draft.keepMonthly,
+      keepYearly: draft.keepYearly,
+      rpoMinutes: draft.rpoMinutes,
+      rtoMinutes: draft.rtoMinutes,
+      escalationPolicyId: draft.escalationPolicyId ?? null,
+      appProfile: draft.appProfile ?? "",
+      appCredentialId: draft.appCredentialId ?? null,
+      drillEnabled: false,
+      drillCron: draft.drillCron ?? "",
+      drillTargetNodeId: draft.drillTargetNodeId ?? null,
+      drillRestorePath: draft.drillRestorePath ?? "/tmp/xirang-drill",
+      drillPreVerify: draft.drillPreVerify ?? "",
+      drillVerify: draft.drillVerify ?? "",
+      drillPostVerify: draft.drillPostVerify ?? "",
+      drillAutoCleanup: draft.drillAutoCleanup ?? true,
     };
 
     try {
@@ -294,6 +300,9 @@ export function PoliciesPage() {
         </DataSurfaceToolbar>
 
         <DataSurfaceContent className="space-y-4">
+          {policiesError ? (
+            <InventoryRetryAlert error={policiesError} onRetry={() => { void refreshPolicies(); }} />
+          ) : null}
           {loading ? (
             <LoadingState
               title={t('policies.loadingTitle')}
@@ -318,7 +327,7 @@ export function PoliciesPage() {
               />
             ))}
 
-            {!filteredPolicies.length ? (
+            {!loading && !requestFailed && !filteredPolicies.length ? (
               <EmptyState
                 className="md:col-span-2 lg:col-span-3"
                 title={t('policies.noMatchTitle')}
@@ -470,7 +479,7 @@ export function PoliciesPage() {
                       </td>
                     </tr>
                   ))
-                ) : (
+                ) : !loading && !requestFailed ? (
                   <tr>
                     <td colSpan={9} className="px-3 py-5">
                       <EmptyState
@@ -491,7 +500,7 @@ export function PoliciesPage() {
                       />
                     </td>
                   </tr>
-                )}
+                ) : null}
               </tbody>
             </table>
             <Pagination

@@ -230,6 +230,9 @@ function createContext(overrides?: Record<string, unknown>) {
   nodesRef.current = {
     nodes: [{ id: 1, name: "node-prod-1" }, { id: 2, name: "node-dr-2" }],
     refreshNodes: vi.fn().mockResolvedValue(undefined),
+    nodesLoading: false,
+    nodesError: null,
+    nodesLoaded: true,
     createNode: vi.fn(),
     updateNode: vi.fn(),
     deleteNode: vi.fn(),
@@ -278,6 +281,9 @@ function createContext(overrides?: Record<string, unknown>) {
     cancelTask: vi.fn().mockResolvedValue(undefined),
     retryTask: vi.fn().mockResolvedValue(undefined),
     refreshTasks: vi.fn().mockResolvedValue(undefined),
+    tasksLoading: false,
+    tasksError: null,
+    tasksLoaded: true,
     pauseTask: vi.fn().mockResolvedValue(undefined),
     resumeTask: vi.fn().mockResolvedValue(undefined),
     skipNextTask: vi.fn().mockResolvedValue(undefined),
@@ -295,6 +301,9 @@ function createContext(overrides?: Record<string, unknown>) {
   policiesRef.current = {
     policies: [],
     refreshPolicies: vi.fn().mockResolvedValue(undefined),
+    policiesLoading: false,
+    policiesError: null,
+    policiesLoaded: true,
     createPolicy: vi.fn(),
     updatePolicy: vi.fn(),
     deletePolicy: vi.fn(),
@@ -663,6 +672,7 @@ describe("TasksPage", () => {
     createContext({ refreshTasks: refreshTasksMock });
     const user = userEvent.setup();
 
+
     render(
       <MemoryRouter>
         <TasksPage />
@@ -708,6 +718,9 @@ describe("TasksPage", () => {
         },
       ] as unknown as Record<string, unknown>[],
       refreshTasks: refreshTasksMock,
+      tasksLoading: false,
+      tasksError: null,
+      tasksLoaded: true,
     });
 
     render(
@@ -745,6 +758,9 @@ describe("TasksPage", () => {
         },
       ] as unknown as Record<string, unknown>[],
       refreshTasks: refreshTasksMock,
+      tasksLoading: false,
+      tasksError: null,
+      tasksLoaded: true,
     });
 
     render(
@@ -830,6 +846,9 @@ describe("TasksPage", () => {
         },
       ] as unknown as Record<string, unknown>[],
       refreshTasks: refreshTasksMock,
+      tasksLoading: false,
+      tasksError: null,
+      tasksLoaded: true,
     });
     const user = userEvent.setup();
 

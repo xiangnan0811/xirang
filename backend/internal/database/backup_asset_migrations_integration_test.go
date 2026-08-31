@@ -55,6 +55,7 @@ const (
 	backupAssetGAVersion               = 71
 	backupAssetTaskRunCompatVersion    = 72
 	backupAssetPlainTextContentVersion = 73
+	drillDurableRecoveryVersion        = 74
 	recoveryEmptyDeleteSetDigest       = "3f5a5d5213612b170da6ce2f2f90775a31d4e40269bb785042589af64011b7cf"
 	recoveryClaimSchedulerRowID        = "0000000000000000000000000000006a"
 	recoveryTakeoverSchedulerRowID     = "0000000000000000000000000000006b"
@@ -542,7 +543,7 @@ func TestRunMigrationsPostgresSchemaDriftCheckUsesSearchPath(t *testing.T) {
 	}
 }
 
-func TestRunMigrationsClean072Applies073SQLite(t *testing.T) {
+func TestRunMigrationsClean072AppliesLatestSQLite(t *testing.T) {
 	fixture := newSQLiteMigrationFixture(t)
 	_, sqlDB := fixture.openAt(t, backupAssetTaskRunCompatVersion)
 	gdb, err := gorm.Open(sqlitegorm.New(sqlitegorm.Config{Conn: sqlDB}), &gorm.Config{})
@@ -551,17 +552,17 @@ func TestRunMigrationsClean072Applies073SQLite(t *testing.T) {
 	}
 
 	if err := RunMigrations(gdb, "sqlite"); err != nil {
-		t.Fatalf("run migration 073 from clean complete 072: %v", err)
+		t.Fatalf("run latest migrations from clean complete 072: %v", err)
 	}
 	dirty, version, err := checkMigrationDirty(sqlDB, "sqlite")
 	if err != nil {
-		t.Fatalf("check migration 073 metadata: %v", err)
+		t.Fatalf("check latest migration metadata: %v", err)
 	}
-	if dirty || version != backupAssetPlainTextContentVersion {
-		t.Fatalf("migration 073 metadata mismatch: version=%d dirty=%v", version, dirty)
+	if dirty || version != drillDurableRecoveryVersion {
+		t.Fatalf("latest migration metadata mismatch: version=%d dirty=%v", version, dirty)
 	}
 	if err := validateMinimumRecoverySchema(sqlDB, "sqlite", version); err != nil {
-		t.Fatalf("validate migration 073 minimum recovery schema: %v", err)
+		t.Fatalf("validate latest minimum recovery schema: %v", err)
 	}
 }
 
@@ -3498,7 +3499,8 @@ func TestBackupAssetMigration073ReleasePropagation(t *testing.T) {
 			name: "PostgresCI",
 			path: filepath.Join("..", "..", "..", ".github", "workflows", "ci.yml"),
 			fragments: []string{
-				"TestBackupAssetMigration0(63|64|65|66|67|68|69|70|71|72|73)Postgres",
+				"run-required-postgres-tests.sh",
+				"Test.*Migration.*Postgres.*",
 			},
 		},
 	}
@@ -3521,6 +3523,12 @@ func TestBackupAssetMigration073ReleasePropagation(t *testing.T) {
 }
 
 func activeGoTestSelectorMatches(workflow, testName string) bool {
+	if selector, ok := activeRequiredPostgresSelector(workflow, "./internal/database"); ok {
+		compiled, err := regexp.Compile(selector)
+		if err == nil && compiled.MatchString(testName) {
+			return true
+		}
+	}
 	for _, rawLine := range strings.Split(workflow, "\n") {
 		line := strings.TrimSpace(rawLine)
 		if !strings.HasPrefix(line, "run:") {
@@ -3574,6 +3582,21 @@ func TestBackupAssetMigration073CISelectorRecognition(t *testing.T) {
 		{
 			name:     "ActiveNonMatchingSelectorFails",
 			workflow: "run: go test ./internal/database -run '^TestBackupAssetMigration072Postgres$' -count=1",
+			want:     false,
+		},
+		{
+			name:     "ActiveReusableRunnerPasses",
+			workflow: "run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL migration parity' ./internal/database '^(Test.*Migration.*Postgres.*)$'",
+			want:     true,
+		},
+		{
+			name:     "CommentedReusableRunnerCannotPass",
+			workflow: "# run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL migration parity' ./internal/database '^(Test.*Migration.*Postgres.*)$'",
+			want:     false,
+		},
+		{
+			name:     "ReusableRunnerForAnotherPackageFails",
+			workflow: "run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL migration parity' ./internal/task '^(Test.*Migration.*Postgres.*)$'",
 			want:     false,
 		},
 	} {

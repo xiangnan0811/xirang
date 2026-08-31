@@ -41,8 +41,17 @@ import type {
 export interface ConsoleDataState {
   overview: OverviewStats;
   nodes: NodeRecord[];
+  nodesLoading: boolean;
+  nodesError: string | null;
+  nodesLoaded: boolean;
   policies: PolicyRecord[];
+  policiesLoading: boolean;
+  policiesError: string | null;
+  policiesLoaded: boolean;
   tasks: TaskRecord[];
+  tasksLoading: boolean;
+  tasksError: string | null;
+  tasksLoaded: boolean;
   alerts: AlertRecord[];
   integrations: IntegrationChannel[];
   sshKeys: SSHKeyRecord[];
@@ -350,8 +359,17 @@ export function useConsoleData(token: string | null): ConsoleDataState {
   return {
     overview,
     nodes: nodesDomain.nodes,
+    nodesLoading: nodesDomain.nodesLoading,
+    nodesError: nodesDomain.nodesError,
+    nodesLoaded: nodesDomain.nodesLoaded,
     policies: policiesDomain.policies,
+    policiesLoading: policiesDomain.policiesLoading,
+    policiesError: policiesDomain.policiesError,
+    policiesLoaded: policiesDomain.policiesLoaded,
     tasks: tasksDomain.tasks,
+    tasksLoading: tasksDomain.tasksLoading,
+    tasksError: tasksDomain.tasksError,
+    tasksLoaded: tasksDomain.tasksLoaded,
     alerts: alertsIntegrationsDomain.alerts,
     integrations: alertsIntegrationsDomain.integrations,
     sshKeys,

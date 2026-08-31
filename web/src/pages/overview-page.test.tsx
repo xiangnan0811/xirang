@@ -84,6 +84,9 @@ function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) 
   nodesRef.current = {
     nodes,
     refreshNodes: refreshNodesMock,
+    nodesLoading: false,
+    nodesError: null,
+    nodesLoaded: true,
     createNode: vi.fn(),
     updateNode: vi.fn(),
     deleteNode: vi.fn(),
@@ -121,6 +124,9 @@ function setContext(nodeCount: number, _withTraffic = true, refreshVersion = 0) 
       },
     ],
     refreshTasks: refreshTasksMock,
+    tasksLoading: false,
+    tasksError: null,
+    tasksLoaded: true,
     createTask: vi.fn(),
     updateTask: vi.fn(),
     deleteTask: vi.fn(),
@@ -489,6 +495,9 @@ describe("OverviewPage", () => {
       ...nodesRef.current,
       nodes,
       refreshNodes: refreshNodesMock,
+      nodesLoading: false,
+      nodesError: null,
+      nodesLoaded: true,
     };
     tasksRef.current = {
       ...tasksRef.current,
@@ -501,6 +510,9 @@ describe("OverviewPage", () => {
         { id: 6, name: "最新任务", policyName: "最新任务", nodeName: "Node-002", nodeId: 2, status: "running", progress: 60, startedAt: "2026-03-01", createdAt: "2026-03-01 09:50:00", updatedAt: "2026-03-01 10:00:00", speedMbps: 16 },
       ],
       refreshTasks: refreshTasksMock,
+      tasksLoading: false,
+      tasksError: null,
+      tasksLoaded: true,
     };
 
     render(<OverviewPage />);

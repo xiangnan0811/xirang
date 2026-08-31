@@ -1,4 +1,5 @@
 import { lazy, Suspense, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 export const OverviewPage = lazy(() =>
   import("@/pages/overview-page").then((m) => ({ default: m.OverviewPage }))
@@ -76,10 +77,20 @@ export const ServiceMonitorsPage = lazy(() =>
 export const StatusPage = lazy(() =>
   import("@/pages/status-page").then((m) => ({ default: m.StatusPage }))
 );
+export const NotFoundPage = lazy(() =>
+  import("@/pages/not-found-page").then((m) => ({ default: m.NotFoundPage }))
+);
 
 export function PageLoader() {
+  const { t } = useTranslation();
+  const label = t("common.loading");
   return (
-    <div className="flex items-center justify-center py-16">
+    <div
+      className="flex items-center justify-center py-16"
+      role="status"
+      aria-busy="true"
+      aria-label={label}
+    >
       <div className="size-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
     </div>
   );

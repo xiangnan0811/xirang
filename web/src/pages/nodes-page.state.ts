@@ -35,9 +35,12 @@ export function useNodesPageState() {
   const { token, role } = useAuth();
   const isAdmin = role === "admin";
   const canBrowseNodeFiles = role === "admin" || role === "operator";
-  const { loading, globalSearch, setGlobalSearch } = useSharedContext();
+  const { globalSearch, setGlobalSearch } = useSharedContext();
   const {
     nodes,
+    nodesLoading,
+    nodesError,
+    nodesLoaded,
     createNode,
     updateNode,
     deleteNode,
@@ -546,7 +549,9 @@ export function useNodesPageState() {
     // data
     nodes,
     sshKeys,
-    loading,
+    loading: (nodesLoading || !nodesLoaded) && nodes.length === 0 && !nodesError,
+    requestFailed: Boolean(nodesError) && nodes.length === 0,
+    nodesError,
     // filters
     keyword,
     setKeyword,

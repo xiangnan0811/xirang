@@ -47,7 +47,7 @@ describe("SystemTab security risk summary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     apiClientMock.getSettings.mockResolvedValue({ definitions: [], values: {} });
-    apiClientMock.getLogsSettings.mockResolvedValue({ default_retention_days: 30 });
+    apiClientMock.getLogsSettings.mockResolvedValue({ defaultRetentionDays: 30 });
     apiClientMock.getSecurityRiskSummary.mockResolvedValue({
       generatedAt: "2026-05-18T00:00:00Z",
       summary: { totalRisks: 19, categories: 9 },

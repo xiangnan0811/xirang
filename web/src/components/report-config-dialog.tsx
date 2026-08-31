@@ -54,20 +54,13 @@ const DEFAULT_DRAFT: Draft = {
 
 /** Module-level for referential stability with useDialogDraft */
 function toDraft(cfg: ReportConfig): Draft {
-  let channelIds: number[] = [];
-  try {
-    const parsed = JSON.parse(cfg.integration_ids);
-    if (Array.isArray(parsed)) channelIds = parsed;
-  } catch {
-    /* ignore */
-  }
   return {
     name: cfg.name,
-    scopeType: cfg.scope_type,
-    scopeValue: cfg.scope_value,
+    scopeType: cfg.scopeType,
+    scopeValue: cfg.scopeValue,
     period: cfg.period,
     cron: cfg.cron,
-    selectedChannelIds: channelIds,
+    selectedChannelIds: cfg.integrationIds,
     enabled: cfg.enabled,
   };
 }
@@ -159,11 +152,11 @@ export function ReportConfigDialog({
 
     const input: NewReportConfigInput = {
       name: draft.name.trim(),
-      scope_type: draft.scopeType,
-      scope_value: draft.scopeValue.trim(),
+      scopeType: draft.scopeType,
+      scopeValue: draft.scopeValue.trim(),
       period: draft.period,
       cron: draft.cron.trim(),
-      integration_ids: draft.selectedChannelIds,
+      integrationIds: draft.selectedChannelIds,
       enabled: draft.enabled,
     };
 
@@ -191,6 +184,7 @@ export function ReportConfigDialog({
       open={open}
       onOpenChange={onOpenChange}
       title={t(isEditing ? "reportConfig.titleEdit" : "reportConfig.title")}
+      description={t(isEditing ? "reportConfig.descriptionEdit" : "reportConfig.description")}
       icon={isEditing ? <Pencil className="size-5" /> : <FileText className="size-5" />}
       size="lg"
       saving={saving}
