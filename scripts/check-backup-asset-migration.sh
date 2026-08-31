@@ -146,6 +146,7 @@ done
 require_text "$POSTGRES_PLAIN_TEXT_UP" "CREATE OR REPLACE FUNCTION backup_asset_plain_text_content_downgrade_admission()"
 require_text "$POSTGRES_PLAIN_TEXT_DOWN" "RAISE EXCEPTION '000073 down blocked: plain_text/text_v2 delivery grant exists';"
 
+bash "$ROOT_DIR/scripts/check-migration-version.sh" || fail "backend README migration version is stale"
 if ! command -v go >/dev/null 2>&1; then
   echo "backup-asset migration check: go is required for the used-down owner" >&2
   exit 2
