@@ -26,9 +26,9 @@ const nodeWriteAdmissionRetryAttempts = 8
 var errNodeWriteBoundaryMissing = errors.New("node write boundary missing")
 
 // NodeWriteCoordinator owns the durable exclusion boundary shared by ordinary
-// Task writes and Recovery node leases. Both methods operate only through the
-// caller's transaction so the caller's TaskRun or lease insert commits or rolls
-// back with admission.
+// Task writes, Drill source+sandbox writes, and Recovery node leases. Every
+// method operates only through the caller's transaction so the caller's run,
+// evidence, or lease mutation commits or rolls back with admission.
 type NodeWriteCoordinator struct {
 	db            *gorm.DB
 	retryAttempts int
@@ -69,6 +69,30 @@ func (coordinator *NodeWriteCoordinator) AdmitTaskTx(ctx context.Context, tx *go
 		return task.ErrNodeWriteConflict
 	}
 	return nil
+}
+
+// AdmitDrillTx reserves the source and sandbox nodes as one durable boundary.
+// Both rows are locked in ascending ID order (with same-node deduplication)
+// before either Recovery lease is inspected, so the caller can insert its
+// TaskRun/Evidence pair in the same transaction without a cross-node gap.
+func (coordinator *NodeWriteCoordinator) AdmitDrillTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	sourceNodeID uint,
+	sandboxNodeID uint,
+) error {
+	if err := coordinator.validateCaller(ctx, tx, sourceNodeID); err != nil {
+		return err
+	}
+	if err := coordinator.validateCaller(ctx, tx, sandboxNodeID); err != nil {
+		return err
+	}
+	ctx = nonNilNodeWriteContext(ctx)
+	nodeIDs := orderedDistinctNodeWriteIDs(sourceNodeID, sandboxNodeID)
+	if err := coordinator.lockNodeBoundaries(ctx, tx, nodeIDs); err != nil {
+		return err
+	}
+	return coordinator.rejectActiveRecoveryLeases(ctx, tx, nodeIDs)
 }
 
 // EnterTaskExecutionTx is the sole executor-entry authority for ordinary and
@@ -126,6 +150,76 @@ func (coordinator *NodeWriteCoordinator) EnterTaskExecutionTx(
 	return nil
 }
 
+// EnterDrillExecutionTx is the TaskRun half of the paired Drill start CAS. It
+// derives the immutable source node from the run, locks source+sandbox in the
+// same deterministic order used at reservation, rechecks both Recovery leases,
+// then starts exactly one pending Drill run. The caller updates or creates the
+// matching Evidence before committing this same transaction.
+func (coordinator *NodeWriteCoordinator) EnterDrillExecutionTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	runID uint,
+	expectedSandboxNodeID uint,
+	startedAt time.Time,
+) error {
+	if err := coordinator.validateCaller(ctx, tx, expectedSandboxNodeID); err != nil || runID == 0 {
+		if err != nil {
+			return err
+		}
+		return task.ErrNodeWriteStartLost
+	}
+	ctx = nonNilNodeWriteContext(ctx)
+
+	var runSnapshot struct {
+		NodeIDSnapshot uint
+		TriggerType    string
+	}
+	result := tx.WithContext(ctx).Model(&model.TaskRun{}).
+		Select("node_id_snapshot", "trigger_type").Where("id = ?", runID).Limit(1).Find(&runSnapshot)
+	if result.Error != nil {
+		return safeNodeWriteDatabaseError(ctx)
+	}
+	if result.RowsAffected != 1 || runSnapshot.TriggerType != "drill" ||
+		!model.IsTaskRunNodeSnapshotAuthoritative(runSnapshot.NodeIDSnapshot) {
+		return task.ErrNodeWriteStartLost
+	}
+	var evidenceSnapshot struct {
+		SandboxNodeID uint
+	}
+	evidenceResult := tx.WithContext(ctx).Model(&model.RestoreDrillEvidence{}).
+		Select("sandbox_node_id").Where("task_run_id = ?", runID).Limit(1).Find(&evidenceSnapshot)
+	if evidenceResult.Error != nil {
+		return safeNodeWriteDatabaseError(ctx)
+	}
+	sandboxNodeID := expectedSandboxNodeID
+	if evidenceResult.RowsAffected == 1 {
+		if !model.IsTaskRunNodeSnapshotAuthoritative(evidenceSnapshot.SandboxNodeID) ||
+			evidenceSnapshot.SandboxNodeID != expectedSandboxNodeID {
+			return task.ErrNodeWriteStartLost
+		}
+		sandboxNodeID = evidenceSnapshot.SandboxNodeID
+	}
+	nodeIDs := orderedDistinctNodeWriteIDs(runSnapshot.NodeIDSnapshot, sandboxNodeID)
+	if err := coordinator.lockNodeBoundaries(ctx, tx, nodeIDs); err != nil {
+		return err
+	}
+	if err := coordinator.rejectActiveRecoveryLeases(ctx, tx, nodeIDs); err != nil {
+		return err
+	}
+
+	result = tx.WithContext(ctx).Model(&model.TaskRun{}).
+		Where("id = ? AND node_id_snapshot = ? AND trigger_type = ? AND status = ?",
+			runID, runSnapshot.NodeIDSnapshot, "drill", model.TaskRunStatusPending).
+		Updates(map[string]interface{}{"status": model.TaskRunStatusRunning, "started_at": &startedAt})
+	if result.Error != nil {
+		return safeNodeWriteDatabaseError(ctx)
+	}
+	if result.RowsAffected != 1 {
+		return task.ErrNodeWriteStartLost
+	}
+	return nil
+}
+
 // AdmitRecoveryTx is the caller-owned transaction seam used by both Recovery
 // job and cleanup lease claims. The caller inserts its holder-specific lease
 // only after this method succeeds and before committing the same transaction.
@@ -152,6 +246,13 @@ func (coordinator *NodeWriteCoordinator) AdmitRecoveryTx(ctx context.Context, tx
 		return safeNodeWriteDatabaseError(ctx)
 	}
 	if activeTaskRuns > 0 {
+		return task.ErrNodeWriteConflict
+	}
+	activeDrillSandbox, err := coordinator.nodeHasActiveDrillSandbox(ctx, tx, nodeID)
+	if err != nil {
+		return safeNodeWriteDatabaseError(ctx)
+	}
+	if activeDrillSandbox {
 		return task.ErrNodeWriteConflict
 	}
 	return nil
@@ -195,6 +296,46 @@ func (coordinator *NodeWriteCoordinator) lockNodeBoundary(ctx context.Context, t
 		}
 	}
 	return task.ErrNodeWriteUnavailable
+}
+
+func (coordinator *NodeWriteCoordinator) lockNodeBoundaries(
+	ctx context.Context,
+	tx *gorm.DB,
+	nodeIDs []uint,
+) error {
+	for _, nodeID := range nodeIDs {
+		if err := coordinator.lockNodeBoundary(ctx, tx, nodeID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (coordinator *NodeWriteCoordinator) rejectActiveRecoveryLeases(
+	ctx context.Context,
+	tx *gorm.DB,
+	nodeIDs []uint,
+) error {
+	for _, nodeID := range nodeIDs {
+		active, err := coordinator.nodeHasActiveRecoveryLease(ctx, tx, nodeID)
+		if err != nil {
+			return safeNodeWriteDatabaseError(ctx)
+		}
+		if active {
+			return task.ErrNodeWriteConflict
+		}
+	}
+	return nil
+}
+
+func orderedDistinctNodeWriteIDs(first, second uint) []uint {
+	if first == second {
+		return []uint{first}
+	}
+	if first < second {
+		return []uint{first, second}
+	}
+	return []uint{second, first}
 }
 
 func lockNodeBoundaryOnce(ctx context.Context, tx *gorm.DB, nodeID uint) error {
@@ -244,6 +385,21 @@ func (coordinator *NodeWriteCoordinator) nodeHasActiveRecoveryLease(
 		Where("node_id = ? AND state = ? AND lease_expires_at > ?", nodeID, "active", now).
 		Count(&activeLeases).Error
 	return activeLeases > 0, err
+}
+
+func (coordinator *NodeWriteCoordinator) nodeHasActiveDrillSandbox(
+	ctx context.Context,
+	tx *gorm.DB,
+	nodeID uint,
+) (bool, error) {
+	var activeDrills int64
+	err := tx.WithContext(ctx).
+		Table("restore_drill_evidences AS evidence").
+		Joins("JOIN task_runs AS run ON run.id = evidence.task_run_id").
+		Where("evidence.sandbox_node_id = ? AND run.trigger_type = ? AND (run.status IN ? OR evidence.status IN ?)",
+			nodeID, "drill", model.TaskRunActiveStatuses(), model.TaskRunActiveStatuses()).
+		Count(&activeDrills).Error
+	return activeDrills > 0, err
 }
 
 func (coordinator *NodeWriteCoordinator) currentTime() time.Time {

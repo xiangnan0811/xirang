@@ -77,6 +77,10 @@ type nodeRequest struct {
 	Archived         *bool   `json:"archived"`
 	UseSudo          *bool   `json:"use_sudo"`
 }
+type nodeUpdateResponse struct {
+	Node    model.Node `json:"node"`
+	Warning string     `json:"warning,omitempty"`
+}
 
 type nodeBatchDeleteRequest struct {
 	IDs []uint `json:"ids"`
@@ -199,7 +203,7 @@ func (h *NodeHandler) Create(c *gin.Context) {
 // @Produce      json
 // @Param        id    path      int          true  "节点 ID"
 // @Param        body  body      nodeRequest  true  "更新节点请求"
-// @Success      200   {object}  handlers.Response{data=model.Node}
+// @Success      200   {object}  handlers.Response{data=nodeUpdateResponse}
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
 // @Failure      404   {object}  handlers.Response
@@ -239,9 +243,9 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		return
 	}
 
-	resp := gin.H{"data": nodeObj.Sanitized()}
+	resp := nodeUpdateResponse{Node: nodeObj.Sanitized()}
 	if oldBackupDir != "" && req.BackupDir != oldBackupDir {
-		resp["warning"] = fmt.Sprintf("备份目录标识已更改，旧路径 /backup/%s 下的数据不会自动迁移", oldBackupDir)
+		resp.Warning = fmt.Sprintf("备份目录标识已更改，旧路径 /backup/%s 下的数据不会自动迁移", oldBackupDir)
 	}
 	respondOK(c, resp)
 }

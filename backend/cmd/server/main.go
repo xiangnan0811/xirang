@@ -237,7 +237,11 @@ func main() {
 	if err := taskManager.LoadSchedules(context.Background()); err != nil {
 		log.Fatal().Err(err).Msg("加载定时任务失败")
 	}
-	taskManager.StartDrillLoop()
+	if taskManager.DrillAvailable() {
+		taskManager.StartDrillLoop()
+	} else {
+		log.Info().Msg("恢复演练调度循环未启动：安全传输尚未配置")
+	}
 
 	taskRetention := task.NewRetentionWorker(settingsSvc, taskManager)
 

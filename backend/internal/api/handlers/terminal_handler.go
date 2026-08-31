@@ -25,8 +25,11 @@ import (
 )
 
 const (
-	terminalSessionTimeout = 30 * time.Minute
-	maxTerminalSessions    = 10
+	terminalSessionTimeout      = 30 * time.Minute
+	maxTerminalSessions         = 10
+	maxTerminalAuthMessageBytes = 4 << 10
+	maxTerminalMessageBytes     = 64 << 10
+	terminalAuthReadTimeout     = 5 * time.Second
 )
 
 type TerminalHandler struct {
@@ -173,6 +176,7 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 			pendingFreed = true
 		}
 	}
+	defer freePending()
 
 	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -180,9 +184,9 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		log.Printf("warn: terminal: websocket 升级失败: %v", err)
 		return
 	}
-
-	// 等待认证消息（5 秒超时）
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	// Limit the authentication frame before ReadMessage can buffer it.
+	conn.SetReadLimit(maxTerminalAuthMessageBytes)
+	_ = conn.SetReadDeadline(time.Now().Add(terminalAuthReadTimeout))
 	_, rawMsg, err := conn.ReadMessage()
 	if err != nil {
 		freePending()
@@ -210,6 +214,9 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		_ = conn.Close()
 		return
 	}
+	// Authentication succeeded; bound every subsequent control or input frame
+	// separately from the smaller authentication budget.
+	conn.SetReadLimit(maxTerminalMessageBytes)
 	proofState := "required"
 	if authMsg.StepUpProof != "" {
 		proofState = "failed"

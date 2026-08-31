@@ -306,3 +306,76 @@ func TestSSHKeyExportAndGetRestrictNonAdminVisibility(t *testing.T) {
 		t.Fatalf("operator get unbound key 应隐藏为 404，实际 status=%d body=%s", getUnboundResp.Code, getUnboundResp.Body.String())
 	}
 }
+
+func TestSSHKeyCreateDuplicateNameReturnsSanitizedConflict(t *testing.T) {
+	db := openSSHKeyHandlerTestDB(t)
+	secure.ResetForTesting()
+	key := buildSSHKeyPrivateKeyForHandlerTest(t)
+	router := newSSHKeyHandlerRouter(db, "admin", 1)
+	payload := fmt.Sprintf(`{"name":"duplicate-key","username":"root","key_type":"auto","private_key":%q}`, key)
+
+	first := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/ssh-keys", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(first, req)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("首次创建 SSH key 期望 201，实际 status=%d body=%s", first.Code, first.Body.String())
+	}
+
+	second := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/ssh-keys", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(second, req)
+	if second.Code != http.StatusConflict {
+		t.Fatalf("重复 SSH key 名称期望 409，实际 status=%d body=%s", second.Code, second.Body.String())
+	}
+	var envelope Response
+	if err := json.Unmarshal(second.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析重复 SSH key 响应失败: %v", err)
+	}
+	if envelope.Code != http.StatusConflict || envelope.Message != sshKeyDuplicateMessage {
+		t.Fatalf("重复 SSH key 响应不符合安全契约: %+v", envelope)
+	}
+	for _, forbidden := range []string{"UNIQUE constraint", "ssh_keys", "duplicate-key", "constraint"} {
+		if strings.Contains(second.Body.String(), forbidden) {
+			t.Fatalf("重复 SSH key 响应泄漏存储细节 %q: %s", forbidden, second.Body.String())
+		}
+	}
+}
+
+func TestSSHKeyBatchCreateEncryptionFailureIsSanitized(t *testing.T) {
+	db := openSSHKeyHandlerTestDB(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("DATA_ENCRYPTION_KEY", "")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
+
+	gin.SetMode(gin.TestMode)
+	handler := NewSSHKeyHandler(db)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("role", "admin")
+		c.Set("userID", uint(1))
+		c.Next()
+	})
+	router.POST("/ssh-keys/batch", handler.BatchCreate)
+	key := buildSSHKeyPrivateKeyForHandlerTest(t)
+	payload := fmt.Sprintf(`{"keys":[{"name":"encrypted-batch-key","username":"root","key_type":"auto","private_key":%q}]}`, key)
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/ssh-keys/batch", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("批量 SSH key 加密失败仍应返回结构化 200，实际 status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	for _, forbidden := range []string{"必须设置 DATA_ENCRYPTION_KEY", "enc:v2", "cipher", "sql:", "database"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("批量 SSH key 响应泄漏加密/驱动错误 %q: %s", forbidden, body)
+		}
+	}
+	if !strings.Contains(body, sshKeyPersistenceMessage) || !strings.Contains(body, sshKeyPersistenceCode) {
+		t.Fatalf("批量 SSH key 响应应返回通用持久化错误: %s", body)
+	}
+}

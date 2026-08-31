@@ -36,6 +36,17 @@ type stubExecutorFactory struct {
 	executor taskexec.Executor
 }
 
+func shutdownManagerOnCleanup(t *testing.T, manager *Manager) {
+	t.Helper()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := manager.Shutdown(shutdownCtx); err != nil {
+			t.Fatalf("shutdown task manager: %v", err)
+		}
+	})
+}
+
 func (f stubExecutorFactory) Resolve(_ string) taskexec.Executor {
 	return f.executor
 }
@@ -56,6 +67,14 @@ type nodeWriteAdmissionFake struct {
 	startEntered        chan struct{}
 	startRelease        <-chan struct{}
 	startEnteredOnce    sync.Once
+	drillCalls          int
+	drillSourceNodeIDs  []uint
+	drillSandboxNodeIDs []uint
+	drillErrs           []error
+	drillStartCalls     int
+	drillStartRunIDs    []uint
+	drillStartNodeIDs   []uint
+	drillStartErrs      []error
 }
 
 func (admission *nodeWriteAdmissionFake) AdmitTaskTx(ctx context.Context, tx *gorm.DB, nodeID uint) error {
@@ -136,6 +155,79 @@ func (admission *nodeWriteAdmissionFake) EnterTaskExecutionTx(
 		return ErrNodeWriteStartLost
 	}
 	return nil
+}
+
+func (admission *nodeWriteAdmissionFake) AdmitDrillTx(
+	ctx context.Context,
+	_ *gorm.DB,
+	sourceNodeID uint,
+	sandboxNodeID uint,
+) error {
+	admission.mu.Lock()
+	admission.drillCalls++
+	admission.drillSourceNodeIDs = append(admission.drillSourceNodeIDs, sourceNodeID)
+	admission.drillSandboxNodeIDs = append(admission.drillSandboxNodeIDs, sandboxNodeID)
+	var admitErr error
+	if len(admission.drillErrs) > 0 {
+		admitErr = admission.drillErrs[0]
+		admission.drillErrs = admission.drillErrs[1:]
+	}
+	admission.mu.Unlock()
+	if admitErr != nil {
+		return admitErr
+	}
+	return ctx.Err()
+}
+
+func (admission *nodeWriteAdmissionFake) EnterDrillExecutionTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	runID uint,
+	sandboxNodeID uint,
+	startedAt time.Time,
+) error {
+	admission.mu.Lock()
+	admission.drillStartCalls++
+	admission.drillStartRunIDs = append(admission.drillStartRunIDs, runID)
+	admission.drillStartNodeIDs = append(admission.drillStartNodeIDs, sandboxNodeID)
+	var startErr error
+	if len(admission.drillStartErrs) > 0 {
+		startErr = admission.drillStartErrs[0]
+		admission.drillStartErrs = admission.drillStartErrs[1:]
+	}
+	admission.mu.Unlock()
+	if startErr != nil {
+		return startErr
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	result := tx.Model(&model.TaskRun{}).
+		Where("id = ? AND trigger_type = ? AND status = ?", runID, "drill", model.TaskRunStatusPending).
+		Updates(map[string]interface{}{"status": model.TaskRunStatusRunning, "started_at": &startedAt})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrNodeWriteStartLost
+	}
+	return nil
+}
+
+func (admission *nodeWriteAdmissionFake) drillSnapshot() (int, []uint, []uint) {
+	admission.mu.Lock()
+	defer admission.mu.Unlock()
+	return admission.drillCalls,
+		append([]uint(nil), admission.drillSourceNodeIDs...),
+		append([]uint(nil), admission.drillSandboxNodeIDs...)
+}
+
+func (admission *nodeWriteAdmissionFake) drillStartSnapshot() (int, []uint, []uint) {
+	admission.mu.Lock()
+	defer admission.mu.Unlock()
+	return admission.drillStartCalls,
+		append([]uint(nil), admission.drillStartRunIDs...),
+		append([]uint(nil), admission.drillStartNodeIDs...)
 }
 
 type taskEntryCommitBarrierPool struct {
@@ -383,6 +475,7 @@ func TestRunTaskCleansUpLockEntries(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	taskEntity := seedTaskForManagerTest(t, db)
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
@@ -415,6 +508,7 @@ func TestRunTaskRejectsNonAuthoritativeNodeSnapshotBeforeExecutor(t *testing.T) 
 			db := openManagerTestDB(t)
 			exec := &successExecutor{}
 			manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+			shutdownManagerOnCleanup(t, manager)
 			taskEntity := seedTaskForManagerTest(t, db)
 			runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
 			if err := db.Model(&model.TaskRun{}).Where("id = ?", runID).UpdateColumn("node_id_snapshot", testCase.snapshot(taskEntity)).Error; err != nil {
@@ -440,6 +534,7 @@ func TestRunTaskRejectsTaskRunOwnedByAnotherTaskBeforeExecutor(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	otherTask := model.Task{
 		Name: "same-node-other-task", NodeID: taskEntity.NodeID, ExecutorType: "rsync", Status: string(StatusPending),
@@ -698,6 +793,7 @@ func TestCancelAtPublicTriggerOwnerRegistrationPreventsScheduling(t *testing.T) 
 func TestCancelReadsTaskOutcomeBeforeSignalingLiveOwner(t *testing.T) {
 	db := openConcurrentManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Update("status", string(StatusSuccess)).Error; err != nil {
 		t.Fatal(err)
@@ -1083,6 +1179,634 @@ func TestCancelActiveTaskAndAuthoritativeRunsCommitAtomically(t *testing.T) {
 	}
 }
 
+func seedRunningOrphanDrillPair(t *testing.T, db *gorm.DB, taskEntity model.Task) (model.TaskRun, model.RestoreDrillEvidence) {
+	t.Helper()
+	startedAt := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Millisecond)
+	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Updates(map[string]any{
+		"status":      string(StatusRunning),
+		"last_run_at": &startedAt,
+		"last_error":  "",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	run := model.TaskRun{
+		TaskID: taskEntity.ID, TriggerType: "drill", Status: model.TaskRunStatusRunning, StartedAt: &startedAt,
+	}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatal(err)
+	}
+	evidence := model.RestoreDrillEvidence{
+		PolicyID: 1, TaskID: taskEntity.ID, TaskRunID: run.ID,
+		SandboxNodeID: taskEntity.NodeID, SandboxPath: "/tmp/orphan-drill",
+		Status: model.TaskRunStatusRunning, StartedAt: &startedAt,
+		RestoreStatus: model.TaskRunStatusSuccess, VerifyStatus: model.TaskRunStatusRunning,
+		PostVerifyStatus: model.TaskRunStatusSkipped, CleanupStatus: model.TaskRunStatusSkipped,
+	}
+	if err := db.Create(&evidence).Error; err != nil {
+		t.Fatal(err)
+	}
+	return run, evidence
+}
+
+func TestCancelOrphanReconciliationFinalizesDrillPairAtomically(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+	taskEntity := seedTaskForManagerTest(t, db)
+	run, evidence := seedRunningOrphanDrillPair(t, db, taskEntity)
+
+	if err := manager.Cancel(taskEntity.ID); err != nil {
+		t.Fatalf("Cancel orphan drill pair: %v", err)
+	}
+	if err := db.First(&run, run.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&evidence, evidence.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != model.TaskRunStatusCanceled || evidence.Status != model.TaskRunStatusCanceled {
+		t.Fatalf("orphan drill terminal pair split: TaskRun=%q Evidence=%q", run.Status, evidence.Status)
+	}
+	if run.FinishedAt == nil || evidence.FinishedAt == nil || !run.FinishedAt.Equal(*evidence.FinishedAt) {
+		t.Fatalf("orphan drill finished_at mismatch: TaskRun=%v Evidence=%v", run.FinishedAt, evidence.FinishedAt)
+	}
+	if run.DurationMs != evidence.DurationMs {
+		t.Fatalf("orphan drill duration mismatch: TaskRun=%d Evidence=%d", run.DurationMs, evidence.DurationMs)
+	}
+	if evidence.FailedStep != "verify" || evidence.VerifyStatus != model.TaskRunStatusCanceled ||
+		evidence.VerifyFinishedAt == nil || !evidence.VerifyFinishedAt.Equal(*run.FinishedAt) || evidence.VerifyError != "任务已取消" {
+		t.Fatalf("orphan drill phase evidence not terminalized: %+v", evidence)
+	}
+	if evidence.ConfidenceEligible {
+		t.Fatal("canceled orphan drill must not remain confidence eligible")
+	}
+}
+
+func TestLoadSchedulesRecoversProcessLostDrillPairOnRestart(t *testing.T) {
+	db := openManagerTestDB(t)
+	taskEntity := seedTaskForManagerTest(t, db)
+	run, evidence := seedRunningOrphanDrillPair(t, db, taskEntity)
+
+	// A fresh Manager has no process-local pendingRuns/chainRunner ownership from
+	// the process that created this durable pair.
+	restarted := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, restarted)
+	if err := restarted.LoadSchedules(context.Background()); err != nil {
+		t.Fatalf("startup drill reconciliation: %v", err)
+	}
+
+	if err := db.First(&run, run.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&evidence, evidence.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != model.TaskRunStatusCanceled || evidence.Status != model.TaskRunStatusCanceled {
+		t.Fatalf("restart left process-lost drill active: TaskRun=%q Evidence=%q", run.Status, evidence.Status)
+	}
+	if run.FinishedAt == nil || evidence.FinishedAt == nil || !run.FinishedAt.Equal(*evidence.FinishedAt) {
+		t.Fatalf("restart reconciliation split finished_at: TaskRun=%v Evidence=%v", run.FinishedAt, evidence.FinishedAt)
+	}
+	if run.DurationMs != evidence.DurationMs || evidence.ConfidenceEligible {
+		t.Fatalf("restart reconciliation duration/confidence mismatch: TaskRun=%d Evidence=%d eligible=%v",
+			run.DurationMs, evidence.DurationMs, evidence.ConfidenceEligible)
+	}
+	if evidence.FailedStep != "verify" || evidence.VerifyStatus != model.TaskRunStatusCanceled || evidence.VerifyFinishedAt == nil {
+		t.Fatalf("restart reconciliation did not terminalize the active phase: %+v", evidence)
+	}
+}
+
+func TestLoadSchedulesRepairsActiveTaskRunFromTerminalDrillEvidence(t *testing.T) {
+	db := openManagerTestDB(t)
+	taskEntity := seedTaskForManagerTest(t, db)
+	run, evidence := seedRunningOrphanDrillPair(t, db, taskEntity)
+	finishedAt := time.Now().UTC().Add(-time.Second).Truncate(time.Millisecond)
+	wantDuration := finishedAt.Sub(run.StartedAt.UTC()).Milliseconds()
+	if err := db.Model(&model.RestoreDrillEvidence{}).Where("id = ?", evidence.ID).Updates(map[string]interface{}{
+		"status":               model.TaskRunStatusSuccess,
+		"finished_at":          &finishedAt,
+		"duration_ms":          wantDuration,
+		"restore_status":       model.TaskRunStatusSuccess,
+		"verify_status":        model.TaskRunStatusSuccess,
+		"post_verify_status":   model.TaskRunStatusSkipped,
+		"cleanup_status":       model.TaskRunStatusSkipped,
+		"confidence_eligible":  true,
+		"recovery_owner_id":    "",
+		"recovery_lease_until": nil,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, restarted)
+	if err := restarted.LoadSchedules(context.Background()); err != nil {
+		t.Fatalf("repair split drill pair: %v", err)
+	}
+	if err := db.First(&run, run.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != model.TaskRunStatusSuccess || run.FinishedAt == nil || !run.FinishedAt.Equal(finishedAt) || run.DurationMs != wantDuration {
+		t.Fatalf("terminal Evidence was not authoritative for split TaskRun: %+v", run)
+	}
+}
+
+func TestLoadSchedulesRepairsActiveDrillEvidenceFromTerminalTaskRun(t *testing.T) {
+	db := openManagerTestDB(t)
+	taskEntity := seedTaskForManagerTest(t, db)
+	run, evidence := seedRunningOrphanDrillPair(t, db, taskEntity)
+	finishedAt := time.Now().UTC().Add(-time.Second).Truncate(time.Millisecond)
+	wantDuration := finishedAt.Sub(run.StartedAt.UTC()).Milliseconds()
+	validLease := time.Now().UTC().Add(time.Hour)
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", run.ID).Updates(map[string]interface{}{
+		"status":      model.TaskRunStatusCanceled,
+		"finished_at": &finishedAt,
+		"duration_ms": wantDuration,
+		"last_error":  "任务已取消",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.RestoreDrillEvidence{}).Where("id = ?", evidence.ID).Updates(map[string]interface{}{
+		"recovery_owner_id":    "lost-process-owner",
+		"recovery_lease_until": &validLease,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, restarted)
+	if err := restarted.LoadSchedules(context.Background()); err != nil {
+		t.Fatalf("repair inverse split drill pair: %v", err)
+	}
+	if err := db.First(&evidence, evidence.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Status != model.TaskRunStatusCanceled || evidence.FinishedAt == nil ||
+		!evidence.FinishedAt.Equal(finishedAt) || evidence.DurationMs != wantDuration {
+		t.Fatalf("terminal TaskRun was not authoritative for active Evidence: %+v", evidence)
+	}
+	if evidence.RecoveryOwnerID != "" || evidence.RecoveryLeaseUntil != nil || evidence.ConfidenceEligible {
+		t.Fatalf("inverse split repair retained recovery authority or confidence: %+v", evidence)
+	}
+	if evidence.FailedStep != "verify" || evidence.VerifyStatus != model.TaskRunStatusCanceled ||
+		evidence.VerifyFinishedAt == nil || !evidence.VerifyFinishedAt.Equal(finishedAt) {
+		t.Fatalf("inverse split repair did not terminalize the active Evidence phase: %+v", evidence)
+	}
+}
+
+func TestLoadSchedulesRejectsIncompleteActiveEvidenceForSuccessfulTaskRun(t *testing.T) {
+	db := openManagerTestDB(t)
+	taskEntity := seedTaskForManagerTest(t, db)
+	run, evidence := seedRunningOrphanDrillPair(t, db, taskEntity)
+	finishedAt := time.Now().UTC().Add(-time.Second).Truncate(time.Millisecond)
+	wantDuration := finishedAt.Sub(run.StartedAt.UTC()).Milliseconds()
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", run.ID).Updates(map[string]interface{}{
+		"status":      model.TaskRunStatusSuccess,
+		"finished_at": &finishedAt,
+		"duration_ms": wantDuration,
+		"last_error":  "",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, restarted)
+	err := restarted.LoadSchedules(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "incomplete active evidence") {
+		t.Fatalf("incomplete positive Evidence recovery error=%v, want fail-closed rejection", err)
+	}
+	if !restarted.drillRecoveryBlocked.Load() {
+		t.Fatal("incomplete positive Evidence recovery cleared drill admission")
+	}
+	if err := db.First(&evidence, evidence.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Status != model.TaskRunStatusRunning || evidence.ConfidenceEligible || evidence.FinishedAt != nil {
+		t.Fatalf("incomplete positive Evidence recovery mutated the disputed row: %+v", evidence)
+	}
+}
+
+func TestRepairActiveDrillEvidenceFromTerminalRunChecksRowsAffected(t *testing.T) {
+	db := openManagerTestDB(t)
+	taskEntity := seedTaskForManagerTest(t, db)
+	run, staleEvidence := seedRunningOrphanDrillPair(t, db, taskEntity)
+	finishedAt := time.Now().UTC().Add(-time.Second).Truncate(time.Millisecond)
+	wantDuration := finishedAt.Sub(run.StartedAt.UTC()).Milliseconds()
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", run.ID).Updates(map[string]interface{}{
+		"status":      model.TaskRunStatusCanceled,
+		"finished_at": &finishedAt,
+		"duration_ms": wantDuration,
+		"last_error":  "任务已取消",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&run, run.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.RestoreDrillEvidence{}).Where("id = ?", staleEvidence.ID).
+		Update("status", model.TaskRunStatusFailed).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	won := true
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		var repairErr error
+		won, repairErr = repairActiveDrillEvidenceFromTerminalRunTx(tx, run, staleEvidence)
+		return repairErr
+	}); err != nil {
+		t.Fatalf("stale inverse-split recovery CAS: %v", err)
+	}
+	if won {
+		t.Fatal("stale inverse-split recovery ignored zero RowsAffected")
+	}
+	var current model.RestoreDrillEvidence
+	if err := db.First(&current, staleEvidence.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != model.TaskRunStatusFailed || current.FinishedAt != nil {
+		t.Fatalf("stale inverse-split recovery overwrote concurrent terminal Evidence: %+v", current)
+	}
+}
+
+func TestLoadSchedulesInverseSplitRecoveryRollsBackOnEvidenceUpdateFailure(t *testing.T) {
+	db := openManagerTestDB(t)
+	taskEntity := seedTaskForManagerTest(t, db)
+	run, evidence := seedRunningOrphanDrillPair(t, db, taskEntity)
+	finishedAt := time.Now().UTC().Add(-time.Second).Truncate(time.Millisecond)
+	wantDuration := finishedAt.Sub(run.StartedAt.UTC()).Milliseconds()
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", run.ID).Updates(map[string]interface{}{
+		"status":      model.TaskRunStatusCanceled,
+		"finished_at": &finishedAt,
+		"duration_ms": wantDuration,
+		"last_error":  "任务已取消",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	injected := errors.New("INTERNAL_INVERSE_SPLIT_EVIDENCE_UPDATE_FAILURE")
+	callbackName := fmt.Sprintf("test:inverse-split-recovery-%d", run.ID)
+	if err := db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "restore_drill_evidences" {
+			_ = tx.AddError(injected)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Update().Remove(callbackName) })
+
+	restarted := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, restarted)
+	err := restarted.LoadSchedules(context.Background())
+	if !errors.Is(err, injected) {
+		t.Fatalf("inverse-split fault injection error=%v, want injected error", err)
+	}
+	if !restarted.drillRecoveryBlocked.Load() {
+		t.Fatal("inverse-split persistence failure cleared drill admission")
+	}
+	if err := db.First(&evidence, evidence.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Status != model.TaskRunStatusRunning || evidence.FinishedAt != nil || evidence.DurationMs != 0 {
+		t.Fatalf("failed inverse-split transaction partially mutated Evidence: %+v", evidence)
+	}
+}
+
+func TestLoadSchedulesSynthesizesEvidenceForProcessLostPendingDrill(t *testing.T) {
+	db := openManagerTestDB(t)
+	taskEntity := seedTaskForManagerTest(t, db)
+	run := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "drill", Status: model.TaskRunStatusPending}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, restarted)
+	if err := restarted.LoadSchedules(context.Background()); err != nil {
+		t.Fatalf("recover process-lost pending drill: %v", err)
+	}
+	var evidence model.RestoreDrillEvidence
+	if err := db.First(&run, run.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&evidence, "task_run_id = ?", run.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != model.TaskRunStatusCanceled || run.StartedAt != nil || run.DurationMs != 0 ||
+		evidence.Status != model.TaskRunStatusCanceled || evidence.StartedAt != nil || evidence.DurationMs != 0 ||
+		evidence.FailedStep != "startup" || evidence.RestoreStatus != model.TaskRunStatusCanceled ||
+		evidence.VerifyStatus != model.TaskRunStatusSkipped || evidence.ConfidenceEligible {
+		t.Fatalf("pending restart recovery did not synthesize an atomic startup terminal pair: TaskRun=%+v Evidence=%+v", run, evidence)
+	}
+}
+
+func TestLoadSchedulesRecoversLegacyRetryingDrillWithoutStartTime(t *testing.T) {
+	db := openManagerTestDB(t)
+	taskEntity := seedTaskForManagerTest(t, db)
+	run := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "drill", Status: model.TaskRunStatusRetrying}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, restarted)
+	if err := restarted.LoadSchedules(context.Background()); err != nil {
+		t.Fatalf("recover legacy retrying drill: %v", err)
+	}
+	var evidence model.RestoreDrillEvidence
+	if err := db.First(&run, run.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&evidence, "task_run_id = ?", run.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != model.TaskRunStatusCanceled || run.StartedAt != nil || run.DurationMs != 0 ||
+		evidence.Status != model.TaskRunStatusCanceled || evidence.DurationMs != 0 {
+		t.Fatalf("legacy retrying drill did not converge as an unstarted pair: TaskRun=%+v Evidence=%+v", run, evidence)
+	}
+}
+
+func TestLoadSchedulesReconcilesMoreThanOneDrillRecoveryBatch(t *testing.T) {
+	db := openManagerTestDB(t)
+	seed := seedTaskForManagerTest(t, db)
+	const orphanCount = drillRecoveryBatchSize + 1
+	for index := 0; index < orphanCount; index++ {
+		taskEntity := model.Task{
+			Name:         fmt.Sprintf("drill-recovery-batch-%02d", index),
+			NodeID:       seed.NodeID,
+			ExecutorType: "rsync",
+			Status:       string(StatusRunning),
+			RsyncSource:  fmt.Sprintf("/tmp/src-%02d", index),
+			RsyncTarget:  fmt.Sprintf("/tmp/dst-%02d", index),
+		}
+		if err := db.Create(&taskEntity).Error; err != nil {
+			t.Fatal(err)
+		}
+		seedRunningOrphanDrillPair(t, db, taskEntity)
+	}
+
+	restarted := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, restarted)
+	if err := restarted.LoadSchedules(context.Background()); err != nil {
+		var remaining int64
+		if countErr := db.Model(&model.TaskRun{}).
+			Where("trigger_type = ? AND status IN ?", "drill", model.TaskRunActiveStatuses()).
+			Count(&remaining).Error; countErr != nil {
+			t.Fatal(countErr)
+		}
+		var remainingRun model.TaskRun
+		if queryErr := db.Where("trigger_type = ? AND status IN ?", "drill", model.TaskRunActiveStatuses()).First(&remainingRun).Error; queryErr != nil {
+			t.Fatal(queryErr)
+		}
+		var remainingEvidence model.RestoreDrillEvidence
+		if queryErr := db.Where("task_run_id = ?", remainingRun.ID).First(&remainingEvidence).Error; queryErr != nil {
+			t.Fatal(queryErr)
+		}
+		t.Fatalf("reconcile multi-batch drill backlog with %d active rows remaining: run=%+v evidence=%+v err=%v", remaining, remainingRun, remainingEvidence, err)
+	}
+	var activeRuns int64
+	if err := db.Model(&model.TaskRun{}).
+		Where("trigger_type = ? AND status IN ?", "drill", model.TaskRunActiveStatuses()).
+		Count(&activeRuns).Error; err != nil {
+		t.Fatal(err)
+	}
+	if activeRuns != 0 {
+		t.Fatalf("single startup sweep left %d active drills after a %d-row backlog", activeRuns, orphanCount)
+	}
+	var terminalEvidence int64
+	if err := db.Model(&model.RestoreDrillEvidence{}).
+		Where("status = ?", model.TaskRunStatusCanceled).Count(&terminalEvidence).Error; err != nil {
+		t.Fatal(err)
+	}
+	if terminalEvidence != orphanCount {
+		t.Fatalf("multi-batch startup terminal Evidence count=%d, want %d", terminalEvidence, orphanCount)
+	}
+}
+
+func TestLoadSchedulesReconcilesMoreThanOneInverseDrillRecoveryBatch(t *testing.T) {
+	db := openManagerTestDB(t)
+	seed := seedTaskForManagerTest(t, db)
+	const orphanCount = drillRecoveryBatchSize + 1
+	for index := 0; index < orphanCount; index++ {
+		taskEntity := model.Task{
+			Name:         fmt.Sprintf("inverse-drill-recovery-batch-%02d", index),
+			NodeID:       seed.NodeID,
+			ExecutorType: "rsync",
+			Status:       string(StatusRunning),
+			RsyncSource:  fmt.Sprintf("/tmp/inverse-src-%02d", index),
+			RsyncTarget:  fmt.Sprintf("/tmp/inverse-dst-%02d", index),
+		}
+		if err := db.Create(&taskEntity).Error; err != nil {
+			t.Fatal(err)
+		}
+		run, _ := seedRunningOrphanDrillPair(t, db, taskEntity)
+		finishedAt := time.Now().UTC().Add(-time.Second).Truncate(time.Millisecond)
+		durationMs := finishedAt.Sub(run.StartedAt.UTC()).Milliseconds()
+		if err := db.Model(&model.TaskRun{}).Where("id = ?", run.ID).Updates(map[string]interface{}{
+			"status":      model.TaskRunStatusCanceled,
+			"finished_at": &finishedAt,
+			"duration_ms": durationMs,
+			"last_error":  "任务已取消",
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	restarted := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, restarted)
+	if err := restarted.LoadSchedules(context.Background()); err != nil {
+		t.Fatalf("reconcile multi-batch inverse drill backlog: %v", err)
+	}
+	var activeEvidence int64
+	if err := db.Model(&model.RestoreDrillEvidence{}).
+		Where("status IN ?", model.TaskRunActiveStatuses()).Count(&activeEvidence).Error; err != nil {
+		t.Fatal(err)
+	}
+	if activeEvidence != 0 {
+		t.Fatalf("single startup sweep left %d active Evidence rows after a %d-row inverse backlog", activeEvidence, orphanCount)
+	}
+	var terminalEvidence int64
+	if err := db.Model(&model.RestoreDrillEvidence{}).
+		Where("status = ?", model.TaskRunStatusCanceled).Count(&terminalEvidence).Error; err != nil {
+		t.Fatal(err)
+	}
+	if terminalEvidence != orphanCount {
+		t.Fatalf("multi-batch inverse startup terminal Evidence count=%d, want %d", terminalEvidence, orphanCount)
+	}
+}
+
+func TestLoadSchedulesKeepsDrillRecoveryBlockedWhenBoundedPassHasBacklog(t *testing.T) {
+	db := openManagerTestDB(t)
+	seed := seedTaskForManagerTest(t, db)
+	const orphanCount = drillRecoveryBatchSize*drillRecoveryMaxBatches + 1
+	for index := 0; index < orphanCount; index++ {
+		taskEntity := model.Task{
+			Name:         fmt.Sprintf("drill-recovery-bounded-%03d", index),
+			NodeID:       seed.NodeID,
+			ExecutorType: "rsync",
+			Status:       string(StatusRunning),
+			RsyncSource:  fmt.Sprintf("/tmp/src-%03d", index),
+			RsyncTarget:  fmt.Sprintf("/tmp/dst-%03d", index),
+		}
+		if err := db.Create(&taskEntity).Error; err != nil {
+			t.Fatal(err)
+		}
+		seedRunningOrphanDrillPair(t, db, taskEntity)
+	}
+
+	restarted := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, restarted)
+	err := restarted.LoadSchedules(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "backlog") {
+		t.Fatalf("bounded recovery backlog error=%v, want fail-closed backlog error", err)
+	}
+	if !restarted.drillRecoveryBlocked.Load() {
+		t.Fatal("bounded recovery backlog cleared the drill recovery admission block")
+	}
+	var activeRuns int64
+	if err := db.Model(&model.TaskRun{}).
+		Where("trigger_type = ? AND status IN ?", "drill", model.TaskRunActiveStatuses()).
+		Count(&activeRuns).Error; err != nil {
+		t.Fatal(err)
+	}
+	if activeRuns == 0 || activeRuns >= orphanCount {
+		t.Fatalf("bounded pass left %d active drills, want finite progress with a retained backlog", activeRuns)
+	}
+}
+
+func TestLoadSchedulesKeepsDrillRecoveryBlockedWhenScheduleQueryFails(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+	injected := errors.New("INTERNAL_SCHEDULE_QUERY_FAILURE_CANARY")
+	callbackName := "test:fail-load-schedules-query"
+	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "tasks" {
+			_ = tx.AddError(injected)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+
+	err := manager.LoadSchedules(context.Background())
+	if !errors.Is(err, injected) {
+		t.Fatalf("LoadSchedules schedule query error=%v, want injected failure", err)
+	}
+	if !manager.drillRecoveryBlocked.Load() {
+		t.Fatal("LoadSchedules cleared drill recovery admission after schedule loading failed")
+	}
+}
+
+func startManagerRecoveryWorker(t *testing.T, manager *Manager) <-chan struct{} {
+	t.Helper()
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		manager.Run(workerCtx)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		manager.managerRunMu.Lock()
+		started := manager.managerRunDone != nil
+		manager.managerRunMu.Unlock()
+		if started {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancelWorker()
+			t.Fatal("Manager.Run did not register the drill recovery lifecycle")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Cleanup(func() {
+		cancelWorker()
+		select {
+		case <-workerDone:
+		case <-time.After(time.Second):
+			t.Error("drill recovery worker did not stop during test cleanup")
+		}
+	})
+	return workerDone
+}
+
+func TestManagerShutdownStopsDrillRecoverySweep(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	runDone := startManagerRecoveryWorker(t, manager)
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelShutdown()
+	if err := manager.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("shutdown manager recovery lifecycle: %v", err)
+	}
+	select {
+	case <-runDone:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("Manager.Shutdown returned while the drill recovery sweep remained live")
+	}
+}
+
+func TestCancelOrphanReconciliationRollsBackWhenDrillEvidenceUpdateFails(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+	taskEntity := seedTaskForManagerTest(t, db)
+	run, evidence := seedRunningOrphanDrillPair(t, db, taskEntity)
+	if err := db.First(&run, run.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&evidence, evidence.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	var beforeTask model.Task
+	if err := db.First(&beforeTask, taskEntity.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	injected := errors.New("INTERNAL_ORPHAN_EVIDENCE_FAILURE_CANARY")
+	injectedReached := false
+	callbackName := fmt.Sprintf("test:fail-orphan-drill-evidence-%d", run.ID)
+	if err := db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		updates, ok := tx.Statement.Dest.(map[string]interface{})
+		if !ok || tx.Statement.Table != "restore_drill_evidences" || updates["status"] != model.TaskRunStatusCanceled {
+			return
+		}
+		injectedReached = true
+		_ = tx.AddError(injected)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Update().Remove(callbackName) })
+
+	err := manager.Cancel(taskEntity.ID)
+	if !errors.Is(err, errTaskCancelUnavailable) {
+		t.Fatalf("Cancel error=%v, want sanitized unavailable", err)
+	}
+	if strings.Contains(fmt.Sprint(err), injected.Error()) {
+		t.Fatalf("Cancel error leaked internal persistence detail: %v", err)
+	}
+	if !injectedReached {
+		t.Fatal("orphan reconciliation did not attempt paired Evidence update")
+	}
+
+	var afterTask model.Task
+	var afterRun model.TaskRun
+	var afterEvidence model.RestoreDrillEvidence
+	if err := db.First(&afterTask, taskEntity.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&afterRun, run.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&afterEvidence, evidence.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(afterTask, beforeTask) || !reflect.DeepEqual(afterRun, run) || !reflect.DeepEqual(afterEvidence, evidence) {
+		t.Fatalf("failed orphan transaction changed durable state:\n task before=%+v after=%+v\n run before=%+v after=%+v\n evidence before=%+v after=%+v",
+			beforeTask, afterTask, run, afterRun, evidence, afterEvidence)
+	}
+	if _, owned := manager.pendingRuns.Load(taskEntity.ID); owned {
+		t.Fatal("failed orphan reconciliation leaked process-local cancellation barrier")
+	}
+}
+
 func TestCancelTerminalTaskWithoutAuthoritativeActiveRunRetainsUnsupported(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
@@ -1401,12 +2125,12 @@ func TestCancelOrphanReconciliationReturnsFixedSafeDatabaseError(t *testing.T) {
 	previousLogger := logger.Log
 	logger.Log = zerolog.New(&logBuffer)
 	t.Cleanup(func() {
-		logger.Log = previousLogger
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if err := manager.Shutdown(shutdownCtx); err != nil {
 			t.Fatalf("shutdown task manager: %v", err)
 		}
+		logger.Log = previousLogger
 	})
 
 	taskEntity := seedTaskForManagerTest(t, db)
@@ -2213,6 +2937,7 @@ func TestRunTaskCanceledAfterInitialCheckCannotResurrectOrEnterExecutor(t *testi
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
 
@@ -2283,6 +3008,7 @@ func TestRunRestoreTaskCanceledBeforeStartCannotEnterPrecheckOrExecutor(t *testi
 	db := openConcurrentManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Update("status", string(StatusSuccess)).Error; err != nil {
 		t.Fatal(err)
@@ -2356,6 +3082,7 @@ func TestRunTaskExecutorEntryAdmissionFailureDoesNotEnterExecutor(t *testing.T) 
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
 	admission := &nodeWriteAdmissionFake{startErrs: []error{ErrNodeWriteConflict}}
@@ -2387,6 +3114,7 @@ func TestRunRestoreTaskExecutorEntryAdmissionFailureDoesNotEnterPrecheckOrExecut
 	db := openManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	runID := createTestTaskRun(t, db, taskEntity.ID, "restore")
 	admission := &nodeWriteAdmissionFake{startErrs: []error{ErrNodeWriteConflict}}
@@ -2609,6 +3337,7 @@ func TestReserveTaskRunRejectsUnknownOrMismatchedNodeBeforeAdmission(t *testing.
 		t.Run(testCase.name, func(t *testing.T) {
 			db := openManagerTestDB(t)
 			manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+			shutdownManagerOnCleanup(t, manager)
 			taskEntity := seedTaskForManagerTest(t, db)
 			admission := &nodeWriteAdmissionFake{}
 			manager.SetNodeWriteAdmission(admission)
@@ -2639,6 +3368,7 @@ func TestReserveTaskRunRejectsUnknownOrMismatchedNodeBeforeAdmission(t *testing.
 func TestCancelPendingTaskRunsIgnoresNonAuthoritativeSnapshots(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	authoritative := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: model.TaskRunStatusPending}
 	legacy := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: model.TaskRunStatusPending}
@@ -2685,6 +3415,7 @@ func TestCancelPendingTaskRunsIgnoresNonAuthoritativeSnapshots(t *testing.T) {
 func TestTriggerRestoreRejectsLegacyUnknownSuccessBeforeAdmission(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	run := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "scheduled", Status: model.TaskRunStatusSuccess}
 	if err := db.Create(&run).Error; err != nil {
@@ -2822,6 +3553,7 @@ func TestRunTaskAttachesCredentialAuditRuntimeContext(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &contextAuditExecutor{}
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
@@ -2984,6 +3716,7 @@ func TestCancelUpdatesTaskRunToCanceled(t *testing.T) {
 func TestCleanupExpiredTaskRuns(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 1) // 1 天保留
+	shutdownManagerOnCleanup(t, m)
 
 	taskEntity := seedTaskForManagerTest(t, db)
 
@@ -3676,6 +4409,7 @@ func TestRestoreNodeMutexBlocksConcurrentRestore(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	t1, t2 := seedTwoTasksSameNode(t, db)
 
@@ -3760,6 +4494,7 @@ func TestTaskArchiveSkipsScheduleReloadForArchivedTask(t *testing.T) {
 	}
 	cron := scheduler.NewCronScheduler()
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, cron, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	t.Cleanup(cron.Stop)
 	taskEntity := seedTaskForManagerTest(t, db)
 	if err := db.Model(&taskEntity).Updates(map[string]any{

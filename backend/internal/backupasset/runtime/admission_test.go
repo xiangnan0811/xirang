@@ -2,9 +2,11 @@ package runtime
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -613,6 +615,77 @@ func TestNodeWriteCoordinatorActiveLeaseRejectsManagerTriggersWithoutResidualRun
 	}
 }
 
+func TestNodeWriteCoordinatorActiveSandboxLeaseRejectsManagerDrillWithoutResidualPair(t *testing.T) {
+	db := openNodeWriteCoordinatorTestDB(t)
+	source, taskEntity := seedNodeWriteCoordinatorTask(t, db, "manager-drill-source")
+	sandbox, _ := seedNodeWriteCoordinatorTask(t, db, "manager-drill-sandbox")
+	targetNodeID := sandbox.ID
+	policy := model.Policy{
+		Name: "manager-drill-policy", SourcePath: "/tmp/source", TargetPath: "/tmp/target",
+		CronSpec: "@daily", DrillEnabled: true, DrillCron: "@every 5m",
+		DrillTargetNodeID: &targetNodeID, DrillRestorePath: "/tmp/node-write-manager-drill",
+	}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.PolicyNode{PolicyID: policy.ID, NodeID: source.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Updates(map[string]interface{}{
+		"policy_id": policy.ID,
+		"status":    "success",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	finishedAt := time.Now().UTC().Add(-time.Minute)
+	if err := db.Create(&model.TaskRun{
+		TaskID: taskEntity.ID, TriggerType: "manual", Status: model.TaskRunStatusSuccess, FinishedAt: &finishedAt,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(nodeWriteTestLease(sandbox.ID)).Error; err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := NewNodeWriteCoordinator(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := task.NewManager(
+		db, nodeWriteManagerExecutorFactory{executor: &nodeWriteManagerExecutor{}}, nil, nil, nil, nil, 8, 90,
+		task.WithDrillRestoreFunc(func(context.Context, model.Task, model.Node, string, func(string, string)) error {
+			return nil
+		}),
+	)
+	manager.SetNodeWriteAdmission(coordinator)
+	t.Cleanup(func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer shutdownCancel()
+		if err := manager.Shutdown(shutdownCtx); err != nil {
+			t.Errorf("shutdown Drill manager: %v", err)
+		}
+	})
+	if err := manager.LoadSchedules(context.Background()); err != nil {
+		t.Fatalf("complete Drill recovery sweep: %v", err)
+	}
+
+	runID, triggerErr := manager.TriggerDrill(policy.ID, nil)
+	if triggerErr == nil || runID != 0 {
+		t.Fatalf("sandbox lease Drill trigger run=%d err=%v, want zero/non-nil", runID, triggerErr)
+	}
+	var runCount, evidenceCount int64
+	if err := db.Model(&model.TaskRun{}).
+		Where("task_id = ? AND trigger_type = ? AND status IN ?", taskEntity.ID, "drill", model.TaskRunActiveStatuses()).
+		Count(&runCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.RestoreDrillEvidence{}).Where("task_id = ?", taskEntity.ID).Count(&evidenceCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if runCount != 0 || evidenceCount != 0 {
+		t.Fatalf("sandbox lease Drill trigger left TaskRun/Evidence=%d/%d", runCount, evidenceCount)
+	}
+}
+
 func TestNodeWriteCoordinatorRecoveryAdmissionBlocksActiveTaskRuns(t *testing.T) {
 	for _, testCase := range []struct {
 		status  string
@@ -648,6 +721,471 @@ func TestNodeWriteCoordinatorRecoveryAdmissionBlocksActiveTaskRuns(t *testing.T)
 			}
 		})
 	}
+}
+
+func TestNodeWriteCoordinatorRecoveryAdmissionBlocksActiveDrillSandbox(t *testing.T) {
+	for _, testCase := range []struct {
+		name           string
+		runStatus      string
+		evidenceStatus string
+		blocked        bool
+	}{
+		{name: "pending pair", runStatus: model.TaskRunStatusPending, evidenceStatus: model.TaskRunStatusPending, blocked: true},
+		{name: "running pair", runStatus: model.TaskRunStatusRunning, evidenceStatus: model.TaskRunStatusRunning, blocked: true},
+		{name: "retrying pair", runStatus: model.TaskRunStatusRetrying, evidenceStatus: model.TaskRunStatusRetrying, blocked: true},
+		{name: "active run split", runStatus: model.TaskRunStatusRunning, evidenceStatus: model.TaskRunStatusFailed, blocked: true},
+		{name: "active evidence split", runStatus: model.TaskRunStatusFailed, evidenceStatus: model.TaskRunStatusRunning, blocked: true},
+		{name: "terminal pair", runStatus: model.TaskRunStatusFailed, evidenceStatus: model.TaskRunStatusFailed},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := openNodeWriteCoordinatorTestDB(t)
+			_, sourceTask := seedNodeWriteCoordinatorTask(t, db, "drill-source-"+strings.ReplaceAll(testCase.name, " ", "-"))
+			sandbox, _ := seedNodeWriteCoordinatorTask(t, db, "drill-sandbox-"+strings.ReplaceAll(testCase.name, " ", "-"))
+			run := model.TaskRun{
+				TaskID: sourceTask.ID, TriggerType: "drill", Status: testCase.runStatus,
+			}
+			if err := db.Create(&run).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Create(&model.RestoreDrillEvidence{
+				PolicyID: 1, TaskID: sourceTask.ID, TaskRunID: run.ID,
+				SandboxNodeID: sandbox.ID, SandboxPath: "/tmp/node-write-drill-sandbox",
+				Status: testCase.evidenceStatus,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			coordinator, err := NewNodeWriteCoordinator(db)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = db.Transaction(func(tx *gorm.DB) error {
+				return coordinator.AdmitRecoveryTx(context.Background(), tx, sandbox.ID)
+			})
+			if testCase.blocked && !errors.Is(err, task.ErrNodeWriteConflict) {
+				t.Fatalf("sandbox recovery admission error=%v, want active-drill conflict", err)
+			}
+			if !testCase.blocked && err != nil {
+				t.Fatalf("terminal Drill pair blocked sandbox Recovery: %v", err)
+			}
+		})
+	}
+}
+
+func TestNodeWriteCoordinatorDrillAdmissionRejectsRecoveryLeaseOnSourceAndSandbox(t *testing.T) {
+	for _, blockedNode := range []string{"source", "sandbox"} {
+		t.Run(blockedNode, func(t *testing.T) {
+			db := openNodeWriteCoordinatorTestDB(t)
+			source, _ := seedNodeWriteCoordinatorTask(t, db, "drill-lease-source-"+blockedNode)
+			sandbox, _ := seedNodeWriteCoordinatorTask(t, db, "drill-lease-sandbox-"+blockedNode)
+			leaseNodeID := source.ID
+			if blockedNode == "sandbox" {
+				leaseNodeID = sandbox.ID
+			}
+			if err := db.Create(nodeWriteTestLease(leaseNodeID)).Error; err != nil {
+				t.Fatal(err)
+			}
+			coordinator, err := NewNodeWriteCoordinator(db)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = db.Transaction(func(tx *gorm.DB) error {
+				return coordinator.AdmitDrillTx(context.Background(), tx, source.ID, sandbox.ID)
+			})
+			if !errors.Is(err, task.ErrNodeWriteConflict) {
+				t.Fatalf("%s lease drill admission error=%v, want conflict", blockedNode, err)
+			}
+		})
+	}
+}
+
+func TestNodeWriteCoordinatorDrillAdmissionDeduplicatesSameNode(t *testing.T) {
+	db := openNodeWriteCoordinatorTestDB(t)
+	node, _ := seedNodeWriteCoordinatorTask(t, db, "drill-same-node")
+	coordinator, err := NewNodeWriteCoordinator(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		return coordinator.AdmitDrillTx(context.Background(), tx, node.ID, node.ID)
+	}); err != nil {
+		t.Fatalf("same-node drill admission failed: %v", err)
+	}
+}
+
+func TestNodeWriteCoordinatorDrillLockOrderIsDeterministicAndDeduplicated(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		first      uint
+		second     uint
+		wantFirst  uint
+		wantSecond uint
+		wantLength int
+	}{
+		{name: "ascending", first: 7, second: 42, wantFirst: 7, wantSecond: 42, wantLength: 2},
+		{name: "descending", first: 42, second: 7, wantFirst: 7, wantSecond: 42, wantLength: 2},
+		{name: "same node", first: 7, second: 7, wantFirst: 7, wantLength: 1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := orderedDistinctNodeWriteIDs(testCase.first, testCase.second)
+			if len(got) != testCase.wantLength || got[0] != testCase.wantFirst ||
+				(testCase.wantLength == 2 && got[1] != testCase.wantSecond) {
+				t.Fatalf("ordered node IDs=%v, want length=%d values=%d/%d",
+					got, testCase.wantLength, testCase.wantFirst, testCase.wantSecond)
+			}
+		})
+	}
+}
+
+func TestNodeWriteCoordinatorDrillAndRecoveryOrdersHaveOneDurableWinner(t *testing.T) {
+	for _, testCase := range []struct {
+		name          string
+		recoveryFirst bool
+	}{
+		{name: "recovery first", recoveryFirst: true},
+		{name: "drill first"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			for _, recoveryNode := range []string{"source", "sandbox"} {
+				t.Run(recoveryNode, func(t *testing.T) {
+					for attempt := 0; attempt < 10; attempt++ {
+						db := openNodeWriteCoordinatorTestDB(t)
+						suffix := strings.ReplaceAll(
+							fmt.Sprintf("%s-%s-%d", testCase.name, recoveryNode, attempt),
+							" ", "-",
+						)
+						source, sourceTask := seedNodeWriteCoordinatorTask(t, db, "ordered-source-"+suffix)
+						sandbox, _ := seedNodeWriteCoordinatorTask(t, db, "ordered-sandbox-"+suffix)
+						coordinator, err := NewNodeWriteCoordinator(db)
+						if err != nil {
+							t.Fatal(err)
+						}
+						recoveryNodeID := source.ID
+						if recoveryNode == "sandbox" {
+							recoveryNodeID = sandbox.ID
+						}
+
+						if testCase.recoveryFirst {
+							if err := claimNodeWriteRecovery(context.Background(), db, coordinator, recoveryNodeID); err != nil {
+								t.Fatalf("attempt %d claim Recovery first: %v", attempt+1, err)
+							}
+							err = reserveNodeWriteDrill(context.Background(), db, coordinator, sourceTask, sandbox.ID)
+						} else {
+							if err := reserveNodeWriteDrill(context.Background(), db, coordinator, sourceTask, sandbox.ID); err != nil {
+								t.Fatalf("attempt %d reserve Drill first: %v", attempt+1, err)
+							}
+							err = claimNodeWriteRecovery(context.Background(), db, coordinator, recoveryNodeID)
+						}
+						if !errors.Is(err, task.ErrNodeWriteConflict) {
+							t.Fatalf("attempt %d losing %s/%s admission error=%v, want conflict", attempt+1, testCase.name, recoveryNode, err)
+						}
+						assertNodeWriteDrillRecoveryWinner(t, db, testCase.recoveryFirst)
+					}
+				})
+			}
+		})
+	}
+}
+
+type nodeWriteDrillRecoveryBarrierCase struct {
+	phase        string
+	recoveryNode string
+	winner       string
+}
+
+var nodeWriteDrillRecoveryBarrierCases = []nodeWriteDrillRecoveryBarrierCase{
+	{phase: "reservation", recoveryNode: "source", winner: "recovery"},
+	{phase: "reservation", recoveryNode: "source", winner: "drill"},
+	{phase: "reservation", recoveryNode: "sandbox", winner: "recovery"},
+	{phase: "reservation", recoveryNode: "sandbox", winner: "drill"},
+	{phase: "start", recoveryNode: "source", winner: "recovery"},
+	{phase: "start", recoveryNode: "source", winner: "drill"},
+	{phase: "start", recoveryNode: "sandbox", winner: "recovery"},
+	{phase: "start", recoveryNode: "sandbox", winner: "drill"},
+}
+
+func TestNodeWriteCoordinatorDrillRecoveryBarrierMatrixIsComplete(t *testing.T) {
+	want := map[nodeWriteDrillRecoveryBarrierCase]bool{}
+	for _, phase := range []string{"reservation", "start"} {
+		for _, recoveryNode := range []string{"source", "sandbox"} {
+			for _, winner := range []string{"recovery", "drill"} {
+				want[nodeWriteDrillRecoveryBarrierCase{phase: phase, recoveryNode: recoveryNode, winner: winner}] = true
+			}
+		}
+	}
+	seen := make(map[nodeWriteDrillRecoveryBarrierCase]bool, len(nodeWriteDrillRecoveryBarrierCases))
+	for _, testCase := range nodeWriteDrillRecoveryBarrierCases {
+		if seen[testCase] {
+			t.Fatalf("Drill/Recovery barrier matrix contains duplicate case: %+v", testCase)
+		}
+		seen[testCase] = true
+		delete(want, testCase)
+	}
+	if len(want) != 0 || len(seen) != 8 {
+		t.Fatalf("Drill/Recovery barrier matrix is missing %d case(s): %v", len(want), want)
+	}
+}
+
+func TestNodeWriteCoordinatorSQLiteDrillRecoveryBarrierMatrix(t *testing.T) {
+	for _, testCase := range nodeWriteDrillRecoveryBarrierCases {
+		winnerLabel := testCase.winner + "-first"
+		if testCase.phase == "start" && testCase.winner == "recovery" {
+			winnerLabel = "legacy-out-of-band-recovery-first"
+		}
+		t.Run(fmt.Sprintf("%s/%s/%s", testCase.phase, testCase.recoveryNode, winnerLabel), func(t *testing.T) {
+			for attempt := 0; attempt < 3; attempt++ {
+				t.Run(fmt.Sprintf("attempt-%d", attempt+1), func(t *testing.T) {
+					testNodeWriteSQLiteDrillRecoveryBarrierCase(t, testCase, attempt)
+				})
+			}
+		})
+	}
+}
+
+func testNodeWriteSQLiteDrillRecoveryBarrierCase(
+	t *testing.T,
+	testCase nodeWriteDrillRecoveryBarrierCase,
+	attempt int,
+) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	db := openNodeWriteCoordinatorTestDB(t)
+	suffix := fmt.Sprintf("barrier-%s-%s-%s-%d", testCase.phase, testCase.recoveryNode, testCase.winner, attempt)
+	source, sourceTask := seedNodeWriteCoordinatorTask(t, db, suffix+"-source")
+	sandbox, _ := seedNodeWriteCoordinatorTask(t, db, suffix+"-sandbox")
+	coordinator, err := NewNodeWriteCoordinator(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryNodeID := source.ID
+	if testCase.recoveryNode == "sandbox" {
+		recoveryNodeID = sandbox.ID
+	}
+
+	var runID uint
+	if testCase.phase == "start" {
+		runID, err = reserveNodeWriteDrillPair(ctx, db, coordinator, sourceTask, sandbox.ID)
+		if err != nil {
+			t.Fatalf("reserve pending Drill pair: %v", err)
+		}
+	}
+
+	winnerTx := db.WithContext(ctx).Begin()
+	if winnerTx.Error != nil {
+		t.Fatal(winnerTx.Error)
+	}
+	winnerCommitted := false
+	defer func() {
+		if !winnerCommitted {
+			_ = winnerTx.Rollback().Error
+		}
+	}()
+
+	switch testCase.winner {
+	case "recovery":
+		lease := nodeWriteTestLease(recoveryNodeID)
+		if testCase.phase == "reservation" {
+			err = claimNodeWriteRecoveryLeaseTx(ctx, winnerTx, coordinator, lease)
+		} else {
+			// A normally admitted Recovery cannot win after the pending Drill pair
+			// exists. This branch deterministically models the documented
+			// legacy/out-of-band lease that appears between reservation and start.
+			err = insertNodeWriteLegacyRecoveryLeaseTx(ctx, winnerTx, lease)
+		}
+	case "drill":
+		if testCase.phase == "reservation" {
+			runID, err = reserveNodeWriteDrillPairTx(ctx, winnerTx, coordinator, sourceTask, sandbox.ID)
+		} else {
+			err = startNodeWriteDrillPairTx(ctx, winnerTx, coordinator, runID, sandbox.ID, time.Now().UTC())
+		}
+	default:
+		t.Fatalf("unsupported matrix winner %q", testCase.winner)
+	}
+	if err != nil {
+		t.Fatalf("prepare uncommitted %s winner: %v", testCase.winner, err)
+	}
+
+	loserEntered := make(chan struct{})
+	loserRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseLoser := func() { releaseOnce.Do(func() { close(loserRelease) }) }
+	defer releaseLoser()
+	loserDB := openNodeWriteSQLiteBoundaryBarrierDB(
+		t,
+		db,
+		loserEntered,
+		loserRelease,
+		nodeWriteSQLiteLoserBoundaryMatch(testCase),
+	)
+	loserCoordinator, err := NewNodeWriteCoordinator(loserDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockContended := make(chan struct{})
+	retryRelease := make(chan struct{})
+	var contentionOnce sync.Once
+	var retryReleaseOnce sync.Once
+	releaseRetry := func() { retryReleaseOnce.Do(func() { close(retryRelease) }) }
+	defer releaseRetry()
+	loserCoordinator.retryWait = func(waitCtx context.Context, _ int) error {
+		contentionOnce.Do(func() { close(lockContended) })
+		select {
+		case <-retryRelease:
+			return nil
+		case <-waitCtx.Done():
+			return waitCtx.Err()
+		}
+	}
+	loserResult := make(chan error, 1)
+	go func() {
+		if testCase.winner == "recovery" {
+			if testCase.phase == "reservation" {
+				_, loserErr := reserveNodeWriteDrillPair(ctx, loserDB, loserCoordinator, sourceTask, sandbox.ID)
+				loserResult <- loserErr
+				return
+			}
+			loserResult <- loserDB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				return startNodeWriteDrillPairTx(ctx, tx, loserCoordinator, runID, sandbox.ID, time.Now().UTC())
+			})
+			return
+		}
+		loserResult <- claimNodeWriteRecoveryLease(ctx, loserDB, loserCoordinator, nodeWriteTestLease(recoveryNodeID))
+	}()
+
+	select {
+	case <-loserEntered:
+		// Both transactions now exist: the winner has completed admission and
+		// its paired mutation, while the loser is paused immediately before its
+		// admission/start recheck reaches the SQLite driver.
+	case <-ctx.Done():
+		t.Fatalf("loser did not reach deterministic SQLite boundary: %v", ctx.Err())
+	}
+	releaseLoser()
+	select {
+	case <-lockContended:
+		// retryWait is reached only after the SQLite driver returns BUSY/LOCKED,
+		// proving the loser actually contended with the still-uncommitted winner.
+	case <-ctx.Done():
+		t.Fatalf("loser did not encounter the uncommitted SQLite winner: %v", ctx.Err())
+	}
+	if err := winnerTx.Commit().Error; err != nil {
+		t.Fatalf("commit %s winner: %v", testCase.winner, err)
+	}
+	winnerCommitted = true
+	releaseRetry()
+
+	select {
+	case err = <-loserResult:
+	case <-ctx.Done():
+		t.Fatalf("loser did not finish after SQLite boundary release: %v", ctx.Err())
+	}
+	if !errors.Is(err, task.ErrNodeWriteConflict) {
+		t.Fatalf("losing %s/%s/%s admission error=%v, want node-write conflict",
+			testCase.phase, testCase.recoveryNode, testCase.winner, err)
+	}
+	assertNodeWriteDrillRecoveryBarrierState(
+		t, db, sourceTask.ID, source.ID, sandbox.ID, runID, recoveryNodeID, testCase.phase, testCase.winner,
+	)
+}
+
+func TestNodeWriteCoordinatorDrillStartRechecksBothNodesAndRollsBackPair(t *testing.T) {
+	for _, leaseNode := range []string{"source", "sandbox"} {
+		t.Run(leaseNode, func(t *testing.T) {
+			db := openNodeWriteCoordinatorTestDB(t)
+			source, sourceTask := seedNodeWriteCoordinatorTask(t, db, "start-source-"+leaseNode)
+			sandbox, _ := seedNodeWriteCoordinatorTask(t, db, "start-sandbox-"+leaseNode)
+			coordinator, err := NewNodeWriteCoordinator(db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := reserveNodeWriteDrill(context.Background(), db, coordinator, sourceTask, sandbox.ID); err != nil {
+				t.Fatal(err)
+			}
+			leaseNodeID := source.ID
+			if leaseNode == "sandbox" {
+				leaseNodeID = sandbox.ID
+			}
+			// Simulate a legacy/out-of-band lease appearing between reservation and
+			// execution. The start boundary must still fail closed.
+			if err := db.Create(nodeWriteTestLease(leaseNodeID)).Error; err != nil {
+				t.Fatal(err)
+			}
+			var run model.TaskRun
+			if err := db.Where("task_id = ? AND trigger_type = ?", sourceTask.ID, "drill").Take(&run).Error; err != nil {
+				t.Fatal(err)
+			}
+
+			err = db.Transaction(func(tx *gorm.DB) error {
+				return coordinator.EnterDrillExecutionTx(context.Background(), tx, run.ID, sandbox.ID, time.Now().UTC())
+			})
+			if !errors.Is(err, task.ErrNodeWriteConflict) {
+				t.Fatalf("%s lease start error=%v, want conflict", leaseNode, err)
+			}
+			assertNodeWriteDrillPairStatus(t, db, run.ID, model.TaskRunStatusPending)
+		})
+	}
+
+	t.Run("caller rollback", func(t *testing.T) {
+		db := openNodeWriteCoordinatorTestDB(t)
+		_, sourceTask := seedNodeWriteCoordinatorTask(t, db, "start-rollback-source")
+		sandbox, _ := seedNodeWriteCoordinatorTask(t, db, "start-rollback-sandbox")
+		coordinator, err := NewNodeWriteCoordinator(db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := reserveNodeWriteDrill(context.Background(), db, coordinator, sourceTask, sandbox.ID); err != nil {
+			t.Fatal(err)
+		}
+		var run model.TaskRun
+		if err := db.Where("task_id = ? AND trigger_type = ?", sourceTask.ID, "drill").Take(&run).Error; err != nil {
+			t.Fatal(err)
+		}
+		injected := errors.New("INTERNAL_DRILL_START_ROLLBACK_CANARY")
+		err = db.Transaction(func(tx *gorm.DB) error {
+			if err := coordinator.EnterDrillExecutionTx(context.Background(), tx, run.ID, sandbox.ID, time.Now().UTC()); err != nil {
+				return err
+			}
+			if err := tx.Model(&model.RestoreDrillEvidence{}).Where("task_run_id = ?", run.ID).
+				Update("status", model.TaskRunStatusRunning).Error; err != nil {
+				return err
+			}
+			return injected
+		})
+		if !errors.Is(err, injected) {
+			t.Fatalf("rollback transaction error=%v, want injected error", err)
+		}
+		assertNodeWriteDrillPairStatus(t, db, run.ID, model.TaskRunStatusPending)
+	})
+
+	t.Run("durable sandbox mismatch", func(t *testing.T) {
+		db := openNodeWriteCoordinatorTestDB(t)
+		_, sourceTask := seedNodeWriteCoordinatorTask(t, db, "start-mismatch-source")
+		durableSandbox, _ := seedNodeWriteCoordinatorTask(t, db, "start-mismatch-durable-sandbox")
+		wrongSandbox, _ := seedNodeWriteCoordinatorTask(t, db, "start-mismatch-wrong-sandbox")
+		coordinator, err := NewNodeWriteCoordinator(db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := reserveNodeWriteDrill(context.Background(), db, coordinator, sourceTask, durableSandbox.ID); err != nil {
+			t.Fatal(err)
+		}
+		var run model.TaskRun
+		if err := db.Where("task_id = ? AND trigger_type = ?", sourceTask.ID, "drill").Take(&run).Error; err != nil {
+			t.Fatal(err)
+		}
+
+		err = db.Transaction(func(tx *gorm.DB) error {
+			return coordinator.EnterDrillExecutionTx(context.Background(), tx, run.ID, wrongSandbox.ID, time.Now().UTC())
+		})
+		if !errors.Is(err, task.ErrNodeWriteStartLost) {
+			t.Fatalf("durable sandbox mismatch error=%v, want start-lost", err)
+		}
+		assertNodeWriteDrillPairStatus(t, db, run.ID, model.TaskRunStatusPending)
+	})
 }
 
 func TestNodeWriteCoordinatorRecoveryAdmissionUsesImmutableRunNodeAfterTaskMigration(t *testing.T) {
@@ -918,6 +1456,108 @@ func TestNodeWriteCoordinatorPostgresLocksSharedNodeRowForUpdate(t *testing.T) {
 	}
 }
 
+type nodeWriteSQLiteBoundaryBarrierPool struct {
+	*sql.DB
+	entered chan struct{}
+	release <-chan struct{}
+	match   func(string) bool
+	once    sync.Once
+}
+
+func (pool *nodeWriteSQLiteBoundaryBarrierPool) BeginTx(
+	ctx context.Context,
+	options *sql.TxOptions,
+) (gorm.ConnPool, error) {
+	tx, err := pool.DB.BeginTx(ctx, options)
+	if err != nil {
+		return nil, err
+	}
+	return &nodeWriteSQLiteBoundaryBarrierTx{Tx: tx, pool: pool}, nil
+}
+
+type nodeWriteSQLiteBoundaryBarrierTx struct {
+	*sql.Tx
+	pool *nodeWriteSQLiteBoundaryBarrierPool
+}
+
+func (tx *nodeWriteSQLiteBoundaryBarrierTx) ExecContext(
+	ctx context.Context,
+	query string,
+	args ...any,
+) (sql.Result, error) {
+	if err := tx.pool.wait(ctx, query); err != nil {
+		return nil, err
+	}
+	return tx.Tx.ExecContext(ctx, query, args...)
+}
+
+func (tx *nodeWriteSQLiteBoundaryBarrierTx) QueryContext(
+	ctx context.Context,
+	query string,
+	args ...any,
+) (*sql.Rows, error) {
+	if err := tx.pool.wait(ctx, query); err != nil {
+		return nil, err
+	}
+	return tx.Tx.QueryContext(ctx, query, args...)
+}
+
+func (pool *nodeWriteSQLiteBoundaryBarrierPool) wait(ctx context.Context, query string) error {
+	if pool.match == nil || !pool.match(query) {
+		return nil
+	}
+	var waitErr error
+	pool.once.Do(func() {
+		close(pool.entered)
+		select {
+		case <-pool.release:
+		case <-ctx.Done():
+			waitErr = ctx.Err()
+		}
+	})
+	return waitErr
+}
+
+func openNodeWriteSQLiteBoundaryBarrierDB(
+	t *testing.T,
+	db *gorm.DB,
+	entered chan struct{},
+	release <-chan struct{},
+	match func(string) bool,
+) *gorm.DB {
+	t.Helper()
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := &nodeWriteSQLiteBoundaryBarrierPool{
+		DB: sqlDB, entered: entered, release: release, match: match,
+	}
+	barrierDB, err := gorm.Open(sqlite.New(sqlite.Config{Conn: pool}), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("open SQLite boundary barrier DB: %v", err)
+	}
+	return barrierDB
+}
+
+func nodeWriteSQLiteLoserBoundaryMatch(testCase nodeWriteDrillRecoveryBarrierCase) func(string) bool {
+	return func(query string) bool {
+		normalized := strings.ToLower(strings.Join(strings.Fields(query), " "))
+		if testCase.phase == "start" && testCase.winner == "recovery" {
+			// The Drill start reads its immutable pair before locking either node.
+			// Pause at that first start boundary; after release, retryWait still has
+			// to prove the same transaction reached and contended on the node write.
+			return strings.Contains(normalized, "select") &&
+				strings.Contains(normalized, "task_runs") &&
+				strings.Contains(normalized, "node_id_snapshot") &&
+				strings.Contains(normalized, "trigger_type")
+		}
+		return strings.Contains(normalized, "update nodes set id = id where id = ?")
+	}
+}
+
 func openNodeWriteCoordinatorTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := fmt.Sprintf("file:node-write-%d?mode=memory&cache=shared&_busy_timeout=1&_loc=UTC", nodeWriteTestDBSequence.Add(1))
@@ -932,8 +1572,8 @@ func openNodeWriteCoordinatorTestDB(t *testing.T) *gorm.DB {
 	sqlDB.SetMaxOpenConns(8)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := db.AutoMigrate(
-		&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{},
-		&model.BackupAssetRecoveryNodeLease{},
+		&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{},
+		&model.RestoreDrillEvidence{}, &model.BackupAssetRecoveryNodeLease{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -972,6 +1612,193 @@ func reserveNodeWriteTask(ctx context.Context, db *gorm.DB, coordinator *NodeWri
 	})
 }
 
+func reserveNodeWriteDrill(
+	ctx context.Context,
+	db *gorm.DB,
+	coordinator *NodeWriteCoordinator,
+	taskEntity model.Task,
+	sandboxNodeID uint,
+) error {
+	_, err := reserveNodeWriteDrillPair(ctx, db, coordinator, taskEntity, sandboxNodeID)
+	return err
+}
+
+func reserveNodeWriteDrillPair(
+	ctx context.Context,
+	db *gorm.DB,
+	coordinator *NodeWriteCoordinator,
+	taskEntity model.Task,
+	sandboxNodeID uint,
+) (uint, error) {
+	var runID uint
+	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		runID, err = reserveNodeWriteDrillPairTx(ctx, tx, coordinator, taskEntity, sandboxNodeID)
+		return err
+	})
+	return runID, err
+}
+
+func reserveNodeWriteDrillPairTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	coordinator *NodeWriteCoordinator,
+	taskEntity model.Task,
+	sandboxNodeID uint,
+) (uint, error) {
+	if err := coordinator.AdmitDrillTx(ctx, tx, taskEntity.NodeID, sandboxNodeID); err != nil {
+		return 0, err
+	}
+	run := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "drill", Status: model.TaskRunStatusPending}
+	if err := tx.WithContext(ctx).Create(&run).Error; err != nil {
+		return 0, err
+	}
+	err := tx.WithContext(ctx).Create(&model.RestoreDrillEvidence{
+		PolicyID: 1, TaskID: taskEntity.ID, TaskRunID: run.ID,
+		SandboxNodeID: sandboxNodeID, SandboxPath: "/tmp/node-write-drill-sandbox",
+		Status: model.TaskRunStatusPending,
+	}).Error
+	return run.ID, err
+}
+
+func startNodeWriteDrillPairTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	coordinator *NodeWriteCoordinator,
+	runID uint,
+	sandboxNodeID uint,
+	startedAt time.Time,
+) error {
+	if err := coordinator.EnterDrillExecutionTx(ctx, tx, runID, sandboxNodeID, startedAt); err != nil {
+		return err
+	}
+	result := tx.WithContext(ctx).Model(&model.RestoreDrillEvidence{}).
+		Where("task_run_id = ? AND status = ?", runID, model.TaskRunStatusPending).
+		Updates(map[string]interface{}{"status": model.TaskRunStatusRunning, "started_at": &startedAt})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return task.ErrNodeWriteStartLost
+	}
+	return nil
+}
+
+func assertNodeWriteDrillRecoveryWinner(t *testing.T, db *gorm.DB, wantRecovery bool) {
+	t.Helper()
+	var runCount, evidenceCount, leaseCount int64
+	if err := db.Model(&model.TaskRun{}).Where("trigger_type = ? AND status IN ?", "drill", model.TaskRunActiveStatuses()).Count(&runCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.RestoreDrillEvidence{}).Where("status IN ?", model.TaskRunActiveStatuses()).Count(&evidenceCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.BackupAssetRecoveryNodeLease{}).Where("state = ?", "active").Count(&leaseCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if wantRecovery {
+		if runCount != 0 || evidenceCount != 0 || leaseCount != 1 {
+			t.Fatalf("Recovery-first durable rows run/evidence/lease=%d/%d/%d, want 0/0/1", runCount, evidenceCount, leaseCount)
+		}
+		return
+	}
+	if runCount != 1 || evidenceCount != 1 || leaseCount != 0 {
+		t.Fatalf("Drill-first durable rows run/evidence/lease=%d/%d/%d, want 1/1/0", runCount, evidenceCount, leaseCount)
+	}
+}
+
+func assertNodeWriteDrillPairStatus(t *testing.T, db *gorm.DB, runID uint, want string) {
+	t.Helper()
+	var run model.TaskRun
+	var evidence model.RestoreDrillEvidence
+	if err := db.First(&run, runID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("task_run_id = ?", runID).Take(&evidence).Error; err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != want || evidence.Status != want {
+		t.Fatalf("drill pair status TaskRun=%q Evidence=%q, want %q/%q", run.Status, evidence.Status, want, want)
+	}
+}
+
+func assertNodeWriteDrillRecoveryBarrierState(
+	t *testing.T,
+	db *gorm.DB,
+	taskID uint,
+	sourceNodeID uint,
+	sandboxNodeID uint,
+	runID uint,
+	recoveryNodeID uint,
+	phase string,
+	winner string,
+) {
+	t.Helper()
+	var runs []model.TaskRun
+	if err := db.Where("task_id = ? AND trigger_type = ?", taskID, "drill").Find(&runs).Error; err != nil {
+		t.Fatal(err)
+	}
+	var evidences []model.RestoreDrillEvidence
+	if err := db.Where("task_id = ?", taskID).Find(&evidences).Error; err != nil {
+		t.Fatal(err)
+	}
+	var leases []model.BackupAssetRecoveryNodeLease
+	if err := db.Where("node_id = ? AND state = ?", recoveryNodeID, "active").Find(&leases).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// A legacy/out-of-band Recovery winner at start does not delete the already
+	// reserved pair: exact fail-closed state is one pending pair plus one lease.
+	wantPair := phase == "start" || winner == "drill"
+	wantLease := winner == "recovery"
+	if len(runs) != boolCount(wantPair) || len(evidences) != boolCount(wantPair) || len(leases) != boolCount(wantLease) {
+		t.Fatalf("durable matrix state TaskRun/Evidence/lease=%d/%d/%d, want %d/%d/%d",
+			len(runs), len(evidences), len(leases),
+			boolCount(wantPair), boolCount(wantPair), boolCount(wantLease))
+	}
+	if !wantPair {
+		return
+	}
+	if runs[0].ID != runID || evidences[0].TaskRunID != runID {
+		t.Fatalf("split Drill pair TaskRun ID/Evidence TaskRun ID=%d/%d, want %d/%d",
+			runs[0].ID, evidences[0].TaskRunID, runID, runID)
+	}
+	if runs[0].NodeIDSnapshot != sourceNodeID || evidences[0].SandboxNodeID != sandboxNodeID {
+		t.Fatalf("Drill pair node snapshots source/sandbox=%d/%d, want %d/%d",
+			runs[0].NodeIDSnapshot, evidences[0].SandboxNodeID, sourceNodeID, sandboxNodeID)
+	}
+	wantStatus := model.TaskRunStatusPending
+	if phase == "start" && winner == "drill" {
+		wantStatus = model.TaskRunStatusRunning
+	}
+	if runs[0].Status != wantStatus || evidences[0].Status != wantStatus {
+		t.Fatalf("Drill pair status TaskRun/Evidence=%q/%q, want %q/%q",
+			runs[0].Status, evidences[0].Status, wantStatus, wantStatus)
+	}
+	if wantStatus == model.TaskRunStatusRunning {
+		if runs[0].StartedAt == nil || evidences[0].StartedAt == nil {
+			t.Fatalf("running Drill pair missing started_at TaskRun/Evidence=%v/%v",
+				runs[0].StartedAt, evidences[0].StartedAt)
+		}
+		if !runs[0].StartedAt.Equal(*evidences[0].StartedAt) {
+			t.Fatalf("running Drill pair started_at differs TaskRun/Evidence=%s/%s",
+				runs[0].StartedAt.UTC(), evidences[0].StartedAt.UTC())
+		}
+		return
+	}
+	if runs[0].StartedAt != nil || evidences[0].StartedAt != nil {
+		t.Fatalf("pending Drill pair has started_at TaskRun/Evidence=%v/%v",
+			runs[0].StartedAt, evidences[0].StartedAt)
+	}
+}
+
+func boolCount(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 func claimNodeWriteRecovery(ctx context.Context, db *gorm.DB, coordinator *NodeWriteCoordinator, nodeID uint) error {
 	return claimNodeWriteRecoveryLease(ctx, db, coordinator, nodeWriteTestLease(nodeID))
 }
@@ -983,11 +1810,31 @@ func claimNodeWriteRecoveryLease(
 	lease *model.BackupAssetRecoveryNodeLease,
 ) error {
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := coordinator.AdmitRecoveryTx(ctx, tx, lease.NodeID); err != nil {
-			return err
-		}
-		return tx.Create(lease).Error
+		return claimNodeWriteRecoveryLeaseTx(ctx, tx, coordinator, lease)
 	})
+}
+
+func claimNodeWriteRecoveryLeaseTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	coordinator *NodeWriteCoordinator,
+	lease *model.BackupAssetRecoveryNodeLease,
+) error {
+	if err := coordinator.AdmitRecoveryTx(ctx, tx, lease.NodeID); err != nil {
+		return err
+	}
+	return tx.WithContext(ctx).Create(lease).Error
+}
+
+func insertNodeWriteLegacyRecoveryLeaseTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	lease *model.BackupAssetRecoveryNodeLease,
+) error {
+	if err := lockNodeBoundaryOnce(ctx, tx, lease.NodeID); err != nil {
+		return err
+	}
+	return tx.WithContext(ctx).Create(lease).Error
 }
 
 func nodeWriteTestLease(nodeID uint) *model.BackupAssetRecoveryNodeLease {

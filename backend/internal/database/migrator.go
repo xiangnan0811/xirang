@@ -18,6 +18,11 @@ import (
 // 服务必须在任何 schema 修复或前向迁移之前拒绝启动，交由备份恢复或离线核验流程处理。
 var ErrMigrationDirty = errors.New("schema_migrations.dirty=1，前次迁移未正常完成，拒绝启动")
 
+// ErrMigrationPrecondition means live data cannot safely be represented by the
+// next migration. The migration runner rejects before golang-migrate marks the
+// target version dirty, so an audited data repair can be retried directly.
+var ErrMigrationPrecondition = errors.New("migration precondition failed; startup refused")
+
 //go:embed migrations/sqlite/*.sql
 var sqliteMigrationsFS embed.FS
 
@@ -58,6 +63,9 @@ func RunMigrations(db *gorm.DB, dbType string) error {
 		return fmt.Errorf("%w (version=%d)", ErrMigrationDirty, version)
 	}
 	if err := validateMinimumRecoverySchema(sqlDB, dbType, version); err != nil {
+		return err
+	}
+	if err := preflightDrillDurableRecoveryMigration(sqlDB, dbType, version); err != nil {
 		return err
 	}
 
@@ -119,6 +127,38 @@ func RunMigrations(db *gorm.DB, dbType string) error {
 	}
 	log.Printf("数据库迁移完成，当前版本: %d, dirty: %v", versionAfter, dirtyAfter)
 
+	return nil
+}
+
+func preflightDrillDurableRecoveryMigration(db *sql.DB, dbType string, version int64) error {
+	if version >= drillDurableRecoverySchemaVersion {
+		return nil
+	}
+	taskRunsExist, err := migrationRelationExists(db, dbType, "task_runs", "table")
+	if err != nil {
+		return fmt.Errorf("%w (version=%d, reason=catalog_query_failed)", ErrMigrationPrecondition, version)
+	}
+	if !taskRunsExist {
+		return nil
+	}
+
+	var duplicateTaskCount int64
+	err = db.QueryRow(`
+		SELECT COUNT(*)
+		FROM (
+			SELECT task_id
+			FROM task_runs
+			WHERE trigger_type = 'drill'
+			  AND status IN ('pending', 'running', 'retrying')
+			GROUP BY task_id
+			HAVING COUNT(*) > 1
+		) AS duplicate_active_drills`).Scan(&duplicateTaskCount)
+	if err != nil {
+		return fmt.Errorf("%w (version=%d, reason=catalog_query_failed)", ErrMigrationPrecondition, version)
+	}
+	if duplicateTaskCount > 0 {
+		return fmt.Errorf("%w (version=%d, reason=duplicate_active_drill); terminalize each TaskRun/Evidence pair atomically before retrying", ErrMigrationPrecondition, version)
+	}
 	return nil
 }
 

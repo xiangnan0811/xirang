@@ -45,7 +45,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
 - Keep version numbers in lockstep across SQLite and PostgreSQL. The current
-  latest migration is `000073_backup_asset_plain_text_content`.
+  latest migration is `000074_drill_durable_recovery`.
 - Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the
   SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
@@ -61,8 +61,10 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   before fixups and validate it again after `Up`. At 000072 or newer, also
   validate the final TaskRun compatibility triggers and PostgreSQL constraint.
   At 000073 or newer, validate both the exact plain-text grant constraints and
-  the semantics of the downgrade-admission trigger/function; a same-named no-op
-  database object is schema drift, not startup authorization.
+  the semantics of the downgrade-admission trigger/function. At 000074 or newer,
+  also validate the durable Drill columns, active-run partial unique index, and
+  downgrade-admission trigger/function; a same-named no-op database object is
+  schema drift, not startup authorization.
   Missing objects are typed, sanitized schema drift and never authorization for
   forward writes.
 
@@ -123,7 +125,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   traffic-window predicates or index names.
 - Backup-asset schema changes are paired across SQLite and PostgreSQL. The
   current baseline includes `000062` through
-  `000073_backup_asset_plain_text_content`;
+  `000074_drill_durable_recovery`;
   later versions must remain paired. After durable Search or publication facts,
   or live content-delivery state exists, schema down must fail closed rather
   than deleting history, Provider facts, grants, reservations, or leases.
@@ -146,6 +148,12 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   replace only the four named renderer/profile product constraints inside one
   transaction. Both direct down and migration-metadata admission must reject
   while any grant uses either 000073-only value.
+- Paired 000074 adds durable Drill ownership/lease fields and a partial unique
+  index that permits at most one `pending|running|retrying` Drill TaskRun per
+  task. Duplicate historical active rows fail migration cleanly before dirty
+  metadata is written; after TaskRun/Evidence are repaired together, the same
+  migration is directly retryable. Used down is protected by metadata admission
+  and preserves version 74 clean.
 
 ## Scenario: TaskRun Snapshot Compatibility and Startup Drift
 
@@ -217,6 +225,94 @@ db.Where("task_id = ? AND node_id_snapshot = ? AND status = ?",
     taskID, task.NodeID, model.TaskRunStatusSuccess)
 ```
 
+## Scenario: Atomic Multi-Node Drill And Recovery Admission
+
+### 1. Scope / Trigger
+
+- Trigger: changing Task/Drill reservation, TaskRun execution entry, Recovery
+  node leases, sandbox selection, or `NodeWriteAdmission` wiring.
+- Applies to both the Drill source node and sandbox node on SQLite and
+  PostgreSQL; a Drill transport being configured does not relax this boundary.
+
+### 2. Signatures
+
+- `AdmitTaskTx(context.Context, *gorm.DB, uint) error`.
+- `EnterTaskExecutionTx(context.Context, *gorm.DB, uint, uint, time.Time) error`.
+- `AdmitDrillTx(context.Context, *gorm.DB, sourceNodeID, sandboxNodeID uint) error`.
+- `EnterDrillExecutionTx(context.Context, *gorm.DB, runID, sandboxNodeID uint, startedAt time.Time) error`.
+- `AdmitRecoveryTx(context.Context, *gorm.DB, nodeID uint) error`.
+
+### 3. Contracts
+
+- Drill reservation sorts and deduplicates source/sandbox node IDs, locks every
+  node boundary in that deterministic order, and checks both Recovery leases in
+  the same transaction that creates TaskRun and Evidence.
+- Drill execution derives the immutable source from TaskRun, locks the same
+  source/sandbox set, rechecks both leases, and commits pending-to-running plus
+  Evidence start atomically. A lease acquired after reservation but before start
+  therefore blocks remote side effects.
+- Recovery admission rejects an active Drill whose source or Evidence sandbox
+  is the requested node. Active on either side remains fail-closed until durable
+  reconciliation repairs a split pair.
+- Missing admission wiring returns the sanitized unavailable sentinel even when
+  a Drill transport is configured. Process-local ownership is never a substitute
+  for the database boundary.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Recovery lease exists on source or sandbox before Drill reservation | Drill reservation conflicts; no TaskRun/Evidence pair is created. |
+| Recovery lease appears on either node after reservation but before start | Start transaction rolls back; TaskRun/Evidence remain pending. |
+| Active Drill exists on a node as source or sandbox | Recovery admission conflicts; no lease is created. |
+| Source and sandbox are the same node | Lock and inspect the boundary once; preserve all other checks. |
+| Admission implementation is nil or a node boundary is missing | Fail closed with unavailable; do not create or start a run. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: source and sandbox are locked in ascending ID order, both leases are
+  rechecked at start, and exactly one side wins a concurrent Drill/Recovery race.
+- Base: source equals sandbox; the deduplicated one-node transaction succeeds
+  only when that node has no active Recovery lease.
+- Bad: check only `TaskRun.node_id_snapshot`, check the sandbox outside the
+  caller transaction, or rely on in-memory Drill ownership.
+
+### 6. Tests Required
+
+- Cover source and sandbox lease conflicts at reservation and start, same-node
+  deduplication, caller rollback, missing admission wiring, and immutable
+  sandbox mismatch.
+- Run both race orders repeatedly on SQLite and required real PostgreSQL:
+  Recovery-first blocks Drill; Drill-first blocks Recovery. PostgreSQL coverage
+  must run in the required parity job rather than being skipped without a DSN.
+- A race test must hold the winner transaction uncommitted until the contender
+  has reached the same database boundary. SQLite asserts a real retryable
+  `BUSY`/`LOCKED` result; PostgreSQL asserts `wait_event_type = 'Lock'` and that
+  `pg_blocking_pids` contains the exact holder PID. A shared start channel or a
+  sequentially pre-seeded lease is not sufficient concurrency evidence.
+- At execution start, a Recovery-first case represents the documented
+  legacy/out-of-band lease appearing after reservation: normal
+  `AdmitRecoveryTx` cannot legally win while the pending Drill pair is active.
+  Name and assert this case separately from normal Recovery admission.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+// Checks only the source and leaves the sandbox outside the reservation.
+if err := admission.AdmitTaskTx(ctx, tx, task.NodeID); err != nil { return err }
+```
+
+Correct:
+
+```go
+if err := admission.AdmitDrillTx(ctx, tx, task.NodeID, evidence.SandboxNodeID); err != nil {
+    return err
+}
+// Create TaskRun and Evidence before committing this same transaction.
+```
+
 ## Scenario: PostgreSQL Timestamp Scan-Location Parity
 
 ### 1. Scope / Trigger
@@ -230,8 +326,10 @@ db.Where("task_id = ? AND node_id_snapshot = ? AND status = ?",
 ### 2. Signatures
 
 - Connection helper: `openPostgresSQLDB(dsn string) (*sql.DB, error)`.
-- CI regression gate:
-  `go test ./internal/database -run '^(TestBackupAssetMigration062PostgresApplyDown|TestBackupAssetMigration0(63|64|65|66|67|68|69|70|71|72|73)Postgres|TestPostgresTimestamptzScanUsesConfiguredUTC|TestRunMigrationsPostgres(Dirty|SchemaDrift)CheckUsesSearchPath)$' -count=1`.
+- Required PostgreSQL runner:
+  `scripts/run-required-postgres-tests.sh <suite-label> <go-package> <test-selector>`.
+- Migration selector:
+  `^(Test.*Migration.*Postgres.*|TestPostgresTimestamptzScanUsesConfiguredUTC)$`.
 - Export behavior gate:
   `go test ./internal/backupasset/export -run '^TestExportBehaviorPostgres$' -count=1`.
 - Required pgx registrations per physical connection:
@@ -251,9 +349,11 @@ db.Where("task_id = ? AND node_id_snapshot = ? AND status = ?",
 - Register **both** `timestamp` and `timestamptz` codecs in pgx's `AfterConnect`
   hook. Configuring only `timestamp` leaves `TIMESTAMPTZ` scans vulnerable to
   `time.Local` on newer Go/pgx combinations.
-- SQLite/PostgreSQL migration parity for backup assets covers 000062 through
-  000073. A new paired migration must be added to this regex deliberately; it
-  must never be silently omitted from the PostgreSQL gate.
+- The migration selector is semantic, not a version whitelist: every PostgreSQL
+  migration test following the `Test...Migration...Postgres...` naming contract
+  is selected automatically. The runner first executes `go test -list` with the
+  exact selector, prints every selected test and its count, rejects an empty
+  selection, requires `TEST_POSTGRES_DSN`, then executes the same selector.
 
 ### 4. Validation & Error Matrix
 
@@ -263,7 +363,8 @@ db.Where("task_id = ? AND node_id_snapshot = ? AND status = ?",
 | DSN timezone cannot be loaded | `Open` fails before creating a GORM database. |
 | `TIMESTAMPTZ '...+00'` is scanned while `TZ=Asia/Shanghai` | Returned `time.Time` has `Location()==time.UTC` and preserves the instant. |
 | Only `TimestampCodec` is registered | Invalid: `TIMESTAMPTZ` may scan in `time.Local`; add `TimestamptzCodec`. |
-| A backup-asset migration is absent from the parity regex | Invalid CI contract; extend the regex and add an integration test. |
+| The selector matches zero tests | Fail before execution; an empty green command is not parity evidence. |
+| A PostgreSQL migration test does not follow the semantic naming contract | Invalid test contract; rename it and make the workflow freshness test fail until selected. |
 
 ### 5. Good/Base/Bad Cases
 
@@ -279,13 +380,16 @@ db.Where("task_id = ? AND node_id_snapshot = ? AND status = ?",
 - `TestPostgresTimestamptzScanUsesConfiguredUTC` must run against a real
   PostgreSQL service with `TZ` set to a non-UTC value and assert both location
   and RFC3339 value.
-- PostgreSQL migration tests must exercise paired apply/down contracts for
-  000062 through 000073.
+- PostgreSQL migration tests must exercise every paired apply/down contract,
+  including 000074 clean preflight/retry, down admission, and schema drift.
 - `TestRunMigrationsPostgresDirtyCheckUsesSearchPath` must prove an unrelated
   sibling schema does not interfere while a search-path-visible dirty row still
   fails closed.
-- Run the CI regex above with `REQUIRE_POSTGRES_MIGRATION_TEST=1`; a skipped
-  PostgreSQL test is not completion evidence.
+- `TestPostgresMigrationCISelectorIncludesDrillRecovery074` must prove the active
+  workflow calls the reusable runner and the exact selector lists all three
+  required 000074 PostgreSQL contracts.
+- Run the required selector above with `REQUIRE_POSTGRES_MIGRATION_TEST=1`; a
+  skipped PostgreSQL test is not completion evidence.
 - Run `TestExportBehaviorPostgres` with `REQUIRE_POSTGRES_EXPORT_TEST=1`; a
   missing `TEST_POSTGRES_DSN` is a failed required gate, never SQLite evidence.
 
@@ -739,9 +843,11 @@ _, err := budget.Finalize(ctx, intent)
 - Bounded conflict helper: `ArtifactSink.retryManifestConflicts`; it recognizes
   SQLite busy/table locks plus PostgreSQL serialization/deadlock conflicts and
   stops on caller cancellation.
-- Required PostgreSQL selectors:
-  `Test(BackupAssetMigration0(62|63|64|65|66|67)Postgres|PostgresTimestamptzScanUsesConfiguredUTC)`
-  and `^TestProcessingBehaviorPostgres$`.
+- Required PostgreSQL migration coverage uses the reusable semantic runner and
+  selector from "PostgreSQL Timestamp Scan-Location Parity"; do not add a
+  version whitelist here.
+- Required Processing behavior selector:
+  `^(TestProcessingBehaviorPostgres|TestArchiveMemberBehaviorPostgres)$`.
 
 ### 3. Contracts
 
@@ -964,8 +1070,8 @@ END;
   `command_unsupported`.
 - Admission trigger: `trg_backup_asset_ga_downgrade_admission` on
   `schema_migrations` for `NEW.version < 71`.
-- CI regex already includes `071`; keep
-  `TestBackupAssetMigration071Postgres` in the parity selector.
+- The semantic CI selector must continue to list
+  `TestBackupAssetMigration071Postgres`.
 - Check script: `scripts/check-backup-asset-migration.sh`.
 
 ### 3. Contracts

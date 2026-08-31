@@ -56,24 +56,30 @@ const (
 	defaultSampleCleanupInterval  = time.Hour
 	defaultSampleCleanupBatchSize = 500
 	nodeWriteReservationAttempts  = 8
+	defaultDrillRecoveryLease     = 30 * time.Second
+	defaultDrillRecoveryInterval  = 5 * time.Second
 )
 
 var (
 	ErrNodeWriteConflict     = errors.New("node write conflict")
 	ErrNodeWriteUnavailable  = errors.New("node write admission unavailable")
 	ErrNodeWriteStartLost    = errors.New("node write start compare-and-swap lost")
+	ErrDrillUnavailable      = errors.New("恢复演练功能暂不可用")
+	ErrDrillAlreadyActive    = errors.New("该任务正在执行中，请勿重复触发")
 	errTaskCancelInProgress  = errors.New("任务取消操作正在进行，请稍候再试")
 	errTaskCancelConflict    = errors.New("任务状态已变化，请重试")
 	errTaskCancelUnavailable = errors.New("取消任务失败，请稍后重试")
 	errTaskCancelUnsupported = errors.New("仅支持取消待执行、重试中或运行中的任务")
 )
 
-// NodeWriteAdmission serializes TaskRun reservations with durable Recovery
-// node leases. The caller owns the transaction and inserts the pending run only
-// after admission succeeds.
+// NodeWriteAdmission serializes ordinary and Drill TaskRun lifecycles with
+// durable Recovery node leases. The caller owns the transaction, so reservation
+// and execution admission commit or roll back with the corresponding run state.
 type NodeWriteAdmission interface {
 	AdmitTaskTx(context.Context, *gorm.DB, uint) error
 	EnterTaskExecutionTx(context.Context, *gorm.DB, uint, uint, time.Time) error
+	AdmitDrillTx(context.Context, *gorm.DB, uint, uint) error
+	EnterDrillExecutionTx(context.Context, *gorm.DB, uint, uint, time.Time) error
 }
 
 // ManagerOption configures a Manager during construction.
@@ -90,15 +96,29 @@ func WithRunContextFactory(factory func(context.Context, time.Duration) (context
 	}
 }
 
+// WithDrillRestoreFunc configures the restore transport used by recovery
+// drills. Production intentionally leaves this unset until a secure
+// credential-agent/relay transport is available; tests and future internal
+// callers can inject an explicit transport when exercising the workflow.
+func WithDrillRestoreFunc(restore func(context.Context, model.Task, model.Node, string, func(string, string)) error) ManagerOption {
+	return func(manager *Manager) {
+		if restore != nil {
+			manager.drillRestoreFunc = restore
+		}
+	}
+}
+
 // chainContext 保存任务链的上下文信息，用于重试时恢复链路追踪
 type chainContext struct {
 	chainRunID string
 }
 
 type pendingRunOwnership struct {
-	mu       sync.Mutex
-	canceled bool
-	cancels  []context.CancelFunc
+	mu                          sync.Mutex
+	canceled                    bool
+	cancels                     []context.CancelFunc
+	drillRecoveryRunID          atomic.Uint64
+	drillRecoveryCleanupClaimed atomic.Bool
 }
 
 // taskCancelTriggerBarrier occupies the same process-local ownership slot as a
@@ -137,6 +157,28 @@ func (ownership *pendingRunOwnership) cancel() {
 	for _, cancel := range cancels {
 		cancel()
 	}
+}
+
+func (ownership *pendingRunOwnership) handoffDrillRecovery(runID uint) {
+	if ownership == nil || runID == 0 {
+		return
+	}
+	ownership.drillRecoveryRunID.Store(uint64(runID))
+}
+
+func (ownership *pendingRunOwnership) handedOffDrillRunID() (uint, bool) {
+	if ownership == nil {
+		return 0, false
+	}
+	runID := ownership.drillRecoveryRunID.Load()
+	return uint(runID), runID != 0
+}
+
+func (ownership *pendingRunOwnership) claimDrillRecoveryCleanup(runID uint) bool {
+	if ownership == nil || runID == 0 || ownership.drillRecoveryRunID.Load() != uint64(runID) {
+		return false
+	}
+	return ownership.drillRecoveryCleanupClaimed.CompareAndSwap(false, true)
 }
 
 func generateChainRunID() string {
@@ -184,7 +226,6 @@ type Manager struct {
 	retryChainContexts          sync.Map // taskID → chainContext
 	semaphore                   chan struct{}
 	taskWG                      sync.WaitGroup
-
 	// Sub-components extracted from the Manager god object.
 	logDispatcher *LogDispatcher
 	sampleWriter  *SampleWriter
@@ -209,9 +250,19 @@ type Manager struct {
 	legacyBlockRecorder    publication.LegacyBlockRecorder
 	managedRetention       ManagedRecoveryPointRetention
 	resticRetentionFunc    func(context.Context, model.Policy, model.Task)
+	rootCtx                context.Context    // worker goroutines 的父级 context
+	rootCancel             context.CancelFunc // 由 Shutdown 调用，通知所有 worker 退出
 
-	rootCtx    context.Context    // worker goroutines 的父级 context
-	rootCancel context.CancelFunc // 由 Shutdown 调用，通知所有 worker 退出
+	drillLoopMu           sync.Mutex
+	drillLoopCancel       context.CancelFunc
+	drillLoopWG           sync.WaitGroup
+	drillOwnerID          string
+	drillRecoveryLease    time.Duration
+	drillRecoveryInterval time.Duration
+	drillRecoveryBlocked  atomic.Bool
+	managerRunMu          sync.Mutex
+	managerRunCancel      context.CancelFunc
+	managerRunDone        chan struct{}
 
 	shuttingDown atomic.Bool
 }
@@ -226,19 +277,23 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 		alertDispatcher = alerting.NewDispatcher(db, nil, nil)
 	}
 	m := &Manager{
-		db:                   db,
-		nodeWriteRetryWait:   waitForNodeWriteReservationRetry,
-		runContextFactory:    context.WithTimeout,
-		stateMachine:         NewStateMachine(),
-		executorFactory:      executorFactory,
-		hub:                  hub,
-		scheduler:            scheduler,
-		semaphore:            make(chan struct{}, 8),
-		hookRunFunc:          nil, // 初始化后设置为默认 runSSHHook
-		taskRunRetentionDays: taskRunRetentionDays,
-		settingsSvc:          settingsSvc,
-		alertDispatcher:      alertDispatcher,
+		db:                    db,
+		nodeWriteRetryWait:    waitForNodeWriteReservationRetry,
+		runContextFactory:     context.WithTimeout,
+		stateMachine:          NewStateMachine(),
+		executorFactory:       executorFactory,
+		hub:                   hub,
+		scheduler:             scheduler,
+		semaphore:             make(chan struct{}, 8),
+		hookRunFunc:           nil, // 初始化后设置为默认 runSSHHook
+		taskRunRetentionDays:  taskRunRetentionDays,
+		settingsSvc:           settingsSvc,
+		alertDispatcher:       alertDispatcher,
+		drillOwnerID:          generateChainRunID(),
+		drillRecoveryLease:    defaultDrillRecoveryLease,
+		drillRecoveryInterval: defaultDrillRecoveryInterval,
 	}
+	m.drillRecoveryBlocked.Store(true)
 	for _, option := range options {
 		if option != nil {
 			option(m)
@@ -246,7 +301,10 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 	}
 	m.hookRunFunc = m.runSSHHook
 	m.drillSSHScriptFunc = m.runDrillSSHScript
-	m.drillRestoreFunc = m.restoreBackupToSandbox
+	// The production restore transport is intentionally unavailable until a
+	// credential-agent/relay implementation can move data without spreading
+	// source-node credentials. Tests and future internal callers may inject
+	// drillRestoreFunc explicitly.
 	m.ensureRemoteTargetReadyFunc = executor.EnsureRemoteTargetReady
 	m.rootCtx, m.rootCancel = context.WithCancel(context.Background())
 
@@ -273,7 +331,11 @@ func (m *Manager) newRunContext(parent context.Context, timeout time.Duration) (
 }
 
 func (m *Manager) claimPendingRunOwnership(taskID uint) (context.Context, *pendingRunOwnership, bool) {
-	launchCtx, launchCancel := context.WithCancel(context.Background())
+	parent := m.rootCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	launchCtx, launchCancel := context.WithCancel(parent)
 	ownership := &pendingRunOwnership{}
 	ownership.addCancel(launchCancel)
 	if _, loaded := m.pendingRuns.LoadOrStore(taskID, ownership); loaded {
@@ -582,6 +644,21 @@ func retryableNodeWriteReservationError(err error) bool {
 	return strings.Contains(message, "database is locked") || strings.Contains(message, "database table is locked")
 }
 
+func isActiveDrillReservationConflict(err error) bool {
+	var sqliteError sqlite3.Error
+	if errors.As(err, &sqliteError) && sqliteError.Code == sqlite3.ErrConstraint &&
+		(sqliteError.ExtendedCode == sqlite3.ErrConstraintUnique || sqliteError.ExtendedCode == sqlite3.ErrConstraintPrimaryKey) {
+		return true
+	}
+	var postgresError *pgconn.PgError
+	if errors.As(err, &postgresError) {
+		return postgresError.Code == "23505" && postgresError.ConstraintName == activeDrillRunIndex
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, activeDrillRunIndex) ||
+		strings.Contains(message, "unique constraint failed: task_runs.task_id")
+}
+
 func waitForNodeWriteReservationRetry(ctx context.Context, attempt int) error {
 	delay := time.Duration(attempt+1) * 5 * time.Millisecond
 	timer := time.NewTimer(delay)
@@ -595,6 +672,13 @@ func waitForNodeWriteReservationRetry(ctx context.Context, attempt int) error {
 }
 
 func (m *Manager) LoadSchedules(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := m.reconcileExpiredDrills(ctx); err != nil {
+		m.drillRecoveryBlocked.Store(true)
+		return fmt.Errorf("reconcile interrupted restore drills: %w", err)
+	}
 	var tasks []model.Task
 	if err := m.db.WithContext(ctx).Where("cron_spec <> '' AND enabled = ? AND archived_at IS NULL", true).Find(&tasks).Error; err != nil {
 		return err
@@ -604,6 +688,7 @@ func (m *Manager) LoadSchedules(ctx context.Context) error {
 			return err
 		}
 	}
+	m.drillRecoveryBlocked.Store(false)
 	return nil
 }
 
@@ -845,10 +930,29 @@ func (m *Manager) Cancel(taskID uint) error {
 		if _, canceling := existing.(*taskCancelTriggerBarrier); canceling {
 			return errTaskCancelInProgress
 		}
-		if _, owned := existing.(*pendingRunOwnership); !owned {
+		ownership, owned := existing.(*pendingRunOwnership)
+		if !owned {
 			return errTaskCancelInProgress
 		}
-		return m.cancelLiveOwnedTask(taskID, false)
+		if err := m.cancelLiveOwnedTask(taskID, false); err != nil {
+			return err
+		}
+		if drillRunID, handedOff := ownership.handedOffDrillRunID(); handedOff {
+			terminal, err := m.drillRunTerminal(drillRunID)
+			if err != nil {
+				logger.Module("task").Error().Err(err).Uint("task_id", taskID).Uint("task_run_id", drillRunID).
+					Msg("验证恢复演练启动补偿终态失败")
+				return errTaskCancelUnavailable
+			}
+			if !terminal {
+				return errTaskCancelConflict
+			}
+			if ownership.claimDrillRecoveryCleanup(drillRunID) {
+				m.chainRunner.Delete(taskID)
+				m.pendingRuns.CompareAndDelete(taskID, ownership)
+			}
+		}
+		return nil
 	}
 
 	// A legacy/direct runner may have registered only in chainRunner. Preserve
@@ -892,6 +996,10 @@ func (m *Manager) cancelLiveOwnedTask(taskID uint, signalBeforeRead bool) error 
 		// Runners register their cancel function before competing for any
 		// executor-entry lock. Signal it before the pending-row CAS so a start
 		// transaction cannot advance after cancellation authority is observed.
+		// Keep drill TaskRuns durable-canceled as well as signaling their owner.
+		if _, err := m.cancelDrillTaskRuns(taskID, "任务已取消"); err != nil {
+			return err
+		}
 		canceledRuns, err := m.cancelPendingTaskRuns(taskID, "任务已取消")
 		if err != nil {
 			return err
@@ -912,6 +1020,9 @@ func (m *Manager) cancelLiveOwnedTask(taskID uint, signalBeforeRead bool) error 
 		return nil
 	case StatusRunning:
 		m.stopRetryTimer(taskID)
+		if _, err := m.cancelDrillTaskRuns(taskID, "任务已取消"); err != nil {
+			return err
+		}
 		// Once a runner owns cancellation, it also owns the atomic terminal
 		// update. An independent Task overwrite here can race its no-executor
 		// compensation and destroy the exact pre-entry outcome.
@@ -920,6 +1031,9 @@ func (m *Manager) cancelLiveOwnedTask(taskID uint, signalBeforeRead bool) error 
 	default:
 		// Terminal-state Tasks may own either an ordinary or legacy-restore runner
 		// between reservation and executor entry.
+		if _, err := m.cancelDrillTaskRuns(taskID, "任务已取消"); err != nil {
+			return err
+		}
 		if _, err := m.cancelPendingTaskRuns(taskID, "任务已取消"); err != nil {
 			return err
 		}
@@ -968,6 +1082,17 @@ func (m *Manager) reconcileOrphanTaskRuns(taskID uint) (string, error) {
 
 		for i := range runs {
 			run := &runs[i]
+			if run.TriggerType == "drill" {
+				won, err := cancelOneDrillRunTx(tx, taskID, run.ID, taskEntity.NodeID, "任务已取消", finishedAt)
+				if err != nil {
+					logger.Module("task").Error().Err(err).Uint("task_id", taskID).Uint("task_run_id", run.ID).Msg("取消孤立恢复演练失败")
+					return errTaskCancelUnavailable
+				}
+				if !won {
+					return errTaskCancelConflict
+				}
+				continue
+			}
 			durationMs := int64(0)
 			if run.StartedAt != nil {
 				durationMs = finishedAt.Sub(run.StartedAt.UTC()).Milliseconds()
@@ -1055,6 +1180,144 @@ func (m *Manager) cancelPendingTaskRuns(taskID uint, message string) (int64, err
 			"last_error":  message,
 		})
 	return result.RowsAffected, result.Error
+}
+
+func (m *Manager) cancelOneDrillRun(
+	taskID uint,
+	drillRunID uint,
+	message string,
+	canceledAt time.Time,
+) (bool, error) {
+	canceledAt = canceledAt.UTC()
+	message = sanitizeTaskLastError(message)
+	won := false
+	err := m.db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		won, err = cancelOneDrillRunTx(tx, taskID, drillRunID, 0, message, canceledAt)
+		return err
+	})
+	return won, err
+}
+
+func cancelOneDrillRunTx(
+	tx *gorm.DB,
+	taskID uint,
+	drillRunID uint,
+	expectedNodeID uint,
+	message string,
+	canceledAt time.Time,
+) (bool, error) {
+	var run model.TaskRun
+	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND task_id = ? AND trigger_type = ? AND status IN ?",
+			drillRunID, taskID, "drill", model.TaskRunActiveStatuses())
+	if model.IsTaskRunNodeSnapshotAuthoritative(expectedNodeID) {
+		query = query.Where("node_id_snapshot = ?", expectedNodeID)
+	}
+	result := query.Limit(1).Find(&run)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return false, nil
+	}
+
+	var evidence model.RestoreDrillEvidence
+	evidenceResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("task_run_id = ? AND task_id = ?", drillRunID, taskID).Limit(1).Find(&evidence)
+	if evidenceResult.Error != nil {
+		return false, evidenceResult.Error
+	}
+	evidenceExists := evidenceResult.RowsAffected == 1
+	if evidenceExists && evidence.Status != model.TaskRunStatusPending && evidence.Status != model.TaskRunStatusRunning {
+		return false, fmt.Errorf("active restore drill has terminal evidence")
+	}
+	if run.Status != model.TaskRunStatusPending && !evidenceExists {
+		return false, fmt.Errorf("active restore drill evidence is unavailable")
+	}
+
+	durationMs := int64(0)
+	startedAt := run.StartedAt
+	if run.Status != model.TaskRunStatusPending {
+		if startedAt == nil {
+			if run.Status != model.TaskRunStatusRetrying {
+				return false, fmt.Errorf("active restore drill task run has no start time")
+			}
+		} else {
+			durationMs = drillDurationMs(startedAt.UTC(), canceledAt)
+		}
+	} else {
+		startedAt = nil
+	}
+
+	runQuery := tx.Model(&model.TaskRun{}).
+		Where("id = ? AND task_id = ? AND trigger_type = ? AND status = ?",
+			run.ID, taskID, "drill", run.Status)
+	if model.IsTaskRunNodeSnapshotAuthoritative(expectedNodeID) {
+		runQuery = runQuery.Where("node_id_snapshot = ?", expectedNodeID)
+	}
+	runResult := runQuery.Updates(map[string]interface{}{
+		"status":      model.TaskRunStatusCanceled,
+		"started_at":  startedAt,
+		"finished_at": &canceledAt,
+		"duration_ms": durationMs,
+		"last_error":  message,
+	})
+	if runResult.Error != nil {
+		return false, runResult.Error
+	}
+	if runResult.RowsAffected != 1 {
+		return false, nil
+	}
+
+	if evidenceExists {
+		updates := map[string]interface{}{
+			"status":               model.TaskRunStatusCanceled,
+			"failed_step":          "",
+			"confidence_eligible":  false,
+			"finished_at":          &canceledAt,
+			"duration_ms":          durationMs,
+			"recovery_owner_id":    "",
+			"recovery_lease_until": nil,
+			"updated_at":           canceledAt,
+		}
+		if run.Status == model.TaskRunStatusPending {
+			updates["started_at"] = nil
+		}
+		addDrillCanceledPhase(updates, evidence, message, canceledAt)
+		updatedEvidence := tx.Model(&model.RestoreDrillEvidence{}).
+			Where("id = ? AND task_run_id = ? AND task_id = ? AND status = ?",
+				evidence.ID, drillRunID, taskID, evidence.Status).
+			Updates(updates)
+		if updatedEvidence.Error != nil {
+			return false, updatedEvidence.Error
+		}
+		if updatedEvidence.RowsAffected != 1 {
+			return false, fmt.Errorf("restore drill evidence cancellation transition lost")
+		}
+	}
+	return true, nil
+}
+
+func (m *Manager) cancelDrillTaskRuns(taskID uint, message string) (int64, error) {
+	var runs []model.TaskRun
+	if err := m.db.Select("id").
+		Where("task_id = ? AND trigger_type = ? AND status IN ?", taskID, "drill", model.TaskRunActiveStatuses()).
+		Order("id ASC").Find(&runs).Error; err != nil {
+		return 0, err
+	}
+	canceledAt := time.Now().UTC()
+	canceled := int64(0)
+	for i := range runs {
+		won, err := m.cancelOneDrillRun(taskID, runs[i].ID, message, canceledAt)
+		if err != nil {
+			return canceled, err
+		}
+		if won {
+			canceled++
+		}
+	}
+	return canceled, nil
 }
 
 // Pause 暂停任务：停止调度、阻止触发，保留任务配置和历史。
@@ -1155,20 +1418,89 @@ func (m *Manager) StopAccepting() {
 	m.shuttingDown.Store(true)
 }
 
-// Run blocks until ctx is done. Implements lifecycle.Worker. The Manager
-// owns no goroutine of its own -- task execution is driven by the cron
-// scheduler injected at construction. Run exists so main.go can drive the
-// Manager through the same lifecycle.Worker slice as every other worker.
+// Run owns the bounded recovery sweep for process-lost restore drills. The
+// sweep is independent of DrillAvailable so a deployment with drill transport
+// disabled still converges durable rows left by an earlier process.
 func (m *Manager) Run(ctx context.Context) {
-	<-ctx.Done()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runCtx, runCancel := context.WithCancel(ctx)
+	runDone := make(chan struct{})
+	m.managerRunMu.Lock()
+	if m.shuttingDown.Load() || m.managerRunCancel != nil {
+		m.managerRunMu.Unlock()
+		runCancel()
+		return
+	}
+	m.managerRunCancel = runCancel
+	m.managerRunDone = runDone
+	m.managerRunMu.Unlock()
+	defer func() {
+		runCancel()
+		m.managerRunMu.Lock()
+		if m.managerRunDone == runDone {
+			m.managerRunCancel = nil
+			m.managerRunDone = nil
+		}
+		close(runDone)
+		m.managerRunMu.Unlock()
+	}()
+	ctx = runCtx
+	if err := m.reconcileExpiredDrills(ctx); err != nil {
+		m.drillRecoveryBlocked.Store(true)
+		if ctx.Err() == nil {
+			logger.Module("task").Warn().Err(err).Msg("恢复演练启动对账失败")
+		}
+	} else {
+		m.drillRecoveryBlocked.Store(false)
+	}
+	interval := m.drillRecoveryInterval
+	if interval <= 0 {
+		interval = defaultDrillRecoveryInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := m.reconcileExpiredDrills(ctx); err != nil {
+				m.drillRecoveryBlocked.Store(true)
+				if ctx.Err() == nil {
+					logger.Module("task").Warn().Err(err).Msg("恢复演练周期对账失败")
+				}
+			} else {
+				m.drillRecoveryBlocked.Store(false)
+			}
+		}
+	}
 }
 
 func (m *Manager) Shutdown(ctx context.Context) error {
 	m.shuttingDown.Store(true)
 	m.stopAllRetryTimers()
+	m.managerRunMu.Lock()
+	runCancel := m.managerRunCancel
+	runDone := m.managerRunDone
+	m.managerRunMu.Unlock()
+	if runCancel != nil {
+		runCancel()
+	}
+	if runDone != nil {
+		select {
+		case <-runDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 
 	m.chainRunner.CancelAll()
 
+	if err := m.stopDrillLoop(ctx); err != nil {
+		return err
+	}
 	taskDone := make(chan struct{})
 	go func() {
 		m.taskWG.Wait()

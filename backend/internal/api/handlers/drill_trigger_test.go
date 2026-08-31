@@ -414,3 +414,67 @@ func TestDrillTriggerBadRequest_WithBody(t *testing.T) {
 		t.Fatalf("期望 400，实际: %d, body=%s", resp.Code, resp.Body.String())
 	}
 }
+
+type unavailableDrillTriggerer struct {
+	called bool
+}
+
+func (m *unavailableDrillTriggerer) TriggerDrill(uint, []uint) (uint, error) {
+	m.called = true
+	return 0, nil
+}
+
+func (*unavailableDrillTriggerer) DrillAvailable() bool {
+	return false
+}
+
+func TestDrillTriggerChecksGlobalAvailabilityBeforePolicyValidation(t *testing.T) {
+	db := openPolicyHandlerTestDB(t)
+	policy := model.Policy{
+		Name:             "drill-transport-unavailable",
+		SourcePath:       "/tmp/src",
+		TargetPath:       "/tmp/dst",
+		CronSpec:         "@daily",
+		DrillEnabled:     false,
+		DrillRestorePath: "/etc/should-never-be-validated",
+	}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+
+	triggerer := &unavailableDrillTriggerer{}
+	handler := NewPolicyHandler(db, nil)
+	handler.drillTriggerer = triggerer
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("role", "admin")
+		c.Next()
+	})
+	r.POST("/policies/:id/drill-trigger", handler.TriggerDrill)
+
+	req := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/policies/%d/drill-trigger", policy.ID), nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusServiceUnavailable {
+		t.Fatalf("全局传输不可用时应优先返回 503，实际: %d, body=%s", resp.Code, resp.Body.String())
+	}
+	var envelope Response
+	if err := json.Unmarshal(resp.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if envelope.Code != http.StatusServiceUnavailable || envelope.Message != "恢复演练功能暂不可用" {
+		t.Fatalf("响应未使用安全 503 合约: %+v", envelope)
+	}
+	if triggerer.called {
+		t.Fatal("全局传输不可用时不应调用演练触发器")
+	}
+	var runCount int64
+	if err := db.Model(&model.TaskRun{}).Count(&runCount).Error; err != nil {
+		t.Fatalf("统计 TaskRun 失败: %v", err)
+	}
+	if runCount != 0 {
+		t.Fatalf("全局传输不可用时不应创建 TaskRun，实际 %d", runCount)
+	}
+}

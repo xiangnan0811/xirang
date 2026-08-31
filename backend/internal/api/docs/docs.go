@@ -6441,7 +6441,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.Node"
+                                            "$ref": "#/definitions/internal_api_handlers.nodeUpdateResponse"
                                         }
                                     }
                                 }
@@ -7914,6 +7914,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -18173,6 +18179,17 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.nodeUpdateResponse": {
+            "type": "object",
+            "properties": {
+                "node": {
+                    "$ref": "#/definitions/xirang_backend_internal_model.Node"
+                },
+                "warning": {
                     "type": "string"
                 }
             }

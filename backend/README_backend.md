@@ -395,7 +395,8 @@ Updater receipt 只在独立 Unix socket `/run/xirang/asset-worker-updater.sock`
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | /healthz | 健康检查（无需认证） |
+| GET | /healthz | 进程存活检查（无需认证） |
+| GET | /readyz | 就绪检查（数据库 Ping 失败时返回 503，无需认证） |
 | GET | /metrics | Prometheus 指标（生产必须 `METRICS_TOKEN` Bearer 鉴权 + 限速） |
 | GET | /swagger/*any | Swagger UI（生产默认关闭；`SWAGGER_ENABLED=true` 可强制开启） |
 | GET | /admin/metrics/rollup-status | 🔒 聚合器诊断（hourly/daily 最新桶 + 落后秒数），仅 admin |
@@ -421,7 +422,7 @@ Updater receipt 只在独立 Unix socket `/run/xirang/asset-worker-updater.sock`
 
 ## 数据库
 
-支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000061_task_runs_traffic_indexes`。
+支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000074_drill_durable_recovery`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
 
 核心模型：User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task, TaskRun, TaskLog, TaskTrafficSample, TokenRevocation, NodeMetricSample, NodeOwner, AuditLog, ReportConfig, Report, LoginFailure, SystemSetting, AppCredential, RestoreDrillEvidence, CredentialAuditEvent, CredentialAccessGrant, NodeMetricSampleHourly, NodeMetricSampleDaily, Silence, SLODefinition, NodeLog, NodeLogCursor, Dashboard, DashboardPanel, PanelFilters, EscalationPolicy, EscalationLevel, AlertEscalationEvent, AnomalyEvent, SnapshotDiffHistory, SnapshotFileIndex, AutomationRule, AutomationRuleLog, ServiceMonitor, ServiceUptimeSample（43 个模型）
 

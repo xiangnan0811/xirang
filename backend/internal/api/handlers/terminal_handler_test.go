@@ -2,15 +2,241 @@ package handlers
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"xirang/backend/internal/auth"
+	"xirang/backend/internal/credentialaudit"
+	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
+	gossh "golang.org/x/crypto/ssh"
 )
+
+type rawTerminalSSHServer struct {
+	addr       string
+	shellReady <-chan struct{}
+}
+
+func startRawTerminalSSHServer(t *testing.T, password string) rawTerminalSSHServer {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("监听测试 SSH 服务失败: %v", err)
+	}
+	_, hostPrivateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		_ = listener.Close()
+		t.Fatalf("生成测试 SSH 主机密钥失败: %v", err)
+	}
+	hostSigner, err := gossh.NewSignerFromKey(hostPrivateKey)
+	if err != nil {
+		_ = listener.Close()
+		t.Fatalf("加载测试 SSH 主机密钥失败: %v", err)
+	}
+	serverConfig := &gossh.ServerConfig{
+		PasswordCallback: func(_ gossh.ConnMetadata, supplied []byte) (*gossh.Permissions, error) {
+			if string(supplied) != password {
+				return nil, fmt.Errorf("test SSH password rejected")
+			}
+			return nil, nil
+		},
+	}
+	serverConfig.AddHostKey(hostSigner)
+	shellReady := make(chan struct{})
+	var shellReadyOnce sync.Once
+
+	go func() {
+		for {
+			rawConn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func() {
+				serverConn, channels, requests, handshakeErr := gossh.NewServerConn(rawConn, serverConfig)
+				if handshakeErr != nil {
+					_ = rawConn.Close()
+					return
+				}
+				go gossh.DiscardRequests(requests)
+				go func() {
+					for newChannel := range channels {
+						if newChannel.ChannelType() != "session" {
+							_ = newChannel.Reject(gossh.UnknownChannelType, "test server only accepts sessions")
+							continue
+						}
+						channel, channelRequests, channelErr := newChannel.Accept()
+						if channelErr != nil {
+							continue
+						}
+						go func() {
+							defer func() { _ = channel.Close() }()
+							for request := range channelRequests {
+								switch request.Type {
+								case "pty-req", "shell", "window-change":
+									_ = request.Reply(true, nil)
+									if request.Type == "shell" {
+										shellReadyOnce.Do(func() { close(shellReady) })
+									}
+								default:
+									_ = request.Reply(false, nil)
+								}
+							}
+						}()
+					}
+				}()
+				_ = serverConn.Wait()
+			}()
+		}
+	}()
+
+	t.Cleanup(func() {
+		_ = listener.Close()
+	})
+	return rawTerminalSSHServer{addr: listener.Addr().String(), shellReady: shellReady}
+}
+
+func waitForTerminalSessions(t *testing.T, handler *TerminalHandler, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		handler.mu.Lock()
+		got := len(handler.sessions)
+		handler.mu.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	handler.mu.Lock()
+	got := len(handler.sessions)
+	handler.mu.Unlock()
+	t.Fatalf("terminal session 数量未达到 %d，实际 %d", want, got)
+}
+
+type rawTerminalFixture struct {
+	handler    *TerminalHandler
+	server     *httptest.Server
+	token      string
+	proof      string
+	nodeID     uint
+	shellReady <-chan struct{}
+}
+
+func setupRawTerminalFixture(t *testing.T) rawTerminalFixture {
+	t.Helper()
+	db := openSSHKeyHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.CredentialAccessGrant{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+		t.Fatalf("初始化 terminal websocket 测试表失败: %v", err)
+	}
+	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "false")
+
+	const password = "terminal-test-password"
+	sshServer := startRawTerminalSSHServer(t, password)
+	host, portText, err := net.SplitHostPort(sshServer.addr)
+	if err != nil {
+		t.Fatalf("解析测试 SSH 地址失败: %v", err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatalf("解析测试 SSH 端口失败: %v", err)
+	}
+
+	user := model.User{
+		Username:     "terminal-admin",
+		PasswordHash: "test-password-hash",
+		Role:         "admin",
+		TOTPEnabled:  true,
+	}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("创建 terminal 测试用户失败: %v", err)
+	}
+	jwtManager := auth.NewJWTManager("terminal-test-secret", time.Hour)
+	token, err := jwtManager.GenerateToken(user)
+	if err != nil {
+		t.Fatalf("生成 terminal 测试 token 失败: %v", err)
+	}
+	proof, expiresAt, err := jwtManager.GenerateStepUpToken(user, auth.StepUpActionTerminalOpen)
+	if err != nil {
+		t.Fatalf("生成 terminal 测试 step-up proof 失败: %v", err)
+	}
+
+	node := model.Node{
+		Name:      "terminal-websocket-node",
+		Host:      host,
+		Port:      port,
+		Username:  "root",
+		AuthType:  "password",
+		Password:  password,
+		BackupDir: "terminal-websocket-node",
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建 terminal 测试节点失败: %v", err)
+	}
+	now := time.Now().UTC()
+	grant := model.CredentialAccessGrant{
+		RequesterUserID:   user.ID,
+		RequesterUsername: user.Username,
+		RequesterRole:     user.Role,
+		Action:            CredentialGrantActionTerminalOpen,
+		Purpose:           sshutil.PurposeTerminal,
+		NodeID:            credentialaudit.PtrUint(node.ID),
+		Reason:            "raw websocket frame limit test",
+		Status:            CredentialGrantStatusActive,
+		RequestedAt:       now,
+		ApprovedAt:        &now,
+		ExpiresAt:         expiresAt,
+	}
+	if err := db.Create(&grant).Error; err != nil {
+		t.Fatalf("创建 terminal 测试凭据授权失败: %v", err)
+	}
+
+	handler := NewTerminalHandler(db, jwtManager, func(*http.Request) bool { return true })
+	router := gin.New()
+	router.GET("/ws/terminal", handler.ServeTerminal)
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+	return rawTerminalFixture{
+		handler:    handler,
+		server:     server,
+		token:      token,
+		proof:      proof,
+		nodeID:     node.ID,
+		shellReady: sshServer.shellReady,
+	}
+}
+
+func dialRawWebsocket(t *testing.T, serverURL, path string) *websocket.Conn {
+	t.Helper()
+	wsURL := "ws" + strings.TrimPrefix(serverURL, "http") + path
+	conn, response, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		if response != nil {
+			t.Fatalf("websocket 握手失败: %v (status=%s)", err, response.Status)
+		}
+		t.Fatalf("websocket 握手失败: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+func dialRawTerminal(t *testing.T, fixture rawTerminalFixture) *websocket.Conn {
+	t.Helper()
+	return dialRawWebsocket(t, fixture.server.URL, fmt.Sprintf("/ws/terminal?node_id=%d", fixture.nodeID))
+}
 
 // TestTerminalHandler_ReserveSlotID_RespectsLimit 验证 Wave 2 (PR-C C3) 修复：
 // reserveSlotID 在持锁内一并完成 "检查上限 + 占位"，杜绝并发请求绕过 maxTerminalSessions。
@@ -147,4 +373,51 @@ func TestTerminalHandlerServeTerminalReturnsEnvelopeWhenFull(t *testing.T) {
 	if envelope.Code != http.StatusServiceUnavailable || envelope.Message != "终端会话数已达上限" {
 		t.Fatalf("期望终端限流响应信封，实际: %+v", envelope)
 	}
+}
+
+func TestServeTerminalRejectsOversizedAuthenticationFrame(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewTerminalHandler(nil, nil, func(*http.Request) bool { return true })
+	router := gin.New()
+	router.GET("/ws/terminal", handler.ServeTerminal)
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+
+	conn := dialRawWebsocket(t, server.URL, "/ws/terminal")
+	authFrame := `{"type":"auth","token":"` + strings.Repeat("a", maxTerminalAuthMessageBytes) + `"}`
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(authFrame)); err != nil {
+		t.Fatalf("发送 oversized terminal auth frame 失败: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := conn.ReadMessage(); err == nil {
+		t.Fatal("oversized terminal auth frame 应关闭 websocket")
+	}
+	waitForTerminalSessions(t, handler, 0)
+}
+
+func TestServeTerminalRejectsOversizedAuthenticatedInput(t *testing.T) {
+	fixture := setupRawTerminalFixture(t)
+	conn := dialRawTerminal(t, fixture)
+	if err := conn.WriteJSON(terminalAuthMessage{
+		Type:        "auth",
+		Token:       fixture.token,
+		StepUpProof: fixture.proof,
+	}); err != nil {
+		t.Fatalf("发送 terminal auth frame 失败: %v", err)
+	}
+	select {
+	case <-fixture.shellReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("测试 SSH 服务未收到 terminal shell 请求")
+	}
+	waitForTerminalSessions(t, fixture.handler, 1)
+
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(strings.Repeat("x", maxTerminalMessageBytes+1))); err != nil {
+		t.Fatalf("发送 oversized terminal input frame 失败: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := conn.ReadMessage(); err == nil {
+		t.Fatal("oversized authenticated terminal input 应关闭 websocket")
+	}
+	waitForTerminalSessions(t, fixture.handler, 0)
 }

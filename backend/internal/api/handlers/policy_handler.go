@@ -13,6 +13,7 @@ import (
 	"xirang/backend/internal/profile"
 	gormrepo "xirang/backend/internal/repository/gorm"
 	"xirang/backend/internal/sshutil"
+	taskpkg "xirang/backend/internal/task"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -26,6 +27,10 @@ import (
 //   - 非 nil（含空切片）→ 仅从这些节点上的备份任务中选源（operator）
 type drillTriggerer interface {
 	TriggerDrill(policyID uint, allowedSourceNodeIDs []uint) (uint, error)
+}
+
+type drillAvailability interface {
+	DrillAvailable() bool
 }
 
 type PolicyHandler struct {
@@ -948,7 +953,22 @@ func (h *PolicyHandler) Delete(c *gin.Context) {
 // @Success      200  {object}  handlers.Response{data=object}
 // @Failure      400  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
+// @Failure      503  {object}  handlers.Response
 // @Router       /policies/{id}/drill-trigger [post]
+func (h *PolicyHandler) respondDrillUnavailable(c *gin.Context, policy model.Policy) {
+	const safeMessage = "恢复演练功能暂不可用"
+	writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+		Action:       "drill.trigger",
+		Purpose:      sshutil.PurposeDrill,
+		PolicyID:     credentialaudit.PtrUint(policy.ID),
+		Outcome:      credentialaudit.OutcomeBlocked,
+		ErrorMessage: safeMessage,
+		Metadata: map[string]any{
+			"node_count": len(policy.Nodes),
+		},
+	})
+	respondServiceUnavailable(c, safeMessage)
+}
 func (h *PolicyHandler) TriggerDrill(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -992,11 +1012,19 @@ func (h *PolicyHandler) TriggerDrill(c *gin.Context) {
 			allowedSourceNodeIDs = []uint{}
 		}
 	}
+	// Check the process-wide transport capability before inspecting any
+	// policy-specific drill flag or configuration. Production deliberately
+	// leaves this capability disabled until source-to-sandbox transport is
+	// available, so every authorized request gets the same sanitized 503
+	// without creating a doomed TaskRun.
+	if availability, ok := h.drillTriggerer.(drillAvailability); ok && !availability.DrillAvailable() {
+		h.respondDrillUnavailable(c, policy)
+		return
+	}
 	if !policy.DrillEnabled {
 		respondBadRequest(c, "该策略未启用恢复演练")
 		return
 	}
-
 	if h.drillTriggerer == nil {
 		respondInternalError(c, fmt.Errorf("恢复演练功能不可用"))
 		return
@@ -1004,6 +1032,21 @@ func (h *PolicyHandler) TriggerDrill(c *gin.Context) {
 
 	taskRunID, err := h.drillTriggerer.TriggerDrill(policy.ID, allowedSourceNodeIDs)
 	if err != nil {
+		if errors.Is(err, taskpkg.ErrDrillUnavailable) {
+			const safeMessage = "恢复演练功能暂不可用"
+			writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
+				Action:       "drill.trigger",
+				Purpose:      sshutil.PurposeDrill,
+				PolicyID:     credentialaudit.PtrUint(policy.ID),
+				Outcome:      credentialaudit.OutcomeBlocked,
+				ErrorMessage: safeMessage,
+				Metadata: map[string]any{
+					"node_count": len(policy.Nodes),
+				},
+			})
+			respondServiceUnavailable(c, safeMessage)
+			return
+		}
 		writeCredentialAuditFromGin(c, h.db, credentialaudit.Event{
 			Action:       "drill.trigger",
 			Purpose:      sshutil.PurposeDrill,

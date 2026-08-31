@@ -63,9 +63,16 @@ type Hub struct {
 	allowEmptyOrigin bool
 	droppedCount     uint64
 	maxClients       int
+	pendingClients   int
 }
 
-const taskAccessCacheTTL = 30 * time.Second
+const (
+	taskAccessCacheTTL     = 30 * time.Second
+	maxWSAuthMessageBytes  = 4 << 10
+	maxWSLogMessageBytes   = 4 << 10
+	wsAuthReadTimeout      = 5 * time.Second
+	wsAuthenticatedReadTTL = 60 * time.Second
+)
 
 func NewHub(db *gorm.DB, allowedOrigins []string, allowEmptyOrigin bool) *Hub {
 	maxClients := 100
@@ -98,8 +105,15 @@ func (h *Hub) Run(ctx context.Context) {
 			return
 		case c := <-h.register:
 			h.mu.Lock()
-			h.clients[c] = struct{}{}
+			admitted := len(h.clients)+h.pendingClients < h.maxClients
+			if admitted {
+				h.clients[c] = struct{}{}
+			}
 			h.mu.Unlock()
+			if !admitted {
+				c.markClosed()
+				_ = c.conn.Close()
+			}
 		case c := <-h.unregister:
 			h.mu.Lock()
 			if _, ok := h.clients[c]; ok {
@@ -134,6 +148,39 @@ func (h *Hub) Run(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// reserveConnection atomically accounts for an unauthenticated handshake before
+// the HTTP upgrade. Pending sockets therefore cannot bypass maxClients.
+func (h *Hub) reserveConnection() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.clients)+h.pendingClients >= h.maxClients {
+		return false
+	}
+	h.pendingClients++
+	return true
+}
+
+func (h *Hub) releaseConnectionReservation() {
+	h.mu.Lock()
+	if h.pendingClients > 0 {
+		h.pendingClients--
+	}
+	h.mu.Unlock()
+}
+
+// admitClient atomically converts a pending handshake reservation into an
+// authenticated client. It avoids the old check-then-register race.
+func (h *Hub) admitClient(c *client) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.pendingClients <= 0 || len(h.clients) >= h.maxClients {
+		return false
+	}
+	h.pendingClients--
+	h.clients[c] = struct{}{}
+	return true
 }
 
 func (h *Hub) snapshotClients() []*client {
@@ -209,10 +256,16 @@ type authMessage struct {
 }
 
 func (h *Hub) ServeWS(c *gin.Context, authorize func(string) (AccessScope, error)) {
-	if h.ClientCount() >= h.maxClients {
+	if !h.reserveConnection() {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "WebSocket 连接数已达上限"})
 		return
 	}
+	reservationHeld := true
+	defer func() {
+		if reservationHeld {
+			h.releaseConnectionReservation()
+		}
+	}()
 
 	upgrader := h.newUpgrader()
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
@@ -221,8 +274,10 @@ func (h *Hub) ServeWS(c *gin.Context, authorize func(string) (AccessScope, error
 		return
 	}
 
-	// 等待认证消息（5 秒超时）
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	// Apply the limit before reading the first frame. ReadMessage otherwise
+	// buffers the entire authentication frame before JSON parsing.
+	conn.SetReadLimit(maxWSAuthMessageBytes)
+	_ = conn.SetReadDeadline(time.Now().Add(wsAuthReadTimeout))
 	_, msg, err := conn.ReadMessage()
 	if err != nil {
 		log.Printf("debug: ws handshake read error: %v", err)
@@ -245,8 +300,10 @@ func (h *Hub) ServeWS(c *gin.Context, authorize func(string) (AccessScope, error
 		return
 	}
 
-	// 认证通过，恢复正常读超时
-	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	// Authenticated log sockets have a separate, endpoint-specific frame
+	// budget. Their messages are only control/heartbeat traffic.
+	conn.SetReadLimit(maxWSLogMessageBytes)
+	_ = conn.SetReadDeadline(time.Now().Add(wsAuthenticatedReadTTL))
 
 	var filterTaskID *uint
 	if raw := c.Query("task_id"); raw != "" {
@@ -280,7 +337,13 @@ func (h *Hub) ServeWS(c *gin.Context, authorize func(string) (AccessScope, error
 		access:        access,
 		taskAccess:    make(map[uint]taskAccessEntry),
 	}
-	h.register <- cl
+	if !h.admitClient(cl) {
+		_ = conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseTryAgainLater, "WebSocket 连接数已达上限"))
+		_ = conn.Close()
+		return
+	}
+	reservationHeld = false
 
 	go cl.writePump(func() { h.unregister <- cl })
 	go cl.readPump(func() { h.unregister <- cl })
@@ -484,10 +547,10 @@ func (c *client) readPump(onClose func()) {
 		_ = c.conn.Close()
 		onClose()
 	}()
-	c.conn.SetReadLimit(1024)
-	_ = c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.conn.SetReadLimit(maxWSLogMessageBytes)
+	_ = c.conn.SetReadDeadline(time.Now().Add(wsAuthenticatedReadTTL))
 	c.conn.SetPongHandler(func(string) error {
-		_ = c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		_ = c.conn.SetReadDeadline(time.Now().Add(wsAuthenticatedReadTTL))
 		return nil
 	})
 	for {
@@ -495,6 +558,6 @@ func (c *client) readPump(onClose func()) {
 			return
 		}
 		// 任何客户端消息（含应用层心跳）都续期读超时
-		_ = c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		_ = c.conn.SetReadDeadline(time.Now().Add(wsAuthenticatedReadTTL))
 	}
 }
