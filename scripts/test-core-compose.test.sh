@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 SMOKE="$ROOT_DIR/scripts/test-core-compose.sh"
+DOCKERFILE="$ROOT_DIR/deploy/allinone/Dockerfile"
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf -- "$TMP_DIR"' EXIT
 
@@ -14,8 +15,80 @@ fail() {
 if [[ ! -f "$SMOKE" ]]; then
   fail "smoke script not found: $SMOKE"
 fi
+if [[ ! -f "$DOCKERFILE" ]]; then
+  fail "all-in-one Dockerfile not found: $DOCKERFILE"
+fi
 if ! grep -Fq -- 'ADMIN_INITIAL_PASSWORD=CoreSmokeAdmin1!' "$SMOKE"; then
   fail "smoke fixture is missing the required initial admin password"
+fi
+
+runtime_packages=$(
+  awk '
+    /^FROM nginx:[^[:space:]]+@sha256:/ { in_runtime = 1; next }
+    in_runtime && /^RUN apk add --no-cache / { in_packages = 1 }
+    in_packages { print }
+    in_packages && $0 !~ /\\$/ { exit }
+  ' "$DOCKERFILE"
+)
+if [[ -z "$runtime_packages" ]]; then
+  fail "all-in-one runtime package install block not found"
+fi
+for package in \
+  'c-ares=1.34.8-r0' \
+  'libcrypto3=3.5.8-r0' \
+  'libssl3=3.5.8-r0' \
+  'libexpat=2.8.3-r0' \
+  'libxml2=2.13.9-r1' \
+  'nghttp2-libs=1.69.0-r0'
+do
+  if ! awk -v expected="$package" '
+    {
+      for (field = 1; field <= NF; field++) {
+        if ($field ~ /^#/) {
+          break
+        }
+        if ($field == expected) {
+          found = 1
+        }
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' <<<"$runtime_packages"; then
+    fail "all-in-one runtime package is not fixed-version pinned: $package"
+  fi
+done
+if grep -Eq '^[[:space:]]*RUN[[:space:]].*apk[[:space:]]+upgrade|apk[[:space:]]+upgrade' "$DOCKERFILE"; then
+  fail "all-in-one Dockerfile uses nondeterministic apk upgrade"
+fi
+
+assert_runtime_pin_mutation_rejected() {
+  local fixture_name=$1
+  local replacement=$2
+  local failure_message=$3
+  local mutation_root="$TMP_DIR/$fixture_name"
+  local mutation_test="$mutation_root/scripts/test-core-compose.test.sh"
+  local mutation_log="$TMP_DIR/$fixture_name.log"
+
+  mkdir -p "$mutation_root/scripts" "$mutation_root/deploy/allinone"
+  cp "$0" "$mutation_test"
+  cp "$SMOKE" "$mutation_root/scripts/test-core-compose.sh"
+  cp "$ROOT_DIR/docker-compose.yml" "$mutation_root/docker-compose.yml"
+  sed "s|c-ares=1\.34\.8-r0|$replacement|" "$DOCKERFILE" \
+    >"$mutation_root/deploy/allinone/Dockerfile"
+  if CORE_COMPOSE_RUNTIME_PIN_MUTATION_CHILD=1 bash "$mutation_test" >"$mutation_log" 2>&1; then
+    fail "$failure_message"
+  fi
+}
+
+if [[ "${CORE_COMPOSE_RUNTIME_PIN_MUTATION_CHILD:-0}" != "1" ]]; then
+  assert_runtime_pin_mutation_rejected \
+    runtime-pin-substring-mutation \
+    not-c-ares=1.34.8-r0 \
+    "runtime package guard accepted a longer token containing the expected pin"
+  assert_runtime_pin_mutation_rejected \
+    runtime-pin-comment-mutation \
+    '# c-ares=1.34.8-r0' \
+    "runtime package guard accepted an expected pin from a comment"
 fi
 
 DOCKER_LOG="$TMP_DIR/docker.log"

@@ -44,10 +44,17 @@ RUN set -eux; \
 FROM nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
 
 # Keep the release image reproducible: base images and every explicitly
-# installed Alpine package are pinned to the versions resolved for this base.
+# installed Alpine package are pinned. Security-fixed transitive libraries are
+# direct pins so the digest-pinned Nginx base cannot retain vulnerable builds.
 # PostgreSQL client utilities provide pg_dump/pg_restore for DB_TYPE=postgres.
 RUN apk add --no-cache \
+      c-ares=1.34.8-r0 \
       curl=8.20.0-r0 \
+      libcrypto3=3.5.8-r0 \
+      libexpat=2.8.3-r0 \
+      libssl3=3.5.8-r0 \
+      libxml2=2.13.9-r1 \
+      nghttp2-libs=1.69.0-r0 \
       rsync=3.4.3-r0 \
       openssh-client=10.2_p1-r0 \
       sqlite=3.53.4-r0 \
