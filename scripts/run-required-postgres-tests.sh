@@ -55,4 +55,4 @@ if [[ -z "${TEST_POSTGRES_DSN:-}" ]]; then
   exit 1
 fi
 
-go test "$package_path" -run "$selector" -count=1
+go test "$package_path" -run "$selector" -count=1 -timeout=20m

@@ -56,4 +56,31 @@ grep -Fq 'ok' "$WORK/execution.out" || {
   exit 1
 }
 
+mkdir -p "$WORK/fake-bin"
+cat >"$WORK/fake-bin/go" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ " $* " == *" -list "* ]]; then
+  printf 'TestFakeRequiredPostgres\n'
+  exit 0
+fi
+
+printf '%s\n' "$*" >"${FAKE_GO_ARGS_FILE:?}"
+printf 'ok\tfake/required-postgres\n'
+EOF
+chmod +x "$WORK/fake-bin/go"
+
+FAKE_GO_ARGS_FILE="$WORK/fake-go.args" \
+  TEST_POSTGRES_DSN='postgres://contract.invalid/test' \
+  PATH="$WORK/fake-bin:$PATH" \
+  bash "$RUNNER" \
+    "runner timeout contract" \
+    ./internal/database \
+    '^TestFakeRequiredPostgres$' >"$WORK/timeout.out"
+grep -Fq -- '-timeout=20m' "$WORK/fake-go.args" || {
+  echo "FAIL: required PostgreSQL runner did not provide the 20-minute suite timeout" >&2
+  exit 1
+}
+
 printf 'required PostgreSQL test runner self-test: PASS\n'
