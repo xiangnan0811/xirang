@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/context/auth-context.hooks";
+import { useDocumentTitle } from "@/hooks/use-document-title";
 import { ApiError, apiClient } from "@/lib/api/client";
 import { normalizeRedirectTarget } from "@/lib/api/core";
 
@@ -15,6 +16,7 @@ type LocationState = {
 
 export function LoginPage() {
   const { t } = useTranslation();
+  useDocumentTitle(t("login.welcomeTitle"));
   const location = useLocation();
   const navigate = useNavigate();
   const { isAuthenticated, login } = useAuth();
@@ -127,14 +129,14 @@ export function LoginPage() {
         secondCaptchaAnswer: secondCaptchaQuestion ? secondCaptchaAnswer : undefined,
       });
 
-      if (result.requires_2fa && result.login_token) {
-        setLoginToken(result.login_token);
+      if (result.requires2FA && result.loginToken) {
+        setLoginToken(result.loginToken);
         setRequires2FA(true);
         return;
       }
 
       if (result.token && result.user) {
-        login(result.token, result.user.username, result.user.role as "admin" | "operator" | "viewer", result.user.id, result.user.totp_enabled ?? false);
+        login(result.token, result.user.username, result.user.role, result.user.id, result.user.totpEnabled ?? false);
         navigate(redirectTo, { replace: true });
       }
       return;
@@ -183,7 +185,7 @@ export function LoginPage() {
 
     try {
       const result = await apiClient.totpLogin(loginToken, totpCode);
-      login(result.token, result.user.username, result.user.role as "admin" | "operator" | "viewer", result.user.id, result.user.totp_enabled);
+      login(result.token, result.user.username, result.user.role, result.user.id, result.user.totpEnabled);
       navigate(redirectTo, { replace: true });
     } catch (error) {
       if (error instanceof ApiError) {

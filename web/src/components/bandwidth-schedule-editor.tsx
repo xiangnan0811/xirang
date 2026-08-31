@@ -17,22 +17,51 @@ import {
 export interface BandwidthRule {
   start: string;
   end: string;
-  limit_mbps: number;
+  limitMbps: number;
 }
+
+type BandwidthRuleWire = {
+  start?: unknown;
+  end?: unknown;
+  limit_mbps?: unknown;
+  limitMbps?: unknown;
+};
 
 interface BandwidthScheduleEditorProps {
   value: string;
   onChange: (value: string) => void;
 }
 
+function parseLimitMbps(raw: unknown): number {
+  const num = typeof raw === "number" ? raw : Number.parseInt(String(raw ?? ""), 10);
+  return Number.isFinite(num) && num >= 0 ? num : 0;
+}
+
 function parseRules(json: string): BandwidthRule[] {
   if (!json) return [];
   try {
-    const parsed = JSON.parse(json);
-    return Array.isArray(parsed) ? parsed : [];
+    const parsed: unknown = JSON.parse(json);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const row = item as BandwidthRuleWire;
+      return [{
+        start: typeof row.start === "string" ? row.start : "",
+        end: typeof row.end === "string" ? row.end : "",
+        limitMbps: parseLimitMbps(row.limitMbps ?? row.limit_mbps),
+      }];
+    });
   } catch {
     return [];
   }
+}
+
+function toWireRules(rules: BandwidthRule[]) {
+  return rules.map((rule) => ({
+    start: rule.start,
+    end: rule.end,
+    limit_mbps: rule.limitMbps,
+  }));
 }
 
 export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEditorProps) {
@@ -41,11 +70,11 @@ export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEd
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
 
   const emit = (next: BandwidthRule[]) => {
-    onChange(next.length > 0 ? JSON.stringify(next) : "");
+    onChange(next.length > 0 ? JSON.stringify(toWireRules(next)) : "");
   };
 
   const addRule = () => {
-    emit([...rules, { start: "22:00", end: "06:00", limit_mbps: 100 }]);
+    emit([...rules, { start: "22:00", end: "06:00", limitMbps: 100 }]);
   };
 
   const confirmRemoveRule = () => {
@@ -59,9 +88,8 @@ export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEd
   const updateRule = (index: number, field: keyof BandwidthRule, val: string) => {
     const next = rules.map((r, i) => {
       if (i !== index) return r;
-      if (field === "limit_mbps") {
-        const num = Number.parseInt(val, 10);
-        return { ...r, limit_mbps: Number.isFinite(num) && num >= 0 ? num : 0 };
+      if (field === "limitMbps") {
+        return { ...r, limitMbps: parseLimitMbps(val) };
       }
       return { ...r, [field]: val };
     });
@@ -103,8 +131,8 @@ export function BandwidthScheduleEditor({ value, onChange }: BandwidthScheduleEd
             type="number"
             className="w-24 text-xs"
             min={0}
-            value={rule.limit_mbps}
-            onChange={(e) => updateRule(i, "limit_mbps", e.target.value)}
+            value={rule.limitMbps}
+            onChange={(e) => updateRule(i, "limitMbps", e.target.value)}
             aria-label={t('bandwidthEditor.limitMbps')}
           />
           <span className="text-xs text-muted-foreground shrink-0">Mbps</span>

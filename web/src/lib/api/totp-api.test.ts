@@ -42,4 +42,13 @@ describe("totp-api step-up", () => {
       cache: undefined,
     });
   });
+
+  it("maps step-up proof wire fields to camelCase", async () => {
+    const api = createTOTPApi();
+    await expect(api.requestStepUpProof("token", "123456", STEP_UP_ACTIONS.terminalOpen)).resolves.toEqual({
+      proof: "FAKE_PROOF_FOR_TEST_ONLY",
+      expiresAt: "2026-07-13T06:00:00Z",
+      proofTtlSeconds: 300,
+    });
+  });
 });

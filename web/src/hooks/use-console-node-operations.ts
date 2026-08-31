@@ -1,6 +1,7 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 import i18n from "@/i18n";
 import { ApiError, apiClient } from "@/lib/api/client";
+import { toast } from "@/components/ui/toast-sonner";
 import { formatTime } from "@/lib/api/core";
 import { parseTags } from "@/hooks/use-console-data.utils";
 import { useApiAction } from "@/hooks/use-api-action";
@@ -195,7 +196,11 @@ export function useNodeOperations({
     if (result) {
       if (result.ok) {
         markInventoryMutated();
-        setNodes((prev) => prev.map((node) => (node.id === nodeID ? result.data : node)));
+        setNodes((prev) => prev.map((node) => (node.id === nodeID ? result.data.node : node)));
+        if (result.data.warning) {
+          setWarning(result.data.warning);
+          toast.warning(result.data.warning);
+        }
       }
       return;
     }
@@ -219,7 +224,8 @@ export function useNodeOperations({
           : node
       )
     );
-  }, [createSSHKey, exec, markInventoryMutated, setNodes]);
+  }, [createSSHKey, exec, markInventoryMutated, setNodes, setWarning]);
+
 
   const deleteNode = useCallback(async (nodeID: number) => {
     await exec(i18n.t("nodes.actions.deleteNode"), (t) => apiClient.deleteNode(t, nodeID));
@@ -274,15 +280,15 @@ export function useNodeOperations({
                   status: r.ok ? "online" : "offline",
                   lastSeenAt: probeTime,
                   diskProbeAt: probeTime,
-                  connectionLatencyMs: r.ok ? r.latency_ms : undefined,
-                  diskUsedGb: r.disk_used_gb ?? node.diskUsedGb,
-                  diskTotalGb: r.disk_total_gb ?? node.diskTotalGb,
-                  diskFreePercent: r.disk_total_gb
+                  connectionLatencyMs: r.ok ? r.latencyMs : undefined,
+                  diskUsedGb: r.diskUsedGb ?? node.diskUsedGb,
+                  diskTotalGb: r.diskTotalGb ?? node.diskTotalGb,
+                  diskFreePercent: r.diskTotalGb
                     ? Math.max(
                         1,
                         Math.round(
-                          ((r.disk_total_gb - (r.disk_used_gb ?? node.diskUsedGb)) /
-                            r.disk_total_gb) *
+                          ((r.diskTotalGb - (r.diskUsedGb ?? node.diskUsedGb)) /
+                            r.diskTotalGb) *
                             100
                         )
                       )

@@ -26,10 +26,10 @@ export function EscalationLevelRow({ level, index, isFirst, integrations, onChan
   const { t } = useTranslation();
 
   const toggleIntegration = (intId: number) => {
-    const ids = level.integration_ids.includes(intId)
-      ? level.integration_ids.filter((id) => id !== intId)
-      : [...level.integration_ids, intId];
-    onChange({ ...level, integration_ids: ids });
+    const ids = level.integrationIds.includes(intId)
+      ? level.integrationIds.filter((id) => id !== intId)
+      : [...level.integrationIds, intId];
+    onChange({ ...level, integrationIds: ids });
   };
 
   // Extract numeric id from "int-N" or plain number
@@ -65,9 +65,9 @@ export function EscalationLevelRow({ level, index, isFirst, integrations, onChan
         <Input
           type="number"
           min={0}
-          value={level.delay_seconds}
+          value={level.delaySeconds}
           disabled={isFirst}
-          onChange={(e) => onChange({ ...level, delay_seconds: Number(e.target.value) })}
+          onChange={(e) => onChange({ ...level, delaySeconds: Number(e.target.value) })}
           aria-label={t("escalation.levels.delaySeconds")}
         />
         {errors?.delay && (
@@ -87,7 +87,7 @@ export function EscalationLevelRow({ level, index, isFirst, integrations, onChan
           <div className="flex flex-wrap gap-2">
             {integrations.map((intg) => {
               const numId = parseIntId(intg.id);
-              const selected = level.integration_ids.includes(numId);
+              const selected = level.integrationIds.includes(numId);
               return (
                 <button
                   key={intg.id}
@@ -116,11 +116,11 @@ export function EscalationLevelRow({ level, index, isFirst, integrations, onChan
       <div className="space-y-1">
         <label className="text-sm font-medium">{t("escalation.levels.severityOverride")}</label>
         <Select
-          value={level.severity_override}
+          value={level.severityOverride}
           onChange={(e) =>
             onChange({
               ...level,
-              severity_override: e.target.value as EscalationLevel["severity_override"],
+              severityOverride: e.target.value as EscalationLevel["severityOverride"],
             })
           }
           aria-label={t("escalation.levels.severityOverride")}

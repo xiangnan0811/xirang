@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { FormDialog } from "@/components/ui/form-dialog";
+import { PageHero } from "@/components/ui/page-hero";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast-sonner";
@@ -113,10 +114,10 @@ export function AutomationRulesPage() {
     if (editingRule) {
       setName(editingRule.name);
       setDescription(editingRule.description ?? "");
-      setEventType(editingRule.event_type);
-      setActionType(editingRule.action_type);
-      setFilters(recordToKV(editingRule.event_filter));
-      setConfigs(recordToKV(editingRule.action_config));
+      setEventType(editingRule.eventType);
+      setActionType(editingRule.actionType);
+      setFilters(recordToKV(editingRule.eventFilter));
+      setConfigs(recordToKV(editingRule.actionConfig));
       setEnabled(editingRule.enabled);
     } else {
       setName("");
@@ -170,10 +171,10 @@ export function AutomationRulesPage() {
     try {
       await createAutomationRulesApi().update(token, rule.id, {
         name: rule.name,
-        event_type: rule.event_type,
-        action_type: rule.action_type,
-        event_filter: rule.event_filter,
-        action_config: rule.action_config,
+        eventType: rule.eventType,
+        actionType: rule.actionType,
+        eventFilter: rule.eventFilter,
+        actionConfig: rule.actionConfig,
         enabled: !rule.enabled,
       });
       fetchRules();
@@ -201,10 +202,10 @@ export function AutomationRulesPage() {
     const input: AutomationRuleInput = {
       name: name.trim(),
       description: description.trim() || undefined,
-      event_type: eventType,
-      action_type: actionType,
-      event_filter: kvToRecord(filters),
-      action_config: kvToRecord(configs),
+      eventType: eventType,
+      actionType: actionType,
+      eventFilter: kvToRecord(filters),
+      actionConfig: kvToRecord(configs),
       enabled,
     };
 
@@ -262,7 +263,7 @@ export function AutomationRulesPage() {
     t(`automation.configFields.${key}`, { defaultValue: key });
 
   const renderFilterSummary = (rule: AutomationRule) => {
-    const entries = Object.entries(rule.event_filter ?? {});
+    const entries = Object.entries(rule.eventFilter ?? {});
     if (entries.length === 0) return <span className="text-muted-foreground">—</span>;
     return entries.map(([k, v]) => (
       <Badge key={k} tone="neutral" className="mr-1">
@@ -272,7 +273,7 @@ export function AutomationRulesPage() {
   };
 
   const renderConfigSummary = (rule: AutomationRule) => {
-    const entries = Object.entries(rule.action_config ?? {});
+    const entries = Object.entries(rule.actionConfig ?? {});
     if (entries.length === 0) return <span className="text-muted-foreground">—</span>;
     return entries.map(([k, v]) => (
       <Badge key={k} tone="info" className="mr-1">
@@ -283,21 +284,16 @@ export function AutomationRulesPage() {
 
   return (
     <div className="animate-fade-in space-y-5">
-      {/* ── Header ── */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">
-            {t("automation.pageTitle")}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {t("automation.pageDesc")}
-          </p>
-        </div>
-        <Button onClick={openCreateDialog}>
-          <Zap className="mr-1.5 size-4" />
-          {t("automation.createBtn")}
-        </Button>
-      </div>
+      <PageHero
+        title={t("automation.pageTitle")}
+        subtitle={t("automation.pageDesc")}
+        actions={
+          <Button onClick={openCreateDialog}>
+            <Zap className="mr-1.5 size-4" />
+            {t("automation.createBtn")}
+          </Button>
+        }
+      />
 
       {/* ── Table ── */}
       <Card className="overflow-hidden rounded-lg border border-border bg-card">
@@ -362,13 +358,13 @@ export function AutomationRulesPage() {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <Badge tone="warning">{eventTypeLabel(rule.event_type)}</Badge>
+                        <Badge tone="warning">{eventTypeLabel(rule.eventType)}</Badge>
                       </td>
                       <td className="hidden px-4 py-3 md:table-cell">
                         {renderFilterSummary(rule)}
                       </td>
                       <td className="px-4 py-3">
-                        <Badge tone="success">{actionTypeLabel(rule.action_type)}</Badge>
+                        <Badge tone="success">{actionTypeLabel(rule.actionType)}</Badge>
                       </td>
                       <td className="hidden px-4 py-3 md:table-cell">
                         {renderConfigSummary(rule)}

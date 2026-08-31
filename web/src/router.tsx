@@ -19,6 +19,7 @@ import {
   MorePage,
   NodesDetailPage,
   NodesPage,
+  NotFoundPage,
   NotificationsPage,
   OverviewPage,
   PoliciesPage,
@@ -152,11 +153,15 @@ export const AppRouter = createBrowserRouter([
       {
         path: "service-monitors",
         element: <LazyPage><ServiceMonitorsPage /></LazyPage>
+      },
+      {
+        path: "*",
+        element: <LazyPage><NotFoundPage /></LazyPage>
       }
     ]
   },
   {
     path: "*",
-    element: <Navigate to="/app/overview" replace />
+    element: <LazyPage><NotFoundPage /></LazyPage>
   }
 ]);

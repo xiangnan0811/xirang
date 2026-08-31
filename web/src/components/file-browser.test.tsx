@@ -16,10 +16,10 @@ const directoryResult: FileListResult = {
     {
       name: "file.txt",
       path: "/safe/file.txt",
-      is_dir: false,
+      isDir: false,
       size: 12,
       mode: "-rw-r--r--",
-      mod_time: "2026-05-24T00:00:00Z",
+      modTime: "2026-05-24T00:00:00Z",
     },
   ],
 };

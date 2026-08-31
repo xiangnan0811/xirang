@@ -54,6 +54,30 @@ type NodeDoctorResponse = {
   checks?: NodeDoctorCheckResponse[];
 };
 
+type NodeUpdateResponse = {
+  node?: NodeResponse;
+  warning?: string;
+};
+
+export type NodeUpdateResult = {
+  node: NodeRecord;
+  warning?: string;
+};
+
+export type NodeConnectionTestResult = {
+  ok: boolean;
+  message: string;
+  latencyMs?: number;
+  diskUsedGb?: number;
+  diskTotalGb?: number;
+};
+
+export type EmergencyBackupResult = {
+  triggered: number;
+  taskIds: number[];
+  errors: string[];
+};
+
 function mapNodeStatus(raw?: string): NodeStatus {
   switch (raw) {
     case "online":
@@ -130,7 +154,7 @@ function mapNodeDoctorResult(row: NodeDoctorResponse): NodeDoctorResult {
   };
 }
 
-export const __test__ = { mapNodeDoctorResult };
+export const __test__ = { mapNodeDoctorResult, mapNode };
 
 export function createNodesApi() {
   return {
@@ -165,8 +189,8 @@ export function createNodesApi() {
       return mapNode(row);
     },
 
-    async updateNode(token: string, nodeId: number, input: NewNodeInput): Promise<NodeRecord> {
-      const row = await request<NodeResponse>(`/nodes/${nodeId}`, {
+    async updateNode(token: string, nodeId: number, input: NewNodeInput): Promise<NodeUpdateResult> {
+      const payload = await request<NodeUpdateResponse>(`/nodes/${nodeId}`, {
         method: "PUT",
         token,
         body: {
@@ -188,7 +212,14 @@ export function createNodesApi() {
           expiry_date: input.expiryDate ?? undefined,
         }
       });
-      return mapNode(row);
+      if (!payload?.node || typeof payload.node.id !== "number" || !payload.node.name || !payload.node.host) {
+        throw new Error("invalid node update response");
+      }
+      const warning = typeof payload.warning === "string" ? payload.warning.trim() : "";
+      return {
+        node: mapNode(payload.node),
+        warning: warning || undefined,
+      };
     },
 
     async deleteNode(token: string, nodeId: number): Promise<void> {
@@ -213,11 +244,18 @@ export function createNodesApi() {
       };
     },
 
-    async testNodeConnection(token: string, nodeId: number): Promise<TestNodeResponse> {
-      return request<TestNodeResponse>(`/nodes/${nodeId}/test-connection`, {
+    async testNodeConnection(token: string, nodeId: number): Promise<NodeConnectionTestResult> {
+      const row = await request<TestNodeResponse>(`/nodes/${nodeId}/test-connection`, {
         method: "POST",
         token
       });
+      return {
+        ok: Boolean(row?.ok),
+        message: String(row?.message ?? ""),
+        latencyMs: row?.latency_ms,
+        diskUsedGb: row?.disk_used_gb,
+        diskTotalGb: row?.disk_total_gb,
+      };
     },
 
     async runNodeDoctor(token: string, nodeId: number): Promise<NodeDoctorResult> {
@@ -228,11 +266,18 @@ export function createNodesApi() {
       return mapNodeDoctorResult(row);
     },
 
-    async emergencyBackup(token: string, nodeId: number): Promise<{ triggered: number; task_ids: number[]; errors: string[] }> {
-      return request<{ triggered: number; task_ids: number[]; errors: string[] }>(
+    async emergencyBackup(token: string, nodeId: number): Promise<EmergencyBackupResult> {
+      const row = await request<{ triggered?: unknown; task_ids?: unknown; errors?: unknown }>(
         `/nodes/${nodeId}/emergency-backup`,
         { token, method: "POST" }
       );
+      return {
+        triggered: finiteNumber(row?.triggered),
+        taskIds: Array.isArray(row?.task_ids)
+          ? row.task_ids.map((id) => finiteNumber(id)).filter((id) => id > 0)
+          : [],
+        errors: Array.isArray(row?.errors) ? row.errors.map((item) => String(item)) : [],
+      };
     },
 
     async migrateNode(

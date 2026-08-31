@@ -19,6 +19,7 @@ import type { NodesViewProps } from "@/pages/nodes-page.utils";
 
 export const NodesTable = React.memo(function NodesTable({
   loading,
+  requestFailed,
   sortedNodes,
   sshKeys,
   selectedNodeSet,
@@ -76,7 +77,7 @@ export const NodesTable = React.memo(function NodesTable({
                 {t("nodes.tableLoading")}
               </td>
             </tr>
-          ) : !sortedNodes.length ? (
+          ) : !requestFailed && !sortedNodes.length ? (
             <tr>
               <td colSpan={9} className="px-3 py-6">
                 <FilteredEmptyState

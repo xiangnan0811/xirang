@@ -14,6 +14,7 @@ import type { NodesViewProps } from "@/pages/nodes-page.utils";
 
 export const NodesGrid = React.memo(function NodesGrid({
   loading,
+  requestFailed,
   sortedNodes,
   sshKeys,
   selectedNodeSet,
@@ -77,8 +78,7 @@ export const NodesGrid = React.memo(function NodesGrid({
             rows={3}
           />
         ) : null}
-
-        {!loading && !sortedNodes.length ? (
+        {!loading && !requestFailed && !sortedNodes.length ? (
           <FilteredEmptyState
             title={t("nodes.emptyTitle")}
             description={t("nodes.emptyDesc")}
@@ -235,7 +235,7 @@ export const NodesGrid = React.memo(function NodesGrid({
           />
         ) : null}
 
-        {!loading && !sortedNodes.length ? (
+        {!loading && !requestFailed && !sortedNodes.length ? (
           <FilteredEmptyState
             title={t("nodes.emptyTitle")}
             description={t("nodes.emptyDesc")}

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,7 +16,7 @@ type FormDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: ReactNode;
-  description?: ReactNode;
+  description: ReactNode;
   icon?: ReactNode;
   size?: "sm" | "md" | "lg";
   saving: boolean;
@@ -42,7 +42,14 @@ export function FormDialog({
   children,
 }: FormDialogProps) {
   const { t } = useTranslation();
-  const resolvedSavingLabel = savingLabel ?? t('common.saving');
+  const resolvedSavingLabel = savingLabel ?? t("common.saving");
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (saving) return;
+    void onSubmit();
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent size={size}>
@@ -55,23 +62,25 @@ export function FormDialog({
           ) : (
             <DialogTitle>{title}</DialogTitle>
           )}
-          {description ? <DialogDescription>{description}</DialogDescription> : null}
+          <DialogDescription>{description}</DialogDescription>
           <DialogCloseButton />
         </DialogHeader>
 
-        <DialogBody className="space-y-3">
-          {children}
-        </DialogBody>
+        <form noValidate onSubmit={handleSubmit}>
+          <DialogBody className="space-y-3">
+            {children}
+          </DialogBody>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            {t('common.cancel')}
-          </Button>
-          {extraFooter}
-          <Button onClick={() => void onSubmit()} disabled={saving}>
-            {saving ? resolvedSavingLabel : submitLabel}
-          </Button>
-        </DialogFooter>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              {t("common.cancel")}
+            </Button>
+            {extraFooter}
+            <Button type="submit" disabled={saving}>
+              {saving ? resolvedSavingLabel : submitLabel}
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );

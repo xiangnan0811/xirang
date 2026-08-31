@@ -517,3 +517,86 @@ describe("Rclone versioning task API", () => {
     }
   });
 });
+
+describe("task inventory pagination", () => {
+  const fetchMock = vi.fn();
+  const api = createTasksApi();
+
+  function createMockResponse(status = 200, body: unknown = "") {
+    return {
+      status,
+      ok: status >= 200 && status < 300,
+      text: vi.fn().mockResolvedValue(typeof body === "string" ? body : JSON.stringify(body)),
+      headers: { get: () => null },
+    } as unknown as Response;
+  }
+
+  function taskRow(id: number) {
+    return {
+      id,
+      name: `task-${id}`,
+      status: "success",
+      node_id: 1,
+      node: { id: 1, name: "node-1" },
+    };
+  }
+
+  function pageEnvelope(
+    items: { id: number; name: string; status: string; node_id: number; node: { id: number; name: string } }[],
+    total: number,
+    page: number,
+    pageSize = 100,
+  ) {
+    return {
+      code: 0,
+      message: "ok",
+      data: items,
+      total,
+      page,
+      page_size: pageSize,
+    };
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    fetchMock.mockReset();
+  });
+
+  it("consumes every backend page above the default 100-item page and de-duplicates IDs", async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) => taskRow(i + 1));
+    const page2 = [taskRow(100), ...Array.from({ length: 99 }, (_, i) => taskRow(i + 101))];
+    const page3 = Array.from({ length: 51 }, (_, i) => taskRow(i + 200));
+
+    fetchMock
+      .mockResolvedValueOnce(createMockResponse(200, pageEnvelope(page1, 250, 1)))
+      .mockResolvedValueOnce(createMockResponse(200, pageEnvelope(page2, 250, 2)))
+      .mockResolvedValueOnce(createMockResponse(200, pageEnvelope(page3, 250, 3)));
+
+    const tasks = await api.getTasks("token-tasks");
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("page=1");
+    expect(String(fetchMock.mock.calls[0][0])).toContain("page_size=100");
+    expect(String(fetchMock.mock.calls[1][0])).toContain("page=2");
+    expect(String(fetchMock.mock.calls[2][0])).toContain("page=3");
+    expect(tasks).toHaveLength(250);
+    expect(new Set(tasks.map((task) => task.id)).size).toBe(250);
+    expect(tasks[0]?.id).toBe(1);
+    expect(tasks[249]?.id).toBe(250);
+  });
+
+  it("stops on an empty page and forwards AbortSignal", async () => {
+    const controller = new AbortController();
+    fetchMock.mockResolvedValueOnce(createMockResponse(200, pageEnvelope([], 0, 1)));
+
+    const tasks = await api.getTasks("token-tasks", { signal: controller.signal });
+
+    expect(tasks).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((fetchMock.mock.calls[0][1] as RequestInit).signal).toBe(controller.signal);
+  });
+});

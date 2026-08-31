@@ -4,6 +4,7 @@ import { Activity, AlertTriangle, CheckCircle2, Globe, HelpCircle } from "lucide
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { DataSurface } from "@/components/ui/data-surface";
+import { useDocumentTitle } from "@/hooks/use-document-title";
 import { createServiceMonitorsApi } from "@/lib/api/service-monitors";
 import { useVisibilityPolling } from "@/hooks/use-visibility-polling";
 import { formatTime } from "@/lib/date-utils";
@@ -28,6 +29,7 @@ function StatusIcon({ status }: { status: string }) {
 
 export function StatusPage() {
   const { t } = useTranslation();
+  useDocumentTitle(t("serviceMonitor.statusPageTitle"));
   const [items, setItems] = useState<StatusPageItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

@@ -1,4 +1,7 @@
-import { useCallback, useRef, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import i18n from "@/i18n";
+import { getErrorMessage } from "@/lib/utils";
+import { idleInventoryRequestState, isAbortError, type InventoryRequestState } from "@/hooks/inventory-request-state";
 import { apiClient } from "@/lib/api/client";
 import { useNodeOperations } from "@/hooks/use-console-node-operations";
 import type {
@@ -48,20 +51,38 @@ export function useNodesDomain({
 }: UseNodesDomainParams) {
   const refreshNodesAbortRef = useRef<AbortController | null>(null);
   const refreshSSHKeysAbortRef = useRef<AbortController | null>(null);
+  const [nodesRequest, setNodesRequest] = useState<InventoryRequestState>(idleInventoryRequestState);
+  const nodesRequestGenRef = useRef(0);
 
   const refreshNodes = useCallback(async (_options?: { limit?: number; offset?: number }) => {
-    if (!token) return;
+    if (!token) {
+      setNodesRequest({ loading: false, error: null, loaded: true });
+      return;
+    }
     refreshNodesAbortRef.current?.abort();
     const controller = new AbortController();
     refreshNodesAbortRef.current = controller;
+    const requestGen = ++nodesRequestGenRef.current;
     const inventoryVersionAtStart = inventoryVersionRef.current;
+    setNodesRequest((prev) => ({ ...prev, loading: true }));
     try {
       const result = await apiClient.getNodes(token, { signal: controller.signal });
+      if (requestGen !== nodesRequestGenRef.current || controller.signal.aborted) {
+        return;
+      }
       if (inventoryVersionAtStart === inventoryVersionRef.current) {
         setNodes(result);
       }
-    } catch {
-      // 按需刷新失败时静默处理，不覆盖全局 warning
+      setNodesRequest({ loading: false, error: null, loaded: true });
+    } catch (error) {
+      if (requestGen !== nodesRequestGenRef.current || controller.signal.aborted || isAbortError(error)) {
+        return;
+      }
+      setNodesRequest((prev) => ({
+        loading: false,
+        error: getErrorMessage(error, i18n.t("nodes.loadFailed")),
+        loaded: prev.loaded,
+      }));
     }
   }, [token, inventoryVersionRef, setNodes]);
 
@@ -110,6 +131,9 @@ export function useNodesDomain({
 
   return {
     nodes,
+    nodesLoading: nodesRequest.loading,
+    nodesError: nodesRequest.error,
+    nodesLoaded: nodesRequest.loaded,
     refreshNodes,
     refreshSSHKeys,
     createNode,

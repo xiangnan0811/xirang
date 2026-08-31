@@ -333,7 +333,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       }
       const shouldPersistProof = pendingRequest.persist;
       if (shouldPersistProof) {
-        const expiresAt = Date.parse(response.expires_at);
+        const expiresAt = Date.parse(response.expiresAt);
         if (Number.isFinite(expiresAt)) {
           saveStepUpProof(pendingRequest.action, response.proof, expiresAt);
         }

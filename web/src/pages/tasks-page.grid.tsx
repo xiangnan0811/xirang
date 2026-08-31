@@ -13,6 +13,7 @@ import type { TasksViewProps } from "@/pages/tasks-page.utils";
 
 export const TasksGrid = React.memo(function TasksGrid({
   loading,
+  requestFailed,
   filteredTasks,
   pendingAction,
   resetFilters,
@@ -302,8 +303,7 @@ export const TasksGrid = React.memo(function TasksGrid({
           </div>
         );
       })}
-
-      {!loading && !filteredTasks.length ? (
+      {!loading && !requestFailed && !filteredTasks.length ? (
         <FilteredEmptyState
           className="md:col-span-2 2xl:col-span-3"
           title={t('tasks.emptyTitle')}

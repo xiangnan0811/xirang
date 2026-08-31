@@ -117,6 +117,9 @@ function buildContext() {
     testNodeConnection: vi.fn().mockResolvedValue({ ok: true, message: "连接成功" }),
     triggerNodeBackup: vi.fn().mockResolvedValue(undefined),
     refreshNodes: vi.fn().mockResolvedValue(undefined),
+    nodesLoading: false,
+    nodesError: null,
+    nodesLoaded: true,
   };
   sshKeysRef.current = {
     sshKeys: [{ id: "key-1", name: "主机密钥" }],

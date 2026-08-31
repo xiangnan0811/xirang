@@ -60,7 +60,10 @@ describe("BackupFileSourceControls", () => {
     const props = { nodes: [node], sets: [set], versions: [], selectedNodeId: 7, selectedBackupSetId: undefined,
       selectedRecoveryPointId: undefined, onSelectNode: vi.fn(), onSelectSet: vi.fn(), onSelectVersion: vi.fn(), ...pagingProps };
     const { rerender } = render(<BackupFileSourceControls {...props} status="partial" />);
-    expect(screen.getByRole("status")).toHaveTextContent(/partial|不完整/i);
+    const partial = screen.getByRole("status");
+    expect(partial).toHaveTextContent(/partial|不完整/i);
+    expect(partial.className).toContain("text-warning");
+    expect(partial.className).not.toContain("amber-");
     rerender(<BackupFileSourceControls {...props} status="blocked" />);
     expect(screen.getByRole("alert")).toHaveTextContent(/unavailable|不可用/i);
   });

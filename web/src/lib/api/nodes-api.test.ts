@@ -76,4 +76,107 @@ describe("nodes api", () => {
   it("__test__.mapNodeDoctorResult 对非法 node_id 使用安全默认值", () => {
     expect(__test__.mapNodeDoctorResult({ node_id: "not-a-number" }).nodeId).toBe(0);
   });
+
+  it("maps PUT /nodes/:id envelope.data {node, warning} and does not treat the wrapper as a Node", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          node: {
+            id: 7,
+            name: "db-1",
+            host: "10.0.0.7",
+            port: 22,
+            username: "root",
+            auth_type: "key",
+            status: "online",
+            backup_dir: "db-1",
+          },
+          warning: "备份目录标识已更改，旧路径 /backup/old 下的数据不会自动迁移",
+        },
+      }))
+    );
+
+    const result = await api.updateNode("token-node", 7, {
+      name: "db-1",
+      host: "10.0.0.7",
+      port: 22,
+      username: "root",
+      authType: "key",
+      tags: "",
+      basePath: "/",
+    });
+
+    expect(result).not.toHaveProperty("id");
+    expect(result.node).toMatchObject({
+      id: 7,
+      name: "db-1",
+      host: "10.0.0.7",
+      status: "online",
+      backupDir: "db-1",
+    });
+    expect(result.warning).toContain("备份目录标识已更改");
+
+    const wrapperMappedAsNode = __test__.mapNode({
+      node: { id: 7, name: "db-1", host: "10.0.0.7" },
+      warning: "ignored",
+    } as never);
+    expect(wrapperMappedAsNode.id).not.toBe(7);
+    expect(wrapperMappedAsNode.name).not.toBe("db-1");
+  });
+
+  it("rejects a PUT /nodes/:id payload that nests the node under data without a node key", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          data: {
+            id: 7,
+            name: "db-1",
+            host: "10.0.0.7",
+          },
+          warning: "should not be mapped as a node",
+        },
+      }))
+    );
+
+    await expect(api.updateNode("token-node", 7, {
+      name: "db-1",
+      host: "10.0.0.7",
+      port: 22,
+      username: "root",
+      authType: "key",
+      tags: "",
+      basePath: "/",
+    })).rejects.toThrow("invalid node update response");
+  });
+
+  it("maps test-connection and emergency-backup snake_case results", async () => {
+    fetchMock
+      .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: { ok: true, message: "alive", latency_ms: 12, disk_used_gb: 40, disk_total_gb: 100 },
+      })))
+      .mockResolvedValueOnce(createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: { triggered: 2, task_ids: [11, 12], errors: [] },
+      })));
+
+    await expect(api.testNodeConnection("token-node", 7)).resolves.toEqual({
+      ok: true,
+      message: "alive",
+      latencyMs: 12,
+      diskUsedGb: 40,
+      diskTotalGb: 100,
+    });
+    await expect(api.emergencyBackup("token-node", 7)).resolves.toEqual({
+      triggered: 2,
+      taskIds: [11, 12],
+      errors: [],
+    });
+  });
 });

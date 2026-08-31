@@ -65,9 +65,9 @@ describe("drill evidence API mapping", () => {
       finishedAt: "2026-05-17T10:02:03Z",
       durationMs: 123000,
     });
-    expect(rows[0].escalation_policy_id).toBe(9);
-    expect(rows[0].app_profile).toBe("mysql");
-    expect(rows[0].app_credential_id).toBe(11);
+    expect(rows[0].escalationPolicyId).toBe(9);
+    expect(rows[0].appProfile).toBe("mysql");
+    expect(rows[0].appCredentialId).toBe(11);
   });
 
   it("normalizes invalid latest_drill numbers without NaN", async () => {
@@ -132,17 +132,17 @@ describe("drill evidence API mapping", () => {
       nodeIds: [2],
       verifyEnabled: true,
       verifySampleRate: 10,
-      escalation_policy_id: 12,
-      app_profile: "postgres",
-      app_credential_id: 13,
-      drill_enabled: true,
-      drill_cron: "0 4 * * 0",
-      drill_target_node_id: 5,
-      drill_restore_path: "/tmp/xirang-drill",
-      drill_pre_verify: "test -d /tmp/xirang-drill",
-      drill_verify: "test -f /tmp/xirang-drill/ok",
-      drill_post_verify: "true",
-      drill_auto_cleanup: true,
+      escalationPolicyId: 12,
+      appProfile: "postgres",
+      appCredentialId: 13,
+      drillEnabled: true,
+      drillCron: "0 4 * * 0",
+      drillTargetNodeId: 5,
+      drillRestorePath: "/tmp/xirang-drill",
+      drillPreVerify: "test -d /tmp/xirang-drill",
+      drillVerify: "test -f /tmp/xirang-drill/ok",
+      drillPostVerify: "true",
+      drillAutoCleanup: true,
     };
 
     await createPoliciesApi().createPolicy("token-policy", input);

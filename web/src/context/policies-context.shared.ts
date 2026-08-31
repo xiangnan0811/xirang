@@ -3,6 +3,9 @@ import type { NewPolicyInput, PolicyRecord } from "@/types/domain";
 
 export interface PoliciesContextValue {
   policies: PolicyRecord[];
+  policiesLoading: boolean;
+  policiesError: string | null;
+  policiesLoaded: boolean;
   refreshPolicies: () => Promise<void>;
   createPolicy: (input: NewPolicyInput) => Promise<void>;
   updatePolicy: (policyId: number, input: NewPolicyInput) => Promise<void>;
@@ -13,6 +16,6 @@ export interface PoliciesContextValue {
     cron: string,
     naturalLanguage: string
   ) => Promise<void>;
-}
+};
 
 export const PoliciesContext = createContext<PoliciesContextValue | null>(null);

@@ -248,6 +248,7 @@ export function IntegrationEditorDialog({
         <InlineAlert tone="warning" title={pendingHint} className="mb-4">
           <div className="flex justify-end gap-2 mt-2">
             <Button
+              type="button"
               size="sm"
               variant="outline"
               onClick={() => setPendingHint(null)}
@@ -255,6 +256,7 @@ export function IntegrationEditorDialog({
               {t('integration.recheck')}
             </Button>
             <Button
+              type="button"
               size="sm"
               onClick={() => handleSave(true)}
               disabled={saving}

@@ -48,6 +48,38 @@ describe("system api", () => {
     });
   });
 
+  it("maps version check and backup list wire fields to camelCase", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          update_available: true,
+          current_version: "1.0.0",
+          latest_version: "1.1.0",
+          release_url: "https://example.com",
+        },
+      })),
+    );
+    await expect(api.checkVersion("token-1")).resolves.toEqual({
+      updateAvailable: true,
+      currentVersion: "1.0.0",
+      latestVersion: "1.1.0",
+      releaseUrl: "https://example.com",
+    });
+
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: [{ filename: "a.db", size: 12, created_at: "2026-01-01T00:00:00Z", sha256: "abc" }],
+      })),
+    );
+    await expect(api.listBackups("token-1")).resolves.toEqual([
+      { filename: "a.db", size: 12, createdAt: "2026-01-01T00:00:00Z", sha256: "abc" },
+    ]);
+  });
+
   it("backupDB surfaces backend envelope messages for unsupported databases", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(501, JSON.stringify({

@@ -71,18 +71,18 @@ export function useDashboard(id: string | undefined, token: string): UseDashboar
   const updateAutoRefresh = useCallback(
     (seconds: number) => {
       if (!dashboard || !token) return;
-      const prevSeconds = dashboard.auto_refresh_seconds;
+      const prevSeconds = dashboard.autoRefreshSeconds;
       // optimistic update
       setDashboard((prev) =>
-        prev ? { ...prev, auto_refresh_seconds: seconds } : prev
+        prev ? { ...prev, autoRefreshSeconds: seconds } : prev
       );
       apiClient.updateDashboard(token, dashboard.id, {
         name: dashboard.name,
         description: dashboard.description,
-        time_range: dashboard.time_range,
-        custom_start: dashboard.custom_start,
-        custom_end: dashboard.custom_end,
-        auto_refresh_seconds: seconds,
+        timeRange: dashboard.timeRange,
+        customStart: dashboard.customStart,
+        customEnd: dashboard.customEnd,
+        autoRefreshSeconds: seconds,
       } as DashboardInput)
         .then((updated) => {
 
@@ -91,7 +91,7 @@ export function useDashboard(id: string | undefined, token: string): UseDashboar
         .catch(() => {
           // revert on failure
           setDashboard((prev) =>
-            prev ? { ...prev, auto_refresh_seconds: prevSeconds } : prev
+            prev ? { ...prev, autoRefreshSeconds: prevSeconds } : prev
           );
           toast.error(t("dashboards.errors.unknown"));
         });
@@ -99,7 +99,7 @@ export function useDashboard(id: string | undefined, token: string): UseDashboar
     [dashboard, token, t]
   );
 
-  // 初始化时同步 dashboard.time_range
+  // 初始化时同步 dashboard.timeRange
   const initializedRef = useRef(false);
 
   // 拉取 dashboard
@@ -116,14 +116,14 @@ export function useDashboard(id: string | undefined, token: string): UseDashboar
         if (controller.signal.aborted) return;
 
         setDashboard(d);
-        // 同步 time_range
+        // 同步 timeRange
         if (!initializedRef.current) {
           initializedRef.current = true;
 
-          setTimeRangeState(d.time_range);
-          if (d.time_range === "custom" && d.custom_start && d.custom_end) {
+          setTimeRangeState(d.timeRange);
+          if (d.timeRange === "custom" && d.customStart && d.customEnd) {
 
-            setCustomRange({ start: d.custom_start, end: d.custom_end });
+            setCustomRange({ start: d.customStart, end: d.customEnd });
           }
         }
       })
@@ -146,7 +146,7 @@ export function useDashboard(id: string | undefined, token: string): UseDashboar
   }, [id, token, refreshNonce]);
 
   // 自动刷新 interval（tab 隐藏时暂停）
-  const autoRefreshSeconds = dashboard?.auto_refresh_seconds ?? 0;
+  const autoRefreshSeconds = dashboard?.autoRefreshSeconds ?? 0;
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {

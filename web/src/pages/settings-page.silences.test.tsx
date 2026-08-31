@@ -77,6 +77,7 @@ describe("SilencesPanel", () => {
     render(<SilencesPanel />)
     await userEvent.click(screen.getByRole("button", { name: /silences.new/ }))
     expect(screen.getByLabelText(/silences.name/)).toBeInTheDocument()
+    expect(screen.getByRole("dialog")).toHaveAccessibleDescription("silences.dialogDesc")
   })
 
   it("rejects invalid time window", async () => {

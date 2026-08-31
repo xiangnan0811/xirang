@@ -92,7 +92,7 @@ export function SelfBackupPanel() {
                   <tr key={entry.filename} className="text-muted-foreground">
                     <td className="py-1.5 pr-4 font-mono">{entry.filename}</td>
                     <td className="py-1.5 pr-4">{formatBytes(entry.size)}</td>
-                    <td className="py-1.5 pr-4">{formatTime(entry.created_at)}</td>
+                    <td className="py-1.5 pr-4">{formatTime(entry.createdAt)}</td>
                     <td className="py-1.5 font-mono" title={entry.sha256}>
                       {entry.sha256 ? entry.sha256.slice(0, 16) + "..." : "-"}
                     </td>

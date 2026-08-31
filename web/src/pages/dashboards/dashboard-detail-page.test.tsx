@@ -55,47 +55,47 @@ const mockQueryPanel = vi.mocked(apiClient.queryPanel);
 
 const panel1 = {
   id: 1,
-  dashboard_id: 1,
+  dashboardId: 1,
   title: "CPU 面板",
-  chart_type: "line" as const,
+  chartType: "line" as const,
   metric: "node.cpu",
   filters: {},
   aggregation: "avg" as const,
-  layout_x: 0,
-  layout_y: 0,
-  layout_w: 6,
-  layout_h: 4,
+  layoutX: 0,
+  layoutY: 0,
+  layoutW: 6,
+  layoutH: 4,
 };
 
 const panel2 = {
   id: 2,
-  dashboard_id: 1,
+  dashboardId: 1,
   title: "内存面板",
-  chart_type: "area" as const,
+  chartType: "area" as const,
   metric: "node.memory",
   filters: {},
   aggregation: "avg" as const,
-  layout_x: 6,
-  layout_y: 0,
-  layout_w: 6,
-  layout_h: 4,
+  layoutX: 6,
+  layoutY: 0,
+  layoutW: 6,
+  layoutH: 4,
 };
 
 const mockDashboard: Dashboard = {
   id: 1,
-  owner_id: 1,
+  ownerId: 1,
   name: "生产看板",
   description: "生产环境监控",
-  time_range: "1h",
-  auto_refresh_seconds: 0,
-  created_at: "2026-04-21T00:00:00Z",
-  updated_at: "2026-04-21T00:00:00Z",
+  timeRange: "1h",
+  autoRefreshSeconds: 0,
+  createdAt: "2026-04-21T00:00:00Z",
+  updatedAt: "2026-04-21T00:00:00Z",
   panels: [panel1, panel2],
 };
 
 const mockQueryResult: PanelQueryResult = {
   series: [{ name: "node-1", points: [{ ts: "2026-04-21T00:00:00Z", value: 42.0 }] }],
-  step_seconds: 60,
+  stepSeconds: 60,
 };
 
 // ─── 渲染辅助 ─────────────────────────────────────────────────────
@@ -126,8 +126,8 @@ describe("DashboardDetailPage", () => {
       expect(screen.getByText("生产看板")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("CPU 面板")).toBeInTheDocument();
-    expect(screen.getByText("内存面板")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "生产看板" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   });
 
   it("切换时间范围后 queryPanel 使用新时间范围被调用", async () => {

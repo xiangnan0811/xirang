@@ -355,21 +355,21 @@ export function NasMountWizard({ open, onOpenChange }: { open: boolean; onOpenCh
                 <div className="space-y-2">
                   <div className="grid gap-2">
                     <VerifyRow label={t("nasMountWizard.verifyLabels.pathExists")} ok={verifyResult.exists} />
-                    <VerifyRow label={t("nasMountWizard.verifyLabels.mountPoint")} ok={verifyResult.is_mount_point} />
+                    <VerifyRow label={t("nasMountWizard.verifyLabels.mountPoint")} ok={verifyResult.isMountPoint} />
                     <VerifyRow label={t("nasMountWizard.verifyLabels.writable")} ok={verifyResult.writable} />
                   </div>
 
                   {verifyResult.exists && (
                     <div className="rounded-lg border border-border/70 bg-muted/20 p-3 text-xs space-y-1">
-                      <p><span className="text-muted-foreground">{t("nasMountWizard.totalSpace")}</span>{verifyResult.total_gb} GB</p>
-                      <p><span className="text-muted-foreground">{t("nasMountWizard.freeSpace")}</span>{verifyResult.free_gb} GB</p>
+                      <p><span className="text-muted-foreground">{t("nasMountWizard.totalSpace")}</span>{verifyResult.totalGb} GB</p>
+                      <p><span className="text-muted-foreground">{t("nasMountWizard.freeSpace")}</span>{verifyResult.freeGb} GB</p>
                       {verifyResult.filesystem && verifyResult.filesystem !== "unknown" && (
                         <p><span className="text-muted-foreground">{t("nasMountWizard.filesystem")}</span>{verifyResult.filesystem}</p>
                       )}
                     </div>
                   )}
 
-                  {verifyResult.exists && verifyResult.is_mount_point && verifyResult.writable && (
+                  {verifyResult.exists && verifyResult.isMountPoint && verifyResult.writable && (
                     <div className="rounded-lg border border-success/30 bg-success/5 p-3">
                       <p className="text-sm text-success font-medium">
                         {t("nasMountWizard.mountSuccess")}
@@ -377,7 +377,7 @@ export function NasMountWizard({ open, onOpenChange }: { open: boolean; onOpenCh
                     </div>
                   )}
 
-                  {verifyResult.exists && !verifyResult.is_mount_point && (
+                  {verifyResult.exists && !verifyResult.isMountPoint && (
                     <div className="rounded-lg border border-warning/30 bg-warning/5 p-3">
                       <p className="text-xs text-warning">
                         {t("nasMountWizard.notMountPointWarning")}

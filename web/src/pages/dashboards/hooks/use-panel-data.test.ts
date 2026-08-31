@@ -24,16 +24,16 @@ const mockQueryPanel = vi.mocked(apiClient.queryPanel);
 
 const mockPanel: Panel = {
   id: 1,
-  dashboard_id: 1,
+  dashboardId: 1,
   title: "CPU 使用率",
-  chart_type: "line",
+  chartType: "line",
   metric: "node.cpu",
   filters: {},
   aggregation: "avg",
-  layout_x: 0,
-  layout_y: 0,
-  layout_w: 6,
-  layout_h: 4,
+  layoutX: 0,
+  layoutY: 0,
+  layoutW: 6,
+  layoutH: 4,
 };
 
 const mockResult: PanelQueryResult = {
@@ -46,7 +46,7 @@ const mockResult: PanelQueryResult = {
       ],
     },
   ],
-  step_seconds: 60,
+  stepSeconds: 60,
 };
 
 const START = "2026-04-21T00:00:00Z";

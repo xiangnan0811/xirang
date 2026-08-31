@@ -48,6 +48,9 @@ vi.mock("@/context/nodes-context.hooks", () => ({
       },
     ],
     refreshNodes: vi.fn().mockResolvedValue(undefined),
+    nodesLoading: false,
+    nodesError: null,
+    nodesLoaded: true,
     createNode: vi.fn(),
     updateNode: vi.fn(),
     deleteNode: vi.fn(),
@@ -63,45 +66,45 @@ beforeEach(() => {
 });
 
 describe("AlertLogsPanel", () => {
-  it("renders 3 log rows and header when alert has node_id=1", async () => {
+  it("renders 3 log rows and header when alert has nodeId=1", async () => {
     searchParamsRef.current = new URLSearchParams("alert_id=42");
 
     getAlertLogsMock.mockResolvedValueOnce({
       data: [
         {
           id: 1,
-          node_id: 1,
+          nodeId: 1,
           source: "journalctl",
           path: "/var/log/syslog",
           timestamp: "2026-04-20T10:00:00Z",
           priority: "err",
           message: "disk full",
-          created_at: "2026-04-20T10:00:00Z",
+          createdAt: "2026-04-20T10:00:00Z",
         },
         {
           id: 2,
-          node_id: 1,
+          nodeId: 1,
           source: "journalctl",
           path: "/var/log/syslog",
           timestamp: "2026-04-20T10:01:00Z",
           priority: "warning",
           message: "high load",
-          created_at: "2026-04-20T10:01:00Z",
+          createdAt: "2026-04-20T10:01:00Z",
         },
         {
           id: 3,
-          node_id: 1,
+          nodeId: 1,
           source: "file",
           path: "/var/log/app.log",
           timestamp: "2026-04-20T10:02:00Z",
           priority: "info",
           message: "service restarted",
-          created_at: "2026-04-20T10:02:00Z",
+          createdAt: "2026-04-20T10:02:00Z",
         },
       ],
-      node_id: 1,
-      window_start: "2026-04-20T09:55:00Z",
-      window_end: "2026-04-20T10:05:00Z",
+      nodeId: 1,
+      windowStart: "2026-04-20T09:55:00Z",
+      windowEnd: "2026-04-20T10:05:00Z",
     });
 
     render(<AlertLogsPanel />);
@@ -120,14 +123,14 @@ describe("AlertLogsPanel", () => {
     );
   });
 
-  it("renders platform hint and no table rows when node_id=0", async () => {
+  it("renders platform hint and no table rows when nodeId=0", async () => {
     searchParamsRef.current = new URLSearchParams("alert_id=99");
 
     getAlertLogsMock.mockResolvedValueOnce({
       data: [],
-      node_id: 0,
-      window_start: "2026-04-20T09:55:00Z",
-      window_end: "2026-04-20T10:05:00Z",
+      nodeId: 0,
+      windowStart: "2026-04-20T09:55:00Z",
+      windowEnd: "2026-04-20T10:05:00Z",
       hint: "平台告警无关联节点日志，请切换到「节点日志」tab 按时间查询",
     });
 

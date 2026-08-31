@@ -15,11 +15,11 @@ vi.mock("@/lib/api/slo", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api/slo")>("@/lib/api/slo");
   return {
     ...actual,
-    parseSLOTags: (s: { match_tags: unknown }) =>
-      Array.isArray(s.match_tags)
-        ? s.match_tags
-        : s.match_tags
-          ? JSON.parse(s.match_tags as string)
+    parseSLOTags: (s: { matchTags: unknown }) =>
+      Array.isArray(s.matchTags)
+        ? s.matchTags
+        : s.matchTags
+          ? JSON.parse(s.matchTags as string)
           : [],
   };
 });
@@ -34,14 +34,14 @@ vi.mock("@/lib/api/client", async () => {
         {
           id: 1,
           name: "prod availability",
-          metric_type: "availability",
-          match_tags: '["prod"]',
+          metricType: "availability",
+          matchTags: '["prod"]',
           threshold: 0.999,
-          window_days: 28,
+          windowDays: 28,
           enabled: true,
-          created_by: 1,
-          created_at: "2026-04-20T00:00:00Z",
-          updated_at: "2026-04-20T00:00:00Z",
+          createdBy: 1,
+          createdAt: "2026-04-20T00:00:00Z",
+          updatedAt: "2026-04-20T00:00:00Z",
         },
       ]),
       getSLOSummary: vi.fn().mockResolvedValue({
@@ -64,16 +64,16 @@ describe("SLOPanel", () => {
   beforeEach(() => {
     getSLOComplianceMock.mockReset();
     getSLOComplianceMock.mockResolvedValue({
-      slo_id: 1,
+      sloId: 1,
       name: "prod availability",
-      metric_type: "availability",
-      window_start: "2026-03-23T00:00:00Z",
-      window_end: "2026-04-20T00:00:00Z",
+      metricType: "availability",
+      windowStart: "2026-03-23T00:00:00Z",
+      windowEnd: "2026-04-20T00:00:00Z",
       threshold: 0.999,
       observed: 0.9995,
-      sample_count: 33600,
-      error_budget_remaining_pct: 50,
-      burn_rate_1h: 0.1,
+      sampleCount: 33600,
+      errorBudgetRemainingPct: 50,
+      burnRate1h: 0.1,
       status: "healthy",
     });
   });
@@ -83,6 +83,7 @@ describe("SLOPanel", () => {
     await waitFor(() => {
       expect(screen.getByText("prod availability")).toBeInTheDocument();
     });
+    expect(screen.queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
   });
 
   it("shows compliance load failure instead of insufficient data", async () => {

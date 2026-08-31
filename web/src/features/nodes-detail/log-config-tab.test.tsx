@@ -30,9 +30,9 @@ vi.mock("@/components/ui/toast-sonner", () => ({
 }));
 
 const BASE_CONFIG = {
-  log_paths: ["/var/log/nginx/access.log"],
-  log_journalctl_enabled: true,
-  log_retention_days: 14,
+  logPaths: ["/var/log/nginx/access.log"],
+  logJournalctlEnabled: true,
+  logRetentionDays: 14,
 };
 
 describe("LogConfigTab", () => {
@@ -65,9 +65,9 @@ describe("LogConfigTab", () => {
 
     await waitFor(() => {
       expect(mockUpdateNodeLogConfig).toHaveBeenCalledWith("test-token", 1, {
-        log_paths: ["/var/log/nginx/access.log"],
-        log_journalctl_enabled: true,
-        log_retention_days: 14,
+        logPaths: ["/var/log/nginx/access.log"],
+        logJournalctlEnabled: true,
+        logRetentionDays: 14,
       });
     });
     expect(mockToastSuccess).toHaveBeenCalled();
@@ -88,20 +88,20 @@ describe("LogConfigTab", () => {
     expect(mockUpdateNodeLogConfig).not.toHaveBeenCalled();
   });
 
-  test("toggle journalctl off and save calls mock with log_journalctl_enabled false", async () => {
+  test("toggle journalctl off and save calls mock with logJournalctlEnabled false", async () => {
     render(<LogConfigTab nodeId={1} token="test-token" />);
     await screen.findByDisplayValue("/var/log/nginx/access.log");
 
     const switchEl = screen.getByRole("switch");
     fireEvent.click(switchEl);
 
-    mockUpdateNodeLogConfig.mockResolvedValue({ ...BASE_CONFIG, log_journalctl_enabled: false });
+    mockUpdateNodeLogConfig.mockResolvedValue({ ...BASE_CONFIG, logJournalctlEnabled: false });
 
     fireEvent.click(screen.getByRole("button", { name: /保存/ }));
 
     await waitFor(() => {
       expect(mockUpdateNodeLogConfig).toHaveBeenCalledWith("test-token", 1, expect.objectContaining({
-        log_journalctl_enabled: false,
+        logJournalctlEnabled: false,
       }));
     });
   });

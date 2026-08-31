@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapSecurityRiskSummary } from "./settings-api";
+import { mapSecurityRiskSummary, mapSettingsResponse } from "./settings-api";
 
 describe("settings api mappers", () => {
   it("maps security risk summary snake_case fields and safe numeric fallbacks", () => {
@@ -155,6 +155,44 @@ describe("settings api mappers", () => {
       severity: "warning",
       count: 0,
       examples: [],
+    });
+  });
+
+  it("maps settings definitions and resolved values to camelCase", () => {
+    expect(
+      mapSettingsResponse({
+        definitions: [
+          {
+            key: "alert.dedup_window",
+            env_var: "ALERT_DEDUP_WINDOW",
+            code_default: "10m",
+            type: "duration",
+            category: "alert",
+            description: "dedup",
+            requires_restart: true,
+            sensitive: false,
+          },
+        ],
+        values: {
+          "alert.dedup_window": { value: "15m", source: "db", updated_at: "2026-05-18T00:00:00Z" },
+        },
+      }),
+    ).toEqual({
+      definitions: [
+        {
+          key: "alert.dedup_window",
+          envVar: "ALERT_DEDUP_WINDOW",
+          codeDefault: "10m",
+          type: "duration",
+          category: "alert",
+          description: "dedup",
+          requiresRestart: true,
+          sensitive: false,
+        },
+      ],
+      values: {
+        "alert.dedup_window": { value: "15m", source: "db", updatedAt: "2026-05-18T00:00:00Z" },
+      },
     });
   });
 });

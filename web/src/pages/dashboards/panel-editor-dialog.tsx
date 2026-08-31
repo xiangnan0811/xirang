@@ -162,11 +162,11 @@ export function PanelEditorDialog({
     // 重置
     if (isEdit && panel) {
       setTitle(panel.title);
-      setChartType(panel.chart_type);
+      setChartType(panel.chartType);
       setMetricKey(panel.metric);
       setAggregation(panel.aggregation);
-      setSelectedNodeIds(panel.filters?.node_ids ?? []);
-      setSelectedTaskIds(panel.filters?.task_ids ?? []);
+      setSelectedNodeIds(panel.filters?.nodeIds ?? []);
+      setSelectedTaskIds(panel.filters?.taskIds ?? []);
     } else {
       setTitle("");
       setChartType("line");
@@ -187,7 +187,7 @@ export function PanelEditorDialog({
           // 创建模式：默认选第一个指标
           if (!isEdit && list.length > 0) {
             setMetricKey(list[0].key);
-            setAggregation(list[0].default_aggregation as Aggregation);
+            setAggregation(list[0].defaultAggregation as Aggregation);
           }
         })
         .catch((err) => {
@@ -227,7 +227,7 @@ export function PanelEditorDialog({
     setMetricKey(key);
     const m = metrics.find((md) => md.key === key);
     if (m) {
-      setAggregation(m.default_aggregation as Aggregation);
+      setAggregation(m.defaultAggregation as Aggregation);
     }
   }
 
@@ -250,8 +250,8 @@ export function PanelEditorDialog({
         {
           metric: metricKey,
           filters: {
-            node_ids: selectedNodeIds.length > 0 ? selectedNodeIds : undefined,
-            task_ids: selectedTaskIds.length > 0 ? selectedTaskIds : undefined,
+            nodeIds: selectedNodeIds.length > 0 ? selectedNodeIds : undefined,
+            taskIds: selectedTaskIds.length > 0 ? selectedTaskIds : undefined,
           },
           aggregation,
           start,
@@ -299,7 +299,7 @@ export function PanelEditorDialog({
   // (currentMetric != undefined). During initial mount the metrics list
   // is still loading; running the sync then would clobber the value that
   // the init effect just restored from the panel prop.
-  const supportedAggs: Aggregation[] = (currentMetric?.supported_aggregations ?? []) as Aggregation[];
+  const supportedAggs: Aggregation[] = (currentMetric?.supportedAggregations ?? []) as Aggregation[];
   const safeAggregation: Aggregation =
     supportedAggs.includes(aggregation) ? aggregation : ((supportedAggs[0] ?? "avg") as Aggregation);
   useEffect(() => {
@@ -315,17 +315,17 @@ export function PanelEditorDialog({
     setSaving(true);
     const input: PanelInput = {
       title: title.trim(),
-      chart_type: chartType,
+      chartType: chartType,
       metric: metricKey,
       filters: {
-        node_ids: selectedNodeIds.length > 0 ? selectedNodeIds : undefined,
-        task_ids: selectedTaskIds.length > 0 ? selectedTaskIds : undefined,
+        nodeIds: selectedNodeIds.length > 0 ? selectedNodeIds : undefined,
+        taskIds: selectedTaskIds.length > 0 ? selectedTaskIds : undefined,
       },
       aggregation: safeAggregation,
-      layout_x: 0,
-      layout_y: Number.MAX_SAFE_INTEGER,
-      layout_w: 6,
-      layout_h: 4,
+      layoutX: 0,
+      layoutY: Number.MAX_SAFE_INTEGER,
+      layoutW: 6,
+      layoutH: 4,
     };
 
     try {
@@ -347,19 +347,19 @@ export function PanelEditorDialog({
   // ── 预览占位符面板（用于传给 PanelRenderer） ─────────────────
   const previewPanel: Panel = {
     id: panel?.id ?? 0,
-    dashboard_id: dashboardID,
+    dashboardId: dashboardID,
     title: title || "预览",
-    chart_type: chartType,
+    chartType: chartType,
     metric: metricKey,
     filters: {
-      node_ids: selectedNodeIds.length > 0 ? selectedNodeIds : undefined,
-      task_ids: selectedTaskIds.length > 0 ? selectedTaskIds : undefined,
+      nodeIds: selectedNodeIds.length > 0 ? selectedNodeIds : undefined,
+      taskIds: selectedTaskIds.length > 0 ? selectedTaskIds : undefined,
     },
     aggregation: safeAggregation,
-    layout_x: 0,
-    layout_y: 0,
-    layout_w: 6,
-    layout_h: 4,
+    layoutX: 0,
+    layoutY: 0,
+    layoutW: 6,
+    layoutH: 4,
   };
 
   // ── 判断当前指标 family ─────────────────────────────────────

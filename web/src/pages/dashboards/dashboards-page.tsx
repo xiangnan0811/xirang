@@ -150,8 +150,8 @@ function CreateDialog({ open, onClose, onCreated }: CreateDialogProps) {
       const input: DashboardInput = {
         name: trimmed,
         description: description.trim(),
-        time_range: timeRange,
-        auto_refresh_seconds: parseInt(autoRefresh, 10),
+        timeRange: timeRange,
+        autoRefreshSeconds: parseInt(autoRefresh, 10),
       };
       const created = await apiClient.createDashboard(token ?? "", input);
       toast.success(t("common.success"));
@@ -338,7 +338,7 @@ export function DashboardsPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="animate-fade-in space-y-5">
       <PageHero
         title={t("dashboards.pageTitle")}
         actions={
@@ -403,7 +403,7 @@ export function DashboardsPage() {
                     {d.name}
                   </Link>
                   <p className="text-xs text-muted-foreground">
-                    {t(`dashboards.timeRange.${d.time_range}`)}
+                    {t(`dashboards.timeRange.${d.timeRange}`)}
                   </p>
                 </CardHeader>
                 <CardContent>
@@ -413,7 +413,7 @@ export function DashboardsPage() {
                     </p>
                   )}
                   <p className="mt-2 text-xs text-muted-foreground">
-                    {formatTime(d.updated_at)}
+                    {formatTime(d.updatedAt)}
                   </p>
                 </CardContent>
               </Card>

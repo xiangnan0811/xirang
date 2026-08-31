@@ -61,17 +61,7 @@ function ReportRow({ report }: { report: Report }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
 
-  let topFailures: {
-    node_name: string;
-    task_name: string;
-    count: number;
-    last_err: string;
-  }[] = [];
-  try {
-    topFailures = JSON.parse(report.top_failures) as typeof topFailures;
-  } catch {
-    /* ignore */
-  }
+  const topFailures = report.topFailures;
 
   return (
     <div className="border-b border-border/40 last:border-0">
@@ -87,17 +77,17 @@ function ReportRow({ report }: { report: Report }) {
           <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         )}
         <span className="flex-1 text-sm">
-          {formatDate(report.period_start)} — {formatDate(report.period_end)}
+          {formatDate(report.periodStart)} — {formatDate(report.periodEnd)}
         </span>
-        <SuccessRateBadge rate={report.success_rate} />
+        <SuccessRateBadge rate={report.successRate} />
         <span className="ml-3 text-xs tabular-nums text-muted-foreground">
           {t("reports.successRuns", {
-            success: report.success_runs,
-            total: report.total_runs,
+            success: report.successRuns,
+            total: report.totalRuns,
           })}
         </span>
         <span className="ml-3 text-xs tabular-nums text-muted-foreground">
-          {t("reports.avgDuration", { ms: report.avg_duration_ms })}
+          {t("reports.avgDuration", { ms: report.avgDurationMs })}
         </span>
       </button>
 
@@ -125,11 +115,11 @@ function ReportRow({ report }: { report: Report }) {
                       key={i}
                       className="border-b border-border/20 last:border-0"
                     >
-                      <td className="max-w-[120px] truncate py-1 pr-4" title={f.node_name}>{f.node_name}</td>
-                      <td className="max-w-[120px] truncate py-1 pr-4" title={f.task_name}>{f.task_name}</td>
+                      <td className="max-w-[120px] truncate py-1 pr-4" title={f.nodeName}>{f.nodeName}</td>
+                      <td className="max-w-[120px] truncate py-1 pr-4" title={f.taskName}>{f.taskName}</td>
                       <td className="py-1 pr-4 tabular-nums">{f.count}</td>
                       <td className="max-w-xs truncate py-1">
-                        {f.last_err || "—"}
+                        {f.lastErr || "—"}
                       </td>
                     </tr>
                   ))}
@@ -198,10 +188,10 @@ function ConfigCard({
   };
 
   const scopeLabel =
-    cfg.scope_type === "all"
+    cfg.scopeType === "all"
       ? t("reports.scopeLabels.all")
-      : cfg.scope_type === "tag"
-        ? t("reports.scopeTagValue", { value: cfg.scope_value })
+      : cfg.scopeType === "tag"
+        ? t("reports.scopeTagValue", { value: cfg.scopeValue })
         : t("reports.scopeLabels.node_ids");
 
   return (

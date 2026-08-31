@@ -28,7 +28,6 @@ function LoadingState({
       role="status"
       aria-live="polite"
       aria-busy="true"
-      aria-label="Loading"
       className={cn("space-y-3 p-4", className)}
     >
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -41,8 +40,6 @@ function LoadingState({
           {description}
         </p>
       ) : null}
-
-      <span className="sr-only">{resolvedTitle}</span>
 
       <div className="space-y-2">
         {skeletonRows.map((row) => (

@@ -51,6 +51,7 @@ describe("ReportsPage", () => {
     expect(
       screen.getByRole("heading", { name: "报告工作台" })
     ).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(
       screen.getByRole("tablist", { name: "报告视图" })
     ).toBeInTheDocument();
@@ -81,6 +82,7 @@ describe("ReportsPage", () => {
       screen.getByRole("tabpanel", { name: "SLO 目标" })
     ).toBeInTheDocument();
     expect(screen.getByText("SLO panel")).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   });
 
   it("supports arrow-key navigation across report tabs", async () => {

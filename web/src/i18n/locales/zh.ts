@@ -170,7 +170,7 @@ const zh = {
     totpLabel: "验证码",
     loginButton: "登录控制台",
     demoTitle: "演示模式仅使用 mock 数据",
-    demoDesc: "不会连接真实服务器、SSH Key 或备份存储；适合查看可信备份、恢复演练、Fleet Doctor 与事件解释流程。",
+    demoDesc: "不会连接真实服务器、SSH Key 或备份存储；适合查看可信备份、历史恢复演练证据、Fleet Doctor 与事件解释流程。",
     demoEnter: "进入演示控制台",
     verifyButton: "验证",
     backToLogin: "返回登录",
@@ -387,6 +387,7 @@ const zh = {
     selectAllVisible: "全选当前页可见节点",
     loadingTitle: "节点数据加载中",
     loadingDesc: "正在刷新节点探测状态与可用性...",
+    loadFailed: "节点列表加载失败。如有已加载数据将继续保留。",
     emptyTitle: "当前筛选条件下暂无节点",
     emptyDesc: "可以重置筛选条件，或新增一个节点继续测试。",
     emptyCreateLabel: "新增节点",
@@ -748,6 +749,7 @@ const zh = {
     enabledRatio: "启用 {{active}}/{{total}}",
     loadingTitle: "策略数据加载中",
     loadingDesc: "正在拉取策略配置与启停状态...",
+    loadFailed: "策略列表加载失败。如有已加载数据将继续保留。",
     noMatchTitle: "暂无匹配策略",
     noMatchDesc: "可调整关键词筛选，或新增策略模板。",
     noMatchDescAlt: "可调整筛选关键词，或新增策略。",
@@ -880,6 +882,8 @@ const zh = {
       triggerSuccess: "演练已触发 (Run #{{id}})",
       triggerFailed: "触发失败",
       sandboxMustNotBeSource: "所有可用节点已被选为备份源，无法选择沙箱节点。",
+      unavailableTitle: "恢复演练暂不可用",
+      unavailableDesc: "在实现安全的源到沙箱传输之前，生产环境不会执行恢复演练。无法手动触发或按计划执行。历史演练结果仍会保留展示。",
     },
   },
 
@@ -950,6 +954,7 @@ const zh = {
     taskUnit: "条任务",
     loadingTitle: "任务数据加载中",
     loadingDesc: "正在同步任务状态、进度与最近执行信息...",
+    loadFailed: "任务列表加载失败。如有已加载数据将继续保留。",
     statPending: "待执行",
     statPendingDesc: "等待调度触发",
     statSuccess: "成功",
@@ -2220,6 +2225,8 @@ const zh = {
     updateFailed: "更新失败",
     scopeNodeIdsLabel: "指定节点 ID（JSON 数组）",
     enabledConfig: "启用配置",
+    description: "创建定时 SLA 报告并选择通知接收渠道。",
+    descriptionEdit: "更新该报告的周期、范围和通知渠道。",
   },
 
   // ── batch command dialog ──
@@ -3589,6 +3596,13 @@ const zh = {
   errorBoundary: {
     unknownError: "发生了未知错误",
     renderError: "页面渲染出错",
+    description: "此页面渲染时出错。可以重试，界面不会展示内部错误细节。",
+  },
+
+  notFound: {
+    title: "页面不存在",
+    description: "当前地址没有对应的控制台页面。请检查链接，或返回概览。",
+    goHome: "返回概览",
   },
 
   // ── filtered empty state ──
@@ -3930,6 +3944,7 @@ const zh = {
     note: "备注",
     noteHint: "可选备注",
     create: "创建",
+    dialogDesc: "创建静默窗口，匹配的告警在窗口结束前保持静默。",
     creating: "创建中...",
     revoke: "立即结束",
     empty: "暂无静默规则",

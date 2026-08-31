@@ -1,5 +1,8 @@
-import { useCallback, useRef, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { apiClient } from "@/lib/api/client";
+import i18n from "@/i18n";
+import { getErrorMessage } from "@/lib/utils";
+import { idleInventoryRequestState, isAbortError, type InventoryRequestState } from "@/hooks/inventory-request-state";
 import { useTaskOperations } from "@/hooks/use-console-task-operations";
 import type {
   AlertRecord,
@@ -41,21 +44,58 @@ export function useTasksDomain({
   handleWriteApiError,
 }: UseTasksDomainParams) {
   const refreshTasksAbortRef = useRef<AbortController | null>(null);
+  const inFlightRefreshRef = useRef<Promise<void> | null>(null);
+  const [tasksRequest, setTasksRequest] = useState<InventoryRequestState>(idleInventoryRequestState);
+  const tasksRequestGenRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      refreshTasksAbortRef.current?.abort();
+      refreshTasksAbortRef.current = null;
+      inFlightRefreshRef.current = null;
+    };
+  }, [token]);
 
   const refreshTasks = useCallback(async (_options?: { limit?: number; offset?: number }) => {
-    if (!token) return;
-    refreshTasksAbortRef.current?.abort();
+    if (!token) {
+      setTasksRequest({ loading: false, error: null, loaded: true });
+      return;
+    }
+    if (inFlightRefreshRef.current) {
+      return inFlightRefreshRef.current;
+    }
     const controller = new AbortController();
     refreshTasksAbortRef.current = controller;
+    const requestGen = ++tasksRequestGenRef.current;
     const taskVersionAtStart = taskVersionRef.current;
-    try {
-      const result = await apiClient.getTasks(token);
-      if (taskVersionAtStart === taskVersionRef.current) {
-        setTasks(result);
+    setTasksRequest((prev) => ({ ...prev, loading: true }));
+    const pending = (async () => {
+      try {
+        const result = await apiClient.getTasks(token, { signal: controller.signal });
+        if (requestGen !== tasksRequestGenRef.current || controller.signal.aborted) {
+          return;
+        }
+        if (taskVersionAtStart === taskVersionRef.current) {
+          setTasks(result);
+        }
+        setTasksRequest({ loading: false, error: null, loaded: true });
+      } catch (error) {
+        if (requestGen !== tasksRequestGenRef.current || controller.signal.aborted || isAbortError(error)) {
+          return;
+        }
+        setTasksRequest((prev) => ({
+          loading: false,
+          error: getErrorMessage(error, i18n.t("tasks.loadFailed")),
+          loaded: prev.loaded,
+        }));
+      } finally {
+        if (refreshTasksAbortRef.current === controller) {
+          inFlightRefreshRef.current = null;
+        }
       }
-    } catch {
-      // 按需刷新失败时静默处理
-    }
+    })();
+    inFlightRefreshRef.current = pending;
+    return pending;
   }, [token, taskVersionRef, setTasks]);
 
   const {
@@ -87,6 +127,9 @@ export function useTasksDomain({
 
   return {
     tasks,
+    tasksLoading: tasksRequest.loading,
+    tasksError: tasksRequest.error,
+    tasksLoaded: tasksRequest.loaded,
     refreshTasks,
     createTask,
     updateTask,

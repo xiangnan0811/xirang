@@ -25,9 +25,9 @@ export default function AnomalyEventRow({ event, showNode, nodeName }: Props) {
     if (event.detector === "ewma" && event.sigma != null) {
       return `${event.sigma.toFixed(2)}${t("anomaly.extra.sigmaSuffix")}`;
     }
-    if (event.detector === "disk_forecast" && event.forecast_days != null) {
+    if (event.detector === "disk_forecast" && event.forecastDays != null) {
       return t("anomaly.extra.forecastPrefix", {
-        days: event.forecast_days.toFixed(1),
+        days: event.forecastDays.toFixed(1),
       });
     }
     return "-";
@@ -39,12 +39,12 @@ export default function AnomalyEventRow({ event, showNode, nodeName }: Props) {
       className="border-t border-border hover:bg-muted/40 text-sm"
     >
       <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
-        {new Date(event.fired_at).toLocaleString()}
+        {new Date(event.firedAt).toLocaleString()}
       </td>
 
       {showNode && (
         <td className="px-3 py-2">
-          <span className="text-xs">{nodeName ?? String(event.node_id)}</span>
+          <span className="text-xs">{nodeName ?? String(event.nodeId)}</span>
         </td>
       )}
 
@@ -65,19 +65,19 @@ export default function AnomalyEventRow({ event, showNode, nodeName }: Props) {
       </td>
 
       <td className="px-3 py-2 text-xs whitespace-nowrap">
-        {event.baseline_value.toFixed(2)} → {event.observed_value.toFixed(2)}
+        {event.baselineValue.toFixed(2)} → {event.observedValue.toFixed(2)}
       </td>
 
       <td className="px-3 py-2 text-xs text-muted-foreground">{extra}</td>
 
       <td className="px-3 py-2 text-xs">
-        {event.alert_id != null ? (
+        {event.alertId != null ? (
           <Link
-            to={`/app/notifications?alert=${event.alert_id}`}
+            to={`/app/notifications?alert=${event.alertId}`}
             data-testid={`anomaly-alert-link-${event.id}`}
             className="text-primary hover:underline whitespace-nowrap"
           >
-            #{event.alert_id}
+            #{event.alertId}
           </Link>
         ) : (
           <span className="text-muted-foreground">-</span>
