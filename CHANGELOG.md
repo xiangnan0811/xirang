@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.53.2](https://github.com/xiangnan0811/xirang/compare/v0.53.1...v0.53.2) (2026-08-31)
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** patch runtime image vulnerabilities ([#486](https://github.com/xiangnan0811/xirang/issues/486)) ([6b5f9ea](https://github.com/xiangnan0811/xirang/commit/6b5f9ea9f3a6117b7cfbe4a723d3fc0aebf4ba9f))
+
 ## [0.53.1](https://github.com/xiangnan0811/xirang/compare/v0.53.0...v0.53.1) (2026-08-31)
 
 
