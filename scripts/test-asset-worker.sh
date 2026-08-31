@@ -106,7 +106,7 @@ for package in \
   'tesseract-ocr-data-chi_sim=5.5.1-r0' \
   'tesseract-ocr-data-eng=5.5.1-r0' \
   'vips-tools=8.17.3-r1' \
-  'gzip=1.14-r2' \
+  'gzip=1.14-r3' \
   'xz=5.8.3-r0' \
   'zstd=1.5.7-r2'; do
   grep -Eq "^[[:space:]]*$package([[:space:]\\]|]|$)" "$DOCKERFILE" || fail "missing pinned closed toolchain package: $package"
@@ -649,7 +649,7 @@ container_id=$("$DOCKER" create \
       tesseract-ocr-data-chi_sim=5.5.1-r0 \
       tesseract-ocr-data-eng=5.5.1-r0 \
       vips-tools=8.17.3-r1 \
-      gzip=1.14-r2 \
+      gzip=1.14-r3 \
       xz=5.8.3-r0 \
       zstd=1.5.7-r2; do
       apk info -e "$package" >/dev/null
