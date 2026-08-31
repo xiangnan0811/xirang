@@ -19,20 +19,20 @@ All tokens are HSL channel triplets (e.g. `217 84% 43%`) consumed via `hsl(var(-
 
 | Token | Light | Dark | Usage |
 |---|---|---|---|
-| `--background` / `--foreground` | `220 24% 97%` / `222 34% 13%` | `222 28% 8%` / `213 31% 91%` | Page canvas + base text |
-| `--card` / `--card-foreground` | `0 0% 100%` / `222 34% 13%` | `222 26% 11%` / `213 31% 91%` | Cards, surfaces |
-| `--popover` / `--popover-foreground` | `0 0% 100%` / `222 34% 13%` | `222 26% 11%` / `213 31% 91%` | Menus, tooltips, popovers |
-| `--primary` / `--primary-foreground` | `217 84% 43%` / `210 40% 98%` | `217 91% 64%` / `222 47% 9%` | Primary actions, links, focus ring |
-| `--secondary` / `--secondary-foreground` | `220 17% 93%` / `222 34% 13%` | `222 20% 17%` / `213 31% 91%` | Secondary surfaces, muted blocks |
-| `--muted` / `--muted-foreground` | `220 17% 93%` / `220 10% 42%` | `222 20% 17%` / `217 15% 66%` | Muted backgrounds, captions |
-| `--accent` / `--accent-foreground` | `213 32% 91%` / `222 34% 13%` | `217 24% 19%` / `213 31% 91%` | Hover/active accents |
-| `--accent-brand` | `217 84% 43%` | `217 91% 64%` | Brand accent (login ambient, marks) |
-| `--destructive` / `--destructive-foreground` | `0 72% 43%` / `210 40% 98%` | `0 74% 62%` / `222 47% 9%` | Errors, down status, delete |
-| `--success` / `--success-foreground` | `156 66% 32%` / `150 45% 96%` | `158 64% 45%` / `222 47% 9%` | Up/healthy status, positive |
-| `--warning` / `--warning-foreground` | `36 88% 42%` / `42 45% 97%` | `38 92% 58%` / `222 47% 9%` | Warning, at-risk |
-| `--info` / `--info-foreground` | `199 87% 39%` / `200 52% 97%` | `199 90% 56%` / `222 47% 9%` | Informational badges |
-| `--border` / `--input` | `220 16% 86%` | `220 18% 23%` | Borders, inputs (shared value) |
-| `--ring` | `217 84% 43%` | `217 91% 64%` | Focus ring |
+| `--background` / `--foreground` | `220 24% 97%` / `222 34% 13%` | `224 40% 5%` / `210 30% 94%` | Page canvas + base text |
+| `--card` / `--card-foreground` | `0 0% 100%` / `222 34% 13%` | `223 32% 8%` / `210 30% 94%` | Cards, surfaces |
+| `--popover` / `--popover-foreground` | `0 0% 100%` / `222 34% 13%` | `223 32% 8%` / `210 30% 94%` | Menus, tooltips, popovers |
+| `--primary` / `--primary-foreground` | `217 84% 43%` / `210 40% 98%` | `217 100% 62%` / `224 60% 6%` | Primary actions, links, focus ring |
+| `--secondary` / `--secondary-foreground` | `220 17% 93%` / `222 34% 13%` | `222 22% 14%` / `210 30% 94%` | Secondary surfaces, muted blocks |
+| `--muted` / `--muted-foreground` | `220 17% 93%` / `220 10% 42%` | `222 22% 14%` / `215 18% 72%` | Muted backgrounds, captions |
+| `--accent` / `--accent-foreground` | `213 32% 91%` / `222 34% 13%` | `217 28% 16%` / `210 30% 94%` | Hover/active accents |
+| `--accent-brand` | `217 84% 43%` | `217 100% 62%` | Brand accent (login ambient, marks) |
+| `--destructive` / `--destructive-foreground` | `0 72% 43%` / `210 40% 98%` | `0 80% 64%` / `224 60% 6%` | Errors, down status, delete |
+| `--success` / `--success-foreground` | `156 66% 32%` / `150 45% 96%` | `158 70% 48%` / `224 60% 6%` | Up/healthy status, positive |
+| `--warning` / `--warning-foreground` | `36 88% 42%` / `42 45% 97%` | `38 95% 60%` / `224 60% 6%` | Warning, at-risk |
+| `--info` / `--info-foreground` | `199 87% 39%` / `200 52% 97%` | `199 95% 58%` / `224 60% 6%` | Informational badges |
+| `--border` / `--input` | `220 16% 86%` | `220 20% 18%` | Borders, inputs (shared value) |
+| `--ring` | `217 84% 43%` | `217 100% 62%` | Focus ring |
 
 **Chart series** (`--chart-1/2/3`, `--chart-ingress`, `--chart-egress`) are semantic and distinct from status text. **Navigation** tokens (`--nav-active`, `--nav-active-foreground`, `--shadow-panel`, `--shadow-panel-hover`, `--shadow-mobile-sheet`) alias accent/foreground and are consumed by mobile navigation and the SSH key sheet.
 
@@ -119,7 +119,7 @@ Key primitives:
 - **`Card`** / `CardContent` / `CardHeader` / `CardTitle` — shadcn card primitives.
 - **`Badge`** — with `tone` (`neutral`/`success`/`warning`/`destructive`/`info`/`primary`).
 - **`Button`** — variants: `default`, `outline`, `ghost`, `secondary`; sizes: `sm`, `icon`, etc.
-- **`FormDialog`** — wraps Radix `Dialog` with `DialogTitle` + optional `DialogDescription` + body + footer. **Always pass a `description` prop** so Radix `DialogContent` does not warn about a missing accessible description.
+- **`FormDialog`** — wraps Radix `Dialog` with `DialogTitle` + required `DialogDescription` + a native `<form>` around body and footer. Always pass a meaningful `description` so Radix `DialogContent` does not warn about a missing accessible description. Submit with `type="submit"`; cancel with `type="button"`.
 - **`Dialog`** family — `Dialog`, `DialogContent`, `DialogHeader`, `DialogTitle`, `DialogDescription`, `DialogCloseButton`, `DialogBody`, `DialogFooter`.
 - **`Input`**, **`Select`**, **`Switch`**, **`Pagination`**, **`EmptyState`**, **`InlineAlert`**, **`LoadingState`**, **`Skeleton`**, **`TagChips`**, **`Toast`** (sonner).
 

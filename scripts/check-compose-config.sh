@@ -53,7 +53,7 @@ jq -e '
   (.services.xirang.ports | length) == 1 and
   .services.xirang.ports[0].target == 10761 and
   .services.xirang.ports[0].published == "10761" and
-  .services.xirang.healthcheck.test == ["CMD", "curl", "-fsS", "http://127.0.0.1:10761/healthz"] and
+  .services.xirang.healthcheck.test == ["CMD", "curl", "-fsS", "http://127.0.0.1:10761/readyz"] and
   .services.xirang.cap_drop == ["FSETID"] and
   .services.xirang.cap_add == null and
   .services.xirang.pid == null and

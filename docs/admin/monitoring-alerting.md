@@ -119,7 +119,7 @@ API：
 
 `/metrics` 是后端进程提供的 Prometheus 标准指标端点。**生产环境必须配置强 `METRICS_TOKEN`**（非空、≥16 字符、非文档占位符），否则进程拒绝启动。
 
-All-in-One 镜像内置 Nginx 默认只代理 `/api/v1/*`、`/healthz` 和前端静态资源，不会通过容器入口 `10761` 暴露 `/metrics`。如需抓取指标，请在可信网络中抓取可直达的后端地址，或自行在外层反向代理中将 `/metrics` 转发到后端，并使用 Bearer token。
+All-in-One 镜像内置 Nginx 默认只代理 `/api/v1/*`、`/healthz`（进程存活）和 `/readyz`（数据库就绪）以及前端静态资源，不会通过容器入口 `10761` 暴露 `/metrics`。如需抓取指标，请在可信网络中抓取可直达的后端地址，或自行在外层反向代理中将 `/metrics` 转发到后端，并使用 Bearer token。
 
 ```bash
 # 后端直连部署（例如源码运行 SERVER_ADDR=:8080）

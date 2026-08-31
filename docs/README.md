@@ -9,7 +9,7 @@
 
 ## 管理员指南
 
-- [备份、恢复与快照](admin/backup-recovery.md)：备份引擎、应用感知备份、恢复演练、GFS/RPO/RTO、快照文件搜索与异常检测。
+- [备份、恢复与快照](admin/backup-recovery.md)：备份引擎、应用感知备份、GFS/RPO/RTO、快照文件搜索与异常检测。生产环境恢复演练当前不可用。
 - [监控、告警与状态页](admin/monitoring-alerting.md)：节点指标、HTTP/TCP uptime 监控、公开状态页、异常事件、告警通知和 Prometheus 指标。
 - [自动化规则](admin/automation.md)：事件触发动作编排、规则配置、模板变量和当前限制。
 - [安全加固](admin/security.md)：生产环境密钥、HTTPS、SSH 主机校验、Webhook SSRF 防护、TOTP、审计与敏感字段保护。

@@ -82,6 +82,10 @@ server {
     proxy_pass http://127.0.0.1:3000/healthz;
   }
 
+  location = /readyz {
+    proxy_pass http://127.0.0.1:3000/readyz;
+  }
+
   location / {
     try_files $uri $uri/ /index.html;
   }

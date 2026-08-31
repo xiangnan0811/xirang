@@ -40,7 +40,7 @@ services:
     ports:
       - "10761:10761"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:10761/healthz"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:10761/readyz"]
       interval: 30s
       timeout: 5s
       retries: 3

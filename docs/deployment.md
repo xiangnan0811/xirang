@@ -17,7 +17,8 @@
                   ┌────────────────────────────────┐
 HTTP :10761  ───> │ Nginx                          │
                   │   ├── /api/v1/*  ──> Backend   │
-                  │   ├── /healthz   ──> Backend   │
+                  │   ├── /healthz   ──> Backend   │  (liveness)
+                  │   ├── /readyz    ──> Backend   │  (DB readiness)
                   │   └── /*         ──> Web UI    │
                   │                                │
                   │ Backend (:3000)                │
@@ -91,6 +92,7 @@ docker compose up -d
 ```bash
 docker compose ps
 docker compose logs --tail=200 xirang
+curl -fsS http://127.0.0.1:10761/readyz
 curl -fsS http://127.0.0.1:10761/healthz
 ```
 
@@ -247,6 +249,9 @@ DB_DSN=postgresql://user:pass@host:5432/xirang?sslmode=require
 
 1. 阅读目标版本的 GitHub Release 和 `CHANGELOG.md`。
 2. 备份数据库和 `.env`。
+   手动部署 workflow 会从当前 workflow ref 上传受测试的 `scripts/predeploy-backup.sh`，进入 `DEPLOY_PATH` 后使用该目录固定的 `docker-compose.yml`、`./data` 和 `./backups` 判定并执行备份。仅当 `xirang` 容器不存在、`./data` 没有任何持久数据且 `.env` 未配置 PostgreSQL 时，才会明确报告首次部署并跳过备份。正常运行的升级必须备份；容器已停止，或容器缺失但仍有本地数据/外部 PostgreSQL 配置时，也必须通过 Compose 的环境、网络和持久挂载运行目标 All-in-One 镜像中的 `/usr/local/bin/backup-db.sh /backup/db`。任何必需备份、产物或 `.sha256` 校验失败都会阻断部署。
+
+   `DEPLOY_PATH` 必须是现有部署目录，并包含当前有效的 `docker-compose.yml` 和 `.env`；workflow 自带备份门禁脚本，不依赖远端目录预先出现该脚本。
 3. 修改 `.env`：
 
 ```env
@@ -259,10 +264,10 @@ IMAGE_TAG=vX.Y.Z
 docker compose pull
 docker compose up -d
 ```
-
-5. 检查健康状态和日志：
+5. 检查就绪状态、进程存活状态和日志：
 
 ```bash
+curl -fsS http://127.0.0.1:10761/readyz
 curl -fsS http://127.0.0.1:10761/healthz
 docker compose logs --tail=200 xirang
 ```
@@ -297,14 +302,35 @@ Docker Compose 默认持久化目录：
 
 ### 手动备份与恢复
 
-SQLite：
+`backup-db.sh` 是 cron 和升级前保全共同使用的唯一数据库备份契约。成功必须同时生成非空数据库产物和同名 `.sha256` 校验文件；任一工具缺失、备份为空或校验文件生成失败都会返回非零。All-in-One 镜像已内置 `sqlite3` 和 PostgreSQL `pg_dump`/`pg_restore` 客户端。
+
+SQLite 备份（在线 `.backup`，不会直接复制 WAL 主文件）：
 
 ```bash
 DB_TYPE=sqlite SQLITE_PATH=./data/xirang.db \
   bash scripts/backup-db.sh ./backups
+backup_file="$(find ./backups -maxdepth 1 -type f -name 'xirang-sqlite-*.db' -printf '%T@ %p\n' | sort -nr | sed -n '1s/^[^ ]* //p')"
+test -n "${backup_file}" && test -s "${backup_file}" && test -s "${backup_file}.sha256"
+```
 
-DB_TYPE=sqlite SQLITE_PATH=./data/xirang.db \
-  bash scripts/restore-db.sh ./backups/xirang-sqlite-20260301-020000.db
+SQLite 恢复**必须离线执行**。停止整个 Compose 栈（不要只覆盖正在运行的数据库文件），确认没有运行中的 Xirang 后，再使用显式维护窗口变量；脚本会校验 SHA-256、执行 `PRAGMA integrity_check`，将文件写入同目录临时文件后原子替换，并仅在该离线路径删除旧的 `-wal`/`-shm` sidecar：
+
+```bash
+backup_file="$(find ./backups -maxdepth 1 -type f -name 'xirang-sqlite-*.db' -printf '%T@ %p\n' | sort -nr | sed -n '1s/^[^ ]* //p')"
+test -n "${backup_file}" && test -s "${backup_file}" && test -s "${backup_file}.sha256"
+docker compose stop
+if docker compose ps --status running --services | grep -q .; then
+  echo "仍有 Compose 服务运行，拒绝恢复" >&2
+  exit 1
+fi
+
+XIRANG_RESTORE_OFFLINE=1 DB_TYPE=sqlite SQLITE_PATH=./data/xirang.db \
+  bash scripts/restore-db.sh "${backup_file}"
+test "$(sqlite3 ./data/xirang.db 'PRAGMA integrity_check;')" = ok
+
+docker compose start
+until curl -fsS http://127.0.0.1:10761/readyz >/dev/null; do sleep 1; done
+curl -fsS http://127.0.0.1:10761/healthz
 ```
 
 PostgreSQL：
@@ -332,8 +358,9 @@ docker compose logs --tail=200 xirang
 # 持久化日志文件（Nginx 访问日志请求行会省略查询字符串）
 ls -lah ./logs
 tail -f ./logs/xirang.log
-
-# 宿主机健康检查
+# 宿主机就绪检查（Compose healthcheck 使用此端点，会 Ping 数据库）
+curl -fsS http://127.0.0.1:10761/readyz
+# 宿主机进程存活检查（不访问数据库）
 curl -fsS http://127.0.0.1:10761/healthz
 ```
 
@@ -353,8 +380,7 @@ docker exec -it xirang sh -lc \
 ## Prometheus `/metrics`
 
 `/metrics` 是后端进程提供的 Prometheus 指标端点。**除显式 `APP_ENV=development` 外必须配置随机 `METRICS_TOKEN`**（含未声明 APP_ENV），否则进程拒绝启动。仅开发环境可留空 token 以兼容本地抓取，但会暴露路由标签和流量画像，并周期性打 warn 日志。
-
-All-in-One 镜像内置 Nginx 默认只代理 `/api/v1/*`、`/healthz` 和前端静态资源，不会暴露 `/metrics`。如果需要抓取指标，请在可信网络中抓取可直达的后端地址，或自行在外层反向代理中将 `/metrics` 转发到后端，并务必启用 token。
+All-in-One 镜像内置 Nginx 默认只代理 `/api/v1/*`、`/healthz`（进程存活）和 `/readyz`（数据库就绪）以及前端静态资源，不会暴露 `/metrics`。如果需要抓取指标，请在可信网络中抓取可直达的后端地址，或自行在外层反向代理中将 `/metrics` 转发到后端，并务必启用 token。
 
 ```bash
 # 后端直连部署（例如源码运行 SERVER_ADDR=:8080）
