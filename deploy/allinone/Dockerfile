@@ -51,11 +51,11 @@ RUN apk add --no-cache \
       c-ares=1.34.8-r0 \
       curl=8.20.0-r0 \
       libcrypto3=3.5.8-r0 \
-      libexpat=2.8.3-r0 \
+      libexpat=2.8.4-r0 \
       libssl3=3.5.8-r0 \
       libxml2=2.13.9-r1 \
       nghttp2-libs=1.69.0-r0 \
-      rsync=3.4.3-r0 \
+      rsync=3.5.0-r0 \
       openssh-client=10.2_p1-r0 \
       sqlite=3.53.4-r0 \
       bash=5.3.3-r1 \
