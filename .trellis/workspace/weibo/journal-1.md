@@ -1877,3 +1877,39 @@ Implemented and independently reviewed task-derived backup preview connection, p
 ### Status
 
 [OK] **Completed**
+
+
+## Session 49: Guard rclone native version deletes and split backup routes
+
+**Date**: 2026-09-03
+**Task**: Guard rclone native version deletes and split backup routes
+**Branch**: `feat/backup-native-version-evidence`
+
+### Summary
+
+Persisted rclone native owned/reference evidence, made preparing a non-reserving referenced wait, and canonicalized backup navigation plus catalog readiness. Follow-up 09-02 remains uncommitted.
+
+### Main Changes
+
+- Durable 000075/000076 native version evidence and referenced blocked reason
+- Preparing siblings no longer occupy deletion reservation
+- Backup Files/Overview/Recovery navigation and catalog-ready gate
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c32ecf7e` | (see git log) |
+| `f4bbab53` | (see git log) |
+
+### Testing
+
+- [OK] go test backupasset/database/task packages; web typecheck + 771 backup-related vitest
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Keep 09-02-backup-lifecycle-effect-audit-idempotency on a new branch after this PR lands
