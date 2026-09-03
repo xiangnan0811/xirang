@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.54.0](https://github.com/xiangnan0811/xirang/compare/v0.53.2...v0.54.0) (2026-09-03)
+
+
+### ✨ Features
+
+* **backup-assets:** persist rclone native versions and split backup routes ([#492](https://github.com/xiangnan0811/xirang/issues/492)) ([ff35c6c](https://github.com/xiangnan0811/xirang/commit/ff35c6cf89ffb01b06acbf0535563d634a98fe29))
+
 ## [0.53.2](https://github.com/xiangnan0811/xirang/compare/v0.53.1...v0.53.2) (2026-08-31)
 
 
