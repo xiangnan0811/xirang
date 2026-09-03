@@ -17,6 +17,12 @@ import {
 } from "lucide-react";
 
 import type { UserRecord } from "@/types/domain";
+import {
+  BACKUP_FILES_PATH,
+  backupFilesHref,
+  isNavPathActive,
+  normalizeAppPathname,
+} from "@/lib/backup-navigation";
 
 export type NavGroup = "operate" | "automate" | "observe" | "pinned";
 
@@ -73,7 +79,7 @@ export const navItems: NavItem[] = [
   },
   {
     titleKey: "nav.backups",
-    path: "/app/backups",
+    path: BACKUP_FILES_PATH,
     icon: HardDrive,
     group: "automate",
     mobileTab: false
@@ -164,3 +170,5 @@ export const navItems: NavItem[] = [
 export function getVisibleNavItems(role: UserRecord["role"] | null): NavItem[] {
   return navItems.filter((item) => !item.adminOnly || role === "admin");
 }
+
+export { BACKUP_FILES_PATH, backupFilesHref, isNavPathActive, normalizeAppPathname };

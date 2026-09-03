@@ -3,7 +3,8 @@ import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { MemoryRouter, Navigate, NavLink, Outlet, Route, Routes, createMemoryRouter, RouterProvider, useLocation, useNavigate } from "react-router-dom";
+import { canonicalizeBackupLocation } from "@/lib/backup-navigation";
 
 import { BackupsPage } from "./backups-page";
 import { BackupsDataPage } from "./backups-page.data";
@@ -12,6 +13,10 @@ import { BackupsRecoveryPage } from "./backups-page.recovery";
 import type { BackupConfidenceData, BackupHealthData, StorageUsageData } from "@/types/domain";
 import { buildAssetRows, recoveryPoint, repository } from "@/features/backup-assets/__tests__/test-utils";
 import { BACKUP_ASSETS_PREFERENCES_KEY } from "@/features/backup-assets/backup-assets-preferences";
+import { parseBackupAssetsRoute } from "@/features/backup-assets/backup-assets-route-state";
+
+const filesSavedSearchId = "e".repeat(32);
+const filesSearch = `?view=search&savedSearchId=${filesSavedSearchId}`;
 
 const backupHealth: BackupHealthData = {
   summary: {
@@ -246,9 +251,9 @@ describe("BackupsPage", () => {
     getStorageUsageMock.mockResolvedValue(storageUsage);
 
     renderBackups("/app/backups/overview");
-
     expect(await screen.findByRole("link", { name: /Configure backup task|配置备份任务/ })).toHaveAttribute("href", "/app/tasks");
     expect(await screen.findByText(/Backup Confidence|备份可信度/)).toBeInTheDocument();
+    await waitFor(() => expect(document.getElementById("backup-assets-ga")).toBeInTheDocument());
     expect((await screen.findAllByText(/Insufficient proof|证据不足/)).length).toBeGreaterThan(0);
     expect(await screen.findByText(/Never backed up|从未备份/)).toBeInTheDocument();
   });
@@ -303,7 +308,9 @@ describe("BackupsPage", () => {
 
     const tablist = await screen.findByRole("tablist", { name: /Backup views|备份视图/ });
     expect(tablist).toBeInTheDocument();
+    expect(tablist).toHaveClass("min-h-11");
     expect(within(tablist).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["文件", "概览", "恢复"]);
+    expect(within(tablist).getAllByRole("tab").every((tab) => tab.className.includes("min-h-11"))).toBe(true);
     expect(screen.getByRole("tab", { name: /Overview|概览/ })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tab", { name: /Files|文件/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: /Recovery|恢复/ })).toHaveAttribute("aria-selected", "false");
@@ -313,21 +320,16 @@ describe("BackupsPage", () => {
     expect(await screen.findByRole("region", { name: /File results|文件结果/ })).toBeInTheDocument();
   });
 
-  it("does not refetch parent backup health when switching nested tabs", async () => {
+  it("does not request backup health on Files or Recovery", async () => {
     const user = userEvent.setup();
-    getBackupHealthMock.mockResolvedValue(backupHealth);
-
     renderBackups("/app/backups/data");
 
     expect(await screen.findByRole("tab", { name: /Files|文件/ })).toHaveAttribute("aria-selected", "true");
-    const healthCalls = getBackupHealthMock.mock.calls.length;
-    expect(healthCalls).toBeGreaterThan(0);
+    expect(getBackupHealthMock).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("tab", { name: /Recovery|恢复/ }));
     expect(await screen.findByRole("tab", { name: /Recovery|恢复/ })).toHaveAttribute("aria-selected", "true");
-    await user.click(screen.getByRole("tab", { name: /Files|文件/ }));
-    expect(await screen.findByRole("tab", { name: /Files|文件/ })).toHaveAttribute("aria-selected", "true");
-    expect(getBackupHealthMock).toHaveBeenCalledTimes(healthCalls);
+    expect(getBackupHealthMock).not.toHaveBeenCalled();
   });
 
   it("keeps a blocked file-source projection out of the searchable workspace", async () => {
@@ -666,7 +668,7 @@ describe("BackupsPage", () => {
     );
     expect(screen.getByRole("link", { name: /Task context|任务上下文/ })).toHaveAttribute(
       "href",
-      "/app/tasks"
+      "/app/backups/data?taskId=7",
     );
     expect(screen.queryByRole("button", { name: /Export|导出|Start recovery|开始恢复/ })).not.toBeInTheDocument();
   });
@@ -713,6 +715,204 @@ describe("BackupsPage", () => {
     expect(getRecoveryPlanMock).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /Create recovery plan|创建恢复计划|Start recovery|开始恢复/ })).not.toBeInTheDocument();
   });
+
+  it("hides task context when recovery has no producing task", async () => {
+    renderBackups("/app/backups/recovery");
+
+    expect(await screen.findByRole("heading", { name: /Recovery evidence|恢复证据/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Task context|任务上下文/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Export|导出|Start recovery|开始恢复/ })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["Files", "/app/backups/data", <BackupsDataPage />],
+    ["Recovery", "/app/backups/recovery", <BackupsRecoveryPage />],
+  ])("does not let an exiting %s page overwrite sibling navigation", async (_, initialEntry, page) => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <NavLink to="/app/tasks">Tasks</NavLink>
+        {page}
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("link", { name: "Tasks" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("backups-location")).toHaveTextContent("/app/tasks");
+    });
+  });
+
+  it("reaches Tasks in one click from the backup index", async () => {
+    const user = userEvent.setup();
+    const router = createMemoryRouter(
+      [
+        {
+          path: "/",
+          HydrateFallback: () => null,
+          element: (
+            <>
+              <nav>
+                <NavLink to="/app/tasks">Tasks</NavLink>
+              </nav>
+              <Outlet />
+              <LocationProbe />
+            </>
+          ),
+          children: [
+            {
+              path: "app/backups",
+              loader: canonicalizeBackupLocation,
+              HydrateFallback: () => null,
+              element: <BackupsPage />,
+              children: [
+                { path: "data", element: <div>files-panel</div> },
+                { path: "overview", element: <div>overview-panel</div> },
+                { path: "recovery", element: <div>recovery-panel</div> },
+              ],
+            },
+            { path: "app/tasks", element: <div data-testid="tasks-page">Tasks ready</div> },
+          ],
+        },
+      ],
+      { initialEntries: ["/app/backups"] },
+    );
+
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByRole("tab", { name: /Files|文件/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("files-panel")).toBeInTheDocument();
+    expect(screen.queryByText("overview-panel")).not.toBeInTheDocument();
+    expect(screen.getByTestId("backups-location")).toHaveTextContent("/app/backups/data");
+
+    await user.click(screen.getByRole("link", { name: "Tasks" }));
+    expect(await screen.findByTestId("tasks-page")).toBeInTheDocument();
+    expect(screen.getByTestId("backups-location")).toHaveTextContent("/app/tasks");
+  });
+
+  it("preserves exact Files search when clicking the active Files tab", async () => {
+    const user = userEvent.setup();
+    expect(parseBackupAssetsRoute("/app/backups/data", filesSearch)).toMatchObject({
+      status: "valid",
+      state: { page: "data", view: "search", savedSearchId: filesSavedSearchId },
+    });
+    renderBackupTabs(`/app/backups/data${filesSearch}`);
+
+    const files = screen.getByRole("tab", { name: /Files|文件/ });
+    expect(files).toHaveAttribute("href", `/app/backups/data${filesSearch}`);
+    await user.click(files);
+    expect(screen.getByTestId("backups-location").textContent).toBe(`/app/backups/data${filesSearch}`);
+  });
+
+  it("restores Files search after a mounted click round-trip through a sibling tab", async () => {
+    const user = userEvent.setup();
+    renderBackupTabs(`/app/backups/data${filesSearch}`);
+
+    await user.click(screen.getByRole("tab", { name: /Overview|概览/ }));
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/overview");
+    expect(screen.getByRole("tab", { name: /Files|文件/ })).toHaveAttribute(
+      "href",
+      `/app/backups/data${filesSearch}`,
+    );
+    expect(screen.getByRole("tab", { name: /Recovery|恢复/ })).toHaveAttribute("href", "/app/backups/recovery");
+
+    await user.click(screen.getByRole("tab", { name: /Files|文件/ }));
+    expect(screen.getByTestId("backups-location").textContent).toBe(`/app/backups/data${filesSearch}`);
+  });
+
+  it("restores Files search after a mounted keyboard round-trip through a sibling tab", () => {
+    renderBackupTabs(`/app/backups/data${filesSearch}`);
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Files|文件/ }), { key: "ArrowRight" });
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/overview");
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Overview|概览/ }), { key: "ArrowLeft" });
+    expect(screen.getByTestId("backups-location").textContent).toBe(`/app/backups/data${filesSearch}`);
+  });
+
+  it("restores changed Files query after programmatic Recovery entry", async () => {
+    const user = userEvent.setup();
+    const changedRepositoryId = "c".repeat(32);
+    const changedRecoveryPointId = "d".repeat(32);
+    const changedParentEntryId = "f".repeat(64);
+    const changedFilesHref =
+      `/app/backups/data?repositoryId=${changedRepositoryId}` +
+      `&recoveryPointId=${changedRecoveryPointId}` +
+      `&parentEntryId=${changedParentEntryId}`;
+    const changedFilesSearch = changedFilesHref.slice("/app/backups/data".length);
+    const planId = "1".repeat(32);
+    const jobId = "2".repeat(32);
+    const recoveryHref =
+      `/app/backups/recovery?recoveryPointId=${changedRecoveryPointId}&planId=${planId}`;
+    const recoveryPatchHref = `${recoveryHref}&jobId=${jobId}`;
+    expect(parseBackupAssetsRoute("/app/backups/data", filesSearch)).toMatchObject({
+      status: "valid",
+      state: { page: "data", view: "search", savedSearchId: filesSavedSearchId },
+    });
+    expect(parseBackupAssetsRoute("/app/backups/data", changedFilesSearch)).toMatchObject({
+      status: "valid",
+      state: {
+        page: "data",
+        repositoryId: changedRepositoryId,
+        recoveryPointId: changedRecoveryPointId,
+        parentEntryId: changedParentEntryId,
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={[`/app/backups/data${filesSearch}`]}>
+        <Routes>
+          <Route path="/app/backups" element={<BackupsPage />}>
+            <Route
+              path="data"
+              element={
+                <div>
+                  <RoutePatchButton to={changedFilesHref}>Change files query</RoutePatchButton>
+                  <RoutePatchButton to={recoveryHref}>Enter recovery</RoutePatchButton>
+                </div>
+              }
+            />
+            <Route path="overview" element={<div>overview-panel</div>} />
+            <Route
+              path="recovery"
+              element={<RoutePatchButton to={recoveryPatchHref}>Patch recovery</RoutePatchButton>}
+            />
+          </Route>
+        </Routes>
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Change files query" }));
+    expect(screen.getByTestId("backups-location").textContent).toBe(changedFilesHref);
+
+    await user.click(screen.getByRole("button", { name: "Enter recovery" }));
+    expect(screen.getByTestId("backups-location").textContent).toBe(recoveryHref);
+    expect(screen.getByRole("tab", { name: /Files|文件/ })).toHaveAttribute("href", changedFilesHref);
+
+    await user.click(screen.getByRole("button", { name: "Patch recovery" }));
+    expect(screen.getByTestId("backups-location").textContent).toBe(recoveryPatchHref);
+    expect(screen.getByRole("tab", { name: /Files|文件/ })).toHaveAttribute("href", changedFilesHref);
+
+    await user.click(screen.getByRole("tab", { name: /Files|文件/ }));
+    expect(screen.getByTestId("backups-location").textContent).toBe(changedFilesHref);
+  });
+
+  it("does not leak Overview or Recovery query params into Files", async () => {
+    const user = userEvent.setup();
+    const recovery = renderBackupTabs("/app/backups/recovery?planId=abc&recoveryPointId=def");
+    expect(screen.getByRole("tab", { name: /Files|文件/ })).toHaveAttribute("href", "/app/backups/data");
+    expect(screen.getByRole("tab", { name: /Overview|概览/ })).toHaveAttribute("href", "/app/backups/overview");
+    await user.click(screen.getByRole("tab", { name: /Files|文件/ }));
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/data");
+    recovery.unmount();
+
+    renderBackupTabs("/app/backups/overview?foo=1");
+    expect(screen.getByRole("tab", { name: /Files|文件/ })).toHaveAttribute("href", "/app/backups/data");
+    await user.click(screen.getByRole("tab", { name: /Files|文件/ }));
+    expect(screen.getByTestId("backups-location").textContent).toBe("/app/backups/data");
+  });
 });
 
 function renderBackups(
@@ -737,6 +937,21 @@ function renderBackups(
   return render(options?.strict ? <StrictMode>{tree}</StrictMode> : tree);
 }
 
+function renderBackupTabs(initialEntry: string) {
+  return render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes>
+        <Route path="/app/backups" element={<BackupsPage />}>
+          <Route path="data" element={<div>files-panel</div>} />
+          <Route path="overview" element={<div>overview-panel</div>} />
+          <Route path="recovery" element={<div>recovery-panel</div>} />
+        </Route>
+      </Routes>
+      <LocationProbe />
+    </MemoryRouter>,
+  );
+}
+
 function LocationProbe() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -745,5 +960,14 @@ function LocationProbe() {
       <output data-testid="backups-location">{location.pathname + location.search}</output>
       <button type="button" data-testid="backups-history-back" onClick={() => navigate(-1)}>Test history back</button>
     </div>
+  );
+}
+
+function RoutePatchButton({ to, children }: { to: string; children: string }) {
+  const navigate = useNavigate();
+  return (
+    <button type="button" onClick={() => navigate(to)}>
+      {children}
+    </button>
   );
 }

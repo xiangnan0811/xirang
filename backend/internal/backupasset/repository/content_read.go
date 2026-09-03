@@ -361,13 +361,24 @@ func (service *Service) openManagedRcloneNativeContentSource(
 		cleanupParent: ctx, cleanupTimeout: contentSourceCleanupTimeout,
 		revalidate: func(validateCtx context.Context) error {
 			current, loadErr := service.loadExactContentRecord(validateCtx, request)
-			if loadErr != nil || current.point.State != string(backupasset.RecoveryPointCommitted) && current.point.State != string(backupasset.RecoveryPointDegraded) ||
-				current.locator.Native != record.locator.Native || current.point.EncryptedProviderLocator != record.point.EncryptedProviderLocator {
+			if loadErr != nil {
+				return loadErr
+			}
+			if current.point.State != string(backupasset.RecoveryPointCommitted) && current.point.State != string(backupasset.RecoveryPointDegraded) ||
+				current.repository.CapabilityRevision != record.repository.CapabilityRevision ||
+				current.point.CapabilityRevision != record.point.CapabilityRevision ||
+				current.locator.Native != record.locator.Native ||
+				current.point.EncryptedProviderLocator != record.point.EncryptedProviderLocator {
 				return fmt.Errorf("%w: immutable native Rclone content source changed", backupasset.ErrConflict)
 			}
-			head, headErr := s3.HeadVersion(validateCtx, provider.RcloneNativeExactReadRequest{PhysicalKey: physicalKey, VersionID: versionID})
-			if headErr != nil || !sameRcloneNativeContentHead(initialHead, head) {
-				return fmt.Errorf("%w: immutable native Rclone exact version changed", backupasset.ErrConflict)
+			_, currentPhysicalKey, currentVersionID, currentHead, resolveErr :=
+				service.resolveManagedRcloneNativeContentBinding(validateCtx, current)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			if currentPhysicalKey != physicalKey || currentVersionID != versionID ||
+				!sameRcloneNativeContentHead(initialHead, currentHead) {
+				return fmt.Errorf("%w: immutable native Rclone content source changed", backupasset.ErrConflict)
 			}
 			return nil
 		},
@@ -441,8 +452,9 @@ func (service *Service) resolveManagedRcloneNativeContentBinding(
 	if err != nil || commit.Native == nil {
 		return nil, "", "", zero, fmt.Errorf("%w: native Rclone content commit is invalid", backupasset.ErrConflict)
 	}
-	commit.Native.CommitKey = locator.NativeCommitKey
-	commit.Native.CommitVersionID = locator.NativeCommitVersionID
+	if err := validateRcloneDurableCapabilityEvidence(record.point, consistency, attempt, commit); err != nil {
+		return nil, "", "", zero, err
+	}
 	commitDigest, err := canonicalRcloneProviderCommitDigest(commit)
 	if err != nil || commitDigest != locator.ProviderCommitDigest || commitDigest != consistency.ProviderCommitDigest ||
 		manifest.EncryptedCommitEvidence != locator.TaggedCommit || record.point.SourceFingerprint != locator.PhysicalIdentityDigest ||
@@ -462,17 +474,30 @@ func (service *Service) resolveManagedRcloneNativeContentBinding(
 	if err != nil {
 		return nil, "", "", zero, err
 	}
+	exactCommitKey := managedRcloneNativeControlCommitKey(runtime.binding, attempt)
+	owned, _, evidenceErr := loadManagedRcloneNativeVersionEvidenceTx(
+		ctx, service.db, record.repository.ID, record.point.ID, markerKey, locator, exactCommitKey,
+	)
+	if evidenceErr != nil {
+		return nil, "", "", zero, evidenceErr
+	}
+	exactCommitVersionID, evidenceErr := managedRcloneNativeCommitVersion(owned, exactCommitKey)
+	if evidenceErr != nil {
+		return nil, "", "", zero, evidenceErr
+	}
+	commit.Native.CommitKey = exactCommitKey
+	commit.Native.CommitVersionID = exactCommitVersionID
 	leaseConfig, err := service.foundation.LeaseConfig()
 	if err != nil {
 		return nil, "", "", zero, err
 	}
 	input, err := service.publication.rcloneReconcileInput(
-		ctx, runtime, attempt, markerKey, leaseConfig, locator.NativeCommitKey, locator.NativeCommitVersionID,
+		ctx, runtime, attempt, markerKey, leaseConfig, exactCommitKey, exactCommitVersionID,
 	)
-	if err != nil || input.NativeRequest == nil || input.NativeRequest.ClientFactory == nil {
-		if err != nil {
-			return nil, "", "", zero, err
-		}
+	if err != nil {
+		return nil, "", "", zero, err
+	}
+	if input.NativeRequest == nil || input.NativeRequest.ClientFactory == nil {
 		return nil, "", "", zero, fmt.Errorf("%w: native Rclone exact client unavailable", backupasset.ErrInvalidState)
 	}
 	physicalKey, versionID, err := decodeRcloneNativeContentEntryLocator(record.locator.Native, runtime.binding.Native.ManagedPrefix)
@@ -482,11 +507,17 @@ func (service *Service) resolveManagedRcloneNativeContentBinding(
 	s3, err := input.NativeRequest.ClientFactory.S3(
 		input.NativeRequest.Session, input.NativeRequest.Profile, input.NativeRequest.KMSKeyBindings,
 	)
-	if err != nil || s3 == nil {
+	if err != nil {
+		return nil, "", "", zero, err
+	}
+	if s3 == nil {
 		return nil, "", "", zero, capabilityError(backupasset.CapabilityProviderUnavailable, "")
 	}
 	head, err := s3.HeadVersion(ctx, provider.RcloneNativeExactReadRequest{PhysicalKey: physicalKey, VersionID: versionID})
-	if err != nil || head.PhysicalKey != physicalKey || head.VersionID != versionID || head.Size != uint64(record.entry.Size) ||
+	if err != nil {
+		return nil, "", "", zero, err
+	}
+	if head.PhysicalKey != physicalKey || head.VersionID != versionID || head.Size != uint64(record.entry.Size) ||
 		head.EncryptionProfile != input.NativeRequest.Encryption.Profile ||
 		head.BucketKeyEnabled != input.NativeRequest.EncryptionEvidence.BucketKeyEnabled ||
 		!validRcloneNativeContentKMSDigest(head, input.NativeRequest.Encryption.Profile, input.NativeRequest.KMSKeyBindings) {
@@ -566,6 +597,9 @@ func (service *Service) resolveManagedRclonePortableContentBinding(
 	}
 	commit, err := provider.DecodeRcloneCommitV1(locator.TaggedCommit)
 	if err != nil {
+		return provider.ReadSnapshot{}, provider.PointLocator{}, exactContentRecord{}, false, err
+	}
+	if err := validateRcloneDurableCapabilityEvidence(record.point, consistency, attempt, commit); err != nil {
 		return provider.ReadSnapshot{}, provider.PointLocator{}, exactContentRecord{}, false, err
 	}
 	commitDigest, err := canonicalRcloneProviderCommitDigest(commit)
@@ -778,6 +812,9 @@ func (service *Service) resolveResticContentBinding(
 	}
 	if record.point.SourceFingerprint != resticSourceFingerprint(*record.repository.RepositoryIdentity, locator.FullSnapshotID) {
 		return provider.ReadSnapshot{}, provider.PointLocator{}, fmt.Errorf("%w: immutable Restic source changed", backupasset.ErrConflict)
+	}
+	if err := service.proveResticReadIdentity(ctx, record.repository.ID, *record.repository.RepositoryIdentity, record.point.CapabilityRevision, runtime); err != nil {
+		return provider.ReadSnapshot{}, provider.PointLocator{}, err
 	}
 	return provider.ReadSnapshot{
 		RepositoryID: record.repository.ID, CapabilityRevision: record.point.CapabilityRevision,

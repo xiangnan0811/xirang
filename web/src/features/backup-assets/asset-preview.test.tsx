@@ -1110,6 +1110,41 @@ describe("AssetPreview", () => {
 		expect(screen.queryByText(/ZIP browsing|ZIP 浏览/)).not.toBeInTheDocument();
   });
 
+  it("hides no-op Retry preview when the controller cannot retry the active preview", async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    const onPrepareDownload = vi.fn();
+    const previewAsset = asset();
+    render(
+      <AssetPreview
+        asset={previewAsset}
+        resource={{
+          status: "error",
+          value: null,
+          error: {
+            code: "temporarily_unavailable",
+            translationKey: "backupAssets.errors.temporarilyUnavailable",
+            retryable: true,
+            action: "retry",
+          },
+        }}
+        canPreview
+        canDownload
+        canRetryPreview={false}
+        onLoadExactPreview={vi.fn()}
+        onRetry={onRetry}
+        onRenew={vi.fn()}
+        onPrepareDownload={onPrepareDownload}
+        onDetach={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /Retry preview|重试预览/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Prepare download|准备下载/ }));
+    expect(onPrepareDownload).toHaveBeenCalledWith(previewAsset);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
   it("unmounts a native renderer before a replacement ticket can attach", () => {
     const rendered = renderPreview("native_video");
     const media = rendered.container.querySelector("video");

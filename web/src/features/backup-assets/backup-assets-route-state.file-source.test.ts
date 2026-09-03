@@ -91,7 +91,35 @@ describe("backup file source route state", () => {
       repositoryId,
       taskId: 9,
       recoveryPointId: pointId,
+      parentEntryId: undefined,
+      entryId,
     });
+  });
+
+  it("preserves the exact hit locator when a cross-source resolver patch is composed through the route updater", () => {
+    const source = {
+      ...defaultBackupAssetsRouteState("data"),
+      recoveryPointId: pointId,
+      parentEntryId: parentId,
+      entryId,
+    };
+    const patch = resolveBackupAssetsLegacySourceRoute(source, resolution);
+    const result = updateBackupAssetsRoute(source, patch);
+
+    expect(result.status).toBe("valid");
+    if (result.status !== "valid") return;
+    expect(result.state).toMatchObject({
+      nodeId: 7,
+      backupSetId: setId,
+      repositoryId,
+      taskId: 9,
+      recoveryPointId: pointId,
+      parentEntryId: parentId,
+      entryId,
+    });
+    expect(result.href).toBe(
+      `/app/backups/data?nodeId=7&backupSetId=${setId}&repositoryId=${repositoryId}&taskId=9&recoveryPointId=${pointId}&parentEntryId=${parentId}&entryId=${entryId}`,
+    );
   });
 
   it.each(["indexing", "unavailable"] as const)(
@@ -120,6 +148,21 @@ describe("backup file source route state", () => {
       });
     },
   );
+
+  it("keeps exact browsing coordinates while browse state is still unresolved", () => {
+    const source = {
+      ...defaultBackupAssetsRouteState("data"),
+      nodeId: 7,
+      backupSetId: setId,
+      repositoryId,
+      taskId: 9,
+      recoveryPointId: pointId,
+      parentEntryId: parentId,
+      entryId,
+    };
+
+    expect(gateBackupAssetsBrowseRoute(source, null)).toEqual(source);
+  });
 
   it("clears incompatible legacy descendants on source-coordinate mismatch", () => {
     const source = {

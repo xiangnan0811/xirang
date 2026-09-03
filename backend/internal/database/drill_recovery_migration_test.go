@@ -241,8 +241,8 @@ func testRunMigrations074DuplicateActiveDrillFailsCleanAndRetries(t *testing.T, 
 	if checkErr != nil {
 		t.Fatalf("check metadata after 000074 retry: %v", checkErr)
 	}
-	if dirty || version != drillDurableRecoveryVersion {
-		t.Fatalf("000074 retry metadata mismatch: version=%d dirty=%v", version, dirty)
+	if dirty || version != latestMigrationVersion {
+		t.Fatalf("migration retry metadata mismatch: version=%d dirty=%v", version, dirty)
 	}
 }
 

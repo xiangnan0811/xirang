@@ -37,7 +37,7 @@ for package in \
   'c-ares=1.34.8-r0' \
   'libcrypto3=3.5.8-r0' \
   'libssl3=3.5.8-r0' \
-  'libexpat=2.8.3-r0' \
+  'libexpat=2.8.4-r0' \
   'libxml2=2.13.9-r1' \
   'nghttp2-libs=1.69.0-r0'
 do

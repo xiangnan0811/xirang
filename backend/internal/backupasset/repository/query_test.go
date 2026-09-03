@@ -1159,6 +1159,13 @@ func TestRsyncResolverRejectsPlanSelectionCatalogRevisionAndCiphertextDrift(t *t
 		{name: "source revision", mutate: func(_ *testing.T, _ *rsyncRestoreResolverFixture, ref *provider.RsyncRestoreSourceRef) {
 			ref.SourceRevisionDigest = strings.Repeat("e", 64)
 		}},
+		{name: "repository capability revision", mutate: func(t *testing.T, fixture *rsyncRestoreResolverFixture, _ *provider.RsyncRestoreSourceRef) {
+			if err := fixture.db.Model(&model.BackupRepository{}).
+				Where("id = ?", fixture.ref.RepositoryID).
+				Update("capability_revision", gorm.Expr("capability_revision + 1")).Error; err != nil {
+				t.Fatal(err)
+			}
+		}},
 		{name: "mutable source revision kind", mutate: func(t *testing.T, fixture *rsyncRestoreResolverFixture, _ *provider.RsyncRestoreSourceRef) {
 			if err := fixture.db.Model(&model.BackupAssetRecoveryPlan{}).
 				Where("id = ?", fixture.ref.PlanID).
@@ -2502,6 +2509,29 @@ func TestManagedRsyncCommittedPointReadRequestBindsExactCommittedEvidence(t *tes
 	}
 	if access.AdapterData != nil || access.Locator != "" || access.RepositoryID != fixture.repository.ID || access.TaskID != fixture.task.ID || access.NodeID != fixture.task.NodeID {
 		t.Fatalf("committed Rsync reader access=%+v", access)
+	}
+	driftedRuntime := runtime
+	driftedRuntime.repository.CapabilityRevision++
+	serviceWithoutKeyring, err := NewService(Dependencies{
+		DB: fixture.db, Foundation: fixture.service.foundation, Registry: fixture.service.registry,
+		Now: func() time.Time { return fixture.now }, Admission: fixture.admission, History: fixture.service.history,
+		Metrics: publication.NoopMetrics{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driftedRequest, driftedAccess, driftErr := serviceWithoutKeyring.managedRsyncCommittedPointReadRequest(
+		context.Background(), driftedRuntime, point,
+	)
+	if !errors.Is(driftErr, backupasset.ErrConflict) {
+		t.Fatalf("capability-drift committed Rsync reader error=%v, want ErrConflict", driftErr)
+	}
+	if !strings.Contains(driftErr.Error(), "committed Rsync point capability revision changed") {
+		t.Fatalf("capability-drift committed Rsync reader error=%v, want capability revision message", driftErr)
+	}
+	if !reflect.DeepEqual(driftedRequest, provider.RsyncCommittedPointReadRequest{}) ||
+		!reflect.DeepEqual(driftedAccess, provider.AccessBinding{}) {
+		t.Fatalf("capability-drift committed Rsync reader returned request=%+v access=%+v, want zero values", driftedRequest, driftedAccess)
 	}
 	if _, err := service.BeginManagedRsyncPointRead(context.Background(), fixture.task.ID, point.ID); !errors.Is(err, backupasset.ErrCapabilityUnavailable) {
 		t.Fatalf("unreadable committed Rsync tree error=%v, want capability unavailable", err)

@@ -11,7 +11,17 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-const NormalizerVersion = 1
+// NormalizerVersion identifies the persisted token output. Bump it whenever
+// normalization changes so older generations are not treated as complete.
+const (
+	NormalizerVersion = 3
+
+	// Prefixes are optional index entries. Keep their expansion bounded so a
+	// deeply nested or unusually long path cannot consume the mandatory token
+	// budget.
+	minIndexedPrefixRunes  = 3
+	maxIndexedPrefixTokens = 64
+)
 
 var ErrInvalidNormalization = errors.New("invalid backup asset search normalization")
 
@@ -26,6 +36,9 @@ type NormalizedToken struct {
 	Value     string
 	Kind      TokenKind
 	Frequency int
+	// Prefix marks a generated search-as-you-type token. It is local
+	// normalization metadata and is not part of the HMAC posting identity.
+	Prefix bool
 }
 
 type NormalizedValue struct {
@@ -150,6 +163,7 @@ func tokenizeSegments(segments []string, field SearchField, limits NormalizerLim
 	}
 	ordered := make([]tokenKey, 0)
 	frequencies := make(map[tokenKey]int)
+	prefixes := make(map[tokenKey]bool)
 	add := func(value string, kind TokenKind) error {
 		if value == "" {
 			return nil
@@ -165,6 +179,22 @@ func tokenizeSegments(segments []string, field SearchField, limits NormalizerLim
 			}
 		}
 		frequencies[key]++
+		return nil
+	}
+	prefixCount := 0
+	addPrefix := func(value string, kind TokenKind) error {
+		runeCount := utf8.RuneCountInString(value)
+		if value == "" || runeCount < minIndexedPrefixRunes || runeCount > limits.MaxTokenRunes {
+			return nil
+		}
+		key := tokenKey{value: value, kind: kind}
+		if frequencies[key] != 0 || prefixCount >= maxIndexedPrefixTokens || len(ordered) >= limits.MaxTokens {
+			return nil
+		}
+		ordered = append(ordered, key)
+		frequencies[key] = 1
+		prefixes[key] = true
+		prefixCount++
 		return nil
 	}
 
@@ -204,9 +234,48 @@ func tokenizeSegments(segments []string, field SearchField, limits NormalizerLim
 		}
 	}
 
+	// Prefixes are indexed as bounded segment/exact tokens so candidate
+	// planning can remain equality-only over opaque HMAC postings. Generate
+	// prefixes for the filename segment first; this keeps useful filename
+	// prefixes available when a long path reaches the token limit.
+	if field == SearchFieldName || field == SearchFieldPath {
+		for segmentIndex := len(segments) - 1; segmentIndex >= 0; segmentIndex-- {
+			runes := []rune(segments[segmentIndex])
+			runEnds := make(map[int]struct{})
+			for start := 0; start < len(runes); {
+				if !unicode.IsLetter(runes[start]) && !unicode.IsDigit(runes[start]) {
+					start++
+					continue
+				}
+				han := unicode.Is(unicode.Han, runes[start])
+				end := start + 1
+				for end < len(runes) && (unicode.IsLetter(runes[end]) || unicode.IsDigit(runes[end])) && unicode.Is(unicode.Han, runes[end]) == han {
+					end++
+				}
+				runEnds[end] = struct{}{}
+				if !han {
+					for prefixLength := 1; prefixLength < end-start; prefixLength++ {
+						if err := addPrefix(string(runes[start:start+prefixLength]), TokenKindExact); err != nil {
+							return nil, err
+						}
+					}
+				}
+				start = end
+			}
+			for prefixLength := 1; prefixLength < len(runes); prefixLength++ {
+				if _, isRunEnd := runEnds[prefixLength]; isRunEnd {
+					continue
+				}
+				if err := addPrefix(string(runes[:prefixLength]), TokenKindSegment); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
 	tokens := make([]NormalizedToken, 0, len(ordered))
 	for _, key := range ordered {
-		tokens = append(tokens, NormalizedToken{Value: key.value, Kind: key.kind, Frequency: frequencies[key]})
+		tokens = append(tokens, NormalizedToken{Value: key.value, Kind: key.kind, Frequency: frequencies[key], Prefix: prefixes[key]})
 	}
 	return tokens, nil
 }

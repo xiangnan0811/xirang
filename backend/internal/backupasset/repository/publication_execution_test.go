@@ -243,7 +243,7 @@ func TestPrepareImmutableConflictRollsBackWithoutSecondPoint(t *testing.T) {
 	conflicting := model.RecoveryPoint{
 		ID: strings.Repeat("d", 32), RepositoryID: fixture.repository.ID,
 		ProducingTaskID: &fixture.task.ID, ProducingTaskRunID: &fixture.taskRun.ID,
-		Semantics: string(backupasset.PointNativeSnapshot), State: string(backupasset.RecoveryPointFailed),
+		ProducingTaskNameSnapshot: fixture.task.Name, ProducingNodeIDSnapshot: fixture.node.ID, ProducingNodeNameSnapshot: fixture.node.Name,
 		ImmutabilityLevel: string(backupasset.ImmutabilityBackendVersioned), PhysicalAvailability: string(backupasset.PhysicalUnknown),
 		HoldState: string(backupasset.HoldNone), CreatedAt: fixture.now, UpdatedAt: fixture.now,
 	}

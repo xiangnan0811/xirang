@@ -171,6 +171,43 @@ func (keyring *Keyring) Active(ctx context.Context, domain KeyDomain) (DomainKey
 	return keyring.material(row)
 }
 
+// ActiveTx reads the active material through a caller-owned transaction. It
+// is used by operations whose identity proof must not open a second database
+// connection while their authority rows are locked.
+func (keyring *Keyring) ActiveTx(ctx context.Context, tx *gorm.DB, domain KeyDomain) (DomainKeyMaterial, error) {
+	if tx == nil {
+		return DomainKeyMaterial{}, fmt.Errorf("%w: keyring transaction is unavailable", ErrKeyUnavailable)
+	}
+	if err := keyring.validate(domain); err != nil {
+		return DomainKeyMaterial{}, err
+	}
+	var row model.WrappedDomainKey
+	err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("domain = ? AND state = ?", domain, DomainKeyActive).
+		First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		var latest model.WrappedDomainKey
+		historyErr := tx.WithContext(ctx).
+			Where("domain = ?", domain).
+			Order("version DESC").
+			First(&latest).Error
+		if errors.Is(historyErr, gorm.ErrRecordNotFound) {
+			return DomainKeyMaterial{}, fmt.Errorf("%w: domain %s has not been initialized", ErrKeyUnavailable, domain)
+		}
+		if historyErr != nil {
+			return DomainKeyMaterial{}, fmt.Errorf("load domain key history: %w", historyErr)
+		}
+		if DomainKeyState(latest.State) == DomainKeyLost {
+			return DomainKeyMaterial{}, fmt.Errorf("%w: domain %s", ErrKeyLost, domain)
+		}
+		return DomainKeyMaterial{}, fmt.Errorf("%w: domain %s has no active key", ErrKeyUnavailable, domain)
+	}
+	if err != nil {
+		return DomainKeyMaterial{}, fmt.Errorf("load active domain key: %w", err)
+	}
+	return keyring.material(row)
+}
+
 func (keyring *Keyring) ByVersion(ctx context.Context, domain KeyDomain, version int) (DomainKeyMaterial, error) {
 	if err := keyring.validate(domain); err != nil {
 		return DomainKeyMaterial{}, err

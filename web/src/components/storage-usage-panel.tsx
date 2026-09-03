@@ -10,7 +10,11 @@ import {
   ResponsiveContainer,
   BarChart,
 } from "recharts";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  DataSurface,
+  DataSurfaceContent,
+  DataSurfaceHeader,
+} from "@/components/ui/data-surface";
 import { LoadingState } from "@/components/ui/loading-state";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { useAuth } from "@/context/auth-context.hooks";
@@ -96,43 +100,41 @@ export function StorageUsagePanel() {
 
   if (loading) {
     return (
-      <Card className="glass-panel border-border/70">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">{t('storage.title')}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <LoadingState title={t('storage.loadingTitle')} rows={2} />
-        </CardContent>
-      </Card>
+      <DataSurface>
+        <DataSurfaceHeader title={t("storage.title")} />
+        <DataSurfaceContent>
+          <LoadingState title={t("storage.loadingTitle")} rows={2} />
+        </DataSurfaceContent>
+      </DataSurface>
     );
   }
 
   if (error || !data) {
     return (
-      <Card className="glass-panel border-border/70">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">{t('storage.title')}</CardTitle>
-        </CardHeader>
-        <CardContent>
+      <DataSurface>
+        <DataSurfaceHeader title={t("storage.title")} />
+        <DataSurfaceContent>
           <InlineAlert tone="warning">
             {error ?? t("common.noData")}
           </InlineAlert>
-        </CardContent>
-      </Card>
+        </DataSurfaceContent>
+      </DataSurface>
     );
   }
 
   const { mountPoints, perNode } = data;
 
   return (
-    <Card className="glass-panel border-border/70">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base flex items-center gap-2">
-          <HardDrive className="size-4 text-primary" aria-hidden />
-          {t('storage.title')}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <DataSurface>
+      <DataSurfaceHeader
+        title={
+          <span className="inline-flex items-center gap-2">
+            <HardDrive className="size-4 text-primary" aria-hidden />
+            {t("storage.title")}
+          </span>
+        }
+      />
+      <DataSurfaceContent className="space-y-4">
         {/* Mount points as progress bars */}
         {mountPoints.length > 0 && (
           <div className="space-y-3">
@@ -203,7 +205,7 @@ export function StorageUsagePanel() {
         {mountPoints.length === 0 && perNode.length === 0 && (
           <p className="text-sm text-muted-foreground text-center py-4">{t('common.noData')}</p>
         )}
-      </CardContent>
-    </Card>
+      </DataSurfaceContent>
+    </DataSurface>
   );
 }

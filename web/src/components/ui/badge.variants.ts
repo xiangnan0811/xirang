@@ -6,7 +6,7 @@ export const badgeVariants = cva(
     variants: {
       tone: {
         success: "bg-[hsl(var(--success)/0.16)] text-[hsl(var(--success))]",
-        warning: "bg-[hsl(var(--warning)/0.22)] text-warning-foreground dark:text-warning",
+        warning: "bg-[hsl(var(--warning)/0.22)] text-foreground",
         destructive: "bg-[hsl(var(--destructive)/0.18)] text-[hsl(var(--destructive))]",
         info: "bg-[hsl(var(--info)/0.18)] text-[hsl(var(--info))]",
         neutral: "bg-muted text-muted-foreground",

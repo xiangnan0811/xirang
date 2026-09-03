@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -138,6 +139,77 @@ func (spy *contentSourceProviderSpy) setSourceRevision(value string) {
 	spy.mu.Unlock()
 }
 
+type scopedContentSourceProvider struct {
+	byRepository map[string]*contentSourceProviderSpy
+	ready        chan string
+	release      chan struct{}
+}
+
+func (sources *scopedContentSourceProvider) sourceFor(snapshot provider.ReadSnapshot) (*contentSourceProviderSpy, error) {
+	source := sources.byRepository[snapshot.RepositoryID]
+	if source == nil {
+		return nil, fmt.Errorf("unexpected content repository %q", snapshot.RepositoryID)
+	}
+	return source, nil
+}
+
+func (sources *scopedContentSourceProvider) ListPoints(ctx context.Context, snapshot provider.ReadSnapshot, request provider.PageRequest) (provider.NativePointPage, error) {
+	source, err := sources.sourceFor(snapshot)
+	if err != nil {
+		return provider.NativePointPage{}, err
+	}
+	if sources.ready != nil && sources.release != nil {
+		sources.ready <- snapshot.RepositoryID
+		<-sources.release
+	}
+	return source.ListPoints(ctx, snapshot, request)
+}
+
+func (sources *scopedContentSourceProvider) StatEntry(ctx context.Context, snapshot provider.ReadSnapshot, point provider.PointLocator, locator provider.EntryLocator) (provider.Entry, error) {
+	source, err := sources.sourceFor(snapshot)
+	if err != nil {
+		return provider.Entry{}, err
+	}
+	return source.StatEntry(ctx, snapshot, point, locator)
+}
+
+func (sources *scopedContentSourceProvider) OpenSequential(ctx context.Context, snapshot provider.ReadSnapshot, point provider.PointLocator, locator provider.EntryLocator, request provider.ReadRequest) (provider.ReadHandle, provider.ContentStat, error) {
+	source, err := sources.sourceFor(snapshot)
+	if err != nil {
+		return nil, provider.ContentStat{}, err
+	}
+	return source.OpenSequential(ctx, snapshot, point, locator, request)
+}
+
+func (sources *scopedContentSourceProvider) OpenRange(ctx context.Context, snapshot provider.ReadSnapshot, point provider.PointLocator, locator provider.EntryLocator, byteRange provider.ByteRange) (provider.ReadHandle, provider.ContentStat, error) {
+	source, err := sources.sourceFor(snapshot)
+	if err != nil {
+		return nil, provider.ContentStat{}, err
+	}
+	return source.OpenRange(ctx, snapshot, point, locator, byteRange)
+}
+
+type taskScopedContentProber struct {
+	sources map[uint]string
+}
+
+func (prober *taskScopedContentProber) Probe(_ context.Context, binding provider.AccessBinding, _ provider.OperationLimits) (provider.RepositoryObservation, error) {
+	sourceRevision, ok := prober.sources[binding.TaskID]
+	if !ok {
+		return provider.RepositoryObservation{}, fmt.Errorf("unexpected content Task %d", binding.TaskID)
+	}
+	facts := append([]string(nil), binding.EndpointFacts...)
+	identity, err := provider.DeriveScopedIdentity(binding.IdentitySalt, provider.ScopedIdentityDocument{
+		Provider: binding.Provider, TaskID: binding.TaskID, NodeID: binding.NodeID, EndpointFacts: facts,
+	})
+	if err != nil {
+		return provider.RepositoryObservation{}, err
+	}
+	observation := testObservation(binding.Provider, identity)
+	observation.SourceRevision = sourceRevision
+	return observation, nil
+}
+
 func (spy *contentSourceProviderSpy) closedHandles() int {
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
@@ -227,6 +299,7 @@ type mutableContentFixture struct {
 	db        *gorm.DB
 	service   *Service
 	provider  *contentSourceProviderSpy
+	prober    *scriptedProber
 	admission *publicationAdmission
 	request   content.SourceRequest
 }
@@ -301,12 +374,200 @@ func newMutableContentFixture(t *testing.T) mutableContentFixture {
 		t.Fatal(err)
 	}
 	return mutableContentFixture{
-		db: db, service: service, provider: reader, admission: admission,
+		db: db, service: service, provider: reader, prober: prober, admission: admission,
 		request: content.SourceRequest{
 			Ref:                 backupasset.AssetRef{RecoveryPointID: connected.MutablePoint.ID, EntryID: entry.EntryID},
 			CatalogGenerationID: generation.ID, ExpectedSource: generation.SourceFingerprint,
 			ExpectedEntry: entry.Fingerprint, Mode: content.SourceModeSequential, MaxBytes: 16,
 		},
+	}
+}
+
+func seedMutableContentCatalog(
+	t *testing.T,
+	db *gorm.DB,
+	service *Service,
+	connected ConnectResult,
+	generationID, entryID, entryFingerprint string,
+	source *contentSourceProviderSpy,
+) content.SourceRequest {
+	t.Helper()
+	if connected.MutablePoint == nil {
+		t.Fatal("mutable content catalog requires a mutable point")
+	}
+	now := service.utcNow()
+	generation := model.CatalogGeneration{
+		ID: strings.Repeat(generationID, 32), RecoveryPointID: connected.MutablePoint.ID,
+		Generation: 1, State: string(catalog.GenerationComplete), IsActive: true,
+		SourceFingerprint: source.sourceRevision, ExpectedEntryCount: 1, WrittenEntryCount: 1,
+		StartedAt: now, FinishedAt: &now, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&generation).Error; err != nil {
+		t.Fatal(err)
+	}
+	locatorPayload, err := json.Marshal(contentEntryLocatorV1{Version: 1, Native: source.entryLocator.Native})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modifiedAt := source.stat.ModTime
+	entry := model.CatalogEntry{
+		GenerationID: generation.ID, EntryID: strings.Repeat(entryID, 64), RecoveryPointID: connected.MutablePoint.ID,
+		NormalizedPath: "docs/" + entryID + ".txt", Name: entryID + ".txt", EntryType: string(backupasset.CatalogEntryFile),
+		Size: source.stat.Size, ModifiedAt: &modifiedAt, MimeType: source.stat.MediaType,
+		Fingerprint: strings.Repeat(entryFingerprint, 64), FingerprintStrength: string(catalog.FingerprintStrong),
+		EncryptedProviderLocator: string(locatorPayload), SecurityState: "sealed", CreatedAt: now,
+	}
+	if err := db.Create(&entry).Error; err != nil {
+		t.Fatal(err)
+	}
+	return content.SourceRequest{
+		Ref:                 backupasset.AssetRef{RecoveryPointID: connected.MutablePoint.ID, EntryID: entry.EntryID},
+		CatalogGenerationID: generation.ID, ExpectedSource: source.sourceRevision,
+		ExpectedEntry: entry.Fingerprint, Mode: content.SourceModeSequential, MaxBytes: int64(len(source.body)),
+	}
+}
+
+func TestMutableContentSourcesRemainTaskAndNodeScopedConcurrently(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	target := t.TempDir()
+	firstTask := seedTask(t, db, "rsync", target, "")
+	secondTask := seedTask(t, db, "rsync", target, "")
+	firstSource := strings.Repeat("a", 64)
+	secondSource := strings.Repeat("b", 64)
+	firstReader := &contentSourceProviderSpy{
+		sourceRevision: firstSource,
+		pointLocator:   provider.PointLocator{Native: "FAKE_FIRST_PRIVATE_POINT_LOCATOR_FOR_TEST_ONLY"},
+		entryLocator:   provider.EntryLocator{Native: "FAKE_FIRST_PRIVATE_ENTRY_LOCATOR_FOR_TEST_ONLY"},
+		body:           []byte("first-task-content"),
+		stat: provider.ContentStat{
+			Size: int64(len("first-task-content")), ModTime: time.Date(2026, 7, 13, 8, 58, 0, 0, time.UTC),
+			SourceRevision: firstSource, MediaType: "text/plain",
+		},
+	}
+	secondReader := &contentSourceProviderSpy{
+		sourceRevision: secondSource,
+		pointLocator:   provider.PointLocator{Native: "FAKE_SECOND_PRIVATE_POINT_LOCATOR_FOR_TEST_ONLY"},
+		entryLocator:   provider.EntryLocator{Native: "FAKE_SECOND_PRIVATE_ENTRY_LOCATOR_FOR_TEST_ONLY"},
+		body:           []byte("second-task-content"),
+		stat: provider.ContentStat{
+			Size: int64(len("second-task-content")), ModTime: time.Date(2026, 7, 13, 8, 57, 0, 0, time.UTC),
+			SourceRevision: secondSource, MediaType: "text/plain",
+		},
+	}
+	prober := &taskScopedContentProber{sources: map[uint]string{
+		firstTask.ID: firstSource, secondTask.ID: secondSource,
+	}}
+	sourceProvider := &scopedContentSourceProvider{
+		byRepository: map[string]*contentSourceProviderSpy{},
+		ready:        make(chan string, 16),
+		release:      make(chan struct{}),
+	}
+	registry := provider.NewRegistry()
+	if err := registry.Register(backupasset.ProviderRsync, provider.Registration{
+		Prober: prober, PointLister: sourceProvider, EntryStatter: sourceProvider,
+		SequentialReader: sourceProvider, RangeReader: sourceProvider,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	admission := &publicationAdmission{mode: publication.AdmissionManaged, generation: 12}
+	service, err := NewService(Dependencies{
+		DB: db, Foundation: enabledFoundation(), Registry: registry, Admission: admission,
+		Now: func() time.Time { return time.Date(2026, 7, 13, 9, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstConnected, err := service.Connect(context.Background(), ConnectRequest{TaskID: firstTask.ID}, RequestContext{})
+	if err != nil || firstConnected.MutablePoint == nil {
+		t.Fatalf("first connect=%+v err=%v", firstConnected, err)
+	}
+	secondConnected, err := service.Connect(context.Background(), ConnectRequest{TaskID: secondTask.ID}, RequestContext{})
+	if err != nil || secondConnected.MutablePoint == nil {
+		t.Fatalf("second connect=%+v err=%v", secondConnected, err)
+	}
+	if firstConnected.Repository.ID == secondConnected.Repository.ID ||
+		firstConnected.MutablePoint.ID == secondConnected.MutablePoint.ID {
+		t.Fatalf("mutable task source identities merged: first=%+v second=%+v", firstConnected, secondConnected)
+	}
+	sourceProvider.byRepository[firstConnected.Repository.ID] = firstReader
+	sourceProvider.byRepository[secondConnected.Repository.ID] = secondReader
+	firstRequest := seedMutableContentCatalog(t, db, service, firstConnected, "c", "d", "1", firstReader)
+	secondRequest := seedMutableContentCatalog(t, db, service, secondConnected, "e", "f", "2", secondReader)
+
+	type openOutcome struct {
+		taskID  uint
+		payload string
+		err     error
+	}
+	outcomes := make(chan openOutcome, 2)
+	open := func(taskID uint, request content.SourceRequest) {
+		session, openErr := service.OpenContentSource(context.Background(), request)
+		if openErr == nil && session == nil {
+			openErr = errors.New("mutable content source returned nil session")
+		}
+		var payload []byte
+		if openErr == nil {
+			payload, openErr = io.ReadAll(session.Reader())
+			openErr = errors.Join(openErr, session.Close())
+		}
+		outcomes <- openOutcome{taskID: taskID, payload: string(payload), err: openErr}
+	}
+	go open(firstTask.ID, firstRequest)
+	go open(secondTask.ID, secondRequest)
+	seenRepositories := map[string]bool{}
+	for range 2 {
+		select {
+		case repositoryID := <-sourceProvider.ready:
+			seenRepositories[repositoryID] = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for concurrent mutable source opens")
+		}
+	}
+	if len(seenRepositories) != 2 || !seenRepositories[firstConnected.Repository.ID] || !seenRepositories[secondConnected.Repository.ID] {
+		t.Fatalf("mutable source opens were not repository-scoped: repositories=%v", seenRepositories)
+	}
+	close(sourceProvider.release)
+	opened := map[uint]string{}
+	for range 2 {
+		select {
+		case outcome := <-outcomes:
+			if outcome.err != nil {
+				t.Fatalf("mutable source open task=%d err=%v", outcome.taskID, outcome.err)
+			}
+			opened[outcome.taskID] = outcome.payload
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for mutable source payload")
+		}
+	}
+	if opened[firstTask.ID] != string(firstReader.body) || opened[secondTask.ID] != string(secondReader.body) {
+		t.Fatalf("mutable source payloads=%v want first=%q second=%q", opened, firstReader.body, secondReader.body)
+	}
+	sourceProvider.ready = nil
+
+	repairedSource := strings.Repeat("9", 64)
+	firstReader.setSourceRevision(repairedSource)
+	prober.sources[firstTask.ID] = repairedSource
+	wake := &catalogWakeRequesterSpy{accept: true}
+	if err := service.SetCatalogWake(wake); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Reconcile(context.Background(), firstConnected.Repository.ID, RequestContext{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls := wake.calls.Load(); calls != 1 {
+		t.Fatalf("manual mutable source repair wakes=%d want=1", calls)
+	}
+	if _, err := service.OpenContentSource(context.Background(), firstRequest); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("stale first mutable source request err=%v, want conflict", err)
+	}
+	secondSession, err := service.OpenContentSource(context.Background(), secondRequest)
+	if err != nil {
+		t.Fatalf("second mutable source after first repair: %v", err)
+	}
+	payload, readErr := io.ReadAll(secondSession.Reader())
+	closeErr := secondSession.Close()
+	if readErr != nil || closeErr != nil || string(payload) != string(secondReader.body) {
+		t.Fatalf("second source after first repair payload=%q read=%v close=%v", payload, readErr, closeErr)
 	}
 }
 
@@ -474,6 +735,55 @@ func TestMutableSourceDriftFailsCloseAfterClosingReaderAndAdmission(t *testing.T
 	}
 }
 
+func TestMutablePreviewSourceRepairRequiresManualReconcile(t *testing.T) {
+	fixture := newMutableContentFixture(t)
+	session, err := fixture.service.OpenContentSource(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repairedSource := strings.Repeat("9", 64)
+	fixture.provider.setSourceRevision(repairedSource)
+	if err := session.Revalidate(context.Background()); err == nil {
+		t.Fatal("mutable preview source drift passed revalidation")
+	}
+	var capabilityErr *CapabilityError
+	if err := session.Close(); !errors.As(err, &capabilityErr) || capabilityErr.Reason.Code != backupasset.CapabilityMutableSourceChanged {
+		t.Fatalf("mutable preview close error=%v", err)
+	}
+
+	wake := &catalogWakeRequesterSpy{accept: true}
+	if err := fixture.service.SetCatalogWake(wake); err != nil {
+		t.Fatal(err)
+	}
+	baseProbe := fixture.prober.probe
+	fixture.prober.probe = func(binding provider.AccessBinding) (provider.RepositoryObservation, error) {
+		observation, err := baseProbe(binding)
+		observation.SourceRevision = repairedSource
+		return observation, err
+	}
+	var beforePoint model.RecoveryPoint
+	if err := fixture.db.First(&beforePoint, "id = ?", fixture.request.Ref.RecoveryPointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.service.Reconcile(context.Background(), beforePoint.RepositoryID, RequestContext{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls := wake.calls.Load(); calls != 1 {
+		t.Fatalf("manual Reconcile Catalog wake calls=%d want=1", calls)
+	}
+
+	var point model.RecoveryPoint
+	if err := fixture.db.First(&point, "id = ?", fixture.request.Ref.RecoveryPointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if point.SourceFingerprint != repairedSource || point.State != string(backupasset.RecoveryPointObserved) {
+		t.Fatalf("repaired mutable point=%+v", point)
+	}
+	if _, err := fixture.service.OpenContentSource(context.Background(), fixture.request); err == nil {
+		t.Fatal("stale preview request served after source repair")
+	}
+}
+
 func TestContentSourceCloseUsesDetachedBoundedCleanupDeadline(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -618,8 +928,9 @@ func TestContentSourceReadsExactImmutableResticPublicationWithoutFakeRange(t *te
 		},
 	}
 	registry := provider.NewRegistry()
+	prober := &scriptedProber{observation: testObservation(backupasset.ProviderRestic, *fixture.repository.RepositoryIdentity)}
 	if err := registry.Register(backupasset.ProviderRestic, provider.Registration{
-		Prober: &scriptedProber{}, EntryStatter: reader, SequentialReader: reader,
+		Prober: prober, EntryStatter: reader, SequentialReader: reader,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -683,6 +994,419 @@ func TestContentSourceReadsExactImmutableResticPublicationWithoutFakeRange(t *te
 	}
 	if reader.closedHandles() != 1 || reader.pointLocator.Native != commit.NativePointID {
 		t.Fatalf("immutable Restic source lifecycle mismatch: closes=%d point=%q", reader.closedHandles(), reader.pointLocator.Native)
+	}
+	changedLocator := "sftp:changed@example.invalid:/repository"
+	changedPassword := "FAKE_CHANGED_RESTIC_PASSWORD_FOR_CONTENT_TEST_ONLY"
+	if err := fixture.db.Model(&model.Task{}).Where("id = ?", fixture.task.ID).Updates(map[string]any{
+		"rsync_target":    changedLocator,
+		"executor_config": fmt.Sprintf(`{"repository_password":%q}`, changedPassword),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	wrongIdentity := provider.NativeResticIdentityPrefix + strings.Repeat("b", 64)
+	prober.probe = func(binding provider.AccessBinding) (provider.RepositoryObservation, error) {
+		if binding.TaskID != fixture.task.ID || binding.NodeID != fixture.node.ID ||
+			binding.Locator != changedLocator || string(binding.Secret) != changedPassword {
+			t.Fatalf("Restic content Probe access=%+v, want current producing Task access", binding)
+		}
+		return testObservation(backupasset.ProviderRestic, wrongIdentity), nil
+	}
+	reader.mu.Lock()
+	beforeStatCalls, beforeSequential := reader.statCalls, reader.sequential
+	reader.mu.Unlock()
+	if _, err := service.OpenContentSource(context.Background(), request); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("wrong-identity Restic content error=%v, want conflict", err)
+	}
+	reader.mu.Lock()
+	afterStatCalls, afterSequential := reader.statCalls, reader.sequential
+	reader.mu.Unlock()
+	if afterStatCalls != beforeStatCalls || afterSequential != beforeSequential {
+		t.Fatalf("wrong-identity Restic content reached provider: stat %d->%d sequential %d->%d", beforeStatCalls, afterStatCalls, beforeSequential, afterSequential)
+	}
+	if prober.calls != 3 {
+		t.Fatalf("Restic content Probe calls=%d, want open, close revalidation, and rejected read", prober.calls)
+	}
+	raceCallbackName := "repository:restic-capability-revision-race:" + strings.ReplaceAll(t.Name(), "/", "_")
+	raceCallbackFired := false
+	capturedOuterCapabilityRevision := 0
+	if err := fixture.db.Callback().Query().After("gorm:after_query").Register(raceCallbackName, func(tx *gorm.DB) {
+		if raceCallbackFired || tx.Statement == nil || tx.Statement.Table != (model.BackupRepository{}).TableName() {
+			return
+		}
+		repository, ok := tx.Statement.Dest.(*model.BackupRepository)
+		if !ok || repository == nil || repository.ID != fixture.repository.ID {
+			return
+		}
+		capturedOuterCapabilityRevision = repository.CapabilityRevision
+		raceCallbackFired = true
+		if err := tx.Session(&gorm.Session{NewDB: true}).Model(&model.BackupRepository{}).
+			Where("id = ?", fixture.repository.ID).
+			Update("capability_revision", fixture.repository.CapabilityRevision+1).Error; err != nil {
+			if addedErr := tx.AddError(err); !errors.Is(addedErr, err) {
+				t.Fatalf("capability-revision-race AddError=%v, want %v", addedErr, err)
+			}
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := fixture.db.Callback().Query().Remove(raceCallbackName); err != nil {
+			t.Errorf("remove Restic capability revision race callback: %v", err)
+		}
+	})
+	reader.mu.Lock()
+	beforeRacePointCalls, beforeRaceStatCalls, beforeRaceSequential := reader.pointCalls, reader.statCalls, reader.sequential
+	beforeRaceRanges := len(reader.ranges)
+	reader.mu.Unlock()
+	beforeRaceProbes := prober.calls
+	if _, err := service.OpenContentSource(context.Background(), request); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("capability-revision-race Restic content error=%v, want conflict", err)
+	}
+	if !raceCallbackFired {
+		t.Fatal("capability-revision-race callback did not fire")
+	}
+	if capturedOuterCapabilityRevision != fixture.repository.CapabilityRevision {
+		t.Fatalf("capability-revision-race Restic content outer CapabilityRevision=%d, want unchanged %d", capturedOuterCapabilityRevision, fixture.repository.CapabilityRevision)
+	}
+	if prober.calls != beforeRaceProbes {
+		t.Fatalf("capability-revision-race Restic content Probe calls=%d, want unchanged at %d", prober.calls, beforeRaceProbes)
+	}
+	reader.mu.Lock()
+	afterRacePointCalls, afterRaceStatCalls, afterRaceSequential := reader.pointCalls, reader.statCalls, reader.sequential
+	afterRaceRanges := len(reader.ranges)
+	reader.mu.Unlock()
+	if afterRacePointCalls != beforeRacePointCalls || afterRaceStatCalls != beforeRaceStatCalls ||
+		afterRaceSequential != beforeRaceSequential || afterRaceRanges != beforeRaceRanges {
+		t.Fatalf("capability-revision-race Restic content reached provider: points %d->%d stats %d->%d sequential %d->%d ranges %d->%d",
+			beforeRacePointCalls, afterRacePointCalls, beforeRaceStatCalls, afterRaceStatCalls,
+			beforeRaceSequential, afterRaceSequential, beforeRaceRanges, afterRaceRanges)
+	}
+}
+
+type resticLineageContentRequest struct {
+	sourceRevision string
+	taskID         uint
+	nodeID         uint
+	secret         string
+}
+
+type resticLineageContentProvider struct {
+	mu       sync.Mutex
+	sources  map[string]*contentSourceProviderSpy
+	requests []resticLineageContentRequest
+}
+
+func (reader *resticLineageContentProvider) sourceFor(snapshot provider.ReadSnapshot) (*contentSourceProviderSpy, error) {
+	reader.mu.Lock()
+	reader.requests = append(reader.requests, resticLineageContentRequest{
+		sourceRevision: snapshot.SourceRevision,
+		taskID:         snapshot.Access.TaskID,
+		nodeID:         snapshot.Access.NodeID,
+		secret:         string(snapshot.Access.Secret),
+	})
+	reader.mu.Unlock()
+	source := reader.sources[snapshot.SourceRevision]
+	if source == nil {
+		return nil, fmt.Errorf("unexpected Restic content source %q", snapshot.SourceRevision)
+	}
+	return source, nil
+}
+
+func (reader *resticLineageContentProvider) StatEntry(
+	ctx context.Context,
+	snapshot provider.ReadSnapshot,
+	point provider.PointLocator,
+	locator provider.EntryLocator,
+) (provider.Entry, error) {
+	source, err := reader.sourceFor(snapshot)
+	if err != nil {
+		return provider.Entry{}, err
+	}
+	return source.StatEntry(ctx, snapshot, point, locator)
+}
+
+func (reader *resticLineageContentProvider) OpenSequential(
+	ctx context.Context,
+	snapshot provider.ReadSnapshot,
+	point provider.PointLocator,
+	locator provider.EntryLocator,
+	request provider.ReadRequest,
+) (provider.ReadHandle, provider.ContentStat, error) {
+	source, err := reader.sourceFor(snapshot)
+	if err != nil {
+		return nil, provider.ContentStat{}, err
+	}
+	return source.OpenSequential(ctx, snapshot, point, locator, request)
+}
+
+func (reader *resticLineageContentProvider) requestSnapshot() []resticLineageContentRequest {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	return append([]resticLineageContentRequest(nil), reader.requests...)
+}
+
+func TestContentSourceSharedResticRepositoryUsesImmutablePublicationLineage(t *testing.T) {
+	fixture := newPublicationFixture(t, true, publication.AdmissionManaged)
+	fixture.connectExactResticBinding(t)
+	connectService, err := NewService(Dependencies{
+		DB: fixture.db, Foundation: fixture.service.foundation, Registry: fixture.service.registry,
+		Keyring: fixture.service.keyring, Now: func() time.Time { return fixture.now },
+		Admission: fixture.admission, History: fixture.service.history, Metrics: publication.NoopMetrics{},
+		Publication: fixture.service,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPassword := "FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY"
+	secondPassword := "FAKE_SECOND_RESTIC_PASSWORD_FOR_CONTENT_TEST_ONLY"
+	if firstPassword == secondPassword {
+		t.Fatal("shared Restic lineage fixture needs separate Task credentials")
+	}
+
+	// Refresh the first Task through the real connect path so the persisted
+	// capability revision matches the one later used by the second Task.
+	if _, err := connectService.Connect(context.Background(), ConnectRequest{
+		TaskID: fixture.task.ID, RepositoryID: fixture.repository.ID, ReplaceAccess: true,
+	}, RequestContext{}); err != nil {
+		t.Fatalf("refresh first Restic Task: %v", err)
+	}
+
+	firstBody := "first-restic-content"
+	secondBody := "second-restic-content"
+	firstNativePointID := strings.Repeat("c", 64)
+	secondNativePointID := strings.Repeat("d", 64)
+	fixture.manifest.build = func(
+		_ context.Context,
+		attempt provider.ResticAttemptV1,
+		commit provider.ResticCommitV1,
+		_ provider.ManifestLimits,
+	) (provider.ResticManifestV1, error) {
+		digest := strings.Repeat("e", 64)
+		if commit.NativePointID == secondNativePointID {
+			digest = strings.Repeat("f", 64)
+		}
+		return provider.ResticManifestV1{
+			DigestAlgorithm: "sha256", Digest: digest, Generator: "xirang-restic-ls", GeneratorVersion: "1",
+			Completeness: backupasset.ManifestComplete, EntryCount: 1, LogicalBytes: int64(commit.LogicalBytes),
+			Fidelity: provider.ResticManifestFidelityV1(), HeaderCapturedAt: commit.CaptureStartedAt,
+			ObservedTagDigest: publicationTagDigest(attempt.RequiredTags),
+		}, nil
+	}
+
+	firstExecution, err := fixture.service.Prepare(context.Background(), fixture.run())
+	if err != nil {
+		t.Fatalf("prepare first Restic Task: %v", err)
+	}
+	firstAttempt := resticAttemptForExecution(t, firstExecution)
+	firstCommit := fixture.commitEvidence()
+	firstCommit.NativePointID = firstNativePointID
+	firstCommit.FilesProcessed = 1
+	firstCommit.LogicalBytes = uint64(len(firstBody))
+	if _, err := firstExecution.RecordProviderCommit(context.Background(), resticProviderCommit(firstCommit)); err != nil {
+		t.Fatalf("commit first Restic point: %v", err)
+	}
+	if outcome, err := fixture.service.ProcessPoint(context.Background(), firstAttempt.RecoveryPointID); err != nil || outcome.State != backupasset.RecoveryPointCommitted {
+		t.Fatalf("first Restic point outcome=%+v err=%v", outcome, err)
+	}
+
+	secondTask := seedTask(t, fixture.db, "restic", "sftp:second@example.invalid:/repository", fmt.Sprintf(`{"repository_password":%q}`, secondPassword))
+	var secondNode model.Node
+	if err := fixture.db.First(&secondNode, secondTask.NodeID).Error; err != nil {
+		t.Fatal(err)
+	}
+	secondTask.Node = secondNode
+	secondRun := model.TaskRun{
+		TaskID: secondTask.ID, TriggerType: "manual", Status: "running",
+		StartedAt: timePointer(fixture.now.Add(-2 * time.Minute)), CreatedAt: fixture.now, UpdatedAt: fixture.now,
+	}
+	if err := fixture.db.Create(&secondRun).Error; err != nil {
+		t.Fatal(err)
+	}
+	if fixture.node.ID == secondNode.ID {
+		t.Fatal("shared Restic lineage fixture needs different Nodes")
+	}
+
+	// Replacing access for the second Task intentionally makes its binding the
+	// repository's active binding. The first immutable point must still rebuild
+	// access from its own producing Task and Node below.
+	if _, err := connectService.Connect(context.Background(), ConnectRequest{
+		TaskID: secondTask.ID, RepositoryID: fixture.repository.ID, ReplaceAccess: true,
+	}, RequestContext{}); err != nil {
+		t.Fatalf("connect second Restic Task: %v", err)
+	}
+
+	secondExecution, err := fixture.service.Prepare(context.Background(), publication.Run{
+		Task: secondTask, TaskRunID: secondRun.ID, Trigger: secondRun.TriggerType, StartedAt: *secondRun.StartedAt,
+		Audit: backupasset.PublicationAuditContext{
+			Actor:         backupasset.AuditActor{UserID: 9, Username: "operator", Role: "operator"},
+			CorrelationID: "publication-shared-content-2",
+		},
+	})
+	if err != nil {
+		t.Fatalf("prepare second Restic Task: %v", err)
+	}
+	secondAttempt := resticAttemptForExecution(t, secondExecution)
+	secondCommit := fixture.commitEvidence()
+	secondCommit.NativePointID = secondNativePointID
+	secondCommit.FilesProcessed = 1
+	secondCommit.LogicalBytes = uint64(len(secondBody))
+	if _, err := secondExecution.RecordProviderCommit(context.Background(), resticProviderCommit(secondCommit)); err != nil {
+		t.Fatalf("commit second Restic point: %v", err)
+	}
+	if outcome, err := fixture.service.ProcessPoint(context.Background(), secondAttempt.RecoveryPointID); err != nil || outcome.State != backupasset.RecoveryPointCommitted {
+		t.Fatalf("second Restic point outcome=%+v err=%v", outcome, err)
+	}
+
+	var firstPoint, secondPoint model.RecoveryPoint
+	if err := fixture.db.First(&firstPoint, "id = ?", firstAttempt.RecoveryPointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.First(&secondPoint, "id = ?", secondAttempt.RecoveryPointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if firstPoint.SourceFingerprint == "" || secondPoint.SourceFingerprint == "" || firstPoint.SourceFingerprint == secondPoint.SourceFingerprint {
+		t.Fatalf("shared Restic points did not retain distinct immutable source fingerprints: first=%q second=%q", firstPoint.SourceFingerprint, secondPoint.SourceFingerprint)
+	}
+
+	firstSource := &contentSourceProviderSpy{
+		sourceRevision: firstPoint.SourceFingerprint,
+		pointLocator:   provider.PointLocator{Native: firstNativePointID},
+		entryLocator:   provider.EntryLocator{Native: contentTestLocator},
+		body:           []byte(firstBody),
+		stat: provider.ContentStat{
+			Size: int64(len(firstBody)), ModTime: fixture.now.Add(-time.Minute),
+			SourceRevision: firstPoint.SourceFingerprint, MediaType: "text/plain",
+		},
+	}
+	secondSource := &contentSourceProviderSpy{
+		sourceRevision: secondPoint.SourceFingerprint,
+		pointLocator:   provider.PointLocator{Native: secondNativePointID},
+		entryLocator:   provider.EntryLocator{Native: contentTestLocator},
+		body:           []byte(secondBody),
+		stat: provider.ContentStat{
+			Size: int64(len(secondBody)), ModTime: fixture.now.Add(-2 * time.Minute),
+			SourceRevision: secondPoint.SourceFingerprint, MediaType: "text/plain",
+		},
+	}
+	firstRequest := seedResticContentCatalog(t, fixture.db, fixture.now, firstPoint.ID, strings.Repeat("4", 32), strings.Repeat("6", 64), strings.Repeat("8", 64), "reports/first.txt", "first.txt", firstSource)
+	secondRequest := seedResticContentCatalog(t, fixture.db, fixture.now, secondPoint.ID, strings.Repeat("5", 32), strings.Repeat("7", 64), strings.Repeat("9", 64), "reports/second.txt", "second.txt", secondSource)
+
+	contentReader := &resticLineageContentProvider{sources: map[string]*contentSourceProviderSpy{
+		firstPoint.SourceFingerprint: firstSource, secondPoint.SourceFingerprint: secondSource,
+	}}
+	registry := provider.NewRegistry()
+	prober := &scriptedProber{observation: testObservation(backupasset.ProviderRestic, *fixture.repository.RepositoryIdentity)}
+	if err := registry.Register(backupasset.ProviderRestic, provider.Registration{
+		Prober: prober, EntryStatter: contentReader, SequentialReader: contentReader,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	contentService, err := NewService(Dependencies{
+		DB: fixture.db, Foundation: fixture.service.foundation, Registry: registry, Keyring: fixture.service.keyring,
+		Now: func() time.Time { return fixture.now }, Admission: fixture.admission, Publication: fixture.service,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readContent := func(request content.SourceRequest) string {
+		session, err := contentService.OpenContentSource(context.Background(), request)
+		if err != nil {
+			t.Fatalf("open Restic content: %v", err)
+		}
+		payload, err := io.ReadAll(session.Reader())
+		if err != nil {
+			_ = session.Close()
+			t.Fatalf("read Restic content: %v", err)
+		}
+		if err := session.Close(); err != nil {
+			t.Fatalf("close Restic content: %v", err)
+		}
+		return string(payload)
+	}
+	if got := readContent(firstRequest); got != firstBody {
+		t.Fatalf("first Restic content=%q want=%q", got, firstBody)
+	}
+	if got := readContent(secondRequest); got != secondBody {
+		t.Fatalf("second Restic content=%q want=%q", got, secondBody)
+	}
+
+	requests := contentReader.requestSnapshot()
+	if len(requests) != 6 {
+		t.Fatalf("Restic provider request count=%d want=6 (%+v)", len(requests), requests)
+	}
+	type expectedLineage struct {
+		taskID uint
+		nodeID uint
+		secret string
+	}
+	expected := map[string]expectedLineage{
+		firstPoint.SourceFingerprint:  {taskID: fixture.task.ID, nodeID: fixture.node.ID, secret: firstPassword},
+		secondPoint.SourceFingerprint: {taskID: secondTask.ID, nodeID: secondNode.ID, secret: secondPassword},
+	}
+	seen := make(map[string]int, len(expected))
+	for _, request := range requests {
+		want, ok := expected[request.sourceRevision]
+		if !ok {
+			t.Fatalf("provider request used unknown Restic source revision %q", request.sourceRevision)
+		}
+		if request.taskID != want.taskID || request.nodeID != want.nodeID || request.secret != want.secret {
+			t.Fatalf("provider request for source %q used task=%d node=%d secret=%q, want task=%d node=%d secret=%q", request.sourceRevision, request.taskID, request.nodeID, request.secret, want.taskID, want.nodeID, want.secret)
+		}
+		seen[request.sourceRevision]++
+	}
+	for sourceRevision := range expected {
+		if seen[sourceRevision] != 3 {
+			t.Fatalf("provider requests for source %q=%d want=3", sourceRevision, seen[sourceRevision])
+		}
+	}
+}
+
+func seedResticContentCatalog(
+	t *testing.T,
+	db *gorm.DB,
+	now time.Time,
+	pointID, generationID, entryID, entryFingerprint, normalizedPath, name string,
+	source *contentSourceProviderSpy,
+) content.SourceRequest {
+	t.Helper()
+	var point model.RecoveryPoint
+	if err := db.First(&point, "id = ?", pointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	var manifest model.RecoveryPointManifest
+	if err := db.Where("recovery_point_id = ? AND is_active = ?", pointID, true).First(&manifest).Error; err != nil {
+		t.Fatal(err)
+	}
+	finished := now
+	generation := model.CatalogGeneration{
+		ID: generationID, RecoveryPointID: pointID, ManifestID: &manifest.ID, Generation: 1,
+		State: string(catalog.GenerationComplete), IsActive: true, SourceFingerprint: point.SourceFingerprint,
+		ExpectedEntryCount: 1, WrittenEntryCount: 1, ExpectedDigest: manifest.Digest, WrittenDigest: manifest.Digest,
+		StartedAt: now, FinishedAt: &finished, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&generation).Error; err != nil {
+		t.Fatal(err)
+	}
+	locatorPayload, err := json.Marshal(contentEntryLocatorV1{Version: 1, Native: source.entryLocator.Native})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modifiedAt := source.stat.ModTime
+	entry := model.CatalogEntry{
+		GenerationID: generation.ID, EntryID: entryID, RecoveryPointID: pointID,
+		NormalizedPath: normalizedPath, Name: name, EntryType: string(backupasset.CatalogEntryFile),
+		Size: source.stat.Size, ModifiedAt: &modifiedAt, MimeType: source.stat.MediaType,
+		Fingerprint: entryFingerprint, FingerprintStrength: string(catalog.FingerprintStrong),
+		EncryptedProviderLocator: string(locatorPayload), SecurityState: "sealed", CreatedAt: now,
+	}
+	if err := db.Create(&entry).Error; err != nil {
+		t.Fatal(err)
+	}
+	return content.SourceRequest{
+		Ref: backupasset.AssetRef{RecoveryPointID: pointID, EntryID: entryID}, CatalogGenerationID: generation.ID,
+		ExpectedSource: point.SourceFingerprint, ExpectedEntry: entry.Fingerprint,
+		Mode: content.SourceModeSequential, MaxBytes: source.stat.Size,
 	}
 }
 
@@ -824,6 +1548,116 @@ func TestContentSourceUsesExactManagedRsyncSessionAndContentAdmission(t *testing
 	}
 }
 
+func TestContentSourceRejectsManagedRsyncCapabilityRevisionRace(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict managed Rsync content reads are Linux-only")
+	}
+	fixture := newManagedRsyncCatalogFixture(t)
+	if _, err := fixture.keyring.Ensure(context.Background(), backupasset.KeyDomainEntryIdentity); err != nil {
+		t.Fatal(err)
+	}
+	indexer, err := catalog.NewIndexer(catalog.IndexerDependencies{
+		DB: fixture.db, Factory: fixture.factory, Lease: fixture.lease, IdentityKeys: fixture.keyring,
+		Now: func() time.Time { return fixture.now },
+		Config: catalog.IndexerConfig{
+			BatchSize: 100, BuildTimeout: time.Minute, MaxEntries: 100, HeartbeatInterval: time.Second,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation, err := indexer.Build(context.Background(), catalog.BuildRequest{
+		RepositoryID: fixture.repository.ID, RecoveryPointID: fixture.point.ID,
+	})
+	if err != nil {
+		t.Fatalf("build real managed-Rsync Catalog: %v", err)
+	}
+	if generation.State != string(catalog.GenerationComplete) || !generation.IsActive {
+		t.Fatalf("Catalog generation=%+v, want active complete", generation)
+	}
+	var entry model.CatalogEntry
+	if err := fixture.db.Where("generation_id = ?", generation.ID).First(&entry).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := content.SourceRequest{
+		Ref:                 backupasset.AssetRef{RecoveryPointID: fixture.point.ID, EntryID: entry.EntryID},
+		CatalogGenerationID: generation.ID, ExpectedSource: fixture.point.SourceFingerprint,
+		ExpectedEntry: entry.Fingerprint, Mode: content.SourceModeSequential, MaxBytes: entry.Size,
+	}
+
+	baseService, ok := fixture.factory.(*Service)
+	if !ok || baseService == nil {
+		t.Fatalf("managed Rsync content fixture factory=%T, want repository Service", fixture.factory)
+	}
+	admission := &catalogAdmissionSpy{mode: publication.AdmissionManaged}
+	service, err := NewService(Dependencies{
+		DB: fixture.db, Foundation: baseService.foundation, Registry: baseService.registry, Keyring: fixture.keyring,
+		Now: func() time.Time { return fixture.now }, Admission: admission, Publication: baseService.publication,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raceCallbackName := "repository:managed-rsync-content-capability-revision-race:" + strings.ReplaceAll(t.Name(), "/", "_")
+	raceCallbackFired := false
+	capturedOuterCapabilityRevision := 0
+	if err := fixture.db.Callback().Query().After("gorm:after_query").Register(raceCallbackName, func(tx *gorm.DB) {
+		if raceCallbackFired || tx.Statement == nil || tx.Statement.Table != (model.BackupRepository{}).TableName() {
+			return
+		}
+		repository, ok := tx.Statement.Dest.(*model.BackupRepository)
+		if !ok || repository == nil || repository.ID != fixture.repository.ID {
+			return
+		}
+		oldRevision := repository.CapabilityRevision
+		capturedOuterCapabilityRevision = oldRevision
+		raceCallbackFired = true
+		if err := tx.Session(&gorm.Session{NewDB: true}).Model(&model.BackupRepository{}).
+			Where("id = ?", repository.ID).
+			Update("capability_revision", oldRevision+1).Error; err != nil {
+			if addedErr := tx.AddError(err); !errors.Is(addedErr, err) {
+				t.Fatalf("capability-revision-race AddError=%v, want %v", addedErr, err)
+			}
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := fixture.db.Callback().Query().Remove(raceCallbackName); err != nil {
+			t.Errorf("remove managed Rsync content capability revision race callback: %v", err)
+		}
+	})
+
+	session, err := service.OpenContentSource(context.Background(), request)
+	if session != nil {
+		_ = session.Close()
+		t.Fatalf("capability-revision-race managed Rsync content session=%v, want nil", session)
+	}
+	if !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("capability-revision-race managed Rsync content error=%v, want ErrConflict", err)
+	}
+	if !raceCallbackFired {
+		t.Fatal("capability-revision-race managed Rsync content callback did not fire")
+	}
+	if capturedOuterCapabilityRevision != fixture.repository.CapabilityRevision {
+		t.Fatalf("capability-revision-race managed Rsync content outer CapabilityRevision=%d, want unchanged %d", capturedOuterCapabilityRevision, fixture.repository.CapabilityRevision)
+	}
+	var persisted model.BackupRepository
+	if err := fixture.db.First(&persisted, "id = ?", fixture.repository.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if persisted.CapabilityRevision != capturedOuterCapabilityRevision+1 {
+		t.Fatalf("capability-revision-race managed Rsync content persisted CapabilityRevision=%d, want %d", persisted.CapabilityRevision, capturedOuterCapabilityRevision+1)
+	}
+	token := admission.latestToken()
+	operations := admission.requestedOperations()
+	if token == nil || token.Operation() != publication.OperationContentRead ||
+		token.closed.Load() != 1 || admission.closeCount() != 1 ||
+		len(operations) != 1 || operations[0] != publication.OperationContentRead {
+		t.Fatalf("capability-revision-race managed Rsync content token=%+v operations=%v closes=%d, want one closed content-read token", token, operations, admission.closeCount())
+	}
+}
+
 func TestContentSourceReconstructsManagedRclonePortableRuntime(t *testing.T) {
 	fixture := newRclonePublicationFixture(t, backupasset.PublicationVersionedPrefix)
 	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
@@ -939,6 +1773,37 @@ func TestContentSourceReconstructsManagedRclonePortableRuntime(t *testing.T) {
 	if len(operations) == 0 || operations[len(operations)-1] != publication.OperationContentRead || reader.closedHandles() != 1 {
 		t.Fatalf("portable Rclone lifecycle operations=%v closes=%d", operations, reader.closedHandles())
 	}
+	var changedPoint model.RecoveryPoint
+	if err := fixture.db.First(&changedPoint, "id = ?", point.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	consistency, err := backupasset.DecodePublicationConsistency(changedPoint.ConsistencyJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consistency.CapabilityRevision++
+	encodedConsistency, err := backupasset.EncodePublicationConsistency(consistency)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", point.ID).
+		Update("consistency_json", encodedConsistency).Error; err != nil {
+		t.Fatal(err)
+	}
+	reader.mu.Lock()
+	beforeStatCalls, beforeSequential, beforeRanges := reader.statCalls, reader.sequential, len(reader.ranges)
+	reader.mu.Unlock()
+	rejected, err := service.OpenContentSource(context.Background(), request)
+	if rejected != nil || !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("portable Rclone capability mismatch session=%v err=%v, want nil and ErrConflict", rejected, err)
+	}
+	reader.mu.Lock()
+	afterStatCalls, afterSequential, afterRanges := reader.statCalls, reader.sequential, len(reader.ranges)
+	reader.mu.Unlock()
+	if afterStatCalls != beforeStatCalls || afterSequential != beforeSequential || afterRanges != beforeRanges {
+		t.Fatalf("portable Rclone capability mismatch reached provider: stat %d->%d sequential %d->%d ranges %d->%d",
+			beforeStatCalls, afterStatCalls, beforeSequential, afterSequential, beforeRanges, afterRanges)
+	}
 }
 
 type contentNativeExactReaderFake struct {
@@ -1009,5 +1874,262 @@ func TestContentSourceUsesRcloneNativeExactVersionReader(t *testing.T) {
 		reader.rangeRequests[0].Offset != 1 || reader.rangeRequests[0].Length != 3 ||
 		len(reader.handles) != 2 || reader.handles[0].closeCount() != 1 || reader.handles[1].closeCount() != 1 {
 		t.Fatalf("native exact lifecycle reads=%+v ranges=%+v handles=%d", reader.readRequests, reader.rangeRequests, len(reader.handles))
+	}
+}
+
+type contentNativeS3Fake struct {
+	*rcloneNativeRepositoryFactoryFake
+	head                provider.RcloneNativeExactObjectHead
+	expectedPhysicalKey string
+	expectedVersionID   string
+	headErr             error
+	reader              *contentNativeExactReaderFake
+	headCalls           int
+}
+
+func (fake *contentNativeS3Fake) HeadVersion(_ context.Context, request provider.RcloneNativeExactReadRequest) (provider.RcloneNativeExactObjectHead, error) {
+	fake.headCalls++
+	if fake.headErr != nil {
+		return provider.RcloneNativeExactObjectHead{}, fake.headErr
+	}
+	expectedPhysicalKey, expectedVersionID := fake.head.PhysicalKey, fake.head.VersionID
+	if fake.expectedPhysicalKey != "" {
+		expectedPhysicalKey = fake.expectedPhysicalKey
+	}
+	if fake.expectedVersionID != "" {
+		expectedVersionID = fake.expectedVersionID
+	}
+	if request.PhysicalKey != expectedPhysicalKey || request.VersionID != expectedVersionID {
+		return provider.RcloneNativeExactObjectHead{}, errors.New("FAKE_NATIVE_HEAD_REQUEST_CHANGED_FOR_TEST_ONLY")
+	}
+	return fake.head, nil
+}
+
+func (fake *contentNativeS3Fake) OpenVersion(ctx context.Context, request provider.RcloneNativeExactReadRequest) (io.ReadCloser, error) {
+	return fake.reader.OpenVersion(ctx, request)
+}
+
+func (fake *contentNativeS3Fake) OpenVersionRange(ctx context.Context, request provider.RcloneNativeExactRangeRequest) (io.ReadCloser, error) {
+	return fake.reader.OpenVersionRange(ctx, request)
+}
+
+type contentNativeFactoryFake struct {
+	*rcloneNativeRepositoryFactoryFake
+	s3 provider.S3Native
+}
+
+func (fake *contentNativeFactoryFake) S3(provider.RcloneNativeSession, provider.RcloneNativeProfile, []provider.RcloneNativeKMSKeyDigestBinding) (provider.S3Native, error) {
+	return fake.s3, nil
+}
+
+func TestContentSourceNativeRcloneCloseRevalidatesCurrentRuntime(t *testing.T) {
+	fixture := newRclonePublicationFixture(t, backupasset.PublicationNativeObjectVersions)
+	_, point, manifest := completeRcloneTestPoint(t, fixture)
+	physicalKey := strings.TrimSuffix(fixture.binding.Native.ManagedPrefix, "/") + "/data/native.txt"
+	versionID := "FAKE_NATIVE_CONTENT_VERSION_FOR_TEST_ONLY"
+	exactReader := &contentNativeExactReaderFake{payload: []byte("exact")}
+	s3 := &contentNativeS3Fake{
+		rcloneNativeRepositoryFactoryFake: fixture.nativeFactory,
+		head: provider.RcloneNativeExactObjectHead{
+			PhysicalKey: physicalKey, VersionID: versionID, Size: 5,
+			EncryptionProfile: provider.RcloneNativeSSES3V1,
+		},
+		reader: exactReader,
+	}
+	factory := &contentNativeFactoryFake{
+		rcloneNativeRepositoryFactoryFake: fixture.nativeFactory,
+		s3:                                s3,
+	}
+	fixture.service.rcloneNativeFactoryBuilder = func(context.Context, provider.RcloneNativeBootstrap, string, int) (RcloneNativeFactory, error) {
+		return factory, nil
+	}
+	generation := model.CatalogGeneration{
+		ID: strings.Repeat("c", 32), RecoveryPointID: point.ID, ManifestID: &manifest.ID,
+		Generation: 1, State: string(catalog.GenerationComplete), IsActive: true,
+		SourceFingerprint: point.SourceFingerprint, ExpectedEntryCount: 1, WrittenEntryCount: 1,
+		StartedAt: fixture.now, CreatedAt: fixture.now, UpdatedAt: fixture.now,
+	}
+	finished := fixture.now
+	generation.FinishedAt = &finished
+	if err := fixture.db.Create(&generation).Error; err != nil {
+		t.Fatal(err)
+	}
+	entryLocator, err := json.Marshal(contentEntryLocatorV1{
+		Version: 1, Native: "native:" + physicalKey + "\x00" + versionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modified := fixture.now.Add(-time.Minute)
+	entry := model.CatalogEntry{
+		GenerationID: generation.ID, EntryID: strings.Repeat("b", 64), RecoveryPointID: point.ID,
+		NormalizedPath: "docs/native.txt", Name: "native.txt", EntryType: string(backupasset.CatalogEntryFile),
+		Size: 5, ModifiedAt: &modified, MimeType: "text/plain", Fingerprint: strings.Repeat("e", 64),
+		FingerprintStrength: string(catalog.FingerprintStrong), EncryptedProviderLocator: string(entryLocator),
+		SecurityState: "sealed", CreatedAt: fixture.now,
+	}
+	if err := fixture.db.Create(&entry).Error; err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(Dependencies{
+		DB: fixture.db, Foundation: fixture.service.foundation, Registry: fixture.service.registry,
+		Keyring: fixture.service.keyring, Now: func() time.Time { return fixture.now },
+		Admission: fixture.service.admission, Publication: fixture.service,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := content.SourceRequest{
+		Ref:                 backupasset.AssetRef{RecoveryPointID: point.ID, EntryID: entry.EntryID},
+		CatalogGenerationID: generation.ID, ExpectedSource: point.SourceFingerprint,
+		ExpectedEntry: entry.Fingerprint, Mode: content.SourceModeSequential, MaxBytes: entry.Size,
+	}
+	session, err := service.OpenContentSource(context.Background(), request)
+	if err != nil {
+		t.Fatalf("open native Rclone content: %v", err)
+	}
+	payload, err := io.ReadAll(session.Reader())
+	if err != nil || string(payload) != "exact" {
+		t.Fatalf("native Rclone content payload=%q err=%v", payload, err)
+	}
+	var access model.RepositoryAccessBinding
+	if err := fixture.db.Where("repository_id = ? AND status = ?", point.RepositoryID, bindingStatusActive).First(&access).Error; err != nil {
+		t.Fatal(err)
+	}
+	currentBinding := fixture.binding
+	currentBinding.CredentialRevision++
+	encodedBinding, err := encodeManagedRcloneBindingDocumentV3(currentBinding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Model(&model.RepositoryAccessBinding{}).Where("id = ?", access.ID).
+		Update("encrypted_config", encodedBinding).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("native Rclone close after credential revision drift error=%v, want ErrConflict", err)
+	}
+	if s3.headCalls != 1 {
+		t.Fatalf("native Rclone close after runtime drift head calls=%d, want initial proof only", s3.headCalls)
+	}
+}
+func newNativeRcloneContentCloseTest(t *testing.T) (*Service, *contentNativeS3Fake, content.SourceRequest, *contentNativeExactReaderFake, *publicationAdmission) {
+	t.Helper()
+	fixture := newRclonePublicationFixture(t, backupasset.PublicationNativeObjectVersions)
+	_, point, manifest := completeRcloneTestPoint(t, fixture)
+	physicalKey := strings.TrimSuffix(fixture.binding.Native.ManagedPrefix, "/") + "/data/native.txt"
+	versionID := "FAKE_NATIVE_CONTENT_VERSION_FOR_TEST_ONLY"
+	exactReader := &contentNativeExactReaderFake{payload: []byte("exact")}
+	s3 := &contentNativeS3Fake{
+		rcloneNativeRepositoryFactoryFake: fixture.nativeFactory,
+		head: provider.RcloneNativeExactObjectHead{
+			PhysicalKey: physicalKey, VersionID: versionID, Size: 5,
+			EncryptionProfile: provider.RcloneNativeSSES3V1,
+		},
+		expectedPhysicalKey: physicalKey, expectedVersionID: versionID,
+		reader: exactReader,
+	}
+	factory := &contentNativeFactoryFake{
+		rcloneNativeRepositoryFactoryFake: fixture.nativeFactory,
+		s3:                                s3,
+	}
+	fixture.service.rcloneNativeFactoryBuilder = func(context.Context, provider.RcloneNativeBootstrap, string, int) (RcloneNativeFactory, error) {
+		return factory, nil
+	}
+	generation := model.CatalogGeneration{
+		ID: strings.Repeat("c", 32), RecoveryPointID: point.ID, ManifestID: &manifest.ID,
+		Generation: 1, State: string(catalog.GenerationComplete), IsActive: true,
+		SourceFingerprint: point.SourceFingerprint, ExpectedEntryCount: 1, WrittenEntryCount: 1,
+		StartedAt: fixture.now, CreatedAt: fixture.now, UpdatedAt: fixture.now,
+	}
+	finished := fixture.now
+	generation.FinishedAt = &finished
+	if err := fixture.db.Create(&generation).Error; err != nil {
+		t.Fatal(err)
+	}
+	entryLocator, err := json.Marshal(contentEntryLocatorV1{
+		Version: 1, Native: "native:" + physicalKey + "\x00" + versionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modified := fixture.now.Add(-time.Minute)
+	entry := model.CatalogEntry{
+		GenerationID: generation.ID, EntryID: strings.Repeat("b", 64), RecoveryPointID: point.ID,
+		NormalizedPath: "docs/native.txt", Name: "native.txt", EntryType: string(backupasset.CatalogEntryFile),
+		Size: 5, ModifiedAt: &modified, MimeType: "text/plain", Fingerprint: strings.Repeat("e", 64),
+		FingerprintStrength: string(catalog.FingerprintStrong), EncryptedProviderLocator: string(entryLocator),
+		SecurityState: "sealed", CreatedAt: fixture.now,
+	}
+	if err := fixture.db.Create(&entry).Error; err != nil {
+		t.Fatal(err)
+	}
+	admission := &publicationAdmission{mode: publication.AdmissionManaged, generation: 1}
+	service, err := NewService(Dependencies{
+		DB: fixture.db, Foundation: fixture.service.foundation, Registry: fixture.service.registry,
+		Keyring: fixture.service.keyring, Now: func() time.Time { return fixture.now },
+		Admission: admission, Publication: fixture.service,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := content.SourceRequest{
+		Ref:                 backupasset.AssetRef{RecoveryPointID: point.ID, EntryID: entry.EntryID},
+		CatalogGenerationID: generation.ID, ExpectedSource: point.SourceFingerprint,
+		ExpectedEntry: entry.Fingerprint, Mode: content.SourceModeSequential, MaxBytes: entry.Size,
+	}
+	return service, s3, request, exactReader, admission
+}
+
+func TestContentSourceNativeRcloneClosePreservesFreshProviderAndContextErrors(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		err  error
+	}{
+		{name: "provider", err: errors.New("FAKE_NATIVE_HEAD_PROVIDER_ERROR_FOR_TEST_ONLY")},
+		{name: "context", err: context.DeadlineExceeded},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			service, s3, request, reader, admission := newNativeRcloneContentCloseTest(t)
+			session, err := service.OpenContentSource(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s3.headErr = testCase.err
+			closeErr := session.Close()
+			if !errors.Is(closeErr, testCase.err) || errors.Is(closeErr, backupasset.ErrConflict) {
+				t.Fatalf("fresh %s error=%v, want original cause without ErrConflict", testCase.name, closeErr)
+			}
+			if s3.headCalls != 2 || len(reader.handles) != 1 || reader.handles[0].closeCount() != 1 || admission.closedCount() != 1 {
+				t.Fatalf("fresh %s close lifecycle headCalls=%d handles=%d closes=%d admission=%d",
+					testCase.name, s3.headCalls, len(reader.handles), reader.handles[0].closeCount(), admission.closedCount())
+			}
+			if secondErr := session.Close(); !errors.Is(secondErr, testCase.err) || s3.headCalls != 2 ||
+				reader.handles[0].closeCount() != 1 || admission.closedCount() != 1 {
+				t.Fatalf("fresh %s repeated close err=%v headCalls=%d reader=%d admission=%d",
+					testCase.name, secondErr, s3.headCalls, reader.handles[0].closeCount(), admission.closedCount())
+			}
+		})
+	}
+}
+
+func TestContentSourceNativeRcloneCloseReportsSuccessfulHeadDriftAsConflict(t *testing.T) {
+	service, s3, request, reader, admission := newNativeRcloneContentCloseTest(t)
+	session, err := service.OpenContentSource(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s3.head.VersionID = "FAKE_NATIVE_CONTENT_VERSION_DRIFT_FOR_TEST_ONLY"
+	if err := session.Close(); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("successful fresh head drift error=%v, want ErrConflict", err)
+	}
+	if s3.headCalls != 2 || len(reader.handles) != 1 || reader.handles[0].closeCount() != 1 || admission.closedCount() != 1 {
+		t.Fatalf("head drift close lifecycle headCalls=%d handles=%d closes=%d admission=%d",
+			s3.headCalls, len(reader.handles), reader.handles[0].closeCount(), admission.closedCount())
+	}
+	if err := session.Close(); !errors.Is(err, backupasset.ErrConflict) || s3.headCalls != 2 ||
+		reader.handles[0].closeCount() != 1 || admission.closedCount() != 1 {
+		t.Fatalf("head drift repeated close err=%v headCalls=%d reader=%d admission=%d",
+			err, s3.headCalls, reader.handles[0].closeCount(), admission.closedCount())
 	}
 }

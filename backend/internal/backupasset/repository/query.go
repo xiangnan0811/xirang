@@ -1958,6 +1958,9 @@ func (service *Service) managedRsyncCommittedPointReadRequest(ctx context.Contex
 		point.ManifestDigestAlgorithm != "sha256" || !isLowerHex64(point.SourceFingerprint) || !isLowerHex64(point.ManifestDigest) {
 		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, fmt.Errorf("%w: committed Rsync point evidence is invalid", backupasset.ErrConflict)
 	}
+	if runtime.repository.CapabilityRevision != point.CapabilityRevision {
+		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, fmt.Errorf("%w: committed Rsync point capability revision changed", backupasset.ErrConflict)
+	}
 	semantics := backupasset.PointVersionSemantics(point.Semantics)
 	if semantics != backupasset.PointXirangManifest && semantics != backupasset.PointImportedBaseline {
 		return provider.RsyncCommittedPointReadRequest{}, provider.AccessBinding{}, fmt.Errorf("%w: committed Rsync point semantics are invalid", backupasset.ErrConflict)

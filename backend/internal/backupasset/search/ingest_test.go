@@ -64,6 +64,35 @@ func TestContentIndexIngestPublishesAtomicOpaqueProjection(t *testing.T) {
 	}
 }
 
+func TestContentIndexIngestRejectsOlderNormalizerGeneration(t *testing.T) {
+	indexer, harness := newIndexerTestHarness(t)
+	entryID := strings.Repeat("8", 64)
+	pointID, catalogID := harness.seedCatalog(t, []model.CatalogEntry{{
+		EntryID: entryID, NormalizedPath: "content.txt", Name: "content.txt", EntryType: "file", SecurityState: "unknown",
+	}})
+	searchGeneration, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Model(&model.BackupAssetSearchGeneration{}).
+		Where("id = ?", searchGeneration.ID).
+		Update("normalizer_version", NormalizerVersion-1).Error; err != nil {
+		t.Fatalf("age Search normalizer version: %v", err)
+	}
+	ingest, lease := newContentIngestForHarness(t, harness)
+	err = ingest.PublishContentProjection(context.Background(), ContentProjection{
+		Ref: backupasset.AssetRef{RecoveryPointID: pointID, EntryID: entryID}, Field: SearchFieldContent,
+		Terms: []TermFrequency{{Term: "needle", Frequency: 1}}, SourceFingerprint: "source-" + pointID,
+		CatalogGenerationID: catalogID, SearchGenerationID: searchGeneration.ID,
+		ProcessingLeaseID: lease.ID, AttemptID: lease.Fence.AttemptID, FenceToken: lease.Fence.FenceToken,
+		ExpectedClassificationRevision: 1, Classification: SensitivityNonSecret, ClassificationRevision: 1,
+		CoverageRevision: 2, PipelineRevision: 2, IndexRevision: 2, Coverage: FieldCoverageComplete,
+	})
+	if !errors.Is(err, ErrContentProjectionStale) {
+		t.Fatalf("old normalizer generation error=%v, want ErrContentProjectionStale", err)
+	}
+}
+
 func TestLifecycleLateOutputRejectsSearchContentAndOCRIngest(t *testing.T) {
 	for _, field := range []SearchField{SearchFieldContent, SearchFieldOCR} {
 		t.Run(string(field), func(t *testing.T) {

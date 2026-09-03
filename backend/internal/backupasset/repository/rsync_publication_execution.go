@@ -429,9 +429,15 @@ func (service *PublicationService) prepareRsyncPoint(ctx context.Context, run pu
 	if len(markerKey) == 0 {
 		return provider.RsyncTreeAttemptV1{}, backupasset.Lease{}, nil, fmt.Errorf("%w: managed Rsync marker key is unavailable", backupasset.ErrInvalidState)
 	}
+	// Publication and lifecycle deletion share repository -> Task -> TaskRun
+	// -> link -> binding -> Node -> SSH key lock ordering.
 	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var repository model.BackupRepository
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&repository, "id = ?", runtime.repository.ID).Error; err != nil {
+			return fmt.Errorf("lock managed Rsync publication repository: %w", err)
+		}
 		var taskEntity model.Task
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Node").Where("archived_at IS NULL").First(&taskEntity, runtime.task.ID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("archived_at IS NULL").First(&taskEntity, runtime.task.ID).Error; err != nil {
 			return fmt.Errorf("lock managed Rsync publication Task: %w", err)
 		}
 		revision, err := managedRsyncTaskRevision(taskEntity)
@@ -449,15 +455,12 @@ func (service *PublicationService) prepareRsyncPoint(ctx context.Context, run pu
 			return fmt.Errorf("%w: TaskRun is not active for managed Rsync publication", backupasset.ErrConflict)
 		}
 		var link model.TaskRepositoryLink
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND task_id = ? AND unlinked_at IS NULL", runtime.link.ID, taskEntity.ID).First(&link).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND task_id = ? AND unlinked_at IS NULL", runtime.link.ID, taskEntity.ID).First(&link).Error; err != nil {
 			return fmt.Errorf("lock managed Rsync publication link: %w", err)
 		}
-		if link.RepositoryID != runtime.repository.ID || link.PublicationMode != string(runtime.binding.PublicationMode) {
+		if link.RepositoryID != repository.ID || link.PublicationMode != string(runtime.binding.PublicationMode) {
 			return fmt.Errorf("%w: managed Rsync publication link changed", backupasset.ErrConflict)
-		}
-		var repository model.BackupRepository
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&repository, "id = ?", runtime.repository.ID).Error; err != nil {
-			return fmt.Errorf("lock managed Rsync publication repository: %w", err)
 		}
 		attemptMode, err := managedRsyncAttemptMode(runtime.binding)
 		if err != nil {
@@ -499,6 +502,9 @@ func (service *PublicationService) prepareRsyncPoint(ctx context.Context, run pu
 				return err
 			}
 			return fmt.Errorf("%w: managed Rsync publication binding changed", backupasset.ErrConflict)
+		}
+		if err := lockLifecycleTaskNodeSSHKeyTx(ctx, tx, &taskEntity); err != nil {
+			return err
 		}
 		pointID, err := deriveRecoveryPointID(link.ID, taskRun.ID)
 		if err != nil {
@@ -1382,6 +1388,17 @@ func (service *PublicationService) rsyncMarkerKey(ctx context.Context, repositor
 		return nil, fmt.Errorf("%w: managed Rsync marker key is unavailable", backupasset.ErrInvalidState)
 	}
 	material, err := service.keyring.Ensure(ctx, backupasset.KeyDomainRecoveryCleanupOwnership)
+	if err != nil {
+		return nil, err
+	}
+	return rsyncOwnershipDigest(material.Key, "xirang.rsync.tree.marker-key.v1", repositoryID), nil
+}
+
+func (service *PublicationService) rsyncMarkerKeyTx(ctx context.Context, tx *gorm.DB, repositoryID string) ([]byte, error) {
+	if service == nil || service.keyring == nil || tx == nil || backupasset.ValidateOpaqueID(repositoryID) != nil {
+		return nil, fmt.Errorf("%w: managed Rsync marker key is unavailable", backupasset.ErrInvalidState)
+	}
+	material, err := service.keyring.ActiveTx(ctx, tx, backupasset.KeyDomainRecoveryCleanupOwnership)
 	if err != nil {
 		return nil, err
 	}

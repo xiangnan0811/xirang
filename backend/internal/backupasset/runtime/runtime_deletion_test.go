@@ -42,7 +42,9 @@ func TestRuntimeRegistersRcloneDeletionMuxForNativeAccess(t *testing.T) {
 			RepositoryID: repositoryID, CapabilityRevision: 1, SourceRevision: strings.Repeat("b", 64),
 			Access: provider.AccessBinding{
 				Provider: backupasset.ProviderRclone, RepositoryID: repositoryID,
-				AdapterData: provider.RcloneNativeDeletionAccess{Versions: versions, Client: native},
+				AdapterData: provider.RcloneNativeDeletionAccess{
+					Versions: versions, AuthorityDigest: strings.Repeat("f", 64), Client: native,
+				},
 			},
 		},
 		Point:                  provider.PointLocator{Native: strings.Repeat("a", 32)},

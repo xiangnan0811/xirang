@@ -146,6 +146,63 @@ describe("BackupFileSourceControls", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/no authorized nodes|没有可访问.*节点/i);
     rerender(<BackupFileSourceControls {...props} status="permission_denied" />);
     expect(screen.getByRole("alert")).toHaveTextContent(/permission|权限/i);
+    expect(screen.queryByRole("button", { name: /^(Retry|重试)$/ })).not.toBeInTheDocument();
+    rerender(<BackupFileSourceControls {...props} status="blocked" canRetry onRetry={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /^(Retry|重试)$/ })).toBeInTheDocument();
+  });
+
+  it("warns on pagination failure without blocking Load more", async () => {
+    const onLoadMoreNodes = vi.fn();
+    render(
+      <BackupFileSourceControls
+        status="ready"
+        nodes={[node]}
+        sets={[set]}
+        versions={[version]}
+        selectedNodeId={7}
+        selectedBackupSetId={undefined}
+        selectedRecoveryPointId={undefined}
+        onSelectNode={vi.fn()}
+        onSelectSet={vi.fn()}
+        onSelectVersion={vi.fn()}
+        hasMoreNodes
+        hasMoreSets={false}
+        hasMoreVersions={false}
+        loadingMoreNodes={false}
+        loadingMoreSets={false}
+        loadingMoreVersions={false}
+        onLoadMoreNodes={onLoadMoreNodes}
+        onLoadMoreSets={vi.fn()}
+        onLoadMoreVersions={vi.fn()}
+        paginationError
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/Could not load more file sources|未能加载更多文件来源/);
+    await userEvent.click(screen.getByRole("button", { name: /more nodes|更多节点/i }));
+    expect(onLoadMoreNodes).toHaveBeenCalledOnce();
+  });
+
+  it("announces page permission denial without exposing a cursor retry", () => {
+    render(
+      <BackupFileSourceControls
+        status="ready"
+        nodes={[node]}
+        sets={[set]}
+        versions={[version]}
+        selectedNodeId={7}
+        selectedBackupSetId={undefined}
+        selectedRecoveryPointId={undefined}
+        onSelectNode={vi.fn()}
+        onSelectSet={vi.fn()}
+        onSelectVersion={vi.fn()}
+        {...pagingProps}
+        paginationPermissionDenied
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/permission|权限/i);
+    expect(screen.queryByRole("button", { name: /more nodes|更多节点/i })).not.toBeInTheDocument();
   });
 
   it("keeps long Chinese and English labels, deterministic control order, mobile touch targets, and axe semantics", async () => {

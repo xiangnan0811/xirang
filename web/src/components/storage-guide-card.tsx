@@ -2,7 +2,11 @@ import React, { Suspense, useState } from "react";
 import { HardDrive } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  DataSurface,
+  DataSurfaceContent,
+  DataSurfaceHeader,
+} from "@/components/ui/data-surface";
 import { useAuth } from "@/context/auth-context.hooks";
 
 const NasMountWizard = React.lazy(() =>
@@ -18,20 +22,18 @@ export function StorageGuideCard() {
 
   return (
     <>
-      <Card className="glass-panel border-border/70">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">{t('storage.guideTitle')}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-xs text-muted-foreground mb-3">
-            {t('storage.guideDesc')}
+      <DataSurface>
+        <DataSurfaceHeader title={t("storage.guideTitle")} />
+        <DataSurfaceContent>
+          <p className="mb-3 text-xs text-muted-foreground">
+            {t("storage.guideDesc")}
           </p>
-          <Button size="sm" variant="outline" onClick={() => setWizardOpen(true)}>
+          <Button size="lg" variant="outline" onClick={() => setWizardOpen(true)}>
             <HardDrive className="mr-1 size-3.5" />
-            {t('storage.configureExternal')}
+            {t("storage.configureExternal")}
           </Button>
-        </CardContent>
-      </Card>
+        </DataSurfaceContent>
+      </DataSurface>
       <Suspense fallback={null}>
         <NasMountWizard open={wizardOpen} onOpenChange={setWizardOpen} />
       </Suspense>

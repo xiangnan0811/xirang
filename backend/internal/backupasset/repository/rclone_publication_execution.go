@@ -28,7 +28,8 @@ import (
 
 const (
 	managedRclonePreparedAttemptVersion        = 1
-	managedRclonePointLocatorVersion           = 1
+	managedRclonePointLocatorLegacyVersion     = 1
+	managedRclonePointLocatorVersion           = 2
 	managedRcloneCommitEvidenceVersion         = 1
 	maxManagedRclonePreparedAttemptRecordBytes = 64 << 10
 	managedRcloneManifestSchemaRevision        = 1
@@ -69,48 +70,55 @@ type managedRclonePreparedAttemptRecordV1 struct {
 	TaggedAttempt    string `json:"tagged_attempt"`
 	ChildFenceDigest string `json:"child_fence_digest"`
 }
-
 type managedRcloneFrozenNativeVersion struct {
 	PhysicalKey string `json:"physical_key"`
 	VersionID   string `json:"version_id"`
 }
 
+// managedRclonePointLocatorV1 is the compatibility view used by the
+// repository/lifecycle package. Version 1 is the historical locator shape;
+// version 2 is the table-backed shape emitted by current publications. Keep
+// the historical native fields in this view so old points can be decoded, but
+// never emit or accept them as part of a version 2 locator.
 type managedRclonePointLocatorV1 struct {
-	Version                 int                                `json:"version"`
-	Provider                backupasset.ProviderKind           `json:"provider"`
-	RepositoryID            string                             `json:"repository_id"`
-	RecoveryPointID         string                             `json:"recovery_point_id"`
-	AttemptID               string                             `json:"attempt_id"`
-	PublicationMode         backupasset.TaskPublicationMode    `json:"publication_mode"`
-	TaggedAttempt           string                             `json:"tagged_attempt"`
-	TaggedCommit            string                             `json:"tagged_commit"`
-	ChildFenceDigest        string                             `json:"child_fence_digest"`
-	CommitPayloadDigest     string                             `json:"commit_payload_digest"`
-	PortableAttemptRoot     string                             `json:"portable_attempt_root,omitempty"`
-	NativeCommitKey         string                             `json:"native_commit_key,omitempty"`
-	NativeCommitVersionID   string                             `json:"native_commit_version_id,omitempty"`
-	FrozenNativeVersions    []managedRcloneFrozenNativeVersion `json:"frozen_native_versions,omitempty"`
-	PhysicalIdentityDigest  string                             `json:"physical_identity_digest"`
-	ProviderCommitDigest    string                             `json:"provider_commit_digest"`
-	ManifestControlIdentity string                             `json:"manifest_control_identity"`
+	Version                      int                                `json:"version"`
+	Provider                     backupasset.ProviderKind           `json:"provider"`
+	RepositoryID                 string                             `json:"repository_id"`
+	RecoveryPointID              string                             `json:"recovery_point_id"`
+	AttemptID                    string                             `json:"attempt_id"`
+	PublicationMode              backupasset.TaskPublicationMode    `json:"publication_mode"`
+	TaggedAttempt                string                             `json:"tagged_attempt"`
+	TaggedCommit                 string                             `json:"tagged_commit"`
+	ChildFenceDigest             string                             `json:"child_fence_digest"`
+	CommitPayloadDigest          string                             `json:"commit_payload_digest"`
+	PortableAttemptRoot          string                             `json:"portable_attempt_root,omitempty"`
+	NativeCommitKey              string                             `json:"native_commit_key,omitempty"`
+	NativeCommitVersionID        string                             `json:"native_commit_version_id,omitempty"`
+	FrozenNativeVersions         []managedRcloneFrozenNativeVersion `json:"frozen_native_versions,omitempty"`
+	FrozenNativeVersionCount     uint64                             `json:"frozen_native_version_count"`
+	FrozenNativeVersionsDigest   string                             `json:"frozen_native_versions_digest"`
+	FrozenNativeReferenceCount   uint64                             `json:"frozen_native_reference_count"`
+	FrozenNativeReferencesDigest string                             `json:"frozen_native_references_digest"`
+	PhysicalIdentityDigest       string                             `json:"physical_identity_digest"`
+	ProviderCommitDigest         string                             `json:"provider_commit_digest"`
+	ManifestControlIdentity      string                             `json:"manifest_control_identity"`
 }
 
-func sameManagedRclonePointLocator(left, right managedRclonePointLocatorV1) bool {
-	return reflect.DeepEqual(left, right)
-}
-
-func managedRcloneFrozenNativeVersions(versions []provider.RcloneNativeExactVersion) []managedRcloneFrozenNativeVersion {
-	if len(versions) == 0 {
-		return nil
-	}
-	frozen := make([]managedRcloneFrozenNativeVersion, 0, len(versions))
-	for _, version := range versions {
-		frozen = append(frozen, managedRcloneFrozenNativeVersion{
-			PhysicalKey: version.PhysicalKey,
-			VersionID:   version.VersionID,
-		})
-	}
-	return frozen
+type managedRclonePortablePointLocatorV1Wire struct {
+	Version                 int                             `json:"version"`
+	Provider                backupasset.ProviderKind        `json:"provider"`
+	RepositoryID            string                          `json:"repository_id"`
+	RecoveryPointID         string                          `json:"recovery_point_id"`
+	AttemptID               string                          `json:"attempt_id"`
+	PublicationMode         backupasset.TaskPublicationMode `json:"publication_mode"`
+	TaggedAttempt           string                          `json:"tagged_attempt"`
+	TaggedCommit            string                          `json:"tagged_commit"`
+	ChildFenceDigest        string                          `json:"child_fence_digest"`
+	CommitPayloadDigest     string                          `json:"commit_payload_digest"`
+	PortableAttemptRoot     string                          `json:"portable_attempt_root,omitempty"`
+	PhysicalIdentityDigest  string                          `json:"physical_identity_digest"`
+	ProviderCommitDigest    string                          `json:"provider_commit_digest"`
+	ManifestControlIdentity string                          `json:"manifest_control_identity"`
 }
 
 type rclonePublicationExecution struct {
@@ -483,6 +491,9 @@ func (service *PublicationService) prepareRcloneNativeProcessInput(
 	if err != nil {
 		return nil, fmt.Errorf("create native Rclone AWS factory: %w", err)
 	}
+	if factory == nil {
+		return nil, fmt.Errorf("%w: native Rclone AWS factory unavailable", backupasset.ErrCapabilityUnavailable)
+	}
 	bootstrapTemporary, err := factory.BootstrapCredentialsExpire(ctx)
 	if err != nil {
 		return nil, err
@@ -538,7 +549,10 @@ func (service *PublicationService) prepareRcloneNativeProcessInput(
 			return nil, err
 		}
 		discoveryS3, err := factory.BaselineS3(discoverySession.Session, profile, sourcePrefixes)
-		if err != nil || discoveryS3 == nil {
+		if err != nil {
+			return nil, err
+		}
+		if discoveryS3 == nil {
 			return nil, fmt.Errorf("%w: native Rclone baseline discovery client unavailable", backupasset.ErrCapabilityUnavailable)
 		}
 		inventoryRequest := provider.RcloneNativeBaselineInventoryRequest{
@@ -555,7 +569,10 @@ func (service *PublicationService) prepareRcloneNativeProcessInput(
 		var inspector provider.KMSKeyInspector
 		if len(discovery.SourceKMSKeyARNs) > 0 {
 			inspector, err = factory.KMS(sessionResult.Session, profile.Region)
-			if err != nil || inspector == nil {
+			if err != nil {
+				return nil, err
+			}
+			if inspector == nil {
 				return nil, fmt.Errorf("%w: native Rclone baseline KMS inspector unavailable", backupasset.ErrCapabilityUnavailable)
 			}
 		}
@@ -580,7 +597,10 @@ func (service *PublicationService) prepareRcloneNativeProcessInput(
 			return nil, fmt.Errorf("%w: native Rclone baseline session policy drift", backupasset.ErrConflict)
 		}
 		finalS3, err := factory.BaselineS3(sessionResult.Session, profile, sourcePrefixes)
-		if err != nil || finalS3 == nil {
+		if err != nil {
+			return nil, err
+		}
+		if finalS3 == nil {
 			return nil, fmt.Errorf("%w: native Rclone baseline verification client unavailable", backupasset.ErrCapabilityUnavailable)
 		}
 		inventory, err := provider.InspectRcloneNativeBaselineSource(ctx, finalS3, inventoryRequest)
@@ -602,7 +622,10 @@ func (service *PublicationService) prepareRcloneNativeProcessInput(
 	}
 
 	s3, err := factory.S3(sessionResult.Session, profile, keyBindings)
-	if err != nil || s3 == nil {
+	if err != nil {
+		return nil, err
+	}
+	if s3 == nil {
 		return nil, fmt.Errorf("%w: native Rclone S3 client unavailable", backupasset.ErrCapabilityUnavailable)
 	}
 	if err := validateRcloneNativeBoundCapability(
@@ -700,7 +723,10 @@ func validateRcloneNativeBoundCapability(
 	keys := make([]provider.RcloneNativeKMSKey, 0, 1+len(encryption.RetainedReadKeyARNs))
 	if encryption.Profile == provider.RcloneNativeSSEKMSV1 {
 		inspector, inspectorErr := factory.KMS(session, profile.Region)
-		if inspectorErr != nil || inspector == nil {
+		if inspectorErr != nil {
+			return inspectorErr
+		}
+		if inspector == nil {
 			return fmt.Errorf("%w: native Rclone KMS inspector unavailable", backupasset.ErrCapabilityUnavailable)
 		}
 		for _, arn := range append([]string{encryption.ActiveKeyARN}, encryption.RetainedReadKeyARNs...) {
@@ -735,31 +761,59 @@ func managedRcloneNativeObservationLimits(maxEntries int64) (provider.RcloneNati
 }
 
 func (service *PublicationService) loadExactManagedRclonePublicationRuntime(ctx context.Context, taskID uint) (managedRclonePublicationRuntime, error) {
-	if service == nil || service.db == nil || taskID == 0 {
+	if service == nil {
 		return managedRclonePublicationRuntime{}, fmt.Errorf("%w: managed Rclone publication runtime is unavailable", backupasset.ErrInvalidState)
 	}
+	return service.loadExactManagedRclonePublicationRuntimeTx(ctx, service.db, taskID)
+}
+
+func (service *PublicationService) loadExactManagedRclonePublicationRuntimeTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	taskID uint,
+) (managedRclonePublicationRuntime, error) {
+	if service == nil || tx == nil || taskID == 0 {
+		return managedRclonePublicationRuntime{}, fmt.Errorf("%w: managed Rclone publication runtime is unavailable", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// The active link is only a repository-ID preview. All authority rows are
+	// then locked in repository -> Task -> link -> binding -> Node -> SSH key
+	// order, and the preview is revalidated by the locked link query.
+	var previewLink model.TaskRepositoryLink
+	if err := tx.WithContext(ctx).Where("task_id = ? AND unlinked_at IS NULL", taskID).First(&previewLink).Error; err != nil {
+		return managedRclonePublicationRuntime{}, fmt.Errorf("load managed Rclone publication link preview: %w", err)
+	}
+	if backupasset.ValidateOpaqueID(previewLink.RepositoryID) != nil {
+		return managedRclonePublicationRuntime{}, fmt.Errorf("%w: managed Rclone publication link repository is invalid", backupasset.ErrConflict)
+	}
+	var repository model.BackupRepository
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", previewLink.RepositoryID).First(&repository).Error; err != nil {
+		return managedRclonePublicationRuntime{}, fmt.Errorf("lock managed Rclone publication repository: %w", err)
+	}
 	var taskEntity model.Task
-	if err := service.db.WithContext(ctx).Where("archived_at IS NULL").Preload("Node.SSHKey").First(&taskEntity, taskID).Error; err != nil {
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND archived_at IS NULL", taskID).First(&taskEntity).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return managedRclonePublicationRuntime{}, fmt.Errorf("%w: managed Rclone publication Task", backupasset.ErrNotFound)
 		}
-		return managedRclonePublicationRuntime{}, fmt.Errorf("load managed Rclone publication Task: %w", err)
+		return managedRclonePublicationRuntime{}, fmt.Errorf("lock managed Rclone publication Task: %w", err)
 	}
 	if bindingProviderForTask(taskEntity) != backupasset.ProviderRclone {
 		return managedRclonePublicationRuntime{}, fmt.Errorf("%w: managed Rclone publication requires a Rclone Task", backupasset.ErrInvalidState)
 	}
 	var link model.TaskRepositoryLink
-	if err := service.db.WithContext(ctx).Where("task_id = ? AND unlinked_at IS NULL", taskID).First(&link).Error; err != nil {
-		return managedRclonePublicationRuntime{}, fmt.Errorf("load managed Rclone publication link: %w", err)
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND task_id = ? AND repository_id = ? AND unlinked_at IS NULL",
+			previewLink.ID, taskID, repository.ID).First(&link).Error; err != nil {
+		return managedRclonePublicationRuntime{}, fmt.Errorf("lock managed Rclone publication link: %w", err)
 	}
 	mode := backupasset.TaskPublicationMode(link.PublicationMode)
 	version, semantics, state, err := backupasset.MapPublicationMode(backupasset.ProviderRclone, mode)
 	if err != nil || semantics != backupasset.PointXirangManifest || state != backupasset.RecoveryPointPreparing {
 		return managedRclonePublicationRuntime{}, fmt.Errorf("%w: managed Rclone publication link mode is invalid", backupasset.ErrConflict)
-	}
-	var repository model.BackupRepository
-	if err := service.db.WithContext(ctx).First(&repository, "id = ?", link.RepositoryID).Error; err != nil {
-		return managedRclonePublicationRuntime{}, fmt.Errorf("load managed Rclone publication repository: %w", err)
 	}
 	if repository.ProviderKind != string(backupasset.ProviderRclone) || repository.VersionMode != string(version) ||
 		repository.ImmutabilityLevel != string(rcloneImmutability(mode)) || repository.RepositoryIdentity == nil ||
@@ -767,8 +821,9 @@ func (service *PublicationService) loadExactManagedRclonePublicationRuntime(ctx 
 		return managedRclonePublicationRuntime{}, fmt.Errorf("%w: managed Rclone repository contract mismatch", backupasset.ErrConflict)
 	}
 	var binding model.RepositoryAccessBinding
-	if err := service.db.WithContext(ctx).Where("repository_id = ? AND status = ?", repository.ID, bindingStatusActive).First(&binding).Error; err != nil {
-		return managedRclonePublicationRuntime{}, fmt.Errorf("load managed Rclone publication binding: %w", err)
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("repository_id = ? AND status = ?", repository.ID, bindingStatusActive).First(&binding).Error; err != nil {
+		return managedRclonePublicationRuntime{}, fmt.Errorf("lock managed Rclone publication binding: %w", err)
 	}
 	stored, err := decodeStoredBindingDocument(binding.EncryptedConfig)
 	if err != nil || stored.ManagedRcloneV3 == nil || stored.V1 != nil || stored.ManagedRsyncV2 != nil {
@@ -786,6 +841,13 @@ func (service *PublicationService) loadExactManagedRclonePublicationRuntime(ctx 
 	if document.RollbackPrepared || !document.PreflightExpiresAt.After(service.now().UTC()) ||
 		document.CapabilityRevision != uint64(repository.CapabilityRevision) {
 		return managedRclonePublicationRuntime{}, fmt.Errorf("%w: managed Rclone preflight or rollback state is not executable", backupasset.ErrForbidden)
+	}
+	if err := lockLifecycleTaskNodeSSHKeyTx(ctx, tx, &taskEntity); err != nil {
+		return managedRclonePublicationRuntime{}, err
+	}
+	if link.TaskID == nil || *link.TaskID != taskEntity.ID || link.TaskNameSnapshot != taskEntity.Name ||
+		link.NodeIDSnapshot != taskEntity.NodeID || link.NodeNameSnapshot != taskEntity.Node.Name {
+		return managedRclonePublicationRuntime{}, fmt.Errorf("%w: managed Rclone publication link snapshot changed", backupasset.ErrConflict)
 	}
 	expectedIdentity, err := managedRcloneRepositoryIdentity(document)
 	if err != nil {
@@ -847,8 +909,17 @@ func (service *PublicationService) prepareRclonePointTx(
 	if service == nil || tx == nil {
 		return provider.RcloneAttemptV1{}, backupasset.Lease{}, fmt.Errorf("%w: managed Rclone publication transaction is unavailable", backupasset.ErrInvalidState)
 	}
+	var repository model.BackupRepository
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&repository, "id = ?", runtime.repository.ID).Error; err != nil {
+		return provider.RcloneAttemptV1{}, backupasset.Lease{}, fmt.Errorf("lock managed Rclone publication repository: %w", err)
+	}
+	if runtime.binding.PublicationMode == backupasset.PublicationNativeObjectVersions {
+		if err := rejectManagedRcloneNativeDeletionReservationTx(ctx, tx, repository.ID); err != nil {
+			return provider.RcloneAttemptV1{}, backupasset.Lease{}, err
+		}
+	}
 	var taskEntity model.Task
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Node.SSHKey").Where("archived_at IS NULL").First(&taskEntity, runtime.task.ID).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("archived_at IS NULL").First(&taskEntity, runtime.task.ID).Error; err != nil {
 		return provider.RcloneAttemptV1{}, backupasset.Lease{}, fmt.Errorf("lock managed Rclone publication Task: %w", err)
 	}
 	var taskRun model.TaskRun
@@ -859,12 +930,10 @@ func (service *PublicationService) prepareRclonePointTx(
 		return provider.RcloneAttemptV1{}, backupasset.Lease{}, fmt.Errorf("%w: TaskRun is not active for managed Rclone publication", backupasset.ErrConflict)
 	}
 	var link model.TaskRepositoryLink
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND task_id = ? AND unlinked_at IS NULL", runtime.link.ID, taskEntity.ID).First(&link).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND task_id = ? AND repository_id = ? AND unlinked_at IS NULL", runtime.link.ID, taskEntity.ID, repository.ID).
+		First(&link).Error; err != nil {
 		return provider.RcloneAttemptV1{}, backupasset.Lease{}, fmt.Errorf("lock managed Rclone publication link: %w", err)
-	}
-	var repository model.BackupRepository
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&repository, "id = ?", runtime.repository.ID).Error; err != nil {
-		return provider.RcloneAttemptV1{}, backupasset.Lease{}, fmt.Errorf("lock managed Rclone publication repository: %w", err)
 	}
 	var unresolved int64
 	if err := tx.Model(&model.RecoveryPoint{}).Where("repository_id = ? AND state IN ?", repository.ID, []string{
@@ -876,7 +945,8 @@ func (service *PublicationService) prepareRclonePointTx(
 		return provider.RcloneAttemptV1{}, backupasset.Lease{}, fmt.Errorf("%w: unresolved managed Rclone writer exists", backupasset.ErrPublicationInProgress)
 	}
 	var binding model.RepositoryAccessBinding
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("repository_id = ? AND status = ?", repository.ID, bindingStatusActive).First(&binding).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("repository_id = ? AND status = ?", repository.ID, bindingStatusActive).First(&binding).Error; err != nil {
 		return provider.RcloneAttemptV1{}, backupasset.Lease{}, fmt.Errorf("lock managed Rclone publication binding: %w", err)
 	}
 	stored, err := decodeStoredBindingDocument(binding.EncryptedConfig)
@@ -889,6 +959,9 @@ func (service *PublicationService) prepareRclonePointTx(
 	if err := validateManagedRcloneBindingAssociation(runtime.binding, managedRcloneBindingAssociation{
 		Task: taskEntity, Link: link, Repository: repository,
 	}); err != nil {
+		return provider.RcloneAttemptV1{}, backupasset.Lease{}, err
+	}
+	if err := lockLifecycleTaskNodeSSHKeyTx(ctx, tx, &taskEntity); err != nil {
 		return provider.RcloneAttemptV1{}, backupasset.Lease{}, err
 	}
 	pointID, err := deriveRecoveryPointID(link.ID, taskRun.ID)
@@ -1151,12 +1224,23 @@ func (service *PublicationService) recordRcloneProviderCommit(
 	var outcome publication.Outcome
 	transitioned := false
 	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var repository model.BackupRepository
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&repository, "id = ?", attempt.RepositoryID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("%w: managed Rclone publication repository", backupasset.ErrNotFound)
+			}
+			return fmt.Errorf("lock managed Rclone provider commit repository: %w", err)
+		}
 		var point model.RecoveryPoint
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&point, "id = ?", attempt.RecoveryPointID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf("%w: managed Rclone publication point", backupasset.ErrNotFound)
 			}
 			return fmt.Errorf("lock managed Rclone provider commit point: %w", err)
+		}
+		if repository.CapabilityRevision <= 0 || uint64(repository.CapabilityRevision) != attempt.CapabilityRevision ||
+			point.CapabilityRevision <= 0 || uint64(point.CapabilityRevision) != attempt.CapabilityRevision {
+			return fmt.Errorf("%w: managed Rclone provider commit capability revision changed", backupasset.ErrConflict)
 		}
 		if point.RepositoryID != attempt.RepositoryID || point.ProducingTaskID == nil || *point.ProducingTaskID != attempt.TaskID ||
 			point.ProducingTaskRunID == nil || *point.ProducingTaskRunID != attempt.TaskRunID {
@@ -1178,11 +1262,39 @@ func (service *PublicationService) recordRcloneProviderCommit(
 			if !matching {
 				return fmt.Errorf("%w: managed Rclone provider commit replay differs", backupasset.ErrConflict)
 			}
+			if evidence.Native != nil {
+				locator, locatorErr := decodeManagedRclonePointLocator(point.EncryptedProviderLocator)
+				if locatorErr != nil {
+					return locatorErr
+				}
+				_, incomingLocator, locatorErr := encodeManagedRclonePointLocator(attempt, binding, markerKey, evidence)
+				if locatorErr != nil {
+					return fmt.Errorf("%w: managed Rclone native replay exact evidence is invalid: %v", backupasset.ErrConflict, locatorErr)
+				}
+				if locator.FrozenNativeVersionCount != incomingLocator.FrozenNativeVersionCount ||
+					locator.FrozenNativeVersionsDigest != incomingLocator.FrozenNativeVersionsDigest ||
+					locator.FrozenNativeReferenceCount != incomingLocator.FrozenNativeReferenceCount ||
+					locator.FrozenNativeReferencesDigest != incomingLocator.FrozenNativeReferencesDigest ||
+					locator.PhysicalIdentityDigest != incomingLocator.PhysicalIdentityDigest {
+					return fmt.Errorf("%w: managed Rclone native replay exact evidence differs", backupasset.ErrConflict)
+				}
+				if _, _, locatorErr = loadManagedRcloneNativeVersionEvidenceTx(
+					ctx, tx, repository.ID, point.ID, markerKey, locator,
+					managedRcloneNativeControlCommitKey(binding, attempt),
+				); locatorErr != nil {
+					return locatorErr
+				}
+			}
 			outcome = replay
 			return nil
 		}
 		if point.State != string(backupasset.RecoveryPointPreparing) {
 			return fmt.Errorf("%w: managed Rclone provider commit point is not preparing", backupasset.ErrConflict)
+		}
+		if evidence.Native != nil {
+			if err := rejectManagedRcloneNativeDeletionReservationTx(ctx, tx, repository.ID); err != nil {
+				return err
+			}
 		}
 		if err := service.lease.ValidateFenceTx(ctx, tx, childFence); err != nil {
 			return err
@@ -1201,6 +1313,9 @@ func (service *PublicationService) recordRcloneProviderCommit(
 		consistency := backupasset.PublicationConsistencyV1{
 			Version: 1, Provider: backupasset.ProviderRclone, RepositoryIdentityDigest: attempt.RepositoryIdentityDigest,
 			ProviderCommitDigest: locator.ProviderCommitDigest, CapabilityRevision: point.CapabilityRevision,
+		}
+		if err := validateRcloneDurableCapabilityEvidence(point, consistency, attempt, evidence); err != nil {
+			return err
 		}
 		encodedConsistency, err := backupasset.EncodePublicationConsistency(consistency)
 		if err != nil {
@@ -1230,9 +1345,18 @@ func (service *PublicationService) recordRcloneProviderCommit(
 			}
 			return fmt.Errorf("save managed Rclone provider commit point: %w", err)
 		}
-		var repository model.BackupRepository
-		if err := tx.First(&repository, "id = ?", point.RepositoryID).Error; err != nil {
-			return fmt.Errorf("load managed Rclone provider commit repository: %w", err)
+		if evidence.Native != nil {
+			ownedDigest, referenceDigest, evidenceErr := persistManagedRcloneNativeVersionEvidenceTx(
+				ctx, tx, repository.ID, point.ID, markerKey, evidence.Native, point.UpdatedAt,
+			)
+			if evidenceErr != nil {
+				return evidenceErr
+			}
+			if locator.FrozenNativeVersionsDigest != ownedDigest || locator.FrozenNativeReferencesDigest != referenceDigest ||
+				locator.FrozenNativeVersionCount != uint64(len(evidence.Native.FrozenNativeVersions)) ||
+				locator.FrozenNativeReferenceCount != uint64(len(evidence.Native.FrozenNativeReferences)) {
+				return lifecycleDeleteIdentityConflict("managed Rclone native locator and durable evidence differ")
+			}
 		}
 		if err := upsertManagedRcloneHistoryLatchesTx(ctx, tx, repository, point, capturedAt, service.now().UTC()); err != nil {
 			return err
@@ -1266,6 +1390,9 @@ func validateRcloneCommitEvidence(
 	if err := validateManagedRcloneBindingDocumentV3(binding); err != nil {
 		return err
 	}
+	if err := validateManagedRcloneNativeControlIdentity(attempt, binding, evidence.Native); err != nil {
+		return err
+	}
 	if err := evidence.Validate(); err != nil {
 		return err
 	}
@@ -1275,15 +1402,22 @@ func validateRcloneCommitEvidence(
 		evidence.RecoveryPointID != attempt.RecoveryPointID || evidence.AttemptID != attempt.AttemptID ||
 		evidence.PublicationMode != attempt.PublicationMode || !evidence.PointDeadlineAt.Equal(attempt.PointDeadlineAt.UTC()) ||
 		evidence.ProviderCommittedAt.After(attempt.PointDeadlineAt) || evidence.ChildFenceDigest != rcloneChildFenceDigest(markerKey, childFence) ||
-		evidence.ChildFenceDigest != attempt.ChildFenceDigest || evidence.CapabilityEvidenceDigest != attempt.PreflightDigest {
+		evidence.ChildFenceDigest != attempt.ChildFenceDigest || evidence.CapabilityEvidenceDigest != attempt.PreflightDigest ||
+		(evidence.Native != nil && evidence.Native.CapabilityRevision != attempt.CapabilityRevision) {
 		return fmt.Errorf("%w: managed Rclone provider commit evidence mismatch", backupasset.ErrConflict)
 	}
-	if attempt.PublicationMode == backupasset.PublicationVersionedPrefix {
-		if evidence.Portable == nil || evidence.Native != nil || evidence.Portable.AttemptMarkerDigest != attempt.Portable.AttemptMarkerDigest {
+	switch attempt.PublicationMode {
+	case backupasset.PublicationVersionedPrefix:
+		if attempt.Portable == nil || evidence.Portable == nil || evidence.Native != nil ||
+			evidence.Portable.AttemptMarkerDigest != attempt.Portable.AttemptMarkerDigest {
 			return fmt.Errorf("%w: managed Rclone portable commit evidence mismatch", backupasset.ErrConflict)
 		}
-	} else if evidence.Native == nil || evidence.Portable != nil {
-		return fmt.Errorf("%w: managed Rclone native commit evidence mismatch", backupasset.ErrConflict)
+	case backupasset.PublicationNativeObjectVersions:
+		if attempt.Native == nil || evidence.Native == nil || evidence.Portable != nil {
+			return fmt.Errorf("%w: managed Rclone native commit evidence mismatch", backupasset.ErrConflict)
+		}
+	default:
+		return fmt.Errorf("%w: unsupported managed Rclone commit publication mode", backupasset.ErrInvalidState)
 	}
 	return nil
 }
@@ -1304,13 +1438,16 @@ func encodeManagedRclonePointLocator(
 	}
 	commitDigest := digestText(taggedCommit)
 	locator := managedRclonePointLocatorV1{
-		Version: managedRclonePointLocatorVersion, Provider: backupasset.ProviderRclone,
+		Version: managedRclonePointLocatorLegacyVersion, Provider: backupasset.ProviderRclone,
 		RepositoryID: attempt.RepositoryID, RecoveryPointID: attempt.RecoveryPointID, AttemptID: attempt.AttemptID,
 		PublicationMode: attempt.PublicationMode, TaggedAttempt: taggedAttempt, TaggedCommit: taggedCommit,
 		ChildFenceDigest: attempt.ChildFenceDigest, ProviderCommitDigest: commitDigest,
 	}
 	switch attempt.PublicationMode {
 	case backupasset.PublicationVersionedPrefix:
+		if evidence.Portable == nil {
+			return "", managedRclonePointLocatorV1{}, fmt.Errorf("%w: portable Rclone provider commit evidence is missing", backupasset.ErrInvalidState)
+		}
 		locator.CommitPayloadDigest = evidence.Portable.CommitPayloadDigest
 		locator.ManifestControlIdentity = evidence.Portable.ControlIdentityDigest
 		locator.PortableAttemptRoot = managedRclonePortableAttemptRoot(binding, attempt)
@@ -1318,23 +1455,52 @@ func encodeManagedRclonePointLocator(
 			"xirang.rclone.portable-point-identity.v1", attempt.RepositoryID, locator.PortableAttemptRoot,
 			evidence.Portable.CommitComponent, evidence.Portable.CommitPayloadDigest))
 	case backupasset.PublicationNativeObjectVersions:
+		if evidence.Native == nil {
+			return "", managedRclonePointLocatorV1{}, fmt.Errorf("%w: native Rclone provider commit evidence is missing", backupasset.ErrInvalidState)
+		}
+		locator.Version = managedRclonePointLocatorVersion
 		locator.CommitPayloadDigest = evidence.Native.CommitContentDigest
 		locator.ManifestControlIdentity = evidence.Native.ManifestControlGraphDigest
-		locator.NativeCommitKey = evidence.Native.CommitKey
-		locator.NativeCommitVersionID = evidence.Native.CommitVersionID
-		locator.FrozenNativeVersions = managedRcloneFrozenNativeVersions(evidence.Native.FrozenNativeVersions)
-		locator.PhysicalIdentityDigest = hex.EncodeToString(rcloneOwnershipDigest(markerKey,
-			"xirang.rclone.native-point-identity.v1", attempt.RepositoryID, evidence.Native.CommitKey,
-			evidence.Native.CommitVersionID, evidence.Native.CommitContentDigest))
+		_, ownedDigest, referenceDigest, evidenceErr := buildManagedRcloneNativeVersionEvidenceRows(
+			attempt.RepositoryID, attempt.RecoveryPointID, markerKey, evidence.Native, time.Time{},
+		)
+		if evidenceErr != nil {
+			return "", managedRclonePointLocatorV1{}, evidenceErr
+		}
+		locator.FrozenNativeVersionCount = uint64(len(evidence.Native.FrozenNativeVersions))
+		locator.FrozenNativeVersionsDigest = ownedDigest
+		locator.FrozenNativeReferenceCount = uint64(len(evidence.Native.FrozenNativeReferences))
+		locator.FrozenNativeReferencesDigest = referenceDigest
+		locator.PhysicalIdentityDigest = managedRcloneNativePointIdentityDigest(
+			markerKey, attempt.RepositoryID, evidence.Native.CommitContentDigest,
+			locator.FrozenNativeVersionCount, locator.FrozenNativeVersionsDigest,
+			locator.FrozenNativeReferenceCount, locator.FrozenNativeReferencesDigest,
+		)
 	default:
 		return "", managedRclonePointLocatorV1{}, fmt.Errorf("%w: unsupported managed Rclone point locator", backupasset.ErrInvalidState)
 	}
 	if err := validateManagedRclonePointLocator(locator); err != nil {
 		return "", managedRclonePointLocatorV1{}, err
 	}
-	payload, err := json.Marshal(locator)
+	var payload []byte
+	if attempt.PublicationMode == backupasset.PublicationVersionedPrefix {
+		payload, err = json.Marshal(managedRclonePortablePointLocatorV1Wire{
+			Version: locator.Version, Provider: locator.Provider, RepositoryID: locator.RepositoryID,
+			RecoveryPointID: locator.RecoveryPointID, AttemptID: locator.AttemptID,
+			PublicationMode: locator.PublicationMode, TaggedAttempt: locator.TaggedAttempt,
+			TaggedCommit: locator.TaggedCommit, ChildFenceDigest: locator.ChildFenceDigest,
+			CommitPayloadDigest: locator.CommitPayloadDigest, PortableAttemptRoot: locator.PortableAttemptRoot,
+			PhysicalIdentityDigest: locator.PhysicalIdentityDigest, ProviderCommitDigest: locator.ProviderCommitDigest,
+			ManifestControlIdentity: locator.ManifestControlIdentity,
+		})
+	} else {
+		payload, err = json.Marshal(locator)
+	}
 	if err != nil {
 		return "", managedRclonePointLocatorV1{}, fmt.Errorf("encode managed Rclone point locator: %w", err)
+	}
+	if len(payload) > maxManagedRclonePreparedAttemptRecordBytes {
+		return "", managedRclonePointLocatorV1{}, fmt.Errorf("%w: managed Rclone point locator exceeds %d bytes", backupasset.ErrInvalidState, maxManagedRclonePreparedAttemptRecordBytes)
 	}
 	return string(payload), locator, nil
 }
@@ -1355,11 +1521,63 @@ func decodeManagedRclonePointLocator(payload string) (managedRclonePointLocatorV
 	if err := validateManagedRclonePointLocator(locator); err != nil {
 		return managedRclonePointLocatorV1{}, err
 	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(payload), &members); err != nil {
+		return managedRclonePointLocatorV1{}, fmt.Errorf("%w: invalid managed Rclone point locator members", backupasset.ErrInvalidState)
+	}
+	if err := validateManagedRclonePointLocatorWireMembers(members, locator); err != nil {
+		return managedRclonePointLocatorV1{}, err
+	}
 	return locator, nil
 }
 
+func validateManagedRclonePointLocatorWireMembers(
+	members map[string]json.RawMessage,
+	locator managedRclonePointLocatorV1,
+) error {
+	reject := func(member string, version int) error {
+		return fmt.Errorf("%w: managed Rclone point locator version %d contains forbidden member %q",
+			backupasset.ErrInvalidState, version, member)
+	}
+	switch locator.Version {
+	case managedRclonePointLocatorLegacyVersion:
+		for _, member := range []string{
+			"frozen_native_version_count", "frozen_native_versions_digest",
+			"frozen_native_reference_count", "frozen_native_references_digest",
+		} {
+			if _, present := members[member]; present {
+				return reject(member, locator.Version)
+			}
+		}
+		switch locator.PublicationMode {
+		case backupasset.PublicationVersionedPrefix:
+			for _, member := range []string{
+				"native_commit_key", "native_commit_version_id", "frozen_native_versions",
+			} {
+				if _, present := members[member]; present {
+					return reject(member, locator.Version)
+				}
+			}
+		case backupasset.PublicationNativeObjectVersions:
+			if _, present := members["portable_attempt_root"]; present {
+				return reject("portable_attempt_root", locator.Version)
+			}
+		}
+	case managedRclonePointLocatorVersion:
+		for _, member := range []string{
+			"portable_attempt_root", "native_commit_key", "native_commit_version_id", "frozen_native_versions",
+		} {
+			if _, present := members[member]; present {
+				return reject(member, locator.Version)
+			}
+		}
+	}
+	return nil
+}
+
 func validateManagedRclonePointLocator(locator managedRclonePointLocatorV1) error {
-	if locator.Version != managedRclonePointLocatorVersion || locator.Provider != backupasset.ProviderRclone ||
+	if (locator.Version != managedRclonePointLocatorLegacyVersion && locator.Version != managedRclonePointLocatorVersion) ||
+		locator.Provider != backupasset.ProviderRclone ||
 		backupasset.ValidateOpaqueID(locator.RepositoryID) != nil || backupasset.ValidateOpaqueID(locator.RecoveryPointID) != nil ||
 		backupasset.ValidateOpaqueID(locator.AttemptID) != nil || !isLowerHex64(locator.ChildFenceDigest) ||
 		!isLowerHex64(locator.CommitPayloadDigest) || !isLowerHex64(locator.PhysicalIdentityDigest) ||
@@ -1384,17 +1602,44 @@ func validateManagedRclonePointLocator(locator managedRclonePointLocatorV1) erro
 	}
 	switch locator.PublicationMode {
 	case backupasset.PublicationVersionedPrefix:
-		if locator.PortableAttemptRoot == "" || locator.NativeCommitKey != "" || locator.NativeCommitVersionID != "" ||
-			commit.Portable == nil || commit.Portable.CommitPayloadDigest != locator.CommitPayloadDigest ||
-			commit.Portable.ControlIdentityDigest != locator.ManifestControlIdentity {
+		if locator.Version != managedRclonePointLocatorLegacyVersion ||
+			locator.NativeCommitKey != "" || locator.NativeCommitVersionID != "" ||
+			len(locator.FrozenNativeVersions) != 0 || locator.FrozenNativeVersionCount != 0 ||
+			locator.FrozenNativeVersionsDigest != "" || locator.FrozenNativeReferenceCount != 0 ||
+			locator.FrozenNativeReferencesDigest != "" || locator.PortableAttemptRoot == "" ||
+			commit.Native != nil || commit.Portable == nil || attempt.Portable == nil {
 			return fmt.Errorf("%w: invalid managed Rclone portable point locator", backupasset.ErrInvalidState)
 		}
+		if _, err := provider.NewRclonePrivateLocator(locator.PortableAttemptRoot); err != nil {
+			return fmt.Errorf("%w: invalid managed Rclone portable point locator root", backupasset.ErrInvalidState)
+		}
+		if attempt.Portable.AttemptMarkerDigest != commit.Portable.AttemptMarkerDigest ||
+			commit.Portable.CommitPayloadDigest != locator.CommitPayloadDigest ||
+			commit.Portable.ControlIdentityDigest != locator.ManifestControlIdentity {
+			return fmt.Errorf("%w: managed Rclone portable point locator evidence mismatch", backupasset.ErrInvalidState)
+		}
 	case backupasset.PublicationNativeObjectVersions:
-		if locator.PortableAttemptRoot != "" || locator.NativeCommitKey == "" || locator.NativeCommitVersionID == "" ||
-			commit.Native == nil || commit.Native.CommitKey != "" || commit.Native.CommitVersionID != "" ||
-			commit.Native.CommitContentDigest != locator.CommitPayloadDigest ||
-			commit.Native.ManifestControlGraphDigest != locator.ManifestControlIdentity {
+		if locator.PortableAttemptRoot != "" || commit.Portable != nil || commit.Native == nil || attempt.Native == nil ||
+			commit.Native.CommitKey != "" || commit.Native.CommitVersionID != "" {
 			return fmt.Errorf("%w: invalid managed Rclone native point locator", backupasset.ErrInvalidState)
+		}
+		if locator.Version == managedRclonePointLocatorLegacyVersion {
+			if locator.FrozenNativeVersionCount != 0 || locator.FrozenNativeVersionsDigest != "" ||
+				locator.FrozenNativeReferenceCount != 0 || locator.FrozenNativeReferencesDigest != "" {
+				return fmt.Errorf("%w: invalid managed Rclone legacy native point locator", backupasset.ErrInvalidState)
+			}
+			if _, err := managedRcloneLegacyNativeVersions(locator); err != nil {
+				return err
+			}
+		} else if locator.NativeCommitKey != "" || locator.NativeCommitVersionID != "" ||
+			len(locator.FrozenNativeVersions) != 0 || locator.FrozenNativeVersionCount == 0 ||
+			!isLowerHex64(locator.FrozenNativeVersionsDigest) ||
+			!isLowerHex64(locator.FrozenNativeReferencesDigest) {
+			return fmt.Errorf("%w: invalid managed Rclone native point locator", backupasset.ErrInvalidState)
+		}
+		if commit.Native.CommitContentDigest != locator.CommitPayloadDigest ||
+			commit.Native.ManifestControlGraphDigest != locator.ManifestControlIdentity {
+			return fmt.Errorf("%w: managed Rclone native point locator evidence mismatch", backupasset.ErrInvalidState)
 		}
 	default:
 		return fmt.Errorf("%w: invalid managed Rclone point locator mode", backupasset.ErrInvalidState)
@@ -1420,6 +1665,9 @@ func canonicalRcloneProviderCommitDigest(evidence provider.RcloneCommitV1) (stri
 func rcloneProviderCommitReplayMatches(point model.RecoveryPoint, attempt provider.RcloneAttemptV1, evidence provider.RcloneCommitV1) (bool, publication.Outcome, error) {
 	consistency, err := backupasset.DecodePublicationConsistency(point.ConsistencyJSON)
 	if err != nil {
+		return false, publication.Outcome{}, err
+	}
+	if err := validateRcloneDurableCapabilityEvidence(point, consistency, attempt, evidence); err != nil {
 		return false, publication.Outcome{}, err
 	}
 	digest, err := canonicalRcloneProviderCommitDigest(evidence)
@@ -1486,6 +1734,17 @@ func (service *PublicationService) rcloneMarkerKey(ctx context.Context, reposito
 		return nil, fmt.Errorf("%w: managed Rclone marker key is unavailable", backupasset.ErrInvalidState)
 	}
 	material, err := service.keyring.Ensure(ctx, backupasset.KeyDomainRecoveryCleanupOwnership)
+	if err != nil {
+		return nil, err
+	}
+	return rcloneOwnershipDigest(material.Key, "xirang.rclone.marker-key.v1", repositoryID), nil
+}
+
+func (service *PublicationService) rcloneMarkerKeyTx(ctx context.Context, tx *gorm.DB, repositoryID string) ([]byte, error) {
+	if service == nil || service.keyring == nil || tx == nil || backupasset.ValidateOpaqueID(repositoryID) != nil {
+		return nil, fmt.Errorf("%w: managed Rclone marker key is unavailable", backupasset.ErrInvalidState)
+	}
+	material, err := service.keyring.ActiveTx(ctx, tx, backupasset.KeyDomainRecoveryCleanupOwnership)
 	if err != nil {
 		return nil, err
 	}

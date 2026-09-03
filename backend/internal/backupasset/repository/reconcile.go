@@ -159,6 +159,9 @@ func (service *Service) Reconcile(ctx context.Context, repositoryID string, requ
 		service.writeAudit(ctx, requestContext, backupasset.AuditActionRepositoryReconcile, backupasset.AuditOutcomeBlocked, repositoryID, &runtime.document.TaskID, "commit", err)
 		return ConnectResult{}, err
 	}
+	if mutablePointCatalogWakeable(mutablePoint) {
+		service.requestCatalogWake()
+	}
 	result, err := connectResultFromModels(repository, mutablePoint)
 	if err != nil {
 		return ConnectResult{}, err
@@ -188,11 +191,38 @@ func sameReconcileBindingProbeLineage(snapshot, current model.RepositoryAccessBi
 		snapshot.CreatedAt.Equal(current.CreatedAt) && snapshot.UpdatedAt.Equal(current.UpdatedAt)
 }
 
+func lockAndRevalidateReconcileRepository(
+	tx *gorm.DB,
+	runtime repositoryRuntime,
+) (model.BackupRepository, error) {
+	var repository model.BackupRepository
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&repository, "id = ?", runtime.repository.ID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return model.BackupRepository{}, fmt.Errorf("%w: repository changed during reconcile probe", backupasset.ErrConflict)
+		}
+		return model.BackupRepository{}, fmt.Errorf("reload repository after reconcile probe: %w", err)
+	}
+	if !sameReconcileRepositoryProbeLineage(runtime.repository, repository) {
+		return model.BackupRepository{}, fmt.Errorf("%w: repository changed during reconcile probe", backupasset.ErrConflict)
+	}
+	return repository, nil
+}
+
 func lockAndRevalidateReconcileAuthority(
 	tx *gorm.DB,
 	runtime repositoryRuntime,
 	linkSnapshot connectTaskLinkSnapshot,
 ) (model.Task, model.BackupRepository, model.RepositoryAccessBinding, error) {
+	resticRepository := runtime.repository.ProviderKind == string(backupasset.ProviderRestic)
+	var repository model.BackupRepository
+	var err error
+	if resticRepository {
+		repository, err = lockAndRevalidateReconcileRepository(tx, runtime)
+		if err != nil {
+			return model.Task{}, model.BackupRepository{}, model.RepositoryAccessBinding{}, err
+		}
+	}
+
 	currentTask, err := lockAndRevalidateConnectTask(tx, runtime.task)
 	if err != nil {
 		return model.Task{}, model.BackupRepository{}, model.RepositoryAccessBinding{}, err
@@ -200,19 +230,15 @@ func lockAndRevalidateReconcileAuthority(
 	if err := lockAndRevalidateConnectTaskLink(tx, currentTask.ID, linkSnapshot); err != nil {
 		return model.Task{}, model.BackupRepository{}, model.RepositoryAccessBinding{}, err
 	}
-	var repository model.BackupRepository
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&repository, "id = ?", runtime.repository.ID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return model.Task{}, model.BackupRepository{}, model.RepositoryAccessBinding{}, fmt.Errorf("%w: repository changed during reconcile probe", backupasset.ErrConflict)
+	if !resticRepository {
+		repository, err = lockAndRevalidateReconcileRepository(tx, runtime)
+		if err != nil {
+			return model.Task{}, model.BackupRepository{}, model.RepositoryAccessBinding{}, err
 		}
-		return model.Task{}, model.BackupRepository{}, model.RepositoryAccessBinding{}, fmt.Errorf("reload repository after reconcile probe: %w", err)
-	}
-	if !sameReconcileRepositoryProbeLineage(runtime.repository, repository) {
-		return model.Task{}, model.BackupRepository{}, model.RepositoryAccessBinding{}, fmt.Errorf("%w: repository changed during reconcile probe", backupasset.ErrConflict)
 	}
 	var binding model.RepositoryAccessBinding
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("id = ? AND repository_id = ? AND status = ?", runtime.binding.ID, runtime.repository.ID, bindingStatusActive).
+		Where("id = ? AND repository_id = ? AND status = ?", runtime.binding.ID, repository.ID, bindingStatusActive).
 		First(&binding).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return model.Task{}, model.BackupRepository{}, model.RepositoryAccessBinding{}, fmt.Errorf("%w: active repository binding changed during reconcile probe", backupasset.ErrConflict)
@@ -299,18 +325,27 @@ func (service *Service) Disconnect(ctx context.Context, repositoryID string, req
 }
 
 func (service *Service) loadRepositoryRuntime(ctx context.Context, repositoryID string) (repositoryRuntime, error) {
-	if backupasset.ValidateOpaqueID(repositoryID) != nil {
+	return service.loadRepositoryRuntimeTx(ctx, service.db, repositoryID)
+}
+
+func (service *Service) loadRepositoryRuntimeTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	repositoryID string,
+) (repositoryRuntime, error) {
+	if service == nil || tx == nil || backupasset.ValidateOpaqueID(repositoryID) != nil {
 		return repositoryRuntime{}, fmt.Errorf("%w: repository", backupasset.ErrNotFound)
 	}
 	var repository model.BackupRepository
-	if err := service.db.WithContext(ctx).First(&repository, "id = ?", repositoryID).Error; err != nil {
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&repository, "id = ?", repositoryID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return repositoryRuntime{}, fmt.Errorf("%w: repository", backupasset.ErrNotFound)
 		}
 		return repositoryRuntime{}, fmt.Errorf("load repository runtime: %w", err)
 	}
 	var binding model.RepositoryAccessBinding
-	if err := service.db.WithContext(ctx).Where("repository_id = ? AND status = ?", repositoryID, bindingStatusActive).First(&binding).Error; err != nil {
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("repository_id = ? AND status = ?", repositoryID, bindingStatusActive).First(&binding).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return repositoryRuntime{}, fmt.Errorf("%w: active repository binding", backupasset.ErrConflict)
 		}
@@ -321,7 +356,7 @@ func (service *Service) loadRepositoryRuntime(ctx context.Context, repositoryID 
 		return repositoryRuntime{}, err
 	}
 	var taskEntity model.Task
-	if err := service.db.WithContext(ctx).Preload("Node.SSHKey").First(&taskEntity, document.TaskID).Error; err != nil {
+	if err := tx.WithContext(ctx).Preload("Node.SSHKey").Clauses(clause.Locking{Strength: "UPDATE"}).First(&taskEntity, document.TaskID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return repositoryRuntime{}, fmt.Errorf("%w: binding Task unavailable", backupasset.ErrConflict)
 		}

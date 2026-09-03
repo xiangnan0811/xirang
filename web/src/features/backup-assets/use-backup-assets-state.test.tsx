@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api/core";
 import type {
   AssetRef,
+  AssetSearchResponse,
   BackupAsset,
   BackupAssetPage,
   BackupAssetFavorite,
@@ -15,6 +16,7 @@ import type {
   BackupRecoveryPoint,
   BackupRepository,
   SavedAssetSearch,
+  CatalogProjection,
 } from "@/types/domain";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import {
@@ -28,6 +30,7 @@ import {
 } from "./backup-assets-route-state";
 import {
   BACKUP_ASSETS_REQUEST_CHANNELS,
+  backupAssetsResultRequestKey,
   useBackupAssetsState,
   useBackupAssetsRequestCoordinator,
 } from "./use-backup-assets-state";
@@ -56,6 +59,8 @@ const {
   updateTagMock,
   getRecoveryPointEvidenceMock,
   issueTicketMock,
+  connectBackupRepositoryMock,
+  getRecoveryPointCatalogStatusMock,
 } = vi.hoisted(() => ({
   getBackupAssetMock: vi.fn(),
   addFavoriteMock: vi.fn(),
@@ -80,6 +85,8 @@ const {
   updateTagMock: vi.fn(),
   getRecoveryPointEvidenceMock: vi.fn(),
   issueTicketMock: vi.fn(),
+  connectBackupRepositoryMock: vi.fn(),
+  getRecoveryPointCatalogStatusMock: vi.fn(),
 }));
 
 vi.mock("@/lib/api/client", () => ({
@@ -87,6 +94,7 @@ vi.mock("@/lib/api/client", () => ({
     addFavorite: addFavoriteMock,
     assignTag: assignTagMock,
     clearRecent: clearRecentMock,
+    connectBackupRepository: connectBackupRepositoryMock,
     createSavedSearch: createSavedSearchMock,
     createTag: createTagMock,
     deleteSavedSearch: deleteSavedSearchMock,
@@ -94,6 +102,7 @@ vi.mock("@/lib/api/client", () => ({
     diffRecoveryPoints: diffRecoveryPointsMock,
     getBackupAsset: getBackupAssetMock,
     getRecoveryPoint: getRecoveryPointMock,
+    getRecoveryPointCatalogStatus: getRecoveryPointCatalogStatusMock,
     getRecoveryPointEvidence: getRecoveryPointEvidenceMock,
     issueTicket: issueTicketMock,
     listBackupAssets: listBackupAssetsMock,
@@ -332,6 +341,47 @@ const recoveryPoint: BackupRecoveryPoint = {
   },
 };
 
+function readyCatalogStatus() {
+  if (recoveryPoint.catalog.status !== "available") {
+    throw new Error("synthetic recovery point must expose Catalog status");
+  }
+  return {
+    status: "available" as const,
+    value: {
+      ...recoveryPoint.catalog.value,
+      generation: {
+        id: "3".repeat(32),
+        sequence: 1,
+        state: "complete" as const,
+        startedAt: "2026-07-19T00:00:00Z",
+        finishedAt: "2026-07-19T00:00:01Z",
+        errorCode: "" as const,
+        correlationId: "",
+      },
+    },
+  };
+}
+
+function staleCatalogStatus(latestBuildState: "building" | "failed" | "partial") {
+  const ready = readyCatalogStatus();
+  return {
+    status: "available" as const,
+    value: {
+      ...ready.value,
+      staleness: { status: "stale" as const, observedAt: "2026-07-19T00:06:00Z", reason: null },
+      latestBuild: {
+        id: "4".repeat(32),
+        sequence: 2,
+        state: latestBuildState,
+        startedAt: "2026-07-19T00:06:00Z",
+        finishedAt: latestBuildState === "building" ? null : "2026-07-19T00:06:01Z",
+        errorCode: (latestBuildState === "failed" ? "catalog_build_failed" : "") as "catalog_build_failed" | "",
+        correlationId: "",
+      },
+    },
+  };
+}
+
 const asset: BackupAsset = {
   ref: { recoveryPointId: recoveryPoint.id, entryId: "c".repeat(64) },
   parentRef: null,
@@ -406,6 +456,9 @@ describe("useBackupAssetsState", () => {
     getRecoveryPointMock.mockResolvedValue({ status: "available", value: recoveryPoint });
     getRecoveryPointEvidenceMock.mockReset();
     issueTicketMock.mockReset();
+    connectBackupRepositoryMock.mockReset();
+    getRecoveryPointCatalogStatusMock.mockReset();
+    getRecoveryPointCatalogStatusMock.mockResolvedValue(readyCatalogStatus());
     listBackupAssetsMock.mockReset();
     listBackupRepositoriesMock.mockReset();
     listFavoritesMock.mockReset();
@@ -1113,14 +1166,14 @@ describe("useBackupAssetsState", () => {
     };
     const { result } = renderHook(() => useBackupAssetsState({ token: "test-token", route }));
 
-    act(() => result.current.actions.setSearchDraft("synthetic term"));
+    act(() => result.current.actions.executeSearch("synthetic term"));
     await waitFor(() => expect(result.current.state.result.status).toBe("ready"));
     expect(searchMock).toHaveBeenCalledWith(
       "test-token",
       expect.objectContaining({
         query: expect.objectContaining({
           schemaVersion: 1,
-          root: { op: "term", field: "any", text: "synthetic term" },
+          root: nameOrPathRoot("synthetic term"),
           scope: {
             mode: "exact_points",
             repositoryIds: [],
@@ -1133,7 +1186,116 @@ describe("useBackupAssetsState", () => {
       })
     );
     expect(result.current.state.searchDraft).toBe("synthetic term");
+    expect(result.current.state.submittedSearchQuery).toBe("synthetic term");
   });
+
+  it("searches filenames with metadata name so docker matches docker-compose.yml without content coverage", async () => {
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    const compose = { ...asset, name: "docker-compose.yml" };
+    searchMock.mockResolvedValue({
+      status: "available",
+      value: {
+        queryGeneration: "f".repeat(64),
+        indexes: [],
+        items: [{ ref: compose.ref, asset: compose, hitFields: ["name"], score: 1, snippet: null }],
+        nextCursor: null,
+        total: 1,
+        totalRelation: "exact",
+        authoritativeEmpty: false,
+        coverage: { status: "complete" },
+        suggestions: [],
+        capabilities: { metadata: true, content: false },
+        permissions: { list: true, secretReveal: false },
+      },
+    });
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      sort: "relevance" as const,
+      direction: "desc" as const,
+    };
+    const { result } = renderHook(() => useBackupAssetsState({ token: "test-token", route }));
+
+    act(() => result.current.actions.executeSearch("docker"));
+    await waitFor(() => expect(result.current.state.result.status).toBe("ready"));
+    expect(searchMock).toHaveBeenCalledWith(
+      "test-token",
+      expect.objectContaining({
+        query: expect.objectContaining({
+          root: nameOrPathRoot("docker"),
+        }),
+      }),
+    );
+    expect(result.current.state.result).toMatchObject({
+      coverage: "complete",
+      rows: [expect.objectContaining({ asset: expect.objectContaining({ name: "docker-compose.yml" }) })],
+    });
+  });
+
+  it("searches directory path segments with metadata name-or-path so a path-only hit stays complete", async () => {
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    const statement = { ...asset, name: "statement.txt" };
+    searchMock.mockResolvedValue({
+      status: "available",
+      value: {
+        queryGeneration: "f".repeat(64),
+        indexes: [],
+        items: [{ ref: statement.ref, asset: statement, hitFields: ["path"], score: 1, snippet: null }],
+        nextCursor: null,
+        total: 1,
+        totalRelation: "exact",
+        authoritativeEmpty: false,
+        coverage: { status: "complete" },
+        suggestions: [],
+        capabilities: { metadata: true, content: false },
+        permissions: { list: true, secretReveal: false },
+      },
+    });
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      sort: "relevance" as const,
+      direction: "desc" as const,
+    };
+    const { result } = renderHook(() => useBackupAssetsState({ token: "test-token", route }));
+
+    act(() => result.current.actions.executeSearch("payables"));
+    await waitFor(() => expect(result.current.state.result.status).toBe("ready"));
+    expect(searchMock).toHaveBeenCalledWith(
+      "test-token",
+      expect.objectContaining({
+        query: expect.objectContaining({
+          root: nameOrPathRoot("payables"),
+        }),
+      }),
+    );
+    expect(result.current.state.result).toMatchObject({
+      coverage: "complete",
+      rows: [expect.objectContaining({
+        asset: expect.objectContaining({ name: "statement.txt" }),
+        hitFields: ["path"],
+      })],
+    });
+  });
+
 
   it("executes a type-only current-point search without inventing query text", async () => {
     listBackupRepositoriesMock.mockResolvedValue({
@@ -1184,6 +1346,794 @@ describe("useBackupAssetsState", () => {
     );
     expect(result.current.state.searchDraft).toBe("");
   });
+
+  it("ands a name-or-path term with the selected type filter", async () => {
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    searchMock.mockResolvedValue(availableSearchProjection(null));
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      types: ["file" as const],
+      sort: "relevance" as const,
+      direction: "desc" as const,
+    };
+    const { result } = renderHook(() => useBackupAssetsState({ token: "test-token", route }));
+
+    await waitFor(() => expect(searchMock).toHaveBeenCalled());
+    searchMock.mockClear();
+    act(() => result.current.actions.executeSearch("payables"));
+    await waitFor(() => expect(searchMock).toHaveBeenCalled());
+    expect(searchMock).toHaveBeenCalledWith(
+      "test-token",
+      expect.objectContaining({
+        query: expect.objectContaining({
+          root: {
+            op: "and",
+            children: [
+              nameOrPathRoot("payables"),
+              { op: "type", values: ["file"] },
+            ],
+          },
+        }),
+      }),
+    );
+  });
+
+  it("includes node, backup set, and task identity in the result request key", () => {
+    const base = {
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      nodeId: 3,
+      backupSetId: "1".repeat(32),
+      taskId: 7,
+    };
+    expect(backupAssetsResultRequestKey(base)).not.toEqual(
+      backupAssetsResultRequestKey({ ...base, nodeId: 4 })
+    );
+    expect(backupAssetsResultRequestKey(base)).not.toEqual(
+      backupAssetsResultRequestKey({ ...base, backupSetId: "2".repeat(32) })
+    );
+    expect(backupAssetsResultRequestKey(base)).not.toEqual(
+      backupAssetsResultRequestKey({ ...base, taskId: 8 })
+    );
+  });
+
+  it("does not commit a previous node's search response after the source context changes", async () => {
+    const first = deferred<CatalogProjection<AssetSearchResponse>>();
+    const composeAsset = {
+      ...asset,
+      name: "docker-compose.yml",
+      ref: { ...asset.ref, entryId: "d".repeat(64) },
+    };
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    listBackupAssetsMock.mockResolvedValue({
+      items: [{ status: "available", value: composeAsset }],
+      nextCursor: null,
+      directory: rootDirectoryContext(),
+    });
+    searchMock.mockImplementationOnce(() => first.promise);
+    const initialRoute = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      nodeId: 3,
+      backupSetId: "1".repeat(32),
+      taskId: 7,
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      sort: "relevance" as const,
+      direction: "desc" as const,
+    };
+    const { result, rerender } = renderHook(
+      ({ route }) => useBackupAssetsState({ token: "test-token", route }),
+      { initialProps: { route: initialRoute } }
+    );
+
+    act(() => result.current.actions.executeSearch("docker"));
+    rerender({
+      route: { ...initialRoute, nodeId: 4, backupSetId: "2".repeat(32), taskId: 8 },
+    });
+    await act(async () => {
+      first.resolve(availableSearchProjection(null));
+      await first.promise;
+    });
+
+    expect(result.current.state.result.rows).toEqual([]);
+    expect(result.current.state.result.status).not.toBe("ready");
+  });
+
+  it("clears a docker search and restores directory rows on the selected recovery point", async () => {
+    const composeAsset = {
+      ...asset,
+      name: "docker-compose.yml",
+      ref: { ...asset.ref, entryId: "d".repeat(64) },
+    };
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    listBackupAssetsMock.mockResolvedValue({
+      items: [{ status: "available", value: composeAsset }],
+      nextCursor: null,
+      directory: rootDirectoryContext(),
+    });
+    searchMock.mockRejectedValue(new ApiError(503, "raw index unavailable", null));
+    const browseRoute = {
+      ...defaultBackupAssetsRouteState("data"),
+      nodeId: 3,
+      backupSetId: "1".repeat(32),
+      taskId: 7,
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+    };
+    const { result, rerender } = renderHook(
+      ({ route }) => useBackupAssetsState({ token: "test-token", route }),
+      { initialProps: { route: browseRoute } }
+    );
+
+    await waitFor(() => expect(result.current.state.result.rows).toEqual([
+      expect.objectContaining({ asset: expect.objectContaining({ name: "docker-compose.yml" }) }),
+    ]));
+
+    rerender({
+      route: {
+        ...browseRoute,
+        view: "search" as const,
+        sort: "relevance" as const,
+        direction: "desc" as const,
+      },
+    });
+    act(() => result.current.actions.executeSearch("docker"));
+    await waitFor(() => expect(result.current.state.result.status).toBe("failed"));
+    expect(result.current.state.result.error?.translationKey).toBe("backupAssets.errors.temporarilyUnavailable");
+    expect(result.current.state.submittedSearchQuery).toBe("docker");
+
+    act(() => result.current.actions.clearSearch());
+    expect(result.current.state.submittedSearchQuery).toBeNull();
+    expect(result.current.state.result.rows).toEqual([]);
+
+    rerender({ route: browseRoute });
+    await waitFor(() => expect(result.current.state.result.rows).toEqual([
+      expect.objectContaining({ asset: expect.objectContaining({ name: "docker-compose.yml" }) }),
+    ]));
+  });
+
+  it("paginates and recovers a stale cursor from the submitted query snapshot", async () => {
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    searchMock
+      .mockResolvedValueOnce(availableSearchProjection("stale-cursor"))
+      .mockRejectedValueOnce(new ApiError(409, "raw stale cursor", { code: 409 }))
+      .mockResolvedValueOnce(availableSearchProjection(null));
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      sort: "relevance" as const,
+      direction: "desc" as const,
+    };
+    const { result } = renderHook(() => useBackupAssetsState({ token: "test-token", route }));
+
+    act(() => result.current.actions.executeSearch("docker"));
+    await waitFor(() => expect(result.current.state.result.nextCursor).toBe("stale-cursor"));
+    act(() => result.current.actions.setSearchDraft("compose"));
+    act(() => result.current.actions.loadMore());
+    await waitFor(() => expect(searchMock).toHaveBeenCalledTimes(3));
+    expect(searchMock.mock.calls[1]?.[1]).toEqual(expect.objectContaining({
+      query: expect.objectContaining({
+        root: nameOrPathRoot("docker"),
+        cursor: "stale-cursor",
+      }),
+    }));
+    expect(searchMock.mock.calls[2]?.[1]).toEqual(expect.objectContaining({
+      query: expect.objectContaining({
+        root: nameOrPathRoot("docker"),
+        cursor: null,
+      }),
+    }));
+    expect(result.current.state.searchDraft).toBe("compose");
+    expect(result.current.state.submittedSearchQuery).toBe("docker");
+  });
+
+  it("defers temporary execution until the saved route is no longer active", async () => {
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    searchMock.mockResolvedValue(availableSearchProjection(null));
+    const savedSearchId = "e".repeat(32);
+    const savedRoute: BackupAssetsRouteState = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      savedSearchId,
+      sort: "relevance" as const,
+      direction: "desc" as const,
+    };
+    const { result, rerender } = renderHook(
+      ({ route }) => useBackupAssetsState({ token: "test-token", route }),
+      { initialProps: { route: savedRoute } },
+    );
+
+    await waitFor(() => expect(searchMock).toHaveBeenCalledWith(
+      "test-token",
+      expect.objectContaining({ savedSearchId, signal: expect.any(AbortSignal) }),
+    ));
+    searchMock.mockClear();
+    act(() => result.current.actions.executeSearch("docker", "current"));
+    expect(searchMock).not.toHaveBeenCalled();
+    expect(result.current.state.submittedSearchQuery).toBe("docker");
+
+    rerender({
+      route: {
+        ...defaultBackupAssetsRouteState("data"),
+        view: "search" as const,
+        repositoryId: repository.id,
+        recoveryPointId: recoveryPoint.id,
+        sort: "relevance" as const,
+        direction: "desc" as const,
+      },
+    });
+    await waitFor(() => expect(searchMock).toHaveBeenCalledWith(
+      "test-token",
+      expect.objectContaining({
+        query: expect.objectContaining({
+          root: nameOrPathRoot("docker"),
+          scope: expect.objectContaining({
+            mode: "exact_points",
+            recoveryPointIds: [recoveryPoint.id],
+          }),
+        }),
+      }),
+    ));
+  });
+
+  it("retains prior search rows and retries the exact cursor after a page failure", async () => {
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    searchMock
+      .mockResolvedValueOnce(availableSearchProjection("exact-cursor"))
+      .mockRejectedValueOnce(new ApiError(503, "raw index unavailable", null))
+      .mockResolvedValueOnce(availableSearchProjection(null));
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      sort: "relevance" as const,
+      direction: "desc" as const,
+    };
+    const { result } = renderHook(() => useBackupAssetsState({ token: "test-token", route }));
+
+    act(() => result.current.actions.executeSearch("docker"));
+    await waitFor(() => expect(result.current.state.result.nextCursor).toBe("exact-cursor"));
+    const firstPageRows = result.current.state.result.rows;
+    expect(firstPageRows.length).toBeGreaterThan(0);
+    act(() => result.current.actions.loadMore());
+    await waitFor(() => expect(result.current.state.result.status).toBe("failed"));
+    expect(result.current.state.result.rows).toEqual(firstPageRows);
+    expect(result.current.state.result.nextCursor).toBe("exact-cursor");
+
+    act(() => result.current.actions.loadMore());
+    await waitFor(() => expect(result.current.state.result.status).toBe("ready"));
+    expect(searchMock.mock.calls[1]?.[1]).toEqual(expect.objectContaining({
+      query: expect.objectContaining({ cursor: "exact-cursor" }),
+    }));
+    expect(searchMock.mock.calls[2]?.[1]).toEqual(expect.objectContaining({
+      query: expect.objectContaining({ cursor: "exact-cursor" }),
+    }));
+  });
+
+  it("retries a first-page temporary search failure through refreshResults", async () => {
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    searchMock
+      .mockRejectedValueOnce(new ApiError(503, "raw index unavailable", null))
+      .mockResolvedValueOnce(availableSearchProjection(null));
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      sort: "relevance" as const,
+      direction: "desc" as const,
+    };
+    const { result } = renderHook(() => useBackupAssetsState({ token: "test-token", route }));
+
+    act(() => result.current.actions.executeSearch("docker"));
+    await waitFor(() => expect(result.current.state.result.status).toBe("failed"));
+    act(() => result.current.actions.refreshResults());
+    await waitFor(() => expect(result.current.state.result.status).toBe("ready"));
+    expect(searchMock).toHaveBeenCalledTimes(2);
+    expect(result.current.state.submittedSearchQuery).toBe("docker");
+  });
+  it("reloads the active result when the global refresh generation advances", async () => {
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    listBackupAssetsMock.mockResolvedValue({
+      items: [{ status: "available", value: asset }],
+      nextCursor: null,
+      directory: rootDirectoryContext(),
+    });
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+    };
+    const { result, rerender } = renderHook(
+      ({ refreshVersion }) => useBackupAssetsState({ token: "test-token", route, refreshVersion }),
+      { initialProps: { refreshVersion: 0 } }
+    );
+    await waitFor(() => expect(result.current.state.result.rows).toHaveLength(1));
+    listBackupAssetsMock.mockClear();
+    listBackupAssetsMock.mockResolvedValue({
+      items: [{ status: "available", value: asset }],
+      nextCursor: null,
+      directory: rootDirectoryContext(),
+    });
+    rerender({ refreshVersion: 1 });
+    await waitFor(() => expect(listBackupAssetsMock).toHaveBeenCalled());
+    expect(listBackupAssetsMock.mock.calls.at(-1)?.[2]).not.toHaveProperty("cursor");
+    expect(listBackupRepositoriesMock).toHaveBeenCalledTimes(2);
+    expect(listRecoveryPointsMock).toHaveBeenCalledTimes(2);
+    expect(getRecoveryPointMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("derives browse coverage only after the selected recovery point is refreshed", async () => {
+    if (recoveryPoint.catalog.status !== "available") {
+      throw new Error("synthetic recovery point must expose Catalog status");
+    }
+    const partialPoint: BackupRecoveryPoint = {
+      ...recoveryPoint,
+      catalog: {
+        status: "available",
+        value: {
+          ...recoveryPoint.catalog.value,
+          coverage: {
+            ...recoveryPoint.catalog.value.coverage,
+            status: "partial",
+            indexedEntries: 1,
+            expectedEntries: 4,
+          },
+        },
+      },
+    };
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: recoveryPoint }],
+      nextCursor: null,
+    });
+    listBackupAssetsMock.mockResolvedValue({
+      items: [{ status: "available", value: asset }],
+      nextCursor: null,
+      directory: rootDirectoryContext(),
+    });
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+    };
+    const { result, rerender } = renderHook(
+      ({ refreshVersion }) => useBackupAssetsState({ token: "test-token", route, refreshVersion }),
+      { initialProps: { refreshVersion: 0 } },
+    );
+    await waitFor(() => expect(result.current.state.result.coverage).toBe("complete"));
+
+    const pointRefresh = deferred<{ status: "available"; value: BackupRecoveryPoint }>();
+    listBackupRepositoriesMock.mockResolvedValue({
+      items: [{ status: "available", value: repository }],
+      nextCursor: null,
+    });
+    listRecoveryPointsMock.mockResolvedValue({
+      items: [{ status: "available", value: partialPoint }],
+      nextCursor: null,
+    });
+    getRecoveryPointMock.mockReturnValue(pointRefresh.promise);
+    listBackupAssetsMock.mockClear();
+    rerender({ refreshVersion: 1 });
+
+    await waitFor(() => expect(getRecoveryPointMock).toHaveBeenCalledTimes(2));
+    expect(listBackupAssetsMock).not.toHaveBeenCalled();
+    expect(result.current.state.result.status).toBe("loading");
+
+    await act(async () => {
+      pointRefresh.resolve({ status: "available", value: partialPoint });
+    });
+    await waitFor(() => expect(listBackupAssetsMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(result.current.state.result.coverage).toBe("partial"));
+    expect(result.current.selectedRecoveryPoint?.catalog).toEqual(partialPoint.catalog);
+  });
+
+
+  it("repairs a source-open failure by refreshing the exact producing task then reissuing once", async () => {
+    prepareSelectedAssetRequests(asset);
+    connectBackupRepositoryMock.mockResolvedValue({
+      status: "available",
+      value: { repository, mutablePoint: recoveryPoint },
+    });
+    issueTicketMock
+      .mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
+        code: 503,
+        message: "raw provider /private/path",
+        data: { reason: { code: "preview_source_open_failed", params: {} }, correlation_id: "safe-correlation" },
+      }))
+      .mockResolvedValueOnce({ status: "available", value: buildContentTicket("plain_text") });
+
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "admin",
+      route: selectedAssetRoute(asset),
+    }));
+
+    await waitFor(() => expect(result.current.content.status).toBe("error"));
+    expect(result.current.content.error?.sourceStage).toBe("open");
+    act(() => result.current.actions.retryPreview());
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(connectBackupRepositoryMock).toHaveBeenCalledTimes(1);
+    expect(connectBackupRepositoryMock).toHaveBeenCalledWith(
+      "test-token",
+      { taskId: 7 },
+      expect.any(AbortSignal)
+    );
+    expect(issueTicketMock).toHaveBeenCalledTimes(2);
+    expect(getRecoveryPointCatalogStatusMock).toHaveBeenCalledWith(
+      "test-token",
+      recoveryPoint.id,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("does not connect a different task when an operator retries a source-open failure", async () => {
+    prepareSelectedAssetRequests(asset);
+    issueTicketMock
+      .mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
+        code: 503,
+        message: "raw provider /private/path",
+        data: { reason: { code: "preview_source_open_failed", params: {} }, correlation_id: "safe-correlation" },
+      }))
+      .mockResolvedValueOnce({ status: "available", value: buildContentTicket("plain_text") });
+
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "operator",
+      route: selectedAssetRoute(asset),
+    }));
+
+    await waitFor(() => expect(result.current.content.status).toBe("error"));
+    act(() => result.current.actions.retryPreview());
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(connectBackupRepositoryMock).not.toHaveBeenCalled();
+    expect(issueTicketMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reissues a repaired preview only after the exact recovery point catalog is ready", async () => {
+    prepareSelectedAssetRequests(asset);
+    const otherPointId = "9".repeat(32);
+    connectBackupRepositoryMock.mockResolvedValue({
+      status: "available",
+      value: { repository, mutablePoint: { ...recoveryPoint, id: otherPointId } },
+    });
+    const building = {
+      ...readyCatalogStatus(),
+      value: {
+        ...readyCatalogStatus().value,
+        generation: { ...readyCatalogStatus().value.generation!, state: "building" as const, finishedAt: null },
+        coverage: { ...readyCatalogStatus().value.coverage, status: "building" as const },
+        contentAvailability: { available: false, reason: null },
+      },
+    };
+    getRecoveryPointCatalogStatusMock
+      .mockResolvedValueOnce(building)
+      .mockResolvedValueOnce(readyCatalogStatus());
+    issueTicketMock
+      .mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
+        code: 503,
+        message: "raw provider /private/path",
+        data: { reason: { code: "preview_source_open_failed", params: {} }, correlation_id: "safe-correlation" },
+      }))
+      .mockResolvedValueOnce({ status: "available", value: buildContentTicket("plain_text") });
+
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "admin",
+      route: selectedAssetRoute(asset),
+    }));
+    await waitFor(() => expect(result.current.content.status).toBe("error"));
+    vi.useFakeTimers();
+    act(() => result.current.actions.retryPreview());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.content.status).toBe("loading");
+    expect(getRecoveryPointCatalogStatusMock).toHaveBeenCalledWith(
+      "test-token",
+      recoveryPoint.id,
+      expect.any(AbortSignal),
+    );
+    expect(getRecoveryPointCatalogStatusMock).not.toHaveBeenCalledWith(
+      "test-token",
+      otherPointId,
+      expect.any(AbortSignal),
+    );
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    vi.useRealTimers();
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(issueTicketMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails a source repair honestly when exact catalog readiness times out", async () => {
+    prepareSelectedAssetRequests(asset);
+    connectBackupRepositoryMock.mockResolvedValue({
+      status: "available",
+      value: { repository, mutablePoint: recoveryPoint },
+    });
+    getRecoveryPointCatalogStatusMock.mockImplementation(() => new Promise(() => undefined));
+    issueTicketMock.mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
+      code: 503,
+      message: "raw provider /private/path",
+      data: { reason: { code: "preview_source_open_failed", params: {} }, correlation_id: "safe-correlation" },
+    }));
+
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "admin",
+      route: selectedAssetRoute(asset),
+    }));
+    await waitFor(() => expect(result.current.content.status).toBe("error"));
+    vi.useFakeTimers();
+    act(() => result.current.actions.retryPreview());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.content.status).toBe("loading");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    vi.useRealTimers();
+    await waitFor(() => expect(result.current.content.status).toBe("error"));
+    expect(result.current.content.error?.retryable).toBe(true);
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts source-repair catalog polling when the preview selection changes", async () => {
+    prepareSelectedAssetRequests(asset);
+    connectBackupRepositoryMock.mockResolvedValue({
+      status: "available",
+      value: { repository, mutablePoint: recoveryPoint },
+    });
+    let catalogSignal: AbortSignal | undefined;
+    getRecoveryPointCatalogStatusMock.mockImplementation((...args: unknown[]) => {
+      catalogSignal = args[2] as AbortSignal;
+      return new Promise(() => undefined);
+    });
+    issueTicketMock.mockRejectedValue(new ApiError(503, "raw provider /private/path", {
+      code: 503,
+      message: "raw provider /private/path",
+      data: { reason: { code: "preview_source_open_failed", params: {} }, correlation_id: "safe-correlation" },
+    }));
+    const initialRoute = selectedAssetRoute(asset);
+    const { result, rerender } = renderHook(
+      ({ route, token }) => useBackupAssetsState({ token, role: "admin", route }),
+      { initialProps: { route: initialRoute, token: "test-token" } },
+    );
+    await waitFor(() => expect(result.current.content.status).toBe("error"));
+    act(() => result.current.actions.retryPreview());
+    await waitFor(() => expect(catalogSignal).toBeInstanceOf(AbortSignal));
+    expect(catalogSignal?.aborted).toBe(false);
+
+    rerender({ route: { ...initialRoute, entryId: "d".repeat(64) }, token: "test-token" });
+    await waitFor(() => expect(catalogSignal?.aborted).toBe(true));
+    expect(issueTicketMock.mock.calls.every((call) => call[1]?.entryId === asset.ref.entryId)).toBe(true);
+  });
+
+  it("waits through a stale complete catalog while latestBuild is building before reissuing", async () => {
+    prepareSelectedAssetRequests(asset);
+    connectBackupRepositoryMock.mockResolvedValue({
+      status: "available",
+      value: { repository, mutablePoint: recoveryPoint },
+    });
+    getRecoveryPointCatalogStatusMock
+      .mockResolvedValueOnce(staleCatalogStatus("building"))
+      .mockResolvedValueOnce(readyCatalogStatus());
+    issueTicketMock
+      .mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
+        code: 503,
+        message: "raw provider /private/path",
+        data: { reason: { code: "preview_source_open_failed", params: {} }, correlation_id: "safe-correlation" },
+      }))
+      .mockResolvedValueOnce({ status: "available", value: buildContentTicket("plain_text") });
+
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "admin",
+      route: selectedAssetRoute(asset),
+    }));
+    await waitFor(() => expect(result.current.content.status).toBe("error"));
+    vi.useFakeTimers();
+    act(() => result.current.actions.retryPreview());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.content.status).toBe("loading");
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    vi.useRealTimers();
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(issueTicketMock).toHaveBeenCalledTimes(2);
+    expect(connectBackupRepositoryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails a source repair honestly when a stale catalog latestBuild is failed", async () => {
+    prepareSelectedAssetRequests(asset);
+    connectBackupRepositoryMock.mockResolvedValue({
+      status: "available",
+      value: { repository, mutablePoint: recoveryPoint },
+    });
+    getRecoveryPointCatalogStatusMock.mockResolvedValue(staleCatalogStatus("failed"));
+    issueTicketMock.mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
+      code: 503,
+      message: "raw provider /private/path",
+      data: { reason: { code: "preview_source_open_failed", params: {} }, correlation_id: "safe-correlation" },
+    }));
+
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "admin",
+      route: selectedAssetRoute(asset),
+    }));
+    await waitFor(() => expect(result.current.content.status).toBe("error"));
+    act(() => result.current.actions.retryPreview());
+    await waitFor(() => expect(result.current.content.status).toBe("error"));
+    expect(result.current.content.error?.retryable).toBe(true);
+    expect(connectBackupRepositoryMock).toHaveBeenCalledTimes(1);
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("repairs a source-open failure with the last exact point while the recovery point is refreshing", async () => {
+    prepareSelectedAssetRequests(asset);
+    connectBackupRepositoryMock.mockResolvedValue({
+      status: "available",
+      value: { repository, mutablePoint: recoveryPoint },
+    });
+    issueTicketMock
+      .mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
+        code: 503,
+        message: "raw provider /private/path",
+        data: { reason: { code: "preview_source_open_failed", params: {} }, correlation_id: "safe-correlation" },
+      }))
+      .mockResolvedValueOnce({ status: "available", value: buildContentTicket("plain_text") });
+
+    const { result, rerender } = renderHook(
+      ({ refreshVersion }) => useBackupAssetsState({
+        token: "test-token",
+        role: "admin",
+        route: selectedAssetRoute(asset),
+        refreshVersion,
+      }),
+      { initialProps: { refreshVersion: 0 } },
+    );
+    await waitFor(() => expect(result.current.content.status).toBe("error"));
+    expect(result.current.selectedRecoveryPoint).not.toBeNull();
+
+    const pointRefresh = deferred<{ status: "available"; value: BackupRecoveryPoint }>();
+    getRecoveryPointMock.mockReturnValue(pointRefresh.promise);
+    rerender({ refreshVersion: 1 });
+    await waitFor(() => expect(result.current.selectedRecoveryPoint).toBeNull());
+    expect(result.current.content.status).toBe("error");
+
+    act(() => result.current.actions.retryPreview());
+    await waitFor(() => expect(connectBackupRepositoryMock).toHaveBeenCalledTimes(1));
+    expect(connectBackupRepositoryMock).toHaveBeenCalledWith(
+      "test-token",
+      { taskId: 7 },
+      expect.any(AbortSignal),
+    );
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(issueTicketMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      pointRefresh.resolve({ status: "available", value: recoveryPoint });
+    });
+  });
+
+  it("does not reissue a failing ticket while exact recovery-point context is still loading", async () => {
+    prepareSelectedAssetRequests(asset);
+    const pointWithoutTask: BackupRecoveryPoint = {
+      ...recoveryPoint,
+      lineage: { producingTaskRunId: 21 },
+    };
+    getRecoveryPointMock.mockResolvedValue({ status: "available", value: pointWithoutTask });
+    issueTicketMock.mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
+      code: 503,
+      message: "raw provider /private/path",
+      data: { reason: { code: "preview_source_open_failed", params: {} }, correlation_id: "safe-correlation" },
+    }));
+
+    const { result, rerender } = renderHook(
+      ({ refreshVersion }) => useBackupAssetsState({
+        token: "test-token",
+        role: "admin",
+        route: selectedAssetRoute(asset),
+        refreshVersion,
+      }),
+      { initialProps: { refreshVersion: 0 } },
+    );
+    await waitFor(() => expect(result.current.content.status).toBe("error"));
+
+    const pointRefresh = deferred<{ status: "available"; value: BackupRecoveryPoint }>();
+    getRecoveryPointMock.mockReturnValue(pointRefresh.promise);
+    rerender({ refreshVersion: 1 });
+    await waitFor(() => expect(result.current.selectedRecoveryPoint).toBeNull());
+
+    act(() => result.current.actions.retryPreview());
+    expect(connectBackupRepositoryMock).not.toHaveBeenCalled();
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+    expect(result.current.content.status).toBe("error");
+
+    await act(async () => {
+      pointRefresh.resolve({ status: "available", value: recoveryPoint });
+    });
+  });
+
+
 
   it("reports a truthful unavailable state for a favorite filter the search API cannot express", async () => {
     listBackupRepositoriesMock.mockResolvedValue({
@@ -1564,6 +2514,83 @@ describe("useBackupAssetsState", () => {
       "test-token",
       savedSearch.id,
       updatedSearch.version,
+      expect.stringMatching(/^asset-overlay-[0-9]+-[0-9a-f]+$/),
+      expect.any(AbortSignal)
+    );
+  });
+
+  it("persists the submitted name-or-path AST when creating or updating a saved search", async () => {
+    const query: SavedAssetSearch["query"] = {
+      schemaVersion: 1,
+      root: nameOrPathRoot("payables"),
+      scope: {
+        mode: "all_retained",
+        repositoryIds: [],
+        taskIds: [],
+        recoveryPointIds: [],
+      },
+      sort: "name_asc",
+      limit: 200,
+      cursor: null,
+    };
+    const savedSearch: SavedAssetSearch = {
+      id: "5".repeat(32),
+      query,
+      version: 1,
+      state: "active",
+      stateReason: null,
+      brokenAt: null,
+      createdAt: "2026-07-19T00:00:00Z",
+      updatedAt: "2026-07-19T00:00:00Z",
+    };
+    const updatedSearch: SavedAssetSearch = {
+      ...savedSearch,
+      version: 2,
+      updatedAt: "2026-07-19T01:00:00Z",
+    };
+    listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
+    listSavedSearchesMock.mockResolvedValue({
+      status: "available",
+      value: { items: [], nextCursor: null },
+    });
+    searchMock.mockResolvedValue(availableSearchProjection(null));
+    createSavedSearchMock.mockResolvedValue({ status: "available", value: savedSearch });
+    updateSavedSearchMock.mockResolvedValue({ status: "available", value: updatedSearch });
+    const route: BackupAssetsRouteState = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search",
+      scope: "all_retained",
+    };
+    const { result } = renderHook(() => useBackupAssetsState({ token: "test-token", route }));
+
+    act(() => result.current.actions.loadOverlaySection("saved"));
+    await waitFor(() => expect(result.current.overlays.savedSearches.status).toBe("ready"));
+    act(() => result.current.actions.executeSearch("payables"));
+    await waitFor(() => expect(searchMock).toHaveBeenCalledWith(
+      "test-token",
+      expect.objectContaining({
+        query: expect.objectContaining({
+          root: nameOrPathRoot("payables"),
+          scope: expect.objectContaining({ mode: "all_retained" }),
+        }),
+      }),
+    ));
+    act(() => result.current.actions.createSavedSearch());
+    await waitFor(() => expect(result.current.overlays.savedSearches.items).toEqual([savedSearch]));
+    expect(createSavedSearchMock).toHaveBeenCalledWith(
+      "test-token",
+      query,
+      expect.stringMatching(/^asset-overlay-[0-9]+-[0-9a-f]+$/),
+      expect.any(AbortSignal)
+    );
+
+    act(() => result.current.actions.updateSavedSearch(savedSearch));
+    await waitFor(() => expect(result.current.overlays.savedSearches.items).toEqual([updatedSearch]));
+    expect(updateSavedSearchMock).toHaveBeenCalledWith(
+      "test-token",
+      savedSearch.id,
+      query,
+      savedSearch.version,
       expect.stringMatching(/^asset-overlay-[0-9]+-[0-9a-f]+$/),
       expect.any(AbortSignal)
     );
@@ -2984,6 +4011,16 @@ function availableSearchProjection(nextCursor: string | null, retainedVersionCou
       capabilities: { metadata: true, content: false },
       permissions: { list: true, secretReveal: false },
     },
+  };
+}
+
+function nameOrPathRoot(text: string) {
+  return {
+    op: "or" as const,
+    children: [
+      { op: "term" as const, field: "name" as const, text },
+      { op: "term" as const, field: "path" as const, text },
+    ],
   };
 }
 

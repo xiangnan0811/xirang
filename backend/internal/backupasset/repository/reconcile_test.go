@@ -70,6 +70,42 @@ func TestReconcileMutableKeepsSingletonAndRevisesOnlyEffectiveCapabilities(t *te
 	}
 }
 
+func TestReconcileMutableSourceRepairWakesCatalog(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	taskEntity := seedTask(t, db, "rsync", t.TempDir(), "")
+	prober := scopedObservationProber(backupasset.ProviderRsync)
+	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, prober)
+	connected, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{})
+	if err != nil || connected.MutablePoint == nil {
+		t.Fatalf("connected=%+v err=%v", connected, err)
+	}
+
+	wake := &catalogWakeRequesterSpy{accept: true}
+	if err := service.SetCatalogWake(wake); err != nil {
+		t.Fatal(err)
+	}
+	baseProbe := prober.probe
+	prober.probe = func(binding provider.AccessBinding) (provider.RepositoryObservation, error) {
+		observation, err := baseProbe(binding)
+		observation.SourceRevision = strings.Repeat("f", 64)
+		return observation, err
+	}
+	result, err := service.Reconcile(context.Background(), connected.Repository.ID, RequestContext{})
+	if err != nil || result.MutablePoint == nil {
+		t.Fatalf("reconciled=%+v err=%v", result, err)
+	}
+	if calls := wake.calls.Load(); calls != 1 {
+		t.Fatalf("Catalog wake calls=%d want=1", calls)
+	}
+	var point model.RecoveryPoint
+	if err := db.First(&point, "id = ?", connected.MutablePoint.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if point.SourceFingerprint != strings.Repeat("f", 64) {
+		t.Fatalf("source fingerprint=%q want repaired revision", point.SourceFingerprint)
+	}
+}
+
 func TestReconcileRejectsTaskArchivedDuringProbePreservingLastGoodFacts(t *testing.T) {
 	db := newRepositoryTestDB(t)
 	taskEntity := seedTask(t, db, "rsync", t.TempDir(), "")
@@ -683,4 +719,73 @@ func TestDisconnectPreservesMutableEvidenceAndReconnectsWithRetainedSalt(t *test
 	if active != 1 || revoked != 1 {
 		t.Fatalf("active=%d revoked=%d", active, revoked)
 	}
+}
+
+func TestReconcileResticLocksRepositoryBeforeTaskLineage(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	taskEntity := seedTask(t, db, "restic", "sftp:user@example.invalid:/repository", `{"repository_password":"FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY"}`)
+	identity := provider.NativeResticIdentityPrefix + strings.Repeat("d", 64)
+	recording := false
+	probeCalls := 0
+	prober := &scriptedProber{probe: func(provider.AccessBinding) (provider.RepositoryObservation, error) {
+		probeCalls++
+		if probeCalls == 2 {
+			recording = true
+		}
+		return testObservation(backupasset.ProviderRestic, identity), nil
+	}}
+	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRestic, prober)
+	connected, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type lockOrderContextKey struct{}
+	marker := &struct{}{}
+	ctx := context.WithValue(context.Background(), lockOrderContextKey{}, marker)
+	var events []string
+	callbackName := "test:reconcile_restic_lock_order_" + strings.ReplaceAll(t.Name(), "/", "_")
+	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil ||
+			tx.Statement.Context.Value(lockOrderContextKey{}) != marker || !recording {
+			return
+		}
+		if _, locked := tx.Statement.Clauses["FOR"]; !locked {
+			return
+		}
+		switch tx.Statement.Schema.Table {
+		case (model.BackupRepository{}).TableName(), "tasks", "nodes",
+			"ssh_keys", (model.TaskRepositoryLink{}).TableName(),
+			(model.RepositoryAccessBinding{}).TableName():
+			events = append(events, tx.Statement.Schema.Table)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+
+	if _, err := service.Reconcile(ctx, connected.Repository.ID, RequestContext{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 || events[0] != (model.BackupRepository{}).TableName() {
+		t.Fatalf("Restic Reconcile lock sequence=%v, want Repository first", events)
+	}
+	repositoryLocks := 0
+	for _, table := range events {
+		if table == (model.BackupRepository{}).TableName() {
+			repositoryLocks++
+		}
+	}
+	if repositoryLocks != 1 {
+		t.Fatalf("Restic Reconcile Repository lock count=%d sequence=%v, want one prelock", repositoryLocks, events)
+	}
+	for index, table := range events {
+		if table == "tasks" {
+			if index == 0 {
+				t.Fatalf("Restic Reconcile Task lock preceded Repository: %v", events)
+			}
+			return
+		}
+	}
+	t.Fatalf("Restic Reconcile did not lock Task after Repository: %v", events)
 }

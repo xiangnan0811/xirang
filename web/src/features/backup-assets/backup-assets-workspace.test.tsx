@@ -1,15 +1,16 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { runAxe } from "@/test/a11y-helpers";
 import type { AuthRole } from "@/context/auth-context.shared";
-import type { BackupAsset, BackupRecoveryPoint } from "@/types/domain";
+import type { BackupAsset, BackupRecoveryPoint, SavedAssetSearch } from "@/types/domain";
 
 import { createInitialBackupAssetsState } from "./backup-assets-state";
-import { defaultBackupAssetsRouteState } from "./backup-assets-route-state";
+import { defaultBackupAssetsRouteState, updateBackupAssetsRoute, type BackupAssetsRouteState } from "./backup-assets-route-state";
 import { BackupAssetsWorkspace } from "./backup-assets-workspace";
 import type { BackupAssetsController } from "./use-backup-assets-state";
 import { buildAssetRows, recoveryPoint, repository } from "./__tests__/test-utils";
@@ -113,12 +114,14 @@ function controller(overrides: Partial<BackupAssetsController> = {}): BackupAsse
     },
     semanticIssue: null,
     filterIssue: null,
+    canRetryPreview: false,
     actions: {
       refreshRepositories: vi.fn(),
       refreshRecoveryPoints: vi.fn(),
       refreshResults: vi.fn(),
       setSearchDraft: vi.fn(),
       executeSearch: vi.fn(),
+      clearSearch: vi.fn(),
       toggleSelection: vi.fn(),
       clearSelection: vi.fn(),
       loadMore: vi.fn(),
@@ -1055,6 +1058,7 @@ describe("BackupAssetsWorkspace", () => {
             refreshResults: vi.fn(),
             setSearchDraft,
             executeSearch: vi.fn(),
+            clearSearch: vi.fn(),
             toggleSelection: vi.fn(),
             clearSelection: vi.fn(),
             loadMore: vi.fn(),
@@ -1087,6 +1091,437 @@ describe("BackupAssetsWorkspace", () => {
     );
     expect(setSearchDraft).toHaveBeenCalled();
   });
+
+  it("restores the captured browse snapshot after clearing a temporary all-retained search", async () => {
+    setViewport(1440);
+    const user = userEvent.setup();
+    const directoryId = "c".repeat(64);
+    const backupSetId = "1".repeat(32);
+    const tagId = "2".repeat(32);
+    const browseRows = buildAssetRows(2);
+    const listedFile = browseRows[1];
+    listedFile.asset.name = "retained-browse-file.yaml";
+    const browseRoute: BackupAssetsRouteState = {
+      ...defaultBackupAssetsRouteState("data"),
+      nodeId: 3,
+      backupSetId,
+      repositoryId: repository.id,
+      taskId: 7,
+      recoveryPointId: recoveryPoint.id,
+      parentEntryId: directoryId,
+      types: ["file"],
+      tagId,
+      favoriteOnly: true,
+      sort: "size",
+      direction: "desc",
+      layout: "grid",
+    };
+    let currentRoute = browseRoute;
+
+    function StatefulWorkspace() {
+      const [route, setRoute] = useState(browseRoute);
+      const [searchDraft, setSearchDraft] = useState("");
+      const [submittedSearchQuery, setSubmittedSearchQuery] = useState<string | null>(null);
+
+      const applyPatch = (patch: Partial<BackupAssetsRouteState>) => {
+        const result = updateBackupAssetsRoute(route, patch);
+        if (result.status !== "valid") return;
+        currentRoute = result.state;
+        setRoute(result.state);
+      };
+
+      const state = createInitialBackupAssetsState(route);
+      state.searchDraft = searchDraft;
+      state.submittedSearchQuery = submittedSearchQuery;
+      if (route.view === "browse") {
+        state.result = {
+          status: "ready",
+          requestKey: "browse:retained-directory",
+          generation: 1,
+          rows: browseRows,
+          nextCursor: null,
+          coverage: "complete",
+          authoritativeEmpty: false,
+          directory: {
+            current: {
+              name: "retained-browse-directory",
+              ref: { recoveryPointId: recoveryPoint.id, entryId: directoryId },
+            },
+            parent: null,
+            breadcrumb: [
+              {
+                name: "retained-browse-directory",
+                ref: { recoveryPointId: recoveryPoint.id, entryId: directoryId },
+              },
+            ],
+          },
+        };
+      } else {
+        state.result = {
+          status: "ready",
+          requestKey: "search:all-retained",
+          generation: 2,
+          rows: [],
+          nextCursor: null,
+          coverage: "complete",
+          authoritativeEmpty: true,
+          directory: null,
+        };
+      }
+
+      return (
+        <BackupAssetsWorkspace
+          controller={controller({
+            state,
+            selectedRecoveryPoint: recoveryPoint,
+            actions: {
+              ...controller().actions,
+              setSearchDraft,
+              executeSearch: (query?: string) => {
+                const normalized = (query ?? searchDraft).trim();
+                setSearchDraft(normalized);
+                setSubmittedSearchQuery(normalized);
+              },
+              clearSearch: () => {
+                setSearchDraft("");
+                setSubmittedSearchQuery(null);
+              },
+            },
+          })}
+          onRoutePatch={applyPatch}
+          onReturnOverview={vi.fn()}
+        />
+      );
+    }
+
+    render(<StatefulWorkspace />);
+
+    expect(screen.getByRole("button", { name: "retained-browse-directory" })).toHaveAttribute("aria-current", "page");
+    expect(
+      screen.getByRole("button", {
+        name: /Open file or directory retained-browse-file.yaml|打开文件或目录 retained-browse-file.yaml/,
+      }),
+    ).toBeInTheDocument();
+
+    await user.type(screen.getByRole("searchbox", { name: /Search files|搜索文件/ }), "term");
+    await user.selectOptions(screen.getByRole("combobox", { name: /Search scope|搜索范围/ }), "all_retained");
+    expect(currentRoute.view).toBe("browse");
+    expect(currentRoute.scope).toBe("current");
+    expect(currentRoute.recoveryPointId).toBe(recoveryPoint.id);
+    await user.click(screen.getByRole("button", { name: /^(Search|搜索)$/ }));
+    expect(currentRoute.view).toBe("search");
+    expect(currentRoute.scope).toBe("all_retained");
+    expect(currentRoute.recoveryPointId).toBeUndefined();
+    expect(currentRoute.parentEntryId).toBeUndefined();
+    expect(
+      screen.queryByRole("button", {
+        name: /Open file or directory retained-browse-file.yaml|打开文件或目录 retained-browse-file.yaml/,
+      }),
+    ).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByRole("combobox", { name: /Search scope|搜索范围/ }), "current");
+    await user.click(screen.getByRole("button", { name: /^(Search|搜索)$/ }));
+    expect(currentRoute).toMatchObject({
+      view: "search",
+      scope: "current",
+      nodeId: 3,
+      backupSetId,
+      repositoryId: repository.id,
+      taskId: 7,
+      recoveryPointId: recoveryPoint.id,
+    });
+
+    await user.click(screen.getByRole("button", { name: /Clear query|清空条件/ }));
+
+    expect(currentRoute).toMatchObject({
+      view: "browse",
+      scope: "current",
+      nodeId: 3,
+      backupSetId,
+      repositoryId: repository.id,
+      taskId: 7,
+      recoveryPointId: recoveryPoint.id,
+      parentEntryId: directoryId,
+      types: ["file"],
+      tagId,
+      favoriteOnly: true,
+      sort: "size",
+      direction: "desc",
+      layout: "grid",
+    });
+    expect(screen.getByRole("button", { name: "retained-browse-directory" })).toHaveAttribute("aria-current", "page");
+    expect(
+      screen.getByRole("button", {
+        name: /Open file or directory retained-browse-file.yaml|打开文件或目录 retained-browse-file.yaml/,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("falls back to valid browse defaults after clearing a cold-loaded all-retained search", async () => {
+    setViewport(1440);
+    const user = userEvent.setup();
+    const backupSetId = "1".repeat(32);
+    const tagId = "2".repeat(32);
+    const searchRoute: BackupAssetsRouteState = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search",
+      scope: "all_retained",
+      nodeId: 3,
+      backupSetId,
+      repositoryId: repository.id,
+      taskId: 7,
+      types: ["file"],
+      tagId,
+      favoriteOnly: true,
+      sort: "relevance",
+      direction: "desc",
+      layout: "grid",
+    };
+    let currentRoute = searchRoute;
+
+    function StatefulWorkspace() {
+      const [route, setRoute] = useState(searchRoute);
+      const [searchDraft, setSearchDraft] = useState("term");
+      const [submittedSearchQuery, setSubmittedSearchQuery] = useState<string | null>("term");
+
+      const applyPatch = (patch: Partial<BackupAssetsRouteState>) => {
+        const result = updateBackupAssetsRoute(route, patch);
+        if (result.status !== "valid") return;
+        currentRoute = result.state;
+        setRoute(result.state);
+      };
+
+      const state = createInitialBackupAssetsState(route);
+      state.searchDraft = searchDraft;
+      state.submittedSearchQuery = submittedSearchQuery;
+      if (route.view === "browse") {
+        state.result = {
+          status: "ready",
+          requestKey: "browse:cold-fallback",
+          generation: 2,
+          rows: [],
+          nextCursor: null,
+          coverage: "complete",
+          authoritativeEmpty: true,
+          directory: null,
+        };
+      } else {
+        state.result = {
+          status: "ready",
+          requestKey: "search:all-retained",
+          generation: 1,
+          rows: [],
+          nextCursor: null,
+          coverage: "complete",
+          authoritativeEmpty: true,
+          directory: null,
+        };
+      }
+
+      return (
+        <BackupAssetsWorkspace
+          controller={controller({
+            state,
+            selectedRecoveryPoint: recoveryPoint,
+            actions: {
+              ...controller().actions,
+              setSearchDraft,
+              executeSearch: (query?: string) => {
+                const normalized = (query ?? searchDraft).trim();
+                setSearchDraft(normalized);
+                setSubmittedSearchQuery(normalized);
+              },
+              clearSearch: () => {
+                setSearchDraft("");
+                setSubmittedSearchQuery(null);
+              },
+            },
+          })}
+          onRoutePatch={applyPatch}
+          onReturnOverview={vi.fn()}
+        />
+      );
+    }
+
+    render(<StatefulWorkspace />);
+
+    expect(currentRoute.view).toBe("search");
+    expect(currentRoute.scope).toBe("all_retained");
+    await user.click(screen.getByRole("button", { name: /Clear query|清空条件/ }));
+
+    expect(currentRoute).toMatchObject({
+      view: "browse",
+      scope: "current",
+      nodeId: 3,
+      backupSetId,
+      repositoryId: repository.id,
+      taskId: 7,
+      types: [],
+      favoriteOnly: false,
+      sort: "name",
+      direction: "asc",
+    });
+    expect(currentRoute.tagId).toBeUndefined();
+    expect(currentRoute.recoveryPointId).toBeUndefined();
+    expect(currentRoute.parentEntryId).toBeUndefined();
+    expect(currentRoute.entryId).toBeUndefined();
+  });
+
+
+  it("opens an all-retained search hit onto browse at the exact recovery point", async () => {
+    setViewport(1440);
+    const user = userEvent.setup();
+    const onRoutePatch = vi.fn();
+    const hitPointId = "f".repeat(32);
+    const fileHit = buildAssetRows(2)[1];
+    const directoryHit = {
+      ...buildAssetRows(1)[0],
+      source: "search" as const,
+      ref: { ...buildAssetRows(1)[0].ref, recoveryPointId: hitPointId },
+      asset: {
+        ...buildAssetRows(1)[0].asset,
+        ref: { ...buildAssetRows(1)[0].ref, recoveryPointId: hitPointId },
+        entryType: "directory" as const,
+        name: "retained-directory",
+      },
+    };
+    const searchFile = {
+      ...fileHit,
+      source: "search" as const,
+      ref: { ...fileHit.ref, recoveryPointId: hitPointId },
+      asset: {
+        ...fileHit.asset,
+        ref: { ...fileHit.ref, recoveryPointId: hitPointId },
+        name: "retained-file.yaml",
+        parentRef: { recoveryPointId: hitPointId, entryId: directoryHit.ref.entryId },
+      },
+    };
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      scope: "all_retained" as const,
+      sort: "relevance" as const,
+      direction: "desc" as const,
+      nodeId: 3,
+      backupSetId: "1".repeat(32),
+      repositoryId: repository.id,
+      taskId: 7,
+    };
+    const state = createInitialBackupAssetsState(route);
+    state.result = {
+      status: "ready",
+      requestKey: "search:all-retained",
+      generation: 1,
+      rows: [directoryHit, searchFile],
+      nextCursor: null,
+      coverage: "complete",
+      authoritativeEmpty: false,
+      directory: null,
+    };
+    render(
+      <BackupAssetsWorkspace
+        controller={controller({
+          state,
+          selectedRecoveryPoint: recoveryPoint,
+        })}
+        onRoutePatch={onRoutePatch}
+        onReturnOverview={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Open file or directory retained-file.yaml|打开文件或目录 retained-file.yaml/ }));
+    expect(onRoutePatch).toHaveBeenCalledWith({
+      view: "browse",
+      scope: "current",
+      nodeId: undefined,
+      backupSetId: undefined,
+      repositoryId: undefined,
+      taskId: undefined,
+      recoveryPointId: hitPointId,
+      parentEntryId: directoryHit.ref.entryId,
+      entryId: searchFile.ref.entryId,
+    });
+
+    onRoutePatch.mockClear();
+    await user.click(screen.getByRole("button", { name: /Open file or directory retained-directory|打开文件或目录 retained-directory/ }));
+    expect(onRoutePatch).toHaveBeenCalledWith({
+      view: "browse",
+      scope: "current",
+      nodeId: undefined,
+      backupSetId: undefined,
+      repositoryId: undefined,
+      taskId: undefined,
+      recoveryPointId: hitPointId,
+      parentEntryId: directoryHit.ref.entryId,
+      entryId: undefined,
+    });
+  });
+
+  it("opens a saved-search hit from another source by clearing unverified hierarchy", async () => {
+    setViewport(1440);
+    const user = userEvent.setup();
+    const onRoutePatch = vi.fn();
+    const hitPointId = "f".repeat(32);
+    const fileHit = buildAssetRows(2)[1];
+    const searchFile = {
+      ...fileHit,
+      source: "search" as const,
+      ref: { ...fileHit.ref, recoveryPointId: hitPointId },
+      asset: {
+        ...fileHit.asset,
+        ref: { ...fileHit.ref, recoveryPointId: hitPointId },
+        name: "saved-search-file.yaml",
+        parentRef: { recoveryPointId: hitPointId, entryId: "9".repeat(64) },
+      },
+    };
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      scope: "current" as const,
+      savedSearchId: "e".repeat(32),
+      sort: "relevance" as const,
+      direction: "desc" as const,
+      nodeId: 3,
+      backupSetId: "1".repeat(32),
+      repositoryId: repository.id,
+      taskId: 7,
+      recoveryPointId: recoveryPoint.id,
+    };
+    const state = createInitialBackupAssetsState(route);
+    state.result = {
+      status: "ready",
+      requestKey: "search:saved",
+      generation: 1,
+      rows: [searchFile],
+      nextCursor: null,
+      coverage: "complete",
+      authoritativeEmpty: false,
+      directory: null,
+    };
+    render(
+      <BackupAssetsWorkspace
+        controller={controller({
+          state,
+          selectedRecoveryPoint: recoveryPoint,
+        })}
+        onRoutePatch={onRoutePatch}
+        onReturnOverview={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Open file or directory saved-search-file.yaml|打开文件或目录 saved-search-file.yaml/ }));
+    expect(onRoutePatch).toHaveBeenCalledWith({
+      view: "browse",
+      scope: "current",
+      nodeId: undefined,
+      backupSetId: undefined,
+      repositoryId: undefined,
+      taskId: undefined,
+      recoveryPointId: hitPointId,
+      parentEntryId: "9".repeat(64),
+      entryId: searchFile.ref.entryId,
+    });
+  });
+
 
   it("opens an overlay portal, loads its collection, and restores trigger focus", async () => {
     setViewport(1440);
@@ -1151,6 +1586,8 @@ describe("BackupAssetsWorkspace", () => {
 
     expect(onRoutePatch).toHaveBeenCalledWith({
       view: "browse",
+      nodeId: undefined,
+      backupSetId: undefined,
       repositoryId: undefined,
       taskId: undefined,
       recoveryPointId: ref.recoveryPointId,
@@ -1160,6 +1597,155 @@ describe("BackupAssetsWorkspace", () => {
     });
   });
 
+  it("locks saved-search editing while Clear remains available", async () => {
+    setViewport(1440);
+    const user = userEvent.setup();
+    const onRoutePatch = vi.fn();
+    const clearSearch = vi.fn();
+    const savedSearchId = "e".repeat(32);
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      savedSearchId,
+      sort: "relevance" as const,
+      direction: "desc" as const,
+    };
+    const state = createInitialBackupAssetsState(route);
+    render(
+      <BackupAssetsWorkspace
+        controller={controller({
+          state,
+          actions: {
+            ...controller().actions,
+            clearSearch,
+          },
+        })}
+        onRoutePatch={onRoutePatch}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("searchbox", { name: /Search files|搜索文件/ })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: /Search scope|搜索范围/ })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: /Sort|排序/ })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: /Clear query|清空条件/ }));
+    expect(clearSearch).toHaveBeenCalledTimes(1);
+    expect(onRoutePatch).toHaveBeenCalledWith(expect.objectContaining({
+      view: "browse",
+      scope: "current",
+    }));
+  });
+
+  it("refreshes the same active saved search instead of re-patching the route", async () => {
+    setViewport(1440);
+    const user = userEvent.setup();
+    const onRoutePatch = vi.fn();
+    const refreshResults = vi.fn();
+    const savedSearch: SavedAssetSearch = {
+      id: "e".repeat(32),
+      query: {
+        schemaVersion: 1,
+        root: { op: "term", field: "name", text: "synthetic" },
+        scope: { mode: "all_retained", repositoryIds: [], taskIds: [], recoveryPointIds: [] },
+        sort: "relevance",
+        limit: 100,
+        cursor: null,
+      },
+      version: 1,
+      state: "active",
+      stateReason: null,
+      brokenAt: null,
+      createdAt: "2026-07-19T00:00:00Z",
+      updatedAt: "2026-07-19T00:00:00Z",
+    };
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      savedSearchId: savedSearch.id,
+      sort: "relevance" as const,
+      direction: "desc" as const,
+    };
+    const state = createInitialBackupAssetsState(route);
+    render(
+      <BackupAssetsWorkspace
+        controller={controller({
+          state,
+          overlays: {
+            ...controller().overlays,
+            savedSearches: { status: "ready", items: [savedSearch], nextCursor: null },
+          },
+          actions: {
+            ...controller().actions,
+            refreshResults,
+          },
+        })}
+        onRoutePatch={onRoutePatch}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Saved searches.*1|保存搜索.*1/ }));
+    await user.click(screen.getByRole("button", { name: /Run saved search|执行保存搜索/ }));
+    expect(refreshResults).toHaveBeenCalledTimes(1);
+    expect(onRoutePatch).not.toHaveBeenCalled();
+  });
+
+  it("exits the active saved search immediately when it is deleted", async () => {
+    setViewport(1440);
+    const user = userEvent.setup();
+    const onRoutePatch = vi.fn();
+    const deleteSavedSearch = vi.fn();
+    const savedSearch: SavedAssetSearch = {
+      id: "e".repeat(32),
+      query: {
+        schemaVersion: 1,
+        root: { op: "term", field: "name", text: "synthetic" },
+        scope: { mode: "all_retained", repositoryIds: [], taskIds: [], recoveryPointIds: [] },
+        sort: "relevance",
+        limit: 100,
+        cursor: null,
+      },
+      version: 1,
+      state: "active",
+      stateReason: null,
+      brokenAt: null,
+      createdAt: "2026-07-19T00:00:00Z",
+      updatedAt: "2026-07-19T00:00:00Z",
+    };
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      savedSearchId: savedSearch.id,
+      sort: "relevance" as const,
+      direction: "desc" as const,
+    };
+    const state = createInitialBackupAssetsState(route);
+    render(
+      <BackupAssetsWorkspace
+        controller={controller({
+          state,
+          overlays: {
+            ...controller().overlays,
+            savedSearches: { status: "ready", items: [savedSearch], nextCursor: null },
+          },
+          actions: {
+            ...controller().actions,
+            deleteSavedSearch,
+          },
+        })}
+        onRoutePatch={onRoutePatch}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Saved searches.*1|保存搜索.*1/ }));
+    await user.click(screen.getByRole("button", { name: /Delete saved search|删除保存搜索/ }));
+    expect(deleteSavedSearch).toHaveBeenCalledWith(savedSearch);
+    expect(onRoutePatch).toHaveBeenCalledWith(expect.objectContaining({
+      view: "browse",
+      scope: "current",
+    }));
+  });
   it("renders the exact selected entry in the desktop inspector and emits reversible route patches", async () => {
     setViewport(1440);
     const user = userEvent.setup();

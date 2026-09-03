@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
 
@@ -103,6 +105,103 @@ func TestLineageExactUsesImmutableLineageAfterProducingFKsSetNull(t *testing.T) 
 	current, previous, err := session.CurrentAndPrevious(fullID)
 	if err != nil || current.RecoveryPointID != point.ID || previous != nil {
 		t.Fatalf("current/previous=%+v/%+v err=%v", current, previous, err)
+	}
+}
+
+func TestLineageExactRejectsStaleCapabilityRevisionAtBeginAndClosesTokenOnce(t *testing.T) {
+	fixture := newLineageFixture(t, true, publication.AdmissionManaged)
+	fixture.link = fixture.createActiveLink(t, fixture.repository.ID)
+	point := fixture.createCommittedPoint(t, fixture.task.ID, fixture.link.ID, strings.Repeat("f", 64), fixture.now)
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", point.ID).Update("capability_revision", 0).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := fixture.service.Begin(context.Background(), fixture.task.ID, publication.OperationLegacySnapshotFiles)
+	if err == nil {
+		_ = session.Close()
+		t.Fatal("stale committed point was admitted into exact lineage")
+	}
+	if !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("stale committed point error=%v, want conflict", err)
+	}
+	if fixture.admit.closeCalls != 1 {
+		t.Fatalf("admission token close calls=%d, want 1", fixture.admit.closeCalls)
+	}
+}
+
+func TestLineageExactListEntriesUsesPinnedCapabilityRevisionWhenUnchanged(t *testing.T) {
+	fixture := newLineageFixture(t, true, publication.AdmissionManaged)
+	fixture.link = fixture.createActiveLink(t, fixture.repository.ID)
+	fullID := strings.Repeat("a", 64)
+	fixture.createCommittedPoint(t, fixture.task.ID, fixture.link.ID, fullID, fixture.now)
+	lister := &lineageEntryLister{}
+	fixture.configureExactResticRuntime(t, lister)
+
+	session, err := fixture.service.Begin(context.Background(), fixture.task.ID, publication.OperationLegacySnapshotFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exactSession, ok := session.(*lineageSession)
+	if !ok {
+		_ = session.Close()
+		t.Fatal("exact session has unexpected implementation")
+	}
+	if exactSession.repositoryCapabilityRevision != fixture.repository.CapabilityRevision {
+		_ = session.Close()
+		t.Fatalf("pinned repository capability revision=%d, want %d", exactSession.repositoryCapabilityRevision, fixture.repository.CapabilityRevision)
+	}
+	if _, err := session.ListEntries(context.Background(), fullID, provider.EntryLocator{}, provider.PageRequest{Limit: 1}); err != nil {
+		_ = session.Close()
+		t.Fatalf("unchanged exact ListEntries error=%v", err)
+	}
+	if lister.calls != 1 || len(lister.snapshots) != 1 || lister.snapshots[0].CapabilityRevision != fixture.repository.CapabilityRevision {
+		_ = session.Close()
+		t.Fatalf("unchanged exact lister calls=%d snapshots=%+v, want one pinned revision %d", lister.calls, lister.snapshots, fixture.repository.CapabilityRevision)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.admit.closeCalls != 1 {
+		t.Fatalf("admission token close calls=%d, want 1", fixture.admit.closeCalls)
+	}
+}
+
+func TestLineageExactListEntriesRejectsRuntimeCapabilityDriftBeforeProviderLister(t *testing.T) {
+	fixture := newLineageFixture(t, true, publication.AdmissionManaged)
+	fixture.link = fixture.createActiveLink(t, fixture.repository.ID)
+	fullID := strings.Repeat("b", 64)
+	fixture.createCommittedPoint(t, fixture.task.ID, fixture.link.ID, fullID, fixture.now)
+	lister := &lineageEntryLister{}
+	fixture.configureExactResticRuntime(t, lister)
+
+	session, err := fixture.service.Begin(context.Background(), fixture.task.ID, publication.OperationLegacySnapshotFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Model(&model.BackupRepository{}).Where("id = ?", fixture.repository.ID).
+		Update("capability_revision", fixture.repository.CapabilityRevision+1).Error; err != nil {
+		_ = session.Close()
+		t.Fatal(err)
+	}
+	if _, err := session.ListEntries(context.Background(), fullID, provider.EntryLocator{}, provider.PageRequest{Limit: 1}); !errors.Is(err, backupasset.ErrConflict) {
+		_ = session.Close()
+		t.Fatalf("runtime capability drift error=%v, want conflict", err)
+	}
+	if lister.calls != 0 {
+		_ = session.Close()
+		t.Fatalf("provider entry lister calls=%d after runtime drift, want 0", lister.calls)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.admit.closeCalls != 1 {
+		t.Fatalf("admission token close calls=%d, want 1", fixture.admit.closeCalls)
 	}
 }
 
@@ -279,6 +378,48 @@ func newLineageFixture(t *testing.T, enabled bool, mode publication.AdmissionMod
 	return fixture
 }
 
+func (fixture *lineageFixture) configureExactResticRuntime(t *testing.T, lister provider.EntryLister) {
+	t.Helper()
+	salt := bytes.Repeat([]byte{7}, provider.IdentitySaltBytes)
+	document := bindingDocument{
+		Version: bindingDocumentVersion, Provider: backupasset.ProviderRestic, IdentityClass: provider.IdentityNativeRepository,
+		TaskID: fixture.task.ID, NodeID: fixture.task.NodeID, IdentitySalt: fmt.Sprintf("%x", salt), Locator: fixture.task.RsyncTarget,
+		Secret:             "FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY",
+		EndpointFacts:      []string{fmt.Sprintf("task:%d", fixture.task.ID), fmt.Sprintf("node:%d", fixture.task.NodeID)},
+		NativeRepositoryID: strings.Repeat("9", 64), AdapterRevision: "test-reader:v1",
+	}
+	payload, err := encodeBindingDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := model.RepositoryAccessBinding{
+		ID: strings.Repeat("6", 32), RepositoryID: fixture.repository.ID, BindingKind: "task",
+		EncryptedConfig: payload, ConfigFingerprint: strings.Repeat("b", 64), Status: bindingStatusActive,
+		CreatedAt: fixture.now, UpdatedAt: fixture.now,
+	}
+	if err := fixture.db.Create(&binding).Error; err != nil {
+		t.Fatal(err)
+	}
+	registry := provider.NewRegistry()
+	if err := registry.Register(backupasset.ProviderRestic, provider.Registration{
+		Prober: scopedObservationProber(backupasset.ProviderRestic), EntryLister: lister,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.service.registry = registry
+}
+
+type lineageEntryLister struct {
+	calls     int
+	snapshots []provider.ReadSnapshot
+}
+
+func (lister *lineageEntryLister) ListEntries(_ context.Context, snapshot provider.ReadSnapshot, _ provider.PointLocator, _ provider.EntryLocator, _ provider.PageRequest) (provider.EntryPage, error) {
+	lister.calls++
+	lister.snapshots = append(lister.snapshots, snapshot)
+	return provider.EntryPage{}, nil
+}
+
 func (fixture *lineageFixture) createActiveLink(t *testing.T, repositoryID string) model.TaskRepositoryLink {
 	t.Helper()
 	return fixture.createLinkForTask(t, fixture.task.ID, repositoryID, strings.Repeat("8", 32))
@@ -339,16 +480,18 @@ func (fixture *lineageFixture) createActivePublicationLease(t *testing.T) {
 type lineageAdmission struct {
 	mode       publication.AdmissionMode
 	generation uint64
+	closeCalls int
 }
 
 func (admission *lineageAdmission) Acquire(_ context.Context, operation publication.ResticOperation) (publication.AdmissionToken, error) {
 	if err := publication.ValidateResticOperation(operation); err != nil {
 		return nil, err
 	}
-	return &lineageAdmissionToken{mode: admission.mode, generation: admission.generation, operation: operation}, nil
+	return &lineageAdmissionToken{admission: admission, mode: admission.mode, generation: admission.generation, operation: operation}, nil
 }
 
 type lineageAdmissionToken struct {
+	admission  *lineageAdmission
 	mode       publication.AdmissionMode
 	generation uint64
 	operation  publication.ResticOperation
@@ -358,6 +501,13 @@ type lineageAdmissionToken struct {
 func (token *lineageAdmissionToken) Generation() uint64                     { return token.generation }
 func (token *lineageAdmissionToken) Mode() publication.AdmissionMode        { return token.mode }
 func (token *lineageAdmissionToken) Operation() publication.ResticOperation { return token.operation }
-func (token *lineageAdmissionToken) Close() error                           { token.once.Do(func() {}); return nil }
+func (token *lineageAdmissionToken) Close() error {
+	token.once.Do(func() {
+		if token.admission != nil {
+			token.admission.closeCalls++
+		}
+	})
+	return nil
+}
 
 var _ publication.Admission = (*lineageAdmission)(nil)

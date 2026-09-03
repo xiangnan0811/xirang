@@ -821,6 +821,12 @@ func (service *Service) termCandidatePlan(
 	}
 	digests := make([]string, 0, len(normalized.Tokens))
 	for _, token := range normalized.Tokens {
+		// Prefix postings are optional index entries for a longer indexed
+		// value. A query must only use its mandatory tokens; a full query
+		// token can still match an indexed prefix through the same HMAC.
+		if token.Prefix {
+			continue
+		}
 		digest, err := TokenHMAC(key.Key, key.Version, NormalizerVersion, node.Field, token.Kind, token.Value)
 		if err != nil {
 			return candidatePlan{}, err
@@ -1131,6 +1137,9 @@ func postingMatch(
 ) (bool, TokenKind, int, []string) {
 	terms := make([]string, 0, len(tokens))
 	for _, token := range tokens {
+		if token.Prefix {
+			continue
+		}
 		digest, err := TokenHMAC(key.Key, key.Version, NormalizerVersion, field, token.Kind, token.Value)
 		if err != nil {
 			continue
@@ -1203,6 +1212,9 @@ func pathLeafProximity(path string, queryTokens []NormalizedToken) int {
 	}
 	query := make(map[tokenKey]struct{}, len(queryTokens))
 	for _, token := range queryTokens {
+		if token.Prefix {
+			continue
+		}
 		query[tokenKey{value: token.Value, kind: token.Kind}] = struct{}{}
 	}
 	segments := strings.Split(normalizedPath.Canonical, "/")

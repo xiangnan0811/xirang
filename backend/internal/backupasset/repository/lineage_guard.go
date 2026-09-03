@@ -110,6 +110,7 @@ func (service *Service) Begin(ctx context.Context, taskID uint, operation public
 	session.mode = publication.LineageExact
 	session.taskID = taskEntity.ID
 	session.repositoryID = binding.repository.ID
+	session.repositoryCapabilityRevision = binding.repository.CapabilityRevision
 	session.linkTag = "xirang.link.v1." + binding.link.ID
 	session.points = points
 	keepToken = true
@@ -206,6 +207,9 @@ func (service *Service) loadCommittedLineagePoints(ctx context.Context, taskID u
 		if lineage.TaskID != taskID || lineage.TaskRepositoryLinkID != link.ID {
 			continue
 		}
+		if record.CapabilityRevision <= 0 || record.CapabilityRevision != repository.CapabilityRevision {
+			return nil, fmt.Errorf("%w: committed lineage point capability revision changed", backupasset.ErrConflict)
+		}
 		if (record.ProducingTaskID != nil && *record.ProducingTaskID != lineage.TaskID) ||
 			(record.ProducingTaskRunID != nil && *record.ProducingTaskRunID != lineage.TaskRunID) {
 			return nil, fmt.Errorf("%w: live producing foreign key conflicts with immutable lineage", backupasset.ErrConflict)
@@ -277,14 +281,15 @@ func (service *Service) blockLegacy(operation publication.ResticOperation) error
 }
 
 type lineageSession struct {
-	service      *Service
-	token        publication.AdmissionToken
-	mode         publication.LineageMode
-	taskID       uint
-	repositoryID string
-	linkTag      string
-	points       []publication.CommittedPoint
-	closeOnce    sync.Once
+	service                      *Service
+	token                        publication.AdmissionToken
+	mode                         publication.LineageMode
+	taskID                       uint
+	repositoryID                 string
+	repositoryCapabilityRevision int
+	linkTag                      string
+	points                       []publication.CommittedPoint
+	closeOnce                    sync.Once
 }
 
 func (session *lineageSession) Mode() publication.LineageMode { return session.mode }
@@ -351,13 +356,16 @@ func (session *lineageSession) ListEntries(ctx context.Context, fullNativeID str
 	if runtime.repository.ProviderKind != string(backupasset.ProviderRestic) {
 		return provider.EntryPage{}, fmt.Errorf("%w: exact Restic repository required", backupasset.ErrInvalidState)
 	}
+	if runtime.repository.CapabilityRevision != session.repositoryCapabilityRevision {
+		return provider.EntryPage{}, fmt.Errorf("%w: exact Restic repository capability revision changed", backupasset.ErrConflict)
+	}
 	lister, err := session.service.registry.EntryLister(backupasset.ProviderRestic)
 	if err != nil {
 		return provider.EntryPage{}, err
 	}
 	return lister.ListEntries(ctx, provider.ReadSnapshot{
 		RepositoryID:       session.repositoryID,
-		CapabilityRevision: runtime.repository.CapabilityRevision,
+		CapabilityRevision: session.repositoryCapabilityRevision,
 		SourceRevision:     runtime.document.AdapterRevision,
 		Access:             runtime.access,
 	}, provider.PointLocator{Native: fullNativeID}, parent, request)

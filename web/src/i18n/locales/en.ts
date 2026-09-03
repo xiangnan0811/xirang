@@ -2442,6 +2442,7 @@ const en = {
     title: "Backup Management",
     pageTitle: "Backups",
     pageSubtitle: "{{count}} policies · {{healthy}} healthy",
+    pageDesc: "Inspect backup health, files, and controlled recovery from one place.",
     newBackup: "Configure backup task",
     loadingTitle: "Loading backup data...",
     loadingDesc: "Reading backup health status",
@@ -2483,6 +2484,7 @@ const en = {
       permissionDenied: "You do not have permission to list these file sources.",
       partial: "The file index is incomplete; only confirmed versions are shown.",
       blocked: "The file source is currently unavailable.",
+      paginationFailed: "Could not load more file sources. Try Load more again.",
       indexing: "The file index is being built. Browsing will be available when it completes.",
       unavailable: "This backup source is currently unavailable. Try again later.",
       states: {
@@ -2662,6 +2664,9 @@ const en = {
       selectAsset: "No file selected",
       loadingAssets: "Loading files",
       partialCoverage: "The file index is incomplete; results include only indexed files",
+      buildingCoverage: "The file index is still being built",
+      failedCoverage: "The file index could not be loaded",
+      unavailableCoverage: "The file index is unavailable",
       noMatchingAssets: "No matching files",
       noIndexedResults: "No files in the indexed range",
       previewNotLoaded: "Preview has not been loaded",
@@ -3168,6 +3173,7 @@ const en = {
       scope: "Search scope",
       current: "Current recovery point",
       allRetained: "All retained recovery points",
+      clear: "Clear query",
     },
     browser: {
       breadcrumb: "Directory breadcrumb",

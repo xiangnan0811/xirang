@@ -107,6 +107,7 @@ describe("Backups routes accessibility", () => {
     const overview = renderBackups("/app/backups/overview");
 
     expect(await screen.findByText(/Backup Confidence|备份可信度/)).toBeInTheDocument();
+    expect(document.getElementById("backup-assets-content-transport")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Overview|概览/ })).toHaveAttribute(
       "aria-selected",
       "true"

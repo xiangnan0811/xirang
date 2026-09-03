@@ -22,7 +22,12 @@ import (
 const (
 	bindingStatusActive  = "active"
 	bindingStatusRevoked = "revoked"
+
+	connectTransactionRetryLimit = 3
 )
+
+// This signal is consumed only by Connect's bounded transaction retry loop.
+var errConnectResticRepositoryPrelockRetry = errors.New("restic repository prelock retry")
 
 type ConnectRequest struct {
 	TaskID        uint
@@ -42,8 +47,9 @@ type connectTaskLinkSnapshot struct {
 }
 
 type connectProbeLineage struct {
-	task    model.Task
-	binding *model.RepositoryAccessBinding
+	task                          model.Task
+	binding                       *model.RepositoryAccessBinding
+	allowRetainedOwnerUnavailable bool
 }
 
 // managedRsyncActivationRequest is an internal hand-off between the future
@@ -135,6 +141,17 @@ func (service *Service) Connect(ctx context.Context, request ConnectRequest, req
 		repository = model.BackupRepository{}
 		mutablePoint = nil
 		return service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var prelockedRepository model.BackupRepository
+			resticRepositoryPrelocked := false
+			if observation.Provider == backupasset.ProviderRestic {
+				var err error
+				prelockedRepository, resticRepositoryPrelocked, err = lockResticConnectRepository(
+					tx, request, linkSnapshot, probeLineage, observation,
+				)
+				if err != nil {
+					return err
+				}
+			}
 			currentTask, err := lockAndRevalidateConnectTask(tx, taskEntity)
 			if err != nil {
 				return err
@@ -148,13 +165,26 @@ func (service *Service) Connect(ctx context.Context, request ConnectRequest, req
 				}
 			}
 			if probeLineage.binding != nil {
-				if err := lockAndRevalidateRetainedProbeBinding(tx, *probeLineage.binding, observation); err != nil {
+				if observation.Provider == backupasset.ProviderRestic {
+					if !resticRepositoryPrelocked || prelockedRepository.ID != probeLineage.binding.RepositoryID {
+						return fmt.Errorf("%w: retained probe repository changed during Provider probe", backupasset.ErrConflict)
+					}
+					if err := revalidateRetainedProbeBinding(tx, *probeLineage.binding, observation, prelockedRepository); err != nil {
+						return err
+					}
+				} else if err := lockAndRevalidateRetainedProbeBinding(tx, *probeLineage.binding, observation); err != nil {
 					return err
 				}
 			}
 			resolved, created, err := service.resolveRepositoryForConnect(tx, request, currentTask, observation)
 			if err != nil {
 				return err
+			}
+			if observation.Provider == backupasset.ProviderRestic && !created {
+				if !resticRepositoryPrelocked || resolved.ID != prelockedRepository.ID {
+					return errConnectResticRepositoryPrelockRetry
+				}
+				resolved = prelockedRepository
 			}
 			repository = resolved
 			capabilitiesJSON, err := json.Marshal(observation.Capabilities)
@@ -202,7 +232,7 @@ func (service *Service) Connect(ctx context.Context, request ConnectRequest, req
 			if err := ensureLegacyTaskLink(tx, repository, currentTask, document, now); err != nil {
 				return err
 			}
-			if err := ensureAccessBinding(tx, repository.ID, bindingPayload, fingerprint, request, retainedAccess, now); err != nil {
+			if err := ensureAccessBinding(tx, repository.ID, bindingPayload, fingerprint, request, retainedAccess, probeLineage.allowRetainedOwnerUnavailable, now); err != nil {
 				return err
 			}
 			if observation.VersionMode == backupasset.VersionMutableHead {
@@ -216,8 +246,22 @@ func (service *Service) Connect(ctx context.Context, request ConnectRequest, req
 		})
 	}
 	err = runTransaction()
-	if isConnectConstraintConflict(err) {
-		err = runTransaction()
+	constraintRetried := false
+	for attempts := 1; attempts < connectTransactionRetryLimit; {
+		switch {
+		case errors.Is(err, errConnectResticRepositoryPrelockRetry):
+			attempts++
+			err = runTransaction()
+		case isConnectConstraintConflict(err) && !constraintRetried:
+			constraintRetried = true
+			attempts++
+			err = runTransaction()
+		default:
+			attempts = connectTransactionRetryLimit
+		}
+	}
+	if errors.Is(err, errConnectResticRepositoryPrelockRetry) {
+		err = fmt.Errorf("%w: Restic repository resolution did not stabilize", backupasset.ErrConflict)
 	}
 	if err != nil {
 		service.writeAudit(ctx, requestContext, backupasset.AuditActionRepositoryConnect, backupasset.AuditOutcomeBlocked, "", &taskEntity.ID, "commit", err)
@@ -257,6 +301,66 @@ func (service *Service) connectTaskLinkSnapshot(ctx context.Context, taskID uint
 		return connectTaskLinkSnapshot{}, fmt.Errorf("load Task link lineage for repository connect: %w", err)
 	}
 	return connectTaskLinkSnapshot{active: &link}, nil
+}
+
+// lockResticConnectRepository establishes the Repository-first order for
+// native Restic commits. A missing identity match is intentionally returned
+// unlocked; resolveRepositoryForConnect detects a concurrent winner later.
+func lockResticConnectRepository(
+	tx *gorm.DB,
+	request ConnectRequest,
+	linkSnapshot connectTaskLinkSnapshot,
+	probeLineage connectProbeLineage,
+	observation provider.RepositoryObservation,
+) (model.BackupRepository, bool, error) {
+	if tx == nil {
+		return model.BackupRepository{}, false, fmt.Errorf("%w: repository transaction unavailable", backupasset.ErrInvalidState)
+	}
+
+	repositoryID := ""
+	if probeLineage.binding != nil {
+		repositoryID = probeLineage.binding.RepositoryID
+	}
+	if repositoryID == "" && linkSnapshot.active != nil {
+		repositoryID = linkSnapshot.active.RepositoryID
+	}
+	if repositoryID == "" {
+		repositoryID = request.RepositoryID
+	}
+
+	var repository model.BackupRepository
+	locked := tx.Clauses(clause.Locking{Strength: "UPDATE"})
+	if repositoryID != "" {
+		err := locked.Where("id = ?", repositoryID).First(&repository).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return model.BackupRepository{}, false, nil
+		}
+		if err != nil {
+			return model.BackupRepository{}, false, fmt.Errorf("lock Restic repository for connect: %w", err)
+		}
+		return repository, true, nil
+	}
+
+	err := locked.Where("provider_kind = ? AND repository_identity = ?", observation.Provider, observation.RepositoryIdentity).
+		First(&repository).Error
+	if err == nil {
+		return repository, true, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return model.BackupRepository{}, false, fmt.Errorf("lock Restic repository for connect: %w", err)
+	}
+
+	placeholder := backupasset.FormatImportedRepositoryIdentity(backupasset.ImportedIdentityRef(observation.RepositoryIdentity))
+	repository = model.BackupRepository{}
+	err = locked.Where("provider_kind = ? AND repository_identity = ?", observation.Provider, placeholder).
+		First(&repository).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return model.BackupRepository{}, false, nil
+	}
+	if err != nil {
+		return model.BackupRepository{}, false, fmt.Errorf("lock imported Restic repository for connect: %w", err)
+	}
+	return repository, true, nil
 }
 
 func lockAndRevalidateConnectTask(tx *gorm.DB, snapshot model.Task) (model.Task, error) {
@@ -334,7 +438,17 @@ func lockAndRevalidateRetainedProbeBinding(
 		}
 		return fmt.Errorf("reload retained probe repository after Provider probe: %w", err)
 	}
-	if repository.RepositoryIdentity == nil || *repository.RepositoryIdentity != observation.RepositoryIdentity ||
+	return revalidateRetainedProbeBinding(tx, snapshot, observation, repository)
+}
+
+func revalidateRetainedProbeBinding(
+	tx *gorm.DB,
+	snapshot model.RepositoryAccessBinding,
+	observation provider.RepositoryObservation,
+	repository model.BackupRepository,
+) error {
+	if repository.ID != snapshot.RepositoryID || repository.RepositoryIdentity == nil ||
+		*repository.RepositoryIdentity != observation.RepositoryIdentity ||
 		repository.ProviderKind != string(observation.Provider) {
 		return fmt.Errorf("%w: retained probe repository changed during Provider probe", backupasset.ErrConflict)
 	}
@@ -502,6 +616,31 @@ func (service *Service) connectAccess(ctx context.Context, taskEntity model.Task
 				currentProvider := bindingProviderForTask(taskEntity)
 				if currentProvider != document.Provider {
 					return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, fmt.Errorf("%w: Task Provider changed", backupasset.ErrConflict)
+				}
+				if document.Provider == backupasset.ProviderRestic && document.IdentityClass == provider.IdentityNativeRepository {
+					salt, saltErr := hexDecodeSalt(document.IdentitySalt)
+					if saltErr != nil {
+						return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, saltErr
+					}
+					currentDocument, access, currentErr := bindingFromTask(taskEntity, taskEntity.Node, salt)
+					if currentErr != nil {
+						return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, currentErr
+					}
+					currentDocument.IdentitySalt = document.IdentitySalt
+					currentDocument.Backend = document.Backend
+					currentDocument.RangeProven = document.RangeProven
+					currentDocument.AdapterRevision = document.AdapterRevision
+					currentDocument.NativeRepositoryID = document.NativeRepositoryID
+					runtimeAccess, ok := access.AdapterData.(provider.ResticRuntimeAccess)
+					if !ok {
+						return bindingDocument{}, provider.AccessBinding{}, connectProbeLineage{}, false, fmt.Errorf("%w: invalid retained Restic adapter access", backupasset.ErrInvalidState)
+					}
+					runtimeAccess.NativeRepositoryID = document.NativeRepositoryID
+					access.AdapterData = runtimeAccess
+					access.RepositoryID = link.RepositoryID
+					return currentDocument, access, connectProbeLineage{
+						task: taskEntity, binding: &binding, allowRetainedOwnerUnavailable: true,
+					}, true, nil
 				}
 				if document.IdentityClass == provider.IdentityTaskScopedEndpoint {
 					salt, saltErr := hexDecodeSalt(document.IdentitySalt)
@@ -676,13 +815,15 @@ func ensureLegacyTaskLink(tx *gorm.DB, repository model.BackupRepository, taskEn
 	return nil
 }
 
-func ensureAccessBinding(tx *gorm.DB, repositoryID, payload, fingerprint string, request ConnectRequest, refreshRetained bool, now time.Time) error {
+func ensureAccessBinding(tx *gorm.DB, repositoryID, payload, fingerprint string, request ConnectRequest, refreshRetained, allowRetainedOwnerUnavailable bool, now time.Time) error {
 	var active model.RepositoryAccessBinding
 	err := tx.Where("repository_id = ? AND status = ?", repositoryID, bindingStatusActive).First(&active).Error
 	if err == nil {
 		if !request.ReplaceAccess {
-			if err := ensureRetainedBindingTaskAvailable(tx, active); err != nil {
-				return err
+			if !refreshRetained || !allowRetainedOwnerUnavailable {
+				if err := ensureRetainedBindingTaskAvailable(tx, active); err != nil {
+					return err
+				}
 			}
 			if refreshRetained {
 				active.EncryptedConfig = payload

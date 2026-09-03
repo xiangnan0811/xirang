@@ -21,6 +21,7 @@ import (
 	"xirang/backend/internal/secure"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type retentionDiagnosticExposure string
@@ -1737,7 +1738,8 @@ func TestExpiryClearsPrivateLocatorOnlyAfterRegistryDeletedOrAlreadyAbsent(t *te
 			policyID := testOpaqueID(712)
 			seedRetentionUsersAndRepository(t, db, repositoryID)
 			privateLocator := `{"snapshot":"FAKE_PRIVATE_REGISTRY_LOCATOR_FOR_TEST_ONLY"}`
-			point := newSelectionPoint(pointID, repositoryID, nil, now.Add(-96*time.Hour), 3)
+			point := newSelectionPoint(pointID, repositoryID, nil, now.Add(-96*time.Hour), 1)
+			point.SourceFingerprint = strings.Repeat("c", 64)
 			point.PointRevision = 20
 			point.EncryptedProviderLocator = privateLocator
 			if err := db.Create(&point).Error; err != nil {
@@ -1764,8 +1766,7 @@ func TestExpiryClearsPrivateLocatorOnlyAfterRegistryDeletedOrAlreadyAbsent(t *te
 				t.Fatalf("Register PointDeleter: %v", err)
 			}
 			snapshot := provider.ReadSnapshot{
-				RepositoryID: repositoryID, CapabilityRevision: 3, SourceRevision: strings.Repeat("c", 64),
-				Access: provider.AccessBinding{Provider: backupasset.ProviderRestic, RepositoryID: repositoryID},
+				RepositoryID: repositoryID, CapabilityRevision: 1, SourceRevision: strings.Repeat("c", 64),
 			}
 			adapter, err := NewRegistryPointDeletion(db, registry, registryDeletePointResolver{snapshot: snapshot})
 			if err != nil {
@@ -1786,7 +1787,7 @@ func TestExpiryClearsPrivateLocatorOnlyAfterRegistryDeletedOrAlreadyAbsent(t *te
 					PolicyID: policyID, PolicyRevision: 1,
 					ScopeKind: backupasset.RetentionPolicyScopeRepository, ScopeID: repositoryID,
 					RulesJSON: `{"version":1,"age":{"keep_days":30}}`, RuleDigest: strings.Repeat("6", 64), EvaluatedAt: now,
-					Points: []SelectedPoint{{RecoveryPointID: pointID, PointRevision: 20, CapabilityRevision: 3}},
+					Points: []SelectedPoint{{RecoveryPointID: pointID, PointRevision: 20, CapabilityRevision: 1}},
 				},
 			})
 			if err != nil {
@@ -1819,6 +1820,11 @@ func TestExpiryClearsPrivateLocatorOnlyAfterRegistryDeletedOrAlreadyAbsent(t *te
 				*tombstone.DeletionReceiptDigest != outcome.result.ReceiptDigest {
 				t.Fatalf("registry deletion tombstone mismatch: %+v", tombstone)
 			}
+			replayed, replayErr := coordinator.Advance(context.Background(), attempt.ID)
+			if replayErr != nil || replayed.Phase != backupasset.LifecyclePhaseComplete || port.calls != 1 {
+				t.Fatalf("replayed registry deletion phase=%q calls=%d error=%v, want complete/1/nil",
+					replayed.Phase, port.calls, replayErr)
+			}
 		})
 	}
 }
@@ -1831,7 +1837,8 @@ func TestLifecycleRegistryPointDeletionMapsWORMWithoutClearingLocator(t *testing
 	policyID := testOpaqueID(722)
 	seedRetentionUsersAndRepository(t, db, repositoryID)
 	privateLocator := `{"snapshot":"FAKE_WORM_PRIVATE_LOCATOR_FOR_TEST_ONLY"}`
-	point := newSelectionPoint(pointID, repositoryID, nil, now.Add(-96*time.Hour), 3)
+	point := newSelectionPoint(pointID, repositoryID, nil, now.Add(-96*time.Hour), 1)
+	point.SourceFingerprint = strings.Repeat("c", 64)
 	point.PointRevision = 8
 	point.EncryptedProviderLocator = privateLocator
 	if err := db.Create(&point).Error; err != nil {
@@ -1858,8 +1865,7 @@ func TestLifecycleRegistryPointDeletionMapsWORMWithoutClearingLocator(t *testing
 		t.Fatalf("Register PointDeleter: %v", err)
 	}
 	snapshot := provider.ReadSnapshot{
-		RepositoryID: repositoryID, CapabilityRevision: 3, SourceRevision: strings.Repeat("c", 64),
-		Access: provider.AccessBinding{Provider: backupasset.ProviderRestic, RepositoryID: repositoryID},
+		RepositoryID: repositoryID, CapabilityRevision: 1, SourceRevision: strings.Repeat("c", 64),
 	}
 	adapter, err := NewRegistryPointDeletion(db, registry, registryDeletePointResolver{snapshot: snapshot})
 	if err != nil {
@@ -1880,7 +1886,7 @@ func TestLifecycleRegistryPointDeletionMapsWORMWithoutClearingLocator(t *testing
 			PolicyID: policyID, PolicyRevision: 1,
 			ScopeKind: backupasset.RetentionPolicyScopeRepository, ScopeID: repositoryID,
 			RulesJSON: `{"version":1,"age":{"keep_days":30}}`, RuleDigest: strings.Repeat("6", 64), EvaluatedAt: now,
-			Points: []SelectedPoint{{RecoveryPointID: pointID, PointRevision: 8, CapabilityRevision: 3}},
+			Points: []SelectedPoint{{RecoveryPointID: pointID, PointRevision: 8, CapabilityRevision: 1}},
 		},
 	})
 	if err != nil {
@@ -1918,7 +1924,8 @@ func TestLifecycleRegistryPointDeletionMissingCapabilityStaysUnproven(t *testing
 	policyID := testOpaqueID(732)
 	seedRetentionUsersAndRepository(t, db, repositoryID)
 	privateLocator := `{"snapshot":"FAKE_UNPROVEN_PRIVATE_LOCATOR_FOR_TEST_ONLY"}`
-	point := newSelectionPoint(pointID, repositoryID, nil, now.Add(-96*time.Hour), 3)
+	point := newSelectionPoint(pointID, repositoryID, nil, now.Add(-96*time.Hour), 1)
+	point.SourceFingerprint = strings.Repeat("c", 64)
 	point.PointRevision = 5
 	point.EncryptedProviderLocator = privateLocator
 	if err := db.Create(&point).Error; err != nil {
@@ -1942,8 +1949,7 @@ func TestLifecycleRegistryPointDeletionMissingCapabilityStaysUnproven(t *testing
 		t.Fatalf("Register read-only provider: %v", err)
 	}
 	snapshot := provider.ReadSnapshot{
-		RepositoryID: repositoryID, CapabilityRevision: 3, SourceRevision: strings.Repeat("c", 64),
-		Access: provider.AccessBinding{Provider: backupasset.ProviderRestic, RepositoryID: repositoryID},
+		RepositoryID: repositoryID, CapabilityRevision: 1, SourceRevision: strings.Repeat("c", 64),
 	}
 	adapter, err := NewRegistryPointDeletion(db, registry, registryDeletePointResolver{snapshot: snapshot})
 	if err != nil {
@@ -1964,7 +1970,7 @@ func TestLifecycleRegistryPointDeletionMissingCapabilityStaysUnproven(t *testing
 			PolicyID: policyID, PolicyRevision: 1,
 			ScopeKind: backupasset.RetentionPolicyScopeRepository, ScopeID: repositoryID,
 			RulesJSON: `{"version":1,"age":{"keep_days":30}}`, RuleDigest: strings.Repeat("6", 64), EvaluatedAt: now,
-			Points: []SelectedPoint{{RecoveryPointID: pointID, PointRevision: 5, CapabilityRevision: 3}},
+			Points: []SelectedPoint{{RecoveryPointID: pointID, PointRevision: 5, CapabilityRevision: 1}},
 		},
 	})
 	if err != nil {
@@ -2562,6 +2568,7 @@ func TestLifecycleProviderFailuresRemainPurgeBlockedAndRetryFenced(t *testing.T)
 	}{
 		{name: "worm", err: ErrPointDeletionWORM, reason: backupasset.LifecycleBlockedProviderWORM},
 		{name: "unavailable", err: backupasset.ErrProviderUnavailable, reason: backupasset.LifecycleBlockedProviderUnavailable},
+		{name: "native version referenced", err: provider.ErrDeletePointNativeVersionReferenced, reason: backupasset.LifecycleBlockedProviderNativeVersionReferenced},
 		{name: "identity", err: ErrPointDeletionIdentityConflict, reason: backupasset.LifecycleBlockedProviderIdentityConflict},
 	}
 	for index, test := range tests {
@@ -2606,6 +2613,561 @@ func TestLifecycleProviderFailuresRemainPurgeBlockedAndRetryFenced(t *testing.T)
 				t.Fatalf("provider retry completion attempt=%+v error=%v", attempt, err)
 			}
 		})
+	}
+}
+func TestLifecycleNativeVersionReferenceBlockAuditsAsOrdinaryBlocked(t *testing.T) {
+	fixture := newClaimedExpiryFixture(t, 1740)
+	fixture.deleter.err = provider.ErrDeletePointNativeVersionReferenced
+	audit := &recordingSettledAudit{}
+	fixture.coordinator.audit = audit
+
+	attempt := fixture.attempt
+	for _, want := range []backupasset.LifecyclePhase{
+		backupasset.LifecyclePhaseRevoking,
+		backupasset.LifecyclePhaseDraining,
+		backupasset.LifecyclePhaseCleaning,
+		backupasset.LifecyclePhaseProviderDelete,
+	} {
+		var err error
+		attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+		if err != nil || attempt.Phase != want {
+			t.Fatalf("Advance to %s attempt=%+v error=%v", want, attempt, err)
+		}
+	}
+	attempt, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
+	if err != nil || attempt.Phase != backupasset.LifecyclePhaseBlocked ||
+		attempt.BlockedReason != backupasset.LifecycleBlockedProviderNativeVersionReferenced {
+		t.Fatalf("native reference dependency block attempt=%+v error=%v", attempt, err)
+	}
+	if len(audit.events) != 1 ||
+		audit.events[0].Fields[backupasset.AuditFieldStatus] != "blocked" {
+		t.Fatalf("native reference dependency settled audit=%+v, want ordinary blocked", audit.events)
+	}
+	if audit.events[0].Fields[backupasset.AuditFieldStatus] == "identity_conflict" {
+		t.Fatal("native reference dependency must not settle as identity conflict")
+	}
+
+	fixture.clock = attempt.RetryAt.Add(time.Second)
+	fixture.deleter.err = nil
+	fixture.deleter.result = PointDeletionResult{
+		Outcome: PointDeletionAlreadyAbsent, ReceiptDigest: strings.Repeat("5", 64),
+	}
+	retried, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
+	if err != nil || retried.Phase != backupasset.LifecyclePhaseProviderDelete ||
+		retried.BlockedReason != "" {
+		t.Fatalf("native reference dependency retry attempt=%+v error=%v, want provider_delete", retried, err)
+	}
+}
+func TestLifecycleProviderReceiptSurvivesHoldAppearingAfterEffect(t *testing.T) {
+	fixture := newClaimedExpiryFixture(t, 1640)
+	fixture.deleter.result = PointDeletionResult{
+		Outcome: PointDeletionDeleted, ReceiptDigest: strings.Repeat("a", 64),
+	}
+	holdID := testOpaqueID(1644)
+	fixture.deleter.afterEffect = func() {
+		if err := fixture.db.Create(&model.RecoveryPointHold{
+			ID: holdID, RecoveryPointID: fixture.pointID,
+			HoldType: string(backupasset.RecoveryPointHoldLegal), State: string(backupasset.HoldActive),
+			EncryptedReason: "hold appeared after provider effect", CreatedBy: 1,
+			CreatedAt: fixture.clock, UpdatedAt: fixture.clock,
+		}).Error; err != nil {
+			t.Errorf("create post-effect active hold: %v", err)
+			return
+		}
+		if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.pointID).
+			Updates(map[string]any{
+				"hold_state": backupasset.HoldActive, "point_revision": 32, "updated_at": fixture.clock,
+			}).Error; err != nil {
+			t.Errorf("project post-effect active hold: %v", err)
+		}
+	}
+	attempt := fixture.attempt
+	for _, want := range []backupasset.LifecyclePhase{
+		backupasset.LifecyclePhaseRevoking,
+		backupasset.LifecyclePhaseDraining,
+		backupasset.LifecyclePhaseCleaning,
+		backupasset.LifecyclePhaseProviderDelete,
+	} {
+		var err error
+		attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+		if err != nil || attempt.Phase != want {
+			t.Fatalf("advance to provider deletion want=%q attempt=%+v error=%v", want, attempt, err)
+		}
+	}
+	blocked, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
+	if err != nil || blocked.Phase != backupasset.LifecyclePhaseBlocked ||
+		blocked.BlockedReason != backupasset.LifecycleBlockedActiveHold {
+		t.Fatalf("post-effect hold attempt=%+v error=%v, want blocked/active_hold", blocked, err)
+	}
+	if fixture.deleter.calls != 1 || fixture.deleter.completed != 1 {
+		t.Fatalf("post-effect hold provider calls/completed=%d/%d, want 1/1", fixture.deleter.calls, fixture.deleter.completed)
+	}
+	var event model.RecoveryPointLifecycleTombstone
+	if err := fixture.db.First(&event, "recovery_point_id = ? AND terminal_operation = ?", fixture.pointID, backupasset.LifecycleRetentionExpire).Error; err != nil {
+		t.Fatalf("load post-effect terminal event: %v", err)
+	}
+	if event.ResultCode != string(PointDeletionDeleted) || event.DeletionReceiptDigest == nil ||
+		*event.DeletionReceiptDigest != strings.Repeat("a", 64) || event.PurgedAt == nil {
+		t.Fatalf("post-effect terminal event=%+v, want settled provider receipt", event)
+	}
+	assertLifecyclePointState(t, fixture.db, fixture.pointID, backupasset.RecoveryPointPurgeBlocked)
+
+	fixture.clock = blocked.RetryAt.UTC().Add(time.Second)
+	if err := fixture.db.Model(&model.RecoveryPointHold{}).Where("id = ?", holdID).Updates(map[string]any{
+		"state": backupasset.HoldReleased, "released_by": uint(1),
+		"released_at": fixture.clock, "updated_at": fixture.clock,
+	}).Error; err != nil {
+		t.Fatalf("release post-effect active hold: %v", err)
+	}
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.pointID).Updates(map[string]any{
+		"hold_state": backupasset.HoldReleased, "point_revision": 34, "updated_at": fixture.clock,
+	}).Error; err != nil {
+		t.Fatalf("project post-effect hold release: %v", err)
+	}
+	resumed, err := fixture.coordinator.Advance(context.Background(), blocked.ID)
+	if err != nil || resumed.Phase != backupasset.LifecyclePhaseTombstoning {
+		t.Fatalf("post-effect hold retry attempt=%+v error=%v, want tombstoning", resumed, err)
+	}
+	assertLifecyclePointState(t, fixture.db, fixture.pointID, backupasset.RecoveryPointPurgeBlocked)
+	if fixture.deleter.calls != 1 {
+		t.Fatalf("post-effect hold retry provider calls=%d, want no replay", fixture.deleter.calls)
+	}
+	completed, err := fixture.coordinator.Advance(context.Background(), resumed.ID)
+	if err != nil || completed.Phase != backupasset.LifecyclePhaseComplete {
+		t.Fatalf("post-effect hold completion attempt=%+v error=%v", completed, err)
+	}
+	if fixture.deleter.calls != 1 {
+		t.Fatalf("post-effect hold completion provider calls=%d, want no replay", fixture.deleter.calls)
+	}
+	assertLifecyclePointState(t, fixture.db, fixture.pointID, backupasset.RecoveryPointExpired)
+}
+
+func TestLifecycleLateHoldReceiptSettledAuditUsesProviderResult(t *testing.T) {
+	tests := []struct {
+		name      string
+		base      uint64
+		outcome   PointDeletionOutcome
+		digest    string
+		wantAudit string
+	}{
+		{
+			name: "deleted", base: 1800, outcome: PointDeletionDeleted,
+			digest: strings.Repeat("a", 64), wantAudit: "deleted",
+		},
+		{
+			name: "already_absent", base: 1810, outcome: PointDeletionAlreadyAbsent,
+			digest: strings.Repeat("b", 64), wantAudit: "already_absent",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newClaimedExpiryFixture(t, test.base)
+			audit := &recordingSettledAudit{}
+			fixture.coordinator.audit = audit
+			fixture.deleter.result = PointDeletionResult{
+				Outcome: test.outcome, ReceiptDigest: test.digest,
+			}
+			holdID := testOpaqueID(test.base + 4)
+			fixture.deleter.afterEffect = func() {
+				if err := fixture.db.Create(&model.RecoveryPointHold{
+					ID: holdID, RecoveryPointID: fixture.pointID,
+					HoldType: string(backupasset.RecoveryPointHoldLegal), State: string(backupasset.HoldActive),
+					EncryptedReason: "late active hold", CreatedBy: 1,
+					CreatedAt: fixture.clock, UpdatedAt: fixture.clock,
+				}).Error; err != nil {
+					t.Errorf("create late active hold: %v", err)
+					return
+				}
+				if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.pointID).
+					Updates(map[string]any{
+						"hold_state": backupasset.HoldActive, "point_revision": 32, "updated_at": fixture.clock,
+					}).Error; err != nil {
+					t.Errorf("project late active hold: %v", err)
+				}
+			}
+			attempt := fixture.attempt
+			for _, want := range []backupasset.LifecyclePhase{
+				backupasset.LifecyclePhaseRevoking,
+				backupasset.LifecyclePhaseDraining,
+				backupasset.LifecyclePhaseCleaning,
+				backupasset.LifecyclePhaseProviderDelete,
+			} {
+				var err error
+				attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+				if err != nil || attempt.Phase != want {
+					t.Fatalf("advance to provider deletion want=%q attempt=%+v error=%v", want, attempt, err)
+				}
+			}
+			blocked, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
+			if err != nil || blocked.Phase != backupasset.LifecyclePhaseBlocked ||
+				blocked.BlockedReason != backupasset.LifecycleBlockedActiveHold {
+				t.Fatalf("late-hold attempt=%+v error=%v, want blocked/active_hold", blocked, err)
+			}
+			if len(audit.events) != 0 {
+				t.Fatalf("late-hold audit before retry writes=%d, want 0", len(audit.events))
+			}
+
+			fixture.clock = blocked.RetryAt.UTC().Add(time.Second)
+			blocked, err = fixture.coordinator.Advance(context.Background(), blocked.ID)
+			if err != nil || blocked.Phase != backupasset.LifecyclePhaseBlocked ||
+				blocked.BlockedReason != backupasset.LifecycleBlockedActiveHold {
+				t.Fatalf("late-hold audit tick attempt=%+v error=%v, want blocked/active_hold", blocked, err)
+			}
+			if len(audit.events) != 1 {
+				t.Fatalf("late-hold audit writes=%d, want one", len(audit.events))
+			}
+			event := audit.events[0]
+			if event.Outcome != backupasset.AuditOutcomeSuccess ||
+				event.Fields[backupasset.AuditFieldStatus] != test.wantAudit {
+				t.Fatalf("late-hold settled audit=%+v fields=%+v, want successful %q", event, event.Fields, test.wantAudit)
+			}
+
+			fixture.clock = blocked.RetryAt.UTC().Add(time.Second)
+			blocked, err = fixture.coordinator.Advance(context.Background(), blocked.ID)
+			if err != nil || blocked.Phase != backupasset.LifecyclePhaseBlocked ||
+				blocked.BlockedReason != backupasset.LifecycleBlockedActiveHold {
+				t.Fatalf("repeated late-hold audit tick attempt=%+v error=%v, want blocked/active_hold", blocked, err)
+			}
+			if len(audit.events) != 1 {
+				t.Fatalf("repeated late-hold audit writes=%d, want one successful audit", len(audit.events))
+			}
+		})
+	}
+}
+
+func TestLifecyclePreEffectActiveHoldSettledAuditRemainsBlocked(t *testing.T) {
+	fixture := newClaimedExpiryFixture(t, 1830)
+	audit := &recordingSettledAudit{}
+	fixture.coordinator.audit = audit
+	attempt, err := fixture.coordinator.Advance(context.Background(), fixture.attempt.ID)
+	if err != nil || attempt.Phase != backupasset.LifecyclePhaseRevoking {
+		t.Fatalf("advance pre-effect hold to revoking attempt=%+v error=%v", attempt, err)
+	}
+	holdID := testOpaqueID(1834)
+	if err := fixture.db.Create(&model.RecoveryPointHold{
+		ID: holdID, RecoveryPointID: fixture.pointID,
+		HoldType: string(backupasset.RecoveryPointHoldLegal), State: string(backupasset.HoldActive),
+		EncryptedReason: "pre-effect active hold", CreatedBy: 1,
+		CreatedAt: fixture.clock, UpdatedAt: fixture.clock,
+	}).Error; err != nil {
+		t.Fatalf("create pre-effect active hold: %v", err)
+	}
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.pointID).
+		Updates(map[string]any{
+			"hold_state": backupasset.HoldActive, "point_revision": 31, "updated_at": fixture.clock,
+		}).Error; err != nil {
+		t.Fatalf("project pre-effect active hold: %v", err)
+	}
+
+	attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+	if err != nil || attempt.Phase != backupasset.LifecyclePhaseBlocked ||
+		attempt.BlockedReason != backupasset.LifecycleBlockedActiveHold {
+		t.Fatalf("pre-effect hold attempt=%+v error=%v, want blocked/active_hold", attempt, err)
+	}
+	if fixture.deleter.calls != 0 {
+		t.Fatalf("pre-effect hold provider calls=%d, want zero", fixture.deleter.calls)
+	}
+
+	fixture.clock = attempt.RetryAt.UTC().Add(time.Second)
+	attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+	if err != nil || attempt.Phase != backupasset.LifecyclePhaseBlocked ||
+		attempt.BlockedReason != backupasset.LifecycleBlockedActiveHold {
+		t.Fatalf("pre-effect hold audit tick attempt=%+v error=%v, want blocked/active_hold", attempt, err)
+	}
+	if len(audit.events) != 1 {
+		t.Fatalf("pre-effect hold audit writes=%d, want one blocked audit", len(audit.events))
+	}
+	if audit.events[0].Outcome != backupasset.AuditOutcomeBlocked ||
+		audit.events[0].Fields[backupasset.AuditFieldStatus] != "blocked" {
+		t.Fatalf("pre-effect hold settled audit=%+v fields=%+v, want blocked", audit.events[0], audit.events[0].Fields)
+	}
+
+	fixture.clock = attempt.RetryAt.UTC().Add(time.Second)
+	attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+	if err != nil || attempt.Phase != backupasset.LifecyclePhaseBlocked ||
+		attempt.BlockedReason != backupasset.LifecycleBlockedActiveHold {
+		t.Fatalf("repeated pre-effect hold tick attempt=%+v error=%v, want blocked/active_hold", attempt, err)
+	}
+	if len(audit.events) != 1 {
+		t.Fatalf("repeated pre-effect hold audit writes=%d, want one blocked audit", len(audit.events))
+	}
+	var tombstoneCount int64
+	if err := fixture.db.Model(&model.RecoveryPointLifecycleTombstone{}).
+		Where("recovery_point_id = ?", fixture.pointID).Count(&tombstoneCount).Error; err != nil {
+		t.Fatalf("count pre-effect hold tombstones: %v", err)
+	}
+	if tombstoneCount != 0 {
+		t.Fatalf("pre-effect hold tombstones=%d, want zero", tombstoneCount)
+	}
+}
+
+func TestLifecycleMutableRetireActiveHoldAfterTerminalEventResumesTombstoning(t *testing.T) {
+	fixture := newTerminalEventRestartFixture(t, backupasset.LifecycleMutableRetire, 1240)
+	audit := &recordingSettledAudit{}
+	fixture.coordinator.audit = audit
+
+	var persistedEvent model.RecoveryPointLifecycleTombstone
+	if err := fixture.db.Where("recovery_point_id = ? AND terminal_operation = ?",
+		fixture.pointID, backupasset.LifecycleMutableRetire).Limit(1).Find(&persistedEvent).Error; err != nil {
+		t.Fatalf("load persisted mutable-retire terminal event: %v", err)
+	}
+	if persistedEvent.RecoveryPointID == "" || persistedEvent.ResultCode != "mutable_retired" ||
+		persistedEvent.DeletionReceiptDigest != nil {
+		t.Fatalf("mutable-retire terminal event=%+v, want valid receipt-free event", persistedEvent)
+	}
+
+	holdID := testOpaqueID(1244)
+	if err := fixture.db.Create(&model.RecoveryPointHold{
+		ID: holdID, RecoveryPointID: fixture.pointID,
+		HoldType: string(backupasset.RecoveryPointHoldLegal), State: string(backupasset.HoldActive),
+		EncryptedReason: "mutable-retire tombstoning hold", CreatedBy: 1,
+		CreatedAt: fixture.clock, UpdatedAt: fixture.clock,
+	}).Error; err != nil {
+		t.Fatalf("create mutable-retire tombstoning hold: %v", err)
+	}
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.pointID).
+		Updates(map[string]any{
+			"hold_state": backupasset.HoldActive, "point_revision": 11, "updated_at": fixture.clock,
+		}).Error; err != nil {
+		t.Fatalf("project mutable-retire tombstoning hold: %v", err)
+	}
+
+	blocked, err := fixture.coordinator.Advance(context.Background(), fixture.attempt.ID)
+	if err != nil || blocked.Phase != backupasset.LifecyclePhaseBlocked ||
+		blocked.BlockedReason != backupasset.LifecycleBlockedActiveHold {
+		t.Fatalf("mutable-retire tombstoning hold attempt=%+v error=%v, want blocked/active_hold", blocked, err)
+	}
+	if len(audit.events) != 0 {
+		t.Fatalf("mutable-retire tombstoning hold audit before retry=%d, want zero", len(audit.events))
+	}
+
+	fixture.clock = blocked.RetryAt.UTC().Add(time.Second)
+	if err := fixture.db.Model(&model.RecoveryPointHold{}).Where("id = ?", holdID).Updates(map[string]any{
+		"state": backupasset.HoldReleased, "released_by": uint(1),
+		"released_at": fixture.clock, "updated_at": fixture.clock,
+	}).Error; err != nil {
+		t.Fatalf("release mutable-retire tombstoning hold: %v", err)
+	}
+	if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.pointID).
+		Updates(map[string]any{
+			"hold_state": backupasset.HoldReleased, "point_revision": 12, "updated_at": fixture.clock,
+		}).Error; err != nil {
+		t.Fatalf("project mutable-retire tombstoning hold release: %v", err)
+	}
+
+	resumed, err := fixture.coordinator.Advance(context.Background(), blocked.ID)
+	if err != nil || resumed.Phase != backupasset.LifecyclePhaseTombstoning {
+		t.Fatalf("mutable-retire tombstoning hold retry attempt=%+v error=%v, want tombstoning", resumed, err)
+	}
+	if len(audit.events) != 1 || audit.events[0].Outcome != backupasset.AuditOutcomeBlocked ||
+		audit.events[0].Fields[backupasset.AuditFieldStatus] != "blocked" {
+		t.Fatalf("mutable-retire tombstoning hold audit=%+v, want one blocked audit", audit.events)
+	}
+	for _, event := range audit.events {
+		status, _ := event.Fields[backupasset.AuditFieldStatus].(string)
+		if event.Outcome == backupasset.AuditOutcomeSuccess || status == "deleted" || status == "already_absent" {
+			t.Fatalf("mutable-retire tombstoning hold emitted provider success audit=%+v", event)
+		}
+	}
+
+	completed, err := fixture.coordinator.Advance(context.Background(), resumed.ID)
+	if err != nil || completed.Phase != backupasset.LifecyclePhaseComplete {
+		t.Fatalf("mutable-retire tombstoning hold completion attempt=%+v error=%v", completed, err)
+	}
+	if fixture.cleanup.calls != 1 || fixture.deleter.calls != 0 {
+		t.Fatalf("mutable-retire tombstoning hold effects=%d/%d, want cleanup 1/provider delete 0",
+			fixture.cleanup.calls, fixture.deleter.calls)
+	}
+	assertLifecyclePointState(t, fixture.db, fixture.pointID, backupasset.RecoveryPointRetired)
+
+	var terminalEvents []model.RecoveryPointLifecycleTombstone
+	if err := fixture.db.Where("recovery_point_id = ? AND terminal_operation = ?",
+		fixture.pointID, backupasset.LifecycleMutableRetire).Find(&terminalEvents).Error; err != nil {
+		t.Fatalf("load mutable-retire terminal event history: %v", err)
+	}
+	if len(terminalEvents) != 1 || !terminalEvents[0].CreatedAt.Equal(persistedEvent.CreatedAt) {
+		t.Fatalf("mutable-retire terminal event history=%+v, want original single event", terminalEvents)
+	}
+}
+
+func TestLifecycleActiveHoldMalformedProviderEvidenceDoesNotAuditSuccess(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation backupasset.LifecycleOperation
+		base      uint64
+		corrupt   func(*gorm.DB, string) error
+	}{
+		{
+			name: "retention expiry missing receipt", operation: backupasset.LifecycleRetentionExpire, base: 1260,
+			corrupt: func(db *gorm.DB, pointID string) error {
+				return db.Model(&model.RecoveryPointLifecycleTombstone{}).
+					Where("recovery_point_id = ? AND terminal_operation = ?", pointID, backupasset.LifecycleRetentionExpire).
+					UpdateColumn("deletion_receipt_digest", nil).Error
+			},
+		},
+		{
+			name: "explicit purge malformed receipt", operation: backupasset.LifecycleExplicitPurge, base: 1280,
+			corrupt: func(db *gorm.DB, pointID string) error {
+				return db.Model(&model.RecoveryPointLifecycleTombstone{}).
+					Where("recovery_point_id = ? AND terminal_operation = ?", pointID, backupasset.LifecycleExplicitPurge).
+					UpdateColumn("deletion_receipt_digest", "invalid").Error
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newTerminalEventRestartFixture(t, test.operation, test.base)
+			audit := &recordingSettledAudit{}
+			fixture.coordinator.audit = audit
+			holdID := testOpaqueID(test.base + 4)
+			if err := fixture.db.Create(&model.RecoveryPointHold{
+				ID: holdID, RecoveryPointID: fixture.pointID,
+				HoldType: string(backupasset.RecoveryPointHoldLegal), State: string(backupasset.HoldActive),
+				EncryptedReason: "malformed provider evidence hold", CreatedBy: 1,
+				CreatedAt: fixture.clock, UpdatedAt: fixture.clock,
+			}).Error; err != nil {
+				t.Fatalf("create malformed provider evidence hold: %v", err)
+			}
+			if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.pointID).
+				Updates(map[string]any{"hold_state": backupasset.HoldActive, "updated_at": fixture.clock}).Error; err != nil {
+				t.Fatalf("project malformed provider evidence hold: %v", err)
+			}
+			blocked, err := fixture.coordinator.Advance(context.Background(), fixture.attempt.ID)
+			if err != nil || blocked.Phase != backupasset.LifecyclePhaseBlocked ||
+				blocked.BlockedReason != backupasset.LifecycleBlockedActiveHold {
+				t.Fatalf("malformed provider evidence block attempt=%+v error=%v, want blocked/active_hold", blocked, err)
+			}
+			if err := test.corrupt(fixture.db, fixture.pointID); err != nil {
+				t.Fatalf("corrupt provider terminal evidence: %v", err)
+			}
+
+			fixture.clock = blocked.RetryAt.UTC().Add(time.Second)
+			restarted := restartTerminalEventCoordinator(t, fixture, test.base+10)
+			restarted.audit = audit
+			retried, err := restarted.Advance(context.Background(), blocked.ID)
+			if !errors.Is(err, backupasset.ErrInvalidState) {
+				t.Fatalf("malformed provider evidence retry error=%v, want ErrInvalidState", err)
+			}
+			if retried.Phase != backupasset.LifecyclePhaseBlocked ||
+				retried.BlockedReason != backupasset.LifecycleBlockedActiveHold {
+				t.Fatalf("malformed provider evidence retry attempt=%+v, want blocked/active_hold", retried)
+			}
+			if len(audit.events) != 0 {
+				for _, event := range audit.events {
+					status, _ := event.Fields[backupasset.AuditFieldStatus].(string)
+					if event.Outcome == backupasset.AuditOutcomeSuccess ||
+						status == "deleted" || status == "already_absent" {
+						t.Fatalf("malformed provider evidence emitted success audit=%+v", event)
+					}
+				}
+				t.Fatalf("malformed provider evidence audit events=%+v, want no audit", audit.events)
+			}
+		})
+	}
+}
+
+func TestLifecycleNativeReservationLinearizesPublicationAtRepositoryLock(t *testing.T) {
+	fixture := newClaimedExpiryFixtureWithDB(t, newLifecycleCoordinatorPostgresTestDB(t), 1660)
+	attempt := fixture.attempt
+	var err error
+	for attempt.Phase != backupasset.LifecyclePhaseCleaning {
+		attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+		if err != nil {
+			t.Fatalf("advance native reservation fixture to cleaning: %v", err)
+		}
+	}
+
+	var point model.RecoveryPoint
+	if err := fixture.db.Select("repository_id").First(&point, "id = ?", fixture.pointID).Error; err != nil {
+		t.Fatalf("load native reservation repository: %v", err)
+	}
+	repositoryID := point.RepositoryID
+	type lockProbeKey struct{}
+	repositoryLocked := make(chan struct{})
+	releaseReservation := make(chan struct{})
+	var repositoryLockCalls int
+	var repositoryLockMu sync.Mutex
+	if err := fixture.db.Callback().Query().After("gorm:query").Register("test:native_reservation_lock", func(callbackDB *gorm.DB) {
+		label, _ := callbackDB.Statement.Context.Value(lockProbeKey{}).(string)
+		if label != "reservation" {
+			return
+		}
+		if _, locked := callbackDB.Statement.Clauses["FOR"]; !locked {
+			return
+		}
+		if _, isRepository := callbackDB.Statement.Dest.(*model.BackupRepository); !isRepository {
+			return
+		}
+		repositoryLockMu.Lock()
+		repositoryLockCalls++
+		lockCall := repositoryLockCalls
+		repositoryLockMu.Unlock()
+		if lockCall != 2 {
+			return
+		}
+		close(repositoryLocked)
+		<-releaseReservation
+	}); err != nil {
+		t.Fatalf("register native reservation lock probe: %v", err)
+	}
+	t.Cleanup(func() { _ = fixture.db.Callback().Query().Remove("test:native_reservation_lock") })
+
+	advanceDone := make(chan struct {
+		attempt LifecycleAttempt
+		err     error
+	}, 1)
+	go func() {
+		advanced, advanceErr := fixture.coordinator.Advance(
+			context.WithValue(context.Background(), lockProbeKey{}, "reservation"), attempt.ID,
+		)
+		advanceDone <- struct {
+			attempt LifecycleAttempt
+			err     error
+		}{advanced, advanceErr}
+	}()
+	select {
+	case <-repositoryLocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("native reservation transition did not lock repository")
+	}
+
+	type publicationCheckResult struct {
+		reservations int64
+		err          error
+	}
+	publicationDone := make(chan publicationCheckResult, 1)
+	go func() {
+		var result publicationCheckResult
+		result.err = fixture.db.Transaction(func(tx *gorm.DB) error {
+			var repository model.BackupRepository
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				First(&repository, "id = ?", repositoryID).Error; err != nil {
+				return err
+			}
+			result.err = tx.Model(&model.RecoveryPointLifecycleAttempt{}).
+				Joins("JOIN recovery_points ON recovery_points.id = recovery_point_lifecycle_attempts.recovery_point_id").
+				Where("recovery_points.repository_id = ? AND recovery_point_lifecycle_attempts.phase = ?",
+					repository.ID, backupasset.LifecyclePhaseProviderDelete).
+				Count(&result.reservations).Error
+			return result.err
+		})
+		publicationDone <- result
+	}()
+	select {
+	case result := <-publicationDone:
+		close(releaseReservation)
+		advanced := <-advanceDone
+		t.Fatalf("publication check passed before reservation transition result=%+v advance=%+v", result, advanced)
+	case <-time.After(250 * time.Millisecond):
+	}
+	close(releaseReservation)
+	advanced := <-advanceDone
+	if advanced.err != nil || advanced.attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+		t.Fatalf("native reservation transition attempt=%+v error=%v, want provider_delete", advanced.attempt, advanced.err)
+	}
+	result := <-publicationDone
+	if result.err != nil || result.reservations != 1 {
+		t.Fatalf("publication check after reservation result=%+v, want one reservation", result)
 	}
 }
 
@@ -3224,10 +3786,14 @@ func TestLifecycleExternalEffectsRequireCurrentFence(t *testing.T) {
 			}
 			test.invalidate(fixture, lease)
 
+			wantReason := backupasset.LifecycleBlockedFenceLost
+			if test.phase == backupasset.LifecyclePhaseProviderDelete {
+				wantReason = backupasset.LifecycleBlockedProviderDeleteUnproven
+			}
 			blocked, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
 			if err != nil || blocked.Phase != backupasset.LifecyclePhaseBlocked ||
-				blocked.BlockedReason != backupasset.LifecycleBlockedFenceLost {
-				t.Fatalf("stale effect attempt=%+v error=%v, want blocked/fence_lost", blocked, err)
+				blocked.BlockedReason != wantReason {
+				t.Fatalf("stale effect attempt=%+v error=%v, want blocked/%s", blocked, err, wantReason)
 			}
 			if got := test.calls(fixture); got != 0 {
 				t.Fatalf("irreversible effect calls=%d, want zero before current authority", got)
@@ -3954,15 +4520,16 @@ func (fake *lifecycleCleanupFake) CleanupRecoveryPoint(ctx context.Context, requ
 }
 
 type lifecycleDeletionFake struct {
-	calls     int
-	completed int
-	pointID   string
-	attemptID string
-	result    PointDeletionResult
-	err       error
-	entered   chan struct{}
-	release   chan struct{}
-	operation backupasset.LifecycleOperation
+	calls       int
+	completed   int
+	pointID     string
+	attemptID   string
+	result      PointDeletionResult
+	err         error
+	entered     chan struct{}
+	release     chan struct{}
+	operation   backupasset.LifecycleOperation
+	afterEffect func()
 }
 
 type registryDeletePointResolver struct {
@@ -3971,6 +4538,7 @@ type registryDeletePointResolver struct {
 
 func (resolver registryDeletePointResolver) ResolveDeletePoint(
 	_ context.Context,
+	_ *gorm.DB,
 	request LifecyclePointRequest,
 	point model.RecoveryPoint,
 	repository model.BackupRepository,
@@ -3978,11 +4546,61 @@ func (resolver registryDeletePointResolver) ResolveDeletePoint(
 	if point.EncryptedProviderLocator == "" || repository.ID != resolver.snapshot.RepositoryID {
 		return provider.DeletePointRequest{}, provider.ErrDeletePointIdentityConflict
 	}
+	snapshot := resolver.snapshot
+	snapshot.Access.Provider = backupasset.ProviderKind(repository.ProviderKind)
+	snapshot.Access.RepositoryID = repository.ID
+	if repository.RepositoryIdentity != nil {
+		snapshot.RepositoryIdentity = *repository.RepositoryIdentity
+	}
 	return provider.DeletePointRequest{
-		Snapshot:               resolver.snapshot,
+		Snapshot:               snapshot,
 		Point:                  provider.PointLocator{Native: point.EncryptedProviderLocator},
-		ExpectedSourceRevision: resolver.snapshot.SourceRevision,
+		ExpectedSourceRevision: snapshot.SourceRevision,
 		OperationID:            request.AttemptID,
+	}, nil
+}
+
+type sequencedDeletePointResolver struct {
+	calls  int
+	native bool
+}
+
+func (resolver *sequencedDeletePointResolver) ResolveDeletePoint(
+	_ context.Context,
+	_ *gorm.DB,
+	request LifecyclePointRequest,
+	point model.RecoveryPoint,
+	repository model.BackupRepository,
+) (provider.DeletePointRequest, error) {
+	resolver.calls++
+	repositoryIdentity := ""
+	if repository.RepositoryIdentity != nil {
+		repositoryIdentity = *repository.RepositoryIdentity
+	}
+	snapshot := provider.ReadSnapshot{
+		RepositoryID: repository.ID, RepositoryIdentity: repositoryIdentity,
+		CapabilityRevision: repository.CapabilityRevision, SourceRevision: point.SourceFingerprint,
+		Access: provider.AccessBinding{
+			Provider: backupasset.ProviderKind(repository.ProviderKind), RepositoryID: repository.ID,
+		},
+	}
+	if resolver.native {
+		authorityDigest := strings.Repeat("a", 64)
+		if resolver.calls > 1 {
+			authorityDigest = strings.Repeat("b", 64)
+		}
+		snapshot.Access.AdapterData = provider.RcloneNativeDeletionAccess{
+			Versions: []provider.RcloneNativeExactVersion{{
+				PhysicalKey: "managed/v1/control/commit.json", VersionID: "v-owned-1",
+			}},
+			AuthorityDigest: authorityDigest,
+		}
+	} else if resolver.calls > 1 {
+		snapshot.Access.Secret = []byte("post-effect binding authority drift")
+	}
+	return provider.DeletePointRequest{
+		Snapshot: snapshot, Point: provider.PointLocator{Native: point.EncryptedProviderLocator},
+		ExpectedSourceRevision: point.SourceFingerprint, OperationID: request.AttemptID,
 	}, nil
 }
 
@@ -3992,6 +4610,8 @@ type registryPointDeleterFake struct {
 	err     error
 	calls   int
 	request provider.DeletePointRequest
+	entered chan struct{}
+	release chan struct{}
 }
 
 func (fake *registryPointDeleterFake) ProviderKind() backupasset.ProviderKind {
@@ -4001,6 +4621,10 @@ func (fake *registryPointDeleterFake) ProviderKind() backupasset.ProviderKind {
 func (fake *registryPointDeleterFake) DeletePoint(_ context.Context, request provider.DeletePointRequest) (provider.DeletePointResult, error) {
 	fake.calls++
 	fake.request = request
+	if fake.entered != nil {
+		close(fake.entered)
+		<-fake.release
+	}
 	return fake.result, fake.err
 }
 
@@ -4020,6 +4644,11 @@ func (fake *lifecycleDeletionFake) DeleteRecoveryPoint(_ context.Context, reques
 		<-fake.release
 	}
 	if fake.err == nil {
+		if fake.afterEffect != nil {
+			afterEffect := fake.afterEffect
+			fake.afterEffect = nil
+			afterEffect()
+		}
 		fake.completed++
 	}
 	return fake.result, fake.err
@@ -4504,6 +5133,453 @@ func TestLifecycleBlockedAuditRetriesAfterReasonChangesToHold(t *testing.T) {
 	if len(audit.events) == 0 || audit.events[0].Fields[backupasset.AuditFieldStatus] != "blocked" {
 		t.Fatalf("blocked audit=%+v, want settled blocked status", audit.events)
 	}
+}
+
+func TestRegistryPointDeletionRejectsActiveHoldCommittedAfterPreparedAuthority(t *testing.T) {
+	fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, nil)
+	_, authority, blocked, err := fixture.coordinator.prepareExternalEffect(
+		context.Background(), fixture.attemptID, backupasset.LifecyclePhaseProviderDelete,
+	)
+	if err != nil || blocked {
+		t.Fatalf("prepareExternalEffect authority=%+v blocked=%t error=%v", authority, blocked, err)
+	}
+	if err := fixture.db.Create(&model.RecoveryPointHold{
+		ID: testOpaqueID(1704), RecoveryPointID: fixture.pointID,
+		HoldType: string(backupasset.RecoveryPointHoldLegal), State: string(backupasset.HoldActive),
+		EncryptedReason: "active hold after prepared authority", CreatedBy: 1,
+		CreatedAt: fixture.now, UpdatedAt: fixture.now,
+	}).Error; err != nil {
+		t.Fatalf("commit active hold after prepared authority: %v", err)
+	}
+	request := LifecyclePointRequest{
+		RecoveryPointID: fixture.pointID, AttemptID: fixture.attemptID,
+		Operation: backupasset.LifecycleRetentionExpire, authority: authority,
+	}
+	_, err = fixture.adapter.DeleteRecoveryPoint(context.Background(), request)
+	if !errors.Is(err, ErrPointDeletionIdentityConflict) {
+		t.Fatalf("active hold error=%v, want ErrPointDeletionIdentityConflict", err)
+	}
+	if fixture.deleter.calls != 0 {
+		t.Fatalf("active hold invoked provider deleter %d times", fixture.deleter.calls)
+	}
+}
+
+func TestRegistryPointDeletionRevalidatesResolverMutationsInsideTransaction(t *testing.T) {
+	for _, mutation := range []struct {
+		name  string
+		point bool
+		repo  bool
+	}{
+		{name: "point", point: true},
+		{name: "repository", repo: true},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			fixture := newDirectRegistryDeletionFixture(t, transactionalMutationDeleteResolver{
+				mutatePoint: mutation.point, mutateRepository: mutation.repo,
+			}, provider.DeletePointDeleted, nil)
+			_, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+			if !errors.Is(err, ErrPointDeletionIdentityConflict) {
+				t.Fatalf("resolver %s mutation error=%v, want identity conflict", mutation.name, err)
+			}
+			if fixture.deleter.calls != 0 {
+				t.Fatalf("resolver %s mutation invoked provider deleter %d times", mutation.name, fixture.deleter.calls)
+			}
+			var point model.RecoveryPoint
+			if err := fixture.db.First(&point, "id = ?", fixture.pointID).Error; err != nil {
+				t.Fatalf("reload point after rollback: %v", err)
+			}
+			if point.SourceFingerprint != strings.Repeat("c", 64) {
+				t.Fatalf("resolver %s mutation committed point source=%q", mutation.name, point.SourceFingerprint)
+			}
+		})
+	}
+}
+
+func TestRegistryPointDeletionPreservesProviderErrorMappings(t *testing.T) {
+	providerError := errors.New("provider temporarily unavailable")
+	for _, test := range []struct {
+		name string
+		err  error
+		want error
+	}{
+		{name: "ordinary provider error", err: providerError, want: providerError},
+		{name: "worm", err: provider.ErrDeletePointWORM, want: ErrPointDeletionWORM},
+		{name: "native version referenced", err: provider.ErrDeletePointNativeVersionReferenced, want: provider.ErrDeletePointNativeVersionReferenced},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, test.err)
+			_, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("provider error=%v, want errors.Is(%v)", err, test.want)
+			}
+			if fixture.deleter.calls != 1 {
+				t.Fatalf("provider error deleter calls=%d, want 1", fixture.deleter.calls)
+			}
+		})
+	}
+}
+
+func TestRegistryPointDeletionSucceedsWithPreparedTransactionAuthority(t *testing.T) {
+	fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, nil)
+	result, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("registry point deletion: %v", err)
+	}
+	if result.Outcome != PointDeletionDeleted || result.ReceiptDigest != strings.Repeat("d", 64) {
+		t.Fatalf("registry point deletion result=%+v", result)
+	}
+	if fixture.deleter.calls != 1 {
+		t.Fatalf("successful registry deleter calls=%d, want 1", fixture.deleter.calls)
+	}
+}
+
+func TestRegistryPointDeletionRejectsPostEffectResolvedAccessDrift(t *testing.T) {
+	resolver := &sequencedDeletePointResolver{}
+	fixture := newDirectRegistryDeletionFixture(t, resolver, provider.DeletePointDeleted, nil)
+	_, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+	if !errors.Is(err, ErrPointDeletionIdentityConflict) {
+		t.Fatalf("post-effect resolved access drift error=%v, want ErrPointDeletionIdentityConflict", err)
+	}
+	if resolver.calls != 2 {
+		t.Fatalf("resolver calls=%d, want pre-effect and post-effect resolution", resolver.calls)
+	}
+	if fixture.deleter.calls != 1 {
+		t.Fatalf("provider calls=%d, want one completed effect before drift rejection", fixture.deleter.calls)
+	}
+}
+
+func TestRegistryPointDeletionRejectsPostEffectNativeAuthorityDigestDrift(t *testing.T) {
+	resolver := &sequencedDeletePointResolver{native: true}
+	fixture := newDirectRegistryDeletionFixture(t, resolver, provider.DeletePointDeleted, nil)
+	_, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+	if !errors.Is(err, ErrPointDeletionIdentityConflict) {
+		t.Fatalf("post-effect native authority drift error=%v, want ErrPointDeletionIdentityConflict", err)
+	}
+	if resolver.calls != 2 {
+		t.Fatalf("native resolver calls=%d, want pre-effect and post-effect resolution", resolver.calls)
+	}
+	if fixture.deleter.calls != 1 {
+		t.Fatalf("native provider calls=%d, want one completed effect before drift rejection", fixture.deleter.calls)
+	}
+}
+
+func TestRegistryPointDeletionAllowsIndependentRepositoryWriteDuringProviderDelete(t *testing.T) {
+	fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, nil)
+	var point model.RecoveryPoint
+	if err := fixture.db.Select("repository_id").First(&point, "id = ?", fixture.pointID).Error; err != nil {
+		t.Fatal(err)
+	}
+	fixture.deleter.entered = make(chan struct{})
+	fixture.deleter.release = make(chan struct{})
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+		deleteDone <- err
+	}()
+	<-fixture.deleter.entered
+
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- fixture.db.Model(&model.BackupRepository{}).Where("id = ?", point.RepositoryID).
+			Update("description", "independent writer completed").Error
+	}()
+	select {
+	case writerErr := <-writerDone:
+		if writerErr != nil {
+			close(fixture.deleter.release)
+			<-deleteDone
+			t.Fatalf("repository writer failed while provider deletion was paused: %v", writerErr)
+		}
+	case <-time.After(time.Second):
+		close(fixture.deleter.release)
+		<-deleteDone
+		t.Fatal("repository writer did not complete while provider deletion was paused")
+	}
+
+	close(fixture.deleter.release)
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("provider deletion after independent repository write: %v", err)
+	}
+	var repository model.BackupRepository
+	if err := fixture.db.First(&repository, "id = ?", point.RepositoryID).Error; err != nil {
+		t.Fatalf("reload repository after provider deletion: %v", err)
+	}
+	if repository.Description != "independent writer completed" {
+		t.Fatalf("repository description=%q, want independent writer update", repository.Description)
+	}
+}
+
+func TestRegistryPointDeletionReturnsReceiptWhenHoldAppearsAfterProviderEffect(t *testing.T) {
+	fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, nil)
+	fixture.deleter.entered = make(chan struct{})
+	fixture.deleter.release = make(chan struct{})
+	type deletionOutcome struct {
+		result PointDeletionResult
+		err    error
+	}
+	deleteDone := make(chan deletionOutcome, 1)
+	go func() {
+		result, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+		deleteDone <- deletionOutcome{result: result, err: err}
+	}()
+	<-fixture.deleter.entered
+
+	if err := fixture.db.Create(&model.RecoveryPointHold{
+		ID: testOpaqueID(1710), RecoveryPointID: fixture.pointID,
+		HoldType: string(backupasset.RecoveryPointHoldLegal), State: string(backupasset.HoldActive),
+		EncryptedReason: "active hold after provider effect", CreatedBy: 1,
+		CreatedAt: fixture.now, UpdatedAt: fixture.now,
+	}).Error; err != nil {
+		close(fixture.deleter.release)
+		<-deleteDone
+		t.Fatalf("commit post-effect active hold: %v", err)
+	}
+	close(fixture.deleter.release)
+	outcome := <-deleteDone
+	if outcome.err != nil {
+		t.Fatalf("post-effect active hold discarded provider receipt: %v", outcome.err)
+	}
+	if outcome.result.Outcome != PointDeletionDeleted ||
+		outcome.result.ReceiptDigest != strings.Repeat("d", 64) {
+		t.Fatalf("post-effect active hold result=%+v, want settled deletion receipt", outcome.result)
+	}
+	if fixture.deleter.calls != 1 {
+		t.Fatalf("post-effect active hold provider calls=%d, want 1", fixture.deleter.calls)
+	}
+}
+
+func TestRegistryPointDeletionRejectsPostEffectDrift(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*directRegistryDeletionFixture) error
+	}{
+		{
+			name: "authority",
+			mutate: func(fixture *directRegistryDeletionFixture) error {
+				return fixture.db.Model(&model.RecoveryPointLifecycleAttempt{}).
+					Where("id = ?", fixture.attemptID).
+					Update("transition_revision", 2).Error
+			},
+		},
+		{
+			name: "request",
+			mutate: func(fixture *directRegistryDeletionFixture) error {
+				return fixture.db.Model(&model.RecoveryPoint{}).
+					Where("id = ?", fixture.pointID).
+					Update("source_fingerprint", strings.Repeat("e", 64)).Error
+			},
+		},
+		{
+			name: "repository fence",
+			mutate: func(fixture *directRegistryDeletionFixture) error {
+				var point model.RecoveryPoint
+				if err := fixture.db.Select("repository_id").First(&point, "id = ?", fixture.pointID).Error; err != nil {
+					return err
+				}
+				return fixture.db.Model(&model.BackupRepository{}).
+					Where("id = ?", point.RepositoryID).
+					Update("capability_revision", 2).Error
+			},
+		},
+		{
+			name: "provider locator",
+			mutate: func(fixture *directRegistryDeletionFixture) error {
+				return fixture.db.Model(&model.RecoveryPoint{}).
+					Where("id = ?", fixture.pointID).
+					Update("encrypted_provider_locator", `{"snapshot":"drifted-private-locator"}`).Error
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, nil)
+			fixture.deleter.entered = make(chan struct{})
+			fixture.deleter.release = make(chan struct{})
+			deleteDone := make(chan error, 1)
+			go func() {
+				_, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+				deleteDone <- err
+			}()
+			<-fixture.deleter.entered
+
+			if err := test.mutate(&fixture); err != nil {
+				close(fixture.deleter.release)
+				<-deleteDone
+				t.Fatalf("post-effect %s mutation: %v", test.name, err)
+			}
+			close(fixture.deleter.release)
+			if err := <-deleteDone; !errors.Is(err, ErrPointDeletionIdentityConflict) {
+				t.Fatalf("post-effect %s drift error=%v, want ErrPointDeletionIdentityConflict", test.name, err)
+			}
+			if fixture.deleter.calls != 1 {
+				t.Fatalf("post-effect %s drift provider calls=%d, want 1", test.name, fixture.deleter.calls)
+			}
+		})
+	}
+}
+
+func TestRegistryPointDeletionRejectsInvalidProviderReceipts(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		result provider.DeletePointResult
+	}{
+		{
+			name:   "deleted missing receipt",
+			result: provider.DeletePointResult{Outcome: provider.DeletePointDeleted},
+		},
+		{
+			name: "already absent malformed receipt",
+			result: provider.DeletePointResult{
+				Outcome: provider.DeletePointAlreadyAbsent, ReceiptDigest: strings.Repeat("A", 64),
+			},
+		},
+		{
+			name: "unknown outcome",
+			result: provider.DeletePointResult{
+				Outcome: provider.DeletePointOutcome("unknown"), ReceiptDigest: strings.Repeat("a", 64),
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, nil)
+			fixture.deleter.result = test.result
+			_, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+			if !errors.Is(err, backupasset.ErrInvalidState) {
+				t.Fatalf("invalid provider result=%+v error=%v, want ErrInvalidState", test.result, err)
+			}
+			if fixture.deleter.calls != 1 {
+				t.Fatalf("invalid provider result deleter calls=%d, want 1", fixture.deleter.calls)
+			}
+		})
+	}
+}
+
+type directRegistryDeletionFixture struct {
+	db          *gorm.DB
+	adapter     *RegistryPointDeletion
+	coordinator *Coordinator
+	holds       *HoldService
+	deleter     *registryPointDeleterFake
+	request     LifecyclePointRequest
+	pointID     string
+	attemptID   string
+	now         time.Time
+}
+
+func newDirectRegistryDeletionFixture(
+	t *testing.T,
+	resolver PointDeletionAccessResolver,
+	outcome provider.DeletePointOutcome,
+	deleterErr error,
+) directRegistryDeletionFixture {
+	t.Helper()
+	db := newLifecycleCoordinatorTestDB(t)
+	now := time.Date(2026, 8, 18, 14, 0, 0, 0, time.UTC)
+	repositoryID, pointID, leaseID, attemptID := testOpaqueID(1700), testOpaqueID(1701), testOpaqueID(1702), testOpaqueID(1703)
+	seedRetentionUsersAndRepository(t, db, repositoryID)
+	point := newSelectionPoint(pointID, repositoryID, nil, now.Add(-time.Hour), 1)
+	point.State = string(backupasset.RecoveryPointExpiring)
+	point.SourceFingerprint = strings.Repeat("c", 64)
+	point.EncryptedProviderLocator = `{"snapshot":"direct-registry-private-locator"}`
+	if err := db.Create(&point).Error; err != nil {
+		t.Fatalf("seed direct registry point: %v", err)
+	}
+	owner := "retention-worker-direct-registry"
+	fenceToken := strings.Repeat("a", 64)
+	fenceHash := hashFenceToken(fenceToken)
+	lease := model.RecoveryPointLease{
+		ID: leaseID, RecoveryPointID: pointID, HolderType: string(backupasset.LeaseHolderRetentionWorker),
+		OwnerID: owner, AttemptID: attemptID, FenceToken: fenceToken, Status: string(backupasset.LeaseActive),
+		LeaseExpiresAt: now.Add(5 * time.Minute), AbsoluteDeadline: now.Add(time.Hour), LastHeartbeatAt: now,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&lease).Error; err != nil {
+		t.Fatalf("seed direct registry lease: %v", err)
+	}
+	attempt := model.RecoveryPointLifecycleAttempt{
+		ID: attemptID, RecoveryPointID: pointID, Operation: string(backupasset.LifecycleRetentionExpire),
+		Phase: string(backupasset.LifecyclePhaseProviderDelete), TransitionRevision: 1,
+		LeaseID: &leaseID, LeaseAttemptID: &attemptID, LeaseFenceTokenHash: &fenceHash,
+		ClaimedAt: &now, HeartbeatAt: &now, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&attempt).Error; err != nil {
+		t.Fatalf("seed direct registry attempt: %v", err)
+	}
+	leaseService, err := backupasset.NewLeaseService(db, func() time.Time { return now }, backupasset.LeaseConfig{
+		Duration: 5 * time.Minute, Heartbeat: time.Minute, AbsoluteDeadline: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("NewLeaseService: %v", err)
+	}
+	coordinator := &Coordinator{db: db, leases: leaseService, now: func() time.Time { return now }, leaseOwnerID: owner}
+	_, authority, blocked, err := coordinator.prepareExternalEffect(context.Background(), attemptID, backupasset.LifecyclePhaseProviderDelete)
+	if err != nil || blocked {
+		t.Fatalf("prepare direct registry authority=%+v blocked=%t error=%v", authority, blocked, err)
+	}
+	snapshot := provider.ReadSnapshot{
+		RepositoryID: repositoryID, CapabilityRevision: 1, SourceRevision: strings.Repeat("c", 64),
+		Access: provider.AccessBinding{Provider: backupasset.ProviderRestic, RepositoryID: repositoryID},
+	}
+	if _, ok := resolver.(registryDeletePointResolver); ok {
+		resolver = registryDeletePointResolver{snapshot: snapshot}
+	}
+	deleter := &registryPointDeleterFake{
+		kind:   backupasset.ProviderRestic,
+		result: provider.DeletePointResult{Outcome: outcome, ReceiptDigest: strings.Repeat("d", 64)},
+		err:    deleterErr,
+	}
+	registry := provider.NewRegistry()
+	if err := registry.Register(backupasset.ProviderRestic, provider.Registration{Prober: &retentionProviderProberFake{}, PointDeleter: deleter}); err != nil {
+		t.Fatalf("register direct registry deleter: %v", err)
+	}
+	adapter, err := NewRegistryPointDeletion(db, registry, resolver)
+	if err != nil {
+		t.Fatalf("NewRegistryPointDeletion: %v", err)
+	}
+	holds, err := NewHoldService(HoldServiceDependencies{DB: db, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatalf("NewHoldService: %v", err)
+	}
+	return directRegistryDeletionFixture{
+		db: db, adapter: adapter, coordinator: coordinator, holds: holds, deleter: deleter,
+		request: LifecyclePointRequest{
+			RecoveryPointID: pointID, AttemptID: attemptID,
+			Operation: backupasset.LifecycleRetentionExpire, authority: authority,
+		},
+		pointID: pointID, attemptID: attemptID, now: now,
+	}
+}
+
+type transactionalMutationDeleteResolver struct {
+	mutatePoint      bool
+	mutateRepository bool
+}
+
+func (resolver transactionalMutationDeleteResolver) ResolveDeletePoint(
+	_ context.Context,
+	tx *gorm.DB,
+	request LifecyclePointRequest,
+	point model.RecoveryPoint,
+	repository model.BackupRepository,
+) (provider.DeletePointRequest, error) {
+	if resolver.mutatePoint {
+		if err := tx.Model(&model.RecoveryPoint{}).Where("id = ?", point.ID).
+			Update("source_fingerprint", strings.Repeat("e", 64)).Error; err != nil {
+			return provider.DeletePointRequest{}, err
+		}
+	}
+	if resolver.mutateRepository {
+		if err := tx.Model(&model.BackupRepository{}).Where("id = ?", repository.ID).
+			Update("capability_revision", 2).Error; err != nil {
+			return provider.DeletePointRequest{}, err
+		}
+	}
+	return registryDeletePointResolver{
+		snapshot: provider.ReadSnapshot{
+			RepositoryID: repository.ID, CapabilityRevision: point.CapabilityRevision,
+			SourceRevision: point.SourceFingerprint,
+			Access:         provider.AccessBinding{Provider: backupasset.ProviderRestic, RepositoryID: repository.ID},
+		},
+	}.ResolveDeletePoint(context.Background(), tx, request, point, repository)
 }
 
 func sequentialOpaqueIDs(start uint64) func() (string, error) {

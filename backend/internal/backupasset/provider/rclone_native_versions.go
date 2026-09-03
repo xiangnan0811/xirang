@@ -2063,36 +2063,44 @@ func attachRcloneNativeFrozenDeletionVersions(
 	if commit == nil || commit.Native == nil {
 		return rcloneNativeError(backupasset.RcloneReasonMarkerMismatch, nil)
 	}
-	versions, err := rcloneNativeFrozenVersionsFromAccepted(point, control, payloads)
+	owned, references, err := rcloneNativeFrozenVersionSetsFromAccepted(point, control, payloads)
 	if err != nil {
 		return err
 	}
-	commit.Native.FrozenNativeVersions = versions
+	commit.Native.FrozenNativeVersions = owned
+	commit.Native.FrozenNativeReferences = references
 	return nil
 }
 
-func rcloneNativeFrozenVersionsFromAccepted(
+// rcloneNativeFrozenVersionSetsFromAccepted separates ownership evidence from
+// the point view. The owned set contains only this attempt's mutation ledger
+// and the control graph; the reference set is the complete point view. In
+// particular, unchanged B0 -> B1 versions must never enter the owned set.
+func rcloneNativeFrozenVersionSetsFromAccepted(
 	point RcloneNativePointGraph,
 	control RcloneNativeControlCommitGraph,
 	payloads [][]byte,
-) ([]RcloneNativeExactVersion, error) {
-	collector := newRcloneNativeFrozenVersionCollector()
+) ([]RcloneNativeExactVersion, []RcloneNativeExactVersion, error) {
+	ownedCollector := newRcloneNativeFrozenVersionCollector()
+	referenceCollector := newRcloneNativeFrozenVersionCollector()
 	if len(point.View) > 0 || len(point.Ledger) > 0 {
 		for _, entry := range point.View {
-			collector.add(entry.PhysicalKey, entry.VersionID)
+			referenceCollector.add(entry.PhysicalKey, entry.VersionID)
 		}
 		for _, entry := range point.Ledger {
-			collector.add(entry.PhysicalKey, entry.VersionID)
+			ownedCollector.add(entry.PhysicalKey, entry.VersionID)
 		}
 	} else {
 		for _, payload := range payloads {
-			if err := collector.addManifestPayload(payload); err != nil {
-				return nil, err
+			if err := addRcloneNativeManifestPayloadToVersionSets(payload, ownedCollector, referenceCollector); err != nil {
+				return nil, nil, err
 			}
 		}
 	}
-	collector.addControl(control)
-	return collector.result(), nil
+	// Control objects are created by this attempt and are always owned even
+	// when they do not occur in the point view.
+	ownedCollector.addControl(control)
+	return ownedCollector.result(), referenceCollector.result(), nil
 }
 
 type rcloneNativeFrozenVersionCollector struct {
@@ -2129,7 +2137,10 @@ func (collector *rcloneNativeFrozenVersionCollector) addControl(control RcloneNa
 	collector.add(control.CommitVersion.PhysicalKey, control.CommitVersion.VersionID)
 }
 
-func (collector *rcloneNativeFrozenVersionCollector) addManifestPayload(payload []byte) error {
+func addRcloneNativeManifestPayloadToVersionSets(
+	payload []byte,
+	owned, references *rcloneNativeFrozenVersionCollector,
+) error {
 	for _, line := range bytes.Split(payload, []byte{'\n'}) {
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
@@ -2149,7 +2160,12 @@ func (collector *rcloneNativeFrozenVersionCollector) addManifestPayload(payload 
 		if record.State == nil {
 			continue
 		}
-		collector.add(record.State.PhysicalKey, record.State.VersionID)
+		switch record.RecordKind {
+		case "mutation":
+			owned.add(record.State.PhysicalKey, record.State.VersionID)
+		case "entry", "delete_state":
+			references.add(record.State.PhysicalKey, record.State.VersionID)
+		}
 	}
 	return nil
 }
@@ -2171,38 +2187,64 @@ func rcloneNativeCommitsEqualIgnoringFrozenVersions(left, right RcloneCommitV1) 
 	if left.Native != nil {
 		native := *left.Native
 		native.FrozenNativeVersions = nil
+		native.FrozenNativeReferences = nil
 		left.Native = &native
 	}
 	if right.Native != nil {
 		native := *right.Native
 		native.FrozenNativeVersions = nil
+		native.FrozenNativeReferences = nil
 		right.Native = &native
 	}
 	return reflect.DeepEqual(left, right)
 }
 
-// RcloneNativeFrozenDeletionVersions reconstructs the exact physical-key/version-ID
-// set from the accepted native commit and manifest. It never lists a current prefix.
+// RcloneNativeFrozenDeletionVersions reconstructs the exact physical-key/
+// version-ID set owned by the accepted native commit and manifest. It never
+// lists a current prefix. The result is intentionally the owned set only:
+// mutation records plus all control-graph objects.
 func RcloneNativeFrozenDeletionVersions(
 	ctx context.Context,
 	request RcloneNativePublicationRequest,
 	commitKey, commitVersionID string,
 ) ([]RcloneNativeExactVersion, error) {
+	owned, _, err := reconstructRcloneNativeFrozenVersionSets(ctx, request, commitKey, commitVersionID)
+	return owned, err
+}
+
+// RcloneNativeFrozenReferenceVersions reconstructs the complete point-view
+// reference set from the accepted native commit and manifest. Unlike
+// RcloneNativeFrozenDeletionVersions, this includes unchanged point-view
+// versions and excludes mutation-only/control records.
+func RcloneNativeFrozenReferenceVersions(
+	ctx context.Context,
+	request RcloneNativePublicationRequest,
+	commitKey, commitVersionID string,
+) ([]RcloneNativeExactVersion, error) {
+	_, references, err := reconstructRcloneNativeFrozenVersionSets(ctx, request, commitKey, commitVersionID)
+	return references, err
+}
+
+func reconstructRcloneNativeFrozenVersionSets(
+	ctx context.Context,
+	request RcloneNativePublicationRequest,
+	commitKey, commitVersionID string,
+) ([]RcloneNativeExactVersion, []RcloneNativeExactVersion, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if request.ClientFactory == nil || !validRcloneNativePhysicalKey(commitKey) || !validRcloneNativeVersionID(commitVersionID) {
-		return nil, rcloneNativeError(backupasset.RcloneReasonAdmissionBlocked, nil)
+		return nil, nil, rcloneNativeError(backupasset.RcloneReasonAdmissionBlocked, nil)
 	}
 	s3, err := request.ClientFactory.S3(request.Session, request.Profile, request.KMSKeyBindings)
 	if err != nil || s3 == nil {
-		return nil, rcloneNativeError(backupasset.RcloneReasonAdmissionBlocked, err)
+		return nil, nil, rcloneNativeError(backupasset.RcloneReasonAdmissionBlocked, err)
 	}
 	request.s3 = s3
 	head, err := s3.HeadVersion(ctx, RcloneNativeExactReadRequest{PhysicalKey: commitKey, VersionID: commitVersionID})
 	if err != nil || head.PhysicalKey != commitKey || head.VersionID != commitVersionID ||
 		head.Size == 0 || head.Size > request.ControlPayloadMaxBytes {
-		return nil, rcloneNativeError(backupasset.RcloneReasonMarkerMismatch, err)
+		return nil, nil, rcloneNativeError(backupasset.RcloneReasonMarkerMismatch, err)
 	}
 	candidate := RcloneNativeVersionRecord{
 		PhysicalKey: head.PhysicalKey, VersionID: head.VersionID, Kind: RcloneNativeObjectVersion, Size: head.Size,
@@ -2210,34 +2252,34 @@ func RcloneNativeFrozenDeletionVersions(
 	}
 	payload, commitVersion, err := readRcloneNativeCommitCandidate(ctx, request, candidate)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	marker, err := decodeRcloneNativeCommitMarker(payload, request.MarkerKey)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := validateRcloneNativeCommitMarker(request, rcloneNativeAttemptControlPrefix(request), marker); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	controlGraph, _, _, payloads, err := reopenRcloneNativeControlGraph(ctx, request, marker, commitVersion)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	versions, err := rcloneNativeFrozenVersionsFromAccepted(RcloneNativePointGraph{}, controlGraph, payloads)
-	if err != nil || len(versions) < 2 {
-		return nil, rcloneNativeError(backupasset.RcloneReasonMarkerMismatch, err)
+	owned, references, err := rcloneNativeFrozenVersionSetsFromAccepted(RcloneNativePointGraph{}, controlGraph, payloads)
+	if err != nil || len(owned) < 2 {
+		return nil, nil, rcloneNativeError(backupasset.RcloneReasonMarkerMismatch, err)
 	}
 	foundCommit := false
-	for _, version := range versions {
+	for _, version := range owned {
 		if version.PhysicalKey == commitKey && version.VersionID == commitVersionID {
 			foundCommit = true
 			break
 		}
 	}
 	if !foundCommit {
-		return nil, rcloneNativeError(backupasset.RcloneReasonMarkerMismatch, nil)
+		return nil, nil, rcloneNativeError(backupasset.RcloneReasonMarkerMismatch, nil)
 	}
-	return versions, nil
+	return owned, references, nil
 }
 
 func rcloneNativeDataPlaneError(ctx context.Context, err error) error {

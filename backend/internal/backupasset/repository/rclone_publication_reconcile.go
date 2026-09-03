@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
+	"time"
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/provider"
@@ -141,9 +143,25 @@ func (service *PublicationService) processRcloneVerifyingPoint(ctx context.Conte
 	if err != nil {
 		return publication.Outcome{}, err
 	}
+	exactCommitKey, exactCommitVersionID := "", ""
+	if claim.attempt.PublicationMode == backupasset.PublicationNativeObjectVersions {
+		if claim.commit.Native == nil {
+			return publication.Outcome{}, fmt.Errorf("%w: managed Rclone native commit evidence missing", backupasset.ErrConflict)
+		}
+		exactCommitKey = managedRcloneNativeControlCommitKey(runtime.binding, claim.attempt)
+		owned, _, evidenceErr := loadManagedRcloneNativeVersionEvidenceTx(
+			ctx, service.db, runtime.repository.ID, claim.point.ID, markerKey, claim.locator, exactCommitKey,
+		)
+		if evidenceErr != nil {
+			return publication.Outcome{}, evidenceErr
+		}
+		exactCommitVersionID, evidenceErr = managedRcloneNativeCommitVersion(owned, exactCommitKey)
+		if evidenceErr != nil {
+			return publication.Outcome{}, evidenceErr
+		}
+	}
 	input, err := service.rcloneReconcileInput(
-		ctx, runtime, claim.attempt, markerKey, leaseConfig,
-		claim.locator.NativeCommitKey, claim.locator.NativeCommitVersionID,
+		ctx, runtime, claim.attempt, markerKey, leaseConfig, exactCommitKey, exactCommitVersionID,
 	)
 	if err != nil {
 		return publication.Outcome{}, err
@@ -257,9 +275,8 @@ func (service *PublicationService) claimRcloneVerifyingPoint(ctx context.Context
 		if err != nil {
 			return err
 		}
-		if commit.Native != nil {
-			commit.Native.CommitKey = locator.NativeCommitKey
-			commit.Native.CommitVersionID = locator.NativeCommitVersionID
+		if err := validateRcloneDurableCapabilityEvidence(point, consistency, attempt, commit); err != nil {
+			return err
 		}
 		if err := validateRclonePreparingClaim(point, lineage, attempt, locator.ChildFenceDigest); err != nil {
 			return err
@@ -318,9 +335,37 @@ func validateRclonePreparingClaim(
 }
 
 func validateRcloneReconcileRuntime(runtime managedRclonePublicationRuntime, point model.RecoveryPoint, attempt provider.RcloneAttemptV1) error {
+	if err := attempt.Validate(); err != nil {
+		return fmt.Errorf("%w: managed Rclone reconciliation attempt identity is invalid", backupasset.ErrConflict)
+	}
+	if point.CapabilityRevision <= 0 || runtime.repository.CapabilityRevision <= 0 ||
+		uint64(point.CapabilityRevision) != uint64(runtime.repository.CapabilityRevision) ||
+		uint64(point.CapabilityRevision) != attempt.CapabilityRevision {
+		return fmt.Errorf("%w: managed Rclone reconciliation capability revision drift", backupasset.ErrConflict)
+	}
+	if point.ID != attempt.RecoveryPointID || point.RepositoryID != attempt.RepositoryID ||
+		point.ProducingTaskID == nil || *point.ProducingTaskID != attempt.TaskID ||
+		point.ProducingTaskRunID == nil || *point.ProducingTaskRunID != attempt.TaskRunID ||
+		runtime.repository.ID != point.RepositoryID || runtime.repository.ID != attempt.RepositoryID ||
+		runtime.task.ID != attempt.TaskID || runtime.task.NodeID == 0 ||
+		point.ProducingNodeIDSnapshot != runtime.task.NodeID ||
+		runtime.link.ID != attempt.TaskRepositoryLinkID || runtime.link.RepositoryID != attempt.RepositoryID ||
+		runtime.link.TaskID == nil || *runtime.link.TaskID != attempt.TaskID ||
+		runtime.link.NodeIDSnapshot != runtime.task.NodeID ||
+		runtime.link.PublicationMode != string(attempt.PublicationMode) {
+		return fmt.Errorf("%w: managed Rclone reconciliation runtime lineage drift", backupasset.ErrConflict)
+	}
+	lineage, err := backupasset.DecodePublicationLineage(point.LineageJSON)
+	if err != nil || lineage.TaskRepositoryLinkID != attempt.TaskRepositoryLinkID ||
+		lineage.TaskID != attempt.TaskID || lineage.TaskRunID != attempt.TaskRunID ||
+		lineage.PublicationMode != string(attempt.PublicationMode) ||
+		!lineage.PointDeadlineAt.Equal(attempt.PointDeadlineAt.UTC()) {
+		return fmt.Errorf("%w: managed Rclone reconciliation durable lineage drift", backupasset.ErrConflict)
+	}
 	binding := runtime.binding
-	if runtime.repository.ID != point.RepositoryID || runtime.link.ID != attempt.TaskRepositoryLinkID || binding.RepositoryID != attempt.RepositoryID ||
-		binding.TaskRepositoryLinkID != attempt.TaskRepositoryLinkID || binding.TaskID != attempt.TaskID || binding.PublicationMode != attempt.PublicationMode ||
+	if binding.Provider != backupasset.ProviderRclone || binding.RepositoryID != attempt.RepositoryID ||
+		binding.TaskRepositoryLinkID != attempt.TaskRepositoryLinkID || binding.TaskID != attempt.TaskID ||
+		binding.NodeID != runtime.task.NodeID || binding.PublicationMode != attempt.PublicationMode ||
 		binding.BindingRevision != attempt.BindingRevision || binding.ConfigRevision != attempt.ConfigRevision ||
 		binding.CapabilityRevision != attempt.CapabilityRevision || binding.CredentialRevision != attempt.CredentialRevision ||
 		binding.PreflightID != attempt.PreflightID || binding.PreflightRevision != attempt.PreflightRevision ||
@@ -328,17 +373,47 @@ func validateRcloneReconcileRuntime(runtime managedRclonePublicationRuntime, poi
 		return fmt.Errorf("%w: managed Rclone reconciliation binding drift", backupasset.ErrConflict)
 	}
 	if attempt.PublicationMode == backupasset.PublicationVersionedPrefix {
-		if binding.Portable == nil || attempt.Portable == nil || binding.Portable.ConfigDigest != attempt.ConfigDigest {
+		if binding.Portable == nil || attempt.Portable == nil || binding.Native != nil ||
+			binding.Portable.ConfigDigest != attempt.ConfigDigest {
 			return fmt.Errorf("%w: managed Rclone portable reconciliation binding drift", backupasset.ErrConflict)
 		}
 		return nil
 	}
-	if binding.Native == nil || attempt.Native == nil || binding.Native.ProfileCode != attempt.Native.ProfileCode ||
-		binding.Native.VersioningDigest != attempt.Native.VersioningDigest || binding.Native.LifecycleDigest != attempt.Native.LifecycleDigest ||
+	if binding.Native == nil || attempt.Native == nil || binding.Portable != nil ||
+		binding.Native.ProfileCode != attempt.Native.ProfileCode ||
+		binding.Native.VersioningDigest != attempt.Native.VersioningDigest ||
+		binding.Native.LifecycleDigest != attempt.Native.LifecycleDigest ||
 		binding.Native.BucketEncryptionDigest != attempt.Native.BucketEncryptionDigest ||
 		binding.Native.EncryptionProfile != attempt.Native.EncryptionProfile ||
 		binding.Native.KMSCapabilityRevision != attempt.Native.KMSCapabilityRevision {
 		return fmt.Errorf("%w: managed Rclone native reconciliation binding drift", backupasset.ErrConflict)
+	}
+	return nil
+}
+
+func validateRcloneDurableCapabilityEvidence(
+	point model.RecoveryPoint,
+	consistency backupasset.PublicationConsistencyV1,
+	attempt provider.RcloneAttemptV1,
+	commit provider.RcloneCommitV1,
+) error {
+	if point.CapabilityRevision <= 0 ||
+		attempt.CapabilityRevision == 0 ||
+		uint64(point.CapabilityRevision) != attempt.CapabilityRevision ||
+		consistency.Provider != backupasset.ProviderRclone ||
+		consistency.CapabilityRevision != point.CapabilityRevision ||
+		consistency.RepositoryIdentityDigest != attempt.RepositoryIdentityDigest {
+		return fmt.Errorf("%w: managed Rclone durable capability revision evidence mismatch", backupasset.ErrConflict)
+	}
+	digest, err := canonicalRcloneProviderCommitDigest(commit)
+	if err != nil {
+		return err
+	}
+	if consistency.ProviderCommitDigest == "" || consistency.ProviderCommitDigest != digest {
+		return fmt.Errorf("%w: managed Rclone durable provider commit digest mismatch", backupasset.ErrConflict)
+	}
+	if commit.Native != nil && commit.Native.CapabilityRevision != attempt.CapabilityRevision {
+		return fmt.Errorf("%w: managed Rclone native capability revision evidence mismatch", backupasset.ErrConflict)
 	}
 	return nil
 }
@@ -352,6 +427,25 @@ func (service *PublicationService) rcloneReconcileInput(
 	exactCommitKey string,
 	exactCommitVersionID string,
 ) (provider.RcloneReconcileInput, error) {
+	return service.rcloneReconcileInputWithPointDeadline(
+		ctx, runtime, attempt, markerKey, leaseConfig, attempt.PointDeadlineAt,
+		exactCommitKey, exactCommitVersionID,
+	)
+}
+
+func (service *PublicationService) rcloneReconcileInputWithPointDeadline(
+	ctx context.Context,
+	runtime managedRclonePublicationRuntime,
+	attempt provider.RcloneAttemptV1,
+	markerKey []byte,
+	leaseConfig backupasset.LeaseConfig,
+	pointDeadline time.Time,
+	exactCommitKey string,
+	exactCommitVersionID string,
+) (provider.RcloneReconcileInput, error) {
+	if ctx == nil || pointDeadline.IsZero() {
+		return provider.RcloneReconcileInput{}, fmt.Errorf("%w: managed Rclone point deadline is unavailable", backupasset.ErrInvalidState)
+	}
 	publicationConfig, err := service.foundation.PublicationConfig()
 	if err != nil {
 		return provider.RcloneReconcileInput{}, err
@@ -359,7 +453,7 @@ func (service *PublicationService) rcloneReconcileInput(
 	var nativeInput *managedRcloneNativeProcessInput
 	if attempt.PublicationMode == backupasset.PublicationNativeObjectVersions {
 		nativeInput, err = service.prepareRcloneNativeProcessInput(
-			ctx, runtime.binding, markerKey, leaseConfig, publicationConfig, service.now().UTC(), attempt.PointDeadlineAt, false, nil,
+			ctx, runtime.binding, markerKey, leaseConfig, publicationConfig, service.now().UTC(), pointDeadline, false, nil,
 		)
 		if err != nil {
 			return provider.RcloneReconcileInput{}, err
@@ -409,12 +503,25 @@ func (service *PublicationService) recordReconciledRcloneProviderCommit(
 	}
 	var outcome publication.Outcome
 	err = service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var repository model.BackupRepository
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&repository, "id = ?", claim.attempt.RepositoryID).Error; err != nil {
+			return fmt.Errorf("lock reconciled managed Rclone repository: %w", err)
+		}
+		if evidence.Native != nil {
+			if err := rejectManagedRcloneNativeDeletionReservationTx(ctx, tx, repository.ID); err != nil {
+				return err
+			}
+		}
 		var point model.RecoveryPoint
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&point, "id = ?", claim.point.ID).Error; err != nil {
 			return fmt.Errorf("lock reconciled managed Rclone point: %w", err)
 		}
 		if point.State != string(backupasset.RecoveryPointPreparing) || point.ConsistencyJSON != claim.point.ConsistencyJSON {
 			return fmt.Errorf("%w: reconciled managed Rclone point changed", backupasset.ErrLeaseFenceLost)
+		}
+		if repository.CapabilityRevision <= 0 || uint64(repository.CapabilityRevision) != claim.attempt.CapabilityRevision ||
+			point.CapabilityRevision <= 0 || uint64(point.CapabilityRevision) != claim.attempt.CapabilityRevision {
+			return fmt.Errorf("%w: reconciled managed Rclone provider commit capability revision changed", backupasset.ErrConflict)
 		}
 		if err := service.lease.ValidateFenceTx(ctx, tx, claim.lease.Fence); err != nil {
 			return err
@@ -434,6 +541,9 @@ func (service *PublicationService) recordReconciledRcloneProviderCommit(
 		consistency.RepositoryIdentityDigest = claim.attempt.RepositoryIdentityDigest
 		consistency.ProviderCommitDigest = locator.ProviderCommitDigest
 		consistency.CapabilityRevision = point.CapabilityRevision
+		if err := validateRcloneDurableCapabilityEvidence(point, consistency, claim.attempt, evidence); err != nil {
+			return err
+		}
 		encodedConsistency, err := backupasset.EncodePublicationConsistency(consistency)
 		if err != nil {
 			return err
@@ -456,9 +566,18 @@ func (service *PublicationService) recordReconciledRcloneProviderCommit(
 		if err := tx.Save(&point).Error; err != nil {
 			return fmt.Errorf("save reconciled managed Rclone point: %w", err)
 		}
-		var repository model.BackupRepository
-		if err := tx.First(&repository, "id = ?", point.RepositoryID).Error; err != nil {
-			return err
+		if evidence.Native != nil {
+			ownedDigest, referenceDigest, evidenceErr := persistManagedRcloneNativeVersionEvidenceTx(
+				ctx, tx, repository.ID, point.ID, markerKey, evidence.Native, point.UpdatedAt,
+			)
+			if evidenceErr != nil {
+				return evidenceErr
+			}
+			if locator.FrozenNativeVersionsDigest != ownedDigest || locator.FrozenNativeReferencesDigest != referenceDigest ||
+				locator.FrozenNativeVersionCount != uint64(len(evidence.Native.FrozenNativeVersions)) ||
+				locator.FrozenNativeReferenceCount != uint64(len(evidence.Native.FrozenNativeReferences)) {
+				return lifecycleDeleteIdentityConflict("managed Rclone native locator and durable evidence differ")
+			}
 		}
 		if err := upsertManagedRcloneHistoryLatchesTx(ctx, tx, repository, point, capturedAt, service.now().UTC()); err != nil {
 			return err
@@ -487,6 +606,9 @@ func validateReconciledRcloneCommitEvidence(
 	if err := validateManagedRcloneBindingDocumentV3(binding); err != nil {
 		return err
 	}
+	if err := validateManagedRcloneNativeControlIdentity(attempt, binding, evidence.Native); err != nil {
+		return err
+	}
 	if err := evidence.Validate(); err != nil {
 		return err
 	}
@@ -496,7 +618,8 @@ func validateReconciledRcloneCommitEvidence(
 		evidence.RecoveryPointID != attempt.RecoveryPointID || evidence.AttemptID != attempt.AttemptID ||
 		evidence.PublicationMode != attempt.PublicationMode || !evidence.PointDeadlineAt.Equal(attempt.PointDeadlineAt.UTC()) ||
 		evidence.ProviderCommittedAt.After(attempt.PointDeadlineAt) || evidence.ChildFenceDigest != attempt.ChildFenceDigest ||
-		evidence.CapabilityEvidenceDigest != attempt.PreflightDigest {
+		evidence.CapabilityEvidenceDigest != attempt.PreflightDigest ||
+		evidence.Native != nil && evidence.Native.CapabilityRevision != attempt.CapabilityRevision {
 		return fmt.Errorf("%w: reconciled managed Rclone provider commit evidence mismatch", backupasset.ErrConflict)
 	}
 	return nil
@@ -510,10 +633,11 @@ func (service *PublicationService) commitReconciledRcloneManifest(
 	if err := fact.Validate(); err != nil || fact.State != provider.RcloneReconcileProviderCommitted || fact.Commit == nil || fact.Manifest == nil {
 		return publication.Outcome{}, fmt.Errorf("%w: complete managed Rclone manifest evidence required", backupasset.ErrInvalidState)
 	}
+	if err := validateRcloneDurableCapabilityEvidence(claim.point, claim.consistency, claim.attempt, *fact.Commit); err != nil {
+		return publication.Outcome{}, err
+	}
 	encodedCommit, err := provider.EncodeProviderCommit(provider.NewRcloneProviderCommit(*fact.Commit))
-	if err != nil || encodedCommit != claim.locator.TaggedCommit ||
-		(fact.Commit.Native != nil && (fact.Commit.Native.CommitKey != claim.locator.NativeCommitKey ||
-			fact.Commit.Native.CommitVersionID != claim.locator.NativeCommitVersionID)) {
+	if err != nil || encodedCommit != claim.locator.TaggedCommit {
 		return publication.Outcome{}, fmt.Errorf("%w: managed Rclone verifying provider evidence drift", backupasset.ErrConflict)
 	}
 	manifestID, err := rcloneManifestID(claim.point.ID, claim.lease.Fence.AttemptID)
@@ -522,6 +646,10 @@ func (service *PublicationService) commitReconciledRcloneManifest(
 	}
 	var outcome publication.Outcome
 	err = service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var repository model.BackupRepository
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&repository, "id = ?", claim.point.RepositoryID).Error; err != nil {
+			return fmt.Errorf("lock committed managed Rclone repository: %w", err)
+		}
 		var point model.RecoveryPoint
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&point, "id = ?", claim.point.ID).Error; err != nil {
 			return fmt.Errorf("lock committed managed Rclone point: %w", err)
@@ -533,7 +661,7 @@ func (service *PublicationService) commitReconciledRcloneManifest(
 			return err
 		}
 		locator, err := decodeManagedRclonePointLocator(point.EncryptedProviderLocator)
-		if err != nil || !sameManagedRclonePointLocator(locator, claim.locator) || point.ManifestDigest != fact.Commit.ManifestIndexDigest ||
+		if err != nil || !reflect.DeepEqual(locator, claim.locator) || point.ManifestDigest != fact.Commit.ManifestIndexDigest ||
 			point.EntryCount != int64(fact.Commit.ManifestEntryCount) || point.LogicalBytes != int64(fact.Commit.LogicalBytes) {
 			return fmt.Errorf("%w: managed Rclone verifying point evidence changed", backupasset.ErrConflict)
 		}

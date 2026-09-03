@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -120,15 +121,31 @@ func (s *ArchiveService) Archive(ctx context.Context, taskID uint) (ArchiveResul
 		if len(links) == 0 {
 			return nil
 		}
-		linkIDs := make([]string, 0, len(links))
+		nativeLinkIDs := make([]string, 0, len(links))
+		mutableLinkIDs := make([]string, 0, len(links))
 		for i := range links {
-			linkIDs = append(linkIDs, links[i].ID)
+			if links[i].PublicationMode == string(backupasset.PublicationNativeSnapshot) {
+				nativeLinkIDs = append(nativeLinkIDs, links[i].ID)
+			} else {
+				mutableLinkIDs = append(mutableLinkIDs, links[i].ID)
+			}
 		}
-		if err := tx.Model(&model.TaskRepositoryLink{}).Where("id IN ?", linkIDs).Updates(map[string]any{
-			"task_id":     nil,
-			"unlinked_at": now,
-		}).Error; err != nil {
-			return err
+		sort.Strings(nativeLinkIDs)
+		sort.Strings(mutableLinkIDs)
+		if len(nativeLinkIDs) > 0 {
+			if err := tx.Model(&model.TaskRepositoryLink{}).Where("id IN ?", nativeLinkIDs).Updates(map[string]any{
+				"unlinked_at": now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		if len(mutableLinkIDs) > 0 {
+			if err := tx.Model(&model.TaskRepositoryLink{}).Where("id IN ?", mutableLinkIDs).Updates(map[string]any{
+				"task_id":     nil,
+				"unlinked_at": now,
+			}).Error; err != nil {
+				return err
+			}
 		}
 		if err := settleTaskLinkRetentionPolicies(ctx, tx, s.writeTx, archiveActorFromContext(ctx), links, now); err != nil {
 			return err

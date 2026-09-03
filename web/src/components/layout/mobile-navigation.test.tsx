@@ -6,13 +6,17 @@ import { MemoryRouter } from "react-router-dom";
 import { I18nextProvider } from "react-i18next";
 import i18n, { setLanguage } from "@/i18n";
 import { ThemeProvider } from "@/context/theme-context";
+import { parseBackupAssetsRoute } from "@/features/backup-assets/backup-assets-route-state";
 import { MobileNavigation } from "./mobile-navigation";
 
-function renderWithProviders() {
+const savedSearchId = "e".repeat(32);
+const filesSavedSearch = `?view=search&savedSearchId=${savedSearchId}`;
+
+function renderWithProviders(initialEntry = "/app/overview") {
   return render(
     <ThemeProvider>
       <I18nextProvider i18n={i18n}>
-        <MemoryRouter initialEntries={["/app/overview"]}>
+        <MemoryRouter initialEntries={[initialEntry]}>
           {/* `role` 是组件自定义 prop（用户角色），并非 ARIA role；
                jsx-a11y 误判为 role 属性。 */}
           {/* eslint-disable-next-line jsx-a11y/aria-role */}
@@ -63,5 +67,47 @@ describe("MobileNavigation", () => {
       expect(screen.queryByRole("dialog", { name: /运维快捷操作/ })).not.toBeInTheDocument();
     });
     expect(menuButton).toHaveFocus();
+  });
+
+  it("marks Backups current for nested and trailing backup paths", async () => {
+    await setLanguage("zh");
+    const user = userEvent.setup();
+    renderWithProviders("/app/backups/data/");
+
+    await user.click(screen.getByRole("button", { name: "打开快捷菜单" }));
+    const backups = screen.getByRole("link", { name: "备份" });
+    expect(backups).toHaveAttribute("aria-current", "page");
+    expect(backups).toHaveAttribute("href", "/app/backups/data");
+  });
+
+  it("keeps Backups current on Overview and Recovery with a queryless Files href", async () => {
+    await setLanguage("zh");
+    const user = userEvent.setup();
+    const overview = renderWithProviders("/app/backups/overview?foo=1");
+    await user.click(screen.getByRole("button", { name: "打开快捷菜单" }));
+    expect(screen.getByRole("link", { name: "备份" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "备份" })).toHaveAttribute("href", "/app/backups/data");
+    overview.unmount();
+
+    renderWithProviders("/app/backups/recovery?planId=abc");
+    await user.click(screen.getByRole("button", { name: "打开快捷菜单" }));
+    expect(screen.getByRole("link", { name: "备份" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "备份" })).toHaveAttribute("href", "/app/backups/data");
+  });
+
+  it("preserves exact Files search on the Backups href only while on Files", async () => {
+    await setLanguage("zh");
+    const user = userEvent.setup();
+    expect(parseBackupAssetsRoute("/app/backups/data", filesSavedSearch)).toMatchObject({
+      status: "valid",
+      state: { page: "data", view: "search", savedSearchId },
+    });
+    renderWithProviders(`/app/backups/data${filesSavedSearch}`);
+
+    await user.click(screen.getByRole("button", { name: "打开快捷菜单" }));
+    expect(screen.getByRole("link", { name: "备份" })).toHaveAttribute(
+      "href",
+      `/app/backups/data${filesSavedSearch}`,
+    );
   });
 });

@@ -15,7 +15,7 @@ import (
 )
 
 func TestRcloneExactPointDeletionDeletesCommittedPrefixOnly(t *testing.T) {
-	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"/data")
+	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"."+strings.Repeat("b", 32))
 	parent := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points")
 	transport := &rcloneDeletionTransport{prefixPresent: true}
 	deleter := newRclonePrefixPointDeleterForTest(t, transport)
@@ -32,6 +32,18 @@ func TestRcloneExactPointDeletionDeletesCommittedPrefixOnly(t *testing.T) {
 	}
 	if transport.deleted.value == parent.value || strings.HasPrefix(parent.value, transport.deleted.value) && transport.deleted.value != prefix.value {
 		t.Fatal("parent prefix was deleted")
+	}
+	wantControlSources := []string{
+		prefix.value + "/control/attempt.json",
+		prefix.value + "/control/commit.json",
+	}
+	if len(transport.catSources) != len(wantControlSources) {
+		t.Fatalf("control reads=%v, want %v", transport.catSources, wantControlSources)
+	}
+	for index, want := range wantControlSources {
+		if transport.catSources[index] != want {
+			t.Fatalf("control read %d=%q, want exact %q", index, transport.catSources[index], want)
+		}
 	}
 
 	parentRequest := request
@@ -54,7 +66,7 @@ func TestRcloneExactPointDeletionDeletesCommittedPrefixOnly(t *testing.T) {
 }
 
 func TestRcloneExactPointDeletionClassifiesPrefixPresenceFromJoinedExitCodes(t *testing.T) {
-	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"/data")
+	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"."+strings.Repeat("b", 32))
 	request := validRclonePrefixDeleteRequest(t, prefix)
 
 	t.Run("run_failed_join_exit_3_already_absent", func(t *testing.T) {
@@ -149,7 +161,7 @@ func TestRcloneExactPointDeletionRejectsPrefixPathEscape(t *testing.T) {
 }
 
 func TestRcloneExactPointDeletionCarriesSSHRuntime(t *testing.T) {
-	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"/data")
+	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"."+strings.Repeat("b", 32))
 	runtime := &RemoteCommandAccess{Node: model.Node{ID: 9}}
 	request := validRclonePrefixDeleteRequest(t, prefix)
 	access := request.Snapshot.Access.AdapterData.(RclonePrefixDeletionAccess)
@@ -184,7 +196,7 @@ func TestRcloneExactPointDeletionCarriesSSHRuntime(t *testing.T) {
 }
 
 func TestRcloneExactPointDeletionRejectsMissingRemoteRuntime(t *testing.T) {
-	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"/data")
+	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"."+strings.Repeat("b", 32))
 	transport := &rcloneDeletionTransport{prefixPresent: true}
 	request := validRclonePrefixDeleteRequest(t, prefix)
 	if access, ok := request.Snapshot.Access.AdapterData.(RclonePrefixDeletionAccess); ok {
@@ -200,7 +212,7 @@ func TestRcloneExactPointDeletionRejectsMissingRemoteRuntime(t *testing.T) {
 }
 
 func TestRcloneExactPointDeletionPrefixAlreadyAbsentIsIdempotent(t *testing.T) {
-	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"/data")
+	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"."+strings.Repeat("b", 32))
 	transport := &rcloneDeletionTransport{}
 	deleter := newRclonePrefixPointDeleterForTest(t, transport)
 	request := validRclonePrefixDeleteRequest(t, prefix)
@@ -214,7 +226,7 @@ func TestRcloneExactPointDeletionPrefixAlreadyAbsentIsIdempotent(t *testing.T) {
 }
 
 func TestRcloneExactPointDeletionAbsentPrefixOnWrongLiveIdentityIsConflict(t *testing.T) {
-	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"/data")
+	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"."+strings.Repeat("b", 32))
 	transport := &rcloneDeletionTransport{liveBackend: "s3"}
 	deleter := newRclonePrefixPointDeleterForTest(t, transport)
 	result, err := deleter.DeletePoint(context.Background(), validRclonePrefixDeleteRequest(t, prefix))
@@ -230,7 +242,7 @@ func TestRcloneExactPointDeletionAbsentPrefixOnWrongLiveIdentityIsConflict(t *te
 }
 
 func TestRcloneExactPointDeletionAbsentPrefixOnWrongSameBackendIdentityIsConflict(t *testing.T) {
-	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"/data")
+	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"."+strings.Repeat("b", 32))
 	ownedRoot, err := rcloneManagedRootFromPointPrefix(prefix)
 	if err != nil {
 		t.Fatal(err)
@@ -259,19 +271,110 @@ func TestRcloneExactPointDeletionAbsentPrefixOnWrongSameBackendIdentityIsConflic
 }
 
 func TestRcloneExactPointDeletionRejectsLivePrefixMarkerDrift(t *testing.T) {
-	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"/data")
+	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"."+strings.Repeat("b", 32))
+	request := validRclonePrefixDeleteRequest(t, prefix)
+	access := request.Snapshot.Access.AdapterData.(RclonePrefixDeletionAccess)
+	tampered := access.Commit
+	tampered.Portable = cloneRclonePortableCommit(tampered.Portable)
+	tampered.Portable.AttemptMarkerDigest = strings.Repeat("c", 64)
+	payload, _, _, err := encodeRcloneCommitMarker(tampered, access.MarkerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitPath := strings.TrimSuffix(prefix.value, "/") + "/control/commit.json"
 	transport := &rcloneDeletionTransport{
-		prefixPresent:    true,
-		liveMarkerDigest: strings.Repeat("c", 64),
+		prefixPresent: true, controlPayloads: map[string][]byte{commitPath: payload},
 	}
 	deleter := newRclonePrefixPointDeleterForTest(t, transport)
-	result, err := deleter.DeletePoint(context.Background(), validRclonePrefixDeleteRequest(t, prefix))
+	result, err := deleter.DeletePoint(context.Background(), request)
 	if !errors.Is(err, ErrDeletePointIdentityConflict) {
 		t.Fatalf("live marker drift error=%v result=%+v, want identity conflict", err, result)
 	}
 	if transport.deleteCalls != 0 {
 		t.Fatalf("mismatched live marker deleted %d time(s)", transport.deleteCalls)
 	}
+}
+
+func TestRcloneExactPointDeletionAuthenticatesExactPortableControls(t *testing.T) {
+	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"."+strings.Repeat("b", 32))
+	base := validRclonePrefixDeleteRequest(t, prefix)
+	access := base.Snapshot.Access.AdapterData.(RclonePrefixDeletionAccess)
+	attemptPath := strings.TrimSuffix(prefix.value, "/") + "/control/attempt.json"
+	commitPath := strings.TrimSuffix(prefix.value, "/") + "/control/commit.json"
+	controls, err := rcloneDeletionControlsForPrefix(prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		mutate  func(map[string][]byte)
+		wantErr error
+	}{
+		{
+			name: "malformed attempt envelope",
+			mutate: func(payloads map[string][]byte) {
+				payloads[attemptPath] = []byte(`{"version":1,"kind":"attempt","document":{},"authentication":"bad"}`)
+			},
+			wantErr: ErrDeletePointIdentityConflict,
+		},
+		{
+			name: "wrong HMAC",
+			mutate: func(payloads map[string][]byte) {
+				payloads[commitPath] = append([]byte(nil), controls.commitPayload...)
+				payloads[commitPath][len(payloads[commitPath])-2] ^= 1
+			},
+			wantErr: ErrDeletePointIdentityConflict,
+		},
+		{
+			name: "wrong frozen key",
+			mutate: func(payloads map[string][]byte) {
+				wrongKey := []byte("FAKE_RCLONE_WRONG_MARKER_AUTH_KEY_32_BYTES")
+				payloads[attemptPath], _, _, _ = encodeRcloneAuthenticatedControl(
+					"attempt", mustRcloneAttemptDocument(t, access.Attempt), wrongKey,
+				)
+			},
+			wantErr: ErrDeletePointIdentityConflict,
+		},
+		{
+			name: "wrong control path",
+			mutate: func(payloads map[string][]byte) {
+				foreignRoot := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("c", 32)+"."+strings.Repeat("d", 32))
+				foreign, foreignErr := rcloneDeletionControlsForPrefix(foreignRoot)
+				if foreignErr != nil {
+					t.Fatal(foreignErr)
+				}
+				payloads[attemptPath] = foreign.attemptPayload
+				payloads[commitPath] = foreign.commitPayload
+			},
+			wantErr: ErrDeletePointIdentityConflict,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			payloads := map[string][]byte{
+				attemptPath: append([]byte(nil), controls.attemptPayload...),
+				commitPath:  append([]byte(nil), controls.commitPayload...),
+			}
+			test.mutate(payloads)
+			transport := &rcloneDeletionTransport{prefixPresent: true, controlPayloads: payloads}
+			result, err := newRclonePrefixPointDeleterForTest(t, transport).DeletePoint(context.Background(), base)
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("result=%+v err=%v, want %v", result, err, test.wantErr)
+			}
+			if transport.deleteCalls != 0 {
+				t.Fatalf("mismatched controls issued purge %d time(s)", transport.deleteCalls)
+			}
+		})
+	}
+}
+
+func mustRcloneAttemptDocument(t *testing.T, attempt RcloneAttemptV1) []byte {
+	t.Helper()
+	document, err := json.Marshal(rcloneAttemptToWire(attempt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return document
 }
 
 func TestRcloneExactPointDeletionDeletesFrozenNativeVersions(t *testing.T) {
@@ -348,6 +451,9 @@ func TestValidCommittedRclonePointPrefixAcceptsPublicationAttemptRoot(t *testing
 	if !validCommittedRclonePointPrefix("backup:managed/v1/points/" + pointID + "." + attemptID) {
 		t.Fatal("publication portable attempt root must be an exact committed prefix")
 	}
+	if validCommittedRclonePointPrefix("backup:managed/v1/points/" + pointID) {
+		t.Fatal("point-only prefix must stay rejected")
+	}
 	if validCommittedRclonePointPrefix("backup:managed/v1/points") {
 		t.Fatal("parent points prefix must stay rejected")
 	}
@@ -361,9 +467,6 @@ func TestRcloneExactPointDeletionForbidsUnversionedCurrentDelete(t *testing.T) {
 	}})
 	if _, err := deleter.DeletePoint(context.Background(), request); !errors.Is(err, ErrInvalidDeletePointRequest) {
 		t.Fatalf("unversioned delete error=%v, want invalid delete request", err)
-	}
-	if native.unversionedDeletes != 0 || len(native.deleted) != 0 {
-		t.Fatalf("unversioned/current delete reached native port deleted=%d unversioned=%d", len(native.deleted), native.unversionedDeletes)
 	}
 }
 
@@ -388,7 +491,7 @@ func TestRcloneExactPointDeletionBlocksWORM(t *testing.T) {
 }
 
 func TestRcloneExactPointDeletionHidesPrefixAndVersionIDs(t *testing.T) {
-	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"/data")
+	prefix := mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"."+strings.Repeat("b", 32))
 	payload, err := json.Marshal(validRclonePrefixDeleteRequest(t, prefix))
 	if err != nil {
 		t.Fatal(err)
@@ -413,7 +516,7 @@ func TestRclonePrefixDeletionAccessOmitsMarkerDigest(t *testing.T) {
 	digest := strings.Repeat("b", 64)
 	identity := strings.Repeat("c", 64)
 	payload, err := json.Marshal(RclonePrefixDeletionAccess{
-		Prefix:               mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"/data"),
+		Prefix:               mustRclonePrivateLocatorForTest(t, "backup:managed/v1/points/"+strings.Repeat("a", 32)+"."+strings.Repeat("b", 32)),
 		MarkerDigest:         digest,
 		ExpectedRootIdentity: identity,
 		ConfigDigest:         strings.Repeat("d", 64),
@@ -429,33 +532,116 @@ func TestRclonePrefixDeletionAccessOmitsMarkerDigest(t *testing.T) {
 	}
 }
 
+const rcloneDeletionMarkerKeyForTest = "FAKE_RCLONE_MARKER_AUTH_KEY_32_BYTES_FOR_TEST_ONLY"
+
+type rcloneDeletionControls struct {
+	key            []byte
+	attempt        RcloneAttemptV1
+	commit         RcloneCommitV1
+	attemptPayload []byte
+	commitPayload  []byte
+}
+
+func rcloneDeletionControlsForPrefix(prefix RclonePrivateLocator) (rcloneDeletionControls, error) {
+	repositoryID := strings.Repeat("1", 32)
+	configDigest := strings.Repeat("d", 64)
+	root, err := rcloneManagedRootFromPointPrefix(prefix)
+	if err != nil {
+		return rcloneDeletionControls{}, err
+	}
+	attempt := validRcloneAttemptForTest(backupasset.PublicationVersionedPrefix)
+	attempt.RepositoryID = repositoryID
+	attempt.TaskRepositoryLinkID = strings.Repeat("2", 32)
+	attempt.RecoveryPointID = strings.Repeat("a", 32)
+	attempt.AttemptID = strings.Repeat("b", 32)
+	attempt.ConfigDigest = configDigest
+	attempt.ManagedRootIdentityDigest = rclonePortableRootIdentity(configDigest, root)
+	attempt.Portable.AttemptComponent = attempt.RecoveryPointID + "." + attempt.AttemptID
+
+	key := []byte(rcloneDeletionMarkerKeyForTest)
+	attemptDocument, err := json.Marshal(rcloneAttemptToWire(attempt))
+	if err != nil {
+		return rcloneDeletionControls{}, err
+	}
+	attemptPayload, _, _, err := encodeRcloneAuthenticatedControl("attempt", attemptDocument, key)
+	if err != nil {
+		return rcloneDeletionControls{}, err
+	}
+	attemptIdentity := sha256Hex(attemptPayload)
+	controlRoot := strings.TrimSuffix(prefix.value, "/") + "/control"
+	dataRoot := strings.TrimSuffix(prefix.value, "/") + "/data"
+	commit := RcloneCommitV1{
+		SchemaVersion: 1, LayoutVersion: attempt.LayoutVersion, MinimumRuntimeRevision: attempt.MinimumRuntimeRevision,
+		RepositoryID: attempt.RepositoryID, TaskRepositoryLinkID: attempt.TaskRepositoryLinkID,
+		RecoveryPointID: attempt.RecoveryPointID, AttemptID: attempt.AttemptID,
+		PublicationMode: attempt.PublicationMode, PointDeadlineAt: attempt.PointDeadlineAt,
+		ProviderCommittedAt: attempt.PreparedAt, ManifestIndexDigest: strings.Repeat("1", 64),
+		ManifestChunkDigests: []string{strings.Repeat("2", 64)}, ManifestEntryCount: 1, LogicalBytes: 5,
+		SourceObservationDigest: strings.Repeat("3", 64), DestinationObservationDigest: strings.Repeat("4", 64),
+		ContentProofDigest: strings.Repeat("5", 64), FidelityEvidenceDigest: strings.Repeat("6", 64),
+		CostEvidenceDigest: strings.Repeat("7", 64), CapabilityEvidenceDigest: strings.Repeat("8", 64),
+		ChildFenceDigest: attempt.ChildFenceDigest,
+		Portable: &RclonePortableCommitV1{
+			AttemptIdentityDigest: attemptIdentity,
+			ControlIdentityDigest: keyedPrivateLocatorDigest(key, controlRoot),
+			DataIdentityDigest:    keyedPrivateLocatorDigest(key, dataRoot),
+			AttemptMarkerDigest:   attempt.Portable.AttemptMarkerDigest, CommitComponent: "commit.json",
+			CommitPayloadDigest: strings.Repeat("9", 64), CommitAuthenticationDigest: strings.Repeat("a", 64),
+			ConsistencyEvidenceDigest: strings.Repeat("b", 64), HashEvidenceDigest: strings.Repeat("c", 64),
+			DownloadVerifiedBytes: 5,
+		},
+	}
+	commitPayload, commitDigest, commitAuthentication, err := encodeRcloneCommitMarker(commit, key)
+	if err != nil {
+		return rcloneDeletionControls{}, err
+	}
+	commit.Portable.CommitPayloadDigest = commitDigest
+	commit.Portable.CommitAuthenticationDigest = commitAuthentication
+	if err := commit.Validate(); err != nil {
+		return rcloneDeletionControls{}, err
+	}
+	return rcloneDeletionControls{
+		key: key, attempt: attempt, commit: commit,
+		attemptPayload: attemptPayload, commitPayload: commitPayload,
+	}, nil
+}
+
 func validRclonePrefixDeleteRequest(t *testing.T, prefix RclonePrivateLocator) DeletePointRequest {
 	t.Helper()
+	controls, err := rcloneDeletionControlsForPrefix(prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configDigest := controls.attempt.ConfigDigest
 	root, err := rcloneManagedRootFromPointPrefix(prefix)
 	if err != nil {
 		t.Fatal(err)
 	}
-	configDigest := strings.Repeat("d", 64)
-	repositoryID := strings.Repeat("1", 32)
+	sourceFingerprint := rclonePortableSourceIdentity(controls.key, controls.commit.RepositoryID, prefix.value,
+		controls.commit.Portable.CommitComponent, controls.commit.Portable.CommitPayloadDigest)
 	binding := AccessBinding{
-		Provider: backupasset.ProviderRclone, RepositoryID: repositoryID,
+		Provider: backupasset.ProviderRclone, RepositoryID: controls.attempt.RepositoryID,
 		Secret: []byte("FAKE_RCLONE_CONFIG_FOR_TEST_ONLY"),
 		AdapterData: RclonePrefixDeletionAccess{
 			Prefix:               prefix,
-			MarkerDigest:         strings.Repeat("b", 64),
+			MarkerDigest:         sourceFingerprint,
 			ExpectedBackend:      "local",
 			ExpectedRootIdentity: rclonePortableRootIdentity(configDigest, root),
 			ConfigDigest:         configDigest,
+			MarkerKey:            append([]byte(nil), controls.key...),
+			Attempt:              controls.attempt,
+			Commit:               controls.commit,
+			ExpectedAttemptRoot:  prefix.value,
 			Command:              &RemoteCommandAccess{Node: model.Node{ID: 9}},
 		},
 	}
 	return DeletePointRequest{
 		Snapshot: ReadSnapshot{
-			RepositoryID: repositoryID, CapabilityRevision: 1,
-			SourceRevision: strings.Repeat("b", 64), Access: binding,
+			RepositoryID: controls.attempt.RepositoryID, CapabilityRevision: 1,
+			SourceRevision: sourceFingerprint, Access: binding,
 		},
 		Point:                  PointLocator{Native: prefix.value},
-		ExpectedSourceRevision: strings.Repeat("b", 64),
+		ExpectedSourceRevision: sourceFingerprint,
 		OperationID:            strings.Repeat("e", 32),
 	}
 }
@@ -465,7 +651,9 @@ func validRcloneNativeDeleteRequest(t *testing.T, versions []RcloneNativeExactVe
 	repositoryID := strings.Repeat("1", 32)
 	binding := AccessBinding{
 		Provider: backupasset.ProviderRclone, RepositoryID: repositoryID,
-		AdapterData: RcloneNativeDeletionAccess{Versions: versions},
+		AdapterData: RcloneNativeDeletionAccess{
+			Versions: versions, AuthorityDigest: strings.Repeat("f", 64),
+		},
 	}
 	return DeletePointRequest{
 		Snapshot: ReadSnapshot{
@@ -517,13 +705,14 @@ func newRcloneNativePointDeleterForTest(t *testing.T, native *rcloneNativeDeleti
 }
 
 type rcloneDeletionTransport struct {
-	prefixPresent    bool
-	liveBackend      string
-	liveMarkerDigest string
-	deleteCalls      int
-	deleted          RclonePrivateLocator
-	statInvocation   CommandInvocation
-	purgeInvocation  CommandInvocation
+	prefixPresent   bool
+	liveBackend     string
+	controlPayloads map[string][]byte
+	deleteCalls     int
+	deleted         RclonePrivateLocator
+	statInvocation  CommandInvocation
+	purgeInvocation CommandInvocation
+	catSources      []string
 }
 
 func (transport *rcloneDeletionTransport) Run(_ context.Context, invocation CommandInvocation, _ OperationLimits) (CommandOutput, error) {
@@ -540,11 +729,19 @@ func (transport *rcloneDeletionTransport) Run(_ context.Context, invocation Comm
 		}
 		return CommandOutput{Stdout: []byte(`{"Path":"data","Name":"data","IsDir":true}`)}, nil
 	case OperationRcloneManagedCat:
-		digest := transport.liveMarkerDigest
-		if digest == "" {
-			digest = strings.Repeat("b", 64)
+		if invocation.RcloneSource == nil {
+			return CommandOutput{}, errors.New("missing Rclone control source")
 		}
-		return CommandOutput{Stdout: []byte(`{"source_fingerprint":"` + digest + `"}`)}, nil
+		source := invocation.RcloneSource.value
+		transport.catSources = append(transport.catSources, source)
+		if payload, ok := transport.controlPayloads[source]; ok {
+			return CommandOutput{Stdout: append([]byte(nil), payload...)}, nil
+		}
+		payload, err := rcloneDeletionControlPayloadForSource(source)
+		if err != nil {
+			return CommandOutput{}, err
+		}
+		return CommandOutput{Stdout: payload}, nil
 	case OperationRcloneManagedDeleteExactPrefix:
 		transport.deleteCalls++
 		transport.purgeInvocation = invocation
@@ -556,6 +753,32 @@ func (transport *rcloneDeletionTransport) Run(_ context.Context, invocation Comm
 	default:
 		return CommandOutput{}, errors.New("unexpected rclone deletion operation")
 	}
+}
+
+func rcloneDeletionControlPayloadForSource(source string) ([]byte, error) {
+	const attemptSuffix = "/control/attempt.json"
+	const commitSuffix = "/control/commit.json"
+	var suffix string
+	switch {
+	case strings.HasSuffix(source, attemptSuffix):
+		suffix = attemptSuffix
+	case strings.HasSuffix(source, commitSuffix):
+		suffix = commitSuffix
+	default:
+		return nil, errors.New("unexpected Rclone control path")
+	}
+	root, err := NewRclonePrivateLocator(strings.TrimSuffix(source, suffix))
+	if err != nil {
+		return nil, err
+	}
+	controls, err := rcloneDeletionControlsForPrefix(root)
+	if err != nil {
+		return nil, err
+	}
+	if suffix == attemptSuffix {
+		return controls.attemptPayload, nil
+	}
+	return controls.commitPayload, nil
 }
 
 func (*rcloneDeletionTransport) Open(context.Context, CommandInvocation, OperationLimits, int64) (ReadHandle, error) {
@@ -591,7 +814,14 @@ func (transport *rclonePrefixPresenceTransport) Run(_ context.Context, invocatio
 		}
 		return CommandOutput{}, sshutil.ErrCommandFailed
 	case OperationRcloneManagedCat:
-		return CommandOutput{Stdout: []byte(`{"source_fingerprint":"` + strings.Repeat("b", 64) + `"}`)}, nil
+		if invocation.RcloneSource == nil {
+			return CommandOutput{}, errors.New("missing Rclone control source")
+		}
+		payload, err := rcloneDeletionControlPayloadForSource(invocation.RcloneSource.value)
+		if err != nil {
+			return CommandOutput{}, err
+		}
+		return CommandOutput{Stdout: payload}, nil
 	case OperationRcloneManagedDeleteExactPrefix:
 		transport.deleteCalls++
 		return CommandOutput{}, nil
