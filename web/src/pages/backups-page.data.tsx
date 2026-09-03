@@ -21,9 +21,14 @@ import {
   type BackupAssetsSemanticIssue,
 } from "@/features/backup-assets/use-backup-assets-state";
 import { useAuth } from "@/context/auth-context.hooks";
+import { normalizeAppPathname } from "@/lib/backup-navigation";
 
 export function BackupsDataPage() {
   const location = useLocation();
+  if (normalizeAppPathname(location.pathname) !== "/app/backups/data") {
+    return null;
+  }
+
   const route = parseBackupAssetsRoute(location.pathname, location.search);
 
   if (route.status === "invalid") {
@@ -79,10 +84,8 @@ function BackupsDataWorkspace({
   };
 
   const fileSources = useBackupFileSources({ token, route: resolvedRoute, onRoutePatch: handleRoutePatch });
-  const controllerRoute = gateBackupAssetsBrowseRoute(
-    resolvedRoute,
-    fileSources.selectedVersion?.browseState ?? null,
-  );
+  const browseState = fileSources.selectedVersion?.browseState ?? null;
+  const controllerRoute = gateBackupAssetsBrowseRoute(resolvedRoute, browseState);
   const controller = useBackupAssetsState({
     token,
     role,
@@ -93,7 +96,7 @@ function BackupsDataWorkspace({
   });
   const sourceWorkspaceUnavailable =
     fileSources.status === "blocked" || fileSources.status === "permission_denied" ||
-    (resolvedRoute.recoveryPointId !== undefined && fileSources.selectedVersion?.browseState !== "browsable");
+    (browseState !== null && browseState !== "browsable");
 
   return (
     <div className="flex min-h-[32rem] flex-col" aria-labelledby="backup-assets-data-title">
@@ -120,6 +123,10 @@ function BackupsDataWorkspace({
         onLoadMoreNodes={fileSources.loadMoreNodes}
         onLoadMoreSets={fileSources.loadMoreSets}
         onLoadMoreVersions={fileSources.loadMoreVersions}
+        paginationError={fileSources.paginationError}
+        paginationPermissionDenied={fileSources.paginationPermissionDenied}
+        canRetry={fileSources.canRetry}
+        onRetry={fileSources.retry}
       />
       {sourceWorkspaceUnavailable ? null : (
         <BackupAssetsWorkspace

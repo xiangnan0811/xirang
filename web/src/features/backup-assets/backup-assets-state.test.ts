@@ -162,6 +162,139 @@ describe("backupAssetsReducer", () => {
     ).toBe(state);
   });
 
+
+  it("clears stale rows immediately on a first-page replacement load", () => {
+    let state = createInitialBackupAssetsState(route());
+    state = backupAssetsReducer(state, { type: "results_loading", requestKey: "browse:one" });
+    state = backupAssetsReducer(state, {
+      type: "results_replaced",
+      requestKey: "browse:one",
+      rows: [row("1")],
+      nextCursor: "f".repeat(32),
+      coverage: "partial",
+      authoritativeEmpty: false,
+      directory: null,
+    });
+    state = backupAssetsReducer(state, { type: "toggle_selection", ref: ref("1") });
+
+    const next = backupAssetsReducer(state, {
+      type: "results_loading",
+      requestKey: "browse:one",
+      replace: true,
+    });
+
+    expect(next.result.rows).toEqual([]);
+    expect(next.result.nextCursor).toBeNull();
+    expect(next.result.status).toBe("loading");
+    expect(next.selection.size).toBe(0);
+    expect(next.result.error).toBeUndefined();
+  });
+
+  it("preserves current rows while appending the same request", () => {
+    let state = createInitialBackupAssetsState(route());
+    state = backupAssetsReducer(state, { type: "results_loading", requestKey: "browse:one" });
+    state = backupAssetsReducer(state, {
+      type: "results_replaced",
+      requestKey: "browse:one",
+      rows: [row("1")],
+      nextCursor: "f".repeat(32),
+      coverage: "complete",
+      authoritativeEmpty: false,
+      directory: null,
+    });
+
+    const next = backupAssetsReducer(state, {
+      type: "results_loading",
+      requestKey: "browse:one",
+      replace: false,
+    });
+
+    expect(next.result.rows).toEqual([row("1")]);
+    expect(next.result.nextCursor).toBe("f".repeat(32));
+    expect(next.result.status).toBe("loading");
+  });
+
+  it("stores a mapped result error without keeping stale rows from another source", () => {
+    let state = createInitialBackupAssetsState(route({ nodeId: 3, taskId: 7, backupSetId: "1".repeat(32) }));
+    state = backupAssetsReducer(state, { type: "results_loading", requestKey: "search:docker" });
+    state = backupAssetsReducer(state, {
+      type: "results_replaced",
+      requestKey: "search:docker",
+      rows: [row("1")],
+      nextCursor: null,
+      coverage: "partial",
+      authoritativeEmpty: false,
+      directory: null,
+    });
+
+    const failed = backupAssetsReducer(state, {
+      type: "results_failed",
+      requestKey: "search:docker",
+      error: {
+        code: "temporarily_unavailable",
+        translationKey: "backupAssets.errors.temporarilyUnavailable",
+        retryable: true,
+        action: "retry",
+      },
+    });
+    expect(failed.result.status).toBe("failed");
+    expect(failed.result.error?.translationKey).toBe("backupAssets.errors.temporarilyUnavailable");
+    expect(failed.result.coverage).toBe("partial");
+
+    const switched = backupAssetsReducer(failed, {
+      type: "route_changed",
+      route: route({ nodeId: 4, taskId: 8, backupSetId: "2".repeat(32) }),
+    });
+    expect(switched.result.rows).toEqual([]);
+    expect(switched.result.status).toBe("idle");
+    expect(switched.contextGeneration).toBeGreaterThan(failed.contextGeneration);
+
+    expect(
+      backupAssetsReducer(switched, {
+        type: "results_replaced",
+        requestKey: "search:docker",
+        rows: [row("9")],
+        nextCursor: null,
+        coverage: "complete",
+        authoritativeEmpty: false,
+        directory: null,
+      })
+    ).toBe(switched);
+  });
+
+  it("snapshots a submitted query independently of the draft and clears it on explicit clear", () => {
+    let state = createInitialBackupAssetsState(route({ view: "search", sort: "relevance", direction: "desc" }));
+    state = backupAssetsReducer(state, { type: "search_draft_changed", text: "docker" });
+    state = backupAssetsReducer(state, { type: "search_submitted", query: "docker" });
+    state = backupAssetsReducer(state, { type: "search_draft_changed", text: "docker-compose" });
+    state = backupAssetsReducer(state, { type: "results_loading", requestKey: "search:docker" });
+    state = backupAssetsReducer(state, {
+      type: "results_replaced",
+      requestKey: "search:docker",
+      rows: [row("1")],
+      nextCursor: "f".repeat(32),
+      coverage: "complete",
+      authoritativeEmpty: false,
+      directory: null,
+    });
+    state = backupAssetsReducer(state, {
+      type: "ticket_ready",
+      bindingKey: assetRefKey(ref("1")),
+      contentUrl: `/api/v1/asset-content/${"9".repeat(32)}`,
+      expiresAt: "2026-07-20T00:00:00Z",
+    });
+
+    expect(state.submittedSearchQuery).toBe("docker");
+    expect(state.searchDraft).toBe("docker-compose");
+
+    const cleared = backupAssetsReducer(state, { type: "search_cleared" });
+    expect(cleared.submittedSearchQuery).toBeNull();
+    expect(cleared.searchDraft).toBe("");
+    expect(cleared.result.rows).toEqual([]);
+    expect(cleared.result.nextCursor).toBeNull();
+    expect(cleared.selection.size).toBe(0);
+    expect(cleared.ticket.status).toBe("idle");
+  });
   it("ignores a replacement for an obsolete result key", () => {
     let state = createInitialBackupAssetsState(route());
     state = backupAssetsReducer(state, { type: "results_loading", requestKey: "browse:new" });
@@ -311,6 +444,63 @@ describe("backupAssetsReducer", () => {
     state = backupAssetsReducer(state, { type: "ticket_detached" });
     expect(state.ticket).toEqual({ status: "idle" });
     expect(JSON.stringify(state)).not.toContain("asset-content");
+  });
+
+  it("retains current rows and cursor when the same request fails after a page", () => {
+    let state = createInitialBackupAssetsState(route());
+    state = backupAssetsReducer(state, { type: "results_loading", requestKey: "search:docker" });
+    state = backupAssetsReducer(state, {
+      type: "results_replaced",
+      requestKey: "search:docker",
+      rows: [row("1")],
+      nextCursor: "f".repeat(32),
+      coverage: "complete",
+      authoritativeEmpty: false,
+      directory: null,
+    });
+
+    const failed = backupAssetsReducer(state, {
+      type: "results_failed",
+      requestKey: "search:docker",
+      error: {
+        code: "temporarily_unavailable",
+        translationKey: "backupAssets.errors.temporarilyUnavailable",
+        retryable: true,
+        action: "retry",
+      },
+    });
+
+    expect(failed.result.status).toBe("failed");
+    expect(failed.result.rows).toEqual([row("1")]);
+    expect(failed.result.nextCursor).toBe("f".repeat(32));
+  });
+
+  it("clears temporary query and selection when a saved search becomes active", () => {
+    let state = createInitialBackupAssetsState(route({
+      view: "search",
+      sort: "relevance",
+      direction: "desc",
+    }));
+    state.searchDraft = "term";
+    state.submittedSearchQuery = "term";
+    state.selection = new Map([[assetRefKey(ref("1")), ref("1")]]);
+
+    state = backupAssetsReducer(state, {
+      type: "route_changed",
+      route: route({
+        view: "search",
+        savedSearchId: "e".repeat(32),
+        sort: "relevance",
+        direction: "desc",
+        repositoryId: undefined,
+        recoveryPointId: undefined,
+      }),
+    });
+
+    expect(state.searchDraft).toBe("");
+    expect(state.submittedSearchQuery).toBeNull();
+    expect(state.selection.size).toBe(0);
+    expect(state.result.rows).toEqual([]);
   });
 });
 

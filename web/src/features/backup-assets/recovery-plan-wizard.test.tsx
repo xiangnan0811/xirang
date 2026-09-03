@@ -113,6 +113,13 @@ describe("RecoveryPlanWizard", () => {
     expect(rendered.container.textContent).not.toContain("private/recovery/result");
   });
 
+  it("moves focus to the recovery error instead of a missing phase heading", async () => {
+    const recovery = controller(recoveryState({ phase: "error", error: "unavailable" }));
+    render(<RecoveryPlanWizard open recovery={recovery} onOpenChange={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByTestId("recovery-error")).toHaveFocus());
+    expect(screen.getByRole("alert")).toHaveTextContent(/temporarily unavailable|暂时不可用/);
+  });
   it("owns labelled target inputs and advances only through controller actions", async () => {
     const user = userEvent.setup();
     const recovery = controller(recoveryState());

@@ -26,6 +26,10 @@ export interface BackupFileSourceControlsProps {
   onLoadMoreNodes: () => void | Promise<void>;
   onLoadMoreSets: () => void | Promise<void>;
   onLoadMoreVersions: () => void | Promise<void>;
+  paginationError?: boolean;
+  paginationPermissionDenied?: boolean;
+  canRetry?: boolean;
+  onRetry?: () => void;
 }
 
 export function BackupFileSourceControls({
@@ -33,6 +37,7 @@ export function BackupFileSourceControls({
   onSelectNode, onSelectSet, onSelectVersion,
   hasMoreNodes, hasMoreSets, hasMoreVersions, loadingMoreNodes, loadingMoreSets, loadingMoreVersions,
   onLoadMoreNodes, onLoadMoreSets, onLoadMoreVersions,
+  paginationError = false, paginationPermissionDenied = false, canRetry = false, onRetry,
 }: BackupFileSourceControlsProps) {
   const { t, i18n } = useTranslation();
   const selectedSet = selectedBackupSetId === undefined && !hasMoreSets && sets.length === 1
@@ -133,7 +138,20 @@ export function BackupFileSourceControls({
       {selectedSet?.browseState === "unavailable" ? <InlineAlert tone="warning" className="mt-2">{t("backupAssets.sources.unavailable")}</InlineAlert> : null}
       {status === "partial" ? <p role="status" className="mt-2 text-xs text-warning">{t("backupAssets.sources.partial")}</p> : null}
       {status === "permission_denied" ? <InlineAlert tone="warning" className="mt-2">{t("backupAssets.sources.permissionDenied")}</InlineAlert> : null}
-      {status === "blocked" ? <InlineAlert tone="warning" className="mt-2">{t("backupAssets.sources.blocked")}</InlineAlert> : null}
+      {status === "blocked" ? (
+        <InlineAlert tone="warning" className="mt-2">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>{t("backupAssets.sources.blocked")}</span>
+            {canRetry && onRetry ? (
+              <Button type="button" variant="outline" size="sm" className="touch-target min-h-11 lg:min-h-8" onClick={onRetry}>
+                {t("common.retry")}
+              </Button>
+            ) : null}
+          </div>
+        </InlineAlert>
+      ) : null}
+      {paginationError ? <InlineAlert tone="warning" className="mt-2">{t("backupAssets.sources.paginationFailed")}</InlineAlert> : null}
+      {paginationPermissionDenied ? <InlineAlert tone="warning" className="mt-2">{t("backupAssets.sources.permissionDenied")}</InlineAlert> : null}
     </section>
   );
 }

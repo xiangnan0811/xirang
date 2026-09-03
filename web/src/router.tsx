@@ -1,4 +1,5 @@
 import { Navigate, createBrowserRouter } from "react-router-dom";
+import { canonicalizeBackupLocation } from "@/lib/backup-navigation";
 import { AppShell } from "@/components/layout/app-shell";
 import { ProtectedRoute } from "@/components/protected-route";
 import { LoginPage } from "@/pages/login-page";
@@ -86,12 +87,9 @@ export const AppRouter = createBrowserRouter([
       },
       {
         path: "backups",
+        loader: canonicalizeBackupLocation,
         element: <LazyPage><BackupsPage /></LazyPage>,
         children: [
-          {
-            index: true,
-            element: <Navigate to="data" replace />
-          },
           {
             path: "overview",
             element: <LazyPage><BackupsOverviewPage /></LazyPage>

@@ -116,6 +116,8 @@ describe("backup assets route state", () => {
     `?scope=all_retained&recoveryPointId=${recoveryPointId}`,
     `?view=search&savedSearchId=${savedSearchId}&scope=all_retained`,
     `?view=search&savedSearchId=${savedSearchId}&type=file`,
+    `?view=search&savedSearchId=${savedSearchId}&nodeId=7`,
+    `?view=search&savedSearchId=${savedSearchId}&repositoryId=${repositoryId}`,
     `?view=repositories&taskId=7`,
     `?view=repositories&recoveryPointId=${recoveryPointId}`,
   ])("rejects invalid coupled data state %s", (search) => {
@@ -259,6 +261,161 @@ describe("backup assets route state", () => {
     expect(result.href).toBe(
       `/app/backups/data?repositoryId=${repositoryId}&recoveryPointId=${recoveryPointId}&entryId=${entryId}`
     );
+  });
+
+  it("preserves explicit browse-owned fields on an atomic search-to-browse patch", () => {
+    const tagId = "1".repeat(32);
+    const source = expectValid(
+      "/app/backups/data",
+      `?view=search&repositoryId=${repositoryId}&scope=all_retained&type=file&favorite=true`
+    );
+
+    const result = updateBackupAssetsRoute(source, {
+      view: "browse",
+      scope: "current",
+      recoveryPointId,
+      parentEntryId,
+      entryId,
+      types: ["file"],
+      tagId,
+      favoriteOnly: true,
+      sort: "size",
+      direction: "desc",
+      layout: "grid",
+    });
+
+    expect(result.status).toBe("valid");
+    if (result.status !== "valid") return;
+    expect(result.state).toMatchObject({
+      view: "browse",
+      scope: "current",
+      repositoryId,
+      recoveryPointId,
+      parentEntryId,
+      entryId,
+      types: ["file"],
+      tagId,
+      favoriteOnly: true,
+      sort: "size",
+      direction: "desc",
+      layout: "grid",
+    });
+    expect(result.href).toBe(
+      `/app/backups/data?repositoryId=${repositoryId}&recoveryPointId=${recoveryPointId}` +
+        `&parentEntryId=${parentEntryId}&entryId=${entryId}&type=file&tag=${tagId}` +
+        "&favorite=true&sort=size&direction=desc&layout=grid"
+    );
+  });
+
+  it("applies browse defaults when search-to-browse omits filter and sort fields", () => {
+    const source = expectValid(
+      "/app/backups/data",
+      `?view=search&repositoryId=${repositoryId}&scope=all_retained&type=file&tag=${savedSearchId}&favorite=true`
+    );
+
+    const result = updateBackupAssetsRoute(source, {
+      view: "browse",
+      recoveryPointId,
+      entryId,
+    });
+
+    expect(result.status).toBe("valid");
+    if (result.status !== "valid") return;
+    expect(result.state).toMatchObject({
+      view: "browse",
+      scope: "current",
+      repositoryId,
+      recoveryPointId,
+      entryId,
+      types: [],
+      favoriteOnly: false,
+      sort: "name",
+      direction: "asc",
+    });
+    expect(result.state.tagId).toBeUndefined();
+    expect(result.href).toBe(
+      `/app/backups/data?repositoryId=${repositoryId}&recoveryPointId=${recoveryPointId}&entryId=${entryId}`
+    );
+  });
+
+  it("clears unverified source hierarchy while opening an all-retained search hit", () => {
+    const backupSetId = "1".repeat(32);
+    const source = expectValid(
+      "/app/backups/data",
+      `?view=search&nodeId=7&backupSetId=${backupSetId}&repositoryId=${repositoryId}&taskId=9&scope=all_retained`
+    );
+
+    const result = updateBackupAssetsRoute(source, {
+      view: "browse",
+      scope: "current",
+      nodeId: undefined,
+      backupSetId: undefined,
+      repositoryId: undefined,
+      taskId: undefined,
+      recoveryPointId,
+      entryId,
+    });
+
+    expect(result.status).toBe("valid");
+    if (result.status !== "valid") return;
+    expect(result.state).toMatchObject({
+      view: "browse",
+      scope: "current",
+      recoveryPointId,
+      entryId,
+    });
+    expect(result.state.nodeId).toBeUndefined();
+    expect(result.state.backupSetId).toBeUndefined();
+    expect(result.state.repositoryId).toBeUndefined();
+    expect(result.state.taskId).toBeUndefined();
+    expect(result.href).toBe(
+      `/app/backups/data?recoveryPointId=${recoveryPointId}&entryId=${entryId}`
+    );
+  });
+
+  it("activates a saved search as an exclusive identity without source or filter state", () => {
+    const backupSetId = "1".repeat(32);
+    const source = expectValid(
+      "/app/backups/data",
+      `?nodeId=7&backupSetId=${backupSetId}&repositoryId=${repositoryId}&taskId=9&recoveryPointId=${recoveryPointId}&entryId=${entryId}`,
+    );
+
+    const result = updateBackupAssetsRoute(source, { savedSearchId });
+
+    expect(result.status).toBe("valid");
+    if (result.status !== "valid") return;
+    expect(result.state).toMatchObject({
+      view: "search",
+      savedSearchId,
+      scope: "current",
+      sort: "relevance",
+      direction: "desc",
+    });
+    expect(result.state.nodeId).toBeUndefined();
+    expect(result.state.backupSetId).toBeUndefined();
+    expect(result.state.repositoryId).toBeUndefined();
+    expect(result.state.taskId).toBeUndefined();
+    expect(result.state.recoveryPointId).toBeUndefined();
+    expect(result.state.parentEntryId).toBeUndefined();
+    expect(result.state.entryId).toBeUndefined();
+    expect(result.href).toBe(`/app/backups/data?view=search&savedSearchId=${savedSearchId}`);
+  });
+
+  it("exits saved search to browse when a source node is selected", () => {
+    const source = expectValid("/app/backups/data", `?view=search&savedSearchId=${savedSearchId}`);
+
+    const result = updateBackupAssetsRoute(source, { nodeId: 7 });
+
+    expect(result.status).toBe("valid");
+    if (result.status !== "valid") return;
+    expect(result.state).toMatchObject({
+      view: "browse",
+      nodeId: 7,
+      scope: "current",
+      sort: "name",
+      direction: "asc",
+    });
+    expect(result.state.savedSearchId).toBeUndefined();
   });
 
   it.each([

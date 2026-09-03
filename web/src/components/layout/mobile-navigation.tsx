@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { LogOut, MoreHorizontal, RefreshCw, X } from "lucide-react";
-import { getVisibleNavItems } from "@/components/layout/navigation";
+import { backupFilesHref, BACKUP_FILES_PATH, getVisibleNavItems, isNavPathActive } from "@/components/layout/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DisplayPreferencesToggle } from "@/components/display-preferences-toggle";
 import { Button } from "@/components/ui/button";
@@ -111,11 +111,11 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
       >
         {primaryTabs.map((item) => {
           const Icon = item.icon;
-          const active = location.pathname === item.path;
+          const active = isNavPathActive(item.path, location.pathname);
           return (
             <NavLink
               key={item.path}
-              to={item.path}
+              to={item.path === BACKUP_FILES_PATH ? backupFilesHref(location.pathname, location.search) : item.path}
               end={item.path === "/app/overview"}
               aria-label={t("appShell.switchTo", { name: t(item.titleKey) })}
               aria-current={active ? "page" : undefined}
@@ -134,7 +134,7 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
               >
                 <Icon className="size-[18px]" aria-hidden />
               </span>
-              <span>{t(item.titleKey)}</span>
+              <span className="max-w-full truncate whitespace-nowrap leading-none">{t(item.titleKey)}</span>
             </NavLink>
           );
         })}
@@ -162,7 +162,7 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
           >
             <MoreHorizontal className="size-[18px]" aria-hidden />
           </span>
-          <span>{t("nav.more")}</span>
+          <span className="max-w-full truncate whitespace-nowrap leading-none">{t("nav.more")}</span>
         </button>
       </nav>
 
@@ -203,15 +203,15 @@ export function MobileNavigation({ username, role, onLogout, onRefresh }: Mobile
             <div className="space-y-2">
               {drawerItems.map((item) => {
                 const Icon = item.icon;
-                const active = location.pathname === item.path;
+                const active = isNavPathActive(item.path, location.pathname);
                 return (
                   <Link
                     key={item.path}
-                    to={item.path}
+                    to={item.path === BACKUP_FILES_PATH ? backupFilesHref(location.pathname, location.search) : item.path}
                     onClick={() => setDrawerOpen(false)}
                     aria-current={active ? "page" : undefined}
                     className={cn(
-                      "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-[color,background-color,opacity] duration-200",
+                      "flex min-h-11 items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-[color,background-color,opacity] duration-200",
                       active
                         ? "border-primary/35 bg-[hsl(var(--nav-active))] text-[hsl(var(--nav-active-foreground))]"
                         : "border-transparent text-muted-foreground hover:border-border/70 hover:bg-background/70 hover:text-foreground"

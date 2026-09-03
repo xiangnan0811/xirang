@@ -1,3 +1,4 @@
+import type { BackupAssetsUIError } from "@/lib/api/backup-assets-error";
 import type {
   AssetRef,
   AssetSearchHitField,
@@ -28,6 +29,7 @@ export interface BackupAssetsResultState {
   coverage: BackupAssetsResultCoverage;
   authoritativeEmpty: boolean;
   directory: BackupAssetDirectoryContext | null;
+  error?: BackupAssetsUIError;
 }
 
 export type BackupAssetsOverlayState =
@@ -48,6 +50,7 @@ export interface BackupAssetsState {
   result: BackupAssetsResultState;
   selection: Map<string, AssetRef>;
   searchDraft: string;
+  submittedSearchQuery: string | null;
   overlay: BackupAssetsOverlayState;
   ticket: BackupAssetsTicketState;
   tombstone: "repository" | "recovery_point" | "parent" | "entry" | null;
@@ -55,7 +58,7 @@ export interface BackupAssetsState {
 
 export type BackupAssetsAction =
   | { type: "route_changed"; route: BackupAssetsRouteState }
-  | { type: "results_loading"; requestKey: string }
+  | { type: "results_loading"; requestKey: string; replace?: boolean }
   | {
       type: "results_replaced";
       requestKey: string;
@@ -72,11 +75,13 @@ export type BackupAssetsAction =
       nextCursor: string | null;
       directory: BackupAssetDirectoryContext | null;
     }
-  | { type: "results_failed"; requestKey: string }
+  | { type: "results_failed"; requestKey: string; error?: BackupAssetsUIError }
   | { type: "cursor_stale"; requestKey: string }
   | { type: "toggle_selection"; ref: AssetRef }
   | { type: "clear_selection" }
   | { type: "search_draft_changed"; text: string }
+  | { type: "search_submitted"; query: string }
+  | { type: "search_cleared" }
   | { type: "overlay_started"; attemptKey: string; operation: string }
   | { type: "overlay_reconciling" }
   | { type: "overlay_failed" }
@@ -95,6 +100,7 @@ export function createInitialBackupAssetsState(route: BackupAssetsRouteState): B
     result: emptyResultState(),
     selection: new Map(),
     searchDraft: "",
+    submittedSearchQuery: null,
     overlay: { status: "idle" },
     ticket: { status: "idle" },
     tombstone: null,
@@ -105,16 +111,34 @@ export function backupAssetsReducer(state: BackupAssetsState, action: BackupAsse
   switch (action.type) {
     case "route_changed":
       return reduceRouteChange(state, action.route);
-    case "results_loading":
+    case "results_loading": {
+      const replace = action.replace ?? action.requestKey !== state.result.requestKey;
+      if (!replace) {
+        return {
+          ...state,
+          result: {
+            ...state.result,
+            status: "loading",
+            requestKey: action.requestKey,
+            authoritativeEmpty: false,
+          },
+        };
+      }
       return {
         ...state,
         result: {
-          ...state.result,
           status: "loading",
           requestKey: action.requestKey,
+          generation: state.result.generation + 1,
+          rows: [],
+          nextCursor: null,
+          coverage: "unavailable",
           authoritativeEmpty: false,
+          directory: null,
         },
+        selection: new Map(),
       };
+    }
     case "results_replaced":
       if (state.result.requestKey !== action.requestKey) return state;
       return {
@@ -154,24 +178,27 @@ export function backupAssetsReducer(state: BackupAssetsState, action: BackupAsse
           status: "ready",
           rows: deduplicateRows([...state.result.rows, ...action.rows]),
           nextCursor: action.nextCursor,
+          error: undefined,
         },
       };
     }
     case "results_failed":
       return state.result.requestKey === action.requestKey
-        ? { ...state, result: { ...state.result, status: "failed" } }
+        ? { ...state, result: { ...state.result, status: "failed", error: action.error } }
         : state;
     case "cursor_stale":
       return state.result.requestKey === action.requestKey
         ? {
             ...state,
             result: {
-              ...state.result,
               status: "loading",
+              requestKey: action.requestKey,
+              generation: state.result.generation + 1,
               rows: [],
               nextCursor: null,
+              coverage: state.result.coverage,
               authoritativeEmpty: false,
-              generation: state.result.generation + 1,
+              directory: null,
             },
             selection: new Map(),
             selectionGeneration: state.selectionGeneration + 1,
@@ -188,6 +215,22 @@ export function backupAssetsReducer(state: BackupAssetsState, action: BackupAsse
       return state.selection.size === 0 ? state : { ...state, selection: new Map() };
     case "search_draft_changed":
       return { ...state, searchDraft: action.text };
+    case "search_submitted":
+      return state.submittedSearchQuery === action.query
+        ? state
+        : { ...state, submittedSearchQuery: action.query };
+    case "search_cleared":
+      return {
+        ...state,
+        searchDraft: "",
+        submittedSearchQuery: null,
+        contextGeneration: state.contextGeneration + 1,
+        selectionGeneration: state.selectionGeneration + 1,
+        result: { ...emptyResultState(), generation: state.result.generation + 1 },
+        selection: new Map(),
+        ticket: { status: "idle" },
+        tombstone: null,
+      };
     case "overlay_started":
       return {
         ...state,
@@ -236,14 +279,21 @@ export function assetRefKey(ref: AssetRef): string {
 
 function reduceRouteChange(state: BackupAssetsState, route: BackupAssetsRouteState): BackupAssetsState {
   const repositoryChanged = state.route.repositoryId !== route.repositoryId;
+  const nodeChanged = state.route.nodeId !== route.nodeId;
+  const backupSetChanged = state.route.backupSetId !== route.backupSetId;
+  const taskChanged = state.route.taskId !== route.taskId;
   const recoveryPointChanged = state.route.recoveryPointId !== route.recoveryPointId;
   const parentChanged = state.route.parentEntryId !== route.parentEntryId;
   const entryChanged = state.route.entryId !== route.entryId;
+  const viewChanged = state.route.view !== route.view;
   const resultContextChanged =
+    nodeChanged ||
+    backupSetChanged ||
     repositoryChanged ||
+    taskChanged ||
     recoveryPointChanged ||
     parentChanged ||
-    state.route.view !== route.view ||
+    viewChanged ||
     state.route.savedSearchId !== route.savedSearchId ||
     state.route.scope !== route.scope ||
     state.route.tagId !== route.tagId ||
@@ -253,6 +303,8 @@ function reduceRouteChange(state: BackupAssetsState, route: BackupAssetsRouteSta
     state.route.types.join(",") !== route.types.join(",");
 
   if (resultContextChanged) {
+    const activatingSaved =
+      route.savedSearchId !== undefined && state.route.savedSearchId !== route.savedSearchId;
     return {
       ...state,
       route,
@@ -260,6 +312,8 @@ function reduceRouteChange(state: BackupAssetsState, route: BackupAssetsRouteSta
       selectionGeneration: state.selectionGeneration + 1,
       result: { ...emptyResultState(), generation: state.result.generation + 1 },
       selection: new Map(),
+      searchDraft: activatingSaved ? "" : state.searchDraft,
+      submittedSearchQuery: activatingSaved ? null : route.view === "search" ? state.submittedSearchQuery : null,
       ticket: { status: "idle" },
       tombstone: null,
     };

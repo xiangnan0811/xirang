@@ -70,6 +70,7 @@ export interface AssetPreviewProps {
   resource: BackupAssetsValueResource<BackupContentTicket>;
   canPreview: boolean;
   canDownload: boolean;
+  canRetryPreview?: boolean;
   processingRuntime?: Pick<AuthContextValue, "token" | "role" | "ensureStepUpProof">;
   archiveContentAvailable?: boolean;
   archiveDownloadAllowed?: boolean;
@@ -86,6 +87,7 @@ export function AssetPreview({
   resource,
   canPreview,
   canDownload,
+  canRetryPreview = true,
   processingRuntime,
   archiveContentAvailable = canDownload,
   archiveDownloadAllowed = canDownload,
@@ -176,7 +178,8 @@ export function AssetPreview({
             {t("backupAssets.preview.processingStatus")}
           </Button>
         ) : null}
-        {canPreview &&
+        {canRetryPreview &&
+        canPreview &&
         (resource.status === "blocked" || resource.status === "error") &&
         resource.error?.retryable ? (
           <Button type="button" variant="ghost" size="sm" className="touch-target min-h-11 lg:min-h-8" onClick={onRetry}>

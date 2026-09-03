@@ -1,7 +1,7 @@
-import { NavLink } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import { getVisibleNavItems, navGroups } from "@/components/layout/navigation";
+import { backupFilesHref, BACKUP_FILES_PATH, getVisibleNavItems, isNavPathActive, navGroups } from "@/components/layout/navigation";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -19,8 +19,8 @@ export function DesktopSidebar({
   onToggleCollapse,
 }: DesktopSidebarProps) {
   const { t } = useTranslation();
+  const location = useLocation();
   const allItems = getVisibleNavItems(role);
-
   const navItemClass = ({
     isActive,
     isCollapsed,
@@ -66,34 +66,30 @@ export function DesktopSidebar({
               <div className="flex flex-col gap-0.5">
                 {groupItems.map((item) => {
                   const Icon = item.icon;
+                  const active = isNavPathActive(item.path, location.pathname);
                   return (
-                    <NavLink
+                    <Link
                       key={item.path}
-                      to={item.path}
+                      to={item.path === BACKUP_FILES_PATH ? backupFilesHref(location.pathname, location.search) : item.path}
                       title={t(item.titleKey)}
                       aria-label={t(item.titleKey)}
-                      className={({ isActive }) =>
-                        navItemClass({ isActive, isCollapsed })
-                      }
+                      aria-current={active ? "page" : undefined}
+                      className={navItemClass({ isActive: active, isCollapsed })}
                     >
-                      {({ isActive }) => (
-                        <>
-                          <Icon
-                            className={cn(
-                              "shrink-0",
-                              isCollapsed ? "size-5" : "size-4",
-                              isActive && "text-primary",
-                            )}
-                            aria-hidden
-                          />
-                          {!isCollapsed && (
-                            <span className="truncate text-nav">
-                              {t(item.titleKey)}
-                            </span>
-                          )}
-                        </>
+                      <Icon
+                        className={cn(
+                          "shrink-0",
+                          isCollapsed ? "size-5" : "size-4",
+                          active && "text-primary",
+                        )}
+                        aria-hidden
+                      />
+                      {!isCollapsed && (
+                        <span className="truncate text-nav">
+                          {t(item.titleKey)}
+                        </span>
                       )}
-                    </NavLink>
+                    </Link>
                   );
                 })}
               </div>
@@ -114,34 +110,30 @@ export function DesktopSidebar({
         >
           {pinnedItems.map((item) => {
             const Icon = item.icon;
+            const active = isNavPathActive(item.path, location.pathname);
             return (
-              <NavLink
+              <Link
                 key={item.path}
-                to={item.path}
+                to={item.path === BACKUP_FILES_PATH ? backupFilesHref(location.pathname, location.search) : item.path}
                 title={t(item.titleKey)}
                 aria-label={t(item.titleKey)}
-                className={({ isActive }) =>
-                  navItemClass({ isActive, isCollapsed })
-                }
+                aria-current={active ? "page" : undefined}
+                className={navItemClass({ isActive: active, isCollapsed })}
               >
-                {({ isActive }) => (
-                  <>
-                    <Icon
-                      className={cn(
-                        "shrink-0",
-                        isCollapsed ? "size-5" : "size-4",
-                        isActive && "text-primary",
-                      )}
-                      aria-hidden
-                    />
-                    {!isCollapsed && (
-                      <span className="truncate text-nav">
-                        {t(item.titleKey)}
-                      </span>
-                    )}
-                  </>
+                <Icon
+                  className={cn(
+                    "shrink-0",
+                    isCollapsed ? "size-5" : "size-4",
+                    active && "text-primary",
+                  )}
+                  aria-hidden
+                />
+                {!isCollapsed && (
+                  <span className="truncate text-nav">
+                    {t(item.titleKey)}
+                  </span>
                 )}
-              </NavLink>
+              </Link>
             );
           })}
         </div>

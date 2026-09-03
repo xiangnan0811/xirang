@@ -23,7 +23,7 @@ import { AssetContextPanel } from "./asset-context-panel";
 import {
   type BackupAssetsPreferencesV1,
 } from "./backup-assets-preferences";
-import type { BackupAssetsRouteState } from "./backup-assets-route-state";
+import type { BackupAssetsRouteState, BackupAssetsScope } from "./backup-assets-route-state";
 import type { BackupAssetsController } from "./use-backup-assets-state";
 import { useBackupRecovery } from "./use-backup-recovery";
 import { AssetBrowser } from "./asset-browser";
@@ -104,6 +104,7 @@ export function BackupAssetsWorkspace({
   const resultsRegionRef = useRef<HTMLElement | null>(null);
   const restorationRegistryRef = useRef<BackupAssetsRestorationRegistry | null>(null);
   const lastRestorationContextRef = useRef<string | null>(null);
+  const browseSearchAnchorRef = useRef<Partial<BackupAssetsRouteState> | null>(null);
   const [restorationAnchor, setRestorationAnchor] = useState<BackupAssetsRestorationAnchor | null>(null);
   const recovery = useBackupRecovery({
     token: processingRuntime?.token ?? null,
@@ -229,6 +230,12 @@ export function BackupAssetsWorkspace({
       onRoutePatch({ exportJobId: undefined }, { replace: true });
     }
   }, [controller.state.route.exportJobId, onRoutePatch, processingRuntime?.role]);
+
+  useEffect(() => {
+    const route = controller.state.route;
+    if (route.view !== "browse" || route.scope === "all_retained") return;
+    browseSearchAnchorRef.current = browseSearchReturnPatch(route);
+  }, [controller.state.route]);
 
   const recordResultAnchor = (
     row: BackupAssetResultRow,
@@ -388,6 +395,7 @@ export function BackupAssetsWorkspace({
             resource={controller.content}
             canPreview={canPreview}
             canDownload={canDownload}
+            canRetryPreview={controller.canRetryPreview}
             processingRuntime={processingRuntime}
             archiveContentAvailable={Boolean(
               selectedCatalog?.contentAvailability.available &&
@@ -458,14 +466,36 @@ export function BackupAssetsWorkspace({
       ) : (
         <AssetBrowser
           state={controller.state}
-          onRoutePatch={onRoutePatch}
+          onRoutePatch={(patch) => {
+            const route = controller.state.route;
+            if (route.view === "browse" && route.scope !== "all_retained") {
+              browseSearchAnchorRef.current = browseSearchReturnPatch(route);
+            }
+            onRoutePatch(patch);
+          }}
           onNavigateDirectory={navigateDirectory}
           onSearch={(query, scope) => {
-            controller.actions.setSearchDraft(query);
-            if (controller.state.route.view === "search" && controller.state.route.scope === scope) {
-              controller.actions.executeSearch(query);
-            } else {
-              onRoutePatch({ view: "search", scope });
+            const route = controller.state.route;
+            if (route.view === "browse" && route.scope !== "all_retained") {
+              browseSearchAnchorRef.current = browseSearchReturnPatch(route);
+            }
+            const normalized = query.trim();
+            if (normalized === "") {
+              if (controller.state.submittedSearchQuery !== null || route.view === "search") {
+                controller.actions.clearSearch();
+                onRoutePatch(browseSearchAnchorRef.current ?? browseSearchFallbackPatch(route));
+              } else {
+                controller.actions.setSearchDraft("");
+              }
+              return;
+            }
+            const sameTemporary =
+              route.view === "search" &&
+              route.scope === scope &&
+              route.savedSearchId === undefined;
+            controller.actions.executeSearch(normalized, scope);
+            if (!sameTemporary) {
+              onRoutePatch(temporarySearchRoutePatch(route, scope, browseSearchAnchorRef.current));
             }
           }}
           onSearchDraftChange={controller.actions.setSearchDraft}
@@ -483,15 +513,46 @@ export function BackupAssetsWorkspace({
           }}
           onRecover={() => openRecovery([...controller.state.selection.values()])}
           onOpen={(row, position) => {
+            recordResultAnchor(row, position);
+            if (row.source === "search") {
+              const isDirectory = row.asset.entryType === "directory";
+              const unverifiedSource =
+                controller.state.route.savedSearchId !== undefined ||
+                controller.state.route.scope === "all_retained" ||
+                row.ref.recoveryPointId !== controller.selectedRecoveryPoint?.id;
+              onRoutePatch({
+                view: "browse",
+                scope: "current",
+                ...(unverifiedSource
+                  ? {
+                      nodeId: undefined,
+                      backupSetId: undefined,
+                      repositoryId: undefined,
+                      taskId: undefined,
+                    }
+                  : {}),
+                recoveryPointId: row.ref.recoveryPointId,
+                parentEntryId: isDirectory
+                  ? row.ref.entryId
+                  : row.asset.parentRef?.recoveryPointId === row.ref.recoveryPointId
+                    ? row.asset.parentRef.entryId
+                    : undefined,
+                entryId: isDirectory ? undefined : row.ref.entryId,
+              });
+              if (isDirectory) {
+                controller.actions.detachContent();
+                controller.actions.clearSelection();
+              }
+              return;
+            }
             if (row.asset.entryType === "directory") {
-              recordResultAnchor(row, position);
               navigateDirectory(row.ref.entryId);
               return;
             }
-            recordResultAnchor(row, position);
             onRoutePatch({ entryId: row.ref.entryId });
           }}
           onLoadMore={controller.actions.loadMore}
+          onRefreshResults={controller.actions.refreshResults}
           restorationAnchor={restorationAnchor}
           onRestorationComplete={handleRestorationComplete}
         />
@@ -566,7 +627,7 @@ export function BackupAssetsWorkspace({
         recent={controller.overlays.recent}
         pending={controller.state.overlay.status === "pending" || controller.state.overlay.status === "reconciling"}
         error={controller.overlayError}
-        canSaveCurrent={controller.state.route.view === "search" && controller.state.searchDraft.trim() !== ""}
+        canSaveCurrent={controller.state.route.view === "search" && (controller.state.submittedSearchQuery ?? controller.state.searchDraft).trim() !== ""}
         selectedRef={selectedAssetRef(controller)}
         onClose={() => {
           setOverlaySection(null);
@@ -574,9 +635,19 @@ export function BackupAssetsWorkspace({
         }}
         onCreateSaved={controller.actions.createSavedSearch}
         onUpdateSaved={controller.actions.updateSavedSearch}
-        onDeleteSaved={controller.actions.deleteSavedSearch}
+        onDeleteSaved={(savedSearch) => {
+          if (controller.state.route.savedSearchId === savedSearch.id) {
+            controller.actions.clearSearch();
+            onRoutePatch(browseSearchAnchorRef.current ?? browseSearchFallbackPatch(controller.state.route));
+          }
+          controller.actions.deleteSavedSearch(savedSearch);
+        }}
         onExecuteSaved={(savedSearchId) => {
           setOverlaySection(null);
+          if (controller.state.route.savedSearchId === savedSearchId) {
+            controller.actions.refreshResults();
+            return;
+          }
           onRoutePatch({ savedSearchId });
         }}
         onToggleFavorite={controller.actions.toggleFavorite}
@@ -591,6 +662,8 @@ export function BackupAssetsWorkspace({
           setRestorationAnchor(null);
           onRoutePatch({
             view: "browse",
+            nodeId: undefined,
+            backupSetId: undefined,
             repositoryId: undefined,
             taskId: undefined,
             recoveryPointId: ref.recoveryPointId,
@@ -712,6 +785,71 @@ function restorationContextKey(route: BackupAssetsRouteState): string | null {
     (value): value is string => value !== undefined
   );
   return parts.length === 0 ? null : parts.join(":");
+}
+
+function browseSearchReturnPatch(route: BackupAssetsRouteState): Partial<BackupAssetsRouteState> {
+  return {
+    view: "browse",
+    scope: "current",
+    nodeId: route.nodeId,
+    backupSetId: route.backupSetId,
+    repositoryId: route.repositoryId,
+    taskId: route.taskId,
+    recoveryPointId: route.recoveryPointId,
+    parentEntryId: route.parentEntryId,
+    entryId: route.entryId,
+    layout: route.layout,
+    types: [...route.types],
+    tagId: route.tagId,
+    favoriteOnly: route.favoriteOnly,
+    sort: route.sort,
+    direction: route.direction,
+    inspectorTab: route.inspectorTab,
+  };
+}
+
+function browseSearchFallbackPatch(route: BackupAssetsRouteState): Partial<BackupAssetsRouteState> {
+  return {
+    view: "browse",
+    scope: "current",
+    nodeId: route.nodeId,
+    backupSetId: route.backupSetId,
+    repositoryId: route.repositoryId,
+    taskId: route.taskId,
+    recoveryPointId: undefined,
+    parentEntryId: undefined,
+    entryId: undefined,
+    types: [],
+    tagId: undefined,
+    favoriteOnly: false,
+    sort: "name",
+    direction: "asc",
+  };
+}
+
+function temporarySearchRoutePatch(
+  route: BackupAssetsRouteState,
+  scope: BackupAssetsScope,
+  captured: Partial<BackupAssetsRouteState> | null,
+): Partial<BackupAssetsRouteState> {
+  const restoreCurrentSource =
+    scope === "current" &&
+    (route.scope === "all_retained" || route.savedSearchId !== undefined) &&
+    captured !== null;
+  return {
+    view: "search",
+    scope,
+    savedSearchId: undefined,
+    ...(restoreCurrentSource
+      ? {
+          nodeId: captured.nodeId,
+          backupSetId: captured.backupSetId,
+          repositoryId: captured.repositoryId,
+          taskId: captured.taskId,
+          recoveryPointId: captured.recoveryPointId,
+        }
+      : {}),
+  };
 }
 
 function ContextDialog({

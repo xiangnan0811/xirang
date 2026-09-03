@@ -33,6 +33,7 @@ export interface AssetBrowserProps {
   onRecover?: () => void;
   onOpen: (row: BackupAssetResultRow, position: Pick<BackupAssetsRestorationAnchor, "index" | "offset">) => void;
   onLoadMore: () => void;
+  onRefreshResults?: () => void;
   restorationAnchor?: BackupAssetsRestorationAnchor | null;
   onRestorationComplete?: () => void;
 }
@@ -51,6 +52,7 @@ export function AssetBrowser({
   onRecover,
   onOpen,
   onLoadMore,
+  onRefreshResults,
   restorationAnchor = null,
   onRestorationComplete,
 }: AssetBrowserProps) {
@@ -143,18 +145,21 @@ export function AssetBrowser({
           );
         })}
       </nav>
-      <div className="grid h-28 shrink-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[44px_44px] items-center gap-2 border-b border-border px-2 py-2 lg:h-24 lg:grid-rows-[36px_36px]">
+      <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 border-b border-border px-2 py-2">
         <AssetSearch
           draft={state.searchDraft}
+          submittedQuery={state.submittedSearchQuery}
           scope={state.route.scope}
           disabled={state.result.status === "loading" && state.result.rows.length === 0}
+          locked={state.route.savedSearchId !== undefined}
+          searchActive={state.route.view === "search"}
           onDraftChange={onSearchDraftChange}
-          onScopeChange={(scope) => onRoutePatch({ scope })}
           onSearch={onSearch}
         />
         <Select
           aria-label={t("backupAssets.browser.sort")}
           value={sortValue(state.route)}
+          disabled={state.route.savedSearchId !== undefined}
           className="touch-target min-h-11 lg:min-h-9"
           containerClassName="w-40 max-w-full min-w-0"
           onChange={(event) => onRoutePatch(sortPatch(event.target.value))}
@@ -184,9 +189,15 @@ export function AssetBrowser({
         />
       </div>
 
-      {state.result.coverage === "partial" ? (
+      {state.result.status === "ready" && state.result.coverage === "partial" ? (
         <InlineAlert tone="info" className="m-2 shrink-0">
           {t("backupAssets.states.partialCoverage")}
+        </InlineAlert>
+      ) : null}
+
+      {state.result.status === "failed" && state.result.rows.length > 0 ? (
+        <InlineAlert tone="critical" className="m-2 shrink-0">
+          {t(state.result.error?.translationKey ?? "backupAssets.errors.unknown")}
         </InlineAlert>
       ) : null}
 
@@ -198,11 +209,12 @@ export function AssetBrowser({
         onActiveChange={handleActiveChange}
         onSelectionToggle={onToggleSelection}
         onOpen={onOpen}
+        onRefreshResults={onRefreshResults}
         restorationAnchor={restorationAnchor}
         onRestorationComplete={finishRestoration}
       />
 
-      {state.result.nextCursor ? (
+      {state.result.nextCursor && (state.result.status !== "failed" || state.result.rows.length > 0) ? (
         <div className="flex h-11 shrink-0 items-center justify-center border-t border-border">
           <Button type="button" variant="ghost" size="sm" className="touch-target min-h-11 lg:min-h-8" onClick={onLoadMore}>
             {state.result.status === "loading" ? (
@@ -246,6 +258,7 @@ function ResultBody({
   onActiveChange,
   onSelectionToggle,
   onOpen,
+  onRefreshResults,
   restorationAnchor,
   onRestorationComplete,
 }: {
@@ -256,6 +269,7 @@ function ResultBody({
   onActiveChange: (row: BackupAssetResultRow) => void;
   onSelectionToggle: (ref: BackupAssetResultRow["ref"]) => void;
   onOpen: (row: BackupAssetResultRow, position: Pick<BackupAssetsRestorationAnchor, "index" | "offset">) => void;
+  onRefreshResults?: () => void;
   restorationAnchor: BackupAssetsRestorationAnchor | null;
   onRestorationComplete?: () => void;
 }) {
@@ -263,25 +277,44 @@ function ResultBody({
   if (state.result.status === "loading" && state.result.rows.length === 0) {
     return <BrowserState busy icon={<LoaderCircle className="size-5 animate-spin" />} text={t("backupAssets.states.loadingAssets")} />;
   }
-  if (state.result.status === "failed") {
+  if (state.result.status === "failed" && state.result.rows.length === 0) {
     return (
       <div className="p-3">
-        <InlineAlert tone="critical">{t("backupAssets.errors.unknown")}</InlineAlert>
+        <InlineAlert tone="critical">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>{t(state.result.error?.translationKey ?? "backupAssets.errors.unknown")}</span>
+            {onRefreshResults ? (
+              <Button type="button" variant="outline" size="sm" className="touch-target min-h-11 lg:min-h-8" onClick={onRefreshResults}>
+                {t("common.retry")}
+              </Button>
+            ) : null}
+          </div>
+        </InlineAlert>
       </div>
     );
   }
   if (state.result.rows.length === 0) {
-    const authoritative = state.result.status === "ready" && state.result.authoritativeEmpty;
+    const authoritativeComplete =
+      state.result.status === "ready" && state.result.authoritativeEmpty && state.result.coverage === "complete";
+    const emptyText = authoritativeComplete
+      ? t("backupAssets.states.noMatchingAssets")
+      : state.result.coverage === "partial"
+        ? t("backupAssets.states.partialCoverage")
+        : state.result.coverage === "building"
+          ? t("backupAssets.states.buildingCoverage")
+          : state.result.coverage === "failed"
+            ? t("backupAssets.states.failedCoverage")
+            : state.result.coverage === "unavailable"
+              ? state.route.recoveryPointId
+                ? t("backupAssets.states.unavailableCoverage")
+                : t("backupAssets.states.selectRecoveryPoint")
+              : state.route.recoveryPointId
+                ? t("backupAssets.states.noIndexedResults")
+                : t("backupAssets.states.selectRecoveryPoint");
     return (
       <BrowserState
         icon={<FolderSearch className="size-5" />}
-        text={
-          authoritative
-            ? t("backupAssets.states.noMatchingAssets")
-            : state.route.recoveryPointId
-              ? t("backupAssets.states.noIndexedResults")
-              : t("backupAssets.states.selectRecoveryPoint")
-        }
+        text={emptyText}
       />
     );
   }

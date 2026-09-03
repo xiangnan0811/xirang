@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useReducer,
   useRef,
@@ -15,7 +16,9 @@ import {
   clearStepUpProof as clearStoredStepUpProof,
   readStepUpProof,
 } from "@/lib/step-up-storage";
+import { waitForRecoveryPointCatalogReady } from "@/lib/recovery-point-catalog-readiness";
 import type { AuthContextValue } from "@/context/auth-context.shared";
+import { SharedContext } from "@/context/shared-context.shared";
 import type {
   AssetRef,
   AssetSearchHit,
@@ -50,6 +53,7 @@ import {
 import {
   serializeBackupAssetsRoute,
   type BackupAssetsRouteState,
+  type BackupAssetsScope,
 } from "./backup-assets-route-state";
 import { selectBackupAssetExactPreviewProduct } from "./asset-preview-model";
 
@@ -213,12 +217,14 @@ export interface BackupAssetsController {
   semanticIssue: BackupAssetsSemanticIssue | null;
   filterIssue: BackupAssetsFilterIssue | null;
   overlayError?: BackupAssetsUIError;
+  canRetryPreview: boolean;
   actions: {
     refreshRepositories(): void;
     refreshRecoveryPoints(): void;
     refreshResults(): void;
     setSearchDraft(value: string): void;
-    executeSearch(query?: string): void;
+    executeSearch(query?: string, scope?: BackupAssetsScope): void;
+    clearSearch(): void;
     toggleSelection(ref: AssetRef): void;
     clearSelection(): void;
     loadMore(): void;
@@ -247,6 +253,7 @@ export interface UseBackupAssetsStateOptions {
   token: string | null;
   role?: AuthContextValue["role"];
   route: BackupAssetsRouteState;
+  refreshVersion?: number;
   ensureStepUpProof?: AuthContextValue["ensureStepUpProof"];
   clearStepUpProof?: AuthContextValue["clearStepUpProof"];
   onRouteRepair?: (repair: BackupAssetsSemanticIssue) => void;
@@ -281,6 +288,8 @@ export interface BackupAssetsFilterIssue {
 export function backupAssetsResultRequestKey(route: BackupAssetsRouteState): string {
   return JSON.stringify([
     route.view,
+    route.nodeId ?? null,
+    route.backupSetId ?? null,
     route.repositoryId ?? null,
     route.taskId ?? null,
     route.recoveryPointId ?? null,
@@ -319,6 +328,7 @@ export function useBackupAssetsState({
   token,
   role,
   route,
+  refreshVersion,
   ensureStepUpProof,
   clearStepUpProof,
   onRouteRepair,
@@ -352,6 +362,7 @@ export function useBackupAssetsState({
   const [recoveryPointContext, setRecoveryPointContext] = useState<
     BackupAssetsValueResource<BackupRecoveryPoint>
   >(emptyValueResource);
+  const [recoveryPointLoadKey, setRecoveryPointLoadKey] = useState<string | null>(null);
   const [semanticIssue, setSemanticIssue] = useState<BackupAssetsSemanticIssue | null>(null);
   const { runLatest, abort } = useBackupAssetsRequestCoordinator(state.selectionGeneration);
   const routeKey = serializeBackupAssetsRoute(route);
@@ -379,12 +390,46 @@ export function useBackupAssetsState({
   const contentSelectionKeyRef = useRef(contentSelectionKey);
   const previewAttemptRef = useRef(0);
   const startedPreviewKeyRef = useRef<string | null>(null);
+  const lastExactPreviewPointRef = useRef<BackupRecoveryPoint | null>(null);
+  const selectedRecoveryPointRef = useRef<BackupRecoveryPoint | null>(null);
+  const derivedRecoveryPointStatusRef = useRef<BackupAssetsResourceStatus>("idle");
   const selectionGenerationRef = useRef(state.selectionGeneration);
   const routeRepairRef = useRef(onRouteRepair);
+  const shared = useContext(SharedContext);
+  const refreshGeneration = refreshVersion ?? shared?.refreshVersion ?? 0;
+  const expectedRecoveryPointLoadKey = token && route.recoveryPointId
+    ? `${refreshGeneration}:${route.recoveryPointId}`
+    : null;
+  const recoveryPointMatchesRefresh = recoveryPointLoadKey === expectedRecoveryPointLoadKey;
+  const selectedRecoveryPoint =
+    recoveryPointMatchesRefresh && recoveryPointContext.status === "ready"
+      ? recoveryPointContext.value
+      : null;
+  const visibleSemanticIssue = recoveryPointMatchesRefresh ? semanticIssue : null;
+  const derivedRecoveryPointStatus: BackupAssetsResourceStatus =
+    expectedRecoveryPointLoadKey === null
+      ? "idle"
+      : recoveryPointMatchesRefresh
+        ? recoveryPointContext.status
+        : "loading";
+  const submittedQueryRef = useRef(state.submittedSearchQuery);
+  const searchDraftRef = useRef(state.searchDraft);
   selectionGenerationRef.current = state.selectionGeneration;
   contentRef.current = content;
   contentSelectionKeyRef.current = contentSelectionKey;
   routeRepairRef.current = onRouteRepair;
+  submittedQueryRef.current = state.submittedSearchQuery;
+  searchDraftRef.current = state.searchDraft;
+  selectedRecoveryPointRef.current = selectedRecoveryPoint;
+  derivedRecoveryPointStatusRef.current = derivedRecoveryPointStatus;
+  if (selectedRecoveryPoint !== null) {
+    lastExactPreviewPointRef.current = selectedRecoveryPoint;
+  } else if (
+    lastExactPreviewPointRef.current !== null &&
+    lastExactPreviewPointRef.current.id !== route.recoveryPointId
+  ) {
+    lastExactPreviewPointRef.current = null;
+  }
   if (routeRef.current.key !== routeKey) routeRef.current = { key: routeKey, value: route };
 
   useEffect(() => {
@@ -400,7 +445,7 @@ export function useBackupAssetsState({
       setRepositories(emptyRepositories);
       return;
     }
-    const requestKey = "repositories:first";
+    const requestKey = `repositories:first:${refreshGeneration}`;
     setRepositories((current) => ({ ...current, status: "loading", error: undefined }));
     void runLatest(
       "repositories",
@@ -426,7 +471,7 @@ export function useBackupAssetsState({
         });
       }
     );
-  }, [runLatest, token]);
+  }, [refreshGeneration, runLatest, token]);
 
   useEffect(() => {
     refreshRepositories();
@@ -438,7 +483,7 @@ export function useBackupAssetsState({
       setRecoveryPoints(emptyRecoveryPoints);
       return;
     }
-    const requestKey = `recovery-points:${repositoryId}`;
+    const requestKey = `recovery-points:${repositoryId}:${refreshGeneration}`;
     setRecoveryPoints((current) => ({ ...current, status: "loading", error: undefined }));
     void runLatest(
       "recoveryPoints",
@@ -457,7 +502,7 @@ export function useBackupAssetsState({
         });
       }
     );
-  }, [route.repositoryId, runLatest, token]);
+  }, [refreshGeneration, route.repositoryId, runLatest, token]);
 
   useEffect(() => {
     refreshRecoveryPoints();
@@ -465,14 +510,16 @@ export function useBackupAssetsState({
 
   useEffect(() => {
     const recoveryPointId = route.recoveryPointId;
+    const loadKey = token && recoveryPointId ? `${refreshGeneration}:${recoveryPointId}` : null;
     if (!token || !recoveryPointId) {
       abort("recoveryPoint");
       setRecoveryPointContext(emptyValueResource());
       setSemanticIssue(null);
+      setRecoveryPointLoadKey(null);
       return;
     }
 
-    const requestKey = `recovery-point:${recoveryPointId}`;
+    const requestKey = `recovery-point:${loadKey}`;
     setRecoveryPointContext({ status: "loading", value: null });
     setSemanticIssue(null);
     void runLatest(
@@ -482,6 +529,7 @@ export function useBackupAssetsState({
       (projection) => {
         if (projection.status !== "available") {
           setRecoveryPointContext({ status: "blocked", value: null, error: closedUnsupportedError() });
+          setRecoveryPointLoadKey(loadKey);
           return;
         }
         const point = projection.value;
@@ -497,6 +545,7 @@ export function useBackupAssetsState({
           };
           setRecoveryPointContext({ status: "blocked", value: null, error: closedUnsupportedError() });
           setSemanticIssue(issue);
+          setRecoveryPointLoadKey(loadKey);
           routeRepairRef.current?.(issue);
           return;
         }
@@ -512,6 +561,7 @@ export function useBackupAssetsState({
           };
           setRecoveryPointContext({ status: "blocked", value: null, error: closedUnsupportedError() });
           setSemanticIssue(issue);
+          setRecoveryPointLoadKey(loadKey);
           routeRepairRef.current?.(issue);
           return;
         }
@@ -519,10 +569,12 @@ export function useBackupAssetsState({
         if (lifecycleIssue !== null) {
           setRecoveryPointContext({ status: "ready", value: point });
           setSemanticIssue(lifecycleIssue);
+          setRecoveryPointLoadKey(loadKey);
           routeRepairRef.current?.(lifecycleIssue);
           return;
         }
         setRecoveryPointContext({ status: "ready", value: point });
+        setRecoveryPointLoadKey(loadKey);
       },
       (error) => {
         const mapped = mapBackupAssetsError(error, "recovery_point");
@@ -531,6 +583,7 @@ export function useBackupAssetsState({
           value: null,
           error: mapped,
         });
+        setRecoveryPointLoadKey(loadKey);
         if (mapped.code === "not_found") {
           const issue: BackupAssetsSemanticIssue = {
             reason: "recovery_point_missing",
@@ -546,16 +599,59 @@ export function useBackupAssetsState({
         }
       }
     );
-  }, [abort, route.recoveryPointId, route.repositoryId, route.taskId, runLatest, token]);
+  }, [abort, refreshGeneration, route.recoveryPointId, route.repositoryId, route.taskId, runLatest, token]);
 
-  const selectedRecoveryPoint =
-    recoveryPointContext.status === "ready" ? recoveryPointContext.value : null;
   const filterIssue = backupAssetsFilterIssue(route);
+
+  const setSearchDraft = useCallback((value: string) => {
+    dispatch({ type: "search_draft_changed", text: value.slice(0, 512) });
+  }, []);
+
+  const executeSearch = useCallback(
+    (query?: string, scope?: BackupAssetsScope) => {
+      const currentRoute = routeRef.current.value;
+      const normalized = (query ?? submittedQueryRef.current ?? searchDraftRef.current).trim();
+      if (query !== undefined) {
+        dispatch({ type: "search_draft_changed", text: normalized.slice(0, 512) });
+      }
+      dispatch({ type: "search_submitted", query: normalized });
+      submittedQueryRef.current = normalized;
+      const requestedScope = scope ?? currentRoute.scope;
+      if (
+        !token ||
+        currentRoute.view !== "search" ||
+        currentRoute.savedSearchId ||
+        currentRoute.scope !== requestedScope
+      ) {
+        return;
+      }
+      const request = buildTemporarySearchRequest(currentRoute, normalized, null);
+      if (!request) return;
+      const requestKey = `search:attempt-${++searchAttemptRef.current}`;
+      dispatch({ type: "results_loading", requestKey, replace: true });
+      void runLatest(
+        "search",
+        requestKey,
+        (signal) =>
+          apiClient.search(token, withSecretRevealProof({ query: request, signal })),
+        (projection) => commitSearchProjection(projection, requestKey, false, dispatch),
+        (error) => {
+          clearRejectedSecretRevealProof(error, clearStepUpProof);
+          dispatch({
+            type: "results_failed",
+            requestKey,
+            error: mapBackupAssetsError(error, "search"),
+          });
+        }
+      );
+    },
+    [clearStepUpProof, runLatest, token]
+  );
 
   const refreshResults = useCallback(() => {
     if (!token) return;
     const currentRoute = routeRef.current.value;
-    const requestKey = `results:${resultRouteKey}`;
+    const requestKey = `results:${refreshGeneration}:${resultRouteKey}`;
     if (backupAssetsFilterIssue(currentRoute) !== null) {
       abort("directory");
       abort("search");
@@ -564,18 +660,19 @@ export function useBackupAssetsState({
 
     if (currentRoute.view === "browse" && currentRoute.recoveryPointId) {
       const recoveryPointId = currentRoute.recoveryPointId;
-      if (recoveryPointContext.status === "idle" || recoveryPointContext.status === "loading") {
-        dispatch({ type: "results_loading", requestKey });
+      const coveragePoint = selectedRecoveryPoint;
+      if (derivedRecoveryPointStatus === "idle" || derivedRecoveryPointStatus === "loading") {
+        dispatch({ type: "results_loading", requestKey, replace: true });
         return;
       }
-      if (semanticIssue !== null || selectedRecoveryPoint === null) {
-        dispatch({ type: "results_failed", requestKey });
+      if (visibleSemanticIssue !== null || coveragePoint === null) {
+        dispatch({ type: "results_failed", requestKey, error: closedUnsupportedError() });
         return;
       }
       const parent: AssetRef | undefined = currentRoute.parentEntryId
         ? { recoveryPointId, entryId: currentRoute.parentEntryId }
         : undefined;
-      dispatch({ type: "results_loading", requestKey });
+      dispatch({ type: "results_loading", requestKey, replace: true });
       void runLatest(
         "directory",
         requestKey,
@@ -588,8 +685,8 @@ export function useBackupAssetsState({
           }),
         (page) => {
           const coverage =
-            selectedRecoveryPoint?.catalog.status === "available"
-              ? selectedRecoveryPoint.catalog.value.coverage.status
+            coveragePoint.catalog.status === "available"
+              ? coveragePoint.catalog.value.coverage.status
               : "unavailable";
           dispatch({
             type: "results_replaced",
@@ -601,85 +698,74 @@ export function useBackupAssetsState({
             directory: page.directory,
           });
         },
-        () => dispatch({ type: "results_failed", requestKey })
+        (error) =>
+          dispatch({
+            type: "results_failed",
+            requestKey,
+            error: mapBackupAssetsError(error, "directory"),
+          })
       );
       return;
     }
 
     if (currentRoute.view === "search" && currentRoute.savedSearchId) {
-      dispatch({ type: "results_loading", requestKey });
+      dispatch({ type: "results_loading", requestKey, replace: true });
       void runLatest(
         "search",
         requestKey,
         (signal) =>
           apiClient.search(token, withSecretRevealProof({ savedSearchId: currentRoute.savedSearchId!, limit: 200, signal })),
-        (projection) => {
-          if (projection.status !== "available") {
-            dispatch({ type: "results_failed", requestKey });
-            return;
-          }
-          const response = projection.value;
-          dispatch({
-            type: "results_replaced",
-            requestKey,
-            rows: response.items.map(searchHitToResultRow),
-            nextCursor: response.nextCursor,
-            coverage: response.coverage.status,
-            authoritativeEmpty: response.authoritativeEmpty,
-            directory: null,
-          });
-        },
-        (error) => {
-          clearRejectedSecretRevealProof(error, clearStepUpProof);
-          dispatch({ type: "results_failed", requestKey });
-        }
-      );
-    }
-  }, [abort, clearStepUpProof, recoveryPointContext.status, resultRouteKey, runLatest, selectedRecoveryPoint, semanticIssue, token]);
-
-  useEffect(() => {
-    refreshResults();
-  }, [refreshResults]);
-
-  const setSearchDraft = useCallback((value: string) => {
-    dispatch({ type: "search_draft_changed", text: value.slice(0, 512) });
-  }, []);
-
-  const executeSearch = useCallback(
-    (query = state.searchDraft) => {
-      if (!token) return;
-      const normalized = query.trim();
-      const currentRoute = routeRef.current.value;
-      const request = buildTemporarySearchRequest(currentRoute, normalized, null);
-      if (!request) return;
-      const requestKey = `search:attempt-${++searchAttemptRef.current}`;
-      dispatch({ type: "results_loading", requestKey });
-      void runLatest(
-        "search",
-        requestKey,
-        (signal) =>
-          apiClient.search(token, withSecretRevealProof({ query: request, signal })),
         (projection) => commitSearchProjection(projection, requestKey, false, dispatch),
         (error) => {
           clearRejectedSecretRevealProof(error, clearStepUpProof);
-          dispatch({ type: "results_failed", requestKey });
+          dispatch({
+            type: "results_failed",
+            requestKey,
+            error: mapBackupAssetsError(error, "search"),
+          });
         }
       );
-    },
-    [clearStepUpProof, runLatest, state.searchDraft, token]
-  );
+      return;
+    }
+
+    if (currentRoute.view === "search") {
+      const snapshot = submittedQueryRef.current;
+      const text = snapshot !== null ? snapshot : currentRoute.types.length > 0 ? "" : null;
+      if (text === null) return;
+      executeSearch(text);
+    }
+  }, [abort, clearStepUpProof, derivedRecoveryPointStatus, executeSearch, refreshGeneration, resultRouteKey, runLatest, selectedRecoveryPoint, token, visibleSemanticIssue]);
 
   useEffect(() => {
-    if (
-      route.view === "search" &&
-      !route.savedSearchId &&
-      state.result.status === "idle" &&
-      backupAssetsFilterIssue(routeRef.current.value) === null &&
-      buildTemporarySearchRequest(routeRef.current.value, state.searchDraft.trim(), null) !== null
-    ) {
-      executeSearch();
-    }
-  }, [executeSearch, resultRouteKey, route.savedSearchId, route.view, state.result.status, state.searchDraft]);
+    const currentRoute = routeRef.current.value;
+    if (currentRoute.view === "search" && !currentRoute.savedSearchId) return;
+    refreshResults();
+  }, [refreshResults]);
+
+  useEffect(() => {
+    if (route.view !== "search" || route.savedSearchId || state.result.status !== "idle") return;
+    if (backupAssetsFilterIssue(routeRef.current.value) !== null) return;
+    const snapshot = submittedQueryRef.current;
+    const text = snapshot !== null ? snapshot : route.types.length > 0 ? "" : null;
+    if (text === null) return;
+    if (buildTemporarySearchRequest(routeRef.current.value, text, null) === null) return;
+    executeSearch(text);
+  }, [executeSearch, resultRouteKey, route.savedSearchId, route.types, route.view, state.result.status]);
+
+  useEffect(() => {
+    if (refreshGeneration === 0) return;
+    if (route.view !== "search" || route.savedSearchId) return;
+    const snapshot = submittedQueryRef.current;
+    if (snapshot === null) return;
+    executeSearch(snapshot);
+  }, [executeSearch, refreshGeneration, route.savedSearchId, route.view]);
+
+  const clearSearch = useCallback(() => {
+    abort("search");
+    submittedQueryRef.current = null;
+    dispatch({ type: "search_cleared" });
+  }, [abort]);
+
 
   const toggleSelection = useCallback((ref: AssetRef) => {
     dispatch({ type: "toggle_selection", ref });
@@ -694,7 +780,7 @@ export function useBackupAssetsState({
     const currentRoute = routeRef.current.value;
     const cursor = state.result.nextCursor;
     const requestKey = state.result.requestKey;
-    dispatch({ type: "results_loading", requestKey });
+    dispatch({ type: "results_loading", requestKey, replace: false });
 
     if (currentRoute.view === "browse" && currentRoute.recoveryPointId) {
       const recoveryPointId = currentRoute.recoveryPointId;
@@ -726,7 +812,7 @@ export function useBackupAssetsState({
             dispatch({ type: "cursor_stale", requestKey });
             refreshResults();
           } else {
-            dispatch({ type: "results_failed", requestKey });
+            dispatch({ type: "results_failed", requestKey, error: mapped });
           }
         }
       );
@@ -737,7 +823,8 @@ export function useBackupAssetsState({
       const input = currentRoute.savedSearchId
         ? { savedSearchId: currentRoute.savedSearchId, limit: 200, cursor }
         : null;
-      const query = input ? null : buildTemporarySearchRequest(currentRoute, state.searchDraft.trim(), cursor);
+      const snapshot = submittedQueryRef.current ?? "";
+      const query = input ? null : buildTemporarySearchRequest(currentRoute, snapshot, cursor);
       if (!input && !query) return;
       void runLatest(
         "search",
@@ -753,14 +840,33 @@ export function useBackupAssetsState({
           clearRejectedSecretRevealProof(error, clearStepUpProof);
           if (mapped.code === "stale_cursor") {
             dispatch({ type: "cursor_stale", requestKey });
-            refreshResults();
+            if (currentRoute.savedSearchId) {
+              refreshResults();
+              return;
+            }
+            const replay = buildTemporarySearchRequest(currentRoute, snapshot, null);
+            if (!replay) return;
+            void runLatest(
+              "search",
+              requestKey,
+              (signal) => apiClient.search(token, withSecretRevealProof({ query: replay, signal })),
+              (projection) => commitSearchProjection(projection, requestKey, false, dispatch),
+              (replayError) => {
+                clearRejectedSecretRevealProof(replayError, clearStepUpProof);
+                dispatch({
+                  type: "results_failed",
+                  requestKey,
+                  error: mapBackupAssetsError(replayError, "search"),
+                });
+              }
+            );
           } else {
-            dispatch({ type: "results_failed", requestKey });
+            dispatch({ type: "results_failed", requestKey, error: mapped });
           }
         }
       );
     }
-  }, [clearStepUpProof, refreshResults, runLatest, state.result.nextCursor, state.result.requestKey, state.searchDraft, token]);
+  }, [clearStepUpProof, refreshResults, runLatest, state.result.nextCursor, state.result.requestKey, token]);
 
   const loadSavedSearches = useCallback(() => {
     if (!token) {
@@ -971,7 +1077,11 @@ export function useBackupAssetsState({
   );
 
   const createSavedSearch = useCallback(() => {
-    const query = buildTemporarySearchRequest(routeRef.current.value, state.searchDraft.trim(), null);
+    const query = buildTemporarySearchRequest(
+      routeRef.current.value,
+      submittedQueryRef.current ?? searchDraftRef.current.trim(),
+      null
+    );
     if (!query) return;
     runOverlayMutation(
       "saved_search_create",
@@ -989,11 +1099,15 @@ export function useBackupAssetsState({
       },
       loadSavedSearches
     );
-  }, [loadSavedSearches, runOverlayMutation, state.searchDraft]);
+  }, [loadSavedSearches, runOverlayMutation]);
 
   const updateSavedSearch = useCallback(
     (savedSearch: SavedAssetSearch) => {
-      const query = buildTemporarySearchRequest(routeRef.current.value, state.searchDraft.trim(), null);
+      const query = buildTemporarySearchRequest(
+        routeRef.current.value,
+        submittedQueryRef.current ?? searchDraftRef.current.trim(),
+        null
+      );
       if (!query) return;
       runOverlayMutation(
         "saved_search_update",
@@ -1018,7 +1132,7 @@ export function useBackupAssetsState({
         loadSavedSearches
       );
     },
-    [loadSavedSearches, runOverlayMutation, state.searchDraft]
+    [loadSavedSearches, runOverlayMutation]
   );
 
   const deleteSavedSearch = useCallback(
@@ -1240,107 +1354,100 @@ export function useBackupAssetsState({
     [runLatest, token]
   );
 
-  const issueContentTicket = useCallback(
-    (
-      selectedAsset: BackupAsset,
-      input: BackupContentTicketInput,
-      options: {
-        revealOnce: boolean;
-        attempt: number;
-        proofAttempt?: "none" | "cached" | "fresh";
-      },
-    ) => {
-      if (!token) return;
-      const bindingKey = contentTicketBindingKey(selectedAsset, input, options.attempt);
-      contentOwnerKeyRef.current = contentSelectionKey;
-      setContent({ status: "loading", value: null });
-      dispatch({ type: "ticket_issuing", bindingKey });
-      void runLatest(
-        "contentTicket",
+  const issueContentTicket = useCallback(function issueContentTicket(selectedAsset: BackupAsset,
+  input: BackupContentTicketInput,
+  options: {
+    revealOnce: boolean;
+    attempt: number;
+    proofAttempt?: "none" | "cached" | "fresh";
+  },) { if (!token) return;
+  const bindingKey = contentTicketBindingKey(selectedAsset, input, options.attempt);
+  contentOwnerKeyRef.current = contentSelectionKey;
+  setContent({ status: "loading", value: null });
+  dispatch({ type: "ticket_issuing", bindingKey });
+  void runLatest(
+    "contentTicket",
+    bindingKey,
+    (signal) =>
+      apiClient.issueTicket(token, selectedAsset.ref, {
+        ...input,
+        signal,
+      }),
+    (projection) => {
+      if (projection.status !== "available") {
+        setContent({ status: "blocked", value: null, error: closedUnsupportedError() });
+        dispatch({ type: "ticket_failed", bindingKey });
+        return;
+      }
+      setContent({ status: "ready", value: projection.value });
+      dispatch({
+        type: "ticket_ready",
         bindingKey,
-        (signal) =>
-          apiClient.issueTicket(token, selectedAsset.ref, {
-            ...input,
-            signal,
-          }),
-        (projection) => {
-          if (projection.status !== "available") {
-            setContent({ status: "blocked", value: null, error: closedUnsupportedError() });
-            dispatch({ type: "ticket_failed", bindingKey });
-            return;
-          }
-          setContent({ status: "ready", value: projection.value });
-          dispatch({
-            type: "ticket_ready",
-            bindingKey,
-            contentUrl: projection.value.contentUrl,
-            expiresAt: projection.value.expiresAt,
-          });
-        },
-        (error) => {
-          const mapped = mapBackupAssetsError(error, "content_ticket");
-          const proofAttempt = options.proofAttempt ?? "none";
-          const secretProofRejected = mapped.code === "secret_reveal_required" && input.stepUpProof !== undefined;
-          if (secretProofRejected) {
-            if (clearStepUpProof) clearStepUpProof(STEP_UP_ACTIONS.assetSecretReveal);
-            else clearStoredStepUpProof(STEP_UP_ACTIONS.assetSecretReveal);
-          }
-          if (
-            options.revealOnce &&
-            input.action === "preview" &&
-            mapped.code === "secret_reveal_required" &&
-            role === "admin" &&
-            ensureStepUpProof &&
-            proofAttempt !== "fresh"
-          ) {
-            const capturedGeneration = selectionGenerationRef.current;
-            const capturedOwnerKey = contentSelectionKeyRef.current;
-            const reuseCached = proofAttempt === "none";
-            const hadCachedProof = reuseCached && readStepUpProof(STEP_UP_ACTIONS.assetSecretReveal) !== null;
-            void ensureStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, {
-              persist: true,
-              reuseCached,
-            })
-              .then((proof) => {
-                if (selectionGenerationRef.current !== capturedGeneration ||
-                    contentSelectionKeyRef.current !== capturedOwnerKey) return;
-                const active = activePreviewRef.current;
-                if (!active || contentTicketBindingKey(active.asset, active.input, active.attempt) !== bindingKey) return;
-                const revealedInput = withContentStepUpProof(input, proof);
-                activePreviewRef.current = { asset: selectedAsset, input: revealedInput, attempt: options.attempt };
-                issueContentTicket(selectedAsset, revealedInput, {
-                  revealOnce: true,
-                  attempt: options.attempt,
-                  proofAttempt: hadCachedProof ? "cached" : "fresh",
-                });
-              })
-              .catch(() => {
-                if (selectionGenerationRef.current !== capturedGeneration ||
-                    contentSelectionKeyRef.current !== capturedOwnerKey) return;
-                setContent({ status: "blocked", value: null, error: mapped });
-                dispatch({ type: "ticket_failed", bindingKey });
-              });
-            return;
-          }
-          setContent({
-            status:
-              mapped.code === "permission_denied" ||
-              mapped.code === "invalid_request" ||
-              mapped.code === "not_found" ||
-              mapped.code === "unsupported" ||
-              mapped.code === "preview_renderer_unsupported" ||
-              mapped.code === "secret_reveal_required"
-                ? "blocked"
-                : "error",
-            value: null,
-            error: mapped,
-          });
-          dispatch({ type: "ticket_failed", bindingKey });
-        }
-      );
+        contentUrl: projection.value.contentUrl,
+        expiresAt: projection.value.expiresAt,
+      });
     },
-    [clearStepUpProof, contentSelectionKey, ensureStepUpProof, role, runLatest, token]
-  );
+    (error) => {
+      const mapped = mapBackupAssetsError(error, "content_ticket");
+      const proofAttempt = options.proofAttempt ?? "none";
+      const secretProofRejected = mapped.code === "secret_reveal_required" && input.stepUpProof !== undefined;
+      if (secretProofRejected) {
+        if (clearStepUpProof) clearStepUpProof(STEP_UP_ACTIONS.assetSecretReveal);
+        else clearStoredStepUpProof(STEP_UP_ACTIONS.assetSecretReveal);
+      }
+      if (
+        options.revealOnce &&
+        input.action === "preview" &&
+        mapped.code === "secret_reveal_required" &&
+        role === "admin" &&
+        ensureStepUpProof &&
+        proofAttempt !== "fresh"
+      ) {
+        const capturedGeneration = selectionGenerationRef.current;
+        const capturedOwnerKey = contentSelectionKeyRef.current;
+        const reuseCached = proofAttempt === "none";
+        const hadCachedProof = reuseCached && readStepUpProof(STEP_UP_ACTIONS.assetSecretReveal) !== null;
+        void ensureStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, {
+          persist: true,
+          reuseCached,
+        })
+          .then((proof) => {
+            if (selectionGenerationRef.current !== capturedGeneration ||
+                contentSelectionKeyRef.current !== capturedOwnerKey) return;
+            const active = activePreviewRef.current;
+            if (!active || contentTicketBindingKey(active.asset, active.input, active.attempt) !== bindingKey) return;
+            const revealedInput = withContentStepUpProof(input, proof);
+            activePreviewRef.current = { asset: selectedAsset, input: revealedInput, attempt: options.attempt };
+            issueContentTicket(selectedAsset, revealedInput, {
+              revealOnce: true,
+              attempt: options.attempt,
+              proofAttempt: hadCachedProof ? "cached" : "fresh",
+            });
+          })
+          .catch(() => {
+            if (selectionGenerationRef.current !== capturedGeneration ||
+                contentSelectionKeyRef.current !== capturedOwnerKey) return;
+            setContent({ status: "blocked", value: null, error: mapped });
+            dispatch({ type: "ticket_failed", bindingKey });
+          });
+        return;
+      }
+      setContent({
+        status:
+          mapped.code === "permission_denied" ||
+          mapped.code === "invalid_request" ||
+          mapped.code === "not_found" ||
+          mapped.code === "unsupported" ||
+          mapped.code === "preview_renderer_unsupported" ||
+          mapped.code === "secret_reveal_required"
+            ? "blocked"
+            : "error",
+        value: null,
+        error: mapped,
+      });
+      dispatch({ type: "ticket_failed", bindingKey });
+    }
+  ); }, [clearStepUpProof, contentSelectionKey, ensureStepUpProof, role, runLatest, token]);
 
   const exactPreviewTicketInput = useCallback((selectedAsset: BackupAsset): BackupContentExactPreviewTicketInput => {
     const product = selectBackupAssetExactPreviewProduct(selectedAsset);
@@ -1404,13 +1511,117 @@ export function useBackupAssetsState({
         currentRoute.entryId !== active.asset.ref.entryId) {
       return;
     }
+    const sourceStage = currentContent.error?.sourceStage;
+    const correlationId = currentContent.error?.correlationId;
+    const producingTaskId = sourceRepairProducingTaskId(
+      selectedRecoveryPointRef.current,
+      lastExactPreviewPointRef.current,
+      currentRoute.taskId,
+      active.asset.ref.recoveryPointId,
+    );
+    const shouldRepairSource =
+      role === "admin" &&
+      Boolean(token) &&
+      (sourceStage === "open" || sourceStage === "changed");
+    if (shouldRepairSource && producingTaskId === undefined) {
+      if (derivedRecoveryPointStatusRef.current === "loading") {
+        return;
+      }
+    }
     const attempt = ++previewAttemptRef.current;
     activePreviewRef.current = { ...active, attempt };
-    issueContentTicket(active.asset, active.input, {
-      revealOnce: true,
-      attempt,
-    });
-  }, [issueContentTicket]);
+    if (!shouldRepairSource || !token || producingTaskId === undefined) {
+      issueContentTicket(active.asset, active.input, {
+        revealOnce: true,
+        attempt,
+      });
+      return;
+    }
+    const bindingKey = contentTicketBindingKey(active.asset, active.input, attempt);
+    const capturedGeneration = selectionGenerationRef.current;
+    const capturedOwnerKey = contentSelectionKeyRef.current;
+    contentOwnerKeyRef.current = capturedOwnerKey;
+    setContent({ status: "loading", value: null });
+    dispatch({ type: "ticket_issuing", bindingKey });
+    void runLatest(
+      "contentTicket",
+      `source-repair:${bindingKey}`,
+      async (signal) => {
+        const projection = await apiClient.connectBackupRepository(token, { taskId: producingTaskId }, signal);
+        if (signal.aborted) {
+          throw new DOMException("Aborted", "AbortError");
+        }
+        if (projection.status !== "available") {
+          return { kind: "connect-unavailable" as const };
+        }
+        const exactPointId = active.asset.ref.recoveryPointId;
+        const readiness = await waitForRecoveryPointCatalogReady({
+          token,
+          recoveryPointId: exactPointId,
+          signal,
+        });
+        return { kind: "repaired" as const, readiness, exactPointId };
+      },
+      (value) => {
+        if (
+          selectionGenerationRef.current !== capturedGeneration ||
+          contentSelectionKeyRef.current !== capturedOwnerKey
+        ) {
+          return;
+        }
+        if (value.kind === "connect-unavailable") {
+          setContent({ status: "blocked", value: null, error: closedUnsupportedError() });
+          dispatch({ type: "ticket_failed", bindingKey });
+          return;
+        }
+        if (value.readiness.status === "aborted") {
+          return;
+        }
+        if (
+          value.readiness.status !== "ready" ||
+          value.exactPointId !== active.asset.ref.recoveryPointId ||
+          routeRef.current.value.recoveryPointId !== active.asset.ref.recoveryPointId ||
+          routeRef.current.value.entryId !== active.asset.ref.entryId
+        ) {
+          if (value.readiness.status !== "ready") {
+            setContent({
+              status: "error",
+              value: null,
+              error: {
+                code: "temporarily_unavailable",
+                translationKey: "backupAssets.errors.temporarilyUnavailable",
+                retryable: true,
+                action: "retry",
+                ...(sourceStage !== undefined ? { sourceStage } : {}),
+                ...(correlationId !== undefined ? { correlationId } : {}),
+              },
+            });
+            dispatch({ type: "ticket_failed", bindingKey });
+          }
+          return;
+        }
+        issueContentTicket(active.asset, active.input, {
+          revealOnce: true,
+          attempt,
+        });
+      },
+      (error) => {
+        if (
+          selectionGenerationRef.current !== capturedGeneration ||
+          contentSelectionKeyRef.current !== capturedOwnerKey
+        ) {
+          return;
+        }
+        const mapped = mapBackupAssetsError(error, "content_ticket");
+        setContent({
+          status: mapped.code === "permission_denied" || mapped.code === "invalid_request" ? "blocked" : "error",
+          value: null,
+          error: mapped,
+        });
+        dispatch({ type: "ticket_failed", bindingKey });
+      }
+    );
+  }, [issueContentTicket, role, runLatest, token]);
 
   const prepareDownload = useCallback(
     (selectedAsset: BackupAsset) => {
@@ -1499,6 +1710,15 @@ export function useBackupAssetsState({
   const visibleContent = contentOwnerKeyRef.current === contentSelectionKey
     ? content
     : emptyValueResource<BackupContentTicket>();
+  const activePreview = activePreviewRef.current;
+  const canRetryPreview =
+    contentOwnerKeyRef.current === contentSelectionKey &&
+    activePreview !== null &&
+    activePreview.input.action === "preview" &&
+    (visibleContent.status === "error" || visibleContent.status === "blocked") &&
+    visibleContent.error?.retryable === true &&
+    route.recoveryPointId === activePreview.asset.ref.recoveryPointId &&
+    route.entryId === activePreview.asset.ref.entryId;
 
   return {
     state,
@@ -1510,15 +1730,17 @@ export function useBackupAssetsState({
     diff,
     content: visibleContent,
     overlays: { savedSearches, favorites, tags, recent },
-    semanticIssue,
+    semanticIssue: visibleSemanticIssue,
     filterIssue,
     overlayError,
+    canRetryPreview,
     actions: {
       refreshRepositories,
       refreshRecoveryPoints,
       refreshResults,
       setSearchDraft,
       executeSearch,
+      clearSearch,
       toggleSelection,
       clearSelection,
       loadMore,
@@ -1677,6 +1899,23 @@ function setOverlayLoadError<T>(
   });
 }
 
+function sourceRepairProducingTaskId(
+  selectedRecoveryPoint: BackupRecoveryPoint | null,
+  lastExactPoint: BackupRecoveryPoint | null,
+  routeTaskId: number | undefined,
+  recoveryPointId: string,
+): number | undefined {
+  const point =
+    selectedRecoveryPoint?.id === recoveryPointId
+      ? selectedRecoveryPoint
+      : lastExactPoint?.id === recoveryPointId
+        ? lastExactPoint
+        : null;
+  const taskId = point?.lineage.producingTaskId ?? routeTaskId;
+  if (taskId === undefined || !Number.isSafeInteger(taskId) || taskId <= 0) return undefined;
+  return taskId;
+}
+
 function closedUnsupportedError(): BackupAssetsUIError {
   return {
     code: "unsupported",
@@ -1755,7 +1994,7 @@ function commitSearchProjection(
   dispatch: Dispatch<BackupAssetsAction>
 ): void {
   if (projection.status !== "available") {
-    dispatch({ type: "results_failed", requestKey });
+    dispatch({ type: "results_failed", requestKey, error: closedUnsupportedError() });
     return;
   }
   const response = projection.value;
@@ -1780,7 +2019,16 @@ function buildTemporarySearchRequest(
   text: string,
   cursor: string | null
 ): AssetSearchRequest | null {
-  const term = text === "" ? null : { op: "term" as const, field: "any" as const, text };
+  const term =
+    text === ""
+      ? null
+      : {
+          op: "or" as const,
+          children: [
+            { op: "term" as const, field: "name" as const, text },
+            { op: "term" as const, field: "path" as const, text },
+          ],
+        };
   if (term === null && route.types.length === 0) return null;
   const typeFilter = { op: "type" as const, values: route.types };
   const root: AssetSearchRequest["root"] = term

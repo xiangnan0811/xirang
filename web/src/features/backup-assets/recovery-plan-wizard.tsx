@@ -204,16 +204,23 @@ export function RecoveryPlanWizard({ open, recovery, authRole = null, onOpenChan
   const { t } = useTranslation();
   const { state } = recovery;
   const phaseHeadingRef = useRef<HTMLHeadingElement>(null);
+  const errorFocusRef = useRef<HTMLDivElement>(null);
   const [targetMode, setTargetMode] = useState<RecoveryTargetMode>("isolated");
   const [targetNodeId, setTargetNodeId] = useState("");
   const [targetRootId, setTargetRootId] = useState("");
   const [conflictPolicy, setConflictPolicy] = useState<RecoveryConflictPolicy>("fail_on_conflict");
   const [inPlaceConfirmOpen, setInPlaceConfirmOpen] = useState(false);
 
+  const showError = state.phase === "unavailable" || state.error !== null;
+
   useEffect(() => {
     if (!open) return;
+    if (showError) {
+      errorFocusRef.current?.focus();
+      return;
+    }
     phaseHeadingRef.current?.focus();
-  }, [open, state.phase]);
+  }, [open, showError, state.phase]);
 
   const changeMode = (mode: RecoveryTargetMode) => {
     setTargetMode(mode);
@@ -261,6 +268,10 @@ export function RecoveryPlanWizard({ open, recovery, authRole = null, onOpenChan
         className="flex flex-col overflow-hidden p-0"
         onOpenAutoFocus={(event) => {
           event.preventDefault();
+          if (showError) {
+            errorFocusRef.current?.focus();
+            return;
+          }
           phaseHeadingRef.current?.focus();
         }}
       >
@@ -430,17 +441,21 @@ export function RecoveryPlanWizard({ open, recovery, authRole = null, onOpenChan
           ) : null}
 
           {state.phase === "unavailable" ? (
-            <InlineAlert tone="critical" title={t("backupAssets.recovery.unavailable.title")}>
-              {t("backupAssets.recovery.unavailable.body")}
-            </InlineAlert>
+            <div ref={errorFocusRef} tabIndex={-1} data-testid="recovery-error" className="outline-none">
+              <InlineAlert tone="critical" title={t("backupAssets.recovery.unavailable.title")}>
+                {t("backupAssets.recovery.unavailable.body")}
+              </InlineAlert>
+            </div>
           ) : null}
           {state.error !== null && state.phase !== "unavailable" ? (
-            <InlineAlert tone="critical">
-              {t(state.error === "secure_transport_required"
-                ? "backupAssets.errors.secureTransportRequired"
-                : `backupAssets.recovery.error.${state.error}`)}
-              {state.error === "secure_transport_required" ? <ContentTransportGuidance authRole={authRole} /> : null}
-            </InlineAlert>
+            <div ref={errorFocusRef} tabIndex={-1} data-testid="recovery-error" className="outline-none">
+              <InlineAlert tone="critical">
+                {t(state.error === "secure_transport_required"
+                  ? "backupAssets.errors.secureTransportRequired"
+                  : `backupAssets.recovery.error.${state.error}`)}
+                {state.error === "secure_transport_required" ? <ContentTransportGuidance authRole={authRole} /> : null}
+              </InlineAlert>
+            </div>
           ) : null}
 
           <p id="recovery-announcement" data-testid="recovery-announcement" aria-live="polite" aria-atomic="true" className="sr-only">

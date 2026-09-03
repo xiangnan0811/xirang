@@ -176,9 +176,10 @@ describe("AssetBrowser", () => {
 
     const search = screen.getByRole("search");
     expect(search.parentElement).toHaveClass("grid");
-    expect(search).toHaveClass("col-span-full");
-    expect(screen.getByRole("searchbox").parentElement).toHaveClass("min-w-0");
-    expect(screen.getByRole("combobox", { name: /Search scope|搜索范围/ }).parentElement).toHaveClass("w-32");
+    expect(search.parentElement).not.toHaveClass("h-28", "lg:h-24");
+    expect(search).toHaveClass("col-span-full", "flex-wrap");
+    expect(screen.getByRole("searchbox").parentElement).toHaveClass("min-w-0", "basis-full");
+    expect(screen.getByRole("combobox", { name: /Search scope|搜索范围/ }).parentElement).toHaveClass("sm:w-72");
   });
 
   it("keeps every primary browser control at least 44px tall on touch layouts", async () => {
@@ -418,6 +419,49 @@ describe("AssetBrowser", () => {
     expect(screen.queryByText(/No matching files|没有匹配的文件/)).not.toBeInTheDocument();
   });
 
+  it("renders one transport failure without a simultaneous partial-index warning", () => {
+    const state = createInitialBackupAssetsState({
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search",
+      sort: "relevance",
+      direction: "desc",
+    });
+    state.searchDraft = "docker";
+    state.submittedSearchQuery = "docker";
+    state.result = {
+      status: "failed",
+      requestKey: "search:docker",
+      generation: 1,
+      rows: [],
+      nextCursor: null,
+      coverage: "partial",
+      authoritativeEmpty: false,
+      directory: null,
+      error: {
+        code: "temporarily_unavailable",
+        translationKey: "backupAssets.errors.temporarilyUnavailable",
+        retryable: true,
+        action: "retry",
+      },
+    };
+    render(
+      <AssetBrowser
+        state={state}
+        onRoutePatch={vi.fn()}
+        onSearch={vi.fn()}
+        onSearchDraftChange={vi.fn()}
+        onToggleSelection={vi.fn()}
+        onClearSelection={vi.fn()}
+        onOpen={vi.fn()}
+        onLoadMore={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/temporarily unavailable|暂不可用/i);
+    expect(screen.queryByText(/incomplete|尚不完整/i)).not.toBeInTheDocument();
+  });
+
+
   it("announces browser loading and failure as scoped live states", () => {
     const state = createInitialBackupAssetsState(defaultBackupAssetsRouteState("data"));
     state.result = {
@@ -442,5 +486,95 @@ describe("AssetBrowser", () => {
     state.result = { ...state.result, status: "failed" };
     rendered.rerender(<AssetBrowser state={state} {...props} />);
     expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
+  it("keeps prior rows and exact-cursor Load more after a pagination failure", async () => {
+    const user = userEvent.setup();
+    const rows = buildAssetRows(1);
+    rows[0].asset.name = "retained-page.yaml";
+    const onLoadMore = vi.fn();
+    const state = createInitialBackupAssetsState({
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search",
+      sort: "relevance",
+      direction: "desc",
+    });
+    state.result = {
+      status: "failed",
+      requestKey: "search:page",
+      generation: 2,
+      rows,
+      nextCursor: "exact-cursor",
+      coverage: "complete",
+      authoritativeEmpty: false,
+      directory: null,
+      error: {
+        code: "temporarily_unavailable",
+        translationKey: "backupAssets.errors.temporarilyUnavailable",
+        retryable: true,
+        action: "retry",
+      },
+    };
+    render(
+      <AssetBrowser
+        state={state}
+        onRoutePatch={vi.fn()}
+        onSearch={vi.fn()}
+        onSearchDraftChange={vi.fn()}
+        onToggleSelection={vi.fn()}
+        onClearSelection={vi.fn()}
+        onOpen={vi.fn()}
+        onLoadMore={onLoadMore}
+      />,
+    );
+
+    expect(screen.getByText("retained-page.yaml")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Load more|加载更多/ }));
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers first-page Retry through refreshResults", async () => {
+    const user = userEvent.setup();
+    const onRefreshResults = vi.fn();
+    const state = createInitialBackupAssetsState({
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search",
+      sort: "relevance",
+      direction: "desc",
+    });
+    state.result = {
+      status: "failed",
+      requestKey: "search:first",
+      generation: 1,
+      rows: [],
+      nextCursor: null,
+      coverage: "unavailable",
+      authoritativeEmpty: false,
+      directory: null,
+      error: {
+        code: "temporarily_unavailable",
+        translationKey: "backupAssets.errors.temporarilyUnavailable",
+        retryable: true,
+        action: "retry",
+      },
+    };
+    render(
+      <AssetBrowser
+        state={state}
+        onRoutePatch={vi.fn()}
+        onSearch={vi.fn()}
+        onSearchDraftChange={vi.fn()}
+        onToggleSelection={vi.fn()}
+        onClearSelection={vi.fn()}
+        onOpen={vi.fn()}
+        onLoadMore={vi.fn()}
+        onRefreshResults={onRefreshResults}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /Load more|加载更多/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^(Retry|重试)$/ }));
+    expect(onRefreshResults).toHaveBeenCalledTimes(1);
   });
 });

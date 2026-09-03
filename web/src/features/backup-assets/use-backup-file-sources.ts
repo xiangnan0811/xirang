@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -10,6 +11,7 @@ import {
 
 import { apiClient } from "@/lib/api/client";
 import { mapBackupAssetsError, type BackupAssetsErrorContext } from "@/lib/api/backup-assets-error";
+import { SharedContext } from "@/context/shared-context.shared";
 import type {
   BackupFileSourceNode,
   BackupFileSourceRecoveryPoint,
@@ -29,7 +31,13 @@ import {
 
 type ResourceStatus = "idle" | "loading" | "loading_more" | "ready" | "blocked" | "permission_denied" | "error";
 type ResourceKind = "nodes" | "sets" | "versions";
-interface SourceResource<T> { key: string; status: ResourceStatus; items: T[]; nextCursor: string | null }
+interface SourceResource<T> {
+  key: string;
+  status: ResourceStatus;
+  items: T[];
+  nextCursor: string | null;
+  pageError: "retryable" | "permission_denied" | null;
+}
 interface LegacyResolutionResource { key: string; status: ResourceStatus }
 interface LegacyResolutionRequest {
   key: string;
@@ -44,15 +52,17 @@ const emptyResource = <T,>(key = "idle", status: ResourceStatus = "idle"): Sourc
   status,
   items: [],
   nextCursor: null,
+  pageError: null,
 });
 
 export interface UseBackupFileSourcesOptions {
   token: string | null;
   route: BackupAssetsRouteState;
+  refreshVersion?: number;
   onRoutePatch: (patch: Partial<BackupAssetsRouteState>, options?: { replace?: boolean }) => void;
 }
 
-export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFileSourcesOptions) {
+export function useBackupFileSources({ token, route, refreshVersion, onRoutePatch }: UseBackupFileSourcesOptions) {
   const [nodes, setNodes] = useState<SourceResource<BackupFileSourceNode>>(emptyResource);
   const [sets, setSets] = useState<SourceResource<BackupFileSourceSet>>(emptyResource);
   const [versions, setVersions] = useState<SourceResource<BackupFileSourceVersion>>(emptyResource);
@@ -61,13 +71,21 @@ export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFi
   const legacyRequestRef = useRef<LegacyResolutionRequest | null>(null);
   const onRoutePatchRef = useRef(onRoutePatch);
   useEffect(() => { onRoutePatchRef.current = onRoutePatch; }, [onRoutePatch]);
+  const shared = useContext(SharedContext);
+  const [listGeneration, setListGeneration] = useState(0);
+  const [autoPaginationPaused, setAutoPaginationPaused] = useState<Record<ResourceKind, boolean>>({
+    nodes: false,
+    sets: false,
+    versions: false,
+  });
+  const refreshGeneration = (refreshVersion ?? shared?.refreshVersion ?? 0) + listGeneration;
   const legacyResolutionRequired = token !== null && token !== "" && route.recoveryPointId !== undefined &&
     (route.nodeId === undefined || route.backupSetId === undefined);
-  const legacyResolutionKey = legacyResolutionRequired ? `recovery-point:${token}:${route.recoveryPointId}` : "idle";
+  const legacyResolutionKey = legacyResolutionRequired ? `recovery-point:${token}:${route.recoveryPointId}:${refreshGeneration}` : "idle";
   const activeLegacyResolution = legacyResolution.key === legacyResolutionKey
     ? legacyResolution
     : { key: legacyResolutionKey, status: legacyResolutionRequired ? "loading" as const : "idle" as const };
-  const nodesKey = token ? `nodes:${token}` : "idle";
+  const nodesKey = token ? `nodes:${token}:${refreshGeneration}` : "idle";
   const activeNodes = nodes.key === nodesKey
     ? nodes
     : emptyResource<BackupFileSourceNode>(nodesKey, token ? "loading" : "idle");
@@ -108,6 +126,8 @@ export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFi
           repositoryId: route.repositoryId,
           taskId: route.taskId,
           recoveryPointId: route.recoveryPointId,
+          parentEntryId: route.parentEntryId,
+          entryId: route.entryId,
         }, resolved.value);
         const exactResolvedPoint = patch.recoveryPointId === resolved.value.recoveryPointId;
         onRoutePatchRef.current(
@@ -153,7 +173,9 @@ export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFi
     legacyResolutionKey,
     legacyResolutionRequired,
     route.backupSetId,
+    route.entryId,
     route.nodeId,
+    route.parentEntryId,
     route.recoveryPointId,
     route.repositoryId,
     route.taskId,
@@ -173,7 +195,7 @@ export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFi
     return () => abort.abort();
   }, [nodesKey, token]);
 
-  const setsKey = token && route.nodeId !== undefined && !legacyResolutionRequired ? `sets:${token}:${route.nodeId}` : "idle";
+  const setsKey = token && route.nodeId !== undefined && !legacyResolutionRequired ? `sets:${token}:${route.nodeId}:${refreshGeneration}` : "idle";
   const activeSets = sets.key === setsKey
     ? sets
     : emptyResource<BackupFileSourceSet>(setsKey, token && route.nodeId !== undefined && !legacyResolutionRequired ? "loading" : "idle");
@@ -198,11 +220,10 @@ export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFi
     : activeSets.items.find((item) => item.backupSetId === route.backupSetId) ?? null;
   const selectedNodeId = route.nodeId;
   const selectedSetId = selectedSet?.backupSetId ?? null;
-  const versionsKey = token && selectedSetId ? `versions:${token}:${selectedSetId}` : "idle";
+  const versionsKey = token && selectedSetId ? `versions:${token}:${selectedSetId}:${refreshGeneration}` : "idle";
   const activeVersions = versions.key === versionsKey
     ? versions
     : emptyResource<BackupFileSourceVersion>(versionsKey, token && selectedSetId ? "loading" : "idle");
-
   useEffect(() => {
     pageControllers.current.versions?.abort();
     pageControllers.current.versions = null;
@@ -229,12 +250,17 @@ export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFi
     requestPage: (cursor: string, signal: AbortSignal) => Promise<CatalogProjection<BackupFileSourcePage<T>>>,
     commit: Dispatch<SetStateAction<SourceResource<T>>>,
   ) => {
-    if (!resource.nextCursor || resource.status !== "ready" || pageControllers.current[kind]) return;
+    if (
+      !resource.nextCursor ||
+      resource.status !== "ready" ||
+      resource.pageError === "permission_denied" ||
+      pageControllers.current[kind]
+    ) return;
     const requestedCursor = resource.nextCursor;
     const abort = new AbortController();
     pageControllers.current[kind] = abort;
     commit((current) => current.key === resource.key && current.nextCursor === requestedCursor
-      ? { ...current, status: "loading_more" }
+      ? { ...current, status: "loading_more", pageError: null }
       : current);
     try {
       const page = await requestPage(requestedCursor, abort.signal);
@@ -242,16 +268,28 @@ export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFi
       const next = resourceFrom(page, resource.key);
       commit((current) => {
         if (current.key !== resource.key || current.nextCursor !== requestedCursor) return current;
-        if (next.status !== "ready") return next;
+        if (next.status !== "ready") return { ...current, status: "ready", pageError: "retryable" };
         const items = appendUnique(current.items, next.items, identity);
         return items === null
-          ? { ...current, status: "blocked", nextCursor: null }
+          ? { ...current, status: "blocked", nextCursor: null, pageError: null }
           : { ...next, items };
       });
     } catch (error: unknown) {
       if (!abort.signal.aborted && !isAbort(error)) {
+        const mapped = mapBackupAssetsError(error, "cursor");
+        if (mapped.code === "stale_cursor") {
+          setAutoPaginationPaused((current) => (
+            current[kind] ? current : { ...current, [kind]: true }
+          ));
+          setListGeneration((generation) => generation + 1);
+          return;
+        }
         commit((current) => current.key === resource.key && current.nextCursor === requestedCursor
-          ? { ...current, status: sourceErrorStatus(error, "cursor"), nextCursor: null }
+          ? {
+              ...current,
+              status: "ready",
+              pageError: mapped.code === "permission_denied" ? "permission_denied" : "retryable",
+            }
           : current);
       }
     } finally {
@@ -259,36 +297,62 @@ export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFi
     }
   }, []);
 
-  const loadMoreNodes = useCallback(() => token
-    ? loadMore(
-        "nodes",
-        activeNodes,
-        (item: BackupFileSourceNode) => String(item.nodeId),
-        (cursor, signal) => apiClient.listBackupFileSourceNodes(token, { limit: 100, cursor, signal }),
-        setNodes,
-      )
-    : Promise.resolve(), [activeNodes, loadMore, token]);
-  const loadMoreSets = useCallback(() => token && selectedNodeId !== undefined
-    ? loadMore(
-        "sets",
-        activeSets,
-        (item: BackupFileSourceSet) => item.backupSetId,
-        (cursor, signal) => apiClient.listBackupFileSourceSets(token, selectedNodeId, { limit: 100, cursor, signal }),
-        setSets,
-      )
-    : Promise.resolve(), [activeSets, loadMore, selectedNodeId, token]);
-  const loadMoreVersions = useCallback(() => token && selectedSet
-    ? loadMore(
-        "versions",
-        activeVersions,
-        (item: BackupFileSourceVersion) => item.recoveryPointId,
-        (cursor, signal) => apiClient.listBackupFileSourceVersions(token, selectedSet.backupSetId, { limit: 100, cursor, signal }),
-        setVersions,
-      )
-    : Promise.resolve(), [activeVersions, loadMore, selectedSet, token]);
+  const resumeAutoPagination = useCallback((kind: ResourceKind) => {
+    setAutoPaginationPaused((current) => (
+      current[kind] ? { ...current, [kind]: false } : current
+    ));
+  }, []);
+  const loadMoreNodes = useCallback(() => {
+    resumeAutoPagination("nodes");
+    return token
+      ? loadMore(
+          "nodes",
+          activeNodes,
+          (item: BackupFileSourceNode) => String(item.nodeId),
+          (cursor, signal) => apiClient.listBackupFileSourceNodes(token, { limit: 100, cursor, signal }),
+          setNodes,
+        )
+      : Promise.resolve();
+  }, [activeNodes, loadMore, resumeAutoPagination, token]);
+  const loadMoreSets = useCallback(() => {
+    resumeAutoPagination("sets");
+    return token && selectedNodeId !== undefined
+      ? loadMore(
+          "sets",
+          activeSets,
+          (item: BackupFileSourceSet) => item.backupSetId,
+          (cursor, signal) => apiClient.listBackupFileSourceSets(token, selectedNodeId, { limit: 100, cursor, signal }),
+          setSets,
+        )
+      : Promise.resolve();
+  }, [activeSets, loadMore, resumeAutoPagination, selectedNodeId, token]);
+  const loadMoreVersions = useCallback(() => {
+    resumeAutoPagination("versions");
+    return token && selectedSet
+      ? loadMore(
+          "versions",
+          activeVersions,
+          (item: BackupFileSourceVersion) => item.recoveryPointId,
+          (cursor, signal) => apiClient.listBackupFileSourceVersions(token, selectedSet.backupSetId, { limit: 100, cursor, signal }),
+          setVersions,
+        )
+      : Promise.resolve();
+  }, [activeVersions, loadMore, resumeAutoPagination, selectedSet, token]);
+
+  useEffect(() => {
+    setAutoPaginationPaused((current) => current.nodes ? { ...current, nodes: false } : current);
+  }, [route.nodeId, token]);
+  useEffect(() => {
+    setAutoPaginationPaused((current) => current.sets ? { ...current, sets: false } : current);
+  }, [route.backupSetId, route.nodeId, token]);
+  useEffect(() => {
+    setAutoPaginationPaused((current) => current.versions ? { ...current, versions: false } : current);
+  }, [route.backupSetId, route.recoveryPointId, token]);
 
   useEffect(() => {
     if (
+      !autoPaginationPaused.nodes &&
+      activeNodes.pageError === null &&
       route.nodeId !== undefined &&
       activeNodes.status === "ready" &&
       !activeNodes.items.some((item) => item.nodeId === route.nodeId) &&
@@ -296,10 +360,12 @@ export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFi
     ) {
       void loadMoreNodes();
     }
-  }, [activeNodes, loadMoreNodes, route.nodeId]);
+  }, [activeNodes, autoPaginationPaused.nodes, loadMoreNodes, route.nodeId]);
 
   useEffect(() => {
     if (
+      !autoPaginationPaused.sets &&
+      activeSets.pageError === null &&
       route.backupSetId !== undefined &&
       activeSets.status === "ready" &&
       !activeSets.items.some((item) => item.backupSetId === route.backupSetId) &&
@@ -307,10 +373,12 @@ export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFi
     ) {
       void loadMoreSets();
     }
-  }, [activeSets, loadMoreSets, route.backupSetId]);
+  }, [activeSets, autoPaginationPaused.sets, loadMoreSets, route.backupSetId]);
 
   useEffect(() => {
     if (
+      !autoPaginationPaused.versions &&
+      activeVersions.pageError === null &&
       route.recoveryPointId !== undefined &&
       selectedSet !== null &&
       activeVersions.status === "ready" &&
@@ -319,7 +387,7 @@ export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFi
     ) {
       void loadMoreVersions();
     }
-  }, [activeVersions, loadMoreVersions, route.recoveryPointId, selectedSet]);
+  }, [activeVersions, autoPaginationPaused.versions, loadMoreVersions, route.recoveryPointId, selectedSet]);
 
   const projection = useMemo(() => projectBackupFileSourceSelection({
     nodes: activeNodes.items,
@@ -360,22 +428,36 @@ export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFi
     sets: projection.sets,
     versions: projection.versions,
     selectedVersion: projection.selectedVersion,
-    hasMoreNodes: activeNodes.nextCursor !== null,
-    hasMoreSets: activeSets.nextCursor !== null,
-    hasMoreVersions: activeVersions.nextCursor !== null,
+    hasMoreNodes: activeNodes.nextCursor !== null && activeNodes.pageError !== "permission_denied",
+    hasMoreSets: activeSets.nextCursor !== null && activeSets.pageError !== "permission_denied",
+    hasMoreVersions: activeVersions.nextCursor !== null && activeVersions.pageError !== "permission_denied",
     loadingMoreNodes: activeNodes.status === "loading_more",
     loadingMoreSets: activeSets.status === "loading_more",
     loadingMoreVersions: activeVersions.status === "loading_more",
+    paginationError:
+      activeNodes.pageError === "retryable" ||
+      activeSets.pageError === "retryable" ||
+      activeVersions.pageError === "retryable",
+    paginationPermissionDenied:
+      activeNodes.pageError === "permission_denied" ||
+      activeSets.pageError === "permission_denied" ||
+      activeVersions.pageError === "permission_denied",
+    canRetry: !permissionDenied && !loading && projection.status === "blocked",
+    retry: () => setListGeneration((generation) => generation + 1),
     selectNode: (nodeId: number | undefined) => onRoutePatch({ nodeId }),
     selectSet: (backupSetId: string | undefined) => onRoutePatch({ backupSetId }),
     selectVersion: (version: BackupFileSourceVersion, backupSetId: string) => {
       if (version.browseState !== "browsable") return;
       onRoutePatch({
+        view: "browse",
+        scope: "current",
         nodeId: route.nodeId,
         backupSetId,
         repositoryId: version.repositoryId,
         taskId: version.producingTaskId,
         recoveryPointId: version.recoveryPointId,
+        parentEntryId: undefined,
+        entryId: undefined,
       });
     },
     loadMoreNodes,
@@ -386,8 +468,8 @@ export function useBackupFileSources({ token, route, onRoutePatch }: UseBackupFi
 
 function resourceFrom<T>(page: CatalogProjection<BackupFileSourcePage<T>>, key: string): SourceResource<T> {
   return page.status === "available"
-    ? { key, status: "ready", items: page.value.items, nextCursor: page.value.nextCursor }
-    : { key, status: "blocked", items: [], nextCursor: null };
+    ? { key, status: "ready", items: page.value.items, nextCursor: page.value.nextCursor, pageError: null }
+    : { key, status: "blocked", items: [], nextCursor: null, pageError: null };
 }
 
 function isAbort(error: unknown): boolean {

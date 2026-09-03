@@ -2442,6 +2442,7 @@ const zh = {
     title: "备份管理",
     pageTitle: "备份",
     pageSubtitle: "{{count}} 个策略 · {{healthy}} 通过",
+    pageDesc: "在同一处查看备份健康、文件和受控恢复。",
     newBackup: "配置备份任务",
     loadingTitle: "加载备份数据中...",
     loadingDesc: "正在读取备份健康状态",
@@ -2483,6 +2484,7 @@ const zh = {
       permissionDenied: "您没有列出这些文件来源的权限。",
       partial: "文件索引尚不完整，当前仅显示已确认的版本。",
       blocked: "文件来源当前不可用。",
+      paginationFailed: "未能加载更多文件来源，请再次点击加载更多。",
       indexing: "正在建立文件索引，完成后即可浏览。",
       unavailable: "此备份来源当前不可用，请稍后重试。",
       states: {
@@ -2662,6 +2664,9 @@ const zh = {
       selectAsset: "尚未选择文件",
       loadingAssets: "正在加载文件",
       partialCoverage: "文件索引尚不完整，结果仅包含已索引文件",
+      buildingCoverage: "文件索引仍在构建",
+      failedCoverage: "文件索引无法加载",
+      unavailableCoverage: "文件索引不可用",
       noMatchingAssets: "没有匹配的文件",
       noIndexedResults: "已索引范围内没有文件",
       previewNotLoaded: "尚未加载预览",
@@ -3168,6 +3173,7 @@ const zh = {
       scope: "搜索范围",
       current: "当前恢复点",
       allRetained: "所有保留恢复点",
+      clear: "清空条件",
     },
     browser: {
       breadcrumb: "目录位置",

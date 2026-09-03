@@ -9,7 +9,7 @@ import type {
   BackupFileSourceVersion,
 } from "@/types/domain";
 import { ApiError } from "@/lib/api/core";
-import { defaultBackupAssetsRouteState, type BackupAssetsRouteState } from "./backup-assets-route-state";
+import { defaultBackupAssetsRouteState, updateBackupAssetsRoute, type BackupAssetsRouteState } from "./backup-assets-route-state";
 import { useBackupFileSources } from "./use-backup-file-sources";
 
 const mocks = vi.hoisted(() => ({ nodes: vi.fn(), sets: vi.fn(), versions: vi.fn(), resolve: vi.fn() }));
@@ -74,11 +74,104 @@ describe("useBackupFileSources", () => {
       repositoryId: resolution.repositoryId,
       taskId: resolution.producingTaskId,
       recoveryPointId: resolution.recoveryPointId,
+      parentEntryId: "d".repeat(64),
+      entryId: "e".repeat(64),
     }, { replace: true }));
     expect(mocks.resolve).toHaveBeenCalledTimes(1);
     expect(mocks.resolve).toHaveBeenCalledWith("token", version.recoveryPointId, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(mocks.sets).not.toHaveBeenCalled();
     expect(mocks.versions).not.toHaveBeenCalled();
+  });
+
+  it("reconstructs a cross-node retained recovery point after unverified hierarchy is cleared", async () => {
+    const foreignSetId = "9".repeat(32);
+    const foreignPointId = "e".repeat(32);
+    const foreignRepositoryId = "f".repeat(32);
+    const foreign: BackupFileSourceRecoveryPoint = {
+      nodeId: 8,
+      backupSetId: foreignSetId,
+      recoveryPointId: foreignPointId,
+      repositoryId: foreignRepositoryId,
+      producingTaskId: 11,
+      browseState: "browsable",
+      unavailableReason: null,
+    };
+    mocks.resolve.mockResolvedValue({ status: "available", value: foreign });
+    const onRoutePatch = vi.fn();
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      recoveryPointId: foreignPointId,
+      parentEntryId: "d".repeat(64),
+      entryId: "e".repeat(64),
+    };
+
+    renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch }));
+
+    await waitFor(() => expect(onRoutePatch).toHaveBeenCalledWith({
+      nodeId: 8,
+      backupSetId: foreignSetId,
+      repositoryId: foreignRepositoryId,
+      taskId: 11,
+      recoveryPointId: foreignPointId,
+      parentEntryId: "d".repeat(64),
+      entryId: "e".repeat(64),
+    }, { replace: true }));
+    expect(mocks.resolve).toHaveBeenCalledWith(
+      "token",
+      foreignPointId,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(mocks.sets).not.toHaveBeenCalled();
+    expect(mocks.versions).not.toHaveBeenCalled();
+  });
+
+  it("keeps the exact hit locator after a cross-source resolver patch is composed through the route updater", async () => {
+    const foreignSetId = "9".repeat(32);
+    const foreignPointId = "e".repeat(32);
+    const foreignRepositoryId = "f".repeat(32);
+    const parentEntryId = "d".repeat(64);
+    const entryId = "e".repeat(64);
+    const foreign: BackupFileSourceRecoveryPoint = {
+      nodeId: 8,
+      backupSetId: foreignSetId,
+      recoveryPointId: foreignPointId,
+      repositoryId: foreignRepositoryId,
+      producingTaskId: 11,
+      browseState: "browsable",
+      unavailableReason: null,
+    };
+    mocks.resolve.mockResolvedValue({ status: "available", value: foreign });
+    const composed = vi.fn();
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      recoveryPointId: foreignPointId,
+      parentEntryId,
+      entryId,
+    };
+
+    renderHook(() => useBackupFileSources({
+      token: "token",
+      route,
+      onRoutePatch: (patch, options) => {
+        composed(updateBackupAssetsRoute(route, patch), options);
+      },
+    }));
+
+    await waitFor(() => expect(composed).toHaveBeenCalled());
+    const result = composed.mock.calls[0]?.[0];
+    expect(result).toMatchObject({
+      status: "valid",
+      state: {
+        nodeId: 8,
+        backupSetId: foreignSetId,
+        repositoryId: foreignRepositoryId,
+        taskId: 11,
+        recoveryPointId: foreignPointId,
+        parentEntryId,
+        entryId,
+      },
+    });
+    expect(composed.mock.calls[0]?.[1]).toEqual({ replace: true });
   });
 
   it("keeps a retained non-browsable legacy resolution out of active browsing context", async () => {
@@ -345,7 +438,17 @@ describe("useBackupFileSources", () => {
     expect(mocks.sets).toHaveBeenCalledWith("token", 7, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(mocks.versions).toHaveBeenCalledWith("token", set.backupSetId, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     act(() => result.current.selectVersion(version, set.backupSetId));
-    expect(onRoutePatch).toHaveBeenCalledWith({ nodeId: 7, backupSetId: set.backupSetId, repositoryId: version.repositoryId, taskId: 9, recoveryPointId: version.recoveryPointId });
+    expect(onRoutePatch).toHaveBeenCalledWith({
+      view: "browse",
+      scope: "current",
+      nodeId: 7,
+      backupSetId: set.backupSetId,
+      repositoryId: version.repositoryId,
+      taskId: 9,
+      recoveryPointId: version.recoveryPointId,
+      parentEntryId: undefined,
+      entryId: undefined,
+    });
   });
 
   it("never patches a non-browsable retained version into active browsing context", async () => {
@@ -431,6 +534,226 @@ describe("useBackupFileSources", () => {
     const { result } = renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch: vi.fn() }));
 
     await waitFor(() => expect(result.current.status).toBe("permission_denied"));
+    expect(result.current.canRetry).toBe(false);
+  });
+
+  it("reloads the first source page instead of blocking on a stale cursor", async () => {
+    mocks.nodes.mockImplementation((_token: string, options: { cursor?: string }) => {
+      if (options.cursor) {
+        return Promise.reject(new ApiError(409, "raw stale cursor", { code: 409 }));
+      }
+      return Promise.resolve({ status: "available", value: { items: [node], nextCursor: pageCursor } });
+    });
+    const route = defaultBackupAssetsRouteState("data");
+    const { result } = renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch: vi.fn() }));
+    await waitFor(() => expect(result.current.hasMoreNodes).toBe(true));
+
+    await act(async () => { await result.current.loadMoreNodes(); });
+    await waitFor(() => {
+      const firstPageCalls = mocks.nodes.mock.calls.filter((call) => !call[1]?.cursor);
+      expect(firstPageCalls).toHaveLength(2);
+    });
+    expect(mocks.nodes.mock.calls.filter((call) => call[1]?.cursor === pageCursor)).toHaveLength(1);
+    expect(result.current.status).not.toBe("blocked");
+    expect(result.current.nodes).toEqual([node]);
+  });
+
+  it("pauses exact-source auto-pagination after a stale cursor until explicit retry", async () => {
+    mocks.nodes.mockImplementation((_token: string, options: { cursor?: string }) => {
+      if (options.cursor) {
+        return Promise.reject(new ApiError(409, "raw stale cursor", { code: 409 }));
+      }
+      return Promise.resolve({ status: "available", value: { items: [node], nextCursor: pageCursor } });
+    });
+    const route = { ...defaultBackupAssetsRouteState("data"), nodeId: secondNode.nodeId };
+    const { result } = renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch: vi.fn() }));
+
+    await waitFor(() => expect(mocks.nodes.mock.calls.filter((call) => call[1]?.cursor === pageCursor)).toHaveLength(1));
+    await waitFor(() => expect(mocks.nodes.mock.calls.filter((call) => !call[1]?.cursor)).toHaveLength(2));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
+    expect(mocks.nodes.mock.calls.filter((call) => call[1]?.cursor === pageCursor)).toHaveLength(1);
+    expect(result.current.nodes).toEqual([node]);
+    expect(result.current.hasMoreNodes).toBe(true);
+
+    await act(async () => { await result.current.loadMoreNodes(); });
+    await waitFor(() => expect(mocks.nodes.mock.calls.filter((call) => call[1]?.cursor === pageCursor)).toHaveLength(2));
+  });
+
+  it("pauses exact-source auto-pagination after a retryable page failure", async () => {
+    mocks.nodes.mockImplementation((_token: string, options: { cursor?: string }) => {
+      if (options.cursor) {
+        return Promise.reject(new ApiError(503, "temporary page failure", null));
+      }
+      return Promise.resolve({ status: "available", value: { items: [node], nextCursor: pageCursor } });
+    });
+    const route = { ...defaultBackupAssetsRouteState("data"), nodeId: secondNode.nodeId };
+    const { result } = renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch: vi.fn() }));
+
+    await waitFor(() => expect(result.current.paginationError).toBe(true));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
+    expect(mocks.nodes.mock.calls.filter((call) => call[1]?.cursor === pageCursor)).toHaveLength(1);
+    expect(result.current.nodes).toEqual([node]);
+    expect(result.current.hasMoreNodes).toBe(true);
+
+    await act(async () => { await result.current.loadMoreNodes(); });
+    expect(mocks.nodes.mock.calls.filter((call) => call[1]?.cursor === pageCursor)).toHaveLength(2);
+  });
+
+  it("reloads authorized source lists when the global refresh generation advances", async () => {
+    const route = defaultBackupAssetsRouteState("data");
+    const { rerender } = renderHook(
+      ({ refreshVersion }) => useBackupFileSources({ token: "token", route, refreshVersion, onRoutePatch: vi.fn() }),
+      { initialProps: { refreshVersion: 0 } }
+    );
+    await waitFor(() => expect(mocks.nodes).toHaveBeenCalledTimes(1));
+    rerender({ refreshVersion: 1 });
+    await waitFor(() => expect(mocks.nodes).toHaveBeenCalledTimes(2));
+    expect(mocks.nodes.mock.calls[1]?.[1]).not.toHaveProperty("cursor");
+  });
+
+  it("retries a sticky exact-point resolver failure when the global refresh generation advances", async () => {
+    mocks.resolve.mockRejectedValueOnce(new ApiError(503, "temporary resolver failure", null));
+    const onRoutePatch = vi.fn();
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      recoveryPointId: version.recoveryPointId,
+      parentEntryId: "d".repeat(64),
+      entryId: "e".repeat(64),
+    };
+    const { result, rerender } = renderHook(
+      ({ refreshVersion }) => useBackupFileSources({ token: "token", route, refreshVersion, onRoutePatch }),
+      { initialProps: { refreshVersion: 0 } },
+    );
+
+    await waitFor(() => expect(result.current.status).toBe("blocked"));
+    expect(mocks.resolve).toHaveBeenCalledTimes(1);
+    expect(onRoutePatch).not.toHaveBeenCalled();
+
+    mocks.resolve.mockResolvedValue({ status: "available", value: resolution });
+    rerender({ refreshVersion: 1 });
+    await waitFor(() => expect(mocks.resolve).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(onRoutePatch).toHaveBeenCalledWith({
+      nodeId: resolution.nodeId,
+      backupSetId: resolution.backupSetId,
+      repositoryId: resolution.repositoryId,
+      taskId: resolution.producingTaskId,
+      recoveryPointId: resolution.recoveryPointId,
+      parentEntryId: "d".repeat(64),
+      entryId: "e".repeat(64),
+    }, { replace: true }));
+  });
+
+  it("switches repositories and all-retained selection onto browse at the current version", async () => {
+    const onRoutePatch = vi.fn();
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      view: "search" as const,
+      scope: "all_retained" as const,
+      nodeId: 7,
+      sort: "relevance" as const,
+      direction: "desc" as const,
+    };
+    const { result } = renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch }));
+    await waitFor(() => expect(result.current.versions).toEqual([version]));
+    act(() => result.current.selectVersion(version, set.backupSetId));
+    expect(onRoutePatch).toHaveBeenCalledWith(expect.objectContaining({
+      view: "browse",
+      scope: "current",
+      recoveryPointId: version.recoveryPointId,
+    }));
+  });
+
+  it("retains loaded sources and the same cursor after a next-page failure", async () => {
+    mocks.nodes.mockImplementation((_token: string, options: { cursor?: string }) => {
+      if (options.cursor) {
+        return Promise.reject(new ApiError(503, "temporary page failure", null));
+      }
+      return Promise.resolve({ status: "available", value: { items: [node], nextCursor: pageCursor } });
+    });
+    const route = defaultBackupAssetsRouteState("data");
+    const { result } = renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch: vi.fn() }));
+    await waitFor(() => expect(result.current.hasMoreNodes).toBe(true));
+
+    await act(async () => { await result.current.loadMoreNodes(); });
+
+    expect(result.current.status).not.toBe("blocked");
+    expect(result.current.nodes).toEqual([node]);
+    expect(result.current.hasMoreNodes).toBe(true);
+    expect(result.current.paginationError).toBe(true);
+
+    await act(async () => { await result.current.loadMoreNodes(); });
+    const cursorCalls = mocks.nodes.mock.calls.filter((call) => call[1]?.cursor === pageCursor);
+    expect(cursorCalls).toHaveLength(2);
+  });
+
+  it("retains loaded sources when a next page is temporarily blocked", async () => {
+    let pageAttempts = 0;
+    mocks.nodes.mockImplementation((_token: string, options: { cursor?: string }) => {
+      if (!options.cursor) {
+        return Promise.resolve({ status: "available", value: { items: [node], nextCursor: pageCursor } });
+      }
+      pageAttempts += 1;
+      return Promise.resolve(pageAttempts === 1
+        ? { status: "blocked", reason: { code: "catalog_unavailable", params: {} } }
+        : { status: "available", value: { items: [secondNode], nextCursor: null } });
+    });
+    const route = defaultBackupAssetsRouteState("data");
+    const { result } = renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch: vi.fn() }));
+    await waitFor(() => expect(result.current.hasMoreNodes).toBe(true));
+
+    await act(async () => { await result.current.loadMoreNodes(); });
+
+    expect(result.current.status).not.toBe("blocked");
+    expect(result.current.nodes).toEqual([node]);
+    expect(result.current.hasMoreNodes).toBe(true);
+    expect(result.current.paginationError).toBe(true);
+
+    await act(async () => { await result.current.loadMoreNodes(); });
+    expect(result.current.nodes).toEqual([node, secondNode]);
+    expect(result.current.hasMoreNodes).toBe(false);
+    expect(result.current.paginationError).toBe(false);
+  });
+
+  it("keeps page-two permission denial non-retryable without hiding loaded sources", async () => {
+    mocks.nodes.mockImplementation((_token: string, options: { cursor?: string }) => {
+      if (options.cursor) {
+        return Promise.reject(new ApiError(403, "raw forbidden", null));
+      }
+      return Promise.resolve({ status: "available", value: { items: [node], nextCursor: pageCursor } });
+    });
+    const route = defaultBackupAssetsRouteState("data");
+    const { result } = renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch: vi.fn() }));
+    await waitFor(() => expect(result.current.hasMoreNodes).toBe(true));
+
+    await act(async () => { await result.current.loadMoreNodes(); });
+
+    expect(result.current.status).not.toBe("blocked");
+    expect(result.current.nodes).toEqual([node]);
+    expect(result.current.hasMoreNodes).toBe(false);
+    expect(result.current.paginationError).toBe(false);
+    expect(result.current.paginationPermissionDenied).toBe(true);
+    expect(mocks.nodes.mock.calls.filter((call) => call[1]?.cursor === pageCursor)).toHaveLength(1);
+
+    await act(async () => { await result.current.loadMoreNodes(); });
+    expect(mocks.nodes.mock.calls.filter((call) => call[1]?.cursor === pageCursor)).toHaveLength(1);
+  });
+
+  it("retries a first-page source failure by incrementing the existing generation", async () => {
+    mocks.nodes
+      .mockRejectedValueOnce(new ApiError(503, "temporary source failure", null))
+      .mockResolvedValue({ status: "available", value: { items: [node], nextCursor: null } });
+    const route = defaultBackupAssetsRouteState("data");
+    const { result } = renderHook(() => useBackupFileSources({ token: "token", route, onRoutePatch: vi.fn() }));
+
+    await waitFor(() => expect(result.current.status).toBe("blocked"));
+    expect(result.current.canRetry).toBe(true);
+    expect(result.current.nodes).toEqual([]);
+
+    act(() => result.current.retry());
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.nodes).toEqual([node]);
+    expect(mocks.nodes.mock.calls.every((call) => !call[1]?.cursor)).toBe(true);
+    expect(mocks.nodes).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -5,7 +5,7 @@ describe("getVisibleNavItems", () => {
   it("keeps exactly one Backups navigation entry", () => {
     const backupItems = navItems.filter((item) => item.path.startsWith("/app/backups"));
     expect(backupItems).toHaveLength(1);
-    expect(backupItems[0]?.path).toBe("/app/backups");
+    expect(backupItems[0]?.path).toBe("/app/backups/data");
   });
 
   it("keeps app credential management admin-only", () => {

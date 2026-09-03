@@ -280,11 +280,11 @@ export function updateBackupAssetsRoute(
       ...state,
       savedSearchId: undefined,
       scope: patch.scope ?? "current",
-      types: [],
-      tagId: undefined,
-      favoriteOnly: false,
-      sort: viewDefaults.sort,
-      direction: viewDefaults.direction,
+      types: hasOwn(patch, "types") ? state.types : [],
+      tagId: hasOwn(patch, "tagId") ? state.tagId : undefined,
+      favoriteOnly: hasOwn(patch, "favoriteOnly") ? state.favoriteOnly : false,
+      sort: hasOwn(patch, "sort") ? state.sort : viewDefaults.sort,
+      direction: hasOwn(patch, "direction") ? state.direction : viewDefaults.direction,
       parentEntryId: hasOwn(patch, "parentEntryId") ? state.parentEntryId : undefined,
       entryId: hasOwn(patch, "entryId") ? state.entryId : undefined,
       exportJobId: hasOwn(patch, "exportJobId") ? state.exportJobId : undefined,
@@ -305,6 +305,13 @@ export function updateBackupAssetsRoute(
     state = {
       ...state,
       view: "search",
+      nodeId: undefined,
+      backupSetId: undefined,
+      repositoryId: undefined,
+      taskId: undefined,
+      recoveryPointId: undefined,
+      parentEntryId: undefined,
+      entryId: undefined,
       scope: "current",
       types: [],
       tagId: undefined,
@@ -312,6 +319,25 @@ export function updateBackupAssetsRoute(
       sort: viewDefaults.sort,
       direction: viewDefaults.direction,
       exportJobId: undefined,
+    };
+  }
+
+  if (
+    source.savedSearchId !== undefined &&
+    state.savedSearchId !== undefined &&
+    (nodeChanged || backupSetChanged)
+  ) {
+    const viewDefaults = defaultsForView("browse");
+    state = {
+      ...state,
+      savedSearchId: undefined,
+      view: "browse",
+      scope: "current",
+      types: [],
+      tagId: undefined,
+      favoriteOnly: false,
+      sort: hasOwn(patch, "sort") ? state.sort : viewDefaults.sort,
+      direction: hasOwn(patch, "direction") ? state.direction : viewDefaults.direction,
     };
   }
 
@@ -515,6 +541,14 @@ function isValidState(state: BackupAssetsRouteState): boolean {
   if (state.savedSearchId !== undefined) {
     if (
       state.view !== "search" ||
+      state.nodeId !== undefined ||
+      state.backupSetId !== undefined ||
+      state.repositoryId !== undefined ||
+      state.taskId !== undefined ||
+      state.recoveryPointId !== undefined ||
+      state.parentEntryId !== undefined ||
+      state.entryId !== undefined ||
+      state.exportJobId !== undefined ||
       state.scope !== "current" ||
       state.types.length > 0 ||
       state.tagId !== undefined ||
@@ -559,7 +593,10 @@ export function reconcileBackupAssetsSourceRoute(
 }
 
 export function resolveBackupAssetsLegacySourceRoute(
-  state: Pick<BackupAssetsRouteState, "nodeId" | "backupSetId" | "repositoryId" | "taskId" | "recoveryPointId">,
+  state: Pick<
+    BackupAssetsRouteState,
+    "nodeId" | "backupSetId" | "repositoryId" | "taskId" | "recoveryPointId" | "parentEntryId" | "entryId"
+  >,
   resolved: BackupFileSourceRecoveryPoint,
 ): Partial<BackupAssetsRouteState> {
   if ((state.nodeId !== undefined && state.nodeId !== resolved.nodeId) ||
@@ -577,6 +614,8 @@ export function resolveBackupAssetsLegacySourceRoute(
     repositoryId: resolved.repositoryId,
     taskId: resolved.producingTaskId,
     recoveryPointId: resolved.recoveryPointId,
+    parentEntryId: state.parentEntryId,
+    entryId: state.entryId,
   };
 }
 
@@ -584,7 +623,7 @@ export function gateBackupAssetsBrowseRoute(
   state: BackupAssetsRouteState,
   browseState: BackupFileSourceBrowseState | null,
 ): BackupAssetsRouteState {
-  if (state.recoveryPointId === undefined || browseState === "browsable") return state;
+  if (state.recoveryPointId === undefined || browseState === "browsable" || browseState === null) return state;
   return {
     ...state,
     repositoryId: undefined,
