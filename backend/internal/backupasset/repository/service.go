@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -212,13 +213,102 @@ func (service *Service) PointDeleter(kind backupasset.ProviderKind) (provider.Po
 
 func (service *Service) utcNow() time.Time { return service.now().UTC() }
 
+// proveResticReadIdentity is the repository-owned fail-closed boundary for
+// immutable Restic reads. The publication runtime carries access reconstructed
+// from the point's producing Task; the live Probe therefore runs through this
+// Service's registry rather than trusting the retained binding alone.
+func (service *Service) proveResticReadIdentity(
+	ctx context.Context,
+	expectedRepositoryID string,
+	expectedRepositoryIdentity string,
+	expectedCapabilityRevision int,
+	runtime publicationRepositoryRuntime,
+) error {
+	if service == nil || service.registry == nil || service.foundation == nil {
+		return fmt.Errorf("%w: immutable Restic read proof unavailable", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if backupasset.ValidateOpaqueID(expectedRepositoryID) != nil {
+		return fmt.Errorf("%w: immutable Restic repository ID is invalid", backupasset.ErrInvalidState)
+	}
+	nativeID := strings.TrimPrefix(expectedRepositoryIdentity, provider.NativeResticIdentityPrefix)
+	normalizedIdentity, err := provider.NativeRepositoryIdentity(backupasset.ProviderRestic, nativeID)
+	if err != nil || normalizedIdentity != expectedRepositoryIdentity {
+		return fmt.Errorf("%w: immutable Restic repository identity is invalid", backupasset.ErrConflict)
+	}
+	if runtime.repository.ID != expectedRepositoryID || runtime.repository.ProviderKind != string(backupasset.ProviderRestic) ||
+		runtime.repository.RepositoryIdentity == nil || *runtime.repository.RepositoryIdentity != expectedRepositoryIdentity {
+		return fmt.Errorf("%w: immutable Restic read repository identity changed", backupasset.ErrConflict)
+	}
+	if runtime.document.Provider != backupasset.ProviderRestic || runtime.document.IdentityClass != provider.IdentityNativeRepository ||
+		runtime.document.NativeRepositoryID != nativeID || strings.TrimSpace(runtime.document.AdapterRevision) == "" {
+		return fmt.Errorf("%w: immutable Restic read binding identity changed", backupasset.ErrConflict)
+	}
+	if runtime.task.ID == 0 || runtime.task.NodeID == 0 ||
+		runtime.access.Provider != backupasset.ProviderRestic ||
+		runtime.access.RepositoryID != expectedRepositoryID ||
+		runtime.access.TaskID != runtime.task.ID ||
+		runtime.access.NodeID != runtime.task.NodeID ||
+		strings.TrimSpace(runtime.access.Locator) == "" || len(runtime.access.Secret) == 0 {
+		return fmt.Errorf("%w: immutable Restic read Task access changed", backupasset.ErrConflict)
+	}
+	runtimeAccess, ok := runtime.access.AdapterData.(provider.ResticRuntimeAccess)
+	if !ok || runtimeAccess.Command == nil || runtimeAccess.Command.Node.ID != runtime.task.NodeID ||
+		runtimeAccess.Command.Node.ID != runtime.access.NodeID || runtimeAccess.NativeRepositoryID != nativeID {
+		return fmt.Errorf("%w: immutable Restic read runtime identity changed", backupasset.ErrConflict)
+	}
+	if expectedCapabilityRevision <= 0 {
+		return fmt.Errorf("%w: immutable Restic capability revision is invalid", backupasset.ErrInvalidState)
+	}
+	if runtime.repository.CapabilityRevision != expectedCapabilityRevision {
+		return fmt.Errorf("%w: immutable Restic read capability revision changed", backupasset.ErrConflict)
+	}
+	prober, err := service.registry.Prober(backupasset.ProviderRestic)
+	if err != nil {
+		return err
+	}
+	limits, err := service.providerOperationLimits()
+	if err != nil {
+		return err
+	}
+	observation, err := prober.Probe(ctx, runtime.access, limits)
+	if err != nil {
+		return err
+	}
+	if err := validateObservation(runtime.access, observation); err != nil {
+		return err
+	}
+	if observation.RepositoryIdentity != expectedRepositoryIdentity || observation.AdapterRevision != runtime.document.AdapterRevision {
+		return fmt.Errorf("%w: immutable Restic read observation changed", backupasset.ErrConflict)
+	}
+	return nil
+}
+
 func (service *Service) ResolveLifecycleDeletePoint(
 	ctx context.Context,
 	operationID string,
 	point model.RecoveryPoint,
 	repository model.BackupRepository,
 ) (provider.DeletePointRequest, error) {
-	if service == nil || service.db == nil || backupasset.ValidateOpaqueID(operationID) != nil ||
+	if service == nil {
+		return provider.DeletePointRequest{}, fmt.Errorf("%w: invalid lifecycle delete reconstruction", backupasset.ErrInvalidState)
+	}
+	return service.ResolveLifecycleDeletePointTx(ctx, service.db, operationID, point, repository)
+}
+
+// ResolveLifecycleDeletePointTx reconstructs the exact provider deletion
+// request using only the caller-owned transaction. Every runtime, binding,
+// and lineage lookup made by lifecycle deletion must use this entry point.
+func (service *Service) ResolveLifecycleDeletePointTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	operationID string,
+	point model.RecoveryPoint,
+	repository model.BackupRepository,
+) (provider.DeletePointRequest, error) {
+	if service == nil || tx == nil || backupasset.ValidateOpaqueID(operationID) != nil ||
 		backupasset.ValidateOpaqueID(point.ID) != nil || backupasset.ValidateOpaqueID(repository.ID) != nil ||
 		point.RepositoryID != repository.ID {
 		return provider.DeletePointRequest{}, fmt.Errorf("%w: invalid lifecycle delete reconstruction", backupasset.ErrInvalidState)
@@ -226,11 +316,15 @@ func (service *Service) ResolveLifecycleDeletePoint(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if point.CapabilityRevision <= 0 || repository.CapabilityRevision <= 0 ||
+		point.CapabilityRevision != repository.CapabilityRevision {
+		return provider.DeletePointRequest{}, lifecycleDeleteIdentityConflict("lifecycle capability revision changed")
+	}
 	native, err := reconstructDeletePointNative(repository.ProviderKind, lifecycleDeleteLocator(point))
 	if err != nil {
 		return provider.DeletePointRequest{}, err
 	}
-	access, err := service.lifecycleDeleteAccess(ctx, repository, point, native)
+	access, err := service.lifecycleDeleteAccessTx(ctx, tx, repository, point, native)
 	if err != nil {
 		return provider.DeletePointRequest{}, err
 	}
@@ -242,7 +336,7 @@ func (service *Service) ResolveLifecycleDeletePoint(
 	return provider.DeletePointRequest{
 		Snapshot: provider.ReadSnapshot{
 			RepositoryID:       repository.ID,
-			CapabilityRevision: repository.CapabilityRevision,
+			CapabilityRevision: point.CapabilityRevision,
 			SourceRevision:     point.SourceFingerprint,
 			RepositoryIdentity: repositoryIdentity,
 			Access:             access,
@@ -274,14 +368,25 @@ func reconstructDeletePointNative(providerKind string, locator string) (string, 
 	case backupasset.ProviderRclone:
 		decoded, err := decodeManagedRclonePointLocator(locator)
 		if err != nil {
+			if errors.Is(err, provider.ErrDeletePointIdentityConflict) {
+				return "", err
+			}
 			return "", &provider.CapabilityError{
 				Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityDeletionUnavailable},
 			}
 		}
-		native := decoded.NativeCommitKey
-		if native == "" {
-			native = decoded.PortableAttemptRoot
+		if decoded.PublicationMode == backupasset.PublicationNativeObjectVersions {
+			attempt, attemptErr := provider.DecodeRcloneAttemptV1(decoded.TaggedAttempt)
+			if attemptErr != nil || attempt.Native == nil {
+				return "", &provider.CapabilityError{
+					Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityDeletionUnavailable},
+				}
+			}
+			// The managed prefix and exact commit version are recovered from
+			// the locked runtime/evidence rows; the locator carries neither.
+			return "native-commit", nil
 		}
+		native := decoded.PortableAttemptRoot
 		if native == "" {
 			return "", &provider.CapabilityError{
 				Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityDeletionUnavailable},

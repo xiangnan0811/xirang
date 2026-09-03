@@ -1465,8 +1465,9 @@ func TestTaskDeleteArchivesAndUnlinks(t *testing.T) {
 	if err := db.First(&storedLink, "id = ?", link.ID).Error; err != nil {
 		t.Fatalf("链接行丢失: %v", err)
 	}
-	if storedLink.TaskID != nil || storedLink.UnlinkedAt == nil || storedLink.EncryptedLegacyLocator != legacyLocator {
-		t.Fatalf("链接未按 unlink 合同保留快照: %+v", storedLink)
+	if storedLink.TaskID == nil || *storedLink.TaskID != taskEntity.ID ||
+		storedLink.UnlinkedAt == nil || storedLink.EncryptedLegacyLocator != legacyLocator {
+		t.Fatalf("链接未按 native Restic unlink 合同保留快照: %+v", storedLink)
 	}
 	if err := db.First(&model.BackupRepository{}, "id = ?", repositoryID).Error; err != nil {
 		t.Fatalf("仓库被删除: %v", err)

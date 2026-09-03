@@ -61,6 +61,94 @@ func TestPrepareManagedRsyncCreatesVersionedAttemptAndChildLease(t *testing.T) {
 		t.Fatalf("managed Rsync child leases=%+v", leases)
 	}
 }
+func TestPrepareManagedRsyncLocksRepositoryBeforeDependentRows(t *testing.T) {
+	fixture := newRsyncPublicationFixture(t)
+	var lockedTables []string
+	const callbackName = "test:prepare-managed-rsync-lock-order"
+	if err := fixture.db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if _, locked := tx.Statement.Clauses["FOR"]; !locked {
+			return
+		}
+		switch tx.Statement.Table {
+		case "backup_repositories", "tasks", "task_runs", "task_repository_links", "repository_access_bindings", "nodes", "ssh_keys":
+			lockedTables = append(lockedTables, tx.Statement.Table)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	execution, err := fixture.service.Prepare(context.Background(), fixture.run())
+	if removeErr := fixture.db.Callback().Query().Remove(callbackName); removeErr != nil {
+		t.Fatalf("remove Rsync lock-order callback: %v", removeErr)
+	}
+	if err != nil {
+		t.Fatalf("prepare managed Rsync: %v", err)
+	}
+	if execution != nil {
+		_ = execution.Abandon(backupasset.ErrPublicationSessionAbandoned)
+	}
+	want := []string{"backup_repositories", "tasks", "task_runs", "task_repository_links", "repository_access_bindings", "nodes"}
+	positions := make(map[string]int, len(lockedTables))
+	for index, table := range lockedTables {
+		if _, exists := positions[table]; !exists {
+			positions[table] = index
+		}
+	}
+	for index, table := range want {
+		position, ok := positions[table]
+		if !ok {
+			t.Fatalf("Rsync lock-order trace omitted %s: %v", table, lockedTables)
+		}
+		if index > 0 {
+			previous := positions[want[index-1]]
+			if position <= previous {
+				t.Fatalf("Rsync lock-order trace=%v, want %s before %s", lockedTables, want[index-1], table)
+			}
+		}
+	}
+}
+
+func TestResolveLifecycleDeleteRsyncLocksRepositoryBeforeDependentRows(t *testing.T) {
+	fixture, _, point, service := newCommittedRsyncLifecycleDeleteFixture(t)
+	var lockedTables []string
+	const callbackName = "test:resolve-lifecycle-delete-rsync-lock-order"
+	if err := service.db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if _, locked := tx.Statement.Clauses["FOR"]; !locked {
+			return
+		}
+		switch tx.Statement.Table {
+		case "backup_repositories", "tasks", "task_runs", "task_repository_links", "repository_access_bindings", "nodes", "ssh_keys":
+			lockedTables = append(lockedTables, tx.Statement.Table)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := service.ResolveLifecycleDeletePoint(context.Background(), strings.Repeat("e", 32), point, fixture.repository)
+	if removeErr := service.db.Callback().Query().Remove(callbackName); removeErr != nil {
+		t.Fatalf("remove lifecycle lock-order callback: %v", removeErr)
+	}
+	if err != nil {
+		t.Fatalf("resolve lifecycle Rsync deletion: %v", err)
+	}
+	want := []string{"backup_repositories", "tasks", "task_runs", "task_repository_links", "repository_access_bindings", "nodes"}
+	positions := make(map[string]int, len(lockedTables))
+	for index, table := range lockedTables {
+		if _, exists := positions[table]; !exists {
+			positions[table] = index
+		}
+	}
+	for index, table := range want {
+		position, ok := positions[table]
+		if !ok {
+			t.Fatalf("lifecycle Rsync lock-order trace omitted %s: %v", table, lockedTables)
+		}
+		if index > 0 {
+			previous := positions[want[index-1]]
+			if position <= previous {
+				t.Fatalf("lifecycle Rsync lock-order trace=%v, want %s before %s", lockedTables, want[index-1], table)
+			}
+		}
+	}
+}
 
 func TestPrepareManagedRsyncRejectsRepositoryIdentityDrift(t *testing.T) {
 	fixture := newRsyncPublicationFixture(t)
@@ -209,7 +297,7 @@ func TestPrepareManagedHardlinkRsyncLeasesExactCommittedParent(t *testing.T) {
 	committedAt := fixture.now.Add(-30 * time.Second)
 	parent := model.RecoveryPoint{
 		ID: parentID, RepositoryID: fixture.repository.ID, ProducingTaskID: &fixture.task.ID, ProducingTaskRunID: &parentRun.ID,
-		ProducingTaskNameSnapshot: fixture.task.Name, ProducingNodeIDSnapshot: fixture.task.NodeID, LineageJSON: encodedLineage,
+		ProducingTaskNameSnapshot: fixture.task.Name, ProducingNodeIDSnapshot: fixture.task.NodeID, ProducingNodeNameSnapshot: fixture.task.Node.Name, LineageJSON: encodedLineage,
 		EncryptedProviderLocator: parentLocator, Semantics: string(backupasset.PointXirangManifest), State: string(backupasset.RecoveryPointCommitted),
 		CapturedAt: &committedAt, CommittedAt: &committedAt, SourceFingerprint: strings.Repeat("c", 64), ManifestDigestAlgorithm: "sha256",
 		ManifestDigest: strings.Repeat("d", 64), EntryCount: 1, LogicalBytes: 42, ConsistencyJSON: parentConsistency, FidelityJSON: "{}",
@@ -945,7 +1033,7 @@ func newRsyncPublicationFixture(t *testing.T) *rsyncPublicationFixture {
 	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Update("updated_at", now).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.First(&taskEntity, taskEntity.ID).Error; err != nil {
+	if err := db.Preload("Node").First(&taskEntity, taskEntity.ID).Error; err != nil {
 		t.Fatal(err)
 	}
 	taskRun := model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: "running", StartedAt: timePointer(now.Add(-time.Minute)), CreatedAt: now, UpdatedAt: now}
@@ -973,7 +1061,8 @@ func newRsyncPublicationFixture(t *testing.T) *rsyncPublicationFixture {
 	}
 	link := model.TaskRepositoryLink{
 		ID: strings.Repeat("2", 32), TaskID: &taskEntity.ID, RepositoryID: repository.ID, TaskNameSnapshot: taskEntity.Name,
-		NodeIDSnapshot: taskEntity.NodeID, PublicationMode: string(backupasset.PublicationVersionedFullCopy), EncryptedLegacyLocator: legacyTarget,
+		NodeIDSnapshot: taskEntity.NodeID, NodeNameSnapshot: taskEntity.Node.Name,
+		PublicationMode: string(backupasset.PublicationVersionedFullCopy), EncryptedLegacyLocator: legacyTarget,
 		LinkedAt: now, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := db.Create(&link).Error; err != nil {

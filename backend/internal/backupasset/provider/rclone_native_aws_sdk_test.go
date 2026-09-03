@@ -48,6 +48,7 @@ type rcloneNativeS3ClientFake struct {
 	putOutput        *s3.PutObjectOutput
 	deleteInput      *s3.DeleteObjectInput
 	deleteOutput     *s3.DeleteObjectOutput
+	deleteError      error
 	locationInput    *s3.GetBucketLocationInput
 	locationOutput   *s3.GetBucketLocationOutput
 	versioningInput  *s3.GetBucketVersioningInput
@@ -80,7 +81,7 @@ func (fake *rcloneNativeS3ClientFake) PutObject(_ context.Context, input *s3.Put
 }
 func (fake *rcloneNativeS3ClientFake) DeleteObject(_ context.Context, input *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	fake.deleteInput = input
-	return fake.deleteOutput, nil
+	return fake.deleteOutput, fake.deleteError
 }
 func (fake *rcloneNativeS3ClientFake) GetBucketLocation(_ context.Context, input *s3.GetBucketLocationInput, _ ...func(*s3.Options)) (*s3.GetBucketLocationOutput, error) {
 	fake.locationInput = input
@@ -543,6 +544,40 @@ func TestRcloneNativeExactVersionMethodsRejectKeysOutsideManagedPrefix(t *testin
 			t.Fatalf("owned DeleteObject input=%+v", client.deleteInput)
 		}
 	})
+}
+
+func TestRcloneNativeDeleteExactVersionMapsOnlyExplicitWORNErrors(t *testing.T) {
+	profile := validRcloneNativeProfileForTest()
+	version := RcloneNativeExactVersion{PhysicalKey: profile.ManagedPrefix + "data/file.bin", VersionID: "v-delete-error-1"}
+	for _, test := range []struct {
+		name     string
+		code     string
+		wantWORM bool
+	}{
+		{name: "generic access denied is retryable", code: "AccessDenied"},
+		{name: "explicit object lock remains WORM", code: "ObjectLocked", wantWORM: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &rcloneNativeS3ClientFake{
+				headOutput:  &s3.HeadObjectOutput{},
+				deleteError: &smithy.GenericAPIError{Code: test.code},
+			}
+			adapter := newRcloneNativeS3SDK(client, "123456789012", profile, nil)
+			err := adapter.DeleteExactVersion(context.Background(), version)
+			if test.wantWORM {
+				if !errors.Is(err, ErrDeletePointWORM) {
+					t.Fatalf("DeleteExactVersion error=%v, want ErrDeletePointWORM", err)
+				}
+				return
+			}
+			if err == nil || errors.Is(err, ErrDeletePointWORM) {
+				t.Fatalf("DeleteExactVersion error=%v, want retryable non-WORM error", err)
+			}
+			if reason := rcloneNativeReason(err); reason != backupasset.RcloneReasonProviderUnavailable {
+				t.Fatalf("DeleteExactVersion error=%v reason=%q, want provider_unavailable", err, reason)
+			}
+		})
+	}
 }
 
 func TestRcloneNativeProbeExactVersionExpiredRetainUntilIsUnlocked(t *testing.T) {

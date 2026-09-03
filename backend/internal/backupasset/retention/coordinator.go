@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -61,6 +62,7 @@ type lifecycleEffectAuthority struct {
 	LeaseID            string
 	LeaseAttemptID     string
 	LeaseFenceHash     string
+	LeaseOwnerID       string
 	Deadline           time.Time
 }
 
@@ -98,13 +100,14 @@ var (
 // credential/locator reconstruction; this package never invents a generic
 // command fallback.
 type PointDeletionAccessResolver interface {
-	ResolveDeletePoint(context.Context, LifecyclePointRequest, model.RecoveryPoint, model.BackupRepository) (provider.DeletePointRequest, error)
+	ResolveDeletePoint(context.Context, *gorm.DB, LifecyclePointRequest, model.RecoveryPoint, model.BackupRepository) (provider.DeletePointRequest, error)
 }
 
 // RegistryPointDeletion is the production PointDeletion adapter. It resolves
 // the RecoveryPoint, provider kind, private locator, and access snapshot, then
-// calls the separately registered provider.PointDeleter. Only deleted or
-// already_absent plus a receipt digest are accepted.
+// calls the separately registered provider.PointDeleter outside any database
+// transaction. Only deleted or already_absent plus a receipt digest are
+// accepted after a second transaction revalidates deletion authority.
 type RegistryPointDeletion struct {
 	db       *gorm.DB
 	registry *provider.Registry
@@ -122,41 +125,233 @@ func (adapter *RegistryPointDeletion) DeleteRecoveryPoint(ctx context.Context, r
 	if adapter == nil || adapter.db == nil || adapter.registry == nil || adapter.resolve == nil {
 		return PointDeletionResult{}, fmt.Errorf("%w: registry point deletion adapter unavailable", backupasset.ErrInvalidState)
 	}
-	if backupasset.ValidateOpaqueID(request.RecoveryPointID) != nil {
+	if backupasset.ValidateOpaqueID(request.RecoveryPointID) != nil ||
+		backupasset.ValidateOpaqueID(request.AttemptID) != nil ||
+		backupasset.ValidateLifecycleOperation(request.Operation) != nil {
 		return PointDeletionResult{}, fmt.Errorf("%w: invalid lifecycle deletion request", backupasset.ErrInvalidState)
 	}
-	var point model.RecoveryPoint
-	if err := adapter.db.WithContext(ctx).First(&point, "id = ?", request.RecoveryPointID).Error; err != nil {
-		return PointDeletionResult{}, fmt.Errorf("load recovery point for deletion: %w", err)
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	var repository model.BackupRepository
-	if err := adapter.db.WithContext(ctx).First(&repository, "id = ?", point.RepositoryID).Error; err != nil {
-		return PointDeletionResult{}, fmt.Errorf("load repository for deletion: %w", err)
-	}
-	kind := backupasset.ProviderKind(repository.ProviderKind)
-	deleteRequest, err := adapter.resolve.ResolveDeletePoint(ctx, request, point, repository)
+
+	var frozenRequest provider.DeletePointRequest
+	var frozenProviderLocator string
+	var deleter provider.PointDeleter
+	err := adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		rows, err := lockLifecycleDeleteRowsTx(ctx, tx, request, false)
+		if err != nil {
+			return err
+		}
+		if err := validateLifecycleDeleteRows(request, rows.attempt, rows.point, rows.lease, rows.repository); err != nil {
+			return err
+		}
+		if err := fenceLifecycleDeleteRepositoryTx(ctx, tx, rows.repository); err != nil {
+			return err
+		}
+		held, err := lifecycleDeleteHasActiveHoldTx(ctx, tx, rows.point)
+		if err != nil {
+			return err
+		}
+		if held {
+			return lifecycleDeleteIdentityConflict("lifecycle deletion is blocked by an active hold")
+		}
+
+		frozenRequest, err = adapter.resolve.ResolveDeletePoint(ctx, tx, request, rows.point, rows.repository)
+		if err != nil {
+			return err
+		}
+		frozenProviderLocator = lifecycleDeletePointLocator(rows.point)
+
+		resolvedRows, err := lockLifecycleDeleteRowsTx(ctx, tx, request, true)
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(rows.attempt, resolvedRows.attempt) ||
+			!reflect.DeepEqual(rows.point, resolvedRows.point) ||
+			!reflect.DeepEqual(rows.lease, resolvedRows.lease) ||
+			!reflect.DeepEqual(rows.repository, resolvedRows.repository) {
+			return lifecycleDeleteIdentityConflict("lifecycle deletion authority changed during resolution")
+		}
+		if err := validateLifecycleDeleteRows(request, resolvedRows.attempt, resolvedRows.point, resolvedRows.lease, resolvedRows.repository); err != nil {
+			return err
+		}
+		if err := validateLifecycleDeleteRequest(
+			request, frozenRequest, resolvedRows.attempt, resolvedRows.point, resolvedRows.repository,
+		); err != nil {
+			return err
+		}
+		held, err = lifecycleDeleteHasActiveHoldTx(ctx, tx, resolvedRows.point)
+		if err != nil {
+			return err
+		}
+		if held {
+			return lifecycleDeleteIdentityConflict("lifecycle deletion is blocked by an active hold")
+		}
+
+		deleter, err = adapter.registry.PointDeleter(backupasset.ProviderKind(resolvedRows.repository.ProviderKind))
+		if err != nil {
+			return err
+		}
+		return nil
+	})
 	if err != nil {
 		return PointDeletionResult{}, mapProviderDeletionError(err)
 	}
-	deleter, err := adapter.registry.PointDeleter(kind)
+
+	providerResult, err := deleter.DeletePoint(ctx, frozenRequest)
+	if err != nil {
+		return PointDeletionResult{}, mapProviderDeletionError(err)
+	}
+	result, err := validateRegistryProviderDeletionResult(providerResult)
 	if err != nil {
 		return PointDeletionResult{}, err
 	}
-	result, err := deleter.DeletePoint(ctx, deleteRequest)
+
+	err = adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		rows, err := lockLifecycleDeleteRowsTx(ctx, tx, request, true)
+		if err != nil {
+			return err
+		}
+		if lifecycleDeletePointLocator(rows.point) != frozenProviderLocator {
+			return lifecycleDeleteIdentityConflict("lifecycle provider locator changed after deletion")
+		}
+		if err := validateLifecycleDeleteRows(request, rows.attempt, rows.point, rows.lease, rows.repository); err != nil {
+			return err
+		}
+		if err := fenceLifecycleDeleteRepositoryTx(ctx, tx, rows.repository); err != nil {
+			return err
+		}
+		if _, err := lifecycleDeleteHasActiveHoldTx(ctx, tx, rows.point); err != nil {
+			return err
+		}
+		// The provider effect has already settled. Preserve its validated
+		// receipt; persistProviderDeleteReceipt rechecks the hold while writing
+		// terminal truth and blocks lifecycle progression when it remains active.
+		currentRequest, err := adapter.resolve.ResolveDeletePoint(ctx, tx, request, rows.point, rows.repository)
+		if err != nil {
+			return err
+		}
+		if err := validateLifecycleDeleteRequest(
+			request, currentRequest, rows.attempt, rows.point, rows.repository,
+		); err != nil {
+			return err
+		}
+		if !sameLifecycleDeleteRequestAuthority(frozenRequest, currentRequest) {
+			return lifecycleDeleteIdentityConflict("lifecycle deletion access authority changed after deletion")
+		}
+		return nil
+	})
 	if err != nil {
 		return PointDeletionResult{}, mapProviderDeletionError(err)
 	}
-	switch result.Outcome {
+	return result, nil
+}
+
+func sameLifecycleDeleteRequestAuthority(left, right provider.DeletePointRequest) bool {
+	normalize := func(request provider.DeletePointRequest) provider.DeletePointRequest {
+		access, ok := request.Snapshot.Access.AdapterData.(provider.RcloneNativeDeletionAccess)
+		if ok {
+			access.Client = nil
+			request.Snapshot.Access.AdapterData = access
+		}
+		return request
+	}
+	return reflect.DeepEqual(normalize(left), normalize(right))
+}
+
+type lifecycleDeleteRows struct {
+	attempt    model.RecoveryPointLifecycleAttempt
+	point      model.RecoveryPoint
+	lease      model.RecoveryPointLease
+	repository model.BackupRepository
+}
+
+func lockLifecycleDeleteRowsTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	request LifecyclePointRequest,
+	identityOnMissing bool,
+) (lifecycleDeleteRows, error) {
+	var rows lifecycleDeleteRows
+	var pointReference struct {
+		RepositoryID string `gorm:"column:repository_id"`
+	}
+	loaded := tx.WithContext(ctx).Model(&model.RecoveryPoint{}).
+		Select("repository_id").Where("id = ?", request.RecoveryPointID).Limit(1).Find(&pointReference)
+	if loaded.Error != nil {
+		return rows, fmt.Errorf("load lifecycle point repository for deletion: %w", loaded.Error)
+	}
+	if loaded.RowsAffected != 1 || backupasset.ValidateOpaqueID(pointReference.RepositoryID) != nil {
+		if identityOnMissing {
+			return rows, lifecycleDeleteIdentityConflict("lifecycle recovery point changed")
+		}
+		return rows, fmt.Errorf("%w: lifecycle recovery point", backupasset.ErrNotFound)
+	}
+
+	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", pointReference.RepositoryID).Limit(1).Find(&rows.repository)
+	if loaded.Error != nil {
+		return rows, fmt.Errorf("lock lifecycle repository for deletion: %w", loaded.Error)
+	}
+	if loaded.RowsAffected != 1 {
+		if identityOnMissing {
+			return rows, lifecycleDeleteIdentityConflict("lifecycle repository changed")
+		}
+		return rows, fmt.Errorf("%w: lifecycle repository", backupasset.ErrNotFound)
+	}
+
+	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", request.RecoveryPointID).Limit(1).Find(&rows.point)
+	if loaded.Error != nil {
+		return rows, fmt.Errorf("lock lifecycle point for deletion: %w", loaded.Error)
+	}
+	if loaded.RowsAffected != 1 {
+		if identityOnMissing {
+			return rows, lifecycleDeleteIdentityConflict("lifecycle recovery point changed")
+		}
+		return rows, fmt.Errorf("%w: lifecycle recovery point", backupasset.ErrNotFound)
+	}
+
+	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", request.AttemptID).Limit(1).Find(&rows.attempt)
+	if loaded.Error != nil {
+		return rows, fmt.Errorf("lock lifecycle attempt for deletion: %w", loaded.Error)
+	}
+	if loaded.RowsAffected != 1 {
+		if identityOnMissing {
+			return rows, lifecycleDeleteIdentityConflict("lifecycle attempt changed")
+		}
+		return rows, fmt.Errorf("%w: lifecycle attempt", backupasset.ErrNotFound)
+	}
+	if rows.attempt.LeaseID == nil || rows.attempt.LeaseAttemptID == nil || rows.attempt.LeaseFenceTokenHash == nil {
+		return rows, lifecycleDeleteIdentityConflict("lifecycle lease authority is incomplete")
+	}
+
+	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", *rows.attempt.LeaseID).Limit(1).Find(&rows.lease)
+	if loaded.Error != nil {
+		return rows, fmt.Errorf("lock lifecycle lease for deletion: %w", loaded.Error)
+	}
+	if loaded.RowsAffected != 1 {
+		return rows, lifecycleDeleteIdentityConflict("lifecycle lease authority changed")
+	}
+	return rows, nil
+}
+
+func validateRegistryProviderDeletionResult(
+	providerResult provider.DeletePointResult,
+) (PointDeletionResult, error) {
+	switch providerResult.Outcome {
 	case provider.DeletePointDeleted:
-		if !isLowerHexString(result.ReceiptDigest, 64) {
+		if !isLowerHexString(providerResult.ReceiptDigest, 64) {
 			return PointDeletionResult{}, fmt.Errorf("%w: provider deletion receipt is unproven", backupasset.ErrInvalidState)
 		}
-		return PointDeletionResult{Outcome: PointDeletionDeleted, ReceiptDigest: result.ReceiptDigest}, nil
+		return PointDeletionResult{Outcome: PointDeletionDeleted, ReceiptDigest: providerResult.ReceiptDigest}, nil
 	case provider.DeletePointAlreadyAbsent:
-		if !isLowerHexString(result.ReceiptDigest, 64) {
+		if !isLowerHexString(providerResult.ReceiptDigest, 64) {
 			return PointDeletionResult{}, fmt.Errorf("%w: provider deletion receipt is unproven", backupasset.ErrInvalidState)
 		}
-		return PointDeletionResult{Outcome: PointDeletionAlreadyAbsent, ReceiptDigest: result.ReceiptDigest}, nil
+		return PointDeletionResult{Outcome: PointDeletionAlreadyAbsent, ReceiptDigest: providerResult.ReceiptDigest}, nil
 	case provider.DeletePointBlockedWORM:
 		return PointDeletionResult{}, ErrPointDeletionWORM
 	default:
@@ -164,10 +359,131 @@ func (adapter *RegistryPointDeletion) DeleteRecoveryPoint(ctx context.Context, r
 	}
 }
 
+func lifecycleDeletePointLocator(point model.RecoveryPoint) string {
+	if strings.TrimSpace(point.EncryptedProviderLocator) != "" {
+		return point.EncryptedProviderLocator
+	}
+	return strings.TrimSpace(point.EncryptedRollbackLocator)
+}
+
+func lifecycleDeleteIdentityConflict(reason string) error {
+	return fmt.Errorf("%w: %s", provider.ErrDeletePointIdentityConflict, reason)
+}
+
+func validateLifecycleDeleteRows(
+	request LifecyclePointRequest,
+	attempt model.RecoveryPointLifecycleAttempt,
+	point model.RecoveryPoint,
+	lease model.RecoveryPointLease,
+	repository model.BackupRepository,
+) error {
+	if attempt.ID != request.AttemptID || attempt.RecoveryPointID != request.RecoveryPointID ||
+		point.ID != request.RecoveryPointID || point.RepositoryID != repository.ID ||
+		backupasset.LifecyclePhase(attempt.Phase) != backupasset.LifecyclePhaseProviderDelete ||
+		backupasset.LifecycleOperation(attempt.Operation) != request.Operation {
+		return lifecycleDeleteIdentityConflict("lifecycle deletion authority changed")
+	}
+	if request.Operation != backupasset.LifecycleRetentionExpire &&
+		request.Operation != backupasset.LifecycleExplicitPurge {
+		return lifecycleDeleteIdentityConflict("lifecycle operation does not authorize provider deletion")
+	}
+	if backupasset.RecoveryPointState(point.State) != backupasset.RecoveryPointExpiring {
+		return lifecycleDeleteIdentityConflict("lifecycle point is not expiring")
+	}
+	if attempt.TransitionRevision <= 0 || request.authority.TransitionRevision != attempt.TransitionRevision ||
+		attempt.LeaseID == nil || attempt.LeaseAttemptID == nil || attempt.LeaseFenceTokenHash == nil ||
+		request.authority.LeaseID != *attempt.LeaseID ||
+		request.authority.LeaseAttemptID != *attempt.LeaseAttemptID ||
+		request.authority.LeaseFenceHash != *attempt.LeaseFenceTokenHash {
+		return lifecycleDeleteIdentityConflict("lifecycle deletion fence changed")
+	}
+	if lease.ID != request.authority.LeaseID || lease.RecoveryPointID != point.ID ||
+		lease.AttemptID != request.authority.LeaseAttemptID ||
+		hashFenceToken(lease.FenceToken) != request.authority.LeaseFenceHash ||
+		lease.OwnerID == "" || request.authority.LeaseOwnerID == "" ||
+		lease.OwnerID != request.authority.LeaseOwnerID ||
+		lease.HolderType != string(backupasset.LeaseHolderRetentionWorker) ||
+		backupasset.LeaseStatus(lease.Status) != backupasset.LeaseActive {
+		return lifecycleDeleteIdentityConflict("lifecycle lease authority changed")
+	}
+	deadline := lease.LeaseExpiresAt.UTC()
+	if lease.AbsoluteDeadline.UTC().Before(deadline) {
+		deadline = lease.AbsoluteDeadline.UTC()
+	}
+	if request.authority.Deadline.IsZero() || !deadline.Equal(request.authority.Deadline.UTC()) {
+		return lifecycleDeleteIdentityConflict("lifecycle lease deadline changed")
+	}
+	if point.CapabilityRevision <= 0 || repository.CapabilityRevision <= 0 ||
+		point.CapabilityRevision != repository.CapabilityRevision {
+		return lifecycleDeleteIdentityConflict("lifecycle capability revision changed")
+	}
+	return nil
+}
+
+func fenceLifecycleDeleteRepositoryTx(ctx context.Context, tx *gorm.DB, repository model.BackupRepository) error {
+	result := tx.WithContext(ctx).Exec(
+		"UPDATE backup_repositories SET updated_at = updated_at WHERE id = ? AND capability_revision = ?",
+		repository.ID,
+		repository.CapabilityRevision,
+	)
+	if result.Error != nil {
+		return fmt.Errorf("fence lifecycle deletion repository: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return lifecycleDeleteIdentityConflict("lifecycle repository changed before deletion")
+	}
+	return nil
+}
+
+func lifecycleDeleteHasActiveHoldTx(ctx context.Context, tx *gorm.DB, point model.RecoveryPoint) (bool, error) {
+	var activeHolds int64
+	if err := tx.WithContext(ctx).Model(&model.RecoveryPointHold{}).
+		Where("recovery_point_id = ? AND state = ?", point.ID, backupasset.HoldActive).
+		Count(&activeHolds).Error; err != nil {
+		return false, fmt.Errorf("load active holds for lifecycle deletion: %w", err)
+	}
+	return point.HoldState == string(backupasset.HoldActive) || activeHolds != 0, nil
+}
+
+func validateLifecycleDeleteRequest(
+	request LifecyclePointRequest,
+	deleteRequest provider.DeletePointRequest,
+	attempt model.RecoveryPointLifecycleAttempt,
+	point model.RecoveryPoint,
+	repository model.BackupRepository,
+) error {
+	repositoryIdentity := ""
+	if repository.RepositoryIdentity != nil {
+		repositoryIdentity = strings.TrimSpace(*repository.RepositoryIdentity)
+	}
+	kind := backupasset.ProviderKind(repository.ProviderKind)
+	if deleteRequest.OperationID != request.AttemptID || deleteRequest.OperationID != attempt.ID ||
+		deleteRequest.Snapshot.RepositoryID != repository.ID ||
+		deleteRequest.Snapshot.CapabilityRevision != point.CapabilityRevision ||
+		deleteRequest.Snapshot.SourceRevision == "" ||
+		deleteRequest.Snapshot.SourceRevision != point.SourceFingerprint ||
+		deleteRequest.ExpectedSourceRevision != point.SourceFingerprint ||
+		deleteRequest.Snapshot.SourceRevision != deleteRequest.ExpectedSourceRevision ||
+		deleteRequest.Snapshot.RepositoryIdentity != repositoryIdentity ||
+		deleteRequest.Snapshot.Access.Provider != kind ||
+		deleteRequest.Snapshot.Access.RepositoryID != repository.ID ||
+		strings.TrimSpace(deleteRequest.Point.Native) == "" ||
+		deleteRequest.Point.Native != strings.TrimSpace(deleteRequest.Point.Native) {
+		return lifecycleDeleteIdentityConflict("provider delete request identity changed")
+	}
+	if err := deleteRequest.Validate(); err != nil {
+		return fmt.Errorf("%w: invalid provider delete request shape", backupasset.ErrInvalidState)
+	}
+	return nil
+}
+
 func mapProviderDeletionError(err error) error {
 	switch {
 	case errors.Is(err, provider.ErrDeletePointWORM):
 		return ErrPointDeletionWORM
+	case errors.Is(err, provider.ErrDeletePointNativeVersionReferenced):
+		// This is a pre-effect dependency wait, not an identity conflict.
+		return err
 	case errors.Is(err, provider.ErrDeletePointIdentityConflict):
 		return ErrPointDeletionIdentityConflict
 	default:
@@ -309,7 +625,7 @@ func (coordinator *Coordinator) Heartbeat(ctx context.Context, attemptID string)
 		}
 		if err := coordinator.ensureLifecycleFenceTx(ctx, tx, &attempt); err != nil {
 			if errors.Is(err, errLifecycleFenceLost) || errors.Is(err, errLifecycleAbsoluteDeadline) {
-				heartbeated, err = coordinator.blockAttemptTx(ctx, tx, &attempt, &point, backupasset.LifecycleBlockedFenceLost)
+				heartbeated, err = coordinator.blockAttemptTx(ctx, tx, &attempt, &point, lifecycleFenceLostReason(backupasset.LifecyclePhase(attempt.Phase)))
 				return err
 			}
 			return err
@@ -317,14 +633,14 @@ func (coordinator *Coordinator) Heartbeat(ctx context.Context, attemptID string)
 		fence, err := coordinator.lifecycleFenceTx(ctx, tx, attempt)
 		if err != nil {
 			if errors.Is(err, errLifecycleFenceLost) {
-				heartbeated, err = coordinator.blockAttemptTx(ctx, tx, &attempt, &point, backupasset.LifecycleBlockedFenceLost)
+				heartbeated, err = coordinator.blockAttemptTx(ctx, tx, &attempt, &point, lifecycleFenceLostReason(backupasset.LifecyclePhase(attempt.Phase)))
 				return err
 			}
 			return err
 		}
 		if _, err := coordinator.leases.RenewTx(ctx, tx, fence); err != nil {
 			if errors.Is(err, backupasset.ErrLeaseFenceLost) || errors.Is(err, backupasset.ErrLeaseDeadlineExceeded) {
-				heartbeated, err = coordinator.blockAttemptTx(ctx, tx, &attempt, &point, backupasset.LifecycleBlockedFenceLost)
+				heartbeated, err = coordinator.blockAttemptTx(ctx, tx, &attempt, &point, lifecycleFenceLostReason(backupasset.LifecyclePhase(attempt.Phase)))
 				return err
 			}
 			return fmt.Errorf("renew lifecycle fence: %w", err)
@@ -447,7 +763,7 @@ func (coordinator *Coordinator) transition(
 		if err := coordinator.ensureLifecycleFenceTx(ctx, tx, &attempt); err != nil {
 			if errors.Is(err, errLifecycleFenceLost) || errors.Is(err, errLifecycleAbsoluteDeadline) {
 				var blockErr error
-				transitioned, blockErr = coordinator.blockAttemptTx(ctx, tx, &attempt, &point, backupasset.LifecycleBlockedFenceLost)
+				transitioned, blockErr = coordinator.blockAttemptTx(ctx, tx, &attempt, &point, lifecycleFenceLostReason(from))
 				return blockErr
 			}
 			return err
@@ -486,7 +802,7 @@ func (coordinator *Coordinator) prepareExternalEffect(
 			return fmt.Errorf("%w: lifecycle phase changed", backupasset.ErrConflict)
 		}
 		if err := coordinator.ensureLifecycleFenceTx(ctx, tx, &attempt); err != nil {
-			current, err = coordinator.blockAttemptTx(ctx, tx, &attempt, &point, backupasset.LifecycleBlockedFenceLost)
+			current, err = coordinator.blockAttemptTx(ctx, tx, &attempt, &point, lifecycleFenceLostReason(phase))
 			blocked = err == nil
 			return err
 		}
@@ -540,6 +856,7 @@ func (coordinator *Coordinator) effectAuthorityTx(
 		LeaseID:            *attempt.LeaseID,
 		LeaseAttemptID:     *attempt.LeaseAttemptID,
 		LeaseFenceHash:     *attempt.LeaseFenceTokenHash,
+		LeaseOwnerID:       lease.OwnerID,
 		Deadline:           deadline,
 	}, nil
 }
@@ -689,7 +1006,7 @@ func (coordinator *Coordinator) blockUncertainEffect(
 			return fmt.Errorf("%w: uncertain lifecycle effect lease changed", backupasset.ErrConflict)
 		}
 		blocked, err = coordinator.blockAttemptTx(
-			ctx, tx, &attempt, &point, backupasset.LifecycleBlockedFenceLost,
+			ctx, tx, &attempt, &point, lifecycleFenceLostReason(phase),
 		)
 		return err
 	})
@@ -933,11 +1250,6 @@ func (coordinator *Coordinator) persistProviderDeleteReceipt(
 		if holdErr != nil {
 			return holdErr
 		}
-		if held {
-			var blockErr error
-			persisted, blockErr = coordinator.blockAttemptTx(ctx, tx, &attemptRow, &point, backupasset.LifecycleBlockedActiveHold)
-			return blockErr
-		}
 		now := coordinator.now().UTC()
 		existing, found, existingErr := coordinator.lockLifecycleTerminalEventTx(ctx, tx, point, attemptRow)
 		if existingErr != nil {
@@ -974,6 +1286,11 @@ func (coordinator *Coordinator) persistProviderDeleteReceipt(
 		attemptRow.HeartbeatAt = &now
 		attemptRow.UpdatedAt = now
 		persisted = lifecycleAttemptFromModel(attemptRow)
+		if held {
+			var blockErr error
+			persisted, blockErr = coordinator.blockAttemptTx(ctx, tx, &attemptRow, &point, backupasset.LifecycleBlockedActiveHold)
+			return blockErr
+		}
 		return nil
 	})
 	if err != nil {
@@ -1081,11 +1398,18 @@ func (coordinator *Coordinator) scheduleBlockedAuditRetry(
 	return scheduled, nil
 }
 
+func lifecycleFenceLostReason(phase backupasset.LifecyclePhase) backupasset.LifecycleBlockedReason {
+	if phase == backupasset.LifecyclePhaseProviderDelete {
+		return backupasset.LifecycleBlockedProviderDeleteUnproven
+	}
+	return backupasset.LifecycleBlockedFenceLost
+}
+
 func providerDeletionBlocked(reason backupasset.LifecycleBlockedReason) bool {
 	switch reason {
 	case backupasset.LifecycleBlockedProviderWORM, backupasset.LifecycleBlockedProviderUnavailable,
-		backupasset.LifecycleBlockedProviderIdentityConflict, backupasset.LifecycleBlockedProviderDeleteUnproven,
-		backupasset.LifecycleBlockedDeletionUnavailable:
+		backupasset.LifecycleBlockedProviderIdentityConflict, backupasset.LifecycleBlockedProviderNativeVersionReferenced,
+		backupasset.LifecycleBlockedProviderDeleteUnproven, backupasset.LifecycleBlockedDeletionUnavailable:
 		return true
 	default:
 		return false
@@ -1114,12 +1438,15 @@ func (coordinator *Coordinator) tombstoneAndComplete(ctx context.Context, attemp
 			completed, err = coordinator.blockAttemptTx(ctx, tx, &attempt, &point, backupasset.LifecycleBlockedActiveHold)
 			return err
 		}
-		_, found, err := coordinator.lockLifecycleTerminalEventTx(ctx, tx, point, attempt)
+		event, found, err := coordinator.lockLifecycleTerminalEventTx(ctx, tx, point, attempt)
 		if err != nil {
 			return err
 		}
 		if !found {
 			return fmt.Errorf("%w: lifecycle tombstone is unproven", backupasset.ErrInvalidState)
+		}
+		if err := validateLifecycleTerminalEvent(point, attempt, event); err != nil {
+			return err
 		}
 		now := coordinator.now().UTC()
 		if backupasset.LifecycleOperation(attempt.Operation) == backupasset.LifecycleMutableRetire {
@@ -1213,15 +1540,32 @@ type settledDeletionLookup interface {
 
 func (coordinator *Coordinator) flushSettledBlockedAudit(ctx context.Context, attempt LifecycleAttempt) error {
 	reason := backupasset.LifecycleBlockedReason(attempt.BlockedReason)
-	status := settledDeletionStatus(reason)
 	now := coordinator.now().UTC()
 	if attempt.RetryAt != nil && now.Before(attempt.RetryAt.UTC()) {
 		return nil
 	}
-	if coordinator.hasSettledDeletionAudit(ctx, attempt, status) {
+	if !providerDeletionBlocked(reason) && reason != backupasset.LifecycleBlockedActiveHold {
 		return nil
 	}
-	if !providerDeletionBlocked(reason) && reason != backupasset.LifecycleBlockedActiveHold {
+	status := settledDeletionStatus(reason)
+	if reason == backupasset.LifecycleBlockedActiveHold &&
+		providerDeleteLifecycleOperation(attempt.Operation) {
+		result, found, err := coordinator.lookupProviderDeleteReceipt(ctx, attempt)
+		if err != nil {
+			return err
+		}
+		if found {
+			switch result.Outcome {
+			case PointDeletionDeleted:
+				status = "deleted"
+			case PointDeletionAlreadyAbsent:
+				status = "already_absent"
+			default:
+				return fmt.Errorf("%w: lifecycle tombstone is unproven", backupasset.ErrInvalidState)
+			}
+		}
+	}
+	if coordinator.hasSettledDeletionAudit(ctx, attempt, status) {
 		return nil
 	}
 	return coordinator.writeSettledDeletionAudit(ctx, attempt, status)
@@ -1256,6 +1600,15 @@ func (coordinator *Coordinator) hasSettledDeletionAudit(ctx context.Context, att
 	return false
 }
 
+func providerDeleteLifecycleOperation(operation backupasset.LifecycleOperation) bool {
+	switch operation {
+	case backupasset.LifecycleRetentionExpire, backupasset.LifecycleExplicitPurge:
+		return true
+	default:
+		return false
+	}
+}
+
 func settledDeletionStatus(reason backupasset.LifecycleBlockedReason) string {
 	if reason == backupasset.LifecycleBlockedProviderIdentityConflict {
 		return "identity_conflict"
@@ -1273,6 +1626,8 @@ func providerDeletionBlockedReason(err error) backupasset.LifecycleBlockedReason
 		return backupasset.LifecycleBlockedProviderWORM
 	case errors.Is(err, backupasset.ErrProviderUnavailable):
 		return backupasset.LifecycleBlockedProviderUnavailable
+	case errors.Is(err, provider.ErrDeletePointNativeVersionReferenced):
+		return backupasset.LifecycleBlockedProviderNativeVersionReferenced
 	case errors.Is(err, ErrPointDeletionIdentityConflict):
 		return backupasset.LifecycleBlockedProviderIdentityConflict
 	default:
@@ -1377,16 +1732,22 @@ func (coordinator *Coordinator) retryBlocked(ctx context.Context, attemptID stri
 			return err
 		}
 		resume := blockedResumePhase(backupasset.LifecycleBlockedReason(attempt.BlockedReason))
-		if backupasset.LifecycleBlockedReason(attempt.BlockedReason) == backupasset.LifecycleBlockedFenceLost {
-			_, terminalEventExists, err := coordinator.lockLifecycleTerminalEventTx(ctx, tx, point, attempt)
+		reason := backupasset.LifecycleBlockedReason(attempt.BlockedReason)
+		if reason == backupasset.LifecycleBlockedFenceLost ||
+			reason == backupasset.LifecycleBlockedActiveHold {
+			event, terminalEventExists, err := coordinator.lockLifecycleTerminalEventTx(ctx, tx, point, attempt)
 			if err != nil {
 				return err
 			}
 			if terminalEventExists {
+				if err := validateLifecycleTerminalEvent(point, attempt, event); err != nil {
+					return err
+				}
 				resume = backupasset.LifecyclePhaseTombstoning
 			}
 		}
-		if backupasset.LifecycleOperation(attempt.Operation) != backupasset.LifecycleMutableRetire &&
+		if resume != backupasset.LifecyclePhaseTombstoning &&
+			backupasset.LifecycleOperation(attempt.Operation) != backupasset.LifecycleMutableRetire &&
 			backupasset.RecoveryPointState(point.State) == backupasset.RecoveryPointPurgeBlocked {
 			result := tx.WithContext(ctx).Model(&model.RecoveryPoint{}).
 				Where("id = ? AND point_revision = ? AND state = ?", point.ID, point.PointRevision, backupasset.RecoveryPointPurgeBlocked).
@@ -1444,8 +1805,8 @@ func blockedResumePhase(reason backupasset.LifecycleBlockedReason) backupasset.L
 		// safe resume: cleanup-only failures are idempotent after revoke+drain.
 		return backupasset.LifecyclePhaseRevoking
 	case backupasset.LifecycleBlockedProviderWORM, backupasset.LifecycleBlockedProviderUnavailable,
-		backupasset.LifecycleBlockedProviderIdentityConflict, backupasset.LifecycleBlockedProviderDeleteUnproven,
-		backupasset.LifecycleBlockedDeletionUnavailable:
+		backupasset.LifecycleBlockedProviderIdentityConflict, backupasset.LifecycleBlockedProviderNativeVersionReferenced,
+		backupasset.LifecycleBlockedProviderDeleteUnproven, backupasset.LifecycleBlockedDeletionUnavailable:
 		return backupasset.LifecyclePhaseProviderDelete
 	default:
 		return backupasset.LifecyclePhaseRevoking
@@ -1575,6 +1936,9 @@ func (coordinator *Coordinator) ValidateHoldAdmissionTx(
 }
 
 func (coordinator *Coordinator) Claim(ctx context.Context, request ClaimRequest) (LifecycleAttempt, error) {
+	if err := validateClaimRequest(request); err != nil {
+		return LifecycleAttempt{}, err
+	}
 	var claimed LifecycleAttempt
 	err := coordinator.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var err error
@@ -1593,6 +1957,11 @@ func (coordinator *Coordinator) ClaimTx(ctx context.Context, tx *gorm.DB, reques
 	}
 	if tx == nil {
 		return LifecycleAttempt{}, fmt.Errorf("%w: lifecycle claim transaction is unavailable", backupasset.ErrInvalidState)
+	}
+	if request.Operation == backupasset.LifecycleExplicitPurge {
+		if _, err := coordinator.lockLifecycleRepositoryForPointTx(ctx, tx, request.RecoveryPointID); err != nil {
+			return LifecycleAttempt{}, err
+		}
 	}
 	var claimed LifecycleAttempt
 	var err error
@@ -1730,6 +2099,34 @@ func (coordinator *Coordinator) ClaimTx(ctx context.Context, tx *gorm.DB, reques
 	return claimed, nil
 }
 
+func (coordinator *Coordinator) lockLifecycleRepositoryForPointTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	pointID string,
+) (model.BackupRepository, error) {
+	var pointReference struct {
+		RepositoryID string `gorm:"column:repository_id"`
+	}
+	loaded := tx.WithContext(ctx).Model(&model.RecoveryPoint{}).
+		Select("repository_id").Where("id = ?", pointID).Limit(1).Find(&pointReference)
+	if loaded.Error != nil {
+		return model.BackupRepository{}, fmt.Errorf("resolve lifecycle repository: %w", loaded.Error)
+	}
+	if loaded.RowsAffected != 1 || backupasset.ValidateOpaqueID(pointReference.RepositoryID) != nil {
+		return model.BackupRepository{}, fmt.Errorf("%w: lifecycle recovery point", backupasset.ErrNotFound)
+	}
+	var repository model.BackupRepository
+	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", pointReference.RepositoryID).Limit(1).Find(&repository)
+	if loaded.Error != nil {
+		return model.BackupRepository{}, fmt.Errorf("lock lifecycle repository: %w", loaded.Error)
+	}
+	if loaded.RowsAffected != 1 {
+		return model.BackupRepository{}, fmt.Errorf("%w: lifecycle repository", backupasset.ErrNotFound)
+	}
+	return repository, nil
+}
+
 func (coordinator *Coordinator) lockAttemptAndPointTx(
 	ctx context.Context,
 	tx *gorm.DB,
@@ -1746,6 +2143,10 @@ func (coordinator *Coordinator) lockAttemptAndPointTx(
 	if loaded.RowsAffected != 1 {
 		return model.RecoveryPointLifecycleAttempt{}, model.RecoveryPoint{}, fmt.Errorf("%w: lifecycle attempt", backupasset.ErrNotFound)
 	}
+	repository, err := coordinator.lockLifecycleRepositoryForPointTx(ctx, tx, identity.RecoveryPointID)
+	if err != nil {
+		return model.RecoveryPointLifecycleAttempt{}, model.RecoveryPoint{}, err
+	}
 	var point model.RecoveryPoint
 	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("id = ?", identity.RecoveryPointID).Limit(1).Find(&point)
@@ -1754,6 +2155,9 @@ func (coordinator *Coordinator) lockAttemptAndPointTx(
 	}
 	if loaded.RowsAffected != 1 {
 		return model.RecoveryPointLifecycleAttempt{}, model.RecoveryPoint{}, fmt.Errorf("%w: lifecycle recovery point", backupasset.ErrNotFound)
+	}
+	if point.RepositoryID != repository.ID {
+		return model.RecoveryPointLifecycleAttempt{}, model.RecoveryPoint{}, fmt.Errorf("%w: lifecycle recovery point repository changed", backupasset.ErrConflict)
 	}
 	var attempt model.RecoveryPointLifecycleAttempt
 	loaded = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).

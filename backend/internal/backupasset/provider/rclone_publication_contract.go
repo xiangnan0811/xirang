@@ -139,9 +139,15 @@ type RclonePortableCommitV1 struct {
 }
 
 type RcloneNativeCommitV1 struct {
-	CommitKey                  string                     `json:"-"`
-	CommitVersionID            string                     `json:"-"`
-	FrozenNativeVersions       []RcloneNativeExactVersion `json:"-"`
+	CommitKey       string `json:"-"`
+	CommitVersionID string `json:"-"`
+	// FrozenNativeVersions is transient owned evidence: the exact versions
+	// created by this attempt, plus the native control graph versions.
+	FrozenNativeVersions []RcloneNativeExactVersion `json:"-"`
+	// FrozenNativeReferences is transient point-view evidence. It includes
+	// unchanged versions carried forward from prior recovery points and is
+	// never an owned deletion set.
+	FrozenNativeReferences     []RcloneNativeExactVersion `json:"-"`
 	CommitContentDigest        string
 	ManifestControlGraphDigest string
 	PointViewDigest            string

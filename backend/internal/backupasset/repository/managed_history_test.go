@@ -201,6 +201,10 @@ func TestManagedHistoryResolverBlocksActiveRcloneManagedLinkBeforeFirstPoint(t *
 	db := newRepositoryTestDB(t)
 	now := time.Date(2026, 7, 16, 8, 0, 0, 0, time.UTC)
 	task := seedTask(t, db, "rclone", "backup:legacy", `{"version":1,"publication_mode":"legacy_mutable"}`)
+	var node model.Node
+	if err := db.First(&node, task.NodeID).Error; err != nil {
+		t.Fatal(err)
+	}
 	identity := "rclone-managed-identity"
 	repository := model.BackupRepository{
 		ID: strings.Repeat("a", 32), ProviderKind: string(backupasset.ProviderRclone), VersionMode: string(backupasset.VersionVersionedPrefix),
@@ -211,7 +215,9 @@ func TestManagedHistoryResolverBlocksActiveRcloneManagedLinkBeforeFirstPoint(t *
 		t.Fatal(err)
 	}
 	if err := db.Create(&model.TaskRepositoryLink{
-		ID: strings.Repeat("b", 32), TaskID: &task.ID, RepositoryID: repository.ID, PublicationMode: string(backupasset.PublicationVersionedPrefix),
+		ID: strings.Repeat("b", 32), TaskID: &task.ID, RepositoryID: repository.ID,
+		TaskNameSnapshot: task.Name, NodeIDSnapshot: task.NodeID, NodeNameSnapshot: node.Name,
+		PublicationMode:        string(backupasset.PublicationVersionedPrefix),
 		EncryptedLegacyLocator: "backup:legacy", LinkedAt: now, CreatedAt: now, UpdatedAt: now,
 	}).Error; err != nil {
 		t.Fatal(err)
@@ -230,6 +236,10 @@ func TestRcloneCleanRollbackWindowClosesAtFirstReservation(t *testing.T) {
 	db := newRepositoryTestDB(t)
 	now := time.Date(2026, 7, 16, 8, 30, 0, 0, time.UTC)
 	task := seedTask(t, db, "rclone", "backup:legacy", `{"version":1,"publication_mode":"legacy_mutable"}`)
+	var node model.Node
+	if err := db.First(&node, task.NodeID).Error; err != nil {
+		t.Fatal(err)
+	}
 	identity := "rclone-clean-rollback-identity"
 	repository := model.BackupRepository{
 		ID: strings.Repeat("c", 32), ProviderKind: string(backupasset.ProviderRclone),
@@ -242,6 +252,7 @@ func TestRcloneCleanRollbackWindowClosesAtFirstReservation(t *testing.T) {
 	}
 	if err := db.Create(&model.TaskRepositoryLink{
 		ID: strings.Repeat("d", 32), TaskID: &task.ID, RepositoryID: repository.ID,
+		TaskNameSnapshot: task.Name, NodeIDSnapshot: task.NodeID, NodeNameSnapshot: node.Name,
 		PublicationMode: string(backupasset.PublicationVersionedPrefix), EncryptedLegacyLocator: "backup:legacy",
 		LinkedAt: now, CreatedAt: now, UpdatedAt: now,
 	}).Error; err != nil {

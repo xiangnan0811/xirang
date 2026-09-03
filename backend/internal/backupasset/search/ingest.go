@@ -479,7 +479,8 @@ func (service *ContentIngestService) lockAndValidate(
 	var generation model.BackupAssetSearchGeneration
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", searchGenerationID).Take(&generation).Error; err != nil ||
 		generation.RecoveryPointID != ref.RecoveryPointID || generation.CatalogGenerationID != catalogGenerationID ||
-		generation.SourceFingerprint != sourceFingerprint || generation.SearchKeyVersion != keyVersion ||
+		generation.SourceFingerprint != sourceFingerprint || generation.NormalizerVersion != NormalizerVersion ||
+		generation.SearchKeyVersion != keyVersion ||
 		!generation.IsActive || generation.State != string(SearchGenerationComplete) {
 		return contentProjectionControl{}, ErrContentProjectionStale
 	}

@@ -44,10 +44,8 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 - Add paired migration files for both database engines:
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
-- Keep version numbers in lockstep across SQLite and PostgreSQL. The current
-  latest migration is `000074_drill_durable_recovery`.
-- Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the
-  SQL files and executes them at startup.
+- Keep version numbers in lockstep across SQLite and PostgreSQL. The current latest migration is `000076_provider_native_version_reference_reason`.
+- Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
   `IF NOT EXISTS` where the engine supports it, and write comments when a
   migration is cleaning up historical drift.
@@ -125,7 +123,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   traffic-window predicates or index names.
 - Backup-asset schema changes are paired across SQLite and PostgreSQL. The
   current baseline includes `000062` through
-  `000074_drill_durable_recovery`;
+  `000076_provider_native_version_reference_reason`;
   later versions must remain paired. After durable Search or publication facts,
   or live content-delivery state exists, schema down must fail closed rather
   than deleting history, Provider facts, grants, reservations, or leases.
@@ -154,6 +152,110 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   metadata is written; after TaskRun/Evidence are repaired together, the same
   migration is directly retryable. Used down is protected by metadata admission
   and preserves version 74 clean.
+- Paired 000075 adds durable native Rclone exact-version evidence for each
+  recovery point. Current locators carry aggregate owned/reference counts and
+  digests; legacy v1 locators remain readable as one exact-version set that is
+  both owned and referenced. Loaders and deletion guards must fail closed on
+  malformed or mixed locator formats rather than treating absent table rows as
+  proof that no references exist.
+- A 000075 down migration is allowed only when the evidence table is empty.
+  Both direct down and `schema_migrations` downgrade admission reject used
+  downs atomically, preserving the migration version, evidence rows, and table.
+- Paired 000076 adds `provider_native_version_referenced` to the lifecycle
+  blocked-reason product so a proven pre-effect native-version dependency can
+  retry without reserving later publication. SQLite rebuilds only
+  `recovery_point_lifecycle_attempts` and must preserve its rows, checks,
+  foreign keys, indexes, and the 000070 downgrade-admission trigger;
+  PostgreSQL replaces only the named blocked-reason check. Both direct down and
+  `schema_migrations` admission reject used downs atomically and preserve clean
+  version 76.
+
+## Scenario: Rclone Native Version Evidence And Deletion Reservation
+
+### 1. Scope / Trigger
+
+- Trigger: changing rclone native publication, lifecycle delete, deletion
+  reservation, or paired migrations `000075` / `000076`.
+- Applies to `recovery_point_rclone_native_versions`, lifecycle blocked
+  reasons, and repository-scoped publication reservation.
+
+### 2. Signatures
+
+- Persist/load: `persistManagedRcloneNativeVersionEvidenceTx`,
+  `loadManagedRcloneNativeVersionEvidenceTx`.
+- Intersection: `rejectManagedRcloneNativeReferenceIntersectionTx`.
+- Reservation: `rejectManagedRcloneNativeDeletionReservationTx`.
+- Provider errors: `ErrDeletePointNativeVersionReferenced`,
+  `ErrDeletePointIdentityConflict`.
+- Schema: paired SQLite/PostgreSQL `000075_rclone_native_version_evidence` and
+  `000076_provider_native_version_reference_reason`.
+
+### 3. Contracts
+
+- Current locators store aggregate owned/reference counts and digests. Exact
+  versions live in `recovery_point_rclone_native_versions` as HMAC identities.
+  Legacy v1 locators remain readable as one set that is both owned and
+  referenced.
+- Deletion may delete only the owned set. A live sibling whose reference set
+  intersects that owned set must block as
+  `provider_native_version_referenced`.
+- An in-flight `preparing` sibling has no durable evidence yet. Intersection
+  must still wait with `ErrDeletePointNativeVersionReferenced`, never
+  `ErrDeletePointIdentityConflict`.
+- `provider_native_version_referenced` is a pre-effect dependency wait and
+  must stay off the deletion-reservation blacklist so the preparing
+  publication can still `RecordProviderCommit`. `identity_conflict` and
+  unproven provider-delete blocks remain reserving.
+- Loaders and guards fail closed on malformed or mixed locators. Absent
+  evidence rows are not proof that no references exist.
+- Used 000075/000076 downs fail closed through metadata admission.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected result |
+|---|---|
+| Sibling `preparing` during delete of an older point | `ErrDeletePointNativeVersionReferenced`; blocked reason `provider_native_version_referenced`; no reservation. |
+| Sibling committed/verifying whose references include this owned version | Same referenced wait; no reservation. |
+| Missing, mixed, or HMAC-drifted sibling evidence | `ErrDeletePointIdentityConflict`; reservation occupied. |
+| In-flight provider delete or unproven blocked delete | Reservation occupied; later `Prepare` / `RecordProviderCommit` conflict. |
+| Used 000075 or 000076 `Steps(-1)` | Error; version stays clean and evidence/reason rows are unchanged. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: point B is `preparing`, delete of A waits as referenced, B still
+  commits, and only a later real reference keeps A blocked.
+- Base: no other live native points; delete proceeds with owned-only access.
+- Bad: classify `preparing` as `identity_conflict` so A's reservation blocks
+  B's commit and both stay stuck.
+
+### 6. Tests Required
+
+- Combination: B already prepared → delete A returns referenced, not identity
+  conflict → persist `blocked` + `provider_native_version_referenced` → B
+  `RecordProviderCommit` reaches `verifying`.
+- Reservation table: referenced blocked reason does not conflict `Prepare`;
+  `identity_conflict` does.
+- Paired 000075/000076 used-down fail-closed on SQLite and required
+  PostgreSQL.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+if otherPoint.State == string(backupasset.RecoveryPointPreparing) {
+    return lifecycleDeleteIdentityConflict("publication is preparing")
+}
+```
+
+Correct:
+
+```go
+if otherPoint.State == string(backupasset.RecoveryPointPreparing) {
+    return fmt.Errorf("%w: managed Rclone native publication is preparing",
+        provider.ErrDeletePointNativeVersionReferenced)
+}
+```
 
 ## Scenario: TaskRun Snapshot Compatibility and Startup Drift
 

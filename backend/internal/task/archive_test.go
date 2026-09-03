@@ -57,8 +57,8 @@ func TestTaskArchiveDisablesUnlinksAndPreservesHistory(t *testing.T) {
 	if err := fixture.db.First(&link, "id = ?", fixture.link.ID).Error; err != nil {
 		t.Fatalf("load unlinked row: %v", err)
 	}
-	if link.TaskID != nil || link.UnlinkedAt == nil || !link.UnlinkedAt.Equal(fixture.now) {
-		t.Fatalf("link task_id=%v unlinked_at=%v, want NULL and %s", link.TaskID, link.UnlinkedAt, fixture.now)
+	if link.TaskID == nil || *link.TaskID != fixture.task.ID || link.UnlinkedAt == nil || !link.UnlinkedAt.Equal(fixture.now) {
+		t.Fatalf("link task_id=%v unlinked_at=%v, want task %d and %s", link.TaskID, link.UnlinkedAt, fixture.task.ID, fixture.now)
 	}
 	if link.TaskNameSnapshot != "archive-task" || link.NodeIDSnapshot != fixture.node.ID || link.NodeNameSnapshot != fixture.node.Name {
 		t.Fatalf("link snapshots changed: %+v", link)
@@ -70,6 +70,43 @@ func TestTaskArchiveDisablesUnlinksAndPreservesHistory(t *testing.T) {
 	assertTaskArchiveHistoryPreserved(t, fixture)
 	if fixture.provider.calls.Load() != 0 {
 		t.Fatalf("provider mutations=%d, want 0", fixture.provider.calls.Load())
+	}
+}
+
+func TestTaskArchiveClearsTaskIDForNonNativePublicationModes(t *testing.T) {
+	tests := []struct {
+		name string
+		mode backupasset.TaskPublicationMode
+	}{
+		{name: "legacy mutable", mode: backupasset.PublicationLegacyMutable},
+		{name: "Rsync hardlink", mode: backupasset.PublicationVersionedHardlink},
+		{name: "Rsync full copy", mode: backupasset.PublicationVersionedFullCopy},
+		{name: "Rsync prefix", mode: backupasset.PublicationVersionedPrefix},
+		{name: "Rclone native object versions", mode: backupasset.PublicationNativeObjectVersions},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newTaskArchiveFixtureWithPublicationMode(t, test.mode)
+			service := NewArchiveService(ArchiveDependencies{
+				DB:             fixture.db,
+				RemoveSchedule: func(uint) error { return nil },
+				Now:            func() time.Time { return fixture.now },
+			})
+			result, err := service.Archive(context.Background(), fixture.task.ID)
+			if err != nil {
+				t.Fatalf("Archive: %v", err)
+			}
+			if !result.Archived || !result.Unlinked || result.ProviderBytesDeleted {
+				t.Fatalf("archive result=%+v, want archived/unlinked and provider_bytes_deleted=false", result)
+			}
+			var link model.TaskRepositoryLink
+			if err := fixture.db.First(&link, "id = ?", fixture.link.ID).Error; err != nil {
+				t.Fatalf("load archived link: %v", err)
+			}
+			if link.TaskID != nil || link.UnlinkedAt == nil || !link.UnlinkedAt.Equal(fixture.now) {
+				t.Fatalf("link mode=%q task_id=%v unlinked_at=%v, want NULL and %s", test.mode, link.TaskID, link.UnlinkedAt, fixture.now)
+			}
+		})
 	}
 }
 
@@ -266,8 +303,8 @@ func TestTaskArchiveSucceedsWhenRetentionPolicyTableMissing(t *testing.T) {
 	if err := fixture.db.First(&link, "id = ?", fixture.link.ID).Error; err != nil {
 		t.Fatalf("load link: %v", err)
 	}
-	if link.TaskID != nil || link.UnlinkedAt == nil {
-		t.Fatalf("missing policy table must still unlink: task_id=%v unlinked_at=%v", link.TaskID, link.UnlinkedAt)
+	if link.TaskID == nil || *link.TaskID != fixture.task.ID || link.UnlinkedAt == nil {
+		t.Fatalf("missing policy table must still unlink with historical owner: task_id=%v unlinked_at=%v", link.TaskID, link.UnlinkedAt)
 	}
 }
 
@@ -536,7 +573,7 @@ func TestTaskArchiveRemovesScheduleOnlyAfterCommit(t *testing.T) {
 			t.Errorf("schedule removal could not read committed link: %v", err)
 			return
 		}
-		if link.TaskID != nil || link.UnlinkedAt == nil {
+		if link.TaskID == nil || *link.TaskID != fixture.task.ID || link.UnlinkedAt == nil {
 			t.Errorf("schedule removed before committed unlink: task_id=%v unlinked_at=%v", link.TaskID, link.UnlinkedAt)
 		}
 	}
@@ -1059,6 +1096,10 @@ type taskArchiveFixture struct {
 }
 
 func newTaskArchiveFixture(t *testing.T) *taskArchiveFixture {
+	return newTaskArchiveFixtureWithPublicationMode(t, backupasset.PublicationNativeSnapshot)
+}
+
+func newTaskArchiveFixtureWithPublicationMode(t *testing.T, publicationMode backupasset.TaskPublicationMode) *taskArchiveFixture {
 	t.Helper()
 	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 	secure.ResetForTesting()
@@ -1147,7 +1188,7 @@ func newTaskArchiveFixture(t *testing.T) *taskArchiveFixture {
 	fixture.link = model.TaskRepositoryLink{
 		ID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", TaskID: &taskID, RepositoryID: repositoryID,
 		TaskNameSnapshot: "archive-task", NodeIDSnapshot: fixture.node.ID, NodeNameSnapshot: fixture.node.Name,
-		PublicationMode: string(backupasset.PublicationNativeSnapshot), EncryptedLegacyLocator: fixture.legacyLocator,
+		PublicationMode: string(publicationMode), EncryptedLegacyLocator: fixture.legacyLocator,
 		LinkedAt: now.Add(-time.Hour), CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
 	}
 	if err := db.Create(&fixture.link).Error; err != nil {

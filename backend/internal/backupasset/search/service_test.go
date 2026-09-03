@@ -69,6 +69,250 @@ func TestSearchServiceMetadataRankingCoverageAndCursor(t *testing.T) {
 	}
 }
 
+func TestSearchServiceMatchesHyphenatedFilenamePrefixes(t *testing.T) {
+	indexer, harness := newIndexerTestHarness(t)
+	entryID := strings.Repeat("d", 64)
+	pointID, _ := harness.seedCatalog(t, []model.CatalogEntry{{
+		EntryID: entryID, NormalizedPath: "compose/docker-compose.yml", Name: "docker-compose.yml",
+		EntryType: "file", SecurityState: "non_secret",
+	}})
+	if _, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID}); err != nil {
+		t.Fatalf("build Search projection: %v", err)
+	}
+	service := newSearchServiceForHarness(t, harness, map[string]bool{pointID: true}, nil)
+	actor := SearchActor{Authorization: catalog.AuthorizationScope{Role: "admin", UserID: 1}}
+	for _, query := range []string{"dock", "com"} {
+		response, err := service.Search(context.Background(), actor, SearchRequest{
+			SchemaVersion: QuerySchemaVersion,
+			Root:          QueryNode{Op: QueryOpTerm, Field: SearchFieldName, Text: query},
+			Scope:         SearchScope{Mode: SearchScopeExactPoints, RecoveryPointIDs: []string{pointID}},
+			Sort:          SearchSortRelevance, Limit: 10,
+		})
+		if err != nil {
+			t.Fatalf("Search %q: %v", query, err)
+		}
+		if len(response.Items) != 1 || response.Items[0].Ref.EntryID != entryID ||
+			response.Coverage.Status != CoverageComplete || response.Total == nil ||
+			*response.Total != 1 || response.TotalRelation != TotalRelationExact {
+			t.Fatalf("Search %q response=%+v", query, response)
+		}
+		if !reflect.DeepEqual(response.Items[0].HitFields, []SearchField{SearchFieldName}) {
+			t.Fatalf("Search %q hit fields=%v", query, response.Items[0].HitFields)
+		}
+	}
+}
+
+func TestSearchServiceNameOrPathFindsDirectoryPathSegment(t *testing.T) {
+	indexer, harness := newIndexerTestHarness(t)
+	pathHitID := strings.Repeat("6", 64)
+	decoyID := strings.Repeat("7", 64)
+	pointID, _ := harness.seedCatalog(t, []model.CatalogEntry{
+		{EntryID: pathHitID, NormalizedPath: "payables/q1/statement.txt", Name: "statement.txt", EntryType: "file", SecurityState: "non_secret"},
+		{EntryID: decoyID, NormalizedPath: "notes/other.txt", Name: "other.txt", EntryType: "file", SecurityState: "non_secret"},
+	})
+	if _, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID}); err != nil {
+		t.Fatalf("build Search projection: %v", err)
+	}
+	service := newSearchServiceForHarness(t, harness, map[string]bool{pointID: true}, nil)
+	response, err := service.Search(context.Background(), SearchActor{
+		Authorization: catalog.AuthorizationScope{Role: "admin", UserID: 1},
+	}, SearchRequest{
+		SchemaVersion: QuerySchemaVersion,
+		Root: QueryNode{Op: QueryOpOr, Children: []QueryNode{
+			{Op: QueryOpTerm, Field: SearchFieldName, Text: "payables"},
+			{Op: QueryOpTerm, Field: SearchFieldPath, Text: "payables"},
+		}},
+		Scope: SearchScope{Mode: SearchScopeExactPoints, RecoveryPointIDs: []string{pointID}},
+		Sort:  SearchSortRelevance, Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Search name-or-path directory segment: %v", err)
+	}
+	if len(response.Items) != 1 || response.Items[0].Ref.EntryID != pathHitID ||
+		response.Coverage.Status != CoverageComplete || response.Total == nil ||
+		*response.Total != 1 || response.TotalRelation != TotalRelationExact ||
+		!response.Capabilities.Metadata || response.AuthoritativeEmpty {
+		t.Fatalf("name-or-path directory segment response=%+v", response)
+	}
+	if !reflect.DeepEqual(response.Items[0].HitFields, []SearchField{SearchFieldPath}) {
+		t.Fatalf("name-or-path directory segment hit fields=%v", response.Items[0].HitFields)
+	}
+}
+
+func TestPostingMatchIgnoresGeneratedQueryPrefixes(t *testing.T) {
+	key := backupasset.DomainKeyMaterial{Version: 1, Key: []byte(strings.Repeat("k", 32))}
+	indexed, err := NormalizeFieldV1(SearchFieldName, "document.txt", DefaultNormalizerLimits())
+	if err != nil {
+		t.Fatalf("normalize indexed name: %v", err)
+	}
+	query, err := NormalizeFieldV1(SearchFieldName, "docker", DefaultNormalizerLimits())
+	if err != nil {
+		t.Fatalf("normalize query name: %v", err)
+	}
+	postings := make([]model.BackupAssetSearchPosting, 0, len(indexed.Tokens))
+	for _, token := range indexed.Tokens {
+		digest, err := TokenHMAC(key.Key, key.Version, NormalizerVersion, SearchFieldName, token.Kind, token.Value)
+		if err != nil {
+			t.Fatalf("hash indexed token %#v: %v", token, err)
+		}
+		postings = append(postings, model.BackupAssetSearchPosting{
+			Field: string(SearchFieldName), TokenKind: string(token.Kind), KeyVersion: key.Version,
+			TokenHMAC: digest, TermFrequency: 1,
+		})
+	}
+	matched, _, _, terms := postingMatch(postings, key, SearchFieldName, query.Tokens)
+	if matched {
+		t.Fatalf("query prefixes produced a false positive; terms=%v", terms)
+	}
+	if len(terms) != 2 || terms[0] != "docker" || terms[1] != "docker" {
+		t.Fatalf("query terms=%v, want only mandatory tokens", terms)
+	}
+}
+
+func TestSearchServiceIgnoresGeneratedQueryPrefixesForCandidates(t *testing.T) {
+	indexer, harness := newIndexerTestHarness(t)
+	targetEntryID := strings.Repeat("1", 64)
+	decoyEntryID := strings.Repeat("2", 64)
+	pointID, _ := harness.seedCatalog(t, []model.CatalogEntry{
+		{EntryID: targetEntryID, NormalizedPath: "docker-compose.yml", Name: "docker-compose.yml", EntryType: "file", SecurityState: "non_secret"},
+		{EntryID: decoyEntryID, NormalizedPath: "document.txt", Name: "document.txt", EntryType: "file", SecurityState: "non_secret"},
+	})
+	if _, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID}); err != nil {
+		t.Fatalf("build Search projection: %v", err)
+	}
+	service := newSearchServiceForHarness(t, harness, map[string]bool{pointID: true}, nil)
+	service.limits.MaxCandidates = 1
+	actor := SearchActor{Authorization: catalog.AuthorizationScope{Role: "admin", UserID: 1}}
+	response, err := service.Search(context.Background(), actor, SearchRequest{
+		SchemaVersion: QuerySchemaVersion,
+		Root:          QueryNode{Op: QueryOpTerm, Field: SearchFieldName, Text: "docker"},
+		Scope:         SearchScope{Mode: SearchScopeExactPoints, RecoveryPointIDs: []string{pointID}},
+		Sort:          SearchSortRelevance, Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Search query with bounded candidates: %v", err)
+	}
+	if len(response.Items) != 1 || response.Items[0].Ref.EntryID != targetEntryID {
+		t.Fatalf("Search response=%+v, want only docker match", response)
+	}
+}
+
+func TestSearchServiceSearchesMultipleRecoveryPoints(t *testing.T) {
+	indexer, harness := newIndexerTestHarness(t)
+	firstEntryID := strings.Repeat("1", 64)
+	firstPointID, _ := harness.seedCatalog(t, []model.CatalogEntry{{
+		EntryID: firstEntryID, NormalizedPath: "docker-compose.yml", Name: "docker-compose.yml",
+		EntryType: "file", SecurityState: "non_secret",
+	}})
+	secondEntryID := strings.Repeat("2", 64)
+	secondPointID, _ := harness.seedCatalog(t, []model.CatalogEntry{{
+		EntryID: secondEntryID, NormalizedPath: "services/docker-compose.yml", Name: "docker-compose.yml",
+		EntryType: "file", SecurityState: "non_secret",
+	}})
+	for _, pointID := range []string{firstPointID, secondPointID} {
+		if _, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID}); err != nil {
+			t.Fatalf("build Search projection for %s: %v", pointID, err)
+		}
+	}
+	service := newSearchServiceForHarness(t, harness, map[string]bool{
+		firstPointID: true, secondPointID: true,
+	}, nil)
+	response, err := service.Search(context.Background(),
+		SearchActor{Authorization: catalog.AuthorizationScope{Role: "admin", UserID: 1}},
+		SearchRequest{
+			SchemaVersion: QuerySchemaVersion,
+			Root:          QueryNode{Op: QueryOpTerm, Field: SearchFieldName, Text: "dock"},
+			Scope:         SearchScope{Mode: SearchScopeExactPoints, RecoveryPointIDs: []string{secondPointID, firstPointID}},
+			Sort:          SearchSortRelevance, Limit: 10,
+		})
+	if err != nil {
+		t.Fatalf("Search multiple recovery points: %v", err)
+	}
+	if len(response.Indexes) != 2 || len(response.Items) != 2 ||
+		response.Coverage.Status != CoverageComplete || response.Total == nil ||
+		*response.Total != 2 || response.TotalRelation != TotalRelationExact {
+		t.Fatalf("multiple-point response=%+v", response)
+	}
+	got := make(map[backupasset.AssetRef]bool, len(response.Items))
+	for _, item := range response.Items {
+		got[item.Ref] = true
+	}
+	if !got[backupasset.AssetRef{RecoveryPointID: firstPointID, EntryID: firstEntryID}] ||
+		!got[backupasset.AssetRef{RecoveryPointID: secondPointID, EntryID: secondEntryID}] {
+		t.Fatalf("multiple-point items=%+v", response.Items)
+	}
+}
+
+func TestSearchServiceReportsPartialCoverageForAnyMetadataMatch(t *testing.T) {
+	indexer, harness := newIndexerTestHarness(t)
+	entryID := strings.Repeat("3", 64)
+	pointID, _ := harness.seedCatalog(t, []model.CatalogEntry{{
+		EntryID: entryID, NormalizedPath: "docker-compose.yml", Name: "docker-compose.yml",
+		EntryType: "file", SecurityState: "non_secret",
+	}})
+	if _, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID}); err != nil {
+		t.Fatalf("build Search projection: %v", err)
+	}
+	service := newSearchServiceForHarness(t, harness, map[string]bool{pointID: true}, nil)
+	response, err := service.Search(context.Background(),
+		SearchActor{Authorization: catalog.AuthorizationScope{Role: "admin", UserID: 1}},
+		SearchRequest{
+			SchemaVersion: QuerySchemaVersion,
+			Root:          QueryNode{Op: QueryOpTerm, Field: SearchFieldAny, Text: "dock"},
+			Scope:         SearchScope{Mode: SearchScopeExactPoints, RecoveryPointIDs: []string{pointID}},
+			Sort:          SearchSortRelevance, Limit: 10,
+		})
+	if err != nil {
+		t.Fatalf("Search Any: %v", err)
+	}
+	if len(response.Items) != 1 || response.Items[0].Ref.EntryID != entryID ||
+		response.Coverage.Status != CoveragePartial || response.Total == nil ||
+		*response.Total != 1 || response.TotalRelation != TotalRelationLowerBound ||
+		response.AuthoritativeEmpty {
+		t.Fatalf("partial Any response=%+v", response)
+	}
+}
+
+func TestSearchServiceStaleCursorDoesNotPoisonFirstPage(t *testing.T) {
+	indexer, harness := newIndexerTestHarness(t)
+	firstEntryID := strings.Repeat("4", 64)
+	pointID, _ := harness.seedCatalog(t, []model.CatalogEntry{
+		{EntryID: firstEntryID, NormalizedPath: "docker-compose.yml", Name: "docker-compose.yml", EntryType: "file", SecurityState: "non_secret"},
+		{EntryID: strings.Repeat("5", 64), NormalizedPath: "docker-stack.yml", Name: "docker-stack.yml", EntryType: "file", SecurityState: "non_secret"},
+	})
+	generation, err := indexer.Build(context.Background(), BuildRequest{RecoveryPointID: pointID})
+	if err != nil {
+		t.Fatalf("build Search projection: %v", err)
+	}
+	service := newSearchServiceForHarness(t, harness, map[string]bool{pointID: true}, nil)
+	actor := SearchActor{Authorization: catalog.AuthorizationScope{Role: "admin", UserID: 1}}
+	request := SearchRequest{
+		SchemaVersion: QuerySchemaVersion,
+		Root:          QueryNode{Op: QueryOpTerm, Field: SearchFieldName, Text: "docker"},
+		Scope:         SearchScope{Mode: SearchScopeExactPoints, RecoveryPointIDs: []string{pointID}},
+		Sort:          SearchSortRelevance, Limit: 1,
+	}
+	first, err := service.Search(context.Background(), actor, request)
+	if err != nil || len(first.Items) != 1 || first.NextCursor == "" {
+		t.Fatalf("initial Search response=%+v err=%v", first, err)
+	}
+	if err := harness.db.Model(&model.BackupAssetSearchGeneration{}).
+		Where("id = ?", generation.ID).
+		Update("projection_revision", generation.ProjectionRevision+1).Error; err != nil {
+		t.Fatalf("advance Search projection revision: %v", err)
+	}
+
+	request.Cursor = first.NextCursor
+	if _, err := service.Search(context.Background(), actor, request); !errors.Is(err, ErrStaleCursor) {
+		t.Fatalf("stale cursor error=%v, want ErrStaleCursor", err)
+	}
+	request.Cursor = ""
+	restarted, err := service.Search(context.Background(), actor, request)
+	if err != nil || len(restarted.Items) != 1 || restarted.Items[0].Ref.EntryID != firstEntryID {
+		t.Fatalf("first-page restart response=%+v err=%v", restarted, err)
+	}
+}
+
 func TestSearchServiceUsesPositivePostingCandidatesBeforeLimit(t *testing.T) {
 	indexer, harness := newIndexerTestHarness(t)
 	pointID, _ := harness.seedCatalog(t, []model.CatalogEntry{

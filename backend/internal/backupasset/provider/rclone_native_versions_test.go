@@ -339,6 +339,55 @@ func TestRcloneNativePointGraphBuildsExactViewAndCompleteMutationLedger(t *testi
 	}
 }
 
+func TestRcloneNativeOwnedSetExcludesUnchangedPointViewVersion(t *testing.T) {
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	shared := rcloneNativeVersionForTest("managed/v1/data/shared.txt", "opaque-shared-v1", RcloneNativeObjectVersion, true, 5, now.Add(-time.Minute))
+	newVersion := rcloneNativeVersionForTest("managed/v1/data/new.txt", "opaque-new-v1", RcloneNativeObjectVersion, true, 7, now)
+	b0, err := NewRcloneNativeStableGraph(
+		RcloneNativeFullObservation{Records: []RcloneNativeVersionRecord{shared}, PageCount: 1},
+		RcloneNativeFullObservation{Records: []RcloneNativeVersionRecord{shared}, PageCount: 1},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b1, err := NewRcloneNativeStableGraph(
+		RcloneNativeFullObservation{Records: []RcloneNativeVersionRecord{newVersion, shared}, PageCount: 1},
+		RcloneNativeFullObservation{Records: []RcloneNativeVersionRecord{newVersion, shared}, PageCount: 1},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	point, err := BuildRcloneNativePointGraph(b0, b1, "managed/v1/data/", []RcloneNativeOwnedMutation{{
+		PhysicalKey: newVersion.PhysicalKey, VersionID: newVersion.VersionID, Kind: newVersion.Kind,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	control := RcloneNativeControlCommitGraph{CommitVersion: RcloneNativeControlObjectVersion{
+		PhysicalKey: "managed/v1/control/points/p/attempts/a/commit.json", VersionID: "opaque-control-v1",
+	}}
+	owned, references, err := rcloneNativeFrozenVersionSetsFromAccepted(point, control, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contains := func(values []RcloneNativeExactVersion, key, version string) bool {
+		for _, value := range values {
+			if value.PhysicalKey == key && value.VersionID == version {
+				return true
+			}
+		}
+		return false
+	}
+	if contains(owned, shared.PhysicalKey, shared.VersionID) {
+		t.Fatalf("unchanged version entered owned deletion set: %+v", owned)
+	}
+	if !contains(references, shared.PhysicalKey, shared.VersionID) ||
+		!contains(owned, newVersion.PhysicalKey, newVersion.VersionID) ||
+		!contains(references, newVersion.PhysicalKey, newVersion.VersionID) {
+		t.Fatalf("owned=%+v references=%+v", owned, references)
+	}
+}
+
 func TestRcloneNativePointGraphRejectsPermanentRemovalAndUnownedVersion(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	baseRecord := rcloneNativeVersionForTest("managed/v1/data/a", "v1", RcloneNativeObjectVersion, true, 1, now)

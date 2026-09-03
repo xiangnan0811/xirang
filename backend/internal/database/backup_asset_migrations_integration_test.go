@@ -43,22 +43,24 @@ import (
 )
 
 const (
-	backupAssetMigrationVersion        = 62
-	backupAssetPublicationVersion      = 63
-	backupAssetRsyncPublicationVersion = 64
-	backupAssetSearchVersion           = 65
-	backupAssetContentVersion          = 66
-	backupAssetProcessingVersion       = 67
-	backupAssetExportVersion           = 68
-	backupAssetRecoveryVersion         = 69
-	backupAssetLifecycleVersion        = 70
-	backupAssetGAVersion               = 71
-	backupAssetTaskRunCompatVersion    = 72
-	backupAssetPlainTextContentVersion = 73
-	drillDurableRecoveryVersion        = 74
-	recoveryEmptyDeleteSetDigest       = "3f5a5d5213612b170da6ce2f2f90775a31d4e40269bb785042589af64011b7cf"
-	recoveryClaimSchedulerRowID        = "0000000000000000000000000000006a"
-	recoveryTakeoverSchedulerRowID     = "0000000000000000000000000000006b"
+	backupAssetMigrationVersion                 = 62
+	backupAssetPublicationVersion               = 63
+	backupAssetRsyncPublicationVersion          = 64
+	backupAssetSearchVersion                    = 65
+	backupAssetContentVersion                   = 66
+	backupAssetProcessingVersion                = 67
+	backupAssetExportVersion                    = 68
+	backupAssetRecoveryVersion                  = 69
+	backupAssetLifecycleVersion                 = 70
+	backupAssetGAVersion                        = 71
+	backupAssetTaskRunCompatVersion             = 72
+	backupAssetPlainTextContentVersion          = 73
+	drillDurableRecoveryVersion                 = 74
+	rcloneNativeVersionEvidenceMigrationVersion = 75
+	latestMigrationVersion                      = 76
+	recoveryEmptyDeleteSetDigest                = "3f5a5d5213612b170da6ce2f2f90775a31d4e40269bb785042589af64011b7cf"
+	recoveryClaimSchedulerRowID                 = "0000000000000000000000000000006a"
+	recoveryTakeoverSchedulerRowID              = "0000000000000000000000000000006b"
 )
 
 type recoveryMigrationSourceResolver struct{}
@@ -558,7 +560,7 @@ func TestRunMigrationsClean072AppliesLatestSQLite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check latest migration metadata: %v", err)
 	}
-	if dirty || version != drillDurableRecoveryVersion {
+	if dirty || version != latestMigrationVersion {
 		t.Fatalf("latest migration metadata mismatch: version=%d dirty=%v", version, dirty)
 	}
 	if err := validateMinimumRecoverySchema(sqlDB, "sqlite", version); err != nil {

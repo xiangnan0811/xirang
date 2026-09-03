@@ -1298,6 +1298,10 @@ func TestFirstReservationBlocksCleanRollbackAndPreparationPreservesEvidence(t *t
 	if err := db.First(&current, taskEntity.ID).Error; err != nil {
 		t.Fatal(err)
 	}
+	var currentNode model.Node
+	if err := db.First(&currentNode, current.NodeID).Error; err != nil {
+		t.Fatal(err)
+	}
 	revision, err := managedRsyncTaskRevision(current)
 	if err != nil {
 		t.Fatal(err)
@@ -1346,6 +1350,7 @@ func TestFirstReservationBlocksCleanRollbackAndPreparationPreservesEvidence(t *t
 	}
 	point := model.RecoveryPoint{
 		ID: pointID, RepositoryID: link.RepositoryID, ProducingTaskID: &current.ID,
+		ProducingTaskNameSnapshot: current.Name, ProducingNodeIDSnapshot: current.NodeID, ProducingNodeNameSnapshot: currentNode.Name,
 		Semantics: string(backupasset.PointXirangManifest), State: string(backupasset.RecoveryPointFailed),
 		ImmutabilityLevel: string(backupasset.ImmutabilityXirangManaged), PhysicalAvailability: string(backupasset.PhysicalUnknown),
 		HoldState: string(backupasset.HoldNone), CapabilityRevision: 2,

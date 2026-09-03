@@ -11,7 +11,7 @@ import (
 	"xirang/backend/internal/model"
 )
 
-func TestPublicationSharedRepositoryConcurrentTasksRetriesAndManualSnapshotsNeverCrossClaim(t *testing.T) {
+func TestPublicationSharedRepositorySequentialDistinctManualTasksPreserveLineage(t *testing.T) {
 	fixture := newPublicationFixture(t, true, publication.AdmissionManaged)
 	fixture.connectExactResticBinding(t)
 

@@ -374,6 +374,36 @@ func TestRcloneNativeSessionPolicyAndGeneratedConfigStayExactAndPrivate(t *testi
 	}
 }
 
+func TestRcloneNativeSessionPolicyScopesExactVersionDeleteToManagedObjects(t *testing.T) {
+	profile := validRcloneNativeProfileForTest()
+	policy, err := BuildRcloneNativeSessionPolicy(RcloneNativeSessionPolicyRequest{
+		Profile: profile, AccountID: "123456789012",
+		Encryption:         RcloneNativeEncryptionSelection{Profile: RcloneNativeSSES3V1},
+		SourceReadPrefixes: []string{"legacy/current/"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document rcloneNativePolicyDocument
+	if err := json.Unmarshal([]byte(policy), &document); err != nil {
+		t.Fatal(err)
+	}
+	managedObjectARN := "arn:aws:s3:::xirang-native-test/managed/v1/*"
+	found := false
+	for _, statement := range document.Statement {
+		if !slices.Contains(statement.Action, "s3:DeleteObjectVersion") {
+			continue
+		}
+		if len(statement.Resource) != 1 || statement.Resource[0] != managedObjectARN {
+			t.Fatalf("exact version delete widened beyond managed object scope: %+v", statement)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatalf("managed object policy missing s3:DeleteObjectVersion: %s", policy)
+	}
+}
+
 func TestRcloneNativeBaselineSessionPolicyAddsExactSourceReadAndDecryptOnly(t *testing.T) {
 	profile := validRcloneNativeProfileForTest()
 	sourceKeyARN := "arn:aws:kms:us-east-1:123456789012:key/FAKE-SOURCE-KMS-KEY-FOR-TEST-ONLY"
@@ -397,7 +427,7 @@ func TestRcloneNativeBaselineSessionPolicyAddsExactSourceReadAndDecryptOnly(t *t
 	for _, statement := range document.Statement {
 		if slices.Contains(statement.Resource, sourceObjectARN) {
 			sourceReadFound = slices.Contains(statement.Action, "s3:GetObject") && slices.Contains(statement.Action, "s3:GetObjectVersion")
-			for _, forbidden := range []string{"s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"} {
+			for _, forbidden := range []string{"s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload"} {
 				if slices.Contains(statement.Action, forbidden) {
 					t.Fatalf("baseline source statement grants %s: %+v", forbidden, statement)
 				}

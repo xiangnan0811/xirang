@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -17,6 +18,10 @@ import (
 type managedRcloneNativeHealthRuntime struct {
 	managedRclonePublicationRuntime
 	points []model.RecoveryPoint
+}
+type managedRcloneNativeHealthEvidence struct {
+	attempt provider.RcloneAttemptV1
+	commit  provider.RcloneCommitV1
 }
 
 func (service *PublicationService) ListRcloneNativeHealthCandidates(ctx context.Context, limit int) ([]string, error) {
@@ -53,20 +58,97 @@ func (service *PublicationService) CheckRcloneNativeHealth(ctx context.Context, 
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var repository model.BackupRepository
+	if err := service.db.WithContext(ctx).Select("id, capability_revision").First(&repository, "id = ?", repositoryID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return provider.RcloneNativeHealthResult{}, fmt.Errorf("%w: native Rclone health repository", backupasset.ErrNotFound)
+		}
+		return provider.RcloneNativeHealthResult{}, fmt.Errorf("load native Rclone health capability revision: %w", err)
+	}
+	if repository.CapabilityRevision <= 0 {
+		return provider.RcloneNativeHealthResult{}, fmt.Errorf("%w: native Rclone health capability revision is invalid", backupasset.ErrConflict)
+	}
+	expectedCapabilityRevision := repository.CapabilityRevision
 	result, healthErr := service.rcloneNativeHealthCheck(ctx, repositoryID)
 	if healthErr != nil && result.Reason == "" {
-		result.Reason = provider.RcloneNativeFailureReason(healthErr)
+		if errors.Is(healthErr, backupasset.ErrConflict) {
+			result.Reason = backupasset.RcloneReasonManifestMismatch
+		} else {
+			result.Reason = provider.RcloneNativeFailureReason(healthErr)
+		}
 	}
-	if persistErr := service.persistRcloneNativeHealth(context.WithoutCancel(ctx), repositoryID, result, healthErr); persistErr != nil {
+	if healthErr != nil && errors.Is(healthErr, backupasset.ErrConflict) {
+		return provider.RcloneNativeHealthResult{}, healthErr
+	}
+	if persistErr := service.persistRcloneNativeHealth(context.WithoutCancel(ctx), repositoryID, result, healthErr, expectedCapabilityRevision); persistErr != nil {
 		return provider.RcloneNativeHealthResult{}, persistErr
 	}
 	return result, healthErr
+}
+func (service *PublicationService) decodeManagedRcloneNativeHealthEvidence(
+	ctx context.Context,
+	runtime managedRcloneNativeHealthRuntime,
+) ([]managedRcloneNativeHealthEvidence, error) {
+	evidence := make([]managedRcloneNativeHealthEvidence, 0, len(runtime.points))
+	markerKey, err := service.rcloneMarkerKey(ctx, runtime.repository.ID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid native Rclone health marker key", backupasset.ErrConflict)
+	}
+	for _, point := range runtime.points {
+		kind, lineage, consistency, factsErr := publicationReconciliationFacts(point)
+		if factsErr != nil || kind != backupasset.ProviderRclone ||
+			lineage.PublicationMode != string(backupasset.PublicationNativeObjectVersions) ||
+			consistency.Provider != backupasset.ProviderRclone {
+			return nil, fmt.Errorf("%w: invalid native Rclone health reconciliation facts", backupasset.ErrConflict)
+		}
+		locator, err := decodeManagedRclonePointLocator(point.EncryptedProviderLocator)
+		if err != nil || locator.PublicationMode != backupasset.PublicationNativeObjectVersions {
+			return nil, fmt.Errorf("%w: invalid native Rclone health locator", backupasset.ErrConflict)
+		}
+		attempt, err := provider.DecodeRcloneAttemptV1(locator.TaggedAttempt)
+		if err != nil || attempt.RepositoryID != runtime.repository.ID || attempt.RecoveryPointID != point.ID ||
+			attempt.PublicationMode != backupasset.PublicationNativeObjectVersions || attempt.Native == nil ||
+			lineage.TaskRepositoryLinkID != attempt.TaskRepositoryLinkID || lineage.TaskID != attempt.TaskID ||
+			lineage.TaskRunID != attempt.TaskRunID {
+			return nil, fmt.Errorf("%w: invalid native Rclone health attempt", backupasset.ErrConflict)
+		}
+		commit, err := provider.DecodeRcloneCommitV1(locator.TaggedCommit)
+		if err != nil || commit.Native == nil {
+			return nil, fmt.Errorf("%w: invalid native Rclone health commit", backupasset.ErrConflict)
+		}
+		exactCommitKey := managedRcloneNativeControlCommitKey(runtime.binding, attempt)
+		owned, _, evidenceErr := loadManagedRcloneNativeVersionEvidenceTx(
+			ctx, service.db, runtime.repository.ID, point.ID, markerKey, locator, exactCommitKey,
+		)
+		if evidenceErr != nil {
+			return nil, evidenceErr
+		}
+		exactCommitVersionID, evidenceErr := managedRcloneNativeCommitVersion(owned, exactCommitKey)
+		if evidenceErr != nil {
+			return nil, evidenceErr
+		}
+		commit.Native.CommitKey = exactCommitKey
+		commit.Native.CommitVersionID = exactCommitVersionID
+		commitDigest, err := canonicalRcloneProviderCommitDigest(commit)
+		if err != nil || commitDigest != locator.ProviderCommitDigest {
+			return nil, fmt.Errorf("%w: invalid native Rclone health provider commit digest", backupasset.ErrConflict)
+		}
+		if err := validateRcloneDurableCapabilityEvidence(point, consistency, attempt, commit); err != nil {
+			return nil, fmt.Errorf("%w: invalid native Rclone health durable evidence", backupasset.ErrConflict)
+		}
+		evidence = append(evidence, managedRcloneNativeHealthEvidence{attempt: attempt, commit: commit})
+	}
+	return evidence, nil
 }
 
 func (service *PublicationService) checkRcloneNativeProviderHealth(ctx context.Context, repositoryID string) (provider.RcloneNativeHealthResult, error) {
 	runtime, err := service.loadManagedRcloneNativeHealthRuntime(ctx, repositoryID)
 	if err != nil {
 		return provider.RcloneNativeHealthResult{}, err
+	}
+	evidence, err := service.decodeManagedRcloneNativeHealthEvidence(ctx, runtime)
+	if err != nil {
+		return provider.RcloneNativeHealthResult{Reason: backupasset.RcloneReasonManifestMismatch}, err
 	}
 	leaseConfig, err := service.foundation.LeaseConfig()
 	if err != nil {
@@ -99,21 +181,9 @@ func (service *PublicationService) checkRcloneNativeProviderHealth(ctx context.C
 	maxReferences := publicationConfig.Rclone.KMSReadKeyMaxCount + 1
 	selected := make(map[string]provider.RcloneNativeHealthReference, maxReferences)
 	var selectedSSES3 *provider.RcloneNativeHealthReference
-	for _, point := range runtime.points {
-		locator, decodeErr := decodeManagedRclonePointLocator(point.EncryptedProviderLocator)
-		if decodeErr != nil || locator.PublicationMode != backupasset.PublicationNativeObjectVersions {
-			return provider.RcloneNativeHealthResult{Reason: backupasset.RcloneReasonManifestMismatch}, fmt.Errorf("%w: invalid native Rclone health locator", backupasset.ErrConflict)
-		}
-		attempt, decodeErr := provider.DecodeRcloneAttemptV1(locator.TaggedAttempt)
-		if decodeErr != nil || attempt.RepositoryID != runtime.repository.ID || attempt.RecoveryPointID != point.ID || attempt.Native == nil {
-			return provider.RcloneNativeHealthResult{Reason: backupasset.RcloneReasonManifestMismatch}, fmt.Errorf("%w: invalid native Rclone health attempt", backupasset.ErrConflict)
-		}
-		commit, decodeErr := provider.DecodeRcloneCommitV1(locator.TaggedCommit)
-		if decodeErr != nil || commit.Native == nil {
-			return provider.RcloneNativeHealthResult{Reason: backupasset.RcloneReasonManifestMismatch}, fmt.Errorf("%w: invalid native Rclone health commit", backupasset.ErrConflict)
-		}
-		commit.Native.CommitKey = locator.NativeCommitKey
-		commit.Native.CommitVersionID = locator.NativeCommitVersionID
+	for _, pointEvidence := range evidence {
+		attempt := pointEvidence.attempt
+		commit := pointEvidence.commit
 		request := provider.RcloneNativePublicationRequest{
 			Attempt: attempt, Profile: nativeInput.profile, Session: nativeInput.session, ClientFactory: nativeInput.factory,
 			ObservationLimits: nativeInput.observationLimits, Encryption: nativeInput.encryption,
@@ -195,7 +265,7 @@ func (service *PublicationService) loadManagedRcloneNativeHealthRuntime(ctx cont
 		return managedRcloneNativeHealthRuntime{}, fmt.Errorf("load native Rclone health repository: %w", err)
 	}
 	if repository.ProviderKind != string(backupasset.ProviderRclone) || repository.VersionMode != string(backupasset.VersionNativeObjectVersions) ||
-		repository.ImmutabilityLevel != string(backupasset.ImmutabilityXirangManaged) || repository.RepositoryIdentity == nil {
+		repository.ImmutabilityLevel != string(backupasset.ImmutabilityBackendVersioned) || repository.RepositoryIdentity == nil {
 		return managedRcloneNativeHealthRuntime{}, fmt.Errorf("%w: native Rclone health repository contract", backupasset.ErrConflict)
 	}
 	var link model.TaskRepositoryLink
@@ -243,7 +313,20 @@ func (service *PublicationService) persistRcloneNativeHealth(
 	repositoryID string,
 	result provider.RcloneNativeHealthResult,
 	healthErr error,
+	expectedCapabilityRevision int,
 ) error {
+	if healthErr != nil && errors.Is(healthErr, backupasset.ErrConflict) {
+		return healthErr
+	}
+	if service == nil || service.db == nil {
+		return fmt.Errorf("%w: native Rclone health persistence unavailable", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if expectedCapabilityRevision <= 0 {
+		return fmt.Errorf("%w: native Rclone health capability revision is invalid", backupasset.ErrConflict)
+	}
 	reason := result.Reason
 	if healthErr != nil && reason == "" {
 		reason = provider.RcloneNativeFailureReason(healthErr)
@@ -269,7 +352,11 @@ func (service *PublicationService) persistRcloneNativeHealth(
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&repository, "id = ?", repositoryID).Error; err != nil {
 			return fmt.Errorf("lock native Rclone health repository: %w", err)
 		}
-		if repository.ProviderKind != string(backupasset.ProviderRclone) || repository.VersionMode != string(backupasset.VersionNativeObjectVersions) {
+		if repository.ProviderKind != string(backupasset.ProviderRclone) ||
+			repository.VersionMode != string(backupasset.VersionNativeObjectVersions) ||
+			repository.ImmutabilityLevel != string(backupasset.ImmutabilityBackendVersioned) ||
+			repository.RepositoryIdentity == nil || repository.CapabilityRevision <= 0 ||
+			repository.CapabilityRevision != expectedCapabilityRevision {
 			return fmt.Errorf("%w: native Rclone health repository changed", backupasset.ErrConflict)
 		}
 		var activeLinks int64
@@ -278,6 +365,17 @@ func (service *PublicationService) persistRcloneNativeHealth(
 		}
 		if activeLinks != 1 {
 			return fmt.Errorf("%w: native Rclone health link changed", backupasset.ErrConflict)
+		}
+		var stalePoints int64
+		if err := tx.Model(&model.RecoveryPoint{}).Where("repository_id = ? AND semantics IN ? AND state IN ?", repositoryID, []string{
+			string(backupasset.PointXirangManifest), string(backupasset.PointImportedBaseline),
+		}, []string{string(backupasset.RecoveryPointCommitted), string(backupasset.RecoveryPointDegraded)}).
+			Where("capability_revision <= 0 OR capability_revision <> ?", expectedCapabilityRevision).
+			Count(&stalePoints).Error; err != nil {
+			return fmt.Errorf("verify native Rclone health point revisions: %w", err)
+		}
+		if stalePoints != 0 {
+			return fmt.Errorf("%w: native Rclone health point revision changed", backupasset.ErrConflict)
 		}
 		if err := backupasset.ValidateRepositoryTransition(backupasset.RepositoryStatus(repository.Status), targetStatus); err != nil {
 			return err

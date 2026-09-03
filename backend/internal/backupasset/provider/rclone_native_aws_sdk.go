@@ -636,7 +636,7 @@ func (adapter *rcloneNativeS3SDK) DeleteExactVersion(ctx context.Context, versio
 		ExpectedBucketOwner: aws.String(adapter.expectedAccountID),
 	})
 	if err != nil {
-		if rcloneNativeAWSErrorCode(err, "AccessDenied", "ObjectLocked") {
+		if rcloneNativeAWSErrorCode(err, "ObjectLocked") {
 			return ErrDeletePointWORM
 		}
 		return rcloneNativeError(backupasset.RcloneReasonProviderUnavailable, err)

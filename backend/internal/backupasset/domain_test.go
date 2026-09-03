@@ -341,6 +341,7 @@ func TestLifecycleClosedEnumsAndValidators(t *testing.T) {
 		LifecycleBlockedActiveHold, LifecycleBlockedLeaseLive, LifecycleBlockedLeaseDrainUnproven,
 		LifecycleBlockedOwnerCleanupUnproven, LifecycleBlockedProviderWORM, LifecycleBlockedProviderUnavailable,
 		LifecycleBlockedProviderIdentityConflict, LifecycleBlockedProviderDeleteUnproven,
+		LifecycleBlockedProviderNativeVersionReferenced,
 		LifecycleBlockedDeletionUnavailable, LifecycleBlockedFenceLost,
 	} {
 		if err := ValidateLifecycleBlockedReason(reason); err != nil {

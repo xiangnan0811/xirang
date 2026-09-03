@@ -404,6 +404,7 @@ type runtimePointDeletionResolver struct {
 
 func (resolver *runtimePointDeletionResolver) ResolveDeletePoint(
 	ctx context.Context,
+	tx *gorm.DB,
 	request retention.LifecyclePointRequest,
 	point model.RecoveryPoint,
 	repositoryRow model.BackupRepository,
@@ -411,7 +412,7 @@ func (resolver *runtimePointDeletionResolver) ResolveDeletePoint(
 	if resolver == nil || resolver.repository == nil {
 		return provider.DeletePointRequest{}, fmt.Errorf("%w: point deletion resolver is unavailable", backupasset.ErrInvalidState)
 	}
-	return resolver.repository.ResolveLifecycleDeletePoint(ctx, request.AttemptID, point, repositoryRow)
+	return resolver.repository.ResolveLifecycleDeletePointTx(ctx, tx, request.AttemptID, point, repositoryRow)
 }
 
 type runtimeImportRebuildReconciler struct {

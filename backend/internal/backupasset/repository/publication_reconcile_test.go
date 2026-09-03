@@ -44,6 +44,7 @@ func TestProcessVerifyingPointOutcomeSelectsImmutableSameTaskPreviousCommittedPo
 	}
 	previousPoint := model.RecoveryPoint{
 		ID: strings.Repeat("f", 32), RepositoryID: fixture.repository.ID, ProducingTaskID: &fixture.task.ID, ProducingTaskRunID: &previousRun.ID,
+		ProducingTaskNameSnapshot: fixture.task.Name, ProducingNodeIDSnapshot: fixture.node.ID, ProducingNodeNameSnapshot: fixture.node.Name,
 		LineageJSON: previousLineage, EncryptedProviderLocator: string(previousLocator), Semantics: string(backupasset.PointNativeSnapshot),
 		State: string(backupasset.RecoveryPointCommitted), ConsistencyJSON: previousConsistency, FidelityJSON: "{}",
 		SourceFingerprint: resticSourceFingerprint(fixture.attemptIdentity(), previousNativeID), ManifestDigestAlgorithm: "sha256", ManifestDigest: strings.Repeat("d", 64),

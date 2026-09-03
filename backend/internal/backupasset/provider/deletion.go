@@ -19,9 +19,10 @@ const (
 )
 
 var (
-	ErrInvalidDeletePointRequest   = errors.New("invalid exact delete point request")
-	ErrDeletePointWORM             = errors.New("point deletion blocked by WORM")
-	ErrDeletePointIdentityConflict = errors.New("point deletion identity conflict")
+	ErrInvalidDeletePointRequest          = errors.New("invalid exact delete point request")
+	ErrDeletePointWORM                    = errors.New("point deletion blocked by WORM")
+	ErrDeletePointIdentityConflict        = errors.New("point deletion identity conflict")
+	ErrDeletePointNativeVersionReferenced = errors.New("point deletion blocked by live native version reference")
 )
 
 // DeletePointRequest is the closed exact-point deletion input. The locator

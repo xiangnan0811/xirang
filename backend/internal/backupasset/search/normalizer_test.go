@@ -78,6 +78,66 @@ func TestNormalizerV1HanBigramsLatinExtensionAndUTCDate(t *testing.T) {
 	}
 }
 
+func TestNormalizerHyphenatedFilenameTokensAndPrefixes(t *testing.T) {
+	value, err := NormalizeFieldV1(SearchFieldName, "docker-compose.yml", DefaultNormalizerLimits())
+	if err != nil {
+		t.Fatalf("NormalizeFieldV1: %v", err)
+	}
+	for _, expected := range []NormalizedToken{
+		{Value: "docker-compose.yml", Kind: TokenKindSegment},
+		{Value: "docker-co", Kind: TokenKindSegment, Prefix: true},
+		{Value: "dock", Kind: TokenKindSegment, Prefix: true},
+		{Value: "docker", Kind: TokenKindExact},
+		{Value: "compose", Kind: TokenKindExact},
+		{Value: "dock", Kind: TokenKindExact, Prefix: true},
+		{Value: "com", Kind: TokenKindExact, Prefix: true},
+		{Value: "yml", Kind: TokenKindExact},
+	} {
+		if !containsNormalizedToken(value.Tokens, expected) {
+			t.Fatalf("tokens %#v omit %#v", value.Tokens, expected)
+		}
+	}
+}
+
+func TestNormalizerBoundsPrefixesWithoutRejectingMandatoryTokens(t *testing.T) {
+	limits := DefaultNormalizerLimits()
+	segments := make([]string, 0, 7)
+	for _, character := range []string{"a", "b", "c", "d", "e", "f", "g"} {
+		segments = append(segments, strings.Repeat(character, 250))
+	}
+
+	value, err := NormalizeFieldV1(SearchFieldPath, strings.Join(segments, "/"), limits)
+	if err != nil {
+		t.Fatalf("NormalizeFieldV1 deep path: %v", err)
+	}
+	if len(value.Tokens) > limits.MaxTokens {
+		t.Fatalf("token count=%d, want <= %d", len(value.Tokens), limits.MaxTokens)
+	}
+
+	prefixCount := 0
+	for _, token := range value.Tokens {
+		if token.Prefix {
+			prefixCount++
+			if utf8.RuneCountInString(token.Value) < minIndexedPrefixRunes {
+				t.Fatalf("short prefix %#v", token)
+			}
+		}
+	}
+	if prefixCount != maxIndexedPrefixTokens {
+		t.Fatalf("prefix count=%d, want bounded budget %d", prefixCount, maxIndexedPrefixTokens)
+	}
+	for _, segment := range segments {
+		for _, expected := range []NormalizedToken{
+			{Value: segment, Kind: TokenKindSegment},
+			{Value: segment, Kind: TokenKindExact},
+		} {
+			if !containsNormalizedToken(value.Tokens, expected) {
+				t.Fatalf("mandatory token %#v missing from %d tokens", expected, len(value.Tokens))
+			}
+		}
+	}
+}
+
 func TestNormalizerV1RejectsTraversalControlsAndLimits(t *testing.T) {
 	limits := DefaultNormalizerLimits()
 	for _, value := range []string{"../secret", "/etc/passwd", "C:\\secret", "docs/../../secret", "docs/\x00secret", "docs/\nsecret", string([]byte{0xff})} {
@@ -118,7 +178,7 @@ func (normalizerQuickString) Generate(random *rand.Rand, size int) reflect.Value
 
 func containsNormalizedToken(tokens []NormalizedToken, expected NormalizedToken) bool {
 	for _, token := range tokens {
-		if token.Value == expected.Value && token.Kind == expected.Kind {
+		if token.Value == expected.Value && token.Kind == expected.Kind && token.Prefix == expected.Prefix {
 			return true
 		}
 	}

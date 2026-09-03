@@ -177,16 +177,17 @@ const (
 type LifecycleBlockedReason string
 
 const (
-	LifecycleBlockedActiveHold               LifecycleBlockedReason = "active_hold"
-	LifecycleBlockedLeaseLive                LifecycleBlockedReason = "lease_live"
-	LifecycleBlockedLeaseDrainUnproven       LifecycleBlockedReason = "lease_drain_unproven"
-	LifecycleBlockedOwnerCleanupUnproven     LifecycleBlockedReason = "owner_cleanup_unproven"
-	LifecycleBlockedProviderWORM             LifecycleBlockedReason = "provider_worm"
-	LifecycleBlockedProviderUnavailable      LifecycleBlockedReason = "provider_unavailable"
-	LifecycleBlockedProviderIdentityConflict LifecycleBlockedReason = "provider_identity_conflict"
-	LifecycleBlockedProviderDeleteUnproven   LifecycleBlockedReason = "provider_delete_unproven"
-	LifecycleBlockedDeletionUnavailable      LifecycleBlockedReason = "deletion_unavailable"
-	LifecycleBlockedFenceLost                LifecycleBlockedReason = "fence_lost"
+	LifecycleBlockedActiveHold                      LifecycleBlockedReason = "active_hold"
+	LifecycleBlockedLeaseLive                       LifecycleBlockedReason = "lease_live"
+	LifecycleBlockedLeaseDrainUnproven              LifecycleBlockedReason = "lease_drain_unproven"
+	LifecycleBlockedOwnerCleanupUnproven            LifecycleBlockedReason = "owner_cleanup_unproven"
+	LifecycleBlockedProviderWORM                    LifecycleBlockedReason = "provider_worm"
+	LifecycleBlockedProviderUnavailable             LifecycleBlockedReason = "provider_unavailable"
+	LifecycleBlockedProviderIdentityConflict        LifecycleBlockedReason = "provider_identity_conflict"
+	LifecycleBlockedProviderNativeVersionReferenced LifecycleBlockedReason = "provider_native_version_referenced"
+	LifecycleBlockedProviderDeleteUnproven          LifecycleBlockedReason = "provider_delete_unproven"
+	LifecycleBlockedDeletionUnavailable             LifecycleBlockedReason = "deletion_unavailable"
+	LifecycleBlockedFenceLost                       LifecycleBlockedReason = "fence_lost"
 )
 
 type ImportCandidateKind string
@@ -778,6 +779,7 @@ var (
 		LifecycleBlockedActiveHold, LifecycleBlockedLeaseLive, LifecycleBlockedLeaseDrainUnproven,
 		LifecycleBlockedOwnerCleanupUnproven, LifecycleBlockedProviderWORM, LifecycleBlockedProviderUnavailable,
 		LifecycleBlockedProviderIdentityConflict, LifecycleBlockedProviderDeleteUnproven,
+		LifecycleBlockedProviderNativeVersionReferenced,
 		LifecycleBlockedDeletionUnavailable, LifecycleBlockedFenceLost,
 	)
 	validImportReviewStates      = setOf(ImportReviewPending, ImportReviewAccepted, ImportReviewRejected)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -233,63 +234,173 @@ func TestConnectRejectsProviderAndNodeDriftDuringProbeWithoutMutation(t *testing
 	}
 }
 
-func TestConnectRejectsRetainedBindingTaskArchivedDuringProbeWithoutMutation(t *testing.T) {
+func TestConnectResticRetainedReconnectUsesRequestedTaskAfterOwnerArchived(t *testing.T) {
 	db := newRepositoryTestDB(t)
-	firstTask := seedTask(t, db, "restic", "sftp:user@example.invalid:/repo", `{"repository_password":"FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY"}`)
-	secondTask := seedTask(t, db, "restic", "sftp:user@example.invalid:/repo", `{"repository_password":"FAKE_SECOND_RESTIC_PASSWORD_FOR_TEST_ONLY"}`)
+	firstSecret := "FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY"
+	secondSecret := "FAKE_SECOND_RESTIC_PASSWORD_FOR_TEST_ONLY"
+	firstHost, firstPort, firstUsername := "first-restic.example.invalid", 2201, "first-restic-reader"
+	secondHost, secondPort, secondUsername := "second-restic.example.invalid", 2202, "second-restic-reader"
+	firstPrivateKey := "FAKE_FIRST_RESTIC_SSH_PRIVATE_KEY_FOR_TEST_ONLY"
+	secondPrivateKey := "FAKE_SECOND_RESTIC_SSH_PRIVATE_KEY_FOR_TEST_ONLY"
+	firstTask := seedTask(t, db, "restic", "sftp:first@example.invalid:/repo-a", `{"repository_password":"`+firstSecret+`"}`)
+	secondTask := seedTask(t, db, "restic", "sftp:second@example.invalid:/repo-b", `{"repository_password":"`+secondSecret+`"}`)
+	firstKey := model.SSHKey{
+		Name: "retained-reconnect-first-key", Username: firstUsername, KeyType: "auto",
+		PrivateKey: firstPrivateKey, Fingerprint: "SHA256:retained-reconnect-first",
+	}
+	secondKey := model.SSHKey{
+		Name: "retained-reconnect-second-key", Username: secondUsername, KeyType: "auto",
+		PrivateKey: secondPrivateKey, Fingerprint: "SHA256:retained-reconnect-second",
+	}
+	for _, key := range []*model.SSHKey{&firstKey, &secondKey} {
+		if err := db.Create(key).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Model(&model.Node{}).Where("id = ?", firstTask.NodeID).Updates(map[string]any{
+		"host": firstHost, "port": firstPort, "username": firstUsername,
+		"auth_type": "key", "password": "", "private_key": "", "ssh_key_id": firstKey.ID,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.Node{}).Where("id = ?", secondTask.NodeID).Updates(map[string]any{
+		"host": secondHost, "port": secondPort, "username": secondUsername,
+		"auth_type": "key", "password": "", "private_key": "", "ssh_key_id": secondKey.ID,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if firstTask.NodeID == secondTask.NodeID || firstTask.RsyncTarget == secondTask.RsyncTarget || firstSecret == secondSecret ||
+		firstHost == secondHost || firstPort == secondPort || firstUsername == secondUsername ||
+		firstKey.ID == secondKey.ID || firstPrivateKey == secondPrivateKey {
+		t.Fatal("shared Restic reconnect fixture must use distinct Nodes, locators, secrets, hosts, ports, users, and managed keys")
+	}
 	identity := provider.NativeResticIdentityPrefix + strings.Repeat("9", 64)
-	probeCalls := 0
-	prober := &scriptedProber{probe: func(provider.AccessBinding) (provider.RepositoryObservation, error) {
-		probeCalls++
-		if probeCalls == 3 {
+	mismatchIdentity := provider.NativeResticIdentityPrefix + strings.Repeat("8", 64)
+	var probed []provider.AccessBinding
+	prober := &scriptedProber{probe: func(binding provider.AccessBinding) (provider.RepositoryObservation, error) {
+		probed = append(probed, binding)
+		switch len(probed) {
+		case 3:
 			archivedAt := time.Date(2026, 8, 17, 9, 15, 0, 0, time.UTC)
 			if err := db.Model(&model.Task{}).Where("id = ?", firstTask.ID).Update("archived_at", archivedAt).Error; err != nil {
 				return provider.RepositoryObservation{}, err
 			}
+		case 4:
+			return testObservation(backupasset.ProviderRestic, mismatchIdentity), nil
 		}
 		return testObservation(backupasset.ProviderRestic, identity), nil
 	}}
 	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRestic, prober)
-	first, err := service.Connect(context.Background(), ConnectRequest{TaskID: firstTask.ID}, RequestContext{})
+
+	first, err := service.Connect(context.Background(), ConnectRequest{TaskID: firstTask.ID}, RequestContext{CorrelationID: "connect-restic-first"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: secondTask.ID}, RequestContext{}); err != nil {
-		t.Fatal(err)
+	second, err := service.Connect(context.Background(), ConnectRequest{TaskID: secondTask.ID}, RequestContext{CorrelationID: "connect-restic-second"})
+	if err != nil || first.Repository.ID != second.Repository.ID {
+		t.Fatalf("first=%+v second=%+v err=%v", first, second, err)
 	}
-	var beforeRepository model.BackupRepository
-	if err := db.First(&beforeRepository, "id = ?", first.Repository.ID).Error; err != nil {
-		t.Fatal(err)
-	}
+
 	var beforeBinding model.RepositoryAccessBinding
 	if err := db.Where("repository_id = ? AND status = ?", first.Repository.ID, bindingStatusActive).First(&beforeBinding).Error; err != nil {
 		t.Fatal(err)
 	}
+	beforeDocument, err := decodeBindingDocument(beforeBinding.EncryptedConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeDocument.TaskID != firstTask.ID || beforeDocument.NodeID != firstTask.NodeID || beforeDocument.Locator != firstTask.RsyncTarget || beforeDocument.Secret != firstSecret {
+		t.Fatalf("active binding before requested reconnect=%+v", beforeDocument)
+	}
+	if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: secondTask.ID}, RequestContext{CorrelationID: "connect-restic-retry"}); err != nil {
+		t.Fatalf("requested Restic reconnect: %v", err)
+	}
+	if len(probed) != 3 {
+		t.Fatalf("probe calls before identity mismatch=%d want=3", len(probed))
+	}
+	thirdProbe := probed[2]
+	if thirdProbe.TaskID != secondTask.ID || thirdProbe.NodeID != secondTask.NodeID ||
+		thirdProbe.Locator != secondTask.RsyncTarget || string(thirdProbe.Secret) != secondSecret {
+		t.Fatalf("third probe access=%+v want requested Task access", thirdProbe)
+	}
+	runtimeAccess, ok := thirdProbe.AdapterData.(provider.ResticRuntimeAccess)
+	if !ok || runtimeAccess.Command == nil {
+		t.Fatalf("third probe runtime access=%+v", thirdProbe.AdapterData)
+	}
+	remoteNode := runtimeAccess.Command.Node
+	if remoteNode.ID != secondTask.NodeID || remoteNode.Host != secondHost || remoteNode.Port != secondPort ||
+		remoteNode.Username != secondUsername || remoteNode.AuthType != "key" ||
+		remoteNode.Password != "" || remoteNode.PrivateKey != "" ||
+		remoteNode.SSHKeyID == nil || *remoteNode.SSHKeyID != secondKey.ID ||
+		remoteNode.SSHKey == nil || remoteNode.SSHKey.ID != secondKey.ID ||
+		remoteNode.SSHKey.Username != secondUsername || remoteNode.SSHKey.PrivateKey != secondPrivateKey {
+		t.Fatalf("third probe remote command node=%+v want second Task credentials", remoteNode)
+	}
+	if runtimeAccess.Command.Audit.TaskID == nil || *runtimeAccess.Command.Audit.TaskID != secondTask.ID {
+		t.Fatalf("third probe audit=%+v want TaskID=%d", runtimeAccess.Command.Audit, secondTask.ID)
+	}
 
-	if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: secondTask.ID}, RequestContext{}); !errors.Is(err, backupasset.ErrConflict) {
-		t.Fatalf("retained binding Task archived during probe connect error=%v", err)
-	}
-	var afterRepository model.BackupRepository
-	if err := db.First(&afterRepository, "id = ?", first.Repository.ID).Error; err != nil {
-		t.Fatal(err)
-	}
 	var afterBinding model.RepositoryAccessBinding
-	if err := db.First(&afterBinding, "id = ?", beforeBinding.ID).Error; err != nil {
+	if err := db.Where("repository_id = ? AND status = ?", first.Repository.ID, bindingStatusActive).First(&afterBinding).Error; err != nil {
 		t.Fatal(err)
 	}
-	if afterRepository.CapabilityRevision != beforeRepository.CapabilityRevision || afterRepository.CapabilitiesJSON != beforeRepository.CapabilitiesJSON ||
-		!afterRepository.UpdatedAt.Equal(beforeRepository.UpdatedAt) || afterBinding.EncryptedConfig != beforeBinding.EncryptedConfig ||
-		afterBinding.ConfigFingerprint != beforeBinding.ConfigFingerprint || !afterBinding.UpdatedAt.Equal(beforeBinding.UpdatedAt) {
-		t.Fatalf("last-good facts changed: repository before=%+v after=%+v binding before=%+v after=%+v", beforeRepository, afterRepository, beforeBinding, afterBinding)
+	afterDocument, err := decodeBindingDocument(afterBinding.EncryptedConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterBinding.ID != beforeBinding.ID || afterDocument.TaskID != secondTask.ID || afterDocument.NodeID != secondTask.NodeID ||
+		afterDocument.Locator != secondTask.RsyncTarget || afterDocument.Secret != secondSecret ||
+		afterDocument.IdentitySalt != beforeDocument.IdentitySalt || afterDocument.NativeRepositoryID != strings.Repeat("9", 64) {
+		t.Fatalf("active binding after requested reconnect=%+v", afterDocument)
+	}
+	var repositories, bindings, links int64
+	if err := db.Model(&model.BackupRepository{}).Count(&repositories).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.RepositoryAccessBinding{}).Count(&bindings).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.TaskRepositoryLink{}).Count(&links).Error; err != nil {
+		t.Fatal(err)
+	}
+	if repositories != 1 || bindings != 1 || links != 2 {
+		t.Fatalf("repositories=%d bindings=%d links=%d", repositories, bindings, links)
+	}
+	var repository model.BackupRepository
+	if err := db.First(&repository, "id = ?", first.Repository.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if repository.RepositoryIdentity == nil || *repository.RepositoryIdentity != identity {
+		t.Fatalf("shared Restic repository identity=%v want=%q", repository.RepositoryIdentity, identity)
+	}
+	var beforeMismatchRepository model.BackupRepository
+	if err := db.First(&beforeMismatchRepository, "id = ?", first.Repository.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	beforeMismatchBinding := afterBinding
+
+	if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: secondTask.ID}, RequestContext{CorrelationID: "connect-restic-mismatch"}); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("mismatched native identity reconnect error=%v", err)
+	}
+	var afterMismatchRepository model.BackupRepository
+	if err := db.First(&afterMismatchRepository, "id = ?", first.Repository.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	var afterMismatchBinding model.RepositoryAccessBinding
+	if err := db.First(&afterMismatchBinding, "id = ?", beforeMismatchBinding.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(afterMismatchRepository, beforeMismatchRepository) || !reflect.DeepEqual(afterMismatchBinding, beforeMismatchBinding) {
+		t.Fatalf("identity mismatch changed active repository/binding: repository before=%+v after=%+v binding before=%+v after=%+v", beforeMismatchRepository, afterMismatchRepository, beforeMismatchBinding, afterMismatchBinding)
 	}
 }
 
-func TestConnectRejectsRetainedProbeOwnerNodeAndSSHCredentialDriftWithoutMutation(t *testing.T) {
+func TestConnectResticRetainedReconnectIgnoresOwnerAccessDrift(t *testing.T) {
 	for _, driftKind := range []string{"node_access", "ssh_private_key"} {
 		t.Run(driftKind, func(t *testing.T) {
 			db := newRepositoryTestDB(t)
-			firstTask := seedTask(t, db, "restic", "sftp:user@example.invalid:/repo", `{"repository_password":"FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY"}`)
-			secondTask := seedTask(t, db, "restic", "sftp:user@example.invalid:/repo", `{"repository_password":"FAKE_SECOND_RESTIC_PASSWORD_FOR_TEST_ONLY"}`)
+			firstTask := seedTask(t, db, "restic", "sftp:first@example.invalid:/repo-a", `{"repository_password":"FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY"}`)
+			secondTask := seedTask(t, db, "restic", "sftp:second@example.invalid:/repo-b", `{"repository_password":"FAKE_SECOND_RESTIC_PASSWORD_FOR_TEST_ONLY"}`)
 			var keyID uint
 			if driftKind == "ssh_private_key" {
 				key := model.SSHKey{
@@ -339,45 +450,32 @@ func TestConnectRejectsRetainedProbeOwnerNodeAndSSHCredentialDriftWithoutMutatio
 				t.Fatal(err)
 			}
 
-			var beforeRepository model.BackupRepository
-			if err := db.First(&beforeRepository, "id = ?", first.Repository.ID).Error; err != nil {
+			if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: secondTask.ID}, RequestContext{}); err != nil {
+				t.Fatalf("retained probe-owner %s drift blocked requested reconnect: %v", driftKind, err)
+			}
+			var binding model.RepositoryAccessBinding
+			if err := db.Where("repository_id = ? AND status = ?", first.Repository.ID, bindingStatusActive).First(&binding).Error; err != nil {
 				t.Fatal(err)
 			}
-			var beforeBinding model.RepositoryAccessBinding
-			if err := db.Where("repository_id = ? AND status = ?", first.Repository.ID, bindingStatusActive).First(&beforeBinding).Error; err != nil {
+			document, err := decodeBindingDocument(binding.EncryptedConfig)
+			if err != nil {
 				t.Fatal(err)
 			}
-			var beforeLinks []model.TaskRepositoryLink
-			if err := db.Order("id").Find(&beforeLinks).Error; err != nil {
+			if document.TaskID != secondTask.ID || document.NodeID != secondTask.NodeID || document.Locator != secondTask.RsyncTarget {
+				t.Fatalf("active binding after %s drift=%+v", driftKind, document)
+			}
+			var repositories, bindings, links int64
+			if err := db.Model(&model.BackupRepository{}).Count(&repositories).Error; err != nil {
 				t.Fatal(err)
 			}
-			var beforePoints []model.RecoveryPoint
-			if err := db.Order("id").Find(&beforePoints).Error; err != nil {
+			if err := db.Model(&model.RepositoryAccessBinding{}).Count(&bindings).Error; err != nil {
 				t.Fatal(err)
 			}
-
-			if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: secondTask.ID}, RequestContext{}); !errors.Is(err, backupasset.ErrConflict) {
-				t.Fatalf("retained probe-owner %s drift connect error=%v", driftKind, err)
-			}
-			var afterRepository model.BackupRepository
-			if err := db.First(&afterRepository, "id = ?", first.Repository.ID).Error; err != nil {
+			if err := db.Model(&model.TaskRepositoryLink{}).Count(&links).Error; err != nil {
 				t.Fatal(err)
 			}
-			var afterBinding model.RepositoryAccessBinding
-			if err := db.First(&afterBinding, "id = ?", beforeBinding.ID).Error; err != nil {
-				t.Fatal(err)
-			}
-			var afterLinks []model.TaskRepositoryLink
-			if err := db.Order("id").Find(&afterLinks).Error; err != nil {
-				t.Fatal(err)
-			}
-			var afterPoints []model.RecoveryPoint
-			if err := db.Order("id").Find(&afterPoints).Error; err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(afterRepository, beforeRepository) || !reflect.DeepEqual(afterBinding, beforeBinding) ||
-				!reflect.DeepEqual(afterLinks, beforeLinks) || !reflect.DeepEqual(afterPoints, beforePoints) {
-				t.Fatal("repository graph facts changed after retained probe-owner lineage conflict")
+			if repositories != 1 || bindings != 1 || links != 2 {
+				t.Fatalf("after %s drift repositories=%d bindings=%d links=%d", driftKind, repositories, bindings, links)
 			}
 		})
 	}
@@ -660,10 +758,9 @@ func TestConnectWithoutReplacementProbesAndRefreshesRetainedBinding(t *testing.T
 	taskEntity := seedTask(t, db, "restic", "sftp:user@example.invalid:/repo", `{"repository_password":"`+oldSecret+`"}`)
 	nativeIdentity := provider.NativeResticIdentityPrefix + strings.Repeat("a", 64)
 	revision := "restic-reader:v1"
+	var probedSecrets []string
 	prober := &scriptedProber{probe: func(binding provider.AccessBinding) (provider.RepositoryObservation, error) {
-		if string(binding.Secret) != oldSecret {
-			t.Fatalf("connect without replace probed unretained access secret")
-		}
+		probedSecrets = append(probedSecrets, string(binding.Secret))
 		observation := testObservation(backupasset.ProviderRestic, nativeIdentity)
 		observation.AdapterRevision = revision
 		return observation, nil
@@ -692,8 +789,11 @@ func TestConnectWithoutReplacementProbesAndRefreshesRetainedBinding(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if document.Secret != oldSecret || document.AdapterRevision != revision {
-		t.Fatalf("retained binding was replaced or observation metadata stayed stale: %+v", document)
+	if len(probedSecrets) != 2 || probedSecrets[0] != oldSecret || probedSecrets[1] != newSecret {
+		t.Fatalf("Restic access secrets=%v want initial/current Task secrets", probedSecrets)
+	}
+	if document.Secret != newSecret || document.AdapterRevision != revision {
+		t.Fatalf("retained binding was not refreshed from current Task or observation metadata stayed stale: %+v", document)
 	}
 }
 
@@ -1039,6 +1139,158 @@ func TestConnectPropagatesCorrelationIntoRemoteCredentialAuditContext(t *testing
 	}
 }
 
+type concurrentTaskScopedProber struct {
+	calls   atomic.Int32
+	ready   chan uint
+	release map[uint]chan struct{}
+
+	mu      sync.RWMutex
+	sources map[uint]string
+}
+
+func (prober *concurrentTaskScopedProber) Probe(_ context.Context, binding provider.AccessBinding, _ provider.OperationLimits) (provider.RepositoryObservation, error) {
+	if prober.calls.Add(1) <= 2 {
+		prober.ready <- binding.TaskID
+		<-prober.release[binding.TaskID]
+	}
+	facts := append([]string(nil), binding.EndpointFacts...)
+	identity, err := provider.DeriveScopedIdentity(binding.IdentitySalt, provider.ScopedIdentityDocument{
+		Provider: binding.Provider, TaskID: binding.TaskID, NodeID: binding.NodeID, EndpointFacts: facts,
+	})
+	if err != nil {
+		return provider.RepositoryObservation{}, err
+	}
+	prober.mu.RLock()
+	sourceRevision := prober.sources[binding.TaskID]
+	prober.mu.RUnlock()
+	observation := testObservation(binding.Provider, identity)
+	observation.SourceRevision = sourceRevision
+	return observation, nil
+}
+
+func (prober *concurrentTaskScopedProber) setSource(taskID uint, sourceRevision string) {
+	prober.mu.Lock()
+	prober.sources[taskID] = sourceRevision
+	prober.mu.Unlock()
+}
+
+func TestConnectConcurrentMutableTaskSourcesRemainIsolated(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	target := t.TempDir()
+	firstTask := seedTask(t, db, "rsync", target, "")
+	secondTask := seedTask(t, db, "rsync", target, "")
+	firstSource := strings.Repeat("c", 64)
+	secondSource := strings.Repeat("d", 64)
+	prober := &concurrentTaskScopedProber{
+		ready: make(chan uint, 2),
+		release: map[uint]chan struct{}{
+			firstTask.ID:  make(chan struct{}),
+			secondTask.ID: make(chan struct{}),
+		},
+		sources: map[uint]string{
+			firstTask.ID:  firstSource,
+			secondTask.ID: secondSource,
+		},
+	}
+	registry := provider.NewRegistry()
+	if err := registry.Register(backupasset.ProviderRsync, provider.Registration{Prober: prober}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(Dependencies{DB: db, Foundation: enabledFoundation(), Registry: registry, Now: func() time.Time {
+		return time.Date(2026, 7, 13, 9, 0, 0, 0, time.UTC)
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type connectOutcome struct {
+		taskID uint
+		result ConnectResult
+		err    error
+	}
+	outcomes := make(chan connectOutcome, 2)
+	go func() {
+		result, err := service.Connect(context.Background(), ConnectRequest{TaskID: firstTask.ID}, RequestContext{})
+		outcomes <- connectOutcome{taskID: firstTask.ID, result: result, err: err}
+	}()
+	go func() {
+		result, err := service.Connect(context.Background(), ConnectRequest{TaskID: secondTask.ID}, RequestContext{})
+		outcomes <- connectOutcome{taskID: secondTask.ID, result: result, err: err}
+	}()
+
+	seen := map[uint]bool{}
+	for range 2 {
+		select {
+		case taskID := <-prober.ready:
+			seen[taskID] = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for concurrent provider probes")
+		}
+	}
+	if len(seen) != 2 || !seen[firstTask.ID] || !seen[secondTask.ID] {
+		t.Fatalf("provider probes were not isolated by task: seen=%v", seen)
+	}
+
+	close(prober.release[firstTask.ID])
+	var firstOutcome connectOutcome
+	select {
+	case firstOutcome = <-outcomes:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for first connect")
+	}
+	if firstOutcome.taskID != firstTask.ID || firstOutcome.err != nil {
+		t.Fatalf("first connect outcome=%+v", firstOutcome)
+	}
+
+	close(prober.release[secondTask.ID])
+	var secondOutcome connectOutcome
+	select {
+	case secondOutcome = <-outcomes:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for second connect")
+	}
+	if secondOutcome.taskID != secondTask.ID || secondOutcome.err != nil {
+		t.Fatalf("second connect outcome=%+v", secondOutcome)
+	}
+	first := firstOutcome.result
+	second := secondOutcome.result
+	if first.Repository.ID == second.Repository.ID ||
+		first.MutablePoint == nil || second.MutablePoint == nil ||
+		first.MutablePoint.ID == second.MutablePoint.ID {
+		t.Fatalf("mutable task sources merged: first=%+v second=%+v", first, second)
+	}
+
+	var firstPoint, secondPoint model.RecoveryPoint
+	if err := db.First(&firstPoint, "id = ?", first.MutablePoint.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&secondPoint, "id = ?", second.MutablePoint.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if firstPoint.SourceFingerprint != firstSource || secondPoint.SourceFingerprint != secondSource {
+		t.Fatalf("connected source fingerprints=%q/%q want=%q/%q", firstPoint.SourceFingerprint, secondPoint.SourceFingerprint, firstSource, secondSource)
+	}
+
+	prober.setSource(firstTask.ID, strings.Repeat("e", 64))
+	if _, err := service.Reconcile(context.Background(), first.Repository.ID, RequestContext{}); err != nil {
+		t.Fatal(err)
+	}
+	var secondPointAfter model.RecoveryPoint
+	if err := db.First(&secondPointAfter, "id = ?", second.MutablePoint.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if secondPointAfter.SourceFingerprint != secondSource || secondPointAfter.ID != secondPoint.ID {
+		t.Fatalf("reconciling first task changed second source point=%+v", secondPointAfter)
+	}
+	var firstPointAfter model.RecoveryPoint
+	if err := db.First(&firstPointAfter, "id = ?", first.MutablePoint.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if firstPointAfter.SourceFingerprint != strings.Repeat("e", 64) {
+		t.Fatalf("first source was not repaired: %q", firstPointAfter.SourceFingerprint)
+	}
+}
+
 func TestConnectMutableTasksNeverMergeEvenWithMatchingEndpoint(t *testing.T) {
 	db := newRepositoryTestDB(t)
 	target := t.TempDir()
@@ -1197,5 +1449,141 @@ func TestConnectClampsRecordLimitToValidMetadataCeiling(t *testing.T) {
 	}
 	if err := prober.limits.Validate(); err != nil || prober.limits.MaxRecordBytes != 65536 {
 		t.Fatalf("probe limits=%+v err=%v", prober.limits, err)
+	}
+}
+
+func TestConnectResticExistingRepositoryLocksRepositoryBeforeTaskLineage(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	firstTask := seedTask(t, db, "restic", "sftp:first@example.invalid:/repository", `{"repository_password":"FAKE_FIRST_RESTIC_PASSWORD_FOR_TEST_ONLY"}`)
+	secondTask := seedTask(t, db, "restic", "sftp:second@example.invalid:/repository", `{"repository_password":"FAKE_SECOND_RESTIC_PASSWORD_FOR_TEST_ONLY"}`)
+	identity := provider.NativeResticIdentityPrefix + strings.Repeat("a", 64)
+	prober := &scriptedProber{observation: testObservation(backupasset.ProviderRestic, identity)}
+	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRestic, prober)
+	if _, err := service.Connect(context.Background(), ConnectRequest{TaskID: firstTask.ID}, RequestContext{}); err != nil {
+		t.Fatal(err)
+	}
+
+	type lockOrderContextKey struct{}
+	marker := &struct{}{}
+	ctx := context.WithValue(context.Background(), lockOrderContextKey{}, marker)
+	recording := false
+	prober.probe = func(provider.AccessBinding) (provider.RepositoryObservation, error) {
+		recording = true
+		return testObservation(backupasset.ProviderRestic, identity), nil
+	}
+	var events []string
+	callbackName := "test:connect_restic_lock_order_" + strings.ReplaceAll(t.Name(), "/", "_")
+	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil ||
+			tx.Statement.Context.Value(lockOrderContextKey{}) != marker || !recording {
+			return
+		}
+		if _, locked := tx.Statement.Clauses["FOR"]; !locked {
+			return
+		}
+		switch tx.Statement.Schema.Table {
+		case (model.BackupRepository{}).TableName(), "tasks", "nodes",
+			"ssh_keys", (model.TaskRepositoryLink{}).TableName():
+			events = append(events, tx.Statement.Schema.Table)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+
+	if _, err := service.Connect(ctx, ConnectRequest{TaskID: secondTask.ID}, RequestContext{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 || events[0] != (model.BackupRepository{}).TableName() {
+		t.Fatalf("Restic Connect lock sequence=%v, want Repository first", events)
+	}
+	repositoryIndex, taskIndex, repositoryLocks := -1, -1, 0
+	for index, table := range events {
+		switch table {
+		case (model.BackupRepository{}).TableName():
+			repositoryLocks++
+			if taskIndex < 0 {
+				repositoryIndex = index
+			}
+		case "tasks":
+			if taskIndex < 0 {
+				taskIndex = index
+			}
+		}
+	}
+	if repositoryLocks != 1 {
+		t.Fatalf("Restic Connect Repository lock count=%d sequence=%v, want one prelock", repositoryLocks, events)
+	}
+	if repositoryIndex < 0 || taskIndex < 0 || repositoryIndex > taskIndex {
+		t.Fatalf("Restic Connect Repository/Task lock sequence=%v", events)
+	}
+}
+
+func TestConnectResticRetriesPostTaskRepositoryRaceWithoutReprobing(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	taskEntity := seedTask(t, db, "restic", "sftp:user@example.invalid:/repository", `{"repository_password":"FAKE_RESTIC_PASSWORD_FOR_TEST_ONLY"}`)
+	identity := provider.NativeResticIdentityPrefix + strings.Repeat("b", 64)
+	prober := &scriptedProber{observation: testObservation(backupasset.ProviderRestic, identity)}
+	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRestic, prober)
+
+	raceRepositoryID := strings.Repeat("c", 32)
+	raceRepository := model.BackupRepository{
+		ID: raceRepositoryID, ProviderKind: string(backupasset.ProviderRestic), RepositoryIdentity: &identity,
+		DisplayName: "race winner", VersionMode: string(backupasset.VersionNativeSnapshot),
+		Status: string(backupasset.RepositoryOnline), CapabilityRevision: 1, CapabilitiesJSON: `{}`,
+		ImmutabilityLevel: string(backupasset.ImmutabilityBackendVersioned),
+		CreatedAt:         time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC),
+	}
+	type raceContextKey struct{}
+	marker := &struct{}{}
+	ctx := context.WithValue(context.Background(), raceContextKey{}, marker)
+	var lockedRepositoryLookups atomic.Int32
+	var injected atomic.Bool
+	var injectionErr error
+	callbackName := "test:connect_restic_post_task_race_" + strings.ReplaceAll(t.Name(), "/", "_")
+	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil ||
+			tx.Statement.Context.Value(raceContextKey{}) != marker || tx.Statement.Schema.Table != (model.BackupRepository{}).TableName() {
+			return
+		}
+		if _, locked := tx.Statement.Clauses["FOR"]; !locked || lockedRepositoryLookups.Add(1) != 2 ||
+			!injected.CompareAndSwap(false, true) {
+			return
+		}
+		// The query callback DB carries gorm.ErrRecordNotFound; use its transaction
+		// connection directly so the injected write reports only its own result.
+		_, injectionErr = tx.Statement.ConnPool.ExecContext(tx.Statement.Context, `INSERT INTO backup_repositories
+			(id, provider_kind, repository_identity, display_name, description, version_mode, status,
+			 capability_revision, capabilities_json, immutability_level, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			raceRepository.ID, raceRepository.ProviderKind, identity, raceRepository.DisplayName, "",
+			raceRepository.VersionMode, raceRepository.Status, raceRepository.CapabilityRevision,
+			raceRepository.CapabilitiesJSON, raceRepository.ImmutabilityLevel, raceRepository.CreatedAt,
+			raceRepository.UpdatedAt)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+
+	result, err := service.Connect(ctx, ConnectRequest{TaskID: taskEntity.ID}, RequestContext{})
+	if injectionErr != nil {
+		t.Fatalf("inject post-prelock repository: %v", injectionErr)
+	}
+	if err != nil || result.Repository.ID == "" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if !injected.Load() {
+		t.Fatal("post-prelock repository race was not injected")
+	}
+	if prober.calls != 1 {
+		t.Fatalf("probe calls=%d want=1", prober.calls)
+	}
+	var repositories []model.BackupRepository
+	if err := db.Find(&repositories).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(repositories) != 1 || repositories[0].ID == raceRepositoryID {
+		t.Fatalf("repositories after retry=%+v", repositories)
 	}
 }

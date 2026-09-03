@@ -54,6 +54,10 @@ func (service *Service) OpenCatalogRead(ctx context.Context, request CatalogPoin
 	} else if err != nil {
 		return nil, fmt.Errorf("load Catalog repository: %w", err)
 	}
+	if point.CapabilityRevision <= 0 || repository.CapabilityRevision <= 0 ||
+		point.CapabilityRevision != repository.CapabilityRevision {
+		return nil, fmt.Errorf("%w: Catalog capability revision changed", backupasset.ErrConflict)
+	}
 
 	kind := backupasset.ProviderKind(repository.ProviderKind)
 	if kind == backupasset.ProviderCommand {
@@ -84,6 +88,30 @@ func (service *Service) OpenCatalogRead(ctx context.Context, request CatalogPoin
 	}
 }
 
+func (service *Service) acquireCatalogAdmission(
+	ctx context.Context,
+	operation publication.ResticOperation,
+) (publication.AdmissionToken, error) {
+	if service == nil || service.admission == nil {
+		return nil, fmt.Errorf("%w: immutable Catalog admission unavailable", backupasset.ErrInvalidState)
+	}
+	token, err := service.admission.Acquire(ctx, operation)
+	if err != nil {
+		if token != nil {
+			_ = token.Close()
+		}
+		return nil, err
+	}
+	if token == nil || token.Operation() != operation ||
+		(token.Mode() != publication.AdmissionManaged && token.Mode() != publication.AdmissionRollbackSafe) {
+		if token != nil {
+			_ = token.Close()
+		}
+		return nil, fmt.Errorf("%w: immutable Catalog is not admitted", backupasset.ErrForbidden)
+	}
+	return token, nil
+}
+
 func (service *Service) openRcloneCatalogRead(
 	ctx context.Context,
 	repository model.BackupRepository,
@@ -91,9 +119,12 @@ func (service *Service) openRcloneCatalogRead(
 	manifest model.RecoveryPointManifest,
 	proof provider.CatalogManifestProof,
 ) (provider.CatalogReadSession, error) {
-	if service.publication == nil || service.admission == nil || service.keyring == nil || point.ProducingTaskID == nil ||
-		point.CapabilityRevision != repository.CapabilityRevision {
+	if service.publication == nil || service.admission == nil || service.keyring == nil || point.ProducingTaskID == nil {
 		return nil, fmt.Errorf("%w: immutable Rclone Catalog dependencies unavailable", backupasset.ErrInvalidState)
+	}
+	if point.CapabilityRevision <= 0 || repository.CapabilityRevision <= 0 ||
+		point.CapabilityRevision != repository.CapabilityRevision {
+		return nil, fmt.Errorf("%w: immutable Rclone Catalog capability revision changed", backupasset.ErrConflict)
 	}
 	kind, lineage, consistency, err := publicationReconciliationFacts(point)
 	if err != nil || kind != backupasset.ProviderRclone || lineage.TaskID != *point.ProducingTaskID ||
@@ -112,9 +143,8 @@ func (service *Service) openRcloneCatalogRead(
 	if err != nil {
 		return nil, err
 	}
-	if commit.Native != nil {
-		commit.Native.CommitKey = locator.NativeCommitKey
-		commit.Native.CommitVersionID = locator.NativeCommitVersionID
+	if err := validateRcloneDurableCapabilityEvidence(point, consistency, attempt, commit); err != nil {
+		return nil, err
 	}
 	commitDigest, err := canonicalRcloneProviderCommitDigest(commit)
 	if err != nil || commitDigest != locator.ProviderCommitDigest || commitDigest != consistency.ProviderCommitDigest ||
@@ -123,6 +153,16 @@ func (service *Service) openRcloneCatalogRead(
 		commit.RecoveryPointID != point.ID || commit.RepositoryID != repository.ID {
 		return nil, fmt.Errorf("%w: immutable Rclone Catalog evidence changed", backupasset.ErrConflict)
 	}
+	token, err := service.acquireCatalogAdmission(ctx, publication.OperationManifest)
+	if err != nil {
+		return nil, err
+	}
+	keepToken := false
+	defer func() {
+		if !keepToken && token != nil {
+			_ = token.Close()
+		}
+	}()
 	runtime, err := service.publication.loadExactManagedRclonePublicationRuntime(ctx, lineage.TaskID)
 	if err != nil {
 		return nil, err
@@ -134,12 +174,31 @@ func (service *Service) openRcloneCatalogRead(
 	if err != nil {
 		return nil, err
 	}
+	exactCommitKey, exactCommitVersionID := "", ""
+	if attempt.PublicationMode == backupasset.PublicationNativeObjectVersions {
+		if commit.Native == nil {
+			return nil, fmt.Errorf("%w: immutable Rclone Catalog native commit evidence missing", backupasset.ErrConflict)
+		}
+		exactCommitKey = managedRcloneNativeControlCommitKey(runtime.binding, attempt)
+		owned, _, evidenceErr := loadManagedRcloneNativeVersionEvidenceTx(
+			ctx, service.db, repository.ID, point.ID, markerKey, locator, exactCommitKey,
+		)
+		if evidenceErr != nil {
+			return nil, evidenceErr
+		}
+		exactCommitVersionID, evidenceErr = managedRcloneNativeCommitVersion(owned, exactCommitKey)
+		if evidenceErr != nil {
+			return nil, evidenceErr
+		}
+		commit.Native.CommitKey = exactCommitKey
+		commit.Native.CommitVersionID = exactCommitVersionID
+	}
 	leaseConfig, err := service.foundation.LeaseConfig()
 	if err != nil {
 		return nil, err
 	}
 	reconcile, err := service.publication.rcloneReconcileInput(
-		ctx, runtime, attempt, markerKey, leaseConfig, locator.NativeCommitKey, locator.NativeCommitVersionID,
+		ctx, runtime, attempt, markerKey, leaseConfig, exactCommitKey, exactCommitVersionID,
 	)
 	if err != nil {
 		return nil, err
@@ -152,10 +211,6 @@ func (service *Service) openRcloneCatalogRead(
 	if err != nil {
 		return nil, err
 	}
-	token, err := service.admission.Acquire(ctx, publication.OperationManifest)
-	if err != nil {
-		return nil, err
-	}
 	access := provider.AccessBinding{Provider: backupasset.ProviderRclone, RepositoryID: repository.ID}
 	inner, err := reader.OpenCatalogRead(ctx, provider.CatalogReadRequest{
 		Provider: backupasset.ProviderRclone, RecoveryPointID: point.ID,
@@ -164,10 +219,14 @@ func (service *Service) openRcloneCatalogRead(
 		Manifest: proof, RcloneProof: &provider.RcloneCatalogProofInput{Reconcile: reconcile, Commit: commit}, MaxItems: maxItems,
 	})
 	if err != nil {
-		_ = token.Close()
 		return nil, err
 	}
-	return &sealedCatalogReadSession{inner: inner, token: token}, nil
+	if inner == nil {
+		return nil, fmt.Errorf("%w: immutable Rclone Catalog reader returned nil session", backupasset.ErrInvalidState)
+	}
+	session := &sealedCatalogReadSession{inner: inner, token: token}
+	keepToken = true
+	return session, nil
 }
 
 func (service *Service) openRsyncCatalogRead(
@@ -177,10 +236,23 @@ func (service *Service) openRsyncCatalogRead(
 	manifest model.RecoveryPointManifest,
 	proof provider.CatalogManifestProof,
 ) (provider.CatalogReadSession, error) {
-	if service.admission == nil || service.keyring == nil || point.ProducingTaskID == nil ||
-		point.CapabilityRevision != repository.CapabilityRevision {
+	if service.admission == nil || service.keyring == nil || point.ProducingTaskID == nil {
 		return nil, fmt.Errorf("%w: immutable Rsync Catalog dependencies unavailable", backupasset.ErrInvalidState)
 	}
+	if point.CapabilityRevision <= 0 || repository.CapabilityRevision <= 0 ||
+		point.CapabilityRevision != repository.CapabilityRevision {
+		return nil, fmt.Errorf("%w: immutable Rsync Catalog capability revision changed", backupasset.ErrConflict)
+	}
+	token, err := service.acquireCatalogAdmission(ctx, publication.OperationManagedRsyncPointRead)
+	if err != nil {
+		return nil, err
+	}
+	keepToken := false
+	defer func() {
+		if !keepToken && token != nil {
+			_ = token.Close()
+		}
+	}()
 	runtime, err := loadExactManagedRsyncPublicationRuntime(ctx, service.db, *point.ProducingTaskID)
 	if err != nil {
 		return nil, err
@@ -220,19 +292,19 @@ func (service *Service) openRsyncCatalogRead(
 	if err != nil {
 		return nil, err
 	}
-	token, err := service.admission.Acquire(ctx, publication.OperationManagedRsyncPointRead)
-	if err != nil {
-		return nil, err
-	}
 	inner, err := adapter.OpenCatalogRead(ctx, provider.CatalogReadRequest{
 		Provider: backupasset.ProviderRsync, RecoveryPointID: point.ID, Snapshot: snapshot, Point: points.Items[0].Locator,
 		Mode: provider.CatalogProofPublicationManifest, Manifest: proof, MaxItems: maxItems,
 	})
 	if err != nil {
-		_ = token.Close()
 		return nil, err
 	}
-	return &sealedCatalogReadSession{inner: inner, token: token}, nil
+	if inner == nil {
+		return nil, fmt.Errorf("%w: immutable Rsync Catalog reader returned nil session", backupasset.ErrInvalidState)
+	}
+	session := &sealedCatalogReadSession{inner: inner, token: token}
+	keepToken = true
+	return session, nil
 }
 
 func (service *Service) activeCatalogManifest(
@@ -266,15 +338,30 @@ func (service *Service) openResticCatalogRead(
 	proof provider.CatalogManifestProof,
 ) (provider.CatalogReadSession, error) {
 	if service.publication == nil || service.admission == nil || point.Semantics != string(backupasset.PointNativeSnapshot) ||
-		point.ProducingTaskID == nil || point.ProducingTaskRunID == nil || point.CapabilityRevision != repository.CapabilityRevision ||
-		repository.RepositoryIdentity == nil {
+		point.ProducingTaskID == nil || point.ProducingTaskRunID == nil || repository.RepositoryIdentity == nil {
 		return nil, fmt.Errorf("%w: immutable Restic Catalog dependencies unavailable", backupasset.ErrInvalidState)
+	}
+	if point.CapabilityRevision <= 0 || repository.CapabilityRevision <= 0 ||
+		point.CapabilityRevision != repository.CapabilityRevision {
+		return nil, fmt.Errorf("%w: immutable Restic Catalog capability revision changed", backupasset.ErrConflict)
 	}
 	lineage, err := backupasset.DecodePublicationLineage(point.LineageJSON)
 	if err != nil || lineage.TaskID != *point.ProducingTaskID || lineage.TaskRunID != *point.ProducingTaskRunID ||
 		lineage.PublicationMode != string(backupasset.PublicationNativeSnapshot) {
 		return nil, fmt.Errorf("%w: immutable Restic Catalog lineage changed", backupasset.ErrConflict)
 	}
+
+	token, err := service.acquireCatalogAdmission(ctx, publication.OperationManifest)
+	if err != nil {
+		return nil, err
+	}
+	keepToken := false
+	defer func() {
+		if !keepToken && token != nil {
+			_ = token.Close()
+		}
+	}()
+
 	runtime, link, err := service.publication.loadExactPublicationRuntime(ctx, lineage.TaskID, backupasset.PublicationAuditContext{})
 	if err != nil {
 		return nil, err
@@ -303,6 +390,9 @@ func (service *Service) openResticCatalogRead(
 		evidence.CaptureFinishedAt.Before(evidence.CaptureStartedAt) {
 		return nil, fmt.Errorf("%w: immutable Restic Catalog evidence changed", backupasset.ErrConflict)
 	}
+	if err := service.proveResticReadIdentity(ctx, repository.ID, *repository.RepositoryIdentity, point.CapabilityRevision, runtime); err != nil {
+		return nil, err
+	}
 	limits, maxItems, err := service.catalogManifestLimits()
 	if err != nil {
 		return nil, err
@@ -322,10 +412,6 @@ func (service *Service) openResticCatalogRead(
 	if err != nil {
 		return nil, err
 	}
-	token, err := service.admission.Acquire(ctx, publication.OperationManifest)
-	if err != nil {
-		return nil, err
-	}
 	inner, err := reader.OpenCatalogRead(ctx, provider.CatalogReadRequest{
 		Provider: backupasset.ProviderRestic, RecoveryPointID: point.ID,
 		Snapshot: provider.ReadSnapshot{RepositoryID: repository.ID, CapabilityRevision: point.CapabilityRevision, SourceRevision: point.SourceFingerprint, Access: runtime.access},
@@ -333,10 +419,14 @@ func (service *Service) openResticCatalogRead(
 		Manifest: proof, ResticProof: &provider.ResticCatalogProofInput{Attempt: attempt, Commit: commit, Limits: limits}, MaxItems: maxItems,
 	})
 	if err != nil {
-		_ = token.Close()
 		return nil, err
 	}
-	return &sealedCatalogReadSession{inner: inner, token: token}, nil
+	if inner == nil {
+		return nil, fmt.Errorf("%w: immutable Restic Catalog reader returned nil session", backupasset.ErrInvalidState)
+	}
+	session := &sealedCatalogReadSession{inner: inner, token: token}
+	keepToken = true
+	return session, nil
 }
 
 func (service *Service) catalogManifestLimits() (provider.ManifestLimits, int, error) {
