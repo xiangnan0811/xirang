@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Validate the published migration version against the latest paired migration
-# files. Migration filenames are the source of truth for this check.
+# files in both engines. Migration filenames are the source of truth for this
+# check; the newest version/name must have one non-empty up/down pair per engine.
 
 set -euo pipefail
 
@@ -35,6 +36,8 @@ latest_migration() {
       if [[ -z "$best_version" ]] || ((10#$version > 10#$best_version)); then
         best_version="$version"
         best_name="$name"
+      elif ((10#$version == 10#$best_version)) && [[ "$name" != "$best_name" ]]; then
+        fail "multiple latest migration names at version ${version} in $dir: ${best_name}, ${name}"
       fi
     fi
   done

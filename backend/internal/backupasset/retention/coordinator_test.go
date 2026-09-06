@@ -2,12 +2,14 @@ package retention
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -314,6 +316,120 @@ func retentionBranchRelay(useSafe bool, safe, private any) any {
 	}
 	if got, want := strings.Join(mutationAnalysis.violations, "\n"), strings.Join(wantMutationViolations, "\n"); got != want {
 		t.Fatalf("retention private diagnostic mutation coverage got=%q want=%q", got, want)
+	}
+}
+
+func TestProviderDeletePrivateTypesRedactDiagnostics(t *testing.T) {
+	const (
+		rawLocator       = "RAW_NATIVE_LOCATOR_CANARY"
+		rawConfig        = "RAW_CONFIG_CANARY"
+		rawSecret        = "RAW_SECRET_CANARY"
+		rawSalt          = "RAW_SALT_CANARY"
+		rawPassword      = "RAW_PASSWORD_CANARY"
+		rawPrivateKey    = "RAW_PRIVATE_KEY_CANARY"
+		rawClient        = "RAW_CLIENT_CANARY"
+		rawNative        = "RAW_NATIVE_MATERIAL_CANARY"
+		rawRemoteCommand = "RAW_REMOTE_COMMAND_CANARY"
+		rawFence         = "RAW_FENCE_CANARY"
+	)
+	access := provider.AccessBinding{
+		IdentitySalt:  []byte(rawSalt),
+		EndpointFacts: []string{rawClient},
+		Locator:       rawLocator,
+		Secret:        []byte(rawSecret),
+		Config:        []byte(rawConfig),
+		AdapterData: map[string]any{
+			"password":    rawPassword,
+			"private_key": rawPrivateKey,
+			"client":      rawClient,
+			"native":      rawNative,
+			"command":     rawRemoteCommand,
+		},
+	}
+	request := provider.DeletePointRequest{
+		Snapshot: provider.ReadSnapshot{
+			RepositoryID:       testOpaqueID(8700),
+			CapabilityRevision: 1,
+			SourceRevision:     rawNative,
+			RepositoryIdentity: rawClient,
+			Access:             access,
+		},
+		Point:                  provider.PointLocator{Native: rawLocator},
+		ExpectedSourceRevision: rawNative,
+		OperationID:            testOpaqueID(8701),
+	}
+	prepared := PreparedPointDeletion{
+		request:        request,
+		identity:       provider.DeletionTargetIdentityInput{RepositoryIdentity: rawClient, Request: request},
+		identityDigest: rawFence,
+	}
+	rawLeaseID, rawAttemptID, rawFenceHash := rawLocator, rawNative, rawFence
+	repositoryIdentity := rawClient
+	rows := LifecycleDeleteRows{
+		attempt: model.RecoveryPointLifecycleAttempt{
+			ID:                  rawAttemptID,
+			RecoveryPointID:     rawLeaseID,
+			LeaseID:             &rawLeaseID,
+			LeaseAttemptID:      &rawAttemptID,
+			LeaseFenceTokenHash: &rawFenceHash,
+		},
+		point: model.RecoveryPoint{
+			ID:                       rawLeaseID,
+			RepositoryID:             rawLeaseID,
+			EncryptedProviderLocator: rawLocator,
+			EncryptedRollbackLocator: rawNative,
+			CapabilitiesJSON:         rawConfig,
+		},
+		lease: model.RecoveryPointLease{
+			ID:              rawLeaseID,
+			RecoveryPointID: rawLeaseID,
+			AttemptID:       rawAttemptID,
+			FenceToken:      rawFence,
+			OwnerID:         rawClient,
+		},
+		repository: model.BackupRepository{
+			ID:                 rawLeaseID,
+			RepositoryIdentity: &repositoryIdentity,
+			CapabilitiesJSON:   rawConfig,
+		},
+	}
+	markers := []string{
+		rawLocator, rawConfig, rawSecret, rawSalt, rawPassword,
+		rawPrivateKey, rawClient, rawNative, rawRemoteCommand, rawFence,
+	}
+	cases := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{name: "prepared value", value: prepared, want: "[prepared provider deletion]"},
+		{name: "prepared pointer", value: &prepared, want: "[prepared provider deletion]"},
+		{name: "rows value", value: rows, want: "[lifecycle provider-delete rows]"},
+		{name: "rows pointer", value: &rows, want: "[lifecycle provider-delete rows]"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			for _, format := range []string{"%+v", "%#v"} {
+				rendered := fmt.Sprintf(format, testCase.value)
+				if rendered != testCase.want {
+					t.Fatalf("format %s rendered %q, want closed redaction %q", format, rendered, testCase.want)
+				}
+				for _, marker := range markers {
+					if strings.Contains(rendered, marker) {
+						t.Fatalf("format %s leaked private marker %q: %s", format, marker, rendered)
+					}
+				}
+			}
+			renderedJSON, err := json.Marshal(testCase.value)
+			if err != nil {
+				t.Fatalf("marshal %s diagnostics value: %v", testCase.name, err)
+			}
+			for _, marker := range markers {
+				if strings.Contains(string(renderedJSON), marker) {
+					t.Fatalf("json leaked private marker %q: %s", marker, renderedJSON)
+				}
+			}
+		})
 	}
 }
 
@@ -1901,10 +2017,23 @@ func TestLifecycleRegistryPointDeletionMapsWORMWithoutClearingLocator(t *testing
 			t.Fatalf("Advance want phase=%q attempt=%+v error=%v", want, attempt, err)
 		}
 	}
-	blocked, err := coordinator.Advance(context.Background(), attempt.ID)
-	if err != nil || blocked.Phase != backupasset.LifecyclePhaseBlocked ||
-		blocked.BlockedReason != backupasset.LifecycleBlockedProviderWORM {
-		t.Fatalf("WORM blocked attempt=%+v err=%v", blocked, err)
+	uncertain, err := coordinator.Advance(context.Background(), attempt.ID)
+	if err == nil || uncertain.Phase != backupasset.LifecyclePhaseProviderDelete {
+		t.Fatalf("WORM provider error attempt=%+v err=%v, want uncertain provider_delete", uncertain, err)
+	}
+	if port.calls != 1 {
+		t.Fatalf("WORM provider calls=%d, want one call", port.calls)
+	}
+	var claim model.RecoveryPointLifecycleEffectClaim
+	if err := db.First(&claim, "attempt_id = ?", attempt.ID).Error; err != nil {
+		t.Fatalf("load uncertain WORM claim: %v", err)
+	}
+	if claim.State != "uncertain" {
+		t.Fatalf("WORM claim state=%q, want uncertain", claim.State)
+	}
+	var tombstone model.RecoveryPointLifecycleTombstone
+	if err := db.Where("recovery_point_id = ?", pointID).First(&tombstone).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("WORM unexpectedly persisted tombstone: %+v err=%v", tombstone, err)
 	}
 	var persisted model.RecoveryPoint
 	if err := db.First(&persisted, "id = ?", pointID).Error; err != nil {
@@ -2560,7 +2689,7 @@ func TestLifecycleRevokeFailureResumesAtRevokingNotCleaning(t *testing.T) {
 	}
 }
 
-func TestLifecycleProviderFailuresRemainPurgeBlockedAndRetryFenced(t *testing.T) {
+func TestLifecycleProviderFailuresRemainUncertainAndRetryFenced(t *testing.T) {
 	tests := []struct {
 		name   string
 		err    error
@@ -2574,7 +2703,7 @@ func TestLifecycleProviderFailuresRemainPurgeBlockedAndRetryFenced(t *testing.T)
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newClaimedExpiryFixture(t, uint64(700+index*10))
-			fixture.deleter.err = test.err
+			fixture.deleter.prepareErr = test.err
 			attempt := fixture.attempt
 			var err error
 			for _, want := range []backupasset.LifecyclePhase{
@@ -2590,12 +2719,20 @@ func TestLifecycleProviderFailuresRemainPurgeBlockedAndRetryFenced(t *testing.T)
 			}
 			attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
 			if err != nil || attempt.Phase != backupasset.LifecyclePhaseBlocked || attempt.BlockedReason != test.reason {
-				t.Fatalf("provider block attempt=%+v error=%v, want %q", attempt, err, test.reason)
+				t.Fatalf("provider observer block attempt=%+v error=%v, want %q", attempt, err, test.reason)
 			}
 			assertLifecyclePointState(t, fixture.db, fixture.pointID, backupasset.RecoveryPointPurgeBlocked)
+			var claimCount int64
+			if err := fixture.db.Model(&model.RecoveryPointLifecycleEffectClaim{}).
+				Where("attempt_id = ?", attempt.ID).Count(&claimCount).Error; err != nil {
+				t.Fatalf("count pre-provider claims: %v", err)
+			}
+			if claimCount != 0 {
+				t.Fatalf("pre-provider observer block claims=%d, want zero", claimCount)
+			}
 
-			fixture.clock = fixture.clock.Add(6 * time.Minute)
-			fixture.deleter.err = nil
+			fixture.clock = attempt.RetryAt.UTC().Add(time.Second)
+			fixture.deleter.prepareErr = nil
 			fixture.deleter.result = PointDeletionResult{
 				Outcome: PointDeletionAlreadyAbsent, ReceiptDigest: strings.Repeat("5", 64),
 			}
@@ -2615,9 +2752,320 @@ func TestLifecycleProviderFailuresRemainPurgeBlockedAndRetryFenced(t *testing.T)
 		})
 	}
 }
+
+func TestLifecycleProviderDeleteAmbiguousClaimCommitNeverBlocks(t *testing.T) {
+	t.Run("committed first acquisition with canceled parent", func(t *testing.T) {
+		fixture := newClaimedExpiryFixture(t, 2110)
+		attempt := fixture.attempt
+		for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+			var err error
+			attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+			if err != nil {
+				t.Fatalf("advance ambiguous-commit fixture to provider_delete: %v", err)
+			}
+		}
+
+		sqlDB, err := fixture.db.DB()
+		if err != nil {
+			t.Fatalf("load ambiguous-commit SQL database: %v", err)
+		}
+		parent, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ambiguousDB := fixture.db.Session(&gorm.Session{NewDB: true})
+		ambiguousDB.Statement.ConnPool = &ambiguousCommitConnPool{
+			DB: sqlDB, failNext: true, onAmbiguousCommit: cancel,
+		}
+		coordinator, err := NewCoordinator(CoordinatorDependencies{
+			DB: ambiguousDB, Leases: fixture.coordinator.leases, Holds: fixture.holds,
+			Now:          func() time.Time { return fixture.clock },
+			NewID:        func() (string, error) { return testOpaqueID(2113), nil },
+			LeaseOwnerID: fixture.coordinator.leaseOwnerID, Admissions: fixture.coordinator.admissions,
+			Cleanup: fixture.cleanup, Deleter: fixture.deleter,
+			EffectExecutorID: testOpaqueID(2114), EffectClaimTTL: fixture.coordinator.effectClaimTTL,
+			EffectClaimAfter: fixture.coordinator.effectClaimAfter, RetryDelay: fixture.coordinator.retryDelay,
+		})
+		if err != nil {
+			t.Fatalf("construct ambiguous-commit coordinator: %v", err)
+		}
+
+		beforeRevision := attempt.TransitionRevision
+		got, err := coordinator.Advance(parent, attempt.ID)
+		if !errors.Is(err, context.Canceled) ||
+			got.Phase != backupasset.LifecyclePhaseProviderDelete ||
+			got.TransitionRevision != beforeRevision || got.RetryAt != nil {
+			t.Fatalf("ambiguous first acquisition attempt=%+v error=%v, want canceled in-flight observation without block/retry",
+				got, err)
+		}
+		if fixture.deleter.calls != 0 {
+			t.Fatalf("ambiguous first acquisition provider calls=%d, want zero", fixture.deleter.calls)
+		}
+		var claim model.RecoveryPointLifecycleEffectClaim
+		if err := fixture.db.First(&claim, "attempt_id = ?", attempt.ID).Error; err != nil {
+			t.Fatalf("load durable first-acquisition claim: %v", err)
+		}
+		if claim.State != "in_flight" || claim.ExecutionID == "" {
+			t.Fatalf("ambiguous first-acquisition claim=%+v, want durable in-flight claim", claim)
+		}
+		var tombstoneCount int64
+		if err := fixture.db.Model(&model.RecoveryPointLifecycleTombstone{}).
+			Where("recovery_point_id = ?", fixture.pointID).Count(&tombstoneCount).Error; err != nil {
+			t.Fatalf("count first-acquisition tombstones: %v", err)
+		}
+		if tombstoneCount != 0 {
+			t.Fatalf("ambiguous first-acquisition tombstones=%d, want zero", tombstoneCount)
+		}
+	})
+
+	t.Run("committed takeover with canceled parent", func(t *testing.T) {
+		fixture := newClaimedExpiryFixture(t, 2140)
+		attempt := fixture.attempt
+		for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+			var err error
+			attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+			if err != nil {
+				t.Fatalf("advance takeover fixture to provider_delete: %v", err)
+			}
+		}
+		fixture.deleter.err = errors.New("seed uncertain provider execution")
+		failed, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
+		fixture.deleter.err = nil
+		if err == nil || failed.Phase != backupasset.LifecyclePhaseProviderDelete || failed.RetryAt == nil {
+			t.Fatalf("seed uncertain takeover claim attempt=%+v error=%v", failed, err)
+		}
+		providerCallsBefore := fixture.deleter.calls
+		fixture.clock = failed.RetryAt.UTC().Add(time.Second)
+		if err := fixture.db.Model(&model.RecoveryPointLease{}).Where("id = ?", failed.LeaseID).
+			Update("lease_expires_at", fixture.clock.Add(-time.Second)).Error; err != nil {
+			t.Fatalf("expire takeover lease: %v", err)
+		}
+		beforeAttempt, err := fixture.coordinator.loadAttempt(context.Background(), attempt.ID)
+		if err != nil {
+			t.Fatalf("load takeover attempt: %v", err)
+		}
+		beforeClaim := model.RecoveryPointLifecycleEffectClaim{}
+		if err := fixture.db.First(&beforeClaim, "attempt_id = ?", attempt.ID).Error; err != nil {
+			t.Fatalf("load uncertain takeover claim: %v", err)
+		}
+		if beforeClaim.State != "uncertain" {
+			t.Fatalf("takeover seed claim=%+v, want uncertain", beforeClaim)
+		}
+
+		sqlDB, err := fixture.db.DB()
+		if err != nil {
+			t.Fatalf("load takeover SQL database: %v", err)
+		}
+		parent, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ambiguousDB := fixture.db.Session(&gorm.Session{NewDB: true})
+		ambiguousDB.Statement.ConnPool = &ambiguousCommitConnPool{
+			DB: sqlDB, failNext: true, onAmbiguousCommit: cancel,
+		}
+		coordinator, err := NewCoordinator(CoordinatorDependencies{
+			DB: ambiguousDB, Leases: fixture.coordinator.leases, Holds: fixture.holds,
+			Now:          func() time.Time { return fixture.clock },
+			NewID:        func() (string, error) { return testOpaqueID(2143), nil },
+			LeaseOwnerID: fixture.coordinator.leaseOwnerID, Admissions: fixture.coordinator.admissions,
+			Cleanup: fixture.cleanup, Deleter: fixture.deleter,
+			EffectExecutorID: testOpaqueID(2144), EffectClaimTTL: fixture.coordinator.effectClaimTTL,
+			EffectClaimAfter: fixture.coordinator.effectClaimAfter, RetryDelay: fixture.coordinator.retryDelay,
+		})
+		if err != nil {
+			t.Fatalf("construct takeover ambiguous-commit coordinator: %v", err)
+		}
+
+		got, err := coordinator.Advance(parent, attempt.ID)
+		if !errors.Is(err, context.Canceled) ||
+			got.Phase != backupasset.LifecyclePhaseProviderDelete ||
+			got.TransitionRevision <= beforeAttempt.TransitionRevision || got.RetryAt != nil {
+			t.Fatalf("ambiguous takeover attempt=%+v error=%v, want canceled in-flight observation after takeover",
+				got, err)
+		}
+		if fixture.deleter.calls != providerCallsBefore {
+			t.Fatalf("ambiguous takeover provider calls=%d, want %d", fixture.deleter.calls, providerCallsBefore)
+		}
+		var claim model.RecoveryPointLifecycleEffectClaim
+		if err := fixture.db.First(&claim, "attempt_id = ?", attempt.ID).Error; err != nil {
+			t.Fatalf("load durable takeover claim: %v", err)
+		}
+		if claim.State != "in_flight" || claim.ExecutionID == beforeClaim.ExecutionID ||
+			claim.LeaseFenceTokenHash == beforeClaim.LeaseFenceTokenHash {
+			t.Fatalf("ambiguous takeover claim=%+v before=%+v, want new durable in-flight binding", claim, beforeClaim)
+		}
+		if got.BlockedReason != "" {
+			t.Fatalf("ambiguous takeover blocked reason=%q, want empty", got.BlockedReason)
+		}
+	})
+
+	t.Run("pre-claim cancellation remains canceled", func(t *testing.T) {
+		fixture := newClaimedExpiryFixture(t, 2170)
+		attempt := fixture.attempt
+		for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+			var err error
+			attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+			if err != nil {
+				t.Fatalf("advance pre-claim fixture to provider_delete: %v", err)
+			}
+		}
+		before, err := fixture.coordinator.loadAttempt(context.Background(), attempt.ID)
+		if err != nil {
+			t.Fatalf("load pre-claim attempt: %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		got, err := fixture.coordinator.Advance(ctx, attempt.ID)
+		if !errors.Is(err, context.Canceled) || got.ID != "" {
+			t.Fatalf("pre-claim canceled attempt=%+v error=%v, want empty canceled result", got, err)
+		}
+		if fixture.deleter.calls != 0 {
+			t.Fatalf("pre-claim canceled provider calls=%d, want zero", fixture.deleter.calls)
+		}
+		var claimCount int64
+		if err := fixture.db.Model(&model.RecoveryPointLifecycleEffectClaim{}).
+			Where("attempt_id = ?", attempt.ID).Count(&claimCount).Error; err != nil {
+			t.Fatalf("count pre-claim canceled claims: %v", err)
+		}
+		if claimCount != 0 {
+			t.Fatalf("pre-claim canceled claims=%d, want zero", claimCount)
+		}
+		after, err := fixture.coordinator.loadAttempt(context.Background(), attempt.ID)
+		if err != nil {
+			t.Fatalf("reload pre-claim attempt: %v", err)
+		}
+		if after.Phase != before.Phase || after.TransitionRevision != before.TransitionRevision ||
+			after.BlockedReason != before.BlockedReason || after.RetryAt != before.RetryAt {
+			t.Fatalf("pre-claim canceled attempt changed before=%+v after=%+v", before, after)
+		}
+	})
+}
+
+func TestLifecycleProviderDeletePreClaimFailureReconcilesConcurrentWinner(t *testing.T) {
+	fixture := newClaimedExpiryFixture(t, 2150)
+	attempt := fixture.attempt
+	for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+		var err error
+		attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+		if err != nil {
+			t.Fatalf("advance pre-claim race fixture to provider_delete: %v", err)
+		}
+	}
+
+	winnerDeleter := &lifecycleDeletionFake{
+		result: PointDeletionResult{
+			Outcome: PointDeletionDeleted, ReceiptDigest: strings.Repeat("e", 64),
+		},
+		entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	winnerCoordinator := acceptanceCloneCoordinator(
+		t, fixture, winnerDeleter, testOpaqueID(2155),
+	)
+	winnerDone := make(chan struct {
+		attempt LifecycleAttempt
+		err     error
+	}, 1)
+	sqlDB, err := fixture.db.DB()
+	if err != nil {
+		t.Fatalf("load pre-claim race SQL database: %v", err)
+	}
+	racePool := &preClaimWinnerConnPool{DB: sqlDB}
+	raceDB := fixture.db.Session(&gorm.Session{NewDB: true, Context: context.Background()})
+	raceDB.Statement.ConnPool = racePool
+	racePool.onFallbackBegin = func() {
+		go func() {
+			winner, winnerErr := winnerCoordinator.Advance(context.Background(), attempt.ID)
+			winnerDone <- struct {
+				attempt LifecycleAttempt
+				err     error
+			}{winner, winnerErr}
+		}()
+		select {
+		case <-winnerDeleter.entered:
+		case <-time.After(5 * time.Second):
+		}
+	}
+	failureCoordinator, err := NewCoordinator(CoordinatorDependencies{
+		DB: raceDB, Leases: fixture.coordinator.leases, Holds: fixture.holds,
+		Now:          func() time.Time { return fixture.clock },
+		NewID:        func() (string, error) { return testOpaqueID(2153), nil },
+		LeaseOwnerID: fixture.coordinator.leaseOwnerID, Admissions: fixture.coordinator.admissions,
+		Cleanup: fixture.cleanup, EffectExecutorID: testOpaqueID(2154),
+		EffectClaimTTL: fixture.coordinator.effectClaimTTL, EffectClaimAfter: fixture.coordinator.effectClaimAfter,
+		RetryDelay: fixture.coordinator.retryDelay,
+	})
+	if err != nil {
+		t.Fatalf("construct pre-claim failure coordinator: %v", err)
+	}
+
+	failureDone := make(chan struct {
+		attempt LifecycleAttempt
+		err     error
+	}, 1)
+	go func() {
+		failedAttempt, failureErr := failureCoordinator.resolveProviderDeletePreparationFailure(
+			context.Background(), attempt.ID,
+			backupasset.LifecycleBlockedProviderDeleteUnproven,
+			errors.New("pre-claim transaction rolled back"),
+		)
+		failureDone <- struct {
+			attempt LifecycleAttempt
+			err     error
+		}{failedAttempt, failureErr}
+	}()
+
+	var failedResult struct {
+		attempt LifecycleAttempt
+		err     error
+	}
+	select {
+	case failedResult = <-failureDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pre-claim failure did not reconcile with the concurrent winner")
+	}
+	if !errors.Is(failedResult.err, ErrEffectClaimInFlight) ||
+		failedResult.attempt.Phase != backupasset.LifecyclePhaseProviderDelete ||
+		failedResult.attempt.RetryAt != nil {
+		t.Fatalf("pre-claim failure result attempt=%+v error=%v, want in-flight observation without block/retry",
+			failedResult.attempt, failedResult.err)
+	}
+	var claim model.RecoveryPointLifecycleEffectClaim
+	if err := fixture.db.First(&claim, "attempt_id = ?", attempt.ID).Error; err != nil {
+		t.Fatalf("load winner claim before release: %v", err)
+	}
+	if claim.State != "in_flight" {
+		t.Fatalf("winner claim before release state=%q, want in_flight", claim.State)
+	}
+
+	close(winnerDeleter.release)
+	select {
+	case winnerResult := <-winnerDone:
+		if winnerResult.err != nil || winnerResult.attempt.Phase != backupasset.LifecyclePhaseTombstoning {
+			t.Fatalf("winner result attempt=%+v error=%v, want tombstoning",
+				winnerResult.attempt, winnerResult.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("concurrent winner did not finish after provider release")
+	}
+	if winnerDeleter.calls != 1 {
+		t.Fatalf("concurrent winner provider calls=%d, want one", winnerDeleter.calls)
+	}
+	if err := fixture.db.First(&claim, "attempt_id = ?", attempt.ID).Error; err != nil {
+		t.Fatalf("load winner claim after release: %v", err)
+	}
+	if claim.State != "proven" {
+		t.Fatalf("winner claim after release state=%q, want proven", claim.State)
+	}
+	var tombstoneCount int64
+	if err := fixture.db.Model(&model.RecoveryPointLifecycleTombstone{}).
+		Where("recovery_point_id = ?", fixture.pointID).Count(&tombstoneCount).Error; err != nil {
+		t.Fatalf("count winner tombstones: %v", err)
+	}
+	if tombstoneCount != 1 {
+		t.Fatalf("winner tombstones=%d, want one", tombstoneCount)
+	}
+}
+
 func TestLifecycleNativeVersionReferenceBlockAuditsAsOrdinaryBlocked(t *testing.T) {
 	fixture := newClaimedExpiryFixture(t, 1740)
-	fixture.deleter.err = provider.ErrDeletePointNativeVersionReferenced
+	fixture.deleter.prepareErr = provider.ErrDeletePointNativeVersionReferenced
 	audit := &recordingSettledAudit{}
 	fixture.coordinator.audit = audit
 
@@ -2639,16 +3087,12 @@ func TestLifecycleNativeVersionReferenceBlockAuditsAsOrdinaryBlocked(t *testing.
 		attempt.BlockedReason != backupasset.LifecycleBlockedProviderNativeVersionReferenced {
 		t.Fatalf("native reference dependency block attempt=%+v error=%v", attempt, err)
 	}
-	if len(audit.events) != 1 ||
-		audit.events[0].Fields[backupasset.AuditFieldStatus] != "blocked" {
-		t.Fatalf("native reference dependency settled audit=%+v, want ordinary blocked", audit.events)
-	}
-	if audit.events[0].Fields[backupasset.AuditFieldStatus] == "identity_conflict" {
-		t.Fatal("native reference dependency must not settle as identity conflict")
+	if len(audit.events) != 0 {
+		t.Fatalf("native reference dependency settled audit before RetryAt=%+v, want none", audit.events)
 	}
 
 	fixture.clock = attempt.RetryAt.Add(time.Second)
-	fixture.deleter.err = nil
+	fixture.deleter.prepareErr = nil
 	fixture.deleter.result = PointDeletionResult{
 		Outcome: PointDeletionAlreadyAbsent, ReceiptDigest: strings.Repeat("5", 64),
 	}
@@ -2656,6 +3100,10 @@ func TestLifecycleNativeVersionReferenceBlockAuditsAsOrdinaryBlocked(t *testing.
 	if err != nil || retried.Phase != backupasset.LifecyclePhaseProviderDelete ||
 		retried.BlockedReason != "" {
 		t.Fatalf("native reference dependency retry attempt=%+v error=%v, want provider_delete", retried, err)
+	}
+	if len(audit.events) != 1 ||
+		audit.events[0].Fields[backupasset.AuditFieldStatus] != "blocked" {
+		t.Fatalf("native reference dependency settled audit after RetryAt=%+v, want ordinary blocked", audit.events)
 	}
 }
 func TestLifecycleProviderReceiptSurvivesHoldAppearingAfterEffect(t *testing.T) {
@@ -2959,15 +3407,8 @@ func TestLifecycleMutableRetireActiveHoldAfterTerminalEventResumesTombstoning(t 
 	if err != nil || resumed.Phase != backupasset.LifecyclePhaseTombstoning {
 		t.Fatalf("mutable-retire tombstoning hold retry attempt=%+v error=%v, want tombstoning", resumed, err)
 	}
-	if len(audit.events) != 1 || audit.events[0].Outcome != backupasset.AuditOutcomeBlocked ||
-		audit.events[0].Fields[backupasset.AuditFieldStatus] != "blocked" {
-		t.Fatalf("mutable-retire tombstoning hold audit=%+v, want one blocked audit", audit.events)
-	}
-	for _, event := range audit.events {
-		status, _ := event.Fields[backupasset.AuditFieldStatus].(string)
-		if event.Outcome == backupasset.AuditOutcomeSuccess || status == "deleted" || status == "already_absent" {
-			t.Fatalf("mutable-retire tombstoning hold emitted provider success audit=%+v", event)
-		}
+	if len(audit.events) != 0 {
+		t.Fatalf("mutable-retire tombstoning hold emitted settled deletion audit=%d, want zero", len(audit.events))
 	}
 
 	completed, err := fixture.coordinator.Advance(context.Background(), resumed.ID)
@@ -3218,7 +3659,7 @@ func TestLifecycleTerminalEventMismatchFailsClosed(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newTerminalEventRestartFixture(t, test.operation, test.base)
-			blocked, _ := blockTerminalEventAtAbsoluteDeadline(t, fixture, test.base+10)
+			blocked := blockTerminalEventForValidation(t, fixture)
 			if err := test.corrupt(fixture.db, fixture.pointID); err != nil {
 				t.Fatalf("inject terminal event mismatch: %v", err)
 			}
@@ -3243,19 +3684,24 @@ func TestLifecycleTerminalEventMismatchFailsClosed(t *testing.T) {
 
 func TestLifecycleMissingTerminalEventRestartsEarliestSafePhase(t *testing.T) {
 	fixture := newTerminalEventRestartFixture(t, backupasset.LifecycleRetentionExpire, 1220)
-	blocked, _ := blockTerminalEventAtAbsoluteDeadline(t, fixture, 1230)
+	blocked := blockTerminalEventForValidation(t, fixture)
 	if err := fixture.db.Where("recovery_point_id = ? AND terminal_operation = ?",
 		fixture.pointID, backupasset.LifecycleRetentionExpire).
 		Delete(&model.RecoveryPointLifecycleTombstone{}).Error; err != nil {
 		t.Fatalf("remove terminal event for missing-event recovery: %v", err)
 	}
+	if err := fixture.db.Where("attempt_id = ?", blocked.ID).
+		Delete(&model.RecoveryPointLifecycleEffectClaim{}).Error; err != nil {
+		t.Fatalf("remove provider claim for missing-event recovery: %v", err)
+	}
 	fixture.clock = blocked.RetryAt.UTC().Add(time.Second)
 	cleanupBefore, deleteBefore := fixture.cleanup.calls, fixture.deleter.calls
 	retried, err := restartTerminalEventCoordinator(t, fixture, 1231).Advance(context.Background(), blocked.ID)
-	if err != nil || retried.Phase != backupasset.LifecyclePhaseRevoking ||
+	if err != nil || retried.Phase != backupasset.LifecyclePhaseBlocked ||
+		retried.BlockedReason != backupasset.LifecycleBlockedFenceLost ||
 		fixture.cleanup.calls != cleanupBefore || fixture.deleter.calls != deleteBefore {
-		t.Fatalf("missing event retry phase/effect deltas=%q/%d/%d error=%v, want revoking/0/0",
-			retried.Phase, fixture.cleanup.calls-cleanupBefore, fixture.deleter.calls-deleteBefore, err)
+		t.Fatalf("missing event retry phase/reason/effect deltas=%q/%q/%d/%d error=%v, want blocked/fence_lost/0/0",
+			retried.Phase, retried.BlockedReason, fixture.cleanup.calls-cleanupBefore, fixture.deleter.calls-deleteBefore, err)
 	}
 }
 
@@ -3361,7 +3807,7 @@ func TestDrainingAttemptAbsoluteDeadlineDurablyBlocksFenceLost(t *testing.T) {
 
 func TestLifecycleBlockedAttemptAdoptsFreshFenceAfterAbsoluteDeadline(t *testing.T) {
 	fixture := newClaimedExpiryFixture(t, 740)
-	fixture.deleter.err = backupasset.ErrProviderUnavailable
+	fixture.deleter.prepareErr = backupasset.ErrProviderUnavailable
 	attempt := fixture.attempt
 	var err error
 	for _, want := range []backupasset.LifecyclePhase{
@@ -3389,7 +3835,7 @@ func TestLifecycleBlockedAttemptAdoptsFreshFenceAfterAbsoluteDeadline(t *testing
 		AttemptID: oldLease.AttemptID, FenceToken: oldLease.FenceToken,
 	}
 	fixture.clock = oldLease.AbsoluteDeadline.UTC().Add(24 * time.Hour)
-	fixture.deleter.err = nil
+	fixture.deleter.prepareErr = nil
 	fixture.deleter.result = PointDeletionResult{
 		Outcome: PointDeletionAlreadyAbsent, ReceiptDigest: strings.Repeat("b", 64),
 	}
@@ -3429,14 +3875,14 @@ func TestLifecycleBlockedAttemptAdoptsFreshFenceAfterAbsoluteDeadline(t *testing
 		t.Fatalf("restart after fence adoption attempt=%+v error=%v", adopted, err)
 	}
 	adopted, err = newCoordinator().Advance(context.Background(), adopted.ID)
-	if err != nil || adopted.Phase != backupasset.LifecyclePhaseComplete || fixture.deleter.calls != 2 {
+	if err != nil || adopted.Phase != backupasset.LifecyclePhaseComplete || fixture.deleter.calls != 1 {
 		t.Fatalf("complete adopted lifecycle attempt=%+v delete_calls=%d error=%v", adopted, fixture.deleter.calls, err)
 	}
 }
 
 func TestLifecycleBlockedAttemptHasExactlyOnePostgresFenceAdopter(t *testing.T) {
 	fixture := newClaimedExpiryFixtureWithDB(t, newLifecycleCoordinatorPostgresTestDB(t), 900)
-	fixture.deleter.err = backupasset.ErrProviderUnavailable
+	fixture.deleter.prepareErr = backupasset.ErrProviderUnavailable
 	attempt := fixture.attempt
 	var err error
 	for attempt.Phase != backupasset.LifecyclePhaseBlocked {
@@ -3689,10 +4135,6 @@ func TestLifecycleCoordinatorRequiresHoldServiceAndRejectsLateHoldsBeforeProvide
 			case <-fixture.deleter.entered:
 			case <-time.After(2 * time.Second):
 				t.Fatal("provider fake did not enter after pre-effect validation")
-			}
-			if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.pointID).
-				Update("state", backupasset.RecoveryPointPurgeBlocked).Error; err != nil {
-				t.Fatalf("make point otherwise hold-eligible during forced race: %v", err)
 			}
 			expiresAt := fixture.clock.Add(time.Hour)
 			create := CreateHoldRequest{
@@ -4331,6 +4773,20 @@ func blockTerminalEventAtAbsoluteDeadline(
 	}
 	return blocked, oldLease
 }
+func blockTerminalEventForValidation(
+	t *testing.T,
+	fixture *terminalEventRestartFixture,
+) LifecycleAttempt {
+	t.Helper()
+	blocked, err := fixture.coordinator.block(
+		context.Background(), fixture.attempt.ID, backupasset.LifecycleBlockedActiveHold,
+	)
+	if err != nil || blocked.Phase != backupasset.LifecyclePhaseBlocked || blocked.RetryAt == nil {
+		t.Fatalf("terminal-event validation block phase/reason=%q/%q error=%v",
+			blocked.Phase, blocked.BlockedReason, err)
+	}
+	return blocked
+}
 
 func restartTerminalEventCoordinator(
 	t *testing.T,
@@ -4366,6 +4822,43 @@ func assertTerminalEventRestartFixtureSkipsEffects(
 	base uint64,
 ) {
 	t.Helper()
+	if operation := fixture.operation; operation == backupasset.LifecycleRetentionExpire || operation == backupasset.LifecycleExplicitPurge {
+		cleanupBefore, deleteBefore := fixture.cleanup.calls, fixture.deleter.calls
+		var oldLease model.RecoveryPointLease
+		if fixture.attempt.LeaseID == "" {
+			t.Fatal("provider terminal event fixture has no lifecycle lease")
+		}
+		if err := fixture.db.First(&oldLease, "id = ?", fixture.attempt.LeaseID).Error; err != nil {
+			t.Fatalf("load provider terminal-event lifecycle lease: %v", err)
+		}
+		fixture.clock = oldLease.AbsoluteDeadline.UTC().Add(time.Second)
+		restarted := restartTerminalEventCoordinator(t, fixture, base+10)
+		current, err := restarted.Advance(context.Background(), fixture.attempt.ID)
+		if err != nil {
+			t.Fatalf("provider terminal-event stale-deadline advance operation=%q: %v", operation, err)
+		}
+		for transitions := 0; transitions < 8 && current.Phase != backupasset.LifecyclePhaseComplete; transitions++ {
+			current, err = restarted.Advance(context.Background(), current.ID)
+			if err != nil {
+				t.Fatalf("provider terminal-event completion operation=%q phase=%q: %v", operation, current.Phase, err)
+			}
+		}
+		if current.Phase != backupasset.LifecyclePhaseComplete ||
+			fixture.cleanup.calls != cleanupBefore || fixture.deleter.calls != deleteBefore {
+			t.Fatalf("provider terminal-event stale-deadline operation=%q phase=%q effect_deltas=%d/%d, want complete/0/0",
+				operation, current.Phase, fixture.cleanup.calls-cleanupBefore, fixture.deleter.calls-deleteBefore)
+		}
+		var eventCount int64
+		if err := fixture.db.Model(&model.RecoveryPointLifecycleTombstone{}).
+			Where("recovery_point_id = ? AND terminal_operation = ?", fixture.pointID, operation).
+			Count(&eventCount).Error; err != nil {
+			t.Fatalf("count provider terminal event: %v", err)
+		}
+		if eventCount != 1 {
+			t.Fatalf("provider terminal event operation=%q count=%d, want one", operation, eventCount)
+		}
+		return
+	}
 	operation := fixture.operation
 	cleanupBefore, deleteBefore := fixture.cleanup.calls, fixture.deleter.calls
 	blocked, oldLease := blockTerminalEventAtAbsoluteDeadline(t, fixture, base+10)
@@ -4474,6 +4967,89 @@ func newClaimedExpiryFixtureWithDB(t *testing.T, db *gorm.DB, base uint64) *clai
 	return fixture
 }
 
+func seedProviderDeleteProofFirstFixture(
+	t *testing.T,
+	base uint64,
+	claimState string,
+) *claimedExpiryFixture {
+	t.Helper()
+	return seedProviderDeleteProofFirstFixtureWithDB(t, newLifecycleCoordinatorTestDB(t), base, claimState)
+}
+
+func seedProviderDeleteProofFirstFixtureWithDB(
+	t *testing.T,
+	db *gorm.DB,
+	base uint64,
+	claimState string,
+) *claimedExpiryFixture {
+	t.Helper()
+	fixture := newClaimedExpiryFixtureWithDB(t, db, base)
+	attempt := fixture.attempt
+	for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+		var err error
+		attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+		if err != nil {
+			t.Fatalf("advance proof-first fixture to provider_delete: %v", err)
+		}
+	}
+	fixture.attempt = attempt
+
+	var point model.RecoveryPoint
+	if err := fixture.db.First(&point, "id = ?", fixture.pointID).Error; err != nil {
+		t.Fatalf("load proof-first point: %v", err)
+	}
+	now := fixture.clock.UTC()
+	stale := now.Add(-time.Minute)
+	if err := fixture.db.Model(&model.RecoveryPointLease{}).
+		Where("id = ?", attempt.LeaseID).
+		Updates(map[string]any{
+			"status": backupasset.LeaseExpired, "lease_expires_at": stale,
+			"absolute_deadline": stale, "updated_at": stale,
+		}).Error; err != nil {
+		t.Fatalf("expire proof-first lease: %v", err)
+	}
+	if err := fixture.db.Create(&model.RecoveryPointLifecycleEffectClaim{
+		ID:                   testOpaqueID(base + 4),
+		AttemptID:            attempt.ID,
+		ExecutorID:           testOpaqueID(base + 5),
+		ExecutionID:          testOpaqueID(base + 6),
+		TransitionRevision:   attempt.TransitionRevision,
+		LeaseID:              attempt.LeaseID,
+		LeaseAttemptID:       attempt.LeaseAttemptID,
+		LeaseFenceTokenHash:  attempt.LeaseFenceTokenHash,
+		TargetIdentityDigest: strings.Repeat("a", 64),
+		State:                claimState,
+		DeadlineAt:           stale,
+		HeartbeatAt:          stale,
+		CreatedAt:            stale,
+		UpdatedAt:            stale,
+	}).Error; err != nil {
+		t.Fatalf("seed proof-first effect claim: %v", err)
+	}
+	receiptDigest := strings.Repeat("c", 64)
+	if err := fixture.db.Create(&model.RecoveryPointLifecycleTombstone{
+		RecoveryPointID:       point.ID,
+		RepositoryID:          point.RepositoryID,
+		OriginalSemantics:     point.Semantics,
+		TerminalOperation:     string(attempt.Operation),
+		TerminalState:         string(backupasset.RecoveryPointExpired),
+		ManagedHistory:        true,
+		DeletionReceiptDigest: &receiptDigest,
+		PurgedAt:              &now,
+		ResultCode:            string(PointDeletionDeleted),
+		CreatedAt:             now,
+	}).Error; err != nil {
+		t.Fatalf("seed proof-first tombstone: %v", err)
+	}
+	futureRetry := now.Add(time.Hour)
+	if err := fixture.db.Model(&model.RecoveryPointLifecycleAttempt{}).
+		Where("id = ?", attempt.ID).
+		Update("retry_at", futureRetry).Error; err != nil {
+		t.Fatalf("seed proof-first retry gate: %v", err)
+	}
+	return fixture
+}
+
 func newRestartedExpiryCoordinator(t *testing.T, fixture *claimedExpiryFixture, id uint64) *Coordinator {
 	t.Helper()
 	coordinator, err := NewCoordinator(CoordinatorDependencies{
@@ -4520,16 +5096,20 @@ func (fake *lifecycleCleanupFake) CleanupRecoveryPoint(ctx context.Context, requ
 }
 
 type lifecycleDeletionFake struct {
-	calls       int
-	completed   int
-	pointID     string
-	attemptID   string
-	result      PointDeletionResult
-	err         error
-	entered     chan struct{}
-	release     chan struct{}
-	operation   backupasset.LifecycleOperation
-	afterEffect func()
+	calls        int
+	prepareCalls int
+	completed    int
+	pointID      string
+	attemptID    string
+	result       PointDeletionResult
+	prepareErr   error
+	err          error
+	entered      chan struct{}
+	release      chan struct{}
+	operation    backupasset.LifecycleOperation
+	afterEffect  func()
+	verify       func(context.Context)
+	verifyCalls  int
 }
 
 type registryDeletePointResolver struct {
@@ -4548,6 +5128,22 @@ func (resolver registryDeletePointResolver) ResolveDeletePoint(
 	}
 	snapshot := resolver.snapshot
 	snapshot.Access.Provider = backupasset.ProviderKind(repository.ProviderKind)
+	snapshot.Access.TaskID = 1
+	snapshot.Access.NodeID = 1
+	snapshot.Access.IdentitySalt = []byte(strings.Repeat("s", 32))
+	snapshot.Access.EndpointFacts = []string{"test-endpoint"}
+	if snapshot.Access.Provider == backupasset.ProviderRestic {
+		snapshot.Access.AdapterData = provider.ResticRuntimeAccess{
+			NativeRepositoryID: strings.Repeat("0", 64),
+			Command: &provider.RemoteCommandAccess{Node: model.Node{
+				ID: 1, Host: "localhost", Port: 22, Username: "root", AuthType: "password",
+				BasePath: "/", BackupDir: "/backup", Password: "FAKE_TEST_PASSWORD",
+			}},
+		}
+	}
+	if strings.TrimSpace(snapshot.RepositoryIdentity) == "" && snapshot.Access.Provider == backupasset.ProviderRestic {
+		snapshot.RepositoryIdentity = provider.NativeResticIdentityPrefix + strings.Repeat("0", 64)
+	}
 	snapshot.Access.RepositoryID = repository.ID
 	if repository.RepositoryIdentity != nil {
 		snapshot.RepositoryIdentity = *repository.RepositoryIdentity
@@ -4581,21 +5177,27 @@ func (resolver *sequencedDeletePointResolver) ResolveDeletePoint(
 		RepositoryID: repository.ID, RepositoryIdentity: repositoryIdentity,
 		CapabilityRevision: repository.CapabilityRevision, SourceRevision: point.SourceFingerprint,
 		Access: provider.AccessBinding{
-			Provider: backupasset.ProviderKind(repository.ProviderKind), RepositoryID: repository.ID,
+			Provider:      backupasset.ProviderKind(repository.ProviderKind),
+			RepositoryID:  repository.ID,
+			TaskID:        1,
+			NodeID:        1,
+			IdentitySalt:  []byte(strings.Repeat("s", provider.IdentitySaltBytes)),
+			EndpointFacts: []string{"test-endpoint"},
 		},
 	}
-	if resolver.native {
-		authorityDigest := strings.Repeat("a", 64)
-		if resolver.calls > 1 {
-			authorityDigest = strings.Repeat("b", 64)
-		}
-		snapshot.Access.AdapterData = provider.RcloneNativeDeletionAccess{
-			Versions: []provider.RcloneNativeExactVersion{{
-				PhysicalKey: "managed/v1/control/commit.json", VersionID: "v-owned-1",
-			}},
-			AuthorityDigest: authorityDigest,
-		}
-	} else if resolver.calls > 1 {
+	command := &provider.RemoteCommandAccess{Node: model.Node{
+		ID: 1, Host: "localhost", Port: 22, Username: "root", AuthType: "password",
+		BasePath: "/", BackupDir: "/backup", Password: "FAKE_TEST_PASSWORD",
+	}}
+	nativeRepositoryID := strings.Repeat("0", 64)
+	if resolver.calls > 1 && resolver.native {
+		nativeRepositoryID = strings.Repeat("1", 64)
+	}
+	snapshot.Access.AdapterData = provider.ResticRuntimeAccess{
+		NativeRepositoryID: nativeRepositoryID,
+		Command:            command,
+	}
+	if !resolver.native && resolver.calls > 1 {
 		snapshot.Access.Secret = []byte("post-effect binding authority drift")
 	}
 	return provider.DeletePointRequest{
@@ -4634,24 +5236,163 @@ func (*retentionProviderProberFake) Probe(context.Context, provider.AccessBindin
 	return provider.RepositoryObservation{}, nil
 }
 
-func (fake *lifecycleDeletionFake) DeleteRecoveryPoint(_ context.Context, request LifecyclePointRequest) (PointDeletionResult, error) {
-	fake.calls++
+func (fake *lifecycleDeletionFake) Prepare(
+	_ context.Context,
+	_ *gorm.DB,
+	_ providerDeletePrepareProfile,
+	request LifecyclePointRequest,
+	_ lifecycleDeleteRows,
+) (preparedPointDeletion, error) {
+	fake.prepareCalls++
 	fake.operation = request.Operation
 	fake.pointID = request.RecoveryPointID
 	fake.attemptID = request.AttemptID
+	if fake.prepareErr != nil {
+		return preparedPointDeletion{}, fake.prepareErr
+	}
+	return preparedPointDeletion{
+		identityDigest: strings.Repeat("a", 64),
+		request:        provider.DeletePointRequest{OperationID: request.AttemptID},
+	}, nil
+}
+
+func (fake *lifecycleDeletionFake) Execute(ctx context.Context, _ preparedPointDeletion) (pointDeletionExecution, error) {
+	fake.calls++
 	if fake.entered != nil {
 		close(fake.entered)
-		<-fake.release
-	}
-	if fake.err == nil {
-		if fake.afterEffect != nil {
-			afterEffect := fake.afterEffect
-			fake.afterEffect = nil
-			afterEffect()
+		select {
+		case <-fake.release:
+		case <-ctx.Done():
+			return pointDeletionExecution{ProviderCalled: true, Stage: providerDeleteStageProvider}, ctx.Err()
 		}
-		fake.completed++
 	}
-	return fake.result, fake.err
+	if fake.err != nil {
+		return pointDeletionExecution{ProviderCalled: true, Stage: providerDeleteStageProvider}, fake.err
+	}
+	if fake.afterEffect != nil {
+		afterEffect := fake.afterEffect
+		fake.afterEffect = nil
+		afterEffect()
+	}
+	fake.completed++
+	return pointDeletionExecution{Result: fake.result, ProviderCalled: true, Stage: providerDeleteStageProvider}, nil
+}
+
+func (fake *lifecycleDeletionFake) Verify(ctx context.Context, _ *gorm.DB, _ LifecyclePointRequest, _ preparedPointDeletion, _ lifecycleDeleteRows) error {
+	fake.verifyCalls++
+	if fake.verify != nil {
+		fake.verify(ctx)
+	}
+	return nil
+}
+
+type preClaimWinnerConnPool struct {
+	*sql.DB
+	mu              sync.Mutex
+	beginCount      int
+	onFallbackBegin func()
+}
+
+func (pool *preClaimWinnerConnPool) BeginTx(ctx context.Context, opts *sql.TxOptions) (gorm.ConnPool, error) {
+	pool.mu.Lock()
+	pool.beginCount++
+	triggerWinner := pool.beginCount == 1
+	onFallbackBegin := pool.onFallbackBegin
+	pool.mu.Unlock()
+	if triggerWinner && onFallbackBegin != nil {
+		onFallbackBegin()
+	}
+	tx, err := pool.DB.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return &ambiguousCommitTx{Tx: tx}, nil
+}
+
+type ambiguousCommitConnPool struct {
+	*sql.DB
+	mu                sync.Mutex
+	failNext          bool
+	onAmbiguousCommit func()
+}
+
+func (pool *ambiguousCommitConnPool) BeginTx(ctx context.Context, opts *sql.TxOptions) (gorm.ConnPool, error) {
+	tx, err := pool.DB.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	pool.mu.Lock()
+	failCommit := pool.failNext
+	pool.failNext = false
+	onAmbiguousCommit := pool.onAmbiguousCommit
+	pool.mu.Unlock()
+	return &ambiguousCommitTx{Tx: tx, failCommit: failCommit, onCommit: onAmbiguousCommit}, nil
+}
+
+type ambiguousCommitTx struct {
+	*sql.Tx
+	failCommit bool
+	onCommit   func()
+}
+
+func (tx *ambiguousCommitTx) Commit() error {
+	err := tx.Tx.Commit()
+	if err == nil && tx.failCommit {
+		if tx.onCommit != nil {
+			tx.onCommit()
+		}
+		return errors.New("ambiguous transaction commit")
+	}
+	return err
+}
+
+func runRegistryPointDeletionProtocol(ctx context.Context, adapter *RegistryPointDeletion, request LifecyclePointRequest) (PointDeletionResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var prepared preparedPointDeletion
+	err := adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		rows, err := lockLifecycleDeleteRowsTx(ctx, tx, request, false)
+		if err != nil {
+			return err
+		}
+		if err := validateLifecycleDeleteRows(request, rows.attempt, rows.point, rows.lease, rows.repository); err != nil {
+			return err
+		}
+		held, err := lifecycleDeleteHasActiveHoldTx(ctx, tx, rows.point)
+		if err != nil {
+			return err
+		}
+		if held {
+			return lifecycleDeleteIdentityConflict("lifecycle deletion is blocked by an active hold")
+		}
+		prepared, err = adapter.Prepare(ctx, tx, providerDeletePrepareObserver, request, rows)
+		return err
+	})
+	if err != nil {
+		return PointDeletionResult{}, mapProviderDeletionError(err)
+	}
+	execution, err := adapter.Execute(ctx, prepared)
+	if err != nil {
+		return PointDeletionResult{}, mapProviderDeletionError(err)
+	}
+	if !execution.ProviderCalled || !validPointDeletionResult(execution.Result) {
+		return PointDeletionResult{}, fmt.Errorf("%w: provider deletion result is unproven", backupasset.ErrInvalidState)
+	}
+	err = adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		rows, err := lockLifecycleDeleteRowsTx(ctx, tx, request, true)
+		if err != nil {
+			return err
+		}
+		if err := adapter.Verify(ctx, tx, request, prepared, rows); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return PointDeletionResult{}, mapProviderDeletionError(err)
+	}
+	return execution.Result, nil
 }
 
 func mustNewLifecycleHoldService(t *testing.T, db *gorm.DB, now func() time.Time) *HoldService {
@@ -4696,6 +5437,8 @@ func newLifecycleCoordinatorTestDB(t *testing.T) *gorm.DB {
 		&model.RecoveryPointLease{},
 		&model.RecoveryPointLifecycleAttempt{},
 		&model.RecoveryPointLifecycleTombstone{},
+		&model.RecoveryPointLifecycleEffectClaim{},
+		&model.RecoveryPointLifecycleAuditSlot{},
 		&model.BackupAssetPurgePlan{},
 		&model.BackupAssetPurgePlanItem{},
 	); err != nil {
@@ -4719,6 +5462,8 @@ func newLifecycleCoordinatorPostgresTestDB(t *testing.T) *gorm.DB {
 		&model.RecoveryPointLease{},
 		&model.RecoveryPointLifecycleAttempt{},
 		&model.RecoveryPointLifecycleTombstone{},
+		&model.RecoveryPointLifecycleEffectClaim{},
+		&model.RecoveryPointLifecycleAuditSlot{},
 		&model.BackupAssetPurgePlan{},
 		&model.BackupAssetPurgePlanItem{},
 	); err != nil {
@@ -4743,21 +5488,8 @@ func (audit *recordingSettledAudit) Write(_ context.Context, event backupasset.A
 	audit.events = append(audit.events, event)
 	return nil
 }
-
-func (audit *recordingSettledAudit) HasSettledDeletion(recoveryPointID, attemptID, status string) bool {
-	for _, event := range audit.events {
-		if event.Action != backupasset.AuditActionRepositoryPurge || event.RecoveryPointID != recoveryPointID {
-			continue
-		}
-		if event.Fields[backupasset.AuditFieldStage] != "settled" || event.Fields[backupasset.AuditFieldStatus] != status {
-			continue
-		}
-		if source, _ := event.Fields[backupasset.AuditFieldSource].(string); source != "" && source != attemptID {
-			continue
-		}
-		return true
-	}
-	return false
+func (audit *recordingSettledAudit) WriteTx(_ context.Context, _ *gorm.DB, event backupasset.AuditEventInput) error {
+	return audit.Write(context.Background(), event)
 }
 
 type flakySettledAudit struct {
@@ -4778,18 +5510,8 @@ func (audit *flakySettledAudit) Write(_ context.Context, event backupasset.Audit
 	audit.events = append(audit.events, event)
 	return nil
 }
-
-func (audit *flakySettledAudit) HasSettledDeletion(recoveryPointID, attemptID, status string) bool {
-	for _, event := range audit.events {
-		if event.RecoveryPointID != recoveryPointID || event.Fields[backupasset.AuditFieldStatus] != status {
-			continue
-		}
-		if source, _ := event.Fields[backupasset.AuditFieldSource].(string); source != "" && source != attemptID {
-			continue
-		}
-		return true
-	}
-	return false
+func (audit *flakySettledAudit) WriteTx(_ context.Context, _ *gorm.DB, event backupasset.AuditEventInput) error {
+	return audit.Write(context.Background(), event)
 }
 
 func TestListIncompleteAttemptsAfterUsesKeysetCursor(t *testing.T) {
@@ -4927,7 +5649,7 @@ func TestSettledProviderDeleteWritesAuditBeyondClaimed(t *testing.T) {
 	}
 }
 
-func TestLifecycleSettledDeletionAuditFailureStaysOnProviderDelete(t *testing.T) {
+func TestLifecycleSettledDeletionAuditFailureProgressesProofBeforeRetry(t *testing.T) {
 	fixture := newClaimedExpiryFixture(t, 1320)
 	fixture.deleter.result = PointDeletionResult{
 		Outcome: PointDeletionDeleted, ReceiptDigest: strings.Repeat("a", 64),
@@ -4953,8 +5675,8 @@ func TestLifecycleSettledDeletionAuditFailureStaysOnProviderDelete(t *testing.T)
 	if err == nil {
 		t.Fatal("expected settled deletion audit failure")
 	}
-	if attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
-		t.Fatalf("phase after failed audit = %q, want %q", attempt.Phase, backupasset.LifecyclePhaseProviderDelete)
+	if attempt.Phase != backupasset.LifecyclePhaseTombstoning {
+		t.Fatalf("phase after failed audit = %q, want %q", attempt.Phase, backupasset.LifecyclePhaseTombstoning)
 	}
 	if attempt.Phase == backupasset.LifecyclePhaseComplete {
 		t.Fatal("attempt must not complete without settled deletion audit")
@@ -4976,12 +5698,16 @@ func TestLifecycleSettledDeletionAuditFailureStaysOnProviderDelete(t *testing.T)
 		t.Fatal("retry_at must be set after settled audit failure")
 	}
 	fixture.clock = attempt.RetryAt.Add(time.Second)
+	pending, err := fixture.coordinator.flushDueSettledAuditBeforeHeartbeat(context.Background(), attempt)
+	if err != nil || pending {
+		t.Fatalf("flush after healthy audit pending=%v error=%v", pending, err)
+	}
 	attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
 	if err != nil {
-		t.Fatalf("retry after healthy audit: %v", err)
+		t.Fatalf("complete after tombstone: %v", err)
 	}
-	if attempt.Phase != backupasset.LifecyclePhaseTombstoning {
-		t.Fatalf("phase after healthy audit = %q, want %q", attempt.Phase, backupasset.LifecyclePhaseTombstoning)
+	if attempt.Phase != backupasset.LifecyclePhaseComplete {
+		t.Fatalf("phase = %q, want complete", attempt.Phase)
 	}
 	if fixture.deleter.calls != 1 {
 		t.Fatalf("deleter calls after audit retry = %d, want 1", fixture.deleter.calls)
@@ -4990,18 +5716,189 @@ func TestLifecycleSettledDeletionAuditFailureStaysOnProviderDelete(t *testing.T)
 		t.Fatalf("settled audit writes = %d, want 1", audit.settledCalls)
 	}
 
-	attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
-	if err != nil {
-		t.Fatalf("complete after tombstone: %v", err)
+}
+
+func TestLifecycleProviderDeleteProofFirstRecoverySQLite(t *testing.T) {
+	states := []string{"in_flight", "uncertain"}
+	for index, claimState := range states {
+		t.Run(claimState, func(t *testing.T) {
+			base := uint64(1350 + index*100)
+			t.Run("advance", func(t *testing.T) {
+				fixture := seedProviderDeleteProofFirstFixture(t, base, claimState)
+				var before model.RecoveryPointLifecycleEffectClaim
+				if err := fixture.db.First(&before, "attempt_id = ?", fixture.attempt.ID).Error; err != nil {
+					t.Fatalf("load proof-first claim before advance: %v", err)
+				}
+				got, err := fixture.coordinator.Advance(context.Background(), fixture.attempt.ID)
+				if err != nil || got.Phase != backupasset.LifecyclePhaseTombstoning {
+					t.Fatalf("proof-first advance attempt=%+v error=%v, want tombstoning", got, err)
+				}
+				var after model.RecoveryPointLifecycleEffectClaim
+				if err := fixture.db.First(&after, "attempt_id = ?", fixture.attempt.ID).Error; err != nil {
+					t.Fatalf("load proof-first claim after advance: %v", err)
+				}
+				if before.State != after.State || before.ExecutionID != after.ExecutionID ||
+					before.LeaseID != after.LeaseID || before.LeaseFenceTokenHash != after.LeaseFenceTokenHash ||
+					fixture.deleter.calls != 0 {
+					t.Fatalf("proof-first advance mutated claim/provider: before=%+v after=%+v calls=%d",
+						before, after, fixture.deleter.calls)
+				}
+			})
+
+			t.Run("heartbeat", func(t *testing.T) {
+				fixture := seedProviderDeleteProofFirstFixture(t, base+10, claimState)
+				if err := fixture.db.Model(&model.RecoveryPointLease{}).
+					Where("id = ?", fixture.attempt.LeaseID).
+					Update("owner_id", "foreign-proof-heartbeat-owner").Error; err != nil {
+					t.Fatalf("rebind proof-first heartbeat lease: %v", err)
+				}
+				var beforeLease model.RecoveryPointLease
+				if err := fixture.db.First(&beforeLease, "id = ?", fixture.attempt.LeaseID).Error; err != nil {
+					t.Fatalf("load proof-first lease before heartbeat: %v", err)
+				}
+				before, err := fixture.coordinator.loadAttempt(context.Background(), fixture.attempt.ID)
+				if err != nil {
+					t.Fatalf("load proof-first attempt before heartbeat: %v", err)
+				}
+				got, err := fixture.coordinator.Heartbeat(context.Background(), fixture.attempt.ID)
+				if err != nil || got.Phase != backupasset.LifecyclePhaseProviderDelete ||
+					got.RetryAt == nil || before.TransitionRevision != got.TransitionRevision {
+					t.Fatalf("proof-first heartbeat attempt=%+v before=%+v error=%v", got, before, err)
+				}
+				var afterLease model.RecoveryPointLease
+				if err := fixture.db.First(&afterLease, "id = ?", fixture.attempt.LeaseID).Error; err != nil {
+					t.Fatalf("load proof-first lease after heartbeat: %v", err)
+				}
+				if !reflect.DeepEqual(beforeLease, afterLease) {
+					t.Fatalf("proof-first heartbeat mutated rebound lease before=%+v after=%+v", beforeLease, afterLease)
+				}
+				if fixture.deleter.calls != 0 {
+					t.Fatalf("proof-first heartbeat provider calls=%d, want 0", fixture.deleter.calls)
+				}
+			})
+
+			t.Run("progress", func(t *testing.T) {
+				fixture := seedProviderDeleteProofFirstFixture(t, base+20, claimState)
+				var before model.RecoveryPointLifecycleEffectClaim
+				if err := fixture.db.First(&before, "attempt_id = ?", fixture.attempt.ID).Error; err != nil {
+					t.Fatalf("load proof-first claim before progress: %v", err)
+				}
+				got, err := fixture.coordinator.progressProviderProof(context.Background(), fixture.attempt.ID)
+				if err != nil || got.Phase != backupasset.LifecyclePhaseTombstoning {
+					t.Fatalf("proof-first progress attempt=%+v error=%v, want tombstoning", got, err)
+				}
+				var after model.RecoveryPointLifecycleEffectClaim
+				if err := fixture.db.First(&after, "attempt_id = ?", fixture.attempt.ID).Error; err != nil {
+					t.Fatalf("load proof-first claim after progress: %v", err)
+				}
+				if before.State != after.State || before.ExecutionID != after.ExecutionID ||
+					before.LeaseID != after.LeaseID || before.LeaseFenceTokenHash != after.LeaseFenceTokenHash ||
+					fixture.deleter.calls != 0 {
+					t.Fatalf("proof-first progress mutated claim/provider: before=%+v after=%+v calls=%d",
+						before, after, fixture.deleter.calls)
+				}
+			})
+
+			t.Run("completion", func(t *testing.T) {
+				fixture := seedProviderDeleteProofFirstFixture(t, base+30, claimState)
+				if _, err := fixture.coordinator.progressProviderProof(context.Background(), fixture.attempt.ID); err != nil {
+					t.Fatalf("progress proof before completion: %v", err)
+				}
+				got, err := fixture.coordinator.Advance(context.Background(), fixture.attempt.ID)
+				if err != nil || got.Phase != backupasset.LifecyclePhaseComplete {
+					t.Fatalf("proof-first completion attempt=%+v error=%v, want complete", got, err)
+				}
+				var claim model.RecoveryPointLifecycleEffectClaim
+				if err := fixture.db.First(&claim, "attempt_id = ?", fixture.attempt.ID).Error; err != nil {
+					t.Fatalf("load proof-first claim after completion: %v", err)
+				}
+				if claim.State != claimState || fixture.deleter.calls != 0 {
+					t.Fatalf("proof-first completion claim/provider state=%q/calls=%d, want %q/0",
+						claim.State, fixture.deleter.calls, claimState)
+				}
+			})
+
+			t.Run("settled audit", func(t *testing.T) {
+				fixture := seedProviderDeleteProofFirstFixture(t, base+40, claimState)
+				audit := &recordingSettledAudit{}
+				var gated model.RecoveryPointLifecycleAttempt
+				if err := fixture.db.First(&gated, "id = ?", fixture.attempt.ID).Error; err != nil {
+					t.Fatalf("load proof-first settled audit retry gate: %v", err)
+				}
+				if gated.RetryAt == nil {
+					t.Fatal("proof-first settled audit retry gate is nil")
+				}
+				fixture.clock = gated.RetryAt.UTC()
+				fixture.coordinator.audit = audit
+				got, err := fixture.coordinator.flushDueSettledAuditBeforeHeartbeat(
+					context.Background(), fixture.attempt,
+				)
+				if err != nil || got {
+					t.Fatalf("proof-first settled audit pending=%v error=%v, want emitted", got, err)
+				}
+				attempt, err := fixture.coordinator.loadAttempt(context.Background(), fixture.attempt.ID)
+				if err != nil {
+					t.Fatalf("load proof-first attempt after settled audit: %v", err)
+				}
+				var claim model.RecoveryPointLifecycleEffectClaim
+				if err := fixture.db.First(&claim, "attempt_id = ?", fixture.attempt.ID).Error; err != nil {
+					t.Fatalf("load proof-first claim after settled audit: %v", err)
+				}
+				var slots int64
+				if err := fixture.db.Model(&model.RecoveryPointLifecycleAuditSlot{}).
+					Where("attempt_id = ?", fixture.attempt.ID).Count(&slots).Error; err != nil {
+					t.Fatalf("count proof-first settled audit slots: %v", err)
+				}
+				if attempt.Phase != backupasset.LifecyclePhaseTombstoning ||
+					attempt.RetryAt != nil || claim.State != claimState ||
+					len(audit.events) != 1 || slots != 1 || fixture.deleter.calls != 0 {
+					t.Fatalf("proof-first settled audit attempt=%+v claim=%q events=%d slots=%d calls=%d",
+						attempt, claim.State, len(audit.events), slots, fixture.deleter.calls)
+				}
+			})
+		})
 	}
-	if attempt.Phase != backupasset.LifecyclePhaseComplete {
-		t.Fatalf("phase = %q, want complete", attempt.Phase)
-	}
+}
+
+func TestLifecycleProviderDeleteProofValidationFailsClosedSQLite(t *testing.T) {
+	t.Run("contradictory tombstone", func(t *testing.T) {
+		fixture := seedProviderDeleteProofFirstFixture(t, 1550, "in_flight")
+		if err := fixture.db.Model(&model.RecoveryPointLifecycleTombstone{}).
+			Where("recovery_point_id = ?", fixture.pointID).
+			Update("terminal_state", "contradictory").Error; err != nil {
+			t.Fatalf("corrupt proof-first tombstone: %v", err)
+		}
+		got, err := fixture.coordinator.Advance(context.Background(), fixture.attempt.ID)
+		if err == nil || !errors.Is(err, backupasset.ErrInvalidState) ||
+			got.Phase != backupasset.LifecyclePhaseProviderDelete || fixture.deleter.calls != 0 {
+			t.Fatalf("contradictory tombstone attempt=%+v calls=%d error=%v, want fail closed",
+				got, fixture.deleter.calls, err)
+		}
+	})
+
+	t.Run("proven claim without tombstone", func(t *testing.T) {
+		fixture := seedProviderDeleteProofFirstFixture(t, 1560, "in_flight")
+		if err := fixture.db.Where("recovery_point_id = ?", fixture.pointID).
+			Delete(&model.RecoveryPointLifecycleTombstone{}).Error; err != nil {
+			t.Fatalf("remove proof-first tombstone: %v", err)
+		}
+		if err := fixture.db.Model(&model.RecoveryPointLifecycleEffectClaim{}).
+			Where("attempt_id = ?", fixture.attempt.ID).
+			Update("state", "proven").Error; err != nil {
+			t.Fatalf("corrupt proof-first claim state: %v", err)
+		}
+		got, err := fixture.coordinator.Advance(context.Background(), fixture.attempt.ID)
+		if err == nil || !errors.Is(err, backupasset.ErrInvalidState) ||
+			got.Phase != backupasset.LifecyclePhaseProviderDelete || fixture.deleter.calls != 0 {
+			t.Fatalf("proven claim without tombstone attempt=%+v calls=%d error=%v, want fail closed",
+				got, fixture.deleter.calls, err)
+		}
+	})
 }
 
 func TestLifecycleBlockedProviderAuditFailureRetriesBeforeLeavingBlocked(t *testing.T) {
 	fixture := newClaimedExpiryFixture(t, 1420)
-	fixture.deleter.err = ErrPointDeletionWORM
+	fixture.deleter.prepareErr = ErrPointDeletionWORM
 	audit := &flakySettledAudit{failLeft: 1}
 	fixture.coordinator.audit = audit
 
@@ -5020,20 +5917,25 @@ func TestLifecycleBlockedProviderAuditFailureRetriesBeforeLeavingBlocked(t *test
 	}
 
 	attempt, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
+	if err != nil || attempt.Phase != backupasset.LifecyclePhaseBlocked {
+		t.Fatalf("provider observer block attempt=%+v error=%v, want blocked", attempt, err)
+	}
+	if audit.settledCalls != 0 {
+		t.Fatalf("settled audit writes before due gate=%d, want 0", audit.settledCalls)
+	}
+	fixture.clock = attempt.RetryAt.Add(time.Second)
+	attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
 	if err == nil {
-		t.Fatal("expected blocked provider audit failure")
+		t.Fatal("expected due blocked audit failure")
 	}
 	if attempt.Phase != backupasset.LifecyclePhaseBlocked {
 		t.Fatalf("phase after failed blocked audit = %q, want %q", attempt.Phase, backupasset.LifecyclePhaseBlocked)
 	}
-	if attempt.Phase == backupasset.LifecyclePhaseComplete {
-		t.Fatal("attempt must not complete without blocked provider audit")
-	}
 	if audit.settledCalls != 0 {
 		t.Fatalf("settled audit writes = %d, want 0", audit.settledCalls)
 	}
-	if attempt.RetryAt == nil {
-		t.Fatal("retry_at must be set after blocked audit failure")
+	if attempt.RetryAt == nil || !attempt.RetryAt.After(fixture.clock) {
+		t.Fatalf("retry_at after blocked audit failure=%v, want future", attempt.RetryAt)
 	}
 
 	audit.failLeft = 0
@@ -5048,14 +5950,14 @@ func TestLifecycleBlockedProviderAuditFailureRetriesBeforeLeavingBlocked(t *test
 	if len(audit.events) == 0 || audit.events[0].Fields[backupasset.AuditFieldStatus] != "blocked" {
 		t.Fatalf("blocked audit=%+v, want settled blocked status", audit.events)
 	}
-	if attempt.Phase == backupasset.LifecyclePhaseComplete {
-		t.Fatal("attempt completed without proving the blocked audit first")
+	if attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+		t.Fatalf("attempt after successful blocked audit=%q, want provider_delete", attempt.Phase)
 	}
 }
 
 func TestLifecycleHealthyBlockedTickDoesNotRewriteSettledAudit(t *testing.T) {
 	fixture := newClaimedExpiryFixture(t, 1520)
-	fixture.deleter.err = ErrPointDeletionWORM
+	fixture.deleter.prepareErr = ErrPointDeletionWORM
 	audit := &recordingSettledAudit{}
 	fixture.coordinator.audit = audit
 
@@ -5073,27 +5975,119 @@ func TestLifecycleHealthyBlockedTickDoesNotRewriteSettledAudit(t *testing.T) {
 		}
 	}
 	attempt, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
-	if err != nil {
-		t.Fatalf("block with healthy settled audit: %v", err)
+	if err != nil || attempt.Phase != backupasset.LifecyclePhaseBlocked {
+		t.Fatalf("provider observer block attempt=%+v error=%v, want blocked", attempt, err)
 	}
-	if attempt.Phase != backupasset.LifecyclePhaseBlocked {
-		t.Fatalf("phase=%q, want blocked", attempt.Phase)
+	if len(audit.events) != 0 {
+		t.Fatalf("settled audit before RetryAt=%d, want 0", len(audit.events))
+	}
+	fixture.clock = attempt.RetryAt.Add(time.Second)
+	attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+	if err != nil || attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+		t.Fatalf("healthy blocked retry attempt=%+v error=%v, want provider_delete", attempt, err)
 	}
 	if len(audit.events) != 1 {
 		t.Fatalf("settled audit writes=%d, want 1", len(audit.events))
 	}
 	attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
-	if err != nil {
-		t.Fatalf("healthy blocked retry before RetryAt: %v", err)
+	if err != nil || attempt.Phase != backupasset.LifecyclePhaseBlocked {
+		t.Fatalf("healthy blocked revisit attempt=%+v error=%v, want blocked", attempt, err)
 	}
 	if len(audit.events) != 1 {
 		t.Fatalf("healthy blocked tick rewrote settled audit writes=%d, want 1", len(audit.events))
 	}
 }
 
+func TestLifecycleSettledAuditAllowsSameTimestampObservationAndTerminal(t *testing.T) {
+	fixture := newClaimedExpiryFixture(t, 7280)
+	audit := &recordingSettledAudit{}
+	fixture.coordinator.audit = audit
+	// Keep the injected clock fixed. A zero retry delay makes the
+	// observation eligible immediately without advancing time.
+	fixedNow := fixture.clock
+	fixture.coordinator.retryDelay = 0
+
+	attempt := fixture.attempt
+	for _, want := range []backupasset.LifecyclePhase{
+		backupasset.LifecyclePhaseRevoking,
+		backupasset.LifecyclePhaseDraining,
+		backupasset.LifecyclePhaseCleaning,
+		backupasset.LifecyclePhaseProviderDelete,
+	} {
+		var err error
+		attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+		if err != nil || attempt.Phase != want {
+			t.Fatalf("Advance to %s attempt=%+v error=%v", want, attempt, err)
+		}
+	}
+	preparation, err := fixture.coordinator.prepareProviderDelete(context.Background(), attempt.ID)
+	if err != nil || !preparation.acquired {
+		t.Fatalf("prepare same-time claim preparation=%+v error=%v", preparation, err)
+	}
+	claimUpdate := fixture.db.Model(&model.RecoveryPointLifecycleEffectClaim{}).
+		Where("attempt_id = ? AND state = ?", attempt.ID, "in_flight").
+		Update("state", "uncertain")
+	if claimUpdate.Error != nil || claimUpdate.RowsAffected != 1 {
+		t.Fatalf("mark same-time claim uncertain rows=%d error=%v", claimUpdate.RowsAffected, claimUpdate.Error)
+	}
+	retryUpdate := fixture.db.Model(&model.RecoveryPointLifecycleAttempt{}).
+		Where("id = ?", attempt.ID).Update("retry_at", fixedNow)
+	if retryUpdate.Error != nil || retryUpdate.RowsAffected != 1 {
+		t.Fatalf("make same-time claim retryable rows=%d error=%v", retryUpdate.RowsAffected, retryUpdate.Error)
+	}
+	fixture.deleter.prepareErr = provider.ErrDeletePointNativeVersionReferenced
+	blocked, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
+	if err != nil || blocked.Phase != backupasset.LifecyclePhaseBlocked {
+		t.Fatalf("provider observer block attempt=%+v error=%v, want blocked", blocked, err)
+	}
+	if len(audit.events) != 1 || audit.events[0].Fields[backupasset.AuditFieldStatus] != "blocked" {
+		t.Fatalf("same-time observation events=%+v, want one blocked event", audit.events)
+	}
+
+	fixture.deleter.prepareErr = nil
+	fixture.deleter.result = PointDeletionResult{
+		Outcome: PointDeletionDeleted, ReceiptDigest: strings.Repeat("a", 64),
+	}
+	tombstoning, err := fixture.coordinator.Advance(context.Background(), blocked.ID)
+	if err != nil || tombstoning.Phase != backupasset.LifecyclePhaseTombstoning {
+		t.Fatalf("same-time terminal attempt=%+v error=%v, want tombstoning", tombstoning, err)
+	}
+	if len(audit.events) != 2 || audit.events[1].Fields[backupasset.AuditFieldStatus] != "deleted" {
+		t.Fatalf("same-time terminal events=%+v, want blocked then deleted", audit.events)
+	}
+
+	var slots []model.RecoveryPointLifecycleAuditSlot
+	if err := fixture.db.Where("attempt_id = ?", blocked.ID).Order("created_at ASC").Find(&slots).Error; err != nil {
+		t.Fatalf("load same-time settled audit slots: %v", err)
+	}
+	if len(slots) != 2 || slots[0].Status != "blocked" || slots[1].Status != "deleted" ||
+		!slots[0].EmittedAt.UTC().Equal(fixedNow.UTC()) || !slots[1].EmittedAt.UTC().Equal(fixedNow.UTC()) {
+		t.Fatalf("same-time settled audit slots=%+v, want blocked/deleted at %s", slots, fixedNow)
+	}
+
+	beforeWrites := len(audit.events)
+	if err := fixture.coordinator.writeSettledDeletionAudit(context.Background(), tombstoning); err != nil {
+		t.Fatalf("idempotent settled audit reread: %v", err)
+	}
+	if pending, err := fixture.coordinator.flushDueSettledAuditBeforeHeartbeat(context.Background(), tombstoning); err != nil || pending {
+		t.Fatalf("worker pre-heartbeat settled audit flush pending=%v error=%v", pending, err)
+	}
+	if len(audit.events) != beforeWrites {
+		t.Fatalf("idempotent settled audit reread/flush writes=%d, want unchanged %d", len(audit.events), beforeWrites)
+	}
+
+	completed, err := fixture.coordinator.Advance(context.Background(), tombstoning.ID)
+	if err != nil || completed.Phase != backupasset.LifecyclePhaseComplete {
+		t.Fatalf("same-time settled lifecycle completion attempt=%+v error=%v, want complete", completed, err)
+	}
+	if len(audit.events) != beforeWrites {
+		t.Fatalf("normal completion rewrote settled audit writes=%d, want unchanged %d", len(audit.events), beforeWrites)
+	}
+}
+
 func TestLifecycleBlockedAuditRetriesAfterReasonChangesToHold(t *testing.T) {
 	fixture := newClaimedExpiryFixture(t, 1620)
-	fixture.deleter.err = ErrPointDeletionWORM
+	fixture.deleter.prepareErr = ErrPointDeletionWORM
 	audit := &flakySettledAudit{failLeft: 1}
 	fixture.coordinator.audit = audit
 
@@ -5111,8 +6105,16 @@ func TestLifecycleBlockedAuditRetriesAfterReasonChangesToHold(t *testing.T) {
 		}
 	}
 	attempt, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
+	if err != nil || attempt.Phase != backupasset.LifecyclePhaseBlocked {
+		t.Fatalf("provider observer block attempt=%+v error=%v, want blocked", attempt, err)
+	}
+	if audit.settledCalls != 0 {
+		t.Fatalf("settled audit writes before due gate=%d, want 0", audit.settledCalls)
+	}
+	fixture.clock = attempt.RetryAt.Add(time.Second)
+	attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
 	if err == nil {
-		t.Fatal("expected blocked provider audit failure")
+		t.Fatal("expected due blocked audit failure")
 	}
 	if audit.settledCalls != 0 {
 		t.Fatalf("settled audit writes=%d, want 0", audit.settledCalls)
@@ -5122,6 +6124,7 @@ func TestLifecycleBlockedAuditRetriesAfterReasonChangesToHold(t *testing.T) {
 		Update("blocked_reason", backupasset.LifecycleBlockedActiveHold).Error; err != nil {
 		t.Fatalf("change blocked reason: %v", err)
 	}
+	audit.failLeft = 0
 	fixture.clock = attempt.RetryAt.Add(time.Second)
 	attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
 	if err != nil {
@@ -5155,7 +6158,7 @@ func TestRegistryPointDeletionRejectsActiveHoldCommittedAfterPreparedAuthority(t
 		RecoveryPointID: fixture.pointID, AttemptID: fixture.attemptID,
 		Operation: backupasset.LifecycleRetentionExpire, authority: authority,
 	}
-	_, err = fixture.adapter.DeleteRecoveryPoint(context.Background(), request)
+	_, err = runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, request)
 	if !errors.Is(err, ErrPointDeletionIdentityConflict) {
 		t.Fatalf("active hold error=%v, want ErrPointDeletionIdentityConflict", err)
 	}
@@ -5177,7 +6180,7 @@ func TestRegistryPointDeletionRevalidatesResolverMutationsInsideTransaction(t *t
 			fixture := newDirectRegistryDeletionFixture(t, transactionalMutationDeleteResolver{
 				mutatePoint: mutation.point, mutateRepository: mutation.repo,
 			}, provider.DeletePointDeleted, nil)
-			_, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+			_, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
 			if !errors.Is(err, ErrPointDeletionIdentityConflict) {
 				t.Fatalf("resolver %s mutation error=%v, want identity conflict", mutation.name, err)
 			}
@@ -5208,7 +6211,7 @@ func TestRegistryPointDeletionPreservesProviderErrorMappings(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, test.err)
-			_, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+			_, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("provider error=%v, want errors.Is(%v)", err, test.want)
 			}
@@ -5221,7 +6224,7 @@ func TestRegistryPointDeletionPreservesProviderErrorMappings(t *testing.T) {
 
 func TestRegistryPointDeletionSucceedsWithPreparedTransactionAuthority(t *testing.T) {
 	fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, nil)
-	result, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+	result, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
 	if err != nil {
 		t.Fatalf("registry point deletion: %v", err)
 	}
@@ -5236,7 +6239,7 @@ func TestRegistryPointDeletionSucceedsWithPreparedTransactionAuthority(t *testin
 func TestRegistryPointDeletionRejectsPostEffectResolvedAccessDrift(t *testing.T) {
 	resolver := &sequencedDeletePointResolver{}
 	fixture := newDirectRegistryDeletionFixture(t, resolver, provider.DeletePointDeleted, nil)
-	_, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+	_, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
 	if !errors.Is(err, ErrPointDeletionIdentityConflict) {
 		t.Fatalf("post-effect resolved access drift error=%v, want ErrPointDeletionIdentityConflict", err)
 	}
@@ -5251,7 +6254,7 @@ func TestRegistryPointDeletionRejectsPostEffectResolvedAccessDrift(t *testing.T)
 func TestRegistryPointDeletionRejectsPostEffectNativeAuthorityDigestDrift(t *testing.T) {
 	resolver := &sequencedDeletePointResolver{native: true}
 	fixture := newDirectRegistryDeletionFixture(t, resolver, provider.DeletePointDeleted, nil)
-	_, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+	_, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
 	if !errors.Is(err, ErrPointDeletionIdentityConflict) {
 		t.Fatalf("post-effect native authority drift error=%v, want ErrPointDeletionIdentityConflict", err)
 	}
@@ -5273,7 +6276,7 @@ func TestRegistryPointDeletionAllowsIndependentRepositoryWriteDuringProviderDele
 	fixture.deleter.release = make(chan struct{})
 	deleteDone := make(chan error, 1)
 	go func() {
-		_, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+		_, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
 		deleteDone <- err
 	}()
 	<-fixture.deleter.entered
@@ -5319,7 +6322,7 @@ func TestRegistryPointDeletionReturnsReceiptWhenHoldAppearsAfterProviderEffect(t
 	}
 	deleteDone := make(chan deletionOutcome, 1)
 	go func() {
-		result, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+		result, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
 		deleteDone <- deletionOutcome{result: result, err: err}
 	}()
 	<-fixture.deleter.entered
@@ -5396,7 +6399,7 @@ func TestRegistryPointDeletionRejectsPostEffectDrift(t *testing.T) {
 			fixture.deleter.release = make(chan struct{})
 			deleteDone := make(chan error, 1)
 			go func() {
-				_, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+				_, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
 				deleteDone <- err
 			}()
 			<-fixture.deleter.entered
@@ -5442,12 +6445,1657 @@ func TestRegistryPointDeletionRejectsInvalidProviderReceipts(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, nil)
 			fixture.deleter.result = test.result
-			_, err := fixture.adapter.DeleteRecoveryPoint(context.Background(), fixture.request)
+			_, err := runRegistryPointDeletionProtocol(context.Background(), fixture.adapter, fixture.request)
 			if !errors.Is(err, backupasset.ErrInvalidState) {
 				t.Fatalf("invalid provider result=%+v error=%v, want ErrInvalidState", test.result, err)
 			}
 			if fixture.deleter.calls != 1 {
 				t.Fatalf("invalid provider result deleter calls=%d, want 1", fixture.deleter.calls)
+			}
+		})
+	}
+}
+
+func TestRegistryPointDeletionExecuteStopsBeforeCanceledRegisteredProvider(t *testing.T) {
+	fixture := newDirectRegistryDeletionFixture(t, registryDeletePointResolver{}, provider.DeletePointDeleted, nil)
+	var prepared preparedPointDeletion
+	if err := fixture.db.Transaction(func(tx *gorm.DB) error {
+		rows, err := lockLifecycleDeleteRowsTx(context.Background(), tx, fixture.request, false)
+		if err != nil {
+			return err
+		}
+		prepared, err = fixture.adapter.Prepare(
+			context.Background(), tx, providerDeletePrepareObserver, fixture.request, rows,
+		)
+		return err
+	}); err != nil {
+		t.Fatalf("prepare direct registry deletion: %v", err)
+	}
+	bounded, cancel, err := fixture.coordinator.providerDeleteBoundContext(
+		context.Background(), fixture.now.Add(time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("bound provider context: %v", err)
+	}
+	cancel()
+	execution, err := fixture.adapter.Execute(bounded, prepared)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled registered provider error=%v, want context.Canceled", err)
+	}
+	if execution.Stage != providerDeleteStageProvider || execution.ProviderCalled {
+		t.Fatalf("canceled registered provider execution=%+v, want provider_invoke/false", execution)
+	}
+	if fixture.deleter.calls != 0 {
+		t.Fatalf("canceled registered provider calls=%d, want zero", fixture.deleter.calls)
+	}
+}
+
+func TestLifecycleProviderReceiptVerifyUsesLeaseBoundContextAndFreshDeadline(t *testing.T) {
+	for index, advanceClock := range []bool{false, true} {
+		name := "live"
+		if advanceClock {
+			name = "absolute_deadline"
+		}
+		t.Run(name, func(t *testing.T) {
+			fixture := newClaimedExpiryFixture(t, 6000+uint64(index)*10)
+			fixture.deleter.result = PointDeletionResult{
+				Outcome: PointDeletionDeleted, ReceiptDigest: strings.Repeat("a", 64),
+			}
+			attempt := fixture.attempt
+			for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+				var err error
+				attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+				if err != nil {
+					t.Fatalf("advance to provider delete: %v", err)
+				}
+			}
+			var lease model.RecoveryPointLease
+			if err := fixture.db.First(&lease, "id = ?", attempt.LeaseID).Error; err != nil {
+				t.Fatalf("load provider lease: %v", err)
+			}
+			fixture.deleter.verify = func(ctx context.Context) {
+				deadline, ok := ctx.Deadline()
+				if !ok || !deadline.Equal(lease.AbsoluteDeadline.UTC()) {
+					t.Errorf("verify deadline=%s present=%t, want lease absolute deadline=%s",
+						deadline, ok, lease.AbsoluteDeadline.UTC())
+				}
+				if advanceClock {
+					fixture.clock = lease.AbsoluteDeadline.UTC()
+				}
+			}
+			got, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
+			if !advanceClock {
+				if err != nil || got.Phase != backupasset.LifecyclePhaseTombstoning {
+					t.Fatalf("live verify attempt=%+v error=%v, want tombstoning", got, err)
+				}
+				if fixture.deleter.verifyCalls != 1 {
+					t.Fatalf("live verify calls=%d, want one", fixture.deleter.verifyCalls)
+				}
+				return
+			}
+			if err == nil || got.Phase != backupasset.LifecyclePhaseProviderDelete {
+				t.Fatalf("deadline-crossing verify attempt=%+v error=%v, want uncertain provider delete", got, err)
+			}
+			var claim model.RecoveryPointLifecycleEffectClaim
+			if err := fixture.db.First(&claim, "attempt_id = ?", attempt.ID).Error; err != nil {
+				t.Fatalf("load deadline-crossing claim: %v", err)
+			}
+			if claim.State != "uncertain" {
+				t.Fatalf("deadline-crossing claim state=%q, want uncertain", claim.State)
+			}
+			var tombstoneCount int64
+			if err := fixture.db.Model(&model.RecoveryPointLifecycleTombstone{}).
+				Where("recovery_point_id = ?", fixture.pointID).Count(&tombstoneCount).Error; err != nil {
+				t.Fatalf("count deadline-crossing tombstones: %v", err)
+			}
+			if tombstoneCount != 0 {
+				t.Fatalf("deadline-crossing verify tombstones=%d, want zero", tombstoneCount)
+			}
+		})
+	}
+}
+func TestLifecycleTakeoverRenewsActiveShortLeaseAtHorizon(t *testing.T) {
+	fixture := newClaimedExpiryFixture(t, 6400)
+	attempt := fixture.attempt
+	for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+		var err error
+		attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+		if err != nil {
+			t.Fatalf("advance short-live takeover fixture: %v", err)
+		}
+	}
+	fixture.deleter.err = errors.New("seed uncertain provider execution")
+	failed, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
+	fixture.deleter.err = nil
+	if err == nil || failed.Phase != backupasset.LifecyclePhaseProviderDelete || failed.RetryAt == nil {
+		t.Fatalf("seed short-live takeover claim attempt=%+v error=%v", failed, err)
+	}
+	fixture.clock = failed.RetryAt.UTC().Add(time.Second)
+	var beforeClaim model.RecoveryPointLifecycleEffectClaim
+	if err := fixture.db.First(&beforeClaim, "attempt_id = ?", attempt.ID).Error; err != nil {
+		t.Fatalf("load short-live takeover claim: %v", err)
+	}
+	var beforeLease model.RecoveryPointLease
+	if err := fixture.db.First(&beforeLease, "id = ?", beforeClaim.LeaseID).Error; err != nil {
+		t.Fatalf("load short-live takeover lease: %v", err)
+	}
+	nearExpiry := fixture.clock.Add(time.Second)
+	if err := fixture.db.Model(&model.RecoveryPointLease{}).Where("id = ?", beforeLease.ID).
+		Update("lease_expires_at", nearExpiry).Error; err != nil {
+		t.Fatalf("set short-live near-expiry lease: %v", err)
+	}
+	if err := fixture.db.Model(&model.RecoveryPointLifecycleAttempt{}).Where("id = ?", attempt.ID).
+		Update("retry_at", fixture.clock.Add(-time.Second)).Error; err != nil {
+		t.Fatalf("make short-live takeover retry due: %v", err)
+	}
+	if err := fixture.db.First(&beforeLease, "id = ?", beforeLease.ID).Error; err != nil {
+		t.Fatalf("reload short-live near-expiry lease: %v", err)
+	}
+	beforeAttempt, err := fixture.coordinator.loadAttempt(context.Background(), attempt.ID)
+	if err != nil {
+		t.Fatalf("load short-live near-expiry attempt: %v", err)
+	}
+	fixture.deleter.result = PointDeletionResult{
+		Outcome: PointDeletionDeleted, ReceiptDigest: strings.Repeat("7", 64),
+	}
+	beforeProviderCalls := fixture.deleter.calls
+	got, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
+	if err != nil || got.Phase != backupasset.LifecyclePhaseTombstoning ||
+		fixture.deleter.calls != beforeProviderCalls+1 {
+		t.Fatalf("short-live near-expiry takeover attempt=%+v error=%v provider_calls=%d", got, err, fixture.deleter.calls)
+	}
+	var afterClaim model.RecoveryPointLifecycleEffectClaim
+	if err := fixture.db.First(&afterClaim, "attempt_id = ?", attempt.ID).Error; err != nil {
+		t.Fatalf("load refreshed short-live takeover claim: %v", err)
+	}
+	var afterLease model.RecoveryPointLease
+	if err := fixture.db.First(&afterLease, "id = ?", beforeLease.ID).Error; err != nil {
+		t.Fatalf("load refreshed short-live takeover lease: %v", err)
+	}
+	horizon := fixture.clock.UTC().Add(fixture.coordinator.effectClaimTTL)
+	if afterClaim.State != "proven" ||
+		afterClaim.LeaseID != beforeClaim.LeaseID ||
+		afterClaim.LeaseAttemptID != beforeClaim.LeaseAttemptID ||
+		afterClaim.LeaseFenceTokenHash != beforeClaim.LeaseFenceTokenHash ||
+		!afterClaim.DeadlineAt.UTC().Equal(horizon) ||
+		!afterLease.LeaseExpiresAt.UTC().After(horizon) ||
+		!afterLease.AbsoluteDeadline.UTC().Equal(beforeLease.AbsoluteDeadline.UTC()) ||
+		afterLease.AttemptID != beforeLease.AttemptID ||
+		afterLease.FenceToken != beforeLease.FenceToken ||
+		got.TransitionRevision != beforeAttempt.TransitionRevision+1 {
+		t.Fatalf("short-live near-expiry horizon claim=%+v before_claim=%+v lease=%+v before_lease=%+v attempt=%+v before_attempt=%+v horizon=%s",
+			afterClaim, beforeClaim, afterLease, beforeLease, got, beforeAttempt, horizon)
+	}
+}
+func TestLifecycleHeartbeatInitialLoadFailureIsFailClosed(t *testing.T) {
+	fixture := newClaimedExpiryFixture(t, 6460)
+	fixture.deleter.result = PointDeletionResult{
+		Outcome: PointDeletionDeleted, ReceiptDigest: strings.Repeat("8", 64),
+	}
+	attempt := fixture.attempt
+	for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+		var err error
+		attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+		if err != nil {
+			t.Fatalf("advance heartbeat fixture to provider_delete: %v", err)
+		}
+	}
+	attempt, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
+	if err != nil || attempt.Phase != backupasset.LifecyclePhaseTombstoning {
+		t.Fatalf("settle heartbeat fixture: attempt=%+v error=%v", attempt, err)
+	}
+
+	var beforeAttempt model.RecoveryPointLifecycleAttempt
+	if err := fixture.db.First(&beforeAttempt, "id = ?", attempt.ID).Error; err != nil {
+		t.Fatalf("load heartbeat attempt snapshot: %v", err)
+	}
+	var beforeLease model.RecoveryPointLease
+	if err := fixture.db.First(&beforeLease, "id = ?", beforeAttempt.LeaseID).Error; err != nil {
+		t.Fatalf("load heartbeat lease snapshot: %v", err)
+	}
+	var beforeClaim model.RecoveryPointLifecycleEffectClaim
+	if err := fixture.db.First(&beforeClaim, "attempt_id = ?", attempt.ID).Error; err != nil {
+		t.Fatalf("load heartbeat claim snapshot: %v", err)
+	}
+	var beforeTombstone model.RecoveryPointLifecycleTombstone
+	if err := fixture.db.Where("recovery_point_id = ? AND terminal_operation = ?", fixture.pointID, attempt.Operation).
+		First(&beforeTombstone).Error; err != nil {
+		t.Fatalf("load heartbeat tombstone snapshot: %v", err)
+	}
+
+	loadErr := errors.New("heartbeat initial attempt load failed")
+	var loadCalls int
+	const callbackName = "test:heartbeat-initial-load-failure"
+	if err := fixture.db.Callback().Query().Before("gorm:query").Register(callbackName, func(query *gorm.DB) {
+		if query.Statement == nil || query.Statement.Table != "recovery_point_lifecycle_attempts" {
+			return
+		}
+		if _, ok := query.Statement.Dest.(*model.RecoveryPointLifecycleAttempt); !ok || loadCalls != 0 {
+			return
+		}
+		loadCalls++
+		_ = query.AddError(loadErr)
+	}); err != nil {
+		t.Fatalf("register heartbeat initial-load failure: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := fixture.db.Callback().Query().Remove(callbackName); err != nil {
+			t.Errorf("remove heartbeat initial-load failure: %v", err)
+		}
+	})
+
+	got, err := fixture.coordinator.Heartbeat(context.Background(), attempt.ID)
+	if !errors.Is(err, loadErr) || got.ID != "" || loadCalls != 1 {
+		t.Fatalf("heartbeat initial-load failure attempt=%+v error=%v load_calls=%d, want wrapped failure/no result/one load",
+			got, err, loadCalls)
+	}
+
+	var afterAttempt model.RecoveryPointLifecycleAttempt
+	if err := fixture.db.First(&afterAttempt, "id = ?", attempt.ID).Error; err != nil {
+		t.Fatalf("load heartbeat attempt after failure: %v", err)
+	}
+	var afterLease model.RecoveryPointLease
+	if err := fixture.db.First(&afterLease, "id = ?", beforeLease.ID).Error; err != nil {
+		t.Fatalf("load heartbeat lease after failure: %v", err)
+	}
+	var afterClaim model.RecoveryPointLifecycleEffectClaim
+	if err := fixture.db.First(&afterClaim, "attempt_id = ?", attempt.ID).Error; err != nil {
+		t.Fatalf("load heartbeat claim after failure: %v", err)
+	}
+	var afterTombstone model.RecoveryPointLifecycleTombstone
+	if err := fixture.db.Where("recovery_point_id = ? AND terminal_operation = ?", fixture.pointID, attempt.Operation).
+		First(&afterTombstone).Error; err != nil {
+		t.Fatalf("load heartbeat tombstone after failure: %v", err)
+	}
+	if !reflect.DeepEqual(beforeAttempt, afterAttempt) ||
+		!reflect.DeepEqual(beforeLease, afterLease) ||
+		!reflect.DeepEqual(beforeClaim, afterClaim) ||
+		!reflect.DeepEqual(beforeTombstone, afterTombstone) {
+		t.Fatalf("heartbeat initial-load failure mutated durable state attempt=%t lease=%t claim=%t tombstone=%t",
+			!reflect.DeepEqual(beforeAttempt, afterAttempt),
+			!reflect.DeepEqual(beforeLease, afterLease),
+			!reflect.DeepEqual(beforeClaim, afterClaim),
+			!reflect.DeepEqual(beforeTombstone, afterTombstone))
+	}
+}
+func TestLifecycleTakeoverLeaseErrorsPreserveConflictAndCause(t *testing.T) {
+	t.Run("renew preserves lease fence sentinel", func(t *testing.T) {
+		fixture := newClaimedExpiryFixture(t, 6480)
+		tx := fixture.db.Begin()
+		if tx.Error != nil {
+			t.Fatalf("begin renew error transaction: %v", tx.Error)
+		}
+		rows, err := lockProviderDeleteRowsByAttemptTx(context.Background(), tx, fixture.attempt.ID)
+		if err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("lock renew error rows: %v", err)
+		}
+		originalFence := rows.lease.FenceToken
+		rows.lease.FenceToken = strings.Repeat("f", 64)
+		if rows.lease.FenceToken == originalFence {
+			rows.lease.FenceToken = strings.Repeat("e", 64)
+		}
+		err = fixture.coordinator.takeoverProviderLeaseTx(context.Background(), tx, &rows)
+		_ = tx.Rollback()
+		if err == nil || !errors.Is(err, backupasset.ErrConflict) ||
+			!errors.Is(err, backupasset.ErrLeaseFenceLost) ||
+			!strings.Contains(err.Error(), string(providerDeleteStageClaimAcquire)) {
+			t.Fatalf("renew error=%v, want claim_acquire/ErrConflict/ErrLeaseFenceLost", err)
+		}
+	})
+
+	t.Run("takeover preserves context sentinel", func(t *testing.T) {
+		fixture := newClaimedExpiryFixture(t, 6490)
+		result := fixture.db.Model(&model.RecoveryPointLease{}).
+			Where("id = ?", fixture.attempt.LeaseID).
+			Updates(map[string]any{
+				"lease_expires_at":  fixture.clock.Add(-time.Second),
+				"absolute_deadline": fixture.clock.Add(time.Hour),
+			})
+		if result.Error != nil || result.RowsAffected != 1 {
+			t.Fatalf("expire takeover error lease rows=%d error=%v", result.RowsAffected, result.Error)
+		}
+		tx := fixture.db.Begin()
+		if tx.Error != nil {
+			t.Fatalf("begin takeover error transaction: %v", tx.Error)
+		}
+		rows, err := lockProviderDeleteRowsByAttemptTx(context.Background(), tx, fixture.attempt.ID)
+		if err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("lock takeover error rows: %v", err)
+		}
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		err = fixture.coordinator.takeoverProviderLeaseTx(cancelled, tx, &rows)
+		_ = tx.Rollback()
+		if err == nil || !errors.Is(err, backupasset.ErrConflict) ||
+			!errors.Is(err, context.Canceled) ||
+			!strings.Contains(err.Error(), string(providerDeleteStageClaimAcquire)) {
+			t.Fatalf("takeover error=%v, want claim_acquire/ErrConflict/context.Canceled", err)
+		}
+	})
+	t.Run("absolute expiry update preserves database sentinel", func(t *testing.T) {
+		fixture := newClaimedExpiryFixture(t, 7230)
+		var lease model.RecoveryPointLease
+		if err := fixture.db.First(&lease, "id = ?", fixture.attempt.LeaseID).Error; err != nil {
+			t.Fatalf("load absolute-expiry update lease: %v", err)
+		}
+		fixture.clock = lease.AbsoluteDeadline.UTC().Add(time.Second)
+		updateErr := errors.New("takeover absolute-expiry update sentinel")
+		var updateCalls int
+		const callbackName = "test:takeover-absolute-expiry-update-error"
+		if err := fixture.db.Callback().Update().Before("gorm:update").Register(callbackName, func(query *gorm.DB) {
+			if query.Statement == nil || query.Statement.Schema == nil ||
+				query.Statement.Schema.Table != (model.RecoveryPointLease{}).TableName() || updateCalls != 0 {
+				return
+			}
+			updateCalls++
+			_ = query.AddError(updateErr)
+		}); err != nil {
+			t.Fatalf("register absolute-expiry update error: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := fixture.db.Callback().Update().Remove(callbackName); err != nil {
+				t.Errorf("remove absolute-expiry update error: %v", err)
+			}
+		})
+		tx := fixture.db.Begin()
+		if tx.Error != nil {
+			t.Fatalf("begin absolute-expiry update error transaction: %v", tx.Error)
+		}
+		rows, err := lockProviderDeleteRowsByAttemptTx(context.Background(), tx, fixture.attempt.ID)
+		if err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("lock absolute-expiry update error rows: %v", err)
+		}
+		err = fixture.coordinator.takeoverProviderLeaseTx(context.Background(), tx, &rows)
+		_ = tx.Rollback()
+		if err == nil || !errors.Is(err, updateErr) || !errors.Is(err, backupasset.ErrConflict) ||
+			!strings.Contains(err.Error(), string(providerDeleteStageClaimAcquire)) || updateCalls != 1 {
+			t.Fatalf("absolute-expiry update error=%v update_calls=%d, want claim_acquire/ErrConflict/sentinel/one update", err, updateCalls)
+		}
+	})
+
+	t.Run("absolute expiry update preserves lost CAS conflict", func(t *testing.T) {
+		fixture := newClaimedExpiryFixture(t, 7240)
+		var lease model.RecoveryPointLease
+		if err := fixture.db.First(&lease, "id = ?", fixture.attempt.LeaseID).Error; err != nil {
+			t.Fatalf("load absolute-expiry CAS lease: %v", err)
+		}
+		fixture.clock = lease.AbsoluteDeadline.UTC().Add(time.Second)
+		var updateCalls int
+		const callbackName = "test:takeover-absolute-expiry-cas"
+		if err := fixture.db.Callback().Update().After("gorm:update").Register(callbackName, func(query *gorm.DB) {
+			if query.Statement == nil || query.Statement.Schema == nil ||
+				query.Statement.Schema.Table != (model.RecoveryPointLease{}).TableName() || updateCalls != 0 {
+				return
+			}
+			updateCalls++
+			query.RowsAffected = 0
+		}); err != nil {
+			t.Fatalf("register absolute-expiry CAS: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := fixture.db.Callback().Update().Remove(callbackName); err != nil {
+				t.Errorf("remove absolute-expiry CAS: %v", err)
+			}
+		})
+		tx := fixture.db.Begin()
+		if tx.Error != nil {
+			t.Fatalf("begin absolute-expiry CAS transaction: %v", tx.Error)
+		}
+		rows, err := lockProviderDeleteRowsByAttemptTx(context.Background(), tx, fixture.attempt.ID)
+		if err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("lock absolute-expiry CAS rows: %v", err)
+		}
+		err = fixture.coordinator.takeoverProviderLeaseTx(context.Background(), tx, &rows)
+		_ = tx.Rollback()
+		if err == nil || !errors.Is(err, backupasset.ErrConflict) ||
+			!strings.Contains(err.Error(), string(providerDeleteStageClaimAcquire)) || updateCalls != 1 {
+			t.Fatalf("absolute-expiry CAS error=%v update_calls=%d, want claim_acquire/ErrConflict/one update", err, updateCalls)
+		}
+	})
+
+	t.Run("fresh acquisition after reconciled expiry preserves database sentinel", func(t *testing.T) {
+		fixture := newClaimedExpiryFixture(t, 7250)
+		attempt := fixture.attempt
+		for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+			var err error
+			attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+			if err != nil {
+				t.Fatalf("advance fresh-acquisition fixture to provider_delete: %v", err)
+			}
+		}
+		fixture.attempt = attempt
+		preparation, err := fixture.coordinator.prepareProviderDelete(context.Background(), attempt.ID)
+		if err != nil || !preparation.acquired {
+			t.Fatalf("prepare fresh-acquisition fixture preparation=%+v error=%v", preparation, err)
+		}
+		var oldLease model.RecoveryPointLease
+		if err := fixture.db.First(&oldLease, "id = ?", attempt.LeaseID).Error; err != nil {
+			t.Fatalf("load fresh-acquisition lease: %v", err)
+		}
+		fixture.clock = oldLease.AbsoluteDeadline.UTC().Add(time.Second)
+		reconciled, err := fixture.coordinator.leases.ReconcileExpired(context.Background())
+		if err != nil || reconciled != 1 {
+			t.Fatalf("reconcile fresh-acquisition lease count=%d error=%v, want one", reconciled, err)
+		}
+		acquireErr := errors.New("fresh takeover acquisition sentinel")
+		var acquireCalls int
+		const callbackName = "test:fresh-takeover-acquisition-error"
+		if err := fixture.db.Callback().Create().Before("gorm:create").Register(callbackName, func(query *gorm.DB) {
+			if query.Statement == nil || query.Statement.Schema == nil ||
+				query.Statement.Schema.Table != (model.RecoveryPointLease{}).TableName() || acquireCalls != 0 {
+				return
+			}
+			acquireCalls++
+			_ = query.AddError(acquireErr)
+		}); err != nil {
+			t.Fatalf("register fresh-acquisition error: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := fixture.db.Callback().Create().Remove(callbackName); err != nil {
+				t.Errorf("remove fresh-acquisition error: %v", err)
+			}
+		})
+		tx := fixture.db.Begin()
+		if tx.Error != nil {
+			t.Fatalf("begin fresh-acquisition transaction: %v", tx.Error)
+		}
+		rows, err := lockProviderDeleteRowsByAttemptTx(context.Background(), tx, attempt.ID)
+		if err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("lock fresh-acquisition rows: %v", err)
+		}
+		err = fixture.coordinator.takeoverProviderLeaseTx(context.Background(), tx, &rows)
+		_ = tx.Rollback()
+		if err == nil || !errors.Is(err, acquireErr) || !errors.Is(err, backupasset.ErrConflict) ||
+			!strings.Contains(err.Error(), string(providerDeleteStageClaimAcquire)) || acquireCalls != 1 {
+			t.Fatalf("fresh acquisition error=%v acquire_calls=%d, want claim_acquire/ErrConflict/sentinel/one create", err, acquireCalls)
+		}
+	})
+
+}
+
+func TestLifecycleProviderDeleteReceiptRejectsForeignLeaseAuthority(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate map[string]any
+	}{
+		{
+			name:   "owner",
+			mutate: map[string]any{"owner_id": "foreign-owner"},
+		},
+		{
+			name:   "holder",
+			mutate: map[string]any{"holder_type": string(backupasset.LeaseHolderContentSession)},
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newClaimedExpiryFixture(t, 6490)
+			fixture.deleter.result = PointDeletionResult{
+				Outcome:       PointDeletionDeleted,
+				ReceiptDigest: strings.Repeat("b", 64),
+			}
+			attempt := fixture.attempt
+			for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+				var err error
+				attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+				if err != nil {
+					t.Fatalf("advance to provider_delete: %v", err)
+				}
+			}
+			preparation, err := fixture.coordinator.prepareProviderDelete(context.Background(), attempt.ID)
+			if err != nil {
+				t.Fatalf("prepare provider delete: %v", err)
+			}
+			if !preparation.acquired {
+				t.Fatal("prepare provider delete did not acquire effect claim")
+			}
+			execution, err := fixture.coordinator.executeProviderDelete(context.Background(), preparation)
+			if err != nil {
+				t.Fatalf("execute provider delete: %v", err)
+			}
+			beforeAttempt, err := fixture.coordinator.loadAttempt(context.Background(), attempt.ID)
+			if err != nil {
+				t.Fatalf("load attempt before receipt: %v", err)
+			}
+			var beforeClaim model.RecoveryPointLifecycleEffectClaim
+			if err := fixture.db.Where("attempt_id = ?", preparation.binding.AttemptID).First(&beforeClaim).Error; err != nil {
+				t.Fatalf("load claim before receipt: %v", err)
+			}
+			if err := fixture.db.Model(&model.RecoveryPointLease{}).
+				Where("id = ?", preparation.binding.LeaseID).
+				Updates(testCase.mutate).Error; err != nil {
+				t.Fatalf("mutate lease authority: %v", err)
+			}
+			var mutatedLease model.RecoveryPointLease
+			if err := fixture.db.Where("id = ?", preparation.binding.LeaseID).First(&mutatedLease).Error; err != nil {
+				t.Fatalf("load mutated lease: %v", err)
+			}
+			if _, err := fixture.coordinator.persistProviderDeleteReceiptWithClaim(context.Background(), preparation, execution); err == nil ||
+				!errors.Is(err, provider.ErrDeletePointIdentityConflict) {
+				t.Fatalf("persist receipt error=%v, want provider identity conflict", err)
+			}
+			afterAttempt, err := fixture.coordinator.loadAttempt(context.Background(), attempt.ID)
+			if err != nil {
+				t.Fatalf("load attempt after receipt: %v", err)
+			}
+			var afterClaim model.RecoveryPointLifecycleEffectClaim
+			if err := fixture.db.Where("attempt_id = ?", preparation.binding.AttemptID).First(&afterClaim).Error; err != nil {
+				t.Fatalf("load claim after receipt: %v", err)
+			}
+			var afterLease model.RecoveryPointLease
+			if err := fixture.db.Where("id = ?", preparation.binding.LeaseID).First(&afterLease).Error; err != nil {
+				t.Fatalf("load lease after receipt: %v", err)
+			}
+			if !reflect.DeepEqual(beforeAttempt, afterAttempt) {
+				t.Fatalf("attempt mutated after foreign lease receipt rejection:\nbefore=%+v\nafter=%+v", beforeAttempt, afterAttempt)
+			}
+			if !reflect.DeepEqual(beforeClaim, afterClaim) {
+				t.Fatalf("claim mutated after foreign lease receipt rejection:\nbefore=%+v\nafter=%+v", beforeClaim, afterClaim)
+			}
+			if !reflect.DeepEqual(mutatedLease, afterLease) {
+				t.Fatalf("lease mutated after foreign lease receipt rejection:\nbefore=%+v\nafter=%+v", mutatedLease, afterLease)
+			}
+			var tombstoneCount int64
+			if err := fixture.db.Model(&model.RecoveryPointLifecycleTombstone{}).Count(&tombstoneCount).Error; err != nil {
+				t.Fatalf("count tombstones: %v", err)
+			}
+			if tombstoneCount != 0 {
+				t.Fatalf("tombstones=%d after foreign lease receipt rejection, want 0", tombstoneCount)
+			}
+			if fixture.deleter.verifyCalls != 0 {
+				t.Fatalf("verify calls=%d after foreign lease receipt rejection, want 0", fixture.deleter.verifyCalls)
+			}
+		})
+	}
+}
+func TestLifecycleEffectClaimRenewPreservesDatabaseError(t *testing.T) {
+	fixture := newClaimedExpiryFixture(t, 7280)
+	attempt := fixture.attempt
+	for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+		var err error
+		attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+		if err != nil {
+			t.Fatalf("advance renewal error fixture to provider_delete: %v", err)
+		}
+	}
+	preparation, err := fixture.coordinator.prepareProviderDelete(context.Background(), attempt.ID)
+	if err != nil || !preparation.acquired {
+		t.Fatalf("prepare renewal error fixture preparation=%+v error=%v", preparation, err)
+	}
+	var beforeLease model.RecoveryPointLease
+	if err := fixture.db.First(&beforeLease, "id = ?", preparation.binding.LeaseID).Error; err != nil {
+		t.Fatalf("load lease before renewal error: %v", err)
+	}
+	var beforeClaim model.RecoveryPointLifecycleEffectClaim
+	if err := fixture.db.First(&beforeClaim, "attempt_id = ?", preparation.binding.AttemptID).Error; err != nil {
+		t.Fatalf("load claim before renewal error: %v", err)
+	}
+
+	updateErr := errors.New("renew effect claim update sentinel")
+	var updateCalls int
+	const callbackName = "test:renew-effect-claim-update-error"
+	if err := fixture.db.Callback().Update().Before("gorm:update").Register(callbackName, func(query *gorm.DB) {
+		if query.Statement == nil || query.Statement.Schema == nil ||
+			query.Statement.Schema.Table != (model.RecoveryPointLifecycleEffectClaim{}).TableName() || updateCalls != 0 {
+			return
+		}
+		updateCalls++
+		_ = query.AddError(updateErr)
+	}); err != nil {
+		t.Fatalf("register renewal update error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := fixture.db.Callback().Update().Remove(callbackName); err != nil {
+			t.Errorf("remove renewal update error: %v", err)
+		}
+	})
+
+	err = fixture.coordinator.renewEffectClaim(context.Background(), &preparation.binding)
+	if err == nil || !errors.Is(err, updateErr) || errors.Is(err, backupasset.ErrConflict) ||
+		strings.Count(err.Error(), string(providerDeleteStageClaimRenew)) != 1 || updateCalls != 1 {
+		t.Fatalf("renewal update error=%v update_calls=%d, want one claim_renew tag and preserved non-conflict sentinel", err, updateCalls)
+	}
+	var afterLease model.RecoveryPointLease
+	if err := fixture.db.First(&afterLease, "id = ?", preparation.binding.LeaseID).Error; err != nil {
+		t.Fatalf("load lease after renewal error: %v", err)
+	}
+	var afterClaim model.RecoveryPointLifecycleEffectClaim
+	if err := fixture.db.First(&afterClaim, "attempt_id = ?", preparation.binding.AttemptID).Error; err != nil {
+		t.Fatalf("load claim after renewal error: %v", err)
+	}
+	if !reflect.DeepEqual(beforeLease, afterLease) {
+		t.Fatalf("lease mutated after renewal update rollback: before=%+v after=%+v", beforeLease, afterLease)
+	}
+	if !reflect.DeepEqual(beforeClaim, afterClaim) {
+		t.Fatalf("claim mutated after renewal update rollback: before=%+v after=%+v", beforeClaim, afterClaim)
+	}
+}
+func TestLifecycleEffectClaimRenewPreservesLeaseLockDatabaseError(t *testing.T) {
+	fixture := newClaimedExpiryFixture(t, 7290)
+	attempt := fixture.attempt
+	for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+		var err error
+		attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+		if err != nil {
+			t.Fatalf("advance renewal lock fixture to provider_delete: %v", err)
+		}
+	}
+	preparation, err := fixture.coordinator.prepareProviderDelete(context.Background(), attempt.ID)
+	if err != nil || !preparation.acquired {
+		t.Fatalf("prepare renewal lock fixture preparation=%+v error=%v", preparation, err)
+	}
+	var beforeLease model.RecoveryPointLease
+	if err := fixture.db.First(&beforeLease, "id = ?", preparation.binding.LeaseID).Error; err != nil {
+		t.Fatalf("load lease before renewal lock error: %v", err)
+	}
+	var beforeClaim model.RecoveryPointLifecycleEffectClaim
+	if err := fixture.db.First(&beforeClaim, "attempt_id = ?", preparation.binding.AttemptID).Error; err != nil {
+		t.Fatalf("load claim before renewal lock error: %v", err)
+	}
+
+	queryErr := errors.New("renew effect claim lease lock sentinel")
+	var queryCalls int
+	const callbackName = "test:renew-effect-claim-lease-lock-error"
+	if err := fixture.db.Callback().Query().Before("gorm:query").Register(callbackName, func(query *gorm.DB) {
+		if query.Statement == nil || query.Statement.Schema == nil ||
+			query.Statement.Schema.Table != (model.RecoveryPointLease{}).TableName() || queryCalls != 0 {
+			return
+		}
+		queryCalls++
+		_ = query.AddError(queryErr)
+	}); err != nil {
+		t.Fatalf("register renewal lease lock error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := fixture.db.Callback().Query().Remove(callbackName); err != nil {
+			t.Errorf("remove renewal lease lock error: %v", err)
+		}
+	})
+
+	err = fixture.coordinator.renewEffectClaim(context.Background(), &preparation.binding)
+	if err == nil || !errors.Is(err, queryErr) || errors.Is(err, backupasset.ErrConflict) ||
+		errors.Is(err, provider.ErrDeletePointIdentityConflict) ||
+		strings.Count(err.Error(), string(providerDeleteStageClaimRenew)) != 1 || queryCalls != 1 {
+		t.Fatalf("renewal lease lock error=%v query_calls=%d, want one claim_renew tag and preserved storage sentinel", err, queryCalls)
+	}
+	var afterLease model.RecoveryPointLease
+	if err := fixture.db.First(&afterLease, "id = ?", preparation.binding.LeaseID).Error; err != nil {
+		t.Fatalf("load lease after renewal lock error: %v", err)
+	}
+	var afterClaim model.RecoveryPointLifecycleEffectClaim
+	if err := fixture.db.First(&afterClaim, "attempt_id = ?", preparation.binding.AttemptID).Error; err != nil {
+		t.Fatalf("load claim after renewal lock error: %v", err)
+	}
+	if !reflect.DeepEqual(beforeLease, afterLease) {
+		t.Fatalf("lease mutated after renewal lock error: before=%+v after=%+v", beforeLease, afterLease)
+	}
+	if !reflect.DeepEqual(beforeClaim, afterClaim) {
+		t.Fatalf("claim mutated after renewal lock error: before=%+v after=%+v", beforeClaim, afterClaim)
+	}
+}
+
+func TestLifecycleEffectClaimRenewRejectsForeignLeaseAuthority(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate map[string]any
+	}{
+		{
+			name:   "owner",
+			mutate: map[string]any{"owner_id": "foreign-owner"},
+		},
+		{
+			name:   "holder",
+			mutate: map[string]any{"holder_type": string(backupasset.LeaseHolderContentSession)},
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newClaimedExpiryFixture(t, 6490)
+			attempt := fixture.attempt
+			for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+				var err error
+				attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+				if err != nil {
+					t.Fatalf("advance to provider_delete: %v", err)
+				}
+			}
+			preparation, err := fixture.coordinator.prepareProviderDelete(context.Background(), attempt.ID)
+			if err != nil {
+				t.Fatalf("prepare provider delete: %v", err)
+			}
+			if !preparation.acquired {
+				t.Fatal("prepare provider delete did not acquire effect claim")
+			}
+			var beforeClaim model.RecoveryPointLifecycleEffectClaim
+			if err := fixture.db.Where("attempt_id = ?", preparation.binding.AttemptID).First(&beforeClaim).Error; err != nil {
+				t.Fatalf("load claim before renewal: %v", err)
+			}
+			if err := fixture.db.Model(&model.RecoveryPointLease{}).
+				Where("id = ?", preparation.binding.LeaseID).
+				Updates(testCase.mutate).Error; err != nil {
+				t.Fatalf("mutate lease authority: %v", err)
+			}
+			var mutatedLease model.RecoveryPointLease
+			if err := fixture.db.Where("id = ?", preparation.binding.LeaseID).First(&mutatedLease).Error; err != nil {
+				t.Fatalf("load mutated lease: %v", err)
+			}
+			if err := fixture.coordinator.renewEffectClaim(context.Background(), &preparation.binding); err == nil ||
+				!errors.Is(err, provider.ErrDeletePointIdentityConflict) {
+				t.Fatalf("renew effect claim error=%v, want provider identity conflict", err)
+			}
+			var afterClaim model.RecoveryPointLifecycleEffectClaim
+			if err := fixture.db.Where("attempt_id = ?", preparation.binding.AttemptID).First(&afterClaim).Error; err != nil {
+				t.Fatalf("load claim after renewal: %v", err)
+			}
+			var afterLease model.RecoveryPointLease
+			if err := fixture.db.Where("id = ?", preparation.binding.LeaseID).First(&afterLease).Error; err != nil {
+				t.Fatalf("load lease after renewal: %v", err)
+			}
+			if !reflect.DeepEqual(beforeClaim, afterClaim) {
+				t.Fatalf("claim mutated after foreign lease renewal rejection:\nbefore=%+v\nafter=%+v", beforeClaim, afterClaim)
+			}
+			if !reflect.DeepEqual(mutatedLease, afterLease) {
+				t.Fatalf("lease mutated after foreign lease renewal rejection:\nbefore=%+v\nafter=%+v", mutatedLease, afterLease)
+			}
+		})
+	}
+}
+
+func TestLifecycleProviderProofProgressAcceptsForeignLeaseAuthority(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate map[string]any
+	}{
+		{
+			name:   "owner",
+			mutate: map[string]any{"owner_id": "foreign-owner"},
+		},
+		{
+			name:   "holder",
+			mutate: map[string]any{"holder_type": string(backupasset.LeaseHolderContentSession)},
+		},
+		{
+			name:   "missing owner",
+			mutate: map[string]any{"owner_id": ""},
+		},
+		{
+			name:   "missing holder",
+			mutate: map[string]any{"holder_type": ""},
+		},
+		{
+			name:   "rebound attempt",
+			mutate: map[string]any{"attempt_id": testOpaqueID(9898)},
+		},
+		{
+			name:   "rebound fence",
+			mutate: map[string]any{"fence_token": strings.Repeat("f", 64)},
+		},
+	}
+	for index, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := seedProviderDeleteProofFirstFixture(t, 6810+uint64(index*10), "in_flight")
+			now := fixture.clock.UTC()
+			leaseExpiry := now.Add(10 * time.Minute)
+			absoluteDeadline := now.Add(time.Hour)
+			if err := fixture.db.Model(&model.RecoveryPointLease{}).
+				Where("id = ?", fixture.attempt.LeaseID).
+				Updates(map[string]any{
+					"status": backupasset.LeaseActive, "holder_type": string(backupasset.LeaseHolderRetentionWorker),
+					"owner_id": fixture.coordinator.leaseOwnerID, "lease_expires_at": leaseExpiry,
+					"absolute_deadline": absoluteDeadline, "updated_at": now,
+				}).Error; err != nil {
+				t.Fatalf("restore active proof lease: %v", err)
+			}
+			if err := fixture.db.Model(&model.RecoveryPointLease{}).
+				Where("id = ?", fixture.attempt.LeaseID).Updates(testCase.mutate).Error; err != nil {
+				t.Fatalf("mutate proven lease authority: %v", err)
+			}
+			var beforeClaim model.RecoveryPointLifecycleEffectClaim
+			if err := fixture.db.Where("attempt_id = ?", fixture.attempt.ID).First(&beforeClaim).Error; err != nil {
+				t.Fatalf("load proof claim before progress: %v", err)
+			}
+			var beforeTombstone model.RecoveryPointLifecycleTombstone
+			if err := fixture.db.Where("recovery_point_id = ? AND terminal_operation = ?",
+				fixture.pointID, backupasset.LifecycleRetentionExpire).First(&beforeTombstone).Error; err != nil {
+				t.Fatalf("load proof tombstone before progress: %v", err)
+			}
+			var beforeLease model.RecoveryPointLease
+			if err := fixture.db.Where("id = ?", fixture.attempt.LeaseID).First(&beforeLease).Error; err != nil {
+				t.Fatalf("load mutated proof lease: %v", err)
+			}
+
+			progressed, err := fixture.coordinator.progressProviderProof(context.Background(), fixture.attempt.ID)
+			if err != nil || progressed.Phase != backupasset.LifecyclePhaseTombstoning {
+				t.Fatalf("progress provider proof attempt=%+v error=%v, want tombstoning", progressed, err)
+			}
+			completed, err := fixture.coordinator.tombstoneAndCompleteProviderProof(context.Background(), fixture.attempt.ID)
+			if err != nil || completed.Phase != backupasset.LifecyclePhaseComplete {
+				t.Fatalf("complete provider proof attempt=%+v error=%v, want complete", completed, err)
+			}
+			var afterClaim model.RecoveryPointLifecycleEffectClaim
+			if err := fixture.db.Where("attempt_id = ?", fixture.attempt.ID).First(&afterClaim).Error; err != nil {
+				t.Fatalf("load proof claim after completion: %v", err)
+			}
+			var afterTombstone model.RecoveryPointLifecycleTombstone
+			if err := fixture.db.Where("recovery_point_id = ? AND terminal_operation = ?",
+				fixture.pointID, backupasset.LifecycleRetentionExpire).First(&afterTombstone).Error; err != nil {
+				t.Fatalf("load proof tombstone after completion: %v", err)
+			}
+			var afterLease model.RecoveryPointLease
+			if err := fixture.db.Where("id = ?", fixture.attempt.LeaseID).First(&afterLease).Error; err != nil {
+				t.Fatalf("load proof lease after completion: %v", err)
+			}
+			var point model.RecoveryPoint
+			if err := fixture.db.First(&point, "id = ?", fixture.pointID).Error; err != nil {
+				t.Fatalf("load proof point after completion: %v", err)
+			}
+			if !reflect.DeepEqual(beforeClaim, afterClaim) ||
+				!reflect.DeepEqual(beforeTombstone, afterTombstone) ||
+				!reflect.DeepEqual(beforeLease, afterLease) ||
+				point.State != string(backupasset.RecoveryPointExpired) ||
+				point.PhysicalAvailability != string(backupasset.PhysicalMissing) {
+				t.Fatalf("foreign proven authority changed durable proof/lease or failed completion claim=%t tombstone=%t lease=%t point=%+v",
+					!reflect.DeepEqual(beforeClaim, afterClaim),
+					!reflect.DeepEqual(beforeTombstone, afterTombstone),
+					!reflect.DeepEqual(beforeLease, afterLease), point)
+			}
+			if fixture.deleter.calls != 0 {
+				t.Fatalf("provider calls=%d after foreign proven lease progress, want 0", fixture.deleter.calls)
+			}
+		})
+	}
+}
+
+func TestLifecycleProviderDeleteObserverRejectsForeignLeaseAuthority(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate map[string]any
+	}{
+		{
+			name:   "owner",
+			mutate: map[string]any{"owner_id": "foreign-owner"},
+		},
+		{
+			name:   "holder",
+			mutate: map[string]any{"holder_type": string(backupasset.LeaseHolderContentSession)},
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newClaimedExpiryFixture(t, 6890)
+			attempt := fixture.attempt
+			for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+				var err error
+				attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+				if err != nil {
+					t.Fatalf("advance to provider_delete: %v", err)
+				}
+			}
+			preparation, err := fixture.coordinator.prepareProviderDelete(context.Background(), attempt.ID)
+			if err != nil {
+				t.Fatalf("prepare provider delete: %v", err)
+			}
+			if !preparation.acquired {
+				t.Fatal("prepare provider delete did not acquire effect claim")
+			}
+			if err := fixture.db.Model(&model.RecoveryPointLifecycleEffectClaim{}).
+				Where("attempt_id = ?", attempt.ID).
+				Update("state", "uncertain").Error; err != nil {
+				t.Fatalf("seed uncertain observer claim: %v", err)
+			}
+			var beforeAttempt model.RecoveryPointLifecycleAttempt
+			if err := fixture.db.Where("id = ?", attempt.ID).First(&beforeAttempt).Error; err != nil {
+				t.Fatalf("load observer attempt before advance: %v", err)
+			}
+			var beforeClaim model.RecoveryPointLifecycleEffectClaim
+			if err := fixture.db.Where("attempt_id = ?", attempt.ID).First(&beforeClaim).Error; err != nil {
+				t.Fatalf("load observer claim before advance: %v", err)
+			}
+			if err := fixture.db.Model(&model.RecoveryPointLease{}).
+				Where("id = ?", preparation.binding.LeaseID).
+				Updates(testCase.mutate).Error; err != nil {
+				t.Fatalf("mutate observer lease authority: %v", err)
+			}
+			var mutatedLease model.RecoveryPointLease
+			if err := fixture.db.Where("id = ?", preparation.binding.LeaseID).First(&mutatedLease).Error; err != nil {
+				t.Fatalf("load mutated observer lease: %v", err)
+			}
+			prepareCalls := fixture.deleter.prepareCalls
+			if _, err := fixture.coordinator.Advance(context.Background(), attempt.ID); err == nil ||
+				!errors.Is(err, provider.ErrDeletePointIdentityConflict) {
+				t.Fatalf("foreign observer advance error=%v, want provider identity conflict", err)
+			}
+			var afterAttempt model.RecoveryPointLifecycleAttempt
+			if err := fixture.db.Where("id = ?", attempt.ID).First(&afterAttempt).Error; err != nil {
+				t.Fatalf("load observer attempt after advance: %v", err)
+			}
+			var afterClaim model.RecoveryPointLifecycleEffectClaim
+			if err := fixture.db.Where("attempt_id = ?", attempt.ID).First(&afterClaim).Error; err != nil {
+				t.Fatalf("load observer claim after advance: %v", err)
+			}
+			var afterLease model.RecoveryPointLease
+			if err := fixture.db.Where("id = ?", preparation.binding.LeaseID).First(&afterLease).Error; err != nil {
+				t.Fatalf("load observer lease after advance: %v", err)
+			}
+			if !reflect.DeepEqual(beforeAttempt, afterAttempt) ||
+				!reflect.DeepEqual(beforeClaim, afterClaim) ||
+				!reflect.DeepEqual(mutatedLease, afterLease) {
+				t.Fatalf("foreign observer advance mutated durable state attempt=%t claim=%t lease=%t",
+					!reflect.DeepEqual(beforeAttempt, afterAttempt),
+					!reflect.DeepEqual(beforeClaim, afterClaim),
+					!reflect.DeepEqual(mutatedLease, afterLease))
+			}
+			if fixture.deleter.prepareCalls != prepareCalls || fixture.deleter.calls != 0 {
+				t.Fatalf("foreign observer advance provider calls prepare=%d/%d execute=%d, want %d/0",
+					fixture.deleter.prepareCalls, prepareCalls, fixture.deleter.calls, prepareCalls)
+			}
+		})
+	}
+}
+
+func TestLifecycleProviderDeleteHeartbeatRejectsForeignLeaseAuthority(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate map[string]any
+	}{
+		{
+			name:   "owner",
+			mutate: map[string]any{"owner_id": "foreign-owner"},
+		},
+		{
+			name:   "holder",
+			mutate: map[string]any{"holder_type": string(backupasset.LeaseHolderContentSession)},
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newClaimedExpiryFixture(t, 6990)
+			attempt := fixture.attempt
+			for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+				var err error
+				attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+				if err != nil {
+					t.Fatalf("advance to provider_delete: %v", err)
+				}
+			}
+			preparation, err := fixture.coordinator.prepareProviderDelete(context.Background(), attempt.ID)
+			if err != nil {
+				t.Fatalf("prepare provider delete: %v", err)
+			}
+			if !preparation.acquired {
+				t.Fatal("prepare provider delete did not acquire effect claim")
+			}
+			var beforeAttempt model.RecoveryPointLifecycleAttempt
+			if err := fixture.db.Where("id = ?", attempt.ID).First(&beforeAttempt).Error; err != nil {
+				t.Fatalf("load heartbeat attempt before heartbeat: %v", err)
+			}
+			var beforeClaim model.RecoveryPointLifecycleEffectClaim
+			if err := fixture.db.Where("attempt_id = ?", attempt.ID).First(&beforeClaim).Error; err != nil {
+				t.Fatalf("load heartbeat claim before heartbeat: %v", err)
+			}
+			if err := fixture.db.Model(&model.RecoveryPointLease{}).
+				Where("id = ?", preparation.binding.LeaseID).
+				Updates(testCase.mutate).Error; err != nil {
+				t.Fatalf("mutate heartbeat lease authority: %v", err)
+			}
+			var mutatedLease model.RecoveryPointLease
+			if err := fixture.db.Where("id = ?", preparation.binding.LeaseID).First(&mutatedLease).Error; err != nil {
+				t.Fatalf("load mutated heartbeat lease: %v", err)
+			}
+			if _, err := fixture.coordinator.heartbeatProviderDelete(context.Background(), attempt.ID); err == nil ||
+				!errors.Is(err, provider.ErrDeletePointIdentityConflict) {
+				t.Fatalf("foreign heartbeat error=%v, want provider identity conflict", err)
+			}
+			var afterAttempt model.RecoveryPointLifecycleAttempt
+			if err := fixture.db.Where("id = ?", attempt.ID).First(&afterAttempt).Error; err != nil {
+				t.Fatalf("load heartbeat attempt after heartbeat: %v", err)
+			}
+			var afterClaim model.RecoveryPointLifecycleEffectClaim
+			if err := fixture.db.Where("attempt_id = ?", attempt.ID).First(&afterClaim).Error; err != nil {
+				t.Fatalf("load heartbeat claim after heartbeat: %v", err)
+			}
+			var afterLease model.RecoveryPointLease
+			if err := fixture.db.Where("id = ?", preparation.binding.LeaseID).First(&afterLease).Error; err != nil {
+				t.Fatalf("load heartbeat lease after heartbeat: %v", err)
+			}
+			if !reflect.DeepEqual(beforeAttempt, afterAttempt) ||
+				!reflect.DeepEqual(beforeClaim, afterClaim) ||
+				!reflect.DeepEqual(mutatedLease, afterLease) {
+				t.Fatalf("foreign heartbeat mutated durable state attempt=%t claim=%t lease=%t",
+					!reflect.DeepEqual(beforeAttempt, afterAttempt),
+					!reflect.DeepEqual(beforeClaim, afterClaim),
+					!reflect.DeepEqual(mutatedLease, afterLease))
+			}
+		})
+	}
+}
+
+func TestLifecycleProviderDeleteNoClaimAdvanceRejectsForeignLeaseAuthority(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate map[string]any
+	}{
+		{name: "owner", mutate: map[string]any{"owner_id": "foreign-owner"}},
+		{name: "holder", mutate: map[string]any{"holder_type": string(backupasset.LeaseHolderContentSession)}},
+	}
+	for index, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newClaimedExpiryFixture(t, 7100+uint64(index*10))
+			attempt := fixture.attempt
+			for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+				var err error
+				attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+				if err != nil {
+					t.Fatalf("advance to provider_delete: %v", err)
+				}
+			}
+			fixture.attempt = attempt
+			var beforeAttempt model.RecoveryPointLifecycleAttempt
+			if err := fixture.db.First(&beforeAttempt, "id = ?", attempt.ID).Error; err != nil {
+				t.Fatalf("load no-claim advance attempt: %v", err)
+			}
+			var beforePoint model.RecoveryPoint
+			if err := fixture.db.First(&beforePoint, "id = ?", fixture.pointID).Error; err != nil {
+				t.Fatalf("load no-claim advance point: %v", err)
+			}
+			var beforeLease model.RecoveryPointLease
+			if err := fixture.db.First(&beforeLease, "id = ?", attempt.LeaseID).Error; err != nil {
+				t.Fatalf("load no-claim advance lease: %v", err)
+			}
+			var beforeClaims, beforeTombstones int64
+			if err := fixture.db.Model(&model.RecoveryPointLifecycleEffectClaim{}).
+				Where("attempt_id = ?", attempt.ID).Count(&beforeClaims).Error; err != nil {
+				t.Fatalf("count no-claim advance claims: %v", err)
+			}
+			if err := fixture.db.Model(&model.RecoveryPointLifecycleTombstone{}).
+				Where("recovery_point_id = ?", fixture.pointID).Count(&beforeTombstones).Error; err != nil {
+				t.Fatalf("count no-claim advance tombstones: %v", err)
+			}
+			if beforeClaims != 0 || beforeTombstones != 0 {
+				t.Fatalf("no-claim advance fixture claims=%d tombstones=%d, want zero", beforeClaims, beforeTombstones)
+			}
+			if err := fixture.db.Model(&model.RecoveryPointLease{}).
+				Where("id = ?", beforeLease.ID).Updates(testCase.mutate).Error; err != nil {
+				t.Fatalf("mutate no-claim advance lease authority: %v", err)
+			}
+			var mutatedLease model.RecoveryPointLease
+			if err := fixture.db.First(&mutatedLease, "id = ?", beforeLease.ID).Error; err != nil {
+				t.Fatalf("load mutated no-claim advance lease: %v", err)
+			}
+			got, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
+			if err == nil || !errors.Is(err, provider.ErrDeletePointIdentityConflict) {
+				t.Fatalf("no-claim advance attempt=%+v error=%v, want provider identity conflict", got, err)
+			}
+			var afterAttempt model.RecoveryPointLifecycleAttempt
+			if err := fixture.db.First(&afterAttempt, "id = ?", attempt.ID).Error; err != nil {
+				t.Fatalf("load no-claim advance attempt after rejection: %v", err)
+			}
+			var afterPoint model.RecoveryPoint
+			if err := fixture.db.First(&afterPoint, "id = ?", fixture.pointID).Error; err != nil {
+				t.Fatalf("load no-claim advance point after rejection: %v", err)
+			}
+			var afterLease model.RecoveryPointLease
+			if err := fixture.db.First(&afterLease, "id = ?", beforeLease.ID).Error; err != nil {
+				t.Fatalf("load no-claim advance lease after rejection: %v", err)
+			}
+			var afterClaims, afterTombstones int64
+			if err := fixture.db.Model(&model.RecoveryPointLifecycleEffectClaim{}).
+				Where("attempt_id = ?", attempt.ID).Count(&afterClaims).Error; err != nil {
+				t.Fatalf("count no-claim advance claims after rejection: %v", err)
+			}
+			if err := fixture.db.Model(&model.RecoveryPointLifecycleTombstone{}).
+				Where("recovery_point_id = ?", fixture.pointID).Count(&afterTombstones).Error; err != nil {
+				t.Fatalf("count no-claim advance tombstones after rejection: %v", err)
+			}
+			if !reflect.DeepEqual(beforeAttempt, afterAttempt) ||
+				!reflect.DeepEqual(beforePoint, afterPoint) ||
+				!reflect.DeepEqual(mutatedLease, afterLease) ||
+				afterClaims != beforeClaims || afterTombstones != beforeTombstones {
+				t.Fatalf("no-claim advance mutated durable state attempt=%t point=%t lease=%t claims=%d/%d tombstones=%d/%d",
+					!reflect.DeepEqual(beforeAttempt, afterAttempt),
+					!reflect.DeepEqual(beforePoint, afterPoint),
+					!reflect.DeepEqual(mutatedLease, afterLease),
+					afterClaims, beforeClaims, afterTombstones, beforeTombstones)
+			}
+			if fixture.deleter.prepareCalls != 0 || fixture.deleter.calls != 0 {
+				t.Fatalf("no-claim advance provider calls prepare=%d execute=%d, want zero",
+					fixture.deleter.prepareCalls, fixture.deleter.calls)
+			}
+		})
+	}
+}
+
+func TestLifecycleProviderDeleteNoClaimHeartbeatRejectsForeignLeaseAuthority(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate map[string]any
+	}{
+		{name: "owner", mutate: map[string]any{"owner_id": "foreign-owner"}},
+		{name: "holder", mutate: map[string]any{"holder_type": string(backupasset.LeaseHolderContentSession)}},
+	}
+	for index, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newClaimedExpiryFixture(t, 7120+uint64(index*10))
+			attempt := fixture.attempt
+			for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+				var err error
+				attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+				if err != nil {
+					t.Fatalf("advance to provider_delete: %v", err)
+				}
+			}
+			fixture.attempt = attempt
+			var beforeAttempt model.RecoveryPointLifecycleAttempt
+			if err := fixture.db.First(&beforeAttempt, "id = ?", attempt.ID).Error; err != nil {
+				t.Fatalf("load no-claim heartbeat attempt: %v", err)
+			}
+			var beforePoint model.RecoveryPoint
+			if err := fixture.db.First(&beforePoint, "id = ?", fixture.pointID).Error; err != nil {
+				t.Fatalf("load no-claim heartbeat point: %v", err)
+			}
+			var beforeLease model.RecoveryPointLease
+			if err := fixture.db.First(&beforeLease, "id = ?", attempt.LeaseID).Error; err != nil {
+				t.Fatalf("load no-claim heartbeat lease: %v", err)
+			}
+			var beforeClaims, beforeTombstones int64
+			if err := fixture.db.Model(&model.RecoveryPointLifecycleEffectClaim{}).
+				Where("attempt_id = ?", attempt.ID).Count(&beforeClaims).Error; err != nil {
+				t.Fatalf("count no-claim heartbeat claims: %v", err)
+			}
+			if err := fixture.db.Model(&model.RecoveryPointLifecycleTombstone{}).
+				Where("recovery_point_id = ?", fixture.pointID).Count(&beforeTombstones).Error; err != nil {
+				t.Fatalf("count no-claim heartbeat tombstones: %v", err)
+			}
+			if beforeClaims != 0 || beforeTombstones != 0 {
+				t.Fatalf("no-claim heartbeat fixture claims=%d tombstones=%d, want zero", beforeClaims, beforeTombstones)
+			}
+			if err := fixture.db.Model(&model.RecoveryPointLease{}).
+				Where("id = ?", beforeLease.ID).Updates(testCase.mutate).Error; err != nil {
+				t.Fatalf("mutate no-claim heartbeat lease authority: %v", err)
+			}
+			var mutatedLease model.RecoveryPointLease
+			if err := fixture.db.First(&mutatedLease, "id = ?", beforeLease.ID).Error; err != nil {
+				t.Fatalf("load mutated no-claim heartbeat lease: %v", err)
+			}
+			got, err := fixture.coordinator.Heartbeat(context.Background(), attempt.ID)
+			if err == nil || !errors.Is(err, provider.ErrDeletePointIdentityConflict) {
+				t.Fatalf("no-claim heartbeat attempt=%+v error=%v, want provider identity conflict", got, err)
+			}
+			var afterAttempt model.RecoveryPointLifecycleAttempt
+			if err := fixture.db.First(&afterAttempt, "id = ?", attempt.ID).Error; err != nil {
+				t.Fatalf("load no-claim heartbeat attempt after rejection: %v", err)
+			}
+			var afterPoint model.RecoveryPoint
+			if err := fixture.db.First(&afterPoint, "id = ?", fixture.pointID).Error; err != nil {
+				t.Fatalf("load no-claim heartbeat point after rejection: %v", err)
+			}
+			var afterLease model.RecoveryPointLease
+			if err := fixture.db.First(&afterLease, "id = ?", beforeLease.ID).Error; err != nil {
+				t.Fatalf("load no-claim heartbeat lease after rejection: %v", err)
+			}
+			var afterClaims, afterTombstones int64
+			if err := fixture.db.Model(&model.RecoveryPointLifecycleEffectClaim{}).
+				Where("attempt_id = ?", attempt.ID).Count(&afterClaims).Error; err != nil {
+				t.Fatalf("count no-claim heartbeat claims after rejection: %v", err)
+			}
+			if err := fixture.db.Model(&model.RecoveryPointLifecycleTombstone{}).
+				Where("recovery_point_id = ?", fixture.pointID).Count(&afterTombstones).Error; err != nil {
+				t.Fatalf("count no-claim heartbeat tombstones after rejection: %v", err)
+			}
+			if !reflect.DeepEqual(beforeAttempt, afterAttempt) ||
+				!reflect.DeepEqual(beforePoint, afterPoint) ||
+				!reflect.DeepEqual(mutatedLease, afterLease) ||
+				afterClaims != beforeClaims || afterTombstones != beforeTombstones {
+				t.Fatalf("no-claim heartbeat mutated durable state attempt=%t point=%t lease=%t claims=%d/%d tombstones=%d/%d",
+					!reflect.DeepEqual(beforeAttempt, afterAttempt),
+					!reflect.DeepEqual(beforePoint, afterPoint),
+					!reflect.DeepEqual(mutatedLease, afterLease),
+					afterClaims, beforeClaims, afterTombstones, beforeTombstones)
+			}
+			if fixture.deleter.prepareCalls != 0 || fixture.deleter.calls != 0 {
+				t.Fatalf("no-claim heartbeat provider calls prepare=%d execute=%d, want zero",
+					fixture.deleter.prepareCalls, fixture.deleter.calls)
+			}
+		})
+	}
+}
+
+func TestLifecycleProviderProofProgressAcceptsForeignLeaseAuthorityAfterSettledStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		status backupasset.LeaseStatus
+		mutate map[string]any
+	}{
+		{
+			name:   "released owner",
+			status: backupasset.LeaseReleased,
+			mutate: map[string]any{"owner_id": "foreign-owner"},
+		},
+		{
+			name:   "released holder",
+			status: backupasset.LeaseReleased,
+			mutate: map[string]any{"holder_type": string(backupasset.LeaseHolderContentSession)},
+		},
+		{
+			name:   "expired owner",
+			status: backupasset.LeaseExpired,
+			mutate: map[string]any{"owner_id": "foreign-owner"},
+		},
+		{
+			name:   "expired holder",
+			status: backupasset.LeaseExpired,
+			mutate: map[string]any{"holder_type": string(backupasset.LeaseHolderContentSession)},
+		},
+	}
+	for index, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := seedProviderDeleteProofFirstFixture(t, 7140+uint64(index*10), "in_flight")
+			now := fixture.clock.UTC()
+			leaseUpdates := map[string]any{"status": testCase.status, "updated_at": now}
+			if testCase.status == backupasset.LeaseReleased {
+				leaseUpdates["released_at"] = now
+			}
+			if err := fixture.db.Model(&model.RecoveryPointLease{}).
+				Where("id = ?", fixture.attempt.LeaseID).Updates(leaseUpdates).Error; err != nil {
+				t.Fatalf("set settled proof lease status: %v", err)
+			}
+			if err := fixture.db.Model(&model.RecoveryPointLease{}).
+				Where("id = ?", fixture.attempt.LeaseID).Updates(testCase.mutate).Error; err != nil {
+				t.Fatalf("mutate settled proof lease authority: %v", err)
+			}
+			var beforeClaim model.RecoveryPointLifecycleEffectClaim
+			if err := fixture.db.First(&beforeClaim, "attempt_id = ?", fixture.attempt.ID).Error; err != nil {
+				t.Fatalf("load settled proof claim: %v", err)
+			}
+			var beforeTombstone model.RecoveryPointLifecycleTombstone
+			if err := fixture.db.Where("recovery_point_id = ? AND terminal_operation = ?",
+				fixture.pointID, backupasset.LifecycleRetentionExpire).First(&beforeTombstone).Error; err != nil {
+				t.Fatalf("load settled proof tombstone: %v", err)
+			}
+			var beforeLease model.RecoveryPointLease
+			if err := fixture.db.First(&beforeLease, "id = ?", fixture.attempt.LeaseID).Error; err != nil {
+				t.Fatalf("load settled proof lease: %v", err)
+			}
+
+			progressed, err := fixture.coordinator.progressProviderProof(context.Background(), fixture.attempt.ID)
+			if err != nil || progressed.Phase != backupasset.LifecyclePhaseTombstoning {
+				t.Fatalf("settled proof progress attempt=%+v error=%v, want tombstoning", progressed, err)
+			}
+			completed, err := fixture.coordinator.tombstoneAndCompleteProviderProof(context.Background(), fixture.attempt.ID)
+			if err != nil || completed.Phase != backupasset.LifecyclePhaseComplete {
+				t.Fatalf("settled proof completion attempt=%+v error=%v, want complete", completed, err)
+			}
+			var afterClaim model.RecoveryPointLifecycleEffectClaim
+			if err := fixture.db.First(&afterClaim, "attempt_id = ?", fixture.attempt.ID).Error; err != nil {
+				t.Fatalf("load settled proof claim after completion: %v", err)
+			}
+			var afterTombstone model.RecoveryPointLifecycleTombstone
+			if err := fixture.db.Where("recovery_point_id = ? AND terminal_operation = ?",
+				fixture.pointID, backupasset.LifecycleRetentionExpire).First(&afterTombstone).Error; err != nil {
+				t.Fatalf("load settled proof tombstone after completion: %v", err)
+			}
+			var afterLease model.RecoveryPointLease
+			if err := fixture.db.First(&afterLease, "id = ?", beforeLease.ID).Error; err != nil {
+				t.Fatalf("load settled proof lease after completion: %v", err)
+			}
+			var point model.RecoveryPoint
+			if err := fixture.db.First(&point, "id = ?", fixture.pointID).Error; err != nil {
+				t.Fatalf("load settled proof point after completion: %v", err)
+			}
+			if !reflect.DeepEqual(beforeClaim, afterClaim) ||
+				!reflect.DeepEqual(beforeTombstone, afterTombstone) ||
+				!reflect.DeepEqual(beforeLease, afterLease) ||
+				point.State != string(backupasset.RecoveryPointExpired) ||
+				point.PhysicalAvailability != string(backupasset.PhysicalMissing) {
+				t.Fatalf("settled proof changed durable proof/lease or failed completion claim=%t tombstone=%t lease=%t point=%+v",
+					!reflect.DeepEqual(beforeClaim, afterClaim),
+					!reflect.DeepEqual(beforeTombstone, afterTombstone),
+					!reflect.DeepEqual(beforeLease, afterLease), point)
+			}
+			if fixture.deleter.prepareCalls != 0 || fixture.deleter.calls != 0 || fixture.deleter.verifyCalls != 0 {
+				t.Fatalf("settled proof provider calls prepare=%d execute=%d verify=%d, want zero",
+					fixture.deleter.prepareCalls, fixture.deleter.calls, fixture.deleter.verifyCalls)
+			}
+		})
+	}
+}
+
+func TestLifecycleProviderDeleteTakeoverAfterSharedReconcileExpired(t *testing.T) {
+	fixture := newClaimedExpiryFixture(t, 7180)
+	attempt := fixture.attempt
+	for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+		var err error
+		attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+		if err != nil {
+			t.Fatalf("advance to provider_delete: %v", err)
+		}
+	}
+	fixture.attempt = attempt
+	preparation, err := fixture.coordinator.prepareProviderDelete(context.Background(), attempt.ID)
+	if err != nil || !preparation.acquired {
+		t.Fatalf("seed durable non-proven claim preparation=%+v error=%v", preparation, err)
+	}
+	if fixture.deleter.prepareCalls != 1 || fixture.deleter.calls != 0 {
+		t.Fatalf("seed durable non-proven claim provider calls prepare=%d execute=%d, want 1/0",
+			fixture.deleter.prepareCalls, fixture.deleter.calls)
+	}
+	var oldAttempt model.RecoveryPointLifecycleAttempt
+	if err := fixture.db.First(&oldAttempt, "id = ?", attempt.ID).Error; err != nil {
+		t.Fatalf("load old takeover attempt: %v", err)
+	}
+	var oldClaim model.RecoveryPointLifecycleEffectClaim
+	if err := fixture.db.First(&oldClaim, "attempt_id = ?", attempt.ID).Error; err != nil {
+		t.Fatalf("load old takeover claim: %v", err)
+	}
+	if oldClaim.State != "in_flight" {
+		t.Fatalf("seed claim state=%q, want in_flight", oldClaim.State)
+	}
+	var oldLease model.RecoveryPointLease
+	if err := fixture.db.First(&oldLease, "id = ?", oldAttempt.LeaseID).Error; err != nil {
+		t.Fatalf("load old takeover lease: %v", err)
+	}
+	var beforeTombstoneCount int64
+	if err := fixture.db.Model(&model.RecoveryPointLifecycleTombstone{}).
+		Where("recovery_point_id = ?", fixture.pointID).Count(&beforeTombstoneCount).Error; err != nil {
+		t.Fatalf("check no pre-existing takeover proof: %v", err)
+	}
+	if beforeTombstoneCount != 0 {
+		t.Fatalf("pre-existing takeover tombstones=%d, want zero", beforeTombstoneCount)
+	}
+	fixture.clock = oldLease.AbsoluteDeadline.UTC().Add(time.Second)
+	reconciled, err := fixture.coordinator.leases.ReconcileExpired(context.Background())
+	if err != nil || reconciled != 1 {
+		t.Fatalf("shared ReconcileExpired count=%d error=%v, want one", reconciled, err)
+	}
+	var expiredLease model.RecoveryPointLease
+	if err := fixture.db.First(&expiredLease, "id = ?", oldLease.ID).Error; err != nil {
+		t.Fatalf("load reconciled expired lease: %v", err)
+	}
+	if backupasset.LeaseStatus(expiredLease.Status) != backupasset.LeaseExpired {
+		t.Fatalf("reconciled lease status=%q, want expired", expiredLease.Status)
+	}
+	fixture.deleter.result = PointDeletionResult{
+		Outcome: PointDeletionDeleted, ReceiptDigest: strings.Repeat("d", 64),
+	}
+	takenOver, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
+	if err != nil {
+		t.Fatalf("advance expired in-flight claim takeover: %v", err)
+	}
+	if takenOver.Phase != backupasset.LifecyclePhaseTombstoning {
+		t.Fatalf("expired in-flight claim takeover phase=%q, want tombstoning", takenOver.Phase)
+	}
+	if fixture.deleter.prepareCalls != 3 || fixture.deleter.calls != 1 {
+		t.Fatalf("expired in-flight claim takeover provider calls prepare=%d execute=%d, want observer/execution prepares (3 total) and one effect",
+			fixture.deleter.prepareCalls, fixture.deleter.calls)
+	}
+	if takenOver.LeaseID == oldLease.ID || takenOver.LeaseAttemptID == oldLease.AttemptID ||
+		takenOver.LeaseFenceTokenHash == hashFenceToken(oldLease.FenceToken) {
+		t.Fatalf("expired in-flight claim takeover did not rotate lease authority: attempt=%+v old_lease=%+v",
+			takenOver, oldLease)
+	}
+	var newLease model.RecoveryPointLease
+	if err := fixture.db.First(&newLease, "id = ?", takenOver.LeaseID).Error; err != nil {
+		t.Fatalf("load fresh takeover lease: %v", err)
+	}
+	if newLease.ID == oldLease.ID ||
+		newLease.RecoveryPointID != oldLease.RecoveryPointID ||
+		newLease.HolderType != string(backupasset.LeaseHolderRetentionWorker) ||
+		newLease.OwnerID != fixture.coordinator.leaseOwnerID {
+		t.Fatalf("fresh takeover lease=%+v, want configured owner/holder and new ID", newLease)
+	}
+	var oldLeaseAfter model.RecoveryPointLease
+	if err := fixture.db.First(&oldLeaseAfter, "id = ?", oldLease.ID).Error; err != nil {
+		t.Fatalf("reload historical expired lease: %v", err)
+	}
+	if !reflect.DeepEqual(expiredLease, oldLeaseAfter) {
+		t.Fatalf("historical expired lease mutated after takeover:\nbefore=%+v\nafter=%+v", expiredLease, oldLeaseAfter)
+	}
+	var claimAfter model.RecoveryPointLifecycleEffectClaim
+	if err := fixture.db.First(&claimAfter, "attempt_id = ?", attempt.ID).Error; err != nil {
+		t.Fatalf("load takeover claim after proof: %v", err)
+	}
+	if claimAfter.State != "proven" ||
+		claimAfter.LeaseID != newLease.ID ||
+		claimAfter.LeaseAttemptID != newLease.AttemptID ||
+		claimAfter.LeaseFenceTokenHash != hashFenceToken(newLease.FenceToken) ||
+		claimAfter.ExecutionID == oldClaim.ExecutionID {
+		t.Fatalf("takeover claim=%+v, want proven fresh lease and execution", claimAfter)
+	}
+	var tombstoneCount int64
+	if err := fixture.db.Model(&model.RecoveryPointLifecycleTombstone{}).
+		Where("recovery_point_id = ?", fixture.pointID).Count(&tombstoneCount).Error; err != nil {
+		t.Fatalf("count takeover tombstones: %v", err)
+	}
+	if tombstoneCount != 1 {
+		t.Fatalf("takeover tombstones=%d, want one", tombstoneCount)
+	}
+	completed, err := fixture.coordinator.Advance(context.Background(), takenOver.ID)
+	if err != nil || completed.Phase != backupasset.LifecyclePhaseComplete {
+		t.Fatalf("complete expired in-flight claim takeover attempt=%+v error=%v, want complete", completed, err)
+	}
+	if fixture.deleter.calls != 1 {
+		t.Fatalf("completed takeover execute calls=%d, want no duplicate effect", fixture.deleter.calls)
+	}
+}
+
+func TestLifecycleUncertainProviderDeleteRetryAtIsDueGated(t *testing.T) {
+	fixture := newClaimedExpiryFixture(t, 6030)
+	fixture.deleter.result = PointDeletionResult{
+		Outcome: PointDeletionDeleted, ReceiptDigest: strings.Repeat("b", 64),
+	}
+	attempt := fixture.attempt
+	for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+		var err error
+		attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+		if err != nil {
+			t.Fatalf("advance to provider delete: %v", err)
+		}
+	}
+	fixture.deleter.err = errors.New("provider execution uncertain")
+	failed, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
+	if err == nil || failed.Phase != backupasset.LifecyclePhaseProviderDelete ||
+		failed.RetryAt == nil {
+		t.Fatalf("uncertain provider attempt=%+v error=%v, want provider delete retry", failed, err)
+	}
+	var beforeAttempt model.RecoveryPointLifecycleAttempt
+	if err := fixture.db.First(&beforeAttempt, "id = ?", failed.ID).Error; err != nil {
+		t.Fatalf("load uncertain attempt: %v", err)
+	}
+	var beforeClaim model.RecoveryPointLifecycleEffectClaim
+	if err := fixture.db.First(&beforeClaim, "attempt_id = ?", failed.ID).Error; err != nil {
+		t.Fatalf("load uncertain claim: %v", err)
+	}
+	var beforeLease model.RecoveryPointLease
+	if err := fixture.db.First(&beforeLease, "id = ?", failed.LeaseID).Error; err != nil {
+		t.Fatalf("load uncertain lease: %v", err)
+	}
+	prepareCalls := fixture.deleter.prepareCalls
+	providerCalls := fixture.deleter.calls
+	retryAt := failed.RetryAt.UTC()
+	fixture.clock = retryAt.Add(-time.Nanosecond)
+	pending, err := fixture.coordinator.Advance(context.Background(), failed.ID)
+	if err != nil || pending.Phase != beforeAttemptPhase(beforeAttempt) ||
+		pending.TransitionRevision != beforeAttempt.TransitionRevision ||
+		!sameLifecycleTimePtr(pending.RetryAt, beforeAttempt.RetryAt) ||
+		fixture.deleter.prepareCalls != prepareCalls || fixture.deleter.calls != providerCalls {
+		t.Fatalf("not-due uncertain retry attempt=%+v error=%v prepare/calls=%d/%d want unchanged rev=%d retry=%s prepare/calls=%d/%d",
+			pending, err, fixture.deleter.prepareCalls, fixture.deleter.calls,
+			beforeAttempt.TransitionRevision, retryAt, prepareCalls, providerCalls)
+	}
+	var afterClaim model.RecoveryPointLifecycleEffectClaim
+	if err := fixture.db.First(&afterClaim, "attempt_id = ?", failed.ID).Error; err != nil {
+		t.Fatalf("reload not-due claim: %v", err)
+	}
+	var afterLease model.RecoveryPointLease
+	if err := fixture.db.First(&afterLease, "id = ?", failed.LeaseID).Error; err != nil {
+		t.Fatalf("reload not-due lease: %v", err)
+	}
+	if afterClaim.State != beforeClaim.State || afterClaim.ExecutionID != beforeClaim.ExecutionID ||
+		!afterClaim.HeartbeatAt.Equal(beforeClaim.HeartbeatAt) || !afterClaim.UpdatedAt.Equal(beforeClaim.UpdatedAt) ||
+		afterLease.Status != beforeLease.Status || !afterLease.LeaseExpiresAt.Equal(beforeLease.LeaseExpiresAt) ||
+		!afterLease.LastHeartbeatAt.Equal(beforeLease.LastHeartbeatAt) || !afterLease.UpdatedAt.Equal(beforeLease.UpdatedAt) {
+		t.Fatalf("not-due uncertain retry mutated claim/lease before=%+v/%+v after=%+v/%+v",
+			beforeClaim, beforeLease, afterClaim, afterLease)
+	}
+	fixture.clock = retryAt
+	fixture.deleter.err = nil
+	retried, err := fixture.coordinator.Advance(context.Background(), failed.ID)
+	if err != nil || retried.Phase != backupasset.LifecyclePhaseTombstoning ||
+		fixture.deleter.calls != providerCalls+1 || retried.RetryAt != nil {
+		t.Fatalf("due uncertain retry attempt=%+v error=%v provider_calls=%d retry_at=%v, want tombstoning/one retry/cleared",
+			retried, err, fixture.deleter.calls, retried.RetryAt)
+	}
+}
+
+func beforeAttemptPhase(attempt model.RecoveryPointLifecycleAttempt) backupasset.LifecyclePhase {
+	return backupasset.LifecyclePhase(attempt.Phase)
+}
+
+func TestLifecycleClaimedBlockedProviderDeleteRetryAtIsDueGated(t *testing.T) {
+	tests := []struct {
+		name        string
+		reason      backupasset.LifecycleBlockedReason
+		prepareErr  error
+		hold        bool
+		auditStatus string
+		wantPrepare int
+	}{
+		{
+			name: "active_hold", reason: backupasset.LifecycleBlockedActiveHold,
+			hold: true, auditStatus: "blocked",
+		},
+		{
+			name: "identity_conflict", reason: backupasset.LifecycleBlockedProviderIdentityConflict,
+			prepareErr: provider.ErrDeletePointIdentityConflict, auditStatus: "identity_conflict", wantPrepare: 1,
+		},
+		{
+			name: "native_reference", reason: backupasset.LifecycleBlockedProviderNativeVersionReferenced,
+			prepareErr: provider.ErrDeletePointNativeVersionReferenced, auditStatus: "blocked", wantPrepare: 1,
+		},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			base := uint64(6100 + index*20)
+			fixture := newClaimedExpiryFixture(t, base)
+			fixture.deleter.result = PointDeletionResult{
+				Outcome: PointDeletionDeleted, ReceiptDigest: strings.Repeat("c", 64),
+			}
+			attempt := fixture.attempt
+			for attempt.Phase != backupasset.LifecyclePhaseProviderDelete {
+				var err error
+				attempt, err = fixture.coordinator.Advance(context.Background(), attempt.ID)
+				if err != nil {
+					t.Fatalf("advance to provider delete: %v", err)
+				}
+			}
+			fixture.deleter.err = errors.New("provider execution uncertain")
+			failed, err := fixture.coordinator.Advance(context.Background(), attempt.ID)
+			if err == nil || failed.RetryAt == nil {
+				t.Fatalf("create uncertain claim attempt=%+v error=%v", failed, err)
+			}
+			if test.hold {
+				holdID := testOpaqueID(base + 9)
+				if err := fixture.db.Create(&model.RecoveryPointHold{
+					ID: holdID, RecoveryPointID: fixture.pointID,
+					HoldType: string(backupasset.RecoveryPointHoldLegal), State: string(backupasset.HoldActive),
+					EncryptedReason: "FAKE_CLAIMED_ACTIVE_HOLD_FOR_TEST_ONLY", CreatedBy: 1,
+					CreatedAt: fixture.clock, UpdatedAt: fixture.clock,
+				}).Error; err != nil {
+					t.Fatalf("seed active hold: %v", err)
+				}
+				result := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.pointID).
+					Updates(map[string]any{"hold_state": backupasset.HoldActive, "updated_at": fixture.clock})
+				if result.Error != nil || result.RowsAffected != 1 {
+					t.Fatalf("project active hold rows=%d error=%v", result.RowsAffected, result.Error)
+				}
+			}
+			var blocked LifecycleAttempt
+			if err := fixture.db.Transaction(func(tx *gorm.DB) error {
+				rows, lockErr := lockProviderDeleteRowsByAttemptTx(context.Background(), tx, failed.ID)
+				if lockErr != nil {
+					return lockErr
+				}
+				var blockErr error
+				blocked, blockErr = fixture.coordinator.blockAttemptTx(
+					context.Background(), tx, &rows.attempt, &rows.point, test.reason,
+				)
+				return blockErr
+			}); err != nil {
+				t.Fatalf("create claimed blocked state: %v", err)
+			}
+			fixture.deleter.prepareErr = test.prepareErr
+			audit := &recordingSettledAudit{}
+			fixture.coordinator.audit = audit
+			slotID := testOpaqueID(base + 8)
+			if err := fixture.db.Create(&model.RecoveryPointLifecycleAuditSlot{
+				ID: slotID, AttemptID: blocked.ID, Status: test.auditStatus,
+				EmittedAt: fixture.clock, CreatedAt: fixture.clock,
+			}).Error; err != nil {
+				t.Fatalf("seed settled audit slot: %v", err)
+			}
+			var beforeAttempt model.RecoveryPointLifecycleAttempt
+			if err := fixture.db.First(&beforeAttempt, "id = ?", blocked.ID).Error; err != nil {
+				t.Fatalf("load claimed blocked attempt: %v", err)
+			}
+			var beforeClaim model.RecoveryPointLifecycleEffectClaim
+			if err := fixture.db.First(&beforeClaim, "attempt_id = ?", blocked.ID).Error; err != nil {
+				t.Fatalf("load claimed blocked claim: %v", err)
+			}
+			prepareCalls := fixture.deleter.prepareCalls
+			providerCalls := fixture.deleter.calls
+			retryAt := blocked.RetryAt.UTC()
+			fixture.clock = retryAt.Add(-time.Nanosecond)
+			pending, err := fixture.coordinator.Advance(context.Background(), blocked.ID)
+			if err != nil || pending.Phase != backupasset.LifecyclePhaseBlocked ||
+				pending.BlockedReason != test.reason ||
+				pending.TransitionRevision != beforeAttempt.TransitionRevision ||
+				!sameLifecycleTimePtr(pending.RetryAt, beforeAttempt.RetryAt) ||
+				fixture.deleter.prepareCalls != prepareCalls || fixture.deleter.calls != providerCalls ||
+				len(audit.events) != 0 {
+				t.Fatalf("not-due claimed blocked attempt=%+v error=%v prepare/calls=%d/%d audit=%d, want unchanged rev=%d retry=%s prepare/calls=%d/%d",
+					pending, err, fixture.deleter.prepareCalls, fixture.deleter.calls, len(audit.events),
+					beforeAttempt.TransitionRevision, retryAt, prepareCalls, providerCalls)
+			}
+			var afterClaim model.RecoveryPointLifecycleEffectClaim
+			if err := fixture.db.First(&afterClaim, "attempt_id = ?", blocked.ID).Error; err != nil {
+				t.Fatalf("reload not-due claimed blocked claim: %v", err)
+			}
+			if afterClaim.State != beforeClaim.State || afterClaim.ExecutionID != beforeClaim.ExecutionID ||
+				!afterClaim.HeartbeatAt.Equal(beforeClaim.HeartbeatAt) || !afterClaim.UpdatedAt.Equal(beforeClaim.UpdatedAt) {
+				t.Fatalf("not-due claimed blocked claim changed before=%+v after=%+v", beforeClaim, afterClaim)
+			}
+			fixture.clock = retryAt
+			due, err := fixture.coordinator.Advance(context.Background(), blocked.ID)
+			if err != nil || due.Phase != backupasset.LifecyclePhaseBlocked ||
+				due.BlockedReason != test.reason || due.RetryAt == nil ||
+				!due.RetryAt.After(fixture.clock) ||
+				due.TransitionRevision != beforeAttempt.TransitionRevision+1 ||
+				fixture.deleter.prepareCalls != prepareCalls+test.wantPrepare ||
+				fixture.deleter.calls != providerCalls {
+				var point model.RecoveryPoint
+				_ = fixture.db.First(&point, "id = ?", fixture.pointID).Error
+				var activeHolds int64
+				_ = fixture.db.Model(&model.RecoveryPointHold{}).
+					Where("recovery_point_id = ? AND state = ?", fixture.pointID, backupasset.HoldActive).
+					Count(&activeHolds).Error
+				t.Fatalf("due claimed blocked attempt=%+v error=%v prepare/calls=%d/%d active_hold_state=%q active_holds=%d, want blocked/retry rev=%d prepare/calls=%d/%d",
+					due, err, fixture.deleter.prepareCalls, fixture.deleter.calls, point.HoldState, activeHolds,
+					beforeAttempt.TransitionRevision+1, prepareCalls+test.wantPrepare, providerCalls)
+			}
+			nextBefore := due
+			fixture.clock = due.RetryAt.UTC().Add(-time.Nanosecond)
+			revisited, err := fixture.coordinator.Advance(context.Background(), due.ID)
+			if err != nil || revisited.TransitionRevision != nextBefore.TransitionRevision ||
+				!sameLifecycleTimePtr(revisited.RetryAt, nextBefore.RetryAt) ||
+				fixture.deleter.prepareCalls != prepareCalls+test.wantPrepare ||
+				fixture.deleter.calls != providerCalls {
+				t.Fatalf("revisited claimed blocked attempt=%+v error=%v prepare/calls=%d/%d, want unchanged after due retry",
+					revisited, err, fixture.deleter.prepareCalls, fixture.deleter.calls)
 			}
 		})
 	}

@@ -1,0 +1,8 @@
+{"file":".trellis/tasks/09-02-backup-lifecycle-effect-audit-idempotency/prd.md","reason":"Verify every durable claim, takeover, receipt, audit-slot, migration, and concurrency acceptance criterion."}
+{"file":".trellis/tasks/09-02-backup-lifecycle-effect-audit-idempotency/design.md","reason":"Verify implementation matches the claim/slot state machines, lock order, and crash protocol."}
+{"file":".trellis/tasks/09-02-backup-lifecycle-effect-audit-idempotency/implement.md","reason":"Verify each implementation phase and validation command was actually executed."}
+{"file":".trellis/tasks/09-02-backup-lifecycle-effect-audit-idempotency/research/current-necessity-review.md","reason":"Verify the implementation closes the four re-verified gaps and does not reopen 000076 reservation behavior."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Review paired migrations, indexes, lock/tx order, and used-down fail-closed guards."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review uncertain external effects, identity conflicts, fencing, retryability, and stale-owner rejection."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review behavioral tests, PostgreSQL barriers, race coverage, and full backend evidence."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reject a new general outbox or duplicated claim machinery when existing WriteTx/tombstone shapes suffice."}

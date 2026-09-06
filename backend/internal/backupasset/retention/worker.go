@@ -313,6 +313,7 @@ func (worker *Worker) settleClaimed(ctx context.Context, limit int) error {
 		pageSize = 100
 	}
 	wrapped := false
+	var passErr error
 	for remaining > 0 {
 		attempts, err := worker.coordinator.ListIncompleteAttemptsAfter(ctx, pageSize, afterID)
 		if err != nil {
@@ -325,7 +326,7 @@ func (worker *Worker) settleClaimed(ctx context.Context, limit int) error {
 				wrapped = true
 				continue
 			}
-			return nil
+			return passErr
 		}
 		for _, attempt := range attempts {
 			afterID = attempt.ID
@@ -333,13 +334,36 @@ func (worker *Worker) settleClaimed(ctx context.Context, limit int) error {
 				worker.attemptAfterID = afterID
 				return err
 			}
+			pending, flushErr := worker.coordinator.flushDueSettledAuditBeforeHeartbeat(ctx, attempt)
+			if flushErr != nil {
+				_, scheduleErr := worker.coordinator.scheduleSettledAuditRetry(ctx, attempt.ID)
+				if scheduleErr != nil {
+					passErr = errors.Join(passErr, flushErr, scheduleErr)
+				} else {
+					passErr = errors.Join(passErr, flushErr)
+				}
+				// Audit failure is scoped to this attempt. It must not
+				// starve later attempts in the same pass.
+				worker.attemptAfterID = afterID
+				remaining--
+				continue
+			}
+			if pending {
+				// A future retry gate also belongs only to this attempt;
+				// pending attempts must not heartbeat or advance.
+				worker.attemptAfterID = afterID
+				remaining--
+				continue
+			}
+			var heartbeatErr error
 			if _, err := worker.coordinator.Heartbeat(ctx, attempt.ID); err != nil {
+				heartbeatErr = err
 				if ctx.Err() != nil {
 					worker.attemptAfterID = afterID
 					return ctx.Err()
 				}
-				if !errors.Is(err, backupasset.ErrNotFound) {
-					worker.observeAttempt(attempt, attempt)
+				if errors.Is(err, backupasset.ErrNotFound) {
+					heartbeatErr = nil
 				}
 			}
 			current, err := worker.coordinator.loadAttempt(ctx, attempt.ID)
@@ -351,6 +375,9 @@ func (worker *Worker) settleClaimed(ctx context.Context, limit int) error {
 				worker.attemptAfterID = afterID
 				return err
 			}
+			if heartbeatErr != nil {
+				worker.observeAttempt(attempt, current)
+			}
 			if err := worker.advanceUntilSettled(ctx, current); err != nil {
 				worker.attemptAfterID = afterID
 				return err
@@ -358,16 +385,16 @@ func (worker *Worker) settleClaimed(ctx context.Context, limit int) error {
 			remaining--
 			if remaining <= 0 {
 				worker.attemptAfterID = afterID
-				return nil
+				return passErr
 			}
 		}
 		worker.attemptAfterID = afterID
 		if len(attempts) < pageSize {
 			worker.attemptAfterID = ""
-			return nil
+			return passErr
 		}
 	}
-	return nil
+	return passErr
 }
 
 func (worker *Worker) advanceUntilSettled(ctx context.Context, attempt LifecycleAttempt) error {

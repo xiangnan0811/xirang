@@ -44,7 +44,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 - Add paired migration files for both database engines:
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
-- Keep version numbers in lockstep across SQLite and PostgreSQL. The current latest migration is `000076_provider_native_version_reference_reason`.
+- Keep version numbers in lockstep across SQLite and PostgreSQL. The current latest migration is `000077_lifecycle_effect_claim_audit_slot`.
 - Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
   `IF NOT EXISTS` where the engine supports it, and write comments when a
@@ -121,12 +121,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `idx_task_runs_started_at` and `idx_task_runs_status_finished_at`. Preserve
   both SQLite/PostgreSQL definitions and matching down migrations when changing
   traffic-window predicates or index names.
-- Backup-asset schema changes are paired across SQLite and PostgreSQL. The
-  current baseline includes `000062` through
-  `000076_provider_native_version_reference_reason`;
-  later versions must remain paired. After durable Search or publication facts,
-  or live content-delivery state exists, schema down must fail closed rather
-  than deleting history, Provider facts, grants, reservations, or leases.
+- Backup-asset schema changes are paired across SQLite and PostgreSQL. The historical baseline includes `000062` through `000076_provider_native_version_reference_reason`; the current migration is `000077_lifecycle_effect_claim_audit_slot`, and later versions must remain paired. After durable Search or publication facts, or live content-delivery state exists, schema down must fail closed rather than deleting history, Provider facts, grants, reservations, or leases.
 - `task_runs.node_id_snapshot` has a closed product contract. Ordinary TaskRun
   writes must freeze a positive node ID matching the live Task at creation;
   `task_id` and the snapshot are immutable. Snapshot `0` is not authority: it is
@@ -169,6 +164,45 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   PostgreSQL replaces only the named blocked-reason check. Both direct down and
   `schema_migrations` admission reject used downs atomically and preserve clean
   version 76.
+- Paired `000077_lifecycle_effect_claim_audit_slot` adds the Coordinator-owned
+  provider-delete effect claim and immutable settled-audit slot tables. The
+  v76→v77 upgrade is quiesced: complete the old-worker drain (stop every old
+  retention worker before applying it), reconcile scoped
+  `retention_expire`/`explicit_purge` `provider_delete` attempts without a
+  valid receipt, and enforce a no mixed-version runtime. The migration rejects
+  such unresolved attempts atomically while ignoring ordinary non-candidates.
+- Migration backfill and runtime share one `settledDeletionCandidate`: scoped
+  operation plus either a valid terminal tombstone/receipt or phase `blocked`
+  with `active_hold`, `provider_worm`, `provider_unavailable`,
+  `provider_identity_conflict`, `provider_native_version_referenced`,
+  `provider_delete_unproven`, or `deletion_unavailable`. `selected`,
+  `revoking`, `draining`, `cleaning`, `lease_live`, `lease_drain_unproven`,
+  `owner_cleanup_unproven`, `fence_lost`, and `mutable_retire` are no-op
+  states. A retained event is exact only with
+  `action=repository_purge`, matching attempt→point→repository IDs,
+  `item_count=1` and integer `fields.item_count=1`,
+  `fields.stage=settled`, `fields.source=<attempt_id>`, a legal
+  `fields.status`, and outcome `blocked` for observational statuses or
+  `success` for terminal statuses; terminal status must agree with the
+  tombstone result. Exact duplicates are deduplicated, observational slots may
+  occur once each in either order, and at most one mutually exclusive terminal
+  slot may follow. Near misses or remaining ambiguity roll back the entire
+  cutover; reconcile source events and durable tombstone truth before retrying.
+- Claims are append-only (`in_flight`, `uncertain`, `proven`) and slots are
+  immutable permanent proof; retention detail purge must not be used as
+  idempotency evidence. `000077` admission and direct down-body guards reject
+  any non-empty claim or slot table. Once durable rows exist, preserve those
+  rows and all history and repair forward only; do not use a destructive down
+  migration.
+- Provider-delete recovery is proof-first: validate the locked
+  attempt/point/tombstone and any proven claim before consulting current lease
+  identity, fence or expiry. A rebound historical owner/holder cannot invalidate
+  committed deletion proof. Leave a rebound lease untouched; only settle an
+  exact still-owned lease. Missing candidate leases and corrupt proof still fail
+  closed, and paths without proof retain the full execution-authority checks.
+- Required lifecycle PostgreSQL CI coverage must be checked against the actual
+  acceptance test inventory and the runner selection. Comparing two copied
+  selector strings does not prove that every acceptance case executes.
 
 ## Scenario: Rclone Native Version Evidence And Deletion Reservation
 

@@ -148,3 +148,39 @@ func testProviderNativeVersionReferenceReasonMigrationLifecycle(t *testing.T, fi
 		}
 	})
 }
+func TestProviderNativeVersionReferenceReasonV77PreservesAdmission(t *testing.T) {
+	t.Run("sqlite", func(t *testing.T) {
+		testProviderNativeVersionReferenceReasonV77PreservesAdmission(t, newSQLiteMigrationFixture(t))
+	})
+	t.Run("postgres", func(t *testing.T) {
+		testProviderNativeVersionReferenceReasonV77PreservesAdmission(t, newRequiredPostgresMigrationFixture(t))
+	})
+}
+
+func testProviderNativeVersionReferenceReasonV77PreservesAdmission(t *testing.T, fixture migrationFixture) {
+	t.Helper()
+	migrator, db := fixture.openAt(t, providerNativeVersionReferenceReasonMigrationVersion)
+	lifecycleName := "trg_backup_asset_lifecycle_downgrade_admission"
+	providerName := "trg_provider_native_version_reference_reason_downgrade_admission"
+	lifecycleBefore := fixture.recoveryTriggerDefinition(t, db, "schema_migrations", lifecycleName)
+	providerBefore := fixture.recoveryTriggerDefinition(t, db, "schema_migrations", providerName)
+
+	migrateToBackupAssetVersion(t, migrator, lifecycleEffectClaimAuditSlotMigrationVersion)
+	if got := fixture.recoveryTriggerDefinition(t, db, "schema_migrations", lifecycleName); got != lifecycleBefore {
+		t.Fatalf("%s v77 upgrade changed v70 admission trigger\n got: %s\nwant: %s", fixture.engine, got, lifecycleBefore)
+	}
+	if got := fixture.recoveryTriggerDefinition(t, db, "schema_migrations", providerName); got != providerBefore {
+		t.Fatalf("%s v77 upgrade changed v76 admission trigger\n got: %s\nwant: %s", fixture.engine, got, providerBefore)
+	}
+
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("%s pristine v77 down: %v", fixture.engine, err)
+	}
+	assertMigrationVersion(t, migrator, providerNativeVersionReferenceReasonMigrationVersion)
+	if got := fixture.recoveryTriggerDefinition(t, db, "schema_migrations", lifecycleName); got != lifecycleBefore {
+		t.Fatalf("%s v77 down changed v70 admission trigger\n got: %s\nwant: %s", fixture.engine, got, lifecycleBefore)
+	}
+	if got := fixture.recoveryTriggerDefinition(t, db, "schema_migrations", providerName); got != providerBefore {
+		t.Fatalf("%s v77 down changed v76 admission trigger\n got: %s\nwant: %s", fixture.engine, got, providerBefore)
+	}
+}

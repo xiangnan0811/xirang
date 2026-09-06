@@ -144,6 +144,13 @@ jobs:
 
       - name: Run PostgreSQL migration parity
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL migration parity' ./internal/database '^(Test.*Migration.*Postgres.*|TestPostgresTimestamptzScanUsesConfiguredUTC)$'
+      - name: Run PostgreSQL lifecycle migration contract
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL lifecycle migration contract' ./internal/database '^TestLifecycleEffectClaimAuditSlotMigrationPostgres(PristineDown|ClaimUsedDown|SlotUsedDown|Constraints|ClaimTransitionRebinding|UpgradeCutover)$'
+
+      - name: Run PostgreSQL lifecycle retention contract
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL lifecycle retention contract' ./internal/backupasset/retention '^TestLifecycle(EffectClaimDualAdvancePostgres|EffectClaimLateLoserCannotMutatePostgres|EffectClaimProofFirstRecoveryPostgres|EffectClaimSameExecutorConcurrentPostgres|EffectClaimRenewsAcrossMultipleDeadlinesPostgres|EffectClaimCrashTakeoverPostgres|EffectClaimStaleFencePostgres|EffectClaimReceiptDeadlineRacePostgres|EffectClaimProvenDeadlineFenceRacePostgres|EffectClaimPartialWORMPostgres|EffectClaimInFlightDoesNotBlockPostgres|EffectClaimAbsoluteDeadlineAfterClaimPostgres|EffectClaimObserverHoldResumePostgres|EffectClaimIdentityConflictResumePostgres|EffectClaimNativeVersionReferencedResumePostgres|RcloneNativePrepareRenewExecutePostgres|LateHoldReceiptSettledAuditUsesRegistryPointDeletionPostgres|SettledAuditConcurrentBlockedTicksPostgres|SettledAuditSuccessAndBlockedShareSlotWriterPostgres|SettledAuditWriteTxRollbackPostgres|SettledAuditAttemptIsolationPostgres|SettledAuditStatusMatrixPostgres|SettledAuditStaleBlockedCallerReDerivesReceiptPostgres)$'
+      - name: Run PostgreSQL lifecycle runtime contract
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL lifecycle runtime contract' ./internal/backupasset/runtime '^TestLifecycleSettledAuditDetailPurgePostgres$'
 
       - name: Run PostgreSQL Recovery behavior parity
         run: go test ./internal/backupasset/recovery -run '^TestRecoveryBehaviorPostgres$' -count=1

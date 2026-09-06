@@ -422,9 +422,19 @@ Updater receipt 只在独立 Unix socket `/run/xirang/asset-worker-updater.sock`
 
 ## 数据库
 
-支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000076_provider_native_version_reference_reason`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
+支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000077_lifecycle_effect_claim_audit_slot`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
 
-核心模型：User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task, TaskRun, TaskLog, TaskTrafficSample, TokenRevocation, NodeMetricSample, NodeOwner, AuditLog, ReportConfig, Report, LoginFailure, SystemSetting, AppCredential, RestoreDrillEvidence, CredentialAuditEvent, CredentialAccessGrant, NodeMetricSampleHourly, NodeMetricSampleDaily, Silence, SLODefinition, NodeLog, NodeLogCursor, Dashboard, DashboardPanel, PanelFilters, EscalationPolicy, EscalationLevel, AlertEscalationEvent, AnomalyEvent, SnapshotDiffHistory, SnapshotFileIndex, AutomationRule, AutomationRuleLog, ServiceMonitor, ServiceUptimeSample（43 个模型）
+000077 是从 v76 到 v77 的静默（quiesced）切换，只允许在完成 old-worker drain（旧 retention worker 已停止接收新任务并排空所有旧 worker）后执行。排空期间必须先处理 scoped `provider_delete`：`retention_expire` 或 `explicit_purge` 的 `provider_delete` 若没有匹配的有效 deletion receipt/tombstone，迁移会原子拒绝；普通的非候选 phase/reason 不会被误判为待迁移数据。迁移完成且所有旧进程退出后才能启动新 worker；这是 no mixed-version runtime 约束，v76 与 v77 retention worker 不得混跑。
+
+settled audit backfill 与运行时共用唯一的 `settledDeletionCandidate` 谓词：operation 必须为 `retention_expire` 或 `explicit_purge`，且必须有有效 terminal tombstone/receipt（`terminal_state=expired`、`purged_at`、`deletion_receipt_digest` 非空，结果为 `provider_deleted` 或 `provider_already_absent`），或 phase=`blocked` 且 reason 属于 `{active_hold, provider_worm, provider_unavailable, provider_identity_conflict, provider_native_version_referenced, provider_delete_unproven, deletion_unavailable}`。`selected`、`revoking`、`draining`、`cleaning`、`lease_live`、`lease_drain_unproven`、`owner_cleanup_unproven`、`fence_lost`、`mutable_retire` 等均为 no-op，不产生 slot。
+
+历史 `backup_asset_audit_events` 只有在完整匹配以下 producer signature 时才可 backfill slot：`action=repository_purge`；`repository_id`、`recovery_point_id` 与 attempt→point→repository 关系精确一致；顶层 `item_count=1` 且 `fields.item_count` 为整数 1；`fields.stage=settled`、`fields.source=<attempt_id>`，`fields.status` 为合法状态；`blocked`/`identity_conflict` 的 `outcome=blocked`，`deleted`/`already_absent` 的 `outcome=success`，并且 terminal 状态必须与 tombstone result 一致。相同 `(attempt_id,status)` 的精确重复只去重一次；`blocked` 与 `identity_conflict` 各最多一次、顺序任意，之后至多一个互斥的 terminal status。任何字段、关联、结果或顺序的 near miss 都不是匹配项；候选仍有歧义时整次迁移回滚且不生成 slot。
+
+若 backfill 因 near miss 或缺失事件而 ambiguous，先在停机窗口内对照有效 tombstone、attempt/point/repository 关系和原始 event 逐项 reconcile，再重新运行迁移；不得用猜测事件填充 slot。000077 的 claim/slot 是永久幂等证据，不能依赖会被 retention 清理的 audit 明细。
+
+000077 down 同时受 schema-migrations admission 与 down body 的独立 guard 保护；只有 effect-claim 与 audit-slot 两张表均为空才允许回退。已有 durable claim/slot rows 后禁止 destructive rollback 或删除历史，必须保留既有 rows/events 并通过 forward-only migration/repair 修复；只有尚未写入 durable rows 的未使用代码才可移除。
+
+核心模型：User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task, TaskRun, TaskLog, TaskTrafficSample, TokenRevocation, NodeMetricSample, NodeOwner, AuditLog, ReportConfig, Report, LoginFailure, SystemSetting, AppCredential, RestoreDrillEvidence, RecoveryPointLifecycleEffectClaim, RecoveryPointLifecycleAuditSlot, CredentialAuditEvent, CredentialAccessGrant, NodeMetricSampleHourly, NodeMetricSampleDaily, Silence, SLODefinition, NodeLog, NodeLogCursor, Dashboard, DashboardPanel, PanelFilters, EscalationPolicy, EscalationLevel, AlertEscalationEvent, AnomalyEvent, SnapshotDiffHistory, SnapshotFileIndex, AutomationRule, AutomationRuleLog, ServiceMonitor, ServiceUptimeSample（45 个模型）
 
 敏感字段通过模型 hooks 加密保存；API 响应必须使用脱敏 DTO/辅助方法。`Node` 不返回密码/私钥，`SSHKey` 不返回私钥，`Task.ExecutorConfig` 不参与 JSON 序列化以避免泄露执行器密钥。
 

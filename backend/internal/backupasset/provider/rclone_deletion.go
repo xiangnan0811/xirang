@@ -39,6 +39,7 @@ type RcloneNativeDeletionAccess struct {
 	Versions        []RcloneNativeExactVersion      `json:"-"`
 	AuthorityDigest string                          `json:"-"`
 	Client          RcloneNativeExactVersionDeleter `json:"-"`
+	Command         *RemoteCommandAccess            `json:"-"`
 }
 
 type RcloneNativeVersionProbe struct {
