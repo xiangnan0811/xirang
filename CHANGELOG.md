@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.0](https://github.com/xiangnan0811/xirang/compare/v0.54.0...v0.55.0) (2026-09-06)
+
+
+### ✨ Features
+
+* **backup:** fence lifecycle deletion effects ([#497](https://github.com/xiangnan0811/xirang/issues/497)) ([ba543af](https://github.com/xiangnan0811/xirang/commit/ba543afda8403655672db40f1fbbe8d62efa33a9))
+
 ## [0.54.0](https://github.com/xiangnan0811/xirang/compare/v0.53.2...v0.54.0) (2026-09-03)
 
 
