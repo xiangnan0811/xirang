@@ -15,8 +15,8 @@
   "branch": "feat/backup-lifecycle-effect-audit-idempotency",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
-  "pr_url": null,
+  "commit": "e1080feda00bb60c0836974aa618c092326e64dd",
+  "pr_url": "https://github.com/xiangnan0811/xirang/pull/497",
   "subtasks": [],
   "children": [],
   "parent": null,
@@ -66,13 +66,15 @@
     "scripts/run-required-postgres-tests.sh",
     ".github/workflows/ci.yml",
     ".trellis/config.yaml",
-    "web/package-lock.json"
+    "web/package-lock.json",
+    "deploy/allinone/Dockerfile",
+    "backend/internal/backupasset/recovery/service_test.go"
   ],
   "notes": "Planning approved by GPT-5.6-Sol and Grok-4.6 after targeted re-review. Gemini 3.8 Flash repeatedly failed before review in the harness. User authorized implementation and, on 2026-09-06, the complete commit/PR/required-CI/merge/cleanup workflow. Plan covers quiesced v76→v77 cutover, exact candidate/backfill, independent downgrade guards, observer-first claims, scoped Heartbeat, proof lease settlement and Worker pre-Heartbeat audit retry.",
   "meta": {
     "implementation_authorized": "true",
-    "deferred_reason": "Delivery is authorized and local gates pass; real provider/NAS E2E remains outside this repository-delivery evidence.",
-    "next_gate": "commit_push_pr_required_remote_ci",
+    "deferred_reason": "Repository delivery gates pass on the committed feature snapshot; real provider/NAS E2E remains outside this repository-delivery evidence.",
+    "next_gate": "archive_push_final_ci_merge",
     "handoff": "implement.md",
     "design": "design.md",
     "implement": "implement.md"

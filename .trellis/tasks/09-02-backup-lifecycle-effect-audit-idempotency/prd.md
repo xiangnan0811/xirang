@@ -90,7 +90,7 @@ Checked items below record local behavioral acceptance for the repaired worktree
 - [x] **AC6 — status state machine:** 表格/事务测试必须证明 `blocked` 和 `identity_conflict` 各最多一次且可任意顺序，二者之后最多追加一个 `deleted` 或 `already_absent`；`deleted`/`already_absent` 互斥且 terminal，terminal 后任何 status 都 fail closed。覆盖 stale blocked caller 在 success receipt 下重新推导 terminal/no-op。
 - [x] **AC7 — shared writer, rollback and audit-only retry:** real Worker 中首次失败 schedule future retry；retry_at 前再次 tick 零 WriteTx/attempt/lease/claim/provider mutation；到期恰好一次 slot retry，成功/no-op 后才进 Heartbeat/Advance。非候选永远 no-op。
 - [x] **AC8 — crash/partial-effect identity:** short-live、short-expired/absolute-live、absolute-expired 的 endpoint/auth/key drift都在 provider/lease mutation 前 observer block；Execute telemetry 不破坏 Tx2。claimed Rclone-native preparing sibling block 后可 commit，清除后 resume→Advance 且只删一次；post-call partial/WORM 永不 definite no-effect。
-- [ ] **AC9 — migration, upgrade parity and gates:** both engines 覆盖 exact-event near misses、候选/非候选、inference/ambiguity；claim/slot 各有 admission-intact migrator downgrade 与 bypassed direct-body down；clean-v77 drift。broad+exact 四组 CI/DSN/zero-match 通过。
+- [x] **AC9 — migration, upgrade parity and gates:** both engines 覆盖 exact-event near misses、候选/非候选、inference/ambiguity；claim/slot 各有 admission-intact migrator downgrade 与 bypassed direct-body down；clean-v77 drift。broad+exact 四组 CI/DSN/zero-match 通过。
 
 ## Out of scope
 

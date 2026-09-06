@@ -293,9 +293,9 @@ The fresh planning review and explicit user authorization occur before productio
 - [x] Slot status matrix, uniqueness, append-only behavior and stale-caller re-derivation are tested.
 - [x] Production AuditWriter/retention adapter and actual non-latest closed-segment purge are exercised.
 - [x] All fixtures, model lists, docs, migration scripts and required PostgreSQL selectors are updated.
-- [x] Focused tests, race tests, required PostgreSQL barriers and final backend gate pass locally for the repaired snapshot; see section 6. Remote CI and delivery remain separate unchecked gates.
+- [x] Focused tests, race tests, required PostgreSQL barriers and final backend gate pass locally for the repaired snapshot; the committed snapshot also passes required remote CI. See sections 6, 9 and 10.
 - [x] Fresh independent planning review has no Important findings and explicit user start approval is recorded before implementation.
-- [ ] After every implementation check passes, set the repository-defined completion/ready state through the normal workflow; do not misuse the start state as a completion gate. A branch commit, PR and required remote CI evidence are still required before delivery.
+- [x] After every implementation check passes, set the repository-defined completion/ready state through the normal workflow; do not misuse the start state as a completion gate. The committed branch, PR and required remote CI evidence are recorded in section 10 and the task is ready for archival and protected merge.
 
 If a later rollback is needed, preserve any claim/slot rows already written. Remove only unused migration/path code before data exists; once durable rows exist, repair forward rather than running a destructive down migration.
 
@@ -479,6 +479,36 @@ post-merge, and cleanup workflow. No new Trellis task was created.
   minimally refreshed to the patched 0.16.8 release; `npm ci`, `npm audit`, and
   the full frontend gate pass.
 
-AC9 and the final completion item remain open until the committed snapshot has
-passed the repository's required remote checks. Real provider/NAS E2E was not
-executed and is not being represented as repository-delivery evidence.
+At this pre-delivery checkpoint, AC9 and the final completion item remained open
+until the committed snapshot passed the repository's required remote checks.
+Real provider/NAS E2E had not been executed and was not represented as
+repository-delivery evidence.
+
+## 10. Committed snapshot and required remote CI (2026-09-06)
+
+Pull request #497 targets `main` from
+`feat/backup-lifecycle-effect-audit-idempotency`. The committed feature snapshot
+is `e1080feda00bb60c0836974aa618c092326e64dd`.
+
+- The first complete CI run, `34036766485`, passed PostgreSQL parity, frontend,
+  Docker, both Worker runtime closures, both Worker build/scan jobs, migration
+  UTC safety, documentation freshness and PR-title validation. Its sole failure
+  was the backend race step: the concurrent different-intent recovery-plan test
+  could exhaust immediate SQLite lock retries and then run global secure cleanup
+  while a spawned caller was still active.
+- The repair is test-only. That case now uses the production SQLite writer
+  serialization options without changing the fault-injection fixtures, drains
+  every caller before assertion/cleanup, and avoids fatal early exit while
+  results remain outstanding. The five focused concurrency/retry tests passed
+  locally under `-race -count=10`; the full recovery package race and the exact
+  CI cross-package race command also passed.
+- CI run `34038232448` passed all 11 jobs on `e1080fed`: backend test/build/race,
+  PostgreSQL migration and behavior parity, frontend test/build/Playwright,
+  Docker build and smoke, both Worker runtime closures and both architecture
+  build/scan jobs, plus PR title, documentation and migration safety checks.
+- GitHub reports the PR ready, non-draft and merge-clean with all checks complete
+  and no unresolved review requirement.
+
+This closes repository delivery acceptance, including AC9. Real
+Restic/Rsync/Rclone/NAS E2E was not executed; it remains separate live-provider
+acceptance and is not represented by these local or remote repository gates.
