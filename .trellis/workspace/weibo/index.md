@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 49
-- **Last Active**: 2026-09-03
+- **Total Sessions**: 50
+- **Last Active**: 2026-09-06
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1915 | Active |
+| `journal-1.md` | ~1957 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 50 | 2026-09-06 | Deliver backup lifecycle effect fencing and audit idempotency | `56cc0b2b`, `cf93511d`, `d49858e1`, `e3bf4071`, `89b0057c`, `e1080fed`, `5379219` | `feat/backup-lifecycle-effect-audit-idempotency` |
 | 49 | 2026-09-03 | Guard rclone native version deletes and split backup routes | `c32ecf7e`, `f4bbab53` | `feat/backup-native-version-evidence` |
 | 48 | 2026-08-29 | Deliver task preview connection workflow | `f038f513` | `codex/backup-task-preview-connect-ui` |
 | 47 | 2026-08-24 | 完成备份资产启用死锁修复与 v0.50.4 生产验收 | `bb295c830285377af439e6021b51234e09df5127`, `214f5e18b47974d4e353227fa52782992cef70f7`, `3235ca5f` | `chore/backup-assets-release-acceptance` |
