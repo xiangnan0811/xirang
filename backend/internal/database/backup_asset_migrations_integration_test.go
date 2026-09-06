@@ -57,7 +57,7 @@ const (
 	backupAssetPlainTextContentVersion          = 73
 	drillDurableRecoveryVersion                 = 74
 	rcloneNativeVersionEvidenceMigrationVersion = 75
-	latestMigrationVersion                      = 76
+	latestMigrationVersion                      = 77
 	recoveryEmptyDeleteSetDigest                = "3f5a5d5213612b170da6ce2f2f90775a31d4e40269bb785042589af64011b7cf"
 	recoveryClaimSchedulerRowID                 = "0000000000000000000000000000006a"
 	recoveryTakeoverSchedulerRowID              = "0000000000000000000000000000006b"
@@ -3480,6 +3480,765 @@ func TestBackupAssetMigration073PairedFiles(t *testing.T) {
 	}
 }
 
+func TestBackupAssetMigration077TerminalIndexPredicateSQLite(t *testing.T) {
+	newSQLiteMigrationFixture(t).test077TerminalIndexPredicateDrift(t)
+}
+
+func TestBackupAssetMigration077TerminalIndexPredicatePostgres(t *testing.T) {
+	newRequiredPostgresMigrationFixture(t).test077TerminalIndexPredicateDrift(t)
+}
+
+func TestBackupAssetMigration077GuardSchemaDriftSQLite(t *testing.T) {
+	newSQLiteMigrationFixture(t).test077GuardSchemaDrift(t)
+}
+
+func TestBackupAssetMigration077GuardSchemaDriftPostgres(t *testing.T) {
+	newRequiredPostgresMigrationFixture(t).test077GuardSchemaDrift(t)
+}
+
+// test077GuardSchemaDrift exercises the startup validator against every
+// fail-closed v77 guard class. Each case starts from a fresh clean v77 schema,
+// weakens one same-named object, and verifies RunMigrations refuses startup
+// without repairing or advancing migration metadata.
+func (fixture migrationFixture) test077GuardSchemaDrift(t *testing.T) {
+	t.Helper()
+	type driftCase struct {
+		name   string
+		mutate func(*testing.T, *sql.DB)
+	}
+	replaceSQLiteTrigger := func(t *testing.T, db *sql.DB, table, name, event string) {
+		t.Helper()
+		fixture.mustExec(t, db, `DROP TRIGGER `+name)
+		fixture.mustExec(t, db, `CREATE TRIGGER `+name+` BEFORE `+event+` ON `+table+` BEGIN SELECT 1; END`)
+	}
+	replacePostgresFunction := func(t *testing.T, db *sql.DB, function string) {
+		t.Helper()
+		fixture.mustExec(t, db, `CREATE OR REPLACE FUNCTION `+function+`()
+			RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$`)
+	}
+	replaceSQLiteTriggerWithDeadBody := func(t *testing.T, db *sql.DB, table, name string) {
+		t.Helper()
+		definition, err := migrationTriggerDefinition(db, "sqlite", table, name)
+		if err != nil {
+			t.Fatalf("load SQLite guard %s: %v", name, err)
+		}
+		begin := migrationSQLKeywordIndex(definition, "begin", 0)
+		if begin < 0 {
+			t.Fatalf("SQLite guard %s has no BEGIN", name)
+		}
+		mutated := definition[:begin+len("begin")] +
+			"\n    SELECT RAISE(IGNORE);\n" +
+			definition[begin+len("begin"):]
+		fixture.mustExec(t, db, `DROP TRIGGER `+name)
+		fixture.mustExec(t, db, mutated)
+	}
+	replacePostgresFunctionWithDeadBody := func(t *testing.T, db *sql.DB, table, trigger, function string) {
+		t.Helper()
+		definition, err := migrationTriggerFunctionDefinition(db, table, trigger)
+		if err != nil {
+			t.Fatalf("load PostgreSQL guard function for %s: %v", trigger, err)
+		}
+		body, ok := migrationPostgresFunctionBody(definition)
+		if !ok {
+			t.Fatalf("PostgreSQL guard function for %s has no body", trigger)
+		}
+		begin := migrationSQLKeywordIndex(body, "begin", 0)
+		end := migrationSQLKeywordLastIndex(body, "end", begin+len("begin"))
+		if begin < 0 || end < 0 {
+			t.Fatalf("PostgreSQL guard function for %s has no BEGIN/END", trigger)
+		}
+		statements := body[begin+len("begin") : end]
+		fixture.mustExec(t, db, `CREATE OR REPLACE FUNCTION `+function+`()
+			RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+				RETURN NEW;`+statements+`
+			END; $$`)
+	}
+	transitionCases := []driftCase{
+		{
+			name: "ClaimPermanence",
+			mutate: func(t *testing.T, db *sql.DB) {
+				if fixture.engine == "sqlite" {
+					replaceSQLiteTrigger(t, db, lifecycleEffectClaimAuditSlotClaimsTable,
+						"trg_recovery_point_lifecycle_effect_claims_no_delete", "DELETE")
+				} else {
+					replacePostgresFunction(t, db, "recovery_point_lifecycle_effect_claim_delete_guard")
+				}
+			},
+		},
+		{
+			name: "ClaimTransitionProvenImmutability",
+			mutate: func(t *testing.T, db *sql.DB) {
+				if fixture.engine == "sqlite" {
+					replaceSQLiteTrigger(t, db, lifecycleEffectClaimAuditSlotClaimsTable,
+						"trg_recovery_point_lifecycle_effect_claims_transition", "UPDATE")
+				} else {
+					replacePostgresFunction(t, db, "recovery_point_lifecycle_effect_claim_transition_guard")
+				}
+			},
+		},
+		{
+			name: "ClaimTransitionIdentityBindingPreservation",
+			mutate: func(t *testing.T, db *sql.DB) {
+				if fixture.engine == "sqlite" {
+					replaceSQLiteTrigger(t, db, lifecycleEffectClaimAuditSlotClaimsTable,
+						"trg_recovery_point_lifecycle_effect_claims_transition", "UPDATE")
+				} else {
+					replacePostgresFunction(t, db, "recovery_point_lifecycle_effect_claim_transition_guard")
+				}
+			},
+		},
+		{
+			name: "ClaimTransitionTakeoverExecutionRotation",
+			mutate: func(t *testing.T, db *sql.DB) {
+				if fixture.engine == "sqlite" {
+					replaceSQLiteTrigger(t, db, lifecycleEffectClaimAuditSlotClaimsTable,
+						"trg_recovery_point_lifecycle_effect_claims_transition", "UPDATE")
+				} else {
+					replacePostgresFunction(t, db, "recovery_point_lifecycle_effect_claim_transition_guard")
+				}
+			},
+		},
+		{
+			name: "AuditSlotOrdering",
+			mutate: func(t *testing.T, db *sql.DB) {
+				if fixture.engine == "sqlite" {
+					replaceSQLiteTrigger(t, db, lifecycleEffectClaimAuditSlotSlotsTable,
+						"trg_recovery_point_lifecycle_audit_slots_transition", "INSERT")
+				} else {
+					replacePostgresFunction(t, db, "recovery_point_lifecycle_audit_slot_transition_guard")
+				}
+			},
+		},
+		{
+			name: "AuditSlotUpdateRejection",
+			mutate: func(t *testing.T, db *sql.DB) {
+				if fixture.engine == "sqlite" {
+					replaceSQLiteTrigger(t, db, lifecycleEffectClaimAuditSlotSlotsTable,
+						"trg_recovery_point_lifecycle_audit_slots_immutable_update", "UPDATE")
+				} else {
+					replacePostgresFunction(t, db, "recovery_point_lifecycle_audit_slot_immutable_guard")
+				}
+			},
+		},
+		{
+			name: "AuditSlotDeleteRejection",
+			mutate: func(t *testing.T, db *sql.DB) {
+				if fixture.engine == "sqlite" {
+					replaceSQLiteTrigger(t, db, lifecycleEffectClaimAuditSlotSlotsTable,
+						"trg_recovery_point_lifecycle_audit_slots_immutable_delete", "DELETE")
+				} else {
+					replacePostgresFunction(t, db, "recovery_point_lifecycle_audit_slot_immutable_guard")
+				}
+			},
+		},
+		{
+			name: "AdmissionGuard",
+			mutate: func(t *testing.T, db *sql.DB) {
+				if fixture.engine == "sqlite" {
+					replaceSQLiteTrigger(t, db, "schema_migrations",
+						lifecycleEffectClaimAuditSlotAdmissionTrigger, "INSERT")
+				} else {
+					replacePostgresFunction(t, db, lifecycleEffectClaimAuditSlotAdmissionFunction)
+				}
+			},
+		},
+		{
+			name: "AdmissionTriggerDisabled",
+			mutate: func(t *testing.T, db *sql.DB) {
+				if fixture.engine == "sqlite" {
+					replaceSQLiteTrigger(t, db, "schema_migrations",
+						lifecycleEffectClaimAuditSlotAdmissionTrigger, "INSERT")
+				} else {
+					fixture.mustExec(t, db, `ALTER TABLE schema_migrations DISABLE TRIGGER `+lifecycleEffectClaimAuditSlotAdmissionTrigger)
+				}
+			},
+		},
+		{
+			name: "AdmissionTriggerReplicaOnly",
+			mutate: func(t *testing.T, db *sql.DB) {
+				if fixture.engine == "sqlite" {
+					replaceSQLiteTrigger(t, db, "schema_migrations",
+						lifecycleEffectClaimAuditSlotAdmissionTrigger, "INSERT")
+				} else {
+					fixture.mustExec(t, db, `ALTER TABLE schema_migrations ENABLE REPLICA TRIGGER `+lifecycleEffectClaimAuditSlotAdmissionTrigger)
+				}
+			},
+		},
+		{
+			name: "ClaimTransitionEarlyReturnDeadBody",
+			mutate: func(t *testing.T, db *sql.DB) {
+				if fixture.engine == "sqlite" {
+					replaceSQLiteTriggerWithDeadBody(t, db, lifecycleEffectClaimAuditSlotClaimsTable,
+						"trg_recovery_point_lifecycle_effect_claims_transition")
+				} else {
+					replacePostgresFunctionWithDeadBody(t, db, lifecycleEffectClaimAuditSlotClaimsTable,
+						"trg_recovery_point_lifecycle_effect_claims_transition",
+						"recovery_point_lifecycle_effect_claim_transition_guard")
+				}
+			},
+		},
+		{
+			name: "ClaimDeleteEarlyReturnDeadBody",
+			mutate: func(t *testing.T, db *sql.DB) {
+				if fixture.engine == "sqlite" {
+					replaceSQLiteTriggerWithDeadBody(t, db, lifecycleEffectClaimAuditSlotClaimsTable,
+						"trg_recovery_point_lifecycle_effect_claims_no_delete")
+				} else {
+					replacePostgresFunctionWithDeadBody(t, db, lifecycleEffectClaimAuditSlotClaimsTable,
+						"trg_recovery_point_lifecycle_effect_claims_no_delete",
+						"recovery_point_lifecycle_effect_claim_delete_guard")
+				}
+			},
+		},
+		{
+			name: "AuditSlotTransitionEarlyReturnDeadBody",
+			mutate: func(t *testing.T, db *sql.DB) {
+				if fixture.engine == "sqlite" {
+					replaceSQLiteTriggerWithDeadBody(t, db, lifecycleEffectClaimAuditSlotSlotsTable,
+						"trg_recovery_point_lifecycle_audit_slots_transition")
+				} else {
+					replacePostgresFunctionWithDeadBody(t, db, lifecycleEffectClaimAuditSlotSlotsTable,
+						"trg_recovery_point_lifecycle_audit_slots_transition",
+						"recovery_point_lifecycle_audit_slot_transition_guard")
+				}
+			},
+		},
+		{
+			name: "AuditSlotImmutableEarlyReturnDeadBody",
+			mutate: func(t *testing.T, db *sql.DB) {
+				if fixture.engine == "sqlite" {
+					replaceSQLiteTriggerWithDeadBody(t, db, lifecycleEffectClaimAuditSlotSlotsTable,
+						"trg_recovery_point_lifecycle_audit_slots_immutable_update")
+				} else {
+					replacePostgresFunctionWithDeadBody(t, db, lifecycleEffectClaimAuditSlotSlotsTable,
+						"trg_recovery_point_lifecycle_audit_slots_immutable_update",
+						"recovery_point_lifecycle_audit_slot_immutable_guard")
+				}
+			},
+		},
+		{
+			name: "AdmissionEarlyReturnDeadBody",
+			mutate: func(t *testing.T, db *sql.DB) {
+				if fixture.engine == "sqlite" {
+					replaceSQLiteTriggerWithDeadBody(t, db, "schema_migrations",
+						lifecycleEffectClaimAuditSlotAdmissionTrigger)
+				} else {
+					replacePostgresFunctionWithDeadBody(t, db, "schema_migrations",
+						lifecycleEffectClaimAuditSlotAdmissionTrigger,
+						lifecycleEffectClaimAuditSlotAdmissionFunction)
+				}
+			},
+		},
+	}
+	for _, testCase := range transitionCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			migrator, db := fixture.openAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
+			testCase.mutate(t, db)
+			err := RunMigrations(fixture.recoveryWorkerGorm(t, db), fixture.engine)
+			if !errors.Is(err, ErrMigrationSchemaDrift) {
+				t.Fatalf("%s v77 guard drift returned %v, want ErrMigrationSchemaDrift", fixture.engine, err)
+			}
+			assertMigrationVersion(t, migrator, lifecycleEffectClaimAuditSlotMigrationVersion)
+		})
+	}
+}
+
+func TestBackupAssetMigration077NonPartialUniqueIndexDriftSQLite(t *testing.T) {
+	newSQLiteMigrationFixture(t).test077RequiredUniqueIndexPredicateDrift(t)
+}
+
+func TestBackupAssetMigration077NonPartialUniqueIndexDriftPostgres(t *testing.T) {
+	newRequiredPostgresMigrationFixture(t).test077RequiredUniqueIndexPredicateDrift(t)
+}
+
+func (fixture migrationFixture) test077RequiredUniqueIndexPredicateDrift(t *testing.T) {
+	t.Helper()
+	for _, testCase := range []struct {
+		name      string
+		index     string
+		table     string
+		columns   string
+		predicate string
+		reason    string
+	}{
+		{
+			name:      "ClaimAttemptPartial",
+			index:     "idx_recovery_point_lifecycle_effect_claims_attempt",
+			table:     lifecycleEffectClaimAuditSlotClaimsTable,
+			columns:   "attempt_id",
+			predicate: "transition_revision > 0",
+			reason:    "invalid_lifecycle_effect_claim_attempt_index",
+		},
+		{
+			name:      "AuditSlotAttemptStatusPartial",
+			index:     "idx_recovery_point_lifecycle_audit_slots_attempt_status",
+			table:     lifecycleEffectClaimAuditSlotSlotsTable,
+			columns:   "attempt_id, status",
+			predicate: "status IS NOT NULL",
+			reason:    "invalid_lifecycle_audit_slot_attempt_status_index",
+		},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			migrator, db := fixture.openAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
+			fixture.mustExec(t, db, `DROP INDEX `+testCase.index)
+			fixture.mustExec(t, db, `CREATE UNIQUE INDEX `+testCase.index+
+				` ON `+testCase.table+`(`+testCase.columns+`) WHERE `+testCase.predicate)
+
+			err := RunMigrations(fixture.recoveryWorkerGorm(t, db), fixture.engine)
+			if !errors.Is(err, ErrMigrationSchemaDrift) || !strings.Contains(err.Error(), testCase.reason) {
+				t.Fatalf("%s partial unique index drift returned %v, want %s", fixture.engine, err, testCase.reason)
+			}
+			assertMigrationVersion(t, migrator, lifecycleEffectClaimAuditSlotMigrationVersion)
+		})
+	}
+	for _, indexState := range []string{"indisvalid", "indisready", "indislive"} {
+		indexState := indexState
+		t.Run("ClaimAttemptNotUsable_"+indexState, func(t *testing.T) {
+			migrator, db := fixture.openAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
+			if fixture.engine == "sqlite" {
+				fixture.mustExec(t, db, `DROP INDEX idx_recovery_point_lifecycle_effect_claims_attempt`)
+				fixture.mustExec(t, db, `CREATE INDEX idx_recovery_point_lifecycle_effect_claims_attempt
+					ON recovery_point_lifecycle_effect_claims(attempt_id)`)
+			} else {
+				fixture.mustExec(t, db, `UPDATE pg_catalog.pg_index
+					SET `+indexState+` = FALSE
+					WHERE indexrelid = ?::regclass`, "idx_recovery_point_lifecycle_effect_claims_attempt")
+			}
+			err := RunMigrations(fixture.recoveryWorkerGorm(t, db), fixture.engine)
+			if !errors.Is(err, ErrMigrationSchemaDrift) ||
+				!strings.Contains(err.Error(), "invalid_lifecycle_effect_claim_attempt_index") {
+				t.Fatalf("%s unusable index state %s returned %v, want invalid_lifecycle_effect_claim_attempt_index",
+					fixture.engine, indexState, err)
+			}
+			assertMigrationVersion(t, migrator, lifecycleEffectClaimAuditSlotMigrationVersion)
+		})
+	}
+}
+
+func TestBackupAssetMigration077PrimaryKeyDriftSQLite(t *testing.T) {
+	newSQLiteMigrationFixture(t).test077PrimaryKeyDrift(t)
+}
+
+func TestBackupAssetMigration077PrimaryKeyDriftPostgres(t *testing.T) {
+	newRequiredPostgresMigrationFixture(t).test077PrimaryKeyDrift(t)
+}
+
+func (fixture migrationFixture) test077PrimaryKeyDrift(t *testing.T) {
+	t.Helper()
+	for _, testCase := range []struct {
+		name        string
+		table       string
+		replacement string
+		reason      string
+	}{
+		{
+			name:   "ClaimsPrimaryKeyDropped",
+			table:  lifecycleEffectClaimAuditSlotClaimsTable,
+			reason: "invalid_lifecycle_effect_claim_primary_key",
+		},
+		{
+			name:        "ClaimsPrimaryKeyReplaced",
+			table:       lifecycleEffectClaimAuditSlotClaimsTable,
+			replacement: "attempt_id",
+			reason:      "invalid_lifecycle_effect_claim_primary_key",
+		},
+		{
+			name:   "AuditSlotsPrimaryKeyDropped",
+			table:  lifecycleEffectClaimAuditSlotSlotsTable,
+			reason: "invalid_lifecycle_audit_slot_primary_key",
+		},
+		{
+			name:        "AuditSlotsPrimaryKeyReplaced",
+			table:       lifecycleEffectClaimAuditSlotSlotsTable,
+			replacement: "attempt_id",
+			reason:      "invalid_lifecycle_audit_slot_primary_key",
+		},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			migrator, db := fixture.openAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
+			if fixture.engine == "sqlite" {
+				fixture.rebuildSQLiteLifecycleTableWithPrimaryKey(t, db, testCase.table, testCase.replacement)
+			} else {
+				fixture.replacePostgresLifecyclePrimaryKey(t, db, testCase.table, testCase.replacement)
+			}
+
+			err := RunMigrations(fixture.recoveryWorkerGorm(t, db), fixture.engine)
+			if !errors.Is(err, ErrMigrationSchemaDrift) || !strings.Contains(err.Error(), testCase.reason) {
+				t.Fatalf("%s primary-key drift returned %v, want %s", fixture.engine, err, testCase.reason)
+			}
+			assertMigrationVersion(t, migrator, lifecycleEffectClaimAuditSlotMigrationVersion)
+		})
+	}
+}
+
+func (fixture migrationFixture) rebuildSQLiteLifecycleTableWithPrimaryKey(
+	t *testing.T,
+	db *sql.DB,
+	table,
+	replacement string,
+) {
+	t.Helper()
+	triggerNames := map[string][]string{
+		lifecycleEffectClaimAuditSlotClaimsTable: {
+			"trg_recovery_point_lifecycle_effect_claims_transition",
+			"trg_recovery_point_lifecycle_effect_claims_no_delete",
+		},
+		lifecycleEffectClaimAuditSlotSlotsTable: {
+			"trg_recovery_point_lifecycle_audit_slots_transition",
+			"trg_recovery_point_lifecycle_audit_slots_immutable_update",
+			"trg_recovery_point_lifecycle_audit_slots_immutable_delete",
+		},
+	}
+	var definition string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&definition); err != nil {
+		t.Fatalf("load SQLite %s table definition: %v", table, err)
+	}
+	primaryKey := strings.Index(strings.ToLower(definition), "primary key")
+	if primaryKey < 0 {
+		t.Fatalf("SQLite %s table has no primary key in definition", table)
+	}
+	triggerDefinitions := make(map[string]string, len(triggerNames[table]))
+	for _, name := range triggerNames[table] {
+		triggerDefinition, err := migrationTriggerDefinition(db, "sqlite", table, name)
+		if err != nil {
+			t.Fatalf("load SQLite %s trigger %s: %v", table, name, err)
+		}
+		triggerDefinitions[name] = triggerDefinition
+	}
+	definition = definition[:primaryKey] + definition[primaryKey+len("primary key"):]
+	if replacement != "" {
+		closeParenthesis := strings.LastIndex(definition, ")")
+		if closeParenthesis < 0 {
+			t.Fatalf("SQLite %s table definition has no closing parenthesis", table)
+		}
+		definition = definition[:closeParenthesis] +
+			", PRIMARY KEY (" + replacement + ")\n" +
+			definition[closeParenthesis:]
+	}
+
+	fixture.mustExec(t, db, `DROP TABLE `+table)
+	fixture.mustExec(t, db, definition)
+	if table == lifecycleEffectClaimAuditSlotClaimsTable {
+		fixture.mustExec(t, db, `CREATE UNIQUE INDEX idx_recovery_point_lifecycle_effect_claims_attempt
+			ON recovery_point_lifecycle_effect_claims(attempt_id)`)
+		fixture.mustExec(t, db, `CREATE INDEX idx_recovery_point_lifecycle_effect_claims_state_deadline
+			ON recovery_point_lifecycle_effect_claims(state, deadline_at)`)
+	} else {
+		fixture.mustExec(t, db, `CREATE UNIQUE INDEX idx_recovery_point_lifecycle_audit_slots_attempt_status
+			ON recovery_point_lifecycle_audit_slots(attempt_id, status)`)
+		fixture.mustExec(t, db, `CREATE UNIQUE INDEX idx_recovery_point_lifecycle_audit_slots_terminal
+			ON recovery_point_lifecycle_audit_slots(attempt_id)
+			WHERE status IN ('deleted', 'already_absent')`)
+	}
+	for _, name := range triggerNames[table] {
+		fixture.mustExec(t, db, triggerDefinitions[name])
+	}
+}
+
+func (fixture migrationFixture) replacePostgresLifecyclePrimaryKey(
+	t *testing.T,
+	db *sql.DB,
+	table,
+	replacement string,
+) {
+	t.Helper()
+	var constraint string
+	err := db.QueryRow(fixture.bind(`SELECT constraint_row.conname
+		FROM pg_catalog.pg_constraint AS constraint_row
+		JOIN pg_catalog.pg_class AS relation ON relation.oid = constraint_row.conrelid
+		JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+		WHERE namespace.nspname = current_schema()
+		  AND relation.relname = ?
+		  AND constraint_row.contype = 'p'`), table).Scan(&constraint)
+	if err != nil {
+		t.Fatalf("load PostgreSQL %s primary-key constraint: %v", table, err)
+	}
+	fixture.mustExec(t, db, `ALTER TABLE `+table+` DROP CONSTRAINT `+constraint)
+	if replacement != "" {
+		fixture.mustExec(t, db, `ALTER TABLE `+table+` ADD PRIMARY KEY (`+replacement+`)`)
+	}
+}
+
+func TestBackupAssetMigration077TableCheckDriftSQLite(t *testing.T) {
+	newSQLiteMigrationFixture(t).test077TableCheckDrift(t)
+}
+
+func TestBackupAssetMigration077TableCheckDriftPostgres(t *testing.T) {
+	newRequiredPostgresMigrationFixture(t).test077TableCheckDrift(t)
+}
+
+func (fixture migrationFixture) test077TableCheckDrift(t *testing.T) {
+	t.Helper()
+	for _, testCase := range []struct {
+		name    string
+		table   string
+		missing string
+		reason  string
+	}{
+		{name: "ClaimExecutorLowercaseHex", table: lifecycleEffectClaimAuditSlotClaimsTable, missing: "executor_id"},
+		{name: "ClaimState", table: lifecycleEffectClaimAuditSlotClaimsTable, missing: "state"},
+		{name: "ClaimStateExtraValue", table: lifecycleEffectClaimAuditSlotClaimsTable, missing: "state_extra"},
+		{name: "ClaimDeadlineNotNull", table: lifecycleEffectClaimAuditSlotClaimsTable, missing: "deadline_at"},
+		{name: "ClaimAttemptRelation", table: lifecycleEffectClaimAuditSlotClaimsTable, missing: "attempt_fk"},
+		{
+			name:    "ClaimExecutorOrTrueBypass",
+			table:   lifecycleEffectClaimAuditSlotClaimsTable,
+			missing: "executor_id_or_true",
+			reason:  "invalid_lifecycle_effect_claim_check",
+		},
+		{
+			name:    "ClaimStateOrTrueBypass",
+			table:   lifecycleEffectClaimAuditSlotClaimsTable,
+			missing: "state_or_true",
+			reason:  "invalid_lifecycle_effect_claim_check",
+		},
+		{
+			name:    "ClaimTransitionRevisionOrTrueBypass",
+			table:   lifecycleEffectClaimAuditSlotClaimsTable,
+			missing: "transition_revision_or_true",
+			reason:  "invalid_lifecycle_effect_claim_check",
+		},
+		{name: "SlotAttemptLowercaseHex", table: lifecycleEffectClaimAuditSlotSlotsTable, missing: "attempt_id"},
+		{name: "SlotStatus", table: lifecycleEffectClaimAuditSlotSlotsTable, missing: "status"},
+		{name: "SlotStatusExtraValue", table: lifecycleEffectClaimAuditSlotSlotsTable, missing: "status_extra"},
+		{name: "SlotAttemptRelation", table: lifecycleEffectClaimAuditSlotSlotsTable, missing: "attempt_fk"},
+		{
+			name:    "SlotAttemptOrTrueBypass",
+			table:   lifecycleEffectClaimAuditSlotSlotsTable,
+			missing: "attempt_id_or_true",
+			reason:  "invalid_lifecycle_audit_slot_check",
+		},
+		{
+			name:    "SlotStatusOrTrueBypass",
+			table:   lifecycleEffectClaimAuditSlotSlotsTable,
+			missing: "status_or_true",
+			reason:  "invalid_lifecycle_audit_slot_check",
+		},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			migrator, db := fixture.openAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
+			if testCase.table == lifecycleEffectClaimAuditSlotClaimsTable {
+				fixture.mustExec(t, db, `DROP TABLE `+lifecycleEffectClaimAuditSlotClaimsTable)
+				fixture.mustExec(t, db, lifecycleClaimTableDDL(fixture.engine, testCase.missing))
+				fixture.mustExec(t, db, `CREATE UNIQUE INDEX idx_recovery_point_lifecycle_effect_claims_attempt
+					ON recovery_point_lifecycle_effect_claims(attempt_id)`)
+				fixture.mustExec(t, db, `CREATE INDEX idx_recovery_point_lifecycle_effect_claims_state_deadline
+					ON recovery_point_lifecycle_effect_claims(state, deadline_at)`)
+			} else {
+				fixture.mustExec(t, db, `DROP TABLE `+lifecycleEffectClaimAuditSlotSlotsTable)
+				fixture.mustExec(t, db, lifecycleAuditSlotTableDDL(fixture.engine, testCase.missing))
+				fixture.mustExec(t, db, `CREATE UNIQUE INDEX idx_recovery_point_lifecycle_audit_slots_attempt_status
+					ON recovery_point_lifecycle_audit_slots(attempt_id, status)`)
+				fixture.mustExec(t, db, `CREATE UNIQUE INDEX idx_recovery_point_lifecycle_audit_slots_terminal
+					ON recovery_point_lifecycle_audit_slots(attempt_id)
+					WHERE status IN ('deleted', 'already_absent')`)
+			}
+			err := RunMigrations(fixture.recoveryWorkerGorm(t, db), fixture.engine)
+			if !errors.Is(err, ErrMigrationSchemaDrift) {
+				t.Fatalf("%s %s table drift returned %v, want ErrMigrationSchemaDrift", fixture.engine, testCase.name, err)
+			}
+			if testCase.reason != "" && !strings.Contains(err.Error(), testCase.reason) {
+				t.Fatalf("%s %s table drift returned %v, want %s", fixture.engine, testCase.name, err, testCase.reason)
+			}
+			assertMigrationVersion(t, migrator, lifecycleEffectClaimAuditSlotMigrationVersion)
+		})
+	}
+	fixture.test077ForeignKeyContractDrift(t)
+}
+
+func (fixture migrationFixture) test077ForeignKeyContractDrift(t *testing.T) {
+	t.Helper()
+	for _, testCase := range []struct {
+		name    string
+		engine  string
+		missing string
+	}{
+		{name: "SQLiteWrongReferencedColumn", engine: "sqlite", missing: "attempt_fk_wrong_column"},
+		{name: "PostgresCrossSchema", engine: "postgres", missing: "attempt_fk_cross_schema"},
+		{name: "PostgresNotValid", engine: "postgres", missing: "attempt_fk_not_valid"},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			if fixture.engine != testCase.engine {
+				t.Skip("foreign-key catalog drift is engine-specific")
+			}
+			migrator, db := fixture.openAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
+			if testCase.missing == "attempt_fk_cross_schema" {
+				fixture.mustExec(t, db, `CREATE SCHEMA lifecycle_fk_cross_schema`)
+				fixture.mustExec(t, db, `CREATE TABLE lifecycle_fk_cross_schema.recovery_point_lifecycle_attempts (
+					id VARCHAR(32) PRIMARY KEY
+				)`)
+				t.Cleanup(func() {
+					_, _ = db.Exec(`DROP SCHEMA IF EXISTS lifecycle_fk_cross_schema CASCADE`)
+				})
+			}
+			fixture.mustExec(t, db, `DROP TABLE `+lifecycleEffectClaimAuditSlotClaimsTable)
+			fixture.mustExec(t, db, lifecycleClaimTableDDL(fixture.engine, testCase.missing))
+			if testCase.missing == "attempt_fk_not_valid" {
+				fixture.mustExec(t, db, `ALTER TABLE recovery_point_lifecycle_effect_claims
+					ADD CONSTRAINT recovery_point_lifecycle_effect_claims_attempt_fk
+					FOREIGN KEY (attempt_id)
+					REFERENCES recovery_point_lifecycle_attempts(id)
+					ON DELETE RESTRICT NOT VALID`)
+			}
+			fixture.mustExec(t, db, `CREATE UNIQUE INDEX idx_recovery_point_lifecycle_effect_claims_attempt
+				ON recovery_point_lifecycle_effect_claims(attempt_id)`)
+			fixture.mustExec(t, db, `CREATE INDEX idx_recovery_point_lifecycle_effect_claims_state_deadline
+				ON recovery_point_lifecycle_effect_claims(state, deadline_at)`)
+
+			err := RunMigrations(fixture.recoveryWorkerGorm(t, db), fixture.engine)
+			if !errors.Is(err, ErrMigrationSchemaDrift) ||
+				!strings.Contains(err.Error(), "missing_lifecycle_effect_claim_audit_slot_attempt_foreign_key") {
+				t.Fatalf("%s %s foreign-key drift returned %v, want missing attempt foreign key", fixture.engine, testCase.name, err)
+			}
+			assertMigrationVersion(t, migrator, lifecycleEffectClaimAuditSlotMigrationVersion)
+		})
+	}
+}
+
+func lifecycleClaimTableDDL(engine, missing string) string {
+	hexCheck := func(column string, length int) string {
+		if missing == column {
+			return ""
+		}
+		if missing == column+"_or_true" {
+			if engine == "sqlite" {
+				return fmt.Sprintf(" CHECK ((length(%s) = %d AND %s NOT GLOB '*[^0-9a-f]*') OR 1 = 1)", column, length, column)
+			}
+			return fmt.Sprintf(" CHECK ((%s ~ '^[0-9a-f]{%d}$') OR TRUE)", column, length)
+		}
+		if engine == "sqlite" {
+			return fmt.Sprintf(" CHECK (length(%s) = %d AND %s NOT GLOB '*[^0-9a-f]*')", column, length, column)
+		}
+		return fmt.Sprintf(" CHECK (%s ~ '^[0-9a-f]{%d}$')", column, length)
+	}
+	revisionCheck := " CHECK (transition_revision > 0)"
+	stateCheck := " CHECK (state IN ('in_flight', 'uncertain', 'proven'))"
+	switch missing {
+	case "transition_revision":
+		revisionCheck = ""
+	case "transition_revision_or_true":
+		if engine == "sqlite" {
+			revisionCheck = " CHECK (transition_revision > 0 OR 1 = 1)"
+		} else {
+			revisionCheck = " CHECK (transition_revision > 0 OR TRUE)"
+		}
+	case "state":
+		stateCheck = ""
+	case "state_extra":
+		stateCheck = " CHECK (state IN ('in_flight', 'uncertain', 'proven', 'released'))"
+	case "state_or_true":
+		if engine == "sqlite" {
+			stateCheck = " CHECK ((state IN ('in_flight', 'uncertain', 'proven') OR 1 = 1))"
+		} else {
+			stateCheck = " CHECK ((state IN ('in_flight', 'uncertain', 'proven') OR TRUE))"
+		}
+	}
+	deadlineNotNull := " NOT NULL"
+	if missing == "deadline_at" {
+		deadlineNotNull = ""
+	}
+	attemptRelation := ""
+	switch missing {
+	case "attempt_fk", "attempt_fk_not_valid":
+	case "attempt_fk_wrong_column":
+		attemptRelation = " REFERENCES recovery_point_lifecycle_attempts(recovery_point_id) ON DELETE RESTRICT"
+	case "attempt_fk_cross_schema":
+		attemptRelation = " REFERENCES lifecycle_fk_cross_schema.recovery_point_lifecycle_attempts(id) ON DELETE RESTRICT"
+	default:
+		attemptRelation = " REFERENCES recovery_point_lifecycle_attempts(id) ON DELETE RESTRICT"
+	}
+	if engine == "sqlite" {
+		return `CREATE TABLE recovery_point_lifecycle_effect_claims (
+			id TEXT NOT NULL PRIMARY KEY` + hexCheck("id", 32) + `,
+			attempt_id TEXT NOT NULL` + hexCheck("attempt_id", 32) + attemptRelation + `,
+			executor_id TEXT NOT NULL` + hexCheck("executor_id", 32) + `,
+			execution_id TEXT NOT NULL` + hexCheck("execution_id", 32) + `,
+			transition_revision INTEGER NOT NULL` + revisionCheck + `,
+			lease_id TEXT NOT NULL` + hexCheck("lease_id", 32) + `,
+			lease_attempt_id TEXT NOT NULL` + hexCheck("lease_attempt_id", 32) + `,
+			lease_fence_token_hash TEXT NOT NULL` + hexCheck("lease_fence_token_hash", 64) + `,
+			target_identity_digest TEXT NOT NULL` + hexCheck("target_identity_digest", 64) + `,
+			state TEXT NOT NULL` + stateCheck + `,
+			deadline_at DATETIME` + deadlineNotNull + `,
+			heartbeat_at DATETIME NOT NULL,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL
+		)`
+	}
+	return `CREATE TABLE recovery_point_lifecycle_effect_claims (
+		id VARCHAR(32) NOT NULL PRIMARY KEY` + hexCheck("id", 32) + `,
+		attempt_id VARCHAR(32) NOT NULL` + hexCheck("attempt_id", 32) + attemptRelation + `,
+		executor_id VARCHAR(32) NOT NULL` + hexCheck("executor_id", 32) + `,
+		execution_id VARCHAR(32) NOT NULL` + hexCheck("execution_id", 32) + `,
+		transition_revision BIGINT NOT NULL` + revisionCheck + `,
+		lease_id VARCHAR(32) NOT NULL` + hexCheck("lease_id", 32) + `,
+		lease_attempt_id VARCHAR(32) NOT NULL` + hexCheck("lease_attempt_id", 32) + `,
+		lease_fence_token_hash VARCHAR(64) NOT NULL` + hexCheck("lease_fence_token_hash", 64) + `,
+		target_identity_digest VARCHAR(64) NOT NULL` + hexCheck("target_identity_digest", 64) + `,
+		state VARCHAR(32) NOT NULL` + stateCheck + `,
+		deadline_at TIMESTAMPTZ` + deadlineNotNull + `,
+		heartbeat_at TIMESTAMPTZ NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL,
+		updated_at TIMESTAMPTZ NOT NULL
+	)`
+}
+
+func lifecycleAuditSlotTableDDL(engine, missing string) string {
+	hexCheck := func(column string) string {
+		if missing == column {
+			return ""
+		}
+		if missing == column+"_or_true" {
+			if engine == "sqlite" {
+				return fmt.Sprintf(" CHECK ((length(%s) = 32 AND %s NOT GLOB '*[^0-9a-f]*') OR 1 = 1)", column, column)
+			}
+			return " CHECK ((" + column + " ~ '^[0-9a-f]{32}$') OR TRUE)"
+		}
+		if engine == "sqlite" {
+			return fmt.Sprintf(" CHECK (length(%s) = 32 AND %s NOT GLOB '*[^0-9a-f]*')", column, column)
+		}
+		return fmt.Sprintf(" CHECK (%s ~ '^[0-9a-f]{32}$')", column)
+	}
+	statusCheck := " CHECK (status IN ('deleted', 'already_absent', 'blocked', 'identity_conflict'))"
+	switch missing {
+	case "status":
+		statusCheck = ""
+	case "status_extra":
+		statusCheck = " CHECK (status IN ('deleted', 'already_absent', 'blocked', 'identity_conflict', 'other'))"
+	case "status_or_true":
+		if engine == "sqlite" {
+			statusCheck = " CHECK ((status IN ('deleted', 'already_absent', 'blocked', 'identity_conflict') OR 1 = 1))"
+		} else {
+			statusCheck = " CHECK ((status IN ('deleted', 'already_absent', 'blocked', 'identity_conflict') OR TRUE))"
+		}
+	}
+	attemptRelation := ""
+	if missing != "attempt_fk" {
+		attemptRelation = " REFERENCES recovery_point_lifecycle_attempts(id) ON DELETE RESTRICT"
+	}
+	if engine == "sqlite" {
+		return `CREATE TABLE recovery_point_lifecycle_audit_slots (
+			id TEXT NOT NULL PRIMARY KEY` + hexCheck("id") + `,
+			attempt_id TEXT NOT NULL` + hexCheck("attempt_id") + attemptRelation + `,
+			status TEXT NOT NULL` + statusCheck + `,
+			emitted_at DATETIME NOT NULL,
+			created_at DATETIME NOT NULL
+		)`
+	}
+	return `CREATE TABLE recovery_point_lifecycle_audit_slots (
+		id VARCHAR(32) NOT NULL PRIMARY KEY` + hexCheck("id") + `,
+		attempt_id VARCHAR(32) NOT NULL` + hexCheck("attempt_id") + attemptRelation + `,
+		status VARCHAR(32) NOT NULL` + statusCheck + `,
+		emitted_at TIMESTAMPTZ NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL
+	)`
+}
+
 func TestBackupAssetMigration073ReleasePropagation(t *testing.T) {
 	testCases := []struct {
 		name      string
@@ -3619,6 +4378,39 @@ func runBackupAssetMigration073Contract(t *testing.T, fixture migrationFixture) 
 	t.Run("CleanVersionMalformedAdmissionTriggerIsRejected", fixture.test073MalformedAdmissionDriftIsRejected)
 	t.Run("UsedDownWithPlainTextIsRejectedAtomically", fixture.test073UsedDownWithPlainTextIsAtomic)
 	t.Run("PristineDownRestores072", fixture.test073PristineDown)
+}
+
+func (fixture migrationFixture) test077TerminalIndexPredicateDrift(t *testing.T) {
+	t.Helper()
+	for _, testCase := range []struct {
+		name      string
+		predicate string
+	}{
+		{name: "OneSidedStatus", predicate: "status IN ('deleted')"},
+		{name: "BroadenedStatusSet", predicate: "status IN ('deleted', 'already_absent', 'blocked')"},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			migrator, db := fixture.openAt(t, lifecycleEffectClaimAuditSlotMigrationVersion)
+			fixture.mustExec(t, db, `DROP INDEX idx_recovery_point_lifecycle_audit_slots_terminal`)
+			fixture.mustExec(t, db, `CREATE UNIQUE INDEX idx_recovery_point_lifecycle_audit_slots_terminal
+				ON recovery_point_lifecycle_audit_slots(attempt_id) WHERE `+testCase.predicate)
+
+			err := RunMigrations(fixture.recoveryWorkerGorm(t, db), fixture.engine)
+			if !errors.Is(err, ErrMigrationSchemaDrift) ||
+				!strings.Contains(err.Error(), "invalid_lifecycle_audit_slot_terminal_index") {
+				t.Fatalf("%s terminal predicate drift returned %v, want typed schema drift", fixture.engine, err)
+			}
+			assertMigrationVersion(t, migrator, lifecycleEffectClaimAuditSlotMigrationVersion)
+			exists, existsErr := migrationRelationExists(db, fixture.engine, "idx_recovery_point_lifecycle_audit_slots_terminal", "index")
+			if existsErr != nil {
+				t.Fatalf("%s terminal predicate drift index lookup: %v", fixture.engine, existsErr)
+			}
+			if !exists {
+				t.Fatalf("%s terminal predicate drift unexpectedly removed replacement index", fixture.engine)
+			}
+		})
+	}
 }
 
 func (fixture migrationFixture) seed073LegacyContent(

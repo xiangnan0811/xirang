@@ -7,8 +7,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_DIR="${ROOT_DIR}/backend"
 WEB_DIR="${ROOT_DIR}/web"
-LOCAL_TMP_DIR="${ROOT_DIR}/.trellis/.runtime/tmp"
-mkdir -p "$LOCAL_TMP_DIR"
+LOCAL_TMP_DIR="/tmp"
 
 section() {
   echo ""

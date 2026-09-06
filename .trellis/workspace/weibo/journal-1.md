@@ -1913,3 +1913,45 @@ Persisted rclone native owned/reference evidence, made preparing a non-reserving
 ### Next Steps
 
 - Keep 09-02-backup-lifecycle-effect-audit-idempotency on a new branch after this PR lands
+
+
+## Session 50: Deliver backup lifecycle effect fencing and audit idempotency
+
+**Date**: 2026-09-06
+**Task**: Deliver backup lifecycle effect fencing and audit idempotency
+**Branch**: `feat/backup-lifecycle-effect-audit-idempotency`
+
+### Summary
+
+Completed repository delivery for durable provider-delete claims, proof-first recovery, settled-audit slots, migration 000077, CI parity hardening, dependency and image pin refreshes, and the CI-only recovery concurrency fixture repair.
+
+### Main Changes
+
+- Added durable lifecycle effect claims, exact provider identity fencing, proof-first convergence, and retention-proof audit slots.
+- Added paired migration 000077 and exact SQLite/PostgreSQL acceptance coverage.
+- Hardened local CI parity, refreshed vulnerable humanfs lockfile dependencies and Alpine curl pin, and fixed the race-only recovery test fixture.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `56cc0b2b` | (see git log) |
+| `cf93511d` | (see git log) |
+| `d49858e1` | (see git log) |
+| `e3bf4071` | (see git log) |
+| `89b0057c` | (see git log) |
+| `e1080fed` | (see git log) |
+| `5379219` | (see git log) |
+
+### Testing
+
+- [OK] Go 1.26.6 make check, local CI parity, focused/full race suites, PostgreSQL 18 required slices, frontend checks, Docker smoke, and migration self-tests passed.
+- [OK] GitHub Actions run 34038232448 passed all 11 required jobs on e1080fed.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Merge PR #497 after the final bookkeeping-head CI passes; real provider/NAS E2E remains separate live acceptance.

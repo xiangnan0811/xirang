@@ -3441,8 +3441,28 @@ func (*runtimeRetentionAdmissionOK) RevokeRecoveryPoint(context.Context, retenti
 
 type runtimeRetentionWORMDeletion struct{}
 
-func (runtimeRetentionWORMDeletion) DeleteRecoveryPoint(context.Context, retention.LifecyclePointRequest) (retention.PointDeletionResult, error) {
-	return retention.PointDeletionResult{}, retention.ErrPointDeletionWORM
+func (runtimeRetentionWORMDeletion) Prepare(
+	context.Context,
+	*gorm.DB,
+	retention.ProviderDeletePrepareProfile,
+	retention.LifecyclePointRequest,
+	retention.LifecycleDeleteRows,
+) (retention.PreparedPointDeletion, error) {
+	return retention.PreparedPointDeletion{}, nil
+}
+
+func (runtimeRetentionWORMDeletion) Execute(context.Context, retention.PreparedPointDeletion) (retention.PointDeletionExecution, error) {
+	return retention.PointDeletionExecution{ProviderCalled: true}, retention.ErrPointDeletionWORM
+}
+
+func (runtimeRetentionWORMDeletion) Verify(
+	context.Context,
+	*gorm.DB,
+	retention.LifecyclePointRequest,
+	retention.PreparedPointDeletion,
+	retention.LifecycleDeleteRows,
+) error {
+	return nil
 }
 
 type runtimeRetentionNoopAudit struct{}
@@ -3468,6 +3488,7 @@ func newRuntimeRetentionCleanupHoldWorker(t *testing.T) (*retention.Worker, *run
 		&model.TaskRepositoryLink{}, &model.BackupRetentionPolicy{}, &model.RecoveryPointHold{},
 		&model.RecoveryPointLease{}, &model.RecoveryPointLifecycleAttempt{},
 		&model.RecoveryPointLifecycleTombstone{},
+		&model.RecoveryPointLifecycleEffectClaim{}, &model.RecoveryPointLifecycleAuditSlot{},
 	); err != nil {
 		t.Fatal(err)
 	}
