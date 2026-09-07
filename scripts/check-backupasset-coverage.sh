@@ -7,7 +7,7 @@ BACKEND_DIR="$ROOT_DIR/backend"
 FLOOR=${BACKUP_ASSET_COVERAGE_FLOOR:-55}
 
 cd "$BACKEND_DIR"
-go test ./internal/backupasset/... -coverprofile="${TMPDIR:-/tmp}/backupasset-coverage.out" -count=1 >/tmp/backupasset-coverage-test.log
+go test ./internal/backupasset/... -coverprofile="${TMPDIR:-/tmp}/backupasset-coverage.out" -count=1 2>&1 | tee /tmp/backupasset-coverage-test.log
 total=$(go tool cover -func="${TMPDIR:-/tmp}/backupasset-coverage.out" | awk '/^total:/ {print $3}' | tr -d '%')
 if [[ -z "$total" ]]; then
   echo "backup-asset coverage: could not read total" >&2
