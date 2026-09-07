@@ -40,3 +40,37 @@ Release PR503 exposed an intermittent frontend intermediate-state assertion and 
 ### Next Steps
 
 - Follow the associated CI follow-up PR and generated release PR503 through Docker Hub publication; use synchronized main for later development.
+
+
+## Session 53: Drill lifecycle recovery completion assertion
+
+**Date**: 2026-09-07
+**Task**: Drill lifecycle recovery completion assertion
+**Branch**: `test/drill-lifecycle-ci-stability`
+
+### Summary
+
+Updated Release PR503 race tests exposed a pre-existing drill test that observed terminal database rows before process ownership cleanup. Reused the neighboring bounded-wait pattern to await both conditions without changing production recovery logic, the deadline, or the polling interval.
+
+### Main Changes
+
+- Preserve persistent failure ownership retention and atomic TaskRun/Evidence terminal assertions; wait until the worker also releases local ownership.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `50c511e8` | (see git log) |
+
+### Testing
+
+- [OK] Go1.26.6 focused race test passed 100 repetitions.
+- [OK] Full internal/task package passed under the race detector.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Merge the associated test-only follow-up and refresh generated Release PR503; continue publication monitoring to Docker Hub.

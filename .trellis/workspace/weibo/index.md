@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 52
+- **Total Sessions**: 53
 - **Last Active**: 2026-09-07
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~42 | Active |
+| `journal-2.md` | ~76 | Active |
 | `journal-1.md` | ~1993 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 53 | 2026-09-07 | Drill lifecycle recovery completion assertion | `50c511e8` | `test/drill-lifecycle-ci-stability` |
 | 52 | 2026-09-07 | Release CI token assertion stability and coverage diagnostics | `2d3f6dd8` | `fix/preview-release-ci-stability` |
 | 51 | 2026-09-07 | Rsync preview source freshness and completion lifecycle | `4ee0c053` | `fix/backup-preview-first-open` |
 | 50 | 2026-09-06 | Deliver backup lifecycle effect fencing and audit idempotency | `56cc0b2b`, `cf93511d`, `d49858e1`, `e3bf4071`, `89b0057c`, `e1080fed`, `5379219` | `feat/backup-lifecycle-effect-audit-idempotency` |
