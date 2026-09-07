@@ -3124,12 +3124,15 @@ describe("useBackupAssetsState", () => {
       asset.ref,
       expect.any(AbortSignal),
     ));
-    expect(result.current.selectedEntry).toEqual({ status: "loading", value: null });
+    expect(result.current.selectedEntry.value).toBeNull();
+    expect(result.current.content.value).toBeNull();
     expect(issueTicketMock).toHaveBeenCalledTimes(1);
 
     refreshedEntry.resolve({ status: "available", value: asset });
     await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(2));
     expect(issueTicketMock.mock.calls[1]?.[0]).toBe("next-session-token");
+    await waitFor(() => expect(result.current.selectedEntry).toEqual({ status: "ready", value: asset }));
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
   });
 
   it("renews the current safe resolution as an exact product instead of re-selecting by MIME", async () => {
