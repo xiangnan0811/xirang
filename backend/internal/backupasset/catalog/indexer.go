@@ -35,6 +35,7 @@ type PointReadRequest struct {
 
 type PointReadFactory interface {
 	OpenCatalogRead(context.Context, PointReadRequest) (provider.CatalogReadSession, error)
+	RefreshMutableObservation(context.Context, PointReadRequest) error
 }
 
 type IdentityKeySource interface {
@@ -103,6 +104,11 @@ type frozenBuild struct {
 	mode       provider.CatalogProofMode
 	proof      provider.CatalogManifestProof
 }
+type buildTarget struct {
+	repository model.BackupRepository
+	point      model.RecoveryPoint
+	mutable    bool
+}
 
 func NewIndexer(dependencies IndexerDependencies) (*Indexer, error) {
 	if dependencies.Config.HeartbeatInterval <= 0 && dependencies.Config.BuildTimeout > 0 {
@@ -135,10 +141,11 @@ func (indexer *Indexer) Build(ctx context.Context, request BuildRequest) (result
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	frozen, err := indexer.loadFrozenBuild(ctx, request)
+	target, err := indexer.loadBuildTarget(ctx, request)
 	if err != nil {
 		return model.CatalogGeneration{}, err
 	}
+	var frozen frozenBuild
 	lease, err := indexer.lease.Acquire(ctx, backupasset.AcquireLeaseRequest{
 		RecoveryPointID: request.RecoveryPointID, HolderType: backupasset.LeaseHolderCatalogBuild,
 		OwnerID: catalogBuildOwnerPrefix + request.RecoveryPointID,
@@ -208,6 +215,29 @@ func (indexer *Indexer) Build(ctx context.Context, request BuildRequest) (result
 	registered = true
 	renewalErrors = make(chan error, 1)
 	stopHeartbeat = indexer.startLeaseHeartbeat(buildContext, lease.Fence, cancel, renewalErrors)
+	if target.mutable {
+		refreshErr := indexer.factory.RefreshMutableObservation(buildContext, PointReadRequest{
+			RepositoryID: request.RepositoryID, RecoveryPointID: request.RecoveryPointID,
+		})
+		if refreshErr != nil {
+			if cancellationErr := buildContext.Err(); cancellationErr != nil {
+				return model.CatalogGeneration{}, cancellationErr
+			}
+			failureFrozen, failureErr := indexer.loadRefreshFailureBuild(buildContext, request)
+			if failureErr == nil {
+				generation, err = indexer.beginGeneration(buildContext, request, failureFrozen, lease.Fence)
+				if err == nil {
+					return generation, refreshErr
+				}
+				return generation, errors.Join(refreshErr, err)
+			}
+			return model.CatalogGeneration{}, errors.Join(refreshErr, failureErr)
+		}
+	}
+	frozen, err = indexer.loadFrozenBuild(buildContext, request)
+	if err != nil {
+		return model.CatalogGeneration{}, err
+	}
 	generation, err = indexer.beginGeneration(buildContext, request, frozen, lease.Fence)
 	if err != nil {
 		return model.CatalogGeneration{}, err
@@ -305,10 +335,57 @@ func (indexer *Indexer) Build(ctx context.Context, request BuildRequest) (result
 	closed = true
 	activated, err := indexer.activate(buildContext, generation, frozen, lease.Fence, proof, written, digest)
 	if err != nil {
+
 		return generation, err
 	}
 	generationSettled = true
 	return activated, nil
+}
+func (indexer *Indexer) loadBuildTarget(ctx context.Context, request BuildRequest) (buildTarget, error) {
+	var target buildTarget
+	if err := indexer.db.WithContext(ctx).First(&target.repository, "id = ?", request.RepositoryID).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+		return buildTarget{}, fmt.Errorf("%w: Catalog repository", backupasset.ErrNotFound)
+	} else if err != nil {
+		return buildTarget{}, fmt.Errorf("load Catalog repository: %w", err)
+	}
+	if err := indexer.db.WithContext(ctx).Where("id = ? AND repository_id = ?", request.RecoveryPointID, request.RepositoryID).
+		First(&target.point).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+		return buildTarget{}, fmt.Errorf("%w: Catalog point", backupasset.ErrNotFound)
+	} else if err != nil {
+		return buildTarget{}, fmt.Errorf("load Catalog point: %w", err)
+	}
+	if target.repository.ProviderKind == string(backupasset.ProviderCommand) {
+		return buildTarget{}, fmt.Errorf("%w: Command has no artifact contract", backupasset.ErrCapabilityUnavailable)
+	}
+	switch backupasset.PointVersionSemantics(target.point.Semantics) {
+	case backupasset.PointMutableHead:
+		if target.point.State != string(backupasset.RecoveryPointObserved) {
+			return buildTarget{}, fmt.Errorf("%w: mutable Catalog point is not observed", backupasset.ErrConflict)
+		}
+		target.mutable = true
+	case backupasset.PointNativeSnapshot, backupasset.PointXirangManifest, backupasset.PointImportedBaseline:
+		if target.point.State != string(backupasset.RecoveryPointCommitted) && target.point.State != string(backupasset.RecoveryPointDegraded) {
+			return buildTarget{}, fmt.Errorf("%w: immutable Catalog point is not committed", backupasset.ErrConflict)
+		}
+	default:
+		return buildTarget{}, fmt.Errorf("%w: unsupported Catalog point semantics", backupasset.ErrInvalidState)
+	}
+	return target, nil
+}
+
+func (indexer *Indexer) loadRefreshFailureBuild(ctx context.Context, request BuildRequest) (frozenBuild, error) {
+	target, err := indexer.loadBuildTarget(ctx, request)
+	if err != nil {
+		return frozenBuild{}, err
+	}
+	status := backupasset.RepositoryStatus(target.repository.Status)
+	if !target.mutable || (status != backupasset.RepositoryOnline && status != backupasset.RepositoryOffline) ||
+		strings.TrimSpace(target.point.SourceFingerprint) == "" {
+		return frozenBuild{}, fmt.Errorf("%w: mutable Catalog point facts unavailable after refresh failure", backupasset.ErrConflict)
+	}
+	return frozenBuild{
+		repository: target.repository, point: target.point, mode: provider.CatalogProofMutableObservation,
+	}, nil
 }
 
 func (indexer *Indexer) loadFrozenBuild(ctx context.Context, request BuildRequest) (frozenBuild, error) {
@@ -931,6 +1008,9 @@ func (indexer *Indexer) ListCandidates(
 			points.manifest_digest, points.entry_count, points.observed_at, repositories.provider_kind`).
 		Joins("JOIN backup_repositories AS repositories ON repositories.id = points.repository_id").
 		Where("repositories.provider_kind <> ?", backupasset.ProviderCommand).
+		Where(`points.semantics <> ? OR repositories.status IN ?`,
+			backupasset.PointMutableHead,
+			[]string{string(backupasset.RepositoryOnline), string(backupasset.RepositoryOffline)}).
 		Where(`(points.semantics = ? AND points.state = ?) OR
 			(points.semantics IN ? AND points.state IN ?)`,
 			backupasset.PointMutableHead, backupasset.RecoveryPointObserved,
@@ -980,6 +1060,27 @@ func (indexer *Indexer) catalogPointEligibleAt(
 		if backupasset.PointVersionSemantics(semantics) != backupasset.PointMutableHead {
 			return active.ExpectedDigest != manifestDigest || active.ExpectedEntryCount != entryCount, nil
 		}
+		if len(generations) > 0 && generations[0].ID != active.ID && generations[0].SourceFingerprint == sourceFingerprint {
+			latest := generations[0]
+			if latest.State == string(GenerationBuilding) {
+				return false, nil
+			}
+			if latest.State == string(GenerationPartial) || latest.State == string(GenerationFailed) {
+				if nonRetryableCatalogFailure(latest.ErrorCode, backupasset.PointVersionSemantics(semantics)) || latest.FinishedAt == nil {
+					return false, nil
+				}
+				failureCount := 0
+				for _, generation := range generations {
+					if generation.SourceFingerprint != sourceFingerprint ||
+						(generation.State != string(GenerationPartial) && generation.State != string(GenerationFailed)) {
+						break
+					}
+					failureCount++
+				}
+				nextAt := latest.FinishedAt.UTC().Add(RetryDelay(config, failureCount, pointID, latest.ID))
+				return !now.Before(nextAt), nil
+			}
+		}
 		if observedAt != nil && now.Before(observedAt.UTC().Add(2*config.ReconcileInterval)) {
 			return false, nil
 		}
@@ -998,7 +1099,7 @@ func (indexer *Indexer) catalogPointEligibleAt(
 	if latest.State != string(GenerationPartial) && latest.State != string(GenerationFailed) {
 		return true, nil
 	}
-	if nonRetryableCatalogFailure(latest.ErrorCode) || latest.FinishedAt == nil {
+	if nonRetryableCatalogFailure(latest.ErrorCode, backupasset.PointVersionSemantics(semantics)) || latest.FinishedAt == nil {
 		return false, nil
 	}
 	failureCount := 0
@@ -1013,7 +1114,10 @@ func (indexer *Indexer) catalogPointEligibleAt(
 	return !now.Before(nextAt), nil
 }
 
-func nonRetryableCatalogFailure(code string) bool {
+func nonRetryableCatalogFailure(code string, semantics backupasset.PointVersionSemantics) bool {
+	if semantics == backupasset.PointMutableHead && code == "catalog_source_changed" {
+		return false
+	}
 	switch code {
 	case "catalog_proof_mismatch", "catalog_projection_mismatch", "catalog_invalid_record", "catalog_identity_key_unavailable", "catalog_source_changed":
 		return true

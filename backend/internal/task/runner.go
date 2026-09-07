@@ -589,6 +589,28 @@ func (m *Manager) runTaskWithContext(
 				m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "post-hook 执行成功", taskEntity.Status)
 			}
 		}
+		if !providerResult.Managed && taskEntity.ExecutorType == "rsync" && m.backupSourceCompletionObserver != nil {
+			if observeErr := m.backupSourceCompletionObserver.ObserveBackupSourceCompletion(execCtx, taskID); observeErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(observeErr).Msg("观察 Rsync 备份源完成状态失败")
+			}
+		}
+		if execCtx.Err() != nil || runCtx.Err() != nil {
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "备份源完成观察期间任务已取消", taskEntity.Status)
+			if statusErr := m.updateStatus(&taskEntity, StatusCanceled, map[string]interface{}{
+				"next_run_at": nextCronRun(taskEntity.CronSpec),
+				"last_error":  "任务已取消",
+			}); statusErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Err(statusErr).Msg("updateStatus failed in source completion cancellation path")
+			}
+			finishedAt := time.Now()
+			m.db.Model(&model.TaskRun{}).Where("id = ?", runID).Updates(map[string]interface{}{
+				"status":      "canceled",
+				"finished_at": &finishedAt,
+				"last_error":  "任务已取消",
+			})
+			runCompleted = true
+			return
+		}
 
 		verifyStatus := "none"
 

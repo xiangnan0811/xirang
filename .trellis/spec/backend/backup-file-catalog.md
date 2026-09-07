@@ -56,6 +56,37 @@ belongs only to the asynchronous reconciler.
 - Fairness is durable: backed-off low IDs, process restart, multiple instances,
   or sustained wake traffic cannot starve a later due candidate. The periodic
   timer survives coalesced wakes and resets only after a periodic pass.
+- After a successful legacy Rsync write and its post-hook, the Task runner
+  observes completion before advertising success or verification warning. The
+  injected `BackupSourceCompletionObserver.ObserveBackupSourceCompletion`
+  refreshes only the exact already-linked mutable Rsync source and invalidates
+  its Catalog even when an in-place child change leaves the root fingerprint
+  unchanged. Do not wait for a failed preview or the periodic freshness deadline.
+- Completion invalidation revalidates Task/link/repository/point authority under
+  the existing lock order and point write-admission guard. It supersedes the
+  active projection and completion-obsoleted building/failed/partial attempts.
+  Preserve prior failure evidence and fill missing finish times without releasing
+  another builder's lease. Completion wakes must make replacement immediately
+  eligible, not enter ordinary failure backoff; normal build failures retain
+  their bounded retry delay. The existing worker owns rebuilding.
+- Disabled features, unconnected Tasks, managed/foreign modes, and disconnected
+  repositories are not auto-connected. Genuine observation errors do not turn a
+  successful backup copy into failure, but parent cancellation still terminalizes
+  the TaskRun as canceled. Provider work stays inside the bounded run context.
+- Before freezing a mutable Catalog build, refresh its source observation under
+  the Catalog lease and bounded build context. Resolve the exact repository,
+  observed point, producing task, active binding, and current link; never choose
+  a task by node or selector order. Reload the point after observation so the
+  generation binds the current source fingerprint and capability revision.
+- A source change must not leave periodic builds retrying an old fingerprint
+  indefinitely. The existing worker performs the refresh; browsing and preview
+  requests do not reconnect repositories or weaken source consistency checks.
+  Immutable points and intentionally disconnected repositories are not repaired
+  by this mutable refresh path. Suppress redundant Catalog wakes from a build.
+- Failed refreshes retain durable generation failure evidence and retry backoff.
+  A last-good active generation must not override a newer failed or in-progress
+  build when deciding whether another mutable build is due. Transient Provider
+  failures must remain eligible for later automatic recovery.
 
 ### 4. Validation & Error Matrix
 
@@ -104,6 +135,16 @@ belongs only to the asynchronous reconciler.
 - Backend-specific proof tests cover exact Restic tags/summary, Rclone commit and
   manifest, and Rsync final marker; ambiguity, staging, missing proof, and
   rewritten evidence stay unrepaired.
+- Mutable source regressions use a real local Rsync tree: build a Catalog,
+  change root metadata without changing the preview file, then rebuild and read
+  the exact file without an explicit reconnect. Cover same-node task isolation,
+  refresh failure/recovery, and source drift after observation before activation.
+- First-preview acceptance also covers Task completion after post-hook, including
+  verification-warning and cancellation paths. Use the real runtime, local Rsync
+  adapter, Catalog worker, source resolver, and Broker Issue/Serve. After the
+  worker makes the replacement Catalog ready, select the entry and issue the
+  first safe-preview ticket without an intervening Connect, Reconcile, Build,
+  or retry; assert exact response bytes and same-node second-Task isolation.
 - Frontend mapper/control tests require the closed state/count/reason contract,
   keep non-browsable lineages visible but disabled, and clear descendants until
   the exact selected version is browsable. Run repeat/race/full gates.

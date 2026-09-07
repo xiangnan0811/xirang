@@ -881,15 +881,37 @@ func ensureRetainedBindingTaskAvailable(tx *gorm.DB, binding model.RepositoryAcc
 }
 
 func ensureMutablePoint(tx *gorm.DB, repository model.BackupRepository, taskEntity model.Task, observation provider.RepositoryObservation, now time.Time) (*model.RecoveryPoint, error) {
+	return ensureMutablePointForExpectedID(tx, repository, taskEntity, observation, now, "")
+}
+
+func ensureMutablePointForExpectedID(
+	tx *gorm.DB,
+	repository model.BackupRepository,
+	taskEntity model.Task,
+	observation provider.RepositoryObservation,
+	now time.Time,
+	expectedPointID string,
+) (*model.RecoveryPoint, error) {
 	var point model.RecoveryPoint
 	err := tx.Where("repository_id = ? AND semantics = ?", repository.ID, backupasset.PointMutableHead).First(&point).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
+	if expectedPointID != "" {
+		if errors.Is(err, gorm.ErrRecordNotFound) || point.ID != expectedPointID {
+			return nil, fmt.Errorf("%w: mutable Catalog point changed during reconcile probe", backupasset.ErrConflict)
+		}
+		if point.ProducingTaskID == nil || *point.ProducingTaskID != taskEntity.ID {
+			return nil, fmt.Errorf("%w: mutable Catalog point producer changed during reconcile probe", backupasset.ErrConflict)
+		}
+	}
 	if err == nil {
 		switch backupasset.RecoveryPointState(point.State) {
 		case backupasset.RecoveryPointObserved:
 		case backupasset.RecoveryPointRetired:
+			if expectedPointID != "" {
+				return nil, fmt.Errorf("%w: mutable Catalog point retired during reconcile probe", backupasset.ErrConflict)
+			}
 			return nil, nil
 		default:
 			return nil, fmt.Errorf("%w: mutable point cannot be reactivated", backupasset.ErrConflict)
