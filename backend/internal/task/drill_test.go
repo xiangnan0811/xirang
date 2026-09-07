@@ -1533,12 +1533,13 @@ func TestExecuteDrillPersistentTerminalFailureRetainsOwnership(t *testing.T) {
 		if err := db.First(&evidence, "task_run_id = ?", runID).Error; err != nil {
 			t.Fatal(err)
 		}
-		if model.IsTerminalTaskRunStatus(run.Status) && model.IsTerminalTaskRunStatus(evidence.Status) {
+		_, owned := fixture.manager.pendingRuns.Load(fixture.task.ID)
+		if model.IsTerminalTaskRunStatus(run.Status) && model.IsTerminalTaskRunStatus(evidence.Status) && !owned {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("Manager.Run lifecycle sweep did not recover persistent terminal failure without manual Cancel: TaskRun=%q Evidence=%q",
-				run.Status, evidence.Status)
+			t.Fatalf("Manager.Run lifecycle sweep did not finish terminal recovery and ownership release without manual Cancel: TaskRun=%q Evidence=%q owned=%v",
+				run.Status, evidence.Status, owned)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
