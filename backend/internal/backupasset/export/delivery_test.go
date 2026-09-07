@@ -3312,7 +3312,12 @@ func TestDeliveryGatewayMalformedAndTamperedCiphertextFailClosedAndChargeReserva
 			return err
 		}},
 		{name: "tampered body", mutate: func(file *os.File, size int64) error {
-			_, err := file.WriteAt([]byte{0xff}, size/2)
+			var original [1]byte
+			if _, err := file.ReadAt(original[:], size/2); err != nil {
+				return err
+			}
+			original[0] ^= 0xff
+			_, err := file.WriteAt(original[:], size/2)
 			return err
 		}},
 	}
