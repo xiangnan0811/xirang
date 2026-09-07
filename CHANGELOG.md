@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.1](https://github.com/xiangnan0811/xirang/compare/v0.55.0...v0.55.1) (2026-09-07)
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** pin patched libuuid runtime package ([#500](https://github.com/xiangnan0811/xirang/issues/500)) ([0b7d61c](https://github.com/xiangnan0811/xirang/commit/0b7d61cb435933694c7b563a36c8ffbc9c8c47b8))
+
 ## [0.55.0](https://github.com/xiangnan0811/xirang/compare/v0.54.0...v0.55.0) (2026-09-06)
 
 
