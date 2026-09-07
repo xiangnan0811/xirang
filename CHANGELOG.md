@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.2](https://github.com/xiangnan0811/xirang/compare/v0.55.1...v0.55.2) (2026-09-07)
+
+
+### 🐛 Bug Fixes
+
+* **backup-assets:** refresh Rsync catalogs after backup completion ([#502](https://github.com/xiangnan0811/xirang/issues/502)) ([33d677d](https://github.com/xiangnan0811/xirang/commit/33d677dd7ebd52e31ba46a43f0643151a630f10d))
+
 ## [0.55.1](https://github.com/xiangnan0811/xirang/compare/v0.55.0...v0.55.1) (2026-09-07)
 
 
