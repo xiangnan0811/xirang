@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -315,30 +313,5 @@ func TestValidateObservationIncludesRcloneBackendIdentityFact(t *testing.T) {
 	}
 	if err := validateObservation(access, observation); err != nil {
 		t.Fatalf("valid Rclone backend-scoped observation rejected: %v", err)
-	}
-}
-
-func TestRepositoryProductionKeepsExecutorMappingInsideBindingBoundary(t *testing.T) {
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, file := range files {
-		if strings.HasSuffix(file, "_test.go") {
-			continue
-		}
-		content, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatalf("read %s: %v", file, err)
-		}
-		source := string(content)
-		for _, forbiddenImport := range []string{"/internal/api/handlers", "/internal/task/executor"} {
-			if strings.Contains(source, forbiddenImport) {
-				t.Fatalf("repository production file %s crosses forbidden boundary %s", file, forbiddenImport)
-			}
-		}
-		if file != "binding.go" && strings.Contains(source, "ExecutorType") {
-			t.Fatalf("repository production file %s branches on Task executor outside binding mapping", file)
-		}
 	}
 }

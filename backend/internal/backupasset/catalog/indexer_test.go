@@ -32,16 +32,17 @@ func (source catalogIndexerKeySource) Active(_ context.Context, domain backupass
 }
 
 type catalogIndexerFactory struct {
-	mu       sync.Mutex
-	provider backupasset.ProviderKind
-	source   string
-	mode     provider.CatalogProofMode
-	manifest provider.CatalogManifestProof
-	records  []provider.CatalogRecord
-	listErr  error
-	mutate   func()
-	proofMut func(*provider.CatalogReadProof)
-	requests []PointReadRequest
+	mu         sync.Mutex
+	provider   backupasset.ProviderKind
+	source     string
+	mode       provider.CatalogProofMode
+	manifest   provider.CatalogManifestProof
+	records    []provider.CatalogRecord
+	listErr    error
+	refreshErr error
+	proofMut   func(*provider.CatalogReadProof)
+	mutate     func()
+	requests   []PointReadRequest
 }
 
 func (factory *catalogIndexerFactory) OpenCatalogRead(_ context.Context, request PointReadRequest) (provider.CatalogReadSession, error) {
@@ -73,6 +74,9 @@ func (factory *catalogIndexerFactory) OpenCatalogRead(_ context.Context, request
 		factory.proofMut(&proof)
 	}
 	return &catalogIndexerSession{records: records, proof: proof, listErr: factory.listErr, mutate: factory.mutate}, nil
+}
+func (factory *catalogIndexerFactory) RefreshMutableObservation(context.Context, PointReadRequest) error {
+	return factory.refreshErr
 }
 
 type catalogIndexerSession struct {
@@ -484,6 +488,47 @@ func TestCatalogIndexerRejectsMutableSourceRaceAndLostFence(t *testing.T) {
 		})
 	}
 }
+func TestCatalogIndexerRetriesMutableObservedAtDrift(t *testing.T) {
+	fixture := newCatalogIndexerFixture(t, true, 0)
+	factory := fixture.factory()
+	indexer := fixture.newIndexer(t, factory)
+	request := BuildRequest{RepositoryID: fixture.point.RepositoryID, RecoveryPointID: fixture.point.ID}
+	if _, err := indexer.Build(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	factory.mutate = func() {
+		observedAt := fixture.now.Add(-2 * time.Hour)
+		if err := fixture.db.Model(&model.RecoveryPoint{}).Where("id = ?", fixture.point.ID).
+			Update("observed_at", observedAt).Error; err != nil {
+			t.Fatalf("update observed_at: %v", err)
+		}
+	}
+	if _, err := indexer.Build(context.Background(), request); !errors.Is(err, ErrCatalogSourceChanged) {
+		t.Fatalf("Build error=%v, want %v", err, ErrCatalogSourceChanged)
+	}
+	var failed model.CatalogGeneration
+	if err := fixture.db.Where("recovery_point_id = ?", fixture.point.ID).
+		Order("generation DESC").First(&failed).Error; err != nil {
+		t.Fatal(err)
+	}
+	if failed.State != string(GenerationFailed) || failed.ErrorCode != "catalog_source_changed" || failed.FinishedAt == nil {
+		t.Fatalf("same-source drift generation=%+v", failed)
+	}
+	config := backupasset.CatalogConfig{
+		Enabled: true, BatchSize: 2, BuildTimeout: 30 * time.Minute, ReconcileInterval: 15 * time.Minute,
+		MaxConcurrency: 2, MaxEntries: 100,
+		Lease: backupasset.LeaseConfig{Duration: 5 * time.Minute, Heartbeat: time.Minute, AbsoluteDeadline: time.Hour},
+	}
+	candidates, err := indexer.ListCandidates(context.Background(), 20, failed.FinishedAt.UTC().Add(time.Second), config)
+	if err != nil || len(candidates) != 0 {
+		t.Fatalf("same-source drift ignored backoff: candidates=%+v err=%v", candidates, err)
+	}
+	retryAt := failed.FinishedAt.UTC().Add(RetryDelay(config, 1, fixture.point.ID, failed.ID) + time.Second)
+	candidates, err = indexer.ListCandidates(context.Background(), 20, retryAt, config)
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("same-source drift did not become retryable: candidates=%+v err=%v", candidates, err)
+	}
+}
 
 func TestCatalogIndexerRetirementDeactivatesProjection(t *testing.T) {
 	fixture := newCatalogIndexerFixture(t, true, 0)
@@ -890,6 +935,119 @@ func TestCatalogIndexerCandidatesHonorActiveProjectionAndDurableBackoff(t *testi
 	if err != nil || len(candidates) != 1 {
 		t.Fatalf("stale active mutable candidates=%+v err=%v", candidates, err)
 	}
+	recentFailureFinishedAt := staleNow
+	recentFailure := model.CatalogGeneration{
+		ID: strings.Repeat("a", 32), RecoveryPointID: fixture.point.ID, Generation: 3, State: string(GenerationFailed),
+		SourceFingerprint: fixture.point.SourceFingerprint, ErrorCode: "catalog_source_changed",
+		StartedAt: staleNow.Add(-time.Minute), FinishedAt: &recentFailureFinishedAt, CreatedAt: staleNow.Add(-time.Minute), UpdatedAt: staleNow,
+	}
+	if err := fixture.db.Create(&recentFailure).Error; err != nil {
+		t.Fatal(err)
+	}
+	candidates, err = indexer.ListCandidates(context.Background(), 20, staleNow, config)
+	if err != nil || len(candidates) != 0 {
+		t.Fatalf("active projection bypassed latest failure backoff: candidates=%+v err=%v", candidates, err)
+	}
+	recentDelay := RetryDelay(config, 1, fixture.point.ID, recentFailure.ID)
+	candidates, err = indexer.ListCandidates(context.Background(), 20, staleNow.Add(recentDelay+time.Second), config)
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("latest failure backoff did not expire: candidates=%+v err=%v delay=%s", candidates, err, recentDelay)
+	}
+}
+func TestCatalogIndexerCandidatesSkipDisconnectedMutableBeforeLimit(t *testing.T) {
+	fixture := newCatalogIndexerFixture(t, true, 0)
+	const disconnectedCount = 200
+	stale := fixture.now.Add(-24 * time.Hour)
+	repositories := make([]model.BackupRepository, 0, disconnectedCount)
+	points := make([]model.RecoveryPoint, 0, disconnectedCount)
+	for index := range disconnectedCount {
+		repositoryID := fmt.Sprintf("%032x", 0x1000+index)
+		pointID := fmt.Sprintf("%032x", 0x2000+index)
+		repositories = append(repositories, model.BackupRepository{
+			ID: repositoryID, ProviderKind: string(backupasset.ProviderRsync), DisplayName: "disconnected",
+			VersionMode: string(backupasset.VersionMutableHead), Status: string(backupasset.RepositoryDisconnected),
+			CapabilityRevision: 3, CapabilitiesJSON: "{}", ImmutabilityLevel: string(backupasset.ImmutabilityMutable),
+			CreatedAt: stale, UpdatedAt: stale,
+		})
+		points = append(points, model.RecoveryPoint{
+			ID: pointID, RepositoryID: repositoryID, Semantics: string(backupasset.PointMutableHead),
+			State: string(backupasset.RecoveryPointObserved), SourceFingerprint: strings.Repeat("d", 64),
+			ManifestDigestAlgorithm: "sha256", ManifestDigest: strings.Repeat("e", 64),
+			ConsistencyJSON: "{}", FidelityJSON: "{}", CapabilityRevision: 3, CapabilitiesJSON: "{}",
+			ImmutabilityLevel: string(backupasset.ImmutabilityMutable), PhysicalAvailability: string(backupasset.PhysicalOffline),
+			HoldState: string(backupasset.HoldNone), ObservedAt: &stale, CreatedAt: stale, UpdatedAt: stale,
+		})
+	}
+	if err := fixture.db.Create(&repositories).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Create(&points).Error; err != nil {
+		t.Fatal(err)
+	}
+	indexer := fixture.newIndexer(t, fixture.factory())
+	config := backupasset.CatalogConfig{
+		Enabled: true, BatchSize: 2, BuildTimeout: 30 * time.Minute, ReconcileInterval: 15 * time.Minute,
+		MaxConcurrency: 2, MaxEntries: 100,
+		Lease: backupasset.LeaseConfig{Duration: 5 * time.Minute, Heartbeat: time.Minute, AbsoluteDeadline: time.Hour},
+	}
+	candidates, err := indexer.ListCandidates(context.Background(), 1, fixture.now, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0].RecoveryPointID != fixture.point.ID {
+		t.Fatalf("disconnected mutable candidates=%+v, want healthy point %q", candidates, fixture.point.ID)
+	}
+}
+
+func TestCatalogIndexerRefreshFailureRecordsRetryableEvidence(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		code string
+	}{
+		{
+			name: "provider failure",
+			err:  &provider.CapabilityError{Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityProviderUnavailable}},
+			code: "catalog_provider_unavailable",
+		},
+		{name: "authority conflict", err: backupasset.ErrConflict, code: "catalog_build_failed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newCatalogIndexerFixture(t, true, 0)
+			factory := fixture.factory()
+			factory.refreshErr = test.err
+			indexer := fixture.newIndexer(t, factory)
+			request := BuildRequest{RepositoryID: fixture.point.RepositoryID, RecoveryPointID: fixture.point.ID}
+			_, buildErr := indexer.Build(context.Background(), request)
+			if buildErr == nil || !errors.Is(buildErr, test.err) {
+				t.Fatalf("refresh failure=%v, want %v", buildErr, test.err)
+			}
+			var failed model.CatalogGeneration
+			if err := fixture.db.Where("recovery_point_id = ?", fixture.point.ID).
+				Order("generation DESC").First(&failed).Error; err != nil {
+				t.Fatal(err)
+			}
+			if failed.State != string(GenerationFailed) || failed.ErrorCode != test.code || failed.FinishedAt == nil {
+				t.Fatalf("failed refresh generation=%+v, want code=%q", failed, test.code)
+			}
+			config := backupasset.CatalogConfig{
+				Enabled: true, BatchSize: 2, BuildTimeout: 30 * time.Minute, ReconcileInterval: 15 * time.Minute,
+				MaxConcurrency: 2, MaxEntries: 100,
+				Lease: backupasset.LeaseConfig{Duration: 5 * time.Minute, Heartbeat: time.Minute, AbsoluteDeadline: time.Hour},
+			}
+			retryAt := failed.FinishedAt.UTC().Add(RetryDelay(config, 1, fixture.point.ID, failed.ID) + time.Second)
+			candidates, err := indexer.ListCandidates(context.Background(), 20, retryAt, config)
+			if err != nil || len(candidates) != 1 || candidates[0].RecoveryPointID != fixture.point.ID {
+				t.Fatalf("retry candidate=%+v err=%v", candidates, err)
+			}
+			factory.refreshErr = nil
+			rebuilt, err := indexer.Build(context.Background(), request)
+			if err != nil || rebuilt.State != string(GenerationComplete) || !rebuilt.IsActive {
+				t.Fatalf("retry build=%+v err=%v", rebuilt, err)
+			}
+		})
+	}
 }
 
 type catalogLeaseRenewer interface {
@@ -956,6 +1114,9 @@ func (factory *catalogDelayedFactory) OpenCatalogRead(ctx context.Context, reque
 	}
 	return &catalogDelayedSession{inner: inner, entered: factory.entered, release: factory.release}, nil
 }
+func (factory *catalogDelayedFactory) RefreshMutableObservation(ctx context.Context, request PointReadRequest) error {
+	return factory.inner.RefreshMutableObservation(ctx, request)
+}
 
 type catalogDelayedSession struct {
 	inner   provider.CatalogReadSession
@@ -986,6 +1147,9 @@ type catalogBlockingFactory struct{ session provider.CatalogReadSession }
 
 func (factory catalogBlockingFactory) OpenCatalogRead(context.Context, PointReadRequest) (provider.CatalogReadSession, error) {
 	return factory.session, nil
+}
+func (factory catalogBlockingFactory) RefreshMutableObservation(context.Context, PointReadRequest) error {
+	return nil
 }
 
 type catalogCancellationIgnoringSession struct {

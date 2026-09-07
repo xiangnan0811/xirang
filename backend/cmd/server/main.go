@@ -206,6 +206,7 @@ func main() {
 	taskManager := task.NewManager(db, executorFactory, hub, cronScheduler, settingsSvc, alertDispatcher, cfg.TaskTrafficRetentionDays, cfg.TaskRunRetentionDays)
 	taskManager.SetPublicationCoordinator(assetRuntime.PublicationCoordinator())
 	taskManager.SetLineageGuard(assetRuntime.LineageGuard())
+	taskManager.SetBackupSourceCompletionObserver(assetRuntime.RepositoryService())
 	taskManager.SetNodeWriteAdmission(assetRuntime.NodeWriteCoordinator())
 	taskManager.SetLegacyBlockRecorder(assetRuntime.LegacyBlockRecorder())
 	taskManager.SetAnomalySink(anomalySink)

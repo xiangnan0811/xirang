@@ -81,6 +81,9 @@ type NodeWriteAdmission interface {
 	AdmitDrillTx(context.Context, *gorm.DB, uint, uint) error
 	EnterDrillExecutionTx(context.Context, *gorm.DB, uint, uint, time.Time) error
 }
+type BackupSourceCompletionObserver interface {
+	ObserveBackupSourceCompletion(context.Context, uint) error
+}
 
 // ManagerOption configures a Manager during construction.
 type ManagerOption func(*Manager)
@@ -245,13 +248,14 @@ type Manager struct {
 	autoDispatcher *automation.Dispatcher // optional; set via SetAutomationDispatcher
 	scheduleMu     sync.Mutex
 
-	publicationCoordinator publication.Coordinator
-	lineageGuard           publication.LineageGuard
-	legacyBlockRecorder    publication.LegacyBlockRecorder
-	managedRetention       ManagedRecoveryPointRetention
-	resticRetentionFunc    func(context.Context, model.Policy, model.Task)
-	rootCtx                context.Context    // worker goroutines 的父级 context
-	rootCancel             context.CancelFunc // 由 Shutdown 调用，通知所有 worker 退出
+	publicationCoordinator         publication.Coordinator
+	lineageGuard                   publication.LineageGuard
+	backupSourceCompletionObserver BackupSourceCompletionObserver
+	legacyBlockRecorder            publication.LegacyBlockRecorder
+	managedRetention               ManagedRecoveryPointRetention
+	resticRetentionFunc            func(context.Context, model.Policy, model.Task)
+	rootCtx                        context.Context    // worker goroutines 的父级 context
+	rootCancel                     context.CancelFunc // 由 Shutdown 调用，通知所有 worker 退出
 
 	drillLoopMu           sync.Mutex
 	drillLoopCancel       context.CancelFunc
@@ -409,6 +413,13 @@ func (m *Manager) SetPublicationCoordinator(coordinator publication.Coordinator)
 // installations without that runtime retain the existing compatibility path.
 func (m *Manager) SetLineageGuard(guard publication.LineageGuard) {
 	m.lineageGuard = guard
+}
+
+// SetBackupSourceCompletionObserver installs the legacy Rsync source completion
+// observer. It is optional for compatibility with task managers without the
+// backup-asset runtime.
+func (m *Manager) SetBackupSourceCompletionObserver(observer BackupSourceCompletionObserver) {
+	m.backupSourceCompletionObserver = observer
 }
 
 // SetLegacyBlockRecorder installs the typed audit/metric sink used after the

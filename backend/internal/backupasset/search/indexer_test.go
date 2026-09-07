@@ -956,6 +956,9 @@ func (factory *searchCatalogProducerFactory) OpenCatalogRead(
 		},
 	}, nil
 }
+func (factory *searchCatalogProducerFactory) RefreshMutableObservation(context.Context, catalog.PointReadRequest) error {
+	return nil
+}
 
 type searchCatalogProducerSession struct {
 	record provider.CatalogRecord

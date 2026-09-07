@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/model"
 
@@ -30,6 +31,228 @@ func (service *Service) Reconcile(ctx context.Context, repositoryID string, requ
 	if err := service.requireRuntime(); err != nil {
 		return ConnectResult{}, err
 	}
+	return service.reconcileLoaded(ctx, repositoryID, requestContext, "", true)
+}
+
+// RefreshMutableObservation re-probes the exact live binding that produces a
+// mutable point. It is deliberately narrower than the public Reconcile path:
+// it cannot create a repository, select a replacement Task, or revive a
+// disconnected repository.
+func (service *Service) RefreshMutableObservation(ctx context.Context, request catalog.PointReadRequest) error {
+	if service == nil || backupasset.ValidateOpaqueID(request.RepositoryID) != nil ||
+		backupasset.ValidateOpaqueID(request.RecoveryPointID) != nil {
+		return fmt.Errorf("%w: mutable observation refresh request", backupasset.ErrInvalidState)
+	}
+	if err := service.ensureEnabled(""); err != nil {
+		return err
+	}
+	if err := service.requireRuntime(); err != nil {
+		return err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	_, err := service.reconcileLoaded(ctx, request.RepositoryID, RequestContext{}, request.RecoveryPointID, false)
+	return err
+}
+
+type backupSourceCompletionTarget struct {
+	taskID       uint
+	repositoryID string
+	linkID       string
+	pointID      string
+}
+
+// ObserveBackupSourceCompletion refreshes and invalidates the exact legacy
+// mutable Rsync source owned by taskID. It never creates a Repository or picks
+// a replacement link; disabled, foreign, managed, disconnected, and
+// unconnected tasks are intentionally ignored.
+func (service *Service) ObserveBackupSourceCompletion(ctx context.Context, taskID uint) error {
+	if service == nil || taskID == 0 {
+		return fmt.Errorf("%w: backup source completion observer", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if service.foundation == nil {
+		return fmt.Errorf("%w: backup source completion foundation unavailable", backupasset.ErrInvalidState)
+	}
+	enabled, err := service.foundation.FeatureEnabled()
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		return nil
+	}
+	if err := service.requireRuntime(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	target, applicable, err := service.loadBackupSourceCompletionTarget(ctx, taskID)
+	if err != nil || !applicable {
+		return err
+	}
+	if err := service.RefreshMutableObservation(ctx, catalog.PointReadRequest{
+		RepositoryID: target.repositoryID, RecoveryPointID: target.pointID,
+	}); err != nil {
+		return err
+	}
+	stillApplicable, err := service.invalidateBackupSourceCatalog(ctx, target)
+	if err != nil {
+		return err
+	}
+	if stillApplicable {
+		service.requestCatalogWake()
+	}
+	return nil
+}
+
+func (service *Service) loadBackupSourceCompletionTarget(
+	ctx context.Context,
+	taskID uint,
+) (backupSourceCompletionTarget, bool, error) {
+	var taskEntity model.Task
+	result := service.db.WithContext(ctx).Where("id = ?", taskID).First(&taskEntity)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return backupSourceCompletionTarget{}, false, nil
+	}
+	if result.Error != nil {
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("load backup source completion Task: %w", result.Error)
+	}
+	if taskEntity.ArchivedAt != nil || bindingProviderForTask(taskEntity) != backupasset.ProviderRsync {
+		return backupSourceCompletionTarget{}, false, nil
+	}
+	var links []model.TaskRepositoryLink
+	if err := service.db.WithContext(ctx).
+		Where("task_id = ? AND unlinked_at IS NULL AND publication_mode = ?", taskID, backupasset.PublicationLegacyMutable).
+		Order("created_at ASC, id ASC").Find(&links).Error; err != nil {
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("load backup source completion Task links: %w", err)
+	}
+	if len(links) == 0 {
+		return backupSourceCompletionTarget{}, false, nil
+	}
+	if len(links) != 1 {
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("%w: ambiguous active legacy Rsync Task links", backupasset.ErrConflict)
+	}
+	link := links[0]
+	var repository model.BackupRepository
+	result = service.db.WithContext(ctx).Where("id = ?", link.RepositoryID).First(&repository)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("%w: linked Rsync repository", backupasset.ErrConflict)
+	}
+	if result.Error != nil {
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("load backup source completion repository: %w", result.Error)
+	}
+	if repository.ProviderKind != string(backupasset.ProviderRsync) ||
+		repository.VersionMode != string(backupasset.VersionMutableHead) {
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("%w: legacy Rsync repository contract changed", backupasset.ErrConflict)
+	}
+	status := backupasset.RepositoryStatus(repository.Status)
+	if status == backupasset.RepositoryDisconnected {
+		return backupSourceCompletionTarget{}, false, nil
+	}
+	if status != backupasset.RepositoryOnline && status != backupasset.RepositoryOffline {
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("%w: legacy Rsync repository status is invalid", backupasset.ErrConflict)
+	}
+	var points []model.RecoveryPoint
+	if err := service.db.WithContext(ctx).
+		Where("repository_id = ? AND semantics = ? AND state = ? AND producing_task_id = ?",
+			repository.ID, backupasset.PointMutableHead, backupasset.RecoveryPointObserved, taskID).
+		Order("created_at ASC, id ASC").Find(&points).Error; err != nil {
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("load backup source completion points: %w", err)
+	}
+	if len(points) == 0 {
+		return backupSourceCompletionTarget{}, false, nil
+	}
+	if len(points) != 1 {
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("%w: ambiguous observed legacy Rsync points", backupasset.ErrConflict)
+	}
+	return backupSourceCompletionTarget{
+		taskID: taskID, repositoryID: repository.ID, linkID: link.ID, pointID: points[0].ID,
+	}, true, nil
+}
+
+func (service *Service) invalidateBackupSourceCatalog(
+	ctx context.Context,
+	target backupSourceCompletionTarget,
+) (bool, error) {
+	applicable := false
+	err := service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var taskEntity model.Task
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", target.taskID).First(&taskEntity).Error; err != nil {
+			return fmt.Errorf("revalidate backup source completion Task: %w", err)
+		}
+		if taskEntity.ArchivedAt != nil || bindingProviderForTask(taskEntity) != backupasset.ProviderRsync {
+			return fmt.Errorf("%w: backup source completion Task changed", backupasset.ErrConflict)
+		}
+		var link model.TaskRepositoryLink
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND task_id = ? AND repository_id = ? AND publication_mode = ? AND unlinked_at IS NULL",
+				target.linkID, target.taskID, target.repositoryID, backupasset.PublicationLegacyMutable).
+			First(&link).Error; err != nil {
+			return fmt.Errorf("%w: backup source completion Task link changed", backupasset.ErrConflict)
+		}
+		var repository model.BackupRepository
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", target.repositoryID).First(&repository).Error; err != nil {
+			return fmt.Errorf("revalidate backup source completion repository: %w", err)
+		}
+		if repository.ProviderKind != string(backupasset.ProviderRsync) ||
+			repository.VersionMode != string(backupasset.VersionMutableHead) {
+			return fmt.Errorf("%w: backup source completion repository changed", backupasset.ErrConflict)
+		}
+		status := backupasset.RepositoryStatus(repository.Status)
+		if status == backupasset.RepositoryDisconnected {
+			return nil
+		}
+		if status != backupasset.RepositoryOnline && status != backupasset.RepositoryOffline {
+			return fmt.Errorf("%w: backup source completion repository status changed", backupasset.ErrConflict)
+		}
+		var point model.RecoveryPoint
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND repository_id = ? AND semantics = ? AND state = ? AND producing_task_id = ?",
+				target.pointID, target.repositoryID, backupasset.PointMutableHead, backupasset.RecoveryPointObserved, target.taskID).
+			First(&point).Error; err != nil {
+			return fmt.Errorf("%w: backup source completion point changed", backupasset.ErrConflict)
+		}
+		if err := backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, point.ID); err != nil {
+			return err
+		}
+		now := service.utcNow()
+		obsoleteStates := []string{
+			string(catalog.GenerationBuilding), string(catalog.GenerationPartial), string(catalog.GenerationFailed),
+		}
+		result := tx.WithContext(ctx).Model(&model.CatalogGeneration{}).
+			Where("recovery_point_id = ? AND state IN ?", target.pointID, obsoleteStates).
+			Updates(map[string]any{
+				"state": catalog.GenerationSuperseded, "is_active": false,
+				"finished_at": gorm.Expr("COALESCE(finished_at, ?)", now), "updated_at": now,
+			})
+		if result.Error != nil {
+			return fmt.Errorf("supersede completion-obsolete Catalog generations: %w", result.Error)
+		}
+		result = tx.WithContext(ctx).Model(&model.CatalogGeneration{}).
+			Where("recovery_point_id = ? AND state = ? AND is_active = ?", target.pointID, catalog.GenerationComplete, true).
+			Updates(map[string]any{"state": catalog.GenerationSuperseded, "is_active": false, "updated_at": now})
+		if result.Error != nil {
+			return fmt.Errorf("invalidate active Catalog generation: %w", result.Error)
+		}
+		applicable = true
+		return nil
+	})
+	return applicable, err
+}
+
+func (service *Service) reconcileLoaded(
+	ctx context.Context,
+	repositoryID string,
+	requestContext RequestContext,
+	expectedPointID string,
+	wakeCatalog bool,
+) (ConnectResult, error) {
 	runtime, err := service.loadRepositoryRuntime(ctx, repositoryID)
 	if err != nil {
 		return ConnectResult{}, err
@@ -41,6 +264,15 @@ func (service *Service) Reconcile(ctx context.Context, repositoryID string, requ
 	if linkSnapshot.active == nil || linkSnapshot.active.RepositoryID != repositoryID {
 		return ConnectResult{}, fmt.Errorf("%w: binding Task link lineage changed", backupasset.ErrConflict)
 	}
+	if expectedPointID != "" {
+		status := backupasset.RepositoryStatus(runtime.repository.Status)
+		if status != backupasset.RepositoryOnline && status != backupasset.RepositoryOffline {
+			return ConnectResult{}, fmt.Errorf("%w: mutable observation repository status cannot be refreshed", backupasset.ErrConflict)
+		}
+		if err := service.validateMutableRefreshTarget(ctx, runtime, expectedPointID); err != nil {
+			return ConnectResult{}, err
+		}
+	}
 	runtime.access = withRemoteAuditContext(runtime.access, requestContext, runtime.document.TaskID)
 	prober, err := service.registry.Prober(runtime.access.Provider)
 	if err != nil {
@@ -51,20 +283,37 @@ func (service *Service) Reconcile(ctx context.Context, repositoryID string, requ
 		return ConnectResult{}, err
 	}
 	observation, probeErr := prober.Probe(ctx, runtime.access, limits)
+	if expectedPointID != "" {
+		if cancellationErr := ctx.Err(); cancellationErr != nil {
+			return ConnectResult{}, cancellationErr
+		}
+	}
 	if probeErr != nil {
 		reason := capabilityReasonForProviderError(probeErr)
-		if stateErr := service.recordReconcileFailure(context.WithoutCancel(ctx), runtime, linkSnapshot, reason); stateErr != nil {
+		failureContext := context.WithoutCancel(ctx)
+		if expectedPointID != "" {
+			failureContext = ctx
+		}
+		if stateErr := service.recordReconcileFailure(failureContext, runtime, linkSnapshot, expectedPointID, reason); stateErr != nil {
 			return ConnectResult{}, stateErr
 		}
-		service.writeAudit(context.WithoutCancel(ctx), requestContext, backupasset.AuditActionRepositoryReconcile, backupasset.AuditOutcomeFailure, repositoryID, &runtime.document.TaskID, "probe", probeErr)
+		if expectedPointID == "" {
+			service.writeAudit(context.WithoutCancel(ctx), requestContext, backupasset.AuditActionRepositoryReconcile, backupasset.AuditOutcomeFailure, repositoryID, &runtime.document.TaskID, "probe", probeErr)
+		}
 		return ConnectResult{}, probeErr
 	}
 	if validationErr := validateObservation(runtime.access, observation); validationErr != nil {
 		reason := backupasset.CapabilityReason{Code: backupasset.CapabilityProviderProtocolIncompatible}
-		if stateErr := service.recordReconcileFailure(context.WithoutCancel(ctx), runtime, linkSnapshot, reason); stateErr != nil {
+		failureContext := context.WithoutCancel(ctx)
+		if expectedPointID != "" {
+			failureContext = ctx
+		}
+		if stateErr := service.recordReconcileFailure(failureContext, runtime, linkSnapshot, expectedPointID, reason); stateErr != nil {
 			return ConnectResult{}, stateErr
 		}
-		service.writeAudit(context.WithoutCancel(ctx), requestContext, backupasset.AuditActionRepositoryReconcile, backupasset.AuditOutcomeFailure, repositoryID, &runtime.document.TaskID, "validate", validationErr)
+		if expectedPointID == "" {
+			service.writeAudit(context.WithoutCancel(ctx), requestContext, backupasset.AuditActionRepositoryReconcile, backupasset.AuditOutcomeFailure, repositoryID, &runtime.document.TaskID, "validate", validationErr)
+		}
 		return ConnectResult{}, validationErr
 	}
 	if runtime.repository.RepositoryIdentity == nil || *runtime.repository.RepositoryIdentity != observation.RepositoryIdentity {
@@ -142,7 +391,7 @@ func (service *Service) Reconcile(ctx context.Context, repositoryID string, requ
 				return fmt.Errorf("update reconciled repository binding: %w", err)
 			}
 			if observation.VersionMode == backupasset.VersionMutableHead {
-				point, err := ensureMutablePoint(tx, repository, currentTask, observation, now)
+				point, err := ensureMutablePointForExpectedID(tx, repository, currentTask, observation, now, expectedPointID)
 				if err != nil {
 					return err
 				}
@@ -156,18 +405,40 @@ func (service *Service) Reconcile(ctx context.Context, repositoryID string, requ
 		err = runTransaction()
 	}
 	if err != nil {
-		service.writeAudit(ctx, requestContext, backupasset.AuditActionRepositoryReconcile, backupasset.AuditOutcomeBlocked, repositoryID, &runtime.document.TaskID, "commit", err)
+		if expectedPointID == "" {
+			service.writeAudit(ctx, requestContext, backupasset.AuditActionRepositoryReconcile, backupasset.AuditOutcomeBlocked, repositoryID, &runtime.document.TaskID, "commit", err)
+		}
 		return ConnectResult{}, err
 	}
-	if mutablePointCatalogWakeable(mutablePoint) {
+	if wakeCatalog && mutablePointCatalogWakeable(mutablePoint) {
 		service.requestCatalogWake()
 	}
 	result, err := connectResultFromModels(repository, mutablePoint)
 	if err != nil {
 		return ConnectResult{}, err
 	}
-	service.writeAudit(ctx, requestContext, backupasset.AuditActionRepositoryReconcile, backupasset.AuditOutcomeSuccess, repositoryID, &runtime.document.TaskID, "commit", nil)
+	if expectedPointID == "" {
+		service.writeAudit(ctx, requestContext, backupasset.AuditActionRepositoryReconcile, backupasset.AuditOutcomeSuccess, repositoryID, &runtime.document.TaskID, "commit", nil)
+	}
 	return result, nil
+}
+
+func (service *Service) validateMutableRefreshTarget(ctx context.Context, runtime repositoryRuntime, pointID string) error {
+	var point model.RecoveryPoint
+	err := service.db.WithContext(ctx).
+		Where("id = ? AND repository_id = ? AND semantics = ?", pointID, runtime.repository.ID, backupasset.PointMutableHead).
+		First(&point).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("%w: mutable Catalog point", backupasset.ErrConflict)
+	}
+	if err != nil {
+		return fmt.Errorf("load mutable Catalog point for refresh: %w", err)
+	}
+	if point.State != string(backupasset.RecoveryPointObserved) || point.ProducingTaskID == nil ||
+		*point.ProducingTaskID != runtime.task.ID {
+		return fmt.Errorf("%w: mutable Catalog point producer changed", backupasset.ErrConflict)
+	}
+	return nil
 }
 
 func sameReconcileRepositoryProbeLineage(snapshot, current model.BackupRepository) bool {
@@ -391,6 +662,7 @@ func (service *Service) recordReconcileFailure(
 	ctx context.Context,
 	runtime repositoryRuntime,
 	linkSnapshot connectTaskLinkSnapshot,
+	expectedPointID string,
 	reason backupasset.CapabilityReason,
 ) error {
 	if err := backupasset.ValidateCapabilityReason(reason); err != nil {
@@ -401,12 +673,18 @@ func (service *Service) recordReconcileFailure(
 		if err != nil {
 			return err
 		}
+		pointQuery := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("repository_id = ? AND semantics = ?", repository.ID, backupasset.PointMutableHead)
+		if expectedPointID != "" {
+			pointQuery = pointQuery.Where("id = ?", expectedPointID)
+		}
 		var mutablePoint model.RecoveryPoint
-		pointErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("repository_id = ? AND semantics = ?", repository.ID, backupasset.PointMutableHead).
-			First(&mutablePoint).Error
+		pointErr := pointQuery.First(&mutablePoint).Error
 		if pointErr != nil && !errors.Is(pointErr, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("lock mutable point for failed reconcile: %w", pointErr)
+		}
+		if expectedPointID != "" && errors.Is(pointErr, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("%w: mutable Catalog point changed during reconcile probe", backupasset.ErrConflict)
 		}
 		if err := backupasset.ValidateRepositoryTransition(backupasset.RepositoryStatus(repository.Status), backupasset.RepositoryOffline); err != nil {
 			return err

@@ -6,10 +6,12 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/provider"
 	"xirang/backend/internal/model"
 
@@ -104,6 +106,358 @@ func TestReconcileMutableSourceRepairWakesCatalog(t *testing.T) {
 	if point.SourceFingerprint != strings.Repeat("f", 64) {
 		t.Fatalf("source fingerprint=%q want repaired revision", point.SourceFingerprint)
 	}
+}
+func TestRefreshMutableObservationUsesExactTaskAndRejectsDisconnectedRepository(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	taskEntity := seedTask(t, db, "rsync", t.TempDir(), "")
+	otherTask := model.Task{
+		Name: "same-node-unrelated-task", NodeID: taskEntity.NodeID, ExecutorType: "rsync",
+		RsyncSource: "/other-source", RsyncTarget: t.TempDir(), Status: "pending", Enabled: true,
+	}
+	if err := db.Create(&otherTask).Error; err != nil {
+		t.Fatal(err)
+	}
+	prober := scopedObservationProber(backupasset.ProviderRsync)
+	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, prober)
+	connected, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{})
+	if err != nil || connected.MutablePoint == nil {
+		t.Fatalf("connected=%+v err=%v", connected, err)
+	}
+	baseProbe := prober.probe
+	probeCalls := 0
+	prober.probe = func(binding provider.AccessBinding) (provider.RepositoryObservation, error) {
+		probeCalls++
+		if binding.TaskID != taskEntity.ID || binding.NodeID != taskEntity.NodeID {
+			t.Fatalf("refresh selected Task=%d Node=%d, want Task=%d Node=%d", binding.TaskID, binding.NodeID, taskEntity.ID, taskEntity.NodeID)
+		}
+		return baseProbe(binding)
+	}
+	if err := service.RefreshMutableObservation(context.Background(), catalog.PointReadRequest{
+		RepositoryID: connected.Repository.ID, RecoveryPointID: connected.MutablePoint.ID,
+	}); err != nil {
+		t.Fatalf("refresh exact mutable observation: %v", err)
+	}
+	if probeCalls != 1 {
+		t.Fatalf("refresh probe calls=%d want=1", probeCalls)
+	}
+	if _, err := service.Disconnect(context.Background(), connected.Repository.ID, RequestContext{}); err != nil {
+		t.Fatalf("disconnect repository: %v", err)
+	}
+	if err := service.RefreshMutableObservation(context.Background(), catalog.PointReadRequest{
+		RepositoryID: connected.Repository.ID, RecoveryPointID: connected.MutablePoint.ID,
+	}); !errors.Is(err, backupasset.ErrConflict) {
+		t.Fatalf("refresh disconnected repository error=%v, want conflict", err)
+	}
+	var repository model.BackupRepository
+	if err := db.First(&repository, "id = ?", connected.Repository.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if repository.Status != string(backupasset.RepositoryDisconnected) {
+		t.Fatalf("refresh changed disconnected repository status=%q", repository.Status)
+	}
+	var activeBindings int64
+	if err := db.Model(&model.RepositoryAccessBinding{}).
+		Where("repository_id = ? AND status = ?", connected.Repository.ID, bindingStatusActive).
+		Count(&activeBindings).Error; err != nil {
+		t.Fatal(err)
+	}
+	if activeBindings != 0 {
+		t.Fatalf("refresh rebound disconnected repository with %d active binding(s)", activeBindings)
+	}
+}
+func TestObserveBackupSourceCompletionInvalidatesExactCatalogProjection(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	taskEntity := seedTask(t, db, "rsync", t.TempDir(), "")
+	prober := scopedObservationProber(backupasset.ProviderRsync)
+	service := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, prober)
+	connected, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{})
+	if err != nil || connected.MutablePoint == nil {
+		t.Fatalf("connected=%+v err=%v", connected, err)
+	}
+	var point model.RecoveryPoint
+	if err := db.First(&point, "id = ?", connected.MutablePoint.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 13, 9, 0, 0, 0, time.UTC)
+	finished := now
+	active := model.CatalogGeneration{
+		ID: strings.Repeat("c", 32), RecoveryPointID: point.ID, Generation: 1,
+		State: string(catalog.GenerationComplete), IsActive: true, SourceFingerprint: point.SourceFingerprint,
+		StartedAt: now.Add(-time.Minute), FinishedAt: &finished, CreatedAt: now.Add(-time.Minute), UpdatedAt: now,
+	}
+	if err := db.Create(&active).Error; err != nil {
+		t.Fatal(err)
+	}
+	failedFinished := now.Add(-30 * time.Second)
+	failed := model.CatalogGeneration{
+		ID: strings.Repeat("e", 32), RecoveryPointID: point.ID, Generation: 3,
+		State: string(catalog.GenerationFailed), SourceFingerprint: point.SourceFingerprint,
+		ErrorCode: string(catalog.GenerationErrorSourceChanged), StartedAt: now.Add(-time.Minute),
+		FinishedAt: &failedFinished, CreatedAt: now.Add(-time.Minute), UpdatedAt: failedFinished,
+	}
+	partialFinished := now.Add(-15 * time.Second)
+	partial := model.CatalogGeneration{
+		ID: strings.Repeat("f", 32), RecoveryPointID: point.ID, Generation: 4,
+		State: string(catalog.GenerationPartial), SourceFingerprint: point.SourceFingerprint,
+		ErrorCode: string(catalog.GenerationErrorBuildIncomplete), StartedAt: now.Add(-45 * time.Second),
+		FinishedAt: &partialFinished, CreatedAt: now.Add(-45 * time.Second), UpdatedAt: partialFinished,
+	}
+	if err := db.Create(&[]model.CatalogGeneration{failed, partial}).Error; err != nil {
+		t.Fatal(err)
+	}
+	building := model.CatalogGeneration{
+		ID: strings.Repeat("d", 32), RecoveryPointID: point.ID, Generation: 2,
+		State: string(catalog.GenerationBuilding), SourceFingerprint: point.SourceFingerprint,
+		StartedAt: now, CreatedAt: now, UpdatedAt: now,
+	}
+	baseProbe := prober.probe
+	prober.probe = func(binding provider.AccessBinding) (provider.RepositoryObservation, error) {
+		if err := db.Create(&building).Error; err != nil {
+			return provider.RepositoryObservation{}, err
+		}
+		return baseProbe(binding)
+	}
+	wake := &catalogWakeRequesterSpy{accept: true}
+	if err := service.SetCatalogWake(wake); err != nil {
+		t.Fatal(err)
+	}
+	probeCalls := prober.calls
+	if err := service.ObserveBackupSourceCompletion(context.Background(), taskEntity.ID); err != nil {
+		t.Fatalf("observe backup source completion: %v", err)
+	}
+	if prober.calls != probeCalls+1 {
+		t.Fatalf("completion observer probe calls=%d want=%d", prober.calls, probeCalls+1)
+	}
+	var storedActive, storedBuilding, storedFailed, storedPartial model.CatalogGeneration
+	if err := db.First(&storedActive, "id = ?", active.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&storedBuilding, "id = ?", building.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&storedFailed, "id = ?", failed.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&storedPartial, "id = ?", partial.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedActive.State != string(catalog.GenerationSuperseded) || storedActive.IsActive {
+		t.Fatalf("active Catalog generation=%+v", storedActive)
+	}
+	if storedBuilding.State != string(catalog.GenerationSuperseded) || storedBuilding.IsActive ||
+		storedBuilding.FinishedAt == nil || !storedBuilding.FinishedAt.Equal(now) {
+		t.Fatalf("building Catalog generation=%+v", storedBuilding)
+	}
+	if storedFailed.State != string(catalog.GenerationSuperseded) || storedFailed.IsActive ||
+		storedFailed.ErrorCode != failed.ErrorCode || storedFailed.FinishedAt == nil || !storedFailed.FinishedAt.Equal(failedFinished) {
+		t.Fatalf("failed Catalog generation=%+v", storedFailed)
+	}
+	if storedPartial.State != string(catalog.GenerationSuperseded) || storedPartial.IsActive ||
+		storedPartial.ErrorCode != partial.ErrorCode || storedPartial.FinishedAt == nil || !storedPartial.FinishedAt.Equal(partialFinished) {
+		t.Fatalf("partial Catalog generation=%+v", storedPartial)
+	}
+	if calls := wake.calls.Load(); calls != 1 {
+		t.Fatalf("Catalog wake calls=%d want=1", calls)
+	}
+	keyring := backupasset.NewKeyring(db, func() time.Time { return now })
+	if _, err := keyring.Ensure(context.Background(), backupasset.KeyDomainEntryIdentity); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := backupasset.NewLeaseService(db, func() time.Time { return now }, backupasset.LeaseConfig{
+		Duration: 5 * time.Minute, Heartbeat: time.Minute, AbsoluteDeadline: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexer, err := catalog.NewIndexer(catalog.IndexerDependencies{
+		DB: db, Factory: service, Lease: lease, IdentityKeys: keyring,
+		Now:    func() time.Time { return now },
+		Config: catalog.IndexerConfig{BatchSize: 10, BuildTimeout: time.Minute, MaxEntries: 10, HeartbeatInterval: time.Second},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := indexer.ListCandidates(context.Background(), 10, now, backupasset.CatalogConfig{
+		BuildTimeout: time.Minute, ReconcileInterval: time.Minute, MaxEntries: 10,
+	})
+	if err != nil || len(candidates) != 1 || candidates[0].RecoveryPointID != point.ID {
+		t.Fatalf("same-clock completion candidate=%+v err=%v", candidates, err)
+	}
+}
+func TestObserveBackupSourceCompletionSkipsIntentionalNoOps(t *testing.T) {
+	t.Run("feature disabled", func(t *testing.T) {
+		db := newRepositoryTestDB(t)
+		taskEntity := seedTask(t, db, "rsync", t.TempDir(), "")
+		prober := scopedObservationProber(backupasset.ProviderRsync)
+		registry := provider.NewRegistry()
+		if err := registry.Register(backupasset.ProviderRsync, provider.Registration{Prober: prober}); err != nil {
+			t.Fatal(err)
+		}
+		service, err := NewService(Dependencies{
+			DB: db, Foundation: backupasset.NewFoundationService(completeRepositoryFoundationSettings(false)),
+			Registry: registry, Now: func() time.Time { return time.Date(2026, 7, 13, 9, 0, 0, 0, time.UTC) },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := service.ObserveBackupSourceCompletion(context.Background(), taskEntity.ID); err != nil {
+			t.Fatalf("disabled observer error=%v", err)
+		}
+		if prober.calls != 0 {
+			t.Fatalf("disabled observer probed %d time(s)", prober.calls)
+		}
+	})
+	t.Run("no active link", func(t *testing.T) {
+		db := newRepositoryTestDB(t)
+		taskEntity := seedTask(t, db, "rsync", t.TempDir(), "")
+		prober := scopedObservationProber(backupasset.ProviderRsync)
+		service := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, prober)
+		if err := service.ObserveBackupSourceCompletion(context.Background(), taskEntity.ID); err != nil {
+			t.Fatalf("unlinked observer error=%v", err)
+		}
+		if prober.calls != 0 {
+			t.Fatalf("unlinked observer probed %d time(s)", prober.calls)
+		}
+	})
+	t.Run("disconnected", func(t *testing.T) {
+		db := newRepositoryTestDB(t)
+		taskEntity := seedTask(t, db, "rsync", t.TempDir(), "")
+		prober := scopedObservationProber(backupasset.ProviderRsync)
+		service := newRepositoryServiceForTest(t, db, backupasset.ProviderRsync, prober)
+		connected, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.Disconnect(context.Background(), connected.Repository.ID, RequestContext{}); err != nil {
+			t.Fatal(err)
+		}
+		probeCalls := prober.calls
+		if err := service.ObserveBackupSourceCompletion(context.Background(), taskEntity.ID); err != nil {
+			t.Fatalf("disconnected observer error=%v", err)
+		}
+		if prober.calls != probeCalls {
+			t.Fatalf("disconnected observer probed %d additional time(s)", prober.calls-probeCalls)
+		}
+	})
+}
+
+func TestRefreshMutableObservationCancellationDoesNotRecordOfflineOrGeneration(t *testing.T) {
+	now := time.Date(2026, 8, 17, 9, 0, 0, 0, time.UTC)
+	db := newRepositoryTestDB(t)
+	baseProber := scopedObservationProber(backupasset.ProviderRsync)
+	blockingProber := &cancellationAwareProber{
+		base: baseProber, entered: make(chan struct{}),
+	}
+	registry := provider.NewRegistry()
+	if err := registry.Register(backupasset.ProviderRsync, provider.Registration{Prober: blockingProber}); err != nil {
+		t.Fatal(err)
+	}
+	keyring := backupasset.NewKeyring(db, func() time.Time { return now })
+	if _, err := keyring.Ensure(context.Background(), backupasset.KeyDomainEntryIdentity); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(Dependencies{
+		DB: db, Foundation: enabledFoundation(), Registry: registry, Keyring: keyring,
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskEntity := seedTask(t, db, "rsync", t.TempDir(), "")
+	connected, err := service.Connect(context.Background(), ConnectRequest{TaskID: taskEntity.ID}, RequestContext{})
+	if err != nil || connected.MutablePoint == nil {
+		t.Fatalf("connected=%+v err=%v", connected, err)
+	}
+	var beforePoint model.RecoveryPoint
+	if err := db.First(&beforePoint, "id = ?", connected.MutablePoint.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	lease, err := backupasset.NewLeaseService(db, func() time.Time { return now }, backupasset.LeaseConfig{
+		Duration: 5 * time.Minute, Heartbeat: time.Minute, AbsoluteDeadline: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexer, err := catalog.NewIndexer(catalog.IndexerDependencies{
+		DB: db, Factory: service, Lease: lease, IdentityKeys: keyring,
+		Now:    func() time.Time { return now },
+		Config: catalog.IndexerConfig{BatchSize: 10, BuildTimeout: time.Minute, MaxEntries: 10, HeartbeatInterval: time.Second},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	buildContext, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, buildErr := indexer.Build(buildContext, catalog.BuildRequest{
+			RepositoryID: connected.Repository.ID, RecoveryPointID: connected.MutablePoint.ID,
+		})
+		result <- buildErr
+	}()
+	select {
+	case <-blockingProber.entered:
+	case <-time.After(time.Second):
+		t.Fatal("refresh probe did not block")
+	}
+	cancel()
+	select {
+	case buildErr := <-result:
+		if !errors.Is(buildErr, context.Canceled) {
+			t.Fatalf("canceled Catalog build error=%v, want context.Canceled", buildErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled Catalog build did not join refresh probe")
+	}
+	var repository model.BackupRepository
+	if err := db.First(&repository, "id = ?", connected.Repository.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if repository.Status != string(backupasset.RepositoryOnline) {
+		t.Fatalf("canceled refresh changed repository status=%q", repository.Status)
+	}
+	var afterPoint model.RecoveryPoint
+	if err := db.First(&afterPoint, "id = ?", connected.MutablePoint.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if afterPoint.PhysicalAvailability != string(backupasset.PhysicalOnline) ||
+		afterPoint.SourceFingerprint != beforePoint.SourceFingerprint ||
+		afterPoint.ObservedAt == nil || beforePoint.ObservedAt == nil ||
+		!afterPoint.ObservedAt.Equal(*beforePoint.ObservedAt) {
+		t.Fatalf("canceled refresh changed point before=%+v after=%+v", beforePoint, afterPoint)
+	}
+	var generations int64
+	if err := db.Model(&model.CatalogGeneration{}).
+		Where("recovery_point_id = ?", connected.MutablePoint.ID).Count(&generations).Error; err != nil {
+		t.Fatal(err)
+	}
+	if generations != 0 {
+		t.Fatalf("canceled refresh created %d Catalog generation(s)", generations)
+	}
+}
+
+type cancellationAwareProber struct {
+	base    *scriptedProber
+	entered chan struct{}
+	once    sync.Once
+	mu      sync.Mutex
+	calls   int
+}
+
+func (prober *cancellationAwareProber) Probe(
+	ctx context.Context,
+	binding provider.AccessBinding,
+	limits provider.OperationLimits,
+) (provider.RepositoryObservation, error) {
+	prober.mu.Lock()
+	prober.calls++
+	call := prober.calls
+	prober.mu.Unlock()
+	if call == 1 {
+		return prober.base.Probe(ctx, binding, limits)
+	}
+	prober.once.Do(func() { close(prober.entered) })
+	<-ctx.Done()
+	return provider.RepositoryObservation{}, ctx.Err()
 }
 
 func TestReconcileRejectsTaskArchivedDuringProbePreservingLastGoodFacts(t *testing.T) {

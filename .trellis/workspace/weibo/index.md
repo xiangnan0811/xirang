@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 50
-- **Last Active**: 2026-09-06
+- **Total Sessions**: 51
+- **Last Active**: 2026-09-07
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1957 | Active |
+| `journal-1.md` | ~1993 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 51 | 2026-09-07 | Rsync preview source freshness and completion lifecycle | `4ee0c053` | `fix/backup-preview-first-open` |
 | 50 | 2026-09-06 | Deliver backup lifecycle effect fencing and audit idempotency | `56cc0b2b`, `cf93511d`, `d49858e1`, `e3bf4071`, `89b0057c`, `e1080fed`, `5379219` | `feat/backup-lifecycle-effect-audit-idempotency` |
 | 49 | 2026-09-03 | Guard rclone native version deletes and split backup routes | `c32ecf7e`, `f4bbab53` | `feat/backup-native-version-evidence` |
 | 48 | 2026-08-29 | Deliver task preview connection workflow | `f038f513` | `codex/backup-task-preview-connect-ui` |
