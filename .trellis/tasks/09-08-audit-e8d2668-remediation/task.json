@@ -15,12 +15,12 @@
   "branch": "fix/audit-e8d2668-remediation",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": "5a2f3d6a6e26410b9770cbc83c3d29e23fed863e",
+  "commit": "187cb2775715c49209ee451998b436f6990c3919",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "NOT READY: independent review retains AR-002 retry recovery, AR-003 heartbeat/executor ownership, AR-004 automation acknowledgement, AR-005 policy-controller composition. See review-ledger.json; task intentionally remains in_progress.",
+  "notes": "NOT READY after repair cycle two: original reviewers resolved AR-002/004/005; AR-003 queued cancellation still lacks owner fencing and AR-008 full retry batch aborts startup. Main reproduced both. Full backend, affected-package PostgreSQL race, lint/build passed but do not waive these defects. See review-ledger.json; task intentionally remains in_progress.",
   "meta": {"readiness": "NOT_READY", "review_ledger": "review-ledger.json"}
 }

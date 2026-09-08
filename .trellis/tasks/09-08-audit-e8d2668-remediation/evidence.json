@@ -4,17 +4,17 @@
   "status": "NOT_READY",
   "toolchain": "Go 1.26.6",
   "verification": {
-    "backend_full": "Implementation checkpoint 5ee2e24: full coverage suite PASS; bounded repair 5a2f3d6a: full task/... and handlers packages PASS under -race",
+    "backend_full": "Repair head 187cb277: GOTOOLCHAIN=go1.26.6 go test ./... -count=1 -timeout=20m PASS; /tmp/xirang-runtime-final-full2.log",
     "backend_coverage_percent": 69.7,
-    "backend_race": "Implementation checkpoint: expanded CI race command PASS, including backupasset, handlers, task, ws, auth, bootstrap, uptime, policy, automation",
-    "backend_lint_build": "golangci-lint v2.11.4: 0 issues; go build ./...: PASS",
+    "backend_race": "Repair head 187cb277: task/... automation/... policy/... handlers cmd/server with real isolated PostgreSQL PASS under -race; /tmp/xirang-runtime-final-race2.log. Earlier implementation checkpoint expanded CI race also PASS.",
+    "backend_lint_build": "Repair head 187cb277: golangci-lint v2.11.4 whole repository 0 issues; go build ./... PASS",
     "govulncheck": "PASS: no reachable vulnerabilities; one uncalled module-level advisory",
     "frontend": "npm run check: typecheck, lint, 211 files / 1960 tests, production build PASS",
     "database": "Full internal/database package with isolated PostgreSQL 17.11 and SQLite: PASS (366.605s)",
     "postgres_concurrency": "Identity last-admin, zero-admin recovery, monitor result/config race, atomic task terminalization, batch idempotency: PASS; task/monitor/batch also passed -race",
     "migration_smoke": "Fresh SQLite/PostgreSQL v81, plaintext header backfill and repeat stability, direct pristine/used downgrade guards: PASS",
     "offline_recovery_smoke": "Real recover-admin binary refusal/confirmed promotion/repeat refusal and atomic audit chain: PASS",
-    "runtime_recovery": "Expired ordinary owner -> coherent terminal pair -> injected effect claim failure -> reconstructed manager drains once; PASS",
+    "runtime_recovery": "SQLite and PostgreSQL fault/restart regressions passed for committed retry deadline/chain, legacy missing intent, pending retry/automation reservations, competing managers, supersession, bounded failure settlement, heartbeat executor cancellation, per-rule action/log rollback/replay, and policy schedule commit/rollback. Targeted verification subsequently identified AR-003/008 coverage gaps.",
     "ipv6": "Real loopback SSH with scoped credential and pinned host: PASS",
     "service_smoke": "Isolated production server binary: login, encrypted write-only monitor creation, live successful probe, omitted header preservation, explicit clear, logout, restart readiness200 and revoked-token401: PASS",
     "backupasset_coverage_percent": 73.6,
@@ -23,13 +23,16 @@
     "workflow": "actionlint v1.7.12; release CI authority 4 tests; migration version/UTC and document freshness checks: PASS",
     "browser_monitor_batch": "Real Chromium with mocked API; names-only headers, preserve/clear/replace payloads, 390px wrapping and scroll-reachable footer, durable dispatch state/no unconfirmed cleanup: PASS",
     "browser_client": "Real Chromium with mocked API: retry kept alert unresolved until authoritative resolution; old delayed401 after UI re-login retained new user/session/route. PASS. Same-origin dev observation is not production-fallback proof.",
-    "bounded_repair": "AR-001/006/007 regressions failed before repair and passed afterward under -race; latest whole-repository lint: 0 issues"
+    "bounded_repair": "Cycle one AR-001/006/007 regressions failed before repair and passed afterward. Cycle two new regressions have pass-after evidence; scheduler deadline-reset overlay mutant failed its behavioral regression, restored production scheduler smoke and race test passed.",
+    "remaining_blocker_smoke": "Main reproduced AR-003 stale owner canceling a foreign pending run with lease retained, and AR-008 exactly 64 retrying Tasks aborting LoadSchedules. Throwaway smoke files and isolated PostgreSQL container removed.",
+    "runtime_ci": "Required PostgreSQL runner executed 13 task and 2 automation tests successfully; legacy retry startup PG regression additionally passed three runs. CI now selects all *Postgres task/automation regressions; actionlint PASS.",
+    "restore_cancel_regression": "First full-suite attempt exposed database-locked restore cancellation race. Runner now waits for cancellation persistence before competing early cancellation; exact regression passed 20 runs and final full/race suites passed."
   },
   "review": {
     "mode": "verification",
     "status": "confirmed_blockers_remaining",
     "discovery_head": "5ee2e240ea982b7bd1091be0fe5449c63857d01d",
-    "repair_head": "5a2f3d6a6e26410b9770cbc83c3d29e23fed863e",
+    "repair_head": "187cb2775715c49209ee451998b436f6990c3919",
     "required_lanes": [
       "integration-reviewer / GPT-5.6-Sol",
       "grok-reviewer / Grok-4.6",
@@ -47,7 +50,7 @@
     "The first six-minute full database attempt exhausted its total time budget; the complete suite passed with a twenty-minute bound.",
     "A pre-existing eight-millisecond cancellation test was made deterministic; the retry boundary regression passed twenty times under -race.",
     "Monitor stale-snapshot regression was corrected to pause after query; an old-Save mutant failed and restored implementation passed.",
-    "Independent discovery completed on all intended models without fallback. Seven deduplicated findings were confirmed; AR-001/006/007 were repaired. AR-002/003/004/005 remain unresolved.",
-    "No extra schema or receipt/key redesign was introduced during the bounded review repair. Do not merge or release this checkpoint."
+    "Independent discovery completed on all intended models without fallback. Original reviewers verified cycle-two AR-002/004/005. AR-003 remains unresolved; repair-introduced NRF-001 was confirmed as AR-008. Six of eight total ledger findings are resolved_verified.",
+    "Maximum two repair-and-verification cycles reached. No new schema, receipt/key redesign, third cycle or additional reviewer. Do not merge or release this checkpoint."
   ]
 }

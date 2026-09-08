@@ -38,7 +38,7 @@
         "INT-DISC-002"
       ],
       "severity": "P1",
-      "status": "confirmed",
+      "status": "resolved_verified",
       "root": "Retry delivery and chain context are memory-only and disappear on crash or a one-shot trigger error.",
       "affected": ["backend/internal/task/runner.go", "backend/internal/task/manager.go"]
     },
@@ -49,8 +49,9 @@
       ],
       "severity": "P1",
       "status": "confirmed",
-      "root": "Heartbeat renewal failure abandons ownership while live executor is not canceled.",
-      "affected": ["backend/internal/task/terminal.go", "backend/internal/task/manager.go"]
+      "root": "Ownership loss is not fenced across all executor and queued-run cancellation paths.",
+      "affected": ["backend/internal/task/terminal.go", "backend/internal/task/runner.go", "backend/internal/task/manager.go"],
+      "verification": "Owner-loss cancellation reaches cancelTaskRunBeforeExecutor, whose pending-only UPDATE lacks owner CAS and lease clearing. Main reproduced stale manager A canceling winner B pending run while retaining B lease."
     },
     {
       "id": "AR-004",
@@ -58,7 +59,7 @@
         "INT-DISC-004"
       ],
       "severity": "P1",
-      "status": "confirmed",
+      "status": "resolved_verified",
       "root": "Automation action/log failures are acknowledged as durable effect success; per-rule receipts are absent.",
       "affected": ["backend/internal/automation/dispatcher.go", "backend/internal/task/terminal.go"]
     },
@@ -69,7 +70,7 @@
         "GROK-D1"
       ],
       "severity": "P2",
-      "status": "confirmed",
+      "status": "resolved_verified",
       "root": "Production omits policy-controller composition, retaining disabled in-memory schedules.",
       "affected": ["backend/cmd/server/main.go", "backend/internal/automation/dispatcher.go"],
       "adjudication": "Deduplicated same root. Executor-entry guard blocks payload, so live scheduler inconsistency is P2, not an unguarded P1 execution."
@@ -91,6 +92,15 @@
       "severity": "P2",
       "status": "resolved_verified",
       "root": "Legacy rsync remote operand still lacks IPv6 brackets."
+    },
+    {
+      "id": "AR-008",
+      "sources": ["NRF-001"],
+      "severity": "P1",
+      "status": "confirmed",
+      "root": "Full retry recovery batch is falsely counted as unprocessed backlog, aborting startup before effect drain.",
+      "affected": ["backend/internal/task/terminal.go", "backend/internal/task/manager.go"],
+      "verification": "Main reproduced LoadSchedules failure with exactly 64 retrying Tasks and future retry deadlines: reconcile missing retry effects: missing retry effect recovery backlog exceeds bounded pass. Existing processed rows remain retrying and are counted again."
     }
   ],
   "notes": [
@@ -100,8 +110,9 @@
     "XR10/XR12 actual Chromium QA passed while discovery ran; dev-server same-origin observation is not production fallback proof.",
     "Repair cycle one covered AR-001, AR-006 and AR-007 only. All three regressions failed before repair and passed afterward under -race.",
     "No TriggerKey/ExecutionKey, receipt model or additional migration was introduced. Expanded repair jobs were aborted before source changes.",
-    "AR-002, AR-003, AR-004 and AR-005 remain confirmed blockers; readiness is NOT READY.",
+    "Cycle two remaining blockers are AR-003 and repair-introduced AR-008; readiness is NOT READY.",
     "Verification on 5a2f3d6a: original GPT-5.6-Sol reviewer resolved AR-001; original Grok-4.6 reviewer resolved AR-006/007. No repair-introduced findings. Gemini remained parked; no additional discovery wave or reviewer was created.",
-    "User authorized continuing AR-002 through AR-005 from aa8975bc. Repair cycle two is in progress with one implementation writer and no schema changes; these four findings remain confirmed until targeted verification completes."
+    "Cycle two frozen repair head 187cb2775715c49209ee451998b436f6990c3919: original GPT-5.6-Sol verified AR-002/004/005 but retained AR-003 and found NRF-001, adjudicated AR-008. Original Grok-4.6 verified AR-005 with no new findings. Actual intended model metadata verified, no fallback. Gemini remained parked.",
+    "Both remaining blockers were reproduced by Main with throwaway SQLite smoke tests; these files were removed. No third repair cycle or new reviewer was created. Maximum two repair-and-verification cycles reached."
   ]
 }
