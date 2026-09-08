@@ -29,7 +29,7 @@
         "INT-DISC-001"
       ],
       "severity": "P1",
-      "status": "repaired_pending_verification",
+      "status": "resolved_verified",
       "root": "Retryable attempt is treated as final task failure; warning emits failure event; effect error payload is stale."
     },
     {
@@ -39,7 +39,8 @@
       ],
       "severity": "P1",
       "status": "confirmed",
-      "root": "Retry delivery and chain context are memory-only and disappear on crash or a one-shot trigger error."
+      "root": "Retry delivery and chain context are memory-only and disappear on crash or a one-shot trigger error.",
+      "affected": ["backend/internal/task/runner.go", "backend/internal/task/manager.go"]
     },
     {
       "id": "AR-003",
@@ -48,7 +49,8 @@
       ],
       "severity": "P1",
       "status": "confirmed",
-      "root": "Heartbeat renewal failure abandons ownership while live executor is not canceled."
+      "root": "Heartbeat renewal failure abandons ownership while live executor is not canceled.",
+      "affected": ["backend/internal/task/terminal.go", "backend/internal/task/manager.go"]
     },
     {
       "id": "AR-004",
@@ -57,7 +59,8 @@
       ],
       "severity": "P1",
       "status": "confirmed",
-      "root": "Automation action/log failures are acknowledged as durable effect success; per-rule receipts are absent."
+      "root": "Automation action/log failures are acknowledged as durable effect success; per-rule receipts are absent.",
+      "affected": ["backend/internal/automation/dispatcher.go", "backend/internal/task/terminal.go"]
     },
     {
       "id": "AR-005",
@@ -68,6 +71,7 @@
       "severity": "P2",
       "status": "confirmed",
       "root": "Production omits policy-controller composition, retaining disabled in-memory schedules.",
+      "affected": ["backend/cmd/server/main.go", "backend/internal/automation/dispatcher.go"],
       "adjudication": "Deduplicated same root. Executor-entry guard blocks payload, so live scheduler inconsistency is P2, not an unguarded P1 execution."
     },
     {
@@ -76,7 +80,7 @@
         "GROK-D2"
       ],
       "severity": "P2",
-      "status": "repaired_pending_verification",
+      "status": "resolved_verified",
       "root": "Monitor List lacks return after error response, concatenating error and success JSON."
     },
     {
@@ -85,7 +89,7 @@
         "GROK-D3"
       ],
       "severity": "P2",
-      "status": "repaired_pending_verification",
+      "status": "resolved_verified",
       "root": "Legacy rsync remote operand still lacks IPv6 brackets."
     }
   ],
@@ -96,6 +100,7 @@
     "XR10/XR12 actual Chromium QA passed while discovery ran; dev-server same-origin observation is not production fallback proof.",
     "Bounded repair cycle covers AR-001, AR-006 and AR-007 only. All three regressions failed before repair and passed afterward under -race.",
     "No TriggerKey/ExecutionKey, receipt model or additional migration was introduced. Expanded repair jobs were aborted before source changes.",
-    "AR-002, AR-003, AR-004 and AR-005 remain confirmed blockers; readiness is NOT READY."
+    "AR-002, AR-003, AR-004 and AR-005 remain confirmed blockers; readiness is NOT READY.",
+    "Verification on 5a2f3d6a: original GPT-5.6-Sol reviewer resolved AR-001; original Grok-4.6 reviewer resolved AR-006/007. No repair-introduced findings. Gemini remained parked; no additional discovery wave or reviewer was created."
   ]
 }

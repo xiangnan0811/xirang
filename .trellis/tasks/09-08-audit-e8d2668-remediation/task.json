@@ -15,12 +15,12 @@
   "branch": "fix/audit-e8d2668-remediation",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
+  "commit": "5a2f3d6a6e26410b9770cbc83c3d29e23fed863e",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "",
-  "meta": {}
+  "notes": "NOT READY: independent review retains AR-002 retry recovery, AR-003 heartbeat/executor ownership, AR-004 automation acknowledgement, AR-005 policy-controller composition. See review-ledger.json; task intentionally remains in_progress.",
+  "meta": {"readiness": "NOT_READY", "review_ledger": "review-ledger.json"}
 }

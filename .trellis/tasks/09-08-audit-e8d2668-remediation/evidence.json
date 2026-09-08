@@ -1,12 +1,12 @@
 {
   "baseline": "e8d2668266b1a5586b5ff7b50937deab31dd0331",
   "branch": "fix/audit-e8d2668-remediation",
-  "status": "local_gates_passed_review_pending",
+  "status": "NOT_READY",
   "toolchain": "Go 1.26.6",
   "verification": {
-    "backend_full": "go test -coverprofile=coverage.out ./... -count=1 -timeout=20m: PASS; final changed test packages rerun PASS",
+    "backend_full": "Implementation checkpoint 5ee2e24: full coverage suite PASS; bounded repair 5a2f3d6a: full task/... and handlers packages PASS under -race",
     "backend_coverage_percent": 69.7,
-    "backend_race": "Expanded CI race command: PASS, including backupasset, handlers, task, ws, auth, bootstrap, uptime, policy, automation",
+    "backend_race": "Implementation checkpoint: expanded CI race command PASS, including backupasset, handlers, task, ws, auth, bootstrap, uptime, policy, automation",
     "backend_lint_build": "golangci-lint v2.11.4: 0 issues; go build ./...: PASS",
     "govulncheck": "PASS: no reachable vulnerabilities; one uncalled module-level advisory",
     "frontend": "npm run check: typecheck, lint, 211 files / 1960 tests, production build PASS",
@@ -22,11 +22,14 @@
     "backupasset_load": "CI-bounded load/security contract: PASS",
     "workflow": "actionlint v1.7.12; release CI authority 4 tests; migration version/UTC and document freshness checks: PASS",
     "browser_monitor_batch": "Real Chromium with mocked API; names-only headers, preserve/clear/replace payloads, 390px wrapping and scroll-reachable footer, durable dispatch state/no unconfirmed cleanup: PASS",
-    "browser_client": "Read-only XR10/XR12 actual browser QA in progress"
+    "browser_client": "Real Chromium with mocked API: retry kept alert unresolved until authoritative resolution; old delayed401 after UI re-login retained new user/session/route. PASS. Same-origin dev observation is not production-fallback proof.",
+    "bounded_repair": "AR-001/006/007 regressions failed before repair and passed afterward under -race; latest whole-repository lint: 0 issues"
   },
   "review": {
-    "mode": "discovery",
-    "status": "not_started",
+    "mode": "verification",
+    "status": "confirmed_blockers_remaining",
+    "discovery_head": "5ee2e240ea982b7bd1091be0fe5449c63857d01d",
+    "repair_head": "5a2f3d6a6e26410b9770cbc83c3d29e23fed863e",
     "required_lanes": [
       "integration-reviewer / GPT-5.6-Sol",
       "grok-reviewer / Grok-4.6",
@@ -43,6 +46,8 @@
     "CHANGELOG.md remains Release Please maintained.",
     "The first six-minute full database attempt exhausted its total time budget; the complete suite passed with a twenty-minute bound.",
     "A pre-existing eight-millisecond cancellation test was made deterministic; the retry boundary regression passed twenty times under -race.",
-    "Monitor stale-snapshot regression was corrected to pause after query; an old-Save mutant failed and restored implementation passed."
+    "Monitor stale-snapshot regression was corrected to pause after query; an old-Save mutant failed and restored implementation passed.",
+    "Independent discovery completed on all intended models without fallback. Seven deduplicated findings were confirmed; AR-001/006/007 were repaired. AR-002/003/004/005 remain unresolved.",
+    "No extra schema or receipt/key redesign was introduced during the bounded review repair. Do not merge or release this checkpoint."
   ]
 }
