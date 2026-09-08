@@ -15,6 +15,7 @@ import (
 
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/backupasset"
+	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/content"
 	backuprepository "xirang/backend/internal/backupasset/repository"
 	"xirang/backend/internal/middleware"
@@ -212,6 +213,12 @@ type BackupContentService interface {
 	RevokeSession(context.Context, string, string) error
 }
 
+// BackupPreviewSourcePreparer validates an authorized source and schedules
+// Catalog refresh without issuing a content capability or reconnecting access.
+type BackupPreviewSourcePreparer interface {
+	PreparePreviewSource(context.Context, content.DeliveryActor, backupasset.AssetRef) (catalog.StatusDTO, error)
+}
+
 type BackupContentHandlerConfig struct {
 	TicketTimeout               time.Duration
 	AllowInsecureLoopback       bool
@@ -221,11 +228,12 @@ type BackupContentHandlerConfig struct {
 type BackupContentHandlerConfigSource func(context.Context) (BackupContentHandlerConfig, error)
 
 type BackupContentHandler struct {
-	service      BackupContentService
-	db           *gorm.DB
-	jwtManager   *auth.JWTManager
-	configSource BackupContentHandlerConfigSource
-	schemePolicy BackupContentSchemePolicy
+	service       BackupContentService
+	previewSource BackupPreviewSourcePreparer
+	db            *gorm.DB
+	jwtManager    *auth.JWTManager
+	configSource  BackupContentHandlerConfigSource
+	schemePolicy  BackupContentSchemePolicy
 }
 
 type backupContentTicketPayload struct {
@@ -284,6 +292,13 @@ func (handler *BackupContentHandler) WithSchemePolicy(policy BackupContentScheme
 	return handler
 }
 
+func (handler *BackupContentHandler) WithPreviewSourcePreparer(preparer BackupPreviewSourcePreparer) *BackupContentHandler {
+	if handler != nil {
+		handler.previewSource = preparer
+	}
+	return handler
+}
+
 type featureDisabledBackupContentService struct{}
 
 func NewFeatureDisabledBackupContentService() BackupContentService {
@@ -306,6 +321,78 @@ func NewFeatureDisabledBackupContentHandlerConfigSource() BackupContentHandlerCo
 	return func(context.Context) (BackupContentHandlerConfig, error) {
 		return BackupContentHandlerConfig{TicketTimeout: 20 * time.Second}, nil
 	}
+}
+
+type backupPreviewSourcePayload struct {
+	SchemaVersion int `json:"schema_version" minimum:"1" maximum:"1" example:"1"`
+}
+
+// PreparePreviewSource verifies exact source readiness before ticket issuance.
+// @Summary      准备备份文件预览内容源
+// @Description  校验已授权条目的当前内容源；可变 Rsync 源过期时只刷新已有来源的目录，不创建或重连仓库。返回当前 Catalog 状态；building 状态应通过 catalog-status 等待，目录就绪后重新获取精确条目再申请票据。
+// @Tags         backup-assets
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id       path      string                      true  "恢复点 opaque ID"
+// @Param        entryId  path      string                      true  "Catalog entry opaque ID"
+// @Param        body     body      backupPreviewSourcePayload  true  "闭合版本请求，不接受 locator 或仓库配置"
+// @Success      200      {object}  handlers.Response{data=catalog.StatusDTO}
+// @Failure      400      {object}  handlers.Response
+// @Failure      401      {object}  handlers.Response
+// @Failure      403      {object}  handlers.Response
+// @Failure      404      {object}  handlers.Response
+// @Failure      429      {object}  handlers.Response
+// @Failure      503      {object}  handlers.Response
+// @Router       /recovery-points/{id}/entries/{entryId}/preview-source [post]
+func (handler *BackupContentHandler) PreparePreviewSource(c *gin.Context) {
+	if c == nil || c.Request == nil || c.Request.URL == nil || c.Request.URL.RawQuery != "" {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	c.Header("Cache-Control", "private, no-store")
+	config, ok := handler.loadConfig(c.Request.Context())
+	if !ok {
+		respondServiceUnavailable(c, "备份内容服务暂不可用")
+		return
+	}
+	var payload backupPreviewSourcePayload
+	if decodeStrictBackupContentJSON(c, &payload) != nil || payload.SchemaVersion != 1 {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	ref := backupasset.AssetRef{RecoveryPointID: strings.TrimSpace(c.Param("id")), EntryID: strings.TrimSpace(c.Param("entryId"))}
+	if backupasset.ValidateAssetRef(ref) != nil {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	binding, exists := middleware.CurrentSessionBinding(c)
+	actor := content.DeliveryActor{UserID: middleware.CurrentUserID(c), Username: c.GetString(middleware.CtxUsername), Role: middleware.CurrentRole(c)}
+	if !exists || actor.UserID == 0 || binding.UserID != actor.UserID || binding.Role != actor.Role ||
+		backupasset.ValidateOpaqueID(binding.JTI) != nil || !binding.ExpiresAt.After(time.Now()) {
+		respondUnauthorized(c, "会话无效")
+		return
+	}
+	if _, err := handler.schemePolicy.SecureCookie(c.Request, config.transportOptions()); err != nil {
+		respondBackupContentSecureTransportRequired(c)
+		return
+	}
+	if handler.previewSource == nil {
+		respondServiceUnavailable(c, "备份内容服务暂不可用")
+		return
+	}
+	prepareCtx, cancel := context.WithTimeout(c.Request.Context(), config.TicketTimeout)
+	defer cancel()
+	status, err := handler.previewSource.PreparePreviewSource(prepareCtx, actor, ref)
+	if err != nil {
+		respondBackupContentIssueError(c, err)
+		return
+	}
+	if status.Validate() != nil {
+		respondServiceUnavailable(c, "备份内容服务暂不可用")
+		return
+	}
+	respondOK(c, status)
 }
 
 // Issue creates a secured, cookie-scoped backup asset delivery ticket.

@@ -108,3 +108,24 @@ Visible coverage diagnostics on post-merge main identified the tampered-body tes
 ### Next Steps
 
 - Merge the associated test-only PR, refresh generated Release PR503, and complete Docker Hub publication monitoring.
+
+
+## Session 55: Rsync SQLite preview source consistency
+
+**Date**: 2026-09-08
+**Task**: Rsync SQLite preview source consistency
+**Branch**: `fix/rsync-preview-source-consistency`
+
+### Summary
+
+Prepared mutable Rsync sources before initial preview and Retry without Connect; repaired drifted generation readiness, orphan catalog leases, fresh-generation CAS races, and Retry UI retention. Integration and Grok discovery/targeted verification passed for V552-1 through V552-4. Backend full tests/build/lint, targeted race count=10, frontend check and docs checks passed. Actual Chromium controlled-API flow verified separately from real SQLite/Rsync integration. No production deployment claimed.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `628b9e7b` | (see git log) |
+
+### Status
+
+[OK] **Completed**

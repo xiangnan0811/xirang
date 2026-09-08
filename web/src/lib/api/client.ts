@@ -224,6 +224,9 @@ const lazyRecoveryPointsApi: RecoveryPointsApi = {
   async getRecoveryPointEvidence(...args) {
     return (await loadRecoveryPointsApi()).getRecoveryPointEvidence(...args);
   },
+  async preparePreviewSource(...args) {
+    return (await loadRecoveryPointsApi()).preparePreviewSource(...args);
+  },
 };
 
 const lazyBackupRepositoriesApi: BackupRepositoriesApi = {

@@ -1,4 +1,5 @@
 import type {
+  AssetRef,
   BackupImmutabilityLevel,
   BackupProviderKind,
   BackupRecoveryPoint,
@@ -752,6 +753,23 @@ export function createRecoveryPointsApi() {
     ): Promise<CatalogProjection<RecoveryPointEvidence>> {
       const raw = await request<unknown>(`/recovery-points/${encodeURIComponent(recoveryPointId)}/evidence`, { token, signal });
       return mapRecoveryPointEvidence(raw);
+    },
+
+    async preparePreviewSource(
+      token: string,
+      ref: AssetRef,
+      signal?: AbortSignal,
+    ): Promise<CatalogProjection<CatalogStatus>> {
+      const raw = await request<unknown>(
+        `/recovery-points/${encodeURIComponent(ref.recoveryPointId)}/entries/${encodeURIComponent(ref.entryId)}/preview-source`,
+        {
+          method: "POST",
+          token,
+          signal,
+          body: { schema_version: 1 },
+        },
+      );
+      return mapCatalogStatus(raw);
     },
   };
 }

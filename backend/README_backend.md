@@ -149,6 +149,7 @@ ADMIN_INITIAL_PASSWORD='LocalDev#2026' APP_ENV=development \
 | GET | /recovery-points/:id/evidence | 🔒 查看分层且不提升信任结论的精确证据（`backup_assets:list`） |
 | GET | /recovery-points/:id/entries | 🔒 使用 opaque parent/cursor 浏览 active Catalog（`backup_assets:list`） |
 | GET | /recovery-points/:id/entries/:entryId | 🔒 使用恢复点与 entry 复合身份查看条目（`backup_assets:list`） |
+| POST | /recovery-points/:id/entries/:entryId/preview-source | 在签发预览票据前校验精确条目内容源；过期的可变 Rsync Catalog 按 CAS 失效并交由工作器重建，返回现有 Catalog 状态（`backup_assets:list` + `backup_assets:preview`，不创建或重连仓库） |
 | POST | /recovery-points/:id/entries/:entryId/delivery-tickets | 🔒 为 exact AssetRef 签发原生/派生 Content Broker ticket（`backup_assets:preview`） |
 | POST | /recovery-points/:id/entries/:entryId/preview-jobs | 🔒 创建闭合 representation 的增强预览 interest（`backup_assets:preview`；queued 为 `202 + Location`） |
 | GET | /recovery-points/:id/entries/:entryId/preview-jobs/:jobId | 🔒 按当前用户与 exact AssetRef 查询一次性处理结果（`backup_assets:preview`） |

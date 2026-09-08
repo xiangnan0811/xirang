@@ -182,6 +182,42 @@ describe("request envelope handling", () => {
       profile: "hex_v1",
     });
   });
+
+  it("composes preview-source preparation and reuses CatalogStatus decoding", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({
+        code: 0,
+        message: "ok",
+        data: {
+          generation: null,
+          latest_build: null,
+          coverage: {
+            status: "building",
+            indexed_entries: 0,
+            expected_entries: null,
+            manifest_digest: "",
+            observed_at: "2026-07-19T00:00:00Z",
+          },
+          staleness: { status: "fresh", observed_at: "2026-07-19T00:00:00Z", reason: null },
+          content_availability: { available: false, reason: null },
+          permissions: { list: true, preview: true, download: false },
+        },
+      }))
+    );
+    const controller = new AbortController();
+    const ref = { recoveryPointId: "a".repeat(32), entryId: "b".repeat(64) };
+
+    const mapped = await apiClient.preparePreviewSource("token-assets", ref, controller.signal);
+
+    expect(mapped.status).toBe("available");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      `/api/v1/recovery-points/${ref.recoveryPointId}/entries/${ref.entryId}/preview-source`
+    );
+    expect(init.method).toBe("POST");
+    expect(init.signal).toBe(controller.signal);
+    expect(JSON.parse(String(init.body))).toEqual({ schema_version: 1 });
+  });
 });
 
 describe("apiClient 任务请求约束", () => {

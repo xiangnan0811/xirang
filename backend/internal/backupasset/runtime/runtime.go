@@ -202,6 +202,7 @@ type Runtime struct {
 	overlayService          *overlay.Service
 	searchReady             *atomic.Bool
 	contentBroker           *content.Broker
+	contentAuthorizer       *runtimeContentAuthorizer
 	contentService          *contentDeliveryMux
 	exportDelivery          *managedExportDeliveryFacade
 	contentBudget           *content.BudgetService
@@ -1245,7 +1246,7 @@ func New(dependencies Dependencies) (*Runtime, error) {
 		catalogService: catalogService, catalogIndexer: catalogIndexer, catalogWorker: catalogWorker, catalogAudit: auditSink,
 		keyring: keyring, searchService: searchService, searchIndexer: searchIndexer, searchIngest: searchIngest,
 		searchWorker: searchWorker, overlayService: overlayService, searchReady: searchReady,
-		contentBroker: contentBroker, contentService: contentService, exportDelivery: exportDeliveryFacade,
+		contentBroker: contentBroker, contentAuthorizer: contentAuthorizer, contentService: contentService, exportDelivery: exportDeliveryFacade,
 		contentBudget: contentBudget, contentAudit: contentAudit,
 		contentReconciler: contentReconciler, contentReady: contentReady, contentManager: contentManager,
 		exportManager: exportManager, recoveryManager: recoveryManager,
@@ -3480,9 +3481,35 @@ func (authorizer *runtimeContentAuthorizer) load(
 		return content.AuthorizedAsset{}, fmt.Errorf("load Content authorization binding: %w", err)
 	}
 	if len(rows) != 1 {
+		if expectedGeneration == "" {
+			pending, pendingErr := authorizer.pendingMutablePreviewAuthorization(ctx, ref)
+			if pendingErr != nil {
+				return content.AuthorizedAsset{}, pendingErr
+			}
+			if pending {
+				return content.AuthorizedAsset{}, content.NewSourceFailureError(
+					content.SourceFailureChanged, content.ErrContentSourceUnavailable,
+				)
+			}
+		}
 		return content.AuthorizedAsset{}, fmt.Errorf("%w: Content asset", backupasset.ErrNotFound)
 	}
 	record := rows[0]
+	if record.RepositoryStatus == string(backupasset.RepositoryOffline) {
+		return content.AuthorizedAsset{}, &repository.CapabilityError{
+			Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityRepositoryOffline},
+		}
+	}
+	if record.RepositoryStatus == string(backupasset.RepositoryDisconnected) {
+		return content.AuthorizedAsset{}, &repository.CapabilityError{
+			Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityRepositoryDisconnected},
+		}
+	}
+	if record.PointPhysicalAvailability != string(backupasset.PhysicalOnline) {
+		return content.AuthorizedAsset{}, &repository.CapabilityError{
+			Reason: backupasset.CapabilityReason{Code: backupasset.CapabilityProviderUnavailable},
+		}
+	}
 	providerKind := backupasset.ProviderKind(record.RepositoryProvider)
 	strength, strengthErr := catalog.ParseFingerprintStrength(record.EntryFingerprintStrength)
 	if strengthErr != nil || !runtimeContentPointVisible(record) || record.PointRetiredAt != nil ||

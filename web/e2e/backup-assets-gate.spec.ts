@@ -171,6 +171,10 @@ async function mockLiveFeature(page: Page) {
       );
       return;
     }
+    if (method === "POST" && url.includes("/preview-source")) {
+      await route.fulfill(envelope(fixture.recoveryPoints.online[0].catalog));
+      return;
+    }
     if (method === "POST" && url.includes("/delivery-tickets")) {
       await route.fulfill(
         envelope({
@@ -401,10 +405,15 @@ test("live FeatureLive can browse, search, and preview fixtures at a usable heig
   await searchPosted;
   await expect(page.getByText("合成审计日志-synthetic-audit.log")).toBeVisible();
 
+  const previewSourcePosted = page.waitForRequest(
+    (request) => request.method() === "POST" && request.url().includes("/preview-source")
+  );
   const previewPosted = page.waitForRequest(
     (request) => request.method() === "POST" && request.url().includes("/delivery-tickets")
   );
   await page.getByRole("button", { name: /(?:Open file or directory|打开文件或目录).*synthetic-audit/ }).click();
+  const previewSourceRequest = await previewSourcePosted;
+  expect(previewSourceRequest.postDataJSON()).toEqual({ schema_version: 1 });
   const previewRequest = await previewPosted;
   expect(previewRequest.postDataJSON()).toEqual({
     schema_version: 1,
