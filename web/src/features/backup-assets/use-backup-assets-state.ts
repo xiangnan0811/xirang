@@ -16,7 +16,11 @@ import {
   clearStepUpProof as clearStoredStepUpProof,
   readStepUpProof,
 } from "@/lib/step-up-storage";
-import { waitForRecoveryPointCatalogReady } from "@/lib/recovery-point-catalog-readiness";
+import {
+  catalogReadinessTerminalNotice,
+  isRecoveryPointCatalogReady,
+  waitForRecoveryPointCatalogReady,
+} from "@/lib/recovery-point-catalog-readiness";
 import type { AuthContextValue } from "@/context/auth-context.shared";
 import { SharedContext } from "@/context/shared-context.shared";
 import type {
@@ -390,9 +394,6 @@ export function useBackupAssetsState({
   const contentSelectionKeyRef = useRef(contentSelectionKey);
   const previewAttemptRef = useRef(0);
   const startedPreviewKeyRef = useRef<string | null>(null);
-  const lastExactPreviewPointRef = useRef<BackupRecoveryPoint | null>(null);
-  const selectedRecoveryPointRef = useRef<BackupRecoveryPoint | null>(null);
-  const derivedRecoveryPointStatusRef = useRef<BackupAssetsResourceStatus>("idle");
   const selectionGenerationRef = useRef(state.selectionGeneration);
   const routeRepairRef = useRef(onRouteRepair);
   const shared = useContext(SharedContext);
@@ -420,16 +421,6 @@ export function useBackupAssetsState({
   routeRepairRef.current = onRouteRepair;
   submittedQueryRef.current = state.submittedSearchQuery;
   searchDraftRef.current = state.searchDraft;
-  selectedRecoveryPointRef.current = selectedRecoveryPoint;
-  derivedRecoveryPointStatusRef.current = derivedRecoveryPointStatus;
-  if (selectedRecoveryPoint !== null) {
-    lastExactPreviewPointRef.current = selectedRecoveryPoint;
-  } else if (
-    lastExactPreviewPointRef.current !== null &&
-    lastExactPreviewPointRef.current.id !== route.recoveryPointId
-  ) {
-    lastExactPreviewPointRef.current = null;
-  }
   if (routeRef.current.key !== routeKey) routeRef.current = { key: routeKey, value: route };
 
   useEffect(() => {
@@ -1354,100 +1345,170 @@ export function useBackupAssetsState({
     [runLatest, token]
   );
 
-  const issueContentTicket = useCallback(function issueContentTicket(selectedAsset: BackupAsset,
-  input: BackupContentTicketInput,
-  options: {
-    revealOnce: boolean;
-    attempt: number;
-    proofAttempt?: "none" | "cached" | "fresh";
-  },) { if (!token) return;
-  const bindingKey = contentTicketBindingKey(selectedAsset, input, options.attempt);
-  contentOwnerKeyRef.current = contentSelectionKey;
-  setContent({ status: "loading", value: null });
-  dispatch({ type: "ticket_issuing", bindingKey });
-  void runLatest(
-    "contentTicket",
-    bindingKey,
-    (signal) =>
-      apiClient.issueTicket(token, selectedAsset.ref, {
-        ...input,
-        signal,
-      }),
-    (projection) => {
-      if (projection.status !== "available") {
-        setContent({ status: "blocked", value: null, error: closedUnsupportedError() });
-        dispatch({ type: "ticket_failed", bindingKey });
-        return;
-      }
-      setContent({ status: "ready", value: projection.value });
-      dispatch({
-        type: "ticket_ready",
-        bindingKey,
-        contentUrl: projection.value.contentUrl,
-        expiresAt: projection.value.expiresAt,
-      });
+  const issueContentTicket = useCallback(function issueContentTicket(
+    selectedAsset: BackupAsset,
+    input: BackupContentTicketInput,
+    options: {
+      revealOnce: boolean;
+      attempt: number;
+      proofAttempt?: "none" | "cached" | "fresh";
+      prepareSource?: boolean;
+      sourceStage?: BackupAssetsUIError["sourceStage"];
+      correlationId?: string;
     },
-    (error) => {
-      const mapped = mapBackupAssetsError(error, "content_ticket");
-      const proofAttempt = options.proofAttempt ?? "none";
-      const secretProofRejected = mapped.code === "secret_reveal_required" && input.stepUpProof !== undefined;
-      if (secretProofRejected) {
-        if (clearStepUpProof) clearStepUpProof(STEP_UP_ACTIONS.assetSecretReveal);
-        else clearStoredStepUpProof(STEP_UP_ACTIONS.assetSecretReveal);
-      }
-      if (
-        options.revealOnce &&
-        input.action === "preview" &&
-        mapped.code === "secret_reveal_required" &&
-        role === "admin" &&
-        ensureStepUpProof &&
-        proofAttempt !== "fresh"
-      ) {
-        const capturedGeneration = selectionGenerationRef.current;
-        const capturedOwnerKey = contentSelectionKeyRef.current;
-        const reuseCached = proofAttempt === "none";
-        const hadCachedProof = reuseCached && readStepUpProof(STEP_UP_ACTIONS.assetSecretReveal) !== null;
-        void ensureStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, {
-          persist: true,
-          reuseCached,
-        })
-          .then((proof) => {
-            if (selectionGenerationRef.current !== capturedGeneration ||
-                contentSelectionKeyRef.current !== capturedOwnerKey) return;
-            const active = activePreviewRef.current;
-            if (!active || contentTicketBindingKey(active.asset, active.input, active.attempt) !== bindingKey) return;
-            const revealedInput = withContentStepUpProof(input, proof);
-            activePreviewRef.current = { asset: selectedAsset, input: revealedInput, attempt: options.attempt };
-            issueContentTicket(selectedAsset, revealedInput, {
-              revealOnce: true,
-              attempt: options.attempt,
-              proofAttempt: hadCachedProof ? "cached" : "fresh",
-            });
-          })
-          .catch(() => {
-            if (selectionGenerationRef.current !== capturedGeneration ||
-                contentSelectionKeyRef.current !== capturedOwnerKey) return;
-            setContent({ status: "blocked", value: null, error: mapped });
-            dispatch({ type: "ticket_failed", bindingKey });
+  ) {
+    if (!token) return;
+    const bindingKey = contentTicketBindingKey(selectedAsset, input, options.attempt);
+    contentOwnerKeyRef.current = contentSelectionKey;
+    setContent({ status: "loading", value: null });
+    dispatch({ type: "ticket_issuing", bindingKey });
+    void runLatest(
+      "contentTicket",
+      bindingKey,
+      async (signal) => {
+        let ticketAsset = selectedAsset;
+        if (options.prepareSource) {
+          if (selectedAsset.entryType !== "file") {
+            return { kind: "entry-only" as const, asset: selectedAsset };
+          }
+          const prepared = await prepareExactPreviewAsset({
+            token,
+            ref: selectedAsset.ref,
+            signal,
           });
-        return;
+          if (prepared.kind !== "ready") return prepared;
+          ticketAsset = prepared.asset;
+          if (
+            input.action === "preview" &&
+            input.previewIntent === "safePreviewV1" &&
+            ticketAsset.entryType !== "file"
+          ) {
+            return { kind: "entry-only" as const, asset: ticketAsset };
+          }
+        }
+        const projection = await apiClient.issueTicket(token, ticketAsset.ref, {
+          ...input,
+          signal,
+        });
+        return { kind: "ticket" as const, projection, asset: ticketAsset };
+      },
+      (value) => {
+        if (value.kind === "blocked") {
+          setContent({ status: "blocked", value: null, error: closedUnsupportedError() });
+          dispatch({ type: "ticket_failed", bindingKey });
+          return;
+        }
+        if (value.kind === "unavailable") {
+          setContent({
+            status: "error",
+            value: null,
+            error: previewSourceNotReadyError(options.sourceStage, options.correlationId),
+          });
+          dispatch({ type: "ticket_failed", bindingKey });
+          return;
+        }
+        const currentRoute = routeRef.current.value;
+        if (
+          currentRoute.recoveryPointId === value.asset.ref.recoveryPointId &&
+          currentRoute.entryId === value.asset.ref.entryId
+        ) {
+          selectedEntryOwnerKeyRef.current = selectedEntryOwnerKeyFor(token, role, currentRoute);
+          setSelectedEntry({ status: "ready", value: value.asset });
+        }
+        const active = activePreviewRef.current;
+        if (active && sameAssetRef(active.asset.ref, value.asset.ref) && active.attempt === options.attempt) {
+          activePreviewRef.current = { ...active, asset: value.asset };
+        }
+        if (value.kind === "entry-only") {
+          activePreviewRef.current = null;
+          setContent(emptyValueResource());
+          dispatch({ type: "ticket_detached" });
+          return;
+        }
+        if (value.projection.status !== "available") {
+          setContent({ status: "blocked", value: null, error: closedUnsupportedError() });
+          dispatch({ type: "ticket_failed", bindingKey });
+          return;
+        }
+        setContent({ status: "ready", value: value.projection.value });
+        dispatch({
+          type: "ticket_ready",
+          bindingKey,
+          contentUrl: value.projection.value.contentUrl,
+          expiresAt: value.projection.value.expiresAt,
+        });
+      },
+      (error) => {
+        const mapped = mapBackupAssetsError(error, "content_ticket");
+        if (options.prepareSource && mapped.code === "not_found") {
+          selectedEntryOwnerKeyRef.current = selectedEntryOwnerKeyFor(token, role, routeRef.current.value);
+          setSelectedEntry({
+            status: "blocked",
+            value: null,
+            error: mapped,
+          });
+        }
+        const proofAttempt = options.proofAttempt ?? "none";
+        const secretProofRejected = mapped.code === "secret_reveal_required" && input.stepUpProof !== undefined;
+        if (secretProofRejected) {
+          if (clearStepUpProof) clearStepUpProof(STEP_UP_ACTIONS.assetSecretReveal);
+          else clearStoredStepUpProof(STEP_UP_ACTIONS.assetSecretReveal);
+        }
+        if (
+          options.revealOnce &&
+          input.action === "preview" &&
+          mapped.code === "secret_reveal_required" &&
+          role === "admin" &&
+          ensureStepUpProof &&
+          proofAttempt !== "fresh"
+        ) {
+          const capturedGeneration = selectionGenerationRef.current;
+          const capturedOwnerKey = contentSelectionKeyRef.current;
+          const reuseCached = proofAttempt === "none";
+          const hadCachedProof = reuseCached && readStepUpProof(STEP_UP_ACTIONS.assetSecretReveal) !== null;
+          void ensureStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, {
+            persist: true,
+            reuseCached,
+          })
+            .then((proof) => {
+              if (selectionGenerationRef.current !== capturedGeneration ||
+                  contentSelectionKeyRef.current !== capturedOwnerKey) return;
+              const active = activePreviewRef.current;
+              if (!active || contentTicketBindingKey(active.asset, active.input, active.attempt) !== bindingKey) return;
+              const retryAsset = active.asset;
+              const revealedInput = withContentStepUpProof(input, proof);
+              activePreviewRef.current = { asset: retryAsset, input: revealedInput, attempt: options.attempt };
+              issueContentTicket(retryAsset, revealedInput, {
+                revealOnce: true,
+                attempt: options.attempt,
+                proofAttempt: hadCachedProof ? "cached" : "fresh",
+              });
+            })
+            .catch(() => {
+              if (selectionGenerationRef.current !== capturedGeneration ||
+                  contentSelectionKeyRef.current !== capturedOwnerKey) return;
+              setContent({ status: "blocked", value: null, error: mapped });
+              dispatch({ type: "ticket_failed", bindingKey });
+            });
+          return;
+        }
+        setContent({
+          status:
+            mapped.code === "permission_denied" ||
+            mapped.code === "invalid_request" ||
+            mapped.code === "not_found" ||
+            mapped.code === "unsupported" ||
+            mapped.code === "preview_renderer_unsupported" ||
+            mapped.code === "secret_reveal_required"
+              ? "blocked"
+              : "error",
+          value: null,
+          error: mapped,
+        });
+        dispatch({ type: "ticket_failed", bindingKey });
       }
-      setContent({
-        status:
-          mapped.code === "permission_denied" ||
-          mapped.code === "invalid_request" ||
-          mapped.code === "not_found" ||
-          mapped.code === "unsupported" ||
-          mapped.code === "preview_renderer_unsupported" ||
-          mapped.code === "secret_reveal_required"
-            ? "blocked"
-            : "error",
-        value: null,
-        error: mapped,
-      });
-      dispatch({ type: "ticket_failed", bindingKey });
-    }
-  ); }, [clearStepUpProof, contentSelectionKey, ensureStepUpProof, role, runLatest, token]);
+    );
+  }, [clearStepUpProof, contentSelectionKey, ensureStepUpProof, role, runLatest, token]);
 
   const exactPreviewTicketInput = useCallback((selectedAsset: BackupAsset): BackupContentExactPreviewTicketInput => {
     const product = selectBackupAssetExactPreviewProduct(selectedAsset);
@@ -1511,117 +1572,16 @@ export function useBackupAssetsState({
         currentRoute.entryId !== active.asset.ref.entryId) {
       return;
     }
-    const sourceStage = currentContent.error?.sourceStage;
-    const correlationId = currentContent.error?.correlationId;
-    const producingTaskId = sourceRepairProducingTaskId(
-      selectedRecoveryPointRef.current,
-      lastExactPreviewPointRef.current,
-      currentRoute.taskId,
-      active.asset.ref.recoveryPointId,
-    );
-    const shouldRepairSource =
-      role === "admin" &&
-      Boolean(token) &&
-      (sourceStage === "open" || sourceStage === "changed");
-    if (shouldRepairSource && producingTaskId === undefined) {
-      if (derivedRecoveryPointStatusRef.current === "loading") {
-        return;
-      }
-    }
     const attempt = ++previewAttemptRef.current;
     activePreviewRef.current = { ...active, attempt };
-    if (!shouldRepairSource || !token || producingTaskId === undefined) {
-      issueContentTicket(active.asset, active.input, {
-        revealOnce: true,
-        attempt,
-      });
-      return;
-    }
-    const bindingKey = contentTicketBindingKey(active.asset, active.input, attempt);
-    const capturedGeneration = selectionGenerationRef.current;
-    const capturedOwnerKey = contentSelectionKeyRef.current;
-    contentOwnerKeyRef.current = capturedOwnerKey;
-    setContent({ status: "loading", value: null });
-    dispatch({ type: "ticket_issuing", bindingKey });
-    void runLatest(
-      "contentTicket",
-      `source-repair:${bindingKey}`,
-      async (signal) => {
-        const projection = await apiClient.connectBackupRepository(token, { taskId: producingTaskId }, signal);
-        if (signal.aborted) {
-          throw new DOMException("Aborted", "AbortError");
-        }
-        if (projection.status !== "available") {
-          return { kind: "connect-unavailable" as const };
-        }
-        const exactPointId = active.asset.ref.recoveryPointId;
-        const readiness = await waitForRecoveryPointCatalogReady({
-          token,
-          recoveryPointId: exactPointId,
-          signal,
-        });
-        return { kind: "repaired" as const, readiness, exactPointId };
-      },
-      (value) => {
-        if (
-          selectionGenerationRef.current !== capturedGeneration ||
-          contentSelectionKeyRef.current !== capturedOwnerKey
-        ) {
-          return;
-        }
-        if (value.kind === "connect-unavailable") {
-          setContent({ status: "blocked", value: null, error: closedUnsupportedError() });
-          dispatch({ type: "ticket_failed", bindingKey });
-          return;
-        }
-        if (value.readiness.status === "aborted") {
-          return;
-        }
-        if (
-          value.readiness.status !== "ready" ||
-          value.exactPointId !== active.asset.ref.recoveryPointId ||
-          routeRef.current.value.recoveryPointId !== active.asset.ref.recoveryPointId ||
-          routeRef.current.value.entryId !== active.asset.ref.entryId
-        ) {
-          if (value.readiness.status !== "ready") {
-            setContent({
-              status: "error",
-              value: null,
-              error: {
-                code: "temporarily_unavailable",
-                translationKey: "backupAssets.errors.temporarilyUnavailable",
-                retryable: true,
-                action: "retry",
-                ...(sourceStage !== undefined ? { sourceStage } : {}),
-                ...(correlationId !== undefined ? { correlationId } : {}),
-              },
-            });
-            dispatch({ type: "ticket_failed", bindingKey });
-          }
-          return;
-        }
-        issueContentTicket(active.asset, active.input, {
-          revealOnce: true,
-          attempt,
-        });
-      },
-      (error) => {
-        if (
-          selectionGenerationRef.current !== capturedGeneration ||
-          contentSelectionKeyRef.current !== capturedOwnerKey
-        ) {
-          return;
-        }
-        const mapped = mapBackupAssetsError(error, "content_ticket");
-        setContent({
-          status: mapped.code === "permission_denied" || mapped.code === "invalid_request" ? "blocked" : "error",
-          value: null,
-          error: mapped,
-        });
-        dispatch({ type: "ticket_failed", bindingKey });
-      }
-    );
-  }, [issueContentTicket, role, runLatest, token]);
+    issueContentTicket(active.asset, active.input, {
+      revealOnce: true,
+      attempt,
+      prepareSource: true,
+      sourceStage: currentContent.error?.sourceStage,
+      correlationId: currentContent.error?.correlationId,
+    });
+  }, [issueContentTicket]);
 
   const prepareDownload = useCallback(
     (selectedAsset: BackupAsset) => {
@@ -1682,8 +1642,14 @@ export function useBackupAssetsState({
 
   useEffect(() => {
     const selectedAsset = selectedEntry.status === "ready" ? selectedEntry.value : null;
-    if (selectedEntryOwnerKeyRef.current !== selectedEntryOwnerKey || !selectedAsset ||
-        !safePreviewEligible(role, selectedRecoveryPoint, selectedAsset, route)) return;
+    if (
+      selectedEntryOwnerKeyRef.current !== selectedEntryOwnerKey ||
+      !selectedAsset ||
+      selectedAsset.entryType !== "file" ||
+      !safePreviewPrepareEligible(role, selectedRecoveryPoint, route)
+    ) {
+      return;
+    }
     const attempt = 0;
     const startedKey = [
       state.selectionGeneration,
@@ -1700,8 +1666,16 @@ export function useBackupAssetsState({
       previewIntent: "safePreviewV1",
     };
     activePreviewRef.current = { asset: selectedAsset, input, attempt };
-    issueContentTicket(selectedAsset, input, { revealOnce: true, attempt });
-  }, [issueContentTicket, role, route, selectedEntry, selectedEntryOwnerKey, selectedRecoveryPoint, state.selectionGeneration]);
+    issueContentTicket(selectedAsset, input, { revealOnce: true, attempt, prepareSource: true });
+  }, [
+    issueContentTicket,
+    role,
+    route,
+    selectedEntry,
+    selectedEntryOwnerKey,
+    selectedRecoveryPoint,
+    state.selectionGeneration,
+  ]);
 
   const visibleSelectedEntry = selectedEntry.status === "loading" ||
       selectedEntryOwnerKeyRef.current === selectedEntryOwnerKey
@@ -1830,21 +1804,21 @@ function exactPreviewProduct(
   return { renderer: ticket.renderer, profile: ticket.profile };
 }
 
-function safePreviewEligible(
+function safePreviewPrepareEligible(
   role: AuthContextValue["role"] | undefined,
   recoveryPoint: BackupRecoveryPoint | null,
-  asset: BackupAsset,
   route: BackupAssetsRouteState,
 ): boolean {
-  if ((role !== "admin" && role !== "operator") || asset.entryType !== "file" ||
+  if ((role !== "admin" && role !== "operator") ||
       route.inspectorTab !== "preview" ||
-      route.recoveryPointId !== asset.ref.recoveryPointId || route.entryId !== asset.ref.entryId ||
-      recoveryPoint?.id !== asset.ref.recoveryPointId || !recoveryPoint.capabilities.openSequential ||
+      !route.recoveryPointId ||
+      !route.entryId ||
+      recoveryPoint?.id !== route.recoveryPointId ||
+      !recoveryPoint.capabilities.openSequential ||
       recoveryPoint.catalog.status !== "available") {
     return false;
   }
-  return recoveryPoint.catalog.value.permissions.list &&
-    recoveryPoint.catalog.value.contentAvailability.available;
+  return recoveryPoint.catalog.value.permissions.list;
 }
 
 function setProjectionValue<T>(
@@ -1899,21 +1873,52 @@ function setOverlayLoadError<T>(
   });
 }
 
-function sourceRepairProducingTaskId(
-  selectedRecoveryPoint: BackupRecoveryPoint | null,
-  lastExactPoint: BackupRecoveryPoint | null,
-  routeTaskId: number | undefined,
-  recoveryPointId: string,
-): number | undefined {
-  const point =
-    selectedRecoveryPoint?.id === recoveryPointId
-      ? selectedRecoveryPoint
-      : lastExactPoint?.id === recoveryPointId
-        ? lastExactPoint
-        : null;
-  const taskId = point?.lineage.producingTaskId ?? routeTaskId;
-  if (taskId === undefined || !Number.isSafeInteger(taskId) || taskId <= 0) return undefined;
-  return taskId;
+async function prepareExactPreviewAsset(input: {
+  token: string;
+  ref: AssetRef;
+  signal: AbortSignal;
+}): Promise<
+  | { kind: "ready"; asset: BackupAsset }
+  | { kind: "blocked" }
+  | { kind: "unavailable" }
+> {
+  const catalog = await apiClient.preparePreviewSource(input.token, input.ref, input.signal);
+  if (input.signal.aborted) throw new DOMException("Aborted", "AbortError");
+  if (catalog.status !== "available") return { kind: "blocked" };
+  if (!isRecoveryPointCatalogReady(catalog.value)) {
+    if (catalogReadinessTerminalNotice(catalog.value) !== null) return { kind: "unavailable" };
+    const readiness = await waitForRecoveryPointCatalogReady({
+      token: input.token,
+      recoveryPointId: input.ref.recoveryPointId,
+      signal: input.signal,
+    });
+    if (readiness.status === "aborted") throw new DOMException("Aborted", "AbortError");
+    if (readiness.status === "blocked") return { kind: "blocked" };
+    if (readiness.status !== "ready") return { kind: "unavailable" };
+    const verified = await apiClient.preparePreviewSource(input.token, input.ref, input.signal);
+    if (input.signal.aborted) throw new DOMException("Aborted", "AbortError");
+    if (verified.status !== "available") return { kind: "blocked" };
+    if (!isRecoveryPointCatalogReady(verified.value)) return { kind: "unavailable" };
+  }
+  const assetProjection = await apiClient.getBackupAsset(input.token, input.ref, input.signal);
+  if (input.signal.aborted) throw new DOMException("Aborted", "AbortError");
+  if (assetProjection.status !== "available") return { kind: "blocked" };
+  if (!sameAssetRef(assetProjection.value.ref, input.ref)) return { kind: "blocked" };
+  return { kind: "ready", asset: assetProjection.value };
+}
+
+function previewSourceNotReadyError(
+  sourceStage?: BackupAssetsUIError["sourceStage"],
+  correlationId?: string,
+): BackupAssetsUIError {
+  return {
+    code: "temporarily_unavailable",
+    translationKey: "backupAssets.errors.temporarilyUnavailable",
+    retryable: true,
+    action: "retry",
+    ...(sourceStage !== undefined ? { sourceStage } : {}),
+    ...(correlationId !== undefined ? { correlationId } : {}),
+  };
 }
 
 function closedUnsupportedError(): BackupAssetsUIError {

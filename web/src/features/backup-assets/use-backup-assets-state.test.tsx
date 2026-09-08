@@ -15,8 +15,9 @@ import type {
   BackupContentTicket,
   BackupRecoveryPoint,
   BackupRepository,
-  SavedAssetSearch,
   CatalogProjection,
+  CatalogStatus,
+  SavedAssetSearch,
 } from "@/types/domain";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
 import {
@@ -59,6 +60,7 @@ const {
   updateTagMock,
   getRecoveryPointEvidenceMock,
   issueTicketMock,
+  preparePreviewSourceMock,
   connectBackupRepositoryMock,
   getRecoveryPointCatalogStatusMock,
 } = vi.hoisted(() => ({
@@ -85,6 +87,7 @@ const {
   updateTagMock: vi.fn(),
   getRecoveryPointEvidenceMock: vi.fn(),
   issueTicketMock: vi.fn(),
+  preparePreviewSourceMock: vi.fn(),
   connectBackupRepositoryMock: vi.fn(),
   getRecoveryPointCatalogStatusMock: vi.fn(),
 }));
@@ -105,6 +108,7 @@ vi.mock("@/lib/api/client", () => ({
     getRecoveryPointCatalogStatus: getRecoveryPointCatalogStatusMock,
     getRecoveryPointEvidence: getRecoveryPointEvidenceMock,
     issueTicket: issueTicketMock,
+    preparePreviewSource: preparePreviewSourceMock,
     listBackupAssets: listBackupAssetsMock,
     listBackupRepositories: listBackupRepositoriesMock,
     listFavorites: listFavoritesMock,
@@ -382,6 +386,19 @@ function staleCatalogStatus(latestBuildState: "building" | "failed" | "partial")
   };
 }
 
+function buildingCatalogStatus() {
+  const ready = readyCatalogStatus();
+  return {
+    status: "available" as const,
+    value: {
+      ...ready.value,
+      generation: { ...ready.value.generation!, state: "building" as const, finishedAt: null },
+      coverage: { ...ready.value.coverage, status: "building" as const },
+      contentAvailability: { available: false, reason: null },
+    },
+  };
+}
+
 const asset: BackupAsset = {
   ref: { recoveryPointId: recoveryPoint.id, entryId: "c".repeat(64) },
   parentRef: null,
@@ -456,6 +473,8 @@ describe("useBackupAssetsState", () => {
     getRecoveryPointMock.mockResolvedValue({ status: "available", value: recoveryPoint });
     getRecoveryPointEvidenceMock.mockReset();
     issueTicketMock.mockReset();
+    preparePreviewSourceMock.mockReset();
+    preparePreviewSourceMock.mockResolvedValue(readyCatalogStatus());
     connectBackupRepositoryMock.mockReset();
     getRecoveryPointCatalogStatusMock.mockReset();
     getRecoveryPointCatalogStatusMock.mockResolvedValue(readyCatalogStatus());
@@ -1795,20 +1814,100 @@ describe("useBackupAssetsState", () => {
     expect(result.current.selectedRecoveryPoint?.catalog).toEqual(partialPoint.catalog);
   });
 
-
-  it("repairs a source-open failure by refreshing the exact producing task then reissuing once", async () => {
+  it("prepares the exact preview source before the first ordinary safe ticket", async () => {
+    const freshAsset: BackupAsset = { ...asset, size: 48, name: "synthetic-config.yaml" };
     prepareSelectedAssetRequests(asset);
-    connectBackupRepositoryMock.mockResolvedValue({
-      status: "available",
-      value: { repository, mutablePoint: recoveryPoint },
+    getBackupAssetMock.mockResolvedValue({ status: "available", value: freshAsset });
+    issueTicketMock.mockResolvedValue({ status: "available", value: buildContentTicket("plain_text") });
+
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "operator",
+      route: selectedAssetRoute(asset),
+    }));
+
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(preparePreviewSourceMock).toHaveBeenCalledTimes(1);
+    expect(preparePreviewSourceMock).toHaveBeenCalledWith("test-token", asset.ref, expect.any(AbortSignal));
+    expect(connectBackupRepositoryMock).not.toHaveBeenCalled();
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+    const previewSignal = preparePreviewSourceMock.mock.calls[0]?.[2];
+    expect(getBackupAssetMock).toHaveBeenCalledWith("test-token", asset.ref, previewSignal);
+    expect(issueTicketMock.mock.calls[0]?.[2].signal).toBe(previewSignal);
+    expect(issueTicketMock).toHaveBeenCalledWith(
+      "test-token",
+      asset.ref,
+      expect.objectContaining({ previewIntent: "safePreviewV1" }),
+    );
+    expect(result.current.selectedEntry).toEqual({ status: "ready", value: freshAsset });
+  });
+
+  it("does not prepare preview-source or issue a ticket for a directory", async () => {
+    const directory: BackupAsset = {
+      ...asset,
+      name: "synthetic-directory",
+      entryType: "directory",
+      mimeType: "",
+    };
+    prepareSelectedAssetRequests(directory);
+    issueTicketMock.mockResolvedValue({ status: "available", value: buildContentTicket("plain_text") });
+
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "operator",
+      route: selectedAssetRoute(directory),
+    }));
+
+    await waitFor(() => expect(result.current.selectedEntry).toEqual({ status: "ready", value: directory }));
+    expect(preparePreviewSourceMock).not.toHaveBeenCalled();
+    expect(issueTicketMock).not.toHaveBeenCalled();
+    expect(result.current.content.status).toBe("idle");
+  });
+
+  it("holds ticket and entry loading until a building catalog becomes current", async () => {
+    prepareSelectedAssetRequests(asset);
+    const catalogReady = deferred<CatalogProjection<CatalogStatus>>();
+    preparePreviewSourceMock
+      .mockResolvedValueOnce(buildingCatalogStatus())
+      .mockResolvedValueOnce(readyCatalogStatus());
+    getRecoveryPointCatalogStatusMock.mockReturnValue(catalogReady.promise);
+    issueTicketMock.mockResolvedValue({ status: "available", value: buildContentTicket("plain_text") });
+
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "operator",
+      route: selectedAssetRoute(asset),
+    }));
+
+    await waitFor(() => expect(getRecoveryPointCatalogStatusMock).toHaveBeenCalledTimes(1));
+    expect(result.current.content.status).toBe("loading");
+    expect(result.current.content.value).toBeNull();
+    expect(result.current.selectedEntry).toEqual({ status: "ready", value: asset });
+    expect(issueTicketMock).not.toHaveBeenCalled();
+    expect(preparePreviewSourceMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      catalogReady.resolve(readyCatalogStatus());
     });
-    issueTicketMock
-      .mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
-        code: 503,
-        message: "raw provider /private/path",
-        data: { reason: { code: "preview_source_open_failed", params: {} }, correlation_id: "safe-correlation" },
-      }))
-      .mockResolvedValueOnce({ status: "available", value: buildContentTicket("plain_text") });
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(preparePreviewSourceMock).toHaveBeenCalledTimes(2);
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+    expect(getRecoveryPointCatalogStatusMock).toHaveBeenCalledWith(
+      "test-token",
+      recoveryPoint.id,
+      expect.any(AbortSignal),
+    );
+    expect(result.current.selectedEntry).toEqual({ status: "ready", value: asset });
+  });
+
+  it("does not treat a superseded building catalog as a missing file", async () => {
+    prepareSelectedAssetRequests(asset);
+    const catalogReady = deferred<CatalogProjection<CatalogStatus>>();
+    preparePreviewSourceMock
+      .mockResolvedValueOnce(staleCatalogStatus("building"))
+      .mockResolvedValueOnce(readyCatalogStatus());
+    getRecoveryPointCatalogStatusMock.mockReturnValue(catalogReady.promise);
+    issueTicketMock.mockResolvedValue({ status: "available", value: buildContentTicket("plain_text") });
 
     const { result } = renderHook(() => useBackupAssetsState({
       token: "test-token",
@@ -1816,25 +1915,80 @@ describe("useBackupAssetsState", () => {
       route: selectedAssetRoute(asset),
     }));
 
-    await waitFor(() => expect(result.current.content.status).toBe("error"));
-    expect(result.current.content.error?.sourceStage).toBe("open");
-    act(() => result.current.actions.retryPreview());
+    await waitFor(() => expect(result.current.content.status).toBe("loading"));
+    expect(result.current.selectedEntry).toEqual({ status: "ready", value: asset });
+    expect(result.current.content.value).toBeNull();
+    expect(result.current.content.error?.code).not.toBe("not_found");
+    expect(issueTicketMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      catalogReady.resolve(readyCatalogStatus());
+    });
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
-    expect(connectBackupRepositoryMock).toHaveBeenCalledTimes(1);
-    expect(connectBackupRepositoryMock).toHaveBeenCalledWith(
-      "test-token",
-      { taskId: 7 },
-      expect.any(AbortSignal)
-    );
-    expect(issueTicketMock).toHaveBeenCalledTimes(2);
-    expect(getRecoveryPointCatalogStatusMock).toHaveBeenCalledWith(
-      "test-token",
-      recoveryPoint.id,
-      expect.any(AbortSignal),
-    );
+    expect(preparePreviewSourceMock).toHaveBeenCalledTimes(2);
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+    expect(connectBackupRepositoryMock).not.toHaveBeenCalled();
   });
 
-  it("does not connect a different task when an operator retries a source-open failure", async () => {
+  it("treats a post-refresh prepare that is still pending as retryable, not missing", async () => {
+    prepareSelectedAssetRequests(asset);
+    const catalogReady = deferred<CatalogProjection<CatalogStatus>>();
+    preparePreviewSourceMock
+      .mockResolvedValueOnce(buildingCatalogStatus())
+      .mockResolvedValueOnce(buildingCatalogStatus());
+    getRecoveryPointCatalogStatusMock.mockReturnValue(catalogReady.promise);
+    issueTicketMock.mockResolvedValue({ status: "available", value: buildContentTicket("plain_text") });
+
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "operator",
+      route: selectedAssetRoute(asset),
+    }));
+
+    await waitFor(() => expect(getRecoveryPointCatalogStatusMock).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      catalogReady.resolve(readyCatalogStatus());
+    });
+    await waitFor(() => expect(result.current.content.status).toBe("error"));
+    expect(result.current.content.error?.retryable).toBe(true);
+    expect(result.current.content.error?.code).not.toBe("not_found");
+    expect(result.current.selectedEntry).toEqual({ status: "ready", value: asset });
+    expect(result.current.canRetryPreview).toBe(true);
+    expect(preparePreviewSourceMock).toHaveBeenCalledTimes(2);
+    expect(issueTicketMock).not.toHaveBeenCalled();
+    expect(getBackupAssetMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not automatically retry a failing preview-source POST", async () => {
+    prepareSelectedAssetRequests(asset);
+    preparePreviewSourceMock
+      .mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
+        code: 503,
+        message: "raw provider /private/path",
+        data: { reason: { code: "preview_source_changed", params: {} }, correlation_id: "safe-correlation" },
+      }))
+      .mockResolvedValue(readyCatalogStatus());
+    issueTicketMock.mockResolvedValue({ status: "available", value: buildContentTicket("plain_text") });
+
+    const { result } = renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "operator",
+      route: selectedAssetRoute(asset),
+    }));
+
+    await waitFor(() => expect(result.current.content.status).toBe("error"));
+    expect(result.current.content.error?.sourceStage).toBe("changed");
+    expect(preparePreviewSourceMock).toHaveBeenCalledTimes(1);
+    expect(issueTicketMock).not.toHaveBeenCalled();
+
+    act(() => result.current.actions.retryPreview());
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(preparePreviewSourceMock).toHaveBeenCalledTimes(2);
+    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+    expect(connectBackupRepositoryMock).not.toHaveBeenCalled();
+  });
+
+  it("retries a source-open failure through preview-source for admin and operator", async () => {
     prepareSelectedAssetRequests(asset);
     issueTicketMock
       .mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
@@ -1851,30 +2005,22 @@ describe("useBackupAssetsState", () => {
     }));
 
     await waitFor(() => expect(result.current.content.status).toBe("error"));
+    expect(result.current.content.error?.sourceStage).toBe("open");
     act(() => result.current.actions.retryPreview());
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
     expect(connectBackupRepositoryMock).not.toHaveBeenCalled();
+    expect(preparePreviewSourceMock).toHaveBeenCalledTimes(2);
     expect(issueTicketMock).toHaveBeenCalledTimes(2);
   });
 
-  it("reissues a repaired preview only after the exact recovery point catalog is ready", async () => {
+  it("waits for the exact point catalog before a repaired retry issues", async () => {
     prepareSelectedAssetRequests(asset);
     const otherPointId = "9".repeat(32);
-    connectBackupRepositoryMock.mockResolvedValue({
-      status: "available",
-      value: { repository, mutablePoint: { ...recoveryPoint, id: otherPointId } },
-    });
-    const building = {
-      ...readyCatalogStatus(),
-      value: {
-        ...readyCatalogStatus().value,
-        generation: { ...readyCatalogStatus().value.generation!, state: "building" as const, finishedAt: null },
-        coverage: { ...readyCatalogStatus().value.coverage, status: "building" as const },
-        contentAvailability: { available: false, reason: null },
-      },
-    };
+    preparePreviewSourceMock
+      .mockResolvedValueOnce(readyCatalogStatus())
+      .mockResolvedValueOnce(buildingCatalogStatus());
     getRecoveryPointCatalogStatusMock
-      .mockResolvedValueOnce(building)
+      .mockResolvedValueOnce(buildingCatalogStatus())
       .mockResolvedValueOnce(readyCatalogStatus());
     issueTicketMock
       .mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
@@ -1916,12 +2062,11 @@ describe("useBackupAssetsState", () => {
     expect(issueTicketMock).toHaveBeenCalledTimes(2);
   });
 
-  it("fails a source repair honestly when exact catalog readiness times out", async () => {
+  it("fails honestly when exact catalog readiness times out", async () => {
     prepareSelectedAssetRequests(asset);
-    connectBackupRepositoryMock.mockResolvedValue({
-      status: "available",
-      value: { repository, mutablePoint: recoveryPoint },
-    });
+    preparePreviewSourceMock
+      .mockResolvedValueOnce(readyCatalogStatus())
+      .mockResolvedValue(buildingCatalogStatus());
     getRecoveryPointCatalogStatusMock.mockImplementation(() => new Promise(() => undefined));
     issueTicketMock.mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
       code: 503,
@@ -1941,118 +2086,67 @@ describe("useBackupAssetsState", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(result.current.content.status).toBe("loading");
+    expect(result.current.selectedEntry).toEqual({ status: "ready", value: asset });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(120_000);
     });
     vi.useRealTimers();
     await waitFor(() => expect(result.current.content.status).toBe("error"));
     expect(result.current.content.error?.retryable).toBe(true);
+    expect(result.current.selectedEntry).toEqual({ status: "ready", value: asset });
+    expect(result.current.canRetryPreview).toBe(true);
     expect(issueTicketMock).toHaveBeenCalledTimes(1);
   });
 
-  it("aborts source-repair catalog polling when the preview selection changes", async () => {
-    prepareSelectedAssetRequests(asset);
-    connectBackupRepositoryMock.mockResolvedValue({
-      status: "available",
-      value: { repository, mutablePoint: recoveryPoint },
+  it("aborts in-flight preview-source preparation when the selection changes", async () => {
+    const nextAsset: BackupAsset = {
+      ...asset,
+      ref: { ...asset.ref, entryId: "d".repeat(64) },
+      name: "next-config.yaml",
+    };
+    prepareSelectedAssetRequests(asset, nextAsset);
+    let firstSignal: AbortSignal | undefined;
+    preparePreviewSourceMock.mockImplementation((_token: string, ref: BackupAsset["ref"], signal: AbortSignal) => {
+      if (ref.entryId === asset.ref.entryId) {
+        firstSignal = signal;
+        return new Promise(() => undefined);
+      }
+      return Promise.resolve(readyCatalogStatus());
     });
-    let catalogSignal: AbortSignal | undefined;
-    getRecoveryPointCatalogStatusMock.mockImplementation((...args: unknown[]) => {
-      catalogSignal = args[2] as AbortSignal;
-      return new Promise(() => undefined);
-    });
-    issueTicketMock.mockRejectedValue(new ApiError(503, "raw provider /private/path", {
-      code: 503,
-      message: "raw provider /private/path",
-      data: { reason: { code: "preview_source_open_failed", params: {} }, correlation_id: "safe-correlation" },
-    }));
+    issueTicketMock.mockResolvedValue({ status: "available", value: buildContentTicket("plain_text") });
     const initialRoute = selectedAssetRoute(asset);
     const { result, rerender } = renderHook(
       ({ route, token }) => useBackupAssetsState({ token, role: "admin", route }),
       { initialProps: { route: initialRoute, token: "test-token" } },
     );
-    await waitFor(() => expect(result.current.content.status).toBe("error"));
-    act(() => result.current.actions.retryPreview());
-    await waitFor(() => expect(catalogSignal).toBeInstanceOf(AbortSignal));
-    expect(catalogSignal?.aborted).toBe(false);
+    await waitFor(() => expect(firstSignal).toBeInstanceOf(AbortSignal));
+    expect(firstSignal?.aborted).toBe(false);
+    expect(issueTicketMock).not.toHaveBeenCalled();
 
-    rerender({ route: { ...initialRoute, entryId: "d".repeat(64) }, token: "test-token" });
-    await waitFor(() => expect(catalogSignal?.aborted).toBe(true));
-    expect(issueTicketMock.mock.calls.every((call) => call[1]?.entryId === asset.ref.entryId)).toBe(true);
-  });
-
-  it("waits through a stale complete catalog while latestBuild is building before reissuing", async () => {
-    prepareSelectedAssetRequests(asset);
-    connectBackupRepositoryMock.mockResolvedValue({
-      status: "available",
-      value: { repository, mutablePoint: recoveryPoint },
-    });
-    getRecoveryPointCatalogStatusMock
-      .mockResolvedValueOnce(staleCatalogStatus("building"))
-      .mockResolvedValueOnce(readyCatalogStatus());
-    issueTicketMock
-      .mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
-        code: 503,
-        message: "raw provider /private/path",
-        data: { reason: { code: "preview_source_open_failed", params: {} }, correlation_id: "safe-correlation" },
-      }))
-      .mockResolvedValueOnce({ status: "available", value: buildContentTicket("plain_text") });
-
-    const { result } = renderHook(() => useBackupAssetsState({
-      token: "test-token",
-      role: "admin",
-      route: selectedAssetRoute(asset),
-    }));
-    await waitFor(() => expect(result.current.content.status).toBe("error"));
-    vi.useFakeTimers();
-    act(() => result.current.actions.retryPreview());
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(result.current.content.status).toBe("loading");
-    expect(issueTicketMock).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
-    });
-    vi.useRealTimers();
+    rerender({ route: selectedAssetRoute(nextAsset), token: "test-token" });
+    await waitFor(() => expect(firstSignal?.aborted).toBe(true));
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
-    expect(issueTicketMock).toHaveBeenCalledTimes(2);
-    expect(connectBackupRepositoryMock).toHaveBeenCalledTimes(1);
+    expect(issueTicketMock.mock.calls.every((call) => call[1]?.entryId === nextAsset.ref.entryId)).toBe(true);
   });
 
-  it("fails a source repair honestly when a stale catalog latestBuild is failed", async () => {
+  it("fails a pending catalog honestly when latestBuild is failed", async () => {
     prepareSelectedAssetRequests(asset);
-    connectBackupRepositoryMock.mockResolvedValue({
-      status: "available",
-      value: { repository, mutablePoint: recoveryPoint },
-    });
-    getRecoveryPointCatalogStatusMock.mockResolvedValue(staleCatalogStatus("failed"));
-    issueTicketMock.mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
-      code: 503,
-      message: "raw provider /private/path",
-      data: { reason: { code: "preview_source_open_failed", params: {} }, correlation_id: "safe-correlation" },
-    }));
+    preparePreviewSourceMock.mockResolvedValue(staleCatalogStatus("failed"));
+    issueTicketMock.mockResolvedValue({ status: "available", value: buildContentTicket("plain_text") });
 
     const { result } = renderHook(() => useBackupAssetsState({
       token: "test-token",
       role: "admin",
       route: selectedAssetRoute(asset),
     }));
-    await waitFor(() => expect(result.current.content.status).toBe("error"));
-    act(() => result.current.actions.retryPreview());
     await waitFor(() => expect(result.current.content.status).toBe("error"));
     expect(result.current.content.error?.retryable).toBe(true);
-    expect(connectBackupRepositoryMock).toHaveBeenCalledTimes(1);
-    expect(issueTicketMock).toHaveBeenCalledTimes(1);
+    expect(connectBackupRepositoryMock).not.toHaveBeenCalled();
+    expect(issueTicketMock).not.toHaveBeenCalled();
   });
 
-  it("repairs a source-open failure with the last exact point while the recovery point is refreshing", async () => {
+  it("retries through preview-source while the recovery point is refreshing", async () => {
     prepareSelectedAssetRequests(asset);
-    connectBackupRepositoryMock.mockResolvedValue({
-      status: "available",
-      value: { repository, mutablePoint: recoveryPoint },
-    });
     issueTicketMock
       .mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
         code: 503,
@@ -2071,22 +2165,16 @@ describe("useBackupAssetsState", () => {
       { initialProps: { refreshVersion: 0 } },
     );
     await waitFor(() => expect(result.current.content.status).toBe("error"));
-    expect(result.current.selectedRecoveryPoint).not.toBeNull();
 
     const pointRefresh = deferred<{ status: "available"; value: BackupRecoveryPoint }>();
     getRecoveryPointMock.mockReturnValue(pointRefresh.promise);
     rerender({ refreshVersion: 1 });
     await waitFor(() => expect(result.current.selectedRecoveryPoint).toBeNull());
-    expect(result.current.content.status).toBe("error");
 
     act(() => result.current.actions.retryPreview());
-    await waitFor(() => expect(connectBackupRepositoryMock).toHaveBeenCalledTimes(1));
-    expect(connectBackupRepositoryMock).toHaveBeenCalledWith(
-      "test-token",
-      { taskId: 7 },
-      expect.any(AbortSignal),
-    );
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(connectBackupRepositoryMock).not.toHaveBeenCalled();
+    expect(preparePreviewSourceMock).toHaveBeenCalledTimes(2);
     expect(issueTicketMock).toHaveBeenCalledTimes(2);
 
     await act(async () => {
@@ -2094,44 +2182,62 @@ describe("useBackupAssetsState", () => {
     });
   });
 
-  it("does not reissue a failing ticket while exact recovery-point context is still loading", async () => {
-    prepareSelectedAssetRequests(asset);
-    const pointWithoutTask: BackupRecoveryPoint = {
-      ...recoveryPoint,
-      lineage: { producingTaskRunId: 21 },
+  it("keeps a genuine deleted file unavailable without guessing another entry", async () => {
+    const otherAsset: BackupAsset = {
+      ...asset,
+      ref: { ...asset.ref, entryId: "d".repeat(64) },
+      name: "synthetic-config.yaml",
     };
-    getRecoveryPointMock.mockResolvedValue({ status: "available", value: pointWithoutTask });
-    issueTicketMock.mockRejectedValueOnce(new ApiError(503, "raw provider /private/path", {
-      code: 503,
-      message: "raw provider /private/path",
-      data: { reason: { code: "preview_source_open_failed", params: {} }, correlation_id: "safe-correlation" },
+    prepareSelectedAssetRequests(asset, otherAsset);
+    getBackupAssetMock.mockImplementation((_token: string, ref: BackupAsset["ref"]) => {
+      if (ref.entryId !== asset.ref.entryId) {
+        return Promise.resolve({ status: "available" as const, value: otherAsset });
+      }
+      return Promise.reject(new ApiError(404, "not found", { code: 404 }));
+    });
+
+    renderHook(() => useBackupAssetsState({
+      token: "test-token",
+      role: "operator",
+      route: selectedAssetRoute(asset),
     }));
 
-    const { result, rerender } = renderHook(
-      ({ refreshVersion }) => useBackupAssetsState({
-        token: "test-token",
-        role: "admin",
-        route: selectedAssetRoute(asset),
-        refreshVersion,
-      }),
-      { initialProps: { refreshVersion: 0 } },
-    );
-    await waitFor(() => expect(result.current.content.status).toBe("error"));
-
-    const pointRefresh = deferred<{ status: "available"; value: BackupRecoveryPoint }>();
-    getRecoveryPointMock.mockReturnValue(pointRefresh.promise);
-    rerender({ refreshVersion: 1 });
-    await waitFor(() => expect(result.current.selectedRecoveryPoint).toBeNull());
-
-    act(() => result.current.actions.retryPreview());
-    expect(connectBackupRepositoryMock).not.toHaveBeenCalled();
-    expect(issueTicketMock).toHaveBeenCalledTimes(1);
-    expect(result.current.content.status).toBe("error");
-
-    await act(async () => {
-      pointRefresh.resolve({ status: "available", value: recoveryPoint });
-    });
+    await waitFor(() => expect(getBackupAssetMock).toHaveBeenCalled());
+    expect(preparePreviewSourceMock).not.toHaveBeenCalled();
+    expect(issueTicketMock).not.toHaveBeenCalled();
+    expect(getBackupAssetMock.mock.calls.every((call) => call[1]?.entryId === asset.ref.entryId)).toBe(true);
+    expect(JSON.stringify(getBackupAssetMock.mock.calls)).not.toMatch(otherAsset.ref.entryId);
   });
+
+  it("does not apply a late preparation to a switched token or node", async () => {
+    prepareSelectedAssetRequests(asset);
+    const first = deferred<CatalogProjection<CatalogStatus>>();
+    let firstSignal: AbortSignal | undefined;
+    preparePreviewSourceMock.mockImplementation((token: string, _ref: BackupAsset["ref"], signal: AbortSignal) => {
+      if (token === "test-token") {
+        firstSignal = signal;
+        if (signal.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
+        return first.promise;
+      }
+      return Promise.resolve(readyCatalogStatus());
+    });
+    issueTicketMock.mockResolvedValue({ status: "available", value: buildContentTicket("plain_text") });
+    const { result, rerender } = renderHook(
+      ({ token, route }) => useBackupAssetsState({ token, role: "operator", route }),
+      { initialProps: { token: "test-token", route: { ...selectedAssetRoute(asset), nodeId: 3 } } },
+    );
+    await waitFor(() => expect(firstSignal).toBeInstanceOf(AbortSignal));
+    expect(issueTicketMock).not.toHaveBeenCalled();
+
+    rerender({ token: "next-session-token", route: { ...selectedAssetRoute(asset), nodeId: 4 } });
+    await waitFor(() => expect(firstSignal?.aborted).toBe(true));
+    await act(async () => {
+      first.resolve(readyCatalogStatus());
+    });
+    await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(issueTicketMock.mock.calls.every((call) => call[0] === "next-session-token")).toBe(true);
+  });
+
 
 
 
@@ -2922,6 +3028,7 @@ describe("useBackupAssetsState", () => {
     );
 
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(preparePreviewSourceMock).toHaveBeenCalledTimes(1);
     expect(issueTicketMock).toHaveBeenCalledTimes(1);
     expect(issueTicketMock).toHaveBeenCalledWith(
       "test-token",
@@ -3156,6 +3263,7 @@ describe("useBackupAssetsState", () => {
       signal: expect.any(AbortSignal),
     }));
     expect(issueTicketMock.mock.calls[1]?.[2]).not.toHaveProperty("previewIntent");
+    expect(preparePreviewSourceMock).toHaveBeenCalledTimes(1);
   });
 
   it("prompts Admin once and retries the same safe-preview intent once", async () => {
@@ -3176,6 +3284,7 @@ describe("useBackupAssetsState", () => {
 
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
     expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
+    expect(preparePreviewSourceMock).toHaveBeenCalledTimes(1);
     expect(issueTicketMock).toHaveBeenCalledTimes(2);
     expect(issueTicketMock.mock.calls[0]?.[2]).toEqual(expect.objectContaining({
       previewIntent: "safePreviewV1",
@@ -3316,7 +3425,8 @@ describe("useBackupAssetsState", () => {
     });
 
     expect(issueTicketMock).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(result.current.content).toEqual({ status: "idle", value: null }));
+    await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(2));
+    expect(result.current.content.error?.retryable).toBe(true);
   });
 
   it("maps an exact renderer rejection to a closed non-retryable preview state", async () => {
@@ -3410,39 +3520,37 @@ describe("useBackupAssetsState", () => {
     );
     expect(result.current.content.value).toEqual(previewTicket);
   });
-
   it("reuses the central in-session secret-reveal proof on preview renew", async () => {
     const ensureStepUpProof = vi.fn().mockImplementation(async () => {
       saveStepUpProof(STEP_UP_ACTIONS.assetSecretReveal, "proof-secret", Date.now() + 45 * 60_000);
       return "proof-secret";
     });
     const previewTicket = buildContentTicket("escaped_text", { classification: "secret" });
-    listBackupRepositoriesMock.mockResolvedValue({ items: [], nextCursor: null });
+    prepareSelectedAssetRequests(asset);
     issueTicketMock
       .mockRejectedValueOnce(secretRevealRequiredError())
+      .mockResolvedValueOnce({ status: "available", value: previewTicket })
       .mockResolvedValueOnce({ status: "available", value: previewTicket })
       .mockResolvedValueOnce({ status: "available", value: previewTicket });
     const { result } = renderHook(() =>
       useBackupAssetsState({
         token: "test-token",
         role: "admin",
-        route: {
-          ...defaultBackupAssetsRouteState("data"),
-          recoveryPointId: asset.ref.recoveryPointId,
-          entryId: asset.ref.entryId,
-        },
+        route: selectedAssetRoute(asset),
         ensureStepUpProof,
       })
     );
 
-    act(() => result.current.actions.loadExactPreview(asset));
     await waitFor(() => expect(result.current.content.status).toBe("ready"));
+    expect(preparePreviewSourceMock).toHaveBeenCalledTimes(1);
+    act(() => result.current.actions.loadExactPreview(asset));
+    await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(3));
     expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
 
     act(() => result.current.actions.renewPreview());
-    await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(issueTicketMock).toHaveBeenCalledTimes(4));
     expect(ensureStepUpProof).toHaveBeenCalledTimes(1);
-    expect(issueTicketMock.mock.calls[2][2]).toEqual(
+    expect(issueTicketMock.mock.calls[3][2]).toEqual(
       expect.objectContaining({
         action: "preview",
         stepUpProof: "proof-secret",
@@ -3587,11 +3695,7 @@ describe("useBackupAssetsState", () => {
       useBackupAssetsState({
         token: "test-token",
         role: "admin",
-        route: {
-          ...defaultBackupAssetsRouteState("data"),
-          recoveryPointId: asset.ref.recoveryPointId,
-          entryId: asset.ref.entryId,
-        },
+        route: defaultBackupAssetsRouteState("data"),
         ensureStepUpProof,
         clearStepUpProof,
       })

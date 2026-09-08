@@ -328,6 +328,31 @@ func TestBackupContentTicketRequiresPreviewPermissionBeforeFeatureGate(t *testin
 	}
 }
 
+func TestPreviewSourcePreparationRequiresPreviewButNotRepositoryManagement(t *testing.T) {
+	fixture := setupBackupAssetRBACFixture(t)
+	path := "https://xirang.example/api/v1/recovery-points/" + strings.Repeat("1", 32) + "/entries/" + strings.Repeat("a", 64) + "/preview-source"
+	body := `{"schema_version":1}`
+	if response := performBackupAssetRBACRequest(t, fixture, http.MethodPost, path, body, ""); response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, role := range []string{"admin", "operator", "viewer", "unknown"} {
+		t.Run(role, func(t *testing.T) {
+			response := performBackupAssetRBACRequest(t, fixture, http.MethodPost, path, body, fixture.tokens[role])
+			want := http.StatusForbidden
+			if role == "admin" || role == "operator" {
+				want = http.StatusServiceUnavailable
+			}
+			if response.Code != want {
+				t.Fatalf("status=%d want=%d body=%s", response.Code, want, response.Body.String())
+			}
+		})
+	}
+	response := performBackupAssetRBACRequest(t, fixture, http.MethodPost, "/api/v1/backup-repositories/connect", `{"task_id":7}`, fixture.tokens["operator"])
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("preview-only operator acquired repository management: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestBackupProcessingRoutesRequirePreviewPermissionBeforeFeatureGate(t *testing.T) {
 	fixture := setupBackupAssetRBACFixture(t)
 	pointID, entryID, interestID := strings.Repeat("1", 32), strings.Repeat("a", 64), strings.Repeat("2", 32)

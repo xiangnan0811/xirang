@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-
+	"time"
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/catalog"
 	"xirang/backend/internal/backupasset/provider"
@@ -107,6 +107,363 @@ func (service *Service) ObserveBackupSourceCompletion(ctx context.Context, taskI
 		service.requestCatalogWake()
 	}
 	return nil
+}
+
+// MutablePreviewPreparationResult reports whether the exact mutable source
+// invalidation happened or the caller joined work already in progress. A
+// preparation call never creates a binding or starts a second worker.
+type MutablePreviewPreparationResult struct {
+	Invalidated bool
+	Joined      bool
+}
+
+// PrepareMutablePreviewSource performs the exact-generation CAS half of a
+// preview-source preparation. The caller has already authorized and statted
+// the requested active Catalog tuple. This method only admits an already
+// connected legacy mutable Rsync binding, atomically invalidates the observed
+// generation, and wakes the existing Catalog worker. The worker owns source
+// re-observation before freezing a replacement generation.
+func (service *Service) PrepareMutablePreviewSource(
+	ctx context.Context,
+	request catalog.PointReadRequest,
+	expectedGenerationID string,
+) (MutablePreviewPreparationResult, error) {
+	var result MutablePreviewPreparationResult
+	if service == nil || backupasset.ValidateOpaqueID(request.RepositoryID) != nil ||
+		backupasset.ValidateOpaqueID(request.RecoveryPointID) != nil ||
+		(expectedGenerationID != "" && backupasset.ValidateOpaqueID(expectedGenerationID) != nil) {
+		return result, fmt.Errorf("%w: mutable preview preparation request", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := service.ensureEnabled(""); err != nil {
+		return result, err
+	}
+	if err := service.requireRuntime(); err != nil {
+		return result, err
+	}
+	target, applicable, err := service.loadMutablePreviewTarget(ctx, request)
+	if err != nil || !applicable {
+		return result, err
+	}
+	err = service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var taskEntity model.Task
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", target.taskID).First(&taskEntity).Error; err != nil {
+			return fmt.Errorf("%w: mutable preview Task changed", backupasset.ErrConflict)
+		}
+		if taskEntity.ArchivedAt != nil || bindingProviderForTask(taskEntity) != backupasset.ProviderRsync {
+			return fmt.Errorf("%w: mutable preview Task changed", backupasset.ErrConflict)
+		}
+
+		var link model.TaskRepositoryLink
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND task_id = ? AND repository_id = ? AND publication_mode = ? AND unlinked_at IS NULL",
+				target.linkID, target.taskID, target.repositoryID, backupasset.PublicationLegacyMutable).
+			First(&link).Error; err != nil {
+			return fmt.Errorf("%w: mutable preview Task link changed", backupasset.ErrConflict)
+		}
+
+		var repository model.BackupRepository
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", target.repositoryID).First(&repository).Error; err != nil {
+			return fmt.Errorf("%w: mutable preview repository changed", backupasset.ErrConflict)
+		}
+		if repository.ProviderKind != string(backupasset.ProviderRsync) ||
+			repository.VersionMode != string(backupasset.VersionMutableHead) {
+			return fmt.Errorf("%w: mutable preview repository contract changed", backupasset.ErrConflict)
+		}
+		switch backupasset.RepositoryStatus(repository.Status) {
+		case backupasset.RepositoryOnline:
+		case backupasset.RepositoryOffline:
+			return capabilityError(backupasset.CapabilityRepositoryOffline, "")
+		case backupasset.RepositoryDisconnected:
+			return capabilityError(backupasset.CapabilityRepositoryDisconnected, "")
+		default:
+			return fmt.Errorf("%w: mutable preview repository status changed", backupasset.ErrConflict)
+		}
+
+		var point model.RecoveryPoint
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND repository_id = ? AND semantics = ? AND state = ? AND producing_task_id = ?",
+				target.pointID, target.repositoryID, backupasset.PointMutableHead, backupasset.RecoveryPointObserved, target.taskID).
+			First(&point).Error; err != nil {
+			return fmt.Errorf("%w: mutable preview point changed", backupasset.ErrConflict)
+		}
+		if point.PhysicalAvailability != string(backupasset.PhysicalOnline) {
+			return capabilityError(backupasset.CapabilityProviderUnavailable, "")
+		}
+		if err := backupasset.ValidateRecoveryPointWriteAdmissionTx(ctx, tx, point.ID); err != nil {
+			return err
+		}
+		now := service.utcNow()
+		liveCatalogBuild, err := service.reconcileExpiredCatalogBuildLeasesTx(ctx, tx, target.pointID, now)
+		if err != nil {
+			return err
+		}
+
+		var active model.CatalogGeneration
+		activeResult := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("recovery_point_id = ? AND state = ? AND is_active = ?", target.pointID, catalog.GenerationComplete, true).
+			Limit(1).Find(&active)
+		if activeResult.Error != nil {
+			return fmt.Errorf("load mutable preview active Catalog generation: %w", activeResult.Error)
+		}
+		if activeResult.RowsAffected != 1 {
+			if expectedGenerationID != "" {
+				result.Joined = true
+				return nil
+			}
+			var latest model.CatalogGeneration
+			latestResult := tx.WithContext(ctx).
+				Where("recovery_point_id = ?", target.pointID).
+				Order("generation DESC, id DESC").Limit(1).Find(&latest)
+			if latestResult.Error != nil {
+				return fmt.Errorf("load mutable preview latest Catalog generation: %w", latestResult.Error)
+			}
+			if latestResult.RowsAffected != 1 {
+				result.Joined = true
+				return nil
+			}
+			if latest.State == string(catalog.GenerationBuilding) {
+				if liveCatalogBuild {
+					result.Joined = true
+					return nil
+				}
+				updated := tx.WithContext(ctx).Model(&model.CatalogGeneration{}).
+					Where("id = ? AND recovery_point_id = ? AND state = ? AND is_active = ?",
+						latest.ID, target.pointID, catalog.GenerationBuilding, false).
+					Updates(map[string]any{
+						"state": catalog.GenerationSuperseded, "is_active": false,
+						"finished_at": gorm.Expr("COALESCE(finished_at, ?)", now), "updated_at": now,
+					})
+				if updated.Error != nil {
+					return fmt.Errorf("rearm orphaned mutable preview Catalog generation: %w", updated.Error)
+				}
+				if updated.RowsAffected == 1 {
+					result.Invalidated = true
+				} else {
+					result.Joined = true
+				}
+				return nil
+			}
+			if latest.State == string(catalog.GenerationPartial) || latest.State == string(catalog.GenerationFailed) {
+				now := service.utcNow()
+				updated := tx.WithContext(ctx).Model(&model.CatalogGeneration{}).
+					Where("id = ? AND recovery_point_id = ? AND state IN ? AND is_active = ?",
+						latest.ID, target.pointID,
+						[]string{string(catalog.GenerationPartial), string(catalog.GenerationFailed)}, false).
+					Updates(map[string]any{
+						"state": catalog.GenerationSuperseded, "is_active": false,
+						"finished_at": gorm.Expr("COALESCE(finished_at, ?)", now), "updated_at": now,
+					})
+				if updated.Error != nil {
+					return fmt.Errorf("rearm mutable preview latest Catalog generation: %w", updated.Error)
+				}
+				if updated.RowsAffected == 1 {
+					result.Invalidated = true
+				} else {
+					result.Joined = true
+				}
+				return nil
+			}
+			result.Joined = true
+			return nil
+		}
+		if expectedGenerationID == "" || active.ID != expectedGenerationID {
+			result.Joined = true
+			return nil
+		}
+
+		var buildingCount int64
+		if err := tx.WithContext(ctx).Model(&model.CatalogGeneration{}).
+			Where("recovery_point_id = ? AND state = ?", target.pointID, catalog.GenerationBuilding).
+			Count(&buildingCount).Error; err != nil {
+			return fmt.Errorf("check mutable preview Catalog builds: %w", err)
+		}
+		if buildingCount != 0 {
+			if !liveCatalogBuild {
+				obsoleteStates := []string{
+					string(catalog.GenerationBuilding), string(catalog.GenerationPartial), string(catalog.GenerationFailed),
+				}
+				updated := tx.WithContext(ctx).Model(&model.CatalogGeneration{}).
+					Where("recovery_point_id = ? AND state IN ? AND is_active = ?", target.pointID, obsoleteStates, false).
+					Updates(map[string]any{
+						"state": catalog.GenerationSuperseded, "is_active": false,
+						"finished_at": gorm.Expr("COALESCE(finished_at, ?)", now), "updated_at": now,
+					})
+				if updated.Error != nil {
+					return fmt.Errorf("rearm orphaned mutable preview Catalog generations: %w", updated.Error)
+				}
+			}
+			updated := tx.WithContext(ctx).Model(&model.CatalogGeneration{}).
+				Where("id = ? AND recovery_point_id = ? AND state = ? AND is_active = ?",
+					expectedGenerationID, target.pointID, catalog.GenerationComplete, true).
+				Updates(map[string]any{"state": catalog.GenerationSuperseded, "is_active": false, "updated_at": now})
+			if updated.Error != nil {
+				return fmt.Errorf("invalidate mutable preview Catalog generation: %w", updated.Error)
+			}
+			if updated.RowsAffected != 1 {
+				result.Joined = true
+				return nil
+			}
+			result.Invalidated = true
+			return nil
+		}
+		obsoleteStates := []string{
+			string(catalog.GenerationPartial), string(catalog.GenerationFailed),
+		}
+		updated := tx.WithContext(ctx).Model(&model.CatalogGeneration{}).
+			Where("recovery_point_id = ? AND state IN ? AND is_active = ?", target.pointID, obsoleteStates, false).
+			Updates(map[string]any{
+				"state": catalog.GenerationSuperseded, "is_active": false,
+				"finished_at": gorm.Expr("COALESCE(finished_at, ?)", now), "updated_at": now,
+			})
+		if updated.Error != nil {
+			return fmt.Errorf("supersede mutable preview Catalog generations: %w", updated.Error)
+		}
+		updated = tx.WithContext(ctx).Model(&model.CatalogGeneration{}).
+			Where("id = ? AND recovery_point_id = ? AND state = ? AND is_active = ?",
+				expectedGenerationID, target.pointID, catalog.GenerationComplete, true).
+			Updates(map[string]any{"state": catalog.GenerationSuperseded, "is_active": false, "updated_at": now})
+		if updated.Error != nil {
+			return fmt.Errorf("invalidate mutable preview Catalog generation: %w", updated.Error)
+		}
+		if updated.RowsAffected != 1 {
+			result.Joined = true
+			return nil
+		}
+		result.Invalidated = true
+		return nil
+	})
+	if err != nil {
+		return result, err
+	}
+	if result.Invalidated || result.Joined {
+		service.requestCatalogWake()
+	}
+	return result, nil
+}
+
+// reconcileExpiredCatalogBuildLeasesTx releases only Catalog worker leases
+// whose own lease window or absolute deadline has elapsed. The caller holds
+// the recovery-point row lock before taking these lease locks, preserving the
+// point-before-lease order used by source preparation. The exact fence fields
+// are part of every expiry update so a concurrent renew or takeover cannot be
+// mistaken for the stale lease observed at the start of this transaction.
+func (service *Service) reconcileExpiredCatalogBuildLeasesTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	pointID string,
+	now time.Time,
+) (bool, error) {
+	if service == nil || tx == nil || backupasset.ValidateOpaqueID(pointID) != nil || now.IsZero() {
+		return false, fmt.Errorf("%w: expired Catalog lease reconciliation request", backupasset.ErrInvalidState)
+	}
+	var leases []model.RecoveryPointLease
+	loaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("recovery_point_id = ? AND holder_type = ? AND status = ?",
+			pointID, backupasset.LeaseHolderCatalogBuild, backupasset.LeaseActive).
+		Order("id").Find(&leases)
+	if loaded.Error != nil {
+		return false, fmt.Errorf("load mutable preview Catalog leases: %w", loaded.Error)
+	}
+	live := false
+	for _, lease := range leases {
+		if now.Before(lease.LeaseExpiresAt.UTC()) && now.Before(lease.AbsoluteDeadline.UTC()) {
+			live = true
+			continue
+		}
+		expired := tx.WithContext(ctx).Model(&model.RecoveryPointLease{}).
+			Where(`id = ? AND recovery_point_id = ? AND holder_type = ? AND owner_id = ? AND attempt_id = ?
+				AND fence_token = ? AND status = ? AND (lease_expires_at <= ? OR absolute_deadline <= ?)`,
+				lease.ID, pointID, backupasset.LeaseHolderCatalogBuild, lease.OwnerID, lease.AttemptID,
+				lease.FenceToken, backupasset.LeaseActive, now, now).
+			Updates(map[string]any{
+				"status": backupasset.LeaseExpired, "updated_at": now,
+			})
+		if expired.Error != nil {
+			return false, fmt.Errorf("expire mutable preview Catalog lease: %w", expired.Error)
+		}
+		if expired.RowsAffected == 1 {
+			continue
+		}
+
+		// A lease worker may renew without taking the point lock. Re-read
+		// after a lost CAS and fail closed if that worker still owns a live
+		// fence; a second stale active row is never stolen here.
+		var current model.RecoveryPointLease
+		reloaded := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", lease.ID).Limit(1).Find(&current)
+		if reloaded.Error != nil {
+			return false, fmt.Errorf("reload mutable preview Catalog lease: %w", reloaded.Error)
+		}
+		if reloaded.RowsAffected != 1 || backupasset.LeaseStatus(current.Status) != backupasset.LeaseActive {
+			continue
+		}
+		if now.Before(current.LeaseExpiresAt.UTC()) && now.Before(current.AbsoluteDeadline.UTC()) {
+			live = true
+			continue
+		}
+		return false, fmt.Errorf("%w: mutable preview Catalog lease fence changed", backupasset.ErrConflict)
+	}
+	return live, nil
+}
+
+func (service *Service) loadMutablePreviewTarget(
+	ctx context.Context,
+	request catalog.PointReadRequest,
+) (backupSourceCompletionTarget, bool, error) {
+	var point model.RecoveryPoint
+	result := service.db.WithContext(ctx).
+		Where("id = ? AND repository_id = ?", request.RecoveryPointID, request.RepositoryID).
+		First(&point)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("%w: mutable preview point", backupasset.ErrNotFound)
+	}
+	if result.Error != nil {
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("load mutable preview point: %w", result.Error)
+	}
+	if point.Semantics != string(backupasset.PointMutableHead) ||
+		point.State != string(backupasset.RecoveryPointObserved) || point.ProducingTaskID == nil {
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("%w: mutable preview point contract changed", backupasset.ErrConflict)
+	}
+	var repository model.BackupRepository
+	result = service.db.WithContext(ctx).Where("id = ?", request.RepositoryID).First(&repository)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("%w: mutable preview repository", backupasset.ErrNotFound)
+	}
+	if result.Error != nil {
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("load mutable preview repository: %w", result.Error)
+	}
+	if repository.ProviderKind != string(backupasset.ProviderRsync) ||
+		repository.VersionMode != string(backupasset.VersionMutableHead) {
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("%w: mutable preview repository contract changed", backupasset.ErrConflict)
+	}
+	switch backupasset.RepositoryStatus(repository.Status) {
+	case backupasset.RepositoryOnline:
+	case backupasset.RepositoryOffline:
+		return backupSourceCompletionTarget{}, false, capabilityError(backupasset.CapabilityRepositoryOffline, "")
+	case backupasset.RepositoryDisconnected:
+		return backupSourceCompletionTarget{}, false, capabilityError(backupasset.CapabilityRepositoryDisconnected, "")
+	default:
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("%w: mutable preview repository status is invalid", backupasset.ErrConflict)
+	}
+	if point.PhysicalAvailability != string(backupasset.PhysicalOnline) {
+		return backupSourceCompletionTarget{}, false, capabilityError(backupasset.CapabilityProviderUnavailable, "")
+	}
+	target, applicable, err := service.loadBackupSourceCompletionTarget(ctx, *point.ProducingTaskID)
+	if err != nil || !applicable {
+		if err != nil {
+			return backupSourceCompletionTarget{}, false, err
+		}
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("%w: mutable preview binding unavailable", backupasset.ErrConflict)
+	}
+	if target.repositoryID != request.RepositoryID || target.pointID != request.RecoveryPointID {
+		return backupSourceCompletionTarget{}, false, fmt.Errorf("%w: mutable preview binding lineage changed", backupasset.ErrConflict)
+	}
+	return target, true, nil
 }
 
 func (service *Service) loadBackupSourceCompletionTarget(

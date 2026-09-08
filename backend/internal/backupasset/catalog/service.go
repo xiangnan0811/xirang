@@ -675,7 +675,7 @@ func generationDTO(generation model.CatalogGeneration) (GenerationDTO, error) {
 
 func coverageFromGeneration(state GenerationState) CoverageStatus {
 	switch state {
-	case GenerationBuilding:
+	case GenerationBuilding, GenerationSuperseded:
 		return CoverageBuilding
 	case GenerationPartial:
 		return CoveragePartial

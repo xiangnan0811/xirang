@@ -83,6 +83,33 @@ belongs only to the asynchronous reconciler.
   requests do not reconnect repositories or weaken source consistency checks.
   Immutable points and intentionally disconnected repositories are not repaired
   by this mutable refresh path. Suppress redundant Catalog wakes from a build.
+- Ordinary safe preview prepares its exact source before issuing a ticket via
+  `POST /recovery-points/:id/entries/:entryId/preview-source` with only
+  `schema_version: 1`. The endpoint requires both list and preview permission
+  plus the normal content transport/session checks, and returns the existing
+  Catalog status DTO without a content capability or locator.
+- Only an already-authorized, connected mutable Rsync tuple is stat-checked.
+  Healthy current metadata can proceed; stale metadata or obsolete Catalog
+  evidence uses exact-generation CAS invalidation and a coalesced worker wake.
+  HTTP preparation does not reconnect access, mutate observation timestamps,
+  or run a full Catalog build. Immutable source behavior remains unchanged.
+- No-active superseded/building projections are pending, not missing files. A
+  known mutable entry between generations must not be returned as file-not-found;
+  a current complete Catalog that proves an exact entry absent still returns 404.
+- Join a building generation only while its durable Catalog lease is genuinely
+  live. A missing or expired lease makes the abandoned generation eligible for
+  exact rearming; expire only proven-expired matching lease/fence rows under the
+  point-before-lease lock order, never steal a live lease. Pending observations
+  must not adopt and invalidate a newer active generation that wins the race.
+- After a pending Catalog becomes ready, the client performs one bounded physical
+  preparation verification, reloads the exact entry under the same token/ref and
+  AbortSignal, then issues one ticket. Continued drift stays retryable without
+  issuing a ticket. Manual retry uses this same flow, never task-derived Connect
+  or a guessed replacement entry. Directories do not enter content preparation.
+- Retain the authorized same-token/ref file as the inspector selection while
+  preparation waits, but clear old ticket content. A retryable timeout or failed
+  verification must leave the inspector and Retry action mounted; token or
+  selection changes still clear stale state.
 - Failed refreshes retain durable generation failure evidence and retry backoff.
   A last-good active generation must not override a newer failed or in-progress
   build when deciding whether another mutable build is due. Transient Provider
@@ -145,6 +172,12 @@ belongs only to the asynchronous reconciler.
   worker makes the replacement Catalog ready, select the entry and issue the
   first safe-preview ticket without an intervening Connect, Reconcile, Build,
   or retry; assert exact response bytes and same-node second-Task isolation.
+- Preview regressions also begin with physically changed SQLite/Rsync content
+  before any completion callback or worker refresh, covering initial preparation,
+  same-root child drift, superseded/building gaps, stale/failed attempts, exact
+  deletion only after a replacement completes, operator authorization, and node
+  switching/cancellation. Do not treat a preconditioned worker Build as proof
+  that the first preview flow repairs stale source metadata.
 - Frontend mapper/control tests require the closed state/count/reason contract,
   keep non-browsable lineages visible but disabled, and clear descendants until
   the exact selected version is browsable. Run repeat/race/full gates.

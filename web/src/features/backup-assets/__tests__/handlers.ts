@@ -224,6 +224,22 @@ export function createBackupAssetsHandlers(
       })
     ),
 
+    http.post(`${API_BASE}/recovery-points/:recoveryPointId/entries/:entryId/preview-source`, async ({ params, request }) => {
+      const body = await request.json();
+      if (body === null || typeof body !== "object" || Array.isArray(body) || !("schema_version" in body) || body.schema_version !== 1) {
+        return badRequest();
+      }
+      const point = [...fixture.recoveryPoints.online, ...fixture.recoveryPoints.offline].find(
+        (candidate) => candidate.id === params.recoveryPointId
+      );
+      const entry = fixture.entries.find(
+        (candidate) =>
+          candidate.recovery_point_id === params.recoveryPointId && candidate.entry_id === params.entryId
+      );
+      if (!point || !entry) return notFound();
+      return ok(point.catalog);
+    }),
+
     http.post(`${API_BASE}/recovery-points/:recoveryPointId/entries/:entryId/delivery-tickets`, async ({ request }) => {
       const body = await request.json();
       if (!isTicketBody(body)) return badRequest();

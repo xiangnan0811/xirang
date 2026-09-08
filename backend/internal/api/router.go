@@ -275,6 +275,9 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	backupContentHandler := handlers.NewBackupContentHandler(
 		backupContentService, dep.DB, dep.JWTManager, backupContentConfig,
 	).WithSchemePolicy(backupContentSchemePolicy)
+	if dep.BackupAssets != nil {
+		backupContentHandler.WithPreviewSourcePreparer(dep.BackupAssets)
+	}
 	var recoveryAuthorization handlers.RecoveryAuthorizationHandlerService
 	var recoveryTargetRoots handlers.RecoveryTargetRootHandlerService
 	var recoveryDowngrade handlers.RecoveryDowngradeHandlerService
@@ -478,6 +481,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 	secured.GET("/recovery-points/:id/entries", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.ListEntries)
 	secured.GET("/recovery-points/:id/entries/:entryId", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.GetEntry)
 	secured.GET("/recovery-points/:id/entries/:entryId/versions", middleware.RBAC(backupasset.PermissionBackupAssetsList), backupAssetHandler.ListEntryVersions)
+	secured.POST("/recovery-points/:id/entries/:entryId/preview-source", middleware.RBAC(backupasset.PermissionBackupAssetsList), middleware.RBAC(backupasset.PermissionBackupAssetsPreview), middleware.APIRateLimit(30, time.Minute), backupContentHandler.PreparePreviewSource)
 	secured.POST("/recovery-points/:id/entries/:entryId/delivery-tickets", middleware.RBAC(backupasset.PermissionBackupAssetsPreview), backupContentHandler.Issue)
 	recoveryRouteHandlers := []gin.HandlerFunc{
 		middleware.RBAC(backupasset.PermissionBackupAssetsRecover), middleware.RequireRole("admin"),

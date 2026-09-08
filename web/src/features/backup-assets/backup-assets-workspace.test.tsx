@@ -1909,6 +1909,59 @@ describe("BackupAssetsWorkspace", () => {
     expect(loadExactPreview).not.toHaveBeenCalled();
   });
 
+  it("keeps Retry on the authorized file when preview source is retryable without exposing ticket bytes", async () => {
+    const user = userEvent.setup();
+    const row = buildAssetRows(1)[0];
+    const retryPreview = vi.fn();
+    const route = {
+      ...defaultBackupAssetsRouteState("data"),
+      repositoryId: repository.id,
+      recoveryPointId: recoveryPoint.id,
+      entryId: row.asset.ref.entryId,
+    };
+    const state = createInitialBackupAssetsState(route);
+    state.result = {
+      status: "ready",
+      requestKey: "retry-preview",
+      generation: 1,
+      rows: [row],
+      nextCursor: null,
+      coverage: "complete",
+      authoritativeEmpty: false,
+      directory: null,
+    };
+    render(
+      <BackupAssetsWorkspace
+        controller={controller({
+          state,
+          selectedRecoveryPoint: recoveryPoint,
+          selectedEntry: { status: "ready", value: row.asset },
+          content: {
+            status: "error",
+            value: null,
+            error: {
+              code: "temporarily_unavailable",
+              translationKey: "backupAssets.errors.temporarilyUnavailable",
+              retryable: true,
+              action: "retry",
+            },
+          },
+          canRetryPreview: true,
+          actions: { ...controller().actions, retryPreview },
+        })}
+        processingRuntime={{ token: "operator-token", role: "operator", ensureStepUpProof: vi.fn() }}
+        onRoutePatch={vi.fn()}
+        onReturnOverview={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByTitle(/Preview|预览/)).not.toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: /Retry preview|重试预览/ });
+    await user.click(retry);
+    expect(retryPreview).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     {
       name: "missing token",
