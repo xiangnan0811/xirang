@@ -110,6 +110,9 @@ func main() {
 	if err := bootstrap.EncryptPlaintextPolicyDrillScripts(db); err != nil {
 		log.Fatal().Err(err).Msg("策略演练脚本明文加密失败，拒绝启动")
 	}
+	if err := bootstrap.EncryptServiceMonitorHeaders(db); err != nil {
+		log.Fatal().Err(err).Msg("服务监控请求头加密失败，拒绝启动")
+	}
 
 	hub := ws.NewHub(db, cfg.AllowedOrigins, cfg.WSAllowEmptyOrigin)
 	hubCtx, hubCancel := context.WithCancel(context.Background())
@@ -327,24 +330,25 @@ func main() {
 	snapshotIndexer := snapshot.NewIndexer(db, assetRuntime.LineageGuard(), assetRuntime.FoundationService())
 
 	router := api.NewRouter(api.Dependencies{
-		AppContext:        hubCtx,
-		DB:                db,
-		AuthService:       authService,
-		JWTManager:        jwtManager,
-		TaskManager:       taskManager,
-		Hub:               hub,
-		SettingsService:   settingsSvc,
-		AllowedOrigins:    cfg.AllowedOrigins,
-		LoginRateLimit:    cfg.LoginRateLimit,
-		LoginRateWindow:   cfg.LoginRateWindow,
-		RetryWorker:       retryWorker,
-		AlertDispatcher:   alertDispatcher,
-		MetricsToken:      cfg.MetricsToken,
-		MetricsRateLimit:  cfg.MetricsRateLimit,
-		TrustedProxies:    cfg.TrustedProxies,
-		MetricsRateWindow: cfg.MetricsRateWindow,
-		BackupAssets:      assetRuntime,
-		BackupContent:     assetRuntime.ContentService(),
+		AppContext:             hubCtx,
+		DB:                     db,
+		AuthService:            authService,
+		JWTManager:             jwtManager,
+		TaskManager:            taskManager,
+		ServiceMonitorNotifier: uptimeProber,
+		Hub:                    hub,
+		SettingsService:        settingsSvc,
+		AllowedOrigins:         cfg.AllowedOrigins,
+		LoginRateLimit:         cfg.LoginRateLimit,
+		LoginRateWindow:        cfg.LoginRateWindow,
+		RetryWorker:            retryWorker,
+		AlertDispatcher:        alertDispatcher,
+		MetricsToken:           cfg.MetricsToken,
+		MetricsRateLimit:       cfg.MetricsRateLimit,
+		TrustedProxies:         cfg.TrustedProxies,
+		MetricsRateWindow:      cfg.MetricsRateWindow,
+		BackupAssets:           assetRuntime,
+		BackupContent:          assetRuntime.ContentService(),
 		BackupContentConfig: func(context.Context) (handlers.BackupContentHandlerConfig, error) {
 			contentConfig, contentConfigErr := assetRuntime.ContentConfig()
 			if contentConfigErr != nil {

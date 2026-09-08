@@ -1,0 +1,48 @@
+{
+  "baseline": "e8d2668266b1a5586b5ff7b50937deab31dd0331",
+  "branch": "fix/audit-e8d2668-remediation",
+  "status": "local_gates_passed_review_pending",
+  "toolchain": "Go 1.26.6",
+  "verification": {
+    "backend_full": "go test -coverprofile=coverage.out ./... -count=1 -timeout=20m: PASS; final changed test packages rerun PASS",
+    "backend_coverage_percent": 69.7,
+    "backend_race": "Expanded CI race command: PASS, including backupasset, handlers, task, ws, auth, bootstrap, uptime, policy, automation",
+    "backend_lint_build": "golangci-lint v2.11.4: 0 issues; go build ./...: PASS",
+    "govulncheck": "PASS: no reachable vulnerabilities; one uncalled module-level advisory",
+    "frontend": "npm run check: typecheck, lint, 211 files / 1960 tests, production build PASS",
+    "database": "Full internal/database package with isolated PostgreSQL 17.11 and SQLite: PASS (366.605s)",
+    "postgres_concurrency": "Identity last-admin, zero-admin recovery, monitor result/config race, atomic task terminalization, batch idempotency: PASS; task/monitor/batch also passed -race",
+    "migration_smoke": "Fresh SQLite/PostgreSQL v81, plaintext header backfill and repeat stability, direct pristine/used downgrade guards: PASS",
+    "offline_recovery_smoke": "Real recover-admin binary refusal/confirmed promotion/repeat refusal and atomic audit chain: PASS",
+    "runtime_recovery": "Expired ordinary owner -> coherent terminal pair -> injected effect claim failure -> reconstructed manager drains once; PASS",
+    "ipv6": "Real loopback SSH with scoped credential and pinned host: PASS",
+    "service_smoke": "Isolated production server binary: login, encrypted write-only monitor creation, live successful probe, omitted header preservation, explicit clear, logout, restart readiness200 and revoked-token401: PASS",
+    "backupasset_coverage_percent": 73.6,
+    "backupasset_coverage_floor_percent": 55,
+    "backupasset_load": "CI-bounded load/security contract: PASS",
+    "workflow": "actionlint v1.7.12; release CI authority 4 tests; migration version/UTC and document freshness checks: PASS",
+    "browser_monitor_batch": "Real Chromium with mocked API; names-only headers, preserve/clear/replace payloads, 390px wrapping and scroll-reachable footer, durable dispatch state/no unconfirmed cleanup: PASS",
+    "browser_client": "Read-only XR10/XR12 actual browser QA in progress"
+  },
+  "review": {
+    "mode": "discovery",
+    "status": "not_started",
+    "required_lanes": [
+      "integration-reviewer / GPT-5.6-Sol",
+      "grok-reviewer / Grok-4.6",
+      "gemini-reviewer / Gemini 3.8 Flash"
+    ]
+  },
+  "external_status": {
+    "pull_request_ci": "not_started",
+    "image_publish": "not_executed",
+    "merge": "not_requested"
+  },
+  "notes": [
+    "User audit report is intentionally excluded from commits.",
+    "CHANGELOG.md remains Release Please maintained.",
+    "The first six-minute full database attempt exhausted its total time budget; the complete suite passed with a twenty-minute bound.",
+    "A pre-existing eight-millisecond cancellation test was made deterministic; the retry boundary regression passed twenty times under -race.",
+    "Monitor stale-snapshot regression was corrected to pause after query; an old-Save mutant failed and restored implementation passed."
+  ]
+}

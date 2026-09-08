@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -410,7 +412,7 @@ func dialSFTP(ctx context.Context, node model.Node, db *gorm.DB) (interface{ Clo
 	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	addr := fmt.Sprintf("%s:%d", node.Host, node.Port)
+	addr := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
 	sshClient, err := sshutil.DialSSH(dialCtx, addr, node.Username, auth, hostKey)
 	if err != nil {
 		return nil, nil, credential, err

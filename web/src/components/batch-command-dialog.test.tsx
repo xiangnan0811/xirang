@@ -136,6 +136,7 @@ describe("BatchCommandDialog", () => {
       undefined,
       false,
       "step-up-marker",
+      expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i),
     );
     expect(requestBatchCommandCredentialGrantMock.mock.invocationCallOrder[0]).toBeLessThan(createBatchCommandMock.mock.invocationCallOrder[0]);
     expect(onOpenChangeMock).toHaveBeenCalledWith(false);
@@ -177,6 +178,86 @@ describe("BatchCommandDialog", () => {
       undefined,
       false,
       "step-up-marker",
+      expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i),
     );
+  });
+
+  it("reuses the same idempotency key through a failed create retry and step-up", async () => {
+    const user = userEvent.setup();
+    withStepUpMock.mockImplementation(async (action: (proof?: string) => Promise<unknown>) => {
+      try {
+        return await action();
+      } catch {
+        return await action("step-up-marker");
+      }
+    });
+    createBatchCommandMock
+      .mockRejectedValueOnce(new Error("创建结果未确认"))
+      .mockResolvedValueOnce({ batchId: "batch-1", retain: false });
+
+    render(
+      <BatchCommandDialog
+        open
+        onOpenChange={onOpenChangeMock}
+        nodes={nodes}
+        token="auth-marker"
+        defaultNodeIds={[1]}
+        onSuccess={onSuccessMock}
+      />,
+    );
+
+    await user.type(screen.getByLabelText("命令"), "uptime");
+    await user.click(screen.getByRole("button", { name: "执行" }));
+    await user.click(screen.getByRole("button", { name: "确认并验证" }));
+
+    await waitFor(() => expect(createBatchCommandMock).toHaveBeenCalledTimes(2));
+    const firstKey = createBatchCommandMock.mock.calls[0]?.[6];
+    const replayKey = createBatchCommandMock.mock.calls[1]?.[6];
+    expect(firstKey).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/i));
+    expect(replayKey).toBe(firstKey);
+    expect(createBatchCommandMock.mock.calls[0]?.[5]).toBeUndefined();
+    expect(createBatchCommandMock.mock.calls[1]?.[5]).toBe("step-up-marker");
+    expect(onSuccessMock).toHaveBeenCalledWith({ batchId: "batch-1", retain: false });
+  });
+
+  it("preserves the key for a lost-response retry and rotates it after the command changes", async () => {
+    const user = userEvent.setup();
+    createBatchCommandMock
+      .mockRejectedValueOnce(new Error("创建结果未确认"))
+      .mockRejectedValueOnce(new Error("创建结果未确认"))
+      .mockResolvedValueOnce({ batchId: "batch-2", retain: false });
+
+    render(
+      <BatchCommandDialog
+        open
+        onOpenChange={onOpenChangeMock}
+        nodes={nodes}
+        token="auth-marker"
+        defaultNodeIds={[1]}
+        onSuccess={onSuccessMock}
+      />,
+    );
+
+    await user.type(screen.getByLabelText("命令"), "uptime");
+    await user.click(screen.getByRole("button", { name: "执行" }));
+    await user.click(screen.getByRole("button", { name: "确认并验证" }));
+
+    await waitFor(() => expect(screen.getByText("创建结果未确认")).toBeInTheDocument());
+    expect(screen.getByText("创建结果未确认").textContent).not.toMatch(/password|secret|token/i);
+
+    await user.click(screen.getByRole("button", { name: "确认并验证" }));
+    await waitFor(() => expect(createBatchCommandMock).toHaveBeenCalledTimes(2));
+    expect(createBatchCommandMock.mock.calls[1]?.[6]).toBe(createBatchCommandMock.mock.calls[0]?.[6]);
+
+    await user.click(screen.getByRole("button", { name: "返回编辑" }));
+    await user.clear(screen.getByLabelText("命令"));
+    await user.type(screen.getByLabelText("命令"), "df -h");
+    await user.click(screen.getByRole("button", { name: "执行" }));
+    await user.click(screen.getByRole("button", { name: "确认并验证" }));
+
+    await waitFor(() => expect(createBatchCommandMock).toHaveBeenCalledTimes(3));
+    expect(createBatchCommandMock.mock.calls[2]?.[2]).toBe("df -h");
+    expect(createBatchCommandMock.mock.calls[2]?.[6]).not.toBe(createBatchCommandMock.mock.calls[0]?.[6]);
+    expect(onSuccessMock).toHaveBeenCalledWith({ batchId: "batch-2", retain: false });
   });
 });

@@ -7,9 +7,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/policy"
 
 	"gorm.io/gorm"
 )
@@ -18,10 +18,20 @@ type TaskTriggerer interface {
 	TriggerAutomation(taskID uint) (uint, error)
 }
 
+type KeyedTaskTriggerer interface {
+	TriggerAutomationWithKey(taskID uint, key string) (uint, error)
+}
+
+type PolicyController interface {
+	PausePolicyNext(ctx context.Context, policyID uint) error
+	DisablePolicy(ctx context.Context, policyID uint) error
+}
+
 // Dispatcher matches events to enabled rules and executes their actions.
 type Dispatcher struct {
-	db        *gorm.DB
-	triggerer TaskTriggerer
+	db               *gorm.DB
+	triggerer        TaskTriggerer
+	policyController PolicyController
 }
 
 // NewDispatcher creates a Dispatcher with the given DB.
@@ -31,6 +41,10 @@ func NewDispatcher(db *gorm.DB) *Dispatcher {
 
 func (d *Dispatcher) SetTaskTriggerer(triggerer TaskTriggerer) {
 	d.triggerer = triggerer
+}
+
+func (d *Dispatcher) SetPolicyController(controller PolicyController) {
+	d.policyController = controller
 }
 
 // Dispatch finds matching enabled rules for the event and executes their actions.
@@ -197,19 +211,18 @@ func (d *Dispatcher) execPausePolicy(ctx context.Context, actionConfig string, e
 	if policyID == 0 {
 		return fmt.Errorf("pause_policy: policy_id 缺失或解析失败 (config=%s)", actionConfig)
 	}
-
-	result := d.db.WithContext(ctx).Model(&model.Policy{}).Where("id = ?", policyID).Update("skip_next", true)
-	if result.Error != nil {
-		return fmt.Errorf("pause_policy: DB 更新失败: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("pause_policy: 未找到 Policy id=%d", policyID)
+	if d.policyController != nil {
+		if err := d.policyController.PausePolicyNext(ctx, policyID); err != nil {
+			return fmt.Errorf("pause_policy: %w", err)
+		}
+	} else if err := policy.NewControlService(d.db, nil).PauseNext(ctx, policyID); err != nil {
+		return fmt.Errorf("pause_policy: %w", err)
 	}
 	log.Info().Uint("policy_id", policyID).Msg("automation: policy paused (skip_next=true)")
 	return nil
 }
 
-// execDisablePolicy sets policy.Enabled = false for the policy_id in config.
+// execDisablePolicy disables a policy and durably clears generated cron specs.
 func (d *Dispatcher) execDisablePolicy(ctx context.Context, actionConfig string, evtCtx map[string]interface{}) error {
 	log := logger.Module("automation")
 	cfg := renderConfig(actionConfig, evtCtx)
@@ -217,13 +230,12 @@ func (d *Dispatcher) execDisablePolicy(ctx context.Context, actionConfig string,
 	if policyID == 0 {
 		return fmt.Errorf("disable_policy: policy_id 缺失或解析失败 (config=%s)", actionConfig)
 	}
-
-	result := d.db.WithContext(ctx).Model(&model.Policy{}).Where("id = ?", policyID).Update("enabled", false)
-	if result.Error != nil {
-		return fmt.Errorf("disable_policy: DB 更新失败: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("disable_policy: 未找到 Policy id=%d", policyID)
+	if d.policyController != nil {
+		if err := d.policyController.DisablePolicy(ctx, policyID); err != nil {
+			return fmt.Errorf("disable_policy: %w", err)
+		}
+	} else if err := policy.NewControlService(d.db, nil).Disable(ctx, policyID); err != nil {
+		return fmt.Errorf("disable_policy: %w", err)
 	}
 	log.Info().Uint("policy_id", policyID).Msg("automation: policy disabled")
 	return nil
@@ -249,7 +261,16 @@ func (d *Dispatcher) execTriggerTask(ctx context.Context, actionConfig string, e
 	default:
 	}
 
-	runID, err := d.triggerer.TriggerAutomation(taskID)
+	var runID uint
+	if key, ok := evtCtx["_effect_key"].(string); ok && strings.TrimSpace(key) != "" {
+		keyed, supported := d.triggerer.(KeyedTaskTriggerer)
+		if !supported {
+			return "", fmt.Errorf("trigger_task: 任务执行器不支持幂等触发")
+		}
+		runID, err = keyed.TriggerAutomationWithKey(taskID, key)
+	} else {
+		runID, err = d.triggerer.TriggerAutomation(taskID)
+	}
 	if err != nil {
 		return "", fmt.Errorf("trigger_task: 触发 Task id=%d 失败: %w", taskID, err)
 	}

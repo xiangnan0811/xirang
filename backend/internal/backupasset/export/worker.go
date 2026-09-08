@@ -21,7 +21,7 @@ import (
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/content"
-	"xirang/backend/internal/database"
+	"xirang/backend/internal/dbtx"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
@@ -1994,7 +1994,7 @@ func (worker *PersistentWorker) claimFinalArchiveNonce(
 	if !validStoreLocator(locator) {
 		return ErrAttemptFenceLost
 	}
-	return database.WithSQLiteBusyRetryTx(ctx, worker.db, func(tx *gorm.DB) error {
+	return dbtx.WithSQLiteBusyRetryTx(ctx, worker.db, func(tx *gorm.DB) error {
 		now := worker.now().UTC()
 		var discovered struct {
 			OwnerUserID uint `gorm:"column:owner_user_id"`
@@ -3863,7 +3863,7 @@ func (coordinator *AttemptCoordinator) MaintainSourceLeases(
 			resultErr = errors.Join(resultErr, releaseErr)
 		}()
 	}
-	resultErr = database.WithSQLiteBusyRetryTx(ctx, coordinator.db, func(tx *gorm.DB) error {
+	resultErr = dbtx.WithSQLiteBusyRetryTx(ctx, coordinator.db, func(tx *gorm.DB) error {
 		now := coordinator.now().UTC()
 		var job model.BackupAssetExportJob
 		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.JobID).Limit(1).Find(&job)
@@ -4202,7 +4202,7 @@ func (coordinator *AttemptCoordinator) Claim(ctx context.Context, request Attemp
 		return AttemptClaim{}, ErrAttemptNotClaimable
 	}
 	var claim AttemptClaim
-	err := database.WithSQLiteBusyRetryTx(ctx, coordinator.db, func(tx *gorm.DB) error {
+	err := dbtx.WithSQLiteBusyRetryTx(ctx, coordinator.db, func(tx *gorm.DB) error {
 		now := coordinator.now().UTC()
 		var buckets quotaBucketPair
 		if coordinator.workerCapacity != nil {

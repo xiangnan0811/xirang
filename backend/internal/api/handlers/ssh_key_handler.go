@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -577,7 +578,7 @@ func (h *SSHKeyHandler) TestConnection(c *gin.Context) {
 			continue
 		}
 
-		addr := fmt.Sprintf("%s:%d", node.Host, node.Port)
+		addr := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 
 		start := time.Now()

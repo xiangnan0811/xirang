@@ -32,21 +32,17 @@ All-in-One 容器只提供 HTTP 单入口 `10761`。公网 HTTPS 应由外部反
 
 ```env
 SSH_STRICT_HOST_KEY_CHECKING=true
-SSH_AUTO_ACCEPT_NEW_HOSTS=true
+SSH_AUTO_ACCEPT_NEW_HOSTS=false
 SSH_KNOWN_HOSTS_PATH=/data/.ssh/known_hosts
 ```
 
 含义：
 
-- 首次连接新主机时自动接受并持久化指纹。
+- 首次连接未知主机时拒绝连接；先通过独立可信渠道核验主机指纹，再预置 known_hosts。
 - 已知主机指纹变化时拒绝连接，避免中间人攻击。
 - All-in-One 镜像默认把 known_hosts 放在 `/data` 下，随数据卷持久化。
 
-如需禁用首次自动接受，设置：
-
-```env
-SSH_AUTO_ACCEPT_NEW_HOSTS=false
-```
+只有明确接受首次连接信任风险时，才设置 `SSH_AUTO_ACCEPT_NEW_HOSTS=true`。此选项会自动记录未知主机密钥，但不会允许已知主机密钥变化；`strict=true` 本身不代表首连身份已经人工核验。
 
 ## Webhook / 通知 SSRF 防护
 
@@ -114,3 +110,16 @@ Malware 结果区分 `not_scanned`、`no_finding`、`finding`、`stale`；positi
 Xirang 会加密存储 SSH 密码、SSH 私钥、TOTP 密钥、通知端点、代理地址等敏感字段。请妥善备份 `DATA_ENCRYPTION_KEY`；数据库备份没有对应密钥时无法恢复敏感字段明文。
 
 备份资产控制面同样依赖该密钥。仓库访问绑定、冻结原因和 wrapped domain key 只有在恢复原数据库 **并且** 使用匹配的 `DATA_ENCRYPTION_KEY` 时才可读。仅保留 Provider 仓库只能在 Admin 有效重连/导入后重建可验证的 RecoveryPoint/Catalog 事实，不能重建 overlays、审计、策略、冻结或 Task 关系。错误或缺失密钥必须失败关闭，不得静默换绑或把 rebuild 报成成功。详见 [备份、恢复与快照](./backup-recovery.md#控制面灾难恢复)。
+
+监控 HTTP 请求头采用写入专用语义：查询只返回已配置标志和头名称，不返回值或 `***` 占位值。`http_headers` 沿用 JSON 对象字符串编码：更新时省略该字段保留已有配置，显式字符串 `"{}"` 清空，其它合法非空对象字符串整体替换；历史明文在服务就绪前加密。
+
+两步登录的 pending token 绑定当前账户版本和 TOTP 状态，成功完成后只能消费一次。恢复码消费使用并发安全事务，不会因为正常登录而撤销该用户的其他合法会话。TOTP 初始化返回 `enrollment_id` 和 `expires_at`，验证必须提交同一个未过期初始化标识；再次初始化会使旧标识失效，已启用的账户不能直接覆盖现有密钥。
+
+## 最后管理员与离线恢复
+
+修改角色和删除用户不能移除最后一个管理员，并发请求也必须保留至少一个管理员。服务启动不会自动提升现有账户。若经过离线核验确认为零管理员状态，可在停机维护窗口使用镜像内 `/usr/local/bin/xirang-recover-admin`（源码入口 `backend/cmd/recover-admin`）：
+
+1. 备份数据库及对应加密密钥，确认数据库已迁移到本版本；恢复工具不执行迁移，也不创建用户。
+2. 使用受控运维会话设置临时 `XIRANG_BREAK_GLASS_CONFIRMATION`，并执行 `xirang-recover-admin -username <现有账户> -reason <8–512 字节操作原因> -confirmation <同一确认值>`。沿用该部署的数据库及配置环境。不要将真实凭据用作确认值，避免将其写入 shell 历史或长期部署配置；这只是明确的本地操作确认，不是远程认证或密码替代。
+3. 工具仅在没有管理员时提升现有账户，原密码和 TOTP 保持不变；同时撤销旧版本会话/待完成登录，并原子保存操作原因与哈希链审计。确认失败、账户不存在、已有管理员或审计写入失败均不会提升权限。
+4. 核验审计和正常登录后清除临时确认环境变量，再恢复服务。不得通过删除安全审计或修改迁移版本来绕过保护。

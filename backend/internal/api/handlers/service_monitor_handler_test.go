@@ -33,7 +33,7 @@ func TestServiceMonitorList_Empty(t *testing.T) {
 	db := openServiceMonitorTestDB(t)
 	r := gin.New()
 	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
-	handler := NewServiceMonitorHandler(db)
+	handler := NewServiceMonitorHandler(db, nil)
 	r.GET("/service-monitors", handler.List)
 
 	req := httptest.NewRequest(http.MethodGet, "/service-monitors", nil)
@@ -59,7 +59,7 @@ func TestServiceMonitorCRUD(t *testing.T) {
 	db := openServiceMonitorTestDB(t)
 	r := gin.New()
 	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
-	handler := NewServiceMonitorHandler(db)
+	handler := NewServiceMonitorHandler(db, nil)
 	r.GET("/service-monitors", handler.List)
 	r.POST("/service-monitors", handler.Create)
 	r.GET("/service-monitors/:id", handler.Get)
@@ -151,7 +151,7 @@ func TestServiceMonitorCreateValidation(t *testing.T) {
 	db := openServiceMonitorTestDB(t)
 	r := gin.New()
 	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
-	handler := NewServiceMonitorHandler(db)
+	handler := NewServiceMonitorHandler(db, nil)
 	r.POST("/service-monitors", handler.Create)
 
 	tests := []struct {
@@ -185,7 +185,7 @@ func TestServiceMonitorDuplicateName(t *testing.T) {
 	db := openServiceMonitorTestDB(t)
 	r := gin.New()
 	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
-	handler := NewServiceMonitorHandler(db)
+	handler := NewServiceMonitorHandler(db, nil)
 	r.POST("/service-monitors", handler.Create)
 
 	body1 := `{"name":"FAKE_TEST_DUP_MON_FOR_TEST_ONLY","type":"http","target":"https://example.com"}`
@@ -212,7 +212,7 @@ func TestServiceMonitorGetNotFound(t *testing.T) {
 	db := openServiceMonitorTestDB(t)
 	r := gin.New()
 	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
-	handler := NewServiceMonitorHandler(db)
+	handler := NewServiceMonitorHandler(db, nil)
 	r.GET("/service-monitors/:id", handler.Get)
 
 	req := httptest.NewRequest(http.MethodGet, "/service-monitors/99999", nil)
@@ -228,7 +228,7 @@ func TestServiceMonitorUpdateNotFound(t *testing.T) {
 	db := openServiceMonitorTestDB(t)
 	r := gin.New()
 	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
-	handler := NewServiceMonitorHandler(db)
+	handler := NewServiceMonitorHandler(db, nil)
 	r.PUT("/service-monitors/:id", handler.Update)
 
 	body := `{"name":"r","type":"http","target":"https://example.com"}`
@@ -245,7 +245,7 @@ func TestServiceMonitorUpdateNotFound(t *testing.T) {
 func TestServiceMonitorStatusPage(t *testing.T) {
 	db := openServiceMonitorTestDB(t)
 	r := gin.New()
-	handler := NewServiceMonitorHandler(db)
+	handler := NewServiceMonitorHandler(db, nil)
 
 	// Seed monitors.
 	db.Create(&model.ServiceMonitor{

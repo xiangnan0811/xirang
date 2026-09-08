@@ -1261,8 +1261,10 @@ export interface ServiceMonitorView {
   timeoutSeconds: number;
   httpMethod: HttpMethod;
   httpExpectedStatus: number;
+  /** Header names are safe to display; values never cross the API boundary. */
+  httpHeaderNames: string[];
+  httpHeadersConfigured: boolean;
   enabled: boolean;
-  httpHeaderList: HeaderKV[]; // parsed form; raw JSON string lives only in API boundary
   lastStatus: "up" | "down" | "unknown";
   uptimePct: number;
   lastCheckedAt: string | null;
@@ -1279,6 +1281,7 @@ export interface NewServiceMonitorInput {
   timeoutSeconds?: number;
   httpMethod?: HttpMethod;
   httpExpectedStatus?: number;
+  /** Undefined preserves existing hidden headers; [] explicitly clears them. */
   httpHeaderList?: HeaderKV[];
   enabled?: boolean;
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -328,7 +329,7 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		return
 	}
 
-	addr := fmt.Sprintf("%s:%d", node.Host, node.Port)
+	addr := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
 	ctx, cancel := context.WithTimeout(context.Background(), terminalSessionTimeout)
 
 	dialStartedAt := time.Now()

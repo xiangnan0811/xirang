@@ -19,8 +19,8 @@ const RAW_MONITOR = {
   timeout_seconds: 10,
   http_method: "get",
   http_expected_status: 200,
-  http_headers: '{"X-Token":"abc"}',
-  enabled: true,
+  http_header_names: ["X-Token"],
+  http_headers_configured: true,
   last_status: "up",
   uptime_pct: 99.9,
   last_checked_at: "2026-05-06T10:00:00Z",
@@ -41,7 +41,7 @@ describe("service-monitors api", () => {
     fetchMock.mockReset();
   });
 
-  it("list 将后端 snake_case 字段映射为前端 camelCase 并解析 http_headers", async () => {
+  it("list 将后端 snake_case 字段映射为前端 camelCase 并保留请求头名称", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: [RAW_MONITOR] }))
     );
@@ -54,26 +54,32 @@ describe("service-monitors api", () => {
       id: 1,
       intervalSeconds: 60,
       timeoutSeconds: 10,
-      httpMethod: "GET", // 小写 get 应被归一化为大写枚举
+      httpMethod: "GET",
       httpExpectedStatus: 200,
-      httpHeaderList: [{ key: "X-Token", value: "abc" }],
+      httpHeaderNames: ["X-Token"],
+      httpHeadersConfigured: true,
       lastStatus: "up",
       uptimePct: 99.9,
       lastCheckedAt: "2026-05-06T10:00:00Z",
     });
   });
 
-  it("list 对坏 JSON 的 http_headers 退化为空数组，不抛出", async () => {
+  it("list 不接受响应中的隐藏请求头值", async () => {
     fetchMock.mockResolvedValueOnce(
       createMockResponse(
         200,
-        JSON.stringify({ code: 0, message: "ok", data: [{ ...RAW_MONITOR, http_headers: "not-json" }] })
+        JSON.stringify({
+          code: 0,
+          message: "ok",
+          data: [{ ...RAW_MONITOR, http_header_names: "not-an-array", http_headers_configured: "yes" }],
+        })
       )
     );
 
     const result = await api.list("token");
 
-    expect(result[0].httpHeaderList).toEqual([]);
+    expect(result[0].httpHeaderNames).toEqual([]);
+    expect(result[0].httpHeadersConfigured).toBe(true);
   });
 
   it("create 将 httpHeaderList 序列化为后端 http_headers JSON 字段", async () => {
@@ -109,5 +115,22 @@ describe("service-monitors api", () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(init.body as string) as Record<string, unknown>;
     expect(body.http_headers).toBe("{}");
+  });
+
+  it("update omits hidden headers when caller did not explicitly replace them", async () => {
+    fetchMock.mockResolvedValueOnce(
+      createMockResponse(200, JSON.stringify({ code: 0, message: "ok", data: RAW_MONITOR }))
+    );
+
+    await api.update("token", 1, {
+      name: "API",
+      type: "http",
+      target: "https://example.com/health",
+      enabled: false,
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("http_headers");
   });
 });

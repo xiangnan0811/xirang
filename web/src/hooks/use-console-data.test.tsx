@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
-import type { NewTaskInput, NodeRecord, OverviewTrafficSeries, TaskRecord } from "@/types/domain";
+import type { AlertRecord, NewTaskInput, NodeRecord, OverviewTrafficSeries, TaskRecord } from "@/types/domain";
 import { useConsoleData } from "./use-console-data";
 
 const { apiClientMock, useStepUpActionMock, oneShotStepUpOptions } = vi.hoisted(() => {
@@ -153,6 +153,22 @@ function createTask(id: number, status: TaskRecord["status"], progress: number):
     updatedAt: "2026-03-06 10:00:00",
     speedMbps: 120,
     enabled: true,
+  };
+}
+
+function createAlert(id: string, taskId: number, status: AlertRecord["status"]): AlertRecord {
+  return {
+    id,
+    nodeName: "node-1",
+    nodeId: 1,
+    taskId,
+    policyName: "每日备份",
+    severity: "critical",
+    status,
+    errorCode: "TASK_FAILED",
+    message: "task failed",
+    triggeredAt: "2026-03-06 10:00:00",
+    retryable: status !== "resolved",
   };
 }
 
@@ -644,5 +660,111 @@ describe("useConsoleData", () => {
     unmount();
     expect(capturedSignal?.aborted).toBe(true);
     pending.reject(new DOMException("Aborted", "AbortError"));
+  });
+
+  it("retryTask 不会 resolve 告警，排队/运行中保持 open/acked", async () => {
+    const openAlert = createAlert("alert-1", 101, "open");
+    const ackedAlert = createAlert("alert-2", 101, "acked");
+    apiClientMock.getNodes.mockResolvedValue([]);
+    apiClientMock.getAlerts.mockResolvedValue([openAlert, ackedAlert]);
+    apiClientMock.getTasks.mockResolvedValue([createTask(101, "failed", 0)]);
+    apiClientMock.requestTaskManualTriggerCredentialGrant.mockResolvedValue({ id: 1, status: "active" });
+    apiClientMock.triggerTask.mockResolvedValue(undefined);
+    apiClientMock.getTask.mockResolvedValue(createTask(101, "running", 12));
+
+    const { result } = renderHook(() => useConsoleData("token-1"));
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    await act(async () => {
+      await result.current.refreshTasks();
+      await result.current.retryTask(101);
+    });
+
+    expect(apiClientMock.resolveAlert).not.toHaveBeenCalled();
+    expect(apiClientMock.getAlerts).toHaveBeenCalledTimes(2);
+    expect(result.current.alerts.map((alert) => alert.status)).toEqual(["open", "acked"]);
+    expect(result.current.alerts.map((alert) => alert.retryable)).toEqual([true, true]);
+    expect(result.current.alerts.map((alert) => alert.message)).toEqual(["task failed", "task failed"]);
+    expect(result.current.tasks[0]?.status).toBe("running");
+  });
+
+  it("retryAlert 走任务重试且保持后端权威状态", async () => {
+    const openAlert = createAlert("alert-9", 202, "open");
+    apiClientMock.getNodes.mockResolvedValue([]);
+    apiClientMock.getAlerts
+      .mockResolvedValueOnce([openAlert])
+      .mockResolvedValueOnce([{ ...openAlert, status: "acked", retryable: true }]);
+    apiClientMock.getTasks.mockResolvedValue([createTask(202, "failed", 0)]);
+    apiClientMock.requestTaskManualTriggerCredentialGrant.mockResolvedValue({ id: 2, status: "active" });
+    apiClientMock.triggerTask.mockResolvedValue(undefined);
+    apiClientMock.getTask.mockResolvedValue(createTask(202, "pending", 0));
+
+    const { result } = renderHook(() => useConsoleData("token-1"));
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    await act(async () => {
+      await result.current.refreshTasks();
+      await result.current.retryAlert("alert-9");
+    });
+
+    expect(apiClientMock.resolveAlert).not.toHaveBeenCalled();
+    expect(result.current.alerts).toEqual([
+      expect.objectContaining({ id: "alert-9", status: "acked", retryable: true, message: "task failed" }),
+    ]);
+    expect(result.current.tasks[0]?.status).toBe("pending");
+  });
+
+  it("retry 后告警刷新失败时仍保持 open，不写成 resolved", async () => {
+    const openAlert = createAlert("alert-3", 303, "open");
+    apiClientMock.getNodes.mockResolvedValue([]);
+    apiClientMock.getAlerts
+      .mockResolvedValueOnce([openAlert])
+      .mockRejectedValueOnce(new Error("alerts down"));
+    apiClientMock.getTasks.mockResolvedValue([createTask(303, "failed", 0)]);
+    apiClientMock.requestTaskManualTriggerCredentialGrant.mockResolvedValue({ id: 3, status: "active" });
+    apiClientMock.triggerTask.mockResolvedValue(undefined);
+    apiClientMock.getTask.mockResolvedValue(createTask(303, "running", 8));
+
+    const { result } = renderHook(() => useConsoleData("token-1"));
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.retryTask(303);
+    });
+
+    expect(apiClientMock.resolveAlert).not.toHaveBeenCalled();
+    expect(result.current.alerts).toEqual([
+      expect.objectContaining({ id: "alert-3", status: "open", retryable: true }),
+    ]);
+  });
+
+  it("后端真正成功关闭后前端与服务端一致且未调用 resolveAlert", async () => {
+    const openAlert = createAlert("alert-4", 404, "open");
+    apiClientMock.getNodes.mockResolvedValue([]);
+    apiClientMock.getAlerts
+      .mockResolvedValueOnce([openAlert])
+      .mockResolvedValueOnce([{ ...openAlert, status: "resolved", retryable: false }]);
+    apiClientMock.getTasks.mockResolvedValue([createTask(404, "failed", 0)]);
+    apiClientMock.requestTaskManualTriggerCredentialGrant.mockResolvedValue({ id: 4, status: "active" });
+    apiClientMock.triggerTask.mockResolvedValue(undefined);
+    apiClientMock.getTask.mockResolvedValue(createTask(404, "success", 100));
+
+    const { result } = renderHook(() => useConsoleData("token-1"));
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    await act(async () => {
+      await result.current.refreshTasks();
+      await result.current.retryTask(404);
+    });
+
+    expect(apiClientMock.resolveAlert).not.toHaveBeenCalled();
+    expect(result.current.alerts[0]?.status).toBe("resolved");
+    expect(result.current.alerts[0]?.retryable).toBe(false);
+    expect(result.current.tasks[0]?.status).toBe("success");
   });
 });

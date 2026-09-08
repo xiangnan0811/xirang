@@ -30,6 +30,8 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
   const [step, setStep] = useState<Step>("setup");
   const [secret, setSecret] = useState("");
   const [qrUrl, setQrUrl] = useState("");
+  const [enrollmentId, setEnrollmentId] = useState("");
+  const [enrollmentExpiresAt, setEnrollmentExpiresAt] = useState("");
   const [verifyCode, setVerifyCode] = useState("");
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -42,14 +44,22 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
     if (!open || step !== "setup" || secret) return;
     let cancelled = false;
     setLoading(true);
-    setError(null);
+    setEnrollmentId("");
+    setEnrollmentExpiresAt("");
 
     apiClient
       .totpSetup(token)
       .then((data) => {
         if (cancelled) return;
+        if (!data.enrollmentId) {
+          setError(t("totp.enrollmentMissing"));
+          return;
+        }
+        setError(null);
         setSecret(data.secret);
         setQrUrl(data.qrUrl);
+        setEnrollmentId(data.enrollmentId);
+        setEnrollmentExpiresAt(data.expiresAt);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -65,7 +75,9 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
         if (!cancelled) setLoading(false);
       });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [open, step, secret, token, t]);
 
   useEffect(() => {
@@ -82,6 +94,8 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
       setStep("setup");
       setSecret("");
       setQrUrl("");
+      setEnrollmentId("");
+      setEnrollmentExpiresAt("");
       setVerifyCode("");
       setRecoveryCodes([]);
       setError(null);
@@ -97,8 +111,19 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
     event.preventDefault();
     setLoading(true);
     setError(null);
+    const expiresAtMs = Date.parse(enrollmentExpiresAt);
+    if (!enrollmentId || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+      setEnrollmentId("");
+      setEnrollmentExpiresAt("");
+      setSecret("");
+      setQrUrl("");
+      setStep("setup");
+      setError(t("totp.enrollmentExpired"));
+      setLoading(false);
+      return;
+    }
     try {
-      const data = await apiClient.totpVerify(token, verifyCode);
+      const data = await apiClient.totpVerify(token, verifyCode, enrollmentId);
       setRecoveryCodes(data.recoveryCodes);
       setStep("recovery");
     } catch (err) {
@@ -215,7 +240,7 @@ export function TOTPSetupDialog({ open, onOpenChange, token, onSuccess }: TOTPSe
           {step === "setup" && (
             <Button
               type="button"
-              disabled={loading || !secret}
+              disabled={loading || !secret || !enrollmentId}
               onClick={() => { setStep("verify"); setError(null); }}
             >
               {t("common.next")}

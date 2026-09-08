@@ -111,7 +111,7 @@ func ResolveSSHHostKeyCallback() (ssh.HostKeyCallback, error) {
 		if callbackErr := callback(hostname, remote, key); callbackErr != nil {
 			var keyErr *knownhosts.KeyError
 			if errors.As(callbackErr, &keyErr) && len(keyErr.Want) == 0 {
-				autoAccept, _ := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", true)
+				autoAccept, _ := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", false)
 				if !autoAccept {
 					return fmt.Errorf("未知主机密钥被拒绝，当前已禁用自动接受(SSH_AUTO_ACCEPT_NEW_HOSTS=false)")
 				}

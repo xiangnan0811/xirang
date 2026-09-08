@@ -1,6 +1,12 @@
 import i18n from "@/i18n";
 import { request } from "./core";
 
+interface BatchDispatchResponse {
+  task_id: number;
+  status: "pending" | "dispatching" | "accepted" | "failed";
+  last_error?: string;
+}
+
 interface BatchCreateResponse {
   batch_id: string;
   task_ids: number[];
@@ -20,6 +26,7 @@ interface BatchStatusResponse {
   }>;
   total: number;
   status_counts: Record<string, number>;
+  dispatches?: BatchDispatchResponse[];
 }
 
 export interface BatchResult {
@@ -40,6 +47,7 @@ export interface BatchStatus {
     nodeId: number;
     nodeName: string;
     lastError?: string;
+    dispatchStatus?: BatchDispatchResponse["status"];
   }>;
 }
 
@@ -51,12 +59,14 @@ export function createBatchApi() {
       command: string,
       name?: string,
       retain?: boolean,
-      stepUpProof?: string
+      stepUpProof?: string,
+      idempotencyKey: string = crypto.randomUUID()
     ): Promise<BatchResult> {
       const payload = await request<BatchCreateResponse>("/batch-commands", {
         method: "POST",
         token,
         stepUpProof,
+        idempotencyKey,
         body: { node_ids: nodeIds, command, name, retain: retain ?? false },
       });
       return {
@@ -72,18 +82,24 @@ export function createBatchApi() {
         `/batch-commands/${batchId}`,
         { token }
       );
+      const dispatches = new Map((payload.dispatches ?? []).map((dispatch) => [dispatch.task_id, dispatch]));
       return {
         batchId: payload.batch_id,
         total: payload.total,
         statusCounts: payload.status_counts ?? {},
-        tasks: (payload.tasks ?? []).map((t) => ({
-          id: t.id,
-          name: t.name,
-          status: t.status,
-          nodeId: t.node?.id ?? t.node_id,
-          nodeName: t.node?.name ?? i18n.t("common.nodeDefault", { id: t.node_id }),
-          lastError: t.last_error,
-        })),
+        tasks: (payload.tasks ?? []).map((t) => {
+          const dispatch = dispatches.get(t.id);
+          const dispatchError = dispatch && dispatch.status !== "accepted" ? dispatch.last_error : undefined;
+          return {
+            id: t.id,
+            name: t.name,
+            status: t.status,
+            nodeId: t.node?.id ?? t.node_id,
+            nodeName: t.node?.name ?? i18n.t("common.nodeDefault", { id: t.node_id }),
+            lastError: t.last_error || dispatchError,
+            dispatchStatus: dispatch?.status,
+          };
+        }),
       };
     },
 

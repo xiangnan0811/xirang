@@ -44,6 +44,7 @@
 - `DOCKERHUB_TOKEN`
 - 官方 Docker Hub 仓库固定为 `linnea7171/xirang`，发布与描述同步 workflow 不读取命名空间变量。
 
+覆盖率上传使用 GitHub OIDC（Codecov action 的 `use_oidc: true`），无需 `CODECOV_TOKEN`；只有后端/前端 job 获得 `id-token: write`。上传关闭自动文件搜索。PR 上传失败会明确告警，main 上传失败会使 CI 失败并阻断正式镜像发布；本地覆盖率阈值始终独立执行。
 ### Deploy Environment 级
 
 - `DEPLOY_HOST`
@@ -65,11 +66,9 @@
    - `X.Y.Z`
    - `latest`
 
-   发布步骤为 **按平台原生构建 digest → Trivy 扫描每个平台 digest →
-   合并并推送正式 multi-arch manifest/tag → attest**。扫描通过前不会创建
-   正式 `vX.Y.Z` / `X.Y.Z` / `latest` 标签；当扫描到 HIGH/CRITICAL 漏洞时，
-   workflow 会在 manifest/tag 发布前失败，不会污染 Docker Hub 的 `latest`
-   标签。Trivy 当前固定到 v0.36.0 的解引用 commit
+   发布步骤为 **一次解析并冻结 source SHA → 等待同仓库 main push 的同 SHA 完整 CI 成功 → 按平台原生构建 digest → Trivy 扫描每个平台 digest → 再次核验 CI → 提升正式 multi-arch manifest/tag → attest**。
+   不接受其他 SHA、fork、PR 或其他工作流的绿色结果。缺失/未完成 CI 最多等待 25 分钟；失败、取消或等待超时均拒绝发布，较新的失败运行不能被旧成功运行掩盖。所有架构只 checkout 冻结的 SHA；构建期间移动输入分支不会改变来源。验证脚本来自发布工作流自身的不可变提交，手动重建历史源码也不能替换验证规则。
+   正式标签仅指向扫描通过的 digest；发布摘要记录 source SHA、CI run、各架构 digest 和扫描结论。当扫描到 HIGH/CRITICAL 漏洞时，workflow 在 manifest/tag 发布前失败，不会更新 `latest`。Trivy 当前固定到 v0.36.0 的解引用 commit
    `ed142fd0673e97e23eac54620cfb913e5ce36c25`，该 ref 已在 2026-05-06
    通过 `git ls-remote` 核验。扫描平台 digest 时 workflow 会显式传入
    `TRIVY_PLATFORM`，避免 arm64 digest 被 Trivy 默认按 amd64 解析。

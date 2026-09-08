@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -134,7 +136,7 @@ func dialSSHForDocker(ctx context.Context, node model.Node, db *gorm.DB) (*ssh.C
 	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	addr := fmt.Sprintf("%s:%d", node.Host, node.Port)
+	addr := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
 	client, err := sshutil.DialSSH(dialCtx, addr, node.Username, auth, hostKey)
 	return client, credential, err
 }

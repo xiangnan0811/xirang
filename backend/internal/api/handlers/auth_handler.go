@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -322,44 +322,36 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 // @Failure      401  {object}  handlers.Response
 // @Router       /auth/2fa/setup [post]
 func (h *AuthHandler) TOTPSetup(c *gin.Context) {
-	if h.db == nil {
-		respondInternalError(c, fmt.Errorf("db 未注入"))
+	if h.authService == nil {
+		respondInternalError(c, fmt.Errorf("认证服务未注入"))
 		return
 	}
 	userID := c.GetUint(middleware.CtxUserID)
-	var user model.User
-	if err := h.db.Select("id", "totp_enabled").First(&user, userID).Error; err != nil {
-		respondNotFound(c, "用户不存在")
-		return
-	}
-	if user.TOTPEnabled {
-		respondBadRequest(c, "两步验证已启用，如需轮换请先完成二次验证并禁用后重新启用")
-		return
-	}
-
-	username := c.GetString(middleware.CtxUsername)
-	key, err := auth.GenerateTOTPSecret("息壤 XiRang", username)
+	result, err := h.authService.SetupTOTP(c.Request.Context(), userID, c.GetString(middleware.CtxUsername))
 	if err != nil {
-		respondInternalError(c, fmt.Errorf("生成 TOTP 密钥失败: %w", err))
+		switch {
+		case errors.Is(err, auth.ErrTOTPAlreadyEnabled),
+			errors.Is(err, auth.ErrTOTPEnrollmentConflict),
+			errors.Is(err, auth.ErrSecurityConflict),
+			errors.Is(err, gorm.ErrRecordNotFound):
+			respondBadRequest(c, err.Error())
+		default:
+			respondInternalError(c, fmt.Errorf("保存密钥失败: %w", err))
+		}
 		return
 	}
-
-	// 将 pending secret 存入 DB（TOTPEnabled 保持 false，直到 verify 成功）
-	if err := h.db.Model(&model.User{}).Where("id = ?", userID).
-		Update("totp_secret", key.Secret()).Error; err != nil {
-		respondInternalError(c, fmt.Errorf("保存密钥失败: %w", err))
-		return
-	}
-
 	respondOK(c, gin.H{
-		"secret": key.Secret(),
-		"qr_url": key.URL(),
-		"issuer": "息壤 XiRang",
+		"secret":        result.Secret,
+		"qr_url":        result.QRURL,
+		"issuer":        result.Issuer,
+		"enrollment_id": result.EnrollmentID,
+		"expires_at":    result.ExpiresAt.UTC(),
 	})
 }
 
 type totpVerifyRequest struct {
-	Code string `json:"code" binding:"required"`
+	Code         string `json:"code" binding:"required"`
+	EnrollmentID string `json:"enrollment_id" binding:"required"`
 }
 
 // TOTPVerify godoc
@@ -375,8 +367,8 @@ type totpVerifyRequest struct {
 // @Failure      401   {object}  handlers.Response
 // @Router       /auth/2fa/verify [post]
 func (h *AuthHandler) TOTPVerify(c *gin.Context) {
-	if h.db == nil {
-		respondInternalError(c, fmt.Errorf("db 未注入"))
+	if h.authService == nil {
+		respondInternalError(c, fmt.Errorf("认证服务未注入"))
 		return
 	}
 	var req totpVerifyRequest
@@ -384,47 +376,22 @@ func (h *AuthHandler) TOTPVerify(c *gin.Context) {
 		respondBadRequest(c, "请求参数不合法")
 		return
 	}
-	userID := c.GetUint(middleware.CtxUserID)
-	var user model.User
-	if err := h.db.First(&user, userID).Error; err != nil {
-		respondNotFound(c, "用户不存在")
-		return
-	}
-	// 使用服务端暂存的 pending secret 校验，拒绝客户端提供的 secret
-	if strings.TrimSpace(user.TOTPSecret) == "" {
-		respondBadRequest(c, "请先调用 setup 接口生成密钥")
-		return
-	}
-	if user.TOTPEnabled {
-		respondBadRequest(c, "两步验证已启用")
-		return
-	}
-	if !auth.ValidateTOTP(user.TOTPSecret, req.Code) {
-		respondBadRequest(c, "验证码错误")
-		return
-	}
-	recoveryCodes, err := auth.GenerateRecoveryCodes()
+	result, err := h.authService.VerifyTOTP(c.Request.Context(), c.GetUint(middleware.CtxUserID), req.Code, req.EnrollmentID)
 	if err != nil {
-		respondInternalError(c, fmt.Errorf("生成恢复码失败: %w", err))
+		switch {
+		case errors.Is(err, auth.ErrTOTPEnrollmentRequired),
+			errors.Is(err, auth.ErrTOTPEnrollmentExpired),
+			errors.Is(err, auth.ErrTOTPEnrollmentConflict),
+			errors.Is(err, auth.ErrTOTPCodeInvalid),
+			errors.Is(err, auth.ErrTOTPAlreadyEnabled),
+			errors.Is(err, auth.ErrSecurityConflict):
+			respondBadRequest(c, err.Error())
+		default:
+			respondInternalError(c, fmt.Errorf("保存 2FA 配置失败: %w", err))
+		}
 		return
 	}
-	hashedRecoveryCodes, err := auth.HashRecoveryCodes(recoveryCodes)
-	if err != nil {
-		respondInternalError(c, fmt.Errorf("哈希恢复码失败: %w", err))
-		return
-	}
-	hashedRecoveryJSON, err := json.Marshal(hashedRecoveryCodes)
-	if err != nil {
-		respondInternalError(c, fmt.Errorf("序列化恢复码失败: %w", err))
-		return
-	}
-	user.TOTPEnabled = true
-	user.RecoveryCodes = string(hashedRecoveryJSON)
-	if err := h.db.Save(&user).Error; err != nil {
-		respondInternalError(c, fmt.Errorf("保存 2FA 配置失败: %w", err))
-		return
-	}
-	respondOK(c, gin.H{"recovery_codes": recoveryCodes})
+	respondOK(c, gin.H{"recovery_codes": result.RecoveryCodes})
 }
 
 type stepUpRequest struct {
@@ -505,10 +472,9 @@ type totpDisableRequest struct {
 // @Success      200   {object}  handlers.Response
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
-// @Router       /auth/2fa/disable [post]
 func (h *AuthHandler) TOTPDisable(c *gin.Context) {
-	if h.db == nil {
-		respondInternalError(c, fmt.Errorf("db 未注入"))
+	if h.authService == nil {
+		respondInternalError(c, fmt.Errorf("认证服务未注入"))
 		return
 	}
 	var req totpDisableRequest
@@ -516,27 +482,16 @@ func (h *AuthHandler) TOTPDisable(c *gin.Context) {
 		respondBadRequest(c, "请求参数不合法")
 		return
 	}
-	userID := c.GetUint(middleware.CtxUserID)
-	var user model.User
-	if err := h.db.First(&user, userID).Error; err != nil {
-		respondNotFound(c, "用户不存在")
-		return
-	}
-	if err := auth.CheckPassword(user.PasswordHash, req.Password); err != nil {
-		respondBadRequest(c, "密码错误")
-		return
-	}
-	if !auth.ValidateTOTP(user.TOTPSecret, req.TOTPCode) {
-		respondBadRequest(c, "验证码错误")
-		return
-	}
-	if err := h.db.Model(&user).Updates(map[string]any{
-		"totp_secret":    "",
-		"totp_enabled":   false,
-		"recovery_codes": "",
-		"token_version":  gorm.Expr("token_version + 1"),
-	}).Error; err != nil {
-		respondInternalError(c, fmt.Errorf("禁用 2FA 失败: %w", err))
+	if err := h.authService.DisableTOTP(c.Request.Context(), c.GetUint(middleware.CtxUserID), req.Password, req.TOTPCode); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrTOTPCodeInvalid),
+			strings.Contains(err.Error(), "密码错误"):
+			respondBadRequest(c, err.Error())
+		case errors.Is(err, auth.ErrSecurityConflict):
+			respondBadRequest(c, err.Error())
+		default:
+			respondInternalError(c, fmt.Errorf("禁用 2FA 失败: %w", err))
+		}
 		return
 	}
 	respondMessage(c, "两步验证已禁用")
@@ -559,8 +514,8 @@ type totpLoginRequest struct {
 // @Failure      401   {object}  handlers.Response
 // @Router       /auth/2fa/login [post]
 func (h *AuthHandler) TOTPLogin(c *gin.Context) {
-	if h.db == nil {
-		respondInternalError(c, fmt.Errorf("db 未注入"))
+	if h.authService == nil {
+		respondInternalError(c, fmt.Errorf("认证服务未注入"))
 		return
 	}
 	var req totpLoginRequest
@@ -568,54 +523,24 @@ func (h *AuthHandler) TOTPLogin(c *gin.Context) {
 		respondBadRequest(c, "请求参数不合法")
 		return
 	}
-	claims, err := h.jwtManager.ParseToken(req.LoginToken)
+	result, err := h.authService.Complete2FALogin(c.Request.Context(), req.LoginToken, req.TOTPCode)
 	if err != nil {
-		respondUnauthorized(c, "登录令牌无效或已过期")
-		return
-	}
-	if claims.Purpose != auth.Purpose2FAPending {
-		respondUnauthorized(c, "登录令牌无效")
-		return
-	}
-	var user model.User
-	if err := h.db.First(&user, claims.UserID).Error; err != nil {
-		respondUnauthorized(c, "用户不存在")
-		return
-	}
-	// 先尝试 TOTP 验证码，再尝试恢复码。
-	if !auth.ValidateTOTP(user.TOTPSecret, req.TOTPCode) {
-		if user.RecoveryCodes == "" {
-			respondUnauthorized(c, "验证码错误")
-			return
+		switch {
+		case errors.Is(err, auth.ErrPendingLoginInvalid),
+			errors.Is(err, auth.ErrRecoveryCodeInvalid):
+			respondUnauthorized(c, err.Error())
+		default:
+			respondInternalError(c, fmt.Errorf("完成 2FA 登录失败: %w", err))
 		}
-		remaining, ok := auth.ValidateAndConsumeRecoveryCode(user.RecoveryCodes, req.TOTPCode)
-		if !ok {
-			respondUnauthorized(c, "验证码错误")
-			return
-		}
-		newJSON, err := json.Marshal(remaining)
-		if err != nil {
-			respondInternalError(c, fmt.Errorf("序列化恢复码失败: %w", err))
-			return
-		}
-		user.RecoveryCodes = string(newJSON)
-		if err := h.db.Save(&user).Error; err != nil {
-			respondInternalError(c, fmt.Errorf("保存恢复码失败: %w", err))
-			return
-		}
-	}
-	token, err := h.jwtManager.GenerateToken(user)
-	if err != nil {
-		respondInternalError(c, fmt.Errorf("生成 token 失败: %w", err))
 		return
 	}
 	respondOK(c, gin.H{
-		"token": token,
+		"token": result.Token,
 		"user": gin.H{
-			"id":           user.ID,
-			"username":     user.Username,
-			"role":         user.Role,
-			"totp_enabled": user.TOTPEnabled,
+			"id":           result.User.ID,
+			"username":     result.User.Username,
+			"role":         result.User.Role,
+			"totp_enabled": result.User.TOTPEnabled,
 		},
 	})
 }

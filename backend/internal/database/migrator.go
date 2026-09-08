@@ -68,6 +68,9 @@ func RunMigrations(db *gorm.DB, dbType string) error {
 	if err := preflightDrillDurableRecoveryMigration(sqlDB, dbType, version); err != nil {
 		return err
 	}
+	if err := preflightTaskRunTerminalEffectsMigration(sqlDB, dbType, version); err != nil {
+		return err
+	}
 
 	if err := preMigrationFixups(sqlDB, dbType); err != nil {
 		return fmt.Errorf("执行迁移前置修复失败: %w", err)
@@ -127,6 +130,27 @@ func RunMigrations(db *gorm.DB, dbType string) error {
 	}
 	log.Printf("数据库迁移完成，当前版本: %d, dirty: %v", versionAfter, dirtyAfter)
 
+	return nil
+}
+
+func preflightTaskRunTerminalEffectsMigration(db *sql.DB, dbType string, version int64) error {
+	if version >= 79 {
+		return nil
+	}
+	exists, err := migrationColumnExists(db, dbType, "task_runs", "upstream_task_run_id")
+	if err != nil {
+		return fmt.Errorf("%w (version=%d, reason=catalog_query_failed)", ErrMigrationPrecondition, version)
+	}
+	if !exists {
+		return nil
+	}
+	var duplicates bool
+	if err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM task_runs WHERE upstream_task_run_id IS NOT NULL GROUP BY task_id, upstream_task_run_id HAVING COUNT(*) > 1)`).Scan(&duplicates); err != nil {
+		return fmt.Errorf("%w (version=%d, reason=downstream_history_query_failed)", ErrMigrationPrecondition, version)
+	}
+	if duplicates {
+		return fmt.Errorf("%w (version=%d, reason=duplicate_downstream_task_run)", ErrMigrationPrecondition, version)
+	}
 	return nil
 }
 

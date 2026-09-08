@@ -221,7 +221,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 			if err != nil {
 				return -1, fmt.Errorf("SSH 主机密钥配置异常，请联系管理员")
 			}
-			autoAccept, _ := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", true)
+			autoAccept, _ := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", false)
 			hostKeyMode := "yes"
 			if autoAccept {
 				hostKeyMode = "accept-new"

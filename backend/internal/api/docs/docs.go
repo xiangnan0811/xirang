@@ -2727,57 +2727,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/auth/2fa/disable": {
-            "post": {
-                "security": [
-                    {
-                        "Bearer": []
-                    }
-                ],
-                "description": "验证密码和 TOTP 码后禁用两步验证",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "auth"
-                ],
-                "summary": "禁用 2FA",
-                "parameters": [
-                    {
-                        "description": "禁用 2FA 请求",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.totpDisableRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    }
-                }
-            }
-        },
         "/auth/2fa/login": {
             "post": {
                 "description": "使用预登录令牌和 TOTP 验证码（或恢复码）完成登录，返回完整 JWT",
@@ -5256,12 +5205,19 @@ const docTemplate = `{
                 "summary": "创建批量命令",
                 "parameters": [
                     {
+                        "type": "string",
+                        "description": "请求者范围的幂等键；同一请求重试必须复用",
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
                         "description": "批量命令请求",
                         "name": "body",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/internal_api_handlers.batchCommandRequest"
                         }
                     }
                 ],
@@ -5286,6 +5242,12 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -11967,7 +11929,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "返回所有服务监控列表",
+                "description": "返回所有服务监控列表（请求头仅返回名称和配置状态）",
                 "produces": [
                     "application/json"
                 ],
@@ -11989,7 +11951,7 @@ const docTemplate = `{
                                         "data": {
                                             "type": "array",
                                             "items": {
-                                                "$ref": "#/definitions/xirang_backend_internal_model.ServiceMonitor"
+                                                "$ref": "#/definitions/internal_api_handlers.serviceMonitorResponse"
                                             }
                                         }
                                     }
@@ -12045,7 +12007,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.ServiceMonitor"
+                                            "$ref": "#/definitions/internal_api_handlers.serviceMonitorResponse"
                                         }
                                     }
                                 }
@@ -12074,7 +12036,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "返回单个服务监控",
+                "description": "返回单个服务监控（请求头仅返回名称和配置状态）",
                 "produces": [
                     "application/json"
                 ],
@@ -12103,7 +12065,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.ServiceMonitor"
+                                            "$ref": "#/definitions/internal_api_handlers.serviceMonitorResponse"
                                         }
                                     }
                                 }
@@ -12171,7 +12133,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.ServiceMonitor"
+                                            "$ref": "#/definitions/internal_api_handlers.serviceMonitorResponse"
                                         }
                                     }
                                 }
@@ -12180,50 +12142,6 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.Response"
-                        }
-                    }
-                }
-            },
-            "delete": {
-                "security": [
-                    {
-                        "Bearer": []
-                    }
-                ],
-                "description": "删除指定服务监控",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "service-monitors"
-                ],
-                "summary": "删除服务监控",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "服务监控 ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -17825,6 +17743,31 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.batchCommandRequest": {
+            "type": "object",
+            "required": [
+                "command",
+                "node_ids"
+            ],
+            "properties": {
+                "command": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "node_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "retain": {
+                    "type": "boolean"
+                }
+            }
+        },
         "internal_api_handlers.bulkResolveAlertsRequest": {
             "type": "object",
             "properties": {
@@ -18527,6 +18470,65 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.serviceMonitorResponse": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "http_expected_status": {
+                    "type": "integer"
+                },
+                "http_header_names": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "http_headers_configured": {
+                    "type": "boolean"
+                },
+                "http_method": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "interval_seconds": {
+                    "type": "integer"
+                },
+                "last_checked_at": {
+                    "type": "string"
+                },
+                "last_status": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "target": {
+                    "type": "string"
+                },
+                "timeout_seconds": {
+                    "type": "integer"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "uptime_pct": {
+                    "type": "number"
+                }
+            }
+        },
         "internal_api_handlers.sshKeyCreateRequest": {
             "type": "object",
             "required": [
@@ -18871,10 +18873,14 @@ const docTemplate = `{
         "internal_api_handlers.totpVerifyRequest": {
             "type": "object",
             "required": [
-                "code"
+                "code",
+                "enrollment_id"
             ],
             "properties": {
                 "code": {
+                    "type": "string"
+                },
+                "enrollment_id": {
                     "type": "string"
                 }
             }
@@ -24128,64 +24134,6 @@ const docTemplate = `{
                 "username": {
                     "description": "PrivateKey 永远不通过 JSON 序列化暴露——所有 handler 都通过 sshKeyResponseItem\n+ toSSHKeyResponse() 脱敏，此处 json:\"-\" 是深度防御，防未来误写 c.JSON(model.SSHKey{...})",
                     "type": "string"
-                }
-            }
-        },
-        "xirang_backend_internal_model.ServiceMonitor": {
-            "type": "object",
-            "properties": {
-                "created_at": {
-                    "type": "string"
-                },
-                "description": {
-                    "type": "string"
-                },
-                "enabled": {
-                    "type": "boolean"
-                },
-                "http_expected_status": {
-                    "type": "integer"
-                },
-                "http_headers": {
-                    "description": "JSON",
-                    "type": "string"
-                },
-                "http_method": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "integer"
-                },
-                "interval_seconds": {
-                    "type": "integer"
-                },
-                "last_checked_at": {
-                    "type": "string"
-                },
-                "last_status": {
-                    "description": "\"up\"|\"down\"|\"unknown\"",
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "target": {
-                    "description": "URL or host:port",
-                    "type": "string"
-                },
-                "timeout_seconds": {
-                    "type": "integer"
-                },
-                "type": {
-                    "description": "\"http\" | \"tcp\"",
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                },
-                "uptime_pct": {
-                    "description": "trailing 24h",
-                    "type": "number"
                 }
             }
         },

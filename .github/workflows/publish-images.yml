@@ -21,14 +21,38 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
   attestations: write
   id-token: write
 
 jobs:
+  prepare:
+    name: Verify immutable release source
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      ci_run_id: ${{ steps.source.outputs.ci_run_id }}
+    steps:
+      - name: Reject prerelease releases
+        if: github.event_name == 'release' && github.event.release.prerelease
+        run: exit 1
+      - name: Checkout verification policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+      - name: Freeze source and await complete matching CI
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.source_ref }}
+        run: node scripts/verify-release-ci.mjs --ref "${SOURCE_REF}"
+
   build:
     name: Build & Scan (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    needs: prepare
     strategy:
       fail-fast: true
       matrix:
@@ -52,12 +76,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.source_ref }}
-
-      - name: Resolve source commit
-        id: source
-        shell: bash
-        run: echo "commit=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+          ref: ${{ needs.prepare.outputs.source_sha }}
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -65,12 +84,15 @@ jobs:
       - name: Resolve release version
         id: version
         shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
-            raw_tag="${{ github.event.release.tag_name }}"
+            raw_tag="${RELEASE_TAG}"
           else
-            raw_tag="${{ github.event.inputs.version }}"
+            raw_tag="${INPUT_VERSION}"
           fi
 
           clean_tag="${raw_tag#refs/tags/}"
@@ -106,7 +128,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ steps.source.outputs.commit }}
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.source_sha }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
 
       # 每个平台在原生 runner 上分别构建并只按 digest 推送，避免在 x64 runner
@@ -159,6 +181,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs:
+      - prepare
       - build
     env:
       REGISTRY_IMAGE: docker.io/linnea7171/xirang
@@ -167,12 +190,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.source_ref }}
+          ref: ${{ needs.prepare.outputs.source_sha }}
 
-      - name: Resolve source commit
-        id: source
-        shell: bash
-        run: echo "commit=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+      - name: Checkout verification policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-policy
+          persist-credentials: false
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -180,12 +205,15 @@ jobs:
       - name: Resolve release version
         id: version
         shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
-            raw_tag="${{ github.event.release.tag_name }}"
+            raw_tag="${RELEASE_TAG}"
           else
-            raw_tag="${{ github.event.inputs.version }}"
+            raw_tag="${INPUT_VERSION}"
           fi
 
           clean_tag="${raw_tag#refs/tags/}"
@@ -221,7 +249,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ steps.source.outputs.commit }}
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.source_sha }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
 
       - name: Download digests
@@ -230,6 +258,13 @@ jobs:
           path: ${{ runner.temp }}/digests
           pattern: digests-*
           merge-multiple: true
+
+      - name: Recheck matching CI before public tag promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          CI_WAIT_SECONDS: 0
+        run: node .release-policy/scripts/verify-release-ci.mjs "${SOURCE_SHA}"
 
       - name: Create and push manifest
         id: manifest
@@ -301,8 +336,9 @@ jobs:
             echo "### Image Published: xirang"
             echo ""
             echo "- Version: ${{ steps.version.outputs.version }}"
-            echo "- Source ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.source_ref }}"
-            echo "- Source commit: ${{ steps.source.outputs.commit }}"
+            echo "- Source commit: ${{ needs.prepare.outputs.source_sha }}"
+            echo "- Verified CI run: ${{ needs.prepare.outputs.ci_run_id }}"
+            echo "- Platform digest scans: passed (both architecture jobs required)"
             echo "- Digest: ${{ steps.manifest.outputs.digest }}"
             echo "- Latest updated: ${{ github.event_name == 'release' && 'yes' || 'no (manual rebuild)' }}"
             echo "- Tags:"

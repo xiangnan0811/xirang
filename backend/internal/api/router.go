@@ -39,27 +39,28 @@ import (
 )
 
 type Dependencies struct {
-	AppContext            context.Context
-	DB                    *gorm.DB
-	AuthService           *auth.Service
-	JWTManager            *auth.JWTManager
-	TaskManager           *task.Manager
-	Hub                   *ws.Hub
-	AllowedOrigins        []string
-	LoginRateLimit        int
-	LoginRateWindow       time.Duration
-	SettingsService       *settings.Service
-	RetryWorker           *alerting.RetryWorker
-	AlertDispatcher       *alerting.Dispatcher
-	MetricsToken          string
-	MetricsRateLimit      int
-	MetricsRateWindow     time.Duration
-	BackupAssets          *backupruntime.Runtime
-	BackupContent         handlers.BackupContentService
-	BackupContentConfig   handlers.BackupContentHandlerConfigSource
-	LegacyResticSnapshots handlers.LegacyResticSnapshots
-	SnapshotDiffRunner    handlers.SnapshotDiffRunner
-	SnapshotIndexer       *snapshot.Indexer
+	AppContext             context.Context
+	DB                     *gorm.DB
+	AuthService            *auth.Service
+	JWTManager             *auth.JWTManager
+	TaskManager            *task.Manager
+	ServiceMonitorNotifier handlers.ServiceMonitorChangeNotifier
+	Hub                    *ws.Hub
+	AllowedOrigins         []string
+	LoginRateLimit         int
+	LoginRateWindow        time.Duration
+	SettingsService        *settings.Service
+	RetryWorker            *alerting.RetryWorker
+	AlertDispatcher        *alerting.Dispatcher
+	MetricsToken           string
+	MetricsRateLimit       int
+	MetricsRateWindow      time.Duration
+	BackupAssets           *backupruntime.Runtime
+	BackupContent          handlers.BackupContentService
+	BackupContentConfig    handlers.BackupContentHandlerConfigSource
+	LegacyResticSnapshots  handlers.LegacyResticSnapshots
+	SnapshotDiffRunner     handlers.SnapshotDiffRunner
+	SnapshotIndexer        *snapshot.Indexer
 	// TrustedProxies limits which reverse proxies may set X-Forwarded-For.
 	// Empty = trust none (ClientIP uses RemoteAddr only).
 	TrustedProxies []string
@@ -662,7 +663,7 @@ func NewRouter(dep Dependencies) *gin.Engine {
 
 	secured.GET("/alerts/:id/escalation-events", middleware.RBAC("alerts:read"), alertHandler.EscalationEvents)
 
-	serviceMonitorHandler := handlers.NewServiceMonitorHandler(dep.DB)
+	serviceMonitorHandler := handlers.NewServiceMonitorHandler(dep.DB, dep.ServiceMonitorNotifier)
 	secured.GET("/service-monitors", middleware.RBAC("service_monitors:read"), serviceMonitorHandler.List)
 	secured.GET("/service-monitors/:id", middleware.RBAC("service_monitors:read"), serviceMonitorHandler.Get)
 	secured.POST("/service-monitors", middleware.RBAC("service_monitors:write"), serviceMonitorHandler.Create)

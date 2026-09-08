@@ -24,7 +24,8 @@ COPY backend/ ./
 RUN set -eux; \
     target_os="${TARGETOS:-$(go env GOOS)}"; \
     target_arch="${TARGETARCH:-$(go env GOARCH)}"; \
-    CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang ./cmd/server
+    CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang ./cmd/server; \
+    CGO_ENABLED=1 GOOS="${target_os}" GOARCH="${target_arch}" go build -trimpath -ldflags='-s -w' -o /out/xirang-recover-admin ./cmd/recover-admin
 
 # 自行使用与后端一致的 Go 工具链编译 supercronic，避免官方预编译二进制带入过期 stdlib 的 HIGH CVE，
 # 并支持 linux/amd64 与 linux/arm64 交叉编译。
@@ -77,6 +78,7 @@ RUN sed -i -e 's|/var/run/nginx.pid|/tmp/nginx.pid|g' -e 's| /run/nginx.pid| /tm
 
 COPY --from=web-builder /app/web/dist /usr/share/nginx/html
 COPY --from=backend-builder /out/xirang /usr/local/bin/xirang
+COPY --from=backend-builder /out/xirang-recover-admin /usr/local/bin/xirang-recover-admin
 COPY deploy/nginx/templates/default.conf.template /etc/nginx/templates/default.conf.template
 COPY deploy/allinone/entrypoint.sh /entrypoint.sh
 COPY scripts/backup-db.sh /usr/local/bin/backup-db.sh

@@ -69,6 +69,7 @@ func (s *NodeService) Create(ctx context.Context, input CreateNodeInput) (*model
 	if err := validateNodeName(input.Name); err != nil {
 		return nil, validationError(err.Error())
 	}
+	input.Host = strings.TrimSpace(input.Host)
 	if err := ValidateNodeHostPort(input.Host, input.Port); err != nil {
 		return nil, validationError(err.Error())
 	}
@@ -177,6 +178,7 @@ func (s *NodeService) Update(ctx context.Context, id uint, input CreateNodeInput
 	if err := validateNodeName(input.Name); err != nil {
 		return nil, "", validationError(err.Error())
 	}
+	input.Host = strings.TrimSpace(input.Host)
 	if err := ValidateNodeHostPort(input.Host, input.Port); err != nil {
 		return nil, "", validationError(err.Error())
 	}

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,7 +40,7 @@ func (r *sshRunner) Run(ctx context.Context, node model.Node, cmd string, timeou
 		r.writeCredentialAudit(node, credential, credentialaudit.OutcomeFailure, "host_key", err, maxBytes)
 		return "", fmt.Errorf("host key: %w", err)
 	}
-	addr := fmt.Sprintf("%s:%d", node.Host, node.Port)
+	addr := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
 	client, err := sshutil.DialSSH(ctx, addr, node.Username, auth, hostKey)
 	if err != nil {
 		r.writeCredentialAudit(node, credential, credentialaudit.OutcomeFailure, "dial", err, maxBytes)

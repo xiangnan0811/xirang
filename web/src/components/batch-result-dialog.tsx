@@ -36,6 +36,13 @@ const statusIcon: Record<string, React.ReactNode> = {
   pending: <Circle className="size-4 shrink-0 text-muted-foreground" />,
 };
 
+const activeBatchTaskStatuses = new Set(["pending", "running", "retrying"]);
+
+function isBatchTaskActive(task: BatchStatus["tasks"][number]) {
+  if (task.dispatchStatus === "pending" || task.dispatchStatus === "dispatching") return true;
+  return activeBatchTaskStatuses.has(task.status) && !(task.status === "pending" && task.dispatchStatus === "failed");
+}
+
 export function BatchResultDialog({
   open,
   onOpenChange,
@@ -66,9 +73,7 @@ export function BatchResultDialog({
       setStatus(result);
       setError("");
 
-      const hasActive = result.tasks.some(
-        (t) => t.status === "running" || t.status === "pending"
-      );
+      const hasActive = result.tasks.some(isBatchTaskActive);
       if (!hasActive) {
         stopPolling();
       }
@@ -118,15 +123,19 @@ export function BatchResultDialog({
   );
 
   const handleToggleExpand = useCallback(
-    (taskId: number, taskStatus: string) => {
-      if (expandedTaskId === taskId) {
+    (task: BatchStatus["tasks"][number]) => {
+      if (expandedTaskId === task.id) {
         setExpandedTaskId(null);
         return;
       }
-      setExpandedTaskId(taskId);
-      // 仅在任务已完成时加载日志
-      if (taskStatus !== "running" && taskStatus !== "pending") {
-        void loadTaskLogs(taskId);
+      setExpandedTaskId(task.id);
+      if (
+        task.dispatchStatus !== "pending"
+        && task.dispatchStatus !== "dispatching"
+        && task.dispatchStatus !== "failed"
+        && !activeBatchTaskStatuses.has(task.status)
+      ) {
+        void loadTaskLogs(task.id);
       }
     },
     [expandedTaskId, loadTaskLogs]
@@ -135,20 +144,21 @@ export function BatchResultDialog({
   // 关闭时清理
   const handleClose = useCallback(
     (nextOpen: boolean) => {
-      if (!nextOpen && batchId && !retain) {
+      const settled = status?.tasks.every((task) => !isBatchTaskActive(task)) ?? false;
+      if (!nextOpen && batchId && !retain && settled) {
         // 后台清理，不阻塞关闭
         void apiClient.deleteBatch(token, batchId).catch(() => {});
       }
       onOpenChange(nextOpen);
     },
-    [batchId, retain, token, onOpenChange]
+    [batchId, retain, token, onOpenChange, status]
   );
 
   const allDone = status
-    ? status.tasks.every((t) => t.status !== "running" && t.status !== "pending")
+    ? status.tasks.every((task) => !isBatchTaskActive(task))
     : false;
   const successCount = status?.statusCounts["success"] ?? 0;
-  const failedCount = status?.statusCounts["failed"] ?? 0;
+  const failedCount = status?.tasks.filter((task) => task.status === "failed" || task.dispatchStatus === "failed").length ?? 0;
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -197,7 +207,9 @@ export function BatchResultDialog({
             <div className="max-h-96 space-y-1.5 overflow-y-auto">
               {status.tasks.map((task) => {
                 const isExpanded = expandedTaskId === task.id;
-                const isDone = task.status !== "running" && task.status !== "pending";
+                const isDone = !isBatchTaskActive(task);
+                const dispatchFailed = task.dispatchStatus === "failed";
+                const dispatchUnconfirmed = task.dispatchStatus === "pending" || task.dispatchStatus === "dispatching";
                 const logs = taskLogs[task.id];
 
                 return (
@@ -205,10 +217,10 @@ export function BatchResultDialog({
                     <button
                       type="button"
                       className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-muted/50 transition-colors"
-                      onClick={() => handleToggleExpand(task.id, task.status)}
+                      onClick={() => handleToggleExpand(task)}
                       disabled={!isDone}
                     >
-                      {statusIcon[task.status] ?? (
+                      {statusIcon[dispatchFailed ? "failed" : dispatchUnconfirmed ? "pending" : task.status] ?? (
                         <Circle className="size-4 shrink-0 text-muted-foreground" />
                       )}
                       <div className="flex-1 min-w-0">
@@ -217,7 +229,7 @@ export function BatchResultDialog({
                             {task.nodeName}
                           </span>
                           <span className="shrink-0 text-xs text-muted-foreground">
-                            {t(`status.batch.${task.status}`, task.status)}
+                            {dispatchFailed ? t("batch.dispatchFailed") : dispatchUnconfirmed ? t("batch.dispatchPending") : t(`status.batch.${task.status}`, task.status)}
                           </span>
                         </div>
                         {task.lastError && !isExpanded && (
@@ -241,14 +253,19 @@ export function BatchResultDialog({
                     </button>
 
                     {isExpanded && isDone && (
-                      <div className="border-t border-border bg-muted/30 px-3 py-2">
+                      <div className="space-y-2 border-t border-border bg-muted/30 px-3 py-2">
+                        {task.lastError && (
+                          <p className="text-xs text-destructive whitespace-pre-wrap break-all">
+                            {task.lastError}
+                          </p>
+                        )}
                         {loadingLogs === task.id && (
                           <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
                             <Loader2 className="size-3 animate-spin" />
                             {t("batch.loadingLogs")}
                           </div>
                         )}
-                        {logs && logs.length === 0 && (
+                        {logs && logs.length === 0 && !task.lastError && (
                           <p className="text-xs text-muted-foreground">{t("batch.noLogOutput")}</p>
                         )}
                         {logs && logs.length > 0 && (

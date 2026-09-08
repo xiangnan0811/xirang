@@ -212,6 +212,7 @@ Updater receipt 只在独立 Unix socket `/run/xirang/asset-worker-updater.sock`
 | GET | /batch-commands/:batch_id | 🔒 查询状态 |
 | DELETE | /batch-commands/:batch_id | 🔒 取消/删除 |
 
+`POST /batch-commands` 必须携带单个 `Idempotency-Key`（16–256 字节）。同一登录用户、同一键、同一请求返回已有批次；同一键换请求返回 409。全部任务及初始派发记录在一个事务中创建，任何一项落库失败均不留下部分批次。事务提交后逐项派发，响应/状态查询中的 `dispatches` 区分 `pending`、`dispatching`（结果未确认）、`accepted` 和 `failed`，不把派发失败伪装成执行成功。重放不重复已接受、失败或未确认的派发；已确认失败需通过任务执行入口显式重试。活动任务、未确认派发和未完成收尾效果均阻止删除；删除保留幂等回执，旧键不能复活已删除批次。
 ### 通知集成
 
 | 方法 | 路径 | 说明 |
@@ -423,7 +424,11 @@ Updater receipt 只在独立 Unix socket `/run/xirang/asset-worker-updater.sock`
 
 ## 数据库
 
-支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000077_lifecycle_effect_claim_audit_slot`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
+支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000081_batch_command_idempotency`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
+
+本次审计整改增加 000078（单次两步登录、绑定会话、离线恢复审计）、000079（普通 TaskRun 执行租约、原子收尾和可恢复效果）与 000081（批次幂等及派发回执）。升级前停止并排空旧服务/执行进程，备份数据库及加密密钥；不得混跑旧的非租约执行器。历史未完成 TOTP 初始化在升级时失效，已启用的 TOTP 不受影响。历史重复 `(task_id, upstream_task_run_id)` 在标记 dirty 前拒绝升级，必须先离线核对真实执行历史，不得猜测去重。
+
+启动前会将历史监控 HTTP 请求头明文及旧 v1 密文回填为当前密文；不可解密或写入失败即拒绝就绪。使用过的恢复审计、两步登录/初始化状态、运行效果或批次回执会触发相应降级保护，禁止通过删表、删回执或强制修改版本绕过；使用前向修复。SQLite 迁移事务由现有迁移驱动统一管理，脚本不重复嵌套 BEGIN。
 
 000077 是从 v76 到 v77 的静默（quiesced）切换，只允许在完成 old-worker drain（旧 retention worker 已停止接收新任务并排空所有旧 worker）后执行。排空期间必须先处理 scoped `provider_delete`：`retention_expire` 或 `explicit_purge` 的 `provider_delete` 若没有匹配的有效 deletion receipt/tombstone，迁移会原子拒绝；普通的非候选 phase/reason 不会被误判为待迁移数据。迁移完成且所有旧进程退出后才能启动新 worker；这是 no mixed-version runtime 约束，v76 与 v77 retention worker 不得混跑。
 
@@ -435,9 +440,9 @@ settled audit backfill 与运行时共用唯一的 `settledDeletionCandidate` �
 
 000077 down 同时受 schema-migrations admission 与 down body 的独立 guard 保护；只有 effect-claim 与 audit-slot 两张表均为空才允许回退。已有 durable claim/slot rows 后禁止 destructive rollback 或删除历史，必须保留既有 rows/events 并通过 forward-only migration/repair 修复；只有尚未写入 durable rows 的未使用代码才可移除。
 
-核心模型：User, SSHKey, Node, Policy, PolicyNode, Integration, Alert, AlertDelivery, Task, TaskRun, TaskLog, TaskTrafficSample, TokenRevocation, NodeMetricSample, NodeOwner, AuditLog, ReportConfig, Report, LoginFailure, SystemSetting, AppCredential, RestoreDrillEvidence, RecoveryPointLifecycleEffectClaim, RecoveryPointLifecycleAuditSlot, CredentialAuditEvent, CredentialAccessGrant, NodeMetricSampleHourly, NodeMetricSampleDaily, Silence, SLODefinition, NodeLog, NodeLogCursor, Dashboard, DashboardPanel, PanelFilters, EscalationPolicy, EscalationLevel, AlertEscalationEvent, AnomalyEvent, SnapshotDiffHistory, SnapshotFileIndex, AutomationRule, AutomationRuleLog, ServiceMonitor, ServiceUptimeSample（45 个模型）
+核心模型包括 User、PendingAuthToken、BreakGlassAudit、SSHKey、Node、Policy、PolicyNode、Integration、Alert、AlertDelivery、Task、TaskRun、TaskRunEffect、TaskLog、TaskTrafficSample、BatchCommand、BatchCommandDispatch、TokenRevocation、NodeMetricSample、NodeOwner、AuditLog、ReportConfig、Report、LoginFailure、SystemSetting、AppCredential、RestoreDrillEvidence、RecoveryPointLifecycleEffectClaim、RecoveryPointLifecycleAuditSlot、CredentialAuditEvent、CredentialAccessGrant、NodeMetricSampleHourly、NodeMetricSampleDaily、Silence、SLODefinition、NodeLog、NodeLogCursor、Dashboard、DashboardPanel、PanelFilters、EscalationPolicy、EscalationLevel、AlertEscalationEvent、AnomalyEvent、SnapshotDiffHistory、SnapshotFileIndex、AutomationRule、AutomationRuleLog、ServiceMonitor 和 ServiceUptimeSample。
 
-敏感字段通过模型 hooks 加密保存；API 响应必须使用脱敏 DTO/辅助方法。`Node` 不返回密码/私钥，`SSHKey` 不返回私钥，`Task.ExecutorConfig` 不参与 JSON 序列化以避免泄露执行器密钥。
+敏感字段通过模型 hooks 加密保存；API 响应必须使用脱敏 DTO/辅助方法。`Node` 不返回密码/私钥，`SSHKey` 不返回私钥，`Task.ExecutorConfig` 与 `ServiceMonitor.HTTPHeaders` 不参与 JSON 序列化以避免泄露凭据；监控 API 仅返回请求头配置标志和头名称。
 
 ### 升级策略
 

@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 
 	"gorm.io/gorm"
@@ -26,9 +25,12 @@ type TaskRunner interface {
 	RemoveSchedule(taskID uint)
 }
 
-// SyncPolicyTasks synchronizes tasks for a policy based on its associated node IDs.
-// It creates new tasks, updates existing ones, and orphans tasks for removed nodes.
+// SyncPolicyTasks synchronizes policy-owned tasks in the caller's database
+// transaction. Scheduler mutations are deliberately excluded: the database
+// commit is authoritative and callers must invoke SyncPolicySchedules only
+// after that commit succeeds.
 func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeIDs []uint) error {
+	_ = runner
 	// 加载关联节点信息（用于拼接任务名称）
 	var nodes []model.Node
 	if len(nodeIDs) > 0 {
@@ -81,13 +83,6 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 				return fmt.Errorf("更新任务失败(task_id=%d): %w", task.ID, err)
 			}
 			task.CronSpec = cronSpec
-			if policy.Enabled {
-				if err := runner.SyncSchedule(*task); err != nil {
-					logger.Module("policy").Warn().Uint("task_id", task.ID).Err(err).Msg("同步任务调度失败")
-				}
-			} else {
-				runner.RemoveSchedule(task.ID)
-			}
 		} else {
 			// 创建新任务
 			policyID := policy.ID
@@ -106,11 +101,6 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 			if err := db.Create(&newTask).Error; err != nil {
 				return fmt.Errorf("创建任务失败(node_id=%d): %w", nid, err)
 			}
-			if policy.Enabled {
-				if err := runner.SyncSchedule(newTask); err != nil {
-					logger.Module("policy").Warn().Uint("task_id", newTask.ID).Err(err).Msg("注册任务调度失败")
-				}
-			}
 		}
 	}
 
@@ -122,7 +112,6 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 			}).Error; err != nil {
 				return fmt.Errorf("暂停任务失败(task_id=%d): %w", task.ID, err)
 			}
-			runner.RemoveSchedule(task.ID)
 		}
 	}
 
@@ -131,13 +120,7 @@ func SyncPolicyTasks(db *gorm.DB, runner TaskRunner, policy model.Policy, nodeID
 
 // PauseTasksForPolicy removes cron schedules for all tasks associated with a policy.
 func PauseTasksForPolicy(db *gorm.DB, runner TaskRunner, policyID uint) error {
-	var tasks []model.Task
-	if err := db.Where("policy_id = ? AND source = ?", policyID, "policy").Find(&tasks).Error; err != nil {
-		return err
-	}
-	for _, t := range tasks {
-		runner.RemoveSchedule(t.ID)
-	}
+	_ = runner
 	// 持久化清除 cron_spec，防止重启后重新加载调度
 	if err := db.Model(&model.Task{}).Where("policy_id = ? AND source = ?", policyID, "policy").Update("cron_spec", "").Error; err != nil {
 		return fmt.Errorf("清除任务调度失败: %w", err)
@@ -146,9 +129,10 @@ func PauseTasksForPolicy(db *gorm.DB, runner TaskRunner, policyID uint) error {
 }
 
 // ResumeTasksForPolicy restores cron schedules for tasks whose nodes are still associated with the policy.
-// Tasks for nodes that have been removed from the policy (cron_spec already cleared) are not resumed.
+// ResumeTasksForPolicy restores cron specifications in the database. The
+// scheduler is reconciled only after the surrounding transaction commits.
 func ResumeTasksForPolicy(db *gorm.DB, runner TaskRunner, policyID uint, cronSpec string) error {
-	// 只恢复仍在 policy_nodes 关联中的节点对应的任务
+	_ = runner
 	var activeNodeIDs []uint
 	if err := db.Table("policy_nodes").Where("policy_id = ?", policyID).Pluck("node_id", &activeNodeIDs).Error; err != nil {
 		return fmt.Errorf("查询策略关联节点失败: %w", err)
@@ -156,31 +140,23 @@ func ResumeTasksForPolicy(db *gorm.DB, runner TaskRunner, policyID uint, cronSpe
 	if len(activeNodeIDs) == 0 {
 		return nil
 	}
-
-	var tasks []model.Task
-	if err := db.Where("policy_id = ? AND source = ? AND node_id IN ?", policyID, "policy", activeNodeIDs).Find(&tasks).Error; err != nil {
-		return err
-	}
-	if err := db.Model(&model.Task{}).Where("policy_id = ? AND source = ? AND node_id IN ?", policyID, "policy", activeNodeIDs).Update("cron_spec", cronSpec).Error; err != nil {
+	if err := db.Model(&model.Task{}).
+		Where("policy_id = ? AND source = ? AND node_id IN ?", policyID, "policy", activeNodeIDs).
+		Update("cron_spec", cronSpec).Error; err != nil {
 		return fmt.Errorf("恢复任务调度失败: %w", err)
-	}
-	for i := range tasks {
-		tasks[i].CronSpec = cronSpec
-		if err := runner.SyncSchedule(tasks[i]); err != nil {
-			logger.Module("policy").Warn().Uint("task_id", tasks[i].ID).Err(err).Msg("恢复任务调度失败")
-		}
 	}
 	return nil
 }
 
-// OrphanTasksForPolicy marks all tasks for a policy as orphaned and removes their schedules.
+// OrphanTasksForPolicy marks all tasks for a policy as orphaned. Scheduler
+// removal is performed by RemovePolicySchedules after the database commit.
 func OrphanTasksForPolicy(db *gorm.DB, runner TaskRunner, policyID uint) error {
+	_ = runner
 	var tasks []model.Task
 	if err := db.Where("policy_id = ? AND source = ?", policyID, "policy").Find(&tasks).Error; err != nil {
 		return err
 	}
 	for _, t := range tasks {
-		runner.RemoveSchedule(t.ID)
 		if err := db.Model(&t).Updates(map[string]interface{}{
 			"source":    "orphaned",
 			"policy_id": nil,
@@ -188,6 +164,34 @@ func OrphanTasksForPolicy(db *gorm.DB, runner TaskRunner, policyID uint) error {
 		}).Error; err != nil {
 			return fmt.Errorf("孤立任务失败(task_id=%d): %w", t.ID, err)
 		}
+	}
+	return nil
+}
+
+// SyncPolicySchedules reconciles the process-local scheduler from committed
+// database rows. It is intentionally called outside write transactions.
+func SyncPolicySchedules(db *gorm.DB, runner TaskRunner, policyID uint) error {
+	if runner == nil {
+		return nil
+	}
+	var tasks []model.Task
+	if err := db.Where("policy_id = ? AND source = ?", policyID, "policy").Find(&tasks).Error; err != nil {
+		return fmt.Errorf("查询策略任务调度失败: %w", err)
+	}
+	for _, task := range tasks {
+		if err := runner.SyncSchedule(task); err != nil {
+			return fmt.Errorf("同步任务调度失败(task_id=%d): %w", task.ID, err)
+		}
+	}
+	return nil
+}
+
+func RemovePolicySchedules(db *gorm.DB, runner TaskRunner, taskIDs []uint) error {
+	if runner == nil {
+		return nil
+	}
+	for _, taskID := range taskIDs {
+		runner.RemoveSchedule(taskID)
 	}
 	return nil
 }
