@@ -9,6 +9,8 @@ const (
 	TaskRunEffectStatusFailed    = "failed"
 
 	TaskRunEffectTypeAutomation     = "automation"
+	TaskRunEffectTypeAutomationRule = "automation_rule"
+	TaskRunEffectTypeRetry          = "retry"
 	TaskRunEffectTypeDownstream     = "downstream"
 	TaskRunEffectTypeDownstreamSkip = "downstream_skip"
 	TaskRunEffectTypeAlert          = "alert"

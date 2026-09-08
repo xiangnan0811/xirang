@@ -69,9 +69,7 @@ func (m *Manager) failTaskRunBeforeExecutor(ctx context.Context, runID uint, mes
 		if !model.IsActiveTaskRunStatus(run.Status) {
 			return errTaskRunCASLost
 		}
-		if strings.TrimSpace(run.ExecutionOwnerID) != "" &&
-			m.executionOwnerID != "" && run.ExecutionOwnerID != m.executionOwnerID &&
-			(run.ExecutionLeaseUntil == nil || run.ExecutionLeaseUntil.After(now)) {
+		if strings.TrimSpace(run.ExecutionOwnerID) != "" && run.ExecutionOwnerID != m.executionOwnerID {
 			return errTaskRunNotOwner
 		}
 		updates := map[string]interface{}{
@@ -180,14 +178,22 @@ func (m *Manager) cancelRestoreTaskRunBeforeExecutor(ctx context.Context, taskID
 }
 
 type taskRunTerminalEffect struct {
-	Key     string
-	Type    string
-	Payload string
+	Key           string
+	Type          string
+	Payload       string
+	NextAttemptAt *time.Time
 }
 
 type automationTaskRunEffect struct {
 	EventType string                 `json:"event_type"`
 	Context   map[string]interface{} `json:"context"`
+}
+
+type retryTaskRunEffect struct {
+	TaskID            uint   `json:"task_id"`
+	ChainRunID        string `json:"chain_run_id"`
+	UpstreamTaskRunID *uint  `json:"upstream_task_run_id,omitempty"`
+	PredecessorRunID  uint   `json:"predecessor_run_id"`
 }
 
 type downstreamTaskRunEffect struct {
@@ -300,11 +306,12 @@ func (m *Manager) terminalizeTaskRun(
 			taskEntity.NodeID != run.NodeIDSnapshot {
 			return errTaskRunCASLost
 		}
-		if strings.TrimSpace(run.ExecutionOwnerID) != "" &&
-			m.executionOwnerID != "" && run.ExecutionOwnerID != m.executionOwnerID {
-			if run.ExecutionLeaseUntil == nil || run.ExecutionLeaseUntil.After(finishedAt) {
-				return errTaskRunNotOwner
-			}
+		// A non-empty execution owner is a capability, not merely a lease
+		// hint. Even after its lease expires, a stale runner cannot terminalize
+		// after another process has (or may have) claimed the row. Historical
+		// rows with an empty owner remain eligible for compatibility recovery.
+		if strings.TrimSpace(run.ExecutionOwnerID) != "" && run.ExecutionOwnerID != m.executionOwnerID {
+			return errTaskRunNotOwner
 		}
 
 		if taskStatus != nil {
@@ -343,6 +350,22 @@ func (m *Manager) terminalizeTaskRun(
 		if message, ok := runUpdates["last_error"].(string); ok {
 			run.LastError = message
 		}
+		if nextValue, ok := taskUpdates["next_run_at"]; ok {
+			switch next := nextValue.(type) {
+			case *time.Time:
+				if next == nil {
+					taskEntity.NextRunAt = nil
+				} else {
+					copied := next.UTC()
+					taskEntity.NextRunAt = &copied
+				}
+			case time.Time:
+				copied := next.UTC()
+				taskEntity.NextRunAt = &copied
+			case nil:
+				taskEntity.NextRunAt = nil
+			}
+		}
 		builtEffects, buildErr := buildTerminalEffects(tx, taskEntity, run, runID, runStatus)
 		if buildErr != nil {
 			return buildErr
@@ -367,10 +390,30 @@ func (m *Manager) terminalizeTaskRun(
 }
 func buildTerminalEffects(tx *gorm.DB, taskEntity model.Task, run model.TaskRun, runID uint, runStatus TaskStatus) ([]taskRunTerminalEffect, error) {
 	ordinary := run.TriggerType != "restore" && run.TriggerType != "drill"
+	result := make([]taskRunTerminalEffect, 0, 5)
 	if ordinary && runStatus == StatusFailed && ParseStatus(taskEntity.Status) == StatusRetrying {
-		return nil, nil
+		payload, err := json.Marshal(retryTaskRunEffect{
+			TaskID:            taskEntity.ID,
+			ChainRunID:        run.ChainRunID,
+			UpstreamTaskRunID: run.UpstreamTaskRunID,
+			PredecessorRunID:  run.ID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("encode retry effect: %w", err)
+		}
+		var nextAttemptAt *time.Time
+		if taskEntity.NextRunAt != nil {
+			next := taskEntity.NextRunAt.UTC()
+			nextAttemptAt = &next
+		}
+		result = append(result, taskRunTerminalEffect{
+			Key:           "retry",
+			Type:          model.TaskRunEffectTypeRetry,
+			Payload:       string(payload),
+			NextAttemptAt: nextAttemptAt,
+		})
+		return result, nil
 	}
-	result := make([]taskRunTerminalEffect, 0, 4)
 	if ordinary && taskEntity.PolicyID != nil {
 		eventType := ""
 		switch runStatus {
@@ -453,8 +496,12 @@ func persistTaskRunEffectsTx(tx *gorm.DB, runID uint, effects []taskRunTerminalE
 	}
 	for _, effect := range effects {
 		row := model.TaskRunEffect{
-			TaskRunID: runID, EffectKey: effect.Key, EffectType: effect.Type,
-			Payload: effect.Payload, Status: model.TaskRunEffectStatusPending,
+			TaskRunID:     runID,
+			EffectKey:     effect.Key,
+			EffectType:    effect.Type,
+			Payload:       effect.Payload,
+			Status:        model.TaskRunEffectStatusPending,
+			NextAttemptAt: effect.NextAttemptAt,
 		}
 		result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
 		if result.Error != nil {
@@ -462,6 +509,106 @@ func persistTaskRunEffectsTx(tx *gorm.DB, runID uint, effects []taskRunTerminalE
 		}
 	}
 	return nil
+}
+
+// reconcileMissingRetryEffects reconstructs a retry effect for legacy
+// retrying Tasks that predate durable effect publication or crashed after the
+// aggregate/run commit but before the effect row was inserted. The Task row is
+// the serialization boundary, so concurrent startup workers cannot publish
+// duplicate intent for the same latest failed predecessor.
+func (m *Manager) reconcileMissingRetryEffects(ctx context.Context) error {
+	if m == nil || m.db == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var candidates []model.Task
+	if err := m.db.WithContext(ctx).
+		Where("status = ?", string(StatusRetrying)).
+		Order("id ASC").Limit(taskRunRecoveryBatchSize).Find(&candidates).Error; err != nil {
+		return err
+	}
+	for i := range candidates {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := m.reconstructMissingRetryEffect(ctx, candidates[i].ID); err != nil {
+			return err
+		}
+	}
+	if len(candidates) == taskRunRecoveryBatchSize {
+		var remaining int64
+		if err := m.db.WithContext(ctx).Model(&model.Task{}).
+			Where("status = ?", string(StatusRetrying)).Count(&remaining).Error; err != nil {
+			return err
+		}
+		if remaining > 0 {
+			return fmt.Errorf("missing retry effect recovery backlog exceeds bounded pass")
+		}
+	}
+	return nil
+}
+
+func (m *Manager) reconstructMissingRetryEffect(ctx context.Context, taskID uint) error {
+	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var taskEntity model.Task
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", taskID).Limit(1).Find(&taskEntity)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 || ParseStatus(taskEntity.Status) != StatusRetrying {
+			return nil
+		}
+		var activeCount int64
+		if err := tx.Model(&model.TaskRun{}).
+			Where("task_id = ? AND status IN ?", taskID, model.TaskRunActiveStatuses()).
+			Count(&activeCount).Error; err != nil {
+			return err
+		}
+		if activeCount > 0 {
+			return nil
+		}
+		var predecessor model.TaskRun
+		result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("task_id = ? AND status = ? AND trigger_type NOT IN ?", taskID, model.TaskRunStatusFailed, []string{"drill", "restore"}).
+			Order("id DESC").Limit(1).Find(&predecessor)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return nil
+		}
+		var existing model.TaskRunEffect
+		result = tx.Where("task_run_id = ? AND effect_type = ?", predecessor.ID, model.TaskRunEffectTypeRetry).
+			Order("id ASC").Limit(1).Find(&existing)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 1 {
+			return nil
+		}
+		payload, err := json.Marshal(retryTaskRunEffect{
+			TaskID:            taskEntity.ID,
+			ChainRunID:        predecessor.ChainRunID,
+			UpstreamTaskRunID: predecessor.UpstreamTaskRunID,
+			PredecessorRunID:  predecessor.ID,
+		})
+		if err != nil {
+			return fmt.Errorf("encode reconstructed retry effect: %w", err)
+		}
+		var nextAttemptAt *time.Time
+		if taskEntity.NextRunAt != nil {
+			next := taskEntity.NextRunAt.UTC()
+			nextAttemptAt = &next
+		}
+		effect := model.TaskRunEffect{
+			TaskRunID: predecessor.ID, EffectKey: "retry", EffectType: model.TaskRunEffectTypeRetry,
+			Payload: string(payload), Status: model.TaskRunEffectStatusPending, NextAttemptAt: nextAttemptAt,
+		}
+		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&effect).Error
+	})
 }
 
 func (m *Manager) claimTaskRunEffect(ctx context.Context, runID uint) (*model.TaskRunEffect, error) {
@@ -526,8 +673,15 @@ func (m *Manager) drainTaskRunEffects(ctx context.Context, runID uint) error {
 			if firstErr == nil {
 				firstErr = err
 			}
-			m.failTaskRunEffect(effect, err)
+			if failErr := m.failTaskRunEffect(effect, err); failErr != nil && firstErr == nil {
+				firstErr = failErr
+			}
 			continue
+		}
+		if effect.EffectType == model.TaskRunEffectTypeAutomationRule {
+			if err := m.reconcilePendingDurableRuns(ctx); err != nil && firstErr == nil {
+				firstErr = err
+			}
 		}
 		if err := m.succeedTaskRunEffect(effect.ID); err != nil {
 			if firstErr == nil {
@@ -535,6 +689,7 @@ func (m *Manager) drainTaskRunEffects(ctx context.Context, runID uint) error {
 			}
 		}
 	}
+
 	return firstErr
 }
 
@@ -583,20 +738,27 @@ func taskRunEffectRecoveryBatchSize() int {
 
 func (m *Manager) executeTaskRunEffect(ctx context.Context, effect model.TaskRunEffect) error {
 	switch effect.EffectType {
-	case model.TaskRunEffectTypeAutomation:
-		var payload automationTaskRunEffect
-		if err := json.Unmarshal([]byte(effect.Payload), &payload); err != nil {
-			return fmt.Errorf("decode automation effect: %w", err)
-		}
+	case model.TaskRunEffectTypeAutomation, model.TaskRunEffectTypeAutomationRule:
 		if m.autoDispatcher == nil {
-			return nil
+			return errors.New("automation dispatcher unavailable")
+		}
+		var payload automationTaskRunEffect
+		if effect.EffectType == model.TaskRunEffectTypeAutomation {
+			if err := json.Unmarshal([]byte(effect.Payload), &payload); err != nil {
+				return fmt.Errorf("decode automation effect: %w", err)
+			}
 		}
 		if payload.Context == nil {
 			payload.Context = make(map[string]interface{})
 		}
-		payload.Context["_effect_key"] = effectKeyForRun(effect)
-		return m.autoDispatcher.Dispatch(ctx, automation.Event{Type: payload.EventType, Context: payload.Context})
+		if effect.EffectType == model.TaskRunEffectTypeAutomationRule {
+			return m.autoDispatcher.DispatchTaskRunEffect(ctx, automation.Event{}, effect)
+		}
+		return m.autoDispatcher.DispatchTaskRunEffect(ctx,
+			automation.Event{Type: payload.EventType, Context: payload.Context}, effect)
 
+	case model.TaskRunEffectTypeRetry:
+		return m.executeRetryTaskRunEffect(ctx, effect)
 	case model.TaskRunEffectTypeDownstream:
 		var payload downstreamTaskRunEffect
 		if err := json.Unmarshal([]byte(effect.Payload), &payload); err != nil {
@@ -671,14 +833,13 @@ func (m *Manager) executeTaskRunEffect(ctx context.Context, effect model.TaskRun
 	}
 }
 
-func effectKeyForRun(effect model.TaskRunEffect) string {
-	return fmt.Sprintf("task_run:%d/effect:%d/%s", effect.TaskRunID, effect.ID, effect.EffectKey)
-}
-
-func (m *Manager) succeedTaskRunEffect(effectID uint) error {
+func markTaskRunEffectSucceededTx(tx *gorm.DB, effectID uint, claimedBy string) error {
+	if tx == nil || effectID == 0 || strings.TrimSpace(claimedBy) == "" {
+		return errors.New("task run effect success transition unavailable")
+	}
 	now := time.Now().UTC()
-	result := m.db.Model(&model.TaskRunEffect{}).
-		Where("id = ? AND status = ? AND claimed_by = ?", effectID, model.TaskRunEffectStatusRunning, m.executionOwnerID).
+	result := tx.Model(&model.TaskRunEffect{}).
+		Where("id = ? AND status = ? AND claimed_by = ?", effectID, model.TaskRunEffectStatusRunning, claimedBy).
 		Updates(map[string]interface{}{
 			"status":            model.TaskRunEffectStatusSucceeded,
 			"claimed_by":        "",
@@ -695,31 +856,427 @@ func (m *Manager) succeedTaskRunEffect(effectID uint) error {
 	return nil
 }
 
-func (m *Manager) failTaskRunEffect(effect *model.TaskRunEffect, effectErr error) {
+func (m *Manager) executeRetryTaskRunEffect(ctx context.Context, effect model.TaskRunEffect) error {
+	var payload retryTaskRunEffect
+	if err := json.Unmarshal([]byte(effect.Payload), &payload); err != nil {
+		return fmt.Errorf("decode retry effect: %w", err)
+	}
+	if payload.TaskID == 0 {
+		return errors.New("retry effect has invalid task identifier")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var retryRunID uint
+	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var currentEffect model.TaskRunEffect
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", effect.ID).Limit(1).Find(&currentEffect)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		if currentEffect.Status == model.TaskRunEffectStatusSucceeded {
+			return nil
+		}
+		if currentEffect.Status != model.TaskRunEffectStatusRunning ||
+			currentEffect.ClaimedBy != m.executionOwnerID {
+			return errTaskRunCASLost
+		}
+
+		var taskEntity model.Task
+		taskResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", payload.TaskID).Limit(1).Find(&taskEntity)
+		if taskResult.Error != nil {
+			return taskResult.Error
+		}
+		if taskResult.RowsAffected != 1 {
+			return markTaskRunEffectSucceededTx(tx, currentEffect.ID, m.executionOwnerID)
+		}
+		policyDisabled := false
+		if taskEntity.PolicyID != nil {
+			var policyEntity model.Policy
+			policyResult := tx.Where("id = ?", *taskEntity.PolicyID).Limit(1).Find(&policyEntity)
+			if policyResult.Error != nil {
+				return policyResult.Error
+			}
+			policyDisabled = policyResult.RowsAffected == 1 && !policyEntity.Enabled
+		}
+		// A pause, archive, policy disable, or a newer attempt supersedes a
+		// retry reservation. Resolve that reservation durably instead of
+		// reviving stale work.
+		if taskEntity.ArchivedAt != nil || !taskEntity.Enabled || policyDisabled ||
+			ParseStatus(taskEntity.Status) != StatusRetrying {
+			if ParseStatus(taskEntity.Status) == StatusRetrying &&
+				(taskEntity.ArchivedAt != nil || !taskEntity.Enabled || policyDisabled) {
+				message := "任务已暂停，重试已取消"
+				if policyDisabled {
+					message = "策略已禁用，重试已取消"
+				}
+				updates := map[string]interface{}{
+					"status":      string(StatusCanceled),
+					"next_run_at": nil,
+					"last_error":  message,
+				}
+				updated := tx.Model(&model.Task{}).
+					Where("id = ? AND status = ?", taskEntity.ID, taskEntity.Status).
+					Updates(updates)
+				if updated.Error != nil {
+					return updated.Error
+				}
+				if updated.RowsAffected != 1 {
+					return errTaskRunCASLost
+				}
+			}
+			return markTaskRunEffectSucceededTx(tx, currentEffect.ID, m.executionOwnerID)
+		}
+		if taskEntity.NextRunAt != nil && taskEntity.NextRunAt.After(time.Now().UTC()) {
+			// claimTaskRunEffect applies the same readiness predicate. This
+			// guard only protects against clock skew between the two reads.
+			return fmt.Errorf("retry effect is not due until %s", taskEntity.NextRunAt.UTC().Format(time.RFC3339Nano))
+		}
+
+		if payload.PredecessorRunID == 0 || currentEffect.TaskRunID != payload.PredecessorRunID {
+			return markTaskRunEffectSucceededTx(tx, currentEffect.ID, m.executionOwnerID)
+		}
+		var latestRun model.TaskRun
+		latestResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("task_id = ? AND trigger_type NOT IN ?", taskEntity.ID, []string{"drill", "restore"}).
+			Order("id DESC").Limit(1).Find(&latestRun)
+		if latestResult.Error != nil {
+			return latestResult.Error
+		}
+		if latestResult.RowsAffected != 1 || latestRun.ID != payload.PredecessorRunID {
+			// A newer attempt has superseded this retry cycle. Do not revive
+			// the predecessor's chain after the newer attempt commits.
+			return markTaskRunEffectSucceededTx(tx, currentEffect.ID, m.executionOwnerID)
+		}
+
+		var activeCount int64
+		if err := tx.Model(&model.TaskRun{}).
+			Where("task_id = ? AND status IN ? AND id <> ?", taskEntity.ID, model.TaskRunActiveStatuses(), currentEffect.TaskRunID).
+			Count(&activeCount).Error; err != nil {
+			return err
+		}
+		if activeCount > 0 {
+			return markTaskRunEffectSucceededTx(tx, currentEffect.ID, m.executionOwnerID)
+		}
+
+		chainRunID := payload.ChainRunID
+		if chainRunID == "" {
+			var predecessor model.TaskRun
+			if err := tx.Select("chain_run_id").First(&predecessor, payload.PredecessorRunID).Error; err != nil &&
+				!errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			chainRunID = predecessor.ChainRunID
+		}
+		retryRun := model.TaskRun{
+			TaskID:         taskEntity.ID,
+			NodeIDSnapshot: taskEntity.NodeID,
+			TriggerType:    "retry",
+			Status:         model.TaskRunStatusPending,
+			ChainRunID:     chainRunID,
+			// The predecessor already owns this task/upstream edge. A retry
+			// is another attempt in that chain, not a new dependency edge;
+			// retaining the payload's upstream identity avoids reusing it in
+			// the unique task/upstream index while preserving lineage.
+			UpstreamTaskRunID: nil,
+		}
+		if err := tx.Create(&retryRun).Error; err != nil {
+			return err
+		}
+		retryRunID = retryRun.ID
+		return markTaskRunEffectSucceededTx(tx, currentEffect.ID, m.executionOwnerID)
+	})
+	if err != nil {
+		return err
+	}
+	if retryRunID != 0 {
+		// Launch after commit. If the process exits between commit and this
+		// call, the pending TaskRun remains recoverable at startup/tick.
+		if launchErr := m.reconcilePendingDurableRuns(ctx); launchErr != nil {
+			logger.Module("task").Warn().Uint("task_run_id", retryRunID).Err(launchErr).
+				Msg("launch durable retry TaskRun")
+		}
+	}
+	return nil
+}
+
+func (m *Manager) launchDurableTaskRun(ctx context.Context, run model.TaskRun) error {
+	if m == nil || m.db == nil || run.ID == 0 || run.TaskID == 0 {
+		return errors.New("durable task run launcher unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	launchCtx, ownership, claimed := m.claimPendingRunOwnership(run.TaskID)
+	if !claimed {
+		return nil
+	}
+	scheduled := false
+	defer func() {
+		if !scheduled {
+			ownership.cancel()
+			m.chainRunner.Delete(run.TaskID)
+			m.pendingRuns.CompareAndDelete(run.TaskID, ownership)
+		}
+	}()
+
+	var taskEntity model.Task
+	if result := m.db.WithContext(ctx).Preload("Policy").Where("id = ?", run.TaskID).Limit(1).Find(&taskEntity); result.Error != nil {
+		return result.Error
+	} else if result.RowsAffected != 1 {
+		return m.cancelPendingDurableRun(ctx, run.ID, run.TaskID, "关联任务不存在")
+	}
+	var currentRun model.TaskRun
+	if result := m.db.WithContext(ctx).Where("id = ? AND task_id = ?", run.ID, run.TaskID).
+		Limit(1).Find(&currentRun); result.Error != nil {
+		return result.Error
+	} else if result.RowsAffected != 1 || currentRun.Status != model.TaskRunStatusPending {
+		return nil
+	}
+	if taskEntity.ArchivedAt != nil || !taskEntity.Enabled ||
+		(taskEntity.Policy != nil && !taskEntity.Policy.Enabled) {
+		return m.cancelPendingDurableRun(ctx, run.ID, run.TaskID, "任务已暂停，重试或自动触发已取消")
+	}
+	runCtx, runCancel := m.newRunContext(launchCtx, computeExecTimeout(taskEntity))
+	ownership.addCancel(runCancel)
+	if err := runCtx.Err(); err != nil {
+		return err
+	}
+	scheduled = true
+	m.taskWG.Add(1)
+	go func() {
+		defer m.taskWG.Done()
+		m.runTaskWithContext(run.TaskID, run.ID, run.TriggerType, run.ChainRunID, runCtx, ownership, ownership.cancel)
+	}()
+	return nil
+}
+
+func (m *Manager) reconcilePendingDurableRuns(ctx context.Context) error {
+	if m == nil || m.db == nil || m.shuttingDown.Load() {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var runs []model.TaskRun
+	if err := m.db.WithContext(ctx).
+		Where("status = ? AND trigger_type IN ?", model.TaskRunStatusPending, []string{"auto", "retry"}).
+		Order("id ASC").Limit(taskRunRecoveryBatchSize).Find(&runs).Error; err != nil {
+		return err
+	}
+	var firstErr error
+	for _, run := range runs {
+		if err := m.launchDurableTaskRun(ctx, run); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr != nil {
+		return firstErr
+	}
+	if len(runs) == taskRunRecoveryBatchSize {
+		return fmt.Errorf("durable pending TaskRun recovery backlog exceeds bounded pass")
+	}
+	return nil
+}
+
+func (m *Manager) cancelPendingDurableRun(ctx context.Context, runID, taskID uint, message string) error {
+	now := time.Now().UTC()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var taskEntity model.Task
+		taskResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", taskID).Limit(1).Find(&taskEntity)
+		if taskResult.Error != nil && !errors.Is(taskResult.Error, gorm.ErrRecordNotFound) {
+			return taskResult.Error
+		}
+		var run model.TaskRun
+		runResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND task_id = ? AND status = ?", runID, taskID, model.TaskRunStatusPending).
+			Limit(1).Find(&run)
+		if runResult.Error != nil {
+			return runResult.Error
+		}
+		if runResult.RowsAffected != 1 {
+			return nil
+		}
+		updated := tx.Model(&model.TaskRun{}).
+			Where("id = ? AND task_id = ? AND status = ?", runID, taskID, model.TaskRunStatusPending).
+			Updates(map[string]interface{}{
+				"status":                model.TaskRunStatusCanceled,
+				"finished_at":           &now,
+				"last_error":            sanitizeTaskLastError(message),
+				"execution_owner_id":    "",
+				"execution_lease_until": nil,
+			})
+		if updated.Error != nil {
+			return updated.Error
+		}
+		if updated.RowsAffected != 1 {
+			return errTaskRunCASLost
+		}
+		if taskResult.RowsAffected == 1 && run.TriggerType == "retry" &&
+			ParseStatus(taskEntity.Status) == StatusRetrying {
+			taskUpdated := tx.Model(&model.Task{}).
+				Where("id = ? AND status = ?", taskID, taskEntity.Status).
+				Updates(map[string]interface{}{
+					"status":      string(StatusCanceled),
+					"next_run_at": nil,
+					"last_error":  sanitizeTaskLastError(message),
+				})
+			if taskUpdated.Error != nil {
+				return taskUpdated.Error
+			}
+			if taskUpdated.RowsAffected != 1 {
+				return errTaskRunCASLost
+			}
+		}
+		return nil
+	})
+}
+
+func (m *Manager) succeedTaskRunEffect(effectID uint) error {
+	now := time.Now().UTC()
+	result := m.db.Model(&model.TaskRunEffect{}).
+		Where("id = ? AND status = ? AND claimed_by = ?", effectID, model.TaskRunEffectStatusRunning, m.executionOwnerID).
+		Updates(map[string]interface{}{
+			"status":            model.TaskRunEffectStatusSucceeded,
+			"claimed_by":        "",
+			"claim_lease_until": nil,
+			"last_error":        "",
+			"updated_at":        now,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 1 {
+		return nil
+	}
+	// A transactional effect executor (retry/automation rule) may publish
+	// success together with its side effects. Treat the outer completion CAS as
+	// idempotent for that already-committed state.
+	var current model.TaskRunEffect
+	lookup := m.db.Where("id = ?", effectID).Limit(1).Find(&current)
+	if lookup.Error != nil {
+		return lookup.Error
+	}
+	if lookup.RowsAffected == 1 && current.Status == model.TaskRunEffectStatusSucceeded {
+		return nil
+	}
+	return errTaskRunCASLost
+}
+
+func (m *Manager) failTaskRunEffect(effect *model.TaskRunEffect, effectErr error) error {
 	if effect == nil {
-		return
+		return nil
+	}
+	if effectErr == nil {
+		effectErr = errors.New("task run effect failed")
 	}
 	now := time.Now().UTC()
-	attempt := effect.Attempts
-	if attempt < 1 {
-		attempt = 1
-	}
-	backoff := time.Second * time.Duration(1<<uint(minInt(attempt-1, 8)))
-	if backoff > taskRunEffectBackoffLimit {
-		backoff = taskRunEffectBackoffLimit
-	}
-	next := now.Add(backoff)
 	message := sanitizeTaskLastError(effectErr.Error())
-	_ = m.db.Model(&model.TaskRunEffect{}).
-		Where("id = ? AND status = ? AND claimed_by = ?", effect.ID, model.TaskRunEffectStatusRunning, m.executionOwnerID).
-		Updates(map[string]interface{}{
+	return m.db.WithContext(context.Background()).Transaction(func(tx *gorm.DB) error {
+		var current model.TaskRunEffect
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", effect.ID).Limit(1).Find(&current)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		if current.Status == model.TaskRunEffectStatusSucceeded {
+			return nil
+		}
+		if current.Status != model.TaskRunEffectStatusRunning ||
+			current.ClaimedBy != m.executionOwnerID {
+			return errTaskRunCASLost
+		}
+		attempt := current.Attempts
+		if attempt < 1 {
+			attempt = 1
+		}
+		backoff := time.Second * time.Duration(1<<uint(minInt(attempt-1, 8)))
+		if backoff > taskRunEffectBackoffLimit {
+			backoff = taskRunEffectBackoffLimit
+		}
+		updates := map[string]interface{}{
 			"status":            model.TaskRunEffectStatusFailed,
-			"next_attempt_at":   &next,
 			"claimed_by":        "",
 			"claim_lease_until": nil,
 			"last_error":        message,
 			"updated_at":        now,
-		})
+		}
+		if current.Attempts >= taskRunEffectMaxAttempts {
+			updates["next_attempt_at"] = nil
+		} else {
+			next := now.Add(backoff)
+			updates["next_attempt_at"] = &next
+		}
+		updated := tx.Model(&model.TaskRunEffect{}).
+			Where("id = ? AND status = ? AND claimed_by = ?", current.ID, model.TaskRunEffectStatusRunning, m.executionOwnerID).
+			Updates(updates)
+		if updated.Error != nil {
+			return updated.Error
+		}
+		if updated.RowsAffected != 1 {
+			return errTaskRunCASLost
+		}
+		if current.Attempts < taskRunEffectMaxAttempts ||
+			current.EffectType != model.TaskRunEffectTypeRetry {
+			return nil
+		}
+		var source model.TaskRun
+		sourceResult := tx.Where("id = ?", current.TaskRunID).Limit(1).Find(&source)
+		if sourceResult.Error != nil {
+			return sourceResult.Error
+		}
+		if sourceResult.RowsAffected != 1 {
+			return nil
+		}
+		var taskEntity model.Task
+		taskResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", source.TaskID).Limit(1).Find(&taskEntity)
+		if taskResult.Error != nil {
+			return taskResult.Error
+		}
+		if taskResult.RowsAffected != 1 || ParseStatus(taskEntity.Status) != StatusRetrying {
+			return nil
+		}
+		var latestRun model.TaskRun
+		latestResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("task_id = ? AND trigger_type NOT IN ?", taskEntity.ID, []string{"drill", "restore"}).
+			Order("id DESC").Limit(1).Find(&latestRun)
+		if latestResult.Error != nil {
+			return latestResult.Error
+		}
+		if latestResult.RowsAffected != 1 || latestRun.ID != current.TaskRunID {
+			// A newer predecessor owns the current retry cycle. The exhausted
+			// stale effect must not fail that newer cycle's aggregate.
+			return nil
+		}
+		taskUpdates := map[string]interface{}{
+			"status":      string(StatusFailed),
+			"next_run_at": nextCronRun(taskEntity.CronSpec),
+			"last_error":  message,
+		}
+		taskUpdated := tx.Model(&model.Task{}).
+			Where("id = ? AND status = ?", taskEntity.ID, taskEntity.Status).
+			Updates(taskUpdates)
+		if taskUpdated.Error != nil {
+			return taskUpdated.Error
+		}
+		if taskUpdated.RowsAffected != 1 {
+			return errTaskRunCASLost
+		}
+		return nil
+	})
 }
 
 func minInt(a, b int) int {
@@ -757,12 +1314,15 @@ func (m *Manager) claimTaskRunOwner(ctx context.Context, taskID, runID uint) (bo
 	return false, nil
 }
 
-func (m *Manager) renewTaskRunOwner(runID uint) error {
+func (m *Manager) renewTaskRunOwner(ctx context.Context, runID uint) error {
 	if m == nil || m.db == nil || runID == 0 || m.executionOwnerID == "" {
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	leaseUntil := time.Now().UTC().Add(m.taskRunLeaseDuration())
-	result := m.db.Model(&model.TaskRun{}).
+	result := m.db.WithContext(ctx).Model(&model.TaskRun{}).
 		Where("id = ? AND execution_owner_id = ? AND status IN ?", runID, m.executionOwnerID, model.TaskRunActiveStatuses()).
 		Update("execution_lease_until", &leaseUntil)
 	if result.Error != nil {
@@ -781,14 +1341,33 @@ func (m *Manager) taskRunLeaseDuration() time.Duration {
 	return m.executionLeaseDuration
 }
 
-func (m *Manager) startTaskRunHeartbeat(ctx context.Context, runID uint) context.CancelFunc {
+func (m *Manager) taskRunRenewalTimeout() time.Duration {
+	timeout := m.taskRunLeaseDuration() / 2
+	if timeout <= 0 {
+		timeout = time.Millisecond
+	}
+	const maxRenewalTimeout = 5 * time.Second
+	if timeout > maxRenewalTimeout {
+		timeout = maxRenewalTimeout
+	}
+	return timeout
+}
+
+func (m *Manager) startTaskRunHeartbeat(
+	ctx context.Context,
+	runID uint,
+	cancelRun context.CancelFunc,
+) context.CancelFunc {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	heartbeatCtx, cancel := context.WithCancel(ctx)
+	if cancelRun == nil {
+		cancelRun = func() {}
+	}
+	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
 	interval := m.taskRunLeaseDuration() / 3
-	if interval < time.Second {
-		interval = time.Second
+	if interval <= 0 {
+		interval = time.Millisecond
 	}
 	m.taskWG.Add(1)
 	go func() {
@@ -800,14 +1379,21 @@ func (m *Manager) startTaskRunHeartbeat(ctx context.Context, runID uint) context
 			case <-heartbeatCtx.Done():
 				return
 			case <-ticker.C:
-				if err := m.renewTaskRunOwner(runID); err != nil {
+				renewCtx, renewCancel := context.WithTimeout(heartbeatCtx, m.taskRunRenewalTimeout())
+				err := m.renewTaskRunOwner(renewCtx, runID)
+				renewCancel()
+				if err != nil {
 					logger.Module("task").Warn().Uint("task_run_id", runID).Err(err).Msg("renew task run execution lease")
+					// Ownership loss is an executor cancellation, not a
+					// best-effort heartbeat warning. The runner must return
+					// before another process can publish recovery effects.
+					cancelRun()
 					return
 				}
 			}
 		}
 	}()
-	return cancel
+	return cancelHeartbeat
 }
 
 func (m *Manager) reconcileExpiredOrdinaryRuns(ctx context.Context) error {
@@ -832,6 +1418,14 @@ func (m *Manager) reconcileExpiredOrdinaryRuns(ctx context.Context) error {
 			return err
 		}
 		run := candidates[i]
+		if m.chainRunner != nil {
+			if _, live := m.chainRunner.Load(run.TaskID); live {
+				// A same-process runner still owns the executor context. Let
+				// its cancellation/recovery path publish the terminal result;
+				// another goroutine must not race it after lease expiry.
+				continue
+			}
+		}
 		claimed, err := m.claimTaskRunOwner(ctx, run.TaskID, run.ID)
 		if err != nil {
 			return err

@@ -69,17 +69,6 @@ var (
 	}, []string{"task_name"})
 )
 
-// trigger 是 triggerCore 的包装，负责在重试时恢复链路上下文。
-func (m *Manager) trigger(taskID uint, reason string) (uint, error) {
-	chainRunID := generateChainRunID()
-	if reason == "retry" {
-		if val, ok := m.retryChainContexts.LoadAndDelete(taskID); ok {
-			chainRunID = val.(chainContext).chainRunID
-		}
-	}
-	return m.triggerCore(taskID, reason, chainRunID, nil)
-}
-
 func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, upstreamRunID *uint) (uint, error) {
 	if m.shuttingDown.Load() {
 		if reason == "retry" || reason == "cron" || reason == "chain" {
@@ -146,12 +135,15 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 			"skip_next":   false,
 			"next_run_at": nextCronRun(taskEntity.CronSpec),
 		})
-		m.logDispatcher.Dispatch(taskID, nil, "info", "本次定时执行已跳过（用户设置跳过下次）", taskEntity.Status)
-		return 0, nil
 	}
 
 	if ParseStatus(taskEntity.Status) == StatusRunning {
 		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
+	}
+	if reason == "cron" && ParseStatus(taskEntity.Status) == StatusRetrying {
+		// Durable retry delivery owns next_run_at. A cron tick must not
+		// create a competing attempt while that reservation is pending.
+		return 0, nil
 	}
 	// 手动触发时，阻止有前置依赖的任务被直接执行，需从头节点触发
 	if reason == "manual" && taskEntity.DependsOnTaskID != nil && *taskEntity.DependsOnTaskID > 0 {
@@ -208,7 +200,6 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 		return 0, fmt.Errorf("创建执行记录失败: %w", err)
 	}
 
-	m.stopRetryTimer(taskID)
 	scheduled = true
 	m.taskWG.Add(1)
 	go func() {
@@ -256,7 +247,7 @@ func (m *Manager) runTaskWithContext(
 		logger.Module("task").Info().Uint("task_id", taskID).Uint("task_run_id", runID).Msg("task run execution lease owned by another process")
 		return
 	}
-	heartbeatCancel := m.startTaskRunHeartbeat(runCtx, runID)
+	heartbeatCancel := m.startTaskRunHeartbeat(runCtx, runID, runCancel)
 	defer heartbeatCancel()
 
 	runCompleted := false
@@ -806,29 +797,6 @@ func (m *Manager) runTaskWithContext(
 
 	if shouldRetry {
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", fmt.Sprintf("任务失败，计划重试 #%d，计划时间: %s", retryCount, nextRun.Local().Format(config.DisplayTimeFormatTZ)), taskEntity.Status)
-		// 保存链路上下文，重试时由 trigger() 恢复
-		m.retryChainContexts.Store(taskID, chainContext{chainRunID: chainRunID})
-		delay := time.Until(nextRun)
-		if delay < 0 {
-			delay = 0
-		}
-		timer := time.AfterFunc(delay, func() {
-			m.retryTimers.Delete(taskID)
-			// 二次确认：任务状态是否仍为 retrying（可能已被取消/暂停）
-			var current struct{ Status string }
-			if err := m.db.Model(&model.Task{}).Select("status").Where("id = ?", taskID).Take(&current).Error; err != nil {
-				logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("重试定时器回调：加载任务状态失败")
-				return
-			}
-			if ParseStatus(current.Status) != StatusRetrying {
-				logger.Module("task").Info().Uint("task_id", taskID).Str("status", current.Status).Msg("重试定时器回调：任务状态已变更，跳过重试")
-				return
-			}
-			if _, err := m.trigger(taskID, "retry"); err != nil {
-				logger.Module("task").Warn().Uint("task_id", taskID).Err(err).Msg("重试触发失败")
-			}
-		})
-		m.storeRetryTimer(taskID, timer)
 		return
 	}
 
@@ -876,7 +844,7 @@ func (m *Manager) runRestoreTaskWithContext(
 		logger.Module("task").Info().Uint("task_id", taskID).Uint("task_run_id", runID).Msg("restore task run execution lease owned by another process")
 		return
 	}
-	heartbeatCancel := m.startTaskRunHeartbeat(execCtx, runID)
+	heartbeatCancel := m.startTaskRunHeartbeat(execCtx, runID, cancel)
 	defer heartbeatCancel()
 
 	if isLegacyGuardedProvider(restoreTask.ExecutorType) && m.lineageGuard != nil {
@@ -916,6 +884,9 @@ func (m *Manager) runRestoreTaskWithContext(
 	select {
 	case m.semaphore <- struct{}{}:
 	case <-execCtx.Done():
+		if ownership != nil {
+			ownership.waitCancellationPersistence()
+		}
 		if err := m.cancelRestoreTaskRunBeforeExecutor(context.Background(), taskID, runID, "恢复任务已取消"); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消排队恢复 TaskRun 失败")
 			return
@@ -927,6 +898,9 @@ func (m *Manager) runRestoreTaskWithContext(
 
 	lock := m.taskLock(taskID)
 	if !acquireLockWithContext(execCtx, lock) {
+		if ownership != nil {
+			ownership.waitCancellationPersistence()
+		}
 		if err := m.cancelRestoreTaskRunBeforeExecutor(context.Background(), taskID, runID, "恢复任务已取消"); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消等待恢复任务锁失败")
 			return
@@ -938,6 +912,9 @@ func (m *Manager) runRestoreTaskWithContext(
 
 	strategyLock := m.strategyLock(restoreTask.NodeID, restoreTask.PolicyID)
 	if !acquireLockWithContext(execCtx, strategyLock) {
+		if ownership != nil {
+			ownership.waitCancellationPersistence()
+		}
 		if err := m.cancelRestoreTaskRunBeforeExecutor(context.Background(), taskID, runID, "恢复任务已取消"); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消等待恢复策略锁失败")
 			return

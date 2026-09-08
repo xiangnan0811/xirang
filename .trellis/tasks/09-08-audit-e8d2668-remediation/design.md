@@ -13,7 +13,10 @@ SSH: net.JoinHostPort everywhere node host+port forms network address; preserve 
 Release: resolve ref exactly once; require CI success for exact SHA before public image promotion; all architecture builds and attestation use frozen SHA; retain digest scans.
 
 ## Migrations and integration
-Reserved migration slots: identity 000078, runtime 000079, monitoring 000080 only if required, batch/main 000081. Workers report unused slots; main renumbers to a contiguous sequence before integration. Both engines need up/down parity and forward-only safety for used durable security/effect data. Workers must not edit shared latest-version constants or migrator glue; report requirements to main.
+Implemented migration slots are identity 000078, runtime 000079 and batch 000081; 000080 was not needed. Do not renumber the committed migrations. Both engines retain up/down parity and forward-only safety for used durable security/effect data. Remaining runtime repairs must reuse the existing schema and preserve latest version 000081.
 
 ## Compatibility and rollback
 Migrate all repo consumers at once; do not retain aliases, permissive bypasses or plaintext fallback writes. Never re-expose secrets on downgrade. Preserve existing backupasset schema/ownership and production data. External secrets/CI availability are verified, not invented.
+
+## Approved continuation
+The user explicitly requested completion of remaining AR-002 through AR-005. One backend implementer owns the coupled runtime/automation/policy changes; Main owns contracts, integration evidence and review adjudication. This is repair cycle two of the existing finding ledger, not a new broad discovery wave. Reuse existing TaskRun/TaskRunEffect transactions for durable retry and per-rule completion, with no new trigger-key columns, receipt tables or migrations. Verify failures, restarts, lease loss and concurrent ownership on SQLite and PostgreSQL; request only affected-finding verification from the original reviewer lanes.

@@ -196,8 +196,11 @@ jobs:
       - name: Run PostgreSQL monitor configuration race
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL monitor configuration race' ./internal/uptime '^TestMonitorResultConfigCommitRacePostgres$'
 
-      - name: Run PostgreSQL atomic task terminalization
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL atomic task terminalization' ./internal/task '^TestTaskTerminalAtomicityPostgres$'
+      - name: Run PostgreSQL durable task runtime contracts
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL durable task runtime contracts' ./internal/task '^Test.*Postgres$'
+
+      - name: Run PostgreSQL durable automation contracts
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL durable automation contracts' ./internal/automation '^Test.*Postgres$'
 
       - name: Run PostgreSQL batch idempotency contract
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL batch idempotency contract' ./internal/api/handlers '^TestBatchCreationRollbackAndConcurrentIdempotency$'

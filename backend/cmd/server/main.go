@@ -218,6 +218,7 @@ func main() {
 	})
 	taskManager.SetAutomationDispatcher(autoDispatcher)
 	autoDispatcher.SetTaskTriggerer(taskManager)
+	autoDispatcher.SetPolicyController(taskManager)
 	if err := assetRuntime.SetCommitObserver(taskManager); err != nil {
 		log.Fatal().Err(err).Msg("配置备份资产提交观察器失败")
 	}

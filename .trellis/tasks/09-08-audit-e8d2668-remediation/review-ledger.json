@@ -19,7 +19,7 @@
       "fallback": false
     }
   ],
-  "repair_cycle": 1,
+  "repair_cycle": 2,
   "maximum_repair_cycles": 2,
   "discovery_repeats_used": 0,
   "findings": [
@@ -98,9 +98,10 @@
     "Model identities and fallback=false verified from actual session model_change metadata.",
     "Source-order/wiring assertion recommendation rejected: use behavioral scheduler/control proof.",
     "XR10/XR12 actual Chromium QA passed while discovery ran; dev-server same-origin observation is not production fallback proof.",
-    "Bounded repair cycle covers AR-001, AR-006 and AR-007 only. All three regressions failed before repair and passed afterward under -race.",
+    "Repair cycle one covered AR-001, AR-006 and AR-007 only. All three regressions failed before repair and passed afterward under -race.",
     "No TriggerKey/ExecutionKey, receipt model or additional migration was introduced. Expanded repair jobs were aborted before source changes.",
     "AR-002, AR-003, AR-004 and AR-005 remain confirmed blockers; readiness is NOT READY.",
-    "Verification on 5a2f3d6a: original GPT-5.6-Sol reviewer resolved AR-001; original Grok-4.6 reviewer resolved AR-006/007. No repair-introduced findings. Gemini remained parked; no additional discovery wave or reviewer was created."
+    "Verification on 5a2f3d6a: original GPT-5.6-Sol reviewer resolved AR-001; original Grok-4.6 reviewer resolved AR-006/007. No repair-introduced findings. Gemini remained parked; no additional discovery wave or reviewer was created.",
+    "User authorized continuing AR-002 through AR-005 from aa8975bc. Repair cycle two is in progress with one implementation writer and no schema changes; these four findings remain confirmed until targeted verification completes."
   ]
 }
