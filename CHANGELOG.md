@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.3](https://github.com/xiangnan0811/xirang/compare/v0.55.2...v0.55.3) (2026-09-08)
+
+
+### 🐛 Bug Fixes
+
+* **backup-assets:** prepare mutable Rsync sources before preview ([#507](https://github.com/xiangnan0811/xirang/issues/507)) ([0a4fd4b](https://github.com/xiangnan0811/xirang/commit/0a4fd4b0d974dc212fe036cfad373def5b9101e4))
+
 ## [0.55.2](https://github.com/xiangnan0811/xirang/compare/v0.55.1...v0.55.2) (2026-09-07)
 
 
