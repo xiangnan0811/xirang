@@ -1,0 +1,101 @@
+{
+  "base": "e8d2668266b1a5586b5ff7b50937deab31dd0331",
+  "discovery_head": "5ee2e240ea982b7bd1091be0fe5449c63857d01d",
+  "discovery_complete": true,
+  "models_verified": [
+    {
+      "lane": "integration-reviewer",
+      "model": "openai-codex/gpt-5.6-sol",
+      "fallback": false
+    },
+    {
+      "lane": "grok-reviewer",
+      "model": "xai-oauth/grok-4.6",
+      "fallback": false
+    },
+    {
+      "lane": "gemini-reviewer",
+      "model": "google-antigravity/gemini-3.8-flash",
+      "fallback": false
+    }
+  ],
+  "repair_cycle": 1,
+  "maximum_repair_cycles": 2,
+  "discovery_repeats_used": 0,
+  "findings": [
+    {
+      "id": "AR-001",
+      "sources": [
+        "INT-DISC-001"
+      ],
+      "severity": "P1",
+      "status": "repaired_pending_verification",
+      "root": "Retryable attempt is treated as final task failure; warning emits failure event; effect error payload is stale."
+    },
+    {
+      "id": "AR-002",
+      "sources": [
+        "INT-DISC-002"
+      ],
+      "severity": "P1",
+      "status": "confirmed",
+      "root": "Retry delivery and chain context are memory-only and disappear on crash or a one-shot trigger error."
+    },
+    {
+      "id": "AR-003",
+      "sources": [
+        "INT-DISC-003"
+      ],
+      "severity": "P1",
+      "status": "confirmed",
+      "root": "Heartbeat renewal failure abandons ownership while live executor is not canceled."
+    },
+    {
+      "id": "AR-004",
+      "sources": [
+        "INT-DISC-004"
+      ],
+      "severity": "P1",
+      "status": "confirmed",
+      "root": "Automation action/log failures are acknowledged as durable effect success; per-rule receipts are absent."
+    },
+    {
+      "id": "AR-005",
+      "sources": [
+        "INT-DISC-005",
+        "GROK-D1"
+      ],
+      "severity": "P2",
+      "status": "confirmed",
+      "root": "Production omits policy-controller composition, retaining disabled in-memory schedules.",
+      "adjudication": "Deduplicated same root. Executor-entry guard blocks payload, so live scheduler inconsistency is P2, not an unguarded P1 execution."
+    },
+    {
+      "id": "AR-006",
+      "sources": [
+        "GROK-D2"
+      ],
+      "severity": "P2",
+      "status": "repaired_pending_verification",
+      "root": "Monitor List lacks return after error response, concatenating error and success JSON."
+    },
+    {
+      "id": "AR-007",
+      "sources": [
+        "GROK-D3"
+      ],
+      "severity": "P2",
+      "status": "repaired_pending_verification",
+      "root": "Legacy rsync remote operand still lacks IPv6 brackets."
+    }
+  ],
+  "notes": [
+    "All first discovery passes completed before repairs. Gemini no-findings does not override valid minority findings.",
+    "Model identities and fallback=false verified from actual session model_change metadata.",
+    "Source-order/wiring assertion recommendation rejected: use behavioral scheduler/control proof.",
+    "XR10/XR12 actual Chromium QA passed while discovery ran; dev-server same-origin observation is not production fallback proof.",
+    "Bounded repair cycle covers AR-001, AR-006 and AR-007 only. All three regressions failed before repair and passed afterward under -race.",
+    "No TriggerKey/ExecutionKey, receipt model or additional migration was introduced. Expanded repair jobs were aborted before source changes.",
+    "AR-002, AR-003, AR-004 and AR-005 remain confirmed blockers; readiness is NOT READY."
+  ]
+}

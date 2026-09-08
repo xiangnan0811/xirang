@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -259,7 +260,11 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 		if NeedsSudo(task.Node) {
 			args = append(args, "--rsync-path", "sudo rsync")
 		}
-		source = fmt.Sprintf("%s@%s:%s", user, task.Node.Host, task.RsyncSource)
+		host := task.Node.Host
+		if parsedIP := net.ParseIP(host); parsedIP != nil && strings.Contains(host, ":") {
+			host = "[" + parsedIP.String() + "]"
+		}
+		source = fmt.Sprintf("%s@%s:%s", user, host, task.RsyncSource)
 	}
 	defer cleanup()
 

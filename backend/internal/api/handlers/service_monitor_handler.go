@@ -125,6 +125,7 @@ func (h *ServiceMonitorHandler) List(c *gin.Context) {
 	var items []model.ServiceMonitor
 	if err := h.db.Order("id asc").Find(&items).Error; err != nil {
 		respondInternalError(c, err)
+		return
 	}
 	out := make([]serviceMonitorResponse, 0, len(items))
 	for _, item := range items {

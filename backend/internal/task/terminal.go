@@ -333,6 +333,16 @@ func (m *Manager) terminalizeTaskRun(
 		if result.RowsAffected != 1 {
 			return errTaskRunCASLost
 		}
+		// Effect intent must describe the committed aggregate and current attempt.
+		if taskStatus != nil {
+			taskEntity.Status = string(*taskStatus)
+		}
+		if message, ok := taskUpdates["last_error"].(string); ok {
+			taskEntity.LastError = message
+		}
+		if message, ok := runUpdates["last_error"].(string); ok {
+			run.LastError = message
+		}
 		builtEffects, buildErr := buildTerminalEffects(tx, taskEntity, run, runID, runStatus)
 		if buildErr != nil {
 			return buildErr
@@ -357,15 +367,17 @@ func (m *Manager) terminalizeTaskRun(
 }
 func buildTerminalEffects(tx *gorm.DB, taskEntity model.Task, run model.TaskRun, runID uint, runStatus TaskStatus) ([]taskRunTerminalEffect, error) {
 	ordinary := run.TriggerType != "restore" && run.TriggerType != "drill"
+	if ordinary && runStatus == StatusFailed && ParseStatus(taskEntity.Status) == StatusRetrying {
+		return nil, nil
+	}
 	result := make([]taskRunTerminalEffect, 0, 4)
 	if ordinary && taskEntity.PolicyID != nil {
 		eventType := ""
 		switch runStatus {
-		case StatusSuccess, StatusWarning, StatusFailed:
+		case StatusSuccess:
 			eventType = automation.EventBackupSucceeded
-			if runStatus != StatusSuccess {
-				eventType = automation.EventBackupFailed
-			}
+		case StatusFailed:
+			eventType = automation.EventBackupFailed
 		}
 		if eventType != "" {
 			payload, _ := json.Marshal(automationTaskRunEffect{
