@@ -262,20 +262,22 @@ func (m *Manager) runTaskWithContext(
 	select {
 	case m.semaphore <- struct{}{}:
 	case <-runCtx.Done():
-		if err := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); err != nil {
+		if err := m.cancelTaskRunBeforeExecutor(taskID, runID, "任务已取消"); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消排队 TaskRun 失败")
+		} else {
+			runCompleted = true
 		}
-		runCompleted = true
 		return
 	}
 	defer func() { <-m.semaphore }()
 
 	lock := m.taskLock(taskID)
 	if !acquireLockWithContext(runCtx, lock) {
-		if err := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); err != nil {
+		if err := m.cancelTaskRunBeforeExecutor(taskID, runID, "任务已取消"); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消等待任务锁的 TaskRun 失败")
+		} else {
+			runCompleted = true
 		}
-		runCompleted = true
 		return
 	}
 	defer lock.Unlock()
@@ -308,10 +310,11 @@ func (m *Manager) runTaskWithContext(
 		return
 	}
 	if currentRun.Status == model.TaskRunStatusCanceled || runCtx.Err() != nil {
-		if err := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); err != nil {
+		if err := m.cancelTaskRunBeforeExecutor(taskID, runID, "任务已取消"); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("保留启动前取消状态失败")
+		} else {
+			runCompleted = true
 		}
-		runCompleted = true
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "任务已在启动前取消，跳过执行", taskEntity.Status)
 		return
 	}
@@ -367,10 +370,11 @@ func (m *Manager) runTaskWithContext(
 
 	strategyLock := m.strategyLock(taskEntity.NodeID, taskEntity.PolicyID)
 	if !acquireLockWithContext(runCtx, strategyLock) {
-		if err := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); err != nil {
+		if err := m.cancelTaskRunBeforeExecutor(taskID, runID, "任务已取消"); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消等待策略锁的 TaskRun 失败")
+		} else {
+			runCompleted = true
 		}
-		runCompleted = true
 		return
 	}
 	defer strategyLock.Unlock()
@@ -379,10 +383,11 @@ func (m *Manager) runTaskWithContext(
 	// 与 TriggerRestore() 中的 hasNodeConflictForRestore+restoreNodes.Store 互斥。
 	nLock := m.nodeLock(taskEntity.NodeID)
 	if !acquireLockWithContext(runCtx, nLock) {
-		if err := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); err != nil {
+		if err := m.cancelTaskRunBeforeExecutor(taskID, runID, "任务已取消"); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消等待节点锁的 TaskRun 失败")
+		} else {
+			runCompleted = true
 		}
-		runCompleted = true
 		return
 	}
 
@@ -421,10 +426,11 @@ func (m *Manager) runTaskWithContext(
 			return
 		}
 		if execCtx.Err() != nil || errors.Is(err, context.Canceled) {
-			if cancelErr := m.cancelTaskRunBeforeExecutor(runID, "任务已取消"); cancelErr != nil {
+			if cancelErr := m.cancelTaskRunBeforeExecutor(taskID, runID, "任务已取消"); cancelErr != nil {
 				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(cancelErr).Msg("保留执行入口取消状态失败")
+			} else {
+				runCompleted = true
 			}
-			runCompleted = true
 			return
 		}
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("TaskRun 执行入口拒绝: %v", err), taskEntity.Status)
@@ -444,9 +450,10 @@ func (m *Manager) runTaskWithContext(
 			"任务已取消",
 		); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("补偿未进入 executor 的 Task 执行失败")
+		} else {
+			runCompleted = true
 		}
 		nLock.Unlock()
-		runCompleted = true
 		return
 	}
 	nLock.Unlock()
@@ -492,8 +499,9 @@ func (m *Manager) runTaskWithContext(
 				"任务已取消",
 			); err != nil {
 				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("补偿 pre-hook 前取消失败")
+			} else {
+				runCompleted = true
 			}
-			runCompleted = true
 			return
 		}
 		hookTimeout := time.Duration(taskEntity.Policy.HookTimeoutSeconds) * time.Second
@@ -532,8 +540,9 @@ func (m *Manager) runTaskWithContext(
 			"任务已取消",
 		); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("补偿 executor 前取消失败")
+		} else {
+			runCompleted = true
 		}
-		runCompleted = true
 		return
 	}
 	runStartedAt := now
@@ -1349,17 +1358,52 @@ func acquireLockWithContext(ctx context.Context, mu *sync.Mutex) bool {
 	}
 }
 
-func (m *Manager) cancelTaskRunBeforeExecutor(runID uint, message string) error {
+func (m *Manager) cancelTaskRunBeforeExecutor(taskID, runID uint, message string) error {
+	if m == nil || m.db == nil || taskID == 0 || runID == 0 {
+		return errors.New("task run cancellation persistence unavailable")
+	}
 	finishedAt := time.Now().UTC()
-	return m.db.Model(&model.TaskRun{}).
-		Where("id = ? AND status = ?", runID, "pending").
-		Updates(map[string]interface{}{
-			"status":      "canceled",
-			"started_at":  nil,
-			"finished_at": &finishedAt,
-			"duration_ms": int64(0),
-			"last_error":  message,
-		}).Error
+	return m.db.Transaction(func(tx *gorm.DB) error {
+		var run model.TaskRun
+		loaded := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND task_id = ?", runID, taskID).Limit(1).Find(&run)
+		if loaded.Error != nil {
+			return loaded.Error
+		}
+		if loaded.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		if run.Status == model.TaskRunStatusCanceled {
+			return nil
+		}
+		if run.Status != model.TaskRunStatusPending {
+			return errTaskRunCASLost
+		}
+		if strings.TrimSpace(run.ExecutionOwnerID) != "" &&
+			run.ExecutionOwnerID != m.executionOwnerID {
+			return errTaskRunNotOwner
+		}
+		result := tx.Model(&model.TaskRun{}).
+			Where(`id = ? AND task_id = ? AND status = ? AND
+				(execution_owner_id = '' OR execution_owner_id = ?)`,
+				runID, taskID, model.TaskRunStatusPending, m.executionOwnerID).
+			Updates(map[string]interface{}{
+				"status":                model.TaskRunStatusCanceled,
+				"started_at":            nil,
+				"finished_at":           &finishedAt,
+				"duration_ms":           int64(0),
+				"last_error":            sanitizeTaskLastError(message),
+				"execution_owner_id":    "",
+				"execution_lease_until": nil,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errTaskRunCASLost
+		}
+		return nil
+	})
 }
 
 func (m *Manager) isCanceled(taskID uint) bool {

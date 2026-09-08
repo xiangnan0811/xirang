@@ -248,6 +248,8 @@ type Manager struct {
 	drillRestoreFunc            func(ctx context.Context, srcTask model.Task, sandboxNode model.Node, drillPath string, logf func(string, string)) error
 	ensureRemoteTargetReadyFunc func(ctx context.Context, node model.Node, targetPath string) error
 	pendingRuns                 sync.Map
+	pendingRecoveryMu           sync.Mutex
+	pendingRecoveryCursor       uint
 	restoreNodes                sync.Map // nodeID → taskID, 持续跟踪有活跃恢复任务的节点
 	semaphore                   chan struct{}
 	taskWG                      sync.WaitGroup
@@ -758,13 +760,17 @@ var errCronTaskBlocked = errors.New("cron task execution blocked")
 func (m *Manager) cancelQueuedCronRunTx(tx *gorm.DB, runID, nodeID uint, message string) error {
 	now := time.Now().UTC()
 	result := tx.Model(&model.TaskRun{}).
-		Where("id = ? AND node_id_snapshot = ? AND status = ?", runID, nodeID, model.TaskRunStatusPending).
+		Where(`id = ? AND node_id_snapshot = ? AND status = ? AND
+			(execution_owner_id = '' OR execution_owner_id = ?)`,
+			runID, nodeID, model.TaskRunStatusPending, m.executionOwnerID).
 		Updates(map[string]interface{}{
-			"status":      model.TaskRunStatusCanceled,
-			"started_at":  nil,
-			"finished_at": &now,
-			"duration_ms": int64(0),
-			"last_error":  message,
+			"status":                model.TaskRunStatusCanceled,
+			"started_at":            nil,
+			"finished_at":           &now,
+			"duration_ms":           int64(0),
+			"last_error":            sanitizeTaskLastError(message),
+			"execution_owner_id":    "",
+			"execution_lease_until": nil,
 		})
 	if result.Error != nil {
 		return result.Error
@@ -784,14 +790,32 @@ func (m *Manager) cancelTaskExecutionBeforeExecutor(
 ) error {
 	canceledAt := time.Now().UTC()
 	return m.db.Transaction(func(tx *gorm.DB) error {
+		var run model.TaskRun
+		loaded := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND task_id = ? AND node_id_snapshot = ?", runID, taskID, nodeID).
+			Limit(1).Find(&run)
+		if loaded.Error != nil {
+			return loaded.Error
+		}
+		if loaded.RowsAffected != 1 || run.Status != model.TaskRunStatusRunning {
+			return ErrNodeWriteStartLost
+		}
+		if strings.TrimSpace(run.ExecutionOwnerID) != "" &&
+			run.ExecutionOwnerID != m.executionOwnerID {
+			return errTaskRunNotOwner
+		}
 		runResult := tx.Model(&model.TaskRun{}).
-			Where("id = ? AND task_id = ? AND node_id_snapshot = ? AND status = ?", runID, taskID, nodeID, "running").
+			Where(`id = ? AND task_id = ? AND node_id_snapshot = ? AND status = ? AND
+				(execution_owner_id = '' OR execution_owner_id = ?)`,
+				runID, taskID, nodeID, model.TaskRunStatusRunning, m.executionOwnerID).
 			Updates(map[string]interface{}{
-				"status":      "canceled",
-				"started_at":  nil,
-				"finished_at": &canceledAt,
-				"duration_ms": int64(0),
-				"last_error":  message,
+				"status":                model.TaskRunStatusCanceled,
+				"started_at":            nil,
+				"finished_at":           &canceledAt,
+				"duration_ms":           int64(0),
+				"last_error":            sanitizeTaskLastError(message),
+				"execution_owner_id":    "",
+				"execution_lease_until": nil,
 			})
 		if runResult.Error != nil {
 			return runResult.Error
@@ -1350,6 +1374,14 @@ func (m *Manager) reconcileOrphanTaskRuns(taskID uint) (string, error) {
 			logger.Module("task").Error().Err(err).Uint("task_id", taskID).Msg("加载待取消执行记录失败")
 			return errTaskCancelUnavailable
 		}
+		for i := range runs {
+			run := &runs[i]
+			if owner := strings.TrimSpace(run.ExecutionOwnerID); owner != "" &&
+				owner != m.executionOwnerID &&
+				(run.ExecutionLeaseUntil == nil || run.ExecutionLeaseUntil.After(finishedAt)) {
+				return errTaskCancelConflict
+			}
+		}
 
 		taskStatus := TaskStatus(taskEntity.Status)
 		taskIsActive := taskStatus == StatusPending || taskStatus == StatusRunning || taskStatus == StatusRetrying
@@ -1412,17 +1444,22 @@ func (m *Manager) reconcileOrphanTaskRuns(taskID uint) (string, error) {
 				}
 			}
 			updates := map[string]any{
-				"status":      model.TaskRunStatusCanceled,
-				"finished_at": &finishedAt,
-				"duration_ms": durationMs,
-				"last_error":  "任务已取消",
+				"status":                model.TaskRunStatusCanceled,
+				"finished_at":           &finishedAt,
+				"duration_ms":           durationMs,
+				"last_error":            "任务已取消",
+				"execution_owner_id":    "",
+				"execution_lease_until": nil,
 			}
 			if run.Status == model.TaskRunStatusPending {
 				updates["started_at"] = nil
 				updates["duration_ms"] = int64(0)
 			}
 			updated := tx.Model(&model.TaskRun{}).
-				Where("id = ? AND task_id = ? AND node_id_snapshot = ? AND status = ?", run.ID, taskID, taskEntity.NodeID, run.Status).
+				Where(`id = ? AND task_id = ? AND node_id_snapshot = ? AND status = ? AND
+					(execution_owner_id = '' OR execution_owner_id = ? OR
+						execution_lease_until IS NULL OR execution_lease_until <= ?)`,
+					run.ID, taskID, taskEntity.NodeID, run.Status, m.executionOwnerID, finishedAt).
 				Updates(updates)
 			if updated.Error != nil {
 				logger.Module("task").Error().Err(updated.Error).Uint("task_id", taskID).Uint("task_run_id", run.ID).Msg("取消孤立执行记录失败")
@@ -1484,11 +1521,13 @@ func (m *Manager) cancelPendingTaskRuns(taskID uint, message string) (int64, err
 			AND node_id_snapshot = (SELECT node_id FROM tasks WHERE tasks.id = task_runs.task_id)
 			AND status = ?`, taskID, model.TaskRunNodeIDLegacyUnknown, model.TaskRunStatusPending).
 		Updates(map[string]interface{}{
-			"status":      model.TaskRunStatusCanceled,
-			"started_at":  nil,
-			"finished_at": &canceledAt,
-			"duration_ms": int64(0),
-			"last_error":  message,
+			"status":                model.TaskRunStatusCanceled,
+			"started_at":            nil,
+			"finished_at":           &canceledAt,
+			"duration_ms":           int64(0),
+			"last_error":            sanitizeTaskLastError(message),
+			"execution_owner_id":    "",
+			"execution_lease_until": nil,
 		})
 	return result.RowsAffected, result.Error
 }
@@ -1568,11 +1607,13 @@ func cancelOneDrillRunTx(
 		runQuery = runQuery.Where("node_id_snapshot = ?", expectedNodeID)
 	}
 	runResult := runQuery.Updates(map[string]interface{}{
-		"status":      model.TaskRunStatusCanceled,
-		"started_at":  startedAt,
-		"finished_at": &canceledAt,
-		"duration_ms": durationMs,
-		"last_error":  message,
+		"status":                model.TaskRunStatusCanceled,
+		"started_at":            startedAt,
+		"finished_at":           &canceledAt,
+		"duration_ms":           durationMs,
+		"last_error":            message,
+		"execution_owner_id":    "",
+		"execution_lease_until": nil,
 	})
 	if runResult.Error != nil {
 		return false, runResult.Error

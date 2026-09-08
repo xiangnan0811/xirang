@@ -511,6 +511,36 @@ func persistTaskRunEffectsTx(tx *gorm.DB, runID uint, effects []taskRunTerminalE
 	return nil
 }
 
+func missingRetryEffectCandidates(db *gorm.DB) *gorm.DB {
+	return db.Model(&model.Task{}).
+		Where("tasks.status = ?", string(StatusRetrying)).
+		Where(`NOT EXISTS (
+			SELECT 1
+			FROM task_runs AS active_retry_runs
+			WHERE active_retry_runs.task_id = tasks.id
+				AND active_retry_runs.status IN ?
+		)`, model.TaskRunActiveStatuses()).
+		Where(`EXISTS (
+			SELECT 1
+			FROM task_runs AS predecessor
+			WHERE predecessor.id = (
+				SELECT latest.id
+				FROM task_runs AS latest
+				WHERE latest.task_id = tasks.id
+				ORDER BY latest.id DESC
+				LIMIT 1
+			)
+			AND predecessor.status = ?
+			AND predecessor.trigger_type NOT IN ?
+			AND NOT EXISTS (
+				SELECT 1
+				FROM task_run_effects AS retry_effect
+				WHERE retry_effect.task_run_id = predecessor.id
+					AND retry_effect.effect_type = ?
+			)
+		)`, model.TaskRunStatusFailed, []string{"drill", "restore"}, model.TaskRunEffectTypeRetry)
+}
+
 // reconcileMissingRetryEffects reconstructs a retry effect for legacy
 // retrying Tasks that predate durable effect publication or crashed after the
 // aggregate/run commit but before the effect row was inserted. The Task row is
@@ -524,9 +554,10 @@ func (m *Manager) reconcileMissingRetryEffects(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	var candidates []model.Task
-	if err := m.db.WithContext(ctx).
-		Where("status = ?", string(StatusRetrying)).
-		Order("id ASC").Limit(taskRunRecoveryBatchSize).Find(&candidates).Error; err != nil {
+	if err := missingRetryEffectCandidates(m.db.WithContext(ctx)).
+		Order("tasks.id ASC").
+		Limit(taskRunRecoveryBatchSize).
+		Find(&candidates).Error; err != nil {
 		return err
 	}
 	for i := range candidates {
@@ -537,19 +568,8 @@ func (m *Manager) reconcileMissingRetryEffects(ctx context.Context) error {
 			return err
 		}
 	}
-	if len(candidates) == taskRunRecoveryBatchSize {
-		var remaining int64
-		if err := m.db.WithContext(ctx).Model(&model.Task{}).
-			Where("status = ?", string(StatusRetrying)).Count(&remaining).Error; err != nil {
-			return err
-		}
-		if remaining > 0 {
-			return fmt.Errorf("missing retry effect recovery backlog exceeds bounded pass")
-		}
-	}
 	return nil
 }
-
 func (m *Manager) reconstructMissingRetryEffect(ctx context.Context, taskID uint) error {
 	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var taskEntity model.Task
@@ -572,12 +592,16 @@ func (m *Manager) reconstructMissingRetryEffect(ctx context.Context, taskID uint
 		}
 		var predecessor model.TaskRun
 		result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("task_id = ? AND status = ? AND trigger_type NOT IN ?", taskID, model.TaskRunStatusFailed, []string{"drill", "restore"}).
+			Where("task_id = ?", taskID).
 			Order("id DESC").Limit(1).Find(&predecessor)
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
+			return nil
+		}
+		if predecessor.Status != model.TaskRunStatusFailed ||
+			predecessor.TriggerType == "drill" || predecessor.TriggerType == "restore" {
 			return nil
 		}
 		var existing model.TaskRunEffect
@@ -693,6 +717,23 @@ func (m *Manager) drainTaskRunEffects(ctx context.Context, runID uint) error {
 	return firstErr
 }
 
+func readyTaskRunEffects(db *gorm.DB, now time.Time) *gorm.DB {
+	return db.Model(&model.TaskRunEffect{}).
+		Where("attempts < ? AND ((status = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)) OR (status = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)) OR (status = ? AND (claim_lease_until IS NULL OR claim_lease_until <= ?)))",
+			taskRunEffectMaxAttempts, model.TaskRunEffectStatusPending, now,
+			model.TaskRunEffectStatusFailed, now, model.TaskRunEffectStatusRunning, now)
+}
+
+func claimablePendingDurableRuns(db *gorm.DB, now time.Time) *gorm.DB {
+	return db.Model(&model.TaskRun{}).
+		Where(`status = ? AND trigger_type IN ? AND
+			(COALESCE(execution_owner_id, '') = '' OR
+				execution_lease_until IS NULL OR execution_lease_until <= ?)`,
+			model.TaskRunStatusPending, []string{"auto", "retry"}, now)
+}
+
+// drainReadyTaskRunEffects claims and drains a bounded page of ready effects.
+// Effects that remain not-ready are left for the next startup/tick pass.
 func (m *Manager) drainReadyTaskRunEffects(ctx context.Context) error {
 	if m == nil || m.db == nil {
 		return nil
@@ -702,11 +743,10 @@ func (m *Manager) drainReadyTaskRunEffects(ctx context.Context) error {
 	}
 	now := time.Now().UTC()
 	var rows []model.TaskRunEffect
-	if err := m.db.WithContext(ctx).
-		Where("attempts < ? AND ((status = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)) OR (status = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)) OR (status = ? AND (claim_lease_until IS NULL OR claim_lease_until <= ?)))",
-			taskRunEffectMaxAttempts, model.TaskRunEffectStatusPending, now,
-			model.TaskRunEffectStatusFailed, now, model.TaskRunEffectStatusRunning, now).
-		Order("id ASC").Limit(taskRunEffectRecoveryBatchSize()).Find(&rows).Error; err != nil {
+	if err := readyTaskRunEffects(m.db.WithContext(ctx), now).
+		Order("id ASC").
+		Limit(taskRunEffectRecoveryBatchSize()).
+		Find(&rows).Error; err != nil {
 		return err
 	}
 	seen := make(map[uint]struct{}, len(rows))
@@ -722,9 +762,6 @@ func (m *Manager) drainReadyTaskRunEffects(ctx context.Context) error {
 	}
 	if firstErr != nil {
 		return firstErr
-	}
-	if len(rows) == taskRunEffectRecoveryBatchSize() {
-		return fmt.Errorf("task terminal effect recovery backlog exceeds bounded pass")
 	}
 	return nil
 }
@@ -1063,14 +1100,37 @@ func (m *Manager) reconcilePendingDurableRuns(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var runs []model.TaskRun
-	if err := m.db.WithContext(ctx).
-		Where("status = ? AND trigger_type IN ?", model.TaskRunStatusPending, []string{"auto", "retry"}).
-		Order("id ASC").Limit(taskRunRecoveryBatchSize).Find(&runs).Error; err != nil {
+	m.pendingRecoveryMu.Lock()
+	defer m.pendingRecoveryMu.Unlock()
+
+	loadRuns := func(afterID uint) ([]model.TaskRun, error) {
+		query := claimablePendingDurableRuns(m.db.WithContext(ctx), time.Now().UTC())
+		if afterID != 0 {
+			query = query.Where("id > ?", afterID)
+		}
+		var runs []model.TaskRun
+		if err := query.Order("id ASC").Limit(taskRunRecoveryBatchSize).Find(&runs).Error; err != nil {
+			return nil, err
+		}
+		return runs, nil
+	}
+
+	cursor := m.pendingRecoveryCursor
+	runs, err := loadRuns(cursor)
+	if err != nil {
 		return err
+	}
+	if len(runs) == 0 && cursor != 0 {
+		runs, err = loadRuns(0)
+		if err != nil {
+			return err
+		}
 	}
 	var firstErr error
 	for _, run := range runs {
+		if _, alreadyHandled := m.pendingRuns.Load(run.TaskID); alreadyHandled {
+			continue
+		}
 		if err := m.launchDurableTaskRun(ctx, run); err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -1078,9 +1138,11 @@ func (m *Manager) reconcilePendingDurableRuns(ctx context.Context) error {
 	if firstErr != nil {
 		return firstErr
 	}
-	if len(runs) == taskRunRecoveryBatchSize {
-		return fmt.Errorf("durable pending TaskRun recovery backlog exceeds bounded pass")
+	if len(runs) == 0 {
+		m.pendingRecoveryCursor = 0
+		return nil
 	}
+	m.pendingRecoveryCursor = runs[len(runs)-1].ID
 	return nil
 }
 
@@ -1106,8 +1168,14 @@ func (m *Manager) cancelPendingDurableRun(ctx context.Context, runID, taskID uin
 		if runResult.RowsAffected != 1 {
 			return nil
 		}
+		if strings.TrimSpace(run.ExecutionOwnerID) != "" &&
+			run.ExecutionOwnerID != m.executionOwnerID {
+			return errTaskRunNotOwner
+		}
 		updated := tx.Model(&model.TaskRun{}).
-			Where("id = ? AND task_id = ? AND status = ?", runID, taskID, model.TaskRunStatusPending).
+			Where(`id = ? AND task_id = ? AND status = ? AND
+				(execution_owner_id = '' OR execution_owner_id = ?)`,
+				runID, taskID, model.TaskRunStatusPending, m.executionOwnerID).
 			Updates(map[string]interface{}{
 				"status":                model.TaskRunStatusCanceled,
 				"finished_at":           &now,
