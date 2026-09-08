@@ -527,18 +527,18 @@ func missingRetryEffectCandidates(db *gorm.DB) *gorm.DB {
 				SELECT latest.id
 				FROM task_runs AS latest
 				WHERE latest.task_id = tasks.id
+					AND latest.trigger_type NOT IN ?
 				ORDER BY latest.id DESC
 				LIMIT 1
 			)
 			AND predecessor.status = ?
-			AND predecessor.trigger_type NOT IN ?
 			AND NOT EXISTS (
 				SELECT 1
 				FROM task_run_effects AS retry_effect
 				WHERE retry_effect.task_run_id = predecessor.id
 					AND retry_effect.effect_type = ?
 			)
-		)`, model.TaskRunStatusFailed, []string{"drill", "restore"}, model.TaskRunEffectTypeRetry)
+		)`, []string{"drill", "restore"}, model.TaskRunStatusFailed, model.TaskRunEffectTypeRetry)
 }
 
 // reconcileMissingRetryEffects reconstructs a retry effect for legacy
@@ -592,7 +592,7 @@ func (m *Manager) reconstructMissingRetryEffect(ctx context.Context, taskID uint
 		}
 		var predecessor model.TaskRun
 		result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("task_id = ?", taskID).
+			Where("task_id = ? AND trigger_type NOT IN ?", taskID, []string{"drill", "restore"}).
 			Order("id DESC").Limit(1).Find(&predecessor)
 		if result.Error != nil {
 			return result.Error
@@ -600,8 +600,7 @@ func (m *Manager) reconstructMissingRetryEffect(ctx context.Context, taskID uint
 		if result.RowsAffected != 1 {
 			return nil
 		}
-		if predecessor.Status != model.TaskRunStatusFailed ||
-			predecessor.TriggerType == "drill" || predecessor.TriggerType == "restore" {
+		if predecessor.Status != model.TaskRunStatusFailed {
 			return nil
 		}
 		var existing model.TaskRunEffect
@@ -1168,14 +1167,16 @@ func (m *Manager) cancelPendingDurableRun(ctx context.Context, runID, taskID uin
 		if runResult.RowsAffected != 1 {
 			return nil
 		}
-		if strings.TrimSpace(run.ExecutionOwnerID) != "" &&
-			run.ExecutionOwnerID != m.executionOwnerID {
+		owner := strings.TrimSpace(run.ExecutionOwnerID)
+		if owner != "" && owner != m.executionOwnerID &&
+			(run.ExecutionLeaseUntil != nil && run.ExecutionLeaseUntil.After(now)) {
 			return errTaskRunNotOwner
 		}
 		updated := tx.Model(&model.TaskRun{}).
 			Where(`id = ? AND task_id = ? AND status = ? AND
-				(execution_owner_id = '' OR execution_owner_id = ?)`,
-				runID, taskID, model.TaskRunStatusPending, m.executionOwnerID).
+				(execution_owner_id = '' OR execution_owner_id = ? OR
+					execution_lease_until IS NULL OR execution_lease_until <= ?)`,
+				runID, taskID, model.TaskRunStatusPending, m.executionOwnerID, now).
 			Updates(map[string]interface{}{
 				"status":                model.TaskRunStatusCanceled,
 				"finished_at":           &now,
@@ -1475,8 +1476,12 @@ func (m *Manager) reconcileExpiredOrdinaryRuns(ctx context.Context) error {
 	staleBefore := now.Add(-taskRunRecoveryGrace)
 	var candidates []model.TaskRun
 	query := m.db.WithContext(ctx).
-		Where("trigger_type <> ? AND status IN ? AND ((execution_lease_until IS NOT NULL AND execution_lease_until <= ?) OR (execution_owner_id = '' AND updated_at <= ?))",
-			"drill", model.TaskRunActiveStatuses(), now, staleBefore).
+		Where(`trigger_type <> ? AND status IN ? AND
+			NOT (status = ? AND trigger_type IN ?) AND
+			((execution_lease_until IS NOT NULL AND execution_lease_until <= ?) OR
+				(execution_owner_id = '' AND updated_at <= ?))`,
+			"drill", model.TaskRunActiveStatuses(), model.TaskRunStatusPending,
+			[]string{"auto", "retry"}, now, staleBefore).
 		Order("id ASC").Limit(taskRunRecoveryBatchSize)
 	if err := query.Find(&candidates).Error; err != nil {
 		return err
@@ -1508,8 +1513,12 @@ func (m *Manager) reconcileExpiredOrdinaryRuns(ctx context.Context) error {
 	if len(candidates) == taskRunRecoveryBatchSize {
 		var remaining int64
 		if err := m.db.WithContext(ctx).Model(&model.TaskRun{}).
-			Where("trigger_type <> ? AND status IN ? AND ((execution_lease_until IS NOT NULL AND execution_lease_until <= ?) OR (execution_owner_id = '' AND updated_at <= ?))",
-				"drill", model.TaskRunActiveStatuses(), now, staleBefore).Count(&remaining).Error; err != nil {
+			Where(`trigger_type <> ? AND status IN ? AND
+				NOT (status = ? AND trigger_type IN ?) AND
+				((execution_lease_until IS NOT NULL AND execution_lease_until <= ?) OR
+					(execution_owner_id = '' AND updated_at <= ?))`,
+				"drill", model.TaskRunActiveStatuses(), model.TaskRunStatusPending,
+				[]string{"auto", "retry"}, now, staleBefore).Count(&remaining).Error; err != nil {
 			return err
 		}
 		if remaining > 0 {

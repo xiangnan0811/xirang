@@ -19,8 +19,10 @@
       "fallback": false
     }
   ],
-  "repair_cycle": 3,
-  "maximum_repair_cycles": 3,
+  "repair_cycle": 4,
+  "maximum_repair_cycles": 4,
+  "current_request_repair_cycle": 2,
+  "maximum_current_request_repair_cycles": 2,
   "discovery_repeats_used": 0,
   "findings": [
     {
@@ -114,6 +116,7 @@
     "Verification on 5a2f3d6a: original GPT-5.6-Sol reviewer resolved AR-001; original Grok-4.6 reviewer resolved AR-006/007. No repair-introduced findings. Gemini remained parked; no additional discovery wave or reviewer was created.",
     "Cycle two frozen repair head 187cb2775715c49209ee451998b436f6990c3919: original GPT-5.6-Sol verified AR-002/004/005 but retained AR-003 and found NRF-001, adjudicated AR-008. Original Grok-4.6 verified AR-005 with no new findings. Actual intended model metadata verified, no fallback. Gemini remained parked.",
     "Both remaining blockers were reproduced by Main with throwaway SQLite smoke tests; these files were removed. The original two-cycle gate stopped NOT READY.",
-    "The user explicitly requested continued repair after that stop. One additional bounded repair-and-verification cycle is authorized for AR-003 and AR-008 from 3d820c147ff308122a6a2f16f551ccc6ff0fd0b0; no new discovery wave, unrelated scope, schema or migration."
+    "The user explicitly requested continued repair after the prior two-cycle stop. Current continuation is bounded to two repair-and-verification batches for AR-003 and AR-008 from 3d820c147ff308122a6a2f16f551ccc6ff0fd0b0; cumulative repair_cycle retains prior history. No new discovery wave, unrelated scope, schema or migration.",
+    "First continuation verification on a677f78a resolved AR-003 and retained AR-008 with AR008-R1 (later drill/restore hides ordinary retry predecessor) and AR008-R2 (expired foreign-owned disabled pending reservation cannot be recovered). Both are batched into the second and final continuation repair, with the original reviewer only."
   ]
 }

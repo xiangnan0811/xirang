@@ -1237,6 +1237,76 @@ func runRetryRecoveryBatchBoundaries(t *testing.T, openDB func(*testing.T) *gorm
 			t.Fatalf("retry effects for superseded predecessor=%d, want 0", retryEffects)
 		}
 	})
+
+	t.Run("later-nonordinary-terminal-does-not-suppress-ordinary-failure", func(t *testing.T) {
+		for _, trigger := range []string{"drill", "restore"} {
+			t.Run(trigger, func(t *testing.T) {
+				db := openDB(t)
+				if err := db.AutoMigrate(&model.RestoreDrillEvidence{}, &model.TaskLog{}, &model.TaskTrafficSample{}, &model.Alert{}); err != nil {
+					t.Fatalf("migrate nonordinary predecessor support tables: %v", err)
+				}
+				node := model.Node{
+					Name:      fmt.Sprintf("retry-nonordinary-%s-node-%d", trigger, time.Now().UnixNano()),
+					Host:      "127.0.0.1",
+					Port:      22,
+					Username:  "root",
+					AuthType:  "key",
+					BackupDir: fmt.Sprintf("/tmp/xirang-retry-nonordinary-%s-%d", trigger, time.Now().UnixNano()),
+				}
+				if err := db.Create(&node).Error; err != nil {
+					t.Fatalf("create nonordinary predecessor node: %v", err)
+				}
+				nextRunAt := time.Now().UTC().Add(time.Hour)
+				task := model.Task{
+					Name:         fmt.Sprintf("retry-nonordinary-%s-task-%d", trigger, time.Now().UnixNano()),
+					NodeID:       node.ID,
+					ExecutorType: "local",
+					Status:       string(StatusRetrying),
+					Enabled:      true,
+					NextRunAt:    &nextRunAt,
+				}
+				if err := db.Create(&task).Error; err != nil {
+					t.Fatalf("create nonordinary predecessor task: %v", err)
+				}
+				oldFailure := model.TaskRun{
+					TaskID:         task.ID,
+					NodeIDSnapshot: node.ID,
+					TriggerType:    "manual",
+					Status:         model.TaskRunStatusFailed,
+					ChainRunID:     "retry-nonordinary-old",
+					LastError:      "RETRY_NONORDINARY_OLD_FAILURE_FOR_TEST_ONLY",
+				}
+				if err := db.Create(&oldFailure).Error; err != nil {
+					t.Fatalf("create older ordinary failed predecessor: %v", err)
+				}
+				newerNonOrdinary := model.TaskRun{
+					TaskID:         task.ID,
+					NodeIDSnapshot: node.ID,
+					TriggerType:    trigger,
+					Status:         model.TaskRunStatusSuccess,
+					ChainRunID:     "retry-nonordinary-new",
+				}
+				if err := db.Create(&newerNonOrdinary).Error; err != nil {
+					t.Fatalf("create newer %s predecessor: %v", trigger, err)
+				}
+				manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+				shutdownManagerOnCleanup(t, manager)
+				manager.shuttingDown.Store(true)
+				if err := manager.LoadSchedules(context.Background()); err != nil {
+					t.Fatalf("reconcile %s predecessor: %v", trigger, err)
+				}
+				var retryEffects int64
+				if err := db.Model(&model.TaskRunEffect{}).
+					Where("task_run_id = ? AND effect_type = ?", oldFailure.ID, model.TaskRunEffectTypeRetry).
+					Count(&retryEffects).Error; err != nil {
+					t.Fatalf("count retry effect for %s predecessor: %v", trigger, err)
+				}
+				if retryEffects != 1 {
+					t.Fatalf("retry effects for ordinary predecessor before later %s=%d, want 1", trigger, retryEffects)
+				}
+			})
+		}
+	})
 }
 
 func TestRetryRecoveryBatchBoundariesSQLite(t *testing.T) {
@@ -1445,6 +1515,28 @@ func seedPendingDurableRuns(t *testing.T, db *gorm.DB, count, foreign int) []mod
 	return runs
 }
 
+func seedMissingPendingDurableRun(t *testing.T, db *gorm.DB, taskID, nodeID uint, owner string, lease time.Time) model.TaskRun {
+	t.Helper()
+	if db.Name() == "postgres" {
+		if err := db.Exec("ALTER TABLE task_runs DROP CONSTRAINT IF EXISTS fk_task_runs_task").Error; err != nil {
+			t.Fatalf("drop task-run authority constraint for legacy fixture: %v", err)
+		}
+	}
+	now := time.Now().UTC()
+	if err := db.Exec(`INSERT INTO task_runs
+		(task_id, node_id_snapshot, trigger_type, status, execution_owner_id, execution_lease_until, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		taskID, nodeID, "auto", model.TaskRunStatusPending, owner, lease, now, now).Error; err != nil {
+		t.Fatalf("create missing-task pending run: %v", err)
+	}
+	var run model.TaskRun
+	if err := db.Where("task_id = ? AND execution_owner_id = ? AND status = ?",
+		taskID, owner, model.TaskRunStatusPending).Order("id DESC").First(&run).Error; err != nil {
+		t.Fatalf("load missing-task pending run: %v", err)
+	}
+	return run
+}
+
 func waitForTaskRunsTerminal(t *testing.T, db *gorm.DB, runs []model.TaskRun) {
 	t.Helper()
 	ids := make([]uint, 0, len(runs))
@@ -1573,6 +1665,61 @@ func runPendingDurableBatchBoundaries(t *testing.T, openDB func(*testing.T) *gor
 		}
 		if selfActive != taskRunRecoveryBatchSize {
 			t.Fatalf("self-owned pending runs=%d, want %d", selfActive, taskRunRecoveryBatchSize)
+		}
+	})
+
+	t.Run("expired-foreign-disabled-archived-missing-cancel-and-progress", func(t *testing.T) {
+		db := openDB(t)
+		if err := db.AutoMigrate(&model.RestoreDrillEvidence{}, &model.TaskLog{}, &model.TaskTrafficSample{}, &model.Alert{}); err != nil {
+			t.Fatalf("migrate expired foreign pending support tables: %v", err)
+		}
+		expired := time.Now().UTC().Add(-time.Hour)
+		blocked := seedPendingDurableRuns(t, db, 2, 2)
+		if err := db.Model(&model.TaskRun{}).
+			Where("id IN ?", idsForTaskRuns(blocked)).
+			Update("execution_lease_until", expired).Error; err != nil {
+			t.Fatalf("expire foreign pending leases: %v", err)
+		}
+		if err := db.Model(&model.Task{}).Where("id = ?", blocked[0].TaskID).Update("enabled", false).Error; err != nil {
+			t.Fatalf("disable pending task: %v", err)
+		}
+		archivedAt := time.Now().UTC()
+		if err := db.Model(&model.Task{}).Where("id = ?", blocked[1].TaskID).Update("archived_at", archivedAt).Error; err != nil {
+			t.Fatalf("archive pending task: %v", err)
+		}
+		var maxTaskID uint
+		if err := db.Model(&model.Task{}).Select("COALESCE(MAX(id), 0)").Scan(&maxTaskID).Error; err != nil {
+			t.Fatalf("find missing-task id: %v", err)
+		}
+		missing := seedMissingPendingDurableRun(t, db, maxTaskID+1000, blocked[1].NodeIDSnapshot,
+			"foreign-pending-owner", expired)
+		trailing := seedPendingDurableRuns(t, db, 1, 0)[0]
+		exec := &successExecutor{}
+		manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+		shutdownManagerOnCleanup(t, manager)
+		if err := manager.LoadSchedules(context.Background()); err != nil {
+			t.Fatalf("expired foreign pending recovery: %v", err)
+		}
+		waitForTaskRunsTerminal(t, db, []model.TaskRun{trailing})
+		for _, run := range []model.TaskRun{blocked[0], blocked[1], missing} {
+			var canceled model.TaskRun
+			if err := db.First(&canceled, run.ID).Error; err != nil {
+				t.Fatalf("reload expired foreign run %d: %v", run.ID, err)
+			}
+			if canceled.Status != model.TaskRunStatusCanceled || canceled.ExecutionOwnerID != "" ||
+				canceled.ExecutionLeaseUntil != nil {
+				t.Fatalf("expired foreign run %d not canceled/cleared: %+v", run.ID, canceled)
+			}
+		}
+		var completed model.TaskRun
+		if err := db.First(&completed, trailing.ID).Error; err != nil {
+			t.Fatalf("reload eligible trailing run: %v", err)
+		}
+		if completed.Status != model.TaskRunStatusSuccess {
+			t.Fatalf("eligible trailing run status=%q, want success", completed.Status)
+		}
+		if exec.Calls() != 1 {
+			t.Fatalf("eligible trailing run executor calls=%d, want 1", exec.Calls())
 		}
 	})
 	t.Run("already-handled-reservations-do-not-starve-eligible-row", func(t *testing.T) {
