@@ -44,7 +44,7 @@
 - `DOCKERHUB_TOKEN`
 - 官方 Docker Hub 仓库固定为 `linnea7171/xirang`，发布与描述同步 workflow 不读取命名空间变量。
 
-覆盖率上传使用 GitHub OIDC（Codecov action 的 `use_oidc: true`），无需 `CODECOV_TOKEN`；只有后端/前端 job 获得 `id-token: write`。上传关闭自动文件搜索。PR 上传失败会明确告警，main 上传失败会使 CI 失败并阻断正式镜像发布；本地覆盖率阈值始终独立执行。
+本项目不使用 Codecov，也不要求配置其账户、令牌或 OIDC 上传权限。CI 继续强制执行后端覆盖率及备份资产覆盖率阈值，前端必须生成非空 LCOV 报告；测试、竞态检查、安全扫描和正式发布的固定 SHA / 主干 CI 校验均保持阻断。外部覆盖率服务不再是发布前置条件。
 ### Deploy Environment 级
 
 - `DEPLOY_HOST`

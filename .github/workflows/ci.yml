@@ -32,7 +32,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     defaults:
       run:
         working-directory: backend
@@ -93,24 +92,6 @@ jobs:
       - name: Backup-asset load contract
         working-directory: .
         run: BACKUP_ASSET_LOAD_LOCAL=ci-bounded bash scripts/test-backup-asset-load.sh
-
-      - name: Upload backend coverage
-        id: backend-codecov
-        if: always()
-        continue-on-error: ${{ github.event_name == 'pull_request' }}
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          files: backend/coverage.out
-          flags: backend
-          disable_search: true
-          use_oidc: true
-          fail_ci_if_error: true
-
-      - name: Report backend coverage upload failure
-        if: always() && steps.backend-codecov.outcome == 'failure'
-        run: |
-          echo "::warning::Backend Codecov upload failed; external coverage is not updated."
-          echo "Backend Codecov upload failed; local coverage gates are separate." >> "$GITHUB_STEP_SUMMARY"
 
   postgres-migration:
     name: PostgreSQL Migration Parity
@@ -227,7 +208,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     defaults:
       run:
         working-directory: web
@@ -285,24 +265,6 @@ jobs:
           COVERED=$(grep -c "^DA:" coverage/lcov.info || echo 0)
           echo "Frontend source files: ${LINES}"
           echo "Frontend covered lines entries: ${COVERED}"
-
-      - name: Upload frontend coverage
-        id: frontend-codecov
-        if: always()
-        continue-on-error: ${{ github.event_name == 'pull_request' }}
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          files: web/coverage/lcov.info
-          flags: frontend
-          disable_search: true
-          use_oidc: true
-          fail_ci_if_error: true
-
-      - name: Report frontend coverage upload failure
-        if: always() && steps.frontend-codecov.outcome == 'failure'
-        run: |
-          echo "::warning::Frontend Codecov upload failed; external coverage is not updated."
-          echo "Frontend Codecov upload failed; local coverage gates are separate." >> "$GITHUB_STEP_SUMMARY"
 
   docker-build:
     name: Docker Build
