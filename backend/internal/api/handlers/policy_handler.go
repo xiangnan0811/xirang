@@ -499,6 +499,12 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		respondBadRequest(c, err.Error())
 		return
 	}
+	if h.runner != nil && !p.IsTemplate {
+		if err := policy.SyncPolicySchedules(h.db, h.runner, p.ID); err != nil {
+			respondInternalError(c, err)
+			return
+		}
+	}
 
 	// 重新加载以获取关联节点
 	h.db.Preload("Nodes").First(&p, p.ID)
@@ -880,6 +886,12 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 		respondBadRequest(c, err.Error())
 		return
 	}
+	if h.runner != nil && !p.IsTemplate {
+		if err := policy.SyncPolicySchedules(h.db, h.runner, p.ID); err != nil {
+			respondInternalError(c, err)
+			return
+		}
+	}
 
 	h.db.Preload("Nodes").First(&p, p.ID)
 	if oldTargetPath != "" && oldTargetPath != config.BackupRoot {
@@ -913,10 +925,14 @@ func (h *PolicyHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	var p model.Policy
-	if err := h.db.First(&p, id).Error; err != nil {
-		respondNotFound(c, "策略不存在")
-		return
+	var orphanedTaskIDs []uint
+	if h.runner != nil {
+		if err := h.db.Model(&model.Task{}).
+			Where("policy_id = ? AND source = ?", id, "policy").
+			Pluck("id", &orphanedTaskIDs).Error; err != nil {
+			respondInternalError(c, err)
+			return
+		}
 	}
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {
@@ -939,6 +955,12 @@ func (h *PolicyHandler) Delete(c *gin.Context) {
 	if err != nil {
 		respondInternalError(c, err)
 		return
+	}
+	if h.runner != nil {
+		if err := policy.RemovePolicySchedules(h.db, h.runner, orphanedTaskIDs); err != nil {
+			respondInternalError(c, err)
+			return
+		}
 	}
 	respondMessage(c, "deleted")
 }
@@ -1322,6 +1344,14 @@ func (h *PolicyHandler) BatchToggle(c *gin.Context) {
 	if err != nil {
 		respondBadRequest(c, err.Error())
 		return
+	}
+	if h.runner != nil {
+		for _, pid := range req.PolicyIDs {
+			if err := policy.SyncPolicySchedules(h.db, h.runner, pid); err != nil {
+				respondInternalError(c, err)
+				return
+			}
+		}
 	}
 	respondOK(c, gin.H{"count": len(req.PolicyIDs)})
 }

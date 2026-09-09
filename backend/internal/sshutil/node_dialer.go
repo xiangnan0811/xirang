@@ -3,6 +3,8 @@ package sshutil
 import (
 	"context"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -125,7 +127,7 @@ func (dialer *NodeDialer) DialAttempt(ctx context.Context, node model.Node, purp
 	}
 	attempt.Stage = NodeDialStageDial
 	startedAt := dialer.now()
-	client, err := dialer.dial(ctx, fmt.Sprintf("%s:%d", node.Host, port), user, authMethods, hostKeyCallback)
+	client, err := dialer.dial(ctx, net.JoinHostPort(node.Host, strconv.Itoa(port)), user, authMethods, hostKeyCallback)
 	attempt.LatencyMS = dialer.now().Sub(startedAt).Milliseconds()
 	if attempt.LatencyMS < 0 {
 		attempt.LatencyMS = 0

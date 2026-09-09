@@ -3,6 +3,7 @@ package probe
 import (
 	"context"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -281,7 +282,7 @@ func (p *Prober) collectMetrics(ctx context.Context, node model.Node) (*nodeMetr
 		return nil, fmt.Errorf("解析主机密钥回调失败: %w", err)
 	}
 
-	addr := fmt.Sprintf("%s:%d", node.Host, node.Port)
+	addr := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
 	client, err := sshutil.DialSSH(ctx, addr, node.Username, authMethods, hostKeyCallback)
 	if err != nil {
 		p.writeMetricCredentialAudit(node, credential, credentialaudit.OutcomeFailure, "dial", err)

@@ -2,6 +2,7 @@ package sshutil
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -36,7 +37,7 @@ func ProbeNodeForPurpose(node model.Node, db *gorm.DB, purpose string) (ProbeRes
 		return ProbeResult{}, credential, fmt.Errorf("解析主机密钥回调失败: %w", err)
 	}
 
-	address := fmt.Sprintf("%s:%d", node.Host, node.Port)
+	address := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
 	start := time.Now()
 	client, err := ssh.Dial("tcp", address, &ssh.ClientConfig{
 		User:            node.Username,

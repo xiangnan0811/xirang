@@ -4,6 +4,10 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"xirang/backend/internal/secure"
+
+	"gorm.io/gorm"
 )
 
 // SLODefinition is a service-level objective target, matched by node tags.
@@ -129,6 +133,10 @@ func (e *AnomalyEvent) DecodedDetails() map[string]any {
 
 // ServiceMonitor is an HTTP/TCP uptime probe target. Probes run from the Xirang
 // server itself (no SSH), collecting uptime samples into service_uptime_samples.
+//
+// HTTPHeaders is deliberately excluded from JSON. API handlers expose only the
+// header names and whether any headers are configured; the value is decrypted
+// only inside the probe worker.
 type ServiceMonitor struct {
 	ID                 uint       `gorm:"primaryKey" json:"id"`
 	Name               string     `gorm:"size:128;not null;uniqueIndex" json:"name"`
@@ -139,13 +147,54 @@ type ServiceMonitor struct {
 	TimeoutSeconds     int        `gorm:"not null;default:10" json:"timeout_seconds"`
 	HTTPMethod         string     `gorm:"size:8;not null;default:'GET'" json:"http_method"`
 	HTTPExpectedStatus int        `gorm:"not null;default:200" json:"http_expected_status"`
-	HTTPHeaders        string     `gorm:"type:text;not null;default:'{}'" json:"http_headers"` // JSON
+	HTTPHeaders        string     `gorm:"type:text;not null;default:'{}'" json:"-"` // encrypted JSON
 	Enabled            bool       `gorm:"not null;default:true" json:"enabled"`
 	LastStatus         string     `gorm:"size:8;not null;default:'unknown'" json:"last_status"` // "up"|"down"|"unknown"
 	UptimePct          float64    `gorm:"not null;default:0" json:"uptime_pct"`                 // trailing 24h
 	LastCheckedAt      *time.Time `json:"last_checked_at"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
+}
+
+func (m *ServiceMonitor) BeforeSave(tx *gorm.DB) error {
+	if !serviceMonitorHeadersSelected(tx) {
+		return nil
+	}
+	if m.HTTPHeaders == "" {
+		m.HTTPHeaders = "{}"
+	}
+	if secure.IsEncrypted(m.HTTPHeaders) {
+		return nil
+	}
+	encrypted, err := secure.EncryptString(m.HTTPHeaders)
+	if err != nil {
+		return err
+	}
+	m.HTTPHeaders = encrypted
+	return nil
+}
+
+func serviceMonitorHeadersSelected(tx *gorm.DB) bool {
+	if tx == nil || tx.Statement == nil {
+		return true
+	}
+	columns, restricted := tx.Statement.SelectAndOmitColumns(false, true)
+	if selected, ok := columns["http_headers"]; ok {
+		return selected
+	}
+	return !restricted
+}
+
+func (m *ServiceMonitor) AfterFind(_ *gorm.DB) error {
+	if m.HTTPHeaders == "" {
+		return nil
+	}
+	decrypted, err := secure.DecryptIfNeeded(m.HTTPHeaders)
+	if err != nil {
+		return err
+	}
+	m.HTTPHeaders = decrypted
+	return nil
 }
 
 // ServiceUptimeSample records hourly probe aggregation for a ServiceMonitor.

@@ -52,3 +52,60 @@ describe("totp-api step-up", () => {
     });
   });
 });
+
+describe("totp-api enrollment", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("maps setup enrollment_id and expires_at", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse({
+      secret: "FAKESECRET_s4t5u6v7w8x9y0z1a2b3",
+      qr_url: "otpauth://totp/xirang",
+      issuer: "xirang",
+      enrollment_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      expires_at: "2026-09-08T12:00:00Z",
+    }));
+    const api = createTOTPApi();
+    await expect(api.totpSetup("token-1")).resolves.toEqual({
+      secret: "FAKESECRET_s4t5u6v7w8x9y0z1a2b3",
+      qrUrl: "otpauth://totp/xirang",
+      issuer: "xirang",
+      enrollmentId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      expiresAt: "2026-09-08T12:00:00Z",
+    });
+  });
+
+  it("verify 必须带 enrollment_id，缺失时不发请求", async () => {
+    const api = createTOTPApi();
+    await expect(api.totpVerify("token-1", "123456", "  ")).rejects.toThrow("enrollment_id is required");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("verify 请求 JSON 包含 code 和 enrollment_id", async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse({
+      recovery_codes: ["aaaa-bbbb"],
+    }));
+    const api = createTOTPApi();
+    await expect(api.totpVerify("token-1", "123456", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")).resolves.toEqual({
+      recoveryCodes: ["aaaa-bbbb"],
+    });
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/auth/2fa/verify", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer token-1",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ code: "123456", enrollment_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }),
+      signal: undefined,
+      cache: undefined,
+    });
+  });
+});

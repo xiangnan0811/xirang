@@ -33,6 +33,7 @@ import (
 	"xirang/backend/internal/backupasset/search"
 	configpkg "xirang/backend/internal/config"
 	"xirang/backend/internal/database"
+	"xirang/backend/internal/dbtx"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
@@ -7358,7 +7359,7 @@ type managedExportSQLiteBusyDrainBudget struct {
 
 func (budget *managedExportSQLiteBusyDrainBudget) ReconcileExpiredAttemptReads(ctx context.Context, _ int) (int, error) {
 	budget.once.Do(func() { close(budget.entered) })
-	err := database.WithSQLiteBusyRetryTx(ctx, budget.db, func(*gorm.DB) error {
+	err := dbtx.WithSQLiteBusyRetryTx(ctx, budget.db, func(*gorm.DB) error {
 		budget.calls.Add(1)
 		return nil
 	})

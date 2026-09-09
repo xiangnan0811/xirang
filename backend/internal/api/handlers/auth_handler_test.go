@@ -43,7 +43,7 @@ func openAuthHandlerTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}, &model.PendingAuthToken{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
 	}
 	return db
@@ -285,9 +285,11 @@ func TestSetupTOTPSuccess(t *testing.T) {
 
 	var r struct {
 		Data struct {
-			Secret string `json:"secret"`
-			QrURL  string `json:"qr_url"`
-			Issuer string `json:"issuer"`
+			Secret       string    `json:"secret"`
+			QrURL        string    `json:"qr_url"`
+			Issuer       string    `json:"issuer"`
+			EnrollmentID string    `json:"enrollment_id"`
+			ExpiresAt    time.Time `json:"expires_at"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(resp.Body.Bytes(), &r); err != nil {
@@ -301,6 +303,12 @@ func TestSetupTOTPSuccess(t *testing.T) {
 	}
 	if r.Data.Issuer == "" {
 		t.Fatalf("期望返回 issuer")
+	}
+	if r.Data.EnrollmentID == "" {
+		t.Fatalf("期望返回 enrollment_id")
+	}
+	if r.Data.ExpiresAt.IsZero() || !r.Data.ExpiresAt.After(time.Now()) {
+		t.Fatalf("期望返回未来 expires_at")
 	}
 
 	// 验证 DB 中已存储 pending secret
@@ -318,7 +326,21 @@ func TestSetupTOTPSuccess(t *testing.T) {
 
 func TestSetupTOTPRejectsAlreadyEnabledUser(t *testing.T) {
 	fx := setupAuthHandlerFixture(t)
-	_ = jsonRequest(t, fx.router, http.MethodPost, "/auth/2fa/setup", fx.adminToken, "")
+	setupResp := jsonRequest(t, fx.router, http.MethodPost, "/auth/2fa/setup", fx.adminToken, "")
+	if setupResp.Code != http.StatusOK {
+		t.Fatalf("setup 失败: %d %s", setupResp.Code, setupResp.Body.String())
+	}
+	var setup struct {
+		Data struct {
+			EnrollmentID string `json:"enrollment_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(setupResp.Body.Bytes(), &setup); err != nil {
+		t.Fatalf("解析 setup 响应失败: %v", err)
+	}
+	if setup.Data.EnrollmentID == "" {
+		t.Fatalf("setup 未返回 enrollment_id")
+	}
 
 	var user model.User
 	if err := fx.db.First(&user, fx.adminUser.ID).Error; err != nil {
@@ -328,7 +350,7 @@ func TestSetupTOTPRejectsAlreadyEnabledUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("生成 TOTP 验证码失败: %v", err)
 	}
-	verifyResp := jsonRequest(t, fx.router, http.MethodPost, "/auth/2fa/verify", fx.adminToken, fmt.Sprintf(`{"code":%q}`, code))
+	verifyResp := jsonRequest(t, fx.router, http.MethodPost, "/auth/2fa/verify", fx.adminToken, fmt.Sprintf(`{"code":%q,"enrollment_id":%q}`, code, setup.Data.EnrollmentID))
 	if verifyResp.Code != http.StatusOK {
 		t.Fatalf("启用 TOTP 失败: %d %s", verifyResp.Code, verifyResp.Body.String())
 	}
@@ -336,8 +358,12 @@ func TestSetupTOTPRejectsAlreadyEnabledUser(t *testing.T) {
 		t.Fatalf("重新加载启用后用户失败: %v", err)
 	}
 	activeSecret := user.TOTPSecret
+	freshToken, err := fx.jwtManager.GenerateToken(user)
+	if err != nil {
+		t.Fatalf("生成刷新后的 admin token 失败: %v", err)
+	}
 
-	resp := jsonRequest(t, fx.router, http.MethodPost, "/auth/2fa/setup", fx.adminToken, "")
+	resp := jsonRequest(t, fx.router, http.MethodPost, "/auth/2fa/setup", freshToken, "")
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("已启用用户再次 setup 应返回 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}
@@ -355,7 +381,21 @@ func TestVerifyTOTPSuccess(t *testing.T) {
 	fx := setupAuthHandlerFixture(t)
 
 	// 第一步：setup
-	_ = jsonRequest(t, fx.router, http.MethodPost, "/auth/2fa/setup", fx.adminToken, "")
+	setupResp := jsonRequest(t, fx.router, http.MethodPost, "/auth/2fa/setup", fx.adminToken, "")
+	if setupResp.Code != http.StatusOK {
+		t.Fatalf("setup 失败: %d %s", setupResp.Code, setupResp.Body.String())
+	}
+	var setup struct {
+		Data struct {
+			EnrollmentID string `json:"enrollment_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(setupResp.Body.Bytes(), &setup); err != nil {
+		t.Fatalf("解析 setup 响应失败: %v", err)
+	}
+	if setup.Data.EnrollmentID == "" {
+		t.Fatalf("setup 未返回 enrollment_id")
+	}
 
 	// 读取 pending secret
 	var user model.User
@@ -371,9 +411,8 @@ func TestVerifyTOTPSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("生成 TOTP 验证码失败: %v", err)
 	}
-
 	// 第二步：verify
-	body := fmt.Sprintf(`{"code":%q}`, code)
+	body := fmt.Sprintf(`{"code":%q,"enrollment_id":%q}`, code, setup.Data.EnrollmentID)
 	resp := jsonRequest(t, fx.router, http.MethodPost, "/auth/2fa/verify", fx.adminToken, body)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("期望状态码 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
@@ -403,16 +442,29 @@ func TestVerifyTOTPSuccess(t *testing.T) {
 		t.Fatalf("verify 后 RecoveryCodes 不应为空")
 	}
 }
-
 func TestVerifyTOTPWrongCode(t *testing.T) {
 	fx := setupAuthHandlerFixture(t)
 
 	// 先 setup
-	_ = jsonRequest(t, fx.router, http.MethodPost, "/auth/2fa/setup", fx.adminToken, "")
+	setupResp := jsonRequest(t, fx.router, http.MethodPost, "/auth/2fa/setup", fx.adminToken, "")
+	if setupResp.Code != http.StatusOK {
+		t.Fatalf("setup 失败: %d %s", setupResp.Code, setupResp.Body.String())
+	}
+	var setup struct {
+		Data struct {
+			EnrollmentID string `json:"enrollment_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(setupResp.Body.Bytes(), &setup); err != nil {
+		t.Fatalf("解析 setup 响应失败: %v", err)
+	}
+	if setup.Data.EnrollmentID == "" {
+		t.Fatalf("setup 未返回 enrollment_id")
+	}
 
 	// 用错误验证码 verify
 	resp := jsonRequest(t, fx.router, http.MethodPost, "/auth/2fa/verify", fx.adminToken,
-		`{"code":"000000"}`)
+		fmt.Sprintf(`{"code":"000000","enrollment_id":%q}`, setup.Data.EnrollmentID))
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("期望状态码 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}

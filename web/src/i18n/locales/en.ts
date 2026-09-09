@@ -2325,6 +2325,8 @@ const en = {
     disableButton: "Disable 2FA",
     disableFailed: "Failed to disable",
     enabledConfig: "Enabled",
+    enrollmentExpired: "This setup session expired. Generate a new key and try again.",
+    enrollmentMissing: "Setup session is missing. Generate a new key and try again.",
   },
 
   // ── cron generator ──
@@ -3723,14 +3725,16 @@ const en = {
     batchId: "Batch ID: {{id}}",
     running: "Running",
     done: "Done",
-    total: "Total",
+    total: "{{count}} total",
     successCount: "Succeeded",
     failedCount: "Failed",
     loadingLogs: "Loading logs...",
     logLoadFailed: "Failed to load logs",
     noLogOutput: "No log output",
     fetchStatusFailed: "Failed to fetch status",
-    autoCleanHint: "Results will be cleaned up automatically after a while.",
+    autoCleanHint: "Closing a finished batch requests cleanup. Unconfirmed batches are retained.",
+    dispatchFailed: "Dispatch failed",
+    dispatchPending: "Dispatch not confirmed",
   },
 
   // ── bandwidth schedule display ──
@@ -4404,6 +4408,9 @@ const en = {
     fieldHttpHeaders: "HTTP Headers",
     fieldUptime: "Uptime",
     httpHeadersHint: "Optional: custom HTTP request headers.",
+    httpHeadersConfigured: "Configured header names: {{names}}",
+    httpHeadersReplaceHint: "Only header names are shown. Saving a header list replaces the complete set; omit headers to keep the current values.",
+    httpHeadersClear: "Clear all custom HTTP headers",
     addHeader: "Add header",
     removeHeader: "Remove",
     headerKeyPlaceholder: "Header name",

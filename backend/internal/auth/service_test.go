@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -14,7 +15,7 @@ import (
 
 func TestLoginLocksByUsernameAndIPAfterThreshold(t *testing.T) {
 	db := openAuthServiceTestDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}, &model.PendingAuthToken{}); err != nil {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
@@ -58,7 +59,7 @@ func TestLoginLocksByUsernameAndIPAfterThreshold(t *testing.T) {
 
 func TestLoginLockExpiresAfterDuration(t *testing.T) {
 	db := openAuthServiceTestDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}, &model.PendingAuthToken{}); err != nil {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
@@ -98,7 +99,7 @@ func TestLoginLockExpiresAfterDuration(t *testing.T) {
 
 func TestChangePasswordRejectsWrongCurrent(t *testing.T) {
 	db := openAuthServiceTestDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}, &model.PendingAuthToken{}); err != nil {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
@@ -128,7 +129,7 @@ func TestChangePasswordRejectsWrongCurrent(t *testing.T) {
 
 func TestCreateUserRejectsDuplicate(t *testing.T) {
 	db := openAuthServiceTestDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}, &model.PendingAuthToken{}); err != nil {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
@@ -153,7 +154,7 @@ func TestCreateUserRejectsDuplicate(t *testing.T) {
 
 func TestCreateUserRejectsInvalidRole(t *testing.T) {
 	db := openAuthServiceTestDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}, &model.PendingAuthToken{}); err != nil {
 		t.Fatalf("初始化用户表失败: %v", err)
 	}
 
@@ -189,7 +190,7 @@ func openAuthServiceTestDB(t *testing.T) *gorm.DB {
 // TestGlobalLoginLock blocks a username after global threshold failures from different IPs.
 func TestGlobalLoginLock(t *testing.T) {
 	db := openAuthServiceTestDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}, &model.PendingAuthToken{}); err != nil {
 		t.Fatalf("初始化表失败: %v", err)
 	}
 
@@ -203,7 +204,7 @@ func TestGlobalLoginLock(t *testing.T) {
 	}
 
 	service := NewService(db, NewJWTManager("test-secret", time.Hour), nil, LoginSecurityConfig{
-		FailLockThreshold:       3,  // low per-IP threshold
+		FailLockThreshold:       3, // low per-IP threshold
 		FailLockDuration:        time.Minute,
 		GlobalFailLockThreshold: 10, // higher global threshold
 		GlobalFailLockDuration:  time.Minute,
@@ -245,7 +246,7 @@ func TestGlobalLoginLock(t *testing.T) {
 // TestGlobalLoginLockResetOnSuccess clears global counter on successful login.
 func TestGlobalLoginLockResetOnSuccess(t *testing.T) {
 	db := openAuthServiceTestDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}, &model.PendingAuthToken{}); err != nil {
 		t.Fatalf("初始化表失败: %v", err)
 	}
 
@@ -292,7 +293,7 @@ func TestGlobalLoginLockResetOnSuccess(t *testing.T) {
 // TestGlobalLoginLockWithDefaults verifies zero-value global config uses sensible defaults.
 func TestGlobalLoginLockWithDefaults(t *testing.T) {
 	db := openAuthServiceTestDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}, &model.PendingAuthToken{}); err != nil {
 		t.Fatalf("初始化表失败: %v", err)
 	}
 
@@ -315,5 +316,44 @@ func TestGlobalLoginLockWithDefaults(t *testing.T) {
 	_, err := service.Login("defaults", "Correct1!", "10.0.99.99")
 	if err != nil {
 		t.Fatalf("低于默认全局阈值时不应锁定，实际错误: %v", err)
+	}
+}
+
+func TestLastAdminInvariantAcrossUserMutations(t *testing.T) {
+	db := openAuthServiceTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.LoginFailure{}, &model.PendingAuthToken{}); err != nil {
+		t.Fatalf("初始化表失败: %v", err)
+	}
+	passwordHash, err := HashPassword("Correct1!")
+	if err != nil {
+		t.Fatalf("生成密码哈希失败: %v", err)
+	}
+	admin := model.User{Username: "sole-admin", PasswordHash: passwordHash, Role: "admin"}
+	operator := model.User{Username: "operator", PasswordHash: passwordHash, Role: "operator"}
+	if err := db.Create(&admin).Error; err != nil {
+		t.Fatalf("创建 admin 失败: %v", err)
+	}
+	if err := db.Create(&operator).Error; err != nil {
+		t.Fatalf("创建 operator 失败: %v", err)
+	}
+	service := NewService(db, NewJWTManager("test-secret", time.Hour), nil, LoginSecurityConfig{
+		FailLockThreshold: 10,
+		FailLockDuration:  time.Minute,
+	})
+
+	demote := "operator"
+	if _, err := service.UpdateUser(admin.ID, &demote, nil); !errors.Is(err, ErrLastAdmin) {
+		t.Fatalf("最后一个 admin 不应被降级，实际错误: %v", err)
+	}
+	if err := service.DeleteUser(admin.ID, operator.ID); !errors.Is(err, ErrLastAdmin) {
+		t.Fatalf("最后一个 admin 不应被删除，实际错误: %v", err)
+	}
+
+	secondAdmin := model.User{Username: "second-admin", PasswordHash: passwordHash, Role: "admin"}
+	if err := db.Create(&secondAdmin).Error; err != nil {
+		t.Fatalf("创建第二个 admin 失败: %v", err)
+	}
+	if _, err := service.UpdateUser(admin.ID, &demote, nil); err != nil {
+		t.Fatalf("存在第二个 admin 时应允许降级: %v", err)
 	}
 }

@@ -1572,7 +1572,7 @@ func openNodeWriteCoordinatorTestDB(t *testing.T) *gorm.DB {
 	sqlDB.SetMaxOpenConns(8)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := db.AutoMigrate(
-		&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{},
+		&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.TaskRunEffect{},
 		&model.RestoreDrillEvidence{}, &model.BackupAssetRecoveryNodeLease{},
 	); err != nil {
 		t.Fatal(err)

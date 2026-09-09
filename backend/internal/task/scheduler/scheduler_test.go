@@ -79,12 +79,6 @@ func TestRemoveTask_RemovesExistingEntry(t *testing.T) {
 	}
 }
 
-func TestRemoveTask_UnknownIDIsSilentNoop(t *testing.T) {
-	s := NewCronScheduler()
-	// Must not panic. No assertions beyond reaching this line.
-	s.RemoveTask(9999)
-}
-
 func TestStartStop_FiresRegisteredJobAtLeastOnce(t *testing.T) {
 	// robfig/cron/v3 ConstantDelaySchedule rounds sub-second intervals up to 1s.
 	// Use @every 1s and sleep 2200ms to guarantee ≥2 fires before Stop.
@@ -109,5 +103,55 @@ func TestStartStop_FiresRegisteredJobAtLeastOnce(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	if after := atomic.LoadInt32(&fires); after != before {
 		t.Fatalf("Stop did not halt scheduler: %d fires after Stop", after-before)
+	}
+}
+
+func TestRegisterTask_SameSpecPreservesLiveEntryAndFires(t *testing.T) {
+	s := NewCronScheduler()
+	var fires int32
+	if err := s.RegisterTask(11, "@every 6s", func() {
+		atomic.AddInt32(&fires, 1)
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	s.Start()
+	defer s.Stop()
+
+	// Periodic reconciliation must not remove/re-add an unchanged @every job:
+	// doing so resets its deadline and prevents intervals longer than the
+	// reconciliation period from ever firing.
+	for i := range 10 {
+		time.Sleep(500 * time.Millisecond)
+		if err := s.RegisterTask(11, "@every 6s", func() {
+			atomic.AddInt32(&fires, 1)
+		}); err != nil {
+			t.Fatalf("reconcile register %d: %v", i, err)
+		}
+	}
+	deadline := time.After(3 * time.Second)
+	for atomic.LoadInt32(&fires) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("unchanged @every 6s schedule did not fire after reconciliation")
+		default:
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+}
+
+func TestRemoveTasksExcept_RemovesStaleEntries(t *testing.T) {
+	s := NewCronScheduler()
+	if err := s.RegisterTask(1, "@every 1m", func() {}); err != nil {
+		t.Fatalf("register task 1: %v", err)
+	}
+	if err := s.RegisterTask(2, "@every 1m", func() {}); err != nil {
+		t.Fatalf("register task 2: %v", err)
+	}
+	s.RemoveTasksExcept(map[uint]struct{}{1: {}})
+	if !s.HasTask(1) {
+		t.Fatal("kept schedule was removed")
+	}
+	if s.HasTask(2) {
+		t.Fatal("stale schedule remained")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -221,7 +222,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 			if err != nil {
 				return -1, fmt.Errorf("SSH 主机密钥配置异常，请联系管理员")
 			}
-			autoAccept, _ := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", true)
+			autoAccept, _ := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", false)
 			hostKeyMode := "yes"
 			if autoAccept {
 				hostKeyMode = "accept-new"
@@ -259,7 +260,11 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 		if NeedsSudo(task.Node) {
 			args = append(args, "--rsync-path", "sudo rsync")
 		}
-		source = fmt.Sprintf("%s@%s:%s", user, task.Node.Host, task.RsyncSource)
+		host := task.Node.Host
+		if parsedIP := net.ParseIP(host); parsedIP != nil && strings.Contains(host, ":") {
+			host = "[" + parsedIP.String() + "]"
+		}
+		source = fmt.Sprintf("%s@%s:%s", user, host, task.RsyncSource)
 	}
 	defer cleanup()
 

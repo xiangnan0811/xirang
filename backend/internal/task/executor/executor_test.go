@@ -115,9 +115,6 @@ func TestRsyncExecutorUsesSSHKeyRelationWhenNodePrivateKeyEmpty(t *testing.T) {
 	if !strings.Contains(joined, "\n--\n") {
 		t.Fatalf("期望 rsync 参数包含 -- 以阻断选项注入，实际日志: %s", joined)
 	}
-	if !strings.Contains(joined, "StrictHostKeyChecking=accept-new") {
-		t.Fatalf("期望默认携带 StrictHostKeyChecking=accept-new，实际日志: %s", joined)
-	}
 	if !strings.Contains(joined, "-i") || !strings.Contains(joined, "[路径已隐藏]") || strings.Contains(joined, "xirang-key-") {
 		t.Fatalf("期望携带已脱敏的 -i 临时密钥参数，实际日志: %s", joined)
 	}
@@ -125,7 +122,7 @@ func TestRsyncExecutorUsesSSHKeyRelationWhenNodePrivateKeyEmpty(t *testing.T) {
 
 func TestRsyncExecutorUsesStrictHostKeyCheckingWhenAutoAcceptDisabled(t *testing.T) {
 	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "true")
-	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "false")
+	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "")
 	exec := &RsyncExecutor{binary: createArgEchoScript(t)}
 	target := t.TempDir()
 

@@ -195,7 +195,6 @@ export function useConsoleData(token: string | null): ConsoleDataState {
     nodes,
     policies,
     tasks,
-    alerts,
     setTasks,
     setAlerts,
     setWarning,

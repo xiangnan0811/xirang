@@ -22,7 +22,6 @@ type UseTaskOperationsParams = {
   nodes: NodeRecord[];
   policies: PolicyRecord[];
   tasks: TaskRecord[];
-  alerts: AlertRecord[];
   setTasks: Dispatch<SetStateAction<TaskRecord[]>>;
   setAlerts: Dispatch<SetStateAction<AlertRecord[]>>;
   setWarning: Dispatch<SetStateAction<string | null>>;
@@ -37,7 +36,6 @@ export function useTaskOperations({
   nodes,
   policies,
   tasks,
-  alerts,
   setTasks,
   setAlerts,
   setWarning,
@@ -160,25 +158,15 @@ export function useTaskOperations({
 
   const retryTask = useCallback(async (taskID: number) => {
     await triggerTask(taskID);
-
-    const relatedAlerts = alerts.filter((alert) => alert.taskId === taskID && alert.status !== "resolved");
-    if (token && relatedAlerts.length > 0) {
-      void Promise.allSettled(relatedAlerts.map((alert) => apiClient.resolveAlert(token, alert.id)));
+    if (!token) {
+      return;
     }
-
-    setAlerts((prev) =>
-      prev.map((alert) =>
-        alert.taskId === taskID
-          ? {
-              ...alert,
-              status: "resolved",
-              retryable: false,
-              message: i18n.t("tasks.retriedMessage")
-            }
-          : alert
-      )
-    );
-  }, [alerts, setAlerts, token, triggerTask]);
+    try {
+      setAlerts(await apiClient.getAlerts(token));
+    } catch {
+      // Keep last known open/acked alerts. Retry must not invent resolved.
+    }
+  }, [setAlerts, token, triggerTask]);
 
   const pauseTask = useCallback(async (taskID: number, cancelRunning?: boolean) => {
     const result = await exec(i18n.t("tasks.actions.pauseTask"), async (t) => {

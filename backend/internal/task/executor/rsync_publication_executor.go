@@ -160,7 +160,7 @@ func managedRsyncRemoteSource(ctx context.Context, node model.Node, source strin
 		cleanup()
 		return provider.RsyncTreeRemoteSource{}, func() {}, fmt.Errorf("resolve managed Rsync known-hosts path: %w", err)
 	}
-	autoAccept, err := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", true)
+	autoAccept, err := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", false)
 	if err != nil {
 		cleanup()
 		return provider.RsyncTreeRemoteSource{}, func() {}, err

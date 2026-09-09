@@ -130,24 +130,26 @@ func (t *Task) AfterFind(_ *gorm.DB) error {
 }
 
 type TaskRun struct {
-	ID                uint       `gorm:"primaryKey" json:"id"`
-	TaskID            uint       `gorm:"not null;index;uniqueIndex:idx_task_runs_active_drill,where:trigger_type = 'drill' AND (status = 'pending' OR status = 'running' OR status = 'retrying')" json:"task_id"`
-	Task              Task       `gorm:"foreignKey:TaskID" json:"-"`
-	NodeIDSnapshot    uint       `gorm:"not null;index:idx_task_runs_node_snapshot_status,priority:1" json:"-"`
-	TriggerType       string     `gorm:"size:32;not null;default:manual" json:"trigger_type"`
-	Status            string     `gorm:"size:32;not null;default:pending;index;index:idx_task_runs_status_finished_at,priority:1;index:idx_task_runs_node_snapshot_status,priority:2" json:"status"`
-	ChainRunID        string     `gorm:"size:64;index" json:"chain_run_id,omitempty"`
-	UpstreamTaskRunID *uint      `gorm:"index" json:"upstream_task_run_id,omitempty"`
-	SkipReason        string     `gorm:"type:text" json:"skip_reason,omitempty"`
-	StartedAt         *time.Time `gorm:"index:idx_task_runs_started_at" json:"started_at"`
-	FinishedAt        *time.Time `gorm:"index:idx_task_runs_status_finished_at,priority:2" json:"finished_at"`
-	DurationMs        int64      `gorm:"not null;default:0" json:"duration_ms"`
-	VerifyStatus      string     `gorm:"size:16;not null;default:none" json:"verify_status"`
-	ThroughputMbps    float64    `gorm:"not null;default:0" json:"throughput_mbps"`
-	Progress          int        `gorm:"not null;default:0" json:"progress"`
-	LastError         string     `gorm:"type:text" json:"last_error"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	ExecutionOwnerID    string     `gorm:"size:64;not null;default:''" json:"-"`
+	ExecutionLeaseUntil *time.Time `gorm:"index" json:"-"`
+	ID                  uint       `gorm:"primaryKey" json:"id"`
+	TaskID              uint       `gorm:"not null;index;uniqueIndex:idx_task_runs_active_drill,where:trigger_type = 'drill' AND (status = 'pending' OR status = 'running' OR status = 'retrying')" json:"task_id"`
+	Task                Task       `gorm:"foreignKey:TaskID" json:"-"`
+	NodeIDSnapshot      uint       `gorm:"not null;index:idx_task_runs_node_snapshot_status,priority:1" json:"-"`
+	TriggerType         string     `gorm:"size:32;not null;default:manual" json:"trigger_type"`
+	Status              string     `gorm:"size:32;not null;default:pending;index;index:idx_task_runs_status_finished_at,priority:1;index:idx_task_runs_node_snapshot_status,priority:2" json:"status"`
+	ChainRunID          string     `gorm:"size:64;index" json:"chain_run_id,omitempty"`
+	UpstreamTaskRunID   *uint      `gorm:"index" json:"upstream_task_run_id,omitempty"`
+	SkipReason          string     `gorm:"type:text" json:"skip_reason,omitempty"`
+	StartedAt           *time.Time `gorm:"index:idx_task_runs_started_at" json:"started_at"`
+	FinishedAt          *time.Time `gorm:"index:idx_task_runs_status_finished_at,priority:2" json:"finished_at"`
+	DurationMs          int64      `gorm:"not null;default:0" json:"duration_ms"`
+	VerifyStatus        string     `gorm:"size:16;not null;default:none" json:"verify_status"`
+	ThroughputMbps      float64    `gorm:"not null;default:0" json:"throughput_mbps"`
+	Progress            int        `gorm:"not null;default:0" json:"progress"`
+	LastError           string     `gorm:"type:text" json:"last_error"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
 // BeforeCreate freezes the Task's current node for every GORM TaskRun writer.

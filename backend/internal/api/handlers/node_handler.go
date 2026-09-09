@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -453,7 +454,7 @@ func (h *NodeHandler) TestConnection(c *gin.Context) {
 		return
 	}
 
-	address := fmt.Sprintf("%s:%d", node.Host, node.Port)
+	address := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
 	hostKeyCallback, err := sshutil.ResolveSSHHostKeyCallback()
 	if err != nil {
 		probeAt := time.Now()

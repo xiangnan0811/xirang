@@ -2325,6 +2325,8 @@ const zh = {
     disableButton: "禁用两步验证",
     disableFailed: "禁用失败",
     enabledConfig: "启用配置",
+    enrollmentExpired: "绑定会话已过期，请重新生成密钥后再试。",
+    enrollmentMissing: "绑定会话缺失，请重新生成密钥后再试。",
   },
 
   // ── cron generator ──
@@ -3723,14 +3725,16 @@ const zh = {
     batchId: "批次 ID：{{id}}",
     running: "运行中",
     done: "已完成",
-    total: "总数",
+    total: "共 {{count}} 项",
     successCount: "成功",
     failedCount: "失败",
     loadingLogs: "加载日志中...",
     logLoadFailed: "日志加载失败",
     noLogOutput: "暂无日志输出",
     fetchStatusFailed: "获取状态失败",
-    autoCleanHint: "执行结果将在一段时间后自动清理。",
+    autoCleanHint: "完成后关闭窗口将尝试清理；未确认的批次会保留。",
+    dispatchFailed: "派发失败",
+    dispatchPending: "派发尚未确认",
   },
 
   // ── bandwidth schedule display ──
@@ -4413,6 +4417,9 @@ const zh = {
     fieldHttpHeaders: "HTTP 请求头",
     fieldUptime: "可用率",
     httpHeadersHint: "可选：自定义 HTTP 请求头。",
+    httpHeadersConfigured: "已配置请求头名称：{{names}}",
+    httpHeadersReplaceHint: "仅显示请求头名称。保存请求头列表会完整替换现有值；省略该字段则保留当前值。",
+    httpHeadersClear: "清除全部自定义 HTTP 请求头",
     addHeader: "添加请求头",
     removeHeader: "移除",
     headerKeyPlaceholder: "Header 名称",

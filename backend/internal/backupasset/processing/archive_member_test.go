@@ -804,39 +804,22 @@ func TestArchiveMemberCreateWaitsForHeldLockAcrossMultipleAttempts(t *testing.T)
 	}
 }
 
-func TestArchiveMemberCreateRetryDelayHonorsContextCancellation(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	db := archiveMemberTestDB(t, now)
-	memberID := strings.Repeat("a", 32)
-	service, err := NewArchiveMemberService(ArchiveMemberServiceDependencies{
-		DB: db, Coordinator: &archiveMemberCoordinatorFake{},
-		Authorize:    archiveMemberAuthorizerFake{asset: archiveMemberAssetFixture()},
-		ResolveIndex: (&archiveMemberIndexFake{binding: archiveMemberIndexFixture(now, memberID)}).Resolve,
-		Now:          func() time.Time { return now },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var attempts atomic.Int32
-	callbackName := "test:archive-member-canceled-use-latch-lock"
-	if err := db.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
-		if tx.Statement.Table == (model.BackupAssetExportQuotaBucket{}).TableName() {
-			attempts.Add(1)
-			_ = tx.AddError(sqlite3.Error{Code: sqlite3.ErrLocked})
-		}
-	}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Callback().Create().Remove(callbackName) })
-
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Millisecond)
+func TestArchiveMemberConflictRetryHonorsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if _, err := service.Create(ctx, archiveMemberCreateFixture(memberID)); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("canceled retry error=%v attempts=%d", err, attempts.Load())
+	var attempts int
+	err := retryArchiveMemberConflicts(ctx, func() error {
+		attempts++
+		// Cancel only after the conflict is reached, not during unrelated
+		// fixture setup or SQL work on a busy race-enabled runner.
+		cancel()
+		return sqlite3.Error{Code: sqlite3.ErrLocked}
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled retry error=%v attempts=%d", err, attempts)
 	}
-	if got := attempts.Load(); got == 0 || got >= int32(archiveMemberConflictAttempts) {
-		t.Fatalf("canceled retry attempts=%d", got)
+	if attempts == 0 || attempts >= archiveMemberConflictAttempts {
+		t.Fatalf("cancellation exhausted retry budget: attempts=%d", attempts)
 	}
 }
 

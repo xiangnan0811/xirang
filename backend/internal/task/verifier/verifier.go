@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -289,7 +290,7 @@ func dialSSHForTask(ctx context.Context, task model.Task, db *gorm.DB) (*ssh.Cli
 		return nil, fmt.Errorf("解析主机密钥回调失败: %w", err)
 	}
 
-	address := fmt.Sprintf("%s:%d", task.Node.Host, task.Node.Port)
+	address := net.JoinHostPort(task.Node.Host, strconv.Itoa(task.Node.Port))
 	return sshutil.DialSSH(ctx, address, task.Node.Username, authMethods, hostKeyCallback)
 }
 
