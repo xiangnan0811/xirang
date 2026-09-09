@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.4](https://github.com/xiangnan0811/xirang/compare/v0.55.3...v0.55.4) (2026-09-09)
+
+
+### 🐛 Bug Fixes
+
+* remediate audit findings ([#509](https://github.com/xiangnan0811/xirang/issues/509)) ([64770db](https://github.com/xiangnan0811/xirang/commit/64770db7f851426ec894d5df03dcafed1ae70e5f))
+
 ## [0.55.3](https://github.com/xiangnan0811/xirang/compare/v0.55.2...v0.55.3) (2026-09-08)
 
 
