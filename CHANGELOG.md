@@ -1,13 +1,24 @@
 # Changelog
 
-## Unreleased
+## [0.55.5](https://github.com/xiangnan0811/xirang/compare/v0.55.4...v0.55.5) (2026-09-10)
 
-### Bug Fixes
 
+### 🐛 Bug Fixes
+
+* harden backup recovery and task execution lifecycle ([#513](https://github.com/xiangnan0811/xirang/issues/513)) ([19def68](https://github.com/xiangnan0811/xirang/commit/19def68de0d5f6a0c60f05c4475355e9b91d12ac))
 * Protect legacy Rsync/Rclone current backup trees from age-based retention deletion; restore Rsync data from Core to the node, honor policy exclusions, and require matching successful-backup provenance before legacy restore.
 * Persist cron occurrence identity, recover safely pending runs across restarts, consume skip-next at execution entry, preserve causal task-alert ordering, and retain retryable or explicit skipped downstream outcomes across Core instances.
 * Bound SSH terminal shutdown and enforce active-session revocation, authority changes, and JWT expiry; preserve raw password semantics when disabling TOTP.
 * Start managed publication cleanup deadlines after provider execution and release admission even when finalization persistence fails.
+* Refresh the exact Worker xz package and matching Core/Worker toolchain inventory to 5.8.4-r0.
+
+### Upgrade Notes
+
+* Back up the database and encryption keys, then stop and drain the old Core before applying SQLite/PostgreSQL migration 000082. Do not mix old schedulers or executors with the upgraded Core.
+* Age-based deletion no longer applies to legacy Rsync/Rclone current mirrors. Managed recovery points and Restic retention are unchanged.
+* Complete a new successful ordinary backup before legacy Rsync restore after upgrading or changing source, node, exclusions, hooks, or other bound inputs; otherwise restore returns `new-backup-required`. Existing backup files are not deleted by this requirement.
+* Downgrade protection refuses to erase persisted cron identity or backup provenance once those fields are used.
+* Optional Worker deployments must rebuild/update Core and Worker from the same release source to keep their exact toolchain fingerprints aligned.
 
 ## [0.55.4](https://github.com/xiangnan0811/xirang/compare/v0.55.3...v0.55.4) (2026-09-09)
 
