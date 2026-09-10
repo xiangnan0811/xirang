@@ -89,6 +89,7 @@
 - Legacy Rsync/Rclone 当前镜像不再执行破坏性的按年龄清理；受管恢复点及 Restic 保留机制不变。
 - Legacy Rsync 恢复必须匹配一次成功的普通备份及其来源、节点、策略执行输入。升级后或这些输入变化后，先完成新备份，否则恢复返回 `new-backup-required`；历史备份文件不会因此被删除。
 - 新迁移的定时触发身份或备份指纹一旦写入，降级会拒绝抹除这些事实；不要绕过降级保护。
+- 可选 Worker 的工具链指纹包含精确系统包版本。升级时从同一发布源码重建/更新 Core 与 Worker，保持指纹一致。
 
 完整运行语义见 [后端说明](../../backend/README_backend.md#legacy-backup-safety-and-task-lifecycle)。
 
