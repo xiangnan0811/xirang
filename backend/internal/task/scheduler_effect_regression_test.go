@@ -302,6 +302,9 @@ func TestCronSkipNextConsumedOnlyAtExecutionEntry(t *testing.T) {
 		t.Fatalf("trigger skipped cron run: %v", err)
 	}
 	run := waitTaskRunTerminal(t, db, runID)
+	// Durable terminalization precedes the runner's process-local owner
+	// cleanup. Join the worker before reserving the independent occurrence.
+	manager.taskWG.Wait()
 	if run.Status != model.TaskRunStatusCanceled {
 		t.Fatalf("skipped cron run status=%q, want canceled", run.Status)
 	}

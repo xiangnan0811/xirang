@@ -238,6 +238,7 @@ func TestReconcileInterruptedRunsQueriesOnlyTaskOwnedResticRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Update("executor_type", "rsync").Error; err != nil {
 		t.Fatal(err)

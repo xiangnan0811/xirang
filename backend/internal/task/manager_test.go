@@ -2462,8 +2462,52 @@ func testCancelTaskEntryCommitPreservesPriorOutcomeWithoutExecutor(
 	t.Helper()
 	db := openConcurrentManagerTestDB(t)
 	executor := &successExecutor{}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitEntered := make(chan struct{})
+	commitRelease := make(chan struct{})
+	commitPool := &taskEntryCommitBarrierPool{
+		DB: sqlDB, committed: commitEntered, release: commitRelease,
+	}
+	db.ConnPool = commitPool
+	db.Statement.ConnPool = commitPool
+
+	startEntered := make(chan struct{})
+	startRelease := make(chan struct{})
+	var blockCancelRead atomic.Bool
+	cancelReadEntered := make(chan struct{})
+	cancelReadRelease := make(chan struct{})
+	var cancelReadOnce sync.Once
+	callbackName := "test:task-entry-cancel-read"
+	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "tasks" || !blockCancelRead.CompareAndSwap(true, false) {
+			return
+		}
+		cancelReadOnce.Do(func() { close(cancelReadEntered) })
+		<-cancelReadRelease
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+
 	manager := NewManager(db, stubExecutorFactory{executor: executor}, nil, nil, nil, nil, 8, 90)
 	shutdownManagerOnCleanup(t, manager)
+
+	var startReleaseOnce sync.Once
+	releaseStart := func() { startReleaseOnce.Do(func() { close(startRelease) }) }
+	var cancelReadReleaseOnce sync.Once
+	releaseCancelRead := func() { cancelReadReleaseOnce.Do(func() { close(cancelReadRelease) }) }
+	var commitReleaseOnce sync.Once
+	releaseCommit := func() { commitReleaseOnce.Do(func() { close(commitRelease) }) }
+	t.Cleanup(func() {
+		releaseStart()
+		releaseCancelRead()
+		releaseCommit()
+	})
+
 	taskEntity := seedTaskForManagerTest(t, db)
 	previousLastRunAt := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Millisecond)
 	previousNextRunAt := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Millisecond)
@@ -2486,51 +2530,9 @@ func testCancelTaskEntryCommitPreservesPriorOutcomeWithoutExecutor(
 	if err := db.First(&previous, taskEntity.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-
-	startEntered := make(chan struct{})
-	startRelease := make(chan struct{})
 	manager.SetNodeWriteAdmission(&nodeWriteAdmissionFake{
 		startEntered: startEntered,
 		startRelease: startRelease,
-	})
-
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	commitEntered := make(chan struct{})
-	commitRelease := make(chan struct{})
-	commitPool := &taskEntryCommitBarrierPool{
-		DB: sqlDB, committed: commitEntered, release: commitRelease,
-	}
-	db.ConnPool = commitPool
-	db.Statement.ConnPool = commitPool
-
-	var blockCancelRead atomic.Bool
-	cancelReadEntered := make(chan struct{})
-	cancelReadRelease := make(chan struct{})
-	var cancelReadOnce sync.Once
-	callbackName := fmt.Sprintf("test:task-entry-cancel-read-%d", taskEntity.ID)
-	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-		if tx.Statement.Table != "tasks" || !blockCancelRead.CompareAndSwap(true, false) {
-			return
-		}
-		cancelReadOnce.Do(func() { close(cancelReadEntered) })
-		<-cancelReadRelease
-	}); err != nil {
-		t.Fatal(err)
-	}
-	var startReleaseOnce sync.Once
-	releaseStart := func() { startReleaseOnce.Do(func() { close(startRelease) }) }
-	var cancelReadReleaseOnce sync.Once
-	releaseCancelRead := func() { cancelReadReleaseOnce.Do(func() { close(cancelReadRelease) }) }
-	var commitReleaseOnce sync.Once
-	releaseCommit := func() { commitReleaseOnce.Do(func() { close(commitRelease) }) }
-	t.Cleanup(func() {
-		releaseStart()
-		releaseCancelRead()
-		releaseCommit()
-		_ = db.Callback().Query().Remove(callbackName)
 	})
 
 	runID, err := manager.TriggerManual(taskEntity.ID)
@@ -2678,8 +2680,33 @@ func testNoExecutorCompensationAfterDurableEntry(
 	if legacyRestore {
 		factoryExecutor = restoreExecutor
 	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitEntered := make(chan struct{})
+	commitRelease := make(chan struct{})
+	commitPool := &taskEntryCommitBarrierPool{
+		DB: sqlDB, committed: commitEntered, release: commitRelease,
+	}
+	db.ConnPool = commitPool
+	db.Statement.ConnPool = commitPool
+	startEntered := make(chan struct{})
+	startRelease := make(chan struct{})
+
 	manager := NewManager(db, stubExecutorFactory{executor: factoryExecutor}, nil, nil, nil, nil, 8, 90)
 	shutdownManagerOnCleanup(t, manager)
+
+	var releaseStartOnce sync.Once
+	releaseStart := func() { releaseStartOnce.Do(func() { close(startRelease) }) }
+	var releaseCommitOnce sync.Once
+	releaseCommit := func() { releaseCommitOnce.Do(func() { close(commitRelease) }) }
+	t.Cleanup(func() {
+		releaseStart()
+		releaseCommit()
+	})
+
 	taskEntity := seedTaskForManagerTest(t, db)
 	previousLastRunAt := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Millisecond)
 	previousNextRunAt := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Millisecond)
@@ -2702,8 +2729,6 @@ func testNoExecutorCompensationAfterDurableEntry(
 	}
 
 	runID := createTestTaskRun(t, db, taskEntity.ID, map[bool]string{true: "restore", false: "manual"}[legacyRestore])
-	startEntered := make(chan struct{})
-	startRelease := make(chan struct{})
 	manager.SetNodeWriteAdmission(&nodeWriteAdmissionFake{
 		startEntered: startEntered,
 		startRelease: startRelease,
@@ -2713,31 +2738,6 @@ func testNoExecutorCompensationAfterDurableEntry(
 		precheckCalls.Add(1)
 		return nil
 	}
-
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	commitEntered := make(chan struct{})
-	commitRelease := make(chan struct{})
-	commitPool := &taskEntryCommitBarrierPool{
-		DB: sqlDB, committed: commitEntered, release: commitRelease,
-	}
-	originalPool := db.ConnPool
-	originalStatementPool := db.Statement.ConnPool
-	db.ConnPool = commitPool
-	db.Statement.ConnPool = commitPool
-
-	var releaseStartOnce sync.Once
-	releaseStart := func() { releaseStartOnce.Do(func() { close(startRelease) }) }
-	var releaseCommitOnce sync.Once
-	releaseCommit := func() { releaseCommitOnce.Do(func() { close(commitRelease) }) }
-	t.Cleanup(func() {
-		releaseStart()
-		releaseCommit()
-		db.ConnPool = originalPool
-		db.Statement.ConnPool = originalStatementPool
-	})
 
 	var runCtx context.Context
 	var runCancel context.CancelFunc
