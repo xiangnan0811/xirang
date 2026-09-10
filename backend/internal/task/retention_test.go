@@ -184,6 +184,7 @@ func TestManagedTaskRetentionDelegatesExactRecoveryPointIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	now := time.Date(2026, 8, 17, 8, 0, 0, 0, time.UTC)
@@ -358,6 +359,7 @@ func TestManagedTaskRetentionDelegatesExactRecoveryPointIDs(t *testing.T) {
 func TestManagedResticRetentionBlocksForgetPruneBeforeCredentialAndSSH(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "restic"
 	policy := model.Policy{ID: 17, RetentionDays: 7}
@@ -394,6 +396,7 @@ func TestManagedResticRetentionBlocksForgetPruneBeforeCredentialAndSSH(t *testin
 func TestManagedRsyncRetentionBlocksLegacyDirectoryDeletion(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "rsync"
 	target := t.TempDir()
@@ -431,6 +434,7 @@ func TestManagedRsyncRetentionBlocksLegacyDirectoryDeletion(t *testing.T) {
 func TestManagedRcloneRetentionBlocksLegacyDeleteBeforeSSH(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "rclone"
 	taskEntity.RsyncTarget = "backup:legacy"
@@ -482,6 +486,7 @@ func TestLegacyRcloneRetentionRejectsMutableMirrorBeforeSSH(t *testing.T) {
 func TestRollbackSafeDisabledRetentionRemainsBlocked(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "restic"
 	policy := model.Policy{ID: 18, RetentionDays: 7}
@@ -509,6 +514,7 @@ func TestRollbackSafeDisabledRetentionRemainsBlocked(t *testing.T) {
 func TestPristineResticRetentionRetainsCompatibility(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "restic"
 	policy := model.Policy{ID: 19, RetentionDays: 7}
@@ -540,6 +546,7 @@ func TestPristineResticRetentionRetainsCompatibility(t *testing.T) {
 func TestResticRetentionAdmissionDrainsThroughCommandAndConnectionClose(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "restic"
 	policy := model.Policy{ID: 20, RetentionDays: 7}
@@ -584,6 +591,7 @@ func TestManagedRestoreAndRetentionRecordTypedLegacyBlockAuditAndMetric(t *testi
 	db := openManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{err: errors.New("must remain unreachable")}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "restic"
 	restoreRunID := createTestTaskRun(t, db, taskEntity.ID, "restore")
@@ -703,6 +711,7 @@ func TestEnforceRsyncRetentionRejectsMutableTreeWithoutVersionAge(t *testing.T) 
 	}
 
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	recorder := &legacyBlockRecorderFake{}
 	manager.SetLegacyBlockRecorder(recorder)
 	manager.enforceRsyncRetention(policy, taskEntity)

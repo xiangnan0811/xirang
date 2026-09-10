@@ -178,6 +178,10 @@ func runPendingCronCrashRecovery(t *testing.T, db *gorm.DB) {
 			t.Fatalf("recover skip-next cron occurrence: %v", err)
 		}
 		recovered := waitTaskRunTerminal(t, db, run.ID)
+		// Durable terminalization precedes the runner's process-local owner
+		// cleanup. Wait for the worker itself before reserving the following
+		// occurrence, otherwise pendingRuns can still reject it as a duplicate.
+		manager.taskWG.Wait()
 		if recovered.Status != model.TaskRunStatusCanceled {
 			t.Fatalf("recovered skip-next status=%q, want canceled", recovered.Status)
 		}
@@ -276,6 +280,7 @@ func runExpiredCronRecoveryNeverReplays(t *testing.T, db *gorm.DB) {
 	t.Run("expired running occurrence is terminalized, not relaunched", func(t *testing.T) {
 		exec := &successExecutor{}
 		manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+		shutdownManagerOnCleanup(t, manager)
 		taskEntity := seedCronRecoveryTask(t, db, StatusRunning, false)
 		if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Updates(map[string]interface{}{
 			"status": string(StatusRunning), "enabled": true, "cron_spec": "@every 1h",

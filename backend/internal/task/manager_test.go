@@ -383,15 +383,13 @@ func openManagerTestDB(t *testing.T) *gorm.DB {
 	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 	secure.ResetForTesting()
 	t.Cleanup(secure.ResetForTesting)
-	// 关键：不用 cache=shared + 命名 file，原实现导致两个 flake：
-	//   1) Manager 的后台 goroutine 与测试主线程并发写同一内存库 →
-	//      SQLite 单写者锁默认立即返回 "database table is locked"，
-	//      CI 上观察到 TestPreHookTimeout 偶发断言失败。
-	//   2) 同一进程内 go test -count=N 重复跑同名测试时，命名 file 复用
-	//      同一份内存库，残留数据触发 UNIQUE constraint。
-	// 改用纯 ":memory:" + SetMaxOpenConns(1)：每次调用得到全新的私有库，
-	// 单连接彻底串行化所有写入；_busy_timeout 作为兜底应对偶发竞争。
-	db, err := gorm.Open(sqlite.Open("file::memory:?_busy_timeout=5000&_loc=UTC"), &gorm.Config{})
+	// Use a per-test file-backed SQLite database. An in-memory database is
+	// tied to its physical connection; a canceled query can retire that
+	// connection, after which database/sql may open a fresh empty database for
+	// a post-shutdown assertion. Keep one connection to serialize manager
+	// workers and test reads; _busy_timeout remains a contention fallback.
+	dsn := fmt.Sprintf("file:%s/manager.db?_busy_timeout=5000&_loc=UTC", t.TempDir())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
@@ -400,8 +398,9 @@ func openManagerTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("获取底层连接失败: %v", err)
 	}
 	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.TaskRunEffect{}, &model.RestoreDrillEvidence{}, &model.CredentialAuditEvent{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}); err != nil {
-		t.Fatalf("初始化测试数据表失败: %v", err)
+		t.Fatalf("初始化测试数据库表失败: %v", err)
 	}
 	if err := db.AutoMigrate(&model.TaskTrafficSample{}); err != nil {
 		t.Fatalf("初始化采样表失败: %v", err)
@@ -579,6 +578,7 @@ func TestTriggerRegistersCancelOwnerBeforeReturning(t *testing.T) {
 		db := openConcurrentManagerTestDB(t)
 		exec := newBlockingExecutor()
 		manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+		shutdownManagerOnCleanup(t, manager)
 		taskEntity := seedTaskForManagerTest(t, db)
 
 		previousProcs := runtime.GOMAXPROCS(1)
@@ -609,6 +609,7 @@ func TestTriggerRegistersCancelOwnerBeforeReturning(t *testing.T) {
 		db := openConcurrentManagerTestDB(t)
 		restoreExecutor := &trackingRestoreExecutor{}
 		manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+		shutdownManagerOnCleanup(t, manager)
 		taskEntity := seedTaskForManagerTest(t, db)
 		if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).
 			Update("status", string(StatusSuccess)).Error; err != nil {
@@ -701,6 +702,7 @@ func TestCancelAtPublicTriggerOwnerRegistrationPreventsScheduling(t *testing.T) 
 					return context.WithCancel(parent)
 				}),
 			)
+			shutdownManagerOnCleanup(t, manager)
 			taskEntity := seedTaskForManagerTest(t, db)
 			if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).
 				Update("status", string(StatusSuccess)).Error; err != nil {
@@ -1739,6 +1741,7 @@ func startManagerRecoveryWorker(t *testing.T, manager *Manager) <-chan struct{} 
 func TestManagerShutdownStopsDrillRecoverySweep(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	runDone := startManagerRecoveryWorker(t, manager)
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelShutdown()
@@ -2283,6 +2286,7 @@ func TestCancelAfterTriggerDurablyTerminatesPendingRunBeforeExecutor(t *testing.
 				factoryExecutor = restoreExecutor
 			}
 			manager := NewManager(db, stubExecutorFactory{executor: factoryExecutor}, nil, nil, nil, nil, 8, 90)
+			shutdownManagerOnCleanup(t, manager)
 			taskEntity := seedTaskForManagerTest(t, db)
 			if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).
 				Update("status", string(StatusSuccess)).Error; err != nil {
@@ -2361,6 +2365,7 @@ func TestTriggerRestoreEarlyCancellationPreservesCommittedTerminalRun(t *testing
 	db := openConcurrentManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).
 		Update("status", string(StatusSuccess)).Error; err != nil {
@@ -2477,6 +2482,7 @@ func testCancelTaskEntryCommitPreservesPriorOutcomeWithoutExecutor(
 	db := openConcurrentManagerTestDB(t)
 	executor := &successExecutor{}
 	manager := NewManager(db, stubExecutorFactory{executor: executor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	previousLastRunAt := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Millisecond)
 	previousNextRunAt := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Millisecond)
@@ -2692,6 +2698,7 @@ func testNoExecutorCompensationAfterDurableEntry(
 		factoryExecutor = restoreExecutor
 	}
 	manager := NewManager(db, stubExecutorFactory{executor: factoryExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	previousLastRunAt := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Millisecond)
 	previousNextRunAt := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Millisecond)
@@ -2882,6 +2889,7 @@ func TestCancelWhileTriggerReservesRunPreventsDurableStart(t *testing.T) {
 				factoryExecutor = restoreExecutor
 			}
 			manager := NewManager(db, stubExecutorFactory{executor: factoryExecutor}, nil, nil, nil, nil, 8, 90)
+			shutdownManagerOnCleanup(t, manager)
 			taskEntity := seedTaskForManagerTest(t, db)
 			if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).
 				Update("status", string(StatusSuccess)).Error; err != nil {
@@ -3202,6 +3210,7 @@ func TestTriggerManualRejectsConcurrentDuplicate(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := newBlockingExecutor()
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	for i := 0; i < cap(m.semaphore); i++ {
@@ -3264,6 +3273,7 @@ func TestRunTaskPersistsTrafficSamplesWithMinuteThrottle(t *testing.T) {
 		{ObservedAt: now.Add(65 * time.Second), ThroughputMbps: 80},
 	}}
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
 	m.runTask(taskEntity.ID, runID, "manual", generateChainRunID())
@@ -3299,6 +3309,7 @@ func TestTriggerCreatesTaskRun(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	runID, err := m.TriggerManual(taskEntity.ID)
@@ -3332,6 +3343,7 @@ func TestTriggerManualNodeWriteConflictLeavesNoReservationOrMarker(t *testing.T)
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	admission := &nodeWriteAdmissionFake{errs: []error{ErrNodeWriteConflict}}
 	manager.SetNodeWriteAdmission(admission)
@@ -3489,6 +3501,7 @@ func TestTriggerManualRetriesRawSQLiteBusyAroundWholeReservationTransaction(t *t
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	admission := &nodeWriteAdmissionFake{errs: []error{sqlite3.Error{Code: sqlite3.ErrBusy}, nil}}
 	manager.SetNodeWriteAdmission(admission)
@@ -3544,6 +3557,7 @@ func TestTriggerRestoreNodeWriteConflictLeavesNoRunMarkerPrecheckOrExecutor(t *t
 	db := openManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 	admission := &nodeWriteAdmissionFake{errs: []error{ErrNodeWriteConflict}}
@@ -3627,6 +3641,7 @@ func TestRunTaskDualWriteSuccess(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
@@ -3664,6 +3679,7 @@ func TestRunTaskDualWriteFailed(t *testing.T) {
 	db := openManagerTestDB(t)
 	failExec := &failingExecutor{err: fmt.Errorf("模拟执行失败")}
 	m := NewManager(db, stubExecutorFactory{executor: failExec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
@@ -3691,6 +3707,7 @@ func TestCancelBeforeRunStartsDoesNotExecute(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	for i := 0; i < cap(m.semaphore); i++ {
@@ -3728,6 +3745,7 @@ func TestCancelUpdatesTaskRunToCanceled(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := newBlockingExecutor()
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	taskEntity := seedTaskForManagerTest(t, db)
 
 	runID, err := m.TriggerManual(taskEntity.ID)
@@ -3843,6 +3861,7 @@ func TestCleanupExpiredTaskRuns(t *testing.T) {
 func TestEmitLogWritesTaskRunID(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	taskEntity := seedTaskForManagerTest(t, db)
 	runID := uint(42)
@@ -3867,6 +3886,7 @@ func TestEmitLogWritesTaskRunID(t *testing.T) {
 func TestEmitLogSanitizesTaskRuntimeEvidence(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	taskEntity := seedTaskForManagerTest(t, db)
 	runID := uint(43)
@@ -3965,6 +3985,7 @@ func TestManagedResticRestoreLatestBlockedBeforeCredentialAndSSH(t *testing.T) {
 	db := openManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{err: errors.New("restore must remain unreachable")}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "restic"
 	runID := createTestTaskRun(t, db, taskEntity.ID, "restore")
@@ -4019,6 +4040,7 @@ func TestManagedRsyncRestoreLatestBlockedBeforePrecheckAndExecutor(t *testing.T)
 	db := openManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{err: errors.New("restore must remain unreachable")}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "rsync"
 	runID := createTestTaskRun(t, db, taskEntity.ID, "restore")
@@ -4058,6 +4080,7 @@ func TestPristineResticRestoreLatestRetainsCompatibility(t *testing.T) {
 	db := openManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{err: errors.New("expected compatibility restore failure")}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "restic"
 	runID := createTestTaskRun(t, db, taskEntity.ID, "restore")
@@ -4100,6 +4123,7 @@ func TestManagedLegacyRestoreBlockCleansReservationMarkers(t *testing.T) {
 	db := openManagerTestDB(t)
 	restoreExecutor := &trackingRestoreExecutor{err: errors.New("restore must remain unreachable")}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Update("executor_type", "restic").Error; err != nil {
 		t.Fatal(err)
@@ -4158,6 +4182,7 @@ func (sink *exactAnomalySinkFake) Raise(_ context.Context, finding anomaly.Findi
 func TestManagerObserveCommittedDispatchesExactAnomalyBestEffort(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.ExecutorType = "restic"
 	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Update("executor_type", "restic").Error; err != nil {
@@ -4202,6 +4227,7 @@ func TestRunTaskSanitizesExecutorFailureLastError(t *testing.T) {
 	db := openManagerTestDB(t)
 	execErr := errors.New(`backup failed for /srv/private/source to root@backup.internal.example:/repo/tenant-a via https://backup.internal.example/api?token=FAKE_EXECUTOR_TOKEN_FOR_TEST_ONLY`)
 	m := NewManager(db, stubExecutorFactory{executor: &failingExecutor{err: execErr}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	taskEntity := seedTaskForManagerTest(t, db)
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
 
@@ -4232,6 +4258,7 @@ func TestRunRestoreTaskSanitizesPrecheckFailureLastError(t *testing.T) {
 	precheckErr := errors.New(`target /srv/private/restore unavailable on restore-precheck.internal.example output=/tmp/precheck-output token=FAKE_RESTORE_PRECHECK_TOKEN_FOR_TEST_ONLY`)
 	restoreExec := &failingRestoreExecutor{err: errors.New("restore executor should not run")}
 	m := NewManager(db, stubExecutorFactory{executor: restoreExec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	m.ensureRemoteTargetReadyFunc = func(context.Context, model.Node, string) error {
 		return precheckErr
 	}
@@ -4275,6 +4302,7 @@ func TestRunRestoreTaskSanitizesRestoreFailureLastError(t *testing.T) {
 	restoreErr := errors.New(`restore failed from /backup/private/source to /srv/private/restore on restore.internal.example via https://restore.internal.example/api?token=FAKE_RESTORE_TOKEN_FOR_TEST_ONLY`)
 	restoreExec := &failingRestoreExecutor{err: restoreErr}
 	m := NewManager(db, stubExecutorFactory{executor: restoreExec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	m.ensureRemoteTargetReadyFunc = func(context.Context, model.Node, string) error {
 		return nil
 	}
@@ -4316,6 +4344,7 @@ func TestRunRestoreTaskSanitizesRestoreFailureLastError(t *testing.T) {
 func TestMaintenanceMessagesSanitizeRuntimeEvidence(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	retentionErr := sanitizeTaskLastError(`restic 保留清理失败: remove /srv/private/repo on backup.internal.example token=FAKE_RETENTION_ALERT_TOKEN_FOR_TEST_ONLY, 输出: /tmp/raw-output`)
 	m.logDispatcher.Dispatch(0, nil, "error", retentionErr, "")
@@ -4358,6 +4387,7 @@ func TestRestoreBlockedByInFlightNormalTask(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := newBlockingExecutor()
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	t1, t2 := seedTwoTasksSameNode(t, db)
 
@@ -4416,6 +4446,7 @@ func TestRestoreNodeMutexBlocksNormalTask(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	t1, t2 := seedTwoTasksSameNode(t, db)
 
@@ -4484,6 +4515,7 @@ func TestRestoreNodeMutexRegisteredSynchronously(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}
 	m := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	t1, t2 := seedTwoTasksSameNode(t, db)
 

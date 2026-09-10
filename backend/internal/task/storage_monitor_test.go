@@ -24,6 +24,7 @@ func openStorageMonitorTestDB(t *testing.T) *gorm.DB {
 func TestCheckLocalStorageSpace_NoLocalPolicies(t *testing.T) {
 	db := openStorageMonitorTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	// 远程路径（含 ":"），应被跳过
 	policy := model.Policy{
@@ -49,6 +50,7 @@ func TestCheckLocalStorageSpace_NoLocalPolicies(t *testing.T) {
 func TestCheckLocalStorageSpace_ValidLocalPath(t *testing.T) {
 	db := openStorageMonitorTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	tmpDir := t.TempDir()
 
@@ -90,6 +92,7 @@ func TestCheckLocalStorageSpace_ValidLocalPath(t *testing.T) {
 func TestCheckLocalStorageSpace_HighThresholdNoAlert(t *testing.T) {
 	db := openStorageMonitorTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	tmpDir := t.TempDir()
 
@@ -121,6 +124,7 @@ func TestCheckLocalStorageSpace_HighThresholdNoAlert(t *testing.T) {
 func TestCheckLocalStorageSpace_NonexistentPath(t *testing.T) {
 	db := openStorageMonitorTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	policy := model.Policy{
 		Name:       "bad-path-policy",
@@ -146,6 +150,7 @@ func TestCheckLocalStorageSpace_NonexistentPath(t *testing.T) {
 func TestCheckLocalStorageSpace_DisabledPolicySkipped(t *testing.T) {
 	db := openStorageMonitorTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	tmpDir := t.TempDir()
 
