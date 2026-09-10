@@ -18448,6 +18448,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "http_headers": {
+                    "description": "HTTPHeaders is a JSON object encoded as a JSON string. Omit it on\nupdates to preserve existing credentials; use \"{}\" to clear them.",
                     "type": "string"
                 },
                 "http_method": {
@@ -23593,6 +23594,16 @@ const docTemplate = `{
                 "created_at": {
                     "type": "string"
                 },
+                "delivery_decided_at": {
+                    "type": "string"
+                },
+                "delivery_decision": {
+                    "description": "DeliveryDecision is intentionally independent of Alert.Status. A resolved\nalert may still have an in-flight delivery intent, while a silenced or\nescalated alert must not be rediscovered as a direct delivery on replay.",
+                    "type": "string"
+                },
+                "delivery_reason": {
+                    "type": "string"
+                },
                 "error_code": {
                     "type": "string"
                 },
@@ -23658,6 +23669,10 @@ const docTemplate = `{
                 "created_at": {
                     "type": "string"
                 },
+                "decision": {
+                    "description": "Decision is normally \"deliver\". It is kept on the row so a future\nnon-delivery intent can be represented without making an absent row\nambiguous. Legacy rows with an empty value are treated as deliverable.",
+                    "type": "string"
+                },
                 "id": {
                     "type": "integer"
                 },
@@ -23667,11 +23682,17 @@ const docTemplate = `{
                 "last_error": {
                     "type": "string"
                 },
+                "lease_expires_at": {
+                    "type": "string"
+                },
                 "next_retry_at": {
                     "type": "string"
                 },
                 "status": {
-                    "description": "pending|sent|retrying|failed",
+                    "description": "pending|sending|sent|retrying|failed",
+                    "type": "string"
+                },
+                "updated_at": {
                     "type": "string"
                 }
             }

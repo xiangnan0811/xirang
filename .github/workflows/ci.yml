@@ -62,7 +62,7 @@ jobs:
         run: go test -coverprofile=coverage.out ./...
 
       - name: Race concurrency-sensitive backend packages
-        run: go test -race ./internal/backupasset/... ./internal/api/handlers/ ./internal/task ./internal/ws ./internal/auth ./internal/bootstrap ./internal/uptime ./internal/policy ./internal/automation -count=1
+        run: go test -race ./internal/backupasset/... ./internal/api/handlers/ ./internal/task ./internal/ws ./internal/auth ./internal/bootstrap ./internal/uptime ./internal/policy ./internal/automation ./internal/alerting -count=1
 
       - name: Backup-asset coverage floor
         run: bash ../scripts/check-backupasset-coverage.sh
@@ -182,9 +182,16 @@ jobs:
 
       - name: Run PostgreSQL durable automation contracts
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL durable automation contracts' ./internal/automation '^Test.*Postgres$'
+      - name: Run PostgreSQL alerting durable delivery
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL alerting durable delivery' ./internal/alerting '^TestAlerting(DurableDeliveryPostgres|DeliveryConcurrencyPostgres|DeliveryClaimLoadFencePostgres)$'
+
+      - name: Run PostgreSQL alert delivery migration contract
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL alert delivery migration contract' ./internal/database '^TestAlertDeliveryMigration.*Postgres$'
 
       - name: Run PostgreSQL batch idempotency contract
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL batch idempotency contract' ./internal/api/handlers '^TestBatchCreationRollbackAndConcurrentIdempotency$'
+      - name: Run PostgreSQL monitor and policy configuration parity
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL monitor and policy configuration parity' ./internal/api/handlers '^TestR306(ServiceMonitorCreateValuesAcrossDatabases|PolicyCreateValuesAndSchedulesAcrossDatabases)$'
 
       - name: Run PostgreSQL general API surface parity
         run: go test ./internal/api -run '^TestGeneralSurfacePostgres$' -count=1

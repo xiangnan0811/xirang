@@ -24,6 +24,13 @@ const (
 	TaskRunStatusCanceled = "canceled"
 	TaskRunStatusWarning  = "warning"
 	TaskRunStatusSkipped  = "skipped"
+
+	TaskRunCaptureLayoutDirectoryRoot     = "directory_root"
+	TaskRunCaptureLayoutDirectoryContents = "directory_contents"
+	TaskRunCaptureLayoutSingleFile        = "single_file"
+
+	TaskRunGenerationStateDirty    = "dirty"
+	TaskRunGenerationStateVerified = "verified"
 )
 
 var (
@@ -106,6 +113,14 @@ type Task struct {
 	EscalationPolicyID *uint      `gorm:"index" json:"escalation_policy_id"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
+
+	// Rsync capture fields are populated only on an in-memory restore task.
+	// They are deliberately not part of the Task table or API surface; durable
+	// capture evidence belongs to the producing TaskRun.
+	RsyncCaptureLayout       string `gorm:"-" json:"-"`
+	RsyncCaptureRoot         string `gorm:"-" json:"-"`
+	RsyncCaptureManifest     string `gorm:"-" json:"-"`
+	RsyncCaptureGenerationID uint   `gorm:"-" json:"-"`
 }
 
 func (t *Task) BeforeSave(_ *gorm.DB) error {
@@ -141,6 +156,11 @@ type TaskRun struct {
 	NodeIDSnapshot          uint       `gorm:"not null;index:idx_task_runs_node_snapshot_status,priority:1" json:"-"`
 	CronScheduledAt         *time.Time `gorm:"column:cron_scheduled_at" json:"-"`
 	BackupConfigFingerprint string     `gorm:"column:backup_config_fingerprint;size:64" json:"-"`
+	BackupCaptureLayout     string     `gorm:"column:backup_capture_layout;size:32" json:"-"`
+	BackupCaptureRoot       string     `gorm:"column:backup_capture_root;size:512" json:"-"`
+	BackupCaptureManifest   string     `gorm:"column:backup_capture_manifest;type:text" json:"-"`
+	BackupGenerationState   string     `gorm:"column:backup_generation_state;size:16" json:"-"`
+	BackupSourceRunID       uint       `gorm:"column:backup_source_run_id" json:"-"`
 	TriggerType             string     `gorm:"size:32;not null;default:manual" json:"trigger_type"`
 	Status                  string     `gorm:"size:32;not null;default:pending;index;index:idx_task_runs_status_finished_at,priority:1;index:idx_task_runs_node_snapshot_status,priority:2" json:"status"`
 	ChainRunID              string     `gorm:"size:64;index" json:"chain_run_id,omitempty"`
@@ -155,6 +175,68 @@ type TaskRun struct {
 	LastError               string     `gorm:"type:text" json:"last_error"`
 	CreatedAt               time.Time  `json:"created_at"`
 	UpdatedAt               time.Time  `json:"updated_at"`
+}
+
+const (
+	RsyncCaptureManifestMaxEntries = 100000
+	RsyncCaptureManifestMaxBytes   = 8 << 20
+)
+
+// RsyncCaptureManifest is the bounded, source-side evidence captured before a
+// compatibility Rsync write. Paths are relative to the original source root.
+// A directory entry proves an empty directory was selected; a symlink entry
+// records its link target instead of pretending it is a regular file.
+type RsyncCaptureManifest struct {
+	Version int                         `json:"version"`
+	Layout  string                      `json:"layout"`
+	Root    string                      `json:"root,omitempty"`
+	Entries []RsyncCaptureManifestEntry `json:"entries"`
+}
+
+type RsyncCaptureManifestEntry struct {
+	Path       string `json:"path"`
+	Kind       string `json:"kind"`
+	Size       int64  `json:"size,omitempty"`
+	SHA256     string `json:"sha256,omitempty"`
+	LinkTarget string `json:"link_target,omitempty"`
+}
+
+func EncodeRsyncCaptureManifest(manifest RsyncCaptureManifest) (string, error) {
+	if manifest.Version == 0 {
+		manifest.Version = 1
+	}
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+func DecodeRsyncCaptureManifest(raw string) (RsyncCaptureManifest, error) {
+	var manifest RsyncCaptureManifest
+	if strings.TrimSpace(raw) == "" {
+		return manifest, fmt.Errorf("rsync capture manifest is empty")
+	}
+	if len(raw) > RsyncCaptureManifestMaxBytes {
+		return RsyncCaptureManifest{}, fmt.Errorf("rsync capture manifest is too large")
+	}
+	if err := json.Unmarshal([]byte(raw), &manifest); err != nil {
+		return RsyncCaptureManifest{}, err
+	}
+	if len(manifest.Entries) > RsyncCaptureManifestMaxEntries {
+		return RsyncCaptureManifest{}, fmt.Errorf("rsync capture manifest has too many entries")
+	}
+	if manifest.Version != 1 {
+		return RsyncCaptureManifest{}, fmt.Errorf("unsupported rsync capture manifest version")
+	}
+	if manifest.Layout != TaskRunCaptureLayoutDirectoryRoot &&
+		manifest.Layout != TaskRunCaptureLayoutDirectoryContents &&
+		manifest.Layout != TaskRunCaptureLayoutSingleFile {
+		return RsyncCaptureManifest{}, fmt.Errorf("invalid rsync capture manifest layout")
+	}
+	if manifest.Entries == nil {
+		return RsyncCaptureManifest{}, fmt.Errorf("rsync capture manifest entries are missing")
+	}
+	return manifest, nil
 }
 
 // TaskRunBackupConfigFingerprint returns a stable, non-secret identity of the

@@ -20,11 +20,11 @@ func TestTaskRunCronProvenanceMigrationPostgres(t *testing.T) {
 
 func testTaskRunCronProvenanceMigration(t *testing.T, fixture migrationFixture) {
 	t.Helper()
-	migrator, db := fixture.openAt(t, latestMigrationVersion-1)
+	migrator, db := fixture.openAt(t, 81)
 	if err := migrator.Steps(1); err != nil {
 		t.Fatalf("apply 000082 %s: %v", fixture.engine, err)
 	}
-	assertMigrationVersion(t, migrator, latestMigrationVersion)
+	assertMigrationVersion(t, migrator, 82)
 
 	now := time.Date(2026, 9, 9, 1, 2, 3, 0, time.UTC)
 	taskID := int64(82001)
@@ -79,11 +79,11 @@ func testTaskRunCronProvenanceMigration(t *testing.T, fixture migrationFixture) 
 	// A used v82 schema cannot be downgraded. The metadata admission trigger
 	// rejects the same write golang-migrate would use before any down body runs.
 	fixture.expectExecRejected(t, db,
-		`INSERT INTO schema_migrations (version, dirty) VALUES (?, ?)`, latestMigrationVersion-1, true)
+		`INSERT INTO schema_migrations (version, dirty) VALUES (?, ?)`, 81, true)
 	if err := migrator.Steps(-1); err == nil {
 		t.Fatalf("used 000082 %s downgrade unexpectedly succeeded", fixture.engine)
 	}
-	assertMigrationVersion(t, migrator, latestMigrationVersion)
+	assertMigrationVersion(t, migrator, 82)
 	var cronAt time.Time
 	if err := db.QueryRow(fixture.bind(`SELECT cron_scheduled_at FROM task_runs WHERE id = ?`), firstRunID).Scan(&cronAt); err != nil {
 		t.Fatalf("read preserved cron occurrence after rejected %s downgrade: %v", fixture.engine, err)
@@ -94,11 +94,11 @@ func testTaskRunCronProvenanceMigration(t *testing.T, fixture migrationFixture) 
 
 	// A pristine v82 schema remains downgradeable, proving the admission guard
 	// protects evidence rather than making every rollback impossible.
-	pristineMigrator, pristineDB := fixture.openAt(t, latestMigrationVersion)
+	pristineMigrator, pristineDB := fixture.openAt(t, 82)
 	if err := pristineMigrator.Steps(-1); err != nil {
 		t.Fatalf("pristine 000082 %s downgrade: %v", fixture.engine, err)
 	}
-	assertMigrationVersion(t, pristineMigrator, latestMigrationVersion-1)
+	assertMigrationVersion(t, pristineMigrator, 81)
 	for _, column := range []string{"cron_scheduled_at", "backup_config_fingerprint"} {
 		exists, err := migrationColumnExists(pristineDB, fixture.engine, "task_runs", column)
 		if err != nil {
@@ -118,7 +118,7 @@ func testTaskRunCronProvenanceMigration(t *testing.T, fixture migrationFixture) 
 		{name: "backup fingerprint only", triggerType: "manual", fingerprint: strings.Repeat("e", 64)},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			identityMigrator, identityDB := fixture.openAt(t, latestMigrationVersion)
+			identityMigrator, identityDB := fixture.openAt(t, 82)
 			identityTaskID := taskID + 100
 			identityRunID := firstRunID + 100
 			fixture.mustExec(t, identityDB, `INSERT INTO tasks
@@ -133,7 +133,7 @@ func testTaskRunCronProvenanceMigration(t *testing.T, fixture migrationFixture) 
 			if err := identityMigrator.Steps(-1); err == nil {
 				t.Fatalf("used %s identity %s downgrade unexpectedly succeeded", fixture.engine, testCase.name)
 			}
-			assertMigrationVersion(t, identityMigrator, latestMigrationVersion)
+			assertMigrationVersion(t, identityMigrator, 82)
 		})
 	}
 }

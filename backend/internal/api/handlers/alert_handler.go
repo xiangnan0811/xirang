@@ -11,7 +11,6 @@ import (
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
-	"xirang/backend/internal/util"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -281,8 +280,17 @@ func (h *AlertHandler) Ack(c *gin.Context) {
 		respondOK(c, alert)
 		return
 	}
-	alert.Status = "acked"
-	if err := h.db.Save(&alert).Error; err != nil {
+	updates := map[string]interface{}{
+		"status":     "acked",
+		"updated_at": time.Now(),
+	}
+	if err := h.db.Model(&model.Alert{}).
+		Where("id = ? AND status != ?", id, "resolved").
+		Updates(updates).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	if err := h.db.First(&alert, id).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
@@ -318,9 +326,16 @@ func (h *AlertHandler) Resolve(c *gin.Context) {
 		respondForbidden(c, "无权操作该告警")
 		return
 	}
-	alert.Status = "resolved"
-	alert.Retryable = false
-	if err := h.db.Save(&alert).Error; err != nil {
+	updates := map[string]interface{}{
+		"status":     "resolved",
+		"retryable":  false,
+		"updated_at": time.Now(),
+	}
+	if err := h.db.Model(&model.Alert{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	if err := h.db.First(&alert, id).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}
@@ -556,37 +571,31 @@ func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 		return
 	}
 
+	// Keep the existing API contract for a deleted integration while routing
+	// all actual work through the durable shared claim/CAS state machine.
 	var integration model.Integration
 	if err := h.db.First(&integration, req.IntegrationID).Error; err != nil {
 		respondNotFound(c, "通知通道不存在")
 		return
 	}
 
-	delivery := model.AlertDelivery{
-		AlertID:       alert.ID,
-		IntegrationID: integration.ID,
-	}
-	if err := h.getAlertDispatcher().SendAlert(integration, alert); err != nil {
-		delivery.Status = "failed"
-		delivery.LastError = util.SanitizeDeliveryError(integration.Type, err)
-		if saveErr := h.db.Create(&delivery).Error; saveErr != nil {
-			respondInternalError(c, saveErr)
-			return
-		}
-		respondOK(c, retryDeliveryResponse{
-			OK:       false,
-			Message:  "重发失败: " + delivery.LastError,
-			Delivery: delivery,
-		})
+	delivery, err := h.getAlertDispatcher().RetryDelivery(c.Request.Context(), alert.ID, integration.ID)
+	if err != nil && errors.Is(err, gorm.ErrRecordNotFound) {
+		respondNotFound(c, "告警或通知通道不存在")
 		return
 	}
-
-	delivery.Status = "sent"
-	if err := h.db.Create(&delivery).Error; err != nil {
+	if err != nil && delivery.ID == 0 {
 		respondInternalError(c, err)
 		return
 	}
-
+	if delivery.Status != model.AlertDeliveryStatusSent {
+		message := "重发失败"
+		if delivery.LastError != "" {
+			message += ": " + delivery.LastError
+		}
+		respondOK(c, retryDeliveryResponse{OK: false, Message: message, Delivery: delivery})
+		return
+	}
 	respondOK(c, retryDeliveryResponse{
 		OK:       true,
 		Message:  "重发成功",
@@ -653,37 +662,28 @@ func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
 		uniqueIntegrationIDs = append(uniqueIntegrationIDs, record.IntegrationID)
 	}
 
+	dispatcher := h.getAlertDispatcher()
 	newDeliveries := make([]model.AlertDelivery, 0, len(uniqueIntegrationIDs))
 	successCount := 0
 	failedCount := 0
 
 	for _, integrationID := range uniqueIntegrationIDs {
-		newRecord := model.AlertDelivery{
-			AlertID:       alert.ID,
-			IntegrationID: integrationID,
-		}
-
-		var integration model.Integration
-		if err := h.db.First(&integration, integrationID).Error; err != nil {
-			newRecord.Status = "failed"
-			newRecord.LastError = fmt.Sprintf("通知通道不存在: %d", integrationID)
-			failedCount += 1
-		} else if err := h.getAlertDispatcher().SendAlert(integration, alert); err != nil {
-			newRecord.Status = "failed"
-			newRecord.LastError = util.SanitizeDeliveryError(integration.Type, err)
-			failedCount += 1
-		} else {
-			newRecord.Status = "sent"
-			successCount += 1
-		}
-
-		if err := h.db.Create(&newRecord).Error; err != nil {
-			respondInternalError(c, err)
+		newRecord, err := dispatcher.RetryDelivery(c.Request.Context(), alert.ID, integrationID)
+		if err != nil && newRecord.ID == 0 {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				respondNotFound(c, "告警或通知通道不存在")
+			} else {
+				respondInternalError(c, err)
+			}
 			return
+		}
+		if newRecord.Status == model.AlertDeliveryStatusSent {
+			successCount++
+		} else {
+			failedCount++
 		}
 		newDeliveries = append(newDeliveries, newRecord)
 	}
-
 	message := fmt.Sprintf("批量重发完成：成功 %d，失败 %d", successCount, failedCount)
 	respondOK(c, retryFailedDeliveriesResponse{
 		OK:            failedCount == 0,

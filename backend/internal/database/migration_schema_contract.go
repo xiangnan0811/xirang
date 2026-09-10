@@ -14,6 +14,8 @@ const (
 	drillDurableRecoverySchemaVersion          int64 = 74
 	lifecycleEffectClaimAuditSlotSchemaVersion int64 = 77
 	taskRunCronProvenanceSchemaVersion         int64 = 82
+	taskRunRecoveryCaptureSchemaVersion        int64 = 83
+	alertDeliveryIntentSchemaVersion           int64 = 84
 )
 
 const lifecycleEffectClaimAuditSlotAdmissionTrigger = "trg_recovery_point_lifecycle_effect_claim_audit_slot_downgrade_admission"
@@ -23,6 +25,8 @@ const lifecycleEffectClaimAuditSlotSlotsTable = "recovery_point_lifecycle_audit_
 
 const taskRunCronProvenanceTrigger = "trg_task_runs_cron_provenance_immutable"
 const taskRunCronProvenanceAdmissionTrigger = "trg_task_runs_cron_provenance_downgrade_admission"
+const taskRunRecoveryCaptureAdmissionTrigger = "trg_task_runs_recovery_capture_downgrade_admission"
+const alertDeliveryIntentAdmissionTrigger = "trg_alert_delivery_intents_downgrade_admission"
 
 type lifecycleEffectClaimAuditSlotTriggerContract struct {
 	table                                 string
@@ -406,6 +410,68 @@ var taskRunCronProvenancePostgresAdmissionFunctionFragments = []string{
 	"raise exception",
 	"return new",
 }
+var taskRunRecoveryCaptureSQLiteAdmissionFragments = []string{
+	"before insert on schema_migrations",
+	"when new.version < 83",
+	"exists (select 1 from task_runs where coalesce(backup_capture_layout, '') <> '')",
+	"exists (select 1 from task_runs where coalesce(backup_capture_root, '') <> '')",
+	"exists (select 1 from task_runs where coalesce(backup_capture_manifest, '') <> '')",
+	"exists (select 1 from task_runs where coalesce(backup_generation_state, '') <> '')",
+	"exists (select 1 from task_runs where coalesce(backup_source_run_id, 0) <> 0)",
+	"select raise(abort",
+}
+
+var taskRunRecoveryCapturePostgresAdmissionTriggerFragments = []string{
+	"before insert on",
+	"schema_migrations",
+	"execute function",
+	"task_runs_recovery_capture_downgrade_admission()",
+}
+
+var taskRunRecoveryCapturePostgresAdmissionFunctionFragments = []string{
+	"if new.version < 83 and exists (",
+	"select 1 from task_runs",
+	"coalesce(backup_capture_layout, '') <> ''",
+	"coalesce(backup_capture_root, '') <> ''",
+	"coalesce(backup_capture_manifest, '') <> ''",
+	"coalesce(backup_generation_state, '') <> ''",
+	"coalesce(backup_source_run_id, 0) <> 0",
+	"raise exception '000083 downgrade blocked: rsync recovery capture evidence exists'",
+	"return new",
+}
+
+var alertDeliveryIntentSQLiteAdmissionFragments = []string{
+	"before insert on schema_migrations",
+	"when new.version < 84",
+	"exists ( select 1 from alerts",
+	"coalesce(delivery_decision, '') <> ''",
+	"delivery_decided_at is not null",
+	"exists ( select 1 from alert_deliveries",
+	"coalesce(delivery_key, '') <> ''",
+	"coalesce(attempt_id, '') <> ''",
+	"lease_expires_at is not null",
+	"select raise(abort",
+}
+
+var alertDeliveryIntentPostgresAdmissionTriggerFragments = []string{
+	"before insert on",
+	"schema_migrations",
+	"execute function",
+	"alert_delivery_intents_downgrade_admission()",
+}
+
+var alertDeliveryIntentPostgresAdmissionFunctionFragments = []string{
+	"if new.version < 84 and (",
+	"select 1 from alerts",
+	"coalesce(delivery_decision, '') <> ''",
+	"delivery_decided_at is not null",
+	"select 1 from alert_deliveries",
+	"coalesce(delivery_key, '') <> ''",
+	"coalesce(attempt_id, '') <> ''",
+	"lease_expires_at is not null",
+	"raise exception '000084 downgrade blocked: alert delivery decision or lease evidence exists'",
+	"return new",
+}
 
 var plainTextContentSQLiteAdmissionFragments = []string{
 	"before insert on schema_migrations",
@@ -600,6 +666,18 @@ func validateMinimumRecoverySchema(db *sql.DB, dbType string, version int64) err
 		return nil
 	}
 	if err := validateTaskRunCronProvenanceSchema(db, dbType); err != nil {
+		return migrationSchemaDriftError(version, err.Error())
+	}
+	if version < taskRunRecoveryCaptureSchemaVersion {
+		return nil
+	}
+	if err := validateTaskRunRecoveryCaptureSchema(db, dbType); err != nil {
+		return migrationSchemaDriftError(version, err.Error())
+	}
+	if version < alertDeliveryIntentSchemaVersion {
+		return nil
+	}
+	if err := validateAlertDeliveryIntentSchema(db, dbType); err != nil {
 		return migrationSchemaDriftError(version, err.Error())
 	}
 
@@ -990,6 +1068,233 @@ func containsMigrationFragmentCounts(normalized string, minimumCounts map[string
 		}
 	}
 	return true
+}
+
+func validateTaskRunRecoveryCaptureSchema(db *sql.DB, dbType string) error {
+	columns := []struct {
+		name         string
+		sqliteType   string
+		postgresType string
+		maxLength    int64
+		defaultSQL   string
+	}{
+		{name: "backup_capture_layout", sqliteType: "varchar(32)", postgresType: "character varying", maxLength: 32, defaultSQL: "''"},
+		{name: "backup_capture_root", sqliteType: "varchar(512)", postgresType: "character varying", maxLength: 512, defaultSQL: "''"},
+		{name: "backup_capture_manifest", sqliteType: "text", postgresType: "text", defaultSQL: "''"},
+		{name: "backup_generation_state", sqliteType: "varchar(16)", postgresType: "character varying", maxLength: 16, defaultSQL: "''"},
+		{name: "backup_source_run_id", sqliteType: "integer", postgresType: "bigint", defaultSQL: "0"},
+	}
+	for _, column := range columns {
+		contract, err := migrationColumnContractOf(db, dbType, "task_runs", column.name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errors.New("missing_task_run_recovery_capture_column")
+			}
+			return errors.New("catalog_query_failed")
+		}
+		wantType := column.sqliteType
+		if dbType == "postgres" {
+			wantType = column.postgresType
+			if column.maxLength > 0 && contract.maxLength != column.maxLength {
+				return errors.New("invalid_task_run_recovery_capture_column")
+			}
+		}
+		defaultSQL := normalizeMigrationSQLToken(contract.defaultSQL)
+		wantDefault := normalizeMigrationSQLToken(column.defaultSQL)
+		if dbType == "postgres" && column.defaultSQL == "''" && column.postgresType == "text" {
+			wantDefault = "''::text"
+		}
+		if dbType == "postgres" && column.defaultSQL == "''" && column.postgresType == "character varying" {
+			wantDefault = "''::charactervarying"
+		}
+		if contract.dataType != wantType || !contract.notNull || defaultSQL != wantDefault {
+			return errors.New("invalid_task_run_recovery_capture_column")
+		}
+	}
+	return validateTaskRunRecoveryCaptureAdmission(db, dbType)
+}
+
+func validateTaskRunRecoveryCaptureAdmission(db *sql.DB, dbType string) error {
+	definition, err := migrationTriggerDefinition(db, dbType, "schema_migrations", taskRunRecoveryCaptureAdmissionTrigger)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_task_run_recovery_capture_admission_trigger")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if dbType == "postgres" {
+		enabled, enabledErr := migrationTriggerEnabled(db, dbType, "schema_migrations", taskRunRecoveryCaptureAdmissionTrigger)
+		if enabledErr != nil {
+			return errors.New("catalog_query_failed")
+		}
+		if !enabled {
+			return errors.New("invalid_task_run_recovery_capture_admission_trigger")
+		}
+	}
+	fragments := taskRunRecoveryCaptureSQLiteAdmissionFragments
+	if dbType == "postgres" {
+		fragments = taskRunRecoveryCapturePostgresAdmissionTriggerFragments
+	}
+	if !containsMigrationFragments(normalizeMigrationDefinition(definition), fragments) {
+		return errors.New("invalid_task_run_recovery_capture_admission_trigger")
+	}
+	if dbType != "postgres" {
+		return nil
+	}
+	functionDefinition, functionErr := migrationTriggerFunctionDefinition(db, "schema_migrations", taskRunRecoveryCaptureAdmissionTrigger)
+	if functionErr != nil {
+		if errors.Is(functionErr, sql.ErrNoRows) {
+			return errors.New("invalid_task_run_recovery_capture_admission_trigger")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !containsMigrationFragments(normalizeMigrationDefinition(functionDefinition), taskRunRecoveryCapturePostgresAdmissionFunctionFragments) {
+		return errors.New("invalid_task_run_recovery_capture_admission_trigger")
+	}
+	return nil
+}
+
+func validateAlertDeliveryIntentSchema(db *sql.DB, dbType string) error {
+	alertColumns := []struct {
+		name         string
+		sqliteType   string
+		postgresType string
+		maxLength    int64
+	}{
+		{name: "delivery_decision", sqliteType: "varchar(32)", postgresType: "character varying", maxLength: 32},
+		{name: "delivery_reason", sqliteType: "varchar(64)", postgresType: "character varying", maxLength: 64},
+		{name: "delivery_decided_at", sqliteType: "datetime", postgresType: "timestamp with time zone"},
+	}
+	for _, column := range alertColumns {
+		contract, err := migrationColumnContractOf(db, dbType, "alerts", column.name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errors.New("missing_alert_delivery_column")
+			}
+			return errors.New("catalog_query_failed")
+		}
+		wantType := column.sqliteType
+		if dbType == "postgres" {
+			wantType = column.postgresType
+			if column.maxLength > 0 && contract.maxLength != column.maxLength {
+				return errors.New("invalid_alert_delivery_column")
+			}
+		}
+		if contract.dataType != wantType || contract.notNull || normalizeMigrationSQLToken(contract.defaultSQL) != "" {
+			return errors.New("invalid_alert_delivery_column")
+		}
+	}
+
+	deliveryColumns := []struct {
+		name         string
+		sqliteType   string
+		postgresType string
+		maxLength    int64
+		notNull      bool
+		defaultSQL   string
+	}{
+		{name: "decision", sqliteType: "varchar(16)", postgresType: "character varying", maxLength: 16, notNull: true, defaultSQL: "'deliver'"},
+		{name: "delivery_key", sqliteType: "varchar(96)", postgresType: "character varying", maxLength: 96},
+		{name: "attempt_id", sqliteType: "varchar(64)", postgresType: "character varying", maxLength: 64},
+		{name: "lease_expires_at", sqliteType: "datetime", postgresType: "timestamp with time zone"},
+		{name: "updated_at", sqliteType: "datetime", postgresType: "timestamp with time zone", notNull: true, defaultSQL: "'1970-01-01 00:00:00'"},
+	}
+	for _, column := range deliveryColumns {
+		contract, err := migrationColumnContractOf(db, dbType, "alert_deliveries", column.name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errors.New("missing_alert_delivery_column")
+			}
+			return errors.New("catalog_query_failed")
+		}
+		wantType := column.sqliteType
+		if dbType == "postgres" {
+			wantType = column.postgresType
+			if column.maxLength > 0 && contract.maxLength != column.maxLength {
+				return errors.New("invalid_alert_delivery_column")
+			}
+		}
+		defaultSQL := normalizeMigrationSQLToken(contract.defaultSQL)
+		wantDefault := normalizeMigrationSQLToken(column.defaultSQL)
+		if dbType == "postgres" && column.name == "decision" {
+			wantDefault = "'deliver'::charactervarying"
+		}
+		if dbType == "postgres" && column.name == "updated_at" {
+			wantDefault = normalizeMigrationSQLToken("now()")
+		}
+		if contract.dataType != wantType || contract.notNull != column.notNull || defaultSQL != wantDefault {
+			return errors.New("invalid_alert_delivery_column")
+		}
+	}
+
+	deliveryKeyIndex, err := migrationIndexContractOf(db, dbType, "alert_deliveries", "idx_alert_deliveries_delivery_key")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_alert_delivery_key_index")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !migrationIndexUsable(deliveryKeyIndex) ||
+		!deliveryKeyIndex.unique ||
+		!sameMigrationIndexColumns(deliveryKeyIndex.columns, []string{"delivery_key"}) ||
+		normalizeMigrationPredicate(deliveryKeyIndex.predicate) != "delivery_keyisnotnullanddelivery_key<>''" {
+		return errors.New("invalid_alert_delivery_key_index")
+	}
+
+	claimIndex, err := migrationIndexContractOf(db, dbType, "alert_deliveries", "idx_alert_deliveries_claim")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_alert_delivery_claim_index")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !migrationIndexUsable(claimIndex) ||
+		claimIndex.unique ||
+		!sameMigrationIndexColumns(claimIndex.columns, []string{"status", "next_retry_at", "lease_expires_at"}) ||
+		strings.TrimSpace(claimIndex.predicate) != "" {
+		return errors.New("invalid_alert_delivery_claim_index")
+	}
+	return validateAlertDeliveryIntentAdmission(db, dbType)
+}
+
+func validateAlertDeliveryIntentAdmission(db *sql.DB, dbType string) error {
+	definition, err := migrationTriggerDefinition(db, dbType, "schema_migrations", alertDeliveryIntentAdmissionTrigger)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_alert_delivery_admission_trigger")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if dbType == "postgres" {
+		enabled, enabledErr := migrationTriggerEnabled(db, dbType, "schema_migrations", alertDeliveryIntentAdmissionTrigger)
+		if enabledErr != nil {
+			return errors.New("catalog_query_failed")
+		}
+		if !enabled {
+			return errors.New("invalid_alert_delivery_admission_trigger")
+		}
+	}
+	fragments := alertDeliveryIntentSQLiteAdmissionFragments
+	if dbType == "postgres" {
+		fragments = alertDeliveryIntentPostgresAdmissionTriggerFragments
+	}
+	if !containsMigrationFragments(normalizeMigrationDefinition(definition), fragments) {
+		return errors.New("invalid_alert_delivery_admission_trigger")
+	}
+	if dbType != "postgres" {
+		return nil
+	}
+	functionDefinition, functionErr := migrationTriggerFunctionDefinition(db, "schema_migrations", alertDeliveryIntentAdmissionTrigger)
+	if functionErr != nil {
+		if errors.Is(functionErr, sql.ErrNoRows) {
+			return errors.New("invalid_alert_delivery_admission_trigger")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !containsMigrationFragments(normalizeMigrationDefinition(functionDefinition), alertDeliveryIntentPostgresAdmissionFunctionFragments) {
+		return errors.New("invalid_alert_delivery_admission_trigger")
+	}
+	return nil
 }
 
 func lifecycleSQLiteGuardDefinitionExact(definition string, contract lifecycleEffectClaimAuditSlotTriggerContract) bool {

@@ -470,6 +470,30 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		if err := tx.Create(&p).Error; err != nil {
 			return err
 		}
+
+		// GORM's struct Create callback substitutes model defaults for zero
+		// values (and writes them back into p). Restore each explicitly
+		// supplied value with an explicit-column update in this same
+		// transaction, before generated tasks consume the policy snapshot.
+		explicitColumns := make([]string, 0, 3)
+		if req.Enabled != nil {
+			p.Enabled = enabled
+			explicitColumns = append(explicitColumns, "enabled")
+		}
+		if req.VerifyEnabled != nil {
+			p.VerifyEnabled = verifyEnabled
+			explicitColumns = append(explicitColumns, "verify_enabled")
+		}
+		if req.MaxRetries != nil {
+			p.MaxRetries = *req.MaxRetries
+			explicitColumns = append(explicitColumns, "max_retries")
+		}
+		if len(explicitColumns) > 0 {
+			if err := tx.Model(&p).Select(explicitColumns).Updates(&p).Error; err != nil {
+				return fmt.Errorf("恢复策略显式配置失败: %w", err)
+			}
+		}
+
 		// 保存策略-节点关联
 		if len(req.NodeIDs) > 0 {
 			// 验证所有节点 ID 存在

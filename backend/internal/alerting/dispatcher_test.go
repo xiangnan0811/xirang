@@ -592,7 +592,7 @@ func TestRaiseAndDispatch_DisabledPolicy_UsesLegacyPath(t *testing.T) {
 	}
 }
 
-func TestRaiseAndDispatch_ResolverError_UsesLegacyPath(t *testing.T) {
+func TestRaiseAndDispatch_ResolverError_LeavesDecisionPending(t *testing.T) {
 	t.Setenv("ALERT_DEDUP_WINDOW", "0")
 	db := openDispatcherDBForEscalation(t)
 
@@ -603,7 +603,8 @@ func TestRaiseAndDispatch_ResolverError_UsesLegacyPath(t *testing.T) {
 	db.Create(&model.Integration{Name: "wh", Type: "webhook", Enabled: true, Endpoint: srv.URL, FailThreshold: 1})
 	db.Create(&model.Node{ID: 13, Name: "node-err"})
 
-	// Resolver: returns an error → fail-open, use legacy dispatch.
+	// A resolver error is transient: preserve pending so the retry worker can
+	// reevaluate policy, rather than mis-recording it as a direct handoff.
 	SetDispatcher(NewDispatcher(db, nil, func(alert model.Alert) (*EscalationPolicySummary, error) {
 		return nil, fmt.Errorf("resolver temporarily unavailable")
 	}))
@@ -618,14 +619,21 @@ func TestRaiseAndDispatch_ResolverError_UsesLegacyPath(t *testing.T) {
 		Message:     "resolver error alert",
 		TriggeredAt: time.Now(),
 	}
-	if err := raiseAndDispatch(db, alert); err != nil {
-		t.Fatalf("raiseAndDispatch failed: %v", err)
+	if err := raiseAndDispatch(db, alert); err == nil {
+		t.Fatal("expected resolver error")
 	}
 
+	var persisted model.Alert
+	if err := db.First(&persisted, alert.ID).Error; err != nil {
+		t.Fatalf("load persisted alert: %v", err)
+	}
+	if persisted.DeliveryDecision != model.AlertDeliveryDecisionPending {
+		t.Fatalf("expected pending delivery decision, got %q", persisted.DeliveryDecision)
+	}
 	var count int64
 	db.Model(&model.AlertDelivery{}).Count(&count)
-	if count == 0 {
-		t.Fatalf("expected >0 deliveries (resolver error → fail-open, legacy path), got 0")
+	if count != 0 {
+		t.Fatalf("resolver error must not create delivery intents, got %d", count)
 	}
 }
 

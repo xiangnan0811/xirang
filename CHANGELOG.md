@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Bug Fixes
+
+* Preserve legacy Rsync capture layout and source-selected evidence across backup, verification, restore admission, and Core-to-node recovery; reject uncertain mutable generations instead of reusing historical success as current authority.
+* Persist initial alert delivery intents before sending; share leased, attempt-fenced claims across automatic and manual retry, retain explicit suppression decisions, and synchronize proxy-cache lifecycle access.
+* Preserve explicitly disabled policies/monitors, disabled verification, and zero task retries through creation and scheduling without bypassing secret-encryption hooks.
+* Show pending, sending, retrying, and unknown notification states truthfully; use numeric delivery IDs for retry requests and label automation notification actions as log-only.
+* Add paired SQLite/PostgreSQL capture and delivery migrations, used-evidence downgrade protection, startup schema validation, and direct alerting concurrency coverage in CI.
+
 ## [0.55.6](https://github.com/xiangnan0811/xirang/compare/v0.55.5...v0.55.6) (2026-09-10)
 
 

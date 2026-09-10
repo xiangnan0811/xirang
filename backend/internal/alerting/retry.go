@@ -3,12 +3,9 @@ package alerting
 import (
 	"context"
 	"errors"
-	"sync"
 	"time"
-
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
-	"xirang/backend/internal/util"
 
 	"gorm.io/gorm"
 )
@@ -42,20 +39,22 @@ func backoffDuration(attempt int) time.Duration {
 }
 
 // RetryWorker 定期扫描 status='retrying' 的告警投递记录并重新发送。
-//
-// 并发约束: tick 由单 ticker 驱动, 不会自我并发。mu 仅保护 attempt 的"状态转移"
-// 段（DB 读取-决策-写入），让慢速的 HTTP send() 落在锁外，避免 ManualRetry 与
-// tick 的状态写入撞车。
+// RetryWorker 定期扫描告警投递记录并重新发送。所有首次、自动和手动发送
+// 共用 alerting/delivery.go 中的数据库租约与 CAS 状态机。
 type RetryWorker struct {
-	mu     sync.Mutex
-	db     *gorm.DB
-	sendFn func(integration model.Integration, alert model.Alert) error
-	done   chan struct{}
+	db         *gorm.DB
+	sendFn     func(integration model.Integration, alert model.Alert) error
+	dispatcher *Dispatcher
+	done       chan struct{}
 }
 
 // NewRetryWorker 创建 RetryWorker，默认使用生产发送函数。
 func NewRetryWorker(db *gorm.DB) *RetryWorker {
-	return &RetryWorker{db: db, sendFn: dispatchSingle, done: make(chan struct{})}
+	dispatcher := defaultDispatcher
+	if dispatcher == nil || dispatcher.DB != db {
+		dispatcher = NewDispatcher(db, nil, nil)
+	}
+	return &RetryWorker{db: db, sendFn: dispatcher.send, dispatcher: dispatcher, done: make(chan struct{})}
 }
 
 // Run 启动后台重试循环，每 10 秒扫描一次，直到 ctx 取消。
@@ -85,10 +84,41 @@ func (w *RetryWorker) Shutdown(ctx context.Context) error {
 }
 
 func (w *RetryWorker) tick(ctx context.Context, now time.Time) {
+	if w.dispatcher == nil {
+		w.dispatcher = NewDispatcher(w.db, nil, nil)
+	}
+	// An alert may have committed successfully just before a process crash,
+	// before its first channel intents were materialized. Replay only rows
+	// explicitly marked pending; historical NULL decisions remain unknown.
+	var pendingAlerts []model.Alert
+	if err := w.db.WithContext(ctx).
+		Where("delivery_decision = ?", model.AlertDeliveryDecisionPending).
+		Order("id ASC").Limit(1000).Find(&pendingAlerts).Error; err != nil {
+		logger.Module("alerting").Warn().Err(err).Msg("retry tick: load pending alerts failed")
+	} else {
+		for i := range pendingAlerts {
+			if ctx.Err() != nil {
+				return
+			}
+			if err := w.dispatcher.dispatchCreatedAlertWithSender(&pendingAlerts[i], w.sendFn); err != nil {
+				logger.Module("alerting").Warn().
+					Uint("alert_id", pendingAlerts[i].ID).
+					Err(err).
+					Msg("retry tick: replay pending alert failed")
+			}
+		}
+	}
+
 	var rows []model.AlertDelivery
 	if err := w.db.WithContext(ctx).
-		Where("status = ? AND next_retry_at <= ?", "retrying", now).
-		Find(&rows).Error; err != nil {
+		Where(
+			"(status = ?) OR (status = ? AND (next_retry_at IS NULL OR next_retry_at <= ?)) OR "+
+				"(status = ? AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)",
+			model.AlertDeliveryStatusPending,
+			model.AlertDeliveryStatusRetrying, now,
+			model.AlertDeliveryStatusSending, now,
+		).
+		Order("id ASC").Limit(1000).Find(&rows).Error; err != nil {
 		logger.Module("alerting").Warn().Err(err).Msg("retry tick: load deliveries failed")
 		return
 	}
@@ -100,139 +130,34 @@ func (w *RetryWorker) tick(ctx context.Context, now time.Time) {
 	}
 }
 
-// attempt performs a single delivery attempt and updates the delivery row state machine.
-//
-// Semantics:
-//   - Retries do NOT re-evaluate silences. Once an alert has been dispatched and a retry
-//     is scheduled, the retry continues to terminal state (sent|failed) regardless of
-//     silences created afterward. Silences suppress NEW dispatches, not pending retries.
-//   - ErrRecordNotFound on integration/alert lookup → mark delivery failed with descriptive
-//     LastError. Other DB errors → warn log and skip this tick (retry scheduler will try again).
-//   - The mutex wraps only the state-transition section; the HTTP send is deliberately
-//     unguarded so one slow channel cannot serialize the retry queue.
+// attempt claims the row before loading dependent records or sending. A stale
+// snapshot from tick is only an ID hint; the durable UPDATE predicate decides
+// whether this invocation is still allowed to send.
 func (w *RetryWorker) attempt(ctx context.Context, d model.AlertDelivery) {
-	var integ model.Integration
-	if err := w.db.WithContext(ctx).First(&integ, d.IntegrationID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			w.finalizeTerminal(d, "integration deleted", integrationDeletedLogger(d))
-		} else {
-			logger.Module("alerting").Warn().
-				Uint("delivery_id", d.ID).Err(err).
-				Msg("读取 integration 失败，跳过本次重试")
-		}
-		return
-	}
-	var alert model.Alert
-	if err := w.db.WithContext(ctx).First(&alert, d.AlertID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			w.finalizeTerminal(d, "alert deleted", alertDeletedLogger(d))
-		} else {
-			logger.Module("alerting").Warn().
-				Uint("delivery_id", d.ID).Err(err).
-				Msg("读取 alert 失败，跳过本次重试")
-		}
-		return
-	}
-
-	// Slow path: HTTP send, intentionally NOT holding mu.
-	sendErr := w.sendFn(integ, alert)
-
-	// State transition is guarded so ManualRetry and tick cannot race.
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	d.AttemptCount++
-	switch {
-	case sendErr == nil:
-		d.Status = "sent"
-		d.NextRetryAt = nil
-		d.LastError = ""
-	case d.AttemptCount >= maxAttempts:
-		d.Status = "failed"
-		d.NextRetryAt = nil
-		d.LastError = sanitizeDeliveryError(sendErr)
+	if err := runDeliveryAttempt(ctx, w.db, d, w.sendFn, false); err != nil {
 		logger.Module("alerting").Warn().
 			Uint("delivery_id", d.ID).
-			Str("error", sanitizeDeliveryError(sendErr)).
-			Msg("告警投递重试达到上限，终止")
-	default:
-		next := time.Now().Add(backoffDuration(d.AttemptCount))
-		d.Status = "retrying"
-		d.NextRetryAt = &next
-		d.LastError = sanitizeDeliveryError(sendErr)
-	}
-	if err := w.db.Save(&d).Error; err != nil {
-		logger.Module("alerting").Warn().Err(err).Uint("delivery_id", d.ID).Msg("save delivery failed")
+			Err(err).
+			Msg("retry attempt failed")
 	}
 }
 
-// finalizeTerminal marks a delivery failed because the referenced integration
-// or alert no longer exists. Caller provides a human-readable reason and a
-// log emitter closure so the caller's context (integration_id / alert_id)
-// stays attached.
-//
-// CONTRACT: caller MUST NOT already hold w.mu. finalizeTerminal acquires it
-// itself; a caller that wraps this in another Lock() would deadlock. The
-// only callsites today are the two ErrRecordNotFound branches in attempt(),
-// which run before attempt() takes the lock.
-func (w *RetryWorker) finalizeTerminal(d model.AlertDelivery, reason string, logFn func()) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	d.Status = "failed"
-	d.NextRetryAt = nil
-	d.LastError = reason
-	d.AttemptCount++
-	if err := w.db.Save(&d).Error; err != nil {
-		logger.Module("alerting").Warn().Err(err).Uint("delivery_id", d.ID).Msg("save terminal delivery failed")
-	}
-	logFn()
-}
-
-func integrationDeletedLogger(d model.AlertDelivery) func() {
-	return func() {
-		logger.Module("alerting").Warn().
-			Uint("delivery_id", d.ID).
-			Uint("integration_id", d.IntegrationID).
-			Msg("integration 已删除，投递标记为 failed")
-	}
-}
-
-func alertDeletedLogger(d model.AlertDelivery) func() {
-	return func() {
-		logger.Module("alerting").Warn().
-			Uint("delivery_id", d.ID).
-			Uint("alert_id", d.AlertID).
-			Msg("alert 已删除，投递标记为 failed")
-	}
-}
-
-// ManualRetry 立即强制重试指定投递记录，绕过 NextRetryAt 调度。供管理员 API 调用。
+// ManualRetry immediately forces one attempt for a delivery, bypassing
+// NextRetryAt but not the sending lease. It uses the same atomic claim and CAS
+// completion path as automatic and initial delivery.
 func (w *RetryWorker) ManualRetry(deliveryID uint) error {
 	var d model.AlertDelivery
 	if err := w.db.First(&d, deliveryID).Error; err != nil {
 		return err
 	}
-	if d.Status == "sent" {
+	if d.Status == model.AlertDeliveryStatusSent {
 		return errors.New("already sent")
 	}
-	w.attempt(context.Background(), d)
-	return nil
+	return runDeliveryAttempt(context.Background(), w.db, d, w.sendFn, true)
 }
 
 // dispatchSingle 是生产路径的适配器：将 (Integration, Alert) 路由到 dispatcher.go 中的
 // send() 函数（按 integration.Type 分发到各通道发送器）。
 func dispatchSingle(integ model.Integration, alert model.Alert) error {
 	return send(integ, alert)
-}
-
-// sanitizeDeliveryError redacts URL credentials and scrubs common token/key
-// patterns from a sender error message before it is persisted to
-// alert_deliveries.last_error. Stored LastError is readable by any user with
-// alerts:deliveries permission (viewer included), so leaking webhook URLs
-// that embed bearer tokens or API keys is a direct A09 risk.
-//
-// Wave 2 (PR-C C6) 起，本函数委托给 util.SanitizeError，与首发路径
-// (dispatcher.go) 和 reporting/last_err 共享同一套规则（URL/path/query 屏蔽
-// + bot token + token/secret/password 模式）。
-func sanitizeDeliveryError(err error) string {
-	return util.SanitizeError(err)
 }

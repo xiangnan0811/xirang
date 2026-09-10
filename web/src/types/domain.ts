@@ -605,11 +605,19 @@ export interface AlertRecord {
   retryable: boolean;
 }
 
+export type AlertDeliveryStatus =
+  | "pending"
+  | "sending"
+  | "retrying"
+  | "sent"
+  | "failed"
+  | "unknown";
+
 export interface AlertDeliveryRecord {
   id: string;
   alertId: string;
   integrationId: string;
-  status: "sent" | "failed";
+  status: AlertDeliveryStatus;
   createdAt: string;
   attemptCount?: number;
   nextRetryAt?: string | null;

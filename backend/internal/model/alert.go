@@ -6,6 +6,31 @@ import (
 	"time"
 )
 
+const (
+	// Alert delivery decisions are persisted separately from the alert status.
+	// They describe why an alert has (or has not) acquired channel intents and
+	// therefore make replay safe after a process restart.
+	AlertDeliveryDecisionPending    = "pending"
+	AlertDeliveryDecisionDirect     = "direct"
+	AlertDeliveryDecisionSuppressed = "suppressed"
+	AlertDeliveryDecisionEscalated  = "escalated"
+	AlertDeliveryDecisionNoChannel  = "no_channel"
+
+	AlertDeliveryReasonSilence             = "silence"
+	AlertDeliveryReasonGrouping            = "grouping"
+	AlertDeliveryReasonThresholdOrCooldown = "threshold_or_cooldown"
+	AlertDeliveryReasonNoEnabledChannel    = "no_enabled_channel"
+	AlertDeliveryReasonEscalation          = "escalation"
+)
+
+const (
+	AlertDeliveryStatusPending  = "pending"
+	AlertDeliveryStatusSending  = "sending"
+	AlertDeliveryStatusSent     = "sent"
+	AlertDeliveryStatusRetrying = "retrying"
+	AlertDeliveryStatusFailed   = "failed"
+)
+
 type Alert struct {
 	ID             uint       `gorm:"primaryKey" json:"id"`
 	NodeID         uint       `gorm:"not null;index:idx_alerts_dedup" json:"node_id"`
@@ -23,8 +48,16 @@ type Alert struct {
 	LastNotifiedAt *time.Time `json:"last_notified_at"`
 	Tags           string     `gorm:"type:text;not null;default:'[]'" json:"tags"`
 	LastLevelFired int        `gorm:"not null;default:-1" json:"last_level_fired"`
-	CreatedAt      time.Time  `gorm:"index:idx_alerts_dedup" json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+
+	// DeliveryDecision is intentionally independent of Alert.Status. A resolved
+	// alert may still have an in-flight delivery intent, while a silenced or
+	// escalated alert must not be rediscovered as a direct delivery on replay.
+	DeliveryDecision  string     `gorm:"size:32" json:"delivery_decision,omitempty"`
+	DeliveryReason    string     `gorm:"size:64" json:"delivery_reason,omitempty"`
+	DeliveryDecidedAt *time.Time `json:"delivery_decided_at,omitempty"`
+
+	CreatedAt time.Time `gorm:"index:idx_alerts_dedup" json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // DecodedTags returns the parsed tags; empty on invalid.
@@ -38,14 +71,22 @@ func (a *Alert) DecodedTags() []string {
 }
 
 type AlertDelivery struct {
-	ID            uint       `gorm:"primaryKey" json:"id"`
-	AlertID       uint       `gorm:"index;not null" json:"alert_id"`
-	IntegrationID uint       `gorm:"index;not null" json:"integration_id"`
-	Status        string     `gorm:"size:16;not null" json:"status"` // pending|sent|retrying|failed
-	AttemptCount  int        `gorm:"not null;default:0" json:"attempt_count"`
-	NextRetryAt   *time.Time `json:"next_retry_at"`
-	LastError     string     `gorm:"type:text" json:"last_error"`
-	CreatedAt     time.Time  `json:"created_at"`
+	ID            uint   `gorm:"primaryKey" json:"id"`
+	AlertID       uint   `gorm:"index;not null" json:"alert_id"`
+	IntegrationID uint   `gorm:"index;not null" json:"integration_id"`
+	Status        string `gorm:"size:16;not null" json:"status"` // pending|sending|sent|retrying|failed
+	// Decision is normally "deliver". It is kept on the row so a future
+	// non-delivery intent can be represented without making an absent row
+	// ambiguous. Legacy rows with an empty value are treated as deliverable.
+	Decision       string     `gorm:"size:16;not null;default:'deliver'" json:"decision"`
+	DeliveryKey    string     `gorm:"size:96" json:"-"`
+	AttemptCount   int        `gorm:"not null;default:0" json:"attempt_count"`
+	AttemptID      string     `gorm:"size:64" json:"-"`
+	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
+	NextRetryAt    *time.Time `json:"next_retry_at"`
+	LastError      string     `gorm:"type:text" json:"last_error"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 // Silence 告警静默规则：在指定时间窗口内抑制匹配的告警

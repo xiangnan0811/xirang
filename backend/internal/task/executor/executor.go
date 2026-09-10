@@ -273,12 +273,16 @@ func (e *RsyncExecutor) RunRestore(ctx context.Context, task model.Task, logf Lo
 	}
 	sourceInfo, err := os.Lstat(source)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return -1, fmt.Errorf("core 备份源不存在")
-		}
-		return -1, fmt.Errorf("core 备份源不可用")
+		return -1, fmt.Errorf("core 备份源不存在或不可读")
 	}
-	source, err = normalizeRsyncRestoreSource(source, sourceInfo)
+	manifest, err := model.DecodeRsyncCaptureManifest(task.RsyncCaptureManifest)
+	if err != nil {
+		return -1, fmt.Errorf("rsync 恢复缺少有效捕获证据")
+	}
+	if task.RsyncCaptureLayout != manifest.Layout || task.RsyncCaptureRoot != manifest.Root {
+		return -1, fmt.Errorf("rsync capture metadata mismatch")
+	}
+	source, err = ResolveRsyncRestoreSource(source, sourceInfo, manifest.Layout, manifest.Root)
 	if err != nil {
 		return -1, err
 	}
@@ -288,14 +292,39 @@ func (e *RsyncExecutor) RunRestore(ctx context.Context, task model.Task, logf Lo
 	if strings.TrimSpace(task.Node.Host) == "" {
 		return -1, fmt.Errorf("节点地址不能为空")
 	}
-
+	captureFilesFrom := ""
+	if manifest.Layout == model.TaskRunCaptureLayoutSingleFile {
+		if len(manifest.Entries) != 1 || manifest.Entries[0].Path != "" ||
+			(manifest.Entries[0].Kind != "file" && manifest.Entries[0].Kind != "symlink") {
+			return -1, fmt.Errorf("rsync capture single-file evidence is invalid")
+		}
+	} else {
+		var cleanup func()
+		captureFilesFrom, cleanup, err = writeRsyncCaptureFilesFrom(task.RsyncCaptureManifest, task)
+		if err != nil {
+			return -1, err
+		}
+		defer cleanup()
+		// The requested node target is the logical root, never Core's wrapper.
+		// Materialize it even when the captured selection contains only that root.
+		if err := EnsureRemoteTargetReadyForPurpose(ctx, task.Node, target, sshutil.PurposeTaskRestore); err != nil {
+			return -1, err
+		}
+	}
 	sshParts, cleanup, err := buildRsyncSSHArgs(ctx, task.Node, sshutil.PurposeTaskRestore)
 	if err != nil {
 		return -1, err
 	}
 	defer cleanup()
-
-	args := []string{"-avz", "--info=progress2", "-e", strings.Join(sshParts, " ")}
+	args := []string{"-avz", "--info=progress2"}
+	if captureFilesFrom != "" {
+		args = append(args, "--no-recursive", "--from0", "--files-from="+captureFilesFrom)
+		if len(manifest.Entries) == 1 && manifest.Entries[0].Path == "" && manifest.Entries[0].Kind == "directory" {
+			// Copy only the proven root metadata, never stale excluded children.
+			args = append(args, "--exclude=*")
+		}
+	}
+	args = append(args, "-e", strings.Join(sshParts, " "))
 	if NeedsSudo(task.Node) {
 		args = append(args, "--rsync-path", "sudo rsync")
 	}
@@ -306,20 +335,6 @@ func (e *RsyncExecutor) RunRestore(ctx context.Context, task model.Task, logf Lo
 	args = append(args, "--", source, destination)
 	logf("info", "从 Core 向远程节点执行恢复命令")
 	return e.runRsyncCommand(ctx, args, logf, progressf)
-}
-
-func normalizeRsyncRestoreSource(source string, info os.FileInfo) (string, error) {
-	if info.IsDir() {
-		source = filepath.Clean(source)
-		if source != string(filepath.Separator) {
-			source += string(filepath.Separator)
-		}
-		return source, nil
-	}
-	if info.Mode().IsRegular() {
-		return source, nil
-	}
-	return "", fmt.Errorf("core 备份源类型不受支持")
 }
 
 const maxRsyncExcludeRuleBytes = 4096
