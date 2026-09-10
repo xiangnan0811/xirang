@@ -145,6 +145,9 @@ jobs:
         run: go mod download
 
       - name: Run PostgreSQL migration parity
+        # The full historical migration slice exceeds 20m on hosted runners.
+        env:
+          POSTGRES_TEST_TIMEOUT: 30m
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL migration parity' ./internal/database '^(Test.*Migration.*Postgres.*|TestPostgresTimestamptzScanUsesConfiguredUTC)$'
       - name: Run PostgreSQL lifecycle migration contract
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL lifecycle migration contract' ./internal/database '^TestLifecycleEffectClaimAuditSlotMigrationPostgres(PristineDown|ClaimUsedDown|SlotUsedDown|Constraints|ClaimTransitionRebinding|UpgradeCutover)$'

@@ -332,11 +332,16 @@ func openAlertingTestDB(t *testing.T) *gorm.DB {
 	t.Setenv("APP_ENV", "development")
 	secure.ResetForTesting()
 	t.Setenv("DATA_ENCRYPTION_KEY", "dGVzdC1rZXktZGF0YS1lbmNyeXB0aW9uLWtleS0zMmIh")
-	dsn := fmt.Sprintf("file:%s/alerting?mode=memory&cache=shared&_loc=UTC", t.TempDir())
+	dsn := fmt.Sprintf("file:%s/alerting.db?_journal_mode=WAL&_busy_timeout=5000&_txlock=immediate&_loc=UTC", t.TempDir())
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("获取测试数据库连接失败: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	return db
 }
 
