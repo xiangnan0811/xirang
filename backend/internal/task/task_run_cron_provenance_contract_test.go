@@ -222,6 +222,9 @@ func TestRestoreRequiresNewBackupAfterPolicyExcludeRulesChange(t *testing.T) {
 		t.Fatalf("restore after equivalent encrypted policy storage: %v", err)
 	}
 	stableRun := waitTaskRunTerminal(t, db, stableRunID)
+	// The next request tests provenance, not overlap with the prior runner
+	// releasing its process-local admission after durable terminalization.
+	manager.taskWG.Wait()
 	if stableRun.Status != model.TaskRunStatusSuccess {
 		t.Fatalf("equivalent encrypted policy restore status=%q, want success", stableRun.Status)
 	}
