@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -573,7 +574,7 @@ func TestAlertRetryFailedDeliveriesMixedResult(t *testing.T) {
 	}
 
 	if result.Data.TotalFailed != 2 {
-		t.Fatalf("期望去重后 total_failed=2，实际: %d", result.Data.TotalFailed)
+		t.Fatalf("期望按逻辑投递 total_failed=2，实际: %d", result.Data.TotalFailed)
 	}
 	if result.Data.SuccessCount != 1 || result.Data.FailedCount != 1 {
 		t.Fatalf("期望成功1失败1，实际 success=%d failed=%d", result.Data.SuccessCount, result.Data.FailedCount)
@@ -582,7 +583,209 @@ func TestAlertRetryFailedDeliveriesMixedResult(t *testing.T) {
 		t.Fatalf("存在失败投递时 OK 应为 false")
 	}
 	if len(result.Data.NewDeliveries) != 2 {
-		t.Fatalf("期望新投递记录为 2 条，实际: %d", len(result.Data.NewDeliveries))
+		t.Fatalf("期望每个逻辑投递记录均返回，实际: %d", len(result.Data.NewDeliveries))
+	}
+}
+
+func TestAlertRetryFailedDeliveriesPreservesEventScopedRows(t *testing.T) {
+	db := openAlertHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Alert{}, &model.AlertDelivery{}, &model.Integration{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	var sends int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&sends, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	alert := model.Alert{
+		NodeID: 1, NodeName: "node-escalated", Severity: "critical", Status: "open",
+		ErrorCode: "XR-ESCALATED", Message: "escalated", TriggeredAt: time.Now(),
+	}
+	if err := db.Create(&alert).Error; err != nil {
+		t.Fatalf("创建告警失败: %v", err)
+	}
+	integration := model.Integration{
+		Type: "webhook", Name: "webhook-escalated", Endpoint: server.URL,
+		Enabled: true, FailThreshold: 1, CooldownMinutes: 0,
+	}
+	if err := db.Create(&integration).Error; err != nil {
+		t.Fatalf("创建通知通道失败: %v", err)
+	}
+	legacyRecords := []model.AlertDelivery{
+		{
+			AlertID: alert.ID, IntegrationID: integration.ID, Status: model.AlertDeliveryStatusFailed,
+			Decision: "deliver", AttemptCount: 1, LastError: "old legacy attempt",
+		},
+		{
+			AlertID: alert.ID, IntegrationID: integration.ID, Status: model.AlertDeliveryStatusFailed,
+			Decision: "deliver", AttemptCount: 1, LastError: "current legacy attempt",
+		},
+	}
+	if err := db.Create(&legacyRecords).Error; err != nil {
+		t.Fatalf("创建历史重复投递记录失败: %v", err)
+	}
+	records := []model.AlertDelivery{
+		{
+			AlertID: alert.ID, IntegrationID: integration.ID, Status: model.AlertDeliveryStatusFailed,
+			Decision: "deliver", DeliveryKey: fmt.Sprintf("%d:%d:%d", alert.ID, 101, integration.ID),
+			AttemptCount: 1, LastError: "level one failed",
+		},
+		{
+			AlertID: alert.ID, IntegrationID: integration.ID, Status: model.AlertDeliveryStatusFailed,
+			Decision: "deliver", DeliveryKey: fmt.Sprintf("%d:%d:%d", alert.ID, 102, integration.ID),
+			AttemptCount: 1, LastError: "level two failed",
+		},
+	}
+	if err := db.Create(&records).Error; err != nil {
+		t.Fatalf("创建事件投递记录失败: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	handler := NewAlertHandler(db)
+	r.POST("/alerts/:id/retry-failed-deliveries", handler.RetryFailedDeliveries)
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/alerts/%d/retry-failed-deliveries", alert.ID), nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("期望状态码 200，实际: %d，body=%s", resp.Code, resp.Body.String())
+	}
+	var result struct {
+		Data retryFailedDeliveriesResponse `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if result.Data.TotalFailed != 3 || result.Data.SuccessCount != 3 || result.Data.FailedCount != 0 || !result.Data.OK {
+		t.Fatalf("批量重发逻辑投递统计错误: %+v", result.Data)
+	}
+	if len(result.Data.NewDeliveries) != 3 || atomic.LoadInt64(&sends) != 3 {
+		t.Fatalf("实际逻辑投递数=%d，网络发送数=%d，want 3/3", len(result.Data.NewDeliveries), atomic.LoadInt64(&sends))
+	}
+
+	var persisted []model.AlertDelivery
+	if err := db.Where("alert_id = ?", alert.ID).Order("id ASC").Find(&persisted).Error; err != nil {
+		t.Fatalf("查询事件投递记录失败: %v", err)
+	}
+	if len(persisted) != 4 {
+		t.Fatalf("事件投递记录数=%d，want 4（含历史重复），禁止创建额外 direct 记录", len(persisted))
+	}
+	if persisted[0].Status != model.AlertDeliveryStatusFailed || persisted[0].AttemptCount != 1 || persisted[0].DeliveryKey != "" {
+		t.Fatalf("旧历史重复记录不应被重试: %+v", persisted[0])
+	}
+	if persisted[1].Status != model.AlertDeliveryStatusSent || persisted[1].AttemptCount != 2 ||
+		persisted[1].DeliveryKey != fmt.Sprintf("%d:%d", alert.ID, integration.ID) {
+		t.Fatalf("当前 legacy direct 逻辑投递错误: %+v", persisted[1])
+	}
+	for i, row := range persisted[2:] {
+		if row.ID != records[i].ID || row.DeliveryKey != records[i].DeliveryKey {
+			t.Fatalf("事件投递记录 %d 被替换或合并: got=%+v want=%+v", i, row, records[i])
+		}
+		if row.Status != model.AlertDeliveryStatusSent || row.AttemptCount != 2 {
+			t.Fatalf("事件投递记录 %d=%+v，want sent/attempt=2", i, row)
+		}
+	}
+
+	// The old blank-key duplicate remains failed, but the canonical direct
+	// head is now sent and must prevent fallback to that historical attempt.
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/alerts/%d/retry-failed-deliveries", alert.ID), nil)
+	resp = httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || atomic.LoadInt64(&sends) != 3 {
+		t.Fatalf("重复批量重发不应发送历史旧记录: status=%d sends=%d", resp.Code, atomic.LoadInt64(&sends))
+	}
+}
+
+func TestAlertRetryDeliveryTargetsMostRecentExistingEventAndKeepsSentTerminal(t *testing.T) {
+	db := openAlertHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Alert{}, &model.AlertDelivery{}, &model.Integration{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	var sends int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&sends, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	alert := model.Alert{
+		NodeID: 1, NodeName: "node-escalated-single", Severity: "critical", Status: "open",
+		ErrorCode: "XR-ESCALATED-SINGLE", Message: "escalated", TriggeredAt: time.Now(),
+	}
+	if err := db.Create(&alert).Error; err != nil {
+		t.Fatalf("创建告警失败: %v", err)
+	}
+	integration := model.Integration{
+		Type: "webhook", Name: "webhook-escalated-single", Endpoint: server.URL,
+		Enabled: true, FailThreshold: 1, CooldownMinutes: 0,
+	}
+	if err := db.Create(&integration).Error; err != nil {
+		t.Fatalf("创建通知通道失败: %v", err)
+	}
+	older := model.AlertDelivery{
+		AlertID: alert.ID, IntegrationID: integration.ID, Status: model.AlertDeliveryStatusFailed,
+		Decision: "deliver", DeliveryKey: fmt.Sprintf("%d:%d:%d", alert.ID, 201, integration.ID),
+		AttemptCount: 1, LastError: "older level failed",
+	}
+	newer := model.AlertDelivery{
+		AlertID: alert.ID, IntegrationID: integration.ID, Status: model.AlertDeliveryStatusFailed,
+		Decision: "deliver", DeliveryKey: fmt.Sprintf("%d:%d:%d", alert.ID, 202, integration.ID),
+		AttemptCount: 1, LastError: "newer level failed",
+	}
+	if err := db.Create(&older).Error; err != nil {
+		t.Fatalf("创建旧事件投递记录失败: %v", err)
+	}
+	if err := db.Create(&newer).Error; err != nil {
+		t.Fatalf("创建新事件投递记录失败: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	handler := NewAlertHandler(db)
+	r.POST("/alerts/:id/retry-delivery", handler.RetryDelivery)
+	body := strings.NewReader(fmt.Sprintf(`{"integration_id":%d}`, integration.ID))
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/alerts/%d/retry-delivery", alert.ID), body)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("首次重发状态码=%d，body=%s", resp.Code, resp.Body.String())
+	}
+	var result struct {
+		Data retryDeliveryResponse `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+		t.Fatalf("解析首次重发响应失败: %v", err)
+	}
+	if !result.Data.OK || result.Data.Delivery.ID != newer.ID || result.Data.Delivery.Status != model.AlertDeliveryStatusSent {
+		t.Fatalf("首次重发未选择最新事件投递: %+v", result.Data)
+	}
+	if atomic.LoadInt64(&sends) != 1 {
+		t.Fatalf("首次重发网络发送数=%d，want 1", atomic.LoadInt64(&sends))
+	}
+
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/alerts/%d/retry-delivery", alert.ID), strings.NewReader(fmt.Sprintf(`{"integration_id":%d}`, integration.ID)))
+	req.Header.Set("Content-Type", "application/json")
+	resp = httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("sent 投递再次请求状态码=%d，body=%s", resp.Code, resp.Body.String())
+	}
+	if atomic.LoadInt64(&sends) != 1 {
+		t.Fatalf("sent 投递被重复发送，网络发送数=%d", atomic.LoadInt64(&sends))
+	}
+	var persisted []model.AlertDelivery
+	if err := db.Where("alert_id = ?", alert.ID).Order("id ASC").Find(&persisted).Error; err != nil {
+		t.Fatalf("查询单通道投递记录失败: %v", err)
+	}
+	if len(persisted) != 2 || persisted[0].Status != model.AlertDeliveryStatusFailed ||
+		persisted[1].Status != model.AlertDeliveryStatusSent || persisted[1].AttemptCount != 2 {
+		t.Fatalf("单通道事件投递状态错误: %+v", persisted)
 	}
 }
 
@@ -726,7 +929,7 @@ func TestAlertGroupInfo_HappyPath(t *testing.T) {
 	// Bump the in-memory grouping counter so we get a non-zero count.
 	key := alerting.GroupKey(a.ErrorCode, a.NodeID, []string{})
 	for i := 0; i < 3; i++ {
-		alerting.GetSharedGrouping().ShouldSend(key)
+		alerting.GetSharedGrouping().ShouldSend(key, a.ID)
 	}
 
 	r := gin.New()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -173,6 +174,85 @@ func TestDurableRoutingDecisionsPersistGroupingAndThreshold(t *testing.T) {
 	})
 }
 
+func TestGroupingCommitFailureReplaysSameFirstAlert(t *testing.T) {
+	db := setupDurableTestDB(t)
+	var sends atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		sends.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+	integration := durableTestIntegration("grouping-commit-replay")
+	integration.Endpoint = server.URL
+	if err := db.Create(&integration).Error; err != nil {
+		t.Fatalf("create integration: %v", err)
+	}
+	alert := durableTestAlert()
+	if err := db.Create(&alert).Error; err != nil {
+		t.Fatalf("create alert: %v", err)
+	}
+	dispatcher := NewDispatcher(db, nil, nil)
+	SetDispatcher(dispatcher)
+	t.Cleanup(func() { SetDispatcher(nil) })
+
+	var failed atomic.Bool
+	const callbackName = "test:fail-grouping-decision-once"
+	if err := db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "alerts" {
+			return
+		}
+		values, ok := tx.Statement.Dest.(map[string]interface{})
+		if !ok {
+			return
+		}
+		decision, ok := values["delivery_decision"].(string)
+		if ok && decision == model.AlertDeliveryDecisionDirect && failed.CompareAndSwap(false, true) {
+			_ = tx.AddError(errors.New("injected grouping decision persistence failure"))
+		}
+	}); err != nil {
+		t.Fatalf("register decision fault: %v", err)
+	}
+	if err := dispatcher.dispatchCreatedAlert(&alert); err == nil {
+		t.Fatal("expected injected decision commit failure")
+	}
+
+	_ = db.Callback().Update().Remove(callbackName)
+	if !failed.Load() {
+		t.Fatal("decision fault callback did not run")
+	}
+
+	var pending model.Alert
+	if err := db.First(&pending, alert.ID).Error; err != nil {
+		t.Fatalf("reload pending alert: %v", err)
+	}
+	if pending.DeliveryDecision != model.AlertDeliveryDecisionPending {
+		t.Fatalf("decision=%q, want pending after rollback", pending.DeliveryDecision)
+	}
+	var before int64
+	if err := db.Model(&model.AlertDelivery{}).Where("alert_id = ?", alert.ID).Count(&before).Error; err != nil {
+		t.Fatalf("count rolled-back intents: %v", err)
+	}
+	if before != 0 {
+		t.Fatalf("rolled-back decision left %d intents", before)
+	}
+
+	worker := NewRetryWorker(db)
+	worker.tick(context.Background(), time.Now())
+	if got := sends.Load(); got != 1 {
+		t.Fatalf("same-alert replay sends=%d, want one", got)
+	}
+	var intent model.AlertDelivery
+	if err := db.Where("alert_id = ? AND integration_id = ?", alert.ID, integration.ID).First(&intent).Error; err != nil {
+		t.Fatalf("load replay intent: %v", err)
+	}
+	if intent.Status != model.AlertDeliveryStatusSent || intent.AttemptCount != 1 {
+		t.Fatalf("replay intent=%+v, want sent once", intent)
+	}
+	if got := GetSharedGrouping().Count(GroupKey(alert.ErrorCode, alert.NodeID, nil)); got != 1 {
+		t.Fatalf("same-alert replay changed grouping count=%d, want 1", got)
+	}
+}
+
 func TestDurableFailedSendLeavesRetryableIntent(t *testing.T) {
 	db := setupDurableTestDB(t)
 	integration := durableTestIntegration("failed-send-intent")
@@ -261,7 +341,6 @@ func TestDurableIntegrationLookupFailureReplaysPendingAlert(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("register integration query fault: %v", err)
 	}
-	defer func() { _ = db.Callback().Query().Remove(callbackName) }()
 
 	dispatcher := NewDispatcher(db, nil, nil)
 	if err := dispatcher.raiseAndDispatch(&alert); err == nil {

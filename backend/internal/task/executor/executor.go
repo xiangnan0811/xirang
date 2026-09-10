@@ -77,6 +77,13 @@ type RestoreExecutor interface {
 	RunRestore(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error)
 }
 
+// RsyncBinaryProvider exposes the exact local compatibility binary selected by
+// the factory. Capture and verification use this value rather than rereading
+// process configuration, so they cannot diverge from Run.
+type RsyncBinaryProvider interface {
+	RsyncBinary() string
+}
+
 type Factory interface {
 	Resolve(executorType string) Executor
 }
@@ -154,28 +161,64 @@ func (e *DisabledExecutor) Run(_ context.Context, _ model.Task, _ LogFunc, _ Pro
 	return -1, fmt.Errorf("不支持的执行器类型")
 }
 
+// NoProcessStartError marks a compatibility Rsync command failure for which
+// no child process was launched. The runner may clear its pre-launch
+// generation fence only for this authoritative outcome; all ordinary
+// execution errors remain fail-closed.
+type NoProcessStartError struct {
+	Err error
+}
+
+func (e *NoProcessStartError) Error() string {
+	if e == nil || e.Err == nil {
+		return "rsync process did not start"
+	}
+	return e.Err.Error()
+}
+
+func (e *NoProcessStartError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func markNoProcessStart(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &NoProcessStartError{Err: err}
+}
+
 var progressLinePattern = regexp.MustCompile(`(?i)^\s*[0-9][0-9,]*(?:\.[0-9]+)?\s+([0-9]+)%\s+([0-9][0-9,]*(?:\.[0-9]+)?)([kmgt]?)(?:i?b|b)/s\s+`)
 
 type RsyncExecutor struct {
 	binary string
 }
 
+func (e *RsyncExecutor) RsyncBinary() string {
+	if e == nil || strings.TrimSpace(e.binary) == "" {
+		return "rsync"
+	}
+	return e.binary
+}
+
 func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
 	if strings.TrimSpace(task.RsyncSource) == "" || strings.TrimSpace(task.RsyncTarget) == "" {
-		return -1, fmt.Errorf("同步任务缺少源路径或目标路径")
+		return -1, markNoProcessStart(fmt.Errorf("同步任务缺少源路径或目标路径"))
 	}
 
 	// 备份模式：标准 rsync 执行（本地 -> 远程，或远程 -> 本地）。
 	if !util.IsRemotePathSpec(task.RsyncTarget) {
 		if err := EnsureLocalTargetReady(task.RsyncTarget); err != nil {
-			return -1, err
+			return -1, markNoProcessStart(err)
 		}
 	}
 
 	args := []string{"-avz", "--info=progress2"}
 	excludes, err := parseRsyncExcludeRules(task.Policy)
 	if err != nil {
-		return -1, err
+		return -1, markNoProcessStart(err)
 	}
 	args = appendRsyncExcludeArgs(args, excludes)
 
@@ -184,7 +227,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 	if strings.TrimSpace(task.Node.Host) != "" {
 		sshParts, sshCleanup, err := buildRsyncSSHArgs(ctx, task.Node, sshutil.PurposeTaskBackup)
 		if err != nil {
-			return -1, err
+			return -1, markNoProcessStart(err)
 		}
 		cleanup = sshCleanup
 		args = append(args, "-e", strings.Join(sshParts, " "))
@@ -205,18 +248,18 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 }
 
 func (e *RsyncExecutor) runRsyncCommand(ctx context.Context, args []string, logf LogFunc, progressf ProgressFunc) (int, error) {
-	cmd := exec.CommandContext(ctx, e.binary, args...)
+	cmd := exec.CommandContext(ctx, e.RsyncBinary(), args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return -1, err
+		return -1, &NoProcessStartError{Err: err}
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return -1, err
+		return -1, &NoProcessStartError{Err: err}
 	}
 
 	if err := cmd.Start(); err != nil {
-		return -1, err
+		return -1, &NoProcessStartError{Err: err}
 	}
 
 	var wg sync.WaitGroup

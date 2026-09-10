@@ -338,28 +338,29 @@ type queuedTaskSample struct {
 }
 
 type Manager struct {
-	db                          *gorm.DB
-	nodeWriteAdmission          NodeWriteAdmission
-	nodeWriteRetryWait          func(context.Context, int) error
-	runContextFactory           func(context.Context, time.Duration) (context.Context, context.CancelFunc)
-	stateMachine                *StateMachine
-	executorFactory             executor.Factory
-	hub                         *ws.Hub
-	scheduler                   *scheduler.CronScheduler
-	locks                       sync.Map
-	strategyLocks               sync.Map
-	nodeLocks                   sync.Map                                                         // nodeID → *sync.Mutex, 节点级互斥（restore 与普通任务共享）
-	hookRunFunc                 func(ctx context.Context, task model.Task, command string) error // 可测试注入
-	afterTriggerRestoreLoad     func()                                                           // 可测试注入：归档检查与 run 预约之间
-	drillSSHScriptFunc          func(ctx context.Context, node model.Node, script string) error  // 可测试注入
-	drillRestoreFunc            func(ctx context.Context, srcTask model.Task, sandboxNode model.Node, drillPath string, logf func(string, string)) error
-	ensureRemoteTargetReadyFunc func(ctx context.Context, node model.Node, targetPath string) error
-	pendingRuns                 sync.Map
-	pendingRecoveryMu           sync.Mutex
-	pendingRecoveryCursor       uint
-	restoreNodes                sync.Map // nodeID → taskID, 持续跟踪有活跃恢复任务的节点
-	semaphore                   chan struct{}
-	taskWG                      sync.WaitGroup
+	db                            *gorm.DB
+	nodeWriteAdmission            NodeWriteAdmission
+	nodeWriteRetryWait            func(context.Context, int) error
+	runContextFactory             func(context.Context, time.Duration) (context.Context, context.CancelFunc)
+	stateMachine                  *StateMachine
+	executorFactory               executor.Factory
+	hub                           *ws.Hub
+	scheduler                     *scheduler.CronScheduler
+	locks                         sync.Map
+	strategyLocks                 sync.Map
+	nodeLocks                     sync.Map                                                         // nodeID → *sync.Mutex, 节点级互斥（restore 与普通任务共享）
+	hookRunFunc                   func(ctx context.Context, task model.Task, command string) error // 可测试注入
+	afterTriggerRestoreLoad       func()                                                           // 可测试注入：归档检查与 run 预约之间
+	afterLegacyRsyncGenerationArm func()                                                           // 可测试注入：Rsync 代际闩锁持久化后
+	drillSSHScriptFunc            func(ctx context.Context, node model.Node, script string) error  // 可测试注入
+	drillRestoreFunc              func(ctx context.Context, srcTask model.Task, sandboxNode model.Node, drillPath string, logf func(string, string)) error
+	ensureRemoteTargetReadyFunc   func(ctx context.Context, node model.Node, targetPath string) error
+	pendingRuns                   sync.Map
+	pendingRecoveryMu             sync.Mutex
+	pendingRecoveryCursor         uint
+	restoreNodes                  sync.Map // nodeID → taskID, 持续跟踪有活跃恢复任务的节点
+	semaphore                     chan struct{}
+	taskWG                        sync.WaitGroup
 	// Sub-components extracted from the Manager god object.
 	logDispatcher *LogDispatcher
 	sampleWriter  *SampleWriter

@@ -46,6 +46,9 @@ jobs:
           cache: true
           cache-dependency-path: backend/go.sum
 
+      - name: Install recovery integration tools
+        run: sudo apt-get update && sudo apt-get install -y rsync openssh-server
+
       - name: Lint backend
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
@@ -62,7 +65,7 @@ jobs:
         run: go test -coverprofile=coverage.out ./...
 
       - name: Race concurrency-sensitive backend packages
-        run: go test -race ./internal/backupasset/... ./internal/api/handlers/ ./internal/task ./internal/ws ./internal/auth ./internal/bootstrap ./internal/uptime ./internal/policy ./internal/automation ./internal/alerting -count=1
+        run: go test -race ./internal/backupasset/... ./internal/api/handlers/ ./internal/task ./internal/task/executor ./internal/task/verifier ./internal/ws ./internal/auth ./internal/bootstrap ./internal/uptime ./internal/policy ./internal/automation ./internal/alerting ./internal/escalation -count=1
 
       - name: Backup-asset coverage floor
         run: bash ../scripts/check-backupasset-coverage.sh
@@ -135,6 +138,9 @@ jobs:
           cache: true
           cache-dependency-path: backend/go.sum
 
+      - name: Install recovery integration tools
+        run: sudo apt-get update && sudo apt-get install -y rsync openssh-server
+
       - name: Download modules
         run: go mod download
 
@@ -184,6 +190,8 @@ jobs:
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL durable automation contracts' ./internal/automation '^Test.*Postgres$'
       - name: Run PostgreSQL alerting durable delivery
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL alerting durable delivery' ./internal/alerting '^TestAlerting(DurableDeliveryPostgres|DeliveryConcurrencyPostgres|DeliveryClaimLoadFencePostgres)$'
+      - name: Run PostgreSQL escalation delivery contract
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL escalation delivery contract' ./internal/escalation '^TestEngineEscalationDeliveryConcurrencyPostgres$'
 
       - name: Run PostgreSQL alert delivery migration contract
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL alert delivery migration contract' ./internal/database '^TestAlertDeliveryMigration.*Postgres$'

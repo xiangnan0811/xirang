@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -237,6 +238,33 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 		m.runTaskWithContext(taskID, run.ID, reason, chainRunID, runCtx, ownership, ownership.cancel)
 	}()
 	return run.ID, nil
+}
+
+func (m *Manager) populateRsyncBinary(task *model.Task) {
+	if m == nil || task == nil || !strings.EqualFold(strings.TrimSpace(task.ExecutorType), "rsync") ||
+		m.executorFactory == nil {
+		return
+	}
+	resolved := m.executorFactory.Resolve(task.ExecutorType)
+	provider, ok := resolved.(executor.RsyncBinaryProvider)
+	if !ok {
+		return
+	}
+	task.RsyncBinary = provider.RsyncBinary()
+}
+
+func (m *Manager) clearLegacyRsyncGenerationAfterNoStart(taskID, runID uint) error {
+	result := m.db.Model(&model.TaskRun{}).
+		Where("id = ? AND task_id = ? AND status = ? AND backup_generation_state = ?",
+			runID, taskID, model.TaskRunStatusRunning, model.TaskRunGenerationStateDirty).
+		Update("backup_generation_state", "")
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("rsync 无启动代际状态未能清除")
+	}
+	return nil
 }
 
 func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID string) {
@@ -578,6 +606,7 @@ func (m *Manager) runTaskWithContext(
 	var captureManifest string
 	var captureLayout string
 	var captureRoot string
+	m.populateRsyncBinary(&taskEntity)
 	captureAttempted := isLegacyMutableRsyncTask(taskEntity)
 	captureError := ""
 	if captureAttempted {
@@ -624,6 +653,9 @@ func (m *Manager) runTaskWithContext(
 			runCompleted = true
 			return
 		}
+		if m.afterLegacyRsyncGenerationArm != nil {
+			m.afterLegacyRsyncGenerationArm()
+		}
 	}
 	runStartedAt := now
 	providerResult := m.executeProvider(execCtx, taskEntity, runID, reason, chainRunID, func(level, message string) {
@@ -637,6 +669,14 @@ func (m *Manager) runTaskWithContext(
 	exitCode, err := providerResult.ExitCode, providerResult.Err
 	suppressRetry := providerResult.SuppressRetry
 
+	if captureAttempted && !providerResult.Managed {
+		var noStartErr *executor.NoProcessStartError
+		if errors.As(err, &noStartErr) {
+			if clearErr := m.clearLegacyRsyncGenerationAfterNoStart(taskID, runID); clearErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(clearErr).Msg("Rsync 无启动代际闩锁清除失败")
+			}
+		}
+	}
 	wasTimeout := !suppressRetry && (errors.Is(err, context.DeadlineExceeded) || errors.Is(execCtx.Err(), context.DeadlineExceeded))
 	if wasTimeout {
 		errorMsg := fmt.Sprintf("任务执行超时（>%s），已强制中止", execTimeout)
@@ -1103,9 +1143,19 @@ func (m *Manager) runRestoreTaskWithContext(
 
 	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "开始恢复任务", "")
 
+	m.populateRsyncBinary(&restoreTask)
+	precheckTarget := restoreTask.RsyncTarget
+	if isLegacyMutableRsyncTask(restoreTask) &&
+		restoreTask.RsyncCaptureLayout == model.TaskRunCaptureLayoutSingleFile {
+		// A captured single-file target may be an existing file or an absent
+		// path. Prepare only its parent; mkdir on the requested file would
+		// either fail with EEXIST or turn the restore into a nested directory.
+		precheckTarget = filepath.Dir(strings.TrimSpace(restoreTask.RsyncTarget))
+	}
+
 	// 恢复前检查：在远程节点上检查源路径（备份）和目标路径
 	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "执行恢复前检查（目标路径、磁盘空间）", "")
-	if err := m.ensureRemoteTargetReadyFunc(execCtx, restoreTask.Node, restoreTask.RsyncTarget); err != nil {
+	if err := m.ensureRemoteTargetReadyFunc(execCtx, restoreTask.Node, precheckTarget); err != nil {
 		// 区分取消与真实失败
 		if execCtx.Err() != nil {
 			finishedAt := time.Now().UTC()

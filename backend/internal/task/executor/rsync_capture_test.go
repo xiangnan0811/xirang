@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,44 @@ import (
 
 	"xirang/backend/internal/model"
 )
+
+func TestRsyncCaptureAndSelectionUseConfiguredBinary(t *testing.T) {
+	rsyncBinary, err := exec.LookPath("rsync")
+	if err != nil {
+		t.Skip("rsync is not installed")
+	}
+	wrapper := filepath.Join(t.TempDir(), "configured-rsync")
+	script := fmt.Sprintf("#!/bin/sh\nexec %q \"$@\"\n", rsyncBinary)
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatalf("write configured rsync wrapper: %v", err)
+	}
+	t.Setenv("PATH", filepath.Join(t.TempDir(), "no-rsync"))
+	source := t.TempDir()
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "payload.txt"), []byte("configured binary payload"), 0o600); err != nil {
+		t.Fatalf("write source payload: %v", err)
+	}
+	task := model.Task{
+		ExecutorType: "rsync",
+		RsyncSource:  source + string(os.PathSeparator),
+		RsyncTarget:  target,
+		RsyncBinary:  wrapper,
+	}
+	raw, err := CaptureRsyncManifest(context.Background(), task)
+	if err != nil {
+		t.Fatalf("configured binary capture failed: %v", err)
+	}
+	if exitCode, runErr := (&RsyncExecutor{binary: wrapper}).Run(context.Background(), task, func(string, string) {}, nil); runErr != nil || exitCode != 0 {
+		t.Fatalf("configured binary transfer failed: exit=%d err=%v", exitCode, runErr)
+	}
+	differences, err := RsyncSelectionDifferences(context.Background(), task, false)
+	if err != nil || differences != 0 {
+		t.Fatalf("configured binary selection comparison differences=%d err=%v", differences, err)
+	}
+	if err := VerifyRsyncCaptureManifestTarget(context.Background(), task, raw); err != nil {
+		t.Fatalf("configured binary target evidence failed: %v", err)
+	}
+}
 
 func TestRsyncCaptureManifestMatchesTransferAndDetectsMutation(t *testing.T) {
 	rsyncBinary, err := exec.LookPath("rsync")

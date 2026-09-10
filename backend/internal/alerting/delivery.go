@@ -25,6 +25,10 @@ func deliveryIntentKey(alertID, integrationID uint) string {
 	return fmt.Sprintf("%d:%d", alertID, integrationID)
 }
 
+func escalationDeliveryIntentKey(alertID, eventID, integrationID uint) string {
+	return fmt.Sprintf("%d:%d:%d", alertID, eventID, integrationID)
+}
+
 func newDeliveryAttemptID() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {

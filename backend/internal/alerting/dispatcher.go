@@ -214,12 +214,6 @@ func SendAlert(channel model.Integration, alert model.Alert) error {
 	return d.SendAlert(channel, alert)
 }
 
-// DispatchToIntegrations fan-outs an alert to the given integration IDs.
-// Exposed for the escalation engine; peer of the inline dispatch in raiseAndDispatch.
-func DispatchToIntegrations(db *gorm.DB, alert model.Alert, ids []uint) {
-	ensureDispatcher(db).DispatchToIntegrations(alert, ids)
-}
-
 // AnomalyAlertInput is the minimal payload needed to raise an anomaly alert.
 // Kept separate from task/SLO/node raises to avoid coupling the anomaly package
 // to every RaiseXxx signature.
@@ -866,7 +860,7 @@ func (d *Dispatcher) prepareDeliveryDecision(alert *model.Alert) (string, error)
 		}
 	}
 	key := GroupKey(alert.ErrorCode, alert.NodeID, splitNodeTags(node.Tags))
-	if !GetSharedGrouping().ShouldSend(key) {
+	if !GetSharedGrouping().ShouldSend(key, alert.ID) {
 		if err := d.commitDeliveryDecision(alert, model.AlertDeliveryDecisionSuppressed, model.AlertDeliveryReasonGrouping, nil); err != nil {
 			return "", err
 		}
@@ -955,7 +949,27 @@ func (d *Dispatcher) commitDeliveryDecision(alert *model.Alert, decision, reason
 }
 
 func ensureDeliveryIntentTx(tx *gorm.DB, alertID, integrationID uint) (model.AlertDelivery, error) {
-	key := deliveryIntentKey(alertID, integrationID)
+	return ensureDeliveryIntentWithKeyTx(
+		tx, alertID, integrationID, deliveryIntentKey(alertID, integrationID), true,
+	)
+}
+
+func ensureEscalationDeliveryIntentTx(
+	tx *gorm.DB,
+	alertID, eventID, integrationID uint,
+) (model.AlertDelivery, error) {
+	return ensureDeliveryIntentWithKeyTx(
+		tx, alertID, integrationID,
+		escalationDeliveryIntentKey(alertID, eventID, integrationID), false,
+	)
+}
+
+func ensureDeliveryIntentWithKeyTx(
+	tx *gorm.DB,
+	alertID, integrationID uint,
+	key string,
+	adoptLegacy bool,
+) (model.AlertDelivery, error) {
 	var intent model.AlertDelivery
 	err := tx.Where("delivery_key = ?", key).First(&intent).Error
 	if err == nil {
@@ -964,27 +978,31 @@ func ensureDeliveryIntentTx(tx *gorm.DB, alertID, integrationID uint) (model.Ale
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return intent, err
 	}
-	// Adopt one pre-migration row, preserving any duplicate historical rows.
-	err = tx.Where("alert_id = ? AND integration_id = ?", alertID, integrationID).
-		Order("id ASC").First(&intent).Error
-	if err == nil {
-		if intent.DeliveryKey == "" {
-			if updateErr := tx.Model(&intent).Where("delivery_key = '' OR delivery_key IS NULL").
-				Update("delivery_key", key).Error; updateErr != nil {
-				return intent, updateErr
+	if adoptLegacy {
+		// Adopt one pre-migration row, preserving any duplicate historical rows.
+		err = tx.Where(
+			"alert_id = ? AND integration_id = ? AND (delivery_key = '' OR delivery_key IS NULL)",
+			alertID, integrationID,
+		).Order("id ASC").First(&intent).Error
+		if err == nil {
+			if intent.DeliveryKey == "" {
+				if updateErr := tx.Model(&intent).Where("delivery_key = '' OR delivery_key IS NULL").
+					Update("delivery_key", key).Error; updateErr != nil {
+					return intent, updateErr
+				}
+				intent.DeliveryKey = key
 			}
-			intent.DeliveryKey = key
-		}
-		if intent.Decision == "" {
-			intent.Decision = "deliver"
-			if updateErr := tx.Model(&intent).Update("decision", "deliver").Error; updateErr != nil {
-				return intent, updateErr
+			if intent.Decision == "" {
+				intent.Decision = "deliver"
+				if updateErr := tx.Model(&intent).Update("decision", "deliver").Error; updateErr != nil {
+					return intent, updateErr
+				}
 			}
+			return intent, nil
 		}
-		return intent, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return intent, err
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return intent, err
+		}
 	}
 	intent = model.AlertDelivery{
 		AlertID:       alertID,
@@ -1001,28 +1019,37 @@ func ensureDeliveryIntentTx(tx *gorm.DB, alertID, integrationID uint) (model.Ale
 
 func (d *Dispatcher) dispatchDeliveryRows(alert model.Alert, sendFn func(model.Integration, model.Alert) error) error {
 	var rows []model.AlertDelivery
+	now := time.Now()
 	if err := d.DB.Where(
 		"alert_id = ? AND (decision = ? OR decision = '' OR decision IS NULL) AND "+
 			"(status = ? OR (status = ? AND (next_retry_at IS NULL OR next_retry_at <= ?)) OR "+
 			"(status = ? AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?))",
 		alert.ID, "deliver",
 		model.AlertDeliveryStatusPending,
-		model.AlertDeliveryStatusRetrying, time.Now(),
-		model.AlertDeliveryStatusSending, time.Now(),
+		model.AlertDeliveryStatusRetrying, now,
+		model.AlertDeliveryStatusSending, now,
 	).Find(&rows).Error; err != nil {
 		return err
 	}
+	return d.dispatchDeliveryCandidates(context.Background(), alert, rows, sendFn)
+}
+
+func (d *Dispatcher) dispatchDeliveryCandidates(
+	ctx context.Context,
+	alert model.Alert,
+	rows []model.AlertDelivery,
+	sendFn func(model.Integration, model.Alert) error,
+) error {
 	if len(rows) == 0 {
 		return nil
 	}
-
 	var wg sync.WaitGroup
 	deliveryDone := make(chan struct{})
 	for _, row := range rows {
 		wg.Add(1)
 		go func(intent model.AlertDelivery) {
 			defer wg.Done()
-			if err := runDeliveryAttempt(context.Background(), d.DB, intent, sendFn, false); err != nil {
+			if err := runDeliveryAttempt(ctx, d.DB, intent, sendFn, false); err != nil {
 				logger.Module("alerting").Warn().
 					Uint("alert_id", alert.ID).
 					Uint("delivery_id", intent.ID).
@@ -1349,36 +1376,108 @@ func (d *Dispatcher) SendAlert(channel model.Integration, alert model.Alert) err
 	return d.send(channel, alert)
 }
 
-// DispatchToIntegrations fan-outs an alert to the given integration IDs.
-// Exposed for the escalation engine. The same durable intent/lease/CAS state
-// machine is used for escalation sends as for initial and retry sends.
-func (d *Dispatcher) DispatchToIntegrations(alert model.Alert, ids []uint) {
-	if d == nil || d.DB == nil || alert.ID == 0 || len(ids) == 0 {
-		return
+// EnqueueEscalationDeliveriesTx materializes one durable deliverable intent
+// per enabled integration for an already-created escalation event. It is
+// deliberately transaction-scoped: callers must invoke it before the event
+// transaction commits, and it never performs network I/O.
+func (d *Dispatcher) EnqueueEscalationDeliveriesTx(
+	tx *gorm.DB,
+	alert model.Alert,
+	event model.AlertEscalationEvent,
+	integrationIDs []uint,
+) ([]uint, error) {
+	if d == nil || d.DB == nil || tx == nil || alert.ID == 0 || event.ID == 0 || event.AlertID != alert.ID {
+		return nil, errors.New("enqueue escalation deliveries: invalid identifiers")
 	}
+	if len(integrationIDs) == 0 {
+		return nil, nil
+	}
+
 	var integrations []model.Integration
-	if err := d.DB.Where("id IN ? AND enabled = ?", ids, true).Find(&integrations).Error; err != nil {
-		logger.Module("alerting").Warn().Err(err).Uint("alert_id", alert.ID).Msg("DispatchToIntegrations: load integrations failed")
-		return
+	if err := tx.Where("id IN ? AND enabled = ?", integrationIDs, true).Find(&integrations).Error; err != nil {
+		return nil, err
 	}
-	if len(integrations) == 0 {
-		if err := d.commitDeliveryDecision(&alert, model.AlertDeliveryDecisionNoChannel, model.AlertDeliveryReasonNoEnabledChannel, nil); err != nil {
-			logger.Module("alerting").Warn().Err(err).Uint("alert_id", alert.ID).Msg("DispatchToIntegrations: persist no-channel decision failed")
+	enabled := make(map[uint]struct{}, len(integrations))
+	for _, integration := range integrations {
+		enabled[integration.ID] = struct{}{}
+	}
+
+	intentIDs := make([]uint, 0, len(integrations))
+	seen := make(map[uint]struct{}, len(integrations))
+	for _, integrationID := range integrationIDs {
+		if _, duplicate := seen[integrationID]; duplicate {
+			continue
 		}
-		return
+		seen[integrationID] = struct{}{}
+		if _, ok := enabled[integrationID]; !ok {
+			continue
+		}
+		intent, err := ensureEscalationDeliveryIntentTx(tx, alert.ID, event.ID, integrationID)
+		if err != nil {
+			return nil, err
+		}
+		intentIDs = append(intentIDs, intent.ID)
 	}
-	if err := d.commitDeliveryDecision(&alert, model.AlertDeliveryDecisionDirect, "", integrations); err != nil {
-		logger.Module("alerting").Warn().Err(err).Uint("alert_id", alert.ID).Msg("DispatchToIntegrations: persist delivery intents failed")
-		return
-	}
-	if err := d.dispatchDeliveryRows(alert, d.send); err != nil {
-		logger.Module("alerting").Warn().Err(err).Uint("alert_id", alert.ID).Msg("DispatchToIntegrations: dispatch delivery rows failed")
-	}
+	return intentIDs, nil
 }
 
-// RetryDelivery performs one explicit manual attempt for a logical
-// alert/integration intent. It never creates a second row for a confirmed
-// delivery and shares the same lease and attempt CAS as automatic retries.
+// DispatchEscalationDeliveries dispatches only the intents materialized for
+// one committed event. Each row still goes through the existing lease/CAS
+// state machine; this method only runs after the fire transaction commits.
+func (d *Dispatcher) DispatchEscalationDeliveries(
+	ctx context.Context,
+	alert model.Alert,
+	eventID uint,
+	intentIDs []uint,
+) error {
+	if d == nil || d.DB == nil || alert.ID == 0 || eventID == 0 {
+		return errors.New("dispatch escalation deliveries: invalid identifiers")
+	}
+	if len(intentIDs) == 0 {
+		return nil
+	}
+	now := time.Now()
+	var rows []model.AlertDelivery
+	if err := d.DB.WithContext(ctx).Where(
+		"id IN ? AND alert_id = ? AND (decision = ? OR decision = '' OR decision IS NULL) AND "+
+			"(status = ? OR (status = ? AND (next_retry_at IS NULL OR next_retry_at <= ?)) OR "+
+			"(status = ? AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?))",
+		intentIDs, alert.ID, "deliver",
+		model.AlertDeliveryStatusPending,
+		model.AlertDeliveryStatusRetrying, now,
+		model.AlertDeliveryStatusSending, now,
+	).Find(&rows).Error; err != nil {
+		return err
+	}
+	filtered := rows[:0]
+	for _, row := range rows {
+		if row.DeliveryKey == escalationDeliveryIntentKey(alert.ID, eventID, row.IntegrationID) {
+			filtered = append(filtered, row)
+		}
+	}
+	return d.dispatchDeliveryCandidates(ctx, alert, filtered, d.send)
+}
+
+var errDeliveryAlreadySent = errors.New("already sent")
+
+// RetryDeliveryByID performs one explicit manual attempt for an existing
+// logical intent. It shares the lease and attempt CAS used by automatic
+// retries, so a concurrent sender cannot duplicate a confirmed delivery.
+func (d *Dispatcher) RetryDeliveryByID(ctx context.Context, deliveryID uint) (model.AlertDelivery, error) {
+	var intent model.AlertDelivery
+	if d == nil || d.DB == nil || deliveryID == 0 {
+		return intent, errors.New("retry delivery: invalid identifiers")
+	}
+	if err := d.DB.WithContext(ctx).First(&intent, deliveryID).Error; err != nil {
+		return intent, err
+	}
+	return d.retryDeliveryIntent(ctx, intent)
+}
+
+// RetryDelivery performs one explicit manual attempt for an alert/channel.
+// Existing rows are selected by newest logical intent, preserving escalation
+// event identity. Only an alert/channel with no prior intent gets the legacy
+// direct key behavior.
 func (d *Dispatcher) RetryDelivery(ctx context.Context, alertID, integrationID uint) (model.AlertDelivery, error) {
 	var intent model.AlertDelivery
 	if d == nil || d.DB == nil || alertID == 0 || integrationID == 0 {
@@ -1389,14 +1488,139 @@ func (d *Dispatcher) RetryDelivery(ctx context.Context, alertID, integrationID u
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&alert, alertID).Error; err != nil {
 			return err
 		}
-		var err error
-		intent, err = ensureDeliveryIntentTx(tx, alert.ID, integrationID)
-		return err
+		err := tx.Where("alert_id = ? AND integration_id = ?", alertID, integrationID).
+			Order("id DESC").First(&intent).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			var ensureErr error
+			intent, ensureErr = ensureDeliveryIntentTx(tx, alert.ID, integrationID)
+			return ensureErr
+		}
+		if err != nil {
+			return err
+		}
+		return canonicalizeDeliveryIntentTx(tx, &intent, deliveryIntentKey(alertID, integrationID))
 	}); err != nil {
 		return intent, err
 	}
+	return d.retryDeliveryIntent(ctx, intent)
+}
+
+// CanonicalizeRetryCandidates resolves failed rows into logical retry
+// identities. Distinct nonempty delivery keys remain independent. Blank-key
+// historical rows share the canonical direct intent for their channel, with
+// an existing direct key taking precedence over legacy duplicates.
+func (d *Dispatcher) CanonicalizeRetryCandidates(
+	ctx context.Context, alertID uint, records []model.AlertDelivery,
+) ([]model.AlertDelivery, error) {
+	if d == nil || d.DB == nil || alertID == 0 {
+		return nil, errors.New("canonicalize retry candidates: invalid identifiers")
+	}
+	candidates := make([]model.AlertDelivery, 0, len(records))
+	if len(records) == 0 {
+		return candidates, nil
+	}
+	err := d.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var alert model.Alert
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&alert, alertID).Error; err != nil {
+			return err
+		}
+		seenIDs := make(map[uint]struct{}, len(records))
+		for _, record := range records {
+			if record.ID == 0 || record.AlertID != alertID || record.IntegrationID == 0 {
+				return errors.New("canonicalize retry candidates: invalid delivery")
+			}
+			candidate, err := selectRetryCandidateTx(tx, alertID, record)
+			if err != nil {
+				return err
+			}
+			if candidate.ID == 0 {
+				return errors.New("canonicalize retry candidates: missing delivery")
+			}
+			if _, seen := seenIDs[candidate.ID]; seen {
+				continue
+			}
+			key := strings.TrimSpace(candidate.DeliveryKey)
+			if key == "" {
+				key = deliveryIntentKey(alertID, candidate.IntegrationID)
+			}
+			if err := canonicalizeDeliveryIntentTx(tx, &candidate, key); err != nil {
+				return err
+			}
+			seenIDs[candidate.ID] = struct{}{}
+			candidates = append(candidates, candidate)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return candidates, nil
+}
+
+func selectRetryCandidateTx(tx *gorm.DB, alertID uint, record model.AlertDelivery) (model.AlertDelivery, error) {
+	var candidate model.AlertDelivery
+	key := strings.TrimSpace(record.DeliveryKey)
+	if key != "" {
+		err := tx.Where(
+			"alert_id = ? AND integration_id = ? AND delivery_key = ?",
+			alertID, record.IntegrationID, key,
+		).Order("id DESC").First(&candidate).Error
+		if err == nil {
+			return candidate, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return candidate, err
+		}
+		return record, nil
+	}
+
+	directKey := deliveryIntentKey(alertID, record.IntegrationID)
+	err := tx.Where(
+		"alert_id = ? AND integration_id = ? AND delivery_key = ?",
+		alertID, record.IntegrationID, directKey,
+	).Order("id DESC").First(&candidate).Error
+	if err == nil {
+		return candidate, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return candidate, err
+	}
+	err = tx.Where(
+		"alert_id = ? AND integration_id = ? AND (delivery_key = '' OR delivery_key IS NULL)",
+		alertID, record.IntegrationID,
+	).Order("id DESC").First(&candidate).Error
+	if err == nil {
+		return candidate, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return candidate, err
+	}
+	return record, nil
+}
+
+func canonicalizeDeliveryIntentTx(tx *gorm.DB, intent *model.AlertDelivery, key string) error {
+	if intent == nil || intent.ID == 0 {
+		return errors.New("canonicalize delivery: invalid intent")
+	}
+	if intent.DeliveryKey == "" {
+		if err := tx.Model(intent).Where("delivery_key = '' OR delivery_key IS NULL").
+			Update("delivery_key", key).Error; err != nil {
+			return err
+		}
+		intent.DeliveryKey = key
+	}
+	if intent.Decision == "" {
+		if err := tx.Model(intent).Update("decision", "deliver").Error; err != nil {
+			return err
+		}
+		intent.Decision = "deliver"
+	}
+	return nil
+}
+
+func (d *Dispatcher) retryDeliveryIntent(ctx context.Context, intent model.AlertDelivery) (model.AlertDelivery, error) {
 	if intent.Status == model.AlertDeliveryStatusSent {
-		return intent, errors.New("already sent")
+		return intent, errDeliveryAlreadySent
 	}
 	if err := runDeliveryAttempt(ctx, d.DB, intent, d.send, true); err != nil {
 		var latest model.AlertDelivery

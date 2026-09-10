@@ -121,6 +121,10 @@ type Task struct {
 	RsyncCaptureRoot         string `gorm:"-" json:"-"`
 	RsyncCaptureManifest     string `gorm:"-" json:"-"`
 	RsyncCaptureGenerationID uint   `gorm:"-" json:"-"`
+	// RsyncBinary is the exact local compatibility binary selected by the
+	// executor factory. It is transient so capture/verification cannot silently
+	// diverge from the configured transfer executable.
+	RsyncBinary string `gorm:"-" json:"-"`
 }
 
 func (t *Task) BeforeSave(_ *gorm.DB) error {

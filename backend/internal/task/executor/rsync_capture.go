@@ -51,6 +51,13 @@ func (b *rsyncCaptureOutputBuffer) Write(p []byte) (int, error) {
 	return b.buf.Write(p)
 }
 
+func rsyncCommandBinary(task model.Task) string {
+	if binary := strings.TrimSpace(task.RsyncBinary); binary != "" {
+		return binary
+	}
+	return "rsync"
+}
+
 // CaptureRsyncManifest enumerates the exact Rsync selection and hashes the
 // source bytes before a mutable compatibility transfer starts. The listing is
 // produced by Rsync itself, so excludes are not approximated by a Go glob.
@@ -290,7 +297,7 @@ func listRsyncCaptureEntries(ctx context.Context, task model.Task, source string
 	}
 	defer cleanup()
 	args = append(args, "--", operand, os.DevNull)
-	cmd := exec.CommandContext(ctx, "rsync", args...)
+	cmd := exec.CommandContext(ctx, rsyncCommandBinary(task), args...)
 	stdout := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureManifestLen}
 	stderr := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureCommandBytes}
 	cmd.Stdout = stdout
@@ -844,7 +851,7 @@ func RsyncSelectionDifferences(ctx context.Context, task model.Task, isRestore b
 	}
 	defer cleanup()
 	args = append(args, "--", source, target)
-	cmd := exec.CommandContext(ctx, "rsync", args...)
+	cmd := exec.CommandContext(ctx, rsyncCommandBinary(task), args...)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

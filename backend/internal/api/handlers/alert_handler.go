@@ -533,7 +533,7 @@ func (h *AlertHandler) Deliveries(c *gin.Context) {
 
 // RetryDelivery godoc
 // @Summary      重发告警通知
-// @Description  向指定通知通道重新发送告警
+// @Description  向指定通知通道重新发送告警；优先重试该告警和通道最新的既有投递意图（包括升级事件投递），仅无历史投递意图时创建 direct 投递
 // @Tags         alerts
 // @Security     Bearer
 // @Accept       json
@@ -545,7 +545,7 @@ func (h *AlertHandler) Deliveries(c *gin.Context) {
 // @Failure      401   {object}  handlers.Response
 // @Failure      403   {object}  handlers.Response
 // @Failure      404   {object}  handlers.Response
-// @Router       /alerts/{id}/retry [post]
+// @Router       /alerts/{id}/retry-delivery [post]
 func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -605,7 +605,7 @@ func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 
 // RetryFailedDeliveries godoc
 // @Summary      批量重发失败的告警通知
-// @Description  对指定告警的所有失败投递记录进行批量重发
+// @Description  按每个逻辑投递意图批量重试；不同升级事件投递保持独立，同一通道的空键历史重复通过 canonical direct 投递合并
 // @Tags         alerts
 // @Security     Bearer
 // @Produce      json
@@ -614,7 +614,7 @@ func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 // @Failure      401  {object}  handlers.Response
 // @Failure      403  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
-// @Router       /alerts/{id}/retry-all [post]
+// @Router       /alerts/{id}/retry-failed-deliveries [post]
 func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -652,23 +652,22 @@ func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
 		return
 	}
 
-	seenIntegration := map[uint]struct{}{}
-	uniqueIntegrationIDs := make([]uint, 0, len(failedRecords))
-	for _, record := range failedRecords {
-		if _, exists := seenIntegration[record.IntegrationID]; exists {
-			continue
-		}
-		seenIntegration[record.IntegrationID] = struct{}{}
-		uniqueIntegrationIDs = append(uniqueIntegrationIDs, record.IntegrationID)
-	}
-
 	dispatcher := h.getAlertDispatcher()
-	newDeliveries := make([]model.AlertDelivery, 0, len(uniqueIntegrationIDs))
+	candidates, err := dispatcher.CanonicalizeRetryCandidates(c.Request.Context(), alert.ID, failedRecords)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondNotFound(c, "告警或通知通道不存在")
+		} else {
+			respondInternalError(c, err)
+		}
+		return
+	}
+	newDeliveries := make([]model.AlertDelivery, 0, len(candidates))
 	successCount := 0
 	failedCount := 0
 
-	for _, integrationID := range uniqueIntegrationIDs {
-		newRecord, err := dispatcher.RetryDelivery(c.Request.Context(), alert.ID, integrationID)
+	for _, candidate := range candidates {
+		newRecord, err := dispatcher.RetryDeliveryByID(c.Request.Context(), candidate.ID)
 		if err != nil && newRecord.ID == 0 {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				respondNotFound(c, "告警或通知通道不存在")
@@ -688,7 +687,7 @@ func (h *AlertHandler) RetryFailedDeliveries(c *gin.Context) {
 	respondOK(c, retryFailedDeliveriesResponse{
 		OK:            failedCount == 0,
 		Message:       message,
-		TotalFailed:   len(uniqueIntegrationIDs),
+		TotalFailed:   len(candidates),
 		SuccessCount:  successCount,
 		FailedCount:   failedCount,
 		NewDeliveries: newDeliveries,

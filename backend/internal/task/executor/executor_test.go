@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,54 @@ import (
 
 	"golang.org/x/crypto/ssh"
 )
+
+func TestRsyncExecutorStartFailureReportsNoProcessStart(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatalf("write source fixture: %v", err)
+	}
+	missingBinary := filepath.Join(root, "missing-rsync")
+	exitCode, err := (&RsyncExecutor{binary: missingBinary}).Run(
+		context.Background(),
+		model.Task{ExecutorType: "rsync", RsyncSource: source, RsyncTarget: filepath.Join(root, "target")},
+		func(string, string) {},
+		nil,
+	)
+	if exitCode != -1 {
+		t.Fatalf("start failure exit code=%d, want -1", exitCode)
+	}
+	var noStartErr *NoProcessStartError
+	if !errors.As(err, &noStartErr) {
+		t.Fatalf("start failure error=%v, want NoProcessStartError", err)
+	}
+}
+func TestRsyncExecutorPreparationFailureReportsNoProcessStart(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatalf("write source fixture: %v", err)
+	}
+	blockedParent := filepath.Join(root, "target-parent")
+	if err := os.WriteFile(blockedParent, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("write blocked parent fixture: %v", err)
+	}
+	target := filepath.Join(blockedParent, "target")
+
+	exitCode, err := (&RsyncExecutor{binary: filepath.Join(root, "missing-rsync")}).Run(
+		context.Background(),
+		model.Task{ExecutorType: "rsync", RsyncSource: source, RsyncTarget: target},
+		func(string, string) {},
+		nil,
+	)
+	if exitCode != -1 {
+		t.Fatalf("preparation failure exit code=%d, want -1", exitCode)
+	}
+	var noStartErr *NoProcessStartError
+	if !errors.As(err, &noStartErr) {
+		t.Fatalf("preparation failure error=%v, want NoProcessStartError", err)
+	}
+}
 
 func TestFactoryRejectsLocalExecutor(t *testing.T) {
 	factory := NewFactory(createArgEchoScript(t))

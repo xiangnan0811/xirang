@@ -1209,14 +1209,14 @@ const docTemplate = `{
                 }
             }
         },
-        "/alerts/{id}/retry": {
+        "/alerts/{id}/retry-delivery": {
             "post": {
                 "security": [
                     {
                         "Bearer": []
                     }
                 ],
-                "description": "向指定通知通道重新发送告警",
+                "description": "向指定通知通道重新发送告警；优先重试该告警和通道最新的既有投递意图（包括升级事件投递），仅无历史投递意图时创建 direct 投递",
                 "consumes": [
                     "application/json"
                 ],
@@ -1291,14 +1291,14 @@ const docTemplate = `{
                 }
             }
         },
-        "/alerts/{id}/retry-all": {
+        "/alerts/{id}/retry-failed-deliveries": {
             "post": {
                 "security": [
                     {
                         "Bearer": []
                     }
                 ],
-                "description": "对指定告警的所有失败投递记录进行批量重发",
+                "description": "按每个逻辑投递意图批量重试；不同升级事件投递保持独立，同一通道的空键历史重复通过 canonical direct 投递合并",
                 "produces": [
                     "application/json"
                 ],
