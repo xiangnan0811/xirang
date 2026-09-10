@@ -9,6 +9,13 @@
 * Bound SSH terminal shutdown and enforce active-session revocation, authority changes, and JWT expiry; preserve raw password semantics when disabling TOTP.
 * Start managed publication cleanup deadlines after provider execution and release admission even when finalization persistence fails.
 
+## [0.55.5](https://github.com/xiangnan0811/xirang/compare/v0.55.4...v0.55.5) (2026-09-10)
+
+
+### 🐛 Bug Fixes
+
+* harden backup recovery and task execution lifecycle ([#513](https://github.com/xiangnan0811/xirang/issues/513)) ([19def68](https://github.com/xiangnan0811/xirang/commit/19def68de0d5f6a0c60f05c4475355e9b91d12ac))
+
 ## [0.55.4](https://github.com/xiangnan0811/xirang/compare/v0.55.3...v0.55.4) (2026-09-09)
 
 
