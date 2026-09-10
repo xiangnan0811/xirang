@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.6](https://github.com/xiangnan0811/xirang/compare/v0.55.5...v0.55.6) (2026-09-10)
+
+
+### 🐛 Bug Fixes
+
+* **ci:** synchronize worker and task lifecycle fixtures ([#515](https://github.com/xiangnan0811/xirang/issues/515)) ([feabd12](https://github.com/xiangnan0811/xirang/commit/feabd129ea166e92bc387f1be2ca9cf8783e687d))
+
 ## [0.55.5](https://github.com/xiangnan0811/xirang/compare/v0.55.4...v0.55.5) (2026-09-10)
 
 
