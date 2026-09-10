@@ -443,6 +443,23 @@ func createTestTaskRun(t *testing.T, db *gorm.DB, taskID uint, reason string) ui
 	}
 	return run.ID
 }
+func createSuccessfulBackupTaskRun(t *testing.T, db *gorm.DB, taskID uint) uint {
+	t.Helper()
+	var task model.Task
+	if err := db.Preload("Node").Preload("Policy").First(&task, taskID).Error; err != nil {
+		t.Fatalf("加载成功备份任务失败: %v", err)
+	}
+	run := model.TaskRun{
+		TaskID:                  taskID,
+		TriggerType:             "manual",
+		Status:                  model.TaskRunStatusSuccess,
+		BackupConfigFingerprint: model.TaskRunBackupConfigFingerprint(task),
+	}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatalf("创建成功备份执行记录失败: %v", err)
+	}
+	return run.ID
+}
 
 func seedTaskForManagerTest(t *testing.T, db *gorm.DB) model.Task {
 	t.Helper()
@@ -598,11 +615,7 @@ func TestTriggerRegistersCancelOwnerBeforeReturning(t *testing.T) {
 			t.Fatal(err)
 		}
 		taskEntity.Status = string(StatusSuccess)
-		if err := db.Create(&model.TaskRun{
-			TaskID: taskEntity.ID, TriggerType: "manual", Status: "success",
-		}).Error; err != nil {
-			t.Fatal(err)
-		}
+		createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 		// Hold the async runner at its context-aware semaphore so the test
 		// observes the trigger-owned cancellation boundary, not a restore that
 		// happened to finish before Cancel was called.
@@ -693,11 +706,7 @@ func TestCancelAtPublicTriggerOwnerRegistrationPreventsScheduling(t *testing.T) 
 				Update("status", string(StatusSuccess)).Error; err != nil {
 				t.Fatal(err)
 			}
-			if err := db.Create(&model.TaskRun{
-				TaskID: taskEntity.ID, TriggerType: "manual", Status: "success",
-			}).Error; err != nil {
-				t.Fatal(err)
-			}
+			createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 			admission := &nodeWriteAdmissionFake{}
 			manager.SetNodeWriteAdmission(admission)
 			var precheckCalls atomic.Int32
@@ -1934,7 +1943,6 @@ func TestCancelTriggerBarrierBlocksNewOwnerAndConcurrentCancel(t *testing.T) {
 func TestDirectRunnerCleanupDoesNotDeleteCancelBarrier(t *testing.T) {
 	db := openConcurrentManagerTestDB(t)
 	exec := newBlockingExecutor()
-	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
 	taskEntity := seedTaskForManagerTest(t, db)
 	runID := createTestTaskRun(t, db, taskEntity.ID, "manual")
 
@@ -1946,7 +1954,17 @@ func TestDirectRunnerCleanupDoesNotDeleteCancelBarrier(t *testing.T) {
 	var blockNextTaskQuery atomic.Bool
 	callbackName := fmt.Sprintf("test:block-direct-runner-live-cancel-read-%d", taskEntity.ID)
 	if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-		if tx.Statement.Table != "tasks" || !blockNextTaskQuery.CompareAndSwap(true, false) {
+		if tx.Statement.Table != "tasks" {
+			return
+		}
+		// The direct runner's terminal transaction locks its Task row. Only
+		// block Cancel's unlocked live-owner read; otherwise the callback can
+		// intercept the runner's next Task query and prevent it from observing
+		// cancellation.
+		if _, locked := tx.Statement.Clauses["FOR"]; locked {
+			return
+		}
+		if !blockNextTaskQuery.CompareAndSwap(true, false) {
 			return
 		}
 		enteredOnce.Do(func() { close(queryEntered) })
@@ -1954,17 +1972,48 @@ func TestDirectRunnerCleanupDoesNotDeleteCancelBarrier(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+
+	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	runDone := make(chan struct{})
+	cancelResult := make(chan error, 1)
+	cancelDone := make(chan struct{})
+	var runStarted atomic.Bool
+	var cancelStarted atomic.Bool
 	t.Cleanup(func() {
+		// Every callback mutation must happen after all users of the callback
+		// have joined, including the manager's background workers.
 		release()
-		_ = db.Callback().Query().Remove(callbackName)
+		joined := true
+		if runStarted.Load() {
+			select {
+			case <-runDone:
+			case <-time.After(3 * time.Second):
+				t.Errorf("direct runner did not finish during cleanup")
+				joined = false
+			}
+		}
+		if cancelStarted.Load() {
+			select {
+			case <-cancelDone:
+			case <-time.After(3 * time.Second):
+				t.Errorf("Cancel did not finish during cleanup")
+				joined = false
+			}
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if err := manager.Shutdown(shutdownCtx); err != nil {
-			t.Fatalf("shutdown task manager: %v", err)
+			t.Errorf("shutdown task manager: %v", err)
+			joined = false
+		}
+		if joined {
+			if err := db.Callback().Query().Remove(callbackName); err != nil {
+				t.Errorf("remove test query callback: %v", err)
+			}
 		}
 	})
 
-	runDone := make(chan struct{})
+	runStarted.Store(true)
 	go func() {
 		defer close(runDone)
 		manager.runTask(taskEntity.ID, runID, "manual", generateChainRunID())
@@ -1976,8 +2025,11 @@ func TestDirectRunnerCleanupDoesNotDeleteCancelBarrier(t *testing.T) {
 	}
 
 	blockNextTaskQuery.Store(true)
-	cancelResult := make(chan error, 1)
-	go func() { cancelResult <- manager.Cancel(taskEntity.ID) }()
+	cancelStarted.Store(true)
+	go func() {
+		defer close(cancelDone)
+		cancelResult <- manager.Cancel(taskEntity.ID)
+	}()
 	select {
 	case <-queryEntered:
 	case <-time.After(3 * time.Second):
@@ -2004,6 +2056,11 @@ func TestDirectRunnerCleanupDoesNotDeleteCancelBarrier(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Cancel did not finish after releasing its Task read")
+	}
+	select {
+	case <-cancelDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Cancel goroutine did not return")
 	}
 	if _, ok := manager.pendingRuns.Load(taskEntity.ID); ok {
 		t.Fatal("Cancel leaked its trigger barrier after returning")
@@ -2229,11 +2286,7 @@ func TestCancelAfterTriggerDurablyTerminatesPendingRunBeforeExecutor(t *testing.
 				t.Fatal(err)
 			}
 			taskEntity.Status = string(StatusSuccess)
-			if err := db.Create(&model.TaskRun{
-				TaskID: taskEntity.ID, TriggerType: "manual", Status: "success",
-			}).Error; err != nil {
-				t.Fatal(err)
-			}
+			createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 
 			startEntered := make(chan struct{})
 			startRelease := make(chan struct{})
@@ -2310,11 +2363,7 @@ func TestTriggerRestoreEarlyCancellationPreservesCommittedTerminalRun(t *testing
 		Update("status", string(StatusSuccess)).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&model.TaskRun{
-		TaskID: taskEntity.ID, TriggerType: "manual", Status: "success",
-	}).Error; err != nil {
-		t.Fatal(err)
-	}
+	createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 	for range cap(manager.semaphore) {
 		manager.semaphore <- struct{}{}
 	}
@@ -2835,11 +2884,7 @@ func TestCancelWhileTriggerReservesRunPreventsDurableStart(t *testing.T) {
 				Update("status", string(StatusSuccess)).Error; err != nil {
 				t.Fatal(err)
 			}
-			if err := db.Create(&model.TaskRun{
-				TaskID: taskEntity.ID, TriggerType: "manual", Status: "success",
-			}).Error; err != nil {
-				t.Fatal(err)
-			}
+			createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 
 			admitEntered := make(chan struct{})
 			admitRelease := make(chan struct{})
@@ -3428,7 +3473,7 @@ func TestTriggerRestoreRejectsLegacyUnknownSuccessBeforeAdmission(t *testing.T) 
 	manager.SetNodeWriteAdmission(admission)
 
 	runID, err := manager.TriggerRestore(taskEntity.ID, "/tmp/legacy-unknown-restore")
-	if err == nil || !strings.Contains(err.Error(), "没有成功的执行记录") {
+	if err == nil || !errors.Is(err, ErrRestoreRequiresNewBackup) || !strings.Contains(err.Error(), "没有成功的执行记录") {
 		t.Fatalf("TriggerRestore legacy_unknown prerequisite run ID=%d error=%v", runID, err)
 	}
 	calls, _, _ := admission.snapshot()
@@ -3497,9 +3542,7 @@ func TestTriggerRestoreNodeWriteConflictLeavesNoRunMarkerPrecheckOrExecutor(t *t
 	restoreExecutor := &trackingRestoreExecutor{}
 	manager := NewManager(db, stubExecutorFactory{executor: restoreExecutor}, nil, nil, nil, nil, 8, 90)
 	taskEntity := seedTaskForManagerTest(t, db)
-	if err := db.Create(&model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: "success"}).Error; err != nil {
-		t.Fatal(err)
-	}
+	createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 	admission := &nodeWriteAdmissionFake{errs: []error{ErrNodeWriteConflict}}
 	manager.SetNodeWriteAdmission(admission)
 	var precheckCalls atomic.Int32
@@ -4058,9 +4101,7 @@ func TestManagedLegacyRestoreBlockCleansReservationMarkers(t *testing.T) {
 	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Update("executor_type", "restic").Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: "success"}).Error; err != nil {
-		t.Fatal(err)
-	}
+	createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 	manager.SetNodeWriteAdmission(&nodeWriteAdmissionFake{})
 	session := &legacyLineageSessionFake{mode: publication.LineageExact}
 	manager.SetLineageGuard(&legacyLineageGuardFake{session: session})
@@ -4318,7 +4359,7 @@ func TestRestoreBlockedByInFlightNormalTask(t *testing.T) {
 	t1, t2 := seedTwoTasksSameNode(t, db)
 
 	// task2 需要有成功记录才能触发恢复
-	db.Create(&model.TaskRun{TaskID: t2.ID, TriggerType: "manual", Status: "success"})
+	createSuccessfulBackupTaskRun(t, db, t2.ID)
 
 	// 触发 task1（普通任务），等待它进入 executor（此时 Task.Status 已更新为 running）
 	_, err := m.TriggerManual(t1.ID)
@@ -4414,8 +4455,8 @@ func TestRestoreNodeMutexBlocksConcurrentRestore(t *testing.T) {
 	t1, t2 := seedTwoTasksSameNode(t, db)
 
 	// task1 和 task2 都需要有成功记录才能触发恢复
-	db.Create(&model.TaskRun{TaskID: t1.ID, TriggerType: "manual", Status: "success"})
-	db.Create(&model.TaskRun{TaskID: t2.ID, TriggerType: "manual", Status: "success"})
+	createSuccessfulBackupTaskRun(t, db, t1.ID)
+	createSuccessfulBackupTaskRun(t, db, t2.ID)
 
 	// 模拟 task1 有恢复正在运行
 	m.restoreNodes.Store(t1.NodeID, t1.ID)
@@ -4444,7 +4485,7 @@ func TestRestoreNodeMutexRegisteredSynchronously(t *testing.T) {
 	t1, t2 := seedTwoTasksSameNode(t, db)
 
 	// task1 需要有成功记录才能触发恢复
-	db.Create(&model.TaskRun{TaskID: t1.ID, TriggerType: "manual", Status: "success"})
+	createSuccessfulBackupTaskRun(t, db, t1.ID)
 
 	// 填满 semaphore，使 restore goroutine 阻塞在排队阶段
 	for i := 0; i < cap(m.semaphore); i++ {

@@ -1,12 +1,12 @@
 package middleware
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"xirang/backend/internal/logger"
@@ -16,7 +16,46 @@ import (
 	"gorm.io/gorm"
 )
 
-var auditWriteMu sync.Mutex
+const auditWriteTimeout = 5 * time.Second
+
+// auditWriteLock serializes hash-chain writers while allowing a caller's
+// context to cancel both queueing and the database work that follows.
+type auditWriteLock struct {
+	sem chan struct{}
+}
+
+func newAuditWriteLock() *auditWriteLock {
+	return &auditWriteLock{sem: make(chan struct{}, 1)}
+}
+
+func (lock *auditWriteLock) Lock() {
+	_ = lock.LockContext(context.Background())
+}
+
+func (lock *auditWriteLock) LockContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case lock.sem <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-lock.sem
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (lock *auditWriteLock) Unlock() {
+	<-lock.sem
+}
+
+var auditWriteMu = newAuditWriteLock()
 
 func AuditLogger(db *gorm.DB) gin.HandlerFunc {
 	if db == nil {
@@ -56,18 +95,31 @@ func AuditLogger(db *gorm.DB) gin.HandlerFunc {
 			UserAgent:  c.Request.UserAgent(),
 		}
 		record.CreatedAt = time.Now().UTC()
-		if err := SaveAuditLogWithHashChain(db, &record); err != nil {
+		auditDB := db
+		if c.Request != nil {
+			auditDB = db.WithContext(c.Request.Context())
+		}
+		if err := SaveAuditLogWithHashChain(auditDB, &record); err != nil {
 			logger.Module("audit").Warn().Err(err).Msg("审计日志写入失败")
 		}
 	}
 }
 
 // SaveAuditLogWithHashChain 在事务中写入审计日志并计算哈希链。
-// 导出供 WebSocket 等非中间件路径使用。
+// 导出供 WebSocket 等非中间件路径使用。db.Statement.Context（若有）
+// 同时约束等待全局哈希链锁和事务中的数据库操作。
 func SaveAuditLogWithHashChain(db *gorm.DB, record *model.AuditLog) error {
-	auditWriteMu.Lock()
+	if db == nil {
+		return errors.New("audit database unavailable")
+	}
+	ctx, cancel := auditWriteContext(db)
+	defer cancel()
+	if err := auditWriteMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer auditWriteMu.Unlock()
-	return db.Transaction(func(tx *gorm.DB) error {
+
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var previous model.AuditLog
 		err := tx.Select("entry_hash").Order("id desc").Take(&previous).Error
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -77,6 +129,14 @@ func SaveAuditLogWithHashChain(db *gorm.DB, record *model.AuditLog) error {
 		record.EntryHash = hashAuditLogEntry(record)
 		return tx.Create(record).Error
 	})
+}
+
+func auditWriteContext(db *gorm.DB) (context.Context, context.CancelFunc) {
+	ctx := context.Background()
+	if db != nil && db.Statement != nil && db.Statement.Context != nil {
+		ctx = db.Statement.Context
+	}
+	return context.WithTimeout(ctx, auditWriteTimeout)
 }
 
 func hashAuditLogEntry(record *model.AuditLog) string {

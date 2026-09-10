@@ -7,10 +7,10 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 
@@ -64,6 +64,100 @@ func createArgEchoScript(t *testing.T) string {
 		t.Fatalf("写入假 rsync 脚本失败: %v", err)
 	}
 	return scriptPath
+}
+func TestRsyncExecutorAppliesPolicyExcludesToLocalTree(t *testing.T) {
+	rsyncBinary, err := exec.LookPath("rsync")
+	if err != nil {
+		t.Skip("rsync is not installed")
+	}
+	source := t.TempDir()
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "included.txt"), []byte("keep"), 0o600); err != nil {
+		t.Fatalf("写入包含文件失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "excluded.env"), []byte("secret"), 0o600); err != nil {
+		t.Fatalf("写入排除文件失败: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(source, "nested"), 0o755); err != nil {
+		t.Fatalf("创建嵌套目录失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "nested", "cache.tmp"), []byte("cache"), 0o600); err != nil {
+		t.Fatalf("写入嵌套排除文件失败: %v", err)
+	}
+
+	task := model.Task{
+		ExecutorType: "rsync",
+		RsyncSource:  source + string(os.PathSeparator),
+		RsyncTarget:  target,
+		Policy:       &model.Policy{ExcludeRules: "excluded.env\nnested/cache.tmp"},
+	}
+	exitCode, runErr := (&RsyncExecutor{binary: rsyncBinary}).Run(
+		context.Background(), task, func(_ string, _ string) {}, nil,
+	)
+	if runErr != nil || exitCode != 0 {
+		t.Fatalf("local Rsync with exclusions failed: exit=%d err=%v", exitCode, runErr)
+	}
+	if _, err := os.Stat(filepath.Join(target, "included.txt")); err != nil {
+		t.Fatalf("included file missing after Rsync: %v", err)
+	}
+	for _, excluded := range []string{"excluded.env", filepath.Join("nested", "cache.tmp")} {
+		if _, err := os.Stat(filepath.Join(target, excluded)); !os.IsNotExist(err) {
+			t.Fatalf("excluded file %q was copied: %v", excluded, err)
+		}
+	}
+}
+
+func TestRsyncExecutorPassesPolicyExcludesAsArguments(t *testing.T) {
+	capturePath := filepath.Join(t.TempDir(), "rsync-args")
+	scriptPath := filepath.Join(t.TempDir(), "fake-rsync-capture.sh")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$XIRANG_RSYNC_CAPTURE\"\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("写入假 rsync 脚本失败: %v", err)
+	}
+	t.Setenv("XIRANG_RSYNC_CAPTURE", capturePath)
+	task := model.Task{
+		ExecutorType: "rsync",
+		RsyncSource:  "/source",
+		RsyncTarget:  t.TempDir(),
+		Policy: &model.Policy{
+			ExcludeRules: "*.log\ncache dir\n.secret\n",
+		},
+	}
+
+	exitCode, err := (&RsyncExecutor{binary: scriptPath}).Run(
+		context.Background(), task, func(_ string, _ string) {}, nil,
+	)
+	if err != nil || exitCode != 0 {
+		t.Fatalf("Rsync with policy excludes failed: exit=%d err=%v", exitCode, err)
+	}
+	raw, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatalf("读取假 rsync 参数失败: %v", err)
+	}
+	args := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	want := []string{"--exclude", "*.log", "--exclude", "cache dir", "--exclude", ".secret"}
+	for index := 0; index+1 < len(want); index += 2 {
+		found := false
+		for argIndex := 0; argIndex+1 < len(args); argIndex++ {
+			if args[argIndex] == want[index] && args[argIndex+1] == want[index+1] {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("Rsync argv missing exclude pair %q/%q: %v", want[index], want[index+1], args)
+		}
+	}
+}
+
+func TestParseRsyncExcludeRulesRejectsUnsafeInput(t *testing.T) {
+	if _, err := parseRsyncExcludeRules(&model.Policy{ExcludeRules: "safe\nbad\x00rule"}); err == nil {
+		t.Fatal("NUL-bearing Rsync exclude rule was accepted")
+	}
+	tooLong := strings.Repeat("x", maxRsyncExcludeRuleBytes+1)
+	if _, err := parseRsyncExcludeRules(&model.Policy{ExcludeRules: tooLong}); err == nil {
+		t.Fatal("overlong Rsync exclude rule was accepted")
+	}
 }
 
 func TestRsyncExecutorUsesSSHKeyRelationWhenNodePrivateKeyEmpty(t *testing.T) {
@@ -395,10 +489,68 @@ func TestRsyncExecutorBackupNotMisidentifiedAsRestore(t *testing.T) {
 	}
 }
 
-// TestRsyncExecutorRestoreUsesRemotePath 验证恢复任务（IsRestore=true）走远程恢复路径。
-// 由于没有真实 SSH 服务器，连接会失败，但关键是确认进入了 runRemoteRestore。
-func TestRsyncExecutorRestoreUsesRemotePath(t *testing.T) {
-	exec := &RsyncExecutor{binary: createArgEchoScript(t)}
+func TestRsyncExecutorRestoreRejectsMissingOrRemoteCoreSource(t *testing.T) {
+	capturePath := filepath.Join(t.TempDir(), "should-not-run")
+	scriptPath := filepath.Join(t.TempDir(), "fake-rsync-marker.sh")
+	script := "#!/bin/sh\ntouch \"$XIRANG_RSYNC_MARKER\"\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("写入假 rsync 脚本失败: %v", err)
+	}
+	t.Setenv("XIRANG_RSYNC_MARKER", capturePath)
+
+	unsupportedRoot := t.TempDir()
+	regularSource := filepath.Join(unsupportedRoot, "regular")
+	if err := os.WriteFile(regularSource, []byte("not a directory source"), 0o600); err != nil {
+		t.Fatalf("写入不支持的测试源失败: %v", err)
+	}
+	symlinkSource := filepath.Join(unsupportedRoot, "symlink")
+	if err := os.Symlink(regularSource, symlinkSource); err != nil {
+		t.Fatalf("创建不支持的测试源链接失败: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		source string
+	}{
+		{name: "missing core source", source: filepath.Join(t.TempDir(), "missing-core-backup")},
+		{name: "unsupported symlink source", source: symlinkSource},
+		{name: "remote source decoy", source: "root@remote-decoy:/backup/node-a"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			exitCode, err := (&RsyncExecutor{binary: scriptPath}).RunRestore(
+				context.Background(),
+				model.Task{ExecutorType: "rsync", RsyncSource: test.source, RsyncTarget: "/var/app/data"},
+				func(_ string, _ string) {}, nil,
+			)
+			if err == nil || exitCode != -1 {
+				t.Fatalf("expected source rejection, exit=%d err=%v", exitCode, err)
+			}
+			if _, statErr := os.Stat(capturePath); !os.IsNotExist(statErr) {
+				t.Fatalf("rsync ran after rejecting Core source: %v", statErr)
+			}
+		})
+	}
+}
+
+// TestRsyncExecutorRestoreUsesCoreSource verifies that legacy Rsync restore
+// sends the Core-local backup tree to the selected node instead of running a
+// same-path command on the node.
+func TestRsyncExecutorRestoreUsesCoreSource(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "core-backup")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatalf("创建 Core 备份源失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "payload.txt"), []byte("core material"), 0o600); err != nil {
+		t.Fatalf("写入 Core 备份材料失败: %v", err)
+	}
+	capturePath := filepath.Join(t.TempDir(), "rsync-args")
+	scriptPath := filepath.Join(t.TempDir(), "fake-rsync-capture.sh")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$XIRANG_RSYNC_CAPTURE\"\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("写入假 rsync 脚本失败: %v", err)
+	}
+	t.Setenv("XIRANG_RSYNC_CAPTURE", capturePath)
 
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
@@ -408,31 +560,112 @@ func TestRsyncExecutorRestoreUsesRemotePath(t *testing.T) {
 		Type:  "RSA PRIVATE KEY",
 		Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
 	})
-
 	task := model.Task{
 		ExecutorType: "rsync",
-		RsyncSource:  "/backup/data",
+		RsyncSource:  source,
 		RsyncTarget:  "/var/app/data",
 		Node: model.Node{
-			Host:     "127.0.0.1",
-			Port:     1, // 使用端口 1，连接会立即被拒绝
-			Username: "root",
-			AuthType: "key",
-			SSHKey: &model.SSHKey{
-				PrivateKey: string(privateKey),
-			},
+			Host: "127.0.0.1", Port: 1, Username: "root", AuthType: "key",
+			SSHKey: &model.SSHKey{PrivateKey: string(privateKey)},
 		},
 	}
 
-	_, err = exec.RunRestore(context.Background(), task, func(_ string, _ string) {}, nil)
-	// 恢复模式需要真实 SSH 连接，所以必定失败。
-	// 关键断言：错误来自 SSH 连接（runRemoteRestore），而非本地 rsync 执行
-	if err == nil {
-		t.Fatalf("恢复模式无真实 SSH 应报错")
+	exitCode, runErr := (&RsyncExecutor{binary: scriptPath}).RunRestore(
+		context.Background(), task, func(_ string, _ string) {}, nil,
+	)
+	if runErr != nil || exitCode != 0 {
+		t.Fatalf("Core -> node Rsync restore failed: exit=%d err=%v", exitCode, runErr)
 	}
-	errMsg := err.Error()
-	if !strings.Contains(errMsg, "SSH") && !strings.Contains(errMsg, "ssh") && !strings.Contains(errMsg, "连接") && !strings.Contains(errMsg, "dial") {
-		t.Fatalf("恢复模式应因 SSH 连接失败而报错，实际: %v", err)
+	raw, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatalf("读取假 rsync 参数失败: %v", err)
+	}
+	args := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	normalizedSource := source + string(os.PathSeparator)
+	joined := strings.Join(args, "\x00")
+	if !strings.Contains(joined, "\x00"+normalizedSource+"\x00") && !strings.HasPrefix(joined, normalizedSource+"\x00") {
+		t.Fatalf("rsync 参数未使用规范化的 Core 源 %q: %q", normalizedSource, args)
+	}
+	if !strings.Contains(joined, "root@127.0.0.1:/var/app/data") {
+		t.Fatalf("rsync 参数未使用节点目标: %q", args)
+	}
+	if strings.Contains(joined, "root@127.0.0.1:"+source) {
+		t.Fatalf("rsync 参数退化为远端同路径恢复: %q", args)
+	}
+}
+func TestRsyncExecutorRestoreCopiesCoreTreeThroughIsolatedRsyncProtocol(t *testing.T) {
+	rsyncBinary, err := exec.LookPath("rsync")
+	if err != nil {
+		t.Skip("rsync is not installed")
+	}
+	source := t.TempDir()
+	nodeRoot := t.TempDir()
+	target := filepath.Join(nodeRoot, "restore")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("创建隔离节点目标目录失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "payload.txt"), []byte("Core material"), 0o600); err != nil {
+		t.Fatalf("写入 Core 备份材料失败: %v", err)
+	}
+	decoy := filepath.Join(nodeRoot, "backup", "node-a")
+	if err := os.MkdirAll(decoy, 0o755); err != nil {
+		t.Fatalf("创建远端诱饵目录失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(decoy, "payload.txt"), []byte("remote decoy"), 0o600); err != nil {
+		t.Fatalf("写入远端诱饵文件失败: %v", err)
+	}
+
+	sshDir := t.TempDir()
+	sshWrapper := filepath.Join(sshDir, "ssh")
+	sshArgsPath := filepath.Join(t.TempDir(), "ssh-args")
+	sshScript := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\" > \"$XIRANG_SSH_ARGS\"\n" +
+		"while [ \"$#\" -gt 0 ]; do\n" +
+		"  case \"$1\" in\n" +
+		"    -p|-o|-i|-l) shift 2 ;;\n" +
+		"    -*) shift ;;\n" +
+		"    rsync) shift; break ;;\n" +
+		"    *) shift ;;\n" +
+		"  esac\n" +
+		"done\n" +
+		"exec \"$XIRANG_REMOTE_RSYNC\" \"$@\"\n"
+	if err := os.WriteFile(sshWrapper, []byte(sshScript), 0o755); err != nil {
+		t.Fatalf("写入隔离 SSH wrapper 失败: %v", err)
+	}
+	t.Setenv("XIRANG_REMOTE_RSYNC", rsyncBinary)
+	t.Setenv("XIRANG_SSH_ARGS", sshArgsPath)
+	t.Setenv("PATH", sshDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "false")
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("生成测试私钥失败: %v", err)
+	}
+	privateKey := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
+	})
+	task := model.Task{
+		RsyncSource: source,
+		RsyncTarget: target,
+		Node: model.Node{
+			Host: "remote-decoy", Port: 1, Username: "root", AuthType: "key",
+			SSHKey: &model.SSHKey{PrivateKey: string(privateKey)},
+		},
+	}
+	exitCode, runErr := (&RsyncExecutor{binary: rsyncBinary}).RunRestore(
+		context.Background(), task, func(level, message string) { t.Logf("%s: %s", level, message) }, nil,
+	)
+	if runErr != nil || exitCode != 0 {
+		rawArgs, _ := os.ReadFile(sshArgsPath)
+		t.Fatalf("isolated Core -> node Rsync restore failed: exit=%d err=%v ssh_args=%q", exitCode, runErr, rawArgs)
+	}
+	content, err := os.ReadFile(filepath.Join(target, "payload.txt"))
+	if err != nil {
+		t.Fatalf("读取恢复内容失败: %v", err)
+	}
+	if string(content) != "Core material" {
+		t.Fatalf("恢复内容来自错误位置: %q", content)
 	}
 }
 

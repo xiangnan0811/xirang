@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -258,6 +259,16 @@ func (m *JWTManager) revokeKey(key string, userID uint, expireAt time.Time) erro
 // IsSessionRevoked checks a non-bearer login-session JTI against both the
 // process cache and durable revocation rows. Invalid identifiers fail closed.
 func (m *JWTManager) IsSessionRevoked(jti string) (bool, error) {
+	return m.IsSessionRevokedContext(context.Background(), jti)
+}
+
+// IsSessionRevokedContext is the context-aware form used by long-lived
+// connections. A bounded context lets callers fail closed instead of leaving
+// a terminal validation goroutine blocked on a stalled database.
+func (m *JWTManager) IsSessionRevokedContext(ctx context.Context, jti string) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if !lowerHexID(jti) {
 		return true, fmt.Errorf("invalid session jti")
 	}
@@ -277,7 +288,8 @@ func (m *JWTManager) IsSessionRevoked(jti string) (bool, error) {
 		return false, nil
 	}
 	var row model.TokenRevocation
-	result := m.db.Select("token_hash", "expires_at").Where("token_hash = ? AND expires_at > ?", key, now).Limit(1).Find(&row)
+	result := m.db.WithContext(ctx).Select("token_hash", "expires_at").
+		Where("token_hash = ? AND expires_at > ?", key, now).Limit(1).Find(&row)
 	if result.Error != nil {
 		return true, fmt.Errorf("query session revocation: %w", result.Error)
 	}

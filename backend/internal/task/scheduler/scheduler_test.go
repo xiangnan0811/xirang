@@ -8,7 +8,7 @@ import (
 
 func TestRegisterTask_HappyPath(t *testing.T) {
 	s := NewCronScheduler()
-	if err := s.RegisterTask(1, "@every 1m", func() {}); err != nil {
+	if err := s.RegisterTask(1, "@every 1m", func(time.Time) {}); err != nil {
 		t.Fatalf("RegisterTask: %v", err)
 	}
 	s.mu.Lock()
@@ -20,14 +20,14 @@ func TestRegisterTask_HappyPath(t *testing.T) {
 
 func TestRegisterTask_ReplacesExisting(t *testing.T) {
 	s := NewCronScheduler()
-	if err := s.RegisterTask(7, "@every 1m", func() {}); err != nil {
+	if err := s.RegisterTask(7, "@every 1m", func(time.Time) {}); err != nil {
 		t.Fatalf("first RegisterTask: %v", err)
 	}
 	s.mu.Lock()
 	firstID := s.entries[7]
 	s.mu.Unlock()
 
-	if err := s.RegisterTask(7, "@every 5m", func() {}); err != nil {
+	if err := s.RegisterTask(7, "@every 5m", func(time.Time) {}); err != nil {
 		t.Fatalf("second RegisterTask: %v", err)
 	}
 	s.mu.Lock()
@@ -40,7 +40,7 @@ func TestRegisterTask_ReplacesExisting(t *testing.T) {
 
 func TestRegisterTask_EmptySpecIsNoop(t *testing.T) {
 	s := NewCronScheduler()
-	if err := s.RegisterTask(99, "", func() {}); err != nil {
+	if err := s.RegisterTask(99, "", func(time.Time) {}); err != nil {
 		t.Fatalf("empty spec should not error, got %v", err)
 	}
 	s.mu.Lock()
@@ -53,7 +53,7 @@ func TestRegisterTask_EmptySpecIsNoop(t *testing.T) {
 
 func TestRegisterTask_InvalidCronReturnsError(t *testing.T) {
 	s := NewCronScheduler()
-	err := s.RegisterTask(42, "this is not a cron expr", func() {})
+	err := s.RegisterTask(42, "this is not a cron expr", func(time.Time) {})
 	if err == nil {
 		t.Fatal("expected error for invalid cron expression, got nil")
 	}
@@ -67,7 +67,7 @@ func TestRegisterTask_InvalidCronReturnsError(t *testing.T) {
 
 func TestRemoveTask_RemovesExistingEntry(t *testing.T) {
 	s := NewCronScheduler()
-	if err := s.RegisterTask(3, "@every 1m", func() {}); err != nil {
+	if err := s.RegisterTask(3, "@every 1m", func(time.Time) {}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	s.RemoveTask(3)
@@ -84,7 +84,7 @@ func TestStartStop_FiresRegisteredJobAtLeastOnce(t *testing.T) {
 	// Use @every 1s and sleep 2200ms to guarantee ≥2 fires before Stop.
 	s := NewCronScheduler()
 	var fires int32
-	if err := s.RegisterTask(1, "@every 1s", func() {
+	if err := s.RegisterTask(1, "@every 1s", func(time.Time) {
 		atomic.AddInt32(&fires, 1)
 	}); err != nil {
 		t.Fatalf("register: %v", err)
@@ -109,7 +109,7 @@ func TestStartStop_FiresRegisteredJobAtLeastOnce(t *testing.T) {
 func TestRegisterTask_SameSpecPreservesLiveEntryAndFires(t *testing.T) {
 	s := NewCronScheduler()
 	var fires int32
-	if err := s.RegisterTask(11, "@every 6s", func() {
+	if err := s.RegisterTask(11, "@every 6s", func(time.Time) {
 		atomic.AddInt32(&fires, 1)
 	}); err != nil {
 		t.Fatalf("register: %v", err)
@@ -122,7 +122,7 @@ func TestRegisterTask_SameSpecPreservesLiveEntryAndFires(t *testing.T) {
 	// reconciliation period from ever firing.
 	for i := range 10 {
 		time.Sleep(500 * time.Millisecond)
-		if err := s.RegisterTask(11, "@every 6s", func() {
+		if err := s.RegisterTask(11, "@every 6s", func(time.Time) {
 			atomic.AddInt32(&fires, 1)
 		}); err != nil {
 			t.Fatalf("reconcile register %d: %v", i, err)
@@ -141,10 +141,10 @@ func TestRegisterTask_SameSpecPreservesLiveEntryAndFires(t *testing.T) {
 
 func TestRemoveTasksExcept_RemovesStaleEntries(t *testing.T) {
 	s := NewCronScheduler()
-	if err := s.RegisterTask(1, "@every 1m", func() {}); err != nil {
+	if err := s.RegisterTask(1, "@every 1m", func(time.Time) {}); err != nil {
 		t.Fatalf("register task 1: %v", err)
 	}
-	if err := s.RegisterTask(2, "@every 1m", func() {}); err != nil {
+	if err := s.RegisterTask(2, "@every 1m", func(time.Time) {}); err != nil {
 		t.Fatalf("register task 2: %v", err)
 	}
 	s.RemoveTasksExcept(map[uint]struct{}{1: {}})
@@ -153,5 +153,39 @@ func TestRemoveTasksExcept_RemovesStaleEntries(t *testing.T) {
 	}
 	if s.HasTask(2) {
 		t.Fatal("stale schedule remained")
+	}
+}
+
+type fixedSchedule time.Time
+
+func (s fixedSchedule) Next(time.Time) time.Time {
+	return time.Time(s)
+}
+
+func TestOccurrenceJobUsesScheduleTimestamp(t *testing.T) {
+	want := time.Date(2026, 9, 9, 1, 2, 3, 0, time.UTC)
+	tracked := &occurrenceSchedule{Schedule: fixedSchedule(want)}
+	if got := tracked.Next(time.Time{}); !got.Equal(want) {
+		t.Fatalf("schedule timestamp = %v, want %v", got, want)
+	}
+	var callbackAt time.Time
+	occurrenceJob{
+		schedule: tracked,
+		callback: func(at time.Time) { callbackAt = at },
+	}.Run()
+	if !callbackAt.Equal(want) {
+		t.Fatalf("callback timestamp = %v, want %v", callbackAt, want)
+	}
+}
+
+func TestOccurrenceJobWithoutScheduleTimestampFailsClosed(t *testing.T) {
+	tracked := &occurrenceSchedule{Schedule: fixedSchedule(time.Time{})}
+	called := false
+	occurrenceJob{
+		schedule: tracked,
+		callback: func(time.Time) { called = true },
+	}.Run()
+	if called {
+		t.Fatal("job invoked callback without a canonical schedule timestamp")
 	}
 }

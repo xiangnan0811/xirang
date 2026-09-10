@@ -214,6 +214,9 @@ type alertTaskRunEffect struct {
 // outside it), locks both rows, checks the expected states, and requires one
 // affected row for every CAS. A retrying aggregate with a failed run is a
 // legal pair, so taskStatus is deliberately independent from runStatus.
+// Pending runs with another active owner are fenced from aggregate/effect
+// mutation inside this same transaction; recovery mode derives the aggregate
+// transition from the locked Task row rather than a preflight read.
 func (m *Manager) terminalizeTaskRun(
 	ctx context.Context,
 	taskID, runID uint,
@@ -222,6 +225,27 @@ func (m *Manager) terminalizeTaskRun(
 	taskUpdates map[string]interface{},
 	runStatus TaskStatus,
 	runUpdates map[string]interface{},
+) error {
+	return m.terminalizeTaskRunTx(ctx, taskID, runID, expectedRunStatuses,
+		taskStatus, taskUpdates, runStatus, runUpdates, terminalizeTaskRunModeNormal)
+}
+
+type terminalizeTaskRunMode uint8
+
+const (
+	terminalizeTaskRunModeNormal terminalizeTaskRunMode = iota
+	terminalizeTaskRunModeRecovery
+)
+
+func (m *Manager) terminalizeTaskRunTx(
+	ctx context.Context,
+	taskID, runID uint,
+	expectedRunStatuses []string,
+	taskStatus *TaskStatus,
+	taskUpdates map[string]interface{},
+	runStatus TaskStatus,
+	runUpdates map[string]interface{},
+	mode terminalizeTaskRunMode,
 ) error {
 	if m == nil || m.db == nil {
 		return errors.New("task terminal persistence unavailable")
@@ -268,6 +292,7 @@ func (m *Manager) terminalizeTaskRun(
 	runUpdates["status"] = string(runStatus)
 	runUpdates["execution_owner_id"] = ""
 	runUpdates["execution_lease_until"] = nil
+	suppressEffects := false
 
 	var effects []taskRunTerminalEffect
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -312,6 +337,34 @@ func (m *Manager) terminalizeTaskRun(
 		// rows with an empty owner remain eligible for compatibility recovery.
 		if strings.TrimSpace(run.ExecutionOwnerID) != "" && run.ExecutionOwnerID != m.executionOwnerID {
 			return errTaskRunNotOwner
+		}
+		if mode == terminalizeTaskRunModeRecovery && taskStatus == nil {
+			currentStatus := ParseStatus(taskEntity.Status)
+			if currentStatus == StatusRunning || currentStatus == StatusRetrying {
+				failed := StatusFailed
+				taskStatus = &failed
+				if _, ok := taskUpdates["next_run_at"]; !ok {
+					taskUpdates["next_run_at"] = nextCronRun(taskEntity.CronSpec)
+				}
+			}
+		}
+		if run.Status == model.TaskRunStatusPending {
+			var activeRun model.TaskRun
+			activeResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where(`task_id = ? AND id <> ? AND status IN ? AND
+					TRIM(COALESCE(execution_owner_id, '')) <> ''`,
+					taskID, runID, model.TaskRunActiveStatuses()).
+				Limit(1).Find(&activeRun)
+			if activeResult.Error != nil {
+				return activeResult.Error
+			}
+			if activeResult.RowsAffected == 1 {
+				// A duplicate/lost runner must not fail the aggregate owned by
+				// another active run. Its own TaskRun is still closed below,
+				// but no retry/chain/alert effects are published for it.
+				taskStatus = nil
+				suppressEffects = true
+			}
 		}
 
 		if taskStatus != nil {
@@ -366,11 +419,15 @@ func (m *Manager) terminalizeTaskRun(
 				taskEntity.NextRunAt = nil
 			}
 		}
-		builtEffects, buildErr := buildTerminalEffects(tx, taskEntity, run, runID, runStatus)
-		if buildErr != nil {
-			return buildErr
+		if suppressEffects {
+			effects = nil
+		} else {
+			builtEffects, buildErr := buildTerminalEffects(tx, taskEntity, run, runID, runStatus)
+			if buildErr != nil {
+				return buildErr
+			}
+			effects = builtEffects
 		}
-		effects = builtEffects
 		if err := persistTaskRunEffectsTx(tx, runID, effects); err != nil {
 			return err
 		}
@@ -725,10 +782,12 @@ func readyTaskRunEffects(db *gorm.DB, now time.Time) *gorm.DB {
 
 func claimablePendingDurableRuns(db *gorm.DB, now time.Time) *gorm.DB {
 	return db.Model(&model.TaskRun{}).
-		Where(`status = ? AND trigger_type IN ? AND
+		Where(`status = ? AND
+			(trigger_type IN ? OR
+				(trigger_type = ? AND cron_scheduled_at IS NOT NULL)) AND
 			(COALESCE(execution_owner_id, '') = '' OR
 				execution_lease_until IS NULL OR execution_lease_until <= ?)`,
-			model.TaskRunStatusPending, []string{"auto", "retry"}, now)
+			model.TaskRunStatusPending, []string{"auto", "retry"}, "cron", now)
 }
 
 // drainReadyTaskRunEffects claims and drains a bounded page of ready effects.
@@ -811,13 +870,27 @@ func (m *Manager) executeTaskRunEffect(ctx context.Context, effect model.TaskRun
 		if query.RowsAffected == 1 {
 			return nil
 		}
-		if _, err := m.triggerCore(payload.TaskID, "chain", payload.ChainRunID, &payload.UpstreamRunID); err != nil {
+		childRunID, err := m.triggerCore(payload.TaskID, "chain", payload.ChainRunID, &payload.UpstreamRunID, nil)
+		if err != nil {
 			// A concurrent worker may have won the unique downstream insert.
 			var raced model.TaskRun
 			if lookupErr := m.db.WithContext(ctx).Where("task_id = ? AND upstream_task_run_id = ?", payload.TaskID, payload.UpstreamRunID).Limit(1).Find(&raced).Error; lookupErr == nil && raced.ID != 0 {
 				return nil
 			}
 			return err
+		}
+		if childRunID != 0 {
+			return nil
+		}
+		var child model.TaskRun
+		lookup := m.db.WithContext(ctx).
+			Where("task_id = ? AND upstream_task_run_id = ?", payload.TaskID, payload.UpstreamRunID).
+			Limit(1).Find(&child)
+		if lookup.Error != nil {
+			return lookup.Error
+		}
+		if lookup.RowsAffected != 1 {
+			return errors.New("chain dispatch produced no durable child run")
 		}
 		return nil
 
@@ -852,15 +925,13 @@ func (m *Manager) executeTaskRunEffect(ctx context.Context, effect model.TaskRun
 		if err := m.db.WithContext(ctx).Preload("Node").Preload("Policy").First(&taskEntity, payload.TaskID).Error; err != nil {
 			return err
 		}
-		runID := payload.RunID
-		runIDPtr := &runID
 		switch payload.Action {
 		case "resolve":
-			return m.alertDispatcher.ResolveTaskAlerts(payload.TaskID, "任务恢复成功")
+			return m.alertDispatcher.ResolveTaskAlertsForRun(payload.TaskID, payload.RunID, "任务恢复成功")
 		case "verification_failure":
-			return m.alertDispatcher.RaiseVerificationFailure(taskEntity, runIDPtr, payload.Message)
+			return m.alertDispatcher.RaiseVerificationFailureForRun(taskEntity, payload.RunID, payload.Message)
 		case "task_failure":
-			return m.alertDispatcher.RaiseTaskFailure(taskEntity, runIDPtr, payload.Message)
+			return m.alertDispatcher.RaiseTaskFailureForRun(taskEntity, payload.RunID, payload.Message)
 		default:
 			return fmt.Errorf("unknown task alert effect action %q", payload.Action)
 		}
@@ -1041,12 +1112,29 @@ func (m *Manager) executeRetryTaskRunEffect(ctx context.Context, effect model.Ta
 	return nil
 }
 
+func isRecoverablePendingDurableRun(run model.TaskRun) bool {
+	if run.Status != model.TaskRunStatusPending {
+		return false
+	}
+	switch run.TriggerType {
+	case "auto", "retry":
+		return true
+	case "cron":
+		return run.CronScheduledAt != nil
+	default:
+		return false
+	}
+}
+
 func (m *Manager) launchDurableTaskRun(ctx context.Context, run model.TaskRun) error {
 	if m == nil || m.db == nil || run.ID == 0 || run.TaskID == 0 {
 		return errors.New("durable task run launcher unavailable")
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if !isRecoverablePendingDurableRun(run) {
+		return nil
 	}
 	launchCtx, ownership, claimed := m.claimPendingRunOwnership(run.TaskID)
 	if !claimed {
@@ -1071,9 +1159,10 @@ func (m *Manager) launchDurableTaskRun(ctx context.Context, run model.TaskRun) e
 	if result := m.db.WithContext(ctx).Where("id = ? AND task_id = ?", run.ID, run.TaskID).
 		Limit(1).Find(&currentRun); result.Error != nil {
 		return result.Error
-	} else if result.RowsAffected != 1 || currentRun.Status != model.TaskRunStatusPending {
+	} else if result.RowsAffected != 1 || !isRecoverablePendingDurableRun(currentRun) {
 		return nil
 	}
+	run = currentRun
 	if taskEntity.ArchivedAt != nil || !taskEntity.Enabled ||
 		(taskEntity.Policy != nil && !taskEntity.Policy.Enabled) {
 		return m.cancelPendingDurableRun(ctx, run.ID, run.TaskID, "任务已暂停，重试或自动触发已取消")
@@ -1477,11 +1566,13 @@ func (m *Manager) reconcileExpiredOrdinaryRuns(ctx context.Context) error {
 	var candidates []model.TaskRun
 	query := m.db.WithContext(ctx).
 		Where(`trigger_type <> ? AND status IN ? AND
-			NOT (status = ? AND trigger_type IN ?) AND
+			NOT (status = ? AND
+				(trigger_type IN ? OR
+					(trigger_type = ? AND cron_scheduled_at IS NOT NULL))) AND
 			((execution_lease_until IS NOT NULL AND execution_lease_until <= ?) OR
 				(execution_owner_id = '' AND updated_at <= ?))`,
 			"drill", model.TaskRunActiveStatuses(), model.TaskRunStatusPending,
-			[]string{"auto", "retry"}, now, staleBefore).
+			[]string{"auto", "retry"}, "cron", now, staleBefore).
 		Order("id ASC").Limit(taskRunRecoveryBatchSize)
 	if err := query.Find(&candidates).Error; err != nil {
 		return err
@@ -1514,11 +1605,13 @@ func (m *Manager) reconcileExpiredOrdinaryRuns(ctx context.Context) error {
 		var remaining int64
 		if err := m.db.WithContext(ctx).Model(&model.TaskRun{}).
 			Where(`trigger_type <> ? AND status IN ? AND
-				NOT (status = ? AND trigger_type IN ?) AND
+				NOT (status = ? AND
+					(trigger_type IN ? OR
+						(trigger_type = ? AND cron_scheduled_at IS NOT NULL))) AND
 				((execution_lease_until IS NOT NULL AND execution_lease_until <= ?) OR
 					(execution_owner_id = '' AND updated_at <= ?))`,
 				"drill", model.TaskRunActiveStatuses(), model.TaskRunStatusPending,
-				[]string{"auto", "retry"}, now, staleBefore).Count(&remaining).Error; err != nil {
+				[]string{"auto", "retry"}, "cron", now, staleBefore).Count(&remaining).Error; err != nil {
 			return err
 		}
 		if remaining > 0 {
@@ -1563,20 +1656,11 @@ func (m *Manager) reconcileClaimedOrdinaryRun(ctx context.Context, run model.Tas
 // owner-fenced and updates the aggregate and run atomically whenever the
 // runner exits before an explicit terminal transition.
 func (m *Manager) recoverTaskRunOnReturn(ctx context.Context, taskID, runID uint, message string) error {
-	var taskEntity model.Task
-	if err := m.db.WithContext(ctx).First(&taskEntity, taskID).Error; err != nil {
-		return err
-	}
-	status := ParseStatus(taskEntity.Status)
-	var taskStatus *TaskStatus
-	if status == StatusRunning || status == StatusRetrying {
-		failed := StatusFailed
-		taskStatus = &failed
-	}
 	now := time.Now().UTC()
-	return m.terminalizeTaskRun(ctx, taskID, runID, model.TaskRunActiveStatuses(), taskStatus,
-		map[string]interface{}{"last_error": message, "next_run_at": nextCronRun(taskEntity.CronSpec)},
-		StatusFailed, map[string]interface{}{"finished_at": &now, "last_error": message})
+	return m.terminalizeTaskRunTx(ctx, taskID, runID, model.TaskRunActiveStatuses(), nil,
+		map[string]interface{}{"last_error": message},
+		StatusFailed, map[string]interface{}{"finished_at": &now, "last_error": message},
+		terminalizeTaskRunModeRecovery)
 }
 func (m *Manager) terminalizeRestoreTaskRun(ctx context.Context, taskID, runID uint, expectedStatuses []string, runStatus TaskStatus, updates map[string]interface{}) error {
 	return m.terminalizeTaskRun(ctx, taskID, runID, expectedStatuses, nil, nil, runStatus, updates)

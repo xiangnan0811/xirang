@@ -81,6 +81,17 @@
 8. 监控 `Publish Docker Images` 直到成功。若 Trivy 因基础镜像或系统包 HIGH/CRITICAL CVE 阻断发布，应升级运行时基础镜像或包来源并重新走 PR/release 流程；不要降低 severity、添加 ignore 或绕过扫描。只有在符合“手动重发镜像”条件时才使用 `workflow_dispatch`。
 9. 如需私有环境部署，由维护者手动运行 `deploy.yml`。
 
+### 任务身份迁移的升级检查
+
+包含 `000082_task_run_cron_provenance` 的版本发布时，变更说明必须提示以下升级边界：
+
+- 升级前备份数据库及加密密钥，停止并排空旧 Core；不得混跑旧调度器或执行进程。
+- Legacy Rsync/Rclone 当前镜像不再执行破坏性的按年龄清理；受管恢复点及 Restic 保留机制不变。
+- Legacy Rsync 恢复必须匹配一次成功的普通备份及其来源、节点、策略执行输入。升级后或这些输入变化后，先完成新备份，否则恢复返回 `new-backup-required`；历史备份文件不会因此被删除。
+- 新迁移的定时触发身份或备份指纹一旦写入，降级会拒绝抹除这些事实；不要绕过降级保护。
+
+完整运行语义见 [后端说明](../../backend/README_backend.md#legacy-backup-safety-and-task-lifecycle)。
+
 ## PR 后监控要求
 
 - PR 创建后，负责人必须监控 GitHub required checks，包括 `PR Title`、`Backend Test & Build`、`Frontend Test & Build`、`Doc Freshness Check`，以及当前 branch protection 要求的其他 jobs。

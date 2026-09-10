@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Bug Fixes
+
+* Protect legacy Rsync/Rclone current backup trees from age-based retention deletion; restore Rsync data from Core to the node, honor policy exclusions, and require matching successful-backup provenance before legacy restore.
+* Persist cron occurrence identity, recover safely pending runs across restarts, consume skip-next at execution entry, preserve causal task-alert ordering, and retain retryable or explicit skipped downstream outcomes across Core instances.
+* Bound SSH terminal shutdown and enforce active-session revocation, authority changes, and JWT expiry; preserve raw password semantics when disabling TOTP.
+* Start managed publication cleanup deadlines after provider execution and release admission even when finalization persistence fails.
+
 ## [0.55.4](https://github.com/xiangnan0811/xirang/compare/v0.55.3...v0.55.4) (2026-09-09)
 
 

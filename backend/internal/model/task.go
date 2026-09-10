@@ -1,6 +1,9 @@
 package model
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -130,26 +133,183 @@ func (t *Task) AfterFind(_ *gorm.DB) error {
 }
 
 type TaskRun struct {
-	ExecutionOwnerID    string     `gorm:"size:64;not null;default:''" json:"-"`
-	ExecutionLeaseUntil *time.Time `gorm:"index" json:"-"`
-	ID                  uint       `gorm:"primaryKey" json:"id"`
-	TaskID              uint       `gorm:"not null;index;uniqueIndex:idx_task_runs_active_drill,where:trigger_type = 'drill' AND (status = 'pending' OR status = 'running' OR status = 'retrying')" json:"task_id"`
-	Task                Task       `gorm:"foreignKey:TaskID" json:"-"`
-	NodeIDSnapshot      uint       `gorm:"not null;index:idx_task_runs_node_snapshot_status,priority:1" json:"-"`
-	TriggerType         string     `gorm:"size:32;not null;default:manual" json:"trigger_type"`
-	Status              string     `gorm:"size:32;not null;default:pending;index;index:idx_task_runs_status_finished_at,priority:1;index:idx_task_runs_node_snapshot_status,priority:2" json:"status"`
-	ChainRunID          string     `gorm:"size:64;index" json:"chain_run_id,omitempty"`
-	UpstreamTaskRunID   *uint      `gorm:"index" json:"upstream_task_run_id,omitempty"`
-	SkipReason          string     `gorm:"type:text" json:"skip_reason,omitempty"`
-	StartedAt           *time.Time `gorm:"index:idx_task_runs_started_at" json:"started_at"`
-	FinishedAt          *time.Time `gorm:"index:idx_task_runs_status_finished_at,priority:2" json:"finished_at"`
-	DurationMs          int64      `gorm:"not null;default:0" json:"duration_ms"`
-	VerifyStatus        string     `gorm:"size:16;not null;default:none" json:"verify_status"`
-	ThroughputMbps      float64    `gorm:"not null;default:0" json:"throughput_mbps"`
-	Progress            int        `gorm:"not null;default:0" json:"progress"`
-	LastError           string     `gorm:"type:text" json:"last_error"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
+	ExecutionOwnerID        string     `gorm:"size:64;not null;default:''" json:"-"`
+	ExecutionLeaseUntil     *time.Time `gorm:"index" json:"-"`
+	ID                      uint       `gorm:"primaryKey" json:"id"`
+	TaskID                  uint       `gorm:"not null;index;uniqueIndex:idx_task_runs_active_drill,where:trigger_type = 'drill' AND (status = 'pending' OR status = 'running' OR status = 'retrying')" json:"task_id"`
+	Task                    Task       `gorm:"foreignKey:TaskID" json:"-"`
+	NodeIDSnapshot          uint       `gorm:"not null;index:idx_task_runs_node_snapshot_status,priority:1" json:"-"`
+	CronScheduledAt         *time.Time `gorm:"column:cron_scheduled_at" json:"-"`
+	BackupConfigFingerprint string     `gorm:"column:backup_config_fingerprint;size:64" json:"-"`
+	TriggerType             string     `gorm:"size:32;not null;default:manual" json:"trigger_type"`
+	Status                  string     `gorm:"size:32;not null;default:pending;index;index:idx_task_runs_status_finished_at,priority:1;index:idx_task_runs_node_snapshot_status,priority:2" json:"status"`
+	ChainRunID              string     `gorm:"size:64;index" json:"chain_run_id,omitempty"`
+	UpstreamTaskRunID       *uint      `gorm:"index" json:"upstream_task_run_id,omitempty"`
+	SkipReason              string     `gorm:"type:text" json:"skip_reason,omitempty"`
+	StartedAt               *time.Time `gorm:"index:idx_task_runs_started_at" json:"started_at"`
+	FinishedAt              *time.Time `gorm:"index:idx_task_runs_status_finished_at,priority:2" json:"finished_at"`
+	DurationMs              int64      `gorm:"not null;default:0" json:"duration_ms"`
+	VerifyStatus            string     `gorm:"size:16;not null;default:none" json:"verify_status"`
+	ThroughputMbps          float64    `gorm:"not null;default:0" json:"throughput_mbps"`
+	Progress                int        `gorm:"not null;default:0" json:"progress"`
+	LastError               string     `gorm:"type:text" json:"last_error"`
+	CreatedAt               time.Time  `json:"created_at"`
+	UpdatedAt               time.Time  `json:"updated_at"`
+}
+
+// TaskRunBackupConfigFingerprint returns a stable, non-secret identity of the
+// task values that the executor is about to use. Executor configuration and
+// policy hooks are represented only by their SHA-256 digests so credentials
+// never enter TaskRun history. The node connection identity is included because
+// a node ID alone does not prove that the same endpoint was used.
+//
+// A policy-bound task must carry the matching Policy snapshot. Returning an
+// empty digest for a missing or mismatched snapshot makes reservation and
+// restore validation fail closed; standalone tasks without PolicyID remain
+// supported.
+func TaskRunBackupConfigFingerprint(task Task) string {
+	type binding struct {
+		NodeID               uint   `json:"node_id"`
+		NodeName             string `json:"node_name"`
+		NodeHost             string `json:"node_host"`
+		NodePort             int    `json:"node_port"`
+		NodeUsername         string `json:"node_username"`
+		NodeAuthType         string `json:"node_auth_type"`
+		NodeSSHKeyID         uint   `json:"node_ssh_key_id"`
+		NodeUseSudo          bool   `json:"node_use_sudo"`
+		NodeBackupDir        string `json:"node_backup_dir"`
+		ExecutorType         string `json:"executor_type"`
+		RsyncSource          string `json:"rsync_source"`
+		RsyncTarget          string `json:"rsync_target"`
+		ExecutorConfigDigest string `json:"executor_config_digest"`
+
+		PolicyBound               bool   `json:"policy_bound"`
+		PolicyID                  uint   `json:"policy_id"`
+		PolicyExcludeRules        string `json:"policy_exclude_rules"`
+		PolicyBwLimit             int    `json:"policy_bw_limit"`
+		PolicyBandwidthSchedule   string `json:"policy_bandwidth_schedule"`
+		PolicyPreHookDigest       string `json:"policy_pre_hook_digest"`
+		PolicyPostHookDigest      string `json:"policy_post_hook_digest"`
+		PolicyHookTimeoutSeconds  int    `json:"policy_hook_timeout_seconds"`
+		PolicyMaxExecutionSeconds int    `json:"policy_max_execution_seconds"`
+		PolicyAppProfile          string `json:"policy_app_profile"`
+		PolicyAppCredentialID     uint   `json:"policy_app_credential_id"`
+	}
+
+	executorConfigDigest, ok := taskRunFingerprintDigest(task.ExecutorConfig)
+	if !ok {
+		return ""
+	}
+
+	policyBound := task.PolicyID != nil
+	policyID := uint(0)
+	policyExcludeRules := ""
+	policyBwLimit := 0
+	policyBandwidthSchedule := ""
+	policyPreHookDigest := ""
+	policyPostHookDigest := ""
+	policyHookTimeoutSeconds := 0
+	policyMaxExecutionSeconds := 0
+	policyAppProfile := ""
+	policyAppCredentialID := uint(0)
+	if policyBound {
+		policyID = *task.PolicyID
+		if policyID == 0 || task.Policy == nil {
+			return ""
+		}
+		if task.Policy.ID != 0 && task.Policy.ID != policyID {
+			return ""
+		}
+		policyPreHookDigest, ok = taskRunFingerprintDigest(task.Policy.PreHook)
+		if !ok {
+			return ""
+		}
+		policyPostHookDigest, ok = taskRunFingerprintDigest(task.Policy.PostHook)
+		if !ok {
+			return ""
+		}
+		policyExcludeRules = canonicalTaskRunExcludeRules(task.Policy.ExcludeRules)
+		policyBwLimit = task.Policy.BwLimit
+		policyBandwidthSchedule = strings.TrimSpace(task.Policy.BandwidthSchedule)
+		policyHookTimeoutSeconds = task.Policy.HookTimeoutSeconds
+		policyMaxExecutionSeconds = task.Policy.MaxExecutionSeconds
+		policyAppProfile = task.Policy.AppProfile
+		if task.Policy.AppCredentialID != nil {
+			policyAppCredentialID = *task.Policy.AppCredentialID
+		}
+	}
+
+	nodeSSHKeyID := uint(0)
+	if task.Node.SSHKeyID != nil {
+		nodeSSHKeyID = *task.Node.SSHKeyID
+	}
+	payload := binding{
+		NodeID:                    task.NodeID,
+		NodeName:                  strings.TrimSpace(task.Node.Name),
+		NodeHost:                  strings.TrimSpace(task.Node.Host),
+		NodePort:                  task.Node.Port,
+		NodeUsername:              strings.TrimSpace(task.Node.Username),
+		NodeAuthType:              strings.ToLower(strings.TrimSpace(task.Node.AuthType)),
+		NodeSSHKeyID:              nodeSSHKeyID,
+		NodeUseSudo:               task.Node.UseSudo,
+		NodeBackupDir:             strings.TrimSpace(task.Node.BackupDir),
+		ExecutorType:              strings.ToLower(strings.TrimSpace(task.ExecutorType)),
+		RsyncSource:               strings.TrimSpace(task.RsyncSource),
+		RsyncTarget:               strings.TrimSpace(task.RsyncTarget),
+		ExecutorConfigDigest:      executorConfigDigest,
+		PolicyBound:               policyBound,
+		PolicyID:                  policyID,
+		PolicyExcludeRules:        policyExcludeRules,
+		PolicyBwLimit:             policyBwLimit,
+		PolicyBandwidthSchedule:   policyBandwidthSchedule,
+		PolicyPreHookDigest:       policyPreHookDigest,
+		PolicyPostHookDigest:      policyPostHookDigest,
+		PolicyHookTimeoutSeconds:  policyHookTimeoutSeconds,
+		PolicyMaxExecutionSeconds: policyMaxExecutionSeconds,
+		PolicyAppProfile:          policyAppProfile,
+		PolicyAppCredentialID:     policyAppCredentialID,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		// The binding contains only scalar values and cannot currently fail to
+		// marshal. Keep the function total if fields are extended later.
+		return ""
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:])
+}
+
+// taskRunFingerprintDigest decrypts encrypted-at-rest values before hashing so
+// random ciphertext bytes never become part of the durable configuration
+// identity. It also lets direct callers pass either plaintext or a persisted
+// encrypted value without changing the result.
+func taskRunFingerprintDigest(raw string) (string, bool) {
+	plaintext, err := secure.DecryptIfNeeded(raw)
+	if err != nil {
+		return "", false
+	}
+	digest := sha256.Sum256([]byte(plaintext))
+	return hex.EncodeToString(digest[:]), true
+}
+
+// canonicalTaskRunExcludeRules matches the executor's input normalization:
+// CRLF is treated as LF, surrounding whitespace is ignored, and blank lines
+// are skipped before rules are passed to rsync. Internal rule bytes remain
+// untouched because they affect validation and the rsync arguments.
+func canonicalTaskRunExcludeRules(raw string) string {
+	normalized := strings.TrimSpace(strings.ReplaceAll(raw, "\r\n", "\n"))
+	if normalized == "" {
+		return ""
+	}
+	lines := strings.Split(normalized, "\n")
+	rules := lines[:0]
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		rules = append(rules, line)
+	}
+	return strings.Join(rules, "\n")
 }
 
 // BeforeCreate freezes the Task's current node for every GORM TaskRun writer.

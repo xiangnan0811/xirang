@@ -3,6 +3,7 @@ package scheduler
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/robfig/cron/v3"
 )
@@ -12,6 +13,54 @@ type CronScheduler struct {
 	entries map[uint]cron.EntryID
 	specs   map[uint]string
 	mu      sync.Mutex
+}
+
+// occurrenceSchedule mirrors the schedule passed to robfig/cron while
+// retaining each canonical activation returned by Next. Cron's Job interface
+// has no timestamp argument; this small adapter carries that value to the
+// callback without deriving it from callback wall-clock time.
+type occurrenceSchedule struct {
+	cron.Schedule
+	mu      sync.Mutex
+	pending []time.Time
+}
+
+func (s *occurrenceSchedule) Next(after time.Time) time.Time {
+	next := s.Schedule.Next(after)
+	if next.IsZero() {
+		return next
+	}
+	s.mu.Lock()
+	s.pending = append(s.pending, next)
+	s.mu.Unlock()
+	return next
+}
+
+func (s *occurrenceSchedule) take() (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.pending) == 0 {
+		return time.Time{}, false
+	}
+	next := s.pending[0]
+	copy(s.pending, s.pending[1:])
+	s.pending = s.pending[:len(s.pending)-1]
+	return next, true
+}
+
+type occurrenceJob struct {
+	schedule *occurrenceSchedule
+	callback func(time.Time)
+}
+
+func (j occurrenceJob) Run() {
+	scheduledAt, ok := j.schedule.take()
+	if !ok {
+		// Never invent an occurrence timestamp. A job invocation without the
+		// schedule's Next result is not safe to persist as a cron run.
+		return
+	}
+	j.callback(scheduledAt)
 }
 
 func NewCronScheduler() *CronScheduler {
@@ -31,9 +80,14 @@ func (s *CronScheduler) Stop() {
 	<-ctx.Done()
 }
 
-func (s *CronScheduler) RegisterTask(taskID uint, spec string, fn func()) error {
+// RegisterTask accepts the timestamp-aware callback used by the manager.
+func (s *CronScheduler) RegisterTask(taskID uint, spec string, fn func(time.Time)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if fn == nil {
+		return fmt.Errorf("cron callback is nil")
+	}
 
 	if oldID, ok := s.entries[taskID]; ok {
 		if spec != "" && s.specs != nil && s.specs[taskID] == spec {
@@ -48,10 +102,13 @@ func (s *CronScheduler) RegisterTask(taskID uint, spec string, fn func()) error 
 		return nil
 	}
 
-	entryID, err := s.cron.AddFunc(spec, fn)
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+	schedule, err := parser.Parse(spec)
 	if err != nil {
 		return fmt.Errorf("注册 cron 任务失败: %w", err)
 	}
+	tracked := &occurrenceSchedule{Schedule: schedule}
+	entryID := s.cron.Schedule(tracked, occurrenceJob{schedule: tracked, callback: fn})
 	if s.specs == nil {
 		s.specs = make(map[uint]string)
 	}

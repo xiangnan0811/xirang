@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -15,6 +16,7 @@ import (
 
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/credentialaudit"
+	"xirang/backend/internal/logger"
 	"xirang/backend/internal/middleware"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
@@ -27,6 +29,12 @@ import (
 
 const (
 	terminalSessionTimeout      = 30 * time.Minute
+	terminalValidationInterval  = 500 * time.Millisecond
+	terminalValidationTimeout   = 250 * time.Millisecond
+	terminalWriteTimeout        = 2 * time.Second
+	terminalCloseControlTimeout = 500 * time.Millisecond
+	terminalAuditTimeout        = 5 * time.Second
+	terminalCloseAuditTimeout   = 1 * time.Second
 	maxTerminalSessions         = 10
 	maxTerminalAuthMessageBytes = 4 << 10
 	maxTerminalMessageBytes     = 64 << 10
@@ -39,6 +47,14 @@ type TerminalHandler struct {
 	upgrader   websocket.Upgrader
 	mu         sync.Mutex
 	sessions   map[string]context.CancelFunc
+}
+
+type terminalSessionBinding struct {
+	userID       uint
+	jti          string
+	role         string
+	tokenVersion uint
+	expiresAt    time.Time
 }
 
 func NewTerminalHandler(db *gorm.DB, jwtManager *auth.JWTManager, checkOrigin func(*http.Request) bool) *TerminalHandler {
@@ -108,13 +124,133 @@ func (h *TerminalHandler) promoteSlot(oldID, newID string, cancel context.Cancel
 	h.sessions[newID] = cancel
 }
 
+// validateTerminalSession rechecks every security boundary that can change
+// after a websocket has been upgraded. A database/revocation error is
+// deliberately fatal: keeping an already-authorized shell open while the
+// authority store is unavailable would fail open.
+func (h *TerminalHandler) validateTerminalSession(parent context.Context, binding terminalSessionBinding) error {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if err := parent.Err(); err != nil {
+		return err
+	}
+	if binding.userID == 0 || binding.jti == "" || binding.role == "" || binding.expiresAt.IsZero() {
+		return errors.New("terminal session binding invalid")
+	}
+	if !binding.expiresAt.After(time.Now().UTC()) {
+		return errors.New("terminal session expired")
+	}
+	if h.jwtManager == nil {
+		return errors.New("terminal authentication unavailable")
+	}
+
+	checkCtx, cancel := context.WithTimeout(parent, terminalValidationTimeout)
+	defer cancel()
+	revoked, err := h.jwtManager.IsSessionRevokedContext(checkCtx, binding.jti)
+	if err != nil {
+		return fmt.Errorf("terminal session revocation check failed: %w", err)
+	}
+	if revoked {
+		return errors.New("terminal session revoked")
+	}
+	if h.db == nil {
+		return errors.New("terminal identity store unavailable")
+	}
+	var identity struct {
+		TokenVersion uint
+		Role         string
+	}
+	result := h.db.WithContext(checkCtx).Table("users").
+		Select("token_version", "role").
+		Where("id = ?", binding.userID).
+		Limit(1).
+		Find(&identity)
+	if result.Error != nil {
+		return fmt.Errorf("terminal identity check failed: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("terminal user no longer exists")
+	}
+	if identity.TokenVersion != binding.tokenVersion || identity.Role != binding.role {
+		return errors.New("terminal authorization changed")
+	}
+	if err := checkCtx.Err(); err != nil {
+		return fmt.Errorf("terminal identity check timed out: %w", err)
+	}
+	return nil
+}
+
+// writeTerminalOutput is the sole WriteMessage caller after establishment.
+// WriteControl is intentionally used by closeTerminalConnection because
+// Gorilla permits it concurrently with this writer.
+func writeTerminalOutput(conn *websocket.Conn, payload []byte) error {
+	if conn == nil {
+		return errors.New("terminal websocket unavailable")
+	}
+	if err := conn.SetWriteDeadline(time.Now().Add(terminalWriteTimeout)); err != nil {
+		return err
+	}
+	return conn.WriteMessage(websocket.BinaryMessage, payload)
+}
+
+func closeTerminalConnection(conn *websocket.Conn, code int, reason string) {
+	if conn == nil {
+		return
+	}
+	deadline := time.Now().Add(terminalCloseControlTimeout)
+	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), deadline)
+	// Always close the underlying connection, even when a peer is not reading
+	// and the close control frame cannot be delivered.
+	_ = conn.Close()
+}
+
+// terminalRequestContext returns the request context when available. Audit
+// writes detach from request cancellation below so a peer closing the
+// websocket cannot silently skip the security event.
+func terminalRequestContext(c *gin.Context) context.Context {
+	if c != nil && c.Request != nil {
+		return c.Request.Context()
+	}
+	return context.Background()
+}
+
+func boundedTerminalAuditContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(parent), timeout)
+}
+
+func (h *TerminalHandler) saveTerminalAuditLog(ctx context.Context, entry *model.AuditLog) error {
+	if h.db == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return middleware.SaveAuditLogWithHashChain(h.db.WithContext(ctx), entry)
+}
+
+func logTerminalAuditFailure(action string, err error) {
+	logger.Module("terminal").Warn().
+		Str("action", action).
+		Err(err).
+		Msg("终端审计日志写入失败")
+}
+
 // writeTerminalAuditEntry 写一条非中间件路径的审计日志（dial/auth/PTY 失败等）。
 // Wave 2 (PR-C C4): 之前只有"成功打开 + 关闭"写 audit；失败路径只 log 不留痕，
 // 攻击者用被入侵的 admin token 可以枚举 node_id 探测节点存活而无审计可追溯。
 func (h *TerminalHandler) writeTerminalAuditEntry(c *gin.Context, claims *auth.Claims, action string, statusCode int) {
-	if h.db == nil {
-		return
+	auditCtx, cancel := boundedTerminalAuditContext(terminalRequestContext(c), terminalAuditTimeout)
+	defer cancel()
+	if err := h.writeTerminalAuditEntryContext(auditCtx, c, claims, action, statusCode); err != nil {
+		logTerminalAuditFailure(action, err)
 	}
+}
+
+func (h *TerminalHandler) writeTerminalAuditEntryContext(ctx context.Context, c *gin.Context, claims *auth.Claims, action string, statusCode int) error {
 	username := ""
 	role := ""
 	var userID uint
@@ -123,6 +259,10 @@ func (h *TerminalHandler) writeTerminalAuditEntry(c *gin.Context, claims *auth.C
 		role = claims.Role
 		userID = claims.UserID
 	}
+	clientIP := ""
+	if c != nil {
+		clientIP = c.ClientIP()
+	}
 	entry := model.AuditLog{
 		UserID:     userID,
 		Username:   username,
@@ -130,13 +270,24 @@ func (h *TerminalHandler) writeTerminalAuditEntry(c *gin.Context, claims *auth.C
 		Method:     "WS",
 		Path:       fmt.Sprintf("/api/v1/ws/terminal?action=%s", action),
 		StatusCode: statusCode,
-		ClientIP:   c.ClientIP(),
+		ClientIP:   clientIP,
 		CreatedAt:  time.Now().UTC(),
 	}
-	_ = middleware.SaveAuditLogWithHashChain(h.db, &entry)
+	return h.saveTerminalAuditLog(ctx, &entry)
 }
 
 func (h *TerminalHandler) writeTerminalCredentialAudit(c *gin.Context, claims *auth.Claims, event credentialaudit.Event) {
+	auditCtx, cancel := boundedTerminalAuditContext(terminalRequestContext(c), terminalAuditTimeout)
+	defer cancel()
+	if err := h.writeTerminalCredentialAuditContext(auditCtx, c, claims, event); err != nil {
+		logger.Module("terminal").Warn().
+			Str("action", event.Action).
+			Err(err).
+			Msg("终端凭据审计写入失败")
+	}
+}
+
+func (h *TerminalHandler) writeTerminalCredentialAuditContext(ctx context.Context, c *gin.Context, claims *auth.Claims, event credentialaudit.Event) error {
 	if claims != nil {
 		if event.UserID == 0 {
 			event.UserID = claims.UserID
@@ -148,7 +299,13 @@ func (h *TerminalHandler) writeTerminalCredentialAudit(c *gin.Context, claims *a
 			event.Role = claims.Role
 		}
 	}
-	writeCredentialAuditFromGin(c, h.db, event)
+	if h.db == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return credentialaudit.Write(h.db.WithContext(ctx), credentialaudit.FromGin(c, event))
 }
 
 // ServeTerminal godoc
@@ -330,8 +487,11 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	}
 
 	addr := net.JoinHostPort(node.Host, strconv.Itoa(node.Port))
-	ctx, cancel := context.WithTimeout(context.Background(), terminalSessionTimeout)
-
+	sessionDeadline := time.Now().Add(terminalSessionTimeout)
+	if claims.ExpiresAt != nil && claims.ExpiresAt.Before(sessionDeadline) {
+		sessionDeadline = claims.ExpiresAt.Time
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), sessionDeadline)
 	dialStartedAt := time.Now()
 	sshClient, err := sshutil.DialSSH(ctx, addr, node.Username, authMethods, hostKeyCallback)
 	if err != nil {
@@ -395,8 +555,8 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	}
 	if err := session.RequestPty("xterm-256color", 24, 80, modes); err != nil {
 		cancel()
-		_ = session.Close()
 		_ = sshClient.Close()
+		_ = session.Close()
 		log.Printf("warn: terminal: 请求 PTY 失败 (node=%d)", node.ID)
 		h.writeTerminalAuditEntry(c, claims, "pty-failed", http.StatusInternalServerError)
 		h.writeTerminalCredentialAudit(c, claims, credentialaudit.Event{
@@ -423,8 +583,8 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	sshStdin, err := session.StdinPipe()
 	if err != nil {
 		cancel()
-		_ = session.Close()
 		_ = sshClient.Close()
+		_ = session.Close()
 		h.writeTerminalCredentialAudit(c, claims, credentialaudit.Event{
 			Action:           "terminal.failure",
 			Purpose:          sshutil.PurposeTerminal,
@@ -445,8 +605,8 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	sshStdout, err := session.StdoutPipe()
 	if err != nil {
 		cancel()
-		_ = session.Close()
 		_ = sshClient.Close()
+		_ = session.Close()
 		h.writeTerminalCredentialAudit(c, claims, credentialaudit.Event{
 			Action:           "terminal.failure",
 			Purpose:          sshutil.PurposeTerminal,
@@ -468,8 +628,8 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	// 启动 shell
 	if err := session.Shell(); err != nil {
 		cancel()
-		_ = session.Close()
 		_ = sshClient.Close()
+		_ = session.Close()
 		log.Printf("warn: terminal: 启动 Shell 失败 (node=%d)", node.ID)
 		h.writeTerminalAuditEntry(c, claims, "shell-failed", http.StatusInternalServerError)
 		h.writeTerminalCredentialAudit(c, claims, credentialaudit.Event{
@@ -495,6 +655,24 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	// 清除认证阶段的读取超时
 	_ = conn.SetReadDeadline(time.Time{})
 
+	sessionBinding := terminalSessionBinding{
+		userID:       claims.UserID,
+		jti:          claims.ID,
+		role:         claims.Role,
+		tokenVersion: claims.TokenVersion,
+		expiresAt:    claims.ExpiresAt.UTC(),
+	}
+	if err := h.validateTerminalSession(ctx, sessionBinding); err != nil {
+		log.Printf("warn: terminal: 会话授权在建立后失效 (node=%d)", node.ID)
+		cancel()
+		_ = sshClient.Close()
+		_ = session.Close()
+		h.writeTerminalAuditEntry(c, claims, "session-validation-failed", http.StatusUnauthorized)
+		freePending()
+		closeTerminalConnection(conn, websocket.ClosePolicyViolation, "终端授权已失效")
+		return
+	}
+
 	// 审计日志：terminal.open
 	clientIP := c.ClientIP()
 	openEntry := model.AuditLog{
@@ -507,7 +685,11 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		ClientIP:   clientIP,
 		CreatedAt:  time.Now().UTC(),
 	}
-	_ = middleware.SaveAuditLogWithHashChain(h.db, &openEntry)
+	openAuditCtx, cancelOpenAudit := boundedTerminalAuditContext(terminalRequestContext(c), terminalAuditTimeout)
+	if err := h.saveTerminalAuditLog(openAuditCtx, &openEntry); err != nil {
+		logTerminalAuditFailure("open", err)
+	}
+	cancelOpenAudit()
 
 	// 注册会话：把先前 reserveSlotID 的占位 ID 替换为真正 sessionID + cancel。
 	// 自此 pendingID 已被 promoteSlot 删除，无需再 freePending。
@@ -532,20 +714,24 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	var closeOnce sync.Once
 	cleanup := func() {
 		closeOnce.Do(func() {
+			var sessionCancel context.CancelFunc
 			h.mu.Lock()
-			if fn, ok := h.sessions[sessionID]; ok {
-				fn()
-				delete(h.sessions, sessionID)
-			}
+			sessionCancel = h.sessions[sessionID]
+			delete(h.sessions, sessionID)
 			h.mu.Unlock()
-			_ = session.Close()
+			if sessionCancel != nil {
+				sessionCancel()
+			}
 			_ = sshClient.Close()
-			// 发送正常关闭帧，让前端收到 code 1000 以便自动关闭弹窗
-			_ = conn.WriteMessage(websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-			_ = conn.Close()
+			_ = session.Close()
+			// WriteControl is safe alongside the single output writer and has an
+			// explicit deadline; Close guarantees release when the peer is stuck.
+			closeTerminalConnection(conn, websocket.CloseNormalClosure, "")
 
-			// 审计日志：terminal.close
+			// 审计日志：terminal.close。传输已经先安全关闭，审计使用独立的
+			// 有界上下文，因此数据库或哈希链锁阻塞不会悬挂终端 worker。
+			closeAuditCtx, cancelCloseAudit := boundedTerminalAuditContext(ctx, terminalCloseAuditTimeout)
+			defer cancelCloseAudit()
 			closeEntry := model.AuditLog{
 				UserID:     claims.UserID,
 				Username:   claims.Username,
@@ -556,8 +742,10 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 				ClientIP:   clientIP,
 				CreatedAt:  time.Now().UTC(),
 			}
-			_ = middleware.SaveAuditLogWithHashChain(h.db, &closeEntry)
-			h.writeTerminalCredentialAudit(c, claims, credentialaudit.Event{
+			if err := h.saveTerminalAuditLog(closeAuditCtx, &closeEntry); err != nil {
+				logTerminalAuditFailure("close", err)
+			}
+			if err := h.writeTerminalCredentialAuditContext(closeAuditCtx, c, claims, credentialaudit.Event{
 				Action:           "terminal.close",
 				Purpose:          sshutil.PurposeTerminal,
 				CredentialKind:   credential.Kind,
@@ -570,18 +758,27 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 					"session_id":  sessionID,
 					"duration_ms": int(time.Since(sessionOpenedAt).Milliseconds()),
 				},
-			})
+			}); err != nil {
+				logger.Module("terminal").Warn().
+					Str("action", "terminal.close").
+					Err(err).
+					Msg("终端凭据审计写入失败")
+			}
 		})
 	}
 
+	var workers sync.WaitGroup
+	workers.Add(2)
+
 	// SSH stdout → WebSocket（二进制帧）
 	go func() {
+		defer workers.Done()
 		defer cleanup()
 		buf := make([]byte, 4096)
 		for {
 			n, readErr := sshStdout.Read(buf)
 			if n > 0 {
-				if writeErr := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); writeErr != nil {
+				if writeErr := writeTerminalOutput(conn, buf[:n]); writeErr != nil {
 					return
 				}
 			}
@@ -594,16 +791,35 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		}
 	}()
 
-	// 超时监控
+	// Periodic validation closes established shells after durable revocation or
+	// identity changes, including changes made in another process.
 	go func() {
-		<-ctx.Done()
-		cleanup()
+		defer workers.Done()
+		defer cleanup()
+		ticker := time.NewTicker(terminalValidationInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := h.validateTerminalSession(ctx, sessionBinding); err != nil {
+					log.Printf("info: terminal: 会话授权检查失败，关闭终端 (node=%d)", node.ID)
+					return
+				}
+			}
+		}
 	}()
 
 	// WebSocket → SSH stdin（主循环，阻塞直到连接关闭）
 	for {
 		msgType, data, readErr := conn.ReadMessage()
 		if readErr != nil {
+			break
+		}
+		// Revalidate immediately before forwarding any client input. This closes
+		// the revoke/input race as tightly as possible without an event bus.
+		if err := h.validateTerminalSession(ctx, sessionBinding); err != nil {
 			break
 		}
 
@@ -631,4 +847,5 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 	}
 
 	cleanup()
+	workers.Wait()
 }

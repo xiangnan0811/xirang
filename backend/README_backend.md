@@ -22,6 +22,24 @@
 
 非 GA 的本地 `asset-worker` Compose profile 使用两个独立 socket volume：Core 同时挂载 `asset-worker-updater-runtime` 与嵌套的 `asset-worker-worker-runtime`，parser 只读挂载后者且不加入 updater GID，updater 只读挂载前者；双方都看不到对方的 socket 或 secret。Worker 没有稳定公共镜像，也不会由本功能发布到 Docker Hub/GitHub Release；普通 Core-only Compose 与 `10761` 端口不变。
 
+## Legacy backup safety and task lifecycle
+
+- Legacy Rsync and Rclone targets are mutable current backup trees, not historical recovery points. Retention refuses destructive age-based cleanup and records the reason in task logs/audit. Managed recovery-point retention and Restic snapshot retention keep their existing ownership gates.
+- Legacy Rsync restore transfers the actual Core-local backup to the selected node over SSH. A missing Core source fails before transfer; a same-named node directory is never a fallback source. Policy exclusion rules apply to backup transfer arguments, not restore.
+- Skip-next is consumed only at execution entry for cron runs, including a flag set before scheduling or while queued. Manual execution does not consume it. Each policy-associated task owns its own flag.
+- A busy downstream task leaves its durable chain effect retryable rather than acknowledging a nonexistent child run, including competing Core instances at the reservation boundary. Disabled or archived downstream tasks retain an explicit skipped child run. Retry exhaustion remains a failed effect; restart/replay must not duplicate an existing upstream/downstream edge.
+- Automatic recovery alerts are bounded by the ordinary task run that caused them. Delayed success must not resolve newer failures, and delayed failure must not reopen a fault superseded by recovery. Manual alert resolution remains an explicit separate action.
+- Established SSH terminals expire no later than their JWT or the terminal session limit. They recheck persisted revocation and current user authority periodically and before forwarding input, failing closed when authority cannot be checked. Closing a terminal uses bounded WebSocket control writes and closes the SSH transport before waiting for workers.
+- Managed publication finalization receives a fresh cleanup budget after the provider returns. Persistence failure must still release process admission; unknown provider outcomes remain unknown and must not be blindly retried. Password verification, including disabling TOTP, compares the original password bytes.
+
+Migration `000082_task_run_cron_provenance` adds private, immutable scheduled-occurrence and executed-backup configuration facts. Drain old Core processes before upgrading; do not mix old writers with the new scheduler.
+
+A replay of the same task/cron occurrence cannot create another execution after skip consumption. An occurrence committed as pending before a crash is reclaimed after the previous execution lease expires and enters through the same skip-next transaction. Running or unknown-outcome occurrences are not blindly replayed.
+
+Legacy Rsync restore requires a successful ordinary backup whose recorded fingerprint matches the current source, node configuration, and policy-owned execution inputs, including exclusions, hooks, and application-profile binding. Historical rows are not assigned guessed fingerprints: after upgrade, or after changing these inputs, run a new successful backup before using legacy restore (`new-backup-required` otherwise). This does not remove historical backup files or replace managed recovery-point restore. Downgrade is refused once either new identity field has been populated.
+
+Automatic alert replay is idempotent per task/run/action independently of the configurable notification deduplication window, including already acknowledged or manually resolved alerts. Restore alerts recover only through a later successful restore; ordinary backup and restore failures never resolve each other. Terminal close auditing shares a bounded budget and logs persistence failures without keeping the closed shell handler alive indefinitely.
+
 ## 快速运行
 
 ```bash
@@ -424,7 +442,7 @@ Updater receipt 只在独立 Unix socket `/run/xirang/asset-worker-updater.sock`
 
 ## 数据库
 
-支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000081_batch_command_idempotency`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
+支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000082_task_run_cron_provenance`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
 
 本次审计整改增加 000078（单次两步登录、绑定会话、离线恢复审计）、000079（普通 TaskRun 执行租约、原子收尾和可恢复效果）与 000081（批次幂等及派发回执）。升级前停止并排空旧服务/执行进程，备份数据库及加密密钥；不得混跑旧的非租约执行器。历史未完成 TOTP 初始化在升级时失效，已启用的 TOTP 不受影响。历史重复 `(task_id, upstream_task_run_id)` 在标记 dirty 前拒绝升级，必须先离线核对真实执行历史，不得猜测去重。
 

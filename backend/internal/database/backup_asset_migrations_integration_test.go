@@ -57,7 +57,7 @@ const (
 	backupAssetPlainTextContentVersion          = 73
 	drillDurableRecoveryVersion                 = 74
 	rcloneNativeVersionEvidenceMigrationVersion = 75
-	latestMigrationVersion                      = 81
+	latestMigrationVersion                      = 82
 	recoveryEmptyDeleteSetDigest                = "3f5a5d5213612b170da6ce2f2f90775a31d4e40269bb785042589af64011b7cf"
 	recoveryClaimSchedulerRowID                 = "0000000000000000000000000000006a"
 	recoveryTakeoverSchedulerRowID              = "0000000000000000000000000000006b"
