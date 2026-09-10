@@ -9,20 +9,34 @@ import (
 	"testing"
 
 	"gorm.io/gorm"
+	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/model"
 	taskexec "xirang/backend/internal/task/executor"
 )
 
 type noStartCompatibilityExecutor struct {
-	err error
+	err   error
+	calls int
 }
 
 func (e *noStartCompatibilityExecutor) Run(context.Context, model.Task, taskexec.LogFunc, taskexec.ProgressFunc) (int, error) {
+	e.calls++
 	return -1, &taskexec.NoProcessStartError{Err: e.err}
 }
 
 func (e *noStartCompatibilityExecutor) RsyncBinary() string {
 	return "rsync"
+}
+
+type contextAwareCompatibilityCoordinator struct {
+	execution publication.Execution
+}
+
+func (c *contextAwareCompatibilityCoordinator) Prepare(ctx context.Context, _ publication.Run) (publication.Execution, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return c.execution, nil
 }
 
 func TestLegacyRsyncNoStartFailurePreservesVerifiedGeneration(t *testing.T) {
@@ -142,5 +156,64 @@ func runLegacyRsyncCancellationAfterCaptureBeforeStart(t *testing.T, db *gorm.DB
 	}
 	if _, err := manager.loadRestoreTaskWithProvenance(context.Background(), taskEntity.ID); err != nil {
 		t.Fatalf("capture-boundary cancellation displaced verified generation: %v", err)
+	}
+}
+func TestLegacyRsyncPublicationPrepareCancellationPreservesVerifiedGeneration(t *testing.T) {
+	rsyncBinary, err := exec.LookPath("rsync")
+	if err != nil {
+		t.Skip("rsync is not installed")
+	}
+	runLegacyRsyncPublicationPrepareCancellation(t, openManagerTestDB(t), rsyncBinary)
+}
+
+func TestLegacyRsyncPublicationPrepareCancellationPreservesVerifiedGenerationPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	rsyncBinary, err := exec.LookPath("rsync")
+	if err != nil {
+		t.Skip("rsync is not installed")
+	}
+	db := openTaskTerminalPostgresDB(t, dsn)
+	if err := db.AutoMigrate(&model.RestoreDrillEvidence{}, &model.CredentialAuditEvent{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}, &model.TaskTrafficSample{}, &model.AlertDelivery{}); err != nil {
+		t.Fatalf("migrate isolated PostgreSQL manager tables: %v", err)
+	}
+	runLegacyRsyncPublicationPrepareCancellation(t, db, rsyncBinary)
+}
+
+func runLegacyRsyncPublicationPrepareCancellation(t *testing.T, db *gorm.DB, rsyncBinary string) {
+	t.Helper()
+	taskEntity := seedTaskForManagerTest(t, db)
+	if err := os.WriteFile(taskEntity.RsyncSource+"payload", []byte("verified-generation-payload"), 0o644); err != nil {
+		t.Fatalf("seed source payload: %v", err)
+	}
+	manager := NewManager(db, taskexec.NewFactory(rsyncBinary), nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+	firstRunID := createTestTaskRun(t, db, taskEntity.ID, "manual")
+	manager.runTask(taskEntity.ID, firstRunID, "manual", generateChainRunID())
+	firstRun := waitTaskRunTerminal(t, db, firstRunID)
+	if firstRun.Status != model.TaskRunStatusSuccess || firstRun.BackupGenerationState != model.TaskRunGenerationStateVerified {
+		t.Fatalf("initial generation status=%q state=%q error=%q", firstRun.Status, firstRun.BackupGenerationState, firstRun.LastError)
+	}
+
+	invocation := &noStartCompatibilityExecutor{err: errors.New("FAKE_PUBLICATION_PREPARE_SHOULD_NOT_INVOKE_EXECUTOR")}
+	manager.executorFactory = stubExecutorFactory{executor: invocation}
+	manager.publicationCoordinator = &contextAwareCompatibilityCoordinator{
+		execution: &publicationExecutionFake{mode: publication.ModeCompatibility},
+	}
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	manager.afterLegacyRsyncGenerationArm = cancel
+	secondRunID := createTestTaskRun(t, db, taskEntity.ID, "manual")
+	manager.runTaskWithContext(taskEntity.ID, secondRunID, "manual", generateChainRunID(), cancelCtx, nil, cancel)
+	secondRun := waitTaskRunTerminal(t, db, secondRunID)
+	if invocation.calls != 0 {
+		t.Fatalf("publication preparation cancellation invoked executor %d times", invocation.calls)
+	}
+	if secondRun.Status != model.TaskRunStatusCanceled || secondRun.BackupGenerationState != "" {
+		t.Fatalf("publication preparation cancellation status=%q state=%q error=%q", secondRun.Status, secondRun.BackupGenerationState, secondRun.LastError)
+	}
+	if _, err := manager.loadRestoreTaskWithProvenance(context.Background(), taskEntity.ID); err != nil {
+		t.Fatalf("authoritative verified generation was displaced by publication preparation cancellation: %v", err)
 	}
 }

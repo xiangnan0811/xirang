@@ -581,7 +581,7 @@ func (h *AlertHandler) RetryDelivery(c *gin.Context) {
 
 	delivery, err := h.getAlertDispatcher().RetryDelivery(c.Request.Context(), alert.ID, integration.ID)
 	if err != nil && errors.Is(err, gorm.ErrRecordNotFound) {
-		respondNotFound(c, "告警或通知通道不存在")
+		respondNotFound(c, "告警、通知通道或投递意图不存在")
 		return
 	}
 	if err != nil && delivery.ID == 0 {

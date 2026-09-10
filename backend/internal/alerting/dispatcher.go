@@ -1491,6 +1491,9 @@ func (d *Dispatcher) RetryDelivery(ctx context.Context, alertID, integrationID u
 		err := tx.Where("alert_id = ? AND integration_id = ?", alertID, integrationID).
 			Order("id DESC").First(&intent).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if strings.TrimSpace(alert.DeliveryDecision) == model.AlertDeliveryDecisionEscalated {
+				return gorm.ErrRecordNotFound
+			}
 			var ensureErr error
 			intent, ensureErr = ensureDeliveryIntentTx(tx, alert.ID, integrationID)
 			return ensureErr

@@ -669,9 +669,13 @@ func (m *Manager) runTaskWithContext(
 	exitCode, err := providerResult.ExitCode, providerResult.Err
 	suppressRetry := providerResult.SuppressRetry
 
-	if captureAttempted && !providerResult.Managed {
-		var noStartErr *executor.NoProcessStartError
-		if errors.As(err, &noStartErr) {
+	if captureAttempted {
+		noProcessStart := providerResult.ExecutorNotInvoked
+		if !noProcessStart && !providerResult.Managed {
+			var noStartErr *executor.NoProcessStartError
+			noProcessStart = errors.As(err, &noStartErr)
+		}
+		if noProcessStart {
 			if clearErr := m.clearLegacyRsyncGenerationAfterNoStart(taskID, runID); clearErr != nil {
 				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(clearErr).Msg("Rsync 无启动代际闩锁清除失败")
 			}

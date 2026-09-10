@@ -482,6 +482,61 @@ func TestAlertRetryDeliveryFailed(t *testing.T) {
 	}
 }
 
+func TestAlertRetryDeliveryEscalatedWithoutIntentDoesNotCreateDirect(t *testing.T) {
+	db := openAlertHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.Alert{}, &model.AlertDelivery{}, &model.Integration{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	var sends int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&sends, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	alert := model.Alert{
+		NodeID: 1, NodeName: "node-escalated-no-intent", Severity: "critical", Status: "open",
+		ErrorCode: "XR-ESCALATED-NO-INTENT", Message: "waiting for escalation", TriggeredAt: time.Now(),
+		DeliveryDecision: model.AlertDeliveryDecisionEscalated,
+		DeliveryReason:   model.AlertDeliveryReasonEscalation,
+	}
+	if err := db.Create(&alert).Error; err != nil {
+		t.Fatalf("创建升级告警失败: %v", err)
+	}
+	integration := model.Integration{
+		Type: "webhook", Name: "webhook-escalated-no-intent", Endpoint: server.URL,
+		Enabled: true, FailThreshold: 1, CooldownMinutes: 0,
+	}
+	if err := db.Create(&integration).Error; err != nil {
+		t.Fatalf("创建通知通道失败: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	handler := NewAlertHandler(db)
+	r.POST("/alerts/:id/retry-delivery", handler.RetryDelivery)
+	body := strings.NewReader(fmt.Sprintf(`{"integration_id":%d}`, integration.ID))
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/alerts/%d/retry-delivery", alert.ID), body)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("无升级投递意图时应返回 404，实际: %d，body=%s", resp.Code, resp.Body.String())
+	}
+	if atomic.LoadInt64(&sends) != 0 {
+		t.Fatalf("无升级投递意图时发送数=%d，want 0", atomic.LoadInt64(&sends))
+	}
+	var intentCount int64
+	if err := db.Model(&model.AlertDelivery{}).Where("alert_id = ?", alert.ID).Count(&intentCount).Error; err != nil {
+		t.Fatalf("查询升级投递意图失败: %v", err)
+	}
+	if intentCount != 0 {
+		t.Fatalf("无升级投递意图时创建了 %d 条 direct 投递", intentCount)
+	}
+}
+
 func TestAlertRetryFailedDeliveriesMixedResult(t *testing.T) {
 	db := openAlertHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Alert{}, &model.AlertDelivery{}, &model.Integration{}); err != nil {
