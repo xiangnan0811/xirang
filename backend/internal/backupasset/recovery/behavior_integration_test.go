@@ -361,11 +361,7 @@ func TestRecoveryBehaviorPostgres(t *testing.T) {
 					t.Fatal(err)
 				}
 				taskEntity.Status = "success"
-				if err := fixture.db.Create(&model.TaskRun{
-					TaskID: taskEntity.ID, TriggerType: "manual", Status: "success",
-				}).Error; err != nil {
-					t.Fatal(err)
-				}
+				seedRecoveryBehaviorSuccessfulBackupRun(t, fixture.db, taskEntity.ID)
 
 				executor := &recoveryBehaviorTrackingExecutor{}
 				manager := task.NewManager(
@@ -1081,11 +1077,7 @@ func testRecoveryBehaviorStopAfterEntryCommit(
 		t.Fatal(err)
 	}
 	if legacyRestore {
-		if err := fixture.db.Create(&model.TaskRun{
-			TaskID: taskEntity.ID, TriggerType: "manual", Status: "success",
-		}).Error; err != nil {
-			t.Fatal(err)
-		}
+		seedRecoveryBehaviorSuccessfulBackupRun(t, fixture.db, taskEntity.ID)
 	}
 	var previous model.Task
 	if err := fixture.db.First(&previous, taskEntity.ID).Error; err != nil {
@@ -1541,6 +1533,26 @@ func seedRecoveryBehaviorNodeTask(t *testing.T, db *gorm.DB, suffix string) (mod
 		t.Fatal(err)
 	}
 	return node, taskEntity
+}
+
+func seedRecoveryBehaviorSuccessfulBackupRun(t *testing.T, db *gorm.DB, taskID uint) {
+	t.Helper()
+	var taskEntity model.Task
+	if err := db.Preload("Node").Preload("Policy").First(&taskEntity, taskID).Error; err != nil {
+		t.Fatalf("load successful backup task: %v", err)
+	}
+	fingerprint := model.TaskRunBackupConfigFingerprint(taskEntity)
+	if fingerprint == "" {
+		t.Fatalf("successful backup task %d has empty configuration fingerprint", taskID)
+	}
+	if err := db.Create(&model.TaskRun{
+		TaskID:                  taskID,
+		TriggerType:             "manual",
+		Status:                  model.TaskRunStatusSuccess,
+		BackupConfigFingerprint: fingerprint,
+	}).Error; err != nil {
+		t.Fatalf("create successful backup run: %v", err)
+	}
 }
 
 func reserveRecoveryBehaviorTask(

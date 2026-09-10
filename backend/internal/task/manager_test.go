@@ -1964,6 +1964,9 @@ func TestDirectRunnerCleanupDoesNotDeleteCancelBarrier(t *testing.T) {
 		if _, locked := tx.Statement.Clauses["FOR"]; locked {
 			return
 		}
+		if _, singleTaskDestination := tx.Statement.Dest.(*model.Task); !singleTaskDestination {
+			return
+		}
 		if !blockNextTaskQuery.CompareAndSwap(true, false) {
 			return
 		}
