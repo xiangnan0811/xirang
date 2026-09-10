@@ -16,6 +16,7 @@ import (
 
 	"xirang/backend/internal/alerting"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
@@ -24,6 +25,9 @@ import (
 
 func migrateEscalationDeliveryDB(t *testing.T, db *gorm.DB) {
 	t.Helper()
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "dGVzdC1rZXktZGF0YS1lbmNyeXB0aW9uLWtleS0zMmIh")
+	secure.ResetForTesting()
 	if err := db.AutoMigrate(
 		&model.EscalationPolicy{}, &model.Alert{}, &model.Task{}, &model.Policy{},
 		&model.SLODefinition{}, &model.Node{}, &model.AlertEscalationEvent{},
