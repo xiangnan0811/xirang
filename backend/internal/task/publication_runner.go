@@ -26,14 +26,28 @@ type providerRunResult struct {
 	WarningCode   backupasset.PublicationFailureCode
 }
 
+type publicationFinalization struct {
+	result    providerRunResult
+	finalized bool
+}
+
 func shouldRunLegacyVerification(result providerRunResult, policy *model.Policy) bool {
 	return !result.Managed && policy != nil && policy.VerifyEnabled
+}
+func newPublicationCleanupContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(parent), sshutil.CommandExecutionJoinTimeout)
 }
 
 // executeProvider keeps TaskRun transfer truth separate from asynchronous
 // recovery-point publication. A successful evidence transfer returns as soon
 // as its exact commit fact is durable; manifest work remains with the worker.
-func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, runID uint, reason string, chainRunID string, logf executor.LogFunc, progressf executor.ProgressFunc) providerRunResult {
+func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, runID uint, reason string, chainRunID string, logf executor.LogFunc, progressf executor.ProgressFunc) (providerResult providerRunResult) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if m == nil || m.executorFactory == nil {
 		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: task executor factory unavailable", backupasset.ErrInvalidState)}
 	}
@@ -61,46 +75,60 @@ func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, ru
 		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: nil publication session", backupasset.ErrInvalidState), Managed: true}
 	}
 
-	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), sshutil.CommandExecutionJoinTimeout)
-	defer cleanupCancel()
-	resolved := false
+	// Finalization is complete only after the persistence handoff succeeds and
+	// the execution implementation has released its admission token. A provider
+	// return, or an attempted fallback, is not enough to mark this fact.
+	publicationFinalized := false
 	defer func() {
-		if !resolved && session.Mode() == publication.ModeEvidence {
-			_ = session.Abandon(backupasset.ErrPublicationSessionAbandoned)
+		if publicationFinalized {
+			return
+		}
+		if abandonErr := session.Abandon(backupasset.ErrPublicationSessionAbandoned); abandonErr != nil {
+			providerResult.WarningCode = backupasset.FailurePublicationSessionAbandoned
+			if providerResult.Err == nil {
+				providerResult.Err = abandonErr
+			} else {
+				providerResult.Err = errors.Join(providerResult.Err, abandonErr)
+			}
 		}
 	}()
 
+	rejectPrecondition := func(result providerRunResult) providerRunResult {
+		cleanupCtx, cleanupCancel := newPublicationCleanupContext(ctx)
+		finalization := rejectPublicationPrecondition(cleanupCtx, session, result)
+		cleanupCancel()
+		publicationFinalized = finalization.finalized
+		return finalization.result
+	}
+
 	commandCtx := session.Context()
 	if commandCtx == nil {
-		_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
-		resolved = true
-		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: publication execution context unavailable", backupasset.ErrInvalidState), Managed: true}
+		return rejectPrecondition(providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: publication execution context unavailable", backupasset.ErrInvalidState), Managed: true})
 	}
 	if session.Mode() == publication.ModeCompatibility {
 		exitCode, runErr := exec.Run(commandCtx, taskEntity, logf, progressf)
+		cleanupCtx, cleanupCancel := newPublicationCleanupContext(ctx)
 		completeErr := session.CompleteCompatibility(cleanupCtx)
-		resolved = true
+		cleanupCancel()
+		publicationFinalized = completeErr == nil
 		if runErr != nil {
+			if completeErr != nil {
+				runErr = errors.Join(runErr, completeErr)
+			}
 			return providerRunResult{ExitCode: exitCode, Err: runErr}
 		}
 		return providerRunResult{ExitCode: exitCode, Err: completeErr}
 	}
 	if session.Mode() != publication.ModeEvidence || session.Attempt() == nil {
-		_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
-		resolved = true
-		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: invalid publication evidence session", backupasset.ErrInvalidState), Managed: true}
+		return rejectPrecondition(providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: invalid publication evidence session", backupasset.ErrInvalidState), Managed: true})
 	}
 	publicationExecutor, ok := exec.(executor.PublicationExecutor)
 	if !ok {
-		_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
-		resolved = true
-		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: provider executor has no publication lane", backupasset.ErrInvalidState), Managed: true}
+		return rejectPrecondition(providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: provider executor has no publication lane", backupasset.ErrInvalidState), Managed: true})
 	}
 	attempt := session.Attempt()
 	if attempt == nil {
-		_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
-		resolved = true
-		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: missing tagged publication attempt", backupasset.ErrInvalidState), Managed: true}
+		return rejectPrecondition(providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: missing tagged publication attempt", backupasset.ErrInvalidState), Managed: true})
 	}
 	request := executor.PublicationExecutionRequest{Task: taskEntity, TaskRunID: runID, Attempt: *attempt}
 	recoveryPointID := ""
@@ -108,131 +136,128 @@ func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, ru
 	case "restic":
 		resticAttempt, attemptErr := attempt.ResticAttempt()
 		if attemptErr != nil {
-			_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
-			resolved = true
-			return providerRunResult{ExitCode: -1, Err: attemptErr, Managed: true}
+			return rejectPrecondition(providerRunResult{ExitCode: -1, Err: attemptErr, Managed: true})
 		}
 		recoveryPointID = resticAttempt.RecoveryPointID
 	case "rsync":
 		rsyncAttempt, attemptErr := attempt.RsyncTreeAttempt()
 		if attemptErr != nil {
-			_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
-			resolved = true
-			return providerRunResult{ExitCode: -1, Err: attemptErr, Managed: true}
+			return rejectPrecondition(providerRunResult{ExitCode: -1, Err: attemptErr, Managed: true})
 		}
 		inputProvider, ok := session.(interface {
 			RsyncTreePublicationInput() (provider.RsyncTreePublicationInput, error)
 		})
 		if !ok {
-			_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
-			resolved = true
-			return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: managed Rsync publication input is unavailable", backupasset.ErrInvalidState), Managed: true}
+			return rejectPrecondition(providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: managed Rsync publication input is unavailable", backupasset.ErrInvalidState), Managed: true})
 		}
 		input, inputErr := inputProvider.RsyncTreePublicationInput()
 		if inputErr != nil {
-			_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
-			resolved = true
-			return providerRunResult{ExitCode: -1, Err: inputErr, Managed: true}
+			return rejectPrecondition(providerRunResult{ExitCode: -1, Err: inputErr, Managed: true})
 		}
 		request.RsyncTreeInput = &input
 		recoveryPointID = rsyncAttempt.RecoveryPointID
 	case "rclone":
 		rcloneAttempt, attemptErr := attempt.RcloneAttempt()
 		if attemptErr != nil {
-			_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
-			resolved = true
-			return providerRunResult{ExitCode: -1, Err: attemptErr, Managed: true}
+			return rejectPrecondition(providerRunResult{ExitCode: -1, Err: attemptErr, Managed: true})
 		}
 		inputProvider, ok := session.(interface {
 			RclonePublicationInput() (provider.RclonePublicationInput, error)
 		})
 		if !ok {
-			_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
-			resolved = true
-			return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: managed Rclone publication input is unavailable", backupasset.ErrInvalidState), Managed: true}
+			return rejectPrecondition(providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: managed Rclone publication input is unavailable", backupasset.ErrInvalidState), Managed: true})
 		}
 		input, inputErr := inputProvider.RclonePublicationInput()
 		if inputErr != nil {
-			_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
-			resolved = true
-			return providerRunResult{ExitCode: -1, Err: inputErr, Managed: true}
+			return rejectPrecondition(providerRunResult{ExitCode: -1, Err: inputErr, Managed: true})
 		}
 		request.RcloneInput = &input
 		recoveryPointID = rcloneAttempt.RecoveryPointID
 	default:
-		_ = session.Reject(cleanupCtx, backupasset.FailurePublicationPreconditionMissing)
-		resolved = true
-		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: unsupported managed publication provider", backupasset.ErrInvalidState), Managed: true}
+		return rejectPrecondition(providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: unsupported managed publication provider", backupasset.ErrInvalidState), Managed: true})
 	}
 	result, runErr := publicationExecutor.RunWithPublication(commandCtx, request, logf, progressf)
-	providerResult := m.finishPublicationExecution(cleanupCtx, session, result, runErr)
+
+	// Do not spend the bounded cleanup budget while the Provider is running.
+	// WithoutCancel preserves the audit/dependency values while allowing the
+	// post-provider transaction to receive its own complete join window.
+	cleanupCtx, cleanupCancel := newPublicationCleanupContext(ctx)
+	finalization := m.finishPublicationExecutionState(cleanupCtx, session, result, runErr)
+	cleanupCancel()
+	publicationFinalized = finalization.finalized
+	providerResult = finalization.result
 	if providerResult.WarningCode != "" && logf != nil {
 		logf("warn", fmt.Sprintf("恢复点发布未提交: point_id=%s code=%s", recoveryPointID, providerResult.WarningCode))
 	}
-	resolved = true
 	return providerResult
 }
 
-func (m *Manager) finishPublicationExecution(ctx context.Context, session publication.Execution, result executor.PublicationExecutionResult, runErr error) providerRunResult {
+func rejectPublicationPrecondition(ctx context.Context, session publication.Execution, result providerRunResult) publicationFinalization {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := session.Reject(ctx, backupasset.FailurePublicationPreconditionMissing); err != nil {
+		if result.Err == nil {
+			result.Err = err
+		} else {
+			result.Err = errors.Join(result.Err, err)
+		}
+		return publicationFinalization{result: result}
+	}
+	return publicationFinalization{result: result, finalized: true}
+}
+
+func (m *Manager) finishPublicationExecutionState(ctx context.Context, session publication.Execution, result executor.PublicationExecutionResult, runErr error) publicationFinalization {
 	if session == nil {
-		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: publication execution unavailable", backupasset.ErrInvalidState), Managed: true}
+		return publicationFinalization{result: providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: publication execution unavailable", backupasset.ErrInvalidState), Managed: true}}
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	managed := true
 	switch result.Completion {
 	case backupasset.CompletionKnownExitZero:
 		if result.ExitCode != 0 {
-			_ = session.Reject(ctx, backupasset.FailurePublicationPreconditionMissing)
-			return providerRunResult{ExitCode: result.ExitCode, Err: fmt.Errorf("%w: known exit-zero result has nonzero exit", backupasset.ErrInvalidState), Managed: managed}
+			return rejectPublicationPrecondition(ctx, session, providerRunResult{ExitCode: result.ExitCode, Err: fmt.Errorf("%w: known exit-zero result has nonzero exit", backupasset.ErrInvalidState), Managed: managed})
 		}
 		if runErr != nil {
-			_ = session.Reject(ctx, backupasset.FailurePublicationPreconditionMissing)
-			return providerRunResult{ExitCode: result.ExitCode, Err: runErr, Managed: managed}
+			return rejectPublicationPrecondition(ctx, session, providerRunResult{ExitCode: result.ExitCode, Err: runErr, Managed: managed})
 		}
 		if result.ProviderCommit != nil && result.EvidenceCode == "" {
 			if err := recordPublicationCommit(ctx, session, *result.ProviderCommit); err != nil {
-				cause := backupasset.ErrPublicationSessionAbandoned
-				if errors.Is(err, backupasset.ErrPublicationUnconfirmed) {
-					cause = backupasset.ErrPublicationUnconfirmed
-				}
-				_ = session.Abandon(cause)
-				return providerRunResult{ExitCode: 0, Managed: managed, WarningCode: backupasset.FailurePublicationSessionAbandoned}
+				return publicationFinalization{result: providerRunResult{ExitCode: 0, Managed: managed, WarningCode: backupasset.FailurePublicationSessionAbandoned}}
 			}
-			return providerRunResult{ExitCode: 0, Managed: managed}
+			return publicationFinalization{result: providerRunResult{ExitCode: 0, Managed: managed}, finalized: true}
 		}
 		if result.ProviderCommit != nil || result.EvidenceCode == "" {
-			_ = session.Reject(ctx, backupasset.FailurePublicationPreconditionMissing)
-			return providerRunResult{ExitCode: 0, Err: fmt.Errorf("%w: inconsistent known exit-zero evidence", backupasset.ErrInvalidState), Managed: managed}
+			return rejectPublicationPrecondition(ctx, session, providerRunResult{ExitCode: 0, Err: fmt.Errorf("%w: inconsistent known exit-zero evidence", backupasset.ErrInvalidState), Managed: managed})
 		}
 		if err := session.Defer(ctx, publication.Deferral{Completion: backupasset.CompletionKnownExitZero, Code: result.EvidenceCode}); err != nil {
-			_ = session.Abandon(backupasset.ErrPublicationSessionAbandoned)
-			return providerRunResult{ExitCode: 0, Managed: managed, WarningCode: backupasset.FailurePublicationSessionAbandoned}
+			return publicationFinalization{result: providerRunResult{ExitCode: 0, Err: err, Managed: managed, WarningCode: backupasset.FailurePublicationSessionAbandoned}}
 		}
-		return providerRunResult{ExitCode: 0, Managed: managed, WarningCode: result.EvidenceCode}
+		return publicationFinalization{result: providerRunResult{ExitCode: 0, Managed: managed, WarningCode: result.EvidenceCode}, finalized: true}
 	case backupasset.CompletionKnownNonzero:
 		if result.ExitCode <= 0 || runErr == nil {
-			_ = session.Reject(ctx, backupasset.FailurePublicationPreconditionMissing)
-			return providerRunResult{ExitCode: result.ExitCode, Err: fmt.Errorf("%w: inconsistent known nonzero evidence", backupasset.ErrInvalidState), Managed: managed}
+			return rejectPublicationPrecondition(ctx, session, providerRunResult{ExitCode: result.ExitCode, Err: fmt.Errorf("%w: inconsistent known nonzero evidence", backupasset.ErrInvalidState), Managed: managed})
 		}
 		if err := session.Fail(ctx, backupasset.FailureProviderNonzeroExit); err != nil {
-			return providerRunResult{ExitCode: result.ExitCode, Err: err, Managed: managed}
+			return publicationFinalization{result: providerRunResult{ExitCode: result.ExitCode, Err: errors.Join(runErr, err), Managed: managed}}
 		}
-		return providerRunResult{ExitCode: result.ExitCode, Err: runErr, Managed: managed}
+		return publicationFinalization{result: providerRunResult{ExitCode: result.ExitCode, Err: runErr, Managed: managed}, finalized: true}
 	case backupasset.CompletionOutcomeUnknown:
 		if result.ExitCode != provider.UnknownProviderExitCode {
-			_ = session.Reject(ctx, backupasset.FailurePublicationPreconditionMissing)
-			return providerRunResult{ExitCode: result.ExitCode, Err: fmt.Errorf("%w: inconsistent unknown-outcome evidence", backupasset.ErrInvalidState), Managed: managed, SuppressRetry: true}
+			return rejectPublicationPrecondition(ctx, session, providerRunResult{ExitCode: result.ExitCode, Err: fmt.Errorf("%w: inconsistent unknown-outcome evidence", backupasset.ErrInvalidState), Managed: managed, SuppressRetry: true})
 		}
 		code := publicationUnknownOutcomeCode(runErr)
 		if err := session.Defer(ctx, publication.Deferral{Completion: backupasset.CompletionOutcomeUnknown, Code: code}); err != nil {
-			return providerRunResult{ExitCode: result.ExitCode, Err: err, Managed: managed, SuppressRetry: true}
+			return publicationFinalization{result: providerRunResult{ExitCode: result.ExitCode, Err: err, Managed: managed, SuppressRetry: true, WarningCode: backupasset.FailurePublicationSessionAbandoned}}
 		}
 		if runErr == nil {
 			runErr = fmt.Errorf("provider command outcome is unknown")
 		}
-		return providerRunResult{ExitCode: result.ExitCode, Err: runErr, Managed: managed, SuppressRetry: true, WarningCode: code}
+		return publicationFinalization{result: providerRunResult{ExitCode: result.ExitCode, Err: runErr, Managed: managed, SuppressRetry: true, WarningCode: code}, finalized: true}
 	default:
-		_ = session.Reject(ctx, backupasset.FailurePublicationPreconditionMissing)
-		return providerRunResult{ExitCode: result.ExitCode, Err: fmt.Errorf("%w: invalid evidence completion", backupasset.ErrInvalidState), Managed: managed}
+		return rejectPublicationPrecondition(ctx, session, providerRunResult{ExitCode: result.ExitCode, Err: fmt.Errorf("%w: invalid evidence completion", backupasset.ErrInvalidState), Managed: managed})
 	}
 }
 

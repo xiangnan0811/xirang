@@ -13,12 +13,16 @@ const (
 	plainTextContentSchemaVersion              int64 = 73
 	drillDurableRecoverySchemaVersion          int64 = 74
 	lifecycleEffectClaimAuditSlotSchemaVersion int64 = 77
+	taskRunCronProvenanceSchemaVersion         int64 = 82
 )
 
 const lifecycleEffectClaimAuditSlotAdmissionTrigger = "trg_recovery_point_lifecycle_effect_claim_audit_slot_downgrade_admission"
 const lifecycleEffectClaimAuditSlotAdmissionFunction = "recovery_point_lifecycle_effect_claim_audit_slot_downgrade_admission"
 const lifecycleEffectClaimAuditSlotClaimsTable = "recovery_point_lifecycle_effect_claims"
 const lifecycleEffectClaimAuditSlotSlotsTable = "recovery_point_lifecycle_audit_slots"
+
+const taskRunCronProvenanceTrigger = "trg_task_runs_cron_provenance_immutable"
+const taskRunCronProvenanceAdmissionTrigger = "trg_task_runs_cron_provenance_downgrade_admission"
 
 type lifecycleEffectClaimAuditSlotTriggerContract struct {
 	table                                 string
@@ -351,6 +355,57 @@ var drillDurableRecoveryPostgresAdmissionFunctionFragments = []string{
 	"and status in ('pending', 'running', 'retrying')",
 	"raise exception '000074 downgrade blocked: active restore drill exists'",
 }
+var taskRunCronProvenanceSQLiteImmutableFragments = []string{
+	"before update of trigger_type, cron_scheduled_at, backup_config_fingerprint on task_runs",
+	"new.trigger_type is not old.trigger_type",
+	"new.cron_scheduled_at is not old.cron_scheduled_at",
+	"new.backup_config_fingerprint is not old.backup_config_fingerprint",
+	"coalesce(old.backup_config_fingerprint, '') = ''",
+	"coalesce(new.backup_config_fingerprint, '') <> ''",
+	"old.status = 'pending'",
+	"select raise(abort",
+}
+
+var taskRunCronProvenanceSQLiteAdmissionFragments = []string{
+	"before insert on schema_migrations",
+	"when new.version < 82",
+	"exists (select 1 from task_runs where cron_scheduled_at is not null)",
+	"exists (select 1 from task_runs where coalesce(backup_config_fingerprint, '') <> '')",
+	"select raise(abort",
+}
+
+var taskRunCronProvenancePostgresImmutableTriggerFragments = []string{
+	"before update of trigger_type, cron_scheduled_at, backup_config_fingerprint on",
+	"task_runs",
+	"execute function",
+	"task_runs_cron_provenance_immutable_guard()",
+}
+
+var taskRunCronProvenancePostgresImmutableFunctionFragments = []string{
+	"if new.trigger_type is distinct from old.trigger_type",
+	"new.cron_scheduled_at is distinct from old.cron_scheduled_at",
+	"new.backup_config_fingerprint is distinct from old.backup_config_fingerprint",
+	"coalesce(old.backup_config_fingerprint, '') = ''",
+	"coalesce(new.backup_config_fingerprint, '') <> ''",
+	"old.status = 'pending'",
+	"raise exception",
+	"return new",
+}
+
+var taskRunCronProvenancePostgresAdmissionTriggerFragments = []string{
+	"before insert on",
+	"schema_migrations",
+	"execute function",
+	"task_runs_cron_provenance_downgrade_admission()",
+}
+
+var taskRunCronProvenancePostgresAdmissionFunctionFragments = []string{
+	"if new.version < 82 and (",
+	"exists (select 1 from task_runs where cron_scheduled_at is not null)",
+	"exists (select 1 from task_runs where coalesce(backup_config_fingerprint, '') <> '')",
+	"raise exception",
+	"return new",
+}
 
 var plainTextContentSQLiteAdmissionFragments = []string{
 	"before insert on schema_migrations",
@@ -539,6 +594,12 @@ func validateMinimumRecoverySchema(db *sql.DB, dbType string, version int64) err
 		return nil
 	}
 	if err := validateLifecycleEffectClaimAuditSlotSchema(db, dbType); err != nil {
+		return migrationSchemaDriftError(version, err.Error())
+	}
+	if version < taskRunCronProvenanceSchemaVersion {
+		return nil
+	}
+	if err := validateTaskRunCronProvenanceSchema(db, dbType); err != nil {
 		return migrationSchemaDriftError(version, err.Error())
 	}
 
@@ -822,6 +883,92 @@ func validateLifecycleEffectClaimAuditSlotSchema(db *sql.DB, dbType string) erro
 			} else if !strings.Contains(normalizedFunction, "return new") {
 				return errors.New("invalid_lifecycle_effect_claim_audit_slot_trigger")
 			}
+		}
+	}
+	return nil
+}
+
+func validateTaskRunCronProvenanceSchema(db *sql.DB, dbType string) error {
+	for _, column := range []string{"cron_scheduled_at", "backup_config_fingerprint"} {
+		exists, err := migrationColumnExists(db, dbType, "task_runs", column)
+		if err != nil {
+			return errors.New("catalog_query_failed")
+		}
+		if !exists {
+			return errors.New("missing_task_run_cron_provenance_column")
+		}
+	}
+
+	index, err := migrationIndexContractOf(db, dbType, "task_runs", "idx_task_runs_cron_occurrence")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_task_run_cron_occurrence_index")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !migrationIndexUsable(index) || !index.unique ||
+		!sameMigrationIndexColumns(index.columns, []string{"task_id", "cron_scheduled_at"}) {
+		return errors.New("invalid_task_run_cron_occurrence_index")
+	}
+	predicate := normalizeMigrationPredicate(index.predicate)
+	if predicate != "trigger_type='cron'andcron_scheduled_atisnotnull" {
+		return errors.New("invalid_task_run_cron_occurrence_index")
+	}
+
+	for _, trigger := range []struct {
+		table string
+		name  string
+	}{
+		{table: "task_runs", name: taskRunCronProvenanceTrigger},
+		{table: "schema_migrations", name: taskRunCronProvenanceAdmissionTrigger},
+	} {
+		definition, triggerErr := migrationTriggerDefinition(db, dbType, trigger.table, trigger.name)
+		if triggerErr != nil {
+			if errors.Is(triggerErr, sql.ErrNoRows) {
+				return errors.New("missing_task_run_cron_provenance_trigger")
+			}
+			return errors.New("catalog_query_failed")
+		}
+		if dbType == "postgres" {
+			enabled, enabledErr := migrationTriggerEnabled(db, dbType, trigger.table, trigger.name)
+			if enabledErr != nil {
+				return errors.New("catalog_query_failed")
+			}
+			if !enabled {
+				return errors.New("disabled_task_run_cron_provenance_trigger")
+			}
+		}
+
+		var triggerFragments []string
+		var functionFragments []string
+		if trigger.name == taskRunCronProvenanceTrigger {
+			if dbType == "postgres" {
+				triggerFragments = taskRunCronProvenancePostgresImmutableTriggerFragments
+				functionFragments = taskRunCronProvenancePostgresImmutableFunctionFragments
+			} else {
+				triggerFragments = taskRunCronProvenanceSQLiteImmutableFragments
+			}
+		} else if dbType == "postgres" {
+			triggerFragments = taskRunCronProvenancePostgresAdmissionTriggerFragments
+			functionFragments = taskRunCronProvenancePostgresAdmissionFunctionFragments
+		} else {
+			triggerFragments = taskRunCronProvenanceSQLiteAdmissionFragments
+		}
+		if !containsMigrationFragments(normalizeMigrationDefinition(definition), triggerFragments) {
+			return errors.New("invalid_task_run_cron_provenance_trigger")
+		}
+		if dbType != "postgres" {
+			continue
+		}
+		functionDefinition, functionErr := migrationTriggerFunctionDefinition(db, trigger.table, trigger.name)
+		if functionErr != nil {
+			if errors.Is(functionErr, sql.ErrNoRows) {
+				return errors.New("invalid_task_run_cron_provenance_trigger")
+			}
+			return errors.New("catalog_query_failed")
+		}
+		if !containsMigrationFragments(normalizeMigrationDefinition(functionDefinition), functionFragments) {
+			return errors.New("invalid_task_run_cron_provenance_trigger")
 		}
 	}
 	return nil

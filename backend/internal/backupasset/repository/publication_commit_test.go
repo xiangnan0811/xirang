@@ -276,6 +276,51 @@ func TestPublicationMutationRejectsStaleFenceInsideSameTransaction(t *testing.T)
 	}
 	fixture.requirePointStateAndActiveLease(t, resticAttemptForExecution(t, execution).RecoveryPointID, backupasset.RecoveryPointPreparing)
 }
+func TestPublicationFinalizationDatabaseFailureReleasesAdmission(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(publication.Execution) error
+	}{
+		{
+			name: "defer",
+			run: func(execution publication.Execution) error {
+				return execution.Defer(context.Background(), publication.Deferral{
+					Completion: backupasset.CompletionKnownExitZero,
+					Code:       backupasset.FailureEvidenceMissingSummary,
+				})
+			},
+		},
+		{
+			name: "fail",
+			run: func(execution publication.Execution) error {
+				return execution.Fail(context.Background(), backupasset.FailureProviderNonzeroExit)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newPublicationFixture(t, true, publication.AdmissionManaged)
+			fixture.connectExactResticBinding(t)
+			execution, err := fixture.service.Prepare(context.Background(), fixture.run())
+			if err != nil {
+				t.Fatal(err)
+			}
+			sqlDB, err := fixture.db.DB()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := sqlDB.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := test.run(execution); err == nil {
+				t.Fatal("finalization unexpectedly succeeded with a closed database")
+			}
+			if got := fixture.admission.closedCount(); got != 1 {
+				t.Fatalf("finalization database failure leaked admission token: closes=%d", got)
+			}
+		})
+	}
+}
 
 func TestRecordLegacyBlockWritesTypedAuditAndMetricWithoutRawFacts(t *testing.T) {
 	fixture := newPublicationFixture(t, false, publication.AdmissionPristineLegacy)

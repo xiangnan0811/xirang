@@ -3,8 +3,6 @@ package task
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -59,12 +57,10 @@ func (m *Manager) enforceRetentionForPolicy(policy model.Policy) {
 		return
 	}
 
-	cutoff := time.Now().AddDate(0, 0, -policy.RetentionDays)
-
 	for _, task := range tasks {
 		switch strings.ToLower(task.ExecutorType) {
 		case "rsync":
-			m.enforceRsyncRetention(policy, task, cutoff)
+			m.enforceRsyncRetention(policy, task)
 		case "restic":
 			m.enforceResticRetention(policy, task)
 		case "rclone":
@@ -73,14 +69,7 @@ func (m *Manager) enforceRetentionForPolicy(policy model.Policy) {
 	}
 }
 
-// dangerousRoots 禁止执行保留清理的系统根目录
-var dangerousRoots = []string{
-	"/", "/etc", "/usr", "/bin", "/sbin", "/boot", "/dev", "/proc",
-	"/sys", "/lib", "/lib64", "/run", "/var", "/home", "/root", "/tmp",
-}
-
-func (m *Manager) enforceRsyncRetention(policy model.Policy, task model.Task, cutoff time.Time) {
-	log := logger.Module("task")
+func (m *Manager) enforceRsyncRetention(policy model.Policy, task model.Task) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	session, legacy := m.beginRetentionAuthority(ctx, policy, task)
@@ -90,58 +79,7 @@ func (m *Manager) enforceRsyncRetention(policy model.Policy, task model.Task, cu
 	if session != nil {
 		defer func() { _ = session.Close() }()
 	}
-	targetPath := strings.TrimSpace(policy.TargetPath)
-	if targetPath == "" {
-		return
-	}
-
-	// 安全检查：拒绝危险的系统根目录
-	cleanedTarget := filepath.Clean(targetPath)
-	for _, dangerous := range dangerousRoots {
-		if cleanedTarget == dangerous {
-			log.Warn().Str("path", sanitizeTaskLogMessage(targetPath)).Msg("跳过危险的备份目标路径（系统根目录），不执行保留清理")
-			return
-		}
-	}
-
-	entries, err := os.ReadDir(targetPath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Warn().Str("path", sanitizeTaskLogMessage(targetPath)).Str("error", sanitizeTaskRuntimeError(err)).Msg("读取备份目录失败")
-		}
-		return
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		subdirPath := filepath.Join(targetPath, entry.Name())
-
-		// 安全检查：确保子目录路径在目标路径下
-		rel, err := filepath.Rel(targetPath, subdirPath)
-		if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
-			log.Warn().Str("path", sanitizeTaskLogMessage(subdirPath)).Msg("跳过不安全的子目录路径")
-			continue
-		}
-
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-
-		if info.ModTime().Before(cutoff) {
-			log.Info().Str("path", sanitizeTaskLogMessage(subdirPath)).Time("mtime", info.ModTime()).Int("retention_days", policy.RetentionDays).Msg("清理过期备份目录")
-			if err := os.RemoveAll(subdirPath); err != nil {
-				errMsg := sanitizeTaskLastError(fmt.Sprintf("清理过期备份目录失败: %s: %v", subdirPath, err))
-				log.Error().Str("error", sanitizeTaskRuntimeError(err)).Str("path", sanitizeTaskLogMessage(subdirPath)).Msg("清理过期备份目录失败")
-				m.logDispatcher.Dispatch(0, nil, "error", errMsg, "")
-				_ = m.alertDispatcher.RaiseRetentionFailure(policy.ID, policy.Name, task.Node.Name, task.NodeID, errMsg)
-			} else {
-				m.logDispatcher.Dispatch(0, nil, "info", fmt.Sprintf("已清理过期备份 (保留天数: %d)", policy.RetentionDays), "")
-			}
-		}
-	}
+	m.rejectLegacyMutableRetention(ctx, task)
 }
 
 func (m *Manager) enforceResticRetention(policy model.Policy, task model.Task) {
@@ -214,8 +152,6 @@ func (m *Manager) enforceLegacyResticRetention(ctx context.Context, policy model
 }
 
 func (m *Manager) enforceRcloneRetention(policy model.Policy, task model.Task) {
-	log := logger.Module("task")
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	session, legacy := m.beginRetentionAuthority(ctx, policy, task)
@@ -225,32 +161,7 @@ func (m *Manager) enforceRcloneRetention(policy model.Policy, task model.Task) {
 	if session != nil {
 		defer func() { _ = session.Close() }()
 	}
-
-	target := strings.TrimSpace(task.RsyncTarget)
-	if target == "" {
-		return
-	}
-
-	client, err := executor.DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeRetention)
-	if err != nil {
-		log.Warn().Uint("task_id", task.ID).Err(err).Msg("rclone 保留清理: SSH 连接失败")
-		return
-	}
-	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
-
-	rcloneBin := util.GetEnvOrDefault("RCLONE_BINARY", "rclone")
-	minAge := fmt.Sprintf("%dd", policy.RetentionDays)
-	cmd := fmt.Sprintf("%s delete %s --min-age %s -v 2>&1", rcloneBin, shellEscape(target), minAge)
-
-	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
-	if err != nil {
-		errMsg := sanitizeTaskLastError(fmt.Sprintf("rclone 保留清理失败: %v, 输出: %s", err, output))
-		log.Error().Uint("task_id", task.ID).Str("error", sanitizeTaskRuntimeError(err)).Str("output", sanitizeTaskRuntimeOutput(output)).Msg("rclone delete 执行失败")
-		m.logDispatcher.Dispatch(0, nil, "error", errMsg, "")
-		_ = m.alertDispatcher.RaiseRetentionFailure(policy.ID, policy.Name, task.Node.Name, task.NodeID, errMsg)
-	} else {
-		m.logDispatcher.Dispatch(0, nil, "info", fmt.Sprintf("rclone 保留清理完成 (最小年龄: %s)", minAge), "")
-	}
+	m.rejectLegacyMutableRetention(ctx, task)
 }
 
 func (m *Manager) beginRetentionAuthority(ctx context.Context, policy model.Policy, task model.Task) (publication.LineageSession, bool) {
@@ -316,7 +227,16 @@ func (m *Manager) delegateManagedRetention(ctx context.Context, policy model.Pol
 
 func (m *Manager) blockLegacyRetention(ctx context.Context, taskID uint) {
 	m.recordLegacyResticBlock(ctx, taskID, nil, publication.OperationLegacyRetention)
-	logger.Module("task").Warn().Uint("task_id", taskID).Msg("受管保留清理已被安全边界阻止")
+	logger.Module("task").Warn().Uint("task_id", taskID).Msg("保留清理已被安全边界阻止")
+}
+
+func (m *Manager) rejectLegacyMutableRetention(ctx context.Context, task model.Task) {
+	const reason = "旧版可变备份树没有版本年龄证据，已拒绝破坏性保留清理"
+	m.blockLegacyRetention(ctx, task.ID)
+	if m.logDispatcher != nil {
+		m.logDispatcher.Dispatch(task.ID, nil, "warn", reason, task.Status)
+	}
+	logger.Module("task").Warn().Uint("task_id", task.ID).Msg(reason)
 }
 
 // shellEscape delegates to executor.ShellEscape for consistency.

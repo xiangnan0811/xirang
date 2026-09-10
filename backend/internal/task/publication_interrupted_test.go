@@ -24,6 +24,7 @@ func setupInterruptedPublicationRun(t *testing.T) (*Manager, *gorm.DB, model.Tas
 		t.Fatal(err)
 	}
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
 	taskEntity := seedTaskForManagerTest(t, db)
 	startedAt := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
 	if err := db.Model(&model.Task{}).Where("id = ?", taskEntity.ID).Updates(map[string]any{

@@ -51,6 +51,7 @@ func seedDrillNodeWithBackupDir(t *testing.T, db *gorm.DB, name, host, backupDir
 func TestValidateDrillConfigSandboxIsSourceNode(t *testing.T) {
 	db := openDrillTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	node := seedDrillNodeWithBackupDir(t, db, "drill-src-node", "192.168.1.10", "drill-src-bd")
 
@@ -88,6 +89,7 @@ func TestValidateDrillConfigSandboxIsSourceNode(t *testing.T) {
 func TestValidateDrillConfigInvalidRestorePath(t *testing.T) {
 	db := openDrillTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	srcNode := seedDrillNodeWithBackupDir(t, db, "drill-src", "192.168.1.10", "drill-src-bd-2")
 	sandbox := seedDrillNodeWithBackupDir(t, db, "drill-sandbox", "192.168.1.20", "drill-sb-bd-2")
@@ -122,6 +124,7 @@ func TestValidateDrillConfigInvalidRestorePath(t *testing.T) {
 func TestValidateDrillConfigSystemDirectory(t *testing.T) {
 	db := openDrillTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	srcNode := seedDrillNodeWithBackupDir(t, db, "drill-src-sys", "192.168.1.10", "drill-src-bd-sys")
 	sandbox := seedDrillNodeWithBackupDir(t, db, "drill-sb-sys", "192.168.1.20", "drill-sb-bd-sys")
@@ -156,6 +159,7 @@ func TestValidateDrillConfigSystemDirectory(t *testing.T) {
 func TestTransferFilesToSandboxBlocksCredentialSpreading(t *testing.T) {
 	db := openDrillTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	srcNode := model.Node{
 		Name:       "drill-transfer-src",
 		Host:       "192.168.3.10",
@@ -182,6 +186,7 @@ func TestTransferFilesToSandboxBlocksCredentialSpreading(t *testing.T) {
 func TestRestoreBackupToSandboxBlocksBeforeRemoteMutation(t *testing.T) {
 	db := openDrillTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 	srcNode := model.Node{Name: "drill-restore-src", Host: "192.168.3.30", Port: 22, Username: "root", AuthType: "key"}
 	dstNode := model.Node{Name: "drill-restore-sandbox", Host: "192.168.3.40", Port: 22, Username: "root", AuthType: "key"}
 	srcTask := model.Task{
@@ -210,6 +215,7 @@ func TestRestoreBackupToSandboxBlocksBeforeRemoteMutation(t *testing.T) {
 func TestValidateDrillConfigSuccess(t *testing.T) {
 	db := openDrillTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	srcNode := seedDrillNodeWithBackupDir(t, db, "drill-src-ok", "192.168.1.10", "drill-src-bd-ok")
 	sandbox := seedDrillNodeWithBackupDir(t, db, "drill-sb-ok", "192.168.1.20", "drill-sb-bd-ok")
@@ -240,6 +246,7 @@ func TestValidateDrillConfigSuccess(t *testing.T) {
 func TestTriggerDrillPolicyNotFound(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	_, err := m.TriggerDrill(99999, nil)
 	if err == nil {
@@ -254,6 +261,7 @@ func TestTriggerDrillPolicyNotFound(t *testing.T) {
 func TestTriggerDrillNotEnabled(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	policy := model.Policy{
 		Name:         "policy-drill-disabled",
@@ -277,6 +285,7 @@ func TestTriggerDrillNotEnabled(t *testing.T) {
 func TestTriggerDrillNoSandbox(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	policy := model.Policy{
 		Name:              "policy-drill-nosandbox",
@@ -354,6 +363,7 @@ func TestDrillCronMatching(t *testing.T) {
 func TestFindTaskForPolicyNoTasks(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	policy := model.Policy{
 		Name:       "policy-no-tasks",
@@ -376,6 +386,7 @@ func TestFindTaskForPolicyNoTasks(t *testing.T) {
 func TestFindTaskForPolicyWithTasks(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	node := seedDrillNodeWithBackupDir(t, db, "drill-node", "192.168.1.10", "drill-node-bd")
 
@@ -409,6 +420,7 @@ func TestFindTaskForPolicyWithTasks(t *testing.T) {
 func TestFindTaskForPolicyPrefersSuccessful(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	node := seedDrillNodeWithBackupDir(t, db, "drill-node-pref", "192.168.1.10", "drill-node-pref-bd")
 
@@ -453,6 +465,7 @@ func TestFindTaskForPolicyPrefersSuccessful(t *testing.T) {
 func TestDrillSourceIgnoresNonAuthoritativeSuccessRuns(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	nodeA := seedDrillNodeWithBackupDir(t, db, "drill-authority-a", "192.0.2.71", "drill-authority-a")
 	nodeB := seedDrillNodeWithBackupDir(t, db, "drill-authority-b", "192.0.2.72", "drill-authority-b")
@@ -504,6 +517,7 @@ func TestDrillSourceIgnoresNonAuthoritativeSuccessRuns(t *testing.T) {
 func TestTriggerDrillSandboxNotFound(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	invalidNodeID := uint(99998)
 	policy := model.Policy{
@@ -530,6 +544,7 @@ func TestTriggerDrillSandboxNotFound(t *testing.T) {
 func TestValidateDrillConfigMissingSandboxNode(t *testing.T) {
 	db := openManagerTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	policy := model.Policy{
 		Name:             "policy-no-sandbox-validate",
@@ -552,6 +567,7 @@ func TestValidateDrillConfigMissingSandboxNode(t *testing.T) {
 func TestValidateDrillConfigNoTargetNodeID(t *testing.T) {
 	db := openDrillTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	sandbox := seedDrillNodeWithBackupDir(t, db, "drill-sb-notarget", "192.168.1.20", "drill-sb-notarget-bd")
 
@@ -867,7 +883,9 @@ func TestTriggerDrillAcrossManagersAllowsOnlyOneDurableActiveRun(t *testing.T) {
 func TestDrillLeaseHeartbeatFailureStopsBeforeNextRemoteMutation(t *testing.T) {
 	db := openDrillTestDB(t)
 	fixture := setupDrillEvidenceFixture(t, db)
-	fixture.manager.drillRecoveryLease = 30 * time.Millisecond
+	// Keep enough lease lifetime for the valid owner to terminalize after the
+	// failed renewal; this test must exercise renewal loss rather than expiry.
+	fixture.manager.drillRecoveryLease = 2 * time.Second
 	completeInitialDrillRecovery(t, fixture.manager)
 	heartbeatAttempted := make(chan struct{})
 	var heartbeatOnce sync.Once
@@ -878,26 +896,38 @@ func TestDrillLeaseHeartbeatFailureStopsBeforeNextRemoteMutation(t *testing.T) {
 			return
 		}
 		leaseUntil, renewing := updates["recovery_lease_until"]
+		// Only the heartbeat writes a non-nil lease without changing phase
+		// status. Terminal transitions clear the lease and must remain intact.
 		if !renewing || leaseUntil == nil {
 			return
 		}
-		heartbeatOnce.Do(func() { close(heartbeatAttempted) })
-		_ = tx.AddError(errors.New("INTERNAL_DRILL_LEASE_HEARTBEAT_FAILURE_CANARY"))
+		if _, phaseUpdate := updates["status"]; phaseUpdate {
+			return
+		}
+		heartbeatOnce.Do(func() {
+			close(heartbeatAttempted)
+			_ = tx.AddError(errors.New("INTERNAL_DRILL_LEASE_HEARTBEAT_FAILURE_CANARY"))
+		})
 	}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = db.Callback().Update().Remove(callbackName) })
 
 	precheckEntered := make(chan struct{})
 	precheckCanceled := make(chan struct{})
+	precheckRelease := make(chan struct{})
 	var precheckOnce sync.Once
+	var precheckCanceledOnce sync.Once
+	var releasePrecheckOnce sync.Once
+	releasePrecheck := func() {
+		releasePrecheckOnce.Do(func() { close(precheckRelease) })
+	}
 	fixture.manager.drillSSHScriptFunc = func(ctx context.Context, _ model.Node, _ string) error {
 		precheckOnce.Do(func() { close(precheckEntered) })
 		select {
 		case <-ctx.Done():
-			close(precheckCanceled)
+			precheckCanceledOnce.Do(func() { close(precheckCanceled) })
 			return ctx.Err()
-		case <-time.After(time.Second):
+		case <-precheckRelease:
 			return nil
 		}
 	}
@@ -909,8 +939,28 @@ func TestDrillLeaseHeartbeatFailureStopsBeforeNextRemoteMutation(t *testing.T) {
 
 	runID, err := fixture.manager.TriggerDrill(fixture.policy.ID, nil)
 	if err != nil {
+		_ = db.Callback().Update().Remove(callbackName)
 		t.Fatalf("trigger heartbeat-loss drill: %v", err)
 	}
+	runnerDone := make(chan struct{})
+	go func() {
+		fixture.manager.taskWG.Wait()
+		close(runnerDone)
+	}()
+	// Keep the fault callback installed until the runner and its heartbeat
+	// user have joined, including failure paths that invoke test cleanup.
+	t.Cleanup(func() {
+		releasePrecheck()
+		select {
+		case <-runnerDone:
+			if err := db.Callback().Update().Remove(callbackName); err != nil {
+				t.Errorf("remove heartbeat fault callback after runner join: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("runner did not join before heartbeat fault callback cleanup")
+		}
+	})
+
 	select {
 	case <-precheckEntered:
 	case <-time.After(3 * time.Second):
@@ -927,24 +977,23 @@ func TestDrillLeaseHeartbeatFailureStopsBeforeNextRemoteMutation(t *testing.T) {
 		t.Fatal("runner context remained live after the durable lease heartbeat failed")
 	}
 	select {
+	case <-runnerDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("lease-loss runner did not join after cancellation")
+	}
+	select {
 	case <-restoreCalled:
 		t.Fatal("runner continued to the restore mutation after losing its durable lease")
-	case <-time.After(150 * time.Millisecond):
+	default:
 	}
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		var run model.TaskRun
-		if err := db.First(&run, runID).Error; err != nil {
-			t.Fatal(err)
-		}
-		_, owned := fixture.manager.pendingRuns.Load(fixture.task.ID)
-		if model.IsTerminalTaskRunStatus(run.Status) && !owned {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("lease-loss runner did not reach a durable terminal before cleanup: status=%q owned=%v", run.Status, owned)
-		}
-		time.Sleep(10 * time.Millisecond)
+
+	var run model.TaskRun
+	if err := db.First(&run, runID).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, owned := fixture.manager.pendingRuns.Load(fixture.task.ID)
+	if !model.IsTerminalTaskRunStatus(run.Status) || owned {
+		t.Fatalf("lease-loss runner did not reach a durable terminal before cleanup: status=%q owned=%v", run.Status, owned)
 	}
 }
 
@@ -2245,6 +2294,7 @@ func TestExecuteDrillRejectsUnsafeCleanupBoundary(t *testing.T) {
 func TestTriggerDrillNoAssociatedTask(t *testing.T) {
 	db := openDrillTestDB(t)
 	m := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, m)
 
 	srcNode := seedDrillNodeWithBackupDir(t, db, "drill-notask-src", "192.168.1.110", "notask-src-bd")
 	sandbox := seedDrillNodeWithBackupDir(t, db, "drill-notask-sb", "192.168.1.210", "notask-sb-bd")

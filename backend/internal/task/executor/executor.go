@@ -23,8 +23,6 @@ import (
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/util"
-
-	"golang.org/x/crypto/ssh"
 )
 
 // tempKeyDir 专用临时目录，用于存放 SSH 私钥临时文件。
@@ -72,7 +70,9 @@ type Executor interface {
 	Run(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error)
 }
 
-// RestoreExecutor 支持恢复操作的执行器。恢复模式下，source 和 target 都在远程节点上。
+// RestoreExecutor supports executor-specific restore operations. Each
+// implementation owns the source/target topology and must preserve its
+// provider's safety boundary.
 type RestoreExecutor interface {
 	RunRestore(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error)
 }
@@ -165,7 +165,7 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 		return -1, fmt.Errorf("同步任务缺少源路径或目标路径")
 	}
 
-	// 备份模式：标准 rsync 执行（本地 -> 远程）
+	// 备份模式：标准 rsync 执行（本地 -> 远程，或远程 -> 本地）。
 	if !util.IsRemotePathSpec(task.RsyncTarget) {
 		if err := EnsureLocalTargetReady(task.RsyncTarget); err != nil {
 			return -1, err
@@ -173,108 +173,38 @@ func (e *RsyncExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, 
 	}
 
 	args := []string{"-avz", "--info=progress2"}
-	source := task.RsyncSource
+	excludes, err := parseRsyncExcludeRules(task.Policy)
+	if err != nil {
+		return -1, err
+	}
+	args = appendRsyncExcludeArgs(args, excludes)
 
+	source := task.RsyncSource
 	cleanup := func() {}
 	if strings.TrimSpace(task.Node.Host) != "" {
-		port := task.Node.Port
-		if port == 0 {
-			port = 22
-		}
-		user := ResolveSSHUser(task.Node)
-
-		authType := strings.ToLower(strings.TrimSpace(task.Node.AuthType))
-		if authType == "password" {
-			return -1, fmt.Errorf("rsync 远程执行暂不支持密码认证，请为节点配置 SSH key")
-		}
-		if authType != "key" {
-			return -1, fmt.Errorf("不支持的认证方式")
-		}
-
-		keyContent, keySource, credential, keyResolveErr := resolveNodePrivateKeyForPurpose(task.Node, sshutil.PurposeTaskBackup)
-		if keyResolveErr != nil {
-			writeRsyncCredentialAudit(ctx, task.Node, credential, credentialaudit.OutcomeBlocked, "key_resolve", keyResolveErr)
-			return -1, keyResolveErr
-		}
-		if keyContent == "" {
-			err := fmt.Errorf("密钥认证未配置，请为节点设置密钥")
-			writeRsyncCredentialAudit(ctx, task.Node, credential, credentialaudit.OutcomeBlocked, "key_resolve", err)
-			return -1, err
-		}
-
-		normalizedKey, _, err := sshutil.ValidateAndPreparePrivateKey(keyContent, sshutil.SSHKeyTypeAuto)
-		if err != nil {
-			_ = keySource // resolved from node or SSH key record
-			auditErr := fmt.Errorf("私钥校验失败，请检查密钥内容是否正确")
-			writeRsyncCredentialAudit(ctx, task.Node, credential, credentialaudit.OutcomeFailure, "key_prepare", auditErr)
-			return -1, auditErr
-		}
-		writeRsyncCredentialAudit(ctx, task.Node, credential, credentialaudit.OutcomeSuccess, "key_prepare", nil)
-
-		sshParts := []string{"ssh", "-p", fmt.Sprintf("%d", port)}
-		strictHostCheck, err := util.ReadBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
+		sshParts, sshCleanup, err := buildRsyncSSHArgs(ctx, task.Node, sshutil.PurposeTaskBackup)
 		if err != nil {
 			return -1, err
 		}
-		if strictHostCheck {
-			knownHosts := util.GetEnvOrDefault("SSH_KNOWN_HOSTS_PATH", "~/.ssh/known_hosts")
-			expandedKnownHosts, err := util.ExpandHomePath(knownHosts)
-			if err != nil {
-				return -1, fmt.Errorf("SSH 主机密钥配置异常，请联系管理员")
-			}
-			autoAccept, _ := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", false)
-			hostKeyMode := "yes"
-			if autoAccept {
-				hostKeyMode = "accept-new"
-			}
-			sshParts = append(sshParts,
-				"-o", fmt.Sprintf("StrictHostKeyChecking=%s", hostKeyMode),
-				"-o", fmt.Sprintf("UserKnownHostsFile=%s", expandedKnownHosts),
-			)
-		} else {
-			sshParts = append(sshParts, "-o", "StrictHostKeyChecking=no")
-		}
-
-		if normalizedKey != "" {
-			if err := ensureTempKeyDir(); err != nil {
-				return -1, fmt.Errorf("准备临时目录失败，请稍候重试")
-			}
-			keyFile, err := os.CreateTemp(tempKeyDir, "xirang-key-*.pem")
-			if err != nil {
-				return -1, fmt.Errorf("准备密钥文件失败，请稍候重试")
-			}
-			if _, err = keyFile.WriteString(normalizedKey); err != nil {
-				_ = keyFile.Close()
-				_ = os.Remove(keyFile.Name())
-				return -1, fmt.Errorf("准备密钥文件失败，请稍候重试")
-			}
-			_ = keyFile.Close()
-			_ = os.Chmod(keyFile.Name(), 0o600)
-			sshParts = append(sshParts, "-i", keyFile.Name())
-			cleanup = func() {
-				_ = os.Remove(keyFile.Name())
-			}
-		}
-
+		cleanup = sshCleanup
 		args = append(args, "-e", strings.Join(sshParts, " "))
 		if NeedsSudo(task.Node) {
 			args = append(args, "--rsync-path", "sudo rsync")
 		}
-		host := task.Node.Host
-		if parsedIP := net.ParseIP(host); parsedIP != nil && strings.Contains(host, ":") {
-			host = "[" + parsedIP.String() + "]"
-		}
-		source = fmt.Sprintf("%s@%s:%s", user, host, task.RsyncSource)
+		source = fmt.Sprintf("%s@%s:%s", ResolveSSHUser(task.Node), formatRsyncHost(task.Node.Host), task.RsyncSource)
 	}
 	defer cleanup()
 
-	// 带宽限制：优先使用调度规则，其次使用静态限制
 	if bwLimit := resolveBwLimit(task); bwLimit > 0 {
 		args = append(args, "--bwlimit", fmt.Sprintf("%dk", bwLimit*1000/8))
 	}
 
 	// 使用 `--` 终止参数解析，防止路径内容被解释为 rsync 选项。
 	args = append(args, "--", source, task.RsyncTarget)
+	return e.runRsyncCommand(ctx, args, logf, progressf)
+}
+
+func (e *RsyncExecutor) runRsyncCommand(ctx context.Context, args []string, logf LogFunc, progressf ProgressFunc) (int, error) {
 	cmd := exec.CommandContext(ctx, e.binary, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -329,111 +259,197 @@ func newProgressScanner(reader io.Reader) *bufio.Scanner {
 	return scanner
 }
 
-// RunRestore 实现 RestoreExecutor 接口，在远程节点上执行 rsync 恢复操作。
+// RunRestore implements RestoreExecutor for legacy Rsync. The backup source
+// lives on Core, while the destination lives on the selected managed node.
+// It must never reinterpret the Core path as a path on the node.
 func (e *RsyncExecutor) RunRestore(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
-	return e.runRemoteRestore(ctx, task, logf, progressf)
+	source := strings.TrimSpace(task.RsyncSource)
+	target := strings.TrimSpace(task.RsyncTarget)
+	if source == "" || target == "" {
+		return -1, fmt.Errorf("rsync 恢复任务缺少 Core 备份源或节点目标路径")
+	}
+	if strings.ContainsRune(source, '\x00') || util.IsRemotePathSpec(source) || !filepath.IsAbs(source) {
+		return -1, fmt.Errorf("rsync 恢复源必须是 Core 上的本地绝对路径")
+	}
+	sourceInfo, err := os.Lstat(source)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return -1, fmt.Errorf("core 备份源不存在")
+		}
+		return -1, fmt.Errorf("core 备份源不可用")
+	}
+	source, err = normalizeRsyncRestoreSource(source, sourceInfo)
+	if err != nil {
+		return -1, err
+	}
+	if strings.ContainsRune(target, '\x00') || util.IsRemotePathSpec(target) || !filepath.IsAbs(target) {
+		return -1, fmt.Errorf("rsync 恢复目标必须是节点上的本地绝对路径")
+	}
+	if strings.TrimSpace(task.Node.Host) == "" {
+		return -1, fmt.Errorf("节点地址不能为空")
+	}
+
+	sshParts, cleanup, err := buildRsyncSSHArgs(ctx, task.Node, sshutil.PurposeTaskRestore)
+	if err != nil {
+		return -1, err
+	}
+	defer cleanup()
+
+	args := []string{"-avz", "--info=progress2", "-e", strings.Join(sshParts, " ")}
+	if NeedsSudo(task.Node) {
+		args = append(args, "--rsync-path", "sudo rsync")
+	}
+	if bwLimit := resolveBwLimit(task); bwLimit > 0 {
+		args = append(args, "--bwlimit", fmt.Sprintf("%dk", bwLimit*1000/8))
+	}
+	destination := fmt.Sprintf("%s@%s:%s", ResolveSSHUser(task.Node), formatRsyncHost(task.Node.Host), target)
+	args = append(args, "--", source, destination)
+	logf("info", "从 Core 向远程节点执行恢复命令")
+	return e.runRsyncCommand(ctx, args, logf, progressf)
 }
 
-// runRemoteRestore 在远程节点上执行 rsync 恢复操作。
-// 与标准备份不同，恢复需要在远程节点上执行 rsync source target（两个路径都是节点本地路径）。
-func (e *RsyncExecutor) runRemoteRestore(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
-	client, err := DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeTaskRestore)
-	if err != nil {
-		return -1, fmt.Errorf("SSH 连接失败: %w", err)
-	}
-	defer client.Close() //nolint:errcheck
-
-	session, err := client.NewSession()
-	if err != nil {
-		return -1, fmt.Errorf("创建 SSH 会话失败: %w", err)
-	}
-	defer session.Close() //nolint:errcheck
-
-	// 构造在远程节点上执行的 rsync 命令
-	// 注意：source 和 target 都是节点本地路径
-	bwPart := ""
-	if bwLimit := resolveBwLimit(task); bwLimit > 0 {
-		bwPart = fmt.Sprintf(" --bwlimit %dk", bwLimit*1000/8)
-	}
-	rsyncBin := "rsync"
-	if NeedsSudo(task.Node) {
-		rsyncBin = "sudo rsync"
-	}
-	rsyncCmd := fmt.Sprintf("%s -avz --info=progress2%s -- %s %s",
-		rsyncBin, bwPart,
-		ShellEscape(task.RsyncSource),
-		ShellEscape(task.RsyncTarget))
-
-	logf("info", "在远程节点执行恢复命令")
-
-	stdout, err := session.StdoutPipe()
-	if err != nil {
-		return -1, fmt.Errorf("获取 stdout 失败: %w", err)
-	}
-	stderr, err := session.StderrPipe()
-	if err != nil {
-		return -1, fmt.Errorf("获取 stderr 失败: %w", err)
-	}
-
-	if err := session.Start(rsyncCmd); err != nil {
-		return -1, fmt.Errorf("启动远程命令失败: %w", err)
-	}
-
-	// 处理输出
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		scanner := bufio.NewScanner(stdout)
-		scanner.Split(splitProgressTokens)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if line != "" {
-				logf("info", sanitizeExecutorRuntimeEvidence(line))
-				if progressf != nil {
-					if sample, ok := parseProgressSample(line); ok {
-						progressf(sample)
-					}
-				}
-			}
+func normalizeRsyncRestoreSource(source string, info os.FileInfo) (string, error) {
+	if info.IsDir() {
+		source = filepath.Clean(source)
+		if source != string(filepath.Separator) {
+			source += string(filepath.Separator)
 		}
-	}()
+		return source, nil
+	}
+	if info.Mode().IsRegular() {
+		return source, nil
+	}
+	return "", fmt.Errorf("core 备份源类型不受支持")
+}
 
-	go func() {
-		defer wg.Done()
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if line != "" {
-				logf("warn", sanitizeExecutorRuntimeEvidence(line))
-			}
+const maxRsyncExcludeRuleBytes = 4096
+
+func parseRsyncExcludeRules(policy *model.Policy) ([]string, error) {
+	if policy == nil {
+		return nil, nil
+	}
+	raw := strings.TrimSpace(policy.ExcludeRules)
+	if raw == "" {
+		return nil, nil
+	}
+	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
+	rules := make([]string, 0, len(lines))
+	for _, rule := range lines {
+		if strings.TrimSpace(rule) == "" {
+			continue
 		}
-	}()
+		if !validRsyncExcludeRule(rule) {
+			return nil, fmt.Errorf("rsync 排除规则无效")
+		}
+		rules = append(rules, rule)
+	}
+	return rules, nil
+}
 
-	// 等待命令完成
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- session.Wait()
-	}()
+func validRsyncExcludeRule(rule string) bool {
+	return rule != "" &&
+		strings.TrimSpace(rule) == rule &&
+		len(rule) <= maxRsyncExcludeRuleBytes &&
+		!strings.ContainsRune(rule, '\x00')
+}
 
-	select {
-	case <-ctx.Done():
-		_ = session.Signal(ssh.SIGTERM)
-		time.Sleep(2 * time.Second)
-		_ = session.Signal(ssh.SIGKILL)
-		wg.Wait()
-		return -1, fmt.Errorf("恢复操作被取消")
-	case err := <-errChan:
-		wg.Wait()
+func appendRsyncExcludeArgs(args, rules []string) []string {
+	for _, rule := range rules {
+		args = append(args, "--exclude", rule)
+	}
+	return args
+}
+
+func formatRsyncHost(host string) string {
+	host = strings.TrimSpace(host)
+	if parsedIP := net.ParseIP(host); parsedIP != nil && strings.Contains(host, ":") {
+		return "[" + parsedIP.String() + "]"
+	}
+	return host
+}
+
+func buildRsyncSSHArgs(ctx context.Context, node model.Node, purpose string) ([]string, func(), error) {
+	port := node.Port
+	if port == 0 {
+		port = 22
+	}
+	authType := strings.ToLower(strings.TrimSpace(node.AuthType))
+	if authType == "password" {
+		return nil, func() {}, fmt.Errorf("rsync 远程执行暂不支持密码认证，请为节点配置 SSH key")
+	}
+	if authType != "key" {
+		return nil, func() {}, fmt.Errorf("不支持的认证方式")
+	}
+
+	keyContent, _, credential, keyResolveErr := resolveNodePrivateKeyForPurpose(node, purpose)
+	if keyResolveErr != nil {
+		writeRsyncCredentialAuditForPurpose(ctx, node, credential, purpose, credentialaudit.OutcomeBlocked, "key_resolve", keyResolveErr)
+		return nil, func() {}, keyResolveErr
+	}
+	if keyContent == "" {
+		err := fmt.Errorf("密钥认证未配置，请为节点设置密钥")
+		writeRsyncCredentialAuditForPurpose(ctx, node, credential, purpose, credentialaudit.OutcomeBlocked, "key_resolve", err)
+		return nil, func() {}, err
+	}
+
+	normalizedKey, _, err := sshutil.ValidateAndPreparePrivateKey(keyContent, sshutil.SSHKeyTypeAuto)
+	if err != nil {
+		auditErr := fmt.Errorf("私钥校验失败，请检查密钥内容是否正确")
+		writeRsyncCredentialAuditForPurpose(ctx, node, credential, purpose, credentialaudit.OutcomeFailure, "key_prepare", auditErr)
+		return nil, func() {}, auditErr
+	}
+	writeRsyncCredentialAuditForPurpose(ctx, node, credential, purpose, credentialaudit.OutcomeSuccess, "key_prepare", nil)
+
+	sshParts := []string{"ssh", "-p", fmt.Sprintf("%d", port)}
+	strictHostCheck, err := util.ReadBoolEnv("SSH_STRICT_HOST_KEY_CHECKING", true)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	if strictHostCheck {
+		knownHosts := util.GetEnvOrDefault("SSH_KNOWN_HOSTS_PATH", "~/.ssh/known_hosts")
+		expandedKnownHosts, err := util.ExpandHomePath(knownHosts)
 		if err != nil {
-			if exitErr, ok := err.(*ssh.ExitError); ok {
-				return exitErr.ExitStatus(), fmt.Errorf("rsync 执行失败: %w", err)
-			}
-			return -1, fmt.Errorf("远程命令执行失败: %w", err)
+			return nil, func() {}, fmt.Errorf("SSH 主机密钥配置异常，请联系管理员")
 		}
-		return 0, nil
+		autoAccept, _ := util.ReadBoolEnv("SSH_AUTO_ACCEPT_NEW_HOSTS", false)
+		hostKeyMode := "yes"
+		if autoAccept {
+			hostKeyMode = "accept-new"
+		}
+		sshParts = append(sshParts,
+			"-o", fmt.Sprintf("StrictHostKeyChecking=%s", hostKeyMode),
+			"-o", fmt.Sprintf("UserKnownHostsFile=%s", expandedKnownHosts),
+		)
+	} else {
+		sshParts = append(sshParts, "-o", "StrictHostKeyChecking=no")
 	}
+
+	cleanup := func() {}
+	if normalizedKey != "" {
+		if err := ensureTempKeyDir(); err != nil {
+			return nil, func() {}, fmt.Errorf("准备临时目录失败，请稍候重试")
+		}
+		keyFile, err := os.CreateTemp(tempKeyDir, "xirang-key-*.pem")
+		if err != nil {
+			return nil, func() {}, fmt.Errorf("准备密钥文件失败，请稍候重试")
+		}
+		if _, err = keyFile.WriteString(normalizedKey); err != nil {
+			_ = keyFile.Close()
+			_ = os.Remove(keyFile.Name())
+			return nil, func() {}, fmt.Errorf("准备密钥文件失败，请稍候重试")
+		}
+		if err := keyFile.Close(); err != nil {
+			_ = os.Remove(keyFile.Name())
+			return nil, func() {}, fmt.Errorf("准备密钥文件失败，请稍候重试")
+		}
+		if err := os.Chmod(keyFile.Name(), 0o600); err != nil {
+			_ = os.Remove(keyFile.Name())
+			return nil, func() {}, fmt.Errorf("准备密钥文件失败，请稍候重试")
+		}
+		sshParts = append(sshParts, "-i", keyFile.Name())
+		cleanup = func() { _ = os.Remove(keyFile.Name()) }
+	}
+	return sshParts, cleanup, nil
 }
 
 // ShellEscape 对 shell 参数进行转义，防止命令注入（导出供其他包使用）。
@@ -594,12 +610,24 @@ func resolveNodePrivateKeyForPurpose(node model.Node, purpose string) (string, s
 }
 
 func writeRsyncCredentialAudit(ctx context.Context, node model.Node, credential sshutil.ResolvedCredential, outcome string, stage string, err error) {
+	writeRsyncCredentialAuditForPurpose(ctx, node, credential, sshutil.PurposeTaskBackup, outcome, stage, err)
+}
+
+func writeRsyncCredentialAuditForPurpose(
+	ctx context.Context,
+	node model.Node,
+	credential sshutil.ResolvedCredential,
+	purpose string,
+	outcome string,
+	stage string,
+	err error,
+) {
 	if _, ok := credentialaudit.RuntimeEvent(ctx); !ok {
 		return
 	}
 	event := credentialaudit.Event{
 		Action:           "task.credential.use",
-		Purpose:          sshutil.PurposeTaskBackup,
+		Purpose:          purpose,
 		CredentialKind:   credential.Kind,
 		CredentialSource: credential.Source,
 		SSHKeyID:         credential.KeyID,

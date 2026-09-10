@@ -25,17 +25,23 @@ func authorizeRealtimeToken(token string, jwtManager *auth.JWTManager, db *gorm.
 	if err != nil {
 		return nil, fmt.Errorf("token 无效或过期")
 	}
+	if claims.ID == "" || claims.ExpiresAt == nil || claims.UserID == 0 {
+		return nil, fmt.Errorf("token 会话绑定无效")
+	}
 	if strings.TrimSpace(claims.Purpose) != "" {
 		return nil, fmt.Errorf("认证令牌用途不匹配")
 	}
 
 	if db != nil {
 		var user model.User
-		if err := db.Select("token_version").First(&user, claims.UserID).Error; err != nil {
+		if err := db.Select("token_version", "role").First(&user, claims.UserID).Error; err != nil {
 			return nil, fmt.Errorf("用户不存在或已删除")
 		}
 		if user.TokenVersion != claims.TokenVersion {
 			return nil, fmt.Errorf("token 已失效，请重新登录")
+		}
+		if user.Role != claims.Role {
+			return nil, fmt.Errorf("用户角色已变更，请重新登录")
 		}
 	}
 

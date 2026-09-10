@@ -69,22 +69,36 @@ var (
 	}, []string{"task_name"})
 )
 
-func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, upstreamRunID *uint) (uint, error) {
+func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, upstreamRunID *uint, scheduledAt *time.Time) (uint, error) {
 	if m.shuttingDown.Load() {
-		if reason == "retry" || reason == "cron" || reason == "chain" {
+		if reason == "chain" {
+			return 0, errTaskChainBusy
+		}
+		if reason == "retry" || reason == "cron" {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("系统维护中，请稍候再试")
 	}
+	var cronScheduledAt *time.Time
+	if reason == "cron" {
+		cronScheduledAt = normalizeCronOccurrence(scheduledAt)
+		if cronScheduledAt == nil {
+			return 0, fmt.Errorf("cron occurrence timestamp required")
+		}
+	}
 
 	launchCtx, ownership, claimed := m.claimPendingRunOwnership(taskID)
 	if !claimed {
-		if reason == "retry" || reason == "cron" || reason == "chain" {
+		if reason == "chain" {
+			return 0, errTaskChainBusy
+		}
+		if reason == "retry" || reason == "cron" {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
 	}
 	scheduled := false
+
 	registeredCancel := ownership.cancel
 	defer func() {
 		if !scheduled {
@@ -102,7 +116,10 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 		return 0, result.Error
 	}
 	if result.RowsAffected == 0 {
-		if reason == "retry" || reason == "cron" || reason == "chain" {
+		if reason == "chain" {
+			return 0, fmt.Errorf("链式任务不存在")
+		}
+		if reason == "retry" || reason == "cron" {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("任务不存在")
@@ -115,26 +132,26 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 		}
 	}
 
-	// 暂停检查
-	if !taskEntity.Enabled {
+	// Paused and archived tasks never enter an executor. Chain effects record
+	// an explicit skipped child so the upstream effect is not a false success.
+	if taskEntity.ArchivedAt != nil || !taskEntity.Enabled {
 		if reason == "cron" {
 			return 0, nil
 		}
 		if reason == "chain" {
-			if err := m.skipTask(taskEntity, chainRunID, upstreamRunID, "任务已暂停，链式执行跳过"); err != nil {
+			skipReason := "任务已暂停，链式执行跳过"
+			if taskEntity.ArchivedAt != nil {
+				skipReason = "任务已归档，链式执行跳过"
+			}
+			if err := m.skipTask(taskEntity, chainRunID, upstreamRunID, skipReason); err != nil {
 				return 0, err
 			}
 			return 0, nil
 		}
+		if taskEntity.ArchivedAt != nil {
+			return 0, fmt.Errorf("任务已归档，请先恢复后再触发")
+		}
 		return 0, fmt.Errorf("任务已暂停，请先恢复后再触发")
-	}
-
-	// 跳过下次检查（仅 cron 触发）
-	if reason == "cron" && taskEntity.SkipNext {
-		m.db.Model(&taskEntity).Updates(map[string]interface{}{
-			"skip_next":   false,
-			"next_run_at": nextCronRun(taskEntity.CronSpec),
-		})
 	}
 
 	if ParseStatus(taskEntity.Status) == StatusRunning {
@@ -184,12 +201,25 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 	requestedRun := model.TaskRun{
 		TaskID:            taskID,
 		TriggerType:       reason,
-		Status:            "pending",
+		Status:            model.TaskRunStatusPending,
 		ChainRunID:        chainRunID,
 		UpstreamTaskRunID: upstreamRunID,
+		CronScheduledAt:   cronScheduledAt,
 	}
 	run, err := m.reserveTaskRun(runCtx, taskEntity.NodeID, requestedRun)
 	nLock.Unlock()
+	if errors.Is(err, errTaskChainRunHandled) {
+		if run.ID != 0 {
+			return run.ID, nil
+		}
+		return 0, fmt.Errorf("链式执行已有子任务但缺少执行记录")
+	}
+	if errors.Is(err, errCronOccurrenceHandled) {
+		return 0, nil
+	}
+	if err == nil && run.Status == model.TaskRunStatusSkipped {
+		return run.ID, nil
+	}
 	if err != nil {
 		if errors.Is(err, ErrNodeWriteConflict) {
 			return 0, fmt.Errorf("同节点有恢复任务正在运行，请稍候再试: %w", err)
@@ -995,7 +1025,7 @@ func (m *Manager) runRestoreTaskWithContext(
 		}
 		runCompleted = true
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, "failed")
-		m.alertDispatcher.RaiseTaskFailure(restoreTask, runIDPtr, errorMsg) //nolint:errcheck // best-effort alert during restore failure
+		m.alertDispatcher.RaiseTaskFailureForRestoreRun(restoreTask, runID, errorMsg) //nolint:errcheck // best-effort alert during restore failure
 		return
 	}
 	exec := m.executorFactory.Resolve(restoreTask.ExecutorType)
@@ -1057,7 +1087,7 @@ func (m *Manager) runRestoreTaskWithContext(
 		}
 		runCompleted = true
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("恢复任务失败: %s", errorMsg), "failed")
-		m.alertDispatcher.RaiseTaskFailure(restoreTask, runIDPtr, errorMsg) //nolint:errcheck // best-effort alert during restore failure
+		m.alertDispatcher.RaiseTaskFailureForRestoreRun(restoreTask, runID, errorMsg) //nolint:errcheck // best-effort alert during restore failure
 		return
 	}
 
@@ -1102,7 +1132,7 @@ func (m *Manager) runRestoreTaskWithContext(
 		}
 		runCompleted = true
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "恢复后校验未通过: "+verifyMessage, "warning")
-		m.alertDispatcher.RaiseVerificationFailure(restoreTask, runIDPtr, verifyMessage) //nolint:errcheck // best-effort alert during verification failure
+		m.alertDispatcher.RaiseVerificationFailureForRestoreRun(restoreTask, runID, verifyMessage) //nolint:errcheck // best-effort alert during verification failure
 		return
 	}
 	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "恢复后完整性校验通过", "")
@@ -1119,8 +1149,8 @@ func (m *Manager) runRestoreTaskWithContext(
 	}
 	runCompleted = true
 	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "恢复任务执行成功", "success")
-	if resolveErr := m.alertDispatcher.ResolveTaskAlerts(taskID, "恢复任务成功"); resolveErr != nil {
-		logger.Module("task").Warn().Uint("task_id", taskID).Err(resolveErr).Msg("ResolveTaskAlerts 失败")
+	if resolveErr := m.alertDispatcher.ResolveTaskAlertsForRestoreRun(taskID, runID, "恢复任务成功"); resolveErr != nil {
+		logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(resolveErr).Msg("ResolveTaskAlertsForRun 失败")
 	}
 }
 
@@ -1264,17 +1294,21 @@ func (m *Manager) skipTask(taskEntity model.Task, chainRunID string, upstreamRun
 		}
 		created = true
 		if ParseStatus(locked.Status) != StatusSkipped {
-			if err := m.stateMachine.ValidateTransition(ParseStatus(locked.Status), StatusSkipped); err != nil {
-				return err
+			if err := m.stateMachine.ValidateTransition(ParseStatus(locked.Status), StatusSkipped); err == nil {
+				taskResult := tx.Model(&model.Task{}).Where("id = ? AND status = ?", locked.ID, locked.Status).
+					Updates(map[string]interface{}{"status": string(StatusSkipped), "last_error": skipReason})
+				if taskResult.Error != nil {
+					return taskResult.Error
+				}
+				if taskResult.RowsAffected != 1 {
+					return errTaskRunCASLost
+				}
 			}
-			taskResult := tx.Model(&model.Task{}).Where("id = ? AND status = ?", locked.ID, locked.Status).
-				Updates(map[string]interface{}{"status": string(StatusSkipped), "last_error": skipReason})
-			if taskResult.Error != nil {
-				return taskResult.Error
-			}
-			if taskResult.RowsAffected != 1 {
-				return errTaskRunCASLost
-			}
+			// A task can already have a terminal outcome (or an active
+			// ordinary run) when a disabled/archive chain effect is consumed.
+			// Preserve that aggregate state; the child TaskRun is the durable
+			// skip fact and must not be rolled back merely because the
+			// aggregate cannot transition to skipped.
 		}
 		var downstreams []model.Task
 		if err := tx.Where("depends_on_task_id = ?", locked.ID).Order("id ASC").Find(&downstreams).Error; err != nil {

@@ -28,6 +28,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/net/proxy"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var alertsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
@@ -105,14 +106,44 @@ func RaiseTaskFailure(db *gorm.DB, task model.Task, taskRunID *uint, message str
 	return ensureDispatcher(db).RaiseTaskFailure(task, taskRunID, message)
 }
 
+// RaiseTaskFailureForRun emits a causally bounded task failure alert.
+func RaiseTaskFailureForRun(db *gorm.DB, task model.Task, runID uint, message string) error {
+	return ensureDispatcher(db).RaiseTaskFailureForRun(task, runID, message)
+}
+
+// RaiseTaskFailureForRestoreRun emits a causally bounded restore failure alert.
+func RaiseTaskFailureForRestoreRun(db *gorm.DB, task model.Task, runID uint, message string) error {
+	return ensureDispatcher(db).RaiseTaskFailureForRestoreRun(task, runID, message)
+}
+
 // RaiseVerificationFailure emits a warning alert for a backup verification failure.
 func RaiseVerificationFailure(db *gorm.DB, task model.Task, taskRunID *uint, message string) error {
 	return ensureDispatcher(db).RaiseVerificationFailure(task, taskRunID, message)
 }
 
+// RaiseVerificationFailureForRun emits a causally bounded verification warning.
+func RaiseVerificationFailureForRun(db *gorm.DB, task model.Task, runID uint, message string) error {
+	return ensureDispatcher(db).RaiseVerificationFailureForRun(task, runID, message)
+}
+
+// RaiseVerificationFailureForRestoreRun emits a causally bounded restore verification warning.
+func RaiseVerificationFailureForRestoreRun(db *gorm.DB, task model.Task, runID uint, message string) error {
+	return ensureDispatcher(db).RaiseVerificationFailureForRestoreRun(task, runID, message)
+}
+
 // ResolveTaskAlerts resolves all open/acked alerts for the given task.
 func ResolveTaskAlerts(db *gorm.DB, taskID uint, note string) error {
 	return ensureDispatcher(db).ResolveTaskAlerts(taskID, note)
+}
+
+// ResolveTaskAlertsForRun is the causally bounded resolution shim.
+func ResolveTaskAlertsForRun(db *gorm.DB, taskID, runID uint, note string) error {
+	return ensureDispatcher(db).ResolveTaskAlertsForRun(taskID, runID, note)
+}
+
+// ResolveTaskAlertsForRestoreRun is the causally bounded restore resolution shim.
+func ResolveTaskAlertsForRestoreRun(db *gorm.DB, taskID, runID uint, note string) error {
+	return ensureDispatcher(db).ResolveTaskAlertsForRestoreRun(taskID, runID, note)
 }
 
 // RaiseNodeProbeFailure emits a warning alert for a node connectivity probe failure.
@@ -261,7 +292,128 @@ func (d *Dispatcher) RaiseTaskFailure(task model.Task, taskRunID *uint, message 
 	return d.raiseAndDispatch(&alert)
 }
 
-// RaiseVerificationFailure emits a warning alert for a backup verification failure.
+// RaiseTaskFailureForRun emits a failure alert only while runID remains the
+// newest terminal ordinary execution for the task. The task-row lock makes the
+// ordering check and alert insert one atomic boundary with terminal writers.
+func (d *Dispatcher) RaiseTaskFailureForRun(task model.Task, runID uint, message string) error {
+	return d.raiseFailureForCurrentRun(task, runID, message, model.TaskRunStatusFailed, "critical", fmt.Sprintf("XR-EXEC-%d", task.ID), true, "ordinary")
+}
+
+// RaiseTaskFailureForRestoreRun emits a failure alert only while runID remains
+// the newest terminal restore execution for the task.
+func (d *Dispatcher) RaiseTaskFailureForRestoreRun(task model.Task, runID uint, message string) error {
+	return d.raiseFailureForCurrentRun(task, runID, message, model.TaskRunStatusFailed, "critical", fmt.Sprintf("XR-EXEC-%d", task.ID), true, "restore")
+}
+
+// RaiseVerificationFailureForRun emits a verification warning only while runID
+// remains the newest terminal ordinary execution for the task. Restore and
+// drill runs never create ordinary task alerts.
+func (d *Dispatcher) RaiseVerificationFailureForRun(task model.Task, runID uint, message string) error {
+	return d.raiseFailureForCurrentRun(task, runID, message, model.TaskRunStatusWarning, "warning", fmt.Sprintf("XR-VRFY-%d", task.ID), false, "ordinary")
+}
+
+// RaiseVerificationFailureForRestoreRun emits a verification warning only
+// while runID remains the newest terminal restore execution for the task.
+func (d *Dispatcher) RaiseVerificationFailureForRestoreRun(task model.Task, runID uint, message string) error {
+	return d.raiseFailureForCurrentRun(task, runID, message, model.TaskRunStatusWarning, "warning", fmt.Sprintf("XR-VRFY-%d", task.ID), false, "restore")
+}
+
+// raiseFailureForCurrentRun persists one task-run/action alert while holding
+// the task row lock. errorCode is the action identity: it separates task
+// failure from verification failure without adding a schema column. The
+// permanent task+run+action lookup is evaluated before the configurable
+// notification dedup window, so replay never reopens or duplicates an alert.
+func (d *Dispatcher) raiseFailureForCurrentRun(task model.Task, runID uint, message string, expectedStatus string, severity, errorCode string, retryable bool, triggerType string) error {
+	if d == nil || d.DB == nil || task.ID == 0 || runID == 0 {
+		return errors.New("task failure alert persistence unavailable")
+	}
+	policyName := ""
+	if task.Policy != nil {
+		policyName = task.Policy.Name
+	}
+	var created *model.Alert
+	err := d.DB.Transaction(func(tx *gorm.DB) error {
+		var lockedTask model.Task
+		taskResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Select("id").Where("id = ?", task.ID).Limit(1).Find(&lockedTask)
+		if taskResult.Error != nil {
+			return taskResult.Error
+		}
+		if taskResult.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+
+		// A durable row is the permanent replay receipt. Do not require it to
+		// remain open/acked: manual resolution must not be undone by replay.
+		var existing model.Alert
+		existingResult := tx.Where(
+			"task_id = ? AND task_run_id = ? AND error_code = ?",
+			task.ID, runID, errorCode,
+		).Limit(1).Find(&existing)
+		if existingResult.Error != nil {
+			return existingResult.Error
+		}
+		if existingResult.RowsAffected == 1 {
+			return nil
+		}
+
+		runQuery := tx.Where(
+			"task_id = ? AND status IN ?",
+			task.ID, model.TaskRunTerminalStatuses(),
+		)
+		if triggerType == "restore" {
+			runQuery = runQuery.Where("trigger_type = ?", "restore")
+		} else {
+			runQuery = runQuery.Where("trigger_type NOT IN ?", []string{"restore", "drill"})
+		}
+		var latest model.TaskRun
+		runResult := runQuery.Order("id DESC").Limit(1).Find(&latest)
+		if runResult.Error != nil {
+			return runResult.Error
+		}
+		if runResult.RowsAffected != 1 || latest.ID != runID || latest.Status != expectedStatus {
+			return nil
+		}
+
+		now := time.Now()
+		alert := model.Alert{
+			NodeID:      task.NodeID,
+			NodeName:    task.Node.Name,
+			TaskID:      &task.ID,
+			TaskRunID:   &runID,
+			PolicyName:  policyName,
+			Severity:    severity,
+			Status:      "open",
+			ErrorCode:   errorCode,
+			Message:     message,
+			Retryable:   retryable,
+			TriggeredAt: now,
+		}
+		if window := d.dedupWindow(); window > 0 {
+			var count int64
+			if err := tx.Model(&model.Alert{}).
+				Where("node_id = ? AND error_code = ? AND created_at >= ?", alert.NodeID, alert.ErrorCode, now.Add(-window)).
+				Where("task_id = ? AND task_run_id = ? AND status IN ?", task.ID, runID, []string{"open", "acked"}).
+				Count(&count).Error; err != nil {
+				return err
+			}
+			if count > 0 {
+				return nil
+			}
+		}
+		if err := tx.Create(&alert).Error; err != nil {
+			return err
+		}
+		created = &alert
+		return nil
+	})
+	if err != nil || created == nil {
+		return err
+	}
+	alertsTotal.WithLabelValues(created.Severity).Inc()
+	return d.dispatchCreatedAlert(created)
+}
+
 func (d *Dispatcher) RaiseVerificationFailure(task model.Task, taskRunID *uint, message string) error {
 	errorCode := fmt.Sprintf("XR-VRFY-%d", task.ID)
 	policyName := ""
@@ -297,6 +449,82 @@ func (d *Dispatcher) ResolveTaskAlerts(taskID uint, note string) error {
 	return d.DB.Model(&model.Alert{}).
 		Where("task_id = ? AND status IN ?", taskID, []string{"open", "acked"}).
 		Updates(updates).Error
+}
+
+// ResolveTaskAlertsForRun resolves only alerts caused by earlier ordinary
+// executions. It is deliberately separate from ResolveTaskAlerts, which is
+// the manual task-wide resolution API.
+func (d *Dispatcher) ResolveTaskAlertsForRun(taskID, runID uint, note string) error {
+	return d.resolveTaskAlertsForRun(taskID, runID, note, "ordinary")
+}
+
+// ResolveTaskAlertsForRestoreRun resolves only alerts caused by earlier
+// restore executions. Ordinary backup alerts are never touched.
+func (d *Dispatcher) ResolveTaskAlertsForRestoreRun(taskID, runID uint, note string) error {
+	return d.resolveTaskAlertsForRun(taskID, runID, note, "restore")
+}
+
+func (d *Dispatcher) resolveTaskAlertsForRun(taskID, runID uint, note, triggerType string) error {
+	if d == nil || d.DB == nil || taskID == 0 || runID == 0 {
+		return errors.New("task alert resolution unavailable")
+	}
+	updates := map[string]interface{}{
+		"status":           "resolved",
+		"retryable":        false,
+		"last_notified_at": time.Now(),
+	}
+	if note != "" {
+		updates["message"] = note
+	}
+	return d.DB.Transaction(func(tx *gorm.DB) error {
+		var lockedTask model.Task
+		taskResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Select("id").Where("id = ?", taskID).Limit(1).Find(&lockedTask)
+		if taskResult.Error != nil {
+			return taskResult.Error
+		}
+		if taskResult.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		runQuery := tx.Where(
+			"id = ? AND task_id = ? AND status = ?",
+			runID, taskID, model.TaskRunStatusSuccess,
+		)
+		if triggerType == "restore" {
+			runQuery = runQuery.Where("trigger_type = ?", "restore")
+		} else {
+			runQuery = runQuery.Where("trigger_type NOT IN ?", []string{"restore", "drill"})
+		}
+		var successfulRun model.TaskRun
+		runResult := runQuery.Limit(1).Find(&successfulRun)
+		if runResult.Error != nil {
+			return runResult.Error
+		}
+		if runResult.RowsAffected != 1 {
+			return nil
+		}
+
+		alerts := tx.Model(&model.Alert{}).
+			Where(`task_id = ? AND task_run_id IS NOT NULL AND task_run_id <= ?
+				AND status IN ?`,
+				taskID, runID, []string{"open", "acked"})
+		if triggerType == "restore" {
+			alerts = alerts.Where(`EXISTS (
+					SELECT 1 FROM task_runs AS alert_run
+					WHERE alert_run.id = alerts.task_run_id
+						AND alert_run.task_id = ?
+						AND alert_run.trigger_type = ?
+				)`, taskID, "restore")
+		} else {
+			alerts = alerts.Where(`EXISTS (
+					SELECT 1 FROM task_runs AS alert_run
+					WHERE alert_run.id = alerts.task_run_id
+						AND alert_run.task_id = ?
+						AND alert_run.trigger_type NOT IN ?
+				)`, taskID, []string{"restore", "drill"})
+		}
+		return alerts.Updates(updates).Error
+	})
 }
 
 // RaiseNodeProbeFailure emits a warning alert for a node connectivity probe failure.
@@ -467,10 +695,16 @@ func (d *Dispatcher) raiseAndDispatch(alert *model.Alert) error {
 	} else if deduped {
 		return nil
 	}
-
 	if err := d.DB.Create(alert).Error; err != nil {
 		return err
 	}
+	return d.dispatchCreatedAlert(alert)
+}
+
+// dispatchCreatedAlert dispatches an alert whose durable row already exists.
+// Keeping persistence separate lets causally bounded alert producers commit
+// their ordering check and row insert in one transaction before fan-out.
+func (d *Dispatcher) dispatchCreatedAlert(alert *model.Alert) error {
 	alertsTotal.WithLabelValues(alert.Severity).Inc()
 
 	// Escalation split: if the alert is linked to an enabled policy whose min_severity
@@ -479,7 +713,6 @@ func (d *Dispatcher) raiseAndDispatch(alert *model.Alert) error {
 	if resolver := d.EscalationResolver; resolver != nil {
 		if summary, rerr := resolver(*alert); rerr == nil && summary != nil && summary.Enabled {
 			if severityAtLeastForDispatch(alert.Severity, summary.MinSeverity) {
-				// Deferred; engine will dispatch and record AlertEscalationEvent.
 				return nil
 			}
 		}
@@ -519,10 +752,6 @@ func (d *Dispatcher) raiseAndDispatch(alert *model.Alert) error {
 					Msg("dispatch: 节点加载失败，跳过本次分发")
 				return err
 			}
-			// Node deleted mid-alert is an expected terminal state, not an
-			// error worth waking oncall for. High-frequency alerts would
-			// otherwise flood the log every tick. Continue with empty tags;
-			// tag-based silences simply won't match.
 			logger.Module("alerting").Info().
 				Uint("alert_id", alert.ID).
 				Uint("node_id", alert.NodeID).
@@ -550,25 +779,10 @@ func (d *Dispatcher) raiseAndDispatch(alert *model.Alert) error {
 		return nil
 	}
 
-	// Wave 2 (PR-C C5) 慢通道隔离：
-	//
-	// 旧行为：每个 enabled integration 起 goroutine + wg.Wait()，整段
-	// raiseAndDispatch 等所有 send() 完成才返回。一个 30s timeout 的代理慢
-	// 通道会把整条 RaiseTaskFailure → task runner 都阻塞 30s。
-	//
-	// 新行为：依然每通道 goroutine（继承之前的并发隔离），但调度路径用
-	// 限时 wg.Wait —— 默认 fastWaitTimeout（500ms），用于"快通道一般 50-200ms
-	// 即返"的常见路径，便于立刻更新 last_notified_at；超时后剩下的 goroutine
-	// 继续在后台跑（每个 goroutine 自带 HTTP client.Timeout=15s 上限），失败
-	// 进 retrying 状态由 RetryWorker 后续扫描兜底，不影响主调度路径。
-	//
-	// 这样：
-	//   - 快通道（< 500ms）：行为同旧版 (wg.Wait 完成 → 更新 last_notified_at)
-	//   - 慢通道（>= 500ms）：raiseAndDispatch 在 ~500ms 内返回；后台 goroutine
-	//     完成后单独 UPDATE last_notified_at，不阻塞 task runner
+	// Slow integrations are isolated behind a bounded fast wait; retries remain
+	// durable in AlertDelivery and do not hold the task terminal path open.
 	var wg sync.WaitGroup
 	deliveryDone := make(chan struct{})
-
 	for _, channel := range integrations {
 		if int(openCount) < channel.FailThreshold {
 			continue
@@ -576,7 +790,6 @@ func (d *Dispatcher) raiseAndDispatch(alert *model.Alert) error {
 		if d.inCooldown(channel.ID, channel.CooldownMinutes, now) {
 			continue
 		}
-
 		wg.Add(1)
 		go func(ch model.Integration) {
 			defer wg.Done()
@@ -592,11 +805,6 @@ func (d *Dispatcher) raiseAndDispatch(alert *model.Alert) error {
 				next := time.Now().Add(backoffDuration(1))
 				del.Status = "retrying"
 				del.NextRetryAt = &next
-				// Wave 2 (PR-C C6): 统一走 util.SanitizeError，与重试路径
-				// (retry.go) 共享同一过滤规则（URL/path/query/bot-token/
-				// token-secret-password 模式）。原来 util.SanitizeDeliveryError
-				// 仅 telegram 类型脱敏，导致 webhook/feishu/dingtalk 失败时
-				// LastError 直接含 bearer token / access_token。
 				del.LastError = util.SanitizeError(err)
 			}
 			if saveErr := d.DB.Create(&del).Error; saveErr != nil {
@@ -605,14 +813,11 @@ func (d *Dispatcher) raiseAndDispatch(alert *model.Alert) error {
 		}(channel)
 	}
 
-	// 后台等待所有发送完成，最后更新 last_notified_at（不阻塞调用方）
 	go func() {
 		wg.Wait()
 		close(deliveryDone)
 		d.updateLastNotifiedAt(alert)
 	}()
-
-	// 限时等待快路径完成；慢通道继续在后台跑，由 RetryWorker 兜底
 	select {
 	case <-deliveryDone:
 	case <-time.After(fastWaitTimeout):
@@ -621,7 +826,6 @@ func (d *Dispatcher) raiseAndDispatch(alert *model.Alert) error {
 			Dur("fast_wait_timeout", fastWaitTimeout).
 			Msg("dispatch: 快路径超时，转后台投递")
 	}
-
 	return nil
 }
 

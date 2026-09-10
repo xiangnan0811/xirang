@@ -46,6 +46,97 @@ func nextCronRun(spec string) *time.Time {
 	return &next
 }
 
+func nextCronRunAfter(spec string, after time.Time) *time.Time {
+	if spec == "" {
+		return nil
+	}
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+	schedule, err := parser.Parse(spec)
+	if err != nil {
+		return nil
+	}
+	next := schedule.Next(after)
+	if next.IsZero() {
+		return nil
+	}
+	next = next.UTC()
+	return &next
+}
+
+func normalizeCronOccurrence(occurrence *time.Time) *time.Time {
+	if occurrence == nil || occurrence.IsZero() {
+		return nil
+	}
+	normalized := occurrence.UTC()
+	return &normalized
+}
+
+func isBackupTaskRunTrigger(triggerType string) bool {
+	switch strings.ToLower(strings.TrimSpace(triggerType)) {
+	case "restore", "drill":
+		return false
+	default:
+		return true
+	}
+}
+
+func loadTaskNodeForFingerprint(tx *gorm.DB, task *model.Task) error {
+	if tx == nil || task == nil || task.NodeID == 0 {
+		return nil
+	}
+	var node model.Node
+	result := tx.Select("id", "name", "host", "port", "username", "auth_type", "ssh_key_id", "backup_dir", "use_sudo").
+		Where("id = ?", task.NodeID).Limit(1).Find(&node)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 1 {
+		task.Node = node
+	} else {
+		task.Node = model.Node{ID: task.NodeID}
+	}
+	return nil
+}
+
+// lockTaskPolicyForFingerprint acquires the policy row associated with a task
+// before the caller locks that task. Policy control transactions use the same
+// Policy -> Task ordering, so the lock acquisition order cannot deadlock with
+// a concurrent policy update. A task without PolicyID deliberately returns a
+// nil snapshot; a non-nil but missing policy is detected after the task row is
+// locked and fails closed.
+func lockTaskPolicyForFingerprint(tx *gorm.DB, taskID uint) (*model.Policy, error) {
+	if tx == nil || taskID == 0 {
+		return nil, fmt.Errorf("任务策略快照不可用")
+	}
+	var policyEntity model.Policy
+	query := tx.Table("policies").
+		Select("policies.*").
+		Joins("JOIN tasks ON tasks.policy_id = policies.id").
+		Where("tasks.id = ?", taskID).
+		Limit(1)
+	if tx.Name() == "postgres" {
+		query = query.Clauses(clause.Locking{
+			Strength: clause.LockingStrengthUpdate,
+			Table:    clause.Table{Name: "policies"},
+		})
+	}
+	result := query.Find(&policyEntity)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return nil, nil
+	}
+	return &policyEntity, nil
+}
+
+func taskPolicySnapshotMatches(task model.Task, policyEntity *model.Policy) bool {
+	if task.PolicyID == nil {
+		return policyEntity == nil
+	}
+	return policyEntity != nil && policyEntity.ID == *task.PolicyID
+}
+
 const (
 	defaultLogQueueCapacity       = 1024
 	defaultLogBatchSize           = 50
@@ -62,15 +153,21 @@ const (
 )
 
 var (
-	ErrNodeWriteConflict     = errors.New("node write conflict")
-	ErrNodeWriteUnavailable  = errors.New("node write admission unavailable")
-	ErrNodeWriteStartLost    = errors.New("node write start compare-and-swap lost")
-	ErrDrillUnavailable      = errors.New("恢复演练功能暂不可用")
-	ErrDrillAlreadyActive    = errors.New("该任务正在执行中，请勿重复触发")
-	errTaskCancelInProgress  = errors.New("任务取消操作正在进行，请稍候再试")
-	errTaskCancelConflict    = errors.New("任务状态已变化，请重试")
-	errTaskCancelUnavailable = errors.New("取消任务失败，请稍后重试")
-	errTaskCancelUnsupported = errors.New("仅支持取消待执行、重试中或运行中的任务")
+	ErrNodeWriteConflict            = errors.New("node write conflict")
+	ErrNodeWriteUnavailable         = errors.New("node write admission unavailable")
+	ErrNodeWriteStartLost           = errors.New("node write start compare-and-swap lost")
+	ErrDrillUnavailable             = errors.New("恢复演练功能暂不可用")
+	ErrDrillAlreadyActive           = errors.New("该任务正在执行中，请勿重复触发")
+	ErrRestoreRequiresNewBackup     = errors.New("new-backup-required")
+	errCronOccurrenceHandled        = errors.New("cron occurrence already handled")
+	errTaskChainRunHandled          = errors.New("chain child already handled")
+	errTaskChainBusy                = errors.New("chain task is busy")
+	errTaskPolicyChanged            = errors.New("task policy changed during reservation")
+	errTaskRunBackupBindingMismatch = errors.New("task run backup binding mismatch")
+	errTaskCancelInProgress         = errors.New("任务取消操作正在进行，请稍候再试")
+	errTaskCancelConflict           = errors.New("任务状态已变化，请重试")
+	errTaskCancelUnavailable        = errors.New("取消任务失败，请稍后重试")
+	errTaskCancelUnsupported        = errors.New("仅支持取消待执行、重试中或运行中的任务")
 )
 
 // NodeWriteAdmission serializes ordinary and Drill TaskRun lifecycles with
@@ -487,7 +584,9 @@ func (m *Manager) reserveTaskRun(ctx context.Context, nodeID uint, requested mod
 	if wait == nil {
 		wait = waitForNodeWriteReservationRetry
 	}
-	for attempt := 0; attempt < nodeWriteReservationAttempts; attempt++ {
+	isChain := strings.EqualFold(strings.TrimSpace(requested.TriggerType), "chain")
+	isCron := strings.EqualFold(strings.TrimSpace(requested.TriggerType), "cron")
+	for attempt := range nodeWriteReservationAttempts {
 		if err := ctx.Err(); err != nil {
 			return model.TaskRun{}, err
 		}
@@ -500,29 +599,104 @@ func (m *Manager) reserveTaskRun(ctx context.Context, nodeID uint, requested mod
 		candidate.CreatedAt = time.Time{}
 		candidate.UpdatedAt = time.Time{}
 		err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			policySnapshot, err := lockTaskPolicyForFingerprint(tx, requested.TaskID)
+			if err != nil {
+				return err
+			}
 			var locked model.Task
-			lock := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", requested.TaskID).Limit(1).Find(&locked)
+			lock := tx.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+				Where("id = ?", requested.TaskID).Limit(1).Find(&locked)
 			if lock.Error != nil {
 				return lock.Error
 			}
 			if lock.RowsAffected == 0 {
 				return fmt.Errorf("任务不存在")
 			}
+			if !taskPolicySnapshotMatches(locked, policySnapshot) {
+				return errTaskPolicyChanged
+			}
+			locked.Policy = policySnapshot
 			if locked.ArchivedAt != nil {
 				return ErrTaskArchived
 			}
 			if locked.NodeID != nodeID {
 				return ErrNodeWriteStartLost
 			}
+			if isChain && requested.UpstreamTaskRunID != nil {
+				var existing model.TaskRun
+				result := tx.Where(
+					"task_id = ? AND upstream_task_run_id = ?",
+					requested.TaskID, *requested.UpstreamTaskRunID,
+				).Order("id ASC").Limit(1).Find(&existing)
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected == 1 {
+					candidate = existing
+					return errTaskChainRunHandled
+				}
+			}
+			if isCron && requested.CronScheduledAt != nil {
+				var existing model.TaskRun
+				result := tx.Where(
+					"task_id = ? AND trigger_type = ? AND cron_scheduled_at = ?",
+					requested.TaskID, "cron", requested.CronScheduledAt,
+				).Order("id ASC").Limit(1).Find(&existing)
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected == 1 {
+					candidate = existing
+					return errCronOccurrenceHandled
+				}
+			}
+			var activeCount int64
+			if err := tx.Model(&model.TaskRun{}).
+				Where("task_id = ? AND status IN ?", requested.TaskID, model.TaskRunActiveStatuses()).
+				Count(&activeCount).Error; err != nil {
+				return err
+			}
+			if activeCount > 0 || ParseStatus(locked.Status) == StatusRunning {
+				if isChain {
+					return errTaskChainBusy
+				}
+				return fmt.Errorf("该任务正在执行中，请勿重复触发")
+			}
+			if err := loadTaskNodeForFingerprint(tx, &locked); err != nil {
+				return err
+			}
 			if m.nodeWriteAdmission != nil {
 				if err := m.nodeWriteAdmission.AdmitTaskTx(ctx, tx, nodeID); err != nil {
 					return err
+				}
+			}
+			if isBackupTaskRunTrigger(requested.TriggerType) {
+				candidate.BackupConfigFingerprint = model.TaskRunBackupConfigFingerprint(locked)
+				if candidate.BackupConfigFingerprint == "" {
+					return fmt.Errorf("生成任务执行绑定失败")
 				}
 			}
 			return tx.Create(&candidate).Error
 		})
 		if err == nil {
 			return candidate, nil
+		}
+		if isCron && requested.CronScheduledAt != nil {
+			var existing model.TaskRun
+			result := m.db.WithContext(ctx).Where(
+				"task_id = ? AND trigger_type = ? AND cron_scheduled_at = ?",
+				requested.TaskID, "cron", requested.CronScheduledAt,
+			).Order("id ASC").Limit(1).Find(&existing)
+			if result.Error == nil && result.RowsAffected == 1 {
+				candidate = existing
+				return candidate, errCronOccurrenceHandled
+			}
+		}
+		if errors.Is(err, errTaskChainRunHandled) {
+			return candidate, err
+		}
+		if errors.Is(err, errCronOccurrenceHandled) {
+			return candidate, err
 		}
 		if errors.Is(err, ErrNodeWriteConflict) {
 			return model.TaskRun{}, ErrNodeWriteConflict
@@ -558,8 +732,12 @@ func (m *Manager) ReserveAutomationRunTx(
 		return 0, err
 	}
 	tx = tx.WithContext(ctx)
+	policySnapshot, err := lockTaskPolicyForFingerprint(tx, taskID)
+	if err != nil {
+		return 0, err
+	}
 	var taskEntity model.Task
-	result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+	result := tx.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
 		Where("id = ?", taskID).Limit(1).Find(&taskEntity)
 	if result.Error != nil {
 		return 0, result.Error
@@ -567,6 +745,10 @@ func (m *Manager) ReserveAutomationRunTx(
 	if result.RowsAffected != 1 {
 		return 0, fmt.Errorf("任务不存在")
 	}
+	if !taskPolicySnapshotMatches(taskEntity, policySnapshot) {
+		return 0, errTaskPolicyChanged
+	}
+	taskEntity.Policy = policySnapshot
 	if taskEntity.ArchivedAt != nil {
 		return 0, ErrTaskArchived
 	}
@@ -582,22 +764,29 @@ func (m *Manager) ReserveAutomationRunTx(
 	if activeCount > 0 || ParseStatus(taskEntity.Status) == StatusRunning {
 		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
 	}
+	if err := loadTaskNodeForFingerprint(tx, &taskEntity); err != nil {
+		return 0, err
+	}
 	if m.nodeWriteAdmission != nil {
 		if err := m.nodeWriteAdmission.AdmitTaskTx(ctx, tx, taskEntity.NodeID); err != nil {
 			return 0, err
 		}
 	}
 	run := model.TaskRun{
-		TaskID:         taskID,
-		NodeIDSnapshot: taskEntity.NodeID,
-		TriggerType:    "auto",
-		Status:         model.TaskRunStatusPending,
-		ChainRunID:     generateChainRunID(),
+		TaskID:                  taskID,
+		NodeIDSnapshot:          taskEntity.NodeID,
+		BackupConfigFingerprint: model.TaskRunBackupConfigFingerprint(taskEntity),
+		TriggerType:             "auto",
+		Status:                  model.TaskRunStatusPending,
+		ChainRunID:              generateChainRunID(),
 		// Leave the execution owner empty. The post-commit launcher claims it;
 		// a restarted manager can therefore recover a committed reservation
 		// immediately instead of waiting for a crashed lease to expire.
 		ExecutionOwnerID:    "",
 		ExecutionLeaseUntil: nil,
+	}
+	if run.BackupConfigFingerprint == "" {
+		return 0, fmt.Errorf("生成任务执行绑定失败")
 	}
 	if err := tx.Create(&run).Error; err != nil {
 		return 0, err
@@ -662,50 +851,117 @@ func (m *Manager) enterTaskExecutionForReason(
 		}
 	}
 	var cronBlocked bool
+	var cronScheduledAt *time.Time
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var policySnapshot *model.Policy
+		var err error
+		if taskEntity != nil {
+			policySnapshot, err = lockTaskPolicyForFingerprint(tx, taskEntity.ID)
+			if err != nil {
+				return err
+			}
+		}
 		var lockedTask model.Task
-		if reason == "cron" && taskEntity != nil {
-			result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", taskEntity.ID).Limit(1).Find(&lockedTask)
+		if taskEntity != nil {
+			result := tx.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+				Preload("Node").
+				Preload("Node.SSHKey").
+				Where("id = ?", taskEntity.ID).
+				Limit(1).
+				Find(&lockedTask)
 			if result.Error != nil {
 				return result.Error
 			}
 			if result.RowsAffected != 1 {
 				return ErrNodeWriteStartLost
 			}
-			policyEnabled := true
-			if lockedTask.PolicyID != nil {
-				var policy model.Policy
-				policyResult := tx.Select("enabled").Where("id = ?", *lockedTask.PolicyID).Limit(1).Find(&policy)
-				if policyResult.Error != nil {
-					return policyResult.Error
-				}
-				if policyResult.RowsAffected == 0 {
-					policyEnabled = false
-				} else {
-					policyEnabled = policy.Enabled
-				}
+			if !taskPolicySnapshotMatches(lockedTask, policySnapshot) {
+				return errTaskPolicyChanged
 			}
-			if !lockedTask.Enabled || strings.TrimSpace(lockedTask.CronSpec) == "" || !policyEnabled {
-				if err := m.cancelQueuedCronRunTx(tx, runID, nodeID, "任务已暂停，定时执行已取消"); err != nil {
+			lockedTask.Policy = policySnapshot
+			if lockedTask.Node.ID == 0 {
+				if err := loadTaskNodeForFingerprint(tx, &lockedTask); err != nil {
 					return err
 				}
-				cronBlocked = true
-			} else if lockedTask.SkipNext {
-				nextRun := nextCronRun(lockedTask.CronSpec)
-				taskResult := tx.Model(&model.Task{}).
-					Where("id = ? AND skip_next = ?", lockedTask.ID, true).
-					Updates(map[string]interface{}{"skip_next": false, "next_run_at": nextRun})
-				if taskResult.Error != nil {
-					return taskResult.Error
+			}
+			if reason == "cron" {
+				var queuedRun model.TaskRun
+				runResult := tx.Select("cron_scheduled_at").
+					Where("id = ? AND node_id_snapshot = ? AND status = ?", runID, nodeID, model.TaskRunStatusPending).
+					Limit(1).
+					Find(&queuedRun)
+				if runResult.Error != nil {
+					return runResult.Error
 				}
-				if taskResult.RowsAffected != 1 {
+				if runResult.RowsAffected != 1 {
 					return ErrNodeWriteStartLost
 				}
-				if err := m.cancelQueuedCronRunTx(tx, runID, nodeID, "本次定时执行已跳过（用户设置跳过下次）"); err != nil {
-					return err
+				cronScheduledAt = queuedRun.CronScheduledAt
+
+				policyEnabled := policySnapshot == nil || policySnapshot.Enabled
+				if !lockedTask.Enabled || strings.TrimSpace(lockedTask.CronSpec) == "" || !policyEnabled {
+					if err := m.cancelQueuedCronRunTx(tx, runID, nodeID, "任务已暂停，定时执行已取消"); err != nil {
+						return err
+					}
+					cronBlocked = true
+				} else if lockedTask.SkipNext {
+					nextRun := nextCronRun(lockedTask.CronSpec)
+					if cronScheduledAt != nil {
+						nextRun = nextCronRunAfter(lockedTask.CronSpec, *cronScheduledAt)
+					}
+					taskResult := tx.Model(&model.Task{}).
+						Where("id = ? AND skip_next = ?", lockedTask.ID, true).
+						Updates(map[string]interface{}{"skip_next": false, "next_run_at": nextRun})
+					if taskResult.Error != nil {
+						return taskResult.Error
+					}
+					if taskResult.RowsAffected != 1 {
+						return ErrNodeWriteStartLost
+					}
+					if err := m.cancelQueuedCronRunTx(tx, runID, nodeID, "本次定时执行已跳过（用户设置跳过下次）"); err != nil {
+						return err
+					}
+					cronBlocked = true
 				}
-				cronBlocked = true
 			}
+			if cronBlocked {
+				return nil
+			}
+			if isBackupTaskRunTrigger(reason) {
+				var queuedRun model.TaskRun
+				runResult := tx.Select("backup_config_fingerprint").
+					Where("id = ? AND node_id_snapshot = ? AND status = ?", runID, nodeID, model.TaskRunStatusPending).
+					Limit(1).
+					Find(&queuedRun)
+				if runResult.Error != nil {
+					return runResult.Error
+				}
+				if runResult.RowsAffected != 1 {
+					return ErrNodeWriteStartLost
+				}
+				fingerprint := model.TaskRunBackupConfigFingerprint(lockedTask)
+				if fingerprint == "" {
+					return errTaskRunBackupBindingMismatch
+				}
+				if strings.TrimSpace(queuedRun.BackupConfigFingerprint) == "" {
+					updateResult := tx.Model(&model.TaskRun{}).
+						Where("id = ? AND node_id_snapshot = ? AND status = ? AND backup_config_fingerprint = ''",
+							runID, nodeID, model.TaskRunStatusPending).
+						Update("backup_config_fingerprint", fingerprint)
+					if updateResult.Error != nil {
+						return updateResult.Error
+					}
+					if updateResult.RowsAffected != 1 {
+						return ErrNodeWriteStartLost
+					}
+				} else if queuedRun.BackupConfigFingerprint != fingerprint {
+					return errTaskRunBackupBindingMismatch
+				}
+			}
+			// Use the row protected by the Task lock for the executor snapshot.
+			// This prevents a concurrent config update from pairing old values
+			// with a newly captured provenance fingerprint.
+			*taskEntity = lockedTask
 		}
 		if cronBlocked {
 			return nil
@@ -847,7 +1103,7 @@ func (m *Manager) cancelTaskExecutionBeforeExecutor(
 }
 
 func retryableNodeWriteReservationError(err error) bool {
-	if errors.Is(err, ErrNodeWriteUnavailable) {
+	if errors.Is(err, ErrNodeWriteUnavailable) || errors.Is(err, errTaskPolicyChanged) {
 		return true
 	}
 	var sqliteError sqlite3.Error
@@ -981,8 +1237,8 @@ func (m *Manager) SyncSchedule(task model.Task) error {
 			}
 		}
 	}
-	return m.scheduler.RegisterTask(task.ID, current.CronSpec, func() {
-		if err := m.TriggerFromScheduler(task.ID); err != nil {
+	return m.scheduler.RegisterTask(task.ID, current.CronSpec, func(scheduledAt time.Time) {
+		if err := m.TriggerFromScheduler(task.ID, scheduledAt); err != nil {
 			logger.Module("task").Warn().Uint("task_id", task.ID).Err(err).Msg("定时触发任务失败")
 		}
 	})
@@ -1019,11 +1275,11 @@ func (m *Manager) Archive(ctx context.Context, taskID uint) (ArchiveResult, erro
 }
 
 func (m *Manager) TriggerManual(taskID uint) (uint, error) {
-	return m.triggerCore(taskID, "manual", generateChainRunID(), nil)
+	return m.triggerCore(taskID, "manual", generateChainRunID(), nil, nil)
 }
 
 func (m *Manager) TriggerAutomation(taskID uint) (uint, error) {
-	return m.triggerCore(taskID, "auto", generateChainRunID(), nil)
+	return m.triggerCore(taskID, "auto", generateChainRunID(), nil, nil)
 }
 
 func (m *Manager) PausePolicyNext(ctx context.Context, policyID uint) error {
@@ -1063,9 +1319,73 @@ func (m *Manager) ReconcilePolicySchedules(_ uint, taskIDs []uint) error {
 	return policy.RemovePolicySchedules(m.db, m, taskIDs)
 }
 
-func (m *Manager) TriggerFromScheduler(taskID uint) error {
-	_, err := m.triggerCore(taskID, "cron", generateChainRunID(), nil)
+func (m *Manager) TriggerFromScheduler(taskID uint, scheduledAt time.Time) error {
+	_, err := m.triggerCore(taskID, "cron", generateChainRunID(), nil, &scheduledAt)
 	return err
+}
+
+func (m *Manager) loadRestoreTaskWithProvenance(ctx context.Context, taskID uint) (model.Task, error) {
+	var taskEntity model.Task
+	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		policySnapshot, err := lockTaskPolicyForFingerprint(tx, taskID)
+		if err != nil {
+			return err
+		}
+		result := tx.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+			Preload("Node").
+			Preload("Node.SSHKey").
+			Where("id = ?", taskID).
+			Limit(1).
+			Find(&taskEntity)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("任务不存在")
+		}
+		if !taskPolicySnapshotMatches(taskEntity, policySnapshot) {
+			return errTaskPolicyChanged
+		}
+		taskEntity.Policy = policySnapshot
+		if taskEntity.ArchivedAt != nil {
+			return ErrTaskArchived
+		}
+		if !model.IsTaskRunNodeSnapshotAuthoritative(taskEntity.NodeID) {
+			return ErrNodeWriteStartLost
+		}
+		if taskEntity.Node.ID == 0 {
+			if err := loadTaskNodeForFingerprint(tx, &taskEntity); err != nil {
+				return err
+			}
+		}
+		currentFingerprint := model.TaskRunBackupConfigFingerprint(taskEntity)
+		if currentFingerprint == "" {
+			return fmt.Errorf("%w: 该任务没有成功的执行记录与当前节点配置匹配，请先创建新的成功备份", ErrRestoreRequiresNewBackup)
+		}
+
+		var latestBackup model.TaskRun
+		runResult := tx.Where(`task_id = ? AND node_id_snapshot = ? AND status = ? AND
+			lower(trigger_type) NOT IN ?`,
+			taskID, taskEntity.NodeID, model.TaskRunStatusSuccess, []string{"restore", "drill"}).
+			Order("id DESC").
+			Limit(1).
+			Find(&latestBackup)
+		if runResult.Error != nil {
+			return runResult.Error
+		}
+		if runResult.RowsAffected != 1 {
+			return fmt.Errorf("%w: 该任务没有成功的执行记录与当前节点配置匹配，请先创建新的成功备份", ErrRestoreRequiresNewBackup)
+		}
+		if strings.TrimSpace(latestBackup.BackupConfigFingerprint) == "" ||
+			latestBackup.BackupConfigFingerprint != currentFingerprint {
+			return fmt.Errorf("%w: 该任务没有成功的执行记录与当前恢复源、目标、节点配置匹配，请先创建新的成功备份", ErrRestoreRequiresNewBackup)
+		}
+		return nil
+	})
+	if err != nil {
+		return model.Task{}, err
+	}
+	return taskEntity, nil
 }
 
 // TriggerRestore 触发备份恢复：将备份目标反向同步回源路径（或自定义路径）。
@@ -1111,22 +1431,17 @@ func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
 		m.afterTriggerRestoreLoad()
 	}
 
+	validatedTask, err := m.loadRestoreTaskWithProvenance(launchCtx, taskID)
+	if err != nil {
+		return 0, err
+	}
+	taskEntity = validatedTask
+
 	// 仅支持文件级同步执行器的恢复
 	switch taskEntity.ExecutorType {
 	case "rsync", "restic", "rclone":
 	default:
 		return 0, fmt.Errorf("该执行器类型（%s）不支持备份恢复", taskEntity.ExecutorType)
-	}
-
-	// 校验是否有成功的执行记录
-	var successCount int64
-	if err := m.db.Model(&model.TaskRun{}).
-		Where("task_id = ? AND node_id_snapshot = ? AND status = ?", taskID, taskEntity.NodeID, model.TaskRunStatusSuccess).
-		Count(&successCount).Error; err != nil {
-		return 0, err
-	}
-	if successCount == 0 {
-		return 0, fmt.Errorf("该任务没有成功的执行记录，无法恢复")
 	}
 
 	// 确定恢复目标路径

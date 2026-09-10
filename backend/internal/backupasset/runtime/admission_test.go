@@ -569,9 +569,7 @@ func TestNodeWriteCoordinatorActiveLeaseRejectsManagerTriggersWithoutResidualRun
 		t.Run(testCase.name, func(t *testing.T) {
 			db := openNodeWriteCoordinatorTestDB(t)
 			node, taskEntity := seedNodeWriteCoordinatorTask(t, db, strings.ReplaceAll(testCase.name, " ", "-"))
-			if err := db.Create(&model.TaskRun{TaskID: taskEntity.ID, TriggerType: "manual", Status: "success"}).Error; err != nil {
-				t.Fatal(err)
-			}
+			createSuccessfulBackupTaskRun(t, db, taskEntity.ID)
 			if err := db.Create(nodeWriteTestLease(node.ID)).Error; err != nil {
 				t.Fatal(err)
 			}
@@ -1601,6 +1599,23 @@ func seedNodeWriteCoordinatorTask(t *testing.T, db *gorm.DB, suffix string) (mod
 		t.Fatal(err)
 	}
 	return node, taskEntity
+}
+
+func createSuccessfulBackupTaskRun(t *testing.T, db *gorm.DB, taskID uint) {
+	t.Helper()
+	var taskEntity model.Task
+	if err := db.Preload("Node").Preload("Policy").First(&taskEntity, taskID).Error; err != nil {
+		t.Fatalf("load successful backup task: %v", err)
+	}
+	run := model.TaskRun{
+		TaskID:                  taskID,
+		TriggerType:             "manual",
+		Status:                  model.TaskRunStatusSuccess,
+		BackupConfigFingerprint: model.TaskRunBackupConfigFingerprint(taskEntity),
+	}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatalf("create successful backup run: %v", err)
+	}
 }
 
 func reserveNodeWriteTask(ctx context.Context, db *gorm.DB, coordinator *NodeWriteCoordinator, taskEntity model.Task) error {
