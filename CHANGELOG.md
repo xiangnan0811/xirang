@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.55.7](https://github.com/xiangnan0811/xirang/compare/v0.55.6...v0.55.7) (2026-09-11)
 
 ### Bug Fixes
 
@@ -9,6 +9,17 @@
 * Preserve explicitly disabled policies/monitors, disabled verification, and zero task retries through creation and scheduling without bypassing secret-encryption hooks.
 * Show pending, sending, retrying, and unknown notification states truthfully; use numeric delivery IDs for retry requests and label automation notification actions as log-only.
 * Add paired SQLite/PostgreSQL capture and delivery migrations, used-evidence downgrade protection, startup schema validation, and direct alerting concurrency coverage in CI.
+
+* Address v0.55.6 external review findings ([#517](https://github.com/xiangnan0811/xirang/issues/517)) ([9c20e4f](https://github.com/xiangnan0811/xirang/commit/9c20e4f4eacea386c36eea69aeace976b4805f44)).
+
+### Upgrade notes
+
+* Back up the database and encryption key, then pause admission, drain work, and stop every old Core before applying migrations `000083` and `000084`. Do not mix old writers with the new schema.
+* Preserve the last remaining legacy Rsync backup before attempting a new backup. Historical success without capture evidence does not authorize restore; uncertain mutable generations return `new-backup-required`.
+* Durable notification intents recover after restart, but a send whose receipt was not committed can be delivered again. Unknown historical decisions are not blindly replayed; unknown does not mean sent.
+* Used capture, generation, and delivery evidence blocks schema downgrade. Do not erase evidence or force migration versions; rollback must preserve database, backup data, and delivery state together.
+* Legacy Rsync/Rclone age-based destructive retention remains disabled; managed recovery points and Restic retention are unchanged. Update Core and optional Worker from the same release to keep toolchain fingerprints aligned.
+* See [upgrade and rollback guidance](docs/deployment.md#升级与回滚) for the complete operational procedure.
 
 ## [0.55.6](https://github.com/xiangnan0811/xirang/compare/v0.55.5...v0.55.6) (2026-09-10)
 
