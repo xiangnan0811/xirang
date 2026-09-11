@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/secure"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -72,6 +73,9 @@ func createCausalPostgresRun(t *testing.T, db *gorm.DB, task model.Task, trigger
 
 func openCausalTaskAlertPostgresDB(t *testing.T, dsn string) *gorm.DB {
 	t.Helper()
+	t.Setenv("DATA_ENCRYPTION_KEY", "dGVzdC1rZXktZGF0YS1lbmNyeXB0aW9uLWtleS0zMmIh")
+	secure.ResetForTesting()
+	t.Cleanup(secure.ResetForTesting)
 	parsed, err := url.Parse(dsn)
 	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") {
 		t.Fatalf("TEST_POSTGRES_DSN must be a PostgreSQL URL: %v", err)
