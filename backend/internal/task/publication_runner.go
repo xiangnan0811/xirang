@@ -19,11 +19,14 @@ import (
 )
 
 type providerRunResult struct {
-	ExitCode      int
-	Err           error
-	SuppressRetry bool
-	Managed       bool
-	WarningCode   backupasset.PublicationFailureCode
+	ExitCode int
+	Err      error
+	// ExecutorNotInvoked is authoritative only for exits before the selected
+	// executor's Run/RunWithPublication method is called.
+	ExecutorNotInvoked bool
+	SuppressRetry      bool
+	Managed            bool
+	WarningCode        backupasset.PublicationFailureCode
 }
 
 type publicationFinalization struct {
@@ -49,11 +52,11 @@ func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, ru
 		ctx = context.Background()
 	}
 	if m == nil || m.executorFactory == nil {
-		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: task executor factory unavailable", backupasset.ErrInvalidState)}
+		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: task executor factory unavailable", backupasset.ErrInvalidState), ExecutorNotInvoked: true}
 	}
 	exec := m.executorFactory.Resolve(taskEntity.ExecutorType)
 	if exec == nil {
-		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: task executor unavailable", backupasset.ErrInvalidState)}
+		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: task executor unavailable", backupasset.ErrInvalidState), ExecutorNotInvoked: true}
 	}
 	providerKind := strings.ToLower(strings.TrimSpace(taskEntity.ExecutorType))
 	if m.publicationCoordinator == nil || (providerKind != "restic" && providerKind != "rsync" && providerKind != "rclone") {
@@ -63,16 +66,16 @@ func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, ru
 
 	audit, err := taskPublicationAuditContext(runID)
 	if err != nil {
-		return providerRunResult{ExitCode: -1, Err: err, Managed: true}
+		return providerRunResult{ExitCode: -1, Err: err, Managed: true, ExecutorNotInvoked: true}
 	}
 	session, err := m.publicationCoordinator.Prepare(ctx, publication.Run{
 		Task: taskEntity, TaskRunID: runID, Trigger: reason, ChainRunID: chainRunID, Audit: audit,
 	})
 	if err != nil {
-		return providerRunResult{ExitCode: -1, Err: err, Managed: true}
+		return providerRunResult{ExitCode: -1, Err: err, Managed: true, ExecutorNotInvoked: true}
 	}
 	if session == nil {
-		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: nil publication session", backupasset.ErrInvalidState), Managed: true}
+		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: nil publication session", backupasset.ErrInvalidState), Managed: true, ExecutorNotInvoked: true}
 	}
 
 	// Finalization is complete only after the persistence handoff succeeds and
@@ -94,6 +97,7 @@ func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, ru
 	}()
 
 	rejectPrecondition := func(result providerRunResult) providerRunResult {
+		result.ExecutorNotInvoked = true
 		cleanupCtx, cleanupCancel := newPublicationCleanupContext(ctx)
 		finalization := rejectPublicationPrecondition(cleanupCtx, session, result)
 		cleanupCancel()

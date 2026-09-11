@@ -26,14 +26,6 @@ var (
 	alertFireLocks   = map[uint]*alertFireLockRef{}
 )
 
-// Dispatcher is escalation's inbound interface for dispatching the
-// fired-level integration list. Defined here so the engine does not import
-// alerting; alerting.DefaultRaiser satisfies this interface because it
-// implements DispatchToIntegrations with the same signature.
-type Dispatcher interface {
-	DispatchToIntegrations(alert model.Alert, integrationIDs []uint)
-}
-
 // Engine polls open alerts and fires the next escalation level when due.
 type Engine struct {
 	db         *gorm.DB
@@ -45,15 +37,12 @@ type Engine struct {
 	done       chan struct{}
 }
 
-// NewEngine constructs an Engine. silence may be nil (no-op silence check);
-// dispatcher MUST be wired but, to mirror the slo/anomaly nil-safety pattern,
-// passing nil installs a stub that logs dropped fires loudly so a
-// misconfiguration is visible in production logs rather than panicking the
-// engine goroutine.
+// NewEngine constructs an Engine. silence may be nil (no-op silence check).
+// A nil dispatcher is fail-closed: the engine logs the misconfiguration and
+// does not advance durable escalation state while dropping notifications.
 func NewEngine(db *gorm.DB, svc *Service, silence SilenceCheckerFn, dispatcher Dispatcher) *Engine {
 	if dispatcher == nil {
-		logger.Module("escalation").Warn().Msg("NewEngine called with nil dispatcher - fires will be logged only")
-		dispatcher = stubDispatcher{}
+		logger.Module("escalation").Warn().Msg("NewEngine called with nil dispatcher - fires will remain pending")
 	}
 	return &Engine{
 		db: db, svc: svc, silence: silence, dispatcher: dispatcher,
@@ -61,15 +50,6 @@ func NewEngine(db *gorm.DB, svc *Service, silence SilenceCheckerFn, dispatcher D
 		nowFn: time.Now,
 		done:  make(chan struct{}),
 	}
-}
-
-type stubDispatcher struct{}
-
-func (stubDispatcher) DispatchToIntegrations(alert model.Alert, integrationIDs []uint) {
-	logger.Module("escalation").Warn().
-		Uint("alert_id", alert.ID).
-		Int("integration_count", len(integrationIDs)).
-		Msg("stub dispatcher active - fire dropped; wire a real Dispatcher via NewEngine")
 }
 
 // SetTickInterval overrides the default tick for tests/smoke.
@@ -175,15 +155,24 @@ func (e *Engine) evaluate(ctx context.Context, alert *model.Alert, now time.Time
 	e.fire(ctx, alert, policy, nextIdx, level, now)
 }
 
-// fire atomically advances last_level_fired, records the event, then dispatches.
+// fire atomically advances last_level_fired, records the event, and enqueues
+// that event's delivery intents before dispatching them after commit.
 // Steps:
 //  1. compute severityAfter and tagsAfter
 //  2. check silence against the projected alert state
 //  3. UPDATE alerts with optimistic lock on last_level_fired
-//  4. INSERT event row (UNIQUE protects against double fire)
-//  5. after tx commit, dispatch to integrations (unless silenced-skip)
+//  4. INSERT event row and its channel intents in one transaction
+//  5. after tx commit, dispatch those intents through the delivery CAS
 func (e *Engine) fire(ctx context.Context, alert *model.Alert, policy *model.EscalationPolicy,
 	idx int, level model.EscalationLevel, now time.Time) {
+	if e.dispatcher == nil {
+		logger.Module("escalation").Warn().
+			Uint("alert_id", alert.ID).
+			Int("level", idx).
+			Msg("fire skipped: escalation dispatcher is not configured")
+		return
+	}
+
 	lock := acquireAlertFireLock(alert.ID)
 	defer releaseAlertFireLock(alert.ID, lock)
 
@@ -198,7 +187,7 @@ func (e *Engine) fire(ctx context.Context, alert *model.Alert, policy *model.Esc
 	tagsJSON, _ := json.Marshal(tagsAfter)
 	tagsAddedJSON, _ := json.Marshal(level.Tags)
 
-	// Check silence against the projected state
+	// Check silence against the projected state.
 	proj := *alert
 	proj.Severity = severityAfter
 	proj.Tags = string(tagsJSON)
@@ -209,14 +198,16 @@ func (e *Engine) fire(ctx context.Context, alert *model.Alert, policy *model.Esc
 		}
 	}
 
-	integrationIDs := level.IntegrationIDs
-	integrationSnapshot := append([]uint(nil), integrationIDs...)
+	integrationIDs := append([]uint(nil), level.IntegrationIDs...)
+	integrationSnapshot := append([]uint{}, integrationIDs...)
 	if silenced {
-		integrationSnapshot = nil
+		integrationSnapshot = []uint{}
 	}
 	integrationSnapshotJSON, _ := json.Marshal(integrationSnapshot)
 
 	pid := policy.ID
+	var evt model.AlertEscalationEvent
+	var intentIDs []uint
 
 	err := e.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Optimistic lock on last_level_fired AND status='open' — covers
@@ -241,7 +232,7 @@ func (e *Engine) fire(ctx context.Context, alert *model.Alert, policy *model.Esc
 		if res.RowsAffected == 0 {
 			return errConcurrentFire
 		}
-		evt := model.AlertEscalationEvent{
+		evt = model.AlertEscalationEvent{
 			AlertID:            alert.ID,
 			EscalationPolicyID: &pid,
 			LevelIndex:         idx,
@@ -251,7 +242,19 @@ func (e *Engine) fire(ctx context.Context, alert *model.Alert, policy *model.Esc
 			TagsAdded:          string(tagsAddedJSON),
 			FiredAt:            now,
 		}
-		return tx.Create(&evt).Error
+		if err := tx.Create(&evt).Error; err != nil {
+			return err
+		}
+		if !silenced && len(integrationSnapshot) > 0 {
+			var err error
+			intentIDs, err = e.dispatcher.EnqueueEscalationDeliveriesTx(
+				tx, *alert, evt, integrationSnapshot,
+			)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		if errors.Is(err, errConcurrentFire) {
@@ -261,7 +264,7 @@ func (e *Engine) fire(ctx context.Context, alert *model.Alert, policy *model.Esc
 		return
 	}
 
-	// Update in-memory snapshot so subsequent evaluates in the same tick see new state
+	// Update in-memory snapshot so subsequent evaluates in the same tick see new state.
 	alert.Severity = severityAfter
 	alert.Tags = string(tagsJSON)
 	alert.LastLevelFired = idx
@@ -272,8 +275,14 @@ func (e *Engine) fire(ctx context.Context, alert *model.Alert, policy *model.Esc
 	}
 	FiresTotal.WithLabelValues(severityAfter, silencedLabel).Inc()
 
-	if !silenced && len(integrationIDs) > 0 {
-		e.dispatcher.DispatchToIntegrations(*alert, integrationIDs)
+	if !silenced && len(intentIDs) > 0 {
+		if err := e.dispatcher.DispatchEscalationDeliveries(ctx, *alert, evt.ID, intentIDs); err != nil {
+			logger.Module("escalation").Warn().Err(err).
+				Uint("alert_id", alert.ID).
+				Uint("event_id", evt.ID).
+				Int("intent_count", len(intentIDs)).
+				Msg("dispatch escalation delivery intents failed")
+		}
 	}
 }
 

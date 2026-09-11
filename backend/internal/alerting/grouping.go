@@ -12,8 +12,9 @@ import (
 )
 
 type groupState struct {
-	firstSeenAt time.Time
-	alertCount  int
+	firstSeenAt  time.Time
+	firstAlertID uint
+	alertCount   int
 }
 
 // Grouping 持有内存中的渐进式分组状态，线程安全。
@@ -28,17 +29,23 @@ func NewGrouping(window time.Duration) *Grouping {
 	return &Grouping{window: window, active: map[string]*groupState{}}
 }
 
-// ShouldSend 报告本次告警是否为窗口内的首次出现。
-// 首次出现时注册 key 并调度清理；窗口内重复出现时递增计数并返回 false。
-func (g *Grouping) ShouldSend(key string) bool {
+// ShouldSend reports whether the persistent alert owns the first-send slot
+// for this key in the current window. Replaying the same alert after a
+// durable routing failure is idempotent: it may reclaim its own first slot
+// without incrementing the group count. A distinct alert in the window is
+// counted and suppressed.
+func (g *Grouping) ShouldSend(key string, alertID uint) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := time.Now()
 	if st, ok := g.active[key]; ok && now.Sub(st.firstSeenAt) < g.window {
+		if alertID != 0 && st.firstAlertID == alertID {
+			return true
+		}
 		st.alertCount++
 		return false
 	}
-	g.active[key] = &groupState{firstSeenAt: now, alertCount: 1}
+	g.active[key] = &groupState{firstSeenAt: now, firstAlertID: alertID, alertCount: 1}
 	time.AfterFunc(g.window, func() {
 		g.mu.Lock()
 		if st, ok := g.active[key]; ok && time.Since(st.firstSeenAt) >= g.window {

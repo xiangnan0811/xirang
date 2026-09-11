@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -237,6 +238,33 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 		m.runTaskWithContext(taskID, run.ID, reason, chainRunID, runCtx, ownership, ownership.cancel)
 	}()
 	return run.ID, nil
+}
+
+func (m *Manager) populateRsyncBinary(task *model.Task) {
+	if m == nil || task == nil || !strings.EqualFold(strings.TrimSpace(task.ExecutorType), "rsync") ||
+		m.executorFactory == nil {
+		return
+	}
+	resolved := m.executorFactory.Resolve(task.ExecutorType)
+	provider, ok := resolved.(executor.RsyncBinaryProvider)
+	if !ok {
+		return
+	}
+	task.RsyncBinary = provider.RsyncBinary()
+}
+
+func (m *Manager) clearLegacyRsyncGenerationAfterNoStart(taskID, runID uint) error {
+	result := m.db.Model(&model.TaskRun{}).
+		Where("id = ? AND task_id = ? AND status = ? AND backup_generation_state = ?",
+			runID, taskID, model.TaskRunStatusRunning, model.TaskRunGenerationStateDirty).
+		Update("backup_generation_state", "")
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("rsync 无启动代际状态未能清除")
+	}
+	return nil
 }
 
 func (m *Manager) runTask(taskID uint, runID uint, reason string, chainRunID string) {
@@ -575,6 +603,60 @@ func (m *Manager) runTaskWithContext(
 		}
 		return
 	}
+	var captureManifest string
+	var captureLayout string
+	var captureRoot string
+	m.populateRsyncBinary(&taskEntity)
+	captureAttempted := isLegacyMutableRsyncTask(taskEntity)
+	captureError := ""
+	if captureAttempted {
+		captureManifest, err = executor.CaptureRsyncManifest(execCtx, taskEntity)
+		if err != nil {
+			captureError = sanitizeTaskLastError("Rsync 捕获证据生成失败: " + err.Error())
+			captureManifest = ""
+		} else {
+			captureEvidence, decodeErr := model.DecodeRsyncCaptureManifest(captureManifest)
+			if decodeErr != nil {
+				captureError = "Rsync 捕获证据无效"
+				captureManifest = ""
+			} else {
+				captureLayout = captureEvidence.Layout
+				captureRoot = captureEvidence.Root
+			}
+		}
+		if execCtx.Err() != nil || runCtx.Err() != nil {
+			if cancelErr := m.cancelTaskExecutionBeforeExecutor(
+				runID,
+				taskID,
+				taskEntity.NodeID,
+				&previousTaskOutcome,
+				"任务已取消",
+			); cancelErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(cancelErr).Msg("捕获证据后取消失败")
+			} else {
+				runCompleted = true
+			}
+			return
+		}
+		dirtyResult := m.db.Model(&model.TaskRun{}).
+			Where("id = ? AND task_id = ? AND status = ?", runID, taskID, model.TaskRunStatusRunning).
+			Update("backup_generation_state", model.TaskRunGenerationStateDirty)
+		if dirtyResult.Error != nil || dirtyResult.RowsAffected != 1 {
+			errorMsg := "Rsync 写入尝试状态持久化失败"
+			failedStatus := StatusFailed
+			finishedAt := time.Now().UTC()
+			_ = m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &failedStatus,
+				map[string]interface{}{"next_run_at": nextCronRun(taskEntity.CronSpec), "last_error": errorMsg},
+				StatusFailed, map[string]interface{}{"finished_at": &finishedAt, "last_error": errorMsg})
+			taskEntity.Status = string(StatusFailed)
+			taskEntity.LastError = errorMsg
+			runCompleted = true
+			return
+		}
+		if m.afterLegacyRsyncGenerationArm != nil {
+			m.afterLegacyRsyncGenerationArm()
+		}
+	}
 	runStartedAt := now
 	providerResult := m.executeProvider(execCtx, taskEntity, runID, reason, chainRunID, func(level, message string) {
 		m.logDispatcher.Dispatch(taskID, runIDPtr, level, message, string(StatusRunning))
@@ -587,6 +669,18 @@ func (m *Manager) runTaskWithContext(
 	exitCode, err := providerResult.ExitCode, providerResult.Err
 	suppressRetry := providerResult.SuppressRetry
 
+	if captureAttempted {
+		noProcessStart := providerResult.ExecutorNotInvoked
+		if !noProcessStart && !providerResult.Managed {
+			var noStartErr *executor.NoProcessStartError
+			noProcessStart = errors.As(err, &noStartErr)
+		}
+		if noProcessStart {
+			if clearErr := m.clearLegacyRsyncGenerationAfterNoStart(taskID, runID); clearErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(clearErr).Msg("Rsync 无启动代际闩锁清除失败")
+			}
+		}
+	}
 	wasTimeout := !suppressRetry && (errors.Is(err, context.DeadlineExceeded) || errors.Is(execCtx.Err(), context.DeadlineExceeded))
 	if wasTimeout {
 		errorMsg := fmt.Sprintf("任务执行超时（>%s），已强制中止", execTimeout)
@@ -661,10 +755,56 @@ func (m *Manager) runTaskWithContext(
 			return
 		}
 
-		verifyStatus := "none"
+		if captureAttempted && captureError != "" {
+			warningStatus := StatusWarning
+			finishedAt := time.Now().UTC()
+			duration := finishedAt.Sub(now).Milliseconds()
+			if terminalErr := m.terminalizeTaskRun(execCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &warningStatus,
+				map[string]interface{}{
+					"retry_count": 0, "next_run_at": nextCronRun(taskEntity.CronSpec),
+					"last_error": captureError, "verify_status": "warning",
+				},
+				StatusWarning, map[string]interface{}{
+					"finished_at": &finishedAt, "duration_ms": duration,
+					"verify_status": "warning", "last_error": captureError, "progress": 100,
+				}); terminalErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("Rsync capture warning persistence failed")
+				return
+			}
+			taskEntity.Status = string(StatusWarning)
+			taskEntity.LastError = captureError
+			runCompleted = true
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "备份捕获证据不可用，结果标记为 warning: "+captureError, taskEntity.Status)
+			return
+		}
 
-		// 检查关联策略是否启用校验
-		if shouldRunLegacyVerification(providerResult, taskEntity.Policy) {
+		verifyStatus := "none"
+		if captureManifest != "" {
+			if verifyErr := executor.VerifyRsyncCaptureManifestTarget(execCtx, taskEntity, captureManifest); verifyErr != nil {
+				verifyMessage := sanitizeTaskLastError("Rsync 捕获目标校验失败: " + verifyErr.Error())
+				warningStatus := StatusWarning
+				finishedAt := time.Now().UTC()
+				duration := finishedAt.Sub(now).Milliseconds()
+				if terminalErr := m.terminalizeTaskRun(execCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &warningStatus,
+					map[string]interface{}{
+						"retry_count": 0, "next_run_at": nextCronRun(taskEntity.CronSpec),
+						"last_error": verifyMessage, "verify_status": "warning",
+					},
+					StatusWarning, map[string]interface{}{
+						"finished_at": &finishedAt, "duration_ms": duration,
+						"verify_status": "warning", "last_error": verifyMessage, "progress": 100,
+					}); terminalErr != nil {
+					logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("Rsync capture target verification persistence failed")
+					return
+				}
+				taskEntity.Status = string(StatusWarning)
+				taskEntity.LastError = verifyMessage
+				runCompleted = true
+				m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "备份捕获证据校验未通过: "+verifyMessage, taskEntity.Status)
+				return
+			}
+			verifyStatus = "passed"
+		} else if shouldRunLegacyVerification(providerResult, taskEntity.Policy) {
 			m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "开始备份完整性校验", taskEntity.Status)
 			result := verifier.VerifyWithLineageGuard(execCtx, taskEntity, taskEntity.Policy.VerifySampleRate, m.db, func(level, msg string) {
 				m.logDispatcher.Dispatch(taskID, runIDPtr, level, msg, string(StatusRunning))
@@ -727,16 +867,23 @@ func (m *Manager) runTaskWithContext(
 			Select("COALESCE(AVG(throughput_mbps), 0)").Scan(&avgThroughput)
 
 		successStatus := StatusSuccess
+		successRunUpdates := map[string]interface{}{
+			"finished_at": &finishedAt, "duration_ms": duration,
+			"verify_status": verifyStatus, "throughput_mbps": avgThroughput,
+			"last_error": "", "progress": 100,
+		}
+		if captureManifest != "" {
+			successRunUpdates["backup_capture_layout"] = captureLayout
+			successRunUpdates["backup_capture_root"] = captureRoot
+			successRunUpdates["backup_capture_manifest"] = captureManifest
+			successRunUpdates["backup_generation_state"] = model.TaskRunGenerationStateVerified
+		}
 		if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &successStatus,
 			map[string]interface{}{
 				"retry_count": 0, "next_run_at": nextCronRun(taskEntity.CronSpec),
 				"last_error": "", "verify_status": verifyStatus,
 			},
-			StatusSuccess, map[string]interface{}{
-				"finished_at": &finishedAt, "duration_ms": duration,
-				"verify_status": verifyStatus, "throughput_mbps": avgThroughput,
-				"last_error": "", "progress": 100,
-			}); terminalErr != nil {
+			StatusSuccess, successRunUpdates); terminalErr != nil {
 			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("更新 success 失败: %v", terminalErr), taskEntity.Status)
 			return
 		}
@@ -793,7 +940,7 @@ func (m *Manager) runTaskWithContext(
 	var nextRun time.Time
 	var shouldRetry bool
 
-	if taskEntity.Policy != nil && taskEntity.Policy.MaxRetries > 0 {
+	if taskEntity.Policy != nil && taskEntity.Policy.MaxRetries >= 0 {
 		nextStatus, retryCount, nextRun, shouldRetry = m.stateMachine.NextAfterFailureConfigurable(
 			StatusRunning, taskEntity.RetryCount, time.Now(),
 			taskEntity.Policy.MaxRetries, taskEntity.Policy.RetryBaseSeconds,
@@ -1000,9 +1147,19 @@ func (m *Manager) runRestoreTaskWithContext(
 
 	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "开始恢复任务", "")
 
+	m.populateRsyncBinary(&restoreTask)
+	precheckTarget := restoreTask.RsyncTarget
+	if isLegacyMutableRsyncTask(restoreTask) &&
+		restoreTask.RsyncCaptureLayout == model.TaskRunCaptureLayoutSingleFile {
+		// A captured single-file target may be an existing file or an absent
+		// path. Prepare only its parent; mkdir on the requested file would
+		// either fail with EEXIST or turn the restore into a nested directory.
+		precheckTarget = filepath.Dir(strings.TrimSpace(restoreTask.RsyncTarget))
+	}
+
 	// 恢复前检查：在远程节点上检查源路径（备份）和目标路径
 	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "执行恢复前检查（目标路径、磁盘空间）", "")
-	if err := m.ensureRemoteTargetReadyFunc(execCtx, restoreTask.Node, restoreTask.RsyncTarget); err != nil {
+	if err := m.ensureRemoteTargetReadyFunc(execCtx, restoreTask.Node, precheckTarget); err != nil {
 		// 区分取消与真实失败
 		if execCtx.Err() != nil {
 			finishedAt := time.Now().UTC()

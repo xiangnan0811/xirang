@@ -22,6 +22,13 @@ type RsyncPublicationExecutor struct {
 	strategy provider.PublicationStrategy
 }
 
+func (executor *RsyncPublicationExecutor) RsyncBinary() string {
+	if executor == nil || executor.legacy == nil {
+		return "rsync"
+	}
+	return executor.legacy.RsyncBinary()
+}
+
 func (executor *RsyncPublicationExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
 	if executor == nil || executor.legacy == nil {
 		return -1, fmt.Errorf("%w: legacy Rsync executor unavailable", backupasset.ErrInvalidState)

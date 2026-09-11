@@ -80,6 +80,16 @@ func isBackupTaskRunTrigger(triggerType string) bool {
 	}
 }
 
+func isLegacyMutableRsyncTask(task model.Task) bool {
+	if !strings.EqualFold(strings.TrimSpace(task.ExecutorType), "rsync") {
+		return false
+	}
+	if strings.TrimSpace(task.RsyncSource) == "" || strings.TrimSpace(task.RsyncTarget) == "" {
+		return false
+	}
+	config, err := ParseRsyncPublicationConfigV1(task.ExecutorConfig)
+	return err == nil && config.PublicationMode == backupasset.PublicationLegacyMutable
+}
 func loadTaskNodeForFingerprint(tx *gorm.DB, task *model.Task) error {
 	if tx == nil || task == nil || task.NodeID == 0 {
 		return nil
@@ -328,28 +338,29 @@ type queuedTaskSample struct {
 }
 
 type Manager struct {
-	db                          *gorm.DB
-	nodeWriteAdmission          NodeWriteAdmission
-	nodeWriteRetryWait          func(context.Context, int) error
-	runContextFactory           func(context.Context, time.Duration) (context.Context, context.CancelFunc)
-	stateMachine                *StateMachine
-	executorFactory             executor.Factory
-	hub                         *ws.Hub
-	scheduler                   *scheduler.CronScheduler
-	locks                       sync.Map
-	strategyLocks               sync.Map
-	nodeLocks                   sync.Map                                                         // nodeID → *sync.Mutex, 节点级互斥（restore 与普通任务共享）
-	hookRunFunc                 func(ctx context.Context, task model.Task, command string) error // 可测试注入
-	afterTriggerRestoreLoad     func()                                                           // 可测试注入：归档检查与 run 预约之间
-	drillSSHScriptFunc          func(ctx context.Context, node model.Node, script string) error  // 可测试注入
-	drillRestoreFunc            func(ctx context.Context, srcTask model.Task, sandboxNode model.Node, drillPath string, logf func(string, string)) error
-	ensureRemoteTargetReadyFunc func(ctx context.Context, node model.Node, targetPath string) error
-	pendingRuns                 sync.Map
-	pendingRecoveryMu           sync.Mutex
-	pendingRecoveryCursor       uint
-	restoreNodes                sync.Map // nodeID → taskID, 持续跟踪有活跃恢复任务的节点
-	semaphore                   chan struct{}
-	taskWG                      sync.WaitGroup
+	db                            *gorm.DB
+	nodeWriteAdmission            NodeWriteAdmission
+	nodeWriteRetryWait            func(context.Context, int) error
+	runContextFactory             func(context.Context, time.Duration) (context.Context, context.CancelFunc)
+	stateMachine                  *StateMachine
+	executorFactory               executor.Factory
+	hub                           *ws.Hub
+	scheduler                     *scheduler.CronScheduler
+	locks                         sync.Map
+	strategyLocks                 sync.Map
+	nodeLocks                     sync.Map                                                         // nodeID → *sync.Mutex, 节点级互斥（restore 与普通任务共享）
+	hookRunFunc                   func(ctx context.Context, task model.Task, command string) error // 可测试注入
+	afterTriggerRestoreLoad       func()                                                           // 可测试注入：归档检查与 run 预约之间
+	afterLegacyRsyncGenerationArm func()                                                           // 可测试注入：Rsync 代际闩锁持久化后
+	drillSSHScriptFunc            func(ctx context.Context, node model.Node, script string) error  // 可测试注入
+	drillRestoreFunc              func(ctx context.Context, srcTask model.Task, sandboxNode model.Node, drillPath string, logf func(string, string)) error
+	ensureRemoteTargetReadyFunc   func(ctx context.Context, node model.Node, targetPath string) error
+	pendingRuns                   sync.Map
+	pendingRecoveryMu             sync.Mutex
+	pendingRecoveryCursor         uint
+	restoreNodes                  sync.Map // nodeID → taskID, 持续跟踪有活跃恢复任务的节点
+	semaphore                     chan struct{}
+	taskWG                        sync.WaitGroup
 	// Sub-components extracted from the Manager god object.
 	logDispatcher *LogDispatcher
 	sampleWriter  *SampleWriter
@@ -664,6 +675,40 @@ func (m *Manager) reserveTaskRun(ctx context.Context, nodeID uint, requested mod
 			}
 			if err := loadTaskNodeForFingerprint(tx, &locked); err != nil {
 				return err
+			}
+			if requested.BackupSourceRunID > 0 {
+				if !isLegacyMutableRsyncTask(locked) {
+					return ErrRestoreRequiresNewBackup
+				}
+				var latestOrdinary model.TaskRun
+				latestResult := tx.Where(`task_id = ? AND node_id_snapshot = ? AND
+					lower(trigger_type) NOT IN ? AND COALESCE(backup_generation_state, '') <> ''`,
+					requested.TaskID, locked.NodeID, []string{"restore", "drill"}).
+					Order("id DESC").Limit(1).Find(&latestOrdinary)
+				if latestResult.Error != nil {
+					return latestResult.Error
+				}
+				if latestResult.RowsAffected != 1 || latestOrdinary.ID != requested.BackupSourceRunID {
+					return ErrRestoreRequiresNewBackup
+				}
+				var sourceRun model.TaskRun
+				sourceResult := tx.Where("id = ?", requested.BackupSourceRunID).Limit(1).Find(&sourceRun)
+				if sourceResult.Error != nil {
+					return sourceResult.Error
+				}
+				if sourceResult.RowsAffected != 1 ||
+					sourceRun.Status != model.TaskRunStatusSuccess ||
+					sourceRun.BackupGenerationState != model.TaskRunGenerationStateVerified ||
+					strings.TrimSpace(sourceRun.BackupCaptureLayout) == "" ||
+					strings.TrimSpace(sourceRun.BackupCaptureManifest) == "" {
+					return ErrRestoreRequiresNewBackup
+				}
+				capture, decodeErr := model.DecodeRsyncCaptureManifest(sourceRun.BackupCaptureManifest)
+				if decodeErr != nil ||
+					capture.Layout != sourceRun.BackupCaptureLayout ||
+					capture.Root != sourceRun.BackupCaptureRoot {
+					return ErrRestoreRequiresNewBackup
+				}
 			}
 			if m.nodeWriteAdmission != nil {
 				if err := m.nodeWriteAdmission.AdmitTaskTx(ctx, tx, nodeID); err != nil {
@@ -1362,14 +1407,31 @@ func (m *Manager) loadRestoreTaskWithProvenance(ctx context.Context, taskID uint
 		if currentFingerprint == "" {
 			return fmt.Errorf("%w: 该任务没有成功的执行记录与当前节点配置匹配，请先创建新的成功备份", ErrRestoreRequiresNewBackup)
 		}
-
+		legacyMutableRsync := isLegacyMutableRsyncTask(taskEntity)
+		if legacyMutableRsync {
+			var activeOrdinary int64
+			activeResult := tx.Model(&model.TaskRun{}).
+				Where(`task_id = ? AND node_id_snapshot = ? AND status IN ? AND
+					lower(trigger_type) NOT IN ?`,
+					taskID, taskEntity.NodeID, model.TaskRunActiveStatuses(), []string{"restore", "drill"}).
+				Count(&activeOrdinary)
+			if activeResult.Error != nil {
+				return activeResult.Error
+			}
+			if activeOrdinary > 0 {
+				return fmt.Errorf("%w: 任务仍有未完成的写入尝试", ErrRestoreRequiresNewBackup)
+			}
+		}
 		var latestBackup model.TaskRun
-		runResult := tx.Where(`task_id = ? AND node_id_snapshot = ? AND status = ? AND
+		latestQuery := tx.Where(`task_id = ? AND node_id_snapshot = ? AND
 			lower(trigger_type) NOT IN ?`,
-			taskID, taskEntity.NodeID, model.TaskRunStatusSuccess, []string{"restore", "drill"}).
-			Order("id DESC").
-			Limit(1).
-			Find(&latestBackup)
+			taskID, taskEntity.NodeID, []string{"restore", "drill"})
+		if legacyMutableRsync {
+			latestQuery = latestQuery.Where("COALESCE(backup_generation_state, '') <> ''")
+		} else {
+			latestQuery = latestQuery.Where("status = ?", model.TaskRunStatusSuccess)
+		}
+		runResult := latestQuery.Order("id DESC").Limit(1).Find(&latestBackup)
 		if runResult.Error != nil {
 			return runResult.Error
 		}
@@ -1379,6 +1441,24 @@ func (m *Manager) loadRestoreTaskWithProvenance(ctx context.Context, taskID uint
 		if strings.TrimSpace(latestBackup.BackupConfigFingerprint) == "" ||
 			latestBackup.BackupConfigFingerprint != currentFingerprint {
 			return fmt.Errorf("%w: 该任务没有成功的执行记录与当前恢复源、目标、节点配置匹配，请先创建新的成功备份", ErrRestoreRequiresNewBackup)
+		}
+		if legacyMutableRsync {
+			if latestBackup.Status != model.TaskRunStatusSuccess ||
+				latestBackup.BackupGenerationState != model.TaskRunGenerationStateVerified ||
+				strings.TrimSpace(latestBackup.BackupCaptureLayout) == "" ||
+				strings.TrimSpace(latestBackup.BackupCaptureManifest) == "" {
+				return fmt.Errorf("%w: 最近一次备份尚未生成可恢复的 RSync 捕获证据，请先创建新的成功备份", ErrRestoreRequiresNewBackup)
+			}
+			capture, decodeErr := model.DecodeRsyncCaptureManifest(latestBackup.BackupCaptureManifest)
+			if decodeErr != nil ||
+				capture.Layout != latestBackup.BackupCaptureLayout ||
+				capture.Root != latestBackup.BackupCaptureRoot {
+				return fmt.Errorf("%w: 最近一次备份的 RSync 捕获证据无效，请先创建新的成功备份", ErrRestoreRequiresNewBackup)
+			}
+			taskEntity.RsyncCaptureLayout = latestBackup.BackupCaptureLayout
+			taskEntity.RsyncCaptureRoot = latestBackup.BackupCaptureRoot
+			taskEntity.RsyncCaptureManifest = latestBackup.BackupCaptureManifest
+			taskEntity.RsyncCaptureGenerationID = latestBackup.ID
 		}
 		return nil
 	})
@@ -1486,9 +1566,10 @@ func (m *Manager) TriggerRestore(taskID uint, targetPath string) (uint, error) {
 		return 0, fmt.Errorf("同节点有任务正在运行，请稍候再试")
 	}
 	requestedRun := model.TaskRun{
-		TaskID:      taskID,
-		TriggerType: "restore",
-		Status:      model.TaskRunStatusPending,
+		TaskID:            taskID,
+		TriggerType:       "restore",
+		Status:            model.TaskRunStatusPending,
+		BackupSourceRunID: validatedTask.RsyncCaptureGenerationID,
 	}
 	run, err := m.reserveTaskRun(execCtx, taskEntity.NodeID, requestedRun)
 	if err != nil {

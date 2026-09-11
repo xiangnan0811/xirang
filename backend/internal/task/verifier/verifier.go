@@ -67,6 +67,16 @@ func Verify(ctx context.Context, task model.Task, sampleRate int, db *gorm.DB, l
 		return Result{Status: "passed", Message: "无需校验：未配置同步路径"}
 	}
 
+	// Restore and backup Rsync both use one exact Core/selection contract.
+	// Restore evidence is a Core-local manifest compared with a node target;
+	// it must not fall back to the historical remote-to-remote probe.
+	if strings.EqualFold(strings.TrimSpace(task.ExecutorType), "rsync") {
+		if isRestore {
+			return verifyRsyncRestoreManifest(ctx, task, logf)
+		}
+		return verifyRsyncBackupSelection(ctx, task, logf)
+	}
+
 	// 恢复模式：restic/rclone 恢复后路径含义已交换（RsyncTarget 是恢复目标而非仓库），
 	// 不能使用内建仓库校验；rsync 恢复使用远程对比校验。
 	if isRestore {

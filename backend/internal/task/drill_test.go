@@ -1521,7 +1521,6 @@ func TestExecuteDrillPersistentTerminalFailureRetainsOwnership(t *testing.T) {
 	fixture.manager.drillRecoveryLease = 50 * time.Millisecond
 	fixture.manager.drillRecoveryInterval = 10 * time.Millisecond
 	completeInitialDrillRecovery(t, fixture.manager)
-	startManagerRecoveryWorker(t, fixture.manager)
 	fixture.manager.drillSSHScriptFunc = func(context.Context, model.Node, string) error { return nil }
 	runID := createTestTaskRun(t, db, fixture.task.ID, "drill")
 	ownership := &pendingRunOwnership{}
@@ -1534,19 +1533,15 @@ func TestExecuteDrillPersistentTerminalFailureRetainsOwnership(t *testing.T) {
 
 	injected := errors.New("INTERNAL_PERSISTENT_DRILL_TERMINAL_FAILURE_CANARY")
 	callbackName := fmt.Sprintf("test:persistent-drill-terminal-%d", runID)
+	var failTerminalWrites atomic.Bool
+	failTerminalWrites.Store(true)
 	if err := db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
-		if tx.Statement.Table == "restore_drill_evidences" {
+		if tx.Statement.Table == "restore_drill_evidences" && failTerminalWrites.Load() {
 			_ = tx.AddError(injected)
 		}
 	}); err != nil {
 		t.Fatal(err)
 	}
-	callbackInstalled := true
-	t.Cleanup(func() {
-		if callbackInstalled {
-			_ = db.Callback().Update().Remove(callbackName)
-		}
-	})
 
 	fixture.manager.executeDrillWithContext(
 		context.Background(), &fixture.policy, fixture.task, fixture.sandbox, runID, ownership, nil,
@@ -1570,10 +1565,8 @@ func TestExecuteDrillPersistentTerminalFailureRetainsOwnership(t *testing.T) {
 		t.Fatalf("fault injection did not leave the expected recovery handoff: TaskRun=%q Evidence=%q", run.Status, evidence.Status)
 	}
 
-	if err := db.Callback().Update().Remove(callbackName); err != nil {
-		t.Fatal(err)
-	}
-	callbackInstalled = false
+	startManagerRecoveryWorker(t, fixture.manager)
+	failTerminalWrites.Store(false)
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		if err := db.First(&run, runID).Error; err != nil {

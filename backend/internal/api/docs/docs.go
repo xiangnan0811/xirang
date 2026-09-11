@@ -1209,14 +1209,14 @@ const docTemplate = `{
                 }
             }
         },
-        "/alerts/{id}/retry": {
+        "/alerts/{id}/retry-delivery": {
             "post": {
                 "security": [
                     {
                         "Bearer": []
                     }
                 ],
-                "description": "向指定通知通道重新发送告警",
+                "description": "向指定通知通道重新发送告警；优先重试该告警和通道最新的既有投递意图（包括升级事件投递），仅无历史投递意图时创建 direct 投递",
                 "consumes": [
                     "application/json"
                 ],
@@ -1291,14 +1291,14 @@ const docTemplate = `{
                 }
             }
         },
-        "/alerts/{id}/retry-all": {
+        "/alerts/{id}/retry-failed-deliveries": {
             "post": {
                 "security": [
                     {
                         "Bearer": []
                     }
                 ],
-                "description": "对指定告警的所有失败投递记录进行批量重发",
+                "description": "按每个逻辑投递意图批量重试；不同升级事件投递保持独立，同一通道的空键历史重复通过 canonical direct 投递合并",
                 "produces": [
                     "application/json"
                 ],
@@ -18448,6 +18448,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "http_headers": {
+                    "description": "HTTPHeaders is a JSON object encoded as a JSON string. Omit it on\nupdates to preserve existing credentials; use \"{}\" to clear them.",
                     "type": "string"
                 },
                 "http_method": {
@@ -23593,6 +23594,16 @@ const docTemplate = `{
                 "created_at": {
                     "type": "string"
                 },
+                "delivery_decided_at": {
+                    "type": "string"
+                },
+                "delivery_decision": {
+                    "description": "DeliveryDecision is intentionally independent of Alert.Status. A resolved\nalert may still have an in-flight delivery intent, while a silenced or\nescalated alert must not be rediscovered as a direct delivery on replay.",
+                    "type": "string"
+                },
+                "delivery_reason": {
+                    "type": "string"
+                },
                 "error_code": {
                     "type": "string"
                 },
@@ -23658,6 +23669,10 @@ const docTemplate = `{
                 "created_at": {
                     "type": "string"
                 },
+                "decision": {
+                    "description": "Decision is normally \"deliver\". It is kept on the row so a future\nnon-delivery intent can be represented without making an absent row\nambiguous. Legacy rows with an empty value are treated as deliverable.",
+                    "type": "string"
+                },
                 "id": {
                     "type": "integer"
                 },
@@ -23667,11 +23682,17 @@ const docTemplate = `{
                 "last_error": {
                     "type": "string"
                 },
+                "lease_expires_at": {
+                    "type": "string"
+                },
                 "next_retry_at": {
                     "type": "string"
                 },
                 "status": {
-                    "description": "pending|sent|retrying|failed",
+                    "description": "pending|sending|sent|retrying|failed",
+                    "type": "string"
+                },
+                "updated_at": {
                     "type": "string"
                 }
             }

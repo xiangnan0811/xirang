@@ -34,9 +34,11 @@ func installCronOccurrenceIndex(t *testing.T, db *gorm.DB) {
 
 func seedCronRecoveryTask(t *testing.T, db *gorm.DB, status TaskStatus, skipNext bool) model.Task {
 	t.Helper()
+	source := t.TempDir()
+	target := t.TempDir()
 	node := model.Node{
 		Name:      fmt.Sprintf("cron-recovery-node-%d", time.Now().UnixNano()),
-		Host:      "127.0.0.1",
+		Host:      "",
 		Port:      22,
 		Username:  "root",
 		AuthType:  "key",
@@ -53,8 +55,8 @@ func seedCronRecoveryTask(t *testing.T, db *gorm.DB, status TaskStatus, skipNext
 		CronSpec:     "@every 1h",
 		Enabled:      true,
 		SkipNext:     skipNext,
-		RsyncSource:  "/tmp/src",
-		RsyncTarget:  "/tmp/dst",
+		RsyncSource:  source + "/",
+		RsyncTarget:  target,
 	}
 	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatalf("create cron recovery task: %v", err)

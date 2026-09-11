@@ -44,7 +44,7 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
 - Add paired migration files for both database engines:
   `backend/internal/database/migrations/sqlite/<version>_<name>.up.sql`,
   `.down.sql`, and the matching `postgres/` files.
-- Keep version numbers in lockstep across SQLite and PostgreSQL. The current latest migration is `000082_task_run_cron_provenance`.
+- Keep version numbers in lockstep across SQLite and PostgreSQL. The current latest migration is `000084_alert_delivery_intents`.
 - Prefer plain SQL migrations over `AutoMigrate`. `RunMigrations` embeds the SQL files and executes them at startup.
 - Make migrations safe for existing installations. Use `IF EXISTS` or
   `IF NOT EXISTS` where the engine supports it, and write comments when a
@@ -121,7 +121,9 @@ hooks. Sensitive fields are encrypted/decrypted through model hooks and
   `idx_task_runs_started_at` and `idx_task_runs_status_finished_at`. Preserve
   both SQLite/PostgreSQL definitions and matching down migrations when changing
   traffic-window predicates or index names.
-- Backup-asset schema changes are paired across SQLite and PostgreSQL. The historical baseline includes `000062` through `000076_provider_native_version_reference_reason`; the current migration is `000082_task_run_cron_provenance`, and later versions must remain paired. After durable Search or publication facts, or live content-delivery state exists, schema down must fail closed rather than deleting history, Provider facts, grants, reservations, or leases.
+- Backup-asset schema changes are paired across SQLite and PostgreSQL. The historical baseline includes `000062` through `000076_provider_native_version_reference_reason`; the current migration is `000084_alert_delivery_intents`, and later versions must remain paired. After durable Search or publication facts, or live content-delivery state exists, schema down must fail closed rather than deleting history, Provider facts, grants, reservations, or leases.
+- Paired `000083_task_run_recovery_capture` records legacy Rsync layout, source-selected manifest, generation state, and restore source-run binding. Historical empty evidence remains unknown. A previous success is not authority after an uncertain mutable write; managed immutable recovery points retain their separate contract.
+- Paired `000084_alert_delivery_intents` separates durable alert fan-out decisions, canonical per-channel intents, and attempt-fenced delivery leases. Persist intent before network I/O; never use a stale model Save to finalize a delivery or overwrite alert decision fields. Historical NULL decisions are not a resend queue. Both migrations reject used-evidence downgrade and are validated for schema drift at startup.
 - Paired `000082_task_run_cron_provenance` preserves private immutable TaskRun cron occurrence and backup configuration fingerprint fields. Historical NULL/empty fields are unknown, never guessed provenance. The populated cron occurrence is unique per task; restore must match an ordinary successful backup fingerprint, node binding, and policy-owned execution inputs. Reservation and entry use the same locked policy snapshot. Only safely pending cron occurrences with stored identity may be relaunched after an expired lease; running/unknown outcomes must not be replayed. Drain old writers before upgrade. Once either new identity field is used, both downgrade admission and the down migration must refuse erasing it.
 - `task_runs.node_id_snapshot` has a closed product contract. Ordinary TaskRun
   writes must freeze a positive node ID matching the live Task at creation;

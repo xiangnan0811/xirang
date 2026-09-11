@@ -445,11 +445,21 @@ func createSuccessfulBackupTaskRun(t *testing.T, db *gorm.DB, taskID uint) uint 
 	if err := db.Preload("Node").Preload("Policy").First(&task, taskID).Error; err != nil {
 		t.Fatalf("加载成功备份任务失败: %v", err)
 	}
+	captureManifest, err := model.EncodeRsyncCaptureManifest(model.RsyncCaptureManifest{
+		Version: 1, Layout: model.TaskRunCaptureLayoutDirectoryContents,
+		Entries: []model.RsyncCaptureManifestEntry{{Path: "", Kind: "directory"}},
+	})
+	if err != nil {
+		t.Fatalf("编码成功备份捕获证据失败: %v", err)
+	}
 	run := model.TaskRun{
 		TaskID:                  taskID,
 		TriggerType:             "manual",
 		Status:                  model.TaskRunStatusSuccess,
 		BackupConfigFingerprint: model.TaskRunBackupConfigFingerprint(task),
+		BackupCaptureLayout:     model.TaskRunCaptureLayoutDirectoryContents,
+		BackupCaptureManifest:   captureManifest,
+		BackupGenerationState:   model.TaskRunGenerationStateVerified,
 	}
 	if err := db.Create(&run).Error; err != nil {
 		t.Fatalf("创建成功备份执行记录失败: %v", err)
@@ -459,9 +469,11 @@ func createSuccessfulBackupTaskRun(t *testing.T, db *gorm.DB, taskID uint) uint 
 
 func seedTaskForManagerTest(t *testing.T, db *gorm.DB) model.Task {
 	t.Helper()
+	source := t.TempDir()
+	target := t.TempDir()
 	node := model.Node{
 		Name:     "node-manager-test",
-		Host:     "127.0.0.1",
+		Host:     "",
 		Port:     22,
 		Username: "root",
 		AuthType: "key",
@@ -469,14 +481,13 @@ func seedTaskForManagerTest(t *testing.T, db *gorm.DB) model.Task {
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
-
 	taskEntity := model.Task{
 		Name:         "task-manager-test",
 		NodeID:       node.ID,
 		ExecutorType: "rsync",
 		Status:       string(StatusPending),
-		RsyncSource:  "/tmp/src",
-		RsyncTarget:  "/tmp/dst",
+		RsyncSource:  source + "/",
+		RsyncTarget:  target,
 	}
 	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatalf("创建任务失败: %v", err)
@@ -4406,7 +4417,7 @@ func TestRestoreBlockedByInFlightNormalTask(t *testing.T) {
 // seedTwoTasksSameNode 创建同节点、不同策略的两个 rsync 任务，用于互斥测试。
 func seedTwoTasksSameNode(t *testing.T, db *gorm.DB) (model.Task, model.Task) {
 	t.Helper()
-	node := model.Node{Name: "node-mutex-test", Host: "127.0.0.1", Port: 22, Username: "root", AuthType: "key"}
+	node := model.Node{Name: "node-mutex-test", Host: "", Port: 22, Username: "root", AuthType: "key"}
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("创建节点失败: %v", err)
 	}
@@ -4414,9 +4425,8 @@ func seedTwoTasksSameNode(t *testing.T, db *gorm.DB) (model.Task, model.Task) {
 	p2 := model.Policy{Name: "policy-mutex-2", SourcePath: "/src2", TargetPath: "/dst2", CronSpec: "@daily"}
 	db.Create(&p1)
 	db.Create(&p2)
-
-	t1 := model.Task{Name: "t-mutex-1", NodeID: node.ID, ExecutorType: "rsync", Status: string(StatusPending), RsyncSource: "/src1", RsyncTarget: "/dst1", PolicyID: &p1.ID}
-	t2 := model.Task{Name: "t-mutex-2", NodeID: node.ID, ExecutorType: "rsync", Status: string(StatusPending), RsyncSource: "/src2", RsyncTarget: "/dst2", PolicyID: &p2.ID}
+	t1 := model.Task{Name: "t-mutex-1", NodeID: node.ID, ExecutorType: "rsync", Status: string(StatusPending), RsyncSource: t.TempDir() + "/", RsyncTarget: t.TempDir(), PolicyID: &p1.ID}
+	t2 := model.Task{Name: "t-mutex-2", NodeID: node.ID, ExecutorType: "rsync", Status: string(StatusPending), RsyncSource: t.TempDir() + "/", RsyncTarget: t.TempDir(), PolicyID: &p2.ID}
 	db.Create(&t1)
 	db.Create(&t2)
 	return t1, t2

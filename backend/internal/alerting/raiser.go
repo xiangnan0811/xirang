@@ -1,6 +1,8 @@
 package alerting
 
 import (
+	"context"
+
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/slo"
 
@@ -9,21 +11,17 @@ import (
 
 // Raiser is alerting's small inbound interface for upstream subsystems
 // that need to surface alerts but would otherwise create an import cycle
-// (slo, anomaly, escalation each refer to types alerting can't see). The
-// interface is intentionally narrow — only the three verbs that today need
-// inversion. Other alerting raise verbs (RaiseNodeProbeFailure,
-// RaiseTaskFailure, etc.) remain free functions consumed directly by probe
-// and task because those packages don't introduce cycles.
+// (slo and anomaly each refer to types alerting can't see). The interface is
+// intentionally narrow — only the two raise verbs that today need inversion.
+// Escalation delivery uses the separate transaction-aware Dispatcher bridge.
 type Raiser interface {
 	RaiseSLOBreach(def *model.SLODefinition, c *slo.Compliance) error
 	RaiseAnomalyAlert(input AnomalyAlertInput) (alertID uint, raisedNew bool, err error)
-	DispatchToIntegrations(alert model.Alert, integrationIDs []uint)
 }
 
 // DefaultRaiser is the production implementation backing every Raiser
-// receiver. Wraps the existing free-function dispatch verbs in alerting/.
-// main.go constructs one of these at boot and passes it to slo.NewEvaluator,
-// anomaly.NewEngine, and escalation.NewEngine.
+// receiver. It also provides the transaction-aware escalation delivery
+// bridge used by escalation.Engine.
 type DefaultRaiser struct {
 	DB *gorm.DB
 }
@@ -36,6 +34,23 @@ func (r DefaultRaiser) RaiseAnomalyAlert(input AnomalyAlertInput) (uint, bool, e
 	return RaiseAnomalyAlert(r.DB, input)
 }
 
-func (r DefaultRaiser) DispatchToIntegrations(alert model.Alert, integrationIDs []uint) {
-	DispatchToIntegrations(r.DB, alert, integrationIDs)
+// EnqueueEscalationDeliveriesTx delegates the transaction-scoped intent
+// materialization to the configured dispatcher without performing network I/O.
+func (r DefaultRaiser) EnqueueEscalationDeliveriesTx(
+	tx *gorm.DB,
+	alert model.Alert,
+	event model.AlertEscalationEvent,
+	integrationIDs []uint,
+) ([]uint, error) {
+	return ensureDispatcher(r.DB).EnqueueEscalationDeliveriesTx(tx, alert, event, integrationIDs)
+}
+
+// DispatchEscalationDeliveries runs the post-commit delivery claim/CAS path.
+func (r DefaultRaiser) DispatchEscalationDeliveries(
+	ctx context.Context,
+	alert model.Alert,
+	eventID uint,
+	intentIDs []uint,
+) error {
+	return ensureDispatcher(r.DB).DispatchEscalationDeliveries(ctx, alert, eventID, intentIDs)
 }

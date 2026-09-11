@@ -1607,11 +1607,25 @@ func createSuccessfulBackupTaskRun(t *testing.T, db *gorm.DB, taskID uint) {
 	if err := db.Preload("Node").Preload("Policy").First(&taskEntity, taskID).Error; err != nil {
 		t.Fatalf("load successful backup task: %v", err)
 	}
+	captureManifest, err := model.EncodeRsyncCaptureManifest(model.RsyncCaptureManifest{
+		Version: 1,
+		Layout:  model.TaskRunCaptureLayoutDirectoryContents,
+		Entries: []model.RsyncCaptureManifestEntry{
+			{Path: "", Kind: "directory"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode successful backup capture manifest: %v", err)
+	}
 	run := model.TaskRun{
 		TaskID:                  taskID,
+		NodeIDSnapshot:          taskEntity.NodeID,
 		TriggerType:             "manual",
 		Status:                  model.TaskRunStatusSuccess,
 		BackupConfigFingerprint: model.TaskRunBackupConfigFingerprint(taskEntity),
+		BackupCaptureLayout:     model.TaskRunCaptureLayoutDirectoryContents,
+		BackupCaptureManifest:   captureManifest,
+		BackupGenerationState:   model.TaskRunGenerationStateVerified,
 	}
 	if err := db.Create(&run).Error; err != nil {
 		t.Fatalf("create successful backup run: %v", err)

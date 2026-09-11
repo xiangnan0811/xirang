@@ -255,7 +255,21 @@ func (h *ServiceMonitorHandler) Create(c *gin.Context) {
 		Enabled:            enabled,
 		LastStatus:         "unknown",
 	}
-	if err := h.db.Create(&item).Error; err != nil {
+	// GORM's struct Create callback replaces selected zero values with the
+	// model's defaults and also writes those defaults back into item. Keep the
+	// model hook on the Create path (HTTP headers are encrypted there), then
+	// restore any explicitly supplied zero value with an explicit-column update
+	// before committing the transaction.
+	if err := h.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&item).Error; err != nil {
+			return err
+		}
+		if req.Enabled == nil {
+			return nil
+		}
+		item.Enabled = enabled
+		return tx.Model(&item).Select([]string{"enabled"}).Updates(&item).Error
+	}); err != nil {
 		err = apperr.WrapDBError(err)
 		if errors.Is(err, apperr.ErrDuplicate) {
 			respondConflict(c, "服务监控名称已存在")

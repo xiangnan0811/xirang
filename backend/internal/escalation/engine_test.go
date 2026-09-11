@@ -3,6 +3,7 @@ package escalation
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,14 +33,35 @@ type senderRecord struct {
 	ids     []uint
 }
 
-// recordingDispatcher captures every DispatchToIntegrations call so tests
-// can assert post-fire dispatch behaviour without touching engine internals.
+// recordingDispatcher captures only post-commit dispatch calls. Intent IDs
+// are synthetic because these unit tests do not migrate alert_deliveries.
 type recordingDispatcher struct {
+	mu    sync.Mutex
 	calls []senderRecord
 }
 
-func (r *recordingDispatcher) DispatchToIntegrations(alert model.Alert, ids []uint) {
-	r.calls = append(r.calls, senderRecord{alertID: alert.ID, ids: ids})
+func (r *recordingDispatcher) EnqueueEscalationDeliveriesTx(
+	_ *gorm.DB,
+	_ model.Alert,
+	_ model.AlertEscalationEvent,
+	ids []uint,
+) ([]uint, error) {
+	return append([]uint(nil), ids...), nil
+}
+
+func (r *recordingDispatcher) DispatchEscalationDeliveries(
+	_ context.Context,
+	alert model.Alert,
+	_ uint,
+	intentIDs []uint,
+) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, senderRecord{
+		alertID: alert.ID,
+		ids:     append([]uint(nil), intentIDs...),
+	})
+	return nil
 }
 
 func seedPolicy(t *testing.T, s *Service, name string, levels []model.EscalationLevel, minSev string) *model.EscalationPolicy {
