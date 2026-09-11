@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.9](https://github.com/xiangnan0811/xirang/compare/v0.55.8...v0.55.9) (2026-09-11)
+
+
+### 🐛 Bug Fixes
+
+* **ci:** isolate SQLite escalation delivery fixtures ([02771d3](https://github.com/xiangnan0811/xirang/commit/02771d3694cb2e30c9024e18b41a4814a9418cf7))
+
 ## [0.55.8](https://github.com/xiangnan0811/xirang/compare/v0.55.7...v0.55.8) (2026-09-11)
 
 
