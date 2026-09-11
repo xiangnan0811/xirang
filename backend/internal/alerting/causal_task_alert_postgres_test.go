@@ -113,6 +113,7 @@ func openCausalTaskAlertPostgresDB(t *testing.T, dsn string) *gorm.DB {
 	if err := db.AutoMigrate(
 		&model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{},
 		&model.Alert{}, &model.AlertDelivery{}, &model.Integration{},
+		&model.AlertEscalationEvent{},
 	); err != nil {
 		t.Fatalf("migrate isolated PostgreSQL causal alert tables: %v", err)
 	}

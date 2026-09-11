@@ -44,6 +44,10 @@ Automatic alert replay is idempotent per task/run/action independently of the co
 
 Migration `000084_alert_delivery_intents` separates alert identity from durable per-channel delivery intent and leased sending attempts. Pending intent is committed before sending and recovered after restart. Suppression, escalation, and no-channel decisions remain explicit; historical unknown decisions are not blindly replayed. Initial, automatic, and manual sends share atomic claims and attempt-fenced results, so stale failures cannot overwrite a newer success. External delivery remains uncertain if a process exits after a remote send but before its receipt commits: this is not an exactly-once promise. Drain old writers before upgrading; used capture or delivery evidence blocks downgrade.
 
+Migration `000085_alert_delivery_success` adds private nullable `AlertDelivery.SentAt`, written only by a matching live delivery attempt, and an index on TaskRun restore-source references. Cooldown uses actual successful completion time; historical NULL timestamps remain unknown rather than being backfilled. Channel-specific Feishu, DingTalk, and WeCom responses require bounded business acknowledgements; generic webhooks keep HTTP 2xx semantics. Legacy blank-key attempts share identity resolution before every claim; ambiguous escalation history stays unknown and event-scoped intents remain distinct.
+
+Legacy Rsync restore verifies a private staging copy before any target mutation and transfers only that copy using content comparison. Post-restore verification remains required. New capture manifests use v2 Base64 byte fields for paths, roots, and link targets, with a version-matched encoded database root sidecar; persisted v1 manifests and raw sidecars remain readable without rewriting historical evidence. Drain old writers before upgrading. History cleanup retains current generation evidence (including dirty), restore source bindings, and active drill sources under transactional task locks; an active successor cannot obsolete the previous final generation. Temporary staging requires space for the selected content; this does not change ordinary backup incrementality or physical retention.
+
 Creating a policy or service monitor preserves explicit `enabled=false`; policy creation also preserves `verify_enabled=false` and `max_retries=0`. Omitted fields retain their documented defaults, and zero retries means no automatic task retry. Encryption hooks still run before these values and dependent scheduling are committed.
 
 ## 快速运行
@@ -448,7 +452,7 @@ Updater receipt 只在独立 Unix socket `/run/xirang/asset-worker-updater.sock`
 
 ## 数据库
 
-支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000084_alert_delivery_intents`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
+支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000085_alert_delivery_success`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
 
 本次审计整改增加 000078（单次两步登录、绑定会话、离线恢复审计）、000079（普通 TaskRun 执行租约、原子收尾和可恢复效果）与 000081（批次幂等及派发回执）。升级前停止并排空旧服务/执行进程，备份数据库及加密密钥；不得混跑旧的非租约执行器。历史未完成 TOTP 初始化在升级时失效，已启用的 TOTP 不受影响。历史重复 `(task_id, upstream_task_run_id)` 在标记 dirty 前拒绝升级，必须先离线核对真实执行历史，不得猜测去重。
 

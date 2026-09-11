@@ -336,6 +336,9 @@ func openAlertHandlerTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
+	if err := db.AutoMigrate(&model.AlertEscalationEvent{}); err != nil {
+		t.Fatalf("初始化告警升级事件表失败: %v", err)
+	}
 	return db
 }
 

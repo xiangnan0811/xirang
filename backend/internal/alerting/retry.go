@@ -112,8 +112,10 @@ func (w *RetryWorker) tick(ctx context.Context, now time.Time) {
 	var rows []model.AlertDelivery
 	if err := w.db.WithContext(ctx).
 		Where(
-			"(status = ?) OR (status = ? AND (next_retry_at IS NULL OR next_retry_at <= ?)) OR "+
-				"(status = ? AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)",
+			"(decision = ? OR decision = '' OR decision IS NULL) AND "+
+				"((status = ?) OR (status = ? AND (next_retry_at IS NULL OR next_retry_at <= ?)) OR "+
+				"(status = ? AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?))",
+			"deliver",
 			model.AlertDeliveryStatusPending,
 			model.AlertDeliveryStatusRetrying, now,
 			model.AlertDeliveryStatusSending, now,

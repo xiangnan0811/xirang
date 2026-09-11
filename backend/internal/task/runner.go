@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -621,7 +620,11 @@ func (m *Manager) runTaskWithContext(
 				captureManifest = ""
 			} else {
 				captureLayout = captureEvidence.Layout
-				captureRoot = captureEvidence.Root
+				captureRoot, decodeErr = model.EncodeRsyncCaptureRootSidecar(captureEvidence.Root)
+				if decodeErr != nil {
+					captureError = "Rsync 捕获根证据无效"
+					captureManifest = ""
+				}
 			}
 		}
 		if execCtx.Err() != nil || runCtx.Err() != nil {
@@ -1148,42 +1151,40 @@ func (m *Manager) runRestoreTaskWithContext(
 	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "开始恢复任务", "")
 
 	m.populateRsyncBinary(&restoreTask)
-	precheckTarget := restoreTask.RsyncTarget
-	if isLegacyMutableRsyncTask(restoreTask) &&
-		restoreTask.RsyncCaptureLayout == model.TaskRunCaptureLayoutSingleFile {
-		// A captured single-file target may be an existing file or an absent
-		// path. Prepare only its parent; mkdir on the requested file would
-		// either fail with EEXIST or turn the restore into a nested directory.
-		precheckTarget = filepath.Dir(strings.TrimSpace(restoreTask.RsyncTarget))
-	}
+	// Legacy Rsync performs source staging and its remote target readiness
+	// check inside RunRestore. Running the readiness check here would mutate a
+	// node before the captured Core source has been verified.
+	if !isLegacyMutableRsyncTask(restoreTask) {
+		precheckTarget := restoreTask.RsyncTarget
 
-	// 恢复前检查：在远程节点上检查源路径（备份）和目标路径
-	m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "执行恢复前检查（目标路径、磁盘空间）", "")
-	if err := m.ensureRemoteTargetReadyFunc(execCtx, restoreTask.Node, precheckTarget); err != nil {
-		// 区分取消与真实失败
-		if execCtx.Err() != nil {
+		// 恢复前检查：在远程节点上检查源路径（备份）和目标路径
+		m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "执行恢复前检查（目标路径、磁盘空间）", "")
+		if err := m.ensureRemoteTargetReadyFunc(execCtx, restoreTask.Node, precheckTarget); err != nil {
+			// 区分取消与真实失败
+			if execCtx.Err() != nil {
+				finishedAt := time.Now().UTC()
+				if terminalErr := m.terminalizeRestoreTaskRun(context.Background(), taskID, runID, []string{model.TaskRunStatusRunning}, StatusCanceled,
+					map[string]interface{}{"finished_at": &finishedAt, "last_error": "恢复任务已取消"}); terminalErr != nil {
+					logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("恢复前检查取消终态保存失败")
+					return
+				}
+				runCompleted = true
+				m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "恢复前检查期间任务已取消", "canceled")
+				return
+			}
+			errorMsg := sanitizeTaskLastError(fmt.Sprintf("恢复前检查失败（目标路径）: %s", err.Error()))
 			finishedAt := time.Now().UTC()
-			if terminalErr := m.terminalizeRestoreTaskRun(context.Background(), taskID, runID, []string{model.TaskRunStatusRunning}, StatusCanceled,
-				map[string]interface{}{"finished_at": &finishedAt, "last_error": "恢复任务已取消"}); terminalErr != nil {
-				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("恢复前检查取消终态保存失败")
+			duration := finishedAt.Sub(now).Milliseconds()
+			if terminalErr := m.terminalizeRestoreTaskRun(execCtx, taskID, runID, []string{model.TaskRunStatusRunning}, StatusFailed,
+				map[string]interface{}{"finished_at": &finishedAt, "duration_ms": duration, "last_error": errorMsg}); terminalErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("恢复前检查失败终态保存失败")
 				return
 			}
 			runCompleted = true
-			m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "恢复前检查期间任务已取消", "canceled")
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, "failed")
+			m.alertDispatcher.RaiseTaskFailureForRestoreRun(restoreTask, runID, errorMsg) //nolint:errcheck // best-effort alert during restore failure
 			return
 		}
-		errorMsg := sanitizeTaskLastError(fmt.Sprintf("恢复前检查失败（目标路径）: %s", err.Error()))
-		finishedAt := time.Now().UTC()
-		duration := finishedAt.Sub(now).Milliseconds()
-		if terminalErr := m.terminalizeRestoreTaskRun(execCtx, taskID, runID, []string{model.TaskRunStatusRunning}, StatusFailed,
-			map[string]interface{}{"finished_at": &finishedAt, "duration_ms": duration, "last_error": errorMsg}); terminalErr != nil {
-			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("恢复前检查失败终态保存失败")
-			return
-		}
-		runCompleted = true
-		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, "failed")
-		m.alertDispatcher.RaiseTaskFailureForRestoreRun(restoreTask, runID, errorMsg) //nolint:errcheck // best-effort alert during restore failure
-		return
 	}
 	exec := m.executorFactory.Resolve(restoreTask.ExecutorType)
 	restoreExec, ok := exec.(executor.RestoreExecutor)

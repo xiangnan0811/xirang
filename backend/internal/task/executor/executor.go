@@ -306,9 +306,12 @@ func newProgressScanner(reader io.Reader) *bufio.Scanner {
 // lives on Core, while the destination lives on the selected managed node.
 // It must never reinterpret the Core path as a path on the node.
 func (e *RsyncExecutor) RunRestore(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
-	source := strings.TrimSpace(task.RsyncSource)
-	target := strings.TrimSpace(task.RsyncTarget)
-	if source == "" || target == "" {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	source := task.RsyncSource
+	target := task.RsyncTarget
+	if strings.TrimSpace(source) == "" || strings.TrimSpace(target) == "" {
 		return -1, fmt.Errorf("rsync 恢复任务缺少 Core 备份源或节点目标路径")
 	}
 	if strings.ContainsRune(source, '\x00') || util.IsRemotePathSpec(source) || !filepath.IsAbs(source) {
@@ -325,6 +328,14 @@ func (e *RsyncExecutor) RunRestore(ctx context.Context, task model.Task, logf Lo
 	if task.RsyncCaptureLayout != manifest.Layout || task.RsyncCaptureRoot != manifest.Root {
 		return -1, fmt.Errorf("rsync capture metadata mismatch")
 	}
+	if err := validateRsyncCaptureEntries(manifest.Entries, manifest.Layout, manifest.Root, true); err != nil {
+		return -1, fmt.Errorf("rsync 恢复捕获证据无效")
+	}
+	if manifest.Layout == model.TaskRunCaptureLayoutSingleFile &&
+		(len(manifest.Entries) != 1 || manifest.Entries[0].Path != "" ||
+			(manifest.Entries[0].Kind != "file" && manifest.Entries[0].Kind != "symlink")) {
+		return -1, fmt.Errorf("rsync capture single-file evidence is invalid")
+	}
 	source, err = ResolveRsyncRestoreSource(source, sourceInfo, manifest.Layout, manifest.Root)
 	if err != nil {
 		return -1, err
@@ -335,38 +346,23 @@ func (e *RsyncExecutor) RunRestore(ctx context.Context, task model.Task, logf Lo
 	if strings.TrimSpace(task.Node.Host) == "" {
 		return -1, fmt.Errorf("节点地址不能为空")
 	}
-	captureFilesFrom := ""
-	if manifest.Layout == model.TaskRunCaptureLayoutSingleFile {
-		if len(manifest.Entries) != 1 || manifest.Entries[0].Path != "" ||
-			(manifest.Entries[0].Kind != "file" && manifest.Entries[0].Kind != "symlink") {
-			return -1, fmt.Errorf("rsync capture single-file evidence is invalid")
-		}
-	} else {
-		var cleanup func()
-		captureFilesFrom, cleanup, err = writeRsyncCaptureFilesFrom(task.RsyncCaptureManifest, task)
-		if err != nil {
-			return -1, err
-		}
-		defer cleanup()
-		// The requested node target is the logical root, never Core's wrapper.
-		// Materialize it even when the captured selection contains only that root.
-		if err := EnsureRemoteTargetReadyForPurpose(ctx, task.Node, target, sshutil.PurposeTaskRestore); err != nil {
-			return -1, err
-		}
+
+	stagedSource, stageCleanup, err := stageRsyncRestoreSource(ctx, source, manifest)
+	if err != nil {
+		return -1, err
 	}
+	defer stageCleanup()
+
+	if err := ensureRsyncRestoreTargetReady(ctx, task.Node, target, manifest.Layout); err != nil {
+		return -1, err
+	}
+
 	sshParts, cleanup, err := buildRsyncSSHArgs(ctx, task.Node, sshutil.PurposeTaskRestore)
 	if err != nil {
 		return -1, err
 	}
 	defer cleanup()
-	args := []string{"-avz", "--info=progress2"}
-	if captureFilesFrom != "" {
-		args = append(args, "--no-recursive", "--from0", "--files-from="+captureFilesFrom)
-		if len(manifest.Entries) == 1 && manifest.Entries[0].Path == "" && manifest.Entries[0].Kind == "directory" {
-			// Copy only the proven root metadata, never stale excluded children.
-			args = append(args, "--exclude=*")
-		}
-	}
+	args := []string{"-avz", "--checksum", "--info=progress2"}
 	args = append(args, "-e", strings.Join(sshParts, " "))
 	if NeedsSudo(task.Node) {
 		args = append(args, "--rsync-path", "sudo rsync")
@@ -375,9 +371,36 @@ func (e *RsyncExecutor) RunRestore(ctx context.Context, task model.Task, logf Lo
 		args = append(args, "--bwlimit", fmt.Sprintf("%dk", bwLimit*1000/8))
 	}
 	destination := fmt.Sprintf("%s@%s:%s", ResolveSSHUser(task.Node), formatRsyncHost(task.Node.Host), target)
-	args = append(args, "--", source, destination)
+	args = append(args, "--", stagedSource, destination)
 	logf("info", "从 Core 向远程节点执行恢复命令")
 	return e.runRsyncCommand(ctx, args, logf, progressf)
+}
+func ensureRsyncRestoreTargetReady(ctx context.Context, node model.Node, target, layout string) error {
+	if layout != model.TaskRunCaptureLayoutSingleFile || strings.HasSuffix(target, string(filepath.Separator)) {
+		return EnsureRemoteTargetReadyForPurpose(ctx, node, target, sshutil.PurposeTaskRestore)
+	}
+	quoted := ShellEscape(target)
+	command := fmt.Sprintf(
+		"if [ -d %s ] && [ ! -L %s ]; then printf directory; elif [ -e %s ] || [ -L %s ]; then printf file; else printf absent; fi",
+		quoted, quoted, quoted, quoted,
+	)
+	if NeedsSudo(node) {
+		command = WrapWithSudoShell(command)
+	}
+	client, err := DialSSHForNodePurpose(ctx, node, sshutil.PurposeTaskRestore)
+	if err != nil {
+		return fmt.Errorf("SSH 连接失败: %w", err)
+	}
+	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
+	output, err := RunSSHCommandOutput(ctx, client, command)
+	if err != nil {
+		return fmt.Errorf("检查恢复目标失败: %w", err)
+	}
+	readyTarget := filepath.Dir(target)
+	if strings.TrimSpace(output) == "directory" {
+		readyTarget = target
+	}
+	return EnsureRemoteTargetReadyForPurpose(ctx, node, readyTarget, sshutil.PurposeTaskRestore)
 }
 
 const maxRsyncExcludeRuleBytes = 4096

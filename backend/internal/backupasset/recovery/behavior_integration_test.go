@@ -1546,11 +1546,15 @@ func seedRecoveryBehaviorSuccessfulBackupRun(t *testing.T, db *gorm.DB, taskID u
 		t.Fatalf("successful backup task %d has empty configuration fingerprint", taskID)
 	}
 	captureManifest, err := model.EncodeRsyncCaptureManifest(model.RsyncCaptureManifest{
-		Version: 1, Layout: model.TaskRunCaptureLayoutDirectoryContents,
+		Version: 2, Layout: model.TaskRunCaptureLayoutDirectoryContents,
 		Entries: []model.RsyncCaptureManifestEntry{{Path: "", Kind: "directory"}},
 	})
 	if err != nil {
 		t.Fatalf("encode successful backup capture: %v", err)
+	}
+	captureRoot, err := model.EncodeRsyncCaptureRootSidecar("")
+	if err != nil {
+		t.Fatalf("encode successful backup capture root: %v", err)
 	}
 	if err := db.Create(&model.TaskRun{
 		TaskID:                  taskID,
@@ -1558,6 +1562,7 @@ func seedRecoveryBehaviorSuccessfulBackupRun(t *testing.T, db *gorm.DB, taskID u
 		Status:                  model.TaskRunStatusSuccess,
 		BackupConfigFingerprint: fingerprint,
 		BackupCaptureLayout:     model.TaskRunCaptureLayoutDirectoryContents,
+		BackupCaptureRoot:       captureRoot,
 		BackupCaptureManifest:   captureManifest,
 		BackupGenerationState:   model.TaskRunGenerationStateVerified,
 	}).Error; err != nil {

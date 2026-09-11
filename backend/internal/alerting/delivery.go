@@ -21,6 +21,38 @@ import (
 // overwrite the newer attempt.
 const deliveryLeaseDuration = 2 * time.Minute
 
+// deliveryFailure is a bounded, channel-aware send failure. Provider response
+// bodies are intentionally never retained here: they can contain credentials,
+// request echoes, or unbounded provider diagnostics.
+type deliveryFailure struct {
+	channel   string
+	code      string
+	reason    string
+	permanent bool
+}
+
+func (e *deliveryFailure) Error() string {
+	if e == nil {
+		return "notification delivery failed"
+	}
+	if e.code == "" {
+		return fmt.Sprintf("%s delivery failed: %s", e.channel, e.reason)
+	}
+	return fmt.Sprintf("%s delivery failed (%s): %s", e.channel, e.code, e.reason)
+}
+
+func (e *deliveryFailure) Permanent() bool {
+	return e != nil && e.permanent
+}
+
+func isPermanentDeliveryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var classified interface{ Permanent() bool }
+	return errors.As(err, &classified) && classified.Permanent()
+}
+
 func deliveryIntentKey(alertID, integrationID uint) string {
 	return fmt.Sprintf("%d:%d", alertID, integrationID)
 }
@@ -109,20 +141,31 @@ func loadClaimedDelivery(ctx context.Context, db *gorm.DB, deliveryID uint, atte
 
 // completeDelivery commits a result only for the currently leased attempt.
 // RowsAffected==0 is deliberately not an error: it means a lease expired and
-// another worker won, so a stale network result must be ignored.
+// another worker won, so a stale network result must be ignored. The lease
+// predicate is part of the same CAS, including for failed/retrying results.
 func completeDelivery(ctx context.Context, db *gorm.DB, deliveryID uint, attemptID, status string, nextRetryAt *time.Time, lastError string) error {
 	if db == nil || deliveryID == 0 || attemptID == "" {
 		return errors.New("complete delivery: invalid attempt")
 	}
+	now := time.Now()
 	updates := map[string]interface{}{
 		"status":           status,
 		"lease_expires_at": nil,
 		"next_retry_at":    nextRetryAt,
 		"last_error":       lastError,
-		"updated_at":       time.Now(),
+		"updated_at":       now,
+	}
+	if status == model.AlertDeliveryStatusSent {
+		// The success timestamp is written in the same attempt/lease CAS as the
+		// terminal status. A late response therefore cannot refresh cooldown.
+		updates["sent_at"] = now
 	}
 	result := db.WithContext(ctx).Model(&model.AlertDelivery{}).
-		Where("id = ? AND status = ? AND attempt_id = ?", deliveryID, model.AlertDeliveryStatusSending, attemptID).
+		Where(
+			"id = ? AND status = ? AND attempt_id = ? AND "+
+				"lease_expires_at IS NOT NULL AND lease_expires_at > ?",
+			deliveryID, model.AlertDeliveryStatusSending, attemptID, now,
+		).
 		Updates(updates)
 	if result.Error != nil {
 		return result.Error
@@ -149,6 +192,18 @@ func runDeliveryAttempt(
 	sendFn func(model.Integration, model.Alert) error,
 	force bool,
 ) error {
+	canonical, eligible, err := canonicalizeDeliveryCandidate(ctx, db, candidate)
+	if err != nil {
+		return err
+	}
+	if !eligible {
+		// An unkeyed row associated with escalation history has no provable
+		// logical identity. Leave it untouched rather than inventing a direct
+		// delivery and risking a duplicate notification.
+		return nil
+	}
+	candidate = canonical
+
 	claimed, ok, err := claimDelivery(ctx, db, candidate.ID, time.Now(), force)
 	if err != nil {
 		return err
@@ -197,6 +252,6 @@ func runDeliveryAttempt(
 	if sendErr == nil {
 		return completeDelivery(ctx, db, claimed.ID, claimed.AttemptID, model.AlertDeliveryStatusSent, nil, "")
 	}
-	status, next, lastError := retryResultForFailure(claimed.AttemptCount, time.Now(), sendErr, force)
+	status, next, lastError := retryResultForFailure(claimed.AttemptCount, time.Now(), sendErr, force || isPermanentDeliveryError(sendErr))
 	return completeDelivery(ctx, db, claimed.ID, claimed.AttemptID, status, next, lastError)
 }
