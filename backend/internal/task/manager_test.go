@@ -385,7 +385,7 @@ func openManagerTestDB(t *testing.T) *gorm.DB {
 	// connection, after which database/sql may open a fresh empty database for
 	// a post-shutdown assertion. Keep one connection to serialize manager
 	// workers and test reads; _busy_timeout remains a contention fallback.
-	dsn := fmt.Sprintf("file:%s/manager.db?_busy_timeout=5000&_loc=UTC", t.TempDir())
+	dsn := fmt.Sprintf("file:%s/manager.db?_busy_timeout=5000&_txlock=immediate&_loc=UTC", t.TempDir())
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
@@ -410,7 +410,7 @@ func openConcurrentManagerTestDB(t *testing.T) *gorm.DB {
 	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 	secure.ResetForTesting()
 	t.Cleanup(secure.ResetForTesting)
-	dsn := fmt.Sprintf("file:%s/manager.db?_busy_timeout=5000&_loc=UTC", t.TempDir())
+	dsn := fmt.Sprintf("file:%s/manager.db?_busy_timeout=5000&_txlock=immediate&_loc=UTC", t.TempDir())
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("打开并发测试数据库失败: %v", err)
@@ -452,12 +452,21 @@ func createSuccessfulBackupTaskRun(t *testing.T, db *gorm.DB, taskID uint) uint 
 	if err != nil {
 		t.Fatalf("编码成功备份捕获证据失败: %v", err)
 	}
+	capture, err := model.DecodeRsyncCaptureManifest(captureManifest)
+	if err != nil {
+		t.Fatalf("解码成功备份捕获证据失败: %v", err)
+	}
+	captureRoot, err := model.EncodeRsyncCaptureRootSidecar(capture.Root)
+	if err != nil {
+		t.Fatalf("编码成功备份捕获根失败: %v", err)
+	}
 	run := model.TaskRun{
 		TaskID:                  taskID,
 		TriggerType:             "manual",
 		Status:                  model.TaskRunStatusSuccess,
 		BackupConfigFingerprint: model.TaskRunBackupConfigFingerprint(task),
 		BackupCaptureLayout:     model.TaskRunCaptureLayoutDirectoryContents,
+		BackupCaptureRoot:       captureRoot,
 		BackupCaptureManifest:   captureManifest,
 		BackupGenerationState:   model.TaskRunGenerationStateVerified,
 	}
@@ -4257,6 +4266,7 @@ func TestRunRestoreTaskSanitizesPrecheckFailureLastError(t *testing.T) {
 	taskEntity := seedTaskForManagerTest(t, db)
 	taskEntity.RsyncSource = "/backup/private/source"
 	taskEntity.RsyncTarget = "/srv/private/restore"
+	taskEntity.ExecutorConfig = `{"publication_mode":"versioned_full_copy"}`
 	runID := createTestTaskRun(t, db, taskEntity.ID, "restore")
 
 	m.runRestoreTask(taskEntity.ID, runID, taskEntity)

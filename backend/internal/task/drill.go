@@ -223,6 +223,25 @@ func (m *Manager) pendingDrillEvidence(
 	}, nil
 }
 
+func latestSuccessfulRunIDTx(tx *gorm.DB, taskID, nodeID uint) (*uint, error) {
+	if tx == nil || !model.IsTaskRunNodeSnapshotAuthoritative(nodeID) {
+		return nil, nil
+	}
+	var run model.TaskRun
+	result := tx.Select("id").
+		Where("task_id = ? AND node_id_snapshot = ? AND status = ?", taskID, nodeID, model.TaskRunStatusSuccess).
+		Order("finished_at DESC, id DESC").
+		Limit(1).
+		Find(&run)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return nil, nil
+	}
+	return &run.ID, nil
+}
+
 func (m *Manager) reserveDrillRun(
 	ctx context.Context,
 	task model.Task,
@@ -260,6 +279,20 @@ func (m *Manager) reserveDrillRun(
 			}
 			if locked.NodeID != task.NodeID {
 				return ErrNodeWriteStartLost
+			}
+			// pendingDrillEvidence is only a preflight read. Resolve the
+			// source again while holding the same task lock used by retention,
+			// ordinary reservation, and restore reservation. The evidence row
+			// is then inserted in this transaction, so cleanup cannot delete
+			// the selected source between validation and durable reference.
+			sourceRunID, sourceErr := latestSuccessfulRunIDTx(tx, locked.ID, locked.NodeID)
+			if sourceErr != nil {
+				return sourceErr
+			}
+			evidence.SourceTaskRunID = sourceRunID
+			evidence.SnapshotRef = ""
+			if sourceRunID != nil {
+				evidence.SnapshotRef = fmt.Sprintf("task_run:%d", *sourceRunID)
 			}
 			if m.nodeWriteAdmission == nil {
 				return ErrNodeWriteUnavailable

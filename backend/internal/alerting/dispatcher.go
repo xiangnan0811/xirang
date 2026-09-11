@@ -778,9 +778,22 @@ func (d *Dispatcher) prepareDeliveryDecision(alert *model.Alert) (string, error)
 		return "", err
 	}
 	if len(existing) > 0 {
-		// A pre-migration row is evidence that this alert was already handed
-		// to direct delivery. Never re-evaluate escalation/silence and never
-		// create another logical intent for it.
+		// A historical blank row on an alert with recorded escalation events
+		// cannot be proven to be the direct intent. Persist that uncertainty
+		// instead of inventing a direct key and potentially duplicating a level.
+		history, err := alertHasEscalationHistoryTx(d.DB, alert.ID)
+		if err != nil {
+			return "", err
+		}
+		if history {
+			if err := d.commitDeliveryDecision(alert, model.AlertDeliveryDecisionUnknown, model.AlertDeliveryReasonEscalation, nil); err != nil {
+				return "", err
+			}
+			return model.AlertDeliveryDecisionUnknown, nil
+		}
+		// A pre-migration row with no escalation evidence is evidence that this
+		// alert was already handed to direct delivery. Never re-evaluate
+		// escalation/silence and never create another logical intent for it.
 		if err := d.commitDeliveryDecision(alert, model.AlertDeliveryDecisionDirect, "", nil); err != nil {
 			return "", err
 		}
@@ -978,15 +991,35 @@ func ensureDeliveryIntentWithKeyTx(
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return intent, err
 	}
+	legacyBlocked := false
 	if adoptLegacy {
-		// Adopt one pre-migration row, preserving any duplicate historical rows.
+		var alert model.Alert
+		if err := tx.First(&alert, alertID).Error; err != nil {
+			return intent, err
+		}
+		history, err := alertHasEscalationHistoryTx(tx, alertID)
+		if err != nil {
+			return intent, err
+		}
+		if history || !legacyDeliveryCanBeDirect(alert) {
+			adoptLegacy = false
+			legacyBlocked = true
+		}
+	}
+	if legacyBlocked {
+		return intent, gorm.ErrRecordNotFound
+	}
+	if adoptLegacy {
+		// Adopt one unambiguous pre-migration row, preserving duplicate
+		// historical rows. Explicitly unknown rows are never reclassified.
 		err = tx.Where(
-			"alert_id = ? AND integration_id = ? AND (delivery_key = '' OR delivery_key IS NULL)",
-			alertID, integrationID,
+			"alert_id = ? AND integration_id = ? AND TRIM(COALESCE(delivery_key, '')) = '' AND COALESCE(decision, '') <> ?",
+			alertID, integrationID, model.AlertDeliveryDecisionUnknown,
 		).Order("id ASC").First(&intent).Error
 		if err == nil {
-			if intent.DeliveryKey == "" {
-				if updateErr := tx.Model(&intent).Where("delivery_key = '' OR delivery_key IS NULL").
+			if strings.TrimSpace(intent.DeliveryKey) == "" {
+				if updateErr := tx.Model(&model.AlertDelivery{}).
+					Where("id = ? AND TRIM(COALESCE(delivery_key, '')) = ''", intent.ID).
 					Update("delivery_key", key).Error; updateErr != nil {
 					return intent, updateErr
 				}
@@ -1178,19 +1211,24 @@ func (d *Dispatcher) dedupWindow() time.Duration {
 }
 
 // inCooldown checks whether the integration is within its cooldown period after
-// the most recent successful delivery.
+// the most recent successful delivery. Historical sent rows with no success
+// timestamp are intentionally excluded because their completion time is
+// unknown.
 func (d *Dispatcher) inCooldown(integrationID uint, cooldownMinutes int, now time.Time) bool {
 	if cooldownMinutes <= 0 {
 		return false
 	}
 	var latest model.AlertDelivery
-	err := d.DB.Where("integration_id = ? AND status = ?", integrationID, "sent").
-		Order("created_at desc").
+	err := d.DB.Where(
+		"integration_id = ? AND status = ? AND sent_at IS NOT NULL",
+		integrationID, model.AlertDeliveryStatusSent,
+	).
+		Order("sent_at desc").
 		First(&latest).Error
-	if err != nil {
+	if err != nil || latest.SentAt == nil {
 		return false
 	}
-	return now.Sub(latest.CreatedAt) < time.Duration(cooldownMinutes)*time.Minute
+	return now.Sub(*latest.SentAt) < time.Duration(cooldownMinutes)*time.Minute
 }
 
 // send routes one alert through the registered integration sender.
@@ -1491,7 +1529,14 @@ func (d *Dispatcher) RetryDelivery(ctx context.Context, alertID, integrationID u
 		err := tx.Where("alert_id = ? AND integration_id = ?", alertID, integrationID).
 			Order("id DESC").First(&intent).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			if strings.TrimSpace(alert.DeliveryDecision) == model.AlertDeliveryDecisionEscalated {
+			history, historyErr := alertHasEscalationHistoryTx(tx, alert.ID)
+			if historyErr != nil {
+				return historyErr
+			}
+			decision := strings.TrimSpace(alert.DeliveryDecision)
+			if history ||
+				decision == model.AlertDeliveryDecisionEscalated ||
+				decision == model.AlertDeliveryDecisionUnknown {
 				return gorm.ErrRecordNotFound
 			}
 			var ensureErr error
@@ -1501,7 +1546,10 @@ func (d *Dispatcher) RetryDelivery(ctx context.Context, alertID, integrationID u
 		if err != nil {
 			return err
 		}
-		return canonicalizeDeliveryIntentTx(tx, &intent, deliveryIntentKey(alertID, integrationID))
+		// Identity repair is intentionally deferred to runDeliveryAttempt so
+		// manual retries use the same DB-authoritative path as automatic and
+		// replay dispatches.
+		return nil
 	}); err != nil {
 		return intent, err
 	}
@@ -1509,9 +1557,9 @@ func (d *Dispatcher) RetryDelivery(ctx context.Context, alertID, integrationID u
 }
 
 // CanonicalizeRetryCandidates resolves failed rows into logical retry
-// identities. Distinct nonempty delivery keys remain independent. Blank-key
-// historical rows share the canonical direct intent for their channel, with
-// an existing direct key taking precedence over legacy duplicates.
+// identities. Distinct nonempty delivery keys remain independent. Legacy
+// blank-key rows are adopted only when the alert has no escalation evidence;
+// otherwise they remain explicitly unknown and are not claimed.
 func (d *Dispatcher) CanonicalizeRetryCandidates(
 	ctx context.Context, alertID uint, records []model.AlertDelivery,
 ) ([]model.AlertDelivery, error) {
@@ -1523,31 +1571,20 @@ func (d *Dispatcher) CanonicalizeRetryCandidates(
 		return candidates, nil
 	}
 	err := d.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var alert model.Alert
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&alert, alertID).Error; err != nil {
-			return err
-		}
 		seenIDs := make(map[uint]struct{}, len(records))
 		for _, record := range records {
 			if record.ID == 0 || record.AlertID != alertID || record.IntegrationID == 0 {
 				return errors.New("canonicalize retry candidates: invalid delivery")
 			}
-			candidate, err := selectRetryCandidateTx(tx, alertID, record)
+			candidate, eligible, err := canonicalizeDeliveryCandidateTx(tx, record)
 			if err != nil {
 				return err
 			}
-			if candidate.ID == 0 {
-				return errors.New("canonicalize retry candidates: missing delivery")
+			if !eligible {
+				continue
 			}
 			if _, seen := seenIDs[candidate.ID]; seen {
 				continue
-			}
-			key := strings.TrimSpace(candidate.DeliveryKey)
-			if key == "" {
-				key = deliveryIntentKey(alertID, candidate.IntegrationID)
-			}
-			if err := canonicalizeDeliveryIntentTx(tx, &candidate, key); err != nil {
-				return err
 			}
 			seenIDs[candidate.ID] = struct{}{}
 			candidates = append(candidates, candidate)
@@ -1560,60 +1597,225 @@ func (d *Dispatcher) CanonicalizeRetryCandidates(
 	return candidates, nil
 }
 
-func selectRetryCandidateTx(tx *gorm.DB, alertID uint, record model.AlertDelivery) (model.AlertDelivery, error) {
-	var candidate model.AlertDelivery
-	key := strings.TrimSpace(record.DeliveryKey)
-	if key != "" {
-		err := tx.Where(
-			"alert_id = ? AND integration_id = ? AND delivery_key = ?",
-			alertID, record.IntegrationID, key,
-		).Order("id DESC").First(&candidate).Error
-		if err == nil {
-			return candidate, nil
-		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return candidate, err
-		}
-		return record, nil
+// canonicalizeDeliveryCandidate runs the identity repair under a short
+// database transaction immediately before claimDelivery. This keeps initial,
+// replay, automatic, and manual paths on one DB-authoritative identity rule.
+func canonicalizeDeliveryCandidate(
+	ctx context.Context, db *gorm.DB, candidate model.AlertDelivery,
+) (model.AlertDelivery, bool, error) {
+	if db == nil || candidate.ID == 0 {
+		return candidate, false, errors.New("canonicalize delivery: invalid intent")
 	}
-
-	directKey := deliveryIntentKey(alertID, record.IntegrationID)
-	err := tx.Where(
-		"alert_id = ? AND integration_id = ? AND delivery_key = ?",
-		alertID, record.IntegrationID, directKey,
-	).Order("id DESC").First(&candidate).Error
-	if err == nil {
-		return candidate, nil
+	var canonical model.AlertDelivery
+	eligible := false
+	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		canonical, eligible, err = canonicalizeDeliveryCandidateTx(tx, candidate)
+		return err
+	})
+	if err != nil {
+		return model.AlertDelivery{}, false, err
 	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return candidate, err
-	}
-	err = tx.Where(
-		"alert_id = ? AND integration_id = ? AND (delivery_key = '' OR delivery_key IS NULL)",
-		alertID, record.IntegrationID,
-	).Order("id DESC").First(&candidate).Error
-	if err == nil {
-		return candidate, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return candidate, err
-	}
-	return record, nil
+	return canonical, eligible, nil
 }
 
-func canonicalizeDeliveryIntentTx(tx *gorm.DB, intent *model.AlertDelivery, key string) error {
-	if intent == nil || intent.ID == 0 {
-		return errors.New("canonicalize delivery: invalid intent")
+func canonicalizeDeliveryCandidateTx(
+	tx *gorm.DB, candidate model.AlertDelivery,
+) (model.AlertDelivery, bool, error) {
+	if tx == nil || candidate.ID == 0 {
+		return candidate, false, errors.New("canonicalize delivery: invalid intent")
 	}
-	if intent.DeliveryKey == "" {
-		if err := tx.Model(intent).Where("delivery_key = '' OR delivery_key IS NULL").
-			Update("delivery_key", key).Error; err != nil {
+
+	var current model.AlertDelivery
+	if err := tx.First(&current, candidate.ID).Error; err != nil {
+		return current, false, err
+	}
+	if current.AlertID == 0 || current.IntegrationID == 0 {
+		return current, false, errors.New("canonicalize delivery: invalid persisted intent")
+	}
+
+	// Lock the parent alert before the delivery rows. Writers that create or
+	// decide intents use the same order, preventing a delivery/alert deadlock.
+	var alert model.Alert
+	alertErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&alert, current.AlertID).Error
+	if errors.Is(alertErr, gorm.ErrRecordNotFound) {
+		// Preserve the existing missing-alert failure path in runDeliveryAttempt.
+		return current, true, nil
+	}
+	if alertErr != nil {
+		return current, false, alertErr
+	}
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, candidate.ID).Error; err != nil {
+		return current, false, err
+	}
+
+	key := strings.TrimSpace(current.DeliveryKey)
+	if key != "" {
+		// Event-scoped keys are already canonical and must never be merged with
+		// direct or other escalation-level intents.
+		if key != deliveryIntentKey(current.AlertID, current.IntegrationID) {
+			return current, true, nil
+		}
+		history, err := alertHasEscalationHistoryTx(tx, alert.ID)
+		if err != nil {
+			return current, false, err
+		}
+		if history || !legacyDeliveryCanBeDirect(alert) {
+			return current, true, nil
+		}
+		// A direct canonical row can coexist with a blank historical row. A
+		// confirmed sent blank row is stronger evidence than a pending direct
+		// row; promote the canonical row without fabricating a success time.
+		return reconcileCanonicalDirectTx(tx, alert, current)
+	}
+
+	history, err := alertHasEscalationHistoryTx(tx, alert.ID)
+	if err != nil {
+		return current, false, err
+	}
+	if history || !legacyDeliveryCanBeDirect(alert) {
+		if current.Decision != model.AlertDeliveryDecisionUnknown {
+			if err := tx.Model(&model.AlertDelivery{}).
+				Where("id = ? AND TRIM(COALESCE(delivery_key, '')) = ''", current.ID).
+				Update("decision", model.AlertDeliveryDecisionUnknown).Error; err != nil {
+				return current, false, err
+			}
+			current.Decision = model.AlertDeliveryDecisionUnknown
+		}
+		return current, false, nil
+	}
+
+	directKey := deliveryIntentKey(current.AlertID, current.IntegrationID)
+	var direct model.AlertDelivery
+	directErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where(
+			"alert_id = ? AND integration_id = ? AND delivery_key = ?",
+			current.AlertID, current.IntegrationID, directKey,
+		).
+		Order("id ASC").First(&direct).Error
+	if directErr == nil {
+		return reconcileCanonicalDirectTx(tx, alert, direct)
+	}
+	if !errors.Is(directErr, gorm.ErrRecordNotFound) {
+		return current, false, directErr
+	}
+
+	blankRows, err := loadBlankDeliveryRowsTx(tx, current.AlertID, current.IntegrationID)
+	if err != nil {
+		return current, false, err
+	}
+	authoritative := chooseLegacyDeliveryRow(blankRows, time.Now().UTC())
+	if authoritative.ID == 0 {
+		return current, false, nil
+	}
+	if err := adoptLegacyDeliveryRowTx(tx, &authoritative, directKey); err != nil {
+		return current, false, err
+	}
+	return authoritative, true, nil
+}
+
+func reconcileCanonicalDirectTx(
+	tx *gorm.DB, alert model.Alert, direct model.AlertDelivery,
+) (model.AlertDelivery, bool, error) {
+	blankRows, err := loadBlankDeliveryRowsTx(tx, alert.ID, direct.IntegrationID)
+	if err != nil {
+		return direct, false, err
+	}
+	now := time.Now().UTC()
+	for _, blank := range blankRows {
+		if blank.Status == model.AlertDeliveryStatusSent {
+			updates := map[string]interface{}{
+				"status":           model.AlertDeliveryStatusSent,
+				"lease_expires_at": nil,
+				"next_retry_at":    nil,
+				"last_error":       "",
+			}
+			if direct.Status != model.AlertDeliveryStatusSent {
+				if err := tx.Model(&model.AlertDelivery{}).Where("id = ?", direct.ID).Updates(updates).Error; err != nil {
+					return direct, false, err
+				}
+				direct.Status = model.AlertDeliveryStatusSent
+				direct.LeaseExpiresAt = nil
+				direct.NextRetryAt = nil
+				direct.LastError = ""
+			}
+			return direct, true, nil
+		}
+	}
+	if direct.Status != model.AlertDeliveryStatusSent {
+		for _, blank := range blankRows {
+			if blank.Status == model.AlertDeliveryStatusSending &&
+				blank.LeaseExpiresAt != nil && blank.LeaseExpiresAt.After(now) {
+				// The unkeyed active attempt is the live DB authority. Do not
+				// manufacture a second unique key while it owns the send.
+				return blank, true, nil
+			}
+		}
+	}
+	return direct, true, nil
+}
+
+func loadBlankDeliveryRowsTx(tx *gorm.DB, alertID, integrationID uint) ([]model.AlertDelivery, error) {
+	var rows []model.AlertDelivery
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where(
+			"alert_id = ? AND integration_id = ? AND TRIM(COALESCE(delivery_key, '')) = ''",
+			alertID, integrationID,
+		).
+		Order("id DESC").
+		Find(&rows).Error
+	return rows, err
+}
+
+func chooseLegacyDeliveryRow(rows []model.AlertDelivery, now time.Time) model.AlertDelivery {
+	for _, row := range rows {
+		if row.Decision == model.AlertDeliveryDecisionUnknown {
+			continue
+		}
+		if row.Status == model.AlertDeliveryStatusSent {
+			return row
+		}
+	}
+	for _, row := range rows {
+		if row.Decision == model.AlertDeliveryDecisionUnknown {
+			continue
+		}
+		if row.Status == model.AlertDeliveryStatusSending &&
+			row.LeaseExpiresAt != nil && row.LeaseExpiresAt.After(now) {
+			return row
+		}
+	}
+	for _, row := range rows {
+		if row.Decision != model.AlertDeliveryDecisionUnknown {
+			return row
+		}
+	}
+	return model.AlertDelivery{}
+}
+
+func adoptLegacyDeliveryRowTx(tx *gorm.DB, intent *model.AlertDelivery, key string) error {
+	if intent == nil || intent.ID == 0 || strings.TrimSpace(key) == "" {
+		return errors.New("canonicalize delivery: invalid legacy intent")
+	}
+	result := tx.Model(&model.AlertDelivery{}).
+		Where("id = ? AND TRIM(COALESCE(delivery_key, '')) = ''", intent.ID).
+		Update("delivery_key", key)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		var latest model.AlertDelivery
+		if err := tx.First(&latest, intent.ID).Error; err != nil {
 			return err
 		}
-		intent.DeliveryKey = key
+		*intent = latest
+		return nil
 	}
-	if intent.Decision == "" {
-		if err := tx.Model(intent).Update("decision", "deliver").Error; err != nil {
+	intent.DeliveryKey = key
+	if strings.TrimSpace(intent.Decision) == "" {
+		if err := tx.Model(&model.AlertDelivery{}).
+			Where("id = ? AND (decision = '' OR decision IS NULL)", intent.ID).
+			Update("decision", "deliver").Error; err != nil {
 			return err
 		}
 		intent.Decision = "deliver"
@@ -1621,7 +1823,34 @@ func canonicalizeDeliveryIntentTx(tx *gorm.DB, intent *model.AlertDelivery, key 
 	return nil
 }
 
+func legacyDeliveryCanBeDirect(alert model.Alert) bool {
+	switch strings.TrimSpace(alert.DeliveryDecision) {
+	case "", model.AlertDeliveryDecisionPending, model.AlertDeliveryDecisionDirect:
+		return true
+	default:
+		return false
+	}
+}
+
+func alertHasEscalationHistoryTx(tx *gorm.DB, alertID uint) (bool, error) {
+	var count int64
+	if err := tx.Model(&model.AlertEscalationEvent{}).Where("alert_id = ?", alertID).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+var errDeliveryIdentityUnknown = errors.New("delivery identity unknown")
+
 func (d *Dispatcher) retryDeliveryIntent(ctx context.Context, intent model.AlertDelivery) (model.AlertDelivery, error) {
+	canonical, eligible, err := canonicalizeDeliveryCandidate(ctx, d.DB, intent)
+	if err != nil {
+		return intent, err
+	}
+	if !eligible {
+		return intent, errDeliveryIdentityUnknown
+	}
+	intent = canonical
 	if intent.Status == model.AlertDeliveryStatusSent {
 		return intent, errDeliveryAlreadySent
 	}
@@ -1654,6 +1883,186 @@ func postJSON(client *http.Client, targetURL string, body interface{}) error {
 		return buildNotificationHTTPError(resp.StatusCode, resp.Body)
 	}
 	return nil
+}
+
+const notificationAckBodyLimit = 8 << 10
+
+// postJSONWithAck sends a channel-specific JSON payload and requires a
+// provider success acknowledgement. Generic webhooks intentionally continue
+// to use postJSON, whose contract is HTTP 2xx only.
+func postJSONWithAck(
+	client *http.Client,
+	targetURL, channel string,
+	body interface{},
+	parseAck func([]byte) (string, bool),
+) error {
+	if client == nil {
+		return &deliveryFailure{channel: channel, reason: "request client unavailable"}
+	}
+	payloadBytes, err := json.Marshal(body)
+	if err != nil {
+		return &deliveryFailure{channel: channel, reason: "request encoding failed"}
+	}
+	resp, err := client.Post(targetURL, "application/json", bytes.NewReader(payloadBytes))
+	if err != nil {
+		return &deliveryFailure{channel: channel, reason: "request failed"}
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return &deliveryFailure{
+			channel:   channel,
+			code:      fmt.Sprintf("http_%d", resp.StatusCode),
+			reason:    "provider rejected request",
+			permanent: channelHTTPStatusPermanent(resp.StatusCode),
+		}
+	}
+	if resp.ContentLength > notificationAckBodyLimit {
+		return &deliveryFailure{channel: channel, reason: "provider response too large"}
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, notificationAckBodyLimit+1))
+	if err != nil {
+		return &deliveryFailure{channel: channel, reason: "provider response unreadable"}
+	}
+	if len(raw) > notificationAckBodyLimit {
+		return &deliveryFailure{channel: channel, reason: "provider response too large"}
+	}
+	if parseAck == nil {
+		return &deliveryFailure{channel: channel, reason: "provider response parser unavailable"}
+	}
+	code, valid := parseAck(raw)
+	if !valid {
+		return &deliveryFailure{channel: channel, reason: "provider response missing a valid success code"}
+	}
+	if code != "0" {
+		return &deliveryFailure{
+			channel:   channel,
+			code:      code,
+			reason:    "provider reported failure",
+			permanent: channelAckCodePermanent(channel, code),
+		}
+	}
+	return nil
+}
+
+func channelHTTPStatusPermanent(statusCode int) bool {
+	return statusCode >= 400 && statusCode < 500 &&
+		statusCode != http.StatusRequestTimeout &&
+		statusCode != http.StatusTooEarly &&
+		statusCode != http.StatusTooManyRequests
+}
+
+func channelAckCodePermanent(channel, code string) bool {
+	permanent := map[string]map[string]struct{}{
+		"feishu": {
+			"9499":  {},
+			"19021": {},
+			"19022": {},
+			"19024": {},
+		},
+		"dingtalk": {
+			"400013": {},
+			"40035":  {},
+			"43004":  {},
+			"400101": {},
+			"400102": {},
+		},
+		"wecom": {
+			"40001": {},
+			"40014": {},
+		},
+	}
+	_, ok := permanent[channel][code]
+	return ok
+}
+
+func parseAckObject(raw []byte) (map[string]json.RawMessage, bool) {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+		return nil, false
+	}
+	return object, true
+}
+
+func parseAckInteger(raw json.RawMessage, allowString bool) (string, bool) {
+	value := bytes.TrimSpace(raw)
+	if len(value) == 0 || bytes.Equal(value, []byte("null")) {
+		return "", false
+	}
+	if value[0] == '"' {
+		if !allowString {
+			return "", false
+		}
+		var text string
+		if err := json.Unmarshal(value, &text); err != nil {
+			return "", false
+		}
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return "", false
+		}
+		number, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return "", false
+		}
+		return strconv.FormatInt(number, 10), true
+	}
+	number, err := strconv.ParseInt(string(value), 10, 64)
+	if err != nil {
+		return "", false
+	}
+	return strconv.FormatInt(number, 10), true
+}
+
+func parseFeishuAck(raw []byte) (string, bool) {
+	object, ok := parseAckObject(raw)
+	if !ok {
+		return "", false
+	}
+	if code, exists := object["code"]; exists {
+		return parseAckInteger(code, false)
+	}
+	legacyCode, exists := object["StatusCode"]
+	if !exists {
+		return "", false
+	}
+	code, ok := parseAckInteger(legacyCode, true)
+	if !ok {
+		return "", false
+	}
+	statusMessage, exists := object["StatusMessage"]
+	if !exists {
+		return "", false
+	}
+	var message string
+	if err := json.Unmarshal(statusMessage, &message); err != nil ||
+		!strings.EqualFold(strings.TrimSpace(message), "success") {
+		return "", false
+	}
+	return code, true
+}
+
+func parseDingtalkAck(raw []byte) (string, bool) {
+	object, ok := parseAckObject(raw)
+	if !ok {
+		return "", false
+	}
+	code, exists := object["errcode"]
+	if !exists {
+		return "", false
+	}
+	return parseAckInteger(code, true)
+}
+
+func parseWecomAck(raw []byte) (string, bool) {
+	object, ok := parseAckObject(raw)
+	if !ok {
+		return "", false
+	}
+	code, exists := object["errcode"]
+	if !exists {
+		return "", false
+	}
+	return parseAckInteger(code, true)
 }
 
 func postTelegram(client *http.Client, endpoint, text string) error {
@@ -1731,21 +2140,18 @@ func extractNotificationErrorDescription(raw []byte) string {
 	}
 
 	var respPayload map[string]interface{}
-	if err := json.Unmarshal(raw, &respPayload); err == nil {
-		if desc, ok := respPayload["description"].(string); ok && strings.TrimSpace(desc) != "" {
-			return desc
-		}
-		if msg, ok := respPayload["message"].(string); ok && strings.TrimSpace(msg) != "" {
-			return msg
-		}
+	if err := json.Unmarshal(raw, &respPayload); err != nil {
+		return ""
 	}
-
-	text := strings.TrimSpace(string(raw))
-	runes := []rune(text)
-	if len(runes) > 180 {
-		return string(runes[:180]) + "..."
+	if desc, ok := respPayload["description"].(string); ok && strings.TrimSpace(desc) != "" {
+		return util.SanitizeMessage(desc)
 	}
-	return text
+	if msg, ok := respPayload["message"].(string); ok && strings.TrimSpace(msg) != "" {
+		return util.SanitizeMessage(msg)
+	}
+	// Unstructured bodies are not safe to echo: they may contain request
+	// tokens or provider internals. Keep only structured, sanitized fields.
+	return ""
 }
 
 // ---- smtp helpers (used by sender.go via sendEmail) ----

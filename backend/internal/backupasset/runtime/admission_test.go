@@ -1608,7 +1608,7 @@ func createSuccessfulBackupTaskRun(t *testing.T, db *gorm.DB, taskID uint) {
 		t.Fatalf("load successful backup task: %v", err)
 	}
 	captureManifest, err := model.EncodeRsyncCaptureManifest(model.RsyncCaptureManifest{
-		Version: 1,
+		Version: 2,
 		Layout:  model.TaskRunCaptureLayoutDirectoryContents,
 		Entries: []model.RsyncCaptureManifestEntry{
 			{Path: "", Kind: "directory"},
@@ -1617,6 +1617,10 @@ func createSuccessfulBackupTaskRun(t *testing.T, db *gorm.DB, taskID uint) {
 	if err != nil {
 		t.Fatalf("encode successful backup capture manifest: %v", err)
 	}
+	captureRoot, err := model.EncodeRsyncCaptureRootSidecar("")
+	if err != nil {
+		t.Fatalf("encode successful backup capture root: %v", err)
+	}
 	run := model.TaskRun{
 		TaskID:                  taskID,
 		NodeIDSnapshot:          taskEntity.NodeID,
@@ -1624,6 +1628,7 @@ func createSuccessfulBackupTaskRun(t *testing.T, db *gorm.DB, taskID uint) {
 		Status:                  model.TaskRunStatusSuccess,
 		BackupConfigFingerprint: model.TaskRunBackupConfigFingerprint(taskEntity),
 		BackupCaptureLayout:     model.TaskRunCaptureLayoutDirectoryContents,
+		BackupCaptureRoot:       captureRoot,
 		BackupCaptureManifest:   captureManifest,
 		BackupGenerationState:   model.TaskRunGenerationStateVerified,
 	}

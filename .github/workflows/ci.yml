@@ -192,7 +192,7 @@ jobs:
       - name: Run PostgreSQL durable automation contracts
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL durable automation contracts' ./internal/automation '^Test.*Postgres$'
       - name: Run PostgreSQL alerting durable delivery
-        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL alerting durable delivery' ./internal/alerting '^TestAlerting(DurableDeliveryPostgres|DeliveryConcurrencyPostgres|DeliveryClaimLoadFencePostgres)$'
+        run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL alerting durable delivery' ./internal/alerting '^Test(Alerting(DurableDeliveryPostgres|DeliveryConcurrencyPostgres|DeliveryClaimLoadFencePostgres|DeliveryLegacyBlankAutoManualConcurrencyPostgres)|RetryTickSkipsUnknownPagePostgres)$'
       - name: Run PostgreSQL escalation delivery contract
         run: bash ../scripts/run-required-postgres-tests.sh 'PostgreSQL escalation delivery contract' ./internal/escalation '^TestEngineEscalationDeliveryConcurrencyPostgres$'
 

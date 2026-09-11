@@ -15,6 +15,7 @@ const (
 	AlertDeliveryDecisionSuppressed = "suppressed"
 	AlertDeliveryDecisionEscalated  = "escalated"
 	AlertDeliveryDecisionNoChannel  = "no_channel"
+	AlertDeliveryDecisionUnknown    = "unknown"
 
 	AlertDeliveryReasonSilence             = "silence"
 	AlertDeliveryReasonGrouping            = "grouping"
@@ -85,8 +86,12 @@ type AlertDelivery struct {
 	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
 	NextRetryAt    *time.Time `json:"next_retry_at"`
 	LastError      string     `gorm:"type:text" json:"last_error"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	// SentAt is the durable provider-success timestamp. It is nullable because
+	// rows written before the success-evidence migration have no trustworthy
+	// completion time and must not be backfilled.
+	SentAt    *time.Time `json:"-"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 // Silence 告警静默规则：在指定时间窗口内抑制匹配的告警

@@ -1,10 +1,13 @@
 package model
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -184,6 +187,11 @@ type TaskRun struct {
 const (
 	RsyncCaptureManifestMaxEntries = 100000
 	RsyncCaptureManifestMaxBytes   = 8 << 20
+	rsyncCaptureManifestVersionV1  = 1
+	rsyncCaptureManifestVersionV2  = 2
+	rsyncCapturePathMaxBytes       = 4096
+	rsyncCaptureRootSidecarMax     = 512
+	rsyncCaptureRootSidecarPrefix  = "v2:"
 )
 
 // RsyncCaptureManifest is the bounded, source-side evidence captured before a
@@ -205,42 +213,363 @@ type RsyncCaptureManifestEntry struct {
 	LinkTarget string `json:"link_target,omitempty"`
 }
 
+// EncodeRsyncCaptureManifest writes the current byte-safe manifest format.
+// Version 1 remains readable for already-persisted history, while every new
+// manifest encodes path-bearing bytes as canonical base64 in version 2.
 func EncodeRsyncCaptureManifest(manifest RsyncCaptureManifest) (string, error) {
-	if manifest.Version == 0 {
-		manifest.Version = 1
+	if err := validateRsyncCaptureManifestShape(manifest, true); err != nil {
+		return "", err
 	}
-	encoded, err := json.Marshal(manifest)
+	type wireEntry struct {
+		PathB64       string `json:"path_b64"`
+		Kind          string `json:"kind"`
+		Size          int64  `json:"size,omitempty"`
+		SHA256        string `json:"sha256,omitempty"`
+		LinkTargetB64 string `json:"link_target_b64,omitempty"`
+	}
+	type wireManifest struct {
+		Version int         `json:"version"`
+		Layout  string      `json:"layout"`
+		RootB64 string      `json:"root_b64"`
+		Entries []wireEntry `json:"entries"`
+	}
+	wire := wireManifest{
+		Version: rsyncCaptureManifestVersionV2,
+		Layout:  manifest.Layout,
+		RootB64: base64.RawStdEncoding.EncodeToString([]byte(manifest.Root)),
+		Entries: make([]wireEntry, len(manifest.Entries)),
+	}
+	for index, entry := range manifest.Entries {
+		wire.Entries[index] = wireEntry{
+			PathB64:       base64.RawStdEncoding.EncodeToString([]byte(entry.Path)),
+			Kind:          entry.Kind,
+			Size:          entry.Size,
+			SHA256:        entry.SHA256,
+			LinkTargetB64: base64.RawStdEncoding.EncodeToString([]byte(entry.LinkTarget)),
+		}
+		if entry.LinkTarget == "" {
+			wire.Entries[index].LinkTargetB64 = ""
+		}
+	}
+	encoded, err := json.Marshal(wire)
 	if err != nil {
 		return "", err
 	}
+	if len(encoded) > RsyncCaptureManifestMaxBytes {
+		return "", fmt.Errorf("rsync capture manifest is too large")
+	}
 	return string(encoded), nil
 }
+
+// DecodeRsyncCaptureManifest accepts the legacy JSON string fields and the
+// current byte-safe base64 fields. It rejects unknown/duplicate fields and
+// non-canonical base64 so persisted evidence has one unambiguous identity.
 func DecodeRsyncCaptureManifest(raw string) (RsyncCaptureManifest, error) {
-	var manifest RsyncCaptureManifest
 	if strings.TrimSpace(raw) == "" {
-		return manifest, fmt.Errorf("rsync capture manifest is empty")
+		return RsyncCaptureManifest{}, fmt.Errorf("rsync capture manifest is empty")
 	}
 	if len(raw) > RsyncCaptureManifestMaxBytes {
 		return RsyncCaptureManifest{}, fmt.Errorf("rsync capture manifest is too large")
 	}
-	if err := json.Unmarshal([]byte(raw), &manifest); err != nil {
+	top, err := decodeRsyncJSONObject([]byte(raw), map[string]struct{}{
+		"version": {}, "layout": {}, "root": {}, "root_b64": {}, "entries": {},
+	})
+	if err != nil {
 		return RsyncCaptureManifest{}, err
 	}
-	if len(manifest.Entries) > RsyncCaptureManifestMaxEntries {
-		return RsyncCaptureManifest{}, fmt.Errorf("rsync capture manifest has too many entries")
+	version, err := decodeRsyncJSONInt(top["version"], "version")
+	if err != nil {
+		return RsyncCaptureManifest{}, err
 	}
-	if manifest.Version != 1 {
+	var manifest RsyncCaptureManifest
+	switch version {
+	case rsyncCaptureManifestVersionV1:
+		if _, present := top["root_b64"]; present {
+			return RsyncCaptureManifest{}, fmt.Errorf("rsync capture v1 has noncanonical root field")
+		}
+		manifest, err = decodeRsyncCaptureManifestV1(top)
+	case rsyncCaptureManifestVersionV2:
+		if _, present := top["root"]; present {
+			return RsyncCaptureManifest{}, fmt.Errorf("rsync capture v2 has noncanonical root field")
+		}
+		manifest, err = decodeRsyncCaptureManifestV2(top)
+	default:
 		return RsyncCaptureManifest{}, fmt.Errorf("unsupported rsync capture manifest version")
 	}
+	if err != nil {
+		return RsyncCaptureManifest{}, err
+	}
+	if err := validateRsyncCaptureManifestShape(manifest, version == rsyncCaptureManifestVersionV2); err != nil {
+		return RsyncCaptureManifest{}, err
+	}
+	return manifest, nil
+}
+
+func decodeRsyncCaptureManifestV1(top map[string]json.RawMessage) (RsyncCaptureManifest, error) {
+	layout, err := decodeRsyncJSONRequiredString(top["layout"], "layout")
+	if err != nil {
+		return RsyncCaptureManifest{}, err
+	}
+	root, err := decodeRsyncJSONOptionalString(top["root"], "root")
+	if err != nil {
+		return RsyncCaptureManifest{}, err
+	}
+	entries, err := decodeRsyncCaptureEntries(top["entries"], false)
+	if err != nil {
+		return RsyncCaptureManifest{}, err
+	}
+	return RsyncCaptureManifest{Version: rsyncCaptureManifestVersionV1, Layout: layout, Root: root, Entries: entries}, nil
+}
+
+func decodeRsyncCaptureManifestV2(top map[string]json.RawMessage) (RsyncCaptureManifest, error) {
+	rootRaw, ok := top["root_b64"]
+	if !ok {
+		return RsyncCaptureManifest{}, fmt.Errorf("rsync capture v2 root field is missing")
+	}
+	root, err := decodeRsyncJSONBase64(rootRaw, "root_b64")
+	if err != nil {
+		return RsyncCaptureManifest{}, err
+	}
+	layout, err := decodeRsyncJSONRequiredString(top["layout"], "layout")
+	if err != nil {
+		return RsyncCaptureManifest{}, err
+	}
+	entries, err := decodeRsyncCaptureEntries(top["entries"], true)
+	if err != nil {
+		return RsyncCaptureManifest{}, err
+	}
+	return RsyncCaptureManifest{Version: rsyncCaptureManifestVersionV2, Layout: layout, Root: root, Entries: entries}, nil
+}
+
+func decodeRsyncCaptureEntries(raw json.RawMessage, byteSafe bool) ([]RsyncCaptureManifestEntry, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, fmt.Errorf("rsync capture manifest entries are missing")
+	}
+	var rawEntries []json.RawMessage
+	if err := json.Unmarshal(raw, &rawEntries); err != nil || rawEntries == nil {
+		return nil, fmt.Errorf("rsync capture manifest entries are invalid")
+	}
+	if len(rawEntries) > RsyncCaptureManifestMaxEntries {
+		return nil, fmt.Errorf("rsync capture manifest has too many entries")
+	}
+	entries := make([]RsyncCaptureManifestEntry, len(rawEntries))
+	for index, rawEntry := range rawEntries {
+		allowed := map[string]struct{}{"kind": {}, "size": {}, "sha256": {}}
+		if byteSafe {
+			allowed["path_b64"] = struct{}{}
+			allowed["link_target_b64"] = struct{}{}
+		} else {
+			allowed["path"] = struct{}{}
+			allowed["link_target"] = struct{}{}
+		}
+		object, err := decodeRsyncJSONObject(rawEntry, allowed)
+		if err != nil {
+			return nil, fmt.Errorf("rsync capture manifest entry %d is invalid: %w", index, err)
+		}
+		if byteSafe {
+			entries[index].Path, err = decodeRsyncJSONBase64Required(object["path_b64"], "path_b64")
+			if err != nil {
+				return nil, err
+			}
+			entries[index].LinkTarget, err = decodeRsyncJSONBase64Optional(object["link_target_b64"], "link_target_b64")
+		} else {
+			entries[index].Path, err = decodeRsyncJSONRequiredString(object["path"], "path")
+			if err != nil {
+				return nil, err
+			}
+			entries[index].LinkTarget, err = decodeRsyncJSONOptionalString(object["link_target"], "link_target")
+		}
+		if err != nil {
+			return nil, err
+		}
+		entries[index].Kind, err = decodeRsyncJSONRequiredString(object["kind"], "kind")
+		if err != nil {
+			return nil, err
+		}
+		entries[index].Size, err = decodeRsyncJSONOptionalInt(object["size"], "size")
+		if err != nil {
+			return nil, err
+		}
+		entries[index].SHA256, err = decodeRsyncJSONOptionalString(object["sha256"], "sha256")
+		if err != nil {
+			return nil, err
+		}
+	}
+	return entries, nil
+}
+
+func validateRsyncCaptureManifestShape(manifest RsyncCaptureManifest, requireSidecar bool) error {
 	if manifest.Layout != TaskRunCaptureLayoutDirectoryRoot &&
 		manifest.Layout != TaskRunCaptureLayoutDirectoryContents &&
 		manifest.Layout != TaskRunCaptureLayoutSingleFile {
-		return RsyncCaptureManifest{}, fmt.Errorf("invalid rsync capture manifest layout")
+		return fmt.Errorf("invalid rsync capture manifest layout")
 	}
-	if manifest.Entries == nil {
-		return RsyncCaptureManifest{}, fmt.Errorf("rsync capture manifest entries are missing")
+	if len(manifest.Root) > rsyncCapturePathMaxBytes || strings.ContainsRune(manifest.Root, '\x00') {
+		return fmt.Errorf("rsync capture manifest root is invalid")
 	}
-	return manifest, nil
+	if requireSidecar {
+		if _, err := EncodeRsyncCaptureRootSidecar(manifest.Root); err != nil {
+			return err
+		}
+	}
+	if len(manifest.Entries) == 0 || len(manifest.Entries) > RsyncCaptureManifestMaxEntries {
+		return fmt.Errorf("rsync capture manifest entries are invalid")
+	}
+	seen := make(map[string]struct{}, len(manifest.Entries))
+	for _, entry := range manifest.Entries {
+		if entry.Kind != "directory" && entry.Kind != "file" && entry.Kind != "symlink" {
+			return fmt.Errorf("rsync capture manifest entry type is invalid")
+		}
+		if len(entry.Path) > rsyncCapturePathMaxBytes || strings.ContainsRune(entry.Path, '\x00') {
+			return fmt.Errorf("rsync capture manifest path is invalid")
+		}
+		if _, exists := seen[entry.Path]; exists {
+			return fmt.Errorf("rsync capture manifest has duplicate paths")
+		}
+		seen[entry.Path] = struct{}{}
+		if entry.Size < 0 {
+			return fmt.Errorf("rsync capture manifest size is invalid")
+		}
+		if len(entry.LinkTarget) > rsyncCapturePathMaxBytes || strings.ContainsRune(entry.LinkTarget, '\x00') {
+			return fmt.Errorf("rsync capture manifest link target is invalid")
+		}
+	}
+	return nil
+}
+
+func decodeRsyncJSONObject(raw []byte, allowed map[string]struct{}) (map[string]json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil, fmt.Errorf("rsync capture manifest object is invalid")
+	}
+	result := make(map[string]json.RawMessage)
+	for decoder.More() {
+		keyToken, keyErr := decoder.Token()
+		key, ok := keyToken.(string)
+		if keyErr != nil || !ok {
+			return nil, fmt.Errorf("rsync capture manifest field name is invalid")
+		}
+		if _, exists := result[key]; exists {
+			return nil, fmt.Errorf("rsync capture manifest has duplicate field %q", key)
+		}
+		if _, known := allowed[key]; !known {
+			return nil, fmt.Errorf("rsync capture manifest has unknown field %q", key)
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, fmt.Errorf("rsync capture manifest field %q is invalid", key)
+		}
+		result[key] = value
+	}
+	closing, err := decoder.Token()
+	if err != nil || closing != json.Delim('}') {
+		return nil, fmt.Errorf("rsync capture manifest object is invalid")
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("rsync capture manifest has trailing data")
+	}
+	return result, nil
+}
+
+func decodeRsyncJSONRequiredString(raw json.RawMessage, field string) (string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", fmt.Errorf("rsync capture manifest field %q is missing", field)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", fmt.Errorf("rsync capture manifest field %q is invalid", field)
+	}
+	return value, nil
+}
+
+func decodeRsyncJSONOptionalString(raw json.RawMessage, field string) (string, error) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+	return decodeRsyncJSONRequiredString(raw, field)
+}
+
+func decodeRsyncJSONOptionalInt(raw json.RawMessage, field string) (int64, error) {
+	if len(raw) == 0 {
+		return 0, nil
+	}
+	if string(raw) == "null" {
+		return 0, fmt.Errorf("rsync capture manifest field %q is invalid", field)
+	}
+	var value int64
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return 0, fmt.Errorf("rsync capture manifest field %q is invalid", field)
+	}
+	return value, nil
+}
+
+func decodeRsyncJSONInt(raw json.RawMessage, field string) (int, error) {
+	value, err := decodeRsyncJSONOptionalInt(raw, field)
+	if err != nil || len(raw) == 0 {
+		if err == nil {
+			err = fmt.Errorf("rsync capture manifest field %q is missing", field)
+		}
+		return 0, err
+	}
+	return int(value), nil
+}
+
+func decodeRsyncJSONBase64(raw json.RawMessage, field string) (string, error) {
+	value, err := decodeRsyncJSONRequiredString(raw, field)
+	if err != nil {
+		return "", err
+	}
+	decoded, err := base64.RawStdEncoding.DecodeString(value)
+	if err != nil || base64.RawStdEncoding.EncodeToString(decoded) != value {
+		return "", fmt.Errorf("rsync capture manifest field %q is not canonical base64", field)
+	}
+	return string(decoded), nil
+}
+
+func decodeRsyncJSONBase64Required(raw json.RawMessage, field string) (string, error) {
+	return decodeRsyncJSONBase64(raw, field)
+}
+
+func decodeRsyncJSONBase64Optional(raw json.RawMessage, field string) (string, error) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+	return decodeRsyncJSONBase64(raw, field)
+}
+
+// EncodeRsyncCaptureRootSidecar creates the PostgreSQL-text-safe root value
+// paired with a version-2 manifest.
+func EncodeRsyncCaptureRootSidecar(root string) (string, error) {
+	if len(root) > rsyncCapturePathMaxBytes || strings.ContainsRune(root, '\x00') {
+		return "", fmt.Errorf("rsync capture root is invalid")
+	}
+	sidecar := rsyncCaptureRootSidecarPrefix + base64.RawStdEncoding.EncodeToString([]byte(root))
+	if len(sidecar) > rsyncCaptureRootSidecarMax {
+		return "", fmt.Errorf("rsync capture root exceeds sidecar limit")
+	}
+	return sidecar, nil
+}
+
+// DecodeRsyncCaptureRootSidecar decodes the version-2 root sidecar. Version 1
+// rows retain their historical raw UTF-8 value and are returned unchanged.
+func DecodeRsyncCaptureRootSidecar(raw string, manifestVersion int) (string, error) {
+	if manifestVersion == rsyncCaptureManifestVersionV1 {
+		return raw, nil
+	}
+	if manifestVersion != rsyncCaptureManifestVersionV2 || !strings.HasPrefix(raw, rsyncCaptureRootSidecarPrefix) {
+		return "", fmt.Errorf("rsync capture root sidecar is invalid")
+	}
+	encoded := strings.TrimPrefix(raw, rsyncCaptureRootSidecarPrefix)
+	decoded, err := base64.RawStdEncoding.DecodeString(encoded)
+	if err != nil || base64.RawStdEncoding.EncodeToString(decoded) != encoded {
+		return "", fmt.Errorf("rsync capture root sidecar is not canonical base64")
+	}
+	if len(raw) > rsyncCaptureRootSidecarMax || len(decoded) > rsyncCapturePathMaxBytes ||
+		strings.ContainsRune(string(decoded), '\x00') {
+		return "", fmt.Errorf("rsync capture root sidecar exceeds limit")
+	}
+	return string(decoded), nil
 }
 
 // TaskRunBackupConfigFingerprint returns a stable, non-secret identity of the

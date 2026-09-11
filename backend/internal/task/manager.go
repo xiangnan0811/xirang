@@ -19,6 +19,7 @@ import (
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/policy"
+	gormrepo "xirang/backend/internal/repository/gorm"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/task/executor"
 	"xirang/backend/internal/task/scheduler"
@@ -704,9 +705,11 @@ func (m *Manager) reserveTaskRun(ctx context.Context, nodeID uint, requested mod
 					return ErrRestoreRequiresNewBackup
 				}
 				capture, decodeErr := model.DecodeRsyncCaptureManifest(sourceRun.BackupCaptureManifest)
+				captureRoot, rootDecodeErr := model.DecodeRsyncCaptureRootSidecar(sourceRun.BackupCaptureRoot, capture.Version)
 				if decodeErr != nil ||
+					rootDecodeErr != nil ||
 					capture.Layout != sourceRun.BackupCaptureLayout ||
-					capture.Root != sourceRun.BackupCaptureRoot {
+					capture.Root != captureRoot {
 					return ErrRestoreRequiresNewBackup
 				}
 			}
@@ -1450,13 +1453,15 @@ func (m *Manager) loadRestoreTaskWithProvenance(ctx context.Context, taskID uint
 				return fmt.Errorf("%w: 最近一次备份尚未生成可恢复的 RSync 捕获证据，请先创建新的成功备份", ErrRestoreRequiresNewBackup)
 			}
 			capture, decodeErr := model.DecodeRsyncCaptureManifest(latestBackup.BackupCaptureManifest)
+			captureRoot, rootDecodeErr := model.DecodeRsyncCaptureRootSidecar(latestBackup.BackupCaptureRoot, capture.Version)
 			if decodeErr != nil ||
+				rootDecodeErr != nil ||
 				capture.Layout != latestBackup.BackupCaptureLayout ||
-				capture.Root != latestBackup.BackupCaptureRoot {
+				capture.Root != captureRoot {
 				return fmt.Errorf("%w: 最近一次备份的 RSync 捕获证据无效，请先创建新的成功备份", ErrRestoreRequiresNewBackup)
 			}
 			taskEntity.RsyncCaptureLayout = latestBackup.BackupCaptureLayout
-			taskEntity.RsyncCaptureRoot = latestBackup.BackupCaptureRoot
+			taskEntity.RsyncCaptureRoot = captureRoot
 			taskEntity.RsyncCaptureManifest = latestBackup.BackupCaptureManifest
 			taskEntity.RsyncCaptureGenerationID = latestBackup.ID
 		}
@@ -2319,8 +2324,12 @@ func (m *Manager) dispatchDrillFailure(policyID, taskRunID uint) {
 	})
 }
 
-// cleanupExpiredTaskRuns removes TaskRun records older than taskRunRetentionDays.
-// Called periodically by LogDispatcher's worker tick.
+// cleanupExpiredTaskRuns removes TaskRun records older than taskRunRetentionDays
+// while retaining the minimum capture evidence needed by restore admission.
+// Candidate selection and dependent cleanup run in one transaction. The task
+// rows are locked before the candidate predicate is evaluated again so a
+// concurrent reservation and cleanup have one serialized answer about whether
+// a source run is still referenced.
 func (m *Manager) cleanupExpiredTaskRuns() {
 	if m.taskRunRetentionDays <= 0 || m.db == nil {
 		return
@@ -2336,33 +2345,126 @@ func (m *Manager) cleanupExpiredTaskRuns() {
 
 	cutoff := now.AddDate(0, 0, -m.taskRunRetentionDays)
 	for {
-		var ids []uint
-		query := m.db.Model(&model.TaskRun{}).
-			Where("task_runs.created_at < ? AND task_runs.status NOT IN ?", cutoff, model.TaskRunActiveStatuses()).
-			Where("NOT EXISTS (SELECT 1 FROM task_run_effects AS effect WHERE effect.task_run_id = task_runs.id AND effect.status <> ?)", model.TaskRunEffectStatusSucceeded)
-		if err := query.Order("task_runs.id").Limit(defaultSampleCleanupBatchSize).Pluck("task_runs.id", &ids).Error; err != nil {
-			logger.Module("task").Warn().Err(err).Msg("查询过期执行记录失败")
-			return
-		}
-		if len(ids) == 0 {
-			break
-		}
-		// 级联清理：删除关联 TaskLog，清除关联 Alert 的 run 引用
-		if err := m.db.Where("task_run_id IN ?", ids).Delete(&model.TaskLog{}).Error; err != nil {
-			logger.Module("task").Warn().Err(err).Msg("清理过期执行记录关联日志失败")
-			return
-		}
-		if err := m.db.Model(&model.Alert{}).Where("task_run_id IN ?", ids).Update("task_run_id", nil).Error; err != nil {
-			logger.Module("task").Warn().Err(err).Msg("清除过期执行记录关联告警引用失败")
-			return
-		}
-		if err := m.db.Where("id IN ?", ids).Delete(&model.TaskRun{}).Error; err != nil {
+		deleted, err := m.cleanupExpiredTaskRunBatch(cutoff)
+		if err != nil {
 			logger.Module("task").Warn().Err(err).Msg("清理过期执行记录失败")
 			return
 		}
-		if len(ids) < defaultSampleCleanupBatchSize {
+		if deleted == 0 {
 			break
 		}
 	}
 	m.lastTaskRunCleanupAt = now
+}
+
+func expiredTaskRunCleanupQuery(tx *gorm.DB, cutoff time.Time) *gorm.DB {
+	return tx.Model(&model.TaskRun{}).
+		Where("task_runs.created_at < ? AND task_runs.status NOT IN ?", cutoff, model.TaskRunActiveStatuses()).
+		Where("NOT EXISTS (SELECT 1 FROM task_run_effects AS effect WHERE effect.task_run_id = task_runs.id AND effect.status <> ?)", model.TaskRunEffectStatusSucceeded).
+		// A generation is evidence only while it is the newest non-empty
+		// ordinary generation for its task and node. An active successor must
+		// not obsolete its predecessor until the successor reaches a terminal
+		// state. This intentionally keeps a newest dirty generation: restore
+		// admission must not fall back to an older verified generation after
+		// an uncertain write.
+		Where(`(
+			TRIM(COALESCE(task_runs.backup_generation_state, '')) = ''
+			OR EXISTS (
+				SELECT 1
+				FROM task_runs AS newer_generation
+				WHERE newer_generation.task_id = task_runs.task_id
+					AND newer_generation.node_id_snapshot = task_runs.node_id_snapshot
+					AND lower(newer_generation.trigger_type) NOT IN ?
+					AND TRIM(COALESCE(newer_generation.backup_generation_state, '')) <> ''
+					AND newer_generation.status IN ?
+					AND newer_generation.id > task_runs.id
+			)
+		)`, []string{"restore", "drill"}, model.TaskRunTerminalStatuses()).
+		// A restore run may still need the capture represented by this row.
+		// Keep the source for every durable binding, including terminal
+		// historical restore rows; it becomes eligible once that binding is
+		// itself removed.
+		Where(`NOT EXISTS (
+			SELECT 1
+			FROM task_runs AS source_reference
+			WHERE source_reference.backup_source_run_id = task_runs.id
+		)`).
+		// Drill evidence is retained only for active recovery work. Terminal
+		// drill provenance is intentionally not a retention dependency here.
+		Where(`NOT EXISTS (
+			SELECT 1
+			FROM restore_drill_evidences AS drill_evidence
+			WHERE drill_evidence.source_task_run_id = task_runs.id
+				AND (
+					drill_evidence.status IN ?
+					OR EXISTS (
+						SELECT 1
+						FROM task_runs AS drill_run
+						WHERE drill_run.id = drill_evidence.task_run_id
+							AND lower(drill_run.trigger_type) = ?
+							AND drill_run.status IN ?
+					)
+				)
+		)`, model.TaskRunActiveStatuses(), "drill", model.TaskRunActiveStatuses())
+}
+
+func (m *Manager) cleanupExpiredTaskRunBatch(cutoff time.Time) (int64, error) {
+	var deleted int64
+	err := m.db.Transaction(func(tx *gorm.DB) error {
+		var candidateIDs []uint
+		if err := expiredTaskRunCleanupQuery(tx, cutoff).
+			Select("task_runs.id").
+			Order("task_runs.id").
+			Limit(defaultSampleCleanupBatchSize).
+			Pluck("task_runs.id", &candidateIDs).Error; err != nil {
+			return err
+		}
+		if len(candidateIDs) == 0 {
+			return nil
+		}
+
+		var taskIDs []uint
+		if err := tx.Model(&model.TaskRun{}).
+			Where("id IN ?", candidateIDs).
+			Distinct().
+			Order("task_id").
+			Pluck("task_id", &taskIDs).Error; err != nil {
+			return err
+		}
+		if err := gormrepo.LockTaskIDsForUpdate(tx, taskIDs); err != nil {
+			return err
+		}
+
+		// Re-evaluate under the same task-row locks used by reservation and
+		// terminal transitions. Restricting to locked tasks prevents deleting a
+		// run whose task was not part of this batch.
+		candidateIDs = candidateIDs[:0]
+		if err := expiredTaskRunCleanupQuery(tx, cutoff).
+			Where("task_runs.task_id IN ?", taskIDs).
+			Select("task_runs.id").
+			Order("task_runs.id").
+			Limit(defaultSampleCleanupBatchSize).
+			Pluck("task_runs.id", &candidateIDs).Error; err != nil {
+			return err
+		}
+		if len(candidateIDs) == 0 {
+			return nil
+		}
+
+		if err := tx.Where("task_run_id IN ?", candidateIDs).Delete(&model.TaskLog{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.Alert{}).
+			Where("task_run_id IN ?", candidateIDs).
+			Update("task_run_id", nil).Error; err != nil {
+			return err
+		}
+		result := tx.Where("id IN ?", candidateIDs).Delete(&model.TaskRun{})
+		if result.Error != nil {
+			return result.Error
+		}
+		deleted = result.RowsAffected
+		return nil
+	})
+	return deleted, err
 }

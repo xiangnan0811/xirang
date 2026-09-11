@@ -143,22 +143,26 @@ func rsyncManifestEntriesEqual(left, right model.RsyncCaptureManifest) bool {
 	if len(left.Entries) != len(right.Entries) {
 		return false
 	}
-	type key struct {
-		path string
-		kind string
-	}
-	entries := make(map[key]model.RsyncCaptureManifestEntry, len(right.Entries))
+	entries := make(map[string]model.RsyncCaptureManifestEntry, len(right.Entries))
 	for _, entry := range right.Entries {
-		entries[key{path: entry.Path, kind: entry.Kind}] = entry
+		if _, exists := entries[entry.Path]; exists {
+			return false
+		}
+		entries[entry.Path] = entry
 	}
+	seen := make(map[string]struct{}, len(left.Entries))
 	for _, entry := range left.Entries {
-		other, ok := entries[key{path: entry.Path, kind: entry.Kind}]
+		if _, exists := seen[entry.Path]; exists {
+			return false
+		}
+		seen[entry.Path] = struct{}{}
+		other, ok := entries[entry.Path]
 		if !ok || entry.Kind != other.Kind {
 			return false
 		}
 		switch entry.Kind {
 		case "file":
-			if entry.SHA256 == "" || entry.SHA256 != other.SHA256 {
+			if !validRsyncManifestSHA256(entry.SHA256) || entry.SHA256 != other.SHA256 {
 				return false
 			}
 			if entry.Size >= 0 && other.Size >= 0 && entry.Size != other.Size {
@@ -168,6 +172,23 @@ func rsyncManifestEntriesEqual(left, right model.RsyncCaptureManifest) bool {
 			if entry.LinkTarget != other.LinkTarget {
 				return false
 			}
+		case "directory":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validRsyncManifestSHA256(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') &&
+			(character < 'a' || character > 'f') &&
+			(character < 'A' || character > 'F') {
+			return false
 		}
 	}
 	return true

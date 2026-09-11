@@ -111,6 +111,46 @@ func testRunMigrations083And084SchemaContract(t *testing.T, fixture migrationFix
 		}
 		assertRunMigrations083And084SchemaDrift(t, fixture, migrator, db, "invalid_alert_delivery_admission_trigger")
 	})
+	t.Run("missing alert delivery success column", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		if fixture.engine == "postgres" {
+			fixture.mustExec(t, db, `ALTER TABLE alert_deliveries DROP COLUMN sent_at`)
+		} else {
+			fixture.mustExec(t, db, `DROP TRIGGER trg_alert_delivery_success_downgrade_admission`)
+			fixture.mustExec(t, db, `ALTER TABLE alert_deliveries DROP COLUMN sent_at`)
+		}
+		assertRunMigrations083And084SchemaDrift(t, fixture, migrator, db, "missing_alert_delivery_success_column")
+	})
+
+	t.Run("missing task run backup source index", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		fixture.mustExec(t, db, `DROP INDEX idx_task_runs_backup_source_run_id`)
+		assertRunMigrations083And084SchemaDrift(t, fixture, migrator, db, "missing_task_run_backup_source_run_index")
+	})
+
+	t.Run("missing alert delivery success admission guard", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		if fixture.engine == "postgres" {
+			fixture.mustExec(t, db, `DROP TRIGGER trg_alert_delivery_success_downgrade_admission ON schema_migrations`)
+		} else {
+			fixture.mustExec(t, db, `DROP TRIGGER trg_alert_delivery_success_downgrade_admission`)
+		}
+		assertRunMigrations083And084SchemaDrift(t, fixture, migrator, db, "missing_alert_delivery_success_admission_trigger")
+	})
+
+	t.Run("no-op alert delivery success admission guard", func(t *testing.T) {
+		migrator, db := fixture.openAt(t, latestMigrationVersion)
+		if fixture.engine == "postgres" {
+			fixture.mustExec(t, db, `CREATE OR REPLACE FUNCTION alert_delivery_success_downgrade_admission()
+				RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$`)
+		} else {
+			fixture.mustExec(t, db, `DROP TRIGGER trg_alert_delivery_success_downgrade_admission`)
+			fixture.mustExec(t, db, `CREATE TRIGGER trg_alert_delivery_success_downgrade_admission
+				BEFORE INSERT ON schema_migrations
+				BEGIN SELECT 1; END`)
+		}
+		assertRunMigrations083And084SchemaDrift(t, fixture, migrator, db, "invalid_alert_delivery_success_admission_trigger")
+	})
 }
 
 func assertRunMigrations083And084SchemaDrift(
