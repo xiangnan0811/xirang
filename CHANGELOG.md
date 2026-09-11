@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.8](https://github.com/xiangnan0811/xirang/compare/v0.55.7...v0.55.8) (2026-09-11)
+
+
+### 🐛 Bug Fixes
+
+* address v0.55.7 external review findings ([23b9c4b](https://github.com/xiangnan0811/xirang/commit/23b9c4bced586a8de97f029af384fd1a396e486f))
+
 ## [0.55.7](https://github.com/xiangnan0811/xirang/compare/v0.55.6...v0.55.7) (2026-09-11)
 
 ### Bug Fixes
