@@ -2,6 +2,7 @@ package escalation
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"xirang/backend/internal/model"
@@ -12,10 +13,17 @@ import (
 
 func openSvcDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared&_loc=UTC"), &gorm.Config{})
+	dsn := fmt.Sprintf("file:%s/service.db?_journal_mode=WAL&_busy_timeout=5000&_txlock=immediate&_loc=UTC", t.TempDir())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get SQLite handle: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(8)
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := db.AutoMigrate(
 		&model.EscalationPolicy{}, &model.Alert{}, &model.Task{}, &model.Policy{},
 		&model.SLODefinition{}, &model.Node{}, &model.AlertEscalationEvent{},

@@ -39,15 +39,17 @@ func migrateEscalationDeliveryDB(t *testing.T, db *gorm.DB) {
 
 func openEscalationDeliverySQLiteDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared&_loc=UTC"), &gorm.Config{})
+	dsn := fmt.Sprintf("file:%s/escalation_delivery.db?_journal_mode=WAL&_busy_timeout=5000&_txlock=immediate&_loc=UTC", t.TempDir())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open SQLite: %v", err)
 	}
-	if sqlDB, err := db.DB(); err == nil {
-		sqlDB.SetMaxOpenConns(8)
-	} else {
+	sqlDB, err := db.DB()
+	if err != nil {
 		t.Fatalf("get SQLite handle: %v", err)
 	}
+	sqlDB.SetMaxOpenConns(8)
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	migrateEscalationDeliveryDB(t, db)
 	return db
 }
@@ -142,6 +144,30 @@ func waitForWebhookSends(t *testing.T, sends *atomic.Int64, want int64) {
 	}
 }
 
+func waitForPersistedWebhookDeliveries(t *testing.T, db *gorm.DB, alertID uint, want int64) {
+	t.Helper()
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var sent int64
+		if err := db.Model(&model.AlertDelivery{}).
+			Where("alert_id = ? AND status = ?", alertID, model.AlertDeliveryStatusSent).
+			Count(&sent).Error; err != nil {
+			t.Fatalf("count persisted webhook deliveries: %v", err)
+		}
+		if sent >= want {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("persisted webhook deliveries=%d, want at least %d", sent, want)
+		case <-ticker.C:
+		}
+	}
+}
+
 func TestEngineProductionDispatcherPersistsAndSendsEscalationLevelsSQLite(t *testing.T) {
 	db := openEscalationDeliverySQLiteDB(t)
 	server, sends := newLoopbackWebhook(t)
@@ -166,6 +192,7 @@ func TestEngineProductionDispatcherPersistsAndSendsEscalationLevelsSQLite(t *tes
 	engine.SetNowFn(func() time.Time { return triggered })
 	engine.Tick(context.Background())
 	waitForWebhookSends(t, sends, 1)
+	waitForPersistedWebhookDeliveries(t, db, alert.ID, 1)
 
 	var events []model.AlertEscalationEvent
 	if err := db.Where("alert_id = ?", alert.ID).Order("level_index ASC").Find(&events).Error; err != nil {
@@ -195,6 +222,7 @@ func TestEngineProductionDispatcherPersistsAndSendsEscalationLevelsSQLite(t *tes
 	engine.SetNowFn(func() time.Time { return triggered.Add(2 * time.Second) })
 	engine.Tick(context.Background())
 	waitForWebhookSends(t, sends, 2)
+	waitForPersistedWebhookDeliveries(t, db, alert.ID, 2)
 	if err := db.Where("alert_id = ?", alert.ID).Order("level_index ASC").Find(&events).Error; err != nil {
 		t.Fatalf("load both escalation events: %v", err)
 	}
