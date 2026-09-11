@@ -10,6 +10,13 @@
 * Show pending, sending, retrying, and unknown notification states truthfully; use numeric delivery IDs for retry requests and label automation notification actions as log-only.
 * Add paired SQLite/PostgreSQL capture and delivery migrations, used-evidence downgrade protection, startup schema validation, and direct alerting concurrency coverage in CI.
 
+## [0.55.7](https://github.com/xiangnan0811/xirang/compare/v0.55.6...v0.55.7) (2026-09-11)
+
+
+### 🐛 Bug Fixes
+
+* address v0.55.6 external review findings ([#517](https://github.com/xiangnan0811/xirang/issues/517)) ([9c20e4f](https://github.com/xiangnan0811/xirang/commit/9c20e4f4eacea386c36eea69aeace976b4805f44))
+
 ## [0.55.6](https://github.com/xiangnan0811/xirang/compare/v0.55.5...v0.55.6) (2026-09-10)
 
 
