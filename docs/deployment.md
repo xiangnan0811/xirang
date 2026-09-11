@@ -247,7 +247,7 @@ DB_DSN=postgresql://user:pass@host:5432/xirang?sslmode=require
 
 ### 升级到稳定版
 
-1. 阅读目标版本的 GitHub Release 和 `CHANGELOG.md`。
+1. 阅读目标版本的 GitHub Release 和 `CHANGELOG.md`，并确认该版本的 `Publish Docker Images` 工作流已成功、官方 Docker Hub 稳定标签已发布。仅有 GitHub Release 不代表镜像可部署；若发行说明标记镜像发布受阻，应继续使用此前已验证版本。
 2. 备份数据库和 `.env`。
    手动部署 workflow 会从当前 workflow ref 上传受测试的 `scripts/predeploy-backup.sh`，进入 `DEPLOY_PATH` 后使用该目录固定的 `docker-compose.yml`、`./data` 和 `./backups` 判定并执行备份。仅当 `xirang` 容器不存在、`./data` 没有任何持久数据且 `.env` 未配置 PostgreSQL 时，才会明确报告首次部署并跳过备份。正常运行的升级必须备份；容器已停止，或容器缺失但仍有本地数据/外部 PostgreSQL 配置时，也必须通过 Compose 的环境、网络和持久挂载运行目标 All-in-One 镜像中的 `/usr/local/bin/backup-db.sh /backup/db`。任何必需备份、产物或 `.sha256` 校验失败都会阻断部署。
 

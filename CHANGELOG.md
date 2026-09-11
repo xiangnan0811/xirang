@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.55.9](https://github.com/xiangnan0811/xirang/compare/v0.55.8...v0.55.9) (2026-09-11)
+
+
+### Release scope
+
+This patch carries forward the v0.55.8 external-review fixes. The v0.55.8 GitHub tag remains unchanged, but its container publication was stopped after source CI exposed a SQLite test-fixture lock conflict. This release includes that fixture correction and must pass its own exact-source CI and image gates.
+
+### Bug Fixes
+
+* Align escalation SQLite test fixtures with production WAL/immediate transaction locking, isolate database lifetimes, and wait for durable delivery completion ([#521](https://github.com/xiangnan0811/xirang/pull/521)). This does not change production behavior or add a migration.
+
+* Restore legacy Rsync data only from a verified private staging copy before any target mutation; preserve directory-self, directory-content, and single-file destinations, archive metadata, and byte-exact names and symlink targets.
+* Preserve current recovery-generation evidence, including dirty generations, restore-source references, and active drill sources under transactional cleanup/reservation locks. An active temporary successor no longer retires the previous final generation.
+* Write byte-safe v2 capture manifests and matching root sidecars while continuing to read existing v1 evidence.
+* Require bounded business-success acknowledgements from Feishu, DingTalk, and WeCom; keep generic webhook HTTP 2xx semantics. Canonicalize legacy delivery identities before every claim without merging distinct escalation events or replaying ambiguous history.
+* Record actual notification success only for the matching live attempt, use successful completion time for cooldown, and prevent unknown historical rows from starving retry work.
+* Add paired SQLite/PostgreSQL migration 000085, schema/downgrade guards, and direct CI coverage for the affected concurrency and persistence contracts.
+
+### Upgrade notes
+
+* Back up the database, encryption keys, and backup data; pause admission, drain work, and stop every old Core before applying migration `000085_alert_delivery_success`. Do not mix old and new schedulers, executors, or other writers.
+* New captures use v2 manifests and encoded root sidecars. Existing v1 captures remain readable, but old Core must not consume new v2 evidence. Preserve the last remaining legacy backup before starting a new backup; missing or invalid capture evidence requires a new successful ordinary backup before restore.
+* Core needs temporary disk capacity for a private copy of the selected restore content. Insufficient space or validation failures must be resolved before recovery can proceed; staging is not a substitute for preserving the original backup.
+* Successful-delivery timestamps and unknown-identity evidence block migration 000085 downgrade once written. Do not erase evidence, fabricate historical success timestamps, or force migration versions. Prefer forward repair; any rollback must use a consistent pre-upgrade database/code backup and preserve backup data and delivery state together.
+* Historical NULL delivery timestamps do not fabricate cooldowns. Unknown historical delivery decisions remain quarantined; external notification delivery still cannot promise exactly-once behavior if a process exits after sending but before committing its receipt.
+* Legacy Rsync/Rclone destructive age-based retention remains disabled; managed recovery points and Restic retention are unchanged. Update Core and optional Worker from the same release source to keep exact toolchain fingerprints aligned.
+* See [upgrade and rollback guidance](docs/deployment.md#升级与回滚) for the complete operational procedure.
+
+
+
 ## [0.55.8](https://github.com/xiangnan0811/xirang/compare/v0.55.7...v0.55.8) (2026-09-11)
 
 
