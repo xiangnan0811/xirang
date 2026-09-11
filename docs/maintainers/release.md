@@ -59,7 +59,7 @@
 2. 创建 PR 后，负责人必须监控 required CI jobs；失败时在同一工作分支修复、推送并重新监控。required checks 失败、pending 或缺失时不得合并。
 3. PR 合并到 `main` 后，继续监控 `Release Please` workflow，确认它成功并按配置和提交语义创建或更新 Release PR。若 Release Please 只更新现有 Release PR 或未产生正式 release，需在交付记录中说明；不要把 post-merge 状态留空。
 4. `release-please.yml` 使用 `RELEASE_PLEASE_TOKEN` 创建或更新 Release PR，确保 release 分支会触发 CI。Release Please action 使用 `googleapis/release-please-action`，不要退回已归档的 `google-github-actions/release-please-action`。
-5. 审阅 Release PR，监控其 required checks，通过后合并。
+5. 审阅 Release PR：将本次已交付的 `Unreleased` 条目归入目标版本，并把数据库迁移、旧进程排空、备份保全及降级限制写入该版本说明，不能只保留自动生成的 PR 标题。监控其 required checks，通过后合并。
 6. GitHub 创建对应 `vX.Y.Z` Release。
 7. `publish-images.yml` 监听 `release.published`，向 Docker Hub 官方仓库 `docker.io/linnea7171/xirang` 发布：
    - `vX.Y.Z`
