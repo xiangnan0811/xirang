@@ -77,7 +77,7 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "true")
 
 	db := openSettingsAnomalySmokeDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.BackupCompletion{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
 		t.Fatalf("migrate security risk tables: %v", err)
 	}
 	now := time.Now().UTC()
@@ -371,7 +371,7 @@ func TestSettingsSecurityRiskSummaryCountsAdvisorySignals(t *testing.T) {
 
 func TestSettingsSecurityRiskSummaryAdminRecoveryPostureCriticalWhenNoAdmin(t *testing.T) {
 	db := openSettingsAnomalySmokeDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.BackupCompletion{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
 		t.Fatalf("migrate admin recovery posture tables: %v", err)
 	}
 	if err := db.Create(&model.User{Username: "FAKE_OPERATOR_USERNAME_FOR_TEST_ONLY", PasswordHash: "FAKE_OPERATOR_PASSWORD_HASH_FOR_TEST_ONLY", Role: "operator", TOTPEnabled: true, TOTPSecret: "FAKE_OPERATOR_TOTP_SECRET_FOR_TEST_ONLY", RecoveryCodes: "FAKE_OPERATOR_RECOVERY_CODE_FOR_TEST_ONLY"}).Error; err != nil {
@@ -411,7 +411,7 @@ func TestSettingsSecurityRiskSummaryAdminRecoveryPostureCriticalWhenNoAdmin(t *t
 
 func TestSettingsSecurityRiskSummaryAdminRecoveryPostureInfoWhenHealthy(t *testing.T) {
 	db := openSettingsAnomalySmokeDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.BackupCompletion{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
 		t.Fatalf("migrate admin recovery posture tables: %v", err)
 	}
 	for _, user := range []model.User{
@@ -490,7 +490,7 @@ func TestSettingsSecurityRiskSummaryWeakSecurityDefaultsInfoWhenHardened(t *test
 
 func TestSettingsSecurityRiskSummaryBackupRestorePostureWarningWhenNoPolicies(t *testing.T) {
 	db := openSettingsAnomalySmokeDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.BackupCompletion{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
 		t.Fatalf("migrate backup restore posture tables: %v", err)
 	}
 
@@ -520,7 +520,7 @@ func TestSettingsSecurityRiskSummaryBackupRestorePostureWarningWhenNoPolicies(t 
 
 func TestSettingsSecurityRiskSummaryBackupRestorePostureAvoidsDuplicateMissingSuccessCount(t *testing.T) {
 	db := openSettingsAnomalySmokeDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.BackupCompletion{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
 		t.Fatalf("migrate backup restore posture tables: %v", err)
 	}
 	policy := model.Policy{Name: "missing-success-policy", SourcePath: "/src", TargetPath: "/dst", CronSpec: "0 2 * * *", Enabled: true, DrillEnabled: true}
@@ -558,7 +558,7 @@ func TestSettingsSecurityRiskSummaryBackupRestorePostureAvoidsDuplicateMissingSu
 
 func TestSettingsSecurityRiskSummaryBackupRestorePostureInfoWhenHealthy(t *testing.T) {
 	db := openSettingsAnomalySmokeDB(t)
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.SSHKey{}, &model.NodeOwner{}, &model.Policy{}, &model.PolicyNode{}, &model.Task{}, &model.TaskRun{}, &model.BackupCompletion{}, &model.RestoreDrillEvidence{}, &model.Alert{}, &model.SystemSetting{}, &model.CredentialAuditEvent{}, &model.AuditLog{}); err != nil {
 		t.Fatalf("migrate backup restore posture tables: %v", err)
 	}
 	now := time.Now().UTC()
@@ -577,9 +577,18 @@ func TestSettingsSecurityRiskSummaryBackupRestorePostureInfoWhenHealthy(t *testi
 	if err := db.Create(&task).Error; err != nil {
 		t.Fatalf("创建健康备份任务失败: %v", err)
 	}
-	run := model.TaskRun{TaskID: task.ID, TriggerType: "manual", Status: "success", VerifyStatus: "success", CreatedAt: now, StartedAt: &now, FinishedAt: &now}
+	run := model.TaskRun{TaskID: task.ID, NodeIDSnapshot: node.ID, ExecutorTypeSnapshot: "rsync", TriggerType: "manual", Status: "success", VerifyStatus: "success", CreatedAt: now, StartedAt: &now, FinishedAt: &now}
 	if err := db.Create(&run).Error; err != nil {
 		t.Fatalf("创建健康备份执行失败: %v", err)
+	}
+	fact := model.BackupCompletion{
+		TaskID: &task.ID, TaskRunID: &run.ID, NodeID: node.ID,
+		ExecutorType: "rsync", FactKind: model.BackupCompletionKindLegacyTransferCompleted,
+		EvidenceStatus: model.BackupCompletionEvidenceVerified, CompletedAt: now,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(&fact).Error; err != nil {
+		t.Fatalf("创建健康备份完成事实失败: %v", err)
 	}
 	drill := model.RestoreDrillEvidence{PolicyID: policy.ID, TaskID: task.ID, TaskRunID: run.ID, SandboxNodeID: node.ID, SandboxPath: "/tmp/xirang-drill", Status: "success", ConfidenceEligible: true, RestoreStatus: "success", VerifyStatus: "success", CleanupStatus: "success", CreatedAt: now, StartedAt: &now, FinishedAt: &now}
 	if err := db.Create(&drill).Error; err != nil {

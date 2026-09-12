@@ -56,6 +56,14 @@ API：
 - 仅支持单探测源，即 Xirang 服务端自身。
 - HTTP headers 通过 JSON 字符串传入。
 
+
+请求头与监控用途绑定：
+
+- HTTP 请求头是写入专用字段；查询只返回请求头名称和是否已配置，不返回值或密文。
+- 更新时省略 `http_headers` 仅在监控用途未变化时保留现有请求头。监控用途包括类型、完整目标（含路径和查询参数）以及 HTTP 方法。
+- 若改变类型、目标或 HTTP 方法，且已有请求头，必须显式提交新的 JSON 请求头，或提交字符串 `"{}"` 清空；不能靠省略字段把旧凭据带到新目标。
+- 此类更新的 `409` 响应在 `data.reason.code` 中返回 `service_monitor_target_change_requires_headers`。并发更新冲突返回 `service_monitor_concurrent_update`；客户端应重新加载监控后重试，不应盲目重复旧请求。
+
 ## 告警与通知
 
 Xirang 支持以下通知渠道：

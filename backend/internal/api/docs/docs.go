@@ -12092,7 +12092,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "完整更新服务监控配置",
+                "description": "完整更新服务监控配置；省略 http_headers 仅在目标、类型和 HTTP 方法均未变化时保留现有请求头，修改监控用途时必须明确替换或清除；409 响应的 data.reason.code 为 service_monitor_target_change_requires_headers 或 service_monitor_concurrent_update",
                 "consumes": [
                     "application/json"
                 ],
@@ -12154,6 +12154,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -13785,7 +13791,7 @@ const docTemplate = `{
                                         "data": {
                                             "type": "array",
                                             "items": {
-                                                "$ref": "#/definitions/xirang_backend_internal_model.Task"
+                                                "$ref": "#/definitions/internal_api_handlers.taskResponse"
                                             }
                                         }
                                     }
@@ -13841,7 +13847,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.Task"
+                                            "$ref": "#/definitions/internal_api_handlers.taskResponse"
                                         }
                                     }
                                 }
@@ -13956,7 +13962,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.Task"
+                                            "$ref": "#/definitions/internal_api_handlers.taskResponse"
                                         }
                                     }
                                 }
@@ -14024,7 +14030,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/xirang_backend_internal_model.Task"
+                                            "$ref": "#/definitions/internal_api_handlers.taskResponse"
                                         }
                                     }
                                 }
@@ -18550,7 +18556,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "http_headers": {
-                    "description": "HTTPHeaders is a JSON object encoded as a JSON string. Omit it on\nupdates to preserve existing credentials; use \"{}\" to clear them.",
+                    "description": "HTTPHeaders is a JSON object encoded as a JSON string. Omit it on\nupdates to preserve existing credentials only when the monitor use\n(type, target, and HTTP method) is unchanged; use \"{}\" to clear them.",
                     "type": "string"
                 },
                 "http_method": {
@@ -18755,6 +18761,17 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.taskPolicyResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api_handlers.taskRcloneActivationRequest": {
             "type": "object",
             "properties": {
@@ -18906,6 +18923,98 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "rsync_target": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.taskResponse": {
+            "type": "object",
+            "properties": {
+                "archived_at": {
+                    "type": "string"
+                },
+                "batch_id": {
+                    "type": "string"
+                },
+                "command": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "cron_spec": {
+                    "type": "string"
+                },
+                "depends_on_task_id": {
+                    "type": "integer"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "escalation_policy_id": {
+                    "type": "integer"
+                },
+                "executor_type": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "last_run_at": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "next_run_at": {
+                    "type": "string"
+                },
+                "node": {
+                    "$ref": "#/definitions/xirang_backend_internal_model.Node"
+                },
+                "node_id": {
+                    "type": "integer"
+                },
+                "policy": {
+                    "$ref": "#/definitions/internal_api_handlers.taskPolicyResponse"
+                },
+                "policy_id": {
+                    "type": "integer"
+                },
+                "progress": {
+                    "type": "integer"
+                },
+                "rclone_publication": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RclonePublicationSummary"
+                },
+                "retry_count": {
+                    "type": "integer"
+                },
+                "rsync_publication": {
+                    "$ref": "#/definitions/xirang_backend_internal_backupasset.RsyncVersioningSummary"
+                },
+                "rsync_source": {
+                    "type": "string"
+                },
+                "rsync_target": {
+                    "type": "string"
+                },
+                "skip_next": {
+                    "type": "boolean"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "verify_status": {
                     "type": "string"
                 }
             }
@@ -24256,92 +24365,6 @@ const docTemplate = `{
                 },
                 "username": {
                     "description": "PrivateKey 永远不通过 JSON 序列化暴露——所有 handler 都通过 sshKeyResponseItem\n+ toSSHKeyResponse() 脱敏，此处 json:\"-\" 是深度防御，防未来误写 c.JSON(model.SSHKey{...})",
-                    "type": "string"
-                }
-            }
-        },
-        "xirang_backend_internal_model.Task": {
-            "type": "object",
-            "properties": {
-                "archived_at": {
-                    "type": "string"
-                },
-                "batch_id": {
-                    "type": "string"
-                },
-                "command": {
-                    "type": "string"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "cron_spec": {
-                    "type": "string"
-                },
-                "depends_on_task_id": {
-                    "type": "integer"
-                },
-                "enabled": {
-                    "type": "boolean"
-                },
-                "escalation_policy_id": {
-                    "type": "integer"
-                },
-                "executor_type": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "integer"
-                },
-                "last_error": {
-                    "type": "string"
-                },
-                "last_run_at": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "next_run_at": {
-                    "type": "string"
-                },
-                "node": {
-                    "$ref": "#/definitions/xirang_backend_internal_model.Node"
-                },
-                "node_id": {
-                    "type": "integer"
-                },
-                "policy": {
-                    "$ref": "#/definitions/xirang_backend_internal_model.Policy"
-                },
-                "policy_id": {
-                    "type": "integer"
-                },
-                "progress": {
-                    "type": "integer"
-                },
-                "retry_count": {
-                    "type": "integer"
-                },
-                "rsync_source": {
-                    "type": "string"
-                },
-                "rsync_target": {
-                    "type": "string"
-                },
-                "skip_next": {
-                    "type": "boolean"
-                },
-                "source": {
-                    "type": "string"
-                },
-                "status": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                },
-                "verify_status": {
                     "type": "string"
                 }
             }

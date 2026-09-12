@@ -2,15 +2,14 @@ package handlers
 
 import (
 	"fmt"
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 	"os"
 	"strconv"
 	"strings"
 	"time"
-
+	"xirang/backend/internal/backuphealth"
 	"xirang/backend/internal/model"
-
-	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
 type BackupHealthHandler struct {
@@ -53,22 +52,41 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 		return
 	}
 
-	// 1. 备份过期节点：从未备份或最后备份超过 48 小时
+	// 1. 备份过期节点：只读取已验证的、分类完成事实。旧的
+	// nodes.last_backup_at 会在迁移时保留为 unverified，不能让节点变新鲜。
 	type staleNode struct {
 		ID           uint       `json:"id"`
 		Name         string     `json:"name"`
 		LastBackupAt *time.Time `json:"last_backup_at"`
 	}
-	var staleNodes []staleNode
-	staleQ := h.db.Model(&model.Node{}).
-		Select("id, name, last_backup_at").
-		Where("last_backup_at IS NULL OR last_backup_at < ?", staleThreshold)
+	var nodes []model.Node
+	nodeQ := h.db.WithContext(c.Request.Context()).Model(&model.Node{}).Select("id, name")
 	if needFilter {
-		staleQ = staleQ.Where("id IN ?", ownedIDs)
+		nodeQ = nodeQ.Where("id IN ?", ownedIDs)
 	}
-	if err := staleQ.Find(&staleNodes).Error; err != nil {
+	if err := nodeQ.Find(&nodes).Error; err != nil {
 		respondInternalError(c, err)
 		return
+	}
+	nodeIDs := make([]uint, 0, len(nodes))
+	for _, node := range nodes {
+		nodeIDs = append(nodeIDs, node.ID)
+	}
+	latestFacts, err := backuphealth.LatestVerifiedForNodes(c.Request.Context(), h.db, nodeIDs)
+	if err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	staleNodes := make([]staleNode, 0, len(nodes))
+	for _, node := range nodes {
+		var lastBackupAt *time.Time
+		if fact, ok := latestFacts[node.ID]; ok {
+			completedAt := fact.CompletedAt.UTC()
+			lastBackupAt = &completedAt
+		}
+		if lastBackupAt == nil || lastBackupAt.Before(staleThreshold) {
+			staleNodes = append(staleNodes, staleNode{ID: node.ID, Name: node.Name, LastBackupAt: lastBackupAt})
+		}
 	}
 
 	// 2. 降级策略：最近 3 次 task_run 全部失败的策略
@@ -83,16 +101,26 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 		Status     string `gorm:"column:status"`
 	}
 	var runInfos []policyRunInfo
-	// Use bound boolean (not = 1) so PostgreSQL accepts the predicate.
+	// Attempts remain classified from immutable TaskRun snapshots for the
+	// denominator. A verified completion fact is the only success signal; this
+	// also handles a managed commit becoming durable before its TaskRun settles.
 	degradedSQL := `
-		SELECT t.policy_id AS policy_id, p.name AS policy_name, tr.status AS status
+		SELECT t.policy_id AS policy_id, p.name AS policy_name,
+			CASE
+				WHEN EXISTS (
+					SELECT 1 FROM backup_completions bc
+					WHERE bc.task_run_id = tr.id AND bc.evidence_status = 'verified'
+				) THEN 'success'
+				WHEN tr.status = 'success' THEN 'incomplete'
+				ELSE tr.status
+			END AS status
 		FROM task_runs tr
 		JOIN tasks t ON t.id = tr.task_id
 		JOIN policies p ON p.id = t.policy_id
-		WHERE p.enabled = ?`
+		WHERE p.enabled = ? AND ` + backuphealth.ClassifiedAttemptPredicate("tr")
 	degradedArgs := []any{true}
 	if needFilter {
-		degradedSQL += ` AND t.node_id IN ?`
+		degradedSQL += ` AND tr.node_id_snapshot IN ?`
 		degradedArgs = append(degradedArgs, ownedIDs)
 	}
 	degradedSQL += `
@@ -159,16 +187,27 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 	caseExpr := "CASE " + strings.Join(caseBranches, " ") + " END"
 	args = append(args, trendStart, trendEnd)
 	trendSQL := fmt.Sprintf(`
-		SELECT %s AS day, tr.status AS status, COUNT(*) AS cnt
-		FROM task_runs tr
-		JOIN tasks t ON t.id = tr.task_id
-		WHERE tr.created_at >= ? AND tr.created_at < ?`, caseExpr)
+		SELECT classified.day, classified.status, COUNT(*) AS cnt
+		FROM (
+			SELECT %s AS day,
+				CASE
+					WHEN EXISTS (
+						SELECT 1 FROM backup_completions bc
+						WHERE bc.task_run_id = tr.id AND bc.evidence_status = 'verified'
+					) THEN 'success'
+					WHEN tr.status = 'success' THEN 'incomplete'
+					ELSE tr.status
+				END AS status
+			FROM task_runs tr
+			WHERE tr.created_at >= ? AND tr.created_at < ? AND %s`,
+		caseExpr, backuphealth.ClassifiedAttemptPredicate("tr"))
 	if needFilter {
-		trendSQL += ` AND t.node_id IN ?`
+		trendSQL += ` AND tr.node_id_snapshot IN ?`
 		args = append(args, ownedIDs)
 	}
 	trendSQL += `
-		GROUP BY day, tr.status`
+		) AS classified
+		GROUP BY classified.day, classified.status`
 	var rows []trendRow
 	if err := h.db.Raw(trendSQL, args...).Scan(&rows).Error; err != nil {
 		respondInternalError(c, err)
@@ -194,11 +233,11 @@ func (h *BackupHealthHandler) Get(c *gin.Context) {
 
 	// 4. 汇总统计（scoped）
 	var totalNodes int64
-	nodeQ := h.db.Model(&model.Node{})
+	nodeCountQ := h.db.Model(&model.Node{})
 	if needFilter {
-		nodeQ = nodeQ.Where("id IN ?", ownedIDs)
+		nodeCountQ = nodeCountQ.Where("id IN ?", ownedIDs)
 	}
-	if err := nodeQ.Count(&totalNodes).Error; err != nil {
+	if err := nodeCountQ.Count(&totalNodes).Error; err != nil {
 		respondInternalError(c, err)
 		return
 	}

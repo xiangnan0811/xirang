@@ -1120,6 +1120,7 @@ func newTaskArchiveFixtureWithPublicationMode(t *testing.T, publicationMode back
 		&model.Node{},
 		&model.Task{},
 		&model.TaskRun{},
+		&model.TaskCronOccurrence{},
 		&model.TaskLog{},
 		&model.TaskTrafficSample{},
 		&model.BackupRepository{},

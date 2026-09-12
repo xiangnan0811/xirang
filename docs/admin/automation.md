@@ -15,6 +15,20 @@
 事件发生 → 匹配启用规则 → 检查过滤条件 → 执行动作 → 记录结果
 ```
 
+## 备份任务 Cron 与持久化调度
+
+备份任务的 Cron 回调会先把调度意图写入 `task_cron_occurrences`，再进入节点、并发和执行器准入。`(task_id, scheduled_at)` 是持久化唯一键，因此两个 Core 同时收到同一时刻的回调也只会产生一条待处理意图；手动或自动触发不会伪造 Cron occurrence。任务忙、并发配额不足、节点或资源准入暂不可用时，Cron 意图保持 `queued`，由后续扫描重试，而不是静默丢失。
+
+### 重启与错过的时刻
+
+- Core 启动和周期扫描都会投递 `queued` 意图。调度租约过期后，其他 Core 可以接管未完成的投递；已经绑定 TaskRun 的 occurrence 不会重复执行。
+- Core 停机期间错过的 `next_run_at` 只记录一条 `skipped` occurrence（原因 `scheduler downtime; missed occurrence coalesced`），不会在重启时把整个停机区间补跑成一批任务。已有的 `queued` 意图仍按原计划投递。
+- 禁用或归档任务、取消任务，或禁用所属策略时，尚未投递的 occurrence 会在同一持久化边界标记为 `canceled` 并清除租约；重新启用后只等待新的调度时刻。正在执行的 TaskRun 仍按任务取消和执行租约规则收敛，不会因删除本地调度器记录而被假定停止。
+
+### Legacy Rclone 的共享目标占用
+
+Legacy Rclone 写入可变 Remote。相同节点和 Remote 的并发写入由数据库持久化占用保护；`writing` 或 `unknown` 事实会继续阻止新的写入，Core 重启、租约到期或本地 SSH 关闭都不等于远端写入已经停止。管理员必须先暂停任务并确认远端及外部写入者停止，再按[备份恢复文档中的显式协调流程](backup-recovery.md#explicit-operator-reconciliation)对指定 TaskRun 调用 `POST /api/v1/tasks/{id}/reconcile-legacy-rclone`。协调只会记录审计并解除已确认的占用，不会自动重试、恢复调度或把旧成功记录提升为新的恢复证据。
+
 ## 事件类型
 
 | event_type | 说明 | 可过滤字段 | 当前触发来源 |

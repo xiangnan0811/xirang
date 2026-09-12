@@ -53,6 +53,13 @@ vi.mock("react-i18next", () => ({
         "serviceMonitor.createTitle": "新建服务监控",
         "serviceMonitor.editTitle": "编辑服务监控",
         "serviceMonitor.fieldTarget": "探测目标",
+        "serviceMonitor.fieldType": "监控类型",
+
+        "serviceMonitor.httpHeadersConfigured": "已配置请求头名称：{{names}}",
+        "serviceMonitor.httpHeadersClear": "清除全部自定义 HTTP 请求头",
+        "serviceMonitor.httpHeadersRetargetWarning": "此监控已配置隐藏的 HTTP 请求头值。修改目标、监控类型或 HTTP 方法前，请明确替换请求头或清除全部请求头。",
+        "serviceMonitor.validation.headersRetargetRequiresAction": "修改监控目标、类型或 HTTP 方法前，请明确替换或清除隐藏的 HTTP 请求头。",
+
         "serviceMonitor.fieldInterval": "探测间隔",
         "serviceMonitor.fieldTimeout": "超时",
         "serviceMonitor.fieldHttpExpectedStatus": "预期状态码",
@@ -95,6 +102,12 @@ const monitor: ServiceMonitorView = {
   createdAt: "2026-05-01T10:00:00Z",
   updatedAt: "2026-05-06T10:00:00Z",
 };
+const configuredMonitor: ServiceMonitorView = {
+  ...monitor,
+  httpHeaderNames: ["Authorization"],
+  httpHeadersConfigured: true,
+};
+
 
 describe("ServiceMonitorsPage", () => {
   beforeEach(() => {
@@ -185,6 +198,72 @@ describe("ServiceMonitorsPage", () => {
         timeoutSeconds: 300,
         httpExpectedStatus: 100,
       })
+    );
+  });
+
+  it("blocks a configured monitor retarget until headers are replaced or cleared", async () => {
+    const user = userEvent.setup();
+    apiMock.list.mockResolvedValueOnce([configuredMonitor]);
+    render(<ServiceMonitorsPage />);
+
+    await user.click(await screen.findByRole("button", { name: "编辑监控 API" }));
+    const targetInput = await screen.findByLabelText("探测目标*");
+    await user.clear(targetInput);
+    await user.type(targetInput, "https://receiver.example/collect?probe=2");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    expect(await screen.findByText("修改监控目标、类型或 HTTP 方法前，请明确替换或清除隐藏的 HTTP 请求头。")).toBeInTheDocument();
+    expect(apiMock.update).not.toHaveBeenCalled();
+  });
+
+  it("sends an explicit header clear when retargeting a configured monitor", async () => {
+    const user = userEvent.setup();
+    apiMock.list.mockResolvedValueOnce([configuredMonitor]);
+    render(<ServiceMonitorsPage />);
+
+    await user.click(await screen.findByRole("button", { name: "编辑监控 API" }));
+    const targetInput = await screen.findByLabelText("探测目标*");
+    await user.clear(targetInput);
+    await user.type(targetInput, "https://receiver.example/collect?probe=2");
+    await user.click(screen.getByRole("button", { name: "清除全部自定义 HTTP 请求头" }));
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(apiMock.update).toHaveBeenCalledTimes(1));
+    expect(apiMock.update).toHaveBeenCalledWith(
+      "test-token",
+      1,
+      expect.objectContaining({
+        target: "https://receiver.example/collect?probe=2",
+        httpHeaderList: [],
+      }),
+    );
+  });
+
+  it("offers an explicit clear when switching a configured monitor to TCP", async () => {
+    const user = userEvent.setup();
+    apiMock.list.mockResolvedValueOnce([configuredMonitor]);
+    render(<ServiceMonitorsPage />);
+
+    await user.click(await screen.findByRole("button", { name: "编辑监控 API" }));
+    fireEvent.change(screen.getByLabelText("监控类型*"), { target: { value: "tcp" } });
+    const targetInput = await screen.findByLabelText("探测目标*");
+    await user.clear(targetInput);
+    await user.type(targetInput, "receiver.example:443");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "此监控已配置隐藏的 HTTP 请求头值。修改目标、监控类型或 HTTP 方法前，请明确替换请求头或清除全部请求头。",
+    );
+    await user.click(screen.getByRole("button", { name: "清除全部自定义 HTTP 请求头" }));
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(apiMock.update).toHaveBeenCalledTimes(1));
+    expect(apiMock.update).toHaveBeenCalledWith(
+      "test-token",
+      1,
+      expect.objectContaining({
+        type: "tcp",
+        target: "receiver.example:443",
+        httpHeaderList: [],
+      }),
     );
   });
 });

@@ -137,32 +137,45 @@ type taskRequest struct {
 	CronSpec        string `json:"cron_spec"`
 }
 
+type taskPolicyResponse struct {
+	ID   uint   `json:"id"`
+	Name string `json:"name"`
+}
+
+func taskPolicyResponseFor(policy *model.Policy) *taskPolicyResponse {
+	if policy == nil {
+		return nil
+	}
+	return &taskPolicyResponse{ID: policy.ID, Name: policy.Name}
+}
+
 func sanitizeTaskForResponse(taskEntity model.Task) model.Task {
 	taskEntity.LastError = task.SanitizeRuntimeEvidenceForRead(taskEntity.LastError)
-	if taskEntity.Policy != nil {
-		policyCopy := *taskEntity.Policy
-		policyCopy.PreHook = ""
-		policyCopy.PostHook = ""
-		taskEntity.Policy = &policyCopy
-	}
+	// Policy is projected explicitly by taskResponse below. Never let the
+	// persistence model's decrypted hooks/drill scripts cross this boundary.
+	taskEntity.Policy = nil
 	return taskEntity
 }
 
-// taskResponse embeds the stable Task JSON shape and adds only the explicit
-// safe Rsync publication projection. It must never contain binding, root,
-// marker, manifest, fence, command, or credential data.
+// taskResponse embeds the stable Task JSON shape and adds only explicit safe
+// nested Policy and publication projections. It must never contain binding,
+// root, marker, manifest, fence, command, credential, hook, or drill script
+// data from persistence models.
 type taskResponse struct {
 	model.Task
+	Policy            *taskPolicyResponse                   `json:"policy,omitempty"`
 	RsyncPublication  *backupasset.RsyncVersioningSummary   `json:"rsync_publication,omitempty"`
 	RclonePublication *backupasset.RclonePublicationSummary `json:"rclone_publication,omitempty"`
 }
 
 func (h *TaskHandler) taskResponse(ctx context.Context, taskEntity model.Task) taskResponse {
-	response := taskResponse{Task: sanitizeTaskForResponse(taskEntity)}
+	policy := taskPolicyResponseFor(taskEntity.Policy)
+	response := taskResponse{Task: sanitizeTaskForResponse(taskEntity), Policy: policy}
 	if h == nil {
 		return response
 	}
 	executorType := strings.ToLower(strings.TrimSpace(taskEntity.ExecutorType))
+
 	if executorType == "rsync" && h.rsyncVersioning != nil {
 		summary, err := h.rsyncVersioning.RsyncVersioningSummary(ctx, taskEntity.ID)
 		if err != nil || summary.Validate() != nil {
@@ -207,7 +220,7 @@ func (h *TaskHandler) taskResponses(ctx context.Context, tasks []model.Task) []t
 // @Param        node_id    query     int     false  "节点 ID 过滤"
 // @Param        policy_id  query     int     false  "策略 ID 过滤"
 // @Param        keyword    query     string  false  "关键字模糊搜索"
-// @Success      200  {object}  handlers.PaginatedResponse{data=[]model.Task}
+// @Success      200  {object}  handlers.PaginatedResponse{data=[]taskResponse}
 // @Failure      401  {object}  handlers.Response
 // @Router       /tasks [get]
 func (h *TaskHandler) List(c *gin.Context) {
@@ -316,7 +329,7 @@ func (h *TaskHandler) List(c *gin.Context) {
 // @Security     Bearer
 // @Produce      json
 // @Param        id   path      int  true  "任务 ID"
-// @Success      200  {object}  handlers.Response{data=model.Task}
+// @Success      200  {object}  handlers.Response{data=taskResponse}
 // @Failure      401  {object}  handlers.Response
 // @Failure      404  {object}  handlers.Response
 // @Router       /tasks/{id} [get]
@@ -351,7 +364,7 @@ func (h *TaskHandler) Get(c *gin.Context) {
 // @Accept       json
 // @Produce      json
 // @Param        body  body      taskRequest  true  "创建任务请求"
-// @Success      201   {object}  handlers.Response{data=model.Task}
+// @Success      201   {object}  handlers.Response{data=taskResponse}
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
 // @Failure      403   {object}  handlers.Response
@@ -403,7 +416,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 // @Produce      json
 // @Param        id    path      int          true  "任务 ID"
 // @Param        body  body      taskRequest  true  "更新任务请求"
-// @Success      200   {object}  handlers.Response{data=model.Task}
+// @Success      200   {object}  handlers.Response{data=taskResponse}
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
 // @Failure      404   {object}  handlers.Response

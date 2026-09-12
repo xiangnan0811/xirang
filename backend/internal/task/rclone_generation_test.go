@@ -535,11 +535,29 @@ func TestLegacyRcloneUnknownGenerationBlocksRecoveryAndFutureWrites(t *testing.T
 	if err := db.Model(&model.TaskRun{}).Where("task_id = ?", taskEntity.ID).Count(&beforeCount).Error; err != nil {
 		t.Fatalf("count Rclone runs before blocked triggers: %v", err)
 	}
+	if _, owned := manager.pendingRuns.Load(taskEntity.ID); owned {
+		t.Fatal("unknown direct run leaked process-local pending ownership")
+	}
 	if _, err := manager.TriggerManual(taskEntity.ID); !errors.Is(err, ErrMutableGenerationUnresolved) {
 		t.Fatalf("manual write after unknown error=%v, want ErrMutableGenerationUnresolved", err)
 	}
-	if err := manager.TriggerFromScheduler(taskEntity.ID, time.Now().UTC()); !errors.Is(err, ErrMutableGenerationUnresolved) {
-		t.Fatalf("cron write after unknown error=%v, want ErrMutableGenerationUnresolved", err)
+	if _, owned := manager.pendingRuns.Load(taskEntity.ID); owned {
+		t.Fatal("blocked manual trigger leaked process-local pending ownership")
+	}
+	if err := manager.TriggerFromScheduler(taskEntity.ID, time.Now().UTC()); err != nil {
+		t.Fatalf("cron write after unknown should remain queued: %v", err)
+	}
+	if _, owned := manager.pendingRuns.Load(taskEntity.ID); owned {
+		t.Fatal("blocked cron trigger leaked process-local pending ownership")
+	}
+	var queuedOccurrences int64
+	if err := db.Model(&model.TaskCronOccurrence{}).
+		Where("task_id = ? AND state = ?", taskEntity.ID, model.TaskCronOccurrenceStateQueued).
+		Count(&queuedOccurrences).Error; err != nil {
+		t.Fatalf("count queued cron occurrence: %v", err)
+	}
+	if queuedOccurrences != 1 {
+		t.Fatalf("queued cron occurrences=%d, want 1", queuedOccurrences)
 	}
 	if err := db.Model(&model.TaskRun{}).Where("task_id = ?", taskEntity.ID).Count(&beforeCount).Error; err != nil {
 		t.Fatalf("count Rclone runs after blocked triggers: %v", err)
@@ -566,6 +584,385 @@ func TestLegacyRcloneUnknownGenerationBlocksRecoveryAndFutureWrites(t *testing.T
 	if preserved.BackupGenerationState != model.TaskRunGenerationStateUnknown {
 		t.Fatalf("target edit erased unresolved state=%q", preserved.BackupGenerationState)
 	}
+}
+func TestLegacyRcloneUnknownGenerationFreezesSharedResourceOnly(t *testing.T) {
+	db := openManagerTestDB(t)
+	taskA := seedLegacyRcloneTask(t, db)
+	sharedRemote := "shared-remote:bucket-a"
+	if err := db.Model(&model.Task{}).Where("id = ?", taskA.ID).Update("rsync_target", sharedRemote).Error; err != nil {
+		t.Fatalf("set shared Rclone target: %v", err)
+	}
+	if err := db.First(&taskA, taskA.ID).Error; err != nil {
+		t.Fatalf("reload shared Rclone task: %v", err)
+	}
+	seedRcloneGeneration(t, db, taskA, model.TaskRunStatusFailed,
+		model.TaskRunGenerationStateUnknown, "RCLONE_SHARED_UNKNOWN_FOR_TEST_ONLY", time.Now().UTC())
+
+	taskB := model.Task{
+		Name:         "legacy-rclone-shared-peer",
+		NodeID:       taskA.NodeID,
+		ExecutorType: "rclone",
+		Status:       string(StatusPending),
+		RsyncSource:  taskA.RsyncSource,
+		RsyncTarget:  sharedRemote,
+	}
+	if err := db.Create(&taskB).Error; err != nil {
+		t.Fatalf("create shared Rclone peer task: %v", err)
+	}
+	taskC := model.Task{
+		Name:         "legacy-rclone-independent-peer",
+		NodeID:       taskA.NodeID,
+		ExecutorType: "rclone",
+		Status:       string(StatusPending),
+		RsyncSource:  taskA.RsyncSource,
+		RsyncTarget:  "independent-remote:bucket-c",
+	}
+	if err := db.Create(&taskC).Error; err != nil {
+		t.Fatalf("create independent Rclone peer task: %v", err)
+	}
+
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+	if _, err := manager.TriggerManual(taskB.ID); !errors.Is(err, ErrMutableGenerationUnresolved) {
+		t.Fatalf("same-resource Rclone peer error=%v, want ErrMutableGenerationUnresolved", err)
+	}
+	var sharedPeerRuns int64
+	if err := db.Model(&model.TaskRun{}).Where("task_id = ?", taskB.ID).Count(&sharedPeerRuns).Error; err != nil {
+		t.Fatalf("count same-resource peer runs: %v", err)
+	}
+	if sharedPeerRuns != 0 {
+		t.Fatalf("same-resource peer created %d runs, want none", sharedPeerRuns)
+	}
+
+	runID, err := manager.TriggerManual(taskC.ID)
+	if err != nil || runID == 0 {
+		t.Fatalf("independent Rclone peer trigger run=%d err=%v", runID, err)
+	}
+	completed := waitTaskRunTerminal(t, db, runID)
+	if completed.Status != model.TaskRunStatusSuccess {
+		t.Fatalf("independent Rclone peer status=%q error=%q, want success", completed.Status, completed.LastError)
+	}
+}
+
+func runSharedRcloneArmFence(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	node := model.Node{
+		Name:      "shared-rclone-arm-node-" + filepath.Base(t.TempDir()),
+		Host:      "",
+		Port:      22,
+		Username:  "root",
+		AuthType:  "key",
+		BackupDir: filepath.Join(t.TempDir(), "backup"),
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("create shared Rclone arm node: %v", err)
+	}
+	const target = "shared-arm-remote:bucket"
+	tasks := []model.Task{
+		{
+			Name:         "shared-rclone-arm-a-" + filepath.Base(t.TempDir()),
+			NodeID:       node.ID,
+			ExecutorType: "rclone",
+			Status:       string(StatusPending),
+			Enabled:      true,
+			RsyncSource:  "/source-a/",
+			RsyncTarget:  target,
+		},
+		{
+			Name:         "shared-rclone-arm-b-" + filepath.Base(t.TempDir()),
+			NodeID:       node.ID,
+			ExecutorType: "rclone",
+			Status:       string(StatusPending),
+			Enabled:      true,
+			RsyncSource:  "/source-b/",
+			RsyncTarget:  target,
+		},
+	}
+	for i := range tasks {
+		if err := db.Create(&tasks[i]).Error; err != nil {
+			t.Fatalf("create shared Rclone arm task %d: %v", i, err)
+		}
+		tasks[i].Node = node
+	}
+	runs := make([]model.TaskRun, len(tasks))
+	for i := range tasks {
+		runs[i] = model.TaskRun{
+			TaskID: tasks[i].ID, NodeIDSnapshot: node.ID, TriggerType: "manual",
+			Status:                  model.TaskRunStatusRunning,
+			BackupConfigFingerprint: model.TaskRunBackupConfigFingerprint(tasks[i]),
+		}
+		if err := db.Create(&runs[i]).Error; err != nil {
+			t.Fatalf("create shared Rclone arm run %d: %v", i, err)
+		}
+	}
+
+	managers := []*Manager{{db: db}, {db: db}}
+	start := make(chan struct{})
+	type armResult struct {
+		index int
+		err   error
+	}
+	results := make(chan armResult, len(managers))
+	for i := range managers {
+		i := i
+		go func() {
+			<-start
+			task := tasks[i]
+			results <- armResult{
+				index: i,
+				err: managers[i].armLegacyMutableGeneration(
+					context.Background(), &task, tasks[i].ID, runs[i].ID,
+					model.TaskRunGenerationStateWriting,
+				),
+			}
+		}()
+	}
+	close(start)
+	armResults := make([]armResult, 0, len(managers))
+	for range managers {
+		armResults = append(armResults, <-results)
+	}
+
+	var armed, blocked int
+	for _, result := range armResults {
+		if result.err == nil {
+			armed++
+			continue
+		}
+		if !errors.Is(result.err, ErrMutableGenerationUnresolved) {
+			t.Fatalf("shared Rclone arm %d error=%v, want duplicate-resource hold", result.index, result.err)
+		}
+		blocked++
+	}
+	if armed != 1 || blocked != 1 {
+		t.Fatalf("shared Rclone arm outcomes armed=%d blocked=%d, want one each", armed, blocked)
+	}
+
+	var persisted []model.TaskRun
+	if err := db.Where("id IN ?", []uint{runs[0].ID, runs[1].ID}).Order("id ASC").Find(&persisted).Error; err != nil {
+		t.Fatalf("reload shared Rclone arm runs: %v", err)
+	}
+	if len(persisted) != len(runs) {
+		t.Fatalf("persisted shared Rclone arm runs=%d, want %d", len(persisted), len(runs))
+	}
+	armedID := uint(0)
+	blockedID := uint(0)
+	for _, run := range persisted {
+		switch run.BackupGenerationState {
+		case model.TaskRunGenerationStateWriting:
+			armedID = run.ID
+		case "":
+			blockedID = run.ID
+		default:
+			t.Fatalf("run %d state=%q, want writing or empty", run.ID, run.BackupGenerationState)
+		}
+	}
+	if armedID == 0 || blockedID == 0 {
+		t.Fatalf("shared Rclone arm persisted states=%+v, want one writing and one empty", persisted)
+	}
+
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", armedID).
+		Update("backup_generation_state", model.TaskRunGenerationStateDirty).Error; err != nil {
+		t.Fatalf("release known shared Rclone arm hold: %v", err)
+	}
+	var blockedIndex int
+	for i := range runs {
+		if runs[i].ID == blockedID {
+			blockedIndex = i
+			break
+		}
+	}
+	retryTask := tasks[blockedIndex]
+	if err := managers[blockedIndex].armLegacyMutableGeneration(
+		context.Background(), &retryTask, retryTask.ID, blockedID,
+		model.TaskRunGenerationStateWriting,
+	); err != nil {
+		t.Fatalf("shared Rclone arm handoff after known terminal state: %v", err)
+	}
+	var retried model.TaskRun
+	if err := db.First(&retried, blockedID).Error; err != nil {
+		t.Fatalf("reload handed-off shared Rclone arm: %v", err)
+	}
+	if retried.BackupGenerationState != model.TaskRunGenerationStateWriting {
+		t.Fatalf("handed-off shared Rclone arm state=%q, want writing", retried.BackupGenerationState)
+	}
+}
+
+func TestLegacyRcloneSharedResourceArmFenceSQLite(t *testing.T) {
+	runSharedRcloneArmFence(t, openConcurrentManagerTestDB(t))
+}
+
+func TestLegacyRcloneSharedResourceArmFencePostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	db := openTaskTerminalPostgresDB(t, dsn)
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_runs_resource_active_unique
+		ON task_runs(resource_key)
+		WHERE resource_key <> '' AND backup_generation_state IN ('writing', 'unknown')`).Error; err != nil {
+		t.Fatalf("install PostgreSQL shared resource arm index: %v", err)
+	}
+	runSharedRcloneArmFence(t, db)
+}
+
+func runKeyedHistoricalRcloneArmFence(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	db = db.Debug()
+	node := model.Node{
+		Name:      "keyed-historical-rclone-node-" + filepath.Base(t.TempDir()),
+		Host:      "",
+		Port:      22,
+		Username:  "root",
+		AuthType:  "key",
+		BackupDir: filepath.Join(t.TempDir(), "backup"),
+	}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("create keyed/historical Rclone node: %v", err)
+	}
+	tasks := []model.Task{
+		{
+			Name:         "keyed-rclone-arm-" + filepath.Base(t.TempDir()),
+			NodeID:       node.ID,
+			ExecutorType: "rclone",
+			Status:       string(StatusPending),
+			Enabled:      true,
+			RsyncSource:  "/source-keyed/",
+			RsyncTarget:  "shared-historical:bucket",
+			Node:         node,
+		},
+		{
+			Name:         "historical-rclone-arm-" + filepath.Base(t.TempDir()),
+			NodeID:       node.ID,
+			ExecutorType: "rclone",
+			Status:       string(StatusPending),
+			Enabled:      true,
+			RsyncSource:  "/source-historical/",
+			RsyncTarget:  "other-historical:bucket",
+			Node:         node,
+		},
+	}
+	for i := range tasks {
+		if err := db.Create(&tasks[i]).Error; err != nil {
+			t.Fatalf("create keyed/historical Rclone task %d: %v", i, err)
+		}
+	}
+	runs := []model.TaskRun{
+		{
+			TaskID: tasks[0].ID, NodeIDSnapshot: node.ID, TriggerType: "manual",
+			Status:                  model.TaskRunStatusRunning,
+			BackupConfigFingerprint: model.TaskRunBackupConfigFingerprint(tasks[0]),
+		},
+		{
+			TaskID: tasks[1].ID, NodeIDSnapshot: node.ID, TriggerType: "manual",
+			Status: model.TaskRunStatusRunning,
+		},
+	}
+	for i := range runs {
+		if err := db.Create(&runs[i]).Error; err != nil {
+			t.Fatalf("create keyed/historical Rclone run %d: %v", i, err)
+		}
+	}
+	// Simulate a pre-000086 historical row: its empty identity is already
+	// durable history, so test setup bypasses the new create-time classifier.
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", runs[1].ID).Updates(map[string]any{
+		"executor_type_snapshot":    "",
+		"resource_key":              "",
+		"resource_provider":         "",
+		"resource_node_id":          0,
+		"resource_namespace":        "",
+		"resource_locator":          "",
+		"resource_evidence":         "",
+		"backup_config_fingerprint": "",
+	}).Error; err != nil {
+		t.Fatalf("clear historical Rclone identity fixture: %v", err)
+	}
+
+	managers := []*Manager{{db: db}, {db: db}}
+	// A keyed writer must fence a later historical row even when the
+	// historical task's editable Remote differs; no target inference is used.
+	keyedTask := tasks[0]
+	if err := managers[0].armLegacyMutableGeneration(
+		context.Background(), &keyedTask, keyedTask.ID, runs[0].ID,
+		model.TaskRunGenerationStateWriting,
+	); err != nil {
+		t.Fatalf("keyed-first Rclone arm: %v", err)
+	}
+	historicalTask := tasks[1]
+	err := managers[1].armLegacyMutableGeneration(
+		context.Background(), &historicalTask, historicalTask.ID, runs[1].ID,
+		model.TaskRunGenerationStateWriting,
+	)
+	if !errors.Is(err, ErrMutableGenerationUnresolved) {
+		t.Fatalf("historical arm after keyed writer error=%v, want shared-node hold", err)
+	}
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", runs[0].ID).
+		Update("backup_generation_state", "").Error; err != nil {
+		t.Fatalf("reset keyed-first Rclone arm fixture: %v", err)
+	}
+	start := make(chan struct{})
+	type armResult struct {
+		index int
+		err   error
+	}
+	results := make(chan armResult, len(managers))
+	for i := range managers {
+		i := i
+		go func() {
+			<-start
+			task := tasks[i]
+			results <- armResult{
+				index: i,
+				err: managers[i].armLegacyMutableGeneration(
+					context.Background(), &task, tasks[i].ID, runs[i].ID,
+					model.TaskRunGenerationStateWriting,
+				),
+			}
+		}()
+	}
+	close(start)
+	var armed, blocked int
+	for range managers {
+		result := <-results
+		if result.err == nil {
+			armed++
+			continue
+		}
+		if !errors.Is(result.err, ErrMutableGenerationUnresolved) {
+			t.Fatalf("keyed/historical Rclone arm %d error=%v", result.index, result.err)
+		}
+		blocked++
+	}
+	if armed != 1 || blocked != 1 {
+		t.Fatalf("keyed/historical Rclone arm outcomes armed=%d blocked=%d, want one each", armed, blocked)
+	}
+	var activeCount int64
+	if err := db.Model(&model.TaskRun{}).
+		Where("status = ? AND backup_generation_state = ?", model.TaskRunStatusRunning, model.TaskRunGenerationStateWriting).
+		Count(&activeCount).Error; err != nil {
+		t.Fatalf("count keyed/historical active writes: %v", err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("keyed/historical active writes=%d, want one", activeCount)
+	}
+}
+
+func TestLegacyRcloneKeyedHistoricalArmFenceSQLite(t *testing.T) {
+	runKeyedHistoricalRcloneArmFence(t, openConcurrentManagerTestDB(t))
+}
+
+func TestLegacyRcloneKeyedHistoricalArmFencePostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	db := openTaskTerminalPostgresDB(t, dsn)
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_runs_resource_active_unique
+		ON task_runs(resource_key)
+		WHERE resource_key <> '' AND backup_generation_state IN ('writing', 'unknown')`).Error; err != nil {
+		t.Fatalf("install PostgreSQL keyed/historical resource index: %v", err)
+	}
+	runKeyedHistoricalRcloneArmFence(t, db)
 }
 
 func TestLegacyRcloneArmCrashRecoveryKeepsWriteHold(t *testing.T) {

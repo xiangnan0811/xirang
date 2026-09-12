@@ -90,6 +90,10 @@ func respondConflict(c *gin.Context, msg string) {
 	c.JSON(http.StatusConflict, Response{Code: http.StatusConflict, Message: msg, Data: nil})
 }
 
+func respondConflictData(c *gin.Context, msg string, data interface{}) {
+	c.JSON(http.StatusConflict, Response{Code: http.StatusConflict, Message: msg, Data: data})
+}
+
 func respondPayloadTooLarge(c *gin.Context, msg string) {
 	c.JSON(http.StatusRequestEntityTooLarge, Response{Code: http.StatusRequestEntityTooLarge, Message: msg, Data: nil})
 }

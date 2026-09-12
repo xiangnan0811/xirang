@@ -1477,6 +1477,7 @@ func openRecoveryBehaviorPostgres(t *testing.T, dsn string) recoveryBehaviorFixt
 	}
 	if err := db.AutoMigrate(
 		&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{},
+		&model.TaskCronOccurrence{}, &model.TaskRunEffect{},
 		&model.TaskLog{}, &model.TaskTrafficSample{}, &model.RestoreDrillEvidence{},
 		&model.BackupAssetRecoveryNodeLease{},
 	); err != nil {

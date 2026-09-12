@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"xirang/backend/internal/backuphealth"
 	"xirang/backend/internal/model"
 
 	"gorm.io/driver/sqlite"
@@ -31,6 +32,7 @@ func openReportingTestDB(t *testing.T) *gorm.DB {
 		&model.Node{},
 		&model.Task{},
 		&model.TaskRun{},
+		&model.BackupCompletion{},
 		&model.NodeMetricSample{},
 		&model.Alert{},
 		&model.ReportConfig{},
@@ -47,6 +49,21 @@ func openReportingTestDB(t *testing.T) *gorm.DB {
 // approxEqual compares floats with the project's standard 1e-6 epsilon.
 func approxEqual(got, want float64) bool {
 	return math.Abs(got-want) < 1e-6
+}
+
+func recordReportCompletion(t *testing.T, db *gorm.DB, taskID, taskRunID, nodeID uint, completedAt time.Time) {
+	t.Helper()
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		return backuphealth.RecordLegacyTransferTx(context.Background(), tx, backuphealth.LegacyTransferInput{
+			TaskID:       taskID,
+			TaskRunID:    taskRunID,
+			NodeID:       nodeID,
+			ExecutorType: "rsync",
+			CompletedAt:  completedAt,
+		})
+	}); err != nil {
+		t.Fatalf("seed backup completion: %v", err)
+	}
 }
 
 // seedReportFixtureBasic writes a stable multi-node, multi-task, mixed-status
@@ -69,7 +86,7 @@ func seedReportFixtureBasic(t *testing.T, db *gorm.DB, base time.Time) {
 		if i > 3 {
 			nodeID = 2
 		}
-		if err := db.Create(&model.Task{ID: uint(i), Name: fmt.Sprintf("task-%d", i), NodeID: nodeID, Command: fmt.Sprintf("echo %d", i)}).Error; err != nil {
+		if err := db.Create(&model.Task{ID: uint(i), Name: fmt.Sprintf("task-%d", i), NodeID: nodeID, ExecutorType: "rsync", Command: fmt.Sprintf("echo %d", i)}).Error; err != nil {
 			t.Fatalf("seed task %d: %v", i, err)
 		}
 	}
@@ -87,11 +104,19 @@ func seedReportFixtureBasic(t *testing.T, db *gorm.DB, base time.Time) {
 			started := base.AddDate(0, 0, -(runIdx%7 + 1))
 			finished := started.Add(time.Minute)
 			run := &model.TaskRun{
-				TaskID: taskID, Status: status, LastError: lastErr,
+				TaskID: taskID, NodeIDSnapshot: func() uint {
+					if taskID <= 3 {
+						return 1
+					}
+					return 2
+				}(), ExecutorTypeSnapshot: "rsync", Status: status, LastError: lastErr,
 				StartedAt: &started, FinishedAt: &finished, DurationMs: 60000,
 			}
 			if err := db.Create(run).Error; err != nil {
 				t.Fatalf("seed run: %v", err)
+			}
+			if status == "success" {
+				recordReportCompletion(t, db, run.TaskID, run.ID, run.NodeIDSnapshot, finished)
 			}
 		}
 	}
@@ -716,7 +741,7 @@ func seedReportFixtureFailureTopN(t *testing.T, db *gorm.DB, base time.Time, n i
 		}
 		taskID := uint(i + 100)
 		if err := db.Create(&model.Task{
-			ID: taskID, Name: fmt.Sprintf("topn-task-%d", i), NodeID: nodeID,
+			ID: taskID, Name: fmt.Sprintf("topn-task-%d", i), NodeID: nodeID, ExecutorType: "rsync",
 		}).Error; err != nil {
 			t.Fatalf("seed topn task: %v", err)
 		}
@@ -726,7 +751,8 @@ func seedReportFixtureFailureTopN(t *testing.T, db *gorm.DB, base time.Time, n i
 			started := base.AddDate(0, 0, -1).Add(time.Duration(k) * time.Minute)
 			finished := started.Add(10 * time.Second)
 			if err := db.Create(&model.TaskRun{
-				TaskID: taskID, Status: "failed", LastError: "boom",
+				TaskID: taskID, NodeIDSnapshot: nodeID, ExecutorTypeSnapshot: "rsync",
+				Status: "failed", LastError: "boom",
 				StartedAt: &started, FinishedAt: &finished, DurationMs: 10000,
 			}).Error; err != nil {
 				t.Fatalf("seed topn run: %v", err)
@@ -764,9 +790,7 @@ func TestComputeRPOAndRTO_WithTargets(t *testing.T) {
 	}
 	// 创建任务
 	task := model.Task{
-		ID:       20,
-		Name:     "rpo-task",
-		NodeID:   node.ID,
+		ID: 20, Name: "rpo-task", NodeID: node.ID, ExecutorType: "rsync",
 		PolicyID: &policy.ID,
 	}
 	if err := db.Create(&task).Error; err != nil {
@@ -776,16 +800,15 @@ func TestComputeRPOAndRTO_WithTargets(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		started := base.Add(-time.Duration(i) * 2 * time.Hour)
 		finished := started.Add(10 * time.Minute)
-		if err := db.Create(&model.TaskRun{
-			TaskID:      task.ID,
-			Status:      "success",
-			TriggerType: "cron",
-			StartedAt:   &started,
-			FinishedAt:  &finished,
-			DurationMs:  600000,
-		}).Error; err != nil {
+		run := &model.TaskRun{
+			TaskID: task.ID, NodeIDSnapshot: node.ID, ExecutorTypeSnapshot: "rsync",
+			Status: "success", TriggerType: "cron",
+			StartedAt: &started, FinishedAt: &finished, DurationMs: 600000,
+		}
+		if err := db.Create(run).Error; err != nil {
 			t.Fatalf("seed run %d: %v", i, err)
 		}
+		recordReportCompletion(t, db, task.ID, run.ID, node.ID, finished)
 	}
 	// 创建一个 restore TaskRun（RTO）
 	restoreStarted := base.Add(-30 * time.Minute)
@@ -934,9 +957,7 @@ func TestGenerate_IncludesRPOAndRTO(t *testing.T) {
 	}
 	// 创建任务
 	task := model.Task{
-		ID:       200,
-		Name:     "rpo-report-task",
-		NodeID:   1,
+		ID: 200, Name: "rpo-report-task", NodeID: 1, ExecutorType: "rsync",
 		PolicyID: &policy.ID,
 	}
 	if err := db.Create(&task).Error; err != nil {
@@ -946,16 +967,15 @@ func TestGenerate_IncludesRPOAndRTO(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		started := base.Add(-time.Duration(i) * 12 * time.Hour)
 		finished := started.Add(10 * time.Minute)
-		if err := db.Create(&model.TaskRun{
-			TaskID:      task.ID,
-			Status:      "success",
-			TriggerType: "cron",
-			StartedAt:   &started,
-			FinishedAt:  &finished,
-			DurationMs:  600000,
-		}).Error; err != nil {
+		run := &model.TaskRun{
+			TaskID: task.ID, NodeIDSnapshot: 1, ExecutorTypeSnapshot: "rsync",
+			Status: "success", TriggerType: "cron",
+			StartedAt: &started, FinishedAt: &finished, DurationMs: 600000,
+		}
+		if err := db.Create(run).Error; err != nil {
 			t.Fatalf("seed run %d: %v", i, err)
 		}
+		recordReportCompletion(t, db, task.ID, run.ID, 1, finished)
 	}
 	// 创建 restore TaskRun (RTO=10 < 60 → compliant)
 	restoreStarted := base.Add(-1 * time.Hour)

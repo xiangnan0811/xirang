@@ -175,7 +175,7 @@ func TestTaskListFilterPaginationSort(t *testing.T) {
 	}
 }
 
-func TestTaskListSanitizesLegacyLastErrorAndPolicyHooksWithoutMutatingRows(t *testing.T) {
+func TestTaskListResponseUsesSafePolicyProjectionWithoutMutatingRows(t *testing.T) {
 	db := openTaskHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.NodeOwner{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
@@ -188,13 +188,19 @@ func TestTaskListSanitizesLegacyLastErrorAndPolicyHooksWithoutMutatingRows(t *te
 
 	rawPreHook := `mysqldump -h db.internal.example -u app -p'FAKE_POLICY_LIST_PASSWORD_FOR_TEST_ONLY' --all-databases > /tmp/xirang-mysql-backup.sql`
 	rawPostHook := `curl https://hooks.internal.example/notify?token=FAKE_POLICY_LIST_HOOK_TOKEN_FOR_TEST_ONLY /tmp/xirang-mysql-backup.sql`
+	rawDrillPreVerify := "echo FAKE_POLICY_LIST_DRILL_PRE_FOR_TEST_ONLY"
+	rawDrillVerify := "echo FAKE_POLICY_LIST_DRILL_VERIFY_FOR_TEST_ONLY"
+	rawDrillPostVerify := "echo FAKE_POLICY_LIST_DRILL_POST_FOR_TEST_ONLY"
 	policy := model.Policy{
-		Name:       "policy-task-list-boundary",
-		SourcePath: "/data/policy-list-source",
-		TargetPath: "/backup/policy-list-target",
-		CronSpec:   "*/5 * * * *",
-		PreHook:    rawPreHook,
-		PostHook:   rawPostHook,
+		Name:            "policy-task-list-boundary",
+		SourcePath:      "/data/policy-list-source",
+		TargetPath:      "/backup/policy-list-target",
+		CronSpec:        "*/5 * * * *",
+		PreHook:         rawPreHook,
+		PostHook:        rawPostHook,
+		DrillPreVerify:  rawDrillPreVerify,
+		DrillVerify:     rawDrillVerify,
+		DrillPostVerify: rawDrillPostVerify,
 	}
 	if err := db.Create(&policy).Error; err != nil {
 		t.Fatalf("创建策略失败: %v", err)
@@ -246,13 +252,9 @@ func TestTaskListSanitizesLegacyLastErrorAndPolicyHooksWithoutMutatingRows(t *te
 	assertTaskReadResponseDoesNotLeak(t, body, []string{
 		"rsync /srv/private/source", "/srv/private/source", "root@task-list.internal.example", "task-list.internal.example", "/backup/private/target", "FAKE_TASK_LIST_LAST_ERROR_TOKEN_FOR_TEST_ONLY", "FAKE_TASK_LIST_QUERY_TOKEN_FOR_TEST_ONLY",
 		"mysqldump", "db.internal.example", "FAKE_POLICY_LIST_PASSWORD_FOR_TEST_ONLY", "FAKE_POLICY_LIST_HOOK_TOKEN_FOR_TEST_ONLY", "hooks.internal.example", "/tmp/xirang-mysql-backup.sql",
+		rawDrillPreVerify, rawDrillVerify, rawDrillPostVerify,
 		"FAKE_NODE_LIST_PASSWORD_FOR_TEST_ONLY", "FAKE_NODE_LIST_PRIVATE_KEY_FOR_TEST_ONLY",
 	})
-	for _, expected := range []string{"[命令已隐藏]", "\"pre_hook\":\"\"", "\"post_hook\":\"\""} {
-		if !strings.Contains(body, expected) {
-			t.Fatalf("期望任务列表响应包含脱敏结果 %q，实际: %s", expected, body)
-		}
-	}
 
 	var payload struct {
 		Data  []model.Task `json:"data"`
@@ -272,9 +274,6 @@ func TestTaskListSanitizesLegacyLastErrorAndPolicyHooksWithoutMutatingRows(t *te
 	if got.LastError == rawLastError || !strings.Contains(got.LastError, "[命令已隐藏]") {
 		t.Fatalf("任务列表 last_error 未按读边界脱敏: %q", got.LastError)
 	}
-	if got.Policy.PreHook != "" || got.Policy.PostHook != "" {
-		t.Fatalf("任务列表嵌套 policy hook 应清空，实际: pre=%q post=%q", got.Policy.PreHook, got.Policy.PostHook)
-	}
 	if got.Node.Password != "" || got.Node.PrivateKey != "" {
 		t.Fatalf("任务列表响应应保留节点脱敏行为，实际: %+v", got.Node)
 	}
@@ -290,12 +289,14 @@ func TestTaskListSanitizesLegacyLastErrorAndPolicyHooksWithoutMutatingRows(t *te
 	if err := db.First(&storedPolicy, policy.ID).Error; err != nil {
 		t.Fatalf("重新读取策略失败: %v", err)
 	}
-	if storedPolicy.PreHook != rawPreHook || storedPolicy.PostHook != rawPostHook {
-		t.Fatalf("读边界脱敏不应改写 DB policy hooks，实际: pre=%q post=%q", storedPolicy.PreHook, storedPolicy.PostHook)
+	if storedPolicy.PreHook != rawPreHook || storedPolicy.PostHook != rawPostHook ||
+		storedPolicy.DrillPreVerify != rawDrillPreVerify || storedPolicy.DrillVerify != rawDrillVerify ||
+		storedPolicy.DrillPostVerify != rawDrillPostVerify {
+		t.Fatalf("读边界脱敏不应改写 DB policy scripts: %+v", storedPolicy)
 	}
 }
 
-func TestTaskGetSanitizesLegacyLastErrorAndPolicyHooksWithoutMutatingRows(t *testing.T) {
+func TestTaskGetResponseUsesSafePolicyProjectionWithoutMutatingRows(t *testing.T) {
 	db := openTaskHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
@@ -308,13 +309,19 @@ func TestTaskGetSanitizesLegacyLastErrorAndPolicyHooksWithoutMutatingRows(t *tes
 
 	rawPreHook := `PGPASSWORD='FAKE_POLICY_DETAIL_PASSWORD_FOR_TEST_ONLY' pg_dumpall -h pg.internal.example > /tmp/xirang-pg-backup.sql`
 	rawPostHook := `redis-cli -h redis.internal.example -a 'FAKE_POLICY_DETAIL_REDIS_PASSWORD_FOR_TEST_ONLY' BGSAVE`
+	rawDrillPreVerify := "echo FAKE_POLICY_DETAIL_DRILL_PRE_FOR_TEST_ONLY"
+	rawDrillVerify := "echo FAKE_POLICY_DETAIL_DRILL_VERIFY_FOR_TEST_ONLY"
+	rawDrillPostVerify := "echo FAKE_POLICY_DETAIL_DRILL_POST_FOR_TEST_ONLY"
 	policy := model.Policy{
-		Name:       "policy-task-detail-boundary",
-		SourcePath: "/data/policy-detail-source",
-		TargetPath: "/backup/policy-detail-target",
-		CronSpec:   "*/10 * * * *",
-		PreHook:    rawPreHook,
-		PostHook:   rawPostHook,
+		Name:            "policy-task-detail-boundary",
+		SourcePath:      "/data/policy-detail-source",
+		TargetPath:      "/backup/policy-detail-target",
+		CronSpec:        "*/10 * * * *",
+		PreHook:         rawPreHook,
+		PostHook:        rawPostHook,
+		DrillPreVerify:  rawDrillPreVerify,
+		DrillVerify:     rawDrillVerify,
+		DrillPostVerify: rawDrillPostVerify,
 	}
 	if err := db.Create(&policy).Error; err != nil {
 		t.Fatalf("创建策略失败: %v", err)
@@ -362,13 +369,9 @@ func TestTaskGetSanitizesLegacyLastErrorAndPolicyHooksWithoutMutatingRows(t *tes
 	assertTaskReadResponseDoesNotLeak(t, body, []string{
 		"curl https://task-detail.internal.example", "cat /var/lib/postgresql/private.sql", "/var/lib/postgresql/private.sql", "root@task-detail.internal.example", "task-detail.internal.example", "/backup/postgresql", "FAKE_TASK_DETAIL_QUERY_TOKEN_FOR_TEST_ONLY", "FAKE_TASK_DETAIL_LAST_ERROR_TOKEN_FOR_TEST_ONLY",
 		"PGPASSWORD", "pg_dumpall", "pg.internal.example", "FAKE_POLICY_DETAIL_PASSWORD_FOR_TEST_ONLY", "redis-cli", "redis.internal.example", "FAKE_POLICY_DETAIL_REDIS_PASSWORD_FOR_TEST_ONLY", "/tmp/xirang-pg-backup.sql",
+		rawDrillPreVerify, rawDrillVerify, rawDrillPostVerify,
 		"FAKE_NODE_DETAIL_PASSWORD_FOR_TEST_ONLY", "FAKE_NODE_DETAIL_PRIVATE_KEY_FOR_TEST_ONLY",
 	})
-	for _, expected := range []string{"[输出已隐藏]", "\"pre_hook\":\"\"", "\"post_hook\":\"\""} {
-		if !strings.Contains(body, expected) {
-			t.Fatalf("期望任务详情响应包含脱敏结果 %q，实际: %s", expected, body)
-		}
-	}
 
 	var payload struct {
 		Data model.Task `json:"data"`
@@ -382,9 +385,6 @@ func TestTaskGetSanitizesLegacyLastErrorAndPolicyHooksWithoutMutatingRows(t *tes
 	}
 	if got.LastError == rawLastError || !strings.Contains(got.LastError, "[输出已隐藏]") {
 		t.Fatalf("任务详情 last_error 未按读边界脱敏: %q", got.LastError)
-	}
-	if got.Policy.PreHook != "" || got.Policy.PostHook != "" {
-		t.Fatalf("任务详情嵌套 policy hook 应清空，实际: pre=%q post=%q", got.Policy.PreHook, got.Policy.PostHook)
 	}
 	if got.Node.Password != "" || got.Node.PrivateKey != "" {
 		t.Fatalf("任务详情响应应保留节点脱敏行为，实际: %+v", got.Node)
@@ -401,8 +401,10 @@ func TestTaskGetSanitizesLegacyLastErrorAndPolicyHooksWithoutMutatingRows(t *tes
 	if err := db.First(&storedPolicy, policy.ID).Error; err != nil {
 		t.Fatalf("重新读取策略失败: %v", err)
 	}
-	if storedPolicy.PreHook != rawPreHook || storedPolicy.PostHook != rawPostHook {
-		t.Fatalf("读边界脱敏不应改写 DB policy hooks，实际: pre=%q post=%q", storedPolicy.PreHook, storedPolicy.PostHook)
+	if storedPolicy.PreHook != rawPreHook || storedPolicy.PostHook != rawPostHook ||
+		storedPolicy.DrillPreVerify != rawDrillPreVerify || storedPolicy.DrillVerify != rawDrillVerify ||
+		storedPolicy.DrillPostVerify != rawDrillPostVerify {
+		t.Fatalf("读边界脱敏不应改写 DB policy scripts: %+v", storedPolicy)
 	}
 }
 
@@ -412,6 +414,93 @@ func assertTaskReadResponseDoesNotLeak(t *testing.T, body string, forbidden []st
 		if strings.Contains(body, fragment) {
 			t.Fatalf("任务读响应泄漏原始敏感片段 %q: %s", fragment, body)
 		}
+	}
+}
+
+func TestTaskListPolicyProjectionIsSafeForEveryRole(t *testing.T) {
+	db := openTaskHandlerTestDB(t)
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}); err != nil {
+		t.Fatalf("初始化测试数据表失败: %v", err)
+	}
+
+	user := model.User{ID: 42, Username: "task-policy-role-user", PasswordHash: "FAKE_TASK_POLICY_ROLE_PASSWORD_FOR_TEST_ONLY", Role: "operator"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("创建 operator 用户失败: %v", err)
+	}
+	node := model.Node{Name: "node-task-policy-role", Host: "10.0.3.3", Username: "root", AuthType: "key", BackupDir: "node-task-policy-role"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("创建节点失败: %v", err)
+	}
+	if err := db.Create(&model.NodeOwner{NodeID: node.ID, UserID: user.ID}).Error; err != nil {
+		t.Fatalf("创建节点 ownership 失败: %v", err)
+	}
+	policy := model.Policy{
+		Name:            "policy-task-policy-role",
+		SourcePath:      "/data/policy-role-source",
+		TargetPath:      "/backup/policy-role-target",
+		CronSpec:        "*/15 * * * *",
+		PreHook:         "echo FAKE_POLICY_ROLE_PRE_HOOK_FOR_TEST_ONLY",
+		PostHook:        "echo FAKE_POLICY_ROLE_POST_HOOK_FOR_TEST_ONLY",
+		DrillPreVerify:  "echo FAKE_POLICY_ROLE_DRILL_PRE_FOR_TEST_ONLY",
+		DrillVerify:     "echo FAKE_POLICY_ROLE_DRILL_VERIFY_FOR_TEST_ONLY",
+		DrillPostVerify: "echo FAKE_POLICY_ROLE_DRILL_POST_FOR_TEST_ONLY",
+	}
+	if err := db.Create(&policy).Error; err != nil {
+		t.Fatalf("创建策略失败: %v", err)
+	}
+	policyID := policy.ID
+	taskEntity := model.Task{Name: "task-policy-role", NodeID: node.ID, PolicyID: &policyID, ExecutorType: "rsync", Status: "pending"}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+
+	role := "admin"
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxRole, role)
+		c.Set(middleware.CtxUserID, user.ID)
+		c.Next()
+	})
+	router.GET("/tasks", NewTaskHandler(db, nil).List)
+
+	for _, currentRole := range []string{"admin", "operator", "viewer"} {
+		currentRole := currentRole
+		t.Run(currentRole, func(t *testing.T) {
+			role = currentRole
+			req := httptest.NewRequest(http.MethodGet, "/tasks?page_size=10&page=1", nil)
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, req)
+			if resp.Code != http.StatusOK {
+				t.Fatalf("%s list status=%d body=%s", currentRole, resp.Code, resp.Body.String())
+			}
+			body := resp.Body.String()
+			for _, marker := range []string{
+				"FAKE_POLICY_ROLE_PRE_HOOK_FOR_TEST_ONLY",
+				"FAKE_POLICY_ROLE_POST_HOOK_FOR_TEST_ONLY",
+				"FAKE_POLICY_ROLE_DRILL_PRE_FOR_TEST_ONLY",
+				"FAKE_POLICY_ROLE_DRILL_VERIFY_FOR_TEST_ONLY",
+				"FAKE_POLICY_ROLE_DRILL_POST_FOR_TEST_ONLY",
+			} {
+				if strings.Contains(body, marker) {
+					t.Fatalf("%s list leaked policy script %q: %s", currentRole, marker, body)
+				}
+			}
+			var payload struct {
+				Data []struct {
+					Policy *struct {
+						ID   uint   `json:"id"`
+						Name string `json:"name"`
+					} `json:"policy"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("%s decode list response: %v", currentRole, err)
+			}
+			if len(payload.Data) != 1 || payload.Data[0].Policy == nil ||
+				payload.Data[0].Policy.ID != policy.ID || payload.Data[0].Policy.Name != policy.Name {
+				t.Fatalf("%s list policy projection=%+v", currentRole, payload.Data)
+			}
+		})
 	}
 }
 
@@ -1084,13 +1173,26 @@ func TestTaskUpdateDoesNotInheritCommand(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("期望状态码 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}
+	var responseEnvelope struct {
+		Code int `json:"code"`
+		Data struct {
+			ID   uint   `json:"id"`
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &responseEnvelope); err != nil {
+		t.Fatalf("解析更新响应失败: %v; 响应: %s", err, resp.Body.String())
+	}
+	if responseEnvelope.Code != http.StatusOK || responseEnvelope.Data.ID != taskEntity.ID || responseEnvelope.Data.Name != "task-new" {
+		t.Fatalf("期望更新响应返回重命名任务，实际: %+v", responseEnvelope)
+	}
 
 	var updated model.Task
 	if err := db.First(&updated, taskEntity.ID).Error; err != nil {
 		t.Fatalf("查询更新后任务失败: %v", err)
 	}
-	if updated.Command != "" {
-		t.Fatalf("期望更新后 command 被清空，实际: %q", updated.Command)
+	if updated.Name != "task-new" || updated.Command != "" {
+		t.Fatalf("期望更新后 name=%q 且 command 被清空，实际: %+v", "task-new", updated)
 	}
 }
 
@@ -1299,7 +1401,7 @@ func TestTaskDeleteArchivesAndUnlinks(t *testing.T) {
 	t.Setenv("DATA_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 	db := openTaskHandlerTestDB(t)
 	if err := db.AutoMigrate(
-		&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}, &model.TaskRun{}, &model.TaskLog{},
+		&model.User{}, &model.Node{}, &model.NodeOwner{}, &model.Task{}, &model.TaskRun{}, &model.TaskCronOccurrence{}, &model.TaskLog{},
 		&model.BackupRepository{}, &model.TaskRepositoryLink{}, &model.BackupRetentionPolicy{},
 		&model.RecoveryPoint{}, &model.CredentialAuditEvent{},
 		&model.WrappedDomainKey{}, &model.BackupAssetAuditCheckpoint{}, &model.BackupAssetAuditEvent{},

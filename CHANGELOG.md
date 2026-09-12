@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### Bug Fixes
+
+* Persist due cron occurrences separately from execution reservations, preserving queued work across quota contention and Core restarts without increasing execution concurrency.
+* Fence legacy mutable Rclone writers by immutable shared-resource evidence across tasks and Core instances; preserve conservative holds for unclassified historical writers.
+* Bind saved service-monitor headers to their destination, monitor type and HTTP method. Retargeting requires explicit clearing or replacement; concurrent edits fail closed. Task responses expose only nested policy ID and name.
+* Use durable, classified backup-completion facts for freshness and health reporting. Ordinary command success, imported baselines and unverified historical timestamps do not establish a new backup. Managed completion requires a committed recovery point and provable lineage.
+* Correct retained compatibility Restic snapshot listing and validate exact identity, bounded complete output and successful process exit before publishing an index. Retired HTTP snapshot routes remain retired.
+
+### Upgrade notes
+
+* Paired SQLite/PostgreSQL migrations `000086_task_cron_occurrences_resource_identity` and `000087_backup_completion_facts` add durable scheduling/resource evidence and backup facts. Back up the database, encryption keys and backup data; pause admission, drain and stop all old Core/executor processes before upgrading. Do not mix old and new writers.
+* Historical freshness is rebuilt only from provable committed backup evidence. Ambiguous timestamps and recovery points remain explicitly unverified and can therefore stop appearing as recent successful backups. This does not delete backup data or authorize restoration.
+* Once new durable evidence is used, guarded schema downgrade is refused. Never erase evidence, force migration versions or use downgrade to clear an unresolved writer; preserve a consistent pre-upgrade database/code backup and prefer forward repair.
+
 ## [0.55.10](https://github.com/xiangnan0811/xirang/compare/v0.55.9...v0.55.10) (2026-09-12)
 
 ### 🐛 Bug Fixes

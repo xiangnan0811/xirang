@@ -16,7 +16,10 @@ func prepareCronRecoveryTestDB(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	// The task manager's asynchronous log/sample workers and terminal effect
 	// path use these tables even when the fixture has no policy or downstream.
-	if err := db.AutoMigrate(&model.TaskLog{}, &model.TaskTrafficSample{}, &model.Alert{}); err != nil {
+	if err := db.AutoMigrate(
+		&model.TaskCronOccurrence{}, &model.TaskLog{}, &model.TaskTrafficSample{},
+		&model.BackupCompletion{}, &model.Alert{}, &model.AlertDelivery{}, &model.Integration{},
+	); err != nil {
 		t.Fatalf("migrate cron recovery support tables: %v", err)
 	}
 }

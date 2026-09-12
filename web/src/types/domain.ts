@@ -1289,7 +1289,7 @@ export interface NewServiceMonitorInput {
   timeoutSeconds?: number;
   httpMethod?: HttpMethod;
   httpExpectedStatus?: number;
-  /** Undefined preserves existing hidden headers; [] explicitly clears them. */
+  /** Undefined preserves hidden headers only when monitor use is unchanged; [] explicitly clears them. */
   httpHeaderList?: HeaderKV[];
   enabled?: boolean;
 }

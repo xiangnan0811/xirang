@@ -2,19 +2,232 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/publication"
+	"xirang/backend/internal/backuphealth"
+	"xirang/backend/internal/model"
+
+	"gorm.io/gorm"
 )
 
 const publicationWakeBuffer = 1000
 
+// ManagedCompletionRecorder is the narrow durable handoff from publication
+// to backup-health evidence. Record is called after a committed point is
+// observed; Replay is called on every bounded worker pass so an interrupted
+// handoff is repaired without requiring a process restart.
+type ManagedCompletionRecorder interface {
+	RecordManagedCommitted(context.Context, string) error
+	ReplayManagedCommitted(context.Context, int) error
+}
+
+type managedCompletionStore struct {
+	db *gorm.DB
+}
+
+func newManagedCompletionStore(db *gorm.DB) (*managedCompletionStore, error) {
+	if db == nil {
+		return nil, fmt.Errorf("%w: managed completion recorder database is unavailable", backupasset.ErrInvalidState)
+	}
+	return &managedCompletionStore{db: db}, nil
+}
+
+func (store *managedCompletionStore) RecordManagedCommitted(ctx context.Context, pointID string) error {
+	if store == nil || store.db == nil {
+		return fmt.Errorf("%w: managed completion recorder database is unavailable", backupasset.ErrInvalidState)
+	}
+	if backupasset.ValidateOpaqueID(pointID) != nil {
+		return fmt.Errorf("%w: managed completion point identity is unverified", backuphealth.ErrUnverifiedManagedCompletion)
+	}
+	input, err := store.managedCompletionInput(ctx, pointID)
+	if err != nil {
+		return err
+	}
+	return backuphealth.RecordManagedCommitted(ctx, store.db, input)
+}
+
+func (store *managedCompletionStore) ReplayManagedCommitted(ctx context.Context, limit int) error {
+	if store == nil || store.db == nil || limit <= 0 {
+		return fmt.Errorf("%w: invalid managed completion replay request", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var pointIDs []string
+	query := store.db.WithContext(ctx).Table("recovery_points AS point").
+		Select("point.id").
+		Joins(`LEFT JOIN backup_completions AS completion
+			ON completion.evidence_ref = point.id
+			AND completion.evidence_status IN ?`,
+			[]string{
+				model.BackupCompletionEvidenceVerified,
+				model.BackupCompletionEvidenceUnverified,
+			}).
+		Where("point.state = ? AND point.semantics IN ? AND completion.id IS NULL",
+			backupasset.RecoveryPointCommitted,
+			[]backupasset.PointVersionSemantics{
+				backupasset.PointNativeSnapshot,
+				backupasset.PointXirangManifest,
+				backupasset.PointImportedBaseline,
+			}).
+		Order("COALESCE(point.committed_at, point.captured_at, point.updated_at, point.created_at) ASC, point.id ASC").
+		Limit(limit).
+		Pluck("point.id", &pointIDs)
+	if query.Error != nil {
+		return fmt.Errorf("list managed completion replay points: %w", query.Error)
+	}
+	var replayErr error
+	for _, pointID := range pointIDs {
+		err := store.RecordManagedCommitted(ctx, pointID)
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, backuphealth.ErrUnverifiedManagedCompletion) {
+			if markerErr := store.markManagedUnverified(ctx, pointID); markerErr != nil && replayErr == nil {
+				replayErr = markerErr
+			}
+			continue
+		}
+		if replayErr == nil {
+			replayErr = fmt.Errorf("replay managed completion %s: %w", pointID, err)
+		}
+	}
+	return replayErr
+}
+
+func (store *managedCompletionStore) markManagedUnverified(ctx context.Context, pointID string) error {
+	var point struct {
+		ProducingNodeIDSnapshot uint
+		CreatedAt               time.Time
+		UpdatedAt               time.Time
+	}
+	query := store.db.WithContext(ctx).Model(&model.RecoveryPoint{}).
+		Select("producing_node_id_snapshot", "created_at", "updated_at").
+		Where("id = ?", pointID).Take(&point)
+	if errors.Is(query.Error, gorm.ErrRecordNotFound) {
+		// A point deleted between the replay scan and this read no longer
+		// requires a marker; it cannot become a future health fact.
+		return nil
+	}
+	if query.Error != nil {
+		return fmt.Errorf("load unverified managed completion point: %w", query.Error)
+	}
+	markedAt := point.UpdatedAt
+	if markedAt.IsZero() {
+		markedAt = point.CreatedAt
+	}
+	if err := backuphealth.RecordManagedUnverified(ctx, store.db, point.ProducingNodeIDSnapshot, pointID, markedAt); err != nil {
+		return fmt.Errorf("record unverified managed completion %s: %w", pointID, err)
+	}
+	return nil
+}
+
+func (store *managedCompletionStore) managedCompletionInput(ctx context.Context, pointID string) (backuphealth.ManagedCommittedInput, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	unverified := func(reason string) (backuphealth.ManagedCommittedInput, error) {
+		return backuphealth.ManagedCommittedInput{}, fmt.Errorf("%w: %s", backuphealth.ErrUnverifiedManagedCompletion, reason)
+	}
+	var point model.RecoveryPoint
+	if err := store.db.WithContext(ctx).Select(
+		"id", "repository_id", "producing_task_id", "producing_task_run_id", "producing_node_id_snapshot",
+		"lineage_json", "consistency_json", "semantics", "state", "committed_at",
+	).Where("id = ?", pointID).Take(&point).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return unverified("managed completion point is unavailable")
+		}
+		return backuphealth.ManagedCommittedInput{}, fmt.Errorf("load managed completion point: %w", err)
+	}
+	if point.State != string(backupasset.RecoveryPointCommitted) {
+		return unverified("managed completion point is not committed")
+	}
+	semantics := backupasset.PointVersionSemantics(point.Semantics)
+	if semantics != backupasset.PointNativeSnapshot && semantics != backupasset.PointXirangManifest {
+		return unverified("imported or mutable point cannot produce a new managed completion")
+	}
+	if point.CommittedAt == nil || point.CommittedAt.IsZero() {
+		return unverified("managed completion commit timestamp is unavailable")
+	}
+	if !model.IsTaskRunNodeSnapshotAuthoritative(point.ProducingNodeIDSnapshot) {
+		return unverified("managed completion node snapshot is unavailable")
+	}
+
+	lineage, err := backupasset.DecodePublicationLineage(point.LineageJSON)
+	if err != nil {
+		return unverified("managed completion lineage is unavailable")
+	}
+	taskID, taskRunID := lineage.TaskID, lineage.TaskRunID
+	if point.ProducingTaskID != nil {
+		if *point.ProducingTaskID == 0 || *point.ProducingTaskID != lineage.TaskID {
+			return unverified("managed completion task lineage changed")
+		}
+		taskID = *point.ProducingTaskID
+	}
+	if point.ProducingTaskRunID != nil {
+		if *point.ProducingTaskRunID == 0 || *point.ProducingTaskRunID != lineage.TaskRunID {
+			return unverified("managed completion TaskRun lineage changed")
+		}
+		taskRunID = *point.ProducingTaskRunID
+	}
+	if strings.EqualFold(strings.TrimSpace(lineage.Trigger), "restore") ||
+		strings.EqualFold(strings.TrimSpace(lineage.Trigger), "drill") {
+		return unverified("recovery and drill lineage cannot produce backup completion")
+	}
+	var expectedExecutor backupasset.ProviderKind
+	switch semantics {
+	case backupasset.PointNativeSnapshot:
+		if lineage.PublicationMode != string(backupasset.PublicationNativeSnapshot) {
+			return unverified("native point lineage mode is invalid")
+		}
+		expectedExecutor = backupasset.ProviderRestic
+	case backupasset.PointXirangManifest:
+		switch backupasset.TaskPublicationMode(lineage.PublicationMode) {
+		case backupasset.PublicationVersionedHardlink, backupasset.PublicationVersionedFullCopy:
+			expectedExecutor = backupasset.ProviderRsync
+		case backupasset.PublicationVersionedPrefix, backupasset.PublicationNativeObjectVersions:
+			expectedExecutor = backupasset.ProviderRclone
+		default:
+			return unverified("managed tree point lineage mode is invalid")
+		}
+	}
+	var repository model.BackupRepository
+	if err := store.db.WithContext(ctx).Select("id", "provider_kind").
+		Where("id = ?", point.RepositoryID).Take(&repository).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return unverified("managed completion repository identity is unavailable")
+		}
+		return backuphealth.ManagedCommittedInput{}, fmt.Errorf("load managed completion repository: %w", err)
+	}
+	executor := strings.ToLower(strings.TrimSpace(repository.ProviderKind))
+	if executor != string(expectedExecutor) {
+		return unverified("managed point provider does not match immutable lineage")
+	}
+	if consistency := strings.TrimSpace(point.ConsistencyJSON); consistency != "" && consistency != "{}" {
+		proof, proofErr := backupasset.DecodePublicationConsistency(consistency)
+		if proofErr != nil {
+			return unverified("managed completion provider proof is unavailable")
+		}
+		if proof.Provider != "" && strings.ToLower(strings.TrimSpace(string(proof.Provider))) != executor {
+			return unverified("managed completion provider proof changed")
+		}
+	}
+	return backuphealth.ManagedCommittedInput{
+		TaskID: taskID, TaskRunID: taskRunID, NodeID: point.ProducingNodeIDSnapshot,
+		ExecutorType: executor, RecoveryPointID: point.ID, CommittedAt: point.CommittedAt.UTC(),
+	}, nil
+}
+
 type PublicationWorkerDependencies struct {
 	Foundation *backupasset.FoundationService
 	Reconciler publication.Reconciler
+	Completion ManagedCompletionRecorder
 	Observer   publication.CommitObserver
 	Reporter   publication.InterruptedRunReporter
 	Metrics    publication.Metrics
@@ -27,6 +240,7 @@ type PublicationWorkerDependencies struct {
 type PublicationWorker struct {
 	foundation *backupasset.FoundationService
 	reconciler publication.Reconciler
+	completion ManagedCompletionRecorder
 	observer   publication.CommitObserver
 	reporter   publication.InterruptedRunReporter
 	metrics    publication.Metrics
@@ -44,7 +258,7 @@ type PublicationWorker struct {
 }
 
 func NewPublicationWorker(dependencies PublicationWorkerDependencies) (*PublicationWorker, error) {
-	if dependencies.Foundation == nil || dependencies.Reconciler == nil || dependencies.Metrics == nil {
+	if dependencies.Foundation == nil || dependencies.Reconciler == nil || dependencies.Completion == nil || dependencies.Metrics == nil {
 		return nil, fmt.Errorf("%w: publication worker dependencies are unavailable", backupasset.ErrInvalidState)
 	}
 	if dependencies.Now == nil {
@@ -53,6 +267,7 @@ func NewPublicationWorker(dependencies PublicationWorkerDependencies) (*Publicat
 	return &PublicationWorker{
 		foundation: dependencies.Foundation,
 		reconciler: dependencies.Reconciler,
+		completion: dependencies.Completion,
 		observer:   dependencies.Observer,
 		reporter:   dependencies.Reporter,
 		metrics:    dependencies.Metrics,
@@ -89,6 +304,10 @@ func (worker *PublicationWorker) StartupPass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var replayErr error
+	if err := worker.completion.ReplayManagedCommitted(ctx, config.ReconcileBatchSize); err != nil {
+		replayErr = err
+	}
 	candidates, err := worker.reconciler.ListCandidates(ctx, config.ReconcileBatchSize)
 	if err != nil {
 		return err
@@ -103,6 +322,9 @@ func (worker *PublicationWorker) StartupPass(ctx context.Context) error {
 		}()
 	}
 	batch.Wait()
+	if replayErr != nil {
+		return replayErr
+	}
 	return nil
 }
 
@@ -232,8 +454,13 @@ func (worker *PublicationWorker) process(parent context.Context, pointID string)
 	if err != nil || outcome.RecoveryPointID == "" {
 		return
 	}
-	if outcome.State == backupasset.RecoveryPointCommitted && worker.markObserved(outcome.RecoveryPointID) && worker.observer != nil {
-		worker.observer.ObserveCommitted(workCtx, outcome)
+	if outcome.State == backupasset.RecoveryPointCommitted {
+		if err := worker.completion.RecordManagedCommitted(workCtx, outcome.RecoveryPointID); err != nil {
+			return
+		}
+		if worker.markObserved(outcome.RecoveryPointID) && worker.observer != nil {
+			worker.observer.ObserveCommitted(workCtx, outcome)
+		}
 	}
 	if worker.reporter != nil {
 		_ = worker.reporter.ReportInterruptedPublication(workCtx, outcome)

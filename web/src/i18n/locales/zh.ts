@@ -4422,7 +4422,8 @@ const zh = {
     fieldUptime: "可用率",
     httpHeadersHint: "可选：自定义 HTTP 请求头。",
     httpHeadersConfigured: "已配置请求头名称：{{names}}",
-    httpHeadersReplaceHint: "仅显示请求头名称。保存请求头列表会完整替换现有值；省略该字段则保留当前值。",
+    httpHeadersReplaceHint: "仅显示请求头名称。保存请求头列表会完整替换现有值；只有监控目标、类型和 HTTP 方法均不变时，省略该字段才会保留当前值。",
+    httpHeadersRetargetWarning: "此监控已配置隐藏的 HTTP 请求头值。修改目标、监控类型或 HTTP 方法前，请明确替换请求头或清除全部请求头。",
     httpHeadersClear: "清除全部自定义 HTTP 请求头",
     addHeader: "添加请求头",
     removeHeader: "移除",
@@ -4450,7 +4451,7 @@ const zh = {
       typeRequired: "请选择监控类型",
       targetRequired: "请输入探测目标",
       httpTargetFormat: "HTTP 监控目标必须以 http:// 或 https:// 开头",
-      tcpTargetFormat: "TCP 监控目标格式应为 host:port",
+      headersRetargetRequiresAction: "修改监控目标、类型或 HTTP 方法前，请明确替换或清除隐藏的 HTTP 请求头。",
     },
     // Status Page (public)
     statusPageTitle: "服务状态",

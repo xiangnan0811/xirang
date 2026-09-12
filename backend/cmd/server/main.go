@@ -27,6 +27,7 @@ import (
 	processingupdater "xirang/backend/internal/backupasset/processing/updater"
 	"xirang/backend/internal/backupasset/provider"
 	backupruntime "xirang/backend/internal/backupasset/runtime"
+	"xirang/backend/internal/backuphealth"
 	"xirang/backend/internal/bootstrap"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/dashboards"
@@ -88,6 +89,9 @@ func main() {
 
 	if err := bootstrap.AutoMigrate(db, cfg.DBType); err != nil {
 		log.Fatal().Err(err).Msg("执行数据库迁移失败")
+	}
+	if err := backuphealth.RegisterBackupCompletionCollector(db); err != nil {
+		log.Fatal().Err(err).Msg("注册备份完成指标失败")
 	}
 	if err := bootstrap.SeedUsers(db); err != nil {
 		log.Fatal().Err(err).Msg("初始化管理员账号失败")
