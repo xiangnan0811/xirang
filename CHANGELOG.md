@@ -1,11 +1,10 @@
 # Changelog
 
-## Unreleased
+## [0.55.10](https://github.com/xiangnan0811/xirang/compare/v0.55.9...v0.55.10) (2026-09-12)
 
-> Release candidate: publication follows required CI and the Release Please workflow.
+### 🐛 Bug Fixes
 
-### Bug Fixes
-
+* **backup:** enforce target ownership and durable execution evidence ([521f7b4](https://github.com/xiangnan0811/xirang/commit/521f7b4f167eabcdcfd6b0d307f7e3d1cafb3bf2))
 * Isolate new policy/node Rsync targets and reject conflicting physical ownership. Preserve historical targets; require quiescent, verified copying before node migration cutover. Import compensation captures locked before-images and revalidates ownership/current row images before rollback, refusing to overwrite concurrent changes.
 * Bind legacy Rclone recovery to its current mutable generation. Preserve dirty and unresolved write evidence; unknown completion or Core crashes cannot authorize older data or blind re-execution. Preserve explicit no-start proof before provider invocation, including maintenance/pre-hook/profile failures, and arm writes only after publication preparation.
 * Add administrator-only, audited reconciliation of an explicitly confirmed stopped legacy Rclone write. Reconciliation leaves the task paused and the generation dirty; it never verifies a backup, resumes scheduling, or permits fallback to an older success.
@@ -17,16 +16,11 @@
 
 ### Upgrade notes
 
-* Drain and stop all old Core writers before upgrading. Inventory and independently preserve legacy shared backup trees and TaskRun evidence; no directory is automatically relocated, cleared, or certified as migrated.
-* An unresolved legacy Rclone write remains an operator hold, not a retry queue. Establish remote quiescence and preserve salvage data; never erase evidence or overwrite the last copy to regain restore admission.
-* The paired migration version is unchanged. See the backup recovery guide for historical-data and mutable-head limitations.
-
-## [0.55.10](https://github.com/xiangnan0811/xirang/compare/v0.55.9...v0.55.10) (2026-09-12)
-
-
-### 🐛 Bug Fixes
-
-* **backup:** enforce target ownership and durable execution evidence ([521f7b4](https://github.com/xiangnan0811/xirang/commit/521f7b4f167eabcdcfd6b0d307f7e3d1cafb3bf2))
+* **Drain old Core and preserve backups:** Back up the database, encryption keys, backup data, TaskRun evidence, and an independent copy of every remaining legacy backup tree. Pause admission, drain and stop every old Core, scheduler, and executor before upgrading; do not mix old and new writers or let an old Core consume new evidence.
+* **Unchanged migration `000085_alert_delivery_success`:** This repair introduces no new database migration; the paired migration version remains unchanged. The unchanged schema version does not make executor downgrade safe. Before rollback, preserve a consistent database/code backup and backup copies, and do not force migration versions or erase durable delivery/unknown-identity evidence.
+* **Unknown hold and admin reconcile:** A legacy Rclone `writing`/`unknown` record remains an operator hold. Lease expiry or closing the local connection does not prove that the remote writer stopped. An authenticated administrator must pause the task, preserve salvage data, confirm the exact remote writer stopped, and reconcile the selected run; reconciliation marks it `dirty` and records audit evidence only—it does not retry, resume scheduling, verify a backup, or authorize an older generation. After all holds are individually reconciled, explicitly resume and complete a new ordinary backup; never delete evidence or change executor configuration to bypass the hold.
+* **Target ownership and downgrade constraints:** Existing stored targets are not silently rewritten. Conflicting/shared/alias/ancestor/descendant ownership, concurrent claims, enabled tasks, and active durable runs fail closed; node migration requires quiescent tasks, independent sources, fresh destinations, verified copying, and locked revalidation. A migration with the same version is not a safe executor rollback, and downgrade must not be used to clear unknown write holds.
+* Legacy Rsync/Rclone destructive age-based retention remains disabled; managed recovery points and Restic retention are unchanged. Rebuild Core and any optional Worker from the same release source to keep exact toolchain fingerprints aligned.
 
 ## [0.55.9](https://github.com/xiangnan0811/xirang/compare/v0.55.8...v0.55.9) (2026-09-11)
 
