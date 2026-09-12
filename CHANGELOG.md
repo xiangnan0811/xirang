@@ -21,6 +21,13 @@
 * An unresolved legacy Rclone write remains an operator hold, not a retry queue. Establish remote quiescence and preserve salvage data; never erase evidence or overwrite the last copy to regain restore admission.
 * The paired migration version is unchanged. See the backup recovery guide for historical-data and mutable-head limitations.
 
+## [0.55.10](https://github.com/xiangnan0811/xirang/compare/v0.55.9...v0.55.10) (2026-09-12)
+
+
+### 🐛 Bug Fixes
+
+* **backup:** enforce target ownership and durable execution evidence ([521f7b4](https://github.com/xiangnan0811/xirang/commit/521f7b4f167eabcdcfd6b0d307f7e3d1cafb3bf2))
+
 ## [0.55.9](https://github.com/xiangnan0811/xirang/compare/v0.55.8...v0.55.9) (2026-09-11)
 
 
