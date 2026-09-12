@@ -437,6 +437,18 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 		KeepMonthly:        keepMonthly,
 		KeepYearly:         keepYearly,
 	}
+	// Materialize model defaults before the shared struct-create boundary so
+	// omitted request fields retain their historical defaults while explicit
+	// false/0 values can be restored after GORM's default callback.
+	if p.HookTimeoutSeconds == 0 {
+		p.HookTimeoutSeconds = 300
+	}
+	if p.MaxRetries == 0 {
+		p.MaxRetries = 2
+	}
+	if p.RetryBaseSeconds == 0 {
+		p.RetryBaseSeconds = 30
+	}
 	if req.HookTimeoutSeconds != nil {
 		if *req.HookTimeoutSeconds < 0 || *req.HookTimeoutSeconds > 3600 {
 			respondBadRequest(c, "hook 超时时间必须在 0-3600 秒之间")
@@ -467,36 +479,13 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 	}
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&p).Error; err != nil {
+		if err := policy.LockTargetOwnershipSpace(tx); err != nil {
 			return err
 		}
-
-		// GORM's struct Create callback substitutes model defaults for zero
-		// values (and writes them back into p). Restore each explicitly
-		// supplied value with an explicit-column update in this same
-		// transaction, before generated tasks consume the policy snapshot.
-		explicitColumns := make([]string, 0, 3)
-		if req.Enabled != nil {
-			p.Enabled = enabled
-			explicitColumns = append(explicitColumns, "enabled")
+		if err := model.CreatePolicyWithExplicitValues(tx, &p, model.PolicyCreateExplicitColumns()...); err != nil {
+			return err
 		}
-		if req.VerifyEnabled != nil {
-			p.VerifyEnabled = verifyEnabled
-			explicitColumns = append(explicitColumns, "verify_enabled")
-		}
-		if req.MaxRetries != nil {
-			p.MaxRetries = *req.MaxRetries
-			explicitColumns = append(explicitColumns, "max_retries")
-		}
-		if len(explicitColumns) > 0 {
-			if err := tx.Model(&p).Select(explicitColumns).Updates(&p).Error; err != nil {
-				return fmt.Errorf("恢复策略显式配置失败: %w", err)
-			}
-		}
-
-		// 保存策略-节点关联
 		if len(req.NodeIDs) > 0 {
-			// 验证所有节点 ID 存在
 			var existCount int64
 			if err := tx.Model(&model.Node{}).Where("id IN ?", req.NodeIDs).Count(&existCount).Error; err != nil {
 				return err
@@ -510,7 +499,6 @@ func (h *PolicyHandler) Create(c *gin.Context) {
 					return err
 				}
 			}
-			// 模板策略不生成任务
 			if h.runner != nil && !p.IsTemplate {
 				if err := policy.SyncPolicyTasks(tx, h.runner, p, req.NodeIDs); err != nil {
 					return err
@@ -861,6 +849,9 @@ func (h *PolicyHandler) Update(c *gin.Context) {
 	}
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {
+		if err := policy.LockTargetOwnershipSpace(tx); err != nil {
+			return err
+		}
 		if err := tx.Save(&p).Error; err != nil {
 			return err
 		}

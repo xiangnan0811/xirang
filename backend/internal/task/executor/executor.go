@@ -161,10 +161,10 @@ func (e *DisabledExecutor) Run(_ context.Context, _ model.Task, _ LogFunc, _ Pro
 	return -1, fmt.Errorf("不支持的执行器类型")
 }
 
-// NoProcessStartError marks a compatibility Rsync command failure for which
-// no child process was launched. The runner may clear its pre-launch
-// generation fence only for this authoritative outcome; all ordinary
-// execution errors remain fail-closed.
+// NoProcessStartError marks a compatibility command failure for which no child
+// process was launched. The runner may clear its pre-launch generation fence
+// only for this authoritative outcome; all ordinary execution errors remain
+// fail-closed.
 type NoProcessStartError struct {
 	Err error
 }
@@ -181,6 +181,37 @@ func (e *NoProcessStartError) Unwrap() error {
 		return nil
 	}
 	return e.Err
+}
+
+// RemoteExecutionUnknownError marks a command that reached the remote SSH
+// session but whose final remote completion cannot be trusted. In particular,
+// cancellation or a transport close may have interrupted a mutable write
+// after some output was emitted. Callers must not classify this as a
+// definitive no-start or immediately retry it as though the remote stopped
+// cleanly.
+type RemoteExecutionUnknownError struct {
+	Err error
+}
+
+func (e *RemoteExecutionUnknownError) Error() string {
+	if e == nil || e.Err == nil {
+		return "remote execution outcome unknown"
+	}
+	return "remote execution outcome unknown: " + e.Err.Error()
+}
+
+func (e *RemoteExecutionUnknownError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func markRemoteExecutionUnknown(err error) error {
+	if err == nil {
+		err = fmt.Errorf("remote execution did not report a final exit status")
+	}
+	return &RemoteExecutionUnknownError{Err: err}
 }
 
 func markNoProcessStart(err error) error {

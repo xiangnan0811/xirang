@@ -3340,6 +3340,89 @@ func TestTriggerCreatesTaskRun(t *testing.T) {
 	}
 }
 
+func TestTriggerManualPauseRaceRechecksEnabledBeforeReservation(t *testing.T) {
+	db := openManagerTestDB(t)
+	exec := &successExecutor{}
+	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+	taskEntity := seedTaskForManagerTest(t, db)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	manager.beforeTaskRunReservation = func() {
+		close(entered)
+		<-release
+	}
+	resultCh := make(chan struct {
+		runID uint
+		err   error
+	}, 1)
+	go func() {
+		runID, err := manager.TriggerManual(taskEntity.ID)
+		resultCh <- struct {
+			runID uint
+			err   error
+		}{runID: runID, err: err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("trigger did not reach reservation gate")
+	}
+	if err := manager.Pause(taskEntity.ID, false); err != nil {
+		t.Fatalf("pause task during trigger race: %v", err)
+	}
+	close(release)
+	select {
+	case result := <-resultCh:
+		if result.err == nil {
+			t.Fatalf("paused trigger unexpectedly succeeded with run %d", result.runID)
+		}
+		if result.runID != 0 {
+			t.Fatalf("paused trigger returned run %d", result.runID)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("paused trigger did not finish")
+	}
+	var runCount int64
+	if err := db.Model(&model.TaskRun{}).Where("task_id = ?", taskEntity.ID).Count(&runCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if runCount != 0 {
+		t.Fatalf("paused trigger left %d TaskRun rows", runCount)
+	}
+	if exec.Calls() != 0 {
+		t.Fatalf("paused trigger reached executor %d time(s)", exec.Calls())
+	}
+}
+
+func TestQueuedTaskEntryAfterPauseCancelsWithoutExecutor(t *testing.T) {
+	db := openManagerTestDB(t)
+	exec := &successExecutor{}
+	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+	taskEntity := seedTaskForManagerTest(t, db)
+	queued, err := manager.reserveTaskRun(context.Background(), taskEntity.NodeID, model.TaskRun{
+		TaskID:      taskEntity.ID,
+		TriggerType: "manual",
+		Status:      model.TaskRunStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("reserve queued task: %v", err)
+	}
+	if err := manager.Pause(taskEntity.ID, false); err != nil {
+		t.Fatalf("pause queued task: %v", err)
+	}
+	manager.runTask(taskEntity.ID, queued.ID, "manual", generateChainRunID())
+	terminal := waitTaskRunTerminal(t, db, queued.ID)
+	if terminal.Status != model.TaskRunStatusCanceled {
+		t.Fatalf("paused queued TaskRun status=%q, want canceled", terminal.Status)
+	}
+	if exec.Calls() != 0 {
+		t.Fatalf("paused queued TaskRun reached executor %d time(s)", exec.Calls())
+	}
+}
+
 func TestTriggerManualNodeWriteConflictLeavesNoReservationOrMarker(t *testing.T) {
 	db := openManagerTestDB(t)
 	exec := &successExecutor{}

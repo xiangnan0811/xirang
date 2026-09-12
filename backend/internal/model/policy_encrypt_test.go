@@ -66,3 +66,42 @@ func TestPolicyEncryptsDrillVerifyScripts(t *testing.T) {
 		t.Fatalf("decrypt mismatch: %+v", loaded)
 	}
 }
+
+func TestCreatePolicyWithExplicitValuesPreservesZeroDefaults(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATA_ENCRYPTION_KEY", "FAKE_DATA_ENCRYPTION_KEY_FOR_TEST_ONLY")
+	secure.ResetForTesting()
+
+	db, err := gorm.Open(sqlite.Open("file:policy_explicit_defaults?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(&Policy{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	p := Policy{
+		Name:               "explicit-zero-policy",
+		SourcePath:         "/src",
+		TargetPath:         "/dst",
+		CronSpec:           "0 * * * *",
+		RetentionMode:      "simple",
+		Enabled:            false,
+		VerifyEnabled:      false,
+		MaxConcurrent:      0,
+		HookTimeoutSeconds: 0,
+		MaxRetries:         0,
+		RetryBaseSeconds:   0,
+		DrillAutoCleanup:   false,
+	}
+	if err := CreatePolicyWithExplicitValues(db, &p, PolicyCreateExplicitColumns()...); err != nil {
+		t.Fatalf("create with explicit values: %v", err)
+	}
+	var loaded Policy
+	if err := db.First(&loaded, p.ID).Error; err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.Enabled || loaded.VerifyEnabled || loaded.DrillAutoCleanup || loaded.MaxConcurrent != 0 ||
+		loaded.HookTimeoutSeconds != 0 || loaded.MaxRetries != 0 || loaded.RetryBaseSeconds != 0 {
+		t.Fatalf("explicit zero values were replaced: %+v", loaded)
+	}
+}

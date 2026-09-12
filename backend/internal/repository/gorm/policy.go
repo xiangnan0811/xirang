@@ -54,6 +54,13 @@ func (r *PolicyRepository) Create(ctx context.Context, policy *model.Policy) err
 	return apperr.WrapDBError(r.db.WithContext(ctx).Create(policy).Error)
 }
 
+// CreateWithExplicitValues runs the Policy struct-create callbacks and then
+// restores explicitly supplied scalar zero/false values in the same
+// transaction owned by the caller.
+func (r *PolicyRepository) CreateWithExplicitValues(ctx context.Context, policy *model.Policy, explicitColumns ...string) error {
+	return apperr.WrapDBError(model.CreatePolicyWithExplicitValues(r.db.WithContext(ctx), policy, explicitColumns...))
+}
+
 // Update saves changes to an existing policy.
 func (r *PolicyRepository) Update(ctx context.Context, policy *model.Policy) error {
 	return apperr.WrapDBError(r.db.WithContext(ctx).Save(policy).Error)

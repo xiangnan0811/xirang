@@ -17,6 +17,7 @@ import (
 )
 
 type backupAssetRBACTestFixture struct {
+	db     *gorm.DB
 	router *gin.Engine
 	tokens map[string]string
 	proofs map[backupAssetRBACProofKey]string
@@ -85,6 +86,7 @@ func setupBackupAssetRBACFixture(t *testing.T) backupAssetRBACTestFixture {
 	}
 
 	return backupAssetRBACTestFixture{
+		db:     db,
 		router: NewRouter(Dependencies{DB: db, JWTManager: jwtManager}),
 		tokens: tokens,
 		proofs: proofs,
@@ -559,6 +561,74 @@ func TestRsyncVersioningMigrationRoutesRequireAdminBeforeFeatureGate(t *testing.
 				}
 			})
 		}
+	}
+}
+
+func TestLegacyRcloneReconcileRequiresAdminAndExplicitStoppedConfirmation(t *testing.T) {
+	fixture := setupBackupAssetRBACFixture(t)
+	if err := fixture.db.AutoMigrate(&model.Node{}, &model.Task{}, &model.TaskRun{}, &model.CredentialAuditEvent{}); err != nil {
+		t.Fatal(err)
+	}
+	node := model.Node{Name: "reconcile-node", Host: "127.0.0.1"}
+	if err := fixture.db.Create(&node).Error; err != nil {
+		t.Fatal(err)
+	}
+	entity := model.Task{Name: "reconcile-task", NodeID: node.ID, ExecutorType: "rclone", Status: "failed"}
+	if err := fixture.db.Create(&entity).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.Model(&entity).Update("enabled", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	run := model.TaskRun{TaskID: entity.ID, NodeIDSnapshot: node.ID, TriggerType: "manual", Status: model.TaskRunStatusFailed, BackupGenerationState: model.TaskRunGenerationStateUnknown}
+	if err := fixture.db.Create(&run).Error; err != nil {
+		t.Fatal(err)
+	}
+	path := fmt.Sprintf("/api/v1/tasks/%d/reconcile-legacy-rclone", entity.ID)
+	body := fmt.Sprintf(`{"task_run_id":%d,"remote_stopped":true,"reason":"remote process stopped; backup preserved","actor":{"user_id":999,"role":"admin"}}`, run.ID)
+	for _, role := range []string{"", "operator", "viewer", "unknown"} {
+		response := performBackupAssetRBACRequest(t, fixture, http.MethodPost, path, body, fixture.tokens[role])
+		want := http.StatusForbidden
+		if role == "" {
+			want = http.StatusUnauthorized
+		}
+		if response.Code != want {
+			t.Fatalf("role=%q status=%d want=%d body=%s", role, response.Code, want, response.Body.String())
+		}
+	}
+	response := performBackupAssetRBACRequest(t, fixture, http.MethodPost, path, fmt.Sprintf(`{"task_run_id":%d,"reason":"not yet confirmed"}`, run.ID), fixture.tokens["admin"])
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("missing confirmation status=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := fixture.db.First(&run, run.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if run.BackupGenerationState != model.TaskRunGenerationStateUnknown {
+		t.Fatalf("rejected requests changed unresolved generation: %s", run.BackupGenerationState)
+	}
+	response = performBackupAssetRBACRequest(t, fixture, http.MethodPost, path, body, fixture.tokens["admin"])
+	if response.Code != http.StatusOK {
+		t.Fatalf("admin reconciliation status=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := fixture.db.First(&run, run.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.First(&entity, entity.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if run.BackupGenerationState != model.TaskRunGenerationStateDirty || entity.Enabled {
+		t.Fatalf("reconciliation must retain dirty paused state, got generation=%s enabled=%v", run.BackupGenerationState, entity.Enabled)
+	}
+	var event model.CredentialAuditEvent
+	if err := fixture.db.Where("task_run_id = ? AND action = ?", run.ID, "task.legacy_rclone_reconcile").First(&event).Error; err != nil {
+		t.Fatalf("missing durable reconciliation audit: %v", err)
+	}
+	var admin model.User
+	if err := fixture.db.Where("username = ?", "backup-asset-rbac-admin").First(&admin).Error; err != nil {
+		t.Fatal(err)
+	}
+	if event.UserID != admin.ID {
+		t.Fatalf("audit trusted body identity instead of authenticated admin: %d", event.UserID)
 	}
 }
 

@@ -113,7 +113,6 @@ func newValidationError(message string) error {
 // ---------------------------------------------------------------------------
 
 // CreateTask creates a new task from the given input. It handles defaults
-// hydration, validation, DB persistence, and cron schedule sync.
 func (s *TaskApiService) CreateTask(ctx context.Context, input CreateTaskInput) (model.Task, error) {
 	SanitizeCreateTaskInput(&input)
 
@@ -144,6 +143,9 @@ func (s *TaskApiService) CreateTask(ctx context.Context, input CreateTaskInput) 
 		return model.Task{}, err
 	}
 	persist := func(ctx context.Context, repo repository.TaskRepository) error {
+		if err := s.validateTargetOwnership(ctx, repo, input, 0); err != nil {
+			return err
+		}
 		if input.DependsOnTaskID != nil {
 			if err := repo.LockIDsForUpdate(ctx, []uint{*input.DependsOnTaskID}); err != nil {
 				return err
@@ -154,20 +156,8 @@ func (s *TaskApiService) CreateTask(ctx context.Context, input CreateTaskInput) 
 		}
 		return repo.Create(ctx, &taskEntity)
 	}
-	if input.DependsOnTaskID != nil {
-		if err := s.taskRepo.RunInTransaction(ctx, persist); err != nil {
-			if IsTaskValidationError(err) {
-				return model.Task{}, err
-			}
-			return model.Task{}, err
-		}
-	} else {
-		if err := persist(ctx, s.taskRepo); err != nil {
-			if IsTaskValidationError(err) {
-				return model.Task{}, err
-			}
-			return model.Task{}, apperr.WrapDBError(err)
-		}
+	if err := s.taskRepo.RunInTransaction(ctx, persist); err != nil {
+		return model.Task{}, err
 	}
 	if s.runner != nil {
 		if err := s.runner.SyncSchedule(taskEntity); err != nil {
@@ -224,19 +214,11 @@ func (s *TaskApiService) UpdateTask(ctx context.Context, id uint, input CreateTa
 	if input.CronSpec == "" {
 		input.CronSpec = taskEntity.CronSpec
 	}
-	if input.ExecutorType == "" {
-		input.ExecutorType = taskEntity.ExecutorType
-	}
 	input.ExecutorConfig = mergeTaskExecutorConfigForUpdate(taskEntity.ExecutorType, input.ExecutorType, taskEntity.ExecutorConfig, input.ExecutorConfig)
 
 	EnsureNodeTargetPrefix(ctx, s.nodeRepo, &input)
-	// When node changes for rsync/restic tasks, regenerate target from new node.
-	if (input.ExecutorType == "rsync" || input.ExecutorType == "restic") &&
-		input.NodeID != 0 && input.NodeID != taskEntity.NodeID {
-		if node, err := s.nodeRepo.FindByID(ctx, input.NodeID); err == nil && node.BackupDir != "" {
-			input.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
-		}
-	}
+	// A persisted target is historical data. Changing a node or policy must
+	// not silently repoint it; explicit migration is the only relocation path.
 
 	if err := ValidateTaskInput(input); err != nil {
 		return model.Task{}, err
@@ -246,10 +228,12 @@ func (s *TaskApiService) UpdateTask(ctx context.Context, id uint, input CreateTa
 	}
 
 	ids := []uint{id}
-	if input.DependsOnTaskID != nil {
-		ids = append(ids, *input.DependsOnTaskID)
-	}
 	err = s.taskRepo.RunInTransaction(ctx, func(ctx context.Context, txRepo repository.TaskRepository) error {
+		if policyPkg.IsCoreLocalTarget(input.ExecutorType, input.RsyncTarget) {
+			if err := txRepo.LockTargetOwnership(ctx); err != nil {
+				return err
+			}
+		}
 		if err := txRepo.LockIDsForUpdate(ctx, ids); err != nil {
 			return err
 		}
@@ -259,6 +243,9 @@ func (s *TaskApiService) UpdateTask(ctx context.Context, id uint, input CreateTa
 		}
 		if fresh.ArchivedAt != nil {
 			return ErrTaskArchived
+		}
+		if err := s.validateTargetOwnership(ctx, txRepo, input, id); err != nil {
+			return err
 		}
 		if err := validateTaskDependencyRefs(ctx, txRepo, input, id); err != nil {
 			return err
@@ -409,45 +396,72 @@ func HydrateTaskDefaultsFromPolicy(ctx context.Context, policyRepo repository.Po
 		req.RsyncSource = p.SourcePath
 	}
 	if strings.TrimSpace(req.RsyncTarget) == "" && req.NodeID != 0 {
-		if node, err := nodeRepo.FindByID(ctx, req.NodeID); err == nil && node.BackupDir != "" {
-			req.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
-		}
+		req.RsyncTarget = policyPkg.PolicyNodeTargetPath(p.TargetPath, p.ID, req.NodeID)
 	}
 	if strings.TrimSpace(req.CronSpec) == "" {
 		req.CronSpec = p.CronSpec
 	}
+	_ = nodeRepo
 }
 
-// EnsureNodeTargetPrefix ensures that policy-linked tasks have the node
-// subdirectory in RsyncTarget. When the target is exactly the backup root
-// (missing the node prefix), it appends the node's backupDir.
-func EnsureNodeTargetPrefix(ctx context.Context, nodeRepo repository.NodeRepository, req *CreateTaskInput) {
-	if req.NodeID == 0 {
-		return
-	}
-	if strings.TrimSpace(req.RsyncTarget) == "" {
-		return
-	}
-	if util.IsRemotePathSpec(req.RsyncTarget) {
-		return
-	}
-	// If target is just the backup root without node subdirectory, append it.
-	if strings.TrimRight(req.RsyncTarget, "/") == strings.TrimRight(config.BackupRoot, "/") {
-		if node, err := nodeRepo.FindByID(ctx, req.NodeID); err == nil && node.BackupDir != "" {
-			req.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
-		}
-	}
-}
+// EnsureNodeTargetPrefix is retained as an input-normalization boundary. It
+// intentionally does not rewrite explicit targets: persisted Task.RsyncTarget
+// is historical data and callers must opt into a migration to move it.
+func EnsureNodeTargetPrefix(_ context.Context, _ repository.NodeRepository, _ *CreateTaskInput) {}
 
-// AutoGenerateTarget generates a target path for rsync/restic tasks when
-// RsyncTarget is still empty after all other defaults have been applied.
-func AutoGenerateTarget(ctx context.Context, nodeRepo repository.NodeRepository, req *CreateTaskInput) {
+// AutoGenerateTarget generates an isolated target for tasks without a policy.
+func AutoGenerateTarget(_ context.Context, _ repository.NodeRepository, req *CreateTaskInput) {
 	if (req.ExecutorType != "rsync" && req.ExecutorType != "restic") || strings.TrimSpace(req.RsyncTarget) != "" {
 		return
 	}
-	if node, err := nodeRepo.FindByID(ctx, req.NodeID); err == nil && node.BackupDir != "" {
-		req.RsyncTarget = policyPkg.NodeTargetPath(config.BackupRoot, node.BackupDir)
+	if req.PolicyID == nil {
+		req.RsyncTarget = policyPkg.ManualNodeTargetPath(config.BackupRoot, req.NodeID)
 	}
+}
+
+func (s *TaskApiService) validateTargetOwnership(ctx context.Context, taskRepo repository.TaskRepository, req CreateTaskInput, taskID uint) error {
+	target := strings.TrimSpace(req.RsyncTarget)
+	if !policyPkg.IsCoreLocalTarget(req.ExecutorType, target) {
+		return nil
+	}
+	canonicalTarget, err := policyPkg.CanonicalTargetPath(target)
+	if err != nil {
+		return newValidationError("备份目标路径无法安全锁定: " + err.Error())
+	}
+	if err := taskRepo.LockTargetOwnership(ctx); err != nil {
+		return fmt.Errorf("锁定任务目标归属失败: %w", err)
+	}
+	tasks, err := taskRepo.List(ctx)
+	if err != nil {
+		return fmt.Errorf("查询任务目标归属失败: %w", err)
+	}
+	claims := make([]policyPkg.TargetOwner, 0, len(tasks))
+	for _, task := range tasks {
+		if !policyPkg.IsCoreLocalTarget(task.ExecutorType, task.RsyncTarget) {
+			continue
+		}
+		claim := policyPkg.TargetOwner{
+			NodeID: task.NodeID,
+			TaskID: task.ID,
+			Target: task.RsyncTarget,
+		}
+		if task.PolicyID != nil {
+			claim.PolicyID = *task.PolicyID
+		}
+		claims = append(claims, claim)
+	}
+	owner := policyPkg.TargetOwner{
+		NodeID: req.NodeID,
+		TaskID: taskID,
+		Target: canonicalTarget,
+	}
+	if req.PolicyID != nil {
+		owner.PolicyID = *req.PolicyID
+	}
+	if _, err := policyPkg.ValidateTargetOwnership(target, owner, claims); err != nil {
+		return newValidationError("备份目标路径与已有任务重叠或无法证明归属: " + err.Error())
+	}
+	return nil
 }
 
 func mergeTaskExecutorConfigForUpdate(previousExecutorType, nextExecutorType, previousConfig, nextConfig string) string {

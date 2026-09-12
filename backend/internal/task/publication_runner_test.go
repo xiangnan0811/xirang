@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func TestProviderRunnerEvidenceUsesExactTaskRunAttempt(t *testing.T) {
 	manager := &Manager{executorFactory: executorFactoryFake{executor: evidence}, publicationCoordinator: coordinator}
 	taskEntity := model.Task{ID: 7, ExecutorType: "restic", RsyncSource: "/source"}
 
-	result := manager.executeProvider(context.Background(), taskEntity, 9, "manual", "", nil, nil)
+	result := manager.executeProvider(context.Background(), taskEntity, 9, "manual", "", nil, nil, nil)
 	if result.Err != nil || result.ExitCode != 0 || !result.Managed || result.SuppressRetry {
 		t.Fatalf("provider result=%+v", result)
 	}
@@ -52,7 +53,7 @@ func TestTaskRunSuccessAndPublicationFailureRemainIndependentFacts(t *testing.T)
 		publicationCoordinator: &publicationCoordinatorFake{execution: session},
 	}
 
-	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil)
+	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil, nil)
 	if result.ExitCode != 0 || result.Err != nil || !result.Managed || result.WarningCode != backupasset.FailurePublicationSessionAbandoned {
 		t.Fatalf("successful provider transfer was changed by publication failure: %+v", result)
 	}
@@ -80,7 +81,7 @@ func TestProviderRunnerRoutesManagedRsyncThroughBoundPublicationInput(t *testing
 	manager := &Manager{executorFactory: executorFactoryFake{executor: evidence}, publicationCoordinator: &publicationCoordinatorFake{execution: session}}
 	taskEntity := model.Task{ID: 7, ExecutorType: "rsync", RsyncSource: "/source", RsyncTarget: "/legacy-target"}
 
-	result := manager.executeProvider(context.Background(), taskEntity, 9, "manual", "", nil, nil)
+	result := manager.executeProvider(context.Background(), taskEntity, 9, "manual", "", nil, nil, nil)
 	if result.Err != nil || result.ExitCode != 0 || !result.Managed || result.WarningCode != "" {
 		t.Fatalf("managed Rsync provider result=%+v", result)
 	}
@@ -107,7 +108,7 @@ func TestProviderRunnerRoutesManagedRcloneThroughBoundPublicationInput(t *testin
 	}
 	taskEntity := model.Task{ID: 7, ExecutorType: "rclone", RsyncSource: "/source"}
 
-	result := manager.executeProvider(context.Background(), taskEntity, 9, "manual", "", nil, nil)
+	result := manager.executeProvider(context.Background(), taskEntity, 9, "manual", "", nil, nil, nil)
 	if result.Err != nil || result.ExitCode != 0 || !result.Managed || result.WarningCode != "" {
 		t.Fatalf("managed Rclone provider result=%+v", result)
 	}
@@ -115,6 +116,57 @@ func TestProviderRunnerRoutesManagedRcloneThroughBoundPublicationInput(t *testin
 		evidence.request.Attempt.Rclone == nil || evidence.request.Attempt.Rclone.RecoveryPointID != attempt.Rclone.RecoveryPointID ||
 		session.commit == nil || *session.commit != commit {
 		t.Fatalf("managed Rclone request=%+v session=%+v", evidence.request, session)
+	}
+}
+
+func TestProviderRunnerPrepareFailureDoesNotArmGeneration(t *testing.T) {
+	prepareErr := errors.New("FAKE_PUBLICATION_PREPARE_FAILURE_FOR_TEST_ONLY")
+	armCalls := 0
+	manager := &Manager{
+		executorFactory:        executorFactoryFake{executor: &evidenceExecutorFake{}},
+		publicationCoordinator: &publicationCoordinatorFake{err: prepareErr},
+	}
+	result := manager.executeProvider(
+		context.Background(),
+		model.Task{ID: 7, ExecutorType: "rclone", RsyncSource: "/source", RsyncTarget: "remote:bucket"},
+		9,
+		"manual",
+		"",
+		func() error {
+			armCalls++
+			return nil
+		},
+		nil,
+		nil,
+	)
+	if !errors.Is(result.Err, prepareErr) || !result.ExecutorNotInvoked || armCalls != 0 {
+		t.Fatalf("publication prepare failure result=%+v armCalls=%d", result, armCalls)
+	}
+}
+
+func TestProviderRunnerPreChildCancellationReturnsTypedNoStart(t *testing.T) {
+	executorFake := &preChildExecutorFake{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	armCalls := 0
+	manager := &Manager{executorFactory: executorFactoryFake{executor: executorFake}}
+	result := manager.executeProvider(
+		ctx,
+		model.Task{ID: 7, ExecutorType: "rclone", RsyncSource: "/source", RsyncTarget: "remote:bucket"},
+		9,
+		"manual",
+		"",
+		func() error {
+			armCalls++
+			return nil
+		},
+		nil,
+		nil,
+	)
+	var noStartErr *executor.NoProcessStartError
+	if !errors.As(result.Err, &noStartErr) || !result.ExecutorNotInvoked ||
+		armCalls != 0 || executorFake.calls.Load() != 0 {
+		t.Fatalf("pre-child cancellation result=%+v armCalls=%d executorCalls=%d", result, armCalls, executorFake.calls.Load())
 	}
 }
 
@@ -144,7 +196,7 @@ func TestProviderRunnerCreatesFreshCleanupBudgetAfterProviderReturns(t *testing.
 	}
 	manager := &Manager{executorFactory: executorFactoryFake{executor: evidence}, publicationCoordinator: &publicationCoordinatorFake{execution: session}}
 
-	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil)
+	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil, nil)
 	if result.Err != nil || result.WarningCode != backupasset.FailureEvidenceMissingSummary {
 		t.Fatalf("provider result=%+v", result)
 	}
@@ -166,7 +218,7 @@ func TestProviderRunnerDefersMissingEvidenceWithoutClaimingCommit(t *testing.T) 
 	}}
 	manager := &Manager{executorFactory: executorFactoryFake{executor: evidence}, publicationCoordinator: &publicationCoordinatorFake{execution: session}}
 
-	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil)
+	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil, nil)
 	if result.Err != nil || result.ExitCode != 0 || !result.Managed || result.WarningCode != backupasset.FailureEvidenceMissingSummary {
 		t.Fatalf("provider result=%+v", result)
 	}
@@ -186,7 +238,7 @@ func TestProviderRunnerUnknownCancellationDefersWithoutRetry(t *testing.T) {
 	}, err: context.Canceled}
 	manager := &Manager{executorFactory: executorFactoryFake{executor: evidence}, publicationCoordinator: &publicationCoordinatorFake{execution: session}}
 
-	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil)
+	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil, nil)
 	if !errors.Is(result.Err, context.Canceled) || !result.SuppressRetry || result.WarningCode != backupasset.FailureProviderCanceled {
 		t.Fatalf("unknown cancellation result=%+v", result)
 	}
@@ -205,9 +257,10 @@ func TestProviderRunnerDeferFailureAbandonsWithoutClaimingSuccess(t *testing.T) 
 	evidence := &evidenceExecutorFake{result: executor.PublicationExecutionResult{
 		ExitCode: 0, Completion: backupasset.CompletionKnownExitZero, EvidenceCode: backupasset.FailureEvidenceMissingSummary,
 	}}
+
 	manager := &Manager{executorFactory: executorFactoryFake{executor: evidence}, publicationCoordinator: &publicationCoordinatorFake{execution: session}}
 
-	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil)
+	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil, nil)
 	if !errors.Is(result.Err, deferErr) || result.ExitCode != 0 || !result.Managed || result.WarningCode != backupasset.FailurePublicationSessionAbandoned {
 		t.Fatalf("defer failure result=%+v", result)
 	}
@@ -226,7 +279,7 @@ func TestProviderRunnerFailFailureAbandonsWithoutClaimingSuccess(t *testing.T) {
 	}, err: providerErr}
 	manager := &Manager{executorFactory: executorFactoryFake{executor: evidence}, publicationCoordinator: &publicationCoordinatorFake{execution: session}}
 
-	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil)
+	result := manager.executeProvider(context.Background(), model.Task{ID: attempt.Restic.TaskID, ExecutorType: "restic", RsyncSource: "/source"}, attempt.Restic.TaskRunID, "manual", "", nil, nil, nil)
 	if !errors.Is(result.Err, providerErr) || !errors.Is(result.Err, failErr) || result.ExitCode != 23 || !result.Managed {
 		t.Fatalf("fail failure result=%+v", result)
 	}
@@ -256,6 +309,15 @@ func (fake *evidenceExecutorFake) RunWithPublication(ctx context.Context, reques
 		return fake.run(ctx, request)
 	}
 	return fake.result, fake.err
+}
+
+type preChildExecutorFake struct {
+	calls atomic.Int32
+}
+
+func (fake *preChildExecutorFake) Run(context.Context, model.Task, executor.LogFunc, executor.ProgressFunc) (int, error) {
+	fake.calls.Add(1)
+	return -1, &executor.NoProcessStartError{Err: context.Canceled}
 }
 
 type publicationCoordinatorFake struct {

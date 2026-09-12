@@ -449,9 +449,7 @@ func legacyIndexSnapshot(ctx context.Context, db *gorm.DB, task model.Task, snap
 		cleanupCmd := executor.BuildCleanupResticPasswordFileCmd(pwFilePath)
 		_, _ = executor.RunSSHCommandOutput(ctx, client, cleanupCmd)
 	}()
-	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
-	cmd := fmt.Sprintf("%s %s find --json --long --path=/ %s -r %s 2>&1",
-		pwFileArg, resolveResticBinary(), executor.ShellEscape(snapshotID), executor.ShellEscape(task.RsyncTarget))
+	cmd := buildLegacyResticFindCommand(resolveResticBinary(), pwFilePath, snapshotID, task.RsyncTarget)
 	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
 		return newResticFindFailureError(err, output)
@@ -471,6 +469,12 @@ type resticFindEntry struct {
 	Path  string `json:"path"`
 	Size  int64  `json:"size"`
 	Mtime string `json:"mtime"`
+}
+
+func buildLegacyResticFindCommand(resticBin, passwordFilePath, snapshotID, repository string) string {
+	return fmt.Sprintf("%s find --json --long --path=/ %s -r %s 2>&1",
+		executor.BuildResticCommandPrefix(resticBin, passwordFilePath),
+		executor.ShellEscape(snapshotID), executor.ShellEscape(repository))
 }
 
 func newResticFindFailureError(err error, output string) error {

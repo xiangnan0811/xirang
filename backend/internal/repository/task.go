@@ -22,6 +22,10 @@ type TaskRepository interface {
 	ExistsLiveByID(ctx context.Context, id uint) (bool, error)
 	CountByID(ctx context.Context, id uint) (int64, error)
 	LockIDsForUpdate(ctx context.Context, ids []uint) error
+
+	// LockTargetOwnership serializes all local target ownership decisions for
+	// the duration of the surrounding transaction, including absent targets.
+	LockTargetOwnership(ctx context.Context) error
 	RunInTransaction(ctx context.Context, fn func(ctx context.Context, txRepo TaskRepository) error) error
 
 	// FindByIDsFields returns tasks matching the given IDs, selecting only the

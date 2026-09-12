@@ -93,6 +93,17 @@
 
 完整运行语义见 [后端说明](../../backend/README_backend.md#legacy-backup-safety-and-task-lifecycle)。
 
+### Legacy 写入证据修复的升级检查
+
+发布包含目标归属、`no_start` 与人工 reconcile 修复的版本时，还需在版本说明中提示：
+
+- 本批修复不新增数据库迁移；仍须排空旧 Core，避免旧进程继续使用旧的写入判定规则。
+- 对遗留 Rclone 的 `writing` / `unknown` 记录，租约到期或本地连接关闭不等于远端已停止。管理员应先暂停任务并实际确认远端停止，再对指定执行记录调用 reconcile；协调只会标记 `dirty` 并记录审计，不会自动重试、恢复调度或恢复资格。
+- 恢复资格需要显式恢复调度后完成一次新备份；不要通过删除未知记录或修改执行器配置绕过历史写入约束。
+- 配置导入的补偿回滚遇到并发修改或旧目标已被占用时会拒绝覆盖。应暂停受影响任务、核对当前配置及目标归属，不要强行恢复旧目标。
+
+操作步骤见 [备份与恢复手册](../admin/backup-recovery.md)。
+
 ## PR 后监控要求
 
 - PR 创建后，负责人必须监控 GitHub required checks，包括 `PR Title`、`Backend Test & Build`、`Frontend Test & Build`、`Doc Freshness Check`，以及当前 branch protection 要求的其他 jobs。

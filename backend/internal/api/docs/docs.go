@@ -14856,6 +14856,88 @@ const docTemplate = `{
                 }
             }
         },
+        "/tasks/{id}/reconcile-legacy-rclone": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "管理员确认远端已停止后，将暂停任务的指定 writing/unknown 代次标记为 dirty；不恢复调度、不执行备份、不放行旧代次恢复。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "协调旧版 Rclone 未知写入",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "任务 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "明确的远端停止确认与原因",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.ReconcileLegacyRcloneWriteRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/tasks/{id}/restore": {
             "post": {
                 "security": [
@@ -16453,6 +16535,26 @@ const docTemplate = `{
                 },
                 "sourcePath": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.ReconcileLegacyRcloneWriteRequest": {
+            "type": "object",
+            "required": [
+                "reason",
+                "remote_stopped",
+                "task_run_id"
+            ],
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "maxLength": 1024
+                },
+                "remote_stopped": {
+                    "type": "boolean"
+                },
+                "task_run_id": {
+                    "type": "integer"
                 }
             }
         },

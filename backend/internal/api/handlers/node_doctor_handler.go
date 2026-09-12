@@ -522,7 +522,7 @@ func (r *nodeDoctorRunner) backupPaths() ([]string, error) {
 		if basePath == "" || strings.Contains(basePath, ":") {
 			continue
 		}
-		path := policy.NodeTargetPath(basePath, r.node.BackupDir)
+		path := policy.PolicyNodeTargetPath(basePath, p.ID, r.node.ID)
 		if path == "" || seen[path] {
 			continue
 		}

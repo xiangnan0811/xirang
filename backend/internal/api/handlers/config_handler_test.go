@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
-
+	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/ga"
 	"xirang/backend/internal/backupasset/overlay"
 	assetruntime "xirang/backend/internal/backupasset/runtime"
@@ -21,6 +24,7 @@ import (
 	"xirang/backend/internal/settings"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -33,6 +37,105 @@ func openConfigHandlerTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
 	return db
+}
+
+func openConfigHandlerTestDBPair(t *testing.T) (*gorm.DB, *gorm.DB) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), handlerTestDBName(t)+".db")
+	open := func() *gorm.DB {
+		db, err := gorm.Open(sqlite.Open(dbPath+"?_busy_timeout=5000&_loc=UTC"), &gorm.Config{})
+		if err != nil {
+			t.Fatalf("打开测试数据库失败: %v", err)
+		}
+		return db
+	}
+	return open(), open()
+}
+
+type configImportRollbackRuntime struct {
+	afterPersist func() error
+	failure      error
+}
+
+func (runtime *configImportRollbackRuntime) TransitionFeature(_ context.Context, _ bool, persist func() error) error {
+	return persist()
+}
+
+var configRollbackPostgresSequence atomic.Uint64
+
+func openConfigHandlerTestDBPairForEngine(t *testing.T, engine string) (*gorm.DB, *gorm.DB) {
+	t.Helper()
+	if engine == "sqlite" {
+		return openConfigHandlerTestDBPair(t)
+	}
+	if engine != "postgres" {
+		t.Fatalf("unsupported config rollback test engine %q", engine)
+	}
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN required for PostgreSQL config rollback contracts")
+	}
+	base, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open PostgreSQL config rollback base: %v", err)
+	}
+	schema := fmt.Sprintf("config_rollback_%d_%d", os.Getpid(), configRollbackPostgresSequence.Add(1))
+	if err := base.Exec("CREATE SCHEMA " + schema).Error; err != nil {
+		t.Fatalf("create PostgreSQL config rollback schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = base.Exec("DROP SCHEMA " + schema + " CASCADE").Error
+		if sqlDB, err := base.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	separator := "?"
+	if strings.Contains(dsn, "?") {
+		separator = "&"
+	}
+	isolatedDSN := dsn + separator + "search_path=" + schema
+	open := func() *gorm.DB {
+		db, err := gorm.Open(postgres.Open(isolatedDSN), &gorm.Config{})
+		if err != nil {
+			t.Fatalf("open isolated PostgreSQL config rollback connection: %v", err)
+		}
+		t.Cleanup(func() {
+			if sqlDB, err := db.DB(); err == nil {
+				_ = sqlDB.Close()
+			}
+		})
+		return db
+	}
+	return open(), open()
+
+}
+
+func (*configImportRollbackRuntime) PrepareApplicationDowngrade(context.Context, func() error) error {
+	return nil
+}
+
+func (*configImportRollbackRuntime) PrepareSchemaDown(context.Context, func() error) error {
+	return nil
+}
+
+func (runtime *configImportRollbackRuntime) TransitionBackupAssetSettingsContextWithRestore(
+	ctx context.Context,
+	_ map[string]string,
+	_ map[string]string,
+	_ map[string]string,
+	_ backupasset.ExportConfig,
+	persist func(context.Context) error,
+	restore func(context.Context) error,
+) error {
+	if err := persist(ctx); err != nil {
+		return err
+	}
+	if runtime.afterPersist != nil {
+		if err := runtime.afterPersist(); err != nil {
+			return err
+		}
+	}
+	return errors.Join(runtime.failure, restore(ctx))
 }
 
 func setConfigHandlerTestEncryption(t *testing.T) {
@@ -414,6 +517,78 @@ func TestConfigImportPostPersistRuntimeFailureRestoresEntireImport(t *testing.T)
 	}
 	if got := svc.GetEffective("backup_assets.content_preview_ttl"); got != "2m" {
 		t.Fatalf("post-persist failure left Foundation value=%q", got)
+	}
+}
+
+func TestConfigImportRollbackKeepsCurrentTargetClaimAcrossConnections(t *testing.T) {
+	for _, engine := range []string{"sqlite", "postgres"} {
+		t.Run(engine, func(t *testing.T) {
+			setConfigHandlerTestEncryption(t)
+			target, concurrent := openConfigHandlerTestDBPairForEngine(t, engine)
+			migrateConfigAssetGraphDB(t, target)
+			node := model.Node{
+				Name: "rollback-node", Host: "10.0.0.30", Port: 22, Username: "root", AuthType: "key",
+			}
+			if err := target.Create(&node).Error; err != nil {
+				t.Fatalf("create node: %v", err)
+			}
+			oldTarget := filepath.Join(t.TempDir(), "old-target")
+			importedTarget := filepath.Join(t.TempDir(), "imported-target")
+			task := model.Task{
+				Name: "rollback-task", NodeID: node.ID, ExecutorType: "rsync",
+				RsyncSource: "/source", RsyncTarget: oldTarget, Status: "pending", Source: "manual",
+			}
+			if err := target.Create(&task).Error; err != nil {
+				t.Fatalf("create task: %v", err)
+			}
+
+			runtime := &configImportRollbackRuntime{
+				failure: errors.New("FAKE_ROLLBACK_RUNTIME_FAILURE_FOR_TEST_ONLY"),
+			}
+			runtime.afterPersist = func() error {
+				var committed model.Task
+				if err := concurrent.First(&committed, task.ID).Error; err != nil {
+					return err
+				}
+				if committed.RsyncTarget != importedTarget {
+					return errors.New("config import did not commit the projected target")
+				}
+				return concurrent.Create(&model.Task{
+					Name: "new-target-claimant", NodeID: node.ID, ExecutorType: "rsync",
+					RsyncSource: "/new-source", RsyncTarget: oldTarget, Status: "pending", Source: "manual",
+				}).Error
+			}
+			handler := NewConfigHandler(target, settings.NewService(target)).WithBackupAssetTransitioner(runtime)
+			router := gin.New()
+			router.POST("/config/import", handler.Import)
+			body := `{
+  "nodes":[{"name":"rollback-node","host":"10.0.0.30","port":22,"username":"root","auth_type":"key"}],
+  "tasks":[{"name":"rollback-task","node_name":"rollback-node","executor_type":"rsync","rsync_source":"/source","rsync_target":"` + importedTarget + `"}],
+  "system_settings":[{"key":"backup_assets.content_preview_ttl","value":"3m"}]
+}`
+			request := httptest.NewRequest(http.MethodPost, "/config/import?conflict=overwrite", strings.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+
+			if response.Code != http.StatusInternalServerError {
+				t.Fatalf("status=%d body=%s, want rollback conflict to remain an internal failure", response.Code, response.Body.String())
+			}
+			var imported model.Task
+			if err := target.First(&imported, task.ID).Error; err != nil {
+				t.Fatalf("load imported task: %v", err)
+			}
+			if imported.RsyncTarget != importedTarget {
+				t.Fatalf("rollback overwrote imported task despite current claim: got=%q want=%q", imported.RsyncTarget, importedTarget)
+			}
+			var claimant model.Task
+			if err := target.Where("name = ?", "new-target-claimant").First(&claimant).Error; err != nil {
+				t.Fatalf("current claimant was not preserved: %v", err)
+			}
+			if claimant.RsyncTarget != oldTarget {
+				t.Fatalf("current claimant target changed: got=%q want=%q", claimant.RsyncTarget, oldTarget)
+			}
+		})
 	}
 }
 
@@ -821,8 +996,9 @@ func TestConfigImportManagedRcloneTasksPauseAndDisconnectForeignPublicationConfi
 }
 
 func TestConfigExportedDataCanBeImportedBackAsDownloadedFile(t *testing.T) {
+	setConfigHandlerTestEncryption(t)
 	sourceDB := openConfigHandlerTestDB(t)
-	if err := sourceDB.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}); err != nil {
+	if err := sourceDB.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
 		t.Fatalf("初始化源数据库失败: %v", err)
 	}
 
@@ -831,8 +1007,13 @@ func TestConfigExportedDataCanBeImportedBackAsDownloadedFile(t *testing.T) {
 		t.Fatalf("创建节点失败: %v", err)
 	}
 
-	policy := model.Policy{Name: "policy-a", SourcePath: "/data/src", TargetPath: "/backup/node-a", CronSpec: "*/5 * * * *", Enabled: true}
-	if err := sourceDB.Create(&policy).Error; err != nil {
+	policy := model.Policy{
+		Name: "policy-a", SourcePath: "/data/src", TargetPath: "/backup/node-a", CronSpec: "*/5 * * * *",
+		Enabled: false, VerifyEnabled: false, MaxRetries: 0,
+		PreHook:  "echo FAKE_CONFIG_IMPORT_PRE_HOOK_FOR_TEST_ONLY",
+		PostHook: "echo FAKE_CONFIG_IMPORT_POST_HOOK_FOR_TEST_ONLY",
+	}
+	if err := model.CreatePolicyWithExplicitValues(sourceDB, &policy, model.PolicyCreateExplicitColumns()...); err != nil {
 		t.Fatalf("创建策略失败: %v", err)
 	}
 
@@ -842,12 +1023,16 @@ func TestConfigExportedDataCanBeImportedBackAsDownloadedFile(t *testing.T) {
 		PolicyID:     &policy.ID,
 		ExecutorType: "rsync",
 		RsyncSource:  "/data/src",
-		RsyncTarget:  "/backup/node-a",
+		RsyncTarget:  "/backup/node-a/task-a",
 		CronSpec:     "*/5 * * * *",
 		Status:       "pending",
+		Enabled:      false,
 	}
 	if err := sourceDB.Create(&taskEntity).Error; err != nil {
 		t.Fatalf("创建任务失败: %v", err)
+	}
+	if err := sourceDB.Model(&model.Task{}).Where("id = ?", taskEntity.ID).UpdateColumn("enabled", false).Error; err != nil {
+		t.Fatalf("保存任务停用状态失败: %v", err)
 	}
 	dependentTask := model.Task{
 		Name:            "task-b",
@@ -856,19 +1041,28 @@ func TestConfigExportedDataCanBeImportedBackAsDownloadedFile(t *testing.T) {
 		DependsOnTaskID: &taskEntity.ID,
 		ExecutorType:    "rsync",
 		RsyncSource:     "/data/dep",
-		RsyncTarget:     "/backup/node-a/dep",
+		RsyncTarget:     "/backup/node-a/task-b",
 		Status:          "pending",
+		Enabled:         false,
 	}
 	if err := sourceDB.Create(&dependentTask).Error; err != nil {
 		t.Fatalf("创建依赖任务失败: %v", err)
 	}
+	if err := sourceDB.Model(&model.Task{}).Where("id = ?", dependentTask.ID).UpdateColumn("enabled", false).Error; err != nil {
+		t.Fatalf("保存依赖任务停用状态失败: %v", err)
+	}
 
 	exportHandler := NewConfigHandler(sourceDB, nil)
 	exportRouter := gin.New()
-	exportRouter.GET("/config/export", exportHandler.Export)
+	exportRouter.GET("/config/export", func(c *gin.Context) {
+		c.Set("user_id", uint(1))
+		c.Set("username", "admin")
+		c.Set("role", "admin")
+		exportHandler.Export(c)
+	})
 
 	exportResp := httptest.NewRecorder()
-	exportReq := httptest.NewRequest(http.MethodGet, "/config/export", nil)
+	exportReq := httptest.NewRequest(http.MethodGet, "/config/export?include_secrets=true", nil)
 	exportRouter.ServeHTTP(exportResp, exportReq)
 	if exportResp.Code != http.StatusOK {
 		t.Fatalf("导出接口期望 200，实际: %d，响应: %s", exportResp.Code, exportResp.Body.String())
@@ -880,23 +1074,24 @@ func TestConfigExportedDataCanBeImportedBackAsDownloadedFile(t *testing.T) {
 	if err := json.Unmarshal(exportResp.Body.Bytes(), &exportPayload); err != nil {
 		t.Fatalf("解析导出响应失败: %v", err)
 	}
-
 	downloadedFile, err := json.Marshal(exportPayload.Data)
 	if err != nil {
 		t.Fatalf("序列化下载文件失败: %v", err)
 	}
 
 	targetDB := openConfigHandlerTestDB(t)
-	if err := targetDB.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}); err != nil {
+	if err := targetDB.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.SystemSetting{}, &model.SSHKey{}, &model.CredentialAuditEvent{}); err != nil {
 		t.Fatalf("初始化目标数据库失败: %v", err)
 	}
-
 	targetNode := model.Node{Name: "node-a", Host: "10.0.0.9", Port: 22, Username: "root", AuthType: "key", BackupDir: "node-a"}
 	if err := targetDB.Create(&targetNode).Error; err != nil {
 		t.Fatalf("创建目标节点失败: %v", err)
 	}
-	targetPolicy := model.Policy{Name: "policy-a", SourcePath: "/seed/src", TargetPath: "/seed/dst", CronSpec: "0 * * * *", Enabled: false}
-	if err := targetDB.Create(&targetPolicy).Error; err != nil {
+	targetPolicy := model.Policy{
+		Name: "policy-a", SourcePath: "/seed/src", TargetPath: "/seed/dst", CronSpec: "0 * * * *",
+		Enabled: true, VerifyEnabled: true, MaxRetries: 4, PreHook: "echo stale hook",
+	}
+	if err := model.CreatePolicyWithExplicitValues(targetDB, &targetPolicy, model.PolicyCreateExplicitColumns()...); err != nil {
 		t.Fatalf("创建目标策略失败: %v", err)
 	}
 
@@ -904,7 +1099,7 @@ func TestConfigExportedDataCanBeImportedBackAsDownloadedFile(t *testing.T) {
 	importRouter := gin.New()
 	importRouter.POST("/config/import", importHandler.Import)
 
-	importReq := httptest.NewRequest(http.MethodPost, "/config/import?conflict=skip", strings.NewReader(string(downloadedFile)))
+	importReq := httptest.NewRequest(http.MethodPost, "/config/import?conflict=overwrite", strings.NewReader(string(downloadedFile)))
 	importReq.Header.Set("Content-Type", "application/json")
 	importResp := httptest.NewRecorder()
 	importRouter.ServeHTTP(importResp, importReq)
@@ -922,10 +1117,47 @@ func TestConfigExportedDataCanBeImportedBackAsDownloadedFile(t *testing.T) {
 	if importedTask.PolicyID == nil || *importedTask.PolicyID != targetPolicy.ID {
 		t.Fatalf("任务应按策略名称映射到目标策略，实际 policy_id=%v，期望 %d", importedTask.PolicyID, targetPolicy.ID)
 	}
+	if importedTask.Enabled {
+		t.Fatal("导入任务应保留显式停用状态")
+	}
+	if importedTask.RsyncTarget != "/backup/node-a/task-a" {
+		t.Fatalf("导入任务应保留历史备份目标，实际 target=%q", importedTask.RsyncTarget)
+	}
+
+	var importedPolicy model.Policy
+	if err := targetDB.First(&importedPolicy, targetPolicy.ID).Error; err != nil {
+		t.Fatalf("导入后应存在策略记录，实际错误: %v", err)
+	}
+	if importedPolicy.Enabled || importedPolicy.VerifyEnabled || importedPolicy.MaxRetries != 0 {
+		t.Fatalf("导入策略未保留显式停用/重试值: enabled=%v verify=%v retries=%d", importedPolicy.Enabled, importedPolicy.VerifyEnabled, importedPolicy.MaxRetries)
+	}
+	if importedPolicy.PreHook != "echo FAKE_CONFIG_IMPORT_PRE_HOOK_FOR_TEST_ONLY" ||
+		importedPolicy.PostHook != "echo FAKE_CONFIG_IMPORT_POST_HOOK_FOR_TEST_ONLY" {
+		t.Fatalf("导入策略未恢复加密钩子字段: pre=%q post=%q", importedPolicy.PreHook, importedPolicy.PostHook)
+	}
+	var rawPolicyHooks struct {
+		PreHook  string `gorm:"column:pre_hook"`
+		PostHook string `gorm:"column:post_hook"`
+	}
+	if err := targetDB.Session(&gorm.Session{SkipHooks: true}).Table("policies").
+		Select("pre_hook, post_hook").Where("id = ?", targetPolicy.ID).Scan(&rawPolicyHooks).Error; err != nil {
+		t.Fatalf("读取导入策略原始钩子失败: %v", err)
+	}
+	for name, value := range map[string]string{"pre_hook": rawPolicyHooks.PreHook, "post_hook": rawPolicyHooks.PostHook} {
+		if !strings.HasPrefix(value, "enc:") || strings.Contains(value, "FAKE_CONFIG_IMPORT") {
+			t.Fatalf("导入策略钩子未加密存储 %s=%q", name, value)
+		}
+	}
 
 	var importedDependent model.Task
 	if err := targetDB.Where("name = ?", "task-b").First(&importedDependent).Error; err != nil {
 		t.Fatalf("导入后应存在依赖任务记录，实际错误: %v", err)
+	}
+	if importedDependent.Enabled {
+		t.Fatal("导入依赖任务应保留显式停用状态")
+	}
+	if importedDependent.RsyncTarget != "/backup/node-a/task-b" {
+		t.Fatalf("导入依赖任务应保留历史备份目标，实际 target=%q", importedDependent.RsyncTarget)
 	}
 	if importedDependent.DependsOnTaskID == nil || *importedDependent.DependsOnTaskID != importedTask.ID {
 		t.Fatalf("导入后应恢复任务依赖关系，实际 depends_on_task_id=%v，期望 %d", importedDependent.DependsOnTaskID, importedTask.ID)

@@ -7,15 +7,16 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"golang.org/x/crypto/ssh"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"xirang/backend/internal/model"
+	policyPkg "xirang/backend/internal/policy"
 	"xirang/backend/internal/sshutil"
-
-	"golang.org/x/crypto/ssh"
+	"xirang/backend/internal/task/testutil"
 )
 
 func TestRsyncExecutorStartFailureReportsNoProcessStart(t *testing.T) {
@@ -154,6 +155,103 @@ func TestRsyncExecutorAppliesPolicyExcludesToLocalTree(t *testing.T) {
 			t.Fatalf("excluded file %q was copied: %v", excluded, err)
 		}
 	}
+}
+
+func TestRsyncExecutorSeparatesSameNodePolicyTargetsAndRestoresManifests(t *testing.T) {
+	rsyncBinary, err := exec.LookPath("rsync")
+	if err != nil {
+		t.Skip("rsync is not installed")
+	}
+	sshdBinary, err := exec.LookPath("sshd")
+	if err != nil {
+		t.Skip("sshd is not installed")
+	}
+	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "false")
+	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "false")
+	node := testutil.StartRsyncSSHServer(t, sshdBinary)
+
+	coreRoot := t.TempDir()
+	targetA := policyPkg.PolicyNodeTargetPath(coreRoot, 101, 7)
+	targetB := policyPkg.PolicyNodeTargetPath(coreRoot, 202, 7)
+	if targetA == "" || targetB == "" || targetA == targetB {
+		t.Fatalf("policy targets are not isolated: A=%q B=%q", targetA, targetB)
+	}
+	sourceA := filepath.Join(t.TempDir(), "source-a")
+	sourceB := filepath.Join(t.TempDir(), "source-b")
+	for _, source := range []string{sourceA, sourceB} {
+		if err := os.MkdirAll(filepath.Join(source, "app"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const payloadA = "policy-A-config"
+	const payloadB = "policy-B-config"
+	if err := os.WriteFile(filepath.Join(sourceA, "app", "config.txt"), []byte(payloadA), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceB, "app", "config.txt"), []byte(payloadB), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	taskA := model.Task{
+		ExecutorType: "rsync", RsyncSource: sourceA + string(os.PathSeparator),
+		RsyncTarget: targetA, RsyncBinary: rsyncBinary, Node: node,
+	}
+	taskB := model.Task{
+		ExecutorType: "rsync", RsyncSource: sourceB,
+		RsyncTarget: targetB, RsyncBinary: rsyncBinary, Node: node,
+	}
+	runner := &RsyncExecutor{binary: rsyncBinary}
+	if code, runErr := runner.Run(context.Background(), taskA, func(string, string) {}, nil); runErr != nil || code != 0 {
+		t.Fatalf("policy A backup code=%d err=%v", code, runErr)
+	}
+	manifestARaw, err := CaptureRsyncManifest(context.Background(), taskA)
+	if err != nil {
+		t.Fatalf("capture policy A manifest before policy B: %v", err)
+	}
+	manifestA, err := model.DecodeRsyncCaptureManifest(manifestARaw)
+	if err != nil || len(manifestA.Entries) == 0 {
+		t.Fatalf("policy A manifest=%+v err=%v", manifestA, err)
+	}
+	if err := VerifyRsyncCaptureManifestTarget(context.Background(), taskA, manifestARaw); err != nil {
+		t.Fatalf("verify policy A target: %v", err)
+	}
+
+	if code, runErr := runner.Run(context.Background(), taskB, func(string, string) {}, nil); runErr != nil || code != 0 {
+		t.Fatalf("policy B backup code=%d err=%v", code, runErr)
+	}
+	manifestBRaw, err := CaptureRsyncManifest(context.Background(), taskB)
+	if err != nil {
+		t.Fatalf("capture policy B manifest: %v", err)
+	}
+	manifestB, err := model.DecodeRsyncCaptureManifest(manifestBRaw)
+	if err != nil || len(manifestB.Entries) == 0 {
+		t.Fatalf("policy B manifest=%+v err=%v", manifestB, err)
+	}
+	if err := VerifyRsyncCaptureManifestTarget(context.Background(), taskB, manifestBRaw); err != nil {
+		t.Fatalf("verify policy B target: %v", err)
+	}
+
+	restore := func(name, source, expected, manifestRaw string, manifest model.RsyncCaptureManifest) {
+		t.Helper()
+		restoreTarget := filepath.Join(t.TempDir(), name)
+		task := model.Task{
+			ExecutorType: "rsync", RsyncSource: source, RsyncTarget: restoreTarget,
+			RsyncBinary: rsyncBinary, Node: node, RsyncCaptureLayout: manifest.Layout,
+			RsyncCaptureRoot: manifest.Root, RsyncCaptureManifest: manifestRaw,
+		}
+		if code, runErr := runner.RunRestore(context.Background(), task, func(string, string) {}, nil); runErr != nil || code != 0 {
+			t.Fatalf("%s restore code=%d err=%v", name, code, runErr)
+		}
+		got, err := os.ReadFile(filepath.Join(restoreTarget, "app", "config.txt"))
+		if err != nil {
+			t.Fatalf("%s restored config: %v", name, err)
+		}
+		if string(got) != expected {
+			t.Fatalf("%s restored config=%q, want %q", name, got, expected)
+		}
+	}
+	restore("restore-policy-a", targetA, payloadA, manifestARaw, manifestA)
+	restore("restore-policy-b", targetB, payloadB, manifestBRaw, manifestB)
 }
 
 func TestRsyncExecutorPassesPolicyExcludesAsArguments(t *testing.T) {

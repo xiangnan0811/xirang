@@ -12,6 +12,10 @@ type PolicyRepository interface {
 	FindByIDWithNodes(ctx context.Context, id uint) (*model.Policy, error)
 	List(ctx context.Context) ([]model.Policy, error)
 	Create(ctx context.Context, policy *model.Policy) error
+
+	// CreateWithExplicitValues preserves explicit scalar zero/false values
+	// while retaining Policy model hooks during the struct-create boundary.
+	CreateWithExplicitValues(ctx context.Context, policy *model.Policy, explicitColumns ...string) error
 	Update(ctx context.Context, policy *model.Policy) error
 	Delete(ctx context.Context, id uint) error
 	ExistsByID(ctx context.Context, id uint) (bool, error)

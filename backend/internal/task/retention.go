@@ -128,7 +128,6 @@ func (m *Manager) enforceLegacyResticRetention(ctx context.Context, policy model
 		cleanupCmd := executor.BuildCleanupResticPasswordFileCmd(pwFilePath)
 		_, _ = executor.RunSSHCommandOutput(ctx, client, cleanupCmd)
 	}()
-	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
 
 	resticBin := util.GetEnvOrDefault("RESTIC_BINARY", "restic")
 	var keepArgs string
@@ -137,8 +136,7 @@ func (m *Manager) enforceLegacyResticRetention(ctx context.Context, policy model
 	} else {
 		keepArgs = fmt.Sprintf("--keep-within %dd", policy.RetentionDays)
 	}
-	cmd := fmt.Sprintf("%s %s forget -r %s %s --prune 2>&1",
-		pwFileArg, resticBin, shellEscape(repo), keepArgs)
+	cmd := buildLegacyResticRetentionCommand(resticBin, pwFilePath, repo, keepArgs)
 
 	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
@@ -151,6 +149,10 @@ func (m *Manager) enforceLegacyResticRetention(ctx context.Context, policy model
 	}
 }
 
+func buildLegacyResticRetentionCommand(resticBin, passwordFilePath, repository, keepArgs string) string {
+	return fmt.Sprintf("%s forget -r %s %s --prune 2>&1",
+		executor.BuildResticCommandPrefix(resticBin, passwordFilePath), shellEscape(repository), keepArgs)
+}
 func (m *Manager) enforceRcloneRetention(policy model.Policy, task model.Task) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()

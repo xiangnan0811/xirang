@@ -29,10 +29,14 @@ func (e *noStartCompatibilityExecutor) RsyncBinary() string {
 }
 
 type contextAwareCompatibilityCoordinator struct {
-	execution publication.Execution
+	execution    publication.Execution
+	beforeReturn func()
 }
 
 func (c *contextAwareCompatibilityCoordinator) Prepare(ctx context.Context, _ publication.Run) (publication.Execution, error) {
+	if c.beforeReturn != nil {
+		c.beforeReturn()
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -199,11 +203,11 @@ func runLegacyRsyncPublicationPrepareCancellation(t *testing.T, db *gorm.DB, rsy
 
 	invocation := &noStartCompatibilityExecutor{err: errors.New("FAKE_PUBLICATION_PREPARE_SHOULD_NOT_INVOKE_EXECUTOR")}
 	manager.executorFactory = stubExecutorFactory{executor: invocation}
-	manager.publicationCoordinator = &contextAwareCompatibilityCoordinator{
-		execution: &publicationExecutionFake{mode: publication.ModeCompatibility},
-	}
 	cancelCtx, cancel := context.WithCancel(context.Background())
-	manager.afterLegacyRsyncGenerationArm = cancel
+	manager.publicationCoordinator = &contextAwareCompatibilityCoordinator{
+		execution:    &publicationExecutionFake{mode: publication.ModeCompatibility},
+		beforeReturn: cancel,
+	}
 	secondRunID := createTestTaskRun(t, db, taskEntity.ID, "manual")
 	manager.runTaskWithContext(taskEntity.ID, secondRunID, "manual", generateChainRunID(), cancelCtx, nil, cancel)
 	secondRun := waitTaskRunTerminal(t, db, secondRunID)

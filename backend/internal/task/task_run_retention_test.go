@@ -281,6 +281,188 @@ func runTaskRunRetentionKeepsCurrentDirtyGenerationAndBlocksFallback(t *testing.
 	}
 }
 
+func TestTaskRunRetentionKeepsOlderUnresolvedGeneration(t *testing.T) {
+	runTaskRunRetentionKeepsOlderUnresolvedGeneration(t, openManagerTestDB(t))
+}
+
+func TestTaskRunRetentionKeepsOlderUnresolvedGenerationPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	runTaskRunRetentionKeepsOlderUnresolvedGeneration(t, openTaskRetentionPostgresDB(t, dsn))
+}
+
+func runTaskRunRetentionKeepsOlderUnresolvedGeneration(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	taskEntity := seedRetentionTask(t, db)
+	old := time.Now().UTC().Add(-72 * time.Hour)
+	unresolved := seedRetentionGeneration(t, db, taskEntity, old, model.TaskRunStatusFailed, model.TaskRunGenerationStateUnknown)
+	latest := seedRetentionGeneration(t, db, taskEntity, old.Add(time.Minute), model.TaskRunStatusSuccess, model.TaskRunGenerationStateVerified)
+	history := seedExpiredHistoryRun(t, db, taskEntity, old.Add(2*time.Minute))
+	retentionManager(db).cleanupExpiredTaskRuns()
+
+	var count int64
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", unresolved.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count older unresolved generation: %v", err)
+	}
+	if count != 1 {
+		t.Fatal("older unresolved generation was deleted")
+	}
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", latest.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count latest verified generation: %v", err)
+	}
+	if count != 1 {
+		t.Fatal("latest verified generation was deleted")
+	}
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", history.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count ordinary expired history: %v", err)
+	}
+	if count != 0 {
+		t.Fatal("ordinary expired history survived cleanup")
+	}
+}
+
+func TestTaskRunRetentionKeepsRcloneVerifiedReferenceAndDirtyHead(t *testing.T) {
+	runTaskRunRetentionKeepsRcloneVerifiedReferenceAndDirtyHead(t, openManagerTestDB(t))
+}
+
+func TestTaskRunRetentionKeepsRcloneVerifiedReferenceAndDirtyHeadPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	runTaskRunRetentionKeepsRcloneVerifiedReferenceAndDirtyHead(t, openTaskRetentionPostgresDB(t, dsn))
+}
+
+func runTaskRunRetentionKeepsRcloneVerifiedReferenceAndDirtyHead(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	taskEntity := configureLegacyRclonePolicy(t, db, seedLegacyRcloneTask(t, db), 0)
+	old := time.Now().UTC().Add(-72 * time.Hour)
+	source := seedRcloneGeneration(t, db, taskEntity, model.TaskRunStatusSuccess, model.TaskRunGenerationStateVerified, "", old)
+	restore := model.TaskRun{
+		TaskID:            taskEntity.ID,
+		NodeIDSnapshot:    taskEntity.NodeID,
+		TriggerType:       "restore",
+		Status:            model.TaskRunStatusPending,
+		BackupSourceRunID: source.ID,
+		CreatedAt:         old.Add(time.Minute),
+		UpdatedAt:         old.Add(time.Minute),
+	}
+	if err := db.Create(&restore).Error; err != nil {
+		t.Fatalf("create Rclone source reference: %v", err)
+	}
+	dirty := seedRcloneGeneration(t, db, taskEntity, model.TaskRunStatusFailed, model.TaskRunGenerationStateDirty, "known partial write", old.Add(2*time.Minute))
+	retentionManager(db).cleanupExpiredTaskRuns()
+
+	var count int64
+	if err := db.Model(&model.TaskRun{}).Where("id IN ?", []uint{source.ID, dirty.ID}).Count(&count).Error; err != nil {
+		t.Fatalf("count Rclone verified/dirty generations: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("Rclone verified source or dirty head was deleted, count=%d", count)
+	}
+	if _, err := (&Manager{db: db}).loadRestoreTaskWithProvenance(context.Background(), taskEntity.ID); !errors.Is(err, ErrRestoreRequiresNewBackup) {
+		t.Fatalf("Rclone dirty head restore error=%v, want ErrRestoreRequiresNewBackup", err)
+	}
+}
+
+func TestTaskRunRetentionKeepsLoneRcloneVerifiedHead(t *testing.T) {
+	runTaskRunRetentionKeepsLoneRcloneVerifiedHead(t, openManagerTestDB(t))
+}
+
+func TestTaskRunRetentionKeepsLoneRcloneVerifiedHeadPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	runTaskRunRetentionKeepsLoneRcloneVerifiedHead(t, openTaskRetentionPostgresDB(t, dsn))
+}
+
+func runTaskRunRetentionKeepsLoneRcloneVerifiedHead(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	taskEntity := configureLegacyRclonePolicy(t, db, seedLegacyRcloneTask(t, db), 0)
+	head := seedRcloneGeneration(t, db, taskEntity, model.TaskRunStatusSuccess, model.TaskRunGenerationStateVerified, "", time.Now().UTC().Add(-72*time.Hour))
+	retentionManager(db).cleanupExpiredTaskRuns()
+
+	var count int64
+	if err := db.Model(&model.TaskRun{}).Where("id = ?", head.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count lone Rclone verified head: %v", err)
+	}
+	if count != 1 {
+		t.Fatal("lone Rclone verified head was deleted")
+	}
+	loaded, err := (&Manager{db: db}).loadRestoreTaskWithProvenance(context.Background(), taskEntity.ID)
+	if err != nil || loaded.RsyncCaptureGenerationID != head.ID {
+		t.Fatalf("lone Rclone verified head restore generation=%d err=%v, want %d", loaded.RsyncCaptureGenerationID, err, head.ID)
+	}
+}
+
+func TestTaskRunRetentionKeepsRcloneVerifiedHeadAfterNoStart(t *testing.T) {
+	runTaskRunRetentionKeepsRcloneVerifiedHeadAfterNoStart(t, openManagerTestDB(t))
+}
+
+func TestTaskRunRetentionKeepsRcloneVerifiedHeadAfterNoStartPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	runTaskRunRetentionKeepsRcloneVerifiedHeadAfterNoStart(t, openTaskRetentionPostgresDB(t, dsn))
+}
+
+func runTaskRunRetentionKeepsRcloneVerifiedHeadAfterNoStart(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	taskEntity := configureLegacyRclonePolicy(t, db, seedLegacyRcloneTask(t, db), 0)
+	old := time.Now().UTC().Add(-72 * time.Hour)
+	head := seedRcloneGeneration(t, db, taskEntity, model.TaskRunStatusSuccess, model.TaskRunGenerationStateVerified, "", old)
+	noStart := seedRcloneGeneration(t, db, taskEntity, model.TaskRunStatusFailed, model.TaskRunGenerationStateNoStart, "", old.Add(time.Minute))
+	retentionManager(db).cleanupExpiredTaskRuns()
+
+	var count int64
+	if err := db.Model(&model.TaskRun{}).Where("id IN ?", []uint{head.ID, noStart.ID}).Count(&count).Error; err != nil {
+		t.Fatalf("count Rclone head/no-start rows: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("Rclone verified head was deleted before no-start skip, count=%d", count)
+	}
+	loaded, err := (&Manager{db: db}).loadRestoreTaskWithProvenance(context.Background(), taskEntity.ID)
+	if err != nil || loaded.RsyncCaptureGenerationID != head.ID {
+		t.Fatalf("Rclone no-start restore generation=%d err=%v, want %d", loaded.RsyncCaptureGenerationID, err, head.ID)
+	}
+}
+
+func TestTaskRunRetentionKeepsRcloneAmbiguousEmptyHead(t *testing.T) {
+	runTaskRunRetentionKeepsRcloneAmbiguousEmptyHead(t, openManagerTestDB(t))
+}
+
+func TestTaskRunRetentionKeepsRcloneAmbiguousEmptyHeadPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	runTaskRunRetentionKeepsRcloneAmbiguousEmptyHead(t, openTaskRetentionPostgresDB(t, dsn))
+}
+
+func runTaskRunRetentionKeepsRcloneAmbiguousEmptyHead(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	taskEntity := configureLegacyRclonePolicy(t, db, seedLegacyRcloneTask(t, db), 0)
+	old := time.Now().UTC().Add(-72 * time.Hour)
+	source := seedRcloneGeneration(t, db, taskEntity, model.TaskRunStatusSuccess, model.TaskRunGenerationStateVerified, "", old)
+	head := seedRcloneGeneration(t, db, taskEntity, model.TaskRunStatusFailed, "", "ambiguous partial write", old.Add(time.Minute))
+	retentionManager(db).cleanupExpiredTaskRuns()
+
+	var count int64
+	if err := db.Model(&model.TaskRun{}).Where("id IN ?", []uint{source.ID, head.ID}).Count(&count).Error; err != nil {
+		t.Fatalf("count Rclone verified/ambiguous rows: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("Rclone ambiguous empty head or predecessor was deleted, count=%d", count)
+	}
+	if _, err := (&Manager{db: db}).loadRestoreTaskWithProvenance(context.Background(), taskEntity.ID); !errors.Is(err, ErrRestoreRequiresNewBackup) {
+		t.Fatalf("Rclone ambiguous empty head restore error=%v, want ErrRestoreRequiresNewBackup", err)
+	}
+}
+
 func TestTaskRunRetentionPreservesPredecessorDuringActiveDirtyNoStart(t *testing.T) {
 	runTaskRunRetentionPreservesPredecessorDuringActiveDirtyNoStart(t, openManagerTestDB(t))
 }
@@ -946,13 +1128,14 @@ func seedRetentionTask(t *testing.T, db *gorm.DB) model.Task {
 	if err := db.Create(&node).Error; err != nil {
 		t.Fatalf("create retention node: %v", err)
 	}
+	taskTarget := fmt.Sprintf("%s/retention-target", t.TempDir())
 	taskEntity := model.Task{
 		Name:         fmt.Sprintf("retention-task-%d", time.Now().UnixNano()),
 		NodeID:       node.ID,
 		ExecutorType: "rsync",
 		Status:       string(StatusPending),
 		RsyncSource:  "/tmp/retention-source/",
-		RsyncTarget:  "/tmp/retention-target",
+		RsyncTarget:  taskTarget,
 	}
 	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatalf("create retention task: %v", err)
