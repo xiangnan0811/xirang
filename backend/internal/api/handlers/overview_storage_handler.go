@@ -2,16 +2,16 @@ package handlers
 
 import (
 	"context"
+	"fmt"
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
-
 	"xirang/backend/internal/model"
-
-	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
+	"xirang/backend/internal/policy"
 )
 
 // StorageUsageHandler 提供存储用量概览。
@@ -117,65 +117,75 @@ func (h *StorageUsageHandler) Get(c *gin.Context) {
 		}
 	}
 
-	// 按节点统计目录大小
 	perNode := make([]perNodeUsage, 0)
-	for _, tp := range targetPaths {
-		if ctx.Err() != nil {
-			break
-		}
-		entries, err := os.ReadDir(tp)
-		if err != nil {
+	// 按任务的实际物理目标统计目录大小。Task.RsyncTarget 是历史事实，
+	// 因此旧路径保持可见；只有没有任务记录的策略才使用新的
+	// policy-ID/node-ID 默认布局，绝不按 mutable BackupDir 反推旧数据。
+	type taskTargetRef struct {
+		NodeID uint
+		Target string
+	}
+	var taskTargets []taskTargetRef
+	taskQ := h.db.Model(&model.Task{}).Select("node_id, rsync_target").
+		Where("rsync_target <> '' AND executor_type IN ?", []string{"rsync", "restic", "rclone"})
+	if needFilter {
+		taskQ = taskQ.Where("node_id IN ?", ownedIDs)
+	}
+	if err := taskQ.Find(&taskTargets).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	seenTaskTargets := make(map[string]struct{})
+	for _, task := range taskTargets {
+		target := strings.TrimSpace(task.Target)
+		if target == "" || strings.Contains(target, ":") || !filepath.IsAbs(target) {
 			continue
 		}
-		// 查找该路径关联的策略及节点
-		var policyIDs []uint
-		for _, p := range policies {
-			if strings.TrimSpace(p.TargetPath) == tp {
-				policyIDs = append(policyIDs, p.ID)
-			}
-		}
-		if len(policyIDs) == 0 {
+		key := fmt.Sprintf("%d:%s", task.NodeID, target)
+		if _, exists := seenTaskTargets[key]; exists {
 			continue
 		}
-		// 获取关联节点
-		type nodeRef struct {
-			NodeID   uint
-			NodeName string
-		}
-		var nodeRefs []nodeRef
-		nodeSQL := "SELECT DISTINCT n.id as node_id, n.name as node_name FROM nodes n " +
-			"INNER JOIN policy_nodes pn ON pn.node_id = n.id " +
-			"WHERE pn.policy_id IN ?"
-		nodeArgs := []any{policyIDs}
-		if needFilter {
-			nodeSQL += " AND n.id IN ?"
-			nodeArgs = append(nodeArgs, ownedIDs)
-		}
-		if err := h.db.Raw(nodeSQL, nodeArgs...).Scan(&nodeRefs).Error; err != nil {
-			respondInternalError(c, err)
-			return
-		}
+		seenTaskTargets[key] = struct{}{}
+		perNode = append(perNode, perNodeUsage{
+			NodeID: task.NodeID,
+			Path:   target,
+			UsedGB: round2(dirSizeGB(ctx, target)),
+		})
+	}
 
-		nodeNameMap := make(map[string]nodeRef)
-		for _, nr := range nodeRefs {
-			nodeNameMap[nr.NodeName] = nr
+	// If a policy has no materialized task yet, expose its isolated new target
+	// without treating the policy base path as a shared node directory.
+	var policyNodes []struct {
+		PolicyID uint
+		Target   string
+		NodeID   uint
+		NodeName string
+	}
+	policyNodeQ := h.db.Table("policies p").
+		Select("p.id AS policy_id, p.target_path AS target, n.id AS node_id, n.name AS node_name").
+		Joins("JOIN policy_nodes pn ON pn.policy_id = p.id JOIN nodes n ON n.id = pn.node_id").
+		Where("p.enabled = ? AND p.is_template = ?", true, false)
+	if needFilter {
+		policyNodeQ = policyNodeQ.Where("n.id IN ?", ownedIDs)
+	}
+	if err := policyNodeQ.Scan(&policyNodes).Error; err != nil {
+		respondInternalError(c, err)
+		return
+	}
+	for _, candidate := range policyNodes {
+		target := policy.PolicyNodeTargetPath(candidate.Target, candidate.PolicyID, candidate.NodeID)
+		if target == "" {
+			continue
 		}
-
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			if nr, ok := nodeNameMap[entry.Name()]; ok {
-				dirPath := filepath.Join(tp, entry.Name())
-				sizeGB := dirSizeGB(ctx, dirPath)
-				perNode = append(perNode, perNodeUsage{
-					NodeID:   nr.NodeID,
-					NodeName: nr.NodeName,
-					Path:     dirPath,
-					UsedGB:   round2(sizeGB),
-				})
-			}
+		key := fmt.Sprintf("%d:%s", candidate.NodeID, target)
+		if _, exists := seenTaskTargets[key]; exists {
+			continue
 		}
+		seenTaskTargets[key] = struct{}{}
+		perNode = append(perNode, perNodeUsage{
+			NodeID: candidate.NodeID, NodeName: candidate.NodeName,
+			Path: target, UsedGB: round2(dirSizeGB(ctx, target)),
+		})
 	}
 
 	respondOK(c, gin.H{

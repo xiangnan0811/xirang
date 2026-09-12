@@ -81,16 +81,38 @@ func isBackupTaskRunTrigger(triggerType string) bool {
 	}
 }
 
-func isLegacyMutableRsyncTask(task model.Task) bool {
-	if !strings.EqualFold(strings.TrimSpace(task.ExecutorType), "rsync") {
-		return false
-	}
+// isLegacyMutableTask identifies compatibility writers whose destination can
+// be changed in place. This is deliberately broader than the Rsync manifest
+// lane: legacy Rclone also writes a mutable remote, but has no source-side
+// capture manifest.
+func isLegacyMutableTask(task model.Task) bool {
 	if strings.TrimSpace(task.RsyncSource) == "" || strings.TrimSpace(task.RsyncTarget) == "" {
 		return false
 	}
-	config, err := ParseRsyncPublicationConfigV1(task.ExecutorConfig)
-	return err == nil && config.PublicationMode == backupasset.PublicationLegacyMutable
+	switch strings.ToLower(strings.TrimSpace(task.ExecutorType)) {
+	case "rsync":
+		config, err := ParseRsyncPublicationConfigV1(task.ExecutorConfig)
+		return err == nil && config.PublicationMode == backupasset.PublicationLegacyMutable
+	case "rclone":
+		config, err := ParseRcloneTaskConfigV1(task.ExecutorConfig)
+		return err == nil && config.PublicationMode == backupasset.PublicationLegacyMutable
+	default:
+		return false
+	}
 }
+
+// isLegacyMutableRsyncTask identifies the only compatibility writer for which
+// source-side manifest capture is available.
+func isLegacyMutableRsyncTask(task model.Task) bool {
+	return isLegacyMutableTask(task) &&
+		strings.EqualFold(strings.TrimSpace(task.ExecutorType), "rsync")
+}
+
+func isLegacyMutableRcloneTask(task model.Task) bool {
+	return isLegacyMutableTask(task) &&
+		strings.EqualFold(strings.TrimSpace(task.ExecutorType), "rclone")
+}
+
 func loadTaskNodeForFingerprint(tx *gorm.DB, task *model.Task) error {
 	if tx == nil || task == nil || task.NodeID == 0 {
 		return nil
@@ -141,11 +163,257 @@ func lockTaskPolicyForFingerprint(tx *gorm.DB, taskID uint) (*model.Policy, erro
 	return &policyEntity, nil
 }
 
+// ErrPolicyConcurrencyLimit is returned when a policy has no execution slot
+// available. Reservation callers use it as a busy refusal: no backup run is
+// created, and an already-reserved run is canceled at the execution gate
+// rather than recorded as a failed transfer.
+var ErrPolicyConcurrencyLimit = errors.New("policy concurrency limit reached")
+
+// ErrMutableGenerationUnresolved marks a legacy mutable target whose previous
+// write did not reach an authoritative terminal outcome. Operators must
+// reconcile the remote before another write is admitted; changing the Task
+// configuration does not clear this durable hold.
+var ErrMutableGenerationUnresolved = errors.New("mutable target generation unresolved")
+
+func policyMaxConcurrent(policyEntity *model.Policy) int {
+	if policyEntity == nil || policyEntity.MaxConcurrent <= 0 {
+		return 1
+	}
+	return policyEntity.MaxConcurrent
+}
+
+// rejectUnresolvedMutableGenerationTx blocks every ordinary write while a
+// Task has a durable writing/unknown generation. The generation is scoped to
+// the Task rather than the current executor/config fingerprint: a config/target
+// edit cannot make evidence from the previous mutable target disappear or
+// silently authorize a mixed remote. Restore admission has its own provenance
+// check and is intentionally not routed through this gate.
+func rejectUnresolvedMutableGenerationTx(tx *gorm.DB, taskEntity *model.Task) error {
+	if tx == nil || taskEntity == nil || taskEntity.ID == 0 {
+		return nil
+	}
+	var unresolved int64
+	result := tx.Model(&model.TaskRun{}).
+		Where(`task_id = ? AND lower(COALESCE(trigger_type, '')) NOT IN ? AND
+			TRIM(COALESCE(backup_generation_state, '')) IN ?`,
+			taskEntity.ID, []string{"restore", "drill"},
+			[]string{model.TaskRunGenerationStateWriting, model.TaskRunGenerationStateUnknown}).
+		Count(&unresolved)
+	if result.Error != nil {
+		return fmt.Errorf("读取未决可变目标代际失败: %w", result.Error)
+	}
+	if unresolved > 0 {
+		return fmt.Errorf("%w: 远端目标仍需人工核验后才能继续写入", ErrMutableGenerationUnresolved)
+	}
+	return nil
+}
+
+// countPolicyActiveRuns is evaluated only after the Policy row has been
+// locked. Pending rows are durable reservations; running rows are admitted
+// executors. Recovery and restore/drill rows are intentionally outside the
+// ordinary policy quota.
+func countPolicyActiveRuns(tx *gorm.DB, policyID, excludeRunID uint, statuses []string) (int64, error) {
+	if tx == nil || policyID == 0 {
+		return 0, nil
+	}
+	query := tx.Model(&model.TaskRun{}).
+		Joins("JOIN tasks ON tasks.id = task_runs.task_id").
+		Where("tasks.policy_id = ?", policyID).
+		Where("lower(COALESCE(task_runs.trigger_type, '')) NOT IN ?", []string{"restore", "drill"}).
+		Where("task_runs.status IN ?", statuses)
+	if excludeRunID != 0 {
+		query = query.Where("task_runs.id <> ?", excludeRunID)
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func reservePolicySlot(tx *gorm.DB, policyEntity *model.Policy) error {
+	if policyEntity == nil {
+		return nil
+	}
+	count, err := countPolicyActiveRuns(tx, policyEntity.ID, 0,
+		[]string{model.TaskRunStatusPending, model.TaskRunStatusRunning})
+	if err != nil {
+		return err
+	}
+	if count >= int64(policyMaxConcurrent(policyEntity)) {
+		return ErrPolicyConcurrencyLimit
+	}
+	return nil
+}
+
+func admitPolicySlot(tx *gorm.DB, policyEntity *model.Policy, runID uint) error {
+	if policyEntity == nil {
+		return nil
+	}
+	count, err := countPolicyActiveRuns(tx, policyEntity.ID, runID,
+		[]string{model.TaskRunStatusRunning})
+	if err != nil {
+		return err
+	}
+	if count >= int64(policyMaxConcurrent(policyEntity)) {
+		return ErrPolicyConcurrencyLimit
+	}
+	return nil
+}
+
+func isNoProcessStartGenerationError(err error) bool {
+	var noStartErr *executor.NoProcessStartError
+	return errors.As(err, &noStartErr)
+}
+
+// rcloneNoStartStateForRunTx derives a no-start proof only from a currently
+// persisted pending run and its Task. A pending row has not entered provider
+// execution; terminal/retrying rows remain ambiguous.
+func rcloneNoStartStateForRunTx(tx *gorm.DB, run *model.TaskRun) (bool, error) {
+	if run == nil || run.Status != model.TaskRunStatusPending {
+		return false, nil
+	}
+	return deriveRcloneNoStartStateForRunTx(tx, run)
+}
+
+// rcloneNoStartStateForPreProviderRunTx is a separate proof for the runner's
+// same-owner cancellation boundary after durable execution admission but
+// before any provider invocation. It must only be called by that boundary;
+// terminal rows and armed/unknown generations are never backfilled.
+func rcloneNoStartStateForPreProviderRunTx(tx *gorm.DB, run *model.TaskRun) (bool, error) {
+	if run == nil || run.Status != model.TaskRunStatusRunning {
+		return false, nil
+	}
+	return deriveRcloneNoStartStateForRunTx(tx, run)
+}
+
+func deriveRcloneNoStartStateForRunTx(tx *gorm.DB, run *model.TaskRun) (bool, error) {
+	if tx == nil || run == nil || run.ID == 0 ||
+		strings.TrimSpace(run.BackupGenerationState) != "" ||
+		!isBackupTaskRunTrigger(run.TriggerType) {
+		return false, nil
+	}
+	var taskEntity model.Task
+	result := tx.Select("id, executor_type, executor_config, rsync_source, rsync_target").
+		Where("id = ?", run.TaskID).Limit(1).Find(&taskEntity)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return false, nil
+	}
+	return isLegacyMutableRcloneTask(taskEntity), nil
+}
+
+type mutableGenerationSelection struct {
+	run        model.TaskRun
+	allowEmpty bool
+}
+
+// latestRcloneMutableGeneration chooses the current Rclone mutable head. A
+// no_start row is an explicit proof that no child process was launched, so it
+// may be skipped. Empty historical rows without that durable proof remain the
+// selected ambiguous head; status text and error wording are never evidence.
+func latestRcloneMutableGeneration(tx *gorm.DB, taskID, nodeID uint) (mutableGenerationSelection, error) {
+	base := tx.Where(`task_id = ? AND node_id_snapshot = ? AND
+		lower(COALESCE(trigger_type, '')) NOT IN ?`,
+		taskID, nodeID, []string{"restore", "drill"})
+	var latest model.TaskRun
+	result := base.Order("id DESC").Limit(1).Find(&latest)
+	if result.Error != nil {
+		return mutableGenerationSelection{}, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return mutableGenerationSelection{}, nil
+	}
+	candidate := latest
+	if strings.TrimSpace(latest.BackupGenerationState) == model.TaskRunGenerationStateNoStart {
+		// Skip every positively proven no-start row in one query. The newest
+		// remaining row is either a usable non-empty generation or the first
+		// ambiguous empty head; never scan past that empty row.
+		var prior model.TaskRun
+		priorResult := base.Where(
+			"TRIM(COALESCE(backup_generation_state, '')) <> ?",
+			model.TaskRunGenerationStateNoStart,
+		).Order("id DESC").Limit(1).Find(&prior)
+		if priorResult.Error != nil {
+			return mutableGenerationSelection{}, priorResult.Error
+		}
+		if priorResult.RowsAffected != 1 {
+			return mutableGenerationSelection{}, nil
+		}
+		candidate = prior
+	}
+	if strings.TrimSpace(candidate.BackupGenerationState) != "" {
+		return mutableGenerationSelection{run: candidate}, nil
+	}
+
+	var prior model.TaskRun
+	priorResult := base.Where(
+		"id < ? AND TRIM(COALESCE(backup_generation_state, '')) <> '' AND TRIM(COALESCE(backup_generation_state, '')) <> ?",
+		candidate.ID, model.TaskRunGenerationStateNoStart,
+	).Order("id DESC").Limit(1).Find(&prior)
+	hasPrior := priorResult.Error == nil && priorResult.RowsAffected == 1
+	if priorResult.Error != nil {
+		return mutableGenerationSelection{}, priorResult.Error
+	}
+	if candidate.Status == model.TaskRunStatusSuccess && !hasPrior {
+		// This is an old, pre-generation-tracking successful Rclone run. It is
+		// usable as a best-effort mutable head, but only when no newer
+		// generation-tracked run exists.
+		return mutableGenerationSelection{run: candidate, allowEmpty: true}, nil
+	}
+	return mutableGenerationSelection{run: candidate}, nil
+}
+
 func taskPolicySnapshotMatches(task model.Task, policyEntity *model.Policy) bool {
 	if task.PolicyID == nil {
 		return policyEntity == nil
 	}
 	return policyEntity != nil && policyEntity.ID == *task.PolicyID
+}
+
+// validateTaskTargetOwnershipTx is the final durable target gate. It runs
+// before node-write admission and provider invocation, and deliberately reads
+// every persisted local Rsync claim, including manual tasks without a Policy.
+func validateTaskTargetOwnershipTx(tx *gorm.DB, taskEntity *model.Task) error {
+	if tx == nil || taskEntity == nil ||
+		!policy.IsCoreLocalTarget(taskEntity.ExecutorType, taskEntity.RsyncTarget) {
+		return nil
+	}
+	var persisted []model.Task
+	query := tx.Select("id, policy_id, node_id, executor_type, rsync_target").
+		Where("id <> ?", taskEntity.ID)
+	if err := query.Find(&persisted).Error; err != nil {
+		return fmt.Errorf("读取任务目标占用声明失败: %w", err)
+	}
+	owner := policy.TargetOwner{
+		NodeID: taskEntity.NodeID,
+		TaskID: taskEntity.ID,
+		Target: taskEntity.RsyncTarget,
+	}
+	if taskEntity.PolicyID != nil {
+		owner.PolicyID = *taskEntity.PolicyID
+	}
+	existing := make([]policy.TargetOwner, 0, len(persisted))
+	for _, persistedTask := range persisted {
+		if !policy.IsCoreLocalTarget(persistedTask.ExecutorType, persistedTask.RsyncTarget) {
+			continue
+		}
+		persistedOwner := policy.TargetOwner{
+			NodeID: persistedTask.NodeID,
+			TaskID: persistedTask.ID,
+			Target: persistedTask.RsyncTarget,
+		}
+		if persistedTask.PolicyID != nil {
+			persistedOwner.PolicyID = *persistedTask.PolicyID
+		}
+		existing = append(existing, persistedOwner)
+	}
+	if _, err := policy.ValidateTargetOwnership(owner.Target, owner, existing); err != nil {
+		return fmt.Errorf("任务目标路径冲突: %w", err)
+	}
+	return nil
 }
 
 const (
@@ -351,10 +619,11 @@ type Manager struct {
 	strategyLocks                 sync.Map
 	nodeLocks                     sync.Map                                                         // nodeID → *sync.Mutex, 节点级互斥（restore 与普通任务共享）
 	hookRunFunc                   func(ctx context.Context, task model.Task, command string) error // 可测试注入
+	beforeTaskRunReservation      func()                                                           // 可测试注入：普通触发读取任务后、持久化预约前
 	afterTriggerRestoreLoad       func()                                                           // 可测试注入：归档检查与 run 预约之间
 	afterLegacyRsyncGenerationArm func()                                                           // 可测试注入：Rsync 代际闩锁持久化后
-	drillSSHScriptFunc            func(ctx context.Context, node model.Node, script string) error  // 可测试注入
 	drillRestoreFunc              func(ctx context.Context, srcTask model.Task, sandboxNode model.Node, drillPath string, logf func(string, string)) error
+	drillSSHScriptFunc            func(ctx context.Context, node model.Node, script string) error // 可测试注入
 	ensureRemoteTargetReadyFunc   func(ctx context.Context, node model.Node, targetPath string) error
 	pendingRuns                   sync.Map
 	pendingRecoveryMu             sync.Mutex
@@ -631,6 +900,10 @@ func (m *Manager) reserveTaskRun(ctx context.Context, nodeID uint, requested mod
 			if locked.ArchivedAt != nil {
 				return ErrTaskArchived
 			}
+			if policySnapshot != nil && !policySnapshot.Enabled &&
+				(isCron || strings.EqualFold(strings.TrimSpace(requested.TriggerType), "auto")) {
+				return fmt.Errorf("策略已禁用，请先启用后再触发")
+			}
 			if locked.NodeID != nodeID {
 				return ErrNodeWriteStartLost
 			}
@@ -662,6 +935,9 @@ func (m *Manager) reserveTaskRun(ctx context.Context, nodeID uint, requested mod
 					return errCronOccurrenceHandled
 				}
 			}
+			if isBackupTaskRunTrigger(requested.TriggerType) && !locked.Enabled {
+				return fmt.Errorf("任务已暂停，请先恢复后再触发")
+			}
 			var activeCount int64
 			if err := tx.Model(&model.TaskRun{}).
 				Where("task_id = ? AND status IN ?", requested.TaskID, model.TaskRunActiveStatuses()).
@@ -677,40 +953,69 @@ func (m *Manager) reserveTaskRun(ctx context.Context, nodeID uint, requested mod
 			if err := loadTaskNodeForFingerprint(tx, &locked); err != nil {
 				return err
 			}
+			if err := validateTaskTargetOwnershipTx(tx, &locked); err != nil {
+				return err
+			}
+			if isBackupTaskRunTrigger(requested.TriggerType) {
+				if err := rejectUnresolvedMutableGenerationTx(tx, &locked); err != nil {
+					return err
+				}
+				if err := reservePolicySlot(tx, policySnapshot); err != nil {
+					return err
+				}
+			}
 			if requested.BackupSourceRunID > 0 {
-				if !isLegacyMutableRsyncTask(locked) {
+				if !isLegacyMutableTask(locked) {
 					return ErrRestoreRequiresNewBackup
 				}
 				var latestOrdinary model.TaskRun
-				latestResult := tx.Where(`task_id = ? AND node_id_snapshot = ? AND
-					lower(trigger_type) NOT IN ? AND COALESCE(backup_generation_state, '') <> ''`,
-					requested.TaskID, locked.NodeID, []string{"restore", "drill"}).
-					Order("id DESC").Limit(1).Find(&latestOrdinary)
-				if latestResult.Error != nil {
-					return latestResult.Error
+				allowEmptyRcloneGeneration := false
+				if isLegacyMutableRcloneTask(locked) {
+					selection, selectionErr := latestRcloneMutableGeneration(tx, requested.TaskID, locked.NodeID)
+					if selectionErr != nil {
+						return selectionErr
+					}
+					latestOrdinary = selection.run
+					allowEmptyRcloneGeneration = selection.allowEmpty
+				} else {
+					latestResult := tx.Where(`task_id = ? AND node_id_snapshot = ? AND
+						lower(COALESCE(trigger_type, '')) NOT IN ? AND
+						COALESCE(backup_generation_state, '') <> ''`,
+						requested.TaskID, locked.NodeID, []string{"restore", "drill"}).
+						Order("id DESC").Limit(1).Find(&latestOrdinary)
+					if latestResult.Error != nil {
+						return latestResult.Error
+					}
 				}
-				if latestResult.RowsAffected != 1 || latestOrdinary.ID != requested.BackupSourceRunID {
+				if latestOrdinary.ID == 0 || latestOrdinary.ID != requested.BackupSourceRunID {
 					return ErrRestoreRequiresNewBackup
 				}
-				var sourceRun model.TaskRun
-				sourceResult := tx.Where("id = ?", requested.BackupSourceRunID).Limit(1).Find(&sourceRun)
-				if sourceResult.Error != nil {
-					return sourceResult.Error
-				}
-				if sourceResult.RowsAffected != 1 ||
-					sourceRun.Status != model.TaskRunStatusSuccess ||
-					sourceRun.BackupGenerationState != model.TaskRunGenerationStateVerified ||
-					strings.TrimSpace(sourceRun.BackupCaptureLayout) == "" ||
-					strings.TrimSpace(sourceRun.BackupCaptureManifest) == "" {
+				sourceRun := latestOrdinary
+				if sourceRun.Status != model.TaskRunStatusSuccess ||
+					strings.TrimSpace(sourceRun.BackupConfigFingerprint) == "" ||
+					sourceRun.BackupConfigFingerprint != model.TaskRunBackupConfigFingerprint(locked) {
 					return ErrRestoreRequiresNewBackup
 				}
-				capture, decodeErr := model.DecodeRsyncCaptureManifest(sourceRun.BackupCaptureManifest)
-				captureRoot, rootDecodeErr := model.DecodeRsyncCaptureRootSidecar(sourceRun.BackupCaptureRoot, capture.Version)
-				if decodeErr != nil ||
-					rootDecodeErr != nil ||
-					capture.Layout != sourceRun.BackupCaptureLayout ||
-					capture.Root != captureRoot {
-					return ErrRestoreRequiresNewBackup
+				if isLegacyMutableRcloneTask(locked) {
+					state := strings.TrimSpace(sourceRun.BackupGenerationState)
+					if (state != "" && state != model.TaskRunGenerationStateVerified) ||
+						(state == "" && !allowEmptyRcloneGeneration) {
+						return ErrRestoreRequiresNewBackup
+					}
+				} else {
+					if sourceRun.BackupGenerationState != model.TaskRunGenerationStateVerified ||
+						strings.TrimSpace(sourceRun.BackupCaptureLayout) == "" ||
+						strings.TrimSpace(sourceRun.BackupCaptureManifest) == "" {
+						return ErrRestoreRequiresNewBackup
+					}
+					capture, decodeErr := model.DecodeRsyncCaptureManifest(sourceRun.BackupCaptureManifest)
+					captureRoot, rootDecodeErr := model.DecodeRsyncCaptureRootSidecar(sourceRun.BackupCaptureRoot, capture.Version)
+					if decodeErr != nil ||
+						rootDecodeErr != nil ||
+						capture.Layout != sourceRun.BackupCaptureLayout ||
+						capture.Root != captureRoot {
+						return ErrRestoreRequiresNewBackup
+					}
 				}
 			}
 			if m.nodeWriteAdmission != nil {
@@ -803,16 +1108,25 @@ func (m *Manager) ReserveAutomationRunTx(
 	if !taskEntity.Enabled {
 		return 0, fmt.Errorf("任务已暂停，请先恢复后再触发")
 	}
+	if policySnapshot != nil && !policySnapshot.Enabled {
+		return 0, fmt.Errorf("策略已禁用，请先启用后再触发")
+	}
 	var activeCount int64
 	if err := tx.Model(&model.TaskRun{}).
 		Where("task_id = ? AND status IN ?", taskID, model.TaskRunActiveStatuses()).
 		Count(&activeCount).Error; err != nil {
 		return 0, err
 	}
-	if activeCount > 0 || ParseStatus(taskEntity.Status) == StatusRunning {
-		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
-	}
 	if err := loadTaskNodeForFingerprint(tx, &taskEntity); err != nil {
+		return 0, err
+	}
+	if err := validateTaskTargetOwnershipTx(tx, &taskEntity); err != nil {
+		return 0, err
+	}
+	if err := rejectUnresolvedMutableGenerationTx(tx, &taskEntity); err != nil {
+		return 0, err
+	}
+	if err := reservePolicySlot(tx, policySnapshot); err != nil {
 		return 0, err
 	}
 	if m.nodeWriteAdmission != nil {
@@ -899,6 +1213,7 @@ func (m *Manager) enterTaskExecutionForReason(
 		}
 	}
 	var cronBlocked bool
+	var taskBlocked bool
 	var cronScheduledAt *time.Time
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var policySnapshot *model.Policy
@@ -931,6 +1246,12 @@ func (m *Manager) enterTaskExecutionForReason(
 				if err := loadTaskNodeForFingerprint(tx, &lockedTask); err != nil {
 					return err
 				}
+			}
+			if isBackupTaskRunTrigger(reason) && reason != "cron" && !lockedTask.Enabled {
+				if err := m.cancelQueuedCronRunTx(tx, runID, nodeID, "任务已暂停，排队执行已取消"); err != nil {
+					return err
+				}
+				taskBlocked = true
 			}
 			if reason == "cron" {
 				var queuedRun model.TaskRun
@@ -972,7 +1293,7 @@ func (m *Manager) enterTaskExecutionForReason(
 					cronBlocked = true
 				}
 			}
-			if cronBlocked {
+			if cronBlocked || taskBlocked {
 				return nil
 			}
 			if isBackupTaskRunTrigger(reason) {
@@ -1010,6 +1331,17 @@ func (m *Manager) enterTaskExecutionForReason(
 			// This prevents a concurrent config update from pairing old values
 			// with a newly captured provenance fingerprint.
 			*taskEntity = lockedTask
+			if err := validateTaskTargetOwnershipTx(tx, &lockedTask); err != nil {
+				return err
+			}
+			if isBackupTaskRunTrigger(reason) {
+				if err := rejectUnresolvedMutableGenerationTx(tx, &lockedTask); err != nil {
+					return err
+				}
+				if err := admitPolicySlot(tx, policySnapshot, runID); err != nil {
+					return err
+				}
+			}
 		}
 		if cronBlocked {
 			return nil
@@ -1050,6 +1382,9 @@ func (m *Manager) enterTaskExecutionForReason(
 	if cronBlocked {
 		return errCronTaskBlocked
 	}
+	if taskBlocked {
+		return errTaskPaused
+	}
 	if taskEntity != nil {
 		taskEntity.Status = string(StatusRunning)
 		taskEntity.LastRunAt = &startedAt
@@ -1059,23 +1394,45 @@ func (m *Manager) enterTaskExecutionForReason(
 	return nil
 }
 
+var errTaskPaused = errors.New("task execution blocked because task is paused")
 var errCronTaskBlocked = errors.New("cron task execution blocked")
 
 func (m *Manager) cancelQueuedCronRunTx(tx *gorm.DB, runID, nodeID uint, message string) error {
 	now := time.Now().UTC()
+	var run model.TaskRun
+	loaded := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND node_id_snapshot = ?", runID, nodeID).Limit(1).Find(&run)
+	if loaded.Error != nil {
+		return loaded.Error
+	}
+	if loaded.RowsAffected != 1 || run.Status != model.TaskRunStatusPending {
+		return ErrNodeWriteStartLost
+	}
+	if strings.TrimSpace(run.ExecutionOwnerID) != "" &&
+		run.ExecutionOwnerID != m.executionOwnerID {
+		return errTaskRunNotOwner
+	}
+	markNoStart, err := rcloneNoStartStateForRunTx(tx, &run)
+	if err != nil {
+		return err
+	}
+	updates := map[string]interface{}{
+		"status":                model.TaskRunStatusCanceled,
+		"started_at":            nil,
+		"finished_at":           &now,
+		"duration_ms":           int64(0),
+		"last_error":            sanitizeTaskLastError(message),
+		"execution_owner_id":    "",
+		"execution_lease_until": nil,
+	}
+	if markNoStart {
+		updates["backup_generation_state"] = model.TaskRunGenerationStateNoStart
+	}
 	result := tx.Model(&model.TaskRun{}).
 		Where(`id = ? AND node_id_snapshot = ? AND status = ? AND
 			(execution_owner_id = '' OR execution_owner_id = ?)`,
 			runID, nodeID, model.TaskRunStatusPending, m.executionOwnerID).
-		Updates(map[string]interface{}{
-			"status":                model.TaskRunStatusCanceled,
-			"started_at":            nil,
-			"finished_at":           &now,
-			"duration_ms":           int64(0),
-			"last_error":            sanitizeTaskLastError(message),
-			"execution_owner_id":    "",
-			"execution_lease_until": nil,
-		})
+		Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -1108,19 +1465,27 @@ func (m *Manager) cancelTaskExecutionBeforeExecutor(
 			run.ExecutionOwnerID != m.executionOwnerID {
 			return errTaskRunNotOwner
 		}
+		markNoStart, err := rcloneNoStartStateForPreProviderRunTx(tx, &run)
+		if err != nil {
+			return err
+		}
+		runUpdates := map[string]interface{}{
+			"status":                model.TaskRunStatusCanceled,
+			"started_at":            nil,
+			"finished_at":           &canceledAt,
+			"duration_ms":           int64(0),
+			"last_error":            sanitizeTaskLastError(message),
+			"execution_owner_id":    "",
+			"execution_lease_until": nil,
+		}
+		if markNoStart && strings.TrimSpace(run.BackupGenerationState) == "" {
+			runUpdates["backup_generation_state"] = model.TaskRunGenerationStateNoStart
+		}
 		runResult := tx.Model(&model.TaskRun{}).
 			Where(`id = ? AND task_id = ? AND node_id_snapshot = ? AND status = ? AND
 				(execution_owner_id = '' OR execution_owner_id = ?)`,
 				runID, taskID, nodeID, model.TaskRunStatusRunning, m.executionOwnerID).
-			Updates(map[string]interface{}{
-				"status":                model.TaskRunStatusCanceled,
-				"started_at":            nil,
-				"finished_at":           &canceledAt,
-				"duration_ms":           int64(0),
-				"last_error":            sanitizeTaskLastError(message),
-				"execution_owner_id":    "",
-				"execution_lease_until": nil,
-			})
+			Updates(runUpdates)
 		if runResult.Error != nil {
 			return runResult.Error
 		}
@@ -1334,8 +1699,66 @@ func (m *Manager) PausePolicyNext(ctx context.Context, policyID uint) error {
 	return policy.NewControlService(m.db, m).PauseNext(ctx, policyID)
 }
 
+func cancelPendingPolicyRunsTx(tx *gorm.DB, policyID uint, message string) error {
+	if tx == nil || policyID == 0 {
+		return nil
+	}
+	if strings.TrimSpace(message) == "" {
+		message = "策略已禁用，排队执行已取消"
+	}
+	now := time.Now().UTC()
+	var runs []model.TaskRun
+	result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where(`task_id IN (SELECT id FROM tasks WHERE policy_id = ?)`, policyID).
+		Where("status = ?", model.TaskRunStatusPending).
+		Where("lower(COALESCE(trigger_type, '')) NOT IN ?", []string{"restore", "drill"}).
+		Find(&runs)
+	if result.Error != nil {
+		return result.Error
+	}
+	for i := range runs {
+		run := &runs[i]
+		markNoStart, err := rcloneNoStartStateForRunTx(tx, run)
+		if err != nil {
+			return err
+		}
+		updates := map[string]interface{}{
+			"status":                model.TaskRunStatusCanceled,
+			"started_at":            nil,
+			"finished_at":           &now,
+			"execution_owner_id":    "",
+			"execution_lease_until": nil,
+			"last_error":            message,
+		}
+		if markNoStart {
+			updates["backup_generation_state"] = model.TaskRunGenerationStateNoStart
+		}
+		result = tx.Model(&model.TaskRun{}).
+			Where("id = ? AND status = ?", run.ID, model.TaskRunStatusPending).
+			Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errTaskRunCASLost
+		}
+	}
+	return nil
+}
+
 func (m *Manager) DisablePolicy(ctx context.Context, policyID uint) error {
-	return policy.NewControlService(m.db, m).Disable(ctx, policyID)
+	if m == nil || m.db == nil {
+		return fmt.Errorf("policy control unavailable")
+	}
+	var taskIDs []uint
+	if err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		taskIDs, err = m.DisablePolicyTx(ctx, tx, policyID)
+		return err
+	}); err != nil {
+		return err
+	}
+	return m.ReconcilePolicySchedules(policyID, taskIDs)
 }
 
 // PausePolicyNextTx applies policy control inside a caller-owned transaction.
@@ -1354,7 +1777,14 @@ func (m *Manager) DisablePolicyTx(ctx context.Context, tx *gorm.DB, policyID uin
 	if m == nil || tx == nil {
 		return nil, fmt.Errorf("policy control unavailable")
 	}
-	return policy.NewControlService(m.db, m).DisableTx(ctx, tx, policyID)
+	taskIDs, err := policy.NewControlService(m.db, m).DisableTx(ctx, tx, policyID)
+	if err != nil {
+		return nil, err
+	}
+	if err := cancelPendingPolicyRunsTx(tx, policyID, "策略已禁用，排队执行已取消"); err != nil {
+		return nil, err
+	}
+	return taskIDs, nil
 }
 
 // ReconcilePolicySchedules removes schedules after a committed policy control
@@ -1410,12 +1840,12 @@ func (m *Manager) loadRestoreTaskWithProvenance(ctx context.Context, taskID uint
 		if currentFingerprint == "" {
 			return fmt.Errorf("%w: 该任务没有成功的执行记录与当前节点配置匹配，请先创建新的成功备份", ErrRestoreRequiresNewBackup)
 		}
-		legacyMutableRsync := isLegacyMutableRsyncTask(taskEntity)
-		if legacyMutableRsync {
+		legacyMutable := isLegacyMutableTask(taskEntity)
+		if legacyMutable {
 			var activeOrdinary int64
 			activeResult := tx.Model(&model.TaskRun{}).
 				Where(`task_id = ? AND node_id_snapshot = ? AND status IN ? AND
-					lower(trigger_type) NOT IN ?`,
+					lower(COALESCE(trigger_type, '')) NOT IN ?`,
 					taskID, taskEntity.NodeID, model.TaskRunActiveStatuses(), []string{"restore", "drill"}).
 				Count(&activeOrdinary)
 			if activeResult.Error != nil {
@@ -1426,26 +1856,36 @@ func (m *Manager) loadRestoreTaskWithProvenance(ctx context.Context, taskID uint
 			}
 		}
 		var latestBackup model.TaskRun
-		latestQuery := tx.Where(`task_id = ? AND node_id_snapshot = ? AND
-			lower(trigger_type) NOT IN ?`,
-			taskID, taskEntity.NodeID, []string{"restore", "drill"})
-		if legacyMutableRsync {
-			latestQuery = latestQuery.Where("COALESCE(backup_generation_state, '') <> ''")
+		allowEmptyRcloneGeneration := false
+		if isLegacyMutableRcloneTask(taskEntity) {
+			selection, selectionErr := latestRcloneMutableGeneration(tx, taskID, taskEntity.NodeID)
+			if selectionErr != nil {
+				return selectionErr
+			}
+			latestBackup = selection.run
+			allowEmptyRcloneGeneration = selection.allowEmpty
 		} else {
-			latestQuery = latestQuery.Where("status = ?", model.TaskRunStatusSuccess)
+			latestQuery := tx.Where(`task_id = ? AND node_id_snapshot = ? AND
+				lower(COALESCE(trigger_type, '')) NOT IN ?`,
+				taskID, taskEntity.NodeID, []string{"restore", "drill"})
+			if isLegacyMutableRsyncTask(taskEntity) {
+				latestQuery = latestQuery.Where("COALESCE(backup_generation_state, '') <> ''")
+			} else {
+				latestQuery = latestQuery.Where("status = ?", model.TaskRunStatusSuccess)
+			}
+			runResult := latestQuery.Order("id DESC").Limit(1).Find(&latestBackup)
+			if runResult.Error != nil {
+				return runResult.Error
+			}
 		}
-		runResult := latestQuery.Order("id DESC").Limit(1).Find(&latestBackup)
-		if runResult.Error != nil {
-			return runResult.Error
-		}
-		if runResult.RowsAffected != 1 {
+		if latestBackup.ID == 0 {
 			return fmt.Errorf("%w: 该任务没有成功的执行记录与当前节点配置匹配，请先创建新的成功备份", ErrRestoreRequiresNewBackup)
 		}
 		if strings.TrimSpace(latestBackup.BackupConfigFingerprint) == "" ||
 			latestBackup.BackupConfigFingerprint != currentFingerprint {
 			return fmt.Errorf("%w: 该任务没有成功的执行记录与当前恢复源、目标、节点配置匹配，请先创建新的成功备份", ErrRestoreRequiresNewBackup)
 		}
-		if legacyMutableRsync {
+		if isLegacyMutableRsyncTask(taskEntity) {
 			if latestBackup.Status != model.TaskRunStatusSuccess ||
 				latestBackup.BackupGenerationState != model.TaskRunGenerationStateVerified ||
 				strings.TrimSpace(latestBackup.BackupCaptureLayout) == "" ||
@@ -1463,6 +1903,17 @@ func (m *Manager) loadRestoreTaskWithProvenance(ctx context.Context, taskID uint
 			taskEntity.RsyncCaptureLayout = latestBackup.BackupCaptureLayout
 			taskEntity.RsyncCaptureRoot = captureRoot
 			taskEntity.RsyncCaptureManifest = latestBackup.BackupCaptureManifest
+			taskEntity.RsyncCaptureGenerationID = latestBackup.ID
+		} else if isLegacyMutableRcloneTask(taskEntity) {
+			state := strings.TrimSpace(latestBackup.BackupGenerationState)
+			if latestBackup.Status != model.TaskRunStatusSuccess ||
+				(state != "" && state != model.TaskRunGenerationStateVerified) ||
+				(state == "" && !allowEmptyRcloneGeneration) {
+				return fmt.Errorf("%w: 最近一次 RClone 写入尝试未证明完成，请先创建新的成功备份", ErrRestoreRequiresNewBackup)
+			}
+			// Rclone has no source-side manifest. Binding the exact durable
+			// run prevents a later mutable write from silently changing the
+			// restore source between validation and reservation.
 			taskEntity.RsyncCaptureGenerationID = latestBackup.ID
 		}
 		return nil
@@ -1837,6 +2288,14 @@ func (m *Manager) reconcileOrphanTaskRuns(taskID uint) (string, error) {
 				}
 				continue
 			}
+			markNoStart := false
+			if run.Status == model.TaskRunStatusPending {
+				var markErr error
+				markNoStart, markErr = rcloneNoStartStateForRunTx(tx, run)
+				if markErr != nil {
+					return errTaskCancelUnavailable
+				}
+			}
 			durationMs := int64(0)
 			if run.StartedAt != nil {
 				durationMs = finishedAt.Sub(run.StartedAt.UTC()).Milliseconds()
@@ -1855,6 +2314,9 @@ func (m *Manager) reconcileOrphanTaskRuns(taskID uint) (string, error) {
 			if run.Status == model.TaskRunStatusPending {
 				updates["started_at"] = nil
 				updates["duration_ms"] = int64(0)
+			}
+			if markNoStart {
+				updates["backup_generation_state"] = model.TaskRunGenerationStateNoStart
 			}
 			updated := tx.Model(&model.TaskRun{}).
 				Where(`id = ? AND task_id = ? AND node_id_snapshot = ? AND status = ? AND
@@ -1916,21 +2378,51 @@ func (m *Manager) cancelTaskRunOwner(taskID uint) bool {
 
 func (m *Manager) cancelPendingTaskRuns(taskID uint, message string) (int64, error) {
 	canceledAt := time.Now().UTC()
-	result := m.db.Model(&model.TaskRun{}).
-		Where(`task_id = ?
-			AND node_id_snapshot > ?
-			AND node_id_snapshot = (SELECT node_id FROM tasks WHERE tasks.id = task_runs.task_id)
-			AND status = ?`, taskID, model.TaskRunNodeIDLegacyUnknown, model.TaskRunStatusPending).
-		Updates(map[string]interface{}{
-			"status":                model.TaskRunStatusCanceled,
-			"started_at":            nil,
-			"finished_at":           &canceledAt,
-			"duration_ms":           int64(0),
-			"last_error":            sanitizeTaskLastError(message),
-			"execution_owner_id":    "",
-			"execution_lease_until": nil,
-		})
-	return result.RowsAffected, result.Error
+	message = sanitizeTaskLastError(message)
+	var canceled int64
+	err := m.db.Transaction(func(tx *gorm.DB) error {
+		var runs []model.TaskRun
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where(`task_id = ?
+				AND node_id_snapshot > ?
+				AND node_id_snapshot = (SELECT node_id FROM tasks WHERE tasks.id = task_runs.task_id)
+				AND status = ?`, taskID, model.TaskRunNodeIDLegacyUnknown, model.TaskRunStatusPending).
+			Find(&runs)
+		if result.Error != nil {
+			return result.Error
+		}
+		for i := range runs {
+			run := &runs[i]
+			markNoStart, markErr := rcloneNoStartStateForRunTx(tx, run)
+			if markErr != nil {
+				return markErr
+			}
+			updates := map[string]interface{}{
+				"status":                model.TaskRunStatusCanceled,
+				"started_at":            nil,
+				"finished_at":           &canceledAt,
+				"duration_ms":           int64(0),
+				"last_error":            message,
+				"execution_owner_id":    "",
+				"execution_lease_until": nil,
+			}
+			if markNoStart {
+				updates["backup_generation_state"] = model.TaskRunGenerationStateNoStart
+			}
+			result = tx.Model(&model.TaskRun{}).
+				Where("id = ? AND status = ?", run.ID, model.TaskRunStatusPending).
+				Updates(updates)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return errTaskRunCASLost
+			}
+			canceled++
+		}
+		return nil
+	})
+	return canceled, err
 }
 
 func (m *Manager) cancelOneDrillRun(
@@ -2361,25 +2853,50 @@ func expiredTaskRunCleanupQuery(tx *gorm.DB, cutoff time.Time) *gorm.DB {
 	return tx.Model(&model.TaskRun{}).
 		Where("task_runs.created_at < ? AND task_runs.status NOT IN ?", cutoff, model.TaskRunActiveStatuses()).
 		Where("NOT EXISTS (SELECT 1 FROM task_run_effects AS effect WHERE effect.task_run_id = task_runs.id AND effect.status <> ?)", model.TaskRunEffectStatusSucceeded).
-		// A generation is evidence only while it is the newest non-empty
-		// ordinary generation for its task and node. An active successor must
-		// not obsolete its predecessor until the successor reaches a terminal
-		// state. This intentionally keeps a newest dirty generation: restore
-		// admission must not fall back to an older verified generation after
-		// an uncertain write.
+		// Unresolved mutable generations are never deletion candidates: they
+		// are the durable operator hold after a crash or unknown remote result.
+		// For known states, an older generation is removable only after a
+		// newer ordinary generation reaches a terminal status.
 		Where(`(
-			TRIM(COALESCE(task_runs.backup_generation_state, '')) = ''
-			OR EXISTS (
-				SELECT 1
-				FROM task_runs AS newer_generation
-				WHERE newer_generation.task_id = task_runs.task_id
-					AND newer_generation.node_id_snapshot = task_runs.node_id_snapshot
-					AND lower(newer_generation.trigger_type) NOT IN ?
-					AND TRIM(COALESCE(newer_generation.backup_generation_state, '')) <> ''
-					AND newer_generation.status IN ?
-					AND newer_generation.id > task_runs.id
+			(
+				TRIM(COALESCE(task_runs.backup_generation_state, '')) = ''
+				AND NOT (
+					EXISTS (
+						SELECT 1
+						FROM tasks AS mutable_rclone_task
+						WHERE mutable_rclone_task.id = task_runs.task_id
+							AND lower(trim(mutable_rclone_task.executor_type)) = 'rclone'
+					)
+					AND NOT EXISTS (
+						SELECT 1
+						FROM task_runs AS newer_rclone
+						WHERE newer_rclone.task_id = task_runs.task_id
+							AND newer_rclone.node_id_snapshot = task_runs.node_id_snapshot
+							AND lower(COALESCE(newer_rclone.trigger_type, '')) NOT IN ?
+							AND TRIM(COALESCE(newer_rclone.backup_generation_state, '')) <> ?
+							AND newer_rclone.id > task_runs.id
+					)
+				)
 			)
-		)`, []string{"restore", "drill"}, model.TaskRunTerminalStatuses()).
+			OR (
+				TRIM(COALESCE(task_runs.backup_generation_state, '')) NOT IN ?
+				AND EXISTS (
+					SELECT 1
+					FROM task_runs AS newer_generation
+					WHERE newer_generation.task_id = task_runs.task_id
+						AND newer_generation.node_id_snapshot = task_runs.node_id_snapshot
+						AND lower(COALESCE(newer_generation.trigger_type, '')) NOT IN ?
+						AND TRIM(COALESCE(newer_generation.backup_generation_state, '')) <> ''
+						AND TRIM(COALESCE(newer_generation.backup_generation_state, '')) <> ?
+						AND newer_generation.status IN ?
+						AND newer_generation.id > task_runs.id
+				)
+			)
+		)`,
+			[]string{"restore", "drill"}, model.TaskRunGenerationStateNoStart,
+			[]string{model.TaskRunGenerationStateWriting, model.TaskRunGenerationStateUnknown},
+			[]string{"restore", "drill"}, model.TaskRunGenerationStateNoStart,
+			model.TaskRunTerminalStatuses()).
 		// A restore run may still need the capture represented by this row.
 		// Keep the source for every durable binding, including terminal
 		// historical restore rows; it becomes eligible once that binding is

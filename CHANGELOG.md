@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+> Release candidate: publication follows required CI and the Release Please workflow.
+
+### Bug Fixes
+
+* Isolate new policy/node Rsync targets and reject conflicting physical ownership. Preserve historical targets; require quiescent, verified copying before node migration cutover. Import compensation captures locked before-images and revalidates ownership/current row images before rollback, refusing to overwrite concurrent changes.
+* Bind legacy Rclone recovery to its current mutable generation. Preserve dirty and unresolved write evidence; unknown completion or Core crashes cannot authorize older data or blind re-execution. Preserve explicit no-start proof before provider invocation, including maintenance/pre-hook/profile failures, and arm writes only after publication preparation.
+* Add administrator-only, audited reconciliation of an explicitly confirmed stopped legacy Rclone write. Reconciliation leaves the task paused and the generation dirty; it never verifies a backup, resumes scheduling, or permits fallback to an older success.
+* Serialize SQLite target ownership without requiring a tasks table in policy-only databases; preserve the transaction writer lock even when the selected table is empty.
+* Recheck task pause state under the database lock at ordinary reservation and execution entry, so stale preflight requests and queued runs cannot restart writes without an explicit resume.
+* Correct executable/password-file ordering for legacy Restic retention, integrity checks, and snapshot indexing. Bound legacy Rclone SSH cancellation without declaring an unknown remote process stopped.
+* Enforce policy concurrency across nodes and Core instances at database-backed reservation and execution entry.
+* Preserve explicit disabled/zero policy values through ordinary creation, template cloning, and configuration import without bypassing encryption hooks.
+
+### Upgrade notes
+
+* Drain and stop all old Core writers before upgrading. Inventory and independently preserve legacy shared backup trees and TaskRun evidence; no directory is automatically relocated, cleared, or certified as migrated.
+* An unresolved legacy Rclone write remains an operator hold, not a retry queue. Establish remote quiescence and preserve salvage data; never erase evidence or overwrite the last copy to regain restore admission.
+* The paired migration version is unchanged. See the backup recovery guide for historical-data and mutable-head limitations.
+
 ## [0.55.9](https://github.com/xiangnan0811/xirang/compare/v0.55.8...v0.55.9) (2026-09-11)
 
 

@@ -73,6 +73,13 @@ func BuildResticPasswordFileArg(passwordFilePath string) string {
 	return "--password-file " + ShellEscape(passwordFilePath)
 }
 
+// BuildResticCommandPrefix returns a binary-first restic command prefix with
+// the password-file option. It deliberately does not add sudo: compatibility
+// callers must preserve their existing privilege policy.
+func BuildResticCommandPrefix(binary, passwordFilePath string) string {
+	return binary + " " + BuildResticPasswordFileArg(passwordFilePath)
+}
+
 // BuildCreateResticPasswordFileCmd 返回在远程节点上创建 restic 密码文件的命令。
 // 密码写入临时文件并设置 chmod 600，确保只有文件所有者可读。
 func BuildCreateResticPasswordFileCmd(passwordFilePath string, access ResticRepositoryAccess) string {

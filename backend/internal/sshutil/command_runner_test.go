@@ -1,6 +1,7 @@
 package sshutil
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -52,6 +53,145 @@ func (*fakeCommandSession) Signal(ssh.Signal) error { return nil }
 func (session *fakeCommandSession) Close() error {
 	session.once.Do(func() { close(session.closed) })
 	return session.closeErr
+}
+
+type startErrorCommandSession struct {
+	*fakeCommandSession
+	startErr error
+}
+
+func (session *startErrorCommandSession) Start(string) error {
+	return session.startErr
+}
+
+type blockedStartCommandSession struct {
+	*fakeCommandSession
+	startEntered  chan struct{}
+	transportDone chan struct{}
+	startErr      error
+	startOnce     sync.Once
+}
+
+func (session *blockedStartCommandSession) Start(string) error {
+	session.startOnce.Do(func() { close(session.startEntered) })
+	<-session.transportDone
+	return session.startErr
+}
+
+type ownedBlockingCommandSession struct {
+	stdout        *blockingCommandReader
+	closed        chan struct{}
+	started       chan struct{}
+	signalEntered chan struct{}
+	signalRelease chan struct{}
+	closeEntered  chan struct{}
+	closeRelease  chan struct{}
+	once          sync.Once
+	signalOnce    sync.Once
+	closeOnce     sync.Once
+}
+
+func newOwnedBlockingCommandSession() *ownedBlockingCommandSession {
+	return &ownedBlockingCommandSession{
+		stdout:        &blockingCommandReader{closed: make(chan struct{})},
+		closed:        make(chan struct{}),
+		started:       make(chan struct{}),
+		signalEntered: make(chan struct{}),
+		signalRelease: make(chan struct{}),
+		closeEntered:  make(chan struct{}),
+		closeRelease:  make(chan struct{}),
+	}
+}
+
+func (session *ownedBlockingCommandSession) StdinPipe() (io.WriteCloser, error) {
+	return &trackingWriteCloser{}, nil
+}
+func (session *ownedBlockingCommandSession) StdoutPipe() (io.Reader, error) {
+	return session.stdout, nil
+}
+func (session *ownedBlockingCommandSession) StderrPipe() (io.Reader, error) {
+	return bytes.NewReader(nil), nil
+}
+func (session *ownedBlockingCommandSession) Start(string) error {
+	close(session.started)
+	return nil
+}
+func (session *ownedBlockingCommandSession) Wait() error {
+	<-session.closed
+	return nil
+}
+func (session *ownedBlockingCommandSession) Signal(ssh.Signal) error {
+	session.signalOnce.Do(func() { close(session.signalEntered) })
+	<-session.signalRelease
+	return nil
+}
+func (session *ownedBlockingCommandSession) Close() error {
+	session.closeOnce.Do(func() { close(session.closeEntered) })
+	<-session.closeRelease
+	return nil
+}
+
+type blockingCommandSession struct {
+	stdout      *blockingCommandReader
+	closed      chan struct{}
+	started     chan struct{}
+	closeOnce   sync.Once
+	signalMu    sync.Mutex
+	signalCount int
+}
+
+func newBlockingCommandSession() *blockingCommandSession {
+	return &blockingCommandSession{
+		stdout:  &blockingCommandReader{closed: make(chan struct{})},
+		closed:  make(chan struct{}),
+		started: make(chan struct{}),
+	}
+}
+
+func (session *blockingCommandSession) StdinPipe() (io.WriteCloser, error) {
+	return &trackingWriteCloser{}, nil
+}
+func (session *blockingCommandSession) StdoutPipe() (io.Reader, error) {
+	return session.stdout, nil
+}
+func (session *blockingCommandSession) StderrPipe() (io.Reader, error) {
+	return bytes.NewReader(nil), nil
+}
+func (session *blockingCommandSession) Start(string) error {
+	close(session.started)
+	return nil
+}
+func (session *blockingCommandSession) Wait() error {
+	<-session.closed
+	return nil
+}
+func (session *blockingCommandSession) Signal(ssh.Signal) error {
+	session.signalMu.Lock()
+	session.signalCount++
+	session.signalMu.Unlock()
+	return nil
+}
+func (session *blockingCommandSession) Close() error {
+	session.closeOnce.Do(func() {
+		close(session.closed)
+		_ = session.stdout.Close()
+	})
+	return nil
+}
+
+type blockingCommandReader struct {
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (reader *blockingCommandReader) Read([]byte) (int, error) {
+	<-reader.closed
+	return 0, io.EOF
+}
+
+func (reader *blockingCommandReader) Close() error {
+	reader.closeOnce.Do(func() { close(reader.closed) })
+	return nil
 }
 
 type trackingWriteCloser struct {
@@ -139,6 +279,192 @@ func TestCommandRunnerQuotesEachOperandAndClosesSecretStdin(t *testing.T) {
 		t.Fatalf("secret leaked into command: %q", session.command)
 	}
 }
+func TestCommandRunnerRawExecutionPreservesCommandBoundary(t *testing.T) {
+	session := newFakeCommandSession()
+	runner := NewCommandRunner(func(context.Context) (CommandSession, error) { return session, nil }, 1)
+	stream, err := runner.OpenRawExecution(context.Background(), RawCommandSpec{
+		Command:        "rclone sync '/source path' 'remote:path' 2>&1",
+		MaxStdoutBytes: 1024,
+	})
+	if err != nil {
+		t.Fatalf("open raw execution: %v", err)
+	}
+	if _, err := io.ReadAll(stream); err != nil {
+		t.Fatalf("read raw execution: %v", err)
+	}
+	if _, err := stream.Join(); err != nil {
+		t.Fatalf("join raw execution: %v", err)
+	}
+	if session.command != "rclone sync '/source path' 'remote:path' 2>&1" {
+		t.Fatalf("raw command=%q", session.command)
+	}
+}
+
+func TestCommandRunnerRawExecutionAllowsCallerBoundLifetimeAndUncappedOutput(t *testing.T) {
+	session := newFakeCommandSession()
+	session.stdout = bytes.Repeat([]byte("x"), 2<<20)
+	runner := NewCommandRunner(func(context.Context) (CommandSession, error) { return session, nil }, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	stream, err := runner.OpenRawExecution(ctx, RawCommandSpec{
+		Command:        "rclone sync source remote 2>&1",
+		MaxRecordBytes: 4 << 20,
+	})
+	if err != nil {
+		t.Fatalf("open raw execution: %v", err)
+	}
+	output, err := io.ReadAll(stream)
+	if err != nil || len(output) != len(session.stdout) {
+		t.Fatalf("read output len=%d err=%v want=%d", len(output), err, len(session.stdout))
+	}
+	if _, err := stream.Join(); err != nil {
+		t.Fatalf("join raw execution: %v", err)
+	}
+}
+
+func TestCommandRunnerRawExecutionClosesOwnedTransportBeforeBlockedStartReturns(t *testing.T) {
+	startErr := errors.New("FAKE_BLOCKED_START_TRANSPORT")
+	session := &blockedStartCommandSession{
+		fakeCommandSession: newFakeCommandSession(),
+		startEntered:       make(chan struct{}),
+		transportDone:      make(chan struct{}),
+		startErr:           startErr,
+	}
+	runner := NewCommandRunner(func(context.Context) (CommandSession, error) { return session, nil }, 1)
+	runner.transportClose = func() {
+		select {
+		case <-session.transportDone:
+		default:
+			close(session.transportDone)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := runner.OpenRawExecution(ctx, RawCommandSpec{Command: "rclone sync source remote 2>&1"})
+		result <- err
+	}()
+	select {
+	case <-session.startEntered:
+	case <-time.After(time.Second):
+		t.Fatal("raw command did not enter blocked start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrCommandStart) || !errors.Is(err, startErr) {
+			t.Fatalf("blocked start error=%v, want ErrCommandStart and cause", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked start did not unblock after owned transport close")
+	}
+	select {
+	case <-session.transportDone:
+	default:
+		t.Fatal("owned transport was not closed")
+	}
+}
+
+func TestCommandRunnerOwnedTransportWatchdogDoesNotWaitForSignalOrSessionClose(t *testing.T) {
+	session := newOwnedBlockingCommandSession()
+	runner := NewCommandRunner(func(context.Context) (CommandSession, error) { return session, nil }, 1)
+	runner.transportClose = func() {
+		session.once.Do(func() {
+			close(session.closed)
+			_ = session.stdout.Close()
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream, err := runner.OpenRawExecution(ctx, RawCommandSpec{
+		Command:        "rclone sync source remote 2>&1",
+		MaxStdoutBytes: 1024,
+	})
+	if err != nil {
+		t.Fatalf("open raw execution: %v", err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stream)
+		for scanner.Scan() {
+		}
+		result <- stream.Cancel()
+	}()
+	select {
+	case <-session.started:
+	case <-time.After(time.Second):
+		t.Fatal("owned command did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, ErrCommandFailed) {
+			t.Fatalf("owned cancellation error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("owned transport watchdog did not join blocked lifecycle")
+	}
+	select {
+	case <-session.signalEntered:
+	case <-time.After(time.Second):
+		t.Fatal("termination signal was not attempted")
+	}
+	select {
+	case <-session.closeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("session close was not attempted asynchronously")
+	}
+	close(session.signalRelease)
+	close(session.closeRelease)
+}
+func TestCommandRunnerRawExecutionCancellationUnblocksScannerAndWait(t *testing.T) {
+	session := newBlockingCommandSession()
+	runner := NewCommandRunner(func(context.Context) (CommandSession, error) { return session, nil }, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream, err := runner.OpenRawExecution(ctx, RawCommandSpec{
+		Command:        "rclone sync source remote 2>&1",
+		MaxStdoutBytes: 1024,
+	})
+	if err != nil {
+		t.Fatalf("open raw execution: %v", err)
+	}
+
+	scannerDone := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stream)
+		for scanner.Scan() {
+		}
+		scannerDone <- stream.Cancel()
+	}()
+	select {
+	case <-session.started:
+	case <-time.After(time.Second):
+		t.Fatal("raw command did not start")
+	}
+	cancel()
+
+	select {
+	case err := <-scannerDone:
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, ErrCommandFailed) {
+			t.Fatalf("cancel result=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("scanner/wait lifecycle did not join after cancellation")
+	}
+	select {
+	case <-session.closed:
+	default:
+		t.Fatal("session transport was not closed")
+	}
+	session.signalMu.Lock()
+	signalCount := session.signalCount
+	session.signalMu.Unlock()
+	if signalCount != 1 {
+		t.Fatalf("termination signal count=%d, want 1", signalCount)
+	}
+}
 
 func TestCommandRunnerCancellationClosesSession(t *testing.T) {
 	session := newFakeCommandSession()
@@ -164,6 +490,20 @@ func TestCommandRunnerCancellationClosesSession(t *testing.T) {
 	case <-session.closed:
 	case <-time.After(time.Second):
 		t.Fatal("session was not closed")
+	}
+}
+func TestCommandRunnerRawStartFailureIsAmbiguous(t *testing.T) {
+	session := &startErrorCommandSession{
+		fakeCommandSession: newFakeCommandSession(),
+		startErr:           errors.New("FAKE_REMOTE_START_TRANSPORT"),
+	}
+	runner := NewCommandRunner(func(context.Context) (CommandSession, error) { return session, nil }, 1)
+	_, err := runner.OpenRawExecution(context.Background(), RawCommandSpec{
+		Command:        "rclone sync source remote 2>&1",
+		MaxStdoutBytes: 1024,
+	})
+	if !errors.Is(err, ErrCommandStart) || !errors.Is(err, session.startErr) || !errors.Is(err, ErrCommandFailed) {
+		t.Fatalf("start error=%v, want ambiguous start and command failure", err)
 	}
 }
 

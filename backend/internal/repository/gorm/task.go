@@ -9,6 +9,7 @@ import (
 
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/policy"
 	"xirang/backend/internal/repository"
 )
 
@@ -104,6 +105,13 @@ func (r *TaskRepository) ExistsLiveByID(ctx context.Context, id uint) (bool, err
 
 func (r *TaskRepository) LockIDsForUpdate(ctx context.Context, ids []uint) error {
 	return LockTaskIDsForUpdate(r.db.WithContext(ctx), ids)
+}
+
+func (r *TaskRepository) LockTargetOwnership(ctx context.Context) error {
+	if r == nil || r.db == nil {
+		return apperr.WrapDBError(gorm.ErrInvalidDB)
+	}
+	return policy.LockTargetOwnershipSpace(r.db.WithContext(ctx))
 }
 
 func (r *TaskRepository) RunInTransaction(ctx context.Context, fn func(ctx context.Context, txRepo repository.TaskRepository) error) error {

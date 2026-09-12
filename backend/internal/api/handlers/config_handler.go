@@ -7,23 +7,25 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/credentialaudit"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/node"
+	policyPkg "xirang/backend/internal/policy"
 	gormrepo "xirang/backend/internal/repository/gorm"
 	"xirang/backend/internal/settings"
 	"xirang/backend/internal/sshutil"
 	taskPkg "xirang/backend/internal/task"
-
-	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
 // ConfigHandler 处理配置导出/导入
@@ -33,6 +35,8 @@ type ConfigHandler struct {
 	transitioner publication.FeatureTransitioner
 	assetProbe   func(operation string)
 }
+
+var errConfigImportTargetConflict = errors.New("config import target ownership conflict")
 
 type configImportData struct {
 	Nodes          []map[string]interface{} `json:"nodes"`
@@ -234,21 +238,49 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 		for _, n := range p.Nodes {
 			nodeNames = append(nodeNames, n.Name)
 		}
-		exportPolicies = append(exportPolicies, gin.H{
-			"name":               p.Name,
-			"description":        p.Description,
-			"source_path":        p.SourcePath,
-			"target_path":        p.TargetPath,
-			"cron_spec":          p.CronSpec,
-			"exclude_rules":      p.ExcludeRules,
-			"bwlimit":            p.BwLimit,
-			"bandwidth_schedule": p.BandwidthSchedule,
-			"retention_days":     p.RetentionDays,
-			"max_concurrent":     p.MaxConcurrent,
-			"enabled":            p.Enabled,
-			"is_template":        p.IsTemplate,
-			"node_names":         nodeNames,
-		})
+		item := gin.H{
+			"name":                  p.Name,
+			"description":           p.Description,
+			"source_path":           p.SourcePath,
+			"target_path":           p.TargetPath,
+			"cron_spec":             p.CronSpec,
+			"exclude_rules":         p.ExcludeRules,
+			"bwlimit":               p.BwLimit,
+			"bandwidth_schedule":    p.BandwidthSchedule,
+			"retention_days":        p.RetentionDays,
+			"retention_mode":        p.RetentionMode,
+			"keep_daily":            p.KeepDaily,
+			"keep_weekly":           p.KeepWeekly,
+			"keep_monthly":          p.KeepMonthly,
+			"keep_yearly":           p.KeepYearly,
+			"max_concurrent":        p.MaxConcurrent,
+			"enabled":               p.Enabled,
+			"verify_enabled":        p.VerifyEnabled,
+			"verify_sample_rate":    p.VerifySampleRate,
+			"max_execution_seconds": p.MaxExecutionSeconds,
+			"max_retries":           p.MaxRetries,
+			"retry_base_seconds":    p.RetryBaseSeconds,
+			"drill_enabled":         p.DrillEnabled,
+			"drill_cron":            p.DrillCron,
+			"drill_restore_path":    p.DrillRestorePath,
+			"drill_auto_cleanup":    p.DrillAutoCleanup,
+			"rpo_minutes":           p.RPOMinutes,
+			"rto_minutes":           p.RTOMinutes,
+			"is_template":           p.IsTemplate,
+			"node_names":            nodeNames,
+		}
+		if includeSecrets {
+			item["pre_hook"] = p.PreHook
+			item["post_hook"] = p.PostHook
+			item["hook_timeout_seconds"] = p.HookTimeoutSeconds
+			item["app_profile"] = p.AppProfile
+			item["app_credential_id"] = p.AppCredentialID
+			item["escalation_policy_id"] = p.EscalationPolicyID
+			item["drill_pre_verify"] = p.DrillPreVerify
+			item["drill_verify"] = p.DrillVerify
+			item["drill_post_verify"] = p.DrillPostVerify
+		}
+		exportPolicies = append(exportPolicies, item)
 	}
 
 	// 构建任务导出数据
@@ -503,6 +535,48 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 	persistImport := func(persistCtx context.Context) error {
 		var rollbackSnapshot *configImportRollbackSnapshot
 		err := h.db.WithContext(persistCtx).Transaction(func(tx *gorm.DB) error {
+			if len(data.Tasks) > 0 {
+				if err := policyPkg.LockTargetOwnershipSpace(tx); err != nil {
+					return fmt.Errorf("锁定导入任务备份目标失败: %w", err)
+				}
+			}
+			// Create repos from tx for task helper functions.
+			importNodeRepo := gormrepo.NewNodeRepository(tx)
+			importPolicyRepo := gormrepo.NewPolicyRepository(tx)
+			importTaskRepo := gormrepo.NewTaskRepository(tx)
+
+			if len(data.Tasks) > 0 {
+				var existingTargetPolicies []model.Policy
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Select("id").
+					Order("id").
+					Find(&existingTargetPolicies).Error; err != nil {
+					return fmt.Errorf("查询现有策略目标归属失败: %w", err)
+				}
+			}
+			targetClaims := make([]policyPkg.TargetOwner, 0)
+			if len(data.Tasks) > 0 {
+				var existingTargetTasks []model.Task
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Select("id", "node_id", "policy_id", "executor_type", "rsync_target").
+					Order("id").Find(&existingTargetTasks).Error; err != nil {
+					return fmt.Errorf("查询现有任务目标归属失败: %w", err)
+				}
+				for _, existingTask := range existingTargetTasks {
+					if !policyPkg.IsCoreLocalTarget(existingTask.ExecutorType, existingTask.RsyncTarget) {
+						continue
+					}
+					claim := policyPkg.TargetOwner{
+						NodeID: existingTask.NodeID,
+						TaskID: existingTask.ID,
+						Target: existingTask.RsyncTarget,
+					}
+					if existingTask.PolicyID != nil {
+						claim.PolicyID = *existingTask.PolicyID
+					}
+					targetClaims = append(targetClaims, claim)
+				}
+			}
 			var captureErr error
 			rollbackSnapshot, captureErr = captureConfigImportRollbackSnapshot(
 				persistCtx, tx, data, settingsPlan, envelope,
@@ -510,10 +584,21 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 			if captureErr != nil {
 				return captureErr
 			}
-			// Create repos from tx for task helper functions.
-			importNodeRepo := gormrepo.NewNodeRepository(tx)
-			importPolicyRepo := gormrepo.NewPolicyRepository(tx)
-			importTaskRepo := gormrepo.NewTaskRepository(tx)
+			validateImportedTarget := func(req taskPkg.CreateTaskInput, taskID uint) error {
+				target := strings.TrimSpace(req.RsyncTarget)
+				if target == "" || !filepath.IsAbs(target) {
+					return nil
+				}
+				owner := policyPkg.TargetOwner{NodeID: req.NodeID, TaskID: taskID, Target: target}
+				if req.PolicyID != nil {
+					owner.PolicyID = *req.PolicyID
+				}
+				if _, err := policyPkg.ValidateTargetOwnership(target, owner, targetClaims); err != nil {
+					return fmt.Errorf("%w: 导入任务 %q 的备份目标存在重叠或归属不明: %w", errConfigImportTargetConflict, req.Name, err)
+				}
+				targetClaims = append(targetClaims, owner)
+				return nil
+			}
 
 			resolvedTaskIDs := make(map[importTaskKey]uint)
 			type taskDependencyUpdate struct {
@@ -706,15 +791,60 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					if ret, ok := policyData["retention_days"].(float64); ok {
 						existing.RetentionDays = int(ret)
 					}
+					if maxC, ok := policyData["max_concurrent"].(float64); ok {
+						existing.MaxConcurrent = int(maxC)
+					}
+					if enabled, ok := policyData["enabled"].(bool); ok {
+						existing.Enabled = enabled
+					}
+					if verify, ok := policyData["verify_enabled"].(bool); ok {
+						existing.VerifyEnabled = verify
+					}
+					if sample, ok := policyData["verify_sample_rate"].(float64); ok {
+						existing.VerifySampleRate = int(sample)
+					}
+					if retries, ok := policyData["max_retries"].(float64); ok {
+						existing.MaxRetries = int(retries)
+					}
+					if retryBase, ok := policyData["retry_base_seconds"].(float64); ok {
+						existing.RetryBaseSeconds = int(retryBase)
+					}
+					if mode, ok := policyData["retention_mode"].(string); ok && mode != "" {
+						existing.RetentionMode = mode
+					}
+					for key, dst := range map[string]*int{
+						"keep_daily": &existing.KeepDaily, "keep_weekly": &existing.KeepWeekly,
+						"keep_monthly": &existing.KeepMonthly, "keep_yearly": &existing.KeepYearly,
+						"rpo_minutes": &existing.RPOMinutes, "rto_minutes": &existing.RTOMinutes,
+						"max_execution_seconds": &existing.MaxExecutionSeconds,
+					} {
+						if value, ok := policyData[key].(float64); ok {
+							*dst = int(value)
+						}
+					}
+					if err := applyImportedPolicyFields(&existing, policyData); err != nil {
+						logger.Module("config").Warn().
+							Str("policy", name).
+							Err(err).
+							Msg("导入策略覆盖时字段校验失败，跳过")
+						continue
+					}
 					if err := tx.Save(&existing).Error; err == nil {
 						importedPolicies++
 					}
 				} else {
 					newPolicy := model.Policy{
-						Name:          name,
-						MaxConcurrent: 1,
-						RetentionDays: 7,
-						Enabled:       false,
+						Name:               name,
+						MaxConcurrent:      1,
+						RetentionDays:      7,
+						RetentionMode:      "simple",
+						Enabled:            false,
+						VerifyEnabled:      true,
+						HookTimeoutSeconds: 300,
+						MaxRetries:         2,
+						RetryBaseSeconds:   30,
+						DrillRestorePath:   "/tmp/xirang-drill",
+						DrillAutoCleanup:   true,
 					}
 					if desc, ok := policyData["description"].(string); ok {
 						newPolicy.Description = desc
@@ -748,12 +878,57 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					if enabled, ok := policyData["enabled"].(bool); ok {
 						newPolicy.Enabled = enabled
 					}
+					if verify, ok := policyData["verify_enabled"].(bool); ok {
+						newPolicy.VerifyEnabled = verify
+					}
+					if sample, ok := policyData["verify_sample_rate"].(float64); ok {
+						newPolicy.VerifySampleRate = int(sample)
+					}
+					if retries, ok := policyData["max_retries"].(float64); ok {
+						newPolicy.MaxRetries = int(retries)
+					}
+					if retryBase, ok := policyData["retry_base_seconds"].(float64); ok {
+						newPolicy.RetryBaseSeconds = int(retryBase)
+					}
+					if mode, ok := policyData["retention_mode"].(string); ok && mode != "" {
+						newPolicy.RetentionMode = mode
+					}
+					for key, dst := range map[string]*int{
+						"keep_daily": &newPolicy.KeepDaily, "keep_weekly": &newPolicy.KeepWeekly,
+						"keep_monthly": &newPolicy.KeepMonthly, "keep_yearly": &newPolicy.KeepYearly,
+						"rpo_minutes": &newPolicy.RPOMinutes, "rto_minutes": &newPolicy.RTOMinutes,
+						"max_execution_seconds": &newPolicy.MaxExecutionSeconds,
+					} {
+						if value, ok := policyData[key].(float64); ok {
+							*dst = int(value)
+						}
+					}
+					if drillEnabled, ok := policyData["drill_enabled"].(bool); ok {
+						newPolicy.DrillEnabled = drillEnabled
+					}
+					if drillCron, ok := policyData["drill_cron"].(string); ok {
+						newPolicy.DrillCron = drillCron
+					}
+					if drillPath, ok := policyData["drill_restore_path"].(string); ok && drillPath != "" {
+						newPolicy.DrillRestorePath = drillPath
+					}
+					if cleanup, ok := policyData["drill_auto_cleanup"].(bool); ok {
+						newPolicy.DrillAutoCleanup = cleanup
+					}
 					if isTmpl, ok := policyData["is_template"].(bool); ok {
 						newPolicy.IsTemplate = isTmpl
 					}
-					if err := tx.Create(&newPolicy).Error; err == nil {
-						importedPolicies++
+					if err := applyImportedPolicyFields(&newPolicy, policyData); err != nil {
+						logger.Module("config").Warn().
+							Str("policy", name).
+							Err(err).
+							Msg("导入新策略时字段校验失败，跳过")
+						continue
 					}
+					if err := importPolicyRepo.CreateWithExplicitValues(persistCtx, &newPolicy, model.PolicyCreateExplicitColumns()...); err != nil {
+						return err
+					}
+					importedPolicies++
 				}
 			}
 
@@ -825,13 +1000,6 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 						Msg("导入任务校验失败，跳过")
 					continue
 				}
-				if err := taskPkg.ValidateTaskRefs(persistCtx, importNodeRepo, importPolicyRepo, importTaskRepo, req, 0); err != nil {
-					logger.Module("config").Warn().
-						Str("task", req.Name).
-						Err(err).
-						Msg("导入任务引用校验失败，跳过")
-					continue
-				}
 				taskKey := buildImportTaskKey(req.Name, req.NodeID)
 
 				var existing model.Task
@@ -841,7 +1009,9 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					if conflict != "overwrite" {
 						continue
 					}
-					existing.PolicyID = req.PolicyID
+					if err := validateImportedTarget(req, existing.ID); err != nil {
+						return err
+					}
 					existing.DependsOnTaskID = nil
 					existing.Command = req.Command
 					existing.RsyncSource = req.RsyncSource
@@ -853,7 +1023,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					// Foreign managed publication configuration is always imported paused.
 					if managedRsyncImport || managedRcloneImport {
 						existing.Enabled = false
-					} else if enabled, ok := taskData["enabled"].(bool); ok {
+					} else if enabled, ok := readImportedBoolField(taskData, "enabled"); ok {
 						existing.Enabled = enabled
 					}
 					if err := tx.Save(&existing).Error; err == nil {
@@ -863,6 +1033,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					continue
 				}
 
+				explicitEnabled, hasExplicitEnabled := readImportedBoolField(taskData, "enabled")
 				newTask := model.Task{
 					Name:           req.Name,
 					NodeID:         req.NodeID,
@@ -880,23 +1051,24 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				if newTask.Source == "" {
 					newTask.Source = "manual"
 				}
-				if !managedRsyncImport && !managedRcloneImport {
-					if enabled, ok := taskData["enabled"].(bool); ok {
-						newTask.Enabled = enabled
-					}
+				if hasExplicitEnabled && !managedRsyncImport && !managedRcloneImport {
+					newTask.Enabled = explicitEnabled
 				}
+				if err := validateImportedTarget(req, 0); err != nil {
+					return err
+				}
+				requestedEnabled := newTask.Enabled
 				if err := tx.Create(&newTask).Error; err != nil {
 					return err
 				}
-				// GORM omits a false bool when the model declares default:true.
-				// Keep the corrective write in this transaction so a foreign
-				// managed task can never become visible as enabled.
-				if managedRsyncImport || managedRcloneImport {
-					if err := tx.Model(&model.Task{}).Where("id = ?", newTask.ID).Update("enabled", false).Error; err != nil {
+				// GORM omits false bools when the model declares default:true.
+				// Restore explicit task values in this transaction while keeping
+				// foreign managed publication tasks paused.
+				if hasExplicitEnabled || managedRsyncImport || managedRcloneImport {
+					if err := tx.Model(&model.Task{}).Where("id = ?", newTask.ID).Update("enabled", requestedEnabled).Error; err != nil {
 						return err
 					}
 				}
-				importedTasks++
 				resolvedTaskIDs[taskKey] = newTask.ID
 				taskDependencyUpdates = append(taskDependencyUpdates, taskDependencyUpdate{taskID: newTask.ID, dependencyKey: dependencyKey, hasDependency: hasDependency})
 			}
@@ -968,6 +1140,10 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 	}
 	importErr := h.persistConfigImport(c.Request.Context(), foundationSettings, persistImport, rollbackJournal.Restore)
 	if importErr != nil {
+		if errors.Is(importErr, errConfigImportTargetConflict) {
+			respondBadRequest(c, "导入任务的备份目标存在重叠或归属不明")
+			return
+		}
 		if errors.Is(importErr, errConfigAssetGraphConflict) {
 			respondConflict(c, "导入的备份资产图与本地身份冲突")
 			return
@@ -1094,6 +1270,135 @@ func validateImportPath(p string) error {
 func readStringField(values map[string]interface{}, key string) string {
 	raw, _ := values[key].(string)
 	return strings.TrimSpace(raw)
+}
+func readImportedBoolField(values map[string]interface{}, key string) (bool, bool) {
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return false, false
+	}
+	switch value := raw.(type) {
+	case bool:
+		return value, true
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+		return parsed, err == nil
+	default:
+		return false, false
+	}
+}
+
+func readImportedIntField(values map[string]interface{}, key string) (int, bool) {
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return 0, false
+	}
+	switch value := raw.(type) {
+	case float64:
+		return int(value), true
+	case json.Number:
+		parsed, err := strconv.Atoi(value.String())
+		return parsed, err == nil
+	case int:
+		return value, true
+	case int64:
+		return int(value), true
+	case uint:
+		return int(value), true
+	default:
+		return 0, false
+	}
+}
+
+// applyImportedPolicyFields copies every policy field emitted by config
+// export, plus encrypted hook fields accepted by older/manual exports. It
+// intentionally leaves omitted fields untouched so model defaults remain
+// meaningful, while explicit false/zero values are retained by the shared
+// policy create boundary.
+func applyImportedPolicyFields(target *model.Policy, data map[string]interface{}) error {
+	if target == nil {
+		return fmt.Errorf("import policy target is required")
+	}
+	for key, dst := range map[string]*string{
+		"description":        &target.Description,
+		"source_path":        &target.SourcePath,
+		"target_path":        &target.TargetPath,
+		"exclude_rules":      &target.ExcludeRules,
+		"bandwidth_schedule": &target.BandwidthSchedule,
+		"retention_mode":     &target.RetentionMode,
+		"drill_cron":         &target.DrillCron,
+		"drill_restore_path": &target.DrillRestorePath,
+		"pre_hook":           &target.PreHook,
+		"post_hook":          &target.PostHook,
+		"drill_pre_verify":   &target.DrillPreVerify,
+		"drill_verify":       &target.DrillVerify,
+		"drill_post_verify":  &target.DrillPostVerify,
+		"app_profile":        &target.AppProfile,
+	} {
+		if value, ok := data[key].(string); ok {
+			*dst = strings.TrimSpace(value)
+		}
+	}
+	if raw, exists := data["cron_spec"]; exists {
+		if value, ok := raw.(string); ok {
+			value = strings.TrimSpace(value)
+			if err := validateCronSpec(value); err != nil {
+				return err
+			}
+			target.CronSpec = value
+		}
+	}
+	for key, dst := range map[string]*int{
+		"bwlimit":               &target.BwLimit,
+		"retention_days":        &target.RetentionDays,
+		"keep_daily":            &target.KeepDaily,
+		"keep_weekly":           &target.KeepWeekly,
+		"keep_monthly":          &target.KeepMonthly,
+		"keep_yearly":           &target.KeepYearly,
+		"max_concurrent":        &target.MaxConcurrent,
+		"verify_sample_rate":    &target.VerifySampleRate,
+		"max_execution_seconds": &target.MaxExecutionSeconds,
+		"max_retries":           &target.MaxRetries,
+		"retry_base_seconds":    &target.RetryBaseSeconds,
+		"rpo_minutes":           &target.RPOMinutes,
+		"rto_minutes":           &target.RTOMinutes,
+		"hook_timeout_seconds":  &target.HookTimeoutSeconds,
+	} {
+		if value, ok := readImportedIntField(data, key); ok {
+			*dst = value
+		}
+	}
+	for key, dst := range map[string]*bool{
+		"enabled":            &target.Enabled,
+		"skip_next":          &target.SkipNext,
+		"verify_enabled":     &target.VerifyEnabled,
+		"is_template":        &target.IsTemplate,
+		"drill_enabled":      &target.DrillEnabled,
+		"drill_auto_cleanup": &target.DrillAutoCleanup,
+	} {
+		if value, ok := data[key].(bool); ok {
+			*dst = value
+		}
+	}
+	for key, dst := range map[string]**uint{
+		"app_credential_id":    &target.AppCredentialID,
+		"escalation_policy_id": &target.EscalationPolicyID,
+		"drill_target_node_id": &target.DrillTargetNodeID,
+	} {
+		if _, exists := data[key]; !exists {
+			continue
+		}
+		raw := data[key]
+		if raw == nil {
+			*dst = nil
+			continue
+		}
+		if value, ok := normalizeUintValue(raw); ok {
+			*dst = &value
+		} else {
+			*dst = nil
+		}
+	}
+	return nil
 }
 
 func canonicalLegacyRsyncImportConfig() string {

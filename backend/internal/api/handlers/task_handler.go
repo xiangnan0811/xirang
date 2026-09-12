@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/credentialaudit"
@@ -555,6 +556,65 @@ func (h *TaskHandler) Cancel(c *gin.Context) {
 		return
 	}
 	respondMessage(c, "canceled")
+}
+
+// ReconcileLegacyRcloneWriteRequest records an explicit operator confirmation;
+// identity and authorization are taken only from the authenticated request.
+type ReconcileLegacyRcloneWriteRequest struct {
+	TaskRunID     uint   `json:"task_run_id" binding:"required"`
+	RemoteStopped bool   `json:"remote_stopped" binding:"required"`
+	Reason        string `json:"reason" binding:"required,max=1024"`
+}
+
+// ReconcileLegacyRcloneWrite acknowledges remote quiescence, not backup validity.
+// @Summary      协调旧版 Rclone 未知写入
+// @Description  管理员确认远端已停止后，将暂停任务的指定 writing/unknown 代次标记为 dirty；不恢复调度、不执行备份、不放行旧代次恢复。
+// @Tags         tasks
+// @Security     Bearer
+// @Accept       json
+// @Produce      json
+// @Param        id    path  int  true  "任务 ID"
+// @Param        body  body  handlers.ReconcileLegacyRcloneWriteRequest  true  "明确的远端停止确认与原因"
+// @Success      200   {object} handlers.Response
+// @Failure      400   {object} handlers.Response
+// @Failure      401   {object} handlers.Response
+// @Failure      403   {object} handlers.Response
+// @Failure      404   {object} handlers.Response
+// @Failure      409   {object} handlers.Response
+// @Failure      500   {object} handlers.Response
+// @Router       /tasks/{id}/reconcile-legacy-rclone [post]
+func (h *TaskHandler) ReconcileLegacyRcloneWrite(c *gin.Context) {
+	if middleware.CurrentRole(c) != "admin" || middleware.CurrentUserID(c) == 0 {
+		respondForbidden(c, "仅管理员可确认远端写入已停止")
+		return
+	}
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	var req ReconcileLegacyRcloneWriteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "需提供执行记录 ID、明确的远端停止确认和不超过 1024 字符的原因")
+		return
+	}
+	err := task.ReconcileLegacyRcloneWrite(c.Request.Context(), h.db, task.LegacyRcloneReconcileRequest{
+		TaskID: id, TaskRunID: req.TaskRunID, RemoteStopped: req.RemoteStopped, Reason: req.Reason,
+		Actor: credentialaudit.FromGin(c, credentialaudit.Event{}),
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, apperr.ErrValidation):
+			respondBadRequest(c, err.Error())
+		case errors.Is(err, apperr.ErrNotFound):
+			respondNotFound(c, "任务或执行记录不存在")
+		case errors.Is(err, apperr.ErrConflict):
+			respondConflict(c, err.Error())
+		default:
+			respondInternalError(c, err)
+		}
+		return
+	}
+	respondMessage(c, "已确认远端停止；任务保持暂停，需完成新备份后才能恢复")
 }
 
 // Pause 暂停任务调度。

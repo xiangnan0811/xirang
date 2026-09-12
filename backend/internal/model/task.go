@@ -34,6 +34,9 @@ const (
 
 	TaskRunGenerationStateDirty    = "dirty"
 	TaskRunGenerationStateVerified = "verified"
+	TaskRunGenerationStateWriting  = "writing"
+	TaskRunGenerationStateUnknown  = "unknown"
+	TaskRunGenerationStateNoStart  = "no_start"
 )
 
 var (

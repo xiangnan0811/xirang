@@ -72,12 +72,19 @@ func (m *Manager) failTaskRunBeforeExecutor(ctx context.Context, runID uint, mes
 		if strings.TrimSpace(run.ExecutionOwnerID) != "" && run.ExecutionOwnerID != m.executionOwnerID {
 			return errTaskRunNotOwner
 		}
+		markNoStart, err := rcloneNoStartStateForRunTx(tx, &run)
+		if err != nil {
+			return err
+		}
 		updates := map[string]interface{}{
 			"status":                model.TaskRunStatusFailed,
 			"finished_at":           &now,
 			"last_error":            sanitizeTaskLastError(message),
 			"execution_owner_id":    "",
 			"execution_lease_until": nil,
+		}
+		if markNoStart && strings.TrimSpace(run.BackupGenerationState) == "" {
+			updates["backup_generation_state"] = model.TaskRunGenerationStateNoStart
 		}
 		if run.Status == model.TaskRunStatusPending {
 			updates["started_at"] = nil
@@ -235,6 +242,7 @@ type terminalizeTaskRunMode uint8
 const (
 	terminalizeTaskRunModeNormal terminalizeTaskRunMode = iota
 	terminalizeTaskRunModeRecovery
+	terminalizeTaskRunModePreProviderFailure
 )
 
 func (m *Manager) terminalizeTaskRunTx(
@@ -337,6 +345,26 @@ func (m *Manager) terminalizeTaskRunTx(
 		// rows with an empty owner remain eligible for compatibility recovery.
 		if strings.TrimSpace(run.ExecutionOwnerID) != "" && run.ExecutionOwnerID != m.executionOwnerID {
 			return errTaskRunNotOwner
+		}
+		markNoStart, markErr := rcloneNoStartStateForRunTx(tx, &run)
+		if markErr != nil {
+			return markErr
+		}
+		if markNoStart && strings.TrimSpace(run.BackupGenerationState) == "" {
+			runUpdates["backup_generation_state"] = model.TaskRunGenerationStateNoStart
+		}
+		if mode == terminalizeTaskRunModePreProviderFailure {
+			if run.Status != model.TaskRunStatusRunning ||
+				strings.TrimSpace(run.ExecutionOwnerID) != m.executionOwnerID {
+				return errTaskRunNotOwner
+			}
+			preProviderNoStart, proofErr := rcloneNoStartStateForPreProviderRunTx(tx, &run)
+			if proofErr != nil {
+				return proofErr
+			}
+			if preProviderNoStart {
+				runUpdates["backup_generation_state"] = model.TaskRunGenerationStateNoStart
+			}
 		}
 		if mode == terminalizeTaskRunModeRecovery && taskStatus == nil {
 			currentStatus := ParseStatus(taskEntity.Status)
@@ -445,6 +473,30 @@ func (m *Manager) terminalizeTaskRunTx(
 	}
 	return nil
 }
+
+// failTaskExecutionBeforeExecutor closes a running ordinary attempt only when
+// the caller has synchronous, same-owner proof that no provider was invoked.
+// The proof and terminal transition share the same row locks/transaction.
+func (m *Manager) failTaskExecutionBeforeExecutor(
+	ctx context.Context,
+	taskID, runID uint,
+	taskUpdates map[string]interface{},
+	runUpdates map[string]interface{},
+) error {
+	failedStatus := StatusFailed
+	return m.terminalizeTaskRunTx(
+		ctx,
+		taskID,
+		runID,
+		[]string{model.TaskRunStatusRunning},
+		&failedStatus,
+		taskUpdates,
+		StatusFailed,
+		runUpdates,
+		terminalizeTaskRunModePreProviderFailure,
+	)
+}
+
 func buildTerminalEffects(tx *gorm.DB, taskEntity model.Task, run model.TaskRun, runID uint, runStatus TaskStatus) ([]taskRunTerminalEffect, error) {
 	ordinary := run.TriggerType != "restore" && run.TriggerType != "drill"
 	result := make([]taskRunTerminalEffect, 0, 5)
@@ -993,6 +1045,10 @@ func (m *Manager) executeRetryTaskRunEffect(ctx context.Context, effect model.Ta
 			return errTaskRunCASLost
 		}
 
+		policySnapshot, err := lockTaskPolicyForFingerprint(tx, payload.TaskID)
+		if err != nil {
+			return err
+		}
 		var taskEntity model.Task
 		taskResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("id = ?", payload.TaskID).Limit(1).Find(&taskEntity)
@@ -1002,15 +1058,11 @@ func (m *Manager) executeRetryTaskRunEffect(ctx context.Context, effect model.Ta
 		if taskResult.RowsAffected != 1 {
 			return markTaskRunEffectSucceededTx(tx, currentEffect.ID, m.executionOwnerID)
 		}
-		policyDisabled := false
-		if taskEntity.PolicyID != nil {
-			var policyEntity model.Policy
-			policyResult := tx.Where("id = ?", *taskEntity.PolicyID).Limit(1).Find(&policyEntity)
-			if policyResult.Error != nil {
-				return policyResult.Error
-			}
-			policyDisabled = policyResult.RowsAffected == 1 && !policyEntity.Enabled
+		if !taskPolicySnapshotMatches(taskEntity, policySnapshot) {
+			return errTaskPolicyChanged
 		}
+		taskEntity.Policy = policySnapshot
+		policyDisabled := policySnapshot != nil && !policySnapshot.Enabled
 		// A pause, archive, policy disable, or a newer attempt supersedes a
 		// retry reservation. Resolve that reservation durably instead of
 		// reviving stale work.
@@ -1072,6 +1124,12 @@ func (m *Manager) executeRetryTaskRunEffect(ctx context.Context, effect model.Ta
 		}
 
 		chainRunID := payload.ChainRunID
+		if err := validateTaskTargetOwnershipTx(tx, &taskEntity); err != nil {
+			return err
+		}
+		if err := reservePolicySlot(tx, policySnapshot); err != nil {
+			return err
+		}
 		if chainRunID == "" {
 			var predecessor model.TaskRun
 			if err := tx.Select("chain_run_id").First(&predecessor, payload.PredecessorRunID).Error; err != nil &&

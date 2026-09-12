@@ -37,6 +37,17 @@ type publicationFinalization struct {
 func shouldRunLegacyVerification(result providerRunResult, policy *model.Policy) bool {
 	return !result.Managed && policy != nil && policy.VerifyEnabled
 }
+
+func providerResultFromExecutor(exitCode int, err error) providerRunResult {
+	result := providerRunResult{ExitCode: exitCode, Err: err}
+	var unknownErr *executor.RemoteExecutionUnknownError
+	if errors.As(err, &unknownErr) {
+		// The remote may have accepted or partially applied the write. Never
+		// retry automatically or clear the mutable-generation latch.
+		result.SuppressRetry = true
+	}
+	return result
+}
 func newPublicationCleanupContext(parent context.Context) (context.Context, context.CancelFunc) {
 	if parent == nil {
 		parent = context.Background()
@@ -44,13 +55,41 @@ func newPublicationCleanupContext(parent context.Context) (context.Context, cont
 	return context.WithTimeout(context.WithoutCancel(parent), sshutil.CommandExecutionJoinTimeout)
 }
 
+func invokeBeforeProvider(ctx context.Context, beforeExecutor func() error) error {
+	if beforeExecutor == nil {
+		return nil
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return &executor.NoProcessStartError{Err: err}
+		}
+	}
+	if err := beforeExecutor(); err != nil {
+		return err
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return &executor.NoProcessStartError{Err: err}
+		}
+	}
+	return nil
+}
+
 // executeProvider keeps TaskRun transfer truth separate from asynchronous
 // recovery-point publication. A successful evidence transfer returns as soon
 // as its exact commit fact is durable; manifest work remains with the worker.
-func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, runID uint, reason string, chainRunID string, logf executor.LogFunc, progressf executor.ProgressFunc) (providerResult providerRunResult) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+// beforeExecutor runs after publication admission/preconditions and immediately
+// before the provider's mutating invocation.
+func (m *Manager) executeProvider(
+	ctx context.Context,
+	taskEntity model.Task,
+	runID uint,
+	reason string,
+	chainRunID string,
+	beforeExecutor func() error,
+	logf executor.LogFunc,
+	progressf executor.ProgressFunc,
+) (providerResult providerRunResult) {
 	if m == nil || m.executorFactory == nil {
 		return providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: task executor factory unavailable", backupasset.ErrInvalidState), ExecutorNotInvoked: true}
 	}
@@ -60,8 +99,11 @@ func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, ru
 	}
 	providerKind := strings.ToLower(strings.TrimSpace(taskEntity.ExecutorType))
 	if m.publicationCoordinator == nil || (providerKind != "restic" && providerKind != "rsync" && providerKind != "rclone") {
+		if beforeErr := invokeBeforeProvider(ctx, beforeExecutor); beforeErr != nil {
+			return providerRunResult{ExitCode: -1, Err: beforeErr, ExecutorNotInvoked: true}
+		}
 		exitCode, err := exec.Run(ctx, taskEntity, logf, progressf)
-		return providerRunResult{ExitCode: exitCode, Err: err}
+		return providerResultFromExecutor(exitCode, err)
 	}
 
 	audit, err := taskPublicationAuditContext(runID)
@@ -110,6 +152,17 @@ func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, ru
 		return rejectPrecondition(providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: publication execution context unavailable", backupasset.ErrInvalidState), Managed: true})
 	}
 	if session.Mode() == publication.ModeCompatibility {
+		if beforeErr := invokeBeforeProvider(commandCtx, beforeExecutor); beforeErr != nil {
+			cleanupCtx, cleanupCancel := newPublicationCleanupContext(ctx)
+			completeErr := session.CompleteCompatibility(cleanupCtx)
+			cleanupCancel()
+			publicationFinalized = completeErr == nil
+			result := providerRunResult{ExitCode: -1, Err: beforeErr, Managed: true, ExecutorNotInvoked: true}
+			if completeErr != nil {
+				result.Err = errors.Join(result.Err, completeErr)
+			}
+			return result
+		}
 		exitCode, runErr := exec.Run(commandCtx, taskEntity, logf, progressf)
 		cleanupCtx, cleanupCancel := newPublicationCleanupContext(ctx)
 		completeErr := session.CompleteCompatibility(cleanupCtx)
@@ -119,9 +172,9 @@ func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, ru
 			if completeErr != nil {
 				runErr = errors.Join(runErr, completeErr)
 			}
-			return providerRunResult{ExitCode: exitCode, Err: runErr}
+			return providerResultFromExecutor(exitCode, runErr)
 		}
-		return providerRunResult{ExitCode: exitCode, Err: completeErr}
+		return providerResultFromExecutor(exitCode, completeErr)
 	}
 	if session.Mode() != publication.ModeEvidence || session.Attempt() == nil {
 		return rejectPrecondition(providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: invalid publication evidence session", backupasset.ErrInvalidState), Managed: true})
@@ -179,6 +232,9 @@ func (m *Manager) executeProvider(ctx context.Context, taskEntity model.Task, ru
 		recoveryPointID = rcloneAttempt.RecoveryPointID
 	default:
 		return rejectPrecondition(providerRunResult{ExitCode: -1, Err: fmt.Errorf("%w: unsupported managed publication provider", backupasset.ErrInvalidState), Managed: true})
+	}
+	if beforeErr := invokeBeforeProvider(commandCtx, beforeExecutor); beforeErr != nil {
+		return rejectPrecondition(providerRunResult{ExitCode: -1, Err: beforeErr, Managed: true})
 	}
 	result, runErr := publicationExecutor.RunWithPublication(commandCtx, request, logf, progressf)
 

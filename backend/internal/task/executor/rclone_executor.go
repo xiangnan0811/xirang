@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -50,20 +51,20 @@ func (e *RcloneExecutor) rcloneBinary() string {
 func (e *RcloneExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
 	cfg, err := parseRcloneConfig(task.ExecutorConfig)
 	if err != nil {
-		return -1, fmt.Errorf("解析 rclone 配置失败: %w", err)
+		return -1, markNoProcessStart(fmt.Errorf("解析 rclone 配置失败: %w", err))
 	}
 	if err := rejectManagedRcloneLegacyExecution(cfg); err != nil {
-		return -1, err
+		return -1, markNoProcessStart(err)
 	}
 	source := strings.TrimSpace(task.RsyncSource)
 	remote := strings.TrimSpace(task.RsyncTarget)
 	if source == "" || remote == "" {
-		return -1, fmt.Errorf("rclone 同步任务缺少源路径或目标 remote")
+		return -1, markNoProcessStart(fmt.Errorf("rclone 同步任务缺少源路径或目标 remote"))
 	}
 
 	client, err := DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeTaskBackup)
 	if err != nil {
-		return -1, fmt.Errorf("SSH 连接失败: %w", err)
+		return -1, markNoProcessStart(fmt.Errorf("SSH 连接失败: %w", err))
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
@@ -71,7 +72,7 @@ func (e *RcloneExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 
 	// 检查 rclone 是否安装
 	if _, err := RunSSHCommandOutput(ctx, client, "which "+bin+" 2>/dev/null || command -v "+bin+" 2>/dev/null"); err != nil {
-		return -1, fmt.Errorf("目标节点未安装 rclone，请先在节点上安装")
+		return -1, markNoProcessStart(fmt.Errorf("目标节点未安装 rclone，请先在节点上安装"))
 	}
 
 	syncCmd := buildRcloneSyncCmd(bin, source, remote, cfg, false, NeedsSudo(task.Node))
@@ -94,20 +95,20 @@ func (e *RcloneExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 func (e *RcloneExecutor) RunRestore(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
 	cfg, err := parseRcloneConfig(task.ExecutorConfig)
 	if err != nil {
-		return -1, fmt.Errorf("解析 rclone 配置失败: %w", err)
+		return -1, markNoProcessStart(fmt.Errorf("解析 rclone 配置失败: %w", err))
 	}
 	if err := rejectManagedRcloneLegacyExecution(cfg); err != nil {
-		return -1, err
+		return -1, markNoProcessStart(err)
 	}
 	remote := strings.TrimSpace(task.RsyncSource)
 	targetPath := strings.TrimSpace(task.RsyncTarget)
 	if remote == "" || targetPath == "" {
-		return -1, fmt.Errorf("rclone 恢复任务缺少 remote 或目标路径")
+		return -1, markNoProcessStart(fmt.Errorf("rclone 恢复任务缺少 remote 或目标路径"))
 	}
 
 	client, err := DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeTaskRestore)
 	if err != nil {
-		return -1, fmt.Errorf("SSH 连接失败: %w", err)
+		return -1, markNoProcessStart(fmt.Errorf("SSH 连接失败: %w", err))
 	}
 	defer client.Close() //nolint:errcheck // close error not actionable on deferred cleanup
 
@@ -126,34 +127,28 @@ func (e *RcloneExecutor) RunRestore(ctx context.Context, task model.Task, logf L
 	return 0, nil
 }
 
-// streamSSHCommand 通过 SSH 流式执行 rclone 命令，解析进度。
+// streamSSHCommand 通过 SSH 流式执行 rclone 命令，解析进度。Raw command
+// execution is retained for the compatibility shell redirection, while the
+// shared SSH runner owns cancellation and session lifecycle.
 func (e *RcloneExecutor) streamSSHCommand(ctx context.Context, client *ssh.Client, cmd string, logf LogFunc, progressf ProgressFunc) (int, error) {
-	session, err := client.NewSession()
+	runner := sshutil.NewSSHCommandRunnerWithTransportClose(client, 1)
+	stream, err := runner.OpenRawExecution(ctx, sshutil.RawCommandSpec{
+		Command: cmd,
+		// The caller controls lifetime; do not impose a shorter backup limit.
+		// Stream parsing bounds each record and stderr remains capped.
+		MaxStdoutBytes: 0,
+		MaxStderrBytes: 64 << 10,
+		MaxRecordBytes: 1 << 20,
+	})
 	if err != nil {
-		return -1, fmt.Errorf("创建 SSH 会话失败: %w", err)
-	}
-	defer session.Close() //nolint:errcheck
-
-	stdout, err := session.StdoutPipe()
-	if err != nil {
-		return -1, err
-	}
-
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = session.Signal(ssh.SIGTERM)
-		case <-done:
+		if errors.Is(err, sshutil.ErrCommandStart) {
+			return -1, markRemoteExecutionUnknown(err)
 		}
-	}()
-
-	if err := session.Start(cmd); err != nil {
-		return -1, fmt.Errorf("启动远程命令失败: %w", err)
+		return -1, markNoProcessStart(err)
 	}
 
-	scanner := bufio.NewScanner(stdout)
+	scanner := bufio.NewScanner(stream)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -166,18 +161,22 @@ func (e *RcloneExecutor) streamSSHCommand(ctx context.Context, client *ssh.Clien
 			}
 		}
 	}
-
-	waitErr := session.Wait()
-	if ctx.Err() != nil {
-		return -1, ctx.Err()
-	}
-	if waitErr != nil {
-		if exitErr, ok := waitErr.(*ssh.ExitError); ok {
-			return exitErr.ExitStatus(), waitErr
+	if scanErr := scanner.Err(); scanErr != nil {
+		cancelErr := stream.Cancel()
+		if cancelErr != nil && !errors.Is(cancelErr, sshutil.ErrCommandFailed) {
+			scanErr = errors.Join(scanErr, cancelErr)
 		}
-		return -1, waitErr
+		return -1, markRemoteExecutionUnknown(scanErr)
 	}
-	return 0, nil
+
+	completion, err := stream.Join()
+	if err != nil {
+		return -1, markRemoteExecutionUnknown(err)
+	}
+	if !completion.ExitCodeKnown {
+		return -1, markRemoteExecutionUnknown(fmt.Errorf("remote command completed without an exit status"))
+	}
+	return completion.ExitCode, nil
 }
 
 func parseRcloneProgressLine(line string) (ProgressSample, bool) {

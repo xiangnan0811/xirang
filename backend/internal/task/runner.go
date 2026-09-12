@@ -166,6 +166,9 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 	if reason == "manual" && taskEntity.DependsOnTaskID != nil && *taskEntity.DependsOnTaskID > 0 {
 		return 0, fmt.Errorf("该任务有前置依赖（任务 ID: %d），请从链头节点触发", *taskEntity.DependsOnTaskID)
 	}
+	if m.beforeTaskRunReservation != nil {
+		m.beforeTaskRunReservation()
+	}
 	// Cancellation ownership precedes durable reservation. A concurrent Cancel
 	// can therefore abort the caller-owned reservation transaction instead of
 	// leaving a pending TaskRun whose goroutine has not registered yet.
@@ -252,16 +255,27 @@ func (m *Manager) populateRsyncBinary(task *model.Task) {
 	task.RsyncBinary = provider.RsyncBinary()
 }
 
-func (m *Manager) clearLegacyRsyncGenerationAfterNoStart(taskID, runID uint) error {
+func (m *Manager) clearLegacyMutableGenerationAfterNoStart(taskID, runID uint, markNoStart bool) error {
+	noStartState := ""
+	generationStates := []string{
+		"",
+		model.TaskRunGenerationStateDirty,
+		model.TaskRunGenerationStateWriting,
+		model.TaskRunGenerationStateUnknown,
+	}
+	if markNoStart {
+		noStartState = model.TaskRunGenerationStateNoStart
+		generationStates = append(generationStates, model.TaskRunGenerationStateNoStart)
+	}
 	result := m.db.Model(&model.TaskRun{}).
-		Where("id = ? AND task_id = ? AND status = ? AND backup_generation_state = ?",
-			runID, taskID, model.TaskRunStatusRunning, model.TaskRunGenerationStateDirty).
-		Update("backup_generation_state", "")
+		Where("id = ? AND task_id = ? AND status = ? AND backup_generation_state IN ?",
+			runID, taskID, model.TaskRunStatusRunning, generationStates).
+		Update("backup_generation_state", noStartState)
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected != 1 {
-		return fmt.Errorf("rsync 无启动代际状态未能清除")
+		return fmt.Errorf("mutable writer no-start generation state could not be cleared")
 	}
 	return nil
 }
@@ -482,6 +496,20 @@ func (m *Manager) runTaskWithContext(
 			m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "定时任务在执行入口被暂停或跳过", taskEntity.Status)
 			return
 		}
+		if errors.Is(err, errTaskPaused) {
+			runCompleted = true
+			m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "任务已暂停，排队执行已取消", taskEntity.Status)
+			return
+		}
+		if errors.Is(err, ErrPolicyConcurrencyLimit) {
+			if cancelErr := m.cancelTaskRunBeforeExecutor(taskID, runID, "策略并发上限，拒绝本次执行"); cancelErr != nil {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(cancelErr).Msg("保存策略并发拒绝状态失败")
+			} else {
+				runCompleted = true
+				m.logDispatcher.Dispatch(taskID, runIDPtr, "warn", "策略并发上限，跳过本次执行", taskEntity.Status)
+			}
+			return
+		}
 		if execCtx.Err() != nil || errors.Is(err, context.Canceled) {
 			if cancelErr := m.cancelTaskRunBeforeExecutor(taskID, runID, "任务已取消"); cancelErr != nil {
 				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(cancelErr).Msg("保留执行入口取消状态失败")
@@ -532,10 +560,9 @@ func (m *Manager) runTaskWithContext(
 		errorMsg := sanitizeTaskLastError(fmt.Sprintf("渲染应用感知 hook 失败: %v", err))
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, taskEntity.Status)
 		failedAt := time.Now().UTC()
-		failedStatus := StatusFailed
-		if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &failedStatus,
+		if terminalErr := m.failTaskExecutionBeforeExecutor(runCtx, taskID, runID,
 			map[string]interface{}{"next_run_at": nextCronRun(taskEntity.CronSpec), "last_error": errorMsg},
-			StatusFailed, map[string]interface{}{"finished_at": &failedAt, "last_error": errorMsg}); terminalErr != nil {
+			map[string]interface{}{"finished_at": &failedAt, "last_error": errorMsg}); terminalErr != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("app-profile hook render terminal persistence failed")
 			return
 		}
@@ -573,10 +600,9 @@ func (m *Manager) runTaskWithContext(
 			errorMsg := sanitizeTaskLastError(fmt.Sprintf("pre-hook 执行失败: %v", hookErr))
 			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, taskEntity.Status)
 			failedAt := time.Now().UTC()
-			failedStatus := StatusFailed
-			if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &failedStatus,
+			if terminalErr := m.failTaskExecutionBeforeExecutor(runCtx, taskID, runID,
 				map[string]interface{}{"next_run_at": nextCronRun(taskEntity.CronSpec), "last_error": errorMsg},
-				StatusFailed, map[string]interface{}{"finished_at": &failedAt, "last_error": errorMsg}); terminalErr != nil {
+				map[string]interface{}{"finished_at": &failedAt, "last_error": errorMsg}); terminalErr != nil {
 				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("pre-hook terminal persistence failed")
 				return
 			}
@@ -606,6 +632,7 @@ func (m *Manager) runTaskWithContext(
 	var captureLayout string
 	var captureRoot string
 	m.populateRsyncBinary(&taskEntity)
+	mutableWriterAttempted := isLegacyMutableTask(taskEntity)
 	captureAttempted := isLegacyMutableRsyncTask(taskEntity)
 	captureError := ""
 	if captureAttempted {
@@ -641,27 +668,49 @@ func (m *Manager) runTaskWithContext(
 			}
 			return
 		}
-		dirtyResult := m.db.Model(&model.TaskRun{}).
-			Where("id = ? AND task_id = ? AND status = ?", runID, taskID, model.TaskRunStatusRunning).
-			Update("backup_generation_state", model.TaskRunGenerationStateDirty)
-		if dirtyResult.Error != nil || dirtyResult.RowsAffected != 1 {
-			errorMsg := "Rsync 写入尝试状态持久化失败"
-			failedStatus := StatusFailed
-			finishedAt := time.Now().UTC()
-			_ = m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &failedStatus,
-				map[string]interface{}{"next_run_at": nextCronRun(taskEntity.CronSpec), "last_error": errorMsg},
-				StatusFailed, map[string]interface{}{"finished_at": &finishedAt, "last_error": errorMsg})
-			taskEntity.Status = string(StatusFailed)
-			taskEntity.LastError = errorMsg
+	}
+	if mutableWriterAttempted && !captureAttempted && (execCtx.Err() != nil || runCtx.Err() != nil) {
+		if cancelErr := m.cancelTaskExecutionBeforeExecutor(
+			runID,
+			taskID,
+			taskEntity.NodeID,
+			&previousTaskOutcome,
+			"任务已取消",
+		); cancelErr != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(cancelErr).Msg("Rclone 写入前取消失败")
+		} else {
 			runCompleted = true
-			return
+		}
+		return
+	}
+	armMutableGeneration := func() error {
+		if err := execCtx.Err(); err != nil {
+			return &executor.NoProcessStartError{Err: err}
+		}
+		if !mutableWriterAttempted {
+			return nil
+		}
+		generationState := model.TaskRunGenerationStateDirty
+		if isLegacyMutableRcloneTask(taskEntity) {
+			// Rclone has no source-side capture. "writing" is the durable
+			// pre-provider hold: a crash or unknown remote outcome must keep
+			// subsequent cron/manual writes out until an operator reconciles
+			// the mutable remote.
+			generationState = model.TaskRunGenerationStateWriting
+		}
+		armResult := m.db.Model(&model.TaskRun{}).
+			Where("id = ? AND task_id = ? AND status = ?", runID, taskID, model.TaskRunStatusRunning).
+			Update("backup_generation_state", generationState)
+		if armResult.Error != nil || armResult.RowsAffected != 1 {
+			return errors.New("mutable writer generation arm persistence failed")
 		}
 		if m.afterLegacyRsyncGenerationArm != nil {
 			m.afterLegacyRsyncGenerationArm()
 		}
+		return nil
 	}
 	runStartedAt := now
-	providerResult := m.executeProvider(execCtx, taskEntity, runID, reason, chainRunID, func(level, message string) {
+	providerResult := m.executeProvider(execCtx, taskEntity, runID, reason, chainRunID, armMutableGeneration, func(level, message string) {
 		m.logDispatcher.Dispatch(taskID, runIDPtr, level, message, string(StatusRunning))
 	}, func(sample executor.ProgressSample) {
 		m.sampleWriter.Write(taskID, taskEntity.NodeID, runStartedAt, sample)
@@ -671,17 +720,16 @@ func (m *Manager) runTaskWithContext(
 	})
 	exitCode, err := providerResult.ExitCode, providerResult.Err
 	suppressRetry := providerResult.SuppressRetry
+	var remoteUnknownErr *executor.RemoteExecutionUnknownError
+	remoteExecutionUnknown := errors.As(err, &remoteUnknownErr)
+	// ExecutorNotInvoked and NoProcessStartError are explicit pre-start
+	// evidence. They are the only outcomes allowed to clear the pre-provider
+	// generation hold, even when another result flag suppresses retries.
+	noProcessStart := providerResult.ExecutorNotInvoked || isNoProcessStartGenerationError(err)
 
-	if captureAttempted {
-		noProcessStart := providerResult.ExecutorNotInvoked
-		if !noProcessStart && !providerResult.Managed {
-			var noStartErr *executor.NoProcessStartError
-			noProcessStart = errors.As(err, &noStartErr)
-		}
-		if noProcessStart {
-			if clearErr := m.clearLegacyRsyncGenerationAfterNoStart(taskID, runID); clearErr != nil {
-				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(clearErr).Msg("Rsync 无启动代际闩锁清除失败")
-			}
+	if mutableWriterAttempted && noProcessStart {
+		if clearErr := m.clearLegacyMutableGenerationAfterNoStart(taskID, runID, isLegacyMutableRcloneTask(taskEntity)); clearErr != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(clearErr).Msg("mutable writer no-start generation latch clear failed")
 		}
 	}
 	wasTimeout := !suppressRetry && (errors.Is(err, context.DeadlineExceeded) || errors.Is(execCtx.Err(), context.DeadlineExceeded))
@@ -841,15 +889,21 @@ func (m *Manager) runTaskWithContext(
 				warningStatus := StatusWarning
 				finishedAt := time.Now().UTC()
 				duration := finishedAt.Sub(now).Milliseconds()
+				warningRunUpdates := map[string]interface{}{
+					"finished_at": &finishedAt, "duration_ms": duration,
+					"verify_status": result.Status, "last_error": verifyMessage, "progress": 100,
+				}
+				if isLegacyMutableRcloneTask(taskEntity) {
+					// The remote command completed, but verification did not:
+					// preserve a known-dirty hold rather than claiming success.
+					warningRunUpdates["backup_generation_state"] = model.TaskRunGenerationStateDirty
+				}
 				if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &warningStatus,
 					map[string]interface{}{
 						"retry_count": 0, "next_run_at": nextCronRun(taskEntity.CronSpec),
 						"last_error": verifyMessage, "verify_status": result.Status,
 					},
-					StatusWarning, map[string]interface{}{
-						"finished_at": &finishedAt, "duration_ms": duration,
-						"verify_status": result.Status, "last_error": verifyMessage, "progress": 100,
-					}); terminalErr != nil {
+					StatusWarning, warningRunUpdates); terminalErr != nil {
 					logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("verify warning terminal persistence failed")
 					return
 				}
@@ -879,6 +933,9 @@ func (m *Manager) runTaskWithContext(
 			successRunUpdates["backup_capture_layout"] = captureLayout
 			successRunUpdates["backup_capture_root"] = captureRoot
 			successRunUpdates["backup_capture_manifest"] = captureManifest
+			successRunUpdates["backup_generation_state"] = model.TaskRunGenerationStateVerified
+		}
+		if mutableWriterAttempted && !captureAttempted {
 			successRunUpdates["backup_generation_state"] = model.TaskRunGenerationStateVerified
 		}
 		if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &successStatus,
@@ -964,6 +1021,18 @@ func (m *Manager) runTaskWithContext(
 	if !shouldRetry {
 		finalStatus = StatusFailed
 	}
+	runUpdates := map[string]interface{}{
+		"finished_at": &failedAt, "duration_ms": failDuration, "last_error": errorMsg,
+	}
+	if isLegacyMutableRcloneTask(taskEntity) && !noProcessStart {
+		if remoteExecutionUnknown {
+			runUpdates["backup_generation_state"] = model.TaskRunGenerationStateUnknown
+		} else {
+			// A known terminal failure proves only that this attempt failed;
+			// it does not prove the previous verified remote generation.
+			runUpdates["backup_generation_state"] = model.TaskRunGenerationStateDirty
+		}
+	}
 	if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &finalStatus,
 		map[string]interface{}{
 			"retry_count": retryCount,
@@ -975,7 +1044,7 @@ func (m *Manager) runTaskWithContext(
 			}(),
 			"last_error": errorMsg,
 		},
-		StatusFailed, map[string]interface{}{"finished_at": &failedAt, "duration_ms": failDuration, "last_error": errorMsg}); terminalErr != nil {
+		StatusFailed, runUpdates); terminalErr != nil {
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("保存任务失败终态失败: %v", terminalErr), taskEntity.Status)
 		return
 	}
@@ -1154,7 +1223,7 @@ func (m *Manager) runRestoreTaskWithContext(
 	// Legacy Rsync performs source staging and its remote target readiness
 	// check inside RunRestore. Running the readiness check here would mutate a
 	// node before the captured Core source has been verified.
-	if !isLegacyMutableRsyncTask(restoreTask) {
+	if !isLegacyMutableTask(restoreTask) {
 		precheckTarget := restoreTask.RsyncTarget
 
 		// 恢复前检查：在远程节点上检查源路径（备份）和目标路径
@@ -1575,19 +1644,27 @@ func (m *Manager) cancelTaskRunBeforeExecutor(taskID, runID uint, message string
 			run.ExecutionOwnerID != m.executionOwnerID {
 			return errTaskRunNotOwner
 		}
+		markNoStart, err := rcloneNoStartStateForRunTx(tx, &run)
+		if err != nil {
+			return err
+		}
+		runUpdates := map[string]interface{}{
+			"status":                model.TaskRunStatusCanceled,
+			"started_at":            nil,
+			"finished_at":           &finishedAt,
+			"duration_ms":           int64(0),
+			"last_error":            sanitizeTaskLastError(message),
+			"execution_owner_id":    "",
+			"execution_lease_until": nil,
+		}
+		if markNoStart && strings.TrimSpace(run.BackupGenerationState) == "" {
+			runUpdates["backup_generation_state"] = model.TaskRunGenerationStateNoStart
+		}
 		result := tx.Model(&model.TaskRun{}).
 			Where(`id = ? AND task_id = ? AND status = ? AND
 				(execution_owner_id = '' OR execution_owner_id = ?)`,
 				runID, taskID, model.TaskRunStatusPending, m.executionOwnerID).
-			Updates(map[string]interface{}{
-				"status":                model.TaskRunStatusCanceled,
-				"started_at":            nil,
-				"finished_at":           &finishedAt,
-				"duration_ms":           int64(0),
-				"last_error":            sanitizeTaskLastError(message),
-				"execution_owner_id":    "",
-				"execution_lease_until": nil,
-			})
+			Updates(runUpdates)
 		if result.Error != nil {
 			return result.Error
 		}

@@ -1309,6 +1309,10 @@ func (r *archiveRaceTaskRepository) LockIDsForUpdate(ctx context.Context, ids []
 	return r.inner.LockIDsForUpdate(ctx, ids)
 }
 
+func (r *archiveRaceTaskRepository) LockTargetOwnership(ctx context.Context) error {
+	return r.inner.LockTargetOwnership(ctx)
+}
+
 func (r *archiveRaceTaskRepository) RunInTransaction(ctx context.Context, fn func(context.Context, repository.TaskRepository) error) error {
 	err := r.inner.RunInTransaction(ctx, fn)
 	if err == nil && r.afterUpdate != nil {

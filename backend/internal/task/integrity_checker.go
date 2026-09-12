@@ -80,11 +80,9 @@ func (m *Manager) checkResticIntegrity(policy model.Policy, task model.Task) {
 		cleanupCmd := executor.BuildCleanupResticPasswordFileCmd(pwFilePath)
 		_, _ = executor.RunSSHCommandOutput(ctx, client, cleanupCmd)
 	}()
-	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
 
 	resticBin := util.GetEnvOrDefault("RESTIC_BINARY", "restic")
-	cmd := fmt.Sprintf("%s %s check -r %s --json 2>&1",
-		pwFileArg, resticBin, shellEscape(repo))
+	cmd := buildLegacyResticIntegrityCommand(resticBin, pwFilePath, repo)
 
 	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
 	if err != nil {
@@ -99,6 +97,10 @@ func (m *Manager) checkResticIntegrity(policy model.Policy, task model.Task) {
 	}
 }
 
+func buildLegacyResticIntegrityCommand(resticBin, passwordFilePath, repository string) string {
+	return fmt.Sprintf("%s check -r %s --json 2>&1",
+		executor.BuildResticCommandPrefix(resticBin, passwordFilePath), shellEscape(repository))
+}
 func (m *Manager) checkRcloneIntegrity(policy model.Policy, task model.Task) {
 	log := logger.Module("task")
 
