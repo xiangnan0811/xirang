@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/alerting"
+	"xirang/backend/internal/backuphealth"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/util"
 
@@ -149,12 +150,17 @@ func aggregateRuns(db *gorm.DB, nodeIDs []uint, start, end time.Time) (runAgg, e
 		AvgMs   float64 `gorm:"column:avg_ms"`
 	}
 	var r row
-	err := db.Table("task_runs").
-		Select("COUNT(*) as total, SUM(CASE WHEN task_runs.status='success' THEN 1 ELSE 0 END) as success_count, SUM(CASE WHEN task_runs.status='failed' THEN 1 ELSE 0 END) as failed_count, AVG(task_runs.duration_ms) as avg_ms").
-		Joins("JOIN tasks ON tasks.id = task_runs.task_id").
-		Where("tasks.node_id IN ? AND task_runs.started_at >= ? AND task_runs.started_at < ?", nodeIDs, start, end).
-		Scan(&r).Error
-	if err != nil {
+	query := db.Table("task_runs").
+		Select(`COUNT(*) as total,
+			SUM(CASE WHEN EXISTS (
+				SELECT 1 FROM backup_completions bc
+				WHERE bc.task_run_id = task_runs.id AND bc.evidence_status = 'verified'
+			) THEN 1 ELSE 0 END) as success_count,
+			SUM(CASE WHEN task_runs.status='failed' THEN 1 ELSE 0 END) as failed_count,
+			AVG(task_runs.duration_ms) as avg_ms`).
+		Where("task_runs.node_id_snapshot IN ? AND task_runs.started_at >= ? AND task_runs.started_at < ?", nodeIDs, start, end).
+		Where(backuphealth.ClassifiedAttemptPredicate("task_runs"))
+	if err := query.Scan(&r).Error; err != nil {
 		return runAgg{}, fmt.Errorf("聚合 TaskRun 失败: %w", err)
 	}
 	return runAgg{
@@ -176,16 +182,16 @@ func buildTopFailures(db *gorm.DB, nodeIDs []uint, start, end time.Time) ([]Fail
 		LastErr  string `gorm:"column:last_err"`
 	}
 	var rows []row
-	err := db.Table("task_runs").
+	query := db.Table("task_runs").
 		Select("nodes.name as node_name, tasks.name as task_name, COUNT(*) as cnt, MAX(task_runs.last_error) as last_err").
 		Joins("JOIN tasks ON tasks.id = task_runs.task_id").
-		Joins("JOIN nodes ON nodes.id = tasks.node_id").
-		Where("tasks.node_id IN ? AND task_runs.status='failed' AND task_runs.started_at >= ? AND task_runs.started_at < ?", nodeIDs, start, end).
-		Group("tasks.node_id, task_runs.task_id").
+		Joins("JOIN nodes ON nodes.id = task_runs.node_id_snapshot").
+		Where("task_runs.node_id_snapshot IN ? AND task_runs.status = ? AND task_runs.started_at >= ? AND task_runs.started_at < ?", nodeIDs, "failed", start, end).
+		Where(backuphealth.ClassifiedAttemptPredicate("task_runs")).
+		Group("task_runs.node_id_snapshot, task_runs.task_id, nodes.name, tasks.name").
 		Order("cnt desc").
-		Limit(5).
-		Scan(&rows).Error
-	if err != nil {
+		Limit(5)
+	if err := query.Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("查询失败热点失败: %w", err)
 	}
 	entries := make([]FailureEntry, 0, len(rows))
@@ -223,8 +229,8 @@ func buildDiskTrend(db *gorm.DB, nodeIDs []uint, start, end time.Time) ([]DiskTr
 
 // computeRPOAndRTO 计算报告中所有相关策略的 RPO/RTO 实际值及达标状态。
 //
-// RPO 实际值：对于每个设置了 rpo_minutes 目标的策略，找到其关联的备份 TaskRun（非 restore/drill），
-// 取最近 20 次成功运行，计算相邻两次 started_at 的最大间隔（分钟），取所有策略中的最差值。
+// RPO 实际值：对于每个设置了 rpo_minutes 目标的策略，找到其持久化的、已验证备份完成事实，
+// 取最近 20 次事实，计算相邻两次 completed_at 的最大间隔（分钟）。
 //
 // RTO 实际值：对于每个设置了 rto_minutes 目标的策略，找到最近一次 restore TaskRun 的 duration_ms / 60000，
 // 取所有策略中的最差值。
@@ -321,30 +327,20 @@ func computeRPOAndRTO(db *gorm.DB, nodeIDs []uint) (actualRPO *int, actualRTO *i
 }
 
 // computePolicyRPO 计算单个策略的 RPO 实际值：
-// 取该策略下所有 task 的最近 20 次成功备份 TaskRun，
-// 按 started_at DESC 排序，计算相邻两次之间的最大间隔（分钟）。
+// 取该策略下所有 task 的最近 20 次已验证备份完成事实，
+// 按 completed_at DESC 排序，计算相邻两次之间的最大间隔（分钟）。
 func computePolicyRPO(db *gorm.DB, taskIDs []uint) *int {
-	var runs []model.TaskRun
-	if err := db.Where("task_id IN ? AND status = ? AND trigger_type NOT IN ?",
-		taskIDs, "success", []string{"restore", "drill"}).
-		Order("started_at DESC").
-		Limit(20).
-		Find(&runs).Error; err != nil || len(runs) < 2 {
+	facts, err := backuphealth.VerifiedForTasks(context.Background(), db, taskIDs, nil, nil, 20)
+	if err != nil || len(facts) < 2 {
 		return nil
 	}
 
 	maxIntervalMin := 0
-	for i := 0; i < len(runs)-1; i++ {
-		if runs[i].StartedAt != nil && runs[i+1].StartedAt != nil {
-			interval := runs[i].StartedAt.Sub(*runs[i+1].StartedAt)
-			intervalMin := int(interval.Minutes())
-			if intervalMin > maxIntervalMin {
-				maxIntervalMin = intervalMin
-			}
+	for i := range len(facts) - 1 {
+		intervalMin := int(facts[i].CompletedAt.Sub(facts[i+1].CompletedAt).Minutes())
+		if intervalMin > maxIntervalMin {
+			maxIntervalMin = intervalMin
 		}
-	}
-	if maxIntervalMin == 0 {
-		return nil
 	}
 	return &maxIntervalMin
 }

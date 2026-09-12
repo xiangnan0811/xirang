@@ -63,13 +63,35 @@ var (
 		Name: "xirang_tasks_active",
 		Help: "Number of currently running tasks",
 	})
-	backupLastSuccess = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "xirang_backup_last_success_timestamp",
-		Help: "Unix timestamp of last successful backup per task",
-	}, []string{"task_name"})
 )
 
 func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, upstreamRunID *uint, scheduledAt *time.Time) (uint, error) {
+	var cronScheduledAt *time.Time
+	var cronOccurrenceID uint
+	cronOccurrenceClaimed := false
+	if reason == "cron" {
+		cronScheduledAt = normalizeCronOccurrence(scheduledAt)
+		if cronScheduledAt == nil {
+			return 0, fmt.Errorf("cron occurrence timestamp required")
+		}
+		occurrence, err := m.ensureCronOccurrence(context.Background(), taskID, *cronScheduledAt)
+		if err != nil {
+			// A removed task cannot have a durable occurrence because the
+			// occurrence FK is authoritative. Scheduler callbacks for it are
+			// therefore harmless no-ops.
+			if strings.Contains(err.Error(), "任务不存在") {
+				return 0, nil
+			}
+			return 0, err
+		}
+		if occurrence.State != model.TaskCronOccurrenceStateQueued || occurrence.TaskRunID != nil {
+			return 0, nil
+		}
+		cronOccurrenceID = occurrence.ID
+	}
+
+	// Intent is durable before this shutdown gate. A shutdown leaves a queued
+	// occurrence for the next manager rather than dropping the scheduler tick.
 	if m.shuttingDown.Load() {
 		if reason == "chain" {
 			return 0, errTaskChainBusy
@@ -79,26 +101,33 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 		}
 		return 0, fmt.Errorf("系统维护中，请稍候再试")
 	}
-	var cronScheduledAt *time.Time
-	if reason == "cron" {
-		cronScheduledAt = normalizeCronOccurrence(scheduledAt)
-		if cronScheduledAt == nil {
-			return 0, fmt.Errorf("cron occurrence timestamp required")
-		}
-	}
 
 	launchCtx, ownership, claimed := m.claimPendingRunOwnership(taskID)
 	if !claimed {
+		if reason == "cron" {
+			// Another local runner owns the pending slot. It did not claim the
+			// durable occurrence, so never clear that runner's lease.
+			return 0, nil
+		}
 		if reason == "chain" {
 			return 0, errTaskChainBusy
 		}
-		if reason == "retry" || reason == "cron" {
+		if reason == "retry" {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
 	}
+	if reason == "cron" {
+		claimed, err := m.claimCronOccurrence(context.Background(), cronOccurrenceID)
+		if err != nil {
+			return 0, err
+		}
+		if !claimed {
+			return 0, nil
+		}
+		cronOccurrenceClaimed = true
+	}
 	scheduled := false
-
 	registeredCancel := ownership.cancel
 	defer func() {
 		if !scheduled {
@@ -107,11 +136,17 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 				m.chainRunner.Delete(taskID)
 			}
 			m.pendingRuns.CompareAndDelete(taskID, ownership)
+			if reason == "cron" && cronOccurrenceClaimed {
+				// The occurrence is retried after quota, node, resource, or
+				// local-busy refusal. Explicit disabled/skip paths settle it
+				// before this defer runs, making this update a no-op.
+				_ = m.releaseCronOccurrence(context.Background(), cronOccurrenceID)
+			}
 		}
 	}()
 
 	var taskEntity model.Task
-	result := m.db.Where("id = ?", taskID).Limit(1).Find(&taskEntity)
+	result := m.db.Preload("Policy").Where("id = ?", taskID).Limit(1).Find(&taskEntity)
 	if result.Error != nil {
 		return 0, result.Error
 	}
@@ -132,10 +167,19 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 		}
 	}
 
-	// Paused and archived tasks never enter an executor. Chain effects record
-	// an explicit skipped child so the upstream effect is not a false success.
-	if taskEntity.ArchivedAt != nil || !taskEntity.Enabled {
+	// Paused and archived tasks never enter an executor. Cron intent is made
+	// explicitly auditable instead of being silently discarded.
+	if taskEntity.ArchivedAt != nil || !taskEntity.Enabled ||
+		(taskEntity.Policy != nil && !taskEntity.Policy.Enabled) {
 		if reason == "cron" {
+			reasonText := "任务已暂停，定时执行已取消"
+			if taskEntity.ArchivedAt != nil {
+				reasonText = "任务已归档，定时执行已取消"
+			} else if taskEntity.Policy != nil && !taskEntity.Policy.Enabled {
+				reasonText = "策略已禁用，定时执行已取消"
+			}
+			_ = m.settleCronOccurrence(context.Background(), cronOccurrenceID,
+				model.TaskCronOccurrenceStateCanceled, reasonText)
 			return 0, nil
 		}
 		if reason == "chain" {
@@ -155,6 +199,9 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 	}
 
 	if ParseStatus(taskEntity.Status) == StatusRunning {
+		if reason == "cron" {
+			return 0, nil
+		}
 		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
 	}
 	if reason == "cron" && ParseStatus(taskEntity.Status) == StatusRetrying {
@@ -182,8 +229,8 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 	}
 
 	// Keep the process-local restore marker check atomic with the durable
-	// admission plus TaskRun reservation. Cross-process exclusion is provided by
-	// the coordinator's shared node-row boundary inside reserveTaskRun.
+	// admission plus TaskRun reservation. Cross-process exclusion is provided
+	// by the coordinator's shared node-row boundary inside reserveTaskRun.
 	nLock := m.nodeLock(taskEntity.NodeID)
 	nLock.Lock()
 	conflicted, err := m.hasRunningConflict(taskEntity)
@@ -193,21 +240,29 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 	}
 	if conflicted {
 		nLock.Unlock()
+		if reason == "cron" {
+			return 0, nil
+		}
 		return 0, fmt.Errorf("同节点有任务正在运行，请稍候再试")
 	}
 	// 检查同节点是否有恢复任务正在运行（恢复是破坏性操作，需要节点级互斥）
 	if m.isNodeRestoring(taskEntity.NodeID) {
 		nLock.Unlock()
+		if reason == "cron" {
+			return 0, nil
+		}
 		return 0, fmt.Errorf("同节点有恢复任务正在运行，请稍候再试")
 	}
 
 	requestedRun := model.TaskRun{
-		TaskID:            taskID,
-		TriggerType:       reason,
-		Status:            model.TaskRunStatusPending,
-		ChainRunID:        chainRunID,
-		UpstreamTaskRunID: upstreamRunID,
-		CronScheduledAt:   cronScheduledAt,
+		TaskID:               taskID,
+		TriggerType:          reason,
+		Status:               model.TaskRunStatusPending,
+		ChainRunID:           chainRunID,
+		UpstreamTaskRunID:    upstreamRunID,
+		CronScheduledAt:      cronScheduledAt,
+		CronOccurrenceID:     cronOccurrenceID,
+		ExecutorTypeSnapshot: strings.ToLower(strings.TrimSpace(taskEntity.ExecutorType)),
 	}
 	run, err := m.reserveTaskRun(runCtx, taskEntity.NodeID, requestedRun)
 	nLock.Unlock()
@@ -217,13 +272,18 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 		}
 		return 0, fmt.Errorf("链式执行已有子任务但缺少执行记录")
 	}
-	if errors.Is(err, errCronOccurrenceHandled) {
+	if errors.Is(err, errCronOccurrenceHandled) || errors.Is(err, errCronOccurrenceClaimed) {
 		return 0, nil
 	}
 	if err == nil && run.Status == model.TaskRunStatusSkipped {
 		return run.ID, nil
 	}
 	if err != nil {
+		if reason == "cron" {
+			// The occurrence remains queued; the defer releases this core's
+			// lease so another core can retry immediately.
+			return 0, nil
+		}
 		if errors.Is(err, ErrNodeWriteConflict) {
 			return 0, fmt.Errorf("同节点有恢复任务正在运行，请稍候再试: %w", err)
 		}
@@ -253,6 +313,118 @@ func (m *Manager) populateRsyncBinary(task *model.Task) {
 		return
 	}
 	task.RsyncBinary = provider.RsyncBinary()
+}
+
+// armLegacyMutableGeneration persists the pre-provider write hold only after
+// revalidating the immutable TaskRun binding. Rclone's keyed hold is fenced by
+// the database partial unique index; historical unkeyed rows are serialized by
+// the authoritative node row and rechecked under that same transaction.
+func (m *Manager) armLegacyMutableGeneration(
+	ctx context.Context,
+	taskEntity *model.Task,
+	taskID, runID uint,
+	generationState string,
+) error {
+	if m == nil || m.db == nil || taskEntity == nil || taskID == 0 || runID == 0 {
+		return fmt.Errorf("mutable writer generation arm persistence unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var refreshed model.Task
+	preserveTaskBinding := false
+	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var run model.TaskRun
+		runResult := tx.Select(
+			"task_id", "status", "node_id_snapshot", "backup_config_fingerprint",
+			"resource_key", "executor_type_snapshot",
+		).Where("id = ? AND task_id = ? AND status = ?", runID, taskID, model.TaskRunStatusRunning).
+			Limit(1).Find(&run)
+		if runResult.Error != nil {
+			return runResult.Error
+		}
+		if runResult.RowsAffected != 1 {
+			return ErrNodeWriteStartLost
+		}
+		if !model.IsTaskRunNodeSnapshotAuthoritative(run.NodeIDSnapshot) ||
+			run.NodeIDSnapshot != taskEntity.NodeID {
+			return ErrNodeWriteStartLost
+		}
+		preserveTaskBinding = strings.TrimSpace(run.BackupConfigFingerprint) == ""
+
+		taskResult := tx.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+			Preload("Node").Preload("Node.SSHKey").Preload("Policy").
+			Where("id = ?", taskID).Limit(1).Find(&refreshed)
+		if taskResult.Error != nil {
+			return taskResult.Error
+		}
+		if taskResult.RowsAffected != 1 || refreshed.NodeID != run.NodeIDSnapshot {
+			return ErrNodeWriteStartLost
+		}
+		if run.BackupConfigFingerprint != "" &&
+			run.BackupConfigFingerprint != model.TaskRunBackupConfigFingerprint(refreshed) {
+			return errTaskRunBackupBindingMismatch
+		}
+
+		if strings.TrimSpace(run.ExecutorTypeSnapshot) != "" &&
+			!strings.EqualFold(strings.TrimSpace(run.ExecutorTypeSnapshot), strings.TrimSpace(refreshed.ExecutorType)) {
+			return errTaskRunBackupBindingMismatch
+		}
+		if isLegacyMutableRcloneTask(refreshed) {
+			// Every legacy Rclone arm participates in the node-row boundary:
+			// keyed-keyed races are fenced by the unique resource index, while
+			// keyed-vs-historical rows share this lock and recheck.
+			nodeLock := tx.Model(&model.Node{}).
+				Where("id = ?", refreshed.NodeID).
+				UpdateColumn("name", gorm.Expr("name"))
+			if nodeLock.Error != nil {
+				return nodeLock.Error
+			}
+			if nodeLock.RowsAffected != 1 {
+				return ErrNodeWriteStartLost
+			}
+			identity, keyed := model.TaskRunResourceIdentityForTask(refreshed)
+			if strings.TrimSpace(run.ResourceKey) != "" &&
+				(!keyed || run.ResourceKey != identity.Key) {
+				return errTaskRunBackupBindingMismatch
+			}
+			if strings.TrimSpace(run.ResourceKey) == "" {
+				if err := rejectUnresolvedMutableGenerationTx(tx, &refreshed); err != nil {
+					return err
+				}
+				if err := rejectSameNodeMutableGenerationTx(tx, &refreshed, runID); err != nil {
+					return err
+				}
+			} else if err := rejectHistoricalUnresolvedMutableGenerationTx(tx, &refreshed); err != nil {
+				return err
+			}
+		}
+
+		armResult := tx.Model(&model.TaskRun{}).
+			Where("id = ? AND task_id = ? AND status = ? AND backup_generation_state IN ?",
+				runID, taskID, model.TaskRunStatusRunning,
+				[]string{"", model.TaskRunGenerationStateDirty, model.TaskRunGenerationStateWriting}).
+			Update("backup_generation_state", generationState)
+		if armResult.Error != nil {
+			if isActiveMutableResourceConflict(armResult.Error) {
+				return fmt.Errorf("%w: shared mutable resource is already being written", ErrMutableGenerationUnresolved)
+			}
+			return armResult.Error
+		}
+		if armResult.RowsAffected != 1 {
+			return ErrNodeWriteStartLost
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !preserveTaskBinding {
+		rsyncBinary := taskEntity.RsyncBinary
+		*taskEntity = refreshed
+		taskEntity.RsyncBinary = rsyncBinary
+	}
+	return nil
 }
 
 func (m *Manager) clearLegacyMutableGenerationAfterNoStart(taskID, runID uint, markNoStart bool) error {
@@ -698,11 +870,8 @@ func (m *Manager) runTaskWithContext(
 			// the mutable remote.
 			generationState = model.TaskRunGenerationStateWriting
 		}
-		armResult := m.db.Model(&model.TaskRun{}).
-			Where("id = ? AND task_id = ? AND status = ?", runID, taskID, model.TaskRunStatusRunning).
-			Update("backup_generation_state", generationState)
-		if armResult.Error != nil || armResult.RowsAffected != 1 {
-			return errors.New("mutable writer generation arm persistence failed")
+		if err := m.armLegacyMutableGeneration(execCtx, &taskEntity, taskID, runID, generationState); err != nil {
+			return err
 		}
 		if m.afterLegacyRsyncGenerationArm != nil {
 			m.afterLegacyRsyncGenerationArm()
@@ -943,19 +1112,13 @@ func (m *Manager) runTaskWithContext(
 				"retry_count": 0, "next_run_at": nextCronRun(taskEntity.CronSpec),
 				"last_error": "", "verify_status": verifyStatus,
 			},
-			StatusSuccess, successRunUpdates); terminalErr != nil {
+			StatusSuccess, successRunUpdates, !providerResult.Managed); terminalErr != nil {
 			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("更新 success 失败: %v", terminalErr), taskEntity.Status)
 			return
 		}
 		taskEntity.Status = string(StatusSuccess)
 		taskEntity.LastError = ""
 		runCompleted = true
-		// 更新关联节点的最后备份时间
-		if taskEntity.NodeID > 0 {
-			backupAt := time.Now().UTC()
-			m.db.Model(&model.Node{}).Where("id = ?", taskEntity.NodeID).Update("last_backup_at", &backupAt)
-		}
-		backupLastSuccess.WithLabelValues(taskEntity.Name).SetToCurrentTime()
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "info", "任务执行成功", taskEntity.Status)
 
 		// 快照差异异常检测（异步，best-effort）

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/backuphealth"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/util"
 
@@ -490,16 +492,16 @@ func (h *HealthIncidentTimelineHandler) recentAlerts(db *gorm.DB, since time.Tim
 
 func (h *HealthIncidentTimelineHandler) recentTaskFailures(db *gorm.DB, since time.Time, ownedIDs []uint, needOwnerFilter bool) ([]healthIncidentTaskFailureRow, error) {
 	query := db.Table("task_runs AS tr").
-		Select(`tr.id AS task_run_id, tr.task_id AS task_id, tasks.name AS task_name, tasks.node_id AS node_id,
+		Select(`tr.id AS task_run_id, tr.task_id AS task_id, tasks.name AS task_name, tr.node_id_snapshot AS node_id,
 			COALESCE(nodes.name, '') AS node_name, tasks.policy_id AS policy_id, COALESCE(policies.name, '') AS policy_name,
 			tr.last_error AS last_error, tr.created_at AS created_at, tr.updated_at AS updated_at,
 			tr.started_at AS started_at, tr.finished_at AS finished_at`).
 		Joins("JOIN tasks ON tasks.id = tr.task_id").
-		Joins("LEFT JOIN nodes ON nodes.id = tasks.node_id").
+		Joins("LEFT JOIN nodes ON nodes.id = tr.node_id_snapshot").
 		Joins("LEFT JOIN policies ON policies.id = tasks.policy_id").
 		Where("tr.status = ? AND tr.created_at >= ?", "failed", since)
 	if needOwnerFilter {
-		query = query.Where("tasks.node_id IN ?", ownedIDs)
+		query = query.Where("tr.node_id_snapshot IN ?", ownedIDs)
 	}
 	var rows []healthIncidentTaskFailureRow
 	err := query.Order("tr.created_at DESC").Limit(maxHealthIncidentSourceRows).Scan(&rows).Error
@@ -690,21 +692,37 @@ func (h *HealthIncidentTimelineHandler) addMetricSignals(db *gorm.DB, acc *healt
 func (h *HealthIncidentTimelineHandler) addBackupStaleSignals(db *gorm.DB, acc *healthIncidentAccumulator, now time.Time, ownedIDs []uint, needOwnerFilter bool) error {
 	staleThreshold := now.Add(-time.Duration(backupStaleThresholdHours()) * time.Hour)
 	query := db.Model(&model.Node{}).
-		Where("archived = ?", false).
-		Where("last_backup_at IS NULL OR last_backup_at < ?", staleThreshold)
+		Select("id, name").
+		Where("archived = ?", false)
 	if needOwnerFilter {
 		query = query.Where("id IN ?", ownedIDs)
 	}
 	var nodes []model.Node
-	if err := query.Order("last_backup_at ASC").Limit(maxHealthIncidentSourceRows).Find(&nodes).Error; err != nil {
+	if err := query.Order("id ASC").Limit(maxHealthIncidentSourceRows).Find(&nodes).Error; err != nil {
+		return err
+	}
+	nodeIDs := make([]uint, 0, len(nodes))
+	for _, node := range nodes {
+		nodeIDs = append(nodeIDs, node.ID)
+	}
+	latestFacts, err := backuphealth.LatestVerifiedForNodes(context.Background(), db, nodeIDs)
+	if err != nil {
 		return err
 	}
 	for _, node := range nodes {
+		var completedAt *time.Time
+		if fact, ok := latestFacts[node.ID]; ok {
+			value := fact.CompletedAt.UTC()
+			completedAt = &value
+		}
+		if completedAt != nil && !completedAt.Before(staleThreshold) {
+			continue
+		}
 		resource := nodeHealthIncidentResource(node.ID, node.Name)
-		message := "节点尚未完成备份"
-		if node.LastBackupAt != nil {
-			hours := int(now.Sub(*node.LastBackupAt).Hours())
-			message = fmt.Sprintf("节点最近一次备份距今约 %d 小时，超过健康阈值", hours)
+		message := "节点尚未完成已验证备份"
+		if completedAt != nil {
+			hours := int(now.Sub(*completedAt).Hours())
+			message = fmt.Sprintf("节点最近一次已验证备份距今约 %d 小时，超过健康阈值", hours)
 		}
 		acc.addSignal(resource, healthIncidentSignal{
 			Type:       "backup_stale",
@@ -719,13 +737,23 @@ func (h *HealthIncidentTimelineHandler) addBackupStaleSignals(db *gorm.DB, acc *
 
 func (h *HealthIncidentTimelineHandler) addDegradedPolicySignals(db *gorm.DB, acc *healthIncidentAccumulator, ownedIDs []uint, needOwnerFilter bool) error {
 	query := db.Table("task_runs AS tr").
-		Select("policies.id AS policy_id, policies.name AS policy_name, tasks.id AS task_id, tasks.node_id AS node_id, COALESCE(nodes.name, '') AS node_name, tr.status AS status, tr.created_at AS created_at").
+		Select(`policies.id AS policy_id, policies.name AS policy_name, tasks.id AS task_id, tr.node_id_snapshot AS node_id, COALESCE(nodes.name, '') AS node_name,
+			CASE
+				WHEN EXISTS (
+					SELECT 1 FROM backup_completions bc
+					WHERE bc.task_run_id = tr.id AND bc.evidence_status = 'verified'
+				) THEN 'success'
+				WHEN tr.status = 'success' THEN 'incomplete'
+				ELSE tr.status
+			END AS status,
+			tr.created_at AS created_at`).
 		Joins("JOIN tasks ON tasks.id = tr.task_id").
 		Joins("JOIN policies ON policies.id = tasks.policy_id").
-		Joins("LEFT JOIN nodes ON nodes.id = tasks.node_id").
-		Where("policies.enabled = ? AND policies.is_template = ?", true, false)
+		Joins("LEFT JOIN nodes ON nodes.id = tr.node_id_snapshot").
+		Where("policies.enabled = ? AND policies.is_template = ?", true, false).
+		Where(backuphealth.ClassifiedAttemptPredicate("tr"))
 	if needOwnerFilter {
-		query = query.Where("tasks.node_id IN ?", ownedIDs)
+		query = query.Where("tr.node_id_snapshot IN ?", ownedIDs)
 	}
 	var rows []healthIncidentPolicyRunRow
 	if err := query.Order("policies.id ASC, tr.created_at DESC").Limit(1000).Scan(&rows).Error; err != nil {

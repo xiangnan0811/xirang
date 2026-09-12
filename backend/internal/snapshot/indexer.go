@@ -5,12 +5,17 @@
 package snapshot
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,7 +29,6 @@ import (
 	"xirang/backend/internal/task/executor"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // indexingJobs tracks active builds so a burst of searches cannot enumerate a
@@ -36,6 +40,24 @@ const (
 	exactIndexPageSize            = 200
 	exactIndexCompleteMarkerPath  = ""
 	exactIndexCompleteMarkerMtime = "xirang-index-complete-v1"
+
+	// Compatibility completion markers use a different value from exact
+	// markers. This prevents a legacy cache row from ever satisfying managed
+	// exact readiness.
+	legacyIndexCompleteMarkerPath  = ""
+	legacyIndexCompleteMarkerMtime = "xirang-compat-index-complete-v1"
+
+	legacyIndexDefaultMaxOutputBytes int64 = 256 << 20
+	legacyIndexDefaultMaxRecordBytes       = 1 << 20
+	legacyIndexDefaultMaxEntries           = 1_000_000
+	legacyIndexMaxStderrBytes        int64 = 64 << 10
+)
+
+var (
+	errResticLSMalformed        = errors.New("malformed Restic ls output")
+	errResticLSIncomplete       = errors.New("incomplete Restic ls output")
+	errResticLSIdentityMismatch = errors.New("restic ls snapshot identity mismatch")
+	errResticLSResourceLimit    = errors.New("restic ls output resource limit exceeded")
 )
 
 // Indexer owns the snapshot cache boundary. A nil guard/foundation is only
@@ -98,7 +120,9 @@ func (indexer *Indexer) EnsureIndexed(ctx context.Context, taskID uint, session 
 	}
 
 	var count int64
-	if err := indexer.db.WithContext(ctx).Model(&model.SnapshotFileIndex{}).Where("task_id = ?", taskID).Limit(1).Count(&count).Error; err != nil {
+	if err := indexer.db.WithContext(ctx).Model(&model.SnapshotFileIndex{}).
+		Where("task_id = ? AND path = ? AND mtime = ?", taskID, legacyIndexCompleteMarkerPath, legacyIndexCompleteMarkerMtime).
+		Limit(1).Count(&count).Error; err != nil {
 		return false, err
 	}
 	if count > 0 {
@@ -147,7 +171,9 @@ func (indexer *Indexer) Status(ctx context.Context, taskID uint, session publica
 		return 0, 0, building, err
 	}
 	var indexedCount int64
-	if err := indexer.db.WithContext(ctx).Model(&model.SnapshotFileIndex{}).Where("task_id = ?", taskID).Distinct("snapshot_id").Count(&indexedCount).Error; err != nil {
+	if err := indexer.db.WithContext(ctx).Model(&model.SnapshotFileIndex{}).
+		Where("task_id = ? AND path = ? AND mtime = ?", taskID, legacyIndexCompleteMarkerPath, legacyIndexCompleteMarkerMtime).
+		Distinct("snapshot_id").Count(&indexedCount).Error; err != nil {
 		return 0, 0, building, err
 	}
 	return int(indexedCount), len(snapshots), building, nil
@@ -387,6 +413,13 @@ func (indexer *Indexer) indexExactPoint(ctx context.Context, taskID uint, sessio
 }
 
 func (indexer *Indexer) buildCompatibility(ctx context.Context, task model.Task) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	limits, err := indexer.compatibilityResticLSLimits()
+	if err != nil {
+		return err
+	}
 	exec := &executor.ResticExecutor{}
 	snapshots, err := exec.ListSnapshots(ctx, task)
 	if err != nil {
@@ -397,17 +430,58 @@ func (indexer *Indexer) buildCompatibility(ctx context.Context, task model.Task)
 			return err
 		}
 		var existingCount int64
-		if err := indexer.db.WithContext(ctx).Model(&model.SnapshotFileIndex{}).Where("task_id = ? AND snapshot_id = ?", task.ID, snapshot.ID).Limit(1).Count(&existingCount).Error; err != nil {
+		if err := indexer.db.WithContext(ctx).Model(&model.SnapshotFileIndex{}).
+			Where("task_id = ? AND snapshot_id = ? AND path = ? AND mtime = ?", task.ID, snapshot.ID, legacyIndexCompleteMarkerPath, legacyIndexCompleteMarkerMtime).
+			Limit(1).Count(&existingCount).Error; err != nil {
 			return fmt.Errorf("检查快照 %s 索引状态失败: %w", snapshot.ShortID, err)
 		}
 		if existingCount > 0 {
 			continue
 		}
-		if err := legacyIndexSnapshot(ctx, indexer.db, task, snapshot.ID); err != nil {
+		if err := legacyIndexSnapshotWithLimits(ctx, indexer.db, task, snapshot.ID, limits); err != nil {
 			return fmt.Errorf("索引快照 %s 失败: %w", snapshot.ShortID, err)
 		}
 	}
 	return nil
+}
+
+type resticLSLimits struct {
+	timeout        time.Duration
+	maxOutputBytes int64
+	maxRecordBytes int
+	maxEntries     int
+	maxStderrBytes int64
+}
+
+func defaultResticLSLimits() resticLSLimits {
+	return resticLSLimits{
+		timeout:        maxIndexDuration(),
+		maxOutputBytes: legacyIndexDefaultMaxOutputBytes,
+		maxRecordBytes: legacyIndexDefaultMaxRecordBytes,
+		maxEntries:     legacyIndexDefaultMaxEntries,
+		maxStderrBytes: legacyIndexMaxStderrBytes,
+	}
+}
+
+func (indexer *Indexer) compatibilityResticLSLimits() (resticLSLimits, error) {
+	limits := defaultResticLSLimits()
+	if indexer == nil || indexer.foundation == nil {
+		return limits, nil
+	}
+	config, err := indexer.foundation.PublicationConfig()
+	if err != nil {
+		return resticLSLimits{}, fmt.Errorf("读取 Restic 索引限制失败: %w", err)
+	}
+	if config.BackupStreamMaxBytes > 0 && config.BackupStreamMaxBytes < limits.maxOutputBytes {
+		limits.maxOutputBytes = config.BackupStreamMaxBytes
+	}
+	if config.ManifestMaxRecordBytes > 0 && config.ManifestMaxRecordBytes < limits.maxRecordBytes {
+		limits.maxRecordBytes = config.ManifestMaxRecordBytes
+	}
+	if config.ManifestMaxEntries > 0 && config.ManifestMaxEntries < int64(limits.maxEntries) {
+		limits.maxEntries = int(config.ManifestMaxEntries)
+	}
+	return limits, nil
 }
 
 // maxIndexDuration returns the bounded compatibility-cache build duration.
@@ -427,9 +501,23 @@ func readEnvIntDefault(key string, defaultVal int) int {
 	return defaultVal
 }
 
-// legacyIndexSnapshot retains the old pristine command path. It is never
-// called from exact mode, where ListEntries is the only Provider operation.
-func legacyIndexSnapshot(ctx context.Context, db *gorm.DB, task model.Task, snapshotID string) error {
+func legacyIndexSnapshotWithLimits(ctx context.Context, db *gorm.DB, task model.Task, snapshotID string, limits resticLSLimits) error {
+	if db == nil {
+		return fmt.Errorf("%w: snapshot index database unavailable", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !validExactSnapshotID(snapshotID) {
+		return fmt.Errorf("%w: invalid Restic snapshot ID", errResticLSIdentityMismatch)
+	}
+	if strings.TrimSpace(task.RsyncTarget) == "" {
+		return fmt.Errorf("%w: Restic repository path is empty", backupasset.ErrInvalidState)
+	}
+	if err := limits.validate(); err != nil {
+		return err
+	}
+
 	client, err := executor.DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeSnapshot)
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)
@@ -446,64 +534,291 @@ func legacyIndexSnapshot(ctx context.Context, db *gorm.DB, task model.Task, snap
 		return fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
 	}
 	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		cleanupCmd := executor.BuildCleanupResticPasswordFileCmd(pwFilePath)
-		_, _ = executor.RunSSHCommandOutput(ctx, client, cleanupCmd)
+		_, _ = executor.RunSSHCommandOutput(cleanupCtx, client, cleanupCmd)
 	}()
-	cmd := buildLegacyResticFindCommand(resolveResticBinary(), pwFilePath, snapshotID, task.RsyncTarget)
-	output, err := executor.RunSSHCommandOutput(ctx, client, cmd)
+
+	cmd := buildLegacyResticLSCommand(
+		executor.ShellEscape(resolveResticBinary()), pwFilePath, snapshotID, strings.TrimSpace(task.RsyncTarget),
+	)
+	runner := sshutil.NewSSHCommandRunnerWithTransportClose(client, 1)
+	stream, err := runner.OpenRawExecution(ctx, sshutil.RawCommandSpec{
+		Command:        cmd,
+		Timeout:        limits.timeout,
+		MaxStdoutBytes: limits.maxOutputBytes,
+		MaxStderrBytes: limits.maxStderrBytes,
+		MaxRecordBytes: limits.maxRecordBytes,
+	})
 	if err != nil {
-		return newResticFindFailureError(err, output)
+		return fmt.Errorf("打开 restic ls 执行流失败: %w", err)
 	}
-	entries := parseResticFindOutput(output)
-	if len(entries) == 0 {
-		return nil
+
+	entries, err := collectResticLSExecution(stream, snapshotID, limits)
+	if err != nil {
+		return err
 	}
-	records := make([]model.SnapshotFileIndex, 0, len(entries))
-	for _, entry := range entries {
-		records = append(records, model.SnapshotFileIndex{TaskID: task.ID, SnapshotID: snapshotID, Path: entry.Path, Size: entry.Size, Mtime: entry.Mtime})
+	return publishResticLSIndex(ctx, db, task.ID, snapshotID, entries)
+}
+func collectResticLSExecution(execution sshutil.CommandExecutionStream, snapshotID string, limits resticLSLimits) ([]resticLSEntry, error) {
+	if execution == nil {
+		return nil, fmt.Errorf("%w: Restic ls execution unavailable", backupasset.ErrInvalidState)
 	}
-	return db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(records, batchSize).Error
+	if err := limits.validate(); err != nil {
+		return nil, err
+	}
+	entries, parseErr := parseResticLSReader(execution, snapshotID, limits.maxEntries, limits.maxRecordBytes)
+	if parseErr != nil {
+		_ = execution.Cancel()
+		return nil, fmt.Errorf("解析 restic ls 输出失败: %w", parseErr)
+	}
+	completion, joinErr := execution.Join()
+	if joinErr != nil {
+		return nil, newResticLSFailureError(joinErr, completion)
+	}
+	if !completion.ExitCodeKnown || completion.ExitCode != 0 {
+		return nil, newResticLSFailureError(nil, completion)
+	}
+	return entries, nil
 }
 
-type resticFindEntry struct {
-	Path  string `json:"path"`
-	Size  int64  `json:"size"`
-	Mtime string `json:"mtime"`
+func (limits resticLSLimits) validate() error {
+	if limits.timeout <= 0 || limits.maxOutputBytes <= 0 || limits.maxRecordBytes <= 0 ||
+		limits.maxEntries <= 0 || limits.maxStderrBytes <= 0 {
+		return fmt.Errorf("%w: invalid Restic ls limits", backupasset.ErrInvalidState)
+	}
+	return nil
 }
 
-func buildLegacyResticFindCommand(resticBin, passwordFilePath, snapshotID, repository string) string {
-	return fmt.Sprintf("%s find --json --long --path=/ %s -r %s 2>&1",
+type resticLSEntry struct {
+	Path  string
+	Size  int64
+	Mtime string
+}
+
+func buildLegacyResticLSCommand(resticBin, passwordFilePath, snapshotID, repository string) string {
+	return fmt.Sprintf("%s ls --json --long -r %s -- %s",
 		executor.BuildResticCommandPrefix(resticBin, passwordFilePath),
-		executor.ShellEscape(snapshotID), executor.ShellEscape(repository))
+		executor.ShellEscape(repository), executor.ShellEscape(snapshotID))
 }
 
-func newResticFindFailureError(err error, output string) error {
-	if strings.TrimSpace(output) == "" {
-		return fmt.Errorf("restic find 执行失败: %w", err)
+func newResticLSFailureError(err error, completion sshutil.CommandCompletion) error {
+	if err != nil {
+		return fmt.Errorf("restic ls 执行失败: %w", err)
 	}
-	return fmt.Errorf("restic find 执行失败: %w, 输出: [输出已隐藏]", err)
+	if !completion.ExitCodeKnown {
+		return fmt.Errorf("restic ls 执行结果未知")
+	}
+	return fmt.Errorf("restic ls 执行失败: exit code %d", completion.ExitCode)
 }
 
-func parseResticFindOutput(output string) []resticFindEntry {
-	var entries []resticFindEntry
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || !strings.HasPrefix(line, "{") {
-			continue
-		}
-		var wrapper struct {
-			Matches []resticFindEntry `json:"matches"`
-		}
-		if err := json.Unmarshal([]byte(line), &wrapper); err != nil {
-			continue
-		}
-		for _, entry := range wrapper.Matches {
-			if entry.Path != "" {
-				entries = append(entries, entry)
+func parseResticLSOutput(output, snapshotID string) ([]resticLSEntry, error) {
+	return parseResticLSReader(bytes.NewReader([]byte(output)), snapshotID,
+		legacyIndexDefaultMaxEntries, legacyIndexDefaultMaxRecordBytes)
+}
+
+func parseResticLSReader(reader io.Reader, snapshotID string, maxEntries, maxRecordBytes int) ([]resticLSEntry, error) {
+	if reader == nil {
+		return nil, errResticLSMalformed
+	}
+	if !validExactSnapshotID(snapshotID) {
+		return nil, fmt.Errorf("%w: invalid expected snapshot ID", errResticLSIdentityMismatch)
+	}
+	if maxEntries <= 0 || maxRecordBytes <= 0 {
+		return nil, fmt.Errorf("%w: invalid parser limits", errResticLSResourceLimit)
+	}
+
+	buffered := bufio.NewReaderSize(reader, maxRecordBytes+1)
+	entries := make([]resticLSEntry, 0)
+	seenPaths := make(map[string]struct{})
+	headerSeen := false
+	for {
+		line, err := buffered.ReadSlice('\n')
+		switch {
+		case errors.Is(err, bufio.ErrBufferFull):
+			return nil, fmt.Errorf("%w: Restic ls record exceeds limit", errResticLSResourceLimit)
+		case errors.Is(err, io.EOF):
+			if len(line) > 0 {
+				return nil, errResticLSIncomplete
 			}
+			if !headerSeen {
+				return nil, fmt.Errorf("%w: snapshot header missing", errResticLSMalformed)
+			}
+			return entries, nil
+		case errors.Is(err, sshutil.ErrCommandOutputLimit):
+			return nil, fmt.Errorf("%w: Restic ls output exceeds limit", errResticLSResourceLimit)
+		case err != nil:
+			return nil, fmt.Errorf("read Restic ls output: %w", err)
+		}
+		if len(line) == 0 || len(line)-1 > maxRecordBytes {
+			return nil, fmt.Errorf("%w: Restic ls record exceeds limit", errResticLSResourceLimit)
+		}
+		line = bytes.TrimSpace(line[:len(line)-1])
+		if len(line) == 0 {
+			return nil, fmt.Errorf("%w: empty Restic ls record", errResticLSMalformed)
+		}
+
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(line, &object); err != nil {
+			return nil, fmt.Errorf("%w: invalid JSON record", errResticLSMalformed)
+		}
+		kind, err := resticLSRecordKind(object)
+		if err != nil {
+			return nil, err
+		}
+		switch kind {
+		case "snapshot":
+			if headerSeen {
+				return nil, fmt.Errorf("%w: duplicate snapshot header", errResticLSMalformed)
+			}
+			headerID, err := resticLSRequiredString(object, "id")
+			if err != nil {
+				return nil, err
+			}
+			if headerID != snapshotID {
+				return nil, fmt.Errorf("%w: got %q", errResticLSIdentityMismatch, headerID)
+			}
+			if !validExactSnapshotID(headerID) {
+				return nil, fmt.Errorf("%w: invalid snapshot header ID", errResticLSIdentityMismatch)
+			}
+			headerSeen = true
+		case "node":
+			if !headerSeen {
+				return nil, fmt.Errorf("%w: node appeared before snapshot header", errResticLSMalformed)
+			}
+			if len(entries) >= maxEntries {
+				return nil, fmt.Errorf("%w: too many Restic ls entries", errResticLSResourceLimit)
+			}
+			entry, err := parseResticLSNode(object)
+			if err != nil {
+				return nil, err
+			}
+			if _, duplicate := seenPaths[entry.Path]; duplicate {
+				return nil, fmt.Errorf("%w: duplicate path %q", errResticLSMalformed, entry.Path)
+			}
+			seenPaths[entry.Path] = struct{}{}
+			entries = append(entries, entry)
+		default:
+			return nil, fmt.Errorf("%w: unsupported record type %q", errResticLSMalformed, kind)
 		}
 	}
-	return entries
+}
+
+func resticLSRecordKind(object map[string]json.RawMessage) (string, error) {
+	var values []string
+	for _, key := range []string{"message_type", "struct_type"} {
+		raw, ok := object[key]
+		if !ok {
+			continue
+		}
+		var value string
+		if len(bytes.TrimSpace(raw)) == 0 || json.Unmarshal(raw, &value) != nil || value == "" {
+			return "", fmt.Errorf("%w: invalid %s", errResticLSMalformed, key)
+		}
+		values = append(values, value)
+	}
+	if len(values) == 0 {
+		return "", fmt.Errorf("%w: record type missing", errResticLSMalformed)
+	}
+	if len(values) == 2 && values[0] != values[1] {
+		return "", fmt.Errorf("%w: record type fields disagree", errResticLSMalformed)
+	}
+	switch values[0] {
+	case "snapshot", "node":
+		return values[0], nil
+	default:
+		return "", fmt.Errorf("%w: unsupported record type %q", errResticLSMalformed, values[0])
+	}
+}
+
+func resticLSRequiredString(object map[string]json.RawMessage, key string) (string, error) {
+	raw, ok := object[key]
+	if !ok {
+		return "", fmt.Errorf("%w: %s missing", errResticLSMalformed, key)
+	}
+	var value string
+	if json.Unmarshal(raw, &value) != nil || value == "" {
+		return "", fmt.Errorf("%w: invalid %s", errResticLSMalformed, key)
+	}
+	return value, nil
+}
+
+func parseResticLSNode(object map[string]json.RawMessage) (resticLSEntry, error) {
+	name, err := resticLSRequiredString(object, "name")
+	if err != nil {
+		return resticLSEntry{}, err
+	}
+	nodeType, err := resticLSRequiredString(object, "type")
+	if err != nil {
+		return resticLSEntry{}, err
+	}
+	switch nodeType {
+	case "file", "dir", "symlink", "dev", "chardev", "fifo", "socket", "irregular":
+	default:
+		return resticLSEntry{}, fmt.Errorf("%w: unsupported node type %q", errResticLSMalformed, nodeType)
+	}
+	nodePath, err := resticLSRequiredString(object, "path")
+	if err != nil {
+		return resticLSEntry{}, err
+	}
+	if strings.ContainsRune(nodePath, '\x00') || !strings.HasPrefix(nodePath, "/") ||
+		path.Clean(nodePath) != nodePath || nodePath == "/" || path.Base(nodePath) != name {
+		return resticLSEntry{}, fmt.Errorf("%w: invalid node path %q", errResticLSMalformed, nodePath)
+	}
+
+	var size int64
+	rawSize, hasSize := object["size"]
+	if nodeType == "file" && !hasSize {
+		return resticLSEntry{}, fmt.Errorf("%w: size missing for %q", errResticLSMalformed, nodePath)
+	}
+	if hasSize {
+		if bytes.Equal(bytes.TrimSpace(rawSize), []byte("null")) || json.Unmarshal(rawSize, &size) != nil || size < 0 {
+			return resticLSEntry{}, fmt.Errorf("%w: invalid size for %q", errResticLSMalformed, nodePath)
+		}
+	}
+
+	mtime := ""
+	if raw, ok := object["mtime"]; ok {
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return resticLSEntry{}, fmt.Errorf("%w: invalid mtime for %q", errResticLSMalformed, nodePath)
+		}
+		var timestamp time.Time
+		if json.Unmarshal(raw, &timestamp) != nil || timestamp.IsZero() {
+			return resticLSEntry{}, fmt.Errorf("%w: invalid mtime for %q", errResticLSMalformed, nodePath)
+		}
+		mtime = timestamp.UTC().Format(time.RFC3339Nano)
+	}
+	return resticLSEntry{Path: nodePath, Size: size, Mtime: mtime}, nil
+}
+
+func publishResticLSIndex(ctx context.Context, db *gorm.DB, taskID uint, snapshotID string, entries []resticLSEntry) error {
+	if db == nil || taskID == 0 || !validExactSnapshotID(snapshotID) {
+		return fmt.Errorf("%w: invalid Restic ls index publication", backupasset.ErrInvalidState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	records := make([]model.SnapshotFileIndex, 0, len(entries)+1)
+	for _, entry := range entries {
+		records = append(records, model.SnapshotFileIndex{
+			TaskID: taskID, SnapshotID: snapshotID, Path: entry.Path, Size: entry.Size, Mtime: entry.Mtime,
+		})
+	}
+	records = append(records, model.SnapshotFileIndex{
+		TaskID: taskID, SnapshotID: snapshotID, Path: legacyIndexCompleteMarkerPath,
+		Size: int64(len(entries)), Mtime: legacyIndexCompleteMarkerMtime,
+	})
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("task_id = ? AND snapshot_id = ?", taskID, snapshotID).
+			Delete(&model.SnapshotFileIndex{}).Error; err != nil {
+			return fmt.Errorf("clear prior compatibility snapshot index: %w", err)
+		}
+		if err := tx.CreateInBatches(records, batchSize).Error; err != nil {
+			return fmt.Errorf("publish compatibility snapshot index: %w", err)
+		}
+		return nil
+	})
 }
 
 func resolveResticBinary() string {

@@ -7,13 +7,60 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
-
 	"xirang/backend/internal/model"
+	taskexec "xirang/backend/internal/task/executor"
 
 	"gorm.io/gorm"
 )
+
+type sameTaskLongRunningCronExecutor struct {
+	calls           atomic.Int32
+	active          atomic.Int32
+	maxActive       atomic.Int32
+	firstStarted    chan struct{}
+	releaseFirst    chan struct{}
+	firstStartedMux sync.Once
+}
+
+func newSameTaskLongRunningCronExecutor() *sameTaskLongRunningCronExecutor {
+	return &sameTaskLongRunningCronExecutor{
+		firstStarted: make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+	}
+}
+
+func (e *sameTaskLongRunningCronExecutor) Run(ctx context.Context, _ model.Task, _ taskexec.LogFunc, _ taskexec.ProgressFunc) (int, error) {
+	call := e.calls.Add(1)
+	active := e.active.Add(1)
+	defer e.active.Add(-1)
+	for {
+		previous := e.maxActive.Load()
+		if active <= previous || e.maxActive.CompareAndSwap(previous, active) {
+			break
+		}
+	}
+	if call == 1 {
+		e.firstStartedMux.Do(func() { close(e.firstStarted) })
+		select {
+		case <-e.releaseFirst:
+		case <-ctx.Done():
+			return -1, ctx.Err()
+		}
+	}
+	return 0, nil
+}
+
+func (e *sameTaskLongRunningCronExecutor) Calls() int {
+	return int(e.calls.Load())
+}
+
+func (e *sameTaskLongRunningCronExecutor) MaxActive() int {
+	return int(e.maxActive.Load())
+}
 
 func seedQuotaPolicyTask(t *testing.T, db *gorm.DB, policyID uint) model.Task {
 	t.Helper()
@@ -35,7 +82,9 @@ func seedQuotaPolicyTask(t *testing.T, db *gorm.DB, policyID uint) model.Task {
 		NodeID:       node.ID,
 		PolicyID:     &policyID,
 		ExecutorType: "rsync",
+		CronSpec:     "@every 1h",
 		Status:       string(StatusPending),
+		Enabled:      true,
 		RsyncSource:  source + "/",
 		RsyncTarget:  target,
 	}
@@ -55,8 +104,14 @@ func seedQuotaPolicy(t *testing.T, db *gorm.DB, maxConcurrent int) model.Policy 
 		t.Fatalf("create quota policy: %v", err)
 	}
 	if err := db.Model(&model.Policy{}).Where("id = ?", policy.ID).
-		Updates(map[string]interface{}{"max_concurrent": maxConcurrent}).Error; err != nil {
+		Updates(map[string]interface{}{"enabled": true, "max_concurrent": maxConcurrent}).Error; err != nil {
 		t.Fatalf("persist quota policy limit: %v", err)
+	}
+	if err := db.First(&policy, policy.ID).Error; err != nil {
+		t.Fatalf("reload quota policy: %v", err)
+	}
+	if !policy.Enabled {
+		t.Fatalf("quota policy remained disabled after explicit enable")
 	}
 	return policy
 }
@@ -173,6 +228,220 @@ func TestPolicyMaxConcurrentReservationsCountPending(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("reservation after slot release: %v", err)
 	}
+}
+func TestCronQuotaRefusalKeepsDurableOccurrenceUntilSlotReleases(t *testing.T) {
+	db := openConcurrentManagerTestDB(t)
+	policy := seedQuotaPolicy(t, db, 1)
+	firstTask := seedQuotaPolicyTask(t, db, policy.ID)
+	secondTask := seedQuotaPolicyTask(t, db, policy.ID)
+	thirdTask := seedQuotaPolicyTask(t, db, policy.ID)
+	exec := newBlockingExecutor()
+	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+
+	occurrence := time.Date(2026, 9, 12, 2, 0, 0, 0, time.UTC)
+	if err := manager.TriggerFromScheduler(firstTask.ID, occurrence); err != nil {
+		t.Fatalf("trigger first cron task: %v", err)
+	}
+	select {
+	case <-exec.started:
+	case <-time.After(3 * time.Second):
+		var currentTask model.Task
+		_ = db.First(&currentTask, firstTask.ID).Error
+		var currentOccurrence model.TaskCronOccurrence
+		_ = db.Where("task_id = ? AND scheduled_at = ?", firstTask.ID, occurrence).First(&currentOccurrence).Error
+		var currentRun model.TaskRun
+		_ = db.Where("task_id = ? AND trigger_type = ?", firstTask.ID, "cron").First(&currentRun).Error
+		t.Fatalf("first cron task did not reach executor: task=%+v occurrence=%+v run=%+v executor_calls=%d", currentTask, currentOccurrence, currentRun, exec.Calls())
+	}
+	if err := manager.TriggerFromScheduler(secondTask.ID, occurrence); err != nil {
+		t.Fatalf("queue second cron task: %v", err)
+	}
+	if err := manager.TriggerFromScheduler(thirdTask.ID, occurrence); err != nil {
+		t.Fatalf("queue third cron task: %v", err)
+	}
+
+	var queuedCount int64
+	if err := db.Model(&model.TaskCronOccurrence{}).
+		Where("task_id IN ? AND state = ?", []uint{secondTask.ID, thirdTask.ID}, model.TaskCronOccurrenceStateQueued).
+		Count(&queuedCount).Error; err != nil {
+		t.Fatalf("count quota-blocked cron occurrences: %v", err)
+	}
+	if queuedCount != 2 {
+		t.Fatalf("quota-blocked cron occurrences=%d, want 2", queuedCount)
+	}
+	var runCount int64
+	if err := db.Model(&model.TaskRun{}).Where("trigger_type = ?", "cron").Count(&runCount).Error; err != nil {
+		t.Fatalf("count cron reservations before slot release: %v", err)
+	}
+	if runCount != 1 {
+		t.Fatalf("cron reservations before slot release=%d, want 1", runCount)
+	}
+
+	close(exec.release)
+	firstRun := waitCronTaskRunByTask(t, db, firstTask.ID)
+	if firstRun.Status != model.TaskRunStatusSuccess {
+		t.Fatalf("first cron task status=%q error=%q, want success", firstRun.Status, firstRun.LastError)
+	}
+
+	for attempt := range 20 {
+		if err := manager.drainCronOccurrences(context.Background()); err != nil {
+			t.Fatalf("drain durable cron occurrences attempt %d: %v", attempt, err)
+		}
+		if err := db.Model(&model.TaskRun{}).Where("trigger_type = ? AND status IN ?",
+			"cron", []string{model.TaskRunStatusPending, model.TaskRunStatusRunning, model.TaskRunStatusSuccess}).Count(&runCount).Error; err != nil {
+			t.Fatalf("count cron deliveries attempt %d: %v", attempt, err)
+		}
+		if runCount == 3 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if runCount != 3 {
+		t.Fatalf("cron reservations after slot release=%d, want 3", runCount)
+	}
+	for _, taskID := range []uint{secondTask.ID, thirdTask.ID} {
+		run := waitCronTaskRunByTask(t, db, taskID)
+		if run.Status != model.TaskRunStatusSuccess {
+			t.Fatalf("queued cron task %d status=%q error=%q, want success", taskID, run.Status, run.LastError)
+		}
+	}
+	var dispatchedCount int64
+	if err := db.Model(&model.TaskCronOccurrence{}).
+		Where("task_id IN ? AND state = ?", []uint{firstTask.ID, secondTask.ID, thirdTask.ID}, model.TaskCronOccurrenceStateDispatched).
+		Count(&dispatchedCount).Error; err != nil {
+		t.Fatalf("count dispatched cron occurrences: %v", err)
+	}
+	if dispatchedCount != 3 {
+		t.Fatalf("dispatched cron occurrences=%d, want 3", dispatchedCount)
+	}
+}
+
+func TestCronOccurrenceQueuesSameTaskLongRunAndDrainsExactlyOnce(t *testing.T) {
+	db := openConcurrentManagerTestDB(t)
+	policy := seedQuotaPolicy(t, db, 1)
+	taskEntity := seedQuotaPolicyTask(t, db, policy.ID)
+	exec := newSameTaskLongRunningCronExecutor()
+	manager := NewManager(db, stubExecutorFactory{executor: exec}, nil, nil, nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+
+	firstOccurrence := time.Date(2026, 9, 12, 2, 0, 0, 0, time.UTC)
+	if err := manager.TriggerFromScheduler(taskEntity.ID, firstOccurrence); err != nil {
+		t.Fatalf("trigger first same-task cron occurrence: %v", err)
+	}
+	select {
+	case <-exec.firstStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("first same-task cron occurrence did not reach the blocking executor; calls=%d", exec.Calls())
+	}
+
+	laterOccurrences := []time.Time{
+		firstOccurrence.Add(time.Hour),
+		firstOccurrence.Add(2 * time.Hour),
+	}
+	for _, occurrence := range laterOccurrences {
+		if err := manager.TriggerFromScheduler(taskEntity.ID, occurrence); err != nil {
+			t.Fatalf("queue same-task cron occurrence at %s: %v", occurrence, err)
+		}
+	}
+
+	var occurrences []model.TaskCronOccurrence
+	if err := db.Where("task_id = ?", taskEntity.ID).Order("scheduled_at ASC").Find(&occurrences).Error; err != nil {
+		t.Fatalf("load queued same-task cron occurrences: %v", err)
+	}
+	if len(occurrences) != 3 {
+		t.Fatalf("same-task cron occurrences before release=%d, want 3", len(occurrences))
+	}
+	for i, occurrence := range occurrences {
+		if i == 0 {
+			if occurrence.State != model.TaskCronOccurrenceStateDispatched || occurrence.TaskRunID == nil {
+				t.Fatalf("first occurrence before release state=%q run_id=%v, want dispatched with run", occurrence.State, occurrence.TaskRunID)
+			}
+			continue
+		}
+		if occurrence.State != model.TaskCronOccurrenceStateQueued || occurrence.TaskRunID != nil {
+			t.Fatalf("later occurrence %d before release state=%q run_id=%v, want queued without run", i, occurrence.State, occurrence.TaskRunID)
+		}
+	}
+	var runCount int64
+	if err := db.Model(&model.TaskRun{}).
+		Where("task_id = ? AND trigger_type = ?", taskEntity.ID, "cron").
+		Count(&runCount).Error; err != nil {
+		t.Fatalf("count same-task cron runs before release: %v", err)
+	}
+	if runCount != 1 {
+		t.Fatalf("same-task cron runs before release=%d, want 1", runCount)
+	}
+
+	close(exec.releaseFirst)
+	firstRun := waitCronTaskRunByTask(t, db, taskEntity.ID)
+	if firstRun.Status != model.TaskRunStatusSuccess {
+		t.Fatalf("first same-task cron run status=%q error=%q, want success", firstRun.Status, firstRun.LastError)
+	}
+	manager.taskWG.Wait()
+
+	for attempt := range 100 {
+		if err := manager.drainCronOccurrences(context.Background()); err != nil {
+			t.Fatalf("drain same-task cron occurrences attempt %d: %v", attempt, err)
+		}
+		manager.taskWG.Wait()
+		if err := db.Model(&model.TaskRun{}).
+			Where("task_id = ? AND trigger_type = ? AND status = ?",
+				taskEntity.ID, "cron", model.TaskRunStatusSuccess).
+			Count(&runCount).Error; err != nil {
+			t.Fatalf("count completed same-task cron runs attempt %d: %v", attempt, err)
+		}
+		if runCount == 3 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if runCount != 3 {
+		t.Fatalf("completed same-task cron runs=%d, want 3", runCount)
+	}
+	if exec.Calls() != 3 {
+		t.Fatalf("same-task cron executor calls=%d, want 3", exec.Calls())
+	}
+	if exec.MaxActive() != 1 {
+		t.Fatalf("same-task cron max concurrent executor entries=%d, want 1", exec.MaxActive())
+	}
+
+	if err := db.Where("task_id = ?", taskEntity.ID).Order("scheduled_at ASC").Find(&occurrences).Error; err != nil {
+		t.Fatalf("reload same-task cron occurrences: %v", err)
+	}
+	if len(occurrences) != 3 {
+		t.Fatalf("same-task cron occurrences after release=%d, want 3", len(occurrences))
+	}
+	seenRunIDs := make(map[uint]struct{}, len(occurrences))
+	for i, occurrence := range occurrences {
+		if occurrence.State != model.TaskCronOccurrenceStateDispatched || occurrence.TaskRunID == nil {
+			t.Fatalf("occurrence %d after release state=%q run_id=%v, want dispatched with run", i, occurrence.State, occurrence.TaskRunID)
+		}
+		if _, duplicate := seenRunIDs[*occurrence.TaskRunID]; duplicate {
+			t.Fatalf("same-task cron occurrence %d reused TaskRun %d", i, *occurrence.TaskRunID)
+		}
+		seenRunIDs[*occurrence.TaskRunID] = struct{}{}
+	}
+}
+
+func waitCronTaskRunByTask(t *testing.T, db *gorm.DB, taskID uint) model.TaskRun {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		var run model.TaskRun
+		if err := db.Where("task_id = ? AND trigger_type = ?", taskID, "cron").Order("id ASC").First(&run).Error; err == nil {
+			if model.IsTerminalTaskRunStatus(run.Status) {
+				return run
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	var run model.TaskRun
+	if err := db.Where("task_id = ? AND trigger_type = ?", taskID, "cron").Order("id ASC").First(&run).Error; err != nil {
+		t.Fatalf("load cron TaskRun for task %d: %v", taskID, err)
+	}
+	t.Fatalf("cron TaskRun for task %d remained %s", taskID, run.Status)
+	return run
 }
 
 func TestPolicyMaxConcurrentAdmissionRechecksRunningAcrossTasks(t *testing.T) {

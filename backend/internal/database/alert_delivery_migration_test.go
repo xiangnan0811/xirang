@@ -19,7 +19,7 @@ func testAlertDeliveryMigrationApplyDown(t *testing.T, fixture migrationFixture)
 	if err := migrator.Steps(2); err != nil {
 		t.Fatalf("apply 000084/000085 on %s: %v", fixture.engine, err)
 	}
-	assertMigrationVersion(t, migrator, latestMigrationVersion)
+	assertMigrationVersion(t, migrator, uint(alertDeliverySuccessSchemaVersion))
 	for table, columns := range map[string][]string{
 		"alerts":           {"delivery_decision", "delivery_reason", "delivery_decided_at"},
 		"alert_deliveries": {"decision", "delivery_key", "attempt_id", "lease_expires_at", "updated_at", "sent_at"},
@@ -86,7 +86,7 @@ func testAlertDeliveryMigrationUsedDownRejected(t *testing.T, fixture migrationF
 	if err != nil {
 		t.Fatalf("read %s migration state after rejected 000085 down: %v", fixture.engine, err)
 	}
-	if version != latestMigrationVersion || dirty {
+	if version != uint(alertDeliverySuccessSchemaVersion) || dirty {
 		t.Fatalf("rejected %s down changed migration state: version=%d dirty=%v", fixture.engine, version, dirty)
 	}
 	if !databaseColumnExists(t, db, fixture.engine, "alert_deliveries", "sent_at") {

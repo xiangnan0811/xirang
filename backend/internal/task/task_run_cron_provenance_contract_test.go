@@ -3,16 +3,39 @@ package task
 import (
 	"context"
 	"errors"
+	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"xirang/backend/internal/model"
+
+	"gorm.io/gorm"
 )
 
 func TestCronOccurrenceDeduplicatesAcrossManagersAndRestart(t *testing.T) {
-	db := openConcurrentManagerTestDB(t)
-	if err := db.Exec(`CREATE UNIQUE INDEX idx_task_runs_cron_occurrence
+	runCronOccurrenceDeduplicatesAcrossManagersAndRestart(t, openConcurrentManagerTestDB(t))
+}
+
+func TestCronOccurrenceDeduplicatesAcrossManagersAndRestartPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	db := openTaskTerminalPostgresDB(t, dsn)
+	if err := db.AutoMigrate(
+		&model.TaskCronOccurrence{}, &model.TaskLog{}, &model.TaskTrafficSample{}, &model.BackupCompletion{},
+		&model.Alert{}, &model.AlertDelivery{}, &model.Integration{},
+	); err != nil {
+		t.Fatalf("migrate PostgreSQL cron support tables: %v", err)
+	}
+	runCronOccurrenceDeduplicatesAcrossManagersAndRestart(t, db)
+}
+
+func runCronOccurrenceDeduplicatesAcrossManagersAndRestart(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_runs_cron_occurrence
 		ON task_runs(task_id, cron_scheduled_at)
 		WHERE trigger_type = 'cron' AND cron_scheduled_at IS NOT NULL`).Error; err != nil {
 		t.Fatalf("install cron occurrence uniqueness: %v", err)
@@ -70,7 +93,7 @@ func TestCronOccurrenceDeduplicatesAcrossManagersAndRestart(t *testing.T) {
 	}
 	laterRun := waitTaskRunTerminal(t, db, laterRunID)
 	if laterRun.Status != model.TaskRunStatusSuccess {
-		t.Fatalf("later cron occurrence status=%q, want success", laterRun.Status)
+		t.Fatalf("later cron occurrence status=%q error=%q, want success", laterRun.Status, laterRun.LastError)
 	}
 	if laterRun.CronScheduledAt == nil || !laterRun.CronScheduledAt.Equal(laterOccurrence) {
 		t.Fatalf("later cron occurrence timestamp=%v, want %v", laterRun.CronScheduledAt, laterOccurrence)

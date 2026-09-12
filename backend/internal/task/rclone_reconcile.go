@@ -136,6 +136,30 @@ func ReconcileLegacyRcloneWrite(ctx context.Context, db *gorm.DB, request Legacy
 			return fmt.Errorf("%w: another task run is still active", apperr.ErrConflict)
 		}
 
+		// A shared immutable Rclone resource cannot be reconciled while another
+		// TaskRun still proves a writing/unknown generation on that same remote.
+		// Historical rows without a key remain conservatively node-scoped.
+		unresolvedQuery := tx.WithContext(ctx).
+			Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+			Select("id").
+			Where("id <> ?", selected.ID).
+			Where(`lower(COALESCE(trigger_type, '')) NOT IN ? AND
+				TRIM(COALESCE(backup_generation_state, '')) IN ?`,
+				[]string{"restore", "drill"},
+				[]string{model.TaskRunGenerationStateWriting, model.TaskRunGenerationStateUnknown})
+		if key := strings.TrimSpace(selected.ResourceKey); key != "" {
+			unresolvedQuery = unresolvedQuery.Where("resource_key = ?", key)
+		} else {
+			unresolvedQuery = unresolvedQuery.Where("node_id_snapshot = ?", selected.NodeIDSnapshot).
+				Where("TRIM(COALESCE(executor_type_snapshot, '')) = '' OR TRIM(COALESCE(resource_key, '')) = ''")
+		}
+		var unresolvedSiblings []model.TaskRun
+		if result := unresolvedQuery.Find(&unresolvedSiblings); result.Error != nil {
+			return apperr.WrapDBError(result.Error)
+		} else if len(unresolvedSiblings) > 0 {
+			return fmt.Errorf("%w: another task run still holds the shared mutable remote", apperr.ErrConflict)
+		}
+
 		// An active selected writing run was abandoned by its expired owner.
 		// Settle its aggregate only when the aggregate is itself in an active
 		// state; paused state and diagnostic text remain untouched.

@@ -6,12 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"xirang/backend/internal/model"
-	"xirang/backend/internal/secure"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -109,7 +106,7 @@ func TestServiceMonitorHeadersAreWriteOnlyAndUpdateSemanticsAreExplicit(t *testi
 	}
 }
 
-func TestServiceMonitorOmittedRenameCannotClobberConcurrentHeaderRotation(t *testing.T) {
+func TestServiceMonitorConcurrentRetargetAndHeaderRotationRemainAtomic(t *testing.T) {
 	db := openServiceMonitorTestDB(t)
 	r := gin.New()
 	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
@@ -122,7 +119,7 @@ func TestServiceMonitorOmittedRenameCannotClobberConcurrentHeaderRotation(t *tes
 	monitor := &model.ServiceMonitor{
 		Name:               "FAKE_CONCURRENT_MONITOR_FOR_TEST_ONLY",
 		Type:               "http",
-		Target:             "https://example.invalid",
+		Target:             "https://receiver-a.example/health?probe=1",
 		HTTPHeaders:        originalHeaders,
 		IntervalSeconds:    60,
 		TimeoutSeconds:     10,
@@ -134,89 +131,163 @@ func TestServiceMonitorOmittedRenameCannotClobberConcurrentHeaderRotation(t *tes
 		t.Fatalf("create monitor: %v", err)
 	}
 
-	snapshotObserved := make(chan string, 1)
-	queryEntered := make(chan struct{})
-	releaseQuery := make(chan struct{})
-	var pauseOnce sync.Once
-	const callbackName = "test:service-monitor-rename-query-pause"
-	if err := db.Callback().Query().After("gorm:after_query").Register(callbackName, func(tx *gorm.DB) {
-		if tx.Statement.Schema == nil || tx.Statement.Schema.Table != "service_monitors" {
-			return
-		}
-		snapshot, ok := tx.Statement.Dest.(*model.ServiceMonitor)
-		if !ok {
-			return
-		}
-		pauseOnce.Do(func() {
-			snapshotObserved <- snapshot.HTTPHeaders
-			close(queryEntered)
-			<-releaseQuery
-		})
-	}); err != nil {
-		t.Fatalf("register query callback: %v", err)
-	}
-	defer func() {
-		if err := db.Callback().Query().Remove(callbackName); err != nil {
-			t.Errorf("remove rotation callback: %v", err)
-		}
-	}()
+	rotatedHeaders := fmt.Sprintf(`{"Authorization":%q}`, rotatedSecret)
+	rotationBody := fmt.Sprintf(
+		`{"name":"FAKE_CONCURRENT_MONITOR_FOR_TEST_ONLY","type":"http","target":"https://receiver-a.example/health?probe=1","http_headers":%q}`,
+		rotatedHeaders,
+	)
+	retargetBody := `{"name":"FAKE_CONCURRENT_MONITOR_RETARGETED_FOR_TEST_ONLY","type":"http","target":"https://receiver-b.example/collect?probe=2"}`
 
-	renameDone := make(chan *httptest.ResponseRecorder, 1)
-	go func() {
-		req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/service-monitors/%d", monitor.ID), strings.NewReader(`{"name":"FAKE_CONCURRENT_MONITOR_RENAMED_FOR_TEST_ONLY","type":"http","target":"https://example.invalid"}`))
-		req.Header.Set("Content-Type", "application/json")
-		response := httptest.NewRecorder()
-		r.ServeHTTP(response, req)
-		renameDone <- response
-	}()
-
-	select {
-	case <-queryEntered:
-	case <-time.After(5 * time.Second):
-		close(releaseQuery)
-		t.Fatal("rename did not load the monitor before rotation")
+	type result struct {
+		name string
+		code int
+		body string
 	}
-	select {
-	case observed := <-snapshotObserved:
-		if observed != originalHeaders {
-			close(releaseQuery)
-			t.Fatalf("rename loaded headers=%q, want original %q", observed, originalHeaders)
+	results := make(chan result, 2)
+	start := make(chan struct{})
+	for _, request := range []struct {
+		name string
+		body string
+	}{
+		{name: "rotation", body: rotationBody},
+		{name: "retarget", body: retargetBody},
+	} {
+		request := request
+		go func() {
+			<-start
+			req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/service-monitors/%d", monitor.ID), strings.NewReader(request.body))
+			req.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			r.ServeHTTP(response, req)
+			results <- result{name: request.name, code: response.Code, body: response.Body.String()}
+		}()
+	}
+	close(start)
+
+	var rotationResult, retargetResult result
+	for range 2 {
+		switch result := <-results; result.name {
+		case "rotation":
+			rotationResult = result
+		case "retarget":
+			retargetResult = result
 		}
-	case <-time.After(5 * time.Second):
-		close(releaseQuery)
-		t.Fatal("rename snapshot was not observed")
 	}
-
-	wantHeaders := fmt.Sprintf(`{"Authorization":%q}`, rotatedSecret)
-	rotated, err := secure.EncryptString(wantHeaders)
-	if err != nil {
-		close(releaseQuery)
-		t.Fatalf("encrypt rotated headers: %v", err)
+	if rotationResult.code != http.StatusOK && rotationResult.code != http.StatusConflict {
+		t.Fatalf("rotation status=%d body=%s", rotationResult.code, rotationResult.body)
 	}
-	if result := db.Session(&gorm.Session{SkipHooks: true}).
-		Table("service_monitors").
-		Where("id = ?", monitor.ID).
-		Update("http_headers", rotated); result.Error != nil {
-		close(releaseQuery)
-		t.Fatalf("rotate headers: %v", result.Error)
+	if retargetResult.code != http.StatusConflict {
+		t.Fatalf("retarget status=%d body=%s", retargetResult.code, retargetResult.body)
 	}
-	close(releaseQuery)
-
-	var response *httptest.ResponseRecorder
-	select {
-	case response = <-renameDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("rename did not complete after header rotation")
+	var conflict struct {
+		Data struct {
+			Reason struct {
+				Code string `json:"code"`
+			} `json:"reason"`
+		} `json:"data"`
 	}
-	if response.Code != http.StatusOK {
-		t.Fatalf("rename status=%d body=%s", response.Code, response.Body.String())
+	if err := json.Unmarshal([]byte(retargetResult.body), &conflict); err != nil {
+		t.Fatalf("decode retarget conflict: %v", err)
+	}
+	if conflict.Data.Reason.Code != serviceMonitorHeadersRetargetedCode &&
+		conflict.Data.Reason.Code != serviceMonitorConcurrentUpdateCode {
+		t.Fatalf("retarget conflict code=%q body=%s", conflict.Data.Reason.Code, retargetResult.body)
 	}
 
 	var loaded model.ServiceMonitor
 	if err := db.First(&loaded, monitor.ID).Error; err != nil {
-		t.Fatalf("load rotated monitor: %v", err)
+		t.Fatalf("load monitor: %v", err)
 	}
-	if loaded.HTTPHeaders != wantHeaders {
-		t.Fatalf("omitted rename clobbered rotated headers: got %q, want %q", loaded.HTTPHeaders, wantHeaders)
+	if loaded.Target != monitor.Target {
+		t.Fatalf("retarget unexpectedly committed target=%q", loaded.Target)
+	}
+	if loaded.HTTPHeaders != originalHeaders && loaded.HTTPHeaders != rotatedHeaders {
+		t.Fatalf("concurrent updates produced an unexpected header state: got %q", loaded.HTTPHeaders)
+	}
+}
+func TestServiceMonitorRetargetRequiresExplicitHeaderDecision(t *testing.T) {
+	db := openServiceMonitorTestDB(t)
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("role", "admin"); c.Next() })
+	handler := NewServiceMonitorHandler(db, nil)
+	r.PUT("/service-monitors/:id", handler.Update)
+
+	const secret = "FAKE_RETARGET_SECRET_FOR_TEST_ONLY"
+	monitor := &model.ServiceMonitor{
+		Name:               "FAKE_RETARGET_MONITOR_FOR_TEST_ONLY",
+		Type:               "http",
+		Target:             "https://receiver-a.example/health?probe=1",
+		HTTPHeaders:        fmt.Sprintf(`{"Authorization":%q}`, secret),
+		IntervalSeconds:    60,
+		TimeoutSeconds:     10,
+		HTTPMethod:         "GET",
+		HTTPExpectedStatus: 200,
+		Enabled:            true,
+	}
+	if err := db.Create(monitor).Error; err != nil {
+		t.Fatalf("create monitor: %v", err)
+	}
+
+	retarget := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/service-monitors/%d", monitor.ID), strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		r.ServeHTTP(response, req)
+		return response
+	}
+
+	rejected := retarget(`{"name":"FAKE_RETARGETED_WITHOUT_HEADERS_FOR_TEST_ONLY","type":"http","target":"https://receiver-b.example/collect?probe=2"}`)
+	if rejected.Code != http.StatusConflict {
+		t.Fatalf("omitted retarget status=%d body=%s", rejected.Code, rejected.Body.String())
+	}
+	var conflict struct {
+		Data struct {
+			Reason struct {
+				Code string `json:"code"`
+			} `json:"reason"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rejected.Body.Bytes(), &conflict); err != nil {
+		t.Fatalf("decode retarget conflict: %v", err)
+	}
+	if conflict.Data.Reason.Code != serviceMonitorHeadersRetargetedCode {
+		t.Fatalf("retarget conflict code=%q want %q", conflict.Data.Reason.Code, serviceMonitorHeadersRetargetedCode)
+	}
+	var unchanged model.ServiceMonitor
+	if err := db.First(&unchanged, monitor.ID).Error; err != nil {
+		t.Fatalf("load rejected monitor: %v", err)
+	}
+	if unchanged.Target != monitor.Target || unchanged.HTTPHeaders != fmt.Sprintf(`{"Authorization":%q}`, secret) {
+		t.Fatalf("rejected retarget changed persisted use: %+v", unchanged)
+	}
+
+	cleared := retarget(`{"name":"FAKE_RETARGETED_WITH_CLEAR_FOR_TEST_ONLY","type":"http","target":"https://receiver-b.example/collect?probe=2","http_headers":"{}"}`)
+	if cleared.Code != http.StatusOK {
+		t.Fatalf("explicit clear retarget status=%d body=%s", cleared.Code, cleared.Body.String())
+	}
+	var afterClear model.ServiceMonitor
+	if err := db.First(&afterClear, monitor.ID).Error; err != nil {
+		t.Fatalf("load cleared monitor: %v", err)
+	}
+	if afterClear.Target != "https://receiver-b.example/collect?probe=2" || afterClear.HTTPHeaders != "{}" {
+		t.Fatalf("explicit clear did not commit target/header state: %+v", afterClear)
+	}
+
+	replacedHeaders := `{"Authorization":"FAKE_REPLACED_RETARGET_SECRET_FOR_TEST_ONLY"}`
+	replaced := retarget(fmt.Sprintf(`{"name":"FAKE_RETARGETED_WITH_REPLACEMENT_FOR_TEST_ONLY","type":"http","target":"https://receiver-c.example/collect?probe=3","http_headers":%q}`, replacedHeaders))
+	if replaced.Code != http.StatusOK {
+		t.Fatalf("explicit replacement retarget status=%d body=%s", replaced.Code, replaced.Body.String())
+	}
+	var afterReplacement model.ServiceMonitor
+	if err := db.First(&afterReplacement, monitor.ID).Error; err != nil {
+		t.Fatalf("load replacement monitor: %v", err)
+	}
+	if afterReplacement.Target != "https://receiver-c.example/collect?probe=3" || afterReplacement.HTTPHeaders != replacedHeaders {
+		t.Fatalf("explicit replacement did not commit target/header state: %+v", afterReplacement)
+	}
+
+	methodChange := retarget(`{"name":"FAKE_METHOD_CHANGE_WITHOUT_HEADERS_FOR_TEST_ONLY","type":"http","target":"https://receiver-c.example/collect?probe=3","http_method":"POST"}`)
+	if methodChange.Code != http.StatusConflict {
+		t.Fatalf("method-change status=%d body=%s", methodChange.Code, methodChange.Body.String())
 	}
 }

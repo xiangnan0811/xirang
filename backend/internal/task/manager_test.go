@@ -396,11 +396,16 @@ func openManagerTestDB(t *testing.T) *gorm.DB {
 	}
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.TaskRunEffect{}, &model.RestoreDrillEvidence{}, &model.CredentialAuditEvent{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}); err != nil {
+	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.TaskCronOccurrence{}, &model.BackupCompletion{}, &model.TaskRunEffect{}, &model.RestoreDrillEvidence{}, &model.CredentialAuditEvent{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}); err != nil {
 		t.Fatalf("初始化测试数据库表失败: %v", err)
 	}
 	if err := db.AutoMigrate(&model.TaskTrafficSample{}); err != nil {
 		t.Fatalf("初始化采样表失败: %v", err)
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_runs_resource_active_unique
+		ON task_runs(resource_key)
+		WHERE resource_key <> '' AND backup_generation_state IN ('writing', 'unknown')`).Error; err != nil {
+		t.Fatalf("初始化可变目标唯一索引失败: %v", err)
 	}
 	return db
 }
@@ -421,8 +426,13 @@ func openConcurrentManagerTestDB(t *testing.T) *gorm.DB {
 	}
 	sqlDB.SetMaxOpenConns(4)
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.TaskRunEffect{}, &model.RestoreDrillEvidence{}, &model.CredentialAuditEvent{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}, &model.TaskTrafficSample{}); err != nil {
+	if err := db.AutoMigrate(&model.SSHKey{}, &model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.TaskCronOccurrence{}, &model.BackupCompletion{}, &model.TaskRunEffect{}, &model.RestoreDrillEvidence{}, &model.CredentialAuditEvent{}, &model.TaskLog{}, &model.Alert{}, &model.Integration{}, &model.TaskTrafficSample{}); err != nil {
 		t.Fatalf("初始化并发测试数据表失败: %v", err)
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_runs_resource_active_unique
+		ON task_runs(resource_key)
+		WHERE resource_key <> '' AND backup_generation_state IN ('writing', 'unknown')`).Error; err != nil {
+		t.Fatalf("初始化并发可变目标唯一索引失败: %v", err)
 	}
 	return db
 }

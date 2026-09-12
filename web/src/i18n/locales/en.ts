@@ -4413,7 +4413,8 @@ const en = {
     fieldUptime: "Uptime",
     httpHeadersHint: "Optional: custom HTTP request headers.",
     httpHeadersConfigured: "Configured header names: {{names}}",
-    httpHeadersReplaceHint: "Only header names are shown. Saving a header list replaces the complete set; omit headers to keep the current values.",
+    httpHeadersReplaceHint: "Only header names are shown. Saving a header list replaces the complete set. Omit headers only when the target, monitor type, and HTTP method stay unchanged.",
+    httpHeadersRetargetWarning: "This monitor has hidden HTTP header values. Changing its target, type, or HTTP method requires replacing the headers or clearing them explicitly.",
     httpHeadersClear: "Clear all custom HTTP headers",
     addHeader: "Add header",
     removeHeader: "Remove",
@@ -4441,7 +4442,7 @@ const en = {
       typeRequired: "Please select a monitor type",
       targetRequired: "Please enter a probe target",
       httpTargetFormat: "HTTP monitor target must start with http:// or https://",
-      tcpTargetFormat: "TCP monitor target must use host:port",
+      headersRetargetRequiresAction: "Explicitly replace or clear the hidden HTTP headers before changing the monitor target, type, or HTTP method.",
     },
     // Status Page (public)
     statusPageTitle: "Service Status",

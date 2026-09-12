@@ -72,6 +72,8 @@ func normalizeCronOccurrence(occurrence *time.Time) *time.Time {
 	return &normalized
 }
 
+const activeMutableResourceIndex = "idx_task_runs_resource_active_unique"
+
 func isBackupTaskRunTrigger(triggerType string) bool {
 	switch strings.ToLower(strings.TrimSpace(triggerType)) {
 	case "restore", "drill":
@@ -182,28 +184,108 @@ func policyMaxConcurrent(policyEntity *model.Policy) int {
 	return policyEntity.MaxConcurrent
 }
 
-// rejectUnresolvedMutableGenerationTx blocks every ordinary write while a
-// Task has a durable writing/unknown generation. The generation is scoped to
-// the Task rather than the current executor/config fingerprint: a config/target
-// edit cannot make evidence from the previous mutable target disappear or
-// silently authorize a mixed remote. Restore admission has its own provenance
-// check and is intentionally not routed through this gate.
+func rejectHistoricalUnresolvedMutableGenerationTx(tx *gorm.DB, taskEntity *model.Task) error {
+	if tx == nil || taskEntity == nil || taskEntity.NodeID == 0 {
+		return nil
+	}
+	var unresolvedRun model.TaskRun
+	result := tx.Model(&model.TaskRun{}).
+		Where(`lower(COALESCE(trigger_type, '')) NOT IN ? AND
+			TRIM(COALESCE(backup_generation_state, '')) IN ?`,
+			[]string{"restore", "drill"},
+			[]string{model.TaskRunGenerationStateWriting, model.TaskRunGenerationStateUnknown}).
+		Where("node_id_snapshot = ?", taskEntity.NodeID).
+		Where("TRIM(COALESCE(executor_type_snapshot, '')) = '' OR TRIM(COALESCE(resource_key, '')) = ''").
+		Limit(1).
+		Find(&unresolvedRun)
+	if result.Error != nil {
+		return fmt.Errorf("读取历史未决可变目标代际失败: %w", result.Error)
+	}
+	if result.RowsAffected > 0 {
+		return fmt.Errorf("%w: 同节点存在未能确定远端的历史写入，需人工核验后才能继续", ErrMutableGenerationUnresolved)
+	}
+	return nil
+}
+
+// rejectSameNodeMutableGenerationTx is used when the candidate run has no
+// immutable resource key. In that case a keyed Rclone writer on the same
+// authoritative node is still a possible conflict; inspecting the editable
+// Task target would be unsafe, so the node lock conservatively fences every
+// same-node writing/unknown legacy row.
+func rejectSameNodeMutableGenerationTx(tx *gorm.DB, taskEntity *model.Task, excludeRunID uint) error {
+	if tx == nil || taskEntity == nil || taskEntity.NodeID == 0 {
+		return nil
+	}
+	query := tx.Model(&model.TaskRun{}).
+		Where(`lower(COALESCE(trigger_type, '')) NOT IN ? AND
+			TRIM(COALESCE(backup_generation_state, '')) IN ?`,
+			[]string{"restore", "drill"},
+			[]string{model.TaskRunGenerationStateWriting, model.TaskRunGenerationStateUnknown}).
+		Where("node_id_snapshot = ?", taskEntity.NodeID).
+		Where(`lower(COALESCE(executor_type_snapshot, '')) = 'rclone' OR
+			lower(COALESCE(resource_provider, '')) = 'rclone' OR
+			(TRIM(COALESCE(executor_type_snapshot, '')) = '' AND
+				TRIM(COALESCE(resource_key, '')) = '')`)
+	if excludeRunID != 0 {
+		query = query.Where("id <> ?", excludeRunID)
+	}
+	var unresolvedRun model.TaskRun
+	result := query.Limit(1).Find(&unresolvedRun)
+	if result.Error != nil {
+		return fmt.Errorf("读取同节点未决可变目标代际失败: %w", result.Error)
+	}
+	if result.RowsAffected > 0 {
+		return fmt.Errorf("%w: 同节点存在未能确定远端的写入，需人工核验后才能继续", ErrMutableGenerationUnresolved)
+	}
+	return nil
+}
+
+// rejectUnresolvedMutableGenerationTx blocks ordinary writes while a mutable
+// generation is unresolved. New rows carry a stable immutable resource key, so
+// the hold spans TaskIDs that point at the same Rclone remote. Pre-000086 rows
+// have no reliable target identity; those rows fail closed only within their
+// authoritative node snapshot and are never rebound through editable Task
+// configuration.
 func rejectUnresolvedMutableGenerationTx(tx *gorm.DB, taskEntity *model.Task) error {
 	if tx == nil || taskEntity == nil || taskEntity.ID == 0 {
 		return nil
 	}
-	var unresolved int64
-	result := tx.Model(&model.TaskRun{}).
-		Where(`task_id = ? AND lower(COALESCE(trigger_type, '')) NOT IN ? AND
+	unresolvedWhere := func(query *gorm.DB) *gorm.DB {
+		return query.Where(`lower(COALESCE(trigger_type, '')) NOT IN ? AND
 			TRIM(COALESCE(backup_generation_state, '')) IN ?`,
-			taskEntity.ID, []string{"restore", "drill"},
-			[]string{model.TaskRunGenerationStateWriting, model.TaskRunGenerationStateUnknown}).
+			[]string{"restore", "drill"},
+			[]string{model.TaskRunGenerationStateWriting, model.TaskRunGenerationStateUnknown})
+	}
+	var unresolved int64
+	result := unresolvedWhere(tx.Model(&model.TaskRun{}).Where("task_id = ?", taskEntity.ID)).
 		Count(&unresolved)
 	if result.Error != nil {
 		return fmt.Errorf("读取未决可变目标代际失败: %w", result.Error)
 	}
 	if unresolved > 0 {
 		return fmt.Errorf("%w: 远端目标仍需人工核验后才能继续写入", ErrMutableGenerationUnresolved)
+	}
+
+	identity, keyed := model.TaskRunResourceIdentityForTask(*taskEntity)
+	if !keyed {
+		return nil
+	}
+	// ResourceKey is immutable evidence captured at reservation time. Do not
+	// compare current source/target strings with historical rows.
+	result = unresolvedWhere(tx.Model(&model.TaskRun{}).Where("resource_key = ?", identity.Key)).
+		Count(&unresolved)
+	if result.Error != nil {
+		return fmt.Errorf("读取共享可变目标代际失败: %w", result.Error)
+	}
+	if unresolved > 0 {
+		return fmt.Errorf("%w: 共享远端目标仍需人工核验后才能继续写入", ErrMutableGenerationUnresolved)
+	}
+
+	// Rows predating immutable identity capture remain unknown. A node snapshot
+	// is the only trustworthy scope, so conservatively hold all legacy Rclone
+	// writers on that node rather than guessing a historical remote from Task.
+	if err := rejectHistoricalUnresolvedMutableGenerationTx(tx, taskEntity); err != nil {
+		return err
 	}
 	return nil
 }
@@ -427,6 +509,8 @@ const (
 	defaultSampleCleanupInterval  = time.Hour
 	defaultSampleCleanupBatchSize = 500
 	nodeWriteReservationAttempts  = 8
+	defaultCronOccurrenceLease    = 30 * time.Second
+	defaultCronOccurrenceBatch    = 32
 	defaultDrillRecoveryLease     = 30 * time.Second
 	defaultDrillRecoveryInterval  = 5 * time.Second
 )
@@ -439,6 +523,7 @@ var (
 	ErrDrillAlreadyActive           = errors.New("该任务正在执行中，请勿重复触发")
 	ErrRestoreRequiresNewBackup     = errors.New("new-backup-required")
 	errCronOccurrenceHandled        = errors.New("cron occurrence already handled")
+	errCronOccurrenceClaimed        = errors.New("cron occurrence claimed by another core")
 	errTaskChainRunHandled          = errors.New("chain child already handled")
 	errTaskChainBusy                = errors.New("chain task is busy")
 	errTaskPolicyChanged            = errors.New("task policy changed during reservation")
@@ -628,6 +713,10 @@ type Manager struct {
 	pendingRuns                   sync.Map
 	pendingRecoveryMu             sync.Mutex
 	pendingRecoveryCursor         uint
+	cronDispatchMu                sync.Mutex
+	cronOccurrenceCursor          uint
+	cronOccurrenceOwnerID         string
+	cronOccurrenceLeaseDuration   time.Duration
 	restoreNodes                  sync.Map // nodeID → taskID, 持续跟踪有活跃恢复任务的节点
 	semaphore                     chan struct{}
 	taskWG                        sync.WaitGroup
@@ -689,23 +778,24 @@ func NewManager(db *gorm.DB, executorFactory executor.Factory, hub *ws.Hub, sche
 		alertDispatcher = alerting.NewDispatcher(db, nil, nil)
 	}
 	m := &Manager{
-		db:                     db,
-		nodeWriteRetryWait:     waitForNodeWriteReservationRetry,
-		runContextFactory:      context.WithTimeout,
-		stateMachine:           NewStateMachine(),
-		executorFactory:        executorFactory,
-		hub:                    hub,
-		scheduler:              scheduler,
-		semaphore:              make(chan struct{}, 8),
-		hookRunFunc:            nil, // 初始化后设置为默认 runSSHHook
-		taskRunRetentionDays:   taskRunRetentionDays,
-		settingsSvc:            settingsSvc,
-		alertDispatcher:        alertDispatcher,
-		drillOwnerID:           generateChainRunID(),
-		drillRecoveryLease:     defaultDrillRecoveryLease,
-		drillRecoveryInterval:  defaultDrillRecoveryInterval,
-		executionOwnerID:       generateChainRunID(),
-		executionLeaseDuration: defaultTaskRunLease,
+		db:                          db,
+		nodeWriteRetryWait:          waitForNodeWriteReservationRetry,
+		runContextFactory:           context.WithTimeout,
+		stateMachine:                NewStateMachine(),
+		executorFactory:             executorFactory,
+		hub:                         hub,
+		scheduler:                   scheduler,
+		semaphore:                   make(chan struct{}, 8),
+		hookRunFunc:                 nil, // 初始化后设置为默认 runSSHHook
+		executionOwnerID:            generateChainRunID(),
+		executionLeaseDuration:      defaultTaskRunLease,
+		cronOccurrenceOwnerID:       generateChainRunID(),
+		cronOccurrenceLeaseDuration: defaultCronOccurrenceLease,
+		alertDispatcher:             alertDispatcher,
+		drillOwnerID:                generateChainRunID(),
+		drillRecoveryLease:          defaultDrillRecoveryLease,
+		drillRecoveryInterval:       defaultDrillRecoveryInterval,
+		taskRunRetentionDays:        taskRunRetentionDays,
 	}
 	m.drillRecoveryBlocked.Store(true)
 	for _, option := range options {
@@ -821,6 +911,266 @@ func (m *Manager) SetPublicationCoordinator(coordinator publication.Coordinator)
 	m.publicationCoordinator = coordinator
 }
 
+func (m *Manager) cronOccurrenceOwner() string {
+	if m == nil {
+		return ""
+	}
+	if owner := strings.TrimSpace(m.cronOccurrenceOwnerID); owner != "" {
+		return owner
+	}
+	return strings.TrimSpace(m.executionOwnerID)
+}
+
+func (m *Manager) cronOccurrenceLease() time.Duration {
+	if m == nil || m.cronOccurrenceLeaseDuration <= 0 {
+		return defaultCronOccurrenceLease
+	}
+	return m.cronOccurrenceLeaseDuration
+}
+
+// ensureCronOccurrence persists scheduler intent before any process-local,
+// quota, node, or executor admission gate. The unique task/scheduled key makes
+// callbacks from two cores converge on one durable row.
+func (m *Manager) ensureCronOccurrence(ctx context.Context, taskID uint, scheduledAt time.Time) (model.TaskCronOccurrence, error) {
+	if m == nil || m.db == nil || taskID == 0 || scheduledAt.IsZero() {
+		return model.TaskCronOccurrence{}, fmt.Errorf("cron occurrence authority unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	scheduledAt = scheduledAt.UTC()
+	var occurrence model.TaskCronOccurrence
+	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var taskIDCheck uint
+		taskResult := tx.Model(&model.Task{}).Select("id").
+			Where("id = ?", taskID).Limit(1).Scan(&taskIDCheck)
+		if taskResult.Error != nil {
+			return taskResult.Error
+		}
+		if taskResult.RowsAffected != 1 {
+			return fmt.Errorf("任务不存在")
+		}
+		insert := model.TaskCronOccurrence{
+			TaskID:      taskID,
+			ScheduledAt: scheduledAt,
+			State:       model.TaskCronOccurrenceStateQueued,
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "task_id"}, {Name: "scheduled_at"}},
+			DoNothing: true,
+		}).Create(&insert).Error; err != nil {
+			return err
+		}
+		result := tx.Where("task_id = ? AND scheduled_at = ?", taskID, scheduledAt).
+			Limit(1).Find(&occurrence)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("cron occurrence disappeared after persistence")
+		}
+		return nil
+	})
+	if err != nil {
+		return model.TaskCronOccurrence{}, err
+	}
+	return occurrence, nil
+}
+
+func (m *Manager) claimCronOccurrence(ctx context.Context, occurrenceID uint) (bool, error) {
+	if m == nil || m.db == nil || occurrenceID == 0 {
+		return false, fmt.Errorf("cron occurrence claim unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	owner := m.cronOccurrenceOwner()
+	if owner == "" {
+		return false, fmt.Errorf("cron occurrence owner unavailable")
+	}
+	claimed := false
+	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var occurrence model.TaskCronOccurrence
+		result := tx.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+			Where("id = ?", occurrenceID).Limit(1).Find(&occurrence)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 || occurrence.State != model.TaskCronOccurrenceStateQueued ||
+			occurrence.TaskRunID != nil {
+			return nil
+		}
+		now := time.Now().UTC()
+		currentOwner := strings.TrimSpace(occurrence.DispatchOwnerID)
+		if currentOwner != "" && currentOwner != owner {
+			if occurrence.DispatchLeaseUntil == nil || occurrence.DispatchLeaseUntil.After(now) {
+				return nil
+			}
+		}
+		leaseUntil := now.Add(m.cronOccurrenceLease())
+		updates := tx.Model(&model.TaskCronOccurrence{}).
+			Where("id = ? AND state = ? AND task_run_id IS NULL", occurrenceID, model.TaskCronOccurrenceStateQueued)
+		if currentOwner != "" && currentOwner != owner {
+			updates = updates.Where("dispatch_owner_id = ? AND dispatch_lease_until <= ?", currentOwner, now)
+		}
+		result = updates.Updates(map[string]interface{}{
+			"dispatch_owner_id":    owner,
+			"dispatch_lease_until": &leaseUntil,
+			"updated_at":           now,
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		claimed = result.RowsAffected == 1
+		return nil
+	})
+	return claimed, err
+}
+
+func (m *Manager) releaseCronOccurrence(ctx context.Context, occurrenceID uint) error {
+	if m == nil || m.db == nil || occurrenceID == 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	owner := m.cronOccurrenceOwner()
+	now := time.Now().UTC()
+	result := m.db.WithContext(ctx).Model(&model.TaskCronOccurrence{}).
+		Where("id = ? AND state = ? AND dispatch_owner_id = ?",
+			occurrenceID, model.TaskCronOccurrenceStateQueued, owner).
+		Updates(map[string]interface{}{"dispatch_owner_id": "", "dispatch_lease_until": nil, "updated_at": now})
+	if result.Error != nil {
+		return result.Error
+	}
+	return nil
+}
+
+func (m *Manager) settleCronOccurrence(ctx context.Context, occurrenceID uint, state, reason string) error {
+	if m == nil || m.db == nil || occurrenceID == 0 {
+		return nil
+	}
+	if state != model.TaskCronOccurrenceStateSkipped && state != model.TaskCronOccurrenceStateCanceled {
+		return fmt.Errorf("invalid cron occurrence terminal state")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	now := time.Now().UTC()
+	result := m.db.WithContext(ctx).Model(&model.TaskCronOccurrence{}).
+		Where("id = ? AND state = ?", occurrenceID, model.TaskCronOccurrenceStateQueued).
+		Updates(map[string]interface{}{
+			"state":                state,
+			"dispatch_owner_id":    "",
+			"dispatch_lease_until": nil,
+			"reason":               sanitizeTaskLastError(reason),
+			"updated_at":           now,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	return nil
+}
+
+func (m *Manager) recordMissedCronOccurrence(ctx context.Context, taskID uint, scheduledAt time.Time) error {
+	if m == nil || m.db == nil || taskID == 0 || scheduledAt.IsZero() {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	scheduledAt = scheduledAt.UTC()
+	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing model.TaskCronOccurrence
+		result := tx.Where("task_id = ? AND scheduled_at = ?", taskID, scheduledAt).
+			Limit(1).Find(&existing)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 1 {
+			return nil
+		}
+		occurrence := model.TaskCronOccurrence{
+			TaskID:      taskID,
+			ScheduledAt: scheduledAt,
+			State:       model.TaskCronOccurrenceStateSkipped,
+			Reason:      "scheduler downtime; missed occurrence coalesced",
+		}
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "task_id"}, {Name: "scheduled_at"}},
+			DoNothing: true,
+		}).Create(&occurrence).Error
+	})
+}
+
+func cancelQueuedCronOccurrencesTx(tx *gorm.DB, taskID uint, reason string) error {
+	if tx == nil || taskID == 0 {
+		return nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "任务已暂停，定时执行已取消"
+	}
+	now := time.Now().UTC()
+	result := tx.Model(&model.TaskCronOccurrence{}).
+		Where("task_id = ? AND state = ?", taskID, model.TaskCronOccurrenceStateQueued).
+		Updates(map[string]interface{}{
+			"state":                model.TaskCronOccurrenceStateCanceled,
+			"dispatch_owner_id":    "",
+			"dispatch_lease_until": nil,
+			"reason":               sanitizeTaskLastError(reason),
+			"updated_at":           now,
+		})
+	return result.Error
+}
+
+func (m *Manager) cancelQueuedCronOccurrences(ctx context.Context, taskID uint, reason string) error {
+	if m == nil || m.db == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return cancelQueuedCronOccurrencesTx(tx, taskID, reason)
+	})
+}
+
+// drainCronOccurrences advances one bounded durable-intent page. A blocked
+// occurrence remains queued and is revisited on a later sweep; cursor order
+// prevents one permanently blocked task from starving later tasks.
+func (m *Manager) drainCronOccurrences(ctx context.Context) error {
+	if m == nil || m.db == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.cronDispatchMu.Lock()
+	defer m.cronDispatchMu.Unlock()
+	start := m.cronOccurrenceCursor
+	var occurrences []model.TaskCronOccurrence
+	query := m.db.WithContext(ctx).
+		Where("state = ? AND id > ?", model.TaskCronOccurrenceStateQueued, start).
+		Order("id ASC").Limit(defaultCronOccurrenceBatch)
+	if err := query.Find(&occurrences).Error; err != nil {
+		return err
+	}
+	if len(occurrences) == 0 && start != 0 {
+		m.cronOccurrenceCursor = 0
+		return nil
+	}
+	for _, occurrence := range occurrences {
+		m.cronOccurrenceCursor = occurrence.ID
+		scheduledAt := occurrence.ScheduledAt.UTC()
+		if _, err := m.triggerCore(occurrence.TaskID, "cron", generateChainRunID(), nil, &scheduledAt); err != nil {
+			logger.Module("task").Warn().Uint("task_id", occurrence.TaskID).
+				Uint("occurrence_id", occurrence.ID).Err(err).
+				Msg("durable cron occurrence dispatch failed")
+		}
+	}
+	return nil
+}
+
 // SetLineageGuard installs the shared Restic command-admission and lineage
 // boundary. It is optional until the backup-asset runtime is composed, so
 // installations without that runtime retain the existing compatibility path.
@@ -874,7 +1224,7 @@ func (m *Manager) reserveTaskRun(ctx context.Context, nodeID uint, requested mod
 		candidate := requested
 		candidate.ID = 0
 		candidate.NodeIDSnapshot = nodeID
-		candidate.ExecutionOwnerID = m.executionOwnerID
+		candidate.ExecutorTypeSnapshot = strings.ToLower(strings.TrimSpace(candidate.ExecutorTypeSnapshot))
 		leaseUntil := time.Now().UTC().Add(m.taskRunLeaseDuration())
 		candidate.ExecutionLeaseUntil = &leaseUntil
 		candidate.CreatedAt = time.Time{}
@@ -1029,7 +1379,45 @@ func (m *Manager) reserveTaskRun(ctx context.Context, nodeID uint, requested mod
 					return fmt.Errorf("生成任务执行绑定失败")
 				}
 			}
-			return tx.Create(&candidate).Error
+			candidate.ExecutorTypeSnapshot = strings.ToLower(strings.TrimSpace(locked.ExecutorType))
+			model.SetTaskRunResourceIdentity(&candidate, locked)
+			if err := tx.Create(&candidate).Error; err != nil {
+				return err
+			}
+			if isCron && requested.CronOccurrenceID != 0 {
+				owner := m.cronOccurrenceOwner()
+				var occurrence model.TaskCronOccurrence
+				result := tx.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+					Where("id = ?", requested.CronOccurrenceID).Limit(1).Find(&occurrence)
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 || occurrence.TaskID != requested.TaskID ||
+					requested.CronScheduledAt == nil ||
+					!occurrence.ScheduledAt.UTC().Equal(requested.CronScheduledAt.UTC()) ||
+					occurrence.State != model.TaskCronOccurrenceStateQueued ||
+					occurrence.TaskRunID != nil ||
+					strings.TrimSpace(occurrence.DispatchOwnerID) != owner {
+					return errCronOccurrenceClaimed
+				}
+				linked := tx.Model(&model.TaskCronOccurrence{}).
+					Where("id = ? AND task_id = ? AND state = ? AND task_run_id IS NULL AND dispatch_owner_id = ?",
+						occurrence.ID, requested.TaskID, model.TaskCronOccurrenceStateQueued, owner).
+					Updates(map[string]interface{}{
+						"state":                model.TaskCronOccurrenceStateDispatched,
+						"task_run_id":          candidate.ID,
+						"dispatch_owner_id":    "",
+						"dispatch_lease_until": nil,
+						"updated_at":           time.Now().UTC(),
+					})
+				if linked.Error != nil {
+					return linked.Error
+				}
+				if linked.RowsAffected != 1 {
+					return errCronOccurrenceClaimed
+				}
+			}
+			return nil
 		})
 		if err == nil {
 			return candidate, nil
@@ -1048,7 +1436,7 @@ func (m *Manager) reserveTaskRun(ctx context.Context, nodeID uint, requested mod
 		if errors.Is(err, errTaskChainRunHandled) {
 			return candidate, err
 		}
-		if errors.Is(err, errCronOccurrenceHandled) {
+		if errors.Is(err, errCronOccurrenceHandled) || errors.Is(err, errCronOccurrenceClaimed) {
 			return candidate, err
 		}
 		if errors.Is(err, ErrNodeWriteConflict) {
@@ -1137,6 +1525,7 @@ func (m *Manager) ReserveAutomationRunTx(
 	run := model.TaskRun{
 		TaskID:                  taskID,
 		NodeIDSnapshot:          taskEntity.NodeID,
+		ExecutorTypeSnapshot:    strings.ToLower(strings.TrimSpace(taskEntity.ExecutorType)),
 		BackupConfigFingerprint: model.TaskRunBackupConfigFingerprint(taskEntity),
 		TriggerType:             "auto",
 		Status:                  model.TaskRunStatusPending,
@@ -1150,6 +1539,7 @@ func (m *Manager) ReserveAutomationRunTx(
 	if run.BackupConfigFingerprint == "" {
 		return 0, fmt.Errorf("生成任务执行绑定失败")
 	}
+	model.SetTaskRunResourceIdentity(&run, taskEntity)
 	if err := tx.Create(&run).Error; err != nil {
 		return 0, err
 	}
@@ -1550,6 +1940,28 @@ func isActiveDrillReservationConflict(err error) bool {
 		strings.Contains(message, "unique constraint failed: task_runs.task_id")
 }
 
+func isActiveMutableResourceConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	var sqliteError sqlite3.Error
+	if errors.As(err, &sqliteError) &&
+		sqliteError.Code == sqlite3.ErrConstraint &&
+		(sqliteError.ExtendedCode == sqlite3.ErrConstraintUnique ||
+			sqliteError.ExtendedCode == sqlite3.ErrConstraintPrimaryKey) {
+		message := strings.ToLower(sqliteError.Error())
+		return strings.Contains(message, activeMutableResourceIndex) ||
+			strings.Contains(message, "unique constraint failed: task_runs.resource_key")
+	}
+	var postgresError *pgconn.PgError
+	if errors.As(err, &postgresError) {
+		return postgresError.Code == "23505" &&
+			postgresError.ConstraintName == activeMutableResourceIndex
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, activeMutableResourceIndex)
+}
+
 func waitForNodeWriteReservationRetry(ctx context.Context, attempt int) error {
 	delay := time.Duration(attempt+1) * 5 * time.Millisecond
 	timer := time.NewTimer(delay)
@@ -1588,6 +2000,9 @@ func (m *Manager) LoadSchedules(ctx context.Context) error {
 	if err := m.reconcileSchedules(ctx); err != nil {
 		return err
 	}
+	if err := m.drainCronOccurrences(ctx); err != nil {
+		return fmt.Errorf("drain durable cron occurrences: %w", err)
+	}
 	m.drillRecoveryBlocked.Store(false)
 	return nil
 }
@@ -1624,22 +2039,29 @@ func (m *Manager) SyncSchedule(task model.Task) error {
 	if m.scheduler == nil {
 		return nil
 	}
-	m.scheduleMu.Lock()
-	defer m.scheduleMu.Unlock()
 	var current struct {
 		ArchivedAt *time.Time `gorm:"column:archived_at"`
 		Status     string     `gorm:"column:status"`
 		Enabled    bool       `gorm:"column:enabled"`
 		CronSpec   string     `gorm:"column:cron_spec"`
+		NextRunAt  *time.Time `gorm:"column:next_run_at"`
 	}
 	if err := m.db.Model(&model.Task{}).
-		Select("archived_at, status, enabled, cron_spec").
+		Select("archived_at, status, enabled, cron_spec, next_run_at").
 		Where("id = ?", task.ID).Limit(1).Scan(&current).Error; err != nil {
 		return fmt.Errorf("load task schedule state: %w", err)
 	}
 	if !current.Enabled || current.ArchivedAt != nil || current.CronSpec == "" {
 		m.removeScheduleLocked(task.ID)
 		return nil
+	}
+	// Preserve one auditable skipped occurrence for scheduler downtime instead
+	// of silently jumping over a persisted deadline. Existing durable queued
+	// intent is left untouched for dispatch.
+	if current.NextRunAt != nil && !current.NextRunAt.UTC().After(time.Now().UTC()) {
+		if err := m.recordMissedCronOccurrence(context.Background(), task.ID, *current.NextRunAt); err != nil {
+			return fmt.Errorf("persist missed cron occurrence: %w", err)
+		}
 	}
 	// A retry reservation owns next_run_at until it is delivered. Cron
 	// reconciliation must not clobber that durable retry deadline.
@@ -1693,6 +2115,25 @@ func (m *Manager) TriggerManual(taskID uint) (uint, error) {
 
 func (m *Manager) TriggerAutomation(taskID uint) (uint, error) {
 	return m.triggerCore(taskID, "auto", generateChainRunID(), nil, nil)
+}
+func cancelQueuedCronOccurrencesForPolicyTx(tx *gorm.DB, policyID uint, reason string) error {
+	if tx == nil || policyID == 0 {
+		return nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "策略已禁用，定时执行已取消"
+	}
+	now := time.Now().UTC()
+	return tx.Model(&model.TaskCronOccurrence{}).
+		Where("task_id IN (SELECT id FROM tasks WHERE policy_id = ?) AND state = ?",
+			policyID, model.TaskCronOccurrenceStateQueued).
+		Updates(map[string]interface{}{
+			"state":                model.TaskCronOccurrenceStateCanceled,
+			"dispatch_owner_id":    "",
+			"dispatch_lease_until": nil,
+			"reason":               sanitizeTaskLastError(reason),
+			"updated_at":           now,
+		}).Error
 }
 
 func (m *Manager) PausePolicyNext(ctx context.Context, policyID uint) error {
@@ -1782,6 +2223,9 @@ func (m *Manager) DisablePolicyTx(ctx context.Context, tx *gorm.DB, policyID uin
 		return nil, err
 	}
 	if err := cancelPendingPolicyRunsTx(tx, policyID, "策略已禁用，排队执行已取消"); err != nil {
+		return nil, err
+	}
+	if err := cancelQueuedCronOccurrencesForPolicyTx(tx, policyID, "策略已禁用，定时执行已取消"); err != nil {
 		return nil, err
 	}
 	return taskIDs, nil
@@ -2098,6 +2542,9 @@ func (m *Manager) Cancel(taskID uint) error {
 		if err := m.cancelLiveOwnedTask(taskID, false); err != nil {
 			return err
 		}
+		if err := m.cancelQueuedCronOccurrences(context.Background(), taskID, "任务已取消，定时执行已取消"); err != nil {
+			return err
+		}
 		if drillRunID, handedOff := ownership.handedOffDrillRunID(); handedOff {
 			terminal, err := m.drillRunTerminal(drillRunID)
 			if err != nil {
@@ -2120,12 +2567,17 @@ func (m *Manager) Cancel(taskID uint) error {
 	// that live-owner path even though the barrier won pendingRuns.
 	if _, owned := m.chainRunner.Load(taskID); owned {
 		defer m.pendingRuns.CompareAndDelete(taskID, barrier)
-		return m.cancelLiveOwnedTask(taskID, true)
+		if err := m.cancelLiveOwnedTask(taskID, true); err != nil {
+			return err
+		}
+		return m.cancelQueuedCronOccurrences(context.Background(), taskID, "任务已取消，定时执行已取消")
 	}
 	defer m.pendingRuns.CompareAndDelete(taskID, barrier)
-
 	status, err := m.reconcileOrphanTaskRuns(taskID)
 	if err != nil {
+		return err
+	}
+	if err := m.cancelQueuedCronOccurrences(context.Background(), taskID, "任务已取消，定时执行已取消"); err != nil {
 		return err
 	}
 	m.logDispatcher.Dispatch(taskID, nil, "warn", "任务已取消", status)
@@ -2584,6 +3036,9 @@ func (m *Manager) Pause(taskID uint, cancelRunning bool) error {
 		return err
 	}
 	taskEntity.Enabled = false
+	if err := m.cancelQueuedCronOccurrences(context.Background(), taskID, "任务已暂停，定时执行已取消"); err != nil {
+		return err
+	}
 
 	m.RemoveSchedule(taskID)
 
@@ -2709,6 +3164,9 @@ func (m *Manager) Run(ctx context.Context) {
 	if err := m.reconcileSchedules(ctx); err != nil && ctx.Err() == nil {
 		logger.Module("task").Warn().Err(err).Msg("任务调度启动对账失败")
 	}
+	if err := m.drainCronOccurrences(ctx); err != nil && ctx.Err() == nil {
+		logger.Module("task").Warn().Err(err).Msg("持久化定时意图启动投递失败")
+	}
 	if err := m.reconcileExpiredDrills(ctx); err != nil {
 		m.drillRecoveryBlocked.Store(true)
 		if ctx.Err() == nil {
@@ -2740,6 +3198,9 @@ func (m *Manager) Run(ctx context.Context) {
 			}
 			if err := m.reconcilePendingDurableRuns(ctx); err != nil && ctx.Err() == nil {
 				logger.Module("task").Warn().Err(err).Msg("持久化待执行任务周期对账失败")
+			}
+			if err := m.drainCronOccurrences(ctx); err != nil && ctx.Err() == nil {
+				logger.Module("task").Warn().Err(err).Msg("持久化定时意图周期投递失败")
 			}
 			if err := m.reconcileSchedules(ctx); err != nil && ctx.Err() == nil {
 				logger.Module("task").Warn().Err(err).Msg("任务调度周期对账失败")

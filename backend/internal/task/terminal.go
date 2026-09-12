@@ -5,15 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
-	"time"
-
-	"xirang/backend/internal/automation"
-	"xirang/backend/internal/logger"
-	"xirang/backend/internal/model"
-
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"strings"
+	"time"
+	"xirang/backend/internal/automation"
+	"xirang/backend/internal/backuphealth"
+	"xirang/backend/internal/logger"
+	"xirang/backend/internal/model"
 )
 
 const (
@@ -232,9 +231,10 @@ func (m *Manager) terminalizeTaskRun(
 	taskUpdates map[string]interface{},
 	runStatus TaskStatus,
 	runUpdates map[string]interface{},
+	legacyFact ...bool,
 ) error {
 	return m.terminalizeTaskRunTx(ctx, taskID, runID, expectedRunStatuses,
-		taskStatus, taskUpdates, runStatus, runUpdates, terminalizeTaskRunModeNormal)
+		taskStatus, taskUpdates, runStatus, runUpdates, terminalizeTaskRunModeNormal, legacyFact...)
 }
 
 type terminalizeTaskRunMode uint8
@@ -254,7 +254,9 @@ func (m *Manager) terminalizeTaskRunTx(
 	runStatus TaskStatus,
 	runUpdates map[string]interface{},
 	mode terminalizeTaskRunMode,
+	legacyFact ...bool,
 ) error {
+	recordLegacyFact := len(legacyFact) > 0 && legacyFact[0]
 	if m == nil || m.db == nil {
 		return errors.New("task terminal persistence unavailable")
 	}
@@ -421,6 +423,21 @@ func (m *Manager) terminalizeTaskRunTx(
 		if result.RowsAffected != 1 {
 			return errTaskRunCASLost
 		}
+		if recordLegacyFact && runStatus == StatusSuccess &&
+			strings.ToLower(strings.TrimSpace(run.TriggerType)) != "restore" &&
+			strings.ToLower(strings.TrimSpace(run.TriggerType)) != "drill" &&
+			isLegacyFactExecutor(run.ExecutorTypeSnapshot) {
+			completedAt := terminalCompletionTime(runUpdates, finishedAt).Truncate(time.Microsecond)
+			if err := backuphealth.RecordLegacyTransferTx(ctx, tx, backuphealth.LegacyTransferInput{
+				TaskID:       run.TaskID,
+				TaskRunID:    run.ID,
+				NodeID:       run.NodeIDSnapshot,
+				ExecutorType: run.ExecutorTypeSnapshot,
+				CompletedAt:  completedAt,
+			}); err != nil {
+				return err
+			}
+		}
 		// Effect intent must describe the committed aggregate and current attempt.
 		if taskStatus != nil {
 			taskEntity.Status = string(*taskStatus)
@@ -481,6 +498,7 @@ func (m *Manager) failTaskExecutionBeforeExecutor(
 	ctx context.Context,
 	taskID, runID uint,
 	taskUpdates map[string]interface{},
+
 	runUpdates map[string]interface{},
 ) error {
 	failedStatus := StatusFailed
@@ -495,6 +513,28 @@ func (m *Manager) failTaskExecutionBeforeExecutor(
 		runUpdates,
 		terminalizeTaskRunModePreProviderFailure,
 	)
+}
+func isLegacyFactExecutor(executorType string) bool {
+	switch strings.ToLower(strings.TrimSpace(executorType)) {
+	case "rsync", "restic", "rclone":
+		return true
+	default:
+		return false
+	}
+}
+
+func terminalCompletionTime(runUpdates map[string]interface{}, fallback time.Time) time.Time {
+	switch value := runUpdates["finished_at"].(type) {
+	case *time.Time:
+		if value != nil && !value.IsZero() {
+			return value.UTC()
+		}
+	case time.Time:
+		if !value.IsZero() {
+			return value.UTC()
+		}
+	}
+	return fallback.UTC()
 }
 
 func buildTerminalEffects(tx *gorm.DB, taskEntity model.Task, run model.TaskRun, runID uint, runStatus TaskStatus) ([]taskRunTerminalEffect, error) {

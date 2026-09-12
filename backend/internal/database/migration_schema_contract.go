@@ -8,15 +8,17 @@ import (
 )
 
 const (
-	minimumRecoverySchemaVersion               int64 = 69
-	taskRunCompatibilitySchemaVersion          int64 = 72
-	plainTextContentSchemaVersion              int64 = 73
-	drillDurableRecoverySchemaVersion          int64 = 74
-	lifecycleEffectClaimAuditSlotSchemaVersion int64 = 77
-	taskRunCronProvenanceSchemaVersion         int64 = 82
-	taskRunRecoveryCaptureSchemaVersion        int64 = 83
-	alertDeliveryIntentSchemaVersion           int64 = 84
-	alertDeliverySuccessSchemaVersion          int64 = 85
+	minimumRecoverySchemaVersion                    int64 = 69
+	taskRunCompatibilitySchemaVersion               int64 = 72
+	plainTextContentSchemaVersion                   int64 = 73
+	drillDurableRecoverySchemaVersion               int64 = 74
+	lifecycleEffectClaimAuditSlotSchemaVersion      int64 = 77
+	taskRunCronProvenanceSchemaVersion              int64 = 82
+	taskRunRecoveryCaptureSchemaVersion             int64 = 83
+	alertDeliveryIntentSchemaVersion                int64 = 84
+	alertDeliverySuccessSchemaVersion               int64 = 85
+	taskCronOccurrenceResourceIdentitySchemaVersion int64 = 86
+	backupCompletionFactsSchemaVersion              int64 = 87
 )
 
 const lifecycleEffectClaimAuditSlotAdmissionTrigger = "trg_recovery_point_lifecycle_effect_claim_audit_slot_downgrade_admission"
@@ -28,7 +30,15 @@ const taskRunCronProvenanceTrigger = "trg_task_runs_cron_provenance_immutable"
 const taskRunCronProvenanceAdmissionTrigger = "trg_task_runs_cron_provenance_downgrade_admission"
 const taskRunRecoveryCaptureAdmissionTrigger = "trg_task_runs_recovery_capture_downgrade_admission"
 const alertDeliveryIntentAdmissionTrigger = "trg_alert_delivery_intents_downgrade_admission"
+const taskRunExecutionResourceImmutableTrigger = "trg_task_runs_execution_resource_immutable"
+const taskCronOccurrenceIdentityImmutableTrigger = "trg_task_cron_occurrences_identity_immutable"
+const taskCronOccurrenceResourceIdentityAdmissionTrigger = "trg_task_cron_occurrences_resource_identity_downgrade_admission"
 const alertDeliverySuccessAdmissionTrigger = "trg_alert_delivery_success_downgrade_admission"
+const backupRepositoryProviderKindImmutableTrigger = "trg_backup_repositories_provider_kind_immutable"
+const backupCompletionImmutableUpdateTrigger = "trg_backup_completions_immutable_update"
+const backupCompletionImmutableDeleteTrigger = "trg_backup_completions_immutable_delete"
+const backupCompletionImmutableTrigger = "trg_backup_completions_immutable"
+const backupCompletionDowngradeAdmissionTrigger = "trg_backup_completions_downgrade_admission"
 
 type lifecycleEffectClaimAuditSlotTriggerContract struct {
 	table                                 string
@@ -498,6 +508,88 @@ var alertDeliverySuccessPostgresAdmissionFunctionFragments = []string{
 	"raise exception '000085 downgrade blocked: alert delivery success or unknown identity evidence exists'",
 	"return new",
 }
+var taskRunExecutionResourceSQLiteImmutableFragments = []string{
+	"before update of trigger_type, executor_type_snapshot, resource_key, resource_provider, resource_node_id, resource_namespace, resource_locator, resource_evidence on task_runs",
+	"coalesce(old.executor_type_snapshot, '') <> ''",
+	"new.trigger_type is not old.trigger_type",
+	"new.executor_type_snapshot is not old.executor_type_snapshot",
+	"new.resource_key is not old.resource_key",
+	"new.resource_provider is not old.resource_provider",
+	"new.resource_node_id is not old.resource_node_id",
+	"new.resource_namespace is not old.resource_namespace",
+	"new.resource_locator is not old.resource_locator",
+	"new.resource_evidence is not old.resource_evidence",
+	"select raise(abort",
+}
+
+var taskRunExecutionResourcePostgresImmutableTriggerFragments = []string{
+	"before update of trigger_type, executor_type_snapshot, resource_key, resource_provider, resource_node_id, resource_namespace, resource_locator, resource_evidence on",
+	"task_runs",
+	"execute function",
+	"task_runs_execution_resource_immutable_guard()",
+}
+
+var taskRunExecutionResourcePostgresImmutableFunctionFragments = []string{
+	"coalesce(old.executor_type_snapshot, '') <> ''",
+	"new.trigger_type is distinct from old.trigger_type",
+	"new.executor_type_snapshot is distinct from old.executor_type_snapshot",
+	"new.resource_key is distinct from old.resource_key",
+	"new.resource_provider is distinct from old.resource_provider",
+	"new.resource_node_id is distinct from old.resource_node_id",
+	"new.resource_namespace is distinct from old.resource_namespace",
+	"new.resource_locator is distinct from old.resource_locator",
+	"new.resource_evidence is distinct from old.resource_evidence",
+	"raise exception",
+	"return new",
+}
+
+var taskCronOccurrenceIdentitySQLiteFragments = []string{
+	"before update of task_id, scheduled_at on task_cron_occurrences",
+	"new.task_id is not old.task_id",
+	"new.scheduled_at is not old.scheduled_at",
+	"select raise(abort",
+}
+
+var taskCronOccurrenceIdentityPostgresTriggerFragments = []string{
+	"before update of task_id, scheduled_at on",
+	"task_cron_occurrences",
+	"execute function",
+	"task_cron_occurrences_identity_immutable_guard()",
+}
+
+var taskCronOccurrenceIdentityPostgresFunctionFragments = []string{
+	"new.task_id is distinct from old.task_id",
+	"new.scheduled_at is distinct from old.scheduled_at",
+	"raise exception",
+	"return new",
+}
+
+var taskCronOccurrenceAdmissionSQLiteFragments = []string{
+	"before insert on schema_migrations",
+	"when new.version < 86",
+	"exists (select 1 from task_cron_occurrences)",
+	"exists (select 1 from task_runs where coalesce(executor_type_snapshot, '') <> '')",
+	"exists (select 1 from task_runs where coalesce(resource_key, '') <> '')",
+	"exists (select 1 from task_runs where coalesce(resource_evidence, '') <> '')",
+	"select raise(abort",
+}
+
+var taskCronOccurrenceAdmissionPostgresTriggerFragments = []string{
+	"before insert on",
+	"schema_migrations",
+	"execute function",
+	"task_cron_occurrences_resource_identity_downgrade_admission()",
+}
+
+var taskCronOccurrenceAdmissionPostgresFunctionFragments = []string{
+	"if new.version < 86 and (",
+	"exists (select 1 from task_cron_occurrences)",
+	"exists (select 1 from task_runs where coalesce(executor_type_snapshot, '') <> '')",
+	"exists (select 1 from task_runs where coalesce(resource_key, '') <> '')",
+	"exists (select 1 from task_runs where coalesce(resource_evidence, '') <> '')",
+	"raise exception",
+	"return new",
+}
 
 var plainTextContentSQLiteAdmissionFragments = []string{
 	"before insert on schema_migrations",
@@ -712,6 +804,18 @@ func validateMinimumRecoverySchema(db *sql.DB, dbType string, version int64) err
 	if err := validateAlertDeliverySuccessSchema(db, dbType); err != nil {
 		return migrationSchemaDriftError(version, err.Error())
 	}
+	if version < taskCronOccurrenceResourceIdentitySchemaVersion {
+		return nil
+	}
+	if err := validateTaskCronOccurrenceResourceIdentitySchema(db, dbType); err != nil {
+		return migrationSchemaDriftError(version, err.Error())
+	}
+	if version < backupCompletionFactsSchemaVersion {
+		return nil
+	}
+	if err := validateBackupCompletionFactsSchema(db, dbType); err != nil {
+		return migrationSchemaDriftError(version, err.Error())
+	}
 
 	return nil
 }
@@ -719,6 +823,7 @@ func validateMinimumRecoverySchema(db *sql.DB, dbType string, version int64) err
 func validateLifecycleEffectClaimAuditSlotSchema(db *sql.DB, dbType string) error {
 	for _, table := range []string{lifecycleEffectClaimAuditSlotClaimsTable, lifecycleEffectClaimAuditSlotSlotsTable} {
 		exists, err := migrationRelationExists(db, dbType, table, "table")
+
 		if err != nil {
 			return errors.New("catalog_query_failed")
 		}
@@ -993,6 +1098,462 @@ func validateLifecycleEffectClaimAuditSlotSchema(db *sql.DB, dbType string) erro
 			} else if !strings.Contains(normalizedFunction, "return new") {
 				return errors.New("invalid_lifecycle_effect_claim_audit_slot_trigger")
 			}
+		}
+	}
+	return nil
+}
+func validateTaskCronOccurrenceResourceIdentitySchema(db *sql.DB, dbType string) error {
+	if exists, err := migrationRelationExists(db, dbType, "task_cron_occurrences", "table"); err != nil {
+		return errors.New("catalog_query_failed")
+	} else if !exists {
+		return errors.New("missing_task_cron_occurrences_table")
+	}
+	if count, err := migrationColumnCount(db, dbType, "task_cron_occurrences"); err != nil {
+		return errors.New("catalog_query_failed")
+	} else if count != 10 {
+		return errors.New("invalid_task_cron_occurrences_column_count")
+	}
+
+	type columnContract struct {
+		table        string
+		name         string
+		sqliteType   string
+		postgresType string
+		maxLength    int64
+		notNull      bool
+		defaultSQL   string
+	}
+	columns := []columnContract{
+		{table: "task_runs", name: "executor_type_snapshot", sqliteType: "varchar(32)", postgresType: "character varying", maxLength: 32, notNull: true, defaultSQL: "''"},
+		{table: "task_runs", name: "resource_key", sqliteType: "varchar(64)", postgresType: "character varying", maxLength: 64, notNull: true, defaultSQL: "''"},
+		{table: "task_runs", name: "resource_provider", sqliteType: "varchar(32)", postgresType: "character varying", maxLength: 32, notNull: true, defaultSQL: "''"},
+		{table: "task_runs", name: "resource_node_id", sqliteType: "integer", postgresType: "bigint", notNull: true, defaultSQL: "0"},
+		{table: "task_runs", name: "resource_namespace", sqliteType: "varchar(255)", postgresType: "character varying", maxLength: 255, notNull: true, defaultSQL: "''"},
+		{table: "task_runs", name: "resource_locator", sqliteType: "varchar(512)", postgresType: "character varying", maxLength: 512, notNull: true, defaultSQL: "''"},
+		{table: "task_runs", name: "resource_evidence", sqliteType: "text", postgresType: "text", notNull: true, defaultSQL: "''"},
+		{table: "task_cron_occurrences", name: "task_id", sqliteType: "integer", postgresType: "bigint", notNull: true},
+		{table: "task_cron_occurrences", name: "scheduled_at", sqliteType: "datetime", postgresType: "timestamp with time zone", notNull: true},
+		{table: "task_cron_occurrences", name: "state", sqliteType: "varchar(16)", postgresType: "character varying", maxLength: 16, notNull: true, defaultSQL: "'queued'"},
+		{table: "task_cron_occurrences", name: "task_run_id", sqliteType: "integer", postgresType: "bigint"},
+		{table: "task_cron_occurrences", name: "dispatch_owner_id", sqliteType: "varchar(64)", postgresType: "character varying", maxLength: 64, notNull: true, defaultSQL: "''"},
+		{table: "task_cron_occurrences", name: "dispatch_lease_until", sqliteType: "datetime", postgresType: "timestamp with time zone"},
+		{table: "task_cron_occurrences", name: "reason", sqliteType: "text", postgresType: "text", notNull: true, defaultSQL: "''"},
+		{table: "task_cron_occurrences", name: "created_at", sqliteType: "datetime", postgresType: "timestamp with time zone", notNull: true},
+		{table: "task_cron_occurrences", name: "updated_at", sqliteType: "datetime", postgresType: "timestamp with time zone", notNull: true},
+	}
+	for _, expected := range columns {
+		contract, err := migrationColumnContractOf(db, dbType, expected.table, expected.name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errors.New("missing_task_cron_occurrences_column")
+			}
+			return errors.New("catalog_query_failed")
+		}
+		wantType := expected.sqliteType
+		if dbType == "postgres" {
+			wantType = expected.postgresType
+			if expected.maxLength > 0 && contract.maxLength != expected.maxLength {
+				return errors.New("invalid_task_cron_occurrences_column")
+			}
+		}
+		if contract.dataType != wantType || contract.notNull != expected.notNull {
+			return errors.New("invalid_task_cron_occurrences_column")
+		}
+		if expected.defaultSQL != "" {
+			gotDefault := normalizeMigrationSQLToken(contract.defaultSQL)
+			wantDefault := normalizeMigrationSQLToken(expected.defaultSQL)
+			if dbType == "postgres" && strings.HasPrefix(expected.defaultSQL, "'") {
+				if expected.postgresType == "text" {
+					wantDefault = normalizeMigrationSQLToken(expected.defaultSQL + "::text")
+				} else {
+					wantDefault = normalizeMigrationSQLToken(expected.defaultSQL + "::charactervarying")
+				}
+			}
+			if gotDefault != wantDefault {
+				return errors.New("invalid_task_cron_occurrences_column")
+			}
+		}
+	}
+
+	uniqueOccurrence, err := migrationIndexContractOf(db, dbType, "task_cron_occurrences", "idx_task_cron_occurrences_task_scheduled")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_task_cron_occurrence_identity_index")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !migrationIndexUsable(uniqueOccurrence) || !uniqueOccurrence.unique ||
+		!sameMigrationIndexColumns(uniqueOccurrence.columns, []string{"task_id", "scheduled_at"}) ||
+		strings.TrimSpace(uniqueOccurrence.predicate) != "" {
+		return errors.New("invalid_task_cron_occurrence_identity_index")
+	}
+	queueIndex, err := migrationIndexContractOf(db, dbType, "task_cron_occurrences", "idx_task_cron_occurrences_queue")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_task_cron_occurrence_queue_index")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !migrationIndexUsable(queueIndex) || queueIndex.unique ||
+		!sameMigrationIndexColumns(queueIndex.columns, []string{"state", "scheduled_at", "id"}) ||
+		strings.TrimSpace(queueIndex.predicate) != "" {
+		return errors.New("invalid_task_cron_occurrence_queue_index")
+	}
+	taskRunIndex, err := migrationIndexContractOf(db, dbType, "task_cron_occurrences", "idx_task_cron_occurrences_task_run")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_task_cron_occurrence_task_run_index")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !migrationIndexUsable(taskRunIndex) || !taskRunIndex.unique ||
+		!sameMigrationIndexColumns(taskRunIndex.columns, []string{"task_run_id"}) ||
+		normalizeMigrationPredicate(taskRunIndex.predicate) != "task_run_idisnotnull" {
+		return errors.New("invalid_task_cron_occurrence_task_run_index")
+	}
+	resourceIndex, err := migrationIndexContractOf(db, dbType, "task_runs", "idx_task_runs_resource_hold")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_task_run_resource_hold_index")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !migrationIndexUsable(resourceIndex) || resourceIndex.unique ||
+		!sameMigrationIndexColumns(resourceIndex.columns, []string{"resource_key", "backup_generation_state", "status"}) ||
+		strings.TrimSpace(resourceIndex.predicate) != "" {
+		return errors.New("invalid_task_run_resource_hold_index")
+	}
+	activeResourceIndex, err := migrationIndexContractOf(db, dbType, "task_runs", "idx_task_runs_resource_active_unique")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_task_run_resource_active_unique_index")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	activeResourcePredicate := normalizeMigrationPredicate(activeResourceIndex.predicate)
+	activeResourcePredicateValid := (dbType == "sqlite" &&
+		activeResourcePredicate == "resource_key<>''andbackup_generation_statein'writing','unknown'") ||
+		(dbType == "postgres" &&
+			activeResourcePredicate == "resource_key<>''andbackup_generation_state=anyarray['writing','unknown']")
+	if !migrationIndexUsable(activeResourceIndex) || !activeResourceIndex.unique ||
+		!sameMigrationIndexColumns(activeResourceIndex.columns, []string{"resource_key"}) ||
+		!activeResourcePredicateValid {
+		return errors.New("invalid_task_run_resource_active_unique_index")
+	}
+	executorIndex, err := migrationIndexContractOf(db, dbType, "task_runs", "idx_task_runs_executor_snapshot")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_task_run_executor_snapshot_index")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !migrationIndexUsable(executorIndex) || executorIndex.unique ||
+		!sameMigrationIndexColumns(executorIndex.columns, []string{"executor_type_snapshot", "node_id_snapshot", "status"}) ||
+		strings.TrimSpace(executorIndex.predicate) != "" {
+		return errors.New("invalid_task_run_executor_snapshot_index")
+	}
+
+	checkTrigger := func(table, name string, sqliteFragments, postgresTriggerFragments, postgresFunctionFragments []string) error {
+		definition, err := migrationTriggerDefinition(db, dbType, table, name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errors.New("missing_task_cron_occurrence_trigger")
+			}
+			return errors.New("catalog_query_failed")
+		}
+		if dbType == "postgres" {
+			enabled, enabledErr := migrationTriggerEnabled(db, dbType, table, name)
+			if enabledErr != nil {
+				return errors.New("catalog_query_failed")
+			}
+			if !enabled {
+				return errors.New("disabled_task_cron_occurrence_trigger")
+			}
+			if !containsMigrationFragments(normalizeMigrationDefinition(definition), postgresTriggerFragments) {
+				return errors.New("invalid_task_cron_occurrence_trigger")
+			}
+			functionDefinition, functionErr := migrationTriggerFunctionDefinition(db, table, name)
+			if functionErr != nil {
+				if errors.Is(functionErr, sql.ErrNoRows) {
+					return errors.New("invalid_task_cron_occurrence_trigger")
+				}
+				return errors.New("catalog_query_failed")
+			}
+			if !containsMigrationFragments(normalizeMigrationDefinition(functionDefinition), postgresFunctionFragments) {
+				return errors.New("invalid_task_cron_occurrence_trigger")
+			}
+			return nil
+		}
+		if !containsMigrationFragments(normalizeMigrationDefinition(definition), sqliteFragments) {
+			return errors.New("invalid_task_cron_occurrence_trigger")
+		}
+		return nil
+	}
+	if err := checkTrigger("task_runs", taskRunExecutionResourceImmutableTrigger,
+		taskRunExecutionResourceSQLiteImmutableFragments,
+		taskRunExecutionResourcePostgresImmutableTriggerFragments,
+		taskRunExecutionResourcePostgresImmutableFunctionFragments); err != nil {
+		return err
+	}
+	if err := checkTrigger("task_cron_occurrences", taskCronOccurrenceIdentityImmutableTrigger,
+		taskCronOccurrenceIdentitySQLiteFragments,
+		taskCronOccurrenceIdentityPostgresTriggerFragments,
+		taskCronOccurrenceIdentityPostgresFunctionFragments); err != nil {
+		return err
+	}
+	if err := checkTrigger("schema_migrations", taskCronOccurrenceResourceIdentityAdmissionTrigger,
+		taskCronOccurrenceAdmissionSQLiteFragments,
+		taskCronOccurrenceAdmissionPostgresTriggerFragments,
+		taskCronOccurrenceAdmissionPostgresFunctionFragments); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateBackupCompletionFactsSchema(db *sql.DB, dbType string) error {
+	const table = "backup_completions"
+	exists, err := migrationRelationExists(db, dbType, table, "table")
+	if err != nil {
+		return errors.New("catalog_query_failed")
+	}
+	if !exists {
+		return errors.New("missing_backup_completion_facts_table")
+	}
+	count, err := migrationColumnCount(db, dbType, table)
+	if err != nil {
+		return errors.New("catalog_query_failed")
+	}
+	if count != 11 {
+		return errors.New("invalid_backup_completion_facts_column_count")
+	}
+
+	primaryKey, err := migrationPrimaryKeyColumns(db, dbType, table)
+	if err != nil {
+		return errors.New("catalog_query_failed")
+	}
+	if !sameMigrationIndexColumns(primaryKey, []string{"id"}) {
+		return errors.New("invalid_backup_completion_facts_primary_key")
+	}
+
+	type columnContract struct {
+		name            string
+		sqliteType      string
+		postgresType    string
+		maxLength       int64
+		sqliteNotNull   bool
+		postgresNotNull bool
+		defaultSQL      string
+	}
+	columns := []columnContract{
+		{name: "id", sqliteType: "integer", postgresType: "bigint", postgresNotNull: true},
+		{name: "task_id", sqliteType: "integer", postgresType: "bigint"},
+		{name: "task_run_id", sqliteType: "integer", postgresType: "bigint"},
+		{name: "node_id", sqliteType: "integer", postgresType: "bigint", sqliteNotNull: true, postgresNotNull: true},
+		{name: "executor_type", sqliteType: "text", postgresType: "character varying", maxLength: 32, sqliteNotNull: true, postgresNotNull: true, defaultSQL: "''"},
+		{name: "fact_kind", sqliteType: "text", postgresType: "character varying", maxLength: 32, sqliteNotNull: true, postgresNotNull: true},
+		{name: "evidence_status", sqliteType: "text", postgresType: "character varying", maxLength: 16, sqliteNotNull: true, postgresNotNull: true},
+		{name: "completed_at", sqliteType: "datetime", postgresType: "timestamp with time zone", sqliteNotNull: true, postgresNotNull: true},
+		{name: "evidence_ref", sqliteType: "text", postgresType: "character varying", maxLength: 64, sqliteNotNull: true, postgresNotNull: true, defaultSQL: "''"},
+		{name: "created_at", sqliteType: "datetime", postgresType: "timestamp with time zone", sqliteNotNull: true, postgresNotNull: true},
+		{name: "updated_at", sqliteType: "datetime", postgresType: "timestamp with time zone", sqliteNotNull: true, postgresNotNull: true},
+	}
+	for _, expected := range columns {
+		contract, err := migrationColumnContractOf(db, dbType, table, expected.name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errors.New("missing_backup_completion_facts_column")
+			}
+			return errors.New("catalog_query_failed")
+		}
+		wantType := expected.sqliteType
+		wantNotNull := expected.sqliteNotNull
+		if dbType == "postgres" {
+			wantType = expected.postgresType
+			wantNotNull = expected.postgresNotNull
+			if expected.maxLength > 0 && contract.maxLength != expected.maxLength {
+				return errors.New("invalid_backup_completion_facts_column")
+			}
+		}
+		if contract.dataType != wantType || contract.notNull != wantNotNull {
+			return errors.New("invalid_backup_completion_facts_column")
+		}
+		if expected.defaultSQL != "" {
+			gotDefault := normalizeMigrationSQLToken(contract.defaultSQL)
+			wantDefault := normalizeMigrationSQLToken(expected.defaultSQL)
+			if dbType == "postgres" {
+				wantDefault = normalizeMigrationSQLToken(expected.defaultSQL + "::charactervarying")
+			}
+			if gotDefault != wantDefault {
+				return errors.New("invalid_backup_completion_facts_column")
+			}
+		}
+	}
+
+	taskRunIndex, err := migrationIndexContractOf(db, dbType, table, "idx_backup_completions_task_run")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_backup_completion_task_run_index")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !migrationIndexUsable(taskRunIndex) || !taskRunIndex.unique ||
+		!sameMigrationIndexColumns(taskRunIndex.columns, []string{"task_run_id"}) ||
+		strings.TrimSpace(taskRunIndex.predicate) != "" {
+		return errors.New("invalid_backup_completion_task_run_index")
+	}
+
+	nodeCompletedIndex, err := migrationIndexContractOf(db, dbType, table, "idx_backup_completions_node_completed")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_backup_completion_node_index")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !migrationIndexUsable(nodeCompletedIndex) || nodeCompletedIndex.unique ||
+		!sameMigrationIndexColumns(nodeCompletedIndex.columns, []string{"node_id", "completed_at", "id"}) ||
+		strings.TrimSpace(nodeCompletedIndex.predicate) != "" {
+		return errors.New("invalid_backup_completion_node_index")
+	}
+
+	verifiedIndex, err := migrationIndexContractOf(db, dbType, table, "idx_backup_completions_verified_task")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_backup_completion_verified_index")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !migrationIndexUsable(verifiedIndex) || verifiedIndex.unique ||
+		!sameMigrationIndexColumns(verifiedIndex.columns, []string{"task_id", "completed_at", "id"}) ||
+		normalizeMigrationPredicate(verifiedIndex.predicate) != "evidence_status='verified'" {
+		return errors.New("invalid_backup_completion_verified_index")
+	}
+
+	unverifiedIndex, err := migrationIndexContractOf(db, dbType, table, "idx_backup_completions_unverified_ref")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("missing_backup_completion_unverified_index")
+		}
+		return errors.New("catalog_query_failed")
+	}
+	if !migrationIndexUsable(unverifiedIndex) || !unverifiedIndex.unique ||
+		!sameMigrationIndexColumns(unverifiedIndex.columns, []string{"evidence_ref"}) ||
+		normalizeMigrationPredicate(unverifiedIndex.predicate) != "evidence_status='unverified'andevidence_ref<>''" {
+		return errors.New("invalid_backup_completion_unverified_index")
+	}
+
+	checkFragments := []string{
+		"node_id > 0 OR (fact_kind = 'legacy_unverified' AND node_id = 0)",
+		"task_id IS NULL",
+		"task_run_id IS NULL",
+		"executor_type IN ('', 'rsync', 'restic', 'rclone')",
+		"fact_kind IN ('legacy_transfer_completed', 'managed_committed', 'legacy_unverified')",
+		"evidence_status IN ('verified', 'unverified')",
+		"fact_kind = 'legacy_unverified'",
+		"fact_kind = 'legacy_transfer_completed'",
+		"fact_kind = 'managed_committed'",
+	}
+	if dbType == "sqlite" {
+		var definition string
+		if err := db.QueryRow("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&definition); err != nil {
+			return errors.New("catalog_query_failed")
+		}
+		if !containsMigrationFragments(normalizeMigrationDefinition(definition), checkFragments) {
+			return errors.New("invalid_backup_completion_facts_checks")
+		}
+	} else {
+		constraintFragments := []struct {
+			name      string
+			fragments []string
+		}{
+			{name: "backup_completions_node_positive", fragments: []string{"node_id > 0", "legacy_unverified", "node_id = 0"}},
+			{name: "backup_completions_task_positive", fragments: []string{"task_id IS NULL", "task_id > 0"}},
+			{name: "backup_completions_run_positive", fragments: []string{"task_run_id IS NULL", "task_run_id > 0"}},
+			{name: "backup_completions_executor_valid", fragments: []string{"executor_type", "rsync", "restic", "rclone"}},
+			{name: "backup_completions_kind_valid", fragments: []string{"fact_kind", "legacy_transfer_completed", "managed_committed", "legacy_unverified"}},
+			{name: "backup_completions_evidence_valid", fragments: []string{"evidence_status", "verified", "unverified"}},
+			{name: "backup_completions_shape_valid", fragments: []string{"legacy_unverified", "legacy_transfer_completed", "managed_committed", "evidence_ref"}},
+		}
+		for _, expected := range constraintFragments {
+			exists, err := migrationConstraintExists(db, table, expected.name)
+			if err != nil {
+				return errors.New("catalog_query_failed")
+			}
+			if !exists {
+				return errors.New("missing_backup_completion_facts_constraint")
+			}
+			definition, err := migrationConstraintDefinition(db, table, expected.name)
+			if err != nil {
+				return errors.New("catalog_query_failed")
+			}
+			if !containsMigrationFragments(normalizeMigrationDefinition(definition), expected.fragments) {
+				return errors.New("invalid_backup_completion_facts_checks")
+			}
+		}
+	}
+
+	checkTrigger := func(table, name string, sqliteFragments, postgresTriggerFragments, postgresFunctionFragments []string) error {
+		definition, err := migrationTriggerDefinition(db, dbType, table, name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errors.New("missing_backup_completion_facts_trigger")
+			}
+			return errors.New("catalog_query_failed")
+		}
+		normalized := normalizeMigrationDefinition(definition)
+		if dbType == "sqlite" {
+			if !containsMigrationFragments(normalized, sqliteFragments) {
+				return errors.New("invalid_backup_completion_facts_trigger")
+			}
+			return nil
+		}
+		enabled, err := migrationTriggerEnabled(db, dbType, table, name)
+		if err != nil {
+			return errors.New("catalog_query_failed")
+		}
+		if !enabled || !containsMigrationFragments(normalized, postgresTriggerFragments) {
+			return errors.New("invalid_backup_completion_facts_trigger")
+		}
+		functionDefinition, err := migrationTriggerFunctionDefinition(db, table, name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errors.New("invalid_backup_completion_facts_trigger")
+			}
+			return errors.New("catalog_query_failed")
+		}
+		if !containsMigrationFragments(normalizeMigrationDefinition(functionDefinition), postgresFunctionFragments) {
+			return errors.New("invalid_backup_completion_facts_trigger")
+		}
+		return nil
+	}
+	if err := checkTrigger("backup_repositories", backupRepositoryProviderKindImmutableTrigger,
+		[]string{"before update of provider_kind on backup_repositories", "select raise(abort", "000087 backup repository provider kind is immutable"},
+		[]string{"before update of provider_kind on", "backup_repositories", "execute function backup_repositories_provider_kind_immutable_guard()"},
+		[]string{"returns trigger", "raise exception '000087 backup repository provider kind is immutable'"}); err != nil {
+		return err
+	}
+	if dbType == "sqlite" {
+		if err := checkTrigger(table, backupCompletionImmutableUpdateTrigger,
+			[]string{"before update on backup_completions", "select raise(abort", "000087 backup completion facts are immutable"}, nil, nil); err != nil {
+			return err
+		}
+		if err := checkTrigger(table, backupCompletionImmutableDeleteTrigger,
+			[]string{"before delete on backup_completions", "select raise(abort", "000087 backup completion facts are immutable"}, nil, nil); err != nil {
+			return err
+		}
+		if err := checkTrigger("schema_migrations", backupCompletionDowngradeAdmissionTrigger,
+			[]string{"before insert on schema_migrations", "new.version < 87", "exists (select 1 from backup_completions)", "select raise(abort", "000087 downgrade blocked: backup completion evidence exists"}, nil, nil); err != nil {
+			return err
+		}
+	} else {
+		if err := checkTrigger(table, backupCompletionImmutableTrigger, nil,
+			[]string{"before delete or update on", "backup_completions", "execute function backup_completions_immutable_guard()"},
+			[]string{"returns trigger", "raise exception '000087 backup completion facts are immutable'"}); err != nil {
+			return err
+		}
+		if err := checkTrigger("schema_migrations", backupCompletionDowngradeAdmissionTrigger, nil,
+			[]string{"before insert on", "schema_migrations", "execute function backup_completions_downgrade_admission()"},
+			[]string{"returns trigger", "if new.version < 87 and exists (select 1 from backup_completions)", "raise exception '000087 downgrade blocked: backup completion evidence exists'", "return new"}); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -65,6 +65,15 @@ export function ServiceMonitorsPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const isEditing = Boolean(editingMonitor);
+  const monitorUseChanged = Boolean(
+    editingMonitor &&
+      (editingMonitor.type !== type ||
+        editingMonitor.target !== target.trim() ||
+        (editingMonitor.type === "http" && type === "http" && editingMonitor.httpMethod !== httpMethod)),
+  );
+  const headersRetargetNeedsDecision = Boolean(
+    editingMonitor?.httpHeadersConfigured && monitorUseChanged && !headersDirty,
+  );
 
   const fetchMonitors = useCallback(async () => {
     if (!token) return;
@@ -179,6 +188,9 @@ export function ServiceMonitorsPage() {
     if (type === "http" && !/^https?:\/\/.+/i.test(target.trim())) {
       nextErrors.target = t("serviceMonitor.validation.httpTargetFormat");
     }
+    if (headersRetargetNeedsDecision && !nextErrors.target) {
+      nextErrors.target = t("serviceMonitor.validation.headersRetargetRequiresAction");
+    }
     if (Object.keys(nextErrors).length > 0) {
       setFieldErrors(nextErrors);
       return;
@@ -199,9 +211,9 @@ export function ServiceMonitorsPage() {
     if (type === "http") {
       input.httpMethod = httpMethod;
       input.httpExpectedStatus = expectedStatusValue;
-      if (!isEditing || headersDirty) {
-        input.httpHeaderList = httpHeaders;
-      }
+    }
+    if (!isEditing || headersDirty) {
+      input.httpHeaderList = httpHeaders;
     }
 
     try {
@@ -515,6 +527,25 @@ export function ServiceMonitorsPage() {
             <p id="sm-target-error" role="alert" className="mt-1 text-xs text-destructive">
               {fieldErrors.target}
             </p>
+          ) : null}
+          {headersRetargetNeedsDecision ? (
+            <div
+              role="alert"
+              className="mt-2 rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-xs text-foreground"
+            >
+              <p>{t("serviceMonitor.httpHeadersRetargetWarning")}</p>
+              {type !== "http" ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  className="mt-1 h-auto px-2 py-0.5 text-xs"
+                  onClick={clearHeaders}
+                >
+                  {t("serviceMonitor.httpHeadersClear")}
+                </Button>
+              ) : null}
+            </div>
           ) : null}
         </div>
 

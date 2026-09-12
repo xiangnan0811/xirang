@@ -36,6 +36,10 @@ Migration `000082_task_run_cron_provenance` adds private, immutable scheduled-oc
 
 A replay of the same task/cron occurrence cannot create another execution after skip consumption. An occurrence committed as pending before a crash is reclaimed after the previous execution lease expires and enters through the same skip-next transaction. Running or unknown-outcome occurrences are not blindly replayed.
 
+Migration `000086_task_cron_occurrences_resource_identity` persists each scheduler tick as a unique `(task_id, scheduled_at)` occurrence before local, node, resource, or policy admission. Queued occurrences survive quota/busy refusal and Core restart; drain them only after the same admission checks succeed, and do not coalesce distinct due times. The migration also records immutable TaskRun resource identity and fences active keyed mutable resources across Core instances.
+
+Migration `000087_backup_completion_facts` stores classified, immutable completion facts for freshness and health reporting. Only a committed recovery point with provable lineage establishes a managed completion; ordinary command success, imported baselines, and unverified historical timestamps remain explicitly unverified. Once these facts are used, guarded downgrade refuses to erase them. Back up the database, encryption keys, and backup data, then drain and stop old Core/executor writers before upgrading; never mix writers across the migration boundary.
+
 Legacy Rsync restore requires a successful ordinary backup with a matching configuration fingerprint and verified capture evidence for the current mutable generation. Migration `000083_task_run_recovery_capture` records directory-self, directory-content, or single-file layout and the source-selected file manifest. Restore reads the captured logical root on Core, writes it to the node, and verifies the captured bytes on both sides; missing sources, enumeration errors, and hash failures are not empty successful backups. Historical rows are not assigned guessed fingerprints or manifests. A failed or interrupted write leaves the current generation uncertain and cannot borrow an older successful run as restore authority. Preserve the remaining backup before deciding to run a new backup; this guard does not delete historical data or alter managed recovery-point restore.
 
 Legacy Rsync recovery evidence reads selected source and Core-target checksums independently of optional policy sampling. Disabling `verify_enabled` does not authorize an unproven generation. Evidence limits or collection failures do not alone prevent an ordinary backup transfer: a completed transfer without trustworthy evidence is a warning, not a verified restore source. Cancellation during read-only capture, before the write attempt, does not dirty an earlier generation.
@@ -461,7 +465,7 @@ Updater receipt 只在独立 Unix socket `/run/xirang/asset-worker-updater.sock`
 
 ## 数据库
 
-支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000085_alert_delivery_success`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
+支持 SQLite（默认）和 PostgreSQL。当前迁移版本：`000087_backup_completion_facts`。该版本号由 `backend/internal/database/migrations/{sqlite,postgres}` 中成对的最新迁移文件维护，发布前必须通过迁移新鲜度检查。若升级时发现同一任务有多条 active drill，000074 会拒绝迁移；必须从已校验备份恢复，或先在单一事务中成对核对并终结 `TaskRun` 与 `RestoreDrillEvidence`，禁止只修改其中一侧。
 
 本次审计整改增加 000078（单次两步登录、绑定会话、离线恢复审计）、000079（普通 TaskRun 执行租约、原子收尾和可恢复效果）与 000081（批次幂等及派发回执）。升级前停止并排空旧服务/执行进程，备份数据库及加密密钥；不得混跑旧的非租约执行器。历史未完成 TOTP 初始化在升级时失效，已启用的 TOTP 不受影响。历史重复 `(task_id, upstream_task_run_id)` 在标记 dirty 前拒绝升级，必须先离线核对真实执行历史，不得猜测去重。
 

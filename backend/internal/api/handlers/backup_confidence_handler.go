@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"xirang/backend/internal/backuphealth"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/util"
 
@@ -86,14 +87,14 @@ type backupConfidenceNextStep struct {
 }
 
 type confidencePolicyContext struct {
-	Policy                    model.Policy
-	Tasks                     []model.Task
-	LatestRun                 *model.TaskRun
-	LatestBackupRun           *model.TaskRun
-	LatestSuccessfulBackupRun *model.TaskRun
-	LatestDrill               *model.RestoreDrillEvidence
-	OpenAlerts                []model.Alert
-	Targets                   []backupConfidenceTarget
+	Policy           model.Policy
+	Tasks            []model.Task
+	LatestRun        *model.TaskRun
+	LatestBackupRun  *model.TaskRun
+	LatestCompletion *model.BackupCompletion
+	LatestDrill      *model.RestoreDrillEvidence
+	OpenAlerts       []model.Alert
+	Targets          []backupConfidenceTarget
 }
 
 // Get godoc
@@ -107,9 +108,8 @@ type confidencePolicyContext struct {
 // @Failure      403  {object}  handlers.Response
 // @Router       /overview/backup-confidence [get]
 func (h *BackupConfidenceHandler) Get(c *gin.Context) {
-	c.Header("Cache-Control", "private, no-store")
+	now := time.Now().UTC()
 
-	now := time.Now()
 	policies, err := h.loadVisiblePolicies(c)
 	if err != nil {
 		respondInternalError(c, err)
@@ -167,15 +167,25 @@ func (h *BackupConfidenceHandler) loadVisiblePolicies(c *gin.Context) ([]model.P
 	}
 	return policies, nil
 }
-
 func (h *BackupConfidenceHandler) loadPolicyContext(c *gin.Context, policy model.Policy) (confidencePolicyContext, error) {
 	ctx := confidencePolicyContext{Policy: policy}
 	targetNodeIDs := make([]uint, 0, len(policy.Nodes))
+	for _, node := range policy.Nodes {
+		targetNodeIDs = append(targetNodeIDs, node.ID)
+	}
+	latestFacts, err := backuphealth.LatestVerifiedForNodes(c.Request.Context(), h.db, targetNodeIDs)
+	if err != nil {
+		return ctx, err
+	}
 	if len(policy.Nodes) > 0 {
 		ctx.Targets = make([]backupConfidenceTarget, 0, len(policy.Nodes))
 		for _, node := range policy.Nodes {
-			ctx.Targets = append(ctx.Targets, backupConfidenceTarget{NodeID: node.ID, NodeName: node.Name, LastBackupAt: node.LastBackupAt})
-			targetNodeIDs = append(targetNodeIDs, node.ID)
+			target := backupConfidenceTarget{NodeID: node.ID, NodeName: node.Name}
+			if fact, ok := latestFacts[node.ID]; ok {
+				completedAt := fact.CompletedAt.UTC()
+				target.LastBackupAt = &completedAt
+			}
+			ctx.Targets = append(ctx.Targets, target)
 		}
 	}
 
@@ -203,17 +213,18 @@ func (h *BackupConfidenceHandler) loadPolicyContext(c *gin.Context, policy model
 		}
 		ctx.LatestRun = latestRun
 
-		latestBackupRun, err := h.loadLatestRun(c, taskIDs, "trigger_type NOT IN ?", []string{"restore", "drill"})
+		backupPredicate := backuphealth.ClassifiedAttemptPredicate("")
+		latestBackupRun, err := h.loadLatestRun(c, taskIDs, backupPredicate)
 		if err != nil {
 			return ctx, err
 		}
 		ctx.LatestBackupRun = latestBackupRun
 
-		latestSuccessfulBackupRun, err := h.loadLatestRun(c, taskIDs, "trigger_type NOT IN ? AND status = ?", []string{"restore", "drill"}, "success")
+		latestCompletion, err := backuphealth.LatestVerifiedForTasks(c.Request.Context(), h.db, taskIDs)
 		if err != nil {
 			return ctx, err
 		}
-		ctx.LatestSuccessfulBackupRun = latestSuccessfulBackupRun
+		ctx.LatestCompletion = latestCompletion
 	}
 
 	// Only attach drill evidence when the operator can see both ends:
@@ -309,12 +320,9 @@ func buildBackupConfidenceItem(now time.Time, ctx confidencePolicyContext) backu
 		item.addFinding("no_task", "critical", "策略尚未关联可执行任务", 35, "create_task", "为该策略创建或关联备份任务")
 	}
 
-	if ctx.LatestBackupRun == nil {
-		item.addFinding("no_successful_backup", "critical", "尚未找到该策略的备份执行证据", 30, "run_backup", "立即执行一次备份任务")
-		item.Evidence = append(item.Evidence, backupConfidenceEvidence{Type: "backup", Status: "missing", Message: "没有可用的备份 TaskRun 记录"})
-	} else {
+	if ctx.LatestBackupRun != nil {
 		item.Evidence = append(item.Evidence, backupConfidenceEvidence{
-			Type:       "backup",
+			Type:       "backup_attempt",
 			Status:     ctx.LatestBackupRun.Status,
 			Message:    buildRunEvidenceMessage(ctx.LatestBackupRun, "最近备份执行"),
 			ObservedAt: preferredRunTime(ctx.LatestBackupRun),
@@ -330,9 +338,23 @@ func buildBackupConfidenceItem(now time.Time, ctx confidencePolicyContext) backu
 			item.addFinding("verify_failed", "critical", "最近备份校验失败", 25, "inspect_verify", "查看校验日志并修复源/目标差异")
 		} else if ctx.LatestBackupRun.VerifyStatus == "warning" {
 			item.addFinding("verify_warning", "warning", "最近备份校验存在告警", 12, "inspect_verify", "查看校验告警并确认样本一致性")
-		} else if ctx.Policy.VerifyEnabled && ctx.LatestBackupRun.VerifyStatus == "none" {
+		} else if ctx.Policy.VerifyEnabled && ctx.LatestBackupRun.Status == "success" && ctx.LatestBackupRun.VerifyStatus == "none" {
 			item.addFinding("verify_missing", "warning", "策略已启用校验但最近备份没有校验证据", 8, "enable_verify", "确认备份校验配置与执行日志")
 		}
+	}
+	if ctx.LatestCompletion == nil {
+		item.addFinding("no_successful_backup", "critical", "尚未找到该策略的已验证备份可用证据", 30, "run_backup", "立即执行一次备份任务")
+		item.Evidence = append(item.Evidence, backupConfidenceEvidence{Type: "backup", Status: "missing", Message: "没有可用的已验证备份完成事实"})
+	} else {
+		completedAt := ctx.LatestCompletion.CompletedAt.UTC()
+		item.Evidence = append(item.Evidence, backupConfidenceEvidence{
+			Type:       "backup",
+			Status:     ctx.LatestCompletion.FactKind,
+			Message:    "最近一次备份已具备持久化可用事实",
+			ObservedAt: &completedAt,
+			TaskID:     uintFromPtr(ctx.LatestCompletion.TaskID),
+			TaskRunID:  uintFromPtr(ctx.LatestCompletion.TaskRunID),
+		})
 	}
 
 	if ctx.LatestRun != nil && (ctx.LatestBackupRun == nil || ctx.LatestRun.ID != ctx.LatestBackupRun.ID) && (ctx.LatestRun.Status == "failed" || ctx.LatestRun.Status == "canceled") {
@@ -346,27 +368,27 @@ func buildBackupConfidenceItem(now time.Time, ctx confidencePolicyContext) backu
 	}
 
 	if ctx.Policy.RPOMinutes > 0 {
-		if ctx.LatestSuccessfulBackupRun == nil {
-			item.addFinding("rpo_unknown", "warning", "缺少成功备份，无法证明 RPO 达标", 14, "run_backup", "先完成一次成功备份以恢复 RPO 证据")
-		} else if observedAt := preferredRunTime(ctx.LatestSuccessfulBackupRun); observedAt != nil {
-			actualMinutes := int(now.Sub(*observedAt).Minutes())
+		if ctx.LatestCompletion == nil {
+			item.addFinding("rpo_unknown", "warning", "缺少已验证备份可用事实，无法证明 RPO 达标", 14, "run_backup", "先完成一次成功备份以恢复 RPO 证据")
+		} else {
+			observedAt := ctx.LatestCompletion.CompletedAt.UTC()
+			actualMinutes := int(now.Sub(observedAt).Minutes())
 			item.Evidence = append(item.Evidence, backupConfidenceEvidence{
 				Type:       "rpo",
 				Status:     "observed",
 				Message:    fmt.Sprintf("最近成功备份距今约 %d 分钟，目标 RPO 为 %d 分钟", actualMinutes, ctx.Policy.RPOMinutes),
-				ObservedAt: observedAt,
-				TaskID:     ctx.LatestSuccessfulBackupRun.TaskID,
-				TaskRunID:  ctx.LatestSuccessfulBackupRun.ID,
+				ObservedAt: &observedAt,
+				TaskID:     uintFromPtr(ctx.LatestCompletion.TaskID),
+				TaskRunID:  uintFromPtr(ctx.LatestCompletion.TaskRunID),
 			})
 			if actualMinutes > ctx.Policy.RPOMinutes {
 				item.addFinding("rpo_exceeded", "critical", fmt.Sprintf("RPO 超限：最近成功备份距今约 %d 分钟，目标 %d 分钟", actualMinutes, ctx.Policy.RPOMinutes), 30, "run_backup", "立即执行备份并检查调度是否正常")
 			}
 		}
 	}
-
 	if ctx.LatestDrill == nil {
-		item.addFinding("drill_missing", "warning", "缺少恢复演练证据，不能证明备份可恢复", 28, "run_restore_drill", "配置并执行一次恢复演练")
-		item.Evidence = append(item.Evidence, backupConfidenceEvidence{Type: "drill", Status: "missing", Message: "没有结构化恢复演练证据"})
+		item.addFinding("drill_missing", "warning", "缺少恢复演练证据", 20, "run_restore_drill", "执行一次完整恢复演练")
+		item.Evidence = append(item.Evidence, backupConfidenceEvidence{Type: "drill", Status: "missing", Message: buildDrillEvidenceMessage(nil)})
 	} else {
 		item.Evidence = append(item.Evidence, backupConfidenceEvidence{
 			Type:       "drill",

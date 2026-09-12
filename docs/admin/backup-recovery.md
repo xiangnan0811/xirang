@@ -28,7 +28,7 @@ Policy creation, template cloning, and config import share explicit-value persis
 
 ## Policy concurrency
 
-`max_concurrent` limits ordinary pending/running reservations across every node in the same policy, including competing Core instances. The database policy lock and execution-entry recheck are authoritative; the global execution limit still applies independently. A full policy refuses a new reservation as busy rather than claiming a failed transfer or creating an unbounded queue. Restore/drill admission keeps its separate safety boundary. Existing non-positive stored limits are treated conservatively as one; negative API values are rejected. Terminal completion releases ordinary capacity, while disabling a policy cancels its pending ordinary reservations.
+`max_concurrent` limits ordinary pending/running reservations across every node in the same policy, including competing Core instances. The database policy lock and execution-entry recheck are authoritative; the global execution limit still applies independently. A manual request that meets a busy policy keeps the manual busy response and does not create a deferred occurrence. A due cron occurrence first persists its durable intent, then waits for an available policy/global quota; that intent does not reserve a slot or bypass quota, so a full policy delays the occurrence instead of silently dropping it. Restore/drill admission keeps its separate safety boundary. Existing non-positive stored limits are treated conservatively as one; negative API values are rejected. Terminal completion releases ordinary capacity, while disabling a policy cancels its pending ordinary reservations and records explicit missed-occurrence state.
 
 ## Legacy Rclone mutable-head recovery
 
@@ -45,6 +45,16 @@ Only an authenticated administrator with task-write permission may call `POST /a
 3. The transaction refuses a live or unbounded execution owner, other active task runs, an enabled task, or a record that is not an eligible `writing`/`unknown` ordinary run. An abandoned active `writing` attempt needs an explicit expired lease as well as the operator confirmation; its stale owner is fenced and its active outcome is settled as failed.
 4. Successful reconciliation changes only the selected unresolved generation to `dirty`, retains the original diagnostics and evidence, and records the authenticated actor/confirmation in the same transaction. It does not mark the backup verified, select an older success, resume the task, or retry the old attempt. Audit persistence failure rolls the transition back.
 5. After all unresolved holds have been individually reconciled, explicitly resume and run a new ordinary backup. Restore remains blocked until a complete new successful generation establishes the current head. Never erase TaskRun evidence or launch another task at the same Remote to bypass a hold.
+
+### 共享 Legacy Rclone 资源与历史锁定
+
+Legacy Rclone 的未决写入按持久化的不可变资源身份划定冲突域，而不是按 TaskID 或当前可编辑的任务配置划定。共享同一 Remote、命名空间和节点证据的任务会一起保持写入锁定；独立资源仍可运行。历史运行如果缺少完整、可验证的资源键，仍按不可推断的节点/资源历史保持 hold，不能从后来编辑的目标路径、节点标签或普通任务字段补猜，也不能用另一个任务绕过。只有确认原写入者及外部 writer 已停止、保留独立副本并完成逐条管理员 reconciliation 后，才可清理该 hold。
+
+## 备份完成事实与健康投影
+
+普通 `command` 或维护任务成功只表示运维命令成功，不是备份完成，不会刷新节点 freshness、健康趋势、置信度或 RPO 报告。可信 freshness 只能来自带不可变执行器快照的 legacy transfer completion，或来自已提交、具备严格 Task/TaskRun/节点血缘与 Provider 证据的 managed RecoveryPoint；pending、warning、失败、恢复和演练运行都不能建立该事实。`imported_baseline` 以及迁移中无法证明的历史只保留为 `unverified` 标记，保留证据引用供调和，但排除在 authoritative freshness、健康统计和恢复点报告之外。
+
+000086/000087 升级前必须停止旧 writer，排空 backup、publication、reconciliation 与相关 worker，并备份数据库和加密密钥；升级按配对迁移顺序执行。000087 会先清除由可变 `Node.last_backup_at` 造成的旧投影，再只用可证明的 committed RecoveryPoint 重建 verified freshness，同时把无法证明的历史保留为 unverified，不得猜测或丢弃。只要新事实或标记已存在，used-down 会拒绝不安全降级；不得通过删除事实、跳过排空或回退到不理解该合同的旧 binary 来绕过门禁。
 
 ## 旧版 Rsync 恢复准入
 

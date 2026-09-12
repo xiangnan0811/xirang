@@ -86,7 +86,7 @@ func newRepositoryTestDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Task{}, &model.TaskRun{}, &model.BackupRepository{}, &model.RepositoryAccessBinding{}, &model.TaskRepositoryLink{}, &model.RecoveryPoint{}, &model.RecoveryPointRcloneNativeVersion{}, &model.RecoveryPointManifest{}, &model.RecoveryPointLease{}, &model.RecoveryPointLifecycleAttempt{}, &model.BackupAssetManagedHistoryLatch{}, &model.CatalogGeneration{}, &model.CatalogEntry{}, &model.NodeOwner{}, &model.WrappedDomainKey{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Node{}, &model.Task{}, &model.TaskRun{}, &model.TaskCronOccurrence{}, &model.BackupRepository{}, &model.RepositoryAccessBinding{}, &model.TaskRepositoryLink{}, &model.RecoveryPoint{}, &model.RecoveryPointRcloneNativeVersion{}, &model.RecoveryPointManifest{}, &model.RecoveryPointLease{}, &model.RecoveryPointLifecycleAttempt{}, &model.BackupAssetManagedHistoryLatch{}, &model.CatalogGeneration{}, &model.CatalogEntry{}, &model.NodeOwner{}, &model.WrappedDomainKey{}); err != nil {
 		t.Fatal(err)
 	}
 	statements := []string{

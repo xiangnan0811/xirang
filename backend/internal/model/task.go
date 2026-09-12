@@ -158,13 +158,30 @@ func (t *Task) AfterFind(_ *gorm.DB) error {
 }
 
 type TaskRun struct {
-	ExecutionOwnerID        string     `gorm:"size:64;not null;default:''" json:"-"`
-	ExecutionLeaseUntil     *time.Time `gorm:"index" json:"-"`
-	ID                      uint       `gorm:"primaryKey" json:"id"`
-	TaskID                  uint       `gorm:"not null;index;uniqueIndex:idx_task_runs_active_drill,where:trigger_type = 'drill' AND (status = 'pending' OR status = 'running' OR status = 'retrying')" json:"task_id"`
-	Task                    Task       `gorm:"foreignKey:TaskID" json:"-"`
-	NodeIDSnapshot          uint       `gorm:"not null;index:idx_task_runs_node_snapshot_status,priority:1" json:"-"`
-	CronScheduledAt         *time.Time `gorm:"column:cron_scheduled_at" json:"-"`
+	ExecutionOwnerID    string     `gorm:"size:64;not null;default:''" json:"-"`
+	ExecutionLeaseUntil *time.Time `gorm:"index" json:"-"`
+	ID                  uint       `gorm:"primaryKey" json:"id"`
+	TaskID              uint       `gorm:"not null;index;uniqueIndex:idx_task_runs_active_drill,where:trigger_type = 'drill' AND (status = 'pending' OR status = 'running' OR status = 'retrying')" json:"task_id"`
+	Task                Task       `gorm:"foreignKey:TaskID" json:"-"`
+	NodeIDSnapshot      uint       `gorm:"not null;index:idx_task_runs_node_snapshot_status,priority:1" json:"-"`
+	CronScheduledAt     *time.Time `gorm:"column:cron_scheduled_at" json:"-"`
+	// CronOccurrenceID links a newly reserved TaskRun to its durable scheduler
+	// intent. It is a reservation-only value and is never persisted as a column.
+	CronOccurrenceID uint `gorm:"-" json:"-"`
+	// ExecutorTypeSnapshot is the immutable executor classification used by
+	// health/reporting consumers. Empty is retained for pre-000086 history and
+	// is never interpreted as a provider.
+	ExecutorTypeSnapshot string `gorm:"column:executor_type_snapshot;size:32;not null;default:''" json:"-"`
+	// Resource identity is populated at TaskRun creation for legacy mutable
+	// writers. It contains no credentials and remains stable across SSH key or
+	// password rotation; unresolved generation checks use ResourceKey across
+	// TaskIDs rather than the editable Task target.
+	ResourceKey             string     `gorm:"column:resource_key;size:64;not null;default:''" json:"-"`
+	ResourceProvider        string     `gorm:"column:resource_provider;size:32;not null;default:''" json:"-"`
+	ResourceNodeID          uint       `gorm:"column:resource_node_id;not null;default:0" json:"-"`
+	ResourceNamespace       string     `gorm:"column:resource_namespace;size:255;not null;default:''" json:"-"`
+	ResourceLocator         string     `gorm:"column:resource_locator;size:512;not null;default:''" json:"-"`
+	ResourceEvidence        string     `gorm:"column:resource_evidence;type:text;not null;default:''" json:"-"`
 	BackupConfigFingerprint string     `gorm:"column:backup_config_fingerprint;size:64" json:"-"`
 	BackupCaptureLayout     string     `gorm:"column:backup_capture_layout;size:32" json:"-"`
 	BackupCaptureRoot       string     `gorm:"column:backup_capture_root;size:512" json:"-"`
@@ -730,10 +747,10 @@ func canonicalTaskRunExcludeRules(raw string) string {
 	return strings.Join(rules, "\n")
 }
 
-// BeforeCreate freezes the Task's current node for every GORM TaskRun writer.
-// Paired migration guards remain the authoritative defense for raw SQL and
-// reject explicit mismatches; the hook keeps legacy TaskRun producers on the
-// same immutable identity contract without duplicating node lookups.
+// BeforeCreate freezes the Task's current node and executor classification for
+// every GORM TaskRun writer. Paired migration guards remain the authoritative
+// defense for raw SQL and reject explicit mismatches; this hook also records a
+// legacy Rclone resource identity before any provider arm can occur.
 func (r *TaskRun) BeforeCreate(tx *gorm.DB) error {
 	if r == nil || tx == nil {
 		return fmt.Errorf("task run authority is unavailable")
@@ -741,26 +758,39 @@ func (r *TaskRun) BeforeCreate(tx *gorm.DB) error {
 	if r.TaskID == 0 {
 		return fmt.Errorf("task run requires an authoritative task")
 	}
-	var taskNode struct {
-		NodeID uint
-	}
-	result := tx.Model(&Task{}).Select("node_id").Where("id = ?", r.TaskID).Limit(1).Find(&taskNode)
+	var taskSnapshot Task
+	result := tx.Model(&Task{}).
+		Select("id, node_id, executor_type, rsync_source, rsync_target, executor_config").
+		Where("id = ?", r.TaskID).Limit(1).Find(&taskSnapshot)
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
 		return fmt.Errorf("task run requires an authoritative task")
 	}
-	if !IsTaskRunNodeSnapshotAuthoritative(taskNode.NodeID) {
+	if !IsTaskRunNodeSnapshotAuthoritative(taskSnapshot.NodeID) {
 		return fmt.Errorf("task run requires an authoritative task node snapshot")
 	}
 	if r.NodeIDSnapshot == 0 {
-		r.NodeIDSnapshot = taskNode.NodeID
-		return nil
+		r.NodeIDSnapshot = taskSnapshot.NodeID
 	}
-	if r.NodeIDSnapshot != taskNode.NodeID {
-		return fmt.Errorf("task run node snapshot %d does not match task node %d", r.NodeIDSnapshot, taskNode.NodeID)
+	if r.NodeIDSnapshot != taskSnapshot.NodeID {
+		return fmt.Errorf("task run node snapshot %d does not match task node %d", r.NodeIDSnapshot, taskSnapshot.NodeID)
 	}
+	executorType := strings.ToLower(strings.TrimSpace(taskSnapshot.ExecutorType))
+	if strings.TrimSpace(r.ExecutorTypeSnapshot) == "" {
+		r.ExecutorTypeSnapshot = executorType
+	} else if strings.ToLower(strings.TrimSpace(r.ExecutorTypeSnapshot)) != executorType {
+		return fmt.Errorf("task run executor snapshot %q does not match task executor %q", r.ExecutorTypeSnapshot, executorType)
+	}
+	SetTaskRunResourceIdentity(r, Task{
+		ID:             taskSnapshot.ID,
+		NodeID:         taskSnapshot.NodeID,
+		ExecutorType:   taskSnapshot.ExecutorType,
+		RsyncSource:    taskSnapshot.RsyncSource,
+		RsyncTarget:    taskSnapshot.RsyncTarget,
+		ExecutorConfig: taskSnapshot.ExecutorConfig,
+	})
 	return nil
 }
 
