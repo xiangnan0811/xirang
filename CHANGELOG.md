@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.11](https://github.com/xiangnan0811/xirang/compare/v0.55.10...v0.55.11) (2026-09-12)
+
+
+### 🐛 Bug Fixes
+
+* **backup:** persist scheduled work and verified backup evidence ([0de7c8b](https://github.com/xiangnan0811/xirang/commit/0de7c8b9f96bec74e192257a5102873859b31c3f))
+
 ## [Unreleased]
 
 ### Bug Fixes
