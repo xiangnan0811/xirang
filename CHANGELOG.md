@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-> Unreleased review candidate: release readiness has not been granted.
+> Release candidate: publication follows required CI and the Release Please workflow.
 
 ### Bug Fixes
 
@@ -19,7 +19,7 @@
 
 * Drain and stop all old Core writers before upgrading. Inventory and independently preserve legacy shared backup trees and TaskRun evidence; no directory is automatically relocated, cleared, or certified as migrated.
 * An unresolved legacy Rclone write remains an operator hold, not a retry queue. Establish remote quiescence and preserve salvage data; never erase evidence or overwrite the last copy to regain restore admission.
-* No release/tag/image is created by this work, and the paired migration version is unchanged. See the backup recovery guide for historical-data and mutable-head limitations.
+* The paired migration version is unchanged. See the backup recovery guide for historical-data and mutable-head limitations.
 
 ## [0.55.9](https://github.com/xiangnan0811/xirang/compare/v0.55.8...v0.55.9) (2026-09-11)
 
