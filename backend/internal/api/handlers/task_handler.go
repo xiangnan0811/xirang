@@ -441,6 +441,7 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	}
 
 	taskEntity, err := h.service().UpdateTask(c.Request.Context(), id, task.CreateTaskInput{
+		Name:            req.Name,
 		NodeID:          req.NodeID,
 		PolicyID:        req.PolicyID,
 		DependsOnTaskID: req.DependsOnTaskID,

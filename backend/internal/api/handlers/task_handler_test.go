@@ -1173,13 +1173,26 @@ func TestTaskUpdateDoesNotInheritCommand(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("期望状态码 200，实际: %d，响应: %s", resp.Code, resp.Body.String())
 	}
+	var responseEnvelope struct {
+		Code int `json:"code"`
+		Data struct {
+			ID   uint   `json:"id"`
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &responseEnvelope); err != nil {
+		t.Fatalf("解析更新响应失败: %v; 响应: %s", err, resp.Body.String())
+	}
+	if responseEnvelope.Code != http.StatusOK || responseEnvelope.Data.ID != taskEntity.ID || responseEnvelope.Data.Name != "task-new" {
+		t.Fatalf("期望更新响应返回重命名任务，实际: %+v", responseEnvelope)
+	}
 
 	var updated model.Task
 	if err := db.First(&updated, taskEntity.ID).Error; err != nil {
 		t.Fatalf("查询更新后任务失败: %v", err)
 	}
-	if updated.Command != "" {
-		t.Fatalf("期望更新后 command 被清空，实际: %q", updated.Command)
+	if updated.Name != "task-new" || updated.Command != "" {
+		t.Fatalf("期望更新后 name=%q 且 command 被清空，实际: %+v", "task-new", updated)
 	}
 }
 

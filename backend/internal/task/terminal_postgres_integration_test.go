@@ -201,7 +201,10 @@ func openTaskTerminalPostgresDB(t *testing.T, dsn string) *gorm.DB {
 	}
 	sqlDB.SetMaxOpenConns(8)
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{}, &model.TaskRunEffect{}); err != nil {
+	if err := db.AutoMigrate(
+		&model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{},
+		&model.TaskCronOccurrence{}, &model.TaskRunEffect{}, &model.BackupCompletion{},
+	); err != nil {
 		t.Fatalf("migrate isolated PostgreSQL task tables: %v", err)
 	}
 	return db
