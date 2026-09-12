@@ -848,6 +848,16 @@ func newIsolatedRetentionPostgresTestDB(t *testing.T) *gorm.DB {
 
 func seedRetentionUsersAndRepository(t *testing.T, db *gorm.DB, repositoryID string) {
 	t.Helper()
+	seedRetentionUsersAndRepositoryWithProvider(t, db, repositoryID, backupasset.ProviderRestic)
+}
+
+func seedRetentionUsersAndRepositoryWithProvider(
+	t *testing.T,
+	db *gorm.DB,
+	repositoryID string,
+	providerKind backupasset.ProviderKind,
+) {
+	t.Helper()
 	users := []model.User{
 		{ID: 1, Username: "admin", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "admin"},
 		{ID: 2, Username: "operator", PasswordHash: "FAKE_PASSWORD_HASH_FOR_TEST_ONLY", Role: "operator"},
@@ -866,10 +876,16 @@ func seedRetentionUsersAndRepository(t *testing.T, db *gorm.DB, repositoryID str
 		}
 	}
 	identityDigest := sha256.Sum256([]byte("retention-test-repository:" + repositoryID))
-	identity := provider.NativeResticIdentityPrefix + hex.EncodeToString(identityDigest[:])
+	identityPrefix := provider.NativeResticIdentityPrefix
+	versionMode := backupasset.VersionNativeSnapshot
+	if providerKind == backupasset.ProviderRsync || providerKind == backupasset.ProviderRclone {
+		identityPrefix = provider.ScopedIdentityPrefix(providerKind)
+		versionMode = backupasset.VersionMutableHead
+	}
+	identity := identityPrefix + hex.EncodeToString(identityDigest[:])
 	repository := model.BackupRepository{
-		ID: repositoryID, ProviderKind: string(backupasset.ProviderRestic), RepositoryIdentity: &identity, DisplayName: "retention-test",
-		VersionMode: string(backupasset.VersionNativeSnapshot), Status: string(backupasset.RepositoryOnline),
+		ID: repositoryID, ProviderKind: string(providerKind), RepositoryIdentity: &identity, DisplayName: "retention-test",
+		VersionMode: string(versionMode), Status: string(backupasset.RepositoryOnline),
 		CapabilityRevision: 1, CapabilitiesJSON: `{}`, ImmutabilityLevel: string(backupasset.ImmutabilityBackendVersioned),
 	}
 	if err := db.Create(&repository).Error; err != nil {
