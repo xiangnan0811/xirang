@@ -1526,8 +1526,8 @@ func seedRecoveryBehaviorNodeTask(t *testing.T, db *gorm.DB, suffix string) (mod
 		ExecutorType: "rsync",
 		Status:       "pending",
 		Enabled:      true,
-		RsyncSource:  "/tmp/source",
-		RsyncTarget:  "/tmp/target",
+		RsyncSource:  fmt.Sprintf("/tmp/recovery-behavior-source-%d", sequence),
+		RsyncTarget:  fmt.Sprintf("/tmp/recovery-behavior-target-%d", sequence),
 	}
 	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatal(err)
