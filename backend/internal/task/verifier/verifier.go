@@ -518,7 +518,7 @@ func sampleChecksumRemote(ctx context.Context, sshClient *ssh.Client, srcPath, d
 }
 
 // VerifyRestic 通过 SSH 在远程节点上执行 restic check 校验仓库完整性。
-func VerifyRestic(ctx context.Context, task model.Task, db *gorm.DB, logf func(level, msg string)) Result {
+func VerifyRestic(ctx context.Context, task model.Task, db *gorm.DB, logf func(level, msg string)) (result Result) {
 	sshClient, err := dialSSHForTask(ctx, task, db)
 	if err != nil {
 		message := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("restic 校验阶段建立 SSH 连接失败: %v", err))
@@ -536,16 +536,31 @@ func VerifyRestic(ctx context.Context, task model.Task, db *gorm.DB, logf func(l
 
 	// 生成唯一的密码临时文件路径，并在远程节点上创建
 	pwFilePath := executor.BuildResticPasswordFilePath()
+	defer func() {
+		if cleanupErr := executor.CleanupResticPasswordFile(task.Node, pwFilePath, sshutil.PurposeIntegrityCheck); cleanupErr != nil {
+			message := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("restic 校验阶段密码临时文件清理失败（校验业务结果降级为 warning）: %v", cleanupErr))
+			if logf != nil {
+				logf("warn", message)
+			}
+			switch {
+			case result.Status == "":
+				result.Status = "warning"
+				result.Message = message
+			case strings.TrimSpace(result.Message) == "":
+				result.Status = "warning"
+				result.Message = message
+			default:
+				result.Status = "warning"
+				result.Message = strings.TrimSpace(result.Message) + "; " + message
+			}
+		}
+	}()
 	createPwCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, access)
 	if _, err := runRemoteCommand(ctx, sshClient, createPwCmd); err != nil {
 		message := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("restic 校验阶段创建密码临时文件失败: %v", err))
 		logf("warn", message)
 		return Result{Status: "warning", Message: message}
 	}
-	defer func() {
-		cleanupCmd := executor.BuildCleanupResticPasswordFileCmd(pwFilePath)
-		_, _ = runRemoteCommand(context.Background(), sshClient, cleanupCmd)
-	}()
 	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
 
 	checkCmd := fmt.Sprintf("restic %s check -r %s 2>&1", pwFileArg, executor.ShellEscape(repo))

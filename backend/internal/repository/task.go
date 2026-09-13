@@ -31,4 +31,8 @@ type TaskRepository interface {
 	// FindByIDsFields returns tasks matching the given IDs, selecting only the
 	// specified fields.
 	FindByIDsFields(ctx context.Context, ids []uint, fields ...string) ([]model.Task, error)
+	// TaskRetryCronCursorMode reads the newest ordinary retry effect's
+	// provenance. The caller must use the transaction-scoped repository after
+	// locking the Task row when making a schedule decision.
+	TaskRetryCronCursorMode(ctx context.Context, taskID uint) (model.TaskRunCronCursorMode, error)
 }

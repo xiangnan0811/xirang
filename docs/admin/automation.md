@@ -22,7 +22,8 @@
 ### 重启与错过的时刻
 
 - Core 启动和周期扫描都会投递 `queued` 意图。调度租约过期后，其他 Core 可以接管未完成的投递；已经绑定 TaskRun 的 occurrence 不会重复执行。
-- Core 停机期间错过的 `next_run_at` 只记录一条 `skipped` occurrence（原因 `scheduler downtime; missed occurrence coalesced`），不会在重启时把整个停机区间补跑成一批任务。已有的 `queued` 意图仍按原计划投递。
+- Online reconciliation and Core restart preserve an overdue persisted `next_run_at` as a `queued` occurrence. A late callback and reconciliation share the same occurrence key; an overdue clock value is not proof of system-wide downtime and never creates an automatic downtime `skipped` result. This preserves known due intent, without claiming to reconstruct every unknown tick during downtime.
+- If a task edit commits but immediate schedule synchronization fails, the API returns HTTP 503 and explicitly reports that the configuration was saved. Periodic reconciliation restores scheduling from persisted configuration; the failed request does not roll back a concurrent pause, edit, or execution result.
 - 禁用或归档任务、取消任务，或禁用所属策略时，尚未投递的 occurrence 会在同一持久化边界标记为 `canceled` 并清除租约；重新启用后只等待新的调度时刻。正在执行的 TaskRun 仍按任务取消和执行租约规则收敛，不会因删除本地调度器记录而被假定停止。
 
 ### Legacy Rclone 的共享目标占用

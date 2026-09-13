@@ -3,6 +3,7 @@ package anomaly
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -353,7 +354,7 @@ func shellEscapeArg(s string) string {
 // AnalyzeSnapshotDiff 在备份成功后异步运行，对比最近两次 restic 快照差异，
 // 写入 diff history 记录，并在变更量异常或检测到已知勒索后缀时返回 Finding。
 // 调用方（task runner）将 findings 传入 anomaly.AlertSink.Raise() 以持久化。
-func AnalyzeSnapshotDiff(ctx context.Context, db *gorm.DB, task model.Task, taskRunID uint) ([]Finding, error) {
+func AnalyzeSnapshotDiff(ctx context.Context, db *gorm.DB, task model.Task, taskRunID uint) (findingsResult []Finding, returnErr error) {
 	// 非 restic 类型：跳过
 	if task.ExecutorType != "restic" {
 		return nil, nil
@@ -387,14 +388,21 @@ func AnalyzeSnapshotDiff(ctx context.Context, db *gorm.DB, task model.Task, task
 
 	// 生成唯一的密码临时文件路径，并在远程节点上创建
 	pwFilePath := executor.BuildResticPasswordFilePath()
+	// Cleanup must be armed before creation and must not inherit a canceled
+	// analysis context.
+	defer func() {
+		if cleanupErr := executor.CleanupResticPasswordFile(fullTask.Node, pwFilePath, sshutil.PurposeSnapshotDiff); cleanupErr != nil {
+			if returnErr != nil {
+				returnErr = errors.Join(returnErr, cleanupErr)
+			} else {
+				returnErr = cleanupErr
+			}
+		}
+	}()
 	createPwCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, access)
 	if _, err := executor.RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
 		return nil, fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
 	}
-	defer func() {
-		cleanupCmd := executor.BuildCleanupResticPasswordFileCmd(pwFilePath)
-		_, _ = executor.RunSSHCommandOutput(ctx, client, cleanupCmd)
-	}()
 	pwFileArg := executor.BuildResticPasswordFileArg(pwFilePath)
 
 	// 获取最近 2 个快照 ID

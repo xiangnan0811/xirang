@@ -176,3 +176,16 @@ func (r *TaskRepository) FindByIDsFields(ctx context.Context, ids []uint, fields
 	}
 	return tasks, nil
 }
+
+// TaskRetryCronCursorMode returns the provenance of the newest ordinary retry
+// effect for taskID. The underlying handle may be a transaction; callers make
+// schedule decisions only after locking the Task row on that same handle.
+func (r *TaskRepository) TaskRetryCronCursorMode(ctx context.Context, taskID uint) (model.TaskRunCronCursorMode, error) {
+	if r == nil || r.db == nil {
+		return model.TaskRunCronCursorModeLegacy, apperr.WrapDBError(gorm.ErrInvalidDB)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return model.LatestTaskRetryEffectCronCursorModeTx(r.db.WithContext(ctx), taskID)
+}

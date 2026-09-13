@@ -11,6 +11,7 @@ import (
 	"xirang/backend/internal/apperr"
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/config"
+	"xirang/backend/internal/cronutil"
 	"xirang/backend/internal/model"
 	policyPkg "xirang/backend/internal/policy"
 	"xirang/backend/internal/repository"
@@ -18,6 +19,12 @@ import (
 )
 
 const maxCommandLength = 4096
+
+// ErrTaskScheduleSyncUnavailable indicates that the Task update committed,
+// but the process-local schedule could not be synchronized. The durable Task
+// row remains authoritative and is repaired by the manager's idempotent
+// schedule reconciliation.
+var ErrTaskScheduleSyncUnavailable = errors.New("task saved but schedule synchronization unavailable")
 
 // TaskRunner is a subset of Manager methods needed by TaskApiService.
 type TaskRunner interface {
@@ -176,7 +183,8 @@ func (s *TaskApiService) CreateTask(ctx context.Context, input CreateTaskInput) 
 // ---------------------------------------------------------------------------
 
 // UpdateTask updates an existing task. It loads the current state, applies
-// defaults, validates, persists, and syncs the cron schedule.
+// defaults, validates, commits the Task configuration, and then syncs the cron
+// schedule. The committed database row is authoritative if schedule sync fails.
 func (s *TaskApiService) UpdateTask(ctx context.Context, id uint, input CreateTaskInput) (model.Task, error) {
 	SanitizeCreateTaskInput(&input)
 
@@ -187,9 +195,6 @@ func (s *TaskApiService) UpdateTask(ctx context.Context, id uint, input CreateTa
 	if taskEntity.ArchivedAt != nil {
 		return model.Task{}, ErrTaskArchived
 	}
-	// Value copy for compensating rollback; the copy shares pointer fields
-	// (e.g. PolicyID) — callers must not mutate through *previous.PolicyID.
-	previous := *taskEntity
 
 	HydrateTaskDefaultsFromPolicy(ctx, s.policyRepo, s.nodeRepo, &input)
 	InferTaskExecutor(&input, taskEntity.ExecutorType)
@@ -259,6 +264,38 @@ func (s *TaskApiService) UpdateTask(ctx context.Context, id uint, input CreateTa
 		fresh.RsyncTarget = input.RsyncTarget
 		fresh.ExecutorType = input.ExecutorType
 		fresh.ExecutorConfig = input.ExecutorConfig
+		cronChanged := strings.TrimSpace(fresh.CronSpec) != strings.TrimSpace(input.CronSpec)
+		if cronChanged {
+			retryCursorMode := model.TaskRunCronCursorModeLegacy
+			if strings.EqualFold(strings.TrimSpace(fresh.Status), model.TaskRunStatusRetrying) {
+				var modeErr error
+				retryCursorMode, modeErr = txRepo.TaskRetryCronCursorMode(ctx, id)
+				if modeErr != nil {
+					return fmt.Errorf("load task retry cron cursor provenance: %w", modeErr)
+				}
+			}
+			if strings.EqualFold(strings.TrimSpace(fresh.Status), model.TaskRunStatusRetrying) {
+				if retryCursorMode == model.TaskRunCronCursorModeRegularV1 {
+					if !fresh.Enabled || strings.TrimSpace(input.CronSpec) == "" {
+						fresh.NextRunAt = nil
+					} else {
+						fresh.NextRunAt = cronutil.Next(input.CronSpec)
+					}
+				}
+				// Legacy retrying tasks retain Task.NextRunAt as their
+				// historical retry deadline, even when cron is removed.
+			} else if !fresh.Enabled {
+				// A paused task has no active schedule generation. Keep its
+				// deadline empty so Resume starts the edited generation from
+				// the resume boundary instead of replaying disabled time.
+				fresh.NextRunAt = nil
+			} else {
+				// A due deadline belongs to the previous cron generation.
+				// Reset it atomically with the new spec so reconciliation
+				// cannot enqueue that stale deadline.
+				fresh.NextRunAt = cronutil.Next(input.CronSpec)
+			}
+		}
 		fresh.CronSpec = input.CronSpec
 		if err := txRepo.Update(ctx, fresh); err != nil {
 			if errors.Is(err, repository.ErrTaskArchived) {
@@ -282,15 +319,12 @@ func (s *TaskApiService) UpdateTask(ctx context.Context, id uint, input CreateTa
 			return *current, ErrTaskArchived
 		}
 		if err := s.runner.SyncSchedule(*current); err != nil {
-			s.runner.RemoveSchedule(taskEntity.ID)
-			if restoreErr := s.taskRepo.Update(ctx, &previous); restoreErr != nil {
-				return model.Task{}, fmt.Errorf("任务调度同步失败且补偿回滚失败: %w", restoreErr)
-			}
-			if restoreScheduleErr := s.runner.SyncSchedule(previous); restoreScheduleErr != nil {
-				s.runner.RemoveSchedule(taskEntity.ID)
-				return model.Task{}, fmt.Errorf("任务调度同步失败且补偿调度失败: %w", restoreScheduleErr)
-			}
-			return model.Task{}, newValidationError("任务调度失败，请检查 Cron 表达式是否正确")
+			// The Task commit is authoritative. Do not roll back a complete
+			// before-image here: another request may have changed runtime
+			// status, pause state, diagnostics, or archival state already.
+			// Manager startup/periodic reconciliation will converge the
+			// process-local schedule from the durable row.
+			return model.Task{}, fmt.Errorf("%w: %v", ErrTaskScheduleSyncUnavailable, err)
 		}
 		return *current, nil
 	}

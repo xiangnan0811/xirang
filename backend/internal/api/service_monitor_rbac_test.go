@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,18 +28,37 @@ type serviceMonitorRBACTestFixture struct {
 	jwtManager *auth.JWTManager
 }
 
+var serviceMonitorRBACTestDBSequence atomic.Uint64
+
 func setupServiceMonitorRBACFixture(t *testing.T) serviceMonitorRBACTestFixture {
 	t.Helper()
 	t.Setenv("APP_ENV", "development")
 	gin.SetMode(gin.TestMode)
 
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_loc=UTC", strings.ReplaceAll(t.Name(), "/", "_"))
+	// Shared in-memory databases survive until every pooled connection closes.
+	// Include a per-process suffix so repeated -count runs cannot reopen an
+	// old fixture.
+	dsn := fmt.Sprintf(
+		"file:%s-%d?mode=memory&cache=shared&_busy_timeout=5000&_loc=UTC",
+		strings.ReplaceAll(t.Name(), "/", "_"),
+		serviceMonitorRBACTestDBSequence.Add(1),
+	)
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		NowFunc: func() time.Time { return time.Now().UTC() },
 	})
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("open test SQL database: %v", err)
+	}
+	// The handler and live prober share this in-memory SQLite database. Keep
+	// their operations on one connection so SQLite's single-writer behavior
+	// cannot surface as a test-only table lock. Register this cleanup before
+	// callers register prober cleanup; t.Cleanup runs in LIFO order.
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := db.AutoMigrate(&model.User{}, &model.ServiceMonitor{}, &model.AuditLog{}); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}

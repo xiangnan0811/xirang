@@ -1462,3 +1462,155 @@ func TestConfigImportAcceptsWrappedExportEnvelope(t *testing.T) {
 		t.Fatalf("包裹格式导入后应创建节点，实际数量: %d", count)
 	}
 }
+func TestConfigImportRetryCronCursorModesSQLite(t *testing.T) {
+	runConfigImportRetryCronCursorModes(t, "sqlite")
+}
+
+func TestConfigImportRetryCronCursorModesPostgres(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN")) == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	runConfigImportRetryCronCursorModes(t, "postgres")
+}
+
+func runConfigImportRetryCronCursorModes(t *testing.T, engine string) {
+	t.Helper()
+	target, _ := openConfigHandlerTestDBPairForEngine(t, engine)
+	if err := target.AutoMigrate(
+		&model.Node{}, &model.Policy{}, &model.Task{}, &model.TaskRun{},
+		&model.TaskRunEffect{}, &model.SystemSetting{}, &model.SSHKey{},
+		&model.CredentialAuditEvent{},
+	); err != nil {
+		t.Fatalf("migrate config import retry cursor tables: %v", err)
+	}
+	node := model.Node{
+		Name: "config-import-cursor-node", Host: "10.0.0.8", Port: 22,
+		Username: "root", AuthType: "key",
+	}
+	if err := target.Create(&node).Error; err != nil {
+		t.Fatalf("create config import cursor node: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	markedCursor := now.Add(4 * time.Hour)
+	legacyDeadline := now.Add(30 * time.Minute)
+	disabledCursor := now.Add(5 * time.Hour)
+	tasks := []model.Task{
+		{
+			Name: "config-import-marked", NodeID: node.ID, ExecutorType: "command",
+			Command: "old-marked", CronSpec: "*/5 * * * *",
+			Status: model.TaskRunStatusRetrying, Enabled: true, NextRunAt: &markedCursor,
+		},
+		{
+			Name: "config-import-legacy", NodeID: node.ID, ExecutorType: "command",
+			Command: "old-legacy", CronSpec: "*/5 * * * *",
+			Status: model.TaskRunStatusRetrying, Enabled: true, NextRunAt: &legacyDeadline,
+		},
+		{
+			Name: "config-import-disabled", NodeID: node.ID, ExecutorType: "command",
+			Command: "old-disabled", CronSpec: "*/5 * * * *",
+			Status: model.TaskRunStatusRetrying, Enabled: true, NextRunAt: &disabledCursor,
+		},
+	}
+	for i := range tasks {
+		if err := target.Create(&tasks[i]).Error; err != nil {
+			t.Fatalf("create config import task %q: %v", tasks[i].Name, err)
+		}
+	}
+	retryDeadline := now.Add(90 * time.Minute)
+	effects := make([]model.TaskRunEffect, 0, len(tasks))
+	for i, mode := range []model.TaskRunCronCursorMode{
+		model.TaskRunCronCursorModeRegularV1,
+		model.TaskRunCronCursorModeLegacy,
+		model.TaskRunCronCursorModeRegularV1,
+	} {
+		run := model.TaskRun{
+			TaskID: tasks[i].ID, NodeIDSnapshot: node.ID, TriggerType: "cron",
+			Status: model.TaskRunStatusFailed,
+		}
+		if err := target.Create(&run).Error; err != nil {
+			t.Fatalf("create config import retry predecessor %d: %v", i, err)
+		}
+		payload := "{}"
+		if mode == model.TaskRunCronCursorModeRegularV1 {
+			payload = `{"cron_cursor_mode":"regular_cursor_v1"}`
+		}
+		effect := model.TaskRunEffect{
+			TaskRunID: run.ID, EffectKey: "retry", EffectType: model.TaskRunEffectTypeRetry,
+			Payload: payload, Status: model.TaskRunEffectStatusPending, NextAttemptAt: &retryDeadline,
+		}
+		if err := target.Create(&effect).Error; err != nil {
+			t.Fatalf("create config import retry effect %d: %v", i, err)
+		}
+		effects = append(effects, effect)
+	}
+
+	serveImport := func(body string) *httptest.ResponseRecorder {
+		handler := NewConfigHandler(target, nil)
+		router := gin.New()
+		router.POST("/config/import", handler.Import)
+		request := httptest.NewRequest(
+			http.MethodPost, "/config/import?conflict=overwrite", strings.NewReader(body),
+		)
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+	const nodeJSON = `"nodes":[{"name":"config-import-cursor-node","host":"10.0.0.8","port":22,"username":"root","auth_type":"key"}]`
+	if err := target.Model(&model.TaskRunEffect{}).Where("id = ?", effects[0].ID).
+		Update("payload", `{"cron_cursor_mode":"future_v2"}`).Error; err != nil {
+		t.Fatalf("install corrupt marked retry fixture: %v", err)
+	}
+	corruptResponse := serveImport(fmt.Sprintf(`{%s,"tasks":[{"name":"config-import-marked","node_name":"config-import-cursor-node","executor_type":"command","command":"new-marked","cron_spec":"0 0 1 1 *","enabled":true}]}`, nodeJSON))
+	if corruptResponse.Code != http.StatusInternalServerError {
+		t.Fatalf("corrupt retry provenance import status=%d body=%s", corruptResponse.Code, corruptResponse.Body.String())
+	}
+	var unchanged model.Task
+	if err := target.First(&unchanged, tasks[0].ID).Error; err != nil {
+		t.Fatalf("reload task after corrupt import: %v", err)
+	}
+	if unchanged.Command != "old-marked" || unchanged.CronSpec != "*/5 * * * *" ||
+		unchanged.NextRunAt == nil || !unchanged.NextRunAt.Equal(markedCursor) {
+		t.Fatalf("corrupt import changed task state: %+v", unchanged)
+	}
+	if err := target.Model(&model.TaskRunEffect{}).Where("id = ?", effects[0].ID).
+		Update("payload", `{"cron_cursor_mode":"regular_cursor_v1"}`).Error; err != nil {
+		t.Fatalf("repair marked retry fixture: %v", err)
+	}
+
+	validResponse := serveImport(fmt.Sprintf(`{%s,"tasks":[
+		{"name":"config-import-marked","node_name":"config-import-cursor-node","executor_type":"command","command":"new-marked","cron_spec":"0 0 1 1 *","enabled":true},
+		{"name":"config-import-legacy","node_name":"config-import-cursor-node","executor_type":"command","command":"new-legacy","cron_spec":"0 0 1 1 *","enabled":true},
+		{"name":"config-import-disabled","node_name":"config-import-cursor-node","executor_type":"command","command":"new-disabled","cron_spec":"0 0 1 1 *","enabled":false}
+	]}`, nodeJSON))
+	if validResponse.Code != http.StatusOK {
+		t.Fatalf("valid retry provenance import status=%d body=%s", validResponse.Code, validResponse.Body.String())
+	}
+	var marked, legacy, disabled model.Task
+	for i, task := range []*model.Task{&marked, &legacy, &disabled} {
+		if err := target.First(task, tasks[i].ID).Error; err != nil {
+			t.Fatalf("reload imported task %d: %v", i, err)
+		}
+	}
+	if marked.Command != "new-marked" || marked.CronSpec != "0 0 1 1 *" ||
+		marked.NextRunAt == nil || !marked.NextRunAt.After(now) || marked.NextRunAt.Equal(markedCursor) {
+		t.Fatalf("marked import did not re-anchor regular cursor: %+v", marked)
+	}
+	if legacy.Command != "new-legacy" || legacy.CronSpec != "0 0 1 1 *" ||
+		legacy.NextRunAt == nil || !legacy.NextRunAt.Equal(legacyDeadline) {
+		t.Fatalf("legacy import did not preserve retry deadline: %+v", legacy)
+	}
+	if disabled.Command != "new-disabled" || disabled.CronSpec != "0 0 1 1 *" ||
+		disabled.Enabled || disabled.NextRunAt != nil {
+		t.Fatalf("disabled marked import did not clear regular cursor: %+v", disabled)
+	}
+	for i := range effects {
+		var effect model.TaskRunEffect
+		if err := target.First(&effect, effects[i].ID).Error; err != nil {
+			t.Fatalf("reload retry effect %d: %v", i, err)
+		}
+		if effect.NextAttemptAt == nil || !effect.NextAttemptAt.Equal(retryDeadline) {
+			t.Fatalf("import changed retry effect %d deadline: %v, want %v", i, effect.NextAttemptAt, retryDeadline)
+		}
+	}
+}

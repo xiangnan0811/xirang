@@ -16,6 +16,7 @@ import (
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const requirePostgresTaskTerminalTestEnv = "REQUIRE_POSTGRES_TASK_TERMINAL_TEST"
@@ -158,6 +159,188 @@ func TestTaskTerminalAtomicityPostgres(t *testing.T) {
 	}
 	if effect.Status != model.TaskRunEffectStatusSucceeded {
 		t.Fatalf("final effect status=%q, want succeeded", effect.Status)
+	}
+}
+
+// TestTaskTerminalRejectCancelLockOrderPostgres forces cancellation to hold
+// the Task row while rejection reaches its first row lock. The rejection
+// transaction must request Task first; the old TaskRun -> Task order forms a
+// PostgreSQL deadlock with cancellation's Task -> TaskRun order.
+func TestTaskTerminalRejectCancelLockOrderPostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	db := openTaskTerminalPostgresDB(t, dsn)
+
+	node := model.Node{Name: "task-terminal-lock-order-node", Host: "127.0.0.1", Port: 22, Username: "root", AuthType: "key"}
+	if err := db.Create(&node).Error; err != nil {
+		t.Fatalf("create lock-order node: %v", err)
+	}
+	taskEntity := model.Task{
+		Name: "task-terminal-lock-order", NodeID: node.ID, ExecutorType: "rsync", Status: string(StatusRunning),
+		RsyncSource: "/tmp/src", RsyncTarget: "/tmp/dst",
+	}
+	if err := db.Create(&taskEntity).Error; err != nil {
+		t.Fatalf("create lock-order task: %v", err)
+	}
+	leaseUntil := time.Now().UTC().Add(time.Hour)
+	run := model.TaskRun{
+		TaskID: taskEntity.ID, NodeIDSnapshot: node.ID, TriggerType: "manual", Status: model.TaskRunStatusRunning,
+		ExecutionOwnerID: "lock-order-owner", ExecutionLeaseUntil: &leaseUntil,
+	}
+	if err := db.Create(&run).Error; err != nil {
+		t.Fatalf("create lock-order task run: %v", err)
+	}
+
+	rejectionManager := &Manager{
+		db: db, stateMachine: NewStateMachine(), executionOwnerID: "lock-order-owner",
+		executionLeaseDuration: time.Minute,
+	}
+	cancellationManager := &Manager{
+		db: db, stateMachine: NewStateMachine(), executionOwnerID: "lock-order-owner",
+		executionLeaseDuration: time.Minute,
+	}
+	ownership := &pendingRunOwnership{}
+	cancellationManager.pendingRuns.Store(taskEntity.ID, ownership)
+	t.Cleanup(func() { cancellationManager.pendingRuns.CompareAndDelete(taskEntity.ID, ownership) })
+
+	isLockingQuery := func(tx *gorm.DB, table string) bool {
+		if tx == nil || tx.Statement == nil || tx.Statement.Schema == nil ||
+			tx.Statement.Schema.Table != table {
+			return false
+		}
+		locking, ok := tx.Statement.Clauses["FOR"]
+		if !ok {
+			return false
+		}
+		switch locking.Expression.(type) {
+		case clause.Locking, *clause.Locking:
+			return true
+		default:
+			return false
+		}
+	}
+
+	cancellationTaskLocked := make(chan struct{})
+	releaseCancellationTask := make(chan struct{})
+	var cancellationTaskOnce sync.Once
+	var releaseCancellationOnce sync.Once
+	releaseCancellation := func() {
+		releaseCancellationOnce.Do(func() { close(releaseCancellationTask) })
+	}
+	t.Cleanup(releaseCancellation)
+
+	rejectionStarted := atomic.Bool{}
+	rejectionLockAttempted := make(chan string, 1)
+	rejectionRunLocked := make(chan struct{})
+	var rejectionLockOnce sync.Once
+	var rejectionRunOnce sync.Once
+
+	afterCallbackName := fmt.Sprintf("test:task-terminal-lock-order-after-%d", run.ID)
+	if err := db.Callback().Query().After("gorm:query").Register(afterCallbackName, func(tx *gorm.DB) {
+		if isLockingQuery(tx, "tasks") {
+			cancellationTaskOnce.Do(func() {
+				close(cancellationTaskLocked)
+				<-releaseCancellationTask
+			})
+		}
+		if rejectionStarted.Load() && isLockingQuery(tx, "task_runs") {
+			rejectionRunOnce.Do(func() { close(rejectionRunLocked) })
+		}
+	}); err != nil {
+		t.Fatalf("register lock-order query barrier: %v", err)
+	}
+	t.Cleanup(func() {
+		releaseCancellation()
+		_ = db.Callback().Query().Remove(afterCallbackName)
+	})
+
+	beforeCallbackName := fmt.Sprintf("test:task-terminal-lock-order-before-%d", run.ID)
+	if err := db.Callback().Query().Before("gorm:query").Register(beforeCallbackName, func(tx *gorm.DB) {
+		if !rejectionStarted.Load() || (!isLockingQuery(tx, "tasks") && !isLockingQuery(tx, "task_runs")) {
+			return
+		}
+		rejectionLockOnce.Do(func() {
+			// Bound the intentionally inverted pre-fix interleaving so the
+			// test reports the lock-order failure without waiting for the
+			// server's default deadlock detector interval.
+			_ = tx.Exec("SET LOCAL lock_timeout = '1s'").Error
+			rejectionLockAttempted <- tx.Statement.Schema.Table
+		})
+	}); err != nil {
+		t.Fatalf("register lock-order query observer: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(beforeCallbackName) })
+
+	type cancellationResult struct {
+		canceled bool
+		err      error
+	}
+	cancellationDone := make(chan cancellationResult, 1)
+	go func() {
+		canceled, err := cancellationManager.cancelOwnedRunningTask(taskEntity.ID, "任务已取消")
+		cancellationDone <- cancellationResult{canceled: canceled, err: err}
+	}()
+	select {
+	case <-cancellationTaskLocked:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancellation did not reach Task lock barrier")
+	}
+
+	rejectionStarted.Store(true)
+	rejectionDone := make(chan error, 1)
+	go func() {
+		rejectionDone <- rejectionManager.failTaskRunBeforeExecutor(context.Background(), run.ID, "入口拒绝")
+	}()
+
+	var firstLock string
+	select {
+	case firstLock = <-rejectionLockAttempted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("rejection did not reach its first row-lock barrier")
+	}
+	if firstLock == "task_runs" {
+		select {
+		case <-rejectionRunLocked:
+		case <-time.After(3 * time.Second):
+			t.Fatal("rejection did not acquire its TaskRun lock barrier")
+		}
+	}
+	releaseCancellation()
+
+	var canceled cancellationResult
+	select {
+	case canceled = <-cancellationDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancellation remained blocked after releasing Task barrier")
+	}
+	var rejectionErr error
+	select {
+	case rejectionErr = <-rejectionDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("rejection remained blocked after releasing Task barrier")
+	}
+	if canceled.err != nil || !canceled.canceled {
+		t.Fatalf("cancellation result=%+v, want successful cancellation", canceled)
+	}
+	if rejectionErr != nil {
+		t.Fatalf("rejection after cancellation: %v", rejectionErr)
+	}
+
+	var finalTask model.Task
+	var finalRun model.TaskRun
+	if err := db.First(&finalTask, taskEntity.ID).Error; err != nil {
+		t.Fatalf("reload lock-order task: %v", err)
+	}
+	if err := db.First(&finalRun, run.ID).Error; err != nil {
+		t.Fatalf("reload lock-order run: %v", err)
+	}
+	if finalTask.Status != string(StatusCanceled) || finalRun.Status != model.TaskRunStatusCanceled {
+		t.Fatalf("cancel/rejection split terminal pair: Task=%q TaskRun=%q", finalTask.Status, finalRun.Status)
+	}
+	if finalRun.ExecutionOwnerID != "" || finalRun.ExecutionLeaseUntil != nil {
+		t.Fatalf("canceled TaskRun retained owner/lease: owner=%q lease=%v", finalRun.ExecutionOwnerID, finalRun.ExecutionLeaseUntil)
 	}
 }
 

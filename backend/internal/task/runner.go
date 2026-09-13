@@ -16,6 +16,7 @@ import (
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/config"
 	"xirang/backend/internal/credentialaudit"
+	"xirang/backend/internal/cronutil"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/profile"
@@ -66,6 +67,17 @@ var (
 )
 
 func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, upstreamRunID *uint, scheduledAt *time.Time) (uint, error) {
+	return m.triggerCoreWithExpectedCronSpec(taskID, reason, chainRunID, upstreamRunID, scheduledAt, "")
+}
+
+func (m *Manager) triggerCoreWithExpectedCronSpec(
+	taskID uint,
+	reason string,
+	chainRunID string,
+	upstreamRunID *uint,
+	scheduledAt *time.Time,
+	expectedCronSpec string,
+) (uint, error) {
 	var cronScheduledAt *time.Time
 	var cronOccurrenceID uint
 	cronOccurrenceClaimed := false
@@ -74,8 +86,16 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 		if cronScheduledAt == nil {
 			return 0, fmt.Errorf("cron occurrence timestamp required")
 		}
-		occurrence, err := m.ensureCronOccurrence(context.Background(), taskID, *cronScheduledAt)
+		occurrence, err := m.ensureCronOccurrenceWithExpectedSpec(
+			context.Background(), taskID, *cronScheduledAt, expectedCronSpec,
+		)
 		if err != nil {
+			// A callback from a replaced schedule must not manufacture an
+			// occurrence under the new schedule. The durable Task row is the
+			// generation authority.
+			if errors.Is(err, errCronScheduleChanged) {
+				return 0, nil
+			}
 			// A removed task cannot have a durable occurrence because the
 			// occurrence FK is authoritative. Scheduler callbacks for it are
 			// therefore harmless no-ops.
@@ -86,6 +106,11 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 		}
 		if occurrence.State != model.TaskCronOccurrenceStateQueued || occurrence.TaskRunID != nil {
 			return 0, nil
+		}
+		if err := m.advanceCronScheduleCursor(
+			context.Background(), taskID, *cronScheduledAt, expectedCronSpec,
+		); err != nil {
+			return 0, err
 		}
 		cronOccurrenceID = occurrence.ID
 	}
@@ -117,23 +142,16 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 		}
 		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
 	}
-	if reason == "cron" {
-		claimed, err := m.claimCronOccurrence(context.Background(), cronOccurrenceID)
-		if err != nil {
-			return 0, err
-		}
-		if !claimed {
-			return 0, nil
-		}
-		cronOccurrenceClaimed = true
-	}
 	scheduled := false
 	registeredCancel := ownership.cancel
+	defer m.releasePendingRunAdmission(ownership)
 	defer func() {
 		if !scheduled {
 			if registeredCancel != nil {
 				registeredCancel()
-				m.chainRunner.Delete(taskID)
+				if m.chainRunner != nil {
+					m.chainRunner.Delete(taskID)
+				}
 			}
 			m.pendingRuns.CompareAndDelete(taskID, ownership)
 			if reason == "cron" && cronOccurrenceClaimed {
@@ -144,6 +162,16 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 			}
 		}
 	}()
+	if reason == "cron" {
+		claimed, err := m.claimCronOccurrence(context.Background(), cronOccurrenceID)
+		cronOccurrenceClaimed = claimed
+		if err != nil {
+			return 0, err
+		}
+		if !claimed {
+			return 0, nil
+		}
+	}
 
 	var taskEntity model.Task
 	result := m.db.Preload("Policy").Where("id = ?", taskID).Limit(1).Find(&taskEntity)
@@ -201,6 +229,9 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 	if ParseStatus(taskEntity.Status) == StatusRunning {
 		if reason == "cron" {
 			return 0, nil
+		}
+		if reason == "chain" {
+			return 0, errTaskChainBusy
 		}
 		return 0, fmt.Errorf("该任务正在执行中，请勿重复触发")
 	}
@@ -292,9 +323,23 @@ func (m *Manager) triggerCore(taskID uint, reason string, chainRunID string, ups
 		}
 		return 0, fmt.Errorf("创建执行记录失败: %w", err)
 	}
-
+	if !m.handoffPendingRunAdmission(ownership) {
+		if run.ID != 0 {
+			if cancelErr := m.cancelTaskRunBeforeExecutorWithOwnership(taskID, run.ID, "任务已取消", ownership); cancelErr != nil &&
+				!errors.Is(cancelErr, errTaskRunCASLost) && !errors.Is(cancelErr, gorm.ErrRecordNotFound) {
+				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", run.ID).
+					Err(cancelErr).Msg("关闭期间放弃任务执行记录失败")
+			}
+		}
+		if reason == "chain" {
+			return 0, errTaskChainBusy
+		}
+		if reason == "retry" || reason == "cron" {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("系统维护中，请稍候再试")
+	}
 	scheduled = true
-	m.taskWG.Add(1)
 	go func() {
 		defer m.taskWG.Done()
 		m.runTaskWithContext(taskID, run.ID, reason, chainRunID, runCtx, ownership, ownership.cancel)
@@ -505,7 +550,7 @@ func (m *Manager) runTaskWithContext(
 	select {
 	case m.semaphore <- struct{}{}:
 	case <-runCtx.Done():
-		if err := m.cancelTaskRunBeforeExecutor(taskID, runID, "任务已取消"); err != nil {
+		if err := m.cancelTaskRunBeforeExecutorWithOwnership(taskID, runID, "任务已取消", ownership); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消排队 TaskRun 失败")
 		} else {
 			runCompleted = true
@@ -516,7 +561,7 @@ func (m *Manager) runTaskWithContext(
 
 	lock := m.taskLock(taskID)
 	if !acquireLockWithContext(runCtx, lock) {
-		if err := m.cancelTaskRunBeforeExecutor(taskID, runID, "任务已取消"); err != nil {
+		if err := m.cancelTaskRunBeforeExecutorWithOwnership(taskID, runID, "任务已取消", ownership); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消等待任务锁的 TaskRun 失败")
 		} else {
 			runCompleted = true
@@ -553,7 +598,7 @@ func (m *Manager) runTaskWithContext(
 		return
 	}
 	if currentRun.Status == model.TaskRunStatusCanceled || runCtx.Err() != nil {
-		if err := m.cancelTaskRunBeforeExecutor(taskID, runID, "任务已取消"); err != nil {
+		if err := m.cancelTaskRunBeforeExecutorWithOwnership(taskID, runID, "任务已取消", ownership); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("保留启动前取消状态失败")
 		} else {
 			runCompleted = true
@@ -613,7 +658,7 @@ func (m *Manager) runTaskWithContext(
 
 	strategyLock := m.strategyLock(taskEntity.NodeID, taskEntity.PolicyID)
 	if !acquireLockWithContext(runCtx, strategyLock) {
-		if err := m.cancelTaskRunBeforeExecutor(taskID, runID, "任务已取消"); err != nil {
+		if err := m.cancelTaskRunBeforeExecutorWithOwnership(taskID, runID, "任务已取消", ownership); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消等待策略锁的 TaskRun 失败")
 		} else {
 			runCompleted = true
@@ -626,7 +671,7 @@ func (m *Manager) runTaskWithContext(
 	// 与 TriggerRestore() 中的 hasNodeConflictForRestore+restoreNodes.Store 互斥。
 	nLock := m.nodeLock(taskEntity.NodeID)
 	if !acquireLockWithContext(runCtx, nLock) {
-		if err := m.cancelTaskRunBeforeExecutor(taskID, runID, "任务已取消"); err != nil {
+		if err := m.cancelTaskRunBeforeExecutorWithOwnership(taskID, runID, "任务已取消", ownership); err != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消等待节点锁的 TaskRun 失败")
 		} else {
 			runCompleted = true
@@ -657,6 +702,9 @@ func (m *Manager) runTaskWithContext(
 	execCtx, timeoutCancel := context.WithTimeout(runCtx, execTimeout)
 	defer timeoutCancel()
 	previousTaskOutcome := taskEntity
+	if ownership != nil {
+		ownership.setPreviousTaskOutcome(previousTaskOutcome)
+	}
 	execCtx = m.withTaskCredentialAuditContext(execCtx, taskEntity, runID, reason, map[string]any{
 		"operation":            "task_run",
 		"chain_run_id_present": strings.TrimSpace(chainRunID) != "",
@@ -674,7 +722,7 @@ func (m *Manager) runTaskWithContext(
 			return
 		}
 		if errors.Is(err, ErrPolicyConcurrencyLimit) {
-			if cancelErr := m.cancelTaskRunBeforeExecutor(taskID, runID, "策略并发上限，拒绝本次执行"); cancelErr != nil {
+			if cancelErr := m.cancelTaskRunBeforeExecutorWithOwnership(taskID, runID, "策略并发上限，拒绝本次执行", ownership); cancelErr != nil {
 				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(cancelErr).Msg("保存策略并发拒绝状态失败")
 			} else {
 				runCompleted = true
@@ -683,7 +731,7 @@ func (m *Manager) runTaskWithContext(
 			return
 		}
 		if execCtx.Err() != nil || errors.Is(err, context.Canceled) {
-			if cancelErr := m.cancelTaskRunBeforeExecutor(taskID, runID, "任务已取消"); cancelErr != nil {
+			if cancelErr := m.cancelTaskRunBeforeExecutorWithOwnership(taskID, runID, "任务已取消", ownership); cancelErr != nil {
 				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(cancelErr).Msg("保留执行入口取消状态失败")
 			} else {
 				runCompleted = true
@@ -733,7 +781,7 @@ func (m *Manager) runTaskWithContext(
 		m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, taskEntity.Status)
 		failedAt := time.Now().UTC()
 		if terminalErr := m.failTaskExecutionBeforeExecutor(runCtx, taskID, runID,
-			map[string]interface{}{"next_run_at": nextCronRun(taskEntity.CronSpec), "last_error": errorMsg},
+			map[string]interface{}{"next_run_at": cronutil.Next(taskEntity.CronSpec), "last_error": errorMsg},
 			map[string]interface{}{"finished_at": &failedAt, "last_error": errorMsg}); terminalErr != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("app-profile hook render terminal persistence failed")
 			return
@@ -773,7 +821,7 @@ func (m *Manager) runTaskWithContext(
 			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", errorMsg, taskEntity.Status)
 			failedAt := time.Now().UTC()
 			if terminalErr := m.failTaskExecutionBeforeExecutor(runCtx, taskID, runID,
-				map[string]interface{}{"next_run_at": nextCronRun(taskEntity.CronSpec), "last_error": errorMsg},
+				map[string]interface{}{"next_run_at": cronutil.Next(taskEntity.CronSpec), "last_error": errorMsg},
 				map[string]interface{}{"finished_at": &failedAt, "last_error": errorMsg}); terminalErr != nil {
 				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("pre-hook terminal persistence failed")
 				return
@@ -879,6 +927,20 @@ func (m *Manager) runTaskWithContext(
 		return nil
 	}
 	runStartedAt := now
+	if ownership != nil && !ownership.beginProvider() {
+		if err := m.cancelTaskExecutionBeforeExecutor(
+			runID,
+			taskID,
+			taskEntity.NodeID,
+			&previousTaskOutcome,
+			"任务已取消",
+		); err != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(err).Msg("取消 provider 入口失败")
+			return
+		}
+		runCompleted = true
+		return
+	}
 	providerResult := m.executeProvider(execCtx, taskEntity, runID, reason, chainRunID, armMutableGeneration, func(level, message string) {
 		m.logDispatcher.Dispatch(taskID, runIDPtr, level, message, string(StatusRunning))
 	}, func(sample executor.ProgressSample) {
@@ -908,7 +970,7 @@ func (m *Manager) runTaskWithContext(
 		failedAt := time.Now().UTC()
 		failedStatus := StatusFailed
 		if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &failedStatus,
-			map[string]interface{}{"next_run_at": nextCronRun(taskEntity.CronSpec), "last_error": errorMsg},
+			map[string]interface{}{"next_run_at": cronutil.Next(taskEntity.CronSpec), "last_error": errorMsg},
 			StatusFailed, map[string]interface{}{"finished_at": &failedAt, "last_error": errorMsg}); terminalErr != nil {
 			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("timeout terminal persistence failed")
 			return
@@ -925,7 +987,7 @@ func (m *Manager) runTaskWithContext(
 		canceledStatus := StatusCanceled
 		finishedAt := time.Now().UTC()
 		if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &canceledStatus,
-			map[string]interface{}{"next_run_at": nextCronRun(taskEntity.CronSpec), "last_error": message},
+			map[string]interface{}{"next_run_at": cronutil.Next(taskEntity.CronSpec), "last_error": message},
 			StatusCanceled, map[string]interface{}{"finished_at": &finishedAt, "last_error": message}); terminalErr != nil {
 			m.logDispatcher.Dispatch(taskID, runIDPtr, "error", fmt.Sprintf("更新 canceled 失败: %v", terminalErr), taskEntity.Status)
 			return
@@ -964,7 +1026,7 @@ func (m *Manager) runTaskWithContext(
 			canceledStatus := StatusCanceled
 			finishedAt := time.Now().UTC()
 			if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &canceledStatus,
-				map[string]interface{}{"next_run_at": nextCronRun(taskEntity.CronSpec), "last_error": message},
+				map[string]interface{}{"next_run_at": cronutil.Next(taskEntity.CronSpec), "last_error": message},
 				StatusCanceled, map[string]interface{}{"finished_at": &finishedAt, "last_error": message}); terminalErr != nil {
 				logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("source completion cancellation terminal persistence failed")
 				return
@@ -981,7 +1043,7 @@ func (m *Manager) runTaskWithContext(
 			duration := finishedAt.Sub(now).Milliseconds()
 			if terminalErr := m.terminalizeTaskRun(execCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &warningStatus,
 				map[string]interface{}{
-					"retry_count": 0, "next_run_at": nextCronRun(taskEntity.CronSpec),
+					"retry_count": 0, "next_run_at": cronutil.Next(taskEntity.CronSpec),
 					"last_error": captureError, "verify_status": "warning",
 				},
 				StatusWarning, map[string]interface{}{
@@ -1007,7 +1069,7 @@ func (m *Manager) runTaskWithContext(
 				duration := finishedAt.Sub(now).Milliseconds()
 				if terminalErr := m.terminalizeTaskRun(execCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &warningStatus,
 					map[string]interface{}{
-						"retry_count": 0, "next_run_at": nextCronRun(taskEntity.CronSpec),
+						"retry_count": 0, "next_run_at": cronutil.Next(taskEntity.CronSpec),
 						"last_error": verifyMessage, "verify_status": "warning",
 					},
 					StatusWarning, map[string]interface{}{
@@ -1040,7 +1102,7 @@ func (m *Manager) runTaskWithContext(
 				canceledStatus := StatusCanceled
 				finishedAt := time.Now().UTC()
 				if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &canceledStatus,
-					map[string]interface{}{"next_run_at": nextCronRun(taskEntity.CronSpec), "last_error": message},
+					map[string]interface{}{"next_run_at": cronutil.Next(taskEntity.CronSpec), "last_error": message},
 					StatusCanceled, map[string]interface{}{"finished_at": &finishedAt, "last_error": message}); terminalErr != nil {
 					logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).Err(terminalErr).Msg("verify cancellation terminal persistence failed")
 					return
@@ -1069,7 +1131,7 @@ func (m *Manager) runTaskWithContext(
 				}
 				if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &warningStatus,
 					map[string]interface{}{
-						"retry_count": 0, "next_run_at": nextCronRun(taskEntity.CronSpec),
+						"retry_count": 0, "next_run_at": cronutil.Next(taskEntity.CronSpec),
 						"last_error": verifyMessage, "verify_status": result.Status,
 					},
 					StatusWarning, warningRunUpdates); terminalErr != nil {
@@ -1109,7 +1171,7 @@ func (m *Manager) runTaskWithContext(
 		}
 		if terminalErr := m.terminalizeTaskRun(runCtx, taskID, runID, []string{model.TaskRunStatusRunning}, &successStatus,
 			map[string]interface{}{
-				"retry_count": 0, "next_run_at": nextCronRun(taskEntity.CronSpec),
+				"retry_count": 0, "next_run_at": cronutil.Next(taskEntity.CronSpec),
 				"last_error": "", "verify_status": verifyStatus,
 			},
 			StatusSuccess, successRunUpdates, !providerResult.Managed); terminalErr != nil {
@@ -1203,7 +1265,7 @@ func (m *Manager) runTaskWithContext(
 				if shouldRetry {
 					return &nextRun
 				}
-				return nextCronRun(taskEntity.CronSpec)
+				return cronutil.Next(taskEntity.CronSpec)
 			}(),
 			"last_error": errorMsg,
 		},
@@ -1780,6 +1842,71 @@ func acquireLockWithContext(ctx context.Context, mu *sync.Mutex) bool {
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+func (m *Manager) cancelTaskRunBeforeExecutorWithOwnership(
+	taskID, runID uint,
+	message string,
+	ownership *pendingRunOwnership,
+) error {
+	if ownership != nil {
+		switch ownership.cancellationKind() {
+		case pendingRunCancellationShutdown:
+			return m.releaseTaskRunBeforeExecutor(taskID, runID)
+		case pendingRunCancellationUser:
+			// Cancel owns the durable terminal boundary. The runner must not
+			// race its compensation transaction against that user decision.
+			ownership.waitCancellationPersistence()
+		}
+	}
+	return m.cancelTaskRunBeforeExecutor(taskID, runID, message)
+}
+
+// releaseTaskRunBeforeExecutor gives a shutdown-canceled pending run back to
+// durable recovery. It deliberately does not write a terminal status, no-start
+// evidence, or Task state: the next manager must be able to claim this intent.
+func (m *Manager) releaseTaskRunBeforeExecutor(taskID, runID uint) error {
+	if m == nil || m.db == nil || taskID == 0 || runID == 0 {
+		return errors.New("task run release persistence unavailable")
+	}
+	return m.db.Transaction(func(tx *gorm.DB) error {
+		var run model.TaskRun
+		loaded := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND task_id = ?", runID, taskID).Limit(1).Find(&run)
+		if loaded.Error != nil {
+			return loaded.Error
+		}
+		if loaded.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		if model.IsTerminalTaskRunStatus(run.Status) {
+			return nil
+		}
+		if run.Status != model.TaskRunStatusPending {
+			return errTaskRunCASLost
+		}
+		if strings.TrimSpace(run.ExecutionOwnerID) != "" &&
+			run.ExecutionOwnerID != m.executionOwnerID &&
+			(run.ExecutionLeaseUntil == nil || run.ExecutionLeaseUntil.After(time.Now().UTC())) {
+			return errTaskRunNotOwner
+		}
+		result := tx.Model(&model.TaskRun{}).
+			Where(`id = ? AND task_id = ? AND status = ? AND
+				(execution_owner_id = '' OR execution_owner_id = ? OR
+					execution_lease_until IS NULL OR execution_lease_until <= ?)`,
+				runID, taskID, model.TaskRunStatusPending, m.executionOwnerID, time.Now().UTC()).
+			Updates(map[string]interface{}{
+				"execution_owner_id":    "",
+				"execution_lease_until": nil,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errTaskRunCASLost
+		}
+		return nil
+	})
 }
 
 func (m *Manager) cancelTaskRunBeforeExecutor(taskID, runID uint, message string) error {

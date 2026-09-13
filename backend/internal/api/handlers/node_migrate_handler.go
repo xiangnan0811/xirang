@@ -209,7 +209,7 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 
 		var lockedInventory []model.Task
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Select("id", "node_id", "policy_id", "executor_type", "rsync_target", "cron_spec", "enabled", "status", "updated_at").
+			Select("id", "node_id", "policy_id", "executor_type", "rsync_target", "cron_spec", "next_run_at", "enabled", "status", "updated_at").
 			Order("id").Find(&lockedInventory).Error; err != nil {
 			return fmt.Errorf("锁定任务失败: %w", err)
 		}
@@ -282,6 +282,7 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 
 		// b. 迁移任务：更新 node_id、name、rsync_target，保留 executor_type 等所有其他字段
 		for _, t := range allTasks {
+			current := lockedByID[t.ID]
 			updates := map[string]any{
 				"node_id": req.TargetNodeID,
 			}
@@ -293,9 +294,14 @@ func (h *NodeHandler) Migrate(c *gin.Context) {
 			if target, ok := migrationTargets[t.ID]; ok {
 				updates["rsync_target"] = target
 			}
-
 			if req.PausePolicies {
-				updates["cron_spec"] = ""
+				scheduleUpdates, err := migrationTaskScheduleClearUpdates(tx, current)
+				if err != nil {
+					return err
+				}
+				for key, value := range scheduleUpdates {
+					updates[key] = value
+				}
 			}
 
 			if err := tx.Model(&model.Task{}).Where("id = ?", t.ID).Updates(updates).Error; err != nil {
@@ -388,6 +394,25 @@ func requireMigrationQuiescence(db *gorm.DB, tasks []model.Task) error {
 		return fmt.Errorf("源节点仍有 %d 个活动执行，已拒绝迁移", activeRuns)
 	}
 	return nil
+}
+
+// migrationTaskScheduleClearUpdates removes a migration-owned cron schedule
+// without stealing a legacy retry deadline. The caller must hold the Task row
+// lock in the surrounding transaction.
+func migrationTaskScheduleClearUpdates(tx *gorm.DB, task model.Task) (map[string]interface{}, error) {
+	updates := map[string]interface{}{"cron_spec": ""}
+	if strings.EqualFold(strings.TrimSpace(task.Status), model.TaskRunStatusRetrying) {
+		mode, err := model.LatestTaskRetryEffectCronCursorModeTx(tx, task.ID)
+		if err != nil {
+			return nil, fmt.Errorf("读取迁移任务重试调度归属失败(task_id=%d): %w", task.ID, err)
+		}
+		if mode == model.TaskRunCronCursorModeRegularV1 {
+			updates["next_run_at"] = nil
+		}
+		return updates, nil
+	}
+	updates["next_run_at"] = nil
+	return updates, nil
 }
 
 type migrationTaskSnapshot struct {

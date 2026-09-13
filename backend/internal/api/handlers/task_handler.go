@@ -420,6 +420,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
 // @Failure      404   {object}  handlers.Response
+// @Failure      503   {object}  handlers.Response
 // @Router       /tasks/{id} [put]
 func (h *TaskHandler) Update(c *gin.Context) {
 	id, ok := parseID(c, "id")
@@ -455,6 +456,10 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, task.ErrTaskArchived) {
 			respondConflict(c, "任务已归档，无法修改")
+			return
+		}
+		if errors.Is(err, task.ErrTaskScheduleSyncUnavailable) {
+			respondServiceUnavailable(c, "任务配置已保存，但定时调度暂不可用；服务恢复后将自动对账恢复，无需重复编辑")
 			return
 		}
 		if task.IsTaskValidationError(err) {

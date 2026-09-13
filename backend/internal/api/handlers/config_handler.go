@@ -18,6 +18,7 @@ import (
 	"xirang/backend/internal/backupasset"
 	"xirang/backend/internal/backupasset/publication"
 	"xirang/backend/internal/credentialaudit"
+	"xirang/backend/internal/cronutil"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/node"
@@ -760,7 +761,12 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					continue
 				}
 				var existing model.Policy
-				found := tx.Where("name = ?", name).Limit(1).Find(&existing).RowsAffected > 0
+				result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("name = ?", name).Limit(1).Find(&existing)
+				if result.Error != nil {
+					return result.Error
+				}
+				found := result.RowsAffected > 0
 				if found {
 					if conflict != "overwrite" {
 						continue
@@ -829,9 +835,10 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 							Msg("导入策略覆盖时字段校验失败，跳过")
 						continue
 					}
-					if err := tx.Save(&existing).Error; err == nil {
-						importedPolicies++
+					if err := tx.Save(&existing).Error; err != nil {
+						return err
 					}
+					importedPolicies++
 				} else {
 					newPolicy := model.Policy{
 						Name:               name,
@@ -1003,7 +1010,12 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				taskKey := buildImportTaskKey(req.Name, req.NodeID)
 
 				var existing model.Task
-				found := tx.Where("name = ? AND node_id = ?", req.Name, req.NodeID).Limit(1).Find(&existing).RowsAffected > 0
+				result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("name = ? AND node_id = ?", req.Name, req.NodeID).Limit(1).Find(&existing)
+				if result.Error != nil {
+					return result.Error
+				}
+				found := result.RowsAffected > 0
 				if found {
 					resolvedTaskIDs[taskKey] = existing.ID
 					if conflict != "overwrite" {
@@ -1012,6 +1024,7 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					if err := validateImportedTarget(req, existing.ID); err != nil {
 						return err
 					}
+					previousCronSpec := strings.TrimSpace(existing.CronSpec)
 					existing.DependsOnTaskID = nil
 					existing.Command = req.Command
 					existing.RsyncSource = req.RsyncSource
@@ -1026,10 +1039,14 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					} else if enabled, ok := readImportedBoolField(taskData, "enabled"); ok {
 						existing.Enabled = enabled
 					}
-					if err := tx.Save(&existing).Error; err == nil {
-						importedTasks++
-						taskDependencyUpdates = append(taskDependencyUpdates, taskDependencyUpdate{taskID: existing.ID, dependencyKey: dependencyKey, hasDependency: hasDependency})
+					if err := applyImportedTaskCronCursor(tx, &existing, previousCronSpec, req.CronSpec); err != nil {
+						return err
 					}
+					if err := tx.Save(&existing).Error; err != nil {
+						return err
+					}
+					importedTasks++
+					taskDependencyUpdates = append(taskDependencyUpdates, taskDependencyUpdate{taskID: existing.ID, dependencyKey: dependencyKey, hasDependency: hasDependency})
 					continue
 				}
 
@@ -1053,6 +1070,9 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				}
 				if hasExplicitEnabled && !managedRsyncImport && !managedRcloneImport {
 					newTask.Enabled = explicitEnabled
+				}
+				if newTask.Enabled {
+					newTask.NextRunAt = cronutil.Next(newTask.CronSpec)
 				}
 				if err := validateImportedTarget(req, 0); err != nil {
 					return err
@@ -1084,8 +1104,8 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				}
 
 				var current model.Task
-				if err := tx.First(&current, update.taskID).Error; err != nil {
-					continue
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, update.taskID).Error; err != nil {
+					return err
 				}
 				req := taskPkg.CreateTaskInput{
 					Name:            current.Name,
@@ -1582,6 +1602,43 @@ func resolveImportNodeID(tx *gorm.DB, taskData map[string]interface{}) (uint, bo
 	}
 
 	return 0, false
+}
+
+// applyImportedTaskCronCursor updates only the cursor owned by this task's
+// current retry provenance. The caller must hold the Task row lock in tx.
+// Legacy retrying rows retain Task.NextRunAt as their retry deadline, while
+// marked rows keep their retry deadline on TaskRunEffect.NextAttemptAt and
+// re-anchor the regular cron cursor on a changed schedule.
+func applyImportedTaskCronCursor(
+	tx *gorm.DB,
+	task *model.Task,
+	previousCronSpec string,
+	nextCronSpec string,
+) error {
+	if tx == nil || task == nil {
+		return fmt.Errorf("导入任务调度归属不可用")
+	}
+	cronChanged := strings.TrimSpace(previousCronSpec) != strings.TrimSpace(nextCronSpec)
+	if strings.EqualFold(strings.TrimSpace(task.Status), model.TaskRunStatusRetrying) {
+		mode, err := model.LatestTaskRetryEffectCronCursorModeTx(tx, task.ID)
+		if err != nil {
+			return fmt.Errorf("读取导入任务重试调度归属失败(task_id=%d): %w", task.ID, err)
+		}
+		if mode == model.TaskRunCronCursorModeRegularV1 {
+			if !task.Enabled {
+				task.NextRunAt = nil
+			} else if cronChanged {
+				task.NextRunAt = cronutil.Next(nextCronSpec)
+			}
+		}
+		return nil
+	}
+	if !task.Enabled {
+		task.NextRunAt = nil
+	} else if cronChanged {
+		task.NextRunAt = cronutil.Next(nextCronSpec)
+	}
+	return nil
 }
 
 func resolveImportPolicyID(tx *gorm.DB, taskData map[string]interface{}) (uint, bool) {

@@ -119,15 +119,16 @@ func (m *Manager) enforceLegacyResticRetention(ctx context.Context, policy model
 
 	// 生成唯一的密码临时文件路径，并在远程节点上创建
 	pwFilePath := executor.BuildResticPasswordFilePath()
+	defer func() {
+		if cleanupErr := executor.CleanupResticPasswordFile(task.Node, pwFilePath, sshutil.PurposeRetention); cleanupErr != nil {
+			log.Warn().Uint("task_id", task.ID).Err(cleanupErr).Msg("restic 保留清理: 密码临时文件清理失败（保留业务结果保持原状态）")
+		}
+	}()
 	createPwCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, access)
 	if _, err := executor.RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
 		log.Warn().Uint("task_id", task.ID).Err(err).Msg("restic 保留清理: 创建密码临时文件失败")
 		return
 	}
-	defer func() {
-		cleanupCmd := executor.BuildCleanupResticPasswordFileCmd(pwFilePath)
-		_, _ = executor.RunSSHCommandOutput(ctx, client, cleanupCmd)
-	}()
 
 	resticBin := util.GetEnvOrDefault("RESTIC_BINARY", "restic")
 	var keepArgs string

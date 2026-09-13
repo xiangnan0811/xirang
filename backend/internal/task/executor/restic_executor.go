@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -121,7 +122,7 @@ func (e *ResticExecutor) resticBinary() string {
 	return util.GetEnvOrDefault("RESTIC_BINARY", "restic")
 }
 
-func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
+func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (exitCode int, returnErr error) {
 	source := strings.TrimSpace(task.RsyncSource)
 	repo := strings.TrimSpace(task.RsyncTarget)
 	if source == "" || repo == "" {
@@ -141,17 +142,23 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 
 	// 生成唯一的密码临时文件路径，并在远程节点上创建
 	pwFilePath := BuildResticPasswordFilePath()
+	// Arm cleanup before creation so cancellation or a partial create cannot
+	// leave a private directory behind. The helper is collision-safe.
+	defer func() {
+		if cleanupErr := CleanupResticPasswordFile(task.Node, pwFilePath, sshutil.PurposeTaskBackup); cleanupErr != nil {
+			if logf != nil {
+				logf("warn", sanitizeExecutorRuntimeEvidence(fmt.Sprintf("restic 密码临时文件清理失败（备份业务结果保持原状态）: %v", cleanupErr)))
+			}
+			if returnErr != nil {
+				returnErr = errors.Join(returnErr, cleanupErr)
+			}
+		}
+	}()
 	createPwCmd := BuildCreateResticPasswordFileCmd(pwFilePath, access)
 	if _, err := RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
 		return -1, fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
 	}
-	// 确保函数退出时清理远程节点上的密码临时文件
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		cleanupCmd := BuildCleanupResticPasswordFileCmd(pwFilePath)
-		_, _ = RunSSHCommandOutput(cleanupCtx, client, cleanupCmd)
-	}()
+	// The cleanup defer remains active for the full Restic operation.
 
 	bin := e.resticBinary()
 
@@ -220,7 +227,7 @@ func (e *ResticExecutor) Run(ctx context.Context, task model.Task, logf LogFunc,
 // RunRestore 在远程节点上执行 restic 恢复操作。
 // restoreTask.RsyncSource = restic 仓库路径（原任务的 RsyncTarget）
 // restoreTask.RsyncTarget = 恢复目标路径
-func (e *ResticExecutor) RunRestore(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (int, error) {
+func (e *ResticExecutor) RunRestore(ctx context.Context, task model.Task, logf LogFunc, progressf ProgressFunc) (exitCode int, returnErr error) {
 	repo := strings.TrimSpace(task.RsyncSource)
 	targetPath := strings.TrimSpace(task.RsyncTarget)
 	if repo == "" || targetPath == "" {
@@ -240,16 +247,20 @@ func (e *ResticExecutor) RunRestore(ctx context.Context, task model.Task, logf L
 
 	// 生成唯一的密码临时文件路径，并在远程节点上创建
 	pwFilePath := BuildResticPasswordFilePath()
+	defer func() {
+		if cleanupErr := CleanupResticPasswordFile(task.Node, pwFilePath, sshutil.PurposeTaskRestore); cleanupErr != nil {
+			if logf != nil {
+				logf("warn", sanitizeExecutorRuntimeEvidence(fmt.Sprintf("restic 密码临时文件清理失败（恢复业务结果保持原状态）: %v", cleanupErr)))
+			}
+			if returnErr != nil {
+				returnErr = errors.Join(returnErr, cleanupErr)
+			}
+		}
+	}()
 	createPwCmd := BuildCreateResticPasswordFileCmd(pwFilePath, access)
 	if _, err := RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
 		return -1, fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
 	}
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		cleanupCmd := BuildCleanupResticPasswordFileCmd(pwFilePath)
-		_, _ = RunSSHCommandOutput(cleanupCtx, client, cleanupCmd)
-	}()
 
 	repoArg := ShellEscape(repo)
 	cmdPrefix := e.buildCommandPrefix(task.Node, pwFilePath)
@@ -271,35 +282,22 @@ func (e *ResticExecutor) RunRestore(ctx context.Context, task model.Task, logf L
 
 // streamSSHCommand 通过 SSH 流式执行命令，解析 restic JSON 进度行。
 func (e *ResticExecutor) streamSSHCommand(ctx context.Context, client *ssh.Client, cmd string, logf LogFunc, progressf ProgressFunc) (int, error) {
-	session, err := client.NewSession()
+	runner := sshutil.NewSSHCommandRunnerWithTransportClose(client, 1)
+	stream, err := runner.OpenRawExecution(ctx, sshutil.RawCommandSpec{
+		Command: cmd,
+		// The caller controls the backup/restore lifetime.
+		MaxStdoutBytes: 0,
+		MaxStderrBytes: 64 << 10,
+		MaxRecordBytes: 1 << 20,
+	})
 	if err != nil {
-		return -1, fmt.Errorf("创建 SSH 会话失败: %w", err)
-	}
-	defer session.Close() //nolint:errcheck // close error not actionable on deferred cleanup
-
-	stdout, err := session.StdoutPipe()
-	if err != nil {
-		return -1, err
-	}
-
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = session.Signal(ssh.SIGTERM)
-		case <-done:
-		}
-	}()
-
-	if err := session.Start(cmd); err != nil {
 		return -1, fmt.Errorf("启动远程命令失败: %w", err)
 	}
 
 	var lastBytesDone int64
 	var lastObservedAt time.Time
-
-	scanner := bufio.NewScanner(stdout)
+	scanner := bufio.NewScanner(stream)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -313,20 +311,26 @@ func (e *ResticExecutor) streamSSHCommand(ctx context.Context, client *ssh.Clien
 				continue
 			}
 		}
-		logf("info", sanitizeExecutorRuntimeEvidence(line))
+		if logf != nil {
+			logf("info", sanitizeExecutorRuntimeEvidence(line))
+		}
+	}
+	if scanErr := scanner.Err(); scanErr != nil {
+		cancelErr := stream.Cancel()
+		if cancelErr != nil && !errors.Is(cancelErr, sshutil.ErrCommandFailed) {
+			scanErr = errors.Join(scanErr, cancelErr)
+		}
+		return -1, scanErr
 	}
 
-	waitErr := session.Wait()
-	if ctx.Err() != nil {
-		return -1, ctx.Err()
+	completion, err := stream.Join()
+	if err != nil {
+		return -1, err
 	}
-	if waitErr != nil {
-		if exitErr, ok := waitErr.(*ssh.ExitError); ok {
-			return exitErr.ExitStatus(), waitErr
-		}
-		return -1, waitErr
+	if !completion.ExitCodeKnown {
+		return -1, fmt.Errorf("远程命令完成但未返回退出状态")
 	}
-	return 0, nil
+	return completion.ExitCode, nil
 }
 
 // resticStatusMsg 表示 restic --json 输出中的 status 类型消息。
@@ -402,7 +406,7 @@ func (e *ResticExecutor) ListSnapshotsByLinkTag(ctx context.Context, task model.
 	return e.listSnapshots(ctx, task, linkTag)
 }
 
-func (e *ResticExecutor) listSnapshots(ctx context.Context, task model.Task, linkTag string) ([]ResticSnapshot, error) {
+func (e *ResticExecutor) listSnapshots(ctx context.Context, task model.Task, linkTag string) (result []ResticSnapshot, returnErr error) {
 	repo := strings.TrimSpace(task.RsyncTarget)
 	if repo == "" {
 		return nil, fmt.Errorf("restic 仓库路径为空")
@@ -420,16 +424,19 @@ func (e *ResticExecutor) listSnapshots(ctx context.Context, task model.Task, lin
 
 	// 生成唯一的密码临时文件路径，并在远程节点上创建
 	pwFilePath := BuildResticPasswordFilePath()
+	defer func() {
+		if cleanupErr := CleanupResticPasswordFile(task.Node, pwFilePath, sshutil.PurposeSnapshot); cleanupErr != nil {
+			if returnErr != nil {
+				returnErr = errors.Join(returnErr, cleanupErr)
+			} else {
+				returnErr = cleanupErr
+			}
+		}
+	}()
 	createPwCmd := BuildCreateResticPasswordFileCmd(pwFilePath, access)
 	if _, err := RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
 		return nil, fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
 	}
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		cleanupCmd := BuildCleanupResticPasswordFileCmd(pwFilePath)
-		_, _ = RunSSHCommandOutput(cleanupCtx, client, cleanupCmd)
-	}()
 
 	cmdPrefix := e.buildCommandPrefix(task.Node, pwFilePath)
 	cmd := fmt.Sprintf("%s snapshots -r %s --json", cmdPrefix, ShellEscape(repo))
@@ -449,7 +456,7 @@ func (e *ResticExecutor) listSnapshots(ctx context.Context, task model.Task, lin
 }
 
 // ListFiles 列出 restic 快照中指定路径下的文件。
-func (e *ResticExecutor) ListFiles(ctx context.Context, task model.Task, snapshotID string, path string) ([]ResticEntry, error) {
+func (e *ResticExecutor) ListFiles(ctx context.Context, task model.Task, snapshotID string, path string) (result []ResticEntry, returnErr error) {
 	repo := strings.TrimSpace(task.RsyncTarget)
 	_, access, err := parseResticConfigWithRepositoryAccess(task.ExecutorConfig)
 	if err != nil {
@@ -464,16 +471,19 @@ func (e *ResticExecutor) ListFiles(ctx context.Context, task model.Task, snapsho
 
 	// 生成唯一的密码临时文件路径，并在远程节点上创建
 	pwFilePath := BuildResticPasswordFilePath()
+	defer func() {
+		if cleanupErr := CleanupResticPasswordFile(task.Node, pwFilePath, sshutil.PurposeSnapshot); cleanupErr != nil {
+			if returnErr != nil {
+				returnErr = errors.Join(returnErr, cleanupErr)
+			} else {
+				returnErr = cleanupErr
+			}
+		}
+	}()
 	createPwCmd := BuildCreateResticPasswordFileCmd(pwFilePath, access)
 	if _, err := RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
 		return nil, fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
 	}
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		cleanupCmd := BuildCleanupResticPasswordFileCmd(pwFilePath)
-		_, _ = RunSSHCommandOutput(cleanupCtx, client, cleanupCmd)
-	}()
 
 	cmdPrefix := e.buildCommandPrefix(task.Node, pwFilePath)
 	lsPath := "/"
@@ -505,7 +515,7 @@ func (e *ResticExecutor) ListFiles(ctx context.Context, task model.Task, snapsho
 }
 
 // RestoreFiles 从 restic 快照恢复指定文件到目标路径。
-func (e *ResticExecutor) RestoreFiles(ctx context.Context, task model.Task, snapshotID string, includes []string, targetPath string) error {
+func (e *ResticExecutor) RestoreFiles(ctx context.Context, task model.Task, snapshotID string, includes []string, targetPath string) (returnErr error) {
 	repo := strings.TrimSpace(task.RsyncTarget)
 	_, access, err := parseResticConfigWithRepositoryAccess(task.ExecutorConfig)
 	if err != nil {
@@ -520,16 +530,19 @@ func (e *ResticExecutor) RestoreFiles(ctx context.Context, task model.Task, snap
 
 	// 生成唯一的密码临时文件路径，并在远程节点上创建
 	pwFilePath := BuildResticPasswordFilePath()
+	defer func() {
+		if cleanupErr := CleanupResticPasswordFile(task.Node, pwFilePath, sshutil.PurposeSnapshot); cleanupErr != nil {
+			if returnErr != nil {
+				returnErr = errors.Join(returnErr, cleanupErr)
+			} else {
+				returnErr = cleanupErr
+			}
+		}
+	}()
 	createPwCmd := BuildCreateResticPasswordFileCmd(pwFilePath, access)
 	if _, err := RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
 		return fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
 	}
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		cleanupCmd := BuildCleanupResticPasswordFileCmd(pwFilePath)
-		_, _ = RunSSHCommandOutput(cleanupCtx, client, cleanupCmd)
-	}()
 
 	cmdPrefix := e.buildCommandPrefix(task.Node, pwFilePath)
 	includeArgs := ""
@@ -546,7 +559,7 @@ func (e *ResticExecutor) RestoreFiles(ctx context.Context, task model.Task, snap
 
 // RunSnapshotDiff executes the legacy Restic diff command behind a narrow
 // port. Callers in managed mode must pass full IDs resolved by LineageSession.
-func (e *ResticExecutor) RunSnapshotDiff(ctx context.Context, task model.Task, leftSnapshotID, rightSnapshotID string) (string, error) {
+func (e *ResticExecutor) RunSnapshotDiff(ctx context.Context, task model.Task, leftSnapshotID, rightSnapshotID string) (result string, returnErr error) {
 	if !validResticSnapshotReference(leftSnapshotID) || !validResticSnapshotReference(rightSnapshotID) {
 		return "", fmt.Errorf("invalid Restic snapshot reference")
 	}
@@ -564,14 +577,18 @@ func (e *ResticExecutor) RunSnapshotDiff(ctx context.Context, task model.Task, l
 	}
 	defer client.Close() //nolint:errcheck // best-effort remote close
 	pwFilePath := BuildResticPasswordFilePath()
+	defer func() {
+		if cleanupErr := CleanupResticPasswordFile(task.Node, pwFilePath, sshutil.PurposeSnapshotDiff); cleanupErr != nil {
+			if returnErr != nil {
+				returnErr = errors.Join(returnErr, cleanupErr)
+			} else {
+				returnErr = cleanupErr
+			}
+		}
+	}()
 	if _, err := RunSSHCommandOutput(ctx, client, BuildCreateResticPasswordFileCmd(pwFilePath, access)); err != nil {
 		return "", fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
 	}
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, _ = RunSSHCommandOutput(cleanupCtx, client, BuildCleanupResticPasswordFileCmd(pwFilePath))
-	}()
 	command := fmt.Sprintf("%s diff %s %s -r %s 2>&1", e.buildCommandPrefix(task.Node, pwFilePath), ShellEscape(leftSnapshotID), ShellEscape(rightSnapshotID), ShellEscape(repo))
 	output, err := RunSSHCommandOutput(ctx, client, command)
 	if err != nil {
