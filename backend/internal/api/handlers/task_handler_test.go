@@ -1074,7 +1074,7 @@ func TestTaskCreateSyncFailureCompensatesByDeletingTask(t *testing.T) {
 	}
 }
 
-func TestTaskUpdateSyncFailureCompensatesByRestoringTask(t *testing.T) {
+func TestTaskUpdateSyncFailureKeepsCommittedTaskAndReportsUnavailable(t *testing.T) {
 	db := openTaskHandlerTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Task{}); err != nil {
 		t.Fatalf("初始化测试数据表失败: %v", err)
@@ -1094,13 +1094,14 @@ func TestTaskUpdateSyncFailureCompensatesByRestoringTask(t *testing.T) {
 		ExecutorType: "rsync",
 		CronSpec:     "*/5 * * * *",
 		Status:       "pending",
+		Enabled:      true,
 	}
 	if err := db.Create(&taskEntity).Error; err != nil {
 		t.Fatalf("创建任务失败: %v", err)
 	}
 
 	runner := &mockTaskRunner{
-		syncErrs: []error{errors.New("sync failed"), nil},
+		syncErrs: []error{errors.New("sync failed")},
 	}
 	handler := NewTaskHandler(db, runner)
 	r := withAdminRole(gin.New())
@@ -1112,25 +1113,27 @@ func TestTaskUpdateSyncFailureCompensatesByRestoringTask(t *testing.T) {
 	resp := httptest.NewRecorder()
 	r.ServeHTTP(resp, req)
 
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("期望状态码 400，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	if resp.Code != http.StatusServiceUnavailable {
+		t.Fatalf("期望保存成功但调度不可用时返回 503，实际: %d，响应: %s", resp.Code, resp.Body.String())
+	}
+	bodyText := resp.Body.String()
+	if !strings.Contains(bodyText, "任务配置已保存") || !strings.Contains(bodyText, "自动对账恢复") {
+		t.Fatalf("响应应明确配置已保存且会自动对账恢复，实际: %s", bodyText)
 	}
 
-	var restored model.Task
-	if err := db.First(&restored, taskEntity.ID).Error; err != nil {
-		t.Fatalf("读取补偿后任务失败: %v", err)
+	var persisted model.Task
+	if err := db.First(&persisted, taskEntity.ID).Error; err != nil {
+		t.Fatalf("读取已提交任务失败: %v", err)
 	}
-	if restored.Name != "task-old" || restored.RsyncSource != "/data/old" || restored.RsyncTarget != "/backup/old" || restored.CronSpec != "*/5 * * * *" {
-		t.Fatalf("期望更新失败后恢复旧任务，实际: %+v", restored)
+	if persisted.Name != "task-new" || persisted.RsyncSource != "/data/new" ||
+		persisted.RsyncTarget != "/backup/new" || persisted.CronSpec != "*/10 * * * *" {
+		t.Fatalf("调度同步失败不应回滚已提交配置，实际: %+v", persisted)
 	}
-	if len(runner.syncCalls) != 2 {
-		t.Fatalf("期望调度补偿触发两次同步（新值失败+旧值恢复），实际: %d", len(runner.syncCalls))
+	if len(runner.syncCalls) != 1 {
+		t.Fatalf("调度同步失败应只尝试一次，实际调用: %d", len(runner.syncCalls))
 	}
-	if runner.syncCalls[1].CronSpec != "*/5 * * * *" {
-		t.Fatalf("期望第二次同步恢复旧 cron，实际: %s", runner.syncCalls[1].CronSpec)
-	}
-	if len(runner.removeCalls) != 1 || runner.removeCalls[0] != taskEntity.ID {
-		t.Fatalf("期望更新失败时先移除失败调度，实际调用: %+v", runner.removeCalls)
+	if len(runner.removeCalls) != 0 {
+		t.Fatalf("调度同步失败不应移除可能属于并发请求的新调度，实际调用: %+v", runner.removeCalls)
 	}
 }
 

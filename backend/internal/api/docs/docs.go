@@ -14054,6 +14054,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
                     }
                 }
             },

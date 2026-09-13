@@ -11,6 +11,7 @@ import (
 	"time"
 	"xirang/backend/internal/automation"
 	"xirang/backend/internal/backuphealth"
+	"xirang/backend/internal/cronutil"
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 )
@@ -51,16 +52,55 @@ func (m *Manager) failTaskRunBeforeExecutor(ctx context.Context, runID uint, mes
 	}
 	ctx = durableTaskContext(ctx)
 	now := time.Now().UTC()
+	sanitizedMessage := sanitizeTaskLastError(message)
 	var effects []taskRunTerminalEffect
+	var provenanceErr error
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Read the aggregate identity without a lock, then acquire the Task
+		// lock before the TaskRun lock. Cancellation and ordinary terminalization
+		// use this same Task -> TaskRun order.
+		var identity struct {
+			TaskID uint `gorm:"column:task_id"`
+		}
+		identityResult := tx.Model(&model.TaskRun{}).
+			Select("task_id").
+			Where("id = ?", runID).
+			Limit(1).
+			Find(&identity)
+		if identityResult.Error != nil {
+			return identityResult.Error
+		}
+		if identityResult.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+
+		var taskEntity model.Task
+		taskResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Preload("Policy").
+			Where("id = ?", identity.TaskID).
+			Limit(1).
+			Find(&taskEntity)
+		if taskResult.Error != nil {
+			return taskResult.Error
+		}
+		taskMissing := taskResult.RowsAffected != 1
+
 		var run model.TaskRun
 		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("id = ?", runID).Limit(1).Find(&run)
+			Where("id = ?", runID).
+			Limit(1).
+			Find(&run)
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
 			return gorm.ErrRecordNotFound
+		}
+		// The unlocked identity read only chose which aggregate to lock. Do
+		// not mutate a row that was rebound to a different aggregate while the
+		// Task lock was being acquired.
+		if run.TaskID != identity.TaskID {
+			return errTaskRunCASLost
 		}
 		if model.IsTerminalTaskRunStatus(run.Status) {
 			return nil
@@ -78,7 +118,7 @@ func (m *Manager) failTaskRunBeforeExecutor(ctx context.Context, runID uint, mes
 		updates := map[string]interface{}{
 			"status":                model.TaskRunStatusFailed,
 			"finished_at":           &now,
-			"last_error":            sanitizeTaskLastError(message),
+			"last_error":            sanitizedMessage,
 			"execution_owner_id":    "",
 			"execution_lease_until": nil,
 		}
@@ -94,7 +134,7 @@ func (m *Manager) failTaskRunBeforeExecutor(ctx context.Context, runID uint, mes
 				updates["duration_ms"] = duration
 			}
 		}
-		run.LastError = updates["last_error"].(string)
+		run.LastError = sanitizedMessage
 		result = tx.Model(&model.TaskRun{}).
 			Where("id = ? AND status = ?", run.ID, run.Status).
 			Updates(updates)
@@ -104,25 +144,112 @@ func (m *Manager) failTaskRunBeforeExecutor(ctx context.Context, runID uint, mes
 		if result.RowsAffected != 1 {
 			return errTaskRunCASLost
 		}
-		var taskEntity model.Task
-		taskResult := tx.Where("id = ?", run.TaskID).Limit(1).Find(&taskEntity)
-		if taskResult.Error != nil {
-			return taskResult.Error
+		// A malformed run can outlive its aggregate. It is still safe to close
+		// the run after its identity was revalidated, but there is no aggregate
+		// or effect work to perform.
+		if taskMissing {
+			return nil
 		}
-		if taskResult.RowsAffected == 1 {
-			var buildErr error
-			effects, buildErr = buildTerminalEffects(tx, taskEntity, run, run.ID, StatusFailed)
-			if buildErr != nil {
-				return buildErr
+
+		currentRetry := false
+		if strings.EqualFold(strings.TrimSpace(run.TriggerType), "retry") &&
+			ParseStatus(taskEntity.Status) == StatusRetrying {
+			currentRetry, err = isCurrentRetryRunTx(tx, run)
+			if err != nil {
+				return err
 			}
-			return persistTaskRunEffectsTx(tx, run.ID, effects)
 		}
-		return nil
+
+		effectTask := taskEntity
+		retrySchedule := terminalRetrySchedule{}
+		if currentRetry {
+			nextStatus, newRetryCount, deadline, shouldRetry :=
+				retryDeadlineAfterPreExecutorFailure(taskEntity, now, m.stateMachine)
+			cursorMode, modeErr := retryCursorModeForTerminalRunTx(tx, taskEntity, run)
+			if modeErr != nil {
+				// The failure is still durable, but an unknown cursor
+				// provenance cannot be interpreted as either legacy or
+				// regular. End this retry cycle and clear the cursor so a
+				// later reconciliation can explicitly rebuild it.
+				provenanceErr = fmt.Errorf("decode retry cursor provenance: %w", modeErr)
+				nextStatus = StatusFailed
+				shouldRetry = false
+				deadline = nil
+			} else {
+				retrySchedule.separate = cursorMode == model.TaskRunCronCursorModeRegularV1
+			}
+			if !shouldRetry {
+				nextStatus = StatusFailed
+			}
+			taskUpdates := map[string]interface{}{
+				"status":      string(nextStatus),
+				"retry_count": newRetryCount,
+				"last_error":  sanitizedMessage,
+			}
+			if shouldRetry {
+				taskUpdates["next_run_at"] = deadline
+				retrySchedule.deadline = deadline
+			} else if provenanceErr != nil {
+				taskUpdates["next_run_at"] = nil
+			} else {
+				taskUpdates["next_run_at"] = cronutil.Next(taskEntity.CronSpec)
+			}
+			taskStatus := nextStatus
+			normalizeCronTerminalSchedule(taskEntity, run, &taskStatus, taskUpdates, retrySchedule)
+			if err := m.stateMachine.ValidateTransition(ParseStatus(taskEntity.Status), taskStatus); err != nil {
+				return err
+			}
+			taskResult = tx.Model(&model.Task{}).
+				Where("id = ? AND status = ?", taskEntity.ID, taskEntity.Status).
+				Updates(taskUpdates)
+			if taskResult.Error != nil {
+				return taskResult.Error
+			}
+			if taskResult.RowsAffected != 1 {
+				return errTaskRunCASLost
+			}
+			effectTask.Status = string(taskStatus)
+			effectTask.RetryCount = newRetryCount
+			effectTask.LastError = sanitizedMessage
+			if nextValue, ok := taskUpdates["next_run_at"]; ok {
+				switch next := nextValue.(type) {
+				case *time.Time:
+					if next == nil {
+						effectTask.NextRunAt = nil
+					} else {
+						copied := next.UTC()
+						effectTask.NextRunAt = &copied
+					}
+				case time.Time:
+					copied := next.UTC()
+					effectTask.NextRunAt = &copied
+				case nil:
+					effectTask.NextRunAt = nil
+				}
+			}
+		} else if ParseStatus(effectTask.Status) == StatusRetrying {
+			// A malformed or stale non-retry run must not publish a retry
+			// intent for the aggregate's unrelated retry cycle.
+			effectTask.Status = string(StatusFailed)
+		}
+
+		var buildErr error
+		effects, buildErr = buildTerminalEffects(tx, effectTask, run, run.ID, StatusFailed, retrySchedule)
+		if buildErr != nil {
+			return buildErr
+		}
+		return persistTaskRunEffectsTx(tx, run.ID, effects)
 	})
 	if err != nil {
 		return err
 	}
-	return m.drainTaskRunEffects(ctx, runID)
+	if drainErr := m.drainTaskRunEffects(ctx, runID); drainErr != nil {
+		if provenanceErr != nil {
+			return errors.Join(provenanceErr, drainErr)
+		}
+		return drainErr
+	}
+	return provenanceErr
 }
 
 // cancelRestoreTaskRunBeforeExecutor records cancellation for a restore run
@@ -183,6 +310,191 @@ func (m *Manager) cancelRestoreTaskRunBeforeExecutor(ctx context.Context, taskID
 	})
 }
 
+// cancelOwnedRunningTask closes a running TaskRun and its active aggregate in
+// one transaction after the caller has signaled the process-local owner. The
+// Task lock is the serialization boundary for the retrying aggregate; no
+// failure effects are published for a user cancellation.
+func (m *Manager) cancelOwnedRunningTask(taskID uint, message string) (bool, error) {
+	if m == nil || m.db == nil || taskID == 0 {
+		return false, errors.New("running task cancellation persistence unavailable")
+	}
+	if strings.TrimSpace(m.executionOwnerID) == "" {
+		return false, nil
+	}
+	now := time.Now().UTC()
+	sanitizedMessage := sanitizeTaskLastError(message)
+	canceled := false
+	previousTaskOutcome, hasPreviousOutcome := m.previousTaskOutcomeForTask(taskID)
+	if !m.claimProviderCancellation(taskID) {
+		return false, nil
+	}
+
+	legacyReanchor := false
+	var provenanceErr error
+	err := m.db.WithContext(context.Background()).Transaction(func(tx *gorm.DB) error {
+		var taskEntity model.Task
+		taskResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", taskID).Limit(1).Find(&taskEntity)
+		if taskResult.Error != nil {
+			return taskResult.Error
+		}
+		if taskResult.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+
+		var runningRuns []model.TaskRun
+		runResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("task_id = ? AND status = ?", taskID, model.TaskRunStatusRunning).
+			Order("id ASC").Find(&runningRuns)
+		if runResult.Error != nil {
+			return runResult.Error
+		}
+		ownedRuns := make([]model.TaskRun, 0, len(runningRuns))
+		for _, run := range runningRuns {
+			owner := strings.TrimSpace(run.ExecutionOwnerID)
+			if owner != "" && owner != m.executionOwnerID {
+				return errTaskRunNotOwner
+			}
+			if owner == m.executionOwnerID {
+				ownedRuns = append(ownedRuns, run)
+			}
+		}
+		if len(ownedRuns) == 0 {
+			if ParseStatus(taskEntity.Status) == StatusRunning {
+				return errTaskCancelConflict
+			}
+			return nil
+		}
+		canceled = true
+
+		var retryRun model.TaskRun
+		for index := len(ownedRuns) - 1; index >= 0; index-- {
+			if strings.EqualFold(strings.TrimSpace(ownedRuns[index].TriggerType), "retry") {
+				retryRun = ownedRuns[index]
+				break
+			}
+		}
+		retryCursorMode := model.TaskRunCronCursorModeLegacy
+		if retryRun.ID != 0 && strings.TrimSpace(taskEntity.CronSpec) != "" {
+			var modeErr error
+			retryCursorMode, modeErr = retryCursorModeForTerminalRunTx(tx, taskEntity, retryRun)
+			if modeErr != nil {
+				// The cancellation is still committed, but no wall-clock
+				// value may be invented for an unknown cursor owner.
+				provenanceErr = fmt.Errorf("decode retry cursor provenance: %w", modeErr)
+			}
+		}
+
+		for _, run := range ownedRuns {
+			markNoStart, markErr := rcloneNoStartStateForPreProviderRunTx(tx, &run)
+			if markErr != nil {
+				return markErr
+			}
+			updates := map[string]interface{}{
+				"status":                model.TaskRunStatusCanceled,
+				"finished_at":           &now,
+				"last_error":            sanitizedMessage,
+				"execution_owner_id":    "",
+				"execution_lease_until": nil,
+			}
+			updates["started_at"] = nil
+			updates["duration_ms"] = int64(0)
+			if markNoStart {
+				updates["backup_generation_state"] = model.TaskRunGenerationStateNoStart
+			}
+			updated := tx.Model(&model.TaskRun{}).
+				Where("id = ? AND task_id = ? AND status = ? AND execution_owner_id = ?",
+					run.ID, taskID, model.TaskRunStatusRunning, m.executionOwnerID).
+				Updates(updates)
+			if updated.Error != nil {
+				return updated.Error
+			}
+			if updated.RowsAffected != 1 {
+				return errTaskCancelConflict
+			}
+		}
+
+		taskStatus := ParseStatus(taskEntity.Status)
+		if hasPreviousOutcome && taskStatus == StatusRunning && retryRun.ID == 0 {
+			taskUpdates := map[string]interface{}{
+				"status":      previousTaskOutcome.Status,
+				"last_run_at": previousTaskOutcome.LastRunAt,
+				"last_error":  previousTaskOutcome.LastError,
+			}
+			if strings.TrimSpace(previousTaskOutcome.CronSpec) == "" {
+				taskUpdates["next_run_at"] = previousTaskOutcome.NextRunAt
+			} else if ParseStatus(previousTaskOutcome.Status) == StatusRetrying {
+				cursorMode, modeErr := retryCursorModeForTerminalRunTx(tx, previousTaskOutcome, retryRun)
+				if modeErr != nil {
+					return modeErr
+				}
+				if cursorMode == model.TaskRunCronCursorModeRegularV1 {
+					taskUpdates["next_run_at"] = previousTaskOutcome.NextRunAt
+				} else {
+					next := cronutil.Next(previousTaskOutcome.CronSpec)
+					taskUpdates["next_run_at"] = next
+					legacyReanchor = next != nil
+				}
+			}
+			updated := tx.Model(&model.Task{}).
+				Where("id = ? AND status = ?", taskID, string(StatusRunning)).
+				Updates(taskUpdates)
+			if updated.Error != nil {
+				return updated.Error
+			}
+			if updated.RowsAffected != 1 {
+				return errTaskCancelConflict
+			}
+			return nil
+		}
+		if taskStatus != StatusPending && taskStatus != StatusRunning && taskStatus != StatusRetrying {
+			return nil
+		}
+		taskUpdates := map[string]interface{}{
+			"status":     string(StatusCanceled),
+			"last_error": sanitizedMessage,
+		}
+		if strings.TrimSpace(taskEntity.CronSpec) == "" ||
+			!taskEntity.Enabled || taskEntity.ArchivedAt != nil {
+			taskUpdates["next_run_at"] = nil
+		} else if retryRun.ID != 0 &&
+			(taskStatus == StatusRetrying || strings.EqualFold(strings.TrimSpace(retryRun.TriggerType), "retry")) {
+			if provenanceErr != nil {
+				taskUpdates["next_run_at"] = nil
+			} else if retryCursorMode != model.TaskRunCronCursorModeRegularV1 {
+				next := cronutil.Next(taskEntity.CronSpec)
+				taskUpdates["next_run_at"] = next
+				legacyReanchor = next != nil
+			}
+		}
+		updated := tx.Model(&model.Task{}).
+			Where("id = ? AND status = ?", taskID, taskEntity.Status).
+			Updates(taskUpdates)
+		if updated.Error != nil {
+			return updated.Error
+		}
+		if updated.RowsAffected != 1 {
+			return errTaskCancelConflict
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	if legacyReanchor {
+		if err := m.SyncSchedule(model.Task{ID: taskID}); err != nil {
+			if provenanceErr != nil {
+				return true, errors.Join(provenanceErr, err)
+			}
+			return true, fmt.Errorf("reconcile legacy retry schedule after cancellation: %w", err)
+		}
+	}
+	if provenanceErr != nil {
+		return true, provenanceErr
+	}
+	return canceled, nil
+}
+
 type taskRunTerminalEffect struct {
 	Key           string
 	Type          string
@@ -200,6 +512,159 @@ type retryTaskRunEffect struct {
 	ChainRunID        string `json:"chain_run_id"`
 	UpstreamTaskRunID *uint  `json:"upstream_task_run_id,omitempty"`
 	PredecessorRunID  uint   `json:"predecessor_run_id"`
+	// Current cron retry effects carry their retry deadline in
+	// TaskRunEffect.NextAttemptAt while Task.NextRunAt remains the regular
+	// cron cursor. An omitted mode is the pre-cutover legacy format, where
+	// Task.NextRunAt was also the retry deadline.
+	CronCursorMode string `json:"cron_cursor_mode,omitempty"`
+}
+
+func retryPredecessorRunIDTx(tx *gorm.DB, run model.TaskRun) (uint, error) {
+	if tx == nil || run.ID == 0 || run.TaskID == 0 ||
+		!strings.EqualFold(strings.TrimSpace(run.TriggerType), "retry") {
+		return 0, nil
+	}
+	var candidates []model.TaskRun
+	result := tx.Where(`task_id = ? AND id < ? AND
+		lower(COALESCE(trigger_type, '')) NOT IN ? AND status = ? AND
+		EXISTS (
+			SELECT 1 FROM task_run_effects AS retry_effect
+			WHERE retry_effect.task_run_id = task_runs.id
+				AND retry_effect.effect_type = ?
+		)`,
+		run.TaskID, run.ID, []string{"drill", "restore"},
+		model.TaskRunStatusFailed, model.TaskRunEffectTypeRetry).
+		Order("id DESC").Limit(taskRunRecoveryBatchSize).Find(&candidates)
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	for _, candidate := range candidates {
+		var effect model.TaskRunEffect
+		effectResult := tx.Where("task_run_id = ? AND effect_type = ?", candidate.ID, model.TaskRunEffectTypeRetry).
+			Order("id DESC").Limit(1).Find(&effect)
+		if effectResult.Error != nil {
+			return 0, effectResult.Error
+		}
+		if effectResult.RowsAffected != 1 {
+			continue
+		}
+		if _, err := model.ParseTaskRunEffectCronCursorMode(effect.Payload); err != nil {
+			return 0, err
+		}
+		var payload retryTaskRunEffect
+		if err := json.Unmarshal([]byte(effect.Payload), &payload); err != nil {
+			return 0, fmt.Errorf("decode predecessor retry effect: %w", err)
+		}
+		if payload.PredecessorRunID != candidate.ID {
+			continue
+		}
+		if run.ChainRunID != "" {
+			if payload.ChainRunID != "" && payload.ChainRunID != run.ChainRunID {
+				continue
+			}
+			if payload.ChainRunID == "" && candidate.ChainRunID != run.ChainRunID {
+				continue
+			}
+		}
+		return candidate.ID, nil
+	}
+	return 0, nil
+}
+
+// retryCursorModeForTerminalRunTx derives a retry attempt's cron ownership
+// from the exact predecessor effect. A newly published cron failure has no
+// predecessor effect and therefore starts in the current regular-cursor mode.
+func retryCursorModeForTerminalRunTx(
+	tx *gorm.DB,
+	taskEntity model.Task,
+	run model.TaskRun,
+) (model.TaskRunCronCursorMode, error) {
+	if strings.TrimSpace(taskEntity.CronSpec) == "" {
+		return model.TaskRunCronCursorModeLegacy, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(run.TriggerType), "retry") {
+		return model.TaskRunCronCursorModeRegularV1, nil
+	}
+	predecessorID, err := retryPredecessorRunIDTx(tx, run)
+	if err != nil {
+		return model.TaskRunCronCursorModeLegacy, err
+	}
+	return model.RetryEffectCronCursorModeTx(tx, predecessorID)
+}
+
+func isCurrentRetryRunTx(tx *gorm.DB, run model.TaskRun) (bool, error) {
+	if tx == nil || run.ID == 0 || run.TaskID == 0 ||
+		!strings.EqualFold(strings.TrimSpace(run.TriggerType), "retry") {
+		return false, nil
+	}
+	var latest model.TaskRun
+	result := tx.Where(`task_id = ? AND
+		lower(COALESCE(trigger_type, '')) NOT IN ?`,
+		run.TaskID, []string{"drill", "restore"}).
+		Order("id DESC").Limit(1).Find(&latest)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1 && latest.ID == run.ID, nil
+}
+
+// retryDeadlineAfterPreExecutorFailure returns the complete state-machine
+// decision. A nil deadline is meaningful only when shouldRetry is false; the
+// caller must never infer a retry from a missing deadline.
+func retryDeadlineAfterPreExecutorFailure(
+	taskEntity model.Task,
+	now time.Time,
+	sm *StateMachine,
+) (TaskStatus, int, *time.Time, bool) {
+	if sm == nil {
+		sm = NewStateMachine()
+	}
+	var nextStatus TaskStatus
+	var newRetryCount int
+	var nextRun time.Time
+	var shouldRetry bool
+	if taskEntity.Policy != nil && taskEntity.Policy.MaxRetries >= 0 {
+		nextStatus, newRetryCount, nextRun, shouldRetry = sm.NextAfterFailureConfigurable(
+			StatusRetrying, taskEntity.RetryCount, now,
+			taskEntity.Policy.MaxRetries, taskEntity.Policy.RetryBaseSeconds,
+		)
+	} else {
+		nextStatus, newRetryCount, nextRun, shouldRetry = sm.NextAfterFailure(
+			StatusRetrying, taskEntity.RetryCount, now,
+		)
+	}
+	if !shouldRetry || nextStatus != StatusRetrying || nextRun.IsZero() {
+		return nextStatus, newRetryCount, nil, false
+	}
+	nextRun = nextRun.UTC()
+	return nextStatus, newRetryCount, &nextRun, true
+}
+
+type terminalRetrySchedule struct {
+	separate bool
+	deadline *time.Time
+}
+
+func retryDeadlineFromTaskUpdates(taskUpdates map[string]interface{}) *time.Time {
+	if taskUpdates == nil {
+		return nil
+	}
+	switch value := taskUpdates["next_run_at"].(type) {
+	case *time.Time:
+		if value == nil || value.IsZero() {
+			return nil
+		}
+		next := value.UTC()
+		return &next
+	case time.Time:
+		if value.IsZero() {
+			return nil
+		}
+		next := value.UTC()
+		return &next
+	default:
+		return nil
+	}
 }
 
 type downstreamTaskRunEffect struct {
@@ -233,8 +698,42 @@ func (m *Manager) terminalizeTaskRun(
 	runUpdates map[string]interface{},
 	legacyFact ...bool,
 ) error {
-	return m.terminalizeTaskRunTx(ctx, taskID, runID, expectedRunStatuses,
-		taskStatus, taskUpdates, runStatus, runUpdates, terminalizeTaskRunModeNormal, legacyFact...)
+	if err := m.terminalizeTaskRunTx(ctx, taskID, runID, expectedRunStatuses,
+		taskStatus, taskUpdates, runStatus, runUpdates, terminalizeTaskRunModeNormal, legacyFact...); err != nil {
+		return err
+	}
+	m.reconcileRetryCronScheduleAfterTerminal(taskID, runID)
+	return nil
+}
+
+// reconcileRetryCronScheduleAfterTerminal closes the legacy compatibility
+// boundary. Pre-cutover retry rows used Task.NextRunAt for the retry deadline,
+// so SyncSchedule fenced their live entry while retrying. Once that retry
+// terminalizes, the durable terminal writer has chosen the new regular
+// cursor; register the live schedule from that same committed value.
+func (m *Manager) reconcileRetryCronScheduleAfterTerminal(taskID, runID uint) {
+	if m == nil || m.db == nil || m.scheduler == nil || taskID == 0 || runID == 0 {
+		return
+	}
+	var run struct {
+		TriggerType string `gorm:"column:trigger_type"`
+	}
+	result := m.db.Model(&model.TaskRun{}).
+		Select("trigger_type").
+		Where("id = ? AND task_id = ?", runID, taskID).
+		Limit(1).Find(&run)
+	if result.Error != nil || result.RowsAffected != 1 ||
+		!strings.EqualFold(strings.TrimSpace(run.TriggerType), "retry") {
+		if result.Error != nil {
+			logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).
+				Err(result.Error).Msg("load retry schedule terminal provenance")
+		}
+		return
+	}
+	if err := m.SyncSchedule(model.Task{ID: taskID}); err != nil {
+		logger.Module("task").Warn().Uint("task_id", taskID).Uint("task_run_id", runID).
+			Err(err).Msg("reconcile retry cron schedule after terminal")
+	}
 }
 
 type terminalizeTaskRunMode uint8
@@ -244,6 +743,54 @@ const (
 	terminalizeTaskRunModeRecovery
 	terminalizeTaskRunModePreProviderFailure
 )
+
+// normalizeCronTerminalSchedule prevents terminal writers from recomputing a
+// normal cron cursor from completion time. For current retry effects the
+// explicit backoff deadline lives on TaskRunEffect.NextAttemptAt, so the
+// durable Task.NextRunAt cursor remains untouched. Legacy retry effects omit
+// the cursor mode and retain their historical Task.NextRunAt behavior.
+func normalizeCronTerminalSchedule(
+	taskEntity model.Task,
+	run model.TaskRun,
+	taskStatus *TaskStatus,
+	taskUpdates map[string]interface{},
+	retrySchedule ...terminalRetrySchedule,
+) {
+	if taskUpdates == nil || strings.TrimSpace(taskEntity.CronSpec) == "" {
+		return
+	}
+	separateRetryCursor := len(retrySchedule) > 0 && retrySchedule[0].separate
+	if taskStatus != nil && *taskStatus == StatusRetrying {
+		if strings.EqualFold(strings.TrimSpace(run.TriggerType), "retry") && !separateRetryCursor {
+			// A legacy retrying row still uses Task.NextRunAt as its retry
+			// reservation until its effect is consumed.
+			return
+		}
+		// Current cron failures keep the regular cursor on Task while the
+		// retry effect stores the attempt deadline separately.
+		delete(taskUpdates, "next_run_at")
+		return
+	}
+	if !taskEntity.Enabled || taskEntity.ArchivedAt != nil {
+		taskUpdates["next_run_at"] = nil
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(run.TriggerType), "retry") {
+		if separateRetryCursor {
+			// The retry attempt must not re-anchor @every from completion time.
+			delete(taskUpdates, "next_run_at")
+		}
+		return
+	}
+	if ParseStatus(taskEntity.Status) == StatusRetrying {
+		// A non-retry run cannot consume a retry reservation owned by another
+		// attempt. Leave its deadline untouched.
+		delete(taskUpdates, "next_run_at")
+		return
+	}
+	// Normal cron/manual terminalization preserves the current durable cursor.
+	delete(taskUpdates, "next_run_at")
+}
 
 func (m *Manager) terminalizeTaskRunTx(
 	ctx context.Context,
@@ -374,7 +921,7 @@ func (m *Manager) terminalizeTaskRunTx(
 				failed := StatusFailed
 				taskStatus = &failed
 				if _, ok := taskUpdates["next_run_at"]; !ok {
-					taskUpdates["next_run_at"] = nextCronRun(taskEntity.CronSpec)
+					taskUpdates["next_run_at"] = cronutil.Next(taskEntity.CronSpec)
 				}
 			}
 		}
@@ -396,6 +943,20 @@ func (m *Manager) terminalizeTaskRunTx(
 				suppressEffects = true
 			}
 		}
+		retrySchedule := terminalRetrySchedule{}
+		if taskStatus != nil && *taskStatus == StatusRetrying {
+			retrySchedule.deadline = retryDeadlineFromTaskUpdates(taskUpdates)
+		}
+		if strings.TrimSpace(taskEntity.CronSpec) != "" &&
+			(taskStatus != nil && *taskStatus == StatusRetrying ||
+				strings.EqualFold(strings.TrimSpace(run.TriggerType), "retry")) {
+			cursorMode, modeErr := retryCursorModeForTerminalRunTx(tx, taskEntity, run)
+			if modeErr != nil {
+				return modeErr
+			}
+			retrySchedule.separate = cursorMode == model.TaskRunCronCursorModeRegularV1
+		}
+		normalizeCronTerminalSchedule(taskEntity, run, taskStatus, taskUpdates, retrySchedule)
 
 		if taskStatus != nil {
 			from := ParseStatus(taskEntity.Status)
@@ -467,7 +1028,7 @@ func (m *Manager) terminalizeTaskRunTx(
 		if suppressEffects {
 			effects = nil
 		} else {
-			builtEffects, buildErr := buildTerminalEffects(tx, taskEntity, run, runID, runStatus)
+			builtEffects, buildErr := buildTerminalEffects(tx, taskEntity, run, runID, runStatus, retrySchedule)
 			if buildErr != nil {
 				return buildErr
 			}
@@ -502,7 +1063,7 @@ func (m *Manager) failTaskExecutionBeforeExecutor(
 	runUpdates map[string]interface{},
 ) error {
 	failedStatus := StatusFailed
-	return m.terminalizeTaskRunTx(
+	if err := m.terminalizeTaskRunTx(
 		ctx,
 		taskID,
 		runID,
@@ -512,7 +1073,11 @@ func (m *Manager) failTaskExecutionBeforeExecutor(
 		StatusFailed,
 		runUpdates,
 		terminalizeTaskRunModePreProviderFailure,
-	)
+	); err != nil {
+		return err
+	}
+	m.reconcileRetryCronScheduleAfterTerminal(taskID, runID)
+	return nil
 }
 func isLegacyFactExecutor(executorType string) bool {
 	switch strings.ToLower(strings.TrimSpace(executorType)) {
@@ -537,21 +1102,38 @@ func terminalCompletionTime(runUpdates map[string]interface{}, fallback time.Tim
 	return fallback.UTC()
 }
 
-func buildTerminalEffects(tx *gorm.DB, taskEntity model.Task, run model.TaskRun, runID uint, runStatus TaskStatus) ([]taskRunTerminalEffect, error) {
+func buildTerminalEffects(
+	tx *gorm.DB,
+	taskEntity model.Task,
+	run model.TaskRun,
+	runID uint,
+	runStatus TaskStatus,
+	retrySchedules ...terminalRetrySchedule,
+) ([]taskRunTerminalEffect, error) {
 	ordinary := run.TriggerType != "restore" && run.TriggerType != "drill"
 	result := make([]taskRunTerminalEffect, 0, 5)
 	if ordinary && runStatus == StatusFailed && ParseStatus(taskEntity.Status) == StatusRetrying {
-		payload, err := json.Marshal(retryTaskRunEffect{
+		retrySchedule := terminalRetrySchedule{}
+		if len(retrySchedules) > 0 {
+			retrySchedule = retrySchedules[0]
+		}
+		retryPayload := retryTaskRunEffect{
 			TaskID:            taskEntity.ID,
 			ChainRunID:        run.ChainRunID,
 			UpstreamTaskRunID: run.UpstreamTaskRunID,
 			PredecessorRunID:  run.ID,
-		})
+		}
+		if retrySchedule.separate {
+			retryPayload.CronCursorMode = string(model.TaskRunCronCursorModeRegularV1)
+		}
+		payload, err := json.Marshal(retryPayload)
 		if err != nil {
 			return nil, fmt.Errorf("encode retry effect: %w", err)
 		}
-		var nextAttemptAt *time.Time
-		if taskEntity.NextRunAt != nil {
+		nextAttemptAt := retrySchedule.deadline
+		if nextAttemptAt == nil && !retrySchedule.separate && taskEntity.NextRunAt != nil {
+			// Only legacy effects infer their deadline from Task.NextRunAt.
+			// Current cron effects own the retry deadline on this effect row.
 			next := taskEntity.NextRunAt.UTC()
 			nextAttemptAt = &next
 		}
@@ -1060,6 +1642,10 @@ func (m *Manager) executeRetryTaskRunEffect(ctx context.Context, effect model.Ta
 	if err := json.Unmarshal([]byte(effect.Payload), &payload); err != nil {
 		return fmt.Errorf("decode retry effect: %w", err)
 	}
+	cursorMode, err := model.ParseTaskRunEffectCronCursorMode(effect.Payload)
+	if err != nil {
+		return fmt.Errorf("decode retry effect cron cursor mode: %w", err)
+	}
 	if payload.TaskID == 0 {
 		return errors.New("retry effect has invalid task identifier")
 	}
@@ -1067,7 +1653,7 @@ func (m *Manager) executeRetryTaskRunEffect(ctx context.Context, effect model.Ta
 		ctx = context.Background()
 	}
 	var retryRunID uint
-	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var currentEffect model.TaskRunEffect
 		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("id = ?", effect.ID).Limit(1).Find(&currentEffect)
@@ -1131,10 +1717,21 @@ func (m *Manager) executeRetryTaskRunEffect(ctx context.Context, effect model.Ta
 			}
 			return markTaskRunEffectSucceededTx(tx, currentEffect.ID, m.executionOwnerID)
 		}
-		if taskEntity.NextRunAt != nil && taskEntity.NextRunAt.After(time.Now().UTC()) {
+		currentCursorMode, modeErr := model.ParseTaskRunEffectCronCursorMode(currentEffect.Payload)
+		if modeErr != nil {
+			return fmt.Errorf("decode retry effect cron cursor mode: %w", modeErr)
+		}
+		cursorMode = currentCursorMode
+		retryDeadline := currentEffect.NextAttemptAt
+		if retryDeadline == nil && cursorMode == model.TaskRunCronCursorModeLegacy {
+			// Legacy effects may not have copied their deadline onto the
+			// effect row. Keep those rows compatible with Task.NextRunAt.
+			retryDeadline = taskEntity.NextRunAt
+		}
+		if retryDeadline != nil && retryDeadline.After(time.Now().UTC()) {
 			// claimTaskRunEffect applies the same readiness predicate. This
 			// guard only protects against clock skew between the two reads.
-			return fmt.Errorf("retry effect is not due until %s", taskEntity.NextRunAt.UTC().Format(time.RFC3339Nano))
+			return fmt.Errorf("retry effect is not due until %s", retryDeadline.UTC().Format(time.RFC3339Nano))
 		}
 
 		if payload.PredecessorRunID == 0 || currentEffect.TaskRunID != payload.PredecessorRunID {
@@ -1238,6 +1835,8 @@ func (m *Manager) launchDurableTaskRun(ctx context.Context, run model.TaskRun) e
 	if !claimed {
 		return nil
 	}
+	defer m.releasePendingRunAdmission(ownership)
+
 	scheduled := false
 	defer func() {
 		if !scheduled {
@@ -1270,15 +1869,23 @@ func (m *Manager) launchDurableTaskRun(ctx context.Context, run model.TaskRun) e
 	if err := runCtx.Err(); err != nil {
 		return err
 	}
+	if !m.handoffPendingRunAdmission(ownership) {
+		if !m.shuttingDown.Load() {
+			if err := m.cancelTaskRunBeforeExecutorWithOwnership(
+				run.TaskID, run.ID, "任务执行入口未获准", ownership,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	scheduled = true
-	m.taskWG.Add(1)
 	go func() {
 		defer m.taskWG.Done()
 		m.runTaskWithContext(run.TaskID, run.ID, run.TriggerType, run.ChainRunID, runCtx, ownership, ownership.cancel)
 	}()
 	return nil
 }
-
 func (m *Manager) reconcilePendingDurableRuns(ctx context.Context) error {
 	if m == nil || m.db == nil || m.shuttingDown.Load() {
 		return nil
@@ -1337,7 +1944,8 @@ func (m *Manager) cancelPendingDurableRun(ctx context.Context, runID, taskID uin
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	legacyReanchor := false
+	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var taskEntity model.Task
 		taskResult := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("id = ?", taskID).Limit(1).Find(&taskEntity)
@@ -1359,6 +1967,18 @@ func (m *Manager) cancelPendingDurableRun(ctx context.Context, runID, taskID uin
 			(run.ExecutionLeaseUntil != nil && run.ExecutionLeaseUntil.After(now)) {
 			return errTaskRunNotOwner
 		}
+
+		retryCursorMode := model.TaskRunCronCursorModeLegacy
+		if taskResult.RowsAffected == 1 &&
+			strings.EqualFold(strings.TrimSpace(run.TriggerType), "retry") &&
+			ParseStatus(taskEntity.Status) == StatusRetrying {
+			var modeErr error
+			retryCursorMode, modeErr = retryCursorModeForTerminalRunTx(tx, taskEntity, run)
+			if modeErr != nil {
+				return modeErr
+			}
+		}
+
 		updated := tx.Model(&model.TaskRun{}).
 			Where(`id = ? AND task_id = ? AND status = ? AND
 				(execution_owner_id = '' OR execution_owner_id = ? OR
@@ -1377,15 +1997,24 @@ func (m *Manager) cancelPendingDurableRun(ctx context.Context, runID, taskID uin
 		if updated.RowsAffected != 1 {
 			return errTaskRunCASLost
 		}
-		if taskResult.RowsAffected == 1 && run.TriggerType == "retry" &&
+		if taskResult.RowsAffected == 1 &&
+			strings.EqualFold(strings.TrimSpace(run.TriggerType), "retry") &&
 			ParseStatus(taskEntity.Status) == StatusRetrying {
+			taskUpdates := map[string]interface{}{
+				"status":     string(StatusCanceled),
+				"last_error": sanitizeTaskLastError(message),
+			}
+			if strings.TrimSpace(taskEntity.CronSpec) == "" ||
+				!taskEntity.Enabled || taskEntity.ArchivedAt != nil {
+				taskUpdates["next_run_at"] = nil
+			} else if retryCursorMode != model.TaskRunCronCursorModeRegularV1 {
+				next := cronutil.Next(taskEntity.CronSpec)
+				taskUpdates["next_run_at"] = next
+				legacyReanchor = next != nil
+			}
 			taskUpdated := tx.Model(&model.Task{}).
 				Where("id = ? AND status = ?", taskID, taskEntity.Status).
-				Updates(map[string]interface{}{
-					"status":      string(StatusCanceled),
-					"next_run_at": nil,
-					"last_error":  sanitizeTaskLastError(message),
-				})
+				Updates(taskUpdates)
 			if taskUpdated.Error != nil {
 				return taskUpdated.Error
 			}
@@ -1395,6 +2024,16 @@ func (m *Manager) cancelPendingDurableRun(ctx context.Context, runID, taskID uin
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if legacyReanchor {
+		if err := m.SyncSchedule(model.Task{ID: taskID}); err != nil {
+			return fmt.Errorf("reconcile legacy retry schedule after cancellation: %w", err)
+		}
+	}
+	return nil
+
 }
 
 func (m *Manager) succeedTaskRunEffect(effectID uint) error {
@@ -1437,7 +2076,9 @@ func (m *Manager) failTaskRunEffect(effect *model.TaskRunEffect, effectErr error
 	}
 	now := time.Now().UTC()
 	message := sanitizeTaskLastError(effectErr.Error())
-	return m.db.WithContext(context.Background()).Transaction(func(tx *gorm.DB) error {
+	var modeErr error
+	var cursorMode model.TaskRunCronCursorMode
+	err := m.db.WithContext(context.Background()).Transaction(func(tx *gorm.DB) error {
 		var current model.TaskRunEffect
 		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("id = ?", effect.ID).Limit(1).Find(&current)
@@ -1453,6 +2094,9 @@ func (m *Manager) failTaskRunEffect(effect *model.TaskRunEffect, effectErr error
 		if current.Status != model.TaskRunEffectStatusRunning ||
 			current.ClaimedBy != m.executionOwnerID {
 			return errTaskRunCASLost
+		}
+		if current.EffectType == model.TaskRunEffectTypeRetry {
+			cursorMode, modeErr = model.ParseTaskRunEffectCronCursorMode(current.Payload)
 		}
 		attempt := current.Attempts
 		if attempt < 1 {
@@ -1484,6 +2128,13 @@ func (m *Manager) failTaskRunEffect(effect *model.TaskRunEffect, effectErr error
 		if updated.RowsAffected != 1 {
 			return errTaskRunCASLost
 		}
+		if modeErr != nil && current.Attempts < taskRunEffectMaxAttempts {
+			// The effect failure is durable, but an invalid provenance value
+			// must never be interpreted as a legacy cron deadline. Keep the
+			// retry reservation for bounded recovery; exhaustion settles it.
+			return nil
+		}
+
 		if current.Attempts < taskRunEffectMaxAttempts ||
 			current.EffectType != model.TaskRunEffectTypeRetry {
 			return nil
@@ -1518,9 +2169,19 @@ func (m *Manager) failTaskRunEffect(effect *model.TaskRunEffect, effectErr error
 			return nil
 		}
 		taskUpdates := map[string]interface{}{
-			"status":      string(StatusFailed),
-			"next_run_at": nextCronRun(taskEntity.CronSpec),
-			"last_error":  message,
+			"status":     string(StatusFailed),
+			"last_error": message,
+		}
+		// Current cron retry effects keep the regular cursor on Task. Legacy
+		// effects still need the historical completion-based cursor reset.
+		if modeErr != nil {
+			// Unknown provenance has no safe regular/legacy interpretation.
+			// Clearing the cursor creates an explicit boundary for a later
+			// schedule reconstruction instead of replaying an old timestamp.
+			taskUpdates["next_run_at"] = nil
+		} else if strings.TrimSpace(taskEntity.CronSpec) == "" ||
+			cursorMode != model.TaskRunCronCursorModeRegularV1 {
+			taskUpdates["next_run_at"] = cronutil.Next(taskEntity.CronSpec)
 		}
 		taskUpdated := tx.Model(&model.Task{}).
 			Where("id = ? AND status = ?", taskEntity.ID, taskEntity.Status).
@@ -1533,6 +2194,14 @@ func (m *Manager) failTaskRunEffect(effect *model.TaskRunEffect, effectErr error
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if modeErr != nil {
+		return fmt.Errorf("decode retry effect cron cursor mode: %w", modeErr)
+	}
+	return nil
+
 }
 
 func minInt(a, b int) int {
@@ -1625,7 +2294,10 @@ func (m *Manager) startTaskRunHeartbeat(
 	if interval <= 0 {
 		interval = time.Millisecond
 	}
-	m.taskWG.Add(1)
+	if !m.addTaskWorker() {
+		cancelHeartbeat()
+		return cancelHeartbeat
+	}
 	go func() {
 		defer m.taskWG.Done()
 		ticker := time.NewTicker(interval)
@@ -1746,7 +2418,7 @@ func (m *Manager) reconcileClaimedOrdinaryRun(ctx context.Context, run model.Tas
 		}
 	}
 	return m.terminalizeTaskRun(ctx, run.TaskID, run.ID, []string{run.Status}, taskStatus,
-		map[string]interface{}{"last_error": message, "next_run_at": nextCronRun(taskEntity.CronSpec)},
+		map[string]interface{}{"last_error": message, "next_run_at": cronutil.Next(taskEntity.CronSpec)},
 		StatusFailed, runUpdates)
 }
 

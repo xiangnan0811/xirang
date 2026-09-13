@@ -1329,3 +1329,6 @@ func (r *archiveRaceTaskRepository) CountByID(ctx context.Context, id uint) (int
 func (r *archiveRaceTaskRepository) FindByIDsFields(ctx context.Context, ids []uint, fields ...string) ([]model.Task, error) {
 	return r.inner.FindByIDsFields(ctx, ids, fields...)
 }
+func (r *archiveRaceTaskRepository) TaskRetryCronCursorMode(ctx context.Context, taskID uint) (model.TaskRunCronCursorMode, error) {
+	return r.inner.TaskRetryCronCursorMode(ctx, taskID)
+}

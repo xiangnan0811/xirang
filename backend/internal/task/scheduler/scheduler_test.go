@@ -162,6 +162,59 @@ func (s fixedSchedule) Next(time.Time) time.Time {
 	return time.Time(s)
 }
 
+type stepSchedule struct {
+	step time.Duration
+}
+
+func (s stepSchedule) Next(after time.Time) time.Time {
+	return after.Add(s.step)
+}
+
+func TestOccurrenceScheduleUsesDurableFirstActivationAndCursor(t *testing.T) {
+	first := time.Date(2026, 9, 9, 1, 2, 3, 456000000, time.UTC)
+	tracked := &occurrenceSchedule{
+		Schedule: stepSchedule{step: time.Hour},
+		firstAt:  first,
+	}
+	if got := tracked.Next(time.Now().Add(24 * time.Hour)); !got.Equal(first) {
+		t.Fatalf("first schedule timestamp = %v, want durable deadline %v", got, first)
+	}
+	if got := tracked.Next(time.Now().Add(-24 * time.Hour)); !got.Equal(first.Add(time.Hour)) {
+		t.Fatalf("second schedule timestamp = %v, want cursor-anchored deadline %v", got, first.Add(time.Hour))
+	}
+	if got, ok := tracked.take(); !ok || !got.Equal(first) {
+		t.Fatalf("first pending occurrence = %v (ok=%v), want %v", got, ok, first)
+	}
+	if got, ok := tracked.take(); !ok || !got.Equal(first.Add(time.Hour)) {
+		t.Fatalf("second pending occurrence = %v (ok=%v), want %v", got, ok, first.Add(time.Hour))
+	}
+}
+
+func TestRegisterTaskAtSameSpecPreservesLiveCursor(t *testing.T) {
+	s := NewCronScheduler()
+	first := time.Now().UTC().Add(time.Hour)
+	if err := s.RegisterTaskAt(17, "@every 1m", &first, func(time.Time) {}); err != nil {
+		t.Fatalf("first RegisterTaskAt: %v", err)
+	}
+	s.mu.Lock()
+	firstID := s.entries[17]
+	firstSchedule := s.schedules[17]
+	s.mu.Unlock()
+
+	replacement := first.Add(time.Hour)
+	if err := s.RegisterTaskAt(17, "@every 1m", &replacement, func(time.Time) {}); err != nil {
+		t.Fatalf("same-spec RegisterTaskAt: %v", err)
+	}
+	s.mu.Lock()
+	secondID := s.entries[17]
+	secondSchedule := s.schedules[17]
+	s.mu.Unlock()
+	if secondID != firstID || secondSchedule != firstSchedule {
+		t.Fatalf("same-spec registration replaced live cursor: entry %v/%v schedule %p/%p",
+			firstID, secondID, firstSchedule, secondSchedule)
+	}
+}
+
 func TestOccurrenceJobUsesScheduleTimestamp(t *testing.T) {
 	want := time.Date(2026, 9, 9, 1, 2, 3, 0, time.UTC)
 	tracked := &occurrenceSchedule{Schedule: fixedSchedule(want)}
@@ -175,6 +228,41 @@ func TestOccurrenceJobUsesScheduleTimestamp(t *testing.T) {
 	}.Run()
 	if !callbackAt.Equal(want) {
 		t.Fatalf("callback timestamp = %v, want %v", callbackAt, want)
+	}
+}
+
+func TestRegisterTask_DeactivatesReplacedScheduleJobs(t *testing.T) {
+	s := NewCronScheduler()
+	var oldCalls, newCalls int32
+	if err := s.RegisterTask(7, "@every 1m", func(time.Time) {
+		atomic.AddInt32(&oldCalls, 1)
+	}); err != nil {
+		t.Fatalf("register initial schedule: %v", err)
+	}
+	s.mu.Lock()
+	oldSchedule := s.schedules[7]
+	s.mu.Unlock()
+	if oldSchedule == nil {
+		t.Fatal("initial tracked schedule missing")
+	}
+	if next := oldSchedule.Next(time.Time{}); next.IsZero() {
+		t.Fatal("initial schedule did not produce a timestamp")
+	}
+
+	if err := s.RegisterTask(7, "@every 2m", func(time.Time) {
+		atomic.AddInt32(&newCalls, 1)
+	}); err != nil {
+		t.Fatalf("replace schedule: %v", err)
+	}
+	occurrenceJob{
+		schedule: oldSchedule,
+		callback: func(time.Time) { atomic.AddInt32(&oldCalls, 1) },
+	}.Run()
+	if got := atomic.LoadInt32(&oldCalls); got != 0 {
+		t.Fatalf("replaced schedule invoked stale callback %d time(s)", got)
+	}
+	if got := atomic.LoadInt32(&newCalls); got != 0 {
+		t.Fatalf("replacement callback ran without a scheduler tick: %d time(s)", got)
 	}
 }
 

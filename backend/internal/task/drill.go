@@ -136,12 +136,15 @@ func (m *Manager) TriggerDrill(policyID uint, allowedSourceNodeIDs []uint) (uint
 		return 0, ErrDrillAlreadyActive
 	}
 	scheduled := false
+	defer m.releasePendingRunAdmission(ownership)
 	defer func() {
 		if scheduled {
 			return
 		}
 		ownership.cancel()
-		m.chainRunner.Delete(task.ID)
+		if m.chainRunner != nil {
+			m.chainRunner.Delete(task.ID)
+		}
 		m.pendingRuns.CompareAndDelete(task.ID, ownership)
 	}()
 
@@ -169,15 +172,20 @@ func (m *Manager) TriggerDrill(policyID uint, allowedSourceNodeIDs []uint) (uint
 		logger.Module("task").Warn().Err(err).Uint("task_id", task.ID).Msg("创建恢复演练执行记录失败")
 		return 0, fmt.Errorf("创建演习执行记录失败")
 	}
-
-	// 5. 异步执行演习 with the manager-owned cancellable context.
+	if !m.handoffPendingRunAdmission(ownership) {
+		if run.ID != 0 {
+			if _, cancelErr := m.cancelDrillTaskRuns(task.ID, "演习已取消"); cancelErr != nil {
+				logger.Module("task").Warn().Uint("task_id", task.ID).Uint("task_run_id", run.ID).
+					Err(cancelErr).Msg("关闭期间放弃恢复演练执行记录失败")
+			}
+		}
+		return 0, fmt.Errorf("系统维护中，请稍候再试")
+	}
 	scheduled = true
-	m.taskWG.Add(1)
 	go func() {
 		defer m.taskWG.Done()
 		m.executeDrillWithContext(runCtx, &policy, task, sandboxNode, run.ID, ownership, runCancel)
 	}()
-
 	return run.ID, nil
 }
 

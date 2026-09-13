@@ -501,7 +501,7 @@ func readEnvIntDefault(key string, defaultVal int) int {
 	return defaultVal
 }
 
-func legacyIndexSnapshotWithLimits(ctx context.Context, db *gorm.DB, task model.Task, snapshotID string, limits resticLSLimits) error {
+func legacyIndexSnapshotWithLimits(ctx context.Context, db *gorm.DB, task model.Task, snapshotID string, limits resticLSLimits) (returnErr error) {
 	if db == nil {
 		return fmt.Errorf("%w: snapshot index database unavailable", backupasset.ErrInvalidState)
 	}
@@ -529,16 +529,21 @@ func legacyIndexSnapshotWithLimits(ctx context.Context, db *gorm.DB, task model.
 		return err
 	}
 	pwFilePath := executor.BuildResticPasswordFilePath()
+	// Arm cleanup before creation. The cleanup command verifies ownership, so
+	// a pre-existing collision cannot cause an attacker path to be removed.
+	defer func() {
+		if cleanupErr := executor.CleanupResticPasswordFile(task.Node, pwFilePath, sshutil.PurposeSnapshot); cleanupErr != nil {
+			if returnErr != nil {
+				returnErr = errors.Join(returnErr, cleanupErr)
+			} else {
+				returnErr = cleanupErr
+			}
+		}
+	}()
 	createPwCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, access)
 	if _, err := executor.RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
 		return fmt.Errorf("创建 restic 密码临时文件失败: %w", err)
 	}
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		cleanupCmd := executor.BuildCleanupResticPasswordFileCmd(pwFilePath)
-		_, _ = executor.RunSSHCommandOutput(cleanupCtx, client, cleanupCmd)
-	}()
 
 	cmd := buildLegacyResticLSCommand(
 		executor.ShellEscape(resolveResticBinary()), pwFilePath, snapshotID, strings.TrimSpace(task.RsyncTarget),
@@ -570,7 +575,10 @@ func collectResticLSExecution(execution sshutil.CommandExecutionStream, snapshot
 	}
 	entries, parseErr := parseResticLSReader(execution, snapshotID, limits.maxEntries, limits.maxRecordBytes)
 	if parseErr != nil {
-		_ = execution.Cancel()
+		cancelErr := execution.Cancel()
+		if cancelErr != nil && !errors.Is(cancelErr, sshutil.ErrCommandFailed) {
+			parseErr = errors.Join(parseErr, cancelErr)
+		}
 		return nil, fmt.Errorf("解析 restic ls 输出失败: %w", parseErr)
 	}
 	completion, joinErr := execution.Join()

@@ -266,6 +266,55 @@ func ClassifiedAttemptPredicate(alias string) string {
 	return fmt.Sprintf("LOWER(COALESCE(%s.executor_type_snapshot, '')) IN ('rsync', 'restic', 'rclone') AND LOWER(COALESCE(%s.trigger_type, '')) NOT IN ('restore', 'drill')", alias, alias)
 }
 
+// latestVerifiedForNodesSQL ranks only the requested, verified facts in the
+// database.  The completed_at/id ordering is deliberately repeated in the
+// window so equal timestamps still have a stable winner; the outer query has
+// no global LIMIT, so every requested node can contribute one row.
+const latestVerifiedForNodesSQL = `
+SELECT
+	ranked.id,
+	ranked.task_id,
+	ranked.task_run_id,
+	ranked.node_id,
+	ranked.executor_type,
+	ranked.fact_kind,
+	ranked.evidence_status,
+	ranked.completed_at,
+	ranked.evidence_ref,
+	ranked.created_at,
+	ranked.updated_at
+FROM (
+	SELECT
+		bc.id,
+		bc.task_id,
+		bc.task_run_id,
+		bc.node_id,
+		bc.executor_type,
+		bc.fact_kind,
+		bc.evidence_status,
+		bc.completed_at,
+		bc.evidence_ref,
+		bc.created_at,
+		bc.updated_at,
+		ROW_NUMBER() OVER (
+			PARTITION BY bc.node_id
+			ORDER BY bc.completed_at DESC, bc.id DESC
+		) AS row_number
+	FROM backup_completions AS bc
+	WHERE bc.node_id IN ? AND bc.evidence_status = ?
+) AS ranked
+WHERE ranked.row_number = 1
+ORDER BY ranked.node_id ASC
+`
+
+func latestVerifiedForNodesQuery(ctx context.Context, db *gorm.DB, nodeIDs []uint) *gorm.DB {
+	return db.WithContext(ctx).Raw(
+		latestVerifiedForNodesSQL,
+		nodeIDs,
+		model.BackupCompletionEvidenceVerified,
+	)
+}
+
 // LatestVerifiedForNodes returns at most one authoritative completion per node.
 // Unverified historical rows are intentionally excluded.
 func LatestVerifiedForNodes(ctx context.Context, db *gorm.DB, nodeIDs []uint) (map[uint]model.BackupCompletion, error) {
@@ -277,13 +326,11 @@ func LatestVerifiedForNodes(ctx context.Context, db *gorm.DB, nodeIDs []uint) (m
 		ctx = context.Background()
 	}
 	var rows []model.BackupCompletion
-	if err := db.WithContext(ctx).Where("node_id IN ? AND evidence_status = ?", nodeIDs, model.BackupCompletionEvidenceVerified).Order("completed_at DESC, id DESC").Find(&rows).Error; err != nil {
+	if err := latestVerifiedForNodesQuery(ctx, db, nodeIDs).Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("query latest backup completion facts: %w", err)
 	}
 	for _, row := range rows {
-		if _, exists := result[row.NodeID]; !exists {
-			result[row.NodeID] = row
-		}
+		result[row.NodeID] = row
 	}
 	return result, nil
 }
