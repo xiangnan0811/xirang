@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.12](https://github.com/xiangnan0811/xirang/compare/v0.55.11...v0.55.12) (2026-09-13)
+
+
+### 🐛 Bug Fixes
+
+* **backup:** repair cron retry lifecycle and secure Restic cleanup ([640e308](https://github.com/xiangnan0811/xirang/commit/640e308da5a0764a4dd84a939591b86ec1265748))
+
 ## [0.55.11](https://github.com/xiangnan0811/xirang/compare/v0.55.10...v0.55.11) (2026-09-12)
 
 
