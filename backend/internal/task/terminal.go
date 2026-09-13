@@ -619,7 +619,10 @@ func retryDeadlineAfterPreExecutorFailure(
 	if sm == nil {
 		sm = NewStateMachine()
 	}
-	nextStatus, newRetryCount, nextRun, shouldRetry := StatusFailed, taskEntity.RetryCount, time.Time{}, false
+	var nextStatus TaskStatus
+	var newRetryCount int
+	var nextRun time.Time
+	var shouldRetry bool
 	if taskEntity.Policy != nil && taskEntity.Policy.MaxRetries >= 0 {
 		nextStatus, newRetryCount, nextRun, shouldRetry = sm.NextAfterFailureConfigurable(
 			StatusRetrying, taskEntity.RetryCount, now,

@@ -39,7 +39,7 @@ func (s *occurrenceSchedule) Next(after time.Time) time.Time {
 	if s.inactive.Load() {
 		return time.Time{}
 	}
-	next := time.Time{}
+	var next time.Time
 	if !s.cursor.IsZero() {
 		// Continue from the last canonical activation, not from the wall clock
 		// supplied by robfig/cron. This preserves @every anchors and calendar

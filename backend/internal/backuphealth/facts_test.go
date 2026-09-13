@@ -315,7 +315,11 @@ func explainLatestVerifiedForNodes(t *testing.T, db *gorm.DB, engine string, nod
 	if err != nil {
 		t.Fatalf("explain %s latest facts: %v", engine, err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Errorf("close %s latest-facts explain: %v", engine, err)
+		}
+	}()
 	var details []string
 	for rows.Next() {
 		if engine == "sqlite" {
