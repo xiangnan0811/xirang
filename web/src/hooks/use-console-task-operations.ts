@@ -6,7 +6,6 @@ import { getErrorMessage } from "@/lib/utils";
 import { useApiAction } from "@/hooks/use-api-action";
 import { useStepUpAction } from "@/hooks/use-step-up-action";
 import { STEP_UP_ACTIONS } from "@/lib/api/totp-api";
-import { buildDemoTask } from "@/hooks/use-console-data.demo";
 import type {
   AlertRecord,
   LogEvent,
@@ -60,6 +59,8 @@ export function useTaskOperations({
       }
       return -1;
     }
+    // Demo builders must not enter the production startup chunk (same as mock.ts).
+    const { buildDemoTask } = await import("@/hooks/use-console-data.demo");
     const nextTask = buildDemoTask(input, nodes, policies, tasks);
     markTasksMutated();
     setTasks((prev) => [nextTask, ...prev]);
