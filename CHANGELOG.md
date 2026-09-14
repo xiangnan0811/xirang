@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.55.13](https://github.com/xiangnan0811/xirang/compare/v0.55.12...v0.55.13) (2026-09-14)
+
+
+### 🐛 Bug Fixes
+
+* resolve backup safety and task lifecycle review findings ([bb55ccb](https://github.com/xiangnan0811/xirang/commit/bb55ccbc48f197f4f0c70205bea327d4220eac17))
+
 ## [0.55.12](https://github.com/xiangnan0811/xirang/compare/v0.55.11...v0.55.12) (2026-09-13)
 
 
