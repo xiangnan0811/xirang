@@ -555,8 +555,7 @@ func VerifyRestic(ctx context.Context, task model.Task, db *gorm.DB, logf func(l
 			}
 		}
 	}()
-	createPwCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, access)
-	if _, err := runRemoteCommand(ctx, sshClient, createPwCmd); err != nil {
+	if err := executor.CreateResticPasswordFile(ctx, sshClient, pwFilePath, access); err != nil {
 		message := sanitizeVerifierRuntimeEvidence(fmt.Sprintf("restic 校验阶段创建密码临时文件失败: %v", err))
 		logf("warn", message)
 		return Result{Status: "warning", Message: message}

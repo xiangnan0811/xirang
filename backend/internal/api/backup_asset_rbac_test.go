@@ -38,7 +38,7 @@ func setupBackupAssetRBACFixture(t *testing.T) backupAssetRBACTestFixture {
 	if err != nil {
 		t.Fatalf("open backup asset RBAC database: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}, &model.TokenRevocation{}); err != nil {
 		t.Fatalf("migrate backup asset RBAC database: %v", err)
 	}
 	sqlDB, err := db.DB()
@@ -48,6 +48,7 @@ func setupBackupAssetRBACFixture(t *testing.T) backupAssetRBACTestFixture {
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
 	jwtManager := auth.NewJWTManager("FAKE_BACKUP_ASSET_RBAC_JWT_SECRET_FOR_TEST_ONLY", time.Hour)
+	jwtManager.SetDB(db)
 	tokens := make(map[string]string, 4)
 	proofs := make(map[backupAssetRBACProofKey]string, 4)
 	for _, role := range []string{"admin", "operator", "viewer", "unknown"} {

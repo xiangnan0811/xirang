@@ -8,15 +8,14 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/rsyncconfinement"
 	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/util"
 )
@@ -27,6 +26,27 @@ const (
 	maxRsyncCapturePathLen      = 4096
 	maxRsyncCaptureCommandBytes = 64 << 10
 )
+
+// RsyncCaptureRole selects which configured filesystem boundary owns the path
+// being enumerated. Backup captures use SourceRole; restore verification
+// captures the node's already-restored target with TargetRole.
+type RsyncCaptureRole string
+
+const (
+	RsyncCaptureSourceRole RsyncCaptureRole = "source"
+	RsyncCaptureTargetRole RsyncCaptureRole = "target"
+)
+
+func rsyncCapturePolicy(policy rsyncconfinement.Policy, role RsyncCaptureRole) ([]string, string, error) {
+	switch role {
+	case RsyncCaptureSourceRole:
+		return policy.SourceRoots, "rsync_capture_source", nil
+	case RsyncCaptureTargetRole:
+		return policy.TargetRoots, "rsync_capture_target", nil
+	default:
+		return nil, "", fmt.Errorf("unsupported rsync capture role %q", role)
+	}
+}
 
 var rsyncListEntryPattern = regexp.MustCompile(`^(.{11}) (.*)$`)
 
@@ -62,7 +82,7 @@ func rsyncCommandBinary(task model.Task) string {
 // CaptureRsyncManifest enumerates the exact Rsync selection and hashes the
 // source bytes before a mutable compatibility transfer starts. The listing is
 // produced by Rsync itself, so excludes are not approximated by a Go glob.
-func CaptureRsyncManifest(ctx context.Context, task model.Task) (string, error) {
+func CaptureRsyncManifest(ctx context.Context, task model.Task, role RsyncCaptureRole) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -78,7 +98,7 @@ func CaptureRsyncManifest(ctx context.Context, task model.Task) (string, error) 
 	layout := strings.TrimSpace(task.RsyncCaptureLayout)
 	root := task.RsyncCaptureRoot
 	if layout == "" {
-		layout, root, err = inferRsyncCaptureLayout(ctx, task, source)
+		layout, root, err = inferRsyncCaptureLayout(ctx, task, source, role)
 		if err != nil {
 			return "", err
 		}
@@ -104,12 +124,12 @@ func CaptureRsyncManifest(ctx context.Context, task model.Task) (string, error) 
 			entries = append(entries, model.RsyncCaptureManifestEntry{Path: path, Kind: selected.Kind})
 		}
 	} else {
-		listed, listErr := listRsyncCaptureEntries(ctx, task, source, rules)
+		listed, listErr := listRsyncCaptureEntries(ctx, task, source, rules, role)
 		if listErr != nil {
 			return "", listErr
 		}
 		if len(listed) == 0 && layout == model.TaskRunCaptureLayoutDirectoryContents {
-			kind, kindErr := rsyncCaptureSourceKind(ctx, task, strings.TrimSuffix(source, string(filepath.Separator)))
+			kind, kindErr := rsyncCaptureSourceKind(ctx, task, strings.TrimSuffix(source, string(filepath.Separator)), role)
 			if kindErr != nil || kind != "directory" {
 				return "", fmt.Errorf("rsync capture selection is empty or could not be enumerated")
 			}
@@ -160,7 +180,7 @@ func CaptureRsyncManifest(ctx context.Context, task model.Task) (string, error) 
 	if err := validateRsyncCaptureEntries(entries, layout, root, false); err != nil {
 		return "", err
 	}
-	if err := populateRsyncCaptureEvidence(ctx, task, source, layout, &entries); err != nil {
+	if err := populateRsyncCaptureEvidence(ctx, task, source, layout, root, rules, &entries, role); err != nil {
 		return "", err
 	}
 	if err := validateRsyncCaptureEntries(entries, layout, root, true); err != nil {
@@ -216,14 +236,6 @@ func validateRsyncCaptureEntries(entries []model.RsyncCaptureManifestEntry, layo
 	return nil
 }
 
-func validRsyncSHA256(value string) bool {
-	if len(value) != sha256.Size*2 {
-		return false
-	}
-	_, err := hex.DecodeString(value)
-	return err == nil
-}
-
 func validateRsyncCaptureLayout(layout, root string) error {
 	switch layout {
 	case model.TaskRunCaptureLayoutDirectoryRoot:
@@ -260,12 +272,12 @@ func validateRsyncCaptureRoot(root string) error {
 	return nil
 }
 
-func inferRsyncCaptureLayout(ctx context.Context, task model.Task, source string) (string, string, error) {
+func inferRsyncCaptureLayout(ctx context.Context, task model.Task, source string, role RsyncCaptureRole) (string, string, error) {
 	cleanSource := strings.TrimSuffix(source, string(filepath.Separator))
 	if cleanSource == "" {
 		cleanSource = source
 	}
-	kind, err := rsyncCaptureSourceKind(ctx, task, cleanSource)
+	kind, err := rsyncCaptureSourceKind(ctx, task, cleanSource, role)
 	if err != nil {
 		return "", "", err
 	}
@@ -287,8 +299,15 @@ func inferRsyncCaptureLayout(ctx context.Context, task model.Task, source string
 		target := task.RsyncTarget
 		targetIsDirectory := strings.HasSuffix(target, string(filepath.Separator))
 		if !targetIsDirectory && !util.IsRemotePathSpec(target) {
-			if info, statErr := os.Lstat(target); statErr == nil {
-				targetIsDirectory = info.IsDir()
+			policy, policyErr := rsyncconfinement.LoadPolicyFromEnv()
+			if policyErr != nil {
+				return "", "", policyErr
+			}
+			kind, kindErr := rsyncCaptureLocalPathKind(target, policy.TargetRoots, "rsync_capture_target")
+			if kindErr == nil {
+				targetIsDirectory = kind == "directory"
+			} else if !os.IsNotExist(kindErr) {
+				return "", "", kindErr
 			}
 		}
 		if targetIsDirectory {
@@ -303,63 +322,183 @@ func inferRsyncCaptureLayout(ctx context.Context, task model.Task, source string
 	}
 }
 
-func rsyncCaptureSourceKind(ctx context.Context, task model.Task, source string) (string, error) {
+func rsyncCaptureSourceKind(ctx context.Context, task model.Task, source string, role RsyncCaptureRole) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	policy, err := rsyncconfinement.LoadPolicyFromEnv()
+	if err != nil {
+		return "", err
+	}
+	checkedPath := strings.TrimSuffix(strings.TrimSpace(source), string(filepath.Separator))
+	if checkedPath == "" {
+		checkedPath = source
+	}
+	if strings.TrimSpace(task.Node.Host) != "" {
+		checkedPath = filepath.Clean(checkedPath)
+	}
+	roots, label, roleErr := rsyncCapturePolicy(policy, role)
+	if roleErr != nil {
+		return "", roleErr
+	}
+	if err := rsyncconfinement.ValidatePath(checkedPath, roots, label); err != nil {
+		return "", err
+	}
 	if strings.TrimSpace(task.Node.Host) == "" {
-		info, err := os.Lstat(source)
-		if err != nil {
-			if os.IsNotExist(err) {
+		kind, kindErr := rsyncCaptureLocalPathKind(checkedPath, roots, label)
+		if kindErr != nil {
+			if os.IsNotExist(kindErr) {
 				return "", fmt.Errorf("rsync capture source does not exist")
 			}
 			return "", fmt.Errorf("rsync capture source is unavailable")
 		}
-		switch {
-		case info.IsDir():
-			return "directory", nil
-		case info.Mode().IsRegular():
-			return "file", nil
-		case info.Mode()&os.ModeSymlink != 0:
-			return "symlink", nil
-		default:
-			return "", fmt.Errorf("unsupported rsync source type")
+		return kind, nil
+	}
+	listed, listErr := listRsyncCaptureEntries(ctx, task, checkedPath, nil, role)
+	if listErr != nil {
+		return "", fmt.Errorf("rsync capture source inspection failed")
+	}
+	if len(listed) == 0 {
+		return "", fmt.Errorf("rsync capture source does not exist")
+	}
+	base := filepath.Base(checkedPath)
+	for _, entry := range listed {
+		if strings.TrimSuffix(entry.path, string(filepath.Separator)) == base {
+			return entry.kind, nil
 		}
 	}
-	client, err := DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeIntegrityCheck)
-	if err != nil {
-		return "", fmt.Errorf("rsync capture source inspection failed")
-	}
-	defer func() { _ = client.Close() }()
-	command := fmt.Sprintf("if [ -L %s ]; then printf symlink; elif [ -d %s ]; then printf directory; elif [ -f %s ]; then printf file; else exit 1; fi", ShellEscape(source), ShellEscape(source), ShellEscape(source))
-	if NeedsSudo(task.Node) {
-		command = WrapWithSudoShell(command)
-	}
-	output, err := RunSSHCommandOutput(ctx, client, command)
-	if err != nil {
-		return "", fmt.Errorf("rsync capture source inspection failed")
-	}
-
-	kind := strings.TrimSpace(output)
-	if kind != "directory" && kind != "file" && kind != "symlink" {
-		return "", fmt.Errorf("unsupported rsync source type")
-	}
-	return kind, nil
+	return listed[0].kind, nil
 }
 
-func listRsyncCaptureEntries(ctx context.Context, task model.Task, source string, rules []string) ([]rsyncCaptureListEntry, error) {
-	args := []string{"-a", "--dry-run", "--8-bit-output", "--out-format=%i %n"}
+func prepareRsyncCaptureSource(
+	ctx context.Context,
+	task model.Task,
+	source string,
+	policy rsyncconfinement.Policy,
+	role RsyncCaptureRole,
+) (operand, localSource string, transportArgs, runtimeReadPaths []string, cleanup func(), err error) {
+	cleanup = func() {}
+	roots, label, roleErr := rsyncCapturePolicy(policy, role)
+	if roleErr != nil {
+		return "", "", nil, nil, cleanup, roleErr
+	}
+	if strings.TrimSpace(task.Node.Host) == "" {
+		if policy.Configured() && util.IsRemotePathSpec(source) {
+			return "", "", nil, nil, cleanup, fmt.Errorf("受限 Rsync 捕获不支持未绑定节点的远程源")
+		}
+		if err := rsyncconfinement.ValidatePath(strings.TrimSuffix(strings.TrimSpace(source), string(filepath.Separator)), roots, label); err != nil {
+			return "", "", nil, nil, cleanup, err
+		}
+		return source, source, nil, nil, cleanup, nil
+	}
+	remotePath := filepath.Clean(strings.TrimSuffix(strings.TrimSpace(source), string(filepath.Separator)))
+	if remotePath == "." || !filepath.IsAbs(remotePath) {
+		return "", "", nil, nil, cleanup, fmt.Errorf("rsync capture remote source must be absolute")
+	}
+	operand = fmt.Sprintf("%s@%s:%s", ResolveSSHUser(task.Node), formatRsyncHost(task.Node.Host), source)
+	sshParts, sshCleanup, sshErr := buildRsyncSSHArgs(ctx, task.Node, sshutil.PurposeIntegrityCheck)
+	if sshErr != nil {
+		return "", "", nil, nil, cleanup, fmt.Errorf("rsync capture SSH setup failed")
+	}
+	cleanup = sshCleanup
+	transportArgs = append(transportArgs, "-e", strings.Join(sshParts, " "))
+	if len(roots) > 0 {
+		remoteCommand, remoteErr := rsyncconfinement.BuildRemoteRsyncPath(
+			"read", "", rsyncCommandBinary(task), roots, remotePath, NeedsSudo(task.Node),
+		)
+		if remoteErr != nil {
+			cleanup()
+			return "", "", nil, nil, func() {}, remoteErr
+		}
+		transportArgs = append(transportArgs, "--rsync-path", remoteCommand)
+	} else if NeedsSudo(task.Node) {
+		transportArgs = append(transportArgs, "--rsync-path", "sudo "+rsyncCommandBinary(task))
+	}
+	return operand, "", transportArgs, rsyncSSHRuntimeReadPaths(sshParts), cleanup, nil
+}
+
+func runRsyncCaptureCommand(
+	ctx context.Context,
+	task model.Task,
+	args []string,
+	localSource string,
+	localTarget string,
+	trustedLocalSource bool,
+	localSourceTargetRole bool,
+	runtimeReadPaths []string,
+	stdout, stderr io.Writer,
+) error {
+	cmd, cleanup, err := rsyncconfinement.NewCommand(ctx, rsyncconfinement.CommandRequest{
+		Binary:                rsyncCommandBinary(task),
+		Args:                  args,
+		LocalSource:           localSource,
+		LocalTarget:           localTarget,
+		LocalSourceTargetRole: localSourceTargetRole,
+		RuntimeReadPaths:      append([]string(nil), runtimeReadPaths...),
+		TrustedLocalSource:    trustedLocalSource,
+		TrustedLocalTarget:    true,
+	})
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	return cmd.Run()
+}
+
+func copyRsyncCaptureSelection(ctx context.Context, task model.Task, source string, rules []string, role RsyncCaptureRole) (string, error) {
+	policy, err := rsyncconfinement.LoadPolicyFromEnv()
+	if err != nil {
+		return "", err
+	}
+	operand, localSource, transportArgs, runtimeReadPaths, cleanup, err := prepareRsyncCaptureSource(ctx, task, source, policy, role)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+	destination, err := os.MkdirTemp("", "xirang-rsync-capture-evidence-*")
+	if err != nil {
+		return "", fmt.Errorf("create rsync capture evidence tree: %w", err)
+	}
+	_ = os.Chmod(destination, 0o700)
+	args := []string{"-a", "--8-bit-output"}
 	args = appendRsyncExcludeArgs(args, rules)
-	cleanup := func() {}
-	operand := source
-	if strings.TrimSpace(task.Node.Host) != "" {
-		operand = fmt.Sprintf("%s@%s:%s", ResolveSSHUser(task.Node), formatRsyncHost(task.Node.Host), source)
-		sshParts, sshCleanup, err := buildRsyncSSHArgs(ctx, task.Node, sshutil.PurposeIntegrityCheck)
-		if err != nil {
-			return nil, fmt.Errorf("rsync capture SSH setup failed")
-		}
-		cleanup = sshCleanup
-		args = append(args, "-e", strings.Join(sshParts, " "))
-		if NeedsSudo(task.Node) {
-			args = append(args, "--rsync-path", "sudo rsync")
-		}
+	args = append(args, transportArgs...)
+	args = append(args, "--", operand, destination+string(filepath.Separator))
+	stdout := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureCommandBytes}
+	stderr := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureCommandBytes}
+	if err := runRsyncCaptureCommand(ctx, task, args, localSource, destination, false, role == RsyncCaptureTargetRole, runtimeReadPaths, stdout, stderr); err != nil {
+		_ = os.RemoveAll(destination)
+		return "", fmt.Errorf("rsync capture evidence copy failed")
+	}
+	return destination, nil
+}
+
+func rsyncCaptureStagedPath(staging, source, layout, root, relative string) string {
+	base := filepath.Clean(staging)
+	if layout == model.TaskRunCaptureLayoutDirectoryRoot || layout == model.TaskRunCaptureLayoutSingleFile {
+		sourceBase := filepath.Base(filepath.Clean(strings.TrimSuffix(source, string(filepath.Separator))))
+		base = filepath.Join(base, sourceBase)
+	}
+	if relative == "" {
+		return base
+	}
+	return filepath.Join(base, filepath.FromSlash(relative))
+}
+
+func listRsyncCaptureEntries(ctx context.Context, task model.Task, source string, rules []string, role RsyncCaptureRole) ([]rsyncCaptureListEntry, error) {
+	policy, err := rsyncconfinement.LoadPolicyFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	operand, localSource, transportArgs, runtimeReadPaths, cleanup, err := prepareRsyncCaptureSource(ctx, task, source, policy, role)
+	if err != nil {
+		return nil, err
 	}
 	defer cleanup()
 
@@ -369,14 +508,13 @@ func listRsyncCaptureEntries(ctx context.Context, task model.Task, source string
 	}
 	_ = os.Chmod(destination, 0o700)
 	defer func() { _ = os.RemoveAll(destination) }()
+	args := []string{"-a", "--dry-run", "--8-bit-output", "--out-format=%i %n"}
+	args = appendRsyncExcludeArgs(args, rules)
+	args = append(args, transportArgs...)
 	args = append(args, "--", operand, destination+string(filepath.Separator))
-	cmd := exec.CommandContext(ctx, rsyncCommandBinary(task), args...)
-	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
 	stdout := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureManifestLen}
 	stderr := &rsyncCaptureOutputBuffer{limit: maxRsyncCaptureCommandBytes}
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	if err := cmd.Run(); err != nil {
+	if err := runRsyncCaptureCommand(ctx, task, args, localSource, destination, false, role == RsyncCaptureTargetRole, runtimeReadPaths, stdout, stderr); err != nil {
 		return nil, fmt.Errorf("rsync capture selection failed")
 	}
 	lines := strings.Split(strings.TrimRight(stdout.buf.String(), "\r\n"), "\n")
@@ -490,193 +628,41 @@ func normalizeRsyncCapturePath(rawPath, kind, layout, root string) (string, erro
 	return path, nil
 }
 
-func populateRsyncCaptureEvidence(ctx context.Context, task model.Task, source, layout string, entries *[]model.RsyncCaptureManifestEntry) error {
-	if strings.TrimSpace(task.Node.Host) == "" {
-		for index := range *entries {
-			entry := &(*entries)[index]
-			path := localRsyncCaptureSourcePath(source, layout, entry.Path)
-			if err := populateLocalRsyncEntry(ctx, path, entry); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	client, err := DialSSHForNodePurpose(ctx, task.Node, sshutil.PurposeIntegrityCheck)
+func populateRsyncCaptureEvidence(
+	ctx context.Context,
+	task model.Task,
+	source, layout, root string,
+	rules []string,
+	entries *[]model.RsyncCaptureManifestEntry,
+	role RsyncCaptureRole,
+) error {
+	staging, err := copyRsyncCaptureSelection(ctx, task, source, rules, role)
 	if err != nil {
-		return fmt.Errorf("rsync capture source hashing failed")
+		return err
 	}
-	defer func() { _ = client.Close() }()
-	filePaths := make([]string, 0)
-	fileIndexes := make(map[string]int)
-	symlinkPaths := make([]string, 0)
-	symlinkIndexes := make(map[string]int)
-	directoryPaths := make([]string, 0)
+	defer func() { _ = os.RemoveAll(staging) }()
+
 	for index := range *entries {
 		entry := &(*entries)[index]
-		path := localRsyncCaptureSourcePath(source, layout, entry.Path)
-		switch entry.Kind {
-		case "directory":
-			directoryPaths = append(directoryPaths, path)
-		case "file":
-			filePaths = append(filePaths, path)
-			fileIndexes[path] = index
-		case "symlink":
-			symlinkPaths = append(symlinkPaths, path)
-			symlinkIndexes[path] = index
+		path := rsyncCaptureStagedPath(staging, source, layout, root, entry.Path)
+		if err := populateLocalRsyncEntry(ctx, path, entry); err != nil {
+			return err
 		}
 	}
-	for start := 0; start < len(directoryPaths); {
-		end := rsyncCaptureBatchEnd(directoryPaths, start, "for p in")
-		parts := make([]string, 0, end-start+2)
-		parts = append(parts, "for p in")
-		for _, path := range directoryPaths[start:end] {
-			parts = append(parts, ShellEscape(path))
+	if layout != model.TaskRunCaptureLayoutSingleFile {
+		verifyRoot := staging
+		if layout == model.TaskRunCaptureLayoutDirectoryRoot {
+			sourceBase := filepath.Base(filepath.Clean(strings.TrimSuffix(source, string(filepath.Separator))))
+			verifyRoot = filepath.Join(staging, sourceBase)
 		}
-		parts = append(parts, "; do test -d \"$p\" && test ! -L \"$p\" && find \"$p\" -mindepth 1 -maxdepth 1 -print0 > /dev/null || exit 1; done")
-		command := strings.Join(parts, " ")
-		if NeedsSudo(task.Node) {
-			command = WrapWithSudoShell(command)
-		}
-		if _, err := RunSSHCommandOutput(ctx, client, command); err != nil {
-			return fmt.Errorf("rsync capture directory is missing or unreadable")
-		}
-		start = end
-	}
-	for start := 0; start < len(filePaths); {
-		end := rsyncCaptureBatchEnd(filePaths, start, "for p in")
-		commandParts := make([]string, 0, (end-start)*2+12)
-		commandParts = append(commandParts, "for p in")
-		for _, path := range filePaths[start:end] {
-			commandParts = append(commandParts, ShellEscape(path))
-		}
-		commandParts = append(commandParts, `; do test -f "$p" && test ! -L "$p" || exit 1; h=$(sha256sum < "$p") || exit 1; h=${h%% *}; s=$(stat -c '%s' -- "$p") || exit 1; printf '%s\0%s\0%s\0' "$p" "$h" "$s"; done`)
-		hashCommand := strings.Join(commandParts, " ")
-		if NeedsSudo(task.Node) {
-			hashCommand = WrapWithSudoShell(hashCommand)
-		}
-		output, commandErr := RunSSHCommandOutput(ctx, client, hashCommand)
-		if commandErr != nil {
-			return fmt.Errorf("rsync capture source hashing failed")
-		}
-		if len(output) > maxRsyncCaptureManifestLen {
-			return fmt.Errorf("rsync capture source hash output is too large")
-		}
-		records := strings.Split(output, "\x00")
-		if len(records) == 0 || records[len(records)-1] != "" ||
-			len(records)-1 != (end-start)*3 {
-			return fmt.Errorf("rsync capture source hash output is invalid")
-		}
-		seen := make(map[string]struct{}, end-start)
-		for index := 0; index < len(records)-1; index += 3 {
-			path := records[index]
-			digest := records[index+1]
-			sizeText := records[index+2]
-			if path == "" || !validRsyncSHA256(digest) {
-				return fmt.Errorf("rsync capture source hash output is invalid")
-			}
-			size, parseErr := strconv.ParseInt(sizeText, 10, 64)
-			if parseErr != nil || size < 0 {
-				return fmt.Errorf("rsync capture source hash output is invalid")
-			}
-			entryIndex, ok := fileIndexes[path]
-			if !ok {
-				return fmt.Errorf("rsync capture source hash path is unexpected")
-			}
-			if _, exists := seen[path]; exists {
-				return fmt.Errorf("rsync capture source hash path is duplicated")
-			}
-			seen[path] = struct{}{}
-			(*entries)[entryIndex].SHA256 = digest
-			(*entries)[entryIndex].Size = size
-		}
-		if len(seen) != end-start {
-			return fmt.Errorf("rsync capture source hash set is incomplete")
-		}
-		start = end
-	}
-	for start := 0; start < len(symlinkPaths); {
-		end := rsyncCaptureBatchEnd(symlinkPaths, start, "for p in")
-		parts := make([]string, 0, (end-start)*2+8)
-		parts = append(parts, "for p in")
-		for _, path := range symlinkPaths[start:end] {
-			parts = append(parts, ShellEscape(path))
-		}
-		parts = append(parts, `; do t=$(readlink -n -- "$p"; rc=$?; printf '\001'; exit "$rc") || exit 1; t=${t%?}; printf '%s\0%s\0' "$p" "$t"; done`)
-		symlinkCommand := strings.Join(parts, " ")
-		if NeedsSudo(task.Node) {
-			symlinkCommand = WrapWithSudoShell(symlinkCommand)
-		}
-		output, commandErr := RunSSHCommandOutput(ctx, client, symlinkCommand)
-		if commandErr != nil {
-			return fmt.Errorf("rsync capture symlink evidence failed")
-		}
-		if len(output) > maxRsyncCaptureManifestLen {
-			return fmt.Errorf("rsync capture symlink output is too large")
-		}
-		records := strings.Split(output, "\x00")
-		if len(records) == 0 || records[len(records)-1] != "" ||
-			len(records)-1 != (end-start)*2 {
-			return fmt.Errorf("rsync capture symlink output is invalid")
-		}
-		seen := make(map[string]struct{}, end-start)
-		for index := 0; index < len(records)-1; index += 2 {
-			path := records[index]
-			target := records[index+1]
-			if path == "" || len(path) > maxRsyncCapturePathLen || len(target) > maxRsyncCapturePathLen {
-				return fmt.Errorf("rsync capture symlink output is invalid")
-			}
-			entryIndex, ok := symlinkIndexes[path]
-			if !ok {
-				return fmt.Errorf("rsync capture symlink path is unexpected")
-			}
-			if _, exists := seen[path]; exists {
-				return fmt.Errorf("rsync capture symlink path is duplicated")
-			}
-			seen[path] = struct{}{}
-			(*entries)[entryIndex].LinkTarget = target
-		}
-		if len(seen) != end-start {
-			return fmt.Errorf("rsync capture symlink evidence is incomplete")
-		}
-		start = end
-	}
-	for index := range *entries {
-		entry := &(*entries)[index]
-		if entry.Kind == "file" && entry.SHA256 == "" {
-			return fmt.Errorf("rsync capture source hash is missing")
-		}
-		if entry.Kind == "symlink" && entry.LinkTarget == "" {
-			return fmt.Errorf("rsync capture symlink target is missing")
+		manifest := model.RsyncCaptureManifest{Layout: layout, Root: root, Entries: *entries}
+		if err := verifyStagedRsyncTree(verifyRoot, manifest); err != nil {
+			return fmt.Errorf("rsync capture selection changed during evidence collection: %w", err)
 		}
 	}
 	return nil
 }
 
-func localRsyncCaptureSourcePath(source, layout, relative string) string {
-	clean := filepath.Clean(source)
-	if layout == model.TaskRunCaptureLayoutSingleFile || relative == "" {
-		return clean
-	}
-	return filepath.Join(clean, filepath.FromSlash(relative))
-}
-
-func rsyncCaptureBatchEnd(paths []string, start int, prefix string) int {
-	commandBytes := len(prefix)
-	end := start
-	for end < len(paths) {
-		escaped := ShellEscape(paths[end])
-		nextBytes := commandBytes + 1 + len(escaped)
-		if end > start && nextBytes > maxRsyncCaptureCommandBytes {
-			break
-		}
-		commandBytes = nextBytes
-		end++
-	}
-	if end == start {
-		return start + 1
-	}
-	return end
-}
 func hashLocalRsyncFile(ctx context.Context, path string) (string, int64, error) {
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
@@ -776,68 +762,333 @@ func VerifyRsyncCaptureManifestTarget(ctx context.Context, task model.Task, raw 
 	if err := validateRsyncCaptureEntries(manifest.Entries, manifest.Layout, manifest.Root, true); err != nil {
 		return fmt.Errorf("rsync capture evidence is invalid")
 	}
-	if strings.TrimSpace(task.RsyncTarget) == "" || !filepath.IsAbs(task.RsyncTarget) {
+	target := strings.TrimSpace(task.RsyncTarget)
+	if target == "" || !filepath.IsAbs(target) {
 		return fmt.Errorf("rsync capture target is not a Core-local absolute path")
 	}
-	base := task.RsyncTarget
+	policy, err := rsyncconfinement.LoadPolicyFromEnv()
+	if err != nil {
+		return err
+	}
+	resolved := target
+	directory := manifest.Layout != model.TaskRunCaptureLayoutSingleFile
+	if manifest.Layout == model.TaskRunCaptureLayoutDirectoryRoot ||
+		(manifest.Layout == model.TaskRunCaptureLayoutSingleFile && manifest.Root != "") {
+		resolved = filepath.Join(resolved, manifest.Root)
+	}
+	root, base, err := openRsyncCaptureVerificationRoot(resolved, policy.TargetRoots, directory)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
 	for _, entry := range manifest.Entries {
-		path := manifestTargetPath(base, manifest, entry.Path)
-		if err := verifyLocalRsyncEntry(ctx, path, entry); err != nil {
+		relative := rsyncCaptureManifestSourcePath(base, entry.Path)
+		if err := verifyRsyncRootEntry(ctx, root, relative, entry, "destination"); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func manifestTargetPath(base string, manifest model.RsyncCaptureManifest, relative string) string {
-	if manifest.Layout == model.TaskRunCaptureLayoutSingleFile {
-		if manifest.Root != "" {
-			return filepath.Join(base, manifest.Root)
+// VerifyRsyncCaptureManifestSource verifies the exact Core-local source bytes
+// selected by a stored manifest. It opens a descriptor-rooted filesystem and
+// stages no unselected files, so excluded files left beside a prior backup do
+// not change restore evidence.
+func VerifyRsyncCaptureManifestSource(ctx context.Context, task model.Task, raw string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	manifest, err := model.DecodeRsyncCaptureManifest(raw)
+	if err != nil || len(raw) > maxRsyncCaptureManifestLen {
+		return fmt.Errorf("rsync capture evidence is invalid")
+	}
+	if err := validateRsyncCaptureEntries(manifest.Entries, manifest.Layout, manifest.Root, true); err != nil {
+		return fmt.Errorf("rsync capture evidence is invalid")
+	}
+	if manifest.Layout == model.TaskRunCaptureLayoutSingleFile &&
+		(len(manifest.Entries) != 1 || manifest.Entries[0].Path != "" ||
+			(manifest.Entries[0].Kind != "file" && manifest.Entries[0].Kind != "symlink")) {
+		return fmt.Errorf("rsync capture single-file evidence is invalid")
+	}
+	if task.RsyncCaptureLayout != manifest.Layout || task.RsyncCaptureRoot != manifest.Root {
+		return fmt.Errorf("rsync capture metadata mismatch")
+	}
+	source := strings.TrimSpace(task.RsyncSource)
+	if source == "" || !filepath.IsAbs(source) || strings.ContainsRune(source, '\x00') {
+		return fmt.Errorf("rsync capture source is not a Core-local absolute path")
+	}
+	policy, err := rsyncconfinement.LoadPolicyFromEnv()
+	if err != nil {
+		return err
+	}
+	if len(policy.TargetRoots) > 0 {
+		if err := policy.ValidateTarget(source, "rsync_target"); err != nil {
+			return err
 		}
-		return base
 	}
-	if manifest.Layout == model.TaskRunCaptureLayoutDirectoryRoot {
-		base = filepath.Join(base, manifest.Root)
+	resolved := source
+	if manifest.Layout == model.TaskRunCaptureLayoutDirectoryRoot ||
+		(manifest.Layout == model.TaskRunCaptureLayoutSingleFile && manifest.Root != "") {
+		resolved = filepath.Join(resolved, manifest.Root)
 	}
+	root, base, err := openRsyncCaptureVerificationRoot(
+		resolved,
+		policy.TargetRoots,
+		manifest.Layout != model.TaskRunCaptureLayoutSingleFile,
+	)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	for _, entry := range manifest.Entries {
+		relative := rsyncCaptureManifestSourcePath(base, entry.Path)
+		if err := verifyRsyncRootEntry(ctx, root, relative, entry, "source"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func openRsyncCapturePathRoot(path string, allowedRoots []string) (*os.Root, string, error) {
+	clean := filepath.Clean(path)
+	if clean == "." || !filepath.IsAbs(clean) {
+		return nil, "", fmt.Errorf("rsync capture path must be absolute")
+	}
+	if len(allowedRoots) > 0 {
+		matchingRoots := make([]string, 0, len(allowedRoots))
+		for _, configuredRoot := range allowedRoots {
+			configuredRoot = filepath.Clean(strings.TrimSpace(configuredRoot))
+			if configuredRoot == "" || configuredRoot == "." {
+				continue
+			}
+			relative, err := filepath.Rel(configuredRoot, clean)
+			if err != nil || relative == ".." ||
+				strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+				continue
+			}
+			matchingRoots = append(matchingRoots, configuredRoot)
+		}
+		sort.SliceStable(matchingRoots, func(i, j int) bool {
+			return len(matchingRoots[i]) > len(matchingRoots[j])
+		})
+		var candidateErr error
+		for _, configuredRoot := range matchingRoots {
+			relative, relativeErr := filepath.Rel(configuredRoot, clean)
+			if relativeErr != nil {
+				candidateErr = relativeErr
+				continue
+			}
+			root, openErr := os.OpenRoot(configuredRoot)
+			if openErr != nil {
+				candidateErr = openErr
+				continue
+			}
+			if _, statErr := root.Lstat(relative); statErr != nil {
+				_ = root.Close()
+				candidateErr = statErr
+				continue
+			}
+			return root, relative, nil
+		}
+		if candidateErr != nil {
+			return nil, "", candidateErr
+		}
+		return nil, "", fmt.Errorf("%w: rsync capture path is outside configured roots", rsyncconfinement.ErrCapabilityUnavailable)
+	}
+	parent := filepath.Dir(clean)
+	root, err := os.OpenRoot(parent)
+	if err != nil {
+		return nil, "", err
+	}
+	return root, filepath.Base(clean), nil
+}
+
+func rsyncCaptureLocalPathKind(path string, allowedRoots []string, label string) (string, error) {
+	clean := filepath.Clean(strings.TrimSuffix(strings.TrimSpace(path), string(filepath.Separator)))
+	if err := rsyncconfinement.ValidatePath(clean, allowedRoots, label); err != nil {
+		return "", err
+	}
+	root, relative, err := openRsyncCapturePathRoot(clean, allowedRoots)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = root.Close() }()
+	info, err := root.Lstat(relative)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case info.IsDir():
+		return "directory", nil
+	case info.Mode().IsRegular():
+		return "file", nil
+	case info.Mode()&os.ModeSymlink != 0:
+		return "symlink", nil
+	default:
+		return "", fmt.Errorf("unsupported rsync source type")
+	}
+}
+
+func openRsyncCaptureVerificationRoot(path string, allowedRoots []string, directory bool) (*os.Root, string, error) {
+	clean := filepath.Clean(path)
+	base := filepath.Base(clean)
+	if base == string(filepath.Separator) {
+		base = "."
+	} else if err := validateRsyncCaptureRoot(base); err != nil {
+		return nil, "", err
+	}
+	parent := filepath.Dir(clean)
+	if directory {
+		if len(allowedRoots) == 0 {
+			root, err := os.OpenRoot(clean)
+			if err != nil {
+				return nil, "", fmt.Errorf("open rsync capture source root: %w", err)
+			}
+			return root, ".", nil
+		}
+		for _, configuredRoot := range allowedRoots {
+			configuredRoot = filepath.Clean(strings.TrimSpace(configuredRoot))
+			if configuredRoot == "" || configuredRoot == "." {
+				continue
+			}
+			relative, err := filepath.Rel(configuredRoot, clean)
+			if err != nil || relative == ".." ||
+				strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+				continue
+			}
+			allowed, err := os.OpenRoot(configuredRoot)
+			if err != nil {
+				continue
+			}
+			if relative == "." {
+				return allowed, ".", nil
+			}
+			root, openErr := allowed.OpenRoot(relative)
+			_ = allowed.Close()
+			if openErr != nil {
+				continue
+			}
+			return root, ".", nil
+		}
+		return nil, "", fmt.Errorf("%w: Core backup source is outside configured Rsync target roots", rsyncconfinement.ErrCapabilityUnavailable)
+	}
+	if len(allowedRoots) == 0 {
+		root, err := os.OpenRoot(parent)
+		if err != nil {
+			return nil, "", fmt.Errorf("open rsync capture source root: %w", err)
+		}
+		return root, base, nil
+	}
+	for _, configuredRoot := range allowedRoots {
+		configuredRoot = filepath.Clean(strings.TrimSpace(configuredRoot))
+		if configuredRoot == "" || configuredRoot == "." {
+			continue
+		}
+		relative, err := filepath.Rel(configuredRoot, parent)
+		if err != nil || relative == ".." ||
+			strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+			continue
+		}
+		allowed, err := os.OpenRoot(configuredRoot)
+		if err != nil {
+			continue
+		}
+		if relative == "." {
+			return allowed, base, nil
+		}
+		root, openErr := allowed.OpenRoot(relative)
+		_ = allowed.Close()
+		if openErr != nil {
+			continue
+		}
+		return root, base, nil
+	}
+	return nil, "", fmt.Errorf("%w: Core backup source is outside configured Rsync target roots", rsyncconfinement.ErrCapabilityUnavailable)
+}
+
+func rsyncCaptureManifestSourcePath(base, relative string) string {
 	if relative == "" {
 		return base
 	}
 	return filepath.Join(base, filepath.FromSlash(relative))
 }
 
-func verifyLocalRsyncEntry(ctx context.Context, path string, expected model.RsyncCaptureManifestEntry) error {
-	info, err := os.Lstat(path)
+func verifyRsyncRootEntry(ctx context.Context, root *os.Root, path string, expected model.RsyncCaptureManifestEntry, label string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	info, err := root.Lstat(path)
 	if err != nil {
-		return fmt.Errorf("rsync capture destination evidence is missing")
+		return fmt.Errorf("rsync capture %s evidence is missing", label)
 	}
 	switch expected.Kind {
 	case "directory":
-		if !info.IsDir() {
-			return fmt.Errorf("rsync capture destination type mismatch")
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("rsync capture %s evidence type mismatch", label)
 		}
-		if err := verifyRsyncDirectoryReadable(ctx, path); err != nil {
-			return err
+		directory, err := root.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+		if err != nil {
+			return fmt.Errorf("rsync capture %s directory is unreadable", label)
+		}
+		defer func() { _ = directory.Close() }()
+		openedInfo, err := directory.Stat()
+		if err != nil || !openedInfo.IsDir() || openedInfo.Mode()&os.ModeSymlink != 0 || !os.SameFile(info, openedInfo) {
+			return fmt.Errorf("rsync capture %s evidence type mismatch", label)
+		}
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			_, err := directory.Readdirnames(128)
+			if err == io.EOF {
+				return nil
+			}
+			if err != nil {
+				return fmt.Errorf("rsync capture %s directory enumeration failed", label)
+			}
 		}
 	case "file":
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("rsync capture destination type mismatch")
+			return fmt.Errorf("rsync capture %s evidence type mismatch", label)
 		}
-		digest, size, err := hashLocalRsyncFile(ctx, path)
-		if err != nil || digest != expected.SHA256 || (expected.Size >= 0 && size != expected.Size) {
-			return fmt.Errorf("rsync capture destination content mismatch")
+		file, err := root.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+		if err != nil {
+			return fmt.Errorf("rsync capture %s file is unreadable", label)
 		}
+		openedInfo, statErr := file.Stat()
+		if statErr != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
+			_ = file.Close()
+			return fmt.Errorf("rsync capture %s evidence type mismatch", label)
+		}
+		hasher := sha256.New()
+		size, copyErr := io.Copy(hasher, &rsyncCaptureContextReader{ctx: ctx, reader: file})
+		closeErr := file.Close()
+		if copyErr != nil {
+			return fmt.Errorf("rsync capture %s hashing failed", label)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("rsync capture %s close failed", label)
+		}
+		if hex.EncodeToString(hasher.Sum(nil)) != expected.SHA256 ||
+			(expected.Size >= 0 && size != expected.Size) {
+			return fmt.Errorf("rsync capture %s evidence content mismatch", label)
+		}
+		return nil
 	case "symlink":
 		if info.Mode()&os.ModeSymlink == 0 {
-			return fmt.Errorf("rsync capture destination type mismatch")
+			return fmt.Errorf("rsync capture %s evidence type mismatch", label)
 		}
-		target, err := os.Readlink(path)
+		target, err := root.Readlink(path)
 		if err != nil || target != expected.LinkTarget {
-			return fmt.Errorf("rsync capture destination symlink mismatch")
+			return fmt.Errorf("rsync capture %s evidence symlink mismatch", label)
 		}
+		return nil
 	default:
 		return fmt.Errorf("rsync capture evidence has unsupported entry type")
 	}
-	return nil
 }
 
 // ResolveRsyncRestoreSource returns the Core path selected by captured layout.
@@ -890,6 +1141,23 @@ func RsyncSelectionDifferences(ctx context.Context, task model.Task, isRestore b
 	if source == "" || target == "" {
 		return 0, fmt.Errorf("rsync verification paths are empty")
 	}
+	policy, err := rsyncconfinement.LoadPolicyFromEnv()
+	if err != nil {
+		return 0, err
+	}
+	rules, err := parseRsyncExcludeRules(task.Policy)
+	if err != nil {
+		return 0, err
+	}
+	args := []string{"-a", "--dry-run", "--checksum", "--delete", "--out-format=%i %n%L"}
+	args = appendRsyncExcludeArgs(args, rules)
+	sourceOperand := source
+	targetOperand := target
+	localSource := ""
+	localTarget := ""
+	trustedLocalSource := false
+	runtimeReadPaths := []string(nil)
+
 	if isRestore {
 		if strings.ContainsRune(source, '\x00') || util.IsRemotePathSpec(source) || !filepath.IsAbs(source) {
 			return 0, fmt.Errorf("rsync verification source is not Core-local")
@@ -898,45 +1166,64 @@ func RsyncSelectionDifferences(ctx context.Context, task model.Task, isRestore b
 		if err != nil {
 			return 0, fmt.Errorf("rsync verification source is unavailable")
 		}
-		source, err = ResolveRsyncRestoreSource(source, info, task.RsyncCaptureLayout, task.RsyncCaptureRoot)
+		sourceOperand, err = ResolveRsyncRestoreSource(source, info, task.RsyncCaptureLayout, task.RsyncCaptureRoot)
 		if err != nil {
 			return 0, err
 		}
+		localSource = sourceOperand
+		trustedLocalSource = true
 		if strings.TrimSpace(task.Node.Host) == "" {
 			return 0, fmt.Errorf("rsync verification node is unavailable")
 		}
-	} else if strings.TrimSpace(task.Node.Host) != "" {
-		source = fmt.Sprintf("%s@%s:%s", ResolveSSHUser(task.Node), formatRsyncHost(task.Node.Host), source)
-	}
-	rules, err := parseRsyncExcludeRules(task.Policy)
-	if err != nil {
-		return 0, err
-	}
-	args := []string{"-a", "--dry-run", "--checksum", "--delete", "--out-format=%i %n%L"}
-	args = appendRsyncExcludeArgs(args, rules)
-	cleanup := func() {}
-	if strings.TrimSpace(task.Node.Host) != "" {
-		sshParts, sshCleanup, err := buildRsyncSSHArgs(ctx, task.Node, sshutil.PurposeIntegrityCheck)
-		if err != nil {
+		sshParts, sshCleanup, sshErr := buildRsyncSSHArgs(ctx, task.Node, sshutil.PurposeIntegrityCheck)
+		if sshErr != nil {
 			return 0, fmt.Errorf("rsync verification SSH setup failed")
 		}
-		cleanup = sshCleanup
+		defer sshCleanup()
 		args = append(args, "-e", strings.Join(sshParts, " "))
-		if NeedsSudo(task.Node) {
-			args = append(args, "--rsync-path", "sudo rsync")
+		runtimeReadPaths = rsyncSSHRuntimeReadPaths(sshParts)
+		targetOperand = fmt.Sprintf("%s@%s:%s", ResolveSSHUser(task.Node), formatRsyncHost(task.Node.Host), target)
+		if len(policy.TargetRoots) > 0 {
+			remoteCommand, remoteErr := rsyncconfinement.BuildRemoteRsyncPath(
+				"write", "", rsyncCommandBinary(task), policy.TargetRoots, target, NeedsSudo(task.Node),
+			)
+			if remoteErr != nil {
+				return 0, remoteErr
+			}
+			args = append(args, "--rsync-path", remoteCommand)
+		} else if NeedsSudo(task.Node) {
+			args = append(args, "--rsync-path", "sudo "+rsyncCommandBinary(task))
 		}
+	} else if strings.TrimSpace(task.Node.Host) != "" {
+		operand, _, transportArgs, paths, sourceCleanup, sourceErr := prepareRsyncCaptureSource(ctx, task, source, policy, RsyncCaptureSourceRole)
+		if sourceErr != nil {
+			return 0, sourceErr
+		}
+		defer sourceCleanup()
+		sourceOperand = operand
+		args = append(args, transportArgs...)
+		localTarget = target
+		runtimeReadPaths = paths
+	} else {
+		if policy.Configured() && util.IsRemotePathSpec(target) {
+			return 0, fmt.Errorf("受限 Rsync 验证不支持未绑定节点的远程目标")
+		}
+		if err := policy.ValidateSource(source, "rsync_verification_source"); err != nil {
+			return 0, err
+		}
+		localSource = source
+		localTarget = target
 	}
-	defer cleanup()
-	args = append(args, "--", source, target)
-	cmd := exec.CommandContext(ctx, rsyncCommandBinary(task), args...)
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+
+	args = append(args, "--", sourceOperand, targetOperand)
+	var stdout, stderr rsyncCaptureOutputBuffer
+	stdout.limit = maxRsyncCaptureManifestLen
+	stderr.limit = maxRsyncCaptureCommandBytes
+	if err := runRsyncCaptureCommand(ctx, task, args, localSource, localTarget, trustedLocalSource, false, runtimeReadPaths, &stdout, &stderr); err != nil {
 		return 0, fmt.Errorf("rsync verification comparison failed")
 	}
 	differences := 0
-	for _, line := range strings.Split(strings.TrimRight(stdout.String(), "\r\n"), "\n") {
+	for _, line := range strings.Split(strings.TrimRight(stdout.buf.String(), "\r\n"), "\n") {
 		if strings.TrimSpace(line) != "" {
 			differences++
 		}

@@ -2,7 +2,9 @@ package gorm
 
 import (
 	"context"
+	"errors"
 	"sort"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -79,6 +81,29 @@ func (r *TaskRepository) Update(ctx context.Context, task *model.Task) error {
 	return nil
 }
 
+// UpdateWithRevision performs the task edit compare-and-set. The timestamp
+// predicate is evaluated by the database in the same transaction as the
+// update, so two writers holding the same stale revision cannot overwrite
+// one another. GORM's update callbacks still run to encrypt ExecutorConfig
+// and advance UpdatedAt.
+func (r *TaskRepository) UpdateWithRevision(ctx context.Context, task *model.Task, expected time.Time) error {
+	if r == nil || r.db == nil || task == nil {
+		return apperr.WrapDBError(gorm.ErrInvalidData)
+	}
+	result := r.db.WithContext(ctx).Model(&model.Task{}).
+		Where("id = ? AND archived_at IS NULL AND updated_at = ?", task.ID, expected).
+		Select("*").
+		Omit("ID", "CreatedAt", "ArchivedAt").
+		Updates(task)
+	if result.Error != nil {
+		return apperr.WrapDBError(result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return repository.ErrTaskRevisionConflict
+	}
+	return nil
+}
+
 // Delete removes a task by its primary key.
 func (r *TaskRepository) Delete(ctx context.Context, id uint) error {
 	return apperr.WrapDBError(r.db.WithContext(ctx).Delete(&model.Task{}, id).Error)
@@ -91,6 +116,45 @@ func (r *TaskRepository) ExistsByID(ctx context.Context, id uint) (bool, error) 
 		return false, apperr.WrapDBError(err)
 	}
 	return count > 0, nil
+}
+
+// LockTaskUpdateReferences acquires referenced rows in the repository-wide
+// policy -> task -> node order. Existing policy and node rows remain locked
+// through the task update, closing the validation-to-write deletion race.
+func (r *TaskRepository) LockTaskUpdateReferences(ctx context.Context, taskID, nodeID uint, policyID *uint) error {
+	if r == nil || r.db == nil {
+		return apperr.WrapDBError(gorm.ErrInvalidDB)
+	}
+	if policyID != nil {
+		var policy model.Policy
+		err := r.db.WithContext(ctx).
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Select("id").
+			First(&policy, *policyID).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return repository.ErrTaskPolicyNotFound
+		}
+		if err != nil {
+			return apperr.WrapDBError(err)
+		}
+	}
+	if err := r.LockIDsForUpdate(ctx, []uint{taskID}); err != nil {
+		return err
+	}
+	if nodeID != 0 {
+		var node model.Node
+		err := r.db.WithContext(ctx).
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Select("id").
+			First(&node, nodeID).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return repository.ErrTaskNodeNotFound
+		}
+		if err != nil {
+			return apperr.WrapDBError(err)
+		}
+	}
+	return nil
 }
 
 // ExistsLiveByID returns true if an unarchived task with the given id exists.

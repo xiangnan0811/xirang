@@ -2353,6 +2353,12 @@ func (m *Manager) reconcileSchedules(ctx context.Context) error {
 	for _, one := range tasks {
 		keep[one.ID] = struct{}{}
 		if err := m.SyncSchedule(one); err != nil {
+			if cronutil.IsInvalidSpecError(err) {
+				m.RemoveSchedule(one.ID)
+				logger.Module("task").Warn().Uint("task_id", one.ID).Err(err).
+					Msg("跳过无效 cron 任务，继续加载其他任务")
+				continue
+			}
 			return err
 		}
 	}
@@ -2416,6 +2422,7 @@ func (m *Manager) SyncSchedule(task model.Task) error {
 		Enabled    bool       `gorm:"column:enabled"`
 		CronSpec   string     `gorm:"column:cron_spec"`
 		NextRunAt  *time.Time `gorm:"column:next_run_at"`
+		PolicyID   *uint      `gorm:"column:policy_id"`
 	}
 
 	var registeredSpec string
@@ -2423,18 +2430,41 @@ func (m *Manager) SyncSchedule(task model.Task) error {
 	for range 4 {
 		var current scheduleState
 		result := m.db.Model(&model.Task{}).
-			Select("archived_at, status, enabled, cron_spec, next_run_at").
+			Select("archived_at, status, enabled, cron_spec, next_run_at, policy_id").
 			Where("id = ?", task.ID).Limit(1).Find(&current)
 		if result.Error != nil {
 			return fmt.Errorf("load task schedule state: %w", result.Error)
 		}
-		if result.RowsAffected != 1 || !current.Enabled || current.ArchivedAt != nil ||
+		if result.RowsAffected != 1 {
+			m.removeScheduleLocked(task.ID)
+			return nil
+		}
+		if current.PolicyID != nil {
+			var policyState struct {
+				Enabled bool `gorm:"column:enabled"`
+			}
+			policyResult := m.db.Model(&model.Policy{}).
+				Select("enabled").Where("id = ?", *current.PolicyID).Limit(1).Find(&policyState)
+			if policyResult.Error != nil {
+				return fmt.Errorf("load policy schedule state: %w", policyResult.Error)
+			}
+			// A disabled or missing policy owns no runnable schedule. Keep
+			// explicit task cron text durable; Pause/Resume owns its cursor.
+			if policyResult.RowsAffected != 1 || !policyState.Enabled {
+				m.removeScheduleLocked(task.ID)
+				return nil
+			}
+		}
+		if !current.Enabled || current.ArchivedAt != nil ||
 			strings.TrimSpace(current.CronSpec) == "" {
 			m.removeScheduleLocked(task.ID)
 			return nil
 		}
 
 		registeredSpec = strings.TrimSpace(current.CronSpec)
+		if err := cronutil.Validate(registeredSpec); err != nil {
+			return fmt.Errorf("task cron expression is invalid: %w", err)
+		}
 		registrationNext = normalizeCronOccurrence(current.NextRunAt)
 		currentStatus := ParseStatus(current.Status)
 		activeRetry := false

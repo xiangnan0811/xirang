@@ -28,10 +28,11 @@ func TestRecoveryReviewF7MixedVersionRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.AuditLog{}, &model.TokenRevocation{}); err != nil {
 		t.Fatal(err)
 	}
 	jwtManager := auth.NewJWTManager("FAKE_RECOVERY_MIXED_VERSION_SIGNING_KEY_FOR_TEST_ONLY", time.Hour)
+	jwtManager.SetDB(db)
 	user := model.User{
 		Username: "recovery-mixed-version-admin", PasswordHash: "FAKE_HASH_FOR_TEST_ONLY",
 		Role: "admin", TokenVersion: 1,

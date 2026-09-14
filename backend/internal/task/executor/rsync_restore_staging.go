@@ -389,9 +389,20 @@ func verifyStagedRsyncManifest(ctx context.Context, verifyBase, stagedRoot strin
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	resolved := verifyBase
+	directory := manifest.Layout != model.TaskRunCaptureLayoutSingleFile
+	if manifest.Layout == model.TaskRunCaptureLayoutDirectoryRoot ||
+		(manifest.Layout == model.TaskRunCaptureLayoutSingleFile && manifest.Root != "") {
+		resolved = filepath.Join(resolved, manifest.Root)
+	}
+	root, base, err := openRsyncCaptureVerificationRoot(resolved, nil, directory)
+	if err != nil {
+		return fmt.Errorf("rsync restore staged evidence root unavailable: %w", err)
+	}
+	defer func() { _ = root.Close() }()
 	for _, entry := range manifest.Entries {
-		path := manifestTargetPath(verifyBase, manifest, entry.Path)
-		if err := verifyLocalRsyncEntry(ctx, path, entry); err != nil {
+		relative := rsyncCaptureManifestSourcePath(base, entry.Path)
+		if err := verifyRsyncRootEntry(ctx, root, relative, entry, "destination"); err != nil {
 			return fmt.Errorf("rsync restore staged evidence mismatch: %w", err)
 		}
 	}

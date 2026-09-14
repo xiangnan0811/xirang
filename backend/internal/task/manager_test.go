@@ -386,7 +386,9 @@ func openManagerTestDB(t *testing.T) *gorm.DB {
 	// a post-shutdown assertion. Keep one connection to serialize manager
 	// workers and test reads; _busy_timeout remains a contention fallback.
 	dsn := fmt.Sprintf("file:%s/manager.db?_busy_timeout=5000&_txlock=immediate&_loc=UTC", t.TempDir())
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		NowFunc: func() time.Time { return time.Now().UTC() },
+	})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
@@ -416,7 +418,9 @@ func openConcurrentManagerTestDB(t *testing.T) *gorm.DB {
 	secure.ResetForTesting()
 	t.Cleanup(secure.ResetForTesting)
 	dsn := fmt.Sprintf("file:%s/manager.db?_busy_timeout=5000&_txlock=immediate&_loc=UTC", t.TempDir())
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		NowFunc: func() time.Time { return time.Now().UTC() },
+	})
 	if err != nil {
 		t.Fatalf("打开并发测试数据库失败: %v", err)
 	}

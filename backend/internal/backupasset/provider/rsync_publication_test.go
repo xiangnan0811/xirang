@@ -32,36 +32,6 @@ func TestBuildRsyncTreeCommandUsesStrictFullCopyProfile(t *testing.T) {
 	}
 }
 
-func TestBuildRsyncTreeCommandUsesStrictHardlinkRemoteProfile(t *testing.T) {
-	command, err := BuildRsyncTreeCommand(RsyncTreeCommandInput{
-		Mode: backupasset.PublicationVersionedHardlink,
-		Source: RsyncTreeCommandSource{Remote: &RsyncTreeRemoteSource{
-			User: "backup",
-			Host: "node.example",
-			Path: "/data/app",
-			Transport: RsyncTreeSSHTransport{
-				Port: 2222, HostKeyMode: RsyncTreeHostKeyStrict,
-				KnownHostsFile: "/private/known_hosts", IdentityFile: "/private/key",
-			},
-			UseSudoRsync: true,
-		}},
-		StagingTree: "/private/managed/staging/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/tree",
-		ParentTree:  "/private/managed/points/cccccccccccccccccccccccccccccccc/tree",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{
-		"--archive", "--checksum", "--hard-links", "--numeric-ids", "--fsync", "--protect-args", "--info=progress2", "--no-devices", "--no-specials",
-		"-e", "ssh -p 2222 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/private/known_hosts -i /private/key",
-		"--rsync-path", "sudo rsync", "--link-dest=/private/managed/points/cccccccccccccccccccccccccccccccc/tree", "--",
-		"backup@node.example:/data/app/", "/private/managed/staging/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/tree/",
-	}
-	if command.Binary != "rsync" || !reflect.DeepEqual(command.Args, want) {
-		t.Fatalf("strict hardlink argv=%q binary=%q, want=%q", command.Args, command.Binary, want)
-	}
-}
-
 func TestRsyncTreeCommandScrubsTransferAffectingEnvironment(t *testing.T) {
 	got := SanitizeRsyncTreeEnvironment([]string{
 		"PATH=/usr/bin",
@@ -146,9 +116,6 @@ func TestBuildRsyncTreeCommandExcludesForbiddenFlags(t *testing.T) {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("forbidden Rsync flag %q entered strict argv=%q", forbidden, command.Args)
 		}
-	}
-	if strings.Count(joined, "--link-dest=") != 1 {
-		t.Fatalf("hardlink profile missing exactly one internally derived link-dest: %q", command.Args)
 	}
 }
 

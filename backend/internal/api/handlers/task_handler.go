@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -137,6 +140,175 @@ type taskRequest struct {
 	CronSpec        string `json:"cron_spec"`
 }
 
+// taskUpdateRequest keeps raw JSON members so omitted fields remain
+// distinguishable from explicit empty/null values. Create requests retain the
+// historical complete task shape above; updates use this separate protocol.
+type taskUpdateRequest struct {
+	ExpectedRevision json.RawMessage `json:"expected_revision"`
+	Name             json.RawMessage `json:"name"`
+	NodeID           json.RawMessage `json:"node_id"`
+	PolicyID         json.RawMessage `json:"policy_id"`
+	DependsOnTaskID  json.RawMessage `json:"depends_on_task_id"`
+	Command          json.RawMessage `json:"command"`
+	RsyncSource      json.RawMessage `json:"rsync_source"`
+	RsyncTarget      json.RawMessage `json:"rsync_target"`
+	ExecutorType     json.RawMessage `json:"executor_type"`
+	CronSpec         json.RawMessage `json:"cron_spec"`
+	ExecutorSettings json.RawMessage `json:"executor_settings"`
+	ExecutorSecrets  json.RawMessage `json:"executor_secrets"`
+}
+
+// TaskUpdateExecutorSettingsSchema describes the optional executor settings
+// accepted by the typed Swagger task update body.
+type TaskUpdateExecutorSettingsSchema struct {
+	ExcludePatterns   []string `json:"exclude_patterns"`
+	RepositoryVersion *int     `json:"repository_version" extensions:"x-nullable"`
+	BandwidthLimit    string   `json:"bandwidth_limit"`
+	Transfers         int      `json:"transfers"`
+}
+
+// TaskUpdateExecutorSecretsSchema describes the optional executor secrets
+// accepted by the typed Swagger task update body.
+type TaskUpdateExecutorSecretsSchema struct {
+	RepositoryPassword string `json:"repository_password" format:"password"`
+}
+
+// TaskUpdateRequestSchema is the typed Swagger body schema for the
+// presence-aware update protocol. Runtime decoding intentionally uses
+// taskUpdateRequest above so omission, explicit empty values, and nullable
+// relationship clears remain distinguishable.
+type TaskUpdateRequestSchema struct {
+	ExpectedRevision string                            `json:"expected_revision" binding:"required" minLength:"1" maxLength:"20" example:"1789344404185193005"`
+	Name             string                            `json:"name"`
+	NodeID           uint                              `json:"node_id"`
+	PolicyID         *uint                             `json:"policy_id" extensions:"x-nullable"`
+	DependsOnTaskID  *uint                             `json:"depends_on_task_id" extensions:"x-nullable"`
+	Command          string                            `json:"command"`
+	RsyncSource      string                            `json:"rsync_source"`
+	RsyncTarget      string                            `json:"rsync_target"`
+	ExecutorType     string                            `json:"executor_type"`
+	CronSpec         string                            `json:"cron_spec"`
+	ExecutorSettings *TaskUpdateExecutorSettingsSchema `json:"executor_settings"`
+	ExecutorSecrets  *TaskUpdateExecutorSecretsSchema  `json:"executor_secrets"`
+}
+
+func parseTaskUpdateRequest(req taskUpdateRequest) (task.UpdateTaskInput, error) {
+	var result task.UpdateTaskInput
+	if len(req.ExpectedRevision) == 0 {
+		return result, fmt.Errorf("expected_revision is required")
+	}
+	var revision string
+	if isJSONNull(req.ExpectedRevision) || json.Unmarshal(req.ExpectedRevision, &revision) != nil {
+		return result, fmt.Errorf("expected_revision must be a string")
+	}
+	result.ExpectedRevision = revision
+
+	var err error
+	result.Name, err = parsePresentTaskString(req.Name, "name")
+	if err != nil {
+		return result, err
+	}
+	result.NodeID, err = parsePresentTaskUint(req.NodeID, "node_id", false)
+	if err != nil {
+		return result, err
+	}
+	result.PolicyID, result.PolicyIDSet, err = parseNullableTaskUint(req.PolicyID, "policy_id")
+	if err != nil {
+		return result, err
+	}
+	result.DependsOnTaskID, result.DependsOnTaskIDSet, err = parseNullableTaskUint(req.DependsOnTaskID, "depends_on_task_id")
+	if err != nil {
+		return result, err
+	}
+	result.Command, err = parsePresentTaskString(req.Command, "command")
+	if err != nil {
+		return result, err
+	}
+	result.RsyncSource, err = parsePresentTaskString(req.RsyncSource, "rsync_source")
+	if err != nil {
+		return result, err
+	}
+	result.RsyncTarget, err = parsePresentTaskString(req.RsyncTarget, "rsync_target")
+	if err != nil {
+		return result, err
+	}
+	result.ExecutorType, err = parsePresentTaskString(req.ExecutorType, "executor_type")
+	if err != nil {
+		return result, err
+	}
+	result.CronSpec, err = parsePresentTaskString(req.CronSpec, "cron_spec")
+	if err != nil {
+		return result, err
+	}
+	if len(req.ExecutorSettings) > 0 {
+		if isJSONNull(req.ExecutorSettings) {
+			return result, fmt.Errorf("executor_settings must be an object")
+		}
+		settings, parseErr := task.ParseExecutorSettingsPatch(req.ExecutorSettings)
+		if parseErr != nil {
+			return result, parseErr
+		}
+		result.ExecutorSettings = &settings
+	}
+	if len(req.ExecutorSecrets) > 0 {
+		if isJSONNull(req.ExecutorSecrets) {
+			return result, fmt.Errorf("executor_secrets must be an object")
+		}
+		secrets, parseErr := task.ParseExecutorSecretsPatch(req.ExecutorSecrets)
+		if parseErr != nil {
+			return result, parseErr
+		}
+		result.ExecutorSecrets = &secrets
+	}
+	return result, nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+}
+
+func parsePresentTaskString(raw json.RawMessage, field string) (*string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if isJSONNull(raw) {
+		return nil, fmt.Errorf("%s must not be null", field)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("%s must be a string", field)
+	}
+	return &value, nil
+}
+
+func parsePresentTaskUint(raw json.RawMessage, field string, allowNull bool) (*uint, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if isJSONNull(raw) {
+		if allowNull {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%s must not be null", field)
+	}
+	var value uint
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("%s must be an integer", field)
+	}
+	return &value, nil
+}
+
+func parseNullableTaskUint(raw json.RawMessage, field string) (*uint, bool, error) {
+	if len(raw) == 0 {
+		return nil, false, nil
+	}
+	if isJSONNull(raw) {
+		return nil, true, nil
+	}
+	value, err := parsePresentTaskUint(raw, field, false)
+	return value, true, err
+}
+
 type taskPolicyResponse struct {
 	ID   uint   `json:"id"`
 	Name string `json:"name"`
@@ -158,19 +330,31 @@ func sanitizeTaskForResponse(taskEntity model.Task) model.Task {
 }
 
 // taskResponse embeds the stable Task JSON shape and adds only explicit safe
-// nested Policy and publication projections. It must never contain binding,
-// root, marker, manifest, fence, command, credential, hook, or drill script
-// data from persistence models.
+// nested Policy, executor settings/status, revision, and publication
+// projections. It never serializes the encrypted executor_config.
 type taskResponse struct {
 	model.Task
-	Policy            *taskPolicyResponse                   `json:"policy,omitempty"`
-	RsyncPublication  *backupasset.RsyncVersioningSummary   `json:"rsync_publication,omitempty"`
-	RclonePublication *backupasset.RclonePublicationSummary `json:"rclone_publication,omitempty"`
+	Policy                    *taskPolicyResponse                   `json:"policy,omitempty"`
+	Revision                  string                                `json:"revision"`
+	ExecutorSettings          any                                   `json:"executor_settings"`
+	ExecutorSecretsConfigured any                                   `json:"executor_secrets_configured"`
+	RsyncPublication          *backupasset.RsyncVersioningSummary   `json:"rsync_publication,omitempty"`
+	RclonePublication         *backupasset.RclonePublicationSummary `json:"rclone_publication,omitempty"`
 }
 
 func (h *TaskHandler) taskResponse(ctx context.Context, taskEntity model.Task) taskResponse {
 	policy := taskPolicyResponseFor(taskEntity.Policy)
-	response := taskResponse{Task: sanitizeTaskForResponse(taskEntity), Policy: policy}
+	response := taskResponse{
+		Task:     sanitizeTaskForResponse(taskEntity),
+		Policy:   policy,
+		Revision: task.TaskRevision(taskEntity),
+	}
+	if settings, err := task.ProjectExecutorSettings(taskEntity.ExecutorType, taskEntity.ExecutorConfig); err == nil {
+		response.ExecutorSettings = settings
+	}
+	if configured, err := task.ProjectExecutorSecretsConfigured(taskEntity.ExecutorConfig); err == nil {
+		response.ExecutorSecretsConfigured = configured
+	}
 	if h == nil {
 		return response
 	}
@@ -415,11 +599,13 @@ func (h *TaskHandler) Create(c *gin.Context) {
 // @Accept       json
 // @Produce      json
 // @Param        id    path      int          true  "任务 ID"
-// @Param        body  body      taskRequest  true  "更新任务请求"
+// @Param        body  body      TaskUpdateRequestSchema  true  "更新任务请求"
 // @Success      200   {object}  handlers.Response{data=taskResponse}
 // @Failure      400   {object}  handlers.Response
 // @Failure      401   {object}  handlers.Response
+// @Failure      403   {object}  handlers.Response
 // @Failure      404   {object}  handlers.Response
+// @Failure      409   {object}  handlers.Response
 // @Failure      503   {object}  handlers.Response
 // @Router       /tasks/{id} [put]
 func (h *TaskHandler) Update(c *gin.Context) {
@@ -427,13 +613,44 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var req taskRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	var req taskUpdateRequest
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
 		respondBadRequest(c, "请求参数不合法")
 		return
 	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		respondBadRequest(c, "请求参数不合法")
+		return
+	}
+	input, err := parseTaskUpdateRequest(req)
+	if err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
 
-	if allowed, err := authorizeNodeOwnership(c, h.db, req.NodeID); err != nil {
+	// An omitted node_id retains the locked task's current node. Authorization
+	// still runs before the mutation, while the service revalidates all
+	// references against its transaction snapshot.
+	nodeID := uint(0)
+	if input.NodeID != nil {
+		nodeID = *input.NodeID
+	} else {
+		var current struct {
+			NodeID uint `gorm:"column:node_id"`
+		}
+		if result := h.db.Model(&model.Task{}).Select("node_id").Where("id = ?", id).Limit(1).Find(&current); result.Error != nil {
+			respondInternalError(c, result.Error)
+			return
+		} else if result.RowsAffected != 1 {
+			respondNotFound(c, "任务不存在")
+			return
+		}
+		nodeID = current.NodeID
+	}
+	if allowed, err := authorizeNodeOwnership(c, h.db, nodeID); err != nil {
 		respondInternalError(c, err)
 		return
 	} else if !allowed {
@@ -441,21 +658,14 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		return
 	}
 
-	taskEntity, err := h.service().UpdateTask(c.Request.Context(), id, task.CreateTaskInput{
-		Name:            req.Name,
-		NodeID:          req.NodeID,
-		PolicyID:        req.PolicyID,
-		DependsOnTaskID: req.DependsOnTaskID,
-		Command:         req.Command,
-		RsyncSource:     req.RsyncSource,
-		RsyncTarget:     req.RsyncTarget,
-		ExecutorType:    req.ExecutorType,
-		ExecutorConfig:  req.ExecutorConfig,
-		CronSpec:        req.CronSpec,
-	})
+	taskEntity, err := h.service().UpdateTask(c.Request.Context(), id, input)
 	if err != nil {
 		if errors.Is(err, task.ErrTaskArchived) {
 			respondConflict(c, "任务已归档，无法修改")
+			return
+		}
+		if errors.Is(err, task.ErrTaskRevisionConflict) {
+			respondConflict(c, "任务已被其他请求修改，请刷新后重试")
 			return
 		}
 		if errors.Is(err, task.ErrTaskScheduleSyncUnavailable) {

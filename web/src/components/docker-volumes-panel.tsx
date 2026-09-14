@@ -14,11 +14,12 @@ export function DockerVolumesPanel({ nodeId, token, onSelectPath }: Props) {
   const { t } = useTranslation();
   const [volumes, setVolumes] = useState<DockerVolume[]>([]);
   const [warning, setWarning] = useState<string>();
+  const [partial, setPartial] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
 
@@ -27,22 +28,23 @@ export function DockerVolumesPanel({ nodeId, token, onSelectPath }: Props) {
     setWarning(undefined);
 
     apiClient
-      .listDockerVolumes(token, nodeId)
+      .listDockerVolumes(token, nodeId, controller.signal)
       .then((res) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         setVolumes(res.volumes);
         setWarning(res.warning);
+        setPartial(res.partial);
       })
       .catch((err) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         setError(err instanceof Error ? err.message : t('dockerVolumes.loadFailed'));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       });
 
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [nodeId, token, t]);
 
@@ -67,7 +69,7 @@ export function DockerVolumesPanel({ nodeId, token, onSelectPath }: Props) {
     return (
       <div className="py-4 text-center text-sm text-muted-foreground">
         <HardDrive className="mx-auto mb-2 size-5 opacity-40" aria-hidden="true" />
-        <p>{t('dockerVolumes.noVolumes')}</p>
+        {!partial && <p>{t("dockerVolumes.noVolumes")}</p>}
         {warning && (
           <p className="mt-1 text-xs text-muted-foreground/70">{warning}</p>
         )}

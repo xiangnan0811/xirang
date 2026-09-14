@@ -2,11 +2,14 @@ package scheduler
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/robfig/cron/v3"
+
+	"xirang/backend/internal/cronutil"
 )
 
 type CronScheduler struct {
@@ -130,6 +133,7 @@ func (s *CronScheduler) RegisterTaskAt(
 	firstAt *time.Time,
 	fn func(time.Time),
 ) error {
+	spec = strings.TrimSpace(spec)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -154,8 +158,7 @@ func (s *CronScheduler) RegisterTaskAt(
 		return nil
 	}
 
-	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
-	schedule, err := parser.Parse(spec)
+	schedule, err := cronutil.Parse(spec)
 	if err != nil {
 		return fmt.Errorf("注册 cron 任务失败: %w", err)
 	}

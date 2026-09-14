@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"xirang/backend/internal/model"
+	"xirang/backend/internal/sshutil"
 	"xirang/backend/internal/task/testutil"
 )
 
@@ -21,6 +23,55 @@ func TestResticRunCancellationCleansPasswordViaIndependentSSH(t *testing.T) {
 
 func TestResticRestoreCancellationCleansPasswordViaIndependentSSH(t *testing.T) {
 	testResticLegacyCancellationCleansPassword(t, true)
+}
+func TestCreateResticPasswordFileSSHUsesExactSecretBytes(t *testing.T) {
+	sshdBinary, err := exec.LookPath("sshd")
+	if err != nil {
+		t.Skip("sshd is not installed")
+	}
+	t.Setenv("SSH_STRICT_HOST_KEY_CHECKING", "false")
+	t.Setenv("SSH_AUTO_ACCEPT_NEW_HOSTS", "false")
+	node := testutil.StartRsyncSSHServer(t, sshdBinary)
+
+	for _, test := range []struct {
+		name     string
+		password []byte
+	}{
+		{name: "empty", password: []byte{}},
+		{name: "special-bytes", password: []byte("line-one\nline-two'\"$HOME")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			passwordFilePath := filepath.Join(t.TempDir(), "private", "password")
+			command := BuildCreateResticPasswordFileCmd(passwordFilePath)
+			if len(test.password) > 0 && strings.Contains(command, string(test.password)) {
+				t.Fatalf("password appeared in creator command")
+			}
+			client, err := DialSSHForNodePurpose(context.Background(), node, sshutil.PurposeTaskBackup)
+			if err != nil {
+				t.Fatalf("dial SSH: %v", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			err = CreateResticPasswordFile(ctx, client, passwordFilePath, NewResticRepositoryAccess(string(test.password)))
+			cancel()
+			_ = client.Close()
+			if err != nil {
+				t.Fatalf("create password file: %v", err)
+			}
+			got, err := os.ReadFile(passwordFilePath)
+			if err != nil {
+				t.Fatalf("read password file: %v", err)
+			}
+			if !bytes.Equal(got, test.password) {
+				t.Fatalf("password bytes=%q, want=%q", got, test.password)
+			}
+			if err := CleanupResticPasswordFile(node, passwordFilePath, sshutil.PurposeTaskBackup); err != nil {
+				t.Fatalf("cleanup password file: %v", err)
+			}
+			if _, err := os.Lstat(passwordFilePath); !os.IsNotExist(err) {
+				t.Fatalf("password file remains after cleanup: %v", err)
+			}
+		})
+	}
 }
 
 func testResticLegacyCancellationCleansPassword(t *testing.T, restore bool) {

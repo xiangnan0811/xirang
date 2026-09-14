@@ -298,6 +298,7 @@ func (h *ConfigHandler) Export(c *gin.Context) {
 			"rsync_source":  t.RsyncSource,
 			"rsync_target":  t.RsyncTarget,
 			"cron_spec":     t.CronSpec,
+			"cron_override": t.CronOverride,
 			"source":        t.Source,
 			"enabled":       t.Enabled,
 		}
@@ -970,10 +971,33 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					CronSpec:        readStringField(taskData, "cron_spec"),
 				}
 				dependencyKey, hasDependency := resolveImportedDependencyKey(tx, taskData)
+				importedCronOverride, hasImportedCronOverride := readImportedBoolField(taskData, "cron_override")
 				explicitCronSpec := req.CronSpec
+				_, hasExplicitCronSpec := taskData["cron_spec"]
 				taskPkg.HydrateTaskDefaultsFromPolicy(persistCtx, importPolicyRepo, importNodeRepo, &req)
+				if hasImportedCronOverride && importedCronOverride && hasExplicitCronSpec {
+					// An explicitly exported empty cron is a deliberate manual
+					// schedule; policy hydration must not fill it back in.
+					req.CronSpec = explicitCronSpec
+				}
 				taskPkg.TrimTaskInput(&req)
 				taskPkg.InferTaskExecutor(&req, "")
+				// Imported snapshots are an explicit compatibility boundary.
+				// Normalize legacy Restic config here (including a ciphertext
+				// envelope produced by an external snapshot) before model hooks
+				// encrypt the destination row. Runtime reads never alias the
+				// removed append_only field.
+				if strings.EqualFold(strings.TrimSpace(req.ExecutorType), "restic") {
+					migratedConfig, migrateErr := taskPkg.NormalizeImportedResticConfig(req.ExecutorConfig)
+					if migrateErr != nil {
+						logger.Module("config").Warn().
+							Str("task", req.Name).
+							Err(migrateErr).
+							Msg("导入 Restic 任务兼容配置失败，跳过")
+						continue
+					}
+					req.ExecutorConfig = migratedConfig
+				}
 				managedRsyncImport := importedRsyncConfigRequiresDisconnect(req.ExecutorType, req.ExecutorConfig)
 				managedRcloneImport := importedRcloneConfigRequiresDisconnect(req.ExecutorType, req.ExecutorConfig)
 				if managedRsyncImport {
@@ -1017,13 +1041,6 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 				}
 				found := result.RowsAffected > 0
 				if found {
-					resolvedTaskIDs[taskKey] = existing.ID
-					if conflict != "overwrite" {
-						continue
-					}
-					if err := validateImportedTarget(req, existing.ID); err != nil {
-						return err
-					}
 					previousCronSpec := strings.TrimSpace(existing.CronSpec)
 					existing.DependsOnTaskID = nil
 					existing.Command = req.Command
@@ -1032,6 +1049,9 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					existing.ExecutorType = req.ExecutorType
 					existing.ExecutorConfig = req.ExecutorConfig
 					existing.CronSpec = req.CronSpec
+					if hasImportedCronOverride {
+						existing.CronOverride = importedCronOverride
+					}
 					existing.Source = readStringField(taskData, "source")
 					// Foreign managed publication configuration is always imported paused.
 					if managedRsyncImport || managedRcloneImport {
@@ -1064,6 +1084,9 @@ func (h *ConfigHandler) Import(c *gin.Context) {
 					Status:         "pending",
 					Source:         readStringField(taskData, "source"),
 					Enabled:        !managedRsyncImport && !managedRcloneImport,
+				}
+				if hasImportedCronOverride {
+					newTask.CronOverride = importedCronOverride
 				}
 				if newTask.Source == "" {
 					newTask.Source = "manual"

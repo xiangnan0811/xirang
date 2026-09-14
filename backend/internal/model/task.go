@@ -104,6 +104,7 @@ type Task struct {
 	ExecutorType       string     `gorm:"size:32;not null;default:local" json:"executor_type"`
 	ExecutorConfig     string     `gorm:"type:text" json:"-"`
 	CronSpec           string     `gorm:"size:128" json:"cron_spec"`
+	CronOverride       bool       `gorm:"not null;default:false" json:"-"`
 	Status             string     `gorm:"size:32;not null;index" json:"status"`
 	BatchID            string     `gorm:"size:64;index" json:"batch_id,omitempty"`
 	Source             string     `gorm:"size:32;not null;default:manual" json:"source"`

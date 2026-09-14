@@ -204,7 +204,7 @@ func TestRsyncExecutorSeparatesSameNodePolicyTargetsAndRestoresManifests(t *test
 	if code, runErr := runner.Run(context.Background(), taskA, func(string, string) {}, nil); runErr != nil || code != 0 {
 		t.Fatalf("policy A backup code=%d err=%v", code, runErr)
 	}
-	manifestARaw, err := CaptureRsyncManifest(context.Background(), taskA)
+	manifestARaw, err := CaptureRsyncManifest(context.Background(), taskA, RsyncCaptureSourceRole)
 	if err != nil {
 		t.Fatalf("capture policy A manifest before policy B: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestRsyncExecutorSeparatesSameNodePolicyTargetsAndRestoresManifests(t *test
 	if code, runErr := runner.Run(context.Background(), taskB, func(string, string) {}, nil); runErr != nil || code != 0 {
 		t.Fatalf("policy B backup code=%d err=%v", code, runErr)
 	}
-	manifestBRaw, err := CaptureRsyncManifest(context.Background(), taskB)
+	manifestBRaw, err := CaptureRsyncManifest(context.Background(), taskB, RsyncCaptureSourceRole)
 	if err != nil {
 		t.Fatalf("capture policy B manifest: %v", err)
 	}

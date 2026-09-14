@@ -111,9 +111,10 @@ vi.mock("@/hooks/use-confirm", () => ({
 
 vi.mock("@/components/task-create-dialog", () => ({
   TaskCreateDialog: () => null,
-  TaskEditorDialog: ({ open, onSave, editingTask }: {
+  TaskEditorDialog: ({ open, onCreate, onUpdate, editingTask }: {
     open: boolean;
-    onSave: (input: Record<string, unknown>) => Promise<void>;
+    onCreate?: (input: Record<string, unknown>) => Promise<void>;
+    onUpdate?: (input: Record<string, unknown>) => Promise<void>;
     editingTask?: { id: number; name?: string } | null;
   }) => {
     if (!open) return null;
@@ -123,20 +124,19 @@ vi.mock("@/components/task-create-dialog", () => ({
           <span data-testid="editing-task-id">{editingTask.id}</span>
           <button
             data-testid="edit-save-btn"
-            onClick={() => void onSave({ name: "新名称", nodeId: editingTask.id })}
->
+            onClick={() => void onUpdate?.({ expectedRevision: "1", name: "新名称" })}
+          >
             保存
           </button>
         </div>
       );
     }
-    // create mode
     return (
       <div data-testid="create-dialog">
         <button
           data-testid="create-save-btn"
-          onClick={() => void onSave({ name: "新任务", nodeId: 1 })}
->
+          onClick={() => void onCreate?.({ name: "新任务", nodeId: 1 })}
+        >
           创建
         </button>
       </div>

@@ -299,6 +299,40 @@ func TestCommandRunnerRawExecutionPreservesCommandBoundary(t *testing.T) {
 		t.Fatalf("raw command=%q", session.command)
 	}
 }
+func TestCommandRunnerRawExecutionPreservesExactSecretStdin(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		secret []byte
+	}{
+		{name: "empty", secret: []byte{}},
+		{name: "trailing-newline", secret: []byte("line-one\nline-two\n")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session := newFakeCommandSession()
+			runner := NewCommandRunner(func(context.Context) (CommandSession, error) { return session, nil }, 1)
+			stream, err := runner.OpenRawExecution(context.Background(), RawCommandSpec{
+				Command:        "cat >/tmp/private-password",
+				MaxStdoutBytes: 1024,
+				SecretStdin:    &SecretStdin{Value: test.secret, AppendNewline: false},
+			})
+			if err != nil {
+				t.Fatalf("open raw execution: %v", err)
+			}
+			if _, err := io.ReadAll(stream); err != nil {
+				t.Fatalf("read raw execution: %v", err)
+			}
+			if _, err := stream.Join(); err != nil {
+				t.Fatalf("join raw execution: %v", err)
+			}
+			if !bytes.Equal(session.stdin.Bytes(), test.secret) || session.stdin.writes != 1 || !session.stdin.closed {
+				t.Fatalf("secret stdin writes=%d closed=%v value=%q want=%q", session.stdin.writes, session.stdin.closed, session.stdin.Bytes(), test.secret)
+			}
+			if strings.Contains(session.command, "line-one") {
+				t.Fatalf("secret leaked into raw command: %q", session.command)
+			}
+		})
+	}
+}
 
 func TestCommandRunnerRawExecutionAllowsCallerBoundLifetimeAndUncappedOutput(t *testing.T) {
 	session := newFakeCommandSession()

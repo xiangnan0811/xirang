@@ -3,7 +3,6 @@ package verifier
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -53,31 +52,15 @@ func verifyRsyncRestoreManifest(ctx context.Context, task model.Task, logf func(
 	if source == "" || !filepath.IsAbs(source) || strings.ContainsRune(source, '\x00') {
 		return warn("恢复校验失败：Core 备份源不可用")
 	}
-	info, err := os.Lstat(source)
-	if err != nil {
-		return warn("恢复校验失败：Core 备份源不存在或不可读")
-	}
-	resolvedSource, err := executor.ResolveRsyncRestoreSource(source, info, task.RsyncCaptureLayout, task.RsyncCaptureRoot)
-	if err != nil {
-		return warn("恢复校验失败：捕获的逻辑根不可用")
+	remoteSourceBase := filepath.Base(filepath.Clean(source))
+	if expected.Root != "" {
+		remoteSourceBase = expected.Root
 	}
 	coreTask := task
-	coreTask.RsyncSource = resolvedSource
-	coreTask.RsyncTarget = ""
-	if expected.Layout == model.TaskRunCaptureLayoutSingleFile {
-		coreTask.RsyncCaptureLayout = model.TaskRunCaptureLayoutSingleFile
-	} else {
-		coreTask.RsyncCaptureLayout = model.TaskRunCaptureLayoutDirectoryContents
-	}
-	coreTask.RsyncCaptureRoot = ""
-	coreTask.Node = model.Node{}
-	coreRaw, err := executor.CaptureRsyncManifest(ctx, coreTask)
-	if err != nil {
+	coreTask.RsyncCaptureLayout = expected.Layout
+	coreTask.RsyncCaptureRoot = expected.Root
+	if err := executor.VerifyRsyncCaptureManifestSource(ctx, coreTask, task.RsyncCaptureManifest); err != nil {
 		return warn("恢复校验失败：Core 源枚举或哈希读取失败")
-	}
-	coreManifest, err := model.DecodeRsyncCaptureManifest(coreRaw)
-	if err != nil || !rsyncManifestEntriesEqual(expected, coreManifest) {
-		return warn("恢复校验失败：Core 捕获字节已变化")
 	}
 
 	// Enumerate and hash the node target with Rsync's own selection machinery.
@@ -93,7 +76,7 @@ func verifyRsyncRestoreManifest(ctx context.Context, task model.Task, logf func(
 		// A single-file restore to an existing directory receives the
 		// resolved source basename. Root is Core-layout provenance only and
 		// may be empty when the Core target was an absent plain file path.
-		remoteSource = filepath.Join(remoteSource, filepath.Base(resolvedSource))
+		remoteSource = filepath.Join(remoteSource, remoteSourceBase)
 		remoteTask.RsyncCaptureLayout = model.TaskRunCaptureLayoutSingleFile
 		remoteTask.RsyncCaptureRoot = ""
 	} else {
@@ -105,12 +88,12 @@ func verifyRsyncRestoreManifest(ctx context.Context, task model.Task, logf func(
 	}
 	remoteTask.RsyncSource = remoteSource
 	remoteTask.RsyncTarget = ""
-	remoteRaw, err := executor.CaptureRsyncManifest(ctx, remoteTask)
+	remoteRaw, err := executor.CaptureRsyncManifest(ctx, remoteTask, executor.RsyncCaptureTargetRole)
 	if err != nil && expected.Layout == model.TaskRunCaptureLayoutSingleFile {
 		// A direct-file restore target is not a directory containing the
 		// basename. Retry the exact target path.
 		remoteTask.RsyncSource = remoteBase
-		remoteRaw, err = executor.CaptureRsyncManifest(ctx, remoteTask)
+		remoteRaw, err = executor.CaptureRsyncManifest(ctx, remoteTask, executor.RsyncCaptureTargetRole)
 	}
 	if err != nil {
 		return warn("恢复校验失败：节点目标枚举或哈希读取失败")

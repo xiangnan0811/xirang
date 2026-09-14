@@ -14,6 +14,8 @@ import (
 	"xirang/backend/internal/logger"
 	"xirang/backend/internal/model"
 	"xirang/backend/internal/sshutil"
+
+	"golang.org/x/crypto/ssh"
 )
 
 const (
@@ -92,13 +94,14 @@ func BuildResticCommandPrefix(binary, passwordFilePath string) string {
 
 // BuildCreateResticPasswordFileCmd 返回在远程节点上创建 restic 密码文件的命令。
 //
+// The password is read only from the command's controlled stdin; it is never
+// interpolated into this shell command or placed in a process argument.
 // The directory is created without -p, so an existing directory or symlink
 // (including a dangling symlink) is a hard failure.  mktemp creates a private
 // regular file, and ln publishes it at the requested name without following
 // or replacing an existing destination.  The trap removes only files that
 // this command successfully published, and never removes a colliding path.
-func BuildCreateResticPasswordFileCmd(passwordFilePath string, access ResticRepositoryAccess) string {
-	pwEscaped := ShellEscape(access.Password())
+func BuildCreateResticPasswordFileCmd(passwordFilePath string) string {
 	fileEscaped := ShellEscape(passwordFilePath)
 	dirEscaped := ShellEscape(path.Dir(passwordFilePath))
 	markerPath := path.Join(path.Dir(passwordFilePath), ".xirang_restic_pw_owner")
@@ -144,7 +147,7 @@ if mkdir -m 700 "$dir"; then
 		rm -f "$marker_tmp" &&
 		marker_tmp= &&
 		tmp=$(mktemp "$dir/.pw.XXXXXX") &&
-		printf '%%s' %s > "$tmp" &&
+		cat > "$tmp" &&
 		[ ! -e "$file" ] &&
 		[ ! -L "$file" ] &&
 		ln "$tmp" "$file" &&
@@ -156,7 +159,56 @@ if mkdir -m 700 "$dir"; then
 else
 	exit 1
 fi
-`, dirEscaped, fileEscaped, markerEscaped, ownerMarker, pwEscaped)
+`, dirEscaped, fileEscaped, markerEscaped, ownerMarker)
+}
+
+// CreateResticPasswordFile sends the exact repository password bytes through a
+// controlled stdin stream to the remote creator. In particular, an empty
+// password and a password ending in a newline are both preserved verbatim.
+func CreateResticPasswordFile(ctx context.Context, client *ssh.Client, passwordFilePath string, access ResticRepositoryAccess) error {
+	if client == nil {
+		return fmt.Errorf("restic password file SSH client is nil")
+	}
+	if strings.TrimSpace(passwordFilePath) == "" {
+		return fmt.Errorf("restic password file path is empty")
+	}
+	password := []byte(access.Password())
+	if len(password) > sshutil.MaximumSecretStdinBytes {
+		return fmt.Errorf("restic password exceeds controlled stdin limit")
+	}
+
+	runner := sshutil.NewSSHCommandRunnerWithTransportClose(client, 1)
+	stream, err := runner.OpenRawExecution(ctx, sshutil.RawCommandSpec{
+		Command:        BuildCreateResticPasswordFileCmd(passwordFilePath),
+		MaxStdoutBytes: 4 << 10,
+		MaxStderrBytes: 4 << 10,
+		MaxRecordBytes: 4 << 10,
+		SecretStdin: &sshutil.SecretStdin{
+			Value:         password,
+			AppendNewline: false,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("restic password file command start failed: %w", err)
+	}
+	if _, err := io.Copy(io.Discard, stream); err != nil {
+		cancelErr := stream.Cancel()
+		if cancelErr != nil && !errors.Is(cancelErr, sshutil.ErrCommandFailed) {
+			err = errors.Join(err, cancelErr)
+		}
+		return fmt.Errorf("restic password file command failed: %w", err)
+	}
+	completion, err := stream.Join()
+	if err != nil {
+		return fmt.Errorf("restic password file command join failed: %w", err)
+	}
+	if !completion.ExitCodeKnown {
+		return fmt.Errorf("restic password file command completed without an exit status")
+	}
+	if completion.ExitCode != 0 {
+		return fmt.Errorf("restic password file command exited with code %d", completion.ExitCode)
+	}
+	return nil
 }
 
 // BuildCleanupResticPasswordFileCmd 返回删除远程节点上 restic 密码临时文件的命令。

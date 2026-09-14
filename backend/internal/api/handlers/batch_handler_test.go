@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/credentialaudit"
@@ -75,7 +74,8 @@ func TestBatchCreateRejectsUnownedNodeForOperator(t *testing.T) {
 func TestBatchCreateMissingGrantDoesNotDecryptInlineCredentials(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := openStepUpHandlerTestDB(t)
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	admin := seedStepUpUser(t, db, "batch-create-grant-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionBatchCommandCreate)
@@ -116,7 +116,8 @@ func TestBatchCreateRequiresAllNodeGrantsBeforeCreatingTasks(t *testing.T) {
 	if err := db.AutoMigrate(&model.BatchCommand{}, &model.BatchCommandDispatch{}); err != nil {
 		t.Fatal(err)
 	}
-	manager := auth.NewJWTManager(stepUpTestJWTSecret, time.Hour)
+	manager := newStepUpTestJWTManager(db)
+	manager.SetDB(db)
 	admin := seedStepUpUser(t, db, "batch-create-all-grants-admin", "admin")
 	token := generatePrimaryToken(t, manager, admin)
 	proof := generateStepUpProofForAction(t, manager, admin, auth.StepUpActionBatchCommandCreate)

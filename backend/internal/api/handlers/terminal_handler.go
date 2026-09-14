@@ -361,7 +361,7 @@ func (h *TerminalHandler) ServeTerminal(c *gin.Context) {
 		return
 	}
 
-	claims, err := authorizeRealtimeToken(authMsg.Token, h.jwtManager, h.db, realtimeAuthRequirements{Role: "admin"})
+	claims, err := authorizeRealtimeToken(terminalRequestContext(c), authMsg.Token, h.jwtManager, h.db, realtimeAuthRequirements{Role: "admin"})
 	if err != nil {
 		// Wave 2 (PR-C C4): 认证失败也写审计——claims 为 nil（拿不到 user/role），
 		// 但仍记录 client IP + path 让管理员能看到尝试。

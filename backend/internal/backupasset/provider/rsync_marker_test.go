@@ -400,6 +400,225 @@ func TestRsyncTreePublicationStrategyHardlinkPreservesParentAndDropsDeletedSourc
 	}
 }
 
+type rsyncTreeTopologyTransitionFixture struct {
+	parentTree    string
+	candidateTree string
+	parentA       os.FileInfo
+	parentB       os.FileInfo
+	strategy      PublicationStrategy
+	attempt       RsyncTreeAttemptV1
+	input         RsyncTreePublicationInput
+	commit        RsyncTreeCommitV1
+}
+
+func (fixture rsyncTreeTopologyTransitionFixture) reconcileRequest() PublicationReconcileRequest {
+	return PublicationReconcileRequest{
+		Attempt: NewRsyncTreePublicationAttempt(fixture.attempt),
+		RsyncTreeInput: &RsyncTreeReconcileInput{
+			ManagedRoot: fixture.input.ManagedRoot, MarkerKey: fixture.input.MarkerKey, SourceFingerprint: fixture.input.SourceFingerprint,
+			ChildFenceDigest: fixture.input.ChildFenceDigest, ManifestLimits: fixture.input.ManifestLimits,
+		},
+	}
+}
+
+func TestRsyncTreePublicationStrategyHardlinkPreservesSourceBreakLinkTopology(t *testing.T) {
+	fixture := runRsyncTreeTopologyTransitionForTest(t, true, true)
+	candidateA, err := os.Stat(filepath.Join(fixture.candidateTree, "a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateB, err := os.Stat(filepath.Join(fixture.candidateTree, "b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(candidateA, candidateB) {
+		t.Fatal("break-link source topology was merged in candidate")
+	}
+	currentParentA, err := os.Stat(filepath.Join(fixture.parentTree, "a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentParentB, err := os.Stat(filepath.Join(fixture.parentTree, "b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(currentParentA, fixture.parentA) || !os.SameFile(currentParentB, fixture.parentB) || !os.SameFile(currentParentA, currentParentB) {
+		t.Fatal("parent hardlink topology changed during break-link publication")
+	}
+}
+
+func TestRsyncTreePublicationStrategyHardlinkPreservesSourceCreateLinkTopology(t *testing.T) {
+	fixture := runRsyncTreeTopologyTransitionForTest(t, false, false)
+	candidateA, err := os.Stat(filepath.Join(fixture.candidateTree, "a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateB, err := os.Stat(filepath.Join(fixture.candidateTree, "b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(candidateA, candidateB) {
+		t.Fatal("create-link source topology was split in candidate")
+	}
+	currentParentA, err := os.Stat(filepath.Join(fixture.parentTree, "a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentParentB, err := os.Stat(filepath.Join(fixture.parentTree, "b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(currentParentA, currentParentB) || !os.SameFile(currentParentA, fixture.parentA) || !os.SameFile(currentParentB, fixture.parentB) {
+		t.Fatal("parent independent topology changed during create-link publication")
+	}
+}
+
+func runRsyncTreeTopologyTransitionForTest(t *testing.T, initiallyLinked, breakLink bool) rsyncTreeTopologyTransitionFixture {
+	t.Helper()
+	root := t.TempDir()
+	marker := []byte(`{"layout_version":1,"repository":"opaque"}`)
+	if err := os.WriteFile(filepath.Join(root, "repository.json"), marker, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	markerSum := sha256.Sum256(marker)
+	markerDigest := hex.EncodeToString(markerSum[:])
+	tree, err := openRsyncManagedTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootIdentity := tree.identityDigest(markerDigest)
+	if err := tree.Close(); err != nil {
+		t.Fatal(err)
+	}
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "a"), []byte("same"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if initiallyLinked {
+		if err := os.Link(filepath.Join(source, "a"), filepath.Join(source, "b")); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if err := os.WriteFile(filepath.Join(source, "b"), []byte("same"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		aInfo, err := os.Stat(filepath.Join(source, "a"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(filepath.Join(source, "b"), aInfo.ModTime(), aInfo.ModTime()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	processRunner, err := newLocalRsyncTreeProcessRunner(os.Environ)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 15, 11, 0, 0, 0, time.UTC)
+	strategy, err := NewRsyncTreePublicationStrategy(processRunner, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := RsyncTreePublicationInput{
+		ManagedRoot: root, Source: RsyncTreeCommandSource{LocalPath: source}, MarkerKey: []byte("FAKE_RSYNC_TREE_MARKER_KEY_32_BYTES"),
+		SourceFingerprint: strings.Repeat("3", 64), ChildFenceDigest: strings.Repeat("4", 64),
+		ManifestLimits: ManifestLimits{Timeout: time.Minute, MaxBytes: 1 << 20, MaxEntries: 100, MaxRecordBytes: 4096, MaxDepth: 10}, MaxCommandOutputBytes: 1 << 20,
+	}
+	firstAttempt := rsyncTreeAttemptForMarkerTest()
+	firstAttempt.RepositoryMarkerDigest = markerDigest
+	firstAttempt.ManagedRootIdentityDigest = rootIdentity
+	firstCommit := runRsyncTreePublicationForTest(t, strategy, firstAttempt, input)
+	parentTree := filepath.Join(root, "points", firstAttempt.FinalComponent, "tree")
+	parentA, err := os.Stat(filepath.Join(parentTree, "a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentB, err := os.Stat(filepath.Join(parentTree, "b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if breakLink {
+		if err := os.Remove(filepath.Join(source, "b")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(source, "b"), []byte("same"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		aInfo, err := os.Stat(filepath.Join(source, "a"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(filepath.Join(source, "b"), aInfo.ModTime(), aInfo.ModTime()); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if err := os.Remove(filepath.Join(source, "b")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Link(filepath.Join(source, "a"), filepath.Join(source, "b")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	secondAttempt := firstAttempt
+	secondAttempt.RecoveryPointID = strings.Repeat("c", 32)
+	secondAttempt.AttemptID = strings.Repeat("d", 32)
+	secondAttempt.StagingComponent = secondAttempt.RecoveryPointID + "." + secondAttempt.AttemptID
+	secondAttempt.FinalComponent = secondAttempt.RecoveryPointID
+	secondAttempt.PublicationMode = backupasset.PublicationVersionedHardlink
+	secondAttempt.ParentRecoveryPointID = firstAttempt.RecoveryPointID
+	secondAttempt.ParentCommitDigest = firstCommit.CommitMarkerDigest
+	secondAttempt.ParentManifestDigest = firstCommit.ManifestDigest
+	secondCommit := runRsyncTreePublicationForTest(t, strategy, secondAttempt, input)
+	return rsyncTreeTopologyTransitionFixture{
+		parentTree: parentTree, candidateTree: filepath.Join(root, "points", secondAttempt.FinalComponent, "tree"),
+		parentA: parentA, parentB: parentB, strategy: strategy, attempt: secondAttempt, input: input, commit: secondCommit,
+	}
+}
+func TestRsyncTreePublicationStrategyReconcilePreservesCommittedBreakLinkTopology(t *testing.T) {
+	assertRsyncTreeTopologyTransitionReconciles(t, runRsyncTreeTopologyTransitionForTest(t, true, true))
+}
+
+func TestRsyncTreePublicationStrategyReconcilePreservesCommittedCreateLinkTopology(t *testing.T) {
+	assertRsyncTreeTopologyTransitionReconciles(t, runRsyncTreeTopologyTransitionForTest(t, false, false))
+}
+
+func assertRsyncTreeTopologyTransitionReconciles(t *testing.T, fixture rsyncTreeTopologyTransitionFixture) {
+	t.Helper()
+	reconciled, err := fixture.strategy.Reconcile(context.Background(), fixture.reconcileRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fact, err := reconciled.RsyncTreeResult()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fact.State != RsyncTreeReconcileFinal || fact.Commit == nil || fact.Commit.CommitMarkerDigest != fixture.commit.CommitMarkerDigest ||
+		fact.Manifest == nil || fact.Manifest.Digest != fixture.commit.ManifestDigest {
+		t.Fatalf("reconciled topology fixture=%+v", fact)
+	}
+}
+
+func TestRsyncTreePublicationStrategyReconcileRejectsCommittedTreeTampering(t *testing.T) {
+	t.Run("candidate", func(t *testing.T) {
+		fixture := runRsyncTreeTopologyTransitionForTest(t, true, true)
+		if err := os.WriteFile(filepath.Join(fixture.candidateTree, "a"), []byte("tampered"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.strategy.Reconcile(context.Background(), fixture.reconcileRequest()); !errors.Is(err, backupasset.ErrConflict) {
+			t.Fatalf("candidate tamper error=%v, want conflict", err)
+		}
+	})
+	t.Run("parent", func(t *testing.T) {
+		fixture := runRsyncTreeTopologyTransitionForTest(t, true, true)
+		if err := os.WriteFile(filepath.Join(fixture.parentTree, "a"), []byte("tampered"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.strategy.Reconcile(context.Background(), fixture.reconcileRequest()); !errors.Is(err, backupasset.ErrConflict) {
+			t.Fatalf("parent tamper error=%v, want conflict", err)
+		}
+	})
+}
+
 func TestRsyncTreePublicationStrategyFullCopyPointsDoNotShareInodes(t *testing.T) {
 	root := t.TempDir()
 	marker := []byte(`{"layout_version":1,"repository":"opaque"}`)

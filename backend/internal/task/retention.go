@@ -124,8 +124,7 @@ func (m *Manager) enforceLegacyResticRetention(ctx context.Context, policy model
 			log.Warn().Uint("task_id", task.ID).Err(cleanupErr).Msg("restic 保留清理: 密码临时文件清理失败（保留业务结果保持原状态）")
 		}
 	}()
-	createPwCmd := executor.BuildCreateResticPasswordFileCmd(pwFilePath, access)
-	if _, err := executor.RunSSHCommandOutput(ctx, client, createPwCmd); err != nil {
+	if err := executor.CreateResticPasswordFile(ctx, client, pwFilePath, access); err != nil {
 		log.Warn().Uint("task_id", task.ID).Err(err).Msg("restic 保留清理: 创建密码临时文件失败")
 		return
 	}

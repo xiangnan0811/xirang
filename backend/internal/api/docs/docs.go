@@ -14014,7 +14014,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_api_handlers.taskRequest"
+                            "$ref": "#/definitions/internal_api_handlers.TaskUpdateRequestSchema"
                         }
                     }
                 ],
@@ -14049,8 +14049,20 @@ const docTemplate = `{
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
                     },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_api_handlers.Response"
                         }
@@ -16582,6 +16594,85 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_handlers.TaskUpdateExecutorSecretsSchema": {
+            "type": "object",
+            "properties": {
+                "repository_password": {
+                    "type": "string",
+                    "format": "password"
+                }
+            }
+        },
+        "internal_api_handlers.TaskUpdateExecutorSettingsSchema": {
+            "type": "object",
+            "properties": {
+                "bandwidth_limit": {
+                    "type": "string"
+                },
+                "exclude_patterns": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "repository_version": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "transfers": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.TaskUpdateRequestSchema": {
+            "type": "object",
+            "required": [
+                "expected_revision"
+            ],
+            "properties": {
+                "command": {
+                    "type": "string"
+                },
+                "cron_spec": {
+                    "type": "string"
+                },
+                "depends_on_task_id": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "executor_secrets": {
+                    "$ref": "#/definitions/internal_api_handlers.TaskUpdateExecutorSecretsSchema"
+                },
+                "executor_settings": {
+                    "$ref": "#/definitions/internal_api_handlers.TaskUpdateExecutorSettingsSchema"
+                },
+                "executor_type": {
+                    "type": "string"
+                },
+                "expected_revision": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "example": "1789344404185193005"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "node_id": {
+                    "type": "integer"
+                },
+                "policy_id": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "rsync_source": {
+                    "type": "string"
+                },
+                "rsync_target": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api_handlers.appCredentialRequest": {
             "type": "object",
             "required": [
@@ -18960,6 +19051,8 @@ const docTemplate = `{
                 "escalation_policy_id": {
                     "type": "integer"
                 },
+                "executor_secrets_configured": {},
+                "executor_settings": {},
                 "executor_type": {
                     "type": "string"
                 },
@@ -18998,6 +19091,9 @@ const docTemplate = `{
                 },
                 "retry_count": {
                     "type": "integer"
+                },
+                "revision": {
+                    "type": "string"
                 },
                 "rsync_publication": {
                     "$ref": "#/definitions/xirang_backend_internal_backupasset.RsyncVersioningSummary"

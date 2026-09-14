@@ -65,6 +65,7 @@ type RawCommandSpec struct {
 	MaxStdoutBytes int64
 	MaxStderrBytes int64
 	MaxRecordBytes int
+	SecretStdin    *SecretStdin `json:"-"`
 }
 
 type CommandResult struct {
@@ -431,8 +432,8 @@ func (runner *CommandRunner) OpenRawExecution(ctx context.Context, specification
 	if specification.MaxStderrBytes <= 0 {
 		specification.MaxStderrBytes = defaultCommandStderrLimit
 	}
-	if specification.Timeout < 0 {
-		return nil, fmt.Errorf("%w: invalid timeout", ErrUnsafeCommandSpec)
+	if specification.SecretStdin != nil && len(specification.SecretStdin.Value) > MaximumSecretStdinBytes {
+		return nil, fmt.Errorf("%w: invalid secret stdin", ErrUnsafeCommandSpec)
 	}
 	maxStdoutBytes := specification.MaxStdoutBytes
 	if maxStdoutBytes == 0 {
@@ -443,6 +444,7 @@ func (runner *CommandRunner) OpenRawExecution(ctx context.Context, specification
 		MaxStdoutBytes: maxStdoutBytes,
 		MaxStderrBytes: specification.MaxStderrBytes,
 		MaxRecordBytes: specification.MaxRecordBytes,
+		SecretStdin:    specification.SecretStdin,
 	}, command)
 }
 func (runner *CommandRunner) openExecution(ctx context.Context, specification CommandSpec, command string) (CommandExecutionStream, error) {
@@ -1234,7 +1236,7 @@ func normalizeCommandSpec(specification CommandSpec) (CommandSpec, string, error
 	if specification.Timeout <= 0 {
 		specification.Timeout = defaultCommandTimeout
 	}
-	if specification.SecretStdin != nil && (len(specification.SecretStdin.Value) == 0 || len(specification.SecretStdin.Value) > MaximumSecretStdinBytes) {
+	if specification.SecretStdin != nil && len(specification.SecretStdin.Value) > MaximumSecretStdinBytes {
 		return CommandSpec{}, "", fmt.Errorf("%w: invalid secret stdin", ErrUnsafeCommandSpec)
 	}
 	quoted := make([]string, len(operands))

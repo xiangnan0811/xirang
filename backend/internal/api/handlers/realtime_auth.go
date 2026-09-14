@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"xirang/backend/internal/auth"
 	"xirang/backend/internal/middleware"
@@ -16,7 +18,9 @@ type realtimeAuthRequirements struct {
 	Role       string
 }
 
-func authorizeRealtimeToken(token string, jwtManager *auth.JWTManager, db *gorm.DB, requirements realtimeAuthRequirements) (*auth.Claims, error) {
+const realtimeSessionRevocationValidationTimeout = 250 * time.Millisecond
+
+func authorizeRealtimeToken(ctx context.Context, token string, jwtManager *auth.JWTManager, db *gorm.DB, requirements realtimeAuthRequirements) (*auth.Claims, error) {
 	if jwtManager == nil {
 		return nil, fmt.Errorf("认证服务不可用")
 	}
@@ -30,6 +34,22 @@ func authorizeRealtimeToken(token string, jwtManager *auth.JWTManager, db *gorm.
 	}
 	if strings.TrimSpace(claims.Purpose) != "" {
 		return nil, fmt.Errorf("认证令牌用途不匹配")
+	}
+	// Keep realtime authentication aligned with HTTP authentication: a valid
+	// signature is not enough when another Core has durably revoked the JTI.
+	// The request-derived timeout prevents a stalled authority store from
+	// leaving a websocket handshake waiting indefinitely.
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, realtimeSessionRevocationValidationTimeout)
+	revoked, revokeErr := jwtManager.IsSessionRevokedContext(checkCtx, claims.ID)
+	cancel()
+	if revokeErr != nil {
+		return nil, fmt.Errorf("认证服务不可用")
+	}
+	if revoked {
+		return nil, fmt.Errorf("token 已注销")
 	}
 
 	if db != nil {

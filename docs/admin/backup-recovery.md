@@ -14,6 +14,16 @@ Xirang 支持三类备份执行器：
 
 备份策略可配置 cron 调度、源/目标路径、排除规则、带宽限制、前后置 hook、重试策略和保留策略。创建时显式设置 `enabled=false`、`verify_enabled=false` 或 `max_retries=0` 会保留原值；零次重试不会自动重跑失败任务，未提交字段仍使用默认值。
 
+### 任务编辑与仓库格式
+
+任务编辑是部分更新：未提交字段保持原值，显式空 `cron_spec` 改为手动任务，即使任务关联了策略也不会重新填入策略 Cron。更新必须提交读取任务时返回的字符串 `expected_revision`；并发修改返回 409，保留草稿并重新加载最新配置后再编辑，不自动重试覆盖。无效 Cron 在写入前拒绝；历史坏 Cron 只隔离对应任务并记录诊断，不阻断其他任务启动。
+
+策略生成任务会持久化调度继承状态。显式提交任务 Cron（包括留空改为手动）建立任务级覆盖；随后修改策略名称、Cron 或停用/恢复策略不会抹掉该覆盖。策略停用仍停止所有关联策略任务并清空活动游标；恢复时手动任务仍手动，自定义 Cron 按自己的表达式恢复，继承任务采用策略当前 Cron。迁移 `000088_task_cron_override` 将历史策略任务中与当时策略有效调度不同的 Cron 标记为覆盖；相同值无法证明曾经覆盖，保留继承关系。导入导出保留该状态。
+
+任务响应只公开白名单 `executor_settings` 与 `executor_secrets_configured`，不返回原始 `executor_config` 或仓库密码。Restic 排除规则传 `[]` 可清空；仓库密码留空保留原值，非空替换时保留原始字节（含首尾空白）。Rclone 带宽限制与并发数在仅改名等编辑中保持不变。
+
+Restic `repository_version` 仅选择新仓库的格式（默认、1、2），**不代表 Append-Only、不可变备份或删除保护**。删除保护状态为未验证，必须在存储后端独立配置和验证权限、保留锁等机制。升级前停止所有旧 Core/执行器并备份数据库及加密密钥；启动时将历史 `append_only=true` 转为格式 2，`false` 转为默认，保留密码、排除规则和其他字段，不改变仓库数据。转换在加密边界内幂等执行；非法或冲突配置隔离并记录任务诊断。旧字段只在显式配置导入边界转换，不再作为运行时配置接受。
+
 ## Policy target isolation and historical data
 
 New policy-owned Rsync tasks use `<backup-root>/.xirang/policies/<policy-id>/nodes/<node-id>`. Persisted IDs, not source basenames or editable node labels, separate writers. Existing stored task targets remain unchanged on synchronization and node-label edits; changing a path is not evidence that historical bytes were migrated. Local target admission rejects conflicting canonical paths, symlink aliases, and ancestor/descendant ownership.
@@ -88,6 +98,8 @@ Rsync 任务默认继续使用传统的可变目标。只有管理员可以从�
 
 - **版本化硬链接树**：在同一受管仓库内复用上一个已提交点的未变更文件。预检必须验证挂载、硬链接、原子提交、容量、inode 和路径安全条件；失败时必须由管理员显式改选完整副本，系统不会自动降级。
 - **版本化完整副本树**：每个点都使用独立文件树，不与前一个点共享 inode。
+
+硬链接树会先传输保持源文件硬链接分组的完整暂存树，再按内容、元数据和 inode 分组兼容性复用上一点的文件；不会使用 `--link-dest` 把上一点的链接关系带入新点。源文件之间新建或断开的硬链接关系必须保留，不兼容的分组保持独立文件。该流程需要容纳完整暂存树的临时空间和传输量，最终提交点仍复用兼容的未变更文件，且不修改上一点。
 
 预检成功后，管理员必须明确选择以下其中一种迁移路径：
 

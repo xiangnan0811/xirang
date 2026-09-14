@@ -286,6 +286,45 @@ func TestRestartReconciliationQueuesDueNextRunWithoutCallback(t *testing.T) {
 	}
 }
 
+func TestReconcileSchedulesIsolatesInvalidHistoricalCron(t *testing.T) {
+	db := openManagerTestDB(t)
+	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil,
+		taskscheduler.NewCronScheduler(), nil, nil, 8, 90)
+	shutdownManagerOnCleanup(t, manager)
+
+	valid := seedTaskForManagerTest(t, db)
+	invalid := model.Task{
+		Name: "task-manager-invalid-cron", NodeID: valid.NodeID,
+		ExecutorType: "rsync", Status: string(StatusPending),
+		RsyncSource: t.TempDir() + "/", RsyncTarget: t.TempDir(),
+	}
+	if err := db.Create(&invalid).Error; err != nil {
+		t.Fatalf("创建无效 cron 任务失败: %v", err)
+	}
+	if err := db.Model(&model.Task{}).Where("id = ?", valid.ID).Updates(map[string]any{
+		"enabled":   true,
+		"cron_spec": "@every 1h",
+	}).Error; err != nil {
+		t.Fatalf("prepare valid historical cron task: %v", err)
+	}
+	if err := db.Model(&model.Task{}).Where("id = ?", invalid.ID).Updates(map[string]any{
+		"enabled":   true,
+		"cron_spec": "@every not-a-duration",
+	}).Error; err != nil {
+		t.Fatalf("prepare invalid historical cron task: %v", err)
+	}
+
+	if err := manager.reconcileSchedules(context.Background()); err != nil {
+		t.Fatalf("reconcile schedules with invalid historical task: %v", err)
+	}
+	if !manager.scheduler.HasTask(valid.ID) {
+		t.Fatalf("valid historical cron task was not registered")
+	}
+	if manager.scheduler.HasTask(invalid.ID) {
+		t.Fatalf("invalid historical cron task was registered")
+	}
+}
+
 func TestReplacedCronCallbackCannotCreateOccurrenceForNewSchedule(t *testing.T) {
 	db := openManagerTestDB(t)
 	manager := NewManager(db, stubExecutorFactory{executor: &successExecutor{}}, nil, nil, nil, nil, 8, 90)

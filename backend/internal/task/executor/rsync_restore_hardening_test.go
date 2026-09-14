@@ -66,7 +66,7 @@ func newRsyncRestoreTestFixture(t *testing.T, node model.Node, rsyncBinary, layo
 		RsyncTarget:  backup,
 		RsyncBinary:  rsyncBinary,
 	}
-	rawManifest, err := CaptureRsyncManifest(context.Background(), captureTask)
+	rawManifest, err := CaptureRsyncManifest(context.Background(), captureTask, RsyncCaptureSourceRole)
 	if err != nil {
 		t.Fatalf("capture fixture manifest: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestStageRsyncRestorePreservesArchiveMetadata(t *testing.T) {
 	}
 	backup := filepath.Join(t.TempDir(), "backup")
 	captureTask := model.Task{ExecutorType: "rsync", RsyncSource: source + string(filepath.Separator), RsyncTarget: backup, RsyncBinary: rsyncBinary}
-	raw, err := CaptureRsyncManifest(context.Background(), captureTask)
+	raw, err := CaptureRsyncManifest(context.Background(), captureTask, RsyncCaptureSourceRole)
 	if err != nil {
 		t.Fatalf("capture metadata fixture: %v", err)
 	}
@@ -455,7 +455,7 @@ func TestRsyncRestoreSingleFileTargetShapes(t *testing.T) {
 				RsyncTarget:  backup,
 				RsyncBinary:  rsyncBinary,
 			}
-			rawManifest, err := CaptureRsyncManifest(context.Background(), captureTask)
+			rawManifest, err := CaptureRsyncManifest(context.Background(), captureTask, RsyncCaptureSourceRole)
 			if err != nil {
 				t.Fatalf("capture manifest: %v", err)
 			}
